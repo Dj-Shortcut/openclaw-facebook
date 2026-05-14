@@ -40,3 +40,43 @@ describe("openclaw plugin manifest", () => {
     );
   });
 });
+
+describe("package openclaw metadata", () => {
+  it("declares ClawHub install and compatibility metadata", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
+      name?: unknown;
+      private?: unknown;
+      openclaw?: {
+        compat?: unknown;
+        build?: unknown;
+        install?: unknown;
+        channel?: {
+          exposure?: unknown;
+          preferOver?: unknown;
+        };
+      };
+    };
+
+    expect(pkg.name).toBe("@openclaw/facebook");
+    expect(pkg.private).toBe(true);
+    expect(pkg.openclaw?.compat).toEqual({
+      pluginApi: ">=2026.5.10-beta.1",
+      minGatewayVersion: "2026.5.10-beta.1",
+    });
+    expect(pkg.openclaw?.build).toEqual({
+      openclawVersion: "2026.5.10-beta.1",
+      pluginSdkVersion: "2026.5.10-beta.1",
+    });
+    expect(pkg.openclaw?.install).toEqual({
+      clawhubSpec: "clawhub:@openclaw/facebook",
+      defaultChoice: "clawhub",
+      minHostVersion: ">=2026.5.10-beta.1",
+    });
+    expect(pkg.openclaw?.channel?.preferOver).toEqual(["messenger"]);
+    expect(pkg.openclaw?.channel?.exposure).toEqual({
+      configured: true,
+      setup: true,
+      docs: true,
+    });
+  });
+});
