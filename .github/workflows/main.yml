@@ -13,12 +13,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show root files
-        run: ls -la
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
 
       - name: Validate required files
         run: |
           test -f README.md
+          test -f openclaw.plugin.json
+          test -f package.json
+          test -f tsconfig.json
+          test -f manifest.test.ts
 
       - name: Check forbidden files
         run: |
@@ -34,12 +41,37 @@ jobs:
             --exclude="*.example" \
             --exclude=".env.example"
 
-      - name: Build tarball smoke test
-        run: |
-          tar \
-            --exclude=.git \
-            --exclude=node_modules \
-            --exclude=.env \
-            -czf /tmp/plugin-package.tar.gz .
+      - name: Install dependencies
+        run: npm ci
 
-          tar -tzf /tmp/plugin-package.tar.gz | head -100
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Dry-run npm pack
+        run: npm run pack:dry
+
+      - name: Create npm tarball
+        run: npm pack
+
+      - name: Validate tarball contents
+        run: |
+          tarball="$(ls openclaw-facebook-*.tgz | head -n 1)"
+          test -n "$tarball"
+          tar -tzf "$tarball" > /tmp/openclaw-facebook-tarball-files.txt
+          grep -Fx "package/dist/index.js" /tmp/openclaw-facebook-tarball-files.txt
+          grep -Fx "package/dist/setup-entry.js" /tmp/openclaw-facebook-tarball-files.txt
+          grep -Fx "package/openclaw.plugin.json" /tmp/openclaw-facebook-tarball-files.txt
+          grep -Fx "package/README.md" /tmp/openclaw-facebook-tarball-files.txt
+          grep -Fx "package/docs/setup.md" /tmp/openclaw-facebook-tarball-files.txt
+          grep -Fx "package/examples/channels.facebook.json5" /tmp/openclaw-facebook-tarball-files.txt
+
+      - name: Install tarball in isolated OpenClaw profile
+        run: |
+          tarball="$(ls openclaw-facebook-*.tgz | head -n 1)"
+          ./node_modules/.bin/openclaw --profile ci-facebook-plugin-test plugins install "./$tarball" --force
+          ./node_modules/.bin/openclaw --profile ci-facebook-plugin-test plugins inspect facebook --json > /tmp/facebook-plugin-inspect.json
+          ./node_modules/.bin/openclaw --profile ci-facebook-plugin-test channels list --all --json > /tmp/openclaw-channels.json
+          node -e "const fs=require('node:fs'); const inspect=JSON.parse(fs.readFileSync('/tmp/facebook-plugin-inspect.json','utf8')); if (inspect.diagnostics?.length) throw new Error(JSON.stringify(inspect.diagnostics)); if (!inspect.plugin?.channelIds?.includes('facebook')) throw new Error('facebook channel not loaded from plugin'); const channels=JSON.parse(fs.readFileSync('/tmp/openclaw-channels.json','utf8')).chat ?? {}; if (!channels.facebook?.installed) throw new Error('facebook is not installed in channel catalog'); if (channels.messenger) throw new Error('messenger appeared as a separate channel');"
