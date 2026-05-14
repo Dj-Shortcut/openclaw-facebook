@@ -8,6 +8,7 @@
           pageAccessToken: "<FACEBOOK_PAGE_ACCESS_TOKEN>",
           appSecret: "<FACEBOOK_APP_SECRET>",
           verifyToken: "<FACEBOOK_VERIFY_TOKEN>",
+          // Optional account-specific path. Omit to use /facebook/webhook.
           webhookPath: "/facebook/leaderbot",
           dmPolicy: "pairing"
         }

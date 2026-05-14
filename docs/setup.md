@@ -1,6 +1,13 @@
 # Facebook Page Messenger Setup
 
-This plugin connects OpenClaw to Facebook Page Messenger direct messages.
+This plugin connects OpenClaw to Facebook Page Messenger direct messages. In
+Meta terms, setup involves three related pieces: a Meta app, a Facebook Page,
+and the Messenger product enabled for that Page. The plugin is installed and
+configured as `facebook` because it owns the Facebook/Meta integration surface;
+V1 does not add a separate active `messenger` channel.
+
+V1 capability is intentionally narrower than the plugin name: Facebook Page
+Messenger DMs only.
 
 ## Meta App
 
@@ -11,9 +18,13 @@ This plugin connects OpenClaw to Facebook Page Messenger direct messages.
 5. Copy the Page ID, Page access token, app secret, and choose a webhook verify
    token.
 
+The Meta app provides app identity and webhook verification. The Facebook Page
+provides the Page ID and Page access token. Messenger is the product surface
+that delivers Page direct-message events to the webhook.
+
 ## OpenClaw Config
 
-Prefer `channels.facebook`:
+Use `channels.facebook` for new installs:
 
 ```json5
 {
@@ -48,6 +59,10 @@ Default callback URL:
 https://<gateway-host>/facebook/webhook
 ```
 
+The old `/messenger/webhook` path is legacy only. Keep it only when an existing
+deployment explicitly sets `webhookPath: "/messenger/webhook"`; do not use it
+as the default for new installs.
+
 Subscribe the Page webhook to:
 
 - `messages`
@@ -55,6 +70,20 @@ Subscribe the Page webhook to:
 - `message_reads`
 
 V1 processes text messages and skips unsupported events.
+
+## Legacy Compatibility
+
+Temporary compatibility remains for existing deployments:
+
+- `channels.messenger`
+- `MESSENGER_PAGE_ID`
+- `MESSENGER_PAGE_ACCESS_TOKEN`
+- `MESSENGER_APP_SECRET`
+- `MESSENGER_VERIFY_TOKEN`
+- target prefixes `messenger:<PSID>` and `fbm:<PSID>`
+
+When both new and legacy values are present, `channels.facebook` and
+`FACEBOOK_*` win. Do not register a second active Messenger channel.
 
 ## Pairing
 
@@ -71,6 +100,8 @@ openclaw pairing approve facebook <CODE>
 Included:
 
 - Facebook Page Messenger direct messages
+- Meta app webhook verification
+- Facebook Page identity and Page access token configuration
 - text inbound and text outbound replies
 - webhook verification and signature validation
 - pairing/allowlist access control

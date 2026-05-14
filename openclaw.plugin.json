@@ -4,7 +4,7 @@
   "activation": {
     "onStartup": false
   },
-  "channels": ["facebook", "messenger"],
+  "channels": ["facebook"],
   "channelEnvVars": {
     "facebook": [
       "FACEBOOK_PAGE_ID",
@@ -15,13 +15,86 @@
       "MESSENGER_PAGE_ACCESS_TOKEN",
       "MESSENGER_APP_SECRET",
       "MESSENGER_VERIFY_TOKEN"
-    ],
-    "messenger": [
-      "MESSENGER_PAGE_ID",
-      "MESSENGER_PAGE_ACCESS_TOKEN",
-      "MESSENGER_APP_SECRET",
-      "MESSENGER_VERIFY_TOKEN"
     ]
+  },
+  "channelConfigs": {
+    "facebook": {
+      "label": "Facebook",
+      "description": "Facebook Page Messenger direct messages via Meta webhooks.",
+      "preferOver": ["messenger"],
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "pageId": { "type": "string" },
+          "pageAccessToken": { "type": "string" },
+          "tokenFile": { "type": "string" },
+          "appSecret": { "type": "string" },
+          "appSecretFile": { "type": "string" },
+          "verifyToken": { "type": "string" },
+          "verifyTokenFile": { "type": "string" },
+          "name": { "type": "string" },
+          "allowFrom": {
+            "type": "array",
+            "items": { "type": ["string", "number"] }
+          },
+          "dmPolicy": {
+            "type": "string",
+            "enum": ["open", "allowlist", "pairing", "disabled"],
+            "default": "pairing"
+          },
+          "responsePrefix": { "type": "string" },
+          "webhookPath": { "type": "string" },
+          "defaultTo": { "type": "string" },
+          "graphApiVersion": { "type": "string" },
+          "defaultAccount": { "type": "string" },
+          "accounts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "pageId": { "type": "string" },
+                "pageAccessToken": { "type": "string" },
+                "tokenFile": { "type": "string" },
+                "appSecret": { "type": "string" },
+                "appSecretFile": { "type": "string" },
+                "verifyToken": { "type": "string" },
+                "verifyTokenFile": { "type": "string" },
+                "name": { "type": "string" },
+                "allowFrom": {
+                  "type": "array",
+                  "items": { "type": ["string", "number"] }
+                },
+                "dmPolicy": {
+                  "type": "string",
+                  "enum": ["open", "allowlist", "pairing", "disabled"],
+                  "default": "pairing"
+                },
+                "responsePrefix": { "type": "string" },
+                "webhookPath": { "type": "string" },
+                "defaultTo": { "type": "string" },
+                "graphApiVersion": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
+      "uiHints": {
+        "pageId": { "label": "Facebook Page ID" },
+        "pageAccessToken": { "label": "Page access token", "sensitive": true },
+        "tokenFile": { "label": "Page access token file" },
+        "appSecret": { "label": "App secret", "sensitive": true },
+        "appSecretFile": { "label": "App secret file" },
+        "verifyToken": { "label": "Webhook verify token", "sensitive": true },
+        "verifyTokenFile": { "label": "Webhook verify token file" },
+        "webhookPath": { "label": "Webhook path", "placeholder": "/facebook/webhook" },
+        "dmPolicy": { "label": "Direct message policy" },
+        "allowFrom": { "label": "Allowed Page-scoped sender IDs" }
+      }
+    }
   },
   "configSchema": {
     "type": "object",
