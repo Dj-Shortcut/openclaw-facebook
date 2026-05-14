@@ -40,5 +40,6 @@ jobs:
             --exclude=.git \
             --exclude=node_modules \
             --exclude=.env \
-            -czf plugin-package.tar.gz .
-          tar -tzf plugin-package.tar.gz | head -100
+            -czf /tmp/plugin-package.tar.gz .
+
+          tar -tzf /tmp/plugin-package.tar.gz | head -100
