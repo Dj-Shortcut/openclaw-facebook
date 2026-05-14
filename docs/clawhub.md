@@ -1,22 +1,23 @@
 # ClawHub Release Prep
 
-This package is prepared for ClawHub discovery as `@openclaw/facebook`.
+This package is prepared for ClawHub discovery as `@dj-shortcut/facebook`.
 
 ## Owner and Package Scope
 
 ClawHub requires the package scope to match the publishing owner. Because the
-package name is `@openclaw/facebook`, publish it with the `@openclaw` ClawHub
-owner.
+package name is `@dj-shortcut/facebook`, publish it with the `@dj-shortcut`
+ClawHub owner.
 
-If publishing from a personal owner instead, rename the package first. Do not
-publish `@openclaw/facebook` from a non-`@openclaw` owner.
+If this plugin later moves to the official OpenClaw namespace, rename or
+transfer the package to `@openclaw/facebook` and publish with the `@openclaw`
+owner.
 
 ## Current Release Choice
 
 Canonical install target:
 
 ```bash
-openclaw plugins install clawhub:@openclaw/facebook
+openclaw plugins install clawhub:@dj-shortcut/facebook
 ```
 
 This repo still keeps `private: true` to avoid accidental npm publication.
@@ -61,14 +62,14 @@ clawhub whoami
 Dry-run the package publish:
 
 ```bash
-clawhub package publish @openclaw/facebook --dry-run
+clawhub package publish @dj-shortcut/facebook --dry-run
 ```
 
 Only publish for real after the dry run succeeds and the package owner is
-confirmed as `@openclaw`:
+confirmed as `@dj-shortcut`:
 
 ```bash
-clawhub package publish @openclaw/facebook
+clawhub package publish @dj-shortcut/facebook
 ```
 
 ## Post-Publish Smoke Test
@@ -76,7 +77,7 @@ clawhub package publish @openclaw/facebook
 Use a fresh profile:
 
 ```bash
-openclaw --profile facebook-clawhub-smoke plugins install clawhub:@openclaw/facebook
+openclaw --profile facebook-clawhub-smoke plugins install clawhub:@dj-shortcut/facebook
 openclaw --profile facebook-clawhub-smoke plugins inspect facebook
 openclaw --profile facebook-clawhub-smoke channels list --all
 ```

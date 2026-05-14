@@ -9,7 +9,7 @@ Use `facebook` for the public plugin/channel/config/webhook surface. Treat
 `messenger` as the old compatibility name for the current DM capability, not as
 a second active channel.
 
-New installs should use the plugin package `@openclaw/facebook`, plugin id
+New installs should use the plugin package `@dj-shortcut/facebook`, plugin id
 `facebook`, channel id `facebook`, `channels.facebook`, `FACEBOOK_*` secrets,
 and the default webhook path `/facebook/webhook`.
 
