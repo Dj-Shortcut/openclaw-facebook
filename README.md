@@ -2,9 +2,15 @@
 
 Private hardening repo for the installable `@openclaw/facebook` plugin.
 
-V1 supports Facebook Page Messenger direct messages through Meta webhooks. The
-public plugin and channel id are `facebook`; legacy `messenger`, `fb`, and
-`fbm` aliases remain for compatibility.
+V1 connects a Meta app, a Facebook Page, and the Messenger product so OpenClaw
+can handle Facebook Page Messenger direct messages through Meta webhooks. The
+public plugin id, channel id, config key, setup docs, and default webhook path
+use `facebook` because this is the Facebook/Meta integration surface, not a
+standalone generic Messenger channel. Legacy `messenger`, `fb`, and `fbm`
+aliases remain temporarily for existing installs only.
+
+The short version: install and configure `facebook`; expect V1 capability to be
+Facebook Page Messenger DMs.
 
 ## Install
 
@@ -45,7 +51,30 @@ Default webhook:
 https://<gateway-host>/facebook/webhook
 ```
 
+Do not configure a second active `messenger` channel. Existing
+`channels.messenger` config and `MESSENGER_*` secrets remain temporary
+fallbacks, but new installs should use `channels.facebook` and `FACEBOOK_*`.
+The old `/messenger/webhook` path is not the new default; keep it only if an
+existing deployment explicitly configured that legacy `webhookPath`.
+
 See [`docs/setup.md`](docs/setup.md) for the full Meta setup flow.
+
+## Local/private install validation
+
+This plugin does not need to be published to npm before it can be installed
+privately:
+
+```bash
+npm run build
+npm test
+npm run pack:dry
+npm pack
+openclaw plugins install ./openclaw-facebook-*.tgz
+openclaw channels list
+```
+
+Expected channel listing: `Facebook`. There should be no separate `Messenger`
+channel.
 
 ## Development
 

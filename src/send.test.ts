@@ -79,6 +79,37 @@ describe("sendMessengerText", () => {
     expect(body.recipient).toEqual({ id: "psid-1" });
   });
 
+  it.each(["facebook:psid-1", "fb:psid-1", "messenger:psid-1", "fbm:psid-1"])(
+    "normalizes target prefix %s before sending",
+    async (target) => {
+      const fetchMock = vi.fn(
+        async (_url: string, _init?: RequestInit) =>
+          new Response(JSON.stringify({ message_id: "mid-1", recipient_id: "psid-1" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      );
+
+      await sendMessengerText(target, "hello", {
+        cfg: {
+          channels: {
+            facebook: {
+              pageId: "page-1",
+              pageAccessToken: "token-1",
+              appSecret: "secret-1",
+              verifyToken: "verify-1",
+            },
+          },
+        } as never,
+        fetch: fetchMock as never,
+      });
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const body = JSON.parse(init.body as string);
+      expect(body.recipient).toEqual({ id: "psid-1" });
+    },
+  );
+
   it("maps 24-hour window errors", async () => {
     const fetchMock = vi.fn(
       async () =>

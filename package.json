@@ -85,7 +85,7 @@
       "quickstartAllowFrom": true,
       "configuredState": {
         "specifier": "./configured-state",
-        "exportName": "hasMessengerConfiguredState"
+        "exportName": "hasFacebookConfiguredState"
       }
     }
   }
