@@ -1,0 +1,45 @@
+name: Validate plugin package
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show root files
+        run: ls -la
+
+      - name: Validate required files
+        run: |
+          test -f README.md
+
+      - name: Check forbidden files
+        run: |
+          test ! -d node_modules
+          test ! -f .env
+
+      - name: Secret smoke check
+        run: |
+          ! grep -RInE "sk-[A-Za-z0-9_-]{20,}|(OPENAI_API_KEY|META_ACCESS_TOKEN|APP_SECRET|CLIENT_SECRET)=.+[A-Za-z0-9]" . \
+            --exclude-dir=.git \
+            --exclude-dir=node_modules \
+            --exclude-dir=.github \
+            --exclude="*.example" \
+            --exclude=".env.example"
+
+      - name: Build tarball smoke test
+        run: |
+          tar \
+            --exclude=.git \
+            --exclude=node_modules \
+            --exclude=.env \
+            -czf /tmp/plugin-package.tar.gz .
+
+          tar -tzf /tmp/plugin-package.tar.gz | head -100
