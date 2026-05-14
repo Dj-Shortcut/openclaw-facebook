@@ -1,6 +1,6 @@
 # OpenClaw Facebook Plugin
 
-Private hardening repo for the installable `@openclaw/facebook` plugin.
+Private hardening repo for the installable `@dj-shortcut/facebook` plugin.
 
 V1 connects a Meta app, a Facebook Page, and the Messenger product so OpenClaw
 can handle Facebook Page Messenger direct messages through Meta webhooks. The
@@ -23,13 +23,13 @@ openclaw plugins install <private-git-or-tarball-url>
 ClawHub phase:
 
 ```bash
-openclaw plugins install clawhub:@openclaw/facebook
+openclaw plugins install clawhub:@dj-shortcut/facebook
 ```
 
 Public phase:
 
 ```bash
-openclaw plugins install @openclaw/facebook
+openclaw plugins install @dj-shortcut/facebook
 ```
 
 ## Configure

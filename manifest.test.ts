@@ -57,7 +57,7 @@ describe("package openclaw metadata", () => {
       };
     };
 
-    expect(pkg.name).toBe("@openclaw/facebook");
+    expect(pkg.name).toBe("@dj-shortcut/facebook");
     expect(pkg.private).toBe(true);
     expect(pkg.openclaw?.compat).toEqual({
       pluginApi: ">=2026.5.10-beta.1",
@@ -68,7 +68,7 @@ describe("package openclaw metadata", () => {
       pluginSdkVersion: "2026.5.10-beta.1",
     });
     expect(pkg.openclaw?.install).toEqual({
-      clawhubSpec: "clawhub:@openclaw/facebook",
+      clawhubSpec: "clawhub:@dj-shortcut/facebook",
       defaultChoice: "clawhub",
       minHostVersion: ">=2026.5.10-beta.1",
     });

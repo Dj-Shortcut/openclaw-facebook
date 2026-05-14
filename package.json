@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/facebook",
+  "name": "@dj-shortcut/facebook",
   "version": "2026.5.10-beta.1",
   "private": true,
   "description": "OpenClaw Facebook channel plugin",
@@ -7,12 +7,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openclaw/openclaw-facebook.git"
+    "url": "git+https://github.com/Dj-Shortcut/openclaw-facebook.git"
   },
   "bugs": {
-    "url": "https://github.com/openclaw/openclaw-facebook/issues"
+    "url": "https://github.com/Dj-Shortcut/openclaw-facebook/issues"
   },
-  "homepage": "https://github.com/openclaw/openclaw-facebook#readme",
+  "homepage": "https://github.com/Dj-Shortcut/openclaw-facebook#readme",
   "files": [
     "dist",
     "openclaw.plugin.json",
@@ -73,7 +73,7 @@
       "pluginSdkVersion": "2026.5.10-beta.1"
     },
     "install": {
-      "clawhubSpec": "clawhub:@openclaw/facebook",
+      "clawhubSpec": "clawhub:@dj-shortcut/facebook",
       "defaultChoice": "clawhub",
       "minHostVersion": ">=2026.5.10-beta.1"
     },
