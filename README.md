@@ -66,6 +66,16 @@ existing deployment explicitly configured that legacy `webhookPath`.
 See [`docs/setup.md`](docs/setup.md) for the full Meta setup flow.
 See [`docs/clawhub.md`](docs/clawhub.md) for ClawHub release preparation.
 
+## Access model
+
+Default setup uses `dmPolicy: "pairing"` so unknown Facebook users receive a
+pairing code before they can talk to the assistant. For a public Page bot, use
+`dmPolicy: "open"` with `allowFrom: ["*"]` to let anyone message the Page.
+
+Open means the conversation entry point is public; it should not grant unknown users
+privileged tools, private memory, files, git/deploy access, or admin actions.
+Use separate OpenClaw permissions/tool policy for that trusted core.
+
 ## Local/private install validation
 
 This plugin does not need to be published to npm before it can be installed
@@ -76,7 +86,7 @@ npm run build
 npm test
 npm run pack:dry
 npm pack
-openclaw plugins install ./openclaw-facebook-*.tgz
+openclaw plugins install ./dj-shortcut-facebook-*.tgz
 openclaw channels list
 ```
 

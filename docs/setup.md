@@ -85,6 +85,34 @@ Temporary compatibility remains for existing deployments:
 When both new and legacy values are present, `channels.facebook` and
 `FACEBOOK_*` win. Do not register a second active Messenger channel.
 
+## Public Page Bot Mode
+
+Use `pairing` while testing or when the assistant should only talk to approved
+people. In pairing mode, unknown senders receive a pairing code.
+
+For a public Facebook Page assistant, use open DM access:
+
+```json5
+{
+  channels: {
+    facebook: {
+      enabled: true,
+      pageId: "<FACEBOOK_PAGE_ID>",
+      pageAccessToken: "<FACEBOOK_PAGE_ACCESS_TOKEN>",
+      appSecret: "<FACEBOOK_APP_SECRET>",
+      verifyToken: "<FACEBOOK_VERIFY_TOKEN>",
+      dmPolicy: "open",
+      allowFrom: ["*"]
+    }
+  }
+}
+```
+
+This only opens the message entry point. Keep privileged tools, private memory,
+workspace access, git/deploy actions, and admin capabilities restricted through
+OpenClaw policy. A good public setup is open for basic conversation and closed
+for sensitive actions.
+
 ## Pairing
 
 Unknown direct-message senders receive a pairing code when `dmPolicy` is

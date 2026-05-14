@@ -58,7 +58,7 @@ jobs:
 
       - name: Validate tarball contents
         run: |
-          tarball="$(ls openclaw-facebook-*.tgz | head -n 1)"
+          tarball="$(ls dj-shortcut-facebook-*.tgz | head -n 1)"
           test -n "$tarball"
           tar -tzf "$tarball" > /tmp/openclaw-facebook-tarball-files.txt
           grep -Fx "package/dist/index.js" /tmp/openclaw-facebook-tarball-files.txt
@@ -67,10 +67,11 @@ jobs:
           grep -Fx "package/README.md" /tmp/openclaw-facebook-tarball-files.txt
           grep -Fx "package/docs/setup.md" /tmp/openclaw-facebook-tarball-files.txt
           grep -Fx "package/examples/channels.facebook.json5" /tmp/openclaw-facebook-tarball-files.txt
+          grep -Fx "package/examples/public-leaderbot.json5" /tmp/openclaw-facebook-tarball-files.txt
 
       - name: Install tarball in isolated OpenClaw profile
         run: |
-          tarball="$(ls openclaw-facebook-*.tgz | head -n 1)"
+          tarball="$(ls dj-shortcut-facebook-*.tgz | head -n 1)"
           ./node_modules/.bin/openclaw --profile ci-facebook-plugin-test plugins install "./$tarball" --force
           ./node_modules/.bin/openclaw --profile ci-facebook-plugin-test plugins inspect facebook --json > /tmp/facebook-plugin-inspect.json
           ./node_modules/.bin/openclaw --profile ci-facebook-plugin-test channels list --all --json > /tmp/openclaw-channels.json

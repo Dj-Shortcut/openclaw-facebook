@@ -52,3 +52,17 @@ Do not register a second active Messenger plugin alongside this Facebook plugin.
 - Update the Meta callback to `https://<gateway-host>/facebook/webhook`
 - Existing Fly/Leaderbot `MESSENGER_*` secrets may remain until the next secret
   rotation, then move them to `FACEBOOK_*`
+
+## Public Leaderbot mode
+
+If Leaderbot is meant to be reachable by anyone who messages the Facebook Page,
+set:
+
+```json5
+dmPolicy: "open",
+allowFrom: ["*"]
+```
+
+That makes the Page DM entry point public. It should not make powerful tools public.
+Keep Codex/workspace access, private memory, git/deploys, config changes, and
+other high-impact actions behind OpenClaw permissions for trusted users only.

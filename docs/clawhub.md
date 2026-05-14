@@ -39,7 +39,7 @@ npm pack
 Verify local install from the tarball:
 
 ```bash
-.\node_modules\.bin\openclaw.cmd --profile facebook-plugin-test plugins install .\openclaw-facebook-*.tgz --force
+.\node_modules\.bin\openclaw.cmd --profile facebook-plugin-test plugins install .\dj-shortcut-facebook-*.tgz --force
 .\node_modules\.bin\openclaw.cmd --profile facebook-plugin-test plugins inspect facebook
 .\node_modules\.bin\openclaw.cmd --profile facebook-plugin-test channels list --all
 ```
