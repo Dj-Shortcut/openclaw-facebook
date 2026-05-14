@@ -25,11 +25,12 @@ jobs:
           test ! -d node_modules
           test ! -f .env
 
-      - name: Secret smoke check
+            - name: Secret smoke check
         run: |
           ! grep -RInE "sk-[A-Za-z0-9_-]{20,}|OPENAI_API_KEY=|META_ACCESS_TOKEN=|APP_SECRET=|CLIENT_SECRET=" . \
             --exclude-dir=.git \
-            --exclude-dir=node_modules
+            --exclude-dir=node_modules \
+            --exclude-dir=.github
 
       - name: Build tarball smoke test
         run: |
