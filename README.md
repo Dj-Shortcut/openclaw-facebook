@@ -20,6 +20,12 @@ Private phase:
 openclaw plugins install <private-git-or-tarball-url>
 ```
 
+ClawHub phase:
+
+```bash
+openclaw plugins install clawhub:@openclaw/facebook
+```
+
 Public phase:
 
 ```bash
@@ -58,6 +64,7 @@ The old `/messenger/webhook` path is not the new default; keep it only if an
 existing deployment explicitly configured that legacy `webhookPath`.
 
 See [`docs/setup.md`](docs/setup.md) for the full Meta setup flow.
+See [`docs/clawhub.md`](docs/clawhub.md) for ClawHub release preparation.
 
 ## Local/private install validation
 

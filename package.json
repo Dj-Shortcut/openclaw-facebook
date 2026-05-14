@@ -64,6 +64,19 @@
     "vitest": "^4.1.5"
   },
   "openclaw": {
+    "compat": {
+      "pluginApi": ">=2026.5.10-beta.1",
+      "minGatewayVersion": "2026.5.10-beta.1"
+    },
+    "build": {
+      "openclawVersion": "2026.5.10-beta.1",
+      "pluginSdkVersion": "2026.5.10-beta.1"
+    },
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/facebook",
+      "defaultChoice": "clawhub",
+      "minHostVersion": ">=2026.5.10-beta.1"
+    },
     "extensions": [
       "./index.ts"
     ],
@@ -82,6 +95,12 @@
       "docsLabel": "facebook",
       "blurb": "Facebook Page Messenger DMs via Meta webhooks.",
       "systemImage": "message.fill",
+      "preferOver": ["messenger"],
+      "exposure": {
+        "configured": true,
+        "setup": true,
+        "docs": true
+      },
       "quickstartAllowFrom": true,
       "configuredState": {
         "specifier": "./configured-state",
