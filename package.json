@@ -1,0 +1,92 @@
+{
+  "name": "@openclaw/facebook",
+  "version": "2026.5.10-beta.1",
+  "private": true,
+  "description": "OpenClaw Facebook channel plugin",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openclaw/openclaw-facebook.git"
+  },
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw-facebook/issues"
+  },
+  "homepage": "https://github.com/openclaw/openclaw-facebook#readme",
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md",
+    "docs",
+    "examples"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./api": {
+      "types": "./dist/channel-plugin-api.d.ts",
+      "default": "./dist/channel-plugin-api.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime-api.d.ts",
+      "default": "./dist/runtime-api.js"
+    },
+    "./setup": {
+      "types": "./dist/setup-entry.d.ts",
+      "default": "./dist/setup-entry.js"
+    },
+    "./configured-state": {
+      "types": "./dist/configured-state.d.ts",
+      "default": "./dist/configured-state.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
+    "test": "vitest run",
+    "prepare": "npm run build",
+    "pack:dry": "npm pack --dry-run",
+    "check": "npm run build && npm test && npm run pack:dry"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.10-beta.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "openclaw": ">=2026.5.10-beta.1",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.5"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "runtimeExtensions": [
+      "./dist/index.js"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "runtimeSetupEntry": "./dist/setup-entry.js",
+    "channel": {
+      "id": "facebook",
+      "label": "Facebook",
+      "aliases": ["messenger", "fb", "fbm"],
+      "selectionLabel": "Facebook (Page Messenger)",
+      "detailLabel": "Facebook Page",
+      "docsPath": "/channels/facebook",
+      "docsLabel": "facebook",
+      "blurb": "Facebook Page Messenger DMs via Meta webhooks.",
+      "systemImage": "message.fill",
+      "quickstartAllowFrom": true,
+      "configuredState": {
+        "specifier": "./configured-state",
+        "exportName": "hasMessengerConfiguredState"
+      }
+    }
+  }
+}
