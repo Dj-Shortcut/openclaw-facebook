@@ -9,9 +9,11 @@ OpenClaw to Facebook Page Messenger direct messages through Meta webhooks:
 - this plugin receives Meta webhook events and sends text replies through the
   Graph API.
 
-It does not connect Instagram, Page comments, private replies, attachments, or
-general Meta automation yet. The plugin is named `facebook` because the setup is
-a Facebook/Meta integration, even though the first supported surface is Facebook
+It does not yet implement Instagram DMs, Page comment handling, Meta Private
+Replies/comment-to-DM flows, attachments, or general Meta automation. Those are
+real Meta surfaces, but V1 of this plugin only supports normal Facebook Page
+Messenger DMs. The plugin is named `facebook` because the setup is a
+Facebook/Meta integration, even though the first supported surface is Facebook
 Page Messenger DMs.
 
 Official Meta references:
@@ -403,8 +405,8 @@ Included:
 Not included:
 
 - Instagram DMs;
-- Facebook Page comments;
-- private replies;
+- Facebook Page comment handling;
+- Meta Private Replies/comment-to-DM flows;
 - attachments, templates, quick replies, or media messages;
 - automatic Page subscription setup;
 - generic Meta platform routing.
