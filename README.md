@@ -63,7 +63,9 @@ fallbacks, but new installs should use `channels.facebook` and `FACEBOOK_*`.
 The old `/messenger/webhook` path is not the new default; keep it only if an
 existing deployment explicitly configured that legacy `webhookPath`.
 
-See [`docs/setup.md`](docs/setup.md) for the full Meta setup flow.
+See [`docs/setup.md`](docs/setup.md) for the full Meta-side tutorial: what this
+repo connects, which values to copy from the Meta dashboard, how to configure
+the webhook, and how to test/debug the Page Messenger flow.
 See [`docs/clawhub.md`](docs/clawhub.md) for ClawHub release preparation.
 
 ## Access model
