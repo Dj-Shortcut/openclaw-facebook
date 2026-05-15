@@ -358,6 +358,31 @@ Check:
 - the sender is allowed by Meta's app mode/access level;
 - the sender is allowed by OpenClaw `dmPolicy`.
 
+### Users see a Europe messaging rules warning
+
+Some users in Europe may see a Facebook/Messenger popup such as:
+
+```text
+Something went wrong
+We are currently updating this feature in response to new rules for messaging
+services in Europe.
+```
+
+This is a Meta/Facebook UI limitation, not an OpenClaw webhook error. It can
+appear when a user clicks a Messenger link, Page message button, or Facebook UI
+entry point while Meta is changing messaging behavior for European rules.
+
+If this happens:
+
+- try opening the conversation in the Messenger mobile app;
+- try the Page inbox in Meta Business Suite;
+- test from another account that has access to message the Page;
+- confirm with OpenClaw logs whether any webhook event reached the gateway.
+
+If no webhook arrives, the user never reached the Page conversation. If the
+webhook arrives but OpenClaw does not answer, continue with the normal webhook,
+token, and `dmPolicy` checks below.
+
 ### Messages arrive, but replies fail
 
 Check:
