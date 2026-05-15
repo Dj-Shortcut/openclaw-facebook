@@ -1,16 +1,20 @@
 # OpenClaw Facebook Plugin
 
-Private hardening repo for the installable `@dj-shortcut/facebook` plugin.
+This plugin gives OpenClaw a Facebook Page inbox. After setup, people can send a
+direct message to your Facebook Page and OpenClaw can receive it, decide what to
+do, and reply through Messenger.
 
-V1 connects a Meta app, a Facebook Page, and the Messenger product so OpenClaw
-can handle Facebook Page Messenger direct messages through Meta webhooks. The
-public plugin id, channel id, config key, setup docs, and default webhook path
-use `facebook` because this is the Facebook/Meta integration surface, not a
-standalone generic Messenger channel. Legacy `messenger`, `fb`, and `fbm`
-aliases remain temporarily for existing installs only.
+It is meant as a clear starting point for building on the Meta platform: connect
+a Meta app, a Facebook Page, and the Messenger product, then let OpenClaw handle
+Facebook Page Messenger DMs through Meta webhooks.
 
-The short version: install and configure `facebook`; expect V1 capability to be
-Facebook Page Messenger DMs.
+V1 is intentionally focused: Facebook Page Messenger direct messages only. It
+does not yet implement comments, Private Replies/comment-to-DM flows, Instagram
+DMs, attachments, or broader Meta automation.
+
+The plugin is called `facebook` because this is the Facebook/Meta integration
+surface. Legacy `messenger`, `fb`, and `fbm` aliases remain temporarily for
+existing installs only.
 
 ## Install
 
