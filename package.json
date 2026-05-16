@@ -5,6 +5,9 @@
   "description": "OpenClaw Facebook channel plugin",
   "type": "module",
   "license": "MIT",
+  "engines": {
+    "node": ">=22.16.0"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Dj-Shortcut/openclaw-facebook.git"
