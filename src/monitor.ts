@@ -397,6 +397,8 @@ export async function monitorMessengerProvider(
               logVerbose(
                 `messenger: skipped event for unmatched page ${redactMessengerIdentifier(
                   event.recipient?.id,
+                )} (sender: ${redactMessengerIdentifier(event.sender?.id)}, message: ${event.message?.text?.substring(0, 50)})`,
+                  event.recipient?.id,
                 )}`,
               );
               continue;
