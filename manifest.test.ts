@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { MessengerConfigSchema } from "./src/config-schema.js";
 
 describe("openclaw plugin manifest", () => {
   it("publishes facebook as the only active channel", () => {
@@ -26,6 +27,22 @@ describe("openclaw plugin manifest", () => {
         accounts: { type: "object" },
       },
     });
+    const facebookSchema = manifest.channelConfigs?.facebook?.schema as {
+      properties?: {
+        dmPolicy?: { default?: unknown };
+        accounts?: {
+          additionalProperties?: {
+            properties?: {
+              dmPolicy?: { default?: unknown };
+            };
+          };
+        };
+      };
+    };
+    expect(facebookSchema.properties?.dmPolicy?.default).toBe("pairing");
+    expect(
+      facebookSchema.properties?.accounts?.additionalProperties?.properties?.dmPolicy?.default,
+    ).toBe("pairing");
     expect(manifest.channelEnvVars?.facebook).toEqual(
       expect.arrayContaining([
         "FACEBOOK_PAGE_ID",
@@ -60,17 +77,17 @@ describe("package openclaw metadata", () => {
     expect(pkg.name).toBe("@dj-shortcut/facebook");
     expect(pkg.private).toBe(true);
     expect(pkg.openclaw?.compat).toEqual({
-      pluginApi: ">=2026.5.10-beta.1",
-      minGatewayVersion: "2026.5.10-beta.1",
+      pluginApi: ">=2026.5.12",
+      minGatewayVersion: "2026.5.12",
     });
     expect(pkg.openclaw?.build).toEqual({
-      openclawVersion: "2026.5.10-beta.1",
-      pluginSdkVersion: "2026.5.10-beta.1",
+      openclawVersion: "2026.5.12",
+      pluginSdkVersion: "2026.5.12",
     });
     expect(pkg.openclaw?.install).toEqual({
       clawhubSpec: "clawhub:@dj-shortcut/facebook",
       defaultChoice: "clawhub",
-      minHostVersion: ">=2026.5.10-beta.1",
+      minHostVersion: ">=2026.5.12",
     });
     expect(pkg.openclaw?.channel?.preferOver).toEqual(["messenger"]);
     expect(pkg.openclaw?.channel?.exposure).toEqual({
@@ -78,5 +95,14 @@ describe("package openclaw metadata", () => {
       setup: true,
       docs: true,
     });
+  });
+});
+
+describe("facebook config safety defaults", () => {
+  it("keeps direct messages in pairing mode unless explicitly opened", () => {
+    const parsed = MessengerConfigSchema.parse({});
+
+    expect(parsed.dmPolicy).toBe("pairing");
+    expect(parsed.allowFrom).toBeUndefined();
   });
 });
