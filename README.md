@@ -101,6 +101,7 @@ channel.
 
 ## Development
 
+Use Node.js `22.16.0` (see `.nvmrc` / `.node-version`) before installing dependencies.
 ```bash
 npm install
 npm run build
