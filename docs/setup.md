@@ -16,6 +16,10 @@ Messenger DMs. The plugin is named `facebook` because the setup is a
 Facebook/Meta integration, even though the first supported surface is Facebook
 Page Messenger DMs.
 
+This is the short setup path. For a complete guide to the Meta app, Facebook
+Page identity, permissions, review, Messenger rules, production checks, and
+troubleshooting, see [facebook-complete-tutorial.md](facebook-complete-tutorial.md).
+
 Official Meta references:
 
 - Messenger Platform overview:
