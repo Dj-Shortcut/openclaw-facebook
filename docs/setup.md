@@ -267,6 +267,11 @@ This opens only the message entry point. Keep powerful tools, private memory,
 workspace files, git/deploy access, config changes, and admin actions restricted
 through OpenClaw permissions for trusted users only.
 
+If this Page is public or paid, treat Facebook as a metered entry point rather
+than full assistant access. Keep budget gates, tool policy, credit balances, and
+provider cost ledgers in the OpenClaw host runtime where model/tool calls
+execute. See [cost-control-plan.md](cost-control-plan.md).
+
 ### Allowlist Mode
 
 Use this when you already know the Page-scoped sender IDs that may talk to the

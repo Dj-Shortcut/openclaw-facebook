@@ -71,6 +71,8 @@ See [`docs/setup.md`](docs/setup.md) for the full Meta-side tutorial: what this
 repo connects, which values to copy from the Meta dashboard, how to configure
 the webhook, and how to test/debug the Page Messenger flow.
 See [`docs/clawhub.md`](docs/clawhub.md) for ClawHub release preparation.
+See [`docs/cost-control-plan.md`](docs/cost-control-plan.md) for the recommended
+budget, usage-ledger, and payment boundaries for public Facebook assistants.
 
 ## Access model
 
@@ -81,6 +83,8 @@ pairing code before they can talk to the assistant. For a public Page bot, use
 Open means the conversation entry point is public; it should not grant unknown users
 privileged tools, private memory, files, git/deploy access, or admin actions.
 Use separate OpenClaw permissions/tool policy for that trusted core.
+For paid or public assistants, keep billing, credits, model selection, and tool
+budgets in the OpenClaw host runtime where provider calls execute.
 
 ## Local/private install validation
 
