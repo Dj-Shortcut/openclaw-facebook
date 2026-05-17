@@ -62,6 +62,9 @@ export type MessengerWebhookTarget = {
 
 const messengerWebhookTargets = new Map<string, MessengerWebhookTarget[]>();
 const messengerWebhookInFlightLimiter = createWebhookInFlightLimiter();
+const MESSENGER_MESSAGE_DEDUPE_TTL_MS = 10 * 60 * 1000;
+const MESSENGER_MESSAGE_DEDUPE_MAX_ENTRIES = 5_000;
+const processedMessengerMessageIds = new Map<string, number>();
 
 export function redactMessengerIdentifier(value: string | undefined): string {
   const normalized = value?.trim();
@@ -69,6 +72,49 @@ export function redactMessengerIdentifier(value: string | undefined): string {
     return "unknown";
   }
   return `sha256:${createHash("sha256").update(normalized).digest("hex").slice(0, 12)}`;
+}
+
+function pruneProcessedMessengerMessageIds(now: number): void {
+  if (processedMessengerMessageIds.size <= MESSENGER_MESSAGE_DEDUPE_MAX_ENTRIES) {
+    for (const [key, expiresAt] of processedMessengerMessageIds) {
+      if (expiresAt <= now) {
+        processedMessengerMessageIds.delete(key);
+      }
+    }
+    return;
+  }
+  for (const [key, expiresAt] of processedMessengerMessageIds) {
+    if (
+      expiresAt <= now ||
+      processedMessengerMessageIds.size > MESSENGER_MESSAGE_DEDUPE_MAX_ENTRIES
+    ) {
+      processedMessengerMessageIds.delete(key);
+    }
+  }
+}
+
+export function shouldProcessMessengerMessageOnce(params: {
+  accountId: string;
+  senderId: string;
+  messageId?: string;
+  timestamp?: number;
+  now?: number;
+}): boolean {
+  const stableMessageId =
+    normalizeOptionalString(params.messageId) ??
+    (params.senderId && params.timestamp ? `${params.senderId}:${params.timestamp}` : undefined);
+  if (!stableMessageId) {
+    return true;
+  }
+  const now = params.now ?? Date.now();
+  pruneProcessedMessengerMessageIds(now);
+  const key = `${params.accountId}:${stableMessageId}`;
+  const existingExpiresAt = processedMessengerMessageIds.get(key);
+  if (existingExpiresAt && existingExpiresAt > now) {
+    return false;
+  }
+  processedMessengerMessageIds.set(key, now + MESSENGER_MESSAGE_DEDUPE_TTL_MS);
+  return true;
 }
 
 export function resolveMessengerEventTarget(
@@ -193,6 +239,22 @@ async function processMessengerEvent(params: {
   }
   const senderId = params.event.sender?.id ?? "";
   const text = params.event.message?.text ?? "";
+  const timestamp = params.event.timestamp ?? Date.now();
+  if (
+    !shouldProcessMessengerMessageOnce({
+      accountId: params.account.accountId,
+      senderId,
+      messageId: params.event.message?.mid,
+      timestamp,
+    })
+  ) {
+    logVerbose(
+      `messenger: skipped duplicate message ${redactMessengerIdentifier(
+        params.event.message?.mid ?? `${senderId}:${timestamp}`,
+      )} from ${redactMessengerIdentifier(senderId)}`,
+    );
+    return;
+  }
   const route = resolveAgentRoute({
     cfg: params.cfg,
     channel: FACEBOOK_CHANNEL_ID,
@@ -204,7 +266,6 @@ async function processMessengerEvent(params: {
     agentId: route.agentId,
     sessionKey: route.sessionKey,
   });
-  const timestamp = params.event.timestamp ?? Date.now();
   const body = formatInboundEnvelope({
     channel: "Facebook",
     from: `facebook:${senderId}`,

@@ -3,6 +3,7 @@ import {
   redactMessengerIdentifier,
   resolveMessengerEventTarget,
   resolveMessengerVerificationTarget,
+  shouldProcessMessengerMessageOnce,
   type MessengerWebhookTarget,
 } from "./monitor.js";
 
@@ -68,5 +69,83 @@ describe("redactMessengerIdentifier", () => {
     expect(redacted).toMatch(/^sha256:[a-f0-9]{12}$/);
     expect(redacted).not.toContain("1234567890");
     expect(redactMessengerIdentifier("1234567890")).toBe(redacted);
+  });
+});
+
+describe("shouldProcessMessengerMessageOnce", () => {
+  it("allows a Messenger message id only once inside the dedupe window", () => {
+    expect(
+      shouldProcessMessengerMessageOnce({
+        accountId: "default",
+        senderId: "sender-1",
+        messageId: "mid-1",
+        now: 1_000,
+      }),
+    ).toBe(true);
+    expect(
+      shouldProcessMessengerMessageOnce({
+        accountId: "default",
+        senderId: "sender-1",
+        messageId: "mid-1",
+        now: 2_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("dedupes the same message id independently per account", () => {
+    expect(
+      shouldProcessMessengerMessageOnce({
+        accountId: "account-a",
+        senderId: "sender-1",
+        messageId: "mid-account",
+        now: 1_000,
+      }),
+    ).toBe(true);
+    expect(
+      shouldProcessMessengerMessageOnce({
+        accountId: "account-b",
+        senderId: "sender-1",
+        messageId: "mid-account",
+        now: 1_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("falls back to sender and timestamp when Meta omits the message id", () => {
+    expect(
+      shouldProcessMessengerMessageOnce({
+        accountId: "default",
+        senderId: "sender-2",
+        timestamp: 123_456,
+        now: 1_000,
+      }),
+    ).toBe(true);
+    expect(
+      shouldProcessMessengerMessageOnce({
+        accountId: "default",
+        senderId: "sender-2",
+        timestamp: 123_456,
+        now: 2_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("allows the same message again after the dedupe window expires", () => {
+    expect(
+      shouldProcessMessengerMessageOnce({
+        accountId: "default",
+        senderId: "sender-3",
+        messageId: "mid-expiring",
+        now: 1_000,
+      }),
+    ).toBe(true);
+    expect(
+      shouldProcessMessengerMessageOnce({
+        accountId: "default",
+        senderId: "sender-3",
+        messageId: "mid-expiring",
+        now: 1_000 + 10 * 60 * 1000 + 1,
+      }),
+    ).toBe(true);
   });
 });
