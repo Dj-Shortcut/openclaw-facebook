@@ -50,6 +50,9 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Run npm audit
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Dry-run npm pack
         run: npm run pack:dry
 
