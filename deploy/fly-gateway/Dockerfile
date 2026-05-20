@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-ARG OPENCLAW_VERSION=2026.5.12
+ARG OPENCLAW_VERSION=2026.5.19
 
 FROM node:22-bookworm-slim AS plugin-build
 
@@ -13,7 +13,7 @@ COPY src ./src
 COPY docs ./docs
 COPY examples ./examples
 
-RUN npm ci && npm run build && mkdir -p /tmp/openclaw-plugin && npm pack --ignore-scripts --pack-destination /tmp/openclaw-plugin
+RUN npm install --ignore-scripts && npm run build && mkdir -p /tmp/openclaw-plugin && npm pack --ignore-scripts --pack-destination /tmp/openclaw-plugin
 
 FROM node:22-bookworm-slim
 ARG OPENCLAW_VERSION
