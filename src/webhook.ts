@@ -7,17 +7,21 @@ export function handleMessengerWebhookVerification(params: {
   url: URL;
   verifyToken: string;
   res: ServerResponse;
+  log?: (message: string) => void;
 }): boolean {
   if (params.url.searchParams.get("hub.mode") !== "subscribe") {
+    params.log?.("messenger webhook verification rejected: unsupported mode");
     params.res.statusCode = 403;
     params.res.end("Forbidden");
     return true;
   }
   if (params.url.searchParams.get("hub.verify_token") !== params.verifyToken) {
+    params.log?.("messenger webhook verification rejected: verify token mismatch");
     params.res.statusCode = 403;
     params.res.end("Forbidden");
     return true;
   }
+  params.log?.("messenger webhook verification accepted");
   params.res.statusCode = 200;
   params.res.setHeader("Content-Type", "text/plain");
   params.res.end(params.url.searchParams.get("hub.challenge") ?? "");
@@ -28,6 +32,7 @@ export async function readVerifiedMessengerWebhookBody(params: {
   req: IncomingMessage;
   res: ServerResponse;
   appSecret: string;
+  log?: (message: string) => void;
 }): Promise<{ ok: true; body: MessengerWebhookBody } | { ok: false }> {
   const signatureHeader = params.req.headers["x-hub-signature-256"];
   const signature =
@@ -37,6 +42,7 @@ export async function readVerifiedMessengerWebhookBody(params: {
         ? (signatureHeader[0] ?? "")
         : "";
   if (!signature.trim()) {
+    params.log?.("messenger webhook rejected: missing signature");
     params.res.statusCode = 401;
     params.res.end("Missing X-Hub-Signature-256");
     return { ok: false };
@@ -48,17 +54,21 @@ export async function readVerifiedMessengerWebhookBody(params: {
     invalidBodyMessage: "Invalid webhook body",
   });
   if (!raw.ok) {
+    params.log?.("messenger webhook rejected: invalid body");
     return { ok: false };
   }
   if (!validateMessengerSignature(raw.value, signature, params.appSecret)) {
+    params.log?.("messenger webhook rejected: invalid signature");
     params.res.statusCode = 401;
     params.res.end("Invalid signature");
     return { ok: false };
   }
   try {
     const body = JSON.parse(raw.value) as MessengerWebhookBody;
+    params.log?.("messenger webhook accepted: verified payload");
     return { ok: true, body };
   } catch {
+    params.log?.("messenger webhook rejected: invalid JSON payload");
     params.res.statusCode = 400;
     params.res.end("Invalid webhook payload");
     return { ok: false };

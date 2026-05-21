@@ -93,6 +93,10 @@ function pruneProcessedMessengerMessageIds(now: number): void {
   }
 }
 
+function logMessengerWebhookRejected(reason: string, path: string): void {
+  logVerbose(`messenger webhook rejected: ${reason} path=${path}`);
+}
+
 export function shouldProcessMessengerMessageOnce(params: {
   accountId: string;
   senderId: string;
@@ -212,6 +216,11 @@ async function shouldProcessMessengerEvent(params: {
   });
 
   if (access.senderAccess.decision === "allow") {
+    logVerbose(
+      `messenger: allowed sender ${redactMessengerIdentifier(senderId)} account=${
+        params.account.accountId
+      }`,
+    );
     return true;
   }
   if (access.senderAccess.decision === "pairing") {
@@ -240,6 +249,13 @@ async function processMessengerEvent(params: {
   const senderId = params.event.sender?.id ?? "";
   const text = params.event.message?.text ?? "";
   const timestamp = params.event.timestamp ?? Date.now();
+  logVerbose(
+    `messenger: received text event sender=${redactMessengerIdentifier(
+      senderId,
+    )} account=${params.account.accountId} message=${redactMessengerIdentifier(
+      params.event.message?.mid ?? `${senderId}:${timestamp}`,
+    )}`,
+  );
   if (
     !shouldProcessMessengerMessageOnce({
       accountId: params.account.accountId,
@@ -297,6 +313,9 @@ async function processMessengerEvent(params: {
     OriginatingTo: `facebook:${senderId}`,
   });
   const core = getMessengerRuntime();
+  logVerbose(
+    `messenger: dispatching inbound turn session=${route.sessionKey} account=${route.accountId}`,
+  );
   const turnResult = await core.channel.turn.run({
     channel: FACEBOOK_CHANNEL_ID,
     accountId: route.accountId,
@@ -360,6 +379,12 @@ async function processMessengerEvent(params: {
     logVerbose(
       `messenger: no response generated for message from ${redactMessengerIdentifier(senderId)}`,
     );
+  } else {
+    logVerbose(
+      `messenger: completed inbound turn sender=${redactMessengerIdentifier(
+        senderId,
+      )} account=${route.accountId}`,
+    );
   }
 }
 
@@ -390,6 +415,7 @@ export async function monitorMessengerProvider(
         if (req.method === "GET") {
           const firstTarget = targets[0];
           if (!firstTarget) {
+            logMessengerWebhookRejected("no registered target for verification", normalizedPath);
             res.statusCode = 404;
             res.end("Not Found");
             return;
@@ -397,6 +423,7 @@ export async function monitorMessengerProvider(
           const url = new URL(req.url ?? "", "http://localhost");
           const target = resolveMessengerVerificationTarget(targets, url);
           if (!target) {
+            logMessengerWebhookRejected("verification token mismatch", normalizedPath);
             res.statusCode = 403;
             res.end("Forbidden");
             return;
@@ -405,6 +432,7 @@ export async function monitorMessengerProvider(
             url,
             verifyToken: target.account.verifyToken,
             res,
+            log: (message) => logVerbose(`${message} path=${normalizedPath}`),
           });
           return;
         }
@@ -417,6 +445,7 @@ export async function monitorMessengerProvider(
           requireJsonContentType: true,
         });
         if (!requestLifecycle.ok) {
+          logMessengerWebhookRejected("request pipeline rejected", normalizedPath);
           return;
         }
         try {
@@ -434,12 +463,14 @@ export async function monitorMessengerProvider(
             invalidBodyMessage: "Invalid webhook body",
           });
           if (!raw.ok) {
+            logMessengerWebhookRejected("invalid body", normalizedPath);
             return;
           }
           const matchingTargets = targets.filter((target) =>
             validateMessengerSignature(raw.value, signature, target.account.appSecret),
           );
           if (matchingTargets.length === 0) {
+            logMessengerWebhookRejected("invalid signature", normalizedPath);
             res.statusCode = 401;
             res.end("Invalid signature");
             return;
@@ -448,17 +479,22 @@ export async function monitorMessengerProvider(
           try {
             body = JSON.parse(raw.value);
           } catch {
+            logMessengerWebhookRejected("invalid JSON payload", normalizedPath);
             res.statusCode = 400;
             res.end("Invalid webhook payload");
             return;
           }
-          for (const event of extractMessengerTextMessages(body as MessengerWebhookBody)) {
+          const events = extractMessengerTextMessages(body as MessengerWebhookBody);
+          logVerbose(
+            `messenger webhook accepted: events=${events.length} targets=${matchingTargets.length} path=${normalizedPath}`,
+          );
+          for (const event of events) {
             const target = resolveMessengerEventTarget(matchingTargets, event);
             if (!target) {
               logVerbose(
                 `messenger: skipped event for unmatched page ${redactMessengerIdentifier(
                   event.recipient?.id,
-                )} (sender: ${redactMessengerIdentifier(event.sender?.id)}, message: ${event.message?.text?.substring(0, 50)})`,
+                )} sender=${redactMessengerIdentifier(event.sender?.id)}`,
               );
               continue;
             }
