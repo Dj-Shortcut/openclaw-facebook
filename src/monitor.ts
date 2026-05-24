@@ -259,6 +259,11 @@ function resolveImageGenRequestConfig():
     const baseUrl = new URL(
       process.env.LEADERBOT_IMAGE_GEN_URL?.trim() || DEFAULT_IMAGE_GEN_URL,
     );
+    const isLocalhost =
+      baseUrl.hostname === "localhost" || baseUrl.hostname === "127.0.0.1";
+    if (baseUrl.protocol !== "https:" && !isLocalhost) {
+      return { ok: false, reason: "invalid_url" };
+    }
     const endpoint = new URL("/internal/messenger/image-request", baseUrl);
     return { ok: true, endpoint: endpoint.toString(), token };
   } catch {
