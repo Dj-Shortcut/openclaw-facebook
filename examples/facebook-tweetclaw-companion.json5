@@ -1,0 +1,28 @@
+{
+  channels: {
+    facebook: {
+      enabled: true,
+      name: "Leaderbot",
+      pageId: "<FACEBOOK_PAGE_ID>",
+      pageAccessToken: "<FACEBOOK_PAGE_ACCESS_TOKEN>",
+      appSecret: "<FACEBOOK_APP_SECRET>",
+      verifyToken: "<FACEBOOK_VERIFY_TOKEN>",
+      dmPolicy: "pairing"
+    }
+  },
+  plugins: {
+    entries: {
+      tweetclaw: {
+        config: {
+          apiKey: "<XQUIK_API_KEY>",
+          pollingEnabled: true,
+          pollingInterval: 60
+        }
+      }
+    }
+  },
+  tools: {
+    // Keep the normal OpenClaw tool profile and explicitly add TweetClaw.
+    alsoAllow: ["explore", "tweetclaw"]
+  }
+}
