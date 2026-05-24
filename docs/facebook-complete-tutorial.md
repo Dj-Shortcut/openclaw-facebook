@@ -322,6 +322,13 @@ Keep private files, memory, shell, deploy, GitHub mutations, machine starts,
 browser automation, image generation, and high-cost tools behind host-level
 trust and budget policy.
 
+Public users may send personal, financial, authentication, or business-sensitive
+information into Messenger. In open mode, those messages can be forwarded into
+your OpenClaw host, model provider, logs, memory, and any enabled tools according
+to your runtime configuration. Before enabling this for a public Page, publish a
+privacy policy, disclose automated/AI handling where required, and decide what
+data is retained, deleted, or shared with third-party providers.
+
 For public or paid bots, read [cost-control-plan.md](cost-control-plan.md).
 
 ## 11. Cost And Tool Safety

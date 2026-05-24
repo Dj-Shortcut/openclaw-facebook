@@ -271,6 +271,13 @@ This opens only the message entry point. Keep powerful tools, private memory,
 workspace files, git/deploy access, config changes, and admin actions restricted
 through OpenClaw permissions for trusted users only.
 
+Public users may send personal, financial, authentication, or business-sensitive
+information into Messenger. In open mode, those messages can be forwarded into
+your OpenClaw host, model provider, logs, memory, and any enabled tools according
+to your runtime configuration. Before enabling this for a public Page, publish a
+privacy policy, disclose automated/AI handling where required, and decide what
+data is retained, deleted, or shared with third-party providers.
+
 If this Page is public or paid, treat Facebook as a metered entry point rather
 than full assistant access. Keep budget gates, tool policy, credit balances, and
 provider cost ledgers in the OpenClaw host runtime where model/tool calls

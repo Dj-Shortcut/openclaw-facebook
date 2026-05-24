@@ -74,6 +74,12 @@ export function redactMessengerIdentifier(value: string | undefined): string {
   return `sha256:${createHash("sha256").update(normalized).digest("hex").slice(0, 12)}`;
 }
 
+export function formatUnmatchedMessengerPageLog(event: MessengerWebhookMessaging): string {
+  return `messenger: skipped event for unmatched page ${redactMessengerIdentifier(
+    event.recipient?.id,
+  )} sender=${redactMessengerIdentifier(event.sender?.id)}`;
+}
+
 function pruneProcessedMessengerMessageIds(now: number): void {
   if (processedMessengerMessageIds.size <= MESSENGER_MESSAGE_DEDUPE_MAX_ENTRIES) {
     for (const [key, expiresAt] of processedMessengerMessageIds) {
@@ -491,11 +497,7 @@ export async function monitorMessengerProvider(
           for (const event of events) {
             const target = resolveMessengerEventTarget(matchingTargets, event);
             if (!target) {
-              logVerbose(
-                `messenger: skipped event for unmatched page ${redactMessengerIdentifier(
-                  event.recipient?.id,
-                )} sender=${redactMessengerIdentifier(event.sender?.id)}`,
-              );
+              logVerbose(formatUnmatchedMessengerPageLog(event));
               continue;
             }
             await processMessengerEvent({

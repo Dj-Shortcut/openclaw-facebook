@@ -84,6 +84,12 @@ pairing code before they can talk to the assistant. For a public Page bot, use
 Open means the conversation entry point is public; it should not grant unknown users
 privileged tools, private memory, files, git/deploy access, or admin actions.
 Use separate OpenClaw permissions/tool policy for that trusted core.
+Public users may send personal, financial, authentication, or business-sensitive
+information into Messenger. In open mode, those messages can be forwarded into
+your OpenClaw host, model provider, logs, memory, and any enabled tools according
+to your runtime configuration. Publish a privacy policy, disclose automated/AI
+handling where required, and decide what data is retained, deleted, or shared
+with third-party providers before enabling this for a public Page.
 For paid or public assistants, keep billing, credits, model selection, and tool
 budgets in the OpenClaw host runtime where provider calls execute.
 

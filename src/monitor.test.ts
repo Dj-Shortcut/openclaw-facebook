@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatUnmatchedMessengerPageLog,
   redactMessengerIdentifier,
   resolveMessengerEventTarget,
   resolveMessengerVerificationTarget,
@@ -69,6 +70,26 @@ describe("redactMessengerIdentifier", () => {
     expect(redacted).toMatch(/^sha256:[a-f0-9]{12}$/);
     expect(redacted).not.toContain("1234567890");
     expect(redactMessengerIdentifier("1234567890")).toBe(redacted);
+  });
+});
+
+describe("formatUnmatchedMessengerPageLog", () => {
+  it("does not include raw sender, page, or message text", () => {
+    const logLine = formatUnmatchedMessengerPageLog({
+      recipient: { id: "page-123456" },
+      sender: { id: "sender-987654" },
+      message: {
+        mid: "mid-sensitive",
+        text: "my card number is 4111 1111 1111 1111",
+      },
+    });
+
+    expect(logLine).toContain("messenger: skipped event for unmatched page");
+    expect(logLine).not.toContain("page-123456");
+    expect(logLine).not.toContain("sender-987654");
+    expect(logLine).not.toContain("card number");
+    expect(logLine).not.toContain("4111");
+    expect(logLine).not.toContain("mid-sensitive");
   });
 });
 
