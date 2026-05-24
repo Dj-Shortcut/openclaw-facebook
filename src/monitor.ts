@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import {
+  buildChannelInboundMediaPayload,
   formatInboundEnvelope,
   resolveInboundSessionEnvelopeContext,
+  toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { hasFinalChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
@@ -45,7 +47,11 @@ import type {
   MessengerWebhookMessaging,
   ResolvedMessengerAccount,
 } from "./types.js";
-import { extractMessengerTextMessages, handleMessengerWebhookVerification } from "./webhook.js";
+import {
+  extractMessengerImageAttachmentUrls,
+  extractMessengerInboundMessages,
+  handleMessengerWebhookVerification,
+} from "./webhook.js";
 
 export interface MonitorMessengerProviderOptions {
   account: ResolvedMessengerAccount;
@@ -476,12 +482,27 @@ async function processMessengerEvent(params: {
     const senderId = params.event.sender?.id ?? "";
     const text = params.event.message?.text ?? "";
     const timestamp = params.event.timestamp ?? Date.now();
+    const imageUrls = extractMessengerImageAttachmentUrls(params.event);
+    const mediaFacts = toInboundMediaFacts(
+      imageUrls.map((url) => ({ url, contentType: "image/*", kind: "image" })),
+      { kind: "image", messageId: params.event.message?.mid },
+    );
+    const mediaPayload = buildChannelInboundMediaPayload(mediaFacts);
+    const hasMedia = imageUrls.length > 0;
+    const textForAgent =
+      text.trim() ||
+      (hasMedia
+        ? "De gebruiker stuurde een afbeelding. Bekijk de bijgevoegde afbeelding en antwoord op basis daarvan."
+        : "");
+    const displayBody = [text.trim(), hasMedia ? `[Messenger image attachment]` : ""]
+      .filter(Boolean)
+      .join("\n");
     logVerbose(
-      `messenger: received text event sender=${redactMessengerIdentifier(
+      `messenger: received inbound event sender=${redactMessengerIdentifier(
         senderId,
       )} account=${params.account.accountId} message=${redactMessengerIdentifier(
         params.event.message?.mid ?? `${senderId}:${timestamp}`,
-      )}`,
+      )} media=${imageUrls.length}`,
     );
     if (
       !shouldProcessMessengerMessageOnce({
@@ -499,7 +520,7 @@ async function processMessengerEvent(params: {
       );
       return;
     }
-    const fastLane = resolveMessengerFastLaneReply(text);
+    const fastLane = hasMedia ? null : resolveMessengerFastLaneReply(text);
     if (fastLane) {
       logMessengerStage(params.trace, "first_response_ready", { intent: fastLane.intent });
       const result = await sendMessengerText(senderId, fastLane.reply, {
@@ -560,7 +581,7 @@ async function processMessengerEvent(params: {
     channel: "Facebook",
     from: `facebook:${senderId}`,
     timestamp,
-    body: text,
+    body: displayBody,
     chatType: "direct",
     sender: { id: senderId },
     previousTimestamp,
@@ -568,8 +589,8 @@ async function processMessengerEvent(params: {
   });
   const ctxPayload = finalizeInboundContext({
     Body: body,
-    BodyForAgent: text,
-    RawBody: text,
+    BodyForAgent: textForAgent,
+    RawBody: displayBody,
     CommandBody: text,
     From: `facebook:${senderId}`,
     To: `facebook:${senderId}`,
@@ -585,6 +606,7 @@ async function processMessengerEvent(params: {
     CommandAuthorized: shouldComputeCommandAuthorized(text, params.cfg),
     OriginatingChannel: FACEBOOK_CHANNEL_ID,
     OriginatingTo: `facebook:${senderId}`,
+    ...mediaPayload,
   });
   const core = getMessengerRuntime();
   logMessengerStage(params.trace, "openclaw_call_started", {
@@ -600,7 +622,9 @@ async function processMessengerEvent(params: {
     adapter: {
       ingest: () => ({
         id: ctxPayload.MessageSid ?? `${senderId}:${timestamp}`,
-        rawText: text,
+        rawText: displayBody,
+        textForAgent,
+        textForCommands: text,
       }),
       resolveTurn: () => ({
         cfg: params.cfg,
@@ -804,7 +828,7 @@ export async function monitorMessengerProvider(
             res.end("Invalid webhook payload");
             return;
           }
-          const events = extractMessengerTextMessages(body as MessengerWebhookBody);
+          const events = extractMessengerInboundMessages(body as MessengerWebhookBody);
           logVerbose(
             `messenger webhook accepted: events=${events.length} targets=${matchingTargets.length} path=${normalizedPath}`,
           );
