@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { extname, join } from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import {
+  type ChannelInboundMediaInput,
   buildChannelInboundMediaPayload,
   formatInboundEnvelope,
   resolveInboundSessionEnvelopeContext,
@@ -89,6 +92,8 @@ type MessengerFastLaneIntent = "greeting" | "help" | "status" | "image";
 
 const DEFAULT_IMAGE_GEN_URL = "https://leaderbot-fb-image-gen.fly.dev";
 const IMAGE_GEN_REQUEST_TIMEOUT_MS = 5_000;
+const MESSENGER_IMAGE_FETCH_TIMEOUT_MS = 10_000;
+const MESSENGER_IMAGE_FETCH_MAX_BYTES = 10 * 1024 * 1024;
 
 export function redactMessengerIdentifier(value: string | undefined): string {
   const normalized = value?.trim();
@@ -179,6 +184,123 @@ function logMessengerStage(
       .map(([key, value]) => `${key}=${String(value)}`)
       .join(" ")}`,
   );
+}
+
+function isAllowedMessengerImageHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return (
+    normalized === "facebook.com" ||
+    normalized.endsWith(".facebook.com") ||
+    normalized === "fbcdn.net" ||
+    normalized.endsWith(".fbcdn.net") ||
+    normalized === "fbsbx.com" ||
+    normalized.endsWith(".fbsbx.com")
+  );
+}
+
+function extensionFromContentType(contentType: string | null): string {
+  const normalized = contentType?.split(";")[0]?.trim().toLowerCase();
+  switch (normalized) {
+    case "image/jpeg":
+      return ".jpg";
+    case "image/png":
+      return ".png";
+    case "image/gif":
+      return ".gif";
+    case "image/webp":
+      return ".webp";
+    default:
+      return "";
+  }
+}
+
+function extensionFromUrl(url: string): string {
+  try {
+    const ext = extname(new URL(url).pathname).toLowerCase();
+    return [".jpg", ".jpeg", ".png", ".gif", ".webp"].includes(ext) ? ext : "";
+  } catch {
+    return "";
+  }
+}
+
+async function downloadMessengerImageAttachment(params: {
+  url: string;
+  reqId: string;
+  index: number;
+}): Promise<ChannelInboundMediaInput | null> {
+  let parsed: URL;
+  try {
+    parsed = new URL(params.url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:" || !isAllowedMessengerImageHost(parsed.hostname)) {
+    return null;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), MESSENGER_IMAGE_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(parsed, { signal: controller.signal });
+    if (!response.ok) {
+      return null;
+    }
+    const contentType = response.headers.get("content-type");
+    if (!contentType?.toLowerCase().startsWith("image/")) {
+      return null;
+    }
+
+    const contentLength = Number(response.headers.get("content-length") ?? "0");
+    if (contentLength > MESSENGER_IMAGE_FETCH_MAX_BYTES) {
+      return null;
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length === 0 || buffer.length > MESSENGER_IMAGE_FETCH_MAX_BYTES) {
+      return null;
+    }
+
+    const mediaDir = join(process.env.OPENCLAW_STATE_DIR?.trim() || "/tmp/openclaw", "media", "inbound");
+    await mkdir(mediaDir, { recursive: true });
+    const digest = createHash("sha256")
+      .update(params.reqId)
+      .update(String(params.index))
+      .update(buffer)
+      .digest("hex")
+      .slice(0, 32);
+    const ext = extensionFromContentType(contentType) || extensionFromUrl(params.url) || ".img";
+    const path = join(mediaDir, `messenger-${digest}${ext}`);
+    await writeFile(path, buffer);
+    return {
+      path,
+      url: params.url,
+      contentType,
+      kind: "image",
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function resolveMessengerImageMedia(params: {
+  urls: string[];
+  trace: MessengerTrace;
+}): Promise<ChannelInboundMediaInput[]> {
+  const media = await Promise.all(
+    params.urls.map((url, index) =>
+      downloadMessengerImageAttachment({ url, reqId: params.trace.reqId, index }),
+    ),
+  );
+  const resolved = media.filter((entry): entry is ChannelInboundMediaInput => entry !== null);
+  if (params.urls.length > 0) {
+    logMessengerStage(params.trace, "media_resolved", {
+      images: params.urls.length,
+      downloaded: resolved.length,
+    });
+  }
+  return resolved;
 }
 
 function normalizeFastLaneText(text: string): string {
@@ -483,11 +605,10 @@ async function processMessengerEvent(params: {
     const text = params.event.message?.text ?? "";
     const timestamp = params.event.timestamp ?? Date.now();
     const imageUrls = extractMessengerImageAttachmentUrls(params.event);
-    const mediaFacts = toInboundMediaFacts(
-      imageUrls.map((url) => ({ url, contentType: "image/*", kind: "image" })),
-      { kind: "image", messageId: params.event.message?.mid },
+    const imageMedia = await resolveMessengerImageMedia({ urls: imageUrls, trace: params.trace });
+    const mediaPayload = buildChannelInboundMediaPayload(
+      toInboundMediaFacts(imageMedia, { kind: "image", messageId: params.event.message?.mid }),
     );
-    const mediaPayload = buildChannelInboundMediaPayload(mediaFacts);
     const hasMedia = imageUrls.length > 0;
     const textForAgent =
       text.trim() ||
