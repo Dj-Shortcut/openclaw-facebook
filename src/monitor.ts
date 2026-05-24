@@ -81,6 +81,9 @@ type MessengerTrace = {
 
 type MessengerFastLaneIntent = "greeting" | "help" | "status" | "image";
 
+const DEFAULT_IMAGE_GEN_URL = "https://leaderbot-fb-image-gen.fly.dev";
+const IMAGE_GEN_REQUEST_TIMEOUT_MS = 5_000;
+
 export function redactMessengerIdentifier(value: string | undefined): string {
   const normalized = value?.trim();
   if (!normalized) {
@@ -235,11 +238,76 @@ export function resolveMessengerFastLaneReply(
     case "image":
       return {
         intent,
-        reply:
-          "Ik herken je afbeeldingsvraag. De snelle Messenger-gateway is nu actief; image generation blijft voorlopig in de aparte image-gen flow.",
+        reply: "Ik stuur je afbeeldingsvraag door naar de image generator. Moment.",
       };
     default:
       return null;
+  }
+}
+
+function resolveImageGenRequestConfig():
+  | { ok: true; endpoint: string; token: string }
+  | { ok: false; reason: "missing_token" | "invalid_url" } {
+  const token =
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN?.trim() ||
+    process.env.INTERNAL_IMAGE_REQUEST_TOKEN?.trim() ||
+    "";
+  if (!token) {
+    return { ok: false, reason: "missing_token" };
+  }
+  try {
+    const baseUrl = new URL(
+      process.env.LEADERBOT_IMAGE_GEN_URL?.trim() || DEFAULT_IMAGE_GEN_URL,
+    );
+    const endpoint = new URL("/internal/messenger/image-request", baseUrl);
+    return { ok: true, endpoint: endpoint.toString(), token };
+  } catch {
+    return { ok: false, reason: "invalid_url" };
+  }
+}
+
+async function requestLeaderbotImageGeneration(params: {
+  psid: string;
+  prompt: string;
+  reqId: string;
+  timestamp: number;
+  trace: MessengerTrace;
+}): Promise<boolean> {
+  const config = resolveImageGenRequestConfig();
+  if (!config.ok) {
+    logMessengerStage(params.trace, "image_gen_request_skipped", { reason: config.reason });
+    return false;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), IMAGE_GEN_REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(config.endpoint, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        psid: params.psid,
+        prompt: params.prompt,
+        reqId: params.reqId,
+        lang: "nl",
+        timestamp: params.timestamp,
+      }),
+    });
+    logMessengerStage(params.trace, "image_gen_request_sent", {
+      status: response.status,
+    });
+    return response.ok;
+  } catch (error) {
+    logMessengerStage(params.trace, "image_gen_request_failed", {
+      error: error instanceof Error ? error.name : "unknown",
+    });
+    return false;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -437,6 +505,25 @@ async function processMessengerEvent(params: {
         intent: fastLane.intent,
         message: redactMessengerIdentifier(result.messageId),
       });
+      if (fastLane.intent === "image") {
+        const queued = await requestLeaderbotImageGeneration({
+          psid: senderId,
+          prompt: text,
+          reqId: params.trace.reqId,
+          timestamp,
+          trace: params.trace,
+        });
+        if (!queued) {
+          await sendMessengerText(
+            senderId,
+            "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
+            {
+              cfg: params.cfg,
+              accountId: params.account.accountId,
+            },
+          );
+        }
+      }
       return;
     }
     await sendMessengerSenderAction(senderId, "typing_on", {
