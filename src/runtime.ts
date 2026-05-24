@@ -5,6 +5,7 @@ type MessengerChannelRuntime = {
   monitorMessengerProvider?: typeof import("./monitor.js").monitorMessengerProvider;
   probeMessengerPage?: typeof import("./probe.js").probeMessengerPage;
   resolveMessengerAccount?: typeof import("./accounts.js").resolveMessengerAccount;
+  sendMessengerSenderAction?: typeof import("./send.js").sendMessengerSenderAction;
   sendMessengerText?: typeof import("./send.js").sendMessengerText;
 };
 

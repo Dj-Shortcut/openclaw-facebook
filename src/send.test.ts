@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { sendMessengerText } from "./send.js";
+import { sendMessengerSenderAction, sendMessengerText } from "./send.js";
 
 describe("sendMessengerText", () => {
   afterEach(() => {
@@ -198,5 +198,47 @@ describe("sendMessengerText", () => {
     await expectedFailure;
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(init.signal?.aborted).toBe(true);
+  });
+});
+
+describe("sendMessengerSenderAction", () => {
+  it("sends Messenger sender actions to the Page messages endpoint", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ recipient_id: "psid-1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    await sendMessengerSenderAction("psid-1", "typing_on", {
+      cfg: {
+        channels: {
+          facebook: {
+            pageId: "page-1",
+            pageAccessToken: "token-1",
+            appSecret: "secret-1",
+            verifyToken: "verify-1",
+          },
+        },
+      } as never,
+      fetch: fetchMock as never,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://graph.facebook.com/v20.0/page-1/messages",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Authorization: "Bearer token-1",
+          "Content-Type": "application/json",
+        }),
+      }),
+    );
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      recipient: { id: "psid-1" },
+      sender_action: "typing_on",
+    });
   });
 });

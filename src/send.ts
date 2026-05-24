@@ -107,4 +107,56 @@ export async function sendMessengerText(
   };
 }
 
+export async function sendMessengerSenderAction(
+  to: string,
+  senderAction: "typing_on" | "typing_off" | "mark_seen",
+  opts: {
+    cfg: OpenClawConfig;
+    accountId?: string;
+    fetch?: FetchLike;
+  },
+): Promise<void> {
+  const account = resolveMessengerAccount({ cfg: opts.cfg, accountId: opts.accountId });
+  if (!account.pageId.trim()) {
+    throw new Error(`Messenger pageId missing for account "${account.accountId}".`);
+  }
+  if (!account.pageAccessToken.trim()) {
+    throw new Error(`Messenger Page access token missing for account "${account.accountId}".`);
+  }
+  const normalizedTo = stripFacebookTargetPrefix(to) || to.trim();
+  if (!normalizedTo) {
+    throw new Error(`Messenger recipient id missing for account "${account.accountId}".`);
+  }
+  const fetchImpl = opts.fetch ?? fetch;
+  const version = resolveGraphApiVersion(account.config.graphApiVersion);
+  const url = `https://graph.facebook.com/${version}/${encodeURIComponent(account.pageId)}/messages`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), MESSENGER_SEND_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetchImpl(url, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${account.pageAccessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        recipient: { id: normalizedTo },
+        sender_action: senderAction,
+      }),
+    });
+  } catch (error) {
+    throw new Error(`Messenger sender action failed: ${formatErrorMessage(error)}`, {
+      cause: error,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+  const body = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) {
+    throw new Error(formatMessengerApiError(body));
+  }
+}
+
 export const MESSENGER_TEXT_CHUNK_LIMIT = 1900;
