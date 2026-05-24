@@ -1,0 +1,49 @@
+0 verbose cli C:\Program Files\nodejs\node.exe C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js
+1 info using npm@11.11.0
+2 info using node@v24.14.1
+3 silly config load:file:C:\Program Files\nodejs\node_modules\npm\npmrc
+4 silly config load:file:C:\Users\Gebruiker\Desktop\projecten\openclaw-facebook\.npmrc
+5 silly config load:file:C:\Users\Gebruiker\.npmrc
+6 silly config load:file:C:\Users\Gebruiker\AppData\Roaming\npm\etc\npmrc
+7 verbose title npm pack
+8 verbose argv "pack" "--dry-run" "--ignore-scripts" "--cache" ".\\.npm-cache"
+9 verbose logfile logs-max:10 dir:C:\Users\Gebruiker\Desktop\projecten\openclaw-facebook\.npm-cache\_logs\2026-05-24T10_17_54_373Z-
+10 verbose logfile C:\Users\Gebruiker\Desktop\projecten\openclaw-facebook\.npm-cache\_logs\2026-05-24T10_17_54_373Z-debug-0.log
+11 silly logfile done cleaning log files
+12 silly packumentCache heap:2283274240 maxSize:570818560 maxEntrySize:285409280
+13 verbose shrinkwrap failed to load node_modules/.package-lock.json out of date, updated: node_modules
+14 http fetch GET https://registry.npmjs.org/npm attempt 1 failed with EACCES
+15 http fetch GET https://registry.npmjs.org/npm attempt 2 failed with EACCES
+16 notice
+17 notice package: @dj-shortcut/facebook@2026.5.22
+18 notice Tarball Contents
+19 notice 1.1kB LICENSE
+19 notice 4.2kB README.md
+19 notice 802B docs/audit-recommendations.md
+19 notice 2.2kB docs/clawhub.md
+19 notice 6.1kB docs/cost-control-plan.md
+19 notice 16.0kB docs/facebook-complete-tutorial.md
+19 notice 2.1kB docs/migration.md
+19 notice 15.4kB docs/setup.md
+19 notice 295B examples/channels.facebook.json5
+19 notice 90B examples/env.example
+19 notice 495B examples/multi-page.json5
+19 notice 542B examples/public-leaderbot.json5
+19 notice 3.9kB openclaw.plugin.json
+19 notice 3.1kB package.json
+20 notice Tarball Details
+21 notice name: @dj-shortcut/facebook
+22 notice version: 2026.5.22
+23 notice filename: dj-shortcut-facebook-2026.5.22.tgz
+24 notice package size: 17.3 kB
+25 notice unpacked size: 56.3 kB
+26 notice shasum: b6e14707a0fed9d24a8addd070a4b4a3aba999d4
+27 notice integrity: sha512-RBE/FeYidX/IH[...]0LyR6qCAp/AXg==
+28 notice total files: 14
+29 notice
+30 verbose cwd C:\Users\Gebruiker\Desktop\projecten\openclaw-facebook
+31 verbose os Windows_NT 10.0.26200
+32 verbose node v24.14.1
+33 verbose npm  v11.11.0
+34 verbose exit 0
+35 info ok

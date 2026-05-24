@@ -24,6 +24,8 @@ The container preserves `/data/openclaw.json` and only seeds non-secret defaults
 - `plugins.load.paths` includes `/app/node_modules/@openclaw/codex`.
 - `plugins.entries.facebook.enabled` defaults to `true`.
 - `channels.facebook.dmPolicy` defaults to `pairing`.
+- `agents.defaults.model.primary` defaults to `OPENCLAW_AGENT_MODEL` when set.
+- `agents.defaults.thinkingDefault` defaults to `OPENCLAW_AGENT_THINKING_DEFAULT` when set.
 
 The container changes `channels.facebook.dmPolicy: "open"` back to `"pairing"` unless `OPENCLAW_FACEBOOK_ALLOW_OPEN=1` is intentionally set.
 Secrets must remain in Fly secrets or the mounted state, never in this repo.

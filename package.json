@@ -1,6 +1,6 @@
 {
   "name": "@dj-shortcut/facebook",
-  "version": "2026.5.19",
+  "version": "2026.5.22",
   "private": true,
   "description": "OpenClaw Facebook channel plugin",
   "type": "module",
@@ -62,7 +62,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "openclaw": "^2026.5.19",
+    "openclaw": "^2026.5.22",
     "typescript": "^5.9.0",
     "vitest": "^4.1.5"
   },
@@ -72,8 +72,8 @@
       "minGatewayVersion": "2026.5.19"
     },
     "build": {
-      "openclawVersion": "2026.5.19",
-      "pluginSdkVersion": "2026.5.19"
+      "openclawVersion": "2026.5.22",
+      "pluginSdkVersion": "2026.5.22"
     },
     "install": {
       "clawhubSpec": "clawhub:@dj-shortcut/facebook",

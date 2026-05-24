@@ -9,6 +9,8 @@ const configPath = process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir, "open
 const pluginPath = process.env.OPENCLAW_FACEBOOK_PLUGIN_PATH || "/app/node_modules/@dj-shortcut/facebook";
 const codexPluginPath = process.env.OPENCLAW_CODEX_PLUGIN_PATH || "/app/node_modules/@openclaw/codex";
 const defaultDmPolicy = process.env.OPENCLAW_FACEBOOK_DEFAULT_DM_POLICY || "pairing";
+const defaultAgentModel = process.env.OPENCLAW_AGENT_MODEL || "";
+const defaultAgentThinking = process.env.OPENCLAW_AGENT_THINKING_DEFAULT || "";
 const allowOpen = process.env.OPENCLAW_FACEBOOK_ALLOW_OPEN === "1";
 
 function isObject(value) {
@@ -78,6 +80,21 @@ function ensurePublicMessengerBaseline(config) {
   }
   if (config.channels.facebook.dmPolicy === undefined) {
     config.channels.facebook.dmPolicy = defaultDmPolicy;
+  }
+
+  if (defaultAgentModel || defaultAgentThinking) {
+    if (!isObject(config.agents)) {
+      config.agents = {};
+    }
+    if (!isObject(config.agents.defaults)) {
+      config.agents.defaults = {};
+    }
+    if (defaultAgentModel && config.agents.defaults.model === undefined) {
+      config.agents.defaults.model = { primary: defaultAgentModel };
+    }
+    if (defaultAgentThinking && config.agents.defaults.thinkingDefault === undefined) {
+      config.agents.defaults.thinkingDefault = defaultAgentThinking;
+    }
   }
 
   const facebookConfig = config.channels.facebook;
