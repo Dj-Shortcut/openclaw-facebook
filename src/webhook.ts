@@ -96,3 +96,36 @@ export function extractMessengerTextMessages(
   }
   return messages;
 }
+
+export function extractMessengerImageAttachmentUrls(event: MessengerWebhookMessaging): string[] {
+  return (event.message?.attachments ?? [])
+    .filter((attachment) => attachment.type === "image")
+    .map((attachment) => attachment.payload?.url?.trim() ?? "")
+    .filter((url) => url.length > 0);
+}
+
+export function extractMessengerInboundMessages(
+  body: MessengerWebhookBody,
+): MessengerWebhookMessaging[] {
+  if (body.object !== "page") {
+    return [];
+  }
+  const messages: MessengerWebhookMessaging[] = [];
+  for (const entry of body.entry ?? []) {
+    for (const event of entry.messaging ?? []) {
+      if (event.message?.is_echo) {
+        continue;
+      }
+      if (!event.sender?.id || !event.recipient?.id) {
+        continue;
+      }
+      const text = event.message?.text?.trim();
+      const imageUrls = extractMessengerImageAttachmentUrls(event);
+      if (!text && imageUrls.length === 0) {
+        continue;
+      }
+      messages.push(event);
+    }
+  }
+  return messages;
+}

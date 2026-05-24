@@ -36,7 +36,7 @@ export const messengerChannelPluginCommon: Pick<
     chatTypes: ["direct"],
     reactions: false,
     threads: false,
-    media: false,
+    media: true,
     nativeCommands: false,
     blockStreaming: true,
   },
