@@ -23,6 +23,7 @@ ENV OPENCLAW_STATE_DIR=/data
 ENV OPENCLAW_CONFIG_PATH=/data/openclaw.json
 ENV OPENCLAW_FACEBOOK_PLUGIN_PATH=/app/node_modules/@dj-shortcut/facebook
 ENV OPENCLAW_CODEX_PLUGIN_PATH=/app/node_modules/@openclaw/codex
+ENV OPENCLAW_SKIP_STARTUP_MODEL_PREWARM=1
 
 WORKDIR /app
 
@@ -38,6 +39,7 @@ COPY --from=plugin-build /tmp/openclaw-plugin/*.tgz /tmp/openclaw-facebook.tgz
 
 RUN npm init -y && \
     npm install --omit=dev "openclaw@${OPENCLAW_VERSION}" "@openclaw/codex@${OPENCLAW_VERSION}" /tmp/openclaw-facebook.tgz && \
+    node -e "const fs=require('fs'); const path=require('path'); const file=fs.readdirSync('node_modules/openclaw/dist').find((name)=>name.startsWith('server.impl-')&&name.endsWith('.js')); if(!file) throw new Error('OpenClaw server impl bundle not found'); const target=path.join('node_modules/openclaw/dist', file); const before=fs.readFileSync(target, 'utf8'); const needle='providerAuthPrewarm: { getConfig: getRuntimeConfig }'; if(!before.includes(needle)) throw new Error('OpenClaw provider auth prewarm patch target not found'); fs.writeFileSync(target, before.replace(needle, 'providerAuthPrewarm: { enabled: false, getConfig: getRuntimeConfig }'));" && \
     npm cache clean --force && \
     rm -f /tmp/openclaw-facebook.tgz
 
