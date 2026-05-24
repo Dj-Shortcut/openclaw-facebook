@@ -9,7 +9,7 @@ export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-sch
 export { setMessengerRuntime } from "./src/runtime.js";
 export { monitorMessengerProvider } from "./src/monitor.js";
 export { probeMessengerPage } from "./src/probe.js";
-export { sendMessengerText } from "./src/send.js";
+export { sendMessengerSenderAction, sendMessengerText } from "./src/send.js";
 export {
   listMessengerAccountIds,
   normalizeAccountId,

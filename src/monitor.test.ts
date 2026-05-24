@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  classifyMessengerFastLaneIntent,
   formatUnmatchedMessengerPageLog,
   redactMessengerIdentifier,
+  resolveMessengerFastLaneReply,
   resolveMessengerEventTarget,
   resolveMessengerVerificationTarget,
   shouldProcessMessengerMessageOnce,
@@ -168,5 +170,29 @@ describe("shouldProcessMessengerMessageOnce", () => {
         now: 1_000 + 10 * 60 * 1000 + 1,
       }),
     ).toBe(true);
+  });
+});
+
+describe("classifyMessengerFastLaneIntent", () => {
+  it.each([
+    ["hey", "greeting"],
+    ["wat kan je?", "help"],
+    ["ben je online", "status"],
+    ["maak afbeelding van een robot", "image"],
+  ] as const)("classifies %s as %s", (text, intent) => {
+    expect(classifyMessengerFastLaneIntent(text)).toBe(intent);
+  });
+
+  it("leaves real assistant prompts for the OpenClaw turn", () => {
+    expect(classifyMessengerFastLaneIntent("Schrijf een korte planning voor morgen")).toBeNull();
+  });
+});
+
+describe("resolveMessengerFastLaneReply", () => {
+  it("returns a direct reply for simple Messenger intents", () => {
+    const result = resolveMessengerFastLaneReply("help");
+
+    expect(result?.intent).toBe("help");
+    expect(result?.reply).toContain("korte vragen");
   });
 });
