@@ -582,6 +582,33 @@ async function processMessengerEvent(params: {
   }
 }
 
+async function processScheduledMessengerEvents(params: {
+  scheduledEvents: Array<{
+    event: MessengerWebhookMessaging;
+    target: MessengerWebhookTarget;
+    trace: MessengerTrace;
+  }>;
+  cfg: OpenClawConfig;
+  runtime: RuntimeEnv;
+}) {
+  for (const item of params.scheduledEvents) {
+    logMessengerStage(item.trace, "messenger_ack_sent", {
+      queuedEvents: params.scheduledEvents.length,
+    });
+    try {
+      await processMessengerEvent({
+        event: item.event,
+        cfg: params.cfg,
+        account: item.target.account,
+        runtime: item.target.runtime,
+        trace: item.trace,
+      });
+    } catch (error) {
+      params.runtime.error?.(danger(`messenger webhook background error: ${String(error)}`));
+    }
+  }
+}
+
 export async function monitorMessengerProvider(
   opts: MonitorMessengerProviderOptions,
 ): Promise<{ stop: () => void }> {
@@ -707,20 +734,11 @@ export async function monitorMessengerProvider(
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");
           res.end(JSON.stringify({ status: "ok" }));
-          for (const item of scheduledEvents) {
-            logMessengerStage(item.trace, "messenger_ack_sent", {
-              queuedEvents: scheduledEvents.length,
-            });
-            void processMessengerEvent({
-              event: item.event,
-              cfg: opts.config,
-              account: item.target.account,
-              runtime: item.target.runtime,
-              trace: item.trace,
-            }).catch((error: unknown) => {
-              opts.runtime.error?.(danger(`messenger webhook background error: ${String(error)}`));
-            });
-          }
+          void processScheduledMessengerEvents({
+            scheduledEvents,
+            cfg: opts.config,
+            runtime: opts.runtime,
+          });
         } catch (error) {
           opts.runtime.error?.(danger(`messenger webhook error: ${String(error)}`));
           if (!res.headersSent) {
