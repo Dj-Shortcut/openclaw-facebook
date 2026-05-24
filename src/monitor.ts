@@ -506,23 +506,30 @@ async function processMessengerEvent(params: {
         message: redactMessengerIdentifier(result.messageId),
       });
       if (fastLane.intent === "image") {
-        const queued = await requestLeaderbotImageGeneration({
-          psid: senderId,
-          prompt: text,
-          reqId: params.trace.reqId,
-          timestamp,
-          trace: params.trace,
-        });
-        if (!queued) {
-          await sendMessengerText(
-            senderId,
-            "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
-            {
-              cfg: params.cfg,
-              accountId: params.account.accountId,
-            },
-          );
-        }
+       void requestLeaderbotImageGeneration({
+  psid: senderId,
+  prompt: text,
+  reqId: params.trace.reqId,
+  timestamp,
+  trace: params.trace,
+})
+  .then(async (queued) => {
+    if (!queued) {
+      await sendMessengerText(
+        senderId,
+        "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
+        {
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+        },
+      );
+    }
+  })
+  .catch((error: unknown) => {
+    params.runtime.error?.(
+      danger(`messenger image generation flow failed: ${String(error)}`),
+    );
+  });
       }
       return;
     }
