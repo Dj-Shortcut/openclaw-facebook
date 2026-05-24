@@ -1,0 +1,139 @@
+name: Update OpenClaw
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-openclaw:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Check latest OpenClaw version
+        id: latest
+        run: |
+          latest_openclaw="$(npm view openclaw version)"
+          latest_codex="$(npm view @openclaw/codex version)"
+          if [ "$latest_openclaw" != "$latest_codex" ]; then
+            echo "::error::openclaw ($latest_openclaw) and @openclaw/codex ($latest_codex) latest versions differ"
+            exit 1
+          fi
+          current="$(node -p "require('./package.json').openclaw.build.openclawVersion")"
+          echo "latest=$latest_openclaw" >> "$GITHUB_OUTPUT"
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          if [ "$current" = "$latest_openclaw" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update version references
+        if: steps.latest.outputs.changed == 'true'
+        env:
+          OPENCLAW_VERSION: ${{ steps.latest.outputs.latest }}
+        run: |
+          node <<'NODE'
+          const fs = require("node:fs");
+          const version = process.env.OPENCLAW_VERSION;
+
+          const pkgPath = "package.json";
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+          pkg.version = version;
+          pkg.devDependencies.openclaw = `^${version}`;
+          pkg.openclaw.build.openclawVersion = version;
+          pkg.openclaw.build.pluginSdkVersion = version;
+          fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
+
+          const manifestTestPath = "manifest.test.ts";
+          let manifestTest = fs.readFileSync(manifestTestPath, "utf8");
+          manifestTest = manifestTest.replace(
+            /openclawVersion: "(\d{4}\.\d+\.\d+(?:-[^"]+)?)"/,
+            `openclawVersion: "${version}"`,
+          );
+          manifestTest = manifestTest.replace(
+            /pluginSdkVersion: "(\d{4}\.\d+\.\d+(?:-[^"]+)?)"/,
+            `pluginSdkVersion: "${version}"`,
+          );
+          fs.writeFileSync(manifestTestPath, manifestTest);
+
+          const dockerfilePath = "deploy/fly-gateway/Dockerfile";
+          let dockerfile = fs.readFileSync(dockerfilePath, "utf8");
+          dockerfile = dockerfile.replace(
+            /^ARG OPENCLAW_VERSION=.*$/m,
+            `ARG OPENCLAW_VERSION=${version}`,
+          );
+          fs.writeFileSync(dockerfilePath, dockerfile);
+          NODE
+
+      - name: Update lockfile
+        if: steps.latest.outputs.changed == 'true'
+        run: npm install --package-lock-only --ignore-scripts --prefer-online
+
+      - name: Install dependencies
+        if: steps.latest.outputs.changed == 'true'
+        run: npm ci
+
+      - name: Build
+        if: steps.latest.outputs.changed == 'true'
+        run: npm run build
+
+      - name: Test
+        if: steps.latest.outputs.changed == 'true'
+        run: npm test
+
+      - name: Dry-run npm pack
+        if: steps.latest.outputs.changed == 'true'
+        run: npm run pack:dry
+
+      - name: Prepare pull request body
+        if: steps.latest.outputs.changed == 'true'
+        env:
+          OPENCLAW_VERSION: ${{ steps.latest.outputs.latest }}
+        run: |
+          cat > /tmp/openclaw-update-pr-body.md <<EOF
+          Automated OpenClaw update.
+
+          - Updates package metadata and lockfile to ${OPENCLAW_VERSION}
+          - Updates the Fly gateway Docker build arg
+          - Runs build, tests, and pack dry-run
+          EOF
+
+      - name: Create pull request
+        if: steps.latest.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENCLAW_VERSION: ${{ steps.latest.outputs.latest }}
+        run: |
+          branch="chore/update-openclaw-${OPENCLAW_VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add package.json package-lock.json manifest.test.ts deploy/fly-gateway/Dockerfile
+          git commit -m "Update OpenClaw to ${OPENCLAW_VERSION}"
+          git push --force-with-lease origin "$branch"
+          if gh pr view "$branch" >/dev/null 2>&1; then
+            gh pr edit "$branch" \
+              --title "Update OpenClaw to ${OPENCLAW_VERSION}" \
+              --body-file /tmp/openclaw-update-pr-body.md
+          else
+            gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "Update OpenClaw to ${OPENCLAW_VERSION}" \
+              --body-file /tmp/openclaw-update-pr-body.md
+          fi
+        shell: bash
