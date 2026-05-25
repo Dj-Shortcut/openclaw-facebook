@@ -288,7 +288,11 @@ function contentTypeMatchesMessengerAttachmentKind(
     case "video":
       return normalized.startsWith("video/");
     case "file":
-      return !normalized.startsWith("image/") && !normalized.startsWith("audio/");
+      return (
+        !normalized.startsWith("image/") &&
+        !normalized.startsWith("audio/") &&
+        !normalized.startsWith("video/")
+      );
     default:
       return true;
   }
@@ -391,16 +395,16 @@ function describeMessengerAttachments(attachments: MessengerAttachmentUrl[]): st
     counts.set(attachment.kind, (counts.get(attachment.kind) ?? 0) + 1);
   }
   const parts: string[] = [];
-  for (const [kind, label] of [
-    ["image", "foto"],
-    ["audio", "voice/audio"],
-    ["video", "video"],
-    ["file", "bestand"],
-    ["unknown", "bijlage"],
+  for (const [kind, singular, plural] of [
+    ["image", "foto", "foto's"],
+    ["audio", "voice/audio", "voice/audio"],
+    ["video", "video", "video's"],
+    ["file", "bestand", "bestanden"],
+    ["unknown", "bijlage", "bijlagen"],
   ] as const) {
     const count = counts.get(kind);
     if (count) {
-      parts.push(`${count} ${label}${count === 1 ? "" : "s"}`);
+      parts.push(`${count} ${count === 1 ? singular : plural}`);
     }
   }
   return parts.join(", ");
