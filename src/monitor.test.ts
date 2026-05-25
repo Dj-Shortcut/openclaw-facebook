@@ -215,6 +215,24 @@ describe("resolveMessengerSourceImageGenerationPrompt", () => {
     ).toBeNull();
   });
 
+  it("does not auto-restyle a whitespace-only upload", () => {
+    expect(
+      resolveMessengerSourceImageGenerationPrompt({
+        hasSourceImage: true,
+        text: "   ",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not treat image analysis questions as generation prompts", () => {
+    expect(
+      resolveMessengerSourceImageGenerationPrompt({
+        hasSourceImage: true,
+        text: "What do you see in this photo?",
+      }),
+    ).toBeNull();
+  });
+
   it("returns the trimmed prompt only for an explicit source-image edit", () => {
     expect(
       resolveMessengerSourceImageGenerationPrompt({
