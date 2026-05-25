@@ -585,6 +585,47 @@ async function requestLeaderbotImageGeneration(params: {
   }
 }
 
+async function forwardLeaderbotMessengerEvent(params: {
+  event: MessengerWebhookMessaging;
+  trace: MessengerTrace;
+}): Promise<boolean> {
+  const config = resolveImageGenRequestConfig();
+  if (!config.ok) {
+    logMessengerStage(params.trace, "messenger_event_forward_skipped", { reason: config.reason });
+    return false;
+  }
+
+  const endpoint = new URL("/internal/messenger/webhook-event", config.endpoint);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), IMAGE_GEN_REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ event: params.event }),
+    });
+    logMessengerStage(params.trace, "messenger_event_forward_sent", {
+      status: response.status,
+    });
+    return response.ok;
+  } catch (error) {
+    logMessengerStage(params.trace, "messenger_event_forward_failed", {
+      error: error instanceof Error ? error.name : "unknown",
+    });
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function hasMessengerInteractivePayload(event: MessengerWebhookMessaging): boolean {
+  return Boolean(event.message?.quick_reply?.payload?.trim() || event.postback?.payload?.trim());
+}
+
 export function shouldProcessMessengerMessageOnce(params: {
   accountId: string;
   senderId: string;
@@ -770,6 +811,26 @@ async function processMessengerEvent(params: {
         params.event.message?.mid ?? `${senderId}:${timestamp}`,
       )} media=${attachments.length}`,
     );
+    if (hasMessengerInteractivePayload(params.event)) {
+      logMessengerStage(params.trace, "messenger_interactive_payload_received", {
+        quickReply: Boolean(params.event.message?.quick_reply?.payload),
+        postback: Boolean(params.event.postback?.payload),
+      });
+      if (await forwardLeaderbotMessengerEvent({ event: params.event, trace: params.trace })) {
+        return;
+      }
+      await sendMessengerText(
+        senderId,
+        "Ik kon deze knopactie nu niet verwerken. Probeer zo meteen opnieuw.",
+        {
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+        },
+      ).catch((err: unknown) => {
+        params.runtime.error?.(danger(`messenger interactive fallback failed: ${String(err)}`));
+      });
+      return;
+    }
     if (sourceImageAttachment && (!text.trim() || hasMessengerImageGenerationIntent(text))) {
       const sourceImageUrl = sanitizeMessengerSourceImageUrl(sourceImageAttachment.url);
       if (!sourceImageUrl) {

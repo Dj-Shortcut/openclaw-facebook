@@ -155,8 +155,9 @@ export function extractMessengerInboundMessages(
         continue;
       }
       const text = event.message?.text?.trim();
+      const payload = event.message?.quick_reply?.payload?.trim() ?? event.postback?.payload?.trim();
       const attachments = extractMessengerAttachmentUrls(event);
-      if (!text && attachments.length === 0) {
+      if (!text && !payload && attachments.length === 0) {
         continue;
       }
       messages.push(event);

@@ -137,4 +137,30 @@ describe("extractMessengerInboundMessages", () => {
       },
     ]);
   });
+
+  it("keeps quick replies and postbacks without text", () => {
+    const messages = extractMessengerInboundMessages({
+      object: "page",
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: "psid-1" },
+              recipient: { id: "page-1" },
+              message: { mid: "m1", quick_reply: { payload: "RETRY_STYLE_gold" } },
+            },
+            {
+              sender: { id: "psid-1" },
+              recipient: { id: "page-1" },
+              postback: { payload: "CHOOSE_STYLE" },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(messages).toHaveLength(2);
+    expect(messages[0]?.message?.quick_reply?.payload).toBe("RETRY_STYLE_gold");
+    expect(messages[1]?.postback?.payload).toBe("CHOOSE_STYLE");
+  });
 });

@@ -61,12 +61,25 @@ export type MessengerWebhookMessaging = {
     mid?: string;
     text?: string;
     is_echo?: boolean;
+    quick_reply?: {
+      payload?: string;
+    };
     attachments?: Array<{
       type?: string;
       payload?: {
         url?: string;
       };
     }>;
+  };
+  postback?: {
+    payload?: string;
+    title?: string;
+    referral?: {
+      ref?: string;
+    };
+  };
+  referral?: {
+    ref?: string;
   };
 };
 
