@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  extractMessengerAttachmentUrls,
   extractMessengerImageAttachmentUrls,
   extractMessengerInboundMessages,
   extractMessengerTextMessages,
@@ -69,7 +70,41 @@ describe("extractMessengerInboundMessages", () => {
     ]);
   });
 
-  it("skips unsupported attachment-only messages", () => {
+  it("keeps audio-only Page messages", () => {
+    const messages = extractMessengerInboundMessages({
+      object: "page",
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: "psid-1" },
+              recipient: { id: "page-1" },
+              message: {
+                mid: "m1",
+                attachments: [
+                  {
+                    type: "audio",
+                    payload: { url: "https://example.test/voice.mp4" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(messages).toHaveLength(1);
+    expect(extractMessengerAttachmentUrls(messages[0]!)).toEqual([
+      {
+        type: "audio",
+        kind: "audio",
+        url: "https://example.test/voice.mp4",
+      },
+    ]);
+  });
+
+  it("keeps file-only Page messages", () => {
     const messages = extractMessengerInboundMessages({
       object: "page",
       entry: [
@@ -93,6 +128,13 @@ describe("extractMessengerInboundMessages", () => {
       ],
     });
 
-    expect(messages).toHaveLength(0);
+    expect(messages).toHaveLength(1);
+    expect(extractMessengerAttachmentUrls(messages[0]!)).toEqual([
+      {
+        type: "file",
+        kind: "file",
+        url: "https://example.test/file.pdf",
+      },
+    ]);
   });
 });
