@@ -51,7 +51,9 @@ import type {
   ResolvedMessengerAccount,
 } from "./types.js";
 import {
-  extractMessengerImageAttachmentUrls,
+  type MessengerAttachmentKind,
+  type MessengerAttachmentUrl,
+  extractMessengerAttachmentUrls,
   extractMessengerInboundMessages,
   handleMessengerWebhookVerification,
 } from "./webhook.js";
@@ -94,6 +96,7 @@ const DEFAULT_IMAGE_GEN_URL = "https://leaderbot-fb-image-gen.fly.dev";
 const IMAGE_GEN_REQUEST_TIMEOUT_MS = 5_000;
 const MESSENGER_IMAGE_FETCH_TIMEOUT_MS = 10_000;
 const MESSENGER_IMAGE_FETCH_MAX_BYTES = 10 * 1024 * 1024;
+const MESSENGER_MEDIA_FETCH_MAX_BYTES = 25 * 1024 * 1024;
 
 export function redactMessengerIdentifier(value: string | undefined): string {
   const normalized = value?.trim();
@@ -186,7 +189,7 @@ function logMessengerStage(
   );
 }
 
-function isAllowedMessengerImageHost(hostname: string): boolean {
+function isAllowedMessengerMediaHost(hostname: string): boolean {
   const normalized = hostname.toLowerCase();
   return (
     normalized === "facebook.com" ||
@@ -198,7 +201,7 @@ function isAllowedMessengerImageHost(hostname: string): boolean {
   );
 }
 
-function extensionFromContentType(contentType: string | null): string {
+function extensionFromContentType(contentType: string | null, kind: MessengerAttachmentKind): string {
   const normalized = contentType?.split(";")[0]?.trim().toLowerCase();
   switch (normalized) {
     case "image/jpeg":
@@ -209,32 +212,100 @@ function extensionFromContentType(contentType: string | null): string {
       return ".gif";
     case "image/webp":
       return ".webp";
+    case "audio/mpeg":
+      return ".mp3";
+    case "audio/mp4":
+      return ".m4a";
+    case "audio/aac":
+      return ".aac";
+    case "audio/ogg":
+      return ".ogg";
+    case "audio/wav":
+    case "audio/x-wav":
+      return ".wav";
+    case "video/mp4":
+      return ".mp4";
+    case "video/quicktime":
+      return ".mov";
+    case "application/pdf":
+      return ".pdf";
     default:
-      return "";
+      return kind === "audio"
+        ? ".audio"
+        : kind === "video"
+          ? ".video"
+          : kind === "file"
+            ? ".bin"
+            : "";
   }
 }
 
-function extensionFromUrl(url: string): string {
+function extensionFromUrl(url: string, kind: MessengerAttachmentKind): string {
   try {
     const ext = extname(new URL(url).pathname).toLowerCase();
-    return [".jpg", ".jpeg", ".png", ".gif", ".webp"].includes(ext) ? ext : "";
+    const allowedByKind: Record<MessengerAttachmentKind, string[]> = {
+      image: [".jpg", ".jpeg", ".png", ".gif", ".webp"],
+      audio: [".mp3", ".m4a", ".aac", ".ogg", ".wav", ".webm"],
+      video: [".mp4", ".mov", ".webm", ".m4v"],
+      file: [".pdf", ".txt", ".csv", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"],
+      unknown: [],
+    };
+    return allowedByKind[kind].includes(ext) ? ext : "";
   } catch {
     return "";
   }
 }
 
-async function downloadMessengerImageAttachment(params: {
-  url: string;
+function mediaKindForMessengerAttachment(kind: MessengerAttachmentKind): ChannelInboundMediaInput["kind"] {
+  switch (kind) {
+    case "image":
+    case "audio":
+    case "video":
+      return kind;
+    case "file":
+      return "document";
+    default:
+      return "unknown";
+  }
+}
+
+function contentTypeMatchesMessengerAttachmentKind(
+  contentType: string | null,
+  kind: MessengerAttachmentKind,
+): boolean {
+  if (kind === "unknown") {
+    return true;
+  }
+  const normalized = contentType?.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (!normalized) {
+    return true;
+  }
+  switch (kind) {
+    case "image":
+      return normalized.startsWith("image/");
+    case "audio":
+      return normalized.startsWith("audio/") || normalized === "video/mp4";
+    case "video":
+      return normalized.startsWith("video/");
+    case "file":
+      return !normalized.startsWith("image/") && !normalized.startsWith("audio/");
+    default:
+      return true;
+  }
+}
+
+async function downloadMessengerMediaAttachment(params: {
+  attachment: MessengerAttachmentUrl;
   reqId: string;
   index: number;
 }): Promise<ChannelInboundMediaInput | null> {
   let parsed: URL;
   try {
-    parsed = new URL(params.url);
+    parsed = new URL(params.attachment.url);
   } catch {
     return null;
   }
-  if (parsed.protocol !== "https:" || !isAllowedMessengerImageHost(parsed.hostname)) {
+  if (parsed.protocol !== "https:" || !isAllowedMessengerMediaHost(parsed.hostname)) {
     return null;
   }
 
@@ -246,17 +317,21 @@ async function downloadMessengerImageAttachment(params: {
       return null;
     }
     const contentType = response.headers.get("content-type");
-    if (!contentType?.toLowerCase().startsWith("image/")) {
+    if (!contentTypeMatchesMessengerAttachmentKind(contentType, params.attachment.kind)) {
       return null;
     }
 
     const contentLength = Number(response.headers.get("content-length") ?? "0");
-    if (contentLength > MESSENGER_IMAGE_FETCH_MAX_BYTES) {
+    const maxBytes =
+      params.attachment.kind === "image"
+        ? MESSENGER_IMAGE_FETCH_MAX_BYTES
+        : MESSENGER_MEDIA_FETCH_MAX_BYTES;
+    if (contentLength > maxBytes) {
       return null;
     }
 
     const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.length === 0 || buffer.length > MESSENGER_IMAGE_FETCH_MAX_BYTES) {
+    if (buffer.length === 0 || buffer.length > maxBytes) {
       return null;
     }
 
@@ -268,14 +343,17 @@ async function downloadMessengerImageAttachment(params: {
       .update(buffer)
       .digest("hex")
       .slice(0, 32);
-    const ext = extensionFromContentType(contentType) || extensionFromUrl(params.url) || ".img";
+    const ext =
+      extensionFromContentType(contentType, params.attachment.kind) ||
+      extensionFromUrl(params.attachment.url, params.attachment.kind) ||
+      ".bin";
     const path = join(mediaDir, `messenger-${digest}${ext}`);
     await writeFile(path, buffer);
     return {
       path,
-      url: params.url,
+      url: params.attachment.url,
       contentType,
-      kind: "image",
+      kind: mediaKindForMessengerAttachment(params.attachment.kind),
     };
   } catch {
     return null;
@@ -284,23 +362,64 @@ async function downloadMessengerImageAttachment(params: {
   }
 }
 
-async function resolveMessengerImageMedia(params: {
-  urls: string[];
+async function resolveMessengerMedia(params: {
+  attachments: MessengerAttachmentUrl[];
   trace: MessengerTrace;
 }): Promise<ChannelInboundMediaInput[]> {
   const media = await Promise.all(
-    params.urls.map((url, index) =>
-      downloadMessengerImageAttachment({ url, reqId: params.trace.reqId, index }),
+    params.attachments.map((attachment, index) =>
+      downloadMessengerMediaAttachment({ attachment, reqId: params.trace.reqId, index }),
     ),
   );
   const resolved = media.filter((entry): entry is ChannelInboundMediaInput => entry !== null);
-  if (params.urls.length > 0) {
+  if (params.attachments.length > 0) {
     logMessengerStage(params.trace, "media_resolved", {
-      images: params.urls.length,
+      media: params.attachments.length,
+      images: params.attachments.filter((attachment) => attachment.kind === "image").length,
+      audio: params.attachments.filter((attachment) => attachment.kind === "audio").length,
+      video: params.attachments.filter((attachment) => attachment.kind === "video").length,
+      files: params.attachments.filter((attachment) => attachment.kind === "file").length,
       downloaded: resolved.length,
     });
   }
   return resolved;
+}
+
+function describeMessengerAttachments(attachments: MessengerAttachmentUrl[]): string {
+  const counts = new Map<MessengerAttachmentKind, number>();
+  for (const attachment of attachments) {
+    counts.set(attachment.kind, (counts.get(attachment.kind) ?? 0) + 1);
+  }
+  const parts: string[] = [];
+  for (const [kind, label] of [
+    ["image", "foto"],
+    ["audio", "voice/audio"],
+    ["video", "video"],
+    ["file", "bestand"],
+    ["unknown", "bijlage"],
+  ] as const) {
+    const count = counts.get(kind);
+    if (count) {
+      parts.push(`${count} ${label}${count === 1 ? "" : "s"}`);
+    }
+  }
+  return parts.join(", ");
+}
+
+function fallbackTextForMessengerAttachments(attachments: MessengerAttachmentUrl[]): string {
+  if (attachments.some((attachment) => attachment.kind === "audio")) {
+    return "De gebruiker stuurde een voice/audio-bericht. Luister of transcribeer de bijlage als dat beschikbaar is en reageer inhoudelijk.";
+  }
+  if (attachments.some((attachment) => attachment.kind === "image")) {
+    return "De gebruiker stuurde een afbeelding. Bekijk de bijgevoegde afbeelding en antwoord op basis daarvan.";
+  }
+  if (attachments.some((attachment) => attachment.kind === "video")) {
+    return "De gebruiker stuurde een video. Bekijk of analyseer de bijgevoegde video als dat beschikbaar is en reageer inhoudelijk.";
+  }
+  if (attachments.some((attachment) => attachment.kind === "file")) {
+    return "De gebruiker stuurde een bestand. Gebruik de bijlage als context als dat beschikbaar is en reageer inhoudelijk.";
+  }
+  return "De gebruiker stuurde een bijlage. Gebruik de bijlage als context als dat beschikbaar is en reageer inhoudelijk.";
 }
 
 function normalizeFastLaneText(text: string): string {
@@ -604,18 +723,22 @@ async function processMessengerEvent(params: {
     const senderId = params.event.sender?.id ?? "";
     const text = params.event.message?.text ?? "";
     const timestamp = params.event.timestamp ?? Date.now();
-    const imageUrls = extractMessengerImageAttachmentUrls(params.event);
-    const imageMedia = await resolveMessengerImageMedia({ urls: imageUrls, trace: params.trace });
+    const attachments = extractMessengerAttachmentUrls(params.event);
+    const media = await resolveMessengerMedia({ attachments, trace: params.trace });
     const mediaPayload = buildChannelInboundMediaPayload(
-      toInboundMediaFacts(imageMedia, { kind: "image", messageId: params.event.message?.mid }),
+      toInboundMediaFacts(media, { messageId: params.event.message?.mid }),
     );
-    const hasMedia = imageUrls.length > 0;
+    const hasMedia = attachments.length > 0;
+    const attachmentSummary = describeMessengerAttachments(attachments);
     const textForAgent =
       text.trim() ||
       (hasMedia
-        ? "De gebruiker stuurde een afbeelding. Bekijk de bijgevoegde afbeelding en antwoord op basis daarvan."
+        ? fallbackTextForMessengerAttachments(attachments)
         : "");
-    const displayBody = [text.trim(), hasMedia ? `[Messenger image attachment]` : ""]
+    const displayBody = [
+      text.trim(),
+      hasMedia ? `[Messenger attachment: ${attachmentSummary || "bijlage"}]` : "",
+    ]
       .filter(Boolean)
       .join("\n");
     logVerbose(
@@ -623,7 +746,7 @@ async function processMessengerEvent(params: {
         senderId,
       )} account=${params.account.accountId} message=${redactMessengerIdentifier(
         params.event.message?.mid ?? `${senderId}:${timestamp}`,
-      )} media=${imageUrls.length}`,
+      )} media=${attachments.length}`,
     );
     if (
       !shouldProcessMessengerMessageOnce({

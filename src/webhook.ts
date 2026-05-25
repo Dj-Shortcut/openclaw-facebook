@@ -3,6 +3,14 @@ import { readWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-gua
 import { validateMessengerSignature } from "./signature.js";
 import type { MessengerWebhookBody, MessengerWebhookMessaging } from "./types.js";
 
+export type MessengerAttachmentKind = "image" | "audio" | "video" | "file" | "unknown";
+
+export type MessengerAttachmentUrl = {
+  type: string;
+  kind: MessengerAttachmentKind;
+  url: string;
+};
+
 export function handleMessengerWebhookVerification(params: {
   url: URL;
   verifyToken: string;
@@ -98,10 +106,37 @@ export function extractMessengerTextMessages(
 }
 
 export function extractMessengerImageAttachmentUrls(event: MessengerWebhookMessaging): string[] {
+  return extractMessengerAttachmentUrls(event)
+    .filter((attachment) => attachment.kind === "image")
+    .map((attachment) => attachment.url);
+}
+
+export function normalizeMessengerAttachmentKind(type: string | undefined): MessengerAttachmentKind {
+  const normalized = type?.trim().toLowerCase();
+  switch (normalized) {
+    case "image":
+      return "image";
+    case "audio":
+      return "audio";
+    case "video":
+      return "video";
+    case "file":
+      return "file";
+    default:
+      return "unknown";
+  }
+}
+
+export function extractMessengerAttachmentUrls(
+  event: MessengerWebhookMessaging,
+): MessengerAttachmentUrl[] {
   return (event.message?.attachments ?? [])
-    .filter((attachment) => attachment.type === "image")
-    .map((attachment) => attachment.payload?.url?.trim() ?? "")
-    .filter((url) => url.length > 0);
+    .map((attachment) => ({
+      type: attachment.type?.trim().toLowerCase() || "unknown",
+      kind: normalizeMessengerAttachmentKind(attachment.type),
+      url: attachment.payload?.url?.trim() ?? "",
+    }))
+    .filter((attachment) => attachment.url.length > 0);
 }
 
 export function extractMessengerInboundMessages(
@@ -120,8 +155,8 @@ export function extractMessengerInboundMessages(
         continue;
       }
       const text = event.message?.text?.trim();
-      const imageUrls = extractMessengerImageAttachmentUrls(event);
-      if (!text && imageUrls.length === 0) {
+      const attachments = extractMessengerAttachmentUrls(event);
+      if (!text && attachments.length === 0) {
         continue;
       }
       messages.push(event);
