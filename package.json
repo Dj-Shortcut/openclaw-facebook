@@ -49,7 +49,7 @@
   "scripts": {
     "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc -p tsconfig.json",
-    "test": "vitest run",
+    "test": "node ./scripts/run-vitest.mjs",
     "prepare": "npm run build",
     "pack:dry": "npm pack --dry-run",
     "check": "npm run build && npm test && npm run pack:dry"
@@ -91,14 +91,20 @@
     "channel": {
       "id": "facebook",
       "label": "Facebook",
-      "aliases": ["messenger", "fb", "fbm"],
+      "aliases": [
+        "messenger",
+        "fb",
+        "fbm"
+      ],
       "selectionLabel": "Facebook (Page Messenger)",
       "detailLabel": "Facebook Page",
       "docsPath": "/channels/facebook",
       "docsLabel": "facebook",
       "blurb": "Facebook Page Messenger DMs via Meta webhooks.",
       "systemImage": "message.fill",
-      "preferOver": ["messenger"],
+      "preferOver": [
+        "messenger"
+      ],
       "exposure": {
         "configured": true,
         "setup": true,
