@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   classifyMessengerFastLaneIntent,
   formatUnmatchedMessengerPageLog,
+  hasMessengerImageGenerationIntent,
   redactMessengerIdentifier,
   resolveMessengerFastLaneReply,
   resolveMessengerEventTarget,
   resolveMessengerVerificationTarget,
+  sanitizeMessengerSourceImageUrl,
   shouldProcessMessengerMessageOnce,
   type MessengerWebhookTarget,
 } from "./monitor.js";
@@ -185,6 +187,37 @@ describe("classifyMessengerFastLaneIntent", () => {
 
   it("leaves real assistant prompts for the OpenClaw turn", () => {
     expect(classifyMessengerFastLaneIntent("Schrijf een korte planning voor morgen")).toBeNull();
+    expect(classifyMessengerFastLaneIntent("Wat zie je op deze foto?")).toBeNull();
+    expect(classifyMessengerFastLaneIntent("Verbeter de stijl van deze tekst")).toBeNull();
+  });
+});
+
+describe("hasMessengerImageGenerationIntent", () => {
+  it("matches explicit generation and restyle prompts", () => {
+    expect(hasMessengerImageGenerationIntent("Restyle deze foto")).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Maak een afbeelding van een robot")).toBe(true);
+  });
+
+  it("does not match image analysis or writing-style prompts", () => {
+    expect(hasMessengerImageGenerationIntent("Wat zie je op deze foto?")).toBe(false);
+    expect(hasMessengerImageGenerationIntent("Verbeter de stijl van deze tekst")).toBe(false);
+  });
+});
+
+describe("sanitizeMessengerSourceImageUrl", () => {
+  it("allows https Messenger media hosts", () => {
+    expect(sanitizeMessengerSourceImageUrl("https://cdn.fbcdn.net/photo.jpg")).toBe(
+      "https://cdn.fbcdn.net/photo.jpg",
+    );
+    expect(sanitizeMessengerSourceImageUrl("https://lookaside.fbsbx.com/photo.jpg")).toBe(
+      "https://lookaside.fbsbx.com/photo.jpg",
+    );
+  });
+
+  it("rejects non-https or non-Messenger media hosts", () => {
+    expect(sanitizeMessengerSourceImageUrl("http://cdn.fbcdn.net/photo.jpg")).toBeNull();
+    expect(sanitizeMessengerSourceImageUrl("https://example.test/photo.jpg")).toBeNull();
+    expect(sanitizeMessengerSourceImageUrl("not a url")).toBeNull();
   });
 });
 

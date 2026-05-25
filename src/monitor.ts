@@ -201,6 +201,19 @@ function isAllowedMessengerMediaHost(hostname: string): boolean {
   );
 }
 
+export function sanitizeMessengerSourceImageUrl(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:" || !isAllowedMessengerMediaHost(parsed.hostname)) {
+    return null;
+  }
+  return parsed.toString();
+}
+
 function extensionFromContentType(contentType: string | null, kind: MessengerAttachmentKind): string {
   const normalized = contentType?.split(";")[0]?.trim().toLowerCase();
   switch (normalized) {
@@ -455,14 +468,17 @@ export function classifyMessengerFastLaneIntent(text: string): MessengerFastLane
   if (/^(status|ping|ben je online|werkt dit|online)$/.test(normalized)) {
     return "status";
   }
-  if (
-    /\b(afbeelding|image|foto|plaatje|illustratie|generate image|create image|maak afbeelding|maak een afbeelding)\b/.test(
-      normalized,
-    )
-  ) {
+  if (hasMessengerImageGenerationIntent(normalized)) {
     return "image";
   }
   return null;
+}
+
+export function hasMessengerImageGenerationIntent(text: string): boolean {
+  const normalized = normalizeFastLaneText(text);
+  return /\b(restyle|restylen|restijlen|restijl|generate image|create image|maak afbeelding|maak een afbeelding|genereer afbeelding|genereer een afbeelding|maak plaatje|maak een plaatje|bewerk foto|bewerk deze foto|edit image|edit this image)\b/.test(
+    normalized,
+  );
 }
 
 export function resolveMessengerFastLaneReply(
@@ -528,6 +544,7 @@ async function requestLeaderbotImageGeneration(params: {
   reqId: string;
   timestamp: number;
   trace: MessengerTrace;
+  sourceImageUrl?: string;
 }): Promise<boolean> {
   const config = resolveImageGenRequestConfig();
   if (!config.ok) {
@@ -551,6 +568,7 @@ async function requestLeaderbotImageGeneration(params: {
         reqId: params.reqId,
         lang: "nl",
         timestamp: params.timestamp,
+        sourceImageUrl: params.sourceImageUrl,
       }),
     });
     logMessengerStage(params.trace, "image_gen_request_sent", {
@@ -744,6 +762,51 @@ async function processMessengerEvent(params: {
       return;
     }
     const attachments = extractMessengerAttachmentUrls(params.event);
+    const sourceImageAttachment = attachments.find((attachment) => attachment.kind === "image");
+    logVerbose(
+      `messenger: received inbound event sender=${redactMessengerIdentifier(
+        senderId,
+      )} account=${params.account.accountId} message=${redactMessengerIdentifier(
+        params.event.message?.mid ?? `${senderId}:${timestamp}`,
+      )} media=${attachments.length}`,
+    );
+    if (sourceImageAttachment && (!text.trim() || hasMessengerImageGenerationIntent(text))) {
+      const sourceImageUrl = sanitizeMessengerSourceImageUrl(sourceImageAttachment.url);
+      if (!sourceImageUrl) {
+        logMessengerStage(params.trace, "image_gen_request_skipped", {
+          reason: "unsafe_source_image_url",
+        });
+      } else {
+        const prompt = text.trim() || "Restyle deze foto.";
+        logMessengerStage(params.trace, "image_gen_request_started", {
+          sourceImage: true,
+          hasPrompt: Boolean(text.trim()),
+        });
+        const queued = await requestLeaderbotImageGeneration({
+          psid: senderId,
+          prompt,
+          reqId: params.trace.reqId,
+          timestamp,
+          trace: params.trace,
+          sourceImageUrl,
+        });
+        if (queued) {
+          return;
+        }
+        await sendMessengerText(
+          senderId,
+          "Ik kon de image generator nu niet bereiken. Ik kijk wel even naar je bericht.",
+          {
+            cfg: params.cfg,
+            accountId: params.account.accountId,
+          },
+        ).catch((err: unknown) => {
+          params.runtime.error?.(
+            danger(`messenger image generator fallback failed: ${String(err)}`),
+          );
+        });
+      }
+    }
     const media = await resolveMessengerMedia({ attachments, trace: params.trace });
     const mediaPayload = buildChannelInboundMediaPayload(
       toInboundMediaFacts(media, { messageId: params.event.message?.mid }),
@@ -761,13 +824,6 @@ async function processMessengerEvent(params: {
     ]
       .filter(Boolean)
       .join("\n");
-    logVerbose(
-      `messenger: received inbound event sender=${redactMessengerIdentifier(
-        senderId,
-      )} account=${params.account.accountId} message=${redactMessengerIdentifier(
-        params.event.message?.mid ?? `${senderId}:${timestamp}`,
-      )} media=${attachments.length}`,
-    );
     const fastLane = hasMedia ? null : resolveMessengerFastLaneReply(text);
     if (fastLane) {
       logMessengerStage(params.trace, "first_response_ready", { intent: fastLane.intent });
