@@ -12,6 +12,8 @@
   },
   plugins: {
     entries: {
+      // Optional third-party plugin. Pin the installed TweetClaw package version
+      // in production, for example @xquik/tweetclaw@1.6.31.
       tweetclaw: {
         config: {
           apiKey: "<XQUIK_API_KEY>",

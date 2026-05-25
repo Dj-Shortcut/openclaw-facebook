@@ -1,8 +1,9 @@
 # X/Twitter Companion Workflow
 
-This Facebook plugin only handles Facebook Page Messenger direct messages. Keep
-it as the Messenger transport, then install TweetClaw separately when the same
-OpenClaw assistant also needs X/Twitter work.
+This Facebook plugin only handles Facebook Page Messenger direct messages.
+TweetClaw is a separate optional third-party OpenClaw plugin maintained outside
+this repository. Keep this plugin as the Messenger transport, then install
+TweetClaw only when the same OpenClaw assistant also needs X/Twitter work.
 
 Useful combined workflows:
 
@@ -15,11 +16,20 @@ Useful combined workflows:
 
 ## Install TweetClaw
 
-Install this plugin first, then add TweetClaw:
+Install this plugin first, then add TweetClaw. For local experiments, installing
+the current TweetClaw package is fine:
 
 ```bash
 openclaw plugins install clawhub:@dj-shortcut/facebook
 openclaw plugins install @xquik/tweetclaw
+```
+
+For production, pin the exact TweetClaw version you tested and roll updates
+through the same review path as the rest of your OpenClaw configuration:
+
+```bash
+openclaw plugins install @xquik/tweetclaw@1.6.31
+openclaw plugins inspect tweetclaw --runtime
 ```
 
 The TweetClaw package is published as
@@ -43,14 +53,17 @@ Do not paste Page access tokens, app secrets, verify tokens, Xquik API keys, or
 TweetClaw request payloads into public chats, prompts, logs, or repository
 examples.
 
+The TweetClaw API key and any TweetClaw billing or MPP settings belong to the
+third-party TweetClaw plugin config, not to `channels.facebook`.
+
 ## Example Config
 
 See [`examples/facebook-tweetclaw-companion.json5`](../examples/facebook-tweetclaw-companion.json5)
 for a combined OpenClaw config shape. It keeps each surface in its own section:
 
 - `channels.facebook` receives and replies to Facebook Page Messenger DMs;
-- `plugins.entries.tweetclaw.config` stores the Xquik API key and monitor
-  polling settings;
+- `plugins.entries.tweetclaw.config` stores the optional third-party TweetClaw
+  settings, such as the Xquik API key and monitor polling settings;
 - `tools.alsoAllow` explicitly enables TweetClaw's `explore` and `tweetclaw`
   tools while preserving the normal OpenClaw tool profile.
 
