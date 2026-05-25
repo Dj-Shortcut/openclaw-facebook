@@ -727,6 +727,22 @@ async function processMessengerEvent(params: {
     const senderId = params.event.sender?.id ?? "";
     const text = params.event.message?.text ?? "";
     const timestamp = params.event.timestamp ?? Date.now();
+    if (
+      !shouldProcessMessengerMessageOnce({
+        accountId: params.account.accountId,
+        senderId,
+        messageId: params.event.message?.mid,
+        timestamp,
+      })
+    ) {
+      logMessengerStage(params.trace, "duplicate_skipped");
+      logVerbose(
+        `messenger: skipped duplicate message ${redactMessengerIdentifier(
+          params.event.message?.mid ?? `${senderId}:${timestamp}`,
+        )} from ${redactMessengerIdentifier(senderId)}`,
+      );
+      return;
+    }
     const attachments = extractMessengerAttachmentUrls(params.event);
     const media = await resolveMessengerMedia({ attachments, trace: params.trace });
     const mediaPayload = buildChannelInboundMediaPayload(
@@ -752,22 +768,6 @@ async function processMessengerEvent(params: {
         params.event.message?.mid ?? `${senderId}:${timestamp}`,
       )} media=${attachments.length}`,
     );
-    if (
-      !shouldProcessMessengerMessageOnce({
-        accountId: params.account.accountId,
-        senderId,
-        messageId: params.event.message?.mid,
-        timestamp,
-      })
-    ) {
-      logMessengerStage(params.trace, "duplicate_skipped");
-      logVerbose(
-        `messenger: skipped duplicate message ${redactMessengerIdentifier(
-          params.event.message?.mid ?? `${senderId}:${timestamp}`,
-        )} from ${redactMessengerIdentifier(senderId)}`,
-      );
-      return;
-    }
     const fastLane = hasMedia ? null : resolveMessengerFastLaneReply(text);
     if (fastLane) {
       logMessengerStage(params.trace, "first_response_ready", { intent: fastLane.intent });
