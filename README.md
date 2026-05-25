@@ -74,6 +74,11 @@ Messenger rules, production checks, and troubleshooting.
 See [`docs/clawhub.md`](docs/clawhub.md) for ClawHub release preparation.
 See [`docs/cost-control-plan.md`](docs/cost-control-plan.md) for the recommended
 budget, usage-ledger, and payment boundaries for public Facebook assistants.
+See [`docs/x-twitter-companion.md`](docs/x-twitter-companion.md) only if the
+same OpenClaw assistant also needs X/Twitter search, monitors, webhooks, media
+workflows, follower export, giveaway draws, or approval-reviewed tweet posts.
+TweetClaw is a separate optional third-party plugin maintained outside this
+repository; it is not required for Facebook Page Messenger DMs.
 
 ## Access model
 
