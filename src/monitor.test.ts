@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyMessengerFastLaneIntent,
   formatUnmatchedMessengerPageLog,
+  hasMessengerImageGenerationIntent,
   redactMessengerIdentifier,
   resolveMessengerFastLaneReply,
   resolveMessengerEventTarget,
@@ -185,6 +186,20 @@ describe("classifyMessengerFastLaneIntent", () => {
 
   it("leaves real assistant prompts for the OpenClaw turn", () => {
     expect(classifyMessengerFastLaneIntent("Schrijf een korte planning voor morgen")).toBeNull();
+    expect(classifyMessengerFastLaneIntent("Wat zie je op deze foto?")).toBeNull();
+    expect(classifyMessengerFastLaneIntent("Verbeter de stijl van deze tekst")).toBeNull();
+  });
+});
+
+describe("hasMessengerImageGenerationIntent", () => {
+  it("matches explicit generation and restyle prompts", () => {
+    expect(hasMessengerImageGenerationIntent("Restyle deze foto")).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Maak een afbeelding van een robot")).toBe(true);
+  });
+
+  it("does not match image analysis or writing-style prompts", () => {
+    expect(hasMessengerImageGenerationIntent("Wat zie je op deze foto?")).toBe(false);
+    expect(hasMessengerImageGenerationIntent("Verbeter de stijl van deze tekst")).toBe(false);
   });
 });
 

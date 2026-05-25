@@ -455,14 +455,17 @@ export function classifyMessengerFastLaneIntent(text: string): MessengerFastLane
   if (/^(status|ping|ben je online|werkt dit|online)$/.test(normalized)) {
     return "status";
   }
-  if (
-    /\b(afbeelding|image|foto|plaatje|illustratie|restyle|restylen|restijlen|restijl|stijl|style|generate image|create image|maak afbeelding|maak een afbeelding)\b/.test(
-      normalized,
-    )
-  ) {
+  if (hasMessengerImageGenerationIntent(normalized)) {
     return "image";
   }
   return null;
+}
+
+export function hasMessengerImageGenerationIntent(text: string): boolean {
+  const normalized = normalizeFastLaneText(text);
+  return /\b(restyle|restylen|restijlen|restijl|generate image|create image|maak afbeelding|maak een afbeelding|genereer afbeelding|genereer een afbeelding|maak plaatje|maak een plaatje|bewerk foto|bewerk deze foto|edit image|edit this image)\b/.test(
+    normalized,
+  );
 }
 
 export function resolveMessengerFastLaneReply(
@@ -771,7 +774,7 @@ async function processMessengerEvent(params: {
         params.event.message?.mid ?? `${senderId}:${timestamp}`,
       )} media=${attachments.length}`,
     );
-    if (sourceImageUrl) {
+    if (sourceImageUrl && (!text.trim() || hasMessengerImageGenerationIntent(text))) {
       const prompt = text.trim() || "Restyle deze foto.";
       logMessengerStage(params.trace, "image_gen_request_started", {
         sourceImage: true,
