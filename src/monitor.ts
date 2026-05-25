@@ -428,7 +428,7 @@ function fallbackTextForMessengerAttachments(attachments: MessengerAttachmentUrl
     return "De gebruiker stuurde een voice/audio-bericht. Luister of transcribeer de bijlage als dat beschikbaar is en reageer inhoudelijk.";
   }
   if (attachments.some((attachment) => attachment.kind === "image")) {
-    return "De gebruiker stuurde een afbeelding. Bekijk de bijgevoegde afbeelding en antwoord op basis daarvan.";
+    return "De gebruiker stuurde een afbeelding zonder duidelijke image-generation opdracht. Bekijk de bijgevoegde afbeelding en antwoord op basis daarvan. Als de gebruiker lijkt te willen restylen of bewerken, vraag eerst welke stijl of bewerking gewenst is.";
   }
   if (attachments.some((attachment) => attachment.kind === "video")) {
     return "De gebruiker stuurde een video. Bekijk of analyseer de bijgevoegde video als dat beschikbaar is en reageer inhoudelijk.";
@@ -479,6 +479,17 @@ export function hasMessengerImageGenerationIntent(text: string): boolean {
   return /\b(restyle|restylen|restijlen|restijl|generate image|create image|maak afbeelding|maak een afbeelding|genereer afbeelding|genereer een afbeelding|maak plaatje|maak een plaatje|bewerk foto|bewerk deze foto|edit image|edit this image)\b/.test(
     normalized,
   );
+}
+
+export function resolveMessengerSourceImageGenerationPrompt(params: {
+  hasSourceImage: boolean;
+  text: string;
+}): string | null {
+  const prompt = params.text.trim();
+  if (!params.hasSourceImage || !prompt || !hasMessengerImageGenerationIntent(prompt)) {
+    return null;
+  }
+  return prompt;
 }
 
 export function resolveMessengerFastLaneReply(
@@ -831,21 +842,24 @@ async function processMessengerEvent(params: {
       });
       return;
     }
-    if (sourceImageAttachment && (!text.trim() || hasMessengerImageGenerationIntent(text))) {
+    const sourceImageGenerationPrompt = resolveMessengerSourceImageGenerationPrompt({
+      hasSourceImage: Boolean(sourceImageAttachment),
+      text,
+    });
+    if (sourceImageAttachment && sourceImageGenerationPrompt) {
       const sourceImageUrl = sanitizeMessengerSourceImageUrl(sourceImageAttachment.url);
       if (!sourceImageUrl) {
         logMessengerStage(params.trace, "image_gen_request_skipped", {
           reason: "unsafe_source_image_url",
         });
       } else {
-        const prompt = text.trim() || "Restyle deze foto.";
         logMessengerStage(params.trace, "image_gen_request_started", {
           sourceImage: true,
-          hasPrompt: Boolean(text.trim()),
+          hasPrompt: true,
         });
         const queued = await requestLeaderbotImageGeneration({
           psid: senderId,
-          prompt,
+          prompt: sourceImageGenerationPrompt,
           reqId: params.trace.reqId,
           timestamp,
           trace: params.trace,

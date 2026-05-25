@@ -6,6 +6,7 @@ import {
   redactMessengerIdentifier,
   resolveMessengerFastLaneReply,
   resolveMessengerEventTarget,
+  resolveMessengerSourceImageGenerationPrompt,
   resolveMessengerVerificationTarget,
   sanitizeMessengerSourceImageUrl,
   shouldProcessMessengerMessageOnce,
@@ -201,6 +202,32 @@ describe("hasMessengerImageGenerationIntent", () => {
   it("does not match image analysis or writing-style prompts", () => {
     expect(hasMessengerImageGenerationIntent("Wat zie je op deze foto?")).toBe(false);
     expect(hasMessengerImageGenerationIntent("Verbeter de stijl van deze tekst")).toBe(false);
+  });
+});
+
+describe("resolveMessengerSourceImageGenerationPrompt", () => {
+  it("does not auto-restyle a photo-only upload", () => {
+    expect(
+      resolveMessengerSourceImageGenerationPrompt({
+        hasSourceImage: true,
+        text: "",
+      }),
+    ).toBeNull();
+  });
+
+  it("returns the trimmed prompt only for an explicit source-image edit", () => {
+    expect(
+      resolveMessengerSourceImageGenerationPrompt({
+        hasSourceImage: true,
+        text: "  Restyle deze foto als cinematic poster  ",
+      }),
+    ).toBe("Restyle deze foto als cinematic poster");
+    expect(
+      resolveMessengerSourceImageGenerationPrompt({
+        hasSourceImage: false,
+        text: "Restyle deze foto",
+      }),
+    ).toBeNull();
   });
 });
 
