@@ -41,6 +41,8 @@ describe("messengerGenerationQueue", () => {
   const originalWorkerOnly = process.env.MESSENGER_GENERATION_WORKER_ONLY;
   const originalMaxAttempts = process.env.MESSENGER_GENERATION_MAX_ATTEMPTS;
   const originalDrainBatchSize = process.env.MESSENGER_GENERATION_DRAIN_BATCH_SIZE;
+  const originalJobLeaseSeconds = process.env.MESSENGER_GENERATION_JOB_LEASE_SECONDS;
+  const originalOpenAiTimeoutMs = process.env.OPENAI_IMAGE_TIMEOUT_MS;
 
   afterEach(() => {
     if (originalQueueEnabled === undefined) {
@@ -72,6 +74,16 @@ describe("messengerGenerationQueue", () => {
       delete process.env.MESSENGER_GENERATION_DRAIN_BATCH_SIZE;
     } else {
       process.env.MESSENGER_GENERATION_DRAIN_BATCH_SIZE = originalDrainBatchSize;
+    }
+    if (originalJobLeaseSeconds === undefined) {
+      delete process.env.MESSENGER_GENERATION_JOB_LEASE_SECONDS;
+    } else {
+      process.env.MESSENGER_GENERATION_JOB_LEASE_SECONDS = originalJobLeaseSeconds;
+    }
+    if (originalOpenAiTimeoutMs === undefined) {
+      delete process.env.OPENAI_IMAGE_TIMEOUT_MS;
+    } else {
+      process.env.OPENAI_IMAGE_TIMEOUT_MS = originalOpenAiTimeoutMs;
     }
     getRedisClientMock.mockReset();
     isRedisEnabledMock.mockReset();
@@ -205,13 +217,97 @@ describe("messengerGenerationQueue", () => {
       "messenger-generation-job-lease:req-queued",
       "1",
       "EX",
-      900
+      240
     );
     expect(redis.del).toHaveBeenCalledWith(
       "messenger-generation-job-lease:req-queued"
     );
     expect(processor).toHaveBeenCalledWith(job);
     expect(processing).toEqual([]);
+  });
+
+  it("uses an explicit job lease when configured", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    process.env.MESSENGER_GENERATION_JOB_LEASE_SECONDS = "420";
+    isRedisEnabledMock.mockReturnValue(true);
+    const job = createJob({ reqId: "req-custom-lease" });
+    const queue: string[] = [JSON.stringify(job)];
+    const processing: string[] = [];
+    const redis = {
+      del: vi.fn(async () => 1),
+      get: vi.fn(async () => null),
+      llen: vi.fn(async (key: string) =>
+        key.endsWith(":processing") ? processing.length : queue.length
+      ),
+      lrange: vi.fn(async () => processing),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      rpoplpush: vi.fn(async () => {
+        const value = queue.pop() ?? null;
+        if (value) {
+          processing.unshift(value);
+        }
+        return value;
+      }),
+      set: vi.fn(async () => "OK"),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await drainMessengerGenerationQueue(vi.fn(async () => undefined));
+
+    expect(redis.set).toHaveBeenCalledWith(
+      "messenger-generation-job-lease:req-custom-lease",
+      "1",
+      "EX",
+      420
+    );
+  });
+
+  it("derives the default job lease from the OpenAI timeout", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    process.env.OPENAI_IMAGE_TIMEOUT_MS = "300000";
+    isRedisEnabledMock.mockReturnValue(true);
+    const job = createJob({ reqId: "req-derived-lease" });
+    const queue: string[] = [JSON.stringify(job)];
+    const processing: string[] = [];
+    const redis = {
+      del: vi.fn(async () => 1),
+      get: vi.fn(async () => null),
+      llen: vi.fn(async (key: string) =>
+        key.endsWith(":processing") ? processing.length : queue.length
+      ),
+      lrange: vi.fn(async () => processing),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      rpoplpush: vi.fn(async () => {
+        const value = queue.pop() ?? null;
+        if (value) {
+          processing.unshift(value);
+        }
+        return value;
+      }),
+      set: vi.fn(async () => "OK"),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await drainMessengerGenerationQueue(vi.fn(async () => undefined));
+
+    expect(redis.set).toHaveBeenCalledWith(
+      "messenger-generation-job-lease:req-derived-lease",
+      "1",
+      "EX",
+      360
+    );
   });
 
   it("requeues a failed job with an incremented attempt count", async () => {

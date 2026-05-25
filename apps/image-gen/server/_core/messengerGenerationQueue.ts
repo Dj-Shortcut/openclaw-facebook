@@ -7,7 +7,8 @@ export const MESSENGER_GENERATION_PROCESSING_KEY =
   "messenger-generation-jobs:processing";
 export const MESSENGER_GENERATION_DEAD_LETTER_KEY =
   "messenger-generation-jobs:dead";
-const DEFAULT_JOB_LEASE_SECONDS = 15 * 60;
+const DEFAULT_JOB_LEASE_BUFFER_SECONDS = 60;
+const OPENAI_TIMEOUT_MS_DEFAULT = 180_000;
 const DEFAULT_MAX_JOB_ATTEMPTS = 3;
 const DEFAULT_DRAIN_BATCH_SIZE = 10;
 const MESSENGER_GENERATION_STYLES = new Set([
@@ -105,7 +106,17 @@ function getGenerationJobLeaseSeconds(): number {
   const configured = Number(process.env.MESSENGER_GENERATION_JOB_LEASE_SECONDS);
   return Number.isFinite(configured) && configured > 0
     ? Math.floor(configured)
-    : DEFAULT_JOB_LEASE_SECONDS;
+    : getDefaultGenerationJobLeaseSeconds();
+}
+
+function getDefaultGenerationJobLeaseSeconds(): number {
+  const configuredOpenAiTimeoutMs = Number(process.env.OPENAI_IMAGE_TIMEOUT_MS);
+  const openAiTimeoutMs =
+    Number.isFinite(configuredOpenAiTimeoutMs) && configuredOpenAiTimeoutMs > 0
+      ? configuredOpenAiTimeoutMs
+      : OPENAI_TIMEOUT_MS_DEFAULT;
+
+  return Math.ceil(openAiTimeoutMs / 1000) + DEFAULT_JOB_LEASE_BUFFER_SECONDS;
 }
 
 function getGenerationJobMaxAttempts(): number {
