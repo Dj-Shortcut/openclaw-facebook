@@ -1,9 +1,15 @@
-name: Fallow
+name: Image Gen Fallow
 
 on:
   pull_request:
+    paths:
+      - "apps/image-gen/**"
+      - ".github/workflows/image-gen-fallow.yml"
   push:
     branches: [main]
+    paths:
+      - "apps/image-gen/**"
+      - ".github/workflows/image-gen-fallow.yml"
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:
@@ -12,12 +18,16 @@ permissions:
   contents: write
 
 concurrency:
-  group: fallow-${{ github.ref }}
+  group: image-gen-fallow-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   codebase-health:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/image-gen
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -65,7 +75,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add public/badges/fallow-maintainability.json public/badges/fallow-metrics.json
-          git commit -m "chore: update Fallow maintainability badge"
+          git commit -m "chore: update image-gen Fallow maintainability badge"
           git push
 
       - name: Enforce maintainability gate

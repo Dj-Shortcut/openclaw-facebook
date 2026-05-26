@@ -1,9 +1,15 @@
-name: CI
+name: Image Gen CI
 
 on:
+  pull_request:
+    paths:
+      - "apps/image-gen/**"
+      - ".github/workflows/image-gen-ci.yml"
   push:
     branches: [main]
-  pull_request:
+    paths:
+      - "apps/image-gen/**"
+      - ".github/workflows/image-gen-ci.yml"
 
 permissions:
   contents: read
@@ -14,18 +20,25 @@ env:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/image-gen
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: pnpm
+          cache-dependency-path: apps/image-gen/pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
