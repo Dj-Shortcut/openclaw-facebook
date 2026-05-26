@@ -84,12 +84,27 @@ async function resolveStoredRuntimeSourceUrl(input: {
   sourceImageUrl?: string;
   lastPhotoUrl?: string | null;
   lastPhotoSource?: SourceImageOrigin | null;
+  reqId: string;
+  userId: string;
 }): Promise<{
   resolvedSourceImageUrl?: string;
   trustedSourceImageUrl: boolean;
 }> {
-  const originalSourceImageUrl =
-    input.sourceImageUrl ?? input.lastPhotoUrl ?? undefined;
+  const hasStoredLastPhoto =
+    typeof input.lastPhotoUrl === "string" && input.lastPhotoSource === "stored";
+
+  if (hasStoredLastPhoto) {
+    if (input.sourceImageUrl && input.sourceImageUrl !== input.lastPhotoUrl) {
+      console.warn("generation_source_image_override_ignored", {
+        reqId: input.reqId,
+        userId: input.userId,
+      });
+    }
+  }
+
+  const originalSourceImageUrl = hasStoredLastPhoto
+    ? input.lastPhotoUrl ?? undefined
+    : input.sourceImageUrl ?? input.lastPhotoUrl ?? undefined;
   const isStoredLastPhoto =
     originalSourceImageUrl !== undefined &&
     originalSourceImageUrl === input.lastPhotoUrl &&
@@ -168,6 +183,16 @@ export async function executeGenerationFlow(
 ): Promise<GenerationFlowResult> {
   const { resolvedSourceImageUrl, trustedSourceImageUrl } =
     await resolveStoredRuntimeSourceUrl(input);
+
+  console.info("generation_source_image_selected", {
+    reqId: input.reqId,
+    userId: input.userId,
+    hasExplicitSourceImageUrl: Boolean(input.sourceImageUrl),
+    hasLastPhotoUrl: Boolean(input.lastPhotoUrl),
+    lastPhotoSource: input.lastPhotoSource ?? null,
+    resolvedSourceImageUrl,
+    trustedSourceImageUrl,
+  });
 
   if (!resolvedSourceImageUrl) {
     return {
