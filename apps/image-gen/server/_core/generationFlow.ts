@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   createImageGenerator,
   type ImageProvider,
@@ -67,6 +68,15 @@ type GenerationFlowResult =
   | GenerationFlowSuccess
   | GenerationFlowFailure;
 
+function summarizeSensitiveUrl(url: string): { host: string; shortHash: string } {
+  const shortHash = createHash("sha256").update(url).digest("hex").slice(0, 12);
+  try {
+    return { host: new URL(url).host || "invalid-url", shortHash };
+  } catch {
+    return { host: "invalid-url", shortHash };
+  }
+}
+
 type ExecuteGenerationFlowInput = {
   style: Style;
   userId: string;
@@ -84,12 +94,25 @@ async function resolveStoredRuntimeSourceUrl(input: {
   sourceImageUrl?: string;
   lastPhotoUrl?: string | null;
   lastPhotoSource?: SourceImageOrigin | null;
+  reqId: string;
 }): Promise<{
   resolvedSourceImageUrl?: string;
   trustedSourceImageUrl: boolean;
 }> {
-  const originalSourceImageUrl =
-    input.sourceImageUrl ?? input.lastPhotoUrl ?? undefined;
+  const hasStoredLastPhoto =
+    typeof input.lastPhotoUrl === "string" && input.lastPhotoSource === "stored";
+
+  if (hasStoredLastPhoto) {
+    if (input.sourceImageUrl && input.sourceImageUrl !== input.lastPhotoUrl) {
+      console.warn("generation_source_image_override_ignored", {
+        reqId: input.reqId,
+      });
+    }
+  }
+
+  const originalSourceImageUrl = hasStoredLastPhoto
+    ? input.lastPhotoUrl ?? undefined
+    : input.sourceImageUrl ?? input.lastPhotoUrl ?? undefined;
   const isStoredLastPhoto =
     originalSourceImageUrl !== undefined &&
     originalSourceImageUrl === input.lastPhotoUrl &&
@@ -169,6 +192,17 @@ export async function executeGenerationFlow(
   const { resolvedSourceImageUrl, trustedSourceImageUrl } =
     await resolveStoredRuntimeSourceUrl(input);
 
+  console.info("generation_source_image_selected", {
+    reqId: input.reqId,
+    hasExplicitSourceImageUrl: Boolean(input.sourceImageUrl),
+    hasLastPhotoUrl: Boolean(input.lastPhotoUrl),
+    lastPhotoSource: input.lastPhotoSource ?? null,
+    resolvedSourceImageUrl: resolvedSourceImageUrl
+      ? summarizeSensitiveUrl(resolvedSourceImageUrl)
+      : null,
+    trustedSourceImageUrl,
+  });
+
   if (!resolvedSourceImageUrl) {
     return {
       kind: "error",
@@ -226,4 +260,3 @@ export async function executeGenerationFlow(
     };
   }
 }
-

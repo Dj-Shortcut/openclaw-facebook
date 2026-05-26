@@ -216,6 +216,68 @@ describe("generationFlow", () => {
     expect(createImageGeneratorMock).not.toHaveBeenCalled();
   });
 
+
+  it("prefers the most recent stored upload over an explicit stale source image", async () => {
+    const generateMock = vi.fn().mockResolvedValue({
+      imageUrl: "https://example.com/generated.jpg",
+      proof: {
+        incomingLen: 10,
+        incomingSha256: "in",
+        openaiInputLen: 10,
+        openaiInputSha256: "out",
+      },
+      metrics: { totalMs: 123 },
+    });
+    createImageGeneratorMock.mockReturnValue({
+      mode: "openai-images",
+      generator: { generate: generateMock },
+    });
+
+    const result = await executeGenerationFlow({
+      style: "cyberpunk",
+      userId: "user-1",
+      reqId: "req-1",
+      sourceImageUrl: "https://assets.example/inbound-source/old.jpg",
+      lastPhotoUrl: "https://assets.example/inbound-source/new.jpg",
+      lastPhotoSource: "stored",
+    });
+
+    expect(result).toMatchObject({
+      kind: "success",
+      resolvedSourceImageUrl: "https://assets.example/inbound-source/new.jpg",
+      trustedSourceImageUrl: true,
+    });
+    expect(generateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceImageUrl: "https://assets.example/inbound-source/new.jpg",
+      })
+    );
+  });
+
+  it("does not silently fall back to a stale explicit source when the latest upload is invalid", async () => {
+    const generateMock = vi.fn();
+    createImageGeneratorMock.mockReturnValue({
+      mode: "openai-images",
+      generator: { generate: generateMock },
+    });
+
+    const result = await executeGenerationFlow({
+      style: "cyberpunk",
+      userId: "user-1",
+      reqId: "req-1",
+      sourceImageUrl: "https://assets.example/inbound-source/old.jpg",
+      lastPhotoUrl: "not-a-valid-url",
+      lastPhotoSource: "stored",
+    });
+
+    expect(result).toMatchObject({
+      kind: "error",
+      errorKind: "invalid_source_image",
+      resolvedSourceImageUrl: "not-a-valid-url",
+    });
+    expect(generateMock).not.toHaveBeenCalled();
+  });
+
   it("classifies mapped generator failures", async () => {
     const timeoutError = new GenerationTimeoutError("timeout");
     (timeoutError as Error & { generationMetrics?: unknown }).generationMetrics = {
