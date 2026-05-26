@@ -1,0 +1,1 @@
+export { getGeneratorStartupConfig } from "../imageService";

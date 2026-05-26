@@ -1,0 +1,57 @@
+name: Image Gen CI
+
+on:
+  pull_request:
+    paths:
+      - "apps/image-gen/**"
+      - ".github/workflows/image-gen-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/image-gen/**"
+      - ".github/workflows/image-gen-ci.yml"
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/image-gen
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: apps/image-gen/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Test
+        run: pnpm run test
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Audit production dependencies (non-blocking)
+        continue-on-error: true
+        run: pnpm audit --prod --audit-level=high --ignore-registry-errors
