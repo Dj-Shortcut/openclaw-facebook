@@ -1,0 +1,17 @@
+{
+  "ignoreDependencies": ["mysql2"],
+  "overrides": [
+    {
+      "files": ["client/index.html"],
+      "rules": {
+        "unresolved-imports": "off"
+      }
+    },
+    {
+      "files": ["client/src/**/*.{ts,tsx}"],
+      "rules": {
+        "unresolved-imports": "off"
+      }
+    }
+  ]
+}

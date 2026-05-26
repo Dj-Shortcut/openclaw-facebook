@@ -1,0 +1,34 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1771791967247,
+      "tag": "0000_romantic_the_call",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1771792056712,
+      "tag": "0001_big_the_phantom",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1771798491450,
+      "tag": "0002_fix_daily_quota_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1771902695410,
+      "tag": "0003_fresh_the_anarchist",
+      "breakpoints": true
+    }
+  ]
+}

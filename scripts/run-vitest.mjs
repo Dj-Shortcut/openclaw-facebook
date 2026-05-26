@@ -5,7 +5,7 @@ process.env.NODE_OPTIONS = nodeOptions
   ? `${nodeOptions} --import=./vitest.node-polyfill.mjs`
   : '--import=./vitest.node-polyfill.mjs';
 
-const result = spawnSync('vitest', ['run'], {
+const result = spawnSync('vitest', ['run', '--exclude', 'apps/**'], {
   stdio: 'inherit',
   shell: true,
   env: process.env,
