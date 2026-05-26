@@ -2,10 +2,17 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import process from "node:process";
 
 const stateDir = process.env.OPENCLAW_STATE_DIR || "/data";
 const configPath = process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir, "openclaw.json");
+const workspaceDir = process.env.OPENCLAW_WORKSPACE_DIR || path.join(stateDir, "workspace");
+const legacyWorkspaceDir = path.join(
+  process.env.HOME || "/home/node",
+  ".openclaw",
+  "workspace",
+);
 const pluginPath = process.env.OPENCLAW_FACEBOOK_PLUGIN_PATH || "/app/node_modules/@dj-shortcut/facebook";
 const codexPluginPath = process.env.OPENCLAW_CODEX_PLUGIN_PATH || "/app/node_modules/@openclaw/codex";
 const defaultDmPolicy = process.env.OPENCLAW_FACEBOOK_DEFAULT_DM_POLICY || "pairing";
@@ -47,6 +54,70 @@ function ensurePublicToolDeny(config, toolId) {
     config.tools.deny = [];
   }
   uniquePush(config.tools.deny, toolId);
+}
+
+function ensureAgentDefaults(config) {
+  if (!isObject(config.agents)) {
+    config.agents = {};
+  }
+  if (!isObject(config.agents.defaults)) {
+    config.agents.defaults = {};
+  }
+  if (
+    config.agents.defaults.workspace === undefined ||
+    path.resolve(String(config.agents.defaults.workspace)) === path.resolve(legacyWorkspaceDir)
+  ) {
+    config.agents.defaults.workspace = workspaceDir;
+  }
+  if (defaultAgentModel && config.agents.defaults.model === undefined) {
+    config.agents.defaults.model = { primary: defaultAgentModel };
+  }
+  if (defaultAgentThinking && config.agents.defaults.thinkingDefault === undefined) {
+    config.agents.defaults.thinkingDefault = defaultAgentThinking;
+  }
+}
+
+function copyIfMissing(sourcePath, destPath) {
+  if (!fs.existsSync(sourcePath) || fs.existsSync(destPath)) {
+    return false;
+  }
+  fs.cpSync(sourcePath, destPath, {
+    recursive: fs.statSync(sourcePath).isDirectory(),
+    errorOnExist: true,
+    force: false,
+  });
+  return true;
+}
+
+function migrateLegacyWorkspaceFiles() {
+  if (path.resolve(legacyWorkspaceDir) === path.resolve(workspaceDir)) {
+    return;
+  }
+  if (!fs.existsSync(legacyWorkspaceDir)) {
+    return;
+  }
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  const entries = [
+    "AGENTS.md",
+    "SOUL.md",
+    "TOOLS.md",
+    "IDENTITY.md",
+    "USER.md",
+    "HEARTBEAT.md",
+    "MEMORY.md",
+    "memory",
+  ];
+  let copied = 0;
+  for (const entry of entries) {
+    if (copyIfMissing(path.join(legacyWorkspaceDir, entry), path.join(workspaceDir, entry))) {
+      copied += 1;
+    }
+  }
+  if (copied > 0) {
+    console.warn(
+      `migrated ${copied} OpenClaw workspace entr${copied === 1 ? "y" : "ies"} from ${legacyWorkspaceDir} to ${workspaceDir}`,
+    );
+  }
 }
 
 function ensurePublicMessengerBaseline(config) {
@@ -93,20 +164,7 @@ function ensurePublicMessengerBaseline(config) {
     config.channels.facebook.dmPolicy = defaultDmPolicy;
   }
 
-  if (defaultAgentModel || defaultAgentThinking) {
-    if (!isObject(config.agents)) {
-      config.agents = {};
-    }
-    if (!isObject(config.agents.defaults)) {
-      config.agents.defaults = {};
-    }
-    if (defaultAgentModel && config.agents.defaults.model === undefined) {
-      config.agents.defaults.model = { primary: defaultAgentModel };
-    }
-    if (defaultAgentThinking && config.agents.defaults.thinkingDefault === undefined) {
-      config.agents.defaults.thinkingDefault = defaultAgentThinking;
-    }
-  }
+  ensureAgentDefaults(config);
 
   const facebookConfig = config.channels.facebook;
   const allowFrom = Array.isArray(facebookConfig.allowFrom) ? facebookConfig.allowFrom : [];
@@ -123,25 +181,38 @@ function ensurePublicMessengerBaseline(config) {
   return config;
 }
 
-fs.mkdirSync(stateDir, { recursive: true });
-const config = ensurePublicMessengerBaseline(readJsonFile(configPath));
-writeJsonFile(configPath, config);
+export function prepareGatewayConfig() {
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(workspaceDir, { recursive: true });
+  migrateLegacyWorkspaceFiles();
+  const config = ensurePublicMessengerBaseline(readJsonFile(configPath));
+  writeJsonFile(configPath, config);
+  return config;
+}
 
-const openclawBin = path.join(process.cwd(), "node_modules", "openclaw", "openclaw.mjs");
-const args = [openclawBin, "gateway", ...process.argv.slice(2)];
-const child = spawn(process.execPath, args, {
-  stdio: "inherit",
-  env: {
-    ...process.env,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_CONFIG_PATH: configPath,
-  },
-});
+export function startGateway() {
+  prepareGatewayConfig();
+  const openclawBin = path.join(process.cwd(), "node_modules", "openclaw", "openclaw.mjs");
+  const args = [openclawBin, "gateway", ...process.argv.slice(2)];
+  const child = spawn(process.execPath, args, {
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_WORKSPACE_DIR: workspaceDir,
+    },
+  });
 
-child.on("exit", (code, signal) => {
-  if (signal) {
-    process.kill(process.pid, signal);
-    return;
-  }
-  process.exit(code ?? 1);
-});
+  child.on("exit", (code, signal) => {
+    if (signal) {
+      process.kill(process.pid, signal);
+      return;
+    }
+    process.exit(code ?? 1);
+  });
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  startGateway();
+}

@@ -20,6 +20,8 @@ fly deploy -a leaderbot-openclaw-gateway
 
 The container preserves `/data/openclaw.json` and only seeds non-secret defaults when missing:
 
+- `OPENCLAW_WORKSPACE_DIR` defaults to `/data/workspace`, keeping `AGENTS.md`, `USER.md`, `MEMORY.md`, and daily memory on the mounted Fly volume.
+- On startup, missing workspace bootstrap files are copied once from the legacy `/home/node/.openclaw/workspace` fallback into `/data/workspace`.
 - `plugins.load.paths` includes `/app/node_modules/@dj-shortcut/facebook`.
 - `plugins.load.paths` includes `/app/node_modules/@openclaw/codex`.
 - `plugins.entries.facebook.enabled` defaults to `true`.
