@@ -39,6 +39,16 @@ function uniquePush(list, value) {
   }
 }
 
+function ensurePublicToolDeny(config, toolId) {
+  if (!isObject(config.tools)) {
+    config.tools = {};
+  }
+  if (!Array.isArray(config.tools.deny)) {
+    config.tools.deny = [];
+  }
+  uniquePush(config.tools.deny, toolId);
+}
+
 function ensurePublicMessengerBaseline(config) {
   if (!isObject(config.plugins)) {
     config.plugins = {};
@@ -71,6 +81,7 @@ function ensurePublicMessengerBaseline(config) {
   if (config.plugins.entries.codex.enabled === undefined) {
     config.plugins.entries.codex.enabled = true;
   }
+  ensurePublicToolDeny(config, "image_generate");
 
   if (!isObject(config.channels)) {
     config.channels = {};
