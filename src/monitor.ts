@@ -476,16 +476,22 @@ export function classifyMessengerFastLaneIntent(text: string): MessengerFastLane
 
 export function hasMessengerImageGenerationIntent(text: string): boolean {
   const normalized = normalizeFastLaneText(text);
-  if (
-    /\b(prompt|prompts)\b/.test(normalized) &&
-    /\b(maak|schrijf|bedenk|genereer|verbeter|formuleer|create|write|draft|improve)\b/.test(
-      normalized,
-    )
-  ) {
+  if (isMessengerPromptWritingRequest(normalized)) {
     return false;
   }
   return /\b(restyle|restylen|restijlen|restijl|generate image|create image|maak afbeelding|maak een afbeelding|genereer afbeelding|genereer een afbeelding|maak plaatje|maak een plaatje|bewerk foto|bewerk deze foto|edit image|edit this image)\b/.test(
     normalized,
+  );
+}
+
+function isMessengerPromptWritingRequest(normalizedText: string): boolean {
+  return (
+    /\b(maak|schrijf|bedenk|genereer|verbeter|formuleer)\s+(?:een|de|mijn)?\s*prompt\b/.test(
+      normalizedText,
+    ) ||
+    /\b(create|write|draft|improve)\s+(?:an?|the|my)?\s*(?:image\s+)?prompt\b/.test(
+      normalizedText,
+    )
   );
 }
 
