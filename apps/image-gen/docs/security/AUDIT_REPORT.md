@@ -275,10 +275,10 @@ The following TypeScript errors exist in template components and are **NOT** fro
 
 1. **Set Environment Variables:**
    ```bash
-   FB_VERIFY_TOKEN=your_random_token_here
-   FB_PAGE_ACCESS_TOKEN=your_page_token
-   FB_APP_SECRET=your_app_secret  # optional
-   ADMIN_TOKEN=your_admin_token    # optional
+   FB_VERIFY_TOKEN=<your-random-token>
+   FB_PAGE_ACCESS_TOKEN=<your-page-token>
+   FB_APP_SECRET=<your-app-secret>  # optional
+   ADMIN_TOKEN=<your-admin-token>   # optional
    ```
 
 2. **Deploy to Fly:**
@@ -357,10 +357,10 @@ vite v7.3.1 building client environment for production...
 
 ```bash
 fly secrets set -a groepsscore \
-  FB_VERIFY_TOKEN="your_random_token" \
-  FB_PAGE_ACCESS_TOKEN="your_page_token" \
-  FB_APP_SECRET="your_app_secret" \
-  ADMIN_TOKEN="your_admin_token"
+  FB_VERIFY_TOKEN="<your-random-token>" \
+  FB_PAGE_ACCESS_TOKEN="<your-page-token>" \
+  FB_APP_SECRET="<your-app-secret>" \
+  ADMIN_TOKEN="<your-admin-token>"
 ```
 
 ### 2. Deploy
