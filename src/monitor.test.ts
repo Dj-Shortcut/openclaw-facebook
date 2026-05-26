@@ -190,6 +190,7 @@ describe("classifyMessengerFastLaneIntent", () => {
     expect(classifyMessengerFastLaneIntent("Schrijf een korte planning voor morgen")).toBeNull();
     expect(classifyMessengerFastLaneIntent("Wat zie je op deze foto?")).toBeNull();
     expect(classifyMessengerFastLaneIntent("Verbeter de stijl van deze tekst")).toBeNull();
+    expect(classifyMessengerFastLaneIntent("Maak een prompt voor een afbeelding")).toBeNull();
   });
 });
 
@@ -202,6 +203,13 @@ describe("hasMessengerImageGenerationIntent", () => {
   it("does not match image analysis or writing-style prompts", () => {
     expect(hasMessengerImageGenerationIntent("Wat zie je op deze foto?")).toBe(false);
     expect(hasMessengerImageGenerationIntent("Verbeter de stijl van deze tekst")).toBe(false);
+    expect(hasMessengerImageGenerationIntent("Maak een prompt voor een afbeelding")).toBe(false);
+    expect(hasMessengerImageGenerationIntent("Write an image prompt for a robot")).toBe(false);
+  });
+
+  it("keeps image generation requests that mention an existing prompt", () => {
+    expect(hasMessengerImageGenerationIntent("Genereer een afbeelding met deze prompt")).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Create image from this prompt")).toBe(true);
   });
 });
 
