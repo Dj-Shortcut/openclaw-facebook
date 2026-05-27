@@ -198,6 +198,9 @@ describe("hasMessengerImageGenerationIntent", () => {
   it("matches explicit generation and restyle prompts", () => {
     expect(hasMessengerImageGenerationIntent("Restyle deze foto")).toBe(true);
     expect(hasMessengerImageGenerationIntent("Maak een afbeelding van een robot")).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Doe maar")).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Ja graag")).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Ok")).toBe(true);
   });
 
   it("does not match image analysis or writing-style prompts", () => {

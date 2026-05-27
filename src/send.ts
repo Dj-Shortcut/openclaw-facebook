@@ -7,6 +7,8 @@ import type { MessengerSendResult } from "./types.js";
 
 const DEFAULT_GRAPH_API_VERSION = "v20.0";
 const MESSENGER_SEND_TIMEOUT_MS = 10_000;
+const MESSENGER_TEXT_MAX_LENGTH = 2000;
+export const MESSENGER_TEXT_CHUNK_LIMIT = 1900;
 
 type FetchLike = typeof fetch;
 
@@ -40,6 +42,13 @@ function formatMessengerApiError(body: unknown): string {
   return `Messenger API error${details.code ? ` ${details.code}` : ""}: ${message}`;
 }
 
+function normalizeMessengerText(text: string): string {
+  if (text.length <= MESSENGER_TEXT_MAX_LENGTH) {
+    return text;
+  }
+  return text.slice(0, MESSENGER_TEXT_MAX_LENGTH);
+}
+
 export async function sendMessengerText(
   to: string,
   text: string,
@@ -61,6 +70,7 @@ export async function sendMessengerText(
     throw new Error(`Messenger recipient id missing for account "${account.accountId}".`);
   }
   const fetchImpl = opts.fetch ?? fetch;
+  const normalizedText = normalizeMessengerText(text);
   const version = resolveGraphApiVersion(account.config.graphApiVersion);
   const url = `https://graph.facebook.com/${version}/${encodeURIComponent(account.pageId)}/messages`;
   const controller = new AbortController();
@@ -77,7 +87,7 @@ export async function sendMessengerText(
       body: JSON.stringify({
         recipient: { id: normalizedTo },
         messaging_type: "RESPONSE",
-        message: { text },
+        message: { text: normalizedText },
       }),
     });
   } catch (error) {
@@ -159,4 +169,3 @@ export async function sendMessengerSenderAction(
   }
 }
 
-export const MESSENGER_TEXT_CHUNK_LIMIT = 1900;
