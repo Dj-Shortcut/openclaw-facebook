@@ -7,8 +7,8 @@ import type { MessengerSendResult } from "./types.js";
 
 const DEFAULT_GRAPH_API_VERSION = "v20.0";
 const MESSENGER_SEND_TIMEOUT_MS = 10_000;
-const MESSENGER_TEXT_MAX_LENGTH = 2000;
-export const MESSENGER_TEXT_CHUNK_LIMIT = 1900;
+export const MESSENGER_TEXT_MAX_LENGTH = 2000;
+export const MESSENGER_TEXT_CHUNK_LIMIT = MESSENGER_TEXT_MAX_LENGTH;
 
 type FetchLike = typeof fetch;
 
