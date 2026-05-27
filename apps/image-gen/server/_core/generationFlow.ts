@@ -19,6 +19,7 @@ import {
 import type { SourceImageOrigin } from "./messengerState";
 import type { Style } from "./messengerStyles";
 import type { DirectorMode } from "./image-generation/director/directorTypes";
+import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import { storageGet, storageKeyFromPublicUrl } from "../storage";
 
 type GenerationProof = {
@@ -80,6 +81,45 @@ type ExecuteGenerationFlowInput = {
   lastPhotoSource?: SourceImageOrigin | null;
 };
 
+type RuntimeSourceInput = {
+  sourceImageUrl?: string;
+  lastPhotoUrl?: string | null;
+  lastPhotoSource?: SourceImageOrigin | null;
+};
+
+function hasStoredLastPhoto(input: RuntimeSourceInput): boolean {
+  return typeof input.lastPhotoUrl === "string" && input.lastPhotoSource === "stored";
+}
+
+function logIgnoredSourceImageOverride(input: RuntimeSourceInput & { reqId: string }): void {
+  if (
+    hasStoredLastPhoto(input) &&
+    input.sourceImageUrl &&
+    input.sourceImageUrl !== input.lastPhotoUrl
+  ) {
+    console.warn("generation_source_image_override_ignored", {
+      reqId: input.reqId,
+    });
+  }
+}
+
+function selectOriginalSourceImageUrl(input: RuntimeSourceInput): string | undefined {
+  return hasStoredLastPhoto(input)
+    ? input.lastPhotoUrl ?? undefined
+    : input.sourceImageUrl ?? input.lastPhotoUrl ?? undefined;
+}
+
+function isOriginalStoredLastPhoto(
+  originalSourceImageUrl: string | undefined,
+  input: RuntimeSourceInput
+): boolean {
+  return (
+    originalSourceImageUrl !== undefined &&
+    originalSourceImageUrl === input.lastPhotoUrl &&
+    input.lastPhotoSource === "stored"
+  );
+}
+
 async function resolveStoredRuntimeSourceUrl(input: {
   sourceImageUrl?: string;
   lastPhotoUrl?: string | null;
@@ -89,24 +129,10 @@ async function resolveStoredRuntimeSourceUrl(input: {
   resolvedSourceImageUrl?: string;
   trustedSourceImageUrl: boolean;
 }> {
-  const hasStoredLastPhoto =
-    typeof input.lastPhotoUrl === "string" && input.lastPhotoSource === "stored";
+  logIgnoredSourceImageOverride(input);
 
-  if (hasStoredLastPhoto) {
-    if (input.sourceImageUrl && input.sourceImageUrl !== input.lastPhotoUrl) {
-      console.warn("generation_source_image_override_ignored", {
-        reqId: input.reqId,
-      });
-    }
-  }
-
-  const originalSourceImageUrl = hasStoredLastPhoto
-    ? input.lastPhotoUrl ?? undefined
-    : input.sourceImageUrl ?? input.lastPhotoUrl ?? undefined;
-  const isStoredLastPhoto =
-    originalSourceImageUrl !== undefined &&
-    originalSourceImageUrl === input.lastPhotoUrl &&
-    input.lastPhotoSource === "stored";
+  const originalSourceImageUrl = selectOriginalSourceImageUrl(input);
+  const isStoredLastPhoto = isOriginalStoredLastPhoto(originalSourceImageUrl, input);
 
   if (!originalSourceImageUrl || !isStoredLastPhoto) {
     return {
@@ -187,7 +213,9 @@ export async function executeGenerationFlow(
     hasExplicitSourceImageUrl: Boolean(input.sourceImageUrl),
     hasLastPhotoUrl: Boolean(input.lastPhotoUrl),
     lastPhotoSource: input.lastPhotoSource ?? null,
-    resolvedSourceImageUrl,
+    resolvedSourceImageUrl: resolvedSourceImageUrl
+      ? summarizeSensitiveUrl(resolvedSourceImageUrl)
+      : null,
     trustedSourceImageUrl,
   });
 
@@ -248,4 +276,3 @@ export async function executeGenerationFlow(
     };
   }
 }
-

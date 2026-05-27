@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { executeGenerationFlow } from "../generationFlow";
 import {
   formatDirectorSocialCopy,
@@ -24,6 +23,7 @@ import {
   sendWhatsAppImageReply,
   sendWhatsAppTextReply,
 } from "../whatsappResponseService";
+import { summarizeSensitiveUrl } from "../utils/urlSummarizer";
 
 type StyleGenerationInput = {
   senderId: string;
@@ -40,15 +40,6 @@ type StyleGenerationInput = {
 
 type GenerationResult = Awaited<ReturnType<typeof executeGenerationFlow>>;
 type GenerationFailure = Extract<GenerationResult, { kind: "error" }>;
-
-function summarizeSensitiveUrl(url: string): { host: string; shortHash: string } {
-  const shortHash = createHash("sha256").update(url).digest("hex").slice(0, 12);
-  try {
-    return { host: new URL(url).host || "invalid-url", shortHash };
-  } catch {
-    return { host: "invalid-url", shortHash };
-  }
-}
 
 function resolvedSourceHost(url?: string): string | undefined {
   if (!url) {
