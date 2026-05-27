@@ -168,6 +168,35 @@ describe("sendMessengerText", () => {
     ).rejects.toThrow("response did not include message_id and recipient_id");
   });
 
+
+  it("truncates outgoing text to Messenger's 2000 character limit", async () => {
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ message_id: "mid-1", recipient_id: "psid-1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+
+    await sendMessengerText("psid-1", "x".repeat(2500), {
+      cfg: {
+        channels: {
+          facebook: {
+            pageId: "page-1",
+            pageAccessToken: "token-1",
+            appSecret: "secret-1",
+            verifyToken: "verify-1",
+          },
+        },
+      } as never,
+      fetch: fetchMock as never,
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.message.text).toHaveLength(2000);
+  });
+
   it("aborts stalled Graph API sends", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn(
