@@ -479,9 +479,15 @@ export function hasMessengerImageGenerationIntent(text: string): boolean {
   if (isMessengerPromptWritingRequest(normalized)) {
     return false;
   }
-  return /\b(restyle|restylen|restijlen|restijl|generate image|create image|maak afbeelding|maak een afbeelding|genereer afbeelding|genereer een afbeelding|maak plaatje|maak een plaatje|bewerk foto|bewerk deze foto|edit image|edit this image)\b/.test(
+
+  const explicitImageIntent = /\b(restyle|restylen|restijlen|restijl|generate image|create image|maak afbeelding|maak een afbeelding|genereer afbeelding|genereer een afbeelding|maak plaatje|maak een plaatje|bewerk foto|bewerk deze foto|edit image|edit this image)\b/.test(
     normalized,
   );
+  if (explicitImageIntent) {
+    return true;
+  }
+
+  return /^(doe maar|ga maar|ja graag|yes please|ok(e)?|prima|top)$/.test(normalized);
 }
 
 function isMessengerPromptWritingRequest(normalizedText: string): boolean {
