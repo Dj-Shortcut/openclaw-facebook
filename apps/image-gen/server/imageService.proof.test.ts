@@ -15,6 +15,30 @@ function toUrlString(url: string | URL): string {
   return typeof url === "string" ? url : url.toString();
 }
 
+function requestJson(init: RequestInit | undefined): {
+  input?: Array<{ content?: Array<{ type?: string; text?: string; image_url?: string }> }>;
+  tools?: Array<{ type?: string; output_format?: string }>;
+} {
+  return typeof init?.body === "string" ? JSON.parse(init.body) : {};
+}
+
+function promptFromRequest(init: RequestInit | undefined): string {
+  const payload = requestJson(init);
+  return (
+    payload.input?.[0]?.content?.find(part => part.type === "input_text")?.text ??
+    ""
+  );
+}
+
+function imageBufferFromRequest(init: RequestInit | undefined): Buffer {
+  const payload = requestJson(init);
+  const imageUrl = payload.input?.[0]?.content?.find(
+    part => part.type === "input_image"
+  )?.image_url;
+  const base64Image = imageUrl?.replace(/^data:[^;]+;base64,/, "") ?? "";
+  return Buffer.from(base64Image, "base64");
+}
+
 function createStoredSourceImageInput(input: {
   userKey: string;
   reqId: string;
@@ -31,13 +55,13 @@ function createStoredSourceImageInput(input: {
 function createOpenAiEditsFetchMock(options?: {
   sourceImageFixture?: Buffer;
   failuresBeforeSuccess?: number;
-  payload?: { data: Array<{ b64_json: string }> };
+  payload?: { output: Array<{ type: string; result: string }> };
   failureFactory?: (attempt: number) => Error;
 }) {
   const sourceImageFixture = options?.sourceImageFixture ?? Buffer.alloc(7000, 9);
   const failuresBeforeSuccess = options?.failuresBeforeSuccess ?? 0;
   const payload = options?.payload ?? {
-    data: [{ b64_json: GENERATED_IMAGE_BASE64 }],
+    output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }],
   };
   let openAiCallCount = 0;
 
@@ -50,7 +74,7 @@ function createOpenAiEditsFetchMock(options?: {
       } as Response;
     }
 
-    expect(toUrlString(url)).toBe("https://api.openai.com/v1/images/edits");
+    expect(toUrlString(url)).toBe("https://api.openai.com/v1/responses");
     openAiCallCount += 1;
     if (openAiCallCount <= failuresBeforeSuccess) {
       const failure =
@@ -222,12 +246,11 @@ function installStoredSourcePromptFetchMock(
       } as Response;
     }
 
-    const formData = init?.body as FormData;
-    assertPrompt(String(formData.get("prompt")));
+    assertPrompt(promptFromRequest(init));
 
     return {
       ok: true,
-      json: async () => ({ data: [{ b64_json: GENERATED_IMAGE_BASE64 }] }),
+      json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
     } as Response;
   });
 
@@ -278,21 +301,22 @@ describe("OpenAi image-to-image proof", () => {
           } as Response;
         }
 
-        expect(toUrlString(url)).toBe("https://api.openai.com/v1/images/edits");
-        const formData = init?.body as FormData;
-        expect(formData).toBeInstanceOf(FormData);
-        const imageBlob = formData.get("image");
-        expect(imageBlob).toBeInstanceOf(Blob);
-        const imageBuffer = Buffer.from(await (imageBlob as Blob).arrayBuffer());
-        expect(sha256(imageBuffer)).toBe(fixtureHash);
-        expect(formData.get("output_format")).toBe("jpeg");
+        expect(toUrlString(url)).toBe("https://api.openai.com/v1/responses");
+        const payload = requestJson(init);
+        expect(sha256(imageBufferFromRequest(init))).toBe(fixtureHash);
+        expect(payload.tools?.[0]).toEqual(
+          expect.objectContaining({
+            type: "image_generation",
+            output_format: "png",
+          })
+        );
 
-        const prompt = String(formData.get("prompt"));
+        const prompt = promptFromRequest(init);
         expectDistinctivePrompt(prompt, styleCase, promptHint);
 
         return {
           ok: true,
-          json: async () => ({ data: [{ b64_json: GENERATED_IMAGE_BASE64 }] }),
+          json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
         } as Response;
       });
 
@@ -310,7 +334,7 @@ describe("OpenAi image-to-image proof", () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(result.imageUrl).toMatch(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
       );
       expect(result.metrics.totalMs).toBeGreaterThanOrEqual(0);
       expect(result.metrics.fbImageFetchMs).toBeGreaterThanOrEqual(0);
@@ -410,7 +434,7 @@ describe("OpenAi image-to-image proof", () => {
 
       return {
         ok: true,
-        json: async () => ({ data: [{ b64_json: GENERATED_IMAGE_BASE64 }] }),
+        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
       } as Response;
     });
 
@@ -450,7 +474,7 @@ describe("OpenAi image-to-image proof", () => {
 
       return {
         ok: true,
-        json: async () => ({ data: [{ b64_json: GENERATED_IMAGE_BASE64 }] }),
+        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
       } as Response;
     });
 
@@ -494,7 +518,7 @@ describe("OpenAi image-to-image proof", () => {
 
       return {
         ok: true,
-        json: async () => ({ data: [{ b64_json: GENERATED_IMAGE_BASE64 }] }),
+        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
       } as Response;
     });
 
@@ -511,7 +535,7 @@ describe("OpenAi image-to-image proof", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(result.imageUrl).toMatch(
-      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
     expect(result.metrics.fbImageFetchMs).toBeGreaterThanOrEqual(0);
   });
@@ -554,7 +578,7 @@ describe("OpenAi image-to-image proof", () => {
 
       return {
         ok: true,
-        json: async () => ({ data: [{ b64_json: GENERATED_IMAGE_BASE64 }] }),
+        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
       } as Response;
     });
 
@@ -571,7 +595,7 @@ describe("OpenAi image-to-image proof", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result.imageUrl).toMatch(
-      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
   });
 
@@ -783,7 +807,7 @@ describe("OpenAi image-to-image proof", () => {
 
       return {
         ok: true,
-        json: async () => ({ data: [{ b64_json: GENERATED_IMAGE_BASE64 }] }),
+        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
       } as Response;
     });
 
@@ -833,7 +857,7 @@ describe("OpenAi image-to-image proof", () => {
 
       return {
         ok: true,
-        json: async () => ({ data: [{ b64_json: GENERATED_IMAGE_BASE64 }] }),
+        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
       } as Response;
     });
 
@@ -850,7 +874,7 @@ describe("OpenAi image-to-image proof", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(result.imageUrl).toMatch(
-      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
     expect(result.metrics.openAiMs).toBeGreaterThanOrEqual(0);
   });
@@ -941,7 +965,7 @@ describe("OpenAi image-to-image proof", () => {
 
       return {
         ok: true,
-        json: async () => ({ data: [{ b64_json: GENERATED_IMAGE_BASE64 }] }),
+        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
       } as Response;
     });
 
@@ -995,7 +1019,7 @@ describe("OpenAi image-to-image proof", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(result.imageUrl).toMatch(
-      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
     expect(result.metrics.openAiMs).toBeGreaterThanOrEqual(0);
   });
@@ -1017,7 +1041,7 @@ describe("OpenAi image-to-image proof", () => {
 
       return {
         ok: true,
-        json: async () => ({ data: [{ b64_json: "!!!" }] }),
+        json: async () => ({ output: [{ type: "image_generation_call", result: "!!!" }] }),
       } as Response;
     });
 
@@ -1033,7 +1057,7 @@ describe("OpenAi image-to-image proof", () => {
         }),
       })
     ).rejects.toThrow(
-      "OpenAI response image data was empty after base64 decode"
+      "OpenAI image_generation_call returned invalid base64 image data"
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(2);

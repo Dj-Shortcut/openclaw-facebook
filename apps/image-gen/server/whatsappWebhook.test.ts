@@ -130,7 +130,7 @@ describe("whatsapp webhook flow", () => {
 
     expect(downloadWhatsAppMediaMock).toHaveBeenCalledWith("wamid-image-1");
     expect(getState(anonymizePsid("wa-user-1"))?.lastPhotoUrl).toMatch(
-      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/.+\.jpg$/
+      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/.+\.png$/
     );
     expect(getState(anonymizePsid("wa-user-1"))?.lastPhotoSource).toBe(
       "stored"
@@ -228,11 +228,11 @@ describe("whatsapp webhook flow", () => {
           } as Response;
         }
 
-        if (resolved === "https://api.openai.com/v1/images/edits") {
+        if (resolved === "https://api.openai.com/v1/responses") {
           return {
             ok: true,
             json: async () => ({
-              data: [{ b64_json: Buffer.from("generated-image").toString("base64") }],
+              output: [{ type: "image_generation_call", result: Buffer.from("generated-image").toString("base64") }],
             }),
           } as Response;
         }
@@ -284,7 +284,7 @@ describe("whatsapp webhook flow", () => {
     expect(sendWhatsAppImageMock).toHaveBeenCalledWith(
       "wa-user-3",
       expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/.+\.jpg$/
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/.+\.png$/
       )
     );
     expect(sendWhatsAppTextMock).toHaveBeenCalledWith(
@@ -660,7 +660,7 @@ describe("whatsapp webhook flow", () => {
       expect(generateSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           sourceImageUrl: expect.stringMatching(
-            /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/.+\.jpg$/
+            /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/.+\.png$/
           ),
           trustedSourceImageUrl: true,
           sourceImageProvenance: "storeInbound",
@@ -784,11 +784,11 @@ describe("whatsapp webhook flow", () => {
           } as Response;
         }
 
-        if (resolved === "https://api.openai.com/v1/images/edits") {
+        if (resolved === "https://api.openai.com/v1/responses") {
           return {
             ok: true,
             json: async () => ({
-              data: [{ b64_json: Buffer.from("generated-image-2").toString("base64") }],
+              output: [{ type: "image_generation_call", result: Buffer.from("generated-image-2").toString("base64") }],
             }),
           } as Response;
         }
@@ -833,7 +833,7 @@ describe("whatsapp webhook flow", () => {
     expect(sendWhatsAppImageMock).toHaveBeenCalledWith(
       "wa-user-5",
       expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/.+\.jpg$/
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/.+\.png$/
       )
     );
     expect(getState(anonymizePsid("wa-user-5"))?.preselectedStyle).toBeNull();

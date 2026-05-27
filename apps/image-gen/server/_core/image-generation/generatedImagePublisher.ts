@@ -12,14 +12,14 @@ import {
 } from "./imageServiceConfig";
 
 export async function publishGeneratedImage(
-  jpegBuffer: Buffer,
+  imageBuffer: Buffer,
   style: Style,
   reqId?: string
 ): Promise<string> {
   if (hasObjectStorageConfig()) {
-    const key = `generated/${style}/${Date.now()}-${randomUUID()}.jpg`;
+    const key = `generated/${style}/${Date.now()}-${randomUUID()}.png`;
     try {
-      const { url } = await storagePut(key, jpegBuffer, "image/jpeg");
+      const { url } = await storagePut(key, imageBuffer, "image/png");
       console.info(
         JSON.stringify({
           level: "info",
@@ -44,7 +44,7 @@ export async function publishGeneratedImage(
 
   assertProductionImageStorageConfig();
 
-  const token = putGeneratedImage(jpegBuffer, "image/jpeg");
+  const token = putGeneratedImage(imageBuffer, "image/png");
   const publicBaseUrl = getRequiredPublicBaseUrl();
   const localUrl = buildGeneratedImageUrl(publicBaseUrl, token);
   console.warn("GENERATED_IMAGE_LOCAL_FALLBACK", {

@@ -46,10 +46,10 @@ describe("OpenAi image delivery via object storage", () => {
         } as Response;
       }
 
-      if (toUrlString(url) === "https://api.openai.com/v1/images/edits") {
+      if (toUrlString(url) === "https://api.openai.com/v1/responses") {
         return {
           ok: true,
-          json: async () => ({ data: [{ b64_json: GENERATED_IMAGE_BASE64 }] }),
+          json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
         } as Response;
       }
 

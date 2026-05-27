@@ -32,13 +32,17 @@ function toUrlString(url: string | URL): string {
 async function promptFromRequest(init: RequestInit | undefined): Promise<string> {
   const body = init?.body;
 
-  if (body instanceof FormData) {
-    const prompt = body.get("prompt");
-    return typeof prompt === "string" ? prompt : "";
-  }
-
   if (typeof body === "string") {
-    return (JSON.parse(body) as { prompt?: string }).prompt ?? "";
+    const payload = JSON.parse(body) as {
+      input?: string | Array<{ content?: Array<{ type?: string; text?: string }> }>;
+    };
+    if (typeof payload.input === "string") {
+      return payload.input;
+    }
+    return (
+      payload.input?.[0]?.content?.find(part => part.type === "input_text")
+        ?.text ?? ""
+    );
   }
 
   return "";
@@ -60,7 +64,14 @@ function configureOpenAiImagesEnv(imageModel?: string): void {
 function createGeneratedImageResponse(): Response {
   return {
     ok: true,
-    json: async () => ({ data: [{ b64_json: GENERATED_IMAGE_BASE64 }] }),
+    json: async () => ({
+      output: [
+        {
+          type: "image_generation_call",
+          result: GENERATED_IMAGE_BASE64,
+        },
+      ],
+    }),
   } as Response;
 }
 
@@ -124,7 +135,7 @@ describe("image provider boundary", () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     const fetchMock = vi.fn(async (url: string | URL) => {
-      expect(toUrlString(url)).toBe("https://api.openai.com/v1/images/edits");
+      expect(toUrlString(url)).toBe("https://api.openai.com/v1/responses");
 
       if (fetchMock.mock.calls.length === 1) {
         return {
@@ -154,7 +165,7 @@ describe("image provider boundary", () => {
       .filter(payload => payload?.msg === "image_provider_used");
 
     expect(result.imageUrl).toMatch(
-      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(providerLogs).toEqual([
@@ -192,13 +203,13 @@ describe("image provider boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("uses gpt-image-1 as the default OpenAI image model", async () => {
+  it("uses gpt-5 as the default OpenAI Responses model", async () => {
     configureOpenAiImagesEnv();
     delete process.env.OPENAI_IMAGE_MODEL;
 
     const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
       const body = requestJson(init) as { model?: string };
-      expect(body.model).toBe("gpt-image-1");
+      expect(body.model).toBe("gpt-5");
 
       return createGeneratedImageResponse();
     });
@@ -237,13 +248,25 @@ describe("image provider boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("uses OPENAI_IMAGE_MODEL in OpenAI edits FormData when source image data is provided", async () => {
+  it("uses OPENAI_IMAGE_MODEL and image_generation tool when source image data is provided", async () => {
     configureOpenAiImagesEnv("gpt-image-2");
 
     const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
-      const body = init?.body;
-      expect(body).toBeInstanceOf(FormData);
-      expect((body as FormData).get("model")).toBe("gpt-image-2");
+      const body = requestJson(init) as {
+        model?: string;
+        input?: Array<{ content?: Array<{ type?: string; image_url?: string }> }>;
+        tools?: Array<{ type?: string; output_format?: string }>;
+      };
+      expect(body.model).toBe("gpt-image-2");
+      expect(body.tools).toEqual([
+        expect.objectContaining({
+          type: "image_generation",
+          output_format: "png",
+        }),
+      ]);
+      expect(body.input?.[0]?.content?.find(part => part.type === "input_image")?.image_url).toMatch(
+        /^data:image\/jpeg;base64,/
+      );
 
       return createGeneratedImageResponse();
     });
@@ -302,27 +325,28 @@ describe("image provider boundary", () => {
       if (resolved === "https://api.openai.com/v1/responses") {
         const payload = requestJson(init) as {
           input?: Array<{ content?: Array<{ type?: string; image_url?: string }> }>;
+          tools?: Array<{ type?: string }>;
         };
-        const imagePart = payload.input?.[1]?.content?.find(
-          part => part.type === "input_image"
+        if (!payload.tools?.some(tool => tool.type === "image_generation")) {
+          const imagePart = payload.input?.[1]?.content?.find(
+            part => part.type === "input_image"
+          );
+          expect(imagePart?.image_url).toMatch(/^data:image\/jpeg;base64,/);
+
+          return {
+            ok: true,
+            json: async () => ({
+              output_text:
+                "Single subject, flat indoor lighting, cluttered background, centered selfie framing.",
+            }),
+          } as Response;
+        }
+
+        expect(await promptFromRequest(init)).toContain(
+          "Single subject, flat indoor lighting, cluttered background, centered selfie framing."
         );
-        expect(imagePart?.image_url).toMatch(/^data:image\/jpeg;base64,/);
-
-        return {
-          ok: true,
-          json: async () => ({
-            output_text:
-              "Single subject, flat indoor lighting, cluttered background, centered selfie framing.",
-          }),
-        } as Response;
+        return createGeneratedImageResponse();
       }
-
-      expect(resolved).toBe("https://api.openai.com/v1/images/edits");
-      expect(await promptFromRequest(init)).toContain(
-        "Single subject, flat indoor lighting, cluttered background, centered selfie framing."
-      );
-
-      return createGeneratedImageResponse();
     });
 
     vi.stubGlobal("fetch", fetchMock);
@@ -346,16 +370,17 @@ describe("image provider boundary", () => {
       const resolved = toUrlString(url);
 
       if (resolved === "https://api.openai.com/v1/responses") {
+        const payload = requestJson(init) as { tools?: Array<{ type?: string }> };
+        if (payload.tools?.some(tool => tool.type === "image_generation")) {
+          expect(await promptFromRequest(init)).toContain("No photo analysis provided");
+          return createGeneratedImageResponse();
+        }
+
         return {
           ok: false,
           status: 500,
         } as Response;
       }
-
-      expect(resolved).toBe("https://api.openai.com/v1/images/edits");
-      expect(await promptFromRequest(init)).toContain("No photo analysis provided");
-
-      return createGeneratedImageResponse();
     });
 
     vi.stubGlobal("fetch", fetchMock);

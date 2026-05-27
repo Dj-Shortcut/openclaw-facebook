@@ -621,7 +621,7 @@ async function startServer() {
   app.use(bodyParserErrorHandler);
 
   const publicDir = path.join(process.cwd(), "public");
-  app.get("/generated/:token.jpg", (req, res) => {
+  app.get("/generated/:token.:ext", (req, res) => {
     const generatedImage = getGeneratedImage(req.params.token);
     if (!generatedImage) {
       console.warn("GENERATED_IMAGE_FETCH_MISS", {

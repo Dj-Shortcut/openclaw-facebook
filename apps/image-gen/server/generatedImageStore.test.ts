@@ -24,6 +24,6 @@ describe("generatedImageStore", () => {
 
   it("builds generated URL with token", () => {
     const url = buildGeneratedImageUrl("https://example.com", "abc-123");
-    expect(url).toBe("https://example.com/generated/abc-123.jpg");
+    expect(url).toBe("https://example.com/generated/abc-123.png");
   });
 });

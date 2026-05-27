@@ -48,6 +48,7 @@ interface ImageGenerator {
     directorMode?: DirectorMode;
     directorInstruction?: string;
     directorPhotoAnalysis?: string;
+    previousResponseId?: string;
     userKey: string;
     reqId: string;
   }): Promise<{
@@ -75,6 +76,7 @@ type GeneratorInput = {
   directorMode?: DirectorMode;
   directorInstruction?: string;
   directorPhotoAnalysis?: string;
+  previousResponseId?: string;
   userKey: string;
   reqId: string;
 };
@@ -85,7 +87,7 @@ type PreparedGenerationInput = {
   sourceImage: DownloadedSourceImage;
 };
 
-function ensureJpegBuffer(buffer: Buffer): Buffer {
+function ensureGeneratedImageBuffer(buffer: Buffer): Buffer {
   return buffer;
 }
 
@@ -201,6 +203,7 @@ export class OpenAiImageGenerator implements ImageGenerator {
         prompt: preparedInput.prompt,
         sourceImage,
         hasSourceImage: preparedInput.hasSourceImage,
+        previousResponseId: input.previousResponseId,
       }), {
         reqId: input.reqId,
         startedAt,
@@ -209,10 +212,10 @@ export class OpenAiImageGenerator implements ImageGenerator {
 
       const imageBufferResult = await parseOpenAiImageResponse(response);
 
-      const jpegBuffer = ensureJpegBuffer(imageBufferResult);
+      const generatedImageBuffer = ensureGeneratedImageBuffer(imageBufferResult);
       const uploadStartedAt = Date.now();
       const imageUrl = await publishGeneratedImage(
-        jpegBuffer,
+        generatedImageBuffer,
         input.style,
         input.reqId
       );

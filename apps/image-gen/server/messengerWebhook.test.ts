@@ -67,6 +67,22 @@ function toUrlString(url: string | URL): string {
   return typeof url === "string" ? url : url.toString();
 }
 
+function promptFromOpenAiRequest(init: RequestInit | undefined): string {
+  if (typeof init?.body !== "string") {
+    return "";
+  }
+  const payload = JSON.parse(init.body) as {
+    input?: string | Array<{ content?: Array<{ type?: string; text?: string }> }>;
+  };
+  if (typeof payload.input === "string") {
+    return payload.input;
+  }
+  return (
+    payload.input?.[0]?.content?.find(part => part.type === "input_text")
+      ?.text ?? ""
+  );
+}
+
 const GENERATED_IMAGE_BASE64 = Buffer.from("fake-png").toString("base64");
 const GENERATED_SOURCE_IMAGE_URL_PREFIX =
   "https://leaderbot-fb-image-gen.fly.dev/generated/";
@@ -106,7 +122,7 @@ function installOpenAiSuccessFetchMock() {
 
     return {
       ok: true,
-      json: async () => ({ data: [{ b64_json: GENERATED_IMAGE_BASE64 }] }),
+      json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
     } as Response;
   });
 
@@ -737,7 +753,7 @@ describe("messenger webhook dedupe", () => {
       expect(sendImageMock).toHaveBeenCalledWith(
         `style-user-${style}`,
         expect.stringMatching(
-          /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+          /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
         )
       );
     }
@@ -778,7 +794,7 @@ describe("messenger webhook dedupe", () => {
     expect(sendImageMock).toHaveBeenCalledWith(
       "canonical-payload-user",
       expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
       )
     );
   });
@@ -796,8 +812,7 @@ describe("messenger webhook dedupe", () => {
         } as Response;
       }
 
-      const formData = init?.body as FormData;
-      const prompt = String(formData.get("prompt"));
+      const prompt = promptFromOpenAiRequest(init);
       expect(prompt).toContain(
         "Reimagine this photo as a nostalgic mid-century American editorial illustration"
       );
@@ -808,7 +823,7 @@ describe("messenger webhook dedupe", () => {
 
       return {
         ok: true,
-        json: async () => ({ data: [{ b64_json: GENERATED_IMAGE_BASE64 }] }),
+        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
       } as Response;
     });
 
@@ -846,7 +861,7 @@ describe("messenger webhook dedupe", () => {
     expect(sendImageMock).toHaveBeenCalledWith(
       "norman-payload-user",
       expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
       )
     );
     expect(getState(anonymizePsid("norman-payload-user"))?.selectedStyle).toBe(
@@ -888,7 +903,7 @@ describe("messenger webhook dedupe", () => {
     expect(sendImageMock).toHaveBeenCalledWith(
       "mock-image-user",
       expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
       )
     );
     expect(sendQuickRepliesMock).toHaveBeenLastCalledWith(
@@ -979,7 +994,7 @@ describe("messenger webhook dedupe", () => {
 
       return {
         ok: true,
-        json: async () => ({ data: [{ b64_json: generatedImageBytes }] }),
+        json: async () => ({ output: [{ type: "image_generation_call", result: generatedImageBytes }] }),
       } as Response;
     });
 
@@ -1021,7 +1036,7 @@ describe("messenger webhook dedupe", () => {
     expect(sendImageMock).toHaveBeenCalledWith(
       "openai-success-user",
       expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
       )
     );
   });
@@ -1063,7 +1078,7 @@ describe("messenger webhook dedupe", () => {
     const failedState = getState(userId);
     expect(failedState?.stage).toBe("FAILURE");
     expect(failedState?.lastPhoto).toMatch(
-      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
     expect(failedState?.lastPhotoSource).toBe("stored");
     expect(failedState?.selectedStyle).toBe("gold");
@@ -1087,7 +1102,7 @@ describe("messenger webhook dedupe", () => {
     const retriedState = getState(userId);
     expect(retriedState?.stage).toBe("FAILURE");
     expect(retriedState?.lastPhoto).toMatch(
-      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
     expect(retriedState?.lastPhotoSource).toBe("stored");
     expect(retriedState?.selectedStyle).toBe("gold");
@@ -1184,7 +1199,7 @@ describe("messenger webhook dedupe", () => {
     let resolveFetch:
       | ((value: {
           ok: boolean;
-          json: () => Promise<{ data: Array<{ b64_json: string }> }>;
+          json: () => Promise<{ output: Array<{ type: string; result: string }> }>;
         }) => void)
       | undefined;
     const sourceImage = Buffer.alloc(6000, 7);
@@ -1199,7 +1214,7 @@ describe("messenger webhook dedupe", () => {
 
       return new Promise<{
         ok: boolean;
-        json: () => Promise<{ data: Array<{ b64_json: string }> }>;
+        json: () => Promise<{ output: Array<{ type: string; result: string }> }>;
       }>(resolve => {
         resolveFetch = resolve;
       });
@@ -1279,7 +1294,7 @@ describe("messenger webhook dedupe", () => {
       const generatedImageBytes = Buffer.from("fake-png").toString("base64");
       resolveFetch?.({
         ok: true,
-        json: async () => ({ data: [{ b64_json: generatedImageBytes }] }),
+        json: async () => ({ output: [{ type: "image_generation_call", result: generatedImageBytes }] }),
       });
       await firstRun;
     } finally {
@@ -1294,7 +1309,7 @@ describe("messenger webhook dedupe", () => {
     let resolveFetch:
       | ((value: {
           ok: boolean;
-          json: () => Promise<{ data: Array<{ b64_json: string }> }>;
+          json: () => Promise<{ output: Array<{ type: string; result: string }> }>;
         }) => void)
       | undefined;
     const sourceImage = Buffer.alloc(6000, 7);
@@ -1309,7 +1324,7 @@ describe("messenger webhook dedupe", () => {
 
       return new Promise<{
         ok: boolean;
-        json: () => Promise<{ data: Array<{ b64_json: string }> }>;
+        json: () => Promise<{ output: Array<{ type: string; result: string }> }>;
       }>(resolve => {
         resolveFetch = resolve;
       });
@@ -1388,7 +1403,7 @@ describe("messenger webhook dedupe", () => {
       const generatedImageBytes = Buffer.from("fake-png").toString("base64");
       resolveFetch?.({
         ok: true,
-        json: async () => ({ data: [{ b64_json: generatedImageBytes }] }),
+        json: async () => ({ output: [{ type: "image_generation_call", result: generatedImageBytes }] }),
       });
       await firstRun;
     } finally {
@@ -2219,7 +2234,7 @@ describe("disabled bot features stay out of the runtime flow", () => {
     expect(sendImageMock).toHaveBeenCalledWith(
       "surprise-style-user",
       expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
       )
     );
     expect(sendImageMock).toHaveBeenCalledTimes(1);
@@ -2275,7 +2290,7 @@ describe("disabled bot features stay out of the runtime flow", () => {
     expect(sendImageMock).toHaveBeenCalledWith(
       "style-command-user",
       expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
       )
     );
     expect(getState(anonymizePsid("style-command-user"))?.selectedStyle).toBe(
@@ -2345,7 +2360,7 @@ describe("disabled bot features stay out of the runtime flow", () => {
     expect(sendImageMock).toHaveBeenCalledWith(
       "style-preselect-user",
       expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
       )
     );
     expect(
@@ -2410,7 +2425,7 @@ describe("disabled bot features stay out of the runtime flow", () => {
     expect(sendImageMock).toHaveBeenCalledWith(
       psid,
       expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
       )
     );
     expect(sendQuickRepliesMock).not.toHaveBeenCalledWith(
@@ -2504,7 +2519,7 @@ describe("disabled bot features stay out of the runtime flow", () => {
       ])
     );
     expect(getState(anonymizePsid("stale-preselect-user"))?.lastPhotoUrl).toMatch(
-      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
     expect(getState(anonymizePsid("stale-preselect-user"))?.lastPhotoSource).toBe("stored");
     expect(
@@ -2564,8 +2579,7 @@ describe("disabled bot features stay out of the runtime flow", () => {
         } as Response;
       }
 
-      const formData = init?.body as FormData;
-      const prompt = String(formData.get("prompt"));
+      const prompt = promptFromOpenAiRequest(init);
       expect(prompt).toContain(
         "Transform this photo into a premium stylized portrait in an Afroman-inspired Americana look."
       );
@@ -2577,7 +2591,7 @@ describe("disabled bot features stay out of the runtime flow", () => {
 
       return {
         ok: true,
-        json: async () => ({ data: [{ b64_json: GENERATED_IMAGE_BASE64 }] }),
+        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
       } as Response;
     });
 
@@ -2631,7 +2645,7 @@ describe("disabled bot features stay out of the runtime flow", () => {
     expect(sendImageMock).toHaveBeenCalledWith(
       "afroman-style-user",
       expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
       )
     );
     expect(getState(anonymizePsid("afroman-style-user"))?.selectedStyle).toBe(

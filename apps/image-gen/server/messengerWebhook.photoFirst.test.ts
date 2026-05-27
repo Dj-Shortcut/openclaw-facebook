@@ -122,7 +122,7 @@ describe("photo-first onboarding", () => {
 
     const userState = getState(anonymizePsid(psid));
     expect(userState?.lastPhotoUrl).toMatch(
-      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
     expect(userState?.lastPhotoSource).toBe("stored");
     expect(userState?.stage).toBe("AWAITING_STYLE");
@@ -234,7 +234,7 @@ describe("photo-first onboarding", () => {
       ])
     );
     expect(getState(anonymizePsid(psid))?.lastSourceImageUrl).toMatch(
-      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.jpg$/
+      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
 
     await processFacebookWebhookPayload({

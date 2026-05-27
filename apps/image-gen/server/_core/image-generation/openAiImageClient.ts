@@ -28,6 +28,7 @@ type OpenAiRequestInput = {
   prompt: string;
   sourceImage: OpenAiSourceImage;
   hasSourceImage: boolean;
+  previousResponseId?: string;
 };
 
 type OpenAiResponseContext = {
@@ -39,6 +40,7 @@ type OpenAiResponseContext = {
 const OPENAI_RETRY_LIMIT_DEFAULT = 1;
 const OPENAI_RETRY_BASE_MS_DEFAULT = 500;
 const OPENAI_TIMEOUT_MS_DEFAULT = 45_000;
+const OPENAI_RESPONSES_IMAGE_ENDPOINT = "https://api.openai.com/v1/responses";
 
 function getOpenAiTimeoutMs(): number {
   const raw = Number.parseInt(process.env.OPENAI_IMAGE_TIMEOUT_MS ?? "", 10);
@@ -174,49 +176,62 @@ export function buildOpenAiRequest(
   input: OpenAiRequestInput
 ): OpenAiRequestContext {
   const { imageGenerationModel } = getOpenAiImageModelConfig();
-
-  if (input.hasSourceImage) {
-    const formData = new FormData();
-    formData.set("model", imageGenerationModel);
-    formData.set("prompt", input.prompt);
-    formData.set("size", "1024x1024");
-    formData.set("output_format", "jpeg");
-    formData.set(
-      "image",
-      new Blob([new Uint8Array(input.sourceImage.buffer)], {
-        type: input.sourceImage.contentType,
-      }),
-      "source-image"
-    );
-
-    return {
-      endpoint: new URL("https://api.openai.com/v1/images/edits"),
-      requestInit: {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        },
-        body: formData,
-      },
-    };
-  }
+  const payload = buildOpenAiImageGenerationPayload({
+    model: imageGenerationModel,
+    prompt: input.prompt,
+    sourceImage: input.hasSourceImage ? input.sourceImage : undefined,
+    previousResponseId: input.previousResponseId,
+  });
 
   return {
-    endpoint: new URL("https://api.openai.com/v1/images/generations"),
+    endpoint: new URL(OPENAI_RESPONSES_IMAGE_ENDPOINT),
     requestInit: {
       method: "POST",
       headers: {
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model: imageGenerationModel,
-        prompt: input.prompt,
-        size: "1024x1024",
-        output_format: "jpeg",
-      }),
+      body: JSON.stringify(payload),
     },
   };
+}
+
+export function buildOpenAiImageGenerationPayload(input: {
+  model: string;
+  prompt: string;
+  sourceImage?: OpenAiSourceImage;
+  previousResponseId?: string;
+}): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    model: input.model,
+    input: input.sourceImage
+      ? [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: input.prompt },
+              {
+                type: "input_image",
+                image_url: `data:${input.sourceImage.contentType};base64,${input.sourceImage.buffer.toString("base64")}`,
+              },
+            ],
+          },
+        ]
+      : input.prompt,
+    tools: [
+      {
+        type: "image_generation",
+        size: "1024x1024",
+        output_format: "png",
+      },
+    ],
+  };
+
+  if (input.previousResponseId?.trim()) {
+    payload.previous_response_id = input.previousResponseId.trim();
+  }
+
+  return payload;
 }
 
 export async function fetchOpenAiImageResponse(
@@ -317,13 +332,32 @@ export async function fetchOpenAiImageResponse(
 
 export async function parseOpenAiImageResponse(response: Response): Promise<Buffer> {
   const result = (await response.json()) as {
-    data?: Array<{ b64_json?: string }>;
+    output?: Array<{ type?: string; result?: string }>;
   };
-  const base64Image = result.data?.[0]?.b64_json;
 
+  if (!Array.isArray(result.output) || result.output.length === 0) {
+    throw new OpenAiGenerationError("OpenAI response output was empty");
+  }
+
+  const imageGenerationCall = result.output.find(
+    output => output?.type === "image_generation_call"
+  );
+  if (!imageGenerationCall) {
+    throw new OpenAiGenerationError(
+      "OpenAI response did not include an image_generation_call"
+    );
+  }
+
+  const base64Image = imageGenerationCall.result;
   if (!base64Image) {
     throw new OpenAiGenerationError(
-      "OpenAI response did not include base64 image data"
+      "OpenAI image_generation_call did not include base64 image data"
+    );
+  }
+
+  if (!isValidBase64ImageData(base64Image)) {
+    throw new OpenAiGenerationError(
+      "OpenAI image_generation_call returned invalid base64 image data"
     );
   }
 
@@ -335,4 +369,13 @@ export async function parseOpenAiImageResponse(response: Response): Promise<Buff
   }
 
   return imageBufferResult;
+}
+
+function isValidBase64ImageData(value: string): boolean {
+  const normalized = value.trim();
+  return (
+    normalized.length > 0 &&
+    normalized.length % 4 !== 1 &&
+    /^[A-Za-z0-9+/]+={0,2}$/.test(normalized)
+  );
 }

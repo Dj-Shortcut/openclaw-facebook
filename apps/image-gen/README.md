@@ -57,7 +57,7 @@ ASCII version:
           |                     |
           v                     v
         +-------------------+   +----------------------+
-        | Redis / State     |   | OpenAI Images API    |
+        | Redis / State     |   | Responses Image Tool |
         | - state store     |   | - generation backend |
         | - rate limit base |   +----------------------+
         +-------------------+
@@ -79,7 +79,7 @@ flowchart TD
     end
 
     redis[("Redis / state store")]
-    openai["OpenAI Images API"]
+    openai["OpenAI Responses image_generation tool"]
     mm --> wh
     wh --> handlers
     handlers --> img
@@ -218,8 +218,8 @@ Operational env shortlist: [`docs/operations/ENV_SHORTLIST.md`](docs/operations/
 - `HTTP_RATE_LIMIT_WINDOW_MS` (global HTTP rate-limit window, default `60000`; Redis-backed when `REDIS_URL` is set)
 - `HTTP_RATE_LIMIT_MAX_REQUESTS` (max requests per IP per window, default `120`)
 - `OPENAI_IMAGE_TIMEOUT_MS`, `FB_IMAGE_FETCH_TIMEOUT_MS` (per-request timeouts; OpenAI defaults to `30000ms` and applies per retry attempt)
-- `OPENAI_IMAGE_MAX_RETRIES`, `OPENAI_IMAGE_RETRY_BASE_MS` (retry policy for OpenAI image edits on `408`/`429`/`5xx`/transient network errors)
-- `IMAGE_PROVIDER` (image provider boundary; currently only `openai-images`, which uses the existing OpenAI Images API flow)
+- `OPENAI_IMAGE_MAX_RETRIES`, `OPENAI_IMAGE_RETRY_BASE_MS` (retry policy for OpenAI image generation on `408`/`429`/`5xx`/transient network errors)
+- `IMAGE_PROVIDER` (image provider boundary; currently only `openai-images`, which uses the existing OpenAI Responses image_generation tool flow)
 - `OPENAI_EDIT_INTERPRETER_MODEL`, `OPENAI_EDIT_INTERPRETER_TIMEOUT_MS`, `OPENAI_EDIT_INTERPRETER_MAX_RETRIES` (optional classifier for conversational edit commands after a generated result)
 - `DEFAULT_MESSENGER_LANG` (`nl`/`en` fallback behavior)
 - `PRIVACY_POLICY_URL` (link sent in privacy quick reply)
@@ -241,7 +241,7 @@ Legacy/app-specific environment variables also exist for SDK and data API integr
 
 ### Free-text behavior
 
-Free-text Messenger and WhatsApp messages use deterministic flow responses. There is no OpenAI text brain for unmatched chat. The only current OpenAI image provider is `openai-images`, which uses the existing Images API edits/generations flow.
+Free-text Messenger and WhatsApp messages use deterministic flow responses. There is no OpenAI text brain for unmatched chat. The only current OpenAI image provider is `openai-images`, which uses the Responses API image_generation tool flow.
 
 ### Secret hygiene
 

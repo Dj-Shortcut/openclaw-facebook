@@ -63,7 +63,7 @@ ASCII version:
           |                     |                         |
           v                     v                         v
         +-------------------+   +----------------------+  +---------------------------+
-        | Redis / State     |   | OpenAI Images API    |  | Storage Proxy (Fly app)   |
+        | Redis / State     |   | Responses Image Tool |  | Storage Proxy (Fly app)   |
         | - state store     |   | - generation backend |  | - Forge-style upload API  |
         | - rate limit base |   +----------------------+  | - returns durable URLs     |
         +-------------------+                             +-------------+-------------+
@@ -92,7 +92,7 @@ flowchart TD
     end
 
     redis["Redis / state store"]
-    openai["OpenAI Images API"]
+    openai["OpenAI Responses image_generation tool"]
     proxy["Storage proxy<br/>Fly app"]
     r2["Cloudflare R2<br/>Public asset URL"]
 
