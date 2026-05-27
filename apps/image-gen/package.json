@@ -29,7 +29,7 @@
     "storage-proxy:start": "cross-env NODE_ENV=production tsx storage-proxy/index.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1053.0",
+    "@aws-sdk/client-s3": "^3.1054.0",
     "@radix-ui/react-slot": "^1.2.3",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@sentry/node": "^10.51.0",
