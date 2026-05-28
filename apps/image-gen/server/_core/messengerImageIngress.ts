@@ -1,6 +1,7 @@
 import { safeLog } from "./messengerApi";
 import type { Style } from "./messengerStyles";
 import { ingestExternalSourceImage } from "./sourceImageStore";
+import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import { normalizeStyle } from "./webhookHelpers";
 
 type NormalizeMessengerInboundImageInput = {
@@ -22,7 +23,7 @@ export async function normalizeMessengerInboundImage(
     safeLog("messenger_inbound_image_ingest_failed", {
       psidHash: input.psidHash,
       reqId: input.reqId,
-      inboundImageUrl: input.inboundImageUrl,
+      inboundImageUrl: summarizeSensitiveUrl(input.inboundImageUrl),
       errorCode:
         error instanceof Error ? error.constructor.name : "UnknownError",
     });

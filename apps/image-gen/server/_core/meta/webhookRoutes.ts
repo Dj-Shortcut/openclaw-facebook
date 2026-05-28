@@ -76,10 +76,32 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
 
   // Keep this dispatch branch local for now; it is the narrow seam for a later helper extraction.
   const handleWebhookPost: express.RequestHandler = async (req, res) => {
+    const receivedAt = Date.now();
+    console.info(
+      JSON.stringify({
+        level: "info",
+        msg: "webhook_delivery_received",
+        path: req.path,
+        contentLength: req.get("content-length") ?? null,
+      })
+    );
+    const ack = (channel: "facebook" | "whatsapp", mode: string) => {
+      res.sendStatus(200);
+      console.info(
+        JSON.stringify({
+          level: "info",
+          msg: "webhook_ack_sent",
+          channel,
+          mode,
+          ackMs: Date.now() - receivedAt,
+        })
+      );
+    };
+
     if (isWhatsAppWebhookPayload(req.body)) {
       console.log("[whatsapp webhook] POST delivery received");
       if (!isWebhookIngressQueueEnabled()) {
-        res.sendStatus(200);
+        ack("whatsapp", "inline");
         processWebhookDeliveryInline("whatsapp", req.body);
         return;
       }
@@ -90,12 +112,12 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
         console.error("[whatsapp webhook] durable enqueue failed, falling back to inline processing", {
           error: error instanceof Error ? error.message : String(error),
         });
-        res.sendStatus(200);
+        ack("whatsapp", "inline_after_enqueue_failure");
         processWebhookDeliveryInline("whatsapp", req.body);
         return;
       }
 
-      res.sendStatus(200);
+      ack("whatsapp", "queued");
       scheduleWebhookIngressDrain();
       return;
     }
@@ -114,7 +136,7 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
 
     console.log("[messenger webhook] POST delivery received");
     if (!isWebhookIngressQueueEnabled()) {
-      res.sendStatus(200);
+      ack("facebook", "inline");
       processWebhookDeliveryInline("facebook", req.body);
       return;
     }
@@ -125,12 +147,12 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
       console.error("[messenger webhook] durable enqueue failed, falling back to inline processing", {
         error: error instanceof Error ? error.message : String(error),
       });
-      res.sendStatus(200);
+      ack("facebook", "inline_after_enqueue_failure");
       processWebhookDeliveryInline("facebook", req.body);
       return;
     }
 
-    res.sendStatus(200);
+    ack("facebook", "queued");
     scheduleWebhookIngressDrain();
   };
 

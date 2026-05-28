@@ -60,6 +60,12 @@ import {
 } from "./faceMemory";
 import { createAdminAuthRateLimiter, verifyAdminToken } from "./adminAuth";
 import { registerInternalImageRequestRoutes } from "./internalImageRequestRoutes";
+import {
+  assertMessengerGenerationQueueConfig,
+  isMessengerGenerationWorkerMode,
+  isMessengerGenerationWorkerOnlyMode,
+} from "./messengerGenerationQueue";
+import { startMessengerGenerationWorker } from "./messengerGenerationWorker";
 
 const gitSha = process.env.GIT_SHA ?? process.env.SOURCE_VERSION ?? "dev";
 const bootTimestamp = new Date().toISOString();
@@ -320,6 +326,15 @@ async function startServer() {
   await ensureWebhookReplayProtectionReady();
   await ensureWebhookIngressQueueReady();
   await ensureHttpRateLimiterReady();
+  assertMessengerGenerationQueueConfig();
+  const generationWorkerOnly = isMessengerGenerationWorkerOnlyMode();
+  if (isMessengerGenerationWorkerMode() || generationWorkerOnly) {
+    startMessengerGenerationWorker({ keepAlive: generationWorkerOnly });
+  }
+  if (generationWorkerOnly) {
+    console.info("[messenger generation worker] worker-only mode active");
+    return;
+  }
 
   const app = express();
   app.set("trust proxy", 1);

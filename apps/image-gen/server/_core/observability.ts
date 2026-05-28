@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type express from "express";
+import { getMessengerGenerationQueueStats } from "./messengerGenerationQueue";
 
 type RequestWithId = express.Request & {
   requestId?: string;
@@ -88,7 +89,31 @@ export function recordHttpRequestMetric(method: string, path: string, statusCode
   incrementMetric(durationBuckets, durationBucketKey(method, normalizedPath, "+Inf"));
 }
 
-function renderPrometheusMetrics(): string {
+async function renderMessengerGenerationQueueMetrics(): Promise<string[]> {
+  try {
+    const stats = await getMessengerGenerationQueueStats();
+    return [
+      "# HELP messenger_generation_queue_enabled Whether the Messenger generation queue is enabled",
+      "# TYPE messenger_generation_queue_enabled gauge",
+      `messenger_generation_queue_enabled ${stats.enabled ? 1 : 0}`,
+      "# HELP messenger_generation_queue_jobs Messenger generation queue depth by state",
+      "# TYPE messenger_generation_queue_jobs gauge",
+      `messenger_generation_queue_jobs{state="queued"} ${stats.queued}`,
+      `messenger_generation_queue_jobs{state="processing"} ${stats.processing}`,
+      "# HELP messenger_generation_queue_scrape_error Whether queue metric collection failed",
+      "# TYPE messenger_generation_queue_scrape_error gauge",
+      "messenger_generation_queue_scrape_error 0",
+    ];
+  } catch {
+    return [
+      "# HELP messenger_generation_queue_scrape_error Whether queue metric collection failed",
+      "# TYPE messenger_generation_queue_scrape_error gauge",
+      "messenger_generation_queue_scrape_error 1",
+    ];
+  }
+}
+
+async function renderPrometheusMetrics(): Promise<string> {
   const lines: string[] = [
     "# HELP http_requests_total Total HTTP requests handled by the server",
     "# TYPE http_requests_total counter",
@@ -113,12 +138,14 @@ function renderPrometheusMetrics(): string {
     lines.push(`http_request_duration_seconds_count{${labels}} ${value}`);
   }
 
+  lines.push(...await renderMessengerGenerationQueueMetrics());
+
   return `${lines.join("\n")}\n`;
 }
 
 export function registerMetricsRoute(app: express.Express): void {
-  app.get("/metrics", (_req, res) => {
-    res.type("text/plain; version=0.0.4").send(renderPrometheusMetrics());
+  app.get("/metrics", async (_req, res) => {
+    res.type("text/plain; version=0.0.4").send(await renderPrometheusMetrics());
   });
 }
 

@@ -95,6 +95,13 @@ import {
   handlePayload,
   handlePostbackEvent,
 } from "./webhookPayloadBranch";
+import { emitGenerationDiagnostic } from "./generationDiagnostics";
+import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
+import type { MessengerGenerationJob } from "./messengerGenerationJob";
+import {
+  enqueueOrRunMessengerGenerationJob,
+  isMessengerGenerationQueueEnabled,
+} from "./messengerGenerationQueue";
 
 type HandlerDeps = {
   defaultLang: Lang;
@@ -727,6 +734,15 @@ async function tryHandleImageMessage(
   }
 
   const inboundImageUrl = imageAttachment.payload.url;
+  console.info(
+    JSON.stringify({
+      level: "info",
+      msg: "messenger_image_message_parsed",
+      reqId: input.reqId,
+      psidHash: anonymizePsid(input.psid).slice(0, 12),
+      attachmentHostname: ctx.getAttachmentHostname(inboundImageUrl),
+    })
+  );
   ctx.debugWebhookLog({
     level: "debug",
     msg: "photo_received",
@@ -1426,16 +1442,19 @@ export function createWebhookHandlers({
     return await sendLoggedText(psid, text, reqId);
   }
 
-  async function runStyleGeneration(
-    psid: string,
-    userId: string,
-    style: Style,
-    reqId: string,
-    lang: Lang,
-    sourceImageUrl?: string,
-    promptHint?: string,
-    directorMode?: DirectorMode
+  async function executeStyleGenerationJob(
+    job: MessengerGenerationJob
   ): Promise<MessengerSendOutcome> {
+    const {
+      psid,
+      userId,
+      style,
+      reqId,
+      lang,
+      sourceImageUrl,
+      promptHint,
+      directorMode,
+    } = job;
     let sendOutcome: MessengerSendOutcome = MESSENGER_SEND_SKIPPED;
     const rememberSendOutcome = (outcome: MessengerSendOutcome) => {
       sendOutcome = combineMessengerSendOutcomes(sendOutcome, outcome);
@@ -1500,7 +1519,7 @@ export function createWebhookHandlers({
             reqId,
             psidHash: anonymizePsid(psid).slice(0, 12),
             style,
-            imageUrl,
+            imageUrl: summarizeSensitiveUrl(imageUrl),
           })
         );
 
@@ -1514,29 +1533,31 @@ export function createWebhookHandlers({
             style,
             ok: true,
             fb_image_fetch_ms: metrics.fbImageFetchMs,
+            prompt_build_ms: metrics.promptBuildMs,
+            openai_payload_build_ms: metrics.openAiPayloadBuildMs,
             openai_ms: metrics.openAiMs,
+            openai_parse_ms: metrics.openAiParseMs,
             upload_or_serve_ms: metrics.uploadOrServeMs,
             total_ms: metrics.totalMs,
           })
         );
 
-        console.log(
-          "PROOF_SUMMARY",
-          JSON.stringify({
-            reqId,
-            psidHash: anonymizePsid(psid).slice(0, 12),
-            style,
-            incomingLen: proof.incomingLen,
-            incomingSha256: proof.incomingSha256,
-            openaiInputLen: proof.openaiInputLen,
-            openaiInputSha256: proof.openaiInputSha256,
-            outputUrl: imageUrl,
-            totalMs: metrics.totalMs,
-            ok: true,
-          })
-        );
+        console.log("PROOF_SUMMARY", JSON.stringify({
+          reqId,
+          psidHash: anonymizePsid(psid).slice(0, 12),
+          style,
+          incomingLen: proof.incomingLen,
+          incomingSha256: proof.incomingSha256,
+          openaiInputLen: proof.openaiInputLen,
+          openaiInputSha256: proof.openaiInputSha256,
+          outputUrl: summarizeSensitiveUrl(imageUrl),
+          totalMs: metrics.totalMs,
+          ok: true,
+        }));
 
+        const messengerSendStartedAt = Date.now();
         rememberSendOutcome(await sendLoggedImage(psid, imageUrl, reqId));
+        const messengerSendMs = Date.now() - messengerSendStartedAt;
         await increment(psid);
         await setLastGenerated(psid, imageUrl);
         await setLastGenerationContext(psid, { style, directorMode, prompt: promptHint });
@@ -1547,6 +1568,22 @@ export function createWebhookHandlers({
           t(lang, "success"),
           reqId
         ));
+        emitGenerationDiagnostic({
+          generationId: reqId,
+          senderId: psid,
+          style,
+          success: true,
+          durationsMs: {
+            source_image_downloaded: metrics.fbImageFetchMs,
+            prompt_built: metrics.promptBuildMs,
+            provider_payload_built: metrics.openAiPayloadBuildMs,
+            provider_request: metrics.openAiMs,
+            provider_response_parsed: metrics.openAiParseMs,
+            result_uploaded_or_stored: metrics.uploadOrServeMs,
+            messenger_send: messengerSendMs,
+            total: metrics.totalMs + messengerSendMs,
+          },
+        });
         await setFlowState(psid, "IDLE");
         return;
       }
@@ -1573,6 +1610,22 @@ export function createWebhookHandlers({
           totalMs: metrics.totalMs,
         })
       );
+      emitGenerationDiagnostic({
+        generationId: reqId,
+        senderId: psid,
+        style,
+        success: false,
+        failureReason: generationResult.errorKind,
+        durationsMs: {
+          source_image_downloaded: metrics.fbImageFetchMs,
+          prompt_built: metrics.promptBuildMs,
+          provider_payload_built: metrics.openAiPayloadBuildMs,
+          provider_request: metrics.openAiMs,
+          provider_response_parsed: metrics.openAiParseMs,
+          result_uploaded_or_stored: metrics.uploadOrServeMs,
+          total: metrics.totalMs,
+        },
+      });
       recordGenerationError();
 
       let failureText = t(lang, "generationGenericFailure");
@@ -1634,6 +1687,45 @@ export function createWebhookHandlers({
     }
     inFlightNoticeSent.delete(psid);
     return sendOutcome;
+  }
+
+  async function runStyleGeneration(
+    psid: string,
+    userId: string,
+    style: Style,
+    reqId: string,
+    lang: Lang,
+    sourceImageUrl?: string,
+    promptHint?: string,
+    directorMode?: DirectorMode
+  ): Promise<MessengerSendOutcome> {
+    const job: MessengerGenerationJob = {
+      psid,
+      userId,
+      style,
+      reqId,
+      lang,
+      sourceImageUrl,
+      promptHint,
+      directorMode,
+    };
+    const result = await enqueueOrRunMessengerGenerationJob(
+      job,
+      executeStyleGenerationJob
+    );
+
+    if (result.mode === "inline") {
+      return result.outcome as MessengerSendOutcome;
+    }
+
+    await setFlowState(psid, "PROCESSING");
+    safeLog("messenger_generation_job_queued", {
+      reqId,
+      user: toLogUser(userId),
+      style,
+      queueEnabled: isMessengerGenerationQueueEnabled(),
+    });
+    return MESSENGER_SEND_SKIPPED;
   }
 
   async function handleStyleSelection(
@@ -1810,8 +1902,15 @@ export function createWebhookHandlers({
     );
   }
 
+  async function processMessengerGenerationJob(
+    input: MessengerGenerationJob
+  ): Promise<MessengerSendOutcome> {
+    return await executeStyleGenerationJob(input);
+  }
+
   return {
     processFacebookWebhookPayload,
     processInternalMessengerImageRequest,
+    processMessengerGenerationJob,
   };
 }

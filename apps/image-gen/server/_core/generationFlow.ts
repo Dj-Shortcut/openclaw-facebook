@@ -32,7 +32,10 @@ type GenerationProof = {
 type GenerationMetrics = NonNullable<ReturnType<typeof getGenerationMetrics>> | {
   totalMs: number;
   fbImageFetchMs?: number;
+  promptBuildMs?: number;
+  openAiPayloadBuildMs?: number;
   openAiMs?: number;
+  openAiParseMs?: number;
   uploadOrServeMs?: number;
 };
 

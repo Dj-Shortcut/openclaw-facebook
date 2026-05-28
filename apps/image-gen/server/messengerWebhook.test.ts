@@ -45,6 +45,7 @@ import {
   getState,
   resetStateStore,
   setPendingImage,
+  setPendingStoredImage,
   setPreselectedStyle,
   setFlowState,
 } from "./_core/messengerState";
@@ -197,6 +198,19 @@ async function sendMessengerPhoto(
       },
     ],
   });
+}
+
+async function waitForCondition(
+  condition: () => boolean,
+  timeoutMs = 1000
+): Promise<void> {
+  const startedAt = Date.now();
+  while (!condition()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("Timed out waiting for test condition");
+    }
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
 }
 
 function clearMessengerSendMocks(): void {
@@ -548,6 +562,65 @@ describe("messenger webhook dedupe", () => {
     } finally {
       consoleLogSpy.mockRestore();
     }
+  });
+
+  it("sends one in-flight notice for a second simultaneous generation by the same sender", async () => {
+    const psid = "same-user-generation-lock";
+    await setPendingStoredImage(
+      psid,
+      "https://leaderbot-fb-image-gen.fly.dev/generated/source.png"
+    );
+
+    let resolveOpenAi: ((response: Response) => void) | undefined;
+    const sourceImage = Buffer.alloc(6000, 7);
+    const openAiResponse = new Promise<Response>(resolve => {
+      resolveOpenAi = resolve;
+    });
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (isSourceImageFetchUrl(url)) {
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "image/jpeg" }),
+          arrayBuffer: async () => sourceImage,
+        } as Response;
+      }
+
+      return await openAiResponse;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const firstGeneration = sendMessengerQuickReply(
+      processFacebookWebhookPayload,
+      psid,
+      "mid-concurrent-style-1",
+      "gold"
+    );
+    await waitForCondition(() =>
+      fetchMock.mock.calls.some(([url]) => !isSourceImageFetchUrl(url))
+    );
+
+    await sendMessengerQuickReply(
+      processFacebookWebhookPayload,
+      psid,
+      "mid-concurrent-style-2",
+      "gold"
+    );
+
+    const inFlightNotices = sendTextMock.mock.calls.filter(
+      ([recipient, text]) =>
+        recipient === psid &&
+        typeof text === "string" &&
+        text.includes("bezig")
+    );
+    expect(inFlightNotices).toHaveLength(1);
+
+    resolveOpenAi?.({
+      ok: true,
+      json: async () => ({
+        output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }],
+      }),
+    } as Response);
+    await firstGeneration;
   });
 
   it("updates lastUserMessageAt only for inbound user messages", async () => {
