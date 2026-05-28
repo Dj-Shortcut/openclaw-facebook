@@ -387,6 +387,7 @@ Operational notes:
 - Outbound WhatsApp sends use `server/_core/whatsappApi.ts` and the WhatsApp Cloud API `phone_number_id` configured through env, not hardcoded values.
 - Set `SOURCE_IMAGE_ALLOWED_HOSTS` in production. Source-image fetches fail closed when it is unset. Use exact hostnames only, such as `scontent.xx.fbcdn.net,lookaside.fbsbx.com`; suffix allowlists like `fbsbx.com` are intentionally not expanded.
 - For WhatsApp source-image reuse, also include the host that serves persisted inbound source images, such as your app host in local/dev or your storage public domain in production.
+- Redis-backed webhook ingress preserves fast Meta ACKs while draining deliveries sequentially in-process, so a burst does not fan out every queued webhook handler at once.
 
 ### Messenger image worker rollout
 

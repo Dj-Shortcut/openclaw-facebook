@@ -1,4 +1,9 @@
-import { ensureRedisReady, getRedisClient, isRedisEnabled, resetRedisClientForTests } from "../redis";
+import {
+  ensureRedisReady,
+  getRedisClient,
+  isRedisEnabled,
+  resetRedisClientForTests,
+} from "../redis";
 import { safeLog } from "../messengerApi";
 
 const WEBHOOK_INGRESS_QUEUE_KEY = "meta-webhook-ingress";
@@ -24,35 +29,43 @@ function serializeError(error: unknown): { message: string; stack?: string } {
   return { message: String(error) };
 }
 
-function processWhatsAppWebhookPayloadSafely(payload: unknown): void {
-  void import("../whatsappWebhook")
-    .then(module => module.processWhatsAppWebhookPayload(payload))
-    .catch(error => {
-      safeLog("webhook_async_processing_failed", {
-        channel: "whatsapp",
-        error: serializeError(error),
-      });
+async function processWhatsAppWebhookPayloadSafely(
+  payload: unknown
+): Promise<void> {
+  try {
+    const module = await import("../whatsappWebhook");
+    await module.processWhatsAppWebhookPayload(payload);
+  } catch (error) {
+    safeLog("webhook_async_processing_failed", {
+      channel: "whatsapp",
+      error: serializeError(error),
     });
+  }
 }
 
-function processFacebookWebhookPayloadSafely(payload: unknown): void {
-  void import("../messengerWebhook")
-    .then(module => module.processFacebookWebhookPayload(payload))
-    .catch(error => {
-      safeLog("webhook_async_processing_failed", {
-        channel: "facebook",
-        error: serializeError(error),
-      });
+async function processFacebookWebhookPayloadSafely(
+  payload: unknown
+): Promise<void> {
+  try {
+    const module = await import("../messengerWebhook");
+    await module.processFacebookWebhookPayload(payload);
+  } catch (error) {
+    safeLog("webhook_async_processing_failed", {
+      channel: "facebook",
+      error: serializeError(error),
     });
+  }
 }
 
-function processQueuedWebhookDelivery(delivery: QueuedWebhookDelivery): void {
+async function processQueuedWebhookDelivery(
+  delivery: QueuedWebhookDelivery
+): Promise<void> {
   if (delivery.channel === "whatsapp") {
-    processWhatsAppWebhookPayloadSafely(delivery.payload);
+    await processWhatsAppWebhookPayloadSafely(delivery.payload);
     return;
   }
 
-  processFacebookWebhookPayloadSafely(delivery.payload);
+  await processFacebookWebhookPayloadSafely(delivery.payload);
 }
 
 export function isWebhookIngressQueueEnabled(): boolean {
@@ -94,7 +107,7 @@ export function scheduleWebhookIngressDrain(): void {
           }
 
           try {
-            processQueuedWebhookDelivery(
+            await processQueuedWebhookDelivery(
               JSON.parse(rawDelivery) as QueuedWebhookDelivery,
             );
           } catch (error) {
@@ -119,11 +132,17 @@ export function processWebhookDeliveryInline(
   payload: unknown,
 ): void {
   setImmediate(() => {
-    processQueuedWebhookDelivery({
+    void processQueuedWebhookDelivery({
       channel,
       payload,
       receivedAt: new Date().toISOString(),
-    });
+    })
+      .catch(error => {
+        safeLog("webhook_async_processing_failed", {
+          channel,
+          error: serializeError(error),
+        });
+      });
   });
 }
 
