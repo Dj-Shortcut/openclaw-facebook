@@ -319,6 +319,7 @@ describe("messenger webhook dedupe", () => {
       markMessengerGenerationCompleted(
         "req-completed-job",
         "https://assets.example/generated/completed.jpg",
+        "completed-job-user-key",
         1_771_000_000_000
       )
     );

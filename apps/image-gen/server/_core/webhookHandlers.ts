@@ -1576,7 +1576,9 @@ export function createWebhookHandlers({
 
         const messengerSendStartedAt = Date.now();
         rememberSendOutcome(await sendLoggedImage(psid, imageUrl, reqId));
-        await Promise.resolve(markMessengerGenerationCompleted(reqId, imageUrl));
+        await Promise.resolve(
+          markMessengerGenerationCompleted(reqId, imageUrl, userId)
+        );
         const messengerSendMs = Date.now() - messengerSendStartedAt;
         await increment(psid);
         await setLastGenerated(psid, imageUrl);

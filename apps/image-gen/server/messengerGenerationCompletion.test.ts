@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  deleteMessengerGenerationCompletionsForUser,
   getMessengerGenerationCompletion,
   markMessengerGenerationCompleted,
 } from "./_core/messengerGenerationCompletion";
@@ -16,6 +17,7 @@ describe("messengerGenerationCompletion", () => {
       markMessengerGenerationCompleted(
         "req-complete",
         "https://assets.example/generated/req-complete.jpg",
+        "user-key-1",
         1_771_000_000_000
       )
     );
@@ -26,6 +28,7 @@ describe("messengerGenerationCompletion", () => {
       reqId: "req-complete",
       imageUrl: "https://assets.example/generated/req-complete.jpg",
       completedAt: 1_771_000_000_000,
+      userKey: "user-key-1",
     });
   });
 
@@ -33,5 +36,34 @@ describe("messengerGenerationCompletion", () => {
     await expect(
       Promise.resolve(getMessengerGenerationCompletion("req-missing"))
     ).resolves.toBeNull();
+  });
+
+  it("deletes completion markers for one user without touching other users", async () => {
+    await markMessengerGenerationCompleted(
+      "req-user-1",
+      "https://assets.example/generated/user-1.jpg",
+      "user-key-1",
+      1_771_000_000_000
+    );
+    await markMessengerGenerationCompleted(
+      "req-user-2",
+      "https://assets.example/generated/user-2.jpg",
+      "user-key-2",
+      1_771_000_000_001
+    );
+
+    await deleteMessengerGenerationCompletionsForUser("user-key-1");
+
+    await expect(
+      Promise.resolve(getMessengerGenerationCompletion("req-user-1"))
+    ).resolves.toBeNull();
+    await expect(
+      Promise.resolve(getMessengerGenerationCompletion("req-user-2"))
+    ).resolves.toEqual(
+      expect.objectContaining({
+        reqId: "req-user-2",
+        userKey: "user-key-2",
+      })
+    );
   });
 });
