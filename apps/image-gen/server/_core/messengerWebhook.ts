@@ -28,6 +28,7 @@ export async function processInternalMessengerImageRequest(input: {
   reqId: string;
   lang?: Lang;
   timestamp?: number;
+  sourceImageUrl?: string;
 }): Promise<void> {
   await handlers.processInternalMessengerImageRequest(input);
 }

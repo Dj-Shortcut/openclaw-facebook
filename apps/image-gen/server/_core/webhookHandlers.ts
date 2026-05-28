@@ -119,6 +119,7 @@ type InternalMessengerImageRequestInput = {
   lang?: Lang;
   style?: Style;
   timestamp?: number;
+  sourceImageUrl?: string;
 };
 
 type FacebookWebhookMessage = NonNullable<FacebookWebhookEvent["message"]>;
@@ -1908,7 +1909,23 @@ export function createWebhookHandlers({
       user: toLogUser(userId),
       psidHash: anonymizePsid(input.psid).slice(0, 12),
       style,
+      hasSourceImageUrl: Boolean(input.sourceImageUrl),
     });
+
+    let storedSourceImageUrl: string | undefined;
+    if (input.sourceImageUrl) {
+      storedSourceImageUrl = (await normalizeMessengerInboundImage({
+        inboundImageUrl: input.sourceImageUrl,
+        psidHash: anonymizePsid(input.psid).slice(0, 12),
+        reqId: input.reqId,
+      })) ?? undefined;
+      if (!storedSourceImageUrl) {
+        await clearPendingImageState(input.psid);
+        await setFlowState(input.psid, "AWAITING_PHOTO");
+        return await sendLoggedText(input.psid, t(lang, "missingInputImage"), input.reqId);
+      }
+      await setPendingStoredImage(input.psid, storedSourceImageUrl);
+    }
 
     const state = await getOrCreateState(input.psid);
     if (state.stage === "PROCESSING") {
@@ -1918,7 +1935,8 @@ export function createWebhookHandlers({
         : MESSENGER_SEND_SKIPPED;
     }
 
-    if (!state.lastPhotoUrl) {
+    const sourceImageUrl = storedSourceImageUrl ?? state.lastPhotoUrl ?? undefined;
+    if (!sourceImageUrl) {
       await setPreselectedStyle(input.psid, style);
       await setFlowState(input.psid, "AWAITING_PHOTO");
       return await sendLoggedText(input.psid, t(lang, "styleWithoutPhoto"), input.reqId);
@@ -1931,7 +1949,7 @@ export function createWebhookHandlers({
       style,
       input.reqId,
       lang,
-      state.lastPhotoUrl,
+      sourceImageUrl,
       input.prompt
     );
   }

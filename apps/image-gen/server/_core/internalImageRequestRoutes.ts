@@ -12,6 +12,7 @@ const internalImageRequestSchema = z.object({
   reqId: z.string().trim().min(1).max(128),
   lang: z.enum(["nl", "en"]).optional(),
   timestamp: z.number().int().positive().optional(),
+  sourceImageUrl: z.string().trim().url().max(4_096).optional(),
 });
 
 const internalMessengerEventSchema = z.object({
