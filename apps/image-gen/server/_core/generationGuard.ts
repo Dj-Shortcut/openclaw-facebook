@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import {
-  deleteEphemeralKey,
+  deleteEphemeralKeyIfValue,
   hasEphemeralKey,
   setEphemeralKey,
   setEphemeralKeyIfAbsent,
@@ -70,9 +71,10 @@ export async function runGuardedGeneration<T>(
     return null;
   }
 
+  const lockToken = randomUUID();
   const acquired = await setEphemeralKeyIfAbsent(
     lockKey(psid),
-    "1",
+    lockToken,
     toSeconds(lockMs)
   );
   if (!acquired) {
@@ -82,7 +84,7 @@ export async function runGuardedGeneration<T>(
   try {
     return await globalLimiter.run(task);
   } finally {
-    await deleteEphemeralKey(lockKey(psid));
+    await deleteEphemeralKeyIfValue(lockKey(psid), lockToken);
     if (cooldownMs > 0) {
       await setEphemeralKey(cooldownKey(psid), "1", toSeconds(cooldownMs));
     }

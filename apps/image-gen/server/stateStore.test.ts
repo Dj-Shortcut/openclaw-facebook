@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearStateStore,
+  deleteEphemeralKeyIfValue,
   findInMemoryState,
   getOrCreateStoredState,
+  hasEphemeralKey,
   readScopedState,
   readState,
+  setEphemeralKey,
+  setEphemeralKeyIfAbsent,
   updateStoredState,
   writeScopedState,
   writeState,
@@ -119,5 +123,35 @@ describe("stateStore memory TTL", () => {
 
     expect(readScopedState("scope", "key")).toBeNull();
     expect(findInMemoryState<{ ok: boolean }>(value => value.ok)).toBeNull();
+  });
+
+  it("only deletes an ephemeral key when the owner token matches", async () => {
+    await setEphemeralKey("lock:user-1", "owner-a", 10);
+
+    await expect(
+      deleteEphemeralKeyIfValue("lock:user-1", "owner-b")
+    ).resolves.toBe(false);
+    await expect(hasEphemeralKey("lock:user-1")).resolves.toBe(true);
+
+    await expect(
+      deleteEphemeralKeyIfValue("lock:user-1", "owner-a")
+    ).resolves.toBe(true);
+    await expect(hasEphemeralKey("lock:user-1")).resolves.toBe(false);
+  });
+
+  it("preserves a newer ephemeral owner when an expired owner finishes late", async () => {
+    await expect(
+      setEphemeralKeyIfAbsent("lock:user-2", "owner-a", 1)
+    ).resolves.toBe(true);
+
+    vi.advanceTimersByTime(1_001);
+
+    await expect(
+      setEphemeralKeyIfAbsent("lock:user-2", "owner-b", 10)
+    ).resolves.toBe(true);
+    await expect(
+      deleteEphemeralKeyIfValue("lock:user-2", "owner-a")
+    ).resolves.toBe(false);
+    await expect(hasEphemeralKey("lock:user-2")).resolves.toBe(true);
   });
 });

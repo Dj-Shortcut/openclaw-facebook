@@ -7,7 +7,7 @@ export type MaybePromise<T> = T | Promise<T>;
 
 const memoryState = new Map<string, string>();
 const memoryStateExpiresAt = new Map<string, number>();
-const memoryEphemeral = new Map<string, number>();
+const memoryEphemeral = new Map<string, { value: string; expiresAt: number }>();
 
 function isPromiseLike<T>(value: MaybePromise<T>): value is Promise<T> {
   return typeof (value as Promise<T> | undefined)?.then === "function";
@@ -260,8 +260,8 @@ function clearExpiredMemoryState(now = Date.now()): void {
 }
 
 function clearExpiredMemoryEphemeral(now = Date.now()): void {
-  for (const [key, expiresAt] of memoryEphemeral.entries()) {
-    if (expiresAt <= now) {
+  for (const [key, entry] of memoryEphemeral.entries()) {
+    if (entry.expiresAt <= now) {
       memoryEphemeral.delete(key);
     }
   }
@@ -283,7 +283,10 @@ export async function setEphemeralKey(
   ttlSeconds: number
 ): Promise<void> {
   if (!isRedisStateStoreEnabled()) {
-    memoryEphemeral.set(key, Date.now() + ttlSeconds * 1000);
+    memoryEphemeral.set(key, {
+      value,
+      expiresAt: Date.now() + ttlSeconds * 1000,
+    });
     return;
   }
 
@@ -302,7 +305,10 @@ export async function setEphemeralKeyIfAbsent(
       return false;
     }
 
-    memoryEphemeral.set(key, Date.now() + ttlSeconds * 1000);
+    memoryEphemeral.set(key, {
+      value,
+      expiresAt: Date.now() + ttlSeconds * 1000,
+    });
     return true;
   }
 
@@ -319,6 +325,31 @@ export async function deleteEphemeralKey(key: string): Promise<void> {
 
   const redis = await getRedisClient();
   await redis.del(key);
+}
+
+export async function deleteEphemeralKeyIfValue(
+  key: string,
+  expectedValue: string
+): Promise<boolean> {
+  if (!isRedisStateStoreEnabled()) {
+    clearExpiredMemoryEphemeral();
+    const entry = memoryEphemeral.get(key);
+    if (!entry || entry.value !== expectedValue) {
+      return false;
+    }
+
+    memoryEphemeral.delete(key);
+    return true;
+  }
+
+  const redis = await getRedisClient();
+  const result = await redis.eval(
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+    1,
+    key,
+    expectedValue
+  );
+  return result === 1;
 }
 
 export { isPromiseLike };

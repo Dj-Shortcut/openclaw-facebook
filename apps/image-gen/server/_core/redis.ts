@@ -10,6 +10,11 @@ export type RedisLike = {
     value: string,
     ...args: Array<string | number>
   ): Promise<unknown>;
+  eval(
+    script: string,
+    numKeys: number,
+    ...args: Array<string | number>
+  ): Promise<unknown>;
   del(key: string): Promise<number>;
   lpush(key: string, value: string): Promise<number>;
   lpop(key: string): Promise<string | null>;
