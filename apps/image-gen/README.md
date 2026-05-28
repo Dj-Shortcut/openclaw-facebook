@@ -411,6 +411,7 @@ Worker-related env:
 - `MESSENGER_GENERATION_WORKER_ONLY=1`: run only the worker loop, no HTTP listener.
 - `MESSENGER_GENERATION_JOB_LEASE_SECONDS=900`: reserved-job lease before reclaim.
 - `MESSENGER_GENERATION_MAX_ATTEMPTS=3`: failed generation jobs are retried up to this many processor attempts, then moved to the Redis dead-letter list.
+- `MESSENGER_GENERATION_DRAIN_BATCH_SIZE=10`: max jobs a worker or inline fallback drain processes per drain pass before yielding to the next poll/enqueue.
 - `MESSENGER_GENERATION_WORKER_POLL_MS=1000`: worker poll interval.
 
 When a worker exits while a generation is reserved, the next worker poll reclaims the expired lease, increments the job attempt count, and either requeues it or moves it to the dead-letter list once `MESSENGER_GENERATION_MAX_ATTEMPTS` is reached.

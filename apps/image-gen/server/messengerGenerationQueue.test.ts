@@ -40,6 +40,7 @@ describe("messengerGenerationQueue", () => {
   const originalWorker = process.env.MESSENGER_GENERATION_WORKER;
   const originalWorkerOnly = process.env.MESSENGER_GENERATION_WORKER_ONLY;
   const originalMaxAttempts = process.env.MESSENGER_GENERATION_MAX_ATTEMPTS;
+  const originalDrainBatchSize = process.env.MESSENGER_GENERATION_DRAIN_BATCH_SIZE;
 
   afterEach(() => {
     if (originalQueueEnabled === undefined) {
@@ -66,6 +67,11 @@ describe("messengerGenerationQueue", () => {
       delete process.env.MESSENGER_GENERATION_MAX_ATTEMPTS;
     } else {
       process.env.MESSENGER_GENERATION_MAX_ATTEMPTS = originalMaxAttempts;
+    }
+    if (originalDrainBatchSize === undefined) {
+      delete process.env.MESSENGER_GENERATION_DRAIN_BATCH_SIZE;
+    } else {
+      process.env.MESSENGER_GENERATION_DRAIN_BATCH_SIZE = originalDrainBatchSize;
     }
     getRedisClientMock.mockReset();
     isRedisEnabledMock.mockReset();
@@ -269,6 +275,62 @@ describe("messengerGenerationQueue", () => {
     expect(processing).toEqual([]);
     expect(dead).toEqual([]);
     expect(queue).toEqual([JSON.stringify({ ...job, attempts: 1 })]);
+  });
+
+  it("stops draining after the configured batch size", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    process.env.MESSENGER_GENERATION_DRAIN_BATCH_SIZE = "2";
+    isRedisEnabledMock.mockReturnValue(true);
+    const jobs = [
+      createJob({ reqId: "req-batch-1" }),
+      createJob({ reqId: "req-batch-2" }),
+      createJob({ reqId: "req-batch-3" }),
+    ];
+    const queue = jobs.map(job => JSON.stringify(job)).reverse();
+    const processing: string[] = [];
+    const leases = new Map<string, string>();
+    const redis = {
+      del: vi.fn(async (key: string) => {
+        const existed = leases.delete(key);
+        return existed ? 1 : 0;
+      }),
+      get: vi.fn(async (key: string) => leases.get(key) ?? null),
+      llen: vi.fn(async (key: string) =>
+        key.endsWith(":processing") ? processing.length : queue.length
+      ),
+      lpush: vi.fn(async (_key: string, value: string) => {
+        queue.unshift(value);
+        return queue.length;
+      }),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      rpoplpush: vi.fn(async () => {
+        const value = queue.pop() ?? null;
+        if (value) {
+          processing.unshift(value);
+        }
+        return value;
+      }),
+      set: vi.fn(async (key: string, value: string) => {
+        leases.set(key, value);
+        return "OK";
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async () => undefined);
+
+    await drainMessengerGenerationQueue(processor);
+
+    expect(processor).toHaveBeenCalledTimes(2);
+    expect(processor).toHaveBeenNthCalledWith(1, jobs[0]);
+    expect(processor).toHaveBeenNthCalledWith(2, jobs[1]);
+    expect(queue).toEqual([JSON.stringify(jobs[2])]);
+    expect(processing).toEqual([]);
   });
 
   it("dead-letters a job after the configured max attempts", async () => {

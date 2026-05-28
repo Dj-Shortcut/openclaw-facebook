@@ -9,6 +9,7 @@ export const MESSENGER_GENERATION_DEAD_LETTER_KEY =
   "messenger-generation-jobs:dead";
 const DEFAULT_JOB_LEASE_SECONDS = 15 * 60;
 const DEFAULT_MAX_JOB_ATTEMPTS = 3;
+const DEFAULT_DRAIN_BATCH_SIZE = 10;
 let drainPromise: Promise<void> | null = null;
 
 type GenerationJobProcessor = (
@@ -91,6 +92,13 @@ function getGenerationJobMaxAttempts(): number {
   return Number.isFinite(configured) && configured > 0
     ? Math.floor(configured)
     : DEFAULT_MAX_JOB_ATTEMPTS;
+}
+
+function getGenerationDrainBatchSize(): number {
+  const configured = Number(process.env.MESSENGER_GENERATION_DRAIN_BATCH_SIZE);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.floor(configured)
+    : DEFAULT_DRAIN_BATCH_SIZE;
 }
 
 function getGenerationJobLeaseKey(job: MessengerGenerationJob): string {
@@ -334,11 +342,19 @@ export async function drainMessengerGenerationQueue(
   }
 
   const redis = await getRedisClient();
+  let drained = 0;
+  const maxBatchSize = getGenerationDrainBatchSize();
   while (true) {
+    if (drained >= maxBatchSize) {
+      await logMessengerGenerationQueueStats("batch_limit", redis);
+      return;
+    }
+
     const reserved = await reserveMessengerGenerationJobFrom(redis);
     if (!reserved) {
       return;
     }
+    drained += 1;
 
     if ("invalid" in reserved) {
       await deadLetterInvalidGenerationJob(redis, reserved.raw);
