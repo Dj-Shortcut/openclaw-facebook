@@ -29,6 +29,12 @@ import {
   MissingOpenAiApiKeyError,
 } from "./image-generation/imageServiceErrors";
 import { getMessengerGenerationGlobalLimitConfig } from "./generationGuard";
+import {
+  isMessengerGenerationInlineFallbackEnabled,
+  isMessengerGenerationQueueEnabled,
+  isMessengerGenerationWorkerMode,
+  isMessengerGenerationWorkerOnlyMode,
+} from "./messengerGenerationQueue";
 import { createLogger } from "./logger";
 
 const OPENAI_IMAGES_PROVIDER = "openai-images" as const;
@@ -101,6 +107,12 @@ export function getGeneratorStartupConfig(): {
   messengerGenerationGlobalLimit: ReturnType<
     typeof getMessengerGenerationGlobalLimitConfig
   >;
+  messengerGenerationRuntime: {
+    queueEnabled: boolean;
+    workerMode: boolean;
+    workerOnlyMode: boolean;
+    inlineFallbackEnabled: boolean;
+  };
 } {
   return {
     mode: getImageProvider(),
@@ -108,6 +120,12 @@ export function getGeneratorStartupConfig(): {
     objectStorageEnabled: hasObjectStorageConfig(),
     requiresDurableStorageInProduction: true,
     messengerGenerationGlobalLimit: getMessengerGenerationGlobalLimitConfig(),
+    messengerGenerationRuntime: {
+      queueEnabled: isMessengerGenerationQueueEnabled(),
+      workerMode: isMessengerGenerationWorkerMode(),
+      workerOnlyMode: isMessengerGenerationWorkerOnlyMode(),
+      inlineFallbackEnabled: isMessengerGenerationInlineFallbackEnabled(),
+    },
   };
 }
 
