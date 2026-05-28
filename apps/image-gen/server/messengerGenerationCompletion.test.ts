@@ -81,6 +81,12 @@ describe("messengerGenerationCompletion", () => {
         "user-key-concurrent",
         1_771_000_000_001
       ),
+      markMessengerGenerationCompleted(
+        "req-concurrent-other-user",
+        "https://assets.example/generated/concurrent-other-user.jpg",
+        "user-key-other-concurrent",
+        1_771_000_000_002
+      ),
     ]);
 
     await deleteMessengerGenerationCompletionsForUser("user-key-concurrent");
@@ -91,5 +97,15 @@ describe("messengerGenerationCompletion", () => {
     await expect(
       Promise.resolve(getMessengerGenerationCompletion("req-concurrent-2"))
     ).resolves.toBeNull();
+    await expect(
+      Promise.resolve(
+        getMessengerGenerationCompletion("req-concurrent-other-user")
+      )
+    ).resolves.toEqual(
+      expect.objectContaining({
+        reqId: "req-concurrent-other-user",
+        userKey: "user-key-other-concurrent",
+      })
+    );
   });
 });

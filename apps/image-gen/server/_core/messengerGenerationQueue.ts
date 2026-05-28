@@ -10,6 +10,27 @@ export const MESSENGER_GENERATION_DEAD_LETTER_KEY =
 const DEFAULT_JOB_LEASE_SECONDS = 15 * 60;
 const DEFAULT_MAX_JOB_ATTEMPTS = 3;
 const DEFAULT_DRAIN_BATCH_SIZE = 10;
+const MESSENGER_GENERATION_STYLES = new Set([
+  "caricature",
+  "storybook-anime",
+  "afroman-americana",
+  "gold",
+  "petals",
+  "clouds",
+  "cinematic",
+  "disco",
+  "cyberpunk",
+  "oil-paint",
+  "norman-blackwell",
+]);
+const MESSENGER_GENERATION_LANGS = new Set(["nl", "en"]);
+const MESSENGER_GENERATION_DIRECTOR_MODES = new Set([
+  "midnight_luxury",
+  "berlin_underground",
+  "vogue_editorial",
+  "hyperpop_idol",
+  "old_money",
+]);
 let drainPromise: Promise<void> | null = null;
 
 type GenerationJobProcessor = (
@@ -314,19 +335,72 @@ async function hasActiveMessengerGenerationJobLease(
   redis: RedisLike,
   rawJob: string
 ): Promise<boolean> {
-  try {
-    const job = JSON.parse(rawJob) as MessengerGenerationJob;
-    return (await redis.get(getGenerationJobLeaseKey(job))) !== null;
-  } catch {
+  const reserved = parseReservedGenerationJob(rawJob);
+  if (!reserved) {
     return false;
   }
+
+  return (await redis.get(getGenerationJobLeaseKey(reserved.job))) !== null;
+}
+
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
+function isOptionalDirectorMode(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (typeof value === "string" && MESSENGER_GENERATION_DIRECTOR_MODES.has(value))
+  );
+}
+
+function isOptionalAttempts(value: unknown): value is number | undefined {
+  return (
+    value === undefined ||
+    (typeof value === "number" && Number.isInteger(value) && value >= 0)
+  );
+}
+
+function parseMessengerGenerationJob(
+  value: unknown
+): MessengerGenerationJob | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+
+  if (
+    typeof value.psid !== "string" ||
+    typeof value.userId !== "string" ||
+    typeof value.reqId !== "string" ||
+    typeof value.style !== "string" ||
+    !MESSENGER_GENERATION_STYLES.has(value.style) ||
+    typeof value.lang !== "string" ||
+    !MESSENGER_GENERATION_LANGS.has(value.lang) ||
+    !isOptionalString(value.sourceImageUrl) ||
+    !isOptionalString(value.promptHint) ||
+    !isOptionalDirectorMode(value.directorMode) ||
+    !isOptionalAttempts(value.attempts)
+  ) {
+    return null;
+  }
+
+  return value as MessengerGenerationJob;
 }
 
 function parseReservedGenerationJob(raw: string): ReservedGenerationJob | null {
   try {
+    const job = parseMessengerGenerationJob(JSON.parse(raw));
+    if (!job) {
+      return null;
+    }
+
     return {
       raw,
-      job: JSON.parse(raw) as MessengerGenerationJob,
+      job,
     };
   } catch {
     return null;
