@@ -3,7 +3,10 @@ import {
   isMessengerGenerationQueueEnabled,
   reclaimReservedMessengerGenerationJobs,
 } from "./messengerGenerationQueue";
-import { processMessengerGenerationJob } from "./messengerWebhook";
+import {
+  processMessengerGenerationJob,
+  processMessengerGenerationJobDeadLetter,
+} from "./messengerWebhook";
 
 const DEFAULT_WORKER_POLL_MS = 1_000;
 
@@ -36,7 +39,9 @@ export function startMessengerGenerationWorker(options: {
           reclaimed,
         });
       }
-      await drainMessengerGenerationQueue(processMessengerGenerationJob);
+      await drainMessengerGenerationQueue(processMessengerGenerationJob, {
+        onDeadLetter: processMessengerGenerationJobDeadLetter,
+      });
     } catch (error) {
       console.error("[messenger generation worker] drain failed", {
         error: error instanceof Error ? error.message : String(error),

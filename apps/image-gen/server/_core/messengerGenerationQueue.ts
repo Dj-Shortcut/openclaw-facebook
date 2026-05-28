@@ -15,6 +15,10 @@ type GenerationJobProcessor = (
   job: MessengerGenerationJob
 ) => Promise<unknown>;
 
+type GenerationQueueDrainOptions = {
+  onDeadLetter?: (job: MessengerGenerationJob, error: unknown) => Promise<void>;
+};
+
 export type MessengerGenerationQueueStats = {
   enabled: boolean;
   queued: number;
@@ -188,7 +192,7 @@ async function releaseMessengerGenerationJob(
   redis: RedisLike,
   reserved: ReservedGenerationJob,
   error: unknown
-): Promise<void> {
+): Promise<"requeued" | "dead_lettered"> {
   const nextAttempt = (reserved.job.attempts ?? 0) + 1;
   const retryJob: MessengerGenerationJob = {
     ...reserved.job,
@@ -208,10 +212,11 @@ async function releaseMessengerGenerationJob(
       errorCode:
         error instanceof Error ? error.constructor.name : "UnknownError",
     });
-    return;
+    return "dead_lettered";
   }
 
   await redis.lpush(MESSENGER_GENERATION_QUEUE_KEY, JSON.stringify(retryJob));
+  return "requeued";
 }
 
 export async function reclaimReservedMessengerGenerationJobs(): Promise<number> {
@@ -257,7 +262,8 @@ async function hasActiveMessengerGenerationJobLease(
 }
 
 export async function drainMessengerGenerationQueue(
-  processor: GenerationJobProcessor
+  processor: GenerationJobProcessor,
+  options: GenerationQueueDrainOptions = {}
 ): Promise<void> {
   if (!isMessengerGenerationQueueEnabled()) {
     return;
@@ -282,7 +288,25 @@ export async function drainMessengerGenerationQueue(
         attempts: (reserved.job.attempts ?? 0) + 1,
         errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
       });
-      await releaseMessengerGenerationJob(redis, reserved, error);
+      const releaseStatus = await releaseMessengerGenerationJob(
+        redis,
+        reserved,
+        error
+      );
+      if (releaseStatus === "dead_lettered" && options.onDeadLetter) {
+        try {
+          await options.onDeadLetter(reserved.job, error);
+        } catch (deadLetterError) {
+          safeLog("messenger_generation_dead_letter_callback_failed", {
+            reqId: reserved.job.reqId,
+            style: reserved.job.style,
+            errorCode:
+              deadLetterError instanceof Error
+                ? deadLetterError.constructor.name
+                : "UnknownError",
+          });
+        }
+      }
       await logMessengerGenerationQueueStats("release", redis);
       return;
     }

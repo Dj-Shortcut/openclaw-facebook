@@ -37,3 +37,9 @@ export async function processMessengerGenerationJob(
 ): Promise<void> {
   await handlers.processMessengerGenerationJob(input);
 }
+
+export async function processMessengerGenerationJobDeadLetter(
+  input: MessengerGenerationJob
+): Promise<void> {
+  await handlers.processMessengerGenerationJobDeadLetter(input);
+}

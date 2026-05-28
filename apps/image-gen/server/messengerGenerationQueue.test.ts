@@ -322,7 +322,8 @@ describe("messengerGenerationQueue", () => {
     const processor = vi.fn(async () => {
       throw new Error("storage unavailable");
     });
-    await drainMessengerGenerationQueue(processor);
+    const onDeadLetter = vi.fn(async () => undefined);
+    await drainMessengerGenerationQueue(processor, { onDeadLetter });
 
     expect(processor).toHaveBeenCalledTimes(1);
     expect(queue).toEqual([]);
@@ -332,6 +333,68 @@ describe("messengerGenerationQueue", () => {
       "messenger-generation-jobs:dead",
       JSON.stringify({ ...job, attempts: 2 })
     );
+    expect(onDeadLetter).toHaveBeenCalledWith(
+      job,
+      expect.any(Error)
+    );
+  });
+
+  it("does not fail the drain when a dead-letter callback fails", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    process.env.MESSENGER_GENERATION_MAX_ATTEMPTS = "1";
+    isRedisEnabledMock.mockReturnValue(true);
+    const job = createJob({ reqId: "req-dead-callback" });
+    const queue: string[] = [JSON.stringify(job)];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const redis = {
+      del: vi.fn(async () => 1),
+      get: vi.fn(async () => "1"),
+      llen: vi.fn(async (key: string) => {
+        if (key.endsWith(":processing")) return processing.length;
+        if (key.endsWith(":dead")) return dead.length;
+        return queue.length;
+      }),
+      lpush: vi.fn(async (_key: string, value: string) => {
+        queue.unshift(value);
+        return queue.length;
+      }),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      rpoplpush: vi.fn(async () => {
+        const value = queue.pop() ?? null;
+        if (value) {
+          processing.unshift(value);
+        }
+        return value;
+      }),
+      rpush: vi.fn(async (_key: string, value: string) => {
+        dead.push(value);
+        return dead.length;
+      }),
+      set: vi.fn(async () => "OK"),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await expect(
+      drainMessengerGenerationQueue(
+        async () => {
+          throw new Error("unexpected worker failure");
+        },
+        {
+          onDeadLetter: async () => {
+            throw new Error("callback failed");
+          },
+        }
+      )
+    ).resolves.toBeUndefined();
+
+    expect(dead).toEqual([JSON.stringify({ ...job, attempts: 1 })]);
   });
 
   it("reclaims expired reserved jobs into the pending queue", async () => {

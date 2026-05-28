@@ -1908,9 +1908,21 @@ export function createWebhookHandlers({
     return await executeStyleGenerationJob(input);
   }
 
+  async function processMessengerGenerationJobDeadLetter(
+    input: MessengerGenerationJob
+  ): Promise<MessengerSendOutcome> {
+    await setFlowState(input.psid, "FAILURE");
+    return await sendLoggedText(
+      input.psid,
+      t(input.lang, "generationGenericFailure"),
+      input.reqId
+    );
+  }
+
   return {
     processFacebookWebhookPayload,
     processInternalMessengerImageRequest,
     processMessengerGenerationJob,
+    processMessengerGenerationJobDeadLetter,
   };
 }
