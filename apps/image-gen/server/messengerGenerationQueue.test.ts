@@ -76,6 +76,27 @@ describe("messengerGenerationQueue", () => {
     expect(getRedisClientMock).not.toHaveBeenCalled();
   });
 
+  it("enqueues without running the generation processor when queueing is enabled", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const redis = {
+      lpush: vi.fn(async () => 1),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async () => "should-not-run");
+    const job = createJob({ reqId: "req-handoff" });
+
+    const result = await enqueueOrRunMessengerGenerationJob(job, processor);
+
+    expect(result).toEqual({ mode: "queued" });
+    expect(processor).not.toHaveBeenCalled();
+    expect(redis.lpush).toHaveBeenCalledWith(
+      "messenger-generation-jobs",
+      JSON.stringify(job)
+    );
+  });
+
   it("enqueues and drains Redis jobs", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
