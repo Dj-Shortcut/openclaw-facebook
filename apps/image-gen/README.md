@@ -215,6 +215,7 @@ Operational env shortlist: [`docs/operations/ENV_SHORTLIST.md`](docs/operations/
 ### Common optional
 
 - `WEBHOOK_REPLAY_TTL_SECONDS` (override webhook replay-protection TTL, default `300`)
+- `WEBHOOK_ENQUEUE_ACK_TIMEOUT_MS` (Meta webhook ACK budget while waiting for Redis ingress enqueue, default `300`)
 - `HTTP_RATE_LIMIT_WINDOW_MS` (global HTTP rate-limit window, default `60000`; Redis-backed when `REDIS_URL` is set)
 - `HTTP_RATE_LIMIT_MAX_REQUESTS` (max requests per IP per window, default `120`)
 - `OPENAI_IMAGE_TIMEOUT_MS`, `FB_IMAGE_FETCH_TIMEOUT_MS` (per-request timeouts; OpenAI defaults to `30000ms` and applies per retry attempt)
