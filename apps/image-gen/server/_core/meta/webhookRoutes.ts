@@ -33,27 +33,12 @@ const webhookDeliveryLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-const DEFAULT_WEBHOOK_ENQUEUE_ACK_TIMEOUT_MS = 300;
-
 function getMetaVerifyToken(): string {
   return (
     process.env.META_VERIFY_TOKEN?.trim() ||
     process.env.FB_VERIFY_TOKEN?.trim() ||
     ""
   );
-}
-
-function getWebhookEnqueueAckTimeoutMs(): number {
-  const configured = Number(process.env.WEBHOOK_ENQUEUE_ACK_TIMEOUT_MS);
-  return Number.isFinite(configured) && configured > 0
-    ? Math.floor(configured)
-    : DEFAULT_WEBHOOK_ENQUEUE_ACK_TIMEOUT_MS;
-}
-
-function wait(ms: number): Promise<"timeout"> {
-  return new Promise(resolve => {
-    setTimeout(() => resolve("timeout"), ms);
-  });
 }
 
 export function registerMetaWebhookRoutes(app: express.Express): void {
@@ -117,47 +102,17 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
     };
 
     const enqueueOrFallback = async (channel: "facebook" | "whatsapp") => {
-      const enqueuePromise = enqueueWebhookIngressDelivery(channel, req.body);
-          ackMs: Date.now() - receivedAt,
-        })
-      );
-    };
-
-    if (isWhatsAppWebhookPayload(req.body)) {
-      console.log("[whatsapp webhook] POST delivery received");
-      if (!isWebhookIngressQueueEnabled()) {
-        ack("whatsapp", "inline");
-        processWebhookDeliveryInline("whatsapp", req.body);
-        return;
-      }
-
       try {
-        const result = await Promise.race([
-          enqueuePromise.then(() => "queued" as const),
-          wait(getWebhookEnqueueAckTimeoutMs()),
-        ]);
-
-        if (result === "queued") {
-          ack(channel, "queued");
-          scheduleWebhookIngressDrain();
-          return;
-        }
-
-        ack(channel, "enqueue_pending");
-        void enqueuePromise
-          .then(() => {
-            scheduleWebhookIngressDrain();
-          })
-          .catch(error => {
-            console.error(`[${channel} webhook] durable enqueue failed after ACK`, {
-              error: error instanceof Error ? error.message : String(error),
-            });
-            processWebhookDeliveryInline(channel, req.body);
-          });
+        await enqueueWebhookIngressDelivery(channel, req.body);
+        ack(channel, "queued");
+        scheduleWebhookIngressDrain();
       } catch (error) {
-        console.error(`[${channel} webhook] durable enqueue failed, falling back to inline processing`, {
-          error: error instanceof Error ? error.message : String(error),
-        });
+        console.error(
+          `[${channel} webhook] durable enqueue failed, falling back to inline processing`,
+          {
+            error: error instanceof Error ? error.message : String(error),
+          }
+        );
         ack(channel, "inline_after_enqueue_failure");
         processWebhookDeliveryInline(channel, req.body);
       }
@@ -165,6 +120,7 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
 
     if (isWhatsAppWebhookPayload(req.body)) {
       console.log("[whatsapp webhook] POST delivery received");
+
       if (!isWebhookIngressQueueEnabled()) {
         ack("whatsapp", "inline");
         processWebhookDeliveryInline("whatsapp", req.body);
@@ -172,8 +128,6 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
       }
 
       await enqueueOrFallback("whatsapp");
-      ack("whatsapp", "queued");
-      scheduleWebhookIngressDrain();
       return;
     }
 
@@ -196,20 +150,7 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
       return;
     }
 
-    try {
-      await enqueueWebhookIngressDelivery("facebook", req.body);
-    } catch (error) {
-      console.error("[messenger webhook] durable enqueue failed, falling back to inline processing", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      ack("facebook", "inline_after_enqueue_failure");
-      processWebhookDeliveryInline("facebook", req.body);
-      return;
-    }
-
     await enqueueOrFallback("facebook");
-    ack("facebook", "queued");
-    scheduleWebhookIngressDrain();
   };
 
   app.post("/webhook", webhookDeliveryLimiter, handleWebhookPost);

@@ -97,7 +97,6 @@ describe("messenger webhook payload validation", () => {
   afterEach(() => {
     delete process.env.FB_APP_SECRET;
     delete process.env.REDIS_URL;
-    delete process.env.WEBHOOK_ENQUEUE_ACK_TIMEOUT_MS;
   });
 
   it("rejects schema-invalid signed webhook payloads", async () => {
@@ -193,11 +192,10 @@ describe("messenger webhook payload validation", () => {
     expect(drainSpy).toHaveBeenCalled();
   });
 
-  it("acks before a slow durable enqueue finishes in redis-backed mode", async () => {
+  it("does not ack before a slow durable enqueue finishes in redis-backed mode", async () => {
     const secret = "test-secret";
     process.env.FB_APP_SECRET = secret;
     process.env.REDIS_URL = "redis://example.test:6379";
-    process.env.WEBHOOK_ENQUEUE_ACK_TIMEOUT_MS = "1";
 
     let resolveEnqueue: (() => void) | undefined;
     const enqueueSpy = vi
@@ -216,17 +214,24 @@ describe("messenger webhook payload validation", () => {
       .mockImplementation(() => {});
 
     const body = JSON.stringify(validMessengerPayload);
-    const response = await postWebhook(body, buildSignature(body, secret));
+    let responseResolved = false;
+    const responsePromise = postWebhook(body, buildSignature(body, secret)).then(response => {
+      responseResolved = true;
+      return response;
+    });
 
-    expect(response.status).toBe(200);
-    expect(enqueueSpy).toHaveBeenCalledWith("facebook", validMessengerPayload);
+    await vi.waitFor(() => {
+      expect(enqueueSpy).toHaveBeenCalledWith("facebook", validMessengerPayload);
+    });
+
+    expect(responseResolved).toBe(false);
     expect(drainSpy).not.toHaveBeenCalled();
     expect(inlineSpy).not.toHaveBeenCalled();
 
     resolveEnqueue?.();
-    await vi.waitFor(() => {
-      expect(drainSpy).toHaveBeenCalled();
-    });
+    const response = await responsePromise;
+    expect(response.status).toBe(200);
+    expect(drainSpy).toHaveBeenCalled();
     expect(inlineSpy).not.toHaveBeenCalled();
   });
 });
