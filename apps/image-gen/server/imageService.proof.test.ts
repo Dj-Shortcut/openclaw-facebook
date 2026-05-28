@@ -275,6 +275,7 @@ describe("OpenAi image-to-image proof", () => {
     delete process.env.OPENAI_IMAGE_MAX_RETRIES;
     delete process.env.OPENAI_IMAGE_RETRY_BASE_MS;
     delete process.env.OPENAI_IMAGE_TIMEOUT_MS;
+    delete process.env.OPENAI_IMAGE_MAX_OUTPUT_BYTES;
     delete process.env.SOURCE_IMAGE_ALLOWED_HOSTS;
     delete process.env.BUILT_IN_FORGE_API_URL;
     delete process.env.BUILT_IN_FORGE_API_KEY;
@@ -1059,6 +1060,49 @@ describe("OpenAi image-to-image proof", () => {
       })
     ).rejects.toThrow(
       "OpenAI image_generation_call returned invalid base64 image data"
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects OpenAI image payloads above the configured decoded byte limit", async () => {
+    process.env.OPENAI_API_KEY = "dummy-key";
+    process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
+    process.env.SOURCE_IMAGE_ALLOWED_HOSTS = STORED_SOURCE_IMAGE_ALLOWED_HOSTS;
+    process.env.OPENAI_IMAGE_MAX_OUTPUT_BYTES = "8";
+
+    const fixture = Buffer.alloc(7000, 9);
+    const oversizedImage = Buffer.alloc(9, 1).toString("base64");
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (toUrlString(url) === STORED_SOURCE_IMAGE_URL) {
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "image/jpeg" }),
+          arrayBuffer: async () => fixture,
+        } as Response;
+      }
+
+      return {
+        ok: true,
+        json: async () => ({
+          output: [{ type: "image_generation_call", result: oversizedImage }],
+        }),
+      } as Response;
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generator = new OpenAiImageGenerator();
+    await expect(
+      generator.generate({
+        style: "disco",
+        ...createStoredSourceImageInput({
+          userKey: "user-1",
+          reqId: "req-output-too-large",
+        }),
+      })
+    ).rejects.toThrow(
+      "OpenAI image_generation_call returned image data above the configured byte limit"
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
