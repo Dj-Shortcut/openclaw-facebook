@@ -1534,6 +1534,7 @@ export function createWebhookHandlers({
             ok: true,
             fb_image_fetch_ms: metrics.fbImageFetchMs,
             prompt_build_ms: metrics.promptBuildMs,
+            openai_payload_build_ms: metrics.openAiPayloadBuildMs,
             openai_ms: metrics.openAiMs,
             openai_parse_ms: metrics.openAiParseMs,
             upload_or_serve_ms: metrics.uploadOrServeMs,
@@ -1575,6 +1576,7 @@ export function createWebhookHandlers({
           durationsMs: {
             source_image_downloaded: metrics.fbImageFetchMs,
             prompt_built: metrics.promptBuildMs,
+            provider_payload_built: metrics.openAiPayloadBuildMs,
             provider_request: metrics.openAiMs,
             provider_response_parsed: metrics.openAiParseMs,
             result_uploaded_or_stored: metrics.uploadOrServeMs,
@@ -1617,6 +1619,7 @@ export function createWebhookHandlers({
         durationsMs: {
           source_image_downloaded: metrics.fbImageFetchMs,
           prompt_built: metrics.promptBuildMs,
+          provider_payload_built: metrics.openAiPayloadBuildMs,
           provider_request: metrics.openAiMs,
           provider_response_parsed: metrics.openAiParseMs,
           result_uploaded_or_stored: metrics.uploadOrServeMs,

@@ -216,12 +216,32 @@ export class OpenAiImageGenerator implements ImageGenerator {
         ? safeLen(sourceImage.buffer)
         : 0;
 
-      const response = await fetchOpenAiImageResponse(buildOpenAiRequest({
+      const requestBuildStartedAt = Date.now();
+      const requestContext = buildOpenAiRequest({
         prompt: preparedInput.prompt,
         sourceImage,
         hasSourceImage: preparedInput.hasSourceImage,
         previousResponseId: input.previousResponseId,
-      }), {
+      });
+      const openAiPayloadBuildMs = Date.now() - requestBuildStartedAt;
+      partialMetrics.openAiPayloadBuildMs = openAiPayloadBuildMs;
+      const payloadBytes =
+        typeof requestContext.requestInit.body === "string"
+          ? Buffer.byteLength(requestContext.requestInit.body)
+          : undefined;
+      console.info(
+        JSON.stringify({
+          level: "info",
+          msg: "openai_image_payload_built",
+          reqId: input.reqId,
+          durationMs: openAiPayloadBuildMs,
+          promptChars: preparedInput.prompt.length,
+          sourceImageBytes: openAiInputByteLen,
+          payloadBytes,
+        })
+      );
+
+      const response = await fetchOpenAiImageResponse(requestContext, {
         reqId: input.reqId,
         startedAt,
         partialMetrics,

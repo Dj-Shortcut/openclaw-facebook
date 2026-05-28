@@ -338,6 +338,7 @@ describe("OpenAi image-to-image proof", () => {
       );
       expect(result.metrics.totalMs).toBeGreaterThanOrEqual(0);
       expect(result.metrics.fbImageFetchMs).toBeGreaterThanOrEqual(0);
+      expect(result.metrics.openAiPayloadBuildMs).toBeGreaterThanOrEqual(0);
       expect(result.metrics.openAiMs).toBeGreaterThanOrEqual(0);
     }
   );

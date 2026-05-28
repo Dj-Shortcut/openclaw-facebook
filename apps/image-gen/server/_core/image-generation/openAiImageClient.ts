@@ -6,6 +6,7 @@ export class OpenAiBudgetExceededError extends Error {}
 export type GenerationMetrics = {
   fbImageFetchMs?: number;
   promptBuildMs?: number;
+  openAiPayloadBuildMs?: number;
   openAiMs?: number;
   openAiParseMs?: number;
   uploadOrServeMs?: number;
