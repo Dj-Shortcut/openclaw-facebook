@@ -15,6 +15,9 @@ const originalAppBaseUrl = process.env.APP_BASE_URL;
 const originalOpenAiImageMaxRetries = process.env.OPENAI_IMAGE_MAX_RETRIES;
 const originalOpenAiImageRetryBaseMs = process.env.OPENAI_IMAGE_RETRY_BASE_MS;
 const originalOpenAiImageModel = process.env.OPENAI_IMAGE_MODEL;
+const originalMessengerMaxImageJobs = process.env.MESSENGER_MAX_IMAGE_JOBS;
+const originalMessengerGlobalImageLockTtlMs =
+  process.env.MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS;
 
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) {
@@ -101,6 +104,11 @@ describe("image provider boundary", () => {
     restoreEnv("OPENAI_IMAGE_MAX_RETRIES", originalOpenAiImageMaxRetries);
     restoreEnv("OPENAI_IMAGE_RETRY_BASE_MS", originalOpenAiImageRetryBaseMs);
     restoreEnv("OPENAI_IMAGE_MODEL", originalOpenAiImageModel);
+    restoreEnv("MESSENGER_MAX_IMAGE_JOBS", originalMessengerMaxImageJobs);
+    restoreEnv(
+      "MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS",
+      originalMessengerGlobalImageLockTtlMs
+    );
   });
 
   it("defaults to the current OpenAI Images provider", () => {
@@ -110,7 +118,16 @@ describe("image provider boundary", () => {
 
     expect(result.mode).toBe("openai-images");
     expect(result.generator).toBeInstanceOf(OpenAiImageGenerator);
-    expect(getGeneratorStartupConfig().mode).toBe("openai-images");
+    expect(getGeneratorStartupConfig()).toEqual(
+      expect.objectContaining({
+        mode: "openai-images",
+        messengerGenerationGlobalLimit: {
+          redisBacked: false,
+          max: 3,
+          lockTtlMs: 120000,
+        },
+      })
+    );
   });
 
   it.each(["openai-responses", "openai-responses-image"])(

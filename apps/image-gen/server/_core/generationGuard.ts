@@ -54,6 +54,26 @@ export type MessengerGenerationGlobalLimitStats = {
   active: number;
 };
 
+export type MessengerGenerationGlobalLimitConfig = {
+  redisBacked: boolean;
+  max: number;
+  lockTtlMs: number;
+};
+
+function getGlobalMaxConcurrency(): number {
+  return Math.max(
+    1,
+    readNonNegativeInt("MESSENGER_MAX_IMAGE_JOBS", DEFAULT_GLOBAL_CONCURRENCY)
+  );
+}
+
+function getGlobalLockMs(): number {
+  return readNonNegativeInt(
+    "MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS",
+    DEFAULT_GLOBAL_LOCK_MS
+  );
+}
+
 function lockKey(psid: string): string {
   return `messenger:inflight:${psid}`;
 }
@@ -96,14 +116,8 @@ async function acquireGlobalGenerationSlot(
 async function runWithGlobalGenerationLimit<T>(
   task: () => Promise<T>
 ): Promise<T> {
-  const maxConcurrency = Math.max(
-    1,
-    readNonNegativeInt("MESSENGER_MAX_IMAGE_JOBS", DEFAULT_GLOBAL_CONCURRENCY)
-  );
-  const lockMs = readNonNegativeInt(
-    "MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS",
-    DEFAULT_GLOBAL_LOCK_MS
-  );
+  const maxConcurrency = getGlobalMaxConcurrency();
+  const lockMs = getGlobalLockMs();
   const ttlSeconds = toSeconds(lockMs);
 
   return globalLimiter.run(async () => {
@@ -126,10 +140,7 @@ async function runWithGlobalGenerationLimit<T>(
 }
 
 export async function getMessengerGenerationGlobalLimitStats(): Promise<MessengerGenerationGlobalLimitStats> {
-  const maxConcurrency = Math.max(
-    1,
-    readNonNegativeInt("MESSENGER_MAX_IMAGE_JOBS", DEFAULT_GLOBAL_CONCURRENCY)
-  );
+  const maxConcurrency = getGlobalMaxConcurrency();
   if (!isRedisStateStoreEnabled()) {
     return {
       redisBacked: false,
@@ -149,6 +160,14 @@ export async function getMessengerGenerationGlobalLimitStats(): Promise<Messenge
     redisBacked: true,
     max: maxConcurrency,
     active,
+  };
+}
+
+export function getMessengerGenerationGlobalLimitConfig(): MessengerGenerationGlobalLimitConfig {
+  return {
+    redisBacked: isRedisStateStoreEnabled(),
+    max: getGlobalMaxConcurrency(),
+    lockTtlMs: getGlobalLockMs(),
   };
 }
 

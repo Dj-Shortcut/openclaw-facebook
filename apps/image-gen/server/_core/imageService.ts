@@ -28,6 +28,7 @@ import {
   InvalidGenerationInputError,
   MissingOpenAiApiKeyError,
 } from "./image-generation/imageServiceErrors";
+import { getMessengerGenerationGlobalLimitConfig } from "./generationGuard";
 import { createLogger } from "./logger";
 
 const OPENAI_IMAGES_PROVIDER = "openai-images" as const;
@@ -97,12 +98,16 @@ export function getGeneratorStartupConfig(): {
   resolvedBaseUrl: string | undefined;
   objectStorageEnabled: boolean;
   requiresDurableStorageInProduction: boolean;
+  messengerGenerationGlobalLimit: ReturnType<
+    typeof getMessengerGenerationGlobalLimitConfig
+  >;
 } {
   return {
     mode: getImageProvider(),
     resolvedBaseUrl: getConfiguredBaseUrl(),
     objectStorageEnabled: hasObjectStorageConfig(),
     requiresDurableStorageInProduction: true,
+    messengerGenerationGlobalLimit: getMessengerGenerationGlobalLimitConfig(),
   };
 }
 

@@ -11,6 +11,7 @@ const stateStoreMocks = vi.hoisted(() => ({
 vi.mock("./_core/stateStore", () => stateStoreMocks);
 
 import {
+  getMessengerGenerationGlobalLimitConfig,
   getMessengerGenerationGlobalLimitStats,
   runGuardedGeneration,
 } from "./_core/generationGuard";
@@ -105,6 +106,18 @@ describe("generationGuard", () => {
       redisBacked: false,
       max: 4,
       active: 0,
+    });
+  });
+
+  it("reports startup config for the global generation limiter", () => {
+    process.env.MESSENGER_MAX_IMAGE_JOBS = "5";
+    process.env.MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS = "45000";
+    stateStoreMocks.isRedisStateStoreEnabled.mockReturnValue(true);
+
+    expect(getMessengerGenerationGlobalLimitConfig()).toEqual({
+      redisBacked: true,
+      max: 5,
+      lockTtlMs: 45000,
     });
   });
 });
