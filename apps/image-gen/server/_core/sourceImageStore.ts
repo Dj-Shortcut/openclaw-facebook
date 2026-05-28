@@ -3,6 +3,11 @@ import {
   buildGeneratedImageUrl,
   putGeneratedImage,
 } from "./generatedImageStore";
+import {
+  assertProductionImageStorageConfig,
+  getRequiredPublicBaseUrl,
+  hasObjectStorageConfig,
+} from "./image-generation/imageServiceConfig";
 import { fetchExternalSourceImageForIngress } from "./image-generation/sourceImageFetcher";
 import { storagePut } from "../storage";
 
@@ -10,31 +15,6 @@ export type StoredSourceImage = {
   url: string;
   origin: "stored";
 };
-
-function getConfiguredBaseUrl(): string | undefined {
-  const configuredBaseUrl =
-    process.env.APP_BASE_URL?.trim() ?? process.env.BASE_URL?.trim();
-
-  if (!configuredBaseUrl || !/^https?:\/\//.test(configuredBaseUrl)) {
-    return undefined;
-  }
-
-  if (
-    process.env.NODE_ENV === "production" &&
-    !configuredBaseUrl.startsWith("https://")
-  ) {
-    return undefined;
-  }
-
-  return configuredBaseUrl.replace(/\/$/, "");
-}
-
-function hasObjectStorageConfig(): boolean {
-  return Boolean(
-    process.env.BUILT_IN_FORGE_API_URL?.trim() &&
-      process.env.BUILT_IN_FORGE_API_KEY?.trim()
-  );
-}
 
 function buildExtension(contentType: string): string {
   if (contentType.includes("png")) {
@@ -61,11 +41,9 @@ export async function storeInboundSourceImage(
     return url;
   }
 
-  const publicBaseUrl = getConfiguredBaseUrl();
-  if (!publicBaseUrl) {
-    throw new Error("APP_BASE_URL is missing or invalid");
-  }
+  assertProductionImageStorageConfig();
 
+  const publicBaseUrl = getRequiredPublicBaseUrl();
   const token = putGeneratedImage(buffer, contentType);
   return buildGeneratedImageUrl(publicBaseUrl, token);
 }

@@ -340,7 +340,7 @@ This app is configured for Fly.io using `Dockerfile` + `fly.toml`.
 
 ### Durable image storage
 
-Production Messenger image delivery should use the R2-backed storage proxy described in [`docs/storage-proxy-r2.md`](docs/storage-proxy-r2.md).
+Production Messenger image delivery and inbound source-image persistence use the R2-backed storage proxy described in [`docs/storage-proxy-r2.md`](docs/storage-proxy-r2.md). Without this proxy config, production image storage fails fast instead of creating gateway-local `/generated/*` URLs that would break across restarts or multiple Fly machines.
 
 Main app settings:
 
@@ -379,7 +379,7 @@ Operational notes:
 - `/admin/disable-face-memory` is protected by `ADMIN_TOKEN` and clears retained face-memory state for emergency rollback.
 - Each request carries an `X-Request-Id` header for simple request tracing across logs and downstream calls.
 - The server accepts and returns `traceparent` so it can plug into OpenTelemetry-compatible tracing later without changing route behavior.
-- `APP_BASE_URL` must be publicly reachable in OpenAI mode so Messenger can fetch generated images from `/generated/<id>.png`.
+- `APP_BASE_URL` must be publicly reachable for local/dev image fallback. Production image delivery and persisted inbound source images require the storage proxy instead of gateway-local `/generated/<id>.png` URLs.
 - Keep `FB_APP_SECRET` configured to enforce webhook signature verification middleware.
 - Outbound WhatsApp sends use `server/_core/whatsappApi.ts` and the WhatsApp Cloud API `phone_number_id` configured through env, not hardcoded values.
 - Set `SOURCE_IMAGE_ALLOWED_HOSTS` in production. Source-image fetches fail closed when it is unset. Use exact hostnames only, such as `scontent.xx.fbcdn.net,lookaside.fbsbx.com`; suffix allowlists like `fbsbx.com` are intentionally not expanded.
