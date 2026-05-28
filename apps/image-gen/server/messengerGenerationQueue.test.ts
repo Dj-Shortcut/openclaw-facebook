@@ -340,6 +340,51 @@ describe("messengerGenerationQueue", () => {
     );
   });
 
+  it("dead-letters invalid pending job payloads without running the processor", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const invalidJob = "{not-json";
+    const queue: string[] = [invalidJob];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const redis = {
+      del: vi.fn(async () => 0),
+      get: vi.fn(async () => null),
+      llen: vi.fn(async (key: string) => {
+        if (key.endsWith(":processing")) return processing.length;
+        if (key.endsWith(":dead")) return dead.length;
+        return queue.length;
+      }),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      rpoplpush: vi.fn(async () => {
+        const value = queue.pop() ?? null;
+        if (value) {
+          processing.unshift(value);
+        }
+        return value;
+      }),
+      rpush: vi.fn(async (_key: string, value: string) => {
+        dead.push(value);
+        return dead.length;
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async () => undefined);
+
+    await expect(drainMessengerGenerationQueue(processor)).resolves.toBeUndefined();
+
+    expect(processor).not.toHaveBeenCalled();
+    expect(queue).toEqual([]);
+    expect(processing).toEqual([]);
+    expect(dead).toEqual([invalidJob]);
+  });
+
   it("does not fail the drain when a dead-letter callback fails", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";

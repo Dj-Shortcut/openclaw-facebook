@@ -154,6 +154,11 @@ type ReservedGenerationJob = {
   job: MessengerGenerationJob;
 };
 
+type InvalidReservedGenerationJob = {
+  raw: string;
+  invalid: true;
+};
+
 class MessengerGenerationJobLeaseExpiredError extends Error {
   constructor() {
     super("Messenger generation job lease expired");
@@ -163,7 +168,7 @@ class MessengerGenerationJobLeaseExpiredError extends Error {
 
 async function reserveMessengerGenerationJobFrom(
   redis: RedisLike
-): Promise<ReservedGenerationJob | null> {
+): Promise<ReservedGenerationJob | InvalidReservedGenerationJob | null> {
   const raw = await redis.rpoplpush(
     MESSENGER_GENERATION_QUEUE_KEY,
     MESSENGER_GENERATION_PROCESSING_KEY
@@ -172,10 +177,7 @@ async function reserveMessengerGenerationJobFrom(
     return null;
   }
 
-  return {
-    raw,
-    job: JSON.parse(raw) as MessengerGenerationJob,
-  };
+  return parseReservedGenerationJob(raw) ?? { raw, invalid: true };
 }
 
 async function markMessengerGenerationJobReserved(
@@ -229,6 +231,20 @@ async function releaseMessengerGenerationJob(
   return "requeued";
 }
 
+async function deadLetterInvalidGenerationJob(
+  redis: RedisLike,
+  raw: string
+): Promise<void> {
+  await redis.lrem(MESSENGER_GENERATION_PROCESSING_KEY, 1, raw);
+  await redis.rpush(MESSENGER_GENERATION_DEAD_LETTER_KEY, raw);
+  safeLog("messenger_generation_job_dead_lettered", {
+    reqId: null,
+    style: null,
+    attempts: null,
+    errorCode: "InvalidGenerationJobPayload",
+  });
+}
+
 export async function reclaimReservedMessengerGenerationJobs(
   options: GenerationQueueDrainOptions = {}
 ): Promise<number> {
@@ -251,14 +267,7 @@ export async function reclaimReservedMessengerGenerationJobs(
 
     const reserved = parseReservedGenerationJob(raw);
     if (!reserved) {
-      await redis.lrem(MESSENGER_GENERATION_PROCESSING_KEY, 1, raw);
-      await redis.rpush(MESSENGER_GENERATION_DEAD_LETTER_KEY, raw);
-      safeLog("messenger_generation_job_dead_lettered", {
-        reqId: null,
-        style: null,
-        attempts: null,
-        errorCode: "InvalidGenerationJobPayload",
-      });
+      await deadLetterInvalidGenerationJob(redis, raw);
       reclaimed += 1;
       continue;
     }
@@ -329,6 +338,12 @@ export async function drainMessengerGenerationQueue(
     const reserved = await reserveMessengerGenerationJobFrom(redis);
     if (!reserved) {
       return;
+    }
+
+    if ("invalid" in reserved) {
+      await deadLetterInvalidGenerationJob(redis, reserved.raw);
+      await logMessengerGenerationQueueStats("invalid", redis);
+      continue;
     }
 
     try {
