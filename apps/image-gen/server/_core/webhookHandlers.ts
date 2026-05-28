@@ -102,6 +102,10 @@ import {
   enqueueOrRunMessengerGenerationJob,
   isMessengerGenerationQueueEnabled,
 } from "./messengerGenerationQueue";
+import {
+  getMessengerGenerationCompletion,
+  markMessengerGenerationCompleted,
+} from "./messengerGenerationCompletion";
 
 type HandlerDeps = {
   defaultLang: Lang;
@@ -1462,6 +1466,21 @@ export function createWebhookHandlers({
     };
 
     const didRun = await runGuardedGeneration(psid, async () => {
+      const completedGeneration = await Promise.resolve(
+        getMessengerGenerationCompletion(reqId)
+      );
+      if (completedGeneration) {
+        safeLog("messenger_generation_job_duplicate_completed", {
+          reqId,
+          user: toLogUser(userId),
+          style,
+        });
+        await setLastGenerated(psid, completedGeneration.imageUrl);
+        await setLastGenerationContext(psid, { style, directorMode, prompt: promptHint });
+        await setFlowState(psid, "IDLE");
+        return;
+      }
+
       const allowed = await canGenerate(psid);
       const quotaState = await getOrCreateState(psid);
       const bypassRaw = process.env.MESSENGER_QUOTA_BYPASS_IDS ?? "";
@@ -1557,6 +1576,7 @@ export function createWebhookHandlers({
 
         const messengerSendStartedAt = Date.now();
         rememberSendOutcome(await sendLoggedImage(psid, imageUrl, reqId));
+        await Promise.resolve(markMessengerGenerationCompleted(reqId, imageUrl));
         const messengerSendMs = Date.now() - messengerSendStartedAt;
         await increment(psid);
         await setLastGenerated(psid, imageUrl);
