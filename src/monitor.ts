@@ -6,19 +6,16 @@ import {
   type ChannelInboundMediaInput,
   buildChannelInboundMediaPayload,
   formatInboundEnvelope,
+  hasFinalInboundReplyDispatch,
   resolveInboundSessionEnvelopeContext,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { hasFinalChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { shouldComputeCommandAuthorized } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  readChannelAllowFromStore,
-  upsertChannelPairingRequest,
-} from "openclaw/plugin-sdk/conversation-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   danger,
@@ -711,10 +708,11 @@ async function sendMessengerPairingReply(params: {
   account: ResolvedMessengerAccount;
   cfg: OpenClawConfig;
 }) {
+  const core = getMessengerRuntime();
   await createChannelPairingChallengeIssuer({
     channel: FACEBOOK_CHANNEL_ID,
     upsertPairingRequest: async ({ id, meta }) =>
-      await upsertChannelPairingRequest({
+      await core.channel.pairing.upsertPairingRequest({
         channel: FACEBOOK_CHANNEL_ID,
         id,
         accountId: params.account.accountId,
@@ -754,7 +752,10 @@ async function shouldProcessMessengerEvent(params: {
     },
     cfg: params.cfg,
     readStoreAllowFrom: async () =>
-      await readChannelAllowFromStore(FACEBOOK_CHANNEL_ID, undefined, params.account.accountId),
+      await getMessengerRuntime().channel.pairing.readAllowFromStore({
+        channel: FACEBOOK_CHANNEL_ID,
+        accountId: params.account.accountId,
+      }),
     subject: { stableId: senderId },
     conversation: {
       kind: "direct",
@@ -1014,7 +1015,7 @@ async function processMessengerEvent(params: {
   logVerbose(
     `messenger: dispatching inbound turn session=${route.sessionKey} account=${route.accountId}`,
   );
-  const turnResult = await core.channel.turn.run({
+  const turnResult = await core.channel.inbound.run({
     channel: FACEBOOK_CHANNEL_ID,
     accountId: route.accountId,
     raw: params.event,
@@ -1048,7 +1049,7 @@ async function processMessengerEvent(params: {
         },
         replyPipeline: {},
         delivery: {
-          deliver: async (payload) => {
+          deliver: async (payload: ReplyPayload) => {
             if (!payload.text?.trim()) {
               return { visibleReplySent: false };
             }
@@ -1073,7 +1074,7 @@ async function processMessengerEvent(params: {
               visibleReplySent: true,
             };
           },
-          onError: (err, info) => {
+          onError: (err: unknown, info: { kind: string }) => {
             params.runtime.error?.(danger(`messenger ${info.kind} reply failed: ${String(err)}`));
           },
         },
@@ -1081,7 +1082,7 @@ async function processMessengerEvent(params: {
     },
   });
   const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
-  if (!hasFinalChannelTurnDispatch(dispatchResult)) {
+  if (!hasFinalInboundReplyDispatch(dispatchResult)) {
     logVerbose(
       `messenger: no response generated for message from ${redactMessengerIdentifier(senderId)}`,
     );

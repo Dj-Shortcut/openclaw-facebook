@@ -5,6 +5,61 @@ import { getForgeApiBaseUrlOrThrow } from "./_core/env";
 
 type StorageConfig = { baseUrl: string; apiKey: string };
 
+const DEFAULT_MAX_STORAGE_ERROR_BODY_CHARS = 2048;
+
+function getMaxStorageErrorBodyChars(): number {
+  const parsed = Number(process.env.STORAGE_ERROR_BODY_MAX_CHARS);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_MAX_STORAGE_ERROR_BODY_CHARS;
+  }
+
+  return Math.min(Math.floor(parsed), 16_384);
+}
+
+async function readBoundedResponseText(response: Response): Promise<string> {
+  const maxChars = getMaxStorageErrorBodyChars();
+  if (!response.body) {
+    return response.text().then((text) => text.slice(0, maxChars));
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let truncated = false;
+
+  try {
+    while (text.length < maxChars) {
+      const { done, value } = await reader.read();
+      if (done) {
+        text += decoder.decode();
+        break;
+      }
+
+      text += decoder.decode(value, { stream: true });
+      if (text.length > maxChars) {
+        text = text.slice(0, maxChars);
+        truncated = true;
+        await reader.cancel().catch(() => undefined);
+        break;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return truncated ? `${text}...<truncated>` : text;
+}
+
+async function buildStorageErrorMessage(
+  operation: string,
+  response: Response
+): Promise<string> {
+  const message = await readBoundedResponseText(response).catch(
+    () => response.statusText
+  );
+  return `Storage ${operation} failed (${response.status} ${response.statusText}): ${message}`;
+}
+
 function extractUrl(value: unknown): string {
   if (typeof value === "object" && value !== null && "url" in value) {
     const url = (value as { url?: unknown }).url;
@@ -55,6 +110,9 @@ async function buildDownloadUrl(
     method: "GET",
     headers: buildAuthHeaders(apiKey),
   });
+  if (!response.ok) {
+    throw new Error(await buildStorageErrorMessage("downloadUrl", response));
+  }
   const payload: unknown = await response.json();
   return extractUrl(payload);
 }
@@ -101,10 +159,7 @@ export async function storagePut(
   });
 
   if (!response.ok) {
-    const message = await response.text().catch(() => response.statusText);
-    throw new Error(
-      `Storage upload failed (${response.status} ${response.statusText}): ${message}`
-    );
+    throw new Error(await buildStorageErrorMessage("upload", response));
   }
   const payload: unknown = await response.json();
   const url = extractUrl(payload);
@@ -120,10 +175,7 @@ export async function storageDelete(relKey: string): Promise<void> {
   });
 
   if (!response.ok && response.status !== 404) {
-    const message = await response.text().catch(() => response.statusText);
-    throw new Error(
-      `Storage delete failed (${response.status} ${response.statusText}): ${message}`
-    );
+    throw new Error(await buildStorageErrorMessage("delete", response));
   }
 }
 
