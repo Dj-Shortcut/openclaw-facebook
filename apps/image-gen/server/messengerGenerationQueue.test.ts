@@ -19,6 +19,7 @@ import {
   isMessengerGenerationQueueEnabled,
   reclaimReservedMessengerGenerationJobs,
   resetMessengerGenerationQueueForTests,
+  scheduleMessengerGenerationQueueDrain,
 } from "./_core/messengerGenerationQueue";
 import type { MessengerGenerationJob } from "./_core/messengerGenerationJob";
 
@@ -456,6 +457,70 @@ describe("messengerGenerationQueue", () => {
     expect(queue).toEqual([]);
     expect(redis.lrem).not.toHaveBeenCalled();
     expect(redis.lpush).not.toHaveBeenCalled();
+  });
+
+  it("reclaims stale reserved jobs before scheduled inline fallback drains", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    isRedisEnabledMock.mockReturnValue(true);
+    const job = createJob({ reqId: "req-scheduled-reclaim" });
+    const rawJob = JSON.stringify(job);
+    const queue: string[] = [];
+    const processing = [rawJob];
+    const leases = new Map<string, string>();
+    const redis = {
+      del: vi.fn(async (key: string) => {
+        const existed = leases.delete(key);
+        return existed ? 1 : 0;
+      }),
+      get: vi.fn(async () => null),
+      llen: vi.fn(async (key: string) => {
+        if (key.endsWith(":processing")) return processing.length;
+        if (key.endsWith(":dead")) return 0;
+        return queue.length;
+      }),
+      lpush: vi.fn(async (key: string, value: string) => {
+        if (key.endsWith(":processing")) {
+          processing.unshift(value);
+        } else {
+          queue.unshift(value);
+        }
+        return queue.length;
+      }),
+      lrange: vi.fn(async () => [...processing]),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      rpoplpush: vi.fn(async () => {
+        const value = queue.pop() ?? null;
+        if (value) {
+          processing.unshift(value);
+        }
+        return value;
+      }),
+      rpush: vi.fn(async () => 1),
+      set: vi.fn(async (key: string, value: string) => {
+        leases.set(key, value);
+        return "OK";
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async () => undefined);
+
+    scheduleMessengerGenerationQueueDrain(processor);
+
+    await vi.waitFor(() => {
+      expect(processor).toHaveBeenCalledWith(job);
+    });
+    expect(redis.lrange).toHaveBeenCalledWith(
+      "messenger-generation-jobs:processing",
+      0,
+      -1
+    );
+    expect(processing).toEqual([]);
+    expect(queue).toEqual([]);
   });
 
   it("reports queue depth when queueing is enabled", async () => {

@@ -320,7 +320,10 @@ export function scheduleMessengerGenerationQueueDrain(
     return;
   }
 
-  drainPromise = drainMessengerGenerationQueue(processor).finally(() => {
+  drainPromise = (async () => {
+    await reclaimReservedMessengerGenerationJobs();
+    await drainMessengerGenerationQueue(processor);
+  })().finally(() => {
     drainPromise = null;
   });
 }
