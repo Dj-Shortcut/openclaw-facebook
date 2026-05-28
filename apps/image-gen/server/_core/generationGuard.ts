@@ -2,13 +2,16 @@ import { randomUUID } from "node:crypto";
 import {
   deleteEphemeralKeyIfValue,
   hasEphemeralKey,
+  isRedisStateStoreEnabled,
   setEphemeralKey,
   setEphemeralKeyIfAbsent,
 } from "./stateStore";
 
 const DEFAULT_GLOBAL_CONCURRENCY = 3;
+const DEFAULT_GLOBAL_LOCK_MS = 120000;
 const DEFAULT_PSID_COOLDOWN_MS = 0;
 const DEFAULT_PSID_LOCK_MS = 120000;
+const DEFAULT_GLOBAL_SLOT_WAIT_MS = 100;
 
 function readNonNegativeInt(name: string, fallback: number): number {
   const raw = Number(process.env[name]);
@@ -39,7 +42,10 @@ class ConcurrencyLimiter {
 }
 
 const globalLimiter = new ConcurrencyLimiter(
-  readNonNegativeInt("MESSENGER_MAX_IMAGE_JOBS", DEFAULT_GLOBAL_CONCURRENCY)
+  Math.max(
+    1,
+    readNonNegativeInt("MESSENGER_MAX_IMAGE_JOBS", DEFAULT_GLOBAL_CONCURRENCY)
+  )
 );
 
 function lockKey(psid: string): string {
@@ -50,8 +56,67 @@ function cooldownKey(psid: string): string {
   return `messenger:cooldown:${psid}`;
 }
 
+function globalSlotKey(index: number): string {
+  return `messenger:global-inflight:${index}`;
+}
+
 function toSeconds(milliseconds: number): number {
   return Math.max(1, Math.ceil(milliseconds / 1000));
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function acquireGlobalGenerationSlot(
+  token: string,
+  maxConcurrency: number,
+  ttlSeconds: number
+): Promise<string> {
+  while (true) {
+    for (let index = 0; index < maxConcurrency; index += 1) {
+      const key = globalSlotKey(index);
+      if (await setEphemeralKeyIfAbsent(key, token, ttlSeconds)) {
+        return key;
+      }
+    }
+
+    await wait(DEFAULT_GLOBAL_SLOT_WAIT_MS);
+  }
+}
+
+async function runWithGlobalGenerationLimit<T>(
+  task: () => Promise<T>
+): Promise<T> {
+  const maxConcurrency = Math.max(
+    1,
+    readNonNegativeInt("MESSENGER_MAX_IMAGE_JOBS", DEFAULT_GLOBAL_CONCURRENCY)
+  );
+  const lockMs = readNonNegativeInt(
+    "MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS",
+    DEFAULT_GLOBAL_LOCK_MS
+  );
+  const ttlSeconds = toSeconds(lockMs);
+
+  return globalLimiter.run(async () => {
+    if (!isRedisStateStoreEnabled()) {
+      return task();
+    }
+
+    const token = randomUUID();
+    const slotKey = await acquireGlobalGenerationSlot(
+      token,
+      maxConcurrency,
+      ttlSeconds
+    );
+    try {
+      return await task();
+    } finally {
+      await deleteEphemeralKeyIfValue(slotKey, token);
+    }
+  });
 }
 
 export async function runGuardedGeneration<T>(
@@ -82,7 +147,7 @@ export async function runGuardedGeneration<T>(
   }
 
   try {
-    return await globalLimiter.run(task);
+    return await runWithGlobalGenerationLimit(task);
   } finally {
     await deleteEphemeralKeyIfValue(lockKey(psid), lockToken);
     if (cooldownMs > 0) {
