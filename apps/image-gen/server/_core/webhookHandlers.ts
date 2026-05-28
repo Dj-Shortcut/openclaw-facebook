@@ -1711,7 +1711,10 @@ export function createWebhookHandlers({
     };
     const result = await enqueueOrRunMessengerGenerationJob(
       job,
-      executeStyleGenerationJob
+      executeStyleGenerationJob,
+      {
+        onDeadLetter: processMessengerGenerationJobDeadLetter,
+      }
     );
 
     if (result.mode === "inline") {

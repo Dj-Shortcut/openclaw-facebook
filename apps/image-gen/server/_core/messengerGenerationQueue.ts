@@ -16,7 +16,10 @@ type GenerationJobProcessor = (
 ) => Promise<unknown>;
 
 type GenerationQueueDrainOptions = {
-  onDeadLetter?: (job: MessengerGenerationJob, error: unknown) => Promise<void>;
+  onDeadLetter?: (
+    job: MessengerGenerationJob,
+    error: unknown
+  ) => Promise<unknown>;
 };
 
 export type MessengerGenerationQueueStats = {
@@ -314,7 +317,8 @@ export async function drainMessengerGenerationQueue(
 }
 
 export function scheduleMessengerGenerationQueueDrain(
-  processor: GenerationJobProcessor
+  processor: GenerationJobProcessor,
+  options: GenerationQueueDrainOptions = {}
 ): void {
   if (!isMessengerGenerationQueueEnabled() || drainPromise) {
     return;
@@ -322,7 +326,7 @@ export function scheduleMessengerGenerationQueueDrain(
 
   drainPromise = (async () => {
     await reclaimReservedMessengerGenerationJobs();
-    await drainMessengerGenerationQueue(processor);
+    await drainMessengerGenerationQueue(processor, options);
   })().finally(() => {
     drainPromise = null;
   });
@@ -330,7 +334,8 @@ export function scheduleMessengerGenerationQueueDrain(
 
 export async function enqueueOrRunMessengerGenerationJob(
   job: MessengerGenerationJob,
-  processor: GenerationJobProcessor
+  processor: GenerationJobProcessor,
+  options: GenerationQueueDrainOptions = {}
 ): Promise<{ mode: "queued" } | { mode: "inline"; outcome: unknown }> {
   if (!isMessengerGenerationQueueEnabled()) {
     const outcome = await processor(job);
@@ -342,7 +347,7 @@ export async function enqueueOrRunMessengerGenerationJob(
     isMessengerGenerationInlineFallbackEnabled() &&
     !isMessengerGenerationWorkerMode()
   ) {
-    scheduleMessengerGenerationQueueDrain(processor);
+    scheduleMessengerGenerationQueueDrain(processor, options);
   }
   return { mode: "queued" };
 }

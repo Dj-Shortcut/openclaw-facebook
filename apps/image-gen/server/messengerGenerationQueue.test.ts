@@ -523,6 +523,72 @@ describe("messengerGenerationQueue", () => {
     expect(queue).toEqual([]);
   });
 
+  it("runs the dead-letter callback from scheduled inline fallback drains", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_MAX_ATTEMPTS = "1";
+    isRedisEnabledMock.mockReturnValue(true);
+    const job = createJob({ reqId: "req-scheduled-dead" });
+    const queue: string[] = [JSON.stringify(job)];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const leases = new Map<string, string>();
+    const redis = {
+      del: vi.fn(async (key: string) => {
+        const existed = leases.delete(key);
+        return existed ? 1 : 0;
+      }),
+      get: vi.fn(async () => null),
+      llen: vi.fn(async (key: string) => {
+        if (key.endsWith(":processing")) return processing.length;
+        if (key.endsWith(":dead")) return dead.length;
+        return queue.length;
+      }),
+      lpush: vi.fn(async (key: string, value: string) => {
+        if (key.endsWith(":processing")) {
+          processing.unshift(value);
+        } else {
+          queue.unshift(value);
+        }
+        return queue.length;
+      }),
+      lrange: vi.fn(async () => []),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      rpoplpush: vi.fn(async () => {
+        const value = queue.pop() ?? null;
+        if (value) {
+          processing.unshift(value);
+        }
+        return value;
+      }),
+      rpush: vi.fn(async (_key: string, value: string) => {
+        dead.push(value);
+        return dead.length;
+      }),
+      set: vi.fn(async (key: string, value: string) => {
+        leases.set(key, value);
+        return "OK";
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+    const processorError = new Error("scheduled worker failure");
+    const processor = vi.fn(async () => {
+      throw processorError;
+    });
+    const onDeadLetter = vi.fn(async () => undefined);
+
+    scheduleMessengerGenerationQueueDrain(processor, { onDeadLetter });
+
+    await vi.waitFor(() => {
+      expect(onDeadLetter).toHaveBeenCalledWith(job, processorError);
+    });
+    expect(dead).toEqual([JSON.stringify({ ...job, attempts: 1 })]);
+  });
+
   it("reports queue depth when queueing is enabled", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     isRedisEnabledMock.mockReturnValue(true);
