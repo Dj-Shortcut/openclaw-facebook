@@ -419,6 +419,7 @@ export async function enqueueOrRunMessengerGenerationJob(
   job: MessengerGenerationJob,
   processor: GenerationJobProcessor,
   options: GenerationQueueDrainOptions = {}
+  processor: GenerationJobProcessor
 ): Promise<{ mode: "queued" } | { mode: "inline"; outcome: unknown }> {
   if (!isMessengerGenerationQueueEnabled()) {
     const outcome = await processor(job);

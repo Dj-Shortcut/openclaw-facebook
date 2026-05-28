@@ -118,6 +118,19 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
 
     const enqueueOrFallback = async (channel: "facebook" | "whatsapp") => {
       const enqueuePromise = enqueueWebhookIngressDelivery(channel, req.body);
+          ackMs: Date.now() - receivedAt,
+        })
+      );
+    };
+
+    if (isWhatsAppWebhookPayload(req.body)) {
+      console.log("[whatsapp webhook] POST delivery received");
+      if (!isWebhookIngressQueueEnabled()) {
+        ack("whatsapp", "inline");
+        processWebhookDeliveryInline("whatsapp", req.body);
+        return;
+      }
+
       try {
         const result = await Promise.race([
           enqueuePromise.then(() => "queued" as const),
@@ -159,6 +172,8 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
       }
 
       await enqueueOrFallback("whatsapp");
+      ack("whatsapp", "queued");
+      scheduleWebhookIngressDrain();
       return;
     }
 
@@ -181,7 +196,20 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
       return;
     }
 
+    try {
+      await enqueueWebhookIngressDelivery("facebook", req.body);
+    } catch (error) {
+      console.error("[messenger webhook] durable enqueue failed, falling back to inline processing", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      ack("facebook", "inline_after_enqueue_failure");
+      processWebhookDeliveryInline("facebook", req.body);
+      return;
+    }
+
     await enqueueOrFallback("facebook");
+    ack("facebook", "queued");
+    scheduleWebhookIngressDrain();
   };
 
   app.post("/webhook", webhookDeliveryLimiter, handleWebhookPost);
