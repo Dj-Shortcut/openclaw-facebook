@@ -14,6 +14,7 @@ import {
   drainMessengerGenerationQueue,
   enqueueMessengerGenerationJob,
   enqueueOrRunMessengerGenerationJob,
+  getMessengerGenerationQueueStats,
   isMessengerGenerationQueueEnabled,
   reclaimReservedMessengerGenerationJobs,
   resetMessengerGenerationQueueForTests,
@@ -81,6 +82,7 @@ describe("messengerGenerationQueue", () => {
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
     isRedisEnabledMock.mockReturnValue(true);
     const redis = {
+      llen: vi.fn(async () => 0),
       lpush: vi.fn(async () => 1),
     };
     getRedisClientMock.mockResolvedValue(redis);
@@ -118,6 +120,9 @@ describe("messengerGenerationQueue", () => {
         }
         return queue.length;
       }),
+      llen: vi.fn(async (key: string) =>
+        key.endsWith(":processing") ? processing.length : queue.length
+      ),
       lrange: vi.fn(async () => processing),
       lrem: vi.fn(async (_key: string, _count: number, value: string) => {
         const index = processing.indexOf(value);
@@ -178,6 +183,9 @@ describe("messengerGenerationQueue", () => {
     const processing = [reserved];
     const redis = {
       get: vi.fn(async () => null),
+      llen: vi.fn(async (key: string) =>
+        key.endsWith(":processing") ? processing.length : queue.length
+      ),
       lrange: vi.fn(async () => [...processing]),
       lrem: vi.fn(async (_key: string, _count: number, value: string) => {
         const index = processing.indexOf(value);
@@ -226,5 +234,22 @@ describe("messengerGenerationQueue", () => {
     expect(queue).toEqual([]);
     expect(redis.lrem).not.toHaveBeenCalled();
     expect(redis.lpush).not.toHaveBeenCalled();
+  });
+
+  it("reports queue depth when queueing is enabled", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    isRedisEnabledMock.mockReturnValue(true);
+    const redis = {
+      llen: vi.fn(async (key: string) =>
+        key.endsWith(":processing") ? 2 : 5
+      ),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await expect(getMessengerGenerationQueueStats()).resolves.toEqual({
+      enabled: true,
+      queued: 5,
+      processing: 2,
+    });
   });
 });

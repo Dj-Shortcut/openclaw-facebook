@@ -14,6 +14,7 @@ export type RedisLike = {
   lpush(key: string, value: string): Promise<number>;
   lpop(key: string): Promise<string | null>;
   lrange(key: string, start: number, stop: number): Promise<string[]>;
+  llen(key: string): Promise<number>;
   lrem(key: string, count: number, value: string): Promise<number>;
   rpoplpush(source: string, destination: string): Promise<string | null>;
   rpush(key: string, value: string): Promise<number>;

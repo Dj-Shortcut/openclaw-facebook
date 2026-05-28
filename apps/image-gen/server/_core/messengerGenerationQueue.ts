@@ -12,6 +12,12 @@ type GenerationJobProcessor = (
   job: MessengerGenerationJob
 ) => Promise<unknown>;
 
+export type MessengerGenerationQueueStats = {
+  enabled: boolean;
+  queued: number;
+  processing: number;
+};
+
 function isExplicitlyEnabled(value: string | undefined): boolean {
   return value === "1" || value?.toLowerCase() === "true";
 }
@@ -51,6 +57,47 @@ export async function enqueueMessengerGenerationJob(
 ): Promise<void> {
   const redis = await getRedisClient();
   await redis.lpush(MESSENGER_GENERATION_QUEUE_KEY, JSON.stringify(job));
+  await logMessengerGenerationQueueStats("enqueue", redis);
+}
+
+export async function getMessengerGenerationQueueStats(): Promise<MessengerGenerationQueueStats> {
+  if (!isMessengerGenerationQueueEnabled()) {
+    return {
+      enabled: false,
+      queued: 0,
+      processing: 0,
+    };
+  }
+
+  const redis = await getRedisClient();
+  return getMessengerGenerationQueueStatsFrom(redis);
+}
+
+async function getMessengerGenerationQueueStatsFrom(
+  redis: RedisLike
+): Promise<MessengerGenerationQueueStats> {
+  const [queued, processing] = await Promise.all([
+    redis.llen(MESSENGER_GENERATION_QUEUE_KEY),
+    redis.llen(MESSENGER_GENERATION_PROCESSING_KEY),
+  ]);
+
+  return {
+    enabled: true,
+    queued,
+    processing,
+  };
+}
+
+async function logMessengerGenerationQueueStats(
+  stage: string,
+  redis: RedisLike
+): Promise<void> {
+  const stats = await getMessengerGenerationQueueStatsFrom(redis);
+  safeLog("messenger_generation_queue_stats", {
+    stage,
+    queued: stats.queued,
+    processing: stats.processing,
+  });
 }
 
 type ReservedGenerationJob = {
@@ -126,6 +173,10 @@ export async function reclaimReservedMessengerGenerationJobs(): Promise<number> 
     reclaimed += 1;
   }
 
+  if (reclaimed > 0) {
+    await logMessengerGenerationQueueStats("reclaim", redis);
+  }
+
   return reclaimed;
 }
 
@@ -159,6 +210,7 @@ export async function drainMessengerGenerationQueue(
       await markMessengerGenerationJobReserved(redis, reserved);
       await processor(reserved.job);
       await completeMessengerGenerationJob(redis, reserved);
+      await logMessengerGenerationQueueStats("complete", redis);
     } catch (error) {
       safeLog("messenger_generation_job_failed", {
         reqId: reserved.job.reqId,
@@ -166,6 +218,7 @@ export async function drainMessengerGenerationQueue(
         errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
       });
       await releaseMessengerGenerationJob(redis, reserved);
+      await logMessengerGenerationQueueStats("release", redis);
     }
   }
 }
