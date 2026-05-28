@@ -410,3 +410,13 @@ Worker-related env:
 - `MESSENGER_GENERATION_JOB_LEASE_SECONDS=900`: reserved-job lease before reclaim.
 - `MESSENGER_GENERATION_MAX_ATTEMPTS=3`: failed generation jobs are retried up to this many processor attempts, then moved to the Redis dead-letter list.
 - `MESSENGER_GENERATION_WORKER_POLL_MS=1000`: worker poll interval.
+
+Production verification checklist:
+
+- Confirm `GENERATOR_STARTUP_CONFIG.messengerGenerationGlobalLimit.redisBacked=true` on both gateway and worker logs before horizontal scaling.
+- Confirm `/metrics` shows `messenger_generation_queue_enabled 1`, stable `messenger_generation_queue_jobs{state="queued"}`, and `messenger_generation_global_slots{state="active"}` below `state="max"` during normal load.
+- Confirm `webhook_ack_sent` p95/p99 stays under 500ms after enabling Redis ingress queue and before increasing gateway instance count.
+- Confirm event-loop diagnostics stay below `eventLoopDelayP99Ms=500` during normal Messenger image generation load.
+- Confirm generated image URLs and persisted inbound source-image URLs come from the storage proxy host, not gateway-local `/generated/*` URLs.
+- Confirm `messenger_generation_queue_jobs{state="failed"}` remains at 0 during rollout, or investigate matching `messenger_generation_job_dead_lettered` logs before continuing.
+- After a worker restart test, confirm stale `processing` jobs are reclaimed and completed rather than remaining in `messenger-generation-jobs:processing`.
