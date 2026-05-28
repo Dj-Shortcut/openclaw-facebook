@@ -11,6 +11,8 @@ const HELP_COMMANDS = new Set([
   "commands",
   "commando",
   "commando's",
+  "help eens",
+  "help me eens",
   "wat kan je",
   "what can you do",
 ]);
@@ -69,7 +71,10 @@ export const assistantCommandsFeature: BotFeature = {
         styleLabel: getRandomStyleLabel(style),
       })
     );
-    await ctx.runStyleGeneration(style, ctx.state.lastPhotoUrl ?? ctx.state.lastPhoto ?? undefined);
+    await ctx.runStyleGeneration(
+      style,
+      ctx.state.lastPhotoUrl ?? ctx.state.lastPhoto ?? undefined
+    );
 
     return { handled: true };
   },
