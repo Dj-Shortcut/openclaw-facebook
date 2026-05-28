@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ensureDefaultBotFeaturesRegistered } from "./_core/bot/defaultFeatures";
 import { assistantCommandsFeature } from "./_core/bot/features/assistantCommandsFeature";
 import { conversationalEditingFeature } from "./_core/bot/features/conversationalEditingFeature";
+import { freeformTransformFeature } from "./_core/bot/features/freeformTransformFeature";
 import { rateLimitFeature } from "./_core/bot/features/rateLimitFeature";
 import { statsFeature } from "./_core/bot/features/statsFeature";
 import { styleCommandsFeature } from "./_core/bot/features/styleCommandsFeature";
@@ -215,6 +216,58 @@ describe("rateLimitFeature", () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+});
+
+describe("freeformTransformFeature", () => {
+  it("turns a Dutch free-form photo request into a cinematic generation prompt", async () => {
+    const runStyleGeneration = vi.fn(async () => undefined);
+
+    const result = await freeformTransformFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Maak me een Romeinse soldaat",
+        normalizedText: "maak me een romeinse soldaat",
+        runStyleGeneration,
+        state: makeState({
+          lastPhotoUrl: "https://img.example/source.jpg",
+          lastPhoto: "https://img.example/source.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runStyleGeneration).toHaveBeenCalledWith(
+      "cinematic",
+      "https://img.example/source.jpg",
+      expect.stringContaining(
+        "User requested transformation: Maak me een Romeinse soldaat"
+      )
+    );
+  });
+
+  it("asks for a photo before accepting free-form transform requests", async () => {
+    const sendText = vi.fn(async () => undefined);
+    const setFlowState = vi.fn(async () => undefined);
+    const runStyleGeneration = vi.fn(async () => undefined);
+
+    const result = await freeformTransformFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Maak me een Romeinse soldaat",
+        normalizedText: "maak me een romeinse soldaat",
+        sendText,
+        setFlowState,
+        runStyleGeneration,
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(setFlowState).toHaveBeenCalledWith("AWAITING_PHOTO");
+    expect(sendText).toHaveBeenCalledWith(
+      "Stuur eerst een foto, dan maak ik die stijl voor je."
+    );
+    expect(runStyleGeneration).not.toHaveBeenCalled();
   });
 });
 
