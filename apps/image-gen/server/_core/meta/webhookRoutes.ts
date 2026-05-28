@@ -33,12 +33,43 @@ const webhookDeliveryLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+const DEFAULT_WEBHOOK_INGRESS_ENQUEUE_TIMEOUT_MS = 450;
+
+class WebhookIngressEnqueueTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`webhook ingress enqueue timed out after ${timeoutMs}ms`);
+    this.name = "WebhookIngressEnqueueTimeoutError";
+  }
+}
+
 function getMetaVerifyToken(): string {
   return (
     process.env.META_VERIFY_TOKEN?.trim() ||
     process.env.FB_VERIFY_TOKEN?.trim() ||
     ""
   );
+}
+
+function getWebhookIngressEnqueueTimeoutMs(): number {
+  const configured = Number(process.env.WEBHOOK_INGRESS_ENQUEUE_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.floor(configured)
+    : DEFAULT_WEBHOOK_INGRESS_ENQUEUE_TIMEOUT_MS;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new WebhookIngressEnqueueTimeoutError(timeoutMs));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  });
 }
 
 export function registerMetaWebhookRoutes(app: express.Express): void {
@@ -103,10 +134,21 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
 
     const enqueueOrFallback = async (channel: "facebook" | "whatsapp") => {
       try {
-        await enqueueWebhookIngressDelivery(channel, req.body);
+        await withTimeout(
+          enqueueWebhookIngressDelivery(channel, req.body),
+          getWebhookIngressEnqueueTimeoutMs()
+        );
         ack(channel, "queued");
         scheduleWebhookIngressDrain();
       } catch (error) {
+        if (error instanceof WebhookIngressEnqueueTimeoutError) {
+          console.error(`[${channel} webhook] durable enqueue timed out`, {
+            error: error.message,
+          });
+          res.sendStatus(503);
+          return;
+        }
+
         console.error(
           `[${channel} webhook] durable enqueue failed, falling back to inline processing`,
           {

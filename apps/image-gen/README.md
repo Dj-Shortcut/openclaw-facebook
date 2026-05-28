@@ -413,6 +413,7 @@ Worker-related env:
 - `MESSENGER_GENERATION_MAX_ATTEMPTS=3`: failed generation jobs are retried up to this many processor attempts, then moved to the Redis dead-letter list.
 - `MESSENGER_GENERATION_DRAIN_BATCH_SIZE=10`: max jobs a worker or inline fallback drain processes per drain pass before yielding to the next poll/enqueue.
 - `MESSENGER_GENERATION_WORKER_POLL_MS=1000`: worker poll interval.
+- `WEBHOOK_INGRESS_ENQUEUE_TIMEOUT_MS=450`: max time the gateway waits for Redis ingress enqueue before returning 503 so Meta can retry instead of losing the delivery.
 
 When a worker exits while a generation is reserved, the next worker poll reclaims the expired lease, increments the job attempt count, and either requeues it or moves it to the dead-letter list once `MESSENGER_GENERATION_MAX_ATTEMPTS` is reached.
 
@@ -426,4 +427,3 @@ Production verification checklist:
 - Confirm generated image URLs and persisted inbound source-image URLs come from the storage proxy host, not gateway-local `/generated/*` URLs.
 - Confirm `messenger_generation_queue_jobs{state="failed"}` remains at 0 during rollout, or investigate matching `messenger_generation_job_dead_lettered` logs before continuing.
 - After a worker restart test, confirm stale `processing` jobs are reclaimed and completed rather than remaining in `messenger-generation-jobs:processing`.
-- `MESSENGER_GENERATION_WORKER_POLL_MS=1000`: worker poll interval.

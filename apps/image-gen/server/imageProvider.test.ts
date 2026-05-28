@@ -158,6 +158,9 @@ describe("image provider boundary", () => {
   });
 
   it("includes Messenger generation runtime mode in startup config", () => {
+    delete process.env.MESSENGER_GENERATION_QUEUE_ENABLED;
+    delete process.env.MESSENGER_MAX_IMAGE_JOBS;
+    delete process.env.MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS;
     process.env.MESSENGER_GENERATION_WORKER = "1";
     process.env.MESSENGER_GENERATION_WORKER_ONLY = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";

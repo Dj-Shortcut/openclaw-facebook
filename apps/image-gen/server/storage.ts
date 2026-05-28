@@ -19,7 +19,9 @@ function getMaxStorageErrorBodyChars(): number {
 async function readBoundedResponseText(response: Response): Promise<string> {
   const maxChars = getMaxStorageErrorBodyChars();
   if (!response.body) {
-    return response.text().then((text) => text.slice(0, maxChars));
+    return response.text().then(text =>
+      text.length > maxChars ? `${text.slice(0, maxChars)}...<truncated>` : text
+    );
   }
 
   const reader = response.body.getReader();
@@ -41,6 +43,15 @@ async function readBoundedResponseText(response: Response): Promise<string> {
         truncated = true;
         await reader.cancel().catch(() => undefined);
         break;
+      }
+    }
+    if (!truncated && text.length === maxChars) {
+      const probe = await reader.read();
+      if (!probe.done) {
+        truncated = true;
+        await reader.cancel().catch(() => undefined);
+      } else {
+        text += decoder.decode();
       }
     }
   } finally {

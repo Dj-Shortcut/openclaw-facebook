@@ -66,4 +66,30 @@ describe("messengerGenerationCompletion", () => {
       })
     );
   });
+
+  it("keeps concurrent completion ids in the per-user deletion index", async () => {
+    await Promise.all([
+      markMessengerGenerationCompleted(
+        "req-concurrent-1",
+        "https://assets.example/generated/concurrent-1.jpg",
+        "user-key-concurrent",
+        1_771_000_000_000
+      ),
+      markMessengerGenerationCompleted(
+        "req-concurrent-2",
+        "https://assets.example/generated/concurrent-2.jpg",
+        "user-key-concurrent",
+        1_771_000_000_001
+      ),
+    ]);
+
+    await deleteMessengerGenerationCompletionsForUser("user-key-concurrent");
+
+    await expect(
+      Promise.resolve(getMessengerGenerationCompletion("req-concurrent-1"))
+    ).resolves.toBeNull();
+    await expect(
+      Promise.resolve(getMessengerGenerationCompletion("req-concurrent-2"))
+    ).resolves.toBeNull();
+  });
 });

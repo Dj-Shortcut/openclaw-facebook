@@ -92,4 +92,18 @@ describe("storageKeyFromPublicUrl", () => {
       "download-error-bodydownl...<truncated>"
     );
   });
+
+  it("marks storage error bodies truncated at the exact configured boundary", async () => {
+    process.env.BUILT_IN_FORGE_API_URL = "https://forge.example";
+    process.env.BUILT_IN_FORGE_API_KEY = "forge-secret";
+    process.env.STORAGE_ERROR_BODY_MAX_CHARS = "8";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("123456789", { status: 502 }))
+    );
+
+    await expect(
+      storagePut("generated/test.png", Buffer.from("png"))
+    ).rejects.toThrow("12345678...<truncated>");
+  });
 });

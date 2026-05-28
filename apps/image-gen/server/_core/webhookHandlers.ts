@@ -1470,15 +1470,24 @@ export function createWebhookHandlers({
         getMessengerGenerationCompletion(reqId)
       );
       if (completedGeneration) {
-        safeLog("messenger_generation_job_duplicate_completed", {
-          reqId,
-          user: toLogUser(userId),
-          style,
-        });
-        await setLastGenerated(psid, completedGeneration.imageUrl);
-        await setLastGenerationContext(psid, { style, directorMode, prompt: promptHint });
-        await setFlowState(psid, "IDLE");
-        return;
+        if (completedGeneration.userKey && completedGeneration.userKey !== userId) {
+          safeLog("messenger_generation_job_duplicate_user_mismatch", {
+            reqId,
+            expectedUser: toLogUser(userId),
+            completionUser: toLogUser(completedGeneration.userKey),
+            style,
+          });
+        } else {
+          safeLog("messenger_generation_job_duplicate_completed", {
+            reqId,
+            user: toLogUser(userId),
+            style,
+          });
+          await setLastGenerated(psid, completedGeneration.imageUrl);
+          await setLastGenerationContext(psid, { style, directorMode, prompt: promptHint });
+          await setFlowState(psid, "IDLE");
+          return;
+        }
       }
 
       const allowed = await canGenerate(psid);
