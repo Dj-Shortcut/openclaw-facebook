@@ -116,6 +116,9 @@ describe("observability", () => {
       expect(body).toContain("http_requests_total");
       expect(body).toContain('path="/ok"');
       expect(body).toContain("http_request_duration_seconds_bucket");
+      expect(body).toContain("messenger_generation_queue_enabled 0");
+      expect(body).toContain('messenger_generation_queue_jobs{state="queued"} 0');
+      expect(body).toContain('messenger_generation_queue_jobs{state="processing"} 0');
     } finally {
       await server.close();
     }

@@ -32,7 +32,7 @@ This inventory tracks runtime state that affects horizontal scaling for Messenge
 - `MESSENGER_GENERATION_JOB_LEASE_SECONDS`: optional reserved-job lease TTL, default `900`.
 - `MESSENGER_GENERATION_WORKER_POLL_MS`: optional worker poll interval, default `1000`.
 
-Queue operations emit compact `messenger_generation_queue_stats` logs with `queued` and `processing` counts after enqueue, completion, release, and reclaim. Use these together with `webhook_ack_sent` and `messenger_generation_diagnostic` to verify that gateway ACKs stay fast while workers drain generation backlog.
+Queue operations emit compact `messenger_generation_queue_stats` logs with `queued` and `processing` counts after enqueue, completion, release, and reclaim. `/metrics` also exposes `messenger_generation_queue_enabled`, `messenger_generation_queue_jobs{state="queued"}`, and `messenger_generation_queue_jobs{state="processing"}` gauges. Use these together with `webhook_ack_sent` and `messenger_generation_diagnostic` to verify that gateway ACKs stay fast while workers drain generation backlog.
 
 ## Remaining scaling work
 
