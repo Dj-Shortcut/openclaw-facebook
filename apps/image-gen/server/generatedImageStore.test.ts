@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { buildGeneratedImageUrl, getGeneratedImage, putGeneratedImage } from "./_core/generatedImageStore";
+import {
+  buildGeneratedImageUrl,
+  getGeneratedImage,
+  hashGeneratedImageToken,
+  putGeneratedImage,
+} from "./_core/generatedImageStore";
 
 describe("generatedImageStore", () => {
   it("stores generated images in memory and retrieves them by token", () => {
@@ -25,5 +30,13 @@ describe("generatedImageStore", () => {
   it("builds generated URL with token", () => {
     const url = buildGeneratedImageUrl("https://example.com", "abc-123");
     expect(url).toBe("https://example.com/generated/abc-123.png");
+  });
+
+  it("hashes generated image tokens for logs without exposing the token", () => {
+    const token = "temporary-generated-image-token";
+    const tokenHash = hashGeneratedImageToken(token);
+
+    expect(tokenHash).toMatch(/^[a-f0-9]{12}$/);
+    expect(tokenHash).not.toContain(token);
   });
 });

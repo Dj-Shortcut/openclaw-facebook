@@ -3,6 +3,7 @@ import type { Style } from "../messengerStyles";
 import { storagePut } from "../../storage";
 import {
   buildGeneratedImageUrl,
+  hashGeneratedImageToken,
   putGeneratedImage,
 } from "../generatedImageStore";
 import {
@@ -48,11 +49,15 @@ export async function publishGeneratedImage(
   const token = putGeneratedImage(imageBuffer, "image/png");
   const publicBaseUrl = getRequiredPublicBaseUrl();
   const localUrl = buildGeneratedImageUrl(publicBaseUrl, token);
-  console.warn("GENERATED_IMAGE_LOCAL_FALLBACK", {
-    reqId,
-    style,
-    token,
-    publicUrl: summarizeSensitiveUrl(localUrl),
-  });
+  console.warn(
+    JSON.stringify({
+      level: "warn",
+      msg: "generated_image_local_fallback",
+      reqId,
+      style,
+      tokenHash: hashGeneratedImageToken(token),
+      publicUrl: summarizeSensitiveUrl(localUrl),
+    })
+  );
   return localUrl;
 }

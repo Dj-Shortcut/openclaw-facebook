@@ -21,6 +21,12 @@ export type RedisLike = {
   lrange(key: string, start: number, stop: number): Promise<string[]>;
   llen(key: string): Promise<number>;
   lrem(key: string, count: number, value: string): Promise<number>;
+  lmove(
+    source: string,
+    destination: string,
+    whereFrom: "LEFT" | "RIGHT",
+    whereTo: "LEFT" | "RIGHT"
+  ): Promise<string | null>;
   rpoplpush(source: string, destination: string): Promise<string | null>;
   rpush(key: string, value: string): Promise<number>;
   incr(key: string): Promise<number>;
