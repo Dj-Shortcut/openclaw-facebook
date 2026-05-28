@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { toUserKey } from "./privacy";
 
 type GenerationDiagnosticInput = {
   generationId: string;
@@ -20,7 +20,7 @@ function compactDurations(
 }
 
 export function hashSenderId(senderId: string): string {
-  return createHash("sha256").update(senderId).digest("hex").slice(0, 12);
+  return toUserKey(senderId).slice(0, 12);
 }
 
 export function emitGenerationDiagnostic(input: GenerationDiagnosticInput): void {

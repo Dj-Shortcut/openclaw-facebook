@@ -606,10 +606,13 @@ describe("messenger webhook dedupe", () => {
       "gold"
     );
 
-    expect(sendTextMock).toHaveBeenCalledWith(
-      psid,
-      expect.stringContaining("bezig")
+    const inFlightNotices = sendTextMock.mock.calls.filter(
+      ([recipient, text]) =>
+        recipient === psid &&
+        typeof text === "string" &&
+        text.includes("bezig")
     );
+    expect(inFlightNotices).toHaveLength(1);
 
     resolveOpenAi?.({
       ok: true,
