@@ -5,7 +5,10 @@ import type { MessengerGenerationJob } from "./messengerGenerationJob";
 export const MESSENGER_GENERATION_QUEUE_KEY = "messenger-generation-jobs";
 export const MESSENGER_GENERATION_PROCESSING_KEY =
   "messenger-generation-jobs:processing";
+export const MESSENGER_GENERATION_DEAD_LETTER_KEY =
+  "messenger-generation-jobs:dead";
 const DEFAULT_JOB_LEASE_SECONDS = 15 * 60;
+const DEFAULT_MAX_JOB_ATTEMPTS = 3;
 let drainPromise: Promise<void> | null = null;
 
 type GenerationJobProcessor = (
@@ -16,6 +19,7 @@ export type MessengerGenerationQueueStats = {
   enabled: boolean;
   queued: number;
   processing: number;
+  failed: number;
 };
 
 function isExplicitlyEnabled(value: string | undefined): boolean {
@@ -75,6 +79,13 @@ function getGenerationJobLeaseSeconds(): number {
     : DEFAULT_JOB_LEASE_SECONDS;
 }
 
+function getGenerationJobMaxAttempts(): number {
+  const configured = Number(process.env.MESSENGER_GENERATION_MAX_ATTEMPTS);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.floor(configured)
+    : DEFAULT_MAX_JOB_ATTEMPTS;
+}
+
 function getGenerationJobLeaseKey(job: MessengerGenerationJob): string {
   return `messenger-generation-job-lease:${job.reqId}`;
 }
@@ -93,6 +104,7 @@ export async function getMessengerGenerationQueueStats(): Promise<MessengerGener
       enabled: false,
       queued: 0,
       processing: 0,
+      failed: 0,
     };
   }
 
@@ -103,15 +115,17 @@ export async function getMessengerGenerationQueueStats(): Promise<MessengerGener
 async function getMessengerGenerationQueueStatsFrom(
   redis: RedisLike
 ): Promise<MessengerGenerationQueueStats> {
-  const [queued, processing] = await Promise.all([
+  const [queued, processing, failed] = await Promise.all([
     redis.llen(MESSENGER_GENERATION_QUEUE_KEY),
     redis.llen(MESSENGER_GENERATION_PROCESSING_KEY),
+    redis.llen(MESSENGER_GENERATION_DEAD_LETTER_KEY),
   ]);
 
   return {
     enabled: true,
     queued,
     processing,
+    failed,
   };
 }
 
@@ -124,6 +138,7 @@ async function logMessengerGenerationQueueStats(
     stage,
     queued: stats.queued,
     processing: stats.processing,
+    failed: stats.failed,
   });
 }
 
@@ -171,10 +186,32 @@ async function completeMessengerGenerationJob(
 
 async function releaseMessengerGenerationJob(
   redis: RedisLike,
-  reserved: ReservedGenerationJob
+  reserved: ReservedGenerationJob,
+  error: unknown
 ): Promise<void> {
+  const nextAttempt = (reserved.job.attempts ?? 0) + 1;
+  const retryJob: MessengerGenerationJob = {
+    ...reserved.job,
+    attempts: nextAttempt,
+  };
+
   await completeMessengerGenerationJob(redis, reserved);
-  await redis.lpush(MESSENGER_GENERATION_QUEUE_KEY, reserved.raw);
+  if (nextAttempt >= getGenerationJobMaxAttempts()) {
+    await redis.rpush(
+      MESSENGER_GENERATION_DEAD_LETTER_KEY,
+      JSON.stringify(retryJob)
+    );
+    safeLog("messenger_generation_job_dead_lettered", {
+      reqId: reserved.job.reqId,
+      style: reserved.job.style,
+      attempts: nextAttempt,
+      errorCode:
+        error instanceof Error ? error.constructor.name : "UnknownError",
+    });
+    return;
+  }
+
+  await redis.lpush(MESSENGER_GENERATION_QUEUE_KEY, JSON.stringify(retryJob));
 }
 
 export async function reclaimReservedMessengerGenerationJobs(): Promise<number> {
@@ -242,10 +279,12 @@ export async function drainMessengerGenerationQueue(
       safeLog("messenger_generation_job_failed", {
         reqId: reserved.job.reqId,
         style: reserved.job.style,
+        attempts: (reserved.job.attempts ?? 0) + 1,
         errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
       });
-      await releaseMessengerGenerationJob(redis, reserved);
+      await releaseMessengerGenerationJob(redis, reserved, error);
       await logMessengerGenerationQueueStats("release", redis);
+      return;
     }
   }
 }

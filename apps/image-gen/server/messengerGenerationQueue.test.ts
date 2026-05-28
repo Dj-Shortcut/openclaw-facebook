@@ -38,6 +38,7 @@ describe("messengerGenerationQueue", () => {
   const originalInlineFallback = process.env.MESSENGER_GENERATION_INLINE_FALLBACK;
   const originalWorker = process.env.MESSENGER_GENERATION_WORKER;
   const originalWorkerOnly = process.env.MESSENGER_GENERATION_WORKER_ONLY;
+  const originalMaxAttempts = process.env.MESSENGER_GENERATION_MAX_ATTEMPTS;
 
   afterEach(() => {
     if (originalQueueEnabled === undefined) {
@@ -59,6 +60,11 @@ describe("messengerGenerationQueue", () => {
       delete process.env.MESSENGER_GENERATION_WORKER_ONLY;
     } else {
       process.env.MESSENGER_GENERATION_WORKER_ONLY = originalWorkerOnly;
+    }
+    if (originalMaxAttempts === undefined) {
+      delete process.env.MESSENGER_GENERATION_MAX_ATTEMPTS;
+    } else {
+      process.env.MESSENGER_GENERATION_MAX_ATTEMPTS = originalMaxAttempts;
     }
     getRedisClientMock.mockReset();
     isRedisEnabledMock.mockReset();
@@ -201,6 +207,133 @@ describe("messengerGenerationQueue", () => {
     expect(processing).toEqual([]);
   });
 
+  it("requeues a failed job with an incremented attempt count", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const job = createJob({ reqId: "req-retry" });
+    const queue: string[] = [JSON.stringify(job)];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const leases = new Map<string, string>();
+    const redis = {
+      del: vi.fn(async (key: string) => {
+        const existed = leases.delete(key);
+        return existed ? 1 : 0;
+      }),
+      get: vi.fn(async (key: string) => leases.get(key) ?? null),
+      llen: vi.fn(async (key: string) => {
+        if (key.endsWith(":processing")) return processing.length;
+        if (key.endsWith(":dead")) return dead.length;
+        return queue.length;
+      }),
+      lpush: vi.fn(async (key: string, value: string) => {
+        if (key.endsWith(":processing")) {
+          processing.unshift(value);
+        } else {
+          queue.unshift(value);
+        }
+        return queue.length;
+      }),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      rpoplpush: vi.fn(async () => {
+        const value = queue.pop() ?? null;
+        if (value) {
+          processing.unshift(value);
+        }
+        return value;
+      }),
+      rpush: vi.fn(async (_key: string, value: string) => {
+        dead.push(value);
+        return dead.length;
+      }),
+      set: vi.fn(async (key: string, value: string) => {
+        leases.set(key, value);
+        return "OK";
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+
+    const processor = vi.fn(async () => {
+      throw new Error("provider unavailable");
+    });
+    await drainMessengerGenerationQueue(processor);
+
+    expect(processor).toHaveBeenCalledTimes(1);
+    expect(processing).toEqual([]);
+    expect(dead).toEqual([]);
+    expect(queue).toEqual([JSON.stringify({ ...job, attempts: 1 })]);
+  });
+
+  it("dead-letters a job after the configured max attempts", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    process.env.MESSENGER_GENERATION_MAX_ATTEMPTS = "2";
+    isRedisEnabledMock.mockReturnValue(true);
+    const job = createJob({ reqId: "req-dead", attempts: 1 });
+    const queue: string[] = [JSON.stringify(job)];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const leases = new Map<string, string>();
+    const redis = {
+      del: vi.fn(async (key: string) => {
+        const existed = leases.delete(key);
+        return existed ? 1 : 0;
+      }),
+      get: vi.fn(async (key: string) => leases.get(key) ?? null),
+      llen: vi.fn(async (key: string) => {
+        if (key.endsWith(":processing")) return processing.length;
+        if (key.endsWith(":dead")) return dead.length;
+        return queue.length;
+      }),
+      lpush: vi.fn(async (_key: string, value: string) => {
+        queue.unshift(value);
+        return queue.length;
+      }),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      rpoplpush: vi.fn(async () => {
+        const value = queue.pop() ?? null;
+        if (value) {
+          processing.unshift(value);
+        }
+        return value;
+      }),
+      rpush: vi.fn(async (_key: string, value: string) => {
+        dead.push(value);
+        return dead.length;
+      }),
+      set: vi.fn(async (key: string, value: string) => {
+        leases.set(key, value);
+        return "OK";
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+
+    const processor = vi.fn(async () => {
+      throw new Error("storage unavailable");
+    });
+    await drainMessengerGenerationQueue(processor);
+
+    expect(processor).toHaveBeenCalledTimes(1);
+    expect(queue).toEqual([]);
+    expect(processing).toEqual([]);
+    expect(dead).toEqual([JSON.stringify({ ...job, attempts: 2 })]);
+    expect(redis.rpush).toHaveBeenCalledWith(
+      "messenger-generation-jobs:dead",
+      JSON.stringify({ ...job, attempts: 2 })
+    );
+  });
+
   it("reclaims expired reserved jobs into the pending queue", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     isRedisEnabledMock.mockReturnValue(true);
@@ -267,7 +400,7 @@ describe("messengerGenerationQueue", () => {
     isRedisEnabledMock.mockReturnValue(true);
     const redis = {
       llen: vi.fn(async (key: string) =>
-        key.endsWith(":processing") ? 2 : 5
+        key.endsWith(":processing") ? 2 : key.endsWith(":dead") ? 0 : 5
       ),
     };
     getRedisClientMock.mockResolvedValue(redis);
@@ -276,6 +409,7 @@ describe("messengerGenerationQueue", () => {
       enabled: true,
       queued: 5,
       processing: 2,
+      failed: 0,
     });
   });
 });

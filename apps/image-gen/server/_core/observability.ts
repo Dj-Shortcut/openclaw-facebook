@@ -100,6 +100,7 @@ async function renderMessengerGenerationQueueMetrics(): Promise<string[]> {
       "# TYPE messenger_generation_queue_jobs gauge",
       `messenger_generation_queue_jobs{state="queued"} ${stats.queued}`,
       `messenger_generation_queue_jobs{state="processing"} ${stats.processing}`,
+      `messenger_generation_queue_jobs{state="failed"} ${stats.failed}`,
       "# HELP messenger_generation_queue_scrape_error Whether queue metric collection failed",
       "# TYPE messenger_generation_queue_scrape_error gauge",
       "messenger_generation_queue_scrape_error 0",

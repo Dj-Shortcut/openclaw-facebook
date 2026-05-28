@@ -119,6 +119,7 @@ describe("observability", () => {
       expect(body).toContain("messenger_generation_queue_enabled 0");
       expect(body).toContain('messenger_generation_queue_jobs{state="queued"} 0');
       expect(body).toContain('messenger_generation_queue_jobs{state="processing"} 0');
+      expect(body).toContain('messenger_generation_queue_jobs{state="failed"} 0');
     } finally {
       await server.close();
     }

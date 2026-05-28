@@ -406,4 +406,5 @@ Worker-related env:
 - `MESSENGER_GENERATION_INLINE_FALLBACK=0`: gateway does not drain queued jobs itself.
 - `MESSENGER_GENERATION_WORKER_ONLY=1`: run only the worker loop, no HTTP listener.
 - `MESSENGER_GENERATION_JOB_LEASE_SECONDS=900`: reserved-job lease before reclaim.
+- `MESSENGER_GENERATION_MAX_ATTEMPTS=3`: failed generation jobs are retried up to this many processor attempts, then moved to the Redis dead-letter list.
 - `MESSENGER_GENERATION_WORKER_POLL_MS=1000`: worker poll interval.
