@@ -154,6 +154,13 @@ type ReservedGenerationJob = {
   job: MessengerGenerationJob;
 };
 
+class MessengerGenerationJobLeaseExpiredError extends Error {
+  constructor() {
+    super("Messenger generation job lease expired");
+    this.name = "MessengerGenerationJobLeaseExpiredError";
+  }
+}
+
 async function reserveMessengerGenerationJobFrom(
   redis: RedisLike
 ): Promise<ReservedGenerationJob | null> {
@@ -222,7 +229,9 @@ async function releaseMessengerGenerationJob(
   return "requeued";
 }
 
-export async function reclaimReservedMessengerGenerationJobs(): Promise<number> {
+export async function reclaimReservedMessengerGenerationJobs(
+  options: GenerationQueueDrainOptions = {}
+): Promise<number> {
   if (!isMessengerGenerationQueueEnabled()) {
     return 0;
   }
@@ -240,8 +249,40 @@ export async function reclaimReservedMessengerGenerationJobs(): Promise<number> 
       continue;
     }
 
-    await redis.lrem(MESSENGER_GENERATION_PROCESSING_KEY, 1, raw);
-    await redis.lpush(MESSENGER_GENERATION_QUEUE_KEY, raw);
+    const reserved = parseReservedGenerationJob(raw);
+    if (!reserved) {
+      await redis.lrem(MESSENGER_GENERATION_PROCESSING_KEY, 1, raw);
+      await redis.rpush(MESSENGER_GENERATION_DEAD_LETTER_KEY, raw);
+      safeLog("messenger_generation_job_dead_lettered", {
+        reqId: null,
+        style: null,
+        attempts: null,
+        errorCode: "InvalidGenerationJobPayload",
+      });
+      reclaimed += 1;
+      continue;
+    }
+
+    const leaseExpiredError = new MessengerGenerationJobLeaseExpiredError();
+    const releaseStatus = await releaseMessengerGenerationJob(
+      redis,
+      reserved,
+      leaseExpiredError
+    );
+    if (releaseStatus === "dead_lettered" && options.onDeadLetter) {
+      try {
+        await options.onDeadLetter(reserved.job, leaseExpiredError);
+      } catch (deadLetterError) {
+        safeLog("messenger_generation_dead_letter_callback_failed", {
+          reqId: reserved.job.reqId,
+          style: reserved.job.style,
+          errorCode:
+            deadLetterError instanceof Error
+              ? deadLetterError.constructor.name
+              : "UnknownError",
+        });
+      }
+    }
     reclaimed += 1;
   }
 
@@ -261,6 +302,17 @@ async function hasActiveMessengerGenerationJobLease(
     return (await redis.get(getGenerationJobLeaseKey(job))) !== null;
   } catch {
     return false;
+  }
+}
+
+function parseReservedGenerationJob(raw: string): ReservedGenerationJob | null {
+  try {
+    return {
+      raw,
+      job: JSON.parse(raw) as MessengerGenerationJob,
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -325,7 +377,7 @@ export function scheduleMessengerGenerationQueueDrain(
   }
 
   drainPromise = (async () => {
-    await reclaimReservedMessengerGenerationJobs();
+    await reclaimReservedMessengerGenerationJobs(options);
     await drainMessengerGenerationQueue(processor, options);
   })().finally(() => {
     drainPromise = null;

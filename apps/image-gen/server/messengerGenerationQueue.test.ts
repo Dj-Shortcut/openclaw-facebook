@@ -401,13 +401,20 @@ describe("messengerGenerationQueue", () => {
   it("reclaims expired reserved jobs into the pending queue", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     isRedisEnabledMock.mockReturnValue(true);
-    const reserved = JSON.stringify(createJob({ reqId: "req-reserved" }));
+    const job = createJob({ reqId: "req-reserved" });
+    const reserved = JSON.stringify(job);
     const queue: string[] = [];
+    const dead: string[] = [];
     const processing = [reserved];
     const redis = {
+      del: vi.fn(async () => 0),
       get: vi.fn(async () => null),
       llen: vi.fn(async (key: string) =>
-        key.endsWith(":processing") ? processing.length : queue.length
+        key.endsWith(":processing")
+          ? processing.length
+          : key.endsWith(":dead")
+            ? dead.length
+            : queue.length
       ),
       lrange: vi.fn(async () => [...processing]),
       lrem: vi.fn(async (_key: string, _count: number, value: string) => {
@@ -420,13 +427,69 @@ describe("messengerGenerationQueue", () => {
         queue.unshift(value);
         return queue.length;
       }),
+      rpush: vi.fn(async (_key: string, value: string) => {
+        dead.push(value);
+        return dead.length;
+      }),
     };
     getRedisClientMock.mockResolvedValue(redis);
 
     await expect(reclaimReservedMessengerGenerationJobs()).resolves.toBe(1);
 
     expect(processing).toEqual([]);
-    expect(queue).toEqual([reserved]);
+    expect(queue).toEqual([JSON.stringify({ ...job, attempts: 1 })]);
+    expect(dead).toEqual([]);
+  });
+
+  it("dead-letters expired reserved jobs after max reclaim attempts", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_MAX_ATTEMPTS = "2";
+    isRedisEnabledMock.mockReturnValue(true);
+    const job = createJob({ reqId: "req-expired-dead", attempts: 1 });
+    const reserved = JSON.stringify(job);
+    const queue: string[] = [];
+    const dead: string[] = [];
+    const processing = [reserved];
+    const redis = {
+      del: vi.fn(async () => 0),
+      get: vi.fn(async () => null),
+      llen: vi.fn(async (key: string) =>
+        key.endsWith(":processing")
+          ? processing.length
+          : key.endsWith(":dead")
+            ? dead.length
+            : queue.length
+      ),
+      lrange: vi.fn(async () => [...processing]),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      lpush: vi.fn(async (_key: string, value: string) => {
+        queue.unshift(value);
+        return queue.length;
+      }),
+      rpush: vi.fn(async (_key: string, value: string) => {
+        dead.push(value);
+        return dead.length;
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+    const onDeadLetter = vi.fn(async () => undefined);
+
+    await expect(
+      reclaimReservedMessengerGenerationJobs({ onDeadLetter })
+    ).resolves.toBe(1);
+
+    expect(queue).toEqual([]);
+    expect(processing).toEqual([]);
+    expect(dead).toEqual([JSON.stringify({ ...job, attempts: 2 })]);
+    expect(onDeadLetter).toHaveBeenCalledWith(
+      job,
+      expect.any(Error)
+    );
   });
 
   it("keeps actively leased reserved jobs in processing", async () => {
@@ -512,7 +575,7 @@ describe("messengerGenerationQueue", () => {
     scheduleMessengerGenerationQueueDrain(processor);
 
     await vi.waitFor(() => {
-      expect(processor).toHaveBeenCalledWith(job);
+      expect(processor).toHaveBeenCalledWith({ ...job, attempts: 1 });
     });
     expect(redis.lrange).toHaveBeenCalledWith(
       "messenger-generation-jobs:processing",

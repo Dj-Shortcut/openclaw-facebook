@@ -33,7 +33,9 @@ export function startMessengerGenerationWorker(options: {
 
     running = true;
     try {
-      const reclaimed = await reclaimReservedMessengerGenerationJobs();
+      const reclaimed = await reclaimReservedMessengerGenerationJobs({
+        onDeadLetter: processMessengerGenerationJobDeadLetter,
+      });
       if (reclaimed > 0) {
         console.warn("[messenger generation worker] reclaimed reserved jobs", {
           reclaimed,
