@@ -11,4 +11,5 @@ export type MessengerGenerationJob = {
   sourceImageUrl?: string;
   promptHint?: string;
   directorMode?: DirectorMode;
+  attempts?: number;
 };

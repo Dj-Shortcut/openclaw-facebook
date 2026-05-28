@@ -102,6 +102,10 @@ import {
   enqueueOrRunMessengerGenerationJob,
   isMessengerGenerationQueueEnabled,
 } from "./messengerGenerationQueue";
+import {
+  getMessengerGenerationCompletion,
+  markMessengerGenerationCompleted,
+} from "./messengerGenerationCompletion";
 
 type HandlerDeps = {
   defaultLang: Lang;
@@ -1462,6 +1466,30 @@ export function createWebhookHandlers({
     };
 
     const didRun = await runGuardedGeneration(psid, async () => {
+      const completedGeneration = await Promise.resolve(
+        getMessengerGenerationCompletion(reqId)
+      );
+      if (completedGeneration) {
+        if (completedGeneration.userKey && completedGeneration.userKey !== userId) {
+          safeLog("messenger_generation_job_duplicate_user_mismatch", {
+            reqId,
+            expectedUser: toLogUser(userId),
+            completionUser: toLogUser(completedGeneration.userKey),
+            style,
+          });
+        } else {
+          safeLog("messenger_generation_job_duplicate_completed", {
+            reqId,
+            user: toLogUser(userId),
+            style,
+          });
+          await setLastGenerated(psid, completedGeneration.imageUrl);
+          await setLastGenerationContext(psid, { style, directorMode, prompt: promptHint });
+          await setFlowState(psid, "IDLE");
+          return;
+        }
+      }
+
       const allowed = await canGenerate(psid);
       const quotaState = await getOrCreateState(psid);
       const bypassRaw = process.env.MESSENGER_QUOTA_BYPASS_IDS ?? "";
@@ -1557,6 +1585,9 @@ export function createWebhookHandlers({
 
         const messengerSendStartedAt = Date.now();
         rememberSendOutcome(await sendLoggedImage(psid, imageUrl, reqId));
+        await Promise.resolve(
+          markMessengerGenerationCompleted(reqId, imageUrl, userId)
+        );
         const messengerSendMs = Date.now() - messengerSendStartedAt;
         await increment(psid);
         await setLastGenerated(psid, imageUrl);
@@ -1711,7 +1742,10 @@ export function createWebhookHandlers({
     };
     const result = await enqueueOrRunMessengerGenerationJob(
       job,
-      executeStyleGenerationJob
+      executeStyleGenerationJob,
+      {
+        onDeadLetter: processMessengerGenerationJobDeadLetter,
+      }
     );
 
     if (result.mode === "inline") {
@@ -1908,9 +1942,21 @@ export function createWebhookHandlers({
     return await executeStyleGenerationJob(input);
   }
 
+  async function processMessengerGenerationJobDeadLetter(
+    input: MessengerGenerationJob
+  ): Promise<MessengerSendOutcome> {
+    await setFlowState(input.psid, "FAILURE");
+    return await sendLoggedText(
+      input.psid,
+      t(input.lang, "generationGenericFailure"),
+      input.reqId
+    );
+  }
+
   return {
     processFacebookWebhookPayload,
     processInternalMessengerImageRequest,
     processMessengerGenerationJob,
+    processMessengerGenerationJobDeadLetter,
   };
 }

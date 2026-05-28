@@ -40,7 +40,11 @@ function getClientIp(req: express.Request): string {
 }
 
 function shouldSkipRateLimit(req: express.Request): boolean {
-  return req.path === "/health" || req.path === "/healthz";
+  return (
+    req.path === "/health" ||
+    req.path === "/healthz" ||
+    req.path === "/readyz"
+  );
 }
 
 function pruneBuckets(now: number): void {

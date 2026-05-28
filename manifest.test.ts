@@ -81,8 +81,8 @@ describe("package openclaw metadata", () => {
       minGatewayVersion: "2026.5.19",
     });
     expect(pkg.openclaw?.build).toEqual({
-      openclawVersion: "2026.5.22",
-      pluginSdkVersion: "2026.5.22",
+      openclawVersion: "2026.5.27",
+      pluginSdkVersion: "2026.5.27",
     });
     expect(pkg.openclaw?.install).toEqual({
       clawhubSpec: "clawhub:@dj-shortcut/facebook",

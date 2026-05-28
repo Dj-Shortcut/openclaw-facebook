@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { deleteUserData } from "./_core/dataDeletionService";
+import {
+  getMessengerGenerationCompletion,
+  markMessengerGenerationCompleted,
+} from "./_core/messengerGenerationCompletion";
 import { anonymizePsid, getOrCreateState, resetStateStore } from "./_core/messengerState";
 import { readScopedState, writeScopedState } from "./_core/stateStore";
 
@@ -49,5 +53,32 @@ describe("data deletion service", () => {
     await deleteUserData(psid);
 
     expect(await Promise.resolve(readScopedState("chat:history", userKey))).toBeNull();
+  });
+
+  it("deletes Messenger generation completion markers during user erasure", async () => {
+    const psid = "delete-generation-completion-user";
+    const userKey = anonymizePsid(psid);
+
+    await Promise.resolve(getOrCreateState(psid));
+    await markMessengerGenerationCompleted(
+      "req-delete-completion",
+      "https://assets.example/generated/delete-completion.jpg",
+      userKey,
+      1_771_000_000_000
+    );
+
+    expect(
+      await Promise.resolve(
+        getMessengerGenerationCompletion("req-delete-completion")
+      )
+    ).toEqual(expect.objectContaining({ userKey }));
+
+    await deleteUserData(psid);
+
+    expect(
+      await Promise.resolve(
+        getMessengerGenerationCompletion("req-delete-completion")
+      )
+    ).toBeNull();
   });
 });

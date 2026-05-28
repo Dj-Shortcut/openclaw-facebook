@@ -15,6 +15,17 @@ const originalAppBaseUrl = process.env.APP_BASE_URL;
 const originalOpenAiImageMaxRetries = process.env.OPENAI_IMAGE_MAX_RETRIES;
 const originalOpenAiImageRetryBaseMs = process.env.OPENAI_IMAGE_RETRY_BASE_MS;
 const originalOpenAiImageModel = process.env.OPENAI_IMAGE_MODEL;
+const originalMessengerMaxImageJobs = process.env.MESSENGER_MAX_IMAGE_JOBS;
+const originalMessengerGlobalImageLockTtlMs =
+  process.env.MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS;
+const originalMessengerGenerationQueueEnabled =
+  process.env.MESSENGER_GENERATION_QUEUE_ENABLED;
+const originalMessengerGenerationWorker =
+  process.env.MESSENGER_GENERATION_WORKER;
+const originalMessengerGenerationWorkerOnly =
+  process.env.MESSENGER_GENERATION_WORKER_ONLY;
+const originalMessengerGenerationInlineFallback =
+  process.env.MESSENGER_GENERATION_INLINE_FALLBACK;
 
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) {
@@ -101,6 +112,24 @@ describe("image provider boundary", () => {
     restoreEnv("OPENAI_IMAGE_MAX_RETRIES", originalOpenAiImageMaxRetries);
     restoreEnv("OPENAI_IMAGE_RETRY_BASE_MS", originalOpenAiImageRetryBaseMs);
     restoreEnv("OPENAI_IMAGE_MODEL", originalOpenAiImageModel);
+    restoreEnv("MESSENGER_MAX_IMAGE_JOBS", originalMessengerMaxImageJobs);
+    restoreEnv(
+      "MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS",
+      originalMessengerGlobalImageLockTtlMs
+    );
+    restoreEnv(
+      "MESSENGER_GENERATION_QUEUE_ENABLED",
+      originalMessengerGenerationQueueEnabled
+    );
+    restoreEnv("MESSENGER_GENERATION_WORKER", originalMessengerGenerationWorker);
+    restoreEnv(
+      "MESSENGER_GENERATION_WORKER_ONLY",
+      originalMessengerGenerationWorkerOnly
+    );
+    restoreEnv(
+      "MESSENGER_GENERATION_INLINE_FALLBACK",
+      originalMessengerGenerationInlineFallback
+    );
   });
 
   it("defaults to the current OpenAI Images provider", () => {
@@ -110,7 +139,42 @@ describe("image provider boundary", () => {
 
     expect(result.mode).toBe("openai-images");
     expect(result.generator).toBeInstanceOf(OpenAiImageGenerator);
-    expect(getGeneratorStartupConfig().mode).toBe("openai-images");
+    expect(getGeneratorStartupConfig()).toEqual(
+      expect.objectContaining({
+        mode: "openai-images",
+        messengerGenerationGlobalLimit: {
+          redisBacked: false,
+          max: 3,
+          lockTtlMs: 120000,
+        },
+        messengerGenerationRuntime: {
+          queueEnabled: false,
+          workerMode: false,
+          workerOnlyMode: false,
+          inlineFallbackEnabled: true,
+        },
+      })
+    );
+  });
+
+  it("includes Messenger generation runtime mode in startup config", () => {
+    delete process.env.MESSENGER_GENERATION_QUEUE_ENABLED;
+    delete process.env.MESSENGER_MAX_IMAGE_JOBS;
+    delete process.env.MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS;
+    process.env.MESSENGER_GENERATION_WORKER = "1";
+    process.env.MESSENGER_GENERATION_WORKER_ONLY = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+
+    expect(getGeneratorStartupConfig()).toEqual(
+      expect.objectContaining({
+        messengerGenerationRuntime: {
+          queueEnabled: false,
+          workerMode: true,
+          workerOnlyMode: true,
+          inlineFallbackEnabled: false,
+        },
+      })
+    );
   });
 
   it.each(["openai-responses", "openai-responses-image"])(

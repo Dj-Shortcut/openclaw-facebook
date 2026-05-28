@@ -9,6 +9,7 @@ This inventory tracks runtime state that affects horizontal scaling for Messenge
 - `webhookReplayProtection.ts`: webhook replay keys use Redis in production.
 - `meta/webhookIngressQueue.ts`: Meta webhook deliveries can be queued in Redis, with inline fallback if enqueue fails.
 - `messengerGenerationQueue.ts`: Messenger generation jobs can be queued in Redis when `MESSENGER_GENERATION_QUEUE_ENABLED=1`. Jobs move from a pending list to a processing list before execution and receive a Redis lease; expired reserved jobs are reclaimed on worker drain, so a worker restart does not silently drop jobs while active workers are left alone.
+- `messengerGenerationCompletion.ts`: completed generation request ids are marked in scoped state after a successful Messenger image send. A retried job with the same `reqId` skips a duplicate image send once this marker exists. This reduces duplicate sends during retry/reclaim paths, but it is not a fully transactional outbox for crashes between the Messenger API accepting a send and the marker write.
 
 ## Local process state
 
@@ -39,5 +40,5 @@ Queue operations emit compact `messenger_generation_queue_stats` logs with `queu
 - Run gateway instances with `MESSENGER_GENERATION_QUEUE_ENABLED=1` and `MESSENGER_GENERATION_INLINE_FALLBACK=0`.
 - Run at least one worker process with `MESSENGER_GENERATION_QUEUE_ENABLED=1` and `MESSENGER_GENERATION_WORKER_ONLY=1`.
 - Replace the Redis list with a stronger queue primitive if strict retry visibility or dead-lettering becomes necessary.
-- Add an idempotency marker before broad worker rollout if duplicate Messenger sends after worker crash become unacceptable. The current queue favors at-least-once completion over silently losing image jobs.
+- Move Messenger sends to a transactional outbox before broad high-volume worker rollout if exactly-once send behavior becomes mandatory. The current marker reduces duplicates after recorded completion, while the queue still favors at-least-once completion over silently losing image jobs.
 - Remove or isolate CPU-heavy base64/image buffer work from gateway processes completely once worker deployment is stable.

@@ -287,6 +287,23 @@ describe("assistantCommandsFeature", () => {
     expect(sendText).toHaveBeenCalledOnce();
     expect(sendText.mock.calls[0]?.[0]).toContain("Feel free to send a photo");
   });
+  it("treats Dutch casual help requests as help commands", async () => {
+    const sendText = vi.fn(async () => undefined);
+
+    const result = await assistantCommandsFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        normalizedText: "help eens",
+        messageText: "Help eens",
+        hasPhoto: false,
+        sendText,
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(sendText.mock.calls[0]?.[0]).toContain("Stuur gerust een foto");
+  });
 
   it("picks a random style and triggers generation for surprise command", async () => {
     const runStyleGeneration = vi.fn(async () => undefined);

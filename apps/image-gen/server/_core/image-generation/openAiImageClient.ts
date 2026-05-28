@@ -43,6 +43,7 @@ type OpenAiResponseContext = {
 const OPENAI_RETRY_LIMIT_DEFAULT = 1;
 const OPENAI_RETRY_BASE_MS_DEFAULT = 500;
 const OPENAI_TIMEOUT_MS_DEFAULT = 45_000;
+const OPENAI_IMAGE_MAX_OUTPUT_BYTES_DEFAULT = 25 * 1024 * 1024;
 const OPENAI_RESPONSES_IMAGE_ENDPOINT = "https://api.openai.com/v1/responses";
 
 function getOpenAiTimeoutMs(): number {
@@ -70,6 +71,15 @@ function getOpenAiRetryBaseMs(): number {
   }
 
   return OPENAI_RETRY_BASE_MS_DEFAULT;
+}
+
+function getOpenAiMaxOutputBytes(): number {
+  const raw = Number.parseInt(process.env.OPENAI_IMAGE_MAX_OUTPUT_BYTES ?? "", 10);
+  if (Number.isFinite(raw) && raw > 0) {
+    return raw;
+  }
+
+  return OPENAI_IMAGE_MAX_OUTPUT_BYTES_DEFAULT;
 }
 
 function wait(ms: number): Promise<void> {
@@ -385,6 +395,19 @@ export async function parseOpenAiImageResponse(
     );
   }
 
+  const estimatedOutputBytes = estimateBase64DecodedBytes(base64Image);
+  const maxOutputBytes = getOpenAiMaxOutputBytes();
+  if (estimatedOutputBytes > maxOutputBytes) {
+    console.warn("OPENAI_IMAGE_OUTPUT_TOO_LARGE", {
+      reqId,
+      estimatedOutputBytes,
+      maxOutputBytes,
+    });
+    throw new OpenAiGenerationError(
+      "OpenAI image_generation_call returned image data above the configured byte limit"
+    );
+  }
+
   const imageBufferResult = Buffer.from(base64Image, "base64");
   if (imageBufferResult.length <= 0) {
     throw new OpenAiGenerationError(
@@ -411,4 +434,11 @@ function isValidBase64ImageData(value: string): boolean {
     normalized.length % 4 !== 1 &&
     /^[A-Za-z0-9+/]+={0,2}$/.test(normalized)
   );
+}
+
+function estimateBase64DecodedBytes(value: string): number {
+  const normalized = value.trim();
+  const padding =
+    normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
+  return Math.floor((normalized.length * 3) / 4) - padding;
 }

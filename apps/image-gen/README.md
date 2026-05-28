@@ -33,7 +33,7 @@ ASCII version:
                     | Routes:                          |
                     | - /webhook/facebook              |
                     | - /api/trpc                      |
-                    | - /healthz, /__version, /metrics|
+                    | - /healthz, /readyz, /__version, /metrics|
                     | - /generated/*         |
                     +----+---------------+-------------+
                          |               |
@@ -73,7 +73,7 @@ flowchart TD
     subgraph lb["Leaderbot Server (Node/Express)"]
         wh["/webhook/facebook"]
         trpc["/api/trpc"]
-        ops["/healthz, /__version, /metrics, /generated/*"]
+        ops["/healthz, /readyz, /__version, /metrics, /generated/*"]
         handlers["Webhook handlers<br/>signature check, dedupe, i18n,<br/>state transitions, quota checks"]
         img["Image service<br/>OpenAI"]
     end
@@ -218,12 +218,14 @@ Operational env shortlist: [`docs/operations/ENV_SHORTLIST.md`](docs/operations/
 - `HTTP_RATE_LIMIT_WINDOW_MS` (global HTTP rate-limit window, default `60000`; Redis-backed when `REDIS_URL` is set)
 - `HTTP_RATE_LIMIT_MAX_REQUESTS` (max requests per IP per window, default `120`)
 - `OPENAI_IMAGE_TIMEOUT_MS`, `FB_IMAGE_FETCH_TIMEOUT_MS` (per-request timeouts; OpenAI defaults to `30000ms` and applies per retry attempt)
+- `OPENAI_IMAGE_MAX_OUTPUT_BYTES` (max decoded bytes accepted from the image provider before buffering the generated image, default `26214400`)
 - `OPENAI_IMAGE_MAX_RETRIES`, `OPENAI_IMAGE_RETRY_BASE_MS` (retry policy for OpenAI image generation on `408`/`429`/`5xx`/transient network errors)
 - `IMAGE_PROVIDER` (image provider boundary; currently only `openai-images`, which uses the existing OpenAI Responses image_generation tool flow)
 - `OPENAI_EDIT_INTERPRETER_MODEL`, `OPENAI_EDIT_INTERPRETER_TIMEOUT_MS`, `OPENAI_EDIT_INTERPRETER_MAX_RETRIES` (optional classifier for conversational edit commands after a generated result)
 - `DEFAULT_MESSENGER_LANG` (`nl`/`en` fallback behavior)
 - `PRIVACY_POLICY_URL` (link sent in privacy quick reply)
-- `MESSENGER_MAX_IMAGE_JOBS` (global cap for concurrent image generations, default `3`)
+- `MESSENGER_MAX_IMAGE_JOBS` (global cap for concurrent image generations, default `3`; Redis-backed across instances when `REDIS_URL` is set)
+- `MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS` (Redis-backed global generation slot TTL, default `120000`)
 - `MESSENGER_PSID_COOLDOWN_MS` (optional per-PSID cooldown between generations, default `0`)
 - `MESSENGER_PSID_LOCK_TTL_MS` (per-PSID in-flight lock TTL, default `120000`)
 - `GRAPH_API_MAX_RETRIES`, `GRAPH_API_RETRY_BASE_MS` (retry policy for Meta Graph API `429`/`5xx` responses)
@@ -267,6 +269,7 @@ Useful checks while developing:
 
 ```bash
 curl http://localhost:8080/healthz
+curl http://localhost:8080/readyz
 curl http://localhost:8080/__version
 curl http://localhost:8080/metrics
 ```
@@ -374,7 +377,7 @@ Operational notes:
 - `NODE_ENV=production` and `PORT=8080` are expected in runtime.
 - `REDIS_URL` must be set in Fly secrets before deploy; production startup now fails without it.
 - `WHATSAPP_ACCESS_TOKEN` and `WHATSAPP_PHONE_NUMBER_ID` must be set in Fly secrets before deploy; startup now fails when either is missing.
-- Health check endpoint is `/healthz`.
+- Liveness endpoint is `/healthz`; dependency readiness is exposed at `/readyz`.
 - `/metrics` exposes Prometheus-style request counters and latency histograms.
 - `/admin/disable-face-memory` is protected by `ADMIN_TOKEN` and clears retained face-memory state for emergency rollback.
 - Each request carries an `X-Request-Id` header for simple request tracing across logs and downstream calls.
@@ -384,6 +387,7 @@ Operational notes:
 - Outbound WhatsApp sends use `server/_core/whatsappApi.ts` and the WhatsApp Cloud API `phone_number_id` configured through env, not hardcoded values.
 - Set `SOURCE_IMAGE_ALLOWED_HOSTS` in production. Source-image fetches fail closed when it is unset. Use exact hostnames only, such as `scontent.xx.fbcdn.net,lookaside.fbsbx.com`; suffix allowlists like `fbsbx.com` are intentionally not expanded.
 - For WhatsApp source-image reuse, also include the host that serves persisted inbound source images, such as your app host in local/dev or your storage public domain in production.
+- Redis-backed webhook ingress preserves fast Meta ACKs while draining deliveries sequentially in-process, so a burst does not fan out every queued webhook handler at once.
 
 ### Messenger image worker rollout
 
@@ -406,4 +410,20 @@ Worker-related env:
 - `MESSENGER_GENERATION_INLINE_FALLBACK=0`: gateway does not drain queued jobs itself.
 - `MESSENGER_GENERATION_WORKER_ONLY=1`: run only the worker loop, no HTTP listener.
 - `MESSENGER_GENERATION_JOB_LEASE_SECONDS=900`: reserved-job lease before reclaim.
+- `MESSENGER_GENERATION_MAX_ATTEMPTS=3`: failed generation jobs are retried up to this many processor attempts, then moved to the Redis dead-letter list.
+- `MESSENGER_GENERATION_DRAIN_BATCH_SIZE=10`: max jobs a worker or inline fallback drain processes per drain pass before yielding to the next poll/enqueue.
 - `MESSENGER_GENERATION_WORKER_POLL_MS=1000`: worker poll interval.
+- `WEBHOOK_INGRESS_ENQUEUE_TIMEOUT_MS=450`: max time the gateway waits for Redis ingress enqueue before returning 503 so Meta can retry instead of losing the delivery.
+
+When a worker exits while a generation is reserved, the next worker poll reclaims the expired lease, increments the job attempt count, and either requeues it or moves it to the dead-letter list once `MESSENGER_GENERATION_MAX_ATTEMPTS` is reached.
+
+Production verification checklist:
+
+- Confirm `/readyz` returns `ok: true` on gateway instances after deploy; failures report dependency names and redacted error classes only.
+- Confirm `GENERATOR_STARTUP_CONFIG.messengerGenerationGlobalLimit.redisBacked=true` and `GENERATOR_STARTUP_CONFIG.messengerGenerationRuntime` has the expected gateway/worker/inline-fallback values before horizontal scaling.
+- Confirm `/metrics` shows `messenger_generation_queue_enabled 1`, `messenger_generation_inline_fallback_enabled 0` on gateway instances after worker rollout, stable `messenger_generation_queue_jobs{state="queued"}`, and `messenger_generation_global_slots{state="active"}` below `state="max"` during normal load.
+- Confirm `webhook_ack_sent` p95/p99 stays under 500ms after enabling Redis ingress queue and before increasing gateway instance count.
+- Confirm event-loop diagnostics stay below `eventLoopDelayP99Ms=500` during normal Messenger image generation load.
+- Confirm generated image URLs and persisted inbound source-image URLs come from the storage proxy host, not gateway-local `/generated/*` URLs.
+- Confirm `messenger_generation_queue_jobs{state="failed"}` remains at 0 during rollout, or investigate matching `messenger_generation_job_dead_lettered` logs before continuing.
+- After a worker restart test, confirm stale `processing` jobs are reclaimed and completed rather than remaining in `messenger-generation-jobs:processing`.
