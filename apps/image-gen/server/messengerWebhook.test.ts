@@ -33,6 +33,7 @@ vi.mock("./_core/messengerApi", () => ({
 
 import {
   processFacebookWebhookPayload as processFacebookWebhookPayloadBase,
+  processMessengerGenerationJob,
   resetMessengerEventDedupe,
 } from "./_core/messengerWebhook";
 import { t } from "./_core/i18n";
@@ -56,6 +57,7 @@ import {
 import { getBotFeatures } from "./_core/bot/features";
 import { setSourceImageDnsLookupForTests } from "./_core/image-generation/sourceImageFetcher";
 import { processConsentedFacebookWebhookPayload } from "./testConsentHelpers";
+import { markMessengerGenerationCompleted } from "./_core/messengerGenerationCompletion";
 
 const TEST_PEPPER = "ci-test-pepper";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
@@ -306,6 +308,40 @@ describe("messenger webhook dedupe", () => {
 
     expect(sendQuickRepliesMock).toHaveBeenCalledTimes(1);
     expect(sendTextMock).not.toHaveBeenCalled();
+  });
+
+  it("does not send a duplicate generated image for a completed queued job", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("duplicate job should not call the image provider");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await Promise.resolve(
+      markMessengerGenerationCompleted(
+        "req-completed-job",
+        "https://assets.example/generated/completed.jpg",
+        1_771_000_000_000
+      )
+    );
+
+    await processMessengerGenerationJob({
+      psid: "completed-job-user",
+      userId: "completed-job-user-key",
+      style: "disco",
+      reqId: "req-completed-job",
+      lang: "nl",
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(sendImageMock).not.toHaveBeenCalled();
+    expect(sendTextMock).not.toHaveBeenCalled();
+    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_generation_job_duplicate_completed",
+      expect.objectContaining({
+        reqId: "req-completed-job",
+        style: "disco",
+      })
+    );
   });
 
   it("dedupes on mid before the real message arrives when an echo already used it", async () => {
