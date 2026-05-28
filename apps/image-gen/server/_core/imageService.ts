@@ -85,6 +85,7 @@ type PreparedGenerationInput = {
   hasSourceImage: boolean;
   prompt: string;
   sourceImage: DownloadedSourceImage;
+  promptBuildMs: number;
 };
 
 function ensureGeneratedImageBuffer(buffer: Buffer): Buffer {
@@ -126,21 +127,36 @@ async function prepareGenerationInput(
   // TODO: collapse this orchestration into a dedicated ImageService once prompt and source-image paths are fully extracted.
   logSourceImageFetchStart(input);
   const sourceImage = await resolveStoredSourceImage(input);
+  const promptStartedAt = Date.now();
   const photoAnalysis =
     input.directorMode && !input.directorPhotoAnalysis
       ? await analyzeDirectorPhoto(sourceImage, input.reqId)
       : input.directorPhotoAnalysis;
+  const prompt = input.directorMode
+    ? buildDirectorPrompt({
+        mode: input.directorMode,
+        userInstruction: input.directorInstruction,
+        photoAnalysis,
+      })
+    : buildStylePrompt(input.style, input.promptHint);
+  const promptBuildMs = Date.now() - promptStartedAt;
+  console.info(
+    JSON.stringify({
+      level: "info",
+      msg: "image_prompt_built",
+      reqId: input.reqId,
+      style: input.style,
+      directorMode: input.directorMode,
+      durationMs: promptBuildMs,
+      promptChars: prompt.length,
+    })
+  );
 
   return {
     hasSourceImage: computeHasSourceImage(input),
-    prompt: input.directorMode
-      ? buildDirectorPrompt({
-          mode: input.directorMode,
-          userInstruction: input.directorInstruction,
-          photoAnalysis,
-        })
-      : buildStylePrompt(input.style, input.promptHint),
+    prompt,
     sourceImage,
+    promptBuildMs,
   };
 }
 
@@ -187,6 +203,7 @@ export class OpenAiImageGenerator implements ImageGenerator {
       logImageProviderUsed(input, provider, preparedInput.hasSourceImage);
       const sourceImage = preparedInput.sourceImage;
       partialMetrics.fbImageFetchMs = sourceImage.fbImageFetchMs;
+      partialMetrics.promptBuildMs = preparedInput.promptBuildMs;
 
       const incomingLen = preparedInput.hasSourceImage ? sourceImage.incomingLen : 0;
       const incomingSha256 = preparedInput.hasSourceImage
@@ -210,7 +227,9 @@ export class OpenAiImageGenerator implements ImageGenerator {
         partialMetrics,
       });
 
-      const imageBufferResult = await parseOpenAiImageResponse(response);
+      const parseStartedAt = Date.now();
+      const imageBufferResult = await parseOpenAiImageResponse(response, input.reqId);
+      partialMetrics.openAiParseMs = Date.now() - parseStartedAt;
 
       const generatedImageBuffer = ensureGeneratedImageBuffer(imageBufferResult);
       const uploadStartedAt = Date.now();

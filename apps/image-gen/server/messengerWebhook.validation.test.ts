@@ -157,6 +157,21 @@ describe("messenger webhook payload validation", () => {
     expect(inlineSpy).toHaveBeenCalledWith("facebook", validMessengerPayload);
   });
 
+  it("acks inline deliveries without awaiting webhook processing", async () => {
+    const secret = "test-secret";
+    process.env.FB_APP_SECRET = secret;
+
+    const inlineSpy = vi
+      .spyOn(webhookIngressQueue, "processWebhookDeliveryInline")
+      .mockImplementation(() => new Promise(() => undefined) as never);
+
+    const body = JSON.stringify(validMessengerPayload);
+    const response = await postWebhook(body, buildSignature(body, secret));
+
+    expect(response.status).toBe(200);
+    expect(inlineSpy).toHaveBeenCalledWith("facebook", validMessengerPayload);
+  });
+
   it("acks after durable enqueue succeeds in redis-backed mode", async () => {
     const secret = "test-secret";
     process.env.FB_APP_SECRET = secret;

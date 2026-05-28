@@ -1,4 +1,5 @@
 import { hasOpenMessengerResponseWindow } from "./messengerState";
+import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 
 const GRAPH_API_VERSION = "v21.0";
 
@@ -321,15 +322,17 @@ export async function sendImage(
   psid: string,
   imageUrl: string
 ): Promise<MessengerSendOutcome> {
+  const imageUrlSummary = summarizeSensitiveUrl(imageUrl);
+  const startedAt = Date.now();
   console.info(
     JSON.stringify({
       level: "info",
-      msg: "messenger_image_send",
-      imageUrl,
+      msg: "messenger_image_send_started",
+      imageUrl: imageUrlSummary,
     })
   );
 
-  return await sendMessage(
+  const outcome = await sendMessage(
     psid,
     {
       attachment: {
@@ -350,7 +353,7 @@ export async function sendImage(
             msg: "messenger_image_retry",
             attempt,
             maxAttempts,
-            imageUrl,
+            imageUrl: imageUrlSummary,
             errorCode: error.name,
           })
         );
@@ -361,13 +364,24 @@ export async function sendImage(
             level: "error",
             msg: "messenger_image_send_failed",
             attempts,
-            imageUrl,
+            imageUrl: imageUrlSummary,
             errorCode: error.name,
           })
         );
       },
     }
   );
+  console.info(
+    JSON.stringify({
+      level: "info",
+      msg: "messenger_image_send_completed",
+      imageUrl: imageUrlSummary,
+      durationMs: Date.now() - startedAt,
+      sent: outcome.sent,
+      reason: outcome.sent ? undefined : outcome.reason,
+    })
+  );
+  return outcome;
 }
 
 export type {

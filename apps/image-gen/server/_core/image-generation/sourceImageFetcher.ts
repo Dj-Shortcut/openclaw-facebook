@@ -524,6 +524,16 @@ async function buildDownloadedSourceImage(
 
   await maybeWriteDebugImageProof(reqId, contentType, imageBuffer);
   assertSourceImageSizeOrThrow(reqId, incomingByteLen);
+  console.info(
+    JSON.stringify({
+      level: "info",
+      msg: "source_image_downloaded",
+      reqId,
+      contentType,
+      byteLength: incomingByteLen,
+      durationMs: totalFetchMs,
+    })
+  );
 
   return {
     buffer: imageBuffer,

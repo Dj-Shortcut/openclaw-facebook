@@ -10,6 +10,7 @@ import {
   getRequiredPublicBaseUrl,
   hasObjectStorageConfig,
 } from "./imageServiceConfig";
+import { summarizeSensitiveUrl } from "../utils/urlSummarizer";
 
 export async function publishGeneratedImage(
   imageBuffer: Buffer,
@@ -27,7 +28,7 @@ export async function publishGeneratedImage(
           reqId,
           style,
           storageKey: key,
-          publicUrl: url,
+          publicUrl: summarizeSensitiveUrl(url),
         })
       );
       return url;
@@ -51,7 +52,7 @@ export async function publishGeneratedImage(
     reqId,
     style,
     token,
-    publicUrl: localUrl,
+    publicUrl: summarizeSensitiveUrl(localUrl),
   });
   return localUrl;
 }

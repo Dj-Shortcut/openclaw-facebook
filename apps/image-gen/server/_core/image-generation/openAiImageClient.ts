@@ -5,7 +5,9 @@ export class OpenAiBudgetExceededError extends Error {}
 
 export type GenerationMetrics = {
   fbImageFetchMs?: number;
+  promptBuildMs?: number;
   openAiMs?: number;
+  openAiParseMs?: number;
   uploadOrServeMs?: number;
   totalMs: number;
 };
@@ -247,6 +249,14 @@ export async function fetchOpenAiImageResponse(
     const openAiStartedAt = Date.now();
 
     try {
+      console.info(
+        JSON.stringify({
+          level: "info",
+          msg: "openai_image_request_started",
+          reqId: context.reqId,
+          attempt: attempt + 1,
+        })
+      );
       const response = await fetchWithTimeout(
         requestContext.endpoint,
         requestContext.requestInit,
@@ -258,6 +268,15 @@ export async function fetchOpenAiImageResponse(
         (Date.now() - openAiStartedAt);
 
       if (response.ok) {
+        console.info(
+          JSON.stringify({
+            level: "info",
+            msg: "openai_image_response_received",
+            reqId: context.reqId,
+            attempt: attempt + 1,
+            status: response.status,
+          })
+        );
         return response;
       }
 
@@ -330,7 +349,11 @@ export async function fetchOpenAiImageResponse(
   );
 }
 
-export async function parseOpenAiImageResponse(response: Response): Promise<Buffer> {
+export async function parseOpenAiImageResponse(
+  response: Response,
+  reqId?: string
+): Promise<Buffer> {
+  const startedAt = Date.now();
   const result = (await response.json()) as {
     output?: Array<{ type?: string; result?: string }>;
   };
@@ -368,6 +391,15 @@ export async function parseOpenAiImageResponse(response: Response): Promise<Buff
     );
   }
 
+  console.info(
+    JSON.stringify({
+      level: "info",
+      msg: "openai_image_response_parsed",
+      reqId,
+      outputBytes: imageBufferResult.length,
+      parseMs: Date.now() - startedAt,
+    })
+  );
   return imageBufferResult;
 }
 
