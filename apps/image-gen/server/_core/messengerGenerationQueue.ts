@@ -5,6 +5,7 @@ import type { MessengerGenerationJob } from "./messengerGenerationJob";
 export const MESSENGER_GENERATION_QUEUE_KEY = "messenger-generation-jobs";
 export const MESSENGER_GENERATION_PROCESSING_KEY =
   "messenger-generation-jobs:processing";
+const DEFAULT_JOB_LEASE_SECONDS = 15 * 60;
 let drainPromise: Promise<void> | null = null;
 
 type GenerationJobProcessor = (
@@ -32,6 +33,17 @@ export function isMessengerGenerationWorkerOnlyMode(): boolean {
 
 export function isMessengerGenerationInlineFallbackEnabled(): boolean {
   return process.env.MESSENGER_GENERATION_INLINE_FALLBACK !== "0";
+}
+
+function getGenerationJobLeaseSeconds(): number {
+  const configured = Number(process.env.MESSENGER_GENERATION_JOB_LEASE_SECONDS);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.floor(configured)
+    : DEFAULT_JOB_LEASE_SECONDS;
+}
+
+function getGenerationJobLeaseKey(job: MessengerGenerationJob): string {
+  return `messenger-generation-job-lease:${job.reqId}`;
 }
 
 export async function enqueueMessengerGenerationJob(
@@ -63,11 +75,24 @@ async function reserveMessengerGenerationJobFrom(
   };
 }
 
+async function markMessengerGenerationJobReserved(
+  redis: RedisLike,
+  reserved: ReservedGenerationJob
+): Promise<void> {
+  await redis.set(
+    getGenerationJobLeaseKey(reserved.job),
+    "1",
+    "EX",
+    getGenerationJobLeaseSeconds()
+  );
+}
+
 async function completeMessengerGenerationJob(
   redis: RedisLike,
   reserved: ReservedGenerationJob
 ): Promise<void> {
   await redis.lrem(MESSENGER_GENERATION_PROCESSING_KEY, 1, reserved.raw);
+  await redis.del(getGenerationJobLeaseKey(reserved.job));
 }
 
 async function releaseMessengerGenerationJob(
@@ -90,12 +115,30 @@ export async function reclaimReservedMessengerGenerationJobs(): Promise<number> 
     -1
   );
 
+  let reclaimed = 0;
   for (const raw of reservedJobs) {
+    if (await hasActiveMessengerGenerationJobLease(redis, raw)) {
+      continue;
+    }
+
     await redis.lrem(MESSENGER_GENERATION_PROCESSING_KEY, 1, raw);
     await redis.lpush(MESSENGER_GENERATION_QUEUE_KEY, raw);
+    reclaimed += 1;
   }
 
-  return reservedJobs.length;
+  return reclaimed;
+}
+
+async function hasActiveMessengerGenerationJobLease(
+  redis: RedisLike,
+  rawJob: string
+): Promise<boolean> {
+  try {
+    const job = JSON.parse(rawJob) as MessengerGenerationJob;
+    return (await redis.get(getGenerationJobLeaseKey(job))) !== null;
+  } catch {
+    return false;
+  }
 }
 
 export async function drainMessengerGenerationQueue(
@@ -113,6 +156,7 @@ export async function drainMessengerGenerationQueue(
     }
 
     try {
+      await markMessengerGenerationJobReserved(redis, reserved);
       await processor(reserved.job);
       await completeMessengerGenerationJob(redis, reserved);
     } catch (error) {

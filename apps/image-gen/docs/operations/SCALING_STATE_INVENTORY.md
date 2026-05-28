@@ -8,7 +8,7 @@ This inventory tracks runtime state that affects horizontal scaling for Messenge
 - `generationGuard.ts`: per-user generation locks use `stateStore` ephemeral keys, so the same lock is cross-instance when Redis is enabled.
 - `webhookReplayProtection.ts`: webhook replay keys use Redis in production.
 - `meta/webhookIngressQueue.ts`: Meta webhook deliveries can be queued in Redis, with inline fallback if enqueue fails.
-- `messengerGenerationQueue.ts`: Messenger generation jobs can be queued in Redis when `MESSENGER_GENERATION_QUEUE_ENABLED=1`. Jobs move from a pending list to a processing list before execution and are reclaimed on worker drain, so a worker restart does not silently drop reserved jobs.
+- `messengerGenerationQueue.ts`: Messenger generation jobs can be queued in Redis when `MESSENGER_GENERATION_QUEUE_ENABLED=1`. Jobs move from a pending list to a processing list before execution and receive a Redis lease; expired reserved jobs are reclaimed on worker drain, so a worker restart does not silently drop jobs while active workers are left alone.
 
 ## Local process state
 
@@ -29,6 +29,7 @@ This inventory tracks runtime state that affects horizontal scaling for Messenge
 - `MESSENGER_GENERATION_INLINE_FALLBACK=0`: disables same-process queue draining, intended only once a dedicated worker is running.
 - `MESSENGER_GENERATION_WORKER=1`: starts the Messenger generation queue worker loop in this process.
 - `MESSENGER_GENERATION_WORKER_ONLY=1`: starts only the Messenger generation worker and skips binding the HTTP gateway.
+- `MESSENGER_GENERATION_JOB_LEASE_SECONDS`: optional reserved-job lease TTL, default `900`.
 - `MESSENGER_GENERATION_WORKER_POLL_MS`: optional worker poll interval, default `1000`.
 
 ## Remaining scaling work

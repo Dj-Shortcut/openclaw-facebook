@@ -82,7 +82,13 @@ describe("messengerGenerationQueue", () => {
     isRedisEnabledMock.mockReturnValue(true);
     const queue: string[] = [];
     const processing: string[] = [];
+    const leases = new Map<string, string>();
     const redis = {
+      del: vi.fn(async (key: string) => {
+        const existed = leases.delete(key);
+        return existed ? 1 : 0;
+      }),
+      get: vi.fn(async (key: string) => leases.get(key) ?? null),
       lpush: vi.fn(async (key: string, value: string) => {
         if (key.endsWith(":processing")) {
           processing.unshift(value);
@@ -97,6 +103,10 @@ describe("messengerGenerationQueue", () => {
         if (index === -1) return 0;
         processing.splice(index, 1);
         return 1;
+      }),
+      set: vi.fn(async (key: string, value: string) => {
+        leases.set(key, value);
+        return "OK";
       }),
       rpoplpush: vi.fn(async () => {
         const value = queue.pop() ?? null;
@@ -126,17 +136,27 @@ describe("messengerGenerationQueue", () => {
       1,
       JSON.stringify(job)
     );
+    expect(redis.set).toHaveBeenCalledWith(
+      "messenger-generation-job-lease:req-queued",
+      "1",
+      "EX",
+      900
+    );
+    expect(redis.del).toHaveBeenCalledWith(
+      "messenger-generation-job-lease:req-queued"
+    );
     expect(processor).toHaveBeenCalledWith(job);
     expect(processing).toEqual([]);
   });
 
-  it("reclaims reserved jobs into the pending queue", async () => {
+  it("reclaims expired reserved jobs into the pending queue", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     isRedisEnabledMock.mockReturnValue(true);
     const reserved = JSON.stringify(createJob({ reqId: "req-reserved" }));
     const queue: string[] = [];
     const processing = [reserved];
     const redis = {
+      get: vi.fn(async () => null),
       lrange: vi.fn(async () => [...processing]),
       lrem: vi.fn(async (_key: string, _count: number, value: string) => {
         const index = processing.indexOf(value);
@@ -155,5 +175,35 @@ describe("messengerGenerationQueue", () => {
 
     expect(processing).toEqual([]);
     expect(queue).toEqual([reserved]);
+  });
+
+  it("keeps actively leased reserved jobs in processing", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    isRedisEnabledMock.mockReturnValue(true);
+    const reserved = JSON.stringify(createJob({ reqId: "req-active" }));
+    const queue: string[] = [];
+    const processing = [reserved];
+    const redis = {
+      get: vi.fn(async () => "1"),
+      lrange: vi.fn(async () => [...processing]),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      lpush: vi.fn(async (_key: string, value: string) => {
+        queue.unshift(value);
+        return queue.length;
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await expect(reclaimReservedMessengerGenerationJobs()).resolves.toBe(0);
+
+    expect(processing).toEqual([reserved]);
+    expect(queue).toEqual([]);
+    expect(redis.lrem).not.toHaveBeenCalled();
+    expect(redis.lpush).not.toHaveBeenCalled();
   });
 });
