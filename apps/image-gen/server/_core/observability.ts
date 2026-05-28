@@ -1,7 +1,12 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type express from "express";
 import { getMessengerGenerationGlobalLimitStats } from "./generationGuard";
-import { getMessengerGenerationQueueStats } from "./messengerGenerationQueue";
+import {
+  getMessengerGenerationQueueStats,
+  isMessengerGenerationInlineFallbackEnabled,
+  isMessengerGenerationWorkerMode,
+  isMessengerGenerationWorkerOnlyMode,
+} from "./messengerGenerationQueue";
 
 type RequestWithId = express.Request & {
   requestId?: string;
@@ -127,6 +132,15 @@ async function renderMessengerGenerationQueueMetrics(): Promise<string[]> {
       "# HELP messenger_generation_queue_enabled Whether the Messenger generation queue is enabled",
       "# TYPE messenger_generation_queue_enabled gauge",
       `messenger_generation_queue_enabled ${stats.enabled ? 1 : 0}`,
+      "# HELP messenger_generation_worker_mode Whether this process runs the Messenger generation worker loop",
+      "# TYPE messenger_generation_worker_mode gauge",
+      `messenger_generation_worker_mode ${isMessengerGenerationWorkerMode() ? 1 : 0}`,
+      "# HELP messenger_generation_worker_only_mode Whether this process runs only the Messenger generation worker without HTTP",
+      "# TYPE messenger_generation_worker_only_mode gauge",
+      `messenger_generation_worker_only_mode ${isMessengerGenerationWorkerOnlyMode() ? 1 : 0}`,
+      "# HELP messenger_generation_inline_fallback_enabled Whether this process may drain queued Messenger generation jobs inline",
+      "# TYPE messenger_generation_inline_fallback_enabled gauge",
+      `messenger_generation_inline_fallback_enabled ${isMessengerGenerationInlineFallbackEnabled() ? 1 : 0}`,
       "# HELP messenger_generation_queue_jobs Messenger generation queue depth by state",
       "# TYPE messenger_generation_queue_jobs gauge",
       `messenger_generation_queue_jobs{state="queued"} ${stats.queued}`,

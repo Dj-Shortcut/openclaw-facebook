@@ -420,7 +420,7 @@ Production verification checklist:
 
 - Confirm `/readyz` returns `ok: true` on gateway instances after deploy; failures report dependency names and redacted error classes only.
 - Confirm `GENERATOR_STARTUP_CONFIG.messengerGenerationGlobalLimit.redisBacked=true` on both gateway and worker logs before horizontal scaling.
-- Confirm `/metrics` shows `messenger_generation_queue_enabled 1`, stable `messenger_generation_queue_jobs{state="queued"}`, and `messenger_generation_global_slots{state="active"}` below `state="max"` during normal load.
+- Confirm `/metrics` shows `messenger_generation_queue_enabled 1`, `messenger_generation_inline_fallback_enabled 0` on gateway instances after worker rollout, stable `messenger_generation_queue_jobs{state="queued"}`, and `messenger_generation_global_slots{state="active"}` below `state="max"` during normal load.
 - Confirm `webhook_ack_sent` p95/p99 stays under 500ms after enabling Redis ingress queue and before increasing gateway instance count.
 - Confirm event-loop diagnostics stay below `eventLoopDelayP99Ms=500` during normal Messenger image generation load.
 - Confirm generated image URLs and persisted inbound source-image URLs come from the storage proxy host, not gateway-local `/generated/*` URLs.

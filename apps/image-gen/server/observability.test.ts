@@ -123,6 +123,9 @@ describe("observability", () => {
       expect(body).toContain('webhook_ack_duration_seconds_sum{channel="facebook",mode="queued"} 0.123000');
       expect(body).toContain('webhook_ack_duration_seconds_count{channel="facebook",mode="queued"} 1');
       expect(body).toContain("messenger_generation_queue_enabled 0");
+      expect(body).toContain("messenger_generation_worker_mode 0");
+      expect(body).toContain("messenger_generation_worker_only_mode 0");
+      expect(body).toContain("messenger_generation_inline_fallback_enabled 1");
       expect(body).toContain('messenger_generation_queue_jobs{state="queued"} 0');
       expect(body).toContain('messenger_generation_queue_jobs{state="processing"} 0');
       expect(body).toContain('messenger_generation_queue_jobs{state="failed"} 0');
