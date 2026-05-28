@@ -33,6 +33,7 @@ vi.mock("./_core/messengerApi", () => ({
 
 import {
   processFacebookWebhookPayload as processFacebookWebhookPayloadBase,
+  processInternalMessengerImageRequest,
   processMessengerGenerationJob,
   resetMessengerEventDedupe,
 } from "./_core/messengerWebhook";
@@ -341,6 +342,39 @@ describe("messenger webhook dedupe", () => {
       expect.objectContaining({
         reqId: "req-completed-job",
         style: "disco",
+      })
+    );
+  });
+
+  it("uses sourceImageUrl from internal gateway image requests", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+
+    await processInternalMessengerImageRequest({
+      psid: "internal-source-user",
+      prompt: "Restyle deze foto cinematic",
+      reqId: "req-internal-source",
+      lang: "nl",
+      timestamp: 1_771_000_000_000,
+      sourceImageUrl: "https://img.example/source.jpg",
+    });
+
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => toUrlString(url) === "https://img.example/source.jpg"
+      )
+    ).toBe(true);
+    expect(sendImageMock).toHaveBeenCalledWith(
+      "internal-source-user",
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+    expect(getState("internal-source-user")?.lastPhotoSource).toBe("stored");
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "internal_image_request_received",
+      expect.objectContaining({
+        reqId: "req-internal-source",
+        hasSourceImageUrl: true,
       })
     );
   });
