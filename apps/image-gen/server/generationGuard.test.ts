@@ -10,7 +10,10 @@ const stateStoreMocks = vi.hoisted(() => ({
 
 vi.mock("./_core/stateStore", () => stateStoreMocks);
 
-import { runGuardedGeneration } from "./_core/generationGuard";
+import {
+  getMessengerGenerationGlobalLimitStats,
+  runGuardedGeneration,
+} from "./_core/generationGuard";
 
 describe("generationGuard", () => {
   beforeEach(() => {
@@ -77,5 +80,31 @@ describe("generationGuard", () => {
       expect.any(String),
       expect.any(Number)
     );
+  });
+
+  it("reports Redis-backed global slot usage", async () => {
+    process.env.MESSENGER_MAX_IMAGE_JOBS = "3";
+    stateStoreMocks.isRedisStateStoreEnabled.mockReturnValue(true);
+    stateStoreMocks.hasEphemeralKey.mockImplementation(async (key: string) =>
+      key === "messenger:global-inflight:0" ||
+      key === "messenger:global-inflight:2"
+    );
+
+    await expect(getMessengerGenerationGlobalLimitStats()).resolves.toEqual({
+      redisBacked: true,
+      max: 3,
+      active: 2,
+    });
+  });
+
+  it("reports configured max without active slots in memory mode", async () => {
+    process.env.MESSENGER_MAX_IMAGE_JOBS = "4";
+    stateStoreMocks.isRedisStateStoreEnabled.mockReturnValue(false);
+
+    await expect(getMessengerGenerationGlobalLimitStats()).resolves.toEqual({
+      redisBacked: false,
+      max: 4,
+      active: 0,
+    });
   });
 });

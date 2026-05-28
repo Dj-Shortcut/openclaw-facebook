@@ -48,6 +48,12 @@ const globalLimiter = new ConcurrencyLimiter(
   )
 );
 
+export type MessengerGenerationGlobalLimitStats = {
+  redisBacked: boolean;
+  max: number;
+  active: number;
+};
+
 function lockKey(psid: string): string {
   return `messenger:inflight:${psid}`;
 }
@@ -117,6 +123,33 @@ async function runWithGlobalGenerationLimit<T>(
       await deleteEphemeralKeyIfValue(slotKey, token);
     }
   });
+}
+
+export async function getMessengerGenerationGlobalLimitStats(): Promise<MessengerGenerationGlobalLimitStats> {
+  const maxConcurrency = Math.max(
+    1,
+    readNonNegativeInt("MESSENGER_MAX_IMAGE_JOBS", DEFAULT_GLOBAL_CONCURRENCY)
+  );
+  if (!isRedisStateStoreEnabled()) {
+    return {
+      redisBacked: false,
+      max: maxConcurrency,
+      active: 0,
+    };
+  }
+
+  let active = 0;
+  for (let index = 0; index < maxConcurrency; index += 1) {
+    if (await hasEphemeralKey(globalSlotKey(index))) {
+      active += 1;
+    }
+  }
+
+  return {
+    redisBacked: true,
+    max: maxConcurrency,
+    active,
+  };
 }
 
 export async function runGuardedGeneration<T>(

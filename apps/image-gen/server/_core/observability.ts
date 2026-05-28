@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type express from "express";
+import { getMessengerGenerationGlobalLimitStats } from "./generationGuard";
 import { getMessengerGenerationQueueStats } from "./messengerGenerationQueue";
 
 type RequestWithId = express.Request & {
@@ -92,6 +93,7 @@ export function recordHttpRequestMetric(method: string, path: string, statusCode
 async function renderMessengerGenerationQueueMetrics(): Promise<string[]> {
   try {
     const stats = await getMessengerGenerationQueueStats();
+    const globalLimitStats = await getMessengerGenerationGlobalLimitStats();
     return [
       "# HELP messenger_generation_queue_enabled Whether the Messenger generation queue is enabled",
       "# TYPE messenger_generation_queue_enabled gauge",
@@ -101,6 +103,13 @@ async function renderMessengerGenerationQueueMetrics(): Promise<string[]> {
       `messenger_generation_queue_jobs{state="queued"} ${stats.queued}`,
       `messenger_generation_queue_jobs{state="processing"} ${stats.processing}`,
       `messenger_generation_queue_jobs{state="failed"} ${stats.failed}`,
+      "# HELP messenger_generation_global_slots Messenger generation global concurrency slots",
+      "# TYPE messenger_generation_global_slots gauge",
+      `messenger_generation_global_slots{state="active"} ${globalLimitStats.active}`,
+      `messenger_generation_global_slots{state="max"} ${globalLimitStats.max}`,
+      "# HELP messenger_generation_global_slots_redis_backed Whether global generation slots are Redis-backed",
+      "# TYPE messenger_generation_global_slots_redis_backed gauge",
+      `messenger_generation_global_slots_redis_backed ${globalLimitStats.redisBacked ? 1 : 0}`,
       "# HELP messenger_generation_queue_scrape_error Whether queue metric collection failed",
       "# TYPE messenger_generation_queue_scrape_error gauge",
       "messenger_generation_queue_scrape_error 0",
