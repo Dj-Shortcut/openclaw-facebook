@@ -61,6 +61,7 @@ import {
 import { createAdminAuthRateLimiter, verifyAdminToken } from "./adminAuth";
 import { registerInternalImageRequestRoutes } from "./internalImageRequestRoutes";
 import {
+  assertMessengerGenerationQueueConfig,
   isMessengerGenerationWorkerMode,
   isMessengerGenerationWorkerOnlyMode,
 } from "./messengerGenerationQueue";
@@ -325,6 +326,7 @@ async function startServer() {
   await ensureWebhookReplayProtectionReady();
   await ensureWebhookIngressQueueReady();
   await ensureHttpRateLimiterReady();
+  assertMessengerGenerationQueueConfig();
   const generationWorkerOnly = isMessengerGenerationWorkerOnlyMode();
   if (isMessengerGenerationWorkerMode() || generationWorkerOnly) {
     startMessengerGenerationWorker({ keepAlive: generationWorkerOnly });

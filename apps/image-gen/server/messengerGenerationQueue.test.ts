@@ -11,6 +11,7 @@ vi.mock("./_core/redis", () => ({
 }));
 
 import {
+  assertMessengerGenerationQueueConfig,
   drainMessengerGenerationQueue,
   enqueueMessengerGenerationJob,
   enqueueOrRunMessengerGenerationJob,
@@ -36,6 +37,7 @@ describe("messengerGenerationQueue", () => {
   const originalQueueEnabled = process.env.MESSENGER_GENERATION_QUEUE_ENABLED;
   const originalInlineFallback = process.env.MESSENGER_GENERATION_INLINE_FALLBACK;
   const originalWorker = process.env.MESSENGER_GENERATION_WORKER;
+  const originalWorkerOnly = process.env.MESSENGER_GENERATION_WORKER_ONLY;
 
   afterEach(() => {
     if (originalQueueEnabled === undefined) {
@@ -53,6 +55,11 @@ describe("messengerGenerationQueue", () => {
     } else {
       process.env.MESSENGER_GENERATION_WORKER = originalWorker;
     }
+    if (originalWorkerOnly === undefined) {
+      delete process.env.MESSENGER_GENERATION_WORKER_ONLY;
+    } else {
+      process.env.MESSENGER_GENERATION_WORKER_ONLY = originalWorkerOnly;
+    }
     getRedisClientMock.mockReset();
     isRedisEnabledMock.mockReset();
     isRedisEnabledMock.mockReturnValue(false);
@@ -66,6 +73,25 @@ describe("messengerGenerationQueue", () => {
 
     isRedisEnabledMock.mockReturnValue(true);
     expect(isMessengerGenerationQueueEnabled()).toBe(true);
+  });
+
+  it("fails fast for worker mode without a Redis-backed queue", () => {
+    process.env.MESSENGER_GENERATION_WORKER_ONLY = "1";
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    isRedisEnabledMock.mockReturnValue(false);
+
+    expect(() => assertMessengerGenerationQueueConfig()).toThrow(
+      "MESSENGER_GENERATION_QUEUE_ENABLED=1 and REDIS_URL are required"
+    );
+  });
+
+  it("fails fast when inline fallback is disabled without an active queue", () => {
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(false);
+
+    expect(() => assertMessengerGenerationQueueConfig()).toThrow(
+      "MESSENGER_GENERATION_INLINE_FALLBACK=0 requires"
+    );
   });
 
   it("runs inline when queueing is disabled", async () => {

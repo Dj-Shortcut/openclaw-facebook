@@ -41,6 +41,33 @@ export function isMessengerGenerationInlineFallbackEnabled(): boolean {
   return process.env.MESSENGER_GENERATION_INLINE_FALLBACK !== "0";
 }
 
+export function assertMessengerGenerationQueueConfig(): void {
+  const queueRequested = isExplicitlyEnabled(
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED
+  );
+  const queueEnabled = isMessengerGenerationQueueEnabled();
+  const workerRequested =
+    isMessengerGenerationWorkerMode() || isMessengerGenerationWorkerOnlyMode();
+
+  if (workerRequested && !queueEnabled) {
+    throw new Error(
+      "MESSENGER_GENERATION_QUEUE_ENABLED=1 and REDIS_URL are required for Messenger generation worker mode"
+    );
+  }
+
+  if (!isMessengerGenerationInlineFallbackEnabled() && !queueEnabled) {
+    throw new Error(
+      "MESSENGER_GENERATION_INLINE_FALLBACK=0 requires MESSENGER_GENERATION_QUEUE_ENABLED=1 and REDIS_URL"
+    );
+  }
+
+  if (queueRequested && !queueEnabled) {
+    throw new Error(
+      "MESSENGER_GENERATION_QUEUE_ENABLED=1 requires REDIS_URL"
+    );
+  }
+}
+
 function getGenerationJobLeaseSeconds(): number {
   const configured = Number(process.env.MESSENGER_GENERATION_JOB_LEASE_SECONDS);
   return Number.isFinite(configured) && configured > 0
