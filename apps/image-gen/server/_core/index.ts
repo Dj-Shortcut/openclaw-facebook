@@ -21,7 +21,10 @@ import { createContext } from "./context";
 import { serveStatic } from "./vite";
 import { assertPrivacyConfig } from "./privacy";
 import { applySecurityHeaders } from "./securityHeaders";
-import { getGeneratedImage } from "./generatedImageStore";
+import {
+  getGeneratedImage,
+  hashGeneratedImageToken,
+} from "./generatedImageStore";
 import { isDebugLogEnabled } from "./logLevel";
 import {
   assertProductionStateStoreConfig,
@@ -644,12 +647,16 @@ async function startServer() {
   app.get("/generated/:token.:ext", (req, res) => {
     const generatedImage = getGeneratedImage(req.params.token);
     if (!generatedImage) {
-      console.warn("GENERATED_IMAGE_FETCH_MISS", {
-        reqId: getRequestId(req),
-        token: req.params.token,
-        path: req.path,
-        nodeEnv: process.env.NODE_ENV ?? "unknown",
-      });
+      console.warn(
+        JSON.stringify({
+          level: "warn",
+          msg: "generated_image_fetch_miss",
+          reqId: getRequestId(req),
+          tokenHash: hashGeneratedImageToken(req.params.token),
+          path: req.path,
+          nodeEnv: process.env.NODE_ENV ?? "unknown",
+        })
+      );
       res.status(404).send("Not found");
       return;
     }

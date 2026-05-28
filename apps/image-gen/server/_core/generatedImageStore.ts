@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 const DEFAULT_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_MAX_ITEMS = 200;
@@ -54,7 +54,10 @@ function pruneOverflow(): void {
   }
 }
 
-export function putGeneratedImage(buffer: Buffer, contentType = "image/jpeg"): string {
+export function putGeneratedImage(
+  buffer: Buffer,
+  contentType = "image/jpeg"
+): string {
   const now = Date.now();
   pruneExpired(now);
 
@@ -70,7 +73,9 @@ export function putGeneratedImage(buffer: Buffer, contentType = "image/jpeg"): s
   return token;
 }
 
-export function getGeneratedImage(token: string): { buffer: Buffer; contentType: string } | null {
+export function getGeneratedImage(
+  token: string
+): { buffer: Buffer; contentType: string } | null {
   const now = Date.now();
   const stored = generatedImages.get(token);
   if (!stored) {
@@ -90,4 +95,8 @@ export function getGeneratedImage(token: string): { buffer: Buffer; contentType:
 
 export function buildGeneratedImageUrl(baseUrl: string, token: string): string {
   return `${baseUrl}/generated/${encodeURIComponent(token)}.png`;
+}
+
+export function hashGeneratedImageToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex").slice(0, 12);
 }

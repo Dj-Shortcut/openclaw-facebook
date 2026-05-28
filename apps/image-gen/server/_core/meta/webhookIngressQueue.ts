@@ -1,12 +1,16 @@
+import { createHash } from "node:crypto";
 import {
   ensureRedisReady,
   getRedisClient,
   isRedisEnabled,
+  type RedisLike,
   resetRedisClientForTests,
 } from "../redis";
 import { safeLog } from "../messengerApi";
 
 const WEBHOOK_INGRESS_QUEUE_KEY = "meta-webhook-ingress";
+const WEBHOOK_INGRESS_PROCESSING_KEY = "meta-webhook-ingress:processing";
+const DEFAULT_WEBHOOK_INGRESS_DELIVERY_LEASE_SECONDS = 15 * 60;
 
 type WebhookChannel = "facebook" | "whatsapp";
 
@@ -14,6 +18,11 @@ type QueuedWebhookDelivery = {
   channel: WebhookChannel;
   payload: unknown;
   receivedAt: string;
+};
+
+type ReservedWebhookDelivery = {
+  raw: string;
+  delivery: QueuedWebhookDelivery;
 };
 
 let drainPromise: Promise<void> | null = null;
@@ -27,6 +36,40 @@ function serializeError(error: unknown): { message: string; stack?: string } {
   }
 
   return { message: String(error) };
+}
+
+function getWebhookIngressDeliveryLeaseSeconds(): number {
+  const configured = Number(process.env.WEBHOOK_INGRESS_DELIVERY_LEASE_SECONDS);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.floor(configured)
+    : DEFAULT_WEBHOOK_INGRESS_DELIVERY_LEASE_SECONDS;
+}
+
+function getWebhookIngressDeliveryLeaseKey(rawDelivery: string): string {
+  const digest = createHash("sha256").update(rawDelivery).digest("hex");
+  return `meta-webhook-ingress-lease:${digest}`;
+}
+
+function parseQueuedWebhookDelivery(
+  rawDelivery: string
+): QueuedWebhookDelivery | null {
+  try {
+    const parsed = JSON.parse(rawDelivery) as Partial<QueuedWebhookDelivery>;
+    if (
+      (parsed.channel === "facebook" || parsed.channel === "whatsapp") &&
+      typeof parsed.receivedAt === "string"
+    ) {
+      return {
+        channel: parsed.channel,
+        payload: parsed.payload,
+        receivedAt: parsed.receivedAt,
+      };
+    }
+  } catch {
+    // Invalid queue payloads are handled by the caller.
+  }
+
+  return null;
 }
 
 async function processWhatsAppWebhookPayloadSafely(
@@ -78,7 +121,7 @@ export async function ensureWebhookIngressQueueReady(): Promise<void> {
 
 export async function enqueueWebhookIngressDelivery(
   channel: WebhookChannel,
-  payload: unknown,
+  payload: unknown
 ): Promise<void> {
   const redis = await getRedisClient();
   const delivery: QueuedWebhookDelivery = {
@@ -90,6 +133,71 @@ export async function enqueueWebhookIngressDelivery(
   await redis.rpush(WEBHOOK_INGRESS_QUEUE_KEY, JSON.stringify(delivery));
 }
 
+async function reserveWebhookIngressDelivery(
+  redis: RedisLike
+): Promise<ReservedWebhookDelivery | { raw: string; invalid: true } | null> {
+  const raw = await redis.lmove(
+    WEBHOOK_INGRESS_QUEUE_KEY,
+    WEBHOOK_INGRESS_PROCESSING_KEY,
+    "LEFT",
+    "RIGHT"
+  );
+  if (!raw) {
+    return null;
+  }
+
+  await redis.set(
+    getWebhookIngressDeliveryLeaseKey(raw),
+    "1",
+    "EX",
+    getWebhookIngressDeliveryLeaseSeconds()
+  );
+
+  const delivery = parseQueuedWebhookDelivery(raw);
+  if (!delivery) {
+    return { raw, invalid: true };
+  }
+
+  return { raw, delivery };
+}
+
+async function completeWebhookIngressDelivery(
+  redis: RedisLike,
+  raw: string
+): Promise<void> {
+  await redis.lrem(WEBHOOK_INGRESS_PROCESSING_KEY, 1, raw);
+  await redis.del(getWebhookIngressDeliveryLeaseKey(raw));
+}
+
+async function reclaimExpiredWebhookIngressDeliveries(
+  redis: RedisLike
+): Promise<number> {
+  const processingDeliveries = await redis.lrange(
+    WEBHOOK_INGRESS_PROCESSING_KEY,
+    0,
+    -1
+  );
+  let reclaimed = 0;
+
+  for (const raw of processingDeliveries) {
+    if ((await redis.get(getWebhookIngressDeliveryLeaseKey(raw))) !== null) {
+      continue;
+    }
+
+    const removed = await redis.lrem(WEBHOOK_INGRESS_PROCESSING_KEY, 1, raw);
+    if (removed > 0) {
+      await redis.lpush(WEBHOOK_INGRESS_QUEUE_KEY, raw);
+      reclaimed += 1;
+    }
+  }
+
+  if (reclaimed > 0) {
+    safeLog("webhook_ingress_deliveries_reclaimed", { count: reclaimed });
+  }
+
+  return reclaimed;
+}
+
 export function scheduleWebhookIngressDrain(): void {
   if (!isWebhookIngressQueueEnabled()) {
     return;
@@ -99,21 +207,28 @@ export function scheduleWebhookIngressDrain(): void {
     drainPromise = (async () => {
       try {
         const redis = await getRedisClient();
+        await reclaimExpiredWebhookIngressDeliveries(redis);
 
         while (true) {
-          const rawDelivery = await redis.lpop(WEBHOOK_INGRESS_QUEUE_KEY);
-          if (!rawDelivery) {
+          const reserved = await reserveWebhookIngressDelivery(redis);
+          if (!reserved) {
             return;
           }
 
           try {
-            await processQueuedWebhookDelivery(
-              JSON.parse(rawDelivery) as QueuedWebhookDelivery,
-            );
+            if ("invalid" in reserved) {
+              safeLog("webhook_queued_delivery_invalid", {});
+              await completeWebhookIngressDelivery(redis, reserved.raw);
+              continue;
+            }
+
+            await processQueuedWebhookDelivery(reserved.delivery);
+            await completeWebhookIngressDelivery(redis, reserved.raw);
           } catch (error) {
             safeLog("webhook_queued_delivery_failed", {
               error: serializeError(error),
             });
+            await completeWebhookIngressDelivery(redis, reserved.raw);
           }
         }
       } catch (error) {
@@ -129,20 +244,19 @@ export function scheduleWebhookIngressDrain(): void {
 
 export function processWebhookDeliveryInline(
   channel: WebhookChannel,
-  payload: unknown,
+  payload: unknown
 ): void {
   setImmediate(() => {
     void processQueuedWebhookDelivery({
       channel,
       payload,
       receivedAt: new Date().toISOString(),
-    })
-      .catch(error => {
-        safeLog("webhook_async_processing_failed", {
-          channel,
-          error: serializeError(error),
-        });
+    }).catch(error => {
+      safeLog("webhook_async_processing_failed", {
+        channel,
+        error: serializeError(error),
       });
+    });
   });
 }
 
