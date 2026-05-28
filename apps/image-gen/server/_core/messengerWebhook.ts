@@ -1,6 +1,7 @@
 import { normalizeLang, t, type Lang } from "./i18n";
 import { createWebhookHandlers } from "./webhookHandlers";
 import { resetWebhookReplayProtection } from "./webhookReplayProtection";
+import type { MessengerGenerationJob } from "./messengerGenerationJob";
 export { processWhatsAppWebhookPayload } from "./whatsappWebhook";
 
 const PRIVACY_POLICY_URL = process.env.PRIVACY_POLICY_URL?.trim() || "<link>";
@@ -29,4 +30,10 @@ export async function processInternalMessengerImageRequest(input: {
   timestamp?: number;
 }): Promise<void> {
   await handlers.processInternalMessengerImageRequest(input);
+}
+
+export async function processMessengerGenerationJob(
+  input: MessengerGenerationJob
+): Promise<void> {
+  await handlers.processMessengerGenerationJob(input);
 }

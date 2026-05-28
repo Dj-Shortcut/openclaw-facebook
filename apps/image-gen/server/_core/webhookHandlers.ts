@@ -97,6 +97,11 @@ import {
 } from "./webhookPayloadBranch";
 import { emitGenerationDiagnostic } from "./generationDiagnostics";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
+import type { MessengerGenerationJob } from "./messengerGenerationJob";
+import {
+  enqueueOrRunMessengerGenerationJob,
+  isMessengerGenerationQueueEnabled,
+} from "./messengerGenerationQueue";
 
 type HandlerDeps = {
   defaultLang: Lang;
@@ -1437,16 +1442,19 @@ export function createWebhookHandlers({
     return await sendLoggedText(psid, text, reqId);
   }
 
-  async function runStyleGeneration(
-    psid: string,
-    userId: string,
-    style: Style,
-    reqId: string,
-    lang: Lang,
-    sourceImageUrl?: string,
-    promptHint?: string,
-    directorMode?: DirectorMode
+  async function executeStyleGenerationJob(
+    job: MessengerGenerationJob
   ): Promise<MessengerSendOutcome> {
+    const {
+      psid,
+      userId,
+      style,
+      reqId,
+      lang,
+      sourceImageUrl,
+      promptHint,
+      directorMode,
+    } = job;
     let sendOutcome: MessengerSendOutcome = MESSENGER_SEND_SKIPPED;
     const rememberSendOutcome = (outcome: MessengerSendOutcome) => {
       sendOutcome = combineMessengerSendOutcomes(sendOutcome, outcome);
@@ -1678,6 +1686,45 @@ export function createWebhookHandlers({
     return sendOutcome;
   }
 
+  async function runStyleGeneration(
+    psid: string,
+    userId: string,
+    style: Style,
+    reqId: string,
+    lang: Lang,
+    sourceImageUrl?: string,
+    promptHint?: string,
+    directorMode?: DirectorMode
+  ): Promise<MessengerSendOutcome> {
+    const job: MessengerGenerationJob = {
+      psid,
+      userId,
+      style,
+      reqId,
+      lang,
+      sourceImageUrl,
+      promptHint,
+      directorMode,
+    };
+    const result = await enqueueOrRunMessengerGenerationJob(
+      job,
+      executeStyleGenerationJob
+    );
+
+    if (result.mode === "inline") {
+      return result.outcome as MessengerSendOutcome;
+    }
+
+    await setFlowState(psid, "PROCESSING");
+    safeLog("messenger_generation_job_queued", {
+      reqId,
+      user: toLogUser(userId),
+      style,
+      queueEnabled: isMessengerGenerationQueueEnabled(),
+    });
+    return MESSENGER_SEND_SKIPPED;
+  }
+
   async function handleStyleSelection(
     psid: string,
     userId: string,
@@ -1852,8 +1899,15 @@ export function createWebhookHandlers({
     );
   }
 
+  async function processMessengerGenerationJob(
+    input: MessengerGenerationJob
+  ): Promise<MessengerSendOutcome> {
+    return await executeStyleGenerationJob(input);
+  }
+
   return {
     processFacebookWebhookPayload,
     processInternalMessengerImageRequest,
+    processMessengerGenerationJob,
   };
 }

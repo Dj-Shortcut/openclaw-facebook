@@ -1,0 +1,159 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const { getRedisClientMock, isRedisEnabledMock } = vi.hoisted(() => ({
+  getRedisClientMock: vi.fn(),
+  isRedisEnabledMock: vi.fn(() => false),
+}));
+
+vi.mock("./_core/redis", () => ({
+  getRedisClient: getRedisClientMock,
+  isRedisEnabled: isRedisEnabledMock,
+}));
+
+import {
+  drainMessengerGenerationQueue,
+  enqueueMessengerGenerationJob,
+  enqueueOrRunMessengerGenerationJob,
+  isMessengerGenerationQueueEnabled,
+  reclaimReservedMessengerGenerationJobs,
+  resetMessengerGenerationQueueForTests,
+} from "./_core/messengerGenerationQueue";
+import type { MessengerGenerationJob } from "./_core/messengerGenerationJob";
+
+function createJob(overrides: Partial<MessengerGenerationJob> = {}): MessengerGenerationJob {
+  return {
+    psid: "psid-1",
+    userId: "user-1",
+    style: "gold",
+    reqId: "req-1",
+    lang: "nl",
+    ...overrides,
+  };
+}
+
+describe("messengerGenerationQueue", () => {
+  const originalQueueEnabled = process.env.MESSENGER_GENERATION_QUEUE_ENABLED;
+  const originalInlineFallback = process.env.MESSENGER_GENERATION_INLINE_FALLBACK;
+  const originalWorker = process.env.MESSENGER_GENERATION_WORKER;
+
+  afterEach(() => {
+    if (originalQueueEnabled === undefined) {
+      delete process.env.MESSENGER_GENERATION_QUEUE_ENABLED;
+    } else {
+      process.env.MESSENGER_GENERATION_QUEUE_ENABLED = originalQueueEnabled;
+    }
+    if (originalInlineFallback === undefined) {
+      delete process.env.MESSENGER_GENERATION_INLINE_FALLBACK;
+    } else {
+      process.env.MESSENGER_GENERATION_INLINE_FALLBACK = originalInlineFallback;
+    }
+    if (originalWorker === undefined) {
+      delete process.env.MESSENGER_GENERATION_WORKER;
+    } else {
+      process.env.MESSENGER_GENERATION_WORKER = originalWorker;
+    }
+    getRedisClientMock.mockReset();
+    isRedisEnabledMock.mockReset();
+    isRedisEnabledMock.mockReturnValue(false);
+    resetMessengerGenerationQueueForTests();
+  });
+
+  it("stays disabled unless both the flag and Redis are present", () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    isRedisEnabledMock.mockReturnValue(false);
+    expect(isMessengerGenerationQueueEnabled()).toBe(false);
+
+    isRedisEnabledMock.mockReturnValue(true);
+    expect(isMessengerGenerationQueueEnabled()).toBe(true);
+  });
+
+  it("runs inline when queueing is disabled", async () => {
+    const processor = vi.fn(async () => "done");
+    const result = await enqueueOrRunMessengerGenerationJob(createJob(), processor);
+
+    expect(result).toEqual({ mode: "inline", outcome: "done" });
+    expect(processor).toHaveBeenCalledWith(createJob());
+    expect(getRedisClientMock).not.toHaveBeenCalled();
+  });
+
+  it("enqueues and drains Redis jobs", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const queue: string[] = [];
+    const processing: string[] = [];
+    const redis = {
+      lpush: vi.fn(async (key: string, value: string) => {
+        if (key.endsWith(":processing")) {
+          processing.unshift(value);
+        } else {
+          queue.unshift(value);
+        }
+        return queue.length;
+      }),
+      lrange: vi.fn(async () => processing),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      rpoplpush: vi.fn(async () => {
+        const value = queue.pop() ?? null;
+        if (value) {
+          processing.unshift(value);
+        }
+        return value;
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+
+    const job = createJob({ reqId: "req-queued" });
+    await enqueueMessengerGenerationJob(job);
+    const processor = vi.fn(async () => undefined);
+    await drainMessengerGenerationQueue(processor);
+
+    expect(redis.lpush).toHaveBeenCalledWith(
+      "messenger-generation-jobs",
+      JSON.stringify(job)
+    );
+    expect(redis.rpoplpush).toHaveBeenCalledWith(
+      "messenger-generation-jobs",
+      "messenger-generation-jobs:processing"
+    );
+    expect(redis.lrem).toHaveBeenCalledWith(
+      "messenger-generation-jobs:processing",
+      1,
+      JSON.stringify(job)
+    );
+    expect(processor).toHaveBeenCalledWith(job);
+    expect(processing).toEqual([]);
+  });
+
+  it("reclaims reserved jobs into the pending queue", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    isRedisEnabledMock.mockReturnValue(true);
+    const reserved = JSON.stringify(createJob({ reqId: "req-reserved" }));
+    const queue: string[] = [];
+    const processing = [reserved];
+    const redis = {
+      lrange: vi.fn(async () => [...processing]),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      lpush: vi.fn(async (_key: string, value: string) => {
+        queue.unshift(value);
+        return queue.length;
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await expect(reclaimReservedMessengerGenerationJobs()).resolves.toBe(1);
+
+    expect(processing).toEqual([]);
+    expect(queue).toEqual([reserved]);
+  });
+});
