@@ -51,6 +51,10 @@ import {
   registerMetricsRoute,
 } from "./observability";
 import {
+  buildRuntimeReadinessChecks,
+  createReadinessHandler,
+} from "./readiness";
+import {
   assertIdentityGameVariantCatalog,
   registerIdentityGameShareRoutes,
 } from "./identityGameVariants";
@@ -416,6 +420,7 @@ async function startServer() {
   };
   app.get("/health", healthHandler);
   app.get("/healthz", healthHandler);
+  app.get("/readyz", createReadinessHandler(buildRuntimeReadinessChecks()));
 
   app.get("/__version", (_req, res) => {
     res.status(200).json(buildVersionPayload());

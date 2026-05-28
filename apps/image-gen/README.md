@@ -33,7 +33,7 @@ ASCII version:
                     | Routes:                          |
                     | - /webhook/facebook              |
                     | - /api/trpc                      |
-                    | - /healthz, /__version, /metrics|
+                    | - /healthz, /readyz, /__version, /metrics|
                     | - /generated/*         |
                     +----+---------------+-------------+
                          |               |
@@ -73,7 +73,7 @@ flowchart TD
     subgraph lb["Leaderbot Server (Node/Express)"]
         wh["/webhook/facebook"]
         trpc["/api/trpc"]
-        ops["/healthz, /__version, /metrics, /generated/*"]
+        ops["/healthz, /readyz, /__version, /metrics, /generated/*"]
         handlers["Webhook handlers<br/>signature check, dedupe, i18n,<br/>state transitions, quota checks"]
         img["Image service<br/>OpenAI"]
     end
@@ -269,6 +269,7 @@ Useful checks while developing:
 
 ```bash
 curl http://localhost:8080/healthz
+curl http://localhost:8080/readyz
 curl http://localhost:8080/__version
 curl http://localhost:8080/metrics
 ```
@@ -376,7 +377,7 @@ Operational notes:
 - `NODE_ENV=production` and `PORT=8080` are expected in runtime.
 - `REDIS_URL` must be set in Fly secrets before deploy; production startup now fails without it.
 - `WHATSAPP_ACCESS_TOKEN` and `WHATSAPP_PHONE_NUMBER_ID` must be set in Fly secrets before deploy; startup now fails when either is missing.
-- Health check endpoint is `/healthz`.
+- Liveness endpoint is `/healthz`; dependency readiness is exposed at `/readyz`.
 - `/metrics` exposes Prometheus-style request counters and latency histograms.
 - `/admin/disable-face-memory` is protected by `ADMIN_TOKEN` and clears retained face-memory state for emergency rollback.
 - Each request carries an `X-Request-Id` header for simple request tracing across logs and downstream calls.
@@ -413,6 +414,7 @@ Worker-related env:
 
 Production verification checklist:
 
+- Confirm `/readyz` returns `ok: true` on gateway instances after deploy; failures report dependency names and redacted error classes only.
 - Confirm `GENERATOR_STARTUP_CONFIG.messengerGenerationGlobalLimit.redisBacked=true` on both gateway and worker logs before horizontal scaling.
 - Confirm `/metrics` shows `messenger_generation_queue_enabled 1`, stable `messenger_generation_queue_jobs{state="queued"}`, and `messenger_generation_global_slots{state="active"}` below `state="max"` during normal load.
 - Confirm `webhook_ack_sent` p95/p99 stays under 500ms after enabling Redis ingress queue and before increasing gateway instance count.
