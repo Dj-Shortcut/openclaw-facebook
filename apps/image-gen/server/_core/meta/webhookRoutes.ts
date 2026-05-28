@@ -11,6 +11,7 @@ import {
   processWebhookDeliveryInline,
   scheduleWebhookIngressDrain,
 } from "./webhookIngressQueue";
+import { recordWebhookAckMetric } from "../observability";
 
 const webhookVerificationQuerySchema = z.object({
   "hub.mode": z.literal("subscribe"),
@@ -102,13 +103,15 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
     );
     const ack = (channel: "facebook" | "whatsapp", mode: string) => {
       res.sendStatus(200);
+      const ackMs = Date.now() - receivedAt;
+      recordWebhookAckMetric(channel, mode, ackMs);
       console.info(
         JSON.stringify({
           level: "info",
           msg: "webhook_ack_sent",
           channel,
           mode,
-          ackMs: Date.now() - receivedAt,
+          ackMs,
         })
       );
     };

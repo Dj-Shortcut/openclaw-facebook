@@ -7,6 +7,7 @@ import {
   getRequestId,
   getTraceContext,
   recordHttpRequestMetric,
+  recordWebhookAckMetric,
   registerMetricsRoute,
 } from "./_core/observability";
 import { bindTestHttpServer } from "./testHttpServer";
@@ -100,6 +101,7 @@ describe("observability", () => {
   });
 
   it("exposes Prometheus-style HTTP metrics", async () => {
+    recordWebhookAckMetric("facebook", "queued", 123);
     const server = await startServer(app => {
       app.get("/ok", (_req, res) => {
         res.status(200).json({ ok: true });
@@ -116,6 +118,10 @@ describe("observability", () => {
       expect(body).toContain("http_requests_total");
       expect(body).toContain('path="/ok"');
       expect(body).toContain("http_request_duration_seconds_bucket");
+      expect(body).toContain("webhook_ack_duration_seconds_bucket");
+      expect(body).toContain('webhook_ack_duration_seconds_bucket{channel="facebook",mode="queued",le="0.25"} 1');
+      expect(body).toContain('webhook_ack_duration_seconds_sum{channel="facebook",mode="queued"} 0.123000');
+      expect(body).toContain('webhook_ack_duration_seconds_count{channel="facebook",mode="queued"} 1');
       expect(body).toContain("messenger_generation_queue_enabled 0");
       expect(body).toContain('messenger_generation_queue_jobs{state="queued"} 0');
       expect(body).toContain('messenger_generation_queue_jobs{state="processing"} 0');

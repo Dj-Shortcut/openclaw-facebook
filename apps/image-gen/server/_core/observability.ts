@@ -18,10 +18,18 @@ type MetricKey = {
   status: string;
 };
 
+type WebhookAckMetricKey = {
+  channel: string;
+  mode: string;
+};
+
 const requestCounters = new Map<string, number>();
 const durationSums = new Map<string, number>();
 const durationCounts = new Map<string, number>();
 const durationBuckets = new Map<string, number>();
+const webhookAckDurationSums = new Map<string, number>();
+const webhookAckDurationCounts = new Map<string, number>();
+const webhookAckDurationBuckets = new Map<string, number>();
 const latencyBucketBoundariesMs = [50, 100, 250, 500, 1000, 2500, 5000];
 const TRACEPARENT_REGEX = /^00-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$/i;
 
@@ -39,6 +47,14 @@ function metricLabelKey({ method, path, status }: MetricKey): string {
 
 function durationBucketKey(method: string, path: string, le: string): string {
   return `method="${escapeLabelValue(method)}",path="${escapeLabelValue(path)}",le="${escapeLabelValue(le)}"`;
+}
+
+function webhookAckMetricLabelKey({ channel, mode }: WebhookAckMetricKey): string {
+  return `channel="${escapeLabelValue(channel)}",mode="${escapeLabelValue(mode)}"`;
+}
+
+function webhookAckDurationBucketKey(channel: string, mode: string, le: string): string {
+  return `channel="${escapeLabelValue(channel)}",mode="${escapeLabelValue(mode)}",le="${escapeLabelValue(le)}"`;
 }
 
 function incrementMetric(map: Map<string, number>, key: string, delta = 1): void {
@@ -88,6 +104,19 @@ export function recordHttpRequestMetric(method: string, path: string, statusCode
     }
   }
   incrementMetric(durationBuckets, durationBucketKey(method, normalizedPath, "+Inf"));
+}
+
+export function recordWebhookAckMetric(channel: string, mode: string, durationMs: number): void {
+  const labels = webhookAckMetricLabelKey({ channel, mode });
+  incrementMetric(webhookAckDurationSums, labels, durationMs / 1000);
+  incrementMetric(webhookAckDurationCounts, labels);
+
+  for (const bucketMs of latencyBucketBoundariesMs) {
+    if (durationMs <= bucketMs) {
+      incrementMetric(webhookAckDurationBuckets, webhookAckDurationBucketKey(channel, mode, String(bucketMs / 1000)));
+    }
+  }
+  incrementMetric(webhookAckDurationBuckets, webhookAckDurationBucketKey(channel, mode, "+Inf"));
 }
 
 async function renderMessengerGenerationQueueMetrics(): Promise<string[]> {
@@ -148,6 +177,21 @@ async function renderPrometheusMetrics(): Promise<string> {
     lines.push(`http_request_duration_seconds_count{${labels}} ${value}`);
   }
 
+  lines.push("# HELP webhook_ack_duration_seconds Webhook acknowledgement latency in seconds");
+  lines.push("# TYPE webhook_ack_duration_seconds histogram");
+
+  for (const [labels, value] of webhookAckDurationBuckets.entries()) {
+    lines.push(`webhook_ack_duration_seconds_bucket{${labels}} ${value}`);
+  }
+
+  for (const [labels, value] of webhookAckDurationSums.entries()) {
+    lines.push(`webhook_ack_duration_seconds_sum{${labels}} ${value.toFixed(6)}`);
+  }
+
+  for (const [labels, value] of webhookAckDurationCounts.entries()) {
+    lines.push(`webhook_ack_duration_seconds_count{${labels}} ${value}`);
+  }
+
   lines.push(...await renderMessengerGenerationQueueMetrics());
 
   return `${lines.join("\n")}\n`;
@@ -164,6 +208,9 @@ function resetObservabilityMetrics(): void {
   durationSums.clear();
   durationCounts.clear();
   durationBuckets.clear();
+  webhookAckDurationSums.clear();
+  webhookAckDurationCounts.clear();
+  webhookAckDurationBuckets.clear();
 }
 
 function parseOrCreateTraceContext(traceparentHeader: string | undefined) {
