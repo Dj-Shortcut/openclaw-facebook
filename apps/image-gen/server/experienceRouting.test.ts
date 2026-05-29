@@ -82,26 +82,33 @@ describe("identity-ai-v1 routing", () => {
     expect(state?.stage).toBe("IDLE");
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
-      "When a new AI tool drops, what do you do first?",
+      [
+        "When a new AI tool drops, what do you do first?",
+        "1. Open it and start making something",
+        "2. Imagine what it could become",
+        "3. Figure out how it actually works",
+        "4. See where it fits in a system",
+        "Tap a number below:",
+      ].join("\n"),
       [
         {
           content_type: "text",
-          title: "Open it and start making something",
+          title: "1",
           payload: "q1_build",
         },
         {
           content_type: "text",
-          title: "Imagine what it could become",
+          title: "2",
           payload: "q1_vision",
         },
         {
           content_type: "text",
-          title: "Figure out how it actually works",
+          title: "3",
           payload: "q1_analyst",
         },
         {
           content_type: "text",
-          title: "See where it fits in a system",
+          title: "4",
           payload: "q1_operate",
         },
       ]
@@ -138,12 +145,12 @@ describe("identity-ai-v1 routing", () => {
 
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
-      "When a new AI tool drops, what do you do first?",
+      expect.stringContaining("Tap a number below:"),
       expect.arrayContaining([
-        expect.objectContaining({ payload: "q1_build" }),
-        expect.objectContaining({ payload: "q1_vision" }),
-        expect.objectContaining({ payload: "q1_analyst" }),
-        expect.objectContaining({ payload: "q1_operate" }),
+        expect.objectContaining({ title: "1", payload: "q1_build" }),
+        expect.objectContaining({ title: "2", payload: "q1_vision" }),
+        expect.objectContaining({ title: "3", payload: "q1_analyst" }),
+        expect.objectContaining({ title: "4", payload: "q1_operate" }),
       ])
     );
     expect(sendTextMock).not.toHaveBeenCalledWith(
@@ -651,8 +658,10 @@ describe("identity-ai-v1 routing", () => {
 
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
-      "That answer does not match one of the 4 choices.\n\nWhen a new AI tool drops, what do you do first?",
-      expect.any(Array)
+      expect.stringContaining("Tap a number below:"),
+      expect.arrayContaining([
+        expect.objectContaining({ title: "1", payload: "q1_build" }),
+      ])
     );
     expect(sendTextMock).not.toHaveBeenCalledWith(
       psid,

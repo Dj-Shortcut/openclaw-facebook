@@ -213,14 +213,16 @@ function createMessengerRouteDeps(context: TrackedEventContext) {
     },
     sendOptionsPrompt: async (
       prompt: string,
-      options: Array<{ id: string; title: string }>
+      options: Array<{ id: string; title: string }>,
+      _fallbackLogName: string | undefined,
+      fallbackText: string | undefined
     ) => {
       await trackedCtx.sendLoggedQuickReplies(
         psid,
-        prompt,
-        options.map(option => ({
+        formatMessengerOptionsPromptText(prompt, options, fallbackText),
+        options.map((option, index) => ({
           content_type: "text",
-          title: option.title,
+          title: String(index + 1),
           payload: option.id,
         })),
         reqId
@@ -235,6 +237,27 @@ function createMessengerRouteDeps(context: TrackedEventContext) {
     setActiveExperience: (nextActiveExperience: ActiveExperience | null) =>
       Promise.resolve(setActiveExperience(psid, nextActiveExperience)),
   };
+}
+
+function formatMessengerOptionsPromptText(
+  prompt: string,
+  options: Array<{ id: string; title: string }>,
+  fallbackText: string | undefined
+): string {
+  const text =
+    fallbackText?.trim() ||
+    [prompt, ...options.map((option, index) => `${index + 1}. ${option.title}`)]
+      .join("\n");
+
+  return text
+    .replace(
+      /Reply with one of these exact options:/g,
+      "Tap a number below:"
+    )
+    .replace(
+      /Antwoord met een van deze exacte opties:/g,
+      "Tik op een nummer hieronder:"
+    );
 }
 
 async function finishSelectedBranch(
