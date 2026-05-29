@@ -822,7 +822,7 @@ async function tryHandleImageMessage(
     hadPreviousPhoto: imageDecision.hadPreviousPhoto,
     incomingImageUrl: imageDecision.incomingImageUrl,
     selectedStyle: state.selectedStyle,
-    preselectedStyle: imageDecision.preselectedStyle,
+    preselectedStyle: imageDecision.styleToRun,
     action: imageDecision.action,
   });
 
@@ -831,11 +831,11 @@ async function tryHandleImageMessage(
     imageDecision.action === "auto_run_selected_style"
   ) {
     await setPreselectedStyle(input.psid, null);
-    await setChosenStyle(input.psid, imageDecision.preselectedStyle);
+    await setChosenStyle(input.psid, imageDecision.styleToRun);
     await ctx.runStyleGeneration(
       input.psid,
       input.userId,
-      imageDecision.preselectedStyle,
+      imageDecision.styleToRun,
       input.reqId,
       input.lang
     );

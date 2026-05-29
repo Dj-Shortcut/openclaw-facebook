@@ -43,19 +43,19 @@ export type StoredMessengerImageDecision =
       action: "show_style_picker";
       hadPreviousPhoto: boolean;
       incomingImageUrl: string;
-      preselectedStyle: null;
+      styleToRun: null;
     }
   | {
       action: "auto_run_preselected_style";
       hadPreviousPhoto: boolean;
       incomingImageUrl: string;
-      preselectedStyle: Style;
+      styleToRun: Style;
     }
   | {
       action: "auto_run_selected_style";
       hadPreviousPhoto: boolean;
       incomingImageUrl: string;
-      preselectedStyle: Style;
+      styleToRun: Style;
     };
 
 export function getStoredMessengerImageDecision(
@@ -70,7 +70,7 @@ export function getStoredMessengerImageDecision(
       action: "auto_run_preselected_style",
       hadPreviousPhoto,
       incomingImageUrl: input.storedSourceImageUrl,
-      preselectedStyle,
+      styleToRun: preselectedStyle,
     };
   }
 
@@ -79,7 +79,7 @@ export function getStoredMessengerImageDecision(
       action: "auto_run_selected_style",
       hadPreviousPhoto,
       incomingImageUrl: input.storedSourceImageUrl,
-      preselectedStyle: selectedStyle,
+      styleToRun: selectedStyle,
     };
   }
 
@@ -87,6 +87,6 @@ export function getStoredMessengerImageDecision(
     action: "show_style_picker",
     hadPreviousPhoto,
     incomingImageUrl: input.storedSourceImageUrl,
-    preselectedStyle: null,
+    styleToRun: null,
   };
 }
