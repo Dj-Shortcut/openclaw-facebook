@@ -1,0 +1,25 @@
+# Repository Coverage Ledger
+
+| Row | Boundary / Area | Family | Files Checked | Disposition | Candidate | Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| RW-001 | Root OpenClaw Facebook plugin webhook routing | Authz / object binding | `src/monitor.ts`, `src/webhook.ts`, `src/signature.ts` | reportable | CAND-001 | Single-target fallback accepts nonmatching `recipient.id` after valid signature. |
+| RW-002 | Root OpenClaw Facebook plugin webhook signature | Signature bypass | `src/webhook.ts`, `src/signature.ts`, `src/monitor.ts` | suppressed | | Raw body HMAC-SHA256, `sha256=` prefix, length check, `timingSafeEqual`. |
+| RW-003 | Root OpenClaw Facebook plugin media handling | SSRF / file write | `src/monitor.ts` | suppressed | | HTTPS plus Facebook/FBCDN/FBSBX host allowlist; content-kind check; bounded byte limits; digest-derived filename. |
+| RW-004 | Root OpenClaw Facebook token/config handling | Secret disclosure / path | `src/accounts.ts`, `src/status.ts`, `openclaw.plugin.json` | suppressed | | Secret file reads use SDK helper with symlink rejection; status exposes token source, not token value. |
+| RW-005 | App Meta webhook POST ingress | Signature bypass | `apps/image-gen/server/_core/index.ts`, `webhookSignatureVerification.ts`, `meta/webhookRoutes.ts` | suppressed | | Raw body capture precedes HMAC verification and route registration; failures close. |
+| RW-006 | App Facebook webhook event processing | Replay | `apps/image-gen/server/_core/webhookHandlers.ts`, `webhookReplayProtection.ts` | suppressed | | `claimEventReplayOrLog` calls `claimWebhookReplayKey` before Facebook event handling. |
+| RW-007 | App WhatsApp webhook event processing | Replay | `apps/image-gen/server/_core/whatsappWebhook.ts`, `meta/webhookRoutes.ts` | reportable | CAND-002 | WhatsApp events process without replay key claim. |
+| RW-008 | App internal routes | Missing auth | `apps/image-gen/server/_core/internalImageRequestRoutes.ts` | suppressed | | Internal image/webhook-event routes require bearer token before side effects. |
+| RW-009 | App admin/debug route | Missing auth / brute force | `apps/image-gen/server/_core/adminAuth.ts`, `index.ts` | suppressed | | `/debug/build` requires admin token, rate limit, and timing-safe compare. |
+| RW-010 | App OAuth/session | CSRF/session fixation | `apps/image-gen/server/_core/oauth.ts`, `cookies.ts`, `sdk.ts`, `env.ts` | suppressed | | OAuth callback validates state nonce cookie; JWT secret length asserted; cookies httpOnly and secure on HTTPS. |
+| RW-011 | App tRPC admin action | Authz / IDOR | `apps/image-gen/server/routers.ts`, `systemRouter.ts`, `trpc.ts`, `context.ts` | suppressed | | Only privileged mutation uses `adminProcedure`; public procedures are `me`, logout, and health. |
+| RW-012 | App database/query layer | SQL injection | `apps/image-gen/server/db.ts`, `drizzle/schema.ts`, `stateStore.ts` | suppressed | | Drizzle builders and parameter interpolation used in reviewed queries. |
+| RW-013 | App Messenger source-image fetch | SSRF / DoS | `apps/image-gen/server/_core/image-generation/sourceImageFetcher.ts`, `sourceImageStore.ts`, `imageService.ts` | suppressed | | HTTPS, exact env allowlist, no credentials, standard port, no redirects, public DNS precheck, size limits. |
+| RW-014 | App WhatsApp media fetch | Resource exhaustion | `apps/image-gen/server/_core/whatsappApi.ts`, `whatsappHandlers/imageHandler.ts` | reportable | CAND-005 | Full `arrayBuffer()` without local content-length, streaming, or timeout limit. |
+| RW-015 | App WhatsApp generation quota | Race / resource abuse | `apps/image-gen/server/_core/whatsappFlows/styleGenerationFlow.ts`, `messengerQuota.ts`, `generationGuard.ts` | reportable | CAND-003 | Quota check and increment are split across generation; no per-sender guard in WhatsApp path. |
+| RW-016 | App Messenger generation quota | Race / resource abuse | `apps/image-gen/server/_core/webhookHandlers.ts`, `generationGuard.ts` | suppressed | | Messenger generation is wrapped in `runGuardedGeneration`; quota check occurs inside lock. |
+| RW-017 | App user deletion and face memory | Privacy retention | `apps/image-gen/server/_core/dataDeletionService.ts`, `faceMemory.ts`, `storage.ts` | reportable | CAND-004 | Storage delete failures are swallowed; final state clear erases retry markers. |
+| RW-018 | App client rendering | XSS | `apps/image-gen/client/src/pages/*`, `components/**/*`, `hooks/*` | suppressed | | No `dangerouslySetInnerHTML` or current user-data rendering sink found in reviewed UI. |
+| RW-019 | Remaining generated worklist rows | Multiple | `artifacts/02_discovery/deep_review_input.csv` rows outside completed shard receipts | deferred | | Not individually full-file reviewed in this run; high-impact runtime/security shards above were prioritized. |
+
+Deferred follow-up should focus on individually closing the remaining 281-row worklist entries that are not named in the completed shard receipts, especially ancillary workers, scripts, notification paths, static serving variants, and less central UI/server modules.
