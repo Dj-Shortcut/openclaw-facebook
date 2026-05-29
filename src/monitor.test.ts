@@ -9,6 +9,7 @@ import {
   resolveMessengerSourceImageGenerationPrompt,
   resolveMessengerVerificationTarget,
   sanitizeMessengerSourceImageUrl,
+  shouldForwardMessengerImageOnlyEventToImageGen,
   shouldProcessMessengerMessageOnce,
   type MessengerWebhookTarget,
 } from "./monitor.js";
@@ -261,6 +262,38 @@ describe("resolveMessengerSourceImageGenerationPrompt", () => {
         text: "Restyle deze foto",
       }),
     ).toBeNull();
+  });
+});
+
+describe("shouldForwardMessengerImageOnlyEventToImageGen", () => {
+  it("forwards photo-only uploads so image-gen can store the source image", () => {
+    expect(
+      shouldForwardMessengerImageOnlyEventToImageGen({
+        hasSourceImage: true,
+        text: "",
+      }),
+    ).toBe(true);
+    expect(
+      shouldForwardMessengerImageOnlyEventToImageGen({
+        hasSourceImage: true,
+        text: "   ",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps captioned images in the existing gateway routing unless explicitly generated", () => {
+    expect(
+      shouldForwardMessengerImageOnlyEventToImageGen({
+        hasSourceImage: true,
+        text: "What do you see in this photo?",
+      }),
+    ).toBe(false);
+    expect(
+      shouldForwardMessengerImageOnlyEventToImageGen({
+        hasSourceImage: false,
+        text: "",
+      }),
+    ).toBe(false);
   });
 });
 

@@ -522,6 +522,13 @@ export function resolveMessengerSourceImageGenerationPrompt(params: {
   return prompt;
 }
 
+export function shouldForwardMessengerImageOnlyEventToImageGen(params: {
+  hasSourceImage: boolean;
+  text: string;
+}): boolean {
+  return params.hasSourceImage && !params.text.trim();
+}
+
 export function resolveMessengerFastLaneReply(
   text: string,
 ): { intent: MessengerFastLaneIntent; reply: string } | null {
@@ -880,6 +887,20 @@ async function processMessengerEvent(params: {
       hasSourceImage: Boolean(sourceImageAttachment),
       text,
     });
+    if (
+      shouldForwardMessengerImageOnlyEventToImageGen({
+        hasSourceImage: Boolean(sourceImageAttachment),
+        text,
+      })
+    ) {
+      logMessengerStage(params.trace, "messenger_event_forward_started", {
+        reason: "source_image_without_prompt",
+        sourceImage: true,
+      });
+      if (await forwardLeaderbotMessengerEvent({ event: params.event, trace: params.trace })) {
+        return;
+      }
+    }
     if (sourceImageAttachment && sourceImageGenerationPrompt) {
       const sourceImageUrl = sanitizeMessengerSourceImageUrl(sourceImageAttachment.url);
       if (!sourceImageUrl) {
