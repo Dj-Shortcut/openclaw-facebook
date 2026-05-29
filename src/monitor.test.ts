@@ -328,4 +328,14 @@ describe("resolveMessengerFastLaneReply", () => {
     expect(result?.intent).toBe("help");
     expect(result?.reply).toContain("korte vragen");
   });
+
+  it("returns the explicit image generator loading reply for image intents", () => {
+    const result = resolveMessengerFastLaneReply("maak afbeelding van een robot");
+
+    expect(result).toEqual({
+      intent: "image",
+      reply:
+        "Ik heb je afbeeldingsvraag ontvangen. Ik start nu de image generator — dit kan even duren.",
+    });
+  });
 });

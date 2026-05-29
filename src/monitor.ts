@@ -556,7 +556,8 @@ export function resolveMessengerFastLaneReply(
     case "image":
       return {
         intent,
-        reply: "Ik stuur je afbeeldingsvraag door naar de image generator. Moment.",
+        reply:
+          "Ik heb je afbeeldingsvraag ontvangen. Ik start nu de image generator — dit kan even duren.",
       };
     default:
       return null;
@@ -966,30 +967,30 @@ async function processMessengerEvent(params: {
         message: redactMessengerIdentifier(result.messageId),
       });
       if (fastLane.intent === "image") {
-       void requestLeaderbotImageGeneration({
-  psid: senderId,
-  prompt: text,
-  reqId: params.trace.reqId,
-  timestamp,
-  trace: params.trace,
-})
-  .then(async (queued) => {
-    if (!queued) {
-      await sendMessengerText(
-        senderId,
-        "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
-        {
-          cfg: params.cfg,
-          accountId: params.account.accountId,
-        },
-      );
-    }
-  })
-  .catch((error: unknown) => {
-    params.runtime.error?.(
-      danger(`messenger image generation flow failed: ${String(error)}`),
-    );
-  });
+        void requestLeaderbotImageGeneration({
+          psid: senderId,
+          prompt: text,
+          reqId: params.trace.reqId,
+          timestamp,
+          trace: params.trace,
+        })
+          .then(async (queued) => {
+            if (!queued) {
+              await sendMessengerText(
+                senderId,
+                "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
+                {
+                  cfg: params.cfg,
+                  accountId: params.account.accountId,
+                },
+              );
+            }
+          })
+          .catch((error: unknown) => {
+            params.runtime.error?.(
+              danger(`messenger image generation flow failed: ${String(error)}`),
+            );
+          });
       }
       return;
     }
