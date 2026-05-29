@@ -385,7 +385,8 @@ type TextMessageInput = {
 
 const IN_FLIGHT_MESSAGE =
   "\u23F3 even geduld, ik ben nog bezig met jouw restyle";
-const inFlightNoticeSent = new Set();
+const IN_FLIGHT_NOTICE_COOLDOWN_MS = 30_000;
+const inFlightNoticeSent = new Map<string, number>();
 const MESSENGER_CAPABILITIES = Object.freeze({
   quickReplies: true,
   richTemplates: true,
@@ -987,12 +988,17 @@ export function createWebhookHandlers({
       return { handled: false };
     }
 
-    if (inFlightNoticeSent.has(psid)) {
+    const now = Date.now();
+    const lastNoticeSentAt = inFlightNoticeSent.get(psid);
+    if (
+      lastNoticeSentAt !== undefined &&
+      now - lastNoticeSentAt < IN_FLIGHT_NOTICE_COOLDOWN_MS
+    ) {
       return { handled: true };
     }
 
-    inFlightNoticeSent.add(psid);
     const outcome = await sendLoggedText(psid, IN_FLIGHT_MESSAGE, reqId);
+    inFlightNoticeSent.set(psid, now);
     return { handled: true, outcome };
   }
 

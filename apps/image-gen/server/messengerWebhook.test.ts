@@ -70,6 +70,7 @@ import { setSourceImageDnsLookupForTests } from "./_core/image-generation/source
 import { processConsentedFacebookWebhookPayload } from "./testConsentHelpers";
 import { markMessengerGenerationCompleted } from "./_core/messengerGenerationCompletion";
 import { resetMessengerGenerationQueueForTests } from "./_core/messengerGenerationQueue";
+import { deleteEphemeralKey, setEphemeralKey } from "./_core/stateStore";
 
 const TEST_PEPPER = "ci-test-pepper";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
@@ -235,6 +236,14 @@ function clearMessengerSendMocks(): void {
   sendImageMock.mockClear();
   sendQuickRepliesMock.mockClear();
   sendTextMock.mockClear();
+}
+
+function inFlightNoticeSendCount(psid: string): number {
+  return sendTextMock.mock.calls.filter(
+    ([recipient, text]) =>
+      recipient === psid &&
+      text === "⏳ even geduld, ik ben nog bezig met jouw restyle"
+  ).length;
 }
 
 function expectFaceMemoryConsentPrompt(psid: string): void {
@@ -407,6 +416,150 @@ describe("messenger webhook dedupe", () => {
     expect(sendTextMock.mock.invocationCallOrder[0]).toBeLessThan(
       safeLogMock.mock.invocationCallOrder[queuedLogCallIndex]
     );
+  });
+
+  it("throttles repeated in-flight notices while a PROCESSING generation is active", async () => {
+    const psid = "active-processing-user";
+    const inFlightKey = `messenger:inflight:${psid}`;
+    const nowSpy = vi.spyOn(Date, "now");
+
+    await Promise.resolve(setFlowState(psid, "PROCESSING"));
+    await setEphemeralKey(inFlightKey, "active", 60);
+
+    try {
+      nowSpy.mockReturnValue(1_771_000_000_000);
+      await processFacebookWebhookPayload({
+        entry: [
+          {
+            messaging: [
+              {
+                sender: { id: psid },
+                message: { mid: "mid-inflight-first", text: "nog eens" },
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(inFlightNoticeSendCount(psid)).toBe(1);
+      expect(sendTextMock).toHaveBeenLastCalledWith(
+        psid,
+        "⏳ even geduld, ik ben nog bezig met jouw restyle"
+      );
+
+      nowSpy.mockReturnValue(1_771_000_010_000);
+      await processFacebookWebhookPayload({
+        entry: [
+          {
+            messaging: [
+              {
+                sender: { id: psid },
+                message: { mid: "mid-inflight-cooldown", text: "nog eens" },
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(inFlightNoticeSendCount(psid)).toBe(1);
+
+      nowSpy.mockReturnValue(1_771_000_031_000);
+      await processFacebookWebhookPayload({
+        entry: [
+          {
+            messaging: [
+              {
+                sender: { id: psid },
+                message: {
+                  mid: "mid-inflight-after-cooldown",
+                  text: "nog eens",
+                },
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(inFlightNoticeSendCount(psid)).toBe(2);
+      expect(sendTextMock).toHaveBeenLastCalledWith(
+        psid,
+        "⏳ even geduld, ik ben nog bezig met jouw restyle"
+      );
+    } finally {
+      nowSpy.mockRestore();
+      await deleteEphemeralKey(inFlightKey);
+    }
+  });
+
+  it("clears the in-flight notice cooldown when PROCESSING has no active generation", async () => {
+    const psid = "processing-cleared-user";
+    const inFlightKey = `messenger:inflight:${psid}`;
+    const nowSpy = vi.spyOn(Date, "now");
+
+    await Promise.resolve(setFlowState(psid, "PROCESSING"));
+    await setEphemeralKey(inFlightKey, "active", 60);
+
+    try {
+      nowSpy.mockReturnValue(1_771_000_100_000);
+      await processFacebookWebhookPayload({
+        entry: [
+          {
+            messaging: [
+              {
+                sender: { id: psid },
+                message: { mid: "mid-inflight-before-clear", text: "nog eens" },
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(inFlightNoticeSendCount(psid)).toBe(1);
+      expect(sendTextMock).toHaveBeenLastCalledWith(
+        psid,
+        "⏳ even geduld, ik ben nog bezig met jouw restyle"
+      );
+
+      await deleteEphemeralKey(inFlightKey);
+      nowSpy.mockReturnValue(1_771_000_110_000);
+      await processFacebookWebhookPayload({
+        entry: [
+          {
+            messaging: [
+              {
+                sender: { id: psid },
+                message: { mid: "mid-inflight-clear", text: "status" },
+              },
+            ],
+          },
+        ],
+      });
+
+      clearMessengerSendMocks();
+      await setEphemeralKey(inFlightKey, "active-again", 60);
+      nowSpy.mockReturnValue(1_771_000_111_000);
+      await processFacebookWebhookPayload({
+        entry: [
+          {
+            messaging: [
+              {
+                sender: { id: psid },
+                message: { mid: "mid-inflight-after-clear", text: "nog eens" },
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(inFlightNoticeSendCount(psid)).toBe(1);
+      expect(sendTextMock).toHaveBeenLastCalledWith(
+        psid,
+        "⏳ even geduld, ik ben nog bezig met jouw restyle"
+      );
+    } finally {
+      nowSpy.mockRestore();
+      await deleteEphemeralKey(inFlightKey);
+    }
   });
 
   it("keeps queued generation accepted when the queued feedback send fails", async () => {
