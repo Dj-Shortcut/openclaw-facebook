@@ -409,6 +409,75 @@ describe("messenger webhook dedupe", () => {
     );
   });
 
+  it("keeps queued generation accepted when the queued feedback send fails", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const redisState = new Map<string, string>();
+    const redis = {
+      del: vi.fn(async (key: string) => (redisState.delete(key) ? 1 : 0)),
+      get: vi.fn(async (key: string) => redisState.get(key) ?? null),
+      llen: vi.fn(async () => 1),
+      lpush: vi.fn(async () => 1),
+      set: vi.fn(async (key: string, value: string) => {
+        redisState.set(key, value);
+        return "OK";
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+    sendTextMock.mockRejectedValueOnce(new Error("Messenger Send API timeout"));
+
+    await expect(
+      processFacebookWebhookPayload({
+        entry: [
+          {
+            messaging: [
+              {
+                sender: { id: "queued-feedback-fail-user" },
+                message: {
+                  mid: "mid-queued-feedback-fail-photo",
+                  attachments: [
+                    {
+                      type: "image",
+                      payload: { url: "https://img.example/queued-fail.jpg" },
+                    },
+                  ],
+                },
+              },
+              {
+                sender: { id: "queued-feedback-fail-user" },
+                message: {
+                  mid: "mid-queued-feedback-fail-style",
+                  quick_reply: { payload: "disco" },
+                },
+              },
+            ],
+          },
+        ],
+      })
+    ).resolves.toBeUndefined();
+
+    expect(redis.lpush).toHaveBeenCalledWith(
+      "messenger-generation-jobs",
+      expect.stringContaining('"style":"disco"')
+    );
+    expect(sendImageMock).not.toHaveBeenCalled();
+    expect(
+      (await Promise.resolve(getState("queued-feedback-fail-user")))?.stage
+    ).toBe("PROCESSING");
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_generation_queued_ack_failed",
+      expect.objectContaining({
+        error: "Messenger Send API timeout",
+        style: "disco",
+      })
+    );
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_generation_job_queued",
+      expect.objectContaining({ style: "disco" })
+    );
+  });
+
   it("does not send a duplicate generated image for a completed queued job", async () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("duplicate job should not call the image provider");
