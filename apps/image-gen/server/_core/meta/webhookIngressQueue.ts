@@ -175,6 +175,36 @@ async function completeWebhookIngressDelivery(
   await redis.del(getWebhookIngressDeliveryLeaseKey(raw));
 }
 
+async function moveFailedWebhookIngressDelivery(
+  redis: RedisLike,
+  reserved: ReservedWebhookDelivery,
+  destinationKey: string,
+  serializedDelivery: string,
+  pushDirection: "LPUSH" | "RPUSH"
+): Promise<void> {
+  const removed = await redis.eval(
+    `
+      local removed = redis.call("LREM", KEYS[1], 1, ARGV[1])
+      if removed > 0 then
+        redis.call("DEL", KEYS[2])
+        redis.call(ARGV[2], KEYS[3], ARGV[3])
+      end
+      return removed
+    `,
+    3,
+    WEBHOOK_INGRESS_PROCESSING_KEY,
+    getWebhookIngressDeliveryLeaseKey(reserved.raw),
+    destinationKey,
+    reserved.raw,
+    pushDirection,
+    serializedDelivery
+  );
+
+  if (removed !== 1) {
+    throw new Error("Reserved webhook delivery was not found in processing");
+  }
+}
+
 async function releaseFailedWebhookIngressDelivery(
   redis: RedisLike,
   reserved: ReservedWebhookDelivery,
@@ -188,10 +218,14 @@ async function releaseFailedWebhookIngressDelivery(
   const serializedRetryDelivery = JSON.stringify(retryDelivery);
   const serializedError = serializeError(error);
 
-  await completeWebhookIngressDelivery(redis, reserved.raw);
-
   if (attempts >= getWebhookIngressMaxAttempts()) {
-    await redis.rpush(WEBHOOK_INGRESS_DEAD_LETTER_KEY, serializedRetryDelivery);
+    await moveFailedWebhookIngressDelivery(
+      redis,
+      reserved,
+      WEBHOOK_INGRESS_DEAD_LETTER_KEY,
+      serializedRetryDelivery,
+      "RPUSH"
+    );
     safeLog("webhook_queued_delivery_dead_lettered", {
       channel: reserved.delivery.channel,
       attempts,
@@ -200,7 +234,13 @@ async function releaseFailedWebhookIngressDelivery(
     return "dead_lettered";
   }
 
-  await redis.lpush(WEBHOOK_INGRESS_QUEUE_KEY, serializedRetryDelivery);
+  await moveFailedWebhookIngressDelivery(
+    redis,
+    reserved,
+    WEBHOOK_INGRESS_QUEUE_KEY,
+    serializedRetryDelivery,
+    "LPUSH"
+  );
   safeLog("webhook_queued_delivery_requeued", {
     channel: reserved.delivery.channel,
     attempts,

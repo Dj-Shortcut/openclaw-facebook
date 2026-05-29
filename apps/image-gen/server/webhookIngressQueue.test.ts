@@ -185,6 +185,49 @@ describe("webhookIngressQueue", () => {
     );
   });
 
+  it("keeps a failed delivery in processing when retry storage fails", async () => {
+    isRedisEnabledMock.mockReturnValue(true);
+    processFacebookWebhookPayloadMock.mockRejectedValue(new Error("retry me"));
+
+    const delivery = JSON.stringify({
+      channel: "facebook",
+      payload: { entry: [{ id: "retry-store-failed" }] },
+      receivedAt: "2026-05-28T00:00:00.000Z",
+    });
+    const queue = [delivery];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const redis = createQueueRedis(queue, processing, dead);
+    redis.eval.mockRejectedValueOnce(new Error("redis write failed"));
+    getRedisClientMock.mockResolvedValue(redis);
+
+    scheduleWebhookIngressDrain();
+
+    await vi.waitFor(() => {
+      expect(safeLogMock).toHaveBeenCalledWith(
+        "webhook_ingress_queue_drain_failed",
+        expect.objectContaining({
+          error: expect.objectContaining({
+            class: "Error",
+            message: "redis write failed",
+          }),
+        })
+      );
+    });
+
+    expect(queue).toEqual([]);
+    expect(processing).toEqual([delivery]);
+    expect(dead).toEqual([]);
+    expect(redis.lrem).not.toHaveBeenCalled();
+    expect(redis.del).not.toHaveBeenCalled();
+    expect(redis.lpush).not.toHaveBeenCalled();
+    expect(redis.rpush).not.toHaveBeenCalled();
+    expect(safeLogMock).not.toHaveBeenCalledWith(
+      "webhook_queued_delivery_requeued",
+      expect.any(Object)
+    );
+  });
+
   it("requeues a failed delivery with an incremented attempt count", async () => {
     isRedisEnabledMock.mockReturnValue(true);
     processWhatsAppWebhookPayloadMock.mockRejectedValue(new Error("try again"));
@@ -437,7 +480,7 @@ function createQueueRedis(
 ) {
   const leases = new Map<string, string>();
 
-  return {
+  const redis = {
     del: vi.fn(async (key: string) => {
       leases.delete(key);
       return 1;
@@ -476,5 +519,38 @@ function createQueueRedis(
       leases.set(key, value);
       return "OK";
     }),
+  };
+
+  return {
+    ...redis,
+    eval: vi.fn(
+      async (
+        _script: string,
+        _numKeys: number,
+        _processingKey: string,
+        leaseKey: string,
+        destinationKey: string,
+        rawDelivery: string,
+        pushDirection: string,
+        serializedDelivery: string
+      ) => {
+        const removed = await redis.lrem(
+          "meta-webhook-ingress:processing",
+          1,
+          rawDelivery
+        );
+        if (removed <= 0) {
+          return removed;
+        }
+
+        await redis.del(leaseKey);
+        if (pushDirection === "LPUSH") {
+          await redis.lpush(destinationKey, serializedDelivery);
+        } else {
+          await redis.rpush(destinationKey, serializedDelivery);
+        }
+        return removed;
+      }
+    ),
   };
 }
