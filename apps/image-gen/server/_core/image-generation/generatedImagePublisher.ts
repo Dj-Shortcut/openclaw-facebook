@@ -11,6 +11,10 @@ import {
   getRequiredPublicBaseUrl,
   hasObjectStorageConfig,
 } from "./imageServiceConfig";
+import {
+  getOpenAiImageOutputContentType,
+  getOpenAiImageOutputExtension,
+} from "./openAiImageClient";
 import { summarizeSensitiveUrl } from "../utils/urlSummarizer";
 
 export async function publishGeneratedImage(
@@ -18,16 +22,20 @@ export async function publishGeneratedImage(
   style: Style,
   reqId?: string
 ): Promise<string> {
+  const contentType = getOpenAiImageOutputContentType();
+  const extension = getOpenAiImageOutputExtension();
+
   if (hasObjectStorageConfig()) {
-    const key = `generated/${style}/${Date.now()}-${randomUUID()}.png`;
+    const key = `generated/${style}/${Date.now()}-${randomUUID()}.${extension}`;
     try {
-      const { url } = await storagePut(key, imageBuffer, "image/png");
+      const { url } = await storagePut(key, imageBuffer, contentType);
       console.info(
         JSON.stringify({
           level: "info",
           msg: "generated_image_upload_success",
           reqId,
           style,
+          contentType,
           storageKey: key,
           publicUrl: summarizeSensitiveUrl(url),
         })
@@ -46,15 +54,16 @@ export async function publishGeneratedImage(
 
   assertProductionImageStorageConfig();
 
-  const token = putGeneratedImage(imageBuffer, "image/png");
+  const token = putGeneratedImage(imageBuffer, contentType);
   const publicBaseUrl = getRequiredPublicBaseUrl();
-  const localUrl = buildGeneratedImageUrl(publicBaseUrl, token);
+  const localUrl = buildGeneratedImageUrl(publicBaseUrl, token, extension);
   console.warn(
     JSON.stringify({
       level: "warn",
       msg: "generated_image_local_fallback",
       reqId,
       style,
+      contentType,
       tokenHash: hashGeneratedImageToken(token),
       publicUrl: summarizeSensitiveUrl(localUrl),
     })

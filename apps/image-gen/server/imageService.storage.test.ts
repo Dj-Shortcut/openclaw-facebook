@@ -22,6 +22,7 @@ describe("OpenAi image delivery via object storage", () => {
     setSourceImageDnsLookupForTests(null);
     delete process.env.NODE_ENV;
     delete process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_IMAGE_OUTPUT_FORMAT;
     delete process.env.SOURCE_IMAGE_ALLOWED_HOSTS;
     delete process.env.BUILT_IN_FORGE_API_URL;
     delete process.env.BUILT_IN_FORGE_API_KEY;
@@ -30,6 +31,7 @@ describe("OpenAi image delivery via object storage", () => {
 
   it("uploads generated image to storage and returns signed URL", async () => {
     process.env.OPENAI_API_KEY = "dummy-key";
+    process.env.OPENAI_IMAGE_OUTPUT_FORMAT = "jpeg";
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS = "leaderbot-fb-image-gen.fly.dev";
     process.env.BUILT_IN_FORGE_API_URL = "https://forge.example";
     process.env.BUILT_IN_FORGE_API_KEY = "forge-secret";
@@ -54,9 +56,13 @@ describe("OpenAi image delivery via object storage", () => {
       }
 
       if (toUrlString(url).startsWith("https://forge.example/v1/storage/upload?path=generated%2Fdisco%2F")) {
+        expect(toUrlString(url)).toMatch(/\.jpg$/);
         expect(init?.method).toBe("POST");
         expect(init?.headers).toEqual({ Authorization: "Bearer forge-secret" });
         expect(init?.body).toBeInstanceOf(FormData);
+        const file = (init?.body as FormData).get("file") as File;
+        expect(file.name).toMatch(/\.jpg$/);
+        expect(file.type).toBe("image/jpeg");
 
         return {
           ok: true,

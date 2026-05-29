@@ -93,8 +93,12 @@ export function getGeneratedImage(
   };
 }
 
-export function buildGeneratedImageUrl(baseUrl: string, token: string): string {
-  return `${baseUrl}/generated/${encodeURIComponent(token)}.png`;
+export function buildGeneratedImageUrl(
+  baseUrl: string,
+  token: string,
+  extension = "png"
+): string {
+  return `${baseUrl}/generated/${encodeURIComponent(token)}.${extension}`;
 }
 
 export function hashGeneratedImageToken(token: string): string {
