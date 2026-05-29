@@ -94,6 +94,7 @@ const IMAGE_GEN_REQUEST_TIMEOUT_MS = 5_000;
 const MESSENGER_IMAGE_FETCH_TIMEOUT_MS = 10_000;
 const MESSENGER_IMAGE_FETCH_MAX_BYTES = 10 * 1024 * 1024;
 const MESSENGER_MEDIA_FETCH_MAX_BYTES = 25 * 1024 * 1024;
+const MESSENGER_MEDIA_FETCH_MAX_REDIRECTS = 2;
 
 export function redactMessengerIdentifier(value: string | undefined): string {
   const normalized = value?.trim();
@@ -321,7 +322,7 @@ function contentTypeMatchesMessengerAttachmentKind(
   }
 }
 
-async function downloadMessengerMediaAttachment(params: {
+export async function downloadMessengerMediaAttachment(params: {
   attachment: MessengerAttachmentUrl;
   reqId: string;
   index: number;
@@ -339,8 +340,33 @@ async function downloadMessengerMediaAttachment(params: {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MESSENGER_IMAGE_FETCH_TIMEOUT_MS);
   try {
-    const response = await fetch(parsed, { signal: controller.signal });
-    if (!response.ok) {
+    let currentUrl = parsed;
+    let response: Response | null = null;
+    for (
+      let redirectCount = 0;
+      redirectCount <= MESSENGER_MEDIA_FETCH_MAX_REDIRECTS;
+      redirectCount += 1
+    ) {
+      response = await fetch(currentUrl, { redirect: "manual", signal: controller.signal });
+      if (response.status < 300 || response.status >= 400) {
+        break;
+      }
+
+      if (redirectCount >= MESSENGER_MEDIA_FETCH_MAX_REDIRECTS) {
+        return null;
+      }
+      const location = response.headers.get("location");
+      if (!location) {
+        return null;
+      }
+      const nextUrl = new URL(location, currentUrl);
+      if (nextUrl.protocol !== "https:" || !isAllowedMessengerMediaHost(nextUrl.hostname)) {
+        return null;
+      }
+      currentUrl = nextUrl;
+    }
+
+    if (!response?.ok) {
       return null;
     }
     const contentType = response.headers.get("content-type");

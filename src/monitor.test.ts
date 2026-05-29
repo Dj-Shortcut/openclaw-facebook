@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   classifyMessengerFastLaneIntent,
+  downloadMessengerMediaAttachment,
   formatUnmatchedMessengerPageLog,
   hasMessengerImageGenerationIntent,
   redactMessengerIdentifier,
@@ -13,6 +17,27 @@ import {
   shouldProcessMessengerMessageOnce,
   type MessengerWebhookTarget,
 } from "./monitor.js";
+
+const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+let temporaryStateDir: string | null = null;
+
+beforeEach(async () => {
+  temporaryStateDir = await mkdtemp(join(tmpdir(), "openclaw-facebook-test-"));
+  process.env.OPENCLAW_STATE_DIR = temporaryStateDir;
+});
+
+afterEach(async () => {
+  vi.unstubAllGlobals();
+  if (originalOpenClawStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+  }
+  if (temporaryStateDir) {
+    await rm(temporaryStateDir, { force: true, recursive: true });
+    temporaryStateDir = null;
+  }
+});
 
 function messengerTarget(
   accountId: string,
@@ -337,5 +362,113 @@ describe("resolveMessengerFastLaneReply", () => {
       reply:
         "Ik heb je afbeeldingsvraag ontvangen. Ik start nu de image generator — dit kan even duren.",
     });
+  });
+});
+
+describe("downloadMessengerMediaAttachment redirects", () => {
+  function attachment(url = "https://lookaside.facebook.com/start"): Parameters<
+    typeof downloadMessengerMediaAttachment
+  >[0]["attachment"] {
+    return { kind: "image", url };
+  }
+
+  function okImageResponse(): Response {
+    return new Response(Buffer.from("fake-image"), {
+      headers: {
+        "content-length": "10",
+        "content-type": "image/png",
+      },
+      status: 200,
+    });
+  }
+
+  it("allows a manual redirect to https fbcdn.net media", async () => {
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      const href = url instanceof URL ? url.href : String(url);
+      if (href === "https://lookaside.facebook.com/start") {
+        return new Response(null, {
+          headers: { location: "https://cdn.fbcdn.net/photo.png" },
+          status: 302,
+        });
+      }
+      if (href === "https://cdn.fbcdn.net/photo.png") {
+        return okImageResponse();
+      }
+      throw new Error(`unexpected fetch ${href}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const media = await downloadMessengerMediaAttachment({
+      attachment: attachment(),
+      index: 0,
+      reqId: "msg_redirect_allowed",
+    });
+
+    expect(media).toMatchObject({
+      contentType: "image/png",
+      kind: "image",
+      url: "https://lookaside.facebook.com/start",
+    });
+    expect(media?.path).toMatch(/messenger-[a-f0-9]{32}\.png$/);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
+    expect(fetchMock.mock.calls[1]?.[0]).toEqual(new URL("https://cdn.fbcdn.net/photo.png"));
+  });
+
+  it("rejects a redirect to http media", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(null, {
+        headers: { location: "http://cdn.fbcdn.net/photo.png" },
+        status: 302,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      downloadMessengerMediaAttachment({
+        attachment: attachment(),
+        index: 0,
+        reqId: "msg_redirect_http",
+      }),
+    ).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a redirect to a non-Facebook media host", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(null, {
+        headers: { location: "https://example.test/photo.png" },
+        status: 302,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      downloadMessengerMediaAttachment({
+        attachment: attachment(),
+        index: 0,
+        reqId: "msg_redirect_host",
+      }),
+    ).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects redirect loops once the redirect limit is reached", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(null, {
+        headers: { location: "https://lookaside.facebook.com/start" },
+        status: 302,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      downloadMessengerMediaAttachment({
+        attachment: attachment(),
+        index: 0,
+        reqId: "msg_redirect_loop",
+      }),
+    ).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
