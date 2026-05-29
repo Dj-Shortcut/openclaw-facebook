@@ -8,9 +8,9 @@ import {
 } from "./stateStore";
 
 const DEFAULT_GLOBAL_CONCURRENCY = 3;
-const DEFAULT_GLOBAL_LOCK_MS = 120000;
+const DEFAULT_GLOBAL_LOCK_MS = 240000;
 const DEFAULT_PSID_COOLDOWN_MS = 0;
-const DEFAULT_PSID_LOCK_MS = 120000;
+const DEFAULT_PSID_LOCK_MS = 240000;
 const DEFAULT_GLOBAL_SLOT_WAIT_MS = 100;
 
 function readNonNegativeInt(name: string, fallback: number): number {

@@ -100,6 +100,7 @@ function buildWhatsAppEvent(message: unknown): NormalizedInboundMessage | null {
   }
 
   const rawMessageType = stringProperty(message, "type") ?? "unknown";
+  const messageId = stringProperty(message, "id");
   const textBody = stringProperty(getNestedObject(message, "text"), "body");
   const interactiveReply = readInteractiveReply(message);
   const imageId = stringProperty(getNestedObject(message, "image"), "id");
@@ -113,6 +114,7 @@ function buildWhatsAppEvent(message: unknown): NormalizedInboundMessage | null {
       richTemplates: false,
     },
     rawMessageType,
+    messageId: messageId ?? undefined,
     messageType: normalizeMessageType(rawMessageType),
     textBody:
       interactiveReply.id ?? interactiveReply.title ?? textBody ?? undefined,

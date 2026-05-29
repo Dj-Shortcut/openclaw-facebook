@@ -6,6 +6,7 @@ import {
 import { getDirectorModeConfig } from "../image-generation/director/directorModes";
 import type { DirectorMode } from "../image-generation/director/directorTypes";
 import { getGenerationMetrics } from "../image-generation/openAiImageClient";
+import { runGuardedGeneration } from "../generationGuard";
 import { t, type Lang } from "../i18n";
 import type { SourceImageOrigin } from "../messengerState";
 import type { Style } from "../messengerStyles";
@@ -259,6 +260,22 @@ async function handleGenerationFailure(input: {
 }
 
 export async function runWhatsAppStyleGeneration(
+  input: StyleGenerationInput
+): Promise<void> {
+  const didRun = await runGuardedGeneration(input.senderId, () =>
+    runWhatsAppStyleGenerationOnce(input)
+  );
+  if (didRun === null) {
+    await sendWhatsAppTextReply(
+      input.senderId,
+      input.lang === "en"
+        ? "Hang tight, I am still working on your image."
+        : "Even geduld, ik ben nog bezig met je beeld."
+    );
+  }
+}
+
+async function runWhatsAppStyleGenerationOnce(
   input: StyleGenerationInput
 ): Promise<void> {
   const {

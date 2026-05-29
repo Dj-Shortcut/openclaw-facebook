@@ -12,6 +12,7 @@ export type NormalizedInboundMessage = {
   channelCapabilities?: BotChannelCapabilities;
   messageType: "text" | "image" | "unknown";
   rawMessageType?: string;
+  messageId?: string;
   textBody?: string;
   imageUrl?: string;
   imageId?: string;

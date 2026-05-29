@@ -709,10 +709,7 @@ export function resolveMessengerEventTarget(
   if (!pageId) {
     return targets.length === 1 ? (targets[0] ?? null) : null;
   }
-  return (
-    targets.find((target) => target.account.pageId === pageId) ??
-    (targets.length === 1 ? (targets[0] ?? null) : null)
-  );
+  return targets.find((target) => target.account.pageId === pageId) ?? null;
 }
 
 export function resolveMessengerVerificationTarget(
@@ -1135,7 +1132,6 @@ async function processMessengerEvent(params: {
   }
   } finally {
     logMessengerStage(params.trace, "request_completed", {
-      eventLoopDelayMs: eventLoopDelayMaxMs(),
       activeMessengerEventJobs,
     });
     activeMessengerEventJobs = Math.max(0, activeMessengerEventJobs - 1);
