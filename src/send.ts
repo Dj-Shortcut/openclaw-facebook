@@ -3,6 +3,7 @@ import { resolveMessengerAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./channel-api.js";
 import { stripFacebookTargetPrefix } from "./naming.js";
 import { createMessengerSendReceipt } from "./send-receipt.js";
+import type { MessengerQuickReply } from "./presentation.js";
 import type { MessengerSendResult } from "./types.js";
 
 const DEFAULT_GRAPH_API_VERSION = "v20.0";
@@ -42,6 +43,19 @@ function formatMessengerApiError(body: unknown): string {
   return `Messenger API error${details.code ? ` ${details.code}` : ""}: ${message}`;
 }
 
+function normalizeMessengerQuickReplies(
+  quickReplies: readonly MessengerQuickReply[] | undefined,
+): MessengerQuickReply[] | undefined {
+  if (!quickReplies?.length) {
+    return undefined;
+  }
+  return quickReplies.map((quickReply) => ({
+    content_type: quickReply.content_type,
+    title: quickReply.title,
+    payload: quickReply.payload,
+  }));
+}
+
 function normalizeMessengerText(text: string): string {
   if (text.length <= MESSENGER_TEXT_MAX_LENGTH) {
     return text;
@@ -56,6 +70,7 @@ export async function sendMessengerText(
     cfg: OpenClawConfig;
     accountId?: string;
     fetch?: FetchLike;
+    quickReplies?: readonly MessengerQuickReply[];
   },
 ): Promise<MessengerSendResult> {
   const account = resolveMessengerAccount({ cfg: opts.cfg, accountId: opts.accountId });
@@ -71,6 +86,7 @@ export async function sendMessengerText(
   }
   const fetchImpl = opts.fetch ?? fetch;
   const normalizedText = normalizeMessengerText(text);
+  const quickReplies = normalizeMessengerQuickReplies(opts.quickReplies);
   const version = resolveGraphApiVersion(account.config.graphApiVersion);
   const url = `https://graph.facebook.com/${version}/${encodeURIComponent(account.pageId)}/messages`;
   const controller = new AbortController();
@@ -87,7 +103,10 @@ export async function sendMessengerText(
       body: JSON.stringify({
         recipient: { id: normalizedTo },
         messaging_type: "RESPONSE",
-        message: { text: normalizedText },
+        message: {
+          text: normalizedText,
+          ...(quickReplies ? { quick_replies: quickReplies } : {}),
+        },
       }),
     });
   } catch (error) {
