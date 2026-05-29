@@ -132,6 +132,7 @@ const MESSENGER_SEND_SKIPPED: MessengerSendOutcome = {
   sent: false,
   reason: "response_window_closed",
 };
+const MESSENGER_ASYNC_RESPONSE_QUEUED: MessengerSendOutcome = { sent: true };
 type MaybeInFlightMessageResult =
   | { handled: false }
   | { handled: true; outcome?: MessengerSendOutcome };
@@ -1764,7 +1765,7 @@ export function createWebhookHandlers({
       style,
       queueEnabled: isMessengerGenerationQueueEnabled(),
     });
-    return MESSENGER_SEND_SKIPPED;
+    return MESSENGER_ASYNC_RESPONSE_QUEUED;
   }
 
   async function handleStyleSelection(
