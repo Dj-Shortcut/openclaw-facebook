@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OpenAiImageGenerator } from "./_core/imageService";
+import { GenerationTimeoutError } from "./_core/image-generation/imageServiceErrors";
 import { InvalidSourceImageUrlError } from "./_core/image-generation/sourceImageFetcher";
 import { sha256 } from "./_core/imageProof";
 import { setSourceImageDnsLookupForTests } from "./_core/image-generation/sourceImageFetcher";
@@ -991,7 +992,7 @@ describe("OpenAi image-to-image proof", () => {
     );
   });
 
-  it("retries OpenAI edits request after timeout aborts", async () => {
+  it("does not retry OpenAI edits request after timeout aborts", async () => {
     process.env.OPENAI_API_KEY = "dummy-key";
     process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
     process.env.OPENAI_IMAGE_MAX_RETRIES = "1";
@@ -1011,19 +1012,17 @@ describe("OpenAi image-to-image proof", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const generator = new OpenAiImageGenerator();
-    const result = await generator.generate({
-      style: "disco",
-      ...createStoredSourceImageInput({
-        userKey: "user-1",
-        reqId: "req-openai-timeout-retry",
-      }),
-    });
+    await expect(
+      generator.generate({
+        style: "disco",
+        ...createStoredSourceImageInput({
+          userKey: "user-1",
+          reqId: "req-openai-timeout-no-retry",
+        }),
+      })
+    ).rejects.toBeInstanceOf(GenerationTimeoutError);
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(result.imageUrl).toMatch(
-      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
-    );
-    expect(result.metrics.openAiMs).toBeGreaterThanOrEqual(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("fails when OpenAI base64 payload decodes to an empty image buffer", async () => {

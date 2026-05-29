@@ -42,7 +42,7 @@ type OpenAiResponseContext = {
 
 const OPENAI_RETRY_LIMIT_DEFAULT = 1;
 const OPENAI_RETRY_BASE_MS_DEFAULT = 500;
-const OPENAI_TIMEOUT_MS_DEFAULT = 45_000;
+const OPENAI_TIMEOUT_MS_DEFAULT = 120_000;
 const OPENAI_IMAGE_MAX_OUTPUT_BYTES_DEFAULT = 25 * 1024 * 1024;
 const OPENAI_RESPONSES_IMAGE_ENDPOINT = "https://api.openai.com/v1/responses";
 
@@ -156,12 +156,12 @@ async function readErrorBody(response: Response): Promise<string> {
   return "";
 }
 
-function isTransientNetworkError(error: unknown): boolean {
+function isRetryableNetworkError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
 
-  return error.name === "AbortError" || error instanceof TypeError;
+  return error instanceof TypeError;
 }
 
 async function fetchWithTimeout(
@@ -340,7 +340,7 @@ export async function fetchOpenAiImageResponse(
         (context.partialMetrics.openAiMs ?? 0) +
         (Date.now() - openAiStartedAt);
 
-      if (attempt < openAiRetryLimit && isTransientNetworkError(error)) {
+      if (attempt < openAiRetryLimit && isRetryableNetworkError(error)) {
         const waitMs = openAiRetryBaseMs * 2 ** attempt;
         console.warn("OPENAI_GENERATION_RETRY", {
           reqId: context.reqId,
