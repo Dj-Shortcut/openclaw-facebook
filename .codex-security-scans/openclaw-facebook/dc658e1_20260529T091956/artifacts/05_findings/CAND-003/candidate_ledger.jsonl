@@ -1,0 +1,3 @@
+{"phase":"discovery","candidate_id":"CAND-003","status":"plausible","evidence":"WhatsApp generation checks quota before generation and increments after success."}
+{"phase":"validation","candidate_id":"CAND-003","status":"validated","evidence":"No runGuardedGeneration wrapper exists in runWhatsAppStyleGeneration; Messenger uses it."}
+{"phase":"attack_path","candidate_id":"CAND-003","status":"reportable","evidence":"Concurrent same-sender requests can pass canGenerate before increments occur."}

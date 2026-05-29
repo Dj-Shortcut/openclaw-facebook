@@ -1,0 +1,7 @@
+# OpenClaw Facebook Repository Threat Model
+
+The repository has two production-relevant surfaces: the root OpenClaw Facebook plugin under `src/`, and the `apps/image-gen` Leaderbot service. Important assets include Meta app/page secrets, verify tokens, admin/internal tokens, OAuth/session tokens, PSIDs/open IDs, source images, generated images, face-memory state, quota/accounting state, MySQL rows, Redis replay/lock state, and provider API credentials.
+
+Primary trust boundaries are public Meta webhook traffic, public browser/API traffic, internal bearer-token routes, OAuth callback/session creation, object storage, Redis/MySQL, Meta Graph, OpenAI/image providers, and the OpenClaw host plugin boundary. Attacker-controlled input includes webhook JSON and headers, Messenger/WhatsApp message text, attachment/media IDs and URLs, OAuth callback query parameters, cookies, TRPC bodies, generated-image URL tokens, and standard HTTP headers.
+
+Critical issues would include unauthenticated RCE, forged webhook processing at scale, theft of production secrets, arbitrary access to private media or user records, or bypass of admin/internal route auth. High issues include replay/signature bypass with costly side effects, SSRF into private networks, cross-user object access, and weak generated media tokens. Medium issues include fail-open setup or replay controls, quota/cost bypasses, privacy deletion gaps, and bounded resource exhaustion. Low issues include deployment footguns, non-sensitive metadata exposure, and developer-only hardening gaps.

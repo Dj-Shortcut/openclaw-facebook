@@ -1,0 +1,3 @@
+{"phase":"discovery","candidate_id":"CAND-004","status":"plausible","evidence":"deleteUserData clears state after best-effort storage deletion."}
+{"phase":"validation","candidate_id":"CAND-004","status":"validated","evidence":"Storage delete errors are swallowed and clearUserState erases retry markers."}
+{"phase":"attack_path","candidate_id":"CAND-004","status":"reportable","evidence":"Transient storage failure can orphan private media after deletion request."}
