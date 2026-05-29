@@ -10,12 +10,16 @@ import {
 } from "vitest";
 
 const {
+  getRedisClientMock,
+  isRedisEnabledMock,
   sendGenericTemplateMock,
   sendImageMock,
   sendQuickRepliesMock,
   sendTextMock,
   safeLogMock,
 } = vi.hoisted(() => ({
+  getRedisClientMock: vi.fn(),
+  isRedisEnabledMock: vi.fn(() => false),
   sendGenericTemplateMock: vi.fn(async () => ({ sent: true })),
   sendImageMock: vi.fn(async () => ({ sent: true })),
   sendQuickRepliesMock: vi.fn(async () => ({ sent: true })),
@@ -29,6 +33,11 @@ vi.mock("./_core/messengerApi", () => ({
   sendQuickReplies: sendQuickRepliesMock,
   sendText: sendTextMock,
   safeLog: safeLogMock,
+}));
+
+vi.mock("./_core/redis", () => ({
+  getRedisClient: getRedisClientMock,
+  isRedisEnabled: isRedisEnabledMock,
 }));
 
 import {
@@ -60,9 +69,14 @@ import { getBotFeatures } from "./_core/bot/features";
 import { setSourceImageDnsLookupForTests } from "./_core/image-generation/sourceImageFetcher";
 import { processConsentedFacebookWebhookPayload } from "./testConsentHelpers";
 import { markMessengerGenerationCompleted } from "./_core/messengerGenerationCompletion";
+import { resetMessengerGenerationQueueForTests } from "./_core/messengerGenerationQueue";
 
 const TEST_PEPPER = "ci-test-pepper";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
+const originalMessengerGenerationQueueEnabled =
+  process.env.MESSENGER_GENERATION_QUEUE_ENABLED;
+const originalMessengerGenerationInlineFallback =
+  process.env.MESSENGER_GENERATION_INLINE_FALLBACK;
 
 const processFacebookWebhookPayload = processConsentedFacebookWebhookPayload(
   processFacebookWebhookPayloadBase
@@ -253,6 +267,22 @@ afterEach(() => {
   delete process.env.APP_BASE_URL;
   delete process.env.SOURCE_IMAGE_ALLOWED_HOSTS;
   delete process.env.ENABLE_FACE_MEMORY;
+  if (originalMessengerGenerationQueueEnabled === undefined) {
+    delete process.env.MESSENGER_GENERATION_QUEUE_ENABLED;
+  } else {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED =
+      originalMessengerGenerationQueueEnabled;
+  }
+  if (originalMessengerGenerationInlineFallback === undefined) {
+    delete process.env.MESSENGER_GENERATION_INLINE_FALLBACK;
+  } else {
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK =
+      originalMessengerGenerationInlineFallback;
+  }
+  getRedisClientMock.mockReset();
+  isRedisEnabledMock.mockReset();
+  isRedisEnabledMock.mockReturnValue(false);
+  resetMessengerGenerationQueueForTests();
 });
 
 beforeEach(() => {
@@ -310,6 +340,142 @@ describe("messenger webhook dedupe", () => {
 
     expect(sendQuickRepliesMock).toHaveBeenCalledTimes(1);
     expect(sendTextMock).not.toHaveBeenCalled();
+  });
+
+  it("sends immediate feedback when a generation job is queued", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const redisState = new Map<string, string>();
+    const redis = {
+      del: vi.fn(async (key: string) => (redisState.delete(key) ? 1 : 0)),
+      get: vi.fn(async (key: string) => redisState.get(key) ?? null),
+      llen: vi.fn(async () => 1),
+      lpush: vi.fn(async () => 1),
+      set: vi.fn(async (key: string, value: string) => {
+        redisState.set(key, value);
+        return "OK";
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: "queued-feedback-user" },
+              message: {
+                mid: "mid-queued-feedback-photo",
+                attachments: [
+                  {
+                    type: "image",
+                    payload: { url: "https://img.example/queued.jpg" },
+                  },
+                ],
+              },
+            },
+            {
+              sender: { id: "queued-feedback-user" },
+              message: {
+                mid: "mid-queued-feedback-style",
+                quick_reply: { payload: "disco" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(redis.lpush).toHaveBeenCalledWith(
+      "messenger-generation-jobs",
+      expect.stringContaining('"style":"disco"')
+    );
+    expect(sendTextMock).toHaveBeenCalledWith(
+      "queued-feedback-user",
+      "Je afbeelding staat in de wachtrij. Ik stuur ze zodra ze klaar is."
+    );
+    expect(sendImageMock).not.toHaveBeenCalled();
+    expect(
+      (await Promise.resolve(getState("queued-feedback-user")))?.stage
+    ).toBe("PROCESSING");
+
+    const queuedLogCallIndex = safeLogMock.mock.calls.findIndex(
+      ([event]) => event === "messenger_generation_job_queued"
+    );
+    expect(queuedLogCallIndex).toBeGreaterThanOrEqual(0);
+    expect(sendTextMock.mock.invocationCallOrder[0]).toBeLessThan(
+      safeLogMock.mock.invocationCallOrder[queuedLogCallIndex]
+    );
+  });
+
+  it("keeps queued generation accepted when the queued feedback send fails", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const redisState = new Map<string, string>();
+    const redis = {
+      del: vi.fn(async (key: string) => (redisState.delete(key) ? 1 : 0)),
+      get: vi.fn(async (key: string) => redisState.get(key) ?? null),
+      llen: vi.fn(async () => 1),
+      lpush: vi.fn(async () => 1),
+      set: vi.fn(async (key: string, value: string) => {
+        redisState.set(key, value);
+        return "OK";
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+    sendTextMock.mockRejectedValueOnce(new Error("Messenger Send API timeout"));
+
+    await expect(
+      processFacebookWebhookPayload({
+        entry: [
+          {
+            messaging: [
+              {
+                sender: { id: "queued-feedback-fail-user" },
+                message: {
+                  mid: "mid-queued-feedback-fail-photo",
+                  attachments: [
+                    {
+                      type: "image",
+                      payload: { url: "https://img.example/queued-fail.jpg" },
+                    },
+                  ],
+                },
+              },
+              {
+                sender: { id: "queued-feedback-fail-user" },
+                message: {
+                  mid: "mid-queued-feedback-fail-style",
+                  quick_reply: { payload: "disco" },
+                },
+              },
+            ],
+          },
+        ],
+      })
+    ).resolves.toBeUndefined();
+
+    expect(redis.lpush).toHaveBeenCalledWith(
+      "messenger-generation-jobs",
+      expect.stringContaining('"style":"disco"')
+    );
+    expect(sendImageMock).not.toHaveBeenCalled();
+    expect(
+      (await Promise.resolve(getState("queued-feedback-fail-user")))?.stage
+    ).toBe("PROCESSING");
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_generation_queued_ack_failed",
+      expect.objectContaining({
+        error: "Messenger Send API timeout",
+        style: "disco",
+      })
+    );
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_generation_job_queued",
+      expect.objectContaining({ style: "disco" })
+    );
   });
 
   it("does not send a duplicate generated image for a completed queued job", async () => {
