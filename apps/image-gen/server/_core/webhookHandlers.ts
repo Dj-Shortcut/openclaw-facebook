@@ -1769,6 +1769,7 @@ export function createWebhookHandlers({
     }
 
     await setFlowState(psid, "PROCESSING");
+    await sendLoggedText(psid, t(lang, "generationQueued"), reqId);
     safeLog("messenger_generation_job_queued", {
       reqId,
       user: toLogUser(userId),
