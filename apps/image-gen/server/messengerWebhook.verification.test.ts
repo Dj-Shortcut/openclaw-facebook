@@ -17,6 +17,7 @@ import {
   createRequestMetricsMiddleware,
   registerMetricsRoute,
 } from "./_core/observability";
+import { bodyParserErrorHandler } from "./_core/bodyParserErrorHandler";
 import { bindTestHttpServer } from "./testHttpServer";
 
 const { rateLimitMock } = vi.hoisted(() => ({
@@ -86,6 +87,27 @@ async function getWebhook(
   })();
 
   return { ...response, signatureMiddlewareCalls };
+}
+
+function getHttpRequestMetricCount(
+  metricsBody: string,
+  method: string,
+  path: string,
+  status: string
+): number {
+  const escapedMethod = escapeRegExp(method);
+  const escapedPath = escapeRegExp(path);
+  const escapedStatus = escapeRegExp(status);
+  const match = new RegExp(
+    `^http_requests_total\\{method="${escapedMethod}",path="${escapedPath}",status="${escapedStatus}"\\} (\\d+)$`,
+    "m"
+  ).exec(metricsBody);
+
+  return match ? Number(match[1]) : 0;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 describe("messenger webhook verification route", () => {
@@ -181,11 +203,12 @@ describe("messenger webhook verification route", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     app.use(attachRequestTracing());
-    app.use(express.json({ verify: captureMetaWebhookRawBody }));
     app.use(createRequestMetricsMiddleware());
+    app.use(express.json({ verify: captureMetaWebhookRawBody }));
     app.use("/webhook", verifyMetaWebhookSignature);
     registerMetaWebhookRoutes(app);
     registerMetricsRoute(app);
+    app.use(bodyParserErrorHandler);
 
     const server = http.createServer(app);
     const boundServer = await bindTestHttpServer(server);
@@ -214,6 +237,63 @@ describe("messenger webhook verification route", () => {
         .map(call => call.map(value => JSON.stringify(value)).join(" "))
         .join("\n");
       expect(loggedText).not.toContain(secretPayloadValue);
+    } finally {
+      await boundServer.close();
+    }
+  });
+
+  it("records HTTP metrics for malformed POST /webhook JSON before body-parser errors skip normal middleware", async () => {
+    const { registerMetaWebhookRoutes } = await import("./_core/meta/webhookRoutes");
+    const app = express();
+    const malformedPayload = '{"object":"page","message":"unterminated-secret';
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    app.use(attachRequestTracing());
+    app.use(createRequestMetricsMiddleware());
+    app.use(express.json({ verify: captureMetaWebhookRawBody }));
+    app.use("/webhook", verifyMetaWebhookSignature);
+    registerMetaWebhookRoutes(app);
+    registerMetricsRoute(app);
+    app.use(bodyParserErrorHandler);
+
+    const server = http.createServer(app);
+    const boundServer = await bindTestHttpServer(server);
+
+    try {
+      const beforeMetricsResponse = await fetch(`${boundServer.baseUrl}/metrics`);
+      const beforeMetricsBody = await beforeMetricsResponse.text();
+      const beforeCount = getHttpRequestMetricCount(
+        beforeMetricsBody,
+        "POST",
+        "/webhook",
+        "400"
+      );
+
+      const webhookResponse = await fetch(`${boundServer.baseUrl}/webhook`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: malformedPayload,
+      });
+      expect(webhookResponse.status).toBe(400);
+
+      const metricsResponse = await fetch(`${boundServer.baseUrl}/metrics`);
+      const metricsBody = await metricsResponse.text();
+
+      expect(metricsResponse.status).toBe(200);
+      expect(
+        getHttpRequestMetricCount(metricsBody, "POST", "/webhook", "400")
+      ).toBe(beforeCount + 1);
+
+      const loggedText = [logSpy, infoSpy, warnSpy, errorSpy]
+        .flatMap(spy => spy.mock.calls)
+        .map(call => call.map(value => JSON.stringify(value)).join(" "))
+        .join("\n");
+      expect(loggedText).not.toContain("unterminated-secret");
     } finally {
       await boundServer.close();
     }

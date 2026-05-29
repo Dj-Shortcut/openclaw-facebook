@@ -350,6 +350,8 @@ async function startServer() {
   app.use(attachRequestTracing());
   app.use(createGlobalHttpRateLimiter());
 
+  app.use(createRequestMetricsMiddleware());
+
   if (process.env.NODE_ENV !== "production") {
     app.get("/debug/sentry", () => {
       throw new Error("Sentry smoke test");
@@ -374,8 +376,6 @@ async function startServer() {
     }
     next();
   });
-
-  app.use(createRequestMetricsMiddleware());
 
   // Verify webhook signature for all Meta webhook deliveries.
   app.use("/webhook", verifyBotWebhookSignature);
