@@ -1,0 +1,42 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  buildGeneratedImageUrl,
+  getGeneratedImage,
+  hashGeneratedImageToken,
+  putGeneratedImage,
+} from "./_core/generatedImageStore";
+
+describe("generatedImageStore", () => {
+  it("stores generated images in memory and retrieves them by token", () => {
+    const token = putGeneratedImage(Buffer.from([1, 2, 3]), "image/jpeg");
+    const stored = getGeneratedImage(token);
+
+    expect(stored).not.toBeNull();
+    expect(stored?.contentType).toBe("image/jpeg");
+    expect(stored?.buffer).toEqual(Buffer.from([1, 2, 3]));
+  });
+
+  it("returns null after TTL expires", async () => {
+    process.env.GENERATED_IMAGE_TTL_MS = "5";
+    const token = putGeneratedImage(Buffer.from([9]), "image/jpeg");
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    expect(getGeneratedImage(token)).toBeNull();
+    delete process.env.GENERATED_IMAGE_TTL_MS;
+  });
+
+  it("builds generated URL with token", () => {
+    const url = buildGeneratedImageUrl("https://example.com", "abc-123");
+    expect(url).toBe("https://example.com/generated/abc-123.png");
+  });
+
+  it("hashes generated image tokens for logs without exposing the token", () => {
+    const token = "temporary-generated-image-token";
+    const tokenHash = hashGeneratedImageToken(token);
+
+    expect(tokenHash).toMatch(/^[a-f0-9]{12}$/);
+    expect(tokenHash).not.toContain(token);
+  });
+});

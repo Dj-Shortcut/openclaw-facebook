@@ -1,0 +1,89 @@
+name: Image Gen Fallow
+
+on:
+  pull_request:
+    paths:
+      - "apps/image-gen/**"
+      - ".github/workflows/image-gen-fallow.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/image-gen/**"
+      - ".github/workflows/image-gen-fallow.yml"
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: image-gen-fallow-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codebase-health:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/image-gen
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Fallow - Codebase Health
+        uses: fallow-rs/fallow@v2.27.0
+        with:
+          version: 2.27.0
+          fail-on-issues: false
+          format: json
+
+      - name: Generate Fallow report
+        shell: bash
+        run: |
+          mkdir -p .fallow
+          npx --yes fallow@2.27.0 --root . dead-code --summary -f json > .fallow/report-check.json || true
+          npx --yes fallow@2.27.0 --root . health --summary --score --file-scores -f json > .fallow/report-health.json || true
+          node -e "const fs=require('node:fs'); const check=JSON.parse(fs.readFileSync('.fallow/report-check.json','utf8')); const health=JSON.parse(fs.readFileSync('.fallow/report-health.json','utf8')); fs.writeFileSync('.fallow/report.json', JSON.stringify({ schema_version: check.schema_version ?? health.schema_version, version: check.version ?? health.version, elapsed_ms: (check.elapsed_ms ?? 0) + (health.elapsed_ms ?? 0), check, health }, null, 2) + '\n');"
+
+      - name: Generate production Fallow report
+        shell: bash
+        run: |
+          mkdir -p .fallow
+          npx --yes fallow@2.27.0 --root . --production dead-code --summary -f json > .fallow/report-production-check.json || true
+          npx --yes fallow@2.27.0 --root . --production health --summary --score --file-scores -f json > .fallow/report-production-health.json || true
+          node -e "const fs=require('node:fs'); const check=JSON.parse(fs.readFileSync('.fallow/report-production-check.json','utf8')); const health=JSON.parse(fs.readFileSync('.fallow/report-production-health.json','utf8')); fs.writeFileSync('.fallow/report-production.json', JSON.stringify({ schema_version: check.schema_version ?? health.schema_version, version: check.version ?? health.version, elapsed_ms: (check.elapsed_ms ?? 0) + (health.elapsed_ms ?? 0), check, health }, null, 2) + '\n');"
+
+      - name: Build maintainability badge
+        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+        run: |
+          node scripts/fallow-badge.mjs \
+            .fallow/report.json \
+            public/badges/fallow-maintainability.json \
+            public/badges/fallow-metrics.json
+
+      - name: Commit badge update
+        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]'
+        shell: bash
+        run: |
+          if git diff --quiet -- public/badges/fallow-maintainability.json public/badges/fallow-metrics.json; then
+            echo "Badge files unchanged"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/badges/fallow-maintainability.json public/badges/fallow-metrics.json
+          git commit -m "chore: update image-gen Fallow maintainability badge"
+          git push
+
+      - name: Enforce maintainability gate
+        if: github.event_name != 'pull_request'
+        run: |
+          node scripts/check-fallow-gate.mjs .fallow/report.json
+
+      - name: Summarize production-only report
+        shell: bash
+        run: |
+          node -e "const fs=require('node:fs'); const report=JSON.parse(fs.readFileSync('.fallow/report-production.json','utf8')); const maintainability=Number(report.health?.summary?.average_maintainability ?? NaN); const issues=Number(report.check?.total_issues ?? report.total_issues ?? 0); console.log(JSON.stringify({ mode: 'production-informational', maintainability: Number.isFinite(maintainability) ? Number(maintainability.toFixed(1)) : null, issues }, null, 2));"

@@ -36,6 +36,28 @@ Public phase:
 openclaw plugins install @dj-shortcut/facebook
 ```
 
+## Repository Layout
+
+This repository is now the Leaderbot/OpenClaw monorepo. The Facebook/OpenClaw
+plugin still lives at the repository root so existing plugin packaging keeps
+working. The production image-generation service lives in
+`apps/image-gen`.
+
+```text
+.
+├── apps/image-gen              # Leaderbot image-generation web/service app
+├── deploy/fly-gateway          # OpenClaw gateway Fly image
+├── src                         # Facebook channel plugin runtime
+└── docs                        # Shared operations and release docs
+```
+
+Deploy targets:
+
+```bash
+npm run gateway:deploy
+npm run image-gen:deploy
+```
+
 ## Configure
 
 Use `channels.facebook` for new installs:

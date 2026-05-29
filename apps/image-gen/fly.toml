@@ -1,0 +1,29 @@
+app = "leaderbot-fb-image-gen"
+primary_region = "ams"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "8080"
+  # REDIS_URL must be provided via Fly secrets for production startup.
+
+[processes]
+  app = "env MESSENGER_GENERATION_QUEUE_ENABLED=1 MESSENGER_GENERATION_INLINE_FALLBACK=0 node dist/index.cjs"
+  worker = "env MESSENGER_GENERATION_QUEUE_ENABLED=1 MESSENGER_GENERATION_WORKER_ONLY=1 node dist/index.cjs"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/healthz"

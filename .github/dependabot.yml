@@ -1,0 +1,44 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+    groups:
+      root-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  - package-ecosystem: "npm"
+    directory: "/apps/image-gen"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+    groups:
+      image-gen-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+      image-gen-frontend:
+        patterns:
+          - "react*"
+          - "@radix-ui/*"
+          - "@tanstack/*"
+          - "@trpc/*"
+          - "vite*"
+      image-gen-aws:
+        patterns:
+          - "@aws-sdk/*"
+      image-gen-tooling:
+        patterns:
+          - "eslint*"
+          - "typescript*"
+          - "vitest"
+          - "prettier"
+          - "drizzle*"

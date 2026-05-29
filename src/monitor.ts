@@ -6,19 +6,16 @@ import {
   type ChannelInboundMediaInput,
   buildChannelInboundMediaPayload,
   formatInboundEnvelope,
+  hasFinalInboundReplyDispatch,
   resolveInboundSessionEnvelopeContext,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { hasFinalChannelTurnDispatch } from "openclaw/plugin-sdk/channel-message";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { shouldComputeCommandAuthorized } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  readChannelAllowFromStore,
-  upsertChannelPairingRequest,
-} from "openclaw/plugin-sdk/conversation-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   danger,
@@ -182,10 +179,23 @@ function logMessengerStage(
     base.eventLoopDelayMs = eventLoopDelayMaxMs();
     base.activeMessengerEventJobs = activeMessengerEventJobs;
   }
-  logVerbose(
-    `messenger_trace ${Object.entries(base)
-      .map(([key, value]) => `${key}=${String(value)}`)
-      .join(" ")}`,
+  const line = `messenger_trace ${Object.entries(base)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(" ")}`;
+  logVerbose(line);
+  if (shouldLogMessengerStageToStdout(stage)) {
+    console.info(line);
+  }
+}
+
+function shouldLogMessengerStageToStdout(stage: string): boolean {
+  return (
+    stage === "webhook_received" ||
+    stage === "messenger_ack_sent" ||
+    stage === "intent_classified" ||
+    stage.startsWith("image_gen_request_") ||
+    stage.startsWith("messenger_event_forward_") ||
+    stage === "request_completed"
   );
 }
 
@@ -487,6 +497,25 @@ export function hasMessengerImageGenerationIntent(text: string): boolean {
   return /\b(restyle|restylen|restijlen|restijl|generate image|create image|maak afbeelding|maak een afbeelding|genereer afbeelding|genereer een afbeelding|maak plaatje|maak een plaatje|bewerk foto|bewerk deze foto|edit image|edit this image)\b/.test(
     normalized,
   );
+  if (explicitImageIntent) {
+    return true;
+  }
+  if (/\bmaak\s+(?:me|mij)\s+(?:een|de)?\s*\S+/.test(normalized)) {
+    return true;
+  }
+
+  return /^(doe maar|ga maar|ja graag|yes please|ok(e)?|prima|top)$/.test(normalized);
+}
+
+function isMessengerPromptWritingRequest(normalizedText: string): boolean {
+  return (
+    /\b(maak|schrijf|bedenk|genereer|verbeter|formuleer)\s+(?:een|de|mijn)?\s*prompt\b/.test(
+      normalizedText,
+    ) ||
+    /\b(create|write|draft|improve)\s+(?:an?|the|my)?\s*(?:image\s+)?prompt\b/.test(
+      normalizedText,
+    )
+  );
 }
 
 export function resolveMessengerSourceImageGenerationPrompt(params: {
@@ -498,6 +527,13 @@ export function resolveMessengerSourceImageGenerationPrompt(params: {
     return null;
   }
   return prompt;
+}
+
+export function shouldForwardMessengerImageOnlyEventToImageGen(params: {
+  hasSourceImage: boolean;
+  text: string;
+}): boolean {
+  return params.hasSourceImage && !params.text.trim();
 }
 
 export function resolveMessengerFastLaneReply(
@@ -677,10 +713,7 @@ export function resolveMessengerEventTarget(
   if (!pageId) {
     return targets.length === 1 ? (targets[0] ?? null) : null;
   }
-  return (
-    targets.find((target) => target.account.pageId === pageId) ??
-    (targets.length === 1 ? (targets[0] ?? null) : null)
-  );
+  return targets.find((target) => target.account.pageId === pageId) ?? null;
 }
 
 export function resolveMessengerVerificationTarget(
@@ -699,10 +732,11 @@ async function sendMessengerPairingReply(params: {
   account: ResolvedMessengerAccount;
   cfg: OpenClawConfig;
 }) {
+  const core = getMessengerRuntime();
   await createChannelPairingChallengeIssuer({
     channel: FACEBOOK_CHANNEL_ID,
     upsertPairingRequest: async ({ id, meta }) =>
-      await upsertChannelPairingRequest({
+      await core.channel.pairing.upsertPairingRequest({
         channel: FACEBOOK_CHANNEL_ID,
         id,
         accountId: params.account.accountId,
@@ -742,7 +776,10 @@ async function shouldProcessMessengerEvent(params: {
     },
     cfg: params.cfg,
     readStoreAllowFrom: async () =>
-      await readChannelAllowFromStore(FACEBOOK_CHANNEL_ID, undefined, params.account.accountId),
+      await getMessengerRuntime().channel.pairing.readAllowFromStore({
+        channel: FACEBOOK_CHANNEL_ID,
+        accountId: params.account.accountId,
+      }),
     subject: { stableId: senderId },
     conversation: {
       kind: "direct",
@@ -854,6 +891,20 @@ async function processMessengerEvent(params: {
       hasSourceImage: Boolean(sourceImageAttachment),
       text,
     });
+    if (
+      shouldForwardMessengerImageOnlyEventToImageGen({
+        hasSourceImage: Boolean(sourceImageAttachment),
+        text,
+      })
+    ) {
+      logMessengerStage(params.trace, "messenger_event_forward_started", {
+        reason: "source_image_without_prompt",
+        sourceImage: true,
+      });
+      if (await forwardLeaderbotMessengerEvent({ event: params.event, trace: params.trace })) {
+        return;
+      }
+    }
     if (sourceImageAttachment && sourceImageGenerationPrompt) {
       const sourceImageUrl = sanitizeMessengerSourceImageUrl(sourceImageAttachment.url);
       if (!sourceImageUrl) {
@@ -1002,7 +1053,7 @@ async function processMessengerEvent(params: {
   logVerbose(
     `messenger: dispatching inbound turn session=${route.sessionKey} account=${route.accountId}`,
   );
-  const turnResult = await core.channel.turn.run({
+  const turnResult = await core.channel.inbound.run({
     channel: FACEBOOK_CHANNEL_ID,
     accountId: route.accountId,
     raw: params.event,
@@ -1036,7 +1087,7 @@ async function processMessengerEvent(params: {
         },
         replyPipeline: {},
         delivery: {
-          deliver: async (payload) => {
+          deliver: async (payload: ReplyPayload) => {
             if (!payload.text?.trim()) {
               return { visibleReplySent: false };
             }
@@ -1061,7 +1112,7 @@ async function processMessengerEvent(params: {
               visibleReplySent: true,
             };
           },
-          onError: (err, info) => {
+          onError: (err: unknown, info: { kind: string }) => {
             params.runtime.error?.(danger(`messenger ${info.kind} reply failed: ${String(err)}`));
           },
         },
@@ -1069,7 +1120,7 @@ async function processMessengerEvent(params: {
     },
   });
   const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
-  if (!hasFinalChannelTurnDispatch(dispatchResult)) {
+  if (!hasFinalInboundReplyDispatch(dispatchResult)) {
     logVerbose(
       `messenger: no response generated for message from ${redactMessengerIdentifier(senderId)}`,
     );
@@ -1085,7 +1136,6 @@ async function processMessengerEvent(params: {
   }
   } finally {
     logMessengerStage(params.trace, "request_completed", {
-      eventLoopDelayMs: eventLoopDelayMaxMs(),
       activeMessengerEventJobs,
     });
     activeMessengerEventJobs = Math.max(0, activeMessengerEventJobs - 1);

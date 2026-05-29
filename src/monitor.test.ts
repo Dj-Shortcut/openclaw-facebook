@@ -9,6 +9,7 @@ import {
   resolveMessengerSourceImageGenerationPrompt,
   resolveMessengerVerificationTarget,
   sanitizeMessengerSourceImageUrl,
+  shouldForwardMessengerImageOnlyEventToImageGen,
   shouldProcessMessengerMessageOnce,
   type MessengerWebhookTarget,
 } from "./monitor.js";
@@ -51,6 +52,16 @@ describe("resolveMessengerEventTarget", () => {
     expect(
       resolveMessengerEventTarget([first, second], {
         recipient: { id: "page-3" },
+      }),
+    ).toBeNull();
+  });
+
+  it("does not fall back to the only target when recipient page id is present and unmatched", () => {
+    const target = messengerTarget("first", "page-1");
+
+    expect(
+      resolveMessengerEventTarget([target], {
+        recipient: { id: "page-2" },
       }),
     ).toBeNull();
   });
@@ -198,6 +209,15 @@ describe("hasMessengerImageGenerationIntent", () => {
   it("matches explicit generation and restyle prompts", () => {
     expect(hasMessengerImageGenerationIntent("Restyle deze foto")).toBe(true);
     expect(hasMessengerImageGenerationIntent("Maak een afbeelding van een robot")).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Kan je een afbeelding maken van een robot?")).toBe(
+      true,
+    );
+    expect(hasMessengerImageGenerationIntent("Ik wil een afbeelding genereren")).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Maak me een romeinse soldaat")).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Maak mij een stripheld")).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Doe maar")).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Ja graag")).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Ok")).toBe(true);
   });
 
   it("does not match image analysis or writing-style prompts", () => {
@@ -249,6 +269,38 @@ describe("resolveMessengerSourceImageGenerationPrompt", () => {
         text: "Restyle deze foto",
       }),
     ).toBeNull();
+  });
+});
+
+describe("shouldForwardMessengerImageOnlyEventToImageGen", () => {
+  it("forwards photo-only uploads so image-gen can store the source image", () => {
+    expect(
+      shouldForwardMessengerImageOnlyEventToImageGen({
+        hasSourceImage: true,
+        text: "",
+      }),
+    ).toBe(true);
+    expect(
+      shouldForwardMessengerImageOnlyEventToImageGen({
+        hasSourceImage: true,
+        text: "   ",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps captioned images in the existing gateway routing unless explicitly generated", () => {
+    expect(
+      shouldForwardMessengerImageOnlyEventToImageGen({
+        hasSourceImage: true,
+        text: "What do you see in this photo?",
+      }),
+    ).toBe(false);
+    expect(
+      shouldForwardMessengerImageOnlyEventToImageGen({
+        hasSourceImage: false,
+        text: "",
+      }),
+    ).toBe(false);
   });
 });
 

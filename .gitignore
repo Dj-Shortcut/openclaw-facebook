@@ -10,3 +10,6 @@ pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 *.tgz
+__pycache__/
+*.pyc
+.codex-security-scans/

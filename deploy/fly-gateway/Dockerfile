@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-ARG OPENCLAW_VERSION=2026.5.22
+ARG OPENCLAW_VERSION=2026.5.27
 
 FROM node:22-bookworm-slim AS plugin-build
 
@@ -21,6 +21,7 @@ ARG OPENCLAW_VERSION
 ENV NODE_ENV=production
 ENV OPENCLAW_STATE_DIR=/data
 ENV OPENCLAW_CONFIG_PATH=/data/openclaw.json
+ENV OPENCLAW_WORKSPACE_DIR=/data/workspace
 ENV OPENCLAW_FACEBOOK_PLUGIN_PATH=/app/node_modules/@dj-shortcut/facebook
 ENV OPENCLAW_CODEX_PLUGIN_PATH=/app/node_modules/@openclaw/codex
 ENV OPENCLAW_SKIP_STARTUP_MODEL_PREWARM=1
@@ -45,7 +46,7 @@ RUN npm init -y && \
 
 COPY deploy/fly-gateway/bin ./deploy/fly-gateway/bin
 
-RUN install -d -m 0700 -o node -g node /data && \
+RUN install -d -m 0700 -o node -g node /data /data/workspace && \
     chown -R node:node /app
 
 USER node

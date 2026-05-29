@@ -1,6 +1,6 @@
 {
   "name": "@dj-shortcut/facebook",
-  "version": "2026.5.22",
+  "version": "2026.5.27",
   "private": true,
   "description": "OpenClaw Facebook channel plugin",
   "type": "module",
@@ -49,10 +49,16 @@
   "scripts": {
     "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc -p tsconfig.json",
-    "test": "vitest run",
+    "test": "node ./scripts/run-vitest.mjs",
     "prepare": "npm run build",
     "pack:dry": "npm pack --dry-run",
-    "check": "npm run build && npm test && npm run pack:dry"
+    "check": "npm run build && npm test && npm run pack:dry",
+    "gateway:deploy": "fly deploy -a leaderbot-openclaw-gateway",
+    "image-gen:install": "pnpm install --dir apps/image-gen --lockfile-dir apps/image-gen --frozen-lockfile",
+    "image-gen:check": "pnpm --dir apps/image-gen check",
+    "image-gen:test": "pnpm --dir apps/image-gen test",
+    "image-gen:build": "pnpm --dir apps/image-gen build",
+    "image-gen:deploy": "pnpm --dir apps/image-gen fly deploy -a leaderbot-fb-image-gen"
   },
   "dependencies": {
     "zod": "^4.4.3"
@@ -61,10 +67,10 @@
     "openclaw": ">=2026.5.19"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
-    "openclaw": "^2026.5.22",
-    "typescript": "^5.9.0",
-    "vitest": "^4.1.5"
+    "@types/node": "^25.9.1",
+    "openclaw": "^2026.5.27",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
   },
   "openclaw": {
     "compat": {
@@ -72,8 +78,8 @@
       "minGatewayVersion": "2026.5.19"
     },
     "build": {
-      "openclawVersion": "2026.5.22",
-      "pluginSdkVersion": "2026.5.22"
+      "openclawVersion": "2026.5.27",
+      "pluginSdkVersion": "2026.5.27"
     },
     "install": {
       "clawhubSpec": "clawhub:@dj-shortcut/facebook",
@@ -91,14 +97,20 @@
     "channel": {
       "id": "facebook",
       "label": "Facebook",
-      "aliases": ["messenger", "fb", "fbm"],
+      "aliases": [
+        "messenger",
+        "fb",
+        "fbm"
+      ],
       "selectionLabel": "Facebook (Page Messenger)",
       "detailLabel": "Facebook Page",
       "docsPath": "/channels/facebook",
       "docsLabel": "facebook",
       "blurb": "Facebook Page Messenger DMs via Meta webhooks.",
       "systemImage": "message.fill",
-      "preferOver": ["messenger"],
+      "preferOver": [
+        "messenger"
+      ],
       "exposure": {
         "configured": true,
         "setup": true,
