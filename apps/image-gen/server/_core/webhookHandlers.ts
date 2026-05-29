@@ -17,31 +17,16 @@ import {
   setFlowState,
   setLastGenerated,
   setLastGenerationContext,
-  setLastEntryIntent,
   setPendingStoredImage,
   setPreselectedStyle,
-  setPreferredLang,
-  setActiveExperience,
   setLastUserMessageAt,
-  markIntroSeen,
   anonymizePsid,
   type ConversationState,
 } from "./messengerState";
-import { recordInboundUserActivity } from "./messengerInboundActivity";
-import { classifyInboundEvent } from "./messengerInboundClassification";
-import {
-  FACE_MEMORY_CONSENT_NO,
-  FACE_MEMORY_CONSENT_YES,
-  isFaceMemoryEnabled,
-  updateConsentedFaceMemorySource,
-} from "./faceMemory";
-import { handleMessengerConsentGate } from "./consentService";
-import { normalizeLang, t, type Lang } from "./i18n";
+import { FACE_MEMORY_CONSENT_NO, FACE_MEMORY_CONSENT_YES } from "./faceMemory";
+import { t, type Lang } from "./i18n";
 import { toLogUser, toUserKey } from "./privacy";
-import {
-  getStoredMessengerImageDecision,
-  normalizeMessengerInboundImage,
-} from "./messengerImageIngress";
+import { normalizeMessengerInboundImage } from "./messengerImageIngress";
 import {
   getStylesForCategory,
   type Style,
@@ -50,7 +35,7 @@ import {
 import { claimWebhookReplayKey } from "./webhookReplayProtection";
 import {
   type FacebookWebhookEntry,
-  FacebookWebhookEvent,
+  type FacebookWebhookEvent,
   getEventDedupeKey,
   getGreetingResponse,
   parseReferralStyle,
@@ -64,25 +49,12 @@ import {
 import { hasInFlightGeneration, runGuardedGeneration } from "./generationGuard";
 import { canGenerate, getFreeDailyLimit, increment } from "./messengerQuota";
 import { isDebugLogEnabled } from "./logLevel";
-import { getBotFeatures } from "./bot/features";
 import { ensureDefaultBotFeaturesRegistered } from "./bot/defaultFeatures";
-import { handleSharedTextMessage } from "./sharedTextHandler";
-import type { NormalizedInboundMessage } from "./normalizedInboundMessage";
-import { sendMessengerBotResponse } from "./botResponseAdapters";
-import {
-  parseMessengerEntryIntent,
-  routeMessengerActiveExperience,
-  routeMessengerEntryIntent,
-} from "./messengerExperienceRouting";
-import type { EntryIntent } from "./entryIntent";
-import type { ActiveExperience } from "./activeExperience";
 import {
   getTodayRuntimeStats,
-  recordActiveUserToday,
   recordGenerationError,
   recordGenerationSuccess,
 } from "./botRuntimeStats";
-import { captureException } from "./observability/sentry";
 import type {
   BotLogger,
   BotPayloadContext,
@@ -90,11 +62,6 @@ import type {
   BotImageContext,
 } from "./botContext";
 import type { DirectorMode } from "./image-generation/director/directorTypes";
-import { createTrackedHandlerContext } from "./webhookTrackedContext";
-import {
-  handlePayload,
-  handlePostbackEvent,
-} from "./webhookPayloadBranch";
 import { emitGenerationDiagnostic } from "./generationDiagnostics";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
@@ -106,6 +73,13 @@ import {
   getMessengerGenerationCompletion,
   markMessengerGenerationCompleted,
 } from "./messengerGenerationCompletion";
+import { handleEntry } from "./webhookEventRouter";
+import {
+  MESSENGER_ASYNC_RESPONSE_QUEUED,
+  MESSENGER_SEND_SKIPPED,
+  combineMessengerSendOutcomes,
+  type MaybeInFlightMessageResult,
+} from "./webhookFallback";
 
 type HandlerDeps = {
   defaultLang: Lang;
@@ -129,52 +103,10 @@ export class InternalMessengerImageRequestNotQueuedError extends Error {
   }
 }
 
-type FacebookWebhookMessage = NonNullable<FacebookWebhookEvent["message"]>;
-type FeatureContextBase = Omit<
-  BotPayloadContext,
-  "payload"
->;
+type FeatureContextBase = Omit<BotPayloadContext, "payload">;
 type MessengerState = Awaited<ReturnType<typeof getOrCreateState>>;
-const MESSENGER_SEND_SKIPPED: MessengerSendOutcome = {
-  sent: false,
-  reason: "response_window_closed",
-};
-const MESSENGER_ASYNC_RESPONSE_QUEUED: MessengerSendOutcome = { sent: true };
-type MaybeInFlightMessageResult =
-  | { handled: false }
-  | { handled: true; outcome?: MessengerSendOutcome };
-
-type TrackedEventContext = {
-  psid: string;
-  userId: string;
-  reqId: string;
-  lang: Lang;
-  localeLang: Lang;
-  senderLocale?: string;
-  state: MessengerState;
-  classification: ReturnType<typeof classifyInboundEvent>;
-  responseSent: () => boolean;
-  markResponseSentFromOutcome: (
-    outcome: MessengerSendOutcome | undefined
-  ) => void;
-  sendFallbackIfNeeded: () => Promise<void>;
-  trackedCtx: HandlerContext;
-};
-
-function combineMessengerSendOutcomes(
-  ...outcomes: MessengerSendOutcome[]
-): MessengerSendOutcome {
-  return outcomes.some(outcome => outcome.sent)
-    ? { sent: true }
-    : MESSENGER_SEND_SKIPPED;
-}
-
 function normalizeImageRequestText(text: string): string {
-  return text
-    .trim()
-    .toLowerCase()
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ");
+  return text.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
 }
 
 function inferStyleFromImageRequest(text: string): Style {
@@ -365,31 +297,6 @@ export type HandlerContext = {
   ) => Promise<MessengerSendOutcome>;
 };
 
-type MessageEventInput = {
-  psid: string;
-  userId: string;
-  event: FacebookWebhookEvent;
-  reqId: string;
-  lang: Lang;
-};
-
-type ImageMessageInput = {
-  psid: string;
-  userId: string;
-  reqId: string;
-  lang: Lang;
-  attachments: FacebookWebhookMessage["attachments"];
-};
-
-type TextMessageInput = {
-  psid: string;
-  userId: string;
-  reqId: string;
-  lang: Lang;
-  text: string;
-  timestamp?: number;
-};
-
 const IN_FLIGHT_MESSAGE =
   "\u23F3 even geduld, ik ben nog bezig met jouw restyle";
 const IN_FLIGHT_NOTICE_COOLDOWN_MS = 30_000;
@@ -398,571 +305,6 @@ const MESSENGER_CAPABILITIES = Object.freeze({
   quickReplies: true,
   richTemplates: true,
 });
-
-function logMessengerWebhookTrace(
-  stage:
-    | "webhook_received"
-    | "selected_branch"
-    | "before_send"
-    | "after_send"
-    | "top_level_catch",
-  details: Record<string, unknown>
-): void {
-  safeLog("messenger_response_window_trace", { stage, ...details });
-}
-
-async function handleEntry(
-  ctx: HandlerContext,
-  entry: FacebookWebhookEntry
-): Promise<void> {
-  const events = Array.isArray(entry?.messaging) ? entry.messaging : [];
-  for (const event of events) {
-    await handleEvent(ctx, event, entry?.id);
-  }
-}
-
-async function createTrackedEventContext(
-  ctx: HandlerContext,
-  event: FacebookWebhookEvent,
-  entryId?: string
-): Promise<TrackedEventContext | null> {
-  const psid = event.sender?.id;
-  if (!psid) return null;
-
-  const userId = toUserKey(psid);
-  const reqId = `${psid}-${Date.now()}`;
-  let responseSent = false;
-  const markResponseSent = () => {
-    responseSent = true;
-  };
-  const markResponseSentFromOutcome = (
-    outcome: MessengerSendOutcome | undefined
-  ) => {
-    if (outcome?.sent) {
-      markResponseSent();
-    }
-  };
-  const trackedCtx = createTrackedHandlerContext(ctx, markResponseSentFromOutcome);
-
-  if (!(await ctx.claimEventReplayOrLog(event, entryId, userId))) {
-    return null;
-  }
-
-  recordActiveUserToday(userId);
-  const senderLocale = event.sender?.locale?.trim();
-  const localeLang = senderLocale
-    ? normalizeLang(senderLocale)
-    : ctx.defaultLang;
-  const state = await getOrCreateState(psid);
-  const lang = state.preferredLang || localeLang || ctx.defaultLang;
-  const classification = classifyInboundEvent(event);
-  await recordInboundUserActivity(psid, event, classification);
-  const sendFallbackIfNeeded = async () => {
-    if (
-      classification.isInboundUserEvent &&
-      !classification.isIntentionalSilentAck &&
-      !classification.isIntentionalSilentUnknownPayload &&
-      !responseSent
-    ) {
-      await trackedCtx.sendLoggedText(psid, t(lang, "failure"), reqId);
-    }
-  };
-
-  return {
-    psid,
-    userId,
-    reqId,
-    lang,
-    localeLang,
-    senderLocale,
-    state,
-    classification,
-    responseSent: () => responseSent,
-    markResponseSentFromOutcome,
-    sendFallbackIfNeeded,
-    trackedCtx,
-  };
-}
-
-async function handleEvent(
-  ctx: HandlerContext,
-  event: FacebookWebhookEvent,
-  entryId?: string
-): Promise<void> {
-  const eventContext = await createTrackedEventContext(ctx, event, entryId);
-  if (!eventContext) return;
-
-  const { psid, userId, reqId, state, trackedCtx } = eventContext;
-
-  logMessengerWebhookTrace("webhook_received", {
-    reqId,
-    user: toLogUser(userId),
-    entryId,
-    hasMessage: Boolean(event.message),
-    hasPostback: Boolean(event.postback),
-    isEcho: Boolean(event.message?.is_echo),
-  });
-
-  try {
-    trackedCtx.logIncomingMessage(psid, userId, event, reqId);
-    trackedCtx.logUserState(psid, userId, state, reqId, "handle_event");
-
-    if (
-      eventContext.senderLocale &&
-      eventContext.localeLang !== state.preferredLang
-    ) {
-      await setPreferredLang(psid, eventContext.localeLang);
-    }
-
-    await routeTrackedEvent(eventContext, event);
-  } catch (error) {
-    logMessengerWebhookTrace("top_level_catch", {
-      reqId,
-      user: toLogUser(userId),
-      errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
-    });
-    captureException(error, {
-      area: "webhook",
-      eventType: event.postback ? "postback" : event.message ? "message" : "unknown",
-      hasImage: Boolean(
-        event.message?.attachments?.some(attachment => attachment.type === "image")
-      ),
-      hasText: Boolean(event.message?.text),
-    });
-    await eventContext.sendFallbackIfNeeded();
-    throw error;
-  }
-
-  await eventContext.sendFallbackIfNeeded();
-}
-
-async function routeTrackedEvent(
-  context: TrackedEventContext,
-  event: FacebookWebhookEvent
-): Promise<void> {
-  const { psid, userId, reqId, lang, localeLang, state, trackedCtx } = context;
-  if (await routeConsentGate(context, event)) return;
-
-  const routeDeps = createMessengerRouteDeps(context);
-  const { referralRef, entryIntent } = parseMessengerEntryIntent({
-    event,
-    reqId,
-    userId,
-    localeLang,
-    safeLog,
-  });
-
-  if (
-    await routeMessengerEntryIntent({
-      deps: routeDeps,
-      state,
-      entryIntent,
-    })
-  ) {
-    await finishSelectedBranch(context, "entry_intent");
-    return;
-  }
-
-  if (
-    await routeMessengerActiveExperience({
-      deps: routeDeps,
-      state,
-      event,
-    })
-  ) {
-    await finishSelectedBranch(context, "active_experience");
-    return;
-  }
-
-  const referralResult = await trackedCtx.handleReferralStyleEvent(
-    psid,
-    referralRef,
-    lang,
-    reqId
-  );
-  if (referralResult.handled) {
-    context.markResponseSentFromOutcome(referralResult.outcome);
-    await finishSelectedBranch(context, "referral");
-    return;
-  }
-
-  if (
-    await handlePostbackEvent(trackedCtx, {
-      psid,
-      userId,
-      event,
-      reqId,
-      lang,
-    })
-  ) {
-    await finishSelectedBranch(context, "postback");
-    return;
-  }
-
-  await handleMessageEvent(trackedCtx, { psid, userId, event, reqId, lang });
-  await finishSelectedBranch(context, "message");
-}
-
-async function routeConsentGate(
-  context: TrackedEventContext,
-  event: FacebookWebhookEvent
-): Promise<boolean> {
-  const { psid, lang, reqId, state, classification, trackedCtx } = context;
-  if (!classification.isInboundUserEvent) {
-    return false;
-  }
-
-  const handled = await handleMessengerConsentGate({
-    psid,
-    lang,
-    text: event.message?.text,
-    payload: classification.eventPayload,
-    state,
-    sendText: async text => {
-      await trackedCtx.sendLoggedText(psid, text, reqId);
-    },
-    sendQuickReplies: async (text, replies) => {
-      await trackedCtx.sendLoggedQuickReplies(psid, text, replies, reqId);
-    },
-    sendRestyleStarterPills: async () => {
-      await setFlowState(psid, "AWAITING_STYLE");
-      await trackedCtx.sendStylePicker(psid, lang, reqId);
-    },
-  });
-
-  if (handled) {
-    await finishSelectedBranch(context, "consent_gate");
-  }
-
-  return handled;
-}
-
-function createMessengerRouteDeps(context: TrackedEventContext) {
-  const { psid, userId, reqId, trackedCtx } = context;
-  return {
-    psid,
-    userId,
-    reqId,
-    sendText: async (text: string) => {
-      await trackedCtx.sendLoggedText(psid, text, reqId);
-    },
-    sendStateText: async (stateName: ConversationState, text: string) => {
-      await trackedCtx.sendStateQuickReplies(psid, stateName, text, reqId);
-    },
-    sendOptionsPrompt: async (
-      prompt: string,
-      options: Array<{ id: string; title: string }>
-    ) => {
-      await trackedCtx.sendLoggedQuickReplies(
-        psid,
-        prompt,
-        options.map(option => ({
-          content_type: "text",
-          title: option.title,
-          payload: option.id,
-        })),
-        reqId
-      );
-    },
-    sendImage: async (imageUrl: string) => {
-      await trackedCtx.sendLoggedImage(psid, imageUrl, reqId);
-    },
-    safeLog,
-    setLastEntryIntent: (nextEntryIntent: EntryIntent | null) =>
-      Promise.resolve(setLastEntryIntent(psid, nextEntryIntent)),
-    setActiveExperience: (nextActiveExperience: ActiveExperience | null) =>
-      Promise.resolve(setActiveExperience(psid, nextActiveExperience)),
-  };
-}
-
-async function finishSelectedBranch(
-  context: TrackedEventContext,
-  branch: string
-): Promise<void> {
-  logMessengerWebhookTrace("selected_branch", {
-    reqId: context.reqId,
-    user: toLogUser(context.userId),
-    branch,
-    responseSent: context.responseSent(),
-  });
-  await context.sendFallbackIfNeeded();
-}
-
-async function handleMessageEvent(
-  ctx: HandlerContext,
-  input: MessageEventInput
-): Promise<void> {
-  const message = input.event.message;
-  if (!message || message.is_echo) return;
-
-  if ((await ctx.maybeSendInFlightMessage(input.psid, input.reqId)).handled) {
-    return;
-  }
-
-  const quickPayload = message.quick_reply?.payload;
-  if (quickPayload) {
-    await handlePayload(ctx, {
-      psid: input.psid,
-      userId: input.userId,
-      payload: quickPayload,
-      reqId: input.reqId,
-      lang: input.lang,
-    });
-    return;
-  }
-
-  if (
-    await tryHandleImageMessage(ctx, {
-      psid: input.psid,
-      userId: input.userId,
-      reqId: input.reqId,
-      lang: input.lang,
-      attachments: message.attachments,
-    })
-  ) {
-    return;
-  }
-
-  const text = message.text;
-  const trimmedText = text?.trim();
-  if (!trimmedText) {
-    return;
-  }
-
-  await handleTextMessage(ctx, {
-    psid: input.psid,
-    userId: input.userId,
-    reqId: input.reqId,
-    lang: input.lang,
-    text: trimmedText,
-    timestamp: input.event.timestamp ?? Date.now(),
-  });
-}
-
-async function tryHandleImageMessage(
-  ctx: HandlerContext,
-  input: ImageMessageInput
-): Promise<boolean> {
-  const imageAttachment = input.attachments?.find(
-    att => att.type === "image" && att.payload?.url
-  );
-  if (!imageAttachment?.payload?.url) {
-    return false;
-  }
-
-  const inboundImageUrl = imageAttachment.payload.url;
-  console.info(
-    JSON.stringify({
-      level: "info",
-      msg: "messenger_image_message_parsed",
-      reqId: input.reqId,
-      psidHash: anonymizePsid(input.psid).slice(0, 12),
-      attachmentHostname: ctx.getAttachmentHostname(inboundImageUrl),
-    })
-  );
-  ctx.debugWebhookLog({
-    level: "debug",
-    msg: "photo_received",
-    reqId: input.reqId,
-    psidHash: anonymizePsid(input.psid).slice(0, 12),
-    hasAttachments: !!input.attachments,
-    attachmentHostname: ctx.getAttachmentHostname(inboundImageUrl),
-  });
-
-  const storedSourceImageUrl = await normalizeMessengerInboundImage({
-    inboundImageUrl,
-    psidHash: anonymizePsid(input.psid).slice(0, 12),
-    reqId: input.reqId,
-  });
-  if (!storedSourceImageUrl) {
-    await clearPendingImageState(input.psid);
-    await setFlowState(input.psid, "AWAITING_PHOTO");
-    await ctx.sendLoggedText(
-      input.psid,
-      t(input.lang, "missingInputImage"),
-      input.reqId
-    );
-    return true;
-  }
-
-  const state = await getOrCreateState(input.psid);
-  for (const feature of getBotFeatures()) {
-    const result = await feature.onImage?.(
-      ctx.createFeatureImageContext(
-        input.psid,
-        input.userId,
-        input.reqId,
-        input.lang,
-        state,
-        storedSourceImageUrl
-      )
-    );
-    if (result?.handled) {
-      return true;
-    }
-  }
-
-  ctx.logUserState(input.psid, input.userId, state, input.reqId, "image_received");
-  const imageDecision = getStoredMessengerImageDecision({
-    lastPhotoUrl: state.lastPhotoUrl,
-    selectedStyle: state.selectedStyle,
-    preselectedStyle: state.preselectedStyle,
-    storedSourceImageUrl,
-  });
-  await setPendingStoredImage(input.psid, storedSourceImageUrl);
-  if (isFaceMemoryEnabled()) {
-    if (state.faceMemoryConsent?.given) {
-      await updateConsentedFaceMemorySource(input.psid, storedSourceImageUrl);
-    } else if (!state.faceMemoryConsent) {
-      if (imageDecision.action === "show_style_picker") {
-        await setPreselectedStyle(input.psid, null);
-      }
-      await ctx.sendFaceMemoryConsentPrompt(input.psid, input.lang, input.reqId);
-      return true;
-    }
-  }
-
-  ctx.logImageFlowDecision({
-    psid: input.psid,
-    userId: input.userId,
-    reqId: input.reqId,
-    stage: state.stage,
-    hadPreviousPhoto: imageDecision.hadPreviousPhoto,
-    incomingImageUrl: imageDecision.incomingImageUrl,
-    selectedStyle: state.selectedStyle,
-    preselectedStyle: imageDecision.styleToRun,
-    action: imageDecision.action,
-  });
-
-  if (
-    imageDecision.action === "auto_run_preselected_style" ||
-    imageDecision.action === "auto_run_selected_style"
-  ) {
-    await setPreselectedStyle(input.psid, null);
-    await setChosenStyle(input.psid, imageDecision.styleToRun);
-    await ctx.runStyleGeneration(
-      input.psid,
-      input.userId,
-      imageDecision.styleToRun,
-      input.reqId,
-      input.lang
-    );
-    return true;
-  }
-
-  await setFlowState(input.psid, "AWAITING_STYLE");
-  await ctx.sendPhotoReceivedPrompt(input.psid, input.lang, input.reqId);
-  return true;
-}
-
-async function handleTextMessage(
-  ctx: HandlerContext,
-  input: TextMessageInput
-): Promise<void> {
-  const normalizedMessage = createNormalizedTextMessage(input);
-  logNormalizedTextHandoff(input, normalizedMessage);
-
-  const result = await handleSharedMessengerText(ctx, input, normalizedMessage);
-  await sendSharedMessengerTextResponse(ctx, input, result);
-  await applyTextAfterSend(result, input);
-}
-
-function createNormalizedTextMessage(
-  input: TextMessageInput
-): NormalizedInboundMessage {
-  return {
-    channel: "messenger",
-    senderId: input.psid,
-    userId: input.userId,
-    messageType: "text",
-    textBody: input.text,
-    timestamp: input.timestamp ?? Date.now(),
-  };
-}
-
-function logNormalizedTextHandoff(
-  input: TextMessageInput,
-  normalizedMessage: NormalizedInboundMessage
-): void {
-  console.log("[messenger webhook] normalized event handoff", {
-    channel: normalizedMessage.channel,
-    reqId: input.reqId,
-    user: toLogUser(input.userId),
-    messageType: normalizedMessage.messageType,
-  });
-}
-
-async function handleSharedMessengerText(
-  ctx: HandlerContext,
-  input: TextMessageInput,
-  normalizedMessage: NormalizedInboundMessage
-) {
-  return await handleSharedTextMessage({
-    message: normalizedMessage,
-    reqId: input.reqId,
-    lang: input.lang,
-    getState: () => Promise.resolve(getOrCreateState(input.psid)),
-    setFlowState: nextState =>
-      Promise.resolve(setFlowState(input.psid, nextState)),
-    runTextFeatures: async ({
-      state,
-      messageText,
-      normalizedText,
-      hasPhoto,
-    }) => {
-      for (const feature of getBotFeatures()) {
-        const result = await feature.onText?.(
-          ctx.createFeatureTextContext(
-            input.psid,
-            input.userId,
-            input.reqId,
-            input.lang,
-            state,
-            messageText,
-            normalizedText,
-            hasPhoto
-          )
-        );
-        if (result?.handled) {
-          return true;
-        }
-      }
-
-      return false;
-    },
-    logState: (state, context) => {
-      ctx.logUserState(input.psid, input.userId, state, input.reqId, context);
-    },
-    logAckIgnored: ack => {
-      safeLog("ack_ignored", { ack });
-    },
-  });
-}
-
-async function sendSharedMessengerTextResponse(
-  ctx: HandlerContext,
-  input: TextMessageInput,
-  result: Awaited<ReturnType<typeof handleSharedMessengerText>>
-): Promise<void> {
-  await sendMessengerBotResponse(result.response, {
-    replyState: result.replyState,
-    sendText: async text => {
-      await ctx.sendLoggedText(input.psid, text, input.reqId);
-    },
-    sendStateText: async (stateName, text) => {
-      await ctx.sendStateQuickReplies(input.psid, stateName, text, input.reqId);
-    },
-  });
-}
-
-async function applyTextAfterSend(
-  result: Awaited<ReturnType<typeof handleSharedMessengerText>>,
-  input: TextMessageInput
-): Promise<void> {
-  if (result.afterSend === "markIntroSeen") {
-    await Promise.resolve(markIntroSeen(input.psid));
-  }
-}
 
 export function createWebhookHandlers({
   defaultLang,
@@ -1259,7 +601,12 @@ export function createWebhookHandlers({
       chooseStyle: async style => {
         await handleStyleSelection(psid, userId, style, reqId, lang);
       },
-      runStyleGeneration: async (style, sourceImageUrl, promptHint, directorMode) => {
+      runStyleGeneration: async (
+        style,
+        sourceImageUrl,
+        promptHint,
+        directorMode
+      ) => {
         await runStyleGeneration(
           psid,
           userId,
@@ -1426,8 +773,8 @@ export function createWebhookHandlers({
     return await sendLoggedQuickReplies(
       psid,
       lang === "en"
-        ? "May I keep your photo for 30 days? Then you do not have to upload it again every time. You can delete it any time with \"delete my data\"."
-        : "Mag ik je foto 30 dagen bewaren? Dan hoef je niet steeds opnieuw te uploaden. Je kan dit altijd wissen met \"verwijder mijn data\".",
+        ? 'May I keep your photo for 30 days? Then you do not have to upload it again every time. You can delete it any time with "delete my data".'
+        : 'Mag ik je foto 30 dagen bewaren? Dan hoef je niet steeds opnieuw te uploaden. Je kan dit altijd wissen met "verwijder mijn data".',
       [
         {
           content_type: "text",
@@ -1495,7 +842,10 @@ export function createWebhookHandlers({
         getMessengerGenerationCompletion(reqId)
       );
       if (completedGeneration) {
-        if (completedGeneration.userKey && completedGeneration.userKey !== userId) {
+        if (
+          completedGeneration.userKey &&
+          completedGeneration.userKey !== userId
+        ) {
           safeLog("messenger_generation_job_duplicate_user_mismatch", {
             reqId,
             expectedUser: toLogUser(userId),
@@ -1509,7 +859,11 @@ export function createWebhookHandlers({
             style,
           });
           await setLastGenerated(psid, completedGeneration.imageUrl);
-          await setLastGenerationContext(psid, { style, directorMode, prompt: promptHint });
+          await setLastGenerationContext(psid, {
+            style,
+            directorMode,
+            prompt: promptHint,
+          });
           await setFlowState(psid, "IDLE");
           return;
         }
@@ -1533,23 +887,27 @@ export function createWebhookHandlers({
         })
       );
       if (!allowed) {
-        rememberSendOutcome(await sendLoggedText(
-          psid,
-          lang === "en"
-            ? "You used your free credits for today. Come back tomorrow."
-            : "Je hebt je gratis credits voor vandaag opgebruikt. Kom morgen terug.",
-          reqId
-        ));
+        rememberSendOutcome(
+          await sendLoggedText(
+            psid,
+            lang === "en"
+              ? "You used your free credits for today. Come back tomorrow."
+              : "Je hebt je gratis credits voor vandaag opgebruikt. Kom morgen terug.",
+            reqId
+          )
+        );
         await setFlowState(psid, "AWAITING_STYLE");
         return;
       }
 
       await setFlowState(psid, "PROCESSING");
-      rememberSendOutcome(await sendLoggedText(
-        psid,
-        t(lang, "generatingPrompt", { styleLabel: STYLE_LABELS[style] }),
-        reqId
-      ));
+      rememberSendOutcome(
+        await sendLoggedText(
+          psid,
+          t(lang, "generatingPrompt", { styleLabel: STYLE_LABELS[style] }),
+          reqId
+        )
+      );
 
       const state = await getOrCreateState(psid);
       const generationResult = await executeGenerationFlow({
@@ -1595,18 +953,21 @@ export function createWebhookHandlers({
           })
         );
 
-        console.log("PROOF_SUMMARY", JSON.stringify({
-          reqId,
-          psidHash: anonymizePsid(psid).slice(0, 12),
-          style,
-          incomingLen: proof.incomingLen,
-          incomingSha256: proof.incomingSha256,
-          openaiInputLen: proof.openaiInputLen,
-          openaiInputSha256: proof.openaiInputSha256,
-          outputUrl: summarizeSensitiveUrl(imageUrl),
-          totalMs: metrics.totalMs,
-          ok: true,
-        }));
+        console.log(
+          "PROOF_SUMMARY",
+          JSON.stringify({
+            reqId,
+            psidHash: anonymizePsid(psid).slice(0, 12),
+            style,
+            incomingLen: proof.incomingLen,
+            incomingSha256: proof.incomingSha256,
+            openaiInputLen: proof.openaiInputLen,
+            openaiInputSha256: proof.openaiInputSha256,
+            outputUrl: summarizeSensitiveUrl(imageUrl),
+            totalMs: metrics.totalMs,
+            ok: true,
+          })
+        );
 
         const messengerSendStartedAt = Date.now();
         rememberSendOutcome(await sendLoggedImage(psid, imageUrl, reqId));
@@ -1616,14 +977,20 @@ export function createWebhookHandlers({
         const messengerSendMs = Date.now() - messengerSendStartedAt;
         await increment(psid);
         await setLastGenerated(psid, imageUrl);
-        await setLastGenerationContext(psid, { style, directorMode, prompt: promptHint });
+        await setLastGenerationContext(psid, {
+          style,
+          directorMode,
+          prompt: promptHint,
+        });
         recordGenerationSuccess(style, metrics.totalMs);
-        rememberSendOutcome(await sendStateQuickReplies(
-          psid,
-          "RESULT_READY",
-          t(lang, "success"),
-          reqId
-        ));
+        rememberSendOutcome(
+          await sendStateQuickReplies(
+            psid,
+            "RESULT_READY",
+            t(lang, "success"),
+            reqId
+          )
+        );
         emitGenerationDiagnostic({
           generationId: reqId,
           senderId: psid,
@@ -1652,8 +1019,8 @@ export function createWebhookHandlers({
 
       const errorClass =
         error instanceof Error ? error.constructor.name : "UnknownError";
-      const metrics =
-        generationResult.metrics ?? getGenerationMetrics(error) ?? { totalMs: 0 };
+      const metrics = generationResult.metrics ??
+        getGenerationMetrics(error) ?? { totalMs: 0 };
 
       console.log(
         "PROOF_SUMMARY",
@@ -1715,27 +1082,31 @@ export function createWebhookHandlers({
       }
 
       if (sendGenericFailureLead) {
-        rememberSendOutcome(await sendLoggedText(psid, t(lang, "failure"), reqId));
+        rememberSendOutcome(
+          await sendLoggedText(psid, t(lang, "failure"), reqId)
+        );
       }
       await setFlowState(psid, "FAILURE");
 
-      rememberSendOutcome(await sendLoggedQuickReplies(
-        psid,
-        failureText,
-        [
-          {
-            content_type: "text",
-            title: t(lang, "retryThisStyle"),
-            payload: `RETRY_STYLE_${style}`,
-          },
-          {
-            content_type: "text",
-            title: t(lang, "otherStyle"),
-            payload: "CHOOSE_STYLE",
-          },
-        ],
-        reqId
-      ));
+      rememberSendOutcome(
+        await sendLoggedQuickReplies(
+          psid,
+          failureText,
+          [
+            {
+              content_type: "text",
+              title: t(lang, "retryThisStyle"),
+              payload: `RETRY_STYLE_${style}`,
+            },
+            {
+              content_type: "text",
+              title: t(lang, "otherStyle"),
+              payload: "CHOOSE_STYLE",
+            },
+          ],
+          reqId
+        )
+      );
     });
 
     if (didRun === null) {
@@ -1888,7 +1259,12 @@ export function createWebhookHandlers({
     await clearPendingImageState(psid);
     await setPreselectedStyle(psid, referralStyle);
     await setFlowState(psid, "AWAITING_PHOTO");
-    const outcome = await sendReferralPhotoPrompt(psid, referralStyle, lang, reqId);
+    const outcome = await sendReferralPhotoPrompt(
+      psid,
+      referralStyle,
+      lang,
+      reqId
+    );
     return { handled: true, outcome };
   }
 
@@ -1952,15 +1328,20 @@ export function createWebhookHandlers({
 
     let storedSourceImageUrl: string | undefined;
     if (input.sourceImageUrl) {
-      storedSourceImageUrl = (await normalizeMessengerInboundImage({
-        inboundImageUrl: input.sourceImageUrl,
-        psidHash: anonymizePsid(input.psid).slice(0, 12),
-        reqId: input.reqId,
-      })) ?? undefined;
+      storedSourceImageUrl =
+        (await normalizeMessengerInboundImage({
+          inboundImageUrl: input.sourceImageUrl,
+          psidHash: anonymizePsid(input.psid).slice(0, 12),
+          reqId: input.reqId,
+        })) ?? undefined;
       if (!storedSourceImageUrl) {
         await clearPendingImageState(input.psid);
         await setFlowState(input.psid, "AWAITING_PHOTO");
-        await sendLoggedText(input.psid, t(lang, "missingInputImage"), input.reqId);
+        await sendLoggedText(
+          input.psid,
+          t(lang, "missingInputImage"),
+          input.reqId
+        );
         throw new InternalMessengerImageRequestNotQueuedError(
           "Internal Messenger image request source image could not be persisted"
         );
@@ -1976,11 +1357,16 @@ export function createWebhookHandlers({
         : MESSENGER_SEND_SKIPPED;
     }
 
-    const sourceImageUrl = storedSourceImageUrl ?? state.lastPhotoUrl ?? undefined;
+    const sourceImageUrl =
+      storedSourceImageUrl ?? state.lastPhotoUrl ?? undefined;
     if (!sourceImageUrl) {
       await setPreselectedStyle(input.psid, style);
       await setFlowState(input.psid, "AWAITING_PHOTO");
-      await sendLoggedText(input.psid, t(lang, "styleWithoutPhoto"), input.reqId);
+      await sendLoggedText(
+        input.psid,
+        t(lang, "styleWithoutPhoto"),
+        input.reqId
+      );
       throw new InternalMessengerImageRequestNotQueuedError(
         "Internal Messenger image request has no source image to enqueue"
       );
