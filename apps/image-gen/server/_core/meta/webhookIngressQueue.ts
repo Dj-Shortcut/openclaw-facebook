@@ -10,7 +10,9 @@ import { safeLog } from "../messengerApi";
 
 const WEBHOOK_INGRESS_QUEUE_KEY = "meta-webhook-ingress";
 const WEBHOOK_INGRESS_PROCESSING_KEY = "meta-webhook-ingress:processing";
+const WEBHOOK_INGRESS_DEAD_LETTER_KEY = "meta-webhook-ingress:dead";
 const DEFAULT_WEBHOOK_INGRESS_DELIVERY_LEASE_SECONDS = 15 * 60;
+const DEFAULT_WEBHOOK_INGRESS_MAX_ATTEMPTS = 3;
 
 type WebhookChannel = "facebook" | "whatsapp";
 
@@ -18,6 +20,7 @@ type QueuedWebhookDelivery = {
   channel: WebhookChannel;
   payload: unknown;
   receivedAt: string;
+  attempts?: number;
 };
 
 type ReservedWebhookDelivery = {
@@ -27,15 +30,20 @@ type ReservedWebhookDelivery = {
 
 let drainPromise: Promise<void> | null = null;
 
-function serializeError(error: unknown): { message: string; stack?: string } {
+function serializeError(error: unknown): {
+  class: string;
+  message: string;
+  stack?: string;
+} {
   if (error instanceof Error) {
     return {
+      class: error.constructor.name,
       message: error.message,
       stack: error.stack,
     };
   }
 
-  return { message: String(error) };
+  return { class: "UnknownError", message: String(error) };
 }
 
 function getWebhookIngressDeliveryLeaseSeconds(): number {
@@ -43,6 +51,13 @@ function getWebhookIngressDeliveryLeaseSeconds(): number {
   return Number.isFinite(configured) && configured > 0
     ? Math.floor(configured)
     : DEFAULT_WEBHOOK_INGRESS_DELIVERY_LEASE_SECONDS;
+}
+
+function getWebhookIngressMaxAttempts(): number {
+  const configured = Number(process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.floor(configured)
+    : DEFAULT_WEBHOOK_INGRESS_MAX_ATTEMPTS;
 }
 
 function getWebhookIngressDeliveryLeaseKey(rawDelivery: string): string {
@@ -57,12 +72,17 @@ function parseQueuedWebhookDelivery(
     const parsed = JSON.parse(rawDelivery) as Partial<QueuedWebhookDelivery>;
     if (
       (parsed.channel === "facebook" || parsed.channel === "whatsapp") &&
-      typeof parsed.receivedAt === "string"
+      typeof parsed.receivedAt === "string" &&
+      (parsed.attempts === undefined ||
+        (typeof parsed.attempts === "number" &&
+          Number.isInteger(parsed.attempts) &&
+          parsed.attempts >= 0))
     ) {
       return {
         channel: parsed.channel,
         payload: parsed.payload,
         receivedAt: parsed.receivedAt,
+        attempts: parsed.attempts,
       };
     }
   } catch {
@@ -75,29 +95,15 @@ function parseQueuedWebhookDelivery(
 async function processWhatsAppWebhookPayloadSafely(
   payload: unknown
 ): Promise<void> {
-  try {
-    const module = await import("../whatsappWebhook");
-    await module.processWhatsAppWebhookPayload(payload);
-  } catch (error) {
-    safeLog("webhook_async_processing_failed", {
-      channel: "whatsapp",
-      error: serializeError(error),
-    });
-  }
+  const module = await import("../whatsappWebhook");
+  await module.processWhatsAppWebhookPayload(payload);
 }
 
 async function processFacebookWebhookPayloadSafely(
   payload: unknown
 ): Promise<void> {
-  try {
-    const module = await import("../messengerWebhook");
-    await module.processFacebookWebhookPayload(payload);
-  } catch (error) {
-    safeLog("webhook_async_processing_failed", {
-      channel: "facebook",
-      error: serializeError(error),
-    });
-  }
+  const module = await import("../messengerWebhook");
+  await module.processFacebookWebhookPayload(payload);
 }
 
 async function processQueuedWebhookDelivery(
@@ -169,6 +175,40 @@ async function completeWebhookIngressDelivery(
   await redis.del(getWebhookIngressDeliveryLeaseKey(raw));
 }
 
+async function releaseFailedWebhookIngressDelivery(
+  redis: RedisLike,
+  reserved: ReservedWebhookDelivery,
+  error: unknown
+): Promise<"requeued" | "dead_lettered"> {
+  const attempts = (reserved.delivery.attempts ?? 0) + 1;
+  const retryDelivery: QueuedWebhookDelivery = {
+    ...reserved.delivery,
+    attempts,
+  };
+  const serializedRetryDelivery = JSON.stringify(retryDelivery);
+  const serializedError = serializeError(error);
+
+  await completeWebhookIngressDelivery(redis, reserved.raw);
+
+  if (attempts >= getWebhookIngressMaxAttempts()) {
+    await redis.rpush(WEBHOOK_INGRESS_DEAD_LETTER_KEY, serializedRetryDelivery);
+    safeLog("webhook_queued_delivery_dead_lettered", {
+      channel: reserved.delivery.channel,
+      attempts,
+      error: serializedError,
+    });
+    return "dead_lettered";
+  }
+
+  await redis.lpush(WEBHOOK_INGRESS_QUEUE_KEY, serializedRetryDelivery);
+  safeLog("webhook_queued_delivery_requeued", {
+    channel: reserved.delivery.channel,
+    attempts,
+    error: serializedError,
+  });
+  return "requeued";
+}
+
 async function reclaimExpiredWebhookIngressDeliveries(
   redis: RedisLike
 ): Promise<number> {
@@ -215,21 +255,20 @@ export function scheduleWebhookIngressDrain(): void {
             return;
           }
 
-          try {
-            if ("invalid" in reserved) {
-              safeLog("webhook_queued_delivery_invalid", {});
-              await completeWebhookIngressDelivery(redis, reserved.raw);
-              continue;
-            }
-
-            await processQueuedWebhookDelivery(reserved.delivery);
+          if ("invalid" in reserved) {
+            safeLog("webhook_queued_delivery_invalid", {});
             await completeWebhookIngressDelivery(redis, reserved.raw);
-          } catch (error) {
-            safeLog("webhook_queued_delivery_failed", {
-              error: serializeError(error),
-            });
-            await completeWebhookIngressDelivery(redis, reserved.raw);
+            continue;
           }
+
+          try {
+            await processQueuedWebhookDelivery(reserved.delivery);
+          } catch (error) {
+            await releaseFailedWebhookIngressDelivery(redis, reserved, error);
+            return;
+          }
+
+          await completeWebhookIngressDelivery(redis, reserved.raw);
         }
       } catch (error) {
         safeLog("webhook_ingress_queue_drain_failed", {
