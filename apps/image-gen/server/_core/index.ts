@@ -73,6 +73,7 @@ import {
   isMessengerGenerationWorkerOnlyMode,
 } from "./messengerGenerationQueue";
 import { startMessengerGenerationWorker } from "./messengerGenerationWorker";
+import { reconcileMessengerProfileOnStartup } from "./messengerProfile";
 
 const gitSha = process.env.GIT_SHA ?? process.env.SOURCE_VERSION ?? "dev";
 const bootTimestamp = new Date().toISOString();
@@ -342,6 +343,8 @@ async function startServer() {
     console.info("[messenger generation worker] worker-only mode active");
     return;
   }
+
+  await reconcileMessengerProfileOnStartup();
 
   const app = express();
   app.set("trust proxy", 1);
