@@ -66,6 +66,26 @@ const OPENAI_IMAGE_ALLOWED_BACKGROUNDS = new Set([
 const OPENAI_IMAGE_ALLOWED_ACTIONS = new Set(["auto", "generate", "edit"]);
 const OPENAI_IMAGE_ALLOWED_INPUT_FIDELITIES = new Set(["low", "high"]);
 
+export type OpenAiImageOutputFormat = "png" | "jpeg" | "webp";
+
+export function getOpenAiImageOutputFormat(): OpenAiImageOutputFormat {
+  return readEnumEnv(
+    "OPENAI_IMAGE_OUTPUT_FORMAT",
+    OPENAI_IMAGE_ALLOWED_FORMATS,
+    "png"
+  ) as OpenAiImageOutputFormat;
+}
+
+export function getOpenAiImageOutputContentType(): string {
+  const outputFormat = getOpenAiImageOutputFormat();
+  return outputFormat === "jpeg" ? "image/jpeg" : `image/${outputFormat}`;
+}
+
+export function getOpenAiImageOutputExtension(): string {
+  const outputFormat = getOpenAiImageOutputFormat();
+  return outputFormat === "jpeg" ? "jpg" : outputFormat;
+}
+
 function getOpenAiTimeoutMs(): number {
   const raw = Number.parseInt(process.env.OPENAI_IMAGE_TIMEOUT_MS ?? "", 10);
   if (Number.isFinite(raw) && raw > 0) {
@@ -278,11 +298,7 @@ export function buildOpenAiImageGenerationPayload(input: {
   sourceImage?: OpenAiSourceImage;
   previousResponseId?: string;
 }): Record<string, unknown> {
-  const outputFormat = readEnumEnv(
-    "OPENAI_IMAGE_OUTPUT_FORMAT",
-    OPENAI_IMAGE_ALLOWED_FORMATS,
-    "png"
-  );
+  const outputFormat = getOpenAiImageOutputFormat();
   const imageTool: Record<string, unknown> = {
     type: "image_generation",
     size: readEnumEnv(
