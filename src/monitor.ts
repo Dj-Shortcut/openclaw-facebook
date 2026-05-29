@@ -496,6 +496,9 @@ export function hasMessengerImageGenerationIntent(text: string): boolean {
   if (explicitImageIntent) {
     return true;
   }
+  if (/\bmaak\s+(?:me|mij)\s+(?:een|de)?\s*\S+/.test(normalized)) {
+    return true;
+  }
 
   return /^(doe maar|ga maar|ja graag|yes please|ok(e)?|prima|top)$/.test(normalized);
 }
