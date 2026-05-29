@@ -203,6 +203,8 @@ describe("hasMessengerImageGenerationIntent", () => {
       true,
     );
     expect(hasMessengerImageGenerationIntent("Ik wil een afbeelding genereren")).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Maak me een romeinse soldaat")).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Maak mij een stripheld")).toBe(true);
     expect(hasMessengerImageGenerationIntent("Doe maar")).toBe(true);
     expect(hasMessengerImageGenerationIntent("Ja graag")).toBe(true);
     expect(hasMessengerImageGenerationIntent("Ok")).toBe(true);
