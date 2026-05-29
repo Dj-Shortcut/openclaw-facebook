@@ -1,3 +1,0 @@
-{"phase":"discovery","candidate_id":"CAND-002","status":"plausible","evidence":"WhatsApp events are dispatched without replay key claiming."}
-{"phase":"validation","candidate_id":"CAND-002","status":"validated","evidence":"Facebook path calls claimEventReplayOrLog/claimWebhookReplayKey; WhatsApp path loops directly in processWhatsAppWebhookPayload."}
-{"phase":"attack_path","candidate_id":"CAND-002","status":"reportable","evidence":"Captured signed body/header can be replayed unchanged to repeat side effects."}

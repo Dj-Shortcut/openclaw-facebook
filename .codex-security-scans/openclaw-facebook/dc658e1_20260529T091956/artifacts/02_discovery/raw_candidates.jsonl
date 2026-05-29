@@ -1,5 +1,0 @@
-{"candidate_id":"CAND-001","title":"Single-target webhook fallback processes signed events for an unmatched Facebook Page","disposition":"reportable"}
-{"candidate_id":"CAND-002","title":"WhatsApp webhook deliveries bypass replay protection","disposition":"reportable"}
-{"candidate_id":"CAND-003","title":"Concurrent WhatsApp generation requests can bypass daily quota","disposition":"reportable"}
-{"candidate_id":"CAND-004","title":"User data deletion loses retry state after storage delete failure","disposition":"reportable"}
-{"candidate_id":"CAND-005","title":"WhatsApp media download buffers the full response without size or timeout limits","disposition":"reportable"}
