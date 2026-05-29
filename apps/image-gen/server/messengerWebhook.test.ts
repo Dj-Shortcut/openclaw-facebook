@@ -61,7 +61,10 @@ import {
   setChosenStyle,
   setFlowState,
 } from "./_core/messengerState";
-import { detectAck, getEventDedupeKey } from "./_core/webhookHelpers";
+import {
+  detectAck,
+  getEventDedupeKey,
+} from "./_core/webhookHelpers";
 import { getBotFeatures } from "./_core/bot/features";
 import { setSourceImageDnsLookupForTests } from "./_core/image-generation/sourceImageFetcher";
 import { processConsentedFacebookWebhookPayload } from "./testConsentHelpers";
@@ -89,9 +92,7 @@ function promptFromOpenAiRequest(init: RequestInit | undefined): string {
     return "";
   }
   const payload = JSON.parse(init.body) as {
-    input?:
-      | string
-      | Array<{ content?: Array<{ type?: string; text?: string }> }>;
+    input?: string | Array<{ content?: Array<{ type?: string; text?: string }> }>;
   };
   if (typeof payload.input === "string") {
     return payload.input;
@@ -141,11 +142,7 @@ function installOpenAiSuccessFetchMock() {
 
     return {
       ok: true,
-      json: async () => ({
-        output: [
-          { type: "image_generation_call", result: GENERATED_IMAGE_BASE64 },
-        ],
-      }),
+      json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
     } as Response;
   });
 
@@ -164,9 +161,7 @@ function installImageIngressFetchMock() {
       } as Response;
     }
 
-    throw new Error(
-      `Unexpected fetch in messengerWebhook.test: ${toUrlString(url)}`
-    );
+    throw new Error(`Unexpected fetch in messengerWebhook.test: ${toUrlString(url)}`);
   });
 
   vi.stubGlobal("fetch", fetchMock);
@@ -810,9 +805,9 @@ describe("messenger webhook dedupe", () => {
       "messenger_generation_job_queued",
       expect.anything()
     );
-    expect(
-      (await Promise.resolve(getState("internal-source-fail-user")))?.stage
-    ).toBe("AWAITING_PHOTO");
+    expect((await Promise.resolve(getState("internal-source-fail-user")))?.stage).toBe(
+      "AWAITING_PHOTO"
+    );
   });
 
   it("dedupes on mid before the real message arrives when an echo already used it", async () => {
@@ -1115,16 +1110,16 @@ describe("messenger webhook dedupe", () => {
 
     const inFlightNotices = sendTextMock.mock.calls.filter(
       ([recipient, text]) =>
-        recipient === psid && typeof text === "string" && text.includes("bezig")
+        recipient === psid &&
+        typeof text === "string" &&
+        text.includes("bezig")
     );
     expect(inFlightNotices).toHaveLength(1);
 
     resolveOpenAi?.({
       ok: true,
       json: async () => ({
-        output: [
-          { type: "image_generation_call", result: GENERATED_IMAGE_BASE64 },
-        ],
+        output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }],
       }),
     } as Response);
     await firstGeneration;
@@ -1403,11 +1398,7 @@ describe("messenger webhook dedupe", () => {
 
       return {
         ok: true,
-        json: async () => ({
-          output: [
-            { type: "image_generation_call", result: GENERATED_IMAGE_BASE64 },
-          ],
-        }),
+        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
       } as Response;
     });
 
@@ -1578,11 +1569,7 @@ describe("messenger webhook dedupe", () => {
 
       return {
         ok: true,
-        json: async () => ({
-          output: [
-            { type: "image_generation_call", result: generatedImageBytes },
-          ],
-        }),
+        json: async () => ({ output: [{ type: "image_generation_call", result: generatedImageBytes }] }),
       } as Response;
     });
 
@@ -1791,9 +1778,7 @@ describe("messenger webhook dedupe", () => {
     let resolveFetch:
       | ((value: {
           ok: boolean;
-          json: () => Promise<{
-            output: Array<{ type: string; result: string }>;
-          }>;
+          json: () => Promise<{ output: Array<{ type: string; result: string }> }>;
         }) => void)
       | undefined;
     const sourceImage = Buffer.alloc(6000, 7);
@@ -1808,9 +1793,7 @@ describe("messenger webhook dedupe", () => {
 
       return new Promise<{
         ok: boolean;
-        json: () => Promise<{
-          output: Array<{ type: string; result: string }>;
-        }>;
+        json: () => Promise<{ output: Array<{ type: string; result: string }> }>;
       }>(resolve => {
         resolveFetch = resolve;
       });
@@ -1890,11 +1873,7 @@ describe("messenger webhook dedupe", () => {
       const generatedImageBytes = Buffer.from("fake-png").toString("base64");
       resolveFetch?.({
         ok: true,
-        json: async () => ({
-          output: [
-            { type: "image_generation_call", result: generatedImageBytes },
-          ],
-        }),
+        json: async () => ({ output: [{ type: "image_generation_call", result: generatedImageBytes }] }),
       });
       await firstRun;
     } finally {
@@ -1909,9 +1888,7 @@ describe("messenger webhook dedupe", () => {
     let resolveFetch:
       | ((value: {
           ok: boolean;
-          json: () => Promise<{
-            output: Array<{ type: string; result: string }>;
-          }>;
+          json: () => Promise<{ output: Array<{ type: string; result: string }> }>;
         }) => void)
       | undefined;
     const sourceImage = Buffer.alloc(6000, 7);
@@ -1926,9 +1903,7 @@ describe("messenger webhook dedupe", () => {
 
       return new Promise<{
         ok: boolean;
-        json: () => Promise<{
-          output: Array<{ type: string; result: string }>;
-        }>;
+        json: () => Promise<{ output: Array<{ type: string; result: string }> }>;
       }>(resolve => {
         resolveFetch = resolve;
       });
@@ -2007,11 +1982,7 @@ describe("messenger webhook dedupe", () => {
       const generatedImageBytes = Buffer.from("fake-png").toString("base64");
       resolveFetch?.({
         ok: true,
-        json: async () => ({
-          output: [
-            { type: "image_generation_call", result: generatedImageBytes },
-          ],
-        }),
+        json: async () => ({ output: [{ type: "image_generation_call", result: generatedImageBytes }] }),
       });
       await firstRun;
     } finally {
@@ -2079,10 +2050,7 @@ describe("messenger deterministic free text", () => {
           messaging: [
             {
               sender: { id: "deterministic-no-photo-user" },
-              message: {
-                mid: "mid-deterministic-no-photo",
-                text: "Wie ben jij?",
-              },
+              message: { mid: "mid-deterministic-no-photo", text: "Wie ben jij?" },
             },
           ],
         },
@@ -3091,10 +3059,7 @@ describe("disabled bot features stay out of the runtime flow", () => {
   });
 
   it("does not auto-run a stale preselected style when a new photo replaces an older one", async () => {
-    await setPendingImage(
-      "stale-preselect-user",
-      "https://img.example/old-source.jpg"
-    );
+    await setPendingImage("stale-preselect-user", "https://img.example/old-source.jpg");
     await setPreselectedStyle("stale-preselect-user", "cyberpunk");
 
     sendImageMock.mockClear();
@@ -3132,14 +3097,10 @@ describe("disabled bot features stay out of the runtime flow", () => {
         expect.objectContaining({ payload: "STYLE_CATEGORY_BOLD" }),
       ])
     );
-    expect(
-      getState(anonymizePsid("stale-preselect-user"))?.lastPhotoUrl
-    ).toMatch(
+    expect(getState(anonymizePsid("stale-preselect-user"))?.lastPhotoUrl).toMatch(
       /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
-    expect(
-      getState(anonymizePsid("stale-preselect-user"))?.lastPhotoSource
-    ).toBe("stored");
+    expect(getState(anonymizePsid("stale-preselect-user"))?.lastPhotoSource).toBe("stored");
     expect(
       getState(anonymizePsid("stale-preselect-user"))?.preselectedStyle
     ).toBe("cyberpunk");
@@ -3150,10 +3111,7 @@ describe("disabled bot features stay out of the runtime flow", () => {
       "selected-style-replacement-user",
       "https://leaderbot-fb-image-gen.fly.dev/generated/old-source.png"
     );
-    await setChosenStyle(
-      "selected-style-replacement-user",
-      "afroman-americana"
-    );
+    await setChosenStyle("selected-style-replacement-user", "afroman-americana");
 
     sendImageMock.mockClear();
     sendQuickRepliesMock.mockClear();
@@ -3219,15 +3177,13 @@ describe("disabled bot features stay out of the runtime flow", () => {
     });
 
     const fetchedUrls = fetchMock.mock.calls.map(([url]) => toUrlString(url));
-    expect(
-      fetchedUrls.filter(url => url === "https://img.example/source.jpg")
-    ).toHaveLength(1);
+    expect(fetchedUrls.filter(url => url === "https://img.example/source.jpg")).toHaveLength(1);
     expect(
       fetchedUrls.some(url => url.startsWith(GENERATED_SOURCE_IMAGE_URL_PREFIX))
     ).toBe(true);
-    expect(
-      getState(anonymizePsid("stored-boundary-user"))?.lastPhotoSource
-    ).toBe("stored");
+    expect(getState(anonymizePsid("stored-boundary-user"))?.lastPhotoSource).toBe(
+      "stored"
+    );
   });
 
   it("handles /style Afroman and routes the next generation through afroman-americana", async () => {
@@ -3253,11 +3209,7 @@ describe("disabled bot features stay out of the runtime flow", () => {
 
       return {
         ok: true,
-        json: async () => ({
-          output: [
-            { type: "image_generation_call", result: GENERATED_IMAGE_BASE64 },
-          ],
-        }),
+        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
       } as Response;
     });
 
@@ -3322,3 +3274,4 @@ describe("disabled bot features stay out of the runtime flow", () => {
     );
   });
 });
+

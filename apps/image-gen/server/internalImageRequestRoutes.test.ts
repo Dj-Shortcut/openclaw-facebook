@@ -70,9 +70,9 @@ beforeEach(() => {
 afterEach(() => {
   if (originalToken === undefined) {
     delete process.env.INTERNAL_IMAGE_REQUEST_TOKEN;
-  } else {
-    process.env.INTERNAL_IMAGE_REQUEST_TOKEN = originalToken;
+    return;
   }
+  process.env.INTERNAL_IMAGE_REQUEST_TOKEN = originalToken;
 });
 
 describe("internal Messenger image request route", () => {
@@ -111,12 +111,10 @@ describe("internal Messenger image request route", () => {
 
     await withListeningApp(createApp(), async baseUrl => {
       let settled = false;
-      const responsePromise = postInternalImageRequest(baseUrl).then(
-        response => {
-          settled = true;
-          return response;
-        }
-      );
+      const responsePromise = postInternalImageRequest(baseUrl).then(response => {
+        settled = true;
+        return response;
+      });
 
       await new Promise(resolve => setTimeout(resolve, 25));
       expect(acceptInternalMessengerImageRequestMock).toHaveBeenCalledTimes(1);

@@ -91,7 +91,10 @@ import type {
 } from "./botContext";
 import type { DirectorMode } from "./image-generation/director/directorTypes";
 import { createTrackedHandlerContext } from "./webhookTrackedContext";
-import { handlePayload, handlePostbackEvent } from "./webhookPayloadBranch";
+import {
+  handlePayload,
+  handlePostbackEvent,
+} from "./webhookPayloadBranch";
 import { emitGenerationDiagnostic } from "./generationDiagnostics";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
@@ -127,7 +130,10 @@ export class InternalMessengerImageRequestNotQueuedError extends Error {
 }
 
 type FacebookWebhookMessage = NonNullable<FacebookWebhookEvent["message"]>;
-type FeatureContextBase = Omit<BotPayloadContext, "payload">;
+type FeatureContextBase = Omit<
+  BotPayloadContext,
+  "payload"
+>;
 type MessengerState = Awaited<ReturnType<typeof getOrCreateState>>;
 const MESSENGER_SEND_SKIPPED: MessengerSendOutcome = {
   sent: false,
@@ -164,7 +170,11 @@ function combineMessengerSendOutcomes(
 }
 
 function normalizeImageRequestText(text: string): string {
-  return text.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
 }
 
 function inferStyleFromImageRequest(text: string): Style {
@@ -432,10 +442,7 @@ async function createTrackedEventContext(
       markResponseSent();
     }
   };
-  const trackedCtx = createTrackedHandlerContext(
-    ctx,
-    markResponseSentFromOutcome
-  );
+  const trackedCtx = createTrackedHandlerContext(ctx, markResponseSentFromOutcome);
 
   if (!(await ctx.claimEventReplayOrLog(event, entryId, userId))) {
     return null;
@@ -512,20 +519,13 @@ async function handleEvent(
     logMessengerWebhookTrace("top_level_catch", {
       reqId,
       user: toLogUser(userId),
-      errorCode:
-        error instanceof Error ? error.constructor.name : "UnknownError",
+      errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
     });
     captureException(error, {
       area: "webhook",
-      eventType: event.postback
-        ? "postback"
-        : event.message
-          ? "message"
-          : "unknown",
+      eventType: event.postback ? "postback" : event.message ? "message" : "unknown",
       hasImage: Boolean(
-        event.message?.attachments?.some(
-          attachment => attachment.type === "image"
-        )
+        event.message?.attachments?.some(attachment => attachment.type === "image")
       ),
       hasText: Boolean(event.message?.text),
     });
@@ -802,13 +802,7 @@ async function tryHandleImageMessage(
     }
   }
 
-  ctx.logUserState(
-    input.psid,
-    input.userId,
-    state,
-    input.reqId,
-    "image_received"
-  );
+  ctx.logUserState(input.psid, input.userId, state, input.reqId, "image_received");
   const imageDecision = getStoredMessengerImageDecision({
     lastPhotoUrl: state.lastPhotoUrl,
     selectedStyle: state.selectedStyle,
@@ -823,11 +817,7 @@ async function tryHandleImageMessage(
       if (imageDecision.action === "show_style_picker") {
         await setPreselectedStyle(input.psid, null);
       }
-      await ctx.sendFaceMemoryConsentPrompt(
-        input.psid,
-        input.lang,
-        input.reqId
-      );
+      await ctx.sendFaceMemoryConsentPrompt(input.psid, input.lang, input.reqId);
       return true;
     }
   }
@@ -1269,12 +1259,7 @@ export function createWebhookHandlers({
       chooseStyle: async style => {
         await handleStyleSelection(psid, userId, style, reqId, lang);
       },
-      runStyleGeneration: async (
-        style,
-        sourceImageUrl,
-        promptHint,
-        directorMode
-      ) => {
+      runStyleGeneration: async (style, sourceImageUrl, promptHint, directorMode) => {
         await runStyleGeneration(
           psid,
           userId,
@@ -1441,8 +1426,8 @@ export function createWebhookHandlers({
     return await sendLoggedQuickReplies(
       psid,
       lang === "en"
-        ? 'May I keep your photo for 30 days? Then you do not have to upload it again every time. You can delete it any time with "delete my data".'
-        : 'Mag ik je foto 30 dagen bewaren? Dan hoef je niet steeds opnieuw te uploaden. Je kan dit altijd wissen met "verwijder mijn data".',
+        ? "May I keep your photo for 30 days? Then you do not have to upload it again every time. You can delete it any time with \"delete my data\"."
+        : "Mag ik je foto 30 dagen bewaren? Dan hoef je niet steeds opnieuw te uploaden. Je kan dit altijd wissen met \"verwijder mijn data\".",
       [
         {
           content_type: "text",
@@ -1510,10 +1495,7 @@ export function createWebhookHandlers({
         getMessengerGenerationCompletion(reqId)
       );
       if (completedGeneration) {
-        if (
-          completedGeneration.userKey &&
-          completedGeneration.userKey !== userId
-        ) {
+        if (completedGeneration.userKey && completedGeneration.userKey !== userId) {
           safeLog("messenger_generation_job_duplicate_user_mismatch", {
             reqId,
             expectedUser: toLogUser(userId),
@@ -1527,11 +1509,7 @@ export function createWebhookHandlers({
             style,
           });
           await setLastGenerated(psid, completedGeneration.imageUrl);
-          await setLastGenerationContext(psid, {
-            style,
-            directorMode,
-            prompt: promptHint,
-          });
+          await setLastGenerationContext(psid, { style, directorMode, prompt: promptHint });
           await setFlowState(psid, "IDLE");
           return;
         }
@@ -1555,27 +1533,23 @@ export function createWebhookHandlers({
         })
       );
       if (!allowed) {
-        rememberSendOutcome(
-          await sendLoggedText(
-            psid,
-            lang === "en"
-              ? "You used your free credits for today. Come back tomorrow."
-              : "Je hebt je gratis credits voor vandaag opgebruikt. Kom morgen terug.",
-            reqId
-          )
-        );
+        rememberSendOutcome(await sendLoggedText(
+          psid,
+          lang === "en"
+            ? "You used your free credits for today. Come back tomorrow."
+            : "Je hebt je gratis credits voor vandaag opgebruikt. Kom morgen terug.",
+          reqId
+        ));
         await setFlowState(psid, "AWAITING_STYLE");
         return;
       }
 
       await setFlowState(psid, "PROCESSING");
-      rememberSendOutcome(
-        await sendLoggedText(
-          psid,
-          t(lang, "generatingPrompt", { styleLabel: STYLE_LABELS[style] }),
-          reqId
-        )
-      );
+      rememberSendOutcome(await sendLoggedText(
+        psid,
+        t(lang, "generatingPrompt", { styleLabel: STYLE_LABELS[style] }),
+        reqId
+      ));
 
       const state = await getOrCreateState(psid);
       const generationResult = await executeGenerationFlow({
@@ -1621,21 +1595,18 @@ export function createWebhookHandlers({
           })
         );
 
-        console.log(
-          "PROOF_SUMMARY",
-          JSON.stringify({
-            reqId,
-            psidHash: anonymizePsid(psid).slice(0, 12),
-            style,
-            incomingLen: proof.incomingLen,
-            incomingSha256: proof.incomingSha256,
-            openaiInputLen: proof.openaiInputLen,
-            openaiInputSha256: proof.openaiInputSha256,
-            outputUrl: summarizeSensitiveUrl(imageUrl),
-            totalMs: metrics.totalMs,
-            ok: true,
-          })
-        );
+        console.log("PROOF_SUMMARY", JSON.stringify({
+          reqId,
+          psidHash: anonymizePsid(psid).slice(0, 12),
+          style,
+          incomingLen: proof.incomingLen,
+          incomingSha256: proof.incomingSha256,
+          openaiInputLen: proof.openaiInputLen,
+          openaiInputSha256: proof.openaiInputSha256,
+          outputUrl: summarizeSensitiveUrl(imageUrl),
+          totalMs: metrics.totalMs,
+          ok: true,
+        }));
 
         const messengerSendStartedAt = Date.now();
         rememberSendOutcome(await sendLoggedImage(psid, imageUrl, reqId));
@@ -1645,20 +1616,14 @@ export function createWebhookHandlers({
         const messengerSendMs = Date.now() - messengerSendStartedAt;
         await increment(psid);
         await setLastGenerated(psid, imageUrl);
-        await setLastGenerationContext(psid, {
-          style,
-          directorMode,
-          prompt: promptHint,
-        });
+        await setLastGenerationContext(psid, { style, directorMode, prompt: promptHint });
         recordGenerationSuccess(style, metrics.totalMs);
-        rememberSendOutcome(
-          await sendStateQuickReplies(
-            psid,
-            "RESULT_READY",
-            t(lang, "success"),
-            reqId
-          )
-        );
+        rememberSendOutcome(await sendStateQuickReplies(
+          psid,
+          "RESULT_READY",
+          t(lang, "success"),
+          reqId
+        ));
         emitGenerationDiagnostic({
           generationId: reqId,
           senderId: psid,
@@ -1687,8 +1652,8 @@ export function createWebhookHandlers({
 
       const errorClass =
         error instanceof Error ? error.constructor.name : "UnknownError";
-      const metrics = generationResult.metrics ??
-        getGenerationMetrics(error) ?? { totalMs: 0 };
+      const metrics =
+        generationResult.metrics ?? getGenerationMetrics(error) ?? { totalMs: 0 };
 
       console.log(
         "PROOF_SUMMARY",
@@ -1750,31 +1715,27 @@ export function createWebhookHandlers({
       }
 
       if (sendGenericFailureLead) {
-        rememberSendOutcome(
-          await sendLoggedText(psid, t(lang, "failure"), reqId)
-        );
+        rememberSendOutcome(await sendLoggedText(psid, t(lang, "failure"), reqId));
       }
       await setFlowState(psid, "FAILURE");
 
-      rememberSendOutcome(
-        await sendLoggedQuickReplies(
-          psid,
-          failureText,
-          [
-            {
-              content_type: "text",
-              title: t(lang, "retryThisStyle"),
-              payload: `RETRY_STYLE_${style}`,
-            },
-            {
-              content_type: "text",
-              title: t(lang, "otherStyle"),
-              payload: "CHOOSE_STYLE",
-            },
-          ],
-          reqId
-        )
-      );
+      rememberSendOutcome(await sendLoggedQuickReplies(
+        psid,
+        failureText,
+        [
+          {
+            content_type: "text",
+            title: t(lang, "retryThisStyle"),
+            payload: `RETRY_STYLE_${style}`,
+          },
+          {
+            content_type: "text",
+            title: t(lang, "otherStyle"),
+            payload: "CHOOSE_STYLE",
+          },
+        ],
+        reqId
+      ));
     });
 
     if (didRun === null) {
@@ -1927,12 +1888,7 @@ export function createWebhookHandlers({
     await clearPendingImageState(psid);
     await setPreselectedStyle(psid, referralStyle);
     await setFlowState(psid, "AWAITING_PHOTO");
-    const outcome = await sendReferralPhotoPrompt(
-      psid,
-      referralStyle,
-      lang,
-      reqId
-    );
+    const outcome = await sendReferralPhotoPrompt(psid, referralStyle, lang, reqId);
     return { handled: true, outcome };
   }
 
@@ -1996,20 +1952,15 @@ export function createWebhookHandlers({
 
     let storedSourceImageUrl: string | undefined;
     if (input.sourceImageUrl) {
-      storedSourceImageUrl =
-        (await normalizeMessengerInboundImage({
-          inboundImageUrl: input.sourceImageUrl,
-          psidHash: anonymizePsid(input.psid).slice(0, 12),
-          reqId: input.reqId,
-        })) ?? undefined;
+      storedSourceImageUrl = (await normalizeMessengerInboundImage({
+        inboundImageUrl: input.sourceImageUrl,
+        psidHash: anonymizePsid(input.psid).slice(0, 12),
+        reqId: input.reqId,
+      })) ?? undefined;
       if (!storedSourceImageUrl) {
         await clearPendingImageState(input.psid);
         await setFlowState(input.psid, "AWAITING_PHOTO");
-        await sendLoggedText(
-          input.psid,
-          t(lang, "missingInputImage"),
-          input.reqId
-        );
+        await sendLoggedText(input.psid, t(lang, "missingInputImage"), input.reqId);
         throw new InternalMessengerImageRequestNotQueuedError(
           "Internal Messenger image request source image could not be persisted"
         );
@@ -2025,16 +1976,11 @@ export function createWebhookHandlers({
         : MESSENGER_SEND_SKIPPED;
     }
 
-    const sourceImageUrl =
-      storedSourceImageUrl ?? state.lastPhotoUrl ?? undefined;
+    const sourceImageUrl = storedSourceImageUrl ?? state.lastPhotoUrl ?? undefined;
     if (!sourceImageUrl) {
       await setPreselectedStyle(input.psid, style);
       await setFlowState(input.psid, "AWAITING_PHOTO");
-      await sendLoggedText(
-        input.psid,
-        t(lang, "styleWithoutPhoto"),
-        input.reqId
-      );
+      await sendLoggedText(input.psid, t(lang, "styleWithoutPhoto"), input.reqId);
       throw new InternalMessengerImageRequestNotQueuedError(
         "Internal Messenger image request has no source image to enqueue"
       );
