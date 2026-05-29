@@ -91,7 +91,6 @@ export const messengerMessageAdapter = defineChannelMessageAdapter({
   durableFinal: {
     capabilities: {
       text: true,
-      payload: true,
       messageSendingHooks: true,
     },
   },
@@ -103,16 +102,6 @@ export const messengerMessageAdapter = defineChannelMessageAdapter({
         text,
         accountId,
         payload: { text },
-      });
-      return toMessengerMessageSendResult(result);
-    },
-    payload: async ({ cfg, to, text, accountId, payload }) => {
-      const result = await messengerOutboundAdapter.sendPayload!({
-        cfg,
-        to,
-        text,
-        accountId,
-        payload,
       });
       return toMessengerMessageSendResult(result);
     },

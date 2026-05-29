@@ -64,7 +64,26 @@ describe("renderMessengerPresentationPayload", () => {
     expect(payload).toBeNull();
   });
 
-  it("keeps at most four focused pills", () => {
+  it("requires conversational lead-in text before native pills", () => {
+    const payload = renderMessengerPresentationPayload({
+      payload: {},
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Scope bepalen", value: "scope" },
+              { label: "Regels maken", value: "rules" },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(payload).toBeNull();
+  });
+
+  it("does not silently truncate more than four focused pills", () => {
     const payload = renderMessengerPresentationPayload({
       payload: { text: "Kies een richting." },
       presentation: {
@@ -83,6 +102,6 @@ describe("renderMessengerPresentationPayload", () => {
       },
     });
 
-    expect(payload?.channelData?.facebook?.quickReplies).toHaveLength(4);
+    expect(payload).toBeNull();
   });
 });

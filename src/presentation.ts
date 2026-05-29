@@ -104,7 +104,7 @@ function extractQuickReplies(blocks: readonly MessagePresentationBlock[]): Messe
       }
     }
   }
-  return quickReplies.slice(0, MESSENGER_QUICK_REPLY_MAX_COUNT);
+  return quickReplies;
 }
 
 function shouldRenderQuickReplies(quickReplies: readonly MessengerQuickReply[]): boolean {
@@ -114,7 +114,7 @@ function shouldRenderQuickReplies(quickReplies: readonly MessengerQuickReply[]):
   );
 }
 
-function presentationText(presentation: MessagePresentation, fallbackText: string | undefined): string {
+function presentationText(presentation: MessagePresentation, fallbackText: string | undefined): string | null {
   const parts: string[] = [];
   if (hasText(fallbackText)) {
     parts.push(fallbackText.trim());
@@ -136,7 +136,7 @@ function presentationText(presentation: MessagePresentation, fallbackText: strin
       }
     }
   }
-  return parts.join("\n\n") || "Kies een optie.";
+  return parts.length > 0 ? parts.join("\n\n") : null;
 }
 
 export function renderMessengerPresentationPayload(params: {
@@ -144,12 +144,13 @@ export function renderMessengerPresentationPayload(params: {
   presentation: MessagePresentation;
 }): MessengerPresentationPayload | null {
   const quickReplies = extractQuickReplies(params.presentation.blocks);
-  if (!shouldRenderQuickReplies(quickReplies)) {
+  const text = presentationText(params.presentation, params.payload.text);
+  if (!text || !shouldRenderQuickReplies(quickReplies)) {
     return null;
   }
   return {
     ...params.payload,
-    text: presentationText(params.presentation, params.payload.text),
+    text,
     channelData: {
       ...(params.payload.channelData ?? {}),
       facebook: {
