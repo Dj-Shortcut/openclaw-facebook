@@ -179,10 +179,23 @@ function logMessengerStage(
     base.eventLoopDelayMs = eventLoopDelayMaxMs();
     base.activeMessengerEventJobs = activeMessengerEventJobs;
   }
-  logVerbose(
-    `messenger_trace ${Object.entries(base)
-      .map(([key, value]) => `${key}=${String(value)}`)
-      .join(" ")}`,
+  const line = `messenger_trace ${Object.entries(base)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(" ")}`;
+  logVerbose(line);
+  if (shouldLogMessengerStageToStdout(stage)) {
+    console.info(line);
+  }
+}
+
+function shouldLogMessengerStageToStdout(stage: string): boolean {
+  return (
+    stage === "webhook_received" ||
+    stage === "messenger_ack_sent" ||
+    stage === "intent_classified" ||
+    stage.startsWith("image_gen_request_") ||
+    stage.startsWith("messenger_event_forward_") ||
+    stage === "request_completed"
   );
 }
 
