@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OpenAiImageGenerator } from "./_core/imageService";
+import { buildOpenAiImageGenerationPayload } from "./_core/image-generation/openAiImageClient";
 import { GenerationTimeoutError } from "./_core/image-generation/imageServiceErrors";
 import { InvalidSourceImageUrlError } from "./_core/image-generation/sourceImageFetcher";
 import { sha256 } from "./_core/imageProof";
@@ -18,7 +19,16 @@ function toUrlString(url: string | URL): string {
 
 function requestJson(init: RequestInit | undefined): {
   input?: Array<{ content?: Array<{ type?: string; text?: string; image_url?: string }> }>;
-  tools?: Array<{ type?: string; output_format?: string }>;
+  tools?: Array<{
+    type?: string;
+    size?: string;
+    output_format?: string;
+    quality?: string;
+    background?: string;
+    action?: string;
+    input_fidelity?: string;
+    output_compression?: number;
+  }>;
 } {
   return typeof init?.body === "string" ? JSON.parse(init.body) : {};
 }
@@ -277,9 +287,48 @@ describe("OpenAi image-to-image proof", () => {
     delete process.env.OPENAI_IMAGE_RETRY_BASE_MS;
     delete process.env.OPENAI_IMAGE_TIMEOUT_MS;
     delete process.env.OPENAI_IMAGE_MAX_OUTPUT_BYTES;
+    delete process.env.OPENAI_IMAGE_SIZE;
+    delete process.env.OPENAI_IMAGE_QUALITY;
+    delete process.env.OPENAI_IMAGE_OUTPUT_FORMAT;
+    delete process.env.OPENAI_IMAGE_OUTPUT_COMPRESSION;
+    delete process.env.OPENAI_IMAGE_BACKGROUND;
+    delete process.env.OPENAI_IMAGE_ACTION;
+    delete process.env.OPENAI_IMAGE_INPUT_FIDELITY;
     delete process.env.SOURCE_IMAGE_ALLOWED_HOSTS;
     delete process.env.BUILT_IN_FORGE_API_URL;
     delete process.env.BUILT_IN_FORGE_API_KEY;
+  });
+
+  it("adds configured image-generation speed knobs to the OpenAI payload", () => {
+    process.env.OPENAI_IMAGE_SIZE = "1024x1024";
+    process.env.OPENAI_IMAGE_QUALITY = "medium";
+    process.env.OPENAI_IMAGE_OUTPUT_FORMAT = "jpeg";
+    process.env.OPENAI_IMAGE_OUTPUT_COMPRESSION = "82";
+    process.env.OPENAI_IMAGE_BACKGROUND = "opaque";
+    process.env.OPENAI_IMAGE_ACTION = "edit";
+    process.env.OPENAI_IMAGE_INPUT_FIDELITY = "low";
+
+    const payload = buildOpenAiImageGenerationPayload({
+      model: "gpt-5",
+      prompt: "A fast image edit",
+      sourceImage: {
+        buffer: Buffer.alloc(7000, 9),
+        contentType: "image/jpeg",
+      },
+    });
+
+    expect(payload.tools).toEqual([
+      expect.objectContaining({
+        type: "image_generation",
+        size: "1024x1024",
+        quality: "medium",
+        output_format: "jpeg",
+        output_compression: 82,
+        background: "opaque",
+        action: "edit",
+        input_fidelity: "low",
+      }),
+    ]);
   });
 
   it.each(STYLE_PROMPT_CASES)(

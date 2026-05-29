@@ -45,6 +45,26 @@ const OPENAI_RETRY_BASE_MS_DEFAULT = 500;
 const OPENAI_TIMEOUT_MS_DEFAULT = 180_000;
 const OPENAI_IMAGE_MAX_OUTPUT_BYTES_DEFAULT = 25 * 1024 * 1024;
 const OPENAI_RESPONSES_IMAGE_ENDPOINT = "https://api.openai.com/v1/responses";
+const OPENAI_IMAGE_ALLOWED_SIZES = new Set([
+  "1024x1024",
+  "1024x1536",
+  "1536x1024",
+  "auto",
+]);
+const OPENAI_IMAGE_ALLOWED_QUALITIES = new Set([
+  "low",
+  "medium",
+  "high",
+  "auto",
+]);
+const OPENAI_IMAGE_ALLOWED_FORMATS = new Set(["png", "jpeg", "webp"]);
+const OPENAI_IMAGE_ALLOWED_BACKGROUNDS = new Set([
+  "opaque",
+  "transparent",
+  "auto",
+]);
+const OPENAI_IMAGE_ALLOWED_ACTIONS = new Set(["auto", "generate", "edit"]);
+const OPENAI_IMAGE_ALLOWED_INPUT_FIDELITIES = new Set(["low", "high"]);
 
 function getOpenAiTimeoutMs(): number {
   const raw = Number.parseInt(process.env.OPENAI_IMAGE_TIMEOUT_MS ?? "", 10);
@@ -80,6 +100,49 @@ function getOpenAiMaxOutputBytes(): number {
   }
 
   return OPENAI_IMAGE_MAX_OUTPUT_BYTES_DEFAULT;
+}
+
+function readEnumEnv(
+  name: string,
+  allowedValues: Set<string>,
+  fallback?: string
+): string | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+
+  if (allowedValues.has(raw)) {
+    return raw;
+  }
+
+  console.warn("OPENAI_IMAGE_CONFIG_IGNORED", {
+    name,
+    value: raw,
+    reason: "unsupported_value",
+    allowedValues: Array.from(allowedValues),
+  });
+  return fallback;
+}
+
+function readCompressionEnv(): number | undefined {
+  const raw = Number.parseInt(
+    process.env.OPENAI_IMAGE_OUTPUT_COMPRESSION ?? "",
+    10
+  );
+  if (Number.isFinite(raw) && raw >= 0 && raw <= 100) {
+    return raw;
+  }
+
+  if (process.env.OPENAI_IMAGE_OUTPUT_COMPRESSION?.trim()) {
+    console.warn("OPENAI_IMAGE_CONFIG_IGNORED", {
+      name: "OPENAI_IMAGE_OUTPUT_COMPRESSION",
+      value: process.env.OPENAI_IMAGE_OUTPUT_COMPRESSION,
+      reason: "expected_integer_0_to_100",
+    });
+  }
+
+  return undefined;
 }
 
 function wait(ms: number): Promise<void> {
@@ -215,6 +278,61 @@ export function buildOpenAiImageGenerationPayload(input: {
   sourceImage?: OpenAiSourceImage;
   previousResponseId?: string;
 }): Record<string, unknown> {
+  const outputFormat = readEnumEnv(
+    "OPENAI_IMAGE_OUTPUT_FORMAT",
+    OPENAI_IMAGE_ALLOWED_FORMATS,
+    "png"
+  );
+  const imageTool: Record<string, unknown> = {
+    type: "image_generation",
+    size: readEnumEnv(
+      "OPENAI_IMAGE_SIZE",
+      OPENAI_IMAGE_ALLOWED_SIZES,
+      "1024x1024"
+    ),
+    output_format: outputFormat,
+  };
+
+  const quality = readEnumEnv(
+    "OPENAI_IMAGE_QUALITY",
+    OPENAI_IMAGE_ALLOWED_QUALITIES
+  );
+  if (quality) {
+    imageTool.quality = quality;
+  }
+
+  const background = readEnumEnv(
+    "OPENAI_IMAGE_BACKGROUND",
+    OPENAI_IMAGE_ALLOWED_BACKGROUNDS
+  );
+  if (background) {
+    imageTool.background = background;
+  }
+
+  const action = readEnumEnv(
+    "OPENAI_IMAGE_ACTION",
+    OPENAI_IMAGE_ALLOWED_ACTIONS
+  );
+  if (action) {
+    imageTool.action = action;
+  }
+
+  const inputFidelity = readEnumEnv(
+    "OPENAI_IMAGE_INPUT_FIDELITY",
+    OPENAI_IMAGE_ALLOWED_INPUT_FIDELITIES
+  );
+  if (inputFidelity) {
+    imageTool.input_fidelity = inputFidelity;
+  }
+
+  const outputCompression = readCompressionEnv();
+  if (
+    outputCompression !== undefined &&
+    (outputFormat === "jpeg" || outputFormat === "webp")
+  ) {
+    imageTool.output_compression = outputCompression;
+  }
+
   const payload: Record<string, unknown> = {
     model: input.model,
     input: input.sourceImage
@@ -231,13 +349,7 @@ export function buildOpenAiImageGenerationPayload(input: {
           },
         ]
       : input.prompt,
-    tools: [
-      {
-        type: "image_generation",
-        size: "1024x1024",
-        output_format: "png",
-      },
-    ],
+    tools: [imageTool],
     tool_choice: { type: "image_generation" },
   };
 
