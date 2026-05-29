@@ -2,6 +2,8 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+.fallow/report*.json
+.fallow/*-report*.json
 .env
 .env.*
 !.env.example

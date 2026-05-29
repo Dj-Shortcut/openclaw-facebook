@@ -71,9 +71,9 @@ Use `channels.facebook` for new installs:
       pageAccessToken: "<FACEBOOK_PAGE_ACCESS_TOKEN>",
       appSecret: "<FACEBOOK_APP_SECRET>",
       verifyToken: "<FACEBOOK_VERIFY_TOKEN>",
-      dmPolicy: "pairing"
-    }
-  }
+      dmPolicy: "pairing",
+    },
+  },
 }
 ```
 
@@ -140,12 +140,25 @@ channel.
 ## Development
 
 Use Node.js `22.16.0` (see `.nvmrc` / `.node-version`) before installing dependencies.
+
 ```bash
 npm install
 npm run build
 npm test
 npm run pack:dry
 ```
+
+Run Fallow from the repository root when you want a repo-wide dead-code and
+maintainability pass:
+
+```bash
+npm run fallow:report
+npm run fallow:report:production
+```
+
+The generated root reports stay in `.fallow/` and are normalized to UTF-8 with
+repo-relative paths. The image-generation app keeps its app-specific Fallow
+badge flow under `apps/image-gen` and uses the same root normalizer.
 
 Do not commit real Page tokens, app secrets, verify tokens, PSIDs, or live
 deployment config.

@@ -58,7 +58,13 @@
     "image-gen:check": "pnpm --dir apps/image-gen check",
     "image-gen:test": "pnpm --dir apps/image-gen test",
     "image-gen:build": "pnpm --dir apps/image-gen build",
-    "image-gen:deploy": "pnpm --dir apps/image-gen fly deploy -a leaderbot-fb-image-gen"
+    "image-gen:deploy": "pnpm --dir apps/image-gen fly deploy -a leaderbot-fb-image-gen",
+    "fallow": "npx --yes fallow@2.27.0 --root .",
+    "fallow:list": "npx --yes fallow@2.27.0 --root . list",
+    "fallow:production": "npx --yes fallow@2.27.0 --root . --production",
+    "fallow:report": "mkdir -p .fallow && npx --yes fallow@2.27.0 --root . -f json > .fallow/report.json && node scripts/normalize-fallow-report.mjs --root . .fallow/report.json",
+    "fallow:report:production": "mkdir -p .fallow && npx --yes fallow@2.27.0 --root . --production -f json > .fallow/report-production.json && node scripts/normalize-fallow-report.mjs --root . .fallow/report-production.json",
+    "fallow:summary": "npx --yes fallow@2.27.0 --root . --summary --score"
   },
   "dependencies": {
     "zod": "^4.4.3"
