@@ -1,3 +1,0 @@
-{"phase":"discovery","candidate_id":"CAND-001","status":"plausible","evidence":"src/monitor.ts:713 falls back to the sole target when recipient.id is present but unmatched."}
-{"phase":"validation","candidate_id":"CAND-001","status":"validated","evidence":"Caller at src/monitor.ts:1277 schedules the returned target; signature validation is present but does not bind page id."}
-{"phase":"attack_path","candidate_id":"CAND-001","status":"reportable","evidence":"Valid Meta-signed wrong-Page event can be processed under configured account in single-target deployments."}
