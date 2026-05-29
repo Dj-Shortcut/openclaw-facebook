@@ -122,6 +122,13 @@ type InternalMessengerImageRequestInput = {
   sourceImageUrl?: string;
 };
 
+export class InternalMessengerImageRequestNotQueuedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InternalMessengerImageRequestNotQueuedError";
+  }
+}
+
 type FacebookWebhookMessage = NonNullable<FacebookWebhookEvent["message"]>;
 type FeatureContextBase = Omit<
   BotPayloadContext,
@@ -1927,7 +1934,7 @@ export function createWebhookHandlers({
     }
   }
 
-  async function processInternalMessengerImageRequest(
+  async function acceptInternalMessengerImageRequest(
     input: InternalMessengerImageRequestInput
   ): Promise<MessengerSendOutcome> {
     const lang = input.lang ?? defaultLang;
@@ -1953,7 +1960,10 @@ export function createWebhookHandlers({
       if (!storedSourceImageUrl) {
         await clearPendingImageState(input.psid);
         await setFlowState(input.psid, "AWAITING_PHOTO");
-        return await sendLoggedText(input.psid, t(lang, "missingInputImage"), input.reqId);
+        await sendLoggedText(input.psid, t(lang, "missingInputImage"), input.reqId);
+        throw new InternalMessengerImageRequestNotQueuedError(
+          "Internal Messenger image request source image could not be persisted"
+        );
       }
       await setPendingStoredImage(input.psid, storedSourceImageUrl);
     }
@@ -1970,7 +1980,10 @@ export function createWebhookHandlers({
     if (!sourceImageUrl) {
       await setPreselectedStyle(input.psid, style);
       await setFlowState(input.psid, "AWAITING_PHOTO");
-      return await sendLoggedText(input.psid, t(lang, "styleWithoutPhoto"), input.reqId);
+      await sendLoggedText(input.psid, t(lang, "styleWithoutPhoto"), input.reqId);
+      throw new InternalMessengerImageRequestNotQueuedError(
+        "Internal Messenger image request has no source image to enqueue"
+      );
     }
 
     await setChosenStyle(input.psid, style);
@@ -1983,6 +1996,12 @@ export function createWebhookHandlers({
       sourceImageUrl,
       input.prompt
     );
+  }
+
+  async function processInternalMessengerImageRequest(
+    input: InternalMessengerImageRequestInput
+  ): Promise<MessengerSendOutcome> {
+    return await acceptInternalMessengerImageRequest(input);
   }
 
   async function processMessengerGenerationJob(
@@ -2004,6 +2023,7 @@ export function createWebhookHandlers({
 
   return {
     processFacebookWebhookPayload,
+    acceptInternalMessengerImageRequest,
     processInternalMessengerImageRequest,
     processMessengerGenerationJob,
     processMessengerGenerationJobDeadLetter,

@@ -1,4 +1,4 @@
-import { normalizeLang, t, type Lang } from "./i18n";
+import { normalizeLang, type Lang } from "./i18n";
 import { createWebhookHandlers } from "./webhookHandlers";
 import { resetWebhookReplayProtection } from "./webhookReplayProtection";
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
@@ -20,6 +20,17 @@ export async function processFacebookWebhookPayload(
   payload: unknown
 ): Promise<void> {
   await handlers.processFacebookWebhookPayload(payload);
+}
+
+export async function acceptInternalMessengerImageRequest(input: {
+  psid: string;
+  prompt: string;
+  reqId: string;
+  lang?: Lang;
+  timestamp?: number;
+  sourceImageUrl?: string;
+}): Promise<void> {
+  await handlers.acceptInternalMessengerImageRequest(input);
 }
 
 export async function processInternalMessengerImageRequest(input: {

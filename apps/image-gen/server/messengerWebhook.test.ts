@@ -699,6 +699,117 @@ describe("messenger webhook dedupe", () => {
     );
   });
 
+  it("does not resolve an internal gateway image request until durable enqueue succeeds", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    let resolveEnqueue!: () => void;
+    const redisState = new Map<string, string>();
+    const enqueueStarted = new Promise<void>(resolve => {
+      const redis = {
+        del: vi.fn(async (key: string) => (redisState.delete(key) ? 1 : 0)),
+        get: vi.fn(async (key: string) => redisState.get(key) ?? null),
+        llen: vi.fn(async () => 1),
+        lpush: vi.fn(
+          () =>
+            new Promise<number>(innerResolve => {
+              resolve();
+              resolveEnqueue = () => innerResolve(1);
+            })
+        ),
+        set: vi.fn(async (key: string, value: string) => {
+          redisState.set(key, value);
+          return "OK";
+        }),
+      };
+      getRedisClientMock.mockResolvedValue(redis);
+    });
+
+    let settled = false;
+    const requestPromise = processInternalMessengerImageRequest({
+      psid: "internal-durable-user",
+      prompt: "Restyle deze foto cinematic",
+      reqId: "req-internal-durable",
+      lang: "nl",
+      timestamp: 1_771_000_000_000,
+      sourceImageUrl: "https://img.example/durable.jpg",
+    }).then(() => {
+      settled = true;
+    });
+
+    await enqueueStarted;
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(settled).toBe(false);
+
+    resolveEnqueue();
+    await requestPromise;
+
+    expect(settled).toBe(true);
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_generation_job_queued",
+      expect.objectContaining({
+        reqId: "req-internal-durable",
+        style: "cinematic",
+      })
+    );
+  });
+
+  it("does not report source-image internal requests as queued when source normalization fails", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const redisState = new Map<string, string>();
+    const redis = {
+      del: vi.fn(async (key: string) => (redisState.delete(key) ? 1 : 0)),
+      get: vi.fn(async (key: string) => redisState.get(key) ?? null),
+      llen: vi.fn(async () => 0),
+      lpush: vi.fn(async () => 1),
+      set: vi.fn(async (key: string, value: string) => {
+        redisState.set(key, value);
+        return "OK";
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string | URL) => {
+        const urlString = toUrlString(url);
+        if (urlString === "https://img.example/source-normalization-fail.jpg") {
+          return {
+            ok: false,
+            status: 502,
+            headers: new Headers({ "content-type": "text/plain" }),
+            text: async () => "bad gateway",
+          } as Response;
+        }
+
+        throw new Error(
+          `Unexpected fetch in normalization failure test: ${urlString}`
+        );
+      })
+    );
+
+    await expect(
+      processInternalMessengerImageRequest({
+        psid: "internal-source-fail-user",
+        prompt: "Restyle deze foto cinematic",
+        reqId: "req-internal-source-fail",
+        lang: "nl",
+        timestamp: 1_771_000_000_000,
+        sourceImageUrl: "https://img.example/source-normalization-fail.jpg",
+      })
+    ).rejects.toThrow("source image could not be persisted");
+
+    expect(redis.lpush).not.toHaveBeenCalled();
+    expect(safeLogMock).not.toHaveBeenCalledWith(
+      "messenger_generation_job_queued",
+      expect.anything()
+    );
+    expect((await Promise.resolve(getState("internal-source-fail-user")))?.stage).toBe(
+      "AWAITING_PHOTO"
+    );
+  });
+
   it("dedupes on mid before the real message arrives when an echo already used it", async () => {
     await processFacebookWebhookPayload({
       entry: [
