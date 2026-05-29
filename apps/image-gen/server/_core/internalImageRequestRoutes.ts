@@ -2,8 +2,8 @@ import type { Express, Request, Response } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import {
+  acceptInternalMessengerImageRequest,
   processFacebookWebhookPayload,
-  processInternalMessengerImageRequest,
 } from "./messengerWebhook";
 
 const internalImageRequestSchema = z.object({
@@ -86,15 +86,17 @@ export function registerInternalImageRequestRoutes(app: Express): void {
         return;
       }
 
-      res.status(202).json({ status: "queued" });
+      try {
+        await acceptInternalMessengerImageRequest(parsed.data);
+      } catch (error) {
+        console.error("[internal image request] failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        res.status(503).json({ error: "Image request was not queued" });
+        return;
+      }
 
-      void processInternalMessengerImageRequest(parsed.data).catch(
-        (error: unknown) => {
-          console.error("[internal image request] failed", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      );
+      res.status(202).json({ status: "queued" });
     }
   );
 
