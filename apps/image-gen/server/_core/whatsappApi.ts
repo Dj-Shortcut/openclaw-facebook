@@ -286,23 +286,22 @@ export async function downloadWhatsAppMedia(
   const timeout = setTimeout(() => {
     controller.abort();
   }, getWhatsAppMediaDownloadTimeoutMs());
-  let mediaResponse: Response;
   try {
-    mediaResponse = await fetchWhatsAppGraph(mediaUrl, {
+    const mediaResponse = await fetchWhatsAppGraph(mediaUrl, {
       signal: controller.signal,
     });
+    await assertWhatsAppResponseOk(mediaResponse, "whatsapp_media_download_failed");
+
+    const contentType =
+      mediaResponse.headers.get("content-type") ??
+      metadata.mime_type?.trim() ??
+      "application/octet-stream";
+
+    return {
+      buffer: await readWhatsAppMediaBuffer(mediaResponse),
+      contentType,
+    };
   } finally {
     clearTimeout(timeout);
   }
-  await assertWhatsAppResponseOk(mediaResponse, "whatsapp_media_download_failed");
-
-  const contentType =
-    mediaResponse.headers.get("content-type") ??
-    metadata.mime_type?.trim() ??
-    "application/octet-stream";
-
-  return {
-    buffer: await readWhatsAppMediaBuffer(mediaResponse),
-    contentType,
-  };
 }

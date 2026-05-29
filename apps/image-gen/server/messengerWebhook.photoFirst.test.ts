@@ -254,7 +254,16 @@ describe("photo-first onboarding", () => {
     });
 
     const userState = getState(anonymizePsid(psid));
-    expect(userState).toBeNull();
+    expect(userState).toEqual(
+      expect.objectContaining({
+        faceMemoryConsent: null,
+        lastPhotoUrl: null,
+        lastSourceImageUrl: null,
+        pendingSourceImageDeleteUrl: expect.stringMatching(
+          /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
+        ),
+      })
+    );
     expect(sendTextMock).toHaveBeenCalledWith(
       psid,
       expect.stringContaining("Je data is verwijderd")

@@ -5,6 +5,7 @@ import { downloadWhatsAppMedia } from "./_core/whatsappApi";
 describe("whatsappApi media download", () => {
   const originalAccessToken = process.env.WHATSAPP_ACCESS_TOKEN;
   const originalMaxBytes = process.env.WHATSAPP_MEDIA_MAX_BYTES;
+  const originalDownloadTimeout = process.env.WHATSAPP_MEDIA_DOWNLOAD_TIMEOUT_MS;
 
   beforeEach(() => {
     process.env.WHATSAPP_ACCESS_TOKEN = "test-token";
@@ -23,6 +24,12 @@ describe("whatsappApi media download", () => {
       delete process.env.WHATSAPP_MEDIA_MAX_BYTES;
     } else {
       process.env.WHATSAPP_MEDIA_MAX_BYTES = originalMaxBytes;
+    }
+
+    if (originalDownloadTimeout === undefined) {
+      delete process.env.WHATSAPP_MEDIA_DOWNLOAD_TIMEOUT_MS;
+    } else {
+      process.env.WHATSAPP_MEDIA_DOWNLOAD_TIMEOUT_MS = originalDownloadTimeout;
     }
   });
 
@@ -58,5 +65,50 @@ describe("whatsappApi media download", () => {
       "WhatsApp media too large"
     );
     expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it("keeps the download timeout active while reading the media body", async () => {
+    vi.useFakeTimers();
+    process.env.WHATSAPP_MEDIA_MAX_BYTES = "100";
+    process.env.WHATSAPP_MEDIA_DOWNLOAD_TIMEOUT_MS = "5";
+
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              url: "https://graph.facebook.com/v19.0/slow-media",
+              mime_type: "image/jpeg",
+            }),
+            { status: 200 }
+          )
+        )
+        .mockImplementationOnce(async (_url, init) => {
+          const signal = init?.signal as AbortSignal | undefined;
+          const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+              signal?.addEventListener("abort", () => {
+                controller.error(new DOMException("aborted", "AbortError"));
+              });
+            },
+          });
+
+          return new Response(body, {
+            status: 200,
+            headers: { "content-type": "image/jpeg" },
+          });
+        })
+    );
+
+    try {
+      const download = downloadWhatsAppMedia("media-id");
+      const rejection = expect(download).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(5);
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
