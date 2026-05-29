@@ -55,10 +55,8 @@ import {
   buildRuntimeReadinessChecks,
   createReadinessHandler,
 } from "./readiness";
-import {
-  assertIdentityGameVariantCatalog,
-  registerIdentityGameShareRoutes,
-} from "./identityGameVariants";
+import { assertIdentityGameVariantCatalog } from "./identityGameVariantValidation";
+import { registerIdentityGameShareRoutes } from "./identityGameShareRoutes";
 import {
   registerFaceMemoryAdminRoutes,
   scheduleFaceMemoryExpiry,
