@@ -238,6 +238,7 @@ export function buildOpenAiImageGenerationPayload(input: {
         output_format: "png",
       },
     ],
+    tool_choice: { type: "image_generation" },
   };
 
   if (input.previousResponseId?.trim()) {
@@ -366,7 +367,11 @@ export async function parseOpenAiImageResponse(
 ): Promise<Buffer> {
   const startedAt = Date.now();
   const result = (await response.json()) as {
-    output?: Array<{ type?: string; result?: string }>;
+    output?: Array<{
+      type?: string;
+      result?: string;
+      content?: Array<{ type?: string }>;
+    }>;
   };
 
   if (!Array.isArray(result.output) || result.output.length === 0) {
@@ -377,6 +382,19 @@ export async function parseOpenAiImageResponse(
     output => output?.type === "image_generation_call"
   );
   if (!imageGenerationCall) {
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        msg: "openai_image_response_missing_generation_call",
+        reqId,
+        outputTypes: result.output.map(output => output?.type ?? "unknown"),
+        contentTypes: result.output.flatMap(output =>
+          Array.isArray(output?.content)
+            ? output.content.map(content => content?.type ?? "unknown")
+            : []
+        ),
+      })
+    );
     throw new OpenAiGenerationError(
       "OpenAI response did not include an image_generation_call"
     );

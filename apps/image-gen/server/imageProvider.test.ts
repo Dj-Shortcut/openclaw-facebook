@@ -320,6 +320,7 @@ describe("image provider boundary", () => {
         model?: string;
         input?: Array<{ content?: Array<{ type?: string; image_url?: string }> }>;
         tools?: Array<{ type?: string; output_format?: string }>;
+        tool_choice?: { type?: string };
       };
       expect(body.model).toBe("gpt-image-2");
       expect(body.tools).toEqual([
@@ -328,6 +329,7 @@ describe("image provider boundary", () => {
           output_format: "png",
         }),
       ]);
+      expect(body.tool_choice).toEqual({ type: "image_generation" });
       expect(body.input?.[0]?.content?.find(part => part.type === "input_image")?.image_url).toMatch(
         /^data:image\/jpeg;base64,/
       );
