@@ -1,12 +1,9 @@
 import http from "node:http";
 import express from "express";
 import { describe, expect, it } from "vitest";
-import {
-  assertIdentityGameVariantCatalog,
-  GAME_VARIANTS,
-  registerIdentityGameShareRoutes,
-  type GameVariantDefinition,
-} from "./_core/identityGameVariants";
+import { GAME_VARIANTS, type GameVariantDefinition } from "./_core/identityGameVariants";
+import { assertIdentityGameVariantCatalog } from "./_core/identityGameVariantValidation";
+import { registerIdentityGameShareRoutes } from "./_core/identityGameShareRoutes";
 import { bindTestHttpServer } from "./testHttpServer";
 
 function createVariant(overrides: Partial<GameVariantDefinition> = {}): GameVariantDefinition {
