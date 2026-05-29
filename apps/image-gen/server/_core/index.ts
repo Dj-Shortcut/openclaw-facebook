@@ -25,7 +25,6 @@ import {
   getGeneratedImage,
   hashGeneratedImageToken,
 } from "./generatedImageStore";
-import { isDebugLogEnabled } from "./logLevel";
 import {
   assertProductionStateStoreConfig,
   ensureStateStoreReady,
@@ -48,9 +47,8 @@ import {
 } from "./httpRateLimit";
 import {
   attachRequestTracing,
+  createRequestMetricsMiddleware,
   getRequestId,
-  getTraceContext,
-  recordHttpRequestMetric,
   registerMetricsRoute,
 } from "./observability";
 import {
@@ -352,6 +350,8 @@ async function startServer() {
   app.use(attachRequestTracing());
   app.use(createGlobalHttpRateLimiter());
 
+  app.use(createRequestMetricsMiddleware());
+
   if (process.env.NODE_ENV !== "production") {
     app.get("/debug/sentry", () => {
       throw new Error("Sentry smoke test");
@@ -385,37 +385,6 @@ async function startServer() {
   registerBotRoutes(app);
   registerInternalImageRequestRoutes(app);
   scheduleWebhookIngressDrain();
-
-  app.use((req, res, next) => {
-    const startTime = process.hrtime.bigint();
-
-    res.on("finish", () => {
-      const durationMs =
-        Number(process.hrtime.bigint() - startTime) / 1_000_000;
-      const log = {
-        reqId: getRequestId(req),
-        traceId: getTraceContext(req)?.traceId,
-        spanId: getTraceContext(req)?.spanId,
-        method: req.method,
-        path: req.path,
-        status: res.statusCode,
-        ms: Number(durationMs.toFixed(1)),
-      };
-      recordHttpRequestMetric(req.method, req.path, res.statusCode, durationMs);
-
-      // Keep info logs compact: skip webhook and health checks unless debug logging is enabled.
-      const shouldLogAtInfo =
-        !req.path.startsWith("/webhook") &&
-        req.path !== "/healthz" &&
-        req.path !== "/health" &&
-        req.path !== "/metrics";
-      if (isDebugLogEnabled() || shouldLogAtInfo) {
-        console.log(JSON.stringify(log));
-      }
-    });
-
-    next();
-  });
 
   // Support both /health and /healthz for compatibility with Fly.io and other platforms
   const healthHandler = (_req: express.Request, res: express.Response) => {
