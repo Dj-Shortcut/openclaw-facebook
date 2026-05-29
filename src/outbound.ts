@@ -9,6 +9,7 @@ import {
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { type ChannelPlugin, type ResolvedMessengerAccount } from "./channel-api.js";
 import { FACEBOOK_CHANNEL_ID } from "./naming.js";
+import { getMessengerQuickReplies, renderMessengerPresentationPayload } from "./presentation.js";
 import { getMessengerRuntime } from "./runtime.js";
 import { MESSENGER_TEXT_CHUNK_LIMIT } from "./send.js";
 
@@ -19,6 +20,34 @@ export const messengerOutboundAdapter: NonNullable<
 > = {
   deliveryMode: "direct",
   textChunkLimit: MESSENGER_TEXT_CHUNK_LIMIT,
+  presentationCapabilities: {
+    supported: true,
+    buttons: true,
+    selects: true,
+    limits: {
+      actions: {
+        maxActions: 4,
+        maxActionsPerRow: 4,
+        maxRows: 1,
+        maxLabelLength: 20,
+        maxValueBytes: 1000,
+        supportsStyles: false,
+        supportsDisabled: false,
+      },
+      selects: {
+        maxOptions: 4,
+        maxLabelLength: 20,
+        maxValueBytes: 1000,
+      },
+      text: {
+        maxLength: MESSENGER_TEXT_CHUNK_LIMIT,
+        encoding: "characters",
+        markdownDialect: "plain",
+      },
+    },
+  },
+  renderPresentation: ({ payload, presentation }) =>
+    renderMessengerPresentationPayload({ payload, presentation }),
   chunker: (text, limit) => getMessengerRuntime().channel.text.chunkMarkdownText(text, limit),
   sendPayload: async ({ to, payload, accountId, cfg }) => {
     const sendText =
@@ -27,6 +56,7 @@ export const messengerOutboundAdapter: NonNullable<
     const result = await sendText(to, payload.text ?? "", {
       cfg,
       accountId: accountId ?? undefined,
+      quickReplies: getMessengerQuickReplies(payload),
     });
     return createEmptyChannelResult(FACEBOOK_CHANNEL_ID, {
       messageId: result.messageId,
@@ -61,6 +91,7 @@ export const messengerMessageAdapter = defineChannelMessageAdapter({
   durableFinal: {
     capabilities: {
       text: true,
+      payload: true,
       messageSendingHooks: true,
     },
   },
@@ -72,6 +103,16 @@ export const messengerMessageAdapter = defineChannelMessageAdapter({
         text,
         accountId,
         payload: { text },
+      });
+      return toMessengerMessageSendResult(result);
+    },
+    payload: async ({ cfg, to, text, accountId, payload }) => {
+      const result = await messengerOutboundAdapter.sendPayload!({
+        cfg,
+        to,
+        text,
+        accountId,
+        payload,
       });
       return toMessengerMessageSendResult(result);
     },
