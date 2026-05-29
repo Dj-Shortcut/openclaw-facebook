@@ -2,7 +2,16 @@ import { getDayKey } from "./messengerStateNormalization";
 import { getOrCreateState, type MessengerUserState } from "./messengerState";
 import { updateStoredState } from "./stateStore";
 
-const FREE_DAILY_LIMIT = 3;
+const DEFAULT_FREE_DAILY_LIMIT = 3;
+
+export function getFreeDailyLimit(): number {
+  const configured = Number(process.env.MESSENGER_FREE_DAILY_LIMIT);
+  if (Number.isFinite(configured) && configured >= 0) {
+    return Math.floor(configured);
+  }
+
+  return DEFAULT_FREE_DAILY_LIMIT;
+}
 
 function hasQuotaBypass(psid: string, userKey: string): boolean {
   const raw = process.env.MESSENGER_QUOTA_BYPASS_IDS ?? "";
@@ -51,7 +60,7 @@ export async function canGenerate(psid: string): Promise<boolean> {
     return true;
   }
 
-  return state.quota.count < FREE_DAILY_LIMIT;
+  return state.quota.count < getFreeDailyLimit();
 }
 
 export async function increment(psid: string): Promise<void> {

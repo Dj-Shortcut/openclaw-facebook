@@ -62,7 +62,7 @@ import {
   toMessengerStyleReplies,
 } from "./webhookHelpers";
 import { hasInFlightGeneration, runGuardedGeneration } from "./generationGuard";
-import { canGenerate, increment } from "./messengerQuota";
+import { canGenerate, getFreeDailyLimit, increment } from "./messengerQuota";
 import { isDebugLogEnabled } from "./logLevel";
 import { getBotFeatures } from "./bot/features";
 import { ensureDefaultBotFeaturesRegistered } from "./bot/defaultFeatures";
@@ -1504,7 +1504,7 @@ export function createWebhookHandlers({
           action: "check",
           psidHash: anonymizePsid(psid).slice(0, 12),
           count: quotaState.quota.count,
-          limit: 3,
+          limit: getFreeDailyLimit(),
           bypassApplied,
           allowed,
         })

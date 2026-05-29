@@ -14,6 +14,7 @@ describe("messenger quota dayKey", () => {
     resetStateStore();
     vi.useRealTimers();
     delete process.env.MESSENGER_QUOTA_BYPASS_IDS;
+    delete process.env.MESSENGER_FREE_DAILY_LIMIT;
   });
 
   afterAll(() => {
@@ -99,6 +100,23 @@ describe("messenger quota dayKey", () => {
 
     expect(await canGenerate(userId)).toBe(true);
     expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(0);
+  });
+
+  it("uses the configured daily quota limit", async () => {
+    const userId = "configured-limit-user";
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "5";
+
+    await increment(userId);
+    await increment(userId);
+    await increment(userId);
+
+    expect(await canGenerate(userId)).toBe(true);
+
+    await increment(userId);
+    await increment(userId);
+
+    expect(await canGenerate(userId)).toBe(false);
+    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(5);
   });
 
 });
