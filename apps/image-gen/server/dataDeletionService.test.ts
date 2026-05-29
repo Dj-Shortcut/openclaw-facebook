@@ -1,4 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { storageDeleteMock } = vi.hoisted(() => ({
+  storageDeleteMock: vi.fn(async () => undefined),
+}));
+
+vi.mock("./storage", async importOriginal => {
+  const actual = await importOriginal<typeof import("./storage")>();
+  return {
+    ...actual,
+    storageDelete: storageDeleteMock,
+  };
+});
 import { deleteUserData } from "./_core/dataDeletionService";
 import {
   getMessengerGenerationCompletion,
@@ -25,6 +37,7 @@ describe("data deletion service", () => {
 
   afterEach(() => {
     resetStateStore();
+    storageDeleteMock.mockReset();
     if (originalRedisUrl === undefined) {
       delete process.env.REDIS_URL;
     } else {
@@ -90,6 +103,8 @@ describe("data deletion service", () => {
 
   it("keeps a pending deletion marker when object storage deletion fails", async () => {
     const psid = "delete-storage-failure-user";
+    storageDeleteMock.mockRejectedValueOnce(new Error("delete failed"));
+
     await Promise.resolve(
       setPendingImage(
         psid,

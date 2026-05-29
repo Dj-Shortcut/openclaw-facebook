@@ -121,12 +121,17 @@ async function processSingleWhatsAppEvent(
 function getWhatsAppEventReplayKey(event: NormalizedWhatsAppEvent): string {
   const stableEventId =
     event.messageId?.trim() ||
-    [
-      event.senderId,
-      event.timestamp ?? "no-ts",
-      event.rawMessageType ?? "unknown",
-      event.imageId ?? event.textBody ?? "no-body",
-    ].join(":");
+    createHash("sha256")
+      .update(
+        [
+          event.senderId,
+          event.timestamp ?? "no-ts",
+          event.rawMessageType ?? "unknown",
+          event.imageId ?? event.textBody ?? "no-body",
+        ].join(":")
+      )
+      .digest("hex")
+      .slice(0, 32);
 
   return `whatsapp:${event.userId}:${stableEventId}`;
 }
