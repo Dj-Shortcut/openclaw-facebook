@@ -1324,7 +1324,7 @@ describe("messenger webhook dedupe", () => {
 
     expect(sendQuickRepliesMock).toHaveBeenLastCalledWith(
       "openai-timeout-user",
-      "This took too long.",
+      "Dit duurde te lang bij de beeldprovider. Probeer nog eens.",
       [
         {
           content_type: "text",
@@ -1333,6 +1333,10 @@ describe("messenger webhook dedupe", () => {
         },
         { content_type: "text", title: "Andere", payload: "CHOOSE_STYLE" },
       ]
+    );
+    expect(sendTextMock).not.toHaveBeenCalledWith(
+      "openai-timeout-user",
+      "Oeps. Probeer nog een stijl."
     );
   });
 

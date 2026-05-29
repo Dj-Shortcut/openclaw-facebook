@@ -99,7 +99,8 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     backToCategories: "Categorieen",
     hdUnavailable: "I can share HD downloads after I generate an image.",
     generationUnavailable: "AI generation isn’t enabled yet.",
-    generationTimeout: "This took too long.",
+    generationTimeout:
+      "Dit duurde te lang bij de beeldprovider. Probeer nog eens.",
     generationBudgetReached:
       "⚠️ Even pauze — ons maandbudget is bereikt. Probeer later opnieuw.",
     generationGenericFailure: "I couldn’t generate that image right now.",
@@ -157,7 +158,8 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     backToCategories: "Categories",
     hdUnavailable: "I can share HD downloads after I generate an image.",
     generationUnavailable: "AI generation isn’t enabled yet.",
-    generationTimeout: "This took too long.",
+    generationTimeout:
+      "This took too long at the image provider. Please try again.",
     generationBudgetReached:
       "⚠️ Quick pause — our monthly budget has been reached. Please try again later.",
     generationGenericFailure: "I couldn’t generate that image right now.",

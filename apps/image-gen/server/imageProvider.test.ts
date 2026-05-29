@@ -145,7 +145,7 @@ describe("image provider boundary", () => {
         messengerGenerationGlobalLimit: {
           redisBacked: false,
           max: 3,
-          lockTtlMs: 120000,
+          lockTtlMs: 240000,
         },
         messengerGenerationRuntime: {
           queueEnabled: false,
