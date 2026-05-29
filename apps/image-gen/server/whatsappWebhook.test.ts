@@ -878,6 +878,21 @@ describe("whatsapp webhook flow", () => {
     );
   });
 
+  it("ignores replayed WhatsApp messages with the same message id", async () => {
+    const payload = createWhatsAppPayload({
+      id: "wamid-replay-1",
+      from: "wa-user-replay",
+      timestamp: "1710000012",
+      type: "text",
+      text: { body: "help" },
+    });
+
+    await processWhatsAppWebhookPayload(payload);
+    await processWhatsAppWebhookPayload(payload);
+
+    expect(sendWhatsAppTextMock).toHaveBeenCalledTimes(1);
+  });
+
   it("adds a plain-text selection hint for WhatsApp help before a photo is uploaded", async () => {
     await processWhatsAppWebhookPayload(
       createWhatsAppPayload({

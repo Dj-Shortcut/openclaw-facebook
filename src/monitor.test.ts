@@ -55,6 +55,16 @@ describe("resolveMessengerEventTarget", () => {
       }),
     ).toBeNull();
   });
+
+  it("does not fall back to the only target when recipient page id is present and unmatched", () => {
+    const target = messengerTarget("first", "page-1");
+
+    expect(
+      resolveMessengerEventTarget([target], {
+        recipient: { id: "page-2" },
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("resolveMessengerVerificationTarget", () => {

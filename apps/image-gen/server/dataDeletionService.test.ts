@@ -1,10 +1,28 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { storageDeleteMock } = vi.hoisted(() => ({
+  storageDeleteMock: vi.fn(async () => undefined),
+}));
+
+vi.mock("./storage", async importOriginal => {
+  const actual = await importOriginal<typeof import("./storage")>();
+  return {
+    ...actual,
+    storageDelete: storageDeleteMock,
+  };
+});
 import { deleteUserData } from "./_core/dataDeletionService";
 import {
   getMessengerGenerationCompletion,
   markMessengerGenerationCompleted,
 } from "./_core/messengerGenerationCompletion";
-import { anonymizePsid, getOrCreateState, resetStateStore } from "./_core/messengerState";
+import {
+  anonymizePsid,
+  getOrCreateState,
+  getState,
+  resetStateStore,
+  setPendingImage,
+} from "./_core/messengerState";
 import { readScopedState, writeScopedState } from "./_core/stateStore";
 
 describe("data deletion service", () => {
@@ -19,6 +37,7 @@ describe("data deletion service", () => {
 
   afterEach(() => {
     resetStateStore();
+    storageDeleteMock.mockReset();
     if (originalRedisUrl === undefined) {
       delete process.env.REDIS_URL;
     } else {
@@ -80,5 +99,25 @@ describe("data deletion service", () => {
         getMessengerGenerationCompletion("req-delete-completion")
       )
     ).toBeNull();
+  });
+
+  it("keeps a pending deletion marker when object storage deletion fails", async () => {
+    const psid = "delete-storage-failure-user";
+    storageDeleteMock.mockRejectedValueOnce(new Error("delete failed"));
+
+    await Promise.resolve(
+      setPendingImage(
+        psid,
+        "https://assets.example/inbound-source/delete-me.jpg",
+        Date.now(),
+        "stored"
+      )
+    );
+
+    await deleteUserData(psid);
+
+    expect((await Promise.resolve(getState(psid)))?.pendingSourceImageDeleteUrl).toBe(
+      "https://assets.example/inbound-source/delete-me.jpg"
+    );
   });
 });
