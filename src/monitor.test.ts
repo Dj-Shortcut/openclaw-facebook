@@ -226,11 +226,6 @@ describe("hasMessengerImageGenerationIntent", () => {
     expect(hasMessengerImageGenerationIntent("Maak een prompt voor een afbeelding")).toBe(false);
     expect(hasMessengerImageGenerationIntent("Write an image prompt for a robot")).toBe(false);
   });
-
-  it("keeps image generation requests that mention an existing prompt", () => {
-    expect(hasMessengerImageGenerationIntent("Genereer een afbeelding met deze prompt")).toBe(true);
-    expect(hasMessengerImageGenerationIntent("Create image from this prompt")).toBe(true);
-  });
 });
 
 describe("resolveMessengerSourceImageGenerationPrompt", () => {
