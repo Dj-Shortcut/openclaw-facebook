@@ -49,6 +49,7 @@ import {
   setPendingImage,
   setPendingStoredImage,
   setPreselectedStyle,
+  setChosenStyle,
   setFlowState,
 } from "./_core/messengerState";
 import {
@@ -2673,6 +2674,45 @@ describe("disabled bot features stay out of the runtime flow", () => {
     expect(
       getState(anonymizePsid("stale-preselect-user"))?.preselectedStyle
     ).toBe("cyberpunk");
+  });
+
+  it("auto-runs the selected style when a new photo replaces an older one", async () => {
+    await setPendingStoredImage(
+      "selected-style-replacement-user",
+      "https://leaderbot-fb-image-gen.fly.dev/generated/old-source.png"
+    );
+    await setChosenStyle("selected-style-replacement-user", "afroman-americana");
+
+    sendImageMock.mockClear();
+    sendQuickRepliesMock.mockClear();
+    sendTextMock.mockClear();
+    installOpenAiSuccessFetchMock();
+
+    await sendMessengerPhoto(
+      processFacebookWebhookPayload,
+      "selected-style-replacement-user",
+      "mid-selected-style-replacement-photo",
+      "https://img.example/new-source.jpg"
+    );
+
+    expect(sendTextMock).toHaveBeenCalledWith(
+      "selected-style-replacement-user",
+      "Ik maak nu je Afroman-stijl."
+    );
+    expect(sendImageMock).toHaveBeenCalledWith(
+      "selected-style-replacement-user",
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
+      )
+    );
+    expect(sendQuickRepliesMock).not.toHaveBeenCalledWith(
+      "selected-style-replacement-user",
+      t("nl", "styleCategoryPicker"),
+      expect.any(Array)
+    );
+    expect(
+      getState(anonymizePsid("selected-style-replacement-user"))?.selectedStyle
+    ).toBe("afroman-americana");
   });
 
   it("stores Messenger attachment URLs before downstream generation fetches them again", async () => {

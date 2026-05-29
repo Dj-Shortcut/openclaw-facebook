@@ -267,7 +267,10 @@ export type HandlerContext = {
     incomingImageUrl: string;
     selectedStyle: string | null;
     preselectedStyle: string | null;
-    action: "show_style_picker" | "auto_run_preselected_style";
+    action:
+      | "show_style_picker"
+      | "auto_run_preselected_style"
+      | "auto_run_selected_style";
   }) => void;
   logIncomingMessage: (
     psid: string,
@@ -794,6 +797,7 @@ async function tryHandleImageMessage(
   ctx.logUserState(input.psid, input.userId, state, input.reqId, "image_received");
   const imageDecision = getStoredMessengerImageDecision({
     lastPhotoUrl: state.lastPhotoUrl,
+    selectedStyle: state.selectedStyle,
     preselectedStyle: state.preselectedStyle,
     storedSourceImageUrl,
   });
@@ -822,7 +826,10 @@ async function tryHandleImageMessage(
     action: imageDecision.action,
   });
 
-  if (imageDecision.action === "auto_run_preselected_style") {
+  if (
+    imageDecision.action === "auto_run_preselected_style" ||
+    imageDecision.action === "auto_run_selected_style"
+  ) {
     await setPreselectedStyle(input.psid, null);
     await setChosenStyle(input.psid, imageDecision.preselectedStyle);
     await ctx.runStyleGeneration(
@@ -1311,7 +1318,10 @@ export function createWebhookHandlers({
     incomingImageUrl: string;
     selectedStyle: string | null;
     preselectedStyle: string | null;
-    action: "show_style_picker" | "auto_run_preselected_style";
+    action:
+      | "show_style_picker"
+      | "auto_run_preselected_style"
+      | "auto_run_selected_style";
   }): void {
     safeLog("messenger_image_flow_decision", {
       reqId: input.reqId,

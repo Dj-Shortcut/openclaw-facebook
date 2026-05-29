@@ -33,6 +33,7 @@ export async function normalizeMessengerInboundImage(
 
 type StoredMessengerImageDecisionInput = {
   lastPhotoUrl: string | null;
+  selectedStyle?: string | null;
   preselectedStyle?: string | null;
   storedSourceImageUrl: string;
 };
@@ -49,12 +50,19 @@ export type StoredMessengerImageDecision =
       hadPreviousPhoto: boolean;
       incomingImageUrl: string;
       preselectedStyle: Style;
+    }
+  | {
+      action: "auto_run_selected_style";
+      hadPreviousPhoto: boolean;
+      incomingImageUrl: string;
+      preselectedStyle: Style;
     };
 
 export function getStoredMessengerImageDecision(
   input: StoredMessengerImageDecisionInput
 ): StoredMessengerImageDecision {
   const hadPreviousPhoto = Boolean(input.lastPhotoUrl);
+  const selectedStyle = normalizeStyle(input.selectedStyle ?? "") ?? null;
   const preselectedStyle = normalizeStyle(input.preselectedStyle ?? "") ?? null;
 
   if (preselectedStyle && !hadPreviousPhoto) {
@@ -63,6 +71,15 @@ export function getStoredMessengerImageDecision(
       hadPreviousPhoto,
       incomingImageUrl: input.storedSourceImageUrl,
       preselectedStyle,
+    };
+  }
+
+  if (selectedStyle) {
+    return {
+      action: "auto_run_selected_style",
+      hadPreviousPhoto,
+      incomingImageUrl: input.storedSourceImageUrl,
+      preselectedStyle: selectedStyle,
     };
   }
 
