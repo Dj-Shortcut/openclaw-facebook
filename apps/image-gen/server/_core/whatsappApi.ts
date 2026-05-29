@@ -3,6 +3,8 @@ import { createLogger } from "./logger";
 
 const GRAPH_API_VERSION = "v19.0";
 const logger = createLogger({});
+const DEFAULT_WHATSAPP_MEDIA_DOWNLOAD_TIMEOUT_MS = 10_000;
+const DEFAULT_WHATSAPP_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
 
 export type WhatsAppReplyButton = {
   id: string;
@@ -54,6 +56,77 @@ async function fetchWhatsAppGraph(
       ...(init.headers ?? {}),
     },
   });
+}
+
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = Number(process.env[name]);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
+}
+
+function getWhatsAppMediaDownloadTimeoutMs(): number {
+  return readPositiveIntEnv(
+    "WHATSAPP_MEDIA_DOWNLOAD_TIMEOUT_MS",
+    DEFAULT_WHATSAPP_MEDIA_DOWNLOAD_TIMEOUT_MS
+  );
+}
+
+function getWhatsAppMediaMaxBytes(): number {
+  return readPositiveIntEnv(
+    "WHATSAPP_MEDIA_MAX_BYTES",
+    DEFAULT_WHATSAPP_MEDIA_MAX_BYTES
+  );
+}
+
+function assertWhatsAppMediaWithinLimit(byteLength: number): void {
+  const maxBytes = getWhatsAppMediaMaxBytes();
+  if (byteLength > maxBytes) {
+    throw new Error(`WhatsApp media too large (${byteLength} bytes)`);
+  }
+}
+
+async function readWhatsAppMediaBuffer(response: Response): Promise<Buffer> {
+  const contentLength = Number.parseInt(
+    response.headers.get("content-length") ?? "",
+    10
+  );
+  if (Number.isFinite(contentLength) && contentLength > 0) {
+    assertWhatsAppMediaWithinLimit(contentLength);
+  }
+
+  if (!response.body) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    assertWhatsAppMediaWithinLimit(buffer.length);
+    return buffer;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    if (!value) {
+      continue;
+    }
+
+    totalBytes += value.byteLength;
+    try {
+      assertWhatsAppMediaWithinLimit(totalBytes);
+    } catch (error) {
+      await reader.cancel();
+      throw error;
+    }
+    chunks.push(value);
+  }
+
+  return Buffer.concat(
+    chunks.map(chunk =>
+      Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+    )
+  );
 }
 
 async function assertWhatsAppResponseOk(
@@ -209,7 +282,18 @@ export async function downloadWhatsAppMedia(
     throw new Error("WhatsApp media metadata response missing url");
   }
 
-  const mediaResponse = await fetchWhatsAppGraph(mediaUrl);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, getWhatsAppMediaDownloadTimeoutMs());
+  let mediaResponse: Response;
+  try {
+    mediaResponse = await fetchWhatsAppGraph(mediaUrl, {
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
   await assertWhatsAppResponseOk(mediaResponse, "whatsapp_media_download_failed");
 
   const contentType =
@@ -218,7 +302,7 @@ export async function downloadWhatsAppMedia(
     "application/octet-stream";
 
   return {
-    buffer: Buffer.from(await mediaResponse.arrayBuffer()),
+    buffer: await readWhatsAppMediaBuffer(mediaResponse),
     contentType,
   };
 }

@@ -9,6 +9,7 @@ import { handleWhatsAppInteractiveEvent } from "./whatsappHandlers/interactiveHa
 import { handleWhatsAppTextEvent } from "./whatsappHandlers/textHandler";
 import { handleWhatsAppExperienceRouting } from "./whatsappRouting";
 import { sendWhatsAppButtonsReply, sendWhatsAppTextReply } from "./whatsappResponseService";
+import { claimWebhookReplayKey } from "./webhookReplayProtection";
 import type { NormalizedWhatsAppEvent } from "./whatsappTypes";
 
 const DEFAULT_LANG = normalizeLang(process.env.DEFAULT_MESSENGER_LANG);
@@ -83,6 +84,10 @@ async function dispatchWhatsAppEvent(
 async function processSingleWhatsAppEvent(
   event: NormalizedWhatsAppEvent
 ): Promise<void> {
+  if (!(await claimWhatsAppEventReplayOrLog(event))) {
+    return;
+  }
+
   const context = createWhatsAppEventContext(event);
   const state = await Promise.resolve(getOrCreateState(event.senderId));
 
@@ -111,6 +116,34 @@ async function processSingleWhatsAppEvent(
   }
 
   await dispatchWhatsAppEvent(event, context);
+}
+
+function getWhatsAppEventReplayKey(event: NormalizedWhatsAppEvent): string {
+  const stableEventId =
+    event.messageId?.trim() ||
+    [
+      event.senderId,
+      event.timestamp ?? "no-ts",
+      event.rawMessageType ?? "unknown",
+      event.imageId ?? event.textBody ?? "no-body",
+    ].join(":");
+
+  return `whatsapp:${event.userId}:${stableEventId}`;
+}
+
+async function claimWhatsAppEventReplayOrLog(
+  event: NormalizedWhatsAppEvent
+): Promise<boolean> {
+  const replayKey = getWhatsAppEventReplayKey(event);
+  const claimed = await claimWebhookReplayKey(replayKey);
+  if (claimed) {
+    return true;
+  }
+
+  console.info("[whatsapp webhook] replay ignored", {
+    user: toLogUser(event.userId),
+  });
+  return false;
 }
 
 async function safelyProcessSingleWhatsAppEvent(

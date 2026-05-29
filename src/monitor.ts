@@ -709,10 +709,7 @@ export function resolveMessengerEventTarget(
   if (!pageId) {
     return targets.length === 1 ? (targets[0] ?? null) : null;
   }
-  return (
-    targets.find((target) => target.account.pageId === pageId) ??
-    (targets.length === 1 ? (targets[0] ?? null) : null)
-  );
+  return targets.find((target) => target.account.pageId === pageId) ?? null;
 }
 
 export function resolveMessengerVerificationTarget(

@@ -4,7 +4,13 @@ import {
   getMessengerGenerationCompletion,
   markMessengerGenerationCompleted,
 } from "./_core/messengerGenerationCompletion";
-import { anonymizePsid, getOrCreateState, resetStateStore } from "./_core/messengerState";
+import {
+  anonymizePsid,
+  getOrCreateState,
+  getState,
+  resetStateStore,
+  setPendingImage,
+} from "./_core/messengerState";
 import { readScopedState, writeScopedState } from "./_core/stateStore";
 
 describe("data deletion service", () => {
@@ -80,5 +86,23 @@ describe("data deletion service", () => {
         getMessengerGenerationCompletion("req-delete-completion")
       )
     ).toBeNull();
+  });
+
+  it("keeps a pending deletion marker when object storage deletion fails", async () => {
+    const psid = "delete-storage-failure-user";
+    await Promise.resolve(
+      setPendingImage(
+        psid,
+        "https://assets.example/inbound-source/delete-me.jpg",
+        Date.now(),
+        "stored"
+      )
+    );
+
+    await deleteUserData(psid);
+
+    expect((await Promise.resolve(getState(psid)))?.pendingSourceImageDeleteUrl).toBe(
+      "https://assets.example/inbound-source/delete-me.jpg"
+    );
   });
 });
