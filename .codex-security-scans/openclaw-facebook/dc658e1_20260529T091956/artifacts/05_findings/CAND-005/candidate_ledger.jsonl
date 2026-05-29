@@ -1,3 +1,0 @@
-{"phase":"discovery","candidate_id":"CAND-005","status":"plausible","evidence":"downloadWhatsAppMedia uses arrayBuffer without local size or timeout limits."}
-{"phase":"validation","candidate_id":"CAND-005","status":"validated","evidence":"No Content-Length check, streaming cap, or AbortController before Buffer.from(await arrayBuffer())."}
-{"phase":"attack_path","candidate_id":"CAND-005","status":"reportable","evidence":"Oversized or slow media response can pressure memory and storage before downstream controls."}
