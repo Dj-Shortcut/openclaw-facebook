@@ -1135,7 +1135,6 @@ async function processMessengerEvent(params: {
   }
   } finally {
     logMessengerStage(params.trace, "request_completed", {
-      eventLoopDelayMs: eventLoopDelayMaxMs(),
       activeMessengerEventJobs,
     });
     activeMessengerEventJobs = Math.max(0, activeMessengerEventJobs - 1);
