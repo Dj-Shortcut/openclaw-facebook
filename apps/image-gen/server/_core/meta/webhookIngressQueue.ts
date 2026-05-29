@@ -95,31 +95,15 @@ function parseQueuedWebhookDelivery(
 async function processWhatsAppWebhookPayloadSafely(
   payload: unknown
 ): Promise<void> {
-  try {
-    const module = await import("../whatsappWebhook");
-    await module.processWhatsAppWebhookPayload(payload);
-  } catch (error) {
-    safeLog("webhook_async_processing_failed", {
-      channel: "whatsapp",
-      error: serializeError(error),
-    });
-    throw error;
-  }
+  const module = await import("../whatsappWebhook");
+  await module.processWhatsAppWebhookPayload(payload);
 }
 
 async function processFacebookWebhookPayloadSafely(
   payload: unknown
 ): Promise<void> {
-  try {
-    const module = await import("../messengerWebhook");
-    await module.processFacebookWebhookPayload(payload);
-  } catch (error) {
-    safeLog("webhook_async_processing_failed", {
-      channel: "facebook",
-      error: serializeError(error),
-    });
-    throw error;
-  }
+  const module = await import("../messengerWebhook");
+  await module.processFacebookWebhookPayload(payload);
 }
 
 async function processQueuedWebhookDelivery(
@@ -271,24 +255,20 @@ export function scheduleWebhookIngressDrain(): void {
             return;
           }
 
-          try {
-            if ("invalid" in reserved) {
-              safeLog("webhook_queued_delivery_invalid", {});
-              await completeWebhookIngressDelivery(redis, reserved.raw);
-              continue;
-            }
-
-            await processQueuedWebhookDelivery(reserved.delivery);
+          if ("invalid" in reserved) {
+            safeLog("webhook_queued_delivery_invalid", {});
             await completeWebhookIngressDelivery(redis, reserved.raw);
-          } catch (error) {
-            if ("invalid" in reserved) {
-              await completeWebhookIngressDelivery(redis, reserved.raw);
-              continue;
-            }
+            continue;
+          }
 
+          try {
+            await processQueuedWebhookDelivery(reserved.delivery);
+          } catch (error) {
             await releaseFailedWebhookIngressDelivery(redis, reserved, error);
             return;
           }
+
+          await completeWebhookIngressDelivery(redis, reserved.raw);
         }
       } catch (error) {
         safeLog("webhook_ingress_queue_drain_failed", {

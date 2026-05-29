@@ -168,9 +168,9 @@ describe("webhookIngressQueue", () => {
       payload: { entry: [{ id: "failed" }] },
     });
     expect(dead).toEqual([]);
-    expect(safeLogMock).toHaveBeenCalledWith(
+    expect(safeLogMock).not.toHaveBeenCalledWith(
       "webhook_async_processing_failed",
-      expect.objectContaining({ channel: "facebook" })
+      expect.any(Object)
     );
     expect(safeLogMock).toHaveBeenCalledWith(
       "webhook_queued_delivery_requeued",
@@ -308,6 +308,50 @@ describe("webhookIngressQueue", () => {
     expect(processFacebookWebhookPayloadMock).toHaveBeenCalledWith({
       entry: [{ id: "ok" }],
     });
+  });
+
+  it("does not requeue a delivery when completion fails after successful processing", async () => {
+    isRedisEnabledMock.mockReturnValue(true);
+    processFacebookWebhookPayloadMock.mockResolvedValue(undefined);
+
+    const delivery = JSON.stringify({
+      channel: "facebook",
+      payload: { entry: [{ id: "complete-failed" }] },
+      receivedAt: "2026-05-28T00:00:00.000Z",
+    });
+    const queue = [delivery];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const redis = createQueueRedis(queue, processing, dead);
+    redis.lrem.mockRejectedValueOnce(new Error("redis unavailable"));
+    getRedisClientMock.mockResolvedValue(redis);
+
+    scheduleWebhookIngressDrain();
+
+    await vi.waitFor(() => {
+      expect(safeLogMock).toHaveBeenCalledWith(
+        "webhook_ingress_queue_drain_failed",
+        expect.objectContaining({
+          error: expect.objectContaining({
+            class: "Error",
+            message: "redis unavailable",
+          }),
+        })
+      );
+    });
+
+    expect(processFacebookWebhookPayloadMock).toHaveBeenCalledWith({
+      entry: [{ id: "complete-failed" }],
+    });
+    expect(processing).toEqual([delivery]);
+    expect(queue).toEqual([]);
+    expect(dead).toEqual([]);
+    expect(redis.lpush).not.toHaveBeenCalled();
+    expect(redis.rpush).not.toHaveBeenCalled();
+    expect(safeLogMock).not.toHaveBeenCalledWith(
+      "webhook_queued_delivery_requeued",
+      expect.any(Object)
+    );
   });
 
   it("reclaims processing deliveries whose lease expired before draining", async () => {
