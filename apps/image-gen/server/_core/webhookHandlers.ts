@@ -1661,6 +1661,7 @@ export function createWebhookHandlers({
       recordGenerationError();
 
       let failureText = t(lang, "generationGenericFailure");
+      let sendGenericFailureLead = true;
       if (generationResult.errorKind === "missing_source_image") {
         rememberSendOutcome(
           await sendLoggedText(psid, t(lang, "styleWithoutPhoto"), reqId)
@@ -1680,6 +1681,7 @@ export function createWebhookHandlers({
         failureText = t(lang, "generationUnavailable");
       } else if (generationResult.errorKind === "generation_timeout") {
         failureText = t(lang, "generationTimeout");
+        sendGenericFailureLead = false;
       } else if (generationResult.errorKind === "generation_budget_reached") {
         rememberSendOutcome(
           await sendLoggedText(psid, t(lang, "generationBudgetReached"), reqId)
@@ -1688,7 +1690,9 @@ export function createWebhookHandlers({
         return;
       }
 
-      rememberSendOutcome(await sendLoggedText(psid, t(lang, "failure"), reqId));
+      if (sendGenericFailureLead) {
+        rememberSendOutcome(await sendLoggedText(psid, t(lang, "failure"), reqId));
+      }
       await setFlowState(psid, "FAILURE");
 
       rememberSendOutcome(await sendLoggedQuickReplies(
