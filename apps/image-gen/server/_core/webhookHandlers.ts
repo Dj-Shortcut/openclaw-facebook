@@ -13,6 +13,7 @@ import { executeGenerationFlow } from "./generationFlow";
 import {
   buildGenerationFailureResponse,
   buildGenerationSuccessResponse,
+  buildQuickStartResponse,
 } from "./conversationActions";
 import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 import {
@@ -810,10 +811,11 @@ export function createWebhookHandlers({
     lang: Lang,
     reqId: string
   ): Promise<void> {
-    await sendStateQuickReplies(
+    const response = buildQuickStartResponse(lang);
+    await sendLoggedQuickReplies(
       psid,
-      "IDLE",
-      t(lang, "flowExplanation"),
+      response.text ?? "",
+      renderMessengerQuickReplies(response.actions),
       reqId
     );
   }
