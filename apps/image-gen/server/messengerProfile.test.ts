@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearMessengerStartScreenPills } from "./_core/messengerProfile";
 
 const originalToken = process.env.FB_PAGE_ACCESS_TOKEN;
+const originalFacebookToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
+const originalMessengerToken = process.env.MESSENGER_PAGE_ACCESS_TOKEN;
 const originalGraphVersion = process.env.FB_GRAPH_API_VERSION;
 const originalClearFlag = process.env.MESSENGER_CLEAR_ICE_BREAKERS_ON_STARTUP;
 const originalRemoveFlag = process.env.MESSENGER_REMOVE_START_SCREEN_PILLS;
@@ -25,6 +27,8 @@ describe("messenger profile start-screen pills", () => {
   beforeEach(() => {
     process.env.FB_PAGE_ACCESS_TOKEN = "page-token";
     process.env.NODE_ENV = "production";
+    delete process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
+    delete process.env.MESSENGER_PAGE_ACCESS_TOKEN;
     delete process.env.FB_GRAPH_API_VERSION;
     delete process.env.MESSENGER_CLEAR_ICE_BREAKERS_ON_STARTUP;
     delete process.env.MESSENGER_REMOVE_START_SCREEN_PILLS;
@@ -34,6 +38,8 @@ describe("messenger profile start-screen pills", () => {
 
   afterEach(() => {
     restoreEnv("FB_PAGE_ACCESS_TOKEN", originalToken);
+    restoreEnv("FACEBOOK_PAGE_ACCESS_TOKEN", originalFacebookToken);
+    restoreEnv("MESSENGER_PAGE_ACCESS_TOKEN", originalMessengerToken);
     restoreEnv("FB_GRAPH_API_VERSION", originalGraphVersion);
     restoreEnv("MESSENGER_CLEAR_ICE_BREAKERS_ON_STARTUP", originalClearFlag);
     restoreEnv("MESSENGER_REMOVE_START_SCREEN_PILLS", originalRemoveFlag);
@@ -63,6 +69,46 @@ describe("messenger profile start-screen pills", () => {
     });
   });
 
+  it("uses the channel Page token names shared by the OpenClaw gateway", async () => {
+    delete process.env.FB_PAGE_ACCESS_TOKEN;
+    process.env.FACEBOOK_PAGE_ACCESS_TOKEN = "facebook-token";
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ result: "success" }), { status: 200 })
+      );
+
+    await expect(
+      clearMessengerStartScreenPills({ fetchImpl, logger })
+    ).resolves.toEqual({ status: "cleared" });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(init).toMatchObject({
+      headers: { Authorization: "Bearer facebook-token" },
+    });
+  });
+
+  it("falls back to the legacy Messenger Page token name", async () => {
+    delete process.env.FB_PAGE_ACCESS_TOKEN;
+    process.env.MESSENGER_PAGE_ACCESS_TOKEN = "messenger-token";
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ result: "success" }), { status: 200 })
+      );
+
+    await expect(
+      clearMessengerStartScreenPills({ fetchImpl, logger })
+    ).resolves.toEqual({ status: "cleared" });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(init).toMatchObject({
+      headers: { Authorization: "Bearer messenger-token" },
+    });
+  });
+
   it("does not clear live Page ice breakers from non-production runs unless explicitly enabled", async () => {
     process.env.NODE_ENV = "test";
     const fetchImpl = vi.fn<typeof fetch>();
@@ -87,6 +133,8 @@ describe("messenger profile start-screen pills", () => {
 
   it("skips cleanup when no Page token is configured", async () => {
     delete process.env.FB_PAGE_ACCESS_TOKEN;
+    delete process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
+    delete process.env.MESSENGER_PAGE_ACCESS_TOKEN;
     const fetchImpl = vi.fn<typeof fetch>();
 
     await expect(
@@ -95,7 +143,7 @@ describe("messenger profile start-screen pills", () => {
 
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(
-      "[messenger profile] FB_PAGE_ACCESS_TOKEN missing; cannot clear start-screen ice breakers"
+      "[messenger profile] Page access token missing; set FB_PAGE_ACCESS_TOKEN, FACEBOOK_PAGE_ACCESS_TOKEN, or MESSENGER_PAGE_ACCESS_TOKEN to clear start-screen ice breakers"
     );
   });
 
