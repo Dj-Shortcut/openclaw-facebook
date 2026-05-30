@@ -13,6 +13,7 @@ import { handleSharedTextMessage } from "./sharedTextHandler";
 import type { NormalizedInboundMessage } from "./normalizedInboundMessage";
 import { sendMessengerBotResponse } from "./botResponseAdapters";
 import { renderMessengerQuickReplies } from "./messengerActionRenderer";
+import { decodeMessengerActionInput } from "./messengerActionPayload";
 import {
   anonymizePsid,
   clearPendingImageState,
@@ -68,6 +69,19 @@ export async function handleMessageEvent(
 
   const quickPayload = message.quick_reply?.payload;
   if (quickPayload) {
+    const actionInput = decodeMessengerActionInput(quickPayload);
+    if (actionInput) {
+      await handleTextMessage(ctx, {
+        psid: input.psid,
+        userId: input.userId,
+        reqId: input.reqId,
+        lang: input.lang,
+        text: actionInput,
+        timestamp: input.event.timestamp ?? Date.now(),
+      });
+      return;
+    }
+
     await handlePayload(ctx, {
       psid: input.psid,
       userId: input.userId,

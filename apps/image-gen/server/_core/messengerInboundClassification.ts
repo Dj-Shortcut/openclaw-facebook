@@ -8,6 +8,7 @@ import {
   styleCategoryPayloadToCategory,
   stylePayloadToStyle,
 } from "./webhookHelpers";
+import { decodeMessengerActionInput } from "./messengerActionPayload";
 
 export type InboundEventClassification = {
   isInboundUserEvent: boolean;
@@ -29,6 +30,7 @@ function isKnownMessengerPayload(payload: string | undefined): boolean {
       payload === "PRIVACY_INFO" ||
       payload === "RETRY_STYLE" ||
       payload.startsWith("RETRY_STYLE_") ||
+      Boolean(decodeMessengerActionInput(payload)) ||
       stylePayloadToStyle(payload) ||
       styleCategoryPayloadToCategory(payload)
   );

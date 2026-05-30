@@ -46,9 +46,7 @@ export function createWhatsAppTextContext(
     hasPhoto,
     sendText: sender.sendText,
     sendImage: sender.sendImage,
-    sendQuickReplies: sender.sendQuickReplies,
-    sendStateQuickReplies: (nextState, text) =>
-      sender.sendStateQuickReplies(nextState, text, context.lang),
+    sendActions: sender.sendActions,
     setFlowState: nextState =>
       Promise.resolve(setFlowState(event.senderId, nextState)),
     preselectStyle: style =>

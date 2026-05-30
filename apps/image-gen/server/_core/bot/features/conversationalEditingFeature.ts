@@ -1,9 +1,10 @@
 import type { BotFeature } from "../features";
-import { t } from "../../i18n";
 import { DIRECTOR_GENERATION_STYLE } from "../../image-generation/director/directorModes";
 import { normalizeStyle } from "../../webhookHelpers";
 import { interpretConversationalEdit } from "../../conversationalEditInterpreter";
 import type { BotTextContext } from "../../botContext";
+
+const DEFAULT_PROMPT_FIRST_EDIT_STYLE = "cinematic";
 
 function shouldSkipConversationalEdit(normalizedText: string): boolean {
   return (
@@ -48,14 +49,10 @@ export const conversationalEditingFeature: BotFeature = {
       return { handled: false };
     }
 
-    const style = decision.style ?? getLastStyle(ctx);
+    const style = decision.style ?? getLastStyle(ctx) ?? DEFAULT_PROMPT_FIRST_EDIT_STYLE;
     const directorMode =
       decision.directorMode ??
       (decision.style ? undefined : ctx.state.lastDirectorMode);
-    if (!style) {
-      await ctx.sendStateQuickReplies("AWAITING_STYLE", t(ctx.lang, "stylePicker"));
-      return { handled: true };
-    }
 
     const combinedPrompt = [ctx.state.lastPrompt, decision.promptHint]
       .map(value => value?.trim())

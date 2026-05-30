@@ -3,20 +3,42 @@ import {
   buildStateResponseText,
   resolveStateReplyPayload,
 } from "./_core/stateResponseText";
+import { classifyInboundEvent } from "./_core/messengerInboundClassification";
 
 describe("stateResponseText", () => {
-  it("labels CHOOSE_STYLE as another style instead of the old new-style CTA", () => {
+  it("does not offer state quick replies for migrated failure responses", () => {
     expect(buildStateResponseText("FAILURE", "Probeer opnieuw?", "nl")).toBe(
-      "Probeer opnieuw?\n\n1. Probeer opnieuw\n2. Andere"
+      "Probeer opnieuw?"
     );
   });
 
-  it("keeps legacy new-style text as a compatibility alias", () => {
+  it("does not resolve legacy failure selections after migration to actions", () => {
+    expect(resolveStateReplyPayload("FAILURE", "1", "nl")).toBe(undefined);
+    expect(resolveStateReplyPayload("FAILURE", "Privacybeleid", "nl")).toBe(
+      undefined
+    );
     expect(resolveStateReplyPayload("FAILURE", "Nieuwe stijl", "nl")).toBe(
-      "CHOOSE_STYLE"
+      undefined
     );
-    expect(resolveStateReplyPayload("FAILURE", "Andere", "nl")).toBe(
-      "CHOOSE_STYLE"
-    );
+  });
+
+  it("still treats stale legacy quick-reply payload taps as known inbound payloads", () => {
+    for (const payload of [
+      "CHOOSE_STYLE",
+      "WHAT_IS_THIS",
+      "PRIVACY_INFO",
+      "RETRY_STYLE",
+      "RETRY_STYLE_gold",
+    ]) {
+      expect(
+        classifyInboundEvent({
+          sender: { id: "psid-1" },
+          message: { quick_reply: { payload } },
+        })
+      ).toMatchObject({
+        eventPayload: payload,
+        isIntentionalSilentUnknownPayload: false,
+      });
+    }
   });
 });

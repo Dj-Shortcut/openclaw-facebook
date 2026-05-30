@@ -1304,7 +1304,7 @@ describe("messenger webhook dedupe", () => {
     );
   });
 
-  it("continues with restyle starter pills after consent is granted", async () => {
+  it("continues with prompt-first quick start actions after consent is granted", async () => {
     const psid = "fresh-consent-accepted-user";
 
     await processFacebookWebhookPayloadBase({
@@ -1325,23 +1325,26 @@ describe("messenger webhook dedupe", () => {
     });
 
     expect(getState(psid)?.consentGiven).toBe(true);
-    expect(getState(psid)?.stage).toBe("AWAITING_STYLE");
+    expect(getState(psid)?.stage).toBe("IDLE");
     expect(sendTextMock).toHaveBeenCalledWith(
       psid,
       expect.stringContaining("Je bent klaar")
     );
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
-      t("nl", "styleCategoryPicker"),
-      expect.arrayContaining([
-        expect.objectContaining({ payload: "STYLE_CATEGORY_ILLUSTRATED" }),
-        expect.objectContaining({ payload: "STYLE_CATEGORY_ATMOSPHERE" }),
-        expect.objectContaining({ payload: "STYLE_CATEGORY_BOLD" }),
-      ])
+      t("nl", "flowExplanation"),
+      [
+        {
+          content_type: "text",
+          title: "Wat doe ik?",
+          payload: "OPENCLAW_ACTION:Wat%20doe%20ik%3F",
+        },
+        { content_type: "text", title: "Privacy", payload: "PRIVACY_INFO" },
+      ]
     );
     expect(sendQuickRepliesMock).not.toHaveBeenCalledWith(
       psid,
-      expect.stringContaining("Je bent klaar"),
+      t("nl", "styleCategoryPicker"),
       expect.any(Array)
     );
   });
@@ -1574,7 +1577,14 @@ describe("messenger webhook dedupe", () => {
     expect(sendQuickRepliesMock).toHaveBeenLastCalledWith(
       "mock-image-user",
       "Klaar ✅",
-      [{ content_type: "text", title: "Privacy", payload: "PRIVACY_INFO" }]
+      [
+        {
+          content_type: "text",
+          title: "Nieuwe afbeelding",
+          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+        },
+        { content_type: "text", title: "Privacy", payload: "PRIVACY_INFO" },
+      ]
     );
   });
 
@@ -1615,10 +1625,9 @@ describe("messenger webhook dedupe", () => {
       [
         {
           content_type: "text",
-          title: "Opnieuw",
-          payload: "RETRY_STYLE_disco",
+          title: "Nieuwe afbeelding",
+          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
         },
-        { content_type: "text", title: "Andere", payload: "CHOOSE_STYLE" },
       ]
     );
     expect(sendImageMock).not.toHaveBeenCalled();
@@ -1631,7 +1640,7 @@ describe("messenger webhook dedupe", () => {
     expect(sendTextMock).toHaveBeenNthCalledWith(
       2,
       "openai-missing-key-user",
-      "Oeps. Probeer nog een stijl."
+      "Oeps. Probeer opnieuw of beschrijf een nieuwe afbeelding."
     );
   });
 
@@ -1778,8 +1787,11 @@ describe("messenger webhook dedupe", () => {
       psid,
       "AI generation isn’t enabled yet.",
       [
-        { content_type: "text", title: "Opnieuw", payload: "RETRY_STYLE_gold" },
-        { content_type: "text", title: "Andere", payload: "CHOOSE_STYLE" },
+        {
+          content_type: "text",
+          title: "Nieuwe afbeelding",
+          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+        },
       ]
     );
   });
@@ -1842,15 +1854,14 @@ describe("messenger webhook dedupe", () => {
       [
         {
           content_type: "text",
-          title: "Opnieuw",
-          payload: "RETRY_STYLE_clouds",
+          title: "Nieuwe afbeelding",
+          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
         },
-        { content_type: "text", title: "Andere", payload: "CHOOSE_STYLE" },
       ]
     );
     expect(sendTextMock).not.toHaveBeenCalledWith(
       "openai-timeout-user",
-      "Oeps. Probeer nog een stijl."
+      "Oeps. Probeer opnieuw of beschrijf een nieuwe afbeelding."
     );
   });
 
@@ -2218,9 +2229,65 @@ describe("messenger greeting behavior", () => {
       "idle-user",
       t("nl", "flowExplanation"),
       expect.arrayContaining([
-        { content_type: "text", title: "Wat doe ik?", payload: "WHAT_IS_THIS" },
+        {
+          content_type: "text",
+          title: "Wat doe ik?",
+          payload: "OPENCLAW_ACTION:Wat%20doe%20ik%3F",
+        },
         { content_type: "text", title: "Privacy", payload: "PRIVACY_INFO" },
       ])
+    );
+  });
+
+  it("routes conversation action clicks back through normal text handling", async () => {
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: "action-input-user" },
+              message: {
+                mid: "mid-action-input-1",
+                quick_reply: {
+                  payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
+    expect(sendTextMock).toHaveBeenCalledWith(
+      "action-input-user",
+      t("nl", "textWithoutPhoto")
+    );
+  });
+
+  it("routes quick-start action clicks back through normal help text handling", async () => {
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: "quick-start-action-user", locale: "nl_BE" },
+              timestamp: 1,
+              message: {
+                mid: "mid-quick-start-action",
+                quick_reply: {
+                  payload: "OPENCLAW_ACTION:Wat%20doe%20ik%3F",
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(sendTextMock).toHaveBeenCalledWith(
+      "quick-start-action-user",
+      [t("nl", "textWithoutPhoto"), t("nl", "assistantPhotoTip")].join("\n\n")
     );
   });
 
@@ -2400,7 +2467,14 @@ describe("messenger greeting behavior", () => {
       2,
       "transition-order-user",
       "Klaar ✅",
-      [{ content_type: "text", title: "Privacy", payload: "PRIVACY_INFO" }]
+      [
+        {
+          content_type: "text",
+          title: "Nieuwe afbeelding",
+          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+        },
+        { content_type: "text", title: "Privacy", payload: "PRIVACY_INFO" },
+      ]
     );
 
     expect(sendQuickRepliesMock.mock.invocationCallOrder[0]).toBeLessThan(
@@ -2495,7 +2569,7 @@ describe("messenger greeting behavior", () => {
     );
     expect(sendTextMock).not.toHaveBeenCalledWith(
       "category-user",
-      "Oeps. Probeer nog een stijl."
+      "Oeps. Probeer opnieuw of beschrijf een nieuwe afbeelding."
     );
   });
 
@@ -2621,6 +2695,11 @@ describe("messenger greeting behavior", () => {
     });
 
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(psid, "Klaar ✅", [
+      {
+        content_type: "text",
+        title: "Nieuwe afbeelding",
+        payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+      },
       { content_type: "text", title: "Privacy", payload: "PRIVACY_INFO" },
     ]);
   });
@@ -2645,17 +2724,12 @@ describe("messenger greeting behavior", () => {
 
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
-      "Oeps. Probeer nog een stijl.",
+      "Oeps. Probeer opnieuw of beschrijf een nieuwe afbeelding.",
       [
         {
           content_type: "text",
-          title: "Probeer opnieuw",
-          payload: "RETRY_STYLE",
-        },
-        {
-          content_type: "text",
-          title: "Andere stijl",
-          payload: "CHOOSE_STYLE",
+          title: "Nieuwe afbeelding",
+          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
         },
       ]
     );

@@ -8,6 +8,9 @@ Leaderbot image-generation service.
 - Root package: `@dj-shortcut/facebook`, the OpenClaw Facebook channel plugin
   and Fly gateway deployment source.
 - `apps/image-gen`: the Leaderbot image-generation app.
+- Planned `leaderbot.live` portal: a tenant/customer app for managing each
+  customer's own AI. This must stay separate from the private OpenClaw gateway
+  UI/API.
 
 ## Deploy
 
@@ -47,6 +50,8 @@ npm run image-gen:build
   build output.
 - Keep both Fly apps separate: `leaderbot-openclaw-gateway` and
   `leaderbot-fb-image-gen`.
+- Keep the OpenClaw gateway shielded. Customer-facing work belongs in the
+  portal app/API, not by exposing the gateway UI publicly.
 - Shared product docs live under root `docs/`.
 - App-specific docs can stay under `apps/image-gen/docs/` until they are
   intentionally consolidated.

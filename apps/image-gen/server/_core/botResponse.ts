@@ -1,6 +1,10 @@
 export type ConversationAction = {
   id: string;
   label: string;
+  inputText?: string;
+  data?: {
+    retryStyle?: string;
+  };
 };
 
 export type ImageOutput = {

@@ -5,6 +5,7 @@ import {
 } from "./messengerStyles";
 import type { DirectorMode } from "./image-generation/director/directorTypes";
 import type { Lang } from "./i18n";
+import type { ConversationAction } from "./botResponse";
 import {
   clearStateStore,
   deleteState,
@@ -74,28 +75,21 @@ export type MessengerUserState = {
   lastPrompt?: string;
   lastGeneratedAt?: number;
   lastVariantCursor?: number;
+  pendingConversationActions?: ConversationAction[];
   quota: QuotaState;
   updatedAt: number;
 };
 
 const QUICK_REPLIES_BY_STATE: Record<ConversationState, StateQuickReply[]> = {
-  IDLE: [
-    { title: "Wat doe ik?", payload: "WHAT_IS_THIS" },
-    { title: "Privacy", payload: "PRIVACY_INFO" },
-  ],
+  IDLE: [],
   AWAITING_PHOTO: [],
   AWAITING_STYLE: STYLE_CATEGORY_CONFIGS.map(category => ({
     title: category.label,
     payload: category.payload,
   })),
   PROCESSING: [],
-  RESULT_READY: [
-    { title: "Privacy", payload: "PRIVACY_INFO" },
-  ],
-  FAILURE: [
-    { title: "Probeer opnieuw", payload: "RETRY_STYLE" },
-    { title: "Andere stijl", payload: "CHOOSE_STYLE" },
-  ],
+  RESULT_READY: [],
+  FAILURE: [],
 };
 
 export function getQuickRepliesForState(state: ConversationState): StateQuickReply[] {
@@ -441,6 +435,24 @@ export function markIntroSeen(psid: string, now = Date.now()): MaybePromise<void
       state: "AWAITING_PHOTO",
     },
     now,
+  );
+
+  if (isPromiseLike(result)) {
+    return result.then(() => undefined);
+  }
+}
+
+export function setPendingConversationActions(
+  psid: string,
+  actions: ConversationAction[] | undefined,
+  now = Date.now()
+): MaybePromise<void> {
+  const result = patchState(
+    psid,
+    {
+      pendingConversationActions: actions?.length ? actions : undefined,
+    },
+    now
   );
 
   if (isPromiseLike(result)) {

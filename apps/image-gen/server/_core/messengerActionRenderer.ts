@@ -1,5 +1,6 @@
 import type { ConversationAction } from "./botResponse";
 import type { QuickReply } from "./messengerApi";
+import { encodeMessengerActionInput } from "./messengerActionPayload";
 
 function normalizeActionValue(value: string): string | undefined {
   const trimmed = value.trim();
@@ -15,7 +16,7 @@ export function renderMessengerQuickReplies(
 
   return actions.flatMap(action => {
     const title = normalizeActionValue(action.label);
-    const payload = normalizeActionValue(action.id);
+    const payload = normalizeActionValue(renderMessengerActionPayload(action));
     if (!title || !payload) {
       return [];
     }
@@ -28,4 +29,12 @@ export function renderMessengerQuickReplies(
       },
     ];
   });
+}
+
+function renderMessengerActionPayload(action: ConversationAction): string {
+  if (action.inputText) {
+    return encodeMessengerActionInput(action.inputText);
+  }
+
+  return action.id;
 }

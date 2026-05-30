@@ -35,7 +35,6 @@ import {
   resetStateStore,
   setFlowState,
 } from "./_core/messengerState";
-import { buildStateResponseText } from "./_core/stateResponseText";
 import { processConsentedWhatsAppWebhookPayload } from "./testConsentHelpers";
 
 const TEST_PEPPER = "ci-test-pepper";
@@ -290,6 +289,14 @@ describe("whatsapp webhook flow", () => {
     expect(sendWhatsAppTextMock).toHaveBeenCalledWith(
       "wa-user-3",
       expect.stringContaining("Klaar")
+    );
+    expect(sendWhatsAppTextMock).toHaveBeenCalledWith(
+      "wa-user-3",
+      expect.stringContaining("Beschrijf wat je wilt maken")
+    );
+    expect(sendWhatsAppTextMock).not.toHaveBeenCalledWith(
+      "wa-user-3",
+      expect.stringContaining("nieuwe stijl")
     );
     expect(getState(anonymizePsid("wa-user-3"))?.selectedStyle).toBe("disco");
   });
@@ -870,12 +877,64 @@ describe("whatsapp webhook flow", () => {
 
     expect(sendWhatsAppTextMock).toHaveBeenCalledWith(
       "wa-user-6",
-      buildStateResponseText(
-        "AWAITING_STYLE",
+      [
         t("nl", "assistantQuickActions"),
-        "nl"
-      )
+        "",
+        "1. Nieuwe afbeelding",
+        "2. Verras me",
+        "3. Privacy",
+      ].join("\n")
     );
+  });
+
+  it("routes numbered WhatsApp inputText actions as normal substituted text", async () => {
+    downloadWhatsAppMediaMock.mockResolvedValue({
+      buffer: Buffer.alloc(6000, 7),
+      contentType: "image/jpeg",
+    });
+    const generateSpy = vi
+      .spyOn(OpenAiImageGenerator.prototype, "generate")
+      .mockResolvedValue({
+        imageUrl: "https://leaderbot-fb-image-gen.fly.dev/generated/surprise.jpg",
+      });
+
+    try {
+      await processWhatsAppWebhookPayload(
+        createWhatsAppPayload({
+          from: "wa-user-action-input",
+          timestamp: "1710000011",
+          type: "image",
+          image: { id: "wamid-image-action-input" },
+        })
+      );
+
+      await processWhatsAppWebhookPayload(
+        createWhatsAppPayload({
+          from: "wa-user-action-input",
+          timestamp: "1710000012",
+          type: "text",
+          text: { body: "help" },
+        })
+      );
+      sendWhatsAppTextMock.mockClear();
+
+      await processWhatsAppWebhookPayload(
+        createWhatsAppPayload({
+          from: "wa-user-action-input",
+          timestamp: "1710000013",
+          type: "text",
+          text: { body: "2" },
+        })
+      );
+
+      expect(sendWhatsAppTextMock).toHaveBeenCalledWith(
+        "wa-user-action-input",
+        expect.stringContaining("ik ga voor")
+      );
+      expect(generateSpy).toHaveBeenCalled();
+    } finally {
+      generateSpy.mockRestore();
+    }
   });
 
   it("ignores replayed WhatsApp messages with the same message id", async () => {
@@ -916,9 +975,19 @@ describe("whatsapp webhook flow", () => {
     await processWhatsAppWebhookPayload(
       createWhatsAppPayload({
         from: "wa-user-7",
+        timestamp: "1710000012",
+        type: "text",
+        text: { body: "Hey" },
+      })
+    );
+    sendWhatsAppTextMock.mockClear();
+
+    await processWhatsAppWebhookPayload(
+      createWhatsAppPayload({
+        from: "wa-user-7",
         timestamp: "1710000013",
         type: "text",
-        text: { body: "1" },
+        text: { body: "2" },
       })
     );
 

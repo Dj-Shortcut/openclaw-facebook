@@ -66,7 +66,7 @@ describe("sharedTextHandler", () => {
       response: {
         text: t("nl", "flowExplanation"),
         actions: [
-          { id: "WHAT_IS_THIS", label: "Wat doe ik?" },
+          { id: "WHAT_IS_THIS", label: "Wat doe ik?", inputText: "Wat doe ik?" },
           { id: "PRIVACY_INFO", label: "Privacy" },
         ],
       },
@@ -79,6 +79,110 @@ describe("sharedTextHandler", () => {
     expect(t("nl", "flowExplanation")).not.toContain("andere stijl");
     expect(t("en", "textWithoutPhoto")).toContain("Describe the image you want");
     expect(t("en", "textWithoutPhoto")).not.toContain("make a style");
+  });
+
+  it("returns prompt-first quick start actions for repeat IDLE greetings", async () => {
+    const result = await handleSharedTextMessage({
+      message: {
+        channel: "messenger",
+        senderId: "psid-repeat",
+        userId: "user-key-repeat",
+        messageType: "text",
+        textBody: "Hi",
+      },
+      reqId: "req-repeat",
+      lang: "nl",
+      getState: async () =>
+        createState({
+          psid: "psid-repeat",
+          userKey: "user-key-repeat",
+          hasSeenIntro: true,
+        }),
+      setFlowState: async () => {},
+    });
+
+    expect(result).toEqual({
+      response: {
+        text: t("nl", "flowExplanation"),
+        actions: [
+          { id: "WHAT_IS_THIS", label: "Wat doe ik?", inputText: "Wat doe ik?" },
+          { id: "PRIVACY_INFO", label: "Privacy" },
+        ],
+      },
+    });
+  });
+
+  it("returns result follow-up choices as conversation actions", async () => {
+    const result = await handleSharedTextMessage({
+      message: {
+        channel: "messenger",
+        senderId: "psid-result",
+        userId: "user-key-result",
+        messageType: "text",
+        textBody: "Hey",
+      },
+      reqId: "req-result",
+      lang: "nl",
+      getState: async () =>
+        createState({
+          psid: "psid-result",
+          userKey: "user-key-result",
+          stage: "RESULT_READY",
+          state: "RESULT_READY",
+          hasSeenIntro: true,
+        }),
+      setFlowState: async () => {},
+    });
+
+    expect(result).toEqual({
+      response: {
+        text: t("nl", "success"),
+        actions: [
+          {
+            id: "NEW_IMAGE",
+            label: "Nieuwe afbeelding",
+            inputText: "Nieuwe afbeelding",
+          },
+          { id: "PRIVACY_INFO", label: "Privacy" },
+        ],
+      },
+    });
+  });
+
+  it("returns failure follow-up choices as conversation actions", async () => {
+    const result = await handleSharedTextMessage({
+      message: {
+        channel: "messenger",
+        senderId: "psid-failure",
+        userId: "user-key-failure",
+        messageType: "text",
+        textBody: "Hey",
+      },
+      reqId: "req-failure",
+      lang: "nl",
+      getState: async () =>
+        createState({
+          psid: "psid-failure",
+          userKey: "user-key-failure",
+          stage: "FAILURE",
+          state: "FAILURE",
+          hasSeenIntro: true,
+        }),
+      setFlowState: async () => {},
+    });
+
+    expect(result).toEqual({
+      response: {
+        text: t("nl", "failure"),
+        actions: [
+          {
+            id: "NEW_IMAGE",
+            label: "Nieuwe afbeelding",
+            inputText: "Nieuwe afbeelding",
+          },
+        ],
+      },
+    });
   });
 
   it("returns no response for acknowledgement text and logs the ignored ack", async () => {
@@ -129,6 +233,36 @@ describe("sharedTextHandler", () => {
     expect(setFlowState).toHaveBeenCalledWith("AWAITING_STYLE");
     expect(result).toEqual({
       response: { kind: "text", text: t("en", "styleCategoryPicker") },
+      replyState: "AWAITING_STYLE",
+    });
+  });
+
+  it("returns the style picker response metadata for the Dutch style shortcut when a photo is already present", async () => {
+    const setFlowState = vi.fn(async () => {});
+
+    const result = await handleSharedTextMessage({
+      message: {
+        channel: "whatsapp",
+        senderId: "wa-user-nl",
+        userId: "wa-user-key-nl",
+        messageType: "text",
+        textBody: "nieuwe stijl",
+      },
+      reqId: "req-style-nl",
+      lang: "nl",
+      getState: async () =>
+        createState({
+          psid: "wa-user-nl",
+          userKey: "wa-user-key-nl",
+          lastPhotoUrl: "https://img.example/input.jpg",
+          lastPhoto: "https://img.example/input.jpg",
+        }),
+      setFlowState,
+    });
+
+    expect(setFlowState).toHaveBeenCalledWith("AWAITING_STYLE");
+    expect(result).toEqual({
+      response: { kind: "text", text: t("nl", "styleCategoryPicker") },
       replyState: "AWAITING_STYLE",
     });
   });

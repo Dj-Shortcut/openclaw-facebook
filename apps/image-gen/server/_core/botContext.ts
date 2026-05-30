@@ -7,7 +7,7 @@ import type {
   ConversationState,
   MessengerUserState,
 } from "./messengerState";
-import type { QuickReply } from "./messengerApi";
+import type { ConversationAction } from "./botResponse";
 import type { Style } from "./messengerStyles";
 import type { GenerationStatsSnapshot } from "./botRuntimeStats";
 import type { DirectorMode } from "./image-generation/director/directorTypes";
@@ -30,11 +30,7 @@ type BotContextBase = {
   state: MessengerUserState;
   sendText(text: string): Promise<void>;
   sendImage(url: string): Promise<void>;
-  sendQuickReplies(text: string, replies: QuickReply[]): Promise<void>;
-  sendStateQuickReplies(
-    state: ConversationState,
-    text: string
-  ): Promise<void>;
+  sendActions(text: string, actions: ConversationAction[]): Promise<void>;
   setFlowState(state: ConversationState): Promise<void>;
   preselectStyle(style: Style | null): Promise<void>;
   chooseStyle(style: Style): Promise<void>;

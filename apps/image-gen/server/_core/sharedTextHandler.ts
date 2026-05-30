@@ -5,7 +5,11 @@ import { detectAck, getGreetingResponse } from "./webhookHelpers";
 import { toLogUser } from "./privacy";
 import type { NormalizedInboundMessage } from "./normalizedInboundMessage";
 import type { BotResponse } from "./botResponse";
-import { buildQuickStartResponse } from "./conversationActions";
+import {
+  buildGenerationFailureResponse,
+  buildGenerationSuccessResponse,
+  buildQuickStartResponse,
+} from "./conversationActions";
 
 const GREETINGS = new Set(["hi", "hello", "hey", "yo", "hola"]);
 const SMALLTALK = new Set([
@@ -113,6 +117,20 @@ async function tryHandleGreetingOrSmalltalk(
   const response = getGreetingResponse(state.stage, input.lang);
   if (response.mode === "text") {
     return { response: { kind: "text", text: response.text } };
+  }
+
+  if (response.state === "IDLE") {
+    return { response: buildQuickStartResponse(input.lang) };
+  }
+
+  if (response.state === "RESULT_READY") {
+    return { response: buildGenerationSuccessResponse(input.lang) };
+  }
+
+  if (response.state === "FAILURE") {
+    return {
+      response: buildGenerationFailureResponse(input.lang, response.text),
+    };
   }
 
   return {

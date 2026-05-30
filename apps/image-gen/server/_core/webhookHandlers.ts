@@ -601,11 +601,13 @@ export function createWebhookHandlers({
       sendImage: async imageUrl => {
         await sendLoggedImage(psid, imageUrl, reqId);
       },
-      sendQuickReplies: async (text, replies) => {
-        await sendLoggedQuickReplies(psid, text, replies, reqId);
-      },
-      sendStateQuickReplies: async (nextState, text) => {
-        await sendStateQuickReplies(psid, nextState, text, reqId);
+      sendActions: async (text, actions) => {
+        await sendLoggedQuickReplies(
+          psid,
+          text,
+          renderMessengerQuickReplies(actions),
+          reqId
+        );
       },
       setFlowState: async nextState => {
         await setFlowState(psid, nextState);
@@ -1112,7 +1114,7 @@ export function createWebhookHandlers({
       const failureResponse = buildGenerationFailureResponse(
         lang,
         failureText,
-        `RETRY_STYLE_${style}`
+        style
       );
       rememberSendOutcome(
         await sendLoggedQuickReplies(

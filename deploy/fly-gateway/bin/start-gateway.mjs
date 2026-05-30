@@ -4,6 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import process from "node:process";
+import {
+  buildGatewayLaunchPlan,
+  startPublicRouteGuard,
+} from "./public-route-guard.mjs";
 
 const stateDir = process.env.OPENCLAW_STATE_DIR || "/data";
 const configPath = process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir, "openclaw.json");
@@ -193,7 +197,14 @@ export function prepareGatewayConfig() {
 export function startGateway() {
   prepareGatewayConfig();
   const openclawBin = path.join(process.cwd(), "node_modules", "openclaw", "openclaw.mjs");
-  const args = [openclawBin, "gateway", ...process.argv.slice(2)];
+  const launchPlan = buildGatewayLaunchPlan();
+  if (launchPlan.guardEnabled) {
+    startPublicRouteGuard({
+      publicPort: launchPlan.publicPort,
+      targetPort: launchPlan.internalPort,
+    });
+  }
+  const args = [openclawBin, "gateway", ...launchPlan.openclawArgs];
   const child = spawn(process.execPath, args, {
     stdio: "inherit",
     env: {
