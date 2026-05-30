@@ -12,6 +12,7 @@ import { getBotFeatures } from "./bot/features";
 import { handleSharedTextMessage } from "./sharedTextHandler";
 import type { NormalizedInboundMessage } from "./normalizedInboundMessage";
 import { sendMessengerBotResponse } from "./botResponseAdapters";
+import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 import {
   anonymizePsid,
   clearPendingImageState,
@@ -423,6 +424,14 @@ async function sendSharedMessengerTextResponse(
     },
     sendStateText: async (stateName, text) => {
       await ctx.sendStateQuickReplies(input.psid, stateName, text, input.reqId);
+    },
+    sendActionPrompt: async (text, actions) => {
+      await ctx.sendLoggedQuickReplies(
+        input.psid,
+        text,
+        renderMessengerQuickReplies(actions),
+        input.reqId
+      );
     },
   });
 }

@@ -5,6 +5,7 @@ import { detectAck, getGreetingResponse } from "./webhookHelpers";
 import { toLogUser } from "./privacy";
 import type { NormalizedInboundMessage } from "./normalizedInboundMessage";
 import type { BotResponse } from "./botResponse";
+import { buildQuickStartResponse } from "./conversationActions";
 
 const GREETINGS = new Set(["hi", "hello", "hey", "yo", "hola"]);
 const SMALLTALK = new Set([
@@ -104,8 +105,7 @@ async function tryHandleGreetingOrSmalltalk(
   input.logState?.(state, "greeting");
   if (!state.hasSeenIntro && state.stage === "IDLE") {
     return {
-      response: { kind: "text", text: t(input.lang, "flowExplanation") },
-      replyState: "IDLE",
+      response: buildQuickStartResponse(input.lang),
       afterSend: "markIntroSeen",
     };
   }

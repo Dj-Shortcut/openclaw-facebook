@@ -64,10 +64,12 @@ describe("sharedTextHandler", () => {
 
     expect(result).toEqual({
       response: {
-        kind: "text",
         text: t("nl", "flowExplanation"),
+        actions: [
+          { id: "WHAT_IS_THIS", label: "Wat doe ik?" },
+          { id: "PRIVACY_INFO", label: "Privacy" },
+        ],
       },
-      replyState: "IDLE",
       afterSend: "markIntroSeen",
     });
   });
