@@ -13,6 +13,8 @@ import {
   resolveMessengerSourceImageGenerationPrompt,
   resolveMessengerVerificationTarget,
   sanitizeMessengerSourceImageUrl,
+  normalizeMessengerReplyPayloadForDelivery,
+  shouldDeliverMessengerReplyPayload,
   shouldForwardMessengerImageOnlyEventToImageGen,
   shouldProcessMessengerMessageOnce,
   type MessengerWebhookTarget,
@@ -362,6 +364,51 @@ describe("resolveMessengerFastLaneReply", () => {
       reply:
         "Ik heb je afbeeldingsvraag ontvangen. Ik start nu de image generator — dit kan even duren.",
     });
+  });
+});
+
+describe("shouldDeliverMessengerReplyPayload", () => {
+  it("delivers normal assistant text", () => {
+    expect(shouldDeliverMessengerReplyPayload({ text: "Normaal antwoord" })).toBe(true);
+  });
+
+  it("delivers status feedback but suppresses hidden internal notices", () => {
+    expect(
+      shouldDeliverMessengerReplyPayload({
+        text: 'search "pill flow" failed',
+        isStatusNotice: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldDeliverMessengerReplyPayload({
+        text: "Model fallback...",
+        isFallbackNotice: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldDeliverMessengerReplyPayload({
+        text: "Thinking...",
+        isReasoning: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("normalizeMessengerReplyPayloadForDelivery", () => {
+  it("formats tool feedback into a readable Messenger bubble", () => {
+    expect(
+      normalizeMessengerReplyPayloadForDelivery({
+        text: 'search "pill flow" in !**/node_modules/** (workspace) failed',
+        isStatusNotice: true,
+      })?.text,
+    ).toBe('Toolfeedback: search "pill flow" in !**/node_modules/** (workspace) is mislukt');
+
+    expect(
+      normalizeMessengerReplyPayloadForDelivery({
+        text: "Gewone statusupdate",
+        isStatusNotice: true,
+      })?.text,
+    ).toBe("Gewone statusupdate");
   });
 });
 

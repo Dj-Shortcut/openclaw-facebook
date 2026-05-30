@@ -16,6 +16,7 @@ import { shouldComputeCommandAuthorized } from "openclaw/plugin-sdk/command-auth
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import { isReplyPayloadNonTerminalToolErrorWarning } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   danger,
@@ -590,6 +591,54 @@ export function resolveMessengerFastLaneReply(
   }
 }
 
+export function shouldDeliverMessengerReplyPayload(
+  payload: ReplyPayload,
+): payload is ReplyPayload & { text: string } {
+  if (!payload.text?.trim()) {
+    return false;
+  }
+  if (
+    payload.isReasoning ||
+    payload.isCompactionNotice ||
+    payload.isFallbackNotice
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isMessengerToolFeedbackPayload(payload: ReplyPayload & { text: string }): boolean {
+  if (isReplyPayloadNonTerminalToolErrorWarning(payload)) {
+    return true;
+  }
+  return (
+    payload.isStatusNotice === true &&
+    /\b(?:run|search|open|find|read|write|edit|tool)\b/i.test(payload.text) &&
+    /\b(?:failed|error|mislukt)\b/i.test(payload.text)
+  );
+}
+
+export function normalizeMessengerReplyPayloadForDelivery(
+  payload: ReplyPayload,
+): (ReplyPayload & { text: string }) | null {
+  if (!shouldDeliverMessengerReplyPayload(payload)) {
+    return null;
+  }
+  if (!isMessengerToolFeedbackPayload(payload)) {
+    return payload;
+  }
+
+  const cleaned = payload.text
+    .replace(/^[\s⚠️🛠🔧]+/u, "")
+    .replace(/\s+/g, " ")
+    .replace(/\bfailed\b/i, "is mislukt")
+    .trim();
+  return {
+    ...payload,
+    text: cleaned ? `Toolfeedback: ${cleaned}` : "Toolfeedback: actie is mislukt.",
+  };
+}
+
 function resolveImageGenRequestConfig():
   | { ok: true; endpoint: string; token: string }
   | { ok: false; reason: "missing_token" | "invalid_url" } {
@@ -1111,13 +1160,14 @@ async function processMessengerEvent(params: {
         replyPipeline: {},
         delivery: {
           deliver: async (payload: ReplyPayload) => {
-            if (!payload.text?.trim()) {
+            const deliveryPayload = normalizeMessengerReplyPayloadForDelivery(payload);
+            if (!deliveryPayload) {
               return { visibleReplySent: false };
             }
             logMessengerStage(params.trace, "first_response_ready", {
               openclawSessionId: route.sessionKey,
             });
-            const result = await sendMessengerText(senderId, payload.text, {
+            const result = await sendMessengerText(senderId, deliveryPayload.text, {
               cfg: params.cfg,
               accountId: params.account.accountId,
             });
@@ -1125,7 +1175,7 @@ async function processMessengerEvent(params: {
               message: redactMessengerIdentifier(result.messageId),
             });
             logVerbose(
-              `messenger: sent ${payload.text.length} char reply to ${redactMessengerIdentifier(
+              `messenger: sent ${deliveryPayload.text.length} char reply to ${redactMessengerIdentifier(
                 senderId,
               )} message=${redactMessengerIdentifier(result.messageId)}`,
             );
