@@ -55,8 +55,6 @@ import {
   buildRuntimeReadinessChecks,
   createReadinessHandler,
 } from "./readiness";
-import { assertIdentityGameVariantCatalog } from "./identityGameVariantValidation";
-import { registerIdentityGameShareRoutes } from "./identityGameShareRoutes";
 import {
   registerFaceMemoryAdminRoutes,
   scheduleFaceMemoryExpiry,
@@ -75,171 +73,6 @@ const gitSha = process.env.GIT_SHA ?? process.env.SOURCE_VERSION ?? "dev";
 const bootTimestamp = new Date().toISOString();
 const REQUEST_BODY_LIMIT = "10mb";
 const SHUTDOWN_GRACE_PERIOD_MS = 5_000;
-const DEFAULT_PUBLIC_BASE_URL = "https://leaderbot.live";
-type InviteOgImage = {
-  path: string;
-  width: string;
-  height: string;
-  alt: string;
-};
-
-type InvitePageConfig = {
-  path: string;
-  title: string;
-  description: string;
-  messengerUrl: string;
-  ogImages: readonly InviteOgImage[];
-};
-
-const INVITE_PAGE_CONFIGS: readonly InvitePageConfig[] = [
-  {
-    path: "/invite/identity-ai-v1",
-    title: "Welke AI ben jij?",
-    description: "Ontdek het in 30 seconden 🤖",
-    messengerUrl: "https://m.me/61587343141159?ref=identity-ai-v1",
-    ogImages: [
-      {
-        path: "/og/identity-ai-v1-invite-v2.png",
-        width: "1536",
-        height: "1024",
-        alt: "Welke AI ben jij? Ontdek het in 30 seconden.",
-      },
-      {
-        path: "/og/identity-ai-v1-invite-v1.png",
-        width: "1024",
-        height: "1536",
-        alt: "Welke AI ben jij? Ontdek het in 30 seconden.",
-      },
-    ],
-  },
-  {
-    path: "/invite/dj-v1",
-    title: "Welke DJ ben jij?",
-    description: "Jouw stijl verraadt meer dan je denkt 🎧",
-    messengerUrl: "https://m.me/61587343141159?ref=game:dj-v1",
-    ogImages: [
-      {
-        path: "/og/dj-v1-1200x630.png",
-        width: "1200",
-        height: "630",
-        alt: "Leaderbot DJ game preview",
-      },
-    ],
-  },
-] as const;
-
-function normalizeBaseUrl(baseUrl: string): string {
-  const trimmed = baseUrl.trim().replace(/\/+$/, "");
-  if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed;
-  }
-  return `https://${trimmed}`;
-}
-
-function getPublicBaseUrl(_req: express.Request): string {
-  const configuredBaseUrl = process.env.APP_BASE_URL;
-  if (configuredBaseUrl) {
-    return normalizeBaseUrl(configuredBaseUrl);
-  }
-  return DEFAULT_PUBLIC_BASE_URL;
-}
-
-function getFacebookAppId(): string {
-  return (process.env.FB_APP_ID ?? process.env.VITE_APP_ID ?? "").trim();
-}
-
-function assertInviteShareConfig(): void {
-  if (process.env.NODE_ENV !== "production") {
-    return;
-  }
-
-  const fbAppId = getFacebookAppId();
-  if (!fbAppId) {
-    throw new Error(
-      "FB_APP_ID (or VITE_APP_ID) must be configured in production for invite Open Graph metadata."
-    );
-  }
-}
-
-function renderInvitePageHtml(input: {
-  baseUrl: string;
-  invitePath: string;
-  title: string;
-  description: string;
-  messengerUrl: string;
-  ogImages: readonly InviteOgImage[];
-  fbAppId: string;
-}): string {
-  const inviteUrl = `${input.baseUrl}${input.invitePath}`;
-  const ogImageMeta = input.ogImages
-    .map((image) => {
-      const imageUrl = `${input.baseUrl}${image.path}`;
-      const lines = [
-        `<meta property="og:image" content="${imageUrl}" />`,
-        `<meta property="og:image:url" content="${imageUrl}" />`,
-        `<meta property="og:image:secure_url" content="${imageUrl}" />`,
-        `<meta property="og:image:alt" content="${image.alt}" />`,
-      ];
-
-      if (image.width) {
-        lines.push(`<meta property="og:image:width" content="${image.width}" />`);
-      }
-      if (image.height) {
-        lines.push(`<meta property="og:image:height" content="${image.height}" />`);
-      }
-
-      return lines.join("\n    ");
-    })
-    .join("\n    ");
-
-  return `
-<!doctype html>
-<html lang="nl">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${input.title}</title>
-    <meta property="og:title" content="${input.title}" />
-    <meta property="og:description" content="${input.description}" />
-    ${ogImageMeta}
-    <meta property="og:url" content="${inviteUrl}" />
-    <meta property="og:type" content="website" />
-    ${input.fbAppId ? `<meta property="fb:app_id" content="${input.fbAppId}" />` : ""}
-    <style>
-      :root { color-scheme: light; }
-      body {
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        font-family: Arial, sans-serif;
-        background: linear-gradient(180deg, #f7fafc 0%, #edf2f7 100%);
-        color: #111827;
-      }
-      main {
-        text-align: center;
-        padding: 24px;
-      }
-      a.cta {
-        display: inline-block;
-        text-decoration: none;
-        font-weight: 700;
-        background: #1877f2;
-        color: #fff;
-        padding: 12px 20px;
-        border-radius: 10px;
-      }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>${input.title}</h1>
-      <p>${input.description}</p>
-      <a class="cta" href="${input.messengerUrl}">Start in Messenger</a>
-    </main>
-  </body>
-</html>`;
-}
 
 function toError(reason: unknown): Error {
   if (reason instanceof Error) {
@@ -322,10 +155,8 @@ async function startServer() {
   assertAuthConfig();
   assertWhatsAppConfig();
   assertPrivacyConfig();
-  assertInviteShareConfig();
   assertProductionStateStoreConfig();
   assertProductionWebhookReplayProtectionConfig();
-  assertIdentityGameVariantCatalog();
   await ensureStateStoreReady();
   await ensureWebhookReplayProtectionReady();
   await ensureWebhookIngressQueueReady();
@@ -570,28 +401,6 @@ async function startServer() {
   `);
   });
 
-  for (const inviteConfig of INVITE_PAGE_CONFIGS) {
-    app.get(inviteConfig.path, (req, res) => {
-      const baseUrl = getPublicBaseUrl(req);
-      const fbAppId = getFacebookAppId();
-
-      res
-        .status(200)
-        .type("text/html; charset=utf-8")
-        .send(
-          renderInvitePageHtml({
-            baseUrl,
-            invitePath: inviteConfig.path,
-            title: inviteConfig.title,
-            description: inviteConfig.description,
-            messengerUrl: inviteConfig.messengerUrl,
-            ogImages: inviteConfig.ogImages,
-            fbAppId,
-          })
-        );
-    });
-  }
-
   scheduleFaceMemoryExpiry();
 
   const oauthServerUrl = process.env.OAUTH_SERVER_URL;
@@ -602,7 +411,6 @@ async function startServer() {
       "[OAuth] OAUTH_SERVER_URL not set, skipping OAuth route initialization"
     );
   }
-  registerIdentityGameShareRoutes(app);
   app.use(
     "/api/trpc",
     createExpressMiddleware({

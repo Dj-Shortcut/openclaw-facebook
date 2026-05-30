@@ -3,8 +3,6 @@ import {
   STYLE_CATEGORY_CONFIGS,
   getStylesForCategory,
 } from "./messengerStyles";
-import type { ActiveExperience } from "./activeExperience";
-import type { EntryIntent } from "./entryIntent";
 import type { DirectorMode } from "./image-generation/director/directorTypes";
 import type { Lang } from "./i18n";
 import {
@@ -46,8 +44,6 @@ export type MessengerUserState = {
   userKey: string;
   stage: MessengerFlowState;
   state: MessengerFlowState;
-  lastEntryIntent?: EntryIntent | null;
-  activeExperience?: ActiveExperience | null;
   lastUserMessageAt?: number;
   lastPhotoUrl: string | null;
   lastPhoto: string | null;
@@ -199,49 +195,6 @@ export function setPendingDeleteConfirm(
   if (isPromiseLike(result)) {
     return result.then(() => undefined);
   }
-}
-
-export function setLastEntryIntent(
-  psid: string,
-  entryIntent: EntryIntent | null,
-  now = Date.now()
-): MaybePromise<void> {
-  const result = patchState(
-    psid,
-    {
-      lastEntryIntent: entryIntent,
-    },
-    now
-  );
-
-  if (isPromiseLike(result)) {
-    return result.then(() => undefined);
-  }
-}
-
-export function setActiveExperience(
-  psid: string,
-  activeExperience: ActiveExperience | null,
-  now = Date.now()
-): MaybePromise<void> {
-  const result = patchState(
-    psid,
-    {
-      activeExperience,
-    },
-    now
-  );
-
-  if (isPromiseLike(result)) {
-    return result.then(() => undefined);
-  }
-}
-
-function clearActiveExperience(
-  psid: string,
-  now = Date.now()
-): MaybePromise<void> {
-  return setActiveExperience(psid, null, now);
 }
 
 export function setPendingImage(

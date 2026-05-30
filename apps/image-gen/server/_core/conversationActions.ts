@@ -16,7 +16,7 @@ export function buildGenerationSuccessResponse(
       },
       {
         id: CONVERSATION_ACTION_PRIVACY_INFO,
-        label: t(lang, "privacyButtonLabel"),
+        label: "Privacy",
       },
     ],
   };

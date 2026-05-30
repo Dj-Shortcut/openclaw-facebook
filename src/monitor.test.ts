@@ -6,6 +6,7 @@ import {
   classifyMessengerFastLaneIntent,
   downloadMessengerMediaAttachment,
   formatUnmatchedMessengerPageLog,
+  getOpenClawActionText,
   hasMessengerImageGenerationIntent,
   redactMessengerIdentifier,
   resolveMessengerFastLaneReply,
@@ -19,6 +20,7 @@ import {
   shouldProcessMessengerMessageOnce,
   type MessengerWebhookTarget,
 } from "./monitor.js";
+import { MESSENGER_OPENCLAW_ACTION_PREFIX } from "./presentation.js";
 
 const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
 let temporaryStateDir: string | null = null;
@@ -409,6 +411,57 @@ describe("normalizeMessengerReplyPayloadForDelivery", () => {
         isStatusNotice: true,
       })?.text,
     ).toBe("Gewone statusupdate");
+  });
+
+  it("renders generic conversation actions as Messenger quick replies", () => {
+    const payload = normalizeMessengerReplyPayloadForDelivery({
+      text: "Wat wil je doen?",
+      actions: [
+        { id: "Scope bepalen", label: "Scope bepalen" },
+        { id: "Regels maken", label: "Regels maken" },
+      ],
+    } as never);
+
+    expect(payload?.channelData?.facebook).toEqual({
+      quickReplies: [
+        {
+          content_type: "text",
+          title: "Scope bepalen",
+          payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Scope bepalen`,
+        },
+        {
+          content_type: "text",
+          title: "Regels maken",
+          payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Regels maken`,
+        },
+      ],
+    });
+  });
+});
+
+describe("getOpenClawActionText", () => {
+  it("maps OpenClaw quick reply clicks back to normal user input", () => {
+    expect(
+      getOpenClawActionText({
+        message: {
+          quick_reply: {
+            payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Scope bepalen`,
+          },
+        },
+      }),
+    ).toBe("Scope bepalen");
+  });
+
+  it("leaves legacy Messenger payloads for channel-specific handlers", () => {
+    expect(
+      getOpenClawActionText({
+        message: {
+          quick_reply: {
+            payload: "RETRY_STYLE_gold",
+          },
+        },
+      }),
+    ).toBeNull();
   });
 });
 

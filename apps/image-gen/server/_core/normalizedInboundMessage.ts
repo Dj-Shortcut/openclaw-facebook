@@ -18,5 +18,4 @@ export type NormalizedInboundMessage = {
   imageId?: string;
   timestamp?: number;
   rawEventMeta?: Record<string, unknown>;
-  entryIntent?: import("./entryIntent").EntryIntent | null;
 };

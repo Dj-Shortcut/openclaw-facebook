@@ -7,7 +7,6 @@ import { extractWhatsAppEvents, logWhatsAppWebhookPayload } from "./inbound/what
 import { handleWhatsAppImageEvent } from "./whatsappHandlers/imageHandler";
 import { handleWhatsAppInteractiveEvent } from "./whatsappHandlers/interactiveHandler";
 import { handleWhatsAppTextEvent } from "./whatsappHandlers/textHandler";
-import { handleWhatsAppExperienceRouting } from "./whatsappRouting";
 import { sendWhatsAppButtonsReply, sendWhatsAppTextReply } from "./whatsappResponseService";
 import { claimWebhookReplayKey } from "./webhookReplayProtection";
 import type { NormalizedWhatsAppEvent } from "./whatsappTypes";
@@ -50,10 +49,6 @@ async function dispatchWhatsAppEvent(
   event: NormalizedWhatsAppEvent,
   context: ReturnType<typeof createWhatsAppEventContext>
 ): Promise<void> {
-  if (await handleWhatsAppExperienceRouting(event)) {
-    return;
-  }
-
   if (event.messageType === "image") {
     await handleWhatsAppImageEvent(event, context);
     return;

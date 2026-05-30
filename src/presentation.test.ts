@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { renderMessengerPresentationPayload } from "./presentation.js";
+import {
+  MESSENGER_OPENCLAW_ACTION_PREFIX,
+  decodeOpenClawActionPayload,
+  renderMessengerActionPayload,
+  renderMessengerPresentationPayload,
+} from "./presentation.js";
 
 const conversationPresentation = {
   blocks: [
@@ -23,9 +28,47 @@ describe("renderMessengerPresentationPayload", () => {
 
     expect(payload?.text).toBe("Ik kan dit op twee manieren verder brengen.");
     expect(payload?.channelData?.facebook?.quickReplies).toEqual([
-      { content_type: "text", title: "Scope bepalen", payload: "scope" },
-      { content_type: "text", title: "Regels maken", payload: "rules" },
+      {
+        content_type: "text",
+        title: "Scope bepalen",
+        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}scope`,
+      },
+      {
+        content_type: "text",
+        title: "Regels maken",
+        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}rules`,
+      },
     ]);
+  });
+
+  it("turns generic conversation actions into Messenger quick replies", () => {
+    const payload = renderMessengerActionPayload({
+      text: "Wat wil je doen?",
+      actions: [
+        { id: "Scope bepalen", label: "Scope bepalen" },
+        { id: "Regels maken", label: "Regels maken" },
+      ],
+    });
+
+    expect(payload?.channelData?.facebook?.quickReplies).toEqual([
+      {
+        content_type: "text",
+        title: "Scope bepalen",
+        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Scope bepalen`,
+      },
+      {
+        content_type: "text",
+        title: "Regels maken",
+        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Regels maken`,
+      },
+    ]);
+  });
+
+  it("decodes OpenClaw action payloads back to user input text", () => {
+    expect(decodeOpenClawActionPayload(`${MESSENGER_OPENCLAW_ACTION_PREFIX}Scope bepalen`)).toBe(
+      "Scope bepalen",
+    );
+    expect(decodeOpenClawActionPayload("RETRY_STYLE_gold")).toBeNull();
   });
 
   it("does not render arbitrary single-pill UI", () => {

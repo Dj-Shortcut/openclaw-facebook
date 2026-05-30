@@ -43,6 +43,11 @@ import {
 import { getMessengerRuntime } from "./runtime.js";
 import { sendMessengerSenderAction, sendMessengerText } from "./send.js";
 import { validateMessengerSignature } from "./signature.js";
+import {
+  decodeOpenClawActionPayload,
+  getMessengerQuickReplies,
+  renderMessengerReplyPayload,
+} from "./presentation.js";
 import type {
   MessengerWebhookBody,
   MessengerWebhookMessaging,
@@ -621,20 +626,21 @@ function isMessengerToolFeedbackPayload(payload: ReplyPayload & { text: string }
 export function normalizeMessengerReplyPayloadForDelivery(
   payload: ReplyPayload,
 ): (ReplyPayload & { text: string }) | null {
-  if (!shouldDeliverMessengerReplyPayload(payload)) {
+  const renderedPayload = renderMessengerReplyPayload(payload);
+  if (!shouldDeliverMessengerReplyPayload(renderedPayload)) {
     return null;
   }
-  if (!isMessengerToolFeedbackPayload(payload)) {
-    return payload;
+  if (!isMessengerToolFeedbackPayload(renderedPayload)) {
+    return renderedPayload;
   }
 
-  const cleaned = payload.text
+  const cleaned = renderedPayload.text
     .replace(/^[\s⚠️🛠🔧]+/u, "")
     .replace(/\s+/g, " ")
     .replace(/\bfailed\b/i, "is mislukt")
     .trim();
   return {
-    ...payload,
+    ...renderedPayload,
     text: cleaned ? `Toolfeedback: ${cleaned}` : "Toolfeedback: actie is mislukt.",
   };
 }
@@ -751,6 +757,12 @@ async function forwardLeaderbotMessengerEvent(params: {
 
 function hasMessengerInteractivePayload(event: MessengerWebhookMessaging): boolean {
   return Boolean(event.message?.quick_reply?.payload?.trim() || event.postback?.payload?.trim());
+}
+
+export function getOpenClawActionText(event: MessengerWebhookMessaging): string | null {
+  return decodeOpenClawActionPayload(
+    event.message?.quick_reply?.payload ?? event.postback?.payload,
+  );
 }
 
 export function shouldProcessMessengerMessageOnce(params: {
@@ -912,7 +924,8 @@ async function processMessengerEvent(params: {
       return;
     }
     const senderId = params.event.sender?.id ?? "";
-    const text = params.event.message?.text ?? "";
+    const openClawActionText = getOpenClawActionText(params.event);
+    const text = openClawActionText ?? params.event.message?.text ?? "";
     const timestamp = params.event.timestamp ?? Date.now();
     if (
       !shouldProcessMessengerMessageOnce({
@@ -939,7 +952,7 @@ async function processMessengerEvent(params: {
         params.event.message?.mid ?? `${senderId}:${timestamp}`,
       )} media=${attachments.length}`,
     );
-    if (hasMessengerInteractivePayload(params.event)) {
+    if (!openClawActionText && hasMessengerInteractivePayload(params.event)) {
       logMessengerStage(params.trace, "messenger_interactive_payload_received", {
         quickReply: Boolean(params.event.message?.quick_reply?.payload),
         postback: Boolean(params.event.postback?.payload),
@@ -1170,6 +1183,7 @@ async function processMessengerEvent(params: {
             const result = await sendMessengerText(senderId, deliveryPayload.text, {
               cfg: params.cfg,
               accountId: params.account.accountId,
+              quickReplies: getMessengerQuickReplies(deliveryPayload),
             });
             logMessengerStage(params.trace, "messenger_response_sent", {
               message: redactMessengerIdentifier(result.messageId),

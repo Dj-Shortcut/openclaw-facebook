@@ -7,14 +7,6 @@ type TranslationParams = {
 
 type TranslationKey =
   | "flowExplanation"
-  | "identityGameConfirmFirstPrompt"
-  | "identityGameConfirmStart"
-  | "identityGameConfirmLater"
-  | "identityGameEntryRecognized"
-  | "identityGameUnavailable"
-  | "identityGameSessionPending"
-  | "identityGameStartConfirmed"
-  | "identityGameDeferred"
   | "stylePicker"
   | "styleCategoryPicker"
   | "styleCategoryCarouselIntro"
@@ -52,20 +44,6 @@ type TranslationValue = string | ((params: TranslationParams) => string);
 const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
   nl: {
     flowExplanation: "Stuur een foto en ik maak er een speciale versie van in een andere stijl — het is gratis.",
-    identityGameConfirmFirstPrompt:
-      "Deze game-entry is herkend. Klaar om later te starten?",
-    identityGameConfirmStart: "Start game",
-    identityGameConfirmLater: "Later",
-    identityGameEntryRecognized:
-      "Deze identity game-entry is herkend. De game flow zelf volgt in de volgende fase.",
-    identityGameUnavailable:
-      "Deze game-link is herkend, maar deze game is momenteel niet beschikbaar.",
-    identityGameSessionPending:
-      "Je identity game-sessie is herkend, maar de game flow zelf is nog niet geactiveerd in deze fase.",
-    identityGameStartConfirmed:
-      "De game-start is bevestigd. De echte vraagflow volgt in de volgende fase.",
-    identityGameDeferred:
-      "Geen probleem. Deze game-link blijft herkenbaar voor later.",
     stylePicker: "Kies je stijl 👇",
     styleCategoryPicker: "Kies eerst een stijlgroep 👇",
     styleCategoryCarouselIntro: ({ styleLabel }) =>
@@ -112,20 +90,6 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
   },
   en: {
     flowExplanation: "Send a photo and I will make a special version of it in another style for free.",
-    identityGameConfirmFirstPrompt:
-      "This game entry was recognized. Ready to start later?",
-    identityGameConfirmStart: "Start game",
-    identityGameConfirmLater: "Later",
-    identityGameEntryRecognized:
-      "This identity game entry was recognized. The actual game flow will follow in the next phase.",
-    identityGameUnavailable:
-      "This game link was recognized, but this game is not available right now.",
-    identityGameSessionPending:
-      "Your identity game session was recognized, but the actual game flow is not enabled in this phase yet.",
-    identityGameStartConfirmed:
-      "The game start was confirmed. The actual question flow will follow in the next phase.",
-    identityGameDeferred:
-      "No problem. This game link will stay recognizable for later.",
     stylePicker: "Pick a style 👇",
     styleCategoryPicker: "Pick a style group first 👇",
     styleCategoryCarouselIntro: ({ styleLabel }) =>

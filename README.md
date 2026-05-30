@@ -120,6 +120,26 @@ with third-party providers before enabling this for a public Page.
 For paid or public assistants, keep billing, credits, model selection, and tool
 budgets in the OpenClaw host runtime where provider calls execute.
 
+## Conversation Actions
+
+Assistant replies may include channel-neutral `actions`:
+
+```json
+{
+  "text": "What would you like to do next?",
+  "actions": [
+    { "id": "Restyle photo", "label": "Restyle photo" },
+    { "id": "Try again", "label": "Try again" }
+  ]
+}
+```
+
+The Facebook channel renders these actions as Messenger quick replies. When a
+person clicks one, the action id is decoded back into the next inbound message
+text, so the assistant receives it like normal user input instead of a
+Messenger-specific payload branch. Existing channel-specific Messenger payloads
+remain available for legacy integrations such as the image-generation service.
+
 ## Local/private install validation
 
 This plugin does not need to be published to npm before it can be installed

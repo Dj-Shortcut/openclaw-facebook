@@ -1,20 +1,10 @@
-import { safeLog } from "./messengerApi";
 import { handleMessengerConsentGate } from "./consentService";
 import {
-  setActiveExperience,
   setFlowState,
-  setLastEntryIntent,
   setPreferredLang,
   type ConversationState,
 } from "./messengerState";
 import { toLogUser } from "./privacy";
-import {
-  parseMessengerEntryIntent,
-  routeMessengerActiveExperience,
-  routeMessengerEntryIntent,
-} from "./messengerExperienceRouting";
-import type { EntryIntent } from "./entryIntent";
-import type { ActiveExperience } from "./activeExperience";
 import { captureException } from "./observability/sentry";
 import { handlePayload, handlePostbackEvent } from "./webhookPayloadBranch";
 import {
@@ -105,36 +95,7 @@ async function routeTrackedEvent(
   const { psid, userId, reqId, lang, localeLang, state, trackedCtx } = context;
   if (await routeConsentGate(context, event)) return;
 
-  const routeDeps = createMessengerRouteDeps(context);
-  const { referralRef, entryIntent } = parseMessengerEntryIntent({
-    event,
-    reqId,
-    userId,
-    localeLang,
-    safeLog,
-  });
-
-  if (
-    await routeMessengerEntryIntent({
-      deps: routeDeps,
-      state,
-      entryIntent,
-    })
-  ) {
-    await finishSelectedBranch(context, "entry_intent");
-    return;
-  }
-
-  if (
-    await routeMessengerActiveExperience({
-      deps: routeDeps,
-      state,
-      event,
-    })
-  ) {
-    await finishSelectedBranch(context, "active_experience");
-    return;
-  }
+  const referralRef = event.postback?.referral?.ref ?? event.referral?.ref;
 
   const referralResult = await trackedCtx.handleReferralStyleEvent(
     psid,
@@ -197,67 +158,6 @@ async function routeConsentGate(
   }
 
   return handled;
-}
-
-function createMessengerRouteDeps(context: TrackedEventContext) {
-  const { psid, userId, reqId, trackedCtx } = context;
-  return {
-    psid,
-    userId,
-    reqId,
-    sendText: async (text: string) => {
-      await trackedCtx.sendLoggedText(psid, text, reqId);
-    },
-    sendStateText: async (stateName: ConversationState, text: string) => {
-      await trackedCtx.sendStateQuickReplies(psid, stateName, text, reqId);
-    },
-    sendOptionsPrompt: async (
-      prompt: string,
-      options: Array<{ id: string; title: string }>,
-      _fallbackLogName: string | undefined,
-      fallbackText: string | undefined
-    ) => {
-      await trackedCtx.sendLoggedQuickReplies(
-        psid,
-        formatMessengerOptionsPromptText(prompt, options, fallbackText),
-        options.map((option, index) => ({
-          content_type: "text",
-          title: String(index + 1),
-          payload: option.id,
-        })),
-        reqId
-      );
-    },
-    sendImage: async (imageUrl: string) => {
-      await trackedCtx.sendLoggedImage(psid, imageUrl, reqId);
-    },
-    safeLog,
-    setLastEntryIntent: (nextEntryIntent: EntryIntent | null) =>
-      Promise.resolve(setLastEntryIntent(psid, nextEntryIntent)),
-    setActiveExperience: (nextActiveExperience: ActiveExperience | null) =>
-      Promise.resolve(setActiveExperience(psid, nextActiveExperience)),
-  };
-}
-
-function formatMessengerOptionsPromptText(
-  prompt: string,
-  options: Array<{ id: string; title: string }>,
-  fallbackText: string | undefined
-): string {
-  const text =
-    fallbackText?.trim() ||
-    [prompt, ...options.map((option, index) => `${index + 1}. ${option.title}`)]
-      .join("\n");
-
-  return text
-    .replace(
-      /Reply with one of these exact options:/g,
-      "Tap a number below:"
-    )
-    .replace(
-      /Antwoord met een van deze exacte opties:/g,
-      "Tik op een nummer hieronder:"
-    );
 }
 
 async function finishSelectedBranch(

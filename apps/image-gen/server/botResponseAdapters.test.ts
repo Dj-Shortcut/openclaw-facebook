@@ -203,7 +203,7 @@ describe("botResponseAdapters", () => {
     await sendMessengerBotResponse(
       {
         kind: "handoff_state",
-        state: "identity_game_waiting",
+        state: "waiting",
         text: "Handing off",
       },
       {

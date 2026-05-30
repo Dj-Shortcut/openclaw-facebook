@@ -49,7 +49,7 @@ De architectuur is ontworpen met schaalbaarheid in gedachten, maar de huidige im
 De code is goed gestructureerd en maakt gebruik van moderne TypeScript-patronen.
 
 ### Observaties:
-- **Type Safety**: Uitgebreid gebruik van TypeScript-interfaces en types (bijv. `BotContext`, `IdentityGameSession`).
+- **Type Safety**: Uitgebreid gebruik van TypeScript-interfaces en types (bijv. `BotContext` en bericht-/statusmodellen).
 - **Observability**: Goede implementatie van request tracing en gestructureerde JSON-logging.
 - **Testdekking**: Aanwezigheid van unit- en integratietests (bijv. `messengerApi.retry.test.ts`), wat duidt op een test-driven benadering.
 
@@ -66,4 +66,4 @@ De code is goed gestructureerd en maakt gebruik van moderne TypeScript-patronen.
 
 ## Conclusie
 
-De `leaderbot-fb-image-gen` repository is een technisch solide basis voor een AI-gestuurde Messenger bot. De overgang van een eenvoudige beeldgenerator naar een complexe "Experience" engine (Identity Game) is goed doordacht in de code. De belangrijkste verbeterpunten liggen in de consistentie van de statusopslag en de robuustheid van de in-memory fallback-mechanismen.
+De `leaderbot-fb-image-gen` repository is een technisch solide basis voor een AI-gestuurde Messenger bot. De belangrijkste verbeterpunten liggen in de consistentie van de statusopslag en de robuustheid van de in-memory fallback-mechanismen.

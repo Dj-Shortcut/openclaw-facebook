@@ -32,8 +32,6 @@ describe("messenger state normalization", () => {
       userKey: psid,
       stage: "IDLE",
       state: "IDLE",
-      lastEntryIntent: null,
-      activeExperience: null,
       lastPhotoUrl: null,
       lastPhoto: null,
       selectedStyle: null,

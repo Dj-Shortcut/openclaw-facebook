@@ -156,7 +156,6 @@ server/_core/whatsapp/presenter/
 server/_core/whatsapp/application/
   processWhatsAppEvent.ts             # per event type dispatch text/image/unknown
   runStyleGenerationUseCase.ts        # quota+state+generation+error policy
-  handleExperienceRoutingUseCase.ts   # entryIntent/activeExperience route handling
 
 server/_core/whatsapp/flow/
   whatsappFlowService.ts              # stage transitions + selection handling

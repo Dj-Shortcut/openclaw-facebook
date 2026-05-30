@@ -64,53 +64,6 @@ export async function sendWhatsAppStateText(
   await sendWhatsAppText(senderId, buildStateResponseText(state, text, lang));
 }
 
-export function createWhatsAppRouteResponseSender(senderId: string) {
-  return {
-    sendText: (text: string) => sendWhatsAppText(senderId, text),
-    sendOptionsPrompt: (
-      prompt: string,
-      options: Array<{ id: string; title: string }>,
-      fallbackText?: string
-    ) =>
-      sendWhatsAppText(
-        senderId,
-        fallbackText ?? [prompt, ...options.map(option => option.title)].join("\n")
-      ),
-    sendImage: (imageUrl: string, caption?: string) => {
-      if (caption) {
-        return sendWhatsAppText(senderId, caption).then(() =>
-          sendWhatsAppImage(senderId, imageUrl)
-        );
-      }
-
-      return sendWhatsAppImage(senderId, imageUrl);
-    },
-  };
-}
-
-export async function sendWhatsAppExperienceRouteResponse(
-  senderId: string,
-  route: {
-    response?: BotResponse | null;
-    afterSend?: (() => Promise<BotResponse | null>) | undefined;
-  }
-): Promise<void> {
-  await sendWhatsAppBotResponse(
-    route.response ?? null,
-    createWhatsAppRouteResponseSender(senderId)
-  );
-
-  if (!route.afterSend) {
-    return;
-  }
-
-  const followUpResponse = await route.afterSend();
-  await sendWhatsAppBotResponse(
-    followUpResponse,
-    createWhatsAppRouteResponseSender(senderId)
-  );
-}
-
 export async function sendWhatsAppBotStateResponse(
   senderId: string,
   response: BotResponse | null,

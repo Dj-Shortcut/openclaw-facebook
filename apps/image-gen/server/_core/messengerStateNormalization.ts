@@ -44,8 +44,6 @@ export function createDefaultState(
     userKey: getUserKey(psid),
     stage: "IDLE",
     state: "IDLE",
-    lastEntryIntent: null,
-    activeExperience: null,
     lastUserMessageAt: undefined,
     lastPhotoUrl: null,
     lastPhoto: null,
@@ -133,15 +131,10 @@ function resolveConsentState(
 
 function resolveConversationContext(
   ctx: NormalizationCtx
-): Pick<
-  MessengerUserState,
-  "lastEntryIntent" | "activeExperience" | "lastUserMessageAt"
-> {
+): Pick<MessengerUserState, "lastUserMessageAt"> {
   const { value, fallback } = ctx;
 
   return {
-    lastEntryIntent: value?.lastEntryIntent ?? fallback.lastEntryIntent,
-    activeExperience: value?.activeExperience ?? fallback.activeExperience,
     lastUserMessageAt: value?.lastUserMessageAt ?? fallback.lastUserMessageAt,
   };
 }

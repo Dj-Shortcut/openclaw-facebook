@@ -8,7 +8,7 @@ describe("conversation actions", () => {
       text: "Done ✅",
       actions: [
         { id: "CHOOSE_STYLE", label: "New style" },
-        { id: "PRIVACY_INFO", label: "Privacy Policy" },
+        { id: "PRIVACY_INFO", label: "Privacy" },
       ],
     });
   });
@@ -17,7 +17,7 @@ describe("conversation actions", () => {
     expect(
       renderMessengerQuickReplies([
         { id: "CHOOSE_STYLE", label: "New style" },
-        { id: "PRIVACY_INFO", label: "Privacy Policy" },
+        { id: "PRIVACY_INFO", label: "Privacy" },
       ])
     ).toEqual([
       {
@@ -27,7 +27,7 @@ describe("conversation actions", () => {
       },
       {
         content_type: "text",
-        title: "Privacy Policy",
+        title: "Privacy",
         payload: "PRIVACY_INFO",
       },
     ]);
