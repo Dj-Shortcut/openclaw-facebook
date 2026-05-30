@@ -1,18 +1,19 @@
 import { describe, expect, it } from "vitest";
+import { t } from "./_core/i18n";
 import { getGreetingResponse } from "./_core/webhookHelpers";
 
 describe("greeting handling by conversation state", () => {
   it("returns processing text while PROCESSING", () => {
     expect(getGreetingResponse("PROCESSING")).toEqual({
       mode: "text",
-      text: "Even geduld — je vorige afbeelding is bijna klaar.",
+      text: t("nl", "processingBlocked"),
     });
   });
 
   it("returns plain photo prompt while AWAITING_PHOTO", () => {
     expect(getGreetingResponse("AWAITING_PHOTO")).toEqual({
       mode: "text",
-      text: "Stuur gerust een foto, dan kan ik een stijl voor je maken.",
+      text: t("nl", "textWithoutPhoto"),
     });
   });
 
@@ -20,7 +21,7 @@ describe("greeting handling by conversation state", () => {
     expect(getGreetingResponse("AWAITING_STYLE")).toEqual({
       mode: "quick_replies",
       state: "AWAITING_STYLE",
-      text: "Kies eerst een stijlgroep 👇",
+      text: t("nl", "styleCategoryPicker"),
     });
   });
 
@@ -28,7 +29,7 @@ describe("greeting handling by conversation state", () => {
     expect(getGreetingResponse("RESULT_READY")).toEqual({
       mode: "quick_replies",
       state: "RESULT_READY",
-      text: "Klaar ✅",
+      text: t("nl", "success"),
     });
   });
 
@@ -36,7 +37,7 @@ describe("greeting handling by conversation state", () => {
     expect(getGreetingResponse("FAILURE")).toEqual({
       mode: "quick_replies",
       state: "FAILURE",
-      text: "Oeps. Probeer nog een stijl.",
+      text: t("nl", "failure"),
     });
   });
 
@@ -44,7 +45,7 @@ describe("greeting handling by conversation state", () => {
     expect(getGreetingResponse("IDLE")).toEqual({
       mode: "quick_replies",
       state: "IDLE",
-      text: "Stuur een foto en ik maak er een speciale versie van in een andere stijl — het is gratis.",
+      text: t("nl", "flowExplanation"),
     });
   });
 });

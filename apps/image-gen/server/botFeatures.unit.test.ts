@@ -7,6 +7,7 @@ import { rateLimitFeature } from "./_core/bot/features/rateLimitFeature";
 import { statsFeature } from "./_core/bot/features/statsFeature";
 import { styleCommandsFeature } from "./_core/bot/features/styleCommandsFeature";
 import { getBotFeatures } from "./_core/bot/features";
+import { t } from "./_core/i18n";
 import type { BotTextContext } from "./_core/botContext";
 import type { MessengerUserState } from "./_core/messengerState";
 import { resetStateStore } from "./_core/messengerState";
@@ -338,7 +339,7 @@ describe("assistantCommandsFeature", () => {
 
     expect(result).toEqual({ handled: true });
     expect(sendText).toHaveBeenCalledOnce();
-    expect(sendText.mock.calls[0]?.[0]).toContain("Feel free to send a photo");
+    expect(sendText.mock.calls[0]?.[0]).toContain(t("en", "textWithoutPhoto"));
   });
   it("treats Dutch casual help requests as help commands", async () => {
     const sendText = vi.fn(async () => undefined);
@@ -355,7 +356,7 @@ describe("assistantCommandsFeature", () => {
 
     expect(result).toEqual({ handled: true });
     expect(sendText).toHaveBeenCalledOnce();
-    expect(sendText.mock.calls[0]?.[0]).toContain("Stuur gerust een foto");
+    expect(sendText.mock.calls[0]?.[0]).toContain(t("nl", "textWithoutPhoto"));
   });
 
   it("picks a random style and triggers generation for surprise command", async () => {

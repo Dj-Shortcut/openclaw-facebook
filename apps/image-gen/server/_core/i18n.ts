@@ -44,7 +44,8 @@ type TranslationValue = string | ((params: TranslationParams) => string);
 
 const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
   nl: {
-    flowExplanation: "Stuur een foto en ik maak er een speciale versie van in een andere stijl — het is gratis.",
+    flowExplanation:
+      "Beschrijf wat je wilt maken, of stuur een foto als je die wilt bewerken.",
     stylePicker: "Kies je stijl 👇",
     styleCategoryPicker: "Kies eerst een stijlgroep 👇",
     styleCategoryCarouselIntro: ({ styleLabel }) =>
@@ -53,24 +54,26 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     newStyle: "Nieuwe stijl",
     retry: "Probeer opnieuw",
     assistantQuickActions:
-      "⚡ Snelle acties: kies een stijl, typ 'remix', of typ 'verras me' voor een willekeurige look.",
+      "Snelle acties: beschrijf een nieuwe afbeelding, pas je laatste prompt aan, of kies expliciet een stijl.",
     assistantPhotoTip:
-      "Tip: typ 'verras me' nadat je een foto hebt gestuurd voor meteen een willekeurige stijl.",
+      "Tip: je kan gewoon typen wat je wilt zien, bijvoorbeeld 'maak een futuristische stad bij zonsondergang'.",
     assistantPhotoTipExtra:
-      "Je kan ook gewoon een stijlnaam typen of op een genummerde optie antwoorden.",
+      "Bij een foto kan je ook beschrijven wat ik moet aanpassen.",
     assistantRandomStyle: ({ styleLabel }) =>
       `🎲 Mooie keuze — ik ga voor ${styleLabel ?? "deze stijl"}.`,
     success: "Klaar ✅",
     processingBlocked: "Even geduld — je vorige afbeelding is bijna klaar.",
     styleWithoutPhoto: "Stuur eerst een foto, dan maak ik die stijl voor je.",
-    textWithoutPhoto: "Stuur gerust een foto, dan kan ik een stijl voor je maken.",
+    textWithoutPhoto:
+      "Beschrijf welke afbeelding je wilt maken, of stuur een foto als je die wilt bewerken.",
     privacy: ({ link }) => [
       "Je foto wordt enkel gebruikt om de afbeelding te maken.",
       "Ze wordt daarna niet bewaard.",
       ...(link ? [`Privacybeleid: ${link}`] : []),
     ].join("\n"),
     privacyButtonLabel: "Privacybeleid",
-    aboutLeaderbot: "Leaderbot is gemaakt door Andy. Je mag hem gerust contacteren via Facebook.\nVolledige naam op vraag: Andy Arijs.",
+    aboutLeaderbot:
+      "Leaderbot is gemaakt door Andy. Je mag hem gerust contacteren via Facebook.\nVolledige naam op vraag: Andy Arijs.",
     failure: "Oeps. Probeer nog een stijl.",
     missingInputImage: "Ik kon je foto niet goed lezen. Stuur ze nog eens door aub.",
     generatingPrompt: ({ styleLabel }) => `Ik maak nu je ${styleLabel ?? ""}-stijl.`,
@@ -91,7 +94,8 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Ik werk voorlopig alleen met foto's. Stuur een foto in plaats van een video of ander bestand.",
   },
   en: {
-    flowExplanation: "Send a photo and I will make a special version of it in another style for free.",
+    flowExplanation:
+      "Describe the image you want to make, or send a photo if you want me to edit it.",
     stylePicker: "Pick a style 👇",
     styleCategoryPicker: "Pick a style group first 👇",
     styleCategoryCarouselIntro: ({ styleLabel }) =>
@@ -100,24 +104,26 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     newStyle: "New style",
     retry: "Retry",
     assistantQuickActions:
-      "⚡ Quick actions: choose a style, type 'remix', or type 'surprise me' for a random look.",
+      "Quick actions: describe a new image, adjust your last prompt, or explicitly pick a style.",
     assistantPhotoTip:
-      "Tip: send 'surprise me' after uploading a photo for an instant random style.",
+      "Tip: you can simply type what you want to see, for example 'make a futuristic city at sunset'.",
     assistantPhotoTipExtra:
-      "You can also type a style name directly or reply with a numbered option.",
+      "With a photo, you can also describe what I should change.",
     assistantRandomStyle: ({ styleLabel }) =>
       `🎲 Nice — going with ${styleLabel ?? "this style"}.`,
     success: "Done ✅",
     processingBlocked: "One sec — your previous image is almost done.",
     styleWithoutPhoto: "Send a photo first, then I can make that style for you.",
-    textWithoutPhoto: "Feel free to send a photo, then I can make a style for you.",
+    textWithoutPhoto:
+      "Describe the image you want to make, or send a photo if you want me to edit it.",
     privacy: ({ link }) => [
       "Your photo is only used to make the image.",
       "It is not stored afterwards.",
       ...(link ? [`Privacy policy: ${link}`] : []),
     ].join("\n"),
     privacyButtonLabel: "Privacy Policy",
-    aboutLeaderbot: "Leaderbot was made by Andy. Feel free to contact him via Facebook.\nFull name on request: Andy Arijs.",
+    aboutLeaderbot:
+      "Leaderbot was made by Andy. Feel free to contact him via Facebook.\nFull name on request: Andy Arijs.",
     failure: "Oops. Try another style.",
     missingInputImage: "I could not read your photo properly. Please send it again.",
     generatingPrompt: ({ styleLabel }) => `I am now making your ${styleLabel ?? ""} style.`,

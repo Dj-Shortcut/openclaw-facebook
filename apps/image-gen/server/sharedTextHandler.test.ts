@@ -72,6 +72,13 @@ describe("sharedTextHandler", () => {
     });
   });
 
+  it("keeps intro guidance prompt-first instead of style-catalog-first", () => {
+    expect(t("nl", "flowExplanation")).toContain("Beschrijf wat je wilt maken");
+    expect(t("nl", "flowExplanation")).not.toContain("andere stijl");
+    expect(t("en", "textWithoutPhoto")).toContain("Describe the image you want");
+    expect(t("en", "textWithoutPhoto")).not.toContain("make a style");
+  });
+
   it("returns no response for acknowledgement text and logs the ignored ack", async () => {
     const logAckIgnored = vi.fn();
 

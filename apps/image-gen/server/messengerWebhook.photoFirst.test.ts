@@ -29,6 +29,7 @@ import {
   processFacebookWebhookPayload as processFacebookWebhookPayloadBase,
   resetMessengerEventDedupe,
 } from "./_core/messengerWebhook";
+import { t } from "./_core/i18n";
 import { anonymizePsid, getState, resetStateStore } from "./_core/messengerState";
 import { setSourceImageDnsLookupForTests } from "./_core/image-generation/sourceImageFetcher";
 import { processConsentedFacebookWebhookPayload } from "./testConsentHelpers";
@@ -349,7 +350,7 @@ describe("photo-first onboarding", () => {
     expect(sendTextMock).not.toHaveBeenCalled();
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
-      "Stuur een foto en ik maak er een speciale versie van in een andere stijl — het is gratis.",
+      t("nl", "flowExplanation"),
       expect.any(Array),
     );
   });
@@ -388,7 +389,7 @@ describe("photo-first onboarding", () => {
     });
 
     expect(sendQuickRepliesMock).not.toHaveBeenCalled();
-    expect(sendTextMock).toHaveBeenCalledWith(psid, "Stuur gerust een foto, dan kan ik een stijl voor je maken.");
+    expect(sendTextMock).toHaveBeenCalledWith(psid, t("nl", "textWithoutPhoto"));
   });
 
   it("guards style payload without pending image", async () => {
@@ -490,7 +491,7 @@ describe("photo-first onboarding", () => {
 
     expect(sendTextMock).toHaveBeenCalledWith(
       psid,
-      "Stuur gerust een foto, dan kan ik een stijl voor je maken.",
+      t("nl", "textWithoutPhoto"),
     );
   });
 
@@ -512,7 +513,7 @@ describe("photo-first onboarding", () => {
 
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
-      "Stuur een foto en ik maak er een speciale versie van in een andere stijl — het is gratis.",
+      t("nl", "flowExplanation"),
       expect.any(Array),
     );
 
