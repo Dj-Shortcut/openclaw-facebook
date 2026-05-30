@@ -5,18 +5,19 @@ import {
 } from "./_core/stateResponseText";
 
 describe("stateResponseText", () => {
-  it("labels CHOOSE_STYLE as another style instead of the old new-style CTA", () => {
+  it("does not offer state quick replies for migrated failure responses", () => {
     expect(buildStateResponseText("FAILURE", "Probeer opnieuw?", "nl")).toBe(
-      "Probeer opnieuw?\n\n1. Probeer opnieuw\n2. Andere"
+      "Probeer opnieuw?"
     );
   });
 
-  it("keeps legacy new-style text as a compatibility alias", () => {
-    expect(resolveStateReplyPayload("FAILURE", "Nieuwe stijl", "nl")).toBe(
-      "CHOOSE_STYLE"
+  it("does not resolve legacy failure selections after migration to actions", () => {
+    expect(resolveStateReplyPayload("FAILURE", "1", "nl")).toBe(undefined);
+    expect(resolveStateReplyPayload("FAILURE", "Privacybeleid", "nl")).toBe(
+      undefined
     );
-    expect(resolveStateReplyPayload("FAILURE", "Andere", "nl")).toBe(
-      "CHOOSE_STYLE"
+    expect(resolveStateReplyPayload("FAILURE", "Nieuwe stijl", "nl")).toBe(
+      undefined
     );
   });
 });

@@ -11,8 +11,6 @@ function localizeReplyTitle(reply: StateQuickReply, lang: Lang): string {
       return t(lang, "whatIsThis");
     case "PRIVACY_INFO":
       return t(lang, "privacyButtonLabel");
-    case "CHOOSE_STYLE":
-      return t(lang, "otherStyle");
     case "RETRY_STYLE":
       return t(lang, "retry");
     default:
@@ -43,14 +41,9 @@ export function resolveStateReplyPayload(
   const matchedReply = replies.find(reply => {
     const localizedTitle = normalizeSelectionText(localizeReplyTitle(reply, lang));
     const rawTitle = normalizeSelectionText(reply.title);
-    const legacyNewStyleTitle =
-      reply.payload === "CHOOSE_STYLE"
-        ? normalizeSelectionText(t(lang, "newStyle"))
-        : "";
     return (
       normalizedSelection === localizedTitle ||
-      normalizedSelection === rawTitle ||
-      normalizedSelection === legacyNewStyleTitle
+      normalizedSelection === rawTitle
     );
   });
 

@@ -2,6 +2,7 @@ import type { BotFeature } from "../features";
 import { t } from "../../i18n";
 import { type Style } from "../../messengerStyles";
 import { STYLE_LABELS, STYLE_OPTIONS } from "../../webhookHelpers";
+import { buildAssistantPhotoHelpResponse } from "../../conversationActions";
 
 const HELP_COMMANDS = new Set([
   "help",
@@ -39,10 +40,8 @@ export const assistantCommandsFeature: BotFeature = {
   async onText(ctx) {
     if (HELP_COMMANDS.has(ctx.normalizedText)) {
       if (ctx.hasPhoto) {
-        await ctx.sendStateQuickReplies(
-          "AWAITING_STYLE",
-          t(ctx.lang, "assistantQuickActions")
-        );
+        const response = buildAssistantPhotoHelpResponse(ctx.lang);
+        await ctx.sendActions(response.text ?? "", response.actions ?? []);
       } else {
         await ctx.sendText(
           [

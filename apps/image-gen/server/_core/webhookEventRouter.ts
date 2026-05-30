@@ -1,9 +1,5 @@
 import { handleMessengerConsentGate } from "./consentService";
-import {
-  setFlowState,
-  setPreferredLang,
-  type ConversationState,
-} from "./messengerState";
+import { setPreferredLang } from "./messengerState";
 import { toLogUser } from "./privacy";
 import { captureException } from "./observability/sentry";
 import { handlePayload, handlePostbackEvent } from "./webhookPayloadBranch";
@@ -18,6 +14,7 @@ import {
 } from "./webhookEventContext";
 import { handleMessageEvent } from "./webhookMessageRouter";
 import type { HandlerContext } from "./webhookHandlers";
+import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 
 export async function handleEntry(
   ctx: HandlerContext,
@@ -144,12 +141,13 @@ async function routeConsentGate(
     sendText: async text => {
       await trackedCtx.sendLoggedText(psid, text, reqId);
     },
-    sendQuickReplies: async (text, replies) => {
-      await trackedCtx.sendLoggedQuickReplies(psid, text, replies, reqId);
-    },
-    sendRestyleStarterPills: async () => {
-      await setFlowState(psid, "AWAITING_STYLE");
-      await trackedCtx.sendStylePicker(psid, lang, reqId);
+    sendActions: async (text, actions) => {
+      await trackedCtx.sendLoggedQuickReplies(
+        psid,
+        text,
+        renderMessengerQuickReplies(actions),
+        reqId
+      );
     },
   });
 

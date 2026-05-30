@@ -337,8 +337,8 @@ This means Cloudflare currently sits behind the storage proxy for durable asset 
 - Webhook acknowledgement is immediate; heavy work is deferred.
 - Inbound dedupe reduces duplicate event processing.
 - Generation failures produce user-facing retry options.
-- Image-generation success and failure follow-ups originate as channel-neutral conversation actions and are rendered as Messenger quick replies at the channel edge.
-- Remaining Messenger-state quick reply flows to migrate incrementally: intro/help, style-category selection, style options within a category, privacy/data deletion consent, and in-experience option prompts.
+- Image-generation success/failure follow-ups, contextual help choices, and Messenger consent/delete choices originate as channel-neutral conversation actions and are rendered as Messenger quick replies at the channel edge.
+- Remaining Messenger-state quick reply flows to migrate incrementally: style-category selection, style options within a category, and in-experience option prompts.
 - Health endpoints + version endpoint support simple monitoring.
 - Face-memory deletion is available through user command, scheduled expiry, and admin kill switch.
 

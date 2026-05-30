@@ -81,6 +81,111 @@ describe("sharedTextHandler", () => {
     expect(t("en", "textWithoutPhoto")).not.toContain("make a style");
   });
 
+  it("returns prompt-first quick start actions for repeat IDLE greetings", async () => {
+    const result = await handleSharedTextMessage({
+      message: {
+        channel: "messenger",
+        senderId: "psid-repeat",
+        userId: "user-key-repeat",
+        messageType: "text",
+        textBody: "Hi",
+      },
+      reqId: "req-repeat",
+      lang: "nl",
+      getState: async () =>
+        createState({
+          psid: "psid-repeat",
+          userKey: "user-key-repeat",
+          hasSeenIntro: true,
+        }),
+      setFlowState: async () => {},
+    });
+
+    expect(result).toEqual({
+      response: {
+        text: t("nl", "flowExplanation"),
+        actions: [
+          { id: "WHAT_IS_THIS", label: "Wat doe ik?" },
+          { id: "PRIVACY_INFO", label: "Privacy" },
+        ],
+      },
+    });
+  });
+
+  it("returns result follow-up choices as conversation actions", async () => {
+    const result = await handleSharedTextMessage({
+      message: {
+        channel: "messenger",
+        senderId: "psid-result",
+        userId: "user-key-result",
+        messageType: "text",
+        textBody: "Hey",
+      },
+      reqId: "req-result",
+      lang: "nl",
+      getState: async () =>
+        createState({
+          psid: "psid-result",
+          userKey: "user-key-result",
+          stage: "RESULT_READY",
+          state: "RESULT_READY",
+          hasSeenIntro: true,
+        }),
+      setFlowState: async () => {},
+    });
+
+    expect(result).toEqual({
+      response: {
+        text: t("nl", "success"),
+        actions: [
+          {
+            id: "NEW_IMAGE",
+            label: "Nieuwe afbeelding",
+            inputText: "Nieuwe afbeelding",
+          },
+          { id: "PRIVACY_INFO", label: "Privacy" },
+        ],
+      },
+    });
+  });
+
+  it("returns failure follow-up choices as conversation actions", async () => {
+    const result = await handleSharedTextMessage({
+      message: {
+        channel: "messenger",
+        senderId: "psid-failure",
+        userId: "user-key-failure",
+        messageType: "text",
+        textBody: "Hey",
+      },
+      reqId: "req-failure",
+      lang: "nl",
+      getState: async () =>
+        createState({
+          psid: "psid-failure",
+          userKey: "user-key-failure",
+          stage: "FAILURE",
+          state: "FAILURE",
+          hasSeenIntro: true,
+        }),
+      setFlowState: async () => {},
+    });
+
+    expect(result).toEqual({
+      response: {
+        text: t("nl", "failure"),
+        actions: [
+          { id: "RETRY_GENERATION", label: "Opnieuw" },
+          {
+            id: "NEW_IMAGE",
+            label: "Nieuwe afbeelding",
+            inputText: "Nieuwe afbeelding",
+          },
+        ],
+      },
+    });
+  });
+
   it("returns no response for acknowledgement text and logs the ignored ack", async () => {
     const logAckIgnored = vi.fn();
 

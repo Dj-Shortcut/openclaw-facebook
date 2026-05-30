@@ -56,10 +56,7 @@ describe("messenger state flow", () => {
   });
 
   it("maps quick replies by state", () => {
-    expect(getQuickRepliesForState("IDLE")).toEqual([
-      { title: "Wat doe ik?", payload: "WHAT_IS_THIS" },
-      { title: "Privacy", payload: "PRIVACY_INFO" },
-    ]);
+    expect(getQuickRepliesForState("IDLE")).toEqual([]);
     expect(getQuickRepliesForState("AWAITING_PHOTO")).toEqual([]);
     expect(getQuickRepliesForState("AWAITING_STYLE")).toEqual(
       STYLE_CATEGORY_CONFIGS.map(category => ({
@@ -68,13 +65,8 @@ describe("messenger state flow", () => {
       })),
     );
     expect(getQuickRepliesForState("PROCESSING")).toEqual([]);
-    expect(getQuickRepliesForState("RESULT_READY")).toEqual([
-      { title: "Privacy", payload: "PRIVACY_INFO" },
-    ]);
-    expect(getQuickRepliesForState("FAILURE")).toEqual([
-      { title: "Probeer opnieuw", payload: "RETRY_STYLE" },
-      { title: "Andere stijl", payload: "CHOOSE_STYLE" },
-    ]);
+    expect(getQuickRepliesForState("RESULT_READY")).toEqual([]);
+    expect(getQuickRepliesForState("FAILURE")).toEqual([]);
   });
 
   it("maps per-category style replies with a back action", () => {

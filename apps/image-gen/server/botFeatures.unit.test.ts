@@ -49,8 +49,7 @@ function makeContext(overrides: Partial<BotTextContext> = {}): BotTextContext {
     hasPhoto: false,
     sendText: vi.fn(async () => undefined),
     sendImage: vi.fn(async () => undefined),
-    sendQuickReplies: vi.fn(async () => undefined),
-    sendStateQuickReplies: vi.fn(async () => undefined),
+    sendActions: vi.fn(async () => undefined),
     setFlowState: vi.fn(async () => undefined),
     preselectStyle: vi.fn(async () => undefined),
     chooseStyle: vi.fn(async () => undefined),
@@ -322,6 +321,54 @@ describe("conversationalEditingFeature", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("uses a prompt-first edit fallback instead of opening the style picker", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        output_text: JSON.stringify({
+          shouldEdit: true,
+          style: null,
+          directorMode: null,
+          promptHint: "make the background darker",
+        }),
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const runStyleGeneration = vi.fn(async () => undefined);
+
+    try {
+      const result = await conversationalEditingFeature.onText?.(
+        makeContext({
+          messageText: "make the background darker",
+          normalizedText: "make the background darker",
+          runStyleGeneration,
+          state: makeState({
+            lastGeneratedUrl: "https://img.example/generated.jpg",
+            lastPhotoUrl: "https://img.example/source.jpg",
+          }),
+        })
+      );
+
+      expect(result).toEqual({ handled: true });
+      expect(runStyleGeneration).toHaveBeenCalledWith(
+        "cinematic",
+        "https://img.example/source.jpg",
+        "make the background darker",
+        undefined
+      );
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe("assistantCommandsFeature", () => {
@@ -340,6 +387,26 @@ describe("assistantCommandsFeature", () => {
     expect(result).toEqual({ handled: true });
     expect(sendText).toHaveBeenCalledOnce();
     expect(sendText.mock.calls[0]?.[0]).toContain(t("en", "textWithoutPhoto"));
+  });
+
+  it("shows photo help as channel-neutral conversation actions", async () => {
+    const sendActions = vi.fn(async () => undefined);
+
+    const result = await assistantCommandsFeature.onText?.(
+      makeContext({
+        normalizedText: "help",
+        messageText: "help",
+        hasPhoto: true,
+        sendActions,
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(sendActions).toHaveBeenCalledWith(t("en", "assistantQuickActions"), [
+      { id: "NEW_IMAGE", label: "New image", inputText: "New image" },
+      { id: "SURPRISE_ME", label: "Surprise me", inputText: "Surprise me" },
+      { id: "PRIVACY_INFO", label: "Privacy" },
+    ]);
   });
   it("treats Dutch casual help requests as help commands", async () => {
     const sendText = vi.fn(async () => undefined);

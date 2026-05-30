@@ -152,11 +152,7 @@ async function handleGenerationSuccess(input: {
   await setFlowState(input.senderId, "RESULT_READY");
   await sendWhatsAppTextReply(
     input.senderId,
-    `${t(input.lang, "success")}\n${
-      input.lang === "en"
-        ? "Reply with 'new style' if you want another version."
-        : "Antwoord met 'nieuwe stijl' als je nog een versie wilt."
-    }`
+    `${t(input.lang, "success")}\n${t(input.lang, "whatsappGenerationFollowup")}`
   );
 }
 

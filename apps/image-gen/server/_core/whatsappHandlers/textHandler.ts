@@ -2,6 +2,7 @@ import { handleSharedTextMessage } from "../sharedTextHandler";
 import {
   getOrCreateState,
   markIntroSeen,
+  setPendingConversationActions,
   setFlowState,
   type ConversationState,
 } from "../messengerState";
@@ -20,15 +21,47 @@ import {
 import { runWhatsAppStyleGeneration } from "../whatsappFlows/styleGenerationFlow";
 import type { NormalizedWhatsAppEvent, WhatsAppHandlerContext } from "../whatsappTypes";
 import { runWhatsAppTextFeatures } from "./textContext";
+import { CONVERSATION_ACTION_RETRY_GENERATION } from "../conversationActions";
 
 export async function handleWhatsAppTextEvent(
   event: NormalizedWhatsAppEvent,
   context: WhatsAppHandlerContext
 ): Promise<void> {
   const state = await Promise.resolve(getOrCreateState(event.senderId));
-  const textBody = event.textBody?.trim() ?? "";
-  const normalizedText = textBody.toLowerCase();
+  let textBody = event.textBody?.trim() ?? "";
+  let normalizedText = textBody.toLowerCase();
   const selectedCategory = state.selectedStyleCategory ?? null;
+
+  const selectedActionIndex = Number.parseInt(normalizedText, 10);
+  const selectedAction =
+    Number.isFinite(selectedActionIndex) && selectedActionIndex > 0
+      ? state.pendingConversationActions?.[selectedActionIndex - 1]
+      : undefined;
+  if (selectedAction) {
+    await Promise.resolve(setPendingConversationActions(event.senderId, undefined));
+    if (!selectedAction.inputText) {
+      const selectedPayload =
+        selectedAction.id === CONVERSATION_ACTION_RETRY_GENERATION
+          ? selectedAction.data?.retryStyle
+            ? `RETRY_STYLE_${selectedAction.data.retryStyle}`
+            : "RETRY_STYLE"
+          : selectedAction.id;
+      if (
+        await handleWhatsAppPayloadSelection({
+          payload: selectedPayload,
+          senderId: event.senderId,
+          userId: event.userId,
+          reqId: context.reqId,
+          lang: context.lang,
+        })
+      ) {
+        return;
+      }
+    } else {
+      textBody = selectedAction.inputText;
+      normalizedText = textBody.toLowerCase();
+    }
+  }
 
   if (
     state.lastPhotoUrl &&

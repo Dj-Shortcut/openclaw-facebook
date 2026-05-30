@@ -11,8 +11,9 @@ type TranslationKey =
   | "styleCategoryPicker"
   | "styleCategoryCarouselIntro"
   | "whatIsThis"
-  | "newStyle"
+  | "newImage"
   | "retry"
+  | "surpriseMe"
   | "assistantQuickActions"
   | "assistantPhotoTip"
   | "assistantPhotoTipExtra"
@@ -29,8 +30,8 @@ type TranslationKey =
   | "generatingPrompt"
   | "generatingImagePrompt"
   | "generationQueued"
+  | "whatsappGenerationFollowup"
   | "retryThisStyle"
-  | "otherStyle"
   | "backToCategories"
   | "hdUnavailable"
   | "generationUnavailable"
@@ -51,10 +52,11 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     styleCategoryCarouselIntro: ({ styleLabel }) =>
       `Hier zijn je ${styleLabel ?? ""}-stijlen. Kies er eentje hieronder.`,
     whatIsThis: "Wat doe ik?",
-    newStyle: "Nieuwe stijl",
+    newImage: "Nieuwe afbeelding",
     retry: "Probeer opnieuw",
+    surpriseMe: "Verras me",
     assistantQuickActions:
-      "Snelle acties: beschrijf een nieuwe afbeelding, pas je laatste prompt aan, of kies expliciet een stijl.",
+      "Snelle acties: beschrijf een nieuwe afbeelding, pas je laatste prompt aan, of vraag privacy-info.",
     assistantPhotoTip:
       "Tip: je kan gewoon typen wat je wilt zien, bijvoorbeeld 'maak een futuristische stad bij zonsondergang'.",
     assistantPhotoTipExtra:
@@ -74,13 +76,14 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     privacyButtonLabel: "Privacybeleid",
     aboutLeaderbot:
       "Leaderbot is gemaakt door Andy. Je mag hem gerust contacteren via Facebook.\nVolledige naam op vraag: Andy Arijs.",
-    failure: "Oeps. Probeer nog een stijl.",
+    failure: "Oeps. Probeer opnieuw of beschrijf een nieuwe afbeelding.",
     missingInputImage: "Ik kon je foto niet goed lezen. Stuur ze nog eens door aub.",
     generatingPrompt: ({ styleLabel }) => `Ik maak nu je ${styleLabel ?? ""}-stijl.`,
     generatingImagePrompt: "Ik maak nu je afbeelding.",
     generationQueued: "Je afbeelding staat in de wachtrij. Ik stuur ze zodra ze klaar is.",
+    whatsappGenerationFollowup:
+      "Beschrijf wat je wilt maken of aanpassen voor een volgende afbeelding.",
     retryThisStyle: "Opnieuw",
-    otherStyle: "Andere",
     backToCategories: "Categorieen",
     hdUnavailable: "I can share HD downloads after I generate an image.",
     generationUnavailable: "AI generation isn’t enabled yet.",
@@ -101,10 +104,11 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     styleCategoryCarouselIntro: ({ styleLabel }) =>
       `Here are your ${styleLabel ?? ""} styles. Pick one below.`,
     whatIsThis: "What is this?",
-    newStyle: "New style",
+    newImage: "New image",
     retry: "Retry",
+    surpriseMe: "Surprise me",
     assistantQuickActions:
-      "Quick actions: describe a new image, adjust your last prompt, or explicitly pick a style.",
+      "Quick actions: describe a new image, adjust your last prompt, or ask for privacy info.",
     assistantPhotoTip:
       "Tip: you can simply type what you want to see, for example 'make a futuristic city at sunset'.",
     assistantPhotoTipExtra:
@@ -124,13 +128,14 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     privacyButtonLabel: "Privacy Policy",
     aboutLeaderbot:
       "Leaderbot was made by Andy. Feel free to contact him via Facebook.\nFull name on request: Andy Arijs.",
-    failure: "Oops. Try another style.",
+    failure: "Oops. Try again or describe a new image.",
     missingInputImage: "I could not read your photo properly. Please send it again.",
     generatingPrompt: ({ styleLabel }) => `I am now making your ${styleLabel ?? ""} style.`,
     generatingImagePrompt: "I am making your image now.",
     generationQueued: "Your image is queued. I’ll send it as soon as it’s ready.",
+    whatsappGenerationFollowup:
+      "Describe what you want to make or change for the next image.",
     retryThisStyle: "Retry",
-    otherStyle: "Another",
     backToCategories: "Categories",
     hdUnavailable: "I can share HD downloads after I generate an image.",
     generationUnavailable: "AI generation isn’t enabled yet.",

@@ -70,6 +70,7 @@ export function createDefaultState(
     lastPrompt: undefined,
     lastGeneratedAt: undefined,
     lastVariantCursor: undefined,
+    pendingConversationActions: undefined,
     quota: {
       dayKey: getDayKey(now),
       count: 0,

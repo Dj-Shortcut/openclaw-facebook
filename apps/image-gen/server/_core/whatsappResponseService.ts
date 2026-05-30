@@ -1,5 +1,5 @@
 import { sendWhatsAppBotResponse } from "./botResponseAdapters";
-import type { BotResponse } from "./botResponse";
+import type { BotResponse, ConversationAction } from "./botResponse";
 import type { Lang } from "./i18n";
 import type { QuickReply } from "./messengerApi";
 import type { ConversationState } from "./messengerState";
@@ -10,6 +10,7 @@ import {
   sendWhatsAppText,
 } from "./whatsappApi";
 import { buildStateResponseText } from "./stateResponseText";
+import { setPendingConversationActions } from "./messengerState";
 
 function buildWhatsAppReplyListText(text: string, replies: QuickReply[]): string {
   if (replies.length === 0) {
@@ -55,6 +56,21 @@ export async function sendWhatsAppListReply(
   await sendWhatsAppList(senderId, text, buttonLabel, rows, sectionTitle);
 }
 
+function buildWhatsAppActionListText(
+  text: string,
+  actions: ConversationAction[]
+): string {
+  if (actions.length === 0) {
+    return text;
+  }
+
+  return [
+    text,
+    "",
+    ...actions.map((action, index) => `${index + 1}. ${action.label}`),
+  ].join("\n");
+}
+
 export async function sendWhatsAppStateText(
   senderId: string,
   state: ConversationState,
@@ -72,6 +88,10 @@ export async function sendWhatsAppBotStateResponse(
 ): Promise<void> {
   await sendWhatsAppBotResponse(response, {
     sendText: text => sendWhatsAppText(senderId, text),
+    sendActionPrompt: async (text, actions) => {
+      await Promise.resolve(setPendingConversationActions(senderId, actions));
+      await sendWhatsAppText(senderId, buildWhatsAppActionListText(text, actions));
+    },
     replyState: replyState ?? undefined,
     sendStateText: (stateName, text) =>
       sendWhatsAppStateText(senderId, stateName, text, lang),
@@ -82,6 +102,10 @@ export function createWhatsAppQuickReplySender(senderId: string) {
   return {
     sendText: (text: string) => sendWhatsAppText(senderId, text),
     sendImage: (imageUrl: string) => sendWhatsAppImage(senderId, imageUrl),
+    sendActions: async (text: string, actions: ConversationAction[]) => {
+      await Promise.resolve(setPendingConversationActions(senderId, actions));
+      await sendWhatsAppText(senderId, buildWhatsAppActionListText(text, actions));
+    },
     sendQuickReplies: (text: string, replies: QuickReply[]) =>
       sendWhatsAppText(senderId, buildWhatsAppReplyListText(text, replies)),
     sendStateQuickReplies: (

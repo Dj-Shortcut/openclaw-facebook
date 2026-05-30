@@ -1,5 +1,6 @@
 import type { MessengerSendOutcome } from "./messengerApi";
 import { safeLog } from "./messengerApi";
+import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 import { toLogUser, toUserKey } from "./privacy";
 import type { HandlerContext } from "./webhookHandlers";
 import type { BotImageContext, BotPayloadContext, BotTextContext } from "./botContext";
@@ -30,14 +31,11 @@ function decorateFeatureContext<TContext extends FeatureContext>(
     sendImage: async imageUrl => {
       await trackedCtx.sendLoggedImage(userPsid, imageUrl, requestId);
     },
-    sendQuickReplies: async (text, replies) => {
-      await trackedCtx.sendLoggedQuickReplies(userPsid, text, replies, requestId);
-    },
-    sendStateQuickReplies: async (nextState, text) => {
-      await trackedCtx.sendStateQuickReplies(
+    sendActions: async (text, actions) => {
+      await trackedCtx.sendLoggedQuickReplies(
         userPsid,
-        nextState,
         text,
+        renderMessengerQuickReplies(actions),
         requestId
       );
     },
