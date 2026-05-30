@@ -2,7 +2,7 @@
 
 Status: Not ready for broad public launch; ready for controlled production smoke after deploy.
 
-Last updated: 2026-05-26
+Last updated: 2026-05-30
 
 ## Production Flow
 
@@ -12,10 +12,11 @@ Last updated: 2026-05-26
 4. Inbound events are acknowledged quickly with `200 {"status":"ok"}` and processed in the background.
 5. `dmPolicy` gates senders through OpenClaw pairing/allowlist/open access before assistant dispatch.
 6. Text-only fast-lane messages can reply directly for greeting/help/status/image intent.
-7. Messenger image-generation intents are routed to the separate Leaderbot image-generation service.
-8. Photo-only/image-analysis messages stay in the OpenClaw assistant path instead of auto-restyling.
-9. Assistant replies are sent through Graph API `/{pageId}/messages` as `messaging_type: RESPONSE`.
-10. Errors are logged with hashed Messenger identifiers; raw PSIDs, tokens, and message text should not be logged.
+7. Messenger image-generation intents are routed to the separate Leaderbot image-generation service as prompt-first text-to-image requests.
+8. Source-photo generation only uses an uploaded/stored photo when the prompt explicitly asks to edit/restyle that photo.
+9. Photo-only/image-analysis messages stay in the OpenClaw assistant path instead of auto-restyling.
+10. Assistant replies are sent through Graph API `/{pageId}/messages` as `messaging_type: RESPONSE`.
+11. Errors are logged with hashed Messenger identifiers; raw PSIDs, tokens, and message text should not be logged.
 
 ## Blocking Issues Fixed
 
@@ -90,6 +91,8 @@ Manual Messenger smoke:
 - Send a normal text question; expect an assistant reply.
 - Send a photo without restyle text; expect analysis/clarifying assistant behavior, not a generated replacement image.
 - Send `maak een afbeelding van ...`; expect the image-gen service path.
+- Send `maak een futuristische stad bij zonsondergang`; expect text-to-image, not a style-picker default.
+- Send `maak een prompt voor een afbeelding`; expect the normal assistant path, not image generation.
 - Send a source photo plus explicit `restyle ...`; expect source-image image-gen path.
 
 ## Rollback Notes

@@ -1,15 +1,17 @@
 # Leaderbot AI Image Generator
-[![Fallow Maintainability](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Dj-Shortcut/leaderbot-fb-image-gen/main/public/badges/fallow-maintainability.json)](https://github.com/Dj-Shortcut/leaderbot-fb-image-gen/actions/workflows/fallow.yml)
+[![Fallow Maintainability](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Dj-Shortcut/openclaw-facebook/main/apps/image-gen/public/badges/fallow-maintainability.json)](https://github.com/Dj-Shortcut/openclaw-facebook/actions/workflows/fallow.yml)
 
-A Meta messaging bot with a shared bot-core for Messenger.
+A Meta messaging bot with a shared bot-core for Messenger and WhatsApp.
 
-The active product scope is photo-to-image styling and related bot infrastructure. This repository also contains some experimental or legacy experience modules, but they are not part of the current Leaderbot direction and should not be treated as planned product work.
+The active product scope is generic AI image generation and related bot infrastructure. Free text-to-image requests are the primary user experience. Source-photo editing and the older style catalog remain as compatibility paths while the generic prompt-first flow is proven.
 
 ## Product Scope
 
 Current repository focus:
 
-- photo-first image generation flows for Messenger and WhatsApp
+- free text-to-image generation from natural Messenger prompts
+- explicit source-photo edit/restyle flows when the user asks to edit a photo
+- legacy style-picker compatibility for existing Messenger and WhatsApp users
 - shared text handling across both Meta channels
 - channel-specific media ingress and outbound message rendering
 - operational tooling around state, quota, storage, security, and deployment
@@ -139,7 +141,7 @@ The repository is now organized around an explicit bot-core boundary:
 
 The built-in registry now starts with foundational bot middleware-style features such as rate limiting, style handling, conversational editing, and admin stats. Future bot features should prefer registering text/payload/image handlers there via `registerBotFeature(...)` instead of expanding unrelated web or admin codepaths.
 
-Repository changes should prioritize the current styling product and the supporting multi-channel bot/runtime foundation. Do not treat older experiment scaffolding as the roadmap by default.
+Repository changes should prioritize generic prompt-first image generation and the supporting multi-channel bot/runtime foundation. Do not treat older style-catalog or experiment scaffolding as the roadmap by default.
 
 ## Multi-channel text flow
 
@@ -149,13 +151,13 @@ Text handling is now split into three layers:
 - Shared domain logic in `server/_core/sharedTextHandler.ts` operates on that normalized shape and returns channel-agnostic bot intents.
 - Channel adapters map outbound `BotResponse` intents into Messenger or WhatsApp send calls.
 
-Current scope is intentionally limited to text messages. Media/image handling is still channel-specific and will be moved later once the shared contracts are expanded.
+Current shared scope is intentionally limited to text messages. Image generation now accepts prompt-first requests, while media/source-image handling is still channel-specific and should only move once the shared contracts are ready.
 
 Further boundary work should continue to reduce coupling between channel adapters and shared bot logic without expanding obsolete experiment paths.
 
 ## WhatsApp image flow
 
-WhatsApp now supports the same core customer journey as Messenger:
+WhatsApp still supports the legacy source-photo journey:
 
 - inbound image webhooks are accepted on the shared Meta callback route
 - WhatsApp media is downloaded through the Cloud API using the inbound media id
@@ -244,7 +246,7 @@ Legacy/app-specific environment variables also exist for SDK and data API integr
 
 ### Free-text behavior
 
-Free-text Messenger and WhatsApp messages use deterministic flow responses. There is no OpenAI text brain for unmatched chat. The only current OpenAI image provider is `openai-images`, which uses the Responses API image_generation tool flow.
+Free-text Messenger and WhatsApp messages use deterministic flow responses for non-image chat. Messenger image-generation prompts are routed to the image-generation service as text-to-image unless they explicitly ask to edit/restyle a source photo. The only current OpenAI image provider is `openai-images`, which uses the Responses API image_generation tool flow.
 
 ### Secret hygiene
 
@@ -310,9 +312,11 @@ Multi-channel text routing now also has a small adapter-level test in `server/bo
 - Keep documentation comments synchronized with implementation changes; when behavior, inputs, or outputs change, update the docblock in the same PR.
 - Remove stale comments rather than leaving outdated guidance in place.
 
-## Style additions
+## Legacy style catalog
 
-When adding or updating image styles, use [`docs/style-guide.md`](docs/style-guide.md) as the quality and consistency checklist for prompts, previews, naming, and review.
+The style catalog is a compatibility layer, not the primary roadmap. Avoid adding new preset styles unless needed for a maintained legacy flow. New product behavior should prefer generic prompt-first image generation.
+
+When a compatibility change truly needs a style update, use [`docs/style-guide.md`](docs/style-guide.md) as the quality and consistency checklist for prompts, previews, naming, and review.
 For Facebook/Messenger share assets, use [`docs/invite-image-export-checklist.md`](docs/invite-image-export-checklist.md) as the required export, naming, and cache-busting workflow.
 
 ## Security: webhook signature verification

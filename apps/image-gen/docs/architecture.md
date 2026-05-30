@@ -8,7 +8,7 @@ Leaderbot runs as one Node.js process (Express + HTTP server):
 - Accepts WhatsApp webhook traffic on the same Meta callback route.
 - Supports outbound WhatsApp Cloud API sends.
 - Shares normalized text/domain handling across Messenger and WhatsApp.
-- Executes conversation flow + generation orchestration.
+- Executes conversation flow + image-generation orchestration.
 - Serves static assets (`/generated`, web build output).
 - Exposes health/version/debug endpoints.
 - Exposes an admin face-memory kill switch when `ADMIN_TOKEN` is configured.
@@ -19,7 +19,7 @@ Primary bootstrap is in `server/_core/index.ts`.
 
 The bot runtime now has an explicit boundary in `server/_core/bot/index.ts`, with future feature hooks centralized in `server/_core/bot/features.ts`.
 
-The repository still contains some experimental experience-routing modules behind a shared router + registry boundary, but that path is not the active product direction for Leaderbot.
+The active product direction is generic prompt-first image generation. Legacy style-picker and source-photo paths stay only as compatibility surfaces while they are still tested and used.
 
 ## Architecture diagrams
 
@@ -122,7 +122,7 @@ flowchart TD
 6. Shared text/domain logic runs in `server/_core/sharedTextHandler.ts`.
 7. Shared logic returns channel-agnostic outbound intents (`BotResponse`).
 8. Channel adapters translate those intents into Messenger or WhatsApp sends.
-9. Image/style flow state is still updated directly in channel orchestration (`setFlowState`, `setPendingImage`, `setChosenStyle`, ...), with WhatsApp using plain-text prompts where Messenger uses richer UI affordances.
+9. Image flow state is still updated directly in channel orchestration (`setFlowState`, `setPendingImage`, `setChosenStyle`, ...). Messenger now treats free image prompts as text-to-image by default; source-image generation only uses a stored/uploaded photo when the user explicitly asks to edit/restyle that photo.
 10. If Messenger face memory is enabled, the first source-photo upload asks for explicit 30-day reuse consent before showing style options.
 11. If generation is triggered:
    - state -> `PROCESSING`,
@@ -233,15 +233,16 @@ The current bot boundary is intentionally incremental:
 
 This keeps Messenger and WhatsApp aligned for text without forcing media/image abstractions before the contracts are ready.
 
-## 5c) Experimental experience routing
+## 5c) Legacy and experimental paths
 
-The codebase still contains some experimental experience-routing modules that were built separately from the legacy style flow.
+The codebase still contains legacy style-catalog paths and some experimental experience-routing modules that were built before the generic image flow.
 
 Important repository rule:
 
-- these modules are not the active Leaderbot roadmap
-- current documentation and maintenance should prioritize the production styling flow
-- any future cleanup of those modules should be handled as a dedicated code-removal/refactor task
+- generic prompt-first image generation is the active roadmap
+- style/category payloads, referral styles, retry-style payloads, and WhatsApp style selection are compatibility paths
+- new product behavior should not be added to legacy style-catalog paths
+- cleanup should happen in small PRs after tests prove the replacement behavior
 
 ## 6) Deployment model
 
@@ -336,8 +337,8 @@ This means Cloudflare currently sits behind the storage proxy for durable asset 
 - Webhook acknowledgement is immediate; heavy work is deferred.
 - Inbound dedupe reduces duplicate event processing.
 - Generation failures produce user-facing retry options.
-- The image-generation success follow-up now originates as channel-neutral conversation actions and is rendered as Messenger quick replies at the channel edge.
-- Remaining Messenger-state quick reply flows to migrate incrementally: intro/help, style-category selection, style options within a category, generation failures, privacy/data deletion consent, and in-experience option prompts.
+- Image-generation success and failure follow-ups originate as channel-neutral conversation actions and are rendered as Messenger quick replies at the channel edge.
+- Remaining Messenger-state quick reply flows to migrate incrementally: intro/help, style-category selection, style options within a category, privacy/data deletion consent, and in-experience option prompts.
 - Health endpoints + version endpoint support simple monitoring.
 - Face-memory deletion is available through user command, scheduled expiry, and admin kill switch.
 

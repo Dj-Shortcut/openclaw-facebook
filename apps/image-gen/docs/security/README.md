@@ -1,11 +1,10 @@
 # Security Documentation
 
-This directory contains security-related documentation for Leaderbot.
+This directory contains current security documentation for Leaderbot.
 
 ## Files
 
-* SECURITY_IMPLEMENTATION_VERIFICATION.md – verification of implemented security controls
-* AUDIT_REPORT.md – security audit results
-* CODE_AUDIT_REPORT.md – code-level audit findings
+- `SECURITY.md` - security model, controls, and operational guidance.
+- `SECURITY_IMPLEMENTATION_VERIFICATION.md` - verification of implemented security controls.
 
-These documents track the current security posture of the system.
+Historical audit snapshots were removed from the active docs set. Track new security work in the primary backlog or as focused issues instead of reviving stale audit reports.
