@@ -1045,6 +1045,32 @@ async function processMessengerEvent(params: {
       .join("\n");
     const fastLane = hasMedia ? null : resolveMessengerFastLaneReply(text);
     if (fastLane) {
+      if (fastLane.intent === "image") {
+        logMessengerStage(params.trace, "image_gen_request_started", {
+          sourceImage: false,
+          hasPrompt: true,
+        });
+        const queued = await requestLeaderbotImageGeneration({
+          psid: senderId,
+          prompt: text,
+          reqId: params.trace.reqId,
+          timestamp,
+          trace: params.trace,
+        });
+        if (queued) {
+          return;
+        }
+        await sendMessengerText(
+          senderId,
+          "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
+          {
+            cfg: params.cfg,
+            accountId: params.account.accountId,
+          },
+        );
+        return;
+      }
+
       logMessengerStage(params.trace, "first_response_ready", { intent: fastLane.intent });
       const result = await sendMessengerText(senderId, fastLane.reply, {
         cfg: params.cfg,
@@ -1054,32 +1080,6 @@ async function processMessengerEvent(params: {
         intent: fastLane.intent,
         message: redactMessengerIdentifier(result.messageId),
       });
-      if (fastLane.intent === "image") {
-        void requestLeaderbotImageGeneration({
-          psid: senderId,
-          prompt: text,
-          reqId: params.trace.reqId,
-          timestamp,
-          trace: params.trace,
-        })
-          .then(async (queued) => {
-            if (!queued) {
-              await sendMessengerText(
-                senderId,
-                "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
-                {
-                  cfg: params.cfg,
-                  accountId: params.account.accountId,
-                },
-              );
-            }
-          })
-          .catch((error: unknown) => {
-            params.runtime.error?.(
-              danger(`messenger image generation flow failed: ${String(error)}`),
-            );
-          });
-      }
       return;
     }
     await sendMessengerSenderAction(senderId, "typing_on", {

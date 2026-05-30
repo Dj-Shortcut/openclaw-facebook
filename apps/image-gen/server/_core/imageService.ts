@@ -12,7 +12,10 @@ import {
   parseOpenAiImageResponse,
   type GenerationMetrics,
 } from "./image-generation/openAiImageClient";
-import { buildStylePrompt } from "./image-generation/promptBuilder";
+import {
+  buildStylePrompt,
+  buildTextToImagePrompt,
+} from "./image-generation/promptBuilder";
 import {
   type DownloadedSourceImage,
   logSourceImageFetchStart,
@@ -44,6 +47,7 @@ export type ImageProvider = typeof OPENAI_IMAGES_PROVIDER;
 interface ImageGenerator {
   generate(input: {
     style: Style;
+    generationKind?: "style_restyle" | "text_to_image";
     sourceImageUrl?: string;
     trustedSourceImageUrl?: boolean;
     sourceImageProvenance?: "storeInbound";
@@ -72,6 +76,7 @@ interface ImageGenerator {
 
 type GeneratorInput = {
   style: Style;
+  generationKind?: "style_restyle" | "text_to_image";
   sourceImageUrl?: string;
   trustedSourceImageUrl?: boolean;
   sourceImageProvenance?: "storeInbound";
@@ -155,13 +160,16 @@ async function prepareGenerationInput(
     input.directorMode && !input.directorPhotoAnalysis
       ? await analyzeDirectorPhoto(sourceImage, input.reqId)
       : input.directorPhotoAnalysis;
-  const prompt = input.directorMode
-    ? buildDirectorPrompt({
-        mode: input.directorMode,
-        userInstruction: input.directorInstruction,
-        photoAnalysis,
-      })
-    : buildStylePrompt(input.style, input.promptHint);
+  const prompt =
+    input.generationKind === "text_to_image"
+      ? buildTextToImagePrompt(input.promptHint ?? "")
+      : input.directorMode
+        ? buildDirectorPrompt({
+            mode: input.directorMode,
+            userInstruction: input.directorInstruction,
+            photoAnalysis,
+          })
+        : buildStylePrompt(input.style, input.promptHint);
   const promptBuildMs = Date.now() - promptStartedAt;
   console.info(
     JSON.stringify({

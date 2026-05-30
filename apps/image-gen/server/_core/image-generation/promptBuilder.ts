@@ -36,3 +36,13 @@ export function buildStylePrompt(style: Style, promptHint?: string): string {
   // TODO: move prompt-level validation here once promptBuilder owns its own tests.
   return `${basePrompt} Additional direction: ${trimmedPromptHint}.`;
 }
+
+export function buildTextToImagePrompt(prompt: string): string {
+  const trimmedPrompt = prompt.trim();
+  return [
+    "Create a new image from the user's request.",
+    "Do not reference or require an uploaded/source photo.",
+    "Follow the requested subject, scene, mood, composition, and language as closely as possible.",
+    `User request: ${trimmedPrompt}`,
+  ].join(" ");
+}

@@ -107,11 +107,13 @@ export class InternalMessengerImageRequestNotQueuedError extends Error {
 
 type FeatureContextBase = Omit<BotPayloadContext, "payload">;
 type MessengerState = Awaited<ReturnType<typeof getOrCreateState>>;
+const DEFAULT_TEXT_TO_IMAGE_STYLE: Style = "cinematic";
+
 function normalizeImageRequestText(text: string): string {
   return text.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
 }
 
-function inferStyleFromImageRequest(text: string): Style {
+function inferStyleFromImageRequest(text: string): Style | undefined {
   const direct = parseStyle(text);
   if (direct) {
     return direct;
@@ -148,7 +150,14 @@ function inferStyleFromImageRequest(text: string): Style {
     return "caricature";
   }
 
-  return "storybook-anime";
+  return undefined;
+}
+
+function isSourceImageEditRequest(text: string): boolean {
+  const normalized = normalizeImageRequestText(text);
+  return /\b(restyle|restylen|restijlen|restijl|bewerk foto|bewerk deze foto|foto bewerken|edit image|edit this image|edit photo|this photo|deze foto)\b/.test(
+    normalized
+  );
 }
 
 export type HandlerContext = {
@@ -827,6 +836,7 @@ export function createWebhookHandlers({
       psid,
       userId,
       style,
+      generationKind = "style_restyle",
       reqId,
       lang,
       sourceImageUrl,
@@ -906,7 +916,9 @@ export function createWebhookHandlers({
       rememberSendOutcome(
         await sendLoggedText(
           psid,
-          t(lang, "generatingPrompt", { styleLabel: STYLE_LABELS[style] }),
+          generationKind === "text_to_image"
+            ? t(lang, "generatingImagePrompt")
+            : t(lang, "generatingPrompt", { styleLabel: STYLE_LABELS[style] }),
           reqId
         )
       );
@@ -914,6 +926,7 @@ export function createWebhookHandlers({
       const state = await getOrCreateState(psid);
       const generationResult = await executeGenerationFlow({
         style,
+        generationKind,
         userId,
         reqId,
         promptHint,
@@ -1131,12 +1144,14 @@ export function createWebhookHandlers({
     lang: Lang,
     sourceImageUrl?: string,
     promptHint?: string,
-    directorMode?: DirectorMode
+    directorMode?: DirectorMode,
+    generationKind: MessengerGenerationJob["generationKind"] = "style_restyle"
   ): Promise<MessengerSendOutcome> {
     const job: MessengerGenerationJob = {
       psid,
       userId,
       style,
+      generationKind,
       reqId,
       lang,
       sourceImageUrl,
@@ -1318,14 +1333,14 @@ export function createWebhookHandlers({
   ): Promise<MessengerSendOutcome> {
     const lang = input.lang ?? defaultLang;
     const userId = toUserKey(input.psid);
-    const style = input.style ?? inferStyleFromImageRequest(input.prompt);
+    const inferredStyle = input.style ?? inferStyleFromImageRequest(input.prompt);
     await setLastUserMessageAt(input.psid, input.timestamp ?? Date.now());
 
     safeLog("internal_image_request_received", {
       reqId: input.reqId,
       user: toLogUser(userId),
       psidHash: anonymizePsid(input.psid).slice(0, 12),
-      style,
+      style: inferredStyle ?? null,
       hasSourceImageUrl: Boolean(input.sourceImageUrl),
     });
 
@@ -1360,21 +1375,42 @@ export function createWebhookHandlers({
         : MESSENGER_SEND_SKIPPED;
     }
 
-    const sourceImageUrl =
-      storedSourceImageUrl ?? state.lastPhotoUrl ?? undefined;
+    const wantsSourceImageEdit = isSourceImageEditRequest(input.prompt);
+    const shouldUsePreviousPhoto = Boolean(storedSourceImageUrl) || wantsSourceImageEdit;
+    const sourceImageUrl = shouldUsePreviousPhoto
+      ? storedSourceImageUrl ?? state.lastPhotoUrl ?? undefined
+      : undefined;
     if (!sourceImageUrl) {
-      await setPreselectedStyle(input.psid, style);
-      await setFlowState(input.psid, "AWAITING_PHOTO");
-      await sendLoggedText(
+      if (wantsSourceImageEdit) {
+        const style = inferredStyle ?? DEFAULT_TEXT_TO_IMAGE_STYLE;
+        await setPreselectedStyle(input.psid, style);
+        await setFlowState(input.psid, "AWAITING_PHOTO");
+        await sendLoggedText(
+          input.psid,
+          t(lang, "styleWithoutPhoto"),
+          input.reqId
+        );
+        throw new InternalMessengerImageRequestNotQueuedError(
+          "Internal Messenger image request needs a source image for edit intent"
+        );
+      }
+
+      const style = inferredStyle ?? DEFAULT_TEXT_TO_IMAGE_STYLE;
+      await setChosenStyle(input.psid, style);
+      return await runStyleGeneration(
         input.psid,
-        t(lang, "styleWithoutPhoto"),
-        input.reqId
-      );
-      throw new InternalMessengerImageRequestNotQueuedError(
-        "Internal Messenger image request has no source image to enqueue"
+        userId,
+        style,
+        input.reqId,
+        lang,
+        undefined,
+        input.prompt,
+        undefined,
+        "text_to_image"
       );
     }
 
+    const style = inferredStyle ?? DEFAULT_TEXT_TO_IMAGE_STYLE;
     await setChosenStyle(input.psid, style);
     return await runStyleGeneration(
       input.psid,

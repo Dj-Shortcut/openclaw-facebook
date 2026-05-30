@@ -73,6 +73,7 @@ type GenerationFlowResult =
 
 type ExecuteGenerationFlowInput = {
   style: Style;
+  generationKind?: "style_restyle" | "text_to_image";
   userId: string;
   reqId: string;
   promptHint?: string;
@@ -222,7 +223,7 @@ export async function executeGenerationFlow(
     trustedSourceImageUrl,
   });
 
-  if (!resolvedSourceImageUrl) {
+  if (!resolvedSourceImageUrl && input.generationKind !== "text_to_image") {
     return {
       kind: "error",
       errorKind: "missing_source_image",
@@ -231,7 +232,7 @@ export async function executeGenerationFlow(
     };
   }
 
-  if (!trustedSourceImageUrl) {
+  if (resolvedSourceImageUrl && !trustedSourceImageUrl) {
     return {
       kind: "error",
       errorKind: "invalid_source_image",
@@ -248,6 +249,7 @@ export async function executeGenerationFlow(
   try {
     const { imageUrl, proof, metrics } = await generator.generate({
       style: input.style,
+      generationKind: input.generationKind,
       sourceImageUrl: resolvedSourceImageUrl,
       trustedSourceImageUrl,
       sourceImageProvenance: trustedSourceImageUrl ? "storeInbound" : undefined,
@@ -265,7 +267,7 @@ export async function executeGenerationFlow(
       metrics,
       proof,
       mode,
-      resolvedSourceImageUrl,
+      resolvedSourceImageUrl: resolvedSourceImageUrl ?? "",
       trustedSourceImageUrl,
     };
   } catch (error) {

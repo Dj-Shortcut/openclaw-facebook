@@ -6,6 +6,7 @@ export type MessengerGenerationJob = {
   psid: string;
   userId: string;
   style: Style;
+  generationKind?: "style_restyle" | "text_to_image";
   reqId: string;
   lang: Lang;
   sourceImageUrl?: string;

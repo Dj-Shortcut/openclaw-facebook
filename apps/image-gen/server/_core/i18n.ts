@@ -27,6 +27,7 @@ type TranslationKey =
   | "failure"
   | "missingInputImage"
   | "generatingPrompt"
+  | "generatingImagePrompt"
   | "generationQueued"
   | "retryThisStyle"
   | "otherStyle"
@@ -73,6 +74,7 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     failure: "Oeps. Probeer nog een stijl.",
     missingInputImage: "Ik kon je foto niet goed lezen. Stuur ze nog eens door aub.",
     generatingPrompt: ({ styleLabel }) => `Ik maak nu je ${styleLabel ?? ""}-stijl.`,
+    generatingImagePrompt: "Ik maak nu je afbeelding.",
     generationQueued: "Je afbeelding staat in de wachtrij. Ik stuur ze zodra ze klaar is.",
     retryThisStyle: "Opnieuw",
     otherStyle: "Andere",
@@ -119,6 +121,7 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     failure: "Oops. Try another style.",
     missingInputImage: "I could not read your photo properly. Please send it again.",
     generatingPrompt: ({ styleLabel }) => `I am now making your ${styleLabel ?? ""} style.`,
+    generatingImagePrompt: "I am making your image now.",
     generationQueued: "Your image is queued. I’ll send it as soon as it’s ready.",
     retryThisStyle: "Retry",
     otherStyle: "Another",

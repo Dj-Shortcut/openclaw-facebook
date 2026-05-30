@@ -131,7 +131,7 @@ function isSourceImageFetchUrl(
 
 function installOpenAiSuccessFetchMock() {
   const sourceImage = Buffer.alloc(6000, 7);
-  const fetchMock = vi.fn(async (url: string | URL) => {
+  const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
     if (isSourceImageFetchUrl(url)) {
       return {
         ok: true,
@@ -697,6 +697,63 @@ describe("messenger webhook dedupe", () => {
         hasSourceImageUrl: true,
       })
     );
+  });
+
+  it("generates a new image from arbitrary text-only internal gateway prompts", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+    const userPrompt =
+      "Maak een futuristische productfoto van een transparante koffiemok op een marmeren tafel";
+
+    await processInternalMessengerImageRequest({
+      psid: "internal-text-image-user",
+      prompt: userPrompt,
+      reqId: "req-internal-text-image",
+      lang: "nl",
+      timestamp: 1_771_000_000_000,
+    });
+
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    expect(openAiCall).toBeDefined();
+    const prompt = promptFromOpenAiRequest(openAiCall?.[1]);
+    expect(prompt).toContain("Create a new image from the user's request.");
+    expect(prompt).toContain(userPrompt);
+    expect(prompt).not.toContain("storybook");
+    expect(sendTextMock).toHaveBeenCalledWith(
+      "internal-text-image-user",
+      "Ik maak nu je afbeelding."
+    );
+    expect(sendTextMock).not.toHaveBeenCalledWith(
+      "internal-text-image-user",
+      expect.stringContaining("Storybook Anime")
+    );
+    expect(sendImageMock).toHaveBeenCalledWith(
+      "internal-text-image-user",
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+  });
+
+  it("keeps explicit restyle requests in the photo flow when no source image exists", async () => {
+    installOpenAiSuccessFetchMock();
+
+    await expect(
+      processInternalMessengerImageRequest({
+        psid: "internal-restyle-without-photo-user",
+        prompt: "Restyle deze foto cinematic",
+        reqId: "req-internal-restyle-without-photo",
+        lang: "nl",
+        timestamp: 1_771_000_000_000,
+      })
+    ).rejects.toThrow("needs a source image");
+
+    expect(sendTextMock).toHaveBeenCalledWith(
+      "internal-restyle-without-photo-user",
+      "Stuur eerst een foto, dan maak ik die stijl voor je."
+    );
+    expect(sendImageMock).not.toHaveBeenCalled();
   });
 
   it("does not resolve an internal gateway image request until durable enqueue succeeds", async () => {
