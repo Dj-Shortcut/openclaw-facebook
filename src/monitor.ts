@@ -528,11 +528,31 @@ export function hasMessengerImageGenerationIntent(text: string): boolean {
   if (explicitImageIntent) {
     return true;
   }
-  if (/\bmaak\s+(?:me|mij)\s+(?:een|de)?\s*\S+/.test(normalized)) {
+  if (isLikelyVisualCreationRequest(normalized)) {
     return true;
   }
+  return false;
+}
 
-  return /^(doe maar|ga maar|ja graag|yes please|ok(e)?|prima|top)$/.test(normalized);
+function isLikelyVisualCreationRequest(normalizedText: string): boolean {
+  if (
+    /\b(planning|plan|lijst|tekst|bericht|mail|email|copy|caption|script|samenvatting|antwoord|reply|document|tabel|schema)\b/.test(
+      normalizedText,
+    )
+  ) {
+    return false;
+  }
+
+  return /\b(maak|genereer|create|generate)\s+(?:(?:me|mij)\s+)?(?:een|de|het|an?|the)?\s*(?:\S+\s+){0,4}?(?:foto|afbeelding|plaatje|beeld|illustratie|tekening|logo|poster|banner|cover|landschap|stad|scene|wereld|portret|character|personage|robot|soldaat|stripheld|futuristische)\b/.test(
+    normalizedText,
+  );
+}
+
+export function hasMessengerSourceImageEditIntent(text: string): boolean {
+  const normalized = normalizeFastLaneText(text);
+  return /\b(restyle|restylen|restijlen|restijl|bewerk|bewerken|foto bewerken|edit image|edit this image|edit photo)\b/.test(
+    normalized,
+  );
 }
 
 function isMessengerPromptWritingRequest(normalizedText: string): boolean {
@@ -551,7 +571,7 @@ export function resolveMessengerSourceImageGenerationPrompt(params: {
   text: string;
 }): string | null {
   const prompt = params.text.trim();
-  if (!params.hasSourceImage || !prompt || !hasMessengerImageGenerationIntent(prompt)) {
+  if (!params.hasSourceImage || !prompt || !hasMessengerSourceImageEditIntent(prompt)) {
     return null;
   }
   return prompt;
@@ -1025,6 +1045,38 @@ async function processMessengerEvent(params: {
           );
         });
       }
+    }
+    if (
+      attachments.length > 0 &&
+      !sourceImageGenerationPrompt &&
+      hasMessengerImageGenerationIntent(text)
+    ) {
+      logMessengerStage(params.trace, "image_gen_request_started", {
+        sourceImage: false,
+        hasPrompt: true,
+      });
+      const queued = await requestLeaderbotImageGeneration({
+        psid: senderId,
+        prompt: text,
+        reqId: params.trace.reqId,
+        timestamp,
+        trace: params.trace,
+      });
+      if (queued) {
+        return;
+      }
+      await sendMessengerText(
+        senderId,
+        "Ik kon de image generator nu niet bereiken. Ik kijk wel even naar je bericht.",
+        {
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+        },
+      ).catch((err: unknown) => {
+        params.runtime.error?.(
+          danger(`messenger image generator fallback failed: ${String(err)}`),
+        );
+      });
     }
     const media = await resolveMessengerMedia({ attachments, trace: params.trace });
     const mediaPayload = buildChannelInboundMediaPayload(

@@ -8,6 +8,7 @@ import {
   formatUnmatchedMessengerPageLog,
   getOpenClawActionText,
   hasMessengerImageGenerationIntent,
+  hasMessengerSourceImageEditIntent,
   redactMessengerIdentifier,
   resolveMessengerFastLaneReply,
   resolveMessengerEventTarget,
@@ -242,11 +243,11 @@ describe("hasMessengerImageGenerationIntent", () => {
       true,
     );
     expect(hasMessengerImageGenerationIntent("Ik wil een afbeelding genereren")).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Maak een futuristische stad bij zonsondergang")).toBe(
+      true,
+    );
     expect(hasMessengerImageGenerationIntent("Maak me een romeinse soldaat")).toBe(true);
     expect(hasMessengerImageGenerationIntent("Maak mij een stripheld")).toBe(true);
-    expect(hasMessengerImageGenerationIntent("Doe maar")).toBe(true);
-    expect(hasMessengerImageGenerationIntent("Ja graag")).toBe(true);
-    expect(hasMessengerImageGenerationIntent("Ok")).toBe(true);
   });
 
   it("does not match image analysis or writing-style prompts", () => {
@@ -254,6 +255,19 @@ describe("hasMessengerImageGenerationIntent", () => {
     expect(hasMessengerImageGenerationIntent("Verbeter de stijl van deze tekst")).toBe(false);
     expect(hasMessengerImageGenerationIntent("Maak een prompt voor een afbeelding")).toBe(false);
     expect(hasMessengerImageGenerationIntent("Write an image prompt for a robot")).toBe(false);
+    expect(hasMessengerImageGenerationIntent("Maak een planning voor morgen")).toBe(false);
+    expect(hasMessengerImageGenerationIntent("Maak me een planning voor morgen")).toBe(false);
+    expect(hasMessengerImageGenerationIntent("Doe maar")).toBe(false);
+    expect(hasMessengerImageGenerationIntent("Ok")).toBe(false);
+  });
+
+  it("separates source-photo edits from free image generation prompts", () => {
+    expect(hasMessengerSourceImageEditIntent("Restyle deze foto als cinematic poster")).toBe(true);
+    expect(hasMessengerSourceImageEditIntent("Bewerk deze foto met neon licht")).toBe(true);
+    expect(hasMessengerSourceImageEditIntent("Maak een futuristische stad")).toBe(false);
+    expect(hasMessengerSourceImageEditIntent("Kan je een landschap afbeelding genereren?")).toBe(
+      false,
+    );
   });
 });
 
@@ -292,6 +306,12 @@ describe("resolveMessengerSourceImageGenerationPrompt", () => {
         text: "  Restyle deze foto als cinematic poster  ",
       }),
     ).toBe("Restyle deze foto als cinematic poster");
+    expect(
+      resolveMessengerSourceImageGenerationPrompt({
+        hasSourceImage: true,
+        text: "Maak een futuristische stad bij zonsondergang",
+      }),
+    ).toBeNull();
     expect(
       resolveMessengerSourceImageGenerationPrompt({
         hasSourceImage: false,

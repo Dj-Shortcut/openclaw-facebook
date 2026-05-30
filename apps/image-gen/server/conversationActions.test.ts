@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildGenerationSuccessResponse } from "./_core/conversationActions";
+import {
+  buildGenerationFailureResponse,
+  buildGenerationSuccessResponse,
+} from "./_core/conversationActions";
 import { renderMessengerQuickReplies } from "./_core/messengerActionRenderer";
 
 describe("conversation actions", () => {
@@ -31,5 +34,15 @@ describe("conversation actions", () => {
         payload: "PRIVACY_INFO",
       },
     ]);
+  });
+
+  it("builds generation failure actions before Messenger rendering", () => {
+    expect(buildGenerationFailureResponse("en", "Try again?", "RETRY_STYLE_gold")).toEqual({
+      text: "Try again?",
+      actions: [
+        { id: "RETRY_STYLE_gold", label: "Retry" },
+        { id: "CHOOSE_STYLE", label: "Another" },
+      ],
+    });
   });
 });

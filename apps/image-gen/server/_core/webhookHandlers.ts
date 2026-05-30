@@ -10,7 +10,10 @@ import type { MessengerSendOutcome } from "./messengerApi";
 import { getGenerationMetrics } from "./image-generation/openAiImageClient";
 import { getConfiguredBaseUrl } from "./image-generation/imageServiceConfig";
 import { executeGenerationFlow } from "./generationFlow";
-import { buildGenerationSuccessResponse } from "./conversationActions";
+import {
+  buildGenerationFailureResponse,
+  buildGenerationSuccessResponse,
+} from "./conversationActions";
 import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 import {
   clearPendingImageState,
@@ -1104,22 +1107,16 @@ export function createWebhookHandlers({
       }
       await setFlowState(psid, "FAILURE");
 
+      const failureResponse = buildGenerationFailureResponse(
+        lang,
+        failureText,
+        `RETRY_STYLE_${style}`
+      );
       rememberSendOutcome(
         await sendLoggedQuickReplies(
           psid,
-          failureText,
-          [
-            {
-              content_type: "text",
-              title: t(lang, "retryThisStyle"),
-              payload: `RETRY_STYLE_${style}`,
-            },
-            {
-              content_type: "text",
-              title: t(lang, "otherStyle"),
-              payload: "CHOOSE_STYLE",
-            },
-          ],
+          failureResponse.text ?? "",
+          renderMessengerQuickReplies(failureResponse.actions),
           reqId
         )
       );
