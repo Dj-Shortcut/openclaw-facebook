@@ -1541,14 +1541,7 @@ describe("messenger webhook dedupe", () => {
     expect(sendQuickRepliesMock).toHaveBeenLastCalledWith(
       "mock-image-user",
       "Klaar ✅",
-      [
-        {
-          content_type: "text",
-          title: "Nieuwe stijl",
-          payload: "CHOOSE_STYLE",
-        },
-        { content_type: "text", title: "Privacy", payload: "PRIVACY_INFO" },
-      ]
+      [{ content_type: "text", title: "Privacy", payload: "PRIVACY_INFO" }]
     );
   });
 
@@ -2374,14 +2367,7 @@ describe("messenger greeting behavior", () => {
       2,
       "transition-order-user",
       "Klaar ✅",
-      [
-        {
-          content_type: "text",
-          title: "Nieuwe stijl",
-          payload: "CHOOSE_STYLE",
-        },
-        { content_type: "text", title: "Privacy", payload: "PRIVACY_INFO" },
-      ]
+      [{ content_type: "text", title: "Privacy", payload: "PRIVACY_INFO" }]
     );
 
     expect(sendQuickRepliesMock.mock.invocationCallOrder[0]).toBeLessThan(
@@ -2602,7 +2588,6 @@ describe("messenger greeting behavior", () => {
     });
 
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(psid, "Klaar ✅", [
-      { content_type: "text", title: "Nieuwe stijl", payload: "CHOOSE_STYLE" },
       { content_type: "text", title: "Privacy", payload: "PRIVACY_INFO" },
     ]);
   });
