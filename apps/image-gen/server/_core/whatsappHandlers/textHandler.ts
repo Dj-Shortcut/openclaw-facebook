@@ -30,6 +30,7 @@ export async function handleWhatsAppTextEvent(
   const state = await Promise.resolve(getOrCreateState(event.senderId));
   let textBody = event.textBody?.trim() ?? "";
   let normalizedText = textBody.toLowerCase();
+  let sharedEvent = event;
   const selectedCategory = state.selectedStyleCategory ?? null;
 
   const selectedActionIndex = Number.parseInt(normalizedText, 10);
@@ -60,6 +61,11 @@ export async function handleWhatsAppTextEvent(
     } else {
       textBody = selectedAction.inputText;
       normalizedText = textBody.toLowerCase();
+      sharedEvent = {
+        ...event,
+        messageType: "text",
+        textBody,
+      };
     }
   }
 
@@ -154,7 +160,7 @@ export async function handleWhatsAppTextEvent(
   }
 
   const result = await handleSharedTextMessage({
-    message: event,
+    message: sharedEvent,
     reqId: context.reqId,
     lang: context.lang,
     getState: () => Promise.resolve(getOrCreateState(event.senderId)),
@@ -166,7 +172,7 @@ export async function handleWhatsAppTextEvent(
       normalizedText: currentNormalizedText,
       hasPhoto,
     }) =>
-      runWhatsAppTextFeatures(event, context, {
+      runWhatsAppTextFeatures(sharedEvent, context, {
         state: currentState,
         messageText,
         normalizedText: currentNormalizedText,

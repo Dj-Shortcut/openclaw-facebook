@@ -887,6 +887,56 @@ describe("whatsapp webhook flow", () => {
     );
   });
 
+  it("routes numbered WhatsApp inputText actions as normal substituted text", async () => {
+    downloadWhatsAppMediaMock.mockResolvedValue({
+      buffer: Buffer.alloc(6000, 7),
+      contentType: "image/jpeg",
+    });
+    const generateSpy = vi
+      .spyOn(OpenAiImageGenerator.prototype, "generate")
+      .mockResolvedValue({
+        imageUrl: "https://leaderbot-fb-image-gen.fly.dev/generated/surprise.jpg",
+      });
+
+    try {
+      await processWhatsAppWebhookPayload(
+        createWhatsAppPayload({
+          from: "wa-user-action-input",
+          timestamp: "1710000011",
+          type: "image",
+          image: { id: "wamid-image-action-input" },
+        })
+      );
+
+      await processWhatsAppWebhookPayload(
+        createWhatsAppPayload({
+          from: "wa-user-action-input",
+          timestamp: "1710000012",
+          type: "text",
+          text: { body: "help" },
+        })
+      );
+      sendWhatsAppTextMock.mockClear();
+
+      await processWhatsAppWebhookPayload(
+        createWhatsAppPayload({
+          from: "wa-user-action-input",
+          timestamp: "1710000013",
+          type: "text",
+          text: { body: "2" },
+        })
+      );
+
+      expect(sendWhatsAppTextMock).toHaveBeenCalledWith(
+        "wa-user-action-input",
+        expect.stringContaining("ik ga voor")
+      );
+      expect(generateSpy).toHaveBeenCalled();
+    } finally {
+      generateSpy.mockRestore();
+    }
+  });
+
   it("ignores replayed WhatsApp messages with the same message id", async () => {
     const payload = createWhatsAppPayload({
       id: "wamid-replay-1",
