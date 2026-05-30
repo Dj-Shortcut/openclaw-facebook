@@ -736,6 +736,39 @@ describe("messenger webhook dedupe", () => {
     );
   });
 
+  it("keeps legacy style names inside text-to-image prompts instead of routing through style presets", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+    const userPrompt = "Maak een storybook anime landschap met mistige bergen";
+
+    await processInternalMessengerImageRequest({
+      psid: "internal-style-word-text-image-user",
+      prompt: userPrompt,
+      reqId: "req-internal-style-word-text-image",
+      lang: "nl",
+      timestamp: 1_771_000_000_000,
+    });
+
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    expect(openAiCall).toBeDefined();
+    const prompt = promptFromOpenAiRequest(openAiCall?.[1]);
+    expect(prompt).toContain("Create a new image from the user's request.");
+    expect(prompt).toContain(userPrompt);
+    expect(prompt).not.toContain("Transform this photo into a whimsical");
+    expect(getState("internal-style-word-text-image-user")?.lastStyle).toBe(
+      "cinematic"
+    );
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "internal_image_request_received",
+      expect.objectContaining({
+        reqId: "req-internal-style-word-text-image",
+        style: null,
+        hasSourceImageUrl: false,
+      })
+    );
+  });
+
   it("keeps explicit restyle requests in the photo flow when no source image exists", async () => {
     installOpenAiSuccessFetchMock();
 

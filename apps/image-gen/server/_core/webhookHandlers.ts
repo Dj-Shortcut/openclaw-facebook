@@ -1330,14 +1330,18 @@ export function createWebhookHandlers({
   ): Promise<MessengerSendOutcome> {
     const lang = input.lang ?? defaultLang;
     const userId = toUserKey(input.psid);
-    const inferredStyle = input.style ?? inferStyleFromImageRequest(input.prompt);
+    const wantsSourceImageEdit = isSourceImageEditRequest(input.prompt);
+    const legacyEditStyle =
+      input.sourceImageUrl || wantsSourceImageEdit
+        ? input.style ?? inferStyleFromImageRequest(input.prompt)
+        : undefined;
     await setLastUserMessageAt(input.psid, input.timestamp ?? Date.now());
 
     safeLog("internal_image_request_received", {
       reqId: input.reqId,
       user: toLogUser(userId),
       psidHash: anonymizePsid(input.psid).slice(0, 12),
-      style: inferredStyle ?? null,
+      style: legacyEditStyle ?? null,
       hasSourceImageUrl: Boolean(input.sourceImageUrl),
     });
 
@@ -1372,14 +1376,13 @@ export function createWebhookHandlers({
         : MESSENGER_SEND_SKIPPED;
     }
 
-    const wantsSourceImageEdit = isSourceImageEditRequest(input.prompt);
     const shouldUsePreviousPhoto = Boolean(storedSourceImageUrl) || wantsSourceImageEdit;
     const sourceImageUrl = shouldUsePreviousPhoto
       ? storedSourceImageUrl ?? state.lastPhotoUrl ?? undefined
       : undefined;
     if (!sourceImageUrl) {
       if (wantsSourceImageEdit) {
-        const style = inferredStyle ?? DEFAULT_TEXT_TO_IMAGE_STYLE;
+        const style = legacyEditStyle ?? DEFAULT_TEXT_TO_IMAGE_STYLE;
         await setPreselectedStyle(input.psid, style);
         await setFlowState(input.psid, "AWAITING_PHOTO");
         await sendLoggedText(
@@ -1392,7 +1395,7 @@ export function createWebhookHandlers({
         );
       }
 
-      const style = inferredStyle ?? DEFAULT_TEXT_TO_IMAGE_STYLE;
+      const style = DEFAULT_TEXT_TO_IMAGE_STYLE;
       await setChosenStyle(input.psid, style);
       return await runStyleGeneration(
         input.psid,
@@ -1407,7 +1410,7 @@ export function createWebhookHandlers({
       );
     }
 
-    const style = inferredStyle ?? DEFAULT_TEXT_TO_IMAGE_STYLE;
+    const style = legacyEditStyle ?? DEFAULT_TEXT_TO_IMAGE_STYLE;
     await setChosenStyle(input.psid, style);
     return await runStyleGeneration(
       input.psid,
