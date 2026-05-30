@@ -12,10 +12,6 @@ export function buildGenerationSuccessResponse(
     text: t(lang, "success"),
     actions: [
       {
-        id: CONVERSATION_ACTION_CHOOSE_STYLE,
-        label: t(lang, "newStyle"),
-      },
-      {
         id: CONVERSATION_ACTION_PRIVACY_INFO,
         label: "Privacy",
       },

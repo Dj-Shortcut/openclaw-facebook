@@ -909,7 +909,7 @@ describe("whatsapp webhook flow", () => {
     );
   });
 
-  it("maps WhatsApp fallback menu selections back to their advertised actions", async () => {
+  it("maps WhatsApp fallback menu selections back to their advertised privacy action", async () => {
     process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
     setFlowState("wa-user-7", "RESULT_READY");
 
@@ -918,7 +918,7 @@ describe("whatsapp webhook flow", () => {
         from: "wa-user-7",
         timestamp: "1710000013",
         type: "text",
-        text: { body: "2" },
+        text: { body: "1" },
       })
     );
 
