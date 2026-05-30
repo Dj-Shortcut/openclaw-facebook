@@ -24,25 +24,3 @@ export type DirectorPromptInput = {
   userInstruction?: string;
   photoAnalysis?: string;
 };
-
-export type DirectorPackId =
-  | "diva_edition"
-  | "nightlife"
-  | "festival"
-  | "business_profile"
-  | "creator_pack"
-  | "dating_profile"
-  | "promo_flyer"
-  | "old_school_nostalgia";
-
-export type DirectorPackConfig = {
-  id: DirectorPackId;
-  payload: string;
-  label: string;
-  description: string;
-  modes: DirectorMode[];
-  positioning: string;
-  promptDirective: string;
-  suggestedUseCases: string[];
-  premium: boolean;
-};
