@@ -237,6 +237,36 @@ describe("sharedTextHandler", () => {
     });
   });
 
+  it("returns the style picker response metadata for the Dutch style shortcut when a photo is already present", async () => {
+    const setFlowState = vi.fn(async () => {});
+
+    const result = await handleSharedTextMessage({
+      message: {
+        channel: "whatsapp",
+        senderId: "wa-user-nl",
+        userId: "wa-user-key-nl",
+        messageType: "text",
+        textBody: "nieuwe stijl",
+      },
+      reqId: "req-style-nl",
+      lang: "nl",
+      getState: async () =>
+        createState({
+          psid: "wa-user-nl",
+          userKey: "wa-user-key-nl",
+          lastPhotoUrl: "https://img.example/input.jpg",
+          lastPhoto: "https://img.example/input.jpg",
+        }),
+      setFlowState,
+    });
+
+    expect(setFlowState).toHaveBeenCalledWith("AWAITING_STYLE");
+    expect(result).toEqual({
+      response: { kind: "text", text: t("nl", "styleCategoryPicker") },
+      replyState: "AWAITING_STYLE",
+    });
+  });
+
   it("keeps free text deterministic without calling OpenAI text APIs", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

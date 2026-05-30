@@ -36,4 +36,4 @@ Customers should be able to log in, configure their AI, connect channels, manage
 
 The public gateway guard should stay enabled. Customer portal code must use tenant-scoped backend APIs rather than direct gateway access.
 
-Before broad customer launch, add authentication, tenant isolation tests, audit logging, billing/usage controls, and GDPR deletion verification.
+Launch readiness work is tracked in the canonical backlog: [apps/image-gen/docs/operations/todo.md](../apps/image-gen/docs/operations/todo.md).

@@ -23,6 +23,11 @@
 
 - [ ] Design the `leaderbot.live` tenant/customer portal as a real app, not a brochure site
 - [ ] Define tenant model: customer workspace, owned AI identity, channel connections, knowledge, usage, and privacy controls
+- [ ] Add portal authentication before broad customer launch
+- [ ] Add tenant isolation tests before broad customer launch
+- [ ] Add portal audit logging before broad customer launch
+- [ ] Add billing and usage controls before broad customer launch
+- [ ] Verify GDPR deletion end-to-end before broad customer launch
 - [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health routes
 - [ ] Move public legal routes (`/privacy`, `/terms`, `/data-deletion`) into the portal surface before pointing customer traffic there
 - [ ] Remove legacy campaign/style assets that do not support the portal direction

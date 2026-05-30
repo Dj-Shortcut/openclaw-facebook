@@ -130,10 +130,25 @@ export function startPublicRouteGuard({
       },
     );
 
-    proxyReq.on("error", () => {
+    let proxyFailureWritten = false;
+    const writeProxyFailure = (statusCode, message) => {
+      if (proxyFailureWritten || res.writableEnded) {
+        return;
+      }
+      proxyFailureWritten = true;
       setSecurityHeaders(res);
-      res.statusCode = 502;
-      res.end("Gateway starting");
+      res.statusCode = statusCode;
+      res.end(message);
+    };
+
+    proxyReq.setTimeout(10_000, () => {
+      req.unpipe(proxyReq);
+      proxyReq.destroy();
+      writeProxyFailure(504, "Gateway timeout");
+    });
+
+    proxyReq.on("error", () => {
+      writeProxyFailure(502, "Gateway starting");
     });
 
     req.pipe(proxyReq);
