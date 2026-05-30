@@ -1,7 +1,25 @@
+export type ConversationAction = {
+  id: string;
+  label: string;
+};
+
+export type ImageOutput = {
+  imageUrl: string;
+  caption?: string;
+};
+
+export type ConversationResponse = {
+  text?: string;
+  images?: ImageOutput[];
+  actions?: ConversationAction[];
+};
+
 export type BotResponse =
+  | ConversationResponse
   | {
       kind: "text";
       text: string;
+      actions?: ConversationAction[];
     }
   | {
       kind: "options_prompt";

@@ -10,6 +10,8 @@ import type { MessengerSendOutcome } from "./messengerApi";
 import { getGenerationMetrics } from "./image-generation/openAiImageClient";
 import { getConfiguredBaseUrl } from "./image-generation/imageServiceConfig";
 import { executeGenerationFlow } from "./generationFlow";
+import { buildGenerationSuccessResponse } from "./conversationActions";
+import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 import {
   clearPendingImageState,
   getOrCreateState,
@@ -983,11 +985,12 @@ export function createWebhookHandlers({
           prompt: promptHint,
         });
         recordGenerationSuccess(style, metrics.totalMs);
+        const successResponse = buildGenerationSuccessResponse(lang);
         rememberSendOutcome(
-          await sendStateQuickReplies(
+          await sendLoggedQuickReplies(
             psid,
-            "RESULT_READY",
-            t(lang, "success"),
+            successResponse.text ?? "",
+            renderMessengerQuickReplies(successResponse.actions),
             reqId
           )
         );

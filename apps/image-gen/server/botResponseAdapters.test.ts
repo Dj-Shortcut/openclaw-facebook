@@ -116,6 +116,52 @@ describe("botResponseAdapters", () => {
     expect(sendText).not.toHaveBeenCalled();
   });
 
+  it("maps channel-neutral actions to the dedicated Messenger action sender", async () => {
+    const sendText = vi.fn(async () => {});
+    const sendStateText = vi.fn(async () => {});
+    const sendActionPrompt = vi.fn(async () => {});
+
+    await sendMessengerBotResponse(
+      {
+        text: "What next?",
+        actions: [
+          { id: "restyle", label: "Restyle photo" },
+          { id: "retry", label: "Try again" },
+        ],
+      },
+      {
+        sendText,
+        sendStateText,
+        sendActionPrompt,
+      }
+    );
+
+    expect(sendActionPrompt).toHaveBeenCalledWith("What next?", [
+      { id: "restyle", label: "Restyle photo" },
+      { id: "retry", label: "Try again" },
+    ]);
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("falls back to plain text when neutral actions have no channel renderer", async () => {
+    const sendText = vi.fn(async () => {});
+
+    await sendWhatsAppBotResponse(
+      {
+        text: "What next?",
+        actions: [
+          { id: "restyle", label: "Restyle photo" },
+          { id: "retry", label: "Try again" },
+        ],
+      },
+      {
+        sendText,
+      }
+    );
+
+    expect(sendText).toHaveBeenCalledWith("What next?\nRestyle photo\nTry again");
+  });
+
   it("maps WhatsApp error responses to plain text", async () => {
     const sendText = vi.fn(async () => {});
 
