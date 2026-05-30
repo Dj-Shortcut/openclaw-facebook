@@ -15,7 +15,11 @@ const HELP_COMMANDS = new Set([
   "help eens",
   "help me eens",
   "wat kan je",
+  "wat doe ik",
+  "wat doe ik?",
   "what can you do",
+  "what is this",
+  "what is this?",
 ]);
 
 const SURPRISE_COMMANDS = new Set([

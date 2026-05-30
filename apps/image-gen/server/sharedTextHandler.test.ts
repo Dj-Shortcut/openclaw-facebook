@@ -66,7 +66,7 @@ describe("sharedTextHandler", () => {
       response: {
         text: t("nl", "flowExplanation"),
         actions: [
-          { id: "WHAT_IS_THIS", label: "Wat doe ik?" },
+          { id: "WHAT_IS_THIS", label: "Wat doe ik?", inputText: "Wat doe ik?" },
           { id: "PRIVACY_INFO", label: "Privacy" },
         ],
       },
@@ -105,7 +105,7 @@ describe("sharedTextHandler", () => {
       response: {
         text: t("nl", "flowExplanation"),
         actions: [
-          { id: "WHAT_IS_THIS", label: "Wat doe ik?" },
+          { id: "WHAT_IS_THIS", label: "Wat doe ik?", inputText: "Wat doe ik?" },
           { id: "PRIVACY_INFO", label: "Privacy" },
         ],
       },
@@ -175,7 +175,6 @@ describe("sharedTextHandler", () => {
       response: {
         text: t("nl", "failure"),
         actions: [
-          { id: "RETRY_GENERATION", label: "Opnieuw" },
           {
             id: "NEW_IMAGE",
             label: "Nieuwe afbeelding",

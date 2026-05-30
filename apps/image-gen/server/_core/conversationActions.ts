@@ -14,6 +14,7 @@ export function buildQuickStartResponse(lang: Lang): ConversationResponse {
       {
         id: CONVERSATION_ACTION_WHAT_IS_THIS,
         label: t(lang, "whatIsThis"),
+        inputText: t(lang, "whatIsThis"),
       },
       {
         id: CONVERSATION_ACTION_PRIVACY_INFO,
@@ -45,16 +46,11 @@ export function buildGenerationSuccessResponse(
 export function buildGenerationFailureResponse(
   lang: Lang,
   text: string,
-  retryStyle?: string
+  _retryStyle?: string
 ): ConversationResponse {
   return {
     text,
     actions: [
-      {
-        id: CONVERSATION_ACTION_RETRY_GENERATION,
-        label: t(lang, "retryThisStyle"),
-        data: retryStyle ? { retryStyle } : undefined,
-      },
       {
         id: CONVERSATION_ACTION_NEW_IMAGE,
         label: t(lang, "newImage"),

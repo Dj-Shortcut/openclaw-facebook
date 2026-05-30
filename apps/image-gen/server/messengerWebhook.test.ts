@@ -1334,7 +1334,11 @@ describe("messenger webhook dedupe", () => {
       psid,
       t("nl", "flowExplanation"),
       [
-        { content_type: "text", title: "Wat doe ik?", payload: "WHAT_IS_THIS" },
+        {
+          content_type: "text",
+          title: "Wat doe ik?",
+          payload: "OPENCLAW_ACTION:Wat%20doe%20ik%3F",
+        },
         { content_type: "text", title: "Privacy", payload: "PRIVACY_INFO" },
       ]
     );
@@ -1621,11 +1625,6 @@ describe("messenger webhook dedupe", () => {
       [
         {
           content_type: "text",
-          title: "Opnieuw",
-          payload: "RETRY_STYLE_disco",
-        },
-        {
-          content_type: "text",
           title: "Nieuwe afbeelding",
           payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
         },
@@ -1788,7 +1787,6 @@ describe("messenger webhook dedupe", () => {
       psid,
       "AI generation isn’t enabled yet.",
       [
-        { content_type: "text", title: "Opnieuw", payload: "RETRY_STYLE_gold" },
         {
           content_type: "text",
           title: "Nieuwe afbeelding",
@@ -1854,11 +1852,6 @@ describe("messenger webhook dedupe", () => {
       "openai-timeout-user",
       "Dit duurde te lang bij de beeldprovider. Probeer nog eens.",
       [
-        {
-          content_type: "text",
-          title: "Opnieuw",
-          payload: "RETRY_STYLE_clouds",
-        },
         {
           content_type: "text",
           title: "Nieuwe afbeelding",
@@ -2236,7 +2229,11 @@ describe("messenger greeting behavior", () => {
       "idle-user",
       t("nl", "flowExplanation"),
       expect.arrayContaining([
-        { content_type: "text", title: "Wat doe ik?", payload: "WHAT_IS_THIS" },
+        {
+          content_type: "text",
+          title: "Wat doe ik?",
+          payload: "OPENCLAW_ACTION:Wat%20doe%20ik%3F",
+        },
         { content_type: "text", title: "Privacy", payload: "PRIVACY_INFO" },
       ])
     );
@@ -2265,6 +2262,32 @@ describe("messenger greeting behavior", () => {
     expect(sendTextMock).toHaveBeenCalledWith(
       "action-input-user",
       t("nl", "textWithoutPhoto")
+    );
+  });
+
+  it("routes quick-start action clicks back through normal help text handling", async () => {
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: "quick-start-action-user", locale: "nl_BE" },
+              timestamp: 1,
+              message: {
+                mid: "mid-quick-start-action",
+                quick_reply: {
+                  payload: "OPENCLAW_ACTION:Wat%20doe%20ik%3F",
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(sendTextMock).toHaveBeenCalledWith(
+      "quick-start-action-user",
+      [t("nl", "textWithoutPhoto"), t("nl", "assistantPhotoTip")].join("\n\n")
     );
   });
 
@@ -2703,11 +2726,6 @@ describe("messenger greeting behavior", () => {
       psid,
       "Oeps. Probeer opnieuw of beschrijf een nieuwe afbeelding.",
       [
-        {
-          content_type: "text",
-          title: "Opnieuw",
-          payload: "RETRY_STYLE",
-        },
         {
           content_type: "text",
           title: "Nieuwe afbeelding",

@@ -12,7 +12,7 @@ describe("conversation actions", () => {
     expect(buildQuickStartResponse("nl")).toEqual({
       text: "Beschrijf wat je wilt maken, of stuur een foto als je die wilt bewerken.",
       actions: [
-        { id: "WHAT_IS_THIS", label: "Wat doe ik?" },
+        { id: "WHAT_IS_THIS", label: "Wat doe ik?", inputText: "Wat doe ik?" },
         { id: "PRIVACY_INFO", label: "Privacy" },
       ],
     });
@@ -57,22 +57,21 @@ describe("conversation actions", () => {
     expect(buildGenerationFailureResponse("en", "Try again?", "gold")).toEqual({
       text: "Try again?",
       actions: [
-        { id: "RETRY_GENERATION", label: "Retry", data: { retryStyle: "gold" } },
         { id: "NEW_IMAGE", label: "New image", inputText: "New image" },
       ],
     });
   });
 
-  it("renders retry actions to legacy Messenger payloads at the channel edge", () => {
+  it("does not render legacy retry payloads from migrated failure actions", () => {
     expect(
-      renderMessengerQuickReplies([
-        { id: "RETRY_GENERATION", label: "Retry", data: { retryStyle: "gold" } },
-      ])
+      renderMessengerQuickReplies(
+        buildGenerationFailureResponse("en", "Try again?", "gold").actions
+      )
     ).toEqual([
       {
         content_type: "text",
-        title: "Retry",
-        payload: "RETRY_STYLE_gold",
+        title: "New image",
+        payload: "OPENCLAW_ACTION:New%20image",
       },
     ]);
   });
