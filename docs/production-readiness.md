@@ -25,6 +25,7 @@ Last updated: 2026-05-30
 - Kept existing persistent workspace files safe: migration only copies missing files.
 - Repaired persisted config when it contains the known legacy default workspace path.
 - Kept OpenClaw built-in `image_generate` denied on the public gateway; Messenger image generation stays routed through Leaderbot image-gen.
+- Added the Fly public route guard: only `/facebook/webhook`, `/messenger/webhook`, and `/healthz` are exposed publicly; the broader gateway UI/API is not reachable from the internet.
 
 ## Remaining Blockers
 
@@ -51,6 +52,7 @@ Important env:
 - `OPENCLAW_STATE_DIR=/data`
 - `OPENCLAW_CONFIG_PATH=/data/openclaw.json`
 - `OPENCLAW_WORKSPACE_DIR=/data/workspace`
+- `OPENCLAW_PUBLIC_GATEWAY_GUARD=1`
 - `LEADERBOT_IMAGE_GEN_URL=https://leaderbot-fb-image-gen.fly.dev`
 
 Image-gen app must have matching internal token:

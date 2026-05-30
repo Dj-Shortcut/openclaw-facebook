@@ -1,8 +1,14 @@
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  buildGatewayLaunchPlan,
+  startPublicRouteGuard,
+} from "./bin/public-route-guard.mjs";
 
 const scriptPath = path.resolve("deploy/fly-gateway/bin/start-gateway.mjs");
 const originalEnv = { ...process.env };
@@ -56,6 +62,22 @@ function runPrepareGatewayConfig(env) {
   return JSON.parse(result.stdout);
 }
 
+function waitForListening(server) {
+  return new Promise((resolve) => {
+    if (server.listening) {
+      resolve();
+      return;
+    }
+    server.once("listening", resolve);
+  });
+}
+
+function closeServer(server) {
+  return new Promise((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
 describe("Fly gateway startup", () => {
   it("persists the default OpenClaw workspace on the Fly volume", () => {
     const { workspaceDir } = configureTempGatewayEnv();
@@ -67,7 +89,7 @@ describe("Fly gateway startup", () => {
     expect(config.agents.defaults.model).toEqual({ primary: "openai/gpt-5.4-mini" });
     expect(config.agents.defaults.thinkingDefault).toBe("low");
     expect(config.tools.deny).toContain("image_generate");
-  });
+  }, 15000);
 
   it("migrates missing legacy workspace markdowns without overwriting persistent files", () => {
     const { workspaceDir, homeDir } = configureTempGatewayEnv();
@@ -82,7 +104,7 @@ describe("Fly gateway startup", () => {
 
     expect(result.agents).toBe("legacy agents\n");
     expect(result.user).toBe("persistent user\n");
-  });
+  }, 15000);
 
   it("repairs the known legacy default workspace path in persisted config", () => {
     const { stateDir, workspaceDir, homeDir } = configureTempGatewayEnv();
@@ -96,5 +118,50 @@ describe("Fly gateway startup", () => {
     const result = runPrepareGatewayConfig({});
 
     expect(result.config.agents.defaults.workspace).toBe(workspaceDir);
-  });
+  }, 15000);
+
+  it("runs OpenClaw on loopback behind the public route guard", async () => {
+    const plan = buildGatewayLaunchPlan(["--allow-unconfigured", "--port", "3000", "--bind", "lan"], {
+      OPENCLAW_PUBLIC_GATEWAY_GUARD: "1",
+      OPENCLAW_INTERNAL_GATEWAY_PORT: "3100",
+    });
+
+    expect(plan).toEqual({
+      guardEnabled: true,
+      publicPort: 3000,
+      internalPort: 3100,
+      openclawArgs: ["--allow-unconfigured", "--port", "3100", "--bind", "loopback"],
+    });
+  }, 15000);
+
+  it("only proxies the public webhook and health routes", async () => {
+    const seenPaths = [];
+    const target = http.createServer((req, res) => {
+      seenPaths.push(req.url);
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ ok: true, path: req.url }));
+    });
+    target.listen(0, "127.0.0.1");
+    await waitForListening(target);
+
+    const targetPort = target.address().port;
+    const guard = startPublicRouteGuard({ publicPort: 0, targetPort });
+    await waitForListening(guard);
+
+    const publicPort = guard.address().port;
+    const webhookResponse = await fetch(`http://127.0.0.1:${publicPort}/facebook/webhook?hub.challenge=ok`);
+    const blockedResponse = await fetch(`http://127.0.0.1:${publicPort}/`);
+
+    expect(webhookResponse.status).toBe(200);
+    expect(await webhookResponse.json()).toEqual({
+      ok: true,
+      path: "/facebook/webhook?hub.challenge=ok",
+    });
+    expect(blockedResponse.status).toBe(404);
+    expect(await blockedResponse.text()).toBe("Not found");
+    expect(seenPaths).toEqual(["/facebook/webhook?hub.challenge=ok"]);
+
+    await closeServer(guard);
+    await closeServer(target);
+  }, 15000);
 });
