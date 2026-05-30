@@ -83,6 +83,28 @@ Over:
 
 ---
 
+## Leaderbot Customer Portal
+
+`leaderbot.live` is intended to become a real tenant/customer portal where customers manage their own AI.
+
+The portal direction is:
+
+* customer account and workspace
+* owned AI identity and instructions
+* knowledge management
+* channel connection status
+* usage, quota, billing, and privacy controls
+
+Do not treat `leaderbot.live` as:
+
+* a marketing-only brochure site
+* the public OpenClaw gateway UI
+* a place to revive old DJ/personality campaign assets
+
+The OpenClaw/Messenger gateway must stay shielded. Public traffic may reach only required webhook/health/legal/customer-app surfaces, not internal gateway admin/API surfaces.
+
+---
+
 # Architectural Direction
 
 ## Desired Ownership

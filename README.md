@@ -43,6 +43,10 @@ plugin still lives at the repository root so existing plugin packaging keeps
 working. The production image-generation service lives in
 `apps/image-gen`.
 
+`leaderbot.live` is planned as a tenant/customer portal where customers manage
+their own AI. It should not expose the private OpenClaw gateway UI/API, and it
+should not become a marketing-only brochure site.
+
 ```text
 .
 ├── apps/image-gen              # Leaderbot image-generation web/service app

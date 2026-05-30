@@ -8,6 +8,7 @@
 - Last reviewed against code: **2026-05-30**
 - Verified commit: **`158365d`** plus the follow-up documentation cleanup
 - Current direction: generic prompt-first image generation; legacy style flows are compatibility only.
+- Product direction: `leaderbot.live` becomes a tenant/customer portal for managing each customer's own AI. The OpenClaw/Messenger gateway remains shielded and is not the customer-facing app.
 
 ## Actieve backlog (open)
 
@@ -20,6 +21,11 @@
 
 ### Product & bot-ervaring
 
+- [ ] Design the `leaderbot.live` tenant/customer portal as a real app, not a brochure site
+- [ ] Define tenant model: customer workspace, owned AI identity, channel connections, knowledge, usage, and privacy controls
+- [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health routes
+- [ ] Move public legal routes (`/privacy`, `/terms`, `/data-deletion`) into the portal surface before pointing customer traffic there
+- [ ] Remove legacy campaign/style assets that do not support the portal direction
 - [ ] Observe generic text-to-image quality before removing legacy style-picker flows
 - [ ] Migrate remaining Messenger state quick replies to channel-neutral conversation actions
 - [ ] Decide which style-catalog compatibility flows can be removed after real Messenger tests
