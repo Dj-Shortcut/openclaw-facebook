@@ -93,6 +93,26 @@ describe("conversation actions", () => {
     expect(decodeMessengerActionInput(reply?.payload)).toBe("Try again");
   });
 
+  it("preserves platform consent and deletion payload actions", () => {
+    expect(
+      renderMessengerQuickReplies([
+        { id: "CONSENT_FACE_YES", label: "Yes" },
+        { id: "GDPR_DELETE_CONFIRM", label: "Delete" },
+      ])
+    ).toEqual([
+      {
+        content_type: "text",
+        title: "Yes",
+        payload: "CONSENT_FACE_YES",
+      },
+      {
+        content_type: "text",
+        title: "Delete",
+        payload: "GDPR_DELETE_CONFIRM",
+      },
+    ]);
+  });
+
   it("builds generation failure actions before Messenger rendering", () => {
     expect(buildGenerationFailureResponse("en", "Try again?")).toEqual({
       text: "Try again?",

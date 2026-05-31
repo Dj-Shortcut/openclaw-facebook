@@ -42,5 +42,13 @@ export function renderMessengerQuickReplies(
 }
 
 function renderMessengerActionPayload(action: ConversationAction): string {
+  if (!action.inputText && isPlatformPayloadActionId(action.id)) {
+    return action.id;
+  }
+
   return encodeMessengerActionInput(action.inputText ?? action.label ?? action.id);
+}
+
+function isPlatformPayloadActionId(id: string): boolean {
+  return /^(?:CONSENT_|GDPR_)/.test(id);
 }
