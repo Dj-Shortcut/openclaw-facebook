@@ -37,10 +37,10 @@ function buildPromptHint(messageText: string): string {
 
 function getSourcePhotoUrl(ctx: BotTextContext): string | undefined {
   return (
-    ctx.state.lastPhotoUrl ??
-    ctx.state.lastPhoto ??
     ctx.state.lastGeneratedUrl ??
     ctx.state.lastImageUrl ??
+    ctx.state.lastPhotoUrl ??
+    ctx.state.lastPhoto ??
     undefined
   );
 }
