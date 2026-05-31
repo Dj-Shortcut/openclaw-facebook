@@ -135,15 +135,8 @@ export const assistantCommandsFeature: BotFeature = {
       return { handled: true };
     }
 
-    await ctx.sendText(t(ctx.lang, "assistantSurprisePrompt"));
-    await ctx.runImageGeneration(
-      undefined,
-      editableImageUrl,
-      t(ctx.lang, "assistantSurprisePrompt"),
-      undefined,
-      "source_image_edit"
-    );
-
+    const response = buildAssistantPhotoHelpResponse(ctx.lang);
+    await ctx.sendActions(response.text ?? "", response.actions ?? []);
     return { handled: true };
   },
 };

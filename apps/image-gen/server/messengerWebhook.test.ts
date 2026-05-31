@@ -1962,7 +1962,7 @@ describe("disabled bot features stay out of the runtime flow", () => {
     expect(sendImageMock).not.toHaveBeenCalled();
   });
 
-  it("auto-runs surprise when a photo is already available", async () => {
+  it("turns surprise with a photo into explicit choices instead of auto-running", async () => {
     installOpenAiSuccessFetchMock();
 
     await processFacebookWebhookPayload({
@@ -2006,24 +2006,29 @@ describe("disabled bot features stay out of the runtime flow", () => {
       ],
     });
 
-    expect(sendTextMock).toHaveBeenNthCalledWith(
-      1,
+    expect(sendTextMock).not.toHaveBeenCalled();
+    expect(sendImageMock).not.toHaveBeenCalled();
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       "surprise-style-user",
-      t("nl", "assistantSurprisePrompt")
+      t("nl", "assistantQuickActions"),
+      [
+        {
+          content_type: "text",
+          title: "Pas aan",
+          payload: "OPENCLAW_ACTION:Pas%20aan",
+        },
+        {
+          content_type: "text",
+          title: "Nieuwe afbeelding",
+          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+        },
+        {
+          content_type: "text",
+          title: "Privacy",
+          payload: "OPENCLAW_ACTION:Privacy",
+        },
+      ]
     );
-    expect(sendTextMock).toHaveBeenNthCalledWith(
-      2,
-      "surprise-style-user",
-      t("nl", "generatingImagePrompt")
-    );
-    expect(sendTextMock).toHaveBeenCalledTimes(2);
-    expect(sendImageMock).toHaveBeenCalledWith(
-      "surprise-style-user",
-      expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
-      )
-    );
-    expect(sendImageMock).toHaveBeenCalledTimes(1);
   });
 
 

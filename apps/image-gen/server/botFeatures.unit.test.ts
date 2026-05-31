@@ -685,9 +685,10 @@ describe("assistantCommandsFeature", () => {
     ]);
   });
 
-  it("runs surprise as a prompt-first edit instead of picking a legacy style", async () => {
+  it("turns surprise with a photo into explicit choices instead of auto-generating", async () => {
     const runImageGeneration = vi.fn(async () => undefined);
     const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
 
     const result = await assistantCommandsFeature.onText?.(
       makeContext({
@@ -695,6 +696,7 @@ describe("assistantCommandsFeature", () => {
         messageText: "surprise me",
         hasPhoto: true,
         sendText,
+        sendActions,
         runImageGeneration,
         state: makeState({
           lastPhotoUrl: "https://img.example/original.jpg",
@@ -703,19 +705,19 @@ describe("assistantCommandsFeature", () => {
     );
 
     expect(result).toEqual({ handled: true });
-    expect(sendText).toHaveBeenCalledWith(t("en", "assistantSurprisePrompt"));
-    expect(runImageGeneration).toHaveBeenCalledWith(
-      undefined,
-      "https://img.example/original.jpg",
-      t("en", "assistantSurprisePrompt"),
-      undefined,
-      "source_image_edit"
-    );
+    expect(sendText).not.toHaveBeenCalled();
+    expect(runImageGeneration).not.toHaveBeenCalled();
+    expect(sendActions).toHaveBeenCalledWith(t("en", "assistantQuickActions"), [
+      { id: "edit_photo", label: "Edit image", inputText: "Edit image" },
+      { id: "new_image", label: "New image", inputText: "New image" },
+      { id: "privacy", label: "Privacy", inputText: "Privacy" },
+    ]);
   });
 
-  it("runs surprise on the last generated image when no upload photo is retained", async () => {
+  it("turns surprise on the last generated image into explicit choices", async () => {
     const runImageGeneration = vi.fn(async () => undefined);
     const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
 
     const result = await assistantCommandsFeature.onText?.(
       makeContext({
@@ -723,6 +725,7 @@ describe("assistantCommandsFeature", () => {
         messageText: "surprise me",
         hasPhoto: false,
         sendText,
+        sendActions,
         runImageGeneration,
         state: makeState({
           lastGeneratedUrl: "https://img.example/generated.jpg",
@@ -731,14 +734,13 @@ describe("assistantCommandsFeature", () => {
     );
 
     expect(result).toEqual({ handled: true });
-    expect(sendText).toHaveBeenCalledWith(t("en", "assistantSurprisePrompt"));
-    expect(runImageGeneration).toHaveBeenCalledWith(
-      undefined,
-      "https://img.example/generated.jpg",
-      t("en", "assistantSurprisePrompt"),
-      undefined,
-      "source_image_edit"
-    );
+    expect(sendText).not.toHaveBeenCalled();
+    expect(runImageGeneration).not.toHaveBeenCalled();
+    expect(sendActions).toHaveBeenCalledWith(t("en", "assistantQuickActions"), [
+      { id: "edit_photo", label: "Edit image", inputText: "Edit image" },
+      { id: "new_image", label: "New image", inputText: "New image" },
+      { id: "privacy", label: "Privacy", inputText: "Privacy" },
+    ]);
   });
 
   it("keeps surprise-without-photo users in prompt-first choices", async () => {
