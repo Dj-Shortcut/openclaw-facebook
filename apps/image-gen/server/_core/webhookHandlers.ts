@@ -29,7 +29,6 @@ import {
 import { t, type Lang } from "./i18n";
 import { toLogUser, toUserKey } from "./privacy";
 import { normalizeMessengerInboundImage } from "./messengerImageIngress";
-import type { Style } from "./messengerStyles";
 import { claimWebhookReplayKey } from "./webhookReplayProtection";
 import {
   type FacebookWebhookEntry,
@@ -189,7 +188,7 @@ export type HandlerContext = {
   runImageGeneration: (
     psid: string,
     userId: string,
-    style: Style | undefined,
+    style: string | undefined,
     reqId: string,
     lang: Lang,
     sourceImageUrl?: string,
@@ -873,7 +872,7 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
   async function runImageGeneration(
     psid: string,
     userId: string,
-    style: Style | undefined,
+    style: string | undefined,
     reqId: string,
     lang: Lang,
     sourceImageUrl?: string,

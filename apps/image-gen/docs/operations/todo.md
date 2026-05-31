@@ -38,6 +38,14 @@
 ### Kosten & quota
 
 - [ ] Implement cost tracking per image/request
+- [ ] Prevent duplicate Messenger webhook deliveries from starting duplicate paid turns
+- [ ] Add host-level budget gates before expensive model/image/tool calls
+- [ ] Add default-deny tool policy for untrusted Facebook-originated users
+- [ ] Add per-user daily spend caps for paired Facebook users
+- [ ] Add global Facebook daily spend cap
+- [ ] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, usage, estimated cost, final cost, and status
+- [ ] Add owner dashboard for Facebook spend by day/month, account/page, `userKey`, blocked attempts, duplicate skips, and provider failures
+- [ ] Add user-facing balance/spend overview before paid rollout
 - [ ] Add monthly cost cap enforcement
 - [ ] Send cost alerts to owner
 - [ ] Add external uptime monitor for `/healthz`

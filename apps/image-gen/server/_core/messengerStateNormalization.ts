@@ -61,7 +61,6 @@ export function createDefaultState(
     pendingSourceImageDeleteUrl: null,
     lastImageUrl: undefined,
     lastGeneratedUrl: null,
-    lastStyle: undefined,
     lastDirectorMode: undefined,
     lastPrompt: undefined,
     lastGeneratedAt: undefined,

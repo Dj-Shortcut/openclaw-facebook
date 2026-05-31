@@ -1,4 +1,3 @@
-import { type Style } from "./messengerStyles";
 import { safeLen, sha256 } from "./imageProof";
 import { buildDirectorPrompt } from "./image-generation/director/directorPromptBuilder";
 import { analyzeDirectorPhoto } from "./image-generation/director/directorPhotoAnalyzer";
@@ -46,7 +45,7 @@ export type ImageProvider = typeof OPENAI_IMAGES_PROVIDER;
 
 interface ImageGenerator {
   generate(input: {
-    style?: Style;
+    style?: string;
     generationKind?: GenerationKind;
     sourceImageUrl?: string;
     trustedSourceImageUrl?: boolean;
@@ -75,7 +74,7 @@ interface ImageGenerator {
 }
 
 type GeneratorInput = {
-  style?: Style;
+  style?: string;
   generationKind?: GenerationKind;
   sourceImageUrl?: string;
   trustedSourceImageUrl?: boolean;
@@ -129,7 +128,7 @@ function buildPromptForGeneration(input: GeneratorInput, photoAnalysis?: string)
   );
 }
 
-function styleToNaturalLanguage(style: Style): string {
+function styleToNaturalLanguage(style: string): string {
   return style.replace(/-/g, " ");
 }
 
