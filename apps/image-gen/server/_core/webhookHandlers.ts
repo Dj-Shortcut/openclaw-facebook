@@ -577,7 +577,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       lang,
       sourceImageUrl,
       promptHint,
-      directorMode,
     } = job;
     const resolvedGenerationKind =
       generationKind ?? (sourceImageUrl ? "source_image_edit" : "text_to_image");
@@ -610,7 +609,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
           });
           await setLastGenerated(psid, completedGeneration.imageUrl);
           await setLastGenerationContext(psid, {
-            directorMode,
             prompt: promptHint,
           });
           await setFlowState(psid, "IDLE");
@@ -666,7 +664,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
         userId,
         reqId,
         promptHint,
-        directorMode,
         sourceImageUrl,
         lastPhotoUrl: state.lastPhotoUrl,
         lastPhotoSource: state.lastPhotoSource,
@@ -729,7 +726,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
         await increment(psid);
         await setLastGenerated(psid, imageUrl);
         await setLastGenerationContext(psid, {
-          directorMode,
           prompt: promptHint,
         });
         recordGenerationSuccess(resolvedGenerationKind, metrics.totalMs);

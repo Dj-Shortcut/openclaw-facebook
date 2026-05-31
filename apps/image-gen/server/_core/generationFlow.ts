@@ -267,9 +267,6 @@ export async function executeGenerationFlow(
       trustedSourceImageUrl,
       sourceImageProvenance: trustedSourceImageUrl ? "storeInbound" : undefined,
       promptHint: input.promptHint,
-      directorMode: input.directorMode,
-      directorInstruction: input.directorInstruction,
-      directorPhotoAnalysis: input.directorPhotoAnalysis,
       userKey: input.userId,
       reqId: input.reqId,
     });
