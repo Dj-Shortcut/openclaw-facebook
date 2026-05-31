@@ -360,9 +360,9 @@ export function startPublicRouteGuard({
     socket.destroy();
   });
 
-  server.listen(publicPort, "0.0.0.0", () => {
+  server.listen(publicPort, () => {
     console.warn(
-      `public gateway guard listening on 0.0.0.0:${publicPort}; proxying allowed paths to ${targetHost}:${targetPort}`,
+      `public gateway guard listening on all interfaces:${publicPort}; proxying allowed paths to ${targetHost}:${targetPort}`,
     );
   });
 
