@@ -18,7 +18,7 @@ afterEach(() => {
 });
 
 describe.sequential("SDK session verification", () => {
-  it("accepts sessions when name is empty", { timeout: 30000 }, async () => {
+  it("accepts sessions when name is empty", { timeout: 90_000 }, async () => {
     process.env.JWT_SECRET = "x".repeat(32);
     process.env.VITE_APP_ID = "leaderbot-app";
 

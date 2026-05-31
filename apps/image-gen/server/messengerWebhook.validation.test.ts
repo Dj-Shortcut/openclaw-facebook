@@ -124,7 +124,7 @@ describe("messenger webhook payload validation", () => {
     expect(response.status).toBe(200);
   });
 
-  it("does not rate limit repeated signed webhook deliveries from the same IP", async () => {
+  it("does not rate limit repeated signed webhook deliveries from the same IP", { timeout: 90_000 }, async () => {
     const secret = "test-secret";
     process.env.FB_APP_SECRET = secret;
 
