@@ -1,5 +1,7 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -7,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildGatewayLaunchPlan,
+  isLocalAdminHost,
   startPublicRouteGuard,
 } from "./bin/public-route-guard.mjs";
 
@@ -76,6 +79,42 @@ function waitForListening(server) {
 function closeServer(server) {
   return new Promise((resolve, reject) => {
     server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+function requestRawUpgrade({ port, path = "/socket", cookie }) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: "127.0.0.1", port });
+    let response = "";
+    socket.setEncoding("utf8");
+    socket.setTimeout(1000, () => {
+      socket.destroy();
+      resolve(response);
+    });
+    socket.on("connect", () => {
+      const websocketKey = crypto.randomBytes(16).toString("base64");
+      socket.write(
+        [
+          `GET ${path} HTTP/1.1`,
+          `Host: 127.0.0.1:${port}`,
+          "Connection: Upgrade",
+          "Upgrade: websocket",
+          "Sec-WebSocket-Version: 13",
+          `Sec-WebSocket-Key: ${websocketKey}`,
+          cookie ? `Cookie: ${cookie}` : null,
+          "",
+          "",
+        ]
+          .filter((line) => line !== null)
+          .join("\r\n"),
+      );
+    });
+    socket.on("data", (chunk) => {
+      response += chunk;
+    });
+    socket.on("end", () => resolve(response));
+    socket.on("close", () => resolve(response));
+    socket.on("error", reject);
   });
 }
 
@@ -165,6 +204,154 @@ describe("Fly gateway startup", () => {
     await closeServer(guard);
     await closeServer(target);
   }, 15000);
+
+  it("keeps admin login disabled until an admin token is configured", async () => {
+    const target = http.createServer((_req, res) => {
+      res.end("target");
+    });
+    target.listen(0, "127.0.0.1");
+    await waitForListening(target);
+
+    const guard = startPublicRouteGuard({
+      publicPort: 0,
+      targetPort: target.address().port,
+      env: {},
+    });
+    await waitForListening(guard);
+
+    const publicPort = guard.address().port;
+    const loginResponse = await fetch(`http://127.0.0.1:${publicPort}/admin/login`);
+    const dashboardResponse = await fetch(`http://127.0.0.1:${publicPort}/`);
+
+    expect(loginResponse.status).toBe(404);
+    expect(dashboardResponse.status).toBe(404);
+
+    await closeServer(guard);
+    await closeServer(target);
+  }, 15000);
+
+  it("proxies dashboard requests only after local admin token login", async () => {
+    const seenPaths = [];
+    const target = http.createServer((req, res) => {
+      seenPaths.push(req.url);
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ ok: true, path: req.url }));
+    });
+    target.listen(0, "127.0.0.1");
+    await waitForListening(target);
+
+    const guard = startPublicRouteGuard({
+      publicPort: 0,
+      targetPort: target.address().port,
+      env: {
+        OPENCLAW_ADMIN_TOKEN: "secret-token",
+      },
+    });
+    await waitForListening(guard);
+
+    const publicPort = guard.address().port;
+    const loginPage = await fetch(`http://127.0.0.1:${publicPort}/admin/login`);
+    const failedLogin = await fetch(`http://127.0.0.1:${publicPort}/admin/login`, {
+      method: "POST",
+      body: new URLSearchParams({ token: "wrong-token" }),
+    });
+    const successfulLogin = await fetch(`http://127.0.0.1:${publicPort}/admin/login`, {
+      method: "POST",
+      body: new URLSearchParams({ token: "secret-token" }),
+      redirect: "manual",
+    });
+    const cookie = successfulLogin.headers.get("set-cookie") || "";
+    const dashboardResponse = await fetch(`http://127.0.0.1:${publicPort}/dashboard?tab=plugins`, {
+      headers: {
+        cookie,
+      },
+    });
+
+    expect(loginPage.status).toBe(200);
+    expect(await loginPage.text()).toContain("OpenClaw Admin");
+    expect(failedLogin.status).toBe(401);
+    expect(successfulLogin.status).toBe(303);
+    expect(successfulLogin.headers.get("location")).toBe("/");
+    expect(cookie).toContain("openclaw_admin=");
+    expect(dashboardResponse.status).toBe(200);
+    expect(await dashboardResponse.json()).toEqual({
+      ok: true,
+      path: "/dashboard?tab=plugins",
+    });
+    expect(seenPaths).toEqual(["/dashboard?tab=plugins"]);
+
+    await closeServer(guard);
+    await closeServer(target);
+  }, 15000);
+
+
+  it("proxies authenticated admin WebSocket upgrades through the tunnel", async () => {
+    const seenUpgrades = [];
+    const target = http.createServer((_req, res) => {
+      res.statusCode = 404;
+      res.end("not found");
+    });
+    target.on("upgrade", (req, socket) => {
+      seenUpgrades.push({
+        url: req.url,
+        host: req.headers.host,
+        forwardedHost: req.headers["x-forwarded-host"],
+        forwardedProto: req.headers["x-forwarded-proto"],
+      });
+      socket.end(
+        [
+          "HTTP/1.1 101 Switching Protocols",
+          "Connection: Upgrade",
+          "Upgrade: websocket",
+          "",
+          "upgraded",
+        ].join("\r\n"),
+      );
+    });
+    target.listen(0, "127.0.0.1");
+    await waitForListening(target);
+
+    const guard = startPublicRouteGuard({
+      publicPort: 0,
+      targetPort: target.address().port,
+      env: {
+        OPENCLAW_ADMIN_TOKEN: "secret-token",
+      },
+    });
+    await waitForListening(guard);
+
+    const publicPort = guard.address().port;
+    const blockedUpgrade = await requestRawUpgrade({ port: publicPort, path: "/ws" });
+    const successfulLogin = await fetch(`http://127.0.0.1:${publicPort}/admin/login`, {
+      method: "POST",
+      body: new URLSearchParams({ token: "secret-token" }),
+      redirect: "manual",
+    });
+    const cookie = successfulLogin.headers.get("set-cookie") || "";
+    const proxiedUpgrade = await requestRawUpgrade({ port: publicPort, path: "/ws", cookie });
+
+    expect(blockedUpgrade).toBe("");
+    expect(proxiedUpgrade).toContain("HTTP/1.1 101 Switching Protocols");
+    expect(proxiedUpgrade).toContain("upgraded");
+    expect(seenUpgrades).toEqual([
+      {
+        url: "/ws",
+        host: `127.0.0.1:${target.address().port}`,
+        forwardedHost: `127.0.0.1:${publicPort}`,
+        forwardedProto: "https",
+      },
+    ]);
+
+    await closeServer(guard);
+    await closeServer(target);
+  }, 15000);
+
+  it("rejects admin access when the request host is not local to the tunnel", () => {
+    expect(isLocalAdminHost("127.0.0.1:7300")).toBe(true);
+    expect(isLocalAdminHost("localhost:7300")).toBe(true);
+    expect(isLocalAdminHost("[::1]:7300")).toBe(true);
+    expect(isLocalAdminHost("leaderbot-openclaw-gateway.fly.dev")).toBe(false);
+  });
 
   it("returns 504 when the internal gateway proxy request times out", async () => {
     const target = http.createServer((_req, _res) => {});
