@@ -15,7 +15,6 @@ type TranslationKey =
   | "assistantQuickActions"
   | "assistantPhotoTip"
   | "assistantPhotoTipExtra"
-  | "assistantSurprisePrompt"
   | "success"
   | "processingBlocked"
   | "editRequiresPhoto"
@@ -53,7 +52,6 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Typ gewoon wat je wilt maken, bijvoorbeeld: maak een futuristische stad bij zonsondergang.",
     assistantPhotoTipExtra:
       "Bij een foto kan je meteen zeggen wat er anders moet.",
-    assistantSurprisePrompt: "Ik maak een verrassende versie van je afbeelding.",
     success: "Klaar.",
     processingBlocked: "Even geduld, je vorige afbeelding is bijna klaar.",
     editRequiresPhoto: "Stuur eerst de foto die je wilt bewerken.",
@@ -98,7 +96,6 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Just type what you want to make, for example: make a futuristic city at sunset.",
     assistantPhotoTipExtra:
       "With a photo, tell me what should change.",
-    assistantSurprisePrompt: "I am making a surprising version of your image.",
     success: "Done.",
     processingBlocked: "One sec, your previous image is almost done.",
     editRequiresPhoto: "Send the photo you want me to edit first.",

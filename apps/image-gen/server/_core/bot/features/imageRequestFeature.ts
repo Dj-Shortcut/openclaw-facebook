@@ -35,6 +35,12 @@ const VAGUE_OBJECT_PATTERNS = [
   /^(?:beter|better|anders|different|mooier|nicer)\b/iu,
 ];
 
+const FRESH_IMAGE_PATTERNS = [
+  /\b(?:nieuwe|nieuw|new|fresh)\s+(?:afbeelding|foto|image|picture)\b/iu,
+  /\b(?:zonder|without)\s+(?:mijn|my|deze|this)\s+(?:foto|afbeelding|image|photo)\b/iu,
+  /\b(?:from scratch|van nul|helemaal nieuw)\b/iu,
+];
+
 function isPromptWritingRequest(text: string): boolean {
   return PROMPT_WRITING_PATTERNS.some(pattern => pattern.test(text));
 }
@@ -66,6 +72,27 @@ function isImageGenerationRequest(text: string): boolean {
   );
 }
 
+function getSourcePhotoUrl(ctx: BotTextContext): string | undefined {
+  return (
+    ctx.state.lastPhotoUrl ??
+    ctx.state.lastPhoto ??
+    ctx.state.lastGeneratedUrl ??
+    ctx.state.lastImageUrl ??
+    undefined
+  );
+}
+
+function shouldUseExistingPhotoContext(
+  ctx: BotTextContext,
+  text: string
+): boolean {
+  return Boolean(
+    ctx.hasPhoto &&
+      getSourcePhotoUrl(ctx) &&
+      !FRESH_IMAGE_PATTERNS.some(pattern => pattern.test(text))
+  );
+}
+
 export const imageRequestFeature: BotFeature = {
   name: "imageRequest",
   async onText(ctx: BotTextContext) {
@@ -85,6 +112,17 @@ export const imageRequestFeature: BotFeature = {
     ctx.logger.info("bot_feature_text_to_image", {
       promptChars: text.length,
     });
+
+    if (shouldUseExistingPhotoContext(ctx, text)) {
+      await ctx.runImageGeneration(
+        undefined,
+        getSourcePhotoUrl(ctx),
+        text,
+        undefined,
+        "source_image_edit"
+      );
+      return { handled: true };
+    }
 
     await ctx.runImageGeneration(
       undefined,

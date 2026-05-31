@@ -19,10 +19,6 @@ function getSourcePhotoUrl(ctx: BotTextContext): string | null {
   );
 }
 
-function hasPriorGeneration(ctx: BotTextContext): boolean {
-  return Boolean(ctx.state.lastGeneratedUrl ?? ctx.state.lastImageUrl);
-}
-
 export const conversationalEditingFeature: BotFeature = {
   name: "conversationalEditing",
   async onText(ctx) {
@@ -31,7 +27,7 @@ export const conversationalEditingFeature: BotFeature = {
     }
 
     const sourcePhotoUrl = getSourcePhotoUrl(ctx);
-    if (!hasPriorGeneration(ctx) || !sourcePhotoUrl) {
+    if (!sourcePhotoUrl) {
       return { handled: false };
     }
 
