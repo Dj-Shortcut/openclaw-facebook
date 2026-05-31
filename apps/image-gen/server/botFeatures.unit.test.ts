@@ -338,6 +338,60 @@ describe("imageRequestFeature", () => {
     expect(result).toEqual({ handled: false });
     expect(runImageGeneration).not.toHaveBeenCalled();
   });
+
+  it("uses an active photo context for visual requests", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Maak een stoere poster voor mijn feest",
+        normalizedText: "maak een stoere poster voor mijn feest",
+        hasPhoto: true,
+        runImageGeneration,
+        state: makeState({
+          lastPhotoUrl: "https://img.example/source.jpg",
+          lastPhoto: "https://img.example/source.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      undefined,
+      "https://img.example/source.jpg",
+      "Maak een stoere poster voor mijn feest",
+      undefined,
+      "source_image_edit"
+    );
+  });
+
+  it("keeps explicit fresh image requests source-less even with photo context", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Maak een nieuwe afbeelding van een draak",
+        normalizedText: "maak een nieuwe afbeelding van een draak",
+        hasPhoto: true,
+        runImageGeneration,
+        state: makeState({
+          lastPhotoUrl: "https://img.example/source.jpg",
+          lastPhoto: "https://img.example/source.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      undefined,
+      undefined,
+      "Maak een nieuwe afbeelding van een draak",
+      undefined,
+      "text_to_image"
+    );
+  });
 });
 
 describe("conversationalEditingFeature", () => {
