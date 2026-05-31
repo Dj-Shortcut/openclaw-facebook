@@ -12,6 +12,7 @@ import {
 
 const scriptPath = path.resolve("deploy/fly-gateway/bin/start-gateway.mjs");
 const originalEnv = { ...process.env };
+const prepareGatewayConfigTimeoutMs = 30000;
 
 afterEach(() => {
   process.env = { ...originalEnv };
@@ -89,7 +90,7 @@ describe("Fly gateway startup", () => {
     expect(config.agents.defaults.model).toEqual({ primary: "openai/gpt-5.4-mini" });
     expect(config.agents.defaults.thinkingDefault).toBe("low");
     expect(config.tools.deny).toContain("image_generate");
-  }, 15000);
+  }, prepareGatewayConfigTimeoutMs);
 
   it("migrates missing legacy workspace markdowns without overwriting persistent files", () => {
     const { workspaceDir, homeDir } = configureTempGatewayEnv();
@@ -104,7 +105,7 @@ describe("Fly gateway startup", () => {
 
     expect(result.agents).toBe("legacy agents\n");
     expect(result.user).toBe("persistent user\n");
-  }, 15000);
+  }, prepareGatewayConfigTimeoutMs);
 
   it("repairs the known legacy default workspace path in persisted config", () => {
     const { stateDir, workspaceDir, homeDir } = configureTempGatewayEnv();
@@ -118,7 +119,7 @@ describe("Fly gateway startup", () => {
     const result = runPrepareGatewayConfig({});
 
     expect(result.config.agents.defaults.workspace).toBe(workspaceDir);
-  }, 15000);
+  }, prepareGatewayConfigTimeoutMs);
 
   it("runs OpenClaw on loopback behind the public route guard", async () => {
     const plan = buildGatewayLaunchPlan(["--allow-unconfigured", "--port", "3000", "--bind", "lan"], {

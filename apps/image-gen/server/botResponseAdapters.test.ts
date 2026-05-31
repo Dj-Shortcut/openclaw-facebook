@@ -157,6 +157,43 @@ describe("botResponseAdapters", () => {
     expect(sendText).not.toHaveBeenCalled();
   });
 
+  it("keeps explicit actions like Privacy next to inferred numbered choices", async () => {
+    const sendText = vi.fn(async () => {});
+    const sendActionPrompt = vi.fn(async () => {});
+    const text = [
+      "Ja. Wil je dat ik een:",
+      "",
+      "1. samurai-portret maak,",
+      "2. samurai-avatar/sticker maak,",
+    ].join("\n");
+
+    await sendMessengerBotResponse(
+      {
+        text,
+        actions: [{ id: "privacy", label: "Privacy", inputText: "Privacy" }],
+      },
+      {
+        sendText,
+        sendActionPrompt,
+      }
+    );
+
+    expect(sendActionPrompt).toHaveBeenCalledWith("Ja. Wil je dat ik een:", [
+      {
+        id: "choice_1",
+        label: "samurai-portret",
+        inputText: "Maak me een samurai-portret",
+      },
+      {
+        id: "choice_2",
+        label: "samurai-avatar/sticker",
+        inputText: "Maak me een samurai-avatar/sticker",
+      },
+      { id: "privacy", label: "Privacy", inputText: "Privacy" },
+    ]);
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
   it("keeps non-choice follow-up text when stripping inferred choices", async () => {
     const sendText = vi.fn(async () => {});
     const sendActionPrompt = vi.fn(async () => {});

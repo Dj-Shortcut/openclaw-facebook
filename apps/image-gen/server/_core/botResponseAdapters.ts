@@ -42,7 +42,13 @@ async function sendTextResponse(
   options: BotResponseSendOptions
 ): Promise<void> {
   if (response.actions?.length && options.sendActionPrompt) {
-    await options.sendActionPrompt(response.text, response.actions);
+    const inferredActions = inferNumberedConversationActions(response.text);
+    await options.sendActionPrompt(
+      inferredActions.length
+        ? stripNumberedConversationChoices(response.text)
+        : response.text,
+      [...inferredActions, ...response.actions]
+    );
     return;
   }
 
@@ -86,7 +92,13 @@ async function sendConversationResponse(
   }
 
   if (response.text && response.actions?.length && options.sendActionPrompt) {
-    await options.sendActionPrompt(response.text, response.actions);
+    const inferredActions = inferNumberedConversationActions(response.text);
+    await options.sendActionPrompt(
+      inferredActions.length
+        ? stripNumberedConversationChoices(response.text)
+        : response.text,
+      [...inferredActions, ...response.actions]
+    );
     return;
   }
 
