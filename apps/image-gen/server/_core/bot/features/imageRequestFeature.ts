@@ -74,10 +74,10 @@ function isImageGenerationRequest(text: string): boolean {
 
 function getSourcePhotoUrl(ctx: BotTextContext): string | undefined {
   return (
-    ctx.state.lastPhotoUrl ??
-    ctx.state.lastPhoto ??
     ctx.state.lastGeneratedUrl ??
     ctx.state.lastImageUrl ??
+    ctx.state.lastPhotoUrl ??
+    ctx.state.lastPhoto ??
     undefined
   );
 }
@@ -115,7 +115,6 @@ export const imageRequestFeature: BotFeature = {
 
     if (shouldUseExistingPhotoContext(ctx, text)) {
       await ctx.runImageGeneration(
-        undefined,
         getSourcePhotoUrl(ctx),
         text,
         undefined,
@@ -125,7 +124,6 @@ export const imageRequestFeature: BotFeature = {
     }
 
     await ctx.runImageGeneration(
-      undefined,
       undefined,
       text,
       undefined,

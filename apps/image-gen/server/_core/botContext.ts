@@ -34,7 +34,6 @@ type BotContextBase = {
   setFlowState(state: ConversationState): Promise<void>;
   clearImageContext?(): Promise<void>;
   runImageGeneration(
-    style: string | undefined,
     sourceImageUrl?: string,
     promptHint?: string,
     directorMode?: DirectorMode,

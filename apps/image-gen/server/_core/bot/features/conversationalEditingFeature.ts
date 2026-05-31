@@ -11,10 +11,10 @@ function shouldSkipConversationalEdit(normalizedText: string): boolean {
 
 function getSourcePhotoUrl(ctx: BotTextContext): string | null {
   return (
-    ctx.state.lastPhotoUrl ??
-    ctx.state.lastPhoto ??
     ctx.state.lastGeneratedUrl ??
     ctx.state.lastImageUrl ??
+    ctx.state.lastPhotoUrl ??
+    ctx.state.lastPhoto ??
     null
   );
 }
@@ -51,7 +51,6 @@ export const conversationalEditingFeature: BotFeature = {
     });
 
     await ctx.runImageGeneration(
-      undefined,
       sourcePhotoUrl,
       combinedPrompt || ctx.state.lastPrompt,
       decision.directorMode,

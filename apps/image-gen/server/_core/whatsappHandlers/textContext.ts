@@ -51,11 +51,10 @@ export function createWhatsAppTextContext(
       Promise.resolve(setFlowState(event.senderId, nextState)),
     clearImageContext: () =>
       Promise.resolve(clearPendingImageState(event.senderId)).then(() => undefined),
-    runImageGeneration: (style, sourceImageUrl, promptHint, directorMode, generationKind) =>
+    runImageGeneration: (sourceImageUrl, promptHint, directorMode, generationKind) =>
       runWhatsAppImageGeneration({
         senderId: event.senderId,
         userId: event.userId,
-        style,
         reqId: context.reqId,
         lang: context.lang,
         sourceImageUrl,

@@ -141,7 +141,6 @@ describe("freeformTransformFeature", () => {
 
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
-      undefined,
       "https://img.example/source.jpg",
       expect.stringContaining(
         "User requested transformation: Maak me een Romeinse soldaat"
@@ -169,11 +168,36 @@ describe("freeformTransformFeature", () => {
 
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
-      undefined,
       "https://img.example/source.jpg",
       expect.stringContaining(
         "User requested transformation: Kan je me een samurai maken"
       ),
+      undefined,
+      "source_image_edit"
+    );
+  });
+
+  it("uses the generated result for follow-up make-me transforms when both sources exist", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await freeformTransformFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Maak me een nog sterkere samurai",
+        normalizedText: "maak me een nog sterkere samurai",
+        runImageGeneration,
+        state: makeState({
+          lastGeneratedUrl: "https://img.example/generated.jpg",
+          lastPhotoUrl: "https://img.example/original.jpg",
+          lastPhoto: "https://img.example/original.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      "https://img.example/generated.jpg",
+      expect.stringContaining("User requested transformation: Maak me een nog sterkere samurai"),
       undefined,
       "source_image_edit"
     );
@@ -200,7 +224,6 @@ describe("freeformTransformFeature", () => {
     expect(sendText).not.toHaveBeenCalled();
     expect(runImageGeneration).toHaveBeenCalledWith(
       undefined,
-      undefined,
       "Maak me een Romeinse soldaat",
       undefined,
       "text_to_image"
@@ -224,7 +247,6 @@ describe("imageRequestFeature", () => {
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
       undefined,
-      undefined,
       "Kan je een landschap afbeelding genereren?",
       undefined,
       "text_to_image"
@@ -246,7 +268,6 @@ describe("imageRequestFeature", () => {
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
       undefined,
-      undefined,
       "Maak een draak met neonvleugels boven Antwerpen",
       undefined,
       "text_to_image"
@@ -267,7 +288,6 @@ describe("imageRequestFeature", () => {
 
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
-      undefined,
       undefined,
       "Kan je een draak met neonvleugels maken?",
       undefined,
@@ -358,9 +378,35 @@ describe("imageRequestFeature", () => {
 
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
-      undefined,
       "https://img.example/source.jpg",
       "Maak een stoere poster voor mijn feest",
+      undefined,
+      "source_image_edit"
+    );
+  });
+
+  it("uses the generated result for visual follow-ups when both sources exist", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Maak een stoere poster van dit resultaat",
+        normalizedText: "maak een stoere poster van dit resultaat",
+        hasPhoto: true,
+        runImageGeneration,
+        state: makeState({
+          lastGeneratedUrl: "https://img.example/generated.jpg",
+          lastPhotoUrl: "https://img.example/original.jpg",
+          lastPhoto: "https://img.example/original.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      "https://img.example/generated.jpg",
+      "Maak een stoere poster van dit resultaat",
       undefined,
       "source_image_edit"
     );
@@ -385,7 +431,6 @@ describe("imageRequestFeature", () => {
 
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
-      undefined,
       undefined,
       "Maak een nieuwe afbeelding van een draak",
       undefined,
@@ -429,8 +474,7 @@ describe("conversationalEditingFeature", () => {
 
       expect(result).toEqual({ handled: true });
       expect(runImageGeneration).toHaveBeenCalledWith(
-        undefined,
-        "https://img.example/source.jpg",
+        "https://img.example/generated.jpg",
         "make it disco",
         undefined,
         "source_image_edit"
@@ -478,8 +522,7 @@ describe("conversationalEditingFeature", () => {
 
       expect(result).toEqual({ handled: true });
       expect(runImageGeneration).toHaveBeenCalledWith(
-        undefined,
-        "https://img.example/source.jpg",
+        "https://img.example/generated.jpg",
         "make the background darker",
         undefined,
         "source_image_edit"
@@ -527,7 +570,6 @@ describe("conversationalEditingFeature", () => {
 
       expect(result).toEqual({ handled: true });
       expect(runImageGeneration).toHaveBeenCalledWith(
-        undefined,
         "https://img.example/source.jpg",
         "add sunglasses",
         undefined,
@@ -569,13 +611,14 @@ describe("conversationalEditingFeature", () => {
           runImageGeneration,
           state: makeState({
             lastGeneratedUrl: "https://img.example/generated.jpg",
+            lastPhotoUrl: "https://img.example/original-upload.jpg",
+            lastPhoto: "https://img.example/original-upload.jpg",
           }),
         })
       );
 
       expect(result).toEqual({ handled: true });
       expect(runImageGeneration).toHaveBeenCalledWith(
-        undefined,
         "https://img.example/generated.jpg",
         "make it darker",
         undefined,

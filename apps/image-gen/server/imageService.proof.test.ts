@@ -262,7 +262,6 @@ describe("OpenAi image-to-image proof", () => {
 
       const generator = new OpenAiImageGenerator();
       const result = await generator.generate({
-        style,
         ...createStoredSourceImageInput({
           promptHint,
           userKey: "user-1",
@@ -280,68 +279,6 @@ describe("OpenAi image-to-image proof", () => {
       expect(result.metrics.openAiMs).toBeGreaterThanOrEqual(0);
     }
   );
-
-  it("keeps cyberpunk as prompt-first natural-language direction", async () => {
-    const fetchMock = installStoredSourcePromptFetchMock(prompt => {
-      expect(prompt).toContain("User request: Apply cyberpunk as natural-language visual direction.");
-      expect(prompt).toContain("not as a preset style catalog");
-      expect(prompt).not.toContain("neon signage glow");
-      expect(prompt).not.toContain("rain-slick reflections");
-    });
-
-    const generator = new OpenAiImageGenerator();
-    await generator.generate({
-      style: "cyberpunk",
-      ...createStoredSourceImageInput({
-        userKey: "user-1",
-        reqId: "req-cyberpunk-prompt",
-      }),
-    });
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps Norman Blackwell as prompt-first natural-language direction", async () => {
-    const fetchMock = installStoredSourcePromptFetchMock(prompt => {
-      expect(prompt).toContain(
-        "User request: Apply norman blackwell as natural-language visual direction."
-      );
-      expect(prompt).toContain("not as a preset style catalog");
-      expect(prompt).not.toContain("warm storybook lighting");
-      expect(prompt).not.toContain("vintage family magazine cover");
-    });
-
-    const generator = new OpenAiImageGenerator();
-    await generator.generate({
-      style: "norman-blackwell",
-      ...createStoredSourceImageInput({
-        userKey: "user-1",
-        reqId: "req-norman-blackwell-prompt",
-      }),
-    });
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps oil-paint as prompt-first natural-language direction", async () => {
-    const fetchMock = installStoredSourcePromptFetchMock(prompt => {
-      expect(prompt).toContain("User request: Apply oil paint as natural-language visual direction.");
-      expect(prompt).toContain("not as a preset style catalog");
-      expect(prompt).not.toContain("museum-grade palette");
-      expect(prompt).not.toContain("textured canvas grain");
-    });
-
-    const generator = new OpenAiImageGenerator();
-    await generator.generate({
-      style: "oil-paint",
-      ...createStoredSourceImageInput({
-        userKey: "user-1",
-        reqId: "req-oil-paint-prompt",
-      }),
-    });
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
 
   it("hard-fails before OpenAI call when input image is too small", async () => {
     process.env.OPENAI_API_KEY = "dummy-key";
@@ -369,7 +306,6 @@ describe("OpenAi image-to-image proof", () => {
     const generator = new OpenAiImageGenerator();
     await expect(
       generator.generate({
-        style: "disco",
         ...createStoredSourceImageInput({
           userKey: "user-1",
           reqId: "req-2",
@@ -409,7 +345,6 @@ describe("OpenAi image-to-image proof", () => {
     const generator = new OpenAiImageGenerator();
     await expect(
       generator.generate({
-        style: "disco",
         ...createStoredSourceImageInput({
           userKey: "user-1",
           reqId: "req-too-large-header",
@@ -452,7 +387,6 @@ describe("OpenAi image-to-image proof", () => {
 
     const generator = new OpenAiImageGenerator();
     const result = await generator.generate({
-      style: "disco",
       ...createStoredSourceImageInput({
         userKey: "user-1",
         reqId: "req-3",
@@ -477,7 +411,6 @@ describe("OpenAi image-to-image proof", () => {
     const generator = new OpenAiImageGenerator();
     await expect(
       generator.generate({
-        style: "disco",
         sourceImageUrl: "https://127.0.0.1/source.jpg",
         userKey: "user-1",
         reqId: "req-private-ip",
@@ -512,7 +445,6 @@ describe("OpenAi image-to-image proof", () => {
 
     const generator = new OpenAiImageGenerator();
     const result = await generator.generate({
-      style: "disco",
       ...createStoredSourceImageInput({
         userKey: "user-1",
         reqId: "req-allowlist",
@@ -536,7 +468,6 @@ describe("OpenAi image-to-image proof", () => {
     const generator = new OpenAiImageGenerator();
     await expect(
       generator.generate({
-        style: "disco",
         sourceImageUrl: "https://other.example/source.jpg",
         userKey: "user-1",
         reqId: "req-deny-allowlist",
@@ -561,7 +492,6 @@ describe("OpenAi image-to-image proof", () => {
     const generator = new OpenAiImageGenerator();
     await expect(
       generator.generate({
-        style: "disco",
         sourceImageUrl: "https://img.example/source.jpg",
         userKey: "user-1",
         reqId: "req-private-dns-resolution",
@@ -582,7 +512,6 @@ describe("OpenAi image-to-image proof", () => {
     const generator = new OpenAiImageGenerator();
     await expect(
       generator.generate({
-        style: "disco",
         sourceImageUrl: "https://pub-storage.example/inbound-source/test.jpg",
         trustedSourceImageUrl: true,
         sourceImageProvenance: "storeInbound",
@@ -605,7 +534,6 @@ describe("OpenAi image-to-image proof", () => {
     const generator = new OpenAiImageGenerator();
     await expect(
       generator.generate({
-        style: "disco",
         sourceImageUrl: "https://pub-storage.example/inbound-source/test.jpg",
         trustedSourceImageUrl: true,
         userKey: "user-1",
@@ -627,7 +555,6 @@ describe("OpenAi image-to-image proof", () => {
     const generator = new OpenAiImageGenerator();
     await expect(
       generator.generate({
-        style: "disco",
         sourceImageUrl: "https://user:pass@img.example/source.jpg",
         userKey: "user-1",
         reqId: "req-embedded-credentials",
@@ -648,7 +575,6 @@ describe("OpenAi image-to-image proof", () => {
     const generator = new OpenAiImageGenerator();
     await expect(
       generator.generate({
-        style: "disco",
         sourceImageUrl: "https://img.example:8443/source.jpg",
         userKey: "user-1",
         reqId: "req-non-standard-port",
@@ -669,7 +595,6 @@ describe("OpenAi image-to-image proof", () => {
     const generator = new OpenAiImageGenerator();
     await expect(
       generator.generate({
-        style: "disco",
         sourceImageUrl: "https://img.example/inbound/../source.jpg",
         userKey: "user-1",
         reqId: "req-path-traversal",
@@ -690,7 +615,6 @@ describe("OpenAi image-to-image proof", () => {
     const generator = new OpenAiImageGenerator();
     await expect(
       generator.generate({
-        style: "disco",
         sourceImageUrl: "https://img.example/inbound/%2e%2e/source.jpg",
         userKey: "user-1",
         reqId: "req-encoded-path-traversal",
@@ -741,7 +665,6 @@ describe("OpenAi image-to-image proof", () => {
 
     const generator = new OpenAiImageGenerator();
     const result = await generator.generate({
-      style: "disco",
       ...createStoredSourceImageInput({
         userKey: "user-1",
         reqId: "req-insecure-app-base-url",
@@ -791,7 +714,6 @@ describe("OpenAi image-to-image proof", () => {
 
     const generator = new OpenAiImageGenerator();
     const result = await generator.generate({
-      style: "disco",
       ...createStoredSourceImageInput({
         userKey: "user-1",
         reqId: "req-openai-retry",
@@ -842,7 +764,6 @@ describe("OpenAi image-to-image proof", () => {
     const generator = new OpenAiImageGenerator();
     await expect(
       generator.generate({
-        style: "disco",
         ...createStoredSourceImageInput({
           userKey: "user-1",
           reqId: "req-openai-budget-exceeded",
@@ -863,7 +784,6 @@ describe("OpenAi image-to-image proof", () => {
     const generator = new OpenAiImageGenerator();
     await expect(
       generator.generate({
-        style: "disco",
         sourceImageUrl: "https://img.example/source.jpg",
         userKey: "user-1",
         reqId: "req-no-allowlist",
@@ -900,7 +820,6 @@ describe("OpenAi image-to-image proof", () => {
     const generator = new OpenAiImageGenerator();
     await expect(
       generator.generate({
-        style: "disco",
         ...createStoredSourceImageInput({
           userKey: "user-1",
           reqId: "req-redirect-error",
@@ -937,7 +856,6 @@ describe("OpenAi image-to-image proof", () => {
     const generator = new OpenAiImageGenerator();
     await expect(
       generator.generate({
-        style: "disco",
         ...createStoredSourceImageInput({
           userKey: "user-1",
           reqId: "req-openai-timeout-no-retry",
@@ -974,7 +892,6 @@ describe("OpenAi image-to-image proof", () => {
     const generator = new OpenAiImageGenerator();
     await expect(
       generator.generate({
-        style: "disco",
         ...createStoredSourceImageInput({
           userKey: "user-1",
           reqId: "req-empty-output-buffer",
@@ -1017,7 +934,6 @@ describe("OpenAi image-to-image proof", () => {
     const generator = new OpenAiImageGenerator();
     await expect(
       generator.generate({
-        style: "disco",
         ...createStoredSourceImageInput({
           userKey: "user-1",
           reqId: "req-output-too-large",

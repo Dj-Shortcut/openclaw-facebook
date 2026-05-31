@@ -5,7 +5,6 @@ import type { GenerationKind } from "./image-generation/generationTypes";
 export type MessengerGenerationJob = {
   psid: string;
   userId: string;
-  style?: string;
   generationKind?: GenerationKind;
   reqId: string;
   lang: Lang;

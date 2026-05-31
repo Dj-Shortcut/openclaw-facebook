@@ -77,7 +77,6 @@ describe("OpenAi image delivery via object storage", () => {
 
     const generator = new OpenAiImageGenerator();
     const result = await generator.generate({
-      style: "disco",
       sourceImageUrl: STORED_SOURCE_IMAGE_URL,
       trustedSourceImageUrl: true,
       sourceImageProvenance: "storeInbound",
