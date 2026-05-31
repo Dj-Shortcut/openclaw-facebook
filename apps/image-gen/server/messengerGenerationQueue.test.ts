@@ -552,6 +552,7 @@ describe("messengerGenerationQueue", () => {
     const redis = {
       del: vi.fn(async () => 0),
       get: vi.fn(async () => null),
+      set: vi.fn(async () => "OK"),
       llen: vi.fn(async (key: string) => {
         if (key.endsWith(":processing")) return processing.length;
         if (key.endsWith(":dead")) return dead.length;
@@ -586,23 +587,26 @@ describe("messengerGenerationQueue", () => {
     expect(dead).toEqual([invalidJob]);
   });
 
-  it("dead-letters style-restyle jobs without a valid legacy style", async () => {
+  it("normalizes stale style-restyle jobs to prompt-first source-image edits", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
     isRedisEnabledMock.mockReturnValue(true);
-    const invalidJob = JSON.stringify({
+    const legacyJob = JSON.stringify({
       psid: "user-1",
       userId: "user-key-1",
       generationKind: "style_restyle",
-      reqId: "req-missing-style",
+      reqId: "req-legacy-style-kind",
       lang: "nl",
+      sourceImageUrl: "https://img.example/source.jpg",
+      promptHint: "make it brighter",
     });
-    const queue: string[] = [invalidJob];
+    const queue: string[] = [legacyJob];
     const processing: string[] = [];
     const dead: string[] = [];
     const redis = {
       del: vi.fn(async () => 0),
       get: vi.fn(async () => null),
+      set: vi.fn(async () => "OK"),
       llen: vi.fn(async (key: string) => {
         if (key.endsWith(":processing")) return processing.length;
         if (key.endsWith(":dead")) return dead.length;
@@ -631,8 +635,14 @@ describe("messengerGenerationQueue", () => {
 
     await expect(drainMessengerGenerationQueue(processor)).resolves.toBeUndefined();
 
-    expect(processor).not.toHaveBeenCalled();
-    expect(dead).toEqual([invalidJob]);
+    expect(processor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        generationKind: "source_image_edit",
+        promptHint: "make it brighter",
+        sourceImageUrl: "https://img.example/source.jpg",
+      })
+    );
+    expect(dead).toEqual([]);
   });
 
   it("dead-letters structurally invalid pending job payloads", async () => {

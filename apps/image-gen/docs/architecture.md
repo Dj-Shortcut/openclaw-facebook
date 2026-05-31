@@ -171,7 +171,7 @@ Core files:
 - stage/status (`IDLE` .. `FAILURE`)
 - latest photo URL fields
 - latest photo provenance (`external` vs `stored`)
-- optional legacy `lastStyle` compatibility for explicit `style_restyle` jobs only
+- optional legacy `lastStyle` compatibility for persisted historical state only
 - preferred language
 - pending/generated image references
 - optional face-memory consent and retained source-image URL fields
@@ -241,7 +241,7 @@ Important repository rule:
 
 - generic prompt-first image generation is the active roadmap
 - legacy Messenger style payloads (`CHOOSE_STYLE`, `STYLE_*`, `RETRY_STYLE*`) are treated as stale/unknown payloads, not active product choices
-- internal preset prompts may remain only as backend compatibility for explicit `style_restyle` jobs while text-to-image and source-image edits use prompt-first builders
+- stale internal `style_restyle` jobs are normalized to prompt-first `source_image_edit` jobs
 - new product behavior should originate in conversation responses/actions and be rendered at the channel edge
 - remaining cleanup should happen in small PRs after tests prove the replacement behavior
 

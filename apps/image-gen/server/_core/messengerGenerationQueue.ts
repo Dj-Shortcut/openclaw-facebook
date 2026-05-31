@@ -33,10 +33,10 @@ const MESSENGER_GENERATION_DIRECTOR_MODES = new Set([
   "old_money",
 ]);
 const MESSENGER_GENERATION_KINDS = new Set([
-  "style_restyle",
   "text_to_image",
   "source_image_edit",
 ]);
+const LEGACY_MESSENGER_GENERATION_KINDS = new Set(["style_restyle"]);
 let drainPromise: Promise<void> | null = null;
 
 type GenerationJobProcessor = (
@@ -377,7 +377,9 @@ function isOptionalDirectorMode(value: unknown): boolean {
 function isOptionalGenerationKind(value: unknown): boolean {
   return (
     value === undefined ||
-    (typeof value === "string" && MESSENGER_GENERATION_KINDS.has(value))
+    (typeof value === "string" &&
+      (MESSENGER_GENERATION_KINDS.has(value) ||
+        LEGACY_MESSENGER_GENERATION_KINDS.has(value)))
   );
 }
 
@@ -414,15 +416,17 @@ function parseMessengerGenerationJob(
     return null;
   }
 
-  if (value.generationKind === "style_restyle" && !isValidGenerationStyle(value.style)) {
-    return null;
-  }
-
   if (value.style !== undefined && !isValidGenerationStyle(value.style)) {
     return null;
   }
 
-  return value as MessengerGenerationJob;
+  return {
+    ...value,
+    generationKind:
+      value.generationKind === "style_restyle"
+        ? "source_image_edit"
+        : value.generationKind,
+  } as MessengerGenerationJob;
 }
 
 function parseReservedGenerationJob(raw: string): ReservedGenerationJob | null {

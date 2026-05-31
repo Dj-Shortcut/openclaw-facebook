@@ -615,7 +615,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
           });
           await setLastGenerated(psid, completedGeneration.imageUrl);
           await setLastGenerationContext(psid, {
-            style: resolvedGenerationKind === "style_restyle" ? style : undefined,
             directorMode,
             prompt: promptHint,
           });
@@ -736,7 +735,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
         await increment(psid);
         await setLastGenerated(psid, imageUrl);
         await setLastGenerationContext(psid, {
-          style: resolvedGenerationKind === "style_restyle" ? style : undefined,
           directorMode,
           prompt: promptHint,
         });
