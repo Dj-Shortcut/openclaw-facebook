@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildGatewayLaunchPlan,
+  isLocalAdminHost,
   startPublicRouteGuard,
 } from "./bin/public-route-guard.mjs";
 
@@ -160,6 +161,117 @@ describe("Fly gateway startup", () => {
     expect(blockedResponse.status).toBe(404);
     expect(await blockedResponse.text()).toBe("Not found");
     expect(seenPaths).toEqual(["/facebook/webhook?hub.challenge=ok"]);
+
+    await closeServer(guard);
+    await closeServer(target);
+  }, 15000);
+
+  it("keeps admin login disabled until an admin token is configured", async () => {
+    const target = http.createServer((_req, res) => {
+      res.end("target");
+    });
+    target.listen(0, "127.0.0.1");
+    await waitForListening(target);
+
+    const guard = startPublicRouteGuard({
+      publicPort: 0,
+      targetPort: target.address().port,
+      env: {},
+    });
+    await waitForListening(guard);
+
+    const publicPort = guard.address().port;
+    const loginResponse = await fetch(`http://127.0.0.1:${publicPort}/admin/login`);
+    const dashboardResponse = await fetch(`http://127.0.0.1:${publicPort}/`);
+
+    expect(loginResponse.status).toBe(404);
+    expect(dashboardResponse.status).toBe(404);
+
+    await closeServer(guard);
+    await closeServer(target);
+  }, 15000);
+
+  it("proxies dashboard requests only after local admin token login", async () => {
+    const seenPaths = [];
+    const target = http.createServer((req, res) => {
+      seenPaths.push(req.url);
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ ok: true, path: req.url }));
+    });
+    target.listen(0, "127.0.0.1");
+    await waitForListening(target);
+
+    const guard = startPublicRouteGuard({
+      publicPort: 0,
+      targetPort: target.address().port,
+      env: {
+        OPENCLAW_ADMIN_TOKEN: "secret-token",
+      },
+    });
+    await waitForListening(guard);
+
+    const publicPort = guard.address().port;
+    const loginPage = await fetch(`http://127.0.0.1:${publicPort}/admin/login`);
+    const failedLogin = await fetch(`http://127.0.0.1:${publicPort}/admin/login`, {
+      method: "POST",
+      body: new URLSearchParams({ token: "wrong-token" }),
+    });
+    const successfulLogin = await fetch(`http://127.0.0.1:${publicPort}/admin/login`, {
+      method: "POST",
+      body: new URLSearchParams({ token: "secret-token" }),
+      redirect: "manual",
+    });
+    const cookie = successfulLogin.headers.get("set-cookie") || "";
+    const dashboardResponse = await fetch(`http://127.0.0.1:${publicPort}/dashboard?tab=plugins`, {
+      headers: {
+        cookie,
+      },
+    });
+
+    expect(loginPage.status).toBe(200);
+    expect(await loginPage.text()).toContain("OpenClaw Admin");
+    expect(failedLogin.status).toBe(401);
+    expect(successfulLogin.status).toBe(303);
+    expect(successfulLogin.headers.get("location")).toBe("/");
+    expect(cookie).toContain("openclaw_admin=");
+    expect(dashboardResponse.status).toBe(200);
+    expect(await dashboardResponse.json()).toEqual({
+      ok: true,
+      path: "/dashboard?tab=plugins",
+    });
+    expect(seenPaths).toEqual(["/dashboard?tab=plugins"]);
+
+    await closeServer(guard);
+    await closeServer(target);
+  }, 15000);
+
+  it("rejects admin access when the request host is not local to the tunnel", () => {
+    expect(isLocalAdminHost("127.0.0.1:7300")).toBe(true);
+    expect(isLocalAdminHost("localhost:7300")).toBe(true);
+    expect(isLocalAdminHost("[::1]:7300")).toBe(true);
+    expect(isLocalAdminHost("leaderbot-openclaw-gateway.fly.dev")).toBe(false);
+  });
+
+  it("returns 504 when the internal gateway proxy request times out", async () => {
+    const target = http.createServer((_req, _res) => {});
+    target.listen(0, "127.0.0.1");
+    await waitForListening(target);
+
+    const targetPort = target.address().port;
+    const guard = startPublicRouteGuard({
+      publicPort: 0,
+      targetPort,
+      env: {
+        OPENCLAW_PUBLIC_GATEWAY_PROXY_TIMEOUT_MS: "25",
+      },
+    });
+    await waitForListening(guard);
+
+    const publicPort = guard.address().port;
+    const response = await fetch(`http://127.0.0.1:${publicPort}/healthz`);
+
+    expect(response.status).toBe(504);
+    expect(await response.text()).toBe("Gateway timeout");
 
     await closeServer(guard);
     await closeServer(target);
