@@ -226,6 +226,68 @@ describe("whatsapp webhook flow", () => {
     }
   });
 
+  it.each(["Old Money", "DIRECTOR_OLD_MONEY"])(
+    "does not treat WhatsApp '%s' as a hidden director generation shortcut",
+    async shortcutText => {
+      downloadWhatsAppMediaMock.mockResolvedValue({
+        buffer: Buffer.alloc(6000, 7),
+        contentType: "image/jpeg",
+      });
+      const generateSpy = vi
+        .spyOn(OpenAiImageGenerator.prototype, "generate")
+        .mockResolvedValue({
+          imageUrl: "https://leaderbot-fb-image-gen.fly.dev/generated/director-shortcut.jpg",
+        });
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          output_text: JSON.stringify({
+            shouldEdit: false,
+            directorMode: null,
+            promptHint: null,
+          }),
+        }),
+      }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      try {
+        await processWhatsAppWebhookPayload(
+          createWhatsAppPayload({
+            from: `wa-director-shortcut-${shortcutText}`,
+            timestamp: "1710000014",
+            type: "image",
+            image: { id: `wamid-director-shortcut-${shortcutText}` },
+          })
+        );
+
+        sendWhatsAppTextMock.mockClear();
+
+        await processWhatsAppWebhookPayload(
+          createWhatsAppPayload({
+            from: `wa-director-shortcut-${shortcutText}`,
+            timestamp: "1710000015",
+            type: "text",
+            text: { body: shortcutText },
+          })
+        );
+
+        expect(generateSpy).not.toHaveBeenCalled();
+        expect(sendWhatsAppTextMock).toHaveBeenCalledWith(
+          `wa-director-shortcut-${shortcutText}`,
+          [
+            t("nl", "assistantQuickActions"),
+            "",
+            "1. Pas aan",
+            "2. Nieuwe afbeelding",
+            "3. Privacy",
+          ].join("\n")
+        );
+      } finally {
+        generateSpy.mockRestore();
+      }
+    }
+  );
+
   it("ignores replayed WhatsApp messages with the same message id", async () => {
     const payload = createWhatsAppPayload({
       id: "wamid-replay-1",
