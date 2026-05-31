@@ -1,4 +1,3 @@
-import { type Style } from "./messengerStyles";
 import { safeLen, sha256 } from "./imageProof";
 import { buildDirectorPrompt } from "./image-generation/director/directorPromptBuilder";
 import { analyzeDirectorPhoto } from "./image-generation/director/directorPhotoAnalyzer";
@@ -13,7 +12,7 @@ import {
   type GenerationMetrics,
 } from "./image-generation/openAiImageClient";
 import {
-  buildStylePrompt,
+  buildSourceImageEditPrompt,
   buildTextToImagePrompt,
 } from "./image-generation/promptBuilder";
 import {
@@ -26,9 +25,9 @@ import {
   hasObjectStorageConfig,
 } from "./image-generation/imageServiceConfig";
 import { publishGeneratedImage } from "./image-generation/generatedImagePublisher";
+import type { GenerationKind } from "./image-generation/generationTypes";
 import {
   GenerationTimeoutError,
-  InvalidGenerationInputError,
   MissingOpenAiApiKeyError,
 } from "./image-generation/imageServiceErrors";
 import { getMessengerGenerationGlobalLimitConfig } from "./generationGuard";
@@ -46,8 +45,8 @@ export type ImageProvider = typeof OPENAI_IMAGES_PROVIDER;
 
 interface ImageGenerator {
   generate(input: {
-    style: Style;
-    generationKind?: "style_restyle" | "text_to_image";
+    style?: string;
+    generationKind?: GenerationKind;
     sourceImageUrl?: string;
     trustedSourceImageUrl?: boolean;
     sourceImageProvenance?: "storeInbound";
@@ -75,8 +74,8 @@ interface ImageGenerator {
 }
 
 type GeneratorInput = {
-  style: Style;
-  generationKind?: "style_restyle" | "text_to_image";
+  style?: string;
+  generationKind?: GenerationKind;
   sourceImageUrl?: string;
   trustedSourceImageUrl?: boolean;
   sourceImageProvenance?: "storeInbound";
@@ -102,6 +101,35 @@ type PreparedGenerationInput = {
 
 function ensureGeneratedImageBuffer(buffer: Buffer): Buffer {
   return buffer;
+}
+
+function buildPromptForGeneration(input: GeneratorInput, photoAnalysis?: string): string {
+  if (input.generationKind === "text_to_image") {
+    return buildTextToImagePrompt(input.promptHint ?? "");
+  }
+
+  if (input.directorMode) {
+    return buildDirectorPrompt({
+      mode: input.directorMode,
+      userInstruction: input.directorInstruction,
+      photoAnalysis,
+    });
+  }
+
+  if (input.generationKind === "source_image_edit") {
+    return buildSourceImageEditPrompt(input.promptHint ?? "");
+  }
+
+  return buildSourceImageEditPrompt(
+    input.promptHint ??
+      (input.style
+        ? `Apply ${styleToNaturalLanguage(input.style)} as natural-language visual direction.`
+        : "")
+  );
+}
+
+function styleToNaturalLanguage(style: string): string {
+  return style.replace(/-/g, " ");
 }
 
 export function getGeneratorStartupConfig(): {
@@ -160,23 +188,15 @@ async function prepareGenerationInput(
     input.directorMode && !input.directorPhotoAnalysis
       ? await analyzeDirectorPhoto(sourceImage, input.reqId)
       : input.directorPhotoAnalysis;
-  const prompt =
-    input.generationKind === "text_to_image"
-      ? buildTextToImagePrompt(input.promptHint ?? "")
-      : input.directorMode
-        ? buildDirectorPrompt({
-            mode: input.directorMode,
-            userInstruction: input.directorInstruction,
-            photoAnalysis,
-          })
-        : buildStylePrompt(input.style, input.promptHint);
+  const prompt = buildPromptForGeneration(input, photoAnalysis);
   const promptBuildMs = Date.now() - promptStartedAt;
   console.info(
     JSON.stringify({
       level: "info",
       msg: "image_prompt_built",
       reqId: input.reqId,
-      style: input.style,
+      generationKind: input.generationKind ?? null,
+      staleStyleHint: input.style ?? null,
       directorMode: input.directorMode,
       durationMs: promptBuildMs,
       promptChars: prompt.length,
@@ -220,10 +240,6 @@ export class OpenAiImageGenerator implements ImageGenerator {
   }> {
     const startedAt = Date.now();
     const partialMetrics: Omit<GenerationMetrics, "totalMs"> = {};
-    if (!input.style) {
-      throw new InvalidGenerationInputError("Style is required");
-    }
-
     if (!process.env.OPENAI_API_KEY) {
       throw new MissingOpenAiApiKeyError("OPENAI_API_KEY is missing");
     }
@@ -286,7 +302,6 @@ export class OpenAiImageGenerator implements ImageGenerator {
       const uploadStartedAt = Date.now();
       const imageUrl = await publishGeneratedImage(
         generatedImageBuffer,
-        input.style,
         input.reqId
       );
       const uploadOrServeMs = Date.now() - uploadStartedAt;

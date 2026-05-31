@@ -47,7 +47,7 @@ export const statsFeature: BotFeature = {
         "",
         `Images generated: ${stats.imagesGeneratedToday}`,
         `Users: ${stats.activeUsersToday}`,
-        `Styles used: ${stats.stylesUsedToday}`,
+        `Generation types: ${stats.generationKindsUsedToday}`,
         `Errors: ${stats.errorCountToday}`,
         `Avg latency: ${avgLatency}`,
         "",

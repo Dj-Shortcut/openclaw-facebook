@@ -17,8 +17,8 @@ import {
   MissingInputImageError,
 } from "./image-generation/sourceImageFetcher";
 import type { SourceImageOrigin } from "./messengerState";
-import type { Style } from "./messengerStyles";
 import type { DirectorMode } from "./image-generation/director/directorTypes";
+import type { GenerationKind } from "./image-generation/generationTypes";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import { storageGet, storageKeyFromPublicUrl } from "../storage";
 
@@ -72,8 +72,8 @@ type GenerationFlowResult =
   | GenerationFlowFailure;
 
 type ExecuteGenerationFlowInput = {
-  style: Style;
-  generationKind?: "style_restyle" | "text_to_image";
+  style?: string;
+  generationKind?: GenerationKind;
   userId: string;
   reqId: string;
   promptHint?: string;
@@ -178,6 +178,17 @@ async function resolveStoredRuntimeSourceUrl(input: {
   }
 }
 
+function resolveEffectiveGenerationKind(input: {
+  generationKind?: ExecuteGenerationFlowInput["generationKind"];
+  resolvedSourceImageUrl?: string;
+}): NonNullable<ExecuteGenerationFlowInput["generationKind"]> {
+  if (input.generationKind) {
+    return input.generationKind;
+  }
+
+  return input.resolvedSourceImageUrl ? "source_image_edit" : "text_to_image";
+}
+
 function classifyGenerationError(error: unknown): GenerationFlowFailureKind {
   if (error instanceof InvalidSourceImageUrlError) {
     return "invalid_source_image";
@@ -211,6 +222,10 @@ export async function executeGenerationFlow(
 ): Promise<GenerationFlowResult> {
   const { resolvedSourceImageUrl, trustedSourceImageUrl } =
     await resolveStoredRuntimeSourceUrl(input);
+  const generationKind = resolveEffectiveGenerationKind({
+    generationKind: input.generationKind,
+    resolvedSourceImageUrl,
+  });
 
   console.info("generation_source_image_selected", {
     reqId: input.reqId,
@@ -223,7 +238,7 @@ export async function executeGenerationFlow(
     trustedSourceImageUrl,
   });
 
-  if (!resolvedSourceImageUrl && input.generationKind !== "text_to_image") {
+  if (!resolvedSourceImageUrl && generationKind !== "text_to_image") {
     return {
       kind: "error",
       errorKind: "missing_source_image",
@@ -249,7 +264,7 @@ export async function executeGenerationFlow(
   try {
     const { imageUrl, proof, metrics } = await generator.generate({
       style: input.style,
-      generationKind: input.generationKind,
+      generationKind,
       sourceImageUrl: resolvedSourceImageUrl,
       trustedSourceImageUrl,
       sourceImageProvenance: trustedSourceImageUrl ? "storeInbound" : undefined,

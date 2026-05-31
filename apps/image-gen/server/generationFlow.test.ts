@@ -63,6 +63,7 @@ describe("generationFlow", () => {
   it("returns missing_source_image when no source image is available", async () => {
     const result = await executeGenerationFlow({
       style: "cyberpunk",
+      generationKind: "source_image_edit",
       userId: "user-1",
       reqId: "req-1",
     });
@@ -105,8 +106,45 @@ describe("generationFlow", () => {
     });
     expect(generateMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        generationKind: "source_image_edit",
         trustedSourceImageUrl: true,
         sourceImageProvenance: "storeInbound",
+      })
+    );
+  });
+
+  it("defaults source-less requests to text-to-image instead of legacy presets", async () => {
+    const generateMock = vi.fn().mockResolvedValue({
+      imageUrl: "https://example.com/generated.jpg",
+      proof: {
+        incomingLen: 0,
+        incomingSha256: "",
+        openaiInputLen: 10,
+        openaiInputSha256: "out",
+      },
+      metrics: { totalMs: 123 },
+    });
+    createImageGeneratorMock.mockReturnValue({
+      mode: "openai-images",
+      generator: { generate: generateMock },
+    });
+
+    const result = await executeGenerationFlow({
+      style: "cinematic",
+      userId: "user-1",
+      reqId: "req-text-default",
+      promptHint: "Maak een landschap",
+    });
+
+    expect(result).toMatchObject({
+      kind: "success",
+      trustedSourceImageUrl: false,
+      resolvedSourceImageUrl: "",
+    });
+    expect(generateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        generationKind: "text_to_image",
+        sourceImageUrl: undefined,
       })
     );
   });
@@ -174,7 +212,6 @@ describe("generationFlow", () => {
     });
 
     const result = await executeGenerationFlow({
-      style: "cinematic",
       userId: "user-1",
       reqId: "req-1",
       lastPhotoUrl: "https://stored.example/image.jpg",
@@ -187,7 +224,8 @@ describe("generationFlow", () => {
     expect(result).toMatchObject({ kind: "success" });
     expect(generateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        style: "cinematic",
+        generationKind: "source_image_edit",
+        style: undefined,
         directorMode: "midnight_luxury",
         directorInstruction: "make it feel like an exclusive event portrait",
         directorPhotoAnalysis: "The source image has low ambient light.",

@@ -8,9 +8,9 @@ import type {
   MessengerUserState,
 } from "./messengerState";
 import type { ConversationAction } from "./botResponse";
-import type { Style } from "./messengerStyles";
 import type { GenerationStatsSnapshot } from "./botRuntimeStats";
 import type { DirectorMode } from "./image-generation/director/directorTypes";
+import type { GenerationKind } from "./image-generation/generationTypes";
 
 export type FeatureResult = { handled: true } | { handled: false };
 
@@ -32,13 +32,13 @@ type BotContextBase = {
   sendImage(url: string): Promise<void>;
   sendActions(text: string, actions: ConversationAction[]): Promise<void>;
   setFlowState(state: ConversationState): Promise<void>;
-  preselectStyle(style: Style | null): Promise<void>;
-  chooseStyle(style: Style): Promise<void>;
-  runStyleGeneration(
-    style: Style,
+  clearImageContext?(): Promise<void>;
+  runImageGeneration(
+    style: string | undefined,
     sourceImageUrl?: string,
     promptHint?: string,
-    directorMode?: DirectorMode
+    directorMode?: DirectorMode,
+    generationKind?: GenerationKind
   ): Promise<void>;
   getRuntimeStats(): GenerationStatsSnapshot;
   logger: BotLogger;

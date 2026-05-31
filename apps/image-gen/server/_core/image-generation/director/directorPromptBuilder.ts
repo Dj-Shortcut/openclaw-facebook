@@ -18,7 +18,7 @@ export function buildDirectorPrompt(input: DirectorPromptInput): string {
   );
 
   return [
-    `Transform the uploaded photo into a ${mode.label} restyle.`,
+    `Edit the uploaded photo into a ${mode.label} image.`,
     "",
     "Creative direction:",
     `- Vibe: ${mode.vibe}.`,

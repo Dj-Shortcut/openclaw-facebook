@@ -11,19 +11,6 @@ const DEFAULT_JOB_LEASE_BUFFER_SECONDS = 60;
 const OPENAI_TIMEOUT_MS_DEFAULT = 180_000;
 const DEFAULT_MAX_JOB_ATTEMPTS = 3;
 const DEFAULT_DRAIN_BATCH_SIZE = 10;
-const MESSENGER_GENERATION_STYLES = new Set([
-  "caricature",
-  "storybook-anime",
-  "afroman-americana",
-  "gold",
-  "petals",
-  "clouds",
-  "cinematic",
-  "disco",
-  "cyberpunk",
-  "oil-paint",
-  "norman-blackwell",
-]);
 const MESSENGER_GENERATION_LANGS = new Set(["nl", "en"]);
 const MESSENGER_GENERATION_DIRECTOR_MODES = new Set([
   "midnight_luxury",
@@ -32,6 +19,11 @@ const MESSENGER_GENERATION_DIRECTOR_MODES = new Set([
   "hyperpop_idol",
   "old_money",
 ]);
+const MESSENGER_GENERATION_KINDS = new Set([
+  "text_to_image",
+  "source_image_edit",
+]);
+const LEGACY_MESSENGER_GENERATION_KINDS = new Set(["style_restyle"]);
 let drainPromise: Promise<void> | null = null;
 
 type GenerationJobProcessor = (
@@ -369,6 +361,15 @@ function isOptionalDirectorMode(value: unknown): boolean {
   );
 }
 
+function isOptionalGenerationKind(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (typeof value === "string" &&
+      (MESSENGER_GENERATION_KINDS.has(value) ||
+        LEGACY_MESSENGER_GENERATION_KINDS.has(value)))
+  );
+}
+
 function isOptionalAttempts(value: unknown): value is number | undefined {
   return (
     value === undefined ||
@@ -387,19 +388,25 @@ function parseMessengerGenerationJob(
     typeof value.psid !== "string" ||
     typeof value.userId !== "string" ||
     typeof value.reqId !== "string" ||
-    typeof value.style !== "string" ||
-    !MESSENGER_GENERATION_STYLES.has(value.style) ||
     typeof value.lang !== "string" ||
     !MESSENGER_GENERATION_LANGS.has(value.lang) ||
+    !isOptionalGenerationKind(value.generationKind) ||
     !isOptionalString(value.sourceImageUrl) ||
     !isOptionalString(value.promptHint) ||
+    !isOptionalString(value.style) ||
     !isOptionalDirectorMode(value.directorMode) ||
     !isOptionalAttempts(value.attempts)
   ) {
     return null;
   }
 
-  return value as MessengerGenerationJob;
+  return {
+    ...value,
+    generationKind:
+      value.generationKind === "style_restyle"
+        ? "source_image_edit"
+        : value.generationKind,
+  } as MessengerGenerationJob;
 }
 
 function parseReservedGenerationJob(raw: string): ReservedGenerationJob | null {

@@ -35,7 +35,9 @@ This inventory tracks runtime state that affects horizontal scaling for Messenge
 
 Queue operations emit compact `messenger_generation_queue_stats` logs with `queued` and `processing` counts after enqueue, completion, release, and reclaim. `/metrics` also exposes `messenger_generation_queue_enabled`, `messenger_generation_queue_jobs{state="queued"}`, and `messenger_generation_queue_jobs{state="processing"}` gauges. Use these together with `webhook_ack_sent` and `messenger_generation_diagnostic` to verify that gateway ACKs stay fast while workers drain generation backlog.
 
-## Remaining scaling work
+## Historical scaling considerations
+
+Open scaling work belongs in [`todo.md`](todo.md). The notes below are retained as background for future worker rollout decisions, not as the actionable backlog for this repository.
 
 - Run gateway instances with `MESSENGER_GENERATION_QUEUE_ENABLED=1` and `MESSENGER_GENERATION_INLINE_FALLBACK=0`.
 - Run at least one worker process with `MESSENGER_GENERATION_QUEUE_ENABLED=1` and `MESSENGER_GENERATION_WORKER_ONLY=1`.

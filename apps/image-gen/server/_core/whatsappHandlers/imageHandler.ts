@@ -3,18 +3,9 @@ import { storeInboundSourceImage } from "../sourceImageStore";
 import { toLogUser } from "../privacy";
 import { t } from "../i18n";
 import {
-  getOrCreateState,
   setPendingImage,
-  setPreselectedStyle,
   setFlowState,
 } from "../messengerState";
-import {
-  normalizeStyle,
-} from "../webhookHelpers";
-import {
-  sendWhatsAppStyleCategoryPrompt,
-} from "../whatsappFlows/styleSelectionFlow";
-import { runWhatsAppStyleGeneration } from "../whatsappFlows/styleGenerationFlow";
 import { sendWhatsAppTextReply } from "../whatsappResponseService";
 import type { NormalizedWhatsAppEvent, WhatsAppHandlerContext } from "../whatsappTypes";
 
@@ -61,22 +52,7 @@ export async function handleWhatsAppImageEvent(
     return;
   }
 
-  const state = await Promise.resolve(getOrCreateState(event.senderId));
-  const preselectedStyle = normalizeStyle(state.preselectedStyle ?? "");
   await setPendingImage(event.senderId, persistedImageUrl, Date.now(), "stored");
 
-  if (preselectedStyle) {
-    await setPreselectedStyle(event.senderId, null);
-    await runWhatsAppStyleGeneration({
-      senderId: event.senderId,
-      userId: event.userId,
-      style: preselectedStyle,
-      reqId: context.reqId,
-      lang: context.lang,
-      sourceImageUrl: persistedImageUrl,
-    });
-    return;
-  }
-
-  await sendWhatsAppStyleCategoryPrompt(event.senderId, context.lang);
+  await sendWhatsAppTextReply(event.senderId, t(context.lang, "photoEditPrompt"));
 }

@@ -1,12 +1,12 @@
 import type { Lang } from "./i18n";
 import type { DirectorMode } from "./image-generation/director/directorTypes";
-import type { Style } from "./messengerStyles";
+import type { GenerationKind } from "./image-generation/generationTypes";
 
 export type MessengerGenerationJob = {
   psid: string;
   userId: string;
-  style: Style;
-  generationKind?: "style_restyle" | "text_to_image";
+  style?: string;
+  generationKind?: GenerationKind;
   reqId: string;
   lang: Lang;
   sourceImageUrl?: string;

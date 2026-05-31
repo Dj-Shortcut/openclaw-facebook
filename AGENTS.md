@@ -65,9 +65,9 @@ User prompt
 -> Image generation
 -> Result
 
-Legacy style-picker flows exist only for compatibility.
+Legacy style-picker menu flows are deprecated.
 
-Do not expand style-picker systems unless explicitly requested.
+Do not reintroduce style-picker systems unless explicitly requested.
 
 Prefer:
 
@@ -225,13 +225,7 @@ Do not remove existing production behavior unless:
 2. tests exist
 3. migration path exists
 
-Legacy payloads:
-
-* CHOOSE_STYLE
-* STYLE_*
-* RETRY_STYLE*
-
-may remain until fully replaced.
+Legacy Messenger style payloads should not be reintroduced. Preserve production behavior through channel-neutral `ConversationAction` inputs and explicit natural-language/image-edit requests.
 
 ---
 

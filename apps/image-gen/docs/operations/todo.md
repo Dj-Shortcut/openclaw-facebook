@@ -7,7 +7,7 @@
 
 - Last reviewed against code: **2026-05-30**
 - Verified commit: **`158365d`** plus the follow-up documentation cleanup
-- Current direction: generic prompt-first image generation; legacy style flows are compatibility only.
+- Current direction: generic prompt-first image generation; legacy style-picker UI and quick-reply flows are removed. Internal style-preset compatibility may remain only as backend fallback.
 - Product direction: `leaderbot.live` becomes a tenant/customer portal for managing each customer's own AI. The OpenClaw/Messenger gateway remains shielded and is not the customer-facing app.
 
 ## Actieve backlog (open)
@@ -30,16 +30,22 @@
 - [ ] Verify GDPR deletion end-to-end before broad customer launch
 - [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health routes
 - [ ] Move public legal routes (`/privacy`, `/terms`, `/data-deletion`) into the portal surface before pointing customer traffic there
-- [ ] Remove legacy campaign/style assets that do not support the portal direction
-- [ ] Observe generic text-to-image quality before removing legacy style-picker flows
-- [ ] Migrate remaining Messenger state quick replies to channel-neutral conversation actions
-- [ ] Decide which style-catalog compatibility flows can be removed after real Messenger tests
+- [x] Remove legacy campaign/style assets that do not support the portal direction
+- [ ] Observe generic text-to-image quality before removing remaining internal style-preset backend compatibility
 - [ ] Create "upgrade to premium" prompt when limit reached
 - [ ] Add image gallery/history for users
 
 ### Kosten & quota
 
 - [ ] Implement cost tracking per image/request
+- [ ] Prevent duplicate Messenger webhook deliveries from starting duplicate paid turns
+- [ ] Add host-level budget gates before expensive model/image/tool calls
+- [ ] Add default-deny tool policy for untrusted Facebook-originated users
+- [ ] Add per-user daily spend caps for paired Facebook users
+- [ ] Add global Facebook daily spend cap
+- [ ] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, usage, estimated cost, final cost, and status
+- [ ] Add owner dashboard for Facebook spend by day/month, account/page, `userKey`, blocked attempts, duplicate skips, and provider failures
+- [ ] Add user-facing balance/spend overview before paid rollout
 - [ ] Add monthly cost cap enforcement
 - [ ] Send cost alerts to owner
 - [ ] Add external uptime monitor for `/healthz`
@@ -48,6 +54,8 @@
 
 - [x] Use durable storage proxy for generated images and retained source images
 - [ ] Continue verifying storage-proxy delivery under Messenger crawler constraints
+- [ ] Plan dedicated image-generation worker rollout before high-volume scaling
+- [ ] Evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory
 
 ### Premium tier (ready but inactive)
 

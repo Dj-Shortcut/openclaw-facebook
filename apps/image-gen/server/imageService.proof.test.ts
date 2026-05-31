@@ -103,141 +103,28 @@ function createOpenAiEditsFetchMock(options?: {
   return { fetchMock, getOpenAiCallCount: () => openAiCallCount };
 }
 
-type StylePromptCase = {
-  style:
-    | "caricature"
-    | "storybook-anime"
-    | "afroman-americana"
-    | "petals"
-    | "gold"
-    | "cinematic"
-    | "disco"
-    | "clouds";
-  baseLead: string;
-  features: string[];
-  minFeatureMatches: number;
-};
-
-const STYLE_PROMPT_CASES = [
-  {
-    style: "caricature",
-    baseLead: "Transform this photo into a high-end caricature portrait",
-    features: [
-      "playfully exaggerated facial proportions",
-      "crisp inked contours",
-      "dimensional cel-shaded rendering",
-    ],
-    minFeatureMatches: 3,
-  },
-  {
-    style: "storybook-anime",
-    baseLead:
-      "Transform this photo into a whimsical hand-drawn fantasy illustration with a warm storybook atmosphere.",
-    features: [
-      "soft, painterly animated scene",
-      "hand-painted background sensibility",
-      "soft daylight or golden-hour lighting",
-      "nostalgic magical mood",
-    ],
-    minFeatureMatches: 3,
-  },
-  {
-    style: "afroman-americana",
-    baseLead:
-      "Transform this photo into a premium stylized portrait in an Afroman-inspired Americana look.",
-    features: [
-      "Preserve the subject identity and facial features",
-      "tailored American flag suit",
-      "bold retro Americana energy",
-      "rich red white and blue color balance",
-    ],
-    minFeatureMatches: 3,
-  },
-  {
-    style: "petals",
-    baseLead: "Turn this image into a romantic floral fantasy portrait",
-    features: [
-      "drifting blossom petals",
-      "luminous backlighting",
-      "soft pastel palette of rose, blush, ivory, and fresh green",
-    ],
-    minFeatureMatches: 3,
-  },
-  {
-    style: "gold",
-    baseLead: "Reimagine this portrait as a luxe gilded editorial artwork",
-    features: [
-      "molten gold highlights",
-      "champagne and amber color grading",
-      "sculpted rim lighting",
-    ],
-    minFeatureMatches: 3,
-  },
-  {
-    style: "cinematic",
-    baseLead: "Reframe this photo as a prestige-film still",
-    features: [
-      "dramatic directional lighting",
-      "deep shadows",
-      "refined teal-and-amber palette",
-    ],
-    minFeatureMatches: 3,
-  },
-  {
-    style: "disco",
-    baseLead: "Convert this portrait into a glamorous disco-era hero shot",
-    features: [
-      "mirror-ball reflections",
-      "magenta and electric blue spotlights",
-      "glittering highlights",
-    ],
-    minFeatureMatches: 3,
-  },
-  {
-    style: "clouds",
-    baseLead: "Render this portrait as an ethereal skyborne scene",
-    features: [
-      "layered clouds",
-      "diffused sunrise lighting",
-      "airy gradients of pearl white, pale blue, silver, and warm peach",
-    ],
-    minFeatureMatches: 3,
-  },
-] satisfies StylePromptCase[];
-
-const GENERIC_FALLBACK_PATTERNS = [
-  "Apply disco style to this photo",
-  /Apply .* style to this photo/i,
+const LEGACY_STYLE_VALUES = [
+  "caricature",
+  "storybook-anime",
+  "afroman-americana",
+  "petals",
+  "gold",
+  "cinematic",
+  "disco",
+  "clouds",
 ] as const;
 
-function expectDistinctivePrompt(
+function expectPromptFirstLegacyFallback(
   prompt: string,
-  styleCase: StylePromptCase,
   promptHint: string
 ): void {
-  for (const pattern of GENERIC_FALLBACK_PATTERNS) {
-    if (typeof pattern === "string") {
-      expect(prompt).not.toContain(pattern);
-      continue;
-    }
-
-    expect(prompt).not.toMatch(pattern);
-  }
-
-  expect(prompt).toContain(styleCase.baseLead);
-
-  const matchedFeatures = styleCase.features.filter(feature =>
-    prompt.includes(feature)
-  );
-  expect(matchedFeatures.length).toBeGreaterThanOrEqual(
-    styleCase.minFeatureMatches
-  );
-
-  const additionalDirection = `Additional direction: ${promptHint}.`;
-  expect(prompt).toContain(additionalDirection);
-  expect(prompt.indexOf(styleCase.baseLead)).toBeLessThan(
-    prompt.indexOf(additionalDirection)
-  );
+  expect(prompt).toContain("Edit the uploaded/source image according to the user's request.");
+  expect(prompt).toContain("Use the source image as the visual reference, not as a preset style catalog.");
+  expect(prompt).toContain(`User request: ${promptHint}`);
+  expect(prompt).not.toContain("Additional direction:");
+  expect(prompt).not.toContain("glamorous disco-era hero shot");
+  expect(prompt).not.toContain("whimsical hand-drawn fantasy illustration");
+  expect(prompt).not.toContain("prestige-film still");
 }
 
 function installStoredSourcePromptFetchMock(
@@ -331,9 +218,9 @@ describe("OpenAi image-to-image proof", () => {
     ]);
   });
 
-  it.each(STYLE_PROMPT_CASES)(
-    "$style builds a distinctive OpenAI edits prompt and preserves prompt hints",
-    async styleCase => {
+  it.each(LEGACY_STYLE_VALUES)(
+    "%s uses prompt-first source-image edits instead of legacy preset prompts",
+    async style => {
       process.env.OPENAI_API_KEY = "dummy-key";
       process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
       process.env.SOURCE_IMAGE_ALLOWED_HOSTS = STORED_SOURCE_IMAGE_ALLOWED_HOSTS;
@@ -363,7 +250,7 @@ describe("OpenAi image-to-image proof", () => {
         );
 
         const prompt = promptFromRequest(init);
-        expectDistinctivePrompt(prompt, styleCase, promptHint);
+        expectPromptFirstLegacyFallback(prompt, promptHint);
 
         return {
           ok: true,
@@ -375,11 +262,11 @@ describe("OpenAi image-to-image proof", () => {
 
       const generator = new OpenAiImageGenerator();
       const result = await generator.generate({
-        style: styleCase.style,
+        style,
         ...createStoredSourceImageInput({
           promptHint,
           userKey: "user-1",
-          reqId: `req-${styleCase.style}-prompt`,
+          reqId: `req-${style}-prompt`,
         }),
       });
 
@@ -394,16 +281,12 @@ describe("OpenAi image-to-image proof", () => {
     }
   );
 
-  it("uses the cyberpunk preset prompt for OpenAI edits", async () => {
+  it("keeps cyberpunk as prompt-first natural-language direction", async () => {
     const fetchMock = installStoredSourcePromptFetchMock(prompt => {
-      expect(prompt).toContain(
-        "Transform this photo into a cyberpunk portrait"
-      );
-      expect(prompt).toContain("neon signage glow");
-      expect(prompt).toContain("rain-slick reflections");
-      expect(prompt).toContain(
-        "vivid palette of electric pink, cyan, ultraviolet, and toxic blue"
-      );
+      expect(prompt).toContain("User request: Apply cyberpunk as natural-language visual direction.");
+      expect(prompt).toContain("not as a preset style catalog");
+      expect(prompt).not.toContain("neon signage glow");
+      expect(prompt).not.toContain("rain-slick reflections");
     });
 
     const generator = new OpenAiImageGenerator();
@@ -418,18 +301,14 @@ describe("OpenAi image-to-image proof", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("uses the Norman Blackwell preset prompt for OpenAI edits", async () => {
+  it("keeps Norman Blackwell as prompt-first natural-language direction", async () => {
     const fetchMock = installStoredSourcePromptFetchMock(prompt => {
       expect(prompt).toContain(
-        "Reimagine this photo as a nostalgic mid-century American editorial illustration"
+        "User request: Apply norman blackwell as natural-language visual direction."
       );
-      expect(prompt).toContain("warm storybook lighting");
-      expect(prompt).toContain(
-        "all-American palette of cream, brick red, muted teal, and honey gold"
-      );
-      expect(prompt).toContain(
-        "polished finish of a vintage family magazine cover from the 1940s or 1950s"
-      );
+      expect(prompt).toContain("not as a preset style catalog");
+      expect(prompt).not.toContain("warm storybook lighting");
+      expect(prompt).not.toContain("vintage family magazine cover");
     });
 
     const generator = new OpenAiImageGenerator();
@@ -444,17 +323,12 @@ describe("OpenAi image-to-image proof", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("uses the oil-paint preset prompt for OpenAI edits", async () => {
+  it("keeps oil-paint as prompt-first natural-language direction", async () => {
     const fetchMock = installStoredSourcePromptFetchMock(prompt => {
-      expect(prompt).toContain(
-        "Render this portrait as a classical oil painting"
-      );
-      expect(prompt).toContain("visible brush strokes");
-      expect(prompt).toContain("textured canvas grain");
-      expect(prompt).toContain("sculpted painterly lighting");
-      expect(prompt).toContain(
-        "rich museum-grade palette of umber, ochre, crimson, and deep blue"
-      );
+      expect(prompt).toContain("User request: Apply oil paint as natural-language visual direction.");
+      expect(prompt).toContain("not as a preset style catalog");
+      expect(prompt).not.toContain("museum-grade palette");
+      expect(prompt).not.toContain("textured canvas grain");
     });
 
     const generator = new OpenAiImageGenerator();
@@ -846,13 +720,13 @@ describe("OpenAi image-to-image proof", () => {
 
       if (
         toUrlString(url).startsWith(
-          "https://forge.example/v1/storage/upload?path=generated%2Fdisco%2F"
+          "https://forge.example/v1/storage/upload?path=generated%2Fimages%2F"
         )
       ) {
         return {
           ok: true,
           json: async () => ({
-            url: "https://cdn.example/generated/disco.jpg?signature=prod",
+            url: "https://cdn.example/generated/images/result.jpg?signature=prod",
           }),
         } as Response;
       }
@@ -875,7 +749,7 @@ describe("OpenAi image-to-image proof", () => {
     });
 
     expect(result.imageUrl).toBe(
-      "https://cdn.example/generated/disco.jpg?signature=prod"
+      "https://cdn.example/generated/images/result.jpg?signature=prod"
     );
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });

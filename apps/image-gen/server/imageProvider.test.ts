@@ -5,7 +5,6 @@ import {
   OpenAiImageGenerator,
 } from "./_core/imageService";
 import { buildDirectorPrompt } from "./_core/image-generation/director/directorPromptBuilder";
-import { buildStylePrompt } from "./_core/image-generation/promptBuilder";
 
 const GENERATED_IMAGE_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0ioAAAAASUVORK5CYII=";
@@ -243,13 +242,15 @@ describe("image provider boundary", () => {
     ]);
   });
 
-  it("uses the existing style prompt when no director mode is provided", async () => {
+  it("uses prompt-first source-image edits when stale style jobs have no director mode", async () => {
     configureOpenAiImagesEnv();
 
     const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
-      expect(await promptFromRequest(init)).toBe(
-        buildStylePrompt("disco", "more glitter in the background")
-      );
+      const prompt = await promptFromRequest(init);
+      expect(prompt).toContain("Edit the uploaded/source image according to the user's request.");
+      expect(prompt).toContain("not as a preset style catalog");
+      expect(prompt).toContain("User request: more glitter in the background");
+      expect(prompt).not.toContain("glamorous disco-era hero shot");
 
       return createGeneratedImageResponse();
     });
@@ -460,5 +461,34 @@ describe("image provider boundary", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses prompt-first source-image edits without the cinematic preset prompt", async () => {
+    configureOpenAiImagesEnv();
+
+    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const resolved = toUrlString(url);
+      if (resolved === "https://api.openai.com/v1/responses") {
+        const prompt = await promptFromRequest(init);
+        expect(prompt).toContain("Edit the uploaded/source image");
+        expect(prompt).toContain("User request: Kan je me een samurai maken");
+        expect(prompt).not.toContain("prestige-film still");
+        expect(prompt).not.toContain("teal-and-amber");
+        return createGeneratedImageResponse();
+      }
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generator = new OpenAiImageGenerator();
+    await generateWithSourceImageData(generator, {
+      style: "cinematic",
+      generationKind: "source_image_edit",
+      promptHint: "Kan je me een samurai maken",
+      userKey: "user-1",
+      reqId: "req-source-image-edit",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

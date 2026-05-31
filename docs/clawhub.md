@@ -2,6 +2,8 @@
 
 This package is prepared for ClawHub discovery as `@dj-shortcut/facebook`.
 
+Public listing copy is maintained in [clawhub-listing.md](clawhub-listing.md).
+
 ## Owner and Package Scope
 
 ClawHub requires the package scope to match the publishing owner. Because the
@@ -25,6 +27,9 @@ ClawHub publication is the next public-distribution path; npm publication
 remains a separate release decision.
 
 ## Preflight
+
+Use Node.js `22.19.0` before installing or packing; this matches the current
+OpenClaw runtime requirement.
 
 Run the package checks before publishing:
 
@@ -65,12 +70,25 @@ Dry-run the package publish:
 clawhub package publish @dj-shortcut/facebook --dry-run
 ```
 
+Or run the GitHub Actions workflow:
+
+1. Add `CLAWHUB_TOKEN` as a repository secret.
+2. Open **Actions** > **Publish Plugin to ClawHub**.
+3. Run it with `publish` left unchecked.
+4. Inspect the generated package artifact and ClawHub validation output.
+
 Only publish for real after the dry run succeeds and the package owner is
 confirmed as `@dj-shortcut`:
 
 ```bash
 clawhub package publish @dj-shortcut/facebook
 ```
+
+To publish from CI, rerun **Publish Plugin to ClawHub** with `publish` checked,
+or push a trusted `v*` tag. The workflow builds, tests, packs, validates the
+tarball contents, installs the tarball into an isolated OpenClaw profile,
+uploads the tarball as an artifact, and then calls OpenClaw's official
+`package-publish.yml` reusable ClawHub workflow.
 
 ## Post-Publish Smoke Test
 

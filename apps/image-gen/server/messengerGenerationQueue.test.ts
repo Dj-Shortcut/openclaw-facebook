@@ -226,6 +226,49 @@ describe("messengerGenerationQueue", () => {
     expect(processing).toEqual([]);
   });
 
+  it("drains prompt-first jobs without legacy style values", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const job = createJob({
+      reqId: "req-prompt-first-no-style",
+      style: undefined,
+      generationKind: "text_to_image",
+      promptHint: "Maak een draak boven Antwerpen",
+    });
+    const queue: string[] = [JSON.stringify(job)];
+    const processing: string[] = [];
+    const redis = {
+      del: vi.fn(async () => 1),
+      get: vi.fn(async () => null),
+      llen: vi.fn(async (key: string) =>
+        key.endsWith(":processing") ? processing.length : queue.length
+      ),
+      lrange: vi.fn(async () => processing),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      rpoplpush: vi.fn(async () => {
+        const value = queue.pop() ?? null;
+        if (value) {
+          processing.unshift(value);
+        }
+        return value;
+      }),
+      set: vi.fn(async () => "OK"),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async () => undefined);
+
+    await drainMessengerGenerationQueue(processor);
+
+    expect(processor).toHaveBeenCalledWith(job);
+    expect(processing).toEqual([]);
+  });
+
   it("uses an explicit job lease when configured", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
@@ -509,6 +552,7 @@ describe("messengerGenerationQueue", () => {
     const redis = {
       del: vi.fn(async () => 0),
       get: vi.fn(async () => null),
+      set: vi.fn(async () => "OK"),
       llen: vi.fn(async (key: string) => {
         if (key.endsWith(":processing")) return processing.length;
         if (key.endsWith(":dead")) return dead.length;
@@ -543,14 +587,72 @@ describe("messengerGenerationQueue", () => {
     expect(dead).toEqual([invalidJob]);
   });
 
-  it("dead-letters structurally invalid pending job payloads", async () => {
+  it("normalizes stale style-restyle jobs to prompt-first source-image edits", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const legacyJob = JSON.stringify({
+      psid: "user-1",
+      userId: "user-key-1",
+      generationKind: "style_restyle",
+      reqId: "req-legacy-style-kind",
+      lang: "nl",
+      sourceImageUrl: "https://img.example/source.jpg",
+      promptHint: "make it brighter",
+    });
+    const queue: string[] = [legacyJob];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const redis = {
+      del: vi.fn(async () => 0),
+      get: vi.fn(async () => null),
+      set: vi.fn(async () => "OK"),
+      llen: vi.fn(async (key: string) => {
+        if (key.endsWith(":processing")) return processing.length;
+        if (key.endsWith(":dead")) return dead.length;
+        return queue.length;
+      }),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      rpoplpush: vi.fn(async () => {
+        const value = queue.pop() ?? null;
+        if (value) {
+          processing.unshift(value);
+        }
+        return value;
+      }),
+      rpush: vi.fn(async (_key: string, value: string) => {
+        dead.push(value);
+        return dead.length;
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async () => undefined);
+
+    await expect(drainMessengerGenerationQueue(processor)).resolves.toBeUndefined();
+
+    expect(processor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        generationKind: "source_image_edit",
+        promptHint: "make it brighter",
+        sourceImageUrl: "https://img.example/source.jpg",
+      })
+    );
+    expect(dead).toEqual([]);
+  });
+
+  it("dead-letters pending job payloads with non-string style hints", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
     isRedisEnabledMock.mockReturnValue(true);
     const invalidJob = JSON.stringify({
       psid: "user-1",
       userId: "user-key-1",
-      style: "not-a-style",
+      style: 123,
       reqId: "req-invalid-style",
       lang: "nl",
     });

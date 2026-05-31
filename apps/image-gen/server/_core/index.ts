@@ -304,13 +304,13 @@ async function startServer() {
     <body>
       <h1>Privacy Policy – Leaderbot</h1>
       <p><strong>Last updated:</strong> 21 April 2026</p>
-      <p>Leaderbot ("we", "our") is a Messenger-based service that transforms user-submitted images using AI styles.</p>
+      <p>Leaderbot ("we", "our") is a Messenger-based service that generates and edits images with AI based on your prompts.</p>
 
       <h2>What data we collect</h2>
       <p>When you interact with Leaderbot through Facebook Messenger, we may receive:</p>
       <ul>
         <li>Messages you send to the Page</li>
-        <li>Images you submit for transformation</li>
+        <li>Images you submit for editing</li>
         <li>Basic messaging metadata necessary to deliver the service (e.g., sender ID, timestamps)</li>
       </ul>
       <p>We do not request your password or access your private Facebook profile data beyond what Messenger delivers for this integration.</p>
@@ -319,13 +319,13 @@ async function startServer() {
       <p>We use your data only to:</p>
       <ul>
         <li>Receive your request</li>
-        <li>Process and transform your submitted image</li>
-        <li>Send the transformed image back to you in Messenger</li>
+        <li>Generate a new image or edit your submitted image</li>
+        <li>Send the generated or edited image back to you in Messenger</li>
         <li>Maintain service reliability, prevent abuse, and troubleshoot issues</li>
       </ul>
 
       <h2>Image handling and retention</h2>
-      <p>Images are processed for the purpose of generating the requested transformation.</p>
+      <p>Images are processed for the purpose of generating or editing the image you requested.</p>
       <p><strong>Optional photo memory:</strong> If you give explicit permission, we keep your uploaded photo for a maximum of 30 days so you do not have to upload it again each time. This is optional. You can withdraw consent at any time by sending "delete my data" in Messenger. Dutch-speaking users may send "verwijder mijn data". After 30 days or withdrawal, the retained photo is permanently deleted. We use it only to generate new images for you.</p>
       <p>We do not sell your images.</p>
       <p>We do not use your images to market to you.</p>

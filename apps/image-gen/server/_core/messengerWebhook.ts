@@ -4,12 +4,10 @@ import { resetWebhookReplayProtection } from "./webhookReplayProtection";
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
 export { processWhatsAppWebhookPayload } from "./whatsappWebhook";
 
-const PRIVACY_POLICY_URL = process.env.PRIVACY_POLICY_URL?.trim() || "<link>";
 const DEFAULT_LANG = normalizeLang(process.env.DEFAULT_MESSENGER_LANG);
 
 const handlers = createWebhookHandlers({
   defaultLang: DEFAULT_LANG,
-  privacyPolicyUrl: PRIVACY_POLICY_URL,
 });
 
 export function resetMessengerEventDedupe(): void {

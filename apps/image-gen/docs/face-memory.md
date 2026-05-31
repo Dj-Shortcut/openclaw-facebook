@@ -21,7 +21,7 @@ ENABLE_FACE_MEMORY=false
    - `lastSourceImageUpdatedAt`
    - `pendingImageUrl` remains in state before the consent click, so consent still works after a server restart when Redis is configured.
 5. If the user chooses `Nee`, the normal single-session image flow continues, but no reusable face-memory source is retained.
-6. The user can generate styles from the retained source image during the 30-day window.
+6. The user can request natural-language edits from the retained source image during the 30-day window.
 7. The user can send `verwijder mijn data` or `delete my data` to delete retained face-memory state.
 8. A daily expiry task clears retained face-memory data older than 30 days.
 

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { Style } from "../messengerStyles";
 import { storagePut } from "../../storage";
 import {
   buildGeneratedImageUrl,
@@ -19,14 +18,13 @@ import { summarizeSensitiveUrl } from "../utils/urlSummarizer";
 
 export async function publishGeneratedImage(
   imageBuffer: Buffer,
-  style: Style,
   reqId?: string
 ): Promise<string> {
   const contentType = getOpenAiImageOutputContentType();
   const extension = getOpenAiImageOutputExtension();
 
   if (hasObjectStorageConfig()) {
-    const key = `generated/${style}/${Date.now()}-${randomUUID()}.${extension}`;
+    const key = `generated/images/${Date.now()}-${randomUUID()}.${extension}`;
     try {
       const { url } = await storagePut(key, imageBuffer, contentType);
       console.info(
@@ -34,7 +32,6 @@ export async function publishGeneratedImage(
           level: "info",
           msg: "generated_image_upload_success",
           reqId,
-          style,
           contentType,
           storageKey: key,
           publicUrl: summarizeSensitiveUrl(url),
@@ -44,7 +41,6 @@ export async function publishGeneratedImage(
     } catch (error) {
       console.error("GENERATED_IMAGE_UPLOAD_FAILED", {
         reqId,
-        style,
         storageKey: key,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -62,7 +58,6 @@ export async function publishGeneratedImage(
       level: "warn",
       msg: "generated_image_local_fallback",
       reqId,
-      style,
       contentType,
       tokenHash: hashGeneratedImageToken(token),
       publicUrl: summarizeSensitiveUrl(localUrl),

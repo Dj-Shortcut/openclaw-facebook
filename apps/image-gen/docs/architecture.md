@@ -19,7 +19,7 @@ Primary bootstrap is in `server/_core/index.ts`.
 
 The bot runtime now has an explicit boundary in `server/_core/bot/index.ts`, with future feature hooks centralized in `server/_core/bot/features.ts`.
 
-The active product direction is generic prompt-first image generation. Legacy style-picker and source-photo paths stay only as compatibility surfaces while they are still tested and used.
+The active product direction is generic prompt-first image generation. Source-photo edits remain supported through natural-language prompts; legacy style-picker menus and payloads are no longer the default interaction model.
 
 ## Architecture diagrams
 
@@ -122,8 +122,8 @@ flowchart TD
 6. Shared text/domain logic runs in `server/_core/sharedTextHandler.ts`.
 7. Shared logic returns channel-agnostic outbound intents (`BotResponse`).
 8. Channel adapters translate those intents into Messenger or WhatsApp sends.
-9. Image flow state is still updated directly in channel orchestration (`setFlowState`, `setPendingImage`, `setChosenStyle`, ...). Messenger now treats free image prompts as text-to-image by default; source-image generation only uses a stored/uploaded photo when the user explicitly asks to edit/restyle that photo.
-10. If Messenger face memory is enabled, the first source-photo upload asks for explicit 30-day reuse consent before showing style options.
+9. Image flow state is still updated directly in channel orchestration (`setFlowState`, `setPendingImage`, `setLastGenerationContext`, ...). Messenger now treats free image prompts as text-to-image by default; source-image generation only uses a stored/uploaded photo when the user explicitly asks to edit/restyle that photo.
+10. If Messenger face memory is enabled, the first source-photo upload asks for explicit 30-day reuse consent before asking for a natural-language edit prompt.
 11. If generation is triggered:
    - state -> `PROCESSING`,
    - OpenAI image generator configuration,
@@ -171,7 +171,7 @@ Core files:
 - stage/status (`IDLE` .. `FAILURE`)
 - latest photo URL fields
 - latest photo provenance (`external` vs `stored`)
-- selected style and optional preselected referral style
+- legacy style fields are ignored during state normalization
 - preferred language
 - pending/generated image references
 - optional face-memory consent and retained source-image URL fields
@@ -235,14 +235,15 @@ This keeps Messenger and WhatsApp aligned for text without forcing media/image a
 
 ## 5c) Legacy and experimental paths
 
-The codebase still contains legacy style-catalog paths and some experimental experience-routing modules that were built before the generic image flow.
+The active image product is prompt-first. The old style-catalog UI, preview assets, state quick replies, referral-style entry, and Messenger/WhatsApp style-picker menu paths have been removed from the default runtime.
 
 Important repository rule:
 
 - generic prompt-first image generation is the active roadmap
-- style/category payloads, referral styles, retry-style payloads, and WhatsApp style selection are compatibility paths
-- new product behavior should not be added to legacy style-catalog paths
-- cleanup should happen in small PRs after tests prove the replacement behavior
+- legacy Messenger style payloads (`CHOOSE_STYLE`, `STYLE_*`, `RETRY_STYLE*`) are treated as stale/unknown payloads, not active product choices
+- stale internal `style_restyle` jobs are normalized to prompt-first `source_image_edit` jobs
+- new product behavior should originate in conversation responses/actions and be rendered at the channel edge
+- remaining cleanup should happen in small PRs after tests prove the replacement behavior
 
 ## 6) Deployment model
 
@@ -338,7 +339,7 @@ This means Cloudflare currently sits behind the storage proxy for durable asset 
 - Inbound dedupe reduces duplicate event processing.
 - Generation failures produce user-facing retry options.
 - Image-generation success/failure follow-ups, contextual help choices, and Messenger consent/delete choices originate as channel-neutral conversation actions and are rendered as Messenger quick replies at the channel edge.
-- Remaining Messenger-state quick reply flows to migrate incrementally: style-category selection, style options within a category, and in-experience option prompts.
+- New Messenger photo-upload state is prompt-first (`AWAITING_EDIT_PROMPT`); legacy `AWAITING_STYLE` persisted state is normalized for compatibility only.
 - Health endpoints + version endpoint support simple monitoring.
 - Face-memory deletion is available through user command, scheduled expiry, and admin kill switch.
 

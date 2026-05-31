@@ -1,6 +1,11 @@
 import type { MessengerSendOutcome } from "./messengerApi";
 import { safeLog } from "./messengerApi";
+import {
+  inferNumberedConversationActions,
+  stripNumberedConversationChoices,
+} from "./conversationActionInference";
 import { renderMessengerQuickReplies } from "./messengerActionRenderer";
+import { setPendingConversationActions } from "./messengerState";
 import { toLogUser, toUserKey } from "./privacy";
 import type { HandlerContext } from "./webhookHandlers";
 import type { BotImageContext, BotPayloadContext, BotTextContext } from "./botContext";
@@ -15,6 +20,30 @@ function logMessengerWebhookTrace(
 
 type FeatureContext = BotImageContext | BotPayloadContext | BotTextContext;
 
+async function sendFeatureActions(
+  trackedCtx: HandlerContext,
+  input: {
+    userPsid: string;
+    requestId: string;
+    text: string;
+    actions: ReturnType<typeof inferNumberedConversationActions>;
+  }
+): Promise<void> {
+  const outcome = await trackedCtx.sendLoggedQuickReplies(
+    input.userPsid,
+    input.text,
+    renderMessengerQuickReplies(input.actions),
+    input.requestId
+  );
+  await Promise.resolve(
+    setPendingConversationActions(
+      input.userPsid,
+      input.actions,
+      outcome?.sent ? outcome.messageId : undefined
+    )
+  );
+}
+
 function decorateFeatureContext<TContext extends FeatureContext>(
   featureCtx: TContext,
   trackedCtx: HandlerContext,
@@ -26,30 +55,37 @@ function decorateFeatureContext<TContext extends FeatureContext>(
   return {
     ...featureCtx,
     sendText: async text => {
+      const inferredActions = inferNumberedConversationActions(text);
+      if (inferredActions.length) {
+        await sendFeatureActions(trackedCtx, {
+          userPsid,
+          requestId,
+          text: stripNumberedConversationChoices(text),
+          actions: inferredActions,
+        });
+        return;
+      }
+
       await trackedCtx.sendLoggedText(userPsid, text, requestId);
     },
     sendImage: async imageUrl => {
       await trackedCtx.sendLoggedImage(userPsid, imageUrl, requestId);
     },
     sendActions: async (text, actions) => {
-      await trackedCtx.sendLoggedQuickReplies(
+      await sendFeatureActions(trackedCtx, {
         userPsid,
-        text,
-        renderMessengerQuickReplies(actions),
-        requestId
-      );
-    },
-    chooseStyle: async style => {
-      await trackedCtx.handleStyleSelection(
-        userPsid,
-        featureUserId,
-        style,
         requestId,
-        userLang
-      );
+        text,
+        actions,
+      });
     },
-    runStyleGeneration: async (style, sourceImageUrl, promptHint, directorMode) => {
-      await trackedCtx.runStyleGeneration(
+    clearImageContext: featureCtx.clearImageContext
+      ? async () => {
+          await featureCtx.clearImageContext?.();
+        }
+      : undefined,
+    runImageGeneration: async (style, sourceImageUrl, promptHint, directorMode, generationKind) => {
+      await trackedCtx.runImageGeneration(
         userPsid,
         featureUserId,
         style,
@@ -57,7 +93,8 @@ function decorateFeatureContext<TContext extends FeatureContext>(
         userLang,
         sourceImageUrl,
         promptHint,
-        directorMode
+        directorMode,
+        generationKind
       );
     },
   };
@@ -150,23 +187,6 @@ export function createTrackedHandlerContext(
         userLang
       );
     },
-    handleStyleSelection: async (
-      userPsid,
-      featureUserId,
-      style,
-      requestId,
-      userLang
-    ) => {
-      const outcome = await ctx.handleStyleSelection(
-        userPsid,
-        featureUserId,
-        style,
-        requestId,
-        userLang
-      );
-      markResponseSentFromOutcome(outcome);
-      return outcome;
-    },
     maybeSendInFlightMessage: async (userPsid, requestId) => {
       const result = await ctx.maybeSendInFlightMessage(userPsid, requestId);
       if (result.handled && "outcome" in result && result.outcome) {
@@ -174,7 +194,7 @@ export function createTrackedHandlerContext(
       }
       return result;
     },
-    runStyleGeneration: async (
+    runImageGeneration: async (
       userPsid,
       featureUserId,
       style,
@@ -182,9 +202,10 @@ export function createTrackedHandlerContext(
       userLang,
       sourceImageUrl,
       promptHint,
-      directorMode
+      directorMode,
+      generationKind
     ) => {
-      const outcome = await ctx.runStyleGeneration(
+      const outcome = await ctx.runImageGeneration(
         userPsid,
         featureUserId,
         style,
@@ -192,7 +213,8 @@ export function createTrackedHandlerContext(
         userLang,
         sourceImageUrl,
         promptHint,
-        directorMode
+        directorMode,
+        generationKind
       );
       markResponseSentFromOutcome(outcome);
       return outcome;
@@ -253,30 +275,6 @@ export function createTrackedHandlerContext(
       });
       return outcome;
     },
-    sendStateQuickReplies: async (userPsid, stateName, text, requestId) => {
-      logMessengerWebhookTrace("before_send", {
-        reqId: requestId,
-        user: toLogUser(toUserKey(userPsid)),
-        kind: "state_quick_replies",
-        state: stateName,
-      });
-      const outcome = await ctx.sendStateQuickReplies(
-        userPsid,
-        stateName,
-        text,
-        requestId
-      );
-      markResponseSentFromOutcome(outcome);
-      logMessengerWebhookTrace("after_send", {
-        reqId: requestId,
-        user: toLogUser(toUserKey(userPsid)),
-        kind: "state_quick_replies",
-        state: stateName,
-        sent: outcome?.sent ?? false,
-        ...(outcome && !outcome.sent ? { reason: outcome.reason } : {}),
-      });
-      return outcome;
-    },
     sendFaceMemoryConsentPrompt: async (userPsid, userLang, requestId) => {
       const outcome = await ctx.sendFaceMemoryConsentPrompt(
         userPsid,
@@ -297,26 +295,6 @@ export function createTrackedHandlerContext(
         userLang,
         requestId
       );
-      markResponseSentFromOutcome(outcome);
-      return outcome;
-    },
-    sendPrivacyInfo: async (userPsid, userLang, requestId) => {
-      const outcome = await ctx.sendPrivacyInfo(userPsid, userLang, requestId);
-      markResponseSentFromOutcome(outcome);
-      return outcome;
-    },
-    sendStyleOptionsForCategory: async (userPsid, category, userLang, requestId) => {
-      const outcome = await ctx.sendStyleOptionsForCategory(
-        userPsid,
-        category,
-        userLang,
-        requestId
-      );
-      markResponseSentFromOutcome(outcome);
-      return outcome;
-    },
-    sendStylePicker: async (userPsid, userLang, requestId) => {
-      const outcome = await ctx.sendStylePicker(userPsid, userLang, requestId);
       markResponseSentFromOutcome(outcome);
       return outcome;
     },

@@ -1,0 +1,108 @@
+name: Publish Plugin to ClawHub
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/clawhub-plugin-publish.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "openclaw.plugin.json"
+      - "README.md"
+      - "docs/**"
+      - "examples/**"
+      - "src/**"
+      - "*.ts"
+      - "tsconfig.json"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a real ClawHub release. Leave false for dry-run.
+        type: boolean
+        required: true
+        default: false
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  package-artifact:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Dry-run npm pack
+        run: npm run pack:dry
+
+      - name: Create npm tarball
+        id: pack
+        run: |
+          npm pack
+          tarball="$(ls dj-shortcut-facebook-*.tgz | head -n 1)"
+          test -n "$tarball"
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+
+      - name: Validate tarball contents
+        run: |
+          tarball="${{ steps.pack.outputs.tarball }}"
+          tar -tzf "$tarball" > /tmp/openclaw-facebook-tarball-files.txt
+          grep -Fx "package/dist/index.js" /tmp/openclaw-facebook-tarball-files.txt
+          grep -Fx "package/dist/setup-entry.js" /tmp/openclaw-facebook-tarball-files.txt
+          grep -Fx "package/openclaw.plugin.json" /tmp/openclaw-facebook-tarball-files.txt
+          grep -Fx "package/package.json" /tmp/openclaw-facebook-tarball-files.txt
+          grep -Fx "package/README.md" /tmp/openclaw-facebook-tarball-files.txt
+          grep -Fx "package/docs/clawhub-listing.md" /tmp/openclaw-facebook-tarball-files.txt
+          grep -Fx "package/docs/setup.md" /tmp/openclaw-facebook-tarball-files.txt
+
+      - name: Install tarball in isolated OpenClaw profile
+        run: |
+          tarball="${{ steps.pack.outputs.tarball }}"
+          ./node_modules/.bin/openclaw --profile ci-facebook-clawhub-package plugins install "./$tarball" --force
+          ./node_modules/.bin/openclaw --profile ci-facebook-clawhub-package plugins inspect facebook --json > /tmp/facebook-plugin-inspect.json
+          ./node_modules/.bin/openclaw --profile ci-facebook-clawhub-package channels list --all --json > /tmp/openclaw-channels.json
+          node -e "const fs=require('node:fs'); const inspect=JSON.parse(fs.readFileSync('/tmp/facebook-plugin-inspect.json','utf8')); if (inspect.diagnostics?.length) throw new Error(JSON.stringify(inspect.diagnostics)); if (!inspect.plugin?.channelIds?.includes('facebook')) throw new Error('facebook channel not loaded from plugin'); const channels=JSON.parse(fs.readFileSync('/tmp/openclaw-channels.json','utf8')).chat ?? {}; if (!channels.facebook?.installed) throw new Error('facebook is not installed in channel catalog'); if (channels.messenger) throw new Error('messenger appeared as a separate channel');"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ steps.pack.outputs.tarball }}
+          path: ${{ steps.pack.outputs.tarball }}
+          if-no-files-found: error
+
+  clawhub-dry-run:
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.publish == false)
+    needs: package-artifact
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@v0.12.0
+    with:
+      dry_run: true
+
+  clawhub-publish:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
+    needs: package-artifact
+    permissions:
+      contents: read
+      id-token: write
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@v0.12.0
+    with:
+      dry_run: false
+    secrets:
+      clawhub_token: ${{ secrets.CLAWHUB_TOKEN }}

@@ -2,12 +2,12 @@ import { getBotFeatures } from "../bot/features";
 import type { BotLogger, BotTextContext } from "../botContext";
 import { getTodayRuntimeStats } from "../botRuntimeStats";
 import {
+  clearPendingImageState,
   setFlowState,
-  setPreselectedStyle,
 } from "../messengerState";
 import { toLogUser } from "../privacy";
-import { createWhatsAppQuickReplySender } from "../whatsappResponseService";
-import { runWhatsAppStyleGeneration } from "../whatsappFlows/styleGenerationFlow";
+import { createWhatsAppResponseSender } from "../whatsappResponseService";
+import { runWhatsAppImageGeneration } from "../whatsappFlows/imageGenerationFlow";
 import type { NormalizedWhatsAppEvent, WhatsAppHandlerContext } from "../whatsappTypes";
 
 function createWhatsAppFeatureLogger(userId: string): BotLogger {
@@ -32,7 +32,7 @@ export function createWhatsAppTextContext(
   normalizedText: string,
   hasPhoto: boolean
 ): BotTextContext {
-  const sender = createWhatsAppQuickReplySender(event.senderId);
+  const sender = createWhatsAppResponseSender(event.senderId);
   return {
     channel: "whatsapp",
     capabilities: { quickReplies: false, richTemplates: false },
@@ -49,18 +49,10 @@ export function createWhatsAppTextContext(
     sendActions: sender.sendActions,
     setFlowState: nextState =>
       Promise.resolve(setFlowState(event.senderId, nextState)),
-    preselectStyle: style =>
-      Promise.resolve(setPreselectedStyle(event.senderId, style)).then(() => undefined),
-    chooseStyle: style =>
-      runWhatsAppStyleGeneration({
-        senderId: event.senderId,
-        userId: event.userId,
-        style,
-        reqId: context.reqId,
-        lang: context.lang,
-      }),
-    runStyleGeneration: (style, sourceImageUrl, promptHint, directorMode) =>
-      runWhatsAppStyleGeneration({
+    clearImageContext: () =>
+      Promise.resolve(clearPendingImageState(event.senderId)).then(() => undefined),
+    runImageGeneration: (style, sourceImageUrl, promptHint, directorMode, generationKind) =>
+      runWhatsAppImageGeneration({
         senderId: event.senderId,
         userId: event.userId,
         style,
@@ -69,6 +61,7 @@ export function createWhatsAppTextContext(
         sourceImageUrl,
         promptHint,
         directorMode,
+        generationKind,
       }),
     getRuntimeStats: () => getTodayRuntimeStats(),
     logger: createWhatsAppFeatureLogger(event.userId),
