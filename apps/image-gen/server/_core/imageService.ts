@@ -3,7 +3,6 @@ import { safeLen, sha256 } from "./imageProof";
 import { buildDirectorPrompt } from "./image-generation/director/directorPromptBuilder";
 import { analyzeDirectorPhoto } from "./image-generation/director/directorPhotoAnalyzer";
 import type { DirectorMode } from "./image-generation/director/directorTypes";
-import { buildLegacyPresetPrompt } from "./image-generation/legacyPresetPrompts";
 import {
   attachGenerationMetrics,
   buildOpenAiRequest,
@@ -30,7 +29,6 @@ import { publishGeneratedImage } from "./image-generation/generatedImagePublishe
 import type { GenerationKind } from "./image-generation/generationTypes";
 import {
   GenerationTimeoutError,
-  InvalidGenerationInputError,
   MissingOpenAiApiKeyError,
 } from "./image-generation/imageServiceErrors";
 import { getMessengerGenerationGlobalLimitConfig } from "./generationGuard";
@@ -123,11 +121,16 @@ function buildPromptForGeneration(input: GeneratorInput, photoAnalysis?: string)
     return buildSourceImageEditPrompt(input.promptHint ?? "");
   }
 
-  if (!input.style) {
-    throw new InvalidGenerationInputError("Legacy preset style is required");
-  }
+  return buildSourceImageEditPrompt(
+    input.promptHint ??
+      (input.style
+        ? `Apply ${styleToNaturalLanguage(input.style)} as natural-language visual direction.`
+        : "")
+  );
+}
 
-  return buildLegacyPresetPrompt(input.style, input.promptHint);
+function styleToNaturalLanguage(style: Style): string {
+  return style.replace(/-/g, " ");
 }
 
 export function getGeneratorStartupConfig(): {
@@ -194,7 +197,7 @@ async function prepareGenerationInput(
       msg: "image_prompt_built",
       reqId: input.reqId,
       generationKind: input.generationKind ?? null,
-      legacyPresetStyle: input.generationKind === "style_restyle" ? input.style : null,
+      staleStyleHint: input.style ?? null,
       directorMode: input.directorMode,
       durationMs: promptBuildMs,
       promptChars: prompt.length,

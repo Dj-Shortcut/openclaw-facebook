@@ -5,7 +5,6 @@ import {
   OpenAiImageGenerator,
 } from "./_core/imageService";
 import { buildDirectorPrompt } from "./_core/image-generation/director/directorPromptBuilder";
-import { buildLegacyPresetPrompt } from "./_core/image-generation/legacyPresetPrompts";
 
 const GENERATED_IMAGE_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0ioAAAAASUVORK5CYII=";
@@ -248,9 +247,7 @@ describe("image provider boundary", () => {
 
     const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
       const prompt = await promptFromRequest(init);
-      expect(prompt).toBe(
-        buildLegacyPresetPrompt("disco", "more glitter in the background")
-      );
+      expect(prompt).toContain("Edit the uploaded/source image according to the user's request.");
       expect(prompt).toContain("not as a preset style catalog");
       expect(prompt).toContain("User request: more glitter in the background");
       expect(prompt).not.toContain("glamorous disco-era hero shot");
