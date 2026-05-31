@@ -8,7 +8,6 @@ import type {
   MessengerUserState,
 } from "./messengerState";
 import type { ConversationAction } from "./botResponse";
-import type { Style } from "./messengerStyles";
 import type { GenerationStatsSnapshot } from "./botRuntimeStats";
 import type { DirectorMode } from "./image-generation/director/directorTypes";
 import type { GenerationKind } from "./image-generation/generationTypes";
@@ -35,7 +34,7 @@ type BotContextBase = {
   setFlowState(state: ConversationState): Promise<void>;
   clearImageContext?(): Promise<void>;
   runImageGeneration(
-    style: Style | undefined,
+    style: string | undefined,
     sourceImageUrl?: string,
     promptHint?: string,
     directorMode?: DirectorMode,

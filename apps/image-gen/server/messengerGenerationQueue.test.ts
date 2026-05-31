@@ -645,14 +645,14 @@ describe("messengerGenerationQueue", () => {
     expect(dead).toEqual([]);
   });
 
-  it("dead-letters structurally invalid pending job payloads", async () => {
+  it("dead-letters pending job payloads with non-string style hints", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
     isRedisEnabledMock.mockReturnValue(true);
     const invalidJob = JSON.stringify({
       psid: "user-1",
       userId: "user-key-1",
-      style: "not-a-style",
+      style: 123,
       reqId: "req-invalid-style",
       lang: "nl",
     });

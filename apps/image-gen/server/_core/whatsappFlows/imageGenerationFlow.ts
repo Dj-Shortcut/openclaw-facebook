@@ -10,7 +10,6 @@ import type { GenerationKind } from "../image-generation/generationTypes";
 import { runGuardedGeneration } from "../generationGuard";
 import { t, type Lang } from "../i18n";
 import type { SourceImageOrigin } from "../messengerState";
-import type { Style } from "../messengerStyles";
 import { canGenerate, increment } from "../messengerQuota";
 import {
   clearPendingImageState,
@@ -28,7 +27,7 @@ import { summarizeSensitiveUrl } from "../utils/urlSummarizer";
 type ImageGenerationInput = {
   senderId: string;
   userId: string;
-  style?: Style;
+  style?: string;
   reqId: string;
   lang: Lang;
   sourceImageUrl?: string;
@@ -56,7 +55,7 @@ function resolvedSourceHost(url?: string): string | undefined {
 
 function logGenerationRequested(input: {
   userId: string;
-  style?: Style;
+  style?: string;
   directorMode?: DirectorMode;
   promptHint?: string;
   resolvedSourceImageUrl?: string;
@@ -119,7 +118,7 @@ async function prepareGeneration(input: ImageGenerationInput): Promise<{
 async function handleGenerationSuccess(input: {
   senderId: string;
   lang: Lang;
-  style?: Style;
+  style?: string;
   generationKind?: GenerationKind;
   directorMode?: DirectorMode;
   promptHint?: string;
@@ -153,7 +152,7 @@ async function handleGenerationSuccess(input: {
 
 function logGenerationFailure(input: {
   userId: string;
-  style?: Style;
+  style?: string;
   result: GenerationFailure;
 }): void {
   const metrics = input.result.metrics ?? getGenerationMetrics(input.result.error);
@@ -170,7 +169,7 @@ function logGenerationFailure(input: {
 
 function logRejectedSourceImage(input: {
   userId: string;
-  style?: Style;
+  style?: string;
   result: GenerationFailure;
 }): void {
   if (
@@ -190,7 +189,7 @@ function logRejectedSourceImage(input: {
 async function resolveGenerationFailure(input: {
   senderId: string;
   userId: string;
-  style?: Style;
+  style?: string;
   lang: Lang;
   sourceImageUrl?: string;
   lastPhotoUrl?: string | null;
@@ -239,7 +238,7 @@ async function resolveGenerationFailure(input: {
 async function handleGenerationFailure(input: {
   senderId: string;
   userId: string;
-  style?: Style;
+  style?: string;
   lang: Lang;
   sourceImageUrl?: string;
   lastPhotoUrl?: string | null;

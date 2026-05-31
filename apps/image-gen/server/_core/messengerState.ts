@@ -1,4 +1,3 @@
-import type { Style } from "./messengerStyles";
 import type { DirectorMode } from "./image-generation/director/directorTypes";
 import type { Lang } from "./i18n";
 import type { ConversationAction } from "./botResponse";
@@ -57,7 +56,6 @@ export type MessengerUserState = {
   pendingSourceImageDeleteUrl?: string | null;
   lastImageUrl?: string;
   lastGeneratedUrl?: string | null;
-  lastStyle?: Style;
   lastDirectorMode?: DirectorMode;
   lastPrompt?: string;
   lastGeneratedAt?: number;
@@ -424,13 +422,12 @@ export function setLastGenerated(psid: string, resultImageUrl: string, now = Dat
 
 export function setLastGenerationContext(
   psid: string,
-  context: { style?: Style; directorMode?: DirectorMode; prompt?: string },
+  context: { directorMode?: DirectorMode; prompt?: string },
   now = Date.now()
 ): MaybePromise<void> {
   const result = patchState(
     psid,
     {
-      lastStyle: context.style,
       lastDirectorMode: context.directorMode,
       lastPrompt: context.prompt,
     },

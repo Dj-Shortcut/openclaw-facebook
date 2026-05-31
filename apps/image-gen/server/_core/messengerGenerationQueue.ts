@@ -11,19 +11,6 @@ const DEFAULT_JOB_LEASE_BUFFER_SECONDS = 60;
 const OPENAI_TIMEOUT_MS_DEFAULT = 180_000;
 const DEFAULT_MAX_JOB_ATTEMPTS = 3;
 const DEFAULT_DRAIN_BATCH_SIZE = 10;
-const MESSENGER_GENERATION_STYLES = new Set([
-  "caricature",
-  "storybook-anime",
-  "afroman-americana",
-  "gold",
-  "petals",
-  "clouds",
-  "cinematic",
-  "disco",
-  "cyberpunk",
-  "oil-paint",
-  "norman-blackwell",
-]);
 const MESSENGER_GENERATION_LANGS = new Set(["nl", "en"]);
 const MESSENGER_GENERATION_DIRECTOR_MODES = new Set([
   "midnight_luxury",
@@ -383,10 +370,6 @@ function isOptionalGenerationKind(value: unknown): boolean {
   );
 }
 
-function isValidGenerationStyle(value: unknown): boolean {
-  return typeof value === "string" && MESSENGER_GENERATION_STYLES.has(value);
-}
-
 function isOptionalAttempts(value: unknown): value is number | undefined {
   return (
     value === undefined ||
@@ -410,13 +393,10 @@ function parseMessengerGenerationJob(
     !isOptionalGenerationKind(value.generationKind) ||
     !isOptionalString(value.sourceImageUrl) ||
     !isOptionalString(value.promptHint) ||
+    !isOptionalString(value.style) ||
     !isOptionalDirectorMode(value.directorMode) ||
     !isOptionalAttempts(value.attempts)
   ) {
-    return null;
-  }
-
-  if (value.style !== undefined && !isValidGenerationStyle(value.style)) {
     return null;
   }
 

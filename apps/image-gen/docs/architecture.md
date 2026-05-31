@@ -171,7 +171,7 @@ Core files:
 - stage/status (`IDLE` .. `FAILURE`)
 - latest photo URL fields
 - latest photo provenance (`external` vs `stored`)
-- optional legacy `lastStyle` compatibility for persisted historical state only
+- legacy style fields are ignored during state normalization
 - preferred language
 - pending/generated image references
 - optional face-memory consent and retained source-image URL fields

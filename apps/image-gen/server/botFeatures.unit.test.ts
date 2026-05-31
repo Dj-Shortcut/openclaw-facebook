@@ -423,7 +423,6 @@ describe("conversationalEditingFeature", () => {
             lastGeneratedUrl: "https://img.example/generated.jpg",
             lastPhotoUrl: "https://img.example/source.jpg",
             lastDirectorMode: "midnight_luxury",
-            lastStyle: "cinematic",
           }),
         })
       );

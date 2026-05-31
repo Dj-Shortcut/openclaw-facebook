@@ -17,7 +17,6 @@ import {
   MissingInputImageError,
 } from "./image-generation/sourceImageFetcher";
 import type { SourceImageOrigin } from "./messengerState";
-import type { Style } from "./messengerStyles";
 import type { DirectorMode } from "./image-generation/director/directorTypes";
 import type { GenerationKind } from "./image-generation/generationTypes";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
@@ -73,7 +72,7 @@ type GenerationFlowResult =
   | GenerationFlowFailure;
 
 type ExecuteGenerationFlowInput = {
-  style?: Style;
+  style?: string;
   generationKind?: GenerationKind;
   userId: string;
   reqId: string;
