@@ -4,7 +4,6 @@ import {
   getGeneratorStartupConfig,
   OpenAiImageGenerator,
 } from "./_core/imageService";
-import { buildDirectorPrompt } from "./_core/image-generation/director/directorPromptBuilder";
 
 const GENERATED_IMAGE_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0ioAAAAASUVORK5CYII=";
@@ -345,19 +344,16 @@ describe("image provider boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("sends a director prompt to OpenAI when director mode is provided", async () => {
+  it("ignores stale director mode input and keeps source edits prompt-first", async () => {
     configureOpenAiImagesEnv();
 
-    const directorInput = {
-      mode: "berlin_underground" as const,
-      userInstruction: "make it feel like a late-night event poster",
-      photoAnalysis: "The source photo is a mirror selfie with flat lighting.",
-    };
-
     const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
-      expect(await promptFromRequest(init)).toBe(
-        buildDirectorPrompt(directorInput)
-      );
+      const prompt = await promptFromRequest(init);
+      expect(prompt).toContain("Edit the uploaded/source image");
+      expect(prompt).toContain("User request: make it feel like a late-night event poster");
+      expect(prompt).not.toContain("Berlin Underground");
+      expect(prompt).not.toContain("raw techno-club energy");
+      expect(prompt).not.toContain("Photo analysis:");
 
       return createGeneratedImageResponse();
     });
@@ -366,10 +362,10 @@ describe("image provider boundary", () => {
 
     const generator = new OpenAiImageGenerator();
     await generateWithSourceImageData(generator, {
-      promptHint: "this should not be used for director prompts",
-      directorMode: directorInput.mode,
-      directorInstruction: directorInput.userInstruction,
-      directorPhotoAnalysis: directorInput.photoAnalysis,
+      promptHint: "make it feel like a late-night event poster",
+      directorMode: "berlin_underground",
+      directorInstruction: "this stale director instruction should not be used",
+      directorPhotoAnalysis: "stale director analysis should not be used",
       userKey: "user-1",
       reqId: "req-director-prompt",
     });
@@ -377,37 +373,18 @@ describe("image provider boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("analyzes the source photo before building an automatic director prompt", async () => {
+  it("does not run director photo analysis for stale director mode input", async () => {
     configureOpenAiImagesEnv();
 
     const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const resolved = toUrlString(url);
+      expect(resolved).toBe("https://api.openai.com/v1/responses");
 
-      if (resolved === "https://api.openai.com/v1/responses") {
-        const payload = requestJson(init) as {
-          input?: Array<{ content?: Array<{ type?: string; image_url?: string }> }>;
-          tools?: Array<{ type?: string }>;
-        };
-        if (!payload.tools?.some(tool => tool.type === "image_generation")) {
-          const imagePart = payload.input?.[1]?.content?.find(
-            part => part.type === "input_image"
-          );
-          expect(imagePart?.image_url).toMatch(/^data:image\/jpeg;base64,/);
-
-          return {
-            ok: true,
-            json: async () => ({
-              output_text:
-                "Single subject, flat indoor lighting, cluttered background, centered selfie framing.",
-            }),
-          } as Response;
-        }
-
-        expect(await promptFromRequest(init)).toContain(
-          "Single subject, flat indoor lighting, cluttered background, centered selfie framing."
-        );
-        return createGeneratedImageResponse();
-      }
+      const prompt = await promptFromRequest(init);
+      expect(prompt).toContain("Edit the uploaded/source image");
+      expect(prompt).not.toContain("Single subject, flat indoor lighting");
+      expect(prompt).not.toContain("Vogue Editorial");
+      return createGeneratedImageResponse();
     });
 
     vi.stubGlobal("fetch", fetchMock);
@@ -415,32 +392,27 @@ describe("image provider boundary", () => {
     const generator = new OpenAiImageGenerator();
     await generateWithSourceImageData(generator, {
       directorMode: "vogue_editorial",
+      promptHint: "make it cleaner and more editorial",
       userKey: "user-1",
       reqId: "req-director-analysis",
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("continues director generation when photo analysis fails", async () => {
+  it("does not call the director analysis path when director analysis would have failed", async () => {
     configureOpenAiImagesEnv();
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const resolved = toUrlString(url);
+      expect(resolved).toBe("https://api.openai.com/v1/responses");
 
-      if (resolved === "https://api.openai.com/v1/responses") {
-        const payload = requestJson(init) as { tools?: Array<{ type?: string }> };
-        if (payload.tools?.some(tool => tool.type === "image_generation")) {
-          expect(await promptFromRequest(init)).toContain("No photo analysis provided");
-          return createGeneratedImageResponse();
-        }
-
-        return {
-          ok: false,
-          status: 500,
-        } as Response;
-      }
+      const prompt = await promptFromRequest(init);
+      expect(prompt).toContain("Edit the uploaded/source image");
+      expect(prompt).not.toContain("No photo analysis provided");
+      expect(prompt).not.toContain("Old Money");
+      return createGeneratedImageResponse();
     });
 
     vi.stubGlobal("fetch", fetchMock);
@@ -448,11 +420,12 @@ describe("image provider boundary", () => {
     const generator = new OpenAiImageGenerator();
     await generateWithSourceImageData(generator, {
       directorMode: "old_money",
+      promptHint: "make it feel more premium but natural",
       userKey: "user-1",
       reqId: "req-director-analysis-fail",
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("uses prompt-first source-image edits without the cinematic preset prompt", async () => {

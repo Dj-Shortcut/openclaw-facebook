@@ -191,7 +191,7 @@ describe("generationFlow", () => {
     );
   });
 
-  it("threads optional director fields to the image generator", async () => {
+  it("drops stale director fields before calling the prompt-first image generator", async () => {
     const generateMock = vi.fn().mockResolvedValue({
       imageUrl: "https://example.com/generated.jpg",
       proof: {
@@ -219,11 +219,13 @@ describe("generationFlow", () => {
 
     expect(result).toMatchObject({ kind: "success" });
     expect(generateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        generationKind: "source_image_edit",
-        directorMode: "midnight_luxury",
-        directorInstruction: "make it feel like an exclusive event portrait",
-        directorPhotoAnalysis: "The source image has low ambient light.",
+      expect.objectContaining({ generationKind: "source_image_edit" })
+    );
+    expect(generateMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        directorMode: expect.anything(),
+        directorInstruction: expect.anything(),
+        directorPhotoAnalysis: expect.anything(),
       })
     );
   });

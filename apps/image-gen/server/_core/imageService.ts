@@ -1,6 +1,4 @@
 import { safeLen, sha256 } from "./imageProof";
-import { buildDirectorPrompt } from "./image-generation/director/directorPromptBuilder";
-import { analyzeDirectorPhoto } from "./image-generation/director/directorPhotoAnalyzer";
 import type { DirectorMode } from "./image-generation/director/directorTypes";
 import {
   attachGenerationMetrics,
@@ -101,17 +99,9 @@ function ensureGeneratedImageBuffer(buffer: Buffer): Buffer {
   return buffer;
 }
 
-function buildPromptForGeneration(input: GeneratorInput, photoAnalysis?: string): string {
+function buildPromptForGeneration(input: GeneratorInput): string {
   if (input.generationKind === "text_to_image") {
     return buildTextToImagePrompt(input.promptHint ?? "");
-  }
-
-  if (input.directorMode) {
-    return buildDirectorPrompt({
-      mode: input.directorMode,
-      userInstruction: input.directorInstruction,
-      photoAnalysis,
-    });
   }
 
   if (input.generationKind === "source_image_edit") {
@@ -175,11 +165,7 @@ async function prepareGenerationInput(
   logSourceImageFetchStart(input);
   const sourceImage = await resolveStoredSourceImage(input);
   const promptStartedAt = Date.now();
-  const photoAnalysis =
-    input.directorMode && !input.directorPhotoAnalysis
-      ? await analyzeDirectorPhoto(sourceImage, input.reqId)
-      : input.directorPhotoAnalysis;
-  const prompt = buildPromptForGeneration(input, photoAnalysis);
+  const prompt = buildPromptForGeneration(input);
   const promptBuildMs = Date.now() - promptStartedAt;
   console.info(
     JSON.stringify({
@@ -187,7 +173,6 @@ async function prepareGenerationInput(
       msg: "image_prompt_built",
       reqId: input.reqId,
       generationKind: input.generationKind ?? null,
-      directorMode: input.directorMode,
       durationMs: promptBuildMs,
       promptChars: prompt.length,
     })
