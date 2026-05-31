@@ -10,6 +10,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { type ChannelPlugin, type ResolvedMessengerAccount } from "./channel-api.js";
 import { FACEBOOK_CHANNEL_ID } from "./naming.js";
 import {
+  MESSENGER_QUICK_REPLY_MAX_COUNT,
   getMessengerQuickReplies,
   renderMessengerPresentationPayload,
   renderMessengerReplyPayload,
@@ -30,8 +31,8 @@ export const messengerOutboundAdapter: NonNullable<
     selects: true,
     limits: {
       actions: {
-        maxActions: 4,
-        maxActionsPerRow: 4,
+        maxActions: MESSENGER_QUICK_REPLY_MAX_COUNT,
+        maxActionsPerRow: MESSENGER_QUICK_REPLY_MAX_COUNT,
         maxRows: 1,
         maxLabelLength: 20,
         maxValueBytes: 1000,
@@ -39,7 +40,7 @@ export const messengerOutboundAdapter: NonNullable<
         supportsDisabled: false,
       },
       selects: {
-        maxOptions: 4,
+        maxOptions: MESSENGER_QUICK_REPLY_MAX_COUNT,
         maxLabelLength: 20,
         maxValueBytes: 1000,
       },

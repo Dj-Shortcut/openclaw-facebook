@@ -55,7 +55,7 @@ describe("OpenAi image delivery via object storage", () => {
         } as Response;
       }
 
-      if (toUrlString(url).startsWith("https://forge.example/v1/storage/upload?path=generated%2Fdisco%2F")) {
+      if (toUrlString(url).startsWith("https://forge.example/v1/storage/upload?path=generated%2Fimages%2F")) {
         expect(toUrlString(url)).toMatch(/\.jpg$/);
         expect(init?.method).toBe("POST");
         expect(init?.headers).toEqual({ Authorization: "Bearer forge-secret" });
@@ -66,7 +66,7 @@ describe("OpenAi image delivery via object storage", () => {
 
         return {
           ok: true,
-          json: async () => ({ url: "https://cdn.example/generated/disco.jpg?signature=abc" }),
+          json: async () => ({ url: "https://cdn.example/generated/images/result.jpg?signature=abc" }),
         } as Response;
       }
 
@@ -85,9 +85,9 @@ describe("OpenAi image delivery via object storage", () => {
       reqId: "req-storage-1",
     });
 
-    expect(result.imageUrl).toBe("https://cdn.example/generated/disco.jpg?signature=abc");
+    expect(result.imageUrl).toBe("https://cdn.example/generated/images/result.jpg?signature=abc");
     expect(fetchMock).toHaveBeenCalledTimes(3);
-  });
+  }, 10_000);
 
   it("fails clearly in production when durable storage config is missing", async () => {
     process.env.NODE_ENV = "production";

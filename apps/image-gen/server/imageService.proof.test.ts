@@ -846,13 +846,13 @@ describe("OpenAi image-to-image proof", () => {
 
       if (
         toUrlString(url).startsWith(
-          "https://forge.example/v1/storage/upload?path=generated%2Fdisco%2F"
+          "https://forge.example/v1/storage/upload?path=generated%2Fimages%2F"
         )
       ) {
         return {
           ok: true,
           json: async () => ({
-            url: "https://cdn.example/generated/disco.jpg?signature=prod",
+            url: "https://cdn.example/generated/images/result.jpg?signature=prod",
           }),
         } as Response;
       }
@@ -875,7 +875,7 @@ describe("OpenAi image-to-image proof", () => {
     });
 
     expect(result.imageUrl).toBe(
-      "https://cdn.example/generated/disco.jpg?signature=prod"
+      "https://cdn.example/generated/images/result.jpg?signature=prod"
     );
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });

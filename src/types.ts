@@ -61,6 +61,9 @@ export type MessengerWebhookMessaging = {
     mid?: string;
     text?: string;
     is_echo?: boolean;
+    reply_to?: {
+      mid?: string;
+    };
     quick_reply?: {
       payload?: string;
     };

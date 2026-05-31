@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildAssistantPhotoHelpResponse,
+  buildPhotoReceivedResponse,
   buildQuickStartResponse,
   buildGenerationFailureResponse,
   buildGenerationSuccessResponse,
@@ -12,37 +14,62 @@ describe("conversation actions", () => {
     expect(buildQuickStartResponse("nl")).toEqual({
       text: "Beschrijf wat je wilt maken, of stuur een foto als je die wilt bewerken.",
       actions: [
-        { id: "WHAT_IS_THIS", label: "Wat doe ik?", inputText: "Wat doe ik?" },
-        { id: "PRIVACY_INFO", label: "Privacy" },
+        { id: "new_image", label: "Nieuwe afbeelding", inputText: "Nieuwe afbeelding" },
+        { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
+        { id: "privacy", label: "Privacy", inputText: "Privacy" },
       ],
     });
   });
 
   it("builds image-generation success follow-up actions without Messenger payload shape", () => {
     expect(buildGenerationSuccessResponse("en")).toEqual({
-      text: "Done ✅",
+      text: "Done.",
       actions: [
-        { id: "NEW_IMAGE", label: "New image", inputText: "New image" },
-        { id: "PRIVACY_INFO", label: "Privacy" },
+        { id: "new_image", label: "New image", inputText: "New image" },
+        { id: "edit_photo", label: "Edit image", inputText: "Edit image" },
+        { id: "privacy", label: "Privacy", inputText: "Privacy" },
       ],
     });
   });
 
   it("renders neutral actions as Messenger quick replies at the channel edge", () => {
     expect(
-      renderMessengerQuickReplies([{ id: "PRIVACY_INFO", label: "Privacy" }])
+      renderMessengerQuickReplies([
+        { id: "privacy", label: "Privacy", inputText: "Privacy" },
+      ])
     ).toEqual([
       {
         content_type: "text",
         title: "Privacy",
-        payload: "PRIVACY_INFO",
+        payload: "OPENCLAW_ACTION:Privacy",
       },
     ]);
   });
 
+  it("builds photo-context help choices as concrete conversation actions", () => {
+    expect(buildAssistantPhotoHelpResponse("nl")).toEqual({
+      text: "Je afbeelding staat klaar. Wat wil je doen?",
+      actions: [
+        { id: "edit_photo", label: "Pas aan", inputText: "Pas aan" },
+        { id: "new_image", label: "Nieuwe afbeelding", inputText: "Nieuwe afbeelding" },
+        { id: "privacy", label: "Privacy", inputText: "Privacy" },
+      ],
+    });
+  });
+
+  it("builds photo-received choices without legacy style picker actions", () => {
+    expect(buildPhotoReceivedResponse("nl")).toEqual({
+      text: "Foto ontvangen. Wat wil je aanpassen?",
+      actions: [
+        { id: "edit_photo", label: "Pas aan", inputText: "Pas aan" },
+        { id: "privacy", label: "Privacy", inputText: "Privacy" },
+      ],
+    });
+  });
+
   it("renders action input as a Messenger payload that can become normal text again", () => {
     const [reply] = renderMessengerQuickReplies([
-      { id: "NEW_IMAGE", label: "New image", inputText: "New image" },
+      { id: "new_image", label: "New image", inputText: "New image" },
     ]);
 
     expect(reply).toEqual({
@@ -54,10 +81,10 @@ describe("conversation actions", () => {
   });
 
   it("builds generation failure actions before Messenger rendering", () => {
-    expect(buildGenerationFailureResponse("en", "Try again?", "gold")).toEqual({
+    expect(buildGenerationFailureResponse("en", "Try again?")).toEqual({
       text: "Try again?",
       actions: [
-        { id: "NEW_IMAGE", label: "New image", inputText: "New image" },
+        { id: "new_image", label: "New image", inputText: "New image" },
       ],
     });
   });
@@ -65,7 +92,7 @@ describe("conversation actions", () => {
   it("does not render legacy retry payloads from migrated failure actions", () => {
     expect(
       renderMessengerQuickReplies(
-        buildGenerationFailureResponse("en", "Try again?", "gold").actions
+        buildGenerationFailureResponse("en", "Try again?").actions
       )
     ).toEqual([
       {

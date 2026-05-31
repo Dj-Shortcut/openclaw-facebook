@@ -5,7 +5,7 @@ import {
   OpenAiImageGenerator,
 } from "./_core/imageService";
 import { buildDirectorPrompt } from "./_core/image-generation/director/directorPromptBuilder";
-import { buildStylePrompt } from "./_core/image-generation/promptBuilder";
+import { buildLegacyPresetPrompt } from "./_core/image-generation/legacyPresetPrompts";
 
 const GENERATED_IMAGE_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0ioAAAAASUVORK5CYII=";
@@ -248,7 +248,7 @@ describe("image provider boundary", () => {
 
     const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
       expect(await promptFromRequest(init)).toBe(
-        buildStylePrompt("disco", "more glitter in the background")
+        buildLegacyPresetPrompt("disco", "more glitter in the background")
       );
 
       return createGeneratedImageResponse();
@@ -460,5 +460,34 @@ describe("image provider boundary", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses prompt-first source-image edits without the cinematic preset prompt", async () => {
+    configureOpenAiImagesEnv();
+
+    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const resolved = toUrlString(url);
+      if (resolved === "https://api.openai.com/v1/responses") {
+        const prompt = await promptFromRequest(init);
+        expect(prompt).toContain("Edit the uploaded/source image");
+        expect(prompt).toContain("User request: Kan je me een samurai maken");
+        expect(prompt).not.toContain("prestige-film still");
+        expect(prompt).not.toContain("teal-and-amber");
+        return createGeneratedImageResponse();
+      }
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generator = new OpenAiImageGenerator();
+    await generateWithSourceImageData(generator, {
+      style: "cinematic",
+      generationKind: "source_image_edit",
+      promptHint: "Kan je me een samurai maken",
+      userKey: "user-1",
+      reqId: "req-source-image-edit",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

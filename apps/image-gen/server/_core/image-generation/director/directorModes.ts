@@ -1,7 +1,4 @@
 import type { DirectorMode, DirectorModeConfig } from "./directorTypes";
-import type { Style } from "../../messengerStyles";
-
-export const DIRECTOR_GENERATION_STYLE: Style = "cinematic";
 
 export const DIRECTOR_MODES = {
   midnight_luxury: {

@@ -9,27 +9,8 @@ type QuickReply = {
   payload: string;
 };
 
-type TemplateButton =
-  | {
-      type: "postback";
-      title: string;
-      payload: string;
-    }
-  | {
-      type: "web_url";
-      title: string;
-      url: string;
-    };
-
-type GenericTemplateElement = {
-  title: string;
-  subtitle?: string;
-  image_url?: string;
-  buttons?: TemplateButton[];
-};
-
 type MessengerSendOutcome =
-  | { sent: true }
+  | { sent: true; messageId?: string }
   | { sent: false; reason: "response_window_closed" };
 
 type SendMessageOptions = {
@@ -221,13 +202,29 @@ async function sendMessage(
     }
 
     if (response.ok) {
-      return { sent: true };
+      return await parseSendOutcome(response);
     }
 
     await handleErrorResponse({ response, attempt, retry, options });
   }
 
   throw new Error("Messenger API error: retry loop exited unexpectedly");
+}
+
+async function parseSendOutcome(response: Response): Promise<MessengerSendOutcome> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    return { sent: true };
+  }
+
+  try {
+    const body = (await response.json()) as { message_id?: unknown };
+    return typeof body.message_id === "string" && body.message_id.trim()
+      ? { sent: true, messageId: body.message_id.trim() }
+      : { sent: true };
+  } catch {
+    return { sent: true };
+  }
 }
 
 function shouldDropLogKey(key: string): boolean {
@@ -283,38 +280,6 @@ export async function sendQuickReplies(
   return await sendMessage(psid, {
     text,
     quick_replies: replies,
-  });
-}
-
-export async function sendGenericTemplate(
-  psid: string,
-  elements: GenericTemplateElement[]
-): Promise<MessengerSendOutcome> {
-  return await sendMessage(psid, {
-    attachment: {
-      type: "template",
-      payload: {
-        template_type: "generic",
-        elements,
-      },
-    },
-  });
-}
-
-export async function sendButtonTemplate(
-  psid: string,
-  text: string,
-  buttons: TemplateButton[]
-): Promise<MessengerSendOutcome> {
-  return await sendMessage(psid, {
-    attachment: {
-      type: "template",
-      payload: {
-        template_type: "button",
-        text,
-        buttons,
-      },
-    },
   });
 }
 
@@ -386,7 +351,5 @@ export async function sendImage(
 
 export type {
   QuickReply,
-  GenericTemplateElement,
-  TemplateButton,
   MessengerSendOutcome,
 };

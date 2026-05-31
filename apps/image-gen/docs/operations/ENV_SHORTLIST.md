@@ -62,7 +62,7 @@ Based on the current local `.env` in this repo:
 - `OPENAI_API_KEY` is blank, so OpenAI-backed paths are not actually configured.
 - Free text is deterministic; there is no Messenger OpenAI text rollout to enable.
 - `BUILT_IN_FORGE_API_URL` and `BUILT_IN_FORGE_API_KEY` are blank, so storage proxy features are unavailable.
-- `ENABLE_FACE_MEMORY=false`, so the old photo-upload -> style-picker flow remains active without consent prompts.
+- `ENABLE_FACE_MEMORY=false`, so photo uploads skip the explicit face-memory consent prompt and ask for a natural-language edit prompt.
 
 ## 6. What to ignore at first
 

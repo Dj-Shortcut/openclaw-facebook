@@ -29,6 +29,13 @@ describe("buildDirectorPrompt", () => {
     expect(prompt).toContain("make it feel like a late-night event poster");
   });
 
+  it("uses prompt-first edit wording instead of legacy restyle wording", () => {
+    const prompt = buildDirectorPrompt({ mode: "midnight_luxury" });
+
+    expect(prompt).toContain("Edit the uploaded photo into a");
+    expect(prompt.toLowerCase()).not.toContain("restyle");
+  });
+
   it("includes optional photo analysis when provided", () => {
     const prompt = buildDirectorPrompt({
       mode: "vogue_editorial",

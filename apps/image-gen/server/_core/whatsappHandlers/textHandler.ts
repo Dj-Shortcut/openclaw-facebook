@@ -6,22 +6,13 @@ import {
   setFlowState,
   type ConversationState,
 } from "../messengerState";
-import { resolveStateReplyPayload } from "../stateResponseText";
+import { resolveConversationActionInput } from "../conversationActionSelection";
 import { toLogUser } from "../privacy";
 import { sendWhatsAppBotStateResponse } from "../whatsappResponseService";
-import { DIRECTOR_GENERATION_STYLE } from "../image-generation/director/directorModes";
-import {
-  handleWhatsAppPayloadSelection,
-  parseWhatsAppCategorySelection,
-  parseWhatsAppDirectorSelection,
-  parseWhatsAppStyleSelection,
-  sendWhatsAppStyleCategoryPrompt,
-  sendWhatsAppStyleOptions,
-} from "../whatsappFlows/styleSelectionFlow";
-import { runWhatsAppStyleGeneration } from "../whatsappFlows/styleGenerationFlow";
+import { parseWhatsAppDirectorSelection } from "../whatsappFlows/directorSelectionFlow";
+import { runWhatsAppImageGeneration } from "../whatsappFlows/imageGenerationFlow";
 import type { NormalizedWhatsAppEvent, WhatsAppHandlerContext } from "../whatsappTypes";
 import { runWhatsAppTextFeatures } from "./textContext";
-import { CONVERSATION_ACTION_RETRY_GENERATION } from "../conversationActions";
 
 export async function handleWhatsAppTextEvent(
   event: NormalizedWhatsAppEvent,
@@ -31,90 +22,33 @@ export async function handleWhatsAppTextEvent(
   let textBody = event.textBody?.trim() ?? "";
   let normalizedText = textBody.toLowerCase();
   let sharedEvent = event;
-  const selectedCategory = state.selectedStyleCategory ?? null;
 
-  const selectedActionIndex = Number.parseInt(normalizedText, 10);
-  const selectedAction =
-    Number.isFinite(selectedActionIndex) && selectedActionIndex > 0
-      ? state.pendingConversationActions?.[selectedActionIndex - 1]
-      : undefined;
-  if (selectedAction) {
+  const selectedActionInput = resolveConversationActionInput(
+    normalizedText,
+    state.pendingConversationActions
+  );
+  if (selectedActionInput) {
     await Promise.resolve(setPendingConversationActions(event.senderId, undefined));
-    if (!selectedAction.inputText) {
-      const selectedPayload =
-        selectedAction.id === CONVERSATION_ACTION_RETRY_GENERATION
-          ? selectedAction.data?.retryStyle
-            ? `RETRY_STYLE_${selectedAction.data.retryStyle}`
-            : "RETRY_STYLE"
-          : selectedAction.id;
-      if (
-        await handleWhatsAppPayloadSelection({
-          payload: selectedPayload,
-          senderId: event.senderId,
-          userId: event.userId,
-          reqId: context.reqId,
-          lang: context.lang,
-        })
-      ) {
-        return;
-      }
-    } else {
-      textBody = selectedAction.inputText;
-      normalizedText = textBody.toLowerCase();
-      sharedEvent = {
-        ...event,
-        messageType: "text",
-        textBody,
-      };
-    }
-  }
-
-  if (
-    state.lastPhotoUrl &&
-    (normalizedText === "nieuwe stijl" || normalizedText === "new style")
-  ) {
-    console.info("[whatsapp webhook] reopening style picker", {
-      user: toLogUser(event.userId),
-    });
-    await setFlowState(event.senderId, "AWAITING_STYLE");
-    await sendWhatsAppStyleCategoryPrompt(event.senderId, context.lang);
-    return;
+    textBody = selectedActionInput;
+    normalizedText = textBody.toLowerCase();
+    sharedEvent = {
+      ...event,
+      messageType: "text",
+      textBody,
+    };
   }
 
   if (textBody) {
-    const selectedPayload = resolveStateReplyPayload(
-      state.stage,
-      textBody,
-      context.lang
-    );
-    if (
-      selectedPayload &&
-      (await handleWhatsAppPayloadSelection({
-        payload: selectedPayload,
-        senderId: event.senderId,
-        userId: event.userId,
-        reqId: context.reqId,
-        lang: context.lang,
-      }))
-    ) {
-      return;
-    }
-
-    const selectedDirectorMode = parseWhatsAppDirectorSelection(
-      textBody,
-      selectedCategory
-    );
+    const selectedDirectorMode = parseWhatsAppDirectorSelection(textBody);
     if (selectedDirectorMode && state.lastPhotoUrl) {
       console.info("[whatsapp webhook] director mode selected", {
         user: toLogUser(event.userId),
         directorMode: selectedDirectorMode,
-        selectedCategory,
         textBody,
       });
-      await runWhatsAppStyleGeneration({
+      await runWhatsAppImageGeneration({
         senderId: event.senderId,
         userId: event.userId,
-        style: DIRECTOR_GENERATION_STYLE,
         directorMode: selectedDirectorMode,
         reqId: context.reqId,
         lang: context.lang,
@@ -122,41 +56,6 @@ export async function handleWhatsAppTextEvent(
       return;
     }
 
-    const selectedStyle = parseWhatsAppStyleSelection(
-      textBody,
-      selectedCategory === "director" ? null : selectedCategory
-    );
-    if (selectedStyle && state.lastPhotoUrl) {
-      console.info("[whatsapp webhook] style selected", {
-        user: toLogUser(event.userId),
-        style: selectedStyle,
-        selectedCategory,
-        textBody,
-      });
-      await runWhatsAppStyleGeneration({
-        senderId: event.senderId,
-        userId: event.userId,
-        style: selectedStyle,
-        reqId: context.reqId,
-        lang: context.lang,
-      });
-      return;
-    }
-
-    const selectedStyleCategory = parseWhatsAppCategorySelection(textBody);
-    if (selectedStyleCategory && state.lastPhotoUrl) {
-      console.info("[whatsapp webhook] style category selected", {
-        user: toLogUser(event.userId),
-        category: selectedStyleCategory,
-        textBody,
-      });
-      await sendWhatsAppStyleOptions(
-        event.senderId,
-        selectedStyleCategory,
-        context.lang
-      );
-      return;
-    }
   }
 
   const result = await handleSharedTextMessage({
@@ -191,8 +90,7 @@ export async function handleWhatsAppTextEvent(
   await sendWhatsAppBotStateResponse(
     event.senderId,
     result.response,
-    result.replyState,
-    context.lang
+    result.replyState
   );
   if (result.afterSend === "markIntroSeen") {
     await Promise.resolve(markIntroSeen(event.senderId));

@@ -6,6 +6,7 @@ import {
 import { getDirectorModeConfig } from "../image-generation/director/directorModes";
 import type { DirectorMode } from "../image-generation/director/directorTypes";
 import { getGenerationMetrics } from "../image-generation/openAiImageClient";
+import type { GenerationKind } from "../image-generation/generationTypes";
 import { runGuardedGeneration } from "../generationGuard";
 import { t, type Lang } from "../i18n";
 import type { SourceImageOrigin } from "../messengerState";
@@ -14,26 +15,25 @@ import { canGenerate, increment } from "../messengerQuota";
 import {
   clearPendingImageState,
   getOrCreateState,
-  setChosenStyle,
   setFlowState,
   setLastGenerated,
   setLastGenerationContext,
 } from "../messengerState";
-import { STYLE_LABELS } from "../webhookHelpers";
 import {
   sendWhatsAppImageReply,
   sendWhatsAppTextReply,
 } from "../whatsappResponseService";
 import { summarizeSensitiveUrl } from "../utils/urlSummarizer";
 
-type StyleGenerationInput = {
+type ImageGenerationInput = {
   senderId: string;
   userId: string;
-  style: Style;
+  style?: Style;
   reqId: string;
   lang: Lang;
   sourceImageUrl?: string;
   promptHint?: string;
+  generationKind?: GenerationKind;
   directorMode?: DirectorMode;
   directorInstruction?: string;
   directorPhotoAnalysis?: string;
@@ -56,7 +56,7 @@ function resolvedSourceHost(url?: string): string | undefined {
 
 function logGenerationRequested(input: {
   userId: string;
-  style: Style;
+  style?: Style;
   directorMode?: DirectorMode;
   promptHint?: string;
   resolvedSourceImageUrl?: string;
@@ -82,10 +82,10 @@ async function sendQuotaExceededReply(
       ? "You used your free credits for today. Come back tomorrow."
       : "Je hebt je gratis credits voor vandaag opgebruikt. Kom morgen terug."
   );
-  await setFlowState(senderId, "AWAITING_STYLE");
+  await setFlowState(senderId, "AWAITING_EDIT_PROMPT");
 }
 
-async function prepareGeneration(input: StyleGenerationInput): Promise<{
+async function prepareGeneration(input: ImageGenerationInput): Promise<{
   lastPhotoUrl?: string | null;
   lastPhotoSource?: SourceImageOrigin | null;
 }> {
@@ -104,15 +104,10 @@ async function prepareGeneration(input: StyleGenerationInput): Promise<{
       state.lastPhotoSource === "stored",
   });
 
-  await setChosenStyle(input.senderId, input.style);
   await setFlowState(input.senderId, "PROCESSING");
   await sendWhatsAppTextReply(
     input.senderId,
-    t(input.lang, "generatingPrompt", {
-      styleLabel: input.directorMode
-        ? getDirectorModeConfig(input.directorMode).label
-        : STYLE_LABELS[input.style],
-    })
+    t(input.lang, "generatingImagePrompt")
   );
 
   return {
@@ -124,7 +119,8 @@ async function prepareGeneration(input: StyleGenerationInput): Promise<{
 async function handleGenerationSuccess(input: {
   senderId: string;
   lang: Lang;
-  style: Style;
+  style?: Style;
+  generationKind?: GenerationKind;
   directorMode?: DirectorMode;
   promptHint?: string;
   imageUrl: string;
@@ -143,7 +139,7 @@ async function handleGenerationSuccess(input: {
   await increment(input.senderId);
   await setLastGenerated(input.senderId, input.imageUrl);
   await setLastGenerationContext(input.senderId, {
-    style: input.style,
+    style: input.generationKind === "style_restyle" ? input.style : undefined,
     directorMode: input.directorMode,
     prompt: input.directorMode
       ? getDirectorModeConfig(input.directorMode).label
@@ -158,7 +154,7 @@ async function handleGenerationSuccess(input: {
 
 function logGenerationFailure(input: {
   userId: string;
-  style: Style;
+  style?: Style;
   result: GenerationFailure;
 }): void {
   const metrics = input.result.metrics ?? getGenerationMetrics(input.result.error);
@@ -175,7 +171,7 @@ function logGenerationFailure(input: {
 
 function logRejectedSourceImage(input: {
   userId: string;
-  style: Style;
+  style?: Style;
   result: GenerationFailure;
 }): void {
   if (
@@ -195,7 +191,7 @@ function logRejectedSourceImage(input: {
 async function resolveGenerationFailure(input: {
   senderId: string;
   userId: string;
-  style: Style;
+  style?: Style;
   lang: Lang;
   sourceImageUrl?: string;
   lastPhotoUrl?: string | null;
@@ -203,7 +199,7 @@ async function resolveGenerationFailure(input: {
 }): Promise<string> {
   if (input.result.errorKind === "missing_source_image") {
     await setFlowState(input.senderId, "AWAITING_PHOTO");
-    return t(input.lang, "styleWithoutPhoto");
+    return t(input.lang, "editRequiresPhoto");
   }
 
   if (
@@ -223,17 +219,17 @@ async function resolveGenerationFailure(input: {
   }
 
   if (input.result.errorKind === "generation_unavailable") {
-    await setFlowState(input.senderId, "AWAITING_STYLE");
+    await setFlowState(input.senderId, "AWAITING_EDIT_PROMPT");
     return t(input.lang, "generationUnavailable");
   }
 
   if (input.result.errorKind === "generation_timeout") {
-    await setFlowState(input.senderId, "AWAITING_STYLE");
+    await setFlowState(input.senderId, "AWAITING_EDIT_PROMPT");
     return t(input.lang, "generationTimeout");
   }
 
   if (input.result.errorKind === "generation_budget_reached") {
-    await setFlowState(input.senderId, "AWAITING_STYLE");
+    await setFlowState(input.senderId, "AWAITING_EDIT_PROMPT");
     return t(input.lang, "generationBudgetReached");
   }
 
@@ -244,7 +240,7 @@ async function resolveGenerationFailure(input: {
 async function handleGenerationFailure(input: {
   senderId: string;
   userId: string;
-  style: Style;
+  style?: Style;
   lang: Lang;
   sourceImageUrl?: string;
   lastPhotoUrl?: string | null;
@@ -255,11 +251,11 @@ async function handleGenerationFailure(input: {
   await sendWhatsAppTextReply(input.senderId, failureText);
 }
 
-export async function runWhatsAppStyleGeneration(
-  input: StyleGenerationInput
+export async function runWhatsAppImageGeneration(
+  input: ImageGenerationInput
 ): Promise<void> {
   const didRun = await runGuardedGeneration(input.senderId, () =>
-    runWhatsAppStyleGenerationOnce(input)
+    runWhatsAppImageGenerationOnce(input)
   );
   if (didRun === null) {
     await sendWhatsAppTextReply(
@@ -271,8 +267,8 @@ export async function runWhatsAppStyleGeneration(
   }
 }
 
-async function runWhatsAppStyleGenerationOnce(
-  input: StyleGenerationInput
+async function runWhatsAppImageGenerationOnce(
+  input: ImageGenerationInput
 ): Promise<void> {
   const {
     senderId,
@@ -282,6 +278,7 @@ async function runWhatsAppStyleGenerationOnce(
     lang,
     sourceImageUrl,
     promptHint,
+    generationKind,
     directorMode,
     directorInstruction,
     directorPhotoAnalysis,
@@ -298,6 +295,7 @@ async function runWhatsAppStyleGenerationOnce(
     style,
     userId,
     reqId,
+    generationKind,
     promptHint,
     directorMode,
     directorInstruction,
@@ -312,6 +310,7 @@ async function runWhatsAppStyleGenerationOnce(
       senderId,
       lang,
       style,
+      generationKind,
       directorMode,
       promptHint,
       imageUrl: result.imageUrl,

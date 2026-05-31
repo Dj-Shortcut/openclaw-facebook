@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-ARG OPENCLAW_VERSION=2026.5.27
+ARG OPENCLAW_VERSION=2026.5.28
 
 FROM node:22-bookworm-slim AS plugin-build
 
