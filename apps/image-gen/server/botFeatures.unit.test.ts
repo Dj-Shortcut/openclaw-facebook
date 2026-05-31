@@ -177,6 +177,32 @@ describe("freeformTransformFeature", () => {
     );
   });
 
+  it("uses the generated result for follow-up make-me transforms when both sources exist", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await freeformTransformFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Maak me een nog sterkere samurai",
+        normalizedText: "maak me een nog sterkere samurai",
+        runImageGeneration,
+        state: makeState({
+          lastGeneratedUrl: "https://img.example/generated.jpg",
+          lastPhotoUrl: "https://img.example/original.jpg",
+          lastPhoto: "https://img.example/original.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      "https://img.example/generated.jpg",
+      expect.stringContaining("User requested transformation: Maak me een nog sterkere samurai"),
+      undefined,
+      "source_image_edit"
+    );
+  });
+
   it("generates prompt-first when a make-me request has no source photo", async () => {
     const sendText = vi.fn(async () => undefined);
     const setFlowState = vi.fn(async () => undefined);
@@ -359,6 +385,33 @@ describe("imageRequestFeature", () => {
     );
   });
 
+  it("uses the generated result for visual follow-ups when both sources exist", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Maak een stoere poster van dit resultaat",
+        normalizedText: "maak een stoere poster van dit resultaat",
+        hasPhoto: true,
+        runImageGeneration,
+        state: makeState({
+          lastGeneratedUrl: "https://img.example/generated.jpg",
+          lastPhotoUrl: "https://img.example/original.jpg",
+          lastPhoto: "https://img.example/original.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      "https://img.example/generated.jpg",
+      "Maak een stoere poster van dit resultaat",
+      undefined,
+      "source_image_edit"
+    );
+  });
+
   it("keeps explicit fresh image requests source-less even with photo context", async () => {
     const runImageGeneration = vi.fn(async () => undefined);
 
@@ -421,7 +474,7 @@ describe("conversationalEditingFeature", () => {
 
       expect(result).toEqual({ handled: true });
       expect(runImageGeneration).toHaveBeenCalledWith(
-        "https://img.example/source.jpg",
+        "https://img.example/generated.jpg",
         "make it disco",
         undefined,
         "source_image_edit"
@@ -469,7 +522,7 @@ describe("conversationalEditingFeature", () => {
 
       expect(result).toEqual({ handled: true });
       expect(runImageGeneration).toHaveBeenCalledWith(
-        "https://img.example/source.jpg",
+        "https://img.example/generated.jpg",
         "make the background darker",
         undefined,
         "source_image_edit"
@@ -558,6 +611,8 @@ describe("conversationalEditingFeature", () => {
           runImageGeneration,
           state: makeState({
             lastGeneratedUrl: "https://img.example/generated.jpg",
+            lastPhotoUrl: "https://img.example/original-upload.jpg",
+            lastPhoto: "https://img.example/original-upload.jpg",
           }),
         })
       );
