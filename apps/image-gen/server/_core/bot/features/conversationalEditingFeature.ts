@@ -34,7 +34,6 @@ export const conversationalEditingFeature: BotFeature = {
     const decision = await interpretConversationalEdit({
       text: ctx.messageText,
       lang: ctx.lang,
-      lastDirectorMode: ctx.state.lastDirectorMode,
     });
     if (!decision?.shouldEdit) {
       return { handled: false };
@@ -46,14 +45,13 @@ export const conversationalEditingFeature: BotFeature = {
       .join(" | ");
 
     ctx.logger.info("bot_feature_conversational_edit", {
-      directorMode: decision.directorMode,
       hasPromptHint: Boolean(decision.promptHint),
     });
 
     await ctx.runImageGeneration(
       sourcePhotoUrl,
       combinedPrompt || ctx.state.lastPrompt,
-      decision.directorMode,
+      undefined,
       "source_image_edit",
     );
     return { handled: true };

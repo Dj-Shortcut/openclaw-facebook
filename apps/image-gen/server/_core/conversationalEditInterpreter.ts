@@ -1,9 +1,4 @@
 import type { Lang } from "./i18n";
-import {
-  DIRECTOR_MODE_CONFIGS,
-  directorPayloadToMode,
-} from "./image-generation/director/directorModes";
-import type { DirectorMode } from "./image-generation/director/directorTypes";
 import { extractResponseText } from "./openai/responseText";
 
 type ResponsesApiPayload = {
@@ -15,7 +10,6 @@ type ResponsesApiPayload = {
 
 type ConversationalEditDecision = {
   shouldEdit: boolean;
-  directorMode?: DirectorMode;
   promptHint?: string;
 };
 
@@ -103,30 +97,18 @@ async function callResponsesApi(
   throw new Error("edit_interpreter_retry_exhausted");
 }
 
-function buildSystemPrompt(input: {
-  lang: Lang;
-  lastDirectorMode?: DirectorMode;
-}): string {
+function buildSystemPrompt(input: { lang: Lang }): string {
   const language = input.lang === "en" ? "English" : "Dutch";
-  const lastDirectorMode = input.lastDirectorMode ?? "unknown";
-  const directorModes = DIRECTOR_MODE_CONFIGS.map(mode => mode.mode).join("|");
 
   return [
     "You classify whether a user wants to edit the latest generated image.",
     `The user language is ${language}.`,
-    `The last known director mode is ${lastDirectorMode}.`,
     "Only return JSON with no markdown.",
-    `Schema: {"shouldEdit":boolean,"directorMode":"${directorModes}"|null,"promptHint":string|null}.`,
+    'Schema: {"shouldEdit":boolean,"promptHint":string|null}.',
     "Set shouldEdit=true only when the user is asking to change the previous image.",
-    "Use directorMode when the user asks for a known director vibe, or when they ask to refine the previous director-generated image without changing vibe.",
-    "If the last known director mode is not unknown and the user asks for a refinement like darker, more luxury, less fake, more cinematic, more event poster, or keep my face closer, keep that directorMode unless they clearly ask for a different mode.",
-    'Map "luxury", "old money", and "quiet luxury" to "old_money" when appropriate.',
-    'Map "berlin", "techno", "rave", and "underground" to "berlin_underground" when appropriate.',
-    'Map "vogue", "fashion", and "editorial" to "vogue_editorial" when appropriate.',
-    'Map "hyperpop", "idol", "pop star", and "creator thumbnail" to "hyperpop_idol" when appropriate.',
-    'Map "midnight", "nightlife", "club", and "premium nightlife" to "midnight_luxury" when appropriate.',
-    'Do not map words like "ghibli", "storybook anime", "gold", "disco", or "cyberpunk" to legacy presets; keep them as natural-language visual direction in promptHint.',
-    "Put the full visual change request into promptHint in concise plain text.",
+    "Never map user wording to a preset, template, director mode, or style catalog.",
+    'Keep words like "luxury", "old money", "vogue", "techno", "cinematic", "ghibli", "storybook anime", "gold", "disco", and "cyberpunk" as natural-language visual direction in promptHint.',
+    "Put the full visual change request into promptHint in concise plain text, preserving the user's requested subject and vibe.",
     "If it is normal chat, a question, or unclear, return shouldEdit=false.",
   ].join(" ");
 }
@@ -135,7 +117,6 @@ function parseDecision(rawText: string): ConversationalEditDecision | null {
   try {
     const parsed = JSON.parse(rawText) as {
       shouldEdit?: unknown;
-      directorMode?: unknown;
       promptHint?: unknown;
     };
 
@@ -147,16 +128,9 @@ function parseDecision(rawText: string): ConversationalEditDecision | null {
       typeof parsed.promptHint === "string" && parsed.promptHint.trim()
         ? sanitizeText(parsed.promptHint)
         : undefined;
-    const directorMode =
-      typeof parsed.directorMode === "string"
-        ? directorPayloadToMode(`DIRECTOR_${parsed.directorMode.toUpperCase()}`) ??
-          directorPayloadToMode(parsed.directorMode) ??
-          DIRECTOR_MODE_CONFIGS.find(mode => mode.mode === parsed.directorMode)?.mode
-        : undefined;
 
     return {
       shouldEdit: parsed.shouldEdit,
-      directorMode,
       promptHint,
     };
   } catch {
@@ -227,7 +201,6 @@ export function looksLikePossibleEditRequest(text: string): boolean {
 export async function interpretConversationalEdit(input: {
   text: string;
   lang: Lang;
-  lastDirectorMode?: DirectorMode;
 }): Promise<ConversationalEditDecision | null> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   const cleanText = sanitizeText(input.text);
