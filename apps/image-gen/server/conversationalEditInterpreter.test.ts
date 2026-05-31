@@ -91,7 +91,7 @@ describe("conversational edit interpreter", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps storybook anime language in the prompt instead of returning legacy style decisions", async () => {
+  it("keeps visual style words in the prompt instead of returning preset decisions", async () => {
     process.env.OPENAI_API_KEY = "dummy-key";
 
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
@@ -121,10 +121,10 @@ describe("conversational edit interpreter", () => {
       input: Array<{ role: string; content: string }>;
     };
     expect(body.input[0]?.content).not.toContain('"storybook-anime"');
-    expect(body.input[0]?.content).toContain("Do not map words");
+    expect(body.input[0]?.content).toContain("Never map user wording");
   });
 
-  it("parses director mode decisions and sends director context to the model", async () => {
+  it("ignores director mode decisions and keeps them as prompt-first edits", async () => {
     process.env.OPENAI_API_KEY = "dummy-key";
 
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
@@ -142,12 +142,10 @@ describe("conversational edit interpreter", () => {
     const result = await interpretConversationalEdit({
       text: "make it less fake and more luxury",
       lang: "en",
-      lastDirectorMode: "midnight_luxury",
     });
 
     expect(result).toEqual({
       shouldEdit: true,
-      directorMode: "old_money",
       promptHint: "make it less fake and more quiet luxury",
     });
 
@@ -155,8 +153,9 @@ describe("conversational edit interpreter", () => {
     const body = JSON.parse(String(request.body)) as {
       input: Array<{ role: string; content: string }>;
     };
-    expect(body.input[0]?.content).toContain("last known director mode");
-    expect(body.input[0]?.content).toContain("midnight_luxury");
-    expect(body.input[0]?.content).toContain("old_money");
+    expect(body.input[0]?.content).not.toContain("last known director mode");
+    expect(body.input[0]?.content).not.toContain("midnight_luxury");
+    expect(body.input[0]?.content).not.toContain("old_money");
+    expect(body.input[0]?.content).toContain("promptHint");
   });
 });
