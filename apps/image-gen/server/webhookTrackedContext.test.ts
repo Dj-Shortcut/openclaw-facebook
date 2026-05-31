@@ -1,7 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTrackedHandlerContext } from "./_core/webhookTrackedContext";
 import type { HandlerContext } from "./_core/webhookHandlers";
-import type { MessengerUserState } from "./_core/messengerState";
+import {
+  getState,
+  resetStateStore,
+  type MessengerUserState,
+} from "./_core/messengerState";
+
+const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
 
 function makeState(): MessengerUserState {
   return {
@@ -79,6 +85,15 @@ function makeHandlerContext(
 }
 
 describe("webhook tracked context", () => {
+  afterEach(() => {
+    resetStateStore();
+    if (originalPrivacyPepper === undefined) {
+      delete process.env.PRIVACY_PEPPER;
+    } else {
+      process.env.PRIVACY_PEPPER = originalPrivacyPepper;
+    }
+  });
+
   it("preserves generationKind when tracking direct generation calls", async () => {
     const runImageGeneration = vi.fn(async () => ({ sent: true }));
     const ctx = makeHandlerContext(runImageGeneration);
@@ -143,5 +158,74 @@ describe("webhook tracked context", () => {
       undefined,
       "source_image_edit"
     );
+  });
+
+  it("renders numbered feature text as Messenger quick replies", async () => {
+    process.env.PRIVACY_PEPPER = "test-pepper";
+    const sendLoggedQuickReplies = vi.fn(async () => ({
+      sent: true,
+      messageId: "mid-feature-choices",
+    }));
+    const ctx = {
+      ...makeHandlerContext(vi.fn(async () => ({ sent: true }))),
+      sendLoggedQuickReplies,
+    };
+    const tracked = createTrackedHandlerContext(ctx, vi.fn());
+    const featureCtx = tracked.createFeatureTextContext(
+      "tracked-user",
+      "tracked-user-key",
+      "req-feature-choices",
+      "nl",
+      makeState(),
+      "Kan je me een samurai maken",
+      "kan je me een samurai maken",
+      true
+    );
+
+    await featureCtx.sendText(
+      [
+        "Ja. Wil je dat ik een:",
+        "",
+        "1. samurai-portret maak,",
+        "2. samurai-avatar/sticker maak,",
+      ].join("\n")
+    );
+
+    expect(ctx.sendLoggedText).not.toHaveBeenCalled();
+    expect(sendLoggedQuickReplies).toHaveBeenCalledWith(
+      "tracked-user",
+      "Ja. Wil je dat ik een:",
+      [
+        {
+          content_type: "text",
+          title: "samurai-portret",
+          payload: "OPENCLAW_ACTION:Maak%20me%20een%20samurai-portret",
+        },
+        {
+          content_type: "text",
+          title: "samurai-avatar/stick",
+          payload:
+            "OPENCLAW_ACTION:Maak%20me%20een%20samurai-avatar%2Fsticker",
+        },
+      ],
+      "req-feature-choices"
+    );
+    expect(getState("tracked-user")?.pendingConversationActions).toEqual([
+      {
+        id: "choice_1",
+        label: "samurai-portret",
+        inputText: "Maak me een samurai-portret",
+      },
+      {
+        id: "choice_2",
+        label: "samurai-avatar/sticker",
+        inputText: "Maak me een samurai-avatar/sticker",
+      },
+    ]);
+    expect(
+      getState("tracked-user")?.pendingConversationActionsByMessageId?.[
+        "mid-feature-choices"
+      ]
+    ).toHaveLength(2);
   });
 });

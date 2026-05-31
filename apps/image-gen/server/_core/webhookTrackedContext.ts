@@ -1,5 +1,9 @@
 import type { MessengerSendOutcome } from "./messengerApi";
 import { safeLog } from "./messengerApi";
+import {
+  inferNumberedConversationActions,
+  stripNumberedConversationChoices,
+} from "./conversationActionInference";
 import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 import { setPendingConversationActions } from "./messengerState";
 import { toLogUser, toUserKey } from "./privacy";
@@ -16,6 +20,30 @@ function logMessengerWebhookTrace(
 
 type FeatureContext = BotImageContext | BotPayloadContext | BotTextContext;
 
+async function sendFeatureActions(
+  trackedCtx: HandlerContext,
+  input: {
+    userPsid: string;
+    requestId: string;
+    text: string;
+    actions: ReturnType<typeof inferNumberedConversationActions>;
+  }
+): Promise<void> {
+  const outcome = await trackedCtx.sendLoggedQuickReplies(
+    input.userPsid,
+    input.text,
+    renderMessengerQuickReplies(input.actions),
+    input.requestId
+  );
+  await Promise.resolve(
+    setPendingConversationActions(
+      input.userPsid,
+      input.actions,
+      outcome?.sent ? outcome.messageId : undefined
+    )
+  );
+}
+
 function decorateFeatureContext<TContext extends FeatureContext>(
   featureCtx: TContext,
   trackedCtx: HandlerContext,
@@ -27,25 +55,29 @@ function decorateFeatureContext<TContext extends FeatureContext>(
   return {
     ...featureCtx,
     sendText: async text => {
+      const inferredActions = inferNumberedConversationActions(text);
+      if (inferredActions.length) {
+        await sendFeatureActions(trackedCtx, {
+          userPsid,
+          requestId,
+          text: stripNumberedConversationChoices(text),
+          actions: inferredActions,
+        });
+        return;
+      }
+
       await trackedCtx.sendLoggedText(userPsid, text, requestId);
     },
     sendImage: async imageUrl => {
       await trackedCtx.sendLoggedImage(userPsid, imageUrl, requestId);
     },
     sendActions: async (text, actions) => {
-      const outcome = await trackedCtx.sendLoggedQuickReplies(
+      await sendFeatureActions(trackedCtx, {
         userPsid,
+        requestId,
         text,
-        renderMessengerQuickReplies(actions),
-        requestId
-      );
-      await Promise.resolve(
-        setPendingConversationActions(
-          userPsid,
-          actions,
-          outcome?.sent ? outcome.messageId : undefined
-        )
-      );
+        actions,
+      });
     },
     clearImageContext: featureCtx.clearImageContext
       ? async () => {
