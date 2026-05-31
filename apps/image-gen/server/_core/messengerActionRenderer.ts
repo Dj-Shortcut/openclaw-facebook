@@ -42,9 +42,5 @@ export function renderMessengerQuickReplies(
 }
 
 function renderMessengerActionPayload(action: ConversationAction): string {
-  if (action.inputText) {
-    return encodeMessengerActionInput(action.inputText);
-  }
-
-  return action.id;
+  return encodeMessengerActionInput(action.inputText ?? action.label ?? action.id);
 }

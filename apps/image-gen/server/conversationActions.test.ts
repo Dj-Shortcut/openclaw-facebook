@@ -80,6 +80,19 @@ describe("conversation actions", () => {
     expect(decodeMessengerActionInput(reply?.payload)).toBe("New image");
   });
 
+  it("renders id-only actions as normal text input using the action label", () => {
+    const [reply] = renderMessengerQuickReplies([
+      { id: "retry", label: "Try again" },
+    ]);
+
+    expect(reply).toEqual({
+      content_type: "text",
+      title: "Try again",
+      payload: "OPENCLAW_ACTION:Try%20again",
+    });
+    expect(decodeMessengerActionInput(reply?.payload)).toBe("Try again");
+  });
+
   it("builds generation failure actions before Messenger rendering", () => {
     expect(buildGenerationFailureResponse("en", "Try again?")).toEqual({
       text: "Try again?",
