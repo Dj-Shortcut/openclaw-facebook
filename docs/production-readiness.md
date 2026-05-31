@@ -91,11 +91,11 @@ Manual Messenger smoke:
 
 - Send `ben je online`; expect a status reply.
 - Send a normal text question; expect an assistant reply.
-- Send a photo without restyle text; expect analysis/clarifying assistant behavior, not a generated replacement image.
+- Send a photo without edit text; expect the photo-received prompt asking what to change, not an automatic generated replacement image.
 - Send `maak een afbeelding van ...`; expect the image-gen service path.
 - Send `maak een futuristische stad bij zonsondergang`; expect text-to-image, not a style-picker default.
 - Send `maak een prompt voor een afbeelding`; expect the normal assistant path, not image generation.
-- Send a source photo plus explicit `restyle ...`; expect source-image image-gen path.
+- Send a source photo plus explicit edit text such as `maak me cyberpunk`; expect the source-image edit path.
 
 ## Rollback Notes
 

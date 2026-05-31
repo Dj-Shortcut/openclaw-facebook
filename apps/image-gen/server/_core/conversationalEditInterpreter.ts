@@ -4,7 +4,6 @@ import {
   directorPayloadToMode,
 } from "./image-generation/director/directorModes";
 import type { DirectorMode } from "./image-generation/director/directorTypes";
-import type { Style } from "./messengerStyles";
 import { extractResponseText } from "./openai/responseText";
 
 type ResponsesApiPayload = {
@@ -16,7 +15,6 @@ type ResponsesApiPayload = {
 
 type ConversationalEditDecision = {
   shouldEdit: boolean;
-  style?: Style;
   directorMode?: DirectorMode;
   promptHint?: string;
 };
@@ -107,23 +105,19 @@ async function callResponsesApi(
 
 function buildSystemPrompt(input: {
   lang: Lang;
-  lastStyle?: Style;
   lastDirectorMode?: DirectorMode;
 }): string {
   const language = input.lang === "en" ? "English" : "Dutch";
-  const lastStyle = input.lastStyle ?? "unknown";
   const lastDirectorMode = input.lastDirectorMode ?? "unknown";
   const directorModes = DIRECTOR_MODE_CONFIGS.map(mode => mode.mode).join("|");
 
   return [
     "You classify whether a user wants to edit the latest generated image.",
     `The user language is ${language}.`,
-    `The last known style is ${lastStyle}.`,
     `The last known director mode is ${lastDirectorMode}.`,
     "Only return JSON with no markdown.",
-    `Schema: {"shouldEdit":boolean,"style":"caricature"|"storybook-anime"|"afroman-americana"|"gold"|"petals"|"clouds"|"cinematic"|"disco"|"cyberpunk"|"norman-blackwell"|null,"directorMode":"${directorModes}"|null,"promptHint":string|null}.`,
+    `Schema: {"shouldEdit":boolean,"directorMode":"${directorModes}"|null,"promptHint":string|null}.`,
     "Set shouldEdit=true only when the user is asking to change the previous image.",
-    "Use style only when the user explicitly asks for a known style or it is clearly implied.",
     "Use directorMode when the user asks for a known director vibe, or when they ask to refine the previous director-generated image without changing vibe.",
     "If the last known director mode is not unknown and the user asks for a refinement like darker, more luxury, less fake, more cinematic, more event poster, or keep my face closer, keep that directorMode unless they clearly ask for a different mode.",
     'Map "luxury", "old money", and "quiet luxury" to "old_money" when appropriate.',
@@ -131,8 +125,8 @@ function buildSystemPrompt(input: {
     'Map "vogue", "fashion", and "editorial" to "vogue_editorial" when appropriate.',
     'Map "hyperpop", "idol", "pop star", and "creator thumbnail" to "hyperpop_idol" when appropriate.',
     'Map "midnight", "nightlife", "club", and "premium nightlife" to "midnight_luxury" when appropriate.',
-    'Treat "ghibli", "ghibli style", "studio ghibli", "storybook anime", and "whimsical anime" as requests for "storybook-anime".',
-    "Put the visual change request into promptHint in concise plain text.",
+    'Do not map words like "ghibli", "storybook anime", "gold", "disco", or "cyberpunk" to legacy presets; keep them as natural-language visual direction in promptHint.',
+    "Put the full visual change request into promptHint in concise plain text.",
     "If it is normal chat, a question, or unclear, return shouldEdit=false.",
   ].join(" ");
 }
@@ -141,7 +135,6 @@ function parseDecision(rawText: string): ConversationalEditDecision | null {
   try {
     const parsed = JSON.parse(rawText) as {
       shouldEdit?: unknown;
-      style?: unknown;
       directorMode?: unknown;
       promptHint?: unknown;
     };
@@ -149,20 +142,6 @@ function parseDecision(rawText: string): ConversationalEditDecision | null {
     if (typeof parsed.shouldEdit !== "boolean") {
       return null;
     }
-
-    const style =
-      parsed.style === "caricature" ||
-      parsed.style === "storybook-anime" ||
-      parsed.style === "afroman-americana" ||
-      parsed.style === "gold" ||
-      parsed.style === "petals" ||
-      parsed.style === "clouds" ||
-      parsed.style === "cinematic" ||
-      parsed.style === "disco" ||
-      parsed.style === "cyberpunk" ||
-      parsed.style === "norman-blackwell"
-        ? parsed.style
-        : undefined;
 
     const promptHint =
       typeof parsed.promptHint === "string" && parsed.promptHint.trim()
@@ -177,7 +156,6 @@ function parseDecision(rawText: string): ConversationalEditDecision | null {
 
     return {
       shouldEdit: parsed.shouldEdit,
-      style,
       directorMode,
       promptHint,
     };
@@ -249,7 +227,6 @@ export function looksLikePossibleEditRequest(text: string): boolean {
 export async function interpretConversationalEdit(input: {
   text: string;
   lang: Lang;
-  lastStyle?: Style;
   lastDirectorMode?: DirectorMode;
 }): Promise<ConversationalEditDecision | null> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();

@@ -92,20 +92,6 @@ async function routeTrackedEvent(
   const { psid, userId, reqId, lang, localeLang, state, trackedCtx } = context;
   if (await routeConsentGate(context, event)) return;
 
-  const referralRef = event.postback?.referral?.ref ?? event.referral?.ref;
-
-  const referralResult = await trackedCtx.handleReferralStyleEvent(
-    psid,
-    referralRef,
-    lang,
-    reqId
-  );
-  if (referralResult.handled) {
-    context.markResponseSentFromOutcome(referralResult.outcome);
-    await finishSelectedBranch(context, "referral");
-    return;
-  }
-
   if (
     await handlePostbackEvent(trackedCtx, {
       psid,

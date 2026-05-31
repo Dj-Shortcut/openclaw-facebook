@@ -72,6 +72,14 @@ function setSecurityHeaders(res) {
   res.setHeader("cache-control", "no-store");
 }
 
+function readProxyTimeoutMs(env = process.env) {
+  const configured = Number(env.OPENCLAW_PUBLIC_GATEWAY_PROXY_TIMEOUT_MS);
+  if (Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured);
+  }
+  return 10_000;
+}
+
 function isAllowedPublicRequest(method, pathname, allowedPaths) {
   if (!allowedPaths.has(pathname)) {
     return false;
@@ -95,6 +103,7 @@ export function startPublicRouteGuard({
   env = process.env,
 }) {
   const allowedPaths = allowedPathsFromEnv(env);
+  const proxyTimeoutMs = readProxyTimeoutMs(env);
   const server = http.createServer((req, res) => {
     const pathname = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`).pathname;
     if (!isAllowedPublicRequest(req.method || "GET", pathname, allowedPaths)) {
@@ -141,7 +150,7 @@ export function startPublicRouteGuard({
       res.end(message);
     };
 
-    proxyReq.setTimeout(10_000, () => {
+    proxyReq.setTimeout(proxyTimeoutMs, () => {
       req.unpipe(proxyReq);
       proxyReq.destroy();
       writeProxyFailure(504, "Gateway timeout");

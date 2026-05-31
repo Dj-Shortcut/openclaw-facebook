@@ -26,6 +26,12 @@ const messengerMessageSchema = z
       .passthrough()
       .optional(),
     attachments: z.array(messengerAttachmentSchema).optional(),
+    reply_to: z
+      .object({
+        mid: nonEmptyString.optional(),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 

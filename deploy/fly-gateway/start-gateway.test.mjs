@@ -164,4 +164,29 @@ describe("Fly gateway startup", () => {
     await closeServer(guard);
     await closeServer(target);
   }, 15000);
+
+  it("returns 504 when the internal gateway proxy request times out", async () => {
+    const target = http.createServer((_req, _res) => {});
+    target.listen(0, "127.0.0.1");
+    await waitForListening(target);
+
+    const targetPort = target.address().port;
+    const guard = startPublicRouteGuard({
+      publicPort: 0,
+      targetPort,
+      env: {
+        OPENCLAW_PUBLIC_GATEWAY_PROXY_TIMEOUT_MS: "25",
+      },
+    });
+    await waitForListening(guard);
+
+    const publicPort = guard.address().port;
+    const response = await fetch(`http://127.0.0.1:${publicPort}/healthz`);
+
+    expect(response.status).toBe(504);
+    expect(await response.text()).toBe("Gateway timeout");
+
+    await closeServer(guard);
+    await closeServer(target);
+  }, 15000);
 });

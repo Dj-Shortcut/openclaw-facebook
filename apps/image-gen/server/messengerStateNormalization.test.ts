@@ -34,8 +34,6 @@ describe("messenger state normalization", () => {
       state: "IDLE",
       lastPhotoUrl: null,
       lastPhoto: null,
-      selectedStyle: null,
-      chosenStyle: null,
       preferredLang: "nl",
       consentGiven: false,
       pendingDeleteConfirm: false,
@@ -55,7 +53,6 @@ describe("messenger state normalization", () => {
       userKey: "legacy-raw-user-key",
       state: "RESULT_READY",
       lastPhoto: "https://example.test/legacy-photo.jpg",
-      chosenStyle: "disco",
       lastImageUrl: "https://example.test/generated.jpg",
       consentGiven: true,
       consentTimestamp: 1234,
@@ -76,8 +73,6 @@ describe("messenger state normalization", () => {
       state: "RESULT_READY",
       lastPhotoUrl: "https://example.test/legacy-photo.jpg",
       lastPhoto: "https://example.test/legacy-photo.jpg",
-      selectedStyle: "disco",
-      chosenStyle: "disco",
       lastImageUrl: "https://example.test/generated.jpg",
       lastGeneratedUrl: "https://example.test/generated.jpg",
       consentGiven: true,
@@ -90,6 +85,19 @@ describe("messenger state normalization", () => {
         count: 3,
       },
       updatedAt: 5678,
+    });
+  });
+
+  it("maps the legacy style-waiting state to the prompt-first edit state", () => {
+    const normalized = normalizeState("legacy-style-psid", {
+      state: "AWAITING_STYLE",
+      lastPhoto: "https://example.test/source.jpg",
+    });
+
+    expect(normalized).toMatchObject({
+      stage: "AWAITING_EDIT_PROMPT",
+      state: "AWAITING_EDIT_PROMPT",
+      lastPhotoUrl: "https://example.test/source.jpg",
     });
   });
 

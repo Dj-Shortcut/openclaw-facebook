@@ -6,6 +6,7 @@ import { toLogUser } from "./privacy";
 import type { NormalizedInboundMessage } from "./normalizedInboundMessage";
 import type { BotResponse } from "./botResponse";
 import {
+  buildAssistantPhotoHelpResponse,
   buildGenerationFailureResponse,
   buildGenerationSuccessResponse,
   buildQuickStartResponse,
@@ -115,19 +116,15 @@ async function tryHandleGreetingOrSmalltalk(
   }
 
   const response = getGreetingResponse(state.stage, input.lang);
-  if (response.mode === "text") {
-    return { response: { kind: "text", text: response.text } };
-  }
-
-  if (response.state === "IDLE") {
+  if (state.stage === "IDLE") {
     return { response: buildQuickStartResponse(input.lang) };
   }
 
-  if (response.state === "RESULT_READY") {
+  if (state.stage === "RESULT_READY") {
     return { response: buildGenerationSuccessResponse(input.lang) };
   }
 
-  if (response.state === "FAILURE") {
+  if (state.stage === "FAILURE") {
     return {
       response: buildGenerationFailureResponse(input.lang, response.text),
     };
@@ -135,27 +132,7 @@ async function tryHandleGreetingOrSmalltalk(
 
   return {
     response: { kind: "text", text: response.text },
-    replyState: response.state,
-  };
-}
-
-async function tryHandleNewStyleShortcut(
-  input: SharedTextHandlerInput,
-  normalizedText: string
-): Promise<SharedTextHandlerResult | null> {
-  if (normalizedText !== "nieuwe stijl" && normalizedText !== "new style") {
-    return null;
-  }
-
-  const state = await input.getState();
-  if (!state.lastPhotoUrl) {
-    return null;
-  }
-
-  await input.setFlowState("AWAITING_STYLE");
-  return {
-    response: { kind: "text", text: t(input.lang, "styleCategoryPicker") },
-    replyState: "AWAITING_STYLE",
+    replyState: state.stage,
   };
 }
 
@@ -163,12 +140,20 @@ function buildDefaultTextResponse(
   lang: Lang,
   hasPhoto: boolean
 ): SharedTextHandlerResult {
-  return {
-    response: {
-      kind: "text",
-      text: hasPhoto ? t(lang, "flowExplanation") : t(lang, "textWithoutPhoto"),
-    },
-  };
+  if (hasPhoto) {
+    return { response: buildAssistantPhotoHelpResponse(lang) };
+  }
+
+  return { response: buildQuickStartResponse(lang) };
+}
+
+function hasEditableImage(state: MessengerUserState): boolean {
+  return Boolean(
+    state.lastPhotoUrl ??
+      state.lastPhoto ??
+      state.lastGeneratedUrl ??
+      state.lastImageUrl
+  );
 }
 
 export async function handleSharedTextMessage(
@@ -195,13 +180,8 @@ export async function handleSharedTextMessage(
     return greetingResult;
   }
 
-  const newStyleResult = await tryHandleNewStyleShortcut(input, normalizedText);
-  if (newStyleResult) {
-    return newStyleResult;
-  }
-
   const state = await input.getState();
-  const hasPhoto = Boolean(state.lastPhotoUrl);
+  const hasPhoto = hasEditableImage(state);
   if (
     input.runTextFeatures &&
     (await input.runTextFeatures({
@@ -215,9 +195,5 @@ export async function handleSharedTextMessage(
   }
 
   input.logState?.(state, "text_message");
-  if (!hasPhoto) {
-    await input.setFlowState("AWAITING_PHOTO");
-  }
-
   return buildDefaultTextResponse(input.lang, hasPhoto);
 }

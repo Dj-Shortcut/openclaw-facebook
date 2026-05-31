@@ -32,6 +32,11 @@ const MESSENGER_GENERATION_DIRECTOR_MODES = new Set([
   "hyperpop_idol",
   "old_money",
 ]);
+const MESSENGER_GENERATION_KINDS = new Set([
+  "style_restyle",
+  "text_to_image",
+  "source_image_edit",
+]);
 let drainPromise: Promise<void> | null = null;
 
 type GenerationJobProcessor = (
@@ -369,6 +374,17 @@ function isOptionalDirectorMode(value: unknown): boolean {
   );
 }
 
+function isOptionalGenerationKind(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (typeof value === "string" && MESSENGER_GENERATION_KINDS.has(value))
+  );
+}
+
+function isValidGenerationStyle(value: unknown): boolean {
+  return typeof value === "string" && MESSENGER_GENERATION_STYLES.has(value);
+}
+
 function isOptionalAttempts(value: unknown): value is number | undefined {
   return (
     value === undefined ||
@@ -387,15 +403,22 @@ function parseMessengerGenerationJob(
     typeof value.psid !== "string" ||
     typeof value.userId !== "string" ||
     typeof value.reqId !== "string" ||
-    typeof value.style !== "string" ||
-    !MESSENGER_GENERATION_STYLES.has(value.style) ||
     typeof value.lang !== "string" ||
     !MESSENGER_GENERATION_LANGS.has(value.lang) ||
+    !isOptionalGenerationKind(value.generationKind) ||
     !isOptionalString(value.sourceImageUrl) ||
     !isOptionalString(value.promptHint) ||
     !isOptionalDirectorMode(value.directorMode) ||
     !isOptionalAttempts(value.attempts)
   ) {
+    return null;
+  }
+
+  if (value.generationKind === "style_restyle" && !isValidGenerationStyle(value.style)) {
+    return null;
+  }
+
+  if (value.style !== undefined && !isValidGenerationStyle(value.style)) {
     return null;
   }
 

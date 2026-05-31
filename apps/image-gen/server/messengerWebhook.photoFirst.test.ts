@@ -1,15 +1,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
-  sendButtonTemplateMock,
-  sendGenericTemplateMock,
   sendImageMock,
   sendQuickRepliesMock,
   sendTextMock,
   safeLogMock,
 } = vi.hoisted(() => ({
-  sendButtonTemplateMock: vi.fn(async () => ({ sent: true })),
-  sendGenericTemplateMock: vi.fn(async () => ({ sent: true })),
   sendImageMock: vi.fn(async () => ({ sent: true })),
   sendQuickRepliesMock: vi.fn(async () => ({ sent: true })),
   sendTextMock: vi.fn(async () => ({ sent: true })),
@@ -17,8 +13,6 @@ const {
 }));
 
 vi.mock("./_core/messengerApi", () => ({
-  sendButtonTemplate: sendButtonTemplateMock,
-  sendGenericTemplate: sendGenericTemplateMock,
   sendImage: sendImageMock,
   sendQuickReplies: sendQuickRepliesMock,
   sendText: sendTextMock,
@@ -55,8 +49,6 @@ describe("photo-first onboarding", () => {
       "img.example,lookaside.fbsbx.com,leaderbot-fb-image-gen.fly.dev";
     process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
     sendImageMock.mockClear();
-    sendButtonTemplateMock.mockClear();
-    sendGenericTemplateMock.mockClear();
     sendQuickRepliesMock.mockClear();
     sendTextMock.mockClear();
     safeLogMock.mockClear();
@@ -102,7 +94,7 @@ describe("photo-first onboarding", () => {
     process.env.PRIVACY_PEPPER = originalPrivacyPepper;
   });
 
-  it("handles inbound image attachment by setting pending image and sending style picker", async () => {
+  it("handles inbound image attachment by setting pending image and asking for an edit prompt", async () => {
     const psid = "photo-first-user";
 
     await processFacebookWebhookPayload({
@@ -126,16 +118,21 @@ describe("photo-first onboarding", () => {
       /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
     expect(userState?.lastPhotoSource).toBe("stored");
-    expect(userState?.stage).toBe("AWAITING_STYLE");
+    expect(userState?.stage).toBe("AWAITING_EDIT_PROMPT");
+    expect(sendImageMock).not.toHaveBeenCalled();
+    expect(sendTextMock).not.toHaveBeenCalled();
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
-      "Kies eerst een stijlgroep 👇",
-      expect.arrayContaining([
-        expect.objectContaining({ payload: "STYLE_CATEGORY_ILLUSTRATED" }),
-      ]),
+      t("nl", "photoEditPrompt"),
+      [
+        {
+          content_type: "text",
+          title: "Pas aan",
+          payload: "OPENCLAW_ACTION:Pas%20aan",
+        },
+        { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
+      ]
     );
-    expect(sendGenericTemplateMock).not.toHaveBeenCalled();
-    expect(sendTextMock).not.toHaveBeenCalled();
   });
 
   it("asks explicit face-memory consent behind the feature flag and stores consent on yes", async () => {
@@ -321,14 +318,20 @@ describe("photo-first onboarding", () => {
     const userState = getState(anonymizePsid(psid));
     expect(userState?.faceMemoryConsent).toBeNull();
     expect(userState?.lastSourceImageUrl).toBeNull();
+    expect(userState?.stage).toBe("IDLE");
+    expect(sendTextMock).not.toHaveBeenCalled();
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
-      expect.stringContaining("Kies eerst een stijlgroep"),
-      expect.any(Array)
+      t("nl", "flowExplanation"),
+      expect.arrayContaining([
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding" }),
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:Pas%20foto%20aan" }),
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:Privacy" }),
+      ])
     );
   });
 
-  it("shows intro once and moves user to AWAITING_PHOTO", async () => {
+  it("shows intro once and keeps prompt-first idle state", async () => {
     const psid = "text-user";
 
     await processFacebookWebhookPayload({
@@ -345,7 +348,7 @@ describe("photo-first onboarding", () => {
     });
 
     const userState = getState(anonymizePsid(psid));
-    expect(userState?.stage).toBe("AWAITING_PHOTO");
+    expect(userState?.stage).toBe("IDLE");
     expect(userState?.hasSeenIntro).toBe(true);
     expect(sendTextMock).not.toHaveBeenCalled();
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
@@ -356,7 +359,7 @@ describe("photo-first onboarding", () => {
   });
 
 
-  it("does not re-send intro on later greetings", async () => {
+  it("keeps later greetings prompt-first with quick actions", async () => {
     const psid = "repeat-hi-user";
 
     await processFacebookWebhookPayload({
@@ -388,11 +391,19 @@ describe("photo-first onboarding", () => {
       ],
     });
 
-    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
-    expect(sendTextMock).toHaveBeenCalledWith(psid, t("nl", "textWithoutPhoto"));
+    expect(sendTextMock).not.toHaveBeenCalled();
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
+      psid,
+      t("nl", "flowExplanation"),
+      expect.arrayContaining([
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding" }),
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:Pas%20foto%20aan" }),
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:Privacy" }),
+      ])
+    );
   });
 
-  it("guards style payload without pending image", async () => {
+  it("ignores removed legacy style text without re-entering photo-first state", async () => {
     const psid = "guard-user";
 
     await processFacebookWebhookPayload({
@@ -401,7 +412,7 @@ describe("photo-first onboarding", () => {
           messaging: [
             {
               sender: { id: psid },
-              message: { mid: "mid-style", quick_reply: { payload: "disco" } },
+              message: { mid: "mid-style", text: "disco" },
             },
           ],
         },
@@ -409,9 +420,24 @@ describe("photo-first onboarding", () => {
     });
 
     const userState = getState(anonymizePsid(psid));
-    expect(userState?.stage).toBe("AWAITING_PHOTO");
-    expect(sendTextMock).toHaveBeenCalledWith(psid, "Stuur eerst een foto, dan maak ik die stijl voor je.");
-    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
+    expect(userState?.stage).toBe("IDLE");
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
+      psid,
+      t("nl", "flowExplanation"),
+      [
+        {
+          content_type: "text",
+          title: "Nieuwe afbeelding",
+          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+        },
+        {
+          content_type: "text",
+          title: "Pas foto aan",
+          payload: "OPENCLAW_ACTION:Pas%20foto%20aan",
+        },
+        { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
+      ]
+    );
   });
 
   it("ignores unknown DOWNLOAD_HD payload without mutating state", async () => {
@@ -438,7 +464,7 @@ describe("photo-first onboarding", () => {
     expect(safeLogMock).toHaveBeenCalledWith("unknown_payload", expect.any(Object));
   });
 
-  it("returns privacy explanation on PRIVACY_INFO postback", async () => {
+  it("returns privacy explanation on privacy action input", async () => {
     const psid = "privacy-user";
     process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
 
@@ -448,32 +474,27 @@ describe("photo-first onboarding", () => {
           messaging: [
             {
               sender: { id: psid },
-              postback: { payload: "PRIVACY_INFO" },
+              message: {
+                mid: "mid-privacy-action",
+                quick_reply: { payload: "OPENCLAW_ACTION:Privacy" },
+              },
             },
           ],
         },
       ],
     });
 
-    expect(sendButtonTemplateMock).toHaveBeenCalledWith(
+    expect(sendTextMock).toHaveBeenCalledWith(
       psid,
       [
         "Je foto wordt enkel gebruikt om de afbeelding te maken.",
         "Ze wordt daarna niet bewaard.",
         "Privacybeleid: https://leaderbot-fb-image-gen.fly.dev/privacy",
-      ].join("\n"),
-      [
-        {
-          type: "web_url",
-          title: "Privacybeleid",
-          url: "https://leaderbot-fb-image-gen.fly.dev/privacy",
-        },
-      ],
+      ].join("\n")
     );
-    expect(sendTextMock).not.toHaveBeenCalled();
   });
 
-  it("routes free-form user text without photo into the photo prompt", async () => {
+  it("routes free-form user text without photo into prompt-first quick actions", async () => {
     const psid = "about-user";
 
     await processFacebookWebhookPayload({
@@ -489,9 +510,22 @@ describe("photo-first onboarding", () => {
       ],
     });
 
-    expect(sendTextMock).toHaveBeenCalledWith(
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
-      t("nl", "textWithoutPhoto"),
+      t("nl", "flowExplanation"),
+      [
+        {
+          content_type: "text",
+          title: "Nieuwe afbeelding",
+          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+        },
+        {
+          content_type: "text",
+          title: "Pas foto aan",
+          payload: "OPENCLAW_ACTION:Pas%20foto%20aan",
+        },
+        { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
+      ]
     );
   });
 
@@ -518,7 +552,6 @@ describe("photo-first onboarding", () => {
     );
 
     sendQuickRepliesMock.mockClear();
-    sendButtonTemplateMock.mockClear();
 
     await processFacebookWebhookPayload({
       entry: [
@@ -526,27 +559,23 @@ describe("photo-first onboarding", () => {
           messaging: [
             {
               sender: { id: psid },
-              postback: { payload: "PRIVACY_INFO" },
+              message: {
+                mid: "mid-privacy-action-en",
+                quick_reply: { payload: "OPENCLAW_ACTION:Privacy" },
+              },
             },
           ],
         },
       ],
     });
 
-    expect(sendButtonTemplateMock).toHaveBeenLastCalledWith(
+    expect(sendTextMock).toHaveBeenLastCalledWith(
       psid,
       [
         "Your photo is only used to make the image.",
         "It is not stored afterwards.",
         "Privacy policy: https://leaderbot-fb-image-gen.fly.dev/privacy",
-      ].join("\n"),
-      [
-        {
-          type: "web_url",
-          title: "Privacy Policy",
-          url: "https://leaderbot-fb-image-gen.fly.dev/privacy",
-        },
-      ],
+      ].join("\n")
     );
   });
 

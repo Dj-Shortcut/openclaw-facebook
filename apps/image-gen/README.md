@@ -3,7 +3,7 @@
 
 A Meta messaging bot with a shared bot-core for Messenger and WhatsApp.
 
-The active product scope is generic AI image generation and related bot infrastructure. Free text-to-image requests are the primary user experience. Source-photo editing and the older style catalog remain as compatibility paths while the generic prompt-first flow is proven.
+The active product scope is generic AI image generation and related bot infrastructure. Free text-to-image requests are the primary user experience; source-photo edits use natural-language prompts rather than legacy style-picker menus.
 
 ## Product Scope
 
@@ -11,7 +11,6 @@ Current repository focus:
 
 - free text-to-image generation from natural Messenger prompts
 - explicit source-photo edit/restyle flows when the user asks to edit a photo
-- legacy style-picker compatibility for existing Messenger and WhatsApp users
 - shared text handling across both Meta channels
 - channel-specific media ingress and outbound message rendering
 - operational tooling around state, quota, storage, security, and deployment
@@ -139,7 +138,7 @@ The repository is now organized around an explicit bot-core boundary:
 - `server/_core/bot/index.ts` exposes the Messenger bot runtime entrypoints used by server bootstrap.
 - `server/_core/bot/features.ts` is the dedicated extension point for future bot features.
 
-The built-in registry now starts with foundational bot middleware-style features such as rate limiting, style handling, conversational editing, and admin stats. Future bot features should prefer registering text/payload/image handlers there via `registerBotFeature(...)` instead of expanding unrelated web or admin codepaths.
+The built-in registry now starts with foundational bot middleware-style features such as rate limiting, prompt-first image/edit commands, conversational editing, and admin stats. Future bot features should prefer registering text/payload/image handlers there via `registerBotFeature(...)` instead of expanding unrelated web or admin codepaths.
 
 Repository changes should prioritize generic prompt-first image generation and the supporting multi-channel bot/runtime foundation. Do not treat older style-catalog or experiment scaffolding as the roadmap by default.
 
@@ -157,12 +156,12 @@ Further boundary work should continue to reduce coupling between channel adapter
 
 ## WhatsApp image flow
 
-WhatsApp still supports the legacy source-photo journey:
+WhatsApp supports the prompt-first image journey and source-photo edits:
 
 - inbound image webhooks are accepted on the shared Meta callback route
 - WhatsApp media is downloaded through the Cloud API using the inbound media id
-- the source image is persisted to a reusable public URL for follow-up style picks
-- users can pick style groups and styles over plain text replies
+- the source image is persisted to a reusable public URL for follow-up edits
+- users can describe the next image or edit in natural language
 - generated images are returned through the WhatsApp Cloud API image send endpoint
 
 Because the persisted source image is fetched again during generation, `SOURCE_IMAGE_ALLOWED_HOSTS` must include the hostname used for those stored source images. In local/dev setups this is usually the `APP_BASE_URL` host. In production it should include the public asset host returned by the storage layer.
@@ -312,11 +311,10 @@ Multi-channel text routing now also has a small adapter-level test in `server/bo
 - Keep documentation comments synchronized with implementation changes; when behavior, inputs, or outputs change, update the docblock in the same PR.
 - Remove stale comments rather than leaving outdated guidance in place.
 
-## Legacy style catalog
+## Image prompts
 
-The style catalog is a compatibility layer, not the primary roadmap. Avoid adding new preset styles unless needed for a maintained legacy flow. New product behavior should prefer generic prompt-first image generation.
+New product behavior should prefer generic prompt-first image generation and natural-language source-photo edits. Do not rebuild legacy style-picker catalogs or preview menus.
 
-When a compatibility change truly needs a style update, use [`docs/style-guide.md`](docs/style-guide.md) as the quality and consistency checklist for prompts, previews, naming, and review.
 For Facebook/Messenger share assets, use [`docs/invite-image-export-checklist.md`](docs/invite-image-export-checklist.md) as the required export, naming, and cache-busting workflow.
 
 ## Security: webhook signature verification

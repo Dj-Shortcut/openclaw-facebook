@@ -132,8 +132,8 @@ Assistant replies may include channel-neutral `actions`:
 {
   "text": "What would you like to do next?",
   "actions": [
-    { "id": "Restyle photo", "label": "Restyle photo" },
-    { "id": "Try again", "label": "Try again" }
+    { "id": "edit_image", "label": "Edit image", "inputText": "Edit image" },
+    { "id": "new_image", "label": "New image", "inputText": "New image" }
   ]
 }
 ```
@@ -141,8 +141,7 @@ Assistant replies may include channel-neutral `actions`:
 The Facebook channel renders these actions as Messenger quick replies. When a
 person clicks one, the action id is decoded back into the next inbound message
 text, so the assistant receives it like normal user input instead of a
-Messenger-specific payload branch. Existing channel-specific Messenger payloads
-remain available for legacy integrations such as the image-generation service.
+Messenger-specific payload branch.
 
 ## Local/private install validation
 
@@ -163,7 +162,7 @@ channel.
 
 ## Development
 
-Use Node.js `22.16.0` (see `.nvmrc` / `.node-version`) before installing dependencies.
+Use Node.js `22.19.0` (see `.nvmrc` / `.node-version`) before installing dependencies.
 
 ```bash
 npm install

@@ -22,10 +22,6 @@ function createState(
     state: "IDLE",
     lastPhotoUrl: null,
     lastPhoto: null,
-    selectedStyle: null,
-    chosenStyle: null,
-    selectedStyleCategory: null,
-    preselectedStyle: null,
     preferredLang: "nl",
     hasSeenIntro: false,
     lastGeneratedUrl: null,
@@ -66,8 +62,9 @@ describe("sharedTextHandler", () => {
       response: {
         text: t("nl", "flowExplanation"),
         actions: [
-          { id: "WHAT_IS_THIS", label: "Wat doe ik?", inputText: "Wat doe ik?" },
-          { id: "PRIVACY_INFO", label: "Privacy" },
+          { id: "new_image", label: "Nieuwe afbeelding", inputText: "Nieuwe afbeelding" },
+          { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
+          { id: "privacy", label: "Privacy", inputText: "Privacy" },
         ],
       },
       afterSend: "markIntroSeen",
@@ -105,8 +102,9 @@ describe("sharedTextHandler", () => {
       response: {
         text: t("nl", "flowExplanation"),
         actions: [
-          { id: "WHAT_IS_THIS", label: "Wat doe ik?", inputText: "Wat doe ik?" },
-          { id: "PRIVACY_INFO", label: "Privacy" },
+          { id: "new_image", label: "Nieuwe afbeelding", inputText: "Nieuwe afbeelding" },
+          { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
+          { id: "privacy", label: "Privacy", inputText: "Privacy" },
         ],
       },
     });
@@ -139,13 +137,49 @@ describe("sharedTextHandler", () => {
         text: t("nl", "success"),
         actions: [
           {
-            id: "NEW_IMAGE",
+            id: "new_image",
             label: "Nieuwe afbeelding",
             inputText: "Nieuwe afbeelding",
           },
-          { id: "PRIVACY_INFO", label: "Privacy" },
+          { id: "edit_photo", label: "Pas aan", inputText: "Pas aan" },
+          { id: "privacy", label: "Privacy", inputText: "Privacy" },
         ],
       },
+    });
+  });
+
+  it("treats a generated image as editable context for help commands", async () => {
+    const runTextFeatures = vi.fn(async () => true);
+
+    const result = await handleSharedTextMessage({
+      message: {
+        channel: "messenger",
+        senderId: "psid-generated-help",
+        userId: "user-key-generated-help",
+        messageType: "text",
+        textBody: "help",
+      },
+      reqId: "req-generated-help",
+      lang: "nl",
+      getState: async () =>
+        createState({
+          psid: "psid-generated-help",
+          userKey: "user-key-generated-help",
+          lastGeneratedUrl: "https://img.example/generated.jpg",
+          hasSeenIntro: true,
+        }),
+      setFlowState: async () => {},
+      runTextFeatures,
+    });
+
+    expect(result).toEqual({ response: null });
+    expect(runTextFeatures).toHaveBeenCalledWith({
+      state: expect.objectContaining({
+        lastGeneratedUrl: "https://img.example/generated.jpg",
+      }),
+      messageText: "help",
+      normalizedText: "help",
+      hasPhoto: true,
     });
   });
 
@@ -176,7 +210,7 @@ describe("sharedTextHandler", () => {
         text: t("nl", "failure"),
         actions: [
           {
-            id: "NEW_IMAGE",
+            id: "new_image",
             label: "Nieuwe afbeelding",
             inputText: "Nieuwe afbeelding",
           },
@@ -207,7 +241,7 @@ describe("sharedTextHandler", () => {
     expect(logAckIgnored).toHaveBeenCalledWith("ok");
   });
 
-  it("returns the style picker response metadata when a photo is already present", async () => {
+  it("treats old English style shortcut text as ordinary text", async () => {
     const setFlowState = vi.fn(async () => {});
 
     const result = await handleSharedTextMessage({
@@ -230,14 +264,20 @@ describe("sharedTextHandler", () => {
       setFlowState,
     });
 
-    expect(setFlowState).toHaveBeenCalledWith("AWAITING_STYLE");
+    expect(setFlowState).not.toHaveBeenCalled();
     expect(result).toEqual({
-      response: { kind: "text", text: t("en", "styleCategoryPicker") },
-      replyState: "AWAITING_STYLE",
+      response: {
+        text: t("en", "assistantQuickActions"),
+        actions: [
+          { id: "edit_photo", label: "Edit image", inputText: "Edit image" },
+          { id: "new_image", label: "New image", inputText: "New image" },
+          { id: "privacy", label: "Privacy", inputText: "Privacy" },
+        ],
+      },
     });
   });
 
-  it("returns the style picker response metadata for the Dutch style shortcut when a photo is already present", async () => {
+  it("treats old Dutch style shortcut text as ordinary text", async () => {
     const setFlowState = vi.fn(async () => {});
 
     const result = await handleSharedTextMessage({
@@ -260,10 +300,16 @@ describe("sharedTextHandler", () => {
       setFlowState,
     });
 
-    expect(setFlowState).toHaveBeenCalledWith("AWAITING_STYLE");
+    expect(setFlowState).not.toHaveBeenCalled();
     expect(result).toEqual({
-      response: { kind: "text", text: t("nl", "styleCategoryPicker") },
-      replyState: "AWAITING_STYLE",
+      response: {
+        text: t("nl", "assistantQuickActions"),
+        actions: [
+          { id: "edit_photo", label: "Pas aan", inputText: "Pas aan" },
+          { id: "new_image", label: "Nieuwe afbeelding", inputText: "Nieuwe afbeelding" },
+          { id: "privacy", label: "Privacy", inputText: "Privacy" },
+        ],
+      },
     });
   });
 
@@ -291,17 +337,21 @@ describe("sharedTextHandler", () => {
       setFlowState,
     });
 
-    expect(setFlowState).toHaveBeenCalledWith("AWAITING_PHOTO");
+    expect(setFlowState).not.toHaveBeenCalled();
     expect(result).toEqual({
       response: {
-        kind: "text",
-        text: t("en", "textWithoutPhoto"),
+        text: t("en", "flowExplanation"),
+        actions: [
+          { id: "new_image", label: "New image", inputText: "New image" },
+          { id: "edit_photo", label: "Edit photo", inputText: "Edit photo" },
+          { id: "privacy", label: "Privacy", inputText: "Privacy" },
+        ],
       },
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("keeps free text with an existing photo on fixed style guidance", async () => {
+  it("returns contextual actions for free text with an existing image", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
@@ -319,8 +369,8 @@ describe("sharedTextHandler", () => {
         createState({
           psid: "psid-3",
           userKey: "user-key-3",
-          stage: "AWAITING_STYLE",
-          state: "AWAITING_STYLE",
+          stage: "AWAITING_EDIT_PROMPT",
+          state: "AWAITING_EDIT_PROMPT",
           hasSeenIntro: true,
           lastPhotoUrl: "https://img.example/input.jpg",
           lastPhoto: "https://img.example/input.jpg",
@@ -330,8 +380,12 @@ describe("sharedTextHandler", () => {
 
     expect(result).toEqual({
       response: {
-        kind: "text",
-        text: t("nl", "flowExplanation"),
+        text: t("nl", "assistantQuickActions"),
+        actions: [
+          { id: "edit_photo", label: "Pas aan", inputText: "Pas aan" },
+          { id: "new_image", label: "Nieuwe afbeelding", inputText: "Nieuwe afbeelding" },
+          { id: "privacy", label: "Privacy", inputText: "Privacy" },
+        ],
       },
     });
     expect(fetchMock).not.toHaveBeenCalled();

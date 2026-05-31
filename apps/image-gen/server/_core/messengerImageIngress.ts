@@ -1,8 +1,6 @@
 import { safeLog } from "./messengerApi";
-import type { Style } from "./messengerStyles";
 import { ingestExternalSourceImage } from "./sourceImageStore";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
-import { normalizeStyle } from "./webhookHelpers";
 
 type NormalizeMessengerInboundImageInput = {
   inboundImageUrl: string;
@@ -33,60 +31,24 @@ export async function normalizeMessengerInboundImage(
 
 type StoredMessengerImageDecisionInput = {
   lastPhotoUrl: string | null;
-  selectedStyle?: string | null;
-  preselectedStyle?: string | null;
   storedSourceImageUrl: string;
 };
 
 export type StoredMessengerImageDecision =
   | {
-      action: "show_style_picker";
+      action: "request_edit_prompt";
       hadPreviousPhoto: boolean;
       incomingImageUrl: string;
-      styleToRun: null;
-    }
-  | {
-      action: "auto_run_preselected_style";
-      hadPreviousPhoto: boolean;
-      incomingImageUrl: string;
-      styleToRun: Style;
-    }
-  | {
-      action: "auto_run_selected_style";
-      hadPreviousPhoto: boolean;
-      incomingImageUrl: string;
-      styleToRun: Style;
     };
 
 export function getStoredMessengerImageDecision(
   input: StoredMessengerImageDecisionInput
 ): StoredMessengerImageDecision {
   const hadPreviousPhoto = Boolean(input.lastPhotoUrl);
-  const selectedStyle = normalizeStyle(input.selectedStyle ?? "") ?? null;
-  const preselectedStyle = normalizeStyle(input.preselectedStyle ?? "") ?? null;
-
-  if (preselectedStyle && !hadPreviousPhoto) {
-    return {
-      action: "auto_run_preselected_style",
-      hadPreviousPhoto,
-      incomingImageUrl: input.storedSourceImageUrl,
-      styleToRun: preselectedStyle,
-    };
-  }
-
-  if (selectedStyle) {
-    return {
-      action: "auto_run_selected_style",
-      hadPreviousPhoto,
-      incomingImageUrl: input.storedSourceImageUrl,
-      styleToRun: selectedStyle,
-    };
-  }
 
   return {
-    action: "show_style_picker",
+    action: "request_edit_prompt",
     hadPreviousPhoto,
     incomingImageUrl: input.storedSourceImageUrl,
-    styleToRun: null,
   };
 }

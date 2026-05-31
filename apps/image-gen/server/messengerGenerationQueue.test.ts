@@ -226,6 +226,49 @@ describe("messengerGenerationQueue", () => {
     expect(processing).toEqual([]);
   });
 
+  it("drains prompt-first jobs without legacy style values", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const job = createJob({
+      reqId: "req-prompt-first-no-style",
+      style: undefined,
+      generationKind: "text_to_image",
+      promptHint: "Maak een draak boven Antwerpen",
+    });
+    const queue: string[] = [JSON.stringify(job)];
+    const processing: string[] = [];
+    const redis = {
+      del: vi.fn(async () => 1),
+      get: vi.fn(async () => null),
+      llen: vi.fn(async (key: string) =>
+        key.endsWith(":processing") ? processing.length : queue.length
+      ),
+      lrange: vi.fn(async () => processing),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      rpoplpush: vi.fn(async () => {
+        const value = queue.pop() ?? null;
+        if (value) {
+          processing.unshift(value);
+        }
+        return value;
+      }),
+      set: vi.fn(async () => "OK"),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async () => undefined);
+
+    await drainMessengerGenerationQueue(processor);
+
+    expect(processor).toHaveBeenCalledWith(job);
+    expect(processing).toEqual([]);
+  });
+
   it("uses an explicit job lease when configured", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
@@ -540,6 +583,55 @@ describe("messengerGenerationQueue", () => {
     expect(processor).not.toHaveBeenCalled();
     expect(queue).toEqual([]);
     expect(processing).toEqual([]);
+    expect(dead).toEqual([invalidJob]);
+  });
+
+  it("dead-letters style-restyle jobs without a valid legacy style", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const invalidJob = JSON.stringify({
+      psid: "user-1",
+      userId: "user-key-1",
+      generationKind: "style_restyle",
+      reqId: "req-missing-style",
+      lang: "nl",
+    });
+    const queue: string[] = [invalidJob];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const redis = {
+      del: vi.fn(async () => 0),
+      get: vi.fn(async () => null),
+      llen: vi.fn(async (key: string) => {
+        if (key.endsWith(":processing")) return processing.length;
+        if (key.endsWith(":dead")) return dead.length;
+        return queue.length;
+      }),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      rpoplpush: vi.fn(async () => {
+        const value = queue.pop() ?? null;
+        if (value) {
+          processing.unshift(value);
+        }
+        return value;
+      }),
+      rpush: vi.fn(async (_key: string, value: string) => {
+        dead.push(value);
+        return dead.length;
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async () => undefined);
+
+    await expect(drainMessengerGenerationQueue(processor)).resolves.toBeUndefined();
+
+    expect(processor).not.toHaveBeenCalled();
     expect(dead).toEqual([invalidJob]);
   });
 

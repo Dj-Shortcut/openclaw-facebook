@@ -2,14 +2,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   anonymizePsid,
   getOrCreateState,
-  getQuickRepliesForState,
-  getStyleRepliesForCategory,
   resetStateStore,
-  setChosenStyle,
-  setFlowState,
   setPendingImage,
 } from "./_core/messengerState";
-import { STYLE_CATEGORY_CONFIGS } from "./_core/messengerStyles";
 
 const TEST_PEPPER = "ci-test-pepper";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
@@ -38,45 +33,9 @@ describe("messenger state flow", () => {
     setPendingImage(userId, "https://img.example/pic.jpg", 1000);
 
     const state = getOrCreateState(userId);
-    expect(state.stage).toBe("AWAITING_STYLE");
+    expect(state.stage).toBe("AWAITING_EDIT_PROMPT");
     expect(state.lastPhoto).toBe("https://img.example/pic.jpg");
     expect(state.hasSeenIntro).toBe(false);
-  });
-
-  it("handles style-first transition", () => {
-    const userId = "style-first-user";
-
-    setFlowState(userId, "IDLE", 1000);
-    setChosenStyle(userId, "Anime", 1001);
-
-    const state = getOrCreateState(userId);
-    expect(state.stage).toBe("IDLE");
-    expect(state.selectedStyle).toBe("Anime");
-    expect(state.lastPhoto).toBeNull();
-  });
-
-  it("maps quick replies by state", () => {
-    expect(getQuickRepliesForState("IDLE")).toEqual([]);
-    expect(getQuickRepliesForState("AWAITING_PHOTO")).toEqual([]);
-    expect(getQuickRepliesForState("AWAITING_STYLE")).toEqual(
-      STYLE_CATEGORY_CONFIGS.map(category => ({
-        title: category.label,
-        payload: category.payload,
-      })),
-    );
-    expect(getQuickRepliesForState("PROCESSING")).toEqual([]);
-    expect(getQuickRepliesForState("RESULT_READY")).toEqual([]);
-    expect(getQuickRepliesForState("FAILURE")).toEqual([]);
-  });
-
-  it("maps per-category style replies with a back action", () => {
-    expect(getStyleRepliesForCategory("bold")).toEqual([
-      { title: "Afroman", payload: "STYLE_AFROMAN_AMERICANA" },
-      { title: "✨ Gold", payload: "STYLE_GOLD" },
-      { title: "🌃 Cyberpunk", payload: "STYLE_CYBERPUNK" },
-      { title: "🪩 Disco Glow", payload: "STYLE_DISCO" },
-      { title: "↩️ Categorieen", payload: "CHOOSE_STYLE" },
-    ]);
   });
 
   it("hashes PSID deterministically", () => {

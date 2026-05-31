@@ -60,7 +60,7 @@ function buildAnalysisPayload(sourceImage: DownloadedSourceImage): ResponsesApiP
         content: [
           {
             type: "input_text",
-            text: "Analyze this uploaded photo for a social-ready creative restyle. Keep it concise and practical.",
+            text: "Analyze this uploaded photo for a social-ready creative image edit. Keep it concise and practical.",
           },
           {
             type: "input_image",
