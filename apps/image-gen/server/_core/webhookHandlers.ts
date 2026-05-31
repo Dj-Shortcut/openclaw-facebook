@@ -82,7 +82,6 @@ type InternalMessengerImageRequestInput = {
   prompt: string;
   reqId: string;
   lang?: Lang;
-  style?: Style;
   timestamp?: number;
   sourceImageUrl?: string;
 };
@@ -994,17 +993,12 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
     const userId = toUserKey(input.psid);
     const wantsSourceImageEdit = isSourceImageEditRequest(input.prompt);
     const wantsPersonalTransform = isPersonalSourceImageTransformRequest(input.prompt);
-    const legacyEditStyle =
-      input.sourceImageUrl || wantsSourceImageEdit || wantsPersonalTransform
-        ? input.style
-        : undefined;
     await setLastUserMessageAt(input.psid, input.timestamp ?? Date.now());
 
     safeLog("internal_image_request_received", {
       reqId: input.reqId,
       user: toLogUser(userId),
       psidHash: anonymizePsid(input.psid).slice(0, 12),
-      style: legacyEditStyle ?? null,
       hasSourceImageUrl: Boolean(input.sourceImageUrl),
     });
 
@@ -1075,13 +1069,13 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
     return await runImageGeneration(
       input.psid,
       userId,
-      legacyEditStyle,
+      undefined,
       input.reqId,
       lang,
       sourceImageUrl,
       input.prompt,
       undefined,
-      legacyEditStyle ? "style_restyle" : "source_image_edit"
+      "source_image_edit"
     );
   }
 

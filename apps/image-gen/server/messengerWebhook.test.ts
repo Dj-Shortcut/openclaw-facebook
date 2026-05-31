@@ -669,7 +669,6 @@ describe("messenger webhook dedupe", () => {
       "internal_image_request_received",
       expect.objectContaining({
         reqId: "req-internal-style-word-text-image",
-        style: null,
         hasSourceImageUrl: false,
       })
     );
@@ -709,7 +708,6 @@ describe("messenger webhook dedupe", () => {
       "internal_image_request_received",
       expect.objectContaining({
         reqId: "req-internal-style-word-source",
-        style: null,
         hasSourceImageUrl: false,
       })
     );
