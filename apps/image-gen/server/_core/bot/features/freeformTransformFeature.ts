@@ -56,7 +56,6 @@ export const freeformTransformFeature: BotFeature = {
     if (!sourcePhotoUrl) {
       await ctx.runImageGeneration(
         undefined,
-        undefined,
         ctx.messageText,
         undefined,
         "text_to_image"
@@ -69,7 +68,6 @@ export const freeformTransformFeature: BotFeature = {
     });
 
     await ctx.runImageGeneration(
-      undefined,
       sourcePhotoUrl,
       buildPromptHint(ctx.messageText),
       undefined,

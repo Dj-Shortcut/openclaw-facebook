@@ -216,7 +216,6 @@ describe("image provider boundary", () => {
 
     const generator = new OpenAiImageGenerator();
     const result = await generateWithSourceImageData(generator, {
-      style: "disco",
       userKey: "user-1",
       reqId: "req-provider-log",
     });
@@ -259,7 +258,6 @@ describe("image provider boundary", () => {
 
     const generator = new OpenAiImageGenerator();
     await generateWithSourceImageData(generator, {
-      style: "disco",
       promptHint: "more glitter in the background",
       userKey: "user-1",
       reqId: "req-style-prompt",
@@ -283,7 +281,6 @@ describe("image provider boundary", () => {
 
     const generator = new OpenAiImageGenerator();
     await generator.generate({
-      style: "disco",
       userKey: "user-default-model",
       reqId: "req-default-model",
     });
@@ -305,7 +302,6 @@ describe("image provider boundary", () => {
 
     const generator = new OpenAiImageGenerator();
     await generator.generate({
-      style: "storybook-anime",
       userKey: "user-configured-model",
       reqId: "req-configured-model",
     });
@@ -342,7 +338,6 @@ describe("image provider boundary", () => {
 
     const generator = new OpenAiImageGenerator();
     await generateWithSourceImageData(generator, {
-      style: "disco",
       userKey: "user-form-data-model",
       reqId: "req-form-data-model",
     });
@@ -371,7 +366,6 @@ describe("image provider boundary", () => {
 
     const generator = new OpenAiImageGenerator();
     await generateWithSourceImageData(generator, {
-      style: "cyberpunk",
       promptHint: "this should not be used for director prompts",
       directorMode: directorInput.mode,
       directorInstruction: directorInput.userInstruction,
@@ -420,7 +414,6 @@ describe("image provider boundary", () => {
 
     const generator = new OpenAiImageGenerator();
     await generateWithSourceImageData(generator, {
-      style: "cinematic",
       directorMode: "vogue_editorial",
       userKey: "user-1",
       reqId: "req-director-analysis",
@@ -454,7 +447,6 @@ describe("image provider boundary", () => {
 
     const generator = new OpenAiImageGenerator();
     await generateWithSourceImageData(generator, {
-      style: "cinematic",
       directorMode: "old_money",
       userKey: "user-1",
       reqId: "req-director-analysis-fail",
@@ -482,7 +474,6 @@ describe("image provider boundary", () => {
 
     const generator = new OpenAiImageGenerator();
     await generateWithSourceImageData(generator, {
-      style: "cinematic",
       generationKind: "source_image_edit",
       promptHint: "Kan je me een samurai maken",
       userKey: "user-1",

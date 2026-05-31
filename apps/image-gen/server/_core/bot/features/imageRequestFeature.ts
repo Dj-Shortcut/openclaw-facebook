@@ -115,7 +115,6 @@ export const imageRequestFeature: BotFeature = {
 
     if (shouldUseExistingPhotoContext(ctx, text)) {
       await ctx.runImageGeneration(
-        undefined,
         getSourcePhotoUrl(ctx),
         text,
         undefined,
@@ -125,7 +124,6 @@ export const imageRequestFeature: BotFeature = {
     }
 
     await ctx.runImageGeneration(
-      undefined,
       undefined,
       text,
       undefined,

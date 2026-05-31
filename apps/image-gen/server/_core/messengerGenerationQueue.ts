@@ -251,7 +251,7 @@ async function releaseMessengerGenerationJob(
     );
     safeLog("messenger_generation_job_dead_lettered", {
       reqId: reserved.job.reqId,
-      style: reserved.job.style,
+      generationKind: reserved.job.generationKind ?? null,
       attempts: nextAttempt,
       errorCode:
         error instanceof Error ? error.constructor.name : "UnknownError",
@@ -271,7 +271,7 @@ async function deadLetterInvalidGenerationJob(
   await redis.rpush(MESSENGER_GENERATION_DEAD_LETTER_KEY, raw);
   safeLog("messenger_generation_job_dead_lettered", {
     reqId: null,
-    style: null,
+    generationKind: null,
     attempts: null,
     errorCode: "InvalidGenerationJobPayload",
   });
@@ -316,7 +316,7 @@ export async function reclaimReservedMessengerGenerationJobs(
       } catch (deadLetterError) {
         safeLog("messenger_generation_dead_letter_callback_failed", {
           reqId: reserved.job.reqId,
-          style: reserved.job.style,
+          generationKind: reserved.job.generationKind ?? null,
           errorCode:
             deadLetterError instanceof Error
               ? deadLetterError.constructor.name
@@ -393,7 +393,6 @@ function parseMessengerGenerationJob(
     !isOptionalGenerationKind(value.generationKind) ||
     !isOptionalString(value.sourceImageUrl) ||
     !isOptionalString(value.promptHint) ||
-    !isOptionalString(value.style) ||
     !isOptionalDirectorMode(value.directorMode) ||
     !isOptionalAttempts(value.attempts)
   ) {
@@ -401,7 +400,14 @@ function parseMessengerGenerationJob(
   }
 
   return {
-    ...value,
+    psid: value.psid,
+    userId: value.userId,
+    reqId: value.reqId,
+    lang: value.lang,
+    sourceImageUrl: value.sourceImageUrl,
+    promptHint: value.promptHint,
+    directorMode: value.directorMode,
+    attempts: value.attempts,
     generationKind:
       value.generationKind === "style_restyle"
         ? "source_image_edit"
@@ -462,7 +468,7 @@ export async function drainMessengerGenerationQueue(
     } catch (error) {
       safeLog("messenger_generation_job_failed", {
         reqId: reserved.job.reqId,
-        style: reserved.job.style,
+        generationKind: reserved.job.generationKind ?? null,
         attempts: (reserved.job.attempts ?? 0) + 1,
         errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
       });
@@ -477,7 +483,7 @@ export async function drainMessengerGenerationQueue(
         } catch (deadLetterError) {
           safeLog("messenger_generation_dead_letter_callback_failed", {
             reqId: reserved.job.reqId,
-            style: reserved.job.style,
+            generationKind: reserved.job.generationKind ?? null,
             errorCode:
               deadLetterError instanceof Error
                 ? deadLetterError.constructor.name
