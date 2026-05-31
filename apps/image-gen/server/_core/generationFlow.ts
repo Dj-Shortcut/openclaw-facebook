@@ -72,7 +72,6 @@ type GenerationFlowResult =
   | GenerationFlowFailure;
 
 type ExecuteGenerationFlowInput = {
-  style?: string;
   generationKind?: GenerationKind;
   userId: string;
   reqId: string;
@@ -263,7 +262,6 @@ export async function executeGenerationFlow(
 
   try {
     const { imageUrl, proof, metrics } = await generator.generate({
-      style: input.style,
       generationKind,
       sourceImageUrl: resolvedSourceImageUrl,
       trustedSourceImageUrl,

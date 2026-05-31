@@ -188,7 +188,6 @@ export type HandlerContext = {
   runImageGeneration: (
     psid: string,
     userId: string,
-    style: string | undefined,
     reqId: string,
     lang: Lang,
     sourceImageUrl?: string,
@@ -439,7 +438,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
         }
       },
       runImageGeneration: async (
-        style,
         sourceImageUrl,
         promptHint,
         directorMode,
@@ -448,7 +446,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
         await runImageGeneration(
           psid,
           userId,
-          style,
           reqId,
           lang,
           sourceImageUrl,
@@ -575,7 +572,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
     const {
       psid,
       userId,
-      style,
       generationKind,
       reqId,
       lang,
@@ -604,13 +600,13 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
             reqId,
             expectedUser: toLogUser(userId),
             completionUser: toLogUser(completedGeneration.userKey),
-            style,
+            generationKind: resolvedGenerationKind,
           });
         } else {
           safeLog("messenger_generation_job_duplicate_completed", {
             reqId,
             user: toLogUser(userId),
-            style,
+            generationKind: resolvedGenerationKind,
           });
           await setLastGenerated(psid, completedGeneration.imageUrl);
           await setLastGenerationContext(psid, {
@@ -666,7 +662,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
 
       const state = await getOrCreateState(psid);
       const generationResult = await executeGenerationFlow({
-        style,
         generationKind: resolvedGenerationKind,
         userId,
         reqId,
@@ -685,7 +680,7 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
             msg: "messenger_send_image_url",
             reqId,
             psidHash: anonymizePsid(psid).slice(0, 12),
-            style,
+            generationKind: resolvedGenerationKind,
             imageUrl: summarizeSensitiveUrl(imageUrl),
           })
         );
@@ -697,7 +692,7 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
             reqId,
             psidHash: anonymizePsid(psid).slice(0, 12),
             mode,
-            style,
+            generationKind: resolvedGenerationKind,
             ok: true,
             fb_image_fetch_ms: metrics.fbImageFetchMs,
             prompt_build_ms: metrics.promptBuildMs,
@@ -714,7 +709,7 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
           JSON.stringify({
             reqId,
             psidHash: anonymizePsid(psid).slice(0, 12),
-            style,
+            generationKind: resolvedGenerationKind,
             incomingLen: proof.incomingLen,
             incomingSha256: proof.incomingSha256,
             openaiInputLen: proof.openaiInputLen,
@@ -750,7 +745,7 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
         emitGenerationDiagnostic({
           generationId: reqId,
           senderId: psid,
-          style: style ?? resolvedGenerationKind,
+          style: resolvedGenerationKind,
           success: true,
           durationsMs: {
             source_image_downloaded: metrics.fbImageFetchMs,
@@ -783,7 +778,7 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
         JSON.stringify({
           reqId,
           psidHash: anonymizePsid(psid).slice(0, 12),
-          style,
+          generationKind: resolvedGenerationKind,
           ok: false,
           errorCode: errorClass,
           totalMs: metrics.totalMs,
@@ -792,7 +787,7 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       emitGenerationDiagnostic({
         generationId: reqId,
         senderId: psid,
-        style: style ?? resolvedGenerationKind,
+        style: resolvedGenerationKind,
         success: false,
         failureReason: generationResult.errorKind,
         durationsMs: {
@@ -872,7 +867,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
   async function runImageGeneration(
     psid: string,
     userId: string,
-    style: string | undefined,
     reqId: string,
     lang: Lang,
     sourceImageUrl?: string,
@@ -885,7 +879,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
     const job: MessengerGenerationJob = {
       psid,
       userId,
-      style,
       generationKind: resolvedGenerationKind,
       reqId,
       lang,
@@ -912,14 +905,14 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       safeLog("messenger_generation_queued_ack_failed", {
         reqId,
         user: toLogUser(userId),
-        style,
+        generationKind: resolvedGenerationKind,
         error: error instanceof Error ? error.message : String(error),
       });
     }
     safeLog("messenger_generation_job_queued", {
       reqId,
       user: toLogUser(userId),
-      style,
+      generationKind: resolvedGenerationKind,
       queueEnabled: isMessengerGenerationQueueEnabled(),
     });
     return MESSENGER_ASYNC_RESPONSE_QUEUED;
@@ -1053,7 +1046,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       return await runImageGeneration(
         input.psid,
         userId,
-        undefined,
         input.reqId,
         lang,
         undefined,
@@ -1066,7 +1058,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
     return await runImageGeneration(
       input.psid,
       userId,
-      undefined,
       input.reqId,
       lang,
       sourceImageUrl,

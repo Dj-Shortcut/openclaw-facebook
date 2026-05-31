@@ -141,7 +141,6 @@ describe("freeformTransformFeature", () => {
 
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
-      undefined,
       "https://img.example/source.jpg",
       expect.stringContaining(
         "User requested transformation: Maak me een Romeinse soldaat"
@@ -169,7 +168,6 @@ describe("freeformTransformFeature", () => {
 
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
-      undefined,
       "https://img.example/source.jpg",
       expect.stringContaining(
         "User requested transformation: Kan je me een samurai maken"
@@ -200,7 +198,6 @@ describe("freeformTransformFeature", () => {
     expect(sendText).not.toHaveBeenCalled();
     expect(runImageGeneration).toHaveBeenCalledWith(
       undefined,
-      undefined,
       "Maak me een Romeinse soldaat",
       undefined,
       "text_to_image"
@@ -224,7 +221,6 @@ describe("imageRequestFeature", () => {
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
       undefined,
-      undefined,
       "Kan je een landschap afbeelding genereren?",
       undefined,
       "text_to_image"
@@ -246,7 +242,6 @@ describe("imageRequestFeature", () => {
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
       undefined,
-      undefined,
       "Maak een draak met neonvleugels boven Antwerpen",
       undefined,
       "text_to_image"
@@ -267,7 +262,6 @@ describe("imageRequestFeature", () => {
 
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
-      undefined,
       undefined,
       "Kan je een draak met neonvleugels maken?",
       undefined,
@@ -358,7 +352,6 @@ describe("imageRequestFeature", () => {
 
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
-      undefined,
       "https://img.example/source.jpg",
       "Maak een stoere poster voor mijn feest",
       undefined,
@@ -385,7 +378,6 @@ describe("imageRequestFeature", () => {
 
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
-      undefined,
       undefined,
       "Maak een nieuwe afbeelding van een draak",
       undefined,
@@ -429,7 +421,6 @@ describe("conversationalEditingFeature", () => {
 
       expect(result).toEqual({ handled: true });
       expect(runImageGeneration).toHaveBeenCalledWith(
-        undefined,
         "https://img.example/source.jpg",
         "make it disco",
         undefined,
@@ -478,7 +469,6 @@ describe("conversationalEditingFeature", () => {
 
       expect(result).toEqual({ handled: true });
       expect(runImageGeneration).toHaveBeenCalledWith(
-        undefined,
         "https://img.example/source.jpg",
         "make the background darker",
         undefined,
@@ -527,7 +517,6 @@ describe("conversationalEditingFeature", () => {
 
       expect(result).toEqual({ handled: true });
       expect(runImageGeneration).toHaveBeenCalledWith(
-        undefined,
         "https://img.example/source.jpg",
         "add sunglasses",
         undefined,
@@ -575,7 +564,6 @@ describe("conversationalEditingFeature", () => {
 
       expect(result).toEqual({ handled: true });
       expect(runImageGeneration).toHaveBeenCalledWith(
-        undefined,
         "https://img.example/generated.jpg",
         "make it darker",
         undefined,

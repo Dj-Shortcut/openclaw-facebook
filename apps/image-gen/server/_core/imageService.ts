@@ -45,7 +45,6 @@ export type ImageProvider = typeof OPENAI_IMAGES_PROVIDER;
 
 interface ImageGenerator {
   generate(input: {
-    style?: string;
     generationKind?: GenerationKind;
     sourceImageUrl?: string;
     trustedSourceImageUrl?: boolean;
@@ -74,7 +73,6 @@ interface ImageGenerator {
 }
 
 type GeneratorInput = {
-  style?: string;
   generationKind?: GenerationKind;
   sourceImageUrl?: string;
   trustedSourceImageUrl?: boolean;
@@ -121,15 +119,8 @@ function buildPromptForGeneration(input: GeneratorInput, photoAnalysis?: string)
   }
 
   return buildSourceImageEditPrompt(
-    input.promptHint ??
-      (input.style
-        ? `Apply ${styleToNaturalLanguage(input.style)} as natural-language visual direction.`
-        : "")
+    input.promptHint ?? ""
   );
-}
-
-function styleToNaturalLanguage(style: string): string {
-  return style.replace(/-/g, " ");
 }
 
 export function getGeneratorStartupConfig(): {
@@ -196,7 +187,6 @@ async function prepareGenerationInput(
       msg: "image_prompt_built",
       reqId: input.reqId,
       generationKind: input.generationKind ?? null,
-      staleStyleHint: input.style ?? null,
       directorMode: input.directorMode,
       durationMs: promptBuildMs,
       promptChars: prompt.length,

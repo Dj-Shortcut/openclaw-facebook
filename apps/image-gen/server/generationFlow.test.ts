@@ -62,7 +62,6 @@ describe("generationFlow", () => {
 
   it("returns missing_source_image when no source image is available", async () => {
     const result = await executeGenerationFlow({
-      style: "cyberpunk",
       generationKind: "source_image_edit",
       userId: "user-1",
       reqId: "req-1",
@@ -92,7 +91,6 @@ describe("generationFlow", () => {
     });
 
     const result = await executeGenerationFlow({
-      style: "cyberpunk",
       userId: "user-1",
       reqId: "req-1",
       lastPhotoUrl: "https://stored.example/image.jpg",
@@ -130,7 +128,6 @@ describe("generationFlow", () => {
     });
 
     const result = await executeGenerationFlow({
-      style: "cinematic",
       userId: "user-1",
       reqId: "req-text-default",
       promptHint: "Maak een landschap",
@@ -171,7 +168,6 @@ describe("generationFlow", () => {
     });
 
     const result = await executeGenerationFlow({
-      style: "cyberpunk",
       userId: "user-1",
       reqId: "req-1",
       lastPhotoUrl: "https://assets.example/inbound-source/photo.jpg?signature=old",
@@ -225,7 +221,6 @@ describe("generationFlow", () => {
     expect(generateMock).toHaveBeenCalledWith(
       expect.objectContaining({
         generationKind: "source_image_edit",
-        style: undefined,
         directorMode: "midnight_luxury",
         directorInstruction: "make it feel like an exclusive event portrait",
         directorPhotoAnalysis: "The source image has low ambient light.",
@@ -237,7 +232,6 @@ describe("generationFlow", () => {
     process.env.BUILT_IN_FORGE_API_URL = "https://forge.example";
 
     const result = await executeGenerationFlow({
-      style: "cyberpunk",
       userId: "user-1",
       reqId: "req-1",
       lastPhotoUrl: "not-a-valid-url",
@@ -272,7 +266,6 @@ describe("generationFlow", () => {
     });
 
     const result = await executeGenerationFlow({
-      style: "cyberpunk",
       userId: "user-1",
       reqId: "req-1",
       sourceImageUrl: "https://assets.example/inbound-source/old.jpg",
@@ -300,7 +293,6 @@ describe("generationFlow", () => {
     });
 
     const result = await executeGenerationFlow({
-      style: "cyberpunk",
       userId: "user-1",
       reqId: "req-1",
       sourceImageUrl: "https://assets.example/inbound-source/old.jpg",
@@ -328,7 +320,6 @@ describe("generationFlow", () => {
     });
 
     const timeoutResult = await executeGenerationFlow({
-      style: "cyberpunk",
       userId: "user-1",
       reqId: "req-1",
       lastPhotoUrl: "https://stored.example/photo.jpg",
@@ -349,7 +340,6 @@ describe("generationFlow", () => {
     });
 
     const invalidSourceResult = await executeGenerationFlow({
-      style: "cyberpunk",
       userId: "user-1",
       reqId: "req-1",
       lastPhotoUrl: "https://stored.example/photo.jpg",
@@ -369,7 +359,6 @@ describe("generationFlow", () => {
     });
 
     const missingInputResult = await executeGenerationFlow({
-      style: "cyberpunk",
       userId: "user-1",
       reqId: "req-1",
       lastPhotoUrl: "https://stored.example/photo.jpg",
@@ -389,7 +378,6 @@ describe("generationFlow", () => {
     });
 
     const budgetResult = await executeGenerationFlow({
-      style: "cyberpunk",
       userId: "user-1",
       reqId: "req-1",
       lastPhotoUrl: "https://stored.example/photo.jpg",
@@ -410,7 +398,6 @@ describe("generationFlow", () => {
     });
 
     const result = await executeGenerationFlow({
-      style: "cyberpunk",
       userId: "user-1",
       reqId: "req-1",
       lastPhotoUrl: "https://example.com/photo.jpg",

@@ -27,7 +27,6 @@ function createJob(overrides: Partial<MessengerGenerationJob> = {}): MessengerGe
   return {
     psid: "psid-1",
     userId: "user-1",
-    style: "gold",
     reqId: "req-1",
     lang: "nl",
     ...overrides,
@@ -232,7 +231,6 @@ describe("messengerGenerationQueue", () => {
     isRedisEnabledMock.mockReturnValue(true);
     const job = createJob({
       reqId: "req-prompt-first-no-style",
-      style: undefined,
       generationKind: "text_to_image",
       promptHint: "Maak een draak boven Antwerpen",
     });
@@ -251,6 +249,15 @@ describe("messengerGenerationQueue", () => {
         processing.splice(index, 1);
         return 1;
       }),
+      lpush: vi.fn(async (_key: string, value: string) => {
+        queue.unshift(value);
+        return queue.length;
+      }),
+      lpush: vi.fn(async (_key: string, value: string) => {
+        queue.unshift(value);
+        return queue.length;
+      }),
+      set: vi.fn(async () => "OK"),
       rpoplpush: vi.fn(async () => {
         const value = queue.pop() ?? null;
         if (value) {
@@ -290,6 +297,11 @@ describe("messengerGenerationQueue", () => {
         processing.splice(index, 1);
         return 1;
       }),
+      lpush: vi.fn(async (_key: string, value: string) => {
+        queue.unshift(value);
+        return queue.length;
+      }),
+      set: vi.fn(async () => "OK"),
       rpoplpush: vi.fn(async () => {
         const value = queue.pop() ?? null;
         if (value) {
@@ -394,6 +406,7 @@ describe("messengerGenerationQueue", () => {
         }
         return value;
       }),
+      set: vi.fn(async () => "OK"),
       rpush: vi.fn(async (_key: string, value: string) => {
         dead.push(value);
         return dead.length;
@@ -509,6 +522,11 @@ describe("messengerGenerationQueue", () => {
           processing.unshift(value);
         }
         return value;
+      }),
+      set: vi.fn(async () => "OK"),
+      lpush: vi.fn(async (_key: string, value: string) => {
+        queue.unshift(value);
+        return queue.length;
       }),
       rpush: vi.fn(async (_key: string, value: string) => {
         dead.push(value);
@@ -645,23 +663,24 @@ describe("messengerGenerationQueue", () => {
     expect(dead).toEqual([]);
   });
 
-  it("dead-letters pending job payloads with non-string style hints", async () => {
+  it("ignores stale style payloads instead of letting them affect queued generation", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
     isRedisEnabledMock.mockReturnValue(true);
-    const invalidJob = JSON.stringify({
+    const staleJob = JSON.stringify({
       psid: "user-1",
       userId: "user-key-1",
       style: 123,
-      reqId: "req-invalid-style",
+      reqId: "req-stale-style",
       lang: "nl",
     });
-    const queue: string[] = [invalidJob];
+    const queue: string[] = [staleJob];
     const processing: string[] = [];
     const dead: string[] = [];
     const redis = {
       del: vi.fn(async () => 0),
       get: vi.fn(async () => null),
+      set: vi.fn(async () => "OK"),
       llen: vi.fn(async (key: string) => {
         if (key.endsWith(":processing")) return processing.length;
         if (key.endsWith(":dead")) return dead.length;
@@ -673,6 +692,11 @@ describe("messengerGenerationQueue", () => {
         processing.splice(index, 1);
         return 1;
       }),
+      lpush: vi.fn(async (_key: string, value: string) => {
+        queue.unshift(value);
+        return queue.length;
+      }),
+      set: vi.fn(async () => "OK"),
       rpoplpush: vi.fn(async () => {
         const value = queue.pop() ?? null;
         if (value) {
@@ -690,10 +714,12 @@ describe("messengerGenerationQueue", () => {
 
     await expect(drainMessengerGenerationQueue(processor)).resolves.toBeUndefined();
 
-    expect(processor).not.toHaveBeenCalled();
+    expect(processor).toHaveBeenCalledWith(
+      expect.not.objectContaining({ style: expect.anything() })
+    );
     expect(queue).toEqual([]);
     expect(processing).toEqual([]);
-    expect(dead).toEqual([invalidJob]);
+    expect(dead).toEqual([]);
   });
 
   it("does not fail the drain when a dead-letter callback fails", async () => {

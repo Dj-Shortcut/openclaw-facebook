@@ -51,7 +51,6 @@ export const conversationalEditingFeature: BotFeature = {
     });
 
     await ctx.runImageGeneration(
-      undefined,
       sourcePhotoUrl,
       combinedPrompt || ctx.state.lastPrompt,
       decision.directorMode,

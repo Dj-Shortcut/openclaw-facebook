@@ -102,7 +102,6 @@ describe("webhook tracked context", () => {
     await tracked.runImageGeneration(
       "tracked-user",
       "tracked-user-key",
-      undefined,
       "req-tracked-direct",
       "nl",
       "https://img.example/source.jpg",
@@ -114,7 +113,6 @@ describe("webhook tracked context", () => {
     expect(runImageGeneration).toHaveBeenCalledWith(
       "tracked-user",
       "tracked-user-key",
-      undefined,
       "req-tracked-direct",
       "nl",
       "https://img.example/source.jpg",
@@ -140,7 +138,6 @@ describe("webhook tracked context", () => {
     );
 
     await featureCtx.runImageGeneration(
-      undefined,
       "https://img.example/source.jpg",
       "Maak me cyberpunk",
       undefined,
@@ -150,7 +147,6 @@ describe("webhook tracked context", () => {
     expect(runImageGeneration).toHaveBeenCalledWith(
       "tracked-user",
       "tracked-user-key",
-      undefined,
       "req-tracked-feature",
       "nl",
       "https://img.example/source.jpg",

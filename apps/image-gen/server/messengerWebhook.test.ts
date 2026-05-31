@@ -482,7 +482,6 @@ describe("messenger webhook dedupe", () => {
     await processMessengerGenerationJob({
       psid: "completed-job-user",
       userId: "completed-job-user-key",
-      style: "disco",
       reqId: "req-completed-job",
       lang: "nl",
     });
@@ -495,7 +494,7 @@ describe("messenger webhook dedupe", () => {
       "messenger_generation_job_duplicate_completed",
       expect.objectContaining({
         reqId: "req-completed-job",
-        style: "disco",
+        generationKind: "text_to_image",
       })
     );
   });
@@ -783,7 +782,7 @@ describe("messenger webhook dedupe", () => {
       "messenger_generation_job_queued",
       expect.objectContaining({
         reqId: "req-internal-durable",
-        style: undefined,
+        generationKind: "source_image_edit",
       })
     );
   });
