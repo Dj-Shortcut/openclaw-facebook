@@ -243,13 +243,17 @@ describe("image provider boundary", () => {
     ]);
   });
 
-  it("uses the existing style prompt when no director mode is provided", async () => {
+  it("uses prompt-first source-image edits when stale style jobs have no director mode", async () => {
     configureOpenAiImagesEnv();
 
     const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
-      expect(await promptFromRequest(init)).toBe(
+      const prompt = await promptFromRequest(init);
+      expect(prompt).toBe(
         buildLegacyPresetPrompt("disco", "more glitter in the background")
       );
+      expect(prompt).toContain("not as a preset style catalog");
+      expect(prompt).toContain("User request: more glitter in the background");
+      expect(prompt).not.toContain("glamorous disco-era hero shot");
 
       return createGeneratedImageResponse();
     });
