@@ -495,6 +495,55 @@ describe("conversationalEditingFeature", () => {
     }
   });
 
+  it("allows the first natural edit prompt immediately after photo upload", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        output_text: JSON.stringify({
+          shouldEdit: true,
+          style: null,
+          directorMode: null,
+          promptHint: "add sunglasses",
+        }),
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    try {
+      const result = await conversationalEditingFeature.onText?.(
+        makeContext({
+          messageText: "add sunglasses",
+          normalizedText: "add sunglasses",
+          hasPhoto: true,
+          runImageGeneration,
+          state: makeState({
+            lastPhotoUrl: "https://img.example/source.jpg",
+          }),
+        })
+      );
+
+      expect(result).toEqual({ handled: true });
+      expect(runImageGeneration).toHaveBeenCalledWith(
+        undefined,
+        "https://img.example/source.jpg",
+        "add sunglasses",
+        undefined,
+        "source_image_edit"
+      );
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("uses the last generated image as the source for follow-up edits", async () => {
     const originalApiKey = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = "test-key";
