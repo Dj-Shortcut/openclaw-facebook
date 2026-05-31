@@ -270,7 +270,7 @@ async function handleAdminRequest(req, res, pathname, env = process.env) {
   return true;
 }
 
-function proxyRequest(req, res, { targetHost, targetPort, proxyTimeoutMs }) {
+function createProxyHeaders(req, { targetHost, targetPort, includeUpgrade = false }) {
   const headers = { ...req.headers };
   delete headers.connection;
   delete headers["keep-alive"];
@@ -279,10 +279,20 @@ function proxyRequest(req, res, { targetHost, targetPort, proxyTimeoutMs }) {
   delete headers.te;
   delete headers.trailer;
   delete headers["transfer-encoding"];
-  delete headers.upgrade;
+  if (!includeUpgrade) {
+    delete headers.upgrade;
+  }
   headers.host = `${targetHost}:${targetPort}`;
   headers["x-forwarded-host"] = req.headers.host || "";
   headers["x-forwarded-proto"] = "https";
+  if (includeUpgrade) {
+    headers.connection = "Upgrade";
+  }
+  return headers;
+}
+
+function proxyRequest(req, res, { targetHost, targetPort, proxyTimeoutMs }) {
+  const headers = createProxyHeaders(req, { targetHost, targetPort });
 
   const proxyReq = http.request(
     {
@@ -323,6 +333,65 @@ function proxyRequest(req, res, { targetHost, targetPort, proxyTimeoutMs }) {
   req.pipe(proxyReq);
 }
 
+function writeUpgradeResponse(socket, proxyRes) {
+  if (socket.destroyed) {
+    return;
+  }
+  socket.write(`HTTP/${proxyRes.httpVersion} ${proxyRes.statusCode} ${proxyRes.statusMessage || ""}\r\n`);
+  for (let index = 0; index < proxyRes.rawHeaders.length; index += 2) {
+    socket.write(`${proxyRes.rawHeaders[index]}: ${proxyRes.rawHeaders[index + 1]}\r\n`);
+  }
+  socket.write("\r\n");
+}
+
+function proxyUpgrade(req, socket, head, { targetHost, targetPort, proxyTimeoutMs }) {
+  const proxyReq = http.request({
+    host: targetHost,
+    port: targetPort,
+    method: req.method,
+    path: req.url,
+    headers: createProxyHeaders(req, { targetHost, targetPort, includeUpgrade: true }),
+  });
+
+  let settled = false;
+  const destroySockets = () => {
+    if (!settled) {
+      settled = true;
+    }
+    proxyReq.destroy();
+    socket.destroy();
+  };
+
+  socket.setTimeout(proxyTimeoutMs, destroySockets);
+  proxyReq.setTimeout(proxyTimeoutMs, destroySockets);
+
+  proxyReq.on("upgrade", (proxyRes, proxySocket, proxyHead) => {
+    settled = true;
+    socket.setTimeout(0);
+    proxySocket.setTimeout(0);
+    writeUpgradeResponse(socket, proxyRes);
+    if (proxyHead.length > 0) {
+      socket.write(proxyHead);
+    }
+    if (head.length > 0) {
+      proxySocket.write(head);
+    }
+    proxySocket.pipe(socket);
+    socket.pipe(proxySocket);
+  });
+
+  proxyReq.on("response", (proxyRes) => {
+    settled = true;
+    writeUpgradeResponse(socket, proxyRes);
+    proxyRes.pipe(socket);
+  });
+
+  proxyReq.on("error", destroySockets);
+  socket.on("error", destroySockets);
+
+  proxyReq.end();
+}
+
 export function startPublicRouteGuard({
   publicPort,
   targetPort,
@@ -356,8 +425,13 @@ export function startPublicRouteGuard({
     proxyRequest(req, res, { targetHost, targetPort, proxyTimeoutMs });
   });
 
-  server.on("upgrade", (_req, socket) => {
-    socket.destroy();
+  server.on("upgrade", (req, socket, head) => {
+    if (!hasAdminSession(req, env)) {
+      socket.destroy();
+      return;
+    }
+
+    proxyUpgrade(req, socket, head, { targetHost, targetPort, proxyTimeoutMs });
   });
 
   server.listen(publicPort, () => {
