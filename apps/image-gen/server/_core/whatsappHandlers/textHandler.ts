@@ -9,8 +9,6 @@ import {
 import { resolveConversationActionInput } from "../conversationActionSelection";
 import { toLogUser } from "../privacy";
 import { sendWhatsAppBotStateResponse } from "../whatsappResponseService";
-import { parseWhatsAppDirectorSelection } from "../whatsappFlows/directorSelectionFlow";
-import { runWhatsAppImageGeneration } from "../whatsappFlows/imageGenerationFlow";
 import type { NormalizedWhatsAppEvent, WhatsAppHandlerContext } from "../whatsappTypes";
 import { runWhatsAppTextFeatures } from "./textContext";
 
@@ -36,26 +34,6 @@ export async function handleWhatsAppTextEvent(
       messageType: "text",
       textBody,
     };
-  }
-
-  if (textBody) {
-    const selectedDirectorMode = parseWhatsAppDirectorSelection(textBody);
-    if (selectedDirectorMode && state.lastPhotoUrl) {
-      console.info("[whatsapp webhook] director mode selected", {
-        user: toLogUser(event.userId),
-        directorMode: selectedDirectorMode,
-        textBody,
-      });
-      await runWhatsAppImageGeneration({
-        senderId: event.senderId,
-        userId: event.userId,
-        directorMode: selectedDirectorMode,
-        reqId: context.reqId,
-        lang: context.lang,
-      });
-      return;
-    }
-
   }
 
   const result = await handleSharedTextMessage({

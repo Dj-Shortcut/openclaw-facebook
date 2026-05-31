@@ -46,6 +46,8 @@
 
 - [x] Use durable storage proxy for generated images and retained source images
 - [ ] Continue verifying storage-proxy delivery under Messenger crawler constraints
+- [ ] Plan dedicated image-generation worker rollout before high-volume scaling
+- [ ] Evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory
 
 ### Premium tier (ready but inactive)
 
