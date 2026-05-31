@@ -105,6 +105,10 @@ same OpenClaw assistant also needs X/Twitter search, monitors, webhooks, media
 workflows, follower export, giveaway draws, or approval-reviewed tweet posts.
 TweetClaw is a separate optional third-party plugin maintained outside this
 repository; it is not required for Facebook Page Messenger DMs.
+See [`docs/x-twitter-getxapi-companion.md`](docs/x-twitter-getxapi-companion.md)
+for the same Facebook + X/Twitter pairing using GetXAPI as a read-only HTTP
+backend. GetXAPI is a separate optional third-party service maintained outside
+this repository.
 
 ## Access model
 
