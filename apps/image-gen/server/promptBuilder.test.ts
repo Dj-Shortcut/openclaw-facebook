@@ -39,6 +39,8 @@ describe("text-to-image prompt builder", () => {
 
     expect(prompt).toContain("User request: a neon city at sunset");
     expect(prompt).toContain("Treat the user's words as the creative brief");
+    expect(prompt).toContain("The requested main subject must be visibly present");
+    expect(prompt).toContain("Never substitute the requested subject");
     expect(prompt).toContain("senior creative director");
     expect(prompt).toContain("camera angle or framing");
     expect(prompt).toContain("polished, high-end image quality");
@@ -69,5 +71,14 @@ describe("text-to-image prompt builder", () => {
     expect(prompt).not.toContain("prestige-film still");
     expect(prompt).not.toContain("teal-and-amber");
     expect(prompt).not.toContain("Additional direction");
+  });
+
+  it("treats missing-subject feedback as a real image correction", () => {
+    const prompt = buildSourceImageEditPrompt("Das mooi, maar geen samurai bro");
+
+    expect(prompt).toContain("treat that as a visual correction");
+    expect(prompt).toContain("add or emphasize that subject clearly");
+    expect(prompt).toContain("Do not answer with a rewritten prompt");
+    expect(prompt).toContain("User request: Das mooi, maar geen samurai bro");
   });
 });

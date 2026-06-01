@@ -680,6 +680,37 @@ describe("normalizeMessengerReplyPayloadForDelivery", () => {
       ],
     });
   });
+
+  it("keeps inferred numbered choices visible next to Privacy for delivery", () => {
+    const payload = normalizeMessengerReplyPayloadForDelivery({
+      text:
+        "Ja. Wil je dat ik een:\n\n" +
+        "1. samurai-portret maak,\n" +
+        "2. samurai-avatar/sticker maak,",
+      actions: [{ id: "privacy", label: "Privacy", inputText: "Privacy" }],
+    } as never);
+
+    expect(payload?.text).toBe("Ja. Wil je dat ik een:");
+    expect(payload?.channelData?.facebook).toEqual({
+      quickReplies: [
+        {
+          content_type: "text",
+          title: "samurai-portret",
+          payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak een samurai-portret`,
+        },
+        {
+          content_type: "text",
+          title: "samurai-avatar/stick",
+          payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak een samurai-avatar/sticker`,
+        },
+        {
+          content_type: "text",
+          title: "Privacy",
+          payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Privacy`,
+        },
+      ],
+    });
+  });
 });
 
 describe("getOpenClawActionText", () => {
