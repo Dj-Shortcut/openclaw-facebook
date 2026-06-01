@@ -51,7 +51,6 @@ export const conversationalEditingFeature: BotFeature = {
     await ctx.runImageGeneration(
       sourcePhotoUrl,
       combinedPrompt || ctx.state.lastPrompt,
-      undefined,
       "source_image_edit",
     );
     return { handled: true };

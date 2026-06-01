@@ -7,7 +7,7 @@
 
 - Last reviewed against code: **2026-06-01**
 - Verified commit: **`a341b4e`**
-- Current direction: generic prompt-first image generation; legacy style-picker UI and quick-reply flows are removed. Internal style-preset compatibility may remain only as backend fallback.
+- Current direction: generic prompt-first image generation; legacy style-picker UI, quick-reply flows, and director-mode preset plumbing are removed. Internal style-preset compatibility may remain only as backend fallback.
 - Product direction: `leaderbot.live` becomes a tenant/customer portal for managing each customer's own AI. The OpenClaw/Messenger gateway remains shielded and is not the customer-facing app.
 - Historical audit and inventory files are not active plans. Keep valid open work here instead of reviving stale audit snapshots.
 
@@ -97,6 +97,7 @@ Open cost-control work:
 - [x] Text-to-image generation accepts arbitrary visual prompts without defaulting to Storybook Anime
 - [x] Image-generation success/failure follow-ups use channel-neutral conversation actions before Messenger rendering
 - [x] Removed unused director prompt/social-copy modules so stale template presets cannot re-enter generation output
+- [x] Removed director-mode fields from active generation/runtime state so stale template names cannot influence prompts or follow-up edits
 
 ## Historisch afgerond
 

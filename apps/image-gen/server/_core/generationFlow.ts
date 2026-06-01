@@ -17,7 +17,6 @@ import {
   MissingInputImageError,
 } from "./image-generation/sourceImageFetcher";
 import type { SourceImageOrigin } from "./messengerState";
-import type { DirectorMode } from "./image-generation/director/directorTypes";
 import type { GenerationKind } from "./image-generation/generationTypes";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import { storageGet, storageKeyFromPublicUrl } from "../storage";
@@ -77,9 +76,6 @@ type ExecuteGenerationFlowInput = {
   userId: string;
   reqId: string;
   promptHint?: string;
-  directorMode?: DirectorMode;
-  directorInstruction?: string;
-  directorPhotoAnalysis?: string;
   sourceImageUrl?: string;
   lastPhotoUrl?: string | null;
   lastPhotoSource?: SourceImageOrigin | null;

@@ -106,7 +106,6 @@ describe("webhook tracked context", () => {
       "nl",
       "https://img.example/source.jpg",
       "Maak me cyberpunk",
-      undefined,
       "source_image_edit"
     );
 
@@ -117,7 +116,6 @@ describe("webhook tracked context", () => {
       "nl",
       "https://img.example/source.jpg",
       "Maak me cyberpunk",
-      undefined,
       "source_image_edit"
     );
   });
@@ -140,7 +138,6 @@ describe("webhook tracked context", () => {
     await featureCtx.runImageGeneration(
       "https://img.example/source.jpg",
       "Maak me cyberpunk",
-      undefined,
       "source_image_edit"
     );
 
@@ -151,7 +148,6 @@ describe("webhook tracked context", () => {
       "nl",
       "https://img.example/source.jpg",
       "Maak me cyberpunk",
-      undefined,
       "source_image_edit"
     );
   });

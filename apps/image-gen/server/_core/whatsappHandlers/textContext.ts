@@ -51,7 +51,7 @@ export function createWhatsAppTextContext(
       Promise.resolve(setFlowState(event.senderId, nextState)),
     clearImageContext: () =>
       Promise.resolve(clearPendingImageState(event.senderId)).then(() => undefined),
-    runImageGeneration: (sourceImageUrl, promptHint, directorMode, generationKind) =>
+    runImageGeneration: (sourceImageUrl, promptHint, generationKind) =>
       runWhatsAppImageGeneration({
         senderId: event.senderId,
         userId: event.userId,
@@ -59,7 +59,6 @@ export function createWhatsAppTextContext(
         lang: context.lang,
         sourceImageUrl,
         promptHint,
-        directorMode,
         generationKind,
       }),
     getRuntimeStats: () => getTodayRuntimeStats(),

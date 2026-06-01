@@ -145,7 +145,6 @@ describe("freeformTransformFeature", () => {
       expect.stringContaining(
         "User requested transformation: Maak me een Romeinse soldaat"
       ),
-      undefined,
       "source_image_edit"
     );
   });
@@ -172,7 +171,6 @@ describe("freeformTransformFeature", () => {
       expect.stringContaining(
         "User requested transformation: Kan je me een samurai maken"
       ),
-      undefined,
       "source_image_edit"
     );
   });
@@ -198,7 +196,6 @@ describe("freeformTransformFeature", () => {
     expect(runImageGeneration).toHaveBeenCalledWith(
       "https://img.example/generated.jpg",
       expect.stringContaining("User requested transformation: Maak me een nog sterkere samurai"),
-      undefined,
       "source_image_edit"
     );
   });
@@ -225,7 +222,6 @@ describe("freeformTransformFeature", () => {
     expect(runImageGeneration).toHaveBeenCalledWith(
       undefined,
       "Maak me een Romeinse soldaat",
-      undefined,
       "text_to_image"
     );
   });
@@ -248,7 +244,6 @@ describe("imageRequestFeature", () => {
     expect(runImageGeneration).toHaveBeenCalledWith(
       undefined,
       "Kan je een landschap afbeelding genereren?",
-      undefined,
       "text_to_image"
     );
   });
@@ -269,7 +264,6 @@ describe("imageRequestFeature", () => {
     expect(runImageGeneration).toHaveBeenCalledWith(
       undefined,
       "Maak een draak met neonvleugels boven Antwerpen",
-      undefined,
       "text_to_image"
     );
   });
@@ -290,7 +284,6 @@ describe("imageRequestFeature", () => {
     expect(runImageGeneration).toHaveBeenCalledWith(
       undefined,
       "Kan je een draak met neonvleugels maken?",
-      undefined,
       "text_to_image"
     );
   });
@@ -380,7 +373,6 @@ describe("imageRequestFeature", () => {
     expect(runImageGeneration).toHaveBeenCalledWith(
       "https://img.example/source.jpg",
       "Maak een stoere poster voor mijn feest",
-      undefined,
       "source_image_edit"
     );
   });
@@ -407,7 +399,6 @@ describe("imageRequestFeature", () => {
     expect(runImageGeneration).toHaveBeenCalledWith(
       "https://img.example/generated.jpg",
       "Maak een stoere poster van dit resultaat",
-      undefined,
       "source_image_edit"
     );
   });
@@ -433,7 +424,6 @@ describe("imageRequestFeature", () => {
     expect(runImageGeneration).toHaveBeenCalledWith(
       undefined,
       "Maak een nieuwe afbeelding van een draak",
-      undefined,
       "text_to_image"
     );
   });
@@ -449,7 +439,6 @@ describe("conversationalEditingFeature", () => {
         output_text: JSON.stringify({
           shouldEdit: true,
           style: "disco",
-          directorMode: null,
           promptHint: "make it disco",
         }),
       }),
@@ -467,7 +456,6 @@ describe("conversationalEditingFeature", () => {
           state: makeState({
             lastGeneratedUrl: "https://img.example/generated.jpg",
             lastPhotoUrl: "https://img.example/source.jpg",
-            lastDirectorMode: "midnight_luxury",
           }),
         })
       );
@@ -476,7 +464,6 @@ describe("conversationalEditingFeature", () => {
       expect(runImageGeneration).toHaveBeenCalledWith(
         "https://img.example/generated.jpg",
         "make it disco",
-        undefined,
         "source_image_edit"
       );
     } finally {
@@ -498,7 +485,6 @@ describe("conversationalEditingFeature", () => {
         output_text: JSON.stringify({
           shouldEdit: true,
           style: null,
-          directorMode: null,
           promptHint: "make the background darker",
         }),
       }),
@@ -524,7 +510,6 @@ describe("conversationalEditingFeature", () => {
       expect(runImageGeneration).toHaveBeenCalledWith(
         "https://img.example/generated.jpg",
         "make the background darker",
-        undefined,
         "source_image_edit"
       );
     } finally {
@@ -546,7 +531,6 @@ describe("conversationalEditingFeature", () => {
         output_text: JSON.stringify({
           shouldEdit: true,
           style: null,
-          directorMode: null,
           promptHint: "add sunglasses",
         }),
       }),
@@ -572,7 +556,6 @@ describe("conversationalEditingFeature", () => {
       expect(runImageGeneration).toHaveBeenCalledWith(
         "https://img.example/source.jpg",
         "add sunglasses",
-        undefined,
         "source_image_edit"
       );
     } finally {
@@ -594,7 +577,6 @@ describe("conversationalEditingFeature", () => {
         output_text: JSON.stringify({
           shouldEdit: true,
           style: null,
-          directorMode: null,
           promptHint: "make it darker",
         }),
       }),
@@ -621,7 +603,6 @@ describe("conversationalEditingFeature", () => {
       expect(runImageGeneration).toHaveBeenCalledWith(
         "https://img.example/generated.jpg",
         "make it darker",
-        undefined,
         "source_image_edit"
       );
     } finally {

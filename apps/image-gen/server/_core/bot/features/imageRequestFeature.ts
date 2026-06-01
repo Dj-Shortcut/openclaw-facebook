@@ -117,7 +117,6 @@ export const imageRequestFeature: BotFeature = {
       await ctx.runImageGeneration(
         getSourcePhotoUrl(ctx),
         text,
-        undefined,
         "source_image_edit"
       );
       return { handled: true };
@@ -126,7 +125,6 @@ export const imageRequestFeature: BotFeature = {
     await ctx.runImageGeneration(
       undefined,
       text,
-      undefined,
       "text_to_image"
     );
     return { handled: true };

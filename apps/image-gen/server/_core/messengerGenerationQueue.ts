@@ -12,13 +12,6 @@ const OPENAI_TIMEOUT_MS_DEFAULT = 180_000;
 const DEFAULT_MAX_JOB_ATTEMPTS = 3;
 const DEFAULT_DRAIN_BATCH_SIZE = 10;
 const MESSENGER_GENERATION_LANGS = new Set(["nl", "en"]);
-const MESSENGER_GENERATION_DIRECTOR_MODES = new Set([
-  "midnight_luxury",
-  "berlin_underground",
-  "vogue_editorial",
-  "hyperpop_idol",
-  "old_money",
-]);
 const MESSENGER_GENERATION_KINDS = new Set([
   "text_to_image",
   "source_image_edit",
@@ -378,13 +371,6 @@ function isOptionalString(value: unknown): value is string | undefined {
   return value === undefined || typeof value === "string";
 }
 
-function isOptionalDirectorMode(value: unknown): boolean {
-  return (
-    value === undefined ||
-    (typeof value === "string" && MESSENGER_GENERATION_DIRECTOR_MODES.has(value))
-  );
-}
-
 function isOptionalGenerationKind(value: unknown): boolean {
   return (
     value === undefined ||
@@ -417,7 +403,6 @@ function parseMessengerGenerationJob(
     !isOptionalGenerationKind(value.generationKind) ||
     !isOptionalString(value.sourceImageUrl) ||
     !isOptionalString(value.promptHint) ||
-    !isOptionalDirectorMode(value.directorMode) ||
     !isOptionalAttempts(value.attempts)
   ) {
     return null;
@@ -430,7 +415,6 @@ function parseMessengerGenerationJob(
     lang: value.lang,
     sourceImageUrl: value.sourceImageUrl,
     promptHint: value.promptHint,
-    directorMode: value.directorMode,
     attempts: value.attempts,
     generationKind:
       value.generationKind === "style_restyle"

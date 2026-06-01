@@ -244,7 +244,6 @@ describe("whatsapp webhook flow", () => {
         json: async () => ({
           output_text: JSON.stringify({
             shouldEdit: false,
-            directorMode: null,
             promptHint: null,
           }),
         }),
@@ -392,7 +391,6 @@ describe("whatsapp webhook flow", () => {
         lang: "nl",
         promptHint: "Maak een krachtige samurai als hoofdonderwerp",
         generationKind: "text_to_image",
-        directorMode: "old_money",
       });
 
       expect(fetchMock).not.toHaveBeenCalled();
@@ -403,7 +401,6 @@ describe("whatsapp webhook flow", () => {
       expect(getState("wa-stale-director-success")?.lastPrompt).toBe(
         "Maak een krachtige samurai als hoofdonderwerp"
       );
-      expect(getState("wa-stale-director-success")?.lastDirectorMode).toBeUndefined();
       expect(
         sendWhatsAppTextMock.mock.calls.some(([, text]) =>
           String(text).includes("Old Money")

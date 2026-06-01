@@ -1,5 +1,4 @@
 import { executeGenerationFlow } from "../generationFlow";
-import type { DirectorMode } from "../image-generation/director/directorTypes";
 import { getGenerationMetrics } from "../image-generation/openAiImageClient";
 import type { GenerationKind } from "../image-generation/generationTypes";
 import { runGuardedGeneration } from "../generationGuard";
@@ -27,9 +26,6 @@ type ImageGenerationInput = {
   sourceImageUrl?: string;
   promptHint?: string;
   generationKind?: GenerationKind;
-  directorMode?: DirectorMode;
-  directorInstruction?: string;
-  directorPhotoAnalysis?: string;
 };
 
 type GenerationResult = Awaited<ReturnType<typeof executeGenerationFlow>>;
@@ -49,14 +45,12 @@ function resolvedSourceHost(url?: string): string | undefined {
 
 function logGenerationRequested(input: {
   userId: string;
-  directorMode?: DirectorMode;
   promptHint?: string;
   resolvedSourceImageUrl?: string;
   trustedSourceImageUrl: boolean;
 }): void {
   console.info("[whatsapp webhook] generation requested", {
     user: input.userId,
-    directorMode: input.directorMode,
     hasPromptHint: Boolean(input.promptHint?.trim()),
     sourceImageUrlHost: resolvedSourceHost(input.resolvedSourceImageUrl),
     trustedSourceImageUrl: input.trustedSourceImageUrl,
@@ -85,7 +79,6 @@ async function prepareGeneration(input: ImageGenerationInput): Promise<{
 
   logGenerationRequested({
     userId: input.userId,
-    directorMode: input.directorMode,
     promptHint: input.promptHint,
     resolvedSourceImageUrl,
     trustedSourceImageUrl:
@@ -247,9 +240,6 @@ async function runWhatsAppImageGenerationOnce(
     sourceImageUrl,
     promptHint,
     generationKind,
-    directorMode,
-    directorInstruction,
-    directorPhotoAnalysis,
   } = input;
   const allowed = await canGenerate(senderId);
   if (!allowed) {
@@ -264,9 +254,6 @@ async function runWhatsAppImageGenerationOnce(
     reqId,
     generationKind,
     promptHint,
-    directorMode,
-    directorInstruction,
-    directorPhotoAnalysis,
     sourceImageUrl,
     lastPhotoUrl: generationContext.lastPhotoUrl,
     lastPhotoSource: generationContext.lastPhotoSource,
