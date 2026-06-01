@@ -123,6 +123,20 @@ describe("generationGuard", () => {
     });
   });
 
+  it("reports whether the daily image budget cap is enabled", () => {
+    expect(guard.getMessengerDailyImageBudgetConfig()).toEqual({
+      enabled: false,
+      cap: null,
+    });
+
+    process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "25";
+
+    expect(guard.getMessengerDailyImageBudgetConfig()).toEqual({
+      enabled: true,
+      cap: 25,
+    });
+  });
+
   it("does not reserve daily image budget when no cap is configured", async () => {
     await expect(
       guard.assertMessengerDailyImageBudgetAvailable({ reqId: "req-no-cap" })

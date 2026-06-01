@@ -87,6 +87,11 @@ export type MessengerGenerationGlobalLimitConfig = {
   lockTtlMs: number;
 };
 
+export type MessengerDailyImageBudgetConfig = {
+  enabled: boolean;
+  cap: number | null;
+};
+
 function getGlobalMaxConcurrency(): number {
   return Math.max(
     1,
@@ -198,11 +203,19 @@ export function getMessengerGenerationGlobalLimitConfig(): MessengerGenerationGl
   };
 }
 
+export function getMessengerDailyImageBudgetConfig(): MessengerDailyImageBudgetConfig {
+  const cap = readPositiveInt("MESSENGER_GLOBAL_DAILY_IMAGE_CAP");
+  return {
+    enabled: cap !== null,
+    cap,
+  };
+}
+
 export async function assertMessengerDailyImageBudgetAvailable(input: {
   reqId: string;
   now?: Date;
 }): Promise<void> {
-  const cap = readPositiveInt("MESSENGER_GLOBAL_DAILY_IMAGE_CAP");
+  const { cap } = getMessengerDailyImageBudgetConfig();
   if (!cap) {
     return;
   }
