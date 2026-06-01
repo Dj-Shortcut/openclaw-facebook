@@ -232,7 +232,7 @@ describe("botResponseAdapters", () => {
     expect(sendText).not.toHaveBeenCalled();
   });
 
-  it("does not infer actions from code blocks", async () => {
+  it("does not infer numbered choice actions from prompt code blocks", async () => {
     const sendText = vi.fn(async () => {});
     const sendActionPrompt = vi.fn(async () => {});
     const text = [
@@ -241,6 +241,70 @@ describe("botResponseAdapters", () => {
       "```text",
       "1. cinematic portrait",
       "2. poster style",
+      "```",
+    ].join("\n");
+
+    await sendMessengerBotResponse(
+      {
+        text,
+      },
+      {
+        sendText,
+        sendActionPrompt,
+      }
+    );
+
+    expect(sendActionPrompt).toHaveBeenCalledWith(text, [
+      {
+        id: "generate_prompt",
+        label: "Maak deze afbeelding",
+        inputText:
+          "Gebruik deze prompt en maak een afbeelding: 1. cinematic portrait 2. poster style",
+      },
+    ]);
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("offers a prompt-to-image action for assistant-written image prompts", async () => {
+    const sendText = vi.fn(async () => {});
+    const sendActionPrompt = vi.fn(async () => {});
+    const text = [
+      "Hier is een sterke prompt voor je:",
+      "",
+      "```text",
+      "Prompt: Maak een krachtige Romeinse gladiator als hoofdonderwerp in een arena, realistische details, warm licht",
+      "```",
+    ].join("\n");
+
+    await sendMessengerBotResponse(
+      {
+        text,
+      },
+      {
+        sendText,
+        sendActionPrompt,
+      }
+    );
+
+    expect(sendActionPrompt).toHaveBeenCalledWith(text, [
+      {
+        id: "generate_prompt",
+        label: "Maak deze afbeelding",
+        inputText:
+          "Gebruik deze prompt en maak een afbeelding: Maak een krachtige Romeinse gladiator als hoofdonderwerp in een arena, realistische details, warm licht",
+      },
+    ]);
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("does not offer prompt-to-image actions for ordinary code examples", async () => {
+    const sendText = vi.fn(async () => {});
+    const sendActionPrompt = vi.fn(async () => {});
+    const text = [
+      "Hier is de functie:",
+      "",
+      "```ts",
+      "const value = createThing();",
       "```",
     ].join("\n");
 

@@ -220,4 +220,59 @@ describe("webhook tracked context", () => {
       ]
     ).toHaveLength(2);
   });
+
+  it("renders assistant-written image prompts as actionable Messenger quick replies", async () => {
+    process.env.PRIVACY_PEPPER = "test-pepper";
+    const sendLoggedQuickReplies = vi.fn(async () => ({
+      sent: true,
+      messageId: "mid-feature-prompt",
+    }));
+    const ctx = {
+      ...makeHandlerContext(vi.fn(async () => ({ sent: true }))),
+      sendLoggedQuickReplies,
+    };
+    const tracked = createTrackedHandlerContext(ctx, vi.fn());
+    const featureCtx = tracked.createFeatureTextContext(
+      "tracked-user",
+      "tracked-user-key",
+      "req-feature-prompt",
+      "nl",
+      makeState(),
+      "Schrijf een prompt voor een gladiator",
+      "schrijf een prompt voor een gladiator",
+      false
+    );
+    const text = [
+      "Hier is een prompt:",
+      "",
+      "```text",
+      "Prompt: Maak een Romeinse gladiator als duidelijk hoofdonderwerp, arena op de achtergrond",
+      "```",
+    ].join("\n");
+
+    await featureCtx.sendText(text);
+
+    expect(ctx.sendLoggedText).not.toHaveBeenCalled();
+    expect(sendLoggedQuickReplies).toHaveBeenCalledWith(
+      "tracked-user",
+      text,
+      [
+        {
+          content_type: "text",
+          title: "Maak deze afbeelding",
+          payload:
+            "OPENCLAW_ACTION:Gebruik%20deze%20prompt%20en%20maak%20een%20afbeelding%3A%20Maak%20een%20Romeinse%20gladiator%20als%20duidelijk%20hoofdonderwerp%2C%20arena%20op%20de%20achtergrond",
+        },
+      ],
+      "req-feature-prompt"
+    );
+    expect(getState("tracked-user")?.pendingConversationActions).toEqual([
+      {
+        id: "generate_prompt",
+        label: "Maak deze afbeelding",
+        inputText:
+          "Gebruik deze prompt en maak een afbeelding: Maak een Romeinse gladiator als duidelijk hoofdonderwerp, arena op de achtergrond",
+      },
+    ]);
+  });
 });

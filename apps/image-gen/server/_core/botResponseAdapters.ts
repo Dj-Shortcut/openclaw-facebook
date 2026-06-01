@@ -5,6 +5,7 @@ import type {
   ConversationResponse,
 } from "./botResponse";
 import {
+  inferConversationActions,
   inferNumberedConversationActions,
   stripNumberedConversationChoices,
 } from "./conversationActionInference";
@@ -42,7 +43,7 @@ async function sendTextResponse(
   options: BotResponseSendOptions
 ): Promise<void> {
   if (response.actions?.length && options.sendActionPrompt) {
-    const inferredActions = inferNumberedConversationActions(response.text);
+    const inferredActions = inferConversationActions(response.text);
     await options.sendActionPrompt(
       inferredActions.length
         ? stripNumberedConversationChoices(response.text)
@@ -52,7 +53,7 @@ async function sendTextResponse(
     return;
   }
 
-  const inferredActions = inferNumberedConversationActions(response.text);
+  const inferredActions = inferConversationActions(response.text);
   if (inferredActions.length && options.sendActionPrompt) {
     await options.sendActionPrompt(
       stripNumberedConversationChoices(response.text),
@@ -92,7 +93,7 @@ async function sendConversationResponse(
   }
 
   if (response.text && response.actions?.length && options.sendActionPrompt) {
-    const inferredActions = inferNumberedConversationActions(response.text);
+    const inferredActions = inferConversationActions(response.text);
     await options.sendActionPrompt(
       inferredActions.length
         ? stripNumberedConversationChoices(response.text)
@@ -102,7 +103,7 @@ async function sendConversationResponse(
     return;
   }
 
-  const inferredActions = inferNumberedConversationActions(response.text);
+  const inferredActions = inferConversationActions(response.text);
   if (response.text && inferredActions.length && options.sendActionPrompt) {
     await options.sendActionPrompt(
       stripNumberedConversationChoices(response.text),
