@@ -2,6 +2,7 @@ import type { ConversationAction } from "./botResponse";
 
 const INFERRED_CHOICE_MIN_COUNT = 2;
 const INFERRED_CHOICE_MAX_COUNT = 13;
+const MAX_PROMPT_ACTION_INPUT_LENGTH = 1_800;
 
 function normalizeInferredChoiceLabel(choice: string): string {
   const cleaned = choice
@@ -24,6 +25,80 @@ function inferChoiceLanguage(sourceText: string): "nl" | "en" {
   )
     ? "nl"
     : "en";
+}
+
+function buildGeneratePromptActionInput(prompt: string, sourceText: string): string {
+  return inferChoiceLanguage(sourceText) === "nl"
+    ? `Gebruik deze prompt en maak een afbeelding: ${prompt}`
+    : `Use this prompt to generate an image: ${prompt}`;
+}
+
+function normalizePromptBlock(block: string): string {
+  return block
+    .replace(/^prompt\s*[:\uFF1A-]\s*/iu, "")
+    .replace(/^tekstprompt\s*[:\uFF1A-]\s*/iu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function isLikelyImagePromptBlock(
+  sourceText: string,
+  language: string,
+  block: string
+): boolean {
+  const normalizedLanguage = language.trim().toLowerCase();
+  if (/^(?:ts|tsx|js|jsx|json|html|css|sql|bash|sh|powershell|pwsh)$/u.test(normalizedLanguage)) {
+    return false;
+  }
+
+  if (
+    /\b(?:function|const|let|class|import|export|SELECT|INSERT|UPDATE|DELETE)\b/u.test(block) ||
+    /(?:=>|<\/?[a-z][\s>])/iu.test(block)
+  ) {
+    return false;
+  }
+
+  return (
+    /^(?:text|prompt|tekstprompt)?$/u.test(normalizedLanguage) &&
+    /\b(?:prompt|tekstprompt|image|afbeelding|foto|picture|poster|portrait|portret|logo|scene|illustratie)\b/iu.test(
+      sourceText
+    )
+  );
+}
+
+export function inferPromptGenerationActions(
+  text: string | undefined
+): ConversationAction[] {
+  if (!text?.trim()) {
+    return [];
+  }
+
+  const blockPattern = /```([a-zA-Z-]*)\s*\n?([\s\S]*?)```/gu;
+  const promptBlocks = [...text.matchAll(blockPattern)]
+    .map(match => ({
+      language: match[1] ?? "",
+      prompt: normalizePromptBlock(match[2] ?? ""),
+    }))
+    .filter(({ language, prompt }) =>
+      prompt.length >= 12 && isLikelyImagePromptBlock(text, language, prompt)
+    );
+
+  const prompt = promptBlocks.at(-1)?.prompt;
+  if (!prompt) {
+    return [];
+  }
+
+  const lang = inferChoiceLanguage(text);
+  return [
+    {
+      id: "generate_prompt",
+      label: lang === "nl" ? "Maak deze afbeelding" : "Generate this image",
+      inputText: buildGeneratePromptActionInput(
+        prompt.slice(0, MAX_PROMPT_ACTION_INPUT_LENGTH),
+        text
+      ),
+    },
+  ];
 }
 
 function normalizeInferredChoiceInput(label: string, sourceText: string): string {
@@ -99,7 +174,18 @@ export function inferNumberedConversationActions(
   });
 }
 
+export function inferConversationActions(text: string | undefined): ConversationAction[] {
+  return [
+    ...inferPromptGenerationActions(text),
+    ...inferNumberedConversationActions(text),
+  ];
+}
+
 export function stripNumberedConversationChoices(text: string): string {
+  if (text.includes("```")) {
+    return text.trim();
+  }
+
   const keptLines: string[] = [];
   let currentChoice: string | null = null;
   let expectedNumber = 1;

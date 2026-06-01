@@ -1,6 +1,7 @@
 import type { MessengerSendOutcome } from "./messengerApi";
 import { safeLog } from "./messengerApi";
 import {
+  inferConversationActions,
   inferNumberedConversationActions,
   stripNumberedConversationChoices,
 } from "./conversationActionInference";
@@ -55,7 +56,7 @@ function decorateFeatureContext<TContext extends FeatureContext>(
   return {
     ...featureCtx,
     sendText: async text => {
-      const inferredActions = inferNumberedConversationActions(text);
+      const inferredActions = inferConversationActions(text);
       if (inferredActions.length) {
         await sendFeatureActions(trackedCtx, {
           userPsid,
