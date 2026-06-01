@@ -129,12 +129,36 @@ function getGenerationJobLeaseKey(job: MessengerGenerationJob): string {
   return `messenger-generation-job-lease:${job.reqId}`;
 }
 
+function getGenerationJobAcceptedKey(job: MessengerGenerationJob): string {
+  return `messenger-generation-job-accepted:${job.reqId}`;
+}
+
+function getGenerationJobAcceptedSeconds(): number {
+  return getGenerationJobLeaseSeconds() * getGenerationJobMaxAttempts();
+}
+
 export async function enqueueMessengerGenerationJob(
   job: MessengerGenerationJob
-): Promise<void> {
+): Promise<boolean> {
   const redis = await getRedisClient();
+  const accepted = await redis.set(
+    getGenerationJobAcceptedKey(job),
+    "1",
+    "EX",
+    getGenerationJobAcceptedSeconds(),
+    "NX"
+  );
+  if (accepted !== "OK") {
+    safeLog("messenger_generation_job_duplicate_enqueue_ignored", {
+      reqId: job.reqId,
+      generationKind: job.generationKind ?? null,
+    });
+    return false;
+  }
+
   await redis.lpush(MESSENGER_GENERATION_QUEUE_KEY, JSON.stringify(job));
   await logMessengerGenerationQueueStats("enqueue", redis);
+  return true;
 }
 
 export async function getMessengerGenerationQueueStats(): Promise<MessengerGenerationQueueStats> {
