@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildAssistantPhotoHelpResponse,
+  buildFaceMemoryConsentResponse,
   buildPhotoReceivedResponse,
   buildQuickStartResponse,
   buildGenerationFailureResponse,
@@ -10,6 +11,16 @@ import { renderMessengerQuickReplies } from "./_core/messengerActionRenderer";
 import { decodeMessengerActionInput } from "./_core/messengerActionPayload";
 
 describe("conversation actions", () => {
+  const originalFaceMemoryRetentionDays = process.env.FACE_MEMORY_RETENTION_DAYS;
+
+  afterEach(() => {
+    if (originalFaceMemoryRetentionDays === undefined) {
+      delete process.env.FACE_MEMORY_RETENTION_DAYS;
+    } else {
+      process.env.FACE_MEMORY_RETENTION_DAYS = originalFaceMemoryRetentionDays;
+    }
+  });
+
   it("builds quick-start choices as channel-neutral conversation actions", () => {
     expect(buildQuickStartResponse("nl")).toEqual({
       text: "Beschrijf wat je wilt maken, of stuur een foto als je die wilt bewerken.",
@@ -118,6 +129,25 @@ describe("conversation actions", () => {
       text: "Try again?",
       actions: [
         { id: "new_image", label: "New image", inputText: "New image" },
+      ],
+    });
+  });
+
+  it("uses the configured face-memory retention window in consent actions", () => {
+    process.env.FACE_MEMORY_RETENTION_DAYS = "7";
+
+    expect(buildFaceMemoryConsentResponse("en")).toMatchObject({
+      text: expect.stringContaining("for 7 days"),
+      actions: [
+        { id: "CONSENT_FACE_YES", label: "Yes, 7 days" },
+        { id: "CONSENT_FACE_NO", label: "No" },
+      ],
+    });
+    expect(buildFaceMemoryConsentResponse("nl")).toMatchObject({
+      text: expect.stringContaining("7 dagen bewaren"),
+      actions: [
+        { id: "CONSENT_FACE_YES", label: "Ja, 7 dagen" },
+        { id: "CONSENT_FACE_NO", label: "Nee" },
       ],
     });
   });

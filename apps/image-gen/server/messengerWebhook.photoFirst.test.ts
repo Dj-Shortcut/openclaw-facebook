@@ -31,6 +31,8 @@ import { processConsentedFacebookWebhookPayload } from "./testConsentHelpers";
 const TEST_PEPPER = "ci-test-pepper";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
 const originalEnableFaceMemory = process.env.ENABLE_FACE_MEMORY;
+const originalFaceMemoryRetentionDays =
+  process.env.FACE_MEMORY_RETENTION_DAYS;
 
 const processFacebookWebhookPayload = processConsentedFacebookWebhookPayload(
   processFacebookWebhookPayloadBase
@@ -48,6 +50,7 @@ describe("photo-first onboarding", () => {
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS =
       "img.example,lookaside.fbsbx.com,leaderbot-fb-image-gen.fly.dev";
     process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
+    delete process.env.FACE_MEMORY_RETENTION_DAYS;
     sendImageMock.mockClear();
     sendQuickRepliesMock.mockClear();
     sendTextMock.mockClear();
@@ -82,6 +85,11 @@ describe("photo-first onboarding", () => {
       delete process.env.ENABLE_FACE_MEMORY;
     } else {
       process.env.ENABLE_FACE_MEMORY = originalEnableFaceMemory;
+    }
+    if (originalFaceMemoryRetentionDays === undefined) {
+      delete process.env.FACE_MEMORY_RETENTION_DAYS;
+    } else {
+      process.env.FACE_MEMORY_RETENTION_DAYS = originalFaceMemoryRetentionDays;
     }
   });
 
