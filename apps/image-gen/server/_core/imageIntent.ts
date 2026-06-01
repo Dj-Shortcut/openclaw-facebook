@@ -24,13 +24,15 @@ const NON_IMAGE_ARTIFACT_PATTERNS = [
 const IMAGE_GENERATION_PATTERNS = [
   /\b(?:maak|genereer|creeer|create|generate)\b.*\b(?:afbeelding|foto|plaatje|image|picture)\b/iu,
   /\b(?:afbeelding|foto|plaatje|image|picture)\b.*\b(?:maak|maken|genereer|genereren|create|generate)\b/iu,
+  /\b(?:ik\s+wil(?:\s+graag)?|graag)\b.*\b(?:afbeelding|foto|plaatje|image|picture)\b/iu,
+  /\b(?:zou|wil|wilt|would)\s+(?:je|jij|you)\b.*\b(?:afbeelding|foto|plaatje|image|picture)\b.*\b(?:maken|genereren|kunnen\s+maken|kunnen\s+genereren|make|create|generate)\b/iu,
   /\b(?:maak|genereer|creeer|create|generate)\b.*\b(?:landschap|stad|poster|logo|portret|avatar|sticker|illustratie|productfoto|scene|cover)\b/iu,
   /\b(?:kan|kun|could|can)\s+(?:je|jij|you)\b.*\b(?:landschap|stad|poster|logo|portret|avatar|sticker|illustratie|productfoto|scene|cover)\b.*\b(?:maken|genereren|make|create|generate)\b/iu,
 ];
 
 const ARBITRARY_VISUAL_CREATE_PATTERNS = [
-  /\b(?:maak|genereer|creeer|create|generate)\s+(?:voor\s+mij\s+|voor\s+me\s+|me\s+|mij\s+)?(?:een|a|an)\s+(.{3,})/iu,
-  /\b(?:kan|kun|could|can)\s+(?:je|jij|you)\b.*\b(?:een|a|an)\s+(.{3,}?)\s+\b(?:maken|genereren|make|create|generate)\b/iu,
+  /\b(?:maak|genereer|creeer|create|generate)\s+(?:eens\s+)?(?:voor\s+mij\s+|voor\s+me\s+|me\s+|mij\s+)?(?:een|a|an)\s+(.{3,})/iu,
+  /\b(?:kan|kun|zou|could|can|would)\s+(?:je|jij|you)\b.*\b(?:een|a|an)\s+(.{3,}?)\s+\b(?:(?:kunnen\s+)?(?:maken|genereren)|make|create|generate)\b/iu,
 ];
 
 const VAGUE_OBJECT_PATTERNS = [

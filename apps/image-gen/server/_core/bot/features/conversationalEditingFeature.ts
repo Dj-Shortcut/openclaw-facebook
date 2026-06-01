@@ -1,15 +1,36 @@
 import type { BotFeature } from "../features";
 import { interpretConversationalEdit } from "../../conversationalEditInterpreter";
 import type { BotTextContext } from "../../botContext";
-import { normalizeImageIntentText } from "../../imageIntent";
+import {
+  isExplicitSourceImageEditRequest,
+  normalizeImageIntentText,
+} from "../../imageIntent";
 
 const UNAMBIGUOUS_VISUAL_CORRECTION_SUBJECT =
   "(?:samurai|samoerai|persoon|mens|man|vrouw|gezicht|paard|robot|soldaat|krijger|gladiator|ninja|stad|landschap|logo|poster|tekst|titel|zwaard|katana|helm|subject|person|face|horse|warrior|city|landscape|text|title|sword)";
 
+const EDIT_ACTION_COMMANDS = new Set([
+  "edit",
+  "edit image",
+  "edit this image",
+  "edit photo",
+  "edit this photo",
+  "pas aan",
+  "pas afbeelding aan",
+  "pas deze afbeelding aan",
+  "pas foto aan",
+  "pas deze foto aan",
+  "bewerk afbeelding",
+  "bewerk deze afbeelding",
+  "bewerk foto",
+  "bewerk deze foto",
+]);
+
 function shouldSkipConversationalEdit(normalizedText: string): boolean {
   return (
     normalizedText.startsWith("remix") ||
-    normalizedText.startsWith("/")
+    normalizedText.startsWith("/") ||
+    EDIT_ACTION_COMMANDS.has(normalizedText)
   );
 }
 
@@ -44,6 +65,14 @@ function isUnambiguousVisualCorrectionRequest(text: string): boolean {
   );
 }
 
+function getDeterministicEditPrompt(text: string): string | undefined {
+  if (isExplicitSourceImageEditRequest(text)) {
+    return text;
+  }
+
+  return undefined;
+}
+
 export const conversationalEditingFeature: BotFeature = {
   name: "conversationalEditing",
   async onText(ctx) {
@@ -56,13 +85,18 @@ export const conversationalEditingFeature: BotFeature = {
       return { handled: false };
     }
 
-    const decision = await interpretConversationalEdit({
-      text: ctx.messageText,
-      lang: ctx.lang,
-    });
-    const deterministicPromptHint = isUnambiguousVisualCorrectionRequest(ctx.messageText)
-      ? ctx.messageText
-      : undefined;
+    const explicitEditPromptHint = getDeterministicEditPrompt(ctx.messageText);
+    const decision = explicitEditPromptHint
+      ? null
+      : await interpretConversationalEdit({
+          text: ctx.messageText,
+          lang: ctx.lang,
+        });
+    const deterministicPromptHint =
+      explicitEditPromptHint ??
+      (isUnambiguousVisualCorrectionRequest(ctx.messageText)
+        ? ctx.messageText
+        : undefined);
     if (!decision?.shouldEdit && !deterministicPromptHint) {
       return { handled: false };
     }

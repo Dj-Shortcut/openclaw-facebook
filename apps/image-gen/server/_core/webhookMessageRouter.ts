@@ -16,6 +16,12 @@ import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 import { decodeMessengerActionInput } from "./messengerActionPayload";
 import { resolveConversationActionInput } from "./conversationActionSelection";
 import {
+  isExplicitSourceImageEditRequest,
+  isImageGenerationRequest,
+  isSourceImageTransformRequest,
+  isVisualCorrectionRequest,
+} from "./imageIntent";
+import {
   anonymizePsid,
   clearPendingImageState,
   getPendingConversationActionsForMessage,
@@ -46,6 +52,8 @@ type ImageMessageInput = {
   reqId: string;
   lang: Lang;
   attachments: FacebookWebhookMessage["attachments"];
+  text?: string;
+  timestamp?: number;
 };
 
 type TextMessageInput = {
@@ -102,6 +110,8 @@ export async function handleMessageEvent(
       reqId: input.reqId,
       lang: input.lang,
       attachments: message.attachments,
+      text: message.text,
+      timestamp: input.event.timestamp ?? Date.now(),
     })
   ) {
     return;
@@ -154,6 +164,19 @@ async function tryHandleImageMessage(
     state,
     storedSourceImageUrl
   );
+
+  if (shouldHandleImageCaptionAsConversation(input.text)) {
+    await handleTextMessage(ctx, {
+      psid: input.psid,
+      userId: input.userId,
+      reqId: input.reqId,
+      lang: input.lang,
+      text: input.text.trim(),
+      timestamp: input.timestamp,
+    });
+    return true;
+  }
+
   if (
     await promptForFaceMemoryConsent(
       ctx,
@@ -168,6 +191,20 @@ async function tryHandleImageMessage(
 
   logImageDecision(ctx, input, state, imageDecision);
   return await handleImageDecision(ctx, input, imageDecision);
+}
+
+function shouldHandleImageCaptionAsConversation(text: string | undefined): text is string {
+  const caption = text?.trim();
+  if (!caption) {
+    return false;
+  }
+
+  return (
+    isImageGenerationRequest(caption) ||
+    isExplicitSourceImageEditRequest(caption) ||
+    isSourceImageTransformRequest(caption) ||
+    isVisualCorrectionRequest(caption)
+  );
 }
 
 function getInboundImageUrl(
