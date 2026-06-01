@@ -592,7 +592,7 @@ describe("messenger webhook dedupe", () => {
     expect(prompt).not.toContain("Gebruik deze prompt");
   });
 
-  it("uses a retained source photo for natural make-me transformation requests", async () => {
+  it("keeps natural make-me requests prompt-first even with a retained source photo", async () => {
     const fetchMock = installOpenAiSuccessFetchMock();
     await setPendingStoredImage(
       "internal-make-me-source-user",
@@ -608,12 +608,52 @@ describe("messenger webhook dedupe", () => {
     });
 
     expect(
+      fetchMock.mock.calls.some(([url]) =>
+        toUrlString(url).startsWith("https://img.example/")
+      )
+    ).toBe(false);
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    expect(promptFromOpenAiRequest(openAiCall?.[1])).toContain(
+      "Create a new image from the user's request."
+    );
+    expect(sendImageMock).toHaveBeenCalledWith(
+      "internal-make-me-source-user",
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+  });
+
+  it("uses a retained source photo for explicit personal transform requests", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+    await setPendingStoredImage(
+      "internal-transform-source-user",
+      "https://img.example/retained-source.jpg"
+    );
+
+    await processInternalMessengerImageRequest({
+      psid: "internal-transform-source-user",
+      prompt: "Verander me in een samurai",
+      reqId: "req-internal-transform-source",
+      lang: "nl",
+      timestamp: 1_771_000_000_000,
+    });
+
+    expect(
       fetchMock.mock.calls.some(
         ([url]) => toUrlString(url) === "https://img.example/retained-source.jpg"
       )
     ).toBe(true);
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    expect(promptFromOpenAiRequest(openAiCall?.[1])).toContain(
+      "Edit the uploaded/source image according to the user's request."
+    );
     expect(sendImageMock).toHaveBeenCalledWith(
-      "internal-make-me-source-user",
+      "internal-transform-source-user",
       expect.stringMatching(
         /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
       )
@@ -734,13 +774,13 @@ describe("messenger webhook dedupe", () => {
     );
   });
 
-  it("keeps legacy style words inside source-image edit prompts instead of routing through preset restyles", async () => {
+  it("keeps legacy style words inside explicit source-image edit prompts instead of routing through preset restyles", async () => {
     const fetchMock = installOpenAiSuccessFetchMock();
     await setPendingStoredImage(
       "internal-style-word-source-user",
       "https://img.example/retained-source.jpg"
     );
-    const userPrompt = "Maak me cyberpunk met neon regen";
+    const userPrompt = "Verander me in cyberpunk met neon regen";
 
     await processInternalMessengerImageRequest({
       psid: "internal-style-word-source-user",
