@@ -39,10 +39,7 @@ export const conversationalEditingFeature: BotFeature = {
       return { handled: false };
     }
 
-    const combinedPrompt = [ctx.state.lastPrompt, decision.promptHint]
-      .map(value => value?.trim())
-      .filter(Boolean)
-      .join(" | ");
+    const promptHint = decision.promptHint?.trim() || ctx.state.lastPrompt;
 
     ctx.logger.info("bot_feature_conversational_edit", {
       hasPromptHint: Boolean(decision.promptHint),
@@ -50,7 +47,7 @@ export const conversationalEditingFeature: BotFeature = {
 
     await ctx.runImageGeneration(
       sourcePhotoUrl,
-      combinedPrompt || ctx.state.lastPrompt,
+      promptHint,
       "source_image_edit",
     );
     return { handled: true };
