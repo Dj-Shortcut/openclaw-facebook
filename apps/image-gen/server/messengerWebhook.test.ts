@@ -725,7 +725,6 @@ describe("messenger webhook dedupe", () => {
     expect(prompt).toContain("Create a new image from the user's request.");
     expect(prompt).toContain(userPrompt);
     expect(prompt).not.toContain("Transform this photo into a whimsical");
-    expect(getState("internal-style-word-text-image-user")?.lastDirectorMode).toBeUndefined();
     expect(safeLogMock).toHaveBeenCalledWith(
       "internal_image_request_received",
       expect.objectContaining({
@@ -764,7 +763,6 @@ describe("messenger webhook dedupe", () => {
     expect(prompt).toContain("Edit the uploaded/source image");
     expect(prompt).toContain(userPrompt);
     expect(prompt).not.toContain("Transform this photo into a cyberpunk portrait");
-    expect(getState("internal-style-word-source-user")?.lastDirectorMode).toBeUndefined();
     expect(safeLogMock).toHaveBeenCalledWith(
       "internal_image_request_received",
       expect.objectContaining({

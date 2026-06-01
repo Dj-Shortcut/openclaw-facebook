@@ -84,7 +84,7 @@ function decorateFeatureContext<TContext extends FeatureContext>(
           await featureCtx.clearImageContext?.();
         }
       : undefined,
-    runImageGeneration: async (sourceImageUrl, promptHint, directorMode, generationKind) => {
+    runImageGeneration: async (sourceImageUrl, promptHint, generationKind) => {
       await trackedCtx.runImageGeneration(
         userPsid,
         featureUserId,
@@ -92,7 +92,6 @@ function decorateFeatureContext<TContext extends FeatureContext>(
         userLang,
         sourceImageUrl,
         promptHint,
-        directorMode,
         generationKind
       );
     },
@@ -200,7 +199,6 @@ export function createTrackedHandlerContext(
       userLang,
       sourceImageUrl,
       promptHint,
-      directorMode,
       generationKind
     ) => {
       const outcome = await ctx.runImageGeneration(
@@ -210,7 +208,6 @@ export function createTrackedHandlerContext(
         userLang,
         sourceImageUrl,
         promptHint,
-        directorMode,
         generationKind
       );
       markResponseSentFromOutcome(outcome);

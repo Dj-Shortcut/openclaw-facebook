@@ -1,5 +1,4 @@
 import { safeLen, sha256 } from "./imageProof";
-import type { DirectorMode } from "./image-generation/director/directorTypes";
 import {
   attachGenerationMetrics,
   buildOpenAiRequest,
@@ -56,9 +55,6 @@ interface ImageGenerator {
       contentType: string;
     };
     promptHint?: string;
-    directorMode?: DirectorMode;
-    directorInstruction?: string;
-    directorPhotoAnalysis?: string;
     previousResponseId?: string;
     userKey: string;
     reqId: string;
@@ -84,9 +80,6 @@ type GeneratorInput = {
     contentType: string;
   };
   promptHint?: string;
-  directorMode?: DirectorMode;
-  directorInstruction?: string;
-  directorPhotoAnalysis?: string;
   previousResponseId?: string;
   userKey: string;
   reqId: string;

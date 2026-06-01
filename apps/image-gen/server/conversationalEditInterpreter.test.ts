@@ -131,7 +131,7 @@ describe("conversational edit interpreter", () => {
       new Response(
         JSON.stringify({
           output_text:
-            '{"shouldEdit":true,"style":null,"directorMode":"old_money","promptHint":"make it less fake and more quiet luxury"}',
+            '{"shouldEdit":true,"style":null,"promptHint":"make it less fake and more quiet luxury"}',
         }),
         { status: 200 }
       )

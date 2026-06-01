@@ -381,7 +381,7 @@ describe("image provider boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("ignores stale director mode input and keeps source edits prompt-first", async () => {
+  it("keeps source edits prompt-first without director template terms", async () => {
     configureOpenAiImagesEnv();
 
     const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
@@ -400,9 +400,6 @@ describe("image provider boundary", () => {
     const generator = new OpenAiImageGenerator();
     await generateWithSourceImageData(generator, {
       promptHint: "make it feel like a late-night event poster",
-      directorMode: "berlin_underground",
-      directorInstruction: "this stale director instruction should not be used",
-      directorPhotoAnalysis: "stale director analysis should not be used",
       userKey: "user-1",
       reqId: "req-director-prompt",
     });
@@ -410,7 +407,7 @@ describe("image provider boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not run director photo analysis for stale director mode input", async () => {
+  it("does not include director photo analysis in prompt-first source edits", async () => {
     configureOpenAiImagesEnv();
 
     const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
@@ -428,7 +425,6 @@ describe("image provider boundary", () => {
 
     const generator = new OpenAiImageGenerator();
     await generateWithSourceImageData(generator, {
-      directorMode: "vogue_editorial",
       promptHint: "make it cleaner and more editorial",
       userKey: "user-1",
       reqId: "req-director-analysis",
@@ -437,7 +433,7 @@ describe("image provider boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not call the director analysis path when director analysis would have failed", async () => {
+  it("does not call a director analysis path for source edits", async () => {
     configureOpenAiImagesEnv();
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
@@ -456,7 +452,6 @@ describe("image provider boundary", () => {
 
     const generator = new OpenAiImageGenerator();
     await generateWithSourceImageData(generator, {
-      directorMode: "old_money",
       promptHint: "make it feel more premium but natural",
       userKey: "user-1",
       reqId: "req-director-analysis-fail",

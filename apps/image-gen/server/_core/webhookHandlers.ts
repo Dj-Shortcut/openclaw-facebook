@@ -51,7 +51,6 @@ import type {
   BotTextContext,
   BotImageContext,
 } from "./botContext";
-import type { DirectorMode } from "./image-generation/director/directorTypes";
 import type { GenerationKind } from "./image-generation/generationTypes";
 import { emitGenerationDiagnostic } from "./generationDiagnostics";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
@@ -212,7 +211,6 @@ export type HandlerContext = {
     lang: Lang,
     sourceImageUrl?: string,
     promptHint?: string,
-    directorMode?: DirectorMode,
     generationKind?: GenerationKind
   ) => Promise<MessengerSendOutcome>;
   sendFaceMemoryConsentPrompt: (
@@ -460,7 +458,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       runImageGeneration: async (
         sourceImageUrl,
         promptHint,
-        directorMode,
         generationKind
       ) => {
         await runImageGeneration(
@@ -470,7 +467,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
           lang,
           sourceImageUrl,
           promptHint,
-          directorMode,
           generationKind
         );
       },
@@ -896,7 +892,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
     lang: Lang,
     sourceImageUrl?: string,
     promptHint?: string,
-    directorMode?: DirectorMode,
     generationKind?: GenerationKind
   ): Promise<MessengerSendOutcome> {
     const resolvedGenerationKind =
@@ -909,7 +904,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       lang,
       sourceImageUrl,
       promptHint,
-      directorMode,
     };
     const result = await enqueueOrRunMessengerGenerationJob(
       job,
@@ -1081,7 +1075,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
         lang,
         undefined,
         input.prompt,
-        undefined,
         "text_to_image"
       );
     }
@@ -1093,7 +1086,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       lang,
       sourceImageUrl,
       input.prompt,
-      undefined,
       "source_image_edit"
     );
   }

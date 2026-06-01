@@ -9,7 +9,6 @@ import type {
 } from "./messengerState";
 import type { ConversationAction } from "./botResponse";
 import type { GenerationStatsSnapshot } from "./botRuntimeStats";
-import type { DirectorMode } from "./image-generation/director/directorTypes";
 import type { GenerationKind } from "./image-generation/generationTypes";
 
 export type FeatureResult = { handled: true } | { handled: false };
@@ -36,7 +35,6 @@ type BotContextBase = {
   runImageGeneration(
     sourceImageUrl?: string,
     promptHint?: string,
-    directorMode?: DirectorMode,
     generationKind?: GenerationKind
   ): Promise<void>;
   getRuntimeStats(): GenerationStatsSnapshot;
