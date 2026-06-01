@@ -3,32 +3,34 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const stateStoreMocks = vi.hoisted(() => ({
   deleteEphemeralKeyIfValue: vi.fn(),
   hasEphemeralKey: vi.fn(),
+  incrementExpiringCounter: vi.fn(),
   isRedisStateStoreEnabled: vi.fn(),
   setEphemeralKey: vi.fn(),
   setEphemeralKeyIfAbsent: vi.fn(),
 }));
 
-vi.mock("./_core/stateStore", () => stateStoreMocks);
-
-import {
-  getMessengerGenerationGlobalLimitConfig,
-  getMessengerGenerationGlobalLimitStats,
-  runGuardedGeneration,
-} from "./_core/generationGuard";
-
 describe("generationGuard", () => {
-  beforeEach(() => {
+  let guard: typeof import("./_core/generationGuard");
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doMock("./_core/stateStore", () => stateStoreMocks);
     stateStoreMocks.hasEphemeralKey.mockResolvedValue(false);
+    stateStoreMocks.incrementExpiringCounter.mockResolvedValue(1);
     stateStoreMocks.isRedisStateStoreEnabled.mockReturnValue(false);
     stateStoreMocks.setEphemeralKeyIfAbsent.mockResolvedValue(true);
     stateStoreMocks.deleteEphemeralKeyIfValue.mockResolvedValue(true);
+    guard = await import("./_core/generationGuard");
   });
 
   afterEach(() => {
     delete process.env.MESSENGER_MAX_IMAGE_JOBS;
     delete process.env.MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS;
+    delete process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP;
     delete process.env.MESSENGER_PSID_COOLDOWN_MS;
     delete process.env.MESSENGER_PSID_LOCK_TTL_MS;
+    vi.restoreAllMocks();
+    vi.doUnmock("./_core/stateStore");
     vi.clearAllMocks();
   });
 
@@ -48,7 +50,7 @@ describe("generationGuard", () => {
     );
 
     await expect(
-      runGuardedGeneration("psid-1", async () => "done")
+      guard.runGuardedGeneration("psid-1", async () => "done")
     ).resolves.toBe("done");
 
     expect(stateStoreMocks.setEphemeralKeyIfAbsent).toHaveBeenCalledWith(
@@ -73,7 +75,7 @@ describe("generationGuard", () => {
     stateStoreMocks.setEphemeralKeyIfAbsent.mockResolvedValue(true);
 
     await expect(
-      runGuardedGeneration("psid-2", async () => "done")
+      guard.runGuardedGeneration("psid-2", async () => "done")
     ).resolves.toBe("done");
 
     expect(stateStoreMocks.setEphemeralKeyIfAbsent).not.toHaveBeenCalledWith(
@@ -91,7 +93,7 @@ describe("generationGuard", () => {
       key === "messenger:global-inflight:2"
     );
 
-    await expect(getMessengerGenerationGlobalLimitStats()).resolves.toEqual({
+    await expect(guard.getMessengerGenerationGlobalLimitStats()).resolves.toEqual({
       redisBacked: true,
       max: 3,
       active: 2,
@@ -102,7 +104,7 @@ describe("generationGuard", () => {
     process.env.MESSENGER_MAX_IMAGE_JOBS = "4";
     stateStoreMocks.isRedisStateStoreEnabled.mockReturnValue(false);
 
-    await expect(getMessengerGenerationGlobalLimitStats()).resolves.toEqual({
+    await expect(guard.getMessengerGenerationGlobalLimitStats()).resolves.toEqual({
       redisBacked: false,
       max: 4,
       active: 0,
@@ -114,10 +116,45 @@ describe("generationGuard", () => {
     process.env.MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS = "45000";
     stateStoreMocks.isRedisStateStoreEnabled.mockReturnValue(true);
 
-    expect(getMessengerGenerationGlobalLimitConfig()).toEqual({
+    expect(guard.getMessengerGenerationGlobalLimitConfig()).toEqual({
       redisBacked: true,
       max: 5,
       lockTtlMs: 45000,
     });
+  });
+
+  it("does not reserve daily image budget when no cap is configured", async () => {
+    await expect(
+      guard.assertMessengerDailyImageBudgetAvailable({ reqId: "req-no-cap" })
+    ).resolves.toBeUndefined();
+
+    expect(stateStoreMocks.incrementExpiringCounter).not.toHaveBeenCalled();
+  });
+
+  it("reserves budget in a UTC daily counter when a cap is configured", async () => {
+    process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "2";
+    const now = new Date("2026-06-01T23:59:30.000Z");
+
+    await expect(
+      guard.assertMessengerDailyImageBudgetAvailable({ reqId: "req-budget", now })
+    ).resolves.toBeUndefined();
+
+    expect(stateStoreMocks.incrementExpiringCounter).toHaveBeenCalledWith(
+      "messenger:daily-image-budget:2026-06-01",
+      30
+    );
+  });
+
+  it("throws when the configured daily image budget is exceeded", async () => {
+    process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "1";
+    stateStoreMocks.incrementExpiringCounter.mockResolvedValue(2);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await expect(
+      guard.assertMessengerDailyImageBudgetAvailable({
+        reqId: "req-over-budget",
+        now: new Date("2026-06-01T12:00:00.000Z"),
+      })
+    ).rejects.toBeInstanceOf(guard.MessengerDailyImageBudgetExceededError);
   });
 });

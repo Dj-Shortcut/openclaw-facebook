@@ -28,7 +28,10 @@ import {
   GenerationTimeoutError,
   MissingOpenAiApiKeyError,
 } from "./image-generation/imageServiceErrors";
-import { getMessengerGenerationGlobalLimitConfig } from "./generationGuard";
+import {
+  assertMessengerDailyImageBudgetAvailable,
+  getMessengerGenerationGlobalLimitConfig,
+} from "./generationGuard";
 import {
   isMessengerGenerationInlineFallbackEnabled,
   isMessengerGenerationQueueEnabled,
@@ -263,6 +266,7 @@ export class OpenAiImageGenerator implements ImageGenerator {
         })
       );
 
+      await assertMessengerDailyImageBudgetAvailable({ reqId: input.reqId });
       const response = await fetchOpenAiImageResponse(requestContext, {
         reqId: input.reqId,
         startedAt,

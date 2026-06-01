@@ -45,11 +45,12 @@ Validated controls:
 3. [x] Duplicate Messenger generation queue enqueues are deduped by request id.
 4. [x] Production queue metrics expose queued, processing, failed, global-slot, Redis-backed, and scrape-error state.
 5. [x] Public OpenClaw gateway denies the built-in `image_generate` tool; Messenger image generation routes through the separate image-gen service.
+6. [x] Optional global daily Messenger image cap (`MESSENGER_GLOBAL_DAILY_IMAGE_CAP`) blocks OpenAI image requests before the provider call.
 
 Open cost-control work:
 
 1. [ ] Implement per-image/request cost tracking.
-2. [ ] Add host-level budget gates before expensive model/image/tool calls.
+2. [ ] Add full host-level budget gates before all expensive model/image/tool calls.
 3. [ ] Add default-deny tool policy for all high-cost tools exposed to untrusted Facebook-originated users.
 4. [ ] Add per-user daily spend caps for paired Facebook users.
 5. [ ] Add global Facebook daily spend cap.

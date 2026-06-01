@@ -5,6 +5,7 @@ import {
   findInMemoryState,
   getOrCreateStoredState,
   hasEphemeralKey,
+  incrementExpiringCounter,
   readScopedState,
   readState,
   setEphemeralKey,
@@ -116,13 +117,23 @@ describe("stateStore memory TTL", () => {
     });
   });
 
-  it("clears both payloads and TTL metadata", () => {
+  it("clears both payloads and TTL metadata", async () => {
     writeScopedState("scope", "key", { ok: true }, 10);
+    await incrementExpiringCounter("counter:key", 10);
     clearStateStore();
     vi.advanceTimersByTime(10_001);
 
     expect(readScopedState("scope", "key")).toBeNull();
     expect(findInMemoryState<{ ok: boolean }>(value => value.ok)).toBeNull();
+  });
+
+  it("increments memory counters until their TTL expires", async () => {
+    await expect(incrementExpiringCounter("counter:user-1", 10)).resolves.toBe(1);
+    await expect(incrementExpiringCounter("counter:user-1", 10)).resolves.toBe(2);
+
+    vi.advanceTimersByTime(10_001);
+
+    await expect(incrementExpiringCounter("counter:user-1", 10)).resolves.toBe(1);
   });
 
   it("only deletes an ephemeral key when the owner token matches", async () => {

@@ -4,6 +4,7 @@ import {
   getGeneratorStartupConfig,
   OpenAiImageGenerator,
 } from "./_core/imageService";
+import { clearStateStore } from "./_core/stateStore";
 
 const GENERATED_IMAGE_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0ioAAAAASUVORK5CYII=";
@@ -24,6 +25,8 @@ const originalMessengerGenerationWorkerOnly =
   process.env.MESSENGER_GENERATION_WORKER_ONLY;
 const originalMessengerGenerationInlineFallback =
   process.env.MESSENGER_GENERATION_INLINE_FALLBACK;
+const originalMessengerGlobalDailyImageCap =
+  process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP;
 
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) {
@@ -128,6 +131,11 @@ describe("image provider boundary", () => {
       "MESSENGER_GENERATION_INLINE_FALLBACK",
       originalMessengerGenerationInlineFallback
     );
+    restoreEnv(
+      "MESSENGER_GLOBAL_DAILY_IMAGE_CAP",
+      originalMessengerGlobalDailyImageCap
+    );
+    clearStateStore();
   });
 
   it("defaults to the current OpenAI Images provider", () => {
@@ -304,6 +312,31 @@ describe("image provider boundary", () => {
       userKey: "user-configured-model",
       reqId: "req-configured-model",
     });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks the OpenAI request when the host daily image cap is reached", async () => {
+    configureOpenAiImagesEnv("gpt-image-2");
+    process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "1";
+    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generator = new OpenAiImageGenerator();
+    await expect(
+      generator.generate({
+        userKey: "user-budget-cap",
+        reqId: "req-budget-cap",
+      })
+    ).resolves.toBeDefined();
+
+    process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "1";
+    await expect(
+      generator.generate({
+        userKey: "user-budget-cap",
+        reqId: "req-budget-over-cap",
+      })
+    ).rejects.toThrow("Messenger daily image budget reached");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

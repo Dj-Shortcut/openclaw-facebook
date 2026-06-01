@@ -8,6 +8,7 @@ export type MaybePromise<T> = T | Promise<T>;
 const memoryState = new Map<string, string>();
 const memoryStateExpiresAt = new Map<string, number>();
 const memoryEphemeral = new Map<string, { value: string; expiresAt: number }>();
+const memoryCounters = new Map<string, { value: number; expiresAt: number }>();
 
 function isPromiseLike<T>(value: MaybePromise<T>): value is Promise<T> {
   return typeof (value as Promise<T> | undefined)?.then === "function";
@@ -248,6 +249,7 @@ export function clearStateStore(): void {
   memoryState.clear();
   memoryStateExpiresAt.clear();
   memoryEphemeral.clear();
+  memoryCounters.clear();
 }
 
 function clearExpiredMemoryState(now = Date.now()): void {
@@ -263,6 +265,14 @@ function clearExpiredMemoryEphemeral(now = Date.now()): void {
   for (const [key, entry] of memoryEphemeral.entries()) {
     if (entry.expiresAt <= now) {
       memoryEphemeral.delete(key);
+    }
+  }
+}
+
+function clearExpiredMemoryCounters(now = Date.now()): void {
+  for (const [key, entry] of memoryCounters.entries()) {
+    if (entry.expiresAt <= now) {
+      memoryCounters.delete(key);
     }
   }
 }
@@ -350,6 +360,29 @@ export async function deleteEphemeralKeyIfValue(
     expectedValue
   );
   return result === 1;
+}
+
+export async function incrementExpiringCounter(
+  key: string,
+  ttlSeconds: number
+): Promise<number> {
+  if (!isRedisStateStoreEnabled()) {
+    clearExpiredMemoryCounters();
+    const existing = memoryCounters.get(key);
+    const value = (existing?.value ?? 0) + 1;
+    memoryCounters.set(key, {
+      value,
+      expiresAt: existing?.expiresAt ?? Date.now() + ttlSeconds * 1000,
+    });
+    return value;
+  }
+
+  const redis = await getRedisClient();
+  const value = await redis.incr(key);
+  if (value === 1) {
+    await redis.expire(key, ttlSeconds);
+  }
+  return value;
 }
 
 export { isPromiseLike };
