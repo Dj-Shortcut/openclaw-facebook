@@ -120,21 +120,46 @@ function parseCookies(cookieHeader = "") {
   return cookies;
 }
 
-export function isLocalAdminHost(hostHeader) {
+function parseHostName(hostHeader) {
   if (!hostHeader) {
-    return false;
+    return "";
   }
   try {
     const { hostname } = new URL(`http://${hostHeader}`);
-    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+    return hostname.toLowerCase().replace(/\.+$/, "");
   } catch {
+    return "";
+  }
+}
+
+function adminHostnamesFromEnv(env = process.env) {
+  return new Set(
+    String(env.OPENCLAW_ADMIN_HOSTS || "")
+      .split(",")
+      .map((item) => item.trim().toLowerCase().replace(/\.+$/, ""))
+      .filter(Boolean),
+  );
+}
+
+export function isLocalAdminHost(hostHeader) {
+  const hostname = parseHostName(hostHeader);
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+}
+
+export function isAdminHostAllowed(hostHeader, env = process.env) {
+  if (isLocalAdminHost(hostHeader)) {
+    return true;
+  }
+  const hostname = parseHostName(hostHeader);
+  if (!hostname) {
     return false;
   }
+  return adminHostnamesFromEnv(env).has(hostname);
 }
 
 function hasAdminSession(req, env = process.env) {
   const token = readAdminToken(env);
-  if (!token || !isLocalAdminHost(req.headers.host)) {
+  if (!token || !isAdminHostAllowed(req.headers.host, env)) {
     return false;
   }
   const cookieValue = parseCookies(req.headers.cookie || "").get(ADMIN_COOKIE_NAME) || "";
@@ -222,7 +247,7 @@ function readRequestBody(req, maxBytes = 4096) {
 
 async function handleAdminRequest(req, res, pathname, env = process.env) {
   const token = readAdminToken(env);
-  if (!token || !isLocalAdminHost(req.headers.host)) {
+  if (!token || !isAdminHostAllowed(req.headers.host, env)) {
     writeBlocked(res);
     return true;
   }

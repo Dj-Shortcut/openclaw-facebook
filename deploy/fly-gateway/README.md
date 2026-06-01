@@ -29,7 +29,7 @@ The container preserves `/data/openclaw.json` and only seeds non-secret defaults
 - `agents.defaults.model.primary` defaults to `OPENCLAW_AGENT_MODEL` when set.
 - `agents.defaults.thinkingDefault` defaults to `OPENCLAW_AGENT_THINKING_DEFAULT` when set.
 - `tools.deny` includes `image_generate` so this public Messenger gateway cannot invoke OpenClaw's built-in image-generation tool; Messenger image generation is routed through the separate Leaderbot image-gen service.
-- `OPENCLAW_PUBLIC_GATEWAY_GUARD=1` puts OpenClaw behind a small public route guard. Fly only exposes `/facebook/webhook`, `/messenger/webhook`, and `/healthz`; the broader OpenClaw gateway UI/API stays unavailable from the public internet.
+- `OPENCLAW_PUBLIC_GATEWAY_GUARD=1` puts OpenClaw behind a small public route guard. Fly exposes `/facebook/webhook`, `/messenger/webhook`, and `/healthz` publicly. Dashboard/UI/API access requires `OPENCLAW_ADMIN_TOKEN` and a request host listed in `OPENCLAW_ADMIN_HOSTS`; after that, OpenClaw's own device pairing/auth still applies.
 
 The container changes `channels.facebook.dmPolicy: "open"` back to `"pairing"` unless `OPENCLAW_FACEBOOK_ALLOW_OPEN=1` is intentionally set.
 Secrets must remain in Fly secrets or the mounted state, never in this repo.
