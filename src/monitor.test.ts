@@ -394,7 +394,7 @@ describe("Messenger prompt memory", () => {
         replyToMessageId: "assistant-options-mid",
         now: 4_100,
       })
-    ).toBe("Maak een samurai-portret");
+    ).toBe("Maak deze afbeelding: samurai-portret");
   });
 
   it("does not treat a numbered prompt-writing option as an image prompt", () => {
@@ -421,6 +421,29 @@ describe("Messenger prompt memory", () => {
     ).toBeNull();
   });
 
+  it("strips markdown when resolving a typed numbered visual option", () => {
+    rememberMessengerAssistantPrompt(
+      "markdown-option-user",
+      [
+        "**Kies een richting:**",
+        "",
+        "1. **samurai-portret** maak,",
+        "2. `samurai-avatar/sticker` maak,",
+      ].join("\n"),
+      4_400,
+      "assistant-markdown-options-mid"
+    );
+
+    expect(
+      resolveMessengerImagePromptFromUserText({
+        senderId: "markdown-option-user",
+        text: "1",
+        replyToMessageId: "assistant-markdown-options-mid",
+        now: 4_500,
+      })
+    ).toBe("Maak deze afbeelding: samurai-portret");
+  });
+
   it("turns a numbered follow-up into the latest offered visual option without Messenger reply context", () => {
     rememberMessengerAssistantPrompt(
       "prompt-option-latest-user",
@@ -441,7 +464,7 @@ describe("Messenger prompt memory", () => {
         text: "Nr 2 go",
         now: 4_600,
       })
-    ).toBe("Maak een samurai-avatar/sticker");
+    ).toBe("Maak deze afbeelding: samurai-avatar/sticker");
 
     expect(
       resolveMessengerImagePromptFromUserText({
@@ -449,7 +472,7 @@ describe("Messenger prompt memory", () => {
         text: "3",
         now: 4_700,
       })
-    ).toBe("Maak een samurai-illustratie voor een poster");
+    ).toBe("Maak deze afbeelding: samurai-illustratie voor een poster");
   });
 });
 
@@ -696,12 +719,12 @@ describe("normalizeMessengerReplyPayloadForDelivery", () => {
         {
           content_type: "text",
           title: "samurai-portret",
-          payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak een samurai-portret`,
+          payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak deze afbeelding: samurai-portret`,
         },
         {
           content_type: "text",
           title: "samurai-avatar/stick",
-          payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak een samurai-avatar/sticker`,
+          payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak deze afbeelding: samurai-avatar/sticker`,
         },
         {
           content_type: "text",
