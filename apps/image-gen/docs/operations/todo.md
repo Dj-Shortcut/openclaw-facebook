@@ -58,7 +58,7 @@ Open cost-control work:
 8. [ ] Add user-facing balance/spend overview before paid rollout.
 9. [ ] Add monthly cost cap enforcement.
 10. [ ] Send cost alerts to owner.
-11. [ ] Add external uptime monitor for `/healthz`.
+11. [x] Add external uptime monitor for `/healthz`.
 
 ### Opslag & platform
 

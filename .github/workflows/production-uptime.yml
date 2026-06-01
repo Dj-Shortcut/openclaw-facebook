@@ -1,0 +1,56 @@
+name: Production Uptime
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/production-uptime.yml"
+      - "apps/image-gen/docs/operations/todo.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-uptime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  healthz:
+    name: Health endpoints
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check image generation service
+        run: |
+          set -euo pipefail
+          body="$(mktemp)"
+          status="$(
+            curl --ipv4 --silent --show-error --location \
+              --max-time 20 \
+              --retry 2 \
+              --retry-delay 5 \
+              --output "$body" \
+              --write-out "%{http_code}" \
+              https://leaderbot-fb-image-gen.fly.dev/healthz
+          )"
+          cat "$body"
+          test "$status" = "200"
+          grep -Fx "ok" "$body"
+
+      - name: Check OpenClaw gateway
+        run: |
+          set -euo pipefail
+          body="$(mktemp)"
+          status="$(
+            curl --ipv4 --silent --show-error --location \
+              --max-time 20 \
+              --retry 2 \
+              --retry-delay 5 \
+              --output "$body" \
+              --write-out "%{http_code}" \
+              https://leaderbot-openclaw-gateway.fly.dev/healthz
+          )"
+          cat "$body"
+          test "$status" = "200"
+          grep -F '"ok":true' "$body"
