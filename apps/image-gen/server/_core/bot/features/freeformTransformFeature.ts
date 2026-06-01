@@ -1,18 +1,6 @@
 import type { BotFeature } from "../features";
 import type { BotTextContext } from "../../botContext";
-
-const TRANSFORM_REQUEST_PATTERNS = [
-  /\bmake\s+(?:me|him|her|us|this)\s+(?:look\s+like|into)\b/i,
-  /\bcan\s+you\s+(?:make|turn|transform)\s+(?:me|him|her|us|this)\s+(?:look\s+like|into)\b/i,
-  /\bcould\s+you\s+(?:make|turn|transform)\s+(?:me|him|her|us|this)\s+(?:look\s+like|into)\b/i,
-  /\bturn\s+(?:me|him|her|us|this)\s+into\b/i,
-  /\btransform\s+(?:me|him|her|us|this)\s+into\b/i,
-  /\bmaak\s+(?:me|mij|hem|haar|ons|dit|deze)\s+(?:als|tot)\b/i,
-  /\b(?:kan|kun)\s+(?:je|jij)\s+(?:me|mij|hem|haar|ons|dit|deze)\s+(?:als|tot).*\b(?:maken|veranderen|omtoveren)\b/i,
-  /\bverander\s+(?:me|mij|hem|haar|ons|dit|deze)\s+(?:in|naar|tot)\b/i,
-  /\btover\s+(?:me|mij|hem|haar|ons|dit|deze)\s+(?:om\s+)?(?:in|tot)\b/i,
-  /\bzet\s+(?:me|mij|hem|haar|ons)\s+(?:neer\s+)?als\b/i,
-];
+import { isSourceImageTransformRequest } from "../../imageIntent";
 
 function normalizePromptHint(messageText: string): string {
   return messageText.replace(/\s+/g, " ").trim();
@@ -24,7 +12,7 @@ function isFreeformTransformRequest(messageText: string): boolean {
     return false;
   }
 
-  return TRANSFORM_REQUEST_PATTERNS.some(pattern => pattern.test(promptHint));
+  return isSourceImageTransformRequest(promptHint);
 }
 
 function buildPromptHint(messageText: string): string {
