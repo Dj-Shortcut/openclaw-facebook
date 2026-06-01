@@ -96,6 +96,7 @@ Open cost-control work:
 - [x] Deploy to production + webhook connectivity tests
 - [x] Text-to-image generation accepts arbitrary visual prompts without defaulting to Storybook Anime
 - [x] Image-generation success/failure follow-ups use channel-neutral conversation actions before Messenger rendering
+- [x] Removed unused director prompt/social-copy modules so stale template presets cannot re-enter generation output
 
 ## Historisch afgerond
 
