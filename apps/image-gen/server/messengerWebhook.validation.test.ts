@@ -136,7 +136,7 @@ describe("messenger webhook payload validation", () => {
     }
 
     expect(response?.status).toBe(400);
-  }, 15000);
+  });
 
   it("falls back to inline processing when durable enqueue fails in redis-backed mode", async () => {
     const secret = "test-secret";

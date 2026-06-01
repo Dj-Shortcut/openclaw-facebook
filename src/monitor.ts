@@ -175,6 +175,7 @@ function createMessengerTrace(params: {
 
 function eventLoopDelayMaxMs(): number {
   const value = messengerEventLoopDelay.max / 1_000_000;
+  messengerEventLoopDelay.reset();
   return Number.isFinite(value) ? Math.round(value) : 0;
 }
 
