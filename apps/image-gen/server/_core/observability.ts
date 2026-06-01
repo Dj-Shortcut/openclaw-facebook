@@ -11,6 +11,7 @@ import {
   isMessengerGenerationWorkerMode,
   isMessengerGenerationWorkerOnlyMode,
 } from "./messengerGenerationQueue";
+import { getTodayRuntimeStats } from "./botRuntimeStats";
 
 type RequestWithId = express.Request & {
   requestId?: string;
@@ -211,6 +212,7 @@ async function renderMessengerGenerationQueueMetrics(): Promise<string[]> {
 }
 
 async function renderPrometheusMetrics(): Promise<string> {
+  const runtimeStats = getTodayRuntimeStats();
   const lines: string[] = [
     "# HELP http_requests_total Total HTTP requests handled by the server",
     "# TYPE http_requests_total counter",
@@ -251,6 +253,25 @@ async function renderPrometheusMetrics(): Promise<string> {
   }
 
   lines.push(...await renderMessengerGenerationQueueMetrics());
+  lines.push("# HELP messenger_generation_today_total Successful Messenger image generations recorded by this process today");
+  lines.push("# TYPE messenger_generation_today_total gauge");
+  lines.push(`messenger_generation_today_total ${runtimeStats.imagesGeneratedToday}`);
+  lines.push("# HELP messenger_generation_errors_today_total Failed Messenger image generations recorded by this process today");
+  lines.push("# TYPE messenger_generation_errors_today_total gauge");
+  lines.push(`messenger_generation_errors_today_total ${runtimeStats.errorCountToday}`);
+  lines.push("# HELP messenger_generation_active_users_today Active Messenger users recorded by this process today");
+  lines.push("# TYPE messenger_generation_active_users_today gauge");
+  lines.push(`messenger_generation_active_users_today ${runtimeStats.activeUsersToday}`);
+  lines.push("# HELP messenger_generation_kinds_used_today Distinct generation kinds recorded by this process today");
+  lines.push("# TYPE messenger_generation_kinds_used_today gauge");
+  lines.push(`messenger_generation_kinds_used_today ${runtimeStats.generationKindsUsedToday}`);
+  lines.push("# HELP messenger_generation_average_latency_seconds Average successful Messenger image generation latency recorded by this process today");
+  lines.push("# TYPE messenger_generation_average_latency_seconds gauge");
+  lines.push(`messenger_generation_average_latency_seconds ${
+    runtimeStats.averageGenerationLatencyMs === null
+      ? 0
+      : (runtimeStats.averageGenerationLatencyMs / 1000).toFixed(6)
+  }`);
 
   return `${lines.join("\n")}\n`;
 }
