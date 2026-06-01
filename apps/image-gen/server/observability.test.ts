@@ -1,6 +1,6 @@
 import http from "node:http";
 import express from "express";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   attachRequestTracing,
@@ -10,6 +10,12 @@ import {
   recordWebhookAckMetric,
   registerMetricsRoute,
 } from "./_core/observability";
+import {
+  recordActiveUserToday,
+  recordGenerationError,
+  recordGenerationSuccess,
+  resetRuntimeStatsForTests,
+} from "./_core/botRuntimeStats";
 import { bindTestHttpServer } from "./testHttpServer";
 
 async function startServer(configure?: (app: express.Express) => void) {
@@ -36,6 +42,10 @@ async function startServer(configure?: (app: express.Express) => void) {
 }
 
 describe("observability", () => {
+  beforeEach(() => {
+    resetRuntimeStatsForTests();
+  });
+
   it("propagates incoming X-Request-Id headers", async () => {
     const server = await startServer(app => {
       app.get("/trace", (req, res) => {
@@ -102,6 +112,10 @@ describe("observability", () => {
 
   it("exposes Prometheus-style HTTP metrics", async () => {
     recordWebhookAckMetric("facebook", "queued", 123);
+    recordActiveUserToday("user-1");
+    recordActiveUserToday("user-2");
+    recordGenerationSuccess("text_to_image", 1234);
+    recordGenerationError();
     const server = await startServer(app => {
       app.get("/ok", (_req, res) => {
         res.status(200).json({ ok: true });
@@ -137,6 +151,11 @@ describe("observability", () => {
       expect(body).toContain("messenger_generation_queue_enabled 0");
       expect(body).toContain('messenger_generation_queue_jobs{state="queued"} 0');
       expect(body).toContain('messenger_generation_queue_jobs{state="processing"} 0');
+      expect(body).toContain("messenger_generation_today_total 1");
+      expect(body).toContain("messenger_generation_errors_today_total 1");
+      expect(body).toContain("messenger_generation_active_users_today 2");
+      expect(body).toContain("messenger_generation_kinds_used_today 1");
+      expect(body).toContain("messenger_generation_average_latency_seconds 1.234000");
     } finally {
       await server.close();
     }
