@@ -246,6 +246,8 @@ describe("resolveMessengerConversationIntent", () => {
     ["Maak een futuristische stad bij zonsondergang", "generate_image"],
     ["Restyle deze foto als cinematic poster", "edit_source_image"],
     ["Bewerk deze foto met neon licht", "edit_source_image"],
+    ["Ik zie geen samurai bro", "edit_source_image"],
+    ["Das mooi, maar geen samurai bro", "edit_source_image"],
     ["Wat zie je op deze foto?", "analyze_image"],
     ["Maak een prompt voor een samurai poster", "write_prompt"],
     ["Schrijf een planning voor morgen", "unknown"],
@@ -471,6 +473,8 @@ describe("hasMessengerImageGenerationIntent", () => {
     expect(hasMessengerImageGenerationIntent("Kan je me een samurai maken")).toBe(true);
     expect(hasMessengerImageGenerationIntent("Kun je voor mij een samoerai maken?")).toBe(true);
     expect(hasMessengerImageGenerationIntent("samurai-avatar/sticker maak")).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Ik zie geen samurai bro")).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Das mooi, maar geen samurai bro")).toBe(true);
   });
 
   it("does not match image analysis or writing-style prompts", () => {

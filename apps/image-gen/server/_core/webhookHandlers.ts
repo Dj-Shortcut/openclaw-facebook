@@ -106,6 +106,26 @@ function isSourceImageEditRequest(text: string): boolean {
   );
 }
 
+function isVisualCorrectionRequest(text: string): boolean {
+  const normalized = normalizeImageRequestText(text);
+  const visualSubject =
+    "(?:samurai|samoerai|persoon|mens|man|vrouw|gezicht|paard|robot|soldaat|krijger|gladiator|ninja|stad|landschap|logo|poster|tekst|titel|zwaard|katana|helm|subject|person|face|horse|warrior|city|landscape|text|title|sword)";
+  return (
+    new RegExp(`\\b(?:ik\\s+zie|zie)\\s+(?:geen|niet\\s+de)\\s+${visualSubject}\\b`).test(
+      normalized
+    ) ||
+    new RegExp(`\\b(?:maar|wel\\s+mooi\\s+maar|mooi\\s+maar)\\s+(?:geen|niet\\s+de)\\s+${visualSubject}\\b`).test(
+      normalized
+    ) ||
+    new RegExp(`\\b(?:er\\s+mist|mist|ontbreekt)\\s+(?:een\\s+|de\\s+)?${visualSubject}\\b`).test(
+      normalized
+    ) ||
+    new RegExp(`\\b(?:i\\s+do\\s+not\\s+see|i\\s+don't\\s+see|no|missing)\\s+(?:a\\s+|the\\s+)?${visualSubject}\\b`).test(
+      normalized
+    )
+  );
+}
+
 function isPersonalSourceImageTransformRequest(text: string): boolean {
   const normalized = normalizeImageRequestText(text);
   return (
@@ -659,14 +679,23 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       );
 
       const state = await getOrCreateState(psid);
+      const sourceIsGeneratedResult = Boolean(
+        sourceImageUrl &&
+          (sourceImageUrl === state.lastGeneratedUrl ||
+            sourceImageUrl === state.lastImageUrl)
+      );
       const generationResult = await executeGenerationFlow({
         generationKind: resolvedGenerationKind,
         userId,
         reqId,
         promptHint,
         sourceImageUrl,
-        lastPhotoUrl: state.lastPhotoUrl,
-        lastPhotoSource: state.lastPhotoSource,
+        lastPhotoUrl: sourceIsGeneratedResult
+          ? sourceImageUrl
+          : state.lastPhotoUrl,
+        lastPhotoSource: sourceIsGeneratedResult
+          ? "stored"
+          : state.lastPhotoSource,
       });
 
       if (generationResult.kind === "success") {
@@ -979,6 +1008,7 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
     const userId = toUserKey(input.psid);
     const wantsSourceImageEdit = isSourceImageEditRequest(input.prompt);
     const wantsPersonalTransform = isPersonalSourceImageTransformRequest(input.prompt);
+    const wantsVisualCorrection = isVisualCorrectionRequest(input.prompt);
     await setLastUserMessageAt(input.psid, input.timestamp ?? Date.now());
 
     safeLog("internal_image_request_received", {
@@ -1019,15 +1049,20 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
         : MESSENGER_SEND_SKIPPED;
     }
 
+    const previousEditableImageUrl =
+      state.lastGeneratedUrl ?? state.lastImageUrl ?? state.lastPhotoUrl ?? undefined;
     const shouldUsePreviousPhoto =
       Boolean(storedSourceImageUrl) ||
       wantsSourceImageEdit ||
-      (wantsPersonalTransform && Boolean(state.lastPhotoUrl));
+      wantsVisualCorrection ||
+      (wantsPersonalTransform && Boolean(previousEditableImageUrl));
     const sourceImageUrl = shouldUsePreviousPhoto
-      ? storedSourceImageUrl ?? state.lastPhotoUrl ?? undefined
+      ? storedSourceImageUrl ??
+        previousEditableImageUrl ??
+        undefined
       : undefined;
     if (!sourceImageUrl) {
-      if (wantsSourceImageEdit) {
+      if (wantsSourceImageEdit || wantsVisualCorrection) {
         await setFlowState(input.psid, "AWAITING_PHOTO");
         await sendLoggedText(
           input.psid,

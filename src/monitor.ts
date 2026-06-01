@@ -849,6 +849,25 @@ function hasMessengerImageAnalysisIntent(normalizedText: string): boolean {
   );
 }
 
+function hasMessengerVisualCorrectionIntent(normalizedText: string): boolean {
+  const visualSubject =
+    "(?:samurai|samoerai|persoon|mens|man|vrouw|gezicht|paard|robot|soldaat|krijger|gladiator|ninja|stad|landschap|logo|poster|tekst|titel|zwaard|katana|helm|subject|person|face|horse|warrior|city|landscape|text|title|sword)";
+  return (
+    new RegExp(`\\b(?:ik\\s+zie|zie)\\s+(?:geen|niet\\s+de)\\s+${visualSubject}\\b`).test(
+      normalizedText,
+    ) ||
+    new RegExp(`\\b(?:maar|wel\\s+mooi\\s+maar|mooi\\s+maar)\\s+(?:geen|niet\\s+de)\\s+${visualSubject}\\b`).test(
+      normalizedText,
+    ) ||
+    new RegExp(`\\b(?:er\\s+mist|mist|ontbreekt)\\s+(?:een\\s+|de\\s+)?${visualSubject}\\b`).test(
+      normalizedText,
+    ) ||
+    new RegExp(`\\b(?:i\\s+do\\s+not\\s+see|i\\s+don't\\s+see|no|missing)\\s+(?:a\\s+|the\\s+)?${visualSubject}\\b`).test(
+      normalizedText,
+    )
+  );
+}
+
 function isMessengerPromptWritingRequest(normalizedText: string): boolean {
   return (
     /\b(maak|schrijf|bedenk|genereer|verbeter|formuleer)\s+(?:een|de|mijn)?\s*prompt\b/.test(
@@ -890,6 +909,9 @@ export function resolveMessengerConversationIntent(params: {
   }
   if (params.hasSourceImage && hasMessengerPersonalSourceTransformIntent(normalized)) {
     return { kind: "edit_source_image", confidence: 0.9, prompt };
+  }
+  if (hasMessengerVisualCorrectionIntent(normalized)) {
+    return { kind: "edit_source_image", confidence: 0.86, prompt };
   }
   if (hasMessengerSourceImageEditIntent(normalized)) {
     return { kind: "edit_source_image", confidence: 0.92, prompt };
