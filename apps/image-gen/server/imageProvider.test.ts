@@ -153,6 +153,10 @@ describe("image provider boundary", () => {
           max: 3,
           lockTtlMs: 240000,
         },
+        messengerGenerationDailyBudget: {
+          enabled: false,
+          cap: null,
+        },
         messengerGenerationRuntime: {
           queueEnabled: false,
           workerMode: false,

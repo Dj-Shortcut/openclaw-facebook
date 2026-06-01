@@ -30,6 +30,7 @@ import {
 } from "./image-generation/imageServiceErrors";
 import {
   assertMessengerDailyImageBudgetAvailable,
+  getMessengerDailyImageBudgetConfig,
   getMessengerGenerationGlobalLimitConfig,
 } from "./generationGuard";
 import {
@@ -124,6 +125,9 @@ export function getGeneratorStartupConfig(): {
   messengerGenerationGlobalLimit: ReturnType<
     typeof getMessengerGenerationGlobalLimitConfig
   >;
+  messengerGenerationDailyBudget: ReturnType<
+    typeof getMessengerDailyImageBudgetConfig
+  >;
   messengerGenerationRuntime: {
     queueEnabled: boolean;
     workerMode: boolean;
@@ -137,6 +141,7 @@ export function getGeneratorStartupConfig(): {
     objectStorageEnabled: hasObjectStorageConfig(),
     requiresDurableStorageInProduction: true,
     messengerGenerationGlobalLimit: getMessengerGenerationGlobalLimitConfig(),
+    messengerGenerationDailyBudget: getMessengerDailyImageBudgetConfig(),
     messengerGenerationRuntime: {
       queueEnabled: isMessengerGenerationQueueEnabled(),
       workerMode: isMessengerGenerationWorkerMode(),

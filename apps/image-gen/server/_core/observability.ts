@@ -1,7 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type express from "express";
 import { isDebugLogEnabled } from "./logLevel";
-import { getMessengerGenerationGlobalLimitStats } from "./generationGuard";
+import {
+  getMessengerDailyImageBudgetConfig,
+  getMessengerGenerationGlobalLimitStats,
+} from "./generationGuard";
 import {
   getMessengerGenerationQueueStats,
   isMessengerGenerationInlineFallbackEnabled,
@@ -162,6 +165,7 @@ async function renderMessengerGenerationQueueMetrics(): Promise<string[]> {
   try {
     const stats = await getMessengerGenerationQueueStats();
     const globalLimitStats = await getMessengerGenerationGlobalLimitStats();
+    const dailyBudget = getMessengerDailyImageBudgetConfig();
     return [
       "# HELP messenger_generation_queue_enabled Whether the Messenger generation queue is enabled",
       "# TYPE messenger_generation_queue_enabled gauge",
@@ -187,6 +191,12 @@ async function renderMessengerGenerationQueueMetrics(): Promise<string[]> {
       "# HELP messenger_generation_global_slots_redis_backed Whether global generation slots are Redis-backed",
       "# TYPE messenger_generation_global_slots_redis_backed gauge",
       `messenger_generation_global_slots_redis_backed ${globalLimitStats.redisBacked ? 1 : 0}`,
+      "# HELP messenger_generation_daily_budget_enabled Whether the optional daily Messenger image budget cap is enabled",
+      "# TYPE messenger_generation_daily_budget_enabled gauge",
+      `messenger_generation_daily_budget_enabled ${dailyBudget.enabled ? 1 : 0}`,
+      "# HELP messenger_generation_daily_budget_cap Configured optional daily Messenger image request cap, or 0 when disabled",
+      "# TYPE messenger_generation_daily_budget_cap gauge",
+      `messenger_generation_daily_budget_cap ${dailyBudget.cap ?? 0}`,
       "# HELP messenger_generation_queue_scrape_error Whether queue metric collection failed",
       "# TYPE messenger_generation_queue_scrape_error gauge",
       "messenger_generation_queue_scrape_error 0",
