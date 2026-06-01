@@ -31,6 +31,9 @@ describe("conversational edit interpreter", () => {
     expect(looksLikePossibleEditRequest("make it norman blackwell")).toBe(true);
     expect(looksLikePossibleEditRequest("make it ghibli")).toBe(true);
     expect(looksLikePossibleEditRequest("make it whimsical")).toBe(true);
+    expect(looksLikePossibleEditRequest("ik zie geen samurai bro")).toBe(true);
+    expect(looksLikePossibleEditRequest("the samurai is missing")).toBe(true);
+    expect(looksLikePossibleEditRequest("not visible enough")).toBe(true);
     expect(looksLikePossibleEditRequest("what can you do?")).toBe(false);
   });
 

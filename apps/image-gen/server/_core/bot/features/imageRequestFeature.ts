@@ -11,6 +11,11 @@ const EXPLICIT_SOURCE_EDIT_PATTERNS = [
   /\b(?:deze|this)\s+(?:foto|afbeelding|image|photo)\b.*\b(?:aanpassen|bewerken|edit|restyle)\b/iu,
 ];
 
+const SOURCE_REFERENCE_PATTERNS = [
+  /\b(?:van|met|op basis van|using|from|based on)\s+(?:deze|dit|this)\s+(?:foto|afbeelding|image|photo|resultaat|result)\b/iu,
+  /\b(?:deze|dit|this)\s+(?:foto|afbeelding|image|photo|resultaat|result)\b/iu,
+];
+
 const NON_IMAGE_ARTIFACT_PATTERNS = [
   /\b(?:maak|create)\s+(?:een\s+)?(?:plan|lijst|samenvatting|tekst|email|e-mail|brief|gedicht|verhaal|script|code|functie|schema|planning)\b/iu,
   /\b(?:kan|kun|could|can)\s+(?:je|jij|you)\b.*\b(?:plan|lijst|samenvatting|tekst|email|e-mail|brief|gedicht|verhaal|script|code|functie|schema|planning|afspraak|reservering|boeking)\b.*\b(?:maken|make|create|write)\b/iu,
@@ -49,6 +54,10 @@ function isExplicitSourceEditRequest(text: string): boolean {
   return EXPLICIT_SOURCE_EDIT_PATTERNS.some(pattern => pattern.test(text));
 }
 
+function referencesExistingImage(text: string): boolean {
+  return SOURCE_REFERENCE_PATTERNS.some(pattern => pattern.test(text));
+}
+
 function isLikelyNonImageArtifactRequest(text: string): boolean {
   return NON_IMAGE_ARTIFACT_PATTERNS.some(pattern => pattern.test(text));
 }
@@ -82,13 +91,11 @@ function getSourcePhotoUrl(ctx: BotTextContext): string | undefined {
   );
 }
 
-function shouldUseExistingPhotoContext(
-  ctx: BotTextContext,
-  text: string
-): boolean {
+function shouldUseExistingImageContext(ctx: BotTextContext, text: string): boolean {
   return Boolean(
     ctx.hasPhoto &&
       getSourcePhotoUrl(ctx) &&
+      referencesExistingImage(text) &&
       !FRESH_IMAGE_PATTERNS.some(pattern => pattern.test(text))
   );
 }
@@ -113,7 +120,7 @@ export const imageRequestFeature: BotFeature = {
       promptChars: text.length,
     });
 
-    if (shouldUseExistingPhotoContext(ctx, text)) {
+    if (shouldUseExistingImageContext(ctx, text)) {
       await ctx.runImageGeneration(
         getSourcePhotoUrl(ctx),
         text,
