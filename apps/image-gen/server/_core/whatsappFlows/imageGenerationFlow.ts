@@ -1,9 +1,4 @@
 import { executeGenerationFlow } from "../generationFlow";
-import {
-  formatDirectorSocialCopy,
-  generateDirectorSocialCopy,
-} from "../image-generation/director/directorSocialCopy";
-import { getDirectorModeConfig } from "../image-generation/director/directorModes";
 import type { DirectorMode } from "../image-generation/director/directorTypes";
 import { getGenerationMetrics } from "../image-generation/openAiImageClient";
 import type { GenerationKind } from "../image-generation/generationTypes";
@@ -115,28 +110,15 @@ async function handleGenerationSuccess(input: {
   senderId: string;
   lang: Lang;
   generationKind?: GenerationKind;
-  directorMode?: DirectorMode;
   promptHint?: string;
   imageUrl: string;
   reqId: string;
 }): Promise<void> {
   await sendWhatsAppImageReply(input.senderId, input.imageUrl);
-  const socialCopy = await generateDirectorSocialCopy({
-    lang: input.lang,
-    directorMode: input.directorMode,
-    promptHint: input.promptHint,
-    reqId: input.reqId,
-  });
-  if (socialCopy) {
-    await sendWhatsAppTextReply(input.senderId, formatDirectorSocialCopy(socialCopy));
-  }
   await increment(input.senderId);
   await setLastGenerated(input.senderId, input.imageUrl);
   await setLastGenerationContext(input.senderId, {
-    directorMode: input.directorMode,
-    prompt: input.directorMode
-      ? getDirectorModeConfig(input.directorMode).label
-      : input.promptHint,
+    prompt: input.promptHint,
   });
   await setFlowState(input.senderId, "RESULT_READY");
   await sendWhatsAppTextReply(
@@ -295,7 +277,6 @@ async function runWhatsAppImageGenerationOnce(
       senderId,
       lang,
       generationKind,
-      directorMode,
       promptHint,
       imageUrl: result.imageUrl,
       reqId,
