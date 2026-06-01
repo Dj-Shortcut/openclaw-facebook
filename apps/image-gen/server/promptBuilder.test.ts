@@ -41,19 +41,22 @@ describe("text-to-image prompt builder", () => {
     expect(prompt).toContain("Treat the user's words as the creative brief");
     expect(prompt).toContain("The requested main subject must be visibly present");
     expect(prompt).toContain("Never substitute the requested subject");
-    expect(prompt).toContain("senior creative director");
-    expect(prompt).toContain("camera angle or framing");
-    expect(prompt).toContain("polished, high-end image quality");
+    expect(prompt).toContain("follow it directly instead of rewriting");
+    expect(prompt).toContain("neutral visual specifics");
+    expect(prompt).toContain("Do not default to cinematic");
+    expect(prompt).toContain("clean image quality");
     expect(prompt).toContain("Avoid generic filler");
+    expect(prompt).not.toContain("senior creative director");
+    expect(prompt).not.toContain("polished, high-end image quality");
     expect(prompt).not.toContain("Use this prompt");
   });
 
   it("enhances short text-to-image prompts without turning them into presets", () => {
     const prompt = buildTextToImagePrompt("Maak een draak boven Antwerpen");
 
-    expect(prompt).toContain("clear focal subject");
-    expect(prompt).toContain("foreground and background depth");
-    expect(prompt).toContain("one or two distinctive details");
+    expect(prompt).toContain("simple setting");
+    expect(prompt).toContain("one or two concrete details");
+    expect(prompt).toContain("support the explicit subject");
     expect(prompt).toContain("User request: Maak een draak boven Antwerpen");
     expect(prompt).not.toContain("storybook");
     expect(prompt).not.toContain("prestige-film still");
@@ -66,10 +69,13 @@ describe("text-to-image prompt builder", () => {
     expect(prompt).toContain("preserve recognizable facial structure");
     expect(prompt).toContain("coherent lighting");
     expect(prompt).toContain("clean edges");
+    expect(prompt).toContain("prioritize that correction");
+    expect(prompt).toContain("Do not add cinematic");
     expect(prompt).toContain("instead of looking like a pasted sticker");
     expect(prompt).toContain("User request: Kan je me een samurai maken");
     expect(prompt).not.toContain("prestige-film still");
     expect(prompt).not.toContain("teal-and-amber");
+    expect(prompt).not.toContain("polished high-end");
     expect(prompt).not.toContain("Additional direction");
   });
 
