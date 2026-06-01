@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildGatewayLaunchPlan,
+  isAdminHostAllowed,
   isLocalAdminHost,
   startPublicRouteGuard,
 } from "./bin/public-route-guard.mjs";
@@ -115,6 +116,49 @@ function requestRawUpgrade({ port, path = "/socket", cookie }) {
     socket.on("end", () => resolve(response));
     socket.on("close", () => resolve(response));
     socket.on("error", reject);
+  });
+}
+
+function requestWithHost({ port, path = "/", method = "GET", host, body, cookie }) {
+  const bodyText = body ? String(body) : "";
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port,
+        method,
+        path,
+        headers: {
+          host,
+          ...(cookie ? { cookie } : {}),
+          ...(bodyText
+            ? {
+                "content-type": "application/x-www-form-urlencoded",
+                "content-length": Buffer.byteLength(bodyText),
+              }
+            : {}),
+        },
+      },
+      (res) => {
+        let responseBody = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          responseBody += chunk;
+        });
+        res.on("end", () => {
+          resolve({
+            status: res.statusCode,
+            headers: res.headers,
+            body: responseBody,
+          });
+        });
+      },
+    );
+    req.on("error", reject);
+    if (bodyText) {
+      req.write(bodyText);
+    }
+    req.end();
   });
 }
 
@@ -284,6 +328,54 @@ describe("Fly gateway startup", () => {
     await closeServer(target);
   }, 15000);
 
+  it("allows admin-token login from an explicitly configured Fly host", async () => {
+    const target = http.createServer((req, res) => {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ ok: true, path: req.url }));
+    });
+    target.listen(0, "127.0.0.1");
+    await waitForListening(target);
+
+    const guard = startPublicRouteGuard({
+      publicPort: 0,
+      targetPort: target.address().port,
+      env: {
+        OPENCLAW_ADMIN_TOKEN: "secret-token",
+        OPENCLAW_ADMIN_HOSTS: "leaderbot-openclaw-gateway.fly.dev",
+      },
+    });
+    await waitForListening(guard);
+
+    const publicPort = guard.address().port;
+    const blockedLogin = await requestWithHost({
+      port: publicPort,
+      path: "/admin/login",
+      host: "other.fly.dev",
+    });
+    const successfulLogin = await requestWithHost({
+      port: publicPort,
+      path: "/admin/login",
+      method: "POST",
+      body: new URLSearchParams({ token: "secret-token" }),
+      host: "leaderbot-openclaw-gateway.fly.dev",
+    });
+    const cookie = successfulLogin.headers["set-cookie"]?.[0] || "";
+    const dashboardResponse = await requestWithHost({
+      port: publicPort,
+      path: "/dashboard",
+      cookie,
+      host: "leaderbot-openclaw-gateway.fly.dev",
+    });
+
+    expect(blockedLogin.status).toBe(404);
+    expect(successfulLogin.status).toBe(303);
+    expect(dashboardResponse.status).toBe(200);
+    expect(JSON.parse(dashboardResponse.body)).toEqual({ ok: true, path: "/dashboard" });
+
+    await closeServer(guard);
+    await closeServer(target);
+  }, 15000);
+
 
   it("proxies authenticated admin WebSocket upgrades through the tunnel", async () => {
     const seenUpgrades = [];
@@ -346,11 +438,22 @@ describe("Fly gateway startup", () => {
     await closeServer(target);
   }, 15000);
 
-  it("rejects admin access when the request host is not local to the tunnel", () => {
+  it("rejects admin access when the request host is not local or explicitly allowlisted", () => {
     expect(isLocalAdminHost("127.0.0.1:7300")).toBe(true);
     expect(isLocalAdminHost("localhost:7300")).toBe(true);
     expect(isLocalAdminHost("[::1]:7300")).toBe(true);
     expect(isLocalAdminHost("leaderbot-openclaw-gateway.fly.dev")).toBe(false);
+    expect(isAdminHostAllowed("leaderbot-openclaw-gateway.fly.dev")).toBe(false);
+    expect(
+      isAdminHostAllowed("leaderbot-openclaw-gateway.fly.dev", {
+        OPENCLAW_ADMIN_HOSTS: "leaderbot-openclaw-gateway.fly.dev",
+      }),
+    ).toBe(true);
+    expect(
+      isAdminHostAllowed("leaderbot-openclaw-gateway.fly.dev.", {
+        OPENCLAW_ADMIN_HOSTS: "leaderbot-openclaw-gateway.fly.dev",
+      }),
+    ).toBe(true);
   });
 
   it("returns 504 when the internal gateway proxy request times out", async () => {
