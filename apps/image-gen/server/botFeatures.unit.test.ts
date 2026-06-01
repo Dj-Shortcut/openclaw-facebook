@@ -709,6 +709,39 @@ describe("conversationalEditingFeature", () => {
     }
   });
 
+  it("does not treat casual no-subject chat as deterministic corrections", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    try {
+      const result = await conversationalEditingFeature.onText?.(
+        makeContext({
+          messageText: "No man, thanks",
+          normalizedText: "no man, thanks",
+          runImageGeneration,
+          state: makeState({
+            lastGeneratedUrl: "https://img.example/generated.jpg",
+          }),
+        })
+      );
+
+      expect(result).toEqual({ handled: false });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(runImageGeneration).not.toHaveBeenCalled();
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("does not prepend the previous prompt to follow-up edit instructions", async () => {
     const originalApiKey = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = "test-key";
