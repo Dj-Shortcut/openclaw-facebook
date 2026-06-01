@@ -101,6 +101,7 @@ Open cost-control work:
 - [x] Made image prompt building more prompt-faithful by removing role/template language and blocking default cinematic/editorial/anime/luxury aesthetics unless requested
 - [x] Kept ambiguous "make me / maak me" visual requests prompt-first and routed missing-subject complaints as image follow-up corrections
 - [x] Aligned internal image-request routing with prompt-first intent rules so retained photos no longer hijack ambiguous "maak me" prompts
+- [x] Extracted shared image intent primitives so Messenger and internal image-request routing use the same prompt-first rules
 
 ## Historisch afgerond
 

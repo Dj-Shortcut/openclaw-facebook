@@ -1,85 +1,13 @@
 import type { BotFeature } from "../features";
 import type { BotTextContext } from "../../botContext";
-
-const PROMPT_WRITING_PATTERNS = [
-  /\b(?:schrijf|write|maak|create)\s+(?:een\s+)?prompt\b/iu,
-  /\bprompt\s+(?:voor|for)\b/iu,
-];
-
-const EXPLICIT_SOURCE_EDIT_PATTERNS = [
-  /\b(?:bewerk|edit|restyle|pas\s+aan|retoucheer)\b/iu,
-  /\b(?:deze|this)\s+(?:foto|afbeelding|image|photo)\b.*\b(?:aanpassen|bewerken|edit|restyle)\b/iu,
-];
-
-const SOURCE_REFERENCE_PATTERNS = [
-  /\b(?:van|met|op basis van|using|from|based on)\s+(?:deze|dit|this)\s+(?:foto|afbeelding|image|photo|resultaat|result)\b/iu,
-  /\b(?:deze|dit|this)\s+(?:foto|afbeelding|image|photo|resultaat|result)\b/iu,
-];
-
-const NON_IMAGE_ARTIFACT_PATTERNS = [
-  /\b(?:maak|create)\s+(?:een\s+)?(?:plan|lijst|samenvatting|tekst|email|e-mail|brief|gedicht|verhaal|script|code|functie|schema|planning)\b/iu,
-  /\b(?:kan|kun|could|can)\s+(?:je|jij|you)\b.*\b(?:plan|lijst|samenvatting|tekst|email|e-mail|brief|gedicht|verhaal|script|code|functie|schema|planning|afspraak|reservering|boeking)\b.*\b(?:maken|make|create|write)\b/iu,
-  /\b(?:write|make|create)\s+(?:a\s+)?(?:plan|list|summary|text|email|letter|poem|story|script|code|function|schedule)\b/iu,
-  /\b(?:could|can)\s+you\b.*\b(?:plan|list|summary|text|email|letter|poem|story|script|code|function|schedule|appointment|reservation|booking)\b.*\b(?:make|create|write)\b/iu,
-];
-
-const IMAGE_GENERATION_PATTERNS = [
-  /\b(?:maak|genereer|creeer|create|generate)\b.*\b(?:afbeelding|foto|plaatje|image|picture)\b/iu,
-  /\b(?:afbeelding|foto|plaatje|image|picture)\b.*\b(?:maak|maken|genereer|genereren|create|generate)\b/iu,
-  /\b(?:maak|genereer|creeer|create|generate)\b.*\b(?:landschap|stad|poster|logo|portret|avatar|sticker|illustratie|productfoto|scene|cover)\b/iu,
-  /\b(?:kan|kun|could|can)\s+(?:je|jij|you)\b.*\b(?:landschap|stad|poster|logo|portret|avatar|sticker|illustratie|productfoto|scene|cover)\b.*\b(?:maken|genereren|make|create|generate)\b/iu,
-];
-
-const ARBITRARY_VISUAL_CREATE_PATTERNS = [
-  /\b(?:maak|genereer|creeer|create|generate)\s+(?:voor\s+mij\s+|voor\s+me\s+|me\s+|mij\s+)?(?:een|a|an)\s+(.{3,})/iu,
-  /\b(?:kan|kun|could|can)\s+(?:je|jij|you)\b.*\b(?:een|a|an)\s+(.{3,}?)\s+\b(?:maken|genereren|make|create|generate)\b/iu,
-];
-
-const VAGUE_OBJECT_PATTERNS = [
-  /^(?:dit|deze|dat|this|that|it)\b/iu,
-  /^(?:beter|better|anders|different|mooier|nicer)\b/iu,
-];
-
-const FRESH_IMAGE_PATTERNS = [
-  /\b(?:nieuwe|nieuw|new|fresh)\s+(?:afbeelding|foto|image|picture)\b/iu,
-  /\b(?:zonder|without)\s+(?:mijn|my|deze|this)\s+(?:foto|afbeelding|image|photo)\b/iu,
-  /\b(?:from scratch|van nul|helemaal nieuw)\b/iu,
-];
-
-function isPromptWritingRequest(text: string): boolean {
-  return PROMPT_WRITING_PATTERNS.some(pattern => pattern.test(text));
-}
-
-function isExplicitSourceEditRequest(text: string): boolean {
-  return EXPLICIT_SOURCE_EDIT_PATTERNS.some(pattern => pattern.test(text));
-}
-
-function referencesExistingImage(text: string): boolean {
-  return SOURCE_REFERENCE_PATTERNS.some(pattern => pattern.test(text));
-}
-
-function isLikelyNonImageArtifactRequest(text: string): boolean {
-  return NON_IMAGE_ARTIFACT_PATTERNS.some(pattern => pattern.test(text));
-}
-
-function hasArbitraryVisualSubject(text: string): boolean {
-  for (const pattern of ARBITRARY_VISUAL_CREATE_PATTERNS) {
-    const match = pattern.exec(text);
-    const subject = match?.[1]?.trim().replace(/[?.!,]+$/u, "");
-    if (subject && !VAGUE_OBJECT_PATTERNS.some(vague => vague.test(subject))) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function isImageGenerationRequest(text: string): boolean {
-  return (
-    IMAGE_GENERATION_PATTERNS.some(pattern => pattern.test(text)) ||
-    hasArbitraryVisualSubject(text)
-  );
-}
+import {
+  isExplicitSourceImageEditRequest,
+  isFreshImageRequest,
+  isImageGenerationRequest,
+  isLikelyNonImageArtifactRequest,
+  isPromptWritingRequest,
+  referencesExistingImage,
+} from "../../imageIntent";
 
 function getSourcePhotoUrl(ctx: BotTextContext): string | undefined {
   return (
@@ -96,7 +24,7 @@ function shouldUseExistingImageContext(ctx: BotTextContext, text: string): boole
     ctx.hasPhoto &&
       getSourcePhotoUrl(ctx) &&
       referencesExistingImage(text) &&
-      !FRESH_IMAGE_PATTERNS.some(pattern => pattern.test(text))
+      !isFreshImageRequest(text)
   );
 }
 
@@ -108,7 +36,7 @@ export const imageRequestFeature: BotFeature = {
       return { handled: false };
     }
 
-    if (isExplicitSourceEditRequest(text) || isLikelyNonImageArtifactRequest(text)) {
+    if (isExplicitSourceImageEditRequest(text) || isLikelyNonImageArtifactRequest(text)) {
       return { handled: false };
     }
 

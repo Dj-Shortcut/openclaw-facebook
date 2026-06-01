@@ -70,6 +70,11 @@ import {
   combineMessengerSendOutcomes,
   type MaybeInFlightMessageResult,
 } from "./webhookFallback";
+import {
+  isExplicitSourceImageEditRequest,
+  isSourceImageTransformRequest,
+  isVisualCorrectionRequest,
+} from "./imageIntent";
 
 type HandlerDeps = {
   defaultLang: Lang;
@@ -93,52 +98,6 @@ export class InternalMessengerImageRequestNotQueuedError extends Error {
 
 type FeatureContextBase = Omit<BotPayloadContext, "payload">;
 type MessengerState = Awaited<ReturnType<typeof getOrCreateState>>;
-
-function normalizeImageRequestText(text: string): string {
-  return text.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
-}
-
-function isSourceImageEditRequest(text: string): boolean {
-  const normalized = normalizeImageRequestText(text);
-  return /\b(restyle|restylen|restijlen|restijl|bewerk foto|bewerk deze foto|foto bewerken|edit image|edit this image|edit photo|this photo|deze foto)\b/.test(
-    normalized
-  );
-}
-
-function isVisualCorrectionRequest(text: string): boolean {
-  const normalized = normalizeImageRequestText(text);
-  const visualSubject =
-    "(?:samurai|samoerai|persoon|mens|man|vrouw|gezicht|paard|robot|soldaat|krijger|gladiator|ninja|stad|landschap|logo|poster|tekst|titel|zwaard|katana|helm|subject|person|face|horse|warrior|city|landscape|text|title|sword)";
-  return (
-    new RegExp(`\\b(?:ik\\s+zie|zie)\\s+(?:geen|niet\\s+de)\\s+${visualSubject}\\b`).test(
-      normalized
-    ) ||
-    new RegExp(`\\b(?:maar|wel\\s+mooi\\s+maar|mooi\\s+maar)\\s+(?:geen|niet\\s+de)\\s+${visualSubject}\\b`).test(
-      normalized
-    ) ||
-    new RegExp(`\\b(?:er\\s+mist|mist|ontbreekt)\\s+(?:een\\s+|de\\s+)?${visualSubject}\\b`).test(
-      normalized
-    ) ||
-    new RegExp(`\\b(?:i\\s+do\\s+not\\s+see|i\\s+don't\\s+see|no|missing)\\s+(?:a\\s+|the\\s+)?${visualSubject}\\b`).test(
-      normalized
-    )
-  );
-}
-
-function isPersonalSourceImageTransformRequest(text: string): boolean {
-  const normalized = normalizeImageRequestText(text);
-  return (
-    /\b(?:verander|tover)\s+(?:me|mij)\s+(?:in|naar|tot)\b/.test(normalized) ||
-    /\bzet\s+(?:me|mij)\s+(?:neer\s+)?als\b/.test(normalized) ||
-    /\b(?:kan|kun)\s+(?:je|jij)\s+(?:me|mij)\s+(?:in|naar|tot|als)\b.*\b(?:veranderen|omtoveren|maken)\b/.test(
-      normalized
-    ) ||
-    /\b(?:make|turn|transform)\s+me\s+(?:look\s+like|into)\b/.test(normalized) ||
-    /\b(?:can|could)\s+you\s+(?:make|turn|transform)\s+me\s+(?:look\s+like|into)\b/.test(
-      normalized
-    )
-  );
-}
 
 export type HandlerContext = {
   defaultLang: Lang;
@@ -1004,8 +963,8 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
   ): Promise<MessengerSendOutcome> {
     const lang = input.lang ?? defaultLang;
     const userId = toUserKey(input.psid);
-    const wantsSourceImageEdit = isSourceImageEditRequest(input.prompt);
-    const wantsPersonalTransform = isPersonalSourceImageTransformRequest(input.prompt);
+    const wantsSourceImageEdit = isExplicitSourceImageEditRequest(input.prompt);
+    const wantsPersonalTransform = isSourceImageTransformRequest(input.prompt);
     const wantsVisualCorrection = isVisualCorrectionRequest(input.prompt);
     await setLastUserMessageAt(input.psid, input.timestamp ?? Date.now());
 
