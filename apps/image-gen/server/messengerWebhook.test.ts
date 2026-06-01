@@ -48,6 +48,7 @@ import {
   anonymizePsid,
   getState,
   resetStateStore,
+  setLastGenerated,
   setPendingImage,
   setPendingStoredImage,
   setFlowState,
@@ -641,6 +642,67 @@ describe("messenger webhook dedupe", () => {
       "internal-make-me-text-user",
       "Stuur eerst de foto die je wilt bewerken."
     );
+  });
+
+  it("applies visual correction prompts to the last generated image", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+    await setLastGenerated(
+      "internal-visual-correction-user",
+      "https://leaderbot-fb-image-gen.fly.dev/generated/generated-landscape.jpg"
+    );
+
+    await processInternalMessengerImageRequest({
+      psid: "internal-visual-correction-user",
+      prompt: "Das mooi, maar geen samurai bro",
+      reqId: "req-internal-visual-correction",
+      lang: "nl",
+      timestamp: 1_771_000_000_000,
+    });
+
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) =>
+          toUrlString(url) ===
+          "https://leaderbot-fb-image-gen.fly.dev/generated/generated-landscape.jpg"
+      )
+    ).toBe(true);
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    expect(promptFromOpenAiRequest(openAiCall?.[1])).toContain(
+      "Das mooi, maar geen samurai bro"
+    );
+    expect(sendImageMock).toHaveBeenCalledWith(
+      "internal-visual-correction-user",
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+  });
+
+  it("keeps visual correction prompts in the photo flow when no previous image exists", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+
+    await expect(
+      processInternalMessengerImageRequest({
+        psid: "internal-visual-correction-without-image-user",
+        prompt: "Das mooi, maar geen samurai bro",
+        reqId: "req-internal-visual-correction-without-image",
+        lang: "nl",
+        timestamp: 1_771_000_000_000,
+      })
+    ).rejects.toThrow("needs a source image");
+
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+      )
+    ).toBe(false);
+    expect(sendTextMock).toHaveBeenCalledWith(
+      "internal-visual-correction-without-image-user",
+      "Stuur eerst de foto die je wilt bewerken."
+    );
+    expect(sendImageMock).not.toHaveBeenCalled();
   });
 
   it("keeps legacy style names inside text-to-image prompts instead of routing through style presets", async () => {
