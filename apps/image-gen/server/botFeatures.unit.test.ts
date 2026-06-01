@@ -671,6 +671,44 @@ describe("conversationalEditingFeature", () => {
     }
   });
 
+  it("routes clear visual corrections even when the edit interpreter is unavailable", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    try {
+      const result = await conversationalEditingFeature.onText?.(
+        makeContext({
+          messageText: "Das mooi, maar geen samurai bro",
+          normalizedText: "das mooi, maar geen samurai bro",
+          runImageGeneration,
+          state: makeState({
+            lastPrompt: "Maak een samurai op een paard",
+            lastGeneratedUrl: "https://img.example/generated.jpg",
+          }),
+        })
+      );
+
+      expect(result).toEqual({ handled: true });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(runImageGeneration).toHaveBeenCalledWith(
+        "https://img.example/generated.jpg",
+        "Das mooi, maar geen samurai bro",
+        "source_image_edit"
+      );
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("does not prepend the previous prompt to follow-up edit instructions", async () => {
     const originalApiKey = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = "test-key";

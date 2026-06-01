@@ -1,6 +1,7 @@
 import type { BotFeature } from "../features";
 import { interpretConversationalEdit } from "../../conversationalEditInterpreter";
 import type { BotTextContext } from "../../botContext";
+import { isVisualCorrectionRequest } from "../../imageIntent";
 
 function shouldSkipConversationalEdit(normalizedText: string): boolean {
   return (
@@ -35,14 +36,19 @@ export const conversationalEditingFeature: BotFeature = {
       text: ctx.messageText,
       lang: ctx.lang,
     });
-    if (!decision?.shouldEdit) {
+    const deterministicPromptHint = isVisualCorrectionRequest(ctx.messageText)
+      ? ctx.messageText
+      : undefined;
+    if (!decision?.shouldEdit && !deterministicPromptHint) {
       return { handled: false };
     }
 
-    const promptHint = decision.promptHint?.trim() || ctx.state.lastPrompt;
+    const promptHint =
+      decision?.promptHint?.trim() || deterministicPromptHint || ctx.state.lastPrompt;
 
     ctx.logger.info("bot_feature_conversational_edit", {
-      hasPromptHint: Boolean(decision.promptHint),
+      hasPromptHint: Boolean(decision?.promptHint),
+      deterministicVisualCorrection: Boolean(!decision?.shouldEdit && deterministicPromptHint),
     });
 
     await ctx.runImageGeneration(
