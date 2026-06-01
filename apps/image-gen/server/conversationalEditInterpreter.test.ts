@@ -124,7 +124,11 @@ describe("conversational edit interpreter", () => {
       input: Array<{ role: string; content: string }>;
     };
     expect(body.input[0]?.content).not.toContain('"storybook-anime"');
+    expect(body.input[0]?.content).not.toContain("storybook anime");
+    expect(body.input[0]?.content).not.toContain("ghibli");
+    expect(body.input[0]?.content).not.toContain("cinematic");
     expect(body.input[0]?.content).toContain("Never map user wording");
+    expect(body.input[0]?.content).toContain("Preserve the user's visual wording");
   });
 
   it("keeps legacy aesthetic wording as prompt-first edits", async () => {

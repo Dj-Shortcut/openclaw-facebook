@@ -108,7 +108,7 @@ function buildSystemPrompt(input: { lang: Lang }): string {
     "Set shouldEdit=true only when the user is asking to change the previous image.",
     "If the user says the requested subject is missing, wrong, not visible, or not recognizable, treat it as a request to correct the previous image.",
     "Never map user wording to a preset, template, or style catalog.",
-    'Keep words like "luxury", "old money", "vogue", "techno", "cinematic", "ghibli", "storybook anime", "gold", "disco", and "cyberpunk" as natural-language visual direction in promptHint.',
+    "Preserve the user's visual wording as natural-language direction in promptHint instead of translating it to internal labels.",
     "Put the full visual change request into promptHint in concise plain text, preserving the user's requested subject and vibe.",
     "If it is normal chat, a question, or unclear, return shouldEdit=false.",
   ].join(" ");
