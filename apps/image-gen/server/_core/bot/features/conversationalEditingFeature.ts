@@ -1,7 +1,10 @@
 import type { BotFeature } from "../features";
 import { interpretConversationalEdit } from "../../conversationalEditInterpreter";
 import type { BotTextContext } from "../../botContext";
-import { isVisualCorrectionRequest } from "../../imageIntent";
+import { normalizeImageIntentText } from "../../imageIntent";
+
+const UNAMBIGUOUS_VISUAL_CORRECTION_SUBJECT =
+  "(?:samurai|samoerai|persoon|mens|man|vrouw|gezicht|paard|robot|soldaat|krijger|gladiator|ninja|stad|landschap|logo|poster|tekst|titel|zwaard|katana|helm|subject|person|face|horse|warrior|city|landscape|text|title|sword)";
 
 function shouldSkipConversationalEdit(normalizedText: string): boolean {
   return (
@@ -17,6 +20,27 @@ function getSourcePhotoUrl(ctx: BotTextContext): string | null {
     ctx.state.lastPhotoUrl ??
     ctx.state.lastPhoto ??
     null
+  );
+}
+
+function isUnambiguousVisualCorrectionRequest(text: string): boolean {
+  const normalized = normalizeImageIntentText(text);
+  return (
+    new RegExp(
+      `\\b(?:ik\\s+zie|zie)\\s+(?:geen|niet\\s+de)\\s+${UNAMBIGUOUS_VISUAL_CORRECTION_SUBJECT}\\b`
+    ).test(normalized) ||
+    new RegExp(
+      `\\b(?:maar|wel\\s+mooi\\s+maar|mooi\\s+maar)\\s+(?:geen|niet\\s+de)\\s+${UNAMBIGUOUS_VISUAL_CORRECTION_SUBJECT}\\b`
+    ).test(normalized) ||
+    new RegExp(
+      `\\b(?:er\\s+mist|mist|ontbreekt)\\s+(?:een\\s+|de\\s+)?${UNAMBIGUOUS_VISUAL_CORRECTION_SUBJECT}\\b`
+    ).test(normalized) ||
+    new RegExp(
+      `\\b(?:i\\s+do\\s+not\\s+see|i\\s+don't\\s+see|missing)\\s+(?:a\\s+|the\\s+)?${UNAMBIGUOUS_VISUAL_CORRECTION_SUBJECT}\\b`
+    ).test(normalized) ||
+    new RegExp(
+      `\\b(?:a\\s+|the\\s+)?${UNAMBIGUOUS_VISUAL_CORRECTION_SUBJECT}\\s+(?:is\\s+|are\\s+)?(?:missing|not\\s+visible)\\b`
+    ).test(normalized)
   );
 }
 
@@ -36,7 +60,7 @@ export const conversationalEditingFeature: BotFeature = {
       text: ctx.messageText,
       lang: ctx.lang,
     });
-    const deterministicPromptHint = isVisualCorrectionRequest(ctx.messageText)
+    const deterministicPromptHint = isUnambiguousVisualCorrectionRequest(ctx.messageText)
       ? ctx.messageText
       : undefined;
     if (!decision?.shouldEdit && !deterministicPromptHint) {
