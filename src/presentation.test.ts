@@ -65,6 +65,41 @@ describe("renderMessengerPresentationPayload", () => {
     ]);
   });
 
+  it("keeps inferred numbered choices visible next to explicit actions", () => {
+    const payload = renderMessengerActionPayload({
+      text:
+        "Ja. Wil je dat ik een:\n\n" +
+        "1. samurai-portret maak,\n" +
+        "2. samurai-avatar/sticker maak,\n" +
+        "3. samurai-illustratie voor een poster maak,",
+      actions: [{ id: "privacy", label: "Privacy", inputText: "Privacy" }],
+    });
+
+    expect(payload?.text).toBe("Ja. Wil je dat ik een:");
+    expect(payload?.channelData?.facebook?.quickReplies).toEqual([
+      {
+        content_type: "text",
+        title: "samurai-portret",
+        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak een samurai-portret`,
+      },
+      {
+        content_type: "text",
+        title: "samurai-avatar/stick",
+        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak een samurai-avatar/sticker`,
+      },
+      {
+        content_type: "text",
+        title: "samurai-illustratie",
+        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak een samurai-illustratie voor een poster`,
+      },
+      {
+        content_type: "text",
+        title: "Privacy",
+        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Privacy`,
+      },
+    ]);
+  });
+
   it("uses action value when inputText is absent and id is technical", () => {
     const payload = renderMessengerActionPayload({
       text: "Kies een richting.",

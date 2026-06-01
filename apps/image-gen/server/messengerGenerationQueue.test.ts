@@ -134,6 +134,7 @@ describe("messengerGenerationQueue", () => {
     const redis = {
       llen: vi.fn(async () => 0),
       lpush: vi.fn(async () => 1),
+      set: vi.fn(async () => "OK"),
     };
     getRedisClientMock.mockResolvedValue(redis);
     const processor = vi.fn(async () => "should-not-run");
@@ -143,6 +144,44 @@ describe("messengerGenerationQueue", () => {
 
     expect(result).toEqual({ mode: "queued" });
     expect(processor).not.toHaveBeenCalled();
+    expect(redis.set).toHaveBeenCalledWith(
+      "messenger-generation-job-accepted:req-handoff",
+      "1",
+      "EX",
+      720,
+      "NX"
+    );
+    expect(redis.lpush).toHaveBeenCalledWith(
+      "messenger-generation-jobs",
+      JSON.stringify(job)
+    );
+  });
+
+  it("dedupes queued generation jobs by reqId before enqueueing", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const accepted = new Set<string>();
+    const redis = {
+      llen: vi.fn(async () => 0),
+      lpush: vi.fn(async () => 1),
+      set: vi.fn(async (key: string, value: string, ...args: Array<string | number>) => {
+        expect(value).toBe("1");
+        expect(args).toEqual(["EX", 720, "NX"]);
+        if (accepted.has(key)) {
+          return null;
+        }
+        accepted.add(key);
+        return "OK";
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+    const job = createJob({ reqId: "req-duplicate" });
+
+    await expect(enqueueMessengerGenerationJob(job)).resolves.toBe(true);
+    await expect(enqueueMessengerGenerationJob(job)).resolves.toBe(false);
+
+    expect(redis.lpush).toHaveBeenCalledTimes(1);
     expect(redis.lpush).toHaveBeenCalledWith(
       "messenger-generation-jobs",
       JSON.stringify(job)
@@ -195,7 +234,7 @@ describe("messengerGenerationQueue", () => {
     getRedisClientMock.mockResolvedValue(redis);
 
     const job = createJob({ reqId: "req-queued" });
-    await enqueueMessengerGenerationJob(job);
+    await expect(enqueueMessengerGenerationJob(job)).resolves.toBe(true);
     const processor = vi.fn(async () => undefined);
     await drainMessengerGenerationQueue(processor);
 
@@ -211,6 +250,13 @@ describe("messengerGenerationQueue", () => {
       "messenger-generation-jobs:processing",
       1,
       JSON.stringify(job)
+    );
+    expect(redis.set).toHaveBeenCalledWith(
+      "messenger-generation-job-accepted:req-queued",
+      "1",
+      "EX",
+      720,
+      "NX"
     );
     expect(redis.set).toHaveBeenCalledWith(
       "messenger-generation-job-lease:req-queued",
@@ -523,7 +569,6 @@ describe("messengerGenerationQueue", () => {
         }
         return value;
       }),
-      set: vi.fn(async () => "OK"),
       lpush: vi.fn(async (_key: string, value: string) => {
         queue.unshift(value);
         return queue.length;

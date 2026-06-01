@@ -334,14 +334,18 @@ export function renderMessengerPresentationPayload(params: {
 }
 
 export function renderMessengerActionPayload(payload: MessengerPresentationPayload): MessengerPresentationPayload | null {
-  const quickReplies = extractActionQuickReplies(payload.actions);
   const text = hasText(payload.text) ? payload.text.trim() : null;
+  const inferredActions = extractNumberedChoicesFromText(text ?? undefined);
+  const quickReplies = extractActionQuickReplies([
+    ...inferredActions,
+    ...(payload.actions ?? []),
+  ]);
   if (!text || !shouldRenderQuickReplies(quickReplies)) {
     return null;
   }
   return {
     ...payload,
-    text,
+    text: inferredActions.length ? stripNumberedChoicesFromText(text) : text,
     channelData: {
       ...(payload.channelData ?? {}),
       facebook: {
