@@ -25,6 +25,7 @@ import {
   processWhatsAppWebhookPayload as processWhatsAppWebhookPayloadBase,
   resetMessengerEventDedupe,
 } from "./_core/messengerWebhook";
+import { runWhatsAppImageGeneration } from "./_core/whatsappFlows/imageGenerationFlow";
 import { t } from "./_core/i18n";
 import {
   anonymizePsid,
@@ -370,6 +371,47 @@ describe("whatsapp webhook flow", () => {
     );
     expect(sendWhatsAppButtonsMock).not.toHaveBeenCalled();
     expect(downloadWhatsAppMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps stale director mode out of WhatsApp success state and follow-up copy", async () => {
+    const generateSpy = vi
+      .spyOn(OpenAiImageGenerator.prototype, "generate")
+      .mockResolvedValue({
+        imageUrl: "https://leaderbot-fb-image-gen.fly.dev/generated/whatsapp-prompt-first.jpg",
+      });
+    const fetchMock = vi.fn(async () => {
+      throw new Error("director social copy should not run");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      await runWhatsAppImageGeneration({
+        senderId: "wa-stale-director-success",
+        userId: "wa-stale-director-success",
+        reqId: "req-wa-stale-director-success",
+        lang: "nl",
+        promptHint: "Maak een krachtige samurai als hoofdonderwerp",
+        generationKind: "text_to_image",
+        directorMode: "old_money",
+      });
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(sendWhatsAppImageMock).toHaveBeenCalledWith(
+        "wa-stale-director-success",
+        "https://leaderbot-fb-image-gen.fly.dev/generated/whatsapp-prompt-first.jpg"
+      );
+      expect(getState("wa-stale-director-success")?.lastPrompt).toBe(
+        "Maak een krachtige samurai als hoofdonderwerp"
+      );
+      expect(getState("wa-stale-director-success")?.lastDirectorMode).toBeUndefined();
+      expect(
+        sendWhatsAppTextMock.mock.calls.some(([, text]) =>
+          String(text).includes("Old Money")
+        )
+      ).toBe(false);
+    } finally {
+      generateSpy.mockRestore();
+    }
   });
 });
 
