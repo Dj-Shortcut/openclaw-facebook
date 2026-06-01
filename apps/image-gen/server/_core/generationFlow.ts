@@ -21,6 +21,7 @@ import type { DirectorMode } from "./image-generation/director/directorTypes";
 import type { GenerationKind } from "./image-generation/generationTypes";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import { storageGet, storageKeyFromPublicUrl } from "../storage";
+import { MessengerDailyImageBudgetExceededError } from "./generationGuard";
 
 type GenerationProof = {
   incomingLen: number;
@@ -210,6 +211,10 @@ function classifyGenerationError(error: unknown): GenerationFlowFailureKind {
   }
 
   if (error instanceof OpenAiBudgetExceededError) {
+    return "generation_budget_reached";
+  }
+
+  if (error instanceof MessengerDailyImageBudgetExceededError) {
     return "generation_budget_reached";
   }
 

@@ -605,6 +605,9 @@ function extractNumberedImageOptionFromAssistantReply(
 
   const option = optionLine
     .replace(/^\d+[.)]\s+/, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
     .replace(/[,.]$/g, "")
     .replace(/^(?:of\s+)?(?:een|a|an)\s+/i, "")
     .replace(/\s+maak$/i, "")
@@ -618,7 +621,7 @@ function extractNumberedImageOptionFromAssistantReply(
 
   return /^(?:maak|genereer|create|generate)\b/i.test(option)
     ? option
-    : `Maak een ${option}`;
+    : `Maak deze afbeelding: ${option}`;
 }
 
 export function rememberMessengerAssistantPrompt(

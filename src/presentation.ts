@@ -46,6 +46,19 @@ function trimToCodePoints(value: string, maxLength: number): string {
   return Array.from(value.trim()).slice(0, maxLength).join("").trim();
 }
 
+function stripMessengerMarkdown(value: string): string {
+  return value
+    .replace(/```[a-z0-9_-]*\s*([\s\S]*?)```/giu, "$1")
+    .replace(/`([^`]+)`/gu, "$1")
+    .replace(/\*\*([^*]+)\*\*/gu, "$1")
+    .replace(/__([^_]+)__/gu, "$1")
+    .replace(/\*([^*\n]+)\*/gu, "$1")
+    .replace(/_([^_\n]+)_/gu, "$1")
+    .replace(/~~([^~]+)~~/gu, "$1")
+    .replace(/^#{1,6}\s+/gmu, "")
+    .trim();
+}
+
 function utf8ByteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
@@ -54,12 +67,14 @@ function normalizeQuickReplyLabel(value: unknown): string | null {
   if (!hasText(value)) {
     return null;
   }
-  const label = trimToCodePoints(value, MESSENGER_QUICK_REPLY_TITLE_MAX_LENGTH);
+  const label = trimToCodePoints(stripMessengerMarkdown(value), MESSENGER_QUICK_REPLY_TITLE_MAX_LENGTH);
   return label || null;
 }
 
 function normalizeQuickReplyPayload(value: unknown, fallback: string): string | null {
-  const payload = hasText(value) ? value.trim() : fallback.trim();
+  const payload = hasText(value)
+    ? stripMessengerMarkdown(value)
+    : stripMessengerMarkdown(fallback);
   if (!payload || utf8ByteLength(payload) > MESSENGER_QUICK_REPLY_PAYLOAD_MAX_BYTES) {
     return null;
   }
@@ -218,7 +233,7 @@ function extractNumberedChoicesFromText(text: string | undefined): ConversationA
 }
 
 function normalizeInferredChoiceLabel(choice: string): string {
-  const cleaned = choice
+  const cleaned = stripMessengerMarkdown(choice)
     .replace(/[,:;?!.]+$/u, "")
     .replace(/^(?:of\s+)?(?:een|a|an)\s+/iu, "")
     .replace(/\s+(?:schrijf|schrijven|write)(?:\s+(?:waarmee|which|that)\b.*)?$/iu, "")
@@ -242,7 +257,7 @@ function normalizeInferredChoiceInput(label: string): string {
   if (/^(?:maak|genereer|create|generate|schrijf|write)\b/iu.test(normalizedLabel)) {
     return normalizedLabel;
   }
-  return `Maak een ${normalizedLabel}`;
+  return `Maak deze afbeelding: ${normalizedLabel}`;
 }
 
 function stripNumberedChoicesFromText(text: string): string {
@@ -276,7 +291,7 @@ function stripNumberedChoicesFromText(text: string): string {
     .replace(/\n{3,}/gu, "\n\n")
     .trim();
 
-  return compacted || text.trim();
+  return stripMessengerMarkdown(compacted || text.trim());
 }
 
 function shouldRenderQuickReplies(quickReplies: readonly MessengerQuickReply[]): boolean {
@@ -308,7 +323,7 @@ function presentationText(presentation: MessagePresentation, fallbackText: strin
       }
     }
   }
-  return parts.length > 0 ? parts.join("\n\n") : null;
+  return parts.length > 0 ? stripMessengerMarkdown(parts.join("\n\n")) : null;
 }
 
 export function renderMessengerPresentationPayload(params: {
@@ -334,8 +349,9 @@ export function renderMessengerPresentationPayload(params: {
 }
 
 export function renderMessengerActionPayload(payload: MessengerPresentationPayload): MessengerPresentationPayload | null {
-  const text = hasText(payload.text) ? payload.text.trim() : null;
-  const inferredActions = extractNumberedChoicesFromText(text ?? undefined);
+  const rawText = hasText(payload.text) ? payload.text.trim() : null;
+  const text = rawText ? stripMessengerMarkdown(rawText) : null;
+  const inferredActions = extractNumberedChoicesFromText(rawText ?? undefined);
   const quickReplies = extractActionQuickReplies([
     ...inferredActions,
     ...(payload.actions ?? []),
@@ -367,12 +383,13 @@ export function renderMessengerInferredChoicePayload(
   if (nativeQuickReplies?.length) {
     return null;
   }
-  const text = hasText(payload.text) ? payload.text.trim() : null;
+  const rawText = hasText(payload.text) ? payload.text.trim() : null;
+  const text = rawText ? stripMessengerMarkdown(rawText) : null;
   if (!text) {
     return null;
   }
 
-  const quickReplies = extractActionQuickReplies(extractNumberedChoicesFromText(text));
+  const quickReplies = extractActionQuickReplies(extractNumberedChoicesFromText(rawText ?? undefined));
   if (!shouldRenderQuickReplies(quickReplies)) {
     return null;
   }

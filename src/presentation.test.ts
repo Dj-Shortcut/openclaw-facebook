@@ -80,17 +80,46 @@ describe("renderMessengerPresentationPayload", () => {
       {
         content_type: "text",
         title: "samurai-portret",
-        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak een samurai-portret`,
+        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak deze afbeelding: samurai-portret`,
       },
       {
         content_type: "text",
         title: "samurai-avatar/stick",
-        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak een samurai-avatar/sticker`,
+        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak deze afbeelding: samurai-avatar/sticker`,
       },
       {
         content_type: "text",
         title: "samurai-illustratie",
-        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak een samurai-illustratie voor een poster`,
+        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak deze afbeelding: samurai-illustratie voor een poster`,
+      },
+      {
+        content_type: "text",
+        title: "Privacy",
+        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Privacy`,
+      },
+    ]);
+  });
+
+  it("strips Messenger-unfriendly markdown from inferred pills and delivery text", () => {
+    const payload = renderMessengerActionPayload({
+      text:
+        "**Kies een richting:**\n\n" +
+        "1. **samurai-portret** maak,\n" +
+        "2. `samurai-avatar/sticker` maak,",
+      actions: [{ id: "privacy", label: "**Privacy**", inputText: "Privacy" }],
+    });
+
+    expect(payload?.text).toBe("Kies een richting:");
+    expect(payload?.channelData?.facebook?.quickReplies).toEqual([
+      {
+        content_type: "text",
+        title: "samurai-portret",
+        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak deze afbeelding: samurai-portret`,
+      },
+      {
+        content_type: "text",
+        title: "samurai-avatar/stick",
+        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak deze afbeelding: samurai-avatar/sticker`,
       },
       {
         content_type: "text",
@@ -290,17 +319,17 @@ describe("renderMessengerPresentationPayload", () => {
       {
         content_type: "text",
         title: "samurai-portret",
-        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak een samurai-portret`,
+        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak deze afbeelding: samurai-portret`,
       },
       {
         content_type: "text",
         title: "samurai-avatar/stick",
-        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak een samurai-avatar/sticker`,
+        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak deze afbeelding: samurai-avatar/sticker`,
       },
       {
         content_type: "text",
         title: "samurai-illustratie",
-        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak een samurai-illustratie voor een poster`,
+        payload: `${MESSENGER_OPENCLAW_ACTION_PREFIX}Maak deze afbeelding: samurai-illustratie voor een poster`,
       },
       {
         content_type: "text",

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   deleteEphemeralKeyIfValue,
   hasEphemeralKey,
+  incrementExpiringCounter,
   isRedisStateStoreEnabled,
   setEphemeralKey,
   setEphemeralKeyIfAbsent,
@@ -12,10 +13,36 @@ const DEFAULT_GLOBAL_LOCK_MS = 240000;
 const DEFAULT_PSID_COOLDOWN_MS = 0;
 const DEFAULT_PSID_LOCK_MS = 240000;
 const DEFAULT_GLOBAL_SLOT_WAIT_MS = 100;
+const DAILY_BUDGET_KEY_PREFIX = "messenger:daily-image-budget";
+
+export class MessengerDailyImageBudgetExceededError extends Error {
+  constructor(message = "Messenger daily image budget reached") {
+    super(message);
+    this.name = "MessengerDailyImageBudgetExceededError";
+  }
+}
 
 function readNonNegativeInt(name: string, fallback: number): number {
   const raw = Number(process.env[name]);
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : fallback;
+}
+
+function readPositiveInt(name: string): number | null {
+  const raw = Number(process.env[name]);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : null;
+}
+
+function getUtcDayKey(now = new Date()): string {
+  return now.toISOString().slice(0, 10);
+}
+
+function secondsUntilNextUtcDay(now = new Date()): number {
+  const nextDay = Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate() + 1
+  );
+  return Math.max(1, Math.ceil((nextDay - now.getTime()) / 1000));
 }
 
 class ConcurrencyLimiter {
@@ -169,6 +196,28 @@ export function getMessengerGenerationGlobalLimitConfig(): MessengerGenerationGl
     max: getGlobalMaxConcurrency(),
     lockTtlMs: getGlobalLockMs(),
   };
+}
+
+export async function assertMessengerDailyImageBudgetAvailable(input: {
+  reqId: string;
+  now?: Date;
+}): Promise<void> {
+  const cap = readPositiveInt("MESSENGER_GLOBAL_DAILY_IMAGE_CAP");
+  if (!cap) {
+    return;
+  }
+
+  const now = input.now ?? new Date();
+  const key = `${DAILY_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
+  const count = await incrementExpiringCounter(key, secondsUntilNextUtcDay(now));
+  if (count > cap) {
+    console.warn("messenger_daily_image_budget_reached", {
+      reqId: input.reqId,
+      cap,
+      count,
+    });
+    throw new MessengerDailyImageBudgetExceededError();
+  }
 }
 
 export async function runGuardedGeneration<T>(
