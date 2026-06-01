@@ -70,6 +70,8 @@ const originalMessengerGenerationQueueEnabled =
   process.env.MESSENGER_GENERATION_QUEUE_ENABLED;
 const originalMessengerGenerationInlineFallback =
   process.env.MESSENGER_GENERATION_INLINE_FALLBACK;
+const originalFaceMemoryRetentionDays =
+  process.env.FACE_MEMORY_RETENTION_DAYS;
 
 const processFacebookWebhookPayload = processConsentedFacebookWebhookPayload(
   processFacebookWebhookPayloadBase
@@ -247,6 +249,11 @@ afterEach(() => {
   delete process.env.APP_BASE_URL;
   delete process.env.SOURCE_IMAGE_ALLOWED_HOSTS;
   delete process.env.ENABLE_FACE_MEMORY;
+  if (originalFaceMemoryRetentionDays === undefined) {
+    delete process.env.FACE_MEMORY_RETENTION_DAYS;
+  } else {
+    process.env.FACE_MEMORY_RETENTION_DAYS = originalFaceMemoryRetentionDays;
+  }
   if (originalMessengerGenerationQueueEnabled === undefined) {
     delete process.env.MESSENGER_GENERATION_QUEUE_ENABLED;
   } else {
@@ -266,6 +273,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  delete process.env.FACE_MEMORY_RETENTION_DAYS;
   setSourceImageDnsLookupForTests(async () => [
     { address: "93.184.216.34", family: 4 },
   ]);

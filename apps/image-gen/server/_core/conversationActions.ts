@@ -4,6 +4,7 @@ import {
   FACE_MEMORY_CONSENT_NO,
   FACE_MEMORY_CONSENT_YES,
 } from "./faceMemory";
+import { formatFaceMemoryRetentionDays } from "./faceMemoryRetention";
 
 export const CONVERSATION_ACTION_NEW_IMAGE = "new_image";
 export const CONVERSATION_ACTION_EDIT_PHOTO = "edit_photo";
@@ -116,15 +117,16 @@ export function buildPhotoReceivedResponse(lang: Lang): ConversationResponse {
 }
 
 export function buildFaceMemoryConsentResponse(lang: Lang): ConversationResponse {
+  const retention = formatFaceMemoryRetentionDays(lang);
   return {
     text:
       lang === "en"
-        ? 'May I keep your photo for 30 days? Then you do not have to upload it again every time. You can delete it any time with "delete my data".'
-        : 'Mag ik je foto 30 dagen bewaren? Dan hoef je niet steeds opnieuw te uploaden. Je kan dit altijd wissen met "verwijder mijn data".',
+        ? `May I keep your photo for ${retention}? Then you do not have to upload it again every time. You can delete it any time with "delete my data".`
+        : `Mag ik je foto ${retention} bewaren? Dan hoef je niet steeds opnieuw te uploaden. Je kan dit altijd wissen met "verwijder mijn data".`,
     actions: [
       {
         id: FACE_MEMORY_CONSENT_YES,
-        label: lang === "en" ? "Yes, 30 days" : "Ja, 30 dagen",
+        label: lang === "en" ? `Yes, ${retention}` : `Ja, ${retention}`,
       },
       {
         id: FACE_MEMORY_CONSENT_NO,

@@ -92,6 +92,7 @@ Open cost-control work:
 - [x] Database-backed quota tables/helpers (`dailyQuota`) beschikbaar
 - [x] Redis-backed Messenger generation queue with dedicated worker is active in production
 - [x] Duplicate Messenger generation queue enqueues are deduped by request id
+- [x] Face Memory retention is configurable via `FACE_MEMORY_RETENTION_DAYS`
 - [x] Webhook opgesplitst in `messengerWebhook.ts` + `webhookHandlers.ts` + `webhookHelpers.ts`
 - [x] Deploy to production + webhook connectivity tests
 - [x] Text-to-image generation accepts arbitrary visual prompts without defaulting to Storybook Anime

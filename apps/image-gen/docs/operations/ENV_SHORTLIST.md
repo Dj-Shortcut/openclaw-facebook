@@ -13,7 +13,8 @@ These variables are the first things to verify when the bot does not reply or Me
 | `FB_APP_SECRET` | Webhook signature verification | Required for signed webhook validation. |
 | `MESSENGER_PAGE_ID` | Canonical `m.me` share links | Needed for share/invite flows. |
 | `APP_BASE_URL` | Public links and generated image URLs | Must be `https://` in production. |
-| `ENABLE_FACE_MEMORY` | Optional Messenger 30-day source-photo reuse | Keep `false` until legal approves consent, privacy, and deletion copy. |
+| `ENABLE_FACE_MEMORY` | Optional Messenger source-photo reuse | Keep `false` until legal approves consent, privacy, and deletion copy. |
+| `FACE_MEMORY_RETENTION_DAYS` | Optional face-memory retention window | Defaults to `30`; positive whole numbers only. Invalid values fall back to `30`. |
 
 ## 2. OpenAI paths
 
@@ -52,8 +53,9 @@ When the bot seems broken, check in this order:
 If face memory is involved, also check:
 
 7. `ENABLE_FACE_MEMORY`
-8. `ADMIN_TOKEN`
-9. Storage proxy delete support: `DELETE /v1/storage/object`
+8. `FACE_MEMORY_RETENTION_DAYS`
+9. `ADMIN_TOKEN`
+10. Storage proxy delete support: `DELETE /v1/storage/object`
 
 ## 5. Current local-dev gotchas
 

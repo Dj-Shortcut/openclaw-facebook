@@ -123,7 +123,7 @@ flowchart TD
 7. Shared logic returns channel-agnostic outbound intents (`BotResponse`).
 8. Channel adapters translate those intents into Messenger or WhatsApp sends.
 9. Image flow state is still updated directly in channel orchestration (`setFlowState`, `setPendingImage`, `setLastGenerationContext`, ...). Messenger now treats free image prompts as text-to-image by default; source-image generation only uses a stored/uploaded photo when the user explicitly asks to edit/restyle that photo.
-10. If Messenger face memory is enabled, the first source-photo upload asks for explicit 30-day reuse consent before asking for a natural-language edit prompt.
+10. If Messenger face memory is enabled, the first source-photo upload asks for explicit reuse consent for the configured retention window before asking for a natural-language edit prompt.
 11. If generation is triggered:
    - state -> `PROCESSING`,
    - OpenAI image generator configuration,

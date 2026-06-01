@@ -21,6 +21,7 @@ import { createContext } from "./context";
 import { serveStatic } from "./vite";
 import { assertPrivacyConfig } from "./privacy";
 import { applySecurityHeaders } from "./securityHeaders";
+import { formatFaceMemoryRetentionDays } from "./faceMemoryRetention";
 import {
   getGeneratedImage,
   hashGeneratedImageToken,
@@ -278,6 +279,7 @@ async function startServer() {
   );
 
   app.get("/privacy", (_req, res) => {
+    const faceMemoryRetention = formatFaceMemoryRetentionDays("en");
     res.type("html").send(`
     <!DOCTYPE html>
     <html>
@@ -326,7 +328,7 @@ async function startServer() {
 
       <h2>Image handling and retention</h2>
       <p>Images are processed for the purpose of generating or editing the image you requested.</p>
-      <p><strong>Optional photo memory:</strong> If you give explicit permission, we keep your uploaded photo for a maximum of 30 days so you do not have to upload it again each time. This is optional. You can withdraw consent at any time by sending "delete my data" in Messenger. Dutch-speaking users may send "verwijder mijn data". After 30 days or withdrawal, the retained photo is permanently deleted. We use it only to generate new images for you.</p>
+      <p><strong>Optional photo memory:</strong> If you give explicit permission, we keep your uploaded photo for a maximum of ${faceMemoryRetention} so you do not have to upload it again each time. This is optional. You can withdraw consent at any time by sending "delete my data" in Messenger. Dutch-speaking users may send "verwijder mijn data". After ${faceMemoryRetention} or withdrawal, the retained photo is permanently deleted. We use it only to generate new images for you.</p>
       <p>We do not sell your images.</p>
       <p>We do not use your images to market to you.</p>
       <p>We do not share your images with third parties except as required to provide the service (e.g., image processing providers).</p>

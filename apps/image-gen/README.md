@@ -168,9 +168,9 @@ Because the persisted source image is fetched again during generation, `SOURCE_I
 
 ## Messenger face memory
 
-Messenger face memory is an optional 30-day source-photo reuse feature. It is disabled by default with `ENABLE_FACE_MEMORY=false` and must remain disabled until the consent copy, privacy policy, and deletion language are approved.
+Messenger face memory is an optional source-photo reuse feature. It is disabled by default with `ENABLE_FACE_MEMORY=false` and must remain disabled until the consent copy, privacy policy, and deletion language are approved. Retention defaults to 30 days and can be configured with `FACE_MEMORY_RETENTION_DAYS`.
 
-When enabled, the first photo upload asks the user whether Leaderbot may keep the uploaded photo for 30 days. A positive answer stores consent metadata and the retained source-image URL. A negative answer keeps the normal one-photo flow without reusable face memory. Users can delete retained face-memory data by sending `verwijder mijn data` or `delete my data`. Stored source-image URLs are refreshed through the storage proxy before generation when the proxy is configured.
+When enabled, the first photo upload asks the user whether Leaderbot may keep the uploaded photo for the configured retention window. A positive answer stores consent metadata and the retained source-image URL. A negative answer keeps the normal one-photo flow without reusable face memory. Users can delete retained face-memory data by sending `verwijder mijn data` or `delete my data`. Stored source-image URLs are refreshed through the storage proxy before generation when the proxy is configured.
 
 For the full legal/ops checklist, rollout guidance, and kill-switch procedure, see [`docs/face-memory.md`](docs/face-memory.md).
 
@@ -236,7 +236,8 @@ Operational env shortlist: [`docs/operations/ENV_SHORTLIST.md`](docs/operations/
 - `OAUTH_SERVER_URL` (enables OAuth route initialization)
 - `LOG_LEVEL`, `DEBUG_STATE_DUMP`, `DEBUG_IMAGE_PROOF` (diagnostics)
 - `MESSENGER_QUOTA_BYPASS_IDS` (comma-separated PSIDs or hashed user keys that skip Messenger daily quota; intended for internal testing/admin)
-- `ENABLE_FACE_MEMORY` (`false` by default; enables explicit-consent 30-day Messenger source-photo reuse after legal approval)
+- `ENABLE_FACE_MEMORY` (`false` by default; enables explicit-consent Messenger source-photo reuse after legal approval)
+- `FACE_MEMORY_RETENTION_DAYS` (optional positive whole number; defaults to `30` and controls retained source-photo expiry plus Redis state TTL buffer)
 - `PORT` (default `8080`)
 - `BUILT_IN_FORGE_API_URL`, `BUILT_IN_FORGE_API_KEY` (used by the storage proxy contract; in production image generation these should point to the R2-backed proxy so generated Messenger attachment URLs are durable across Fly machines)
 - `VITE_APP_ID`, `DATABASE_URL`, `OWNER_OPEN_ID`, `BUILT_IN_FORGE_API_URL`, `BUILT_IN_FORGE_API_KEY` (app/data integrations exposed via `server/_core/env.ts`)

@@ -17,3 +17,12 @@ export function getFaceMemoryRetentionMs(): number {
 export function getFaceMemoryStateTtlSeconds(): number {
   return (getFaceMemoryRetentionDays() + FACE_MEMORY_STATE_TTL_BUFFER_DAYS) * 24 * 60 * 60;
 }
+
+export function formatFaceMemoryRetentionDays(lang: "en" | "nl"): string {
+  const days = getFaceMemoryRetentionDays();
+  if (lang === "en") {
+    return `${days} ${days === 1 ? "day" : "days"}`;
+  }
+
+  return `${days} ${days === 1 ? "dag" : "dagen"}`;
+}
