@@ -128,16 +128,13 @@ function isVisualCorrectionRequest(text: string): boolean {
 function isPersonalSourceImageTransformRequest(text: string): boolean {
   const normalized = normalizeImageRequestText(text);
   return (
-    /\b(?:maak|verander|tover)\s+(?:me|mij)\s+(?:een|als|tot|in)\b/.test(normalized) ||
-    /\b(?:maak|verander|tover)\s+(?:me|mij)\s+\S+/.test(normalized) ||
-    /\b(?:kan|kun)\s+(?:je|jij)\s+(?:me|mij)\s+(?:een|als|tot|in)\b.*\b(?:maken|veranderen|omtoveren)\b/.test(
+    /\b(?:verander|tover)\s+(?:me|mij)\s+(?:in|naar|tot)\b/.test(normalized) ||
+    /\bzet\s+(?:me|mij)\s+(?:neer\s+)?als\b/.test(normalized) ||
+    /\b(?:kan|kun)\s+(?:je|jij)\s+(?:me|mij)\s+(?:in|naar|tot|als)\b.*\b(?:veranderen|omtoveren|maken)\b/.test(
       normalized
     ) ||
-    /\b(?:kan|kun)\s+(?:je|jij)\s+(?:me|mij)\s+\S+.*\b(?:maken|veranderen|omtoveren)\b/.test(
-      normalized
-    ) ||
-    /\b(?:make|turn|transform)\s+me\s+(?:a|an|into)\b/.test(normalized) ||
-    /\b(?:can|could)\s+you\s+(?:make|turn|transform)\s+me\s+(?:a|an|into)\b/.test(
+    /\b(?:make|turn|transform)\s+me\s+(?:look\s+like|into)\b/.test(normalized) ||
+    /\b(?:can|could)\s+you\s+(?:make|turn|transform)\s+me\s+(?:look\s+like|into)\b/.test(
       normalized
     )
   );
@@ -675,7 +672,10 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       );
 
       const state = await getOrCreateState(psid);
+      const shouldSendSourceImage =
+        resolvedGenerationKind === "source_image_edit";
       const sourceIsGeneratedResult = Boolean(
+        shouldSendSourceImage &&
         sourceImageUrl &&
           (sourceImageUrl === state.lastGeneratedUrl ||
             sourceImageUrl === state.lastImageUrl)
@@ -685,13 +685,17 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
         userId,
         reqId,
         promptHint,
-        sourceImageUrl,
-        lastPhotoUrl: sourceIsGeneratedResult
-          ? sourceImageUrl
-          : state.lastPhotoUrl,
-        lastPhotoSource: sourceIsGeneratedResult
-          ? "stored"
-          : state.lastPhotoSource,
+        sourceImageUrl: shouldSendSourceImage ? sourceImageUrl : undefined,
+        lastPhotoUrl: shouldSendSourceImage
+          ? sourceIsGeneratedResult
+            ? sourceImageUrl
+            : state.lastPhotoUrl
+          : undefined,
+        lastPhotoSource: shouldSendSourceImage
+          ? sourceIsGeneratedResult
+            ? "stored"
+            : state.lastPhotoSource
+          : undefined,
       });
 
       if (generationResult.kind === "success") {
