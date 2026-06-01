@@ -123,7 +123,7 @@ describe("rateLimitFeature", () => {
 });
 
 describe("freeformTransformFeature", () => {
-  it("turns a Dutch free-form photo request into a prompt-first source edit", async () => {
+  it("does not treat ambiguous Dutch make-me create wording as a source edit", async () => {
     const runImageGeneration = vi.fn(async () => undefined);
 
     const result = await freeformTransformFeature.onText?.(
@@ -139,17 +139,11 @@ describe("freeformTransformFeature", () => {
       })
     );
 
-    expect(result).toEqual({ handled: true });
-    expect(runImageGeneration).toHaveBeenCalledWith(
-      "https://img.example/source.jpg",
-      expect.stringContaining(
-        "User requested transformation: Maak me een Romeinse soldaat"
-      ),
-      "source_image_edit"
-    );
+    expect(result).toEqual({ handled: false });
+    expect(runImageGeneration).not.toHaveBeenCalled();
   });
 
-  it("handles natural Dutch make-me requests with a retained photo", async () => {
+  it("does not treat natural Dutch make-me create requests as source edits", async () => {
     const runImageGeneration = vi.fn(async () => undefined);
 
     const result = await freeformTransformFeature.onText?.(
@@ -165,24 +159,18 @@ describe("freeformTransformFeature", () => {
       })
     );
 
-    expect(result).toEqual({ handled: true });
-    expect(runImageGeneration).toHaveBeenCalledWith(
-      "https://img.example/source.jpg",
-      expect.stringContaining(
-        "User requested transformation: Kan je me een samurai maken"
-      ),
-      "source_image_edit"
-    );
+    expect(result).toEqual({ handled: false });
+    expect(runImageGeneration).not.toHaveBeenCalled();
   });
 
-  it("uses the generated result for follow-up make-me transforms when both sources exist", async () => {
+  it("uses the generated result for explicit transform requests when both sources exist", async () => {
     const runImageGeneration = vi.fn(async () => undefined);
 
     const result = await freeformTransformFeature.onText?.(
       makeContext({
         lang: "nl",
-        messageText: "Maak me een nog sterkere samurai",
-        normalizedText: "maak me een nog sterkere samurai",
+        messageText: "Verander me in een nog sterkere samurai",
+        normalizedText: "verander me in een nog sterkere samurai",
         runImageGeneration,
         state: makeState({
           lastGeneratedUrl: "https://img.example/generated.jpg",
@@ -195,12 +183,12 @@ describe("freeformTransformFeature", () => {
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
       "https://img.example/generated.jpg",
-      expect.stringContaining("User requested transformation: Maak me een nog sterkere samurai"),
+      expect.stringContaining("User requested transformation: Verander me in een nog sterkere samurai"),
       "source_image_edit"
     );
   });
 
-  it("generates prompt-first when a make-me request has no source photo", async () => {
+  it("leaves ambiguous make-me requests without a source photo for image intent", async () => {
     const sendText = vi.fn(async () => undefined);
     const setFlowState = vi.fn(async () => undefined);
     const runImageGeneration = vi.fn(async () => undefined);
@@ -216,14 +204,10 @@ describe("freeformTransformFeature", () => {
       })
     );
 
-    expect(result).toEqual({ handled: true });
+    expect(result).toEqual({ handled: false });
     expect(setFlowState).not.toHaveBeenCalled();
     expect(sendText).not.toHaveBeenCalled();
-    expect(runImageGeneration).toHaveBeenCalledWith(
-      undefined,
-      "Maak me een Romeinse soldaat",
-      "text_to_image"
-    );
+    expect(runImageGeneration).not.toHaveBeenCalled();
   });
 });
 
@@ -352,7 +336,7 @@ describe("imageRequestFeature", () => {
     expect(runImageGeneration).not.toHaveBeenCalled();
   });
 
-  it("uses an active photo context for visual requests", async () => {
+  it("keeps ordinary visual requests prompt-first even with active photo context", async () => {
     const runImageGeneration = vi.fn(async () => undefined);
 
     const result = await imageRequestFeature.onText?.(
@@ -371,13 +355,39 @@ describe("imageRequestFeature", () => {
 
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
-      "https://img.example/source.jpg",
+      undefined,
       "Maak een stoere poster voor mijn feest",
-      "source_image_edit"
+      "text_to_image"
     );
   });
 
-  it("uses the generated result for visual follow-ups when both sources exist", async () => {
+  it("keeps ambiguous make-me visual requests prompt-first with generated context", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Maak me een samurai aub",
+        normalizedText: "maak me een samurai aub",
+        hasPhoto: true,
+        runImageGeneration,
+        state: makeState({
+          lastGeneratedUrl: "https://img.example/generated-landscape.jpg",
+          lastPhotoUrl: "https://img.example/source.jpg",
+          lastPhoto: "https://img.example/source.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      undefined,
+      "Maak me een samurai aub",
+      "text_to_image"
+    );
+  });
+
+  it("uses the generated result for explicit source-referenced visual follow-ups", async () => {
     const runImageGeneration = vi.fn(async () => undefined);
 
     const result = await imageRequestFeature.onText?.(
@@ -603,6 +613,52 @@ describe("conversationalEditingFeature", () => {
       expect(runImageGeneration).toHaveBeenCalledWith(
         "https://img.example/generated.jpg",
         "make it darker",
+        "source_image_edit"
+      );
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("routes missing-subject complaints as follow-up corrections", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        output_text: JSON.stringify({
+          shouldEdit: true,
+          style: null,
+          promptHint: "make the samurai clearly visible as the main subject",
+        }),
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    try {
+      const result = await conversationalEditingFeature.onText?.(
+        makeContext({
+          messageText: "Ik zie geen samurai bro",
+          normalizedText: "ik zie geen samurai bro",
+          runImageGeneration,
+          state: makeState({
+            lastPrompt: "Maak een samurai op een paard",
+            lastGeneratedUrl: "https://img.example/generated.jpg",
+          }),
+        })
+      );
+
+      expect(result).toEqual({ handled: true });
+      expect(runImageGeneration).toHaveBeenCalledWith(
+        "https://img.example/generated.jpg",
+        "Maak een samurai op een paard | make the samurai clearly visible as the main subject",
         "source_image_edit"
       );
     } finally {
