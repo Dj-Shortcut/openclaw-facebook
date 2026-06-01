@@ -124,7 +124,7 @@ describe("conversational edit interpreter", () => {
     expect(body.input[0]?.content).toContain("Never map user wording");
   });
 
-  it("ignores director mode decisions and keeps them as prompt-first edits", async () => {
+  it("keeps legacy aesthetic wording as prompt-first edits", async () => {
     process.env.OPENAI_API_KEY = "dummy-key";
 
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
@@ -153,7 +153,7 @@ describe("conversational edit interpreter", () => {
     const body = JSON.parse(String(request.body)) as {
       input: Array<{ role: string; content: string }>;
     };
-    expect(body.input[0]?.content).not.toContain("last known director mode");
+    expect(body.input[0]?.content).not.toContain("director mode");
     expect(body.input[0]?.content).not.toContain("midnight_luxury");
     expect(body.input[0]?.content).not.toContain("old_money");
     expect(body.input[0]?.content).toContain("promptHint");

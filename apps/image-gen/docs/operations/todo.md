@@ -98,6 +98,7 @@ Open cost-control work:
 - [x] Image-generation success/failure follow-ups use channel-neutral conversation actions before Messenger rendering
 - [x] Removed unused director prompt/social-copy modules so stale template presets cannot re-enter generation output
 - [x] Removed director-mode fields from active generation/runtime state so stale template names cannot influence prompts or follow-up edits
+- [x] Made image prompt building more prompt-faithful by removing role/template language and blocking default cinematic/editorial/anime/luxury aesthetics unless requested
 
 ## Historisch afgerond
 
