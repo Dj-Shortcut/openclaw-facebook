@@ -58,7 +58,7 @@
     "image-gen:check": "pnpm --dir apps/image-gen check",
     "image-gen:test": "pnpm --dir apps/image-gen test",
     "image-gen:build": "pnpm --dir apps/image-gen build",
-    "image-gen:deploy": "pnpm --dir apps/image-gen fly deploy -a leaderbot-fb-image-gen",
+    "image-gen:deploy": "cd apps/image-gen && fly deploy -a leaderbot-fb-image-gen",
     "fallow": "npx --yes fallow@2.27.0 --root .",
     "fallow:list": "npx --yes fallow@2.27.0 --root . list",
     "fallow:production": "npx --yes fallow@2.27.0 --root . --production",
