@@ -658,7 +658,53 @@ describe("conversationalEditingFeature", () => {
       expect(result).toEqual({ handled: true });
       expect(runImageGeneration).toHaveBeenCalledWith(
         "https://img.example/generated.jpg",
-        "Maak een samurai op een paard | make the samurai clearly visible as the main subject",
+        "make the samurai clearly visible as the main subject",
+        "source_image_edit"
+      );
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not prepend the previous prompt to follow-up edit instructions", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        output_text: JSON.stringify({
+          shouldEdit: true,
+          style: null,
+          promptHint: "add a clear samurai as the central subject",
+        }),
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    try {
+      const result = await conversationalEditingFeature.onText?.(
+        makeContext({
+          messageText: "Er mist een samurai",
+          normalizedText: "er mist een samurai",
+          runImageGeneration,
+          state: makeState({
+            lastPrompt: "Maak een rustig landschap met een windmolen",
+            lastGeneratedUrl: "https://img.example/generated.jpg",
+          }),
+        })
+      );
+
+      expect(result).toEqual({ handled: true });
+      expect(runImageGeneration).toHaveBeenCalledWith(
+        "https://img.example/generated.jpg",
+        "add a clear samurai as the central subject",
         "source_image_edit"
       );
     } finally {

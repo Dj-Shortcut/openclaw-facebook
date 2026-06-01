@@ -43,7 +43,7 @@ describe("text-to-image prompt builder", () => {
     expect(prompt).toContain("Never substitute the requested subject");
     expect(prompt).toContain("follow it directly instead of rewriting");
     expect(prompt).toContain("neutral visual specifics");
-    expect(prompt).toContain("Do not default to cinematic");
+    expect(prompt).toContain("Do not add an aesthetic genre");
     expect(prompt).toContain("clean image quality");
     expect(prompt).toContain("Avoid generic filler");
     expect(prompt).not.toContain("senior creative director");
@@ -70,7 +70,7 @@ describe("text-to-image prompt builder", () => {
     expect(prompt).toContain("coherent lighting");
     expect(prompt).toContain("clean edges");
     expect(prompt).toContain("prioritize that correction");
-    expect(prompt).toContain("Do not add cinematic");
+    expect(prompt).toContain("Do not add an aesthetic genre");
     expect(prompt).toContain("instead of looking like a pasted sticker");
     expect(prompt).toContain("User request: Kan je me een samurai maken");
     expect(prompt).not.toContain("prestige-film still");
