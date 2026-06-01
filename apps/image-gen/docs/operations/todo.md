@@ -15,9 +15,9 @@
 
 ### Architectuur
 
-- [ ] Centraliseer Redis client management
-- [ ] Maak Face Memory retentie configureerbaar via ENV
-- [ ] Verplaats Admin Rate Limiting van memory naar Redis
+- [x] Centraliseer Redis client management
+- [x] Maak Face Memory retentie configureerbaar via ENV
+- [x] Verplaats Admin Rate Limiting van memory naar Redis
 - [ ] Consolideer operationele logging naar `safeLog` / gestructureerde logger
 
 ### Product & bot-ervaring
