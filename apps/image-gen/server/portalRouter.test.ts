@@ -147,10 +147,10 @@ describe("portal router audit logging", () => {
         callbackMode: "hosted",
       });
     } finally {
-      if (originalFbAppId === undefined) {
-        delete process.env.FB_APP_ID;
-      } else {
+      if (originalFbAppId !== undefined) {
         process.env.FB_APP_ID = originalFbAppId;
+      } else {
+        delete process.env.FB_APP_ID;
       }
     }
 
