@@ -1,7 +1,8 @@
 import { TRPCError } from "@trpc/server";
 import { ENV } from "./env";
+import { safeLog } from "./logger";
 
-export type NotificationPayload = {
+type NotificationPayload = {
   title: string;
   content: string;
 };
@@ -98,17 +99,21 @@ export async function notifyOwner(
 
     if (!response.ok) {
       const detail = await response.text().catch(() => "");
-      console.warn(
-        `[Notification] Failed to notify owner (${response.status} ${response.statusText})${
-          detail ? `: ${detail}` : ""
-        }`
-      );
+      safeLog("owner_notification_failed", {
+        level: "warn",
+        status: response.status,
+        statusText: response.statusText,
+        hasDetail: Boolean(detail),
+      });
       return false;
     }
 
     return true;
   } catch (error) {
-    console.warn("[Notification] Error calling notification service:", error);
+    safeLog("owner_notification_request_failed", {
+      level: "warn",
+      error,
+    });
     return false;
   }
 }

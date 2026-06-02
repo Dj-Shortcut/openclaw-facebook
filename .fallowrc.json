@@ -1,0 +1,11 @@
+{
+  "ignoreDependencies": ["@sentry/node", "@trpc/server"],
+  "overrides": [
+    {
+      "files": ["apps/image-gen/**/*.{ts,tsx}"],
+      "rules": {
+        "unlisted-dependencies": "off"
+      }
+    }
+  ]
+}

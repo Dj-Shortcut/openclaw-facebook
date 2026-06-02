@@ -39,6 +39,7 @@ import {
   isMessengerGenerationWorkerOnlyMode,
 } from "./messengerGenerationQueue";
 import { createLogger } from "./logger";
+import { safeLog } from "./logger";
 
 const OPENAI_IMAGES_PROVIDER = "openai-images" as const;
 
@@ -168,16 +169,12 @@ async function prepareGenerationInput(
   const promptStartedAt = Date.now();
   const prompt = buildPromptForGeneration(input);
   const promptBuildMs = Date.now() - promptStartedAt;
-  console.info(
-    JSON.stringify({
-      level: "info",
-      msg: "image_prompt_built",
-      reqId: input.reqId,
-      generationKind: input.generationKind ?? null,
-      durationMs: promptBuildMs,
-      promptChars: prompt.length,
-    })
-  );
+  safeLog("image_prompt_built", {
+    reqId: input.reqId,
+    generationKind: input.generationKind ?? null,
+    durationMs: promptBuildMs,
+    promptChars: prompt.length,
+  });
 
   return {
     hasSourceImage: computeHasSourceImage(input),
@@ -252,17 +249,13 @@ export class OpenAiImageGenerator implements ImageGenerator {
         typeof requestContext.requestInit.body === "string"
           ? Buffer.byteLength(requestContext.requestInit.body)
           : undefined;
-      console.info(
-        JSON.stringify({
-          level: "info",
-          msg: "openai_image_payload_built",
-          reqId: input.reqId,
-          durationMs: openAiPayloadBuildMs,
-          promptChars: preparedInput.prompt.length,
-          sourceImageBytes: openAiInputByteLen,
-          payloadBytes,
-        })
-      );
+      safeLog("openai_image_payload_built", {
+        reqId: input.reqId,
+        durationMs: openAiPayloadBuildMs,
+        promptChars: preparedInput.prompt.length,
+        sourceImageBytes: openAiInputByteLen,
+        payloadBytes,
+      });
 
       await assertMessengerDailyImageBudgetAvailable({ reqId: input.reqId });
       const response = await fetchOpenAiImageResponse(requestContext, {

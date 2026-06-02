@@ -21,6 +21,7 @@ import type { GenerationKind } from "./image-generation/generationTypes";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import { storageGet, storageKeyFromPublicUrl } from "../storage";
 import { MessengerDailyImageBudgetExceededError } from "./generationGuard";
+import { safeLog } from "./logger";
 
 type GenerationProof = {
   incomingLen: number;
@@ -97,7 +98,8 @@ function logIgnoredSourceImageOverride(input: RuntimeSourceInput & { reqId: stri
     input.sourceImageUrl &&
     input.sourceImageUrl !== input.lastPhotoUrl
   ) {
-    console.warn("generation_source_image_override_ignored", {
+    safeLog("generation_source_image_override_ignored", {
+      level: "warn",
       reqId: input.reqId,
     });
   }
@@ -163,9 +165,11 @@ async function resolveStoredRuntimeSourceUrl(input: {
       trustedSourceImageUrl: true,
     };
   } catch (error) {
-    console.warn("stored_source_image_url_refresh_failed", {
+    safeLog("stored_source_image_url_refresh_failed", {
+      level: "warn",
+      reqId: input.reqId,
       storageKey,
-      error: error instanceof Error ? error.message : String(error),
+      error,
     });
     return {
       resolvedSourceImageUrl: originalSourceImageUrl,
@@ -227,7 +231,7 @@ export async function executeGenerationFlow(
     resolvedSourceImageUrl,
   });
 
-  console.info("generation_source_image_selected", {
+  safeLog("generation_source_image_selected", {
     reqId: input.reqId,
     hasExplicitSourceImageUrl: Boolean(input.sourceImageUrl),
     hasLastPhotoUrl: Boolean(input.lastPhotoUrl),

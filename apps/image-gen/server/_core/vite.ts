@@ -5,6 +5,7 @@ import { nanoid } from "nanoid";
 import path from "path";
 import { createGlobalHttpRateLimiter, DEFAULT_MAX_REQUESTS, DEFAULT_WINDOW_MS } from "./httpRateLimit";
 import rateLimit from "express-rate-limit";
+import { safeLog } from "./logger";
 
 type ViteCreateServer = (typeof import("vite"))["createServer"];
 const PROJECT_ROOT_MARKERS = ["package.json", "vite.config.ts"] as const;
@@ -106,9 +107,10 @@ export function serveStatic(app: Express, staticRoot?: string) {
   const distPath = distPathCandidates.find((candidate) => fs.existsSync(candidate));
 
   if (!distPath) {
-    console.error(
-      `Could not find a build directory. Tried: ${distPathCandidates.join(", ")}. Make sure to build the client first.`
-    );
+    safeLog("static_build_directory_missing", {
+      level: "error",
+      candidateCount: distPathCandidates.length,
+    });
     return;
   }
 

@@ -11,6 +11,7 @@ import { toLogUser } from "../privacy";
 import { sendWhatsAppBotStateResponse } from "../whatsappResponseService";
 import type { NormalizedWhatsAppEvent, WhatsAppHandlerContext } from "../whatsappTypes";
 import { runWhatsAppTextFeatures } from "./textContext";
+import { safeLog } from "../logger";
 
 export async function handleWhatsAppTextEvent(
   event: NormalizedWhatsAppEvent,
@@ -54,9 +55,9 @@ export async function handleWhatsAppTextEvent(
         messageText,
         normalizedText: currentNormalizedText,
         hasPhoto,
-      }),
+    }),
     logState: (currentState, logContext) => {
-      console.log("[whatsapp webhook] shared state", {
+      safeLog("whatsapp_shared_state", {
         context: logContext,
         user: toLogUser(event.userId),
         stage: currentState.stage,

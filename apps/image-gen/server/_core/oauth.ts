@@ -4,6 +4,7 @@ import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import * as db from "../db";
 import { getSessionCookieOptions } from "./cookies";
+import { safeLog } from "./logger";
 
 const OAUTH_STATE_COOKIE_NAME = "lb_oauth_state_nonce";
 
@@ -137,7 +138,10 @@ export function registerOAuthRoutes(app: Express) {
         res.redirect(302, "/");
       } catch (error) {
         clearOAuthStateCookie(req, res);
-        console.error("[OAuth] Callback failed", error);
+        safeLog("oauth_callback_failed", {
+          level: "error",
+          error: error instanceof Error ? error.message : String(error),
+        });
         res.status(500).json({ error: "OAuth callback failed" });
       }
     })();

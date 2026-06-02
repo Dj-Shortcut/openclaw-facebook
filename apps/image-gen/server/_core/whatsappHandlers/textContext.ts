@@ -9,22 +9,23 @@ import { toLogUser } from "../privacy";
 import { createWhatsAppResponseSender } from "../whatsappResponseService";
 import { runWhatsAppImageGeneration } from "../whatsappFlows/imageGenerationFlow";
 import type { NormalizedWhatsAppEvent, WhatsAppHandlerContext } from "../whatsappTypes";
+import { safeLog } from "../logger";
 
 function createWhatsAppFeatureLogger(userId: string): BotLogger {
   return {
     info(event, details = {}) {
-      console.info("[whatsapp feature]", event, { user: toLogUser(userId), ...details });
+      safeLog(event, { ...details, user: toLogUser(userId) });
     },
     warn(event, details = {}) {
-      console.warn("[whatsapp feature]", event, { user: toLogUser(userId), ...details });
+      safeLog(event, { ...details, user: toLogUser(userId), level: "warn" });
     },
     error(event, details = {}) {
-      console.error("[whatsapp feature]", event, { user: toLogUser(userId), ...details });
+      safeLog(event, { ...details, user: toLogUser(userId), level: "error" });
     },
   };
 }
 
-export function createWhatsAppTextContext(
+function createWhatsAppTextContext(
   event: NormalizedWhatsAppEvent,
   context: WhatsAppHandlerContext,
   state: BotTextContext["state"],

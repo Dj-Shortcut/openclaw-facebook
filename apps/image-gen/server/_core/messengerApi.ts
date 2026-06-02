@@ -1,5 +1,7 @@
 import { hasOpenMessengerResponseWindow } from "./messengerState";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
+import { safeLog } from "./logger";
+export { safeLog } from "./logger";
 
 const GRAPH_API_VERSION = "v21.0";
 
@@ -227,44 +229,6 @@ async function parseSendOutcome(response: Response): Promise<MessengerSendOutcom
   }
 }
 
-function shouldDropLogKey(key: string): boolean {
-  const lowered = key.toLowerCase();
-  return [
-    "token",
-    "psid",
-    "text",
-    "url",
-    "payload",
-    "attachment",
-    "message",
-    "sender",
-    "body",
-  ].some(fragment => lowered.includes(fragment));
-}
-
-function redactLogDetails(
-  details: Record<string, unknown>
-): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(details)
-      .filter(([key]) => !shouldDropLogKey(key))
-      .map(([key, value]) => {
-        if (typeof value === "string" && key === "user") {
-          return [key, value.slice(0, 8)];
-        }
-
-        return [key, value];
-      })
-  );
-}
-
-export function safeLog(
-  event: string,
-  details: Record<string, unknown> = {}
-): void {
-  console.log(`[messenger] ${event}`, redactLogDetails(details));
-}
-
 export async function sendText(
   psid: string,
   text: string
@@ -289,13 +253,7 @@ export async function sendImage(
 ): Promise<MessengerSendOutcome> {
   const imageUrlSummary = summarizeSensitiveUrl(imageUrl);
   const startedAt = Date.now();
-  console.info(
-    JSON.stringify({
-      level: "info",
-      msg: "messenger_image_send_started",
-      imageUrl: imageUrlSummary,
-    })
-  );
+  safeLog("messenger_image_send_started", { imageUrl: imageUrlSummary });
 
   const outcome = await sendMessage(
     psid,
@@ -312,40 +270,30 @@ export async function sendImage(
       maxRetries: 2,
       retryBaseMs: 150,
       onRetry: (attempt, maxAttempts, error) => {
-        console.warn(
-          JSON.stringify({
-            level: "warn",
-            msg: "messenger_image_retry",
-            attempt,
-            maxAttempts,
-            imageUrl: imageUrlSummary,
-            errorCode: error.name,
-          })
-        );
+        safeLog("messenger_image_retry", {
+          level: "warn",
+          attempt,
+          maxAttempts,
+          imageUrl: imageUrlSummary,
+          errorCode: error.name,
+        });
       },
       onFinalFailure: (attempts, _maxAttempts, error) => {
-        console.error(
-          JSON.stringify({
-            level: "error",
-            msg: "messenger_image_send_failed",
-            attempts,
-            imageUrl: imageUrlSummary,
-            errorCode: error.name,
-          })
-        );
+        safeLog("messenger_image_send_failed", {
+          level: "error",
+          attempts,
+          imageUrl: imageUrlSummary,
+          errorCode: error.name,
+        });
       },
     }
   );
-  console.info(
-    JSON.stringify({
-      level: "info",
-      msg: "messenger_image_send_completed",
-      imageUrl: imageUrlSummary,
-      durationMs: Date.now() - startedAt,
-      sent: outcome.sent,
-      reason: outcome.sent ? undefined : outcome.reason,
-    })
-  );
+  safeLog("messenger_image_send_completed", {
+    imageUrl: imageUrlSummary,
+    durationMs: Date.now() - startedAt,
+    sent: outcome.sent,
+    reason: outcome.sent ? undefined : outcome.reason,
+  });
   return outcome;
 }
 

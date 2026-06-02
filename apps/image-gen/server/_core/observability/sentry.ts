@@ -1,9 +1,10 @@
 import * as Sentry from "@sentry/node";
+import { safeLog } from "../logger";
 
 export function initSentry() {
   const dsn = process.env.SENTRY_DSN;
   if (!dsn) {
-    console.log("[Sentry] disabled (no DSN)");
+    safeLog("sentry_disabled", { reason: "missing_dsn" });
     return;
   }
 
@@ -23,7 +24,7 @@ export function initSentry() {
     },
   });
 
-  console.log("[Sentry] initialized", { hasDsn: !!process.env.SENTRY_DSN });
+  safeLog("sentry_initialized", { hasDsn: true });
 }
 
 export function captureException(

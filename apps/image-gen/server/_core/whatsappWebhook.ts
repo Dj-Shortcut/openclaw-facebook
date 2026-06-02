@@ -10,6 +10,7 @@ import { handleWhatsAppTextEvent } from "./whatsappHandlers/textHandler";
 import { sendWhatsAppButtonsReply, sendWhatsAppTextReply } from "./whatsappResponseService";
 import { claimWebhookReplayKey } from "./webhookReplayProtection";
 import type { NormalizedWhatsAppEvent } from "./whatsappTypes";
+import { safeLog } from "./logger";
 
 const DEFAULT_LANG = normalizeLang(process.env.DEFAULT_MESSENGER_LANG);
 
@@ -38,7 +39,8 @@ async function sendUnsupportedMessageReply(
   event: NormalizedWhatsAppEvent,
   lang: typeof DEFAULT_LANG
 ): Promise<void> {
-  console.warn("[whatsapp webhook] unsupported inbound message type", {
+  safeLog("whatsapp_unsupported_inbound_message_type", {
+    level: "warn",
     user: toLogUser(event.userId),
     rawMessageType: event.rawMessageType,
   });
@@ -69,7 +71,8 @@ async function dispatchWhatsAppEvent(
     return;
   }
 
-  console.warn("[whatsapp webhook] no handler for inbound event", {
+  safeLog("whatsapp_no_handler_for_inbound_event", {
+    level: "warn",
     user: toLogUser(event.userId),
     messageType: event.messageType,
     rawMessageType: event.rawMessageType,
@@ -86,7 +89,7 @@ async function processSingleWhatsAppEvent(
   const context = createWhatsAppEventContext(event);
   const state = await Promise.resolve(getOrCreateState(event.senderId));
 
-  console.log("[whatsapp webhook] normalized inbound event", {
+  safeLog("whatsapp_normalized_inbound_event", {
     channel: event.channel,
     user: toLogUser(event.userId),
     messageType: event.messageType,
@@ -140,7 +143,7 @@ async function claimWhatsAppEventReplayOrLog(
     return true;
   }
 
-  console.info("[whatsapp webhook] replay ignored", {
+  safeLog("whatsapp_replay_ignored", {
     user: toLogUser(event.userId),
   });
   return false;
@@ -153,7 +156,8 @@ async function safelyProcessSingleWhatsAppEvent(
   try {
     await processSingleWhatsAppEvent(event);
   } catch (error) {
-    console.error("[whatsapp webhook] reply failed", {
+    safeLog("whatsapp_reply_failed", {
+      level: "error",
       user: toLogUser(event.userId),
       error: error instanceof Error ? error.message : String(error),
     });
@@ -171,7 +175,7 @@ export async function processWhatsAppWebhookPayload(
 
   const events = normalizeWhatsAppEvents(payload);
   if (events.length === 0) {
-    console.log("[whatsapp webhook] no inbound messages found");
+    safeLog("whatsapp_no_inbound_messages_found");
     return;
   }
 

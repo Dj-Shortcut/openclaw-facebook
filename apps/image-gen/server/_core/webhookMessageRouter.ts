@@ -223,15 +223,11 @@ function logParsedImageMessage(
 ): void {
   const psidHash = anonymizePsid(input.psid).slice(0, 12);
   const attachmentHostname = ctx.getAttachmentHostname(inboundImageUrl);
-  console.info(
-    JSON.stringify({
-      level: "info",
-      msg: "messenger_image_message_parsed",
-      reqId: input.reqId,
-      psidHash,
-      attachmentHostname,
-    })
-  );
+  safeLog("messenger_image_message_parsed", {
+    reqId: input.reqId,
+    psidHash,
+    attachmentHostname,
+  });
   ctx.debugWebhookLog({
     level: "debug",
     msg: "photo_received",
@@ -420,7 +416,7 @@ function logNormalizedTextHandoff(
   input: TextMessageInput,
   normalizedMessage: NormalizedInboundMessage
 ): void {
-  console.log("[messenger webhook] normalized event handoff", {
+  safeLog("messenger_normalized_event_handoff", {
     channel: normalizedMessage.channel,
     reqId: input.reqId,
     user: toLogUser(input.userId),

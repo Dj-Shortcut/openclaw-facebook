@@ -18,7 +18,7 @@ describe("generation diagnostics", () => {
   });
 
   it("emits compact redacted generation logs", () => {
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     try {
       emitGenerationDiagnostic({
@@ -34,14 +34,14 @@ describe("generation diagnostics", () => {
         },
       });
 
-      expect(infoSpy).toHaveBeenCalledTimes(1);
-      const payload = JSON.parse(String(infoSpy.mock.calls[0][0])) as {
-        msg: string;
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      const payload = JSON.parse(String(logSpy.mock.calls[0][0])) as {
+        event: string;
         sender_id_hash: string;
         durations_ms: Record<string, number>;
       };
 
-      expect(payload.msg).toBe("messenger_generation_diagnostic");
+      expect(payload.event).toBe("messenger_generation_diagnostic");
       expect(payload.sender_id_hash).toMatch(/^[a-f0-9]{12}$/);
       expect(payload.sender_id_hash).toBe(toUserKey("psid-sensitive").slice(0, 12));
       expect(JSON.stringify(payload)).not.toContain("psid-sensitive");
@@ -50,7 +50,7 @@ describe("generation diagnostics", () => {
         provider_request: 34,
       });
     } finally {
-      infoSpy.mockRestore();
+      logSpy.mockRestore();
     }
   });
 

@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
+import { safeLog } from "./logger";
 
 type MetaWebhookRequest = Request & { rawBody?: Buffer };
 
@@ -22,14 +23,20 @@ export function verifyMetaWebhookSignature(
 
   // Fail closed if app secret is not configured
   if (!appSecret) {
-    console.error("[meta webhook] signature validation failed: FB_APP_SECRET not configured");
+    safeLog("meta_webhook_signature_validation_failed", {
+      level: "error",
+      reason: "missing_app_secret",
+    });
     res.status(500).json({ error: "Server misconfiguration" });
     return;
   }
 
   // Require signature header
   if (!signature || typeof signature !== "string") {
-    console.warn("[meta webhook] signature validation failed: missing or invalid X-Hub-Signature-256 header");
+    safeLog("meta_webhook_signature_validation_failed", {
+      level: "warn",
+      reason: "missing_or_invalid_header",
+    });
     res.status(403).json({ error: "Signature verification failed" });
     return;
   }
@@ -37,14 +44,20 @@ export function verifyMetaWebhookSignature(
   // Get raw body (must be captured before JSON parsing)
   const rawBody = (req as MetaWebhookRequest).rawBody;
   if (!rawBody) {
-    console.error("[meta webhook] signature validation failed: raw body unavailable");
+    safeLog("meta_webhook_signature_validation_failed", {
+      level: "error",
+      reason: "raw_body_unavailable",
+    });
     res.status(500).json({ error: "Server misconfiguration" });
     return;
   }
 
   // Enforce expected Meta signature format
   if (!signature.startsWith("sha256=")) {
-    console.warn("[meta webhook] signature validation failed: invalid X-Hub-Signature-256 format");
+    safeLog("meta_webhook_signature_validation_failed", {
+      level: "warn",
+      reason: "invalid_header_format",
+    });
     res.status(403).json({ error: "Signature verification failed" });
     return;
   }
@@ -60,13 +73,16 @@ export function verifyMetaWebhookSignature(
   const isValid = safeCompare(signature, expectedHeader);
 
   if (!isValid) {
-    console.warn("[meta webhook] signature validation failed: digest mismatch");
+    safeLog("meta_webhook_signature_validation_failed", {
+      level: "warn",
+      reason: "digest_mismatch",
+    });
     res.status(403).json({ error: "Signature verification failed" });
     return;
   }
 
   // Signature is valid, proceed
-  console.log("[meta webhook] POST signature validated");
+  safeLog("meta_webhook_signature_validated");
   next();
 }
 
