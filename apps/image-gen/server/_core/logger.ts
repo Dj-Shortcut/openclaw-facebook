@@ -7,6 +7,22 @@ type LoggerOptions = {
   debugEnabled?: boolean;
 };
 
+const RAW_URL_KEYS = new Set([
+  "url",
+  "rawurl",
+  "originalurl",
+  "sourceurl",
+  "sourceimageurl",
+  "inboundimageurl",
+]);
+
+const SUMMARIZED_URL_KEYS = new Set([
+  "imageurl",
+  "publicurl",
+  "thumbnailurl",
+  "outputurl",
+]);
+
 function emit(level: LogLevel, fields: LogFields): void {
   const payload = { level, ...fields };
   const serialized = JSON.stringify(payload);
@@ -59,11 +75,19 @@ function shouldDropLogKey(key: string): boolean {
     return false;
   }
 
+  const normalized = lowered.replace(/[_-]/g, "");
+  if (SUMMARIZED_URL_KEYS.has(normalized)) {
+    return false;
+  }
+
+  if (RAW_URL_KEYS.has(normalized)) {
+    return true;
+  }
+
   return [
     "token",
     "psid",
     "text",
-    "url",
     "payload",
     "attachment",
     "message",
@@ -72,12 +96,53 @@ function shouldDropLogKey(key: string): boolean {
   ].some(fragment => lowered.includes(fragment));
 }
 
-function normalizeLogValue(value: unknown): unknown {
+function sanitizeString(value: string): string {
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
+    .replace(/([?&](?:access_)?token=)[^&\s]+/gi, "$1[REDACTED]")
+    .replace(/https?:\/\/[^\s)]+/gi, "[URL_REDACTED]");
+}
+
+function normalizeLogValue(
+  value: unknown,
+  seen: WeakSet<object> = new WeakSet()
+): unknown {
+  if (typeof value === "string") {
+    return sanitizeString(value);
+  }
+
   if (value instanceof Error) {
-    return {
+    const normalized: Record<string, unknown> = {
       name: value.name,
-      message: value.message,
+      message: sanitizeString(value.message),
     };
+
+    if (value.stack) {
+      normalized.stack = sanitizeString(value.stack);
+    }
+
+    if (value.cause !== undefined) {
+      normalized.cause = normalizeLogValue(value.cause, seen);
+    }
+
+    return normalized;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(item => normalizeLogValue(item, seen));
+  }
+
+  if (value && typeof value === "object") {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+
+    seen.add(value);
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => !shouldDropLogKey(key))
+        .map(([key, nested]) => [key, normalizeLogValue(nested, seen)])
+    );
   }
 
   return value;

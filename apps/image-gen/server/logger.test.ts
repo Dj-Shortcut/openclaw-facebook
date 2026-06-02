@@ -62,4 +62,41 @@ describe("safeLog", () => {
     });
     expect(payload).not.toHaveProperty("senderId");
   });
+
+  it("keeps summarized URL fields while dropping raw URL fields", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    safeLog("url_event", {
+      imageUrl: "example.com/path",
+      publicUrl: "cdn.example/path",
+      sourceImageUrl: "https://secret.example/raw-token",
+      rawUrl: "https://secret.example/raw-token",
+    });
+
+    const payload = JSON.parse(String(logSpy.mock.calls[0]?.[0]));
+
+    expect(payload).toMatchObject({
+      imageUrl: "example.com/path",
+      publicUrl: "cdn.example/path",
+    });
+    expect(payload).not.toHaveProperty("sourceImageUrl");
+    expect(payload).not.toHaveProperty("rawUrl");
+  });
+
+  it("sanitizes sensitive content inside error messages", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    safeLog("error_event", {
+      level: "error",
+      error: new Error("failed for https://example.com/secret?token=abc"),
+    });
+
+    const payload = JSON.parse(String(errorSpy.mock.calls[0]?.[0]));
+
+    expect(payload.error).toMatchObject({
+      name: "Error",
+      message: "failed for [URL_REDACTED]",
+    });
+    expect(JSON.stringify(payload)).not.toContain("abc");
+  });
 });

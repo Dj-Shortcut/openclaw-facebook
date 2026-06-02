@@ -156,6 +156,7 @@ export async function getOrCreateUserWorkspace(user: {
 }) {
   const db = await getDb();
   if (!db) {
+    logDatabaseUnavailable("get_or_create_user_workspace");
     return fallbackWorkspaceForUser(user.id, user.name);
   }
 
@@ -206,6 +207,7 @@ export async function getOrCreateUserWorkspace(user: {
 export async function getWorkspaceMembership(workspaceId: number, userId: number) {
   const db = await getDb();
   if (!db) {
+    logDatabaseUnavailable("get_workspace_membership");
     return workspaceId === userId ? { workspaceId, userId, role: "owner" as const } : null;
   }
 
@@ -226,6 +228,7 @@ export async function getWorkspaceMembership(workspaceId: number, userId: number
 export async function getOrCreateAiIdentity(workspaceId: number) {
   const db = await getDb();
   if (!db) {
+    logDatabaseUnavailable("get_or_create_ai_identity");
     return {
       id: workspaceId,
       workspaceId,
@@ -273,6 +276,7 @@ export async function updateAiIdentity(
 ) {
   const db = await getDb();
   if (!db) {
+    logDatabaseUnavailable("update_ai_identity");
     return {
       id: workspaceId,
       workspaceId,
@@ -295,6 +299,7 @@ export async function updateAiIdentity(
 export async function listChannelConnections(workspaceId: number) {
   const db = await getDb();
   if (!db) {
+    logDatabaseUnavailable("list_channel_connections");
     return [
       {
         id: workspaceId,
@@ -322,7 +327,10 @@ export async function listChannelConnections(workspaceId: number) {
 
 export async function upsertChannelConnection(values: InsertChannelConnection) {
   const db = await getDb();
-  if (!db) return null;
+  if (!db) {
+    logDatabaseUnavailable("upsert_channel_connection");
+    return null;
+  }
 
   await db.insert(channelConnections).values(values).onDuplicateKeyUpdate({
     set: {
@@ -341,6 +349,7 @@ export async function upsertChannelConnection(values: InsertChannelConnection) {
 export async function getWorkspaceUsageSummary(workspaceId: number) {
   const db = await getDb();
   if (!db) {
+    logDatabaseUnavailable("get_workspace_usage_summary");
     return {
       workspaceId,
       period: "today" as const,
@@ -374,7 +383,10 @@ export async function getWorkspaceUsageSummary(workspaceId: number) {
 
 export async function insertAuditLog(values: InsertAuditLog) {
   const db = await getDb();
-  if (!db) return null;
+  if (!db) {
+    logDatabaseUnavailable("insert_audit_log");
+    return null;
+  }
 
   return db.insert(auditLog).values(values);
 }
@@ -664,7 +676,10 @@ async function logNotification(data: InsertNotificationLog) {
  */
 async function getOrCreateMessengerState(psid: string, userKey: string) {
   const db = await getDb();
-  if (!db) return null;
+  if (!db) {
+    logDatabaseUnavailable("get_or_create_messenger_state");
+    return null;
+  }
 
   const existing = await db
     .select()
@@ -689,7 +704,10 @@ async function getOrCreateMessengerState(psid: string, userKey: string) {
  */
 async function updateMessengerState(psid: string, updates: Partial<InsertMessengerState>) {
   const db = await getDb();
-  if (!db) return;
+  if (!db) {
+    logDatabaseUnavailable("update_messenger_state");
+    return;
+  }
 
   await db
     .update(messengerState)
@@ -703,7 +721,10 @@ async function updateMessengerState(psid: string, updates: Partial<InsertMesseng
 async function checkAndIncrementMessengerQuota(psid: string): Promise<boolean> {
   void psid;
 
-  if (!(await getDb())) return true; // Fail open for quota if DB is down
+  if (!(await getDb())) {
+    logDatabaseUnavailable("check_and_increment_messenger_quota");
+    return true; // Fail open for quota if DB is down
+  }
 
   // Current implementation intentionally stays fail-open for compatibility.
   return true;

@@ -167,8 +167,9 @@ async function resolveStoredRuntimeSourceUrl(input: {
   } catch (error) {
     safeLog("stored_source_image_url_refresh_failed", {
       level: "warn",
+      reqId: input.reqId,
       storageKey,
-      error: error instanceof Error ? error.message : String(error),
+      error,
     });
     return {
       resolvedSourceImageUrl: originalSourceImageUrl,

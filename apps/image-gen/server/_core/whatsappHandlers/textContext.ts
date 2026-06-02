@@ -14,13 +14,13 @@ import { safeLog } from "../logger";
 function createWhatsAppFeatureLogger(userId: string): BotLogger {
   return {
     info(event, details = {}) {
-      safeLog(event, { user: toLogUser(userId), ...details });
+      safeLog(event, { ...details, user: toLogUser(userId) });
     },
     warn(event, details = {}) {
-      safeLog(event, { level: "warn", user: toLogUser(userId), ...details });
+      safeLog(event, { ...details, user: toLogUser(userId), level: "warn" });
     },
     error(event, details = {}) {
-      safeLog(event, { level: "error", user: toLogUser(userId), ...details });
+      safeLog(event, { ...details, user: toLogUser(userId), level: "error" });
     },
   };
 }

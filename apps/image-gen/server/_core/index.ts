@@ -115,7 +115,7 @@ function setupGlobalErrorHandlers(server: ReturnType<typeof createServer>) {
       if (closeError) {
         safeLog("server_close_failed", {
           level: "error",
-          error: closeError instanceof Error ? closeError.message : String(closeError),
+          error: closeError,
         });
       }
       process.exit(1);
@@ -138,7 +138,7 @@ function setupGlobalErrorHandlers(server: ReturnType<typeof createServer>) {
       if (closeError) {
         safeLog("server_sigterm_close_failed", {
           level: "error",
-          error: closeError instanceof Error ? closeError.message : String(closeError),
+          error: closeError,
         });
         process.exit(1);
       }
@@ -475,7 +475,7 @@ async function startServer() {
 startServer().catch((error) => {
   safeLog("server_start_failed", {
     level: "error",
-    error: error instanceof Error ? error.message : String(error),
+    error: toError(error),
   });
   process.exit(1);
 });

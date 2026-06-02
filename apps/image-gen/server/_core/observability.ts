@@ -13,6 +13,7 @@ import {
 } from "./messengerGenerationQueue";
 import { getTodayRuntimeStats } from "./botRuntimeStats";
 import { safeLog } from "./logger";
+import { hashGeneratedImageToken } from "./generatedImageStore";
 
 type RequestWithId = express.Request & {
   requestId?: string;
@@ -50,6 +51,15 @@ function escapeLabelValue(value: string): string {
 
 function normalizePath(path: string): string {
   return path || "/";
+}
+
+function sanitizeTelemetryPath(path: string): string {
+  const match = /^\/generated\/([^/.]+)\.([^/.]+)$/.exec(path);
+  if (!match) {
+    return path;
+  }
+
+  return `/generated/${hashGeneratedImageToken(match[1])}.${match[2]}`;
 }
 
 function metricLabelKey({ method, path, status }: MetricKey): string {
@@ -124,16 +134,17 @@ export function createRequestMetricsMiddleware(): express.RequestHandler {
     res.on("finish", () => {
       const durationMs =
         Number(process.hrtime.bigint() - startTime) / 1_000_000;
+      const sanitizedPath = sanitizeTelemetryPath(req.path);
       const log = {
         reqId: getRequestId(req),
         traceId: getTraceContext(req)?.traceId,
         spanId: getTraceContext(req)?.spanId,
         method: req.method,
-        path: req.path,
+        path: sanitizedPath,
         status: res.statusCode,
         ms: Number(durationMs.toFixed(1)),
       };
-      recordHttpRequestMetric(req.method, req.path, res.statusCode, durationMs);
+      recordHttpRequestMetric(req.method, sanitizedPath, res.statusCode, durationMs);
 
       // Keep info logs compact: skip webhook and health checks unless debug logging is enabled.
       const shouldLogAtInfo =

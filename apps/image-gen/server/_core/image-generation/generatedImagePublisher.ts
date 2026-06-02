@@ -40,7 +40,7 @@ export async function publishGeneratedImage(
         level: "error",
         reqId,
         storageKey: key,
-        error: error instanceof Error ? error.message : String(error),
+        error,
       });
       throw error;
     }

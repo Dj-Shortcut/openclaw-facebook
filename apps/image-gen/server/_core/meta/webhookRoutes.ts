@@ -139,7 +139,7 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
           safeLog("webhook_durable_enqueue_timed_out", {
             level: "error",
             channel,
-            error: error.message,
+            error,
           });
           res.sendStatus(503);
           return;
@@ -148,7 +148,7 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
         safeLog("webhook_durable_enqueue_failed_inline_fallback", {
           level: "error",
           channel,
-          error: error instanceof Error ? error.message : String(error),
+          error,
         });
         ack(channel, "inline_after_enqueue_failure");
         processWebhookDeliveryInline(channel, req.body);
