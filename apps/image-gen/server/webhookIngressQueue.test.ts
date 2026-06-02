@@ -185,6 +185,49 @@ describe("webhookIngressQueue", () => {
     );
   });
 
+  it("keeps a failed delivery in processing when retry storage fails", async () => {
+    isRedisEnabledMock.mockReturnValue(true);
+    processFacebookWebhookPayloadMock.mockRejectedValue(new Error("retry me"));
+
+    const delivery = JSON.stringify({
+      channel: "facebook",
+      payload: { entry: [{ id: "retry-store-failed" }] },
+      receivedAt: "2026-05-28T00:00:00.000Z",
+    });
+    const queue = [delivery];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const redis = createQueueRedis(queue, processing, dead);
+    redis.eval.mockRejectedValueOnce(new Error("redis write failed"));
+    getRedisClientMock.mockResolvedValue(redis);
+
+    scheduleWebhookIngressDrain();
+
+    await vi.waitFor(() => {
+      expect(safeLogMock).toHaveBeenCalledWith(
+        "webhook_ingress_queue_drain_failed",
+        expect.objectContaining({
+          error: expect.objectContaining({
+            class: "Error",
+            message: "redis write failed",
+          }),
+        })
+      );
+    });
+
+    expect(queue).toEqual([]);
+    expect(processing).toEqual([delivery]);
+    expect(dead).toEqual([]);
+    expect(redis.lrem).not.toHaveBeenCalled();
+    expect(redis.del).not.toHaveBeenCalled();
+    expect(redis.lpush).not.toHaveBeenCalled();
+    expect(redis.rpush).not.toHaveBeenCalled();
+    expect(safeLogMock).not.toHaveBeenCalledWith(
+      "webhook_queued_delivery_requeued",
+      expect.any(Object)
+    );
+  });
+
   it("requeues a failed delivery with an incremented attempt count", async () => {
     isRedisEnabledMock.mockReturnValue(true);
     processWhatsAppWebhookPayloadMock.mockRejectedValue(new Error("try again"));
@@ -354,6 +397,87 @@ describe("webhookIngressQueue", () => {
     );
   });
 
+  it("does not remove a failed delivery when atomic requeue preflight fails", async () => {
+    isRedisEnabledMock.mockReturnValue(true);
+    processFacebookWebhookPayloadMock.mockRejectedValue(new Error("callback failed"));
+
+    const delivery = JSON.stringify({
+      channel: "facebook",
+      payload: { entry: [{ id: "requeue-preflight-failed" }] },
+      receivedAt: "2026-05-28T00:00:00.000Z",
+    });
+    const queue = [delivery];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const redis = createQueueRedis(queue, processing, dead, {
+      destinationType: "string",
+    });
+    getRedisClientMock.mockResolvedValue(redis);
+
+    scheduleWebhookIngressDrain();
+
+    await vi.waitFor(() => {
+      expect(safeLogMock).toHaveBeenCalledWith(
+        "webhook_ingress_queue_drain_failed",
+        expect.objectContaining({
+          error: expect.objectContaining({
+            class: "Error",
+            message: "destination key is not a list",
+          }),
+        })
+      );
+    });
+
+    expect(processing).toEqual([delivery]);
+    expect(queue).toEqual([]);
+    expect(dead).toEqual([]);
+    expect(redis.lpush).not.toHaveBeenCalledWith(
+      "meta-webhook-ingress",
+      expect.any(String)
+    );
+  });
+
+  it("does not remove a failed delivery when the atomic retry push fails", async () => {
+    isRedisEnabledMock.mockReturnValue(true);
+    processFacebookWebhookPayloadMock.mockRejectedValue(new Error("callback failed"));
+
+    const delivery = JSON.stringify({
+      channel: "facebook",
+      payload: { entry: [{ id: "requeue-push-failed" }] },
+      receivedAt: "2026-05-28T00:00:00.000Z",
+    });
+    const queue = [delivery];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const redis = createQueueRedis(queue, processing, dead, {
+      pushError: new Error("OOM command not allowed when used memory > maxmemory"),
+    });
+    getRedisClientMock.mockResolvedValue(redis);
+
+    scheduleWebhookIngressDrain();
+
+    await vi.waitFor(() => {
+      expect(safeLogMock).toHaveBeenCalledWith(
+        "webhook_ingress_queue_drain_failed",
+        expect.objectContaining({
+          error: expect.objectContaining({
+            class: "Error",
+            message: "OOM command not allowed when used memory > maxmemory",
+          }),
+        })
+      );
+    });
+
+    expect(processing).toEqual([delivery]);
+    expect(queue).toEqual([]);
+    expect(dead).toEqual([]);
+    expect(redis.lrem).not.toHaveBeenCalledWith(
+      "meta-webhook-ingress:processing",
+      1,
+      delivery
+    );
+  });
+
   it("reclaims processing deliveries whose lease expired before draining", async () => {
     isRedisEnabledMock.mockReturnValue(true);
     const expiredDelivery = JSON.stringify({
@@ -433,11 +557,17 @@ describe("webhookIngressQueue", () => {
 function createQueueRedis(
   queue: string[],
   processing: string[],
-  dead: string[]
+  dead: string[],
+  types: {
+    processingType?: "none" | "list" | "string";
+    leaseType?: "none" | "string" | "list";
+    destinationType?: "none" | "list" | "string";
+    pushError?: Error;
+  } = {}
 ) {
   const leases = new Map<string, string>();
 
-  return {
+  const redis = {
     del: vi.fn(async (key: string) => {
       leases.delete(key);
       return 1;
@@ -476,5 +606,59 @@ function createQueueRedis(
       leases.set(key, value);
       return "OK";
     }),
+  };
+
+  return {
+    ...redis,
+    eval: vi.fn(
+      async (
+        _script: string,
+        _numKeys: number,
+        _processingKey: string,
+        leaseKey: string,
+        destinationKey: string,
+        rawDelivery: string,
+        pushDirection: string,
+        serializedDelivery: string
+      ) => {
+        const processingType = types.processingType ?? "list";
+        if (processingType !== "none" && processingType !== "list") {
+          throw new Error("processing key is not a list");
+        }
+        const leaseType = types.leaseType ?? "string";
+        if (leaseType !== "none" && leaseType !== "string") {
+          throw new Error("lease key is not a string");
+        }
+        const destinationType = types.destinationType ?? "list";
+        if (destinationType !== "none" && destinationType !== "list") {
+          throw new Error("destination key is not a list");
+        }
+
+        if (!processing.includes(rawDelivery)) {
+          return 0;
+        }
+
+        if (types.pushError) {
+          throw types.pushError;
+        }
+        if (pushDirection === "LPUSH") {
+          await redis.lpush(destinationKey, serializedDelivery);
+        } else {
+          await redis.rpush(destinationKey, serializedDelivery);
+        }
+
+        const removed = await redis.lrem(
+          "meta-webhook-ingress:processing",
+          1,
+          rawDelivery
+        );
+        if (removed <= 0) {
+          return removed;
+        }
+
+        await redis.del(leaseKey);
+        return removed;
+      }
+    ),
   };
 }
