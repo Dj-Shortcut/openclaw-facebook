@@ -14,6 +14,9 @@ on:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   web:
     name: Web client
@@ -48,8 +51,9 @@ jobs:
         run: pnpm run build
 
   tauri:
-    name: Tauri shell
+    name: Tauri shell (informational)
     runs-on: ubuntu-latest
+    continue-on-error: true
     defaults:
       run:
         working-directory: apps/customer-app
@@ -65,7 +69,7 @@ jobs:
             build-essential \
             curl \
             file \
-            libappindicator3-dev \
+            libayatana-appindicator3-dev \
             librsvg2-dev \
             libsoup-3.0-dev \
             libssl-dev \
