@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Leaderbot",
+  "version": "0.1.0",
+  "identifier": "live.leaderbot.customer",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' https://leaderbot.live https://*.leaderbot.live; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    },
+    "windows": [
+      {
+        "title": "Leaderbot",
+        "width": 1200,
+        "height": 780,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "shortDescription": "Leaderbot customer portal",
+    "longDescription": "Manage your Leaderbot AI, customer workspace, channels, usage, and privacy controls.",
+    "createUpdaterArtifacts": false
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["leaderbot"]
+      }
+    }
+  }
+}

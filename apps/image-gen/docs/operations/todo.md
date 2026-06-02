@@ -24,6 +24,8 @@
 
 - [ ] Design the `leaderbot.live` tenant/customer portal as a real app, not a brochure site
 - [ ] Define tenant model: customer workspace, owned AI identity, channel connections, knowledge, usage, and privacy controls
+- [x] Scaffold customer-facing Tauri portal app with tenant-scoped portal API surfaces
+- [x] Add initial Facebook Page Connect authorization entrypoint for customer workspaces
 - [ ] Add portal authentication before broad customer launch
 - [ ] Add tenant isolation tests before broad customer launch
 - [ ] Add portal audit logging before broad customer launch

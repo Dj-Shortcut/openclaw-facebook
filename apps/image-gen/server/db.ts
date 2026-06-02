@@ -1,6 +1,29 @@
 import { eq, and, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, imageRequests, dailyQuota, usageStats, notificationLog, messengerState, InsertImageRequest, InsertUsageStats, InsertNotificationLog, InsertMessengerState } from "../drizzle/schema";
+import {
+  aiIdentities,
+  auditLog,
+  channelConnections,
+  dailyQuota,
+  imageRequests,
+  InsertAiIdentity,
+  InsertAuditLog,
+  InsertChannelConnection,
+  InsertImageRequest,
+  InsertMessengerState,
+  InsertNotificationLog,
+  InsertUsageStats,
+  InsertUser,
+  InsertWorkspace,
+  InsertWorkspaceMember,
+  messengerState,
+  notificationLog,
+  usageStats,
+  users,
+  workspaceMembers,
+  workspaces,
+  workspaceUsageDaily,
+} from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -101,6 +124,245 @@ async function getUserById(id: number) {
   const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
 
   return result.length > 0 ? result[0] : undefined;
+}
+
+function fallbackWorkspaceForUser(userId: number, name?: string | null) {
+  return {
+    id: userId,
+    name: name ? `${name}'s workspace` : "Leaderbot workspace",
+    slug: `workspace-${userId}`,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  };
+}
+
+export async function getOrCreateUserWorkspace(user: {
+  id: number;
+  name?: string | null;
+}) {
+  const db = await getDb();
+  if (!db) {
+    return fallbackWorkspaceForUser(user.id, user.name);
+  }
+
+  const existing = await db
+    .select({
+      id: workspaces.id,
+      name: workspaces.name,
+      slug: workspaces.slug,
+      createdAt: workspaces.createdAt,
+      updatedAt: workspaces.updatedAt,
+    })
+    .from(workspaceMembers)
+    .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
+    .where(eq(workspaceMembers.userId, user.id))
+    .limit(1);
+
+  if (existing.length > 0) {
+    return existing[0];
+  }
+
+  const workspaceValues: InsertWorkspace = {
+    name: user.name ? `${user.name}'s workspace` : "Leaderbot workspace",
+    slug: `workspace-${user.id}`,
+  };
+  await db.insert(workspaces).values(workspaceValues).onDuplicateKeyUpdate({
+    set: { slug: workspaceValues.slug },
+  });
+
+  const created = await db
+    .select()
+    .from(workspaces)
+    .where(eq(workspaces.slug, workspaceValues.slug))
+    .limit(1);
+
+  const workspace = created[0] ?? fallbackWorkspaceForUser(user.id, user.name);
+  const memberValues: InsertWorkspaceMember = {
+    workspaceId: workspace.id,
+    userId: user.id,
+    role: "owner",
+  };
+  await db.insert(workspaceMembers).values(memberValues).onDuplicateKeyUpdate({
+    set: { workspaceId: memberValues.workspaceId },
+  });
+
+  return workspace;
+}
+
+export async function getWorkspaceMembership(workspaceId: number, userId: number) {
+  const db = await getDb();
+  if (!db) {
+    return workspaceId === userId ? { workspaceId, userId, role: "owner" as const } : null;
+  }
+
+  const result = await db
+    .select()
+    .from(workspaceMembers)
+    .where(
+      and(
+        eq(workspaceMembers.workspaceId, workspaceId),
+        eq(workspaceMembers.userId, userId)
+      )
+    )
+    .limit(1);
+
+  return result[0] ?? null;
+}
+
+export async function getOrCreateAiIdentity(workspaceId: number) {
+  const db = await getDb();
+  if (!db) {
+    return {
+      id: workspaceId,
+      workspaceId,
+      name: "Leaderbot",
+      instructions: "Help customers with clear, useful answers.",
+      tone: "Helpful",
+      language: "nl",
+      modelDefault: "default",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    };
+  }
+
+  const existing = await db
+    .select()
+    .from(aiIdentities)
+    .where(eq(aiIdentities.workspaceId, workspaceId))
+    .limit(1);
+
+  if (existing.length > 0) {
+    return existing[0];
+  }
+
+  const values: InsertAiIdentity = {
+    workspaceId,
+    name: "Leaderbot",
+    instructions: "Help customers with clear, useful answers.",
+  };
+  await db.insert(aiIdentities).values(values).onDuplicateKeyUpdate({
+    set: { workspaceId },
+  });
+
+  const created = await db
+    .select()
+    .from(aiIdentities)
+    .where(eq(aiIdentities.workspaceId, workspaceId))
+    .limit(1);
+
+  return created[0];
+}
+
+export async function updateAiIdentity(
+  workspaceId: number,
+  updates: Pick<InsertAiIdentity, "name" | "instructions" | "tone" | "language" | "modelDefault">
+) {
+  const db = await getDb();
+  if (!db) {
+    return {
+      id: workspaceId,
+      workspaceId,
+      createdAt: new Date(0),
+      updatedAt: new Date(),
+      ...updates,
+      instructions: updates.instructions ?? null,
+    };
+  }
+
+  await getOrCreateAiIdentity(workspaceId);
+  await db
+    .update(aiIdentities)
+    .set(updates)
+    .where(eq(aiIdentities.workspaceId, workspaceId));
+
+  return getOrCreateAiIdentity(workspaceId);
+}
+
+export async function listChannelConnections(workspaceId: number) {
+  const db = await getDb();
+  if (!db) {
+    return [
+      {
+        id: workspaceId,
+        workspaceId,
+        channel: "facebook_messenger" as const,
+        status: "disconnected" as const,
+        externalId: null,
+        displayName: null,
+        encryptedAccessToken: null,
+        grantedScopes: null,
+        lastCheckedAt: null,
+        createdAt: new Date(0),
+        updatedAt: new Date(0),
+      },
+    ];
+  }
+
+  const result = await db
+    .select()
+    .from(channelConnections)
+    .where(eq(channelConnections.workspaceId, workspaceId));
+
+  return result;
+}
+
+export async function upsertChannelConnection(values: InsertChannelConnection) {
+  const db = await getDb();
+  if (!db) return null;
+
+  await db.insert(channelConnections).values(values).onDuplicateKeyUpdate({
+    set: {
+      status: values.status,
+      externalId: values.externalId ?? null,
+      displayName: values.displayName ?? null,
+      encryptedAccessToken: values.encryptedAccessToken ?? null,
+      grantedScopes: values.grantedScopes ?? null,
+      lastCheckedAt: new Date(),
+    },
+  });
+
+  return listChannelConnections(values.workspaceId);
+}
+
+export async function getWorkspaceUsageSummary(workspaceId: number) {
+  const db = await getDb();
+  if (!db) {
+    return {
+      workspaceId,
+      period: "today" as const,
+      messageCount: 0,
+      imageCount: 0,
+      blockedCount: 0,
+    };
+  }
+
+  const today = getTodayUTC();
+  const result = await db
+    .select()
+    .from(workspaceUsageDaily)
+    .where(
+      and(
+        eq(workspaceUsageDaily.workspaceId, workspaceId),
+        eq(workspaceUsageDaily.date, today)
+      )
+    )
+    .limit(1);
+
+  const usage = result[0];
+  return {
+    workspaceId,
+    period: "today" as const,
+    messageCount: usage?.messageCount ?? 0,
+    imageCount: usage?.imageCount ?? 0,
+    blockedCount: usage?.blockedCount ?? 0,
+  };
+}
+
+export async function insertAuditLog(values: InsertAuditLog) {
+  const db = await getDb();
+  if (!db) return null;
+
+  return db.insert(auditLog).values(values);
 }
 
 /**

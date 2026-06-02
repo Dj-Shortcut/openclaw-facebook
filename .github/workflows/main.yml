@@ -2,6 +2,17 @@ name: Validate plugin package
 
 on:
   pull_request:
+    paths:
+      - ".github/workflows/main.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "openclaw.plugin.json"
+      - "README.md"
+      - "docs/**"
+      - "examples/**"
+      - "src/**"
+      - "*.ts"
+      - "tsconfig.json"
   push:
     branches: [main]
 
