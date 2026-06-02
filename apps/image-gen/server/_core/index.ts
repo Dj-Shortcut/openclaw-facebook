@@ -70,6 +70,7 @@ import {
 } from "./messengerGenerationQueue";
 import { startMessengerGenerationWorker } from "./messengerGenerationWorker";
 import { reconcileMessengerProfileOnStartup } from "./messengerProfile";
+import { safeLog } from "./logger";
 
 const gitSha = process.env.GIT_SHA ?? process.env.SOURCE_VERSION ?? "dev";
 const bootTimestamp = new Date().toISOString();
@@ -95,21 +96,27 @@ function setupGlobalErrorHandlers(server: ReturnType<typeof createServer>) {
     shuttingDown = true;
     const reasonError = toError(reason);
 
-    console.error("[fatal] shutting down server", {
+    safeLog("server_fatal_shutdown_started", {
+      level: "error",
       name: reasonError.name,
       message: reasonError.message,
       stack: reasonError.stack,
     });
 
     const forcedShutdownTimer = setTimeout(() => {
-      console.error("[fatal] forced shutdown after grace period elapsed");
+      safeLog("server_forced_shutdown_after_grace_period", {
+        level: "error",
+      });
       process.exit(1);
     }, SHUTDOWN_GRACE_PERIOD_MS);
     forcedShutdownTimer.unref();
 
     server.close((closeError) => {
       if (closeError) {
-        console.error("[fatal] failed to close server cleanly", closeError);
+        safeLog("server_close_failed", {
+          level: "error",
+          error: closeError instanceof Error ? closeError.message : String(closeError),
+        });
       }
       process.exit(1);
     });
@@ -129,7 +136,10 @@ function setupGlobalErrorHandlers(server: ReturnType<typeof createServer>) {
     shuttingDown = true;
     server.close((closeError) => {
       if (closeError) {
-        console.error("[shutdown] SIGTERM close failed", closeError);
+        safeLog("server_sigterm_close_failed", {
+          level: "error",
+          error: closeError instanceof Error ? closeError.message : String(closeError),
+        });
         process.exit(1);
       }
       process.exit(0);
@@ -149,10 +159,10 @@ function buildVersionPayload() {
 }
 
 async function startServer() {
-  console.log("BOOT", { pid: process.pid });
-  console.log("VERSION", buildVersionPayload());
+  safeLog("boot", { pid: process.pid });
+  safeLog("version", buildVersionPayload());
   const generatorStartupConfig = getBotStartupConfig();
-  console.log("GENERATOR_STARTUP_CONFIG", generatorStartupConfig);
+  safeLog("generator_startup_config", generatorStartupConfig);
   assertProductionImageStorageConfig();
   assertAuthConfig();
   assertWhatsAppConfig();
@@ -169,7 +179,7 @@ async function startServer() {
     startMessengerGenerationWorker({ keepAlive: generationWorkerOnly });
   }
   if (generationWorkerOnly) {
-    console.info("[messenger generation worker] worker-only mode active");
+    safeLog("messenger_generation_worker_only_mode_active");
     return;
   }
 
@@ -202,7 +212,7 @@ async function startServer() {
 
   app.use("/webhook", (req, _res, next) => {
     if (req.method === "POST") {
-      console.info("[meta webhook] inbound post hit", {
+      safeLog("meta_webhook_inbound_post_hit", {
         path: req.path,
         contentType: req.headers["content-type"],
         hasSignatureHeader: typeof req.headers["x-hub-signature-256"] === "string",
@@ -411,9 +421,7 @@ async function startServer() {
   if (oauthServerUrl) {
     registerOAuthRoutes(app);
   } else {
-    console.info(
-      "[OAuth] OAUTH_SERVER_URL not set, skipping OAuth route initialization"
-    );
+    safeLog("oauth_routes_skipped", { reason: "missing_oauth_server_url" });
   }
   app.use(
     "/api/trpc",
@@ -429,16 +437,13 @@ async function startServer() {
   app.get("/generated/:token.:ext", (req, res) => {
     const generatedImage = getGeneratedImage(req.params.token);
     if (!generatedImage) {
-      console.warn(
-        JSON.stringify({
-          level: "warn",
-          msg: "generated_image_fetch_miss",
-          reqId: getRequestId(req),
-          tokenHash: hashGeneratedImageToken(req.params.token),
-          path: req.path,
-          nodeEnv: process.env.NODE_ENV ?? "unknown",
-        })
-      );
+      safeLog("generated_image_fetch_miss", {
+        level: "warn",
+        reqId: getRequestId(req),
+        tokenHash: hashGeneratedImageToken(req.params.token),
+        path: req.path,
+        nodeEnv: process.env.NODE_ENV ?? "unknown",
+      });
       res.status(404).send("Not found");
       return;
     }
@@ -463,11 +468,14 @@ async function startServer() {
   const HOST = "0.0.0.0";
 
   server.listen(PORT, HOST, () => {
-    console.log(`Server listening on port ${PORT} (${HOST})`);
+    safeLog("server_listening", { port: PORT, host: HOST });
   });
 }
 
 startServer().catch((error) => {
-  console.error("[startup] failed to start server", error);
+  safeLog("server_start_failed", {
+    level: "error",
+    error: error instanceof Error ? error.message : String(error),
+  });
   process.exit(1);
 });

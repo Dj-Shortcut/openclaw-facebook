@@ -17,6 +17,7 @@ import {
   sendWhatsAppTextReply,
 } from "../whatsappResponseService";
 import { summarizeSensitiveUrl } from "../utils/urlSummarizer";
+import { safeLog } from "../logger";
 
 type ImageGenerationInput = {
   senderId: string;
@@ -49,7 +50,7 @@ function logGenerationRequested(input: {
   resolvedSourceImageUrl?: string;
   trustedSourceImageUrl: boolean;
 }): void {
-  console.info("[whatsapp webhook] generation requested", {
+  safeLog("whatsapp_generation_requested", {
     user: input.userId,
     hasPromptHint: Boolean(input.promptHint?.trim()),
     sourceImageUrlHost: resolvedSourceHost(input.resolvedSourceImageUrl),
@@ -125,7 +126,8 @@ function logGenerationFailure(input: {
   result: GenerationFailure;
 }): void {
   const metrics = input.result.metrics ?? getGenerationMetrics(input.result.error);
-  console.error("[whatsapp webhook] generation failed", {
+  safeLog("whatsapp_generation_failed", {
+    level: "error",
     user: input.userId,
     totalMs: metrics?.totalMs,
     error:
@@ -146,9 +148,10 @@ function logRejectedSourceImage(input: {
     return;
   }
 
-  console.error("[whatsapp webhook] source image rejected", {
+  safeLog("whatsapp_source_image_rejected", {
+    level: "error",
     user: input.userId,
-    sourceImageUrl: summarizeSensitiveUrl(input.result.resolvedSourceImageUrl),
+    sourceImageLocation: summarizeSensitiveUrl(input.result.resolvedSourceImageUrl),
   });
 }
 

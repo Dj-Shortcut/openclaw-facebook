@@ -2,6 +2,7 @@ import {
   MissingAppBaseUrlError,
   MissingObjectStorageConfigError,
 } from "./imageServiceErrors";
+import { safeLog } from "../logger";
 
 type OpenAiImageModelConfig = {
   imageGenerationModel: string;
@@ -33,13 +34,11 @@ export function getConfiguredBaseUrl(): string | undefined {
     process.env.NODE_ENV === "production" &&
     !configuredBaseUrl.startsWith("https://")
   ) {
-    console.error(
-      "Configured base URL (APP_BASE_URL or BASE_URL) must use https:// in production",
-      {
+    safeLog("configured_base_url_insecure_in_production", {
+      level: "error",
       hasConfiguredBaseUrl: true,
       protocol: configuredBaseUrl.split(":")[0],
-      }
-    );
+    });
     return undefined;
   }
 
@@ -49,7 +48,7 @@ export function getConfiguredBaseUrl(): string | undefined {
 export function getRequiredPublicBaseUrl(): string {
   const baseUrl = getConfiguredBaseUrl();
   if (!baseUrl) {
-    console.error("APP_BASE_URL is required for image generation");
+    safeLog("app_base_url_required_for_image_generation", { level: "error" });
     throw new MissingAppBaseUrlError("APP_BASE_URL is missing or invalid");
   }
 

@@ -7,6 +7,7 @@ import { SignJWT, jwtVerify } from "jose";
 import type { User } from "../../drizzle/schema";
 import * as db from "../db";
 import { ENV, getConfiguredJwtSecret } from "./env";
+import { safeLog } from "./logger";
 import type {
   ExchangeTokenRequest,
   ExchangeTokenResponse,
@@ -37,11 +38,11 @@ type UserInfoWithPlatforms = {
 class OAuthService {
   constructor(private client: ReturnType<typeof axios.create>) {
     if (ENV.oAuthServerUrl) {
-      console.log("[OAuth] Initialized with baseURL:", ENV.oAuthServerUrl);
+      safeLog("oauth_client_initialized", { hasBaseUrl: true });
       return;
     }
 
-    console.info("[OAuth] OAUTH_SERVER_URL not set, OAuth client calls are disabled until configured");
+    safeLog("oauth_client_disabled", { reason: "missing_oauth_server_url" });
   }
 
   async getTokenByCode(
@@ -211,7 +212,7 @@ class SDKServer {
     cookieValue: string | undefined | null
   ): Promise<{ openId: string; appId: string; name: string } | null> {
     if (!cookieValue) {
-      console.warn("[Auth] Missing session cookie");
+      safeLog("auth_session_cookie_missing", { level: "warn" });
       return null;
     }
 
@@ -223,7 +224,10 @@ class SDKServer {
       const { openId, appId, name } = payload as Record<string, unknown>;
 
       if (!isNonEmptyString(openId) || !isNonEmptyString(appId)) {
-        console.warn("[Auth] Session payload missing required identity fields");
+        safeLog("auth_session_payload_invalid", {
+          level: "warn",
+          reason: "missing_identity_fields",
+        });
         return null;
       }
 
@@ -233,7 +237,10 @@ class SDKServer {
         name: isNonEmptyString(name) ? name : "",
       };
     } catch (error) {
-      console.warn("[Auth] Session verification failed", String(error));
+      safeLog("auth_session_verification_failed", {
+        level: "warn",
+        error: error instanceof Error ? error.message : String(error),
+      });
       return null;
     }
   }
@@ -281,7 +288,10 @@ class SDKServer {
         });
         user = await db.getUserByOpenId(userInfo.openId);
       } catch (error) {
-        console.error("[Auth] Failed to sync user from OAuth:", error);
+        safeLog("auth_oauth_user_sync_failed", {
+          level: "error",
+          error: error instanceof Error ? error.message : String(error),
+        });
         throw ForbiddenError("Failed to sync user info");
       }
     }

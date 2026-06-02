@@ -12,6 +12,7 @@ import {
   isMessengerGenerationWorkerOnlyMode,
 } from "./messengerGenerationQueue";
 import { getTodayRuntimeStats } from "./botRuntimeStats";
+import { safeLog } from "./logger";
 
 type RequestWithId = express.Request & {
   requestId?: string;
@@ -141,7 +142,7 @@ export function createRequestMetricsMiddleware(): express.RequestHandler {
         req.path !== "/health" &&
         req.path !== "/metrics";
       if (isDebugLogEnabled() || shouldLogAtInfo) {
-        console.log(JSON.stringify(log));
+        safeLog("http_request_completed", log);
       }
     });
 

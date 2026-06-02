@@ -5,6 +5,7 @@ import os from "node:os";
 import fs from "fs/promises";
 import path from "path";
 import { safeLen, sha256 } from "../imageProof";
+import { safeLog } from "../logger";
 
 export class MissingInputImageError extends Error {}
 export class InvalidSourceImageUrlError extends Error {}
@@ -207,7 +208,8 @@ function blockSourceImageUrl(
   reason: string,
   details: Record<string, unknown> = {}
 ): never {
-  console.warn("SOURCE_IMAGE_URL_BLOCKED", {
+  safeLog("source_image_url_blocked", {
+    level: "warn",
     reqId,
     reason,
     ...details,
@@ -368,7 +370,8 @@ function shouldRetrySourceImageStatus(
     attempt < FB_IMAGE_FETCH_RETRY_LIMIT &&
     isRetryableResponseStatus(response.status)
   ) {
-    console.debug("FB_IMAGE_FETCH_RETRY", {
+    safeLog("fb_image_fetch_retry", {
+      level: "debug",
       reqId,
       attempt: attempt + 1,
       status: response.status,
@@ -380,7 +383,8 @@ function shouldRetrySourceImageStatus(
 }
 
 function throwMissingInputDownloadFailed(reqId: string, status: number): never {
-  console.error("MISSING_INPUT_IMAGE", {
+  safeLog("missing_input_image", {
+    level: "error",
     reqId,
     reason: "download_failed",
     status,
@@ -400,7 +404,10 @@ async function maybeWriteDebugImageProof(
   }
 
   if (process.env.NODE_ENV === "production") {
-    console.warn("DEBUG_IMAGE_PROOF is ignored in production", { reqId });
+    safeLog("debug_image_proof_ignored_in_production", {
+      level: "warn",
+      reqId,
+    });
     return;
   }
 
@@ -414,9 +421,10 @@ async function maybeWriteDebugImageProof(
   try {
     await fs.mkdir(debugDir, { recursive: true });
     await fs.writeFile(savedPath, imageBuffer);
-    console.log("DEBUG_IMAGE_PROOF", { reqId, saved_path: savedPath });
+    safeLog("debug_image_proof_written", { reqId, saved_path: savedPath });
   } catch (error) {
-    console.warn("DEBUG_IMAGE_PROOF_WRITE_FAILED", {
+    safeLog("debug_image_proof_write_failed", {
+      level: "warn",
       reqId,
       error: error instanceof Error ? error.message : String(error),
     });
@@ -431,7 +439,8 @@ function assertSourceImageSizeOrThrow(
     return;
   }
 
-  console.error("MISSING_INPUT_IMAGE", {
+  safeLog("missing_input_image", {
+    level: "error",
     reqId,
     reason: "too_small",
     byte_len: incomingByteLen,
@@ -449,7 +458,8 @@ function assertInboundImageWithinLimit(
     return;
   }
 
-  console.error("MISSING_INPUT_IMAGE", {
+  safeLog("missing_input_image", {
+    level: "error",
     reqId,
     reason: "too_large",
     byte_len: incomingByteLen,
@@ -524,16 +534,12 @@ async function buildDownloadedSourceImage(
 
   await maybeWriteDebugImageProof(reqId, contentType, imageBuffer);
   assertSourceImageSizeOrThrow(reqId, incomingByteLen);
-  console.info(
-    JSON.stringify({
-      level: "info",
-      msg: "source_image_downloaded",
-      reqId,
-      contentType,
-      byteLength: incomingByteLen,
-      durationMs: totalFetchMs,
-    })
-  );
+  safeLog("source_image_downloaded", {
+    reqId,
+    contentType,
+    byteLength: incomingByteLen,
+    durationMs: totalFetchMs,
+  });
 
   return {
     buffer: imageBuffer,
@@ -550,7 +556,8 @@ function shouldRetrySourceImageError(
   reqId: string
 ): boolean {
   if (attempt < FB_IMAGE_FETCH_RETRY_LIMIT && isTransientNetworkError(error)) {
-    console.debug("FB_IMAGE_FETCH_RETRY", {
+    safeLog("fb_image_fetch_retry", {
+      level: "debug",
       reqId,
       attempt: attempt + 1,
       reason: error instanceof Error ? error.name : "UnknownError",
@@ -570,7 +577,8 @@ function rethrowSourceImageError(error: unknown, reqId: string): never {
   }
 
   if (isTransientNetworkError(error)) {
-    console.error("MISSING_INPUT_IMAGE", {
+    safeLog("missing_input_image", {
+      level: "error",
       reqId,
       reason:
         error instanceof Error && error.name === "AbortError"
@@ -653,7 +661,7 @@ export function logSourceImageFetchStart(input: SourceImageResolveInput): void {
     return;
   }
 
-  console.info("SOURCE_IMAGE_FETCH_START", {
+  safeLog("source_image_fetch_start", {
     reqId: input.reqId,
     trustedSourceImageUrl: Boolean(input.trustedSourceImageUrl),
     sourceImageProvenance: input.sourceImageProvenance,

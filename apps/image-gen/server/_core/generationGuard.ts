@@ -7,6 +7,7 @@ import {
   setEphemeralKey,
   setEphemeralKeyIfAbsent,
 } from "./stateStore";
+import { safeLog } from "./logger";
 
 const DEFAULT_GLOBAL_CONCURRENCY = 3;
 const DEFAULT_GLOBAL_LOCK_MS = 240000;
@@ -224,7 +225,8 @@ export async function assertMessengerDailyImageBudgetAvailable(input: {
   const key = `${DAILY_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
   const count = await incrementExpiringCounter(key, secondsUntilNextUtcDay(now));
   if (count > cap) {
-    console.warn("messenger_daily_image_budget_reached", {
+    safeLog("messenger_daily_image_budget_reached", {
+      level: "warn",
       reqId: input.reqId,
       cap,
       count,

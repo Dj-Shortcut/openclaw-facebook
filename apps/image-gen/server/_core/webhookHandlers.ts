@@ -223,7 +223,9 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       return;
     }
 
-    console.log(JSON.stringify(message));
+    const event =
+      typeof message.msg === "string" ? message.msg : "webhook_debug";
+    safeLog(event, { level: "debug", ...message });
   }
 
   function getAttachmentHostname(url: string): string | null {
@@ -593,18 +595,14 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       const bypassRaw = process.env.MESSENGER_QUOTA_BYPASS_IDS ?? "";
       const bypassApplied =
         bypassRaw.includes(psid) || bypassRaw.includes(quotaState.userKey);
-      console.log(
-        JSON.stringify({
-          level: "info",
-          msg: "quota_decision",
-          action: "check",
-          psidHash: anonymizePsid(psid).slice(0, 12),
-          count: quotaState.quota.count,
-          limit: getFreeDailyLimit(),
-          bypassApplied,
-          allowed,
-        })
-      );
+      safeLog("quota_decision", {
+        action: "check",
+        psidHash: anonymizePsid(psid).slice(0, 12),
+        count: quotaState.quota.count,
+        limit: getFreeDailyLimit(),
+        bypassApplied,
+        allowed,
+      });
       if (!allowed) {
         rememberSendOutcome(
           await sendLoggedText(
@@ -659,51 +657,40 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
 
       if (generationResult.kind === "success") {
         const { imageUrl, metrics, mode, proof } = generationResult;
-        console.info(
-          JSON.stringify({
-            level: "info",
-            msg: "messenger_send_image_url",
-            reqId,
-            psidHash: anonymizePsid(psid).slice(0, 12),
-            generationKind: resolvedGenerationKind,
-            imageUrl: summarizeSensitiveUrl(imageUrl),
-          })
-        );
+        safeLog("messenger_send_image_url", {
+          reqId,
+          psidHash: anonymizePsid(psid).slice(0, 12),
+          generationKind: resolvedGenerationKind,
+          imageLocation: summarizeSensitiveUrl(imageUrl),
+        });
 
-        console.info(
-          JSON.stringify({
-            level: "info",
-            msg: "generation_summary",
-            reqId,
-            psidHash: anonymizePsid(psid).slice(0, 12),
-            mode,
-            generationKind: resolvedGenerationKind,
-            ok: true,
-            fb_image_fetch_ms: metrics.fbImageFetchMs,
-            prompt_build_ms: metrics.promptBuildMs,
-            openai_payload_build_ms: metrics.openAiPayloadBuildMs,
-            openai_ms: metrics.openAiMs,
-            openai_parse_ms: metrics.openAiParseMs,
-            upload_or_serve_ms: metrics.uploadOrServeMs,
-            total_ms: metrics.totalMs,
-          })
-        );
+        safeLog("generation_summary", {
+          reqId,
+          psidHash: anonymizePsid(psid).slice(0, 12),
+          mode,
+          generationKind: resolvedGenerationKind,
+          ok: true,
+          fb_image_fetch_ms: metrics.fbImageFetchMs,
+          prompt_build_ms: metrics.promptBuildMs,
+          openai_payload_build_ms: metrics.openAiPayloadBuildMs,
+          openai_ms: metrics.openAiMs,
+          openai_parse_ms: metrics.openAiParseMs,
+          upload_or_serve_ms: metrics.uploadOrServeMs,
+          total_ms: metrics.totalMs,
+        });
 
-        console.log(
-          "PROOF_SUMMARY",
-          JSON.stringify({
-            reqId,
-            psidHash: anonymizePsid(psid).slice(0, 12),
-            generationKind: resolvedGenerationKind,
-            incomingLen: proof.incomingLen,
-            incomingSha256: proof.incomingSha256,
-            openaiInputLen: proof.openaiInputLen,
-            openaiInputSha256: proof.openaiInputSha256,
-            outputUrl: summarizeSensitiveUrl(imageUrl),
-            totalMs: metrics.totalMs,
-            ok: true,
-          })
-        );
+        safeLog("proof_summary", {
+          reqId,
+          psidHash: anonymizePsid(psid).slice(0, 12),
+          generationKind: resolvedGenerationKind,
+          incomingLen: proof.incomingLen,
+          incomingSha256: proof.incomingSha256,
+          openaiInputLen: proof.openaiInputLen,
+          openaiInputSha256: proof.openaiInputSha256,
+          outputLocation: summarizeSensitiveUrl(imageUrl),
+          totalMs: metrics.totalMs,
+          ok: true,
+        });
 
         const messengerSendStartedAt = Date.now();
         rememberSendOutcome(await sendLoggedImage(psid, imageUrl, reqId));
@@ -747,7 +734,8 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       }
 
       const error = generationResult.error;
-      console.error("OPENAI_CALL_ERROR", {
+      safeLog("openai_call_error", {
+        level: "error",
         psidHash: anonymizePsid(psid).slice(0, 12),
         error: error instanceof Error ? error.message : undefined,
       });
@@ -757,17 +745,14 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       const metrics = generationResult.metrics ??
         getGenerationMetrics(error) ?? { totalMs: 0 };
 
-      console.log(
-        "PROOF_SUMMARY",
-        JSON.stringify({
-          reqId,
-          psidHash: anonymizePsid(psid).slice(0, 12),
-          generationKind: resolvedGenerationKind,
-          ok: false,
-          errorCode: errorClass,
-          totalMs: metrics.totalMs,
-        })
-      );
+      safeLog("proof_summary", {
+        reqId,
+        psidHash: anonymizePsid(psid).slice(0, 12),
+        generationKind: resolvedGenerationKind,
+        ok: false,
+        errorCode: errorClass,
+        totalMs: metrics.totalMs,
+      });
       emitGenerationDiagnostic({
         generationId: reqId,
         senderId: psid,

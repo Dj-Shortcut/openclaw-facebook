@@ -25,9 +25,17 @@ import {
   workspaceUsageDaily,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
+import { safeLog } from "./_core/logger";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 const FREE_DAILY_LIMIT = 3;
+
+function logDatabaseUnavailable(operation: string): void {
+  safeLog("database_unavailable", {
+    level: "warn",
+    operation,
+  });
+}
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
 async function getDb() {
@@ -35,7 +43,10 @@ async function getDb() {
     try {
       _db = drizzle(process.env.DATABASE_URL);
     } catch (error) {
-      console.warn("[Database] Failed to connect:", error);
+      safeLog("database_connect_failed", {
+        level: "warn",
+        error: error instanceof Error ? error.message : String(error),
+      });
       _db = null;
     }
   }
@@ -50,7 +61,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
 
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot upsert user: database not available");
+    logDatabaseUnavailable("upsert_user");
     return;
   }
 
@@ -97,7 +108,10 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       set: updateSet,
     });
   } catch (error) {
-    console.error("[Database] Failed to upsert user:", error);
+    safeLog("database_upsert_user_failed", {
+      level: "error",
+      error: error instanceof Error ? error.message : String(error),
+    });
     throw error;
   }
 }
@@ -105,7 +119,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
 export async function getUserByOpenId(openId: string) {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot get user: database not available");
+    logDatabaseUnavailable("get_user_by_open_id");
     return undefined;
   }
 
@@ -117,7 +131,7 @@ export async function getUserByOpenId(openId: string) {
 async function getUserById(id: number) {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot get user: database not available");
+    logDatabaseUnavailable("get_user_by_id");
     return undefined;
   }
 
@@ -382,7 +396,7 @@ function getTodayUTC(): string {
 export async function canUserGenerateImage(userId: number): Promise<boolean> {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot check quota: database not available");
+    logDatabaseUnavailable("check_quota");
     return false;
   }
 
@@ -406,7 +420,7 @@ export async function canUserGenerateImage(userId: number): Promise<boolean> {
 async function incrementUserQuota(userId: number): Promise<void> {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot increment quota: database not available");
+    logDatabaseUnavailable("increment_quota");
     return;
   }
 
@@ -443,7 +457,7 @@ async function incrementUserQuota(userId: number): Promise<void> {
 async function reserveUserDailyQuota(userId: number): Promise<boolean> {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot reserve quota: database not available");
+    logDatabaseUnavailable("reserve_quota");
     return false;
   }
 
@@ -495,7 +509,7 @@ async function reserveUserDailyQuota(userId: number): Promise<boolean> {
 async function releaseUserDailyQuota(userId: number): Promise<void> {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot release quota: database not available");
+    logDatabaseUnavailable("release_quota");
     return;
   }
 
@@ -516,7 +530,7 @@ async function releaseUserDailyQuota(userId: number): Promise<void> {
 async function createImageRequest(data: InsertImageRequest) {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot create image request: database not available");
+    logDatabaseUnavailable("create_image_request");
     return null;
   }
 
@@ -530,7 +544,7 @@ async function createImageRequest(data: InsertImageRequest) {
 async function updateImageRequest(id: number, updates: { imageUrl?: string; imageKey?: string; status: 'pending' | 'completed' | 'failed'; errorMessage?: string | null; completedAt?: Date }) {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot update image request: database not available");
+    logDatabaseUnavailable("update_image_request");
     return null;
   }
 
@@ -544,7 +558,7 @@ async function updateImageRequest(id: number, updates: { imageUrl?: string; imag
 async function getUserImageRequests(userId: number, limit = 50, offset = 0) {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot get image requests: database not available");
+    logDatabaseUnavailable("get_image_requests");
     return [];
   }
 
@@ -565,7 +579,7 @@ async function getUserImageRequests(userId: number, limit = 50, offset = 0) {
 async function getCompletedImages(limit = 100, offset = 0) {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot get completed images: database not available");
+    logDatabaseUnavailable("get_completed_images");
     return [];
   }
 
@@ -594,7 +608,7 @@ async function getCompletedImages(limit = 100, offset = 0) {
 async function getTodayStats() {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot get stats: database not available");
+    logDatabaseUnavailable("get_stats");
     return null;
   }
 
@@ -614,7 +628,7 @@ async function getTodayStats() {
 async function updateTodayStats(updates: Partial<InsertUsageStats>) {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot update stats: database not available");
+    logDatabaseUnavailable("update_stats");
     return null;
   }
 
@@ -637,7 +651,7 @@ async function updateTodayStats(updates: Partial<InsertUsageStats>) {
 async function logNotification(data: InsertNotificationLog) {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot log notification: database not available");
+    logDatabaseUnavailable("log_notification");
     return null;
   }
 
@@ -701,7 +715,7 @@ async function checkAndIncrementMessengerQuota(psid: string): Promise<boolean> {
 async function getRecentNotifications(limit = 20) {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot get notifications: database not available");
+    logDatabaseUnavailable("get_notifications");
     return [];
   }
 
