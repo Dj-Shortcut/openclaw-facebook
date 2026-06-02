@@ -27,8 +27,8 @@
 - [x] Scaffold customer-facing Tauri portal app with tenant-scoped portal API surfaces
 - [x] Add initial Facebook Page Connect authorization entrypoint for customer workspaces
 - [ ] Add portal authentication before broad customer launch
-- [ ] Add tenant isolation tests before broad customer launch
-- [ ] Add portal audit logging before broad customer launch
+- [x] Add tenant isolation tests before broad customer launch
+- [x] Add portal audit logging before broad customer launch
 - [ ] Add billing and usage controls before broad customer launch
 - [ ] Verify GDPR deletion end-to-end before broad customer launch
 - [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health routes
