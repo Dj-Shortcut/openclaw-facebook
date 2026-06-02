@@ -48,6 +48,7 @@ import {
   anonymizePsid,
   getState,
   resetStateStore,
+  setConsentState,
   setLastGenerated,
   setPendingImage,
   setPendingStoredImage,
@@ -91,8 +92,14 @@ function promptFromOpenAiRequest(init: RequestInit | undefined): string {
   if (typeof payload.input === "string") {
     return payload.input;
   }
+  const firstInput = payload.input?.[0] as
+    | { content?: string | Array<{ type?: string; text?: string }> }
+    | undefined;
+  if (typeof firstInput?.content === "string") {
+    return firstInput.content;
+  }
   return (
-    payload.input?.[0]?.content?.find(part => part.type === "input_text")
+    firstInput?.content?.find(part => part.type === "input_text")
       ?.text ?? ""
   );
 }
@@ -1649,6 +1656,132 @@ describe("messenger deterministic free text", () => {
     );
     expect(sendImageMock).toHaveBeenCalledWith(
       "arbitrary-text-image-user",
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+  });
+
+  it("handles captioned Messenger source-image edits in the conversation layer", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: "captioned-source-edit-user" },
+              message: {
+                mid: "mid-captioned-source-edit",
+                text: "Restyle deze foto als cyberpunk poster",
+                attachments: [
+                  {
+                    type: "image",
+                    payload: { url: "https://img.example/caption-source.jpg" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => toUrlString(url) === "https://img.example/caption-source.jpg"
+      )
+    ).toBe(true);
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    expect(promptFromOpenAiRequest(openAiCall?.[1])).toContain(
+      "Restyle deze foto als cyberpunk poster"
+    );
+    expect(sendImageMock).toHaveBeenCalledWith(
+      "captioned-source-edit-user",
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+  });
+
+  it("prompts for face-memory consent before processing captioned image edits", async () => {
+    const psid = "captioned-source-edit-consent-user";
+    await setConsentState(psid, true);
+    process.env.ENABLE_FACE_MEMORY = "true";
+    const fetchMock = installOpenAiSuccessFetchMock();
+
+    await processFacebookWebhookPayloadBase({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: psid },
+              message: {
+                mid: "mid-captioned-source-edit-consent",
+                text: "Restyle deze foto als cyberpunk poster",
+                attachments: [
+                  {
+                    type: "image",
+                    payload: { url: "https://img.example/consent-source.jpg" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expectFaceMemoryConsentPrompt(psid);
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+      )
+    ).toBe(false);
+    expect(sendImageMock).not.toHaveBeenCalledWith(
+      psid,
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+  });
+
+  it("handles captioned fresh image requests without treating the photo as a style preset", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: "captioned-fresh-image-user" },
+              message: {
+                mid: "mid-captioned-fresh-image",
+                text: "Maak een draak boven Antwerpen",
+                attachments: [
+                  {
+                    type: "image",
+                    payload: { url: "https://img.example/context-photo.jpg" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    const prompt = promptFromOpenAiRequest(openAiCall?.[1]);
+    expect(prompt).toContain("Create a new image from the user's request.");
+    expect(prompt).toContain("User request: Maak een draak boven Antwerpen");
+    expect(prompt).not.toContain("storybook");
+    expect(sendImageMock).toHaveBeenCalledWith(
+      "captioned-fresh-image-user",
       expect.stringMatching(
         /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
       )

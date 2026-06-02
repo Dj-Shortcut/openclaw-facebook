@@ -761,6 +761,10 @@ export function hasMessengerImageGenerationIntent(text: string): boolean {
   return intent.kind === "generate_image" || intent.kind === "edit_source_image";
 }
 
+export function shouldForwardMessengerTextToImageGen(text: string): boolean {
+  return hasMessengerImageGenerationIntent(text);
+}
+
 type MessengerConversationIntentKind =
   | "greeting"
   | "help"
@@ -1366,70 +1370,38 @@ async function processMessengerEvent(params: {
       }
     }
     if (sourceImageAttachment && sourceImageGenerationPrompt) {
-      const sourceImageUrl = sanitizeMessengerSourceImageUrl(sourceImageAttachment.url);
-      if (!sourceImageUrl) {
-        logMessengerStage(params.trace, "image_gen_request_skipped", {
-          reason: "unsafe_source_image_url",
-        });
-      } else {
-        logMessengerStage(params.trace, "image_gen_request_started", {
-          sourceImage: true,
-          hasPrompt: true,
-        });
-        const queued = await requestLeaderbotImageGeneration({
-          psid: senderId,
-          prompt: sourceImageGenerationPrompt,
-          reqId: params.trace.reqId,
-          timestamp,
-          trace: params.trace,
-          sourceImageUrl,
-        });
-        if (queued) {
-          return;
-        }
-        await sendMessengerText(
-          senderId,
-          "Ik kon de image generator nu niet bereiken. Ik kijk wel even naar je bericht.",
-          {
-            cfg: params.cfg,
-            accountId: params.account.accountId,
-          },
-        ).catch((err: unknown) => {
-          params.runtime.error?.(
-            danger(`messenger image generator fallback failed: ${String(err)}`),
-          );
-        });
+      logMessengerStage(params.trace, "messenger_event_forward_started", {
+        reason: "source_image_with_prompt",
+        sourceImage: true,
+        hasPrompt: true,
+      });
+      if (await forwardLeaderbotMessengerEvent({ event: params.event, trace: params.trace })) {
+        return;
       }
+      await sendMessengerText(
+        senderId,
+        "Ik kon de image generator nu niet bereiken. Ik kijk wel even naar je bericht.",
+        {
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+        },
+      ).catch((err: unknown) => {
+        params.runtime.error?.(
+          danger(`messenger image generator fallback failed: ${String(err)}`),
+        );
+      });
     }
     if (
       attachments.length > 0 &&
       !sourceImageGenerationPrompt &&
       hasMessengerImageGenerationIntent(text)
     ) {
-      logMessengerStage(params.trace, "image_gen_request_started", {
-        sourceImage: false,
+      logMessengerStage(params.trace, "messenger_event_forward_started", {
+        reason: "media_with_image_prompt",
+        isSourceImageEdit: false,
         hasPrompt: true,
       });
-      const imagePrompt = resolveMessengerImagePromptFromUserText({
-        senderId,
-        text,
-        replyToMessageId,
-      });
-      if (!imagePrompt) {
-        await sendMessengerText(senderId, MISSING_REFERENCED_PROMPT_REPLY, {
-          cfg: params.cfg,
-          accountId: params.account.accountId,
-        });
-        return;
-      }
-      const queued = await requestLeaderbotImageGeneration({
-        psid: senderId,
-        prompt: imagePrompt,
-        reqId: params.trace.reqId,
-        timestamp,
-        trace: params.trace,
-      });
-      if (queued) {
+      if (await forwardLeaderbotMessengerEvent({ event: params.event, trace: params.trace })) {
         return;
       }
       await sendMessengerText(
@@ -1508,46 +1480,27 @@ async function processMessengerEvent(params: {
     ]
       .filter(Boolean)
       .join("\n");
-    const fastLane = hasMedia ? null : resolveMessengerFastLaneReply(text);
-    if (fastLane) {
-      if (fastLane.intent === "image") {
-        logMessengerStage(params.trace, "image_gen_request_started", {
-          sourceImage: false,
-          hasPrompt: true,
-        });
-        const imagePrompt = resolveMessengerImagePromptFromUserText({
-          senderId,
-          text,
-          replyToMessageId,
-        });
-        if (!imagePrompt) {
-          await sendMessengerText(senderId, MISSING_REFERENCED_PROMPT_REPLY, {
-            cfg: params.cfg,
-            accountId: params.account.accountId,
-          });
-          return;
-        }
-        const queued = await requestLeaderbotImageGeneration({
-          psid: senderId,
-          prompt: imagePrompt,
-          reqId: params.trace.reqId,
-          timestamp,
-          trace: params.trace,
-        });
-        if (queued) {
-          return;
-        }
-        await sendMessengerText(
-          senderId,
-          "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
-          {
-            cfg: params.cfg,
-            accountId: params.account.accountId,
-          },
-        );
+    if (!hasMedia && shouldForwardMessengerTextToImageGen(text)) {
+      logMessengerStage(params.trace, "messenger_event_forward_started", {
+        reason: "text_image_intent",
+        sourceImage: false,
+        hasPrompt: true,
+      });
+      if (await forwardLeaderbotMessengerEvent({ event: params.event, trace: params.trace })) {
         return;
       }
-
+      await sendMessengerText(
+        senderId,
+        "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
+        {
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+        },
+      );
+      return;
+    }
+    const fastLane = hasMedia ? null : resolveMessengerFastLaneReply(text);
+    if (fastLane) {
       logMessengerStage(params.trace, "first_response_ready", { intent: fastLane.intent });
       const result = await sendMessengerText(senderId, fastLane.reply, {
         cfg: params.cfg,

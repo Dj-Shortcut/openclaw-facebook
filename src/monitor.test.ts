@@ -22,6 +22,7 @@ import {
   rememberMessengerAssistantPrompt,
   shouldDeliverMessengerReplyPayload,
   shouldForwardMessengerImageOnlyEventToImageGen,
+  shouldForwardMessengerTextToImageGen,
   shouldProcessMessengerMessageOnce,
   type MessengerWebhookTarget,
 } from "./monitor.js";
@@ -520,6 +521,27 @@ describe("hasMessengerImageGenerationIntent", () => {
     expect(hasMessengerSourceImageEditIntent("Kan je een landschap afbeelding genereren?")).toBe(
       false,
     );
+  });
+});
+
+describe("shouldForwardMessengerTextToImageGen", () => {
+  it("forwards explicit text image requests to the Leaderbot conversation layer", () => {
+    expect(shouldForwardMessengerTextToImageGen("Maak een afbeelding van een robot")).toBe(true);
+    expect(shouldForwardMessengerTextToImageGen("Kan je een landschap afbeelding genereren?")).toBe(
+      true,
+    );
+    expect(
+      shouldForwardMessengerTextToImageGen(
+        "Een afbeelding maken een Belgisch landschap in de natuur",
+      ),
+    ).toBe(true);
+    expect(shouldForwardMessengerTextToImageGen("Maak me een romeinse soldaat")).toBe(true);
+  });
+
+  it("keeps non-image and prompt-writing requests in the normal OpenClaw turn", () => {
+    expect(shouldForwardMessengerTextToImageGen("Maak een prompt voor een afbeelding")).toBe(false);
+    expect(shouldForwardMessengerTextToImageGen("Schrijf een planning voor morgen")).toBe(false);
+    expect(shouldForwardMessengerTextToImageGen("Wat zie je op deze foto?")).toBe(false);
   });
 });
 
