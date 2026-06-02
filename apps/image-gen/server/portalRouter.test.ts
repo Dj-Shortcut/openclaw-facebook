@@ -95,3 +95,68 @@ describe("portal router tenant isolation", () => {
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 });
+
+describe("portal router audit logging", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getWorkspaceMembership.mockResolvedValue({
+      workspaceId: 42,
+      userId: user.id,
+      role: "owner",
+    });
+  });
+
+  it("records an audit log when a workspace AI identity is updated", async () => {
+    const caller = createCaller();
+    const updatedIdentity = {
+      id: 42,
+      workspaceId: 42,
+      name: "Leaderbot Support",
+      instructions: "Answer as the customer support assistant.",
+      tone: "Helpful",
+      language: "nl",
+      modelDefault: "default",
+      createdAt: new Date(0),
+      updatedAt: new Date(1),
+    };
+    mocks.updateAiIdentity.mockResolvedValue(updatedIdentity);
+
+    await expect(
+      caller.aiIdentity.update({
+        workspaceId: 42,
+        name: updatedIdentity.name,
+        instructions: updatedIdentity.instructions,
+        tone: updatedIdentity.tone,
+        language: updatedIdentity.language,
+        modelDefault: updatedIdentity.modelDefault,
+      })
+    ).resolves.toEqual(updatedIdentity);
+
+    expect(mocks.insertAuditLog).toHaveBeenCalledWith({
+      workspaceId: 42,
+      userId: user.id,
+      event: "ai_identity.updated",
+      metadata: {
+        fields: ["name", "instructions", "tone", "language", "modelDefault"],
+      },
+    });
+  });
+
+  it("records an audit log when Facebook connect is started", async () => {
+    const caller = createCaller();
+
+    await expect(caller.facebook.startConnect({ workspaceId: 42 })).resolves.toMatchObject({
+      authorizationUrl: null,
+      callbackMode: "hosted",
+    });
+
+    expect(mocks.insertAuditLog).toHaveBeenCalledWith({
+      workspaceId: 42,
+      userId: user.id,
+      event: "facebook_connect.started",
+      metadata: {
+        scopes: ["pages_show_list", "pages_manage_metadata", "pages_messaging"],
+      },
+    });
+  });
+});
