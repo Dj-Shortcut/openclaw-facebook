@@ -437,6 +437,47 @@ describe("webhookIngressQueue", () => {
     );
   });
 
+  it("does not remove a failed delivery when the atomic retry push fails", async () => {
+    isRedisEnabledMock.mockReturnValue(true);
+    processFacebookWebhookPayloadMock.mockRejectedValue(new Error("callback failed"));
+
+    const delivery = JSON.stringify({
+      channel: "facebook",
+      payload: { entry: [{ id: "requeue-push-failed" }] },
+      receivedAt: "2026-05-28T00:00:00.000Z",
+    });
+    const queue = [delivery];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const redis = createQueueRedis(queue, processing, dead, {
+      pushError: new Error("OOM command not allowed when used memory > maxmemory"),
+    });
+    getRedisClientMock.mockResolvedValue(redis);
+
+    scheduleWebhookIngressDrain();
+
+    await vi.waitFor(() => {
+      expect(safeLogMock).toHaveBeenCalledWith(
+        "webhook_ingress_queue_drain_failed",
+        expect.objectContaining({
+          error: expect.objectContaining({
+            class: "Error",
+            message: "OOM command not allowed when used memory > maxmemory",
+          }),
+        })
+      );
+    });
+
+    expect(processing).toEqual([delivery]);
+    expect(queue).toEqual([]);
+    expect(dead).toEqual([]);
+    expect(redis.lrem).not.toHaveBeenCalledWith(
+      "meta-webhook-ingress:processing",
+      1,
+      delivery
+    );
+  });
+
   it("reclaims processing deliveries whose lease expired before draining", async () => {
     isRedisEnabledMock.mockReturnValue(true);
     const expiredDelivery = JSON.stringify({
@@ -521,6 +562,7 @@ function createQueueRedis(
     processingType?: "none" | "list" | "string";
     leaseType?: "none" | "string" | "list";
     destinationType?: "none" | "list" | "string";
+    pushError?: Error;
   } = {}
 ) {
   const leases = new Map<string, string>();
@@ -592,6 +634,19 @@ function createQueueRedis(
           throw new Error("destination key is not a list");
         }
 
+        if (!processing.includes(rawDelivery)) {
+          return 0;
+        }
+
+        if (types.pushError) {
+          throw types.pushError;
+        }
+        if (pushDirection === "LPUSH") {
+          await redis.lpush(destinationKey, serializedDelivery);
+        } else {
+          await redis.rpush(destinationKey, serializedDelivery);
+        }
+
         const removed = await redis.lrem(
           "meta-webhook-ingress:processing",
           1,
@@ -602,11 +657,6 @@ function createQueueRedis(
         }
 
         await redis.del(leaseKey);
-        if (pushDirection === "LPUSH") {
-          await redis.lpush(destinationKey, serializedDelivery);
-        } else {
-          await redis.rpush(destinationKey, serializedDelivery);
-        }
         return removed;
       }
     ),

@@ -199,10 +199,23 @@ async function moveFailedWebhookIngressDelivery(
         return redis.error_reply("destination key is not a list")
       end
 
+      local found = 0
+      local processingDeliveries = redis.call("LRANGE", KEYS[1], 0, -1)
+      for i = 1, #processingDeliveries do
+        if processingDeliveries[i] == ARGV[1] then
+          found = 1
+          break
+        end
+      end
+
+      if found == 0 then
+        return 0
+      end
+
+      redis.call(ARGV[2], KEYS[3], ARGV[3])
       local removed = redis.call("LREM", KEYS[1], 1, ARGV[1])
       if removed > 0 then
         redis.call("DEL", KEYS[2])
-        redis.call(ARGV[2], KEYS[3], ARGV[3])
       end
       return removed
     `,
