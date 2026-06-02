@@ -17,12 +17,6 @@ const result = spawnSync(
   vitestBin,
   [
     'run',
-    '--exclude',
-    'apps/**',
-    '--exclude',
-    '.worktrees/**',
-    '--exclude',
-    '.tmp-npm-pack/**',
   ],
   {
   stdio: 'inherit',
