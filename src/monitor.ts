@@ -1398,7 +1398,7 @@ async function processMessengerEvent(params: {
     ) {
       logMessengerStage(params.trace, "messenger_event_forward_started", {
         reason: "media_with_image_prompt",
-        sourceImage: false,
+        isSourceImageEdit: false,
         hasPrompt: true,
       });
       if (await forwardLeaderbotMessengerEvent({ event: params.event, trace: params.trace })) {

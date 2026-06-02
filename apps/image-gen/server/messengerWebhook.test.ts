@@ -48,6 +48,7 @@ import {
   anonymizePsid,
   getState,
   resetStateStore,
+  setConsentState,
   setLastGenerated,
   setPendingImage,
   setPendingStoredImage,
@@ -1699,6 +1700,48 @@ describe("messenger deterministic free text", () => {
     );
     expect(sendImageMock).toHaveBeenCalledWith(
       "captioned-source-edit-user",
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+  });
+
+  it("prompts for face-memory consent before processing captioned image edits", async () => {
+    const psid = "captioned-source-edit-consent-user";
+    await setConsentState(psid, true);
+    process.env.ENABLE_FACE_MEMORY = "true";
+    const fetchMock = installOpenAiSuccessFetchMock();
+
+    await processFacebookWebhookPayloadBase({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: psid },
+              message: {
+                mid: "mid-captioned-source-edit-consent",
+                text: "Restyle deze foto als cyberpunk poster",
+                attachments: [
+                  {
+                    type: "image",
+                    payload: { url: "https://img.example/consent-source.jpg" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expectFaceMemoryConsentPrompt(psid);
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+      )
+    ).toBe(false);
+    expect(sendImageMock).not.toHaveBeenCalledWith(
+      psid,
       expect.stringMatching(
         /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
       )

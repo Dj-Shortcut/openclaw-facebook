@@ -530,6 +530,11 @@ describe("shouldForwardMessengerTextToImageGen", () => {
     expect(shouldForwardMessengerTextToImageGen("Kan je een landschap afbeelding genereren?")).toBe(
       true,
     );
+    expect(
+      shouldForwardMessengerTextToImageGen(
+        "Een afbeelding maken een Belgisch landschap in de natuur",
+      ),
+    ).toBe(true);
     expect(shouldForwardMessengerTextToImageGen("Maak me een romeinse soldaat")).toBe(true);
   });
 

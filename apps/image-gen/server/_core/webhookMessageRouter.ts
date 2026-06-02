@@ -165,18 +165,6 @@ async function tryHandleImageMessage(
     storedSourceImageUrl
   );
 
-  if (shouldHandleImageCaptionAsConversation(input.text)) {
-    await handleTextMessage(ctx, {
-      psid: input.psid,
-      userId: input.userId,
-      reqId: input.reqId,
-      lang: input.lang,
-      text: input.text.trim(),
-      timestamp: input.timestamp,
-    });
-    return true;
-  }
-
   if (
     await promptForFaceMemoryConsent(
       ctx,
@@ -186,6 +174,18 @@ async function tryHandleImageMessage(
       storedSourceImageUrl
     )
   ) {
+    return true;
+  }
+
+  if (shouldHandleImageCaptionAsConversation(input.text)) {
+    await handleTextMessage(ctx, {
+      psid: input.psid,
+      userId: input.userId,
+      reqId: input.reqId,
+      lang: input.lang,
+      text: input.text.trim(),
+      timestamp: input.timestamp,
+    });
     return true;
   }
 
