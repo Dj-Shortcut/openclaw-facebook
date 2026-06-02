@@ -12,7 +12,7 @@ CREATE TABLE `workspaceMembers` (
   `id` int AUTO_INCREMENT NOT NULL,
   `workspaceId` int NOT NULL,
   `userId` int NOT NULL,
-  `role` enum('owner','admin','member') NOT NULL DEFAULT 'owner',
+  `role` enum('owner','admin','member') NOT NULL DEFAULT 'member',
   `createdAt` timestamp NOT NULL DEFAULT (now()),
   CONSTRAINT `workspaceMembers_id` PRIMARY KEY(`id`),
   CONSTRAINT `workspaceMembers_workspaceId_userId_unique` UNIQUE(`workspaceId`,`userId`)
@@ -45,7 +45,7 @@ CREATE TABLE `channelConnections` (
   `createdAt` timestamp NOT NULL DEFAULT (now()),
   `updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT `channelConnections_id` PRIMARY KEY(`id`),
-  CONSTRAINT `channelConnections_workspace_channel_external_unique` UNIQUE(`workspaceId`,`channel`,`externalId`)
+  CONSTRAINT `channelConnections_workspace_channel_unique` UNIQUE(`workspaceId`,`channel`)
 );
 --> statement-breakpoint
 CREATE TABLE `workspaceUsageDaily` (

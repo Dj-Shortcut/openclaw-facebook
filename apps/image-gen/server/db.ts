@@ -166,7 +166,9 @@ export async function getOrCreateUserWorkspace(user: {
     name: user.name ? `${user.name}'s workspace` : "Leaderbot workspace",
     slug: `workspace-${user.id}`,
   };
-  await db.insert(workspaces).values(workspaceValues);
+  await db.insert(workspaces).values(workspaceValues).onDuplicateKeyUpdate({
+    set: { slug: workspaceValues.slug },
+  });
 
   const created = await db
     .select()
@@ -181,7 +183,7 @@ export async function getOrCreateUserWorkspace(user: {
     role: "owner",
   };
   await db.insert(workspaceMembers).values(memberValues).onDuplicateKeyUpdate({
-    set: { role: memberValues.role },
+    set: { workspaceId: memberValues.workspaceId },
   });
 
   return workspace;
@@ -238,7 +240,9 @@ export async function getOrCreateAiIdentity(workspaceId: number) {
     name: "Leaderbot",
     instructions: "Help customers with clear, useful answers.",
   };
-  await db.insert(aiIdentities).values(values);
+  await db.insert(aiIdentities).values(values).onDuplicateKeyUpdate({
+    set: { workspaceId },
+  });
 
   const created = await db
     .select()
@@ -309,6 +313,7 @@ export async function upsertChannelConnection(values: InsertChannelConnection) {
   await db.insert(channelConnections).values(values).onDuplicateKeyUpdate({
     set: {
       status: values.status,
+      externalId: values.externalId ?? null,
       displayName: values.displayName ?? null,
       encryptedAccessToken: values.encryptedAccessToken ?? null,
       grantedScopes: values.grantedScopes ?? null,

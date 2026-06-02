@@ -2,17 +2,12 @@ import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import * as db from "../db";
 import {
-  createFacebookConnectState,
-  type FacebookConnectState,
-} from "./portalSecurity";
+  getFacebookOAuthUrl,
+  REQUIRED_FACEBOOK_SCOPES,
+  startFacebookConnect,
+  storeFacebookAuthorizationCode,
+} from "./facebookConnectStore";
 import { sdk } from "./sdk";
-
-const facebookConnectStates = new Map<string, FacebookConnectState>();
-const REQUIRED_FACEBOOK_SCOPES = [
-  "pages_show_list",
-  "pages_manage_metadata",
-  "pages_messaging",
-] as const;
 
 const aiIdentityUpdateSchema = z.object({
   workspaceId: z.number().int().positive(),
@@ -41,7 +36,10 @@ async function getAuthenticatedUser(req: Request, res: Response) {
   }
 }
 
-async function requireWorkspace(user: { id: number; name: string | null }, workspaceId?: number) {
+async function requireWorkspace(
+  user: { id: number; name: string | null },
+  workspaceId?: number
+) {
   const workspace = workspaceId
     ? { id: workspaceId }
     : await db.getOrCreateUserWorkspace(user);
@@ -52,32 +50,20 @@ async function requireWorkspace(user: { id: number; name: string | null }, works
   return workspaceId ? workspace : await db.getOrCreateUserWorkspace(user);
 }
 
-function getPortalBaseUrl() {
-  return (process.env.PORTAL_BASE_URL ?? process.env.APP_BASE_URL ?? "http://localhost:8080").replace(/\/$/, "");
-}
-
-function getFacebookOAuthUrl(state: string) {
-  const appId = process.env.FB_APP_ID;
-  if (!appId) return null;
-
-  const redirectUri = `${getPortalBaseUrl()}/api/facebook/connect/callback`;
-  const url = new URL("https://www.facebook.com/v21.0/dialog/oauth");
-  url.searchParams.set("client_id", appId);
-  url.searchParams.set("redirect_uri", redirectUri);
-  url.searchParams.set("state", state);
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", REQUIRED_FACEBOOK_SCOPES.join(","));
-  return url.toString();
-}
-
 export function registerPortalRoutes(app: Express) {
-  app.get("/api/facebook/connect/callback", async (req, res) => {
+  app.get("/api/facebook/connect/callback", (req, res) => {
     const parsed = facebookCallbackSchema.safeParse({
       code: typeof req.query.code === "string" ? req.query.code : undefined,
       state: typeof req.query.state === "string" ? req.query.state : undefined,
     });
 
-    if (!parsed.success || !facebookConnectStates.has(parsed.data.state)) {
+    if (
+      !parsed.success ||
+      !storeFacebookAuthorizationCode({
+        state: parsed.data.state,
+        code: parsed.data.code,
+      })
+    ) {
       res.status(400).type("html").send("<h1>Invalid Facebook authorization</h1>");
       return;
     }
@@ -184,11 +170,10 @@ export function registerPortalRoutes(app: Express) {
       return;
     }
 
-    const state = createFacebookConnectState({
+    const state = startFacebookConnect({
       workspaceId: parsed.data.workspaceId,
       userId: user.id,
     });
-    facebookConnectStates.set(state.state, state);
     await db.insertAuditLog({
       workspaceId: parsed.data.workspaceId,
       userId: user.id,

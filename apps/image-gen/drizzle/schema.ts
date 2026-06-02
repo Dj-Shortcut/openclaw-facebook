@@ -144,7 +144,7 @@ export const workspaceMembers = mysqlTable(
     id: int("id").autoincrement().primaryKey(),
     workspaceId: int("workspaceId").notNull(),
     userId: int("userId").notNull(),
-    role: mysqlEnum("role", ["owner", "admin", "member"]).default("owner").notNull(),
+    role: mysqlEnum("role", ["owner", "admin", "member"]).default("member").notNull(),
     createdAt: timestamp("createdAt").defaultNow().notNull(),
   },
   table => ({
@@ -189,10 +189,9 @@ export const channelConnections = mysqlTable(
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
   table => ({
-    workspaceChannelExternalUnique: uniqueIndex("channelConnections_workspace_channel_external_unique").on(
+    workspaceChannelUnique: uniqueIndex("channelConnections_workspace_channel_unique").on(
       table.workspaceId,
-      table.channel,
-      table.externalId
+      table.channel
     ),
   })
 );

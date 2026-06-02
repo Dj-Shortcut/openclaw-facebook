@@ -100,17 +100,24 @@ function App() {
   }
 
   async function connectFacebook() {
+    const authWindow = window.open("about:blank", "_blank", "noopener,noreferrer");
     setSaving(true);
     setNotice(null);
     try {
       const response = await startFacebookConnect(snapshot.workspace.id);
       if (!response.authorizationUrl) {
+        authWindow?.close();
         setNotice("Facebook app id is not configured on the portal backend.");
         return;
       }
-      window.open(response.authorizationUrl, "_blank", "noopener,noreferrer");
+      if (authWindow) {
+        authWindow.location.href = response.authorizationUrl;
+      } else {
+        window.location.href = response.authorizationUrl;
+      }
       setNotice("Facebook authorization opened. Return here after approving the Page.");
     } catch (error) {
+      authWindow?.close();
       setNotice(error instanceof Error ? error.message : "Could not start Facebook connect.");
     } finally {
       setSaving(false);

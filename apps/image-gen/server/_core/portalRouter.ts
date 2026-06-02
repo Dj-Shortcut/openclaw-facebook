@@ -2,19 +2,17 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import * as db from "../db";
 import {
-  createFacebookConnectState,
-  validateFacebookConnectState,
-  type FacebookConnectState,
-} from "./portalSecurity";
+  consumeFacebookPage,
+  exchangeFacebookCodeForPages,
+  getFacebookOAuthUrl,
+  getStoredFacebookState,
+  REQUIRED_FACEBOOK_SCOPES,
+  sealFacebookPageToken,
+  startFacebookConnect,
+  storeFacebookPages,
+  validateStoredFacebookState,
+} from "./facebookConnectStore";
 import { protectedProcedure, publicProcedure, router } from "./trpc";
-
-const REQUIRED_FACEBOOK_SCOPES = [
-  "pages_show_list",
-  "pages_manage_metadata",
-  "pages_messaging",
-] as const;
-
-const facebookConnectStates = new Map<string, FacebookConnectState>();
 
 const workspaceInput = z.object({
   workspaceId: z.number().int().positive(),
@@ -28,7 +26,10 @@ const aiIdentityUpdateInput = workspaceInput.extend({
   modelDefault: z.string().trim().min(1).max(80),
 });
 
-async function requireWorkspace(ctx: { user: { id: number; name: string | null } }, workspaceId?: number) {
+async function requireWorkspace(
+  ctx: { user: { id: number; name: string | null } },
+  workspaceId?: number
+) {
   const workspace = workspaceId
     ? { id: workspaceId }
     : await db.getOrCreateUserWorkspace(ctx.user);
@@ -41,30 +42,14 @@ async function requireWorkspace(ctx: { user: { id: number; name: string | null }
     });
   }
 
-  return workspaceId
-    ? { id: workspaceId }
-    : db.getOrCreateUserWorkspace(ctx.user);
+  return workspaceId ? { id: workspaceId } : db.getOrCreateUserWorkspace(ctx.user);
 }
 
-function getPortalBaseUrl() {
-  return (process.env.PORTAL_BASE_URL ?? process.env.APP_BASE_URL ?? "http://localhost:8080").replace(/\/$/, "");
-}
-
-function getFacebookOAuthUrl(state: string) {
-  const appId = process.env.FB_APP_ID;
-  const redirectUri = `${getPortalBaseUrl()}/api/facebook/connect/callback`;
-
-  if (!appId) {
-    return null;
-  }
-
-  const url = new URL("https://www.facebook.com/v21.0/dialog/oauth");
-  url.searchParams.set("client_id", appId);
-  url.searchParams.set("redirect_uri", redirectUri);
-  url.searchParams.set("state", state);
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", REQUIRED_FACEBOOK_SCOPES.join(","));
-  return url.toString();
+function badRequest(error: unknown, fallback: string) {
+  return new TRPCError({
+    code: "BAD_REQUEST",
+    message: error instanceof Error ? error.message : fallback,
+  });
 }
 
 export const portalRouter = router({
@@ -95,7 +80,9 @@ export const portalRouter = router({
           workspaceId: input.workspaceId,
           userId: ctx.user.id,
           event: "ai_identity.updated",
-          metadata: { fields: ["name", "instructions", "tone", "language", "modelDefault"] },
+          metadata: {
+            fields: ["name", "instructions", "tone", "language", "modelDefault"],
+          },
         });
         return updated;
       }),
@@ -139,11 +126,10 @@ export const portalRouter = router({
       .input(workspaceInput)
       .mutation(async ({ ctx, input }) => {
         await requireWorkspace(ctx, input.workspaceId);
-        const state = createFacebookConnectState({
+        const state = startFacebookConnect({
           workspaceId: input.workspaceId,
           userId: ctx.user.id,
         });
-        facebookConnectStates.set(state.state, state);
         await db.insertAuditLog({
           workspaceId: input.workspaceId,
           userId: ctx.user.id,
@@ -163,66 +149,89 @@ export const portalRouter = router({
       .input(
         workspaceInput.extend({
           state: z.string().min(16),
-          code: z.string().min(1),
+          code: z.string().min(1).optional(),
         })
       )
       .mutation(async ({ ctx, input }) => {
         await requireWorkspace(ctx, input.workspaceId);
-        const stored = validateFacebookConnectState(
-          facebookConnectStates.get(input.state),
-          {
+        try {
+          validateStoredFacebookState({
             state: input.state,
             workspaceId: input.workspaceId,
             userId: ctx.user.id,
-          }
-        );
-        facebookConnectStates.delete(stored.state);
+          });
+        } catch (error) {
+          throw badRequest(error, "invalid facebook connect state");
+        }
+
+        const code = input.code ?? getStoredFacebookState(input.state)?.authorizationCode;
+        if (!code || code !== getStoredFacebookState(input.state)?.authorizationCode) {
+          throw badRequest(null, "facebook authorization code missing or mismatched");
+        }
+
+        let pages;
+        try {
+          pages = await exchangeFacebookCodeForPages(code);
+        } catch (error) {
+          throw badRequest(error, "facebook token exchange failed");
+        }
+
+        storeFacebookPages({ state: input.state, pages });
         await db.insertAuditLog({
           workspaceId: input.workspaceId,
           userId: ctx.user.id,
           event: "facebook_connect.completed",
-          metadata: { codeReceived: Boolean(input.code) },
+          metadata: { pageCount: pages.length },
         });
 
         return {
-          pages: [
-            {
-              id: "pending-meta-exchange",
-              name: "Select after Meta token exchange",
-              grantedScopes: REQUIRED_FACEBOOK_SCOPES,
-            },
-          ],
+          pages: pages.map(({ accessToken: _token, ...page }) => page),
         };
       }),
 
     selectPage: protectedProcedure
       .input(
         workspaceInput.extend({
+          state: z.string().min(16),
           pageId: z.string().min(1).max(160),
-          pageName: z.string().min(1).max(255),
-          grantedScopes: z.array(z.enum(REQUIRED_FACEBOOK_SCOPES)).min(1),
         })
       )
       .mutation(async ({ ctx, input }) => {
         await requireWorkspace(ctx, input.workspaceId);
+        let page;
+        try {
+          page = consumeFacebookPage({
+            state: input.state,
+            workspaceId: input.workspaceId,
+            userId: ctx.user.id,
+            pageId: input.pageId,
+          });
+        } catch (error) {
+          throw badRequest(error, "facebook page was not authorized");
+        }
+
+        const hasAllScopes = REQUIRED_FACEBOOK_SCOPES.every(scope =>
+          page.grantedScopes.includes(scope)
+        );
         await db.upsertChannelConnection({
           workspaceId: input.workspaceId,
           channel: "facebook_messenger",
-          status:
-            input.grantedScopes.length === REQUIRED_FACEBOOK_SCOPES.length
-              ? "connected"
-              : "missing_permissions",
-          externalId: input.pageId,
-          displayName: input.pageName,
-          grantedScopes: input.grantedScopes,
-          encryptedAccessToken: null,
+          status: hasAllScopes ? "connected" : "missing_permissions",
+          externalId: page.id,
+          displayName: page.name,
+          grantedScopes: page.grantedScopes,
+          encryptedAccessToken: sealFacebookPageToken(page.accessToken),
           lastCheckedAt: new Date(),
         });
         await db.insertAuditLog({
           workspaceId: input.workspaceId,
           userId: ctx.user.id,
           event: "facebook_page.selected",
-          metadata: { pageId: input.pageId, pageName: input.pageName },
+          metadata: {
+            pageId: page.id,
+            pageName: page.name,
+            status: hasAllScopes ? "connected" : "missing_permissions",
+          },
         });
         return { success: true } as const;
       }),

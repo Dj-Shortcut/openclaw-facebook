@@ -55,10 +55,27 @@ export type FacebookStartResponse = {
   requiredScopes: string[];
 };
 
-const apiBaseUrl = (import.meta.env.VITE_PORTAL_API_BASE_URL ?? "").replace(/\/$/, "");
+declare global {
+  interface Window {
+    __TAURI_INTERNALS__?: unknown;
+  }
+}
+
+function getApiBaseUrl() {
+  const configured = (import.meta.env.VITE_PORTAL_API_BASE_URL ?? "").trim();
+  if (configured) {
+    return configured.replace(/\/$/, "");
+  }
+
+  if (typeof window !== "undefined" && window.__TAURI_INTERNALS__) {
+    throw new Error("VITE_PORTAL_API_BASE_URL is required for the Tauri customer app.");
+  }
+
+  return "";
+}
 
 function apiUrl(path: string) {
-  return `${apiBaseUrl}${path}`;
+  return `${getApiBaseUrl()}${path}`;
 }
 
 async function readJson<T>(response: Response): Promise<T> {

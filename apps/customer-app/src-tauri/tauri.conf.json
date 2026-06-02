@@ -11,7 +11,7 @@
   },
   "app": {
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' https://leaderbot.live https://*.leaderbot.live http://127.0.0.1:*; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      "csp": "default-src 'self'; connect-src 'self' https://leaderbot.live https://*.leaderbot.live; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'"
     },
     "windows": [
       {

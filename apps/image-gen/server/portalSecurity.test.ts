@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  consumeFacebookPage,
+  startFacebookConnect,
+  storeFacebookAuthorizationCode,
+  storeFacebookPages,
+  validateStoredFacebookState,
+} from "./_core/facebookConnectStore";
+import {
   assertWorkspaceMembership,
   createFacebookConnectState,
   validateFacebookConnectState,
@@ -56,5 +63,58 @@ describe("portal security", () => {
         now: 1000 + 10 * 60 * 1000 + 1,
       })
     ).toThrow("facebook connect state expired");
+  });
+
+  it("shares facebook connect state across start, callback code, and page selection", () => {
+    const now = Date.now();
+    const state = startFacebookConnect({
+      workspaceId: 12,
+      userId: 9,
+      now,
+    });
+
+    expect(
+      storeFacebookAuthorizationCode({
+        state: state.state,
+        code: "oauth-code",
+      })
+    ).toBe(true);
+    expect(
+      validateStoredFacebookState({
+        state: state.state,
+        workspaceId: 12,
+        userId: 9,
+        now: now + 1000,
+      }).authorizationCode
+    ).toBe("oauth-code");
+
+    storeFacebookPages({
+      state: state.state,
+      pages: [
+        {
+          id: "page-1",
+          name: "Customer Page",
+          accessToken: "page-token",
+          grantedScopes: [
+            "pages_show_list",
+            "pages_manage_metadata",
+            "pages_messaging",
+          ],
+        },
+      ],
+    });
+
+    expect(
+      consumeFacebookPage({
+        state: state.state,
+        workspaceId: 12,
+        userId: 9,
+        pageId: "page-1",
+      })
+    ).toMatchObject({
+      id: "page-1",
+      name: "Customer Page",
+      accessToken: "page-token",
+    });
   });
 });
