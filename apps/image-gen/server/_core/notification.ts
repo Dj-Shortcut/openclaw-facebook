@@ -2,7 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { ENV } from "./env";
 import { safeLog } from "./logger";
 
-export type NotificationPayload = {
+type NotificationPayload = {
   title: string;
   content: string;
 };

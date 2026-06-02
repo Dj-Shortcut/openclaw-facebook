@@ -19,7 +19,7 @@ import type {
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0;
 
-export type SessionPayload = {
+type SessionPayload = {
   openId: string;
   appId: string;
   name?: string;

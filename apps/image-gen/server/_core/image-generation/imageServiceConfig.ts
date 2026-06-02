@@ -62,7 +62,7 @@ export function hasObjectStorageConfig(): boolean {
   );
 }
 
-export function isProductionRuntime(): boolean {
+function isProductionRuntime(): boolean {
   return process.env.NODE_ENV === "production";
 }
 

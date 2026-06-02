@@ -10,7 +10,7 @@ import { safeLog } from "../logger";
 export class MissingInputImageError extends Error {}
 export class InvalidSourceImageUrlError extends Error {}
 
-export type SourceImageData = {
+type SourceImageData = {
   buffer: Buffer;
   contentType: string;
 };

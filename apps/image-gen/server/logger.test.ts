@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { safeLog } from "./_core/logger";
 
-describe("safeLog", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
+describe("safeLog routing", () => {
   it("emits structured info logs with redacted sensitive fields", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -44,7 +44,9 @@ describe("safeLog", () => {
       event: "error_event",
     });
   });
+});
 
+describe("safeLog redaction", () => {
   it("preserves already-hashed operational identifiers", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 

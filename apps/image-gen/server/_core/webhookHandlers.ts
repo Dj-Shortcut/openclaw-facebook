@@ -89,7 +89,7 @@ type InternalMessengerImageRequestInput = {
   sourceImageUrl?: string;
 };
 
-export class InternalMessengerImageRequestNotQueuedError extends Error {
+class InternalMessengerImageRequestNotQueuedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "InternalMessengerImageRequestNotQueuedError";

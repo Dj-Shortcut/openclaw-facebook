@@ -25,7 +25,7 @@ function createWhatsAppFeatureLogger(userId: string): BotLogger {
   };
 }
 
-export function createWhatsAppTextContext(
+function createWhatsAppTextContext(
   event: NormalizedWhatsAppEvent,
   context: WhatsAppHandlerContext,
   state: BotTextContext["state"],

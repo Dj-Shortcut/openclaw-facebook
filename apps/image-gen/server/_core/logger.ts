@@ -1,3 +1,4 @@
+/** @public */
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 type LogFields = Record<string, unknown>;
@@ -40,6 +41,7 @@ function emit(level: LogLevel, fields: LogFields): void {
   console.log(serialized);
 }
 
+/** @public */
 export function createLogger({ reqId, debugEnabled = false }: LoggerOptions) {
   function withReq(fields: LogFields): LogFields {
     if (!reqId || fields.reqId) {
@@ -173,6 +175,7 @@ function resolveLogLevel(details: LogFields): LogLevel {
     : "info";
 }
 
+/** @public */
 export function safeLog(
   event: string,
   details: LogFields = {}

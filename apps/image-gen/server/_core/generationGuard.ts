@@ -76,19 +76,19 @@ const globalLimiter = new ConcurrencyLimiter(
   )
 );
 
-export type MessengerGenerationGlobalLimitStats = {
+type MessengerGenerationGlobalLimitStats = {
   redisBacked: boolean;
   max: number;
   active: number;
 };
 
-export type MessengerGenerationGlobalLimitConfig = {
+type MessengerGenerationGlobalLimitConfig = {
   redisBacked: boolean;
   max: number;
   lockTtlMs: number;
 };
 
-export type MessengerDailyImageBudgetConfig = {
+type MessengerDailyImageBudgetConfig = {
   enabled: boolean;
   cap: number | null;
 };
