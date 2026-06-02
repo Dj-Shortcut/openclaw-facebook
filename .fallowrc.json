@@ -1,5 +1,5 @@
 {
-  "ignoreDependencies": ["@trpc/server"],
+  "ignoreDependencies": ["@sentry/node", "@trpc/server"],
   "overrides": [
     {
       "files": ["apps/image-gen/**/*.{ts,tsx}"],
