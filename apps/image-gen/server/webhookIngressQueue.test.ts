@@ -397,6 +397,46 @@ describe("webhookIngressQueue", () => {
     );
   });
 
+  it("does not remove a failed delivery when atomic requeue preflight fails", async () => {
+    isRedisEnabledMock.mockReturnValue(true);
+    processFacebookWebhookPayloadMock.mockRejectedValue(new Error("callback failed"));
+
+    const delivery = JSON.stringify({
+      channel: "facebook",
+      payload: { entry: [{ id: "requeue-preflight-failed" }] },
+      receivedAt: "2026-05-28T00:00:00.000Z",
+    });
+    const queue = [delivery];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const redis = createQueueRedis(queue, processing, dead, {
+      destinationType: "string",
+    });
+    getRedisClientMock.mockResolvedValue(redis);
+
+    scheduleWebhookIngressDrain();
+
+    await vi.waitFor(() => {
+      expect(safeLogMock).toHaveBeenCalledWith(
+        "webhook_ingress_queue_drain_failed",
+        expect.objectContaining({
+          error: expect.objectContaining({
+            class: "Error",
+            message: "destination key is not a list",
+          }),
+        })
+      );
+    });
+
+    expect(processing).toEqual([delivery]);
+    expect(queue).toEqual([]);
+    expect(dead).toEqual([]);
+    expect(redis.lpush).not.toHaveBeenCalledWith(
+      "meta-webhook-ingress",
+      expect.any(String)
+    );
+  });
+
   it("reclaims processing deliveries whose lease expired before draining", async () => {
     isRedisEnabledMock.mockReturnValue(true);
     const expiredDelivery = JSON.stringify({
@@ -476,7 +516,12 @@ describe("webhookIngressQueue", () => {
 function createQueueRedis(
   queue: string[],
   processing: string[],
-  dead: string[]
+  dead: string[],
+  types: {
+    processingType?: "none" | "list" | "string";
+    leaseType?: "none" | "string" | "list";
+    destinationType?: "none" | "list" | "string";
+  } = {}
 ) {
   const leases = new Map<string, string>();
 
@@ -534,6 +579,19 @@ function createQueueRedis(
         pushDirection: string,
         serializedDelivery: string
       ) => {
+        const processingType = types.processingType ?? "list";
+        if (processingType !== "none" && processingType !== "list") {
+          throw new Error("processing key is not a list");
+        }
+        const leaseType = types.leaseType ?? "string";
+        if (leaseType !== "none" && leaseType !== "string") {
+          throw new Error("lease key is not a string");
+        }
+        const destinationType = types.destinationType ?? "list";
+        if (destinationType !== "none" && destinationType !== "list") {
+          throw new Error("destination key is not a list");
+        }
+
         const removed = await redis.lrem(
           "meta-webhook-ingress:processing",
           1,

@@ -184,6 +184,21 @@ async function moveFailedWebhookIngressDelivery(
 ): Promise<void> {
   const removed = await redis.eval(
     `
+      local processingType = redis.call("TYPE", KEYS[1]).ok
+      if processingType ~= "none" and processingType ~= "list" then
+        return redis.error_reply("processing key is not a list")
+      end
+
+      local leaseType = redis.call("TYPE", KEYS[2]).ok
+      if leaseType ~= "none" and leaseType ~= "string" then
+        return redis.error_reply("lease key is not a string")
+      end
+
+      local destinationType = redis.call("TYPE", KEYS[3]).ok
+      if destinationType ~= "none" and destinationType ~= "list" then
+        return redis.error_reply("destination key is not a list")
+      end
+
       local removed = redis.call("LREM", KEYS[1], 1, ARGV[1])
       if removed > 0 then
         redis.call("DEL", KEYS[2])
