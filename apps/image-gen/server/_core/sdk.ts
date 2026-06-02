@@ -38,7 +38,7 @@ type UserInfoWithPlatforms = {
 class OAuthService {
   constructor(private client: ReturnType<typeof axios.create>) {
     if (ENV.oAuthServerUrl) {
-      safeLog("oauth_client_initialized", { hasBaseUrl: true });
+      safeLog("oauth_client_initialized", { configured: true });
       return;
     }
 

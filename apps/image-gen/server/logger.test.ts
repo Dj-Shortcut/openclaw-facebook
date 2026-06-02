@@ -44,4 +44,22 @@ describe("safeLog", () => {
       event: "error_event",
     });
   });
+
+  it("preserves already-hashed operational identifiers", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    safeLog("generation_diagnostic", {
+      psidHash: "abc123",
+      sender_id_hash: "def456",
+      senderId: "raw-sender",
+    });
+
+    const payload = JSON.parse(String(logSpy.mock.calls[0]?.[0]));
+
+    expect(payload).toMatchObject({
+      psidHash: "abc123",
+      sender_id_hash: "def456",
+    });
+    expect(payload).not.toHaveProperty("senderId");
+  });
 });

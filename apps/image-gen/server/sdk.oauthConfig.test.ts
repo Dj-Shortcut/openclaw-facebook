@@ -22,7 +22,7 @@ describe.sequential("OAuth SDK configuration guard", () => {
   it("does not log an OAuth error when OAUTH_SERVER_URL is missing", { timeout: 180_000 }, async () => {
     delete process.env.OAUTH_SERVER_URL;
     process.env.JWT_SECRET = "x".repeat(32);
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     vi.resetModules();
@@ -31,9 +31,11 @@ describe.sequential("OAuth SDK configuration guard", () => {
     expect(errorSpy).not.toHaveBeenCalledWith(
       expect.stringContaining("OAUTH_SERVER_URL is not configured")
     );
-    expect(infoSpy).toHaveBeenCalledWith(
-      "[OAuth] OAUTH_SERVER_URL not set, OAuth client calls are disabled until configured"
-    );
+    expect(JSON.parse(String(logSpy.mock.calls[0]?.[0]))).toEqual({
+      level: "info",
+      event: "oauth_client_disabled",
+      reason: "missing_oauth_server_url",
+    });
   });
 
   it("logs OAuth initialization when OAUTH_SERVER_URL is provided", { timeout: 180_000 }, async () => {
@@ -44,10 +46,11 @@ describe.sequential("OAuth SDK configuration guard", () => {
     vi.resetModules();
     await import("./_core/sdk");
 
-    expect(logSpy).toHaveBeenCalledWith(
-      "[OAuth] Initialized with baseURL:",
-      "https://oauth.example.com"
-    );
+    expect(JSON.parse(String(logSpy.mock.calls[0]?.[0]))).toEqual({
+      level: "info",
+      event: "oauth_client_initialized",
+      configured: true,
+    });
   });
 
   it("fails auth config validation when JWT_SECRET is missing or too short", () => {

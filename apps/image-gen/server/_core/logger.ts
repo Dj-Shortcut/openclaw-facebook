@@ -55,6 +55,10 @@ export function createLogger({ reqId, debugEnabled = false }: LoggerOptions) {
 
 function shouldDropLogKey(key: string): boolean {
   const lowered = key.toLowerCase();
+  if (lowered === "hash" || lowered.endsWith("hash") || lowered.endsWith("_hash")) {
+    return false;
+  }
+
   return [
     "token",
     "psid",
