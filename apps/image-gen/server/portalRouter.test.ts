@@ -34,6 +34,16 @@ const user: NonNullable<TrpcContext["user"]> = {
   lastSignedIn: new Date(0),
 };
 
+const workspaceId = 42;
+const aiIdentityUpdateInput = {
+  workspaceId,
+  name: "Leaderbot Support",
+  instructions: "Answer as the customer support assistant.",
+  tone: "Helpful",
+  language: "nl",
+  modelDefault: "default",
+};
+
 function createCaller() {
   return portalRouter.createCaller({
     user,
@@ -60,16 +70,13 @@ describe("portal router tenant isolation", () => {
 
     await expectForbidden(() =>
       caller.aiIdentity.update({
-        workspaceId: 42,
+        ...aiIdentityUpdateInput,
         name: "Other Workspace Bot",
         instructions: "Do not cross tenant boundaries.",
-        tone: "Helpful",
-        language: "nl",
-        modelDefault: "default",
       })
     );
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(42, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
     expect(mocks.updateAiIdentity).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
@@ -77,9 +84,9 @@ describe("portal router tenant isolation", () => {
   it("rejects cross-workspace channel and usage reads before returning tenant data", async () => {
     const caller = createCaller();
 
-    await expectForbidden(() => caller.channels.list({ workspaceId: 42 }));
-    await expectForbidden(() => caller.channels.status({ workspaceId: 42 }));
-    await expectForbidden(() => caller.usage.summary({ workspaceId: 42 }));
+    await expectForbidden(() => caller.channels.list({ workspaceId }));
+    await expectForbidden(() => caller.channels.status({ workspaceId }));
+    await expectForbidden(() => caller.usage.summary({ workspaceId }));
 
     expect(mocks.getWorkspaceMembership).toHaveBeenCalledTimes(3);
     expect(mocks.listChannelConnections).not.toHaveBeenCalled();
@@ -89,9 +96,9 @@ describe("portal router tenant isolation", () => {
   it("rejects cross-workspace Facebook connect starts before creating state or audit logs", async () => {
     const caller = createCaller();
 
-    await expectForbidden(() => caller.facebook.startConnect({ workspaceId: 42 }));
+    await expectForbidden(() => caller.facebook.startConnect({ workspaceId }));
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(42, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 });
@@ -100,7 +107,7 @@ describe("portal router audit logging", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getWorkspaceMembership.mockResolvedValue({
-      workspaceId: 42,
+      workspaceId,
       userId: user.id,
       role: "owner",
     });
@@ -109,31 +116,17 @@ describe("portal router audit logging", () => {
   it("records an audit log when a workspace AI identity is updated", async () => {
     const caller = createCaller();
     const updatedIdentity = {
-      id: 42,
-      workspaceId: 42,
-      name: "Leaderbot Support",
-      instructions: "Answer as the customer support assistant.",
-      tone: "Helpful",
-      language: "nl",
-      modelDefault: "default",
+      id: workspaceId,
+      ...aiIdentityUpdateInput,
       createdAt: new Date(0),
       updatedAt: new Date(1),
     };
     mocks.updateAiIdentity.mockResolvedValue(updatedIdentity);
 
-    await expect(
-      caller.aiIdentity.update({
-        workspaceId: 42,
-        name: updatedIdentity.name,
-        instructions: updatedIdentity.instructions,
-        tone: updatedIdentity.tone,
-        language: updatedIdentity.language,
-        modelDefault: updatedIdentity.modelDefault,
-      })
-    ).resolves.toEqual(updatedIdentity);
+    await expect(caller.aiIdentity.update(aiIdentityUpdateInput)).resolves.toEqual(updatedIdentity);
 
     expect(mocks.insertAuditLog).toHaveBeenCalledWith({
-      workspaceId: 42,
+      workspaceId,
       userId: user.id,
       event: "ai_identity.updated",
       metadata: {
@@ -144,14 +137,25 @@ describe("portal router audit logging", () => {
 
   it("records an audit log when Facebook connect is started", async () => {
     const caller = createCaller();
+    const originalFbAppId = process.env.FB_APP_ID;
 
-    await expect(caller.facebook.startConnect({ workspaceId: 42 })).resolves.toMatchObject({
-      authorizationUrl: null,
-      callbackMode: "hosted",
-    });
+    try {
+      delete process.env.FB_APP_ID;
+
+      await expect(caller.facebook.startConnect({ workspaceId })).resolves.toMatchObject({
+        authorizationUrl: null,
+        callbackMode: "hosted",
+      });
+    } finally {
+      if (originalFbAppId === undefined) {
+        delete process.env.FB_APP_ID;
+      } else {
+        process.env.FB_APP_ID = originalFbAppId;
+      }
+    }
 
     expect(mocks.insertAuditLog).toHaveBeenCalledWith({
-      workspaceId: 42,
+      workspaceId,
       userId: user.id,
       event: "facebook_connect.started",
       metadata: {
