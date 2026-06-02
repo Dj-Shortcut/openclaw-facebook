@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { assertAuthConfig } from "./_core/env";
 
+function parseConsoleLogCalls(logSpy: ReturnType<typeof vi.spyOn>) {
+  return logSpy.mock.calls.map(call => JSON.parse(String(call[0])));
+}
+
 describe.sequential("OAuth SDK configuration guard", () => {
   const originalOAuthUrl = process.env.OAUTH_SERVER_URL;
   const originalJwtSecret = process.env.JWT_SECRET;
@@ -23,6 +27,7 @@ describe.sequential("OAuth SDK configuration guard", () => {
     delete process.env.OAUTH_SERVER_URL;
     process.env.JWT_SECRET = "x".repeat(32);
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     vi.resetModules();
@@ -31,7 +36,8 @@ describe.sequential("OAuth SDK configuration guard", () => {
     expect(errorSpy).not.toHaveBeenCalledWith(
       expect.stringContaining("OAUTH_SERVER_URL is not configured")
     );
-    expect(JSON.parse(String(logSpy.mock.calls[0]?.[0]))).toEqual({
+    expect(infoSpy).not.toHaveBeenCalled();
+    expect(parseConsoleLogCalls(logSpy)).toContainEqual({
       level: "info",
       event: "oauth_client_disabled",
       reason: "missing_oauth_server_url",
@@ -42,15 +48,20 @@ describe.sequential("OAuth SDK configuration guard", () => {
     process.env.OAUTH_SERVER_URL = "https://oauth.example.com";
     process.env.JWT_SECRET = "x".repeat(32);
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
 
     vi.resetModules();
     await import("./_core/sdk");
 
-    expect(JSON.parse(String(logSpy.mock.calls[0]?.[0]))).toEqual({
+    expect(infoSpy).not.toHaveBeenCalled();
+    expect(parseConsoleLogCalls(logSpy)).toContainEqual({
       level: "info",
       event: "oauth_client_initialized",
       configured: true,
     });
+    expect(parseConsoleLogCalls(logSpy)).not.toContainEqual(
+      expect.objectContaining({ baseUrl: "https://oauth.example.com" })
+    );
   });
 
   it("fails auth config validation when JWT_SECRET is missing or too short", () => {
