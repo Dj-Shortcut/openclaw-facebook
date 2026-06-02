@@ -122,3 +122,115 @@ export const messengerState = mysqlTable("messengerState", {
 
 export type MessengerState = typeof messengerState.$inferSelect;
 export type InsertMessengerState = typeof messengerState.$inferInsert;
+
+/**
+ * Customer portal workspace owned by one or more authenticated customer users.
+ * All portal APIs must scope reads and writes through workspace membership.
+ */
+export const workspaces = mysqlTable("workspaces", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 160 }).notNull(),
+  slug: varchar("slug", { length: 160 }).notNull().unique(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type Workspace = typeof workspaces.$inferSelect;
+export type InsertWorkspace = typeof workspaces.$inferInsert;
+
+export const workspaceMembers = mysqlTable(
+  "workspaceMembers",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    role: mysqlEnum("role", ["owner", "admin", "member"]).default("owner").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  table => ({
+    workspaceUserUnique: uniqueIndex("workspaceMembers_workspaceId_userId_unique").on(
+      table.workspaceId,
+      table.userId
+    ),
+  })
+);
+
+export type WorkspaceMember = typeof workspaceMembers.$inferSelect;
+export type InsertWorkspaceMember = typeof workspaceMembers.$inferInsert;
+
+export const aiIdentities = mysqlTable("aiIdentities", {
+  id: int("id").autoincrement().primaryKey(),
+  workspaceId: int("workspaceId").notNull().unique(),
+  name: varchar("name", { length: 120 }).notNull(),
+  instructions: text("instructions"),
+  tone: varchar("tone", { length: 80 }).default("Helpful").notNull(),
+  language: varchar("language", { length: 16 }).default("nl").notNull(),
+  modelDefault: varchar("modelDefault", { length: 80 }).default("default").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type AiIdentity = typeof aiIdentities.$inferSelect;
+export type InsertAiIdentity = typeof aiIdentities.$inferInsert;
+
+export const channelConnections = mysqlTable(
+  "channelConnections",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    channel: mysqlEnum("channel", ["facebook_messenger", "whatsapp", "web"]).notNull(),
+    status: mysqlEnum("status", ["connected", "missing_permissions", "token_expired", "webhook_unhealthy", "disconnected"]).default("disconnected").notNull(),
+    externalId: varchar("externalId", { length: 160 }),
+    displayName: varchar("displayName", { length: 255 }),
+    encryptedAccessToken: text("encryptedAccessToken"),
+    grantedScopes: json("grantedScopes"),
+    lastCheckedAt: timestamp("lastCheckedAt"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    workspaceChannelExternalUnique: uniqueIndex("channelConnections_workspace_channel_external_unique").on(
+      table.workspaceId,
+      table.channel,
+      table.externalId
+    ),
+  })
+);
+
+export type ChannelConnection = typeof channelConnections.$inferSelect;
+export type InsertChannelConnection = typeof channelConnections.$inferInsert;
+
+export const workspaceUsageDaily = mysqlTable(
+  "workspaceUsageDaily",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    date: varchar("date", { length: 10 }).notNull(),
+    messageCount: int("messageCount").default(0).notNull(),
+    imageCount: int("imageCount").default(0).notNull(),
+    blockedCount: int("blockedCount").default(0).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    workspaceDateUnique: uniqueIndex("workspaceUsageDaily_workspaceId_date_unique").on(
+      table.workspaceId,
+      table.date
+    ),
+  })
+);
+
+export type WorkspaceUsageDaily = typeof workspaceUsageDaily.$inferSelect;
+export type InsertWorkspaceUsageDaily = typeof workspaceUsageDaily.$inferInsert;
+
+export const auditLog = mysqlTable("auditLog", {
+  id: int("id").autoincrement().primaryKey(),
+  workspaceId: int("workspaceId").notNull(),
+  userId: int("userId").notNull(),
+  event: varchar("event", { length: 120 }).notNull(),
+  metadata: json("metadata"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type AuditLog = typeof auditLog.$inferSelect;
+export type InsertAuditLog = typeof auditLog.$inferInsert;

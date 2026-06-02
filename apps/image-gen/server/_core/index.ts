@@ -61,6 +61,7 @@ import {
 } from "./faceMemory";
 import { createAdminAuthRateLimiter, verifyAdminToken } from "./adminAuth";
 import { registerInternalImageRequestRoutes } from "./internalImageRequestRoutes";
+import { registerPortalRoutes } from "./portalRoutes";
 import {
   assertMessengerGenerationQueueConfig,
   isMessengerGenerationWorkerMode,
@@ -231,6 +232,7 @@ async function startServer() {
   });
   registerMetricsRoute(app);
   registerFaceMemoryAdminRoutes(app);
+  registerPortalRoutes(app);
 
   app.get(
     "/debug/build",
