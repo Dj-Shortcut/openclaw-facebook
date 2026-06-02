@@ -112,7 +112,7 @@ export async function notifyOwner(
   } catch (error) {
     safeLog("owner_notification_request_failed", {
       level: "warn",
-      error: error instanceof Error ? error.message : String(error),
+      error,
     });
     return false;
   }

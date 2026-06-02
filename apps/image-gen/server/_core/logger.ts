@@ -82,6 +82,10 @@ function shouldDropLogKey(key: string): boolean {
     return false;
   }
 
+  if (lowered === "context") {
+    return false;
+  }
+
   if (RAW_URL_KEYS.has(normalized)) {
     return true;
   }
@@ -103,6 +107,10 @@ function sanitizeString(value: string): string {
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
     .replace(/([?&](?:access_)?token=)[^&\s]+/gi, "$1[REDACTED]")
     .replace(/https?:\/\/[^\s)]+/gi, "[URL_REDACTED]");
+}
+
+function truncateLogUser(value: unknown): unknown {
+  return typeof value === "string" ? value.slice(0, 8) : value;
 }
 
 function normalizeLogValue(
@@ -131,6 +139,11 @@ function normalizeLogValue(
   }
 
   if (Array.isArray(value)) {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+
+    seen.add(value);
     return value.map(item => normalizeLogValue(item, seen));
   }
 
@@ -143,7 +156,10 @@ function normalizeLogValue(
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
         .filter(([key]) => !shouldDropLogKey(key))
-        .map(([key, nested]) => [key, normalizeLogValue(nested, seen)])
+        .map(([key, nested]) => [
+          key,
+          normalizeLogValue(key === "user" ? truncateLogUser(nested) : nested, seen),
+        ])
     );
   }
 
@@ -157,8 +173,8 @@ function redactLogDetails(
     Object.entries(details)
       .filter(([key]) => !shouldDropLogKey(key))
       .map(([key, value]) => {
-        if (typeof value === "string" && key === "user") {
-          return [key, value.slice(0, 8)];
+        if (key === "user") {
+          return [key, normalizeLogValue(truncateLogUser(value))];
         }
 
         return [key, normalizeLogValue(value)];
@@ -181,6 +197,6 @@ export function safeLog(
   details: LogFields = {}
 ): void {
   const level = resolveLogLevel(details);
-  const { level: _level, ...rest } = details;
+  const { level: _level, event: _event, ...rest } = details;
   emit(level, { event, ...redactLogDetails(rest) });
 }

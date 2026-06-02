@@ -45,7 +45,7 @@ async function getDb() {
     } catch (error) {
       safeLog("database_connect_failed", {
         level: "warn",
-        error: error instanceof Error ? error.message : String(error),
+        error,
       });
       _db = null;
     }
@@ -110,7 +110,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
   } catch (error) {
     safeLog("database_upsert_user_failed", {
       level: "error",
-      error: error instanceof Error ? error.message : String(error),
+      error,
     });
     throw error;
   }

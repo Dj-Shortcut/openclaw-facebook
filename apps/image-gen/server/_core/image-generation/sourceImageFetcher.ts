@@ -426,7 +426,7 @@ async function maybeWriteDebugImageProof(
     safeLog("debug_image_proof_write_failed", {
       level: "warn",
       reqId,
-      error: error instanceof Error ? error.message : String(error),
+      error,
     });
   }
 }

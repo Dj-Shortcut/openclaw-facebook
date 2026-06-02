@@ -239,7 +239,7 @@ class SDKServer {
     } catch (error) {
       safeLog("auth_session_verification_failed", {
         level: "warn",
-        error: error instanceof Error ? error.message : String(error),
+        error,
       });
       return null;
     }
@@ -290,7 +290,7 @@ class SDKServer {
       } catch (error) {
         safeLog("auth_oauth_user_sync_failed", {
           level: "error",
-          error: error instanceof Error ? error.message : String(error),
+          error,
         });
         throw ForbiddenError("Failed to sync user info");
       }

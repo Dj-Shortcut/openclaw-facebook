@@ -737,7 +737,7 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       safeLog("openai_call_error", {
         level: "error",
         psidHash: anonymizePsid(psid).slice(0, 12),
-        error: error instanceof Error ? error.message : undefined,
+        error,
       });
 
       const errorClass =
@@ -873,7 +873,7 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
         reqId,
         user: toLogUser(userId),
         generationKind: resolvedGenerationKind,
-        error: error instanceof Error ? error.message : String(error),
+        error,
       });
     }
     safeLog("messenger_generation_job_queued", {

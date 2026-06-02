@@ -101,4 +101,28 @@ describe("safeLog redaction", () => {
     });
     expect(JSON.stringify(payload)).not.toContain("abc");
   });
+
+  it("redacts nested users, circular arrays, and event overrides", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const circular: unknown[] = [];
+    circular.push(circular);
+
+    safeLog("trusted_event", {
+      event: "untrusted_event",
+      context: {
+        user: "1234567890",
+        items: circular,
+      },
+    });
+
+    const payload = JSON.parse(String(logSpy.mock.calls[0]?.[0]));
+
+    expect(payload).toMatchObject({
+      event: "trusted_event",
+      context: {
+        user: "12345678",
+        items: ["[Circular]"],
+      },
+    });
+  });
 });
