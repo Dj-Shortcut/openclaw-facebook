@@ -177,7 +177,6 @@ export async function getOrCreateUserWorkspace(user: {
     .limit(1);
 
   if (existing.length > 0) {
-    await seedWorkspacePrivacyDefaults(existing[0].id);
     return existing[0];
   }
 
