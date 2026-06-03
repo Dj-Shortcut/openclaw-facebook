@@ -114,3 +114,8 @@ skills-lock.json
 *.sqlite
 *.sqlite3
 public/generated/
+
+# Fallow local analysis reports (badges are committed separately)
+.fallow/
+fallow-full.json
+fallow-production.json
