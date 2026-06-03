@@ -5,7 +5,7 @@
 This repository powers:
 
 * OpenClaw Facebook Messenger integration
-* Leaderbot conversational assistant
+* Leaderbot tenant-owned conversational assistants
 * Leaderbot image-generation platform
 
 Primary goal:
@@ -33,6 +33,8 @@ The conversation layer owns:
 * assistant responses
 * follow-up actions
 * conversation state
+
+Conversation state, memory, and assistant context must be scoped to the owning customer/workspace. Do not introduce shared or global memory paths that can leak customer data across tenants or channels.
 
 Preferred response shape:
 
@@ -92,6 +94,7 @@ The portal direction is:
 * customer account and workspace
 * owned AI identity and instructions
 * knowledge management
+  * Knowledge management must be tenant-scoped: uploaded files, extracted text, embeddings, retrieval indexes, and assistant memory must not be shared or searchable across customer workspaces unless an explicit customer-controlled sharing feature exists.
 * channel connection status
 * usage, quota, billing, and privacy controls
 
@@ -129,6 +132,7 @@ Conversation Layer:
 * images
 * actions
 * state transitions
+* tenant-scoped memory/context boundaries
 
 Channel Layer:
 
@@ -239,6 +243,8 @@ Do not remove existing production behavior unless:
 2. tests exist
 3. migration path exists
 
+Privacy and tenant-isolation fixes may intentionally restrict operator/admin access to customer data, provided there is a safe migration path for support workflows, auditability is preserved, and production customer functionality remains available.
+
 Legacy Messenger style payloads should not be reintroduced. Preserve production behavior through channel-neutral `ConversationAction` inputs and explicit natural-language/image-edit requests.
 
 ---
@@ -248,7 +254,7 @@ Legacy Messenger style payloads should not be reintroduced. Preserve production 
 Favor:
 
 * stability
-* observability
+* privacy-preserving observability
 * rollback safety
 
 Over:
@@ -256,6 +262,8 @@ Over:
 * clever abstractions
 * speculative architecture
 * premature optimization
+
+Observability should prefer metadata, health signals, aggregate metrics, and redacted diagnostics. Do not log or expose customer conversation content, memory, uploaded knowledge, personal data, or generated prompts/outputs unless there is an explicit customer-approved support flow or audited break-glass incident path.
 
 Never break:
 
