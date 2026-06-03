@@ -254,7 +254,7 @@ Legacy Messenger style payloads should not be reintroduced. Preserve production 
 Favor:
 
 * stability
-* observability
+* privacy-preserving observability
 * rollback safety
 
 Over:
@@ -262,6 +262,8 @@ Over:
 * clever abstractions
 * speculative architecture
 * premature optimization
+
+Observability should prefer metadata, health signals, aggregate metrics, and redacted diagnostics. Do not log or expose customer conversation content, memory, uploaded knowledge, personal data, or generated prompts/outputs unless there is an explicit customer-approved support flow or audited break-glass incident path.
 
 Never break:
 
