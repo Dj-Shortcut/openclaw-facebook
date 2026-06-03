@@ -6,8 +6,10 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  createFallowSpawnConfig,
   getNpxCommand,
   parseRunFallowReportArgs,
+  quoteWindowsShellArg,
 } from "./run-fallow-report.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -40,6 +42,28 @@ describe("run-fallow-report", () => {
   it("uses the npx executable directly on non-Windows platforms", () => {
     expect(getNpxCommand("linux")).toBe("npx");
     expect(getNpxCommand("darwin")).toBe("npx");
+  });
+
+  it("enables the shell and quotes fallow arguments for Windows npx.cmd", () => {
+    const config = createFallowSpawnConfig(
+      "C:\\tmp\\image gen",
+      ["--flag=hello & goodbye", 'quote"value'],
+      "win32"
+    );
+
+    expect(config.args).toEqual([]);
+    expect(config.options).toMatchObject({
+      cwd: "C:\\tmp\\image gen",
+      shell: true,
+    });
+    expect(config.command).toContain("npx.cmd");
+    expect(config.command).toContain(
+      quoteWindowsShellArg("C:\\tmp\\image gen")
+    );
+    expect(config.command).toContain(
+      quoteWindowsShellArg("--flag=hello & goodbye")
+    );
+    expect(config.command).toContain(quoteWindowsShellArg('quote"value'));
   });
 
   it("keeps fallow arguments after the separator", () => {
