@@ -41,23 +41,16 @@ export function parseRunFallowReportArgs(args) {
     fallowArgs.push(arg);
   }
 
-  return { root, outputPath, fallowArgs };
+  return { fallowArgs, outputPath, root };
 }
 
-export function runFallowReport({
-  args = process.argv.slice(2),
-  platform = process.platform,
-  spawn = spawnSync,
-  exit = process.exit,
-  stderr = process.stderr,
-} = {}) {
-  const { root, outputPath, fallowArgs } = parseRunFallowReportArgs(args);
+export function runFallowReport(args = process.argv.slice(2)) {
+  const { fallowArgs, outputPath, root } = parseRunFallowReportArgs(args);
 
   if (!outputPath) {
-    stderr.write(
-      "Usage: node scripts/run-fallow-report.mjs [--root <root>] --output <report.json> [-- <fallow args>]\n"
+    console.error(
+      "Usage: node scripts/run-fallow-report.mjs [--root <root>] --output <report.json> [-- <fallow args>]"
     );
-    exit(1);
     return 1;
   }
 
@@ -75,8 +68,8 @@ export function runFallowReport({
   );
 
   try {
-    const result = spawn(
-      getNpxCommand(platform),
+    const result = spawnSync(
+      getNpxCommand(),
       [
         "--yes",
         "fallow@2.27.0",
@@ -94,7 +87,7 @@ export function runFallowReport({
     );
 
     if (result.stderr) {
-      stderr.write(result.stderr);
+      process.stderr.write(result.stderr);
     }
 
     if (result.error) {
@@ -102,13 +95,12 @@ export function runFallowReport({
     }
 
     if (result.status !== 0) {
-      exit(result.status ?? 1);
       return result.status ?? 1;
     }
 
     fs.writeFileSync(temporaryReportPath, result.stdout, "utf8");
 
-    const normalizeResult = spawn(
+    const normalizeResult = spawnSync(
       process.execPath,
       [normalizeScriptPath, "--root", rootPath, temporaryReportPath],
       {
@@ -123,7 +115,6 @@ export function runFallowReport({
     }
 
     if (normalizeResult.status !== 0) {
-      exit(normalizeResult.status ?? 1);
       return normalizeResult.status ?? 1;
     }
 
@@ -134,6 +125,6 @@ export function runFallowReport({
   }
 }
 
-if (process.argv[1] === scriptPath) {
-  runFallowReport();
+if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
+  process.exit(runFallowReport());
 }
