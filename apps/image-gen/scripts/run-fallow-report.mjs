@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const normalizeScriptPath = fileURLToPath(
-  new URL("../../scripts/normalize-fallow-report.mjs", import.meta.url)
+  new URL("../../../scripts/normalize-fallow-report.mjs", import.meta.url)
 );
 
 export function getNpxCommand(platform = process.platform) {
