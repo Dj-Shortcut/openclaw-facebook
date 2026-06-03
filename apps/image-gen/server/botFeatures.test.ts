@@ -67,7 +67,7 @@ describe("bot features", () => {
     expect(textExecutions).toHaveLength(11);
   });
 
-  it("lets remix text fall back to deterministic text handling", async () => {
+  it("lets remix text fall back to prompt-first quick actions", async () => {
     const psid = "remix-fallback-user";
 
     await processFacebookWebhookPayload({
@@ -83,7 +83,15 @@ describe("bot features", () => {
       ],
     });
 
-    expect(sendTextMock).toHaveBeenCalledWith(psid, t("nl", "textWithoutPhoto"));
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
+      psid,
+      t("nl", "flowExplanation"),
+      expect.arrayContaining([
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding" }),
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:Pas%20foto%20aan" }),
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:Privacy" }),
+      ])
+    );
   });
 
   it("handles help command via bot feature without OpenAI text", async () => {
@@ -102,13 +110,18 @@ describe("bot features", () => {
       ],
     });
 
-    expect(sendTextMock).toHaveBeenCalledWith(
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
-      [t("nl", "textWithoutPhoto"), t("nl", "assistantPhotoTip")].join("\n\n")
+      t("nl", "flowExplanation"),
+      expect.arrayContaining([
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding" }),
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:Pas%20foto%20aan" }),
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:Privacy" }),
+      ])
     );
   });
 
-  it("keeps surprise-without-photo users in awaiting-photo state", async () => {
+  it("keeps surprise-without-photo users in prompt-first quick actions", async () => {
     const psid = "surprise-user";
 
     await processFacebookWebhookPayload({
@@ -124,7 +137,15 @@ describe("bot features", () => {
       ],
     });
 
-    expect(sendTextMock).toHaveBeenCalledWith(psid, t("nl", "textWithoutPhoto"));
-    expect(getState(anonymizePsid(psid))?.stage).toBe("AWAITING_PHOTO");
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
+      psid,
+      t("nl", "flowExplanation"),
+      expect.arrayContaining([
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding" }),
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:Pas%20foto%20aan" }),
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:Privacy" }),
+      ])
+    );
+    expect(getState(anonymizePsid(psid))?.stage).toBe("IDLE");
   });
 });

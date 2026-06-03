@@ -1,15 +1,16 @@
 # Leaderbot AI Image Generator
-[![Fallow Maintainability](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Dj-Shortcut/leaderbot-fb-image-gen/main/public/badges/fallow-maintainability.json)](https://github.com/Dj-Shortcut/leaderbot-fb-image-gen/actions/workflows/fallow.yml)
+[![Fallow Maintainability](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Dj-Shortcut/openclaw-facebook/main/apps/image-gen/public/badges/fallow-maintainability.json)](https://github.com/Dj-Shortcut/openclaw-facebook/actions/workflows/fallow.yml)
 
-A Meta messaging bot with a shared bot-core for Messenger.
+A Meta messaging bot with a shared bot-core for Messenger and WhatsApp.
 
-The active product scope is photo-to-image styling and related bot infrastructure. This repository also contains some experimental or legacy experience modules, but they are not part of the current Leaderbot direction and should not be treated as planned product work.
+The active product scope is generic AI image generation and related bot infrastructure. Free text-to-image requests are the primary user experience; source-photo edits use natural-language prompts rather than legacy style-picker menus.
 
 ## Product Scope
 
 Current repository focus:
 
-- photo-first image generation flows for Messenger and WhatsApp
+- free text-to-image generation from natural Messenger prompts
+- explicit source-photo edit/restyle flows when the user asks to edit a photo
 - shared text handling across both Meta channels
 - channel-specific media ingress and outbound message rendering
 - operational tooling around state, quota, storage, security, and deployment
@@ -111,7 +112,7 @@ Primary stages:
 
 - `IDLE`
 - `AWAITING_PHOTO`
-- `AWAITING_STYLE`
+- `AWAITING_EDIT_PROMPT`
 - `PROCESSING`
 - `RESULT_READY`
 - `FAILURE`
@@ -137,9 +138,9 @@ The repository is now organized around an explicit bot-core boundary:
 - `server/_core/bot/index.ts` exposes the Messenger bot runtime entrypoints used by server bootstrap.
 - `server/_core/bot/features.ts` is the dedicated extension point for future bot features.
 
-The built-in registry now starts with foundational bot middleware-style features such as rate limiting, style handling, conversational editing, and admin stats. Future bot features should prefer registering text/payload/image handlers there via `registerBotFeature(...)` instead of expanding unrelated web or admin codepaths.
+The built-in registry now starts with foundational bot middleware-style features such as rate limiting, prompt-first image/edit commands, conversational editing, and admin stats. Future bot features should prefer registering text/payload/image handlers there via `registerBotFeature(...)` instead of expanding unrelated web or admin codepaths.
 
-Repository changes should prioritize the current styling product and the supporting multi-channel bot/runtime foundation. Do not treat older experiment scaffolding as the roadmap by default.
+Repository changes should prioritize generic prompt-first image generation and the supporting multi-channel bot/runtime foundation. Do not treat older style-catalog or experiment scaffolding as the roadmap by default.
 
 ## Multi-channel text flow
 
@@ -149,27 +150,27 @@ Text handling is now split into three layers:
 - Shared domain logic in `server/_core/sharedTextHandler.ts` operates on that normalized shape and returns channel-agnostic bot intents.
 - Channel adapters map outbound `BotResponse` intents into Messenger or WhatsApp send calls.
 
-Current scope is intentionally limited to text messages. Media/image handling is still channel-specific and will be moved later once the shared contracts are expanded.
+Current shared scope is intentionally limited to text messages. Image generation now accepts prompt-first requests, while media/source-image handling is still channel-specific and should only move once the shared contracts are ready.
 
 Further boundary work should continue to reduce coupling between channel adapters and shared bot logic without expanding obsolete experiment paths.
 
 ## WhatsApp image flow
 
-WhatsApp now supports the same core customer journey as Messenger:
+WhatsApp supports the prompt-first image journey and source-photo edits:
 
 - inbound image webhooks are accepted on the shared Meta callback route
 - WhatsApp media is downloaded through the Cloud API using the inbound media id
-- the source image is persisted to a reusable public URL for follow-up style picks
-- users can pick style groups and styles over plain text replies
+- the source image is persisted to a reusable public URL for follow-up edits
+- users can describe the next image or edit in natural language
 - generated images are returned through the WhatsApp Cloud API image send endpoint
 
 Because the persisted source image is fetched again during generation, `SOURCE_IMAGE_ALLOWED_HOSTS` must include the hostname used for those stored source images. In local/dev setups this is usually the `APP_BASE_URL` host. In production it should include the public asset host returned by the storage layer.
 
 ## Messenger face memory
 
-Messenger face memory is an optional 30-day source-photo reuse feature. It is disabled by default with `ENABLE_FACE_MEMORY=false` and must remain disabled until the consent copy, privacy policy, and deletion language are approved.
+Messenger face memory is an optional source-photo reuse feature. It is disabled by default with `ENABLE_FACE_MEMORY=false` and must remain disabled until the consent copy, privacy policy, and deletion language are approved. Retention defaults to 30 days and can be configured with `FACE_MEMORY_RETENTION_DAYS`.
 
-When enabled, the first photo upload asks the user whether Leaderbot may keep the uploaded photo for 30 days. A positive answer stores consent metadata and the retained source-image URL. A negative answer keeps the normal one-photo flow without reusable face memory. Users can delete retained face-memory data by sending `verwijder mijn data` or `delete my data`. Stored source-image URLs are refreshed through the storage proxy before generation when the proxy is configured.
+When enabled, the first photo upload asks the user whether Leaderbot may keep the uploaded photo for the configured retention window. A positive answer stores consent metadata and the retained source-image URL. A negative answer keeps the normal one-photo flow without reusable face memory. Users can delete retained face-memory data by sending `verwijder mijn data` or `delete my data`. Stored source-image URLs are refreshed through the storage proxy before generation when the proxy is configured.
 
 For the full legal/ops checklist, rollout guidance, and kill-switch procedure, see [`docs/face-memory.md`](docs/face-memory.md).
 
@@ -235,7 +236,8 @@ Operational env shortlist: [`docs/operations/ENV_SHORTLIST.md`](docs/operations/
 - `OAUTH_SERVER_URL` (enables OAuth route initialization)
 - `LOG_LEVEL`, `DEBUG_STATE_DUMP`, `DEBUG_IMAGE_PROOF` (diagnostics)
 - `MESSENGER_QUOTA_BYPASS_IDS` (comma-separated PSIDs or hashed user keys that skip Messenger daily quota; intended for internal testing/admin)
-- `ENABLE_FACE_MEMORY` (`false` by default; enables explicit-consent 30-day Messenger source-photo reuse after legal approval)
+- `ENABLE_FACE_MEMORY` (`false` by default; enables explicit-consent Messenger source-photo reuse after legal approval)
+- `FACE_MEMORY_RETENTION_DAYS` (optional positive whole number; defaults to `30` and controls retained source-photo expiry plus Redis state TTL buffer)
 - `PORT` (default `8080`)
 - `BUILT_IN_FORGE_API_URL`, `BUILT_IN_FORGE_API_KEY` (used by the storage proxy contract; in production image generation these should point to the R2-backed proxy so generated Messenger attachment URLs are durable across Fly machines)
 - `VITE_APP_ID`, `DATABASE_URL`, `OWNER_OPEN_ID`, `BUILT_IN_FORGE_API_URL`, `BUILT_IN_FORGE_API_KEY` (app/data integrations exposed via `server/_core/env.ts`)
@@ -244,7 +246,7 @@ Legacy/app-specific environment variables also exist for SDK and data API integr
 
 ### Free-text behavior
 
-Free-text Messenger and WhatsApp messages use deterministic flow responses. There is no OpenAI text brain for unmatched chat. The only current OpenAI image provider is `openai-images`, which uses the Responses API image_generation tool flow.
+Free-text Messenger and WhatsApp messages use deterministic flow responses for non-image chat. Messenger image-generation prompts are routed to the image-generation service as text-to-image unless they explicitly ask to edit/restyle a source photo. The only current OpenAI image provider is `openai-images`, which uses the Responses API image_generation tool flow.
 
 ### Secret hygiene
 
@@ -310,9 +312,10 @@ Multi-channel text routing now also has a small adapter-level test in `server/bo
 - Keep documentation comments synchronized with implementation changes; when behavior, inputs, or outputs change, update the docblock in the same PR.
 - Remove stale comments rather than leaving outdated guidance in place.
 
-## Style additions
+## Image prompts
 
-When adding or updating image styles, use [`docs/style-guide.md`](docs/style-guide.md) as the quality and consistency checklist for prompts, previews, naming, and review.
+New product behavior should prefer generic prompt-first image generation and natural-language source-photo edits. Do not rebuild legacy style-picker catalogs or preview menus.
+
 For Facebook/Messenger share assets, use [`docs/invite-image-export-checklist.md`](docs/invite-image-export-checklist.md) as the required export, naming, and cache-busting workflow.
 
 ## Security: webhook signature verification

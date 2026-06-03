@@ -5,9 +5,8 @@ import {
 import {
   detectAck,
   type FacebookWebhookEvent,
-  styleCategoryPayloadToCategory,
-  stylePayloadToStyle,
 } from "./webhookHelpers";
+import { decodeMessengerActionInput } from "./messengerActionPayload";
 
 export type InboundEventClassification = {
   isInboundUserEvent: boolean;
@@ -22,15 +21,9 @@ function isKnownMessengerPayload(payload: string | undefined): boolean {
   }
 
   return Boolean(
-    payload === FACE_MEMORY_CONSENT_YES ||
+      payload === FACE_MEMORY_CONSENT_YES ||
       payload === FACE_MEMORY_CONSENT_NO ||
-      payload === "CHOOSE_STYLE" ||
-      payload === "WHAT_IS_THIS" ||
-      payload === "PRIVACY_INFO" ||
-      payload === "RETRY_STYLE" ||
-      payload.startsWith("RETRY_STYLE_") ||
-      stylePayloadToStyle(payload) ||
-      styleCategoryPayloadToCategory(payload)
+      Boolean(decodeMessengerActionInput(payload))
   );
 }
 

@@ -1,12 +1,5 @@
-import type { Style, StyleCategory } from "./messengerStyles";
-import {
-  STYLE_CATEGORY_CONFIGS,
-  getStylesForCategory,
-} from "./messengerStyles";
-import type { ActiveExperience } from "./activeExperience";
-import type { EntryIntent } from "./entryIntent";
-import type { DirectorMode } from "./image-generation/director/directorTypes";
 import type { Lang } from "./i18n";
+import type { ConversationAction } from "./botResponse";
 import {
   clearStateStore,
   deleteState,
@@ -23,16 +16,11 @@ import {
 export type ConversationState =
   | "IDLE"
   | "AWAITING_PHOTO"
-  | "AWAITING_STYLE"
+  | "AWAITING_EDIT_PROMPT"
   | "PROCESSING"
   | "RESULT_READY"
   | "FAILURE";
 export type MessengerFlowState = ConversationState;
-
-export type StateQuickReply = {
-  title: string;
-  payload: string;
-};
 
 export type QuotaState = {
   dayKey: string;
@@ -46,16 +34,10 @@ export type MessengerUserState = {
   userKey: string;
   stage: MessengerFlowState;
   state: MessengerFlowState;
-  lastEntryIntent?: EntryIntent | null;
-  activeExperience?: ActiveExperience | null;
   lastUserMessageAt?: number;
   lastPhotoUrl: string | null;
   lastPhoto: string | null;
   lastPhotoSource?: SourceImageOrigin | null;
-  selectedStyle: string | null;
-  chosenStyle: string | null;
-  selectedStyleCategory?: StyleCategory | "director" | null;
-  preselectedStyle?: string | null;
   preferredLang?: Lang;
   consentGiven: boolean;
   consentTimestamp?: number;
@@ -73,39 +55,14 @@ export type MessengerUserState = {
   pendingSourceImageDeleteUrl?: string | null;
   lastImageUrl?: string;
   lastGeneratedUrl?: string | null;
-  lastStyle?: Style;
-  lastDirectorMode?: DirectorMode;
   lastPrompt?: string;
   lastGeneratedAt?: number;
   lastVariantCursor?: number;
+  pendingConversationActions?: ConversationAction[];
+  pendingConversationActionsByMessageId?: Record<string, ConversationAction[]>;
   quota: QuotaState;
   updatedAt: number;
 };
-
-const QUICK_REPLIES_BY_STATE: Record<ConversationState, StateQuickReply[]> = {
-  IDLE: [
-    { title: "Wat doe ik?", payload: "WHAT_IS_THIS" },
-    { title: "Privacy", payload: "PRIVACY_INFO" },
-  ],
-  AWAITING_PHOTO: [],
-  AWAITING_STYLE: STYLE_CATEGORY_CONFIGS.map(category => ({
-    title: category.label,
-    payload: category.payload,
-  })),
-  PROCESSING: [],
-  RESULT_READY: [
-    { title: "Nieuwe stijl", payload: "CHOOSE_STYLE" },
-    { title: "Privacy", payload: "PRIVACY_INFO" },
-  ],
-  FAILURE: [
-    { title: "Probeer opnieuw", payload: "RETRY_STYLE" },
-    { title: "Andere stijl", payload: "CHOOSE_STYLE" },
-  ],
-};
-
-export function getQuickRepliesForState(state: ConversationState): StateQuickReply[] {
-  return QUICK_REPLIES_BY_STATE[state];
-}
 
 export function anonymizePsid(psid: string): string {
   return toUserKey(psid);
@@ -201,49 +158,6 @@ export function setPendingDeleteConfirm(
   }
 }
 
-export function setLastEntryIntent(
-  psid: string,
-  entryIntent: EntryIntent | null,
-  now = Date.now()
-): MaybePromise<void> {
-  const result = patchState(
-    psid,
-    {
-      lastEntryIntent: entryIntent,
-    },
-    now
-  );
-
-  if (isPromiseLike(result)) {
-    return result.then(() => undefined);
-  }
-}
-
-export function setActiveExperience(
-  psid: string,
-  activeExperience: ActiveExperience | null,
-  now = Date.now()
-): MaybePromise<void> {
-  const result = patchState(
-    psid,
-    {
-      activeExperience,
-    },
-    now
-  );
-
-  if (isPromiseLike(result)) {
-    return result.then(() => undefined);
-  }
-}
-
-function clearActiveExperience(
-  psid: string,
-  now = Date.now()
-): MaybePromise<void> {
-  return setActiveExperience(psid, null, now);
-}
-
 export function setPendingImage(
   psid: string,
   imageUrl: string,
@@ -256,10 +170,12 @@ export function setPendingImage(
       lastPhotoUrl: imageUrl,
       lastPhoto: imageUrl,
       lastPhotoSource: source,
+      lastImageUrl: undefined,
+      lastGeneratedUrl: null,
       pendingImageUrl: imageUrl,
       pendingImageAt: now,
-      stage: "AWAITING_STYLE",
-      state: "AWAITING_STYLE",
+      stage: "AWAITING_EDIT_PROMPT",
+      state: "AWAITING_EDIT_PROMPT",
     },
     now,
   );
@@ -385,71 +301,13 @@ export function clearPendingImageState(psid: string, now = Date.now()): MaybePro
       lastPhotoUrl: null,
       lastPhoto: null,
       lastPhotoSource: null,
+      lastImageUrl: undefined,
+      lastGeneratedUrl: null,
       pendingImageUrl: undefined,
       pendingImageAt: undefined,
-      selectedStyle: null,
-      chosenStyle: null,
-      selectedStyleCategory: null,
     },
     now,
   );
-}
-
-export function setPreselectedStyle(psid: string, style: string | null, now = Date.now()): MaybePromise<MessengerUserState> {
-  return patchState(
-    psid,
-    {
-      preselectedStyle: style,
-    },
-    now,
-  );
-}
-
-export function setChosenStyle(psid: string, style: string, now = Date.now()): MaybePromise<void> {
-  const result = patchState(
-    psid,
-    {
-      selectedStyle: style,
-      chosenStyle: style,
-      selectedStyleCategory: null,
-    },
-    now,
-  );
-
-  if (isPromiseLike(result)) {
-    return result.then(() => undefined);
-  }
-}
-
-export function setSelectedStyleCategory(
-  psid: string,
-  category: StyleCategory | "director" | null,
-  now = Date.now()
-): MaybePromise<void> {
-  const result = patchState(
-    psid,
-    {
-      selectedStyleCategory: category,
-    },
-    now
-  );
-
-  if (isPromiseLike(result)) {
-    return result.then(() => undefined);
-  }
-}
-
-export function getStyleRepliesForCategory(category: StyleCategory): StateQuickReply[] {
-  return [
-    ...getStylesForCategory(category).map(style => ({
-      title: style.label,
-      payload: style.payload,
-    })),
-    {
-      title: "↩️ Categorieen",
-      payload: "CHOOSE_STYLE",
-    },
-  ];
 }
 
 export function setPreferredLang(psid: string, lang: Lang, now = Date.now()): MaybePromise<void> {
@@ -485,8 +343,8 @@ export function markIntroSeen(psid: string, now = Date.now()): MaybePromise<void
     psid,
     {
       hasSeenIntro: true,
-      stage: "AWAITING_PHOTO",
-      state: "AWAITING_PHOTO",
+      stage: "IDLE",
+      state: "IDLE",
     },
     now,
   );
@@ -494,6 +352,56 @@ export function markIntroSeen(psid: string, now = Date.now()): MaybePromise<void
   if (isPromiseLike(result)) {
     return result.then(() => undefined);
   }
+}
+
+export function setPendingConversationActions(
+  psid: string,
+  actions: ConversationAction[] | undefined,
+  messageId?: string,
+  now = Date.now()
+): MaybePromise<void> {
+  const currentState = getOrCreateState(psid);
+  const currentByMessageId = isPromiseLike(currentState)
+    ? undefined
+    : currentState.pendingConversationActionsByMessageId;
+  const nextByMessageId =
+    actions?.length && messageId?.trim()
+      ? prunePendingConversationActionsByMessageId({
+          ...(currentByMessageId ?? {}),
+          [messageId.trim()]: actions,
+        })
+      : currentByMessageId;
+  const result = patchState(
+    psid,
+    {
+      pendingConversationActions: actions?.length ? actions : undefined,
+      pendingConversationActionsByMessageId: nextByMessageId,
+    },
+    now
+  );
+
+  if (isPromiseLike(result)) {
+    return result.then(() => undefined);
+  }
+}
+
+export function getPendingConversationActionsForMessage(
+  state: MessengerUserState,
+  messageId: string | undefined
+): ConversationAction[] | undefined {
+  const key = messageId?.trim();
+  if (!key) {
+    return undefined;
+  }
+
+  return state.pendingConversationActionsByMessageId?.[key];
+}
+
+function prunePendingConversationActionsByMessageId(
+  actionsByMessageId: Record<string, ConversationAction[]>
+): Record<string, ConversationAction[]> {
+  const entries = Object.entries(actionsByMessageId).slice(-20);
+  return Object.fromEntries(entries);
 }
 
 export function setLastGenerated(psid: string, resultImageUrl: string, now = Date.now()): MaybePromise<void> {
@@ -516,14 +424,12 @@ export function setLastGenerated(psid: string, resultImageUrl: string, now = Dat
 
 export function setLastGenerationContext(
   psid: string,
-  context: { style?: Style; directorMode?: DirectorMode; prompt?: string },
+  context: { prompt?: string },
   now = Date.now()
 ): MaybePromise<void> {
   const result = patchState(
     psid,
     {
-      lastStyle: context.style,
-      lastDirectorMode: context.directorMode,
       lastPrompt: context.prompt,
     },
     now,

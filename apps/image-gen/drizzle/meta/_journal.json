@@ -29,6 +29,13 @@
       "when": 1771902695410,
       "tag": "0003_fresh_the_anarchist",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1780300800000,
+      "tag": "0004_customer_portal",
+      "breakpoints": true
     }
   ]
 }

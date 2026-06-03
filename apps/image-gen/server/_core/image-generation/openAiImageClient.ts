@@ -1,4 +1,5 @@
 import { getOpenAiImageModelConfig } from "./imageServiceConfig";
+import { safeLog } from "../logger";
 
 class OpenAiGenerationError extends Error {}
 export class OpenAiBudgetExceededError extends Error {}
@@ -66,8 +67,10 @@ const OPENAI_IMAGE_ALLOWED_BACKGROUNDS = new Set([
 const OPENAI_IMAGE_ALLOWED_ACTIONS = new Set(["auto", "generate", "edit"]);
 const OPENAI_IMAGE_ALLOWED_INPUT_FIDELITIES = new Set(["low", "high"]);
 
+/** @public */
 export type OpenAiImageOutputFormat = "png" | "jpeg" | "webp";
 
+/** @public */
 export function getOpenAiImageOutputFormat(): OpenAiImageOutputFormat {
   return readEnumEnv(
     "OPENAI_IMAGE_OUTPUT_FORMAT",
@@ -136,7 +139,8 @@ function readEnumEnv(
     return raw;
   }
 
-  console.warn("OPENAI_IMAGE_CONFIG_IGNORED", {
+  safeLog("openai_image_config_ignored", {
+    level: "warn",
     name,
     value: raw,
     reason: "unsupported_value",
@@ -155,7 +159,8 @@ function readCompressionEnv(): number | undefined {
   }
 
   if (process.env.OPENAI_IMAGE_OUTPUT_COMPRESSION?.trim()) {
-    console.warn("OPENAI_IMAGE_CONFIG_IGNORED", {
+    safeLog("openai_image_config_ignored", {
+      level: "warn",
       name: "OPENAI_IMAGE_OUTPUT_COMPRESSION",
       value: process.env.OPENAI_IMAGE_OUTPUT_COMPRESSION,
       reason: "expected_integer_0_to_100",
@@ -389,14 +394,10 @@ export async function fetchOpenAiImageResponse(
     const openAiStartedAt = Date.now();
 
     try {
-      console.info(
-        JSON.stringify({
-          level: "info",
-          msg: "openai_image_request_started",
-          reqId: context.reqId,
-          attempt: attempt + 1,
-        })
-      );
+      safeLog("openai_image_request_started", {
+        reqId: context.reqId,
+        attempt: attempt + 1,
+      });
       const response = await fetchWithTimeout(
         requestContext.endpoint,
         requestContext.requestInit,
@@ -408,21 +409,18 @@ export async function fetchOpenAiImageResponse(
         (Date.now() - openAiStartedAt);
 
       if (response.ok) {
-        console.info(
-          JSON.stringify({
-            level: "info",
-            msg: "openai_image_response_received",
-            reqId: context.reqId,
-            attempt: attempt + 1,
-            status: response.status,
-          })
-        );
+        safeLog("openai_image_response_received", {
+          reqId: context.reqId,
+          attempt: attempt + 1,
+          status: response.status,
+        });
         return response;
       }
 
       const errorBody = await readErrorBody(response);
       if (isBudgetExceededErrorResponse(response.status, errorBody)) {
-        console.error("OPENAI_BUDGET_EXCEEDED", {
+        safeLog("openai_budget_exceeded", {
+          level: "error",
           reqId: context.reqId,
           status: response.status,
           statusText: response.statusText,
@@ -441,7 +439,8 @@ export async function fetchOpenAiImageResponse(
         isRetryableResponseStatus(response.status)
       ) {
         const waitMs = openAiRetryBaseMs * 2 ** attempt;
-        console.warn("OPENAI_GENERATION_RETRY", {
+        safeLog("openai_generation_retry", {
+          level: "warn",
           reqId: context.reqId,
           attempt: attempt + 1,
           waitMs,
@@ -451,7 +450,8 @@ export async function fetchOpenAiImageResponse(
         continue;
       }
 
-      console.error("OPENAI_ERROR_RESPONSE", {
+      safeLog("openai_error_response", {
+        level: "error",
         reqId: context.reqId,
         status: response.status,
         statusText: response.statusText,
@@ -470,7 +470,8 @@ export async function fetchOpenAiImageResponse(
 
       if (attempt < openAiRetryLimit && isRetryableNetworkError(error)) {
         const waitMs = openAiRetryBaseMs * 2 ** attempt;
-        console.warn("OPENAI_GENERATION_RETRY", {
+        safeLog("openai_generation_retry", {
+          level: "warn",
           reqId: context.reqId,
           attempt: attempt + 1,
           waitMs,
@@ -510,19 +511,16 @@ export async function parseOpenAiImageResponse(
     output => output?.type === "image_generation_call"
   );
   if (!imageGenerationCall) {
-    console.warn(
-      JSON.stringify({
-        level: "warn",
-        msg: "openai_image_response_missing_generation_call",
-        reqId,
-        outputTypes: result.output.map(output => output?.type ?? "unknown"),
-        contentTypes: result.output.flatMap(output =>
-          Array.isArray(output?.content)
-            ? output.content.map(content => content?.type ?? "unknown")
-            : []
-        ),
-      })
-    );
+    safeLog("openai_image_response_missing_generation_call", {
+      level: "warn",
+      reqId,
+      outputTypes: result.output.map(output => output?.type ?? "unknown"),
+      contentTypes: result.output.flatMap(output =>
+        Array.isArray(output?.content)
+          ? output.content.map(content => content?.type ?? "unknown")
+          : []
+      ),
+    });
     throw new OpenAiGenerationError(
       "OpenAI response did not include an image_generation_call"
     );
@@ -544,7 +542,8 @@ export async function parseOpenAiImageResponse(
   const estimatedOutputBytes = estimateBase64DecodedBytes(base64Image);
   const maxOutputBytes = getOpenAiMaxOutputBytes();
   if (estimatedOutputBytes > maxOutputBytes) {
-    console.warn("OPENAI_IMAGE_OUTPUT_TOO_LARGE", {
+    safeLog("openai_image_output_too_large", {
+      level: "warn",
       reqId,
       estimatedOutputBytes,
       maxOutputBytes,
@@ -561,15 +560,11 @@ export async function parseOpenAiImageResponse(
     );
   }
 
-  console.info(
-    JSON.stringify({
-      level: "info",
-      msg: "openai_image_response_parsed",
-      reqId,
-      outputBytes: imageBufferResult.length,
-      parseMs: Date.now() - startedAt,
-    })
-  );
+  safeLog("openai_image_response_parsed", {
+    reqId,
+    outputBytes: imageBufferResult.length,
+    parseMs: Date.now() - startedAt,
+  });
   return imageBufferResult;
 }
 

@@ -1,4 +1,4 @@
-import {
+﻿import {
   afterAll,
   afterEach,
   beforeAll,
@@ -12,7 +12,6 @@ import {
 const {
   getRedisClientMock,
   isRedisEnabledMock,
-  sendGenericTemplateMock,
   sendImageMock,
   sendQuickRepliesMock,
   sendTextMock,
@@ -20,7 +19,6 @@ const {
 } = vi.hoisted(() => ({
   getRedisClientMock: vi.fn(),
   isRedisEnabledMock: vi.fn(() => false),
-  sendGenericTemplateMock: vi.fn(async () => ({ sent: true })),
   sendImageMock: vi.fn(async () => ({ sent: true })),
   sendQuickRepliesMock: vi.fn(async () => ({ sent: true })),
   sendTextMock: vi.fn(async () => ({ sent: true })),
@@ -28,7 +26,6 @@ const {
 }));
 
 vi.mock("./_core/messengerApi", () => ({
-  sendGenericTemplate: sendGenericTemplateMock,
   sendImage: sendImageMock,
   sendQuickReplies: sendQuickRepliesMock,
   sendText: sendTextMock,
@@ -48,17 +45,13 @@ import {
 } from "./_core/messengerWebhook";
 import { t } from "./_core/i18n";
 import {
-  STYLE_CATEGORY_CONFIGS,
-  getStylesForCategory,
-} from "./_core/messengerStyles";
-import {
   anonymizePsid,
   getState,
   resetStateStore,
+  setConsentState,
+  setLastGenerated,
   setPendingImage,
   setPendingStoredImage,
-  setPreselectedStyle,
-  setChosenStyle,
   setFlowState,
 } from "./_core/messengerState";
 import {
@@ -78,6 +71,8 @@ const originalMessengerGenerationQueueEnabled =
   process.env.MESSENGER_GENERATION_QUEUE_ENABLED;
 const originalMessengerGenerationInlineFallback =
   process.env.MESSENGER_GENERATION_INLINE_FALLBACK;
+const originalFaceMemoryRetentionDays =
+  process.env.FACE_MEMORY_RETENTION_DAYS;
 
 const processFacebookWebhookPayload = processConsentedFacebookWebhookPayload(
   processFacebookWebhookPayloadBase
@@ -97,8 +92,14 @@ function promptFromOpenAiRequest(init: RequestInit | undefined): string {
   if (typeof payload.input === "string") {
     return payload.input;
   }
+  const firstInput = payload.input?.[0] as
+    | { content?: string | Array<{ type?: string; text?: string }> }
+    | undefined;
+  if (typeof firstInput?.content === "string") {
+    return firstInput.content;
+  }
   return (
-    payload.input?.[0]?.content?.find(part => part.type === "input_text")
+    firstInput?.content?.find(part => part.type === "input_text")
       ?.text ?? ""
   );
 }
@@ -131,7 +132,7 @@ function isSourceImageFetchUrl(
 
 function installOpenAiSuccessFetchMock() {
   const sourceImage = Buffer.alloc(6000, 7);
-  const fetchMock = vi.fn(async (url: string | URL) => {
+  const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
     if (isSourceImageFetchUrl(url)) {
       return {
         ok: true,
@@ -166,29 +167,6 @@ function installImageIngressFetchMock() {
 
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
-}
-
-async function sendMessengerQuickReply(
-  processPayload: typeof processFacebookWebhookPayloadBase,
-  psid: string,
-  mid: string,
-  payload: string
-): Promise<void> {
-  await processPayload({
-    entry: [
-      {
-        messaging: [
-          {
-            sender: { id: psid },
-            message: {
-              mid,
-              quick_reply: { payload },
-            },
-          },
-        ],
-      },
-    ],
-  });
 }
 
 async function sendMessengerPhoto(
@@ -238,11 +216,13 @@ function clearMessengerSendMocks(): void {
   sendTextMock.mockClear();
 }
 
+const IN_FLIGHT_NOTICE = "Even geduld, ik ben nog bezig met je afbeelding.";
+
 function inFlightNoticeSendCount(psid: string): number {
   return sendTextMock.mock.calls.filter(
     ([recipient, text]) =>
       recipient === psid &&
-      text === "⏳ even geduld, ik ben nog bezig met jouw restyle"
+      text === IN_FLIGHT_NOTICE
   ).length;
 }
 
@@ -276,6 +256,11 @@ afterEach(() => {
   delete process.env.APP_BASE_URL;
   delete process.env.SOURCE_IMAGE_ALLOWED_HOSTS;
   delete process.env.ENABLE_FACE_MEMORY;
+  if (originalFaceMemoryRetentionDays === undefined) {
+    delete process.env.FACE_MEMORY_RETENTION_DAYS;
+  } else {
+    process.env.FACE_MEMORY_RETENTION_DAYS = originalFaceMemoryRetentionDays;
+  }
   if (originalMessengerGenerationQueueEnabled === undefined) {
     delete process.env.MESSENGER_GENERATION_QUEUE_ENABLED;
   } else {
@@ -295,6 +280,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  delete process.env.FACE_MEMORY_RETENTION_DAYS;
   setSourceImageDnsLookupForTests(async () => [
     { address: "93.184.216.34", family: 4 },
   ]);
@@ -308,7 +294,6 @@ describe("messenger webhook dedupe", () => {
     process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
     installImageIngressFetchMock();
     sendImageMock.mockClear();
-    sendGenericTemplateMock.mockClear();
     sendQuickRepliesMock.mockClear();
     sendTextMock.mockClear();
     safeLogMock.mockClear();
@@ -318,7 +303,7 @@ describe("messenger webhook dedupe", () => {
 
   it("registers built-in bot features", () => {
     expect(getBotFeatures().map(feature => feature.name)).toEqual(
-      expect.arrayContaining(["rateLimit", "styleCommands"])
+      expect.arrayContaining(["rateLimit", "assistant_commands"])
     );
   });
 
@@ -347,75 +332,9 @@ describe("messenger webhook dedupe", () => {
     await processFacebookWebhookPayload(payload);
     await processFacebookWebhookPayload(payload);
 
-    expect(sendQuickRepliesMock).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(1);
     expect(sendTextMock).not.toHaveBeenCalled();
-  });
-
-  it("sends immediate feedback when a generation job is queued", async () => {
-    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
-    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
-    isRedisEnabledMock.mockReturnValue(true);
-    const redisState = new Map<string, string>();
-    const redis = {
-      del: vi.fn(async (key: string) => (redisState.delete(key) ? 1 : 0)),
-      get: vi.fn(async (key: string) => redisState.get(key) ?? null),
-      llen: vi.fn(async () => 1),
-      lpush: vi.fn(async () => 1),
-      set: vi.fn(async (key: string, value: string) => {
-        redisState.set(key, value);
-        return "OK";
-      }),
-    };
-    getRedisClientMock.mockResolvedValue(redis);
-
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: "queued-feedback-user" },
-              message: {
-                mid: "mid-queued-feedback-photo",
-                attachments: [
-                  {
-                    type: "image",
-                    payload: { url: "https://img.example/queued.jpg" },
-                  },
-                ],
-              },
-            },
-            {
-              sender: { id: "queued-feedback-user" },
-              message: {
-                mid: "mid-queued-feedback-style",
-                quick_reply: { payload: "disco" },
-              },
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(redis.lpush).toHaveBeenCalledWith(
-      "messenger-generation-jobs",
-      expect.stringContaining('"style":"disco"')
-    );
-    expect(sendTextMock).toHaveBeenCalledWith(
-      "queued-feedback-user",
-      "Je afbeelding staat in de wachtrij. Ik stuur ze zodra ze klaar is."
-    );
-    expect(sendImageMock).not.toHaveBeenCalled();
-    expect(
-      (await Promise.resolve(getState("queued-feedback-user")))?.stage
-    ).toBe("PROCESSING");
-
-    const queuedLogCallIndex = safeLogMock.mock.calls.findIndex(
-      ([event]) => event === "messenger_generation_job_queued"
-    );
-    expect(queuedLogCallIndex).toBeGreaterThanOrEqual(0);
-    expect(sendTextMock.mock.invocationCallOrder[0]).toBeLessThan(
-      safeLogMock.mock.invocationCallOrder[queuedLogCallIndex]
-    );
+    expect(sendQuickRepliesMock).toHaveBeenCalledTimes(1);
   });
 
   it("throttles repeated in-flight notices while a PROCESSING generation is active", async () => {
@@ -444,7 +363,7 @@ describe("messenger webhook dedupe", () => {
       expect(inFlightNoticeSendCount(psid)).toBe(1);
       expect(sendTextMock).toHaveBeenLastCalledWith(
         psid,
-        "⏳ even geduld, ik ben nog bezig met jouw restyle"
+        IN_FLIGHT_NOTICE
       );
 
       nowSpy.mockReturnValue(1_771_000_010_000);
@@ -483,7 +402,7 @@ describe("messenger webhook dedupe", () => {
       expect(inFlightNoticeSendCount(psid)).toBe(2);
       expect(sendTextMock).toHaveBeenLastCalledWith(
         psid,
-        "⏳ even geduld, ik ben nog bezig met jouw restyle"
+        IN_FLIGHT_NOTICE
       );
     } finally {
       nowSpy.mockRestore();
@@ -517,7 +436,7 @@ describe("messenger webhook dedupe", () => {
       expect(inFlightNoticeSendCount(psid)).toBe(1);
       expect(sendTextMock).toHaveBeenLastCalledWith(
         psid,
-        "⏳ even geduld, ik ben nog bezig met jouw restyle"
+        IN_FLIGHT_NOTICE
       );
 
       await deleteEphemeralKey(inFlightKey);
@@ -554,81 +473,12 @@ describe("messenger webhook dedupe", () => {
       expect(inFlightNoticeSendCount(psid)).toBe(1);
       expect(sendTextMock).toHaveBeenLastCalledWith(
         psid,
-        "⏳ even geduld, ik ben nog bezig met jouw restyle"
+        IN_FLIGHT_NOTICE
       );
     } finally {
       nowSpy.mockRestore();
       await deleteEphemeralKey(inFlightKey);
     }
-  });
-
-  it("keeps queued generation accepted when the queued feedback send fails", async () => {
-    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
-    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
-    isRedisEnabledMock.mockReturnValue(true);
-    const redisState = new Map<string, string>();
-    const redis = {
-      del: vi.fn(async (key: string) => (redisState.delete(key) ? 1 : 0)),
-      get: vi.fn(async (key: string) => redisState.get(key) ?? null),
-      llen: vi.fn(async () => 1),
-      lpush: vi.fn(async () => 1),
-      set: vi.fn(async (key: string, value: string) => {
-        redisState.set(key, value);
-        return "OK";
-      }),
-    };
-    getRedisClientMock.mockResolvedValue(redis);
-    sendTextMock.mockRejectedValueOnce(new Error("Messenger Send API timeout"));
-
-    await expect(
-      processFacebookWebhookPayload({
-        entry: [
-          {
-            messaging: [
-              {
-                sender: { id: "queued-feedback-fail-user" },
-                message: {
-                  mid: "mid-queued-feedback-fail-photo",
-                  attachments: [
-                    {
-                      type: "image",
-                      payload: { url: "https://img.example/queued-fail.jpg" },
-                    },
-                  ],
-                },
-              },
-              {
-                sender: { id: "queued-feedback-fail-user" },
-                message: {
-                  mid: "mid-queued-feedback-fail-style",
-                  quick_reply: { payload: "disco" },
-                },
-              },
-            ],
-          },
-        ],
-      })
-    ).resolves.toBeUndefined();
-
-    expect(redis.lpush).toHaveBeenCalledWith(
-      "messenger-generation-jobs",
-      expect.stringContaining('"style":"disco"')
-    );
-    expect(sendImageMock).not.toHaveBeenCalled();
-    expect(
-      (await Promise.resolve(getState("queued-feedback-fail-user")))?.stage
-    ).toBe("PROCESSING");
-    expect(safeLogMock).toHaveBeenCalledWith(
-      "messenger_generation_queued_ack_failed",
-      expect.objectContaining({
-        error: "Messenger Send API timeout",
-        style: "disco",
-      })
-    );
-    expect(safeLogMock).toHaveBeenCalledWith(
-      "messenger_generation_job_queued",
-      expect.objectContaining({ style: "disco" })
-    );
   });
 
   it("does not send a duplicate generated image for a completed queued job", async () => {
@@ -648,7 +498,6 @@ describe("messenger webhook dedupe", () => {
     await processMessengerGenerationJob({
       psid: "completed-job-user",
       userId: "completed-job-user-key",
-      style: "disco",
       reqId: "req-completed-job",
       lang: "nl",
     });
@@ -661,7 +510,7 @@ describe("messenger webhook dedupe", () => {
       "messenger_generation_job_duplicate_completed",
       expect.objectContaining({
         reqId: "req-completed-job",
-        style: "disco",
+        generationKind: "text_to_image",
       })
     );
   });
@@ -697,6 +546,305 @@ describe("messenger webhook dedupe", () => {
         hasSourceImageUrl: true,
       })
     );
+  });
+
+  it("generates a new image from arbitrary text-only internal gateway prompts", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+    const userPrompt =
+      "Maak een futuristische productfoto van een transparante koffiemok op een marmeren tafel";
+
+    await processInternalMessengerImageRequest({
+      psid: "internal-text-image-user",
+      prompt: userPrompt,
+      reqId: "req-internal-text-image",
+      lang: "nl",
+      timestamp: 1_771_000_000_000,
+    });
+
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    expect(openAiCall).toBeDefined();
+    const prompt = promptFromOpenAiRequest(openAiCall?.[1]);
+    expect(prompt).toContain("Create a new image from the user's request.");
+    expect(prompt).toContain(userPrompt);
+    expect(prompt).not.toContain("storybook");
+    expect(sendTextMock).toHaveBeenCalledWith(
+      "internal-text-image-user",
+      "Ik maak nu je afbeelding."
+    );
+    expect(sendTextMock).not.toHaveBeenCalledWith(
+      "internal-text-image-user",
+      expect.stringContaining("Storybook Anime")
+    );
+    expect(sendImageMock).toHaveBeenCalledWith(
+      "internal-text-image-user",
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+  });
+
+  it("cleans pasted prompt wrappers before text-to-image generation", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+
+    await processInternalMessengerImageRequest({
+      psid: "internal-pasted-prompt-user",
+      prompt:
+        "Gebruik deze prompt en maak een afbeelding: Maak een krachtige samurai poster, geen tekst, geen logo",
+      reqId: "req-internal-pasted-prompt",
+      lang: "nl",
+      timestamp: 1_771_000_000_000,
+    });
+
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    const prompt = promptFromOpenAiRequest(openAiCall?.[1]);
+    expect(prompt).toContain(
+      "User request: Maak een krachtige samurai poster, geen tekst, geen logo"
+    );
+    expect(prompt).not.toContain("Gebruik deze prompt");
+  });
+
+  it("keeps natural make-me requests prompt-first even with a retained source photo", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+    await setPendingStoredImage(
+      "internal-make-me-source-user",
+      "https://img.example/retained-source.jpg"
+    );
+
+    await processInternalMessengerImageRequest({
+      psid: "internal-make-me-source-user",
+      prompt: "Kan je me een samurai maken",
+      reqId: "req-internal-make-me-source",
+      lang: "nl",
+      timestamp: 1_771_000_000_000,
+    });
+
+    expect(
+      fetchMock.mock.calls.some(([url]) =>
+        toUrlString(url).startsWith("https://img.example/")
+      )
+    ).toBe(false);
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    expect(promptFromOpenAiRequest(openAiCall?.[1])).toContain(
+      "Create a new image from the user's request."
+    );
+    expect(sendImageMock).toHaveBeenCalledWith(
+      "internal-make-me-source-user",
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+  });
+
+  it("uses a retained source photo for explicit personal transform requests", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+    await setPendingStoredImage(
+      "internal-transform-source-user",
+      "https://img.example/retained-source.jpg"
+    );
+
+    await processInternalMessengerImageRequest({
+      psid: "internal-transform-source-user",
+      prompt: "Verander me in een samurai",
+      reqId: "req-internal-transform-source",
+      lang: "nl",
+      timestamp: 1_771_000_000_000,
+    });
+
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => toUrlString(url) === "https://img.example/retained-source.jpg"
+      )
+    ).toBe(true);
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    expect(promptFromOpenAiRequest(openAiCall?.[1])).toContain(
+      "Edit the uploaded/source image according to the user's request."
+    );
+    expect(sendImageMock).toHaveBeenCalledWith(
+      "internal-transform-source-user",
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+  });
+
+  it("keeps make-me generation prompt-first when no source photo exists", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+
+    await processInternalMessengerImageRequest({
+      psid: "internal-make-me-text-user",
+      prompt: "Kan je me een samurai maken",
+      reqId: "req-internal-make-me-text",
+      lang: "nl",
+      timestamp: 1_771_000_000_000,
+    });
+
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    expect(openAiCall).toBeDefined();
+    expect(promptFromOpenAiRequest(openAiCall?.[1])).toContain(
+      "Create a new image from the user's request."
+    );
+    expect(sendTextMock).not.toHaveBeenCalledWith(
+      "internal-make-me-text-user",
+      "Stuur eerst de foto die je wilt bewerken."
+    );
+  });
+
+  it("applies visual correction prompts to the last generated image", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+    await setLastGenerated(
+      "internal-visual-correction-user",
+      "https://leaderbot-fb-image-gen.fly.dev/generated/generated-landscape.jpg"
+    );
+
+    await processInternalMessengerImageRequest({
+      psid: "internal-visual-correction-user",
+      prompt: "Das mooi, maar geen samurai bro",
+      reqId: "req-internal-visual-correction",
+      lang: "nl",
+      timestamp: 1_771_000_000_000,
+    });
+
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) =>
+          toUrlString(url) ===
+          "https://leaderbot-fb-image-gen.fly.dev/generated/generated-landscape.jpg"
+      )
+    ).toBe(true);
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    expect(promptFromOpenAiRequest(openAiCall?.[1])).toContain(
+      "Das mooi, maar geen samurai bro"
+    );
+    expect(sendImageMock).toHaveBeenCalledWith(
+      "internal-visual-correction-user",
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+  });
+
+  it("keeps visual correction prompts in the photo flow when no previous image exists", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+
+    await expect(
+      processInternalMessengerImageRequest({
+        psid: "internal-visual-correction-without-image-user",
+        prompt: "Das mooi, maar geen samurai bro",
+        reqId: "req-internal-visual-correction-without-image",
+        lang: "nl",
+        timestamp: 1_771_000_000_000,
+      })
+    ).rejects.toThrow("needs a source image");
+
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+      )
+    ).toBe(false);
+    expect(sendTextMock).toHaveBeenCalledWith(
+      "internal-visual-correction-without-image-user",
+      "Stuur eerst de foto die je wilt bewerken."
+    );
+    expect(sendImageMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps legacy style names inside text-to-image prompts instead of routing through style presets", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+    const userPrompt = "Maak een storybook anime landschap met mistige bergen";
+
+    await processInternalMessengerImageRequest({
+      psid: "internal-style-word-text-image-user",
+      prompt: userPrompt,
+      reqId: "req-internal-style-word-text-image",
+      lang: "nl",
+      timestamp: 1_771_000_000_000,
+    });
+
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    expect(openAiCall).toBeDefined();
+    const prompt = promptFromOpenAiRequest(openAiCall?.[1]);
+    expect(prompt).toContain("Create a new image from the user's request.");
+    expect(prompt).toContain(userPrompt);
+    expect(prompt).not.toContain("Transform this photo into a whimsical");
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "internal_image_request_received",
+      expect.objectContaining({
+        reqId: "req-internal-style-word-text-image",
+        hasSourceImageUrl: false,
+      })
+    );
+  });
+
+  it("keeps legacy style words inside explicit source-image edit prompts instead of routing through preset restyles", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+    await setPendingStoredImage(
+      "internal-style-word-source-user",
+      "https://img.example/retained-source.jpg"
+    );
+    const userPrompt = "Verander me in cyberpunk met neon regen";
+
+    await processInternalMessengerImageRequest({
+      psid: "internal-style-word-source-user",
+      prompt: userPrompt,
+      reqId: "req-internal-style-word-source",
+      lang: "nl",
+      timestamp: 1_771_000_000_000,
+    });
+
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => toUrlString(url) === "https://img.example/retained-source.jpg"
+      )
+    ).toBe(true);
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    expect(openAiCall).toBeDefined();
+    const prompt = promptFromOpenAiRequest(openAiCall?.[1]);
+    expect(prompt).toContain("Edit the uploaded/source image");
+    expect(prompt).toContain(userPrompt);
+    expect(prompt).not.toContain("Transform this photo into a cyberpunk portrait");
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "internal_image_request_received",
+      expect.objectContaining({
+        reqId: "req-internal-style-word-source",
+        hasSourceImageUrl: false,
+      })
+    );
+  });
+
+  it("keeps explicit restyle requests in the photo flow when no source image exists", async () => {
+    installOpenAiSuccessFetchMock();
+
+    await expect(
+      processInternalMessengerImageRequest({
+        psid: "internal-restyle-without-photo-user",
+        prompt: "Restyle deze foto cinematic",
+        reqId: "req-internal-restyle-without-photo",
+        lang: "nl",
+        timestamp: 1_771_000_000_000,
+      })
+    ).rejects.toThrow("needs a source image");
+
+    expect(sendTextMock).toHaveBeenCalledWith(
+      "internal-restyle-without-photo-user",
+      "Stuur eerst de foto die je wilt bewerken."
+    );
+    expect(sendImageMock).not.toHaveBeenCalled();
   });
 
   it("does not resolve an internal gateway image request until durable enqueue succeeds", async () => {
@@ -749,7 +897,7 @@ describe("messenger webhook dedupe", () => {
       "messenger_generation_job_queued",
       expect.objectContaining({
         reqId: "req-internal-durable",
-        style: "cinematic",
+        generationKind: "source_image_edit",
       })
     );
   });
@@ -883,7 +1031,7 @@ describe("messenger webhook dedupe", () => {
     await processFacebookWebhookPayload(payload);
     await processFacebookWebhookPayload(payload);
 
-    expect(sendQuickRepliesMock).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("does not collide fallback keys for different events with identical timestamps", () => {
@@ -922,7 +1070,7 @@ describe("messenger webhook dedupe", () => {
     const duplicateEvent = {
       sender: { id: "psid-dup-ts" },
       timestamp: 1730000000003,
-      postback: { payload: "STYLE_DISCO" },
+      postback: { payload: "SOME_ACTION" },
     };
 
     const first = getEventDedupeKey(duplicateEvent, "psid-dup-ts", "entry-dup");
@@ -986,7 +1134,7 @@ describe("messenger webhook dedupe", () => {
     await processFacebookWebhookPayload(duplicatePayload);
     await processFacebookWebhookPayload(duplicatePayload);
 
-    expect(sendQuickRepliesMock).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("uses entry.id plus timestamp as replay key when mid is missing", async () => {
@@ -1015,7 +1163,7 @@ describe("messenger webhook dedupe", () => {
     await processFacebookWebhookPayload(payload);
     await processFacebookWebhookPayload(payload);
 
-    expect(sendQuickRepliesMock).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(1);
     expect(safeLogMock).toHaveBeenCalledWith("webhook_replay_ignored", {
       user: expect.any(String),
       eventId: expect.stringContaining("entry:entry-123:"),
@@ -1064,65 +1212,6 @@ describe("messenger webhook dedupe", () => {
     } finally {
       consoleLogSpy.mockRestore();
     }
-  });
-
-  it("sends one in-flight notice for a second simultaneous generation by the same sender", async () => {
-    const psid = "same-user-generation-lock";
-    await setPendingStoredImage(
-      psid,
-      "https://leaderbot-fb-image-gen.fly.dev/generated/source.png"
-    );
-
-    let resolveOpenAi: ((response: Response) => void) | undefined;
-    const sourceImage = Buffer.alloc(6000, 7);
-    const openAiResponse = new Promise<Response>(resolve => {
-      resolveOpenAi = resolve;
-    });
-    const fetchMock = vi.fn(async (url: string | URL) => {
-      if (isSourceImageFetchUrl(url)) {
-        return {
-          ok: true,
-          headers: new Headers({ "content-type": "image/jpeg" }),
-          arrayBuffer: async () => sourceImage,
-        } as Response;
-      }
-
-      return await openAiResponse;
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    const firstGeneration = sendMessengerQuickReply(
-      processFacebookWebhookPayload,
-      psid,
-      "mid-concurrent-style-1",
-      "gold"
-    );
-    await waitForCondition(() =>
-      fetchMock.mock.calls.some(([url]) => !isSourceImageFetchUrl(url))
-    );
-
-    await sendMessengerQuickReply(
-      processFacebookWebhookPayload,
-      psid,
-      "mid-concurrent-style-2",
-      "gold"
-    );
-
-    const inFlightNotices = sendTextMock.mock.calls.filter(
-      ([recipient, text]) =>
-        recipient === psid &&
-        typeof text === "string" &&
-        text.includes("bezig")
-    );
-    expect(inFlightNotices).toHaveLength(1);
-
-    resolveOpenAi?.({
-      ok: true,
-      json: async () => ({
-        output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }],
-      }),
-    } as Response);
-    await firstGeneration;
   });
 
   it("updates lastUserMessageAt only for inbound user messages", async () => {
@@ -1214,7 +1303,7 @@ describe("messenger webhook dedupe", () => {
     );
   });
 
-  it("continues with restyle starter pills after consent is granted", async () => {
+  it("continues with prompt-first quick start actions after consent is granted", async () => {
     const psid = "fresh-consent-accepted-user";
 
     await processFacebookWebhookPayloadBase({
@@ -1235,760 +1324,35 @@ describe("messenger webhook dedupe", () => {
     });
 
     expect(getState(psid)?.consentGiven).toBe(true);
-    expect(getState(psid)?.stage).toBe("AWAITING_STYLE");
+    expect(getState(psid)?.stage).toBe("IDLE");
     expect(sendTextMock).toHaveBeenCalledWith(
       psid,
       expect.stringContaining("Je bent klaar")
     );
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
-      t("nl", "styleCategoryPicker"),
-      expect.arrayContaining([
-        expect.objectContaining({ payload: "STYLE_CATEGORY_ILLUSTRATED" }),
-        expect.objectContaining({ payload: "STYLE_CATEGORY_ATMOSPHERE" }),
-        expect.objectContaining({ payload: "STYLE_CATEGORY_BOLD" }),
-      ])
-    );
-    expect(sendQuickRepliesMock).not.toHaveBeenCalledWith(
-      psid,
-      expect.stringContaining("Je bent klaar"),
-      expect.any(Array)
-    );
-  });
-
-  it("opens the Messenger response window before postback routing", async () => {
-    const psid = "fresh-postback-window-user";
-    const timestamp = 1730000000789;
-
-    sendTextMock.mockImplementationOnce(async () => {
-      expect(getState(psid)?.lastUserMessageAt).toBe(timestamp);
-      return { sent: true };
-    });
-
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: psid },
-              timestamp,
-              postback: { payload: "STYLE_CATEGORY_ILLUSTRATED" },
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(sendTextMock).toHaveBeenCalledTimes(1);
-    expect(sendGenericTemplateMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns generated images for all canonical styles through the OpenAI path", async () => {
-    const styles = STYLE_CATEGORY_CONFIGS.flatMap(category =>
-      getStylesForCategory(category.category).map(style => style.style)
-    );
-
-    for (const style of styles) {
-      const fetchMock = installOpenAiSuccessFetchMock();
-      sendImageMock.mockClear();
-      sendQuickRepliesMock.mockClear();
-      sendTextMock.mockClear();
-      resetStateStore();
-      resetMessengerEventDedupe();
-
-      await processFacebookWebhookPayload({
-        entry: [
-          {
-            messaging: [
-              {
-                sender: { id: `style-user-${style}` },
-                message: {
-                  mid: `mid-photo-${style}`,
-                  attachments: [
-                    {
-                      type: "image",
-                      payload: { url: "https://img.example/source.jpg" },
-                    },
-                  ],
-                },
-              },
-              {
-                sender: { id: `style-user-${style}` },
-                message: {
-                  mid: `mid-style-${style}`,
-                  quick_reply: { payload: style },
-                },
-              },
-            ],
-          },
-        ],
-      });
-
-      expect(fetchMock).toHaveBeenCalledTimes(3);
-      expect(sendImageMock).toHaveBeenCalledWith(
-        `style-user-${style}`,
-        expect.stringMatching(
-          /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
-        )
-      );
-    }
-  });
-
-  it("uses canonical quick-reply payload and APP_BASE_URL for image attachments", async () => {
-    process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
-    installOpenAiSuccessFetchMock();
-
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: "canonical-payload-user" },
-              message: {
-                mid: "mid-photo-canonical",
-                attachments: [
-                  {
-                    type: "image",
-                    payload: { url: "https://img.example/source.jpg" },
-                  },
-                ],
-              },
-            },
-            {
-              sender: { id: "canonical-payload-user" },
-              message: {
-                mid: "mid-style-canonical",
-                quick_reply: { payload: "disco" },
-              },
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(sendImageMock).toHaveBeenCalledWith(
-      "canonical-payload-user",
-      expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
-      )
-    );
-  });
-
-  it("routes STYLE_NORMAN_BLACKWELL quick replies through the same payload flow", async () => {
-    process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
-
-    const sourceImage = Buffer.alloc(6000, 7);
-    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
-      if (isSourceImageFetchUrl(url)) {
-        return {
-          ok: true,
-          headers: new Headers({ "content-type": "image/jpeg" }),
-          arrayBuffer: async () => sourceImage,
-        } as Response;
-      }
-
-      const prompt = promptFromOpenAiRequest(init);
-      expect(prompt).toContain(
-        "Reimagine this photo as a nostalgic mid-century American editorial illustration"
-      );
-      expect(prompt).toContain("warm storybook lighting");
-      expect(prompt).toContain(
-        "all-American palette of cream, brick red, muted teal, and honey gold"
-      );
-
-      return {
-        ok: true,
-        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
-      } as Response;
-    });
-
-    vi.stubGlobal("fetch", fetchMock);
-
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: "norman-payload-user" },
-              message: {
-                mid: "mid-photo-norman-payload",
-                attachments: [
-                  {
-                    type: "image",
-                    payload: { url: "https://img.example/source.jpg" },
-                  },
-                ],
-              },
-            },
-            {
-              sender: { id: "norman-payload-user" },
-              message: {
-                mid: "mid-style-norman-payload",
-                quick_reply: { payload: "STYLE_NORMAN_BLACKWELL" },
-              },
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(sendImageMock).toHaveBeenCalledWith(
-      "norman-payload-user",
-      expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
-      )
-    );
-    expect(getState(anonymizePsid("norman-payload-user"))?.selectedStyle).toBe(
-      "norman-blackwell"
-    );
-  });
-
-  it("returns a generated image attachment and follow-up after style selection", async () => {
-    installOpenAiSuccessFetchMock();
-
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: "mock-image-user" },
-              message: {
-                mid: "mid-photo-1",
-                attachments: [
-                  {
-                    type: "image",
-                    payload: { url: "https://img.example/source.jpg" },
-                  },
-                ],
-              },
-            },
-            {
-              sender: { id: "mock-image-user" },
-              message: {
-                mid: "mid-style-1",
-                quick_reply: { payload: "disco" },
-              },
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(sendImageMock).toHaveBeenCalledWith(
-      "mock-image-user",
-      expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
-      )
-    );
-    expect(sendQuickRepliesMock).toHaveBeenLastCalledWith(
-      "mock-image-user",
-      "Klaar ✅",
+      t("nl", "flowExplanation"),
       [
         {
           content_type: "text",
-          title: "Nieuwe stijl",
-          payload: "CHOOSE_STYLE",
+          title: "Nieuwe afbeelding",
+          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
         },
-        { content_type: "text", title: "Privacy", payload: "PRIVACY_INFO" },
-      ]
-    );
-  });
-
-  it("shows friendly message when OPENAI_API_KEY is missing", async () => {
-    delete process.env.OPENAI_API_KEY;
-
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: "openai-missing-key-user" },
-              message: {
-                mid: "mid-photo-openai-missing",
-                attachments: [
-                  {
-                    type: "image",
-                    payload: { url: "https://img.example/source.jpg" },
-                  },
-                ],
-              },
-            },
-            {
-              sender: { id: "openai-missing-key-user" },
-              message: {
-                mid: "mid-style-openai-missing",
-                quick_reply: { payload: "disco" },
-              },
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(sendQuickRepliesMock).toHaveBeenLastCalledWith(
-      "openai-missing-key-user",
-      "AI generation isn’t enabled yet.",
-      [
         {
           content_type: "text",
-          title: "Opnieuw",
-          payload: "RETRY_STYLE_disco",
+          title: "Pas foto aan",
+          payload: "OPENCLAW_ACTION:Pas%20foto%20aan",
         },
-        { content_type: "text", title: "Andere", payload: "CHOOSE_STYLE" },
+        { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
       ]
     );
-    expect(sendImageMock).not.toHaveBeenCalled();
-    expect(sendTextMock).toHaveBeenCalledTimes(2);
-    expect(sendTextMock).toHaveBeenNthCalledWith(
-      1,
-      "openai-missing-key-user",
-      "Ik maak nu je Disco-stijl."
-    );
-    expect(sendTextMock).toHaveBeenNthCalledWith(
-      2,
-      "openai-missing-key-user",
-      "Oeps. Probeer nog een stijl."
-    );
-  });
-
-  it("reaches OpenAI generator path with API key", async () => {
-    process.env.OPENAI_API_KEY = "dummy-key";
-    process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
-
-    const sourceImage = Buffer.alloc(6000, 7);
-    const generatedImageBytes = Buffer.from("fake-png").toString("base64");
-    const fetchMock = vi.fn(async (url: string | URL) => {
-      if (isSourceImageFetchUrl(url, "https://img.example/source.jpg")) {
-        return {
-          ok: true,
-          headers: new Headers({ "content-type": "image/jpeg" }),
-          arrayBuffer: async () => sourceImage,
-        } as Response;
-      }
-
-      return {
-        ok: true,
-        json: async () => ({ output: [{ type: "image_generation_call", result: generatedImageBytes }] }),
-      } as Response;
-    });
-
-    vi.stubGlobal("fetch", fetchMock);
-
-    try {
-      await processFacebookWebhookPayload({
-        entry: [
-          {
-            messaging: [
-              {
-                sender: { id: "openai-success-user" },
-                message: {
-                  mid: "mid-photo-openai-success",
-                  attachments: [
-                    {
-                      type: "image",
-                      payload: { url: "https://img.example/source.jpg" },
-                    },
-                  ],
-                },
-              },
-              {
-                sender: { id: "openai-success-user" },
-                message: {
-                  mid: "mid-style-openai-success",
-                  quick_reply: { payload: "gold" },
-                },
-              },
-            ],
-          },
-        ],
-      });
-    } finally {
-      vi.unstubAllGlobals();
-    }
-
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(sendImageMock).toHaveBeenCalledWith(
-      "openai-success-user",
-      expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
+    expect(
+      sendQuickRepliesMock.mock.calls.some(([, text]) =>
+        String(text).toLowerCase().includes("stijl")
       )
-    );
+    ).toBe(false);
   });
 
-  it("keeps failure context and retries selected style with prior photo", async () => {
-    delete process.env.OPENAI_API_KEY;
-
-    const psid = "retry-failure-user";
-    const userId = anonymizePsid(psid);
-
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: psid },
-              message: {
-                mid: "mid-photo-retry-failure",
-                attachments: [
-                  {
-                    type: "image",
-                    payload: { url: "https://img.example/retry.jpg" },
-                  },
-                ],
-              },
-            },
-            {
-              sender: { id: psid },
-              message: {
-                mid: "mid-style-retry-failure",
-                quick_reply: { payload: "gold" },
-              },
-            },
-          ],
-        },
-      ],
-    });
-
-    const failedState = getState(userId);
-    expect(failedState?.stage).toBe("FAILURE");
-    expect(failedState?.lastPhoto).toMatch(
-      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
-    );
-    expect(failedState?.lastPhotoSource).toBe("stored");
-    expect(failedState?.selectedStyle).toBe("gold");
-
-    sendTextMock.mockClear();
-    sendQuickRepliesMock.mockClear();
-
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: psid },
-              postback: { payload: "RETRY_STYLE_gold" },
-            },
-          ],
-        },
-      ],
-    });
-
-    const retriedState = getState(userId);
-    expect(retriedState?.stage).toBe("FAILURE");
-    expect(retriedState?.lastPhoto).toMatch(
-      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
-    );
-    expect(retriedState?.lastPhotoSource).toBe("stored");
-    expect(retriedState?.selectedStyle).toBe("gold");
-    expect(sendQuickRepliesMock).not.toHaveBeenCalledWith(
-      psid,
-      "What style should I use?",
-      expect.anything()
-    );
-    expect(sendQuickRepliesMock).not.toHaveBeenCalledWith(
-      psid,
-      "Pick a style using the buttons below 🙂",
-      expect.anything()
-    );
-    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
-      psid,
-      "AI generation isn’t enabled yet.",
-      [
-        { content_type: "text", title: "Opnieuw", payload: "RETRY_STYLE_gold" },
-        { content_type: "text", title: "Andere", payload: "CHOOSE_STYLE" },
-      ]
-    );
-  });
-  it("shows timeout message when OpenAI generation exceeds timeout", async () => {
-    process.env.OPENAI_API_KEY = "dummy-key";
-    process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
-
-    const timeoutError = new Error("aborted");
-    timeoutError.name = "AbortError";
-    const sourceImage = Buffer.alloc(6000, 7);
-    const fetchMock = vi.fn(async (url: string | URL) => {
-      if (isSourceImageFetchUrl(url, "https://img.example/source.jpg")) {
-        return {
-          ok: true,
-          headers: new Headers({ "content-type": "image/jpeg" }),
-          arrayBuffer: async () => sourceImage,
-        } as Response;
-      }
-
-      throw timeoutError;
-    });
-
-    vi.stubGlobal("fetch", fetchMock);
-
-    try {
-      await processFacebookWebhookPayload({
-        entry: [
-          {
-            messaging: [
-              {
-                sender: { id: "openai-timeout-user" },
-                message: {
-                  mid: "mid-photo-openai-timeout",
-                  attachments: [
-                    {
-                      type: "image",
-                      payload: { url: "https://img.example/source.jpg" },
-                    },
-                  ],
-                },
-              },
-              {
-                sender: { id: "openai-timeout-user" },
-                message: {
-                  mid: "mid-style-openai-timeout",
-                  quick_reply: { payload: "clouds" },
-                },
-              },
-            ],
-          },
-        ],
-      });
-    } finally {
-      vi.unstubAllGlobals();
-    }
-
-    expect(sendQuickRepliesMock).toHaveBeenLastCalledWith(
-      "openai-timeout-user",
-      "Dit duurde te lang bij de beeldprovider. Probeer nog eens.",
-      [
-        {
-          content_type: "text",
-          title: "Opnieuw",
-          payload: "RETRY_STYLE_clouds",
-        },
-        { content_type: "text", title: "Andere", payload: "CHOOSE_STYLE" },
-      ]
-    );
-    expect(sendTextMock).not.toHaveBeenCalledWith(
-      "openai-timeout-user",
-      "Oeps. Probeer nog een stijl."
-    );
-  });
-
-  it("style click during generation does not start a second run", async () => {
-    process.env.OPENAI_API_KEY = "dummy-key";
-    process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
-
-    let resolveFetch:
-      | ((value: {
-          ok: boolean;
-          json: () => Promise<{ output: Array<{ type: string; result: string }> }>;
-        }) => void)
-      | undefined;
-    const sourceImage = Buffer.alloc(6000, 7);
-    const fetchMock = vi.fn((url: string | URL) => {
-      if (isSourceImageFetchUrl(url, "https://img.example/source.jpg")) {
-        return Promise.resolve({
-          ok: true,
-          headers: new Headers({ "content-type": "image/jpeg" }),
-          arrayBuffer: async () => sourceImage,
-        } as Response);
-      }
-
-      return new Promise<{
-        ok: boolean;
-        json: () => Promise<{ output: Array<{ type: string; result: string }> }>;
-      }>(resolve => {
-        resolveFetch = resolve;
-      });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    try {
-      await processFacebookWebhookPayload({
-        entry: [
-          {
-            messaging: [
-              {
-                sender: { id: "busy-user" },
-                message: {
-                  mid: "mid-photo-busy",
-                  attachments: [
-                    {
-                      type: "image",
-                      payload: { url: "https://img.example/source.jpg" },
-                    },
-                  ],
-                },
-              },
-            ],
-          },
-        ],
-      });
-
-      const firstRun = processFacebookWebhookPayload({
-        entry: [
-          {
-            messaging: [
-              {
-                sender: { id: "busy-user" },
-                message: {
-                  mid: "mid-style-busy-1",
-                  quick_reply: { payload: "disco" },
-                },
-              },
-            ],
-          },
-        ],
-      });
-
-      await vi.waitFor(() => {
-        expect(fetchMock).toHaveBeenCalledTimes(3);
-        expect(resolveFetch).toBeTypeOf("function");
-      });
-
-      sendImageMock.mockClear();
-      sendQuickRepliesMock.mockClear();
-      sendTextMock.mockClear();
-      safeLogMock.mockClear();
-
-      await processFacebookWebhookPayload({
-        entry: [
-          {
-            messaging: [
-              {
-                sender: { id: "busy-user" },
-                message: {
-                  mid: "mid-style-busy-2",
-                  quick_reply: { payload: "gold" },
-                },
-              },
-            ],
-          },
-        ],
-      });
-
-      expect(fetchMock).toHaveBeenCalledTimes(3);
-      expect(sendTextMock).toHaveBeenCalledWith(
-        "busy-user",
-        "⏳ even geduld, ik ben nog bezig met jouw restyle"
-      );
-
-      const generatedImageBytes = Buffer.from("fake-png").toString("base64");
-      resolveFetch?.({
-        ok: true,
-        json: async () => ({ output: [{ type: "image_generation_call", result: generatedImageBytes }] }),
-      });
-      await firstRun;
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("returns only in-progress status message for style changes while generating", async () => {
-    process.env.OPENAI_API_KEY = "dummy-key";
-    process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
-
-    let resolveFetch:
-      | ((value: {
-          ok: boolean;
-          json: () => Promise<{ output: Array<{ type: string; result: string }> }>;
-        }) => void)
-      | undefined;
-    const sourceImage = Buffer.alloc(6000, 7);
-    const fetchMock = vi.fn((url: string | URL) => {
-      if (isSourceImageFetchUrl(url, "https://img.example/source.jpg")) {
-        return Promise.resolve({
-          ok: true,
-          headers: new Headers({ "content-type": "image/jpeg" }),
-          arrayBuffer: async () => sourceImage,
-        } as Response);
-      }
-
-      return new Promise<{
-        ok: boolean;
-        json: () => Promise<{ output: Array<{ type: string; result: string }> }>;
-      }>(resolve => {
-        resolveFetch = resolve;
-      });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    try {
-      await processFacebookWebhookPayload({
-        entry: [
-          {
-            messaging: [
-              {
-                sender: { id: "busy-user-text" },
-                message: {
-                  mid: "mid-photo-busy-text",
-                  attachments: [
-                    {
-                      type: "image",
-                      payload: { url: "https://img.example/source.jpg" },
-                    },
-                  ],
-                },
-              },
-            ],
-          },
-        ],
-      });
-
-      const firstRun = processFacebookWebhookPayload({
-        entry: [
-          {
-            messaging: [
-              {
-                sender: { id: "busy-user-text" },
-                message: {
-                  mid: "mid-style-busy-text-1",
-                  quick_reply: { payload: "disco" },
-                },
-              },
-            ],
-          },
-        ],
-      });
-
-      await vi.waitFor(() => {
-        expect(fetchMock).toHaveBeenCalledTimes(3);
-        expect(resolveFetch).toBeTypeOf("function");
-      });
-
-      sendImageMock.mockClear();
-      sendQuickRepliesMock.mockClear();
-      sendTextMock.mockClear();
-
-      await processFacebookWebhookPayload({
-        entry: [
-          {
-            messaging: [
-              {
-                sender: { id: "busy-user-text" },
-                message: {
-                  mid: "mid-style-busy-text-2",
-                  quick_reply: { payload: "gold" },
-                },
-              },
-            ],
-          },
-        ],
-      });
-
-      expect(sendTextMock.mock.calls).toEqual([
-        ["busy-user-text", "⏳ even geduld, ik ben nog bezig met jouw restyle"],
-      ]);
-      expect(sendImageMock).not.toHaveBeenCalled();
-      expect(sendQuickRepliesMock).not.toHaveBeenCalled();
-
-      const generatedImageBytes = Buffer.from("fake-png").toString("base64");
-      resolveFetch?.({
-        ok: true,
-        json: async () => ({ output: [{ type: "image_generation_call", result: generatedImageBytes }] }),
-      });
-      await firstRun;
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
 });
 
 describe("messenger deterministic free text", () => {
@@ -2034,9 +1398,393 @@ describe("messenger deterministic free text", () => {
       ],
     });
 
-    expect(sendTextMock).toHaveBeenLastCalledWith(
+    expect(sendTextMock).not.toHaveBeenCalledWith(
       "deterministic-user",
       t("nl", "flowExplanation")
+    );
+    expect(sendQuickRepliesMock).toHaveBeenLastCalledWith(
+      "deterministic-user",
+      t("nl", "assistantQuickActions"),
+      [
+        {
+          content_type: "text",
+          title: "Pas aan",
+          payload: "OPENCLAW_ACTION:Pas%20aan",
+        },
+        {
+          content_type: "text",
+          title: "Nieuwe afbeelding",
+          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+        },
+        { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
+      ]
+    );
+  });
+
+  it("lets typed Messenger replies choose the last quick action", async () => {
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: "typed-action-user" },
+              message: {
+                mid: "mid-typed-action-photo",
+                attachments: [
+                  {
+                    type: "image",
+                    payload: { url: "https://img.example/typed-action.jpg" },
+                  },
+                ],
+              },
+            },
+            {
+              sender: { id: "typed-action-user" },
+              message: {
+                mid: "mid-typed-action-help",
+                text: "Wat kan ik nu doen?",
+              },
+            },
+            {
+              sender: { id: "typed-action-user" },
+              message: {
+                mid: "mid-typed-action-choice",
+                text: "Nr 1 go",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
+      "typed-action-user",
+      t("nl", "assistantQuickActions"),
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: "Pas aan",
+          payload: "OPENCLAW_ACTION:Pas%20aan",
+        }),
+      ])
+    );
+    expect(sendTextMock).toHaveBeenLastCalledWith(
+      "typed-action-user",
+      t("nl", "editImagePrompt")
+    );
+  });
+
+  it("lets typed Messenger replies choose feature-level help actions", async () => {
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: "typed-feature-action-user" },
+              message: {
+                mid: "mid-typed-feature-action-photo",
+                attachments: [
+                  {
+                    type: "image",
+                    payload: { url: "https://img.example/typed-feature-action.jpg" },
+                  },
+                ],
+              },
+            },
+            {
+              sender: { id: "typed-feature-action-user" },
+              message: {
+                mid: "mid-typed-feature-action-help",
+                text: "help",
+              },
+            },
+            {
+              sender: { id: "typed-feature-action-user" },
+              message: {
+                mid: "mid-typed-feature-action-choice",
+                text: "Nr 1 go",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
+      "typed-feature-action-user",
+      t("nl", "assistantQuickActions"),
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: "Pas aan",
+          payload: "OPENCLAW_ACTION:Pas%20aan",
+        }),
+      ])
+    );
+    expect(sendTextMock).toHaveBeenLastCalledWith(
+      "typed-feature-action-user",
+      t("nl", "editImagePrompt")
+    );
+  });
+
+  it("lets Messenger reply-to choose actions from the referenced quick-reply message", async () => {
+    sendQuickRepliesMock
+      .mockImplementationOnce(async () => ({
+        sent: true,
+        messageId: "mid-quickstart-actions",
+      }))
+      .mockImplementationOnce(async () => ({
+        sent: true,
+        messageId: "mid-photo-received-actions",
+      }))
+      .mockImplementationOnce(async () => ({
+        sent: true,
+        messageId: "mid-photo-help-actions",
+      }));
+
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: "reply-action-user" },
+              message: {
+                mid: "mid-reply-action-hi",
+                text: "Hi",
+              },
+            },
+            {
+              sender: { id: "reply-action-user" },
+              message: {
+                mid: "mid-reply-action-photo",
+                attachments: [
+                  {
+                    type: "image",
+                    payload: { url: "https://img.example/reply-action.jpg" },
+                  },
+                ],
+              },
+            },
+            {
+              sender: { id: "reply-action-user" },
+              message: {
+                mid: "mid-reply-action-help",
+                text: "Wat kan ik nu doen?",
+              },
+            },
+            {
+              sender: { id: "reply-action-user" },
+              message: {
+                mid: "mid-reply-action-choice",
+                text: "Nr 1 go",
+                reply_to: { mid: "mid-quickstart-actions" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(sendTextMock).toHaveBeenLastCalledWith(
+      "reply-action-user",
+      t("nl", "textWithoutPhoto")
+    );
+    expect(getState(anonymizePsid("reply-action-user"))?.lastPhotoUrl).toBeNull();
+  });
+
+  it("generates direct Messenger text image requests prompt-first", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: "direct-text-image-user" },
+              message: {
+                mid: "mid-direct-text-image",
+                text: "Kan je een landschap afbeelding genereren?",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    expect(openAiCall).toBeDefined();
+    expect(promptFromOpenAiRequest(openAiCall?.[1])).toContain(
+      "User request: Kan je een landschap afbeelding genereren?"
+    );
+    expect(sendTextMock).toHaveBeenCalledWith(
+      "direct-text-image-user",
+      t("nl", "generatingImagePrompt")
+    );
+    expect(sendImageMock).toHaveBeenCalledWith(
+      "direct-text-image-user",
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+  });
+
+  it("generates arbitrary Messenger create requests prompt-first", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: "arbitrary-text-image-user" },
+              message: {
+                mid: "mid-arbitrary-text-image",
+                text: "Maak een draak met neonvleugels boven Antwerpen",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    expect(openAiCall).toBeDefined();
+    expect(promptFromOpenAiRequest(openAiCall?.[1])).toContain(
+      "User request: Maak een draak met neonvleugels boven Antwerpen"
+    );
+    expect(sendImageMock).toHaveBeenCalledWith(
+      "arbitrary-text-image-user",
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+  });
+
+  it("handles captioned Messenger source-image edits in the conversation layer", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: "captioned-source-edit-user" },
+              message: {
+                mid: "mid-captioned-source-edit",
+                text: "Restyle deze foto als cyberpunk poster",
+                attachments: [
+                  {
+                    type: "image",
+                    payload: { url: "https://img.example/caption-source.jpg" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => toUrlString(url) === "https://img.example/caption-source.jpg"
+      )
+    ).toBe(true);
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    expect(promptFromOpenAiRequest(openAiCall?.[1])).toContain(
+      "Restyle deze foto als cyberpunk poster"
+    );
+    expect(sendImageMock).toHaveBeenCalledWith(
+      "captioned-source-edit-user",
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+  });
+
+  it("prompts for face-memory consent before processing captioned image edits", async () => {
+    const psid = "captioned-source-edit-consent-user";
+    await setConsentState(psid, true);
+    process.env.ENABLE_FACE_MEMORY = "true";
+    const fetchMock = installOpenAiSuccessFetchMock();
+
+    await processFacebookWebhookPayloadBase({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: psid },
+              message: {
+                mid: "mid-captioned-source-edit-consent",
+                text: "Restyle deze foto als cyberpunk poster",
+                attachments: [
+                  {
+                    type: "image",
+                    payload: { url: "https://img.example/consent-source.jpg" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expectFaceMemoryConsentPrompt(psid);
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+      )
+    ).toBe(false);
+    expect(sendImageMock).not.toHaveBeenCalledWith(
+      psid,
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+  });
+
+  it("handles captioned fresh image requests without treating the photo as a style preset", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: "captioned-fresh-image-user" },
+              message: {
+                mid: "mid-captioned-fresh-image",
+                text: "Maak een draak boven Antwerpen",
+                attachments: [
+                  {
+                    type: "image",
+                    payload: { url: "https://img.example/context-photo.jpg" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    const prompt = promptFromOpenAiRequest(openAiCall?.[1]);
+    expect(prompt).toContain("Create a new image from the user's request.");
+    expect(prompt).toContain("User request: Maak een draak boven Antwerpen");
+    expect(prompt).not.toContain("storybook");
+    expect(sendImageMock).toHaveBeenCalledWith(
+      "captioned-fresh-image-user",
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
     );
   });
 
@@ -2057,49 +1805,29 @@ describe("messenger deterministic free text", () => {
       ],
     });
 
-    expect(sendTextMock).toHaveBeenLastCalledWith(
+    expect(sendQuickRepliesMock).toHaveBeenLastCalledWith(
       "deterministic-no-photo-user",
-      t("nl", "textWithoutPhoto")
+      t("nl", "flowExplanation"),
+      [
+        {
+          content_type: "text",
+          title: "Nieuwe afbeelding",
+          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+        },
+        {
+          content_type: "text",
+          title: "Pas foto aan",
+          payload: "OPENCLAW_ACTION:Pas%20foto%20aan",
+        },
+        { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
+      ]
     );
     expect(getState(anonymizePsid("deterministic-no-photo-user"))?.stage).toBe(
-      "AWAITING_PHOTO"
+      "IDLE"
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("keeps attachment/style/image generation path independent from free-text chat", async () => {
-    installOpenAiSuccessFetchMock();
-
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: "deterministic-image-user" },
-              message: {
-                mid: "mid-deterministic-image-photo",
-                attachments: [
-                  {
-                    type: "image",
-                    payload: { url: "https://img.example/image-path.jpg" },
-                  },
-                ],
-              },
-            },
-            {
-              sender: { id: "deterministic-image-user" },
-              message: {
-                mid: "mid-deterministic-image-style",
-                quick_reply: { payload: "disco" },
-              },
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(sendImageMock).toHaveBeenCalledTimes(1);
-  });
 });
 
 describe("messenger greeting behavior", () => {
@@ -2135,395 +1863,71 @@ describe("messenger greeting behavior", () => {
       "idle-user",
       t("nl", "flowExplanation"),
       expect.arrayContaining([
-        { content_type: "text", title: "Wat doe ik?", payload: "WHAT_IS_THIS" },
-        { content_type: "text", title: "Privacy", payload: "PRIVACY_INFO" },
+        {
+          content_type: "text",
+          title: "Nieuwe afbeelding",
+          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+        },
+        {
+          content_type: "text",
+          title: "Pas foto aan",
+          payload: "OPENCLAW_ACTION:Pas%20foto%20aan",
+        },
+        { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
       ])
     );
   });
 
-  it("ignores acknowledgement text after entering AWAITING_STYLE", async () => {
+  it("routes conversation action clicks back through normal text handling", async () => {
     await processFacebookWebhookPayload({
       entry: [
         {
           messaging: [
             {
-              sender: { id: "style-user" },
+              sender: { id: "action-input-user" },
               message: {
-                mid: "mid-style-1",
-                attachments: [
-                  {
-                    type: "image",
-                    payload: { url: "https://img.example/style.jpg" },
-                  },
-                ],
-              },
-            },
-            {
-              sender: { id: "style-user" },
-              message: { mid: "mid-style-2", text: "thanks" },
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(sendTextMock).not.toHaveBeenCalled();
-    expect(sendQuickRepliesMock).toHaveBeenLastCalledWith(
-      "style-user",
-      "Kies eerst een stijlgroep 👇",
-      [
-        {
-          content_type: "text",
-          title: "🎨 Illustrated",
-          payload: "STYLE_CATEGORY_ILLUSTRATED",
-        },
-        {
-          content_type: "text",
-          title: "🌤️ Atmosphere",
-          payload: "STYLE_CATEGORY_ATMOSPHERE",
-        },
-        {
-          content_type: "text",
-          title: "⚡ Bold",
-          payload: "STYLE_CATEGORY_BOLD",
-        },
-      ]
-    );
-  });
-
-  it("shows monthly budget fallback when OpenAI quota is exhausted", async () => {
-    process.env.OPENAI_API_KEY = "dummy-key";
-    process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
-
-    const sourceImage = Buffer.alloc(6000, 7);
-    const fetchMock = vi.fn(async (url: string | URL) => {
-      if (isSourceImageFetchUrl(url, "https://img.example/source.jpg")) {
-        return {
-          ok: true,
-          headers: new Headers({ "content-type": "image/jpeg" }),
-          arrayBuffer: async () => sourceImage,
-        } as Response;
-      }
-
-      return new Response(
-        JSON.stringify({
-          error: {
-            code: "insufficient_quota",
-            message: "Budget reached for this month",
-          },
-        }),
-        {
-          status: 429,
-          statusText: "Too Many Requests",
-          headers: new Headers({ "content-type": "application/json" }),
-        }
-      );
-    });
-
-    vi.stubGlobal("fetch", fetchMock);
-
-    try {
-      await processFacebookWebhookPayload({
-        entry: [
-          {
-            messaging: [
-              {
-                sender: { id: "openai-budget-user" },
-                message: {
-                  mid: "mid-photo-openai-budget",
-                  attachments: [
-                    {
-                      type: "image",
-                      payload: { url: "https://img.example/source.jpg" },
-                    },
-                  ],
+                mid: "mid-action-input-1",
+                quick_reply: {
+                  payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
                 },
               },
-              {
-                sender: { id: "openai-budget-user" },
-                message: {
-                  mid: "mid-style-openai-budget",
-                  quick_reply: { payload: "clouds" },
-                },
-              },
-            ],
-          },
-        ],
-      });
-    } finally {
-      vi.unstubAllGlobals();
-    }
-
-    expect(sendTextMock).toHaveBeenLastCalledWith(
-      "openai-budget-user",
-      "⚠️ Even pauze — ons maandbudget is bereikt. Probeer later opnieuw."
-    );
-    expect(sendQuickRepliesMock).not.toHaveBeenLastCalledWith(
-      "openai-budget-user",
-      expect.any(String),
-      expect.arrayContaining([
-        expect.objectContaining({ payload: "RETRY_STYLE_clouds" }),
-      ])
-    );
-    expect(getState(anonymizePsid("openai-budget-user"))?.stage).toBe(
-      "AWAITING_STYLE"
-    );
-  });
-
-  it("emits one intentional response package per transition in order", async () => {
-    installOpenAiSuccessFetchMock();
-
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: "transition-order-user" },
-              message: {
-                mid: "mid-transition-photo",
-                attachments: [
-                  {
-                    type: "image",
-                    payload: { url: "https://img.example/source.jpg" },
-                  },
-                ],
-              },
-            },
-            {
-              sender: { id: "transition-order-user" },
-              message: {
-                mid: "mid-transition-style",
-                quick_reply: { payload: "gold" },
-              },
             },
           ],
         },
       ],
     });
 
-    expect(sendQuickRepliesMock).toHaveBeenNthCalledWith(
-      1,
-      "transition-order-user",
-      "Kies eerst een stijlgroep 👇",
-      expect.any(Array)
-    );
-    expect(sendTextMock).toHaveBeenCalledTimes(1);
-    expect(sendTextMock).toHaveBeenCalledWith(
-      "transition-order-user",
-      "Ik maak nu je Gold-stijl."
-    );
-    expect(sendImageMock).toHaveBeenCalledTimes(1);
-    expect(sendQuickRepliesMock).toHaveBeenNthCalledWith(
-      2,
-      "transition-order-user",
-      "Klaar ✅",
-      [
-        {
-          content_type: "text",
-          title: "Nieuwe stijl",
-          payload: "CHOOSE_STYLE",
-        },
-        { content_type: "text", title: "Privacy", payload: "PRIVACY_INFO" },
-      ]
-    );
-
-    expect(sendQuickRepliesMock.mock.invocationCallOrder[0]).toBeLessThan(
-      sendTextMock.mock.invocationCallOrder[0]
-    );
-    expect(sendTextMock.mock.invocationCallOrder[0]).toBeLessThan(
-      sendImageMock.mock.invocationCallOrder[0]
-    );
-    expect(sendImageMock.mock.invocationCallOrder[0]).toBeLessThan(
-      sendQuickRepliesMock.mock.invocationCallOrder[1]
-    );
-  });
-
-  it("shows category intro text before the carousel without duplicate substyle pills", async () => {
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: "category-user" },
-              message: {
-                mid: "mid-category-photo",
-                attachments: [
-                  {
-                    type: "image",
-                    payload: { url: "https://img.example/source.jpg" },
-                  },
-                ],
-              },
-            },
-            {
-              sender: { id: "category-user" },
-              postback: { payload: "STYLE_CATEGORY_ILLUSTRATED" },
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(sendTextMock).toHaveBeenCalledWith(
-      "category-user",
-      "Hier zijn je illustrated-stijlen. Kies er eentje hieronder."
-    );
-    expect(sendGenericTemplateMock).toHaveBeenCalledWith("category-user", [
-      expect.objectContaining({
-        title: "Caricature",
-        image_url:
-          "https://leaderbot-fb-image-gen.fly.dev/style-previews/caricature.png",
-        buttons: [
-          {
-            type: "postback",
-            title: "Kies",
-            payload: "STYLE_CARICATURE",
-          },
-        ],
-      }),
-      expect.objectContaining({
-        title: "Storybook Anime",
-        image_url:
-          "https://leaderbot-fb-image-gen.fly.dev/style-previews/storybook-anime.png",
-        buttons: [
-          {
-            type: "postback",
-            title: "Kies",
-            payload: "STYLE_STORYBOOK_ANIME",
-          },
-        ],
-      }),
-      expect.objectContaining({
-        title: "Oil Paint",
-        image_url:
-          "https://leaderbot-fb-image-gen.fly.dev/style-previews/oil-paint.png",
-      }),
-      expect.objectContaining({
-        title: "Norman Blackwell",
-        image_url:
-          "https://leaderbot-fb-image-gen.fly.dev/style-previews/norman-blackwell.png",
-      }),
-    ]);
-    expect(sendQuickRepliesMock).toHaveBeenCalledTimes(1);
-    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
-      "category-user",
-      "Kies eerst een stijlgroep 👇",
-      expect.arrayContaining([
-        expect.objectContaining({ payload: "STYLE_CATEGORY_ILLUSTRATED" }),
-        expect.objectContaining({ payload: "STYLE_CATEGORY_ATMOSPHERE" }),
-        expect.objectContaining({ payload: "STYLE_CATEGORY_BOLD" }),
-      ])
-    );
-    expect(sendTextMock.mock.invocationCallOrder[0]).toBeLessThan(
-      sendGenericTemplateMock.mock.invocationCallOrder[0]
-    );
-    expect(sendTextMock).not.toHaveBeenCalledWith(
-      "category-user",
-      "Oeps. Probeer nog een stijl."
-    );
-  });
-
-  it("keeps category selection in no-photo flow on a single text-plus-carousel path", async () => {
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: "category-no-photo-user" },
-              postback: { payload: "STYLE_CATEGORY_ATMOSPHERE" },
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(sendTextMock).toHaveBeenCalledWith(
-      "category-no-photo-user",
-      "Hier zijn je atmosphere-stijlen. Kies er eentje hieronder."
-    );
-    expect(sendGenericTemplateMock).toHaveBeenCalledWith(
-      "category-no-photo-user",
-      expect.arrayContaining([
-        expect.objectContaining({
-          title: "Petals",
-          image_url:
-            "https://leaderbot-fb-image-gen.fly.dev/style-previews/petals.png",
-        }),
-        expect.objectContaining({
-          title: "Cinematic",
-          image_url:
-            "https://leaderbot-fb-image-gen.fly.dev/style-previews/cinematic.png",
-        }),
-        expect.objectContaining({
-          title: "Clouds",
-          image_url:
-            "https://leaderbot-fb-image-gen.fly.dev/style-previews/clouds.png",
-        }),
-      ])
-    );
     expect(sendQuickRepliesMock).not.toHaveBeenCalled();
+    expect(sendTextMock).toHaveBeenCalledWith(
+      "action-input-user",
+      t("nl", "textWithoutPhoto")
+    );
   });
 
-  it("falls back to category style pills when the carousel send fails", async () => {
-    sendGenericTemplateMock.mockRejectedValueOnce(new Error("template-failed"));
-
+  it("routes quick-start action clicks back through normal help text handling", async () => {
     await processFacebookWebhookPayload({
       entry: [
         {
           messaging: [
             {
-              sender: { id: "category-fallback-user" },
+              sender: { id: "quick-start-action-user", locale: "nl_BE" },
+              timestamp: 1,
               message: {
-                mid: "mid-category-fallback-photo",
-                attachments: [
-                  {
-                    type: "image",
-                    payload: { url: "https://img.example/source.jpg" },
-                  },
-                ],
+                mid: "mid-quick-start-action",
+                quick_reply: {
+                  payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+                },
               },
-            },
-            {
-              sender: { id: "category-fallback-user" },
-              postback: { payload: "STYLE_CATEGORY_BOLD" },
             },
           ],
         },
       ],
     });
 
-    expect(sendQuickRepliesMock).toHaveBeenLastCalledWith(
-      "category-fallback-user",
-      "Hier zijn je bold-stijlen. Kies er eentje hieronder.",
-      [
-        {
-          content_type: "text",
-          title: "Afroman",
-          payload: "STYLE_AFROMAN_AMERICANA",
-        },
-        { content_type: "text", title: "✨ Gold", payload: "STYLE_GOLD" },
-        {
-          content_type: "text",
-          title: "🌃 Cyberpunk",
-          payload: "STYLE_CYBERPUNK",
-        },
-        {
-          content_type: "text",
-          title: "🪩 Disco Glow",
-          payload: "STYLE_DISCO",
-        },
-        {
-          content_type: "text",
-          title: "Categorieen",
-          payload: "CHOOSE_STYLE",
-        },
-      ]
+    expect(sendTextMock).toHaveBeenCalledWith(
+      "quick-start-action-user",
+      t("nl", "textWithoutPhoto")
     );
-    expect(safeLogMock).toHaveBeenCalledWith("style_category_carousel_failed", {
-      user: expect.any(String),
-      category: "bold",
-      errorCode: "Error",
-    });
   });
 
   it("offers follow-up quick actions when state is RESULT_READY", async () => {
@@ -2544,10 +1948,47 @@ describe("messenger greeting behavior", () => {
       ],
     });
 
-    expect(sendQuickRepliesMock).toHaveBeenCalledWith(psid, "Klaar ✅", [
-      { content_type: "text", title: "Nieuwe stijl", payload: "CHOOSE_STYLE" },
-      { content_type: "text", title: "Privacy", payload: "PRIVACY_INFO" },
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(psid, "Klaar.", [
+      {
+        content_type: "text",
+        title: "Nieuwe afbeelding",
+        payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+      },
+      {
+        content_type: "text",
+        title: "Pas aan",
+        payload: "OPENCLAW_ACTION:Pas%20aan",
+      },
+      { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
     ]);
+  });
+
+  it("starts a fresh prompt-first flow when the new-image action is clicked", async () => {
+    const psid = "new-image-action-user";
+    const userId = anonymizePsid(psid);
+    setPendingImage(userId, "https://img.example/old.jpg");
+    sendTextMock.mockClear();
+
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: psid },
+              message: {
+                mid: "mid-new-image-action",
+                quick_reply: { payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const state = getState(userId);
+    expect(state?.lastPhotoUrl).toBeNull();
+    expect(state?.stage).toBe("IDLE");
+    expect(sendTextMock).toHaveBeenCalledWith(psid, t("nl", "textWithoutPhoto"));
   });
 
   it("offers retry actions when state is FAILURE", async () => {
@@ -2570,17 +2011,12 @@ describe("messenger greeting behavior", () => {
 
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
-      "Oeps. Probeer nog een stijl.",
+      "Oeps. Probeer opnieuw of beschrijf een nieuwe afbeelding.",
       [
         {
           content_type: "text",
-          title: "Probeer opnieuw",
-          payload: "RETRY_STYLE",
-        },
-        {
-          content_type: "text",
-          title: "Andere stijl",
-          payload: "CHOOSE_STYLE",
+          title: "Nieuwe afbeelding",
+          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
         },
       ]
     );
@@ -2748,14 +2184,25 @@ describe("disabled bot features stay out of the runtime flow", () => {
       ],
     });
 
-    expect(sendTextMock).toHaveBeenCalledWith(
+    expect(sendTextMock).not.toHaveBeenCalledWith(
       "edit-text-user",
       t("nl", "flowExplanation")
+    );
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
+      "edit-text-user",
+      t("nl", "assistantQuickActions"),
+      expect.arrayContaining([
+        {
+          content_type: "text",
+          title: "Pas aan",
+          payload: "OPENCLAW_ACTION:Pas%20aan",
+        },
+      ])
     );
     expect(sendImageMock).not.toHaveBeenCalled();
   });
 
-  it("auto-runs surprise when a photo is already available", async () => {
+  it("turns surprise with a photo into explicit choices instead of auto-running", async () => {
     installOpenAiSuccessFetchMock();
 
     await processFacebookWebhookPayload({
@@ -2799,479 +2246,35 @@ describe("disabled bot features stay out of the runtime flow", () => {
       ],
     });
 
-    expect(sendTextMock).toHaveBeenNthCalledWith(
-      1,
-      "surprise-style-user",
-      expect.stringMatching(/Mooie keuze/)
-    );
-    expect(sendTextMock).toHaveBeenNthCalledWith(
-      2,
-      "surprise-style-user",
-      expect.stringMatching(/^Ik maak nu je .*?-stijl\.$/)
-    );
-    expect(sendTextMock).toHaveBeenCalledTimes(2);
-    expect(sendImageMock).toHaveBeenCalledWith(
-      "surprise-style-user",
-      expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
-      )
-    );
-    expect(sendImageMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("handles /style cyberpunk as a first-class style selection", async () => {
-    installOpenAiSuccessFetchMock();
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: "style-command-user" },
-              message: {
-                mid: "mid-style-command-photo",
-                attachments: [
-                  {
-                    type: "image",
-                    payload: { url: "https://img.example/source.jpg" },
-                  },
-                ],
-              },
-            },
-          ],
-        },
-      ],
-    });
-
-    sendImageMock.mockClear();
-    sendQuickRepliesMock.mockClear();
-    sendTextMock.mockClear();
-
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: "style-command-user" },
-              message: {
-                mid: "mid-style-command-text",
-                text: "/style cyberpunk",
-              },
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(sendTextMock).toHaveBeenCalledWith(
-      "style-command-user",
-      "Ik maak nu je Cyberpunk-stijl."
-    );
-    expect(sendImageMock).toHaveBeenCalledWith(
-      "style-command-user",
-      expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
-      )
-    );
-    expect(getState(anonymizePsid("style-command-user"))?.selectedStyle).toBe(
-      "cyberpunk"
-    );
-    expect(getState(anonymizePsid("style-command-user"))?.lastStyle).toBe(
-      "cyberpunk"
-    );
-  });
-
-  it("persists /style cyberpunk for the next photo upload", async () => {
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: "style-preselect-user" },
-              message: {
-                mid: "mid-style-preselect-text",
-                text: "/style cyberpunk",
-              },
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(sendTextMock).toHaveBeenCalledWith(
-      "style-preselect-user",
-      "✅ Stijl ingesteld op cyberpunk.\n\nStuur eerst een foto, dan maak ik die stijl voor je."
-    );
-    expect(sendImageMock).not.toHaveBeenCalled();
-    expect(getState(anonymizePsid("style-preselect-user"))?.stage).toBe(
-      "AWAITING_PHOTO"
-    );
-
-    sendImageMock.mockClear();
-    sendQuickRepliesMock.mockClear();
-    sendTextMock.mockClear();
-    installOpenAiSuccessFetchMock();
-
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: "style-preselect-user" },
-              message: {
-                mid: "mid-style-preselect-photo",
-                attachments: [
-                  {
-                    type: "image",
-                    payload: { url: "https://img.example/source.jpg" },
-                  },
-                ],
-              },
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(sendTextMock).toHaveBeenCalledWith(
-      "style-preselect-user",
-      "Ik maak nu je Cyberpunk-stijl."
-    );
-    expect(sendImageMock).toHaveBeenCalledWith(
-      "style-preselect-user",
-      expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
-      )
-    );
-    expect(
-      getState(anonymizePsid("style-preselect-user"))?.preselectedStyle
-    ).toBeNull();
-    expect(getState(anonymizePsid("style-preselect-user"))?.selectedStyle).toBe(
-      "cyberpunk"
-    );
-  });
-
-  it("continues generation after GDPR, style choice, photo upload, and face-memory consent", async () => {
-    process.env.ENABLE_FACE_MEMORY = "true";
-    const psid = "gdpr-style-photo-user";
-
-    await sendMessengerQuickReply(
-      processFacebookWebhookPayloadBase,
-      psid,
-      "mid-gdpr-style-photo-consent",
-      "GDPR_CONSENT_AGREE"
-    );
-
-    await processFacebookWebhookPayloadBase({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: psid },
-              postback: { payload: "STYLE_CYBERPUNK" },
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(getState(anonymizePsid(psid))?.preselectedStyle).toBe("cyberpunk");
-
-    clearMessengerSendMocks();
-    installOpenAiSuccessFetchMock();
-
-    await sendMessengerPhoto(
-      processFacebookWebhookPayloadBase,
-      psid,
-      "mid-gdpr-style-photo-upload",
-      "https://img.example/source.jpg"
-    );
-
-    expectFaceMemoryConsentPrompt(psid);
-
-    clearMessengerSendMocks();
-
-    await sendMessengerQuickReply(
-      processFacebookWebhookPayloadBase,
-      psid,
-      "mid-gdpr-style-photo-memory-yes",
-      "CONSENT_FACE_YES"
-    );
-
-    expect(sendTextMock).toHaveBeenCalledWith(
-      psid,
-      "Ik maak nu je Cyberpunk-stijl."
-    );
-    expect(sendImageMock).toHaveBeenCalledWith(
-      psid,
-      expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
-      )
-    );
-    expect(sendQuickRepliesMock).not.toHaveBeenCalledWith(
-      psid,
-      t("nl", "styleCategoryPicker"),
-      expect.any(Array)
-    );
-    expect(getState(anonymizePsid(psid))?.preselectedStyle).toBeNull();
-    expect(getState(anonymizePsid(psid))?.selectedStyle).toBe("cyberpunk");
-  });
-
-  it("does not resume a stale preselected style after face-memory consent for a replacement photo", async () => {
-    process.env.ENABLE_FACE_MEMORY = "true";
-    const psid = "face-memory-stale-preselect-user";
-    await setPendingImage(psid, "https://img.example/old-source.jpg");
-    await setPreselectedStyle(psid, "cyberpunk");
-
-    clearMessengerSendMocks();
-
-    await sendMessengerPhoto(
-      processFacebookWebhookPayload,
-      psid,
-      "mid-face-memory-stale-photo",
-      "https://img.example/new-source.jpg"
-    );
-
-    expectFaceMemoryConsentPrompt(psid);
-
-    clearMessengerSendMocks();
-
-    await sendMessengerQuickReply(
-      processFacebookWebhookPayload,
-      psid,
-      "mid-face-memory-stale-yes",
-      "CONSENT_FACE_YES"
-    );
-
-    expect(sendImageMock).not.toHaveBeenCalled();
-    expect(sendTextMock).not.toHaveBeenCalledWith(
-      psid,
-      "Ik maak nu je Cyberpunk-stijl."
-    );
-    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
-      psid,
-      t("nl", "styleCategoryPicker"),
-      expect.arrayContaining([
-        expect.objectContaining({ payload: "STYLE_CATEGORY_ILLUSTRATED" }),
-      ])
-    );
-    expect(getState(anonymizePsid(psid))?.preselectedStyle).toBeNull();
-    expect(getState(anonymizePsid(psid))?.stage).toBe("AWAITING_STYLE");
-  });
-
-  it("does not auto-run a stale preselected style when a new photo replaces an older one", async () => {
-    await setPendingImage("stale-preselect-user", "https://img.example/old-source.jpg");
-    await setPreselectedStyle("stale-preselect-user", "cyberpunk");
-
-    sendImageMock.mockClear();
-    sendQuickRepliesMock.mockClear();
-    sendTextMock.mockClear();
-
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: "stale-preselect-user" },
-              message: {
-                mid: "mid-stale-preselect-photo",
-                attachments: [
-                  {
-                    type: "image",
-                    payload: { url: "https://img.example/new-source.jpg" },
-                  },
-                ],
-              },
-            },
-          ],
-        },
-      ],
-    });
-
+    expect(sendTextMock).not.toHaveBeenCalled();
     expect(sendImageMock).not.toHaveBeenCalled();
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
-      "stale-preselect-user",
-      "Kies eerst een stijlgroep 👇",
-      expect.arrayContaining([
-        expect.objectContaining({ payload: "STYLE_CATEGORY_ILLUSTRATED" }),
-        expect.objectContaining({ payload: "STYLE_CATEGORY_ATMOSPHERE" }),
-        expect.objectContaining({ payload: "STYLE_CATEGORY_BOLD" }),
-      ])
-    );
-    expect(getState(anonymizePsid("stale-preselect-user"))?.lastPhotoUrl).toMatch(
-      /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
-    );
-    expect(getState(anonymizePsid("stale-preselect-user"))?.lastPhotoSource).toBe("stored");
-    expect(
-      getState(anonymizePsid("stale-preselect-user"))?.preselectedStyle
-    ).toBe("cyberpunk");
-  });
-
-  it("auto-runs the selected style when a new photo replaces an older one", async () => {
-    await setPendingStoredImage(
-      "selected-style-replacement-user",
-      "https://leaderbot-fb-image-gen.fly.dev/generated/old-source.png"
-    );
-    await setChosenStyle("selected-style-replacement-user", "afroman-americana");
-
-    sendImageMock.mockClear();
-    sendQuickRepliesMock.mockClear();
-    sendTextMock.mockClear();
-    installOpenAiSuccessFetchMock();
-
-    await sendMessengerPhoto(
-      processFacebookWebhookPayload,
-      "selected-style-replacement-user",
-      "mid-selected-style-replacement-photo",
-      "https://img.example/new-source.jpg"
-    );
-
-    expect(sendTextMock).toHaveBeenCalledWith(
-      "selected-style-replacement-user",
-      "Ik maak nu je Afroman-stijl."
-    );
-    expect(sendImageMock).toHaveBeenCalledWith(
-      "selected-style-replacement-user",
-      expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
-      )
-    );
-    expect(sendQuickRepliesMock).not.toHaveBeenCalledWith(
-      "selected-style-replacement-user",
-      t("nl", "styleCategoryPicker"),
-      expect.any(Array)
-    );
-    expect(
-      getState(anonymizePsid("selected-style-replacement-user"))?.selectedStyle
-    ).toBe("afroman-americana");
-  });
-
-  it("stores Messenger attachment URLs before downstream generation fetches them again", async () => {
-    const fetchMock = installOpenAiSuccessFetchMock();
-
-    await processFacebookWebhookPayload({
-      entry: [
+      "surprise-style-user",
+      t("nl", "assistantQuickActions"),
+      [
         {
-          messaging: [
-            {
-              sender: { id: "stored-boundary-user" },
-              message: {
-                mid: "mid-stored-boundary-photo",
-                attachments: [
-                  {
-                    type: "image",
-                    payload: { url: "https://img.example/source.jpg" },
-                  },
-                ],
-              },
-            },
-            {
-              sender: { id: "stored-boundary-user" },
-              message: {
-                mid: "mid-stored-boundary-style",
-                quick_reply: { payload: "gold" },
-              },
-            },
-          ],
+          content_type: "text",
+          title: "Pas aan",
+          payload: "OPENCLAW_ACTION:Pas%20aan",
         },
-      ],
-    });
-
-    const fetchedUrls = fetchMock.mock.calls.map(([url]) => toUrlString(url));
-    expect(fetchedUrls.filter(url => url === "https://img.example/source.jpg")).toHaveLength(1);
-    expect(
-      fetchedUrls.some(url => url.startsWith(GENERATED_SOURCE_IMAGE_URL_PREFIX))
-    ).toBe(true);
-    expect(getState(anonymizePsid("stored-boundary-user"))?.lastPhotoSource).toBe(
-      "stored"
+        {
+          content_type: "text",
+          title: "Nieuwe afbeelding",
+          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+        },
+        {
+          content_type: "text",
+          title: "Privacy",
+          payload: "OPENCLAW_ACTION:Privacy",
+        },
+      ]
     );
   });
 
-  it("handles /style Afroman and routes the next generation through afroman-americana", async () => {
-    const sourceImage = Buffer.alloc(6000, 7);
-    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
-      if (isSourceImageFetchUrl(url)) {
-        return {
-          ok: true,
-          headers: new Headers({ "content-type": "image/jpeg" }),
-          arrayBuffer: async () => sourceImage,
-        } as Response;
-      }
 
-      const prompt = promptFromOpenAiRequest(init);
-      expect(prompt).toContain(
-        "Transform this photo into a premium stylized portrait in an Afroman-inspired Americana look."
-      );
-      expect(prompt).toContain(
-        "Preserve the subject identity and facial features"
-      );
-      expect(prompt).toContain("tailored American flag suit");
-      expect(prompt).toContain("bold retro Americana energy");
 
-      return {
-        ok: true,
-        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
-      } as Response;
-    });
 
-    vi.stubGlobal("fetch", fetchMock);
 
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: "afroman-style-user" },
-              message: {
-                mid: "mid-afroman-photo",
-                attachments: [
-                  {
-                    type: "image",
-                    payload: { url: "https://img.example/source.jpg" },
-                  },
-                ],
-              },
-            },
-          ],
-        },
-      ],
-    });
 
-    sendImageMock.mockClear();
-    sendQuickRepliesMock.mockClear();
-    sendTextMock.mockClear();
-
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: "afroman-style-user" },
-              message: {
-                mid: "mid-afroman-style-command",
-                text: "/style Afroman",
-              },
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(sendTextMock).toHaveBeenCalledWith(
-      "afroman-style-user",
-      "Ik maak nu je Afroman-stijl."
-    );
-    expect(sendImageMock).toHaveBeenCalledWith(
-      "afroman-style-user",
-      expect.stringMatching(
-        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
-      )
-    );
-    expect(getState(anonymizePsid("afroman-style-user"))?.selectedStyle).toBe(
-      "afroman-americana"
-    );
-    expect(getState(anonymizePsid("afroman-style-user"))?.lastStyle).toBe(
-      "afroman-americana"
-    );
-  });
 });
 

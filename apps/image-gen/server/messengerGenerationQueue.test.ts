@@ -27,7 +27,6 @@ function createJob(overrides: Partial<MessengerGenerationJob> = {}): MessengerGe
   return {
     psid: "psid-1",
     userId: "user-1",
-    style: "gold",
     reqId: "req-1",
     lang: "nl",
     ...overrides,
@@ -135,6 +134,7 @@ describe("messengerGenerationQueue", () => {
     const redis = {
       llen: vi.fn(async () => 0),
       lpush: vi.fn(async () => 1),
+      set: vi.fn(async () => "OK"),
     };
     getRedisClientMock.mockResolvedValue(redis);
     const processor = vi.fn(async () => "should-not-run");
@@ -144,6 +144,44 @@ describe("messengerGenerationQueue", () => {
 
     expect(result).toEqual({ mode: "queued" });
     expect(processor).not.toHaveBeenCalled();
+    expect(redis.set).toHaveBeenCalledWith(
+      "messenger-generation-job-accepted:req-handoff",
+      "1",
+      "EX",
+      720,
+      "NX"
+    );
+    expect(redis.lpush).toHaveBeenCalledWith(
+      "messenger-generation-jobs",
+      JSON.stringify(job)
+    );
+  });
+
+  it("dedupes queued generation jobs by reqId before enqueueing", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const accepted = new Set<string>();
+    const redis = {
+      llen: vi.fn(async () => 0),
+      lpush: vi.fn(async () => 1),
+      set: vi.fn(async (key: string, value: string, ...args: Array<string | number>) => {
+        expect(value).toBe("1");
+        expect(args).toEqual(["EX", 720, "NX"]);
+        if (accepted.has(key)) {
+          return null;
+        }
+        accepted.add(key);
+        return "OK";
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+    const job = createJob({ reqId: "req-duplicate" });
+
+    await expect(enqueueMessengerGenerationJob(job)).resolves.toBe(true);
+    await expect(enqueueMessengerGenerationJob(job)).resolves.toBe(false);
+
+    expect(redis.lpush).toHaveBeenCalledTimes(1);
     expect(redis.lpush).toHaveBeenCalledWith(
       "messenger-generation-jobs",
       JSON.stringify(job)
@@ -196,7 +234,7 @@ describe("messengerGenerationQueue", () => {
     getRedisClientMock.mockResolvedValue(redis);
 
     const job = createJob({ reqId: "req-queued" });
-    await enqueueMessengerGenerationJob(job);
+    await expect(enqueueMessengerGenerationJob(job)).resolves.toBe(true);
     const processor = vi.fn(async () => undefined);
     await drainMessengerGenerationQueue(processor);
 
@@ -214,6 +252,13 @@ describe("messengerGenerationQueue", () => {
       JSON.stringify(job)
     );
     expect(redis.set).toHaveBeenCalledWith(
+      "messenger-generation-job-accepted:req-queued",
+      "1",
+      "EX",
+      720,
+      "NX"
+    );
+    expect(redis.set).toHaveBeenCalledWith(
       "messenger-generation-job-lease:req-queued",
       "1",
       "EX",
@@ -222,6 +267,57 @@ describe("messengerGenerationQueue", () => {
     expect(redis.del).toHaveBeenCalledWith(
       "messenger-generation-job-lease:req-queued"
     );
+    expect(processor).toHaveBeenCalledWith(job);
+    expect(processing).toEqual([]);
+  });
+
+  it("drains prompt-first jobs without legacy style values", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const job = createJob({
+      reqId: "req-prompt-first-no-style",
+      generationKind: "text_to_image",
+      promptHint: "Maak een draak boven Antwerpen",
+    });
+    const queue: string[] = [JSON.stringify(job)];
+    const processing: string[] = [];
+    const redis = {
+      del: vi.fn(async () => 1),
+      get: vi.fn(async () => null),
+      llen: vi.fn(async (key: string) =>
+        key.endsWith(":processing") ? processing.length : queue.length
+      ),
+      lrange: vi.fn(async () => processing),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      lpush: vi.fn(async (_key: string, value: string) => {
+        queue.unshift(value);
+        return queue.length;
+      }),
+      lpush: vi.fn(async (_key: string, value: string) => {
+        queue.unshift(value);
+        return queue.length;
+      }),
+      set: vi.fn(async () => "OK"),
+      rpoplpush: vi.fn(async () => {
+        const value = queue.pop() ?? null;
+        if (value) {
+          processing.unshift(value);
+        }
+        return value;
+      }),
+      set: vi.fn(async () => "OK"),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async () => undefined);
+
+    await drainMessengerGenerationQueue(processor);
+
     expect(processor).toHaveBeenCalledWith(job);
     expect(processing).toEqual([]);
   });
@@ -247,6 +343,11 @@ describe("messengerGenerationQueue", () => {
         processing.splice(index, 1);
         return 1;
       }),
+      lpush: vi.fn(async (_key: string, value: string) => {
+        queue.unshift(value);
+        return queue.length;
+      }),
+      set: vi.fn(async () => "OK"),
       rpoplpush: vi.fn(async () => {
         const value = queue.pop() ?? null;
         if (value) {
@@ -351,6 +452,7 @@ describe("messengerGenerationQueue", () => {
         }
         return value;
       }),
+      set: vi.fn(async () => "OK"),
       rpush: vi.fn(async (_key: string, value: string) => {
         dead.push(value);
         return dead.length;
@@ -467,6 +569,10 @@ describe("messengerGenerationQueue", () => {
         }
         return value;
       }),
+      lpush: vi.fn(async (_key: string, value: string) => {
+        queue.unshift(value);
+        return queue.length;
+      }),
       rpush: vi.fn(async (_key: string, value: string) => {
         dead.push(value);
         return dead.length;
@@ -509,6 +615,7 @@ describe("messengerGenerationQueue", () => {
     const redis = {
       del: vi.fn(async () => 0),
       get: vi.fn(async () => null),
+      set: vi.fn(async () => "OK"),
       llen: vi.fn(async (key: string) => {
         if (key.endsWith(":processing")) return processing.length;
         if (key.endsWith(":dead")) return dead.length;
@@ -543,23 +650,26 @@ describe("messengerGenerationQueue", () => {
     expect(dead).toEqual([invalidJob]);
   });
 
-  it("dead-letters structurally invalid pending job payloads", async () => {
+  it("normalizes stale style-restyle jobs to prompt-first source-image edits", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
     isRedisEnabledMock.mockReturnValue(true);
-    const invalidJob = JSON.stringify({
+    const legacyJob = JSON.stringify({
       psid: "user-1",
       userId: "user-key-1",
-      style: "not-a-style",
-      reqId: "req-invalid-style",
+      generationKind: "style_restyle",
+      reqId: "req-legacy-style-kind",
       lang: "nl",
+      sourceImageUrl: "https://img.example/source.jpg",
+      promptHint: "make it brighter",
     });
-    const queue: string[] = [invalidJob];
+    const queue: string[] = [legacyJob];
     const processing: string[] = [];
     const dead: string[] = [];
     const redis = {
       del: vi.fn(async () => 0),
       get: vi.fn(async () => null),
+      set: vi.fn(async () => "OK"),
       llen: vi.fn(async (key: string) => {
         if (key.endsWith(":processing")) return processing.length;
         if (key.endsWith(":dead")) return dead.length;
@@ -588,10 +698,73 @@ describe("messengerGenerationQueue", () => {
 
     await expect(drainMessengerGenerationQueue(processor)).resolves.toBeUndefined();
 
-    expect(processor).not.toHaveBeenCalled();
+    expect(processor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        generationKind: "source_image_edit",
+        promptHint: "make it brighter",
+        sourceImageUrl: "https://img.example/source.jpg",
+      })
+    );
+    expect(dead).toEqual([]);
+  });
+
+  it("ignores stale style payloads instead of letting them affect queued generation", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const staleJob = JSON.stringify({
+      psid: "user-1",
+      userId: "user-key-1",
+      style: 123,
+      reqId: "req-stale-style",
+      lang: "nl",
+    });
+    const queue: string[] = [staleJob];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const redis = {
+      del: vi.fn(async () => 0),
+      get: vi.fn(async () => null),
+      set: vi.fn(async () => "OK"),
+      llen: vi.fn(async (key: string) => {
+        if (key.endsWith(":processing")) return processing.length;
+        if (key.endsWith(":dead")) return dead.length;
+        return queue.length;
+      }),
+      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+        const index = processing.indexOf(value);
+        if (index === -1) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      lpush: vi.fn(async (_key: string, value: string) => {
+        queue.unshift(value);
+        return queue.length;
+      }),
+      set: vi.fn(async () => "OK"),
+      rpoplpush: vi.fn(async () => {
+        const value = queue.pop() ?? null;
+        if (value) {
+          processing.unshift(value);
+        }
+        return value;
+      }),
+      rpush: vi.fn(async (_key: string, value: string) => {
+        dead.push(value);
+        return dead.length;
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async () => undefined);
+
+    await expect(drainMessengerGenerationQueue(processor)).resolves.toBeUndefined();
+
+    expect(processor).toHaveBeenCalledWith(
+      expect.not.objectContaining({ style: expect.anything() })
+    );
     expect(queue).toEqual([]);
     expect(processing).toEqual([]);
-    expect(dead).toEqual([invalidJob]);
+    expect(dead).toEqual([]);
   });
 
   it("does not fail the drain when a dead-letter callback fails", async () => {

@@ -2,42 +2,30 @@ export type Lang = "nl" | "en";
 
 type TranslationParams = {
   link?: string;
-  styleLabel?: string;
 };
 
 type TranslationKey =
   | "flowExplanation"
-  | "identityGameConfirmFirstPrompt"
-  | "identityGameConfirmStart"
-  | "identityGameConfirmLater"
-  | "identityGameEntryRecognized"
-  | "identityGameUnavailable"
-  | "identityGameSessionPending"
-  | "identityGameStartConfirmed"
-  | "identityGameDeferred"
-  | "stylePicker"
-  | "styleCategoryPicker"
-  | "styleCategoryCarouselIntro"
+  | "photoEditPrompt"
+  | "editImagePrompt"
   | "whatIsThis"
-  | "newStyle"
-  | "retry"
+  | "newImage"
+  | "editImage"
+  | "editPhoto"
   | "assistantQuickActions"
   | "assistantPhotoTip"
   | "assistantPhotoTipExtra"
-  | "assistantRandomStyle"
   | "success"
   | "processingBlocked"
-  | "styleWithoutPhoto"
+  | "editRequiresPhoto"
   | "textWithoutPhoto"
   | "privacy"
-  | "privacyButtonLabel"
   | "aboutLeaderbot"
   | "failure"
   | "missingInputImage"
-  | "generatingPrompt"
+  | "generatingImagePrompt"
   | "generationQueued"
-  | "retryThisStyle"
-  | "otherStyle"
+  | "whatsappGenerationFollowup"
   | "backToCategories"
   | "hdUnavailable"
   | "generationUnavailable"
@@ -51,121 +39,89 @@ type TranslationValue = string | ((params: TranslationParams) => string);
 
 const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
   nl: {
-    flowExplanation: "Stuur een foto en ik maak er een speciale versie van in een andere stijl — het is gratis.",
-    identityGameConfirmFirstPrompt:
-      "Deze game-entry is herkend. Klaar om later te starten?",
-    identityGameConfirmStart: "Start game",
-    identityGameConfirmLater: "Later",
-    identityGameEntryRecognized:
-      "Deze identity game-entry is herkend. De game flow zelf volgt in de volgende fase.",
-    identityGameUnavailable:
-      "Deze game-link is herkend, maar deze game is momenteel niet beschikbaar.",
-    identityGameSessionPending:
-      "Je identity game-sessie is herkend, maar de game flow zelf is nog niet geactiveerd in deze fase.",
-    identityGameStartConfirmed:
-      "De game-start is bevestigd. De echte vraagflow volgt in de volgende fase.",
-    identityGameDeferred:
-      "Geen probleem. Deze game-link blijft herkenbaar voor later.",
-    stylePicker: "Kies je stijl 👇",
-    styleCategoryPicker: "Kies eerst een stijlgroep 👇",
-    styleCategoryCarouselIntro: ({ styleLabel }) =>
-      `Hier zijn je ${styleLabel ?? ""}-stijlen. Kies er eentje hieronder.`,
+    flowExplanation:
+      "Beschrijf wat je wilt maken, of stuur een foto als je die wilt bewerken.",
+    photoEditPrompt: "Foto ontvangen. Wat wil je aanpassen?",
+    editImagePrompt: "Wat wil je aanpassen?",
     whatIsThis: "Wat doe ik?",
-    newStyle: "Nieuwe stijl",
-    retry: "Probeer opnieuw",
-    assistantQuickActions:
-      "⚡ Snelle acties: kies een stijl, typ 'remix', of typ 'verras me' voor een willekeurige look.",
+    newImage: "Nieuwe afbeelding",
+    editImage: "Pas aan",
+    editPhoto: "Pas foto aan",
+    assistantQuickActions: "Je afbeelding staat klaar. Wat wil je doen?",
     assistantPhotoTip:
-      "Tip: typ 'verras me' nadat je een foto hebt gestuurd voor meteen een willekeurige stijl.",
+      "Typ gewoon wat je wilt maken, bijvoorbeeld: maak een futuristische stad bij zonsondergang.",
     assistantPhotoTipExtra:
-      "Je kan ook gewoon een stijlnaam typen of op een genummerde optie antwoorden.",
-    assistantRandomStyle: ({ styleLabel }) =>
-      `🎲 Mooie keuze — ik ga voor ${styleLabel ?? "deze stijl"}.`,
-    success: "Klaar ✅",
-    processingBlocked: "Even geduld — je vorige afbeelding is bijna klaar.",
-    styleWithoutPhoto: "Stuur eerst een foto, dan maak ik die stijl voor je.",
-    textWithoutPhoto: "Stuur gerust een foto, dan kan ik een stijl voor je maken.",
+      "Bij een foto kan je meteen zeggen wat er anders moet.",
+    success: "Klaar.",
+    processingBlocked: "Even geduld, je vorige afbeelding is bijna klaar.",
+    editRequiresPhoto: "Stuur eerst de foto die je wilt bewerken.",
+    textWithoutPhoto:
+      "Beschrijf welke afbeelding je wilt maken, of stuur een foto als je die wilt bewerken.",
     privacy: ({ link }) => [
       "Je foto wordt enkel gebruikt om de afbeelding te maken.",
       "Ze wordt daarna niet bewaard.",
       ...(link ? [`Privacybeleid: ${link}`] : []),
     ].join("\n"),
-    privacyButtonLabel: "Privacybeleid",
-    aboutLeaderbot: "Leaderbot is gemaakt door Andy. Je mag hem gerust contacteren via Facebook.\nVolledige naam op vraag: Andy Arijs.",
-    failure: "Oeps. Probeer nog een stijl.",
+    aboutLeaderbot:
+      "Leaderbot is gemaakt door Andy. Je mag hem gerust contacteren via Facebook.\nVolledige naam op vraag: Andy Arijs.",
+    failure: "Oeps. Probeer opnieuw of beschrijf een nieuwe afbeelding.",
     missingInputImage: "Ik kon je foto niet goed lezen. Stuur ze nog eens door aub.",
-    generatingPrompt: ({ styleLabel }) => `Ik maak nu je ${styleLabel ?? ""}-stijl.`,
-    generationQueued: "Je afbeelding staat in de wachtrij. Ik stuur ze zodra ze klaar is.",
-    retryThisStyle: "Opnieuw",
-    otherStyle: "Andere",
+    generatingImagePrompt: "Ik maak nu je afbeelding.",
+    generationQueued: "Ik zet je afbeelding in de wachtrij en stuur ze zodra ze klaar is.",
+    whatsappGenerationFollowup:
+      "Beschrijf je volgende afbeelding of aanpassing.",
     backToCategories: "Categorieen",
-    hdUnavailable: "I can share HD downloads after I generate an image.",
-    generationUnavailable: "AI generation isn’t enabled yet.",
+    hdUnavailable: "Ik kan HD-downloads delen nadat ik een afbeelding heb gemaakt.",
+    generationUnavailable: "Beeldgeneratie staat nog niet aan.",
     generationTimeout:
       "Dit duurde te lang bij de beeldprovider. Probeer nog eens.",
     generationBudgetReached:
-      "⚠️ Even pauze — ons maandbudget is bereikt. Probeer later opnieuw.",
-    generationGenericFailure: "I couldn’t generate that image right now.",
+      "Even pauze, ons maandbudget is bereikt. Probeer later opnieuw.",
+    generationGenericFailure: "Ik kon die afbeelding nu niet maken.",
     errorFallback: "Er liep iets mis aan mijn kant. Probeer gerust opnieuw.",
     unsupportedMedia:
       "Ik werk voorlopig alleen met foto's. Stuur een foto in plaats van een video of ander bestand.",
   },
   en: {
-    flowExplanation: "Send a photo and I will make a special version of it in another style for free.",
-    identityGameConfirmFirstPrompt:
-      "This game entry was recognized. Ready to start later?",
-    identityGameConfirmStart: "Start game",
-    identityGameConfirmLater: "Later",
-    identityGameEntryRecognized:
-      "This identity game entry was recognized. The actual game flow will follow in the next phase.",
-    identityGameUnavailable:
-      "This game link was recognized, but this game is not available right now.",
-    identityGameSessionPending:
-      "Your identity game session was recognized, but the actual game flow is not enabled in this phase yet.",
-    identityGameStartConfirmed:
-      "The game start was confirmed. The actual question flow will follow in the next phase.",
-    identityGameDeferred:
-      "No problem. This game link will stay recognizable for later.",
-    stylePicker: "Pick a style 👇",
-    styleCategoryPicker: "Pick a style group first 👇",
-    styleCategoryCarouselIntro: ({ styleLabel }) =>
-      `Here are your ${styleLabel ?? ""} styles. Pick one below.`,
+    flowExplanation:
+      "Describe the image you want to make, or send a photo if you want me to edit it.",
+    photoEditPrompt: "Photo received. What should I change?",
+    editImagePrompt: "What should I change?",
     whatIsThis: "What is this?",
-    newStyle: "New style",
-    retry: "Retry",
-    assistantQuickActions:
-      "⚡ Quick actions: choose a style, type 'remix', or type 'surprise me' for a random look.",
+    newImage: "New image",
+    editImage: "Edit image",
+    editPhoto: "Edit photo",
+    assistantQuickActions: "Your image is ready. What would you like to do?",
     assistantPhotoTip:
-      "Tip: send 'surprise me' after uploading a photo for an instant random style.",
+      "Just type what you want to make, for example: make a futuristic city at sunset.",
     assistantPhotoTipExtra:
-      "You can also type a style name directly or reply with a numbered option.",
-    assistantRandomStyle: ({ styleLabel }) =>
-      `🎲 Nice — going with ${styleLabel ?? "this style"}.`,
-    success: "Done ✅",
-    processingBlocked: "One sec — your previous image is almost done.",
-    styleWithoutPhoto: "Send a photo first, then I can make that style for you.",
-    textWithoutPhoto: "Feel free to send a photo, then I can make a style for you.",
+      "With a photo, tell me what should change.",
+    success: "Done.",
+    processingBlocked: "One sec, your previous image is almost done.",
+    editRequiresPhoto: "Send the photo you want me to edit first.",
+    textWithoutPhoto:
+      "Describe the image you want to make, or send a photo if you want me to edit it.",
     privacy: ({ link }) => [
       "Your photo is only used to make the image.",
       "It is not stored afterwards.",
       ...(link ? [`Privacy policy: ${link}`] : []),
     ].join("\n"),
-    privacyButtonLabel: "Privacy Policy",
-    aboutLeaderbot: "Leaderbot was made by Andy. Feel free to contact him via Facebook.\nFull name on request: Andy Arijs.",
-    failure: "Oops. Try another style.",
+    aboutLeaderbot:
+      "Leaderbot was made by Andy. Feel free to contact him via Facebook.\nFull name on request: Andy Arijs.",
+    failure: "Oops. Try again or describe a new image.",
     missingInputImage: "I could not read your photo properly. Please send it again.",
-    generatingPrompt: ({ styleLabel }) => `I am now making your ${styleLabel ?? ""} style.`,
-    generationQueued: "Your image is queued. I’ll send it as soon as it’s ready.",
-    retryThisStyle: "Retry",
-    otherStyle: "Another",
+    generatingImagePrompt: "I am making your image now.",
+    generationQueued: "I queued your image and will send it as soon as it is ready.",
+    whatsappGenerationFollowup:
+      "Describe your next image or change.",
     backToCategories: "Categories",
     hdUnavailable: "I can share HD downloads after I generate an image.",
-    generationUnavailable: "AI generation isn’t enabled yet.",
+    generationUnavailable: "Image generation is not enabled yet.",
     generationTimeout:
       "This took too long at the image provider. Please try again.",
     generationBudgetReached:
-      "⚠️ Quick pause — our monthly budget has been reached. Please try again later.",
-    generationGenericFailure: "I couldn’t generate that image right now.",
+      "Quick pause, our monthly budget has been reached. Please try again later.",
+    generationGenericFailure: "I could not generate that image right now.",
     errorFallback: "Something went wrong on my side. Please try again.",
     unsupportedMedia:
       "I currently only work with photos. Please send a photo instead of a video or other file.",

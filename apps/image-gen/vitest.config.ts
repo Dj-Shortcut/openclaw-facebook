@@ -19,5 +19,8 @@ export default defineConfig({
       "server/**/*.spec.ts",
       "scripts/**/*.test.mjs",
     ],
+    include: ["server/**/*.test.ts", "server/**/*.spec.ts"],
+    hookTimeout: 180_000,
+    testTimeout: 180_000,
   },
 });

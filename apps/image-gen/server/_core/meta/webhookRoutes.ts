@@ -12,6 +12,7 @@ import {
   scheduleWebhookIngressDrain,
 } from "./webhookIngressQueue";
 import { recordWebhookAckMetric } from "../observability";
+import { safeLog } from "../logger";
 
 const webhookVerificationQuerySchema = z.object({
   "hub.mode": z.literal("subscribe"),
@@ -79,14 +80,15 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
     const parsedQuery = webhookVerificationQuerySchema.safeParse(req.query);
     const path = req.path;
 
-    console.log("[meta webhook] GET verification request", { path });
+    safeLog("meta_webhook_verification_requested", { path });
 
     if (
       !configuredToken ||
       !parsedQuery.success ||
       parsedQuery.data["hub.verify_token"] !== configuredToken
     ) {
-      console.warn("[meta webhook] GET verification rejected", {
+      safeLog("meta_webhook_verification_rejected", {
+        level: "warn",
         path,
         hasConfiguredToken: Boolean(configuredToken),
         hasMode: typeof req.query["hub.mode"] === "string",
@@ -95,7 +97,7 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
       return res.sendStatus(403);
     }
 
-    console.log("[meta webhook] GET verification accepted", { path });
+    safeLog("meta_webhook_verification_accepted", { path });
     return res
       .status(200)
       .type("text/plain")
@@ -109,27 +111,19 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
   // Keep this dispatch branch local for now; it is the narrow seam for a later helper extraction.
   const handleWebhookPost: express.RequestHandler = async (req, res) => {
     const receivedAt = Date.now();
-    console.info(
-      JSON.stringify({
-        level: "info",
-        msg: "webhook_delivery_received",
-        path: req.path,
-        contentLength: req.get("content-length") ?? null,
-      })
-    );
+    safeLog("webhook_delivery_received", {
+      path: req.path,
+      contentLength: req.get("content-length") ?? null,
+    });
     const ack = (channel: "facebook" | "whatsapp", mode: string) => {
       res.sendStatus(200);
       const ackMs = Date.now() - receivedAt;
       recordWebhookAckMetric(channel, mode, ackMs);
-      console.info(
-        JSON.stringify({
-          level: "info",
-          msg: "webhook_ack_sent",
-          channel,
-          mode,
-          ackMs,
-        })
-      );
+      safeLog("webhook_ack_sent", {
+        channel,
+        mode,
+        ackMs,
+      });
     };
 
     const enqueueOrFallback = async (channel: "facebook" | "whatsapp") => {
@@ -142,26 +136,27 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
         scheduleWebhookIngressDrain();
       } catch (error) {
         if (error instanceof WebhookIngressEnqueueTimeoutError) {
-          console.error(`[${channel} webhook] durable enqueue timed out`, {
-            error: error.message,
+          safeLog("webhook_durable_enqueue_timed_out", {
+            level: "error",
+            channel,
+            error,
           });
           res.sendStatus(503);
           return;
         }
 
-        console.error(
-          `[${channel} webhook] durable enqueue failed, falling back to inline processing`,
-          {
-            error: error instanceof Error ? error.message : String(error),
-          }
-        );
+        safeLog("webhook_durable_enqueue_failed_inline_fallback", {
+          level: "error",
+          channel,
+          error,
+        });
         ack(channel, "inline_after_enqueue_failure");
         processWebhookDeliveryInline(channel, req.body);
       }
     };
 
     if (isWhatsAppWebhookPayload(req.body)) {
-      console.log("[whatsapp webhook] POST delivery received");
+      safeLog("whatsapp_webhook_post_delivery_received");
 
       if (!isWebhookIngressQueueEnabled()) {
         ack("whatsapp", "inline");
@@ -177,7 +172,7 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
       facebookWebhookPayloadSchema.parse(req.body);
     } catch (error) {
       if (error instanceof ZodError) {
-        console.warn("[messenger webhook] POST rejected: invalid payload shape");
+        safeLog("messenger_webhook_post_invalid_payload", { level: "warn" });
         res.status(400).json({ error: "Invalid webhook payload" });
         return;
       }
@@ -185,7 +180,7 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
       throw error;
     }
 
-    console.log("[messenger webhook] POST delivery received");
+    safeLog("messenger_webhook_post_delivery_received");
     if (!isWebhookIngressQueueEnabled()) {
       ack("facebook", "inline");
       processWebhookDeliveryInline("facebook", req.body);

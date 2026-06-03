@@ -1,10 +1,41 @@
 import { eq, and, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users, imageRequests, dailyQuota, usageStats, notificationLog, messengerState, InsertImageRequest, InsertUsageStats, InsertNotificationLog, InsertMessengerState } from "../drizzle/schema";
+import {
+  aiIdentities,
+  auditLog,
+  channelConnections,
+  dailyQuota,
+  imageRequests,
+  InsertAiIdentity,
+  InsertAuditLog,
+  InsertChannelConnection,
+  InsertImageRequest,
+  InsertMessengerState,
+  InsertNotificationLog,
+  InsertUsageStats,
+  InsertUser,
+  InsertWorkspace,
+  InsertWorkspaceMember,
+  messengerState,
+  notificationLog,
+  usageStats,
+  users,
+  workspaceMembers,
+  workspaces,
+  workspaceUsageDaily,
+} from "../drizzle/schema";
 import { ENV } from './_core/env';
+import { safeLog } from "./_core/logger";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 const FREE_DAILY_LIMIT = 3;
+
+function logDatabaseUnavailable(operation: string): void {
+  safeLog("database_unavailable", {
+    level: "warn",
+    operation,
+  });
+}
 
 // Lazily create the drizzle instance so local tooling can run without a DB.
 async function getDb() {
@@ -12,7 +43,10 @@ async function getDb() {
     try {
       _db = drizzle(process.env.DATABASE_URL);
     } catch (error) {
-      console.warn("[Database] Failed to connect:", error);
+      safeLog("database_connect_failed", {
+        level: "warn",
+        error,
+      });
       _db = null;
     }
   }
@@ -27,7 +61,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
 
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot upsert user: database not available");
+    logDatabaseUnavailable("upsert_user");
     return;
   }
 
@@ -74,7 +108,10 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       set: updateSet,
     });
   } catch (error) {
-    console.error("[Database] Failed to upsert user:", error);
+    safeLog("database_upsert_user_failed", {
+      level: "error",
+      error,
+    });
     throw error;
   }
 }
@@ -82,7 +119,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
 export async function getUserByOpenId(openId: string) {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot get user: database not available");
+    logDatabaseUnavailable("get_user_by_open_id");
     return undefined;
   }
 
@@ -94,13 +131,264 @@ export async function getUserByOpenId(openId: string) {
 async function getUserById(id: number) {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot get user: database not available");
+    logDatabaseUnavailable("get_user_by_id");
     return undefined;
   }
 
   const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
 
   return result.length > 0 ? result[0] : undefined;
+}
+
+function fallbackWorkspaceForUser(userId: number, name?: string | null) {
+  return {
+    id: userId,
+    name: name ? `${name}'s workspace` : "Leaderbot workspace",
+    slug: `workspace-${userId}`,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  };
+}
+
+export async function getOrCreateUserWorkspace(user: {
+  id: number;
+  name?: string | null;
+}) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("get_or_create_user_workspace");
+    return fallbackWorkspaceForUser(user.id, user.name);
+  }
+
+  const existing = await db
+    .select({
+      id: workspaces.id,
+      name: workspaces.name,
+      slug: workspaces.slug,
+      createdAt: workspaces.createdAt,
+      updatedAt: workspaces.updatedAt,
+    })
+    .from(workspaceMembers)
+    .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
+    .where(eq(workspaceMembers.userId, user.id))
+    .limit(1);
+
+  if (existing.length > 0) {
+    return existing[0];
+  }
+
+  const workspaceValues: InsertWorkspace = {
+    name: user.name ? `${user.name}'s workspace` : "Leaderbot workspace",
+    slug: `workspace-${user.id}`,
+  };
+  await db.insert(workspaces).values(workspaceValues).onDuplicateKeyUpdate({
+    set: { slug: workspaceValues.slug },
+  });
+
+  const created = await db
+    .select()
+    .from(workspaces)
+    .where(eq(workspaces.slug, workspaceValues.slug))
+    .limit(1);
+
+  const workspace = created[0] ?? fallbackWorkspaceForUser(user.id, user.name);
+  const memberValues: InsertWorkspaceMember = {
+    workspaceId: workspace.id,
+    userId: user.id,
+    role: "owner",
+  };
+  await db.insert(workspaceMembers).values(memberValues).onDuplicateKeyUpdate({
+    set: { workspaceId: memberValues.workspaceId },
+  });
+
+  return workspace;
+}
+
+export async function getWorkspaceMembership(workspaceId: number, userId: number) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("get_workspace_membership");
+    return workspaceId === userId ? { workspaceId, userId, role: "owner" as const } : null;
+  }
+
+  const result = await db
+    .select()
+    .from(workspaceMembers)
+    .where(
+      and(
+        eq(workspaceMembers.workspaceId, workspaceId),
+        eq(workspaceMembers.userId, userId)
+      )
+    )
+    .limit(1);
+
+  return result[0] ?? null;
+}
+
+export async function getOrCreateAiIdentity(workspaceId: number) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("get_or_create_ai_identity");
+    return {
+      id: workspaceId,
+      workspaceId,
+      name: "Leaderbot",
+      instructions: "Help customers with clear, useful answers.",
+      tone: "Helpful",
+      language: "nl",
+      modelDefault: "default",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    };
+  }
+
+  const existing = await db
+    .select()
+    .from(aiIdentities)
+    .where(eq(aiIdentities.workspaceId, workspaceId))
+    .limit(1);
+
+  if (existing.length > 0) {
+    return existing[0];
+  }
+
+  const values: InsertAiIdentity = {
+    workspaceId,
+    name: "Leaderbot",
+    instructions: "Help customers with clear, useful answers.",
+  };
+  await db.insert(aiIdentities).values(values).onDuplicateKeyUpdate({
+    set: { workspaceId },
+  });
+
+  const created = await db
+    .select()
+    .from(aiIdentities)
+    .where(eq(aiIdentities.workspaceId, workspaceId))
+    .limit(1);
+
+  return created[0];
+}
+
+export async function updateAiIdentity(
+  workspaceId: number,
+  updates: Pick<InsertAiIdentity, "name" | "instructions" | "tone" | "language" | "modelDefault">
+) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("update_ai_identity");
+    return {
+      id: workspaceId,
+      workspaceId,
+      createdAt: new Date(0),
+      updatedAt: new Date(),
+      ...updates,
+      instructions: updates.instructions ?? null,
+    };
+  }
+
+  await getOrCreateAiIdentity(workspaceId);
+  await db
+    .update(aiIdentities)
+    .set(updates)
+    .where(eq(aiIdentities.workspaceId, workspaceId));
+
+  return getOrCreateAiIdentity(workspaceId);
+}
+
+export async function listChannelConnections(workspaceId: number) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("list_channel_connections");
+    return [
+      {
+        id: workspaceId,
+        workspaceId,
+        channel: "facebook_messenger" as const,
+        status: "disconnected" as const,
+        externalId: null,
+        displayName: null,
+        encryptedAccessToken: null,
+        grantedScopes: null,
+        lastCheckedAt: null,
+        createdAt: new Date(0),
+        updatedAt: new Date(0),
+      },
+    ];
+  }
+
+  const result = await db
+    .select()
+    .from(channelConnections)
+    .where(eq(channelConnections.workspaceId, workspaceId));
+
+  return result;
+}
+
+export async function upsertChannelConnection(values: InsertChannelConnection) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("upsert_channel_connection");
+    return null;
+  }
+
+  await db.insert(channelConnections).values(values).onDuplicateKeyUpdate({
+    set: {
+      status: values.status,
+      externalId: values.externalId ?? null,
+      displayName: values.displayName ?? null,
+      encryptedAccessToken: values.encryptedAccessToken ?? null,
+      grantedScopes: values.grantedScopes ?? null,
+      lastCheckedAt: new Date(),
+    },
+  });
+
+  return listChannelConnections(values.workspaceId);
+}
+
+export async function getWorkspaceUsageSummary(workspaceId: number) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("get_workspace_usage_summary");
+    return {
+      workspaceId,
+      period: "today" as const,
+      messageCount: 0,
+      imageCount: 0,
+      blockedCount: 0,
+    };
+  }
+
+  const today = getTodayUTC();
+  const result = await db
+    .select()
+    .from(workspaceUsageDaily)
+    .where(
+      and(
+        eq(workspaceUsageDaily.workspaceId, workspaceId),
+        eq(workspaceUsageDaily.date, today)
+      )
+    )
+    .limit(1);
+
+  const usage = result[0];
+  return {
+    workspaceId,
+    period: "today" as const,
+    messageCount: usage?.messageCount ?? 0,
+    imageCount: usage?.imageCount ?? 0,
+    blockedCount: usage?.blockedCount ?? 0,
+  };
+}
+
+export async function insertAuditLog(values: InsertAuditLog) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("insert_audit_log");
+    return null;
+  }
+
+  return db.insert(auditLog).values(values);
 }
 
 /**
@@ -120,7 +408,7 @@ function getTodayUTC(): string {
 export async function canUserGenerateImage(userId: number): Promise<boolean> {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot check quota: database not available");
+    logDatabaseUnavailable("check_quota");
     return false;
   }
 
@@ -144,7 +432,7 @@ export async function canUserGenerateImage(userId: number): Promise<boolean> {
 async function incrementUserQuota(userId: number): Promise<void> {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot increment quota: database not available");
+    logDatabaseUnavailable("increment_quota");
     return;
   }
 
@@ -181,7 +469,7 @@ async function incrementUserQuota(userId: number): Promise<void> {
 async function reserveUserDailyQuota(userId: number): Promise<boolean> {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot reserve quota: database not available");
+    logDatabaseUnavailable("reserve_quota");
     return false;
   }
 
@@ -233,7 +521,7 @@ async function reserveUserDailyQuota(userId: number): Promise<boolean> {
 async function releaseUserDailyQuota(userId: number): Promise<void> {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot release quota: database not available");
+    logDatabaseUnavailable("release_quota");
     return;
   }
 
@@ -254,7 +542,7 @@ async function releaseUserDailyQuota(userId: number): Promise<void> {
 async function createImageRequest(data: InsertImageRequest) {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot create image request: database not available");
+    logDatabaseUnavailable("create_image_request");
     return null;
   }
 
@@ -268,7 +556,7 @@ async function createImageRequest(data: InsertImageRequest) {
 async function updateImageRequest(id: number, updates: { imageUrl?: string; imageKey?: string; status: 'pending' | 'completed' | 'failed'; errorMessage?: string | null; completedAt?: Date }) {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot update image request: database not available");
+    logDatabaseUnavailable("update_image_request");
     return null;
   }
 
@@ -282,7 +570,7 @@ async function updateImageRequest(id: number, updates: { imageUrl?: string; imag
 async function getUserImageRequests(userId: number, limit = 50, offset = 0) {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot get image requests: database not available");
+    logDatabaseUnavailable("get_image_requests");
     return [];
   }
 
@@ -303,7 +591,7 @@ async function getUserImageRequests(userId: number, limit = 50, offset = 0) {
 async function getCompletedImages(limit = 100, offset = 0) {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot get completed images: database not available");
+    logDatabaseUnavailable("get_completed_images");
     return [];
   }
 
@@ -332,7 +620,7 @@ async function getCompletedImages(limit = 100, offset = 0) {
 async function getTodayStats() {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot get stats: database not available");
+    logDatabaseUnavailable("get_stats");
     return null;
   }
 
@@ -352,7 +640,7 @@ async function getTodayStats() {
 async function updateTodayStats(updates: Partial<InsertUsageStats>) {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot update stats: database not available");
+    logDatabaseUnavailable("update_stats");
     return null;
   }
 
@@ -375,7 +663,7 @@ async function updateTodayStats(updates: Partial<InsertUsageStats>) {
 async function logNotification(data: InsertNotificationLog) {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot log notification: database not available");
+    logDatabaseUnavailable("log_notification");
     return null;
   }
 
@@ -388,7 +676,10 @@ async function logNotification(data: InsertNotificationLog) {
  */
 async function getOrCreateMessengerState(psid: string, userKey: string) {
   const db = await getDb();
-  if (!db) return null;
+  if (!db) {
+    logDatabaseUnavailable("get_or_create_messenger_state");
+    return null;
+  }
 
   const existing = await db
     .select()
@@ -413,7 +704,10 @@ async function getOrCreateMessengerState(psid: string, userKey: string) {
  */
 async function updateMessengerState(psid: string, updates: Partial<InsertMessengerState>) {
   const db = await getDb();
-  if (!db) return;
+  if (!db) {
+    logDatabaseUnavailable("update_messenger_state");
+    return;
+  }
 
   await db
     .update(messengerState)
@@ -427,7 +721,10 @@ async function updateMessengerState(psid: string, updates: Partial<InsertMesseng
 async function checkAndIncrementMessengerQuota(psid: string): Promise<boolean> {
   void psid;
 
-  if (!(await getDb())) return true; // Fail open for quota if DB is down
+  if (!(await getDb())) {
+    logDatabaseUnavailable("check_and_increment_messenger_quota");
+    return true; // Fail open for quota if DB is down
+  }
 
   // Current implementation intentionally stays fail-open for compatibility.
   return true;
@@ -439,7 +736,7 @@ async function checkAndIncrementMessengerQuota(psid: string): Promise<boolean> {
 async function getRecentNotifications(limit = 20) {
   const db = await getDb();
   if (!db) {
-    console.warn("[Database] Cannot get notifications: database not available");
+    logDatabaseUnavailable("get_notifications");
     return [];
   }
 

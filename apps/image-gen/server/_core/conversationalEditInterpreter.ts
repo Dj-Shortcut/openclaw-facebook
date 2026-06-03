@@ -1,10 +1,4 @@
 import type { Lang } from "./i18n";
-import {
-  DIRECTOR_MODE_CONFIGS,
-  directorPayloadToMode,
-} from "./image-generation/director/directorModes";
-import type { DirectorMode } from "./image-generation/director/directorTypes";
-import type { Style } from "./messengerStyles";
 import { extractResponseText } from "./openai/responseText";
 
 type ResponsesApiPayload = {
@@ -16,8 +10,6 @@ type ResponsesApiPayload = {
 
 type ConversationalEditDecision = {
   shouldEdit: boolean;
-  style?: Style;
-  directorMode?: DirectorMode;
   promptHint?: string;
 };
 
@@ -105,34 +97,19 @@ async function callResponsesApi(
   throw new Error("edit_interpreter_retry_exhausted");
 }
 
-function buildSystemPrompt(input: {
-  lang: Lang;
-  lastStyle?: Style;
-  lastDirectorMode?: DirectorMode;
-}): string {
+function buildSystemPrompt(input: { lang: Lang }): string {
   const language = input.lang === "en" ? "English" : "Dutch";
-  const lastStyle = input.lastStyle ?? "unknown";
-  const lastDirectorMode = input.lastDirectorMode ?? "unknown";
-  const directorModes = DIRECTOR_MODE_CONFIGS.map(mode => mode.mode).join("|");
 
   return [
     "You classify whether a user wants to edit the latest generated image.",
     `The user language is ${language}.`,
-    `The last known style is ${lastStyle}.`,
-    `The last known director mode is ${lastDirectorMode}.`,
     "Only return JSON with no markdown.",
-    `Schema: {"shouldEdit":boolean,"style":"caricature"|"storybook-anime"|"afroman-americana"|"gold"|"petals"|"clouds"|"cinematic"|"disco"|"cyberpunk"|"norman-blackwell"|null,"directorMode":"${directorModes}"|null,"promptHint":string|null}.`,
+    'Schema: {"shouldEdit":boolean,"promptHint":string|null}.',
     "Set shouldEdit=true only when the user is asking to change the previous image.",
-    "Use style only when the user explicitly asks for a known style or it is clearly implied.",
-    "Use directorMode when the user asks for a known director vibe, or when they ask to refine the previous director-generated image without changing vibe.",
-    "If the last known director mode is not unknown and the user asks for a refinement like darker, more luxury, less fake, more cinematic, more event poster, or keep my face closer, keep that directorMode unless they clearly ask for a different mode.",
-    'Map "luxury", "old money", and "quiet luxury" to "old_money" when appropriate.',
-    'Map "berlin", "techno", "rave", and "underground" to "berlin_underground" when appropriate.',
-    'Map "vogue", "fashion", and "editorial" to "vogue_editorial" when appropriate.',
-    'Map "hyperpop", "idol", "pop star", and "creator thumbnail" to "hyperpop_idol" when appropriate.',
-    'Map "midnight", "nightlife", "club", and "premium nightlife" to "midnight_luxury" when appropriate.',
-    'Treat "ghibli", "ghibli style", "studio ghibli", "storybook anime", and "whimsical anime" as requests for "storybook-anime".',
-    "Put the visual change request into promptHint in concise plain text.",
+    "If the user says the requested subject is missing, wrong, not visible, or not recognizable, treat it as a request to correct the previous image.",
+    "Never map user wording to a preset, template, or style catalog.",
+    "Preserve the user's visual wording as natural-language direction in promptHint instead of translating it to internal labels.",
+    "Put the full visual change request into promptHint in concise plain text, preserving the user's requested subject and vibe.",
     "If it is normal chat, a question, or unclear, return shouldEdit=false.",
   ].join(" ");
 }
@@ -141,8 +118,6 @@ function parseDecision(rawText: string): ConversationalEditDecision | null {
   try {
     const parsed = JSON.parse(rawText) as {
       shouldEdit?: unknown;
-      style?: unknown;
-      directorMode?: unknown;
       promptHint?: unknown;
     };
 
@@ -150,35 +125,13 @@ function parseDecision(rawText: string): ConversationalEditDecision | null {
       return null;
     }
 
-    const style =
-      parsed.style === "caricature" ||
-      parsed.style === "storybook-anime" ||
-      parsed.style === "afroman-americana" ||
-      parsed.style === "gold" ||
-      parsed.style === "petals" ||
-      parsed.style === "clouds" ||
-      parsed.style === "cinematic" ||
-      parsed.style === "disco" ||
-      parsed.style === "cyberpunk" ||
-      parsed.style === "norman-blackwell"
-        ? parsed.style
-        : undefined;
-
     const promptHint =
       typeof parsed.promptHint === "string" && parsed.promptHint.trim()
         ? sanitizeText(parsed.promptHint)
         : undefined;
-    const directorMode =
-      typeof parsed.directorMode === "string"
-        ? directorPayloadToMode(`DIRECTOR_${parsed.directorMode.toUpperCase()}`) ??
-          directorPayloadToMode(parsed.directorMode) ??
-          DIRECTOR_MODE_CONFIGS.find(mode => mode.mode === parsed.directorMode)?.mode
-        : undefined;
 
     return {
       shouldEdit: parsed.shouldEdit,
-      style,
-      directorMode,
       promptHint,
     };
   } catch {
@@ -214,7 +167,6 @@ export function looksLikePossibleEditRequest(text: string): boolean {
     "poster",
     "keep my face",
     "closer to the original",
-    "director",
     "vibe",
     "berlin",
     "techno",
@@ -234,6 +186,20 @@ export function looksLikePossibleEditRequest(text: string): boolean {
     "norman blackwell",
     "caricature",
     "background",
+    "missing",
+    "not visible",
+    "can't see",
+    "cant see",
+    "i don't see",
+    "i dont see",
+    "wrong subject",
+    "geen ",
+    "zie geen",
+    "ik zie",
+    "niet zichtbaar",
+    "ontbreekt",
+    "mist",
+    "verkeerd",
     "remove",
     "add",
     "maak",
@@ -249,8 +215,6 @@ export function looksLikePossibleEditRequest(text: string): boolean {
 export async function interpretConversationalEdit(input: {
   text: string;
   lang: Lang;
-  lastStyle?: Style;
-  lastDirectorMode?: DirectorMode;
 }): Promise<ConversationalEditDecision | null> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   const cleanText = sanitizeText(input.text);

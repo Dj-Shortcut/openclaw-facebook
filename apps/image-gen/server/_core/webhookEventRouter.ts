@@ -1,20 +1,6 @@
-import { safeLog } from "./messengerApi";
 import { handleMessengerConsentGate } from "./consentService";
-import {
-  setActiveExperience,
-  setFlowState,
-  setLastEntryIntent,
-  setPreferredLang,
-  type ConversationState,
-} from "./messengerState";
+import { setPreferredLang } from "./messengerState";
 import { toLogUser } from "./privacy";
-import {
-  parseMessengerEntryIntent,
-  routeMessengerActiveExperience,
-  routeMessengerEntryIntent,
-} from "./messengerExperienceRouting";
-import type { EntryIntent } from "./entryIntent";
-import type { ActiveExperience } from "./activeExperience";
 import { captureException } from "./observability/sentry";
 import { handlePayload, handlePostbackEvent } from "./webhookPayloadBranch";
 import {
@@ -28,6 +14,7 @@ import {
 } from "./webhookEventContext";
 import { handleMessageEvent } from "./webhookMessageRouter";
 import type { HandlerContext } from "./webhookHandlers";
+import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 
 export async function handleEntry(
   ctx: HandlerContext,
@@ -105,49 +92,6 @@ async function routeTrackedEvent(
   const { psid, userId, reqId, lang, localeLang, state, trackedCtx } = context;
   if (await routeConsentGate(context, event)) return;
 
-  const routeDeps = createMessengerRouteDeps(context);
-  const { referralRef, entryIntent } = parseMessengerEntryIntent({
-    event,
-    reqId,
-    userId,
-    localeLang,
-    safeLog,
-  });
-
-  if (
-    await routeMessengerEntryIntent({
-      deps: routeDeps,
-      state,
-      entryIntent,
-    })
-  ) {
-    await finishSelectedBranch(context, "entry_intent");
-    return;
-  }
-
-  if (
-    await routeMessengerActiveExperience({
-      deps: routeDeps,
-      state,
-      event,
-    })
-  ) {
-    await finishSelectedBranch(context, "active_experience");
-    return;
-  }
-
-  const referralResult = await trackedCtx.handleReferralStyleEvent(
-    psid,
-    referralRef,
-    lang,
-    reqId
-  );
-  if (referralResult.handled) {
-    context.markResponseSentFromOutcome(referralResult.outcome);
-    await finishSelectedBranch(context, "referral");
-    return;
-  }
-
   if (
     await handlePostbackEvent(trackedCtx, {
       psid,
@@ -183,12 +127,13 @@ async function routeConsentGate(
     sendText: async text => {
       await trackedCtx.sendLoggedText(psid, text, reqId);
     },
-    sendQuickReplies: async (text, replies) => {
-      await trackedCtx.sendLoggedQuickReplies(psid, text, replies, reqId);
-    },
-    sendRestyleStarterPills: async () => {
-      await setFlowState(psid, "AWAITING_STYLE");
-      await trackedCtx.sendStylePicker(psid, lang, reqId);
+    sendActions: async (text, actions) => {
+      await trackedCtx.sendLoggedQuickReplies(
+        psid,
+        text,
+        renderMessengerQuickReplies(actions),
+        reqId
+      );
     },
   });
 
@@ -197,44 +142,6 @@ async function routeConsentGate(
   }
 
   return handled;
-}
-
-function createMessengerRouteDeps(context: TrackedEventContext) {
-  const { psid, userId, reqId, trackedCtx } = context;
-  return {
-    psid,
-    userId,
-    reqId,
-    sendText: async (text: string) => {
-      await trackedCtx.sendLoggedText(psid, text, reqId);
-    },
-    sendStateText: async (stateName: ConversationState, text: string) => {
-      await trackedCtx.sendStateQuickReplies(psid, stateName, text, reqId);
-    },
-    sendOptionsPrompt: async (
-      prompt: string,
-      options: Array<{ id: string; title: string }>
-    ) => {
-      await trackedCtx.sendLoggedQuickReplies(
-        psid,
-        prompt,
-        options.map(option => ({
-          content_type: "text",
-          title: option.title,
-          payload: option.id,
-        })),
-        reqId
-      );
-    },
-    sendImage: async (imageUrl: string) => {
-      await trackedCtx.sendLoggedImage(psid, imageUrl, reqId);
-    },
-    safeLog,
-    setLastEntryIntent: (nextEntryIntent: EntryIntent | null) =>
-      Promise.resolve(setLastEntryIntent(psid, nextEntryIntent)),
-    setActiveExperience: (nextActiveExperience: ActiveExperience | null) =>
-      Promise.resolve(setActiveExperience(psid, nextActiveExperience)),
-  };
 }
 
 async function finishSelectedBranch(

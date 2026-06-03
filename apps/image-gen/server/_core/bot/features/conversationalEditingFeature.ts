@@ -1,29 +1,76 @@
 import type { BotFeature } from "../features";
-import { t } from "../../i18n";
-import { DIRECTOR_GENERATION_STYLE } from "../../image-generation/director/directorModes";
-import { normalizeStyle } from "../../webhookHelpers";
 import { interpretConversationalEdit } from "../../conversationalEditInterpreter";
 import type { BotTextContext } from "../../botContext";
+import {
+  isExplicitSourceImageEditRequest,
+  normalizeImageIntentText,
+} from "../../imageIntent";
+
+const UNAMBIGUOUS_VISUAL_CORRECTION_SUBJECT =
+  "(?:samurai|samoerai|persoon|mens|man|vrouw|gezicht|paard|robot|soldaat|krijger|gladiator|ninja|stad|landschap|logo|poster|tekst|titel|zwaard|katana|helm|subject|person|face|horse|warrior|city|landscape|text|title|sword)";
+
+const EDIT_ACTION_COMMANDS = new Set([
+  "edit",
+  "edit image",
+  "edit this image",
+  "edit photo",
+  "edit this photo",
+  "pas aan",
+  "pas afbeelding aan",
+  "pas deze afbeelding aan",
+  "pas foto aan",
+  "pas deze foto aan",
+  "bewerk afbeelding",
+  "bewerk deze afbeelding",
+  "bewerk foto",
+  "bewerk deze foto",
+]);
 
 function shouldSkipConversationalEdit(normalizedText: string): boolean {
   return (
     normalizedText.startsWith("remix") ||
-    normalizedText === "nieuwe stijl" ||
-    normalizedText === "new style" ||
-    normalizedText.startsWith("/")
+    normalizedText.startsWith("/") ||
+    EDIT_ACTION_COMMANDS.has(normalizedText)
   );
 }
 
 function getSourcePhotoUrl(ctx: BotTextContext): string | null {
-  return ctx.state.lastPhotoUrl ?? ctx.state.lastPhoto ?? null;
+  return (
+    ctx.state.lastGeneratedUrl ??
+    ctx.state.lastImageUrl ??
+    ctx.state.lastPhotoUrl ??
+    ctx.state.lastPhoto ??
+    null
+  );
 }
 
-function hasPriorGeneration(ctx: BotTextContext): boolean {
-  return Boolean(ctx.state.lastGeneratedUrl ?? ctx.state.lastImageUrl);
+function isUnambiguousVisualCorrectionRequest(text: string): boolean {
+  const normalized = normalizeImageIntentText(text);
+  return (
+    new RegExp(
+      `\\b(?:ik\\s+zie|zie)\\s+(?:geen|niet\\s+de)\\s+${UNAMBIGUOUS_VISUAL_CORRECTION_SUBJECT}\\b`
+    ).test(normalized) ||
+    new RegExp(
+      `\\b(?:maar|wel\\s+mooi\\s+maar|mooi\\s+maar)\\s+(?:geen|niet\\s+de)\\s+${UNAMBIGUOUS_VISUAL_CORRECTION_SUBJECT}\\b`
+    ).test(normalized) ||
+    new RegExp(
+      `\\b(?:er\\s+mist|mist|ontbreekt)\\s+(?:een\\s+|de\\s+)?${UNAMBIGUOUS_VISUAL_CORRECTION_SUBJECT}\\b`
+    ).test(normalized) ||
+    new RegExp(
+      `\\b(?:i\\s+do\\s+not\\s+see|i\\s+don't\\s+see|missing)\\s+(?:a\\s+|the\\s+)?${UNAMBIGUOUS_VISUAL_CORRECTION_SUBJECT}\\b`
+    ).test(normalized) ||
+    new RegExp(
+      `\\b(?:a\\s+|the\\s+)?${UNAMBIGUOUS_VISUAL_CORRECTION_SUBJECT}\\s+(?:is\\s+|are\\s+)?(?:missing|not\\s+visible)\\b`
+    ).test(normalized)
+  );
 }
 
-function getLastStyle(ctx: BotTextContext) {
-  return normalizeStyle(ctx.state.selectedStyle ?? "") ?? ctx.state.lastStyle;
+function getDeterministicEditPrompt(text: string): string | undefined {
+  if (isExplicitSourceImageEditRequest(text)) {
+    return text;
+  }
+
+  return undefined;
 }
 
 export const conversationalEditingFeature: BotFeature = {
@@ -34,45 +81,38 @@ export const conversationalEditingFeature: BotFeature = {
     }
 
     const sourcePhotoUrl = getSourcePhotoUrl(ctx);
-    if (!hasPriorGeneration(ctx) || !sourcePhotoUrl) {
+    if (!sourcePhotoUrl) {
       return { handled: false };
     }
 
-    const decision = await interpretConversationalEdit({
-      text: ctx.messageText,
-      lang: ctx.lang,
-      lastStyle: getLastStyle(ctx),
-      lastDirectorMode: ctx.state.lastDirectorMode,
-    });
-    if (!decision?.shouldEdit) {
+    const explicitEditPromptHint = getDeterministicEditPrompt(ctx.messageText);
+    const decision = explicitEditPromptHint
+      ? null
+      : await interpretConversationalEdit({
+          text: ctx.messageText,
+          lang: ctx.lang,
+        });
+    const deterministicPromptHint =
+      explicitEditPromptHint ??
+      (isUnambiguousVisualCorrectionRequest(ctx.messageText)
+        ? ctx.messageText
+        : undefined);
+    if (!decision?.shouldEdit && !deterministicPromptHint) {
       return { handled: false };
     }
 
-    const style = decision.style ?? getLastStyle(ctx);
-    const directorMode =
-      decision.directorMode ??
-      (decision.style ? undefined : ctx.state.lastDirectorMode);
-    if (!style) {
-      await ctx.sendStateQuickReplies("AWAITING_STYLE", t(ctx.lang, "stylePicker"));
-      return { handled: true };
-    }
-
-    const combinedPrompt = [ctx.state.lastPrompt, decision.promptHint]
-      .map(value => value?.trim())
-      .filter(Boolean)
-      .join(" | ");
+    const promptHint =
+      decision?.promptHint?.trim() || deterministicPromptHint || ctx.state.lastPrompt;
 
     ctx.logger.info("bot_feature_conversational_edit", {
-      style,
-      directorMode,
-      hasPromptHint: Boolean(decision.promptHint),
+      hasPromptHint: Boolean(decision?.promptHint),
+      deterministicVisualCorrection: Boolean(!decision?.shouldEdit && deterministicPromptHint),
     });
 
-    await ctx.runStyleGeneration(
-      directorMode ? DIRECTOR_GENERATION_STYLE : style,
+    await ctx.runImageGeneration(
       sourcePhotoUrl,
-      combinedPrompt || ctx.state.lastPrompt,
-      directorMode,
+      promptHint,
+      "source_image_edit",
     );
     return { handled: true };
   },

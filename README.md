@@ -43,6 +43,10 @@ plugin still lives at the repository root so existing plugin packaging keeps
 working. The production image-generation service lives in
 `apps/image-gen`.
 
+`leaderbot.live` is planned as a tenant/customer portal where customers manage
+their own AI. It should not expose the private OpenClaw gateway UI/API, and it
+should not become a marketing-only brochure site.
+
 ```text
 .
 ├── apps/image-gen              # Leaderbot image-generation web/service app
@@ -120,6 +124,25 @@ with third-party providers before enabling this for a public Page.
 For paid or public assistants, keep billing, credits, model selection, and tool
 budgets in the OpenClaw host runtime where provider calls execute.
 
+## Conversation Actions
+
+Assistant replies may include channel-neutral `actions`:
+
+```json
+{
+  "text": "What would you like to do next?",
+  "actions": [
+    { "id": "edit_image", "label": "Edit image", "inputText": "Edit image" },
+    { "id": "new_image", "label": "New image", "inputText": "New image" }
+  ]
+}
+```
+
+The Facebook channel renders these actions as Messenger quick replies. When a
+person clicks one, the action id is decoded back into the next inbound message
+text, so the assistant receives it like normal user input instead of a
+Messenger-specific payload branch.
+
 ## Local/private install validation
 
 This plugin does not need to be published to npm before it can be installed
@@ -139,7 +162,7 @@ channel.
 
 ## Development
 
-Use Node.js `22.16.0` (see `.nvmrc` / `.node-version`) before installing dependencies.
+Use Node.js `22.19.0` (see `.nvmrc` / `.node-version`) before installing dependencies.
 
 ```bash
 npm install

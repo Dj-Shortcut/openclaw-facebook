@@ -7,6 +7,7 @@ import {
   processMessengerGenerationJob,
   processMessengerGenerationJobDeadLetter,
 } from "./messengerWebhook";
+import { safeLog } from "./logger";
 
 const DEFAULT_WORKER_POLL_MS = 1_000;
 
@@ -21,7 +22,7 @@ export function startMessengerGenerationWorker(options: {
   keepAlive?: boolean;
 } = {}): void {
   if (!isMessengerGenerationQueueEnabled()) {
-    console.warn("[messenger generation worker] queue disabled; worker idle");
+    safeLog("messenger_generation_worker_queue_disabled", { level: "warn" });
     return;
   }
 
@@ -37,7 +38,8 @@ export function startMessengerGenerationWorker(options: {
         onDeadLetter: processMessengerGenerationJobDeadLetter,
       });
       if (reclaimed > 0) {
-        console.warn("[messenger generation worker] reclaimed reserved jobs", {
+        safeLog("messenger_generation_worker_reclaimed_reserved_jobs", {
+          level: "warn",
           reclaimed,
         });
       }
@@ -45,7 +47,8 @@ export function startMessengerGenerationWorker(options: {
         onDeadLetter: processMessengerGenerationJobDeadLetter,
       });
     } catch (error) {
-      console.error("[messenger generation worker] drain failed", {
+      safeLog("messenger_generation_worker_drain_failed", {
+        level: "error",
         error: error instanceof Error ? error.message : String(error),
       });
     } finally {
@@ -60,5 +63,5 @@ export function startMessengerGenerationWorker(options: {
   if (!options.keepAlive) {
     timer.unref();
   }
-  console.info("[messenger generation worker] started");
+  safeLog("messenger_generation_worker_started");
 }

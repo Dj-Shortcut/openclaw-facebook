@@ -31,6 +31,9 @@ describe("conversational edit interpreter", () => {
     expect(looksLikePossibleEditRequest("make it norman blackwell")).toBe(true);
     expect(looksLikePossibleEditRequest("make it ghibli")).toBe(true);
     expect(looksLikePossibleEditRequest("make it whimsical")).toBe(true);
+    expect(looksLikePossibleEditRequest("ik zie geen samurai bro")).toBe(true);
+    expect(looksLikePossibleEditRequest("the samurai is missing")).toBe(true);
+    expect(looksLikePossibleEditRequest("not visible enough")).toBe(true);
     expect(looksLikePossibleEditRequest("what can you do?")).toBe(false);
   });
 
@@ -41,7 +44,7 @@ describe("conversational edit interpreter", () => {
       new Response(
         JSON.stringify({
           output_text:
-            '{"shouldEdit":true,"style":"gold","promptHint":"make it darker with warm glow"}',
+            '{"shouldEdit":true,"promptHint":"make it darker with warm gold glow"}',
         }),
         { status: 200 }
       )
@@ -52,13 +55,11 @@ describe("conversational edit interpreter", () => {
     const result = await interpretConversationalEdit({
       text: "make it darker and more gold",
       lang: "en",
-      lastStyle: "disco",
     });
 
     expect(result).toEqual({
       shouldEdit: true,
-      style: "gold",
-      promptHint: "make it darker with warm glow",
+      promptHint: "make it darker with warm gold glow",
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -71,7 +72,7 @@ describe("conversational edit interpreter", () => {
         JSON.stringify({
           output: [
             {
-              text: '{"shouldEdit":true,"style":"cyberpunk","promptHint":"more neon rain"}',
+              text: '{"shouldEdit":true,"promptHint":"more cyberpunk neon rain"}',
             },
           ],
         }),
@@ -84,25 +85,23 @@ describe("conversational edit interpreter", () => {
     const result = await interpretConversationalEdit({
       text: "make it more cyberpunk",
       lang: "en",
-      lastStyle: "disco",
     });
 
     expect(result).toEqual({
       shouldEdit: true,
-      style: "cyberpunk",
-      promptHint: "more neon rain",
+      promptHint: "more cyberpunk neon rain",
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("supports storybook anime style decisions and sends alias guidance to the model", async () => {
+  it("keeps visual style words in the prompt instead of returning preset decisions", async () => {
     process.env.OPENAI_API_KEY = "dummy-key";
 
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
         JSON.stringify({
           output_text:
-            '{"shouldEdit":true,"style":"storybook-anime","promptHint":"add cozy magical forest details"}',
+            '{"shouldEdit":true,"style":"storybook-anime","promptHint":"make it storybook anime with cozy magical forest details"}',
         }),
         { status: 200 }
       )
@@ -113,31 +112,33 @@ describe("conversational edit interpreter", () => {
     const result = await interpretConversationalEdit({
       text: "make it ghibli",
       lang: "en",
-      lastStyle: "disco",
     });
 
     expect(result).toEqual({
       shouldEdit: true,
-      style: "storybook-anime",
-      promptHint: "add cozy magical forest details",
+      promptHint: "make it storybook anime with cozy magical forest details",
     });
 
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
     const body = JSON.parse(String(request.body)) as {
       input: Array<{ role: string; content: string }>;
     };
-    expect(body.input[0]?.content).toContain('"storybook-anime"');
-    expect(body.input[0]?.content).toContain('Treat "ghibli"');
+    expect(body.input[0]?.content).not.toContain('"storybook-anime"');
+    expect(body.input[0]?.content).not.toContain("storybook anime");
+    expect(body.input[0]?.content).not.toContain("ghibli");
+    expect(body.input[0]?.content).not.toContain("cinematic");
+    expect(body.input[0]?.content).toContain("Never map user wording");
+    expect(body.input[0]?.content).toContain("Preserve the user's visual wording");
   });
 
-  it("parses director mode decisions and sends director context to the model", async () => {
+  it("keeps legacy aesthetic wording as prompt-first edits", async () => {
     process.env.OPENAI_API_KEY = "dummy-key";
 
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(
         JSON.stringify({
           output_text:
-            '{"shouldEdit":true,"style":null,"directorMode":"old_money","promptHint":"make it less fake and more quiet luxury"}',
+            '{"shouldEdit":true,"style":null,"promptHint":"make it less fake and more quiet luxury"}',
         }),
         { status: 200 }
       )
@@ -148,13 +149,10 @@ describe("conversational edit interpreter", () => {
     const result = await interpretConversationalEdit({
       text: "make it less fake and more luxury",
       lang: "en",
-      lastStyle: "cinematic",
-      lastDirectorMode: "midnight_luxury",
     });
 
     expect(result).toEqual({
       shouldEdit: true,
-      directorMode: "old_money",
       promptHint: "make it less fake and more quiet luxury",
     });
 
@@ -162,8 +160,9 @@ describe("conversational edit interpreter", () => {
     const body = JSON.parse(String(request.body)) as {
       input: Array<{ role: string; content: string }>;
     };
-    expect(body.input[0]?.content).toContain("last known director mode");
-    expect(body.input[0]?.content).toContain("midnight_luxury");
-    expect(body.input[0]?.content).toContain("old_money");
+    expect(body.input[0]?.content).not.toContain("director mode");
+    expect(body.input[0]?.content).not.toContain("midnight_luxury");
+    expect(body.input[0]?.content).not.toContain("old_money");
+    expect(body.input[0]?.content).toContain("promptHint");
   });
 });

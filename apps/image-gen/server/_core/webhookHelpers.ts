@@ -1,15 +1,6 @@
 import { createHash } from "node:crypto";
 import { normalizeLang, t, type Lang } from "./i18n";
-import {
-  getStyleRepliesForCategory,
-  getQuickRepliesForState,
-  type ConversationState,
-} from "./messengerState";
-import {
-  type Style,
-  type StyleCategory,
-  STYLE_CATEGORY_CONFIGS,
-} from "./messengerStyles";
+import type { ConversationState } from "./messengerState";
 
 export type FacebookWebhookEvent = {
   sender?: { id?: string; locale?: string };
@@ -20,6 +11,7 @@ export type FacebookWebhookEvent = {
     text?: string;
     quick_reply?: { payload?: string };
     attachments?: Array<{ type?: string; payload?: { url?: string } }>;
+    reply_to?: { mid?: string };
   };
   postback?: {
     title?: string;
@@ -50,66 +42,10 @@ export type WebhookSummary = {
   events: WebhookSummaryEvent[];
 };
 
-export const STYLE_OPTIONS: Style[] = [
-  "caricature",
-  "storybook-anime",
-  "afroman-americana",
-  "petals",
-  "gold",
-  "cinematic",
-  "oil-paint",
-  "cyberpunk",
-  "norman-blackwell",
-  "disco",
-  "clouds",
-];
-
-export const STYLE_LABELS: Record<Style, string> = {
-  caricature: "Caricature",
-  "storybook-anime": "Storybook Anime",
-  "afroman-americana": "Afroman",
-  petals: "Petals",
-  gold: "Gold",
-  cinematic: "Cinematic",
-  "oil-paint": "Oil Paint",
-  cyberpunk: "Cyberpunk",
-  "norman-blackwell": "Norman Blackwell",
-  disco: "Disco",
-  clouds: "Clouds",
-};
-
-export const STYLE_CATEGORY_LABELS: Record<StyleCategory, string> = {
-  illustrated: "Illustrated",
-  atmosphere: "Atmosphere",
-  bold: "Bold",
-};
-
-const STYLE_ALIASES: Record<string, Style> = {
-  afroman: "afroman-americana",
-  "afroman americana": "afroman-americana",
-  "afroman-americana": "afroman-americana",
-  ghibli: "storybook-anime",
-  "ghibli style": "storybook-anime",
-  "studio ghibli": "storybook-anime",
-  "storybook anime": "storybook-anime",
-  "whimsical anime": "storybook-anime",
-  whimsical: "storybook-anime",
-  "oil paint": "oil-paint",
-  "oil painting": "oil-paint",
-  "oil-paint": "oil-paint",
-  "norman blackwell": "norman-blackwell",
-  blackwell: "norman-blackwell",
-};
-
-function normalizeStyleToken(input: string): string {
-  return input.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
-}
-
 export type AckKind = "like" | "ok" | "thanks" | "emoji";
 
 type GreetingResponse =
-  | { mode: "text"; text: string }
-  | { mode: "quick_replies"; state: ConversationState; text: string };
+  | { mode: "text"; text: string };
 
 export function getEventDedupeKey(
   event: FacebookWebhookEvent,
@@ -185,80 +121,18 @@ export function getGreetingResponse(
   switch (state) {
     case "PROCESSING":
       return { mode: "text", text: t(lang, "processingBlocked") };
-    case "AWAITING_STYLE":
-      return {
-        mode: "quick_replies",
-        state: "AWAITING_STYLE",
-        text: t(lang, "styleCategoryPicker"),
-      };
+    case "AWAITING_EDIT_PROMPT":
+      return { mode: "text", text: t(lang, "editImagePrompt") };
     case "RESULT_READY":
-      return {
-        mode: "quick_replies",
-        state: "RESULT_READY",
-        text: t(lang, "success"),
-      };
+      return { mode: "text", text: t(lang, "success") };
     case "FAILURE":
-      return {
-        mode: "quick_replies",
-        state: "FAILURE",
-        text: t(lang, "failure"),
-      };
+      return { mode: "text", text: t(lang, "failure") };
     case "AWAITING_PHOTO":
       return { mode: "text", text: t(lang, "textWithoutPhoto") };
     case "IDLE":
     default:
-      return {
-        mode: "quick_replies",
-        state: "IDLE",
-        text: t(lang, "flowExplanation"),
-      };
+      return { mode: "text", text: t(lang, "flowExplanation") };
   }
-}
-
-export function normalizeStyle(input: string): Style | undefined {
-  const normalized = normalizeStyleToken(input);
-  const alias = STYLE_ALIASES[normalized];
-  if (alias) {
-    return alias;
-  }
-
-  return STYLE_OPTIONS.find(style => normalizeStyleToken(style) === normalized);
-}
-
-export function stylePayloadToStyle(payload: string): Style | undefined {
-  const canonicalPayloadStyle = normalizeStyle(payload);
-  if (canonicalPayloadStyle) {
-    return canonicalPayloadStyle;
-  }
-
-  if (!payload.startsWith("STYLE_")) {
-    return undefined;
-  }
-
-  const styleKey = payload
-    .slice("STYLE_".length)
-    .toLowerCase()
-    .replace(/_/g, "-");
-  return normalizeStyle(styleKey);
-}
-
-export function parseStyle(text: string): Style | undefined {
-  return normalizeStyle(text);
-}
-
-export function styleCategoryPayloadToCategory(
-  payload: string
-): StyleCategory | undefined {
-  const category = STYLE_CATEGORY_CONFIGS.find(item => item.payload === payload);
-  return category?.category;
-}
-
-export function parseReferralStyle(ref: string | undefined): Style | undefined {
-  if (!ref?.startsWith("style_")) {
-    return undefined;
-  }
-
-  return normalizeStyle(ref.slice("style_".length));
 }
 
 export function detectAck(raw: string | undefined | null): AckKind | null {
@@ -293,21 +167,4 @@ export function detectAck(raw: string | undefined | null): AckKind | null {
   }
 
   return null;
-}
-
-export function toMessengerReplies(state: ConversationState) {
-  return getQuickRepliesForState(state).map(reply => ({
-    content_type: "text" as const,
-    title: reply.title,
-    payload: reply.payload,
-  }));
-}
-
-export function toMessengerStyleReplies(category: StyleCategory, lang: Lang) {
-  return getStyleRepliesForCategory(category).map(reply => ({
-    content_type: "text" as const,
-    title:
-      reply.payload === "CHOOSE_STYLE" ? t(lang, "backToCategories") : reply.title,
-    payload: reply.payload,
-  }));
 }

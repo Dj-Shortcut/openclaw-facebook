@@ -1,13 +1,19 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type express from "express";
 import { isDebugLogEnabled } from "./logLevel";
-import { getMessengerGenerationGlobalLimitStats } from "./generationGuard";
+import {
+  getMessengerDailyImageBudgetConfig,
+  getMessengerGenerationGlobalLimitStats,
+} from "./generationGuard";
 import {
   getMessengerGenerationQueueStats,
   isMessengerGenerationInlineFallbackEnabled,
   isMessengerGenerationWorkerMode,
   isMessengerGenerationWorkerOnlyMode,
 } from "./messengerGenerationQueue";
+import { getTodayRuntimeStats } from "./botRuntimeStats";
+import { safeLog } from "./logger";
+import { hashGeneratedImageToken } from "./generatedImageStore";
 
 type RequestWithId = express.Request & {
   requestId?: string;
@@ -45,6 +51,15 @@ function escapeLabelValue(value: string): string {
 
 function normalizePath(path: string): string {
   return path || "/";
+}
+
+function sanitizeTelemetryPath(path: string): string {
+  const match = /^\/generated\/([^/.]+)\.([^/.]+)$/.exec(path);
+  if (!match) {
+    return path;
+  }
+
+  return `/generated/${hashGeneratedImageToken(match[1])}.${match[2]}`;
 }
 
 function metricLabelKey({ method, path, status }: MetricKey): string {
@@ -119,16 +134,17 @@ export function createRequestMetricsMiddleware(): express.RequestHandler {
     res.on("finish", () => {
       const durationMs =
         Number(process.hrtime.bigint() - startTime) / 1_000_000;
+      const sanitizedPath = sanitizeTelemetryPath(req.path);
       const log = {
         reqId: getRequestId(req),
         traceId: getTraceContext(req)?.traceId,
         spanId: getTraceContext(req)?.spanId,
         method: req.method,
-        path: req.path,
+        path: sanitizedPath,
         status: res.statusCode,
         ms: Number(durationMs.toFixed(1)),
       };
-      recordHttpRequestMetric(req.method, req.path, res.statusCode, durationMs);
+      recordHttpRequestMetric(req.method, sanitizedPath, res.statusCode, durationMs);
 
       // Keep info logs compact: skip webhook and health checks unless debug logging is enabled.
       const shouldLogAtInfo =
@@ -137,7 +153,7 @@ export function createRequestMetricsMiddleware(): express.RequestHandler {
         req.path !== "/health" &&
         req.path !== "/metrics";
       if (isDebugLogEnabled() || shouldLogAtInfo) {
-        console.log(JSON.stringify(log));
+        safeLog("http_request_completed", log);
       }
     });
 
@@ -162,6 +178,7 @@ async function renderMessengerGenerationQueueMetrics(): Promise<string[]> {
   try {
     const stats = await getMessengerGenerationQueueStats();
     const globalLimitStats = await getMessengerGenerationGlobalLimitStats();
+    const dailyBudget = getMessengerDailyImageBudgetConfig();
     return [
       "# HELP messenger_generation_queue_enabled Whether the Messenger generation queue is enabled",
       "# TYPE messenger_generation_queue_enabled gauge",
@@ -187,6 +204,12 @@ async function renderMessengerGenerationQueueMetrics(): Promise<string[]> {
       "# HELP messenger_generation_global_slots_redis_backed Whether global generation slots are Redis-backed",
       "# TYPE messenger_generation_global_slots_redis_backed gauge",
       `messenger_generation_global_slots_redis_backed ${globalLimitStats.redisBacked ? 1 : 0}`,
+      "# HELP messenger_generation_daily_budget_enabled Whether the optional daily Messenger image budget cap is enabled",
+      "# TYPE messenger_generation_daily_budget_enabled gauge",
+      `messenger_generation_daily_budget_enabled ${dailyBudget.enabled ? 1 : 0}`,
+      "# HELP messenger_generation_daily_budget_cap Configured optional daily Messenger image request cap, or 0 when disabled",
+      "# TYPE messenger_generation_daily_budget_cap gauge",
+      `messenger_generation_daily_budget_cap ${dailyBudget.cap ?? 0}`,
       "# HELP messenger_generation_queue_scrape_error Whether queue metric collection failed",
       "# TYPE messenger_generation_queue_scrape_error gauge",
       "messenger_generation_queue_scrape_error 0",
@@ -201,6 +224,7 @@ async function renderMessengerGenerationQueueMetrics(): Promise<string[]> {
 }
 
 async function renderPrometheusMetrics(): Promise<string> {
+  const runtimeStats = getTodayRuntimeStats();
   const lines: string[] = [
     "# HELP http_requests_total Total HTTP requests handled by the server",
     "# TYPE http_requests_total counter",
@@ -241,6 +265,25 @@ async function renderPrometheusMetrics(): Promise<string> {
   }
 
   lines.push(...await renderMessengerGenerationQueueMetrics());
+  lines.push("# HELP messenger_generation_today_total Successful Messenger image generations recorded by this process today");
+  lines.push("# TYPE messenger_generation_today_total gauge");
+  lines.push(`messenger_generation_today_total ${runtimeStats.imagesGeneratedToday}`);
+  lines.push("# HELP messenger_generation_errors_today_total Failed Messenger image generations recorded by this process today");
+  lines.push("# TYPE messenger_generation_errors_today_total gauge");
+  lines.push(`messenger_generation_errors_today_total ${runtimeStats.errorCountToday}`);
+  lines.push("# HELP messenger_generation_active_users_today Active Messenger users recorded by this process today");
+  lines.push("# TYPE messenger_generation_active_users_today gauge");
+  lines.push(`messenger_generation_active_users_today ${runtimeStats.activeUsersToday}`);
+  lines.push("# HELP messenger_generation_kinds_used_today Distinct generation kinds recorded by this process today");
+  lines.push("# TYPE messenger_generation_kinds_used_today gauge");
+  lines.push(`messenger_generation_kinds_used_today ${runtimeStats.generationKindsUsedToday}`);
+  lines.push("# HELP messenger_generation_average_latency_seconds Average successful Messenger image generation latency recorded by this process today");
+  lines.push("# TYPE messenger_generation_average_latency_seconds gauge");
+  lines.push(`messenger_generation_average_latency_seconds ${
+    runtimeStats.averageGenerationLatencyMs === null
+      ? 0
+      : (runtimeStats.averageGenerationLatencyMs / 1000).toFixed(6)
+  }`);
 
   return `${lines.join("\n")}\n`;
 }

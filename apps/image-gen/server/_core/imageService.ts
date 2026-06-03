@@ -1,8 +1,4 @@
-import { type Style } from "./messengerStyles";
 import { safeLen, sha256 } from "./imageProof";
-import { buildDirectorPrompt } from "./image-generation/director/directorPromptBuilder";
-import { analyzeDirectorPhoto } from "./image-generation/director/directorPhotoAnalyzer";
-import type { DirectorMode } from "./image-generation/director/directorTypes";
 import {
   attachGenerationMetrics,
   buildOpenAiRequest,
@@ -12,7 +8,10 @@ import {
   parseOpenAiImageResponse,
   type GenerationMetrics,
 } from "./image-generation/openAiImageClient";
-import { buildStylePrompt } from "./image-generation/promptBuilder";
+import {
+  buildSourceImageEditPrompt,
+  buildTextToImagePrompt,
+} from "./image-generation/promptBuilder";
 import {
   type DownloadedSourceImage,
   logSourceImageFetchStart,
@@ -23,12 +22,16 @@ import {
   hasObjectStorageConfig,
 } from "./image-generation/imageServiceConfig";
 import { publishGeneratedImage } from "./image-generation/generatedImagePublisher";
+import type { GenerationKind } from "./image-generation/generationTypes";
 import {
   GenerationTimeoutError,
-  InvalidGenerationInputError,
   MissingOpenAiApiKeyError,
 } from "./image-generation/imageServiceErrors";
-import { getMessengerGenerationGlobalLimitConfig } from "./generationGuard";
+import {
+  assertMessengerDailyImageBudgetAvailable,
+  getMessengerDailyImageBudgetConfig,
+  getMessengerGenerationGlobalLimitConfig,
+} from "./generationGuard";
 import {
   isMessengerGenerationInlineFallbackEnabled,
   isMessengerGenerationQueueEnabled,
@@ -36,6 +39,7 @@ import {
   isMessengerGenerationWorkerOnlyMode,
 } from "./messengerGenerationQueue";
 import { createLogger } from "./logger";
+import { safeLog } from "./logger";
 
 const OPENAI_IMAGES_PROVIDER = "openai-images" as const;
 
@@ -43,7 +47,7 @@ export type ImageProvider = typeof OPENAI_IMAGES_PROVIDER;
 
 interface ImageGenerator {
   generate(input: {
-    style: Style;
+    generationKind?: GenerationKind;
     sourceImageUrl?: string;
     trustedSourceImageUrl?: boolean;
     sourceImageProvenance?: "storeInbound";
@@ -52,9 +56,6 @@ interface ImageGenerator {
       contentType: string;
     };
     promptHint?: string;
-    directorMode?: DirectorMode;
-    directorInstruction?: string;
-    directorPhotoAnalysis?: string;
     previousResponseId?: string;
     userKey: string;
     reqId: string;
@@ -71,7 +72,7 @@ interface ImageGenerator {
 }
 
 type GeneratorInput = {
-  style: Style;
+  generationKind?: GenerationKind;
   sourceImageUrl?: string;
   trustedSourceImageUrl?: boolean;
   sourceImageProvenance?: "storeInbound";
@@ -80,9 +81,6 @@ type GeneratorInput = {
     contentType: string;
   };
   promptHint?: string;
-  directorMode?: DirectorMode;
-  directorInstruction?: string;
-  directorPhotoAnalysis?: string;
   previousResponseId?: string;
   userKey: string;
   reqId: string;
@@ -99,6 +97,20 @@ function ensureGeneratedImageBuffer(buffer: Buffer): Buffer {
   return buffer;
 }
 
+function buildPromptForGeneration(input: GeneratorInput): string {
+  if (input.generationKind === "text_to_image") {
+    return buildTextToImagePrompt(input.promptHint ?? "");
+  }
+
+  if (input.generationKind === "source_image_edit") {
+    return buildSourceImageEditPrompt(input.promptHint ?? "");
+  }
+
+  return buildSourceImageEditPrompt(
+    input.promptHint ?? ""
+  );
+}
+
 export function getGeneratorStartupConfig(): {
   mode: ImageProvider;
   resolvedBaseUrl: string | undefined;
@@ -106,6 +118,9 @@ export function getGeneratorStartupConfig(): {
   requiresDurableStorageInProduction: boolean;
   messengerGenerationGlobalLimit: ReturnType<
     typeof getMessengerGenerationGlobalLimitConfig
+  >;
+  messengerGenerationDailyBudget: ReturnType<
+    typeof getMessengerDailyImageBudgetConfig
   >;
   messengerGenerationRuntime: {
     queueEnabled: boolean;
@@ -120,6 +135,7 @@ export function getGeneratorStartupConfig(): {
     objectStorageEnabled: hasObjectStorageConfig(),
     requiresDurableStorageInProduction: true,
     messengerGenerationGlobalLimit: getMessengerGenerationGlobalLimitConfig(),
+    messengerGenerationDailyBudget: getMessengerDailyImageBudgetConfig(),
     messengerGenerationRuntime: {
       queueEnabled: isMessengerGenerationQueueEnabled(),
       workerMode: isMessengerGenerationWorkerMode(),
@@ -151,29 +167,14 @@ async function prepareGenerationInput(
   logSourceImageFetchStart(input);
   const sourceImage = await resolveStoredSourceImage(input);
   const promptStartedAt = Date.now();
-  const photoAnalysis =
-    input.directorMode && !input.directorPhotoAnalysis
-      ? await analyzeDirectorPhoto(sourceImage, input.reqId)
-      : input.directorPhotoAnalysis;
-  const prompt = input.directorMode
-    ? buildDirectorPrompt({
-        mode: input.directorMode,
-        userInstruction: input.directorInstruction,
-        photoAnalysis,
-      })
-    : buildStylePrompt(input.style, input.promptHint);
+  const prompt = buildPromptForGeneration(input);
   const promptBuildMs = Date.now() - promptStartedAt;
-  console.info(
-    JSON.stringify({
-      level: "info",
-      msg: "image_prompt_built",
-      reqId: input.reqId,
-      style: input.style,
-      directorMode: input.directorMode,
-      durationMs: promptBuildMs,
-      promptChars: prompt.length,
-    })
-  );
+  safeLog("image_prompt_built", {
+    reqId: input.reqId,
+    generationKind: input.generationKind ?? null,
+    durationMs: promptBuildMs,
+    promptChars: prompt.length,
+  });
 
   return {
     hasSourceImage: computeHasSourceImage(input),
@@ -212,10 +213,6 @@ export class OpenAiImageGenerator implements ImageGenerator {
   }> {
     const startedAt = Date.now();
     const partialMetrics: Omit<GenerationMetrics, "totalMs"> = {};
-    if (!input.style) {
-      throw new InvalidGenerationInputError("Style is required");
-    }
-
     if (!process.env.OPENAI_API_KEY) {
       throw new MissingOpenAiApiKeyError("OPENAI_API_KEY is missing");
     }
@@ -252,18 +249,15 @@ export class OpenAiImageGenerator implements ImageGenerator {
         typeof requestContext.requestInit.body === "string"
           ? Buffer.byteLength(requestContext.requestInit.body)
           : undefined;
-      console.info(
-        JSON.stringify({
-          level: "info",
-          msg: "openai_image_payload_built",
-          reqId: input.reqId,
-          durationMs: openAiPayloadBuildMs,
-          promptChars: preparedInput.prompt.length,
-          sourceImageBytes: openAiInputByteLen,
-          payloadBytes,
-        })
-      );
+      safeLog("openai_image_payload_built", {
+        reqId: input.reqId,
+        durationMs: openAiPayloadBuildMs,
+        promptChars: preparedInput.prompt.length,
+        sourceImageBytes: openAiInputByteLen,
+        payloadBytes,
+      });
 
+      await assertMessengerDailyImageBudgetAvailable({ reqId: input.reqId });
       const response = await fetchOpenAiImageResponse(requestContext, {
         reqId: input.reqId,
         startedAt,
@@ -278,7 +272,6 @@ export class OpenAiImageGenerator implements ImageGenerator {
       const uploadStartedAt = Date.now();
       const imageUrl = await publishGeneratedImage(
         generatedImageBuffer,
-        input.style,
         input.reqId
       );
       const uploadOrServeMs = Date.now() - uploadStartedAt;

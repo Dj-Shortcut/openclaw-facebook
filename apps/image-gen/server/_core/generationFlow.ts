@@ -17,10 +17,11 @@ import {
   MissingInputImageError,
 } from "./image-generation/sourceImageFetcher";
 import type { SourceImageOrigin } from "./messengerState";
-import type { Style } from "./messengerStyles";
-import type { DirectorMode } from "./image-generation/director/directorTypes";
+import type { GenerationKind } from "./image-generation/generationTypes";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import { storageGet, storageKeyFromPublicUrl } from "../storage";
+import { MessengerDailyImageBudgetExceededError } from "./generationGuard";
+import { safeLog } from "./logger";
 
 type GenerationProof = {
   incomingLen: number;
@@ -72,13 +73,10 @@ type GenerationFlowResult =
   | GenerationFlowFailure;
 
 type ExecuteGenerationFlowInput = {
-  style: Style;
+  generationKind?: GenerationKind;
   userId: string;
   reqId: string;
   promptHint?: string;
-  directorMode?: DirectorMode;
-  directorInstruction?: string;
-  directorPhotoAnalysis?: string;
   sourceImageUrl?: string;
   lastPhotoUrl?: string | null;
   lastPhotoSource?: SourceImageOrigin | null;
@@ -100,7 +98,8 @@ function logIgnoredSourceImageOverride(input: RuntimeSourceInput & { reqId: stri
     input.sourceImageUrl &&
     input.sourceImageUrl !== input.lastPhotoUrl
   ) {
-    console.warn("generation_source_image_override_ignored", {
+    safeLog("generation_source_image_override_ignored", {
+      level: "warn",
       reqId: input.reqId,
     });
   }
@@ -166,15 +165,28 @@ async function resolveStoredRuntimeSourceUrl(input: {
       trustedSourceImageUrl: true,
     };
   } catch (error) {
-    console.warn("stored_source_image_url_refresh_failed", {
+    safeLog("stored_source_image_url_refresh_failed", {
+      level: "warn",
+      reqId: input.reqId,
       storageKey,
-      error: error instanceof Error ? error.message : String(error),
+      error,
     });
     return {
       resolvedSourceImageUrl: originalSourceImageUrl,
       trustedSourceImageUrl: true,
     };
   }
+}
+
+function resolveEffectiveGenerationKind(input: {
+  generationKind?: ExecuteGenerationFlowInput["generationKind"];
+  resolvedSourceImageUrl?: string;
+}): NonNullable<ExecuteGenerationFlowInput["generationKind"]> {
+  if (input.generationKind) {
+    return input.generationKind;
+  }
+
+  return input.resolvedSourceImageUrl ? "source_image_edit" : "text_to_image";
 }
 
 function classifyGenerationError(error: unknown): GenerationFlowFailureKind {
@@ -202,6 +214,10 @@ function classifyGenerationError(error: unknown): GenerationFlowFailureKind {
     return "generation_budget_reached";
   }
 
+  if (error instanceof MessengerDailyImageBudgetExceededError) {
+    return "generation_budget_reached";
+  }
+
   return "generation_failed";
 }
 
@@ -210,8 +226,12 @@ export async function executeGenerationFlow(
 ): Promise<GenerationFlowResult> {
   const { resolvedSourceImageUrl, trustedSourceImageUrl } =
     await resolveStoredRuntimeSourceUrl(input);
+  const generationKind = resolveEffectiveGenerationKind({
+    generationKind: input.generationKind,
+    resolvedSourceImageUrl,
+  });
 
-  console.info("generation_source_image_selected", {
+  safeLog("generation_source_image_selected", {
     reqId: input.reqId,
     hasExplicitSourceImageUrl: Boolean(input.sourceImageUrl),
     hasLastPhotoUrl: Boolean(input.lastPhotoUrl),
@@ -222,7 +242,7 @@ export async function executeGenerationFlow(
     trustedSourceImageUrl,
   });
 
-  if (!resolvedSourceImageUrl) {
+  if (!resolvedSourceImageUrl && generationKind !== "text_to_image") {
     return {
       kind: "error",
       errorKind: "missing_source_image",
@@ -231,7 +251,7 @@ export async function executeGenerationFlow(
     };
   }
 
-  if (!trustedSourceImageUrl) {
+  if (resolvedSourceImageUrl && !trustedSourceImageUrl) {
     return {
       kind: "error",
       errorKind: "invalid_source_image",
@@ -247,14 +267,11 @@ export async function executeGenerationFlow(
 
   try {
     const { imageUrl, proof, metrics } = await generator.generate({
-      style: input.style,
+      generationKind,
       sourceImageUrl: resolvedSourceImageUrl,
       trustedSourceImageUrl,
       sourceImageProvenance: trustedSourceImageUrl ? "storeInbound" : undefined,
       promptHint: input.promptHint,
-      directorMode: input.directorMode,
-      directorInstruction: input.directorInstruction,
-      directorPhotoAnalysis: input.directorPhotoAnalysis,
       userKey: input.userId,
       reqId: input.reqId,
     });
@@ -265,7 +282,7 @@ export async function executeGenerationFlow(
       metrics,
       proof,
       mode,
-      resolvedSourceImageUrl,
+      resolvedSourceImageUrl: resolvedSourceImageUrl ?? "",
       trustedSourceImageUrl,
     };
   } catch (error) {

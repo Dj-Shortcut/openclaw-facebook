@@ -1,5 +1,6 @@
 import { toUserKey } from "../privacy";
 import type { NormalizedInboundMessage } from "../normalizedInboundMessage";
+import { safeLog } from "../logger";
 
 export function isWhatsAppWebhookPayload(
   payload: unknown
@@ -24,11 +25,11 @@ export function logWhatsAppWebhookPayload(payload: unknown): void {
       : { object: null, entryCount: 0 };
 
   if (process.env.WEBHOOK_DEBUG_LOGS === "1") {
-    console.log("[whatsapp webhook] inbound payload", summary);
+    safeLog("whatsapp_inbound_payload", summary);
     return;
   }
 
-  console.log("[whatsapp webhook] inbound payload summary", summary);
+  safeLog("whatsapp_inbound_payload_summary", summary);
 }
 
 function objectValue(value: unknown): Record<string, unknown> | null {

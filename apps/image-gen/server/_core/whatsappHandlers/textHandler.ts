@@ -2,126 +2,43 @@ import { handleSharedTextMessage } from "../sharedTextHandler";
 import {
   getOrCreateState,
   markIntroSeen,
+  setPendingConversationActions,
   setFlowState,
   type ConversationState,
 } from "../messengerState";
-import { resolveStateReplyPayload } from "../stateResponseText";
+import { resolveConversationActionInput } from "../conversationActionSelection";
 import { toLogUser } from "../privacy";
 import { sendWhatsAppBotStateResponse } from "../whatsappResponseService";
-import { DIRECTOR_GENERATION_STYLE } from "../image-generation/director/directorModes";
-import {
-  handleWhatsAppPayloadSelection,
-  parseWhatsAppCategorySelection,
-  parseWhatsAppDirectorSelection,
-  parseWhatsAppStyleSelection,
-  sendWhatsAppStyleCategoryPrompt,
-  sendWhatsAppStyleOptions,
-} from "../whatsappFlows/styleSelectionFlow";
-import { runWhatsAppStyleGeneration } from "../whatsappFlows/styleGenerationFlow";
 import type { NormalizedWhatsAppEvent, WhatsAppHandlerContext } from "../whatsappTypes";
 import { runWhatsAppTextFeatures } from "./textContext";
+import { safeLog } from "../logger";
 
 export async function handleWhatsAppTextEvent(
   event: NormalizedWhatsAppEvent,
   context: WhatsAppHandlerContext
 ): Promise<void> {
   const state = await Promise.resolve(getOrCreateState(event.senderId));
-  const textBody = event.textBody?.trim() ?? "";
-  const normalizedText = textBody.toLowerCase();
-  const selectedCategory = state.selectedStyleCategory ?? null;
+  let textBody = event.textBody?.trim() ?? "";
+  let normalizedText = textBody.toLowerCase();
+  let sharedEvent = event;
 
-  if (
-    state.lastPhotoUrl &&
-    (normalizedText === "nieuwe stijl" || normalizedText === "new style")
-  ) {
-    console.info("[whatsapp webhook] reopening style picker", {
-      user: toLogUser(event.userId),
-    });
-    await setFlowState(event.senderId, "AWAITING_STYLE");
-    await sendWhatsAppStyleCategoryPrompt(event.senderId, context.lang);
-    return;
-  }
-
-  if (textBody) {
-    const selectedPayload = resolveStateReplyPayload(
-      state.stage,
+  const selectedActionInput = resolveConversationActionInput(
+    normalizedText,
+    state.pendingConversationActions
+  );
+  if (selectedActionInput) {
+    await Promise.resolve(setPendingConversationActions(event.senderId, undefined));
+    textBody = selectedActionInput;
+    normalizedText = textBody.toLowerCase();
+    sharedEvent = {
+      ...event,
+      messageType: "text",
       textBody,
-      context.lang
-    );
-    if (
-      selectedPayload &&
-      (await handleWhatsAppPayloadSelection({
-        payload: selectedPayload,
-        senderId: event.senderId,
-        userId: event.userId,
-        reqId: context.reqId,
-        lang: context.lang,
-      }))
-    ) {
-      return;
-    }
-
-    const selectedDirectorMode = parseWhatsAppDirectorSelection(
-      textBody,
-      selectedCategory
-    );
-    if (selectedDirectorMode && state.lastPhotoUrl) {
-      console.info("[whatsapp webhook] director mode selected", {
-        user: toLogUser(event.userId),
-        directorMode: selectedDirectorMode,
-        selectedCategory,
-        textBody,
-      });
-      await runWhatsAppStyleGeneration({
-        senderId: event.senderId,
-        userId: event.userId,
-        style: DIRECTOR_GENERATION_STYLE,
-        directorMode: selectedDirectorMode,
-        reqId: context.reqId,
-        lang: context.lang,
-      });
-      return;
-    }
-
-    const selectedStyle = parseWhatsAppStyleSelection(
-      textBody,
-      selectedCategory === "director" ? null : selectedCategory
-    );
-    if (selectedStyle && state.lastPhotoUrl) {
-      console.info("[whatsapp webhook] style selected", {
-        user: toLogUser(event.userId),
-        style: selectedStyle,
-        selectedCategory,
-        textBody,
-      });
-      await runWhatsAppStyleGeneration({
-        senderId: event.senderId,
-        userId: event.userId,
-        style: selectedStyle,
-        reqId: context.reqId,
-        lang: context.lang,
-      });
-      return;
-    }
-
-    const selectedStyleCategory = parseWhatsAppCategorySelection(textBody);
-    if (selectedStyleCategory && state.lastPhotoUrl) {
-      console.info("[whatsapp webhook] style category selected", {
-        user: toLogUser(event.userId),
-        category: selectedStyleCategory,
-        textBody,
-      });
-      await sendWhatsAppStyleOptions(
-        event.senderId,
-        selectedStyleCategory,
-        context.lang
-      );
-      return;
-    }
+    };
   }
 
   const result = await handleSharedTextMessage({
-    message: event,
+    message: sharedEvent,
     reqId: context.reqId,
     lang: context.lang,
     getState: () => Promise.resolve(getOrCreateState(event.senderId)),
@@ -133,14 +50,14 @@ export async function handleWhatsAppTextEvent(
       normalizedText: currentNormalizedText,
       hasPhoto,
     }) =>
-      runWhatsAppTextFeatures(event, context, {
+      runWhatsAppTextFeatures(sharedEvent, context, {
         state: currentState,
         messageText,
         normalizedText: currentNormalizedText,
         hasPhoto,
-      }),
+    }),
     logState: (currentState, logContext) => {
-      console.log("[whatsapp webhook] shared state", {
+      safeLog("whatsapp_shared_state", {
         context: logContext,
         user: toLogUser(event.userId),
         stage: currentState.stage,
@@ -152,8 +69,7 @@ export async function handleWhatsAppTextEvent(
   await sendWhatsAppBotStateResponse(
     event.senderId,
     result.response,
-    result.replyState,
-    context.lang
+    result.replyState
   );
   if (result.afterSend === "markIntroSeen") {
     await Promise.resolve(markIntroSeen(event.senderId));

@@ -60,6 +60,19 @@ function postInternalImageRequest(baseUrl: string): Promise<Response> {
   });
 }
 
+async function waitForMockCall(
+  mock: { mock: { calls: unknown[][] } },
+  expectedCalls: number
+): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (mock.mock.calls.length < expectedCalls) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for ${expectedCalls} mock call(s)`);
+    }
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+}
+
 beforeEach(() => {
   process.env.INTERNAL_IMAGE_REQUEST_TOKEN = "route-token";
   acceptInternalMessengerImageRequestMock.mockReset();
@@ -116,7 +129,7 @@ describe("internal Messenger image request route", () => {
         return response;
       });
 
-      await new Promise(resolve => setTimeout(resolve, 25));
+      await waitForMockCall(acceptInternalMessengerImageRequestMock, 1);
       expect(acceptInternalMessengerImageRequestMock).toHaveBeenCalledTimes(1);
       expect(settled).toBe(false);
 

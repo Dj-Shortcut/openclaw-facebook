@@ -3,10 +3,11 @@ import { ensureDefaultBotFeaturesRegistered } from "./_core/bot/defaultFeatures"
 import { assistantCommandsFeature } from "./_core/bot/features/assistantCommandsFeature";
 import { conversationalEditingFeature } from "./_core/bot/features/conversationalEditingFeature";
 import { freeformTransformFeature } from "./_core/bot/features/freeformTransformFeature";
+import { imageRequestFeature } from "./_core/bot/features/imageRequestFeature";
 import { rateLimitFeature } from "./_core/bot/features/rateLimitFeature";
 import { statsFeature } from "./_core/bot/features/statsFeature";
-import { styleCommandsFeature } from "./_core/bot/features/styleCommandsFeature";
 import { getBotFeatures } from "./_core/bot/features";
+import { t } from "./_core/i18n";
 import type { BotTextContext } from "./_core/botContext";
 import type { MessengerUserState } from "./_core/messengerState";
 import { resetStateStore } from "./_core/messengerState";
@@ -21,8 +22,6 @@ function makeState(
     state: "IDLE",
     lastPhotoUrl: null,
     lastPhoto: null,
-    selectedStyle: null,
-    chosenStyle: null,
     hasSeenIntro: false,
     lastGeneratedUrl: null,
     quota: { dayKey: "2026-01-01", count: 0 },
@@ -48,17 +47,15 @@ function makeContext(overrides: Partial<BotTextContext> = {}): BotTextContext {
     hasPhoto: false,
     sendText: vi.fn(async () => undefined),
     sendImage: vi.fn(async () => undefined),
-    sendQuickReplies: vi.fn(async () => undefined),
-    sendStateQuickReplies: vi.fn(async () => undefined),
+    sendActions: vi.fn(async () => undefined),
     setFlowState: vi.fn(async () => undefined),
-    preselectStyle: vi.fn(async () => undefined),
-    chooseStyle: vi.fn(async () => undefined),
-    runStyleGeneration: vi.fn(async () => undefined),
+    clearImageContext: vi.fn(async () => undefined),
+    runImageGeneration: vi.fn(async () => undefined),
     getRuntimeStats: () => ({
       date: "2026-01-01",
       imagesGeneratedToday: 0,
       activeUsersToday: 0,
-      stylesUsedToday: 0,
+      generationKindsUsedToday: 0,
       errorCountToday: 0,
       averageGenerationLatencyMs: null,
     }),
@@ -75,102 +72,8 @@ describe("default feature registration", () => {
     }).not.toThrow();
 
     expect(getBotFeatures().map(feature => feature.name)).toEqual(
-      expect.arrayContaining(["rateLimit", "styleCommands"])
+      expect.arrayContaining(["rateLimit", "freeformTransform", "imageRequest"])
     );
-  });
-});
-
-describe("styleCommandsFeature", () => {
-  it("accepts style aliases and resolves them to the canonical oil-paint key", async () => {
-    const chooseStyle = vi.fn(async () => undefined);
-    const context = makeContext({
-      state: makeState({
-        lastPhotoUrl: "https://img.example/source.jpg",
-        lastPhoto: "https://img.example/source.jpg",
-      }),
-      messageText: "style: oil painting",
-      normalizedText: "style: oil painting",
-      chooseStyle,
-    });
-
-    const handled = await styleCommandsFeature.onText?.(context);
-
-    expect(handled).toEqual({ handled: true });
-    expect(chooseStyle).toHaveBeenCalledWith("oil-paint");
-  });
-
-  it("accepts /style Norman Blackwell aliases and delegates style selection", async () => {
-    const chooseStyle = vi.fn(async () => undefined);
-    const context = makeContext({
-      state: makeState({
-        lastPhotoUrl: "https://img.example/source.jpg",
-        lastPhoto: "https://img.example/source.jpg",
-      }),
-      messageText: "/style norman blackwell",
-      normalizedText: "/style norman blackwell",
-      chooseStyle,
-    });
-
-    const handled = await styleCommandsFeature.onText?.(context);
-
-    expect(handled).toEqual({ handled: true });
-    expect(chooseStyle).toHaveBeenCalledWith("norman-blackwell");
-  });
-
-  it("accepts /style cyberpunk and delegates style selection", async () => {
-    const chooseStyle = vi.fn(async () => undefined);
-    const context = makeContext({
-      state: makeState({
-        lastPhotoUrl: "https://img.example/source.jpg",
-        lastPhoto: "https://img.example/source.jpg",
-      }),
-      messageText: "/style cyberpunk",
-      normalizedText: "/style cyberpunk",
-      chooseStyle,
-    });
-
-    const handled = await styleCommandsFeature.onText?.(context);
-
-    expect(handled).toEqual({ handled: true });
-    expect(chooseStyle).toHaveBeenCalledWith("cyberpunk");
-  });
-
-  it("confirms style changes when no photo context exists yet", async () => {
-    const sendText = vi.fn(async () => undefined);
-    const preselectStyle = vi.fn(async () => undefined);
-    const chooseStyle = vi.fn(async () => undefined);
-    const setFlowState = vi.fn(async () => undefined);
-    const context = makeContext({
-      messageText: "style: cyberpunk",
-      normalizedText: "style: cyberpunk",
-      sendText,
-      preselectStyle,
-      setFlowState,
-      chooseStyle,
-    });
-
-    await styleCommandsFeature.onText?.(context);
-
-    expect(preselectStyle).toHaveBeenCalledWith("cyberpunk");
-    expect(setFlowState).toHaveBeenCalledWith("AWAITING_PHOTO");
-    expect(sendText).toHaveBeenCalledWith(
-      "✅ Style set to cyberpunk.\n\nSend a photo first, then I can make that style for you."
-    );
-    expect(chooseStyle).not.toHaveBeenCalled();
-  });
-
-  it("falls through on invalid style commands", async () => {
-    const chooseStyle = vi.fn(async () => undefined);
-    const context = makeContext({
-      messageText: "/style vaporwave",
-      normalizedText: "/style vaporwave",
-      chooseStyle,
-    });
-
-    const handled = await styleCommandsFeature.onText?.(context);
-
-    expect(handled).toEqual({ handled: false });
-    expect(chooseStyle).not.toHaveBeenCalled();
   });
 });
 
@@ -220,15 +123,15 @@ describe("rateLimitFeature", () => {
 });
 
 describe("freeformTransformFeature", () => {
-  it("turns a Dutch free-form photo request into a cinematic generation prompt", async () => {
-    const runStyleGeneration = vi.fn(async () => undefined);
+  it("does not treat ambiguous Dutch make-me create wording as a source edit", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
 
     const result = await freeformTransformFeature.onText?.(
       makeContext({
         lang: "nl",
         messageText: "Maak me een Romeinse soldaat",
         normalizedText: "maak me een romeinse soldaat",
-        runStyleGeneration,
+        runImageGeneration,
         state: makeState({
           lastPhotoUrl: "https://img.example/source.jpg",
           lastPhoto: "https://img.example/source.jpg",
@@ -236,20 +139,59 @@ describe("freeformTransformFeature", () => {
       })
     );
 
+    expect(result).toEqual({ handled: false });
+    expect(runImageGeneration).not.toHaveBeenCalled();
+  });
+
+  it("does not treat natural Dutch make-me create requests as source edits", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await freeformTransformFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Kan je me een samurai maken",
+        normalizedText: "kan je me een samurai maken",
+        runImageGeneration,
+        state: makeState({
+          lastPhotoUrl: "https://img.example/source.jpg",
+          lastPhoto: "https://img.example/source.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: false });
+    expect(runImageGeneration).not.toHaveBeenCalled();
+  });
+
+  it("uses the generated result for explicit transform requests when both sources exist", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await freeformTransformFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Verander me in een nog sterkere samurai",
+        normalizedText: "verander me in een nog sterkere samurai",
+        runImageGeneration,
+        state: makeState({
+          lastGeneratedUrl: "https://img.example/generated.jpg",
+          lastPhotoUrl: "https://img.example/original.jpg",
+          lastPhoto: "https://img.example/original.jpg",
+        }),
+      })
+    );
+
     expect(result).toEqual({ handled: true });
-    expect(runStyleGeneration).toHaveBeenCalledWith(
-      "cinematic",
-      "https://img.example/source.jpg",
-      expect.stringContaining(
-        "User requested transformation: Maak me een Romeinse soldaat"
-      )
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      "https://img.example/generated.jpg",
+      expect.stringContaining("User requested transformation: Verander me in een nog sterkere samurai"),
+      "source_image_edit"
     );
   });
 
-  it("asks for a photo before accepting free-form transform requests", async () => {
+  it("leaves ambiguous make-me requests without a source photo for image intent", async () => {
     const sendText = vi.fn(async () => undefined);
     const setFlowState = vi.fn(async () => undefined);
-    const runStyleGeneration = vi.fn(async () => undefined);
+    const runImageGeneration = vi.fn(async () => undefined);
 
     const result = await freeformTransformFeature.onText?.(
       makeContext({
@@ -258,21 +200,247 @@ describe("freeformTransformFeature", () => {
         normalizedText: "maak me een romeinse soldaat",
         sendText,
         setFlowState,
-        runStyleGeneration,
+        runImageGeneration,
+      })
+    );
+
+    expect(result).toEqual({ handled: false });
+    expect(setFlowState).not.toHaveBeenCalled();
+    expect(sendText).not.toHaveBeenCalled();
+    expect(runImageGeneration).not.toHaveBeenCalled();
+  });
+});
+
+describe("imageRequestFeature", () => {
+  it("generates direct prompt-first image requests from Messenger text", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Kan je een landschap afbeelding genereren?",
+        normalizedText: "kan je een landschap afbeelding genereren?",
+        runImageGeneration,
       })
     );
 
     expect(result).toEqual({ handled: true });
-    expect(setFlowState).toHaveBeenCalledWith("AWAITING_PHOTO");
-    expect(sendText).toHaveBeenCalledWith(
-      "Stuur eerst een foto, dan maak ik die stijl voor je."
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      undefined,
+      "Kan je een landschap afbeelding genereren?",
+      "text_to_image"
     );
-    expect(runStyleGeneration).not.toHaveBeenCalled();
+  });
+
+  it("generates arbitrary explicit create requests without requiring known subjects", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Maak een draak met neonvleugels boven Antwerpen",
+        normalizedText: "maak een draak met neonvleugels boven antwerpen",
+        runImageGeneration,
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      undefined,
+      "Maak een draak met neonvleugels boven Antwerpen",
+      "text_to_image"
+    );
+  });
+
+  it("generates arbitrary can-you-make visual requests without known subjects", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Kan je een draak met neonvleugels maken?",
+        normalizedText: "kan je een draak met neonvleugels maken?",
+        runImageGeneration,
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      undefined,
+      "Kan je een draak met neonvleugels maken?",
+      "text_to_image"
+    );
+  });
+
+  it("does not steal prompt-writing requests from the assistant", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Schrijf een prompt voor een landschap",
+        normalizedText: "schrijf een prompt voor een landschap",
+        runImageGeneration,
+      })
+    );
+
+    expect(result).toEqual({ handled: false });
+    expect(runImageGeneration).not.toHaveBeenCalled();
+  });
+
+  it("does not steal non-image creation requests from the assistant", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Maak een plan voor morgen",
+        normalizedText: "maak een plan voor morgen",
+        runImageGeneration,
+      })
+    );
+
+    expect(result).toEqual({ handled: false });
+    expect(runImageGeneration).not.toHaveBeenCalled();
+  });
+
+  it("does not steal can-you-make non-image requests from the assistant", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Kan je een plan voor morgen maken?",
+        normalizedText: "kan je een plan voor morgen maken?",
+        runImageGeneration,
+      })
+    );
+
+    expect(result).toEqual({ handled: false });
+    expect(runImageGeneration).not.toHaveBeenCalled();
+  });
+
+  it("does not treat vague improvement requests as image generation", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Kan je dit niet beter maken?",
+        normalizedText: "kan je dit niet beter maken?",
+        runImageGeneration,
+      })
+    );
+
+    expect(result).toEqual({ handled: false });
+    expect(runImageGeneration).not.toHaveBeenCalled();
+  });
+
+  it("keeps ordinary visual requests prompt-first even with active photo context", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Maak een stoere poster voor mijn feest",
+        normalizedText: "maak een stoere poster voor mijn feest",
+        hasPhoto: true,
+        runImageGeneration,
+        state: makeState({
+          lastPhotoUrl: "https://img.example/source.jpg",
+          lastPhoto: "https://img.example/source.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      undefined,
+      "Maak een stoere poster voor mijn feest",
+      "text_to_image"
+    );
+  });
+
+  it("keeps ambiguous make-me visual requests prompt-first with generated context", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Maak me een samurai aub",
+        normalizedText: "maak me een samurai aub",
+        hasPhoto: true,
+        runImageGeneration,
+        state: makeState({
+          lastGeneratedUrl: "https://img.example/generated-landscape.jpg",
+          lastPhotoUrl: "https://img.example/source.jpg",
+          lastPhoto: "https://img.example/source.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      undefined,
+      "Maak me een samurai aub",
+      "text_to_image"
+    );
+  });
+
+  it("uses the generated result for explicit source-referenced visual follow-ups", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Maak een stoere poster van dit resultaat",
+        normalizedText: "maak een stoere poster van dit resultaat",
+        hasPhoto: true,
+        runImageGeneration,
+        state: makeState({
+          lastGeneratedUrl: "https://img.example/generated.jpg",
+          lastPhotoUrl: "https://img.example/original.jpg",
+          lastPhoto: "https://img.example/original.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      "https://img.example/generated.jpg",
+      "Maak een stoere poster van dit resultaat",
+      "source_image_edit"
+    );
+  });
+
+  it("keeps explicit fresh image requests source-less even with photo context", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Maak een nieuwe afbeelding van een draak",
+        normalizedText: "maak een nieuwe afbeelding van een draak",
+        hasPhoto: true,
+        runImageGeneration,
+        state: makeState({
+          lastPhotoUrl: "https://img.example/source.jpg",
+          lastPhoto: "https://img.example/source.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      undefined,
+      "Maak een nieuwe afbeelding van een draak",
+      "text_to_image"
+    );
   });
 });
 
 describe("conversationalEditingFeature", () => {
-  it("does not reuse the previous director mode when the edit chooses a normal style", async () => {
+  it("treats legacy style words as prompt-first edits instead of preset restyles", async () => {
     const originalApiKey = process.env.OPENAI_API_KEY;
     process.env.OPENAI_API_KEY = "test-key";
     const fetchMock = vi.fn(async () => ({
@@ -281,36 +449,334 @@ describe("conversationalEditingFeature", () => {
         output_text: JSON.stringify({
           shouldEdit: true,
           style: "disco",
-          directorMode: null,
           promptHint: "make it disco",
         }),
       }),
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const runStyleGeneration = vi.fn(async () => undefined);
+    const runImageGeneration = vi.fn(async () => undefined);
 
     try {
       const result = await conversationalEditingFeature.onText?.(
         makeContext({
           messageText: "make it disco",
           normalizedText: "make it disco",
-          runStyleGeneration,
+          runImageGeneration,
           state: makeState({
             lastGeneratedUrl: "https://img.example/generated.jpg",
             lastPhotoUrl: "https://img.example/source.jpg",
-            lastDirectorMode: "midnight_luxury",
-            selectedStyle: "cinematic",
           }),
         })
       );
 
       expect(result).toEqual({ handled: true });
-      expect(runStyleGeneration).toHaveBeenCalledWith(
-        "disco",
-        "https://img.example/source.jpg",
+      expect(runImageGeneration).toHaveBeenCalledWith(
+        "https://img.example/generated.jpg",
         "make it disco",
-        undefined
+        "source_image_edit"
+      );
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("uses a prompt-first edit fallback instead of opening the style picker", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        output_text: JSON.stringify({
+          shouldEdit: true,
+          style: null,
+          promptHint: "make the background darker",
+        }),
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    try {
+      const result = await conversationalEditingFeature.onText?.(
+        makeContext({
+          messageText: "make the background darker",
+          normalizedText: "make the background darker",
+          runImageGeneration,
+          state: makeState({
+            lastGeneratedUrl: "https://img.example/generated.jpg",
+            lastPhotoUrl: "https://img.example/source.jpg",
+          }),
+        })
+      );
+
+      expect(result).toEqual({ handled: true });
+      expect(runImageGeneration).toHaveBeenCalledWith(
+        "https://img.example/generated.jpg",
+        "make the background darker",
+        "source_image_edit"
+      );
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("allows the first natural edit prompt immediately after photo upload", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        output_text: JSON.stringify({
+          shouldEdit: true,
+          style: null,
+          promptHint: "add sunglasses",
+        }),
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    try {
+      const result = await conversationalEditingFeature.onText?.(
+        makeContext({
+          messageText: "add sunglasses",
+          normalizedText: "add sunglasses",
+          hasPhoto: true,
+          runImageGeneration,
+          state: makeState({
+            lastPhotoUrl: "https://img.example/source.jpg",
+          }),
+        })
+      );
+
+      expect(result).toEqual({ handled: true });
+      expect(runImageGeneration).toHaveBeenCalledWith(
+        "https://img.example/source.jpg",
+        "add sunglasses",
+        "source_image_edit"
+      );
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("uses the last generated image as the source for follow-up edits", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        output_text: JSON.stringify({
+          shouldEdit: true,
+          style: null,
+          promptHint: "make it darker",
+        }),
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    try {
+      const result = await conversationalEditingFeature.onText?.(
+        makeContext({
+          messageText: "make it darker",
+          normalizedText: "make it darker",
+          runImageGeneration,
+          state: makeState({
+            lastGeneratedUrl: "https://img.example/generated.jpg",
+            lastPhotoUrl: "https://img.example/original-upload.jpg",
+            lastPhoto: "https://img.example/original-upload.jpg",
+          }),
+        })
+      );
+
+      expect(result).toEqual({ handled: true });
+      expect(runImageGeneration).toHaveBeenCalledWith(
+        "https://img.example/generated.jpg",
+        "make it darker",
+        "source_image_edit"
+      );
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("routes missing-subject complaints as follow-up corrections", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        output_text: JSON.stringify({
+          shouldEdit: true,
+          style: null,
+          promptHint: "make the samurai clearly visible as the main subject",
+        }),
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    try {
+      const result = await conversationalEditingFeature.onText?.(
+        makeContext({
+          messageText: "Ik zie geen samurai bro",
+          normalizedText: "ik zie geen samurai bro",
+          runImageGeneration,
+          state: makeState({
+            lastPrompt: "Maak een samurai op een paard",
+            lastGeneratedUrl: "https://img.example/generated.jpg",
+          }),
+        })
+      );
+
+      expect(result).toEqual({ handled: true });
+      expect(runImageGeneration).toHaveBeenCalledWith(
+        "https://img.example/generated.jpg",
+        "make the samurai clearly visible as the main subject",
+        "source_image_edit"
+      );
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("routes clear visual corrections even when the edit interpreter is unavailable", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    try {
+      const result = await conversationalEditingFeature.onText?.(
+        makeContext({
+          messageText: "Das mooi, maar geen samurai bro",
+          normalizedText: "das mooi, maar geen samurai bro",
+          runImageGeneration,
+          state: makeState({
+            lastPrompt: "Maak een samurai op een paard",
+            lastGeneratedUrl: "https://img.example/generated.jpg",
+          }),
+        })
+      );
+
+      expect(result).toEqual({ handled: true });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(runImageGeneration).toHaveBeenCalledWith(
+        "https://img.example/generated.jpg",
+        "Das mooi, maar geen samurai bro",
+        "source_image_edit"
+      );
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not treat casual no-subject chat as deterministic corrections", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    try {
+      const result = await conversationalEditingFeature.onText?.(
+        makeContext({
+          messageText: "No man, thanks",
+          normalizedText: "no man, thanks",
+          runImageGeneration,
+          state: makeState({
+            lastGeneratedUrl: "https://img.example/generated.jpg",
+          }),
+        })
+      );
+
+      expect(result).toEqual({ handled: false });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(runImageGeneration).not.toHaveBeenCalled();
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not prepend the previous prompt to follow-up edit instructions", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key";
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        output_text: JSON.stringify({
+          shouldEdit: true,
+          style: null,
+          promptHint: "add a clear samurai as the central subject",
+        }),
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    try {
+      const result = await conversationalEditingFeature.onText?.(
+        makeContext({
+          messageText: "Er mist een samurai",
+          normalizedText: "er mist een samurai",
+          runImageGeneration,
+          state: makeState({
+            lastPrompt: "Maak een rustig landschap met een windmolen",
+            lastGeneratedUrl: "https://img.example/generated.jpg",
+          }),
+        })
+      );
+
+      expect(result).toEqual({ handled: true });
+      expect(runImageGeneration).toHaveBeenCalledWith(
+        "https://img.example/generated.jpg",
+        "add a clear samurai as the central subject",
+        "source_image_edit"
       );
     } finally {
       if (originalApiKey === undefined) {
@@ -326,6 +792,7 @@ describe("conversationalEditingFeature", () => {
 describe("assistantCommandsFeature", () => {
   it("shows contextual help when user has not uploaded a photo yet", async () => {
     const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
 
     const result = await assistantCommandsFeature.onText?.(
       makeContext({
@@ -333,15 +800,115 @@ describe("assistantCommandsFeature", () => {
         messageText: "help",
         hasPhoto: false,
         sendText,
+        sendActions,
       })
     );
 
     expect(result).toEqual({ handled: true });
-    expect(sendText).toHaveBeenCalledOnce();
-    expect(sendText.mock.calls[0]?.[0]).toContain("Feel free to send a photo");
+    expect(sendText).not.toHaveBeenCalled();
+    expect(sendActions).toHaveBeenCalledWith(t("en", "flowExplanation"), [
+      { id: "new_image", label: "New image", inputText: "New image" },
+      { id: "edit_photo", label: "Edit photo", inputText: "Edit photo" },
+      { id: "privacy", label: "Privacy", inputText: "Privacy" },
+    ]);
   });
+
+  it("shows photo help as channel-neutral conversation actions", async () => {
+    const sendActions = vi.fn(async () => undefined);
+
+    const result = await assistantCommandsFeature.onText?.(
+      makeContext({
+        normalizedText: "help",
+        messageText: "help",
+        hasPhoto: true,
+        sendActions,
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(sendActions).toHaveBeenCalledWith(t("en", "assistantQuickActions"), [
+      { id: "edit_photo", label: "Edit image", inputText: "Edit image" },
+      { id: "new_image", label: "New image", inputText: "New image" },
+      { id: "privacy", label: "Privacy", inputText: "Privacy" },
+    ]);
+  });
+
+  it("turns edit-photo action input into a direct edit prompt", async () => {
+    const sendText = vi.fn(async () => undefined);
+    const setFlowState = vi.fn(async () => undefined);
+
+    const result = await assistantCommandsFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        normalizedText: "pas foto aan",
+        messageText: "Pas foto aan",
+        hasPhoto: true,
+        sendText,
+        setFlowState,
+        state: makeState({
+          lastPhotoUrl: "https://img.example/source.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(setFlowState).toHaveBeenCalledWith("AWAITING_EDIT_PROMPT");
+    expect(sendText).toHaveBeenCalledWith(t("nl", "editImagePrompt"));
+  });
+
+  it("turns edit-image action input into an edit prompt for the last generated image", async () => {
+    const sendText = vi.fn(async () => undefined);
+    const setFlowState = vi.fn(async () => undefined);
+
+    const result = await assistantCommandsFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        normalizedText: "pas aan",
+        messageText: "Pas aan",
+        hasPhoto: false,
+        sendText,
+        setFlowState,
+        state: makeState({
+          lastGeneratedUrl: "https://img.example/generated.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(setFlowState).toHaveBeenCalledWith("AWAITING_EDIT_PROMPT");
+    expect(sendText).toHaveBeenCalledWith(t("nl", "editImagePrompt"));
+  });
+
+  it("turns new-image action input into a fresh prompt-first start", async () => {
+    const sendText = vi.fn(async () => undefined);
+    const setFlowState = vi.fn(async () => undefined);
+    const clearImageContext = vi.fn(async () => undefined);
+
+    const result = await assistantCommandsFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        normalizedText: "nieuwe afbeelding",
+        messageText: "Nieuwe afbeelding",
+        hasPhoto: true,
+        sendText,
+        setFlowState,
+        clearImageContext,
+        state: makeState({
+          lastPhotoUrl: "https://img.example/old.jpg",
+          lastPhoto: "https://img.example/old.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(clearImageContext).toHaveBeenCalledOnce();
+    expect(setFlowState).toHaveBeenCalledWith("IDLE");
+    expect(sendText).toHaveBeenCalledWith(t("nl", "textWithoutPhoto"));
+  });
+
   it("treats Dutch casual help requests as help commands", async () => {
     const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
 
     const result = await assistantCommandsFeature.onText?.(
       makeContext({
@@ -350,46 +917,80 @@ describe("assistantCommandsFeature", () => {
         messageText: "Help eens",
         hasPhoto: false,
         sendText,
+        sendActions,
       })
     );
 
     expect(result).toEqual({ handled: true });
-    expect(sendText).toHaveBeenCalledOnce();
-    expect(sendText.mock.calls[0]?.[0]).toContain("Stuur gerust een foto");
+    expect(sendText).not.toHaveBeenCalled();
+    expect(sendActions).toHaveBeenCalledWith(t("nl", "flowExplanation"), [
+      { id: "new_image", label: "Nieuwe afbeelding", inputText: "Nieuwe afbeelding" },
+      { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
+      { id: "privacy", label: "Privacy", inputText: "Privacy" },
+    ]);
   });
 
-  it("picks a random style and triggers generation for surprise command", async () => {
-    const runStyleGeneration = vi.fn(async () => undefined);
+  it("turns surprise with a photo into explicit choices instead of auto-generating", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
     const sendText = vi.fn(async () => undefined);
-    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+    const sendActions = vi.fn(async () => undefined);
 
-    try {
-      const result = await assistantCommandsFeature.onText?.(
-        makeContext({
-          normalizedText: "surprise me",
-          messageText: "surprise me",
-          hasPhoto: true,
-          sendText,
-          runStyleGeneration,
-          state: makeState({
-            lastPhotoUrl: "https://img.example/original.jpg",
-          }),
-        })
-      );
+    const result = await assistantCommandsFeature.onText?.(
+      makeContext({
+        normalizedText: "surprise me",
+        messageText: "surprise me",
+        hasPhoto: true,
+        sendText,
+        sendActions,
+        runImageGeneration,
+        state: makeState({
+          lastPhotoUrl: "https://img.example/original.jpg",
+        }),
+      })
+    );
 
-      expect(result).toEqual({ handled: true });
-      expect(sendText).toHaveBeenCalledWith("🎲 Nice — going with Caricature.");
-      expect(runStyleGeneration).toHaveBeenCalledWith(
-        "caricature",
-        "https://img.example/original.jpg"
-      );
-    } finally {
-      randomSpy.mockRestore();
-    }
+    expect(result).toEqual({ handled: true });
+    expect(sendText).not.toHaveBeenCalled();
+    expect(runImageGeneration).not.toHaveBeenCalled();
+    expect(sendActions).toHaveBeenCalledWith(t("en", "assistantQuickActions"), [
+      { id: "edit_photo", label: "Edit image", inputText: "Edit image" },
+      { id: "new_image", label: "New image", inputText: "New image" },
+      { id: "privacy", label: "Privacy", inputText: "Privacy" },
+    ]);
   });
 
-  it("moves surprise-without-photo users into awaiting photo state", async () => {
+  it("turns surprise on the last generated image into explicit choices", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
     const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
+
+    const result = await assistantCommandsFeature.onText?.(
+      makeContext({
+        normalizedText: "surprise me",
+        messageText: "surprise me",
+        hasPhoto: false,
+        sendText,
+        sendActions,
+        runImageGeneration,
+        state: makeState({
+          lastGeneratedUrl: "https://img.example/generated.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(sendText).not.toHaveBeenCalled();
+    expect(runImageGeneration).not.toHaveBeenCalled();
+    expect(sendActions).toHaveBeenCalledWith(t("en", "assistantQuickActions"), [
+      { id: "edit_photo", label: "Edit image", inputText: "Edit image" },
+      { id: "new_image", label: "New image", inputText: "New image" },
+      { id: "privacy", label: "Privacy", inputText: "Privacy" },
+    ]);
+  });
+
+  it("keeps surprise-without-photo users in prompt-first choices", async () => {
+    const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
     const setFlowState = vi.fn(async () => undefined);
 
     const result = await assistantCommandsFeature.onText?.(
@@ -398,13 +999,19 @@ describe("assistantCommandsFeature", () => {
         messageText: "surprise me",
         hasPhoto: false,
         sendText,
+        sendActions,
         setFlowState,
       })
     );
 
     expect(result).toEqual({ handled: true });
-    expect(setFlowState).toHaveBeenCalledWith("AWAITING_PHOTO");
-    expect(sendText).toHaveBeenCalledOnce();
+    expect(setFlowState).not.toHaveBeenCalled();
+    expect(sendText).not.toHaveBeenCalled();
+    expect(sendActions).toHaveBeenCalledWith(t("en", "flowExplanation"), [
+      { id: "new_image", label: "New image", inputText: "New image" },
+      { id: "edit_photo", label: "Edit photo", inputText: "Edit photo" },
+      { id: "privacy", label: "Privacy", inputText: "Privacy" },
+    ]);
   });
 });
 
@@ -426,7 +1033,7 @@ describe("statsFeature", () => {
             date: "2026-03-16",
             imagesGeneratedToday: 0,
             activeUsersToday: 0,
-            stylesUsedToday: 0,
+            generationKindsUsedToday: 0,
             errorCountToday: 0,
             averageGenerationLatencyMs: null,
           }),
@@ -440,7 +1047,7 @@ describe("statsFeature", () => {
           "",
           "Images generated: 0",
           "Users: 0",
-          "Styles used: 0",
+          "Generation types: 0",
           "Errors: 0",
           "Avg latency: 0ms",
           "",

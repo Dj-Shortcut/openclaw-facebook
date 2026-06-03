@@ -16,6 +16,7 @@ import { shouldComputeCommandAuthorized } from "openclaw/plugin-sdk/command-auth
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import { isReplyPayloadNonTerminalToolErrorWarning } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   danger,
@@ -42,6 +43,11 @@ import {
 import { getMessengerRuntime } from "./runtime.js";
 import { sendMessengerSenderAction, sendMessengerText } from "./send.js";
 import { validateMessengerSignature } from "./signature.js";
+import {
+  decodeOpenClawActionPayload,
+  getMessengerQuickReplies,
+  renderMessengerReplyPayload,
+} from "./presentation.js";
 import type {
   MessengerWebhookBody,
   MessengerWebhookMessaging,
@@ -75,6 +81,18 @@ const MESSENGER_MESSAGE_DEDUPE_TTL_MS = 10 * 60 * 1000;
 const MESSENGER_MESSAGE_DEDUPE_MAX_ENTRIES = 5_000;
 const MESSENGER_SLOW_REQUEST_LOG_MS = 5_000;
 const processedMessengerMessageIds = new Map<string, number>();
+const MESSENGER_PROMPT_MEMORY_TTL_MS = 30 * 60 * 1000;
+const MESSENGER_PROMPT_MEMORY_MAX_ENTRIES = 2_000;
+const recentMessengerAssistantPrompts = new Map<string, { prompt: string; expiresAt: number }>();
+const recentMessengerAssistantPromptsByMessage = new Map<
+  string,
+  { prompt: string; expiresAt: number }
+>();
+const recentMessengerAssistantRepliesByMessage = new Map<
+  string,
+  { text: string; expiresAt: number }
+>();
+const recentMessengerAssistantReplies = new Map<string, { text: string; expiresAt: number }>();
 const messengerEventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
 let activeMessengerEventJobs = 0;
 
@@ -95,6 +113,8 @@ const MESSENGER_IMAGE_FETCH_TIMEOUT_MS = 10_000;
 const MESSENGER_IMAGE_FETCH_MAX_BYTES = 10 * 1024 * 1024;
 const MESSENGER_MEDIA_FETCH_MAX_BYTES = 25 * 1024 * 1024;
 const MESSENGER_MEDIA_FETCH_MAX_REDIRECTS = 2;
+const MISSING_REFERENCED_PROMPT_REPLY =
+  "Ik vind die prompt niet meer terug. Plak hem even opnieuw, dan maak ik de afbeelding.";
 
 export function redactMessengerIdentifier(value: string | undefined): string {
   const normalized = value?.trim();
@@ -155,6 +175,7 @@ function createMessengerTrace(params: {
 
 function eventLoopDelayMaxMs(): number {
   const value = messengerEventLoopDelay.max / 1_000_000;
+  messengerEventLoopDelay.reset();
   return Number.isFinite(value) ? Math.round(value) : 0;
 }
 
@@ -464,7 +485,7 @@ function fallbackTextForMessengerAttachments(attachments: MessengerAttachmentUrl
     return "De gebruiker stuurde een voice/audio-bericht. Luister of transcribeer de bijlage als dat beschikbaar is en reageer inhoudelijk.";
   }
   if (attachments.some((attachment) => attachment.kind === "image")) {
-    return "De gebruiker stuurde een afbeelding zonder duidelijke image-generation opdracht. Bekijk de bijgevoegde afbeelding en antwoord op basis daarvan. Als de gebruiker lijkt te willen restylen of bewerken, vraag eerst welke stijl of bewerking gewenst is.";
+    return "De gebruiker stuurde een afbeelding zonder duidelijke image-generation opdracht. Bekijk de bijgevoegde afbeelding en antwoord op basis daarvan. Als de gebruiker lijkt te willen bewerken, vraag eerst wat er aangepast moet worden.";
   }
   if (attachments.some((attachment) => attachment.kind === "video")) {
     return "De gebruiker stuurde een video. Bekijk of analyseer de bijgevoegde video als dat beschikbaar is en reageer inhoudelijk.";
@@ -487,46 +508,372 @@ function normalizeFastLaneText(text: string): string {
 }
 
 export function classifyMessengerFastLaneIntent(text: string): MessengerFastLaneIntent | null {
-  const normalized = normalizeFastLaneText(text);
-  if (!normalized) {
-    return null;
-  }
-  if (/^(hey|hi|hallo|hello|hoi|yo|goedemorgen|goedemiddag|goedenavond)$/.test(normalized)) {
-    return "greeting";
-  }
-  if (
-    /^(help|\/help|wat kan je|wat kun je|wat doe je|commands|commando's|mogelijkheden)$/.test(
-      normalized,
-    )
-  ) {
-    return "help";
-  }
-  if (/^(status|ping|ben je online|werkt dit|online)$/.test(normalized)) {
-    return "status";
-  }
-  if (hasMessengerImageGenerationIntent(normalized)) {
+  const intent = resolveMessengerConversationIntent({ text });
+  if (intent.kind === "generate_image" || intent.kind === "edit_source_image") {
     return "image";
+  }
+  if (intent.kind === "greeting" || intent.kind === "help" || intent.kind === "status") {
+    return intent.kind;
   }
   return null;
 }
 
-export function hasMessengerImageGenerationIntent(text: string): boolean {
+function pruneRecentMessengerAssistantPrompts(now: number): void {
+  const pruneMap = (entries: Map<string, { expiresAt: number }>) => {
+    if (entries.size <= MESSENGER_PROMPT_MEMORY_MAX_ENTRIES) {
+      for (const [key, value] of entries) {
+        if (value.expiresAt <= now) {
+          entries.delete(key);
+        }
+      }
+      return;
+    }
+
+    for (const [key, value] of entries) {
+      if (value.expiresAt <= now) {
+        entries.delete(key);
+      }
+    }
+    for (const key of entries.keys()) {
+      if (entries.size <= MESSENGER_PROMPT_MEMORY_MAX_ENTRIES) {
+        break;
+      }
+      entries.delete(key);
+    }
+  };
+
+  pruneMap(recentMessengerAssistantPrompts);
+  pruneMap(recentMessengerAssistantPromptsByMessage);
+  pruneMap(recentMessengerAssistantReplies);
+  pruneMap(recentMessengerAssistantRepliesByMessage);
+}
+
+export function extractImagePromptFromAssistantReply(text: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed || !/\bprompt\b/i.test(trimmed)) {
+    return null;
+  }
+
+  const fencedMatches = [...trimmed.matchAll(/```(?:text|prompt)?\s*([\s\S]*?)```/gi)];
+  const fencedPrompt = fencedMatches
+    .map((match) => match[1]?.trim())
+    .filter((value): value is string => Boolean(value && value.length >= 20))
+    .at(-1);
+  if (fencedPrompt) {
+    return fencedPrompt;
+  }
+
+  const afterPromptLabel = trimmed.match(/\bprompt\s*[:-]\s*([\s\S]+)/i)?.[1]?.trim();
+  if (afterPromptLabel && afterPromptLabel.length >= 20) {
+    return afterPromptLabel;
+  }
+
+  return null;
+}
+
+function messengerPromptMessageKey(senderId: string, messageId: string): string {
+  return `${senderId}:${messageId}`;
+}
+
+function selectedOptionNumber(text: string): number | null {
   const normalized = normalizeFastLaneText(text);
-  if (isMessengerPromptWritingRequest(normalized)) {
+  const match =
+    normalized.match(/^nr\s*(\d+)(?:\s*go)?$/) ??
+    normalized.match(/^nummer\s*(\d+)(?:\s*go)?$/) ??
+    normalized.match(/^option\s*(\d+)(?:\s*go)?$/) ??
+    normalized.match(/^(\d+)(?:\s*go)?$/);
+  const value = Number(match?.[1]);
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function extractNumberedImageOptionFromAssistantReply(
+  assistantText: string,
+  userText: string,
+): string | null {
+  const optionNumber = selectedOptionNumber(userText);
+  if (!optionNumber) {
+    return null;
+  }
+
+  const optionLine = assistantText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => new RegExp(`^${optionNumber}[.)]\\s+`).test(line));
+  if (!optionLine) {
+    return null;
+  }
+
+  const option = optionLine
+    .replace(/^\d+[.)]\s+/, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/[,.]$/g, "")
+    .replace(/^(?:of\s+)?(?:een|a|an)\s+/i, "")
+    .replace(/\s+maak$/i, "")
+    .trim();
+  if (!option) {
+    return null;
+  }
+  if (/\b(?:tekstprompt|image prompt|prompt)\b/i.test(option)) {
+    return null;
+  }
+
+  return /^(?:maak|genereer|create|generate)\b/i.test(option)
+    ? option
+    : `Maak deze afbeelding: ${option}`;
+}
+
+export function rememberMessengerAssistantPrompt(
+  senderId: string,
+  text: string,
+  now = Date.now(),
+  messageId?: string,
+): void {
+  const prompt = extractImagePromptFromAssistantReply(text);
+  const expiresAt = now + MESSENGER_PROMPT_MEMORY_TTL_MS;
+  const normalizedMessageId = messageId?.trim();
+  pruneRecentMessengerAssistantPrompts(now);
+  recentMessengerAssistantReplies.set(senderId, { text, expiresAt });
+  if (normalizedMessageId) {
+    recentMessengerAssistantRepliesByMessage.set(
+      messengerPromptMessageKey(senderId, normalizedMessageId),
+      { text, expiresAt },
+    );
+  }
+  if (!prompt) {
+    return;
+  }
+  recentMessengerAssistantPrompts.set(senderId, {
+    prompt,
+    expiresAt,
+  });
+  if (normalizedMessageId) {
+    recentMessengerAssistantPromptsByMessage.set(
+      messengerPromptMessageKey(senderId, normalizedMessageId),
+      { prompt, expiresAt },
+    );
+  }
+}
+
+function resolveRememberedMessengerAssistantPrompt(
+  senderId: string,
+  now = Date.now(),
+  replyToMessageId?: string,
+): string | null {
+  pruneRecentMessengerAssistantPrompts(now);
+  const normalizedMessageId = replyToMessageId?.trim();
+  if (normalizedMessageId) {
+    const exact = recentMessengerAssistantPromptsByMessage.get(
+      messengerPromptMessageKey(senderId, normalizedMessageId),
+    )?.prompt;
+    if (exact) {
+      return exact;
+    }
+  }
+  return recentMessengerAssistantPrompts.get(senderId)?.prompt ?? null;
+}
+
+function resolveMessengerAssistantReplyOptionPrompt(params: {
+  senderId: string;
+  text: string;
+  now?: number;
+  replyToMessageId?: string;
+}): string | null {
+  pruneRecentMessengerAssistantPrompts(params.now ?? Date.now());
+  const normalizedMessageId = params.replyToMessageId?.trim();
+  if (normalizedMessageId) {
+    const exactAssistantReply = recentMessengerAssistantRepliesByMessage.get(
+      messengerPromptMessageKey(params.senderId, normalizedMessageId),
+    )?.text;
+    if (exactAssistantReply) {
+      return extractNumberedImageOptionFromAssistantReply(exactAssistantReply, params.text);
+    }
+  }
+
+  const assistantReply = recentMessengerAssistantReplies.get(params.senderId)?.text;
+  return assistantReply
+    ? extractNumberedImageOptionFromAssistantReply(assistantReply, params.text)
+    : null;
+}
+
+function isPromptReferenceImageRequest(text: string): boolean {
+  const normalized = normalizeFastLaneText(text);
+  return (
+    /^(?:gebruik|use)\s+(?:deze|this)\s+prompt\s*(?:en\s+maak\s+(?:een\s+)?(?:afbeelding|foto|plaatje)|to\s+(?:make|create|generate)\s+(?:an?\s+)?(?:image|picture|photo))?\.?$/.test(
+      normalized,
+    ) ||
+    /^(?:maak|genereer|create|generate)\s+(?:deze|dit|this)\s*(?:afbeelding|foto|plaatje|image|picture|photo)?$/.test(
+      normalized,
+    ) ||
+    /^(?:maak|generate|create|go|start|ja|yes|ok|nr\s*\d+\s*go)$/.test(normalized) ||
+    selectedOptionNumber(text) !== null
+  );
+}
+
+function isExplicitPromptReferenceImageRequest(text: string): boolean {
+  const normalized = normalizeFastLaneText(text);
+  return (
+    /^(?:gebruik|use)\s+(?:deze|this)\s+prompt\s*(?:en\s+maak\s+(?:een\s+)?(?:afbeelding|foto|plaatje)|to\s+(?:make|create|generate)\s+(?:an?\s+)?(?:image|picture|photo))?\.?$/.test(
+      normalized,
+    ) ||
+    /^(?:maak|genereer|create|generate)\s+(?:deze|dit|this)\s*(?:afbeelding|foto|plaatje|image|picture|photo)?$/.test(
+      normalized,
+    )
+  );
+}
+
+export function resolveMessengerImagePromptFromUserText(params: {
+  senderId: string;
+  text: string;
+  now?: number;
+  replyToMessageId?: string;
+}): string | null {
+  const text = params.text.trim();
+  if (isPromptReferenceImageRequest(text)) {
+    return (
+      resolveMessengerAssistantReplyOptionPrompt(params) ??
+      resolveRememberedMessengerAssistantPrompt(
+        params.senderId,
+        params.now,
+        params.replyToMessageId,
+      )
+    );
+  }
+  const exactReplyPrompt = params.replyToMessageId
+    ? resolveRememberedMessengerAssistantPrompt(
+        params.senderId,
+        params.now,
+        params.replyToMessageId,
+      )
+    : null;
+  if (
+    exactReplyPrompt &&
+    (isPromptReferenceImageRequest(text) || hasMessengerImageGenerationIntent(text))
+  ) {
+    return exactReplyPrompt;
+  }
+  return text;
+}
+
+export function hasMessengerImageGenerationIntent(text: string): boolean {
+  const intent = resolveMessengerConversationIntent({ text });
+  return intent.kind === "generate_image" || intent.kind === "edit_source_image";
+}
+
+export function shouldForwardMessengerTextToImageGen(text: string): boolean {
+  return hasMessengerImageGenerationIntent(text);
+}
+
+type MessengerConversationIntentKind =
+  | "greeting"
+  | "help"
+  | "status"
+  | "generate_image"
+  | "edit_source_image"
+  | "analyze_image"
+  | "write_prompt"
+  | "unknown";
+
+export type MessengerConversationIntent = {
+  kind: MessengerConversationIntentKind;
+  confidence: number;
+  prompt?: string;
+};
+
+function hasExplicitImageGenerationIntent(normalized: string): boolean {
+  return /\b(restyle|restylen|restijlen|restijl|generate image|create image|maak afbeelding|maak een afbeelding|afbeelding maken|een afbeelding maken|genereer afbeelding|genereer een afbeelding|afbeelding genereren|een afbeelding genereren|maak plaatje|maak een plaatje|plaatje maken|een plaatje maken|bewerk foto|bewerk deze foto|foto bewerken|edit image|edit this image)\b/.test(
+    normalized,
+  );
+}
+
+function isLikelyVisualCreationRequest(normalizedText: string): boolean {
+  if (
+    /\b(planning|plan|lijst|tekst|bericht|mail|email|e mail|copy|caption|script|samenvatting|antwoord|reply|document|tabel|schema|code|functie|afspraak|reservering|boeking|schedule|appointment|reservation|booking|story|verhaal|gedicht|poem|letter)\b/.test(
+      normalizedText,
+    )
+  ) {
     return false;
   }
 
-  const explicitImageIntent = /\b(restyle|restylen|restijlen|restijl|generate image|create image|maak afbeelding|maak een afbeelding|afbeelding maken|een afbeelding maken|genereer afbeelding|genereer een afbeelding|afbeelding genereren|een afbeelding genereren|maak plaatje|maak een plaatje|plaatje maken|een plaatje maken|bewerk foto|bewerk deze foto|foto bewerken|edit image|edit this image)\b/.test(
+  const visualSubject =
+    "(?:foto|afbeelding|plaatje|beeld|illustratie|tekening|logo|poster|banner|cover|landschap|stad|scene|wereld|portret|character|personage|robot|soldaat|krijger|samurai|samoerai|ninja|superheld|stripheld|avatar|sticker|futuristische)";
+  const createBeforeSubject = new RegExp(
+    `\\b(?:maak|genereer|create|generate)\\s+(?:(?:me|mij)\\s+)?(?:een|de|het|an?|the)?\\s*(?:\\S+\\s+){0,4}?${visualSubject}\\b`,
+  );
+  const subjectBeforeCreate = new RegExp(
+    `\\b(?:kan je|kun je|kan jij|kun jij|could you|can you)\\s+(?:(?:me|mij|voor mij)\\s+)?(?:een|de|het|an?|the)?\\s*(?:\\S+\\s+){0,4}?${visualSubject}\\s+(?:maken|genereren|make|create|generate)\\b`,
+  );
+  const subjectThenCreate = new RegExp(
+    `\\b(?:\\S+\\s+){0,4}?${visualSubject}(?:\\S+\\s+){0,4}\\s+(?:maak|maken|genereer|genereren|make|create|generate)\\b`,
+  );
+  const broadCreateRequest =
+    /\b(?:maak|genereer|create|generate)\s+(?:(?:voor mij|voor me|me|mij)\s+)?(?:een|de|het|an?|the)\s+\S+(?:\s+\S+){0,12}\b/.test(
+      normalizedText,
+    );
+  const broadCanYouCreateRequest =
+    /\b(?:kan je|kun je|kan jij|kun jij|could you|can you)\s+(?:(?:voor mij|voor me|me|mij)\s+)?(?:een|de|het|an?|the)\s+\S+(?:\s+\S+){0,12}\s+(?:maken|genereren|make|create|generate)\b/.test(
+      normalizedText,
+    );
+  return (
+    createBeforeSubject.test(normalizedText) ||
+    subjectBeforeCreate.test(normalizedText) ||
+    subjectThenCreate.test(normalizedText) ||
+    broadCreateRequest ||
+    broadCanYouCreateRequest
+  );
+}
+
+export function hasMessengerSourceImageEditIntent(text: string): boolean {
+  const normalized = normalizeFastLaneText(text);
+  return /\b(restyle|restylen|restijlen|restijl|bewerk|bewerken|foto bewerken|edit image|edit this image|edit photo)\b/.test(
     normalized,
   );
-  if (explicitImageIntent) {
-    return true;
-  }
-  if (/\bmaak\s+(?:me|mij)\s+(?:een|de)?\s*\S+/.test(normalized)) {
-    return true;
-  }
+}
 
-  return /^(doe maar|ga maar|ja graag|yes please|ok(e)?|prima|top)$/.test(normalized);
+function hasMessengerPersonalSourceTransformIntent(normalizedText: string): boolean {
+  return (
+    /\b(?:maak|verander|tover)\s+(?:me|mij|hem|haar|ons|dit|deze)\s+(?:een|als|tot|in)\b/.test(
+      normalizedText,
+    ) ||
+    /\b(?:maak|verander|tover)\s+(?:me|mij|hem|haar|ons|dit|deze)\s+\S+/.test(
+      normalizedText,
+    ) ||
+    /\b(?:kan je|kun je|kan jij|kun jij)\s+(?:me|mij|hem|haar|ons|dit|deze)\s+\S+.*\b(?:maken|veranderen|omtoveren)\b/.test(
+      normalizedText,
+    ) ||
+    /\b(?:make|turn|transform)\s+(?:me|him|her|us|this)\s+(?:a|an|into)\b/.test(
+      normalizedText,
+    ) ||
+    /\b(?:can|could)\s+you\s+(?:make|turn|transform)\s+(?:me|him|her|us|this)\s+(?:a|an|into)\b/.test(
+      normalizedText,
+    )
+  );
+}
+
+function hasMessengerImageAnalysisIntent(normalizedText: string): boolean {
+  return /\b(wat zie je|wat staat er|beschrijf (?:deze )?foto|analyseer (?:deze )?foto|what do you see|describe (?:this )?(?:photo|image)|analy[sz]e (?:this )?(?:photo|image))\b/.test(
+    normalizedText,
+  );
+}
+
+function hasMessengerVisualCorrectionIntent(normalizedText: string): boolean {
+  const visualSubject =
+    "(?:samurai|samoerai|persoon|mens|man|vrouw|gezicht|paard|robot|soldaat|krijger|gladiator|ninja|stad|landschap|logo|poster|tekst|titel|zwaard|katana|helm|subject|person|face|horse|warrior|city|landscape|text|title|sword)";
+  return (
+    new RegExp(`\\b(?:ik\\s+zie|zie)\\s+(?:geen|niet\\s+de)\\s+${visualSubject}\\b`).test(
+      normalizedText,
+    ) ||
+    new RegExp(`\\b(?:maar|wel\\s+mooi\\s+maar|mooi\\s+maar)\\s+(?:geen|niet\\s+de)\\s+${visualSubject}\\b`).test(
+      normalizedText,
+    ) ||
+    new RegExp(`\\b(?:er\\s+mist|mist|ontbreekt)\\s+(?:een\\s+|de\\s+)?${visualSubject}\\b`).test(
+      normalizedText,
+    ) ||
+    new RegExp(`\\b(?:i\\s+do\\s+not\\s+see|i\\s+don't\\s+see|no|missing)\\s+(?:a\\s+|the\\s+)?${visualSubject}\\b`).test(
+      normalizedText,
+    )
+  );
 }
 
 function isMessengerPromptWritingRequest(normalizedText: string): boolean {
@@ -540,15 +887,58 @@ function isMessengerPromptWritingRequest(normalizedText: string): boolean {
   );
 }
 
+export function resolveMessengerConversationIntent(params: {
+  text: string;
+  hasSourceImage?: boolean;
+}): MessengerConversationIntent {
+  const prompt = params.text.trim();
+  const normalized = normalizeFastLaneText(prompt);
+  if (!normalized) {
+    return { kind: "unknown", confidence: 0 };
+  }
+  if (/^(hey|hi|hallo|hello|hoi|yo|goedemorgen|goedemiddag|goedenavond)$/.test(normalized)) {
+    return { kind: "greeting", confidence: 0.95 };
+  }
+  if (
+    /^(help|\/help|wat kan je|wat kun je|wat doe je|commands|commando's|mogelijkheden)$/.test(
+      normalized,
+    )
+  ) {
+    return { kind: "help", confidence: 0.95 };
+  }
+  if (/^(status|ping|ben je online|werkt dit|online)$/.test(normalized)) {
+    return { kind: "status", confidence: 0.95 };
+  }
+  if (isMessengerPromptWritingRequest(normalized)) {
+    return { kind: "write_prompt", confidence: 0.92, prompt };
+  }
+  if (hasMessengerImageAnalysisIntent(normalized)) {
+    return { kind: "analyze_image", confidence: 0.86, prompt };
+  }
+  if (params.hasSourceImage && hasMessengerPersonalSourceTransformIntent(normalized)) {
+    return { kind: "edit_source_image", confidence: 0.9, prompt };
+  }
+  if (hasMessengerVisualCorrectionIntent(normalized)) {
+    return { kind: "edit_source_image", confidence: 0.86, prompt };
+  }
+  if (hasMessengerSourceImageEditIntent(normalized)) {
+    return { kind: "edit_source_image", confidence: 0.92, prompt };
+  }
+  if (hasExplicitImageGenerationIntent(normalized) || isLikelyVisualCreationRequest(normalized)) {
+    return { kind: "generate_image", confidence: 0.88, prompt };
+  }
+  return { kind: "unknown", confidence: 0.2 };
+}
+
 export function resolveMessengerSourceImageGenerationPrompt(params: {
   hasSourceImage: boolean;
   text: string;
 }): string | null {
-  const prompt = params.text.trim();
-  if (!params.hasSourceImage || !prompt || !hasMessengerImageGenerationIntent(prompt)) {
+  const intent = resolveMessengerConversationIntent(params);
+  if (!params.hasSourceImage || intent.kind !== "edit_source_image" || !intent.prompt) {
     return null;
   }
-  return prompt;
+  return intent.prompt;
 }
 
 export function shouldForwardMessengerImageOnlyEventToImageGen(params: {
@@ -579,15 +969,58 @@ export function resolveMessengerFastLaneReply(
         intent,
         reply: "Online. Messenger is verbonden en ik kan je berichten ontvangen.",
       };
-    case "image":
-      return {
-        intent,
-        reply:
-          "Ik heb je afbeeldingsvraag ontvangen. Ik start nu de image generator — dit kan even duren.",
-      };
     default:
       return null;
   }
+}
+
+export function shouldDeliverMessengerReplyPayload(
+  payload: ReplyPayload,
+): payload is ReplyPayload & { text: string } {
+  if (!payload.text?.trim()) {
+    return false;
+  }
+  if (
+    payload.isReasoning ||
+    payload.isCompactionNotice ||
+    payload.isFallbackNotice
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isMessengerToolFeedbackPayload(payload: ReplyPayload & { text: string }): boolean {
+  if (isReplyPayloadNonTerminalToolErrorWarning(payload)) {
+    return true;
+  }
+  return (
+    payload.isStatusNotice === true &&
+    /\b(?:run|search|open|find|read|write|edit|tool)\b/i.test(payload.text) &&
+    /\b(?:failed|error|mislukt)\b/i.test(payload.text)
+  );
+}
+
+export function normalizeMessengerReplyPayloadForDelivery(
+  payload: ReplyPayload,
+): (ReplyPayload & { text: string }) | null {
+  const renderedPayload = renderMessengerReplyPayload(payload);
+  if (!shouldDeliverMessengerReplyPayload(renderedPayload)) {
+    return null;
+  }
+  if (!isMessengerToolFeedbackPayload(renderedPayload)) {
+    return renderedPayload;
+  }
+
+  const cleaned = renderedPayload.text
+    .replace(/^[\s!*\-:]+/u, "")
+    .replace(/\s+/g, " ")
+    .replace(/\bfailed\b/i, "is mislukt")
+    .trim();
+  return {
+    ...renderedPayload,
+    text: cleaned ? `Toolfeedback: ${cleaned}` : "Toolfeedback: actie is mislukt.",
+  };
 }
 
 function resolveImageGenRequestConfig():
@@ -702,6 +1135,12 @@ async function forwardLeaderbotMessengerEvent(params: {
 
 function hasMessengerInteractivePayload(event: MessengerWebhookMessaging): boolean {
   return Boolean(event.message?.quick_reply?.payload?.trim() || event.postback?.payload?.trim());
+}
+
+export function getOpenClawActionText(event: MessengerWebhookMessaging): string | null {
+  return decodeOpenClawActionPayload(
+    event.message?.quick_reply?.payload ?? event.postback?.payload,
+  );
 }
 
 export function shouldProcessMessengerMessageOnce(params: {
@@ -863,7 +1302,8 @@ async function processMessengerEvent(params: {
       return;
     }
     const senderId = params.event.sender?.id ?? "";
-    const text = params.event.message?.text ?? "";
+    const openClawActionText = getOpenClawActionText(params.event);
+    const text = openClawActionText ?? params.event.message?.text ?? "";
     const timestamp = params.event.timestamp ?? Date.now();
     if (
       !shouldProcessMessengerMessageOnce({
@@ -883,6 +1323,7 @@ async function processMessengerEvent(params: {
     }
     const attachments = extractMessengerAttachmentUrls(params.event);
     const sourceImageAttachment = attachments.find((attachment) => attachment.kind === "image");
+    const replyToMessageId = params.event.message?.reply_to?.mid;
     logVerbose(
       `messenger: received inbound event sender=${redactMessengerIdentifier(
         senderId,
@@ -890,7 +1331,7 @@ async function processMessengerEvent(params: {
         params.event.message?.mid ?? `${senderId}:${timestamp}`,
       )} media=${attachments.length}`,
     );
-    if (hasMessengerInteractivePayload(params.event)) {
+    if (!openClawActionText && hasMessengerInteractivePayload(params.event)) {
       logMessengerStage(params.trace, "messenger_interactive_payload_received", {
         quickReply: Boolean(params.event.message?.quick_reply?.payload),
         postback: Boolean(params.event.postback?.payload),
@@ -929,40 +1370,98 @@ async function processMessengerEvent(params: {
       }
     }
     if (sourceImageAttachment && sourceImageGenerationPrompt) {
-      const sourceImageUrl = sanitizeMessengerSourceImageUrl(sourceImageAttachment.url);
-      if (!sourceImageUrl) {
-        logMessengerStage(params.trace, "image_gen_request_skipped", {
-          reason: "unsafe_source_image_url",
-        });
-      } else {
-        logMessengerStage(params.trace, "image_gen_request_started", {
-          sourceImage: true,
-          hasPrompt: true,
-        });
-        const queued = await requestLeaderbotImageGeneration({
-          psid: senderId,
-          prompt: sourceImageGenerationPrompt,
-          reqId: params.trace.reqId,
-          timestamp,
-          trace: params.trace,
-          sourceImageUrl,
-        });
-        if (queued) {
-          return;
-        }
-        await sendMessengerText(
-          senderId,
-          "Ik kon de image generator nu niet bereiken. Ik kijk wel even naar je bericht.",
-          {
-            cfg: params.cfg,
-            accountId: params.account.accountId,
-          },
-        ).catch((err: unknown) => {
-          params.runtime.error?.(
-            danger(`messenger image generator fallback failed: ${String(err)}`),
-          );
-        });
+      logMessengerStage(params.trace, "messenger_event_forward_started", {
+        reason: "source_image_with_prompt",
+        sourceImage: true,
+        hasPrompt: true,
+      });
+      if (await forwardLeaderbotMessengerEvent({ event: params.event, trace: params.trace })) {
+        return;
       }
+      await sendMessengerText(
+        senderId,
+        "Ik kon de image generator nu niet bereiken. Ik kijk wel even naar je bericht.",
+        {
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+        },
+      ).catch((err: unknown) => {
+        params.runtime.error?.(
+          danger(`messenger image generator fallback failed: ${String(err)}`),
+        );
+      });
+    }
+    if (
+      attachments.length > 0 &&
+      !sourceImageGenerationPrompt &&
+      hasMessengerImageGenerationIntent(text)
+    ) {
+      logMessengerStage(params.trace, "messenger_event_forward_started", {
+        reason: "media_with_image_prompt",
+        isSourceImageEdit: false,
+        hasPrompt: true,
+      });
+      if (await forwardLeaderbotMessengerEvent({ event: params.event, trace: params.trace })) {
+        return;
+      }
+      await sendMessengerText(
+        senderId,
+        "Ik kon de image generator nu niet bereiken. Ik kijk wel even naar je bericht.",
+        {
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+        },
+      ).catch((err: unknown) => {
+        params.runtime.error?.(
+          danger(`messenger image generator fallback failed: ${String(err)}`),
+        );
+      });
+    }
+    const referencedPrompt = resolveMessengerImagePromptFromUserText({
+      senderId,
+      text,
+      replyToMessageId,
+    });
+    if (
+      attachments.length === 0 &&
+      referencedPrompt &&
+      referencedPrompt !== text.trim()
+    ) {
+      logMessengerStage(params.trace, "image_gen_request_started", {
+        sourceImage: false,
+        hasPrompt: true,
+        promptSource: replyToMessageId ? "messenger_reply" : "assistant_reference",
+      });
+      const queued = await requestLeaderbotImageGeneration({
+        psid: senderId,
+        prompt: referencedPrompt,
+        reqId: params.trace.reqId,
+        timestamp,
+        trace: params.trace,
+      });
+      if (queued) {
+        return;
+      }
+      await sendMessengerText(
+        senderId,
+        "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
+        {
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+        },
+      );
+      return;
+    }
+    if (
+      attachments.length === 0 &&
+      !referencedPrompt &&
+      isExplicitPromptReferenceImageRequest(text)
+    ) {
+      await sendMessengerText(senderId, MISSING_REFERENCED_PROMPT_REPLY, {
+        cfg: params.cfg,
+        accountId: params.account.accountId,
+      });
+      return;
     }
     const media = await resolveMessengerMedia({ attachments, trace: params.trace });
     const mediaPayload = buildChannelInboundMediaPayload(
@@ -981,6 +1480,25 @@ async function processMessengerEvent(params: {
     ]
       .filter(Boolean)
       .join("\n");
+    if (!hasMedia && shouldForwardMessengerTextToImageGen(text)) {
+      logMessengerStage(params.trace, "messenger_event_forward_started", {
+        reason: "text_image_intent",
+        sourceImage: false,
+        hasPrompt: true,
+      });
+      if (await forwardLeaderbotMessengerEvent({ event: params.event, trace: params.trace })) {
+        return;
+      }
+      await sendMessengerText(
+        senderId,
+        "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
+        {
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+        },
+      );
+      return;
+    }
     const fastLane = hasMedia ? null : resolveMessengerFastLaneReply(text);
     if (fastLane) {
       logMessengerStage(params.trace, "first_response_ready", { intent: fastLane.intent });
@@ -992,32 +1510,6 @@ async function processMessengerEvent(params: {
         intent: fastLane.intent,
         message: redactMessengerIdentifier(result.messageId),
       });
-      if (fastLane.intent === "image") {
-        void requestLeaderbotImageGeneration({
-          psid: senderId,
-          prompt: text,
-          reqId: params.trace.reqId,
-          timestamp,
-          trace: params.trace,
-        })
-          .then(async (queued) => {
-            if (!queued) {
-              await sendMessengerText(
-                senderId,
-                "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
-                {
-                  cfg: params.cfg,
-                  accountId: params.account.accountId,
-                },
-              );
-            }
-          })
-          .catch((error: unknown) => {
-            params.runtime.error?.(
-              danger(`messenger image generation flow failed: ${String(error)}`),
-            );
-          });
-      }
       return;
     }
     await sendMessengerSenderAction(senderId, "typing_on", {
@@ -1111,21 +1603,29 @@ async function processMessengerEvent(params: {
         replyPipeline: {},
         delivery: {
           deliver: async (payload: ReplyPayload) => {
-            if (!payload.text?.trim()) {
+            const deliveryPayload = normalizeMessengerReplyPayloadForDelivery(payload);
+            if (!deliveryPayload) {
               return { visibleReplySent: false };
             }
             logMessengerStage(params.trace, "first_response_ready", {
               openclawSessionId: route.sessionKey,
             });
-            const result = await sendMessengerText(senderId, payload.text, {
+            const result = await sendMessengerText(senderId, deliveryPayload.text, {
               cfg: params.cfg,
               accountId: params.account.accountId,
+              quickReplies: getMessengerQuickReplies(deliveryPayload),
             });
+            rememberMessengerAssistantPrompt(
+              senderId,
+              deliveryPayload.text,
+              Date.now(),
+              result.messageId,
+            );
             logMessengerStage(params.trace, "messenger_response_sent", {
               message: redactMessengerIdentifier(result.messageId),
             });
             logVerbose(
-              `messenger: sent ${payload.text.length} char reply to ${redactMessengerIdentifier(
+              `messenger: sent ${deliveryPayload.text.length} char reply to ${redactMessengerIdentifier(
                 senderId,
               )} message=${redactMessengerIdentifier(result.messageId)}`,
             );

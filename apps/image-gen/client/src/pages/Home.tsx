@@ -9,19 +9,19 @@ function Home() {
         </div>
         <h1 className="mb-2 text-4xl font-bold text-slate-50">Leaderbot</h1>
         <p className="mb-8 text-lg text-slate-300">
-          Transform your photos with AI styles. Message us to get started!
+          Create new images from prompts or edit photos with natural language.
         </p>
         <div className="rounded-lg border border-slate-800 bg-slate-900/80 p-6 shadow-lg shadow-slate-950/30">
           <h2 className="mb-4 text-xl font-bold text-slate-100">How to Use</h2>
           <ol className="space-y-2 text-left text-slate-300">
-            <li><strong>1.</strong> Send a 'hi' or photo on Messenger</li>
-            <li><strong>2.</strong> Pick a style (Disco, Anime, Gold, etc.)</li>
-            <li><strong>3.</strong> Get your transformed image</li>
-            <li><strong>4.</strong> 3 free images per day!</li>
+            <li><strong>1.</strong> Describe the image you want in Messenger</li>
+            <li><strong>2.</strong> Or send a photo and say what should change</li>
+            <li><strong>3.</strong> Get your generated image when it is ready</li>
+            <li><strong>4.</strong> 3 free images per day</li>
           </ol>
         </div>
         <p className="mt-6 text-sm text-slate-400">
-          Find us on Facebook Messenger and start transforming your photos today.
+          Find us on Facebook Messenger and start creating images today.
         </p>
       </div>
     </div>

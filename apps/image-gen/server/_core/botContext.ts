@@ -7,10 +7,9 @@ import type {
   ConversationState,
   MessengerUserState,
 } from "./messengerState";
-import type { QuickReply } from "./messengerApi";
-import type { Style } from "./messengerStyles";
+import type { ConversationAction } from "./botResponse";
 import type { GenerationStatsSnapshot } from "./botRuntimeStats";
-import type { DirectorMode } from "./image-generation/director/directorTypes";
+import type { GenerationKind } from "./image-generation/generationTypes";
 
 export type FeatureResult = { handled: true } | { handled: false };
 
@@ -30,19 +29,13 @@ type BotContextBase = {
   state: MessengerUserState;
   sendText(text: string): Promise<void>;
   sendImage(url: string): Promise<void>;
-  sendQuickReplies(text: string, replies: QuickReply[]): Promise<void>;
-  sendStateQuickReplies(
-    state: ConversationState,
-    text: string
-  ): Promise<void>;
+  sendActions(text: string, actions: ConversationAction[]): Promise<void>;
   setFlowState(state: ConversationState): Promise<void>;
-  preselectStyle(style: Style | null): Promise<void>;
-  chooseStyle(style: Style): Promise<void>;
-  runStyleGeneration(
-    style: Style,
+  clearImageContext?(): Promise<void>;
+  runImageGeneration(
     sourceImageUrl?: string,
     promptHint?: string,
-    directorMode?: DirectorMode
+    generationKind?: GenerationKind
   ): Promise<void>;
   getRuntimeStats(): GenerationStatsSnapshot;
   logger: BotLogger;

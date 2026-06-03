@@ -9,7 +9,12 @@ import {
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { type ChannelPlugin, type ResolvedMessengerAccount } from "./channel-api.js";
 import { FACEBOOK_CHANNEL_ID } from "./naming.js";
-import { getMessengerQuickReplies, renderMessengerPresentationPayload } from "./presentation.js";
+import {
+  MESSENGER_QUICK_REPLY_MAX_COUNT,
+  getMessengerQuickReplies,
+  renderMessengerPresentationPayload,
+  renderMessengerReplyPayload,
+} from "./presentation.js";
 import { getMessengerRuntime } from "./runtime.js";
 import { MESSENGER_TEXT_CHUNK_LIMIT } from "./send.js";
 
@@ -26,8 +31,8 @@ export const messengerOutboundAdapter: NonNullable<
     selects: true,
     limits: {
       actions: {
-        maxActions: 4,
-        maxActionsPerRow: 4,
+        maxActions: MESSENGER_QUICK_REPLY_MAX_COUNT,
+        maxActionsPerRow: MESSENGER_QUICK_REPLY_MAX_COUNT,
         maxRows: 1,
         maxLabelLength: 20,
         maxValueBytes: 1000,
@@ -35,7 +40,7 @@ export const messengerOutboundAdapter: NonNullable<
         supportsDisabled: false,
       },
       selects: {
-        maxOptions: 4,
+        maxOptions: MESSENGER_QUICK_REPLY_MAX_COUNT,
         maxLabelLength: 20,
         maxValueBytes: 1000,
       },
@@ -50,13 +55,14 @@ export const messengerOutboundAdapter: NonNullable<
     renderMessengerPresentationPayload({ payload, presentation }),
   chunker: (text, limit) => getMessengerRuntime().channel.text.chunkMarkdownText(text, limit),
   sendPayload: async ({ to, payload, accountId, cfg }) => {
+    const deliveryPayload = renderMessengerReplyPayload(payload);
     const sendText =
       getMessengerRuntime().channel.facebook?.sendMessengerText ??
       (await loadMessengerRuntime()).sendMessengerText;
-    const result = await sendText(to, payload.text ?? "", {
+    const result = await sendText(to, deliveryPayload.text ?? "", {
       cfg,
       accountId: accountId ?? undefined,
-      quickReplies: getMessengerQuickReplies(payload),
+      quickReplies: getMessengerQuickReplies(deliveryPayload),
     });
     return createEmptyChannelResult(FACEBOOK_CHANNEL_ID, {
       messageId: result.messageId,

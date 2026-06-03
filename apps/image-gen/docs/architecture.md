@@ -8,7 +8,7 @@ Leaderbot runs as one Node.js process (Express + HTTP server):
 - Accepts WhatsApp webhook traffic on the same Meta callback route.
 - Supports outbound WhatsApp Cloud API sends.
 - Shares normalized text/domain handling across Messenger and WhatsApp.
-- Executes conversation flow + generation orchestration.
+- Executes conversation flow + image-generation orchestration.
 - Serves static assets (`/generated`, web build output).
 - Exposes health/version/debug endpoints.
 - Exposes an admin face-memory kill switch when `ADMIN_TOKEN` is configured.
@@ -19,7 +19,7 @@ Primary bootstrap is in `server/_core/index.ts`.
 
 The bot runtime now has an explicit boundary in `server/_core/bot/index.ts`, with future feature hooks centralized in `server/_core/bot/features.ts`.
 
-The repository still contains some experimental experience-routing modules behind a shared router + registry boundary, but that path is not the active product direction for Leaderbot.
+The active product direction is generic prompt-first image generation. Source-photo edits remain supported through natural-language prompts; legacy style-picker menus and payloads are no longer the default interaction model.
 
 ## Architecture diagrams
 
@@ -122,8 +122,8 @@ flowchart TD
 6. Shared text/domain logic runs in `server/_core/sharedTextHandler.ts`.
 7. Shared logic returns channel-agnostic outbound intents (`BotResponse`).
 8. Channel adapters translate those intents into Messenger or WhatsApp sends.
-9. Image/style flow state is still updated directly in channel orchestration (`setFlowState`, `setPendingImage`, `setChosenStyle`, ...), with WhatsApp using plain-text prompts where Messenger uses richer UI affordances.
-10. If Messenger face memory is enabled, the first source-photo upload asks for explicit 30-day reuse consent before showing style options.
+9. Image flow state is still updated directly in channel orchestration (`setFlowState`, `setPendingImage`, `setLastGenerationContext`, ...). Messenger now treats free image prompts as text-to-image by default; source-image generation only uses a stored/uploaded photo when the user explicitly asks to edit/restyle that photo.
+10. If Messenger face memory is enabled, the first source-photo upload asks for explicit reuse consent for the configured retention window before asking for a natural-language edit prompt.
 11. If generation is triggered:
    - state -> `PROCESSING`,
    - OpenAI image generator configuration,
@@ -171,7 +171,7 @@ Core files:
 - stage/status (`IDLE` .. `FAILURE`)
 - latest photo URL fields
 - latest photo provenance (`external` vs `stored`)
-- selected style and optional preselected referral style
+- legacy style fields are ignored during state normalization
 - preferred language
 - pending/generated image references
 - optional face-memory consent and retained source-image URL fields
@@ -233,15 +233,17 @@ The current bot boundary is intentionally incremental:
 
 This keeps Messenger and WhatsApp aligned for text without forcing media/image abstractions before the contracts are ready.
 
-## 5c) Experimental experience routing
+## 5c) Legacy and experimental paths
 
-The codebase still contains some experimental experience-routing modules that were built separately from the legacy style flow.
+The active image product is prompt-first. The old style-catalog UI, preview assets, state quick replies, referral-style entry, and Messenger/WhatsApp style-picker menu paths have been removed from the default runtime.
 
 Important repository rule:
 
-- these modules are not the active Leaderbot roadmap
-- current documentation and maintenance should prioritize the production styling flow
-- any future cleanup of those modules should be handled as a dedicated code-removal/refactor task
+- generic prompt-first image generation is the active roadmap
+- legacy Messenger style payloads (`CHOOSE_STYLE`, `STYLE_*`, `RETRY_STYLE*`) are treated as stale/unknown payloads, not active product choices
+- stale internal `style_restyle` jobs are normalized to prompt-first `source_image_edit` jobs
+- new product behavior should originate in conversation responses/actions and be rendered at the channel edge
+- remaining cleanup should happen in small PRs after tests prove the replacement behavior
 
 ## 6) Deployment model
 
@@ -336,6 +338,8 @@ This means Cloudflare currently sits behind the storage proxy for durable asset 
 - Webhook acknowledgement is immediate; heavy work is deferred.
 - Inbound dedupe reduces duplicate event processing.
 - Generation failures produce user-facing retry options.
+- Image-generation success/failure follow-ups, contextual help choices, and Messenger consent/delete choices originate as channel-neutral conversation actions and are rendered as Messenger quick replies at the channel edge.
+- New Messenger photo-upload state is prompt-first (`AWAITING_EDIT_PROMPT`); legacy `AWAITING_STYLE` persisted state is normalized for compatibility only.
 - Health endpoints + version endpoint support simple monitoring.
 - Face-memory deletion is available through user command, scheduled expiry, and admin kill switch.
 

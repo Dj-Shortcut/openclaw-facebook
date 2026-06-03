@@ -1,6 +1,4 @@
 import {
-  sendButtonTemplate,
-  sendGenericTemplate,
   sendImage,
   sendQuickReplies,
   sendText,
@@ -8,43 +6,35 @@ import {
 } from "./messengerApi";
 import type { MessengerSendOutcome } from "./messengerApi";
 import { getGenerationMetrics } from "./image-generation/openAiImageClient";
-import { getConfiguredBaseUrl } from "./image-generation/imageServiceConfig";
 import { executeGenerationFlow } from "./generationFlow";
+import {
+  buildFaceMemoryConsentResponse,
+  buildGenerationFailureResponse,
+  buildGenerationSuccessResponse,
+  buildPhotoReceivedResponse,
+  buildQuickStartResponse,
+} from "./conversationActions";
+import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 import {
   clearPendingImageState,
   getOrCreateState,
-  setChosenStyle,
   setFlowState,
   setLastGenerated,
   setLastGenerationContext,
   setPendingStoredImage,
-  setPreselectedStyle,
   setLastUserMessageAt,
   anonymizePsid,
   type ConversationState,
 } from "./messengerState";
-import { FACE_MEMORY_CONSENT_NO, FACE_MEMORY_CONSENT_YES } from "./faceMemory";
 import { t, type Lang } from "./i18n";
 import { toLogUser, toUserKey } from "./privacy";
 import { normalizeMessengerInboundImage } from "./messengerImageIngress";
-import {
-  getStylesForCategory,
-  type Style,
-  type StyleCategory,
-} from "./messengerStyles";
 import { claimWebhookReplayKey } from "./webhookReplayProtection";
 import {
   type FacebookWebhookEntry,
   type FacebookWebhookEvent,
   getEventDedupeKey,
   getGreetingResponse,
-  parseReferralStyle,
-  parseStyle,
-  STYLE_CATEGORY_LABELS,
-  STYLE_LABELS,
-  STYLE_OPTIONS,
-  toMessengerReplies,
-  toMessengerStyleReplies,
 } from "./webhookHelpers";
 import { hasInFlightGeneration, runGuardedGeneration } from "./generationGuard";
 import { canGenerate, getFreeDailyLimit, increment } from "./messengerQuota";
@@ -61,7 +51,7 @@ import type {
   BotTextContext,
   BotImageContext,
 } from "./botContext";
-import type { DirectorMode } from "./image-generation/director/directorTypes";
+import type { GenerationKind } from "./image-generation/generationTypes";
 import { emitGenerationDiagnostic } from "./generationDiagnostics";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
@@ -80,10 +70,14 @@ import {
   combineMessengerSendOutcomes,
   type MaybeInFlightMessageResult,
 } from "./webhookFallback";
+import {
+  isExplicitSourceImageEditRequest,
+  isSourceImageTransformRequest,
+  isVisualCorrectionRequest,
+} from "./imageIntent";
 
 type HandlerDeps = {
   defaultLang: Lang;
-  privacyPolicyUrl: string;
 };
 
 type InternalMessengerImageRequestInput = {
@@ -91,12 +85,11 @@ type InternalMessengerImageRequestInput = {
   prompt: string;
   reqId: string;
   lang?: Lang;
-  style?: Style;
   timestamp?: number;
   sourceImageUrl?: string;
 };
 
-export class InternalMessengerImageRequestNotQueuedError extends Error {
+class InternalMessengerImageRequestNotQueuedError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "InternalMessengerImageRequestNotQueuedError";
@@ -105,49 +98,6 @@ export class InternalMessengerImageRequestNotQueuedError extends Error {
 
 type FeatureContextBase = Omit<BotPayloadContext, "payload">;
 type MessengerState = Awaited<ReturnType<typeof getOrCreateState>>;
-function normalizeImageRequestText(text: string): string {
-  return text.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
-}
-
-function inferStyleFromImageRequest(text: string): Style {
-  const direct = parseStyle(text);
-  if (direct) {
-    return direct;
-  }
-
-  const normalized = normalizeImageRequestText(text);
-  for (const style of STYLE_OPTIONS) {
-    const styleLabel = normalizeImageRequestText(STYLE_LABELS[style]);
-    const styleId = normalizeImageRequestText(style);
-    if (normalized.includes(styleLabel) || normalized.includes(styleId)) {
-      return style;
-    }
-  }
-
-  if (/\b(cyber|neon|future|futuristisch)\b/.test(normalized)) {
-    return "cyberpunk";
-  }
-  if (/\b(cinema|cinematic|film|movie|dramatisch)\b/.test(normalized)) {
-    return "cinematic";
-  }
-  if (/\b(olie|oil|painting|schilderij)\b/.test(normalized)) {
-    return "oil-paint";
-  }
-  if (/\b(gold|goud|luxury|luxe)\b/.test(normalized)) {
-    return "gold";
-  }
-  if (/\b(disco|glow|party)\b/.test(normalized)) {
-    return "disco";
-  }
-  if (/\b(wolk|cloud|clouds|hemel)\b/.test(normalized)) {
-    return "clouds";
-  }
-  if (/\b(caricature|karikatuur)\b/.test(normalized)) {
-    return "caricature";
-  }
-
-  return "storybook-anime";
-}
 
 export type HandlerContext = {
   defaultLang: Lang;
@@ -184,19 +134,6 @@ export type HandlerContext = {
   ) => BotTextContext;
   debugWebhookLog: (message: Record<string, unknown>) => void;
   getAttachmentHostname: (url: string) => string | null;
-  handleStyleSelection: (
-    psid: string,
-    userId: string,
-    selectedStyle: Style,
-    reqId: string,
-    lang: Lang
-  ) => Promise<MessengerSendOutcome>;
-  handleReferralStyleEvent: (
-    psid: string,
-    referralRef: string | undefined,
-    lang: Lang,
-    reqId: string
-  ) => Promise<MaybeInFlightMessageResult>;
   logImageFlowDecision: (input: {
     psid: string;
     userId: string;
@@ -204,12 +141,7 @@ export type HandlerContext = {
     stage: string;
     hadPreviousPhoto: boolean;
     incomingImageUrl: string;
-    selectedStyle: string | null;
-    preselectedStyle: string | null;
-    action:
-      | "show_style_picker"
-      | "auto_run_preselected_style"
-      | "auto_run_selected_style";
+    action: "request_edit_prompt";
   }) => void;
   logIncomingMessage: (
     psid: string,
@@ -228,15 +160,14 @@ export type HandlerContext = {
     psid: string,
     reqId: string
   ) => Promise<MaybeInFlightMessageResult>;
-  runStyleGeneration: (
+  runImageGeneration: (
     psid: string,
     userId: string,
-    style: Style,
     reqId: string,
     lang: Lang,
     sourceImageUrl?: string,
     promptHint?: string,
-    directorMode?: DirectorMode
+    generationKind?: GenerationKind
   ) => Promise<MessengerSendOutcome>;
   sendFaceMemoryConsentPrompt: (
     psid: string,
@@ -273,32 +204,10 @@ export type HandlerContext = {
     lang: Lang,
     reqId: string
   ) => Promise<MessengerSendOutcome>;
-  sendPrivacyInfo: (
-    psid: string,
-    lang: Lang,
-    reqId: string
-  ) => Promise<MessengerSendOutcome>;
-  sendStateQuickReplies: (
-    psid: string,
-    stateName: ConversationState,
-    text: string,
-    reqId: string
-  ) => Promise<MessengerSendOutcome>;
-  sendStyleOptionsForCategory: (
-    psid: string,
-    category: StyleCategory,
-    lang: Lang,
-    reqId: string
-  ) => Promise<MessengerSendOutcome>;
-  sendStylePicker: (
-    psid: string,
-    lang: Lang,
-    reqId: string
-  ) => Promise<MessengerSendOutcome>;
 };
 
 const IN_FLIGHT_MESSAGE =
-  "\u23F3 even geduld, ik ben nog bezig met jouw restyle";
+  "Even geduld, ik ben nog bezig met je afbeelding.";
 const IN_FLIGHT_NOTICE_COOLDOWN_MS = 30_000;
 const inFlightNoticeSent = new Map<string, number>();
 const MESSENGER_CAPABILITIES = Object.freeze({
@@ -306,10 +215,7 @@ const MESSENGER_CAPABILITIES = Object.freeze({
   richTemplates: true,
 });
 
-export function createWebhookHandlers({
-  defaultLang,
-  privacyPolicyUrl,
-}: HandlerDeps) {
+export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
   ensureDefaultBotFeaturesRegistered();
 
   function debugWebhookLog(message: Record<string, unknown>): void {
@@ -317,7 +223,9 @@ export function createWebhookHandlers({
       return;
     }
 
-    console.log(JSON.stringify(message));
+    const event =
+      typeof message.msg === "string" ? message.msg : "webhook_debug";
+    safeLog(event, { level: "debug", ...message });
   }
 
   function getAttachmentHostname(url: string): string | null {
@@ -393,8 +301,6 @@ export function createWebhookHandlers({
       stage: state.stage,
       hasSeenIntro: state.hasSeenIntro,
       hasLastPhoto: Boolean(state.lastPhotoUrl),
-      selectedStyle: state.selectedStyle ?? null,
-      preselectedStyle: state.preselectedStyle ?? null,
       preferredLang: state.preferredLang ?? null,
     });
   }
@@ -452,105 +358,6 @@ export function createWebhookHandlers({
     return await sendImage(psid, imageUrl);
   }
 
-  async function sendStateQuickReplies(
-    psid: string,
-    state: ConversationState,
-    text: string,
-    reqId: string
-  ): Promise<MessengerSendOutcome> {
-    const replies = toMessengerReplies(state);
-    if (replies.length === 0) {
-      return await sendLoggedText(psid, text, reqId);
-    }
-
-    return await sendLoggedQuickReplies(psid, text, replies, reqId);
-  }
-
-  function resolvePrivacyPolicyUrl(): string | undefined {
-    const trimmed = privacyPolicyUrl.trim();
-    if (/^https?:\/\//i.test(trimmed)) {
-      return trimmed;
-    }
-
-    const appBaseUrl = getConfiguredBaseUrl();
-    if (appBaseUrl) {
-      return `${appBaseUrl}/privacy`;
-    }
-
-    return undefined;
-  }
-
-  function resolveStylePreviewUrl(style: Style): string | undefined {
-    const appBaseUrl = getConfiguredBaseUrl();
-    if (!appBaseUrl) {
-      return undefined;
-    }
-
-    return `${appBaseUrl}/style-previews/${style}.png`;
-  }
-
-  async function sendLoggedGenericTemplate(
-    psid: string,
-    elements: Parameters<typeof sendGenericTemplate>[1],
-    reqId: string
-  ): Promise<MessengerSendOutcome> {
-    debugWebhookLog({
-      level: "debug",
-      msg: "outgoing_message",
-      kind: "generic_template",
-      reqId,
-      psidHash: anonymizePsid(psid).slice(0, 12),
-      elements: elements.map(element => ({
-        title: element.title,
-        subtitle: element.subtitle,
-        imageUrl: element.image_url,
-        buttons: element.buttons?.map(button => {
-          if (button.type === "web_url") {
-            return {
-              type: button.type,
-              title: button.title,
-            };
-          }
-
-          return {
-            type: button.type,
-            title: button.title,
-            payload: button.payload,
-          };
-        }),
-      })),
-    });
-    return await sendGenericTemplate(psid, elements);
-  }
-
-  async function sendLoggedButtonTemplate(
-    psid: string,
-    text: string,
-    buttons: Parameters<typeof sendButtonTemplate>[2],
-    reqId: string
-  ): Promise<MessengerSendOutcome> {
-    debugWebhookLog({
-      level: "debug",
-      msg: "outgoing_message",
-      kind: "button_template",
-      reqId,
-      psidHash: anonymizePsid(psid).slice(0, 12),
-      text,
-      buttons: buttons.map(button => {
-        if (button.type === "web_url") {
-          return { type: button.type, title: button.title };
-        }
-
-        return {
-          type: button.type,
-          title: button.title,
-          payload: button.payload,
-        };
-      }),
-    });
-    return await sendButtonTemplate(psid, text, buttons);
-  }
-
   function createFeatureLogger(userId: string): BotLogger {
     return {
       info(event, details = {}) {
@@ -586,36 +393,39 @@ export function createWebhookHandlers({
       sendImage: async imageUrl => {
         await sendLoggedImage(psid, imageUrl, reqId);
       },
-      sendQuickReplies: async (text, replies) => {
-        await sendLoggedQuickReplies(psid, text, replies, reqId);
-      },
-      sendStateQuickReplies: async (nextState, text) => {
-        await sendStateQuickReplies(psid, nextState, text, reqId);
+      sendActions: async (text, actions) => {
+        await sendLoggedQuickReplies(
+          psid,
+          text,
+          renderMessengerQuickReplies(actions),
+          reqId
+        );
       },
       setFlowState: async nextState => {
         await setFlowState(psid, nextState);
+        if (userId !== psid) {
+          await setFlowState(userId, nextState);
+        }
       },
-      preselectStyle: async style => {
-        await setPreselectedStyle(psid, style);
+      clearImageContext: async () => {
+        await clearPendingImageState(psid);
+        if (userId !== psid) {
+          await clearPendingImageState(userId);
+        }
       },
-      chooseStyle: async style => {
-        await handleStyleSelection(psid, userId, style, reqId, lang);
-      },
-      runStyleGeneration: async (
-        style,
+      runImageGeneration: async (
         sourceImageUrl,
         promptHint,
-        directorMode
+        generationKind
       ) => {
-        await runStyleGeneration(
+        await runImageGeneration(
           psid,
           userId,
-          style,
           reqId,
           lang,
           sourceImageUrl,
           promptHint,
-          directorMode
+          generationKind
         );
       },
       getRuntimeStats: () => getTodayRuntimeStats(),
@@ -676,12 +486,7 @@ export function createWebhookHandlers({
     stage: string;
     hadPreviousPhoto: boolean;
     incomingImageUrl: string;
-    selectedStyle: string | null;
-    preselectedStyle: string | null;
-    action:
-      | "show_style_picker"
-      | "auto_run_preselected_style"
-      | "auto_run_selected_style";
+    action: "request_edit_prompt";
   }): void {
     safeLog("messenger_image_flow_decision", {
       reqId: input.reqId,
@@ -690,79 +495,21 @@ export function createWebhookHandlers({
       stage: input.stage,
       hadPreviousPhoto: input.hadPreviousPhoto,
       incomingImageHost: getAttachmentHostname(input.incomingImageUrl),
-      selectedStyle: input.selectedStyle,
-      preselectedStyle: input.preselectedStyle,
       action: input.action,
     });
   }
-
-  async function sendStylePicker(
-    psid: string,
-    lang: Lang,
-    reqId: string
-  ): Promise<MessengerSendOutcome> {
-    return await sendStateQuickReplies(
-      psid,
-      "AWAITING_STYLE",
-      t(lang, "styleCategoryPicker"),
-      reqId
-    );
-  }
-
-  async function sendStyleOptionsForCategory(
-    psid: string,
-    category: StyleCategory,
-    lang: Lang,
-    reqId: string
-  ): Promise<MessengerSendOutcome> {
-    const styles = getStylesForCategory(category);
-    const categoryLabel = STYLE_CATEGORY_LABELS[category];
-    const introText = t(lang, "styleCategoryCarouselIntro", {
-      styleLabel: categoryLabel.toLowerCase(),
-    });
-
-    try {
-      const introOutcome = await sendLoggedText(psid, introText, reqId);
-      const templateOutcome = await sendLoggedGenericTemplate(
-        psid,
-        styles.map(style => ({
-          title: STYLE_LABELS[style.style],
-          subtitle:
-            lang === "en" ? `${categoryLabel} style` : `${categoryLabel}-stijl`,
-          image_url: resolveStylePreviewUrl(style.style),
-          buttons: [
-            {
-              type: "postback",
-              title: lang === "en" ? "Choose" : "Kies",
-              payload: style.payload,
-            },
-          ],
-        })),
-        reqId
-      );
-      return combineMessengerSendOutcomes(introOutcome, templateOutcome);
-    } catch (error) {
-      safeLog("style_category_carousel_failed", {
-        user: toLogUser(psid),
-        category,
-        errorCode: error instanceof Error ? error.name : "unknown_error",
-      });
-    }
-
-    return await sendLoggedQuickReplies(
-      psid,
-      introText,
-      toMessengerStyleReplies(category, lang),
-      reqId
-    );
-  }
-
   async function sendPhotoReceivedPrompt(
     psid: string,
     lang: Lang,
     reqId: string
   ): Promise<MessengerSendOutcome> {
-    return await sendStylePicker(psid, lang, reqId);
+    const response = buildPhotoReceivedResponse(lang);
+    return await sendLoggedQuickReplies(
+      psid,
+      response.text ?? "",
+      renderMessengerQuickReplies(response.actions),
+      reqId
+    );
   }
 
   async function sendFaceMemoryConsentPrompt(
@@ -770,23 +517,11 @@ export function createWebhookHandlers({
     lang: Lang,
     reqId: string
   ): Promise<MessengerSendOutcome> {
+    const response = buildFaceMemoryConsentResponse(lang);
     return await sendLoggedQuickReplies(
       psid,
-      lang === "en"
-        ? 'May I keep your photo for 30 days? Then you do not have to upload it again every time. You can delete it any time with "delete my data".'
-        : 'Mag ik je foto 30 dagen bewaren? Dan hoef je niet steeds opnieuw te uploaden. Je kan dit altijd wissen met "verwijder mijn data".',
-      [
-        {
-          content_type: "text",
-          title: lang === "en" ? "Yes, 30 days" : "Ja, 30 dagen",
-          payload: FACE_MEMORY_CONSENT_YES,
-        },
-        {
-          content_type: "text",
-          title: lang === "en" ? "No" : "Nee",
-          payload: FACE_MEMORY_CONSENT_NO,
-        },
-      ],
+      response.text ?? "",
+      renderMessengerQuickReplies(response.actions),
       reqId
     );
   }
@@ -796,41 +531,29 @@ export function createWebhookHandlers({
     lang: Lang,
     reqId: string
   ): Promise<void> {
-    await sendStateQuickReplies(
+    const response = buildQuickStartResponse(lang);
+    await sendLoggedQuickReplies(
       psid,
-      "IDLE",
-      t(lang, "flowExplanation"),
+      response.text ?? "",
+      renderMessengerQuickReplies(response.actions),
       reqId
     );
   }
 
-  async function sendReferralPhotoPrompt(
-    psid: string,
-    style: Style,
-    lang: Lang,
-    reqId: string
-  ): Promise<MessengerSendOutcome> {
-    const styleLabel = STYLE_LABELS[style];
-    const text =
-      lang === "en"
-        ? `You came in via ${styleLabel}. Send a photo to start `
-        : `Je bent binnengekomen via ${styleLabel}. Stuur een foto om te starten `;
-    return await sendLoggedText(psid, text, reqId);
-  }
-
-  async function executeStyleGenerationJob(
+  async function executeImageGenerationJob(
     job: MessengerGenerationJob
   ): Promise<MessengerSendOutcome> {
     const {
       psid,
       userId,
-      style,
+      generationKind,
       reqId,
       lang,
       sourceImageUrl,
       promptHint,
-      directorMode,
     } = job;
+    const resolvedGenerationKind =
+      generationKind ?? (sourceImageUrl ? "source_image_edit" : "text_to_image");
     let sendOutcome: MessengerSendOutcome = MESSENGER_SEND_SKIPPED;
     const rememberSendOutcome = (outcome: MessengerSendOutcome) => {
       sendOutcome = combineMessengerSendOutcomes(sendOutcome, outcome);
@@ -850,18 +573,16 @@ export function createWebhookHandlers({
             reqId,
             expectedUser: toLogUser(userId),
             completionUser: toLogUser(completedGeneration.userKey),
-            style,
+            generationKind: resolvedGenerationKind,
           });
         } else {
           safeLog("messenger_generation_job_duplicate_completed", {
             reqId,
             user: toLogUser(userId),
-            style,
+            generationKind: resolvedGenerationKind,
           });
           await setLastGenerated(psid, completedGeneration.imageUrl);
           await setLastGenerationContext(psid, {
-            style,
-            directorMode,
             prompt: promptHint,
           });
           await setFlowState(psid, "IDLE");
@@ -874,18 +595,14 @@ export function createWebhookHandlers({
       const bypassRaw = process.env.MESSENGER_QUOTA_BYPASS_IDS ?? "";
       const bypassApplied =
         bypassRaw.includes(psid) || bypassRaw.includes(quotaState.userKey);
-      console.log(
-        JSON.stringify({
-          level: "info",
-          msg: "quota_decision",
-          action: "check",
-          psidHash: anonymizePsid(psid).slice(0, 12),
-          count: quotaState.quota.count,
-          limit: getFreeDailyLimit(),
-          bypassApplied,
-          allowed,
-        })
-      );
+      safeLog("quota_decision", {
+        action: "check",
+        psidHash: anonymizePsid(psid).slice(0, 12),
+        count: quotaState.quota.count,
+        limit: getFreeDailyLimit(),
+        bypassApplied,
+        allowed,
+      });
       if (!allowed) {
         rememberSendOutcome(
           await sendLoggedText(
@@ -896,7 +613,7 @@ export function createWebhookHandlers({
             reqId
           )
         );
-        await setFlowState(psid, "AWAITING_STYLE");
+        await setFlowState(psid, "AWAITING_EDIT_PROMPT");
         return;
       }
 
@@ -904,70 +621,76 @@ export function createWebhookHandlers({
       rememberSendOutcome(
         await sendLoggedText(
           psid,
-          t(lang, "generatingPrompt", { styleLabel: STYLE_LABELS[style] }),
+          resolvedGenerationKind === "text_to_image"
+            ? t(lang, "generatingImagePrompt")
+            : t(lang, "generatingImagePrompt"),
           reqId
         )
       );
 
       const state = await getOrCreateState(psid);
+      const shouldSendSourceImage =
+        resolvedGenerationKind === "source_image_edit";
+      const sourceIsGeneratedResult = Boolean(
+        shouldSendSourceImage &&
+        sourceImageUrl &&
+          (sourceImageUrl === state.lastGeneratedUrl ||
+            sourceImageUrl === state.lastImageUrl)
+      );
       const generationResult = await executeGenerationFlow({
-        style,
+        generationKind: resolvedGenerationKind,
         userId,
         reqId,
         promptHint,
-        directorMode,
-        sourceImageUrl,
-        lastPhotoUrl: state.lastPhotoUrl,
-        lastPhotoSource: state.lastPhotoSource,
+        sourceImageUrl: shouldSendSourceImage ? sourceImageUrl : undefined,
+        lastPhotoUrl: shouldSendSourceImage
+          ? sourceIsGeneratedResult
+            ? sourceImageUrl
+            : state.lastPhotoUrl
+          : undefined,
+        lastPhotoSource: shouldSendSourceImage
+          ? sourceIsGeneratedResult
+            ? "stored"
+            : state.lastPhotoSource
+          : undefined,
       });
 
       if (generationResult.kind === "success") {
         const { imageUrl, metrics, mode, proof } = generationResult;
-        console.info(
-          JSON.stringify({
-            level: "info",
-            msg: "messenger_send_image_url",
-            reqId,
-            psidHash: anonymizePsid(psid).slice(0, 12),
-            style,
-            imageUrl: summarizeSensitiveUrl(imageUrl),
-          })
-        );
+        safeLog("messenger_send_image_url", {
+          reqId,
+          psidHash: anonymizePsid(psid).slice(0, 12),
+          generationKind: resolvedGenerationKind,
+          imageLocation: summarizeSensitiveUrl(imageUrl),
+        });
 
-        console.info(
-          JSON.stringify({
-            level: "info",
-            msg: "generation_summary",
-            reqId,
-            psidHash: anonymizePsid(psid).slice(0, 12),
-            mode,
-            style,
-            ok: true,
-            fb_image_fetch_ms: metrics.fbImageFetchMs,
-            prompt_build_ms: metrics.promptBuildMs,
-            openai_payload_build_ms: metrics.openAiPayloadBuildMs,
-            openai_ms: metrics.openAiMs,
-            openai_parse_ms: metrics.openAiParseMs,
-            upload_or_serve_ms: metrics.uploadOrServeMs,
-            total_ms: metrics.totalMs,
-          })
-        );
+        safeLog("generation_summary", {
+          reqId,
+          psidHash: anonymizePsid(psid).slice(0, 12),
+          mode,
+          generationKind: resolvedGenerationKind,
+          ok: true,
+          fb_image_fetch_ms: metrics.fbImageFetchMs,
+          prompt_build_ms: metrics.promptBuildMs,
+          openai_payload_build_ms: metrics.openAiPayloadBuildMs,
+          openai_ms: metrics.openAiMs,
+          openai_parse_ms: metrics.openAiParseMs,
+          upload_or_serve_ms: metrics.uploadOrServeMs,
+          total_ms: metrics.totalMs,
+        });
 
-        console.log(
-          "PROOF_SUMMARY",
-          JSON.stringify({
-            reqId,
-            psidHash: anonymizePsid(psid).slice(0, 12),
-            style,
-            incomingLen: proof.incomingLen,
-            incomingSha256: proof.incomingSha256,
-            openaiInputLen: proof.openaiInputLen,
-            openaiInputSha256: proof.openaiInputSha256,
-            outputUrl: summarizeSensitiveUrl(imageUrl),
-            totalMs: metrics.totalMs,
-            ok: true,
-          })
-        );
+        safeLog("proof_summary", {
+          reqId,
+          psidHash: anonymizePsid(psid).slice(0, 12),
+          generationKind: resolvedGenerationKind,
+          incomingLen: proof.incomingLen,
+          incomingSha256: proof.incomingSha256,
+          openaiInputLen: proof.openaiInputLen,
+          openaiInputSha256: proof.openaiInputSha256,
+          outputLocation: summarizeSensitiveUrl(imageUrl),
+          totalMs: metrics.totalMs,
+          ok: true,
+        });
 
         const messengerSendStartedAt = Date.now();
         rememberSendOutcome(await sendLoggedImage(psid, imageUrl, reqId));
@@ -978,23 +701,22 @@ export function createWebhookHandlers({
         await increment(psid);
         await setLastGenerated(psid, imageUrl);
         await setLastGenerationContext(psid, {
-          style,
-          directorMode,
           prompt: promptHint,
         });
-        recordGenerationSuccess(style, metrics.totalMs);
+        recordGenerationSuccess(resolvedGenerationKind, metrics.totalMs);
+        const successResponse = buildGenerationSuccessResponse(lang);
         rememberSendOutcome(
-          await sendStateQuickReplies(
+          await sendLoggedQuickReplies(
             psid,
-            "RESULT_READY",
-            t(lang, "success"),
+            successResponse.text ?? "",
+            renderMessengerQuickReplies(successResponse.actions),
             reqId
           )
         );
         emitGenerationDiagnostic({
           generationId: reqId,
           senderId: psid,
-          style,
+          style: resolvedGenerationKind,
           success: true,
           durationsMs: {
             source_image_downloaded: metrics.fbImageFetchMs,
@@ -1012,9 +734,10 @@ export function createWebhookHandlers({
       }
 
       const error = generationResult.error;
-      console.error("OPENAI_CALL_ERROR", {
+      safeLog("openai_call_error", {
+        level: "error",
         psidHash: anonymizePsid(psid).slice(0, 12),
-        error: error instanceof Error ? error.message : undefined,
+        error,
       });
 
       const errorClass =
@@ -1022,21 +745,18 @@ export function createWebhookHandlers({
       const metrics = generationResult.metrics ??
         getGenerationMetrics(error) ?? { totalMs: 0 };
 
-      console.log(
-        "PROOF_SUMMARY",
-        JSON.stringify({
-          reqId,
-          psidHash: anonymizePsid(psid).slice(0, 12),
-          style,
-          ok: false,
-          errorCode: errorClass,
-          totalMs: metrics.totalMs,
-        })
-      );
+      safeLog("proof_summary", {
+        reqId,
+        psidHash: anonymizePsid(psid).slice(0, 12),
+        generationKind: resolvedGenerationKind,
+        ok: false,
+        errorCode: errorClass,
+        totalMs: metrics.totalMs,
+      });
       emitGenerationDiagnostic({
         generationId: reqId,
         senderId: psid,
-        style,
+        style: resolvedGenerationKind,
         success: false,
         failureReason: generationResult.errorKind,
         durationsMs: {
@@ -1055,7 +775,7 @@ export function createWebhookHandlers({
       let sendGenericFailureLead = true;
       if (generationResult.errorKind === "missing_source_image") {
         rememberSendOutcome(
-          await sendLoggedText(psid, t(lang, "styleWithoutPhoto"), reqId)
+          await sendLoggedText(psid, t(lang, "editRequiresPhoto"), reqId)
         );
         await setFlowState(psid, "AWAITING_PHOTO");
         return;
@@ -1077,7 +797,7 @@ export function createWebhookHandlers({
         rememberSendOutcome(
           await sendLoggedText(psid, t(lang, "generationBudgetReached"), reqId)
         );
-        await setFlowState(psid, "AWAITING_STYLE");
+        await setFlowState(psid, "AWAITING_EDIT_PROMPT");
         return;
       }
 
@@ -1088,22 +808,15 @@ export function createWebhookHandlers({
       }
       await setFlowState(psid, "FAILURE");
 
+      const failureResponse = buildGenerationFailureResponse(
+        lang,
+        failureText
+      );
       rememberSendOutcome(
         await sendLoggedQuickReplies(
           psid,
-          failureText,
-          [
-            {
-              content_type: "text",
-              title: t(lang, "retryThisStyle"),
-              payload: `RETRY_STYLE_${style}`,
-            },
-            {
-              content_type: "text",
-              title: t(lang, "otherStyle"),
-              payload: "CHOOSE_STYLE",
-            },
-          ],
+          failureResponse.text ?? "",
+          renderMessengerQuickReplies(failureResponse.actions),
           reqId
         )
       );
@@ -1120,29 +833,29 @@ export function createWebhookHandlers({
     return sendOutcome;
   }
 
-  async function runStyleGeneration(
+  async function runImageGeneration(
     psid: string,
     userId: string,
-    style: Style,
     reqId: string,
     lang: Lang,
     sourceImageUrl?: string,
     promptHint?: string,
-    directorMode?: DirectorMode
+    generationKind?: GenerationKind
   ): Promise<MessengerSendOutcome> {
+    const resolvedGenerationKind =
+      generationKind ?? (sourceImageUrl ? "source_image_edit" : "text_to_image");
     const job: MessengerGenerationJob = {
       psid,
       userId,
-      style,
+      generationKind: resolvedGenerationKind,
       reqId,
       lang,
       sourceImageUrl,
       promptHint,
-      directorMode,
     };
     const result = await enqueueOrRunMessengerGenerationJob(
       job,
-      executeStyleGenerationJob,
+      executeImageGenerationJob,
       {
         onDeadLetter: processMessengerGenerationJobDeadLetter,
       }
@@ -1159,68 +872,17 @@ export function createWebhookHandlers({
       safeLog("messenger_generation_queued_ack_failed", {
         reqId,
         user: toLogUser(userId),
-        style,
-        error: error instanceof Error ? error.message : String(error),
+        generationKind: resolvedGenerationKind,
+        error,
       });
     }
     safeLog("messenger_generation_job_queued", {
       reqId,
       user: toLogUser(userId),
-      style,
+      generationKind: resolvedGenerationKind,
       queueEnabled: isMessengerGenerationQueueEnabled(),
     });
     return MESSENGER_ASYNC_RESPONSE_QUEUED;
-  }
-
-  async function handleStyleSelection(
-    psid: string,
-    userId: string,
-    selectedStyle: Style,
-    reqId: string,
-    lang: Lang
-  ): Promise<MessengerSendOutcome> {
-    const state = await getOrCreateState(psid);
-    if (state.stage === "PROCESSING") {
-      const result = await maybeSendInFlightMessage(psid, reqId);
-      return "outcome" in result && result.outcome
-        ? result.outcome
-        : MESSENGER_SEND_SKIPPED;
-    }
-
-    await setChosenStyle(psid, selectedStyle);
-    if (!state.lastPhotoUrl) {
-      await setPreselectedStyle(psid, selectedStyle);
-      await setFlowState(psid, "AWAITING_PHOTO");
-      return await sendLoggedText(psid, t(lang, "styleWithoutPhoto"), reqId);
-    }
-
-    return await runStyleGeneration(psid, userId, selectedStyle, reqId, lang);
-  }
-
-  async function sendPrivacyInfo(
-    psid: string,
-    lang: Lang,
-    reqId: string
-  ): Promise<MessengerSendOutcome> {
-    const resolvedPrivacyUrl = resolvePrivacyPolicyUrl();
-    const privacyText = t(lang, "privacy", { link: resolvedPrivacyUrl });
-
-    if (!resolvedPrivacyUrl) {
-      return await sendLoggedText(psid, privacyText, reqId);
-    }
-
-    return await sendLoggedButtonTemplate(
-      psid,
-      privacyText,
-      [
-        {
-          type: "web_url",
-          title: t(lang, "privacyButtonLabel"),
-          url: resolvedPrivacyUrl,
-        },
-      ],
-      reqId
-    );
   }
 
   async function claimEventReplayOrLog(
@@ -1245,29 +907,6 @@ export function createWebhookHandlers({
     return false;
   }
 
-  async function handleReferralStyleEvent(
-    psid: string,
-    referralRef: string | undefined,
-    lang: Lang,
-    reqId: string
-  ): Promise<MaybeInFlightMessageResult> {
-    const referralStyle = parseReferralStyle(referralRef);
-    if (!referralStyle) {
-      return { handled: false };
-    }
-
-    await clearPendingImageState(psid);
-    await setPreselectedStyle(psid, referralStyle);
-    await setFlowState(psid, "AWAITING_PHOTO");
-    const outcome = await sendReferralPhotoPrompt(
-      psid,
-      referralStyle,
-      lang,
-      reqId
-    );
-    return { handled: true, outcome };
-  }
-
   const ctx: HandlerContext = {
     defaultLang,
     claimEventReplayOrLog,
@@ -1276,13 +915,11 @@ export function createWebhookHandlers({
     createFeatureTextContext,
     debugWebhookLog,
     getAttachmentHostname,
-    handleStyleSelection,
-    handleReferralStyleEvent,
     logImageFlowDecision,
     logIncomingMessage,
     logUserState,
     maybeSendInFlightMessage,
-    runStyleGeneration,
+    runImageGeneration,
     sendFaceMemoryConsentPrompt,
     sendFlowExplanation: (userPsid, userLang, requestId) =>
       sendLoggedText(userPsid, t(userLang, "flowExplanation"), requestId),
@@ -1290,10 +927,6 @@ export function createWebhookHandlers({
     sendLoggedQuickReplies,
     sendLoggedText,
     sendPhotoReceivedPrompt,
-    sendPrivacyInfo,
-    sendStateQuickReplies,
-    sendStyleOptionsForCategory,
-    sendStylePicker,
   };
 
   async function processFacebookWebhookPayload(
@@ -1315,14 +948,15 @@ export function createWebhookHandlers({
   ): Promise<MessengerSendOutcome> {
     const lang = input.lang ?? defaultLang;
     const userId = toUserKey(input.psid);
-    const style = input.style ?? inferStyleFromImageRequest(input.prompt);
+    const wantsSourceImageEdit = isExplicitSourceImageEditRequest(input.prompt);
+    const wantsPersonalTransform = isSourceImageTransformRequest(input.prompt);
+    const wantsVisualCorrection = isVisualCorrectionRequest(input.prompt);
     await setLastUserMessageAt(input.psid, input.timestamp ?? Date.now());
 
     safeLog("internal_image_request_received", {
       reqId: input.reqId,
       user: toLogUser(userId),
       psidHash: anonymizePsid(input.psid).slice(0, 12),
-      style,
       hasSourceImageUrl: Boolean(input.sourceImageUrl),
     });
 
@@ -1357,30 +991,50 @@ export function createWebhookHandlers({
         : MESSENGER_SEND_SKIPPED;
     }
 
-    const sourceImageUrl =
-      storedSourceImageUrl ?? state.lastPhotoUrl ?? undefined;
+    const previousEditableImageUrl =
+      state.lastGeneratedUrl ?? state.lastImageUrl ?? state.lastPhotoUrl ?? undefined;
+    const shouldUsePreviousPhoto =
+      Boolean(storedSourceImageUrl) ||
+      wantsSourceImageEdit ||
+      wantsVisualCorrection ||
+      (wantsPersonalTransform && Boolean(previousEditableImageUrl));
+    const sourceImageUrl = shouldUsePreviousPhoto
+      ? storedSourceImageUrl ??
+        previousEditableImageUrl ??
+        undefined
+      : undefined;
     if (!sourceImageUrl) {
-      await setPreselectedStyle(input.psid, style);
-      await setFlowState(input.psid, "AWAITING_PHOTO");
-      await sendLoggedText(
+      if (wantsSourceImageEdit || wantsVisualCorrection) {
+        await setFlowState(input.psid, "AWAITING_PHOTO");
+        await sendLoggedText(
+          input.psid,
+          t(lang, "editRequiresPhoto"),
+          input.reqId
+        );
+        throw new InternalMessengerImageRequestNotQueuedError(
+          "Internal Messenger image request needs a source image for edit intent"
+        );
+      }
+
+      return await runImageGeneration(
         input.psid,
-        t(lang, "styleWithoutPhoto"),
-        input.reqId
-      );
-      throw new InternalMessengerImageRequestNotQueuedError(
-        "Internal Messenger image request has no source image to enqueue"
+        userId,
+        input.reqId,
+        lang,
+        undefined,
+        input.prompt,
+        "text_to_image"
       );
     }
 
-    await setChosenStyle(input.psid, style);
-    return await runStyleGeneration(
+    return await runImageGeneration(
       input.psid,
       userId,
-      style,
       input.reqId,
       lang,
       sourceImageUrl,
-      input.prompt
+      input.prompt,
+      "source_image_edit"
     );
   }
 
@@ -1393,7 +1047,7 @@ export function createWebhookHandlers({
   async function processMessengerGenerationJob(
     input: MessengerGenerationJob
   ): Promise<MessengerSendOutcome> {
-    return await executeStyleGenerationJob(input);
+    return await executeImageGenerationJob(input);
   }
 
   async function processMessengerGenerationJobDeadLetter(

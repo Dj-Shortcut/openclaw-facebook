@@ -15,3 +15,4 @@ yarn-error.log*
 __pycache__/
 *.pyc
 .codex-security-scans/
+.codex-remote-attachments/

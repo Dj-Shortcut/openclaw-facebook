@@ -1,5 +1,7 @@
 import { hasOpenMessengerResponseWindow } from "./messengerState";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
+import { safeLog } from "./logger";
+export { safeLog } from "./logger";
 
 const GRAPH_API_VERSION = "v21.0";
 
@@ -9,27 +11,8 @@ type QuickReply = {
   payload: string;
 };
 
-type TemplateButton =
-  | {
-      type: "postback";
-      title: string;
-      payload: string;
-    }
-  | {
-      type: "web_url";
-      title: string;
-      url: string;
-    };
-
-type GenericTemplateElement = {
-  title: string;
-  subtitle?: string;
-  image_url?: string;
-  buttons?: TemplateButton[];
-};
-
 type MessengerSendOutcome =
-  | { sent: true }
+  | { sent: true; messageId?: string }
   | { sent: false; reason: "response_window_closed" };
 
 type SendMessageOptions = {
@@ -221,7 +204,7 @@ async function sendMessage(
     }
 
     if (response.ok) {
-      return { sent: true };
+      return await parseSendOutcome(response);
     }
 
     await handleErrorResponse({ response, attempt, retry, options });
@@ -230,42 +213,20 @@ async function sendMessage(
   throw new Error("Messenger API error: retry loop exited unexpectedly");
 }
 
-function shouldDropLogKey(key: string): boolean {
-  const lowered = key.toLowerCase();
-  return [
-    "token",
-    "psid",
-    "text",
-    "url",
-    "payload",
-    "attachment",
-    "message",
-    "sender",
-    "body",
-  ].some(fragment => lowered.includes(fragment));
-}
+async function parseSendOutcome(response: Response): Promise<MessengerSendOutcome> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    return { sent: true };
+  }
 
-function redactLogDetails(
-  details: Record<string, unknown>
-): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(details)
-      .filter(([key]) => !shouldDropLogKey(key))
-      .map(([key, value]) => {
-        if (typeof value === "string" && key === "user") {
-          return [key, value.slice(0, 8)];
-        }
-
-        return [key, value];
-      })
-  );
-}
-
-export function safeLog(
-  event: string,
-  details: Record<string, unknown> = {}
-): void {
-  console.log(`[messenger] ${event}`, redactLogDetails(details));
+  try {
+    const body = (await response.json()) as { message_id?: unknown };
+    return typeof body.message_id === "string" && body.message_id.trim()
+      ? { sent: true, messageId: body.message_id.trim() }
+      : { sent: true };
+  } catch {
+    return { sent: true };
+  }
 }
 
 export async function sendText(
@@ -286,51 +247,13 @@ export async function sendQuickReplies(
   });
 }
 
-export async function sendGenericTemplate(
-  psid: string,
-  elements: GenericTemplateElement[]
-): Promise<MessengerSendOutcome> {
-  return await sendMessage(psid, {
-    attachment: {
-      type: "template",
-      payload: {
-        template_type: "generic",
-        elements,
-      },
-    },
-  });
-}
-
-export async function sendButtonTemplate(
-  psid: string,
-  text: string,
-  buttons: TemplateButton[]
-): Promise<MessengerSendOutcome> {
-  return await sendMessage(psid, {
-    attachment: {
-      type: "template",
-      payload: {
-        template_type: "button",
-        text,
-        buttons,
-      },
-    },
-  });
-}
-
 export async function sendImage(
   psid: string,
   imageUrl: string
 ): Promise<MessengerSendOutcome> {
   const imageUrlSummary = summarizeSensitiveUrl(imageUrl);
   const startedAt = Date.now();
-  console.info(
-    JSON.stringify({
-      level: "info",
-      msg: "messenger_image_send_started",
-      imageUrl: imageUrlSummary,
-    })
-  );
+  safeLog("messenger_image_send_started", { imageUrl: imageUrlSummary });
 
   const outcome = await sendMessage(
     psid,
@@ -347,46 +270,34 @@ export async function sendImage(
       maxRetries: 2,
       retryBaseMs: 150,
       onRetry: (attempt, maxAttempts, error) => {
-        console.warn(
-          JSON.stringify({
-            level: "warn",
-            msg: "messenger_image_retry",
-            attempt,
-            maxAttempts,
-            imageUrl: imageUrlSummary,
-            errorCode: error.name,
-          })
-        );
+        safeLog("messenger_image_retry", {
+          level: "warn",
+          attempt,
+          maxAttempts,
+          imageUrl: imageUrlSummary,
+          errorCode: error.name,
+        });
       },
       onFinalFailure: (attempts, _maxAttempts, error) => {
-        console.error(
-          JSON.stringify({
-            level: "error",
-            msg: "messenger_image_send_failed",
-            attempts,
-            imageUrl: imageUrlSummary,
-            errorCode: error.name,
-          })
-        );
+        safeLog("messenger_image_send_failed", {
+          level: "error",
+          attempts,
+          imageUrl: imageUrlSummary,
+          errorCode: error.name,
+        });
       },
     }
   );
-  console.info(
-    JSON.stringify({
-      level: "info",
-      msg: "messenger_image_send_completed",
-      imageUrl: imageUrlSummary,
-      durationMs: Date.now() - startedAt,
-      sent: outcome.sent,
-      reason: outcome.sent ? undefined : outcome.reason,
-    })
-  );
+  safeLog("messenger_image_send_completed", {
+    imageUrl: imageUrlSummary,
+    durationMs: Date.now() - startedAt,
+    sent: outcome.sent,
+    reason: outcome.sent ? undefined : outcome.reason,
+  });
   return outcome;
 }
 
 export type {
   QuickReply,
-  GenericTemplateElement,
-  TemplateButton,
   MessengerSendOutcome,
 };

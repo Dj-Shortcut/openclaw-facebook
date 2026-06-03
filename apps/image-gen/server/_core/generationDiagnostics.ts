@@ -1,4 +1,5 @@
 import { toUserKey } from "./privacy";
+import { safeLog } from "./logger";
 
 type GenerationDiagnosticInput = {
   generationId: string;
@@ -24,16 +25,12 @@ export function hashSenderId(senderId: string): string {
 }
 
 export function emitGenerationDiagnostic(input: GenerationDiagnosticInput): void {
-  console.info(
-    JSON.stringify({
-      level: "info",
-      msg: "messenger_generation_diagnostic",
-      generation_id: input.generationId,
-      sender_id_hash: hashSenderId(input.senderId),
-      style: input.style,
-      success: input.success,
-      failure_reason: input.failureReason,
-      durations_ms: compactDurations(input.durationsMs),
-    })
-  );
+  safeLog("messenger_generation_diagnostic", {
+    generation_id: input.generationId,
+    sender_id_hash: hashSenderId(input.senderId),
+    style: input.style,
+    success: input.success,
+    failure_reason: input.failureReason,
+    durations_ms: compactDurations(input.durationsMs),
+  });
 }

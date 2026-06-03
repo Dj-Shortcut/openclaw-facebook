@@ -1,11 +1,13 @@
 # Face Memory
 
-Face memory is an optional Messenger feature that lets a user reuse one uploaded source photo for up to 30 days without uploading again.
+Face memory is an optional Messenger feature that lets a user reuse one uploaded source photo for a limited retention window without uploading again.
 
 The feature must stay disabled until legal/privacy copy is approved:
 
 ```env
 ENABLE_FACE_MEMORY=false
+# Optional; defaults to 30.
+FACE_MEMORY_RETENTION_DAYS=30
 ```
 
 ## User Flow
@@ -13,7 +15,7 @@ ENABLE_FACE_MEMORY=false
 1. User uploads a photo in Messenger.
 2. The bot stores the inbound source image using the normal source-image storage path.
 3. If `ENABLE_FACE_MEMORY=true` and the user has no prior face-memory decision, the bot asks for explicit consent.
-4. If the user chooses `Ja, 30 dagen`, state stores:
+4. If the user accepts the retention prompt, state stores:
    - `faceMemoryConsent.given=true`
    - consent timestamp
    - consent version `v1`
@@ -21,9 +23,9 @@ ENABLE_FACE_MEMORY=false
    - `lastSourceImageUpdatedAt`
    - `pendingImageUrl` remains in state before the consent click, so consent still works after a server restart when Redis is configured.
 5. If the user chooses `Nee`, the normal single-session image flow continues, but no reusable face-memory source is retained.
-6. The user can generate styles from the retained source image during the 30-day window.
+6. The user can request natural-language edits from the retained source image during the configured retention window.
 7. The user can send `verwijder mijn data` or `delete my data` to delete retained face-memory state.
-8. A daily expiry task clears retained face-memory data older than 30 days.
+8. A daily expiry task clears retained face-memory data older than the configured retention window.
 
 A declined consent choice is respected and does not trigger repeated prompts on every later photo upload. If product wants users to opt in later, add an explicit opt-in command and have legal approve that copy.
 
@@ -32,7 +34,7 @@ A declined consent choice is respected and does not trigger repeated prompts on 
 Legal should approve these exact surfaces before enabling the feature:
 
 - Messenger consent copy and quick-reply labels.
-- `/privacy` page text, especially the optional 30-day photo-memory paragraph.
+- `/privacy` page text, especially the optional photo-memory retention paragraph.
 - `/data-deletion` page text if it claims deletion paths or retained image handling.
 - The technical statement that Leaderbot stores the source photo URL and consent metadata, but does not create face embeddings, face vectors, face templates, or biometric identification profiles.
 - The operational deletion controls: user command, daily expiry, and admin kill switch.
@@ -62,9 +64,9 @@ Not stored:
 
 ## Retention And Deletion
 
-Maximum retention is 30 days from `lastSourceImageUpdatedAt`.
+Maximum retention is controlled by `FACE_MEMORY_RETENTION_DAYS`, counted from `lastSourceImageUpdatedAt`. The default is 30 days. Invalid, non-integer, or non-positive values fall back to 30 days.
 
-Runtime state for active face memory or pending object-storage deletion is kept for 32 days. The extra two-day buffer lets the daily expiry sweep see inactive users after the 30-day retention window and delete object-storage files before Redis metadata expires.
+Runtime state for active face memory or pending object-storage deletion is kept for the configured retention window plus two days. The extra two-day buffer lets the daily expiry sweep see inactive users after the retention window and delete object-storage files before Redis metadata expires.
 
 Deletion paths:
 

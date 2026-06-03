@@ -1,6 +1,7 @@
 import { deleteUserData } from "./dataDeletionService";
 import type { Lang } from "./i18n";
-import type { QuickReply } from "./messengerApi";
+import type { ConversationAction } from "./botResponse";
+import { buildQuickStartResponse } from "./conversationActions";
 import {
   setConsentState,
   setPendingDeleteConfirm,
@@ -33,8 +34,7 @@ type MessengerConsentGateInput = {
   payload?: string | null;
   state: MessengerUserState;
   sendText: (text: string) => Promise<void>;
-  sendQuickReplies: (text: string, replies: QuickReply[]) => Promise<void>;
-  sendRestyleStarterPills: () => Promise<void>;
+  sendActions: (text: string, actions: ConversationAction[]) => Promise<void>;
 };
 
 type WhatsAppConsentGateInput = {
@@ -116,43 +116,28 @@ function messengerConsentAcceptedText(lang: Lang): string {
     : `Je bent klaar ✅\nJe kan je data altijd verwijderen door '${command}' te typen.`;
 }
 
-function consentReplies(lang: Lang): QuickReply[] {
+function consentActions(lang: Lang): ConversationAction[] {
   return [
     {
-      content_type: "text",
-      title: lang === "en" ? "I Agree" : "Ik ga akkoord",
-      payload: GDPR_CONSENT_AGREE,
+      id: GDPR_CONSENT_AGREE,
+      label: lang === "en" ? "I Agree" : "Ik ga akkoord",
     },
     {
-      content_type: "text",
-      title: lang === "en" ? "No thanks" : "Nee bedankt",
-      payload: GDPR_CONSENT_DECLINE,
+      id: GDPR_CONSENT_DECLINE,
+      label: lang === "en" ? "No thanks" : "Nee bedankt",
     },
   ];
 }
 
-function deleteNoticeReplies(lang: Lang): QuickReply[] {
-  const command = deleteCommand(lang);
+function deleteActions(lang: Lang): ConversationAction[] {
   return [
     {
-      content_type: "text",
-      title: lang === "en" ? "🗑 Delete my data" : "🗑 Verwijder mijn data",
-      payload: command,
-    },
-  ];
-}
-
-function deleteReplies(lang: Lang): QuickReply[] {
-  return [
-    {
-      content_type: "text",
-      title: lang === "en" ? "Yes, delete" : "Ja, verwijder",
-      payload: GDPR_DELETE_CONFIRM,
+      id: GDPR_DELETE_CONFIRM,
+      label: lang === "en" ? "Yes, delete" : "Ja, verwijder",
     },
     {
-      content_type: "text",
-      title: lang === "en" ? "Cancel" : "Annuleer",
-      payload: GDPR_DELETE_CANCEL,
+      id: GDPR_DELETE_CANCEL,
+      label: lang === "en" ? "Cancel" : "Annuleer",
     },
   ];
 }
@@ -199,7 +184,8 @@ export async function handleMessengerConsentGate(
   if (input.payload === GDPR_CONSENT_AGREE) {
     await Promise.resolve(setConsentState(input.psid, true));
     await input.sendText(messengerConsentAcceptedText(input.lang));
-    await input.sendRestyleStarterPills();
+    const response = buildQuickStartResponse(input.lang);
+    await input.sendActions(response.text ?? "", response.actions ?? []);
     return true;
   }
 
@@ -235,17 +221,17 @@ export async function handleMessengerConsentGate(
 
   if (isDeleteCommand(input.text) || isDeleteCommand(input.payload)) {
     await Promise.resolve(setPendingDeleteConfirm(input.psid, true));
-    await input.sendQuickReplies(deletionConfirmText(input.lang), deleteReplies(input.lang));
+    await input.sendActions(deletionConfirmText(input.lang), deleteActions(input.lang));
     return true;
   }
 
   if (input.state.pendingDeleteConfirm) {
-    await input.sendQuickReplies(deletionConfirmText(input.lang), deleteReplies(input.lang));
+    await input.sendActions(deletionConfirmText(input.lang), deleteActions(input.lang));
     return true;
   }
 
   if (input.state.consentGiven !== true) {
-    await input.sendQuickReplies(consentText(input.lang), consentReplies(input.lang));
+    await input.sendActions(consentText(input.lang), consentActions(input.lang));
     return true;
   }
 

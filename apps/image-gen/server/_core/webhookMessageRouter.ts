@@ -12,15 +12,24 @@ import { getBotFeatures } from "./bot/features";
 import { handleSharedTextMessage } from "./sharedTextHandler";
 import type { NormalizedInboundMessage } from "./normalizedInboundMessage";
 import { sendMessengerBotResponse } from "./botResponseAdapters";
+import { renderMessengerQuickReplies } from "./messengerActionRenderer";
+import { decodeMessengerActionInput } from "./messengerActionPayload";
+import { resolveConversationActionInput } from "./conversationActionSelection";
+import {
+  isExplicitSourceImageEditRequest,
+  isImageGenerationRequest,
+  isSourceImageTransformRequest,
+  isVisualCorrectionRequest,
+} from "./imageIntent";
 import {
   anonymizePsid,
   clearPendingImageState,
+  getPendingConversationActionsForMessage,
   getOrCreateState,
   markIntroSeen,
-  setChosenStyle,
   setFlowState,
+  setPendingConversationActions,
   setPendingStoredImage,
-  setPreselectedStyle,
 } from "./messengerState";
 import { toLogUser } from "./privacy";
 import { type FacebookWebhookEvent } from "./webhookHelpers";
@@ -43,6 +52,8 @@ type ImageMessageInput = {
   reqId: string;
   lang: Lang;
   attachments: FacebookWebhookMessage["attachments"];
+  text?: string;
+  timestamp?: number;
 };
 
 type TextMessageInput = {
@@ -51,6 +62,7 @@ type TextMessageInput = {
   reqId: string;
   lang: Lang;
   text: string;
+  replyToMessageId?: string;
   timestamp?: number;
 };
 
@@ -67,6 +79,20 @@ export async function handleMessageEvent(
 
   const quickPayload = message.quick_reply?.payload;
   if (quickPayload) {
+    const actionInput = decodeMessengerActionInput(quickPayload);
+    if (actionInput) {
+      await handleTextMessage(ctx, {
+        psid: input.psid,
+        userId: input.userId,
+        reqId: input.reqId,
+        lang: input.lang,
+        text: actionInput,
+        replyToMessageId: message.reply_to?.mid,
+        timestamp: input.event.timestamp ?? Date.now(),
+      });
+      return;
+    }
+
     await handlePayload(ctx, {
       psid: input.psid,
       userId: input.userId,
@@ -84,6 +110,8 @@ export async function handleMessageEvent(
       reqId: input.reqId,
       lang: input.lang,
       attachments: message.attachments,
+      text: message.text,
+      timestamp: input.event.timestamp ?? Date.now(),
     })
   ) {
     return;
@@ -101,6 +129,7 @@ export async function handleMessageEvent(
     reqId: input.reqId,
     lang: input.lang,
     text: trimmedText,
+    replyToMessageId: message.reply_to?.mid,
     timestamp: input.event.timestamp ?? Date.now(),
   });
 }
@@ -135,6 +164,7 @@ async function tryHandleImageMessage(
     state,
     storedSourceImageUrl
   );
+
   if (
     await promptForFaceMemoryConsent(
       ctx,
@@ -147,8 +177,34 @@ async function tryHandleImageMessage(
     return true;
   }
 
+  if (shouldHandleImageCaptionAsConversation(input.text)) {
+    await handleTextMessage(ctx, {
+      psid: input.psid,
+      userId: input.userId,
+      reqId: input.reqId,
+      lang: input.lang,
+      text: input.text.trim(),
+      timestamp: input.timestamp,
+    });
+    return true;
+  }
+
   logImageDecision(ctx, input, state, imageDecision);
   return await handleImageDecision(ctx, input, imageDecision);
+}
+
+function shouldHandleImageCaptionAsConversation(text: string | undefined): text is string {
+  const caption = text?.trim();
+  if (!caption) {
+    return false;
+  }
+
+  return (
+    isImageGenerationRequest(caption) ||
+    isExplicitSourceImageEditRequest(caption) ||
+    isSourceImageTransformRequest(caption) ||
+    isVisualCorrectionRequest(caption)
+  );
 }
 
 function getInboundImageUrl(
@@ -167,15 +223,11 @@ function logParsedImageMessage(
 ): void {
   const psidHash = anonymizePsid(input.psid).slice(0, 12);
   const attachmentHostname = ctx.getAttachmentHostname(inboundImageUrl);
-  console.info(
-    JSON.stringify({
-      level: "info",
-      msg: "messenger_image_message_parsed",
-      reqId: input.reqId,
-      psidHash,
-      attachmentHostname,
-    })
-  );
+  safeLog("messenger_image_message_parsed", {
+    reqId: input.reqId,
+    psidHash,
+    attachmentHostname,
+  });
   ctx.debugWebhookLog({
     level: "debug",
     msg: "photo_received",
@@ -250,8 +302,6 @@ async function prepareStoredImageDecision(
   );
   const imageDecision = getStoredMessengerImageDecision({
     lastPhotoUrl: state.lastPhotoUrl,
-    selectedStyle: state.selectedStyle,
-    preselectedStyle: state.preselectedStyle,
     storedSourceImageUrl,
   });
   await setPendingStoredImage(input.psid, storedSourceImageUrl);
@@ -278,9 +328,6 @@ async function promptForFaceMemoryConsent(
     return false;
   }
 
-  if (imageAction === "show_style_picker") {
-    await setPreselectedStyle(input.psid, null);
-  }
   await ctx.sendFaceMemoryConsentPrompt(input.psid, input.lang, input.reqId);
   return true;
 }
@@ -298,8 +345,6 @@ function logImageDecision(
     stage: state.stage,
     hadPreviousPhoto: imageDecision.hadPreviousPhoto,
     incomingImageUrl: imageDecision.incomingImageUrl,
-    selectedStyle: state.selectedStyle,
-    preselectedStyle: imageDecision.styleToRun,
     action: imageDecision.action,
   });
 }
@@ -309,34 +354,49 @@ async function handleImageDecision(
   input: ImageMessageInput,
   imageDecision: ReturnType<typeof getStoredMessengerImageDecision>
 ): Promise<boolean> {
-  if (imageDecision.action === "show_style_picker") {
-    await setFlowState(input.psid, "AWAITING_STYLE");
+  if (imageDecision.action === "request_edit_prompt") {
+    await setFlowState(input.psid, "AWAITING_EDIT_PROMPT");
     await ctx.sendPhotoReceivedPrompt(input.psid, input.lang, input.reqId);
     return true;
   }
 
-  await setPreselectedStyle(input.psid, null);
-  await setChosenStyle(input.psid, imageDecision.styleToRun);
-  await ctx.runStyleGeneration(
-    input.psid,
-    input.userId,
-    imageDecision.styleToRun,
-    input.reqId,
-    input.lang
-  );
-  return true;
+  return false;
 }
 
 async function handleTextMessage(
   ctx: HandlerContext,
   input: TextMessageInput
 ): Promise<void> {
-  const normalizedMessage = createNormalizedTextMessage(input);
+  const resolvedInput = await resolvePendingActionText(input);
+  const normalizedMessage = createNormalizedTextMessage(resolvedInput);
   logNormalizedTextHandoff(input, normalizedMessage);
 
-  const result = await handleSharedMessengerText(ctx, input, normalizedMessage);
-  await sendSharedMessengerTextResponse(ctx, input, result);
-  await applyTextAfterSend(result, input);
+  const result = await handleSharedMessengerText(ctx, resolvedInput, normalizedMessage);
+  await sendSharedMessengerTextResponse(ctx, resolvedInput, result);
+  await applyTextAfterSend(result, resolvedInput);
+}
+
+async function resolvePendingActionText(
+  input: TextMessageInput
+): Promise<TextMessageInput> {
+  const state = await getOrCreateState(input.psid);
+  const replyActions = getPendingConversationActionsForMessage(
+    state,
+    input.replyToMessageId
+  );
+  const actionInput = resolveConversationActionInput(
+    input.text,
+    replyActions ?? state.pendingConversationActions
+  );
+  if (!actionInput) {
+    return input;
+  }
+
+  await Promise.resolve(setPendingConversationActions(input.psid, undefined));
+  return {
+    ...input,
+    text: actionInput,
+  };
 }
 
 function createNormalizedTextMessage(
@@ -356,7 +416,7 @@ function logNormalizedTextHandoff(
   input: TextMessageInput,
   normalizedMessage: NormalizedInboundMessage
 ): void {
-  console.log("[messenger webhook] normalized event handoff", {
+  safeLog("messenger_normalized_event_handoff", {
     channel: normalizedMessage.channel,
     reqId: input.reqId,
     user: toLogUser(input.userId),
@@ -421,8 +481,20 @@ async function sendSharedMessengerTextResponse(
     sendText: async text => {
       await ctx.sendLoggedText(input.psid, text, input.reqId);
     },
-    sendStateText: async (stateName, text) => {
-      await ctx.sendStateQuickReplies(input.psid, stateName, text, input.reqId);
+    sendActionPrompt: async (text, actions) => {
+      const outcome = await ctx.sendLoggedQuickReplies(
+        input.psid,
+        text,
+        renderMessengerQuickReplies(actions),
+        input.reqId
+      );
+      await Promise.resolve(
+        setPendingConversationActions(
+          input.psid,
+          actions,
+          outcome?.sent ? outcome.messageId : undefined
+        )
+      );
     },
   });
 }

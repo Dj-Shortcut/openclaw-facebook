@@ -44,7 +44,12 @@ function getGraphApiVersion(): string {
 }
 
 function getPageAccessToken(): string {
-  return process.env.FB_PAGE_ACCESS_TOKEN?.trim() ?? "";
+  return (
+    process.env.FB_PAGE_ACCESS_TOKEN?.trim() ||
+    process.env.FACEBOOK_PAGE_ACCESS_TOKEN?.trim() ||
+    process.env.MESSENGER_PAGE_ACCESS_TOKEN?.trim() ||
+    ""
+  );
 }
 
 function getProfileSyncTimeoutMs(): number {
@@ -85,7 +90,7 @@ export async function clearMessengerStartScreenPills(
   const pageAccessToken = getPageAccessToken();
   if (!pageAccessToken) {
     logger.warn(
-      "[messenger profile] FB_PAGE_ACCESS_TOKEN missing; cannot clear start-screen ice breakers"
+      "[messenger profile] Page access token missing; set FB_PAGE_ACCESS_TOKEN, FACEBOOK_PAGE_ACCESS_TOKEN, or MESSENGER_PAGE_ACCESS_TOKEN to clear start-screen ice breakers"
     );
     return { status: "skipped", reason: "missing_token" };
   }

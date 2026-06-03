@@ -2,29 +2,30 @@ import { getBotFeatures } from "../bot/features";
 import type { BotLogger, BotTextContext } from "../botContext";
 import { getTodayRuntimeStats } from "../botRuntimeStats";
 import {
+  clearPendingImageState,
   setFlowState,
-  setPreselectedStyle,
 } from "../messengerState";
 import { toLogUser } from "../privacy";
-import { createWhatsAppQuickReplySender } from "../whatsappResponseService";
-import { runWhatsAppStyleGeneration } from "../whatsappFlows/styleGenerationFlow";
+import { createWhatsAppResponseSender } from "../whatsappResponseService";
+import { runWhatsAppImageGeneration } from "../whatsappFlows/imageGenerationFlow";
 import type { NormalizedWhatsAppEvent, WhatsAppHandlerContext } from "../whatsappTypes";
+import { safeLog } from "../logger";
 
 function createWhatsAppFeatureLogger(userId: string): BotLogger {
   return {
     info(event, details = {}) {
-      console.info("[whatsapp feature]", event, { user: toLogUser(userId), ...details });
+      safeLog(event, { ...details, user: toLogUser(userId) });
     },
     warn(event, details = {}) {
-      console.warn("[whatsapp feature]", event, { user: toLogUser(userId), ...details });
+      safeLog(event, { ...details, user: toLogUser(userId), level: "warn" });
     },
     error(event, details = {}) {
-      console.error("[whatsapp feature]", event, { user: toLogUser(userId), ...details });
+      safeLog(event, { ...details, user: toLogUser(userId), level: "error" });
     },
   };
 }
 
-export function createWhatsAppTextContext(
+function createWhatsAppTextContext(
   event: NormalizedWhatsAppEvent,
   context: WhatsAppHandlerContext,
   state: BotTextContext["state"],
@@ -32,7 +33,7 @@ export function createWhatsAppTextContext(
   normalizedText: string,
   hasPhoto: boolean
 ): BotTextContext {
-  const sender = createWhatsAppQuickReplySender(event.senderId);
+  const sender = createWhatsAppResponseSender(event.senderId);
   return {
     channel: "whatsapp",
     capabilities: { quickReplies: false, richTemplates: false },
@@ -46,31 +47,20 @@ export function createWhatsAppTextContext(
     hasPhoto,
     sendText: sender.sendText,
     sendImage: sender.sendImage,
-    sendQuickReplies: sender.sendQuickReplies,
-    sendStateQuickReplies: (nextState, text) =>
-      sender.sendStateQuickReplies(nextState, text, context.lang),
+    sendActions: sender.sendActions,
     setFlowState: nextState =>
       Promise.resolve(setFlowState(event.senderId, nextState)),
-    preselectStyle: style =>
-      Promise.resolve(setPreselectedStyle(event.senderId, style)).then(() => undefined),
-    chooseStyle: style =>
-      runWhatsAppStyleGeneration({
+    clearImageContext: () =>
+      Promise.resolve(clearPendingImageState(event.senderId)).then(() => undefined),
+    runImageGeneration: (sourceImageUrl, promptHint, generationKind) =>
+      runWhatsAppImageGeneration({
         senderId: event.senderId,
         userId: event.userId,
-        style,
-        reqId: context.reqId,
-        lang: context.lang,
-      }),
-    runStyleGeneration: (style, sourceImageUrl, promptHint, directorMode) =>
-      runWhatsAppStyleGeneration({
-        senderId: event.senderId,
-        userId: event.userId,
-        style,
         reqId: context.reqId,
         lang: context.lang,
         sourceImageUrl,
         promptHint,
-        directorMode,
+        generationKind,
       }),
     getRuntimeStats: () => getTodayRuntimeStats(),
     logger: createWhatsAppFeatureLogger(event.userId),
