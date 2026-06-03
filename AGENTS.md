@@ -92,6 +92,7 @@ The portal direction is:
 * customer account and workspace
 * owned AI identity and instructions
 * knowledge management
+  * Knowledge management must be tenant-scoped: uploaded files, extracted text, embeddings, retrieval indexes, and assistant memory must not be shared or searchable across customer workspaces unless an explicit customer-controlled sharing feature exists.
 * channel connection status
 * usage, quota, billing, and privacy controls
 
