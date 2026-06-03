@@ -308,6 +308,8 @@ function createTestRunner(
 }
 
 function createContextBackedRunner() {
+  // ctx is assigned after runner creation; safe because callbacks are only
+  // invoked at test runtime, after ctx is assigned.
   let ctx!: HandlerContext;
   const runner = createMessengerGenerationJobRunner({
     maybeSendInFlightMessage: (psid, reqId) =>
