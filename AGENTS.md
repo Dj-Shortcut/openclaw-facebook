@@ -239,6 +239,8 @@ Do not remove existing production behavior unless:
 2. tests exist
 3. migration path exists
 
+Privacy and tenant-isolation fixes may intentionally restrict operator/admin access to customer data, provided there is a safe migration path for support workflows, auditability is preserved, and production customer functionality remains available.
+
 Legacy Messenger style payloads should not be reintroduced. Preserve production behavior through channel-neutral `ConversationAction` inputs and explicit natural-language/image-edit requests.
 
 ---
