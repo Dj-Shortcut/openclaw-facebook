@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - "apps/image-gen/**"
+      - "scripts/normalize-fallow-report.mjs"
       - ".github/workflows/image-gen-fallow.yml"
   push:
     branches: [main]
     paths:
       - "apps/image-gen/**"
+      - "scripts/normalize-fallow-report.mjs"
       - ".github/workflows/image-gen-fallow.yml"
   schedule:
     - cron: "0 6 * * 1"
