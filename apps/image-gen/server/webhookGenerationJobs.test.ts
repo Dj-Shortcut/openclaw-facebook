@@ -336,8 +336,8 @@ function createContextBackedRunner() {
       ctx.maybeSendInFlightMessage(psid, reqId, "nl"),
     sendLoggedImage: (psid, imageUrl, reqId) =>
       ctx.sendLoggedImage(psid, imageUrl, reqId),
-    sendLoggedActions: (psid, text, replies, reqId) =>
-      ctx.sendLoggedActions(psid, text, replies, reqId),
+    sendLoggedActions: (psid, text, actions, reqId) =>
+      ctx.sendLoggedActions(psid, text, actions, reqId),
     sendLoggedText: (psid, text, reqId) =>
       ctx.sendLoggedText(psid, text, reqId),
   });
