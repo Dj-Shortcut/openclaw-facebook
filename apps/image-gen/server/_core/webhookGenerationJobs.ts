@@ -84,88 +84,111 @@ export function createMessengerGenerationJobRunner(
       return outcome;
     };
 
-    const didRun = await runGuardedGeneration(psid, async () => {
-      if (
-        await finishDuplicateGenerationIfCompleted({
-          psid,
-          userId,
-          reqId,
-          promptHint,
-          resolvedGenerationKind,
-        })
-      ) {
-        return;
-      }
+    let didRun: Awaited<ReturnType<typeof runGuardedGeneration<void>>>;
+    try {
+      didRun = await runGuardedGeneration(psid, async () => {
+        if (
+          await finishDuplicateGenerationIfCompleted({
+            psid,
+            userId,
+            reqId,
+            promptHint,
+            resolvedGenerationKind,
+          })
+        ) {
+          return;
+        }
 
-      if (
-        !(await reserveGenerationQuota({
+        if (
+          !(await reserveGenerationQuota({
+            deps,
+            psid,
+            reqId,
+            lang,
+            rememberSendOutcome,
+          }))
+        ) {
+          return;
+        }
+
+        await setFlowState(psid, "PROCESSING");
+        await sendGenerationStartedAck({
           deps,
           psid,
+          userId,
           reqId,
           lang,
+          resolvedGenerationKind,
           rememberSendOutcome,
-        }))
-      ) {
-        return;
-      }
+        });
 
-      await setFlowState(psid, "PROCESSING");
-      rememberSendOutcome(
-        await deps.sendLoggedText(psid, t(lang, "generatingImagePrompt"), reqId)
-      );
+        const state = await getOrCreateState(psid);
+        const shouldSendSourceImage =
+          resolvedGenerationKind === "source_image_edit";
+        const sourceIsGeneratedResult = Boolean(
+          shouldSendSourceImage &&
+          sourceImageUrl &&
+          (sourceImageUrl === state.lastGeneratedUrl ||
+            sourceImageUrl === state.lastImageUrl)
+        );
+        const generationResult = await executeGenerationFlow({
+          generationKind: resolvedGenerationKind,
+          userId,
+          reqId,
+          promptHint,
+          sourceImageUrl: shouldSendSourceImage ? sourceImageUrl : undefined,
+          lastPhotoUrl: shouldSendSourceImage
+            ? sourceIsGeneratedResult
+              ? sourceImageUrl
+              : state.lastPhotoUrl
+            : undefined,
+          lastPhotoSource: shouldSendSourceImage
+            ? sourceIsGeneratedResult
+              ? "stored"
+              : state.lastPhotoSource
+            : undefined,
+        });
 
-      const state = await getOrCreateState(psid);
-      const shouldSendSourceImage =
-        resolvedGenerationKind === "source_image_edit";
-      const sourceIsGeneratedResult = Boolean(
-        shouldSendSourceImage &&
-        sourceImageUrl &&
-        (sourceImageUrl === state.lastGeneratedUrl ||
-          sourceImageUrl === state.lastImageUrl)
-      );
-      const generationResult = await executeGenerationFlow({
-        generationKind: resolvedGenerationKind,
-        userId,
-        reqId,
-        promptHint,
-        sourceImageUrl: shouldSendSourceImage ? sourceImageUrl : undefined,
-        lastPhotoUrl: shouldSendSourceImage
-          ? sourceIsGeneratedResult
-            ? sourceImageUrl
-            : state.lastPhotoUrl
-          : undefined,
-        lastPhotoSource: shouldSendSourceImage
-          ? sourceIsGeneratedResult
-            ? "stored"
-            : state.lastPhotoSource
-          : undefined,
-      });
+        if (generationResult.kind === "success") {
+          await handleGenerationSuccess({
+            deps,
+            generationResult,
+            promptHint,
+            psid,
+            reqId,
+            resolvedGenerationKind,
+            userId,
+            lang,
+            rememberSendOutcome,
+          });
+          return;
+        }
 
-      if (generationResult.kind === "success") {
-        await handleGenerationSuccess({
+        await handleGenerationFailure({
           deps,
           generationResult,
-          promptHint,
           psid,
           reqId,
           resolvedGenerationKind,
-          userId,
           lang,
           rememberSendOutcome,
         });
-        return;
-      }
-
-      await handleGenerationFailure({
+      });
+    } catch (error) {
+      await recoverUnexpectedGenerationError({
         deps,
-        generationResult,
+        error,
         psid,
+        userId,
         reqId,
-        resolvedGenerationKind,
         lang,
+        resolvedGenerationKind,
         rememberSendOutcome,
       });
-    });
+      return sendOutcome;
+    } finally {
+      clearInFlightNotice(psid);
+    }
 
     if (didRun === null) {
       const result = await deps.maybeSendInFlightMessage(psid, reqId);
@@ -174,7 +197,6 @@ export function createMessengerGenerationJobRunner(
       }
       return sendOutcome;
     }
-    clearInFlightNotice(psid);
     return sendOutcome;
   }
 
@@ -244,6 +266,109 @@ export function createMessengerGenerationJobRunner(
     processMessengerGenerationJob: executeImageGenerationJob,
     processMessengerGenerationJobDeadLetter,
   };
+}
+
+async function sendGenerationStartedAck(input: {
+  deps: GenerationJobRunnerDeps;
+  psid: string;
+  userId: string;
+  reqId: string;
+  lang: MessengerGenerationJob["lang"];
+  resolvedGenerationKind: GenerationKind;
+  rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
+}): Promise<void> {
+  try {
+    input.rememberSendOutcome(
+      await input.deps.sendLoggedText(
+        input.psid,
+        t(input.lang, "generatingImagePrompt"),
+        input.reqId
+      )
+    );
+  } catch (error) {
+    logMessengerGenerationRecoveryEvent(
+      "messenger_generation_started_ack_failed",
+      {
+        reqId: input.reqId,
+        user: toLogUser(input.userId),
+        generationKind: input.resolvedGenerationKind,
+        error,
+      }
+    );
+  }
+}
+
+async function recoverUnexpectedGenerationError(input: {
+  deps: GenerationJobRunnerDeps;
+  error: unknown;
+  psid: string;
+  userId: string;
+  reqId: string;
+  lang: MessengerGenerationJob["lang"];
+  resolvedGenerationKind: GenerationKind;
+  rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
+}): Promise<void> {
+  try {
+    await setFlowState(input.psid, "FAILURE");
+  } catch (stateError) {
+    logMessengerGenerationRecoveryEvent(
+      "messenger_generation_recovery_state_failed",
+      {
+        level: "error",
+        reqId: input.reqId,
+        user: toLogUser(input.userId),
+        generationKind: input.resolvedGenerationKind,
+        error: stateError,
+      }
+    );
+    return;
+  }
+
+  logMessengerGenerationRecoveryEvent("messenger_generation_unexpected_error", {
+    level: "error",
+    reqId: input.reqId,
+    user: toLogUser(input.userId),
+    generationKind: input.resolvedGenerationKind,
+    error: input.error,
+  });
+  recordGenerationError();
+
+  try {
+    const failureResponse = buildGenerationFailureResponse(
+      input.lang,
+      t(input.lang, "generationGenericFailure")
+    );
+    input.rememberSendOutcome(
+      await input.deps.sendLoggedQuickReplies(
+        input.psid,
+        failureResponse.text ?? "",
+        renderMessengerQuickReplies(failureResponse.actions),
+        input.reqId
+      )
+    );
+  } catch (sendError) {
+    logMessengerGenerationRecoveryEvent(
+      "messenger_generation_recovery_send_failed",
+      {
+        level: "error",
+        reqId: input.reqId,
+        user: toLogUser(input.userId),
+        generationKind: input.resolvedGenerationKind,
+        error: sendError,
+      }
+    );
+  }
+}
+
+function logMessengerGenerationRecoveryEvent(
+  event: string,
+  details: Record<string, unknown>
+): void {
+  try {
+    safeLog(event, details);
+  } catch {
+    // Recovery logging must never prevent flow-state recovery.
+  }
 }
 
 async function finishDuplicateGenerationIfCompleted(input: {
