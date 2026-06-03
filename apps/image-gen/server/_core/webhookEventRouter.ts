@@ -13,7 +13,7 @@ import {
   type TrackedEventContext,
 } from "./webhookEventContext";
 import { handleMessageEvent } from "./webhookMessageRouter";
-import type { HandlerContext } from "./webhookHandlers";
+import type { HandlerContext } from "./webhookHandlerTypes";
 import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 
 export async function handleEntry(
@@ -85,7 +85,7 @@ async function handleEvent(
   await eventContext.sendFallbackIfNeeded();
 }
 
-async function routeTrackedEvent(
+export async function routeTrackedEvent(
   context: TrackedEventContext,
   event: FacebookWebhookEvent
 ): Promise<void> {

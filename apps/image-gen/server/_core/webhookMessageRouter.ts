@@ -34,11 +34,11 @@ import {
 import { toLogUser } from "./privacy";
 import { type FacebookWebhookEvent } from "./webhookHelpers";
 import { handlePayload } from "./webhookPayloadBranch";
-import type { HandlerContext } from "./webhookHandlers";
+import type { HandlerContext } from "./webhookHandlerTypes";
 
 type FacebookWebhookMessage = NonNullable<FacebookWebhookEvent["message"]>;
 
-type MessageEventInput = {
+export type MessageEventInput = {
   psid: string;
   userId: string;
   event: FacebookWebhookEvent;
@@ -46,7 +46,7 @@ type MessageEventInput = {
   lang: Lang;
 };
 
-type ImageMessageInput = {
+export type ImageMessageInput = {
   psid: string;
   userId: string;
   reqId: string;
@@ -56,7 +56,7 @@ type ImageMessageInput = {
   timestamp?: number;
 };
 
-type TextMessageInput = {
+export type TextMessageInput = {
   psid: string;
   userId: string;
   reqId: string;
@@ -134,7 +134,7 @@ export async function handleMessageEvent(
   });
 }
 
-async function tryHandleImageMessage(
+export async function tryHandleImageMessage(
   ctx: HandlerContext,
   input: ImageMessageInput
 ): Promise<boolean> {
@@ -193,7 +193,9 @@ async function tryHandleImageMessage(
   return await handleImageDecision(ctx, input, imageDecision);
 }
 
-function shouldHandleImageCaptionAsConversation(text: string | undefined): text is string {
+function shouldHandleImageCaptionAsConversation(
+  text: string | undefined
+): text is string {
   const caption = text?.trim();
   if (!caption) {
     return false;
@@ -363,7 +365,7 @@ async function handleImageDecision(
   return false;
 }
 
-async function handleTextMessage(
+export async function handleTextMessage(
   ctx: HandlerContext,
   input: TextMessageInput
 ): Promise<void> {
@@ -371,7 +373,11 @@ async function handleTextMessage(
   const normalizedMessage = createNormalizedTextMessage(resolvedInput);
   logNormalizedTextHandoff(input, normalizedMessage);
 
-  const result = await handleSharedMessengerText(ctx, resolvedInput, normalizedMessage);
+  const result = await handleSharedMessengerText(
+    ctx,
+    resolvedInput,
+    normalizedMessage
+  );
   await sendSharedMessengerTextResponse(ctx, resolvedInput, result);
   await applyTextAfterSend(result, resolvedInput);
 }

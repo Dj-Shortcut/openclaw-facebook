@@ -17,7 +17,7 @@ import { buildQuickStartResponse } from "./conversationActions";
 import { safeLog } from "./messengerApi";
 import { toLogUser } from "./privacy";
 import { type FacebookWebhookEvent } from "./webhookHelpers";
-import type { HandlerContext } from "./webhookHandlers";
+import type { HandlerContext } from "./webhookHandlerTypes";
 import type { Lang } from "./i18n";
 
 type PostbackEventInput = {

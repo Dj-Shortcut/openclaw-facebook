@@ -8,8 +8,12 @@ import {
 import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 import { setPendingConversationActions } from "./messengerState";
 import { toLogUser, toUserKey } from "./privacy";
-import type { HandlerContext } from "./webhookHandlers";
-import type { BotImageContext, BotPayloadContext, BotTextContext } from "./botContext";
+import type { HandlerContext } from "./webhookHandlerTypes";
+import type {
+  BotImageContext,
+  BotPayloadContext,
+  BotTextContext,
+} from "./botContext";
 import type { Lang } from "./i18n";
 
 function logMessengerWebhookTrace(
@@ -280,7 +284,11 @@ export function createTrackedHandlerContext(
       return outcome;
     },
     sendFlowExplanation: async (userPsid, userLang, requestId) => {
-      const outcome = await ctx.sendFlowExplanation(userPsid, userLang, requestId);
+      const outcome = await ctx.sendFlowExplanation(
+        userPsid,
+        userLang,
+        requestId
+      );
       markResponseSentFromOutcome(outcome);
       return outcome;
     },

@@ -11,7 +11,7 @@ import {
   createResponseSentTracker,
   sendFallbackTextIfNeeded,
 } from "./webhookFallback";
-import type { HandlerContext } from "./webhookHandlers";
+import type { HandlerContext } from "./webhookHandlerTypes";
 
 type MessengerState = Awaited<ReturnType<typeof getOrCreateState>>;
 
