@@ -152,9 +152,9 @@ describe("internal Messenger image request route", () => {
   });
 
   it("maps skipped internal request outcomes to a non-retryable response", async () => {
-    acceptInternalMessengerImageRequestMock.mockResolvedValueOnce(
-      MESSENGER_SEND_SKIPPED
-    );
+    acceptInternalMessengerImageRequestMock.mockResolvedValueOnce({
+      ...MESSENGER_SEND_SKIPPED,
+    });
 
     await withListeningApp(createApp(), async baseUrl => {
       const response = await postInternalImageRequest(baseUrl);

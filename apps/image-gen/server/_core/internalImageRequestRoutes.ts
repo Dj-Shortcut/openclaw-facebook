@@ -8,6 +8,7 @@ import {
 import { safeLog } from "./logger";
 import { isInternalMessengerImageRequestNotQueuedError } from "./internalImageRequestErrors";
 import { MESSENGER_SEND_SKIPPED } from "./webhookFallback";
+import type { MessengerSendOutcome } from "./messengerApi";
 
 const internalImageRequestSchema = z.object({
   psid: z.string().trim().min(1),
@@ -73,6 +74,15 @@ function authorizeInternalRequest(req: Request, res: Response): boolean {
   return true;
 }
 
+function isSkippedInternalImageRequestOutcome(
+  outcome: MessengerSendOutcome | undefined
+): boolean {
+  return (
+    outcome === MESSENGER_SEND_SKIPPED ||
+    (outcome?.sent === false && outcome.reason === "response_window_closed")
+  );
+}
+
 function sendNotQueuedResponse(res: Response): void {
   res.status(409).json({
     error: "Image request was not queued",
@@ -100,7 +110,11 @@ export function registerInternalImageRequestRoutes(app: Express): void {
 
       try {
         const outcome = await acceptInternalMessengerImageRequest(parsed.data);
-        if (outcome === MESSENGER_SEND_SKIPPED) {
+        if (isSkippedInternalImageRequestOutcome(outcome)) {
+          safeLog("internal_image_request_not_queued", {
+            level: "warn",
+            reason: "send_skipped",
+          });
           sendNotQueuedResponse(res);
           return;
         }
