@@ -27,6 +27,7 @@ import {
   getPendingConversationActionsForMessage,
   getOrCreateState,
   markIntroSeen,
+  setPendingScreenshotIntentContinuation,
   setFlowState,
   setPendingConversationActions,
   setPendingStoredImage,
@@ -169,6 +170,7 @@ export async function tryHandleImageMessage(
     state,
     storedSourceImageUrl
   );
+  await setPendingScreenshotIntentContinuation(input.psid, false);
 
   if (
     await promptForFaceMemoryConsent(
@@ -176,7 +178,12 @@ export async function tryHandleImageMessage(
       input,
       state,
       imageDecision.action,
-      storedSourceImageUrl
+      storedSourceImageUrl,
+      shouldContinueImageIntentAfterScreenshot({
+        text: input.text,
+        state,
+        storedSourceImageUrl,
+      })
     )
   ) {
     return true;
@@ -256,19 +263,15 @@ function shouldContinueImageIntentAfterScreenshot(
     return false;
   }
 
+  if (shouldHandleImageCaptionAsConversation(input.text)) {
+    return false;
+  }
+
   if (!input.state.lastPrompt) {
     return false;
   }
 
-  return (
-    input.state.stage === "AWAITING_EDIT_PROMPT" ||
-    Boolean(
-      input.state.lastPhotoUrl ||
-        input.state.lastPhoto ||
-        input.state.lastImageUrl ||
-        input.state.lastGeneratedUrl
-    )
-  );
+  return input.state.stage === "AWAITING_EDIT_PROMPT";
 }
 
 async function handleScreenshotIntentContinuation(
@@ -403,7 +406,8 @@ async function promptForFaceMemoryConsent(
   input: ImageMessageInput,
   state: Awaited<ReturnType<typeof getOrCreateState>>,
   imageAction: ReturnType<typeof getStoredMessengerImageDecision>["action"],
-  storedSourceImageUrl: string
+  storedSourceImageUrl: string,
+  shouldContinueScreenshotIntent = false
 ): Promise<boolean> {
   if (!isFaceMemoryEnabled()) {
     return false;
@@ -416,6 +420,10 @@ async function promptForFaceMemoryConsent(
 
   if (state.faceMemoryConsent) {
     return false;
+  }
+
+  if (shouldContinueScreenshotIntent) {
+    await setPendingScreenshotIntentContinuation(input.psid, true);
   }
 
   await ctx.sendFaceMemoryConsentPrompt(input.psid, input.lang, input.reqId);

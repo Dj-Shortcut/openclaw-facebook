@@ -1765,6 +1765,173 @@ describe("messenger deterministic free text", () => {
     );
   });
 
+  it("does not continue a stale screenshot intent when no active edit flow exists", async () => {
+    const priorPrompt = "Maak iets grappigs en onschuldig voor mijn zus";
+    const psid = "screenshot-stale-intent-user";
+    const fetchMock = installOpenAiSuccessFetchMock();
+
+    await Promise.resolve(
+      setLastGenerationContext(psid, { prompt: priorPrompt })
+    );
+    await Promise.resolve(setFlowState(psid, "IDLE"));
+
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: psid },
+              message: {
+                mid: "mid-screenshot-stale-intent",
+                text: "Tis een screen",
+                attachments: [
+                  {
+                    type: "image",
+                    payload: { url: "https://img.example/screenshot-stale.jpg" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(sendTextMock).toHaveBeenCalledWith(
+      psid,
+      t("nl", "screenshotClarifyPrompt")
+    );
+    expect(fetchMock.mock.calls.some(([url]) => toUrlString(url) === "https://api.openai.com/v1/responses")).toBe(false);
+    expect(sendImageMock).not.toHaveBeenCalledWith(
+      psid,
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+  });
+
+  it("treats explicit screenshot captions as conversation input", async () => {
+    const fetchMock = installOpenAiSuccessFetchMock();
+    const psid = "screenshot-explicit-caption-user";
+    const priorPrompt = "Maak iets grappigs voor mijn zus";
+
+    await Promise.resolve(setLastGenerationContext(psid, { prompt: priorPrompt }));
+    await Promise.resolve(setFlowState(psid, "AWAITING_EDIT_PROMPT"));
+
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: psid },
+              message: {
+                mid: "mid-screenshot-explicit-caption",
+                text: "Tis een screenshot, bewerk deze foto als cartoon",
+                attachments: [
+                  {
+                    type: "image",
+                    payload: { url: "https://img.example/screenshot-explicit.jpg" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    expect(openAiCall).toBeDefined();
+    expect(promptFromOpenAiRequest(openAiCall?.[1])).not.toContain(priorPrompt);
+    expect(promptFromOpenAiRequest(openAiCall?.[1])).toContain(
+      "Tis een screenshot, bewerk deze foto als cartoon"
+    );
+    expect(sendTextMock).not.toHaveBeenCalledWith(
+      psid,
+      t("nl", "screenshotIntentContinuation")
+    );
+    expect(sendImageMock).toHaveBeenCalledWith(
+      psid,
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+  });
+
+  it("continues screenshot intent flow after face-memory consent choice", async () => {
+    const priorPrompt = "Maak iets grappigs en onschuldig voor mijn zus";
+    const psid = "screenshot-consent-continue-user";
+    const fetchMock = installOpenAiSuccessFetchMock();
+
+    await Promise.resolve(
+      setLastGenerationContext(psid, { prompt: priorPrompt })
+    );
+    await Promise.resolve(setFlowState(psid, "AWAITING_EDIT_PROMPT"));
+    process.env.ENABLE_FACE_MEMORY = "true";
+
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: psid },
+              message: {
+                mid: "mid-screenshot-consent-initial",
+                text: "Tis een screenshot",
+                attachments: [
+                  {
+                    type: "image",
+                    payload: { url: "https://img.example/screenshot-consent.jpg" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expectFaceMemoryConsentPrompt(psid);
+
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: psid },
+              message: {
+                mid: "mid-screenshot-consent-no",
+                quick_reply: { payload: "CONSENT_FACE_NO" },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(sendTextMock).toHaveBeenCalledWith(
+      psid,
+      t("nl", "screenshotIntentContinuation")
+    );
+    expect(sendTextMock).toHaveBeenCalledWith(
+      psid,
+      t("nl", "generatingImagePrompt")
+    );
+    const openAiCall = fetchMock.mock.calls.find(
+      ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+    );
+    expect(openAiCall).toBeDefined();
+    expect(promptFromOpenAiRequest(openAiCall?.[1])).toContain(priorPrompt);
+    expect(sendImageMock).toHaveBeenCalledWith(
+      psid,
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
+  });
+
   it("asks a natural screenshot clarification prompt when no prior intent exists", async () => {
     const psid = "screenshot-clarify-user";
 

@@ -1,6 +1,7 @@
 import {
   declineFaceMemory,
   getOrCreateState,
+  clearPendingScreenshotIntentContinuation,
   rememberFaceSourceImage,
   setFaceMemoryConsentGiven,
   setFlowState,
@@ -14,6 +15,7 @@ import { getBotFeatures } from "./bot/features";
 import { handleMessengerPayload } from "./messengerPayloadRouting";
 import { buildQuickStartResponse } from "./conversationActions";
 import { safeLog } from "./messengerApi";
+import { t } from "./i18n";
 import { toLogUser } from "./privacy";
 import { type FacebookWebhookEvent } from "./webhookHelpers";
 import type { HandlerContext } from "./webhookHandlerTypes";
@@ -39,6 +41,31 @@ async function continueAfterFaceMemoryChoice(
   ctx: HandlerContext,
   input: PayloadFlowInput
 ): Promise<void> {
+  const state = await getOrCreateState(input.psid);
+  if (state.pendingScreenshotIntentContinuation) {
+    const sourceImageUrl = state.pendingImageUrl ?? state.lastPhotoUrl;
+    const priorPrompt = state.lastPrompt;
+    await clearPendingScreenshotIntentContinuation(input.psid);
+    await setFlowState(input.psid, "AWAITING_EDIT_PROMPT");
+    if (sourceImageUrl && priorPrompt) {
+      await ctx.sendLoggedText(
+        input.psid,
+        t(input.lang, "screenshotIntentContinuation"),
+        input.reqId
+      );
+      await ctx.runImageGeneration(
+        input.psid,
+        input.userId,
+        input.reqId,
+        input.lang,
+        sourceImageUrl,
+        priorPrompt,
+        "source_image_edit"
+      );
+      return;
+    }
+  }
+
   await setFlowState(input.psid, "AWAITING_EDIT_PROMPT");
   await ctx.sendPhotoReceivedPrompt(input.psid, input.lang, input.reqId);
 }
