@@ -110,15 +110,15 @@ The OpenClaw/Messenger gateway must stay shielded. Public traffic may reach only
 
 ## Tenant Privacy & Data Ownership
 
-### Operator and support access
+Infrastructure ownership does not imply customer data access.
 
-* Operators should not have default read access to customer conversations, memory, uploaded knowledge, personal data, or generated prompts/outputs.
-* Support access to content should require explicit customer approval where possible.
-* Emergency break-glass access must be exceptional, time-limited, audited, and reviewed.
-* Admin tooling should expose operational metadata by default, not raw customer content.
-* Debugging tools must avoid cross-tenant search or transcript browsing unless intentionally built as a controlled, audited support feature.
+Rules:
 
-These boundaries apply to admin dashboards, logs, support workflows, and incident tooling.
+1. Each customer gets their own assistant workspace.
+2. Customer data includes conversations, assistant memory, uploaded knowledge, personal data, generated prompts/outputs, channel identifiers, and metadata.
+3. Infrastructure operators may manage deployment, uptime, billing, quotas, security, and reliability, but must not have default access to customer conversation content, memory, knowledge base content, or personal data.
+4. Default system behavior must be tenant isolation by design, least-privilege access, metadata-first observability, redacted logs by default, explicit customer-approved support access when content inspection is required, auditable break-glass access for exceptional incidents, and deletion/export paths for tenant-owned data.
+5. Never introduce admin tooling, logs, analytics, debug endpoints, or background jobs that expose customer content across tenants by default.
 
 ---
 
