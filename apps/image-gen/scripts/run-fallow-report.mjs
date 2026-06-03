@@ -37,7 +37,7 @@ export function quoteWindowsShellArg(value) {
     }
 
     quotedValue += "\\".repeat(backslashCount);
-    quotedValue += character.replace(/[&<>()|^%]/g, "^$&");
+    quotedValue += character;
     backslashCount = 0;
   }
 

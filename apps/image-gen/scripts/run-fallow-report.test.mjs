@@ -41,24 +41,30 @@ describe("run-fallow-report", () => {
 
   it("enables the shell and quotes fallow arguments for Windows npx.cmd", () => {
     const config = createFallowSpawnConfig(
-      "C:\\tmp\\image gen",
+      "C:\\R&D\\image gen",
       ["--flag=hello & goodbye", 'quote"value'],
       "win32"
     );
 
     expect(config.args).toEqual([]);
     expect(config.options).toMatchObject({
-      cwd: "C:\\tmp\\image gen",
+      cwd: "C:\\R&D\\image gen",
       shell: true,
     });
     expect(config.command).toContain("npx.cmd");
     expect(config.command).toContain(
-      quoteWindowsShellArg("C:\\tmp\\image gen")
+      quoteWindowsShellArg("C:\\R&D\\image gen")
     );
     expect(config.command).toContain(
       quoteWindowsShellArg("--flag=hello & goodbye")
     );
     expect(config.command).toContain(quoteWindowsShellArg('quote"value'));
+    expect(quoteWindowsShellArg("C:\\R&D\\image gen")).toBe(
+      '"C:\\R&D\\image gen"'
+    );
+    expect(quoteWindowsShellArg("--flag=hello & goodbye")).toBe(
+      '"--flag=hello & goodbye"'
+    );
   });
 
   it("keeps fallow arguments after the separator", () => {
