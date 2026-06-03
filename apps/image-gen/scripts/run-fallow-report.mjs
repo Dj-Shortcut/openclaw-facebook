@@ -13,78 +13,6 @@ export function getNpxCommand(platform = process.platform) {
   return platform === "win32" ? "npx.cmd" : "npx";
 }
 
-export function quoteWindowsShellArg(value) {
-  const stringValue = String(value);
-
-  if (stringValue.length === 0) {
-    return '""';
-  }
-
-  let quotedValue = '"';
-  let backslashCount = 0;
-
-  for (const character of stringValue) {
-    if (character === "\\") {
-      backslashCount += 1;
-      continue;
-    }
-
-    if (character === '"') {
-      quotedValue += "\\".repeat(backslashCount * 2 + 1);
-      quotedValue += '"';
-      backslashCount = 0;
-      continue;
-    }
-
-    quotedValue += "\\".repeat(backslashCount);
-    quotedValue += character.replace(/[&<>()|^%]/g, "^$&");
-    backslashCount = 0;
-  }
-
-  quotedValue += "\\".repeat(backslashCount * 2);
-  quotedValue += '"';
-
-  return quotedValue;
-}
-
-export function createFallowSpawnConfig(
-  rootPath,
-  fallowArgs,
-  platform = process.platform
-) {
-  const args = [
-    "--yes",
-    "fallow@2.27.0",
-    "--root",
-    rootPath,
-    ...fallowArgs,
-    "-f",
-    "json",
-  ];
-  const options = {
-    cwd: rootPath,
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024 * 200,
-  };
-
-  if (platform === "win32") {
-    return {
-      command: `${getNpxCommand(platform)} ${args.map(quoteWindowsShellArg).join(" ")}`,
-      args: [],
-      options: {
-        ...options,
-        shell: true,
-      },
-    };
-  }
-
-  return {
-    command: getNpxCommand(platform),
-    args,
-    options,
-  };
-}
-
 export function parseRunFallowReportArgs(args) {
   let root = ".";
   let outputPath = "";
@@ -113,16 +41,23 @@ export function parseRunFallowReportArgs(args) {
     fallowArgs.push(arg);
   }
 
-  return { fallowArgs, outputPath, root };
+  return { root, outputPath, fallowArgs };
 }
 
-export function runFallowReport(args = process.argv.slice(2)) {
-  const { fallowArgs, outputPath, root } = parseRunFallowReportArgs(args);
+export function runFallowReport({
+  args = process.argv.slice(2),
+  platform = process.platform,
+  spawn = spawnSync,
+  exit = process.exit,
+  stderr = process.stderr,
+} = {}) {
+  const { root, outputPath, fallowArgs } = parseRunFallowReportArgs(args);
 
   if (!outputPath) {
-    console.error(
-      "Usage: node scripts/run-fallow-report.mjs [--root <root>] --output <report.json> [-- <fallow args>]"
+    stderr.write(
+      "Usage: node scripts/run-fallow-report.mjs [--root <root>] --output <report.json> [-- <fallow args>]\n"
     );
+    exit(1);
     return 1;
   }
 
@@ -140,15 +75,26 @@ export function runFallowReport(args = process.argv.slice(2)) {
   );
 
   try {
-    const fallowSpawnConfig = createFallowSpawnConfig(rootPath, fallowArgs);
-    const result = spawnSync(
-      fallowSpawnConfig.command,
-      fallowSpawnConfig.args,
-      fallowSpawnConfig.options
+    const result = spawn(
+      getNpxCommand(platform),
+      [
+        "--yes",
+        "fallow@2.27.0",
+        "--root",
+        rootPath,
+        ...fallowArgs,
+        "-f",
+        "json",
+      ],
+      {
+        cwd: rootPath,
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024 * 200,
+      }
     );
 
     if (result.stderr) {
-      process.stderr.write(result.stderr);
+      stderr.write(result.stderr);
     }
 
     if (result.error) {
@@ -156,12 +102,13 @@ export function runFallowReport(args = process.argv.slice(2)) {
     }
 
     if (result.status !== 0) {
+      exit(result.status ?? 1);
       return result.status ?? 1;
     }
 
     fs.writeFileSync(temporaryReportPath, result.stdout, "utf8");
 
-    const normalizeResult = spawnSync(
+    const normalizeResult = spawn(
       process.execPath,
       [normalizeScriptPath, "--root", rootPath, temporaryReportPath],
       {
@@ -176,6 +123,7 @@ export function runFallowReport(args = process.argv.slice(2)) {
     }
 
     if (normalizeResult.status !== 0) {
+      exit(normalizeResult.status ?? 1);
       return normalizeResult.status ?? 1;
     }
 
@@ -186,6 +134,6 @@ export function runFallowReport(args = process.argv.slice(2)) {
   }
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
-  process.exit(runFallowReport());
+if (process.argv[1] === scriptPath) {
+  runFallowReport();
 }
