@@ -72,6 +72,7 @@ function authorizeInternalRequest(req: Request, res: Response): boolean {
   return true;
 }
 
+/** Registers authenticated internal Messenger image-request and event bridge routes. */
 export function registerInternalImageRequestRoutes(app: Express): void {
   app.post(
     "/internal/messenger/image-request",

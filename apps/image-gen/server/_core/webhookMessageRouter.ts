@@ -66,6 +66,7 @@ export type TextMessageInput = {
   timestamp?: number;
 };
 
+/** Handles a non-echo Messenger message event and dispatches payload, image, or text flows. */
 export async function handleMessageEvent(
   ctx: HandlerContext,
   input: MessageEventInput
@@ -137,6 +138,7 @@ export async function handleMessageEvent(
   });
 }
 
+/** Attempts to persist and route an inbound Messenger image attachment. */
 export async function tryHandleImageMessage(
   ctx: HandlerContext,
   input: ImageMessageInput
@@ -368,6 +370,7 @@ async function handleImageDecision(
   return false;
 }
 
+/** Normalizes and routes Messenger text through the shared conversation layer. */
 export async function handleTextMessage(
   ctx: HandlerContext,
   input: TextMessageInput

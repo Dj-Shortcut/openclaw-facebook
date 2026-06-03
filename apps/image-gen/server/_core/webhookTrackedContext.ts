@@ -103,6 +103,7 @@ function decorateFeatureContext<TContext extends FeatureContext>(
   };
 }
 
+/** Wraps a handler context so successful sends mark the current webhook response as handled. */
 export function createTrackedHandlerContext(
   ctx: HandlerContext,
   markResponseSentFromOutcome: (

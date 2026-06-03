@@ -16,6 +16,7 @@ export type {
   InternalMessengerImageRequestInput,
 } from "./webhookHandlerTypes";
 
+/** Creates the public Messenger webhook handlers while delegating work to focused modules. */
 export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
   ensureDefaultBotFeaturesRegistered();
 

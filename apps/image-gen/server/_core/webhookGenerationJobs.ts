@@ -65,6 +65,7 @@ type GenerationJobRunnerDeps = Pick<
   | "sendLoggedText"
 >;
 
+/** Creates the Messenger image-generation job runner and queue/dead-letter entry points. */
 export function createMessengerGenerationJobRunner(
   deps: GenerationJobRunnerDeps
 ): GenerationJobRunner {

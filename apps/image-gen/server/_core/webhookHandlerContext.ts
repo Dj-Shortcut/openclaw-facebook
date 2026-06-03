@@ -36,6 +36,7 @@ const MESSENGER_CAPABILITIES = Object.freeze({
   richTemplates: true,
 });
 
+/** Builds the Messenger handler context used by webhook routers and feature adapters. */
 export function createHandlerContext({
   defaultLang,
   runImageGeneration,
@@ -387,6 +388,7 @@ export function createHandlerContext({
   };
 }
 
+/** Clears the per-user in-flight notice cooldown after generation completes or recovers. */
 export function clearInFlightNotice(psid: string): void {
   inFlightNoticeSent.delete(psid);
 }

@@ -22,6 +22,7 @@ import type {
   InternalMessengerImageRequestInput,
 } from "./webhookHandlerTypes";
 
+/** Signals an accepted internal request that could not safely enqueue or start generation. */
 export class InternalMessengerImageRequestNotQueuedError extends Error {
   constructor(message: string) {
     super(message);
@@ -36,6 +37,7 @@ type InternalImageRequestHandlerDeps = Pick<
   defaultLang: Lang;
 };
 
+/** Creates handlers for tenant-scoped internal Messenger image-generation requests. */
 export function createInternalMessengerImageRequestHandler(
   deps: InternalImageRequestHandlerDeps
 ) {

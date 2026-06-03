@@ -13,6 +13,7 @@ export function getFreeDailyLimit(): number {
   return DEFAULT_FREE_DAILY_LIMIT;
 }
 
+/** Returns whether a Messenger PSID or tenant-safe user key has exact quota bypass access. */
 export function hasQuotaBypass(psid: string, userKey: string): boolean {
   const raw = process.env.MESSENGER_QUOTA_BYPASS_IDS ?? "";
   if (!raw.trim()) {

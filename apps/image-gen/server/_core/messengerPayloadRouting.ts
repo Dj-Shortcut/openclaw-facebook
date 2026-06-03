@@ -55,6 +55,7 @@ async function tryHandleFeaturePayload(
   return false;
 }
 
+/** Routes Messenger payloads through in-flight checks and registered payload features. */
 export async function handleMessengerPayload(
   input: MessengerPayloadRoutingInput
 ): Promise<void> {

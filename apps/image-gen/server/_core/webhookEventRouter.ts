@@ -16,6 +16,7 @@ import { handleMessageEvent } from "./webhookMessageRouter";
 import type { HandlerContext } from "./webhookHandlerTypes";
 import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 
+/** Routes every Messenger event in a Facebook webhook entry. */
 export async function handleEntry(
   ctx: HandlerContext,
   entry: FacebookWebhookEntry
@@ -85,6 +86,7 @@ async function handleEvent(
   await eventContext.sendFallbackIfNeeded();
 }
 
+/** Selects the consent, postback, or message branch for a tracked event. */
 export async function routeTrackedEvent(
   context: TrackedEventContext,
   event: FacebookWebhookEvent
