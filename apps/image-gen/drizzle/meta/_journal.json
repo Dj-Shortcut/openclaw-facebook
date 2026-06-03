@@ -36,6 +36,13 @@
       "when": 1780300800000,
       "tag": "0004_customer_portal",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1780636800000,
+      "tag": "0005_workspace_tenant_model",
+      "breakpoints": true
     }
   ]
 }

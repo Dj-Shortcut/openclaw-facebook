@@ -16,11 +16,14 @@ import {
   InsertUser,
   InsertWorkspace,
   InsertWorkspaceMember,
+  InsertWorkspacePrivacySetting,
   messengerState,
   notificationLog,
   usageStats,
   users,
   workspaceMembers,
+  workspacePrivacySettings,
+  workspaceKnowledgeSources,
   workspaces,
   workspaceUsageDaily,
 } from "../drizzle/schema";
@@ -323,6 +326,134 @@ export async function listChannelConnections(workspaceId: number) {
     .where(eq(channelConnections.workspaceId, workspaceId));
 
   return result;
+}
+
+type WorkspacePrivacySettingsRecord = {
+  allowKnowledgeIndexing: number;
+  allowUsageAnalytics: number;
+  imageMemoryRetentionDays: number;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type WorkspacePrivacySettingsModel = {
+  allowKnowledgeIndexing: boolean;
+  allowUsageAnalytics: boolean;
+  imageMemoryRetentionDays: number;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+const DEFAULT_WORKSPACE_PRIVACY_SETTINGS: Omit<
+  WorkspacePrivacySettingsModel,
+  "createdAt" | "updatedAt"
+> = {
+  allowKnowledgeIndexing: true,
+  allowUsageAnalytics: false,
+  imageMemoryRetentionDays: 30,
+};
+
+function normalizeWorkspacePrivacySettings(
+  record?: WorkspacePrivacySettingsRecord | null,
+  fallbackBase = new Date()
+): WorkspacePrivacySettingsModel {
+  if (!record) {
+    return {
+      allowKnowledgeIndexing: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowKnowledgeIndexing,
+      allowUsageAnalytics: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowUsageAnalytics,
+      imageMemoryRetentionDays: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.imageMemoryRetentionDays,
+      createdAt: fallbackBase,
+      updatedAt: fallbackBase,
+    };
+  }
+
+  return {
+    allowKnowledgeIndexing: record.allowKnowledgeIndexing === 1,
+    allowUsageAnalytics: record.allowUsageAnalytics === 1,
+    imageMemoryRetentionDays: record.imageMemoryRetentionDays,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+}
+
+export async function listWorkspaceKnowledgeSources(workspaceId: number) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("list_workspace_knowledge_sources");
+    return [];
+  }
+
+  const result = await db
+    .select()
+    .from(workspaceKnowledgeSources)
+    .where(eq(workspaceKnowledgeSources.workspaceId, workspaceId))
+    .orderBy((table) => table.name);
+
+  return result;
+}
+
+export async function getWorkspaceKnowledgeSummary(workspaceId: number) {
+  const sources = await listWorkspaceKnowledgeSources(workspaceId);
+  const activeSources = sources.filter(source => source.status === "active");
+  return {
+    workspaceId,
+    totalSources: sources.length,
+    activeSources: activeSources.length,
+    lastUpdate:
+      sources.reduce((last: Date | null, source) => {
+        if (!source.updatedAt || (last && source.updatedAt <= last)) {
+          return last;
+        }
+        return source.updatedAt;
+      }, null as Date | null) ?? new Date(0),
+    sources,
+  };
+}
+
+export async function getWorkspacePrivacySettings(workspaceId: number) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("get_workspace_privacy_settings");
+    return {
+      workspaceId,
+      ...DEFAULT_WORKSPACE_PRIVACY_SETTINGS,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    };
+  }
+
+  const existing = await db
+    .select()
+    .from(workspacePrivacySettings)
+    .where(eq(workspacePrivacySettings.workspaceId, workspaceId))
+    .limit(1);
+
+  const record = existing[0];
+  if (record) {
+    return {
+      workspaceId,
+      ...normalizeWorkspacePrivacySettings(record, record.createdAt),
+    };
+  }
+
+  const defaults: InsertWorkspacePrivacySetting = {
+    workspaceId,
+    allowKnowledgeIndexing: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowKnowledgeIndexing ? 1 : 0,
+    allowUsageAnalytics: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowUsageAnalytics ? 1 : 0,
+    imageMemoryRetentionDays: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.imageMemoryRetentionDays,
+  };
+  await db.insert(workspacePrivacySettings).values(defaults).onDuplicateKeyUpdate({
+    set: {
+      workspaceId,
+    },
+  });
+
+  return {
+    workspaceId,
+    ...DEFAULT_WORKSPACE_PRIVACY_SETTINGS,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
 }
 
 export async function upsertChannelConnection(values: InsertChannelConnection) {
