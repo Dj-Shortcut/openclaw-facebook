@@ -7,6 +7,7 @@
 
 ## Commit
 - `033dab4` Preserve screenshot intent flow for image uploads
+- `c2a2567` Add nightly conversation work log
 
 ## Files changed
 - `apps/image-gen/server/_core/imageIntent.ts`
