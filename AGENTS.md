@@ -23,6 +23,47 @@ The conversation layer should not know Messenger-specific details.
 
 ---
 
+# Hard Production Rules
+
+### Tenant Isolation
+
+- Customer data must remain tenant-scoped and workspace-bound at all times.
+- No cross-tenant reads are allowed in API handlers, jobs, logs, caches, or analytics.
+- No shared memory layers or global caches may store tenant content unless explicitly justified and documented per workspace boundary.
+- No shared retrieval indexes, vectors, or search artifacts may span customer workspaces unless an explicit customer-approved sharing feature exists.
+- All new storage systems must document their tenant boundary model before production use.
+
+### Privacy
+
+- Never log raw PSIDs, access tokens, tenant secrets, customer messages, or uploaded knowledge.
+- Never persist customer content in debug paths, shared tracing streams, support notes, or ad-hoc diagnostics.
+- Prefer redacted logs, hashed identifiers, and metadata-only observability signals.
+
+### Messenger Compliance
+
+- Preserve webhook verification and request signature handling.
+- Preserve GDPR consent flow and deletion requirements (`delete-my-data`).
+- Avoid changes that risk violating Facebook/Messenger platform policies or sender expectations.
+- Keep operational behavior compatible with approved policy envelopes during staged rollouts.
+
+### Cost Protection
+
+- Image generation is billable and must remain bounded by customer policy.
+- Preserve quota enforcement, budget enforcement, exhaustion handling, and abuse protection.
+- Never bypass quota checks in fallback paths, queue workers, or inline generation modes.
+- Billing controls must remain observable with auditable signals before and after refactors.
+
+# Meta Review Requirements
+
+New or changed Messenger capabilities should:
+
+- Consider Meta App Review impact before implementation.
+- Preserve reviewability and keep behavior easy to demonstrate in a reproducible way.
+- Avoid unnecessary permissions and never expand permission scope without explicit product and policy approval.
+- Update review documentation, demo instructions, and required-permission notes whenever review scope changes.
+
+---
+
 # Product Principles
 
 ## Conversation First
@@ -119,6 +160,10 @@ Rules:
 3. Infrastructure operators may manage deployment, uptime, billing, quotas, security, and reliability, but must not have default access to customer conversation content, memory, knowledge base content, or personal data.
 4. Default system behavior must be tenant isolation by design, least-privilege access, metadata-first observability, redacted logs by default, explicit customer-approved support access when content inspection is required, auditable break-glass access for exceptional incidents, and deletion/export paths for tenant-owned data.
 5. Never introduce admin tooling, logs, analytics, debug endpoints, or background jobs that expose customer content across tenants by default.
+6. Infrastructure ownership never implies customer-content access by default.
+7. Customer content is private by default.
+8. Support access must be explicit, customer-approved, and auditable.
+9. Break-glass access must be exceptional, narrowly scoped, time-limited, and logged.
 
 ---
 
@@ -175,8 +220,6 @@ Examples:
 
 Actions are a conversation primitive, not a Messenger primitive.
 
----
-
 # Current Refactor Priorities
 
 Priority order:
@@ -194,7 +237,14 @@ Not priorities:
 * Style catalog expansion.
 * Experimental routing systems.
 
----
+# Out of Scope
+
+- Do not add Facebook Login without explicit approval.
+- Do not request `user_posts`.
+- Do not request `user_friends`.
+- Do not add social graph features.
+- Do not add invasive profile collection.
+- Favor minimal Meta permission requests by default.
 
 # Dead Code Policy
 
@@ -210,8 +260,6 @@ Unless a task explicitly references them:
 Prefer deletion over preservation.
 
 Dead code increases maintenance cost.
-
----
 
 # Refactor Rules
 
@@ -233,8 +281,6 @@ If touching a large file:
 * preserve behavior
 * add tests first when possible
 
----
-
 # Compatibility Rules
 
 Do not remove existing production behavior unless:
@@ -246,8 +292,6 @@ Do not remove existing production behavior unless:
 Privacy and tenant-isolation fixes may intentionally restrict operator/admin access to customer data, provided there is a safe migration path for support workflows, auditability is preserved, and production customer functionality remains available.
 
 Legacy Messenger style payloads should not be reintroduced. Preserve production behavior through channel-neutral `ConversationAction` inputs and explicit natural-language/image-edit requests.
-
----
 
 # Production Safety
 
@@ -273,7 +317,32 @@ Never break:
 * Image generation pipeline
 * OpenClaw channel compatibility
 
----
+# High-Risk Areas
+
+### Messenger Runtime
+
+- `messengerWebhook.ts`
+- `webhookHandlers.ts`
+- `generationFlow.ts`
+- `webhookGenerationJobs.ts`
+
+Preserve webhook verification, consent gating, conversation state transitions, and image delivery paths in these files.
+
+### Privacy Systems
+
+- `consentService.ts`
+- `faceMemory.ts`
+- `delete-my-data` handlers
+
+Avoid data-retention or observability regressions; ensure redaction and tenant boundaries remain enforced.
+
+### Billing / Quotas
+
+- `messengerQuota.ts`
+- billing-related services
+- future Stripe integrations
+
+Quota and budget enforcement must remain intact and test-covered for fallback and failure paths.
 
 # Documentation Rules
 
@@ -286,8 +355,6 @@ Keep docs aligned with code.
 Delete stale documents rather than maintaining outdated plans.
 
 Historical documents should not appear actionable.
-
----
 
 # Agent Decision Framework
 
@@ -302,8 +369,6 @@ Before making changes ask:
 If the answer to multiple questions is "no":
 
 Stop and reconsider.
-
----
 
 # Testing
 
