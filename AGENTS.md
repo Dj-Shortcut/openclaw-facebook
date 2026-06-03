@@ -5,7 +5,7 @@
 This repository powers:
 
 * OpenClaw Facebook Messenger integration
-* Leaderbot conversational assistant
+* Leaderbot tenant-owned conversational assistants
 * Leaderbot image-generation platform
 
 Primary goal:
