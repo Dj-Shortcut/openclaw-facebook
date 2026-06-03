@@ -30,6 +30,7 @@ import { createMessengerGenerationJobRunner } from "./_core/webhookGenerationJob
 import { getState, resetStateStore } from "./_core/messengerState";
 import { deleteEphemeralKey, setEphemeralKey } from "./_core/stateStore";
 import { t } from "./_core/i18n";
+import { getMessengerGenerationCompletion } from "./_core/messengerGenerationCompletion";
 import type { MessengerSendOutcome } from "./_core/messengerApi";
 import type { HandlerContext } from "./_core/webhookHandlerTypes";
 
@@ -84,9 +85,10 @@ describe("messenger generation job safety", () => {
     expect(sendQuickRepliesMock).toHaveBeenCalled();
   });
 
-  it("clears the in-flight notice when handleGenerationSuccess throws", async () => {
+  it("records completion and clears in-flight notice when handleGenerationSuccess throws", async () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_771_001_000_000);
     const psid = "success-throw-clears-notice-user";
+    const reqId = "req-success-throw-clears-notice";
     const { ctx, runner } = createContextBackedRunner();
     executeGenerationFlowMock.mockResolvedValueOnce(successGenerationResult());
     sendImageMock.mockRejectedValueOnce(
@@ -98,9 +100,27 @@ describe("messenger generation job safety", () => {
       await runner.processMessengerGenerationJob({
         psid,
         userId: `${psid}-key`,
-        reqId: "req-success-throw-clears-notice",
+        reqId,
         lang: "nl",
       });
+
+      await expect(
+        Promise.resolve(getMessengerGenerationCompletion(reqId))
+      ).resolves.toEqual(
+        expect.objectContaining({
+          reqId,
+          imageUrl: "https://img.example/generated.png",
+          userKey: `${psid}-key`,
+        })
+      );
+
+      await runner.processMessengerGenerationJob({
+        psid,
+        userId: `${psid}-key`,
+        reqId,
+        lang: "nl",
+      });
+      expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
 
       sendTextMock.mockClear();
       await setEphemeralKey(`messenger:inflight:${psid}`, "active-again", 60);

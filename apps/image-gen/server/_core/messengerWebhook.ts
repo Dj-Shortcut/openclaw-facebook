@@ -2,6 +2,7 @@ import { normalizeLang, type Lang } from "./i18n";
 import { createWebhookHandlers } from "./webhookHandlers";
 import { resetWebhookReplayProtection } from "./webhookReplayProtection";
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
+import type { MessengerSendOutcome } from "./messengerApi";
 export { processWhatsAppWebhookPayload } from "./whatsappWebhook";
 
 const DEFAULT_LANG = normalizeLang(process.env.DEFAULT_MESSENGER_LANG);
@@ -27,8 +28,8 @@ export async function acceptInternalMessengerImageRequest(input: {
   lang?: Lang;
   timestamp?: number;
   sourceImageUrl?: string;
-}): Promise<void> {
-  await handlers.acceptInternalMessengerImageRequest(input);
+}): Promise<MessengerSendOutcome> {
+  return await handlers.acceptInternalMessengerImageRequest(input);
 }
 
 export async function processInternalMessengerImageRequest(input: {
@@ -38,8 +39,8 @@ export async function processInternalMessengerImageRequest(input: {
   lang?: Lang;
   timestamp?: number;
   sourceImageUrl?: string;
-}): Promise<void> {
-  await handlers.processInternalMessengerImageRequest(input);
+}): Promise<MessengerSendOutcome> {
+  return await handlers.processInternalMessengerImageRequest(input);
 }
 
 export async function processMessengerGenerationJob(

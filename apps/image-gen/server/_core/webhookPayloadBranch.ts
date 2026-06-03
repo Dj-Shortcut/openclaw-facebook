@@ -119,8 +119,8 @@ export async function handlePayload(
     payload: input.payload,
     reqId: input.reqId,
     lang: input.lang,
-    maybeSendInFlightMessage: async (userPsid, requestId) =>
-      (await ctx.maybeSendInFlightMessage(userPsid, requestId, input.lang))
+    maybeSendInFlightMessage: async (userPsid, requestId, payloadLang) =>
+      (await ctx.maybeSendInFlightMessage(userPsid, requestId, payloadLang))
         .handled,
     getState: userPsid => Promise.resolve(getOrCreateState(userPsid)),
     getFeatures: getBotFeatures,

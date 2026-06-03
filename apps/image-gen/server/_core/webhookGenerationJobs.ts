@@ -496,17 +496,18 @@ async function handleGenerationSuccess(input: {
     ok: true,
   });
 
+  await Promise.resolve(
+    markMessengerGenerationCompleted(input.reqId, imageUrl, input.userId)
+  );
+  await increment(input.psid);
+  await setLastGenerated(input.psid, imageUrl);
+  await setLastGenerationContext(input.psid, { prompt: input.promptHint });
+
   const messengerSendStartedAt = Date.now();
   input.rememberSendOutcome(
     await input.deps.sendLoggedImage(input.psid, imageUrl, input.reqId)
   );
-  await Promise.resolve(
-    markMessengerGenerationCompleted(input.reqId, imageUrl, input.userId)
-  );
   const messengerSendMs = Date.now() - messengerSendStartedAt;
-  await increment(input.psid);
-  await setLastGenerated(input.psid, imageUrl);
-  await setLastGenerationContext(input.psid, { prompt: input.promptHint });
   recordGenerationSuccess(input.resolvedGenerationKind, metrics.totalMs);
   const successResponse = buildGenerationSuccessResponse(input.lang);
   input.rememberSendOutcome(

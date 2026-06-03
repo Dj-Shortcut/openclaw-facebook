@@ -52,7 +52,6 @@ export function createInternalMessengerImageRequestHandler(
       hasSourceImageUrl: Boolean(input.sourceImageUrl),
     });
 
-    const storedSourceImageUrl = await persistOptionalSourceImage(input, lang);
     const state = await getOrCreateState(input.psid);
     if (state.stage === "PROCESSING") {
       const result = await deps.maybeSendInFlightMessage(
@@ -65,6 +64,7 @@ export function createInternalMessengerImageRequestHandler(
         : MESSENGER_SEND_SKIPPED;
     }
 
+    const storedSourceImageUrl = await persistOptionalSourceImage(input, lang);
     const previousEditableImageUrl =
       state.lastGeneratedUrl ??
       state.lastImageUrl ??

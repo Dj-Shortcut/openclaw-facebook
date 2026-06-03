@@ -7,6 +7,7 @@ import {
 } from "./messengerWebhook";
 import { safeLog } from "./logger";
 import { isInternalMessengerImageRequestNotQueuedError } from "./internalImageRequestErrors";
+import { MESSENGER_SEND_SKIPPED } from "./webhookFallback";
 
 const internalImageRequestSchema = z.object({
   psid: z.string().trim().min(1),
@@ -72,6 +73,14 @@ function authorizeInternalRequest(req: Request, res: Response): boolean {
   return true;
 }
 
+function sendNotQueuedResponse(res: Response): void {
+  res.status(409).json({
+    error: "Image request was not queued",
+    reason: "not_queued",
+    retryable: false,
+  });
+}
+
 /** Registers authenticated internal Messenger image-request and event bridge routes. */
 export function registerInternalImageRequestRoutes(app: Express): void {
   app.post(
@@ -90,18 +99,18 @@ export function registerInternalImageRequestRoutes(app: Express): void {
       }
 
       try {
-        await acceptInternalMessengerImageRequest(parsed.data);
+        const outcome = await acceptInternalMessengerImageRequest(parsed.data);
+        if (outcome === MESSENGER_SEND_SKIPPED) {
+          sendNotQueuedResponse(res);
+          return;
+        }
       } catch (error) {
         if (isInternalMessengerImageRequestNotQueuedError(error)) {
           safeLog("internal_image_request_not_queued", {
             level: "warn",
             error: error.message,
           });
-          res.status(409).json({
-            error: "Image request was not queued",
-            reason: "not_queued",
-            retryable: false,
-          });
+          sendNotQueuedResponse(res);
           return;
         }
 
