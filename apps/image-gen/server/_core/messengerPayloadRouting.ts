@@ -14,7 +14,11 @@ type MessengerPayloadRoutingInput = {
   payload: string;
   reqId: string;
   lang: Lang;
-  maybeSendInFlightMessage: (psid: string, reqId: string) => Promise<boolean>;
+  maybeSendInFlightMessage: (
+    psid: string,
+    reqId: string,
+    lang: Lang
+  ) => Promise<boolean>;
   getState: (psid: string) => Promise<MessengerUserState>;
   getFeatures: () => readonly PayloadFeature[];
   createFeaturePayloadContext: (
@@ -51,10 +55,13 @@ async function tryHandleFeaturePayload(
   return false;
 }
 
+/** Routes Messenger payloads through in-flight checks and registered payload features. */
 export async function handleMessengerPayload(
   input: MessengerPayloadRoutingInput
 ): Promise<void> {
-  if (await input.maybeSendInFlightMessage(input.psid, input.reqId)) {
+  if (
+    await input.maybeSendInFlightMessage(input.psid, input.reqId, input.lang)
+  ) {
     return;
   }
 

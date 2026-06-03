@@ -11,7 +11,7 @@ import {
   createResponseSentTracker,
   sendFallbackTextIfNeeded,
 } from "./webhookFallback";
-import type { HandlerContext } from "./webhookHandlers";
+import type { HandlerContext } from "./webhookHandlerTypes";
 
 type MessengerState = Awaited<ReturnType<typeof getOrCreateState>>;
 
@@ -32,6 +32,7 @@ export type TrackedEventContext = {
   trackedCtx: HandlerContext;
 };
 
+/** Creates per-event tracking, locale, state, and fallback context for webhook routing. */
 export async function createTrackedEventContext(
   ctx: HandlerContext,
   event: FacebookWebhookEvent,

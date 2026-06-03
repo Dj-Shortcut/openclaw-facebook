@@ -5,11 +5,14 @@ import {
   inferNumberedConversationActions,
   stripNumberedConversationChoices,
 } from "./conversationActionInference";
-import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 import { setPendingConversationActions } from "./messengerState";
 import { toLogUser, toUserKey } from "./privacy";
-import type { HandlerContext } from "./webhookHandlers";
-import type { BotImageContext, BotPayloadContext, BotTextContext } from "./botContext";
+import type { HandlerContext } from "./webhookHandlerTypes";
+import type {
+  BotImageContext,
+  BotPayloadContext,
+  BotTextContext,
+} from "./botContext";
 import type { Lang } from "./i18n";
 
 function logMessengerWebhookTrace(
@@ -30,10 +33,10 @@ async function sendFeatureActions(
     actions: ReturnType<typeof inferNumberedConversationActions>;
   }
 ): Promise<void> {
-  const outcome = await trackedCtx.sendLoggedQuickReplies(
+  const outcome = await trackedCtx.sendLoggedActions(
     input.userPsid,
     input.text,
-    renderMessengerQuickReplies(input.actions),
+    input.actions,
     input.requestId
   );
   await Promise.resolve(
@@ -99,6 +102,7 @@ function decorateFeatureContext<TContext extends FeatureContext>(
   };
 }
 
+/** Wraps a handler context so successful sends mark the current webhook response as handled. */
 export function createTrackedHandlerContext(
   ctx: HandlerContext,
   markResponseSentFromOutcome: (
@@ -186,8 +190,12 @@ export function createTrackedHandlerContext(
         userLang
       );
     },
-    maybeSendInFlightMessage: async (userPsid, requestId) => {
-      const result = await ctx.maybeSendInFlightMessage(userPsid, requestId);
+    maybeSendInFlightMessage: async (userPsid, requestId, userLang) => {
+      const result = await ctx.maybeSendInFlightMessage(
+        userPsid,
+        requestId,
+        userLang
+      );
       if (result.handled && "outcome" in result && result.outcome) {
         markResponseSentFromOutcome(result.outcome);
       }
@@ -231,16 +239,16 @@ export function createTrackedHandlerContext(
       });
       return outcome;
     },
-    sendLoggedQuickReplies: async (userPsid, text, replies, requestId) => {
+    sendLoggedActions: async (userPsid, text, actions, requestId) => {
       logMessengerWebhookTrace("before_send", {
         reqId: requestId,
         user: toLogUser(toUserKey(userPsid)),
         kind: "quick_replies",
       });
-      const outcome = await ctx.sendLoggedQuickReplies(
+      const outcome = await ctx.sendLoggedActions(
         userPsid,
         text,
-        replies,
+        actions,
         requestId
       );
       markResponseSentFromOutcome(outcome);
@@ -280,7 +288,11 @@ export function createTrackedHandlerContext(
       return outcome;
     },
     sendFlowExplanation: async (userPsid, userLang, requestId) => {
-      const outcome = await ctx.sendFlowExplanation(userPsid, userLang, requestId);
+      const outcome = await ctx.sendFlowExplanation(
+        userPsid,
+        userLang,
+        requestId
+      );
       markResponseSentFromOutcome(outcome);
       return outcome;
     },

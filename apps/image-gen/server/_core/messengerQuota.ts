@@ -13,17 +13,26 @@ export function getFreeDailyLimit(): number {
   return DEFAULT_FREE_DAILY_LIMIT;
 }
 
-function hasQuotaBypass(psid: string, userKey: string): boolean {
+/** Returns whether a Messenger PSID or tenant-safe user key has exact quota bypass access. */
+export function hasQuotaBypass(psid: string, userKey: string): boolean {
   const raw = process.env.MESSENGER_QUOTA_BYPASS_IDS ?? "";
   if (!raw.trim()) {
     return false;
   }
 
-  const ids = new Set(raw.split(",").map(item => item.trim()).filter(Boolean));
+  const ids = new Set(
+    raw
+      .split(",")
+      .map(item => item.trim())
+      .filter(Boolean)
+  );
   return ids.has(psid) || ids.has(userKey);
 }
 
-function withSyncedQuota(state: MessengerUserState, now = Date.now()): MessengerUserState {
+function withSyncedQuota(
+  state: MessengerUserState,
+  now = Date.now()
+): MessengerUserState {
   const dayKey = getDayKey(now);
 
   if (state.quota.dayKey === dayKey) {
@@ -40,8 +49,14 @@ function withSyncedQuota(state: MessengerUserState, now = Date.now()): Messenger
   };
 }
 
-async function syncQuotaState(psid: string, now = Date.now()): Promise<MessengerUserState> {
-  const current = withSyncedQuota(await Promise.resolve(getOrCreateState(psid)), now);
+async function syncQuotaState(
+  psid: string,
+  now = Date.now()
+): Promise<MessengerUserState> {
+  const current = withSyncedQuota(
+    await Promise.resolve(getOrCreateState(psid)),
+    now
+  );
 
   return Promise.resolve(
     updateStoredState<MessengerUserState>(psid, storedState => {
@@ -50,7 +65,7 @@ async function syncQuotaState(psid: string, now = Date.now()): Promise<Messenger
       }
 
       return withSyncedQuota(storedState, now);
-    }),
+    })
   );
 }
 
@@ -70,7 +85,6 @@ export async function increment(psid: string): Promise<void> {
     return;
   }
 
-
   await Promise.resolve(
     updateStoredState<MessengerUserState>(psid, storedState => {
       const baseState = withSyncedQuota(storedState ?? current, now);
@@ -83,6 +97,6 @@ export async function increment(psid: string): Promise<void> {
         },
         updatedAt: now,
       };
-    }),
+    })
   );
 }

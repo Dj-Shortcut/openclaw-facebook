@@ -17,6 +17,7 @@ type TranslationKey =
   | "assistantPhotoTipExtra"
   | "success"
   | "processingBlocked"
+  | "inFlightMessage"
   | "editRequiresPhoto"
   | "textWithoutPhoto"
   | "privacy"
@@ -31,6 +32,7 @@ type TranslationKey =
   | "generationUnavailable"
   | "generationTimeout"
   | "generationBudgetReached"
+  | "outOfFreeCredits"
   | "generationGenericFailure"
   | "errorFallback"
   | "unsupportedMedia";
@@ -54,29 +56,36 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Bij een foto kan je meteen zeggen wat er anders moet.",
     success: "Klaar.",
     processingBlocked: "Even geduld, je vorige afbeelding is bijna klaar.",
+    inFlightMessage: "Even geduld, ik ben nog bezig met je afbeelding.",
     editRequiresPhoto: "Stuur eerst de foto die je wilt bewerken.",
     textWithoutPhoto:
       "Beschrijf welke afbeelding je wilt maken, of stuur een foto als je die wilt bewerken.",
-    privacy: ({ link }) => [
-      "Je foto wordt enkel gebruikt om de afbeelding te maken.",
-      "Ze wordt daarna niet bewaard.",
-      ...(link ? [`Privacybeleid: ${link}`] : []),
-    ].join("\n"),
+    privacy: ({ link }) =>
+      [
+        "Je foto wordt enkel gebruikt om de afbeelding te maken.",
+        "Ze wordt daarna niet bewaard.",
+        ...(link ? [`Privacybeleid: ${link}`] : []),
+      ].join("\n"),
     aboutLeaderbot:
       "Leaderbot is gemaakt door Andy. Je mag hem gerust contacteren via Facebook.\nVolledige naam op vraag: Andy Arijs.",
     failure: "Oeps. Probeer opnieuw of beschrijf een nieuwe afbeelding.",
-    missingInputImage: "Ik kon je foto niet goed lezen. Stuur ze nog eens door aub.",
+    missingInputImage:
+      "Ik kon je foto niet goed lezen. Stuur ze nog eens door aub.",
     generatingImagePrompt: "Ik maak nu je afbeelding.",
-    generationQueued: "Ik zet je afbeelding in de wachtrij en stuur ze zodra ze klaar is.",
+    generationQueued:
+      "Ik zet je afbeelding in de wachtrij en stuur ze zodra ze klaar is.",
     whatsappGenerationFollowup:
       "Beschrijf je volgende afbeelding of aanpassing.",
     backToCategories: "Categorieen",
-    hdUnavailable: "Ik kan HD-downloads delen nadat ik een afbeelding heb gemaakt.",
+    hdUnavailable:
+      "Ik kan HD-downloads delen nadat ik een afbeelding heb gemaakt.",
     generationUnavailable: "Beeldgeneratie staat nog niet aan.",
     generationTimeout:
       "Dit duurde te lang bij de beeldprovider. Probeer nog eens.",
     generationBudgetReached:
       "Even pauze, ons maandbudget is bereikt. Probeer later opnieuw.",
+    outOfFreeCredits:
+      "Je hebt je gratis credits voor vandaag opgebruikt. Kom morgen terug.",
     generationGenericFailure: "Ik kon die afbeelding nu niet maken.",
     errorFallback: "Er liep iets mis aan mijn kant. Probeer gerust opnieuw.",
     unsupportedMedia:
@@ -94,26 +103,28 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     assistantQuickActions: "Your image is ready. What would you like to do?",
     assistantPhotoTip:
       "Just type what you want to make, for example: make a futuristic city at sunset.",
-    assistantPhotoTipExtra:
-      "With a photo, tell me what should change.",
+    assistantPhotoTipExtra: "With a photo, tell me what should change.",
     success: "Done.",
     processingBlocked: "One sec, your previous image is almost done.",
+    inFlightMessage: "One sec, I am still working on your image.",
     editRequiresPhoto: "Send the photo you want me to edit first.",
     textWithoutPhoto:
       "Describe the image you want to make, or send a photo if you want me to edit it.",
-    privacy: ({ link }) => [
-      "Your photo is only used to make the image.",
-      "It is not stored afterwards.",
-      ...(link ? [`Privacy policy: ${link}`] : []),
-    ].join("\n"),
+    privacy: ({ link }) =>
+      [
+        "Your photo is only used to make the image.",
+        "It is not stored afterwards.",
+        ...(link ? [`Privacy policy: ${link}`] : []),
+      ].join("\n"),
     aboutLeaderbot:
       "Leaderbot was made by Andy. Feel free to contact him via Facebook.\nFull name on request: Andy Arijs.",
     failure: "Oops. Try again or describe a new image.",
-    missingInputImage: "I could not read your photo properly. Please send it again.",
+    missingInputImage:
+      "I could not read your photo properly. Please send it again.",
     generatingImagePrompt: "I am making your image now.",
-    generationQueued: "I queued your image and will send it as soon as it is ready.",
-    whatsappGenerationFollowup:
-      "Describe your next image or change.",
+    generationQueued:
+      "I queued your image and will send it as soon as it is ready.",
+    whatsappGenerationFollowup: "Describe your next image or change.",
     backToCategories: "Categories",
     hdUnavailable: "I can share HD downloads after I generate an image.",
     generationUnavailable: "Image generation is not enabled yet.",
@@ -121,6 +132,8 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "This took too long at the image provider. Please try again.",
     generationBudgetReached:
       "Quick pause, our monthly budget has been reached. Please try again later.",
+    outOfFreeCredits:
+      "You used your free credits for today. Come back tomorrow.",
     generationGenericFailure: "I could not generate that image right now.",
     errorFallback: "Something went wrong on my side. Please try again.",
     unsupportedMedia:
@@ -129,10 +142,16 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
 };
 
 export function normalizeLang(lang: string | null | undefined): Lang {
-  return typeof lang === "string" && lang.toLowerCase().startsWith("en") ? "en" : "nl";
+  return typeof lang === "string" && lang.toLowerCase().startsWith("en")
+    ? "en"
+    : "nl";
 }
 
-export function t(lang: Lang, key: TranslationKey, params: TranslationParams = {}): string {
+export function t(
+  lang: Lang,
+  key: TranslationKey,
+  params: TranslationParams = {}
+): string {
   const entry = translations[lang][key];
   return typeof entry === "function" ? entry(params) : entry;
 }

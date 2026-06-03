@@ -12,7 +12,6 @@ import { getBotFeatures } from "./bot/features";
 import { handleSharedTextMessage } from "./sharedTextHandler";
 import type { NormalizedInboundMessage } from "./normalizedInboundMessage";
 import { sendMessengerBotResponse } from "./botResponseAdapters";
-import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 import { decodeMessengerActionInput } from "./messengerActionPayload";
 import { resolveConversationActionInput } from "./conversationActionSelection";
 import {
@@ -34,11 +33,11 @@ import {
 import { toLogUser } from "./privacy";
 import { type FacebookWebhookEvent } from "./webhookHelpers";
 import { handlePayload } from "./webhookPayloadBranch";
-import type { HandlerContext } from "./webhookHandlers";
+import type { HandlerContext } from "./webhookHandlerTypes";
 
 type FacebookWebhookMessage = NonNullable<FacebookWebhookEvent["message"]>;
 
-type MessageEventInput = {
+export type MessageEventInput = {
   psid: string;
   userId: string;
   event: FacebookWebhookEvent;
@@ -46,7 +45,7 @@ type MessageEventInput = {
   lang: Lang;
 };
 
-type ImageMessageInput = {
+export type ImageMessageInput = {
   psid: string;
   userId: string;
   reqId: string;
@@ -56,7 +55,7 @@ type ImageMessageInput = {
   timestamp?: number;
 };
 
-type TextMessageInput = {
+export type TextMessageInput = {
   psid: string;
   userId: string;
   reqId: string;
@@ -66,6 +65,7 @@ type TextMessageInput = {
   timestamp?: number;
 };
 
+/** Handles a non-echo Messenger message event and dispatches payload, image, or text flows. */
 export async function handleMessageEvent(
   ctx: HandlerContext,
   input: MessageEventInput
@@ -73,7 +73,10 @@ export async function handleMessageEvent(
   const message = input.event.message;
   if (!message || message.is_echo) return;
 
-  if ((await ctx.maybeSendInFlightMessage(input.psid, input.reqId)).handled) {
+  if (
+    (await ctx.maybeSendInFlightMessage(input.psid, input.reqId, input.lang))
+      .handled
+  ) {
     return;
   }
 
@@ -134,7 +137,8 @@ export async function handleMessageEvent(
   });
 }
 
-async function tryHandleImageMessage(
+/** Attempts to persist and route an inbound Messenger image attachment. */
+export async function tryHandleImageMessage(
   ctx: HandlerContext,
   input: ImageMessageInput
 ): Promise<boolean> {
@@ -193,7 +197,9 @@ async function tryHandleImageMessage(
   return await handleImageDecision(ctx, input, imageDecision);
 }
 
-function shouldHandleImageCaptionAsConversation(text: string | undefined): text is string {
+function shouldHandleImageCaptionAsConversation(
+  text: string | undefined
+): text is string {
   const caption = text?.trim();
   if (!caption) {
     return false;
@@ -363,7 +369,8 @@ async function handleImageDecision(
   return false;
 }
 
-async function handleTextMessage(
+/** Normalizes and routes Messenger text through the shared conversation layer. */
+export async function handleTextMessage(
   ctx: HandlerContext,
   input: TextMessageInput
 ): Promise<void> {
@@ -371,7 +378,11 @@ async function handleTextMessage(
   const normalizedMessage = createNormalizedTextMessage(resolvedInput);
   logNormalizedTextHandoff(input, normalizedMessage);
 
-  const result = await handleSharedMessengerText(ctx, resolvedInput, normalizedMessage);
+  const result = await handleSharedMessengerText(
+    ctx,
+    resolvedInput,
+    normalizedMessage
+  );
   await sendSharedMessengerTextResponse(ctx, resolvedInput, result);
   await applyTextAfterSend(result, resolvedInput);
 }
@@ -482,10 +493,10 @@ async function sendSharedMessengerTextResponse(
       await ctx.sendLoggedText(input.psid, text, input.reqId);
     },
     sendActionPrompt: async (text, actions) => {
-      const outcome = await ctx.sendLoggedQuickReplies(
+      const outcome = await ctx.sendLoggedActions(
         input.psid,
         text,
-        renderMessengerQuickReplies(actions),
+        actions,
         input.reqId
       );
       await Promise.resolve(

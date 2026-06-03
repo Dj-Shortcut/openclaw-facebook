@@ -13,9 +13,9 @@ import {
   type TrackedEventContext,
 } from "./webhookEventContext";
 import { handleMessageEvent } from "./webhookMessageRouter";
-import type { HandlerContext } from "./webhookHandlers";
-import { renderMessengerQuickReplies } from "./messengerActionRenderer";
+import type { HandlerContext } from "./webhookHandlerTypes";
 
+/** Routes every Messenger event in a Facebook webhook entry. */
 export async function handleEntry(
   ctx: HandlerContext,
   entry: FacebookWebhookEntry
@@ -85,7 +85,8 @@ async function handleEvent(
   await eventContext.sendFallbackIfNeeded();
 }
 
-async function routeTrackedEvent(
+/** Selects the consent, postback, or message branch for a tracked event. */
+export async function routeTrackedEvent(
   context: TrackedEventContext,
   event: FacebookWebhookEvent
 ): Promise<void> {
@@ -128,12 +129,7 @@ async function routeConsentGate(
       await trackedCtx.sendLoggedText(psid, text, reqId);
     },
     sendActions: async (text, actions) => {
-      await trackedCtx.sendLoggedQuickReplies(
-        psid,
-        text,
-        renderMessengerQuickReplies(actions),
-        reqId
-      );
+      await trackedCtx.sendLoggedActions(psid, text, actions, reqId);
     },
   });
 

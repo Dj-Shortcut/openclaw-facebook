@@ -12,12 +12,11 @@ import {
 } from "./faceMemory";
 import { getBotFeatures } from "./bot/features";
 import { handleMessengerPayload } from "./messengerPayloadRouting";
-import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 import { buildQuickStartResponse } from "./conversationActions";
 import { safeLog } from "./messengerApi";
 import { toLogUser } from "./privacy";
 import { type FacebookWebhookEvent } from "./webhookHelpers";
-import type { HandlerContext } from "./webhookHandlers";
+import type { HandlerContext } from "./webhookHandlerTypes";
 import type { Lang } from "./i18n";
 
 type PostbackEventInput = {
@@ -56,10 +55,10 @@ async function handleDisabledFaceMemoryPayload(
 
   await setFlowState(input.psid, "IDLE");
   const response = buildQuickStartResponse(input.lang);
-  await ctx.sendLoggedQuickReplies(
+  await ctx.sendLoggedActions(
     input.psid,
     response.text ?? "",
-    renderMessengerQuickReplies(response.actions),
+    response.actions ?? [],
     input.reqId
   );
 }
@@ -119,8 +118,9 @@ export async function handlePayload(
     payload: input.payload,
     reqId: input.reqId,
     lang: input.lang,
-    maybeSendInFlightMessage: async (userPsid, requestId) =>
-      (await ctx.maybeSendInFlightMessage(userPsid, requestId)).handled,
+    maybeSendInFlightMessage: async (userPsid, requestId, payloadLang) =>
+      (await ctx.maybeSendInFlightMessage(userPsid, requestId, payloadLang))
+        .handled,
     getState: userPsid => Promise.resolve(getOrCreateState(userPsid)),
     getFeatures: getBotFeatures,
     createFeaturePayloadContext: ctx.createFeaturePayloadContext,
