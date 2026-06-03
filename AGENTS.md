@@ -105,6 +105,20 @@ The OpenClaw/Messenger gateway must stay shielded. Public traffic may reach only
 
 ---
 
+## Tenant Privacy & Data Ownership
+
+Infrastructure ownership does not imply customer data access.
+
+Rules:
+
+1. Each customer gets their own assistant workspace.
+2. Customer data includes conversations, assistant memory, uploaded knowledge, personal data, generated prompts/outputs, channel identifiers, and metadata.
+3. Infrastructure operators may manage deployment, uptime, billing, quotas, security, and reliability, but must not have default access to customer conversation content, memory, knowledge base content, or personal data.
+4. Default system behavior must be tenant isolation by design, least-privilege access, metadata-first observability, redacted logs by default, explicit customer-approved support access when content inspection is required, auditable break-glass access for exceptional incidents, and deletion/export paths for tenant-owned data.
+5. Never introduce admin tooling, logs, analytics, debug endpoints, or background jobs that expose customer content across tenants by default.
+
+---
+
 # Architectural Direction
 
 ## Desired Ownership
