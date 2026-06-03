@@ -40,20 +40,10 @@ jobs:
           format: json
 
       - name: Generate Fallow report
-        shell: bash
-        run: |
-          mkdir -p .fallow
-          npx --yes fallow@2.27.0 --root . dead-code --summary -f json > .fallow/report-check.json || true
-          npx --yes fallow@2.27.0 --root . health --summary --score --file-scores -f json > .fallow/report-health.json || true
-          node -e "const fs=require('node:fs'); const check=JSON.parse(fs.readFileSync('.fallow/report-check.json','utf8')); const health=JSON.parse(fs.readFileSync('.fallow/report-health.json','utf8')); fs.writeFileSync('.fallow/report.json', JSON.stringify({ schema_version: check.schema_version ?? health.schema_version, version: check.version ?? health.version, elapsed_ms: (check.elapsed_ms ?? 0) + (health.elapsed_ms ?? 0), check, health }, null, 2) + '\n');"
+        run: npm run fallow:report
 
       - name: Generate production Fallow report
-        shell: bash
-        run: |
-          mkdir -p .fallow
-          npx --yes fallow@2.27.0 --root . --production dead-code --summary -f json > .fallow/report-production-check.json || true
-          npx --yes fallow@2.27.0 --root . --production health --summary --score --file-scores -f json > .fallow/report-production-health.json || true
-          node -e "const fs=require('node:fs'); const check=JSON.parse(fs.readFileSync('.fallow/report-production-check.json','utf8')); const health=JSON.parse(fs.readFileSync('.fallow/report-production-health.json','utf8')); fs.writeFileSync('.fallow/report-production.json', JSON.stringify({ schema_version: check.schema_version ?? health.schema_version, version: check.version ?? health.version, elapsed_ms: (check.elapsed_ms ?? 0) + (health.elapsed_ms ?? 0), check, health }, null, 2) + '\n');"
+        run: npm run fallow:report:production
 
       - name: Build maintainability badge
         if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'

@@ -70,8 +70,8 @@ const metrics = {
 
 fs.mkdirSync(path.dirname(badgePath), { recursive: true });
 fs.mkdirSync(path.dirname(metricsPath), { recursive: true });
-fs.writeFileSync(badgePath, `${JSON.stringify(badge, null, 2)}\n`);
-fs.writeFileSync(metricsPath, `${JSON.stringify(metrics, null, 2)}\n`);
+fs.writeFileSync(badgePath, `${JSON.stringify(badge, null, 2)}\n`, "utf8");
+fs.writeFileSync(metricsPath, `${JSON.stringify(metrics, null, 2)}\n`, "utf8");
 
 console.log(
   JSON.stringify(
