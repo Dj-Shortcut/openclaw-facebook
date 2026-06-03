@@ -302,7 +302,7 @@ function createTestRunner(
   overrides: Partial<
     Pick<
       HandlerContext,
-      "sendLoggedImage" | "sendLoggedQuickReplies" | "sendLoggedText"
+      "sendLoggedImage" | "sendLoggedActions" | "sendLoggedText"
     >
   > = {}
 ) {
@@ -312,13 +312,13 @@ function createTestRunner(
       overrides.sendLoggedImage ??
       (async (psid, imageUrl) =>
         (await sendImageMock(psid, imageUrl)) satisfies MessengerSendOutcome),
-    sendLoggedQuickReplies:
-      overrides.sendLoggedQuickReplies ??
-      (async (psid, text, replies) =>
+    sendLoggedActions:
+      overrides.sendLoggedActions ??
+      (async (psid, text, actions) =>
         (await sendQuickRepliesMock(
           psid,
           text,
-          replies
+          actions
         )) satisfies MessengerSendOutcome),
     sendLoggedText:
       overrides.sendLoggedText ??
@@ -336,8 +336,8 @@ function createContextBackedRunner() {
       ctx.maybeSendInFlightMessage(psid, reqId, "nl"),
     sendLoggedImage: (psid, imageUrl, reqId) =>
       ctx.sendLoggedImage(psid, imageUrl, reqId),
-    sendLoggedQuickReplies: (psid, text, replies, reqId) =>
-      ctx.sendLoggedQuickReplies(psid, text, replies, reqId),
+    sendLoggedActions: (psid, text, replies, reqId) =>
+      ctx.sendLoggedActions(psid, text, replies, reqId),
     sendLoggedText: (psid, text, reqId) =>
       ctx.sendLoggedText(psid, text, reqId),
   });

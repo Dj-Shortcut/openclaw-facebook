@@ -4,6 +4,7 @@ import type {
   BotPayloadContext,
   BotTextContext,
 } from "./botContext";
+import type { ConversationAction } from "./botResponse";
 import type { GenerationKind } from "./image-generation/generationTypes";
 import type { Lang } from "./i18n";
 import { getOrCreateState } from "./messengerState";
@@ -111,14 +112,10 @@ export type HandlerContext = {
     imageUrl: string,
     reqId: string
   ) => Promise<MessengerSendOutcome>;
-  sendLoggedQuickReplies: (
+  sendLoggedActions: (
     psid: string,
     text: string,
-    quickReplies: Array<{
-      content_type: "text";
-      title: string;
-      payload: string;
-    }>,
+    actions: ConversationAction[],
     reqId: string
   ) => Promise<MessengerSendOutcome>;
   sendLoggedText: (

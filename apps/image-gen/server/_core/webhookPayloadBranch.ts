@@ -12,7 +12,6 @@ import {
 } from "./faceMemory";
 import { getBotFeatures } from "./bot/features";
 import { handleMessengerPayload } from "./messengerPayloadRouting";
-import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 import { buildQuickStartResponse } from "./conversationActions";
 import { safeLog } from "./messengerApi";
 import { toLogUser } from "./privacy";
@@ -56,10 +55,10 @@ async function handleDisabledFaceMemoryPayload(
 
   await setFlowState(input.psid, "IDLE");
   const response = buildQuickStartResponse(input.lang);
-  await ctx.sendLoggedQuickReplies(
+  await ctx.sendLoggedActions(
     input.psid,
     response.text ?? "",
-    renderMessengerQuickReplies(response.actions),
+    response.actions ?? [],
     input.reqId
   );
 }

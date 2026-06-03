@@ -31,8 +31,8 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       ctx.maybeSendInFlightMessage(psid, reqId, lang),
     sendLoggedImage: (psid, imageUrl, reqId) =>
       ctx.sendLoggedImage(psid, imageUrl, reqId),
-    sendLoggedQuickReplies: (psid, text, replies, reqId) =>
-      ctx.sendLoggedQuickReplies(psid, text, replies, reqId),
+    sendLoggedActions: (psid, text, actions, reqId) =>
+      ctx.sendLoggedActions(psid, text, actions, reqId),
     sendLoggedText: (psid, text, reqId) =>
       ctx.sendLoggedText(psid, text, reqId),
   });

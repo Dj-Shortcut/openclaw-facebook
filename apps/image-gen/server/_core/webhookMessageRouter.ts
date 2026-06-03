@@ -12,7 +12,6 @@ import { getBotFeatures } from "./bot/features";
 import { handleSharedTextMessage } from "./sharedTextHandler";
 import type { NormalizedInboundMessage } from "./normalizedInboundMessage";
 import { sendMessengerBotResponse } from "./botResponseAdapters";
-import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 import { decodeMessengerActionInput } from "./messengerActionPayload";
 import { resolveConversationActionInput } from "./conversationActionSelection";
 import {
@@ -494,10 +493,10 @@ async function sendSharedMessengerTextResponse(
       await ctx.sendLoggedText(input.psid, text, input.reqId);
     },
     sendActionPrompt: async (text, actions) => {
-      const outcome = await ctx.sendLoggedQuickReplies(
+      const outcome = await ctx.sendLoggedActions(
         input.psid,
         text,
-        renderMessengerQuickReplies(actions),
+        actions,
         input.reqId
       );
       await Promise.resolve(

@@ -5,7 +5,6 @@ import {
   inferNumberedConversationActions,
   stripNumberedConversationChoices,
 } from "./conversationActionInference";
-import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 import { setPendingConversationActions } from "./messengerState";
 import { toLogUser, toUserKey } from "./privacy";
 import type { HandlerContext } from "./webhookHandlerTypes";
@@ -34,10 +33,10 @@ async function sendFeatureActions(
     actions: ReturnType<typeof inferNumberedConversationActions>;
   }
 ): Promise<void> {
-  const outcome = await trackedCtx.sendLoggedQuickReplies(
+  const outcome = await trackedCtx.sendLoggedActions(
     input.userPsid,
     input.text,
-    renderMessengerQuickReplies(input.actions),
+    input.actions,
     input.requestId
   );
   await Promise.resolve(
@@ -240,16 +239,16 @@ export function createTrackedHandlerContext(
       });
       return outcome;
     },
-    sendLoggedQuickReplies: async (userPsid, text, replies, requestId) => {
+    sendLoggedActions: async (userPsid, text, actions, requestId) => {
       logMessengerWebhookTrace("before_send", {
         reqId: requestId,
         user: toLogUser(toUserKey(userPsid)),
         kind: "quick_replies",
       });
-      const outcome = await ctx.sendLoggedQuickReplies(
+      const outcome = await ctx.sendLoggedActions(
         userPsid,
         text,
-        replies,
+        actions,
         requestId
       );
       markResponseSentFromOutcome(outcome);

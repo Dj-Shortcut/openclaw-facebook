@@ -78,7 +78,7 @@ function makeHandlerContext(
     sendFaceMemoryConsentPrompt: vi.fn(async () => ({ sent: true })),
     sendFlowExplanation: vi.fn(async () => ({ sent: true })),
     sendLoggedImage: vi.fn(async () => ({ sent: true })),
-    sendLoggedQuickReplies: vi.fn(async () => ({ sent: true })),
+    sendLoggedActions: vi.fn(async () => ({ sent: true })),
     sendLoggedText: vi.fn(async () => ({ sent: true })),
     sendPhotoReceivedPrompt: vi.fn(async () => ({ sent: true })),
   };
@@ -154,13 +154,13 @@ describe("webhook tracked context", () => {
 
   it("renders numbered feature text as Messenger quick replies", async () => {
     process.env.PRIVACY_PEPPER = "test-pepper";
-    const sendLoggedQuickReplies = vi.fn(async () => ({
+    const sendLoggedActions = vi.fn(async () => ({
       sent: true,
       messageId: "mid-feature-choices",
     }));
     const ctx = {
       ...makeHandlerContext(vi.fn(async () => ({ sent: true }))),
-      sendLoggedQuickReplies,
+      sendLoggedActions,
     };
     const tracked = createTrackedHandlerContext(ctx, vi.fn());
     const featureCtx = tracked.createFeatureTextContext(
@@ -184,20 +184,19 @@ describe("webhook tracked context", () => {
     );
 
     expect(ctx.sendLoggedText).not.toHaveBeenCalled();
-    expect(sendLoggedQuickReplies).toHaveBeenCalledWith(
+    expect(sendLoggedActions).toHaveBeenCalledWith(
       "tracked-user",
       "Ja. Wil je dat ik een:",
       [
         {
-          content_type: "text",
-          title: "samurai-portret",
-          payload: "OPENCLAW_ACTION:Maak%20me%20een%20samurai-portret",
+          id: "choice_1",
+          label: "samurai-portret",
+          inputText: "Maak me een samurai-portret",
         },
         {
-          content_type: "text",
-          title: "samurai-avatar/stick",
-          payload:
-            "OPENCLAW_ACTION:Maak%20me%20een%20samurai-avatar%2Fsticker",
+          id: "choice_2",
+          label: "samurai-avatar/sticker",
+          inputText: "Maak me een samurai-avatar/sticker",
         },
       ],
       "req-feature-choices"
@@ -223,13 +222,13 @@ describe("webhook tracked context", () => {
 
   it("renders assistant-written image prompts as actionable Messenger quick replies", async () => {
     process.env.PRIVACY_PEPPER = "test-pepper";
-    const sendLoggedQuickReplies = vi.fn(async () => ({
+    const sendLoggedActions = vi.fn(async () => ({
       sent: true,
       messageId: "mid-feature-prompt",
     }));
     const ctx = {
       ...makeHandlerContext(vi.fn(async () => ({ sent: true }))),
-      sendLoggedQuickReplies,
+      sendLoggedActions,
     };
     const tracked = createTrackedHandlerContext(ctx, vi.fn());
     const featureCtx = tracked.createFeatureTextContext(
@@ -253,15 +252,15 @@ describe("webhook tracked context", () => {
     await featureCtx.sendText(text);
 
     expect(ctx.sendLoggedText).not.toHaveBeenCalled();
-    expect(sendLoggedQuickReplies).toHaveBeenCalledWith(
+    expect(sendLoggedActions).toHaveBeenCalledWith(
       "tracked-user",
       text,
       [
         {
-          content_type: "text",
-          title: "Maak deze afbeelding",
-          payload:
-            "OPENCLAW_ACTION:Gebruik%20deze%20prompt%20en%20maak%20een%20afbeelding%3A%20Maak%20een%20Romeinse%20gladiator%20als%20duidelijk%20hoofdonderwerp%2C%20arena%20op%20de%20achtergrond",
+          id: "generate_prompt",
+          label: "Maak deze afbeelding",
+          inputText:
+            "Gebruik deze prompt en maak een afbeelding: Maak een Romeinse gladiator als duidelijk hoofdonderwerp, arena op de achtergrond",
         },
       ],
       "req-feature-prompt"

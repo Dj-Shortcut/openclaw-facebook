@@ -18,6 +18,7 @@ import { hasInFlightGeneration } from "./generationGuard";
 import { isDebugLogEnabled } from "./logLevel";
 import { getTodayRuntimeStats } from "./botRuntimeStats";
 import type { BotLogger, BotPayloadContext } from "./botContext";
+import type { ConversationAction } from "./botResponse";
 import type { GenerationKind } from "./image-generation/generationTypes";
 import type { MaybeInFlightMessageResult } from "./webhookFallback";
 import type { HandlerContext, MessengerState } from "./webhookHandlerTypes";
@@ -170,6 +171,20 @@ export function createHandlerContext({
     return await sendQuickReplies(psid, text, replies);
   }
 
+  async function sendLoggedActions(
+    psid: string,
+    text: string,
+    actions: ConversationAction[],
+    reqId: string
+  ): Promise<MessengerSendOutcome> {
+    return await sendLoggedQuickReplies(
+      psid,
+      text,
+      renderMessengerQuickReplies(actions),
+      reqId
+    );
+  }
+
   async function sendLoggedImage(
     psid: string,
     imageUrl: string,
@@ -222,12 +237,7 @@ export function createHandlerContext({
         await sendLoggedImage(psid, imageUrl, reqId);
       },
       sendActions: async (text, actions) => {
-        await sendLoggedQuickReplies(
-          psid,
-          text,
-          renderMessengerQuickReplies(actions),
-          reqId
-        );
+        await sendLoggedActions(psid, text, actions, reqId);
       },
       setFlowState: async nextState => {
         await setFlowState(psid, nextState);
@@ -309,10 +319,10 @@ export function createHandlerContext({
     reqId: string
   ): Promise<MessengerSendOutcome> {
     const response = buildPhotoReceivedResponse(lang);
-    return await sendLoggedQuickReplies(
+    return await sendLoggedActions(
       psid,
       response.text ?? "",
-      renderMessengerQuickReplies(response.actions),
+      response.actions ?? [],
       reqId
     );
   }
@@ -323,10 +333,10 @@ export function createHandlerContext({
     reqId: string
   ): Promise<MessengerSendOutcome> {
     const response = buildFaceMemoryConsentResponse(lang);
-    return await sendLoggedQuickReplies(
+    return await sendLoggedActions(
       psid,
       response.text ?? "",
-      renderMessengerQuickReplies(response.actions),
+      response.actions ?? [],
       reqId
     );
   }
@@ -382,7 +392,7 @@ export function createHandlerContext({
     sendFlowExplanation: (userPsid, userLang, requestId) =>
       sendLoggedText(userPsid, t(userLang, "flowExplanation"), requestId),
     sendLoggedImage,
-    sendLoggedQuickReplies,
+    sendLoggedActions,
     sendLoggedText,
     sendPhotoReceivedPrompt,
   };

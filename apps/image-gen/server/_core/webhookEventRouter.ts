@@ -14,7 +14,6 @@ import {
 } from "./webhookEventContext";
 import { handleMessageEvent } from "./webhookMessageRouter";
 import type { HandlerContext } from "./webhookHandlerTypes";
-import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 
 /** Routes every Messenger event in a Facebook webhook entry. */
 export async function handleEntry(
@@ -130,12 +129,7 @@ async function routeConsentGate(
       await trackedCtx.sendLoggedText(psid, text, reqId);
     },
     sendActions: async (text, actions) => {
-      await trackedCtx.sendLoggedQuickReplies(
-        psid,
-        text,
-        renderMessengerQuickReplies(actions),
-        reqId
-      );
+      await trackedCtx.sendLoggedActions(psid, text, actions, reqId);
     },
   });
 

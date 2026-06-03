@@ -6,7 +6,6 @@ import {
   buildGenerationFailureResponse,
   buildGenerationSuccessResponse,
 } from "./conversationActions";
-import { renderMessengerQuickReplies } from "./messengerActionRenderer";
 import {
   anonymizePsid,
   getOrCreateState,
@@ -61,7 +60,7 @@ type GenerationJobRunnerDeps = Pick<
   HandlerContext,
   | "maybeSendInFlightMessage"
   | "sendLoggedImage"
-  | "sendLoggedQuickReplies"
+  | "sendLoggedActions"
   | "sendLoggedText"
 >;
 
@@ -345,10 +344,10 @@ async function recoverUnexpectedGenerationError(input: {
       t(input.lang, "generationGenericFailure")
     );
     input.rememberSendOutcome(
-      await input.deps.sendLoggedQuickReplies(
+      await input.deps.sendLoggedActions(
         input.psid,
         failureResponse.text ?? "",
-        renderMessengerQuickReplies(failureResponse.actions),
+        failureResponse.actions ?? [],
         input.reqId
       )
     );
@@ -511,10 +510,10 @@ async function handleGenerationSuccess(input: {
   recordGenerationSuccess(input.resolvedGenerationKind, metrics.totalMs);
   const successResponse = buildGenerationSuccessResponse(input.lang);
   input.rememberSendOutcome(
-    await input.deps.sendLoggedQuickReplies(
+    await input.deps.sendLoggedActions(
       input.psid,
       successResponse.text ?? "",
-      renderMessengerQuickReplies(successResponse.actions),
+      successResponse.actions ?? [],
       input.reqId
     )
   );
@@ -615,10 +614,10 @@ async function handleGenerationFailure(input: {
     failure.failureText
   );
   input.rememberSendOutcome(
-    await input.deps.sendLoggedQuickReplies(
+    await input.deps.sendLoggedActions(
       input.psid,
       failureResponse.text ?? "",
-      renderMessengerQuickReplies(failureResponse.actions),
+      failureResponse.actions ?? [],
       input.reqId
     )
   );
