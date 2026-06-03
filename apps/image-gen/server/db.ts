@@ -177,6 +177,7 @@ export async function getOrCreateUserWorkspace(user: {
     .limit(1);
 
   if (existing.length > 0) {
+    await seedWorkspacePrivacyDefaults(existing[0].id);
     return existing[0];
   }
 
@@ -203,8 +204,30 @@ export async function getOrCreateUserWorkspace(user: {
   await db.insert(workspaceMembers).values(memberValues).onDuplicateKeyUpdate({
     set: { workspaceId: memberValues.workspaceId },
   });
+  await seedWorkspacePrivacyDefaults(workspace.id);
 
   return workspace;
+}
+
+async function seedWorkspacePrivacyDefaults(workspaceId: number) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("seed_workspace_privacy_defaults");
+    return;
+  }
+
+  const defaults: InsertWorkspacePrivacySetting = {
+    workspaceId,
+    allowKnowledgeIndexing: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowKnowledgeIndexing ? 1 : 0,
+    allowUsageAnalytics: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowUsageAnalytics ? 1 : 0,
+    imageMemoryRetentionDays: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.imageMemoryRetentionDays,
+  };
+
+  await db.insert(workspacePrivacySettings).values(defaults).onDuplicateKeyUpdate({
+    set: {
+      workspaceId,
+    },
+  });
 }
 
 export async function getWorkspaceMembership(workspaceId: number, userId: number) {
@@ -436,21 +459,9 @@ export async function getWorkspacePrivacySettings(workspaceId: number) {
     };
   }
 
-  const defaults: InsertWorkspacePrivacySetting = {
-    workspaceId,
-    allowKnowledgeIndexing: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowKnowledgeIndexing ? 1 : 0,
-    allowUsageAnalytics: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowUsageAnalytics ? 1 : 0,
-    imageMemoryRetentionDays: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.imageMemoryRetentionDays,
-  };
-  await db.insert(workspacePrivacySettings).values(defaults).onDuplicateKeyUpdate({
-    set: {
-      workspaceId,
-    },
-  });
-
   return {
     workspaceId,
-    ...DEFAULT_WORKSPACE_PRIVACY_SETTINGS,
+    ...normalizeWorkspacePrivacySettings(undefined, new Date(0)),
     createdAt: new Date(),
     updatedAt: new Date(),
   };

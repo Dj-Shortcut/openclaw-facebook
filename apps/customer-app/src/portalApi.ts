@@ -24,6 +24,25 @@ export type PortalSnapshot = {
     language: string;
     modelDefault: string;
   };
+  knowledgeStore: {
+    workspaceId: number;
+    totalSources: number;
+    activeSources: number;
+    lastUpdate: string;
+    sources: Array<{
+      id: number;
+      workspaceId: number;
+      sourceType: "upload" | "website" | "manual_text" | "integration";
+      name: string;
+      sourceReference: string | null;
+      status: "active" | "queued" | "indexing" | "error" | "disabled";
+      itemCount: number;
+      lastIndexedAt: string | null;
+      metadata: unknown;
+      createdAt: string;
+      updatedAt: string;
+    }>;
+  };
   channels: Array<{
     id: number;
     workspaceId: number;
@@ -46,6 +65,13 @@ export type PortalSnapshot = {
     dataDeletion: string;
     exportRequest: string;
     deletionRequest: string;
+    controls: {
+      allowKnowledgeIndexing: boolean;
+      allowUsageAnalytics: boolean;
+      imageMemoryRetentionDays: number;
+      createdAt: string;
+      updatedAt: string;
+    };
   };
 };
 
