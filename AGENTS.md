@@ -34,6 +34,8 @@ The conversation layer owns:
 * follow-up actions
 * conversation state
 
+Conversation state, memory, and assistant context must be scoped to the owning customer/workspace. Do not introduce shared or global memory paths that can leak customer data across tenants or channels.
+
 Preferred response shape:
 
 ```ts
@@ -115,6 +117,7 @@ Conversation Layer:
 * images
 * actions
 * state transitions
+* tenant-scoped memory/context boundaries
 
 Channel Layer:
 
