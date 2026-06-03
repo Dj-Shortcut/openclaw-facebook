@@ -199,6 +199,54 @@ export const channelConnections = mysqlTable(
 export type ChannelConnection = typeof channelConnections.$inferSelect;
 export type InsertChannelConnection = typeof channelConnections.$inferInsert;
 
+export const workspaceKnowledgeSources = mysqlTable(
+  "workspaceKnowledgeSources",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    sourceType: mysqlEnum("sourceType", ["upload", "website", "manual_text", "integration"]).notNull(),
+    name: varchar("name", { length: 200 }).notNull(),
+    sourceReference: varchar("sourceReference", { length: 1024 }),
+    status: mysqlEnum("status", ["active", "queued", "indexing", "error", "disabled"])
+      .default("active")
+      .notNull(),
+    itemCount: int("itemCount").default(0).notNull(),
+    lastIndexedAt: timestamp("lastIndexedAt"),
+    metadata: json("metadata"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    workspaceKnowledgeSourceWorkspaceNameUnique: uniqueIndex(
+      "workspaceKnowledgeSources_workspaceId_name_unique"
+    ).on(table.workspaceId, table.name),
+  })
+);
+
+export type WorkspaceKnowledgeSource = typeof workspaceKnowledgeSources.$inferSelect;
+export type InsertWorkspaceKnowledgeSource = typeof workspaceKnowledgeSources.$inferInsert;
+
+export const workspacePrivacySettings = mysqlTable(
+  "workspacePrivacySettings",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    allowKnowledgeIndexing: int("allowKnowledgeIndexing").default(1).notNull(),
+    allowUsageAnalytics: int("allowUsageAnalytics").default(0).notNull(),
+    imageMemoryRetentionDays: int("imageMemoryRetentionDays").default(30).notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    workspacePrivacySettingsWorkspaceUnique: uniqueIndex(
+      "workspacePrivacySettings_workspaceId_unique"
+    ).on(table.workspaceId),
+  })
+);
+
+export type WorkspacePrivacySetting = typeof workspacePrivacySettings.$inferSelect;
+export type InsertWorkspacePrivacySetting = typeof workspacePrivacySettings.$inferInsert;
+
 export const workspaceUsageDaily = mysqlTable(
   "workspaceUsageDaily",
   {

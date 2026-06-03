@@ -37,11 +37,25 @@ export const mockSnapshot: PortalSnapshot = {
     imageCount: 0,
     blockedCount: 0,
   },
+  knowledgeStore: {
+    workspaceId: 1,
+    totalSources: 0,
+    activeSources: 0,
+    lastUpdate: new Date(0).toISOString(),
+    sources: [],
+  },
   privacy: {
     privacy: "/privacy",
     terms: "/terms",
     dataDeletion: "/data-deletion",
     exportRequest: "mailto:privacy@leaderbot.live?subject=Leaderbot data export",
     deletionRequest: "mailto:privacy@leaderbot.live?subject=Leaderbot data deletion",
+    controls: {
+      allowKnowledgeIndexing: true,
+      allowUsageAnalytics: false,
+      imageMemoryRetentionDays: 30,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    },
   },
 };

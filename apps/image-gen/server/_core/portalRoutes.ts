@@ -95,10 +95,12 @@ export function registerPortalRoutes(app: Express) {
       return;
     }
 
-    const [identity, channels, usage] = await Promise.all([
+    const [identity, channels, usage, knowledge, privacySettings] = await Promise.all([
       db.getOrCreateAiIdentity(workspace.id),
       db.listChannelConnections(workspace.id),
       db.getWorkspaceUsageSummary(workspace.id),
+      db.getWorkspaceKnowledgeSummary(workspace.id),
+      db.getWorkspacePrivacySettings(workspace.id),
     ]);
 
     res.status(200).json({
@@ -111,12 +113,16 @@ export function registerPortalRoutes(app: Express) {
       aiIdentity: identity,
       channels: channels.map(({ encryptedAccessToken: _token, ...channel }) => channel),
       usage,
+      knowledgeStore: {
+        ...knowledge,
+      },
       privacy: {
         privacy: "/privacy",
         terms: "/terms",
         dataDeletion: "/data-deletion",
         exportRequest: "mailto:privacy@leaderbot.live?subject=Leaderbot data export",
         deletionRequest: "mailto:privacy@leaderbot.live?subject=Leaderbot data deletion",
+        controls: privacySettings,
       },
     });
   });
