@@ -16,7 +16,7 @@ vi.mock("./_core/messengerWebhook", () => ({
 }));
 
 import { registerInternalImageRequestRoutes } from "./_core/internalImageRequestRoutes";
-import { InternalMessengerImageRequestNotQueuedError } from "./_core/webhookInternalImageRequest";
+import { InternalMessengerImageRequestNotQueuedError } from "./_core/internalImageRequestErrors";
 
 const originalToken = process.env.INTERNAL_IMAGE_REQUEST_TOKEN;
 
@@ -117,6 +117,25 @@ describe("internal Messenger image request route", () => {
   it("maps non-queued control-flow errors to a non-retryable response", async () => {
     acceptInternalMessengerImageRequestMock.mockRejectedValueOnce(
       new InternalMessengerImageRequestNotQueuedError("missing source image")
+    );
+
+    await withListeningApp(createApp(), async baseUrl => {
+      const response = await postInternalImageRequest(baseUrl);
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: "Image request was not queued",
+        reason: "not_queued",
+        retryable: false,
+      });
+    });
+  });
+
+  it("maps named non-queued errors across module boundaries", async () => {
+    const crossBoundaryError = new Error("missing source image");
+    crossBoundaryError.name = "InternalMessengerImageRequestNotQueuedError";
+    acceptInternalMessengerImageRequestMock.mockRejectedValueOnce(
+      crossBoundaryError
     );
 
     await withListeningApp(createApp(), async baseUrl => {

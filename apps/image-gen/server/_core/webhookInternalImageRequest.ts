@@ -17,18 +17,12 @@ import {
   isVisualCorrectionRequest,
 } from "./imageIntent";
 import { MESSENGER_SEND_SKIPPED } from "./webhookFallback";
+import { InternalMessengerImageRequestNotQueuedError } from "./internalImageRequestErrors";
+export { InternalMessengerImageRequestNotQueuedError } from "./internalImageRequestErrors";
 import type {
   HandlerContext,
   InternalMessengerImageRequestInput,
 } from "./webhookHandlerTypes";
-
-/** Signals an accepted internal request that could not safely enqueue or start generation. */
-export class InternalMessengerImageRequestNotQueuedError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "InternalMessengerImageRequestNotQueuedError";
-  }
-}
 
 type InternalImageRequestHandlerDeps = Pick<
   HandlerContext,
