@@ -105,6 +105,20 @@ The OpenClaw/Messenger gateway must stay shielded. Public traffic may reach only
 
 ---
 
+## Tenant Privacy & Data Ownership
+
+### Operator and support access
+
+* Operators should not have default read access to customer conversations, memory, uploaded knowledge, personal data, or generated prompts/outputs.
+* Support access to content should require explicit customer approval where possible.
+* Emergency break-glass access must be exceptional, time-limited, audited, and reviewed.
+* Admin tooling should expose operational metadata by default, not raw customer content.
+* Debugging tools must avoid cross-tenant search or transcript browsing unless intentionally built as a controlled, audited support feature.
+
+These boundaries apply to admin dashboards, logs, support workflows, and incident tooling.
+
+---
+
 # Architectural Direction
 
 ## Desired Ownership
