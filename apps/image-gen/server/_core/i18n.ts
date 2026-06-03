@@ -8,6 +8,8 @@ type TranslationKey =
   | "flowExplanation"
   | "photoEditPrompt"
   | "editImagePrompt"
+  | "screenshotClarifyPrompt"
+  | "screenshotIntentContinuation"
   | "whatIsThis"
   | "newImage"
   | "editImage"
@@ -43,9 +45,11 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
   nl: {
     flowExplanation:
       "Beschrijf wat je wilt maken, of stuur een foto als je die wilt bewerken.",
-    photoEditPrompt: "Foto ontvangen. Wat wil je aanpassen?",
-    editImagePrompt: "Wat wil je aanpassen?",
-    whatIsThis: "Wat doe ik?",
+  photoEditPrompt: "Foto ontvangen. Wat wil je aanpassen?",
+  editImagePrompt: "Wat wil je aanpassen?",
+  screenshotClarifyPrompt: "Ik zag een screenshot — wat wil je daar precies mee doen?",
+  screenshotIntentContinuation: "Top, dit is een screenshot. Ik werk dit meteen volgens je eerdere bedoeling af.",
+  whatIsThis: "Wat doe ik?",
     newImage: "Nieuwe afbeelding",
     editImage: "Pas aan",
     editPhoto: "Pas foto aan",
@@ -96,6 +100,8 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Describe the image you want to make, or send a photo if you want me to edit it.",
     photoEditPrompt: "Photo received. What should I change?",
     editImagePrompt: "What should I change?",
+    screenshotClarifyPrompt: "I see a screenshot — what do you want to do with it?",
+    screenshotIntentContinuation: "Got it, this is a screenshot. I’ll apply your previous request now.",
     whatIsThis: "What is this?",
     newImage: "New image",
     editImage: "Edit image",

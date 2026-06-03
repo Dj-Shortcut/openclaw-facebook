@@ -62,6 +62,8 @@ const SOURCE_IMAGE_TRANSFORM_PATTERNS = [
 const VISUAL_CORRECTION_SUBJECT =
   "(?:samurai|samoerai|persoon|mens|man|vrouw|gezicht|paard|robot|soldaat|krijger|gladiator|ninja|stad|landschap|logo|poster|tekst|titel|zwaard|katana|helm|subject|person|face|horse|warrior|city|landscape|text|title|sword)";
 
+const SCREEN_REFERENCE_PATTERNS = [/\b(?:screenshot|screen)\b/iu];
+
 export function normalizeImageIntentText(text: string): string {
   return text.trim().toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
 }
@@ -128,4 +130,9 @@ export function isImageGenerationRequest(text: string): boolean {
     IMAGE_GENERATION_PATTERNS.some(pattern => pattern.test(text)) ||
     hasArbitraryVisualSubject(text)
   );
+}
+
+export function isScreenshotUploadCaption(text: string): boolean {
+  const normalized = normalizeImageIntentText(text);
+  return SCREEN_REFERENCE_PATTERNS.some(pattern => pattern.test(normalized));
 }

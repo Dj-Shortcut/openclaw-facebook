@@ -18,6 +18,7 @@ import {
   isExplicitSourceImageEditRequest,
   isImageGenerationRequest,
   isSourceImageTransformRequest,
+  isScreenshotUploadCaption,
   isVisualCorrectionRequest,
 } from "./imageIntent";
 import {
@@ -181,6 +182,22 @@ export async function tryHandleImageMessage(
     return true;
   }
 
+  if (
+    shouldContinueImageIntentAfterScreenshot({
+      text: input.text,
+      state,
+      storedSourceImageUrl,
+    })
+  ) {
+    await handleScreenshotIntentContinuation(
+      ctx,
+      input,
+      storedSourceImageUrl,
+      state.lastPrompt
+    );
+    return true;
+  }
+
   if (shouldHandleImageCaptionAsConversation(input.text)) {
     await handleTextMessage(ctx, {
       psid: input.psid,
@@ -190,6 +207,15 @@ export async function tryHandleImageMessage(
       text: input.text.trim(),
       timestamp: input.timestamp,
     });
+    return true;
+  }
+
+  if (isScreenshotUploadCaption(input.text ?? "")) {
+    await ctx.sendLoggedText(
+      input.psid,
+      t(input.lang, "screenshotClarifyPrompt"),
+      input.reqId
+    );
     return true;
   }
 
@@ -210,6 +236,64 @@ function shouldHandleImageCaptionAsConversation(
     isExplicitSourceImageEditRequest(caption) ||
     isSourceImageTransformRequest(caption) ||
     isVisualCorrectionRequest(caption)
+  );
+}
+
+type ScreenshotIntentContinuationInput = {
+  text?: string;
+  state: Awaited<ReturnType<typeof getOrCreateState>>;
+  storedSourceImageUrl: string;
+};
+
+function shouldContinueImageIntentAfterScreenshot(
+  input: ScreenshotIntentContinuationInput
+): boolean {
+  if (!input.text) {
+    return false;
+  }
+
+  if (!isScreenshotUploadCaption(input.text)) {
+    return false;
+  }
+
+  if (!input.state.lastPrompt) {
+    return false;
+  }
+
+  return (
+    input.state.stage === "AWAITING_EDIT_PROMPT" ||
+    Boolean(
+      input.state.lastPhotoUrl ||
+        input.state.lastPhoto ||
+        input.state.lastImageUrl ||
+        input.state.lastGeneratedUrl
+    )
+  );
+}
+
+async function handleScreenshotIntentContinuation(
+  ctx: HandlerContext,
+  input: ImageMessageInput,
+  sourceImageUrl: string,
+  priorPrompt?: string
+): Promise<void> {
+  if (!priorPrompt) {
+    return;
+  }
+
+  await ctx.sendLoggedText(
+    input.psid,
+    t(input.lang, "screenshotIntentContinuation"),
+    input.reqId
+  );
+  await ctx.runImageGeneration(
+    input.psid,
+    input.userId,
+    input.reqId,
+    input.lang,
+    sourceImageUrl,
+    priorPrompt,
+    "source_image_edit"
   );
 }
 
