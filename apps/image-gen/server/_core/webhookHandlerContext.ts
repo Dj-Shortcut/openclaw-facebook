@@ -29,7 +29,6 @@ type CreateHandlerContextInput = {
   runImageGeneration: HandlerContext["runImageGeneration"];
 };
 
-const IN_FLIGHT_MESSAGE = "Even geduld, ik ben nog bezig met je afbeelding.";
 const IN_FLIGHT_NOTICE_COOLDOWN_MS = 30_000;
 const inFlightNoticeSent = new Map<string, number>();
 const MESSENGER_CAPABILITIES = Object.freeze({
@@ -61,7 +60,8 @@ export function createHandlerContext({
 
   async function maybeSendInFlightMessage(
     psid: string,
-    reqId: string
+    reqId: string,
+    lang: Lang
   ): Promise<MaybeInFlightMessageResult> {
     if (!(await hasInFlightGeneration(psid))) {
       inFlightNoticeSent.delete(psid);
@@ -77,7 +77,11 @@ export function createHandlerContext({
       return { handled: true };
     }
 
-    const outcome = await sendLoggedText(psid, IN_FLIGHT_MESSAGE, reqId);
+    const outcome = await sendLoggedText(
+      psid,
+      t(lang, "inFlightMessage"),
+      reqId
+    );
     inFlightNoticeSent.set(psid, now);
     return { handled: true, outcome };
   }

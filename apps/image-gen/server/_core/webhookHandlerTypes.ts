@@ -84,7 +84,8 @@ export type HandlerContext = {
   ) => void;
   maybeSendInFlightMessage: (
     psid: string,
-    reqId: string
+    reqId: string,
+    lang: Lang
   ) => Promise<MaybeInFlightMessageResult>;
   runImageGeneration: (
     psid: string,

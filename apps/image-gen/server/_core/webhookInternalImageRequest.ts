@@ -61,7 +61,8 @@ export function createInternalMessengerImageRequestHandler(
     if (state.stage === "PROCESSING") {
       const result = await deps.maybeSendInFlightMessage(
         input.psid,
-        input.reqId
+        input.reqId,
+        lang
       );
       return "outcome" in result && result.outcome
         ? result.outcome

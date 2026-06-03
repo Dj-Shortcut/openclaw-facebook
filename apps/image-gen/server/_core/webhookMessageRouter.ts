@@ -73,7 +73,10 @@ export async function handleMessageEvent(
   const message = input.event.message;
   if (!message || message.is_echo) return;
 
-  if ((await ctx.maybeSendInFlightMessage(input.psid, input.reqId)).handled) {
+  if (
+    (await ctx.maybeSendInFlightMessage(input.psid, input.reqId, input.lang))
+      .handled
+  ) {
     return;
   }
 

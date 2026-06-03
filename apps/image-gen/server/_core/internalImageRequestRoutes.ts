@@ -6,6 +6,7 @@ import {
   processFacebookWebhookPayload,
 } from "./messengerWebhook";
 import { safeLog } from "./logger";
+import { InternalMessengerImageRequestNotQueuedError } from "./webhookInternalImageRequest";
 
 const internalImageRequestSchema = z.object({
   psid: z.string().trim().min(1),
@@ -90,6 +91,19 @@ export function registerInternalImageRequestRoutes(app: Express): void {
       try {
         await acceptInternalMessengerImageRequest(parsed.data);
       } catch (error) {
+        if (error instanceof InternalMessengerImageRequestNotQueuedError) {
+          safeLog("internal_image_request_not_queued", {
+            level: "warn",
+            error: error.message,
+          });
+          res.status(409).json({
+            error: "Image request was not queued",
+            reason: "not_queued",
+            retryable: false,
+          });
+          return;
+        }
+
         safeLog("internal_image_request_failed", {
           level: "error",
           error: error instanceof Error ? error.message : String(error),

@@ -19,10 +19,15 @@ export type {
 export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
   ensureDefaultBotFeaturesRegistered();
 
+  // The createMessengerGenerationJobRunner wrappers capture ctx but must stay
+  // deferred: createMessengerGenerationJobRunner, createHandlerContext, and
+  // createInternalMessengerImageRequestHandler must not invoke them during
+  // construction. generationRunner.runImageGeneration is wired into
+  // createHandlerContext below, then ctx is assigned before runtime calls.
   let ctx: HandlerContext;
   const generationRunner = createMessengerGenerationJobRunner({
-    maybeSendInFlightMessage: (psid, reqId) =>
-      ctx.maybeSendInFlightMessage(psid, reqId),
+    maybeSendInFlightMessage: (psid, reqId, lang) =>
+      ctx.maybeSendInFlightMessage(psid, reqId, lang),
     sendLoggedImage: (psid, imageUrl, reqId) =>
       ctx.sendLoggedImage(psid, imageUrl, reqId),
     sendLoggedQuickReplies: (psid, text, replies, reqId) =>

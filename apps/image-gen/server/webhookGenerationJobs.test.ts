@@ -104,7 +104,7 @@ describe("messenger generation job safety", () => {
 
       sendTextMock.mockClear();
       await setEphemeralKey(`messenger:inflight:${psid}`, "active-again", 60);
-      await ctx.maybeSendInFlightMessage(psid, "req-after-success-throw");
+      await ctx.maybeSendInFlightMessage(psid, "req-after-success-throw", "nl");
 
       expect(sendTextMock).toHaveBeenCalledWith(psid, IN_FLIGHT_NOTICE);
     } finally {
@@ -133,11 +133,28 @@ describe("messenger generation job safety", () => {
 
       sendTextMock.mockClear();
       await setEphemeralKey(`messenger:inflight:${psid}`, "active-again", 60);
-      await ctx.maybeSendInFlightMessage(psid, "req-after-failure-throw");
+      await ctx.maybeSendInFlightMessage(psid, "req-after-failure-throw", "nl");
 
       expect(sendTextMock).toHaveBeenCalledWith(psid, IN_FLIGHT_NOTICE);
     } finally {
       nowSpy.mockRestore();
+      await deleteEphemeralKey(`messenger:inflight:${psid}`);
+    }
+  });
+
+  it("localizes in-flight notices through the handler context", async () => {
+    const psid = "english-inflight-user";
+    const { ctx } = createContextBackedRunner();
+
+    try {
+      await setEphemeralKey(`messenger:inflight:${psid}`, "active", 60);
+      await ctx.maybeSendInFlightMessage(psid, "req-english-inflight", "en");
+
+      expect(sendTextMock).toHaveBeenCalledWith(
+        psid,
+        t("en", "inFlightMessage")
+      );
+    } finally {
       await deleteEphemeralKey(`messenger:inflight:${psid}`);
     }
   });
@@ -168,6 +185,66 @@ describe("messenger generation job safety", () => {
       })
     );
     expect(getState("inline-ack-fails-user")?.stage).toBe("IDLE");
+  });
+
+  it("logs quota bypass with exact id matching", async () => {
+    const originalBypassIds = process.env.MESSENGER_QUOTA_BYPASS_IDS;
+    process.env.MESSENGER_QUOTA_BYPASS_IDS = "quota-user-1234";
+    const runner = createTestRunner();
+    executeGenerationFlowMock.mockResolvedValueOnce(successGenerationResult());
+
+    try {
+      await runner.processMessengerGenerationJob({
+        psid: "quota-user-123",
+        userId: "quota-user-123-key",
+        reqId: "req-quota-exact-bypass-log",
+        lang: "nl",
+      });
+    } finally {
+      if (originalBypassIds === undefined) {
+        delete process.env.MESSENGER_QUOTA_BYPASS_IDS;
+      } else {
+        process.env.MESSENGER_QUOTA_BYPASS_IDS = originalBypassIds;
+      }
+    }
+
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "quota_decision",
+      expect.objectContaining({
+        bypassApplied: false,
+        allowed: true,
+      })
+    );
+  });
+
+  it("uses the out-of-free-credits translation when quota is exhausted", async () => {
+    const originalLimit = process.env.MESSENGER_FREE_DAILY_LIMIT;
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
+    const runner = createTestRunner();
+
+    try {
+      await runner.processMessengerGenerationJob({
+        psid: "quota-exhausted-user",
+        userId: "quota-exhausted-user-key",
+        reqId: "req-quota-exhausted",
+        lang: "en",
+      });
+    } finally {
+      if (originalLimit === undefined) {
+        delete process.env.MESSENGER_FREE_DAILY_LIMIT;
+      } else {
+        process.env.MESSENGER_FREE_DAILY_LIMIT = originalLimit;
+      }
+    }
+
+    expect(sendTextMock).toHaveBeenCalledWith(
+      "quota-exhausted-user",
+      t("en", "outOfFreeCredits")
+    );
+    expect(executeGenerationFlowMock).not.toHaveBeenCalled();
+    expect(getState("quota-exhausted-user")?.stage).toBe(
+      "AWAITING_EDIT_PROMPT"
+    );
   });
 
   it("allows a later generation to recover after an unexpected generation error", async () => {
@@ -234,7 +311,7 @@ function createContextBackedRunner() {
   let ctx!: HandlerContext;
   const runner = createMessengerGenerationJobRunner({
     maybeSendInFlightMessage: (psid, reqId) =>
-      ctx.maybeSendInFlightMessage(psid, reqId),
+      ctx.maybeSendInFlightMessage(psid, reqId, "nl"),
     sendLoggedImage: (psid, imageUrl, reqId) =>
       ctx.sendLoggedImage(psid, imageUrl, reqId),
     sendLoggedQuickReplies: (psid, text, replies, reqId) =>
@@ -254,7 +331,7 @@ async function seedInFlightNotice(
   psid: string
 ): Promise<void> {
   await setEphemeralKey(`messenger:inflight:${psid}`, "active", 60);
-  await ctx.maybeSendInFlightMessage(psid, "req-seed-notice");
+  await ctx.maybeSendInFlightMessage(psid, "req-seed-notice", "nl");
   await deleteEphemeralKey(`messenger:inflight:${psid}`);
   expect(sendTextMock).toHaveBeenCalledWith(psid, IN_FLIGHT_NOTICE);
 }

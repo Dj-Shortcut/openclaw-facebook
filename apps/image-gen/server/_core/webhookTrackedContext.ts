@@ -190,8 +190,12 @@ export function createTrackedHandlerContext(
         userLang
       );
     },
-    maybeSendInFlightMessage: async (userPsid, requestId) => {
-      const result = await ctx.maybeSendInFlightMessage(userPsid, requestId);
+    maybeSendInFlightMessage: async (userPsid, requestId, userLang) => {
+      const result = await ctx.maybeSendInFlightMessage(
+        userPsid,
+        requestId,
+        userLang
+      );
       if (result.handled && "outcome" in result && result.outcome) {
         markResponseSentFromOutcome(result.outcome);
       }

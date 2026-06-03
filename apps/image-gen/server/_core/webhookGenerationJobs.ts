@@ -17,7 +17,12 @@ import {
 import { t } from "./i18n";
 import { toLogUser } from "./privacy";
 import { runGuardedGeneration } from "./generationGuard";
-import { canGenerate, getFreeDailyLimit, increment } from "./messengerQuota";
+import {
+  canGenerate,
+  getFreeDailyLimit,
+  hasQuotaBypass,
+  increment,
+} from "./messengerQuota";
 import {
   recordGenerationError,
   recordGenerationSuccess,
@@ -191,7 +196,7 @@ export function createMessengerGenerationJobRunner(
     }
 
     if (didRun === null) {
-      const result = await deps.maybeSendInFlightMessage(psid, reqId);
+      const result = await deps.maybeSendInFlightMessage(psid, reqId, lang);
       if ("outcome" in result && result.outcome) {
         rememberSendOutcome(result.outcome);
       }
@@ -418,9 +423,7 @@ async function reserveGenerationQuota(input: {
 }): Promise<boolean> {
   const allowed = await canGenerate(input.psid);
   const quotaState = await getOrCreateState(input.psid);
-  const bypassRaw = process.env.MESSENGER_QUOTA_BYPASS_IDS ?? "";
-  const bypassApplied =
-    bypassRaw.includes(input.psid) || bypassRaw.includes(quotaState.userKey);
+  const bypassApplied = hasQuotaBypass(input.psid, quotaState.userKey);
   safeLog("quota_decision", {
     action: "check",
     psidHash: anonymizePsid(input.psid).slice(0, 12),
@@ -436,9 +439,7 @@ async function reserveGenerationQuota(input: {
   input.rememberSendOutcome(
     await input.deps.sendLoggedText(
       input.psid,
-      input.lang === "en"
-        ? "You used your free credits for today. Come back tomorrow."
-        : "Je hebt je gratis credits voor vandaag opgebruikt. Kom morgen terug.",
+      t(input.lang, "outOfFreeCredits"),
       input.reqId
     )
   );
