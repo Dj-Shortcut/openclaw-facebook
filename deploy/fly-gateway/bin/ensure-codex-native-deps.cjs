@@ -2,19 +2,9 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const { createRequire } = require('node:module');
 const path = require('node:path');
+const { TARGETS } = require('./codex-targets.cjs');
 
-const TARGETS = {
-  'linux:x64': {
-    packageName: '@openai/codex-linux-x64',
-    triple: 'x86_64-unknown-linux-musl',
-    executable: 'codex',
-  },
-  'linux:arm64': {
-    packageName: '@openai/codex-linux-arm64',
-    triple: 'aarch64-unknown-linux-musl',
-    executable: 'codex',
-  },
-};
+const NPM_INSTALL_TIMEOUT_MS = 5 * 60 * 1000;
 
 function resolveCodexPackage() {
   const openclawCodexPackage = require.resolve('@openclaw/codex/package.json');
@@ -88,7 +78,11 @@ execFileSync(
     '--no-save',
     installSpec,
   ],
-  { stdio: 'inherit' },
+  {
+    cwd: codexRoot,
+    stdio: 'inherit',
+    timeout: NPM_INSTALL_TIMEOUT_MS,
+  },
 );
 
 if (!hasNativeRuntime(codexPackage, target)) {

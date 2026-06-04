@@ -37,6 +37,7 @@ RUN --mount=type=cache,id=leaderbot-openclaw-apt-cache,target=/var/cache/apt,sha
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=plugin-build /tmp/openclaw-plugin/*.tgz /tmp/openclaw-facebook.tgz
+COPY deploy/fly-gateway/bin/codex-targets.cjs ./deploy/fly-gateway/bin/codex-targets.cjs
 COPY deploy/fly-gateway/bin/prune-image-deps.mjs ./deploy/fly-gateway/bin/prune-image-deps.mjs
 COPY deploy/fly-gateway/bin/ensure-codex-native-deps.cjs ./deploy/fly-gateway/bin/ensure-codex-native-deps.cjs
 COPY deploy/fly-gateway/bin/verify-codex-native-deps.cjs ./deploy/fly-gateway/bin/verify-codex-native-deps.cjs

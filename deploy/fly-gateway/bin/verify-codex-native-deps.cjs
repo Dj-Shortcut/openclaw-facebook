@@ -1,19 +1,7 @@
 const fs = require('node:fs');
 const { createRequire } = require('node:module');
 const path = require('node:path');
-
-const TARGETS = {
-  'linux:x64': {
-    packageName: '@openai/codex-linux-x64',
-    triple: 'x86_64-unknown-linux-musl',
-    executable: 'codex',
-  },
-  'linux:arm64': {
-    packageName: '@openai/codex-linux-arm64',
-    triple: 'aarch64-unknown-linux-musl',
-    executable: 'codex',
-  },
-};
+const { TARGETS } = require('./codex-targets.cjs');
 
 const target = TARGETS[`${process.platform}:${process.arch}`];
 if (!target) {
@@ -49,6 +37,16 @@ if (!fs.existsSync(nativeBinary)) {
   throw new Error(
     `Missing Codex native executable at ${nativeBinary}. `
     + 'Ensure the platform package vendor payload is installed before deploying.',
+  );
+}
+
+try {
+  fs.accessSync(nativeBinary, fs.constants.X_OK);
+} catch (error) {
+  throw new Error(
+    `Codex native executable at ${nativeBinary} exists but is not executable. `
+    + 'Ensure the platform package preserves file permissions.',
+    { cause: error },
   );
 }
 
