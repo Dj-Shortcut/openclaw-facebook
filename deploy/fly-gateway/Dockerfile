@@ -38,11 +38,13 @@ RUN --mount=type=cache,id=leaderbot-openclaw-apt-cache,target=/var/cache/apt,sha
 
 COPY --from=plugin-build /tmp/openclaw-plugin/*.tgz /tmp/openclaw-facebook.tgz
 COPY deploy/fly-gateway/bin/prune-image-deps.mjs ./deploy/fly-gateway/bin/prune-image-deps.mjs
+COPY deploy/fly-gateway/bin/verify-codex-native-deps.cjs ./deploy/fly-gateway/bin/verify-codex-native-deps.cjs
 
 RUN npm init -y && \
-    npm install --omit=dev --no-audit --no-fund "openclaw@${OPENCLAW_VERSION}" "@openclaw/codex@${OPENCLAW_VERSION}" /tmp/openclaw-facebook.tgz && \
+    npm install --omit=dev --include=optional --no-audit --no-fund "openclaw@${OPENCLAW_VERSION}" "@openclaw/codex@${OPENCLAW_VERSION}" /tmp/openclaw-facebook.tgz && \
     node -e "const fs=require('fs'); const path=require('path'); const file=fs.readdirSync('node_modules/openclaw/dist').find((name)=>name.startsWith('server.impl-')&&name.endsWith('.js')); if(!file) throw new Error('OpenClaw server impl bundle not found'); const target=path.join('node_modules/openclaw/dist', file); const before=fs.readFileSync(target, 'utf8'); const needle='providerAuthPrewarm: { getConfig: getRuntimeConfig }'; if(!before.includes(needle)) throw new Error('OpenClaw provider auth prewarm patch target not found'); fs.writeFileSync(target, before.replace(needle, 'providerAuthPrewarm: { enabled: false, getConfig: getRuntimeConfig }'));" && \
     node ./deploy/fly-gateway/bin/prune-image-deps.mjs /app && \
+    node ./deploy/fly-gateway/bin/verify-codex-native-deps.cjs && \
     npm cache clean --force && \
     rm -f /tmp/openclaw-facebook.tgz
 

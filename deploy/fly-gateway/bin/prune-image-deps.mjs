@@ -71,7 +71,28 @@ function shouldRemoveFile(filePath, name) {
   return false;
 }
 
+function isProtectedRuntimePackage(directory) {
+  const relative = path.relative(nodeModules, directory);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return false;
+  }
+  const parts = relative.split(path.sep);
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    if (parts[index] !== "@openai") {
+      continue;
+    }
+    const packageName = parts[index + 1];
+    if (packageName === "codex" || packageName.startsWith("codex-")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function pruneDirectory(directory) {
+  if (isProtectedRuntimePackage(directory)) {
+    return 0;
+  }
   let removedBytes = 0;
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const entryPath = path.join(directory, entry.name);
