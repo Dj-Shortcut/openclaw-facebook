@@ -107,6 +107,11 @@ type MessengerTrace = {
 
 type MessengerFastLaneIntent = "greeting" | "help" | "status" | "image";
 
+export type MessengerAudioTranscript = {
+  mediaIndex: number;
+  text: string;
+};
+
 const DEFAULT_IMAGE_GEN_URL = "https://leaderbot-fb-image-gen.fly.dev";
 const IMAGE_GEN_REQUEST_TIMEOUT_MS = 5_000;
 const MESSENGER_IMAGE_FETCH_TIMEOUT_MS = 10_000;
@@ -494,6 +499,84 @@ function fallbackTextForMessengerAttachments(attachments: MessengerAttachmentUrl
     return "De gebruiker stuurde een bestand. Gebruik de bijlage als context als dat beschikbaar is en reageer inhoudelijk.";
   }
   return "De gebruiker stuurde een bijlage. Gebruik de bijlage als context als dat beschikbaar is en reageer inhoudelijk.";
+}
+
+export function buildMessengerAgentTextForAttachments(params: {
+  text: string;
+  attachments: MessengerAttachmentUrl[];
+  audioTranscripts?: MessengerAudioTranscript[];
+}): string {
+  const userText = params.text.trim();
+  const transcripts = (params.audioTranscripts ?? [])
+    .map((transcript) => transcript.text.trim())
+    .filter(Boolean);
+
+  if (transcripts.length > 0) {
+    const transcriptText = transcripts
+      .map((transcript, index) =>
+        transcripts.length === 1
+          ? `Transcriptie voicebericht:\n${transcript}`
+          : `Transcriptie voicebericht ${index + 1}:\n${transcript}`,
+      )
+      .join("\n\n");
+    return userText ? `${userText}\n\n${transcriptText}` : transcriptText;
+  }
+
+  return userText ||
+    (params.attachments.length > 0
+      ? fallbackTextForMessengerAttachments(params.attachments)
+      : "");
+}
+
+async function resolveMessengerAudioTranscripts(params: {
+  media: ChannelInboundMediaInput[];
+  cfg: OpenClawConfig;
+  trace: MessengerTrace;
+}): Promise<MessengerAudioTranscript[]> {
+  const audioMedia = params.media
+    .map((entry, mediaIndex) => ({ entry, mediaIndex, path: entry.path }))
+    .filter(
+      (item): item is { entry: ChannelInboundMediaInput; mediaIndex: number; path: string } =>
+        item.entry.kind === "audio" && typeof item.path === "string" && item.path.length > 0,
+    );
+  if (audioMedia.length === 0) {
+    return [];
+  }
+
+  const transcripts = await Promise.all(
+    audioMedia.map(async ({ entry, mediaIndex, path }) => {
+      try {
+        const { transcribeAudioFile } =
+          await import("openclaw/plugin-sdk/media-understanding-runtime");
+        const result = await transcribeAudioFile({
+          filePath: path,
+          cfg: params.cfg,
+          mime: entry.contentType ?? undefined,
+        });
+        const text = result.text?.trim();
+        if (!text) {
+          logMessengerStage(params.trace, "audio_transcription_skipped", {
+            mediaIndex,
+            reason: "empty_transcript",
+          });
+          return null;
+        }
+        logMessengerStage(params.trace, "audio_transcribed", {
+          mediaIndex,
+          chars: text.length,
+        });
+        return { mediaIndex, text };
+      } catch (error) {
+        logMessengerStage(params.trace, "audio_transcription_skipped", {
+          mediaIndex,
+          errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
+        });
+        return null;
+      }
+    }),
+  );
+
+  return transcripts.filter((entry): entry is MessengerAudioTranscript => entry !== null);
 }
 
 function normalizeFastLaneText(text: string): string {
@@ -1464,16 +1547,36 @@ async function processMessengerEvent(params: {
       return;
     }
     const media = await resolveMessengerMedia({ attachments, trace: params.trace });
+    const audioTranscripts = await resolveMessengerAudioTranscripts({
+      media,
+      cfg: params.cfg,
+      trace: params.trace,
+    });
     const mediaPayload = buildChannelInboundMediaPayload(
       toInboundMediaFacts(media, { messageId: params.event.message?.mid }),
     );
     const hasMedia = attachments.length > 0;
+    const hasAudioAttachment = attachments.some((attachment) => attachment.kind === "audio");
+    if (hasAudioAttachment && !text.trim() && audioTranscripts.length === 0) {
+      await sendMessengerText(
+        senderId,
+        "Ik heb je voicebericht ontvangen, maar ik kan audio nu niet betrouwbaar omzetten naar tekst. Typ je bericht even uit, dan help ik meteen verder.",
+        {
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+        },
+      );
+      logMessengerStage(params.trace, "messenger_response_sent", {
+        reason: "audio_transcription_unavailable",
+      });
+      return;
+    }
     const attachmentSummary = describeMessengerAttachments(attachments);
-    const textForAgent =
-      text.trim() ||
-      (hasMedia
-        ? fallbackTextForMessengerAttachments(attachments)
-        : "");
+    const textForAgent = buildMessengerAgentTextForAttachments({
+      text,
+      attachments,
+      audioTranscripts,
+    });
     const displayBody = [
       text.trim(),
       hasMedia ? `[Messenger attachment: ${attachmentSummary || "bijlage"}]` : "",
