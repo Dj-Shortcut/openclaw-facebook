@@ -2,7 +2,7 @@
 
 ARG OPENCLAW_VERSION=2026.6.1
 
-FROM node:22-bookworm-slim AS plugin-build
+FROM node:24-bookworm-slim AS plugin-build
 
 WORKDIR /plugin
 
@@ -15,7 +15,7 @@ COPY examples ./examples
 
 RUN npm install --ignore-scripts && npm run build && mkdir -p /tmp/openclaw-plugin && npm pack --ignore-scripts --pack-destination /tmp/openclaw-plugin
 
-FROM node:22-bookworm-slim
+FROM node:24-bookworm-slim
 ARG OPENCLAW_VERSION
 
 ENV NODE_ENV=production
