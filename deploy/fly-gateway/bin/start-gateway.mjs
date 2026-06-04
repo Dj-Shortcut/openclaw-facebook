@@ -124,6 +124,19 @@ function migrateLegacyWorkspaceFiles() {
   }
 }
 
+function ensureWorkspaceMemoryFile() {
+  const memoryPath = path.join(workspaceDir, "MEMORY.md");
+  if (fs.existsSync(memoryPath)) {
+    return false;
+  }
+  fs.writeFileSync(
+    memoryPath,
+    "# Memory\n\nPersistent assistant memory for this OpenClaw workspace.\n",
+    { mode: 0o600 },
+  );
+  return true;
+}
+
 function ensurePublicMessengerBaseline(config) {
   if (!isObject(config.plugins)) {
     config.plugins = {};
@@ -189,6 +202,7 @@ export function prepareGatewayConfig() {
   fs.mkdirSync(stateDir, { recursive: true });
   fs.mkdirSync(workspaceDir, { recursive: true });
   migrateLegacyWorkspaceFiles();
+  ensureWorkspaceMemoryFile();
   const config = ensurePublicMessengerBaseline(readJsonFile(configPath));
   writeJsonFile(configPath, config);
   return config;

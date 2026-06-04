@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 const repoRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const pruneScript = join(repoRoot, 'deploy/fly-gateway/bin/prune-image-deps.mjs');
 const verifyScriptSource = join(repoRoot, 'deploy/fly-gateway/bin/verify-codex-native-deps.cjs');
+const ensureScriptSource = join(repoRoot, 'deploy/fly-gateway/bin/ensure-codex-native-deps.cjs');
 
 const tempDirs = [];
 
@@ -58,6 +59,7 @@ describe('Fly gateway image dependency pruning', () => {
     writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/package.json', '{"name":"@openclaw/codex"}');
     writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/node_modules/@openai/codex/package.json', '{"name":"@openai/codex"}');
     writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/node_modules/@openai/codex-linux-x64/package.json', '{"name":"@openai/codex-linux-x64"}');
+    writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex');
 
     const result = spawnSync(process.execPath, [verifyScript], {
       cwd: appRoot,
@@ -68,5 +70,46 @@ describe('Fly gateway image dependency pruning', () => {
     expect(result.stderr).toBe('');
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('verified @openai/codex-linux-x64/package.json');
+    expect(result.stdout).toContain('vendor/x86_64-unknown-linux-musl/bin/codex');
+  });
+
+  it('rejects a Codex native package without the Linux executable payload', () => {
+    const appRoot = makeTempApp();
+    const verifyScript = join(appRoot, 'deploy/fly-gateway/bin/verify-codex-native-deps.cjs');
+    writeFixtureFile(appRoot, 'deploy/fly-gateway/bin/.keep');
+    writeFileSync(verifyScript, readFileSync(verifyScriptSource));
+    writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/package.json', '{"name":"@openclaw/codex"}');
+    writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/node_modules/@openai/codex/package.json', '{"name":"@openai/codex"}');
+    writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/node_modules/@openai/codex-linux-x64/package.json', '{"name":"@openai/codex-linux-x64"}');
+
+    const result = spawnSync(process.execPath, [verifyScript], {
+      cwd: appRoot,
+      encoding: 'utf8',
+      env: { ...process.env, NODE_OPTIONS: '' },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Missing Codex native executable');
+  });
+
+  it('accepts an already installed Codex native runtime in the repair script', () => {
+    const appRoot = makeTempApp();
+    const ensureScript = join(appRoot, 'deploy/fly-gateway/bin/ensure-codex-native-deps.cjs');
+    writeFixtureFile(appRoot, 'deploy/fly-gateway/bin/.keep');
+    writeFileSync(ensureScript, readFileSync(ensureScriptSource));
+    writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/package.json', '{"name":"@openclaw/codex"}');
+    writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/node_modules/@openai/codex/package.json', '{"name":"@openai/codex","optionalDependencies":{"@openai/codex-linux-x64":"npm:@openai/codex@0.0.0-linux-x64"}}');
+    writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/node_modules/@openai/codex-linux-x64/package.json', '{"name":"@openai/codex-linux-x64"}');
+    writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex');
+
+    const result = spawnSync(process.execPath, [ensureScript], {
+      cwd: appRoot,
+      encoding: 'utf8',
+      env: { ...process.env, NODE_OPTIONS: '' },
+    });
+
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Codex native runtime already present: @openai/codex-linux-x64');
   });
 });
