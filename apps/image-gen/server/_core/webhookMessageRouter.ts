@@ -18,6 +18,7 @@ import {
   isExplicitSourceImageEditRequest,
   isImageGenerationRequest,
   isSourceImageTransformRequest,
+  isScreenshotUploadCaption,
   isVisualCorrectionRequest,
 } from "./imageIntent";
 import {
@@ -26,6 +27,7 @@ import {
   getPendingConversationActionsForMessage,
   getOrCreateState,
   markIntroSeen,
+  setPendingScreenshotIntentContinuation,
   setFlowState,
   setPendingConversationActions,
   setPendingStoredImage,
@@ -33,6 +35,7 @@ import {
 import { toLogUser } from "./privacy";
 import { type FacebookWebhookEvent } from "./webhookHelpers";
 import { handlePayload } from "./webhookPayloadBranch";
+import { runScreenshotIntentContinuation } from "./screenshotIntentContinuation";
 import type { HandlerContext } from "./webhookHandlerTypes";
 
 type FacebookWebhookMessage = NonNullable<FacebookWebhookEvent["message"]>;
@@ -168,6 +171,27 @@ export async function tryHandleImageMessage(
     state,
     storedSourceImageUrl
   );
+  await setPendingScreenshotIntentContinuation(input.psid, false);
+
+  const shouldContinueScreenshotIntent = shouldContinueImageIntentAfterScreenshot({
+    text: input.text,
+    state,
+    storedSourceImageUrl,
+  });
+
+  if (
+    isScreenshotUploadCaption(input.text ?? "") &&
+    !shouldContinueScreenshotIntent &&
+    !shouldHandleImageCaptionAsConversation(input.text)
+  ) {
+    await setFlowState(input.psid, "AWAITING_EDIT_PROMPT");
+    await ctx.sendLoggedText(
+      input.psid,
+      t(input.lang, "screenshotClarifyPrompt"),
+      input.reqId
+    );
+    return true;
+  }
 
   if (
     await promptForFaceMemoryConsent(
@@ -175,9 +199,20 @@ export async function tryHandleImageMessage(
       input,
       state,
       imageDecision.action,
-      storedSourceImageUrl
+      storedSourceImageUrl,
+      shouldContinueScreenshotIntent
     )
   ) {
+    return true;
+  }
+
+  if (shouldContinueScreenshotIntent && state.lastPrompt) {
+    await runScreenshotIntentContinuation(
+      ctx,
+      input,
+      storedSourceImageUrl,
+      state.lastPrompt
+    );
     return true;
   }
 
@@ -211,6 +246,34 @@ function shouldHandleImageCaptionAsConversation(
     isSourceImageTransformRequest(caption) ||
     isVisualCorrectionRequest(caption)
   );
+}
+
+type ScreenshotIntentContinuationInput = {
+  text?: string;
+  state: Awaited<ReturnType<typeof getOrCreateState>>;
+  storedSourceImageUrl: string;
+};
+
+function shouldContinueImageIntentAfterScreenshot(
+  input: ScreenshotIntentContinuationInput
+): boolean {
+  if (!input.text) {
+    return false;
+  }
+
+  if (!isScreenshotUploadCaption(input.text)) {
+    return false;
+  }
+
+  if (shouldHandleImageCaptionAsConversation(input.text)) {
+    return false;
+  }
+
+  if (!input.state.lastPrompt) {
+    return false;
+  }
+
+  return input.state.stage === "AWAITING_EDIT_PROMPT";
 }
 
 function getInboundImageUrl(
@@ -319,7 +382,8 @@ async function promptForFaceMemoryConsent(
   input: ImageMessageInput,
   state: Awaited<ReturnType<typeof getOrCreateState>>,
   imageAction: ReturnType<typeof getStoredMessengerImageDecision>["action"],
-  storedSourceImageUrl: string
+  storedSourceImageUrl: string,
+  shouldContinueScreenshotIntent = false
 ): Promise<boolean> {
   if (!isFaceMemoryEnabled()) {
     return false;
@@ -332,6 +396,10 @@ async function promptForFaceMemoryConsent(
 
   if (state.faceMemoryConsent) {
     return false;
+  }
+
+  if (shouldContinueScreenshotIntent) {
+    await setPendingScreenshotIntentContinuation(input.psid, true);
   }
 
   await ctx.sendFaceMemoryConsentPrompt(input.psid, input.lang, input.reqId);

@@ -53,6 +53,7 @@ export type MessengerUserState = {
   lastSourceImageUrl?: string | null;
   lastSourceImageUpdatedAt?: number | null;
   pendingSourceImageDeleteUrl?: string | null;
+  pendingScreenshotIntentContinuation?: boolean;
   lastImageUrl?: string;
   lastGeneratedUrl?: string | null;
   lastPrompt?: string;
@@ -118,6 +119,31 @@ export function setFlowState(psid: string, nextState: MessengerFlowState): Maybe
   if (isPromiseLike(result)) {
     return result.then(() => undefined);
   }
+}
+
+export function setPendingScreenshotIntentContinuation(
+  psid: string,
+  pending: boolean,
+  now = Date.now()
+): MaybePromise<void> {
+  const result = patchState(
+    psid,
+    {
+      pendingScreenshotIntentContinuation: pending ? true : undefined,
+    },
+    now
+  );
+
+  if (isPromiseLike(result)) {
+    return result.then(() => undefined);
+  }
+}
+
+export function clearPendingScreenshotIntentContinuation(
+  psid: string,
+  now = Date.now()
+): MaybePromise<void> {
+  return setPendingScreenshotIntentContinuation(psid, false, now);
 }
 
 export function setConsentState(
@@ -305,6 +331,7 @@ export function clearPendingImageState(psid: string, now = Date.now()): MaybePro
       lastGeneratedUrl: null,
       pendingImageUrl: undefined,
       pendingImageAt: undefined,
+      pendingScreenshotIntentContinuation: undefined,
     },
     now,
   );
