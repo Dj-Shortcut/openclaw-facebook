@@ -50,6 +50,9 @@ function runPrepareGatewayConfig(env) {
         : null,
       user: fs.existsSync(process.env.OPENCLAW_WORKSPACE_DIR + "/USER.md")
         ? fs.readFileSync(process.env.OPENCLAW_WORKSPACE_DIR + "/USER.md", "utf8")
+        : null,
+      memory: fs.existsSync(process.env.OPENCLAW_WORKSPACE_DIR + "/MEMORY.md")
+        ? fs.readFileSync(process.env.OPENCLAW_WORKSPACE_DIR + "/MEMORY.md", "utf8")
         : null
     }));
   `;
@@ -173,6 +176,17 @@ describe("Fly gateway startup", () => {
     expect(config.agents.defaults.model).toEqual({ primary: "openai/gpt-5.4-mini" });
     expect(config.agents.defaults.thinkingDefault).toBe("low");
     expect(config.tools.deny).toContain("image_generate");
+    expect(result.memory).toBe("# Memory\n\nPersistent assistant memory for this OpenClaw workspace.\n");
+  }, prepareGatewayConfigTimeoutMs);
+
+  it("keeps an existing persistent memory file", () => {
+    const { workspaceDir } = configureTempGatewayEnv();
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    fs.writeFileSync(path.join(workspaceDir, "MEMORY.md"), "existing memory\n");
+
+    const result = runPrepareGatewayConfig({});
+
+    expect(result.memory).toBe("existing memory\n");
   }, prepareGatewayConfigTimeoutMs);
 
   it("migrates missing legacy workspace markdowns without overwriting persistent files", () => {
