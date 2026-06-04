@@ -44,7 +44,7 @@ jobs:
           cache-dependency-path: apps/customer-app/pnpm-lock.yaml
 
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck
         run: pnpm run check
@@ -102,7 +102,7 @@ jobs:
           workspaces: apps/customer-app/src-tauri
 
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Check Tauri shell
         working-directory: apps/customer-app/src-tauri
