@@ -15,9 +15,9 @@ import { getBotFeatures } from "./bot/features";
 import { handleMessengerPayload } from "./messengerPayloadRouting";
 import { buildQuickStartResponse } from "./conversationActions";
 import { safeLog } from "./messengerApi";
-import { t } from "./i18n";
 import { toLogUser } from "./privacy";
 import { type FacebookWebhookEvent } from "./webhookHelpers";
+import { runScreenshotIntentContinuation } from "./screenshotIntentContinuation";
 import type { HandlerContext } from "./webhookHandlerTypes";
 import type { Lang } from "./i18n";
 
@@ -48,20 +48,7 @@ async function continueAfterFaceMemoryChoice(
     await clearPendingScreenshotIntentContinuation(input.psid);
     await setFlowState(input.psid, "AWAITING_EDIT_PROMPT");
     if (sourceImageUrl && priorPrompt) {
-      await ctx.sendLoggedText(
-        input.psid,
-        t(input.lang, "screenshotIntentContinuation"),
-        input.reqId
-      );
-      await ctx.runImageGeneration(
-        input.psid,
-        input.userId,
-        input.reqId,
-        input.lang,
-        sourceImageUrl,
-        priorPrompt,
-        "source_image_edit"
-      );
+      await runScreenshotIntentContinuation(ctx, input, sourceImageUrl, priorPrompt);
       return;
     }
   }

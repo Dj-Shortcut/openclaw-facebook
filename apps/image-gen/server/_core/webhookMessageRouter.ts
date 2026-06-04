@@ -35,6 +35,7 @@ import {
 import { toLogUser } from "./privacy";
 import { type FacebookWebhookEvent } from "./webhookHelpers";
 import { handlePayload } from "./webhookPayloadBranch";
+import { runScreenshotIntentContinuation } from "./screenshotIntentContinuation";
 import type { HandlerContext } from "./webhookHandlerTypes";
 
 type FacebookWebhookMessage = NonNullable<FacebookWebhookEvent["message"]>;
@@ -172,6 +173,25 @@ export async function tryHandleImageMessage(
   );
   await setPendingScreenshotIntentContinuation(input.psid, false);
 
+  const shouldContinueScreenshotIntent = shouldContinueImageIntentAfterScreenshot({
+    text: input.text,
+    state,
+    storedSourceImageUrl,
+  });
+
+  if (
+    isScreenshotUploadCaption(input.text ?? "") &&
+    !shouldContinueScreenshotIntent &&
+    !shouldHandleImageCaptionAsConversation(input.text)
+  ) {
+    await ctx.sendLoggedText(
+      input.psid,
+      t(input.lang, "screenshotClarifyPrompt"),
+      input.reqId
+    );
+    return true;
+  }
+
   if (
     await promptForFaceMemoryConsent(
       ctx,
@@ -179,24 +199,14 @@ export async function tryHandleImageMessage(
       state,
       imageDecision.action,
       storedSourceImageUrl,
-      shouldContinueImageIntentAfterScreenshot({
-        text: input.text,
-        state,
-        storedSourceImageUrl,
-      })
+      shouldContinueScreenshotIntent
     )
   ) {
     return true;
   }
 
-  if (
-    shouldContinueImageIntentAfterScreenshot({
-      text: input.text,
-      state,
-      storedSourceImageUrl,
-    })
-  ) {
-    await handleScreenshotIntentContinuation(
+  if (shouldContinueScreenshotIntent && state.lastPrompt) {
+    await runScreenshotIntentContinuation(
       ctx,
       input,
       storedSourceImageUrl,
@@ -214,15 +224,6 @@ export async function tryHandleImageMessage(
       text: input.text.trim(),
       timestamp: input.timestamp,
     });
-    return true;
-  }
-
-  if (isScreenshotUploadCaption(input.text ?? "")) {
-    await ctx.sendLoggedText(
-      input.psid,
-      t(input.lang, "screenshotClarifyPrompt"),
-      input.reqId
-    );
     return true;
   }
 
@@ -272,32 +273,6 @@ function shouldContinueImageIntentAfterScreenshot(
   }
 
   return input.state.stage === "AWAITING_EDIT_PROMPT";
-}
-
-async function handleScreenshotIntentContinuation(
-  ctx: HandlerContext,
-  input: ImageMessageInput,
-  sourceImageUrl: string,
-  priorPrompt?: string
-): Promise<void> {
-  if (!priorPrompt) {
-    return;
-  }
-
-  await ctx.sendLoggedText(
-    input.psid,
-    t(input.lang, "screenshotIntentContinuation"),
-    input.reqId
-  );
-  await ctx.runImageGeneration(
-    input.psid,
-    input.userId,
-    input.reqId,
-    input.lang,
-    sourceImageUrl,
-    priorPrompt,
-    "source_image_edit"
-  );
 }
 
 function getInboundImageUrl(
