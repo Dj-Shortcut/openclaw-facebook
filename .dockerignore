@@ -1,0 +1,16 @@
+.git
+.github
+.fallow
+.vscode
+.idea
+node_modules
+apps/*/node_modules
+apps/*/.next
+apps/*/dist
+apps/*/build
+coverage
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.DS_Store
