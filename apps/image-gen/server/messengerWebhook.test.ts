@@ -2038,6 +2038,9 @@ describe("messenger deterministic free text", () => {
       psid,
       t("nl", "screenshotClarifyPrompt")
     );
+    expect(getState(anonymizePsid(psid))?.stage).toBe(
+      "AWAITING_EDIT_PROMPT"
+    );
     expect(sendImageMock).not.toHaveBeenCalled();
     expect(sendQuickRepliesMock).not.toHaveBeenCalled();
   });

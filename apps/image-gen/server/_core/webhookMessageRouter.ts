@@ -184,6 +184,7 @@ export async function tryHandleImageMessage(
     !shouldContinueScreenshotIntent &&
     !shouldHandleImageCaptionAsConversation(input.text)
   ) {
+    await setFlowState(input.psid, "AWAITING_EDIT_PROMPT");
     await ctx.sendLoggedText(
       input.psid,
       t(input.lang, "screenshotClarifyPrompt"),
