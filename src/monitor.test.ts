@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildMessengerAgentTextForAttachments,
   classifyMessengerFastLaneIntent,
   downloadMessengerMediaAttachment,
   extractImagePromptFromAssistantReply,
@@ -781,6 +782,43 @@ describe("getOpenClawActionText", () => {
         },
       }),
     ).toBeNull();
+  });
+});
+
+describe("buildMessengerAgentTextForAttachments", () => {
+  it("injects voice transcripts into the agent-facing text", () => {
+    expect(
+      buildMessengerAgentTextForAttachments({
+        text: "",
+        attachments: [
+          { type: "audio", kind: "audio", url: "https://lookaside.facebook.com/voice.mp4" },
+        ],
+        audioTranscripts: [{ mediaIndex: 0, text: "ja, gebruik de fallback" }],
+      }),
+    ).toBe("Transcriptie voicebericht:\nja, gebruik de fallback");
+  });
+
+  it("keeps typed text together with a voice transcript", () => {
+    expect(
+      buildMessengerAgentTextForAttachments({
+        text: "extra context",
+        attachments: [
+          { type: "audio", kind: "audio", url: "https://lookaside.facebook.com/voice.mp4" },
+        ],
+        audioTranscripts: [{ mediaIndex: 0, text: "maak de afbeelding opnieuw" }],
+      }),
+    ).toBe("extra context\n\nTranscriptie voicebericht:\nmaak de afbeelding opnieuw");
+  });
+
+  it("falls back to an audio attachment instruction when no transcript exists", () => {
+    expect(
+      buildMessengerAgentTextForAttachments({
+        text: "",
+        attachments: [
+          { type: "audio", kind: "audio", url: "https://lookaside.facebook.com/voice.mp4" },
+        ],
+      }),
+    ).toContain("voice/audio-bericht");
   });
 });
 
