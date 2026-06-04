@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isExplicitSourceImageEditRequest,
   isImageGenerationRequest,
+  isScreenshotUploadCaption,
   isSourceImageTransformRequest,
   isVisualCorrectionRequest,
   referencesExistingImage,
@@ -29,5 +30,12 @@ describe("image intent primitives", () => {
   it("detects missing-subject correction language", () => {
     expect(isVisualCorrectionRequest("Ik zie geen samurai bro")).toBe(true);
     expect(isVisualCorrectionRequest("The samurai is missing")).toBe(true);
+  });
+
+  it("detects screenshot wording in image captions", () => {
+    expect(isScreenshotUploadCaption("Tis een screen")).toBe(true);
+    expect(isScreenshotUploadCaption("Dit is een screenshot")).toBe(true);
+    expect(isScreenshotUploadCaption("Screenshot: ik heb dit net geüpload")).toBe(true);
+    expect(isScreenshotUploadCaption("Kan je dit aanpassen?")).toBe(false);
   });
 });
