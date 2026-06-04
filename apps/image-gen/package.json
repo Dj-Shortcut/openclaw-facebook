@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "license": "MIT",
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "scripts": {
     "build": "vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/index.js",
     "build:docker": "vite build && esbuild server/_core/index.ts --platform=node --bundle --format=cjs --external:vite --outfile=dist/index.cjs",

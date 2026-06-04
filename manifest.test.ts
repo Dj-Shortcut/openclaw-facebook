@@ -78,7 +78,7 @@ describe("package openclaw metadata", () => {
     expect(pkg.name).toBe("@dj-shortcut/facebook");
     expect(pkg.private).toBe(true);
     expect(pkg.engines).toEqual({
-      node: ">=22.19.0",
+      node: ">=24.0.0",
     });
     expect(pkg.openclaw?.compat).toEqual({
       pluginApi: ">=2026.5.19",
