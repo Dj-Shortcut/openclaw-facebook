@@ -41,11 +41,24 @@ jobs:
           fail-on-issues: false
           format: json
 
+      - name: Generate repo-wide Fallow report
+        working-directory: ${{ github.workspace }}
+        run: npm run fallow:report
+
       - name: Generate Fallow report
         run: npm run fallow:report
 
       - name: Generate production Fallow report
         run: npm run fallow:report:production
+
+      - name: Build repo-wide maintainability badge
+        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+        working-directory: ${{ github.workspace }}
+        run: |
+          node apps/image-gen/scripts/fallow-badge.mjs \
+            .fallow/report.json \
+            public/badges/fallow-maintainability.json \
+            public/badges/fallow-metrics.json
 
       - name: Build maintainability badge
         if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
@@ -57,17 +70,18 @@ jobs:
 
       - name: Commit badge update
         if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]'
+        working-directory: ${{ github.workspace }}
         shell: bash
         run: |
-          if git diff --quiet -- public/badges/fallow-maintainability.json public/badges/fallow-metrics.json; then
+          if git diff --quiet -- public/badges/fallow-maintainability.json public/badges/fallow-metrics.json apps/image-gen/public/badges/fallow-maintainability.json apps/image-gen/public/badges/fallow-metrics.json; then
             echo "Badge files unchanged"
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add public/badges/fallow-maintainability.json public/badges/fallow-metrics.json
-          git commit -m "chore: update image-gen Fallow maintainability badge"
+          git add public/badges/fallow-maintainability.json public/badges/fallow-metrics.json apps/image-gen/public/badges/fallow-maintainability.json apps/image-gen/public/badges/fallow-metrics.json
+          git commit -m "chore: update Fallow maintainability badges"
           git push
 
       - name: Enforce maintainability gate
