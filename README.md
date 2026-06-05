@@ -1,5 +1,8 @@
 # OpenClaw Facebook Plugin
 
+[![Repo Fallow Maintainability](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Dj-Shortcut/openclaw-facebook/main/public/badges/fallow-maintainability.json)](https://github.com/Dj-Shortcut/openclaw-facebook/actions/workflows/image-gen-fallow.yml)
+[![Image Gen Fallow Maintainability](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Dj-Shortcut/openclaw-facebook/main/apps/image-gen/public/badges/fallow-maintainability.json)](https://github.com/Dj-Shortcut/openclaw-facebook/actions/workflows/image-gen-fallow.yml)
+
 This plugin gives OpenClaw a Facebook Page inbox. After setup, people can send a
 direct message to your Facebook Page and OpenClaw can receive it, decide what to
 do, and reply through Messenger.
@@ -179,9 +182,16 @@ npm run fallow:report
 npm run fallow:report:production
 ```
 
-The generated root reports stay in `.fallow/` and are normalized to UTF-8 with
-repo-relative paths. The image-generation app keeps its app-specific Fallow
-badge flow under `apps/image-gen` and uses the same root normalizer.
+The primary maintainability badge at the top of this README is generated from
+the full-repo `.fallow/report.json` and published to
+`public/badges/fallow-maintainability.json`. The image-generation app badge is a
+secondary app-level signal from `apps/image-gen/.fallow/report.json`; it can stay
+green while repo-wide health declines in other packages, root plugin code, or
+unsupported/static-analysis entrypoints.
+
+Badge JSON is refreshed only by the Fallow workflow on scheduled or manual runs
+against `main`. Pull requests generate reports for review, but they do not write
+badge changes.
 
 Do not commit real Page tokens, app secrets, verify tokens, PSIDs, or live
 deployment config.

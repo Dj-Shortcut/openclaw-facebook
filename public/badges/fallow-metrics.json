@@ -1,0 +1,37 @@
+{
+  "generatedAt": "2026-06-05T14:52:12.681Z",
+  "fallowVersion": "2.27.0",
+  "totalIssues": 375,
+  "functionsAboveThreshold": 16,
+  "functionsAnalyzed": 3257,
+  "filesScored": 242,
+  "coverageModel": "static_estimated",
+  "maintainabilityScore": 80.7,
+  "formula": "native Fallow average_maintainability",
+  "summary": {
+    "total_issues": 375,
+    "unused_files": 142,
+    "unused_exports": 126,
+    "unused_types": 68,
+    "unused_dependencies": 0,
+    "unused_enum_members": 0,
+    "unused_class_members": 0,
+    "unresolved_imports": 2,
+    "unlisted_dependencies": 36,
+    "duplicate_exports": 0,
+    "type_only_dependencies": 0,
+    "test_only_dependencies": 0,
+    "circular_dependencies": 1,
+    "boundary_violations": 0
+  },
+  "healthSummary": {
+    "files_analyzed": 283,
+    "functions_analyzed": 3257,
+    "functions_above_threshold": 16,
+    "max_cyclomatic_threshold": 20,
+    "max_cognitive_threshold": 15,
+    "files_scored": 242,
+    "average_maintainability": 80.7,
+    "coverage_model": "static_estimated"
+  }
+}
