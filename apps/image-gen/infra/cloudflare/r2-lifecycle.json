@@ -1,0 +1,30 @@
+{
+  "rules": [
+    {
+      "id": "expire-inbound-source-after-30-days",
+      "enabled": true,
+      "conditions": {
+        "prefix": "inbound-source/"
+      },
+      "deleteObjectsTransition": {
+        "condition": {
+          "type": "Age",
+          "maxAge": 2592000
+        }
+      }
+    },
+    {
+      "id": "expire-generated-images-after-30-days",
+      "enabled": true,
+      "conditions": {
+        "prefix": "generated/images/"
+      },
+      "deleteObjectsTransition": {
+        "condition": {
+          "type": "Age",
+          "maxAge": 2592000
+        }
+      }
+    }
+  ]
+}

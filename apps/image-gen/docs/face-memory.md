@@ -6,7 +6,7 @@ The feature must stay disabled until legal/privacy copy is approved:
 
 ```env
 ENABLE_FACE_MEMORY=false
-# Optional; defaults to 30.
+# Optional; defaults to 30 and is capped at 30.
 FACE_MEMORY_RETENTION_DAYS=30
 ```
 
@@ -64,15 +64,21 @@ Not stored:
 
 ## Retention And Deletion
 
-Maximum retention is controlled by `FACE_MEMORY_RETENTION_DAYS`, counted from `lastSourceImageUpdatedAt`. The default is 30 days. Invalid, non-integer, or non-positive values fall back to 30 days.
+Maximum application retention is controlled by `FACE_MEMORY_RETENTION_DAYS`, counted from `lastSourceImageUpdatedAt`. The default is 30 days. Invalid, non-integer, or non-positive values fall back to 30 days. Values above 30 are capped at 30 because uploaded source images and face-memory images must not survive beyond the R2 30-day lifecycle maximum.
 
 Runtime state for active face memory or pending object-storage deletion is kept for the configured retention window plus two days. The extra two-day buffer lets the daily expiry sweep see inactive users after the retention window and delete object-storage files before Redis metadata expires.
+
+Object storage retention must also be enforced by the Cloudflare R2 lifecycle
+policy in [`r2-retention.md`](r2-retention.md). The application expiry job can
+only delete objects while their state references still exist; the R2 lifecycle
+rule is the required 30-day hard maximum and orphaned-object backstop for
+`inbound-source/` objects.
 
 Deletion paths:
 
 - User command: `verwijder mijn data` or `delete my data`.
 - Daily expiry task: clears expired face-memory state and attempts object-storage deletion.
-- Failed object-storage deletes leave a non-active `pendingSourceImageDeleteUrl` retry marker so later expiry runs can retry cleanup.
+- Failed object-storage deletes leave non-active retry markers so later expiry runs can retry cleanup for every failed object.
 - Admin kill switch: `POST /admin/disable-face-memory` with `X-Admin-Token`. Auth failures, rate-limited attempts, and successful kill-switch runs are logged.
 
 Generation refreshes stored source-image URLs through the storage proxy download-url endpoint when `BUILT_IN_FORGE_API_URL` is configured. This keeps retained source-photo generation compatible with short-lived signed public URLs.

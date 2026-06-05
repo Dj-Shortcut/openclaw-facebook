@@ -6,7 +6,7 @@ import { deleteScopedState } from "./stateStore";
 import {
   clearUserState,
   getState,
-  setPendingSourceImageDeleteUrl,
+  setPendingSourceImageDeleteUrls,
   type MessengerUserState,
 } from "./messengerState";
 
@@ -18,6 +18,7 @@ function getStateImageUrls(state: MessengerUserState): string[] {
     state.pendingImageUrl,
     state.lastSourceImageUrl,
     state.pendingSourceImageDeleteUrl,
+    ...(state.pendingSourceImageDeleteUrls ?? []),
     state.lastGeneratedUrl,
     state.lastImageUrl,
   ].filter((url): url is string => Boolean(url));
@@ -77,10 +78,12 @@ export async function deleteUserData(psid: string): Promise<void> {
     deleteMessengerGenerationCompletionsForUser(state.userKey)
   );
 
-  const firstFailedDelete = deleteResults.find(result => !result.deleted);
-  if (firstFailedDelete) {
+  const failedDeletes = deleteResults
+    .filter(result => !result.deleted)
+    .map(result => result.url);
+  if (failedDeletes.length) {
     await Promise.resolve(
-      setPendingSourceImageDeleteUrl(psid, firstFailedDelete.url)
+      setPendingSourceImageDeleteUrls(psid, failedDeletes)
     );
     return;
   }

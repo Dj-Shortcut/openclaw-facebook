@@ -126,6 +126,8 @@ curl -X DELETE "https://storage-proxy.example.com/v1/storage/object?path=inbound
 - If you run Fly commands manually, prefer `-a leaderbot-storage-proxy`
 - `PUBLIC_BASE_URL` should be a durable public R2 URL or custom domain.
 - The bucket must be readable at `PUBLIC_BASE_URL`.
+- The bucket must have prefix-scoped lifecycle expiration configured as
+  documented in [`r2-retention.md`](r2-retention.md).
 - The main app should only talk to the proxy, not directly to R2.
 - This removes Fly machine affinity from Messenger attachment delivery because the returned URL no longer depends on local machine memory or disk.
 - Retained source-image features depend on the delete endpoint for user-initiated deletion and emergency cleanup.

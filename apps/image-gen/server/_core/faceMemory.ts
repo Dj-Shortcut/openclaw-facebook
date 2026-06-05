@@ -1,10 +1,12 @@
 import type express from "express";
 import {
+  clearPendingSourceImageDeleteUrls,
   clearFaceMemoryState,
   getState,
   getOrCreateState,
   rememberFaceSourceImage,
   setPendingSourceImageDeleteUrl,
+  setPendingSourceImageDeleteUrls,
   type MessengerUserState,
 } from "./messengerState";
 import { forEachStoredState } from "./stateStore";
@@ -15,6 +17,7 @@ import { safeLog } from "./messengerApi";
 
 export const FACE_MEMORY_CONSENT_YES = "CONSENT_FACE_YES";
 export const FACE_MEMORY_CONSENT_NO = "CONSENT_FACE_NO";
+const INBOUND_SOURCE_PREFIX = "inbound-source/";
 
 export function isFaceMemoryEnabled(): boolean {
   return process.env.ENABLE_FACE_MEMORY === "true";
@@ -42,6 +45,59 @@ async function deleteStoredImageUrl(imageUrl: string | null | undefined): Promis
   }
 }
 
+function getInboundSourceUrl(imageUrl: string | null | undefined): string | null {
+  if (!imageUrl) {
+    return null;
+  }
+
+  const key = storageKeyFromPublicUrl(imageUrl);
+  if (!key?.startsWith(INBOUND_SOURCE_PREFIX)) {
+    return null;
+  }
+
+  return imageUrl;
+}
+
+function getExpiredInboundSourceUrls(
+  state: Partial<MessengerUserState>,
+  expiredBefore: number
+): string[] {
+  const hasRetainedSource = Boolean(
+    state.faceMemoryConsent?.given && state.lastSourceImageUrl
+  );
+  const candidates = [state.lastPhotoUrl, state.pendingImageUrl].map(url => {
+    const inboundSourceUrl = getInboundSourceUrl(url);
+    const isRetainedSource =
+      hasRetainedSource && inboundSourceUrl === state.lastSourceImageUrl;
+    const timestamp = isRetainedSource
+      ? state.lastSourceImageUpdatedAt ?? state.pendingImageAt ?? state.updatedAt
+      : state.pendingImageAt ?? state.lastSourceImageUpdatedAt ?? state.updatedAt;
+    return { url: inboundSourceUrl, timestamp };
+  });
+
+  return Array.from(
+    new Set(
+      candidates
+        .filter(candidate => candidate.timestamp && candidate.timestamp < expiredBefore)
+        .map(candidate => candidate.url)
+        .filter((url): url is string => Boolean(url))
+    )
+  );
+}
+
+function getPendingSourceDeleteUrls(
+  state: Partial<MessengerUserState>
+): string[] {
+  return Array.from(
+    new Set(
+      [
+        state.pendingSourceImageDeleteUrl,
+        ...(state.pendingSourceImageDeleteUrls ?? []),
+      ].filter((url): url is string => Boolean(url))
+    )
+  );
+}
+
 export async function deleteFaceMemoryForUser(psid: string): Promise<void> {
   const state = await getState(psid);
   if (!state) {
@@ -49,19 +105,24 @@ export async function deleteFaceMemoryForUser(psid: string): Promise<void> {
   }
 
   const urlsToDelete = [
-    state.pendingSourceImageDeleteUrl,
+    ...getPendingSourceDeleteUrls(state),
     state.lastSourceImageUrl,
   ].filter((url): url is string => Boolean(url));
-  let pendingDeleteUrl: string | null = null;
+  const failedDeleteUrls: string[] = [];
 
   for (const imageUrl of new Set(urlsToDelete)) {
     const deleted = await deleteStoredImageUrl(imageUrl);
-    if (!deleted && !pendingDeleteUrl) {
-      pendingDeleteUrl = imageUrl;
+    if (!deleted) {
+      failedDeleteUrls.push(imageUrl);
     }
   }
 
-  await clearFaceMemoryState(psid, Date.now(), pendingDeleteUrl);
+  await clearFaceMemoryState(
+    psid,
+    Date.now(),
+    failedDeleteUrls[0] ?? null,
+    failedDeleteUrls
+  );
 }
 
 export async function expireFaceMemory(
@@ -75,28 +136,52 @@ export async function expireFaceMemory(
   let deletedCount = 0;
 
   await forEachStoredState<Partial<MessengerUserState>>(async (psid, state) => {
-    if (state.pendingSourceImageDeleteUrl) {
-      const retryDeleted = await deleteStoredImageUrl(state.pendingSourceImageDeleteUrl);
-      if (retryDeleted) {
-        await clearFaceMemoryState(psid, finiteNow);
-      }
-      return;
-    }
-
+    const pendingDeleteUrls = getPendingSourceDeleteUrls(state);
+    const expiredInboundSourceUrls = options.matchAll
+      ? []
+      : getExpiredInboundSourceUrls(state, expiredBefore);
     const updatedAt = state.lastSourceImageUpdatedAt;
     const shouldClear = options.matchAll
       ? Boolean(state.faceMemoryConsent || state.lastSourceImageUrl)
       : Boolean(updatedAt && updatedAt < expiredBefore);
 
-    if (!shouldClear) {
+    if (
+      pendingDeleteUrls.length === 0 &&
+      !shouldClear &&
+      expiredInboundSourceUrls.length === 0
+    ) {
       return;
     }
 
-    const deleted = await deleteStoredImageUrl(state.lastSourceImageUrl);
+    const urlsToDelete = Array.from(
+      new Set([
+        ...pendingDeleteUrls,
+        ...(shouldClear ? [state.lastSourceImageUrl] : []),
+        ...expiredInboundSourceUrls,
+      ].filter((url): url is string => Boolean(url)))
+    );
+    const failedDeleteUrls: string[] = [];
+    for (const imageUrl of urlsToDelete) {
+      const deleted = await deleteStoredImageUrl(imageUrl);
+      if (!deleted) {
+        failedDeleteUrls.push(imageUrl);
+      }
+    }
+
+    if (!shouldClear && expiredInboundSourceUrls.length === 0) {
+      if (failedDeleteUrls.length) {
+        await setPendingSourceImageDeleteUrls(psid, failedDeleteUrls, finiteNow);
+      } else {
+        await clearPendingSourceImageDeleteUrls(psid, finiteNow);
+      }
+      return;
+    }
+
     await clearFaceMemoryState(
       psid,
       finiteNow,
-      deleted ? null : state.lastSourceImageUrl ?? null
+      failedDeleteUrls[0] ?? null,
+      failedDeleteUrls
     );
     deletedCount += 1;
   });
