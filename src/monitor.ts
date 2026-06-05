@@ -1372,7 +1372,7 @@ async function shouldProcessMessengerEvent(params: {
   return false;
 }
 
-async function processMessengerEvent(params: {
+export async function processMessengerEvent(params: {
   event: MessengerWebhookMessaging;
   cfg: OpenClawConfig;
   account: ResolvedMessengerAccount;
@@ -1463,7 +1463,7 @@ async function processMessengerEvent(params: {
       }
       await sendMessengerText(
         senderId,
-        "Ik kon de image generator nu niet bereiken. Ik kijk wel even naar je bericht.",
+        "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
         {
           cfg: params.cfg,
           accountId: params.account.accountId,
@@ -1473,6 +1473,7 @@ async function processMessengerEvent(params: {
           danger(`messenger image generator fallback failed: ${String(err)}`),
         );
       });
+      return;
     }
     if (
       attachments.length > 0 &&
@@ -1489,7 +1490,7 @@ async function processMessengerEvent(params: {
       }
       await sendMessengerText(
         senderId,
-        "Ik kon de image generator nu niet bereiken. Ik kijk wel even naar je bericht.",
+        "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
         {
           cfg: params.cfg,
           accountId: params.account.accountId,
@@ -1499,6 +1500,7 @@ async function processMessengerEvent(params: {
           danger(`messenger image generator fallback failed: ${String(err)}`),
         );
       });
+      return;
     }
     const referencedPrompt = resolveMessengerImagePromptFromUserText({
       senderId,

@@ -20,6 +20,7 @@ import {
   resolveMessengerVerificationTarget,
   sanitizeMessengerSourceImageUrl,
   normalizeMessengerReplyPayloadForDelivery,
+  processMessengerEvent,
   rememberMessengerAssistantPrompt,
   shouldDeliverMessengerReplyPayload,
   shouldForwardMessengerImageOnlyEventToImageGen,
@@ -28,8 +29,12 @@ import {
   type MessengerWebhookTarget,
 } from "./monitor.js";
 import { MESSENGER_OPENCLAW_ACTION_PREFIX } from "./presentation.js";
+import { clearMessengerRuntime, setMessengerRuntime } from "./runtime.js";
+import type { MessengerWebhookMessaging, ResolvedMessengerAccount } from "./types.js";
 
 const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+const originalImageGenToken = process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN;
+const originalImageGenUrl = process.env.LEADERBOT_IMAGE_GEN_URL;
 let temporaryStateDir: string | null = null;
 
 beforeEach(async () => {
@@ -44,6 +49,17 @@ afterEach(async () => {
   } else {
     process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
   }
+  if (originalImageGenToken === undefined) {
+    delete process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN;
+  } else {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = originalImageGenToken;
+  }
+  if (originalImageGenUrl === undefined) {
+    delete process.env.LEADERBOT_IMAGE_GEN_URL;
+  } else {
+    process.env.LEADERBOT_IMAGE_GEN_URL = originalImageGenUrl;
+  }
+  clearMessengerRuntime();
   if (temporaryStateDir) {
     await rm(temporaryStateDir, { force: true, recursive: true });
     temporaryStateDir = null;
@@ -73,6 +89,80 @@ function messengerTarget(
       exit: () => {},
     },
   };
+}
+
+function messengerTestConfig() {
+  return {
+    channels: {
+      facebook: {
+        pageId: "page-1",
+        pageAccessToken: "page-token",
+        appSecret: "app-secret",
+        verifyToken: "verify-token",
+        dmPolicy: "open",
+        allowFrom: ["*"],
+      },
+    },
+  } as never;
+}
+
+function messengerTestAccount(): ResolvedMessengerAccount {
+  return {
+    accountId: "default",
+    enabled: true,
+    pageId: "page-1",
+    pageAccessToken: "page-token",
+    appSecret: "app-secret",
+    verifyToken: "verify-token",
+    tokenSource: "config",
+    config: { dmPolicy: "open", allowFrom: ["*"] },
+  };
+}
+
+function messengerImagePromptEvent(mid: string): MessengerWebhookMessaging {
+  return {
+    sender: { id: `sender-${mid}` },
+    recipient: { id: "page-1" },
+    timestamp: 1_700_000_000_000,
+    message: {
+      mid,
+      text: "Maak een afbeelding van een robot",
+    },
+  };
+}
+
+function setGatewayRuntime(inboundRun = vi.fn()) {
+  setMessengerRuntime({
+    channel: {
+      pairing: {
+        readAllowFromStore: vi.fn(async () => []),
+      },
+      inbound: {
+        run: inboundRun,
+      },
+    },
+  } as never);
+  return inboundRun;
+}
+
+async function processGatewayTestEvent(event: MessengerWebhookMessaging) {
+  await processMessengerEvent({
+    event,
+    cfg: messengerTestConfig(),
+    account: messengerTestAccount(),
+    runtime: {
+      log: () => {},
+      error: () => {},
+      exit: () => {},
+    },
+    trace: {
+      accountId: "default",
+      reqId: `req-${event.message?.mid ?? "event"}`,
+      senderId: event.sender?.id ?? "",
+      messageId: event.message?.mid ?? "",
+      createdAt: Date.now(),
+    },
+  } as never);
 }
 
 describe("resolveMessengerEventTarget", () => {
@@ -543,6 +633,71 @@ describe("shouldForwardMessengerTextToImageGen", () => {
     expect(shouldForwardMessengerTextToImageGen("Maak een prompt voor een afbeelding")).toBe(false);
     expect(shouldForwardMessengerTextToImageGen("Schrijf een planning voor morgen")).toBe(false);
     expect(shouldForwardMessengerTextToImageGen("Wat zie je op deze foto?")).toBe(false);
+  });
+});
+
+describe("processMessengerEvent image intents", () => {
+  it("forwards Messenger text-to-image prompts without entering OpenClaw inbound", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    const inboundRun = setGatewayRuntime();
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      expect(String(url)).toBe("https://image-gen.example.test/internal/messenger/webhook-event");
+      return new Response(JSON.stringify({ status: "queued" }), {
+        headers: { "content-type": "application/json" },
+        status: 202,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(messengerImagePromptEvent("mid-image-forward"));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
+    expect(inboundRun).not.toHaveBeenCalled();
+  });
+
+  it("sends only the image-generator-unavailable message when forwarding fails", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    const inboundRun = setGatewayRuntime();
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      const href = String(url);
+      if (href === "https://image-gen.example.test/internal/messenger/webhook-event") {
+        return new Response(JSON.stringify({ error: "unavailable" }), {
+          headers: { "content-type": "application/json" },
+          status: 503,
+        });
+      }
+      if (href === "https://graph.facebook.com/v20.0/page-1/messages") {
+        return new Response(
+          JSON.stringify({
+            message_id: "fallback-message",
+            recipient_id: "sender-mid-image-forward-failure",
+          }),
+          {
+            headers: { "content-type": "application/json" },
+            status: 200,
+          },
+        );
+      }
+      throw new Error(`unexpected fetch ${href}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(messengerImagePromptEvent("mid-image-forward-failure"));
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "POST" });
+    const sendBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body));
+    expect(sendBody).toMatchObject({
+      messaging_type: "RESPONSE",
+      message: {
+        text: "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
+      },
+      recipient: { id: "sender-mid-image-forward-failure" },
+    });
+    expect(inboundRun).not.toHaveBeenCalled();
   });
 });
 
