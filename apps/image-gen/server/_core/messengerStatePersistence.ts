@@ -17,7 +17,7 @@ import type { MessengerUserState } from "./messengerState";
 
 type PartialState = Partial<MessengerUserState>;
 
-export function saveState(
+function saveState(
   psid: string,
   nextState: MessengerUserState
 ): MaybePromise<MessengerUserState> {
