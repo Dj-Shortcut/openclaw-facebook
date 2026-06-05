@@ -2,10 +2,10 @@ import { getRedisClient, isRedisEnabled, type RedisLike } from "./redis";
 import { safeLog } from "./messengerApi";
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
 
-export const MESSENGER_GENERATION_QUEUE_KEY = "messenger-generation-jobs";
-export const MESSENGER_GENERATION_PROCESSING_KEY =
+const MESSENGER_GENERATION_QUEUE_KEY = "messenger-generation-jobs";
+const MESSENGER_GENERATION_PROCESSING_KEY =
   "messenger-generation-jobs:processing";
-export const MESSENGER_GENERATION_DEAD_LETTER_KEY =
+const MESSENGER_GENERATION_DEAD_LETTER_KEY =
   "messenger-generation-jobs:dead";
 const DEFAULT_JOB_LEASE_BUFFER_SECONDS = 60;
 const OPENAI_TIMEOUT_MS_DEFAULT = 180_000;
