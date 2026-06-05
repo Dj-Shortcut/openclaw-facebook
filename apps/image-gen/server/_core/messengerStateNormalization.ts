@@ -59,6 +59,7 @@ export function createDefaultState(
     lastSourceImageUrl: null,
     lastSourceImageUpdatedAt: null,
     pendingSourceImageDeleteUrl: null,
+    pendingSourceImageDeleteUrls: null,
     lastImageUrl: undefined,
     lastGeneratedUrl: null,
     lastPrompt: undefined,
@@ -175,6 +176,7 @@ function resolveSourceImageState(
   | "lastSourceImageUrl"
   | "lastSourceImageUpdatedAt"
   | "pendingSourceImageDeleteUrl"
+  | "pendingSourceImageDeleteUrls"
 > {
   const { value, fallback } = ctx;
 
@@ -185,6 +187,8 @@ function resolveSourceImageState(
       value?.lastSourceImageUpdatedAt ?? fallback.lastSourceImageUpdatedAt,
     pendingSourceImageDeleteUrl:
       value?.pendingSourceImageDeleteUrl ?? fallback.pendingSourceImageDeleteUrl,
+    pendingSourceImageDeleteUrls:
+      value?.pendingSourceImageDeleteUrls ?? fallback.pendingSourceImageDeleteUrls,
   };
 }
 

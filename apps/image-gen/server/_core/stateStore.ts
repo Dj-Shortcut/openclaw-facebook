@@ -120,6 +120,7 @@ export function writeState<T>(psid: string, value: T): MaybePromise<void> {
     lastSourceImageUrl?: string | null;
     lastSourceImageUpdatedAt?: number | null;
     pendingSourceImageDeleteUrl?: string | null;
+    pendingSourceImageDeleteUrls?: string[] | null;
   } | null;
   const hasActiveFaceMemory =
     faceMemoryValue?.faceMemoryConsent?.given === true &&
@@ -128,7 +129,8 @@ export function writeState<T>(psid: string, value: T): MaybePromise<void> {
         faceMemoryValue.lastSourceImageUpdatedAt
     );
   const hasPendingSourceDelete = Boolean(
-    faceMemoryValue?.pendingSourceImageDeleteUrl
+    faceMemoryValue?.pendingSourceImageDeleteUrl ||
+      faceMemoryValue?.pendingSourceImageDeleteUrls?.length
   );
   const ttlSeconds =
     hasActiveFaceMemory || hasPendingSourceDelete

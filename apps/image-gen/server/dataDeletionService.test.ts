@@ -121,6 +121,31 @@ describe("data deletion service", () => {
     );
   });
 
+  it("keeps every failed object deletion marker during user erasure", async () => {
+    const psid = "delete-multiple-storage-failure-user";
+    const sourceUrl = "https://assets.example/inbound-source/source-fail.jpg";
+    const generatedUrl = "https://assets.example/generated/images/generated-fail.jpg";
+    storageDeleteMock.mockRejectedValue(new Error("delete failed"));
+
+    writeState(psid, {
+      ...(await Promise.resolve(getOrCreateState(psid))),
+      lastPhotoUrl: sourceUrl,
+      lastPhoto: sourceUrl,
+      lastPhotoSource: "stored",
+      pendingImageUrl: sourceUrl,
+      lastGeneratedUrl: generatedUrl,
+    });
+
+    await deleteUserData(psid);
+
+    const state = await Promise.resolve(getState(psid));
+    expect(state?.pendingSourceImageDeleteUrl).toBe(sourceUrl);
+    expect(state?.pendingSourceImageDeleteUrls).toEqual([
+      sourceUrl,
+      generatedUrl,
+    ]);
+  });
+
   it("deletes state-referenced source and generated objects during user erasure", async () => {
     const psid = "delete-all-state-images-user";
     const sourceUrl = "https://assets.example/inbound-source/user-source.jpg";

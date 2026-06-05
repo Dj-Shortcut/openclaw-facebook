@@ -14,7 +14,7 @@ These variables are the first things to verify when the bot does not reply or Me
 | `MESSENGER_PAGE_ID` | Canonical `m.me` share links | Needed for share/invite flows. |
 | `APP_BASE_URL` | Public links and generated image URLs | Must be `https://` in production. |
 | `ENABLE_FACE_MEMORY` | Optional Messenger source-photo reuse | Keep `false` until legal approves consent, privacy, and deletion copy. |
-| `FACE_MEMORY_RETENTION_DAYS` | Optional face-memory retention window | Defaults to `30`; positive whole numbers only. Invalid values fall back to `30`. |
+| `FACE_MEMORY_RETENTION_DAYS` | Optional face-memory retention window | Defaults to `30`; positive whole numbers only. Invalid values fall back to `30`; values above `30` are capped at `30`. |
 
 ## 2. OpenAI paths
 

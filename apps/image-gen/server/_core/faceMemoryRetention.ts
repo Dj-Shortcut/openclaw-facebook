@@ -1,10 +1,11 @@
 const DEFAULT_FACE_MEMORY_RETENTION_DAYS = 30;
+const MAX_FACE_MEMORY_RETENTION_DAYS = 30;
 const FACE_MEMORY_STATE_TTL_BUFFER_DAYS = 2;
 
 export function getFaceMemoryRetentionDays(): number {
   const parsed = Number(process.env.FACE_MEMORY_RETENTION_DAYS);
   if (Number.isFinite(parsed) && parsed > 0 && Number.isInteger(parsed)) {
-    return parsed;
+    return Math.min(parsed, MAX_FACE_MEMORY_RETENTION_DAYS);
   }
 
   return DEFAULT_FACE_MEMORY_RETENTION_DAYS;

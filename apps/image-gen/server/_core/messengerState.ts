@@ -53,6 +53,7 @@ export type MessengerUserState = {
   lastSourceImageUrl?: string | null;
   lastSourceImageUpdatedAt?: number | null;
   pendingSourceImageDeleteUrl?: string | null;
+  pendingSourceImageDeleteUrls?: string[] | null;
   pendingScreenshotIntentContinuation?: boolean;
   lastImageUrl?: string;
   lastGeneratedUrl?: string | null;
@@ -279,15 +280,22 @@ export function declineFaceMemory(psid: string, now = Date.now()): MaybePromise<
 export function clearFaceMemoryState(
   psid: string,
   now = Date.now(),
-  pendingDeleteUrl: string | null = null
+  pendingDeleteUrl: string | null = null,
+  pendingDeleteUrls: string[] = pendingDeleteUrl ? [pendingDeleteUrl] : []
 ): MaybePromise<void> {
+  const uniquePendingDeleteUrls = Array.from(
+    new Set(pendingDeleteUrls.filter(Boolean))
+  );
   const result = patchState(
     psid,
     {
       faceMemoryConsent: null,
       lastSourceImageUrl: null,
       lastSourceImageUpdatedAt: null,
-      pendingSourceImageDeleteUrl: pendingDeleteUrl,
+      pendingSourceImageDeleteUrl: uniquePendingDeleteUrls[0] ?? pendingDeleteUrl,
+      pendingSourceImageDeleteUrls: uniquePendingDeleteUrls.length
+        ? uniquePendingDeleteUrls
+        : null,
       lastPhotoUrl: null,
       lastPhoto: null,
       lastPhotoSource: null,
@@ -307,10 +315,40 @@ export function setPendingSourceImageDeleteUrl(
   pendingDeleteUrl: string,
   now = Date.now()
 ): MaybePromise<void> {
+  return setPendingSourceImageDeleteUrls(psid, [pendingDeleteUrl], now);
+}
+
+export function setPendingSourceImageDeleteUrls(
+  psid: string,
+  pendingDeleteUrls: string[],
+  now = Date.now()
+): MaybePromise<void> {
+  const uniquePendingDeleteUrls = Array.from(new Set(pendingDeleteUrls));
   const result = patchState(
     psid,
     {
-      pendingSourceImageDeleteUrl: pendingDeleteUrl,
+      pendingSourceImageDeleteUrl: uniquePendingDeleteUrls[0] ?? null,
+      pendingSourceImageDeleteUrls: uniquePendingDeleteUrls.length
+        ? uniquePendingDeleteUrls
+        : null,
+    },
+    now
+  );
+
+  if (isPromiseLike(result)) {
+    return result.then(() => undefined);
+  }
+}
+
+export function clearPendingSourceImageDeleteUrls(
+  psid: string,
+  now = Date.now()
+): MaybePromise<void> {
+  const result = patchState(
+    psid,
+    {
+      pendingSourceImageDeleteUrl: null,
+      pendingSourceImageDeleteUrls: null,
     },
     now
   );

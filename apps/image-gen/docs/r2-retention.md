@@ -8,7 +8,7 @@ backstop for objects whose Redis/application state reference has been lost.
 
 | Prefix | Classification | Active writer | Retention policy |
 | --- | --- | --- | --- |
-| `inbound-source/` | User-uploaded source images, including face-memory source photos | `server/_core/sourceImageStore.ts` | Expire after 30 days |
+| `inbound-source/` | User-uploaded source images, including face-memory source photos | `server/_core/sourceImageStore.ts` | Expire after 30 days; this is the hard maximum |
 | `generated/images/` | Generated image outputs returned to Messenger/WhatsApp | `server/_core/image-generation/generatedImagePublisher.ts` | Expire after 30 days |
 | `generated/` | Generated outputs and possible legacy generated artifacts | No current R2 writer found for this parent prefix except `generated/images/`; examples/tests still reference older keys | Do not add a parent-prefix rule until production inventory confirms every child is safe to expire |
 
@@ -56,8 +56,8 @@ because it can only delete objects whose keys are still known to app state.
 - Face-memory expiry runs on startup and every 24 hours. It deletes retained
   source photos and expired `inbound-source/` session images still referenced by
   state.
-- Failed source-photo deletes leave `pendingSourceImageDeleteUrl` so later
-  expiry runs can retry.
+- Failed source-photo deletes leave retry markers so later expiry runs can retry
+  every failed object delete.
 
 These paths remain correct after lifecycle rules are added. Lifecycle expiration
 is a backstop, not a replacement for immediate user deletion.
@@ -67,6 +67,11 @@ is a backstop, not a replacement for immediate user deletion.
 `inbound-source/` expiration is mandatory privacy enforcement. These objects are
 user-uploaded source images, including face-memory source photos, and must not
 survive indefinitely if Redis/application state is lost.
+
+Thirty days is the hard maximum for uploaded source and face-memory objects.
+`FACE_MEMORY_RETENTION_DAYS` may choose a shorter application retention window,
+but values above 30 are clamped and must not be paired with a longer R2
+lifecycle rule.
 
 `generated/images/` expiration aligns product behavior with privacy-policy
 language that generated outputs are retained only as long as needed. Generated
@@ -86,8 +91,8 @@ changing this lifecycle policy.
 
 1. Apply `apps/image-gen/infra/cloudflare/r2-lifecycle.json` to the production
    R2 bucket.
-2. List lifecycle rules and confirm `inbound-source/` and `generated/` are
-   enabled with a 30-day age condition.
+2. List lifecycle rules and confirm `inbound-source/` and `generated/images/`
+   are enabled with a 30-day age condition.
 3. Wait for R2 lifecycle processing. Existing objects may not disappear
    immediately; Cloudflare documents lifecycle deletion as asynchronous after
    expiration.

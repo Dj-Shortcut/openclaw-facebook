@@ -33,7 +33,7 @@ function loadPolicy(): LifecyclePolicy {
 }
 
 describe("R2 lifecycle retention policy", () => {
-  it("expires uploaded source images after the configured retention window", () => {
+  it("expires uploaded source images after the hard maximum retention window", () => {
     const policy = loadPolicy();
     const inboundSourceRule = policy.rules.find(
       rule => rule.conditions.prefix === "inbound-source/"
