@@ -37,6 +37,7 @@ import {
 import {
   getMessengerGenerationCompletion,
   markMessengerGenerationCompleted,
+  markMessengerGenerationDelivered,
 } from "./messengerGenerationCompletion";
 import {
   MESSENGER_ASYNC_RESPONSE_QUEUED,
@@ -63,6 +64,16 @@ type GenerationJobRunnerDeps = Pick<
   | "sendLoggedActions"
   | "sendLoggedText"
 >;
+
+class MessengerGenerationDeliveryError extends Error {
+  readonly cause: unknown;
+
+  constructor(cause: unknown) {
+    super("Messenger image delivery failed");
+    this.name = "MessengerGenerationDeliveryError";
+    this.cause = cause;
+  }
+}
 
 /** Creates the Messenger image-generation job runner and queue/dead-letter entry points. */
 export function createMessengerGenerationJobRunner(
@@ -94,11 +105,14 @@ export function createMessengerGenerationJobRunner(
       didRun = await runGuardedGeneration(psid, async () => {
         if (
           await finishDuplicateGenerationIfCompleted({
+            deps,
             psid,
             userId,
             reqId,
+            lang,
             promptHint,
             resolvedGenerationKind,
+            rememberSendOutcome,
           })
         ) {
           return;
@@ -180,6 +194,16 @@ export function createMessengerGenerationJobRunner(
         });
       });
     } catch (error) {
+      if (error instanceof MessengerGenerationDeliveryError) {
+        safeLog("messenger_generation_image_delivery_failed", {
+          level: "error",
+          reqId,
+          user: toLogUser(userId),
+          generationKind: resolvedGenerationKind,
+          error: error.cause,
+        });
+        throw error;
+      }
       await recoverUnexpectedGenerationError({
         deps,
         error,
@@ -377,11 +401,14 @@ function logMessengerGenerationRecoveryEvent(
 }
 
 async function finishDuplicateGenerationIfCompleted(input: {
+  deps: GenerationJobRunnerDeps;
   psid: string;
   userId: string;
   reqId: string;
+  lang: MessengerGenerationJob["lang"];
   promptHint?: string;
   resolvedGenerationKind: GenerationKind;
+  rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
 }): Promise<boolean> {
   const completedGeneration = await Promise.resolve(
     getMessengerGenerationCompletion(input.reqId)
@@ -407,9 +434,32 @@ async function finishDuplicateGenerationIfCompleted(input: {
     reqId: input.reqId,
     user: toLogUser(input.userId),
     generationKind: input.resolvedGenerationKind,
+    delivered: Boolean(completedGeneration.deliveredAt),
   });
   await setLastGenerated(input.psid, completedGeneration.imageUrl);
   await setLastGenerationContext(input.psid, { prompt: input.promptHint });
+  if (!completedGeneration.deliveredAt) {
+    safeLog("messenger_generation_job_duplicate_delivery_recovered", {
+      reqId: input.reqId,
+      user: toLogUser(input.userId),
+      generationKind: input.resolvedGenerationKind,
+    });
+    await deliverGenerationImage({
+      deps: input.deps,
+      psid: input.psid,
+      imageUrl: completedGeneration.imageUrl,
+      reqId: input.reqId,
+      userId: input.userId,
+      rememberSendOutcome: input.rememberSendOutcome,
+    });
+    await sendGenerationSuccessActions({
+      deps: input.deps,
+      psid: input.psid,
+      reqId: input.reqId,
+      lang: input.lang,
+      rememberSendOutcome: input.rememberSendOutcome,
+    });
+  }
   await setFlowState(input.psid, "IDLE");
   return true;
 }
@@ -502,21 +552,22 @@ async function handleGenerationSuccess(input: {
   await setLastGenerated(input.psid, imageUrl);
   await setLastGenerationContext(input.psid, { prompt: input.promptHint });
 
-  const messengerSendStartedAt = Date.now();
-  input.rememberSendOutcome(
-    await input.deps.sendLoggedImage(input.psid, imageUrl, input.reqId)
-  );
-  const messengerSendMs = Date.now() - messengerSendStartedAt;
+  const messengerSendMs = await deliverGenerationImage({
+    deps: input.deps,
+    psid: input.psid,
+    imageUrl,
+    reqId: input.reqId,
+    userId: input.userId,
+    rememberSendOutcome: input.rememberSendOutcome,
+  });
   recordGenerationSuccess(input.resolvedGenerationKind, metrics.totalMs);
-  const successResponse = buildGenerationSuccessResponse(input.lang);
-  input.rememberSendOutcome(
-    await input.deps.sendLoggedActions(
-      input.psid,
-      successResponse.text ?? "",
-      successResponse.actions ?? [],
-      input.reqId
-    )
-  );
+  await sendGenerationSuccessActions({
+    deps: input.deps,
+    psid: input.psid,
+    reqId: input.reqId,
+    lang: input.lang,
+    rememberSendOutcome: input.rememberSendOutcome,
+  });
   emitGenerationDiagnostic({
     generationId: input.reqId,
     senderId: input.psid,
@@ -534,6 +585,59 @@ async function handleGenerationSuccess(input: {
     },
   });
   await setFlowState(input.psid, "IDLE");
+}
+
+async function deliverGenerationImage(input: {
+  deps: GenerationJobRunnerDeps;
+  psid: string;
+  imageUrl: string;
+  reqId: string;
+  userId: string;
+  rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
+}): Promise<number> {
+  const messengerSendStartedAt = Date.now();
+  let outcome: MessengerSendOutcome;
+  try {
+    outcome = await input.deps.sendLoggedImage(
+      input.psid,
+      input.imageUrl,
+      input.reqId
+    );
+  } catch (error) {
+    throw new MessengerGenerationDeliveryError(error);
+  }
+
+  input.rememberSendOutcome(outcome);
+  if (!outcome.sent) {
+    throw new MessengerGenerationDeliveryError(
+      new Error(`Messenger image send skipped: ${outcome.reason}`)
+    );
+  }
+
+  await markMessengerGenerationDelivered(
+    input.reqId,
+    input.imageUrl,
+    input.userId
+  );
+  return Date.now() - messengerSendStartedAt;
+}
+
+async function sendGenerationSuccessActions(input: {
+  deps: GenerationJobRunnerDeps;
+  psid: string;
+  reqId: string;
+  lang: MessengerGenerationJob["lang"];
+  rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
+}): Promise<void> {
+  const successResponse = buildGenerationSuccessResponse(input.lang);
+  input.rememberSendOutcome(
+    await input.deps.sendLoggedActions(
+      input.psid,
+      successResponse.text ?? "",
+      successResponse.actions ?? [],
+      input.reqId
+    )
+  );
 }
 
 async function handleGenerationFailure(input: {

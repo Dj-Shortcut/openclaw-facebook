@@ -85,7 +85,7 @@ describe("messenger generation job safety", () => {
     expect(sendQuickRepliesMock).toHaveBeenCalled();
   });
 
-  it("records completion and clears in-flight notice when handleGenerationSuccess throws", async () => {
+  it("retries cached image delivery when generation completed before image send failed", async () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_771_001_000_000);
     const psid = "success-throw-clears-notice-user";
     const reqId = "req-success-throw-clears-notice";
@@ -97,12 +97,14 @@ describe("messenger generation job safety", () => {
 
     try {
       await seedInFlightNotice(ctx, psid);
-      await runner.processMessengerGenerationJob({
-        psid,
-        userId: `${psid}-key`,
-        reqId,
-        lang: "nl",
-      });
+      await expect(
+        runner.processMessengerGenerationJob({
+          psid,
+          userId: `${psid}-key`,
+          reqId,
+          lang: "nl",
+        })
+      ).rejects.toThrow("Messenger image delivery failed");
 
       await expect(
         Promise.resolve(getMessengerGenerationCompletion(reqId))
@@ -113,6 +115,9 @@ describe("messenger generation job safety", () => {
           userKey: `${psid}-key`,
         })
       );
+      await expect(
+        Promise.resolve(getMessengerGenerationCompletion(reqId))
+      ).resolves.not.toHaveProperty("deliveredAt");
 
       await runner.processMessengerGenerationJob({
         psid,
@@ -121,6 +126,17 @@ describe("messenger generation job safety", () => {
         lang: "nl",
       });
       expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
+      expect(sendImageMock).toHaveBeenCalledTimes(2);
+      await expect(
+        Promise.resolve(getMessengerGenerationCompletion(reqId))
+      ).resolves.toEqual(
+        expect.objectContaining({
+          reqId,
+          imageUrl: "https://img.example/generated.png",
+          userKey: `${psid}-key`,
+          deliveredAt: 1_771_001_000_000,
+        })
+      );
 
       sendTextMock.mockClear();
       await setEphemeralKey(`messenger:inflight:${psid}`, "active-again", 60);
