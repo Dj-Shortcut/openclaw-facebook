@@ -23,7 +23,7 @@ import {
   resetStateStore,
   setPendingImage,
 } from "./_core/messengerState";
-import { readScopedState, writeScopedState } from "./_core/stateStore";
+import { readScopedState, writeScopedState, writeState } from "./_core/stateStore";
 
 describe("data deletion service", () => {
   const originalRedisUrl = process.env.REDIS_URL;
@@ -119,5 +119,40 @@ describe("data deletion service", () => {
     expect((await Promise.resolve(getState(psid)))?.pendingSourceImageDeleteUrl).toBe(
       "https://assets.example/inbound-source/delete-me.jpg"
     );
+  });
+
+  it("deletes state-referenced source and generated objects during user erasure", async () => {
+    const psid = "delete-all-state-images-user";
+    const sourceUrl = "https://assets.example/inbound-source/user-source.jpg";
+    const retainedSourceUrl =
+      "https://assets.example/inbound-source/retained-source.jpg";
+    const generatedUrl = "https://assets.example/generated/images/result.jpg";
+    const legacyGeneratedUrl = "https://assets.example/generated/legacy-result.jpg";
+
+    writeState(psid, {
+      ...(await Promise.resolve(getOrCreateState(psid))),
+      lastPhotoUrl: sourceUrl,
+      lastPhoto: sourceUrl,
+      lastPhotoSource: "stored",
+      pendingImageUrl: sourceUrl,
+      lastSourceImageUrl: retainedSourceUrl,
+      pendingSourceImageDeleteUrl: retainedSourceUrl,
+      lastGeneratedUrl: generatedUrl,
+      lastImageUrl: legacyGeneratedUrl,
+    });
+
+    await deleteUserData(psid);
+
+    expect(storageDeleteMock).toHaveBeenCalledWith(
+      "inbound-source/user-source.jpg"
+    );
+    expect(storageDeleteMock).toHaveBeenCalledWith(
+      "inbound-source/retained-source.jpg"
+    );
+    expect(storageDeleteMock).toHaveBeenCalledWith(
+      "generated/images/result.jpg"
+    );
+    expect(storageDeleteMock).toHaveBeenCalledWith("generated/legacy-result.jpg");
+    expect(await Promise.resolve(getState(psid))).toBeNull();
   });
 });

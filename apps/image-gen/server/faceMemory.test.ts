@@ -138,6 +138,89 @@ describe("face memory deletion", () => {
     expect(state?.lastSourceImageUrl).toBeNull();
   });
 
+  it("backfills deletion for expired inbound source session images", async () => {
+    const sourceUrl = "https://assets.example/inbound-source/session-source.jpg";
+    const now = Date.now();
+    writeState("user-stale-session-source", {
+      lastPhotoUrl: sourceUrl,
+      lastPhoto: sourceUrl,
+      lastPhotoSource: "stored",
+      pendingImageUrl: sourceUrl,
+      pendingImageAt: now - 31 * 24 * 60 * 60 * 1000,
+    });
+
+    const deleted = await expireFaceMemory(now);
+
+    const state = await getState("user-stale-session-source");
+    expect(deleted).toBe(1);
+    expect(storageDeleteMock).toHaveBeenCalledWith(
+      "inbound-source/session-source.jpg"
+    );
+    expect(state?.lastPhotoUrl).toBeNull();
+    expect(state?.pendingImageUrl).toBeUndefined();
+    expect(state?.pendingSourceImageDeleteUrl).toBeNull();
+  });
+
+  it("does not delete fresh inbound source session images", async () => {
+    const sourceUrl = "https://assets.example/inbound-source/fresh-source.jpg";
+    const now = Date.now();
+    writeState("user-fresh-session-source", {
+      lastPhotoUrl: sourceUrl,
+      lastPhoto: sourceUrl,
+      lastPhotoSource: "stored",
+      pendingImageUrl: sourceUrl,
+      pendingImageAt: now - 29 * 24 * 60 * 60 * 1000,
+    });
+
+    const deleted = await expireFaceMemory(now);
+
+    const state = await getState("user-fresh-session-source");
+    expect(deleted).toBe(0);
+    expect(storageDeleteMock).not.toHaveBeenCalled();
+    expect(state?.lastPhotoUrl).toBe(sourceUrl);
+    expect(state?.pendingImageUrl).toBe(sourceUrl);
+  });
+
+  it("does not delete generated image URLs during inbound source cleanup", async () => {
+    const generatedUrl = "https://assets.example/generated/session-output.jpg";
+    const now = Date.now();
+    writeState("user-stale-generated-session", {
+      lastPhotoUrl: generatedUrl,
+      lastPhoto: generatedUrl,
+      lastPhotoSource: "stored",
+      pendingImageUrl: generatedUrl,
+      pendingImageAt: now - 31 * 24 * 60 * 60 * 1000,
+    });
+
+    const deleted = await expireFaceMemory(now);
+
+    const state = await getState("user-stale-generated-session");
+    expect(deleted).toBe(0);
+    expect(storageDeleteMock).not.toHaveBeenCalled();
+    expect(state?.lastPhotoUrl).toBe(generatedUrl);
+  });
+
+  it("records a pending delete marker when expired inbound source cleanup fails", async () => {
+    const sourceUrl = "https://assets.example/inbound-source/stale-fail.jpg";
+    const now = Date.now();
+    storageDeleteMock.mockRejectedValueOnce(new Error("storage unavailable"));
+    writeState("user-stale-session-source-fail", {
+      lastPhotoUrl: sourceUrl,
+      lastPhoto: sourceUrl,
+      lastPhotoSource: "stored",
+      pendingImageUrl: sourceUrl,
+      pendingImageAt: now - 31 * 24 * 60 * 60 * 1000,
+    });
+
+    const deleted = await expireFaceMemory(now);
+
+    const state = await getState("user-stale-session-source-fail");
+    expect(deleted).toBe(1);
+    expect(storageDeleteMock).toHaveBeenCalledWith("inbound-source/stale-fail.jpg");
+    expect(state?.lastPhotoUrl).toBeNull();
+    expect(state?.pendingSourceImageDeleteUrl).toBe(sourceUrl);
+  });
+
   it("uses FACE_MEMORY_RETENTION_DAYS when expiring retained source data", async () => {
     process.env.FACE_MEMORY_RETENTION_DAYS = "7";
     const oldSourceUrl = "https://assets.example/generated/env-retention-source.jpg";

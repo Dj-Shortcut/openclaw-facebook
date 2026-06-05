@@ -68,6 +68,11 @@ Maximum retention is controlled by `FACE_MEMORY_RETENTION_DAYS`, counted from `l
 
 Runtime state for active face memory or pending object-storage deletion is kept for the configured retention window plus two days. The extra two-day buffer lets the daily expiry sweep see inactive users after the retention window and delete object-storage files before Redis metadata expires.
 
+Object storage retention must also be enforced by the Cloudflare R2 lifecycle
+policy in [`r2-retention.md`](r2-retention.md). The application expiry job can
+only delete objects while their state references still exist; the R2 lifecycle
+rule is the required backstop for orphaned `inbound-source/` objects.
+
 Deletion paths:
 
 - User command: `verwijder mijn data` or `delete my data`.

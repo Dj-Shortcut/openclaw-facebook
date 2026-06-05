@@ -15,6 +15,7 @@ import { safeLog } from "./messengerApi";
 
 export const FACE_MEMORY_CONSENT_YES = "CONSENT_FACE_YES";
 export const FACE_MEMORY_CONSENT_NO = "CONSENT_FACE_NO";
+const INBOUND_SOURCE_PREFIX = "inbound-source/";
 
 export function isFaceMemoryEnabled(): boolean {
   return process.env.ENABLE_FACE_MEMORY === "true";
@@ -40,6 +41,40 @@ async function deleteStoredImageUrl(imageUrl: string | null | undefined): Promis
     });
     return false;
   }
+}
+
+function getInboundSourceUrl(imageUrl: string | null | undefined): string | null {
+  if (!imageUrl) {
+    return null;
+  }
+
+  const key = storageKeyFromPublicUrl(imageUrl);
+  if (!key?.startsWith(INBOUND_SOURCE_PREFIX)) {
+    return null;
+  }
+
+  return imageUrl;
+}
+
+function getExpiredInboundSourceUrls(
+  state: Partial<MessengerUserState>,
+  expiredBefore: number
+): string[] {
+  const timestamp =
+    state.pendingImageAt ??
+    state.lastSourceImageUpdatedAt ??
+    state.updatedAt;
+  if (!timestamp || timestamp >= expiredBefore) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      [state.lastPhotoUrl, state.pendingImageUrl]
+        .map(getInboundSourceUrl)
+        .filter((url): url is string => Boolean(url))
+    )
+  );
 }
 
 export async function deleteFaceMemoryForUser(psid: string): Promise<void> {
@@ -83,20 +118,35 @@ export async function expireFaceMemory(
       return;
     }
 
+    const expiredInboundSourceUrls = options.matchAll
+      ? []
+      : getExpiredInboundSourceUrls(state, expiredBefore);
     const updatedAt = state.lastSourceImageUpdatedAt;
     const shouldClear = options.matchAll
       ? Boolean(state.faceMemoryConsent || state.lastSourceImageUrl)
       : Boolean(updatedAt && updatedAt < expiredBefore);
 
-    if (!shouldClear) {
+    if (!shouldClear && expiredInboundSourceUrls.length === 0) {
       return;
     }
 
-    const deleted = await deleteStoredImageUrl(state.lastSourceImageUrl);
+    const urlsToDelete = Array.from(
+      new Set([
+        ...(shouldClear ? [state.lastSourceImageUrl] : []),
+        ...expiredInboundSourceUrls,
+      ].filter((url): url is string => Boolean(url)))
+    );
+    let pendingDeleteUrl: string | null = null;
+    for (const imageUrl of urlsToDelete) {
+      const deleted = await deleteStoredImageUrl(imageUrl);
+      if (!deleted && !pendingDeleteUrl) {
+        pendingDeleteUrl = imageUrl;
+      }
+    }
     await clearFaceMemoryState(
       psid,
       finiteNow,
-      deleted ? null : state.lastSourceImageUrl ?? null
+      pendingDeleteUrl
     );
     deletedCount += 1;
   });
