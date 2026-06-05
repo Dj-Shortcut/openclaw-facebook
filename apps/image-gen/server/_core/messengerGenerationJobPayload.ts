@@ -1,6 +1,6 @@
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
+import { normalizeSupportedUiLang } from "./i18n";
 
-const MESSENGER_GENERATION_LANGS = new Set(["nl", "en"]);
 const MESSENGER_GENERATION_KINDS = new Set([
   "text_to_image",
   "source_image_edit",
@@ -43,12 +43,12 @@ function parseMessengerGenerationJob(
     return null;
   }
 
+  const lang = normalizeSupportedUiLang(value.lang);
   if (
     typeof value.psid !== "string" ||
     typeof value.userId !== "string" ||
     typeof value.reqId !== "string" ||
-    typeof value.lang !== "string" ||
-    !MESSENGER_GENERATION_LANGS.has(value.lang) ||
+    !lang ||
     !isOptionalGenerationKind(value.generationKind) ||
     !isOptionalString(value.sourceImageUrl) ||
     !isOptionalString(value.promptHint) ||
@@ -61,7 +61,7 @@ function parseMessengerGenerationJob(
     psid: value.psid,
     userId: value.userId,
     reqId: value.reqId,
-    lang: value.lang,
+    lang,
     sourceImageUrl: value.sourceImageUrl,
     promptHint: value.promptHint,
     attempts: value.attempts,

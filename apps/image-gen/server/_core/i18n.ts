@@ -1,4 +1,5 @@
 export type Lang = "nl" | "en";
+export type SupportedUiLang = Lang;
 
 type TranslationParams = {
   link?: string;
@@ -151,6 +152,12 @@ export function normalizeLang(lang: string | null | undefined): Lang {
   return typeof lang === "string" && lang.toLowerCase().startsWith("en")
     ? "en"
     : "nl";
+}
+
+export function normalizeSupportedUiLang(
+  value: unknown
+): SupportedUiLang | null {
+  return value === "nl" || value === "en" ? value : null;
 }
 
 export function t(

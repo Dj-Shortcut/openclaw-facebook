@@ -33,6 +33,47 @@ function createJob(overrides: Partial<MessengerGenerationJob> = {}): MessengerGe
   };
 }
 
+function createDrainRedis(queue: string[]) {
+  const processing: string[] = [];
+  const dead: string[] = [];
+  const leases = new Map<string, string>();
+  const redis = {
+    del: vi.fn(async (key: string) => {
+      const existed = leases.delete(key);
+      return existed ? 1 : 0;
+    }),
+    get: vi.fn(async (key: string) => leases.get(key) ?? null),
+    set: vi.fn(async (key: string, value: string) => {
+      leases.set(key, value);
+      return "OK";
+    }),
+    llen: vi.fn(async (key: string) => {
+      if (key.endsWith(":processing")) return processing.length;
+      if (key.endsWith(":dead")) return dead.length;
+      return queue.length;
+    }),
+    lrem: vi.fn(async (_key: string, _count: number, value: string) => {
+      const index = processing.indexOf(value);
+      if (index === -1) return 0;
+      processing.splice(index, 1);
+      return 1;
+    }),
+    rpoplpush: vi.fn(async () => {
+      const value = queue.pop() ?? null;
+      if (value) {
+        processing.unshift(value);
+      }
+      return value;
+    }),
+    rpush: vi.fn(async (_key: string, value: string) => {
+      dead.push(value);
+      return dead.length;
+    }),
+  };
+
+  return { dead, processing, redis };
+}
+
 describe("messengerGenerationQueue", () => {
   const originalQueueEnabled = process.env.MESSENGER_GENERATION_QUEUE_ENABLED;
   const originalInlineFallback = process.env.MESSENGER_GENERATION_INLINE_FALLBACK;
@@ -648,6 +689,50 @@ describe("messengerGenerationQueue", () => {
     expect(queue).toEqual([]);
     expect(processing).toEqual([]);
     expect(dead).toEqual([invalidJob]);
+  });
+
+  it("accepts supported UI locales and preserves lang through dequeue", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const nlJob = createJob({ lang: "nl", reqId: "req-locale-nl" });
+    const enJob = createJob({ lang: "en", reqId: "req-locale-en" });
+    const queue = [JSON.stringify(nlJob), JSON.stringify(enJob)];
+    const { dead, processing, redis } = createDrainRedis(queue);
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async () => undefined);
+
+    await expect(drainMessengerGenerationQueue(processor)).resolves.toBeUndefined();
+
+    expect(processor).toHaveBeenCalledTimes(2);
+    expect(processor).toHaveBeenNthCalledWith(1, enJob);
+    expect(processor).toHaveBeenNthCalledWith(2, nlJob);
+    expect(queue).toEqual([]);
+    expect(processing).toEqual([]);
+    expect(dead).toEqual([]);
+  });
+
+  it("rejects unsupported queued UI locales without running the processor", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const unsupportedLocaleJob = JSON.stringify({
+      psid: "psid-unsupported-locale",
+      userId: "user-unsupported-locale",
+      reqId: "req-unsupported-locale",
+      lang: "fr",
+    });
+    const queue = [unsupportedLocaleJob];
+    const { dead, processing, redis } = createDrainRedis(queue);
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async () => undefined);
+
+    await expect(drainMessengerGenerationQueue(processor)).resolves.toBeUndefined();
+
+    expect(processor).not.toHaveBeenCalled();
+    expect(queue).toEqual([]);
+    expect(processing).toEqual([]);
+    expect(dead).toEqual([unsupportedLocaleJob]);
   });
 
   it("normalizes stale style-restyle jobs to prompt-first source-image edits", async () => {
