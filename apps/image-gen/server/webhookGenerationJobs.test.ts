@@ -85,7 +85,7 @@ describe("messenger generation job safety", () => {
     expect(sendQuickRepliesMock).toHaveBeenCalled();
   });
 
-  it("records completion and clears in-flight notice when handleGenerationSuccess throws", async () => {
+  it("recovers inline state when image delivery fails after generation completed", async () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_771_001_000_000);
     const psid = "success-throw-clears-notice-user";
     const reqId = "req-success-throw-clears-notice";
@@ -110,7 +110,20 @@ describe("messenger generation job safety", () => {
         expect.objectContaining({
           reqId,
           imageUrl: "https://img.example/generated.png",
+          deliveryStatus: "pending",
           userKey: `${psid}-key`,
+        })
+      );
+      await expect(
+        Promise.resolve(getMessengerGenerationCompletion(reqId))
+      ).resolves.not.toHaveProperty("deliveredAt");
+      expect(getState(psid)?.stage).toBe("IDLE");
+      expect(safeLogMock).toHaveBeenCalledWith(
+        "messenger_generation_image_delivery_failed",
+        expect.objectContaining({
+          reqId,
+          generationKind: "text_to_image",
+          queueEnabled: false,
         })
       );
 
@@ -121,6 +134,18 @@ describe("messenger generation job safety", () => {
         lang: "nl",
       });
       expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
+      expect(sendImageMock).toHaveBeenCalledTimes(2);
+      await expect(
+        Promise.resolve(getMessengerGenerationCompletion(reqId))
+      ).resolves.toEqual(
+        expect.objectContaining({
+          reqId,
+          imageUrl: "https://img.example/generated.png",
+          deliveryStatus: "delivered",
+          userKey: `${psid}-key`,
+          deliveredAt: 1_771_001_000_000,
+        })
+      );
 
       sendTextMock.mockClear();
       await setEphemeralKey(`messenger:inflight:${psid}`, "active-again", 60);

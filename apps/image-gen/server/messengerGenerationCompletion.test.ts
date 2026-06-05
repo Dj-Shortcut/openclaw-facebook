@@ -4,6 +4,7 @@ import {
   deleteMessengerGenerationCompletionsForUser,
   getMessengerGenerationCompletion,
   markMessengerGenerationCompleted,
+  markMessengerGenerationDelivered,
 } from "./_core/messengerGenerationCompletion";
 import { clearStateStore } from "./_core/stateStore";
 
@@ -28,7 +29,35 @@ describe("messengerGenerationCompletion", () => {
       reqId: "req-complete",
       imageUrl: "https://assets.example/generated/req-complete.jpg",
       completedAt: 1_771_000_000_000,
+      deliveryStatus: "pending",
       userKey: "user-key-1",
+    });
+  });
+
+  it("marks completed generations as delivered without changing completion time", async () => {
+    await markMessengerGenerationCompleted(
+      "req-delivered",
+      "https://assets.example/generated/req-delivered.jpg",
+      "user-key-delivered",
+      1_771_000_000_000
+    );
+
+    await markMessengerGenerationDelivered(
+      "req-delivered",
+      "https://assets.example/generated/req-delivered.jpg",
+      "user-key-delivered",
+      1_771_000_000_100
+    );
+
+    await expect(
+      Promise.resolve(getMessengerGenerationCompletion("req-delivered"))
+    ).resolves.toEqual({
+      reqId: "req-delivered",
+      imageUrl: "https://assets.example/generated/req-delivered.jpg",
+      completedAt: 1_771_000_000_000,
+      deliveryStatus: "delivered",
+      deliveredAt: 1_771_000_000_100,
+      userKey: "user-key-delivered",
     });
   });
 

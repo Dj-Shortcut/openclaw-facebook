@@ -62,9 +62,16 @@ import {
 import { getBotFeatures } from "./_core/bot/features";
 import { setSourceImageDnsLookupForTests } from "./_core/image-generation/sourceImageFetcher";
 import { processConsentedFacebookWebhookPayload } from "./testConsentHelpers";
-import { markMessengerGenerationCompleted } from "./_core/messengerGenerationCompletion";
+import {
+  markMessengerGenerationCompleted,
+  markMessengerGenerationDelivered,
+} from "./_core/messengerGenerationCompletion";
 import { resetMessengerGenerationQueueForTests } from "./_core/messengerGenerationQueue";
-import { deleteEphemeralKey, setEphemeralKey } from "./_core/stateStore";
+import {
+  deleteEphemeralKey,
+  setEphemeralKey,
+  writeScopedState,
+} from "./_core/stateStore";
 
 const TEST_PEPPER = "ci-test-pepper";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
@@ -495,6 +502,12 @@ describe("messenger webhook dedupe", () => {
         1_771_000_000_000
       )
     );
+    await markMessengerGenerationDelivered(
+      "req-completed-job",
+      "https://assets.example/generated/completed.jpg",
+      "completed-job-user-key",
+      1_771_000_000_001
+    );
 
     await processMessengerGenerationJob({
       psid: "completed-job-user",
@@ -511,6 +524,85 @@ describe("messenger webhook dedupe", () => {
       "messenger_generation_job_duplicate_completed",
       expect.objectContaining({
         reqId: "req-completed-job",
+        generationKind: "text_to_image",
+      })
+    );
+  });
+
+  it("does not resend a legacy completed generation without delivery status", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("legacy completed job should not call the image provider");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await Promise.resolve(
+      writeScopedState(
+        "messenger-generation-completion",
+        "req-legacy-completed-job",
+        {
+          reqId: "req-legacy-completed-job",
+          imageUrl: "https://assets.example/generated/legacy-completed.jpg",
+          completedAt: 1_771_000_000_000,
+          userKey: "legacy-completed-job-user-key",
+        },
+        7 * 24 * 60 * 60
+      )
+    );
+
+    await processMessengerGenerationJob({
+      psid: "legacy-completed-job-user",
+      userId: "legacy-completed-job-user-key",
+      reqId: "req-legacy-completed-job",
+      lang: "nl",
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(sendImageMock).not.toHaveBeenCalled();
+    expect(sendTextMock).not.toHaveBeenCalled();
+    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_generation_job_duplicate_completed",
+      expect.objectContaining({
+        reqId: "req-legacy-completed-job",
+        deliveryStatus: "legacy_completed",
+      })
+    );
+  });
+
+  it("sends the cached image for a completed queued job that was not delivered", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("undelivered completed job should not call the image provider");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await Promise.resolve(
+      markMessengerGenerationCompleted(
+        "req-undelivered-completed-job",
+        "https://assets.example/generated/undelivered-completed.jpg",
+        "undelivered-completed-job-user-key",
+        1_771_000_000_000
+      )
+    );
+
+    await processMessengerGenerationJob({
+      psid: "undelivered-completed-job-user",
+      userId: "undelivered-completed-job-user-key",
+      reqId: "req-undelivered-completed-job",
+      lang: "nl",
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(sendImageMock).toHaveBeenCalledWith(
+      "undelivered-completed-job-user",
+      "https://assets.example/generated/undelivered-completed.jpg"
+    );
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
+      "undelivered-completed-job-user",
+      t("nl", "success"),
+      expect.any(Array)
+    );
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_generation_job_duplicate_delivery_recovered",
+      expect.objectContaining({
+        reqId: "req-undelivered-completed-job",
         generationKind: "text_to_image",
       })
     );

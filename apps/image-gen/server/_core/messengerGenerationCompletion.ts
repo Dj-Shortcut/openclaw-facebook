@@ -19,6 +19,8 @@ export type MessengerGenerationCompletion = {
   reqId: string;
   imageUrl: string;
   completedAt: number;
+  deliveryStatus?: "pending" | "delivered";
+  deliveredAt?: number;
   userKey?: string;
 };
 
@@ -70,19 +72,44 @@ export function markMessengerGenerationCompleted(
   userKey?: string,
   now = Date.now()
 ): Promise<void> {
+  return writeMessengerGenerationCompletion({
+    reqId,
+    imageUrl,
+    completedAt: now,
+    deliveryStatus: "pending",
+    userKey,
+  });
+}
+
+export async function markMessengerGenerationDelivered(
+  reqId: string,
+  imageUrl: string,
+  userKey?: string,
+  now = Date.now()
+): Promise<void> {
+  const existing = await Promise.resolve(getMessengerGenerationCompletion(reqId));
+  await writeMessengerGenerationCompletion({
+    reqId,
+    imageUrl,
+    completedAt: existing?.completedAt ?? now,
+    deliveryStatus: "delivered",
+    deliveredAt: now,
+    userKey: userKey ?? existing?.userKey,
+  });
+}
+
+function writeMessengerGenerationCompletion(
+  completion: MessengerGenerationCompletion
+): Promise<void> {
   return Promise.resolve(
     writeScopedState<MessengerGenerationCompletion>(
       GENERATION_COMPLETION_SCOPE,
-      reqId,
-      {
-        reqId,
-        imageUrl,
-        completedAt: now,
-        userKey,
-      },
+      completion.reqId,
+      completion,
       GENERATION_COMPLETION_TTL_SECONDS
     )
   ).then(async () => {
+    const userKey = completion.userKey;
     if (!userKey) {
       return;
     }
@@ -95,7 +122,7 @@ export function markMessengerGenerationCompleted(
             userKey
           )
         )) ?? [];
-      const nextIndex = Array.from(new Set([...currentIndex, reqId]));
+      const nextIndex = Array.from(new Set([...currentIndex, completion.reqId]));
       await Promise.resolve(
         writeScopedState(
           GENERATION_COMPLETION_USER_INDEX_SCOPE,
