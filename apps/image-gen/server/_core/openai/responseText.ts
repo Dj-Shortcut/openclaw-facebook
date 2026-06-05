@@ -4,7 +4,7 @@ function objectValue(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-export function trimmedText(value: unknown): string | null {
+function trimmedText(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 

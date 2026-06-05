@@ -70,12 +70,3 @@ export function getForgeApiBaseUrlOrThrow(): string {
   enforceHttpsInProduction(parsed, "BUILT_IN_FORGE_API_URL");
   return parsed.toString();
 }
-
-export function assertOutboundHttpsUrl(rawUrl: string, label = "outbound URL"): void {
-  const parsed = parseUrlOrThrow(rawUrl, label);
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    throw new Error(`${label} must start with http:// or https://`);
-  }
-
-  enforceHttpsInProduction(parsed, label);
-}
