@@ -1,4 +1,4 @@
-import type { Lang } from "./i18n";
+import type { SupportedUiLang } from "./i18n";
 import type { GenerationKind } from "./image-generation/generationTypes";
 
 export type MessengerGenerationJob = {
@@ -6,7 +6,7 @@ export type MessengerGenerationJob = {
   userId: string;
   generationKind?: GenerationKind;
   reqId: string;
-  lang: Lang;
+  lang: SupportedUiLang;
   sourceImageUrl?: string;
   promptHint?: string;
   attempts?: number;
