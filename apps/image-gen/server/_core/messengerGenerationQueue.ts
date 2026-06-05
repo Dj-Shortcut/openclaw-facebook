@@ -1,6 +1,10 @@
 import { getRedisClient, isRedisEnabled, type RedisLike } from "./redis";
 import { safeLog } from "./messengerApi";
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
+import {
+  parseReservedGenerationJob,
+  type ReservedGenerationJob,
+} from "./messengerGenerationJobPayload";
 
 const MESSENGER_GENERATION_QUEUE_KEY = "messenger-generation-jobs";
 const MESSENGER_GENERATION_PROCESSING_KEY =
@@ -11,12 +15,6 @@ const DEFAULT_JOB_LEASE_BUFFER_SECONDS = 60;
 const OPENAI_TIMEOUT_MS_DEFAULT = 180_000;
 const DEFAULT_MAX_JOB_ATTEMPTS = 3;
 const DEFAULT_DRAIN_BATCH_SIZE = 10;
-const MESSENGER_GENERATION_LANGS = new Set(["nl", "en"]);
-const MESSENGER_GENERATION_KINDS = new Set([
-  "text_to_image",
-  "source_image_edit",
-]);
-const LEGACY_MESSENGER_GENERATION_KINDS = new Set(["style_restyle"]);
 let drainPromise: Promise<void> | null = null;
 
 type GenerationJobProcessor = (
@@ -198,11 +196,6 @@ async function logMessengerGenerationQueueStats(
   });
 }
 
-type ReservedGenerationJob = {
-  raw: string;
-  job: MessengerGenerationJob;
-};
-
 type InvalidReservedGenerationJob = {
   raw: string;
   invalid: true;
@@ -361,82 +354,6 @@ async function hasActiveMessengerGenerationJobLease(
   }
 
   return (await redis.get(getGenerationJobLeaseKey(reserved.job))) !== null;
-}
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isOptionalString(value: unknown): value is string | undefined {
-  return value === undefined || typeof value === "string";
-}
-
-function isOptionalGenerationKind(value: unknown): boolean {
-  return (
-    value === undefined ||
-    (typeof value === "string" &&
-      (MESSENGER_GENERATION_KINDS.has(value) ||
-        LEGACY_MESSENGER_GENERATION_KINDS.has(value)))
-  );
-}
-
-function isOptionalAttempts(value: unknown): value is number | undefined {
-  return (
-    value === undefined ||
-    (typeof value === "number" && Number.isInteger(value) && value >= 0)
-  );
-}
-
-function parseMessengerGenerationJob(
-  value: unknown
-): MessengerGenerationJob | null {
-  if (!isObjectRecord(value)) {
-    return null;
-  }
-
-  if (
-    typeof value.psid !== "string" ||
-    typeof value.userId !== "string" ||
-    typeof value.reqId !== "string" ||
-    typeof value.lang !== "string" ||
-    !MESSENGER_GENERATION_LANGS.has(value.lang) ||
-    !isOptionalGenerationKind(value.generationKind) ||
-    !isOptionalString(value.sourceImageUrl) ||
-    !isOptionalString(value.promptHint) ||
-    !isOptionalAttempts(value.attempts)
-  ) {
-    return null;
-  }
-
-  return {
-    psid: value.psid,
-    userId: value.userId,
-    reqId: value.reqId,
-    lang: value.lang,
-    sourceImageUrl: value.sourceImageUrl,
-    promptHint: value.promptHint,
-    attempts: value.attempts,
-    generationKind:
-      value.generationKind === "style_restyle"
-        ? "source_image_edit"
-        : value.generationKind,
-  } as MessengerGenerationJob;
-}
-
-function parseReservedGenerationJob(raw: string): ReservedGenerationJob | null {
-  try {
-    const job = parseMessengerGenerationJob(JSON.parse(raw));
-    if (!job) {
-      return null;
-    }
-
-    return {
-      raw,
-      job,
-    };
-  } catch {
-    return null;
-  }
 }
 
 export async function drainMessengerGenerationQueue(
