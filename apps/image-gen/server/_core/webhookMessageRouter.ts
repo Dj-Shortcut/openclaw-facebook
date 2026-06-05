@@ -30,12 +30,10 @@ import { handlePayload } from "./webhookPayloadBranch";
 import { runScreenshotIntentContinuation } from "./screenshotIntentContinuation";
 import type { HandlerContext } from "./webhookHandlerTypes";
 import { handleTextMessage } from "./webhookTextMessageRouter";
-export { handleTextMessage } from "./webhookTextMessageRouter";
-export type TextMessageInput = Parameters<typeof handleTextMessage>[1];
 
 type FacebookWebhookMessage = NonNullable<FacebookWebhookEvent["message"]>;
 
-export type MessageEventInput = {
+type MessageEventInput = {
   psid: string;
   userId: string;
   event: FacebookWebhookEvent;
@@ -43,7 +41,7 @@ export type MessageEventInput = {
   lang: Lang;
 };
 
-export type ImageMessageInput = {
+type ImageMessageInput = {
   psid: string;
   userId: string;
   reqId: string;
@@ -126,7 +124,7 @@ export async function handleMessageEvent(
 }
 
 /** Attempts to persist and route an inbound Messenger image attachment. */
-export async function tryHandleImageMessage(
+async function tryHandleImageMessage(
   ctx: HandlerContext,
   input: ImageMessageInput
 ): Promise<boolean> {
