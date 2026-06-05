@@ -200,8 +200,13 @@ export function createMessengerGenerationJobRunner(
           reqId,
           user: toLogUser(userId),
           generationKind: resolvedGenerationKind,
+          queueEnabled: isMessengerGenerationQueueEnabled(),
           error: error.cause,
         });
+        if (!isMessengerGenerationQueueEnabled()) {
+          await setFlowState(psid, "IDLE");
+          return sendOutcome;
+        }
         throw error;
       }
       await recoverUnexpectedGenerationError({
@@ -434,11 +439,11 @@ async function finishDuplicateGenerationIfCompleted(input: {
     reqId: input.reqId,
     user: toLogUser(input.userId),
     generationKind: input.resolvedGenerationKind,
-    delivered: Boolean(completedGeneration.deliveredAt),
+    deliveryStatus: completedGeneration.deliveryStatus ?? "legacy_completed",
   });
   await setLastGenerated(input.psid, completedGeneration.imageUrl);
   await setLastGenerationContext(input.psid, { prompt: input.promptHint });
-  if (!completedGeneration.deliveredAt) {
+  if (completedGeneration.deliveryStatus === "pending") {
     safeLog("messenger_generation_job_duplicate_delivery_recovered", {
       reqId: input.reqId,
       user: toLogUser(input.userId),
@@ -614,11 +619,20 @@ async function deliverGenerationImage(input: {
     );
   }
 
-  await markMessengerGenerationDelivered(
-    input.reqId,
-    input.imageUrl,
-    input.userId
-  );
+  try {
+    await markMessengerGenerationDelivered(
+      input.reqId,
+      input.imageUrl,
+      input.userId
+    );
+  } catch (error) {
+    safeLog("messenger_generation_delivery_marker_failed", {
+      level: "error",
+      reqId: input.reqId,
+      user: toLogUser(input.userId),
+      error,
+    });
+  }
   return Date.now() - messengerSendStartedAt;
 }
 

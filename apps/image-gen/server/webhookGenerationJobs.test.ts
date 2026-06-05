@@ -85,7 +85,7 @@ describe("messenger generation job safety", () => {
     expect(sendQuickRepliesMock).toHaveBeenCalled();
   });
 
-  it("retries cached image delivery when generation completed before image send failed", async () => {
+  it("recovers inline state when image delivery fails after generation completed", async () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_771_001_000_000);
     const psid = "success-throw-clears-notice-user";
     const reqId = "req-success-throw-clears-notice";
@@ -97,14 +97,12 @@ describe("messenger generation job safety", () => {
 
     try {
       await seedInFlightNotice(ctx, psid);
-      await expect(
-        runner.processMessengerGenerationJob({
-          psid,
-          userId: `${psid}-key`,
-          reqId,
-          lang: "nl",
-        })
-      ).rejects.toThrow("Messenger image delivery failed");
+      await runner.processMessengerGenerationJob({
+        psid,
+        userId: `${psid}-key`,
+        reqId,
+        lang: "nl",
+      });
 
       await expect(
         Promise.resolve(getMessengerGenerationCompletion(reqId))
@@ -112,12 +110,22 @@ describe("messenger generation job safety", () => {
         expect.objectContaining({
           reqId,
           imageUrl: "https://img.example/generated.png",
+          deliveryStatus: "pending",
           userKey: `${psid}-key`,
         })
       );
       await expect(
         Promise.resolve(getMessengerGenerationCompletion(reqId))
       ).resolves.not.toHaveProperty("deliveredAt");
+      expect(getState(psid)?.stage).toBe("IDLE");
+      expect(safeLogMock).toHaveBeenCalledWith(
+        "messenger_generation_image_delivery_failed",
+        expect.objectContaining({
+          reqId,
+          generationKind: "text_to_image",
+          queueEnabled: false,
+        })
+      );
 
       await runner.processMessengerGenerationJob({
         psid,
@@ -133,6 +141,7 @@ describe("messenger generation job safety", () => {
         expect.objectContaining({
           reqId,
           imageUrl: "https://img.example/generated.png",
+          deliveryStatus: "delivered",
           userKey: `${psid}-key`,
           deliveredAt: 1_771_001_000_000,
         })

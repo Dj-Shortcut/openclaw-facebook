@@ -67,7 +67,11 @@ import {
   markMessengerGenerationDelivered,
 } from "./_core/messengerGenerationCompletion";
 import { resetMessengerGenerationQueueForTests } from "./_core/messengerGenerationQueue";
-import { deleteEphemeralKey, setEphemeralKey } from "./_core/stateStore";
+import {
+  deleteEphemeralKey,
+  setEphemeralKey,
+  writeScopedState,
+} from "./_core/stateStore";
 
 const TEST_PEPPER = "ci-test-pepper";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
@@ -521,6 +525,45 @@ describe("messenger webhook dedupe", () => {
       expect.objectContaining({
         reqId: "req-completed-job",
         generationKind: "text_to_image",
+      })
+    );
+  });
+
+  it("does not resend a legacy completed generation without delivery status", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("legacy completed job should not call the image provider");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await Promise.resolve(
+      writeScopedState(
+        "messenger-generation-completion",
+        "req-legacy-completed-job",
+        {
+          reqId: "req-legacy-completed-job",
+          imageUrl: "https://assets.example/generated/legacy-completed.jpg",
+          completedAt: 1_771_000_000_000,
+          userKey: "legacy-completed-job-user-key",
+        },
+        7 * 24 * 60 * 60
+      )
+    );
+
+    await processMessengerGenerationJob({
+      psid: "legacy-completed-job-user",
+      userId: "legacy-completed-job-user-key",
+      reqId: "req-legacy-completed-job",
+      lang: "nl",
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(sendImageMock).not.toHaveBeenCalled();
+    expect(sendTextMock).not.toHaveBeenCalled();
+    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_generation_job_duplicate_completed",
+      expect.objectContaining({
+        reqId: "req-legacy-completed-job",
+        deliveryStatus: "legacy_completed",
       })
     );
   });

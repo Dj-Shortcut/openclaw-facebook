@@ -19,6 +19,7 @@ export type MessengerGenerationCompletion = {
   reqId: string;
   imageUrl: string;
   completedAt: number;
+  deliveryStatus?: "pending" | "delivered";
   deliveredAt?: number;
   userKey?: string;
 };
@@ -75,6 +76,7 @@ export function markMessengerGenerationCompleted(
     reqId,
     imageUrl,
     completedAt: now,
+    deliveryStatus: "pending",
     userKey,
   });
 }
@@ -90,6 +92,7 @@ export async function markMessengerGenerationDelivered(
     reqId,
     imageUrl,
     completedAt: existing?.completedAt ?? now,
+    deliveryStatus: "delivered",
     deliveredAt: now,
     userKey: userKey ?? existing?.userKey,
   });
