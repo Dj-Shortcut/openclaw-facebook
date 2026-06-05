@@ -87,6 +87,26 @@ Open cost-control work:
 - [ ] Provide cost monitoring dashboard
 - [ ] Create user-facing bot instructions
 
+### Maintenance backlog
+
+Run each pass as a separate, reviewable PR validated with `pnpm --dir apps/image-gen check`, `pnpm --dir apps/image-gen test`, `pnpm --dir apps/image-gen fallow:report`, and `pnpm --dir apps/image-gen fallow:gate`.
+
+1. Unused dependencies / package cleanup
+   - Fallow currently reports `unused_dependencies: 0`; do not remove `express` while runtime/tests still import it.
+   - Re-run Fallow after each dependency update and verify package-lock/pnpm-lock changes stay scoped.
+2. Dead exports and dead files
+   - Triage server dead exports before frontend entries; Fallow may not see Vite's `client/index.html` entry correctly.
+   - Avoid data deletion, face memory, storage retention, webhook routing, Meta verification, and public API contracts unless code search and tests prove removal is safe.
+3. Duplicated helpers
+   - Start with duplicated test queue helpers reported in Messenger generation/webhook queue tests.
+   - Keep helper extraction inside test code unless production duplication has direct maintenance cost.
+4. Large/hot modules
+   - Split only one responsibility per pass from webhook and generation modules.
+   - Preserve routing, consent, quota, and image delivery behavior with targeted tests.
+5. Risky architectural refactors
+   - Handle channel-neutral conversation layering, portal ownership boundaries, and storage proxy changes separately from maintenance cleanup.
+   - Require explicit migration and rollback notes before touching production data or public contracts.
+
 ## Reeds geverifieerd in code (afgerond)
 
 - [x] OpenAI image generation integration via Responses image generation
