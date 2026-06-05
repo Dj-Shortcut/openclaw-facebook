@@ -6,10 +6,9 @@ import {
 } from "./faceMemory";
 import { formatFaceMemoryRetentionDays } from "./faceMemoryRetention";
 
-export const CONVERSATION_ACTION_NEW_IMAGE = "new_image";
-export const CONVERSATION_ACTION_EDIT_PHOTO = "edit_photo";
-export const CONVERSATION_ACTION_PRIVACY_INFO = "privacy";
-export const CONVERSATION_ACTION_WHAT_IS_THIS = "what_is_this";
+const CONVERSATION_ACTION_NEW_IMAGE = "new_image";
+const CONVERSATION_ACTION_EDIT_PHOTO = "edit_photo";
+const CONVERSATION_ACTION_PRIVACY_INFO = "privacy";
 
 export function buildQuickStartResponse(lang: Lang): ConversationResponse {
   return {

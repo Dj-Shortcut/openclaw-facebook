@@ -66,7 +66,7 @@ function isLikelyImagePromptBlock(
   );
 }
 
-export function inferPromptGenerationActions(
+function inferPromptGenerationActions(
   text: string | undefined
 ): ConversationAction[] {
   if (!text?.trim()) {
