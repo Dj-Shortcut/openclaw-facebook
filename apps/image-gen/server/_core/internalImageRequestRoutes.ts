@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from "express";
+import { timingSafeEqual } from "node:crypto";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import {
@@ -62,11 +63,28 @@ function readBearerToken(header: string | undefined): string {
   return token;
 }
 
+export function timingSafeTokenEqual(
+  expectedToken: string,
+  providedToken: string
+): boolean {
+  if (!expectedToken || !providedToken) {
+    return false;
+  }
+
+  const expected = Buffer.from(expectedToken);
+  const provided = Buffer.from(providedToken);
+  if (expected.length !== provided.length) {
+    return false;
+  }
+
+  return timingSafeEqual(expected, provided);
+}
+
 function authorizeInternalRequest(req: Request, res: Response): boolean {
   const expectedToken = getInternalImageRequestToken();
   const providedToken = readBearerToken(req.header("authorization"));
 
-  if (!expectedToken || providedToken !== expectedToken) {
+  if (!timingSafeTokenEqual(expectedToken, providedToken)) {
     res.sendStatus(403);
     return false;
   }

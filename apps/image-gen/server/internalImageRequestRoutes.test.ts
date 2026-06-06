@@ -5,17 +5,32 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const {
   acceptInternalMessengerImageRequestMock,
   processFacebookWebhookPayloadMock,
+  timingSafeEqualMock,
 } = vi.hoisted(() => ({
   acceptInternalMessengerImageRequestMock: vi.fn(async () => undefined),
   processFacebookWebhookPayloadMock: vi.fn(async () => undefined),
+  timingSafeEqualMock: vi.fn((left: Buffer, right: Buffer) =>
+    left.equals(right)
+  ),
 }));
+
+vi.mock("node:crypto", async importOriginal => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return {
+    ...actual,
+    timingSafeEqual: timingSafeEqualMock,
+  };
+});
 
 vi.mock("./_core/messengerWebhook", () => ({
   acceptInternalMessengerImageRequest: acceptInternalMessengerImageRequestMock,
   processFacebookWebhookPayload: processFacebookWebhookPayloadMock,
 }));
 
-import { registerInternalImageRequestRoutes } from "./_core/internalImageRequestRoutes";
+import {
+  registerInternalImageRequestRoutes,
+  timingSafeTokenEqual,
+} from "./_core/internalImageRequestRoutes";
 import { InternalMessengerImageRequestNotQueuedError } from "./_core/internalImageRequestErrors";
 import { MESSENGER_SEND_SKIPPED } from "./_core/webhookFallback";
 
@@ -44,11 +59,14 @@ async function withListeningApp<T>(
   }
 }
 
-function postInternalImageRequest(baseUrl: string): Promise<Response> {
+function postInternalImageRequest(
+  baseUrl: string,
+  token = "route-token"
+): Promise<Response> {
   return fetch(`${baseUrl}/internal/messenger/image-request`, {
     method: "POST",
     headers: {
-      authorization: "Bearer route-token",
+      authorization: `Bearer ${token}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({
@@ -80,6 +98,7 @@ beforeEach(() => {
   acceptInternalMessengerImageRequestMock.mockReset();
   acceptInternalMessengerImageRequestMock.mockResolvedValue(undefined);
   processFacebookWebhookPayloadMock.mockReset();
+  timingSafeEqualMock.mockClear();
 });
 
 afterEach(() => {
@@ -91,6 +110,29 @@ afterEach(() => {
 });
 
 describe("internal Messenger image request route", () => {
+  it("compares internal bearer tokens with the timing-safe helper", () => {
+    expect(timingSafeTokenEqual("route-token", "route-token")).toBe(true);
+    expect(timingSafeEqualMock).toHaveBeenCalledTimes(1);
+
+    expect(timingSafeTokenEqual("route-token", "route-taken")).toBe(false);
+    expect(timingSafeEqualMock).toHaveBeenCalledTimes(2);
+
+    expect(timingSafeTokenEqual("route-token", "short")).toBe(false);
+    expect(timingSafeTokenEqual("", "route-token")).toBe(false);
+    expect(timingSafeTokenEqual("route-token", "")).toBe(false);
+    expect(timingSafeEqualMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects invalid bearer tokens before accepting internal image requests", async () => {
+    await withListeningApp(createApp(), async baseUrl => {
+      const response = await postInternalImageRequest(baseUrl, "wrongtoken");
+
+      expect(response.status).toBe(403);
+    });
+
+    expect(acceptInternalMessengerImageRequestMock).not.toHaveBeenCalled();
+  });
+
   it("does not return 202 when durable accept/enqueue fails", async () => {
     acceptInternalMessengerImageRequestMock.mockRejectedValueOnce(
       new Error("Redis unavailable")
