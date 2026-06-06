@@ -1301,15 +1301,30 @@ async function sendMessengerPairingReply(params: {
   });
 }
 
+type MessengerIngressDecision = "process" | "leaderbot_free_tier" | "stop";
+
+function shouldRouteUnknownSenderToLeaderbotFreeTier(params: {
+  account: ResolvedMessengerAccount;
+  dmPolicy: string;
+  senderId: string;
+}): boolean {
+  return (
+    params.dmPolicy === "pairing" &&
+    params.senderId.trim().length > 0 &&
+    params.account.config.unknownSenderMode === "leaderbot_free_tier"
+  );
+}
+
 async function shouldProcessMessengerEvent(params: {
   event: MessengerWebhookMessaging;
   cfg: OpenClawConfig;
   account: ResolvedMessengerAccount;
   trace?: MessengerTrace;
-}) {
+}): Promise<MessengerIngressDecision> {
   params.trace && logMessengerStage(params.trace, "intent_classified", { decision: "checking" });
   const senderId = params.event.sender?.id ?? "";
   const rawText = params.event.message?.text ?? "";
+  const dmPolicy = params.account.config.dmPolicy ?? "pairing";
   const access = await resolveStableChannelMessageIngress({
     channelId: FACEBOOK_CHANNEL_ID,
     accountId: params.account.accountId,
@@ -1331,7 +1346,7 @@ async function shouldProcessMessengerEvent(params: {
       id: senderId || "unknown",
     },
     event: { kind: "message" },
-    dmPolicy: params.account.config.dmPolicy ?? "pairing",
+    dmPolicy,
     groupPolicy: "disabled",
     policy: {
       activation: {
@@ -1354,22 +1369,34 @@ async function shouldProcessMessengerEvent(params: {
         params.account.accountId
       }`,
     );
-    return true;
+    return "process";
   }
   if (access.senderAccess.decision === "pairing") {
+    if (shouldRouteUnknownSenderToLeaderbotFreeTier({ account: params.account, dmPolicy, senderId })) {
+      params.trace &&
+        logMessengerStage(params.trace, "intent_classified", {
+          decision: "leaderbot_free_tier",
+        });
+      logVerbose(
+        `messenger: routing unknown sender ${redactMessengerIdentifier(
+          senderId,
+        )} to Leaderbot free tier account=${params.account.accountId}`,
+      );
+      return "leaderbot_free_tier";
+    }
     params.trace && logMessengerStage(params.trace, "intent_classified", { decision: "pairing" });
     if (senderId) {
       await sendMessengerPairingReply({ senderId, account: params.account, cfg: params.cfg });
     }
-    return false;
+    return "stop";
   }
   params.trace && logMessengerStage(params.trace, "intent_classified", { decision: "blocked" });
   logVerbose(
     `Blocked messenger sender ${redactMessengerIdentifier(senderId)} (dmPolicy: ${
-      params.account.config.dmPolicy ?? "pairing"
+      dmPolicy
     })`,
   );
-  return false;
+  return "stop";
 }
 
 export async function processMessengerEvent(params: {
@@ -1381,7 +1408,8 @@ export async function processMessengerEvent(params: {
 }) {
   activeMessengerEventJobs += 1;
   try {
-    if (!(await shouldProcessMessengerEvent(params))) {
+    const ingressDecision = await shouldProcessMessengerEvent(params);
+    if (ingressDecision === "stop") {
       return;
     }
     const senderId = params.event.sender?.id ?? "";
@@ -1401,6 +1429,23 @@ export async function processMessengerEvent(params: {
         `messenger: skipped duplicate message ${redactMessengerIdentifier(
           params.event.message?.mid ?? `${senderId}:${timestamp}`,
         )} from ${redactMessengerIdentifier(senderId)}`,
+      );
+      return;
+    }
+    if (ingressDecision === "leaderbot_free_tier") {
+      logMessengerStage(params.trace, "messenger_event_forward_started", {
+        reason: "unknown_sender_leaderbot_free_tier",
+      });
+      if (await forwardLeaderbotMessengerEvent({ event: params.event, trace: params.trace })) {
+        return;
+      }
+      await sendMessengerText(
+        senderId,
+        "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
+        {
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+        },
       );
       return;
     }

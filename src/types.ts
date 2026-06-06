@@ -2,6 +2,7 @@ import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
 
 export type MessengerTokenSource = "config" | "env" | "file" | "none";
+export type MessengerUnknownSenderMode = "pairing" | "leaderbot_free_tier";
 
 interface MessengerAccountBaseConfig {
   enabled?: boolean;
@@ -15,6 +16,7 @@ interface MessengerAccountBaseConfig {
   name?: string;
   allowFrom?: Array<string | number>;
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
+  unknownSenderMode?: MessengerUnknownSenderMode;
   responsePrefix?: string;
   webhookPath?: string;
   defaultTo?: string;

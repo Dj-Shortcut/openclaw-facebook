@@ -44,6 +44,10 @@
             "enum": ["open", "allowlist", "pairing", "disabled"],
             "default": "pairing"
           },
+          "unknownSenderMode": {
+            "type": "string",
+            "enum": ["pairing", "leaderbot_free_tier"]
+          },
           "responsePrefix": { "type": "string" },
           "webhookPath": { "type": "string" },
           "defaultTo": { "type": "string" },
@@ -73,6 +77,10 @@
                   "enum": ["open", "allowlist", "pairing", "disabled"],
                   "default": "pairing"
                 },
+                "unknownSenderMode": {
+                  "type": "string",
+                  "enum": ["pairing", "leaderbot_free_tier"]
+                },
                 "responsePrefix": { "type": "string" },
                 "webhookPath": { "type": "string" },
                 "defaultTo": { "type": "string" },
@@ -92,6 +100,7 @@
         "verifyTokenFile": { "label": "Webhook verify token file" },
         "webhookPath": { "label": "Webhook path", "placeholder": "/facebook/webhook" },
         "dmPolicy": { "label": "Direct message policy" },
+        "unknownSenderMode": { "label": "Unknown sender mode" },
         "allowFrom": { "label": "Allowed Page-scoped sender IDs" }
       }
     }

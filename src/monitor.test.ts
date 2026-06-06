@@ -91,7 +91,9 @@ function messengerTarget(
   };
 }
 
-function messengerTestConfig() {
+function messengerTestConfig(
+  configOverrides: Partial<ResolvedMessengerAccount["config"]> = {},
+) {
   return {
     channels: {
       facebook: {
@@ -101,12 +103,15 @@ function messengerTestConfig() {
         verifyToken: "verify-token",
         dmPolicy: "open",
         allowFrom: ["*"],
+        ...configOverrides,
       },
     },
   } as never;
 }
 
-function messengerTestAccount(): ResolvedMessengerAccount {
+function messengerTestAccount(
+  configOverrides: Partial<ResolvedMessengerAccount["config"]> = {},
+): ResolvedMessengerAccount {
   return {
     accountId: "default",
     enabled: true,
@@ -115,7 +120,7 @@ function messengerTestAccount(): ResolvedMessengerAccount {
     appSecret: "app-secret",
     verifyToken: "verify-token",
     tokenSource: "config",
-    config: { dmPolicy: "open", allowFrom: ["*"] },
+    config: { dmPolicy: "open", allowFrom: ["*"], ...configOverrides },
   };
 }
 
@@ -131,11 +136,31 @@ function messengerImagePromptEvent(mid: string): MessengerWebhookMessaging {
   };
 }
 
-function setGatewayRuntime(inboundRun = vi.fn()) {
+function messengerTextEvent(mid: string, text = "Hallo"): MessengerWebhookMessaging {
+  return {
+    sender: { id: `sender-${mid}` },
+    recipient: { id: "page-1" },
+    timestamp: 1_700_000_000_000,
+    message: {
+      mid,
+      text,
+    },
+  };
+}
+
+function setGatewayRuntime(
+  inboundRun = vi.fn(),
+  options: {
+    readAllowFromStore?: ReturnType<typeof vi.fn>;
+    upsertPairingRequest?: ReturnType<typeof vi.fn>;
+  } = {},
+) {
   setMessengerRuntime({
     channel: {
       pairing: {
-        readAllowFromStore: vi.fn(async () => []),
+        readAllowFromStore: options.readAllowFromStore ?? vi.fn(async () => []),
+        upsertPairingRequest:
+          options.upsertPairingRequest ?? vi.fn(async () => ({ code: "PAIR-1", created: true })),
       },
       inbound: {
         run: inboundRun,
@@ -145,11 +170,14 @@ function setGatewayRuntime(inboundRun = vi.fn()) {
   return inboundRun;
 }
 
-async function processGatewayTestEvent(event: MessengerWebhookMessaging) {
+async function processGatewayTestEvent(
+  event: MessengerWebhookMessaging,
+  configOverrides: Partial<ResolvedMessengerAccount["config"]> = {},
+) {
   await processMessengerEvent({
     event,
-    cfg: messengerTestConfig(),
-    account: messengerTestAccount(),
+    cfg: messengerTestConfig(configOverrides),
+    account: messengerTestAccount(configOverrides),
     runtime: {
       log: () => {},
       error: () => {},
@@ -633,6 +661,78 @@ describe("shouldForwardMessengerTextToImageGen", () => {
     expect(shouldForwardMessengerTextToImageGen("Maak een prompt voor een afbeelding")).toBe(false);
     expect(shouldForwardMessengerTextToImageGen("Schrijf een planning voor morgen")).toBe(false);
     expect(shouldForwardMessengerTextToImageGen("Wat zie je op deze foto?")).toBe(false);
+  });
+});
+
+describe("processMessengerEvent unknown sender access policy", () => {
+  it("keeps private pairing mode unchanged for unknown senders", async () => {
+    const inboundRun = vi.fn();
+    const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR-1", created: true }));
+    setGatewayRuntime(inboundRun, { upsertPairingRequest });
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
+      return new Response(
+        JSON.stringify({
+          message_id: "pairing-message",
+          recipient_id: "sender-mid-private-pairing",
+        }),
+        {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(messengerTextEvent("mid-private-pairing"), {
+      dmPolicy: "pairing",
+      allowFrom: undefined,
+    });
+
+    expect(upsertPairingRequest).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const sendBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    expect(sendBody.recipient).toEqual({ id: "sender-mid-private-pairing" });
+    expect(String(sendBody.message?.text ?? "")).toContain("pairing");
+    expect(inboundRun).not.toHaveBeenCalled();
+  });
+
+  it("routes unknown senders to the existing Leaderbot event bridge only when free-tier mode is explicit", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    const inboundRun = vi.fn();
+    const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR-1", created: true }));
+    setGatewayRuntime(inboundRun, { upsertPairingRequest });
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      expect(String(url)).toBe("https://image-gen.example.test/internal/messenger/webhook-event");
+      return new Response(JSON.stringify({ status: "queued" }), {
+        headers: { "content-type": "application/json" },
+        status: 202,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(messengerTextEvent("mid-free-tier", "Hi"), {
+      dmPolicy: "pairing",
+      allowFrom: undefined,
+      unknownSenderMode: "leaderbot_free_tier",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
+    const bridgeBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    expect(bridgeBody).toMatchObject({
+      event: {
+        sender: { id: "sender-mid-free-tier" },
+        recipient: { id: "page-1" },
+        message: {
+          mid: "mid-free-tier",
+          text: "Hi",
+        },
+      },
+    });
+    expect(upsertPairingRequest).not.toHaveBeenCalled();
+    expect(inboundRun).not.toHaveBeenCalled();
   });
 });
 
