@@ -8,6 +8,7 @@ import { z } from "zod";
 import type { ResolvedMessengerAccount } from "./types.js";
 
 const DmPolicySchema = z.enum(["open", "allowlist", "pairing", "disabled"]);
+const UnknownSenderModeSchema = z.enum(["pairing", "leaderbot_free_tier"]);
 
 const MessengerCommonConfigSchemaBase = z.object({
   enabled: z.boolean().optional(),
@@ -21,6 +22,7 @@ const MessengerCommonConfigSchemaBase = z.object({
   name: z.string().optional(),
   allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   dmPolicy: DmPolicySchema.optional().default("pairing"),
+  unknownSenderMode: UnknownSenderModeSchema.optional(),
   responsePrefix: z.string().optional(),
   webhookPath: z.string().optional(),
   defaultTo: z.string().optional(),
