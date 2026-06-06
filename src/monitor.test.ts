@@ -173,6 +173,11 @@ function setGatewayRuntime(
 async function processGatewayTestEvent(
   event: MessengerWebhookMessaging,
   configOverrides: Partial<ResolvedMessengerAccount["config"]> = {},
+  runtimeOverrides: Partial<{
+    log: (message: unknown) => void;
+    error: (message: unknown) => void;
+    exit: () => void;
+  }> = {},
 ) {
   await processMessengerEvent({
     event,
@@ -182,6 +187,7 @@ async function processGatewayTestEvent(
       log: () => {},
       error: () => {},
       exit: () => {},
+      ...runtimeOverrides,
     },
     trace: {
       accountId: "default",
@@ -732,6 +738,50 @@ describe("processMessengerEvent unknown sender access policy", () => {
       },
     });
     expect(upsertPairingRequest).not.toHaveBeenCalled();
+    expect(inboundRun).not.toHaveBeenCalled();
+  });
+
+  it("logs and returns when free-tier bridge and fallback send both fail", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    const runtimeError = vi.fn();
+    const inboundRun = vi.fn();
+    setGatewayRuntime(inboundRun);
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      const href = String(url);
+      if (href === "https://image-gen.example.test/internal/messenger/webhook-event") {
+        return new Response(JSON.stringify({ error: "unavailable" }), {
+          headers: { "content-type": "application/json" },
+          status: 503,
+        });
+      }
+      if (href === "https://graph.facebook.com/v20.0/page-1/messages") {
+        return new Response(JSON.stringify({ error: { message: "send failed", code: 10 } }), {
+          headers: { "content-type": "application/json" },
+          status: 500,
+        });
+      }
+      throw new Error(`unexpected fetch ${href}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      processGatewayTestEvent(
+        messengerTextEvent("mid-free-tier-fallback-failure", "Hi"),
+        {
+          dmPolicy: "pairing",
+          allowFrom: undefined,
+          unknownSenderMode: "leaderbot_free_tier",
+        },
+        { error: runtimeError },
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(runtimeError).toHaveBeenCalledTimes(1);
+    expect(String(runtimeError.mock.calls[0]?.[0])).toContain(
+      "messenger image generator fallback failed",
+    );
     expect(inboundRun).not.toHaveBeenCalled();
   });
 });

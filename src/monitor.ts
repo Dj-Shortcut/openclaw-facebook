@@ -1446,7 +1446,11 @@ export async function processMessengerEvent(params: {
           cfg: params.cfg,
           accountId: params.account.accountId,
         },
-      );
+      ).catch((err: unknown) => {
+        params.runtime.error?.(
+          danger(`messenger image generator fallback failed: ${String(err)}`),
+        );
+      });
       return;
     }
     const attachments = extractMessengerAttachmentUrls(params.event);
