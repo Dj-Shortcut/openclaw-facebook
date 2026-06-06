@@ -5,6 +5,9 @@ type ImageCostEstimate = {
   quality: string;
   inputFidelity?: string;
   estimatedCostUsd?: number;
+  estimatedOutputCostUsd?: number;
+  costEstimateComplete: boolean;
+  unpricedCostComponents?: Array<"output_image" | "source_image_input">;
   estimateSource:
     | "env_override"
     | "gpt_image_1_table"
@@ -82,6 +85,21 @@ export function readOpenAiImageCostOptionsFromRequestBody(body: unknown): {
   };
 }
 
+function estimateOutputImageCost(input: {
+  pricingModel: string;
+  size: string;
+  quality: string;
+  override?: number;
+}): number | undefined {
+  if (input.override !== undefined) {
+    return input.override;
+  }
+
+  return input.pricingModel.toLowerCase() === "gpt-image-1"
+    ? GPT_IMAGE_1_PER_IMAGE_USD[input.quality]?.[input.size]
+    : undefined;
+}
+
 export function estimateOpenAiImageRequestCost(input: {
   model: string;
   pricingModel?: string;
@@ -93,18 +111,12 @@ export function estimateOpenAiImageRequestCost(input: {
   const pricingModel =
     input.pricingModel?.trim() || DEFAULT_OPENAI_IMAGE_PRICING_MODEL;
   const override = readUsdEnv("OPENAI_IMAGE_ESTIMATED_COST_USD");
-
-  if (override !== undefined) {
-    return {
-      model: input.model,
-      pricingModel,
-      size: input.size,
-      quality: input.quality,
-      ...(input.inputFidelity ? { inputFidelity: input.inputFidelity } : {}),
-      estimatedCostUsd: override,
-      estimateSource: "env_override",
-    };
-  }
+  const outputEstimate = estimateOutputImageCost({
+    pricingModel,
+    size: input.size,
+    quality: input.quality,
+    override,
+  });
 
   if (input.hasSourceImage) {
     return {
@@ -114,15 +126,27 @@ export function estimateOpenAiImageRequestCost(input: {
       quality: input.quality,
       ...(input.inputFidelity ? { inputFidelity: input.inputFidelity } : {}),
       estimatedCostUsd: undefined,
+      ...(outputEstimate !== undefined
+        ? { estimatedOutputCostUsd: outputEstimate }
+        : {}),
+      costEstimateComplete: false,
+      unpricedCostComponents: ["source_image_input"],
       estimateSource: "partial_source_image_input_unpriced",
     };
   }
 
-  const normalizedPricingModel = pricingModel.toLowerCase();
-  const tableEstimate =
-    normalizedPricingModel === "gpt-image-1"
-      ? GPT_IMAGE_1_PER_IMAGE_USD[input.quality]?.[input.size]
-      : undefined;
+  if (override !== undefined) {
+    return {
+      model: input.model,
+      pricingModel,
+      size: input.size,
+      quality: input.quality,
+      ...(input.inputFidelity ? { inputFidelity: input.inputFidelity } : {}),
+      estimatedCostUsd: override,
+      costEstimateComplete: true,
+      estimateSource: "env_override",
+    };
+  }
 
   return {
     model: input.model,
@@ -130,8 +154,12 @@ export function estimateOpenAiImageRequestCost(input: {
     size: input.size,
     quality: input.quality,
     ...(input.inputFidelity ? { inputFidelity: input.inputFidelity } : {}),
-    estimatedCostUsd: tableEstimate,
+    estimatedCostUsd: outputEstimate,
+    costEstimateComplete: outputEstimate !== undefined,
+    ...(outputEstimate === undefined
+      ? { unpricedCostComponents: ["output_image" as const] }
+      : {}),
     estimateSource:
-      tableEstimate === undefined ? "unpriced" : "gpt_image_1_table",
+      outputEstimate === undefined ? "unpriced" : "gpt_image_1_table",
   };
 }

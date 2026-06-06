@@ -39,6 +39,7 @@ describe("image cost estimates", () => {
       size: "1024x1536",
       quality: "medium",
       estimatedCostUsd: 0.019,
+      costEstimateComplete: true,
       estimateSource: "env_override",
     });
   });
@@ -57,6 +58,7 @@ describe("image cost estimates", () => {
       size: "1024x1024",
       quality: "low",
       estimatedCostUsd: 0.011,
+      costEstimateComplete: true,
       estimateSource: "gpt_image_1_table",
     });
   });
@@ -96,6 +98,9 @@ describe("image cost estimates", () => {
       quality: "medium",
       inputFidelity: "high",
       estimatedCostUsd: undefined,
+      estimatedOutputCostUsd: 0.042,
+      costEstimateComplete: false,
+      unpricedCostComponents: ["source_image_input"],
       estimateSource: "partial_source_image_input_unpriced",
     });
   });
@@ -117,6 +122,8 @@ describe("image cost estimates", () => {
       size: "1024x1024",
       quality: "auto",
       estimatedCostUsd: undefined,
+      costEstimateComplete: false,
+      unpricedCostComponents: ["output_image"],
       estimateSource: "unpriced",
     });
   });

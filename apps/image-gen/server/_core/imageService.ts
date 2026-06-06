@@ -289,6 +289,9 @@ export class OpenAiImageGenerator implements ImageGenerator {
         quality: costEstimate.quality,
         inputFidelity: costEstimate.inputFidelity ?? null,
         estimatedCostUsd: costEstimate.estimatedCostUsd ?? null,
+        estimatedOutputCostUsd: costEstimate.estimatedOutputCostUsd ?? null,
+        costEstimateComplete: costEstimate.costEstimateComplete,
+        unpricedCostComponents: costEstimate.unpricedCostComponents ?? [],
         estimateSource: costEstimate.estimateSource,
         status: "provider_response_received",
       });
