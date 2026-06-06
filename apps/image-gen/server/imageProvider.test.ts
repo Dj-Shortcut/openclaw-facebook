@@ -14,6 +14,12 @@ const originalAppBaseUrl = process.env.APP_BASE_URL;
 const originalOpenAiImageMaxRetries = process.env.OPENAI_IMAGE_MAX_RETRIES;
 const originalOpenAiImageRetryBaseMs = process.env.OPENAI_IMAGE_RETRY_BASE_MS;
 const originalOpenAiImageModel = process.env.OPENAI_IMAGE_MODEL;
+const originalOpenAiImageEstimatedCostUsd =
+  process.env.OPENAI_IMAGE_ESTIMATED_COST_USD;
+const originalOpenAiImageSize = process.env.OPENAI_IMAGE_SIZE;
+const originalOpenAiImageQuality = process.env.OPENAI_IMAGE_QUALITY;
+const originalOpenAiImageInputFidelity =
+  process.env.OPENAI_IMAGE_INPUT_FIDELITY;
 const originalMessengerMaxImageJobs = process.env.MESSENGER_MAX_IMAGE_JOBS;
 const originalMessengerGlobalImageLockTtlMs =
   process.env.MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS;
@@ -113,6 +119,13 @@ describe("image provider boundary", () => {
     restoreEnv("OPENAI_IMAGE_MAX_RETRIES", originalOpenAiImageMaxRetries);
     restoreEnv("OPENAI_IMAGE_RETRY_BASE_MS", originalOpenAiImageRetryBaseMs);
     restoreEnv("OPENAI_IMAGE_MODEL", originalOpenAiImageModel);
+    restoreEnv(
+      "OPENAI_IMAGE_ESTIMATED_COST_USD",
+      originalOpenAiImageEstimatedCostUsd
+    );
+    restoreEnv("OPENAI_IMAGE_SIZE", originalOpenAiImageSize);
+    restoreEnv("OPENAI_IMAGE_QUALITY", originalOpenAiImageQuality);
+    restoreEnv("OPENAI_IMAGE_INPUT_FIDELITY", originalOpenAiImageInputFidelity);
     restoreEnv("MESSENGER_MAX_IMAGE_JOBS", originalMessengerMaxImageJobs);
     restoreEnv(
       "MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS",
@@ -317,6 +330,102 @@ describe("image provider boundary", () => {
       reqId: "req-configured-model",
     });
 
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs image cost estimate metadata without prompt content", async () => {
+    configureOpenAiImagesEnv("gpt-image-2");
+    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
+    process.env.OPENAI_IMAGE_SIZE = "1024x1536";
+    process.env.OPENAI_IMAGE_QUALITY = "medium";
+    const privatePrompt = "private tester prompt for a neon train station";
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generator = new OpenAiImageGenerator();
+    await generator.generate({
+      generationKind: "text_to_image",
+      promptHint: privatePrompt,
+      userKey: "testuser",
+      reqId: "req-cost-estimate",
+    });
+
+    const parsedLogs = logSpy.mock.calls.map(([payload]) =>
+      typeof payload === "string" ? JSON.parse(payload) : payload
+    );
+    const serializedLogs = JSON.stringify(parsedLogs);
+    const costLogs = parsedLogs.filter(
+      payload => payload?.event === "image_generation_cost_estimate"
+    );
+
+    expect(costLogs).toEqual([
+      {
+        level: "info",
+        event: "image_generation_cost_estimate",
+        reqId: "req-cost-estimate",
+        user: "testuser",
+        provider: "openai-images",
+        model: "gpt-image-2",
+        pricingModel: "gpt-image-1",
+        generationKind: "text_to_image",
+        hasSourceImage: false,
+        size: "1024x1536",
+        quality: "medium",
+        inputFidelity: null,
+        estimatedCostUsd: 0.025,
+        estimateSource: "env_override",
+        status: "provider_response_received",
+      },
+    ]);
+    expect(serializedLogs).not.toContain(privatePrompt);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks source-image edit cost estimates as partial input-unpriced metadata", async () => {
+    configureOpenAiImagesEnv("gpt-5");
+    process.env.OPENAI_IMAGE_SIZE = "1024x1024";
+    process.env.OPENAI_IMAGE_QUALITY = "medium";
+    process.env.OPENAI_IMAGE_INPUT_FIDELITY = "high";
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generator = new OpenAiImageGenerator();
+    await generateWithSourceImageData(generator, {
+      generationKind: "source_image_edit",
+      promptHint: "make the product shot brighter",
+      userKey: "source-edit-user",
+      reqId: "req-source-edit-cost-estimate",
+    });
+
+    const costLogs = logSpy.mock.calls
+      .map(([payload]) =>
+        typeof payload === "string" ? JSON.parse(payload) : payload
+      )
+      .filter(payload => payload?.event === "image_generation_cost_estimate");
+
+    expect(costLogs).toEqual([
+      {
+        level: "info",
+        event: "image_generation_cost_estimate",
+        reqId: "req-source-edit-cost-estimate",
+        user: "source-e",
+        provider: "openai-images",
+        model: "gpt-5",
+        pricingModel: "gpt-image-1",
+        generationKind: "source_image_edit",
+        hasSourceImage: true,
+        size: "1024x1024",
+        quality: "medium",
+        inputFidelity: "high",
+        estimatedCostUsd: null,
+        estimateSource: "partial_source_image_input_unpriced",
+        status: "provider_response_received",
+      },
+    ]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 

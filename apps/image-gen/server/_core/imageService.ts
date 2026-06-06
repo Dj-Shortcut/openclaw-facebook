@@ -19,8 +19,13 @@ import {
 } from "./image-generation/sourceImageFetcher";
 import {
   getConfiguredBaseUrl,
+  getOpenAiImageModelConfig,
   hasObjectStorageConfig,
 } from "./image-generation/imageServiceConfig";
+import {
+  estimateOpenAiImageRequestCost,
+  readOpenAiImageCostOptionsFromRequestBody,
+} from "./image-generation/imageCostEstimate";
 import { publishGeneratedImage } from "./image-generation/generatedImagePublisher";
 import type { GenerationKind } from "./image-generation/generationTypes";
 import {
@@ -40,6 +45,7 @@ import {
 } from "./messengerGenerationQueue";
 import { createLogger } from "./logger";
 import { safeLog } from "./logger";
+import { toLogUser } from "./privacy";
 
 const OPENAI_IMAGES_PROVIDER = "openai-images" as const;
 
@@ -245,6 +251,14 @@ export class OpenAiImageGenerator implements ImageGenerator {
       });
       const openAiPayloadBuildMs = Date.now() - requestBuildStartedAt;
       partialMetrics.openAiPayloadBuildMs = openAiPayloadBuildMs;
+      const imageCostOptions = readOpenAiImageCostOptionsFromRequestBody(
+        requestContext.requestInit.body
+      );
+      const costEstimate = estimateOpenAiImageRequestCost({
+        model: getOpenAiImageModelConfig().imageGenerationModel,
+        ...imageCostOptions,
+        hasSourceImage: preparedInput.hasSourceImage,
+      });
       const payloadBytes =
         typeof requestContext.requestInit.body === "string"
           ? Buffer.byteLength(requestContext.requestInit.body)
@@ -262,6 +276,21 @@ export class OpenAiImageGenerator implements ImageGenerator {
         reqId: input.reqId,
         startedAt,
         partialMetrics,
+      });
+      safeLog("image_generation_cost_estimate", {
+        reqId: input.reqId,
+        user: toLogUser(input.userKey),
+        provider,
+        model: costEstimate.model,
+        pricingModel: costEstimate.pricingModel,
+        generationKind: input.generationKind ?? null,
+        hasSourceImage: preparedInput.hasSourceImage,
+        size: costEstimate.size,
+        quality: costEstimate.quality,
+        inputFidelity: costEstimate.inputFidelity ?? null,
+        estimatedCostUsd: costEstimate.estimatedCostUsd ?? null,
+        estimateSource: costEstimate.estimateSource,
+        status: "provider_response_received",
       });
 
       const parseStartedAt = Date.now();
