@@ -28,8 +28,9 @@
     "test": "vitest run",
     "lint:server": "eslint server",
     "lint:server:fix": "eslint server --fix",
-    "storage-proxy:dev": "tsx watch storage-proxy/index.ts",
-    "storage-proxy:start": "cross-env NODE_ENV=production tsx storage-proxy/index.ts"
+    "storage-proxy:install": "pnpm --dir storage-proxy install --frozen-lockfile",
+    "storage-proxy:dev": "pnpm --dir storage-proxy start:proxy",
+    "storage-proxy:start": "cross-env NODE_ENV=production pnpm --dir storage-proxy start:proxy"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.3",
