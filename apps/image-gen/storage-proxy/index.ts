@@ -1,4 +1,5 @@
 import express from "express";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import {
   DeleteObjectCommand,
@@ -15,7 +16,17 @@ type ProxyEnv = {
   r2AccessKeyId: string;
   r2SecretAccessKey: string;
   port: number;
+  maxUploadBytes: number;
 };
+
+const DEFAULT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+class PayloadTooLargeError extends Error {
+  constructor(readonly maxBytes: number) {
+    super("payload_too_large");
+    this.name = "PayloadTooLargeError";
+  }
+}
 
 function loadDotEnvFromDisk(): void {
   const envPath = ".env";
@@ -103,6 +114,20 @@ function getEnv(name: string): string {
   return value;
 }
 
+function readPositiveIntegerEnv(name: string, fallback: number): number {
+  const rawValue = readEnv(name).trim();
+  if (!rawValue) {
+    return fallback;
+  }
+
+  const value = Number.parseInt(rawValue, 10);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+
+  return value;
+}
+
 function ensureTrailingSlash(value: string): string {
   return value.endsWith("/") ? value : `${value}/`;
 }
@@ -131,6 +156,10 @@ function loadConfig(): ProxyEnv {
     r2AccessKeyId: getEnv("R2_ACCESS_KEY_ID"),
     r2SecretAccessKey: getEnv("R2_SECRET_ACCESS_KEY"),
     port: Number.parseInt(process.env.PORT ?? "8787", 10) || 8787,
+    maxUploadBytes: readPositiveIntegerEnv(
+      "MAX_UPLOAD_BYTES",
+      DEFAULT_MAX_UPLOAD_BYTES
+    ),
   };
 }
 
@@ -164,29 +193,82 @@ function getBearerToken(authorization: string | undefined): string | null {
   return token || null;
 }
 
-function readRawBody(req: express.Request): Promise<Buffer> {
+function getRequestContentLength(req: express.Request): number | null {
+  const value = req.header("content-length");
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function readRawBody(req: express.Request, maxBytes: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
+    const contentLength = getRequestContentLength(req);
+    if (contentLength !== null && contentLength > maxBytes) {
+      reject(new PayloadTooLargeError(maxBytes));
+      req.destroy();
+      return;
+    }
+
     const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    let settled = false;
+
+    const rejectOnce = (error: Error): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(error);
+      req.destroy(error);
+    };
+
     req.on("data", chunk => {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      if (settled) {
+        return;
+      }
+
+      const piece = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += piece.length;
+      if (totalBytes > maxBytes) {
+        rejectOnce(new PayloadTooLargeError(maxBytes));
+        return;
+      }
+
+      chunks.push(piece);
     });
     req.on("end", () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       resolve(Buffer.concat(chunks));
     });
-    req.on("error", reject);
+    req.on("error", error => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(error);
+    });
   });
 }
 
-async function readMultipartFile(req: express.Request): Promise<{
+async function readMultipartFile(
+  req: express.Request,
+  maxBytes: number
+): Promise<{
   buffer: Buffer;
   contentType: string;
   fileName: string;
 }> {
-  const rawBody = await readRawBody(req);
+  const rawBody = await readRawBody(req, maxBytes);
   const request = new Request("http://storage-proxy.local/upload", {
     method: "POST",
     headers: req.headers as HeadersInit,
-    body: rawBody,
+    body: new Uint8Array(rawBody),
   });
   const formData = await request.formData();
   const file = formData.get("file");
@@ -213,6 +295,54 @@ function logJson(level: "info" | "warn" | "error", payload: Record<string, unkno
     return;
   }
   console.info(serialized);
+}
+
+function hashForLog(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+function objectKeyLogFields(objectKey: string): Record<string, unknown> {
+  return {
+    objectKeyHash: hashForLog(objectKey),
+  };
+}
+
+function fileNameLogFields(fileName: string): Record<string, unknown> {
+  return {
+    fileNameHash: hashForLog(fileName),
+  };
+}
+
+function storageErrorLogFields(error: unknown): Record<string, unknown> {
+  return {
+    errorName: error instanceof Error ? error.name : typeof error,
+    statusCode: getStorageErrorStatusCode(error),
+  };
+}
+
+function getStorageErrorStatusCode(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null || !("$metadata" in error)) {
+    return undefined;
+  }
+
+  const metadata = (error as { $metadata?: { httpStatusCode?: unknown } })
+    .$metadata;
+  return typeof metadata?.httpStatusCode === "number"
+    ? metadata.httpStatusCode
+    : undefined;
+}
+
+function isMissingStorageObjectError(error: unknown): boolean {
+  const statusCode = getStorageErrorStatusCode(error);
+  if (statusCode === 404) {
+    return true;
+  }
+
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return error.name === "NotFound" || error.name === "NoSuchKey";
 }
 
 export function createStorageProxyApp(config: ProxyEnv): express.Express {
@@ -245,7 +375,7 @@ export function createStorageProxyApp(config: ProxyEnv): express.Express {
     }
 
     try {
-      const file = await readMultipartFile(req);
+      const file = await readMultipartFile(req, config.maxUploadBytes);
       await s3.send(
         new PutObjectCommand({
           Bucket: config.r2Bucket,
@@ -258,17 +388,28 @@ export function createStorageProxyApp(config: ProxyEnv): express.Express {
       const publicUrl = buildPublicUrl(config, objectKey);
       logJson("info", {
         msg: "storage_proxy_upload_success",
-        objectKey,
+        ...objectKeyLogFields(objectKey),
         contentType: file.contentType,
-        fileName: file.fileName,
-        publicUrl,
+        ...fileNameLogFields(file.fileName),
+        sizeBytes: file.buffer.byteLength,
       });
       res.status(200).json({ url: publicUrl });
     } catch (error) {
+      if (error instanceof PayloadTooLargeError) {
+        logJson("warn", {
+          msg: "storage_proxy_upload_rejected",
+          ...objectKeyLogFields(objectKey),
+          reason: "payload_too_large",
+          maxUploadBytes: error.maxBytes,
+        });
+        res.status(413).json({ error: "Payload too large" });
+        return;
+      }
+
       logJson("error", {
         msg: "storage_proxy_upload_failed",
-        objectKey,
-        error: error instanceof Error ? error.message : String(error),
+        ...objectKeyLogFields(objectKey),
+        ...storageErrorLogFields(error),
       });
       res.status(502).json({ error: "Upload failed" });
     }
@@ -292,17 +433,20 @@ export function createStorageProxyApp(config: ProxyEnv): express.Express {
       const publicUrl = buildPublicUrl(config, objectKey);
       logJson("info", {
         msg: "storage_proxy_download_url",
-        objectKey,
-        publicUrl,
+        ...objectKeyLogFields(objectKey),
       });
       res.status(200).json({ url: publicUrl });
     } catch (error) {
       logJson("error", {
         msg: "storage_proxy_download_url_failed",
-        objectKey,
-        error: error instanceof Error ? error.message : String(error),
+        ...objectKeyLogFields(objectKey),
+        ...storageErrorLogFields(error),
       });
-      res.status(404).json({ error: "Object not found" });
+      if (isMissingStorageObjectError(error)) {
+        res.status(404).json({ error: "Object not found" });
+        return;
+      }
+      res.status(502).json({ error: "Download URL lookup failed" });
     }
   });
 
@@ -323,14 +467,14 @@ export function createStorageProxyApp(config: ProxyEnv): express.Express {
 
       logJson("info", {
         msg: "storage_proxy_delete_success",
-        objectKey,
+        ...objectKeyLogFields(objectKey),
       });
       res.status(204).send();
     } catch (error) {
       logJson("error", {
         msg: "storage_proxy_delete_failed",
-        objectKey,
-        error: error instanceof Error ? error.message : String(error),
+        ...objectKeyLogFields(objectKey),
+        ...storageErrorLogFields(error),
       });
       res.status(502).json({ error: "Delete failed" });
     }

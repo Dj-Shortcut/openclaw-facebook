@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "typecheck:proxy": "tsc --noEmit -p tsconfig.json",
     "build:proxy": "esbuild index.ts --platform=node --target=node20 --bundle --format=cjs --outfile=dist/index.cjs",
     "start:proxy": "tsx index.ts",
     "start:proxy:dist": "node dist/index.cjs"
