@@ -13,7 +13,8 @@ Facebook Page Messenger DMs through Meta webhooks.
 
 V1 is intentionally focused: Facebook Page Messenger direct messages only. It
 does not yet implement comments, Private Replies/comment-to-DM flows, Instagram
-DMs, attachments, or broader Meta automation.
+DMs, broader Meta automation, or general attachment workflows. Inbound media
+attachments are handled only as supported Messenger payloads for DM ingestion.
 
 The plugin is called `facebook` because this is the Facebook/Meta integration
 surface. Legacy `messenger`, `fb`, and `fbm` aliases remain temporarily for

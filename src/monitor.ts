@@ -1455,6 +1455,7 @@ export async function processMessengerEvent(params: {
     }
     const attachments = extractMessengerAttachmentUrls(params.event);
     const sourceImageAttachment = attachments.find((attachment) => attachment.kind === "image");
+    const rawAttachmentCount = params.event.message?.attachments?.length ?? 0;
     const replyToMessageId = params.event.message?.reply_to?.mid;
     logVerbose(
       `messenger: received inbound event sender=${redactMessengerIdentifier(
@@ -1463,6 +1464,20 @@ export async function processMessengerEvent(params: {
         params.event.message?.mid ?? `${senderId}:${timestamp}`,
       )} media=${attachments.length}`,
     );
+    if (rawAttachmentCount > 0 && attachments.length === 0 && !text.trim()) {
+      logMessengerStage(params.trace, "messenger_event_forward_skipped", {
+        reason: "attachments_missing_payload_url",
+        rawAttachments: rawAttachmentCount,
+      });
+      logVerbose(
+        `messenger: skipped attachment-only event with no usable payload.url sender=${redactMessengerIdentifier(
+          senderId,
+        )} account=${params.account.accountId} message=${redactMessengerIdentifier(
+          params.event.message?.mid ?? `${senderId}:${timestamp}`,
+        )} rawAttachments=${rawAttachmentCount}`,
+      );
+      return;
+    }
     if (!openClawActionText && hasMessengerInteractivePayload(params.event)) {
       logMessengerStage(params.trace, "messenger_interactive_payload_received", {
         quickReply: Boolean(params.event.message?.quick_reply?.payload),
