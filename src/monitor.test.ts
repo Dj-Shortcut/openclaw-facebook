@@ -784,6 +784,36 @@ describe("processMessengerEvent unknown sender access policy", () => {
     );
     expect(inboundRun).not.toHaveBeenCalled();
   });
+
+  it("ignores free-tier attachment-only messages when payload.url is missing", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    const inboundRun = setGatewayRuntime();
+    const fetchMock = vi.fn(async () => {
+      throw new Error("image generator should not be called");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(
+      {
+        sender: { id: "sender-mid-free-tier-missing-attachment" },
+        recipient: { id: "page-1" },
+        timestamp: 1_700_000_000_001,
+        message: {
+          mid: "mid-free-tier-missing-attachment",
+          attachments: [{ type: "image", payload: {} }],
+        },
+      },
+      {
+        dmPolicy: "pairing",
+        allowFrom: undefined,
+        unknownSenderMode: "leaderbot_free_tier",
+      },
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(inboundRun).not.toHaveBeenCalled();
+  });
 });
 
 describe("processMessengerEvent image intents", () => {
