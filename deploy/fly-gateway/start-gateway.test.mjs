@@ -179,6 +179,39 @@ describe("Fly gateway startup", () => {
     expect(result.memory).toBe("# Memory\n\nPersistent assistant memory for this OpenClaw workspace.\n");
   }, prepareGatewayConfigTimeoutMs);
 
+  it("seeds Leaderbot free-tier unknown sender mode when configured", () => {
+    configureTempGatewayEnv();
+    const result = runPrepareGatewayConfig({
+      OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE: "leaderbot_free_tier",
+    });
+
+    expect(result.config.channels.facebook.dmPolicy).toBe("pairing");
+    expect(result.config.channels.facebook.unknownSenderMode).toBe("leaderbot_free_tier");
+  }, prepareGatewayConfigTimeoutMs);
+
+  it("keeps explicit pairing-only unknown sender mode", () => {
+    const { stateDir } = configureTempGatewayEnv();
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "openclaw.json"),
+      `${JSON.stringify({
+        channels: {
+          facebook: {
+            dmPolicy: "pairing",
+            unknownSenderMode: "pairing",
+          },
+        },
+      })}\n`,
+    );
+
+    const result = runPrepareGatewayConfig({
+      OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE: "leaderbot_free_tier",
+    });
+
+    expect(result.config.channels.facebook.dmPolicy).toBe("pairing");
+    expect(result.config.channels.facebook.unknownSenderMode).toBe("pairing");
+  }, prepareGatewayConfigTimeoutMs);
+
   it("keeps an existing persistent memory file", () => {
     const { workspaceDir } = configureTempGatewayEnv();
     fs.mkdirSync(workspaceDir, { recursive: true });

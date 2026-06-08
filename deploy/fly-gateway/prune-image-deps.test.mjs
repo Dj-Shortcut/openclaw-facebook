@@ -76,6 +76,47 @@ describe('Fly gateway image dependency pruning', () => {
     expect(readFileSync(join(appRoot, 'node_modules/@openclaw/codex/node_modules/@openai/codex-linux-x64/docs/native-notes.md'), 'utf8')).toBe('fixture');
   });
 
+  it('keeps yaml dist doc runtime modules while pruning ordinary doc directories', () => {
+    const appRoot = makeTempApp();
+    writeFixtureFile(appRoot, 'node_modules/plain-package/doc/readme.md');
+    writeFixtureFile(
+      appRoot,
+      'node_modules/openclaw/node_modules/yaml/dist/compose/composer.js',
+      "require('../doc/directives.js');\n",
+    );
+    writeFixtureFile(
+      appRoot,
+      'node_modules/openclaw/node_modules/yaml/dist/doc/directives.js',
+      'module.exports = {};\n',
+    );
+    writeFixtureFile(
+      appRoot,
+      'node_modules/openclaw/node_modules/yaml/dist/doc/Document.js',
+      'module.exports = {};\n',
+    );
+
+    const result = spawnSync(process.execPath, [pruneScript, appRoot], {
+      encoding: 'utf8',
+      env: { ...process.env, NODE_OPTIONS: '' },
+    });
+
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    expect(() => readFileSync(join(appRoot, 'node_modules/plain-package/doc/readme.md'))).toThrow();
+    expect(
+      readFileSync(
+        join(appRoot, 'node_modules/openclaw/node_modules/yaml/dist/doc/directives.js'),
+        'utf8',
+      ),
+    ).toBe('module.exports = {};\n');
+    expect(
+      readFileSync(
+        join(appRoot, 'node_modules/openclaw/node_modules/yaml/dist/compose/composer.js'),
+        'utf8',
+      ),
+    ).toContain("../doc/directives.js");
+  });
+
   it('verifies the Codex Linux native package from the runtime app root', () => {
     const appRoot = makeTempApp();
     const verifyScript = join(appRoot, 'deploy/fly-gateway/bin/verify-codex-native-deps.cjs');
