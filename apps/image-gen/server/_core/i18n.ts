@@ -9,6 +9,10 @@ type TranslationKey =
   | "flowExplanation"
   | "photoEditPrompt"
   | "editImagePrompt"
+  | "newImagePrompt"
+  | "changeBackground"
+  | "changeBackgroundPrompt"
+  | "changeBackgroundRequiresPhoto"
   | "screenshotClarifyPrompt"
   | "screenshotIntentContinuation"
   | "whatIsThis"
@@ -27,6 +31,9 @@ type TranslationKey =
   | "aboutLeaderbot"
   | "failure"
   | "missingInputImage"
+  | "missingInputImageWithEditableImage"
+  | "messengerMissingInputImage"
+  | "messengerMissingInputImageWithEditableImage"
   | "generatingImagePrompt"
   | "generationQueued"
   | "whatsappGenerationFollowup"
@@ -46,8 +53,15 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
   nl: {
     flowExplanation:
       "Beschrijf wat je wilt maken, of stuur een foto als je die wilt bewerken.",
-  photoEditPrompt: "Foto ontvangen. Wat wil je aanpassen?",
-  editImagePrompt: "Wat wil je aanpassen?",
+  photoEditPrompt:
+    "Foto ontvangen. Beschrijf wat je aan de foto wilt aanpassen.",
+  editImagePrompt: "Beschrijf wat je aan de afbeelding wilt aanpassen.",
+  newImagePrompt: "Beschrijf de nieuwe afbeelding die je wilt maken.",
+  changeBackground: "Andere achtergrond",
+  changeBackgroundPrompt:
+    "Beschrijf de nieuwe achtergrond. Ik gebruik de huidige afbeelding.",
+  changeBackgroundRequiresPhoto:
+    "Stuur eerst een bruikbare bronfoto via de fotoknop of camera, niet als bestand of bijlage. Daarna vraag ik welke achtergrond je wilt.",
   screenshotClarifyPrompt: "Ik zag een screenshot — wat wil je daar precies mee doen?",
   screenshotIntentContinuation: "Top, dit is een screenshot. Ik werk dit meteen volgens je eerdere bedoeling af.",
   whatIsThis: "Wat doe ik?",
@@ -62,7 +76,8 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     success: "Klaar.",
     processingBlocked: "Even geduld, je vorige afbeelding is bijna klaar.",
     inFlightMessage: "Even geduld, ik ben nog bezig met je afbeelding.",
-    editRequiresPhoto: "Stuur eerst de foto die je wilt bewerken.",
+    editRequiresPhoto:
+      "Stuur eerst een bruikbare foto via de fotoknop of camera, niet als bestand of bijlage.",
     textWithoutPhoto:
       "Beschrijf welke afbeelding je wilt maken, of stuur een foto als je die wilt bewerken.",
     privacy: ({ link }) =>
@@ -75,7 +90,13 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Leaderbot is gemaakt door Andy. Je mag hem gerust contacteren via Facebook.\nVolledige naam op vraag: Andy Arijs.",
     failure: "Oeps. Probeer opnieuw of beschrijf een nieuwe afbeelding.",
     missingInputImage:
-      "Ik kon je foto niet goed lezen. Stuur ze nog eens door aub.",
+      "Ik kon je foto niet goed lezen. Stuur opnieuw een gewone foto als afbeelding. Daarna vraag ik wat je wilt aanpassen.",
+    missingInputImageWithEditableImage:
+      "Ik kon die foto niet goed lezen. Beschrijf wat je aan de huidige afbeelding wilt aanpassen, of stuur opnieuw een gewone foto als je een andere bronfoto wilt gebruiken.",
+    messengerMissingInputImage:
+      "Ik kon deze upload niet lezen. Gebruik de fotoknop of camera in Messenger en stuur de foto als foto, niet als bestand of bijlage. Wil je zonder foto verder, kies Nieuwe afbeelding.",
+    messengerMissingInputImageWithEditableImage:
+      "Ik kon deze upload niet lezen. Ik kan nog verder met je huidige afbeelding: beschrijf de aanpassing, of gebruik de fotoknop/camera in Messenger als je een andere bronfoto wilt sturen.",
     generatingImagePrompt: "Ik maak nu je afbeelding.",
     generationQueued:
       "Ik zet je afbeelding in de wachtrij en stuur ze zodra ze klaar is.",
@@ -99,8 +120,15 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
   en: {
     flowExplanation:
       "Describe the image you want to make, or send a photo if you want me to edit it.",
-    photoEditPrompt: "Photo received. What should I change?",
-    editImagePrompt: "What should I change?",
+    photoEditPrompt:
+      "Photo received. Describe what you want me to change in the photo.",
+    editImagePrompt: "Describe what you want me to change in the image.",
+    newImagePrompt: "Describe the new image you want me to create.",
+    changeBackground: "Different background",
+    changeBackgroundPrompt:
+      "Describe the new background. I will use the current image.",
+    changeBackgroundRequiresPhoto:
+      "Send a usable source photo with the photo button or camera first, not as a file attachment. Then I will ask what background you want.",
     screenshotClarifyPrompt: "I see a screenshot — what do you want to do with it?",
     screenshotIntentContinuation: "Got it, this is a screenshot. I’ll apply your previous request now.",
     whatIsThis: "What is this?",
@@ -114,7 +142,8 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     success: "Done.",
     processingBlocked: "One sec, your previous image is almost done.",
     inFlightMessage: "One sec, I am still working on your image.",
-    editRequiresPhoto: "Send the photo you want me to edit first.",
+    editRequiresPhoto:
+      "Send a usable photo with the photo button or camera first, not as a file attachment.",
     textWithoutPhoto:
       "Describe the image you want to make, or send a photo if you want me to edit it.",
     privacy: ({ link }) =>
@@ -127,7 +156,13 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Leaderbot was made by Andy. Feel free to contact him via Facebook.\nFull name on request: Andy Arijs.",
     failure: "Oops. Try again or describe a new image.",
     missingInputImage:
-      "I could not read your photo properly. Please send it again.",
+      "I could not read your photo properly. Please send a normal photo image again. Then I will ask what you want to change.",
+    missingInputImageWithEditableImage:
+      "I could not read that photo properly. Describe what you want to change in the current image, or send a normal photo image again if you want to use a different source photo.",
+    messengerMissingInputImage:
+      "I could not read this upload. Use the photo button or camera in Messenger and send it as a photo, not as a file attachment. To continue without a photo, choose New image.",
+    messengerMissingInputImageWithEditableImage:
+      "I could not read this upload. I can still use your current image: describe the change, or use the photo button/camera in Messenger if you want to send a different source photo.",
     generatingImagePrompt: "I am making your image now.",
     generationQueued:
       "I queued your image and will send it as soon as it is ready.",

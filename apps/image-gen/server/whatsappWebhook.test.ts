@@ -171,8 +171,9 @@ describe("whatsapp webhook flow", () => {
         t("nl", "assistantQuickActions"),
         "",
         "1. Pas aan",
-        "2. Nieuwe afbeelding",
-        "3. Privacy",
+        "2. Andere achtergrond",
+        "3. Nieuwe afbeelding",
+        "4. Privacy",
       ].join("\n")
     );
   });
@@ -213,7 +214,7 @@ describe("whatsapp webhook flow", () => {
           from: "wa-user-action-input",
           timestamp: "1710000013",
           type: "text",
-          text: { body: "3" },
+          text: { body: "4" },
         })
       );
 
@@ -278,8 +279,9 @@ describe("whatsapp webhook flow", () => {
             t("nl", "assistantQuickActions"),
             "",
             "1. Pas aan",
-            "2. Nieuwe afbeelding",
-            "3. Privacy",
+            "2. Andere achtergrond",
+            "3. Nieuwe afbeelding",
+            "4. Privacy",
           ].join("\n")
         );
       } finally {
@@ -341,12 +343,12 @@ describe("whatsapp webhook flow", () => {
 
     await processWhatsAppWebhookPayload(
       createWhatsAppPayload({
-        from: "wa-user-7",
-        timestamp: "1710000013",
-        type: "text",
-        text: { body: "3" },
-      })
-    );
+          from: "wa-user-7",
+          timestamp: "1710000013",
+          type: "text",
+          text: { body: "3" },
+        })
+      );
 
     expect(sendWhatsAppTextMock).toHaveBeenCalledWith(
       "wa-user-7",

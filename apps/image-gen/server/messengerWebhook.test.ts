@@ -1,4 +1,4 @@
-﻿import {
+import {
   afterAll,
   afterEach,
   beforeAll,
@@ -848,7 +848,7 @@ describe("messenger webhook dedupe", () => {
     ).toBe(false);
     expect(sendTextMock).toHaveBeenCalledWith(
       "internal-visual-correction-without-image-user",
-      "Stuur eerst de foto die je wilt bewerken."
+      t("nl", "editRequiresPhoto")
     );
     expect(sendImageMock).not.toHaveBeenCalled();
   });
@@ -935,7 +935,7 @@ describe("messenger webhook dedupe", () => {
 
     expect(sendTextMock).toHaveBeenCalledWith(
       "internal-restyle-without-photo-user",
-      "Stuur eerst de foto die je wilt bewerken."
+      t("nl", "editRequiresPhoto")
     );
     expect(sendImageMock).not.toHaveBeenCalled();
   });
@@ -1429,7 +1429,7 @@ describe("messenger webhook dedupe", () => {
         {
           content_type: "text",
           title: "Nieuwe afbeelding",
-          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+          payload: "OPENCLAW_ACTION:new_image",
         },
         {
           content_type: "text",
@@ -1506,8 +1506,13 @@ describe("messenger deterministic free text", () => {
         },
         {
           content_type: "text",
+          title: "Andere achtergrond",
+          payload: "OPENCLAW_ACTION:change_background",
+        },
+        {
+          content_type: "text",
           title: "Nieuwe afbeelding",
-          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+          payload: "OPENCLAW_ACTION:new_image",
         },
         { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
       ]
@@ -1678,7 +1683,7 @@ describe("messenger deterministic free text", () => {
 
     expect(sendTextMock).toHaveBeenLastCalledWith(
       "reply-action-user",
-      t("nl", "textWithoutPhoto")
+      t("nl", "newImagePrompt")
     );
     expect(getState(anonymizePsid("reply-action-user"))?.lastPhotoUrl).toBeNull();
   });
@@ -2243,7 +2248,7 @@ describe("messenger deterministic free text", () => {
         {
           content_type: "text",
           title: "Nieuwe afbeelding",
-          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+          payload: "OPENCLAW_ACTION:new_image",
         },
         {
           content_type: "text",
@@ -2297,7 +2302,7 @@ describe("messenger greeting behavior", () => {
         {
           content_type: "text",
           title: "Nieuwe afbeelding",
-          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+          payload: "OPENCLAW_ACTION:new_image",
         },
         {
           content_type: "text",
@@ -2319,7 +2324,7 @@ describe("messenger greeting behavior", () => {
               message: {
                 mid: "mid-action-input-1",
                 quick_reply: {
-                  payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+                  payload: "OPENCLAW_ACTION:new_image",
                 },
               },
             },
@@ -2331,7 +2336,68 @@ describe("messenger greeting behavior", () => {
     expect(sendQuickRepliesMock).not.toHaveBeenCalled();
     expect(sendTextMock).toHaveBeenCalledWith(
       "action-input-user",
-      t("nl", "textWithoutPhoto")
+      t("nl", "newImagePrompt")
+    );
+  });
+
+  it("routes stable background action clicks into background-edit state", async () => {
+    const psid = "background-action-user";
+    const userId = anonymizePsid(psid);
+    setLastGenerated(userId, "https://img.example/generated.jpg");
+    sendTextMock.mockClear();
+
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: psid },
+              message: {
+                mid: "mid-background-action",
+                quick_reply: {
+                  payload: "OPENCLAW_ACTION:change_background",
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(getState(userId)?.stage).toBe("AWAITING_EDIT_PROMPT");
+    expect(sendTextMock).toHaveBeenCalledWith(
+      psid,
+      t("nl", "changeBackgroundPrompt")
+    );
+  });
+
+  it("routes legacy background label clicks as explicit UI intent", async () => {
+    const psid = "background-label-action-user";
+    const userId = anonymizePsid(psid);
+    sendTextMock.mockClear();
+
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: psid },
+              message: {
+                mid: "mid-background-label-action",
+                quick_reply: {
+                  payload: "OPENCLAW_ACTION:Andere%20achtergrond",
+                },
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(getState(userId)?.stage).toBe("AWAITING_PHOTO");
+    expect(sendTextMock).toHaveBeenCalledWith(
+      psid,
+      t("nl", "changeBackgroundRequiresPhoto")
     );
   });
 
@@ -2346,7 +2412,7 @@ describe("messenger greeting behavior", () => {
               message: {
                 mid: "mid-quick-start-action",
                 quick_reply: {
-                  payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+                  payload: "OPENCLAW_ACTION:new_image",
                 },
               },
             },
@@ -2357,14 +2423,14 @@ describe("messenger greeting behavior", () => {
 
     expect(sendTextMock).toHaveBeenCalledWith(
       "quick-start-action-user",
-      t("nl", "textWithoutPhoto")
+      t("nl", "newImagePrompt")
     );
   });
 
   it("offers follow-up quick actions when state is RESULT_READY", async () => {
     const psid = "result-user";
     const userId = anonymizePsid(psid);
-    setFlowState(userId, "RESULT_READY");
+    setLastGenerated(userId, "https://img.example/result.jpg");
 
     await processFacebookWebhookPayload({
       entry: [
@@ -2383,12 +2449,17 @@ describe("messenger greeting behavior", () => {
       {
         content_type: "text",
         title: "Nieuwe afbeelding",
-        payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+        payload: "OPENCLAW_ACTION:new_image",
       },
       {
         content_type: "text",
         title: "Pas aan",
         payload: "OPENCLAW_ACTION:Pas%20aan",
+      },
+      {
+        content_type: "text",
+        title: "Andere achtergrond",
+        payload: "OPENCLAW_ACTION:change_background",
       },
       { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
     ]);
@@ -2408,7 +2479,7 @@ describe("messenger greeting behavior", () => {
               sender: { id: psid },
               message: {
                 mid: "mid-new-image-action",
-                quick_reply: { payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding" },
+                quick_reply: { payload: "OPENCLAW_ACTION:new_image" },
               },
             },
           ],
@@ -2419,7 +2490,7 @@ describe("messenger greeting behavior", () => {
     const state = getState(userId);
     expect(state?.lastPhotoUrl).toBeNull();
     expect(state?.stage).toBe("IDLE");
-    expect(sendTextMock).toHaveBeenCalledWith(psid, t("nl", "textWithoutPhoto"));
+    expect(sendTextMock).toHaveBeenCalledWith(psid, t("nl", "newImagePrompt"));
   });
 
   it("offers retry actions when state is FAILURE", async () => {
@@ -2447,7 +2518,7 @@ describe("messenger greeting behavior", () => {
         {
           content_type: "text",
           title: "Nieuwe afbeelding",
-          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+          payload: "OPENCLAW_ACTION:new_image",
         },
       ]
     );
@@ -2690,8 +2761,13 @@ describe("disabled bot features stay out of the runtime flow", () => {
         },
         {
           content_type: "text",
+          title: "Andere achtergrond",
+          payload: "OPENCLAW_ACTION:change_background",
+        },
+        {
+          content_type: "text",
           title: "Nieuwe afbeelding",
-          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+          payload: "OPENCLAW_ACTION:new_image",
         },
         {
           content_type: "text",

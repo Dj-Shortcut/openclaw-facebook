@@ -45,8 +45,14 @@ vi.mock("./_core/webhookTextMessageRouter", () => ({
 }));
 
 import { tryHandleImageMessage } from "./_core/webhookImageMessageRouter";
-import { resetStateStore } from "./_core/messengerState";
+import {
+  getState,
+  resetStateStore,
+  setFlowState,
+  setLastGenerated,
+} from "./_core/messengerState";
 import type { HandlerContext } from "./_core/webhookHandlerTypes";
+import { t } from "./_core/i18n";
 
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
 
@@ -121,6 +127,17 @@ describe("webhook image message router", () => {
       psidHash: expect.stringMatching(/^[a-f0-9]{12}$/),
       reqId: "req-image-router",
     });
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_image_message_parsed",
+      expect.objectContaining({
+        attachmentType: "image",
+        attachmentHostname: "example.com",
+        attachmentPayloadUrl: {
+          host: "example.com",
+          shortHash: expect.stringMatching(/^[a-f0-9]{12}$/),
+        },
+      })
+    );
     expect(handleTextMessageMock).toHaveBeenCalledWith(ctx, {
       psid: "image-router-user",
       userId: "image-router-user-key",
@@ -130,5 +147,90 @@ describe("webhook image message router", () => {
       timestamp: 1730000000000,
     });
     expect(ctx.sendPhotoReceivedPrompt).not.toHaveBeenCalled();
+  });
+
+  it("preserves the editable image context when an inbound image cannot be read", async () => {
+    const ctx = makeHandlerContext();
+    const psid = "image-router-failed-upload-user";
+    normalizeMessengerInboundImageMock.mockResolvedValueOnce(null);
+    await Promise.resolve(
+      setLastGenerated(psid, "https://assets.example/current.jpg")
+    );
+    await Promise.resolve(setFlowState(psid, "AWAITING_EDIT_PROMPT"));
+
+    await expect(
+      tryHandleImageMessage(ctx, {
+        psid,
+        userId: "image-router-failed-upload-key",
+        reqId: "req-image-router-failed-upload",
+        lang: "nl",
+        attachments: [
+          {
+            type: "image",
+            payload: {
+              url: "https://example.com/unreadable.jpg",
+            },
+          },
+        ],
+        timestamp: 1730000000000,
+      })
+    ).resolves.toBe(true);
+
+    expect(ctx.sendLoggedActions).toHaveBeenCalledWith(
+      psid,
+      t("nl", "messengerMissingInputImageWithEditableImage"),
+      [
+        {
+          id: "change_background",
+          label: "Andere achtergrond",
+          inputText: "change_background",
+        },
+        { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
+      ],
+      "req-image-router-failed-upload"
+    );
+    expect(await Promise.resolve(getState(psid))).toMatchObject({
+      stage: "AWAITING_EDIT_PROMPT",
+      state: "AWAITING_EDIT_PROMPT",
+      lastGeneratedUrl: "https://assets.example/current.jpg",
+      lastImageUrl: "https://assets.example/current.jpg",
+    });
+  });
+
+  it("guides unreadable first-photo uploads away from the same attachment loop", async () => {
+    const ctx = makeHandlerContext();
+    const psid = "image-router-first-upload-fail-user";
+    normalizeMessengerInboundImageMock.mockResolvedValueOnce(null);
+
+    await expect(
+      tryHandleImageMessage(ctx, {
+        psid,
+        userId: "image-router-first-upload-fail-key",
+        reqId: "req-image-router-first-upload-fail",
+        lang: "nl",
+        attachments: [
+          {
+            type: "image",
+            payload: {
+              url: "https://example.com/unreadable-first.jpg",
+            },
+          },
+        ],
+        timestamp: 1730000000000,
+      })
+    ).resolves.toBe(true);
+
+    expect(ctx.sendLoggedActions).toHaveBeenCalledWith(
+      psid,
+      t("nl", "messengerMissingInputImage"),
+      [{ id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" }],
+      "req-image-router-first-upload-fail"
+    );
+    expect(await Promise.resolve(getState(psid))).toMatchObject({
+      stage: "AWAITING_PHOTO",
+      state: "AWAITING_PHOTO",
+      lastGeneratedUrl: null,
+      lastPhotoUrl: null,
+    });
   });
 });

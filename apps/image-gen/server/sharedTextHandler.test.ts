@@ -62,7 +62,7 @@ describe("sharedTextHandler", () => {
       response: {
         text: t("nl", "flowExplanation"),
         actions: [
-          { id: "new_image", label: "Nieuwe afbeelding", inputText: "Nieuwe afbeelding" },
+          { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
           { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
           { id: "privacy", label: "Privacy", inputText: "Privacy" },
         ],
@@ -102,7 +102,7 @@ describe("sharedTextHandler", () => {
       response: {
         text: t("nl", "flowExplanation"),
         actions: [
-          { id: "new_image", label: "Nieuwe afbeelding", inputText: "Nieuwe afbeelding" },
+          { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
           { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
           { id: "privacy", label: "Privacy", inputText: "Privacy" },
         ],
@@ -110,7 +110,7 @@ describe("sharedTextHandler", () => {
     });
   });
 
-  it("returns result follow-up choices as conversation actions", async () => {
+  it("does not offer image-edit actions for stale result state without an image", async () => {
     const result = await handleSharedTextMessage({
       message: {
         channel: "messenger",
@@ -134,14 +134,50 @@ describe("sharedTextHandler", () => {
 
     expect(result).toEqual({
       response: {
+        text: t("nl", "flowExplanation"),
+        actions: [
+          { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
+          { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
+          { id: "privacy", label: "Privacy", inputText: "Privacy" },
+        ],
+      },
+    });
+  });
+
+  it("returns result follow-up edit choices only when a current image exists", async () => {
+    const result = await handleSharedTextMessage({
+      message: {
+        channel: "messenger",
+        senderId: "psid-result-image",
+        userId: "user-key-result-image",
+        messageType: "text",
+        textBody: "Hey",
+      },
+      reqId: "req-result-image",
+      lang: "nl",
+      getState: async () =>
+        createState({
+          psid: "psid-result-image",
+          userKey: "user-key-result-image",
+          stage: "RESULT_READY",
+          state: "RESULT_READY",
+          hasSeenIntro: true,
+          lastGeneratedUrl: "https://img.example/result.jpg",
+        }),
+      setFlowState: async () => {},
+    });
+
+    expect(result).toEqual({
+      response: {
         text: t("nl", "success"),
         actions: [
-          {
-            id: "new_image",
-            label: "Nieuwe afbeelding",
-            inputText: "Nieuwe afbeelding",
-          },
+          { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
           { id: "edit_photo", label: "Pas aan", inputText: "Pas aan" },
+          {
+            id: "change_background",
+            label: "Andere achtergrond",
+            inputText: "change_background",
+          },
           { id: "privacy", label: "Privacy", inputText: "Privacy" },
         ],
       },
@@ -212,7 +248,7 @@ describe("sharedTextHandler", () => {
           {
             id: "new_image",
             label: "Nieuwe afbeelding",
-            inputText: "Nieuwe afbeelding",
+            inputText: "new_image",
           },
         ],
       },
@@ -270,7 +306,12 @@ describe("sharedTextHandler", () => {
         text: t("en", "assistantQuickActions"),
         actions: [
           { id: "edit_photo", label: "Edit image", inputText: "Edit image" },
-          { id: "new_image", label: "New image", inputText: "New image" },
+          {
+            id: "change_background",
+            label: "Different background",
+            inputText: "change_background",
+          },
+          { id: "new_image", label: "New image", inputText: "new_image" },
           { id: "privacy", label: "Privacy", inputText: "Privacy" },
         ],
       },
@@ -306,7 +347,12 @@ describe("sharedTextHandler", () => {
         text: t("nl", "assistantQuickActions"),
         actions: [
           { id: "edit_photo", label: "Pas aan", inputText: "Pas aan" },
-          { id: "new_image", label: "Nieuwe afbeelding", inputText: "Nieuwe afbeelding" },
+          {
+            id: "change_background",
+            label: "Andere achtergrond",
+            inputText: "change_background",
+          },
+          { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
           { id: "privacy", label: "Privacy", inputText: "Privacy" },
         ],
       },
@@ -342,7 +388,7 @@ describe("sharedTextHandler", () => {
       response: {
         text: t("en", "flowExplanation"),
         actions: [
-          { id: "new_image", label: "New image", inputText: "New image" },
+          { id: "new_image", label: "New image", inputText: "new_image" },
           { id: "edit_photo", label: "Edit photo", inputText: "Edit photo" },
           { id: "privacy", label: "Privacy", inputText: "Privacy" },
         ],
@@ -383,7 +429,12 @@ describe("sharedTextHandler", () => {
         text: t("nl", "assistantQuickActions"),
         actions: [
           { id: "edit_photo", label: "Pas aan", inputText: "Pas aan" },
-          { id: "new_image", label: "Nieuwe afbeelding", inputText: "Nieuwe afbeelding" },
+          {
+            id: "change_background",
+            label: "Andere achtergrond",
+            inputText: "change_background",
+          },
+          { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
           { id: "privacy", label: "Privacy", inputText: "Privacy" },
         ],
       },

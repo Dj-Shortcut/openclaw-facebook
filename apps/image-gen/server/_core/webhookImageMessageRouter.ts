@@ -8,7 +8,9 @@ import {
   getStoredMessengerImageDecision,
   normalizeMessengerInboundImage,
 } from "./messengerImageIngress";
+import { buildImageUploadFailureResponse } from "./conversationActions";
 import { getBotFeatures } from "./bot/features";
+import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import { handleTextMessage } from "./webhookTextMessageRouter";
 import { runScreenshotIntentContinuation } from "./screenshotIntentContinuation";
 import {
@@ -20,7 +22,6 @@ import {
 } from "./imageIntent";
 import {
   anonymizePsid,
-  clearPendingImageState,
   getOrCreateState,
   setPendingScreenshotIntentContinuation,
   setFlowState,
@@ -194,10 +195,16 @@ function logParsedImageMessage(
 ): void {
   const psidHash = anonymizePsid(input.psid).slice(0, 12);
   const attachmentHostname = ctx.getAttachmentHostname(inboundImageUrl);
+  const attachmentType = input.attachments?.find(
+    att => att.type === "image" && att.payload?.url === inboundImageUrl
+  )?.type;
+  const attachmentPayloadUrl = summarizeSensitiveUrl(inboundImageUrl);
   safeLog("messenger_image_message_parsed", {
     reqId: input.reqId,
     psidHash,
+    attachmentType,
     attachmentHostname,
+    attachmentPayloadUrl,
   });
   ctx.debugWebhookLog({
     level: "debug",
@@ -205,7 +212,9 @@ function logParsedImageMessage(
     reqId: input.reqId,
     psidHash,
     hasAttachments: !!input.attachments,
+    attachmentType,
     attachmentHostname,
+    attachmentPayloadUrl,
   });
 }
 
@@ -224,11 +233,22 @@ async function handleMissingStoredImage(
   ctx: HandlerContext,
   input: ImageMessageInput
 ): Promise<void> {
-  await clearPendingImageState(input.psid);
-  await setFlowState(input.psid, "AWAITING_PHOTO");
-  await ctx.sendLoggedText(
+  const state = await getOrCreateState(input.psid);
+  const hasEditableImage = Boolean(
+    state.lastPhotoUrl ??
+      state.lastPhoto ??
+      state.lastGeneratedUrl ??
+      state.lastImageUrl
+  );
+  await setFlowState(
     input.psid,
-    t(input.lang, "missingInputImage"),
+    hasEditableImage ? "AWAITING_EDIT_PROMPT" : "AWAITING_PHOTO"
+  );
+  const response = buildImageUploadFailureResponse(input.lang, hasEditableImage);
+  await ctx.sendLoggedActions(
+    input.psid,
+    response.text ?? "",
+    response.actions ?? [],
     input.reqId
   );
 }

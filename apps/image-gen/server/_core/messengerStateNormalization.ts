@@ -67,6 +67,7 @@ export function createDefaultState(
     lastVariantCursor: undefined,
     pendingConversationActions: undefined,
     pendingConversationActionsByMessageId: undefined,
+    pendingEditIntent: null,
     quota: {
       dayKey: getDayKey(now),
       count: 0,
@@ -203,6 +204,16 @@ function resolveQuotaState(
   };
 }
 
+function resolvePendingEditIntent(
+  ctx: NormalizationCtx
+): Pick<MessengerUserState, "pendingEditIntent"> {
+  const { value, fallback } = ctx;
+
+  return {
+    pendingEditIntent: value?.pendingEditIntent ?? fallback.pendingEditIntent,
+  };
+}
+
 function applyNormalizedStateShape(
   value: PartialState | null | undefined,
   base: StateNormalizationBase,
@@ -224,6 +235,7 @@ function applyNormalizedStateShape(
     ...resolvePhotoAndStyleState(ctx, { lastPhoto }),
     ...resolveGeneratedImageState(ctx, lastGeneratedUrl),
     ...resolveSourceImageState(ctx),
+    ...resolvePendingEditIntent(ctx),
     quota: resolveQuotaState(ctx),
     updatedAt: value?.updatedAt ?? fallback.updatedAt,
   };

@@ -96,6 +96,15 @@ function isProtectedRuntimeDirectory(directory) {
   }
   const parts = relative.split(path.sep);
   const lastIndex = parts.length - 1;
+  if (
+    parts[lastIndex] === "templates" &&
+    parts[lastIndex - 1] === "agents" &&
+    parts[lastIndex - 2] === "src" &&
+    parts[lastIndex - 3] === "openclaw"
+  ) {
+    return true;
+  }
+
   return (
     parts[lastIndex] === "doc" &&
     parts[lastIndex - 1] === "dist" &&

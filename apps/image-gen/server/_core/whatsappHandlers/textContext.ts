@@ -4,6 +4,7 @@ import { getTodayRuntimeStats } from "../botRuntimeStats";
 import {
   clearPendingImageState,
   setFlowState,
+  setPendingEditIntent,
 } from "../messengerState";
 import { toLogUser } from "../privacy";
 import { createWhatsAppResponseSender } from "../whatsappResponseService";
@@ -50,6 +51,8 @@ function createWhatsAppTextContext(
     sendActions: sender.sendActions,
     setFlowState: nextState =>
       Promise.resolve(setFlowState(event.senderId, nextState)),
+    setPendingEditIntent: intent =>
+      Promise.resolve(setPendingEditIntent(event.senderId, intent)),
     clearImageContext: () =>
       Promise.resolve(clearPendingImageState(event.senderId)).then(() => undefined),
     runImageGeneration: (sourceImageUrl, promptHint, generationKind) =>

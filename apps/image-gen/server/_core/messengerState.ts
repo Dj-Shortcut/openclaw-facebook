@@ -28,6 +28,7 @@ export type QuotaState = {
 };
 
 export type SourceImageOrigin = "external" | "stored";
+export type PendingEditIntent = "change_background";
 
 export type MessengerUserState = {
   psid: string;
@@ -62,6 +63,7 @@ export type MessengerUserState = {
   lastVariantCursor?: number;
   pendingConversationActions?: ConversationAction[];
   pendingConversationActionsByMessageId?: Record<string, ConversationAction[]>;
+  pendingEditIntent?: PendingEditIntent | null;
   quota: QuotaState;
   updatedAt: number;
 };
@@ -116,6 +118,24 @@ export function setFlowState(psid: string, nextState: MessengerFlowState): Maybe
     stage: nextState,
     state: nextState,
   });
+
+  if (isPromiseLike(result)) {
+    return result.then(() => undefined);
+  }
+}
+
+export function setPendingEditIntent(
+  psid: string,
+  intent: PendingEditIntent | null,
+  now = Date.now()
+): MaybePromise<void> {
+  const result = patchState(
+    psid,
+    {
+      pendingEditIntent: intent,
+    },
+    now
+  );
 
   if (isPromiseLike(result)) {
     return result.then(() => undefined);
@@ -201,6 +221,7 @@ export function setPendingImage(
       lastGeneratedUrl: null,
       pendingImageUrl: imageUrl,
       pendingImageAt: now,
+      pendingEditIntent: null,
       stage: "AWAITING_EDIT_PROMPT",
       state: "AWAITING_EDIT_PROMPT",
     },
@@ -370,6 +391,7 @@ export function clearPendingImageState(psid: string, now = Date.now()): MaybePro
       pendingImageUrl: undefined,
       pendingImageAt: undefined,
       pendingScreenshotIntentContinuation: undefined,
+      pendingEditIntent: null,
     },
     now,
   );
@@ -476,6 +498,7 @@ export function setLastGenerated(psid: string, resultImageUrl: string, now = Dat
       lastImageUrl: resultImageUrl,
       lastGeneratedUrl: resultImageUrl,
       lastGeneratedAt: now,
+      pendingEditIntent: null,
       stage: "RESULT_READY",
       state: "RESULT_READY",
     },
