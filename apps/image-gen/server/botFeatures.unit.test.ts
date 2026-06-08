@@ -470,6 +470,7 @@ describe("imageRequestFeature", () => {
 
   it("does not reuse source image for background intent when not in edit-prompt flow", async () => {
     const runImageGeneration = vi.fn(async () => undefined);
+    const setPendingEditIntent = vi.fn(async () => undefined);
 
     const result = await imageRequestFeature.onText?.(
       makeContext({
@@ -478,6 +479,7 @@ describe("imageRequestFeature", () => {
         normalizedText: "maak een nieuwe avatar van een draak",
         hasPhoto: true,
         runImageGeneration,
+        setPendingEditIntent,
         state: makeState({
           pendingEditIntent: "change_background",
           lastGeneratedUrl: "https://img.example/generated.jpg",
@@ -492,6 +494,7 @@ describe("imageRequestFeature", () => {
       "Maak een nieuwe avatar van een draak",
       "text_to_image"
     );
+    expect(setPendingEditIntent).toHaveBeenCalledWith(null);
   });
 });
 

@@ -42,7 +42,10 @@ function shouldUseExistingImageContext(ctx: BotTextContext, text: string): boole
 }
 
 function getPromptHint(ctx: BotTextContext, text: string): string {
-  if (ctx.state.pendingEditIntent === "change_background") {
+  if (
+    ctx.state.stage === "AWAITING_EDIT_PROMPT" &&
+    ctx.state.pendingEditIntent === "change_background"
+  ) {
     return `Change the background to: ${text}`;
   }
 
@@ -76,6 +79,13 @@ export const imageRequestFeature: BotFeature = {
         "source_image_edit"
       );
       return { handled: true };
+    }
+
+    if (
+      ctx.state.pendingEditIntent === "change_background" &&
+      ctx.setPendingEditIntent
+    ) {
+      await ctx.setPendingEditIntent(null);
     }
 
     await ctx.runImageGeneration(
