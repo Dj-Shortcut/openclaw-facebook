@@ -156,8 +156,8 @@ export function extractMessengerInboundMessages(
       }
       const text = event.message?.text?.trim();
       const payload = event.message?.quick_reply?.payload?.trim() ?? event.postback?.payload?.trim();
-      const attachments = extractMessengerAttachmentUrls(event);
-      if (!text && !payload && attachments.length === 0) {
+      const hasAttachments = (event.message?.attachments?.length ?? 0) > 0;
+      if (!text && !payload && !hasAttachments) {
         continue;
       }
       messages.push(event);

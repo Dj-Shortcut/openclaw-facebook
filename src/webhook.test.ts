@@ -70,6 +70,34 @@ describe("extractMessengerInboundMessages", () => {
     ]);
   });
 
+  it("keeps image-only Page messages even when payload.url is missing", () => {
+    const messages = extractMessengerInboundMessages({
+      object: "page",
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: "psid-1" },
+              recipient: { id: "page-1" },
+              message: {
+                mid: "m1",
+                attachments: [
+                  {
+                    type: "image",
+                    payload: {},
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(messages).toHaveLength(1);
+    expect(extractMessengerAttachmentUrls(messages[0]!)).toEqual([]);
+  });
+
   it("keeps audio-only Page messages", () => {
     const messages = extractMessengerInboundMessages({
       object: "page",

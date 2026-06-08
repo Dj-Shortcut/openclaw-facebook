@@ -440,6 +440,7 @@ Included:
 - Meta app webhook verification;
 - webhook signature validation;
 - Page access token based text replies;
+- inbound Messenger media attachment ingestion for DM events;
 - pairing, allowlist, open, and disabled DM policies;
 - multi-page account config.
 
@@ -448,7 +449,7 @@ Not included:
 - Instagram DMs;
 - Facebook Page comment handling;
 - Meta Private Replies/comment-to-DM flows;
-- attachments, templates, quick replies, or media messages;
+- generic attachments, templates, quick replies, or media messages;
 - automatic Page subscription setup;
 - generic Meta platform routing.
 
