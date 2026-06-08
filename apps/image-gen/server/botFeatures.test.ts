@@ -87,7 +87,7 @@ describe("bot features", () => {
       psid,
       t("nl", "flowExplanation"),
       expect.arrayContaining([
-        expect.objectContaining({ payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding" }),
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:new_image" }),
         expect.objectContaining({ payload: "OPENCLAW_ACTION:Pas%20foto%20aan" }),
         expect.objectContaining({ payload: "OPENCLAW_ACTION:Privacy" }),
       ])
@@ -114,7 +114,7 @@ describe("bot features", () => {
       psid,
       t("nl", "flowExplanation"),
       expect.arrayContaining([
-        expect.objectContaining({ payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding" }),
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:new_image" }),
         expect.objectContaining({ payload: "OPENCLAW_ACTION:Pas%20foto%20aan" }),
         expect.objectContaining({ payload: "OPENCLAW_ACTION:Privacy" }),
       ])
@@ -141,7 +141,7 @@ describe("bot features", () => {
       psid,
       t("nl", "flowExplanation"),
       expect.arrayContaining([
-        expect.objectContaining({ payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding" }),
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:new_image" }),
         expect.objectContaining({ payload: "OPENCLAW_ACTION:Pas%20foto%20aan" }),
         expect.objectContaining({ payload: "OPENCLAW_ACTION:Privacy" }),
       ])

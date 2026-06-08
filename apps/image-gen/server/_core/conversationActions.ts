@@ -8,6 +8,7 @@ import { formatFaceMemoryRetentionDays } from "./faceMemoryRetention";
 
 const CONVERSATION_ACTION_NEW_IMAGE = "new_image";
 const CONVERSATION_ACTION_EDIT_PHOTO = "edit_photo";
+const CONVERSATION_ACTION_CHANGE_BACKGROUND = "change_background";
 const CONVERSATION_ACTION_PRIVACY_INFO = "privacy";
 
 export function buildQuickStartResponse(lang: Lang): ConversationResponse {
@@ -17,7 +18,7 @@ export function buildQuickStartResponse(lang: Lang): ConversationResponse {
       {
         id: CONVERSATION_ACTION_NEW_IMAGE,
         label: t(lang, "newImage"),
-        inputText: t(lang, "newImage"),
+        inputText: CONVERSATION_ACTION_NEW_IMAGE,
       },
       {
         id: CONVERSATION_ACTION_EDIT_PHOTO,
@@ -42,12 +43,17 @@ export function buildGenerationSuccessResponse(
       {
         id: CONVERSATION_ACTION_NEW_IMAGE,
         label: t(lang, "newImage"),
-        inputText: t(lang, "newImage"),
+        inputText: CONVERSATION_ACTION_NEW_IMAGE,
       },
       {
         id: CONVERSATION_ACTION_EDIT_PHOTO,
         label: t(lang, "editImage"),
         inputText: t(lang, "editImage"),
+      },
+      {
+        id: CONVERSATION_ACTION_CHANGE_BACKGROUND,
+        label: t(lang, "changeBackground"),
+        inputText: CONVERSATION_ACTION_CHANGE_BACKGROUND,
       },
       {
         id: CONVERSATION_ACTION_PRIVACY_INFO,
@@ -68,7 +74,37 @@ export function buildGenerationFailureResponse(
       {
         id: CONVERSATION_ACTION_NEW_IMAGE,
         label: t(lang, "newImage"),
-        inputText: t(lang, "newImage"),
+        inputText: CONVERSATION_ACTION_NEW_IMAGE,
+      },
+    ],
+  };
+}
+
+export function buildImageUploadFailureResponse(
+  lang: Lang,
+  hasEditableImage: boolean
+): ConversationResponse {
+  return {
+    text: t(
+      lang,
+      hasEditableImage
+        ? "messengerMissingInputImageWithEditableImage"
+        : "messengerMissingInputImage"
+    ),
+    actions: [
+      ...(hasEditableImage
+        ? [
+            {
+              id: CONVERSATION_ACTION_CHANGE_BACKGROUND,
+              label: t(lang, "changeBackground"),
+              inputText: CONVERSATION_ACTION_CHANGE_BACKGROUND,
+            },
+          ]
+        : []),
+      {
+        id: CONVERSATION_ACTION_NEW_IMAGE,
+        label: t(lang, "newImage"),
+        inputText: CONVERSATION_ACTION_NEW_IMAGE,
       },
     ],
   };
@@ -84,9 +120,14 @@ export function buildAssistantPhotoHelpResponse(lang: Lang): ConversationRespons
         inputText: t(lang, "editImage"),
       },
       {
+        id: CONVERSATION_ACTION_CHANGE_BACKGROUND,
+        label: t(lang, "changeBackground"),
+        inputText: CONVERSATION_ACTION_CHANGE_BACKGROUND,
+      },
+      {
         id: CONVERSATION_ACTION_NEW_IMAGE,
         label: t(lang, "newImage"),
-        inputText: t(lang, "newImage"),
+        inputText: CONVERSATION_ACTION_NEW_IMAGE,
       },
       {
         id: CONVERSATION_ACTION_PRIVACY_INFO,
@@ -105,6 +146,11 @@ export function buildPhotoReceivedResponse(lang: Lang): ConversationResponse {
         id: CONVERSATION_ACTION_EDIT_PHOTO,
         label: t(lang, "editImage"),
         inputText: t(lang, "editImage"),
+      },
+      {
+        id: CONVERSATION_ACTION_CHANGE_BACKGROUND,
+        label: t(lang, "changeBackground"),
+        inputText: CONVERSATION_ACTION_CHANGE_BACKGROUND,
       },
       {
         id: CONVERSATION_ACTION_PRIVACY_INFO,

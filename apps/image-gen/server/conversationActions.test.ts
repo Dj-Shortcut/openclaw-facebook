@@ -6,6 +6,7 @@ import {
   buildQuickStartResponse,
   buildGenerationFailureResponse,
   buildGenerationSuccessResponse,
+  buildImageUploadFailureResponse,
 } from "./_core/conversationActions";
 import { renderMessengerQuickReplies } from "./_core/messengerActionRenderer";
 import { decodeMessengerActionInput } from "./_core/messengerActionPayload";
@@ -25,7 +26,7 @@ describe("conversation actions", () => {
     expect(buildQuickStartResponse("nl")).toEqual({
       text: "Beschrijf wat je wilt maken, of stuur een foto als je die wilt bewerken.",
       actions: [
-        { id: "new_image", label: "Nieuwe afbeelding", inputText: "Nieuwe afbeelding" },
+        { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
         { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
         { id: "privacy", label: "Privacy", inputText: "Privacy" },
       ],
@@ -36,8 +37,13 @@ describe("conversation actions", () => {
     expect(buildGenerationSuccessResponse("en")).toEqual({
       text: "Done.",
       actions: [
-        { id: "new_image", label: "New image", inputText: "New image" },
+        { id: "new_image", label: "New image", inputText: "new_image" },
         { id: "edit_photo", label: "Edit image", inputText: "Edit image" },
+        {
+          id: "change_background",
+          label: "Different background",
+          inputText: "change_background",
+        },
         { id: "privacy", label: "Privacy", inputText: "Privacy" },
       ],
     });
@@ -62,7 +68,12 @@ describe("conversation actions", () => {
       text: "Je afbeelding staat klaar. Wat wil je doen?",
       actions: [
         { id: "edit_photo", label: "Pas aan", inputText: "Pas aan" },
-        { id: "new_image", label: "Nieuwe afbeelding", inputText: "Nieuwe afbeelding" },
+        {
+          id: "change_background",
+          label: "Andere achtergrond",
+          inputText: "change_background",
+        },
+        { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
         { id: "privacy", label: "Privacy", inputText: "Privacy" },
       ],
     });
@@ -70,9 +81,14 @@ describe("conversation actions", () => {
 
   it("builds photo-received choices without legacy style picker actions", () => {
     expect(buildPhotoReceivedResponse("nl")).toEqual({
-      text: "Foto ontvangen. Wat wil je aanpassen?",
+      text: "Foto ontvangen. Beschrijf wat je aan de foto wilt aanpassen.",
       actions: [
         { id: "edit_photo", label: "Pas aan", inputText: "Pas aan" },
+        {
+          id: "change_background",
+          label: "Andere achtergrond",
+          inputText: "change_background",
+        },
         { id: "privacy", label: "Privacy", inputText: "Privacy" },
       ],
     });
@@ -80,15 +96,32 @@ describe("conversation actions", () => {
 
   it("renders action input as a Messenger payload that can become normal text again", () => {
     const [reply] = renderMessengerQuickReplies([
-      { id: "new_image", label: "New image", inputText: "New image" },
+      { id: "new_image", label: "New image", inputText: "new_image" },
     ]);
 
     expect(reply).toEqual({
       content_type: "text",
       title: "New image",
-      payload: "OPENCLAW_ACTION:New%20image",
+      payload: "OPENCLAW_ACTION:new_image",
     });
-    expect(decodeMessengerActionInput(reply?.payload)).toBe("New image");
+    expect(decodeMessengerActionInput(reply?.payload)).toBe("new_image");
+  });
+
+  it("renders background UI intent with a stable Messenger payload", () => {
+    const [reply] = renderMessengerQuickReplies([
+      {
+        id: "change_background",
+        label: "Andere achtergrond",
+        inputText: "change_background",
+      },
+    ]);
+
+    expect(reply).toEqual({
+      content_type: "text",
+      title: "Andere achtergrond",
+      payload: "OPENCLAW_ACTION:change_background",
+    });
+    expect(decodeMessengerActionInput(reply?.payload)).toBe("change_background");
   });
 
   it("renders id-only actions as normal text input using the action label", () => {
@@ -128,7 +161,28 @@ describe("conversation actions", () => {
     expect(buildGenerationFailureResponse("en", "Try again?")).toEqual({
       text: "Try again?",
       actions: [
-        { id: "new_image", label: "New image", inputText: "New image" },
+        { id: "new_image", label: "New image", inputText: "new_image" },
+      ],
+    });
+  });
+
+  it("builds unreadable-photo recovery with only valid next actions", () => {
+    expect(buildImageUploadFailureResponse("nl", false)).toEqual({
+      text: expect.stringContaining("fotoknop of camera in Messenger"),
+      actions: [
+        { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
+      ],
+    });
+
+    expect(buildImageUploadFailureResponse("nl", true)).toEqual({
+      text: expect.stringContaining("huidige afbeelding"),
+      actions: [
+        {
+          id: "change_background",
+          label: "Andere achtergrond",
+          inputText: "change_background",
+        },
+        { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
       ],
     });
   });
@@ -161,7 +215,7 @@ describe("conversation actions", () => {
       {
         content_type: "text",
         title: "New image",
-        payload: "OPENCLAW_ACTION:New%20image",
+        payload: "OPENCLAW_ACTION:new_image",
       },
     ]);
   });

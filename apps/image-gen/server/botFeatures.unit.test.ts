@@ -361,6 +361,33 @@ describe("imageRequestFeature", () => {
     );
   });
 
+  it("uses the current image for create-shaped text while awaiting an edit prompt", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Maak een strand bij zonsondergang",
+        normalizedText: "maak een strand bij zonsondergang",
+        hasPhoto: false,
+        runImageGeneration,
+        state: makeState({
+          stage: "AWAITING_EDIT_PROMPT",
+          state: "AWAITING_EDIT_PROMPT",
+          pendingEditIntent: "change_background",
+          lastGeneratedUrl: "https://img.example/generated.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      "https://img.example/generated.jpg",
+      "Change the background to: Maak een strand bij zonsondergang",
+      "source_image_edit"
+    );
+  });
+
   it("keeps ambiguous make-me visual requests prompt-first with generated context", async () => {
     const runImageGeneration = vi.fn(async () => undefined);
 
@@ -424,6 +451,9 @@ describe("imageRequestFeature", () => {
         hasPhoto: true,
         runImageGeneration,
         state: makeState({
+          stage: "AWAITING_EDIT_PROMPT",
+          state: "AWAITING_EDIT_PROMPT",
+          pendingEditIntent: "change_background",
           lastPhotoUrl: "https://img.example/source.jpg",
           lastPhoto: "https://img.example/source.jpg",
         }),
@@ -568,6 +598,82 @@ describe("conversationalEditingFeature", () => {
         "add sunglasses",
         "source_image_edit"
       );
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("uses awaited edit-prompt text as a deterministic source edit", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    try {
+      const result = await conversationalEditingFeature.onText?.(
+        makeContext({
+          lang: "nl",
+          messageText: "een strand bij zonsondergang",
+          normalizedText: "een strand bij zonsondergang",
+          runImageGeneration,
+          state: makeState({
+            stage: "AWAITING_EDIT_PROMPT",
+            state: "AWAITING_EDIT_PROMPT",
+            pendingEditIntent: "change_background",
+            lastGeneratedUrl: "https://img.example/generated.jpg",
+          }),
+        })
+      );
+
+      expect(result).toEqual({ handled: true });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(runImageGeneration).toHaveBeenCalledWith(
+        "https://img.example/generated.jpg",
+        "Change the background to: een strand bij zonsondergang",
+        "source_image_edit"
+      );
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = originalApiKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("leaves help commands for assistant handling while awaiting an edit prompt", async () => {
+    const originalApiKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    try {
+      const result = await conversationalEditingFeature.onText?.(
+        makeContext({
+          messageText: "help",
+          normalizedText: "help",
+          runImageGeneration,
+          state: makeState({
+            stage: "AWAITING_EDIT_PROMPT",
+            state: "AWAITING_EDIT_PROMPT",
+            lastGeneratedUrl: "https://img.example/generated.jpg",
+          }),
+        })
+      );
+
+      expect(result).toEqual({ handled: false });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(runImageGeneration).not.toHaveBeenCalled();
     } finally {
       if (originalApiKey === undefined) {
         delete process.env.OPENAI_API_KEY;
@@ -807,7 +913,7 @@ describe("assistantCommandsFeature", () => {
     expect(result).toEqual({ handled: true });
     expect(sendText).not.toHaveBeenCalled();
     expect(sendActions).toHaveBeenCalledWith(t("en", "flowExplanation"), [
-      { id: "new_image", label: "New image", inputText: "New image" },
+      { id: "new_image", label: "New image", inputText: "new_image" },
       { id: "edit_photo", label: "Edit photo", inputText: "Edit photo" },
       { id: "privacy", label: "Privacy", inputText: "Privacy" },
     ]);
@@ -822,13 +928,42 @@ describe("assistantCommandsFeature", () => {
         messageText: "help",
         hasPhoto: true,
         sendActions,
+        state: makeState({
+          lastPhotoUrl: "https://img.example/source.jpg",
+          lastPhoto: "https://img.example/source.jpg",
+        }),
       })
     );
 
     expect(result).toEqual({ handled: true });
     expect(sendActions).toHaveBeenCalledWith(t("en", "assistantQuickActions"), [
       { id: "edit_photo", label: "Edit image", inputText: "Edit image" },
-      { id: "new_image", label: "New image", inputText: "New image" },
+      {
+        id: "change_background",
+        label: "Different background",
+        inputText: "change_background",
+      },
+      { id: "new_image", label: "New image", inputText: "new_image" },
+      { id: "privacy", label: "Privacy", inputText: "Privacy" },
+    ]);
+  });
+
+  it("does not show edit actions when the image flag is stale without an editable image", async () => {
+    const sendActions = vi.fn(async () => undefined);
+
+    const result = await assistantCommandsFeature.onText?.(
+      makeContext({
+        normalizedText: "help",
+        messageText: "help",
+        hasPhoto: true,
+        sendActions,
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(sendActions).toHaveBeenCalledWith(t("en", "flowExplanation"), [
+      { id: "new_image", label: "New image", inputText: "new_image" },
+      { id: "edit_photo", label: "Edit photo", inputText: "Edit photo" },
       { id: "privacy", label: "Privacy", inputText: "Privacy" },
     ]);
   });
@@ -883,6 +1018,7 @@ describe("assistantCommandsFeature", () => {
     const sendText = vi.fn(async () => undefined);
     const setFlowState = vi.fn(async () => undefined);
     const clearImageContext = vi.fn(async () => undefined);
+    const setPendingEditIntent = vi.fn(async () => undefined);
 
     const result = await assistantCommandsFeature.onText?.(
       makeContext({
@@ -893,6 +1029,7 @@ describe("assistantCommandsFeature", () => {
         sendText,
         setFlowState,
         clearImageContext,
+        setPendingEditIntent,
         state: makeState({
           lastPhotoUrl: "https://img.example/old.jpg",
           lastPhoto: "https://img.example/old.jpg",
@@ -901,9 +1038,64 @@ describe("assistantCommandsFeature", () => {
     );
 
     expect(result).toEqual({ handled: true });
+    expect(setPendingEditIntent).toHaveBeenCalledWith(null);
     expect(clearImageContext).toHaveBeenCalledOnce();
     expect(setFlowState).toHaveBeenCalledWith("IDLE");
-    expect(sendText).toHaveBeenCalledWith(t("nl", "textWithoutPhoto"));
+    expect(sendText).toHaveBeenCalledWith(t("nl", "newImagePrompt"));
+  });
+
+  it("turns stable background action input into the background-edit prompt", async () => {
+    const sendText = vi.fn(async () => undefined);
+    const setFlowState = vi.fn(async () => undefined);
+    const setPendingEditIntent = vi.fn(async () => undefined);
+
+    const result = await assistantCommandsFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        normalizedText: "change_background",
+        messageText: "change_background",
+        hasPhoto: false,
+        sendText,
+        setFlowState,
+        setPendingEditIntent,
+        state: makeState({
+          lastGeneratedUrl: "https://img.example/generated.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(setFlowState).toHaveBeenCalledWith("AWAITING_EDIT_PROMPT");
+    expect(setPendingEditIntent).toHaveBeenCalledWith("change_background");
+    expect(sendText).toHaveBeenCalledWith(t("nl", "changeBackgroundPrompt"));
+  });
+
+  it("maps the Dutch background pill label as explicit UI intent", async () => {
+    const sendText = vi.fn(async () => undefined);
+    const setFlowState = vi.fn(async () => undefined);
+    const setPendingEditIntent = vi.fn(async () => undefined);
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await assistantCommandsFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        normalizedText: "andere achtergrond",
+        messageText: "Andere achtergrond",
+        hasPhoto: false,
+        sendText,
+        setFlowState,
+        setPendingEditIntent,
+        runImageGeneration,
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(setFlowState).toHaveBeenCalledWith("AWAITING_PHOTO");
+    expect(setPendingEditIntent).toHaveBeenCalledWith(null);
+    expect(runImageGeneration).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith(
+      t("nl", "changeBackgroundRequiresPhoto")
+    );
   });
 
   it("treats Dutch casual help requests as help commands", async () => {
@@ -924,7 +1116,7 @@ describe("assistantCommandsFeature", () => {
     expect(result).toEqual({ handled: true });
     expect(sendText).not.toHaveBeenCalled();
     expect(sendActions).toHaveBeenCalledWith(t("nl", "flowExplanation"), [
-      { id: "new_image", label: "Nieuwe afbeelding", inputText: "Nieuwe afbeelding" },
+      { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
       { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
       { id: "privacy", label: "Privacy", inputText: "Privacy" },
     ]);
@@ -954,7 +1146,12 @@ describe("assistantCommandsFeature", () => {
     expect(runImageGeneration).not.toHaveBeenCalled();
     expect(sendActions).toHaveBeenCalledWith(t("en", "assistantQuickActions"), [
       { id: "edit_photo", label: "Edit image", inputText: "Edit image" },
-      { id: "new_image", label: "New image", inputText: "New image" },
+      {
+        id: "change_background",
+        label: "Different background",
+        inputText: "change_background",
+      },
+      { id: "new_image", label: "New image", inputText: "new_image" },
       { id: "privacy", label: "Privacy", inputText: "Privacy" },
     ]);
   });
@@ -983,7 +1180,12 @@ describe("assistantCommandsFeature", () => {
     expect(runImageGeneration).not.toHaveBeenCalled();
     expect(sendActions).toHaveBeenCalledWith(t("en", "assistantQuickActions"), [
       { id: "edit_photo", label: "Edit image", inputText: "Edit image" },
-      { id: "new_image", label: "New image", inputText: "New image" },
+      {
+        id: "change_background",
+        label: "Different background",
+        inputText: "change_background",
+      },
+      { id: "new_image", label: "New image", inputText: "new_image" },
       { id: "privacy", label: "Privacy", inputText: "Privacy" },
     ]);
   });
@@ -1008,7 +1210,7 @@ describe("assistantCommandsFeature", () => {
     expect(setFlowState).not.toHaveBeenCalled();
     expect(sendText).not.toHaveBeenCalled();
     expect(sendActions).toHaveBeenCalledWith(t("en", "flowExplanation"), [
-      { id: "new_image", label: "New image", inputText: "New image" },
+      { id: "new_image", label: "New image", inputText: "new_image" },
       { id: "edit_photo", label: "Edit photo", inputText: "Edit photo" },
       { id: "privacy", label: "Privacy", inputText: "Privacy" },
     ]);

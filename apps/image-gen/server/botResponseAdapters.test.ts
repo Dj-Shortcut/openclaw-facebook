@@ -157,6 +157,41 @@ describe("botResponseAdapters", () => {
     expect(sendText).not.toHaveBeenCalled();
   });
 
+  it("maps exact background quick-reply labels to the stable UI intent", async () => {
+    const sendText = vi.fn(async () => {});
+    const sendActionPrompt = vi.fn(async () => {});
+    const text = [
+      "Wat wil je doen?",
+      "",
+      "1. Andere achtergrond",
+      "2. Nieuwe afbeelding",
+    ].join("\n");
+
+    await sendMessengerBotResponse(
+      {
+        text,
+      },
+      {
+        sendText,
+        sendActionPrompt,
+      }
+    );
+
+    expect(sendActionPrompt).toHaveBeenCalledWith("Wat wil je doen?", [
+      {
+        id: "choice_1",
+        label: "Andere achtergrond",
+        inputText: "change_background",
+      },
+      {
+        id: "choice_2",
+        label: "Nieuwe afbeelding",
+        inputText: "Maak me een Nieuwe afbeelding",
+      },
+    ]);
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
   it("keeps explicit actions like Privacy next to inferred numbered choices", async () => {
     const sendText = vi.fn(async () => {});
     const sendActionPrompt = vi.fn(async () => {});

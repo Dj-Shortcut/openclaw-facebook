@@ -158,7 +158,19 @@ function hostnameMatchesAllowedHost(
   hostname: string,
   allowedHost: string
 ): boolean {
-  return hostname === allowedHost;
+  if (hostname === allowedHost) {
+    return true;
+  }
+
+  if (allowedHost === "fbsbx.com") {
+    return hostname.endsWith(".fbsbx.com");
+  }
+
+  if (allowedHost === "scontent.xx.fbcdn.net") {
+    return /^scontent-[a-z0-9-]+\.xx\.fbcdn\.net$/u.test(hostname);
+  }
+
+  return false;
 }
 
 function extractRawPathname(sourceImageUrl: string): string {
@@ -274,11 +286,7 @@ function validateSourceImageUrlOrThrow(
     });
   }
 
-  const requestUrl = new URL(`https://${matchedAllowedHost}`);
-  requestUrl.pathname = parsedUrl.pathname;
-  requestUrl.search = parsedUrl.search;
-
-  return { url: requestUrl };
+  return { url: parsedUrl };
 }
 
 async function fetchSourceImageAttempt(

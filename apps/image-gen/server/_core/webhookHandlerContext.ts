@@ -9,6 +9,7 @@ import {
   anonymizePsid,
   clearPendingImageState,
   setFlowState,
+  setPendingEditIntent,
 } from "./messengerState";
 import { t, type Lang } from "./i18n";
 import { toLogUser } from "./privacy";
@@ -243,6 +244,12 @@ export function createHandlerContext({
         await setFlowState(psid, nextState);
         if (userId !== psid) {
           await setFlowState(userId, nextState);
+        }
+      },
+      setPendingEditIntent: async intent => {
+        await setPendingEditIntent(psid, intent);
+        if (userId !== psid) {
+          await setPendingEditIntent(userId, intent);
         }
       },
       clearImageContext: async () => {

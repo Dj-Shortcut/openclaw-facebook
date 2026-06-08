@@ -20,12 +20,32 @@ function getSourcePhotoUrl(ctx: BotTextContext): string | undefined {
 }
 
 function shouldUseExistingImageContext(ctx: BotTextContext, text: string): boolean {
+  const sourcePhotoUrl = getSourcePhotoUrl(ctx);
+  if (!sourcePhotoUrl) {
+    return false;
+  }
+
+  if (
+    ctx.state.pendingEditIntent === "change_background" &&
+    !isFreshImageRequest(text)
+  ) {
+    return true;
+  }
+
   return Boolean(
     ctx.hasPhoto &&
-      getSourcePhotoUrl(ctx) &&
+      sourcePhotoUrl &&
       referencesExistingImage(text) &&
       !isFreshImageRequest(text)
   );
+}
+
+function getPromptHint(ctx: BotTextContext, text: string): string {
+  if (ctx.state.pendingEditIntent === "change_background") {
+    return `Change the background to: ${text}`;
+  }
+
+  return text;
 }
 
 export const imageRequestFeature: BotFeature = {
@@ -51,7 +71,7 @@ export const imageRequestFeature: BotFeature = {
     if (shouldUseExistingImageContext(ctx, text)) {
       await ctx.runImageGeneration(
         getSourcePhotoUrl(ctx),
-        text,
+        getPromptHint(ctx, text),
         "source_image_edit"
       );
       return { handled: true };

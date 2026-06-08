@@ -121,7 +121,11 @@ async function tryHandleGreetingOrSmalltalk(
   }
 
   if (state.stage === "RESULT_READY") {
-    return { response: buildGenerationSuccessResponse(input.lang) };
+    return {
+      response: hasEditableImage(state)
+        ? buildGenerationSuccessResponse(input.lang)
+        : buildQuickStartResponse(input.lang),
+    };
   }
 
   if (state.stage === "FAILURE") {

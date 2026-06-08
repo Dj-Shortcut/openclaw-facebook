@@ -6,6 +6,7 @@ import type {
 import type {
   ConversationState,
   MessengerUserState,
+  PendingEditIntent,
 } from "./messengerState";
 import type { ConversationAction } from "./botResponse";
 import type { GenerationStatsSnapshot } from "./botRuntimeStats";
@@ -31,6 +32,7 @@ type BotContextBase = {
   sendImage(url: string): Promise<void>;
   sendActions(text: string, actions: ConversationAction[]): Promise<void>;
   setFlowState(state: ConversationState): Promise<void>;
+  setPendingEditIntent?(intent: PendingEditIntent | null): Promise<void>;
   clearImageContext?(): Promise<void>;
   runImageGeneration(
     sourceImageUrl?: string,

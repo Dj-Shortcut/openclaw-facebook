@@ -32,6 +32,7 @@ const SURPRISE_COMMANDS = new Set([
 ]);
 
 const NEW_IMAGE_COMMANDS = new Set([
+  "new_image",
   "new image",
   "nieuwe afbeelding",
   "nieuwe foto",
@@ -53,6 +54,12 @@ const EDIT_PHOTO_COMMANDS = new Set([
   "bewerk deze afbeelding",
   "bewerk foto",
   "bewerk deze foto",
+]);
+
+const CHANGE_BACKGROUND_COMMANDS = new Set([
+  "change_background",
+  "andere achtergrond",
+  "different background",
 ]);
 
 const PRIVACY_COMMANDS = new Set([
@@ -89,7 +96,7 @@ export const assistantCommandsFeature: BotFeature = {
   name: "assistant_commands",
   async onText(ctx) {
     if (HELP_COMMANDS.has(ctx.normalizedText)) {
-      if (ctx.hasPhoto) {
+      if (getEditableImageUrl(ctx)) {
         const response = buildAssistantPhotoHelpResponse(ctx.lang);
         await ctx.sendActions(response.text ?? "", response.actions ?? []);
       } else {
@@ -101,13 +108,29 @@ export const assistantCommandsFeature: BotFeature = {
     }
 
     if (NEW_IMAGE_COMMANDS.has(ctx.normalizedText)) {
+      await ctx.setPendingEditIntent?.(null);
       await ctx.clearImageContext?.();
       await ctx.setFlowState("IDLE");
-      await ctx.sendText(t(ctx.lang, "textWithoutPhoto"));
+      await ctx.sendText(t(ctx.lang, "newImagePrompt"));
+      return { handled: true };
+    }
+
+    if (CHANGE_BACKGROUND_COMMANDS.has(ctx.normalizedText)) {
+      if (!getEditableImageUrl(ctx)) {
+        await ctx.setPendingEditIntent?.(null);
+        await ctx.setFlowState("AWAITING_PHOTO");
+        await ctx.sendText(t(ctx.lang, "changeBackgroundRequiresPhoto"));
+        return { handled: true };
+      }
+
+      await ctx.setFlowState("AWAITING_EDIT_PROMPT");
+      await ctx.setPendingEditIntent?.("change_background");
+      await ctx.sendText(t(ctx.lang, "changeBackgroundPrompt"));
       return { handled: true };
     }
 
     if (EDIT_PHOTO_COMMANDS.has(ctx.normalizedText)) {
+      await ctx.setPendingEditIntent?.(null);
       if (!getEditableImageUrl(ctx)) {
         await ctx.setFlowState("AWAITING_PHOTO");
         await ctx.sendText(t(ctx.lang, "editRequiresPhoto"));

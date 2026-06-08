@@ -26,11 +26,34 @@ const EDIT_ACTION_COMMANDS = new Set([
   "bewerk deze foto",
 ]);
 
+const UI_INTENT_COMMANDS = new Set([
+  "new_image",
+  "new image",
+  "nieuwe afbeelding",
+  "nieuwe foto",
+  "nieuw beeld",
+  "change_background",
+  "andere achtergrond",
+  "different background",
+  "help",
+  "/help",
+  "menu",
+  "/menu",
+  "privacy",
+  "privacybeleid",
+  "privacy policy",
+  "surprise",
+  "surprise me",
+  "verras me",
+  "random",
+]);
+
 function shouldSkipConversationalEdit(normalizedText: string): boolean {
   return (
     normalizedText.startsWith("remix") ||
     normalizedText.startsWith("/") ||
-    EDIT_ACTION_COMMANDS.has(normalizedText)
+    EDIT_ACTION_COMMANDS.has(normalizedText) ||
+    UI_INTENT_COMMANDS.has(normalizedText)
   );
 }
 
@@ -73,6 +96,14 @@ function getDeterministicEditPrompt(text: string): string | undefined {
   return undefined;
 }
 
+function getPendingEditPrompt(ctx: BotTextContext): string | undefined {
+  if (ctx.state.pendingEditIntent === "change_background") {
+    return `Change the background to: ${ctx.messageText.trim()}`;
+  }
+
+  return undefined;
+}
+
 export const conversationalEditingFeature: BotFeature = {
   name: "conversationalEditing",
   async onText(ctx) {
@@ -94,6 +125,7 @@ export const conversationalEditingFeature: BotFeature = {
         });
     const deterministicPromptHint =
       explicitEditPromptHint ??
+      getPendingEditPrompt(ctx) ??
       (isUnambiguousVisualCorrectionRequest(ctx.messageText)
         ? ctx.messageText
         : undefined);

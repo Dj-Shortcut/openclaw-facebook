@@ -3,6 +3,7 @@ import type { ConversationAction } from "./botResponse";
 const INFERRED_CHOICE_MIN_COUNT = 2;
 const INFERRED_CHOICE_MAX_COUNT = 13;
 const MAX_PROMPT_ACTION_INPUT_LENGTH = 1_800;
+const CHANGE_BACKGROUND_ACTION_INPUT = "change_background";
 
 function normalizeInferredChoiceLabel(choice: string): string {
   const cleaned = choice
@@ -39,6 +40,22 @@ function normalizePromptBlock(block: string): string {
     .replace(/^tekstprompt\s*[:\uFF1A-]\s*/iu, "")
     .replace(/\s+/gu, " ")
     .trim();
+}
+
+function normalizeExactUiActionLabel(label: string): string {
+  return label.trim().replace(/[,:;?!.]+$/u, "").toLowerCase();
+}
+
+function getExactUiActionInput(label: string): string | undefined {
+  const normalizedLabel = normalizeExactUiActionLabel(label);
+  if (
+    normalizedLabel === "andere achtergrond" ||
+    normalizedLabel === "different background"
+  ) {
+    return CHANGE_BACKGROUND_ACTION_INPUT;
+  }
+
+  return undefined;
 }
 
 function isLikelyImagePromptBlock(
@@ -102,6 +119,11 @@ function inferPromptGenerationActions(
 }
 
 function normalizeInferredChoiceInput(label: string, sourceText: string): string {
+  const uiActionInput = getExactUiActionInput(label);
+  if (uiActionInput) {
+    return uiActionInput;
+  }
+
   const normalizedLabel = label.trim().replace(/[,:;?!.]+$/u, "");
   if (/^(?:tekstprompt|prompt|image prompt)$/iu.test(normalizedLabel)) {
     return normalizedLabel === "image prompt"

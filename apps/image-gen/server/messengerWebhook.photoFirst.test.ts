@@ -138,6 +138,11 @@ describe("photo-first onboarding", () => {
           title: "Pas aan",
           payload: "OPENCLAW_ACTION:Pas%20aan",
         },
+        {
+          content_type: "text",
+          title: "Andere achtergrond",
+          payload: "OPENCLAW_ACTION:change_background",
+        },
         { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
       ]
     );
@@ -332,7 +337,7 @@ describe("photo-first onboarding", () => {
       psid,
       t("nl", "flowExplanation"),
       expect.arrayContaining([
-        expect.objectContaining({ payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding" }),
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:new_image" }),
         expect.objectContaining({ payload: "OPENCLAW_ACTION:Pas%20foto%20aan" }),
         expect.objectContaining({ payload: "OPENCLAW_ACTION:Privacy" }),
       ])
@@ -404,7 +409,7 @@ describe("photo-first onboarding", () => {
       psid,
       t("nl", "flowExplanation"),
       expect.arrayContaining([
-        expect.objectContaining({ payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding" }),
+        expect.objectContaining({ payload: "OPENCLAW_ACTION:new_image" }),
         expect.objectContaining({ payload: "OPENCLAW_ACTION:Pas%20foto%20aan" }),
         expect.objectContaining({ payload: "OPENCLAW_ACTION:Privacy" }),
       ])
@@ -436,7 +441,7 @@ describe("photo-first onboarding", () => {
         {
           content_type: "text",
           title: "Nieuwe afbeelding",
-          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+          payload: "OPENCLAW_ACTION:new_image",
         },
         {
           content_type: "text",
@@ -525,7 +530,7 @@ describe("photo-first onboarding", () => {
         {
           content_type: "text",
           title: "Nieuwe afbeelding",
-          payload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
+          payload: "OPENCLAW_ACTION:new_image",
         },
         {
           content_type: "text",
