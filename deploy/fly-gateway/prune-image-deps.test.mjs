@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 const repoRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const pruneScript = join(repoRoot, 'deploy/fly-gateway/bin/prune-image-deps.mjs');
 const codexTargetsSource = join(repoRoot, 'deploy/fly-gateway/bin/codex-targets.cjs');
+const ensureTemplatesScript = join(repoRoot, 'deploy/fly-gateway/bin/ensure-openclaw-runtime-templates.mjs');
 const verifyScriptSource = join(repoRoot, 'deploy/fly-gateway/bin/verify-codex-native-deps.cjs');
 const ensureScriptSource = join(repoRoot, 'deploy/fly-gateway/bin/ensure-codex-native-deps.cjs');
 
@@ -115,6 +116,69 @@ describe('Fly gateway image dependency pruning', () => {
         'utf8',
       ),
     ).toContain("../doc/directives.js");
+  });
+
+  it('keeps OpenClaw runtime workspace templates while pruning ordinary docs', () => {
+    const appRoot = makeTempApp();
+    writeFixtureFile(appRoot, 'node_modules/plain-package/docs/readme.md');
+    writeFixtureFile(
+      appRoot,
+      'node_modules/openclaw/src/agents/templates/HEARTBEAT.md',
+      '# Heartbeat\n',
+    );
+    writeFixtureFile(
+      appRoot,
+      'node_modules/openclaw/docs/reference/templates/SOUL.md',
+      '# Soul\n',
+    );
+    writeFixtureFile(
+      appRoot,
+      'node_modules/openclaw/docs/reference/templates/IDENTITY.md',
+      '# Identity\n',
+    );
+
+    const ensureResult = spawnSync(process.execPath, [ensureTemplatesScript, appRoot], {
+      encoding: 'utf8',
+      env: { ...process.env, NODE_OPTIONS: '' },
+    });
+    const pruneResult = spawnSync(process.execPath, [pruneScript, appRoot], {
+      encoding: 'utf8',
+      env: { ...process.env, NODE_OPTIONS: '' },
+    });
+    const verifyResult = spawnSync(
+      process.execPath,
+      [ensureTemplatesScript, appRoot, '--verify-only'],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, NODE_OPTIONS: '' },
+      },
+    );
+
+    expect(ensureResult.stderr).toBe('');
+    expect(ensureResult.status).toBe(0);
+    expect(pruneResult.stderr).toBe('');
+    expect(pruneResult.status).toBe(0);
+    expect(verifyResult.stderr).toBe('');
+    expect(verifyResult.status).toBe(0);
+    expect(() => readFileSync(join(appRoot, 'node_modules/plain-package/docs/readme.md'))).toThrow();
+    expect(
+      readFileSync(
+        join(appRoot, 'node_modules/openclaw/src/agents/templates/HEARTBEAT.md'),
+        'utf8',
+      ),
+    ).toBe('# Heartbeat\n');
+    expect(
+      readFileSync(
+        join(appRoot, 'node_modules/openclaw/src/agents/templates/SOUL.md'),
+        'utf8',
+      ),
+    ).toBe('# Soul\n');
+    expect(
+      readFileSync(
+        join(appRoot, 'node_modules/openclaw/src/agents/templates/IDENTITY.md'),
+        'utf8',
+      ),
+    ).toBe('# Identity\n');
   });
 
   it('verifies the Codex Linux native package from the runtime app root', () => {
