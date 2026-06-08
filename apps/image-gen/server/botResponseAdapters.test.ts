@@ -186,7 +186,7 @@ describe("botResponseAdapters", () => {
       {
         id: "choice_2",
         label: "Nieuwe afbeelding",
-        inputText: "Maak me een Nieuwe afbeelding",
+        inputText: "new_image",
       },
     ]);
     expect(sendText).not.toHaveBeenCalled();

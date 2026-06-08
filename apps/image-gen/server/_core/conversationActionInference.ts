@@ -4,6 +4,7 @@ const INFERRED_CHOICE_MIN_COUNT = 2;
 const INFERRED_CHOICE_MAX_COUNT = 13;
 const MAX_PROMPT_ACTION_INPUT_LENGTH = 1_800;
 const CHANGE_BACKGROUND_ACTION_INPUT = "change_background";
+const NEW_IMAGE_ACTION_INPUT = "new_image";
 
 function normalizeInferredChoiceLabel(choice: string): string {
   const cleaned = choice
@@ -50,9 +51,17 @@ function getExactUiActionInput(label: string): string | undefined {
   const normalizedLabel = normalizeExactUiActionLabel(label);
   if (
     normalizedLabel === "andere achtergrond" ||
-    normalizedLabel === "different background"
+    normalizedLabel === "different background" ||
+    normalizedLabel === "change_background"
   ) {
     return CHANGE_BACKGROUND_ACTION_INPUT;
+  }
+  if (
+    normalizedLabel === "nieuwe afbeelding" ||
+    normalizedLabel === "new image" ||
+    normalizedLabel === "new_image"
+  ) {
+    return NEW_IMAGE_ACTION_INPUT;
   }
 
   return undefined;
