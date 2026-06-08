@@ -20,9 +20,11 @@ const legacyWorkspaceDir = path.join(
 const pluginPath = process.env.OPENCLAW_FACEBOOK_PLUGIN_PATH || "/app/node_modules/@dj-shortcut/facebook";
 const codexPluginPath = process.env.OPENCLAW_CODEX_PLUGIN_PATH || "/app/node_modules/@openclaw/codex";
 const defaultDmPolicy = process.env.OPENCLAW_FACEBOOK_DEFAULT_DM_POLICY || "pairing";
+const defaultUnknownSenderMode = process.env.OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE || "";
 const defaultAgentModel = process.env.OPENCLAW_AGENT_MODEL || "";
 const defaultAgentThinking = process.env.OPENCLAW_AGENT_THINKING_DEFAULT || "";
 const allowOpen = process.env.OPENCLAW_FACEBOOK_ALLOW_OPEN === "1";
+const allowedUnknownSenderModes = new Set(["pairing", "leaderbot_free_tier"]);
 
 function isObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -79,6 +81,19 @@ function ensureAgentDefaults(config) {
   if (defaultAgentThinking && config.agents.defaults.thinkingDefault === undefined) {
     config.agents.defaults.thinkingDefault = defaultAgentThinking;
   }
+}
+
+function resolveDefaultUnknownSenderMode() {
+  const mode = defaultUnknownSenderMode.trim();
+  if (!mode) {
+    return "";
+  }
+  if (!allowedUnknownSenderModes.has(mode)) {
+    throw new Error(
+      'OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE must be "pairing" or "leaderbot_free_tier".',
+    );
+  }
+  return mode;
 }
 
 function copyIfMissing(sourcePath, destPath) {
@@ -179,6 +194,10 @@ function ensurePublicMessengerBaseline(config) {
   }
   if (config.channels.facebook.dmPolicy === undefined) {
     config.channels.facebook.dmPolicy = defaultDmPolicy;
+  }
+  const unknownSenderMode = resolveDefaultUnknownSenderMode();
+  if (unknownSenderMode && config.channels.facebook.unknownSenderMode === undefined) {
+    config.channels.facebook.unknownSenderMode = unknownSenderMode;
   }
 
   ensureAgentDefaults(config);

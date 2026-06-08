@@ -89,6 +89,20 @@ function isProtectedRuntimePackage(directory) {
   return false;
 }
 
+function isProtectedRuntimeDirectory(directory) {
+  const relative = path.relative(nodeModules, directory);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return false;
+  }
+  const parts = relative.split(path.sep);
+  const lastIndex = parts.length - 1;
+  return (
+    parts[lastIndex] === "doc" &&
+    parts[lastIndex - 1] === "dist" &&
+    parts[lastIndex - 2] === "yaml"
+  );
+}
+
 function pruneDirectory(directory) {
   if (isProtectedRuntimePackage(directory)) {
     return 0;
@@ -97,7 +111,7 @@ function pruneDirectory(directory) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const entryPath = path.join(directory, entry.name);
     if (entry.isDirectory()) {
-      if (removableDirectoryNames.has(entry.name)) {
+      if (removableDirectoryNames.has(entry.name) && !isProtectedRuntimeDirectory(entryPath)) {
         removedBytes += removePath(entryPath);
         continue;
       }
