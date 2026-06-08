@@ -117,18 +117,19 @@ export const conversationalEditingFeature: BotFeature = {
     }
 
     const explicitEditPromptHint = getDeterministicEditPrompt(ctx.messageText);
-    const decision = explicitEditPromptHint
+    const pendingEditPromptHint = getPendingEditPrompt(ctx);
+    const deterministicPromptHint =
+      explicitEditPromptHint ??
+      pendingEditPromptHint ??
+      (isUnambiguousVisualCorrectionRequest(ctx.messageText)
+        ? ctx.messageText
+        : undefined);
+    const decision = explicitEditPromptHint || pendingEditPromptHint
       ? null
       : await interpretConversationalEdit({
           text: ctx.messageText,
           lang: ctx.lang,
         });
-    const deterministicPromptHint =
-      explicitEditPromptHint ??
-      getPendingEditPrompt(ctx) ??
-      (isUnambiguousVisualCorrectionRequest(ctx.messageText)
-        ? ctx.messageText
-        : undefined);
     if (!decision?.shouldEdit && !deterministicPromptHint) {
       return { handled: false };
     }

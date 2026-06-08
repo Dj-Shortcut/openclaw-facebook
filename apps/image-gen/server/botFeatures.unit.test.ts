@@ -467,6 +467,32 @@ describe("imageRequestFeature", () => {
       "text_to_image"
     );
   });
+
+  it("does not reuse source image for background intent when not in edit-prompt flow", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Maak een nieuwe avatar van een draak",
+        normalizedText: "maak een nieuwe avatar van een draak",
+        hasPhoto: true,
+        runImageGeneration,
+        state: makeState({
+          pendingEditIntent: "change_background",
+          lastGeneratedUrl: "https://img.example/generated.jpg",
+          lastPhotoUrl: "https://img.example/source.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      undefined,
+      "Maak een nieuwe avatar van een draak",
+      "text_to_image"
+    );
+  });
 });
 
 describe("conversationalEditingFeature", () => {

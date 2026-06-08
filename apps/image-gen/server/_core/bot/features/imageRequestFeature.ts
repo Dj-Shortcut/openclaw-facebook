@@ -26,6 +26,7 @@ function shouldUseExistingImageContext(ctx: BotTextContext, text: string): boole
   }
 
   if (
+    ctx.state.stage === "AWAITING_EDIT_PROMPT" &&
     ctx.state.pendingEditIntent === "change_background" &&
     !isFreshImageRequest(text)
   ) {
