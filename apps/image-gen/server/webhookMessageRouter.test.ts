@@ -237,17 +237,6 @@ describe("webhook message router", () => {
       },
     },
     {
-      type: "gif",
-      expected: t("nl", "unsupportedGif"),
-      attachment: {
-        type: "image",
-        payload: {
-          url: "https://media.example/anim.gif",
-          mime_type: "image/gif",
-        },
-      },
-    },
-    {
       type: "video",
       expected: t("nl", "unsupportedMedia"),
       attachment: {
@@ -303,4 +292,48 @@ describe("webhook message router", () => {
       );
     }
   );
-});
+
+  it("routes gif attachments through image handling when image flow handles them", async () => {
+    tryHandleImageMessageMock.mockResolvedValueOnce(true);
+    const ctx = makeContext();
+
+    await handleMessageEvent(ctx, {
+      psid: "gif-image-user",
+      userId: "gif-image-user-key",
+      event: {
+        message: messageWithTextAndAttachments("maak deze cyberpunk", [
+          {
+            type: "image",
+            payload: {
+              url: "https://media.example/anim.gif",
+              mime_type: "image/gif",
+            },
+          },
+        ]),
+      },
+      reqId: "req-gif-image",
+      lang: "nl",
+    });
+
+    expect(tryHandleImageMessageMock).toHaveBeenCalledWith(
+      ctx,
+      expect.objectContaining({
+        attachments: [
+          expect.objectContaining({
+            type: "image",
+            payload: expect.objectContaining({
+              url: "https://media.example/anim.gif",
+            }),
+          }),
+        ],
+        text: "maak deze cyberpunk",
+      })
+    );
+    expect(handleTextMessageMock).not.toHaveBeenCalled();
+    expect(ctx.sendLoggedText).not.toHaveBeenCalled();
+    expect(findLogEvent("messenger_attachment_unsupported")).toBeUndefined();
+    expect(findLogEvent("messenger_attachment_routed")).toMatchObject({
+      route: "image",
+    });
+  });
+}); 
