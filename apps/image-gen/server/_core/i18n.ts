@@ -45,7 +45,9 @@ type TranslationKey =
   | "outOfFreeCredits"
   | "generationGenericFailure"
   | "errorFallback"
-  | "unsupportedMedia";
+  | "unsupportedMedia"
+  | "unsupportedGif"
+  | "unsupportedAudio";
 
 type TranslationValue = string | ((params: TranslationParams) => string);
 
@@ -116,6 +118,10 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     errorFallback: "Er liep iets mis aan mijn kant. Probeer gerust opnieuw.",
     unsupportedMedia:
       "Ik werk voorlopig alleen met foto's. Stuur een foto in plaats van een video of ander bestand.",
+    unsupportedGif:
+      "GIF ontvangen, stuur best een gewone foto voor bewerking.",
+    unsupportedAudio:
+      "Ik heb je voice ontvangen, maar kan die nog niet verwerken. Stuur tekst of een foto.",
   },
   en: {
     flowExplanation:
@@ -180,6 +186,10 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     errorFallback: "Something went wrong on my side. Please try again.",
     unsupportedMedia:
       "I currently only work with photos. Please send a photo instead of a video or other file.",
+    unsupportedGif:
+      "I got your GIF, send a regular photo instead.",
+    unsupportedAudio:
+      "I got your voice message, but I can't process it yet. Send text or a photo.",
   },
 };
 

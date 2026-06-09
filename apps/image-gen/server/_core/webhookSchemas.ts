@@ -8,6 +8,7 @@ const messengerAttachmentSchema = z
     payload: z
       .object({
         url: z.string().url().optional(),
+        mime_type: z.string().optional(),
       })
       .passthrough()
       .optional(),
