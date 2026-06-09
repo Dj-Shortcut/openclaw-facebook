@@ -154,8 +154,11 @@ export function getAttachmentCategory(
   return EMPTY_ATTACHMENT_TYPE;
 }
 
-export function isImageAttachment(attachment: FacebookWebhookAttachment): boolean {
-  return getAttachmentCategory(attachment) === "image";
+export function isImageAttachment(
+  attachment: FacebookWebhookAttachment
+): boolean {
+  const category = getAttachmentCategory(attachment);
+  return category === "image" || category === "gif";
 }
 
 export function isGifAttachment(attachment: FacebookWebhookAttachment): boolean {
@@ -213,7 +216,10 @@ export function getNormalizedAttachmentTypes(
 export function hasImageAttachment(
   attachments: MessengerNormalizedAttachment[] | undefined
 ): boolean {
-  return attachments?.some(att => att.type === "image") ?? false;
+  return (
+    attachments?.some(att => att.type === "image" || att.type === "gif") ??
+    false
+  );
 }
 
 export function hasImage(
@@ -292,7 +298,7 @@ export function hasReadableImageAttachment(
   return (
     attachments?.some(
       att =>
-        att.type === "image" &&
+        (att.type === "image" || att.type === "gif") &&
         typeof att.url === "string" &&
         att.url.trim() !== ""
     ) ?? false

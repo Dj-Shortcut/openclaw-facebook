@@ -2650,16 +2650,6 @@ describe("acknowledgement edgecases", () => {
     expectedKinds: string[];
   }> = [
     {
-      type: "gif",
-      expected: t("nl", "unsupportedGif"),
-      attachmentType: "image",
-      payload: {
-        url: "https://media.example/anim.gif",
-        mime_type: "image/gif",
-      },
-      expectedKinds: ["gif"],
-    },
-    {
       type: "audio",
       expected: t("nl", "unsupportedAudio"),
       attachmentType: "audio",
