@@ -7,9 +7,10 @@ import {
   vi,
 } from "vitest";
 
-const { safeLogMock, handleTextMessageMock } = vi.hoisted(() => ({
+const { safeLogMock, handleTextMessageMock, canGenerateMock } = vi.hoisted(() => ({
   safeLogMock: vi.fn(),
   handleTextMessageMock: vi.fn(async () => undefined),
+  canGenerateMock: vi.fn(async () => true),
 }));
 
 vi.mock("./_core/messengerApi", () => ({
@@ -32,9 +33,14 @@ vi.mock("./_core/image-generation/sourceImageFetcher", () => ({
     }),
 }));
 
+vi.mock("./_core/messengerQuota", () => ({
+  canGenerate: canGenerateMock,
+}));
+
 import type { HandlerContext } from "./_core/webhookHandlerTypes";
 import { tryHandleAudioMessage } from "./_core/webhookAudioMessageRouter";
 import { type FacebookWebhookEvent } from "./_core/webhookHelpers";
+import { t } from "./_core/i18n";
 
 type TestAttachment = Exclude<
   NonNullable<FacebookWebhookEvent["message"]>["attachments"],
@@ -73,6 +79,8 @@ describe("webhook audio message router", () => {
     handleTextMessageMock.mockClear();
     process.env.PRIVACY_PEPPER = "test-pepper";
     process.env.OPENAI_API_KEY = "dummy-key";
+    canGenerateMock.mockClear();
+    canGenerateMock.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -149,6 +157,30 @@ describe("webhook audio message router", () => {
         text: "maak een foto van een cyberpunk stadslandschap",
       })
     );
+  });
+
+  it("returns false when user is out of generation quota and sends out-of-credits message", async () => {
+    const ctx = makeContext();
+    canGenerateMock.mockResolvedValue(false);
+
+    const result = await tryHandleAudioMessage(ctx, {
+      psid: "psid-4",
+      userId: "user-4",
+      reqId: "req-audio-quota",
+      lang: "nl",
+      attachments: [
+        { type: "audio", payload: { url: "https://audio.example/message.mp3" } },
+      ],
+      text: "",
+    });
+
+    expect(result).toBe(true);
+    expect(ctx.sendLoggedText).toHaveBeenCalledWith(
+      "psid-4",
+      t("nl", "outOfFreeCredits"),
+      "req-audio-quota"
+    );
+    expect(handleTextMessageMock).not.toHaveBeenCalled();
   });
 
   it("returns false when OPENAI API key is missing", async () => {
