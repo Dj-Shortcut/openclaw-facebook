@@ -97,18 +97,6 @@ async function transcribeAudioMessage(
     return null;
   }
 
-  const body = new FormData();
-  const audioFile = new Blob([new Uint8Array(sourceAudio.buffer)], {
-    type: sourceAudio.contentType || "audio/mpeg",
-  });
-  body.append(
-    "file",
-    audioFile,
-    getAudioFileName(audioUrl, sourceAudio.contentType)
-  );
-  body.append("model", OPENAI_AUDIO_TRANSCRIPTION_MODEL);
-  body.append("response_format", "json");
-
   const attemptPayload = {
     reqId,
     psidHash: anonymizePsid(psid).slice(0, 12),
@@ -137,7 +125,7 @@ async function transcribeAudioMessage(
         headers: {
           Authorization: `Bearer ${apiKey}`,
         },
-        body,
+        body: buildTranscriptionRequestBody(sourceAudio, audioUrl),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -210,6 +198,25 @@ async function transcribeAudioMessage(
 function waitForRetryDelay(attempt: number): Promise<void> {
   const delayMs = 150 * 2 ** attempt;
   return new Promise(resolve => setTimeout(resolve, delayMs));
+}
+
+function buildTranscriptionRequestBody(
+  sourceAudio: { buffer: Buffer; contentType?: string },
+  audioUrl: string
+): FormData {
+  const body = new FormData();
+  const audioFile = new Blob([new Uint8Array(sourceAudio.buffer)], {
+    type: sourceAudio.contentType || "audio/mpeg",
+  });
+  body.append(
+    "file",
+    audioFile,
+    getAudioFileName(audioUrl, sourceAudio.contentType)
+  );
+  body.append("model", OPENAI_AUDIO_TRANSCRIPTION_MODEL);
+  body.append("response_format", "json");
+
+  return body;
 }
 
 function isRetryableStatus(status: number): boolean {

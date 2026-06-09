@@ -44,7 +44,7 @@ type TestAttachment = Exclude<
 function makeContext(): HandlerContext {
   return {
     defaultLang: "nl",
-    claimEventReplayOrLog: vi.fn(async () => ({ handled: false })),
+    claimEventReplayOrLog: vi.fn(async () => false),
     createFeatureImageContext: vi.fn(),
     createFeaturePayloadContext: vi.fn(),
     createFeatureTextContext: vi.fn(),
@@ -66,6 +66,7 @@ function makeContext(): HandlerContext {
 
 describe("webhook audio message router", () => {
   const originalOpenAiKey = process.env.OPENAI_API_KEY;
+  const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
 
   beforeEach(() => {
     safeLogMock.mockClear();
@@ -80,7 +81,11 @@ describe("webhook audio message router", () => {
     } else {
       process.env.OPENAI_API_KEY = originalOpenAiKey;
     }
-    delete process.env.PRIVACY_PEPPER;
+    if (originalPrivacyPepper === undefined) {
+      delete process.env.PRIVACY_PEPPER;
+    } else {
+      process.env.PRIVACY_PEPPER = originalPrivacyPepper;
+    }
     vi.unstubAllGlobals();
   });
 
