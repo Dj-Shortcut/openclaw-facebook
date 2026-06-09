@@ -21,6 +21,7 @@ import { handlePayload } from "./webhookPayloadBranch";
 import type { HandlerContext } from "./webhookHandlerTypes";
 import { handleTextMessage } from "./webhookTextMessageRouter";
 import { tryHandleImageMessage } from "./webhookImageMessageRouter";
+import { tryHandleAudioMessage } from "./webhookAudioMessageRouter";
 
 type MessageEventInput = {
   psid: string;
@@ -105,7 +106,7 @@ export async function handleMessageEvent(
       userId: input.userId,
       reqId: input.reqId,
       lang: input.lang,
-      attachments: message.attachments,
+      attachments: message.attachments ?? [],
       text: message.text,
       timestamp: input.event.timestamp ?? Date.now(),
     });
@@ -116,6 +117,28 @@ export async function handleMessageEvent(
         normalizedAttachments,
         trimmedText,
         true
+      );
+      return;
+    }
+  }
+
+  if (hasAudioAttachment(normalizedAttachments)) {
+    const audioHandled = await tryHandleAudioMessage(ctx, {
+      psid: input.psid,
+      userId: input.userId,
+      reqId: input.reqId,
+      lang: input.lang,
+      attachments: message.attachments ?? [],
+      text: message.text,
+      timestamp: input.event.timestamp ?? Date.now(),
+    });
+    if (audioHandled) {
+      await logMessengerAttachmentRouted(
+        ctx,
+        input,
+        normalizedAttachments,
+        trimmedText,
+        "audio"
       );
       return;
     }
