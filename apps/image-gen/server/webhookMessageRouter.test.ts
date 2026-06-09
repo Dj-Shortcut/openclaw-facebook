@@ -6,12 +6,14 @@ const {
   decodeMessengerActionInputMock,
   handlePayloadMock,
   tryHandleImageMessageMock,
+  tryHandleAudioMessageMock,
 } = vi.hoisted(() => ({
   safeLogMock: vi.fn(),
   handleTextMessageMock: vi.fn(async () => undefined),
   decodeMessengerActionInputMock: vi.fn(),
   handlePayloadMock: vi.fn(async () => undefined),
   tryHandleImageMessageMock: vi.fn(async () => false),
+  tryHandleAudioMessageMock: vi.fn(async () => false),
 }));
 
 vi.mock("./_core/messengerApi", () => ({
@@ -32,6 +34,10 @@ vi.mock("./_core/webhookPayloadBranch", () => ({
 
 vi.mock("./_core/webhookImageMessageRouter", () => ({
   tryHandleImageMessage: tryHandleImageMessageMock,
+}));
+
+vi.mock("./_core/webhookAudioMessageRouter", () => ({
+  tryHandleAudioMessage: tryHandleAudioMessageMock,
 }));
 
 import type { HandlerContext } from "./_core/webhookHandlerTypes";
@@ -92,6 +98,7 @@ describe("webhook message router", () => {
     decodeMessengerActionInputMock.mockClear();
     handlePayloadMock.mockClear();
     tryHandleImageMessageMock.mockClear();
+    tryHandleAudioMessageMock.mockClear();
   });
 
   afterEach(() => {
@@ -100,6 +107,7 @@ describe("webhook message router", () => {
     decodeMessengerActionInputMock.mockReset();
     handlePayloadMock.mockReset();
     tryHandleImageMessageMock.mockReset();
+    tryHandleAudioMessageMock.mockReset();
   });
 
   it("routes mixed text + image to image handling and avoids text fallback", async () => {
@@ -229,14 +237,6 @@ describe("webhook message router", () => {
     attachment: TestAttachment;
   }> = [
     {
-      type: "audio",
-      expected: t("nl", "unsupportedAudio"),
-      attachment: {
-        type: "audio",
-        payload: { url: "https://media.example/audio.mp3" },
-      },
-    },
-    {
       type: "video",
       expected: t("nl", "unsupportedMedia"),
       attachment: {
@@ -292,6 +292,52 @@ describe("webhook message router", () => {
       );
     }
   );
+
+  it("routes captioned audio as unsupported when audio handler declines", async () => {
+    const ctx = makeContext();
+
+    await handleMessageEvent(ctx, {
+      psid: "audio-caption-user",
+      userId: "audio-caption-user-key",
+      event: {
+        message: messageWithTextAndAttachments("maak deze cyberpunk", [
+          { type: "audio", payload: { url: "https://media.example/audio.mp3" } },
+        ]),
+      },
+      reqId: "req-audio-caption-unsupported",
+      lang: "nl",
+    });
+
+    expect(handleTextMessageMock).not.toHaveBeenCalled();
+    expect(ctx.sendLoggedText).toHaveBeenCalledWith(
+      "audio-caption-user",
+      t("nl", "unsupportedAudio"),
+      "req-audio-caption-unsupported"
+    );
+  });
+
+  it("routes audio attachments through dedicated audio handler when accepted", async () => {
+    tryHandleAudioMessageMock.mockResolvedValueOnce(true);
+    const ctx = makeContext();
+
+    await handleMessageEvent(ctx, {
+      psid: "audio-user",
+      userId: "audio-user-key",
+      event: {
+        message: messageWithTextAndAttachments("", [
+          { type: "audio", payload: { url: "https://media.example/audio.mp3" } },
+        ]),
+      },
+      reqId: "req-audio-supported",
+      lang: "nl",
+    });
+
+    expect(handleTextMessageMock).not.toHaveBeenCalled();
+    expect(ctx.sendLoggedText).not.toHaveBeenCalled();
+    expect(findLogEvent("messenger_attachment_routed")).toMatchObject({
+      route: "audio",
+    });
+  });
 
   it("routes gif attachments through image handling when image flow handles them", async () => {
     tryHandleImageMessageMock.mockResolvedValueOnce(true);
