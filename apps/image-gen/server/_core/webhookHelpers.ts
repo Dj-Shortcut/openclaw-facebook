@@ -51,9 +51,11 @@ export type MessengerAttachmentCategory =
   | "audio"
   | "video"
   | "file"
+  | "link"
   | "unknown";
 
 const GIF_MIME_HINT = /gif/i;
+const LINK_ATTACHMENT_TYPES = new Set(["file_share", "link", "share", "fallback"]);
 const EMPTY_ATTACHMENT_TYPE = "unknown";
 
 type AttachmentLikeForCategory =
@@ -143,6 +145,10 @@ export function getAttachmentCategory(
 
   if (rawType === "file") {
     return "file";
+  }
+
+  if (LINK_ATTACHMENT_TYPES.has(rawType)) {
+    return "link";
   }
 
   return EMPTY_ATTACHMENT_TYPE;
@@ -263,7 +269,7 @@ export function hasUnsupportedAttachment(
 ): boolean {
   return (
     attachments?.some(att =>
-      ["gif", "audio", "video", "file", "unknown"].includes(att.type)
+      ["gif", "audio", "video", "file", "link", "unknown"].includes(att.type)
     ) ?? false
   );
 }
@@ -272,6 +278,12 @@ export function hasUnknownAttachment(
   attachments: MessengerNormalizedAttachment[] | undefined
 ): boolean {
   return attachments?.some(att => att.type === "unknown") ?? false;
+}
+
+export function hasLinkAttachment(
+  attachments: MessengerNormalizedAttachment[] | undefined
+): boolean {
+  return attachments?.some(att => att.type === "link") ?? false;
 }
 
 export function hasReadableImageAttachment(

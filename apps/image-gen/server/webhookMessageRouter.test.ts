@@ -271,6 +271,14 @@ describe("webhook message router", () => {
         payload: { sticker_id: "123" },
       },
     },
+    {
+      type: "link",
+      expected: t("nl", "unsupportedMedia"),
+      attachment: {
+        type: "fallback",
+        payload: { url: "https://shared.example/story", title: "Shared link" },
+      },
+    },
   ];
 
   it.each(unsupportedCases)(
