@@ -21,14 +21,15 @@ export type DownloadedSourceImage = SourceImageData & {
   fbImageFetchMs: number;
 };
 
-type SourceImageDownloadOptions = {
-  trustedSourceImageUrl?: boolean;
-  sourceImageProvenance?: "storeInbound";
-};
-
 type SourceImageFetchAttemptResult = {
   response: Response;
   contentType: string;
+};
+
+type SourceImageDownloadOptions = {
+  trustedSourceImageUrl?: boolean;
+  sourceImageProvenance?: "storeInbound";
+  skipDebugImageProof?: boolean;
 };
 
 type ValidatedSourceImageRequest = {
@@ -534,13 +535,17 @@ async function buildDownloadedSourceImage(
   reqId: string,
   contentType: string,
   response: Response,
-  totalFetchMs: number
+  totalFetchMs: number,
+  options?: SourceImageDownloadOptions
 ): Promise<DownloadedSourceImage> {
   const imageBuffer = await readResponseBufferWithinLimit(reqId, response);
   const incomingByteLen = safeLen(imageBuffer);
   const incomingHash = sha256(imageBuffer);
 
-  await maybeWriteDebugImageProof(reqId, contentType, imageBuffer);
+  if (!options?.skipDebugImageProof) {
+    await maybeWriteDebugImageProof(reqId, contentType, imageBuffer);
+  }
+
   assertSourceImageSizeOrThrow(reqId, incomingByteLen);
   safeLog("source_image_downloaded", {
     reqId,
@@ -638,7 +643,8 @@ async function downloadSourceImageOrThrow(
         reqId,
         contentType,
         response,
-        totalFetchMs
+        totalFetchMs,
+        options
       );
     } catch (error) {
       totalFetchMs += Date.now() - attemptStartedAt;
@@ -678,13 +684,17 @@ export function logSourceImageFetchStart(input: SourceImageResolveInput): void {
 }
 
 export async function fetchExternalSourceImageForIngress(
-  input: Pick<SourceImageResolveInput, "sourceImageUrl" | "reqId">
+  input: Pick<SourceImageResolveInput, "sourceImageUrl" | "reqId"> & {
+    skipDebugImageProof?: boolean;
+  }
 ): Promise<DownloadedSourceImage> {
   if (!input.sourceImageUrl) {
     throw new MissingInputImageError("Missing source image");
   }
 
-  return downloadSourceImageOrThrow(input.sourceImageUrl, input.reqId);
+  return downloadSourceImageOrThrow(input.sourceImageUrl, input.reqId, {
+    skipDebugImageProof: input.skipDebugImageProof,
+  });
 }
 
 export async function resolveStoredSourceImage(

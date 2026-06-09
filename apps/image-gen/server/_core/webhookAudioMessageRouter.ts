@@ -83,6 +83,7 @@ async function transcribeAudioMessage(
     sourceAudio = await fetchExternalSourceImageForIngress({
       sourceImageUrl: audioUrl,
       reqId,
+      skipDebugImageProof: true,
     });
   } catch (error) {
     safeLog("messenger_audio_transcription_skipped", {
@@ -100,7 +101,11 @@ async function transcribeAudioMessage(
   const audioFile = new Blob([new Uint8Array(sourceAudio.buffer)], {
     type: sourceAudio.contentType || "audio/mpeg",
   });
-  body.append("file", audioFile, "voice-message");
+  body.append(
+    "file",
+    audioFile,
+    getAudioFileName(audioUrl, sourceAudio.contentType)
+  );
   body.append("model", OPENAI_AUDIO_TRANSCRIPTION_MODEL);
   body.append("response_format", "json");
 
@@ -216,4 +221,55 @@ function isTransientError(error: unknown): boolean {
     error instanceof Error &&
     (error.name === "AbortError" || error.name === "TypeError")
   );
+}
+
+function getAudioFileName(audioUrl: string, contentType?: string): string {
+  const extFromContentType = mapAudioMimeTypeToExtension(contentType);
+  if (extFromContentType) {
+    return `voice-message${extFromContentType}`;
+  }
+
+  const extFromUrl = extractAudioFileExtensionFromUrl(audioUrl);
+  if (extFromUrl) {
+    return `voice-message${extFromUrl}`;
+  }
+
+  return "voice-message.mp3";
+}
+
+function mapAudioMimeTypeToExtension(contentType: string | undefined): string | null {
+  if (!contentType) {
+    return null;
+  }
+
+  const normalized = contentType.split(";")[0].trim().toLowerCase();
+  if (normalized === "audio/mpeg") return ".mp3";
+  if (normalized === "audio/mp4") return ".m4a";
+  if (normalized === "audio/x-m4a") return ".m4a";
+  if (normalized === "audio/wav" || normalized === "audio/wave") return ".wav";
+  if (normalized === "audio/ogg") return ".ogg";
+  if (normalized === "audio/webm") return ".webm";
+  if (normalized === "audio/flac") return ".flac";
+  return null;
+}
+
+function extractAudioFileExtensionFromUrl(audioUrl: string): string | null {
+  try {
+    const parsed = new URL(audioUrl);
+    const basename = parsed.pathname.split("/").pop() ?? "";
+    const cleanBasename = basename.replace(/\?.*$/, "").split("#")[0];
+    const matched = cleanBasename.match(/\.[a-z0-9]{2,6}$/i);
+    if (!matched) {
+      return null;
+    }
+
+    const ext = matched[0].toLowerCase();
+    if ([".mp3", ".m4a", ".ogg", ".wav", ".webm", ".flac", ".opus"].includes(ext)) {
+      return ext;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
 }
