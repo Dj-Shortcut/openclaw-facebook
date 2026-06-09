@@ -2638,10 +2638,8 @@ describe("acknowledgement edgecases", () => {
     );
     const unsupportedLog = safeLogMock.mock.calls.find(
       ([event]) => event === "messenger_attachment_unsupported"
-    )?.[1] as { text?: string } | undefined;
-    expect(Object.prototype.hasOwnProperty.call(unsupportedLog ?? {}, "text")).toBe(
-      false
-    );
+    )?.[1];
+    expect(unsupportedLog).not.toHaveProperty("text");
   });
 
   const unsupportedMediaCases: Array<{
