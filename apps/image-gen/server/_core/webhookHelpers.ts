@@ -10,7 +10,7 @@ export type FacebookWebhookEvent = {
     is_echo?: boolean;
     text?: string;
     quick_reply?: { payload?: string };
-    attachments?: Array<{ type?: string; payload?: { url?: string } }>;
+    attachments?: FacebookWebhookAttachment[];
     reply_to?: { mid?: string };
   };
   postback?: {
@@ -20,6 +20,288 @@ export type FacebookWebhookEvent = {
   };
   timestamp?: number;
 };
+
+export type FacebookWebhookAttachment = {
+  type?: string;
+  payload?: {
+    url?: string;
+    mime_type?: string;
+    sticker_id?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+};
+
+export type MessengerNormalizedAttachment = {
+  type: MessengerAttachmentCategory;
+  rawType: string;
+  payload?: FacebookWebhookAttachment["payload"];
+  url?: string;
+  mimeType?: string;
+};
+
+export type MessengerNormalizedInboundMessage = {
+  text?: string;
+  attachments: MessengerNormalizedAttachment[];
+};
+
+export type MessengerAttachmentCategory =
+  | "image"
+  | "gif"
+  | "audio"
+  | "video"
+  | "file"
+  | "unknown";
+
+const GIF_MIME_HINT = /gif/i;
+const EMPTY_ATTACHMENT_TYPE = "unknown";
+
+type AttachmentLikeForCategory =
+  | FacebookWebhookAttachment
+  | MessengerNormalizedAttachment;
+
+function normalizeAttachmentType(type: string | undefined): string {
+  return type?.trim().toLowerCase() ?? "";
+}
+
+function resolveAttachmentPayload(
+  attachment: AttachmentLikeForCategory | undefined
+): FacebookWebhookAttachment["payload"] | undefined {
+  return attachment?.payload;
+}
+
+function resolveAttachmentUrl(
+  attachment: AttachmentLikeForCategory | undefined
+): string | undefined {
+  const payload = resolveAttachmentPayload(attachment);
+  if (typeof payload?.url === "string") {
+    return payload.url;
+  }
+
+  return typeof (attachment as MessengerNormalizedAttachment)?.url === "string"
+    ? (attachment as MessengerNormalizedAttachment).url
+    : undefined;
+}
+
+function resolveAttachmentMimeType(
+  attachment: AttachmentLikeForCategory | undefined
+): string {
+  const payload = resolveAttachmentPayload(attachment);
+  if (typeof payload?.mime_type === "string") {
+    return payload.mime_type.trim().toLowerCase();
+  }
+
+  if (typeof (attachment as MessengerNormalizedAttachment)?.mimeType === "string") {
+    return (attachment as MessengerNormalizedAttachment).mimeType!.trim().toLowerCase();
+  }
+
+  return "";
+}
+
+function isLikelyGifAttachment(attachment: AttachmentLikeForCategory): boolean {
+  const mimeType = resolveAttachmentMimeType(attachment);
+  if (GIF_MIME_HINT.test(mimeType)) {
+    return true;
+  }
+
+  const attachmentUrl = resolveAttachmentUrl(attachment)?.trim();
+  if (!attachmentUrl) {
+    return false;
+  }
+
+  return attachmentUrl
+    .split(/[?#]/)[0]
+    .toLowerCase()
+    .includes(".gif");
+}
+
+export function getAttachmentCategory(
+  attachment: AttachmentLikeForCategory | undefined
+): MessengerAttachmentCategory {
+  if (!attachment) {
+    return EMPTY_ATTACHMENT_TYPE;
+  }
+
+  const rawType = normalizeAttachmentType(
+    (attachment as MessengerNormalizedAttachment).rawType || attachment.type
+  );
+  if (rawType === "image" && isLikelyGifAttachment(attachment)) {
+    return "gif";
+  }
+
+  if (rawType === "image") {
+    return "image";
+  }
+
+  if (rawType === "audio") {
+    return "audio";
+  }
+
+  if (rawType === "video") {
+    return "video";
+  }
+
+  if (rawType === "file") {
+    return "file";
+  }
+
+  return EMPTY_ATTACHMENT_TYPE;
+}
+
+export function isImageAttachment(attachment: FacebookWebhookAttachment): boolean {
+  return getAttachmentCategory(attachment) === "image";
+}
+
+export function isGifAttachment(attachment: FacebookWebhookAttachment): boolean {
+  return getAttachmentCategory(attachment) === "gif";
+}
+
+export function isUnsupportedMessengerAttachment(
+  attachment: FacebookWebhookAttachment
+): boolean {
+  return ["gif", "audio", "video", "file", "unknown"].includes(
+    getAttachmentCategory(attachment)
+  );
+}
+
+export function normalizeMessengerInboundMessage(
+  message: FacebookWebhookEvent["message"] | undefined
+): MessengerNormalizedInboundMessage {
+  return {
+    text: message?.text,
+    attachments: normalizeMessengerAttachments(message?.attachments),
+  };
+}
+
+export function normalizeMessengerAttachments(
+  attachments: FacebookWebhookAttachment[] | undefined
+): MessengerNormalizedAttachment[] {
+  if (!attachments?.length) {
+    return [];
+  }
+
+  return attachments.map(attachment => {
+    const category = getAttachmentCategory(attachment);
+    const payload = attachment.payload;
+    return {
+      type: category,
+      rawType: normalizeAttachmentType(attachment.type),
+      payload,
+      url: typeof payload?.url === "string" ? payload.url : undefined,
+      mimeType:
+        typeof payload?.mime_type === "string" ? payload.mime_type : undefined,
+    };
+  });
+}
+
+export function getNormalizedAttachmentTypes(
+  attachments: MessengerNormalizedAttachment[] | undefined
+): MessengerAttachmentCategory[] {
+  if (!attachments?.length) {
+    return [];
+  }
+
+  return Array.from(new Set(attachments.map(att => att.type))).sort();
+}
+
+export function hasImageAttachment(
+  attachments: MessengerNormalizedAttachment[] | undefined
+): boolean {
+  return attachments?.some(att => att.type === "image") ?? false;
+}
+
+export function hasImage(
+  attachments: MessengerNormalizedAttachment[] | undefined
+): boolean {
+  return hasImageAttachment(attachments);
+}
+
+export function hasGifAttachment(
+  attachments: MessengerNormalizedAttachment[] | undefined
+): boolean {
+  return attachments?.some(att => att.type === "gif") ?? false;
+}
+
+export function hasGif(
+  attachments: MessengerNormalizedAttachment[] | undefined
+): boolean {
+  return hasGifAttachment(attachments);
+}
+
+export function hasAudioAttachment(
+  attachments: MessengerNormalizedAttachment[] | undefined
+): boolean {
+  return attachments?.some(att => att.type === "audio") ?? false;
+}
+
+export function hasAudio(
+  attachments: MessengerNormalizedAttachment[] | undefined
+): boolean {
+  return hasAudioAttachment(attachments);
+}
+
+export function hasVideoAttachment(
+  attachments: MessengerNormalizedAttachment[] | undefined
+): boolean {
+  return attachments?.some(att => att.type === "video") ?? false;
+}
+
+export function hasVideo(
+  attachments: MessengerNormalizedAttachment[] | undefined
+): boolean {
+  return hasVideoAttachment(attachments);
+}
+
+export function hasFileAttachment(
+  attachments: MessengerNormalizedAttachment[] | undefined
+): boolean {
+  return attachments?.some(att => att.type === "file") ?? false;
+}
+
+export function hasUnsupportedAttachment(
+  attachments: MessengerNormalizedAttachment[] | undefined
+): boolean {
+  return (
+    attachments?.some(att =>
+      ["gif", "audio", "video", "file", "unknown"].includes(att.type)
+    ) ?? false
+  );
+}
+
+export function hasUnknownAttachment(
+  attachments: MessengerNormalizedAttachment[] | undefined
+): boolean {
+  return attachments?.some(att => att.type === "unknown") ?? false;
+}
+
+export function hasReadableImageAttachment(
+  attachments: MessengerNormalizedAttachment[] | undefined
+): boolean {
+  return (
+    attachments?.some(
+      att =>
+        att.type === "image" &&
+        typeof att.url === "string" &&
+        att.url.trim() !== ""
+    ) ?? false
+  );
+}
+
+export function getAttachmentCategorySummary(
+  attachments: FacebookWebhookAttachment[] | undefined
+): MessengerAttachmentCategory[] {
+  if (!attachments?.length) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      attachments
+        .map(attachment => getAttachmentCategory(attachment))
+        .filter(category => category !== "unknown")
+    )
+  ).sort();
+}
 
 export type FacebookWebhookEntry = {
   id?: string;
@@ -42,7 +324,7 @@ export type WebhookSummary = {
   events: WebhookSummaryEvent[];
 };
 
-export type AckKind = "like" | "ok" | "thanks" | "emoji";
+export type AckKind = "like" | "ok" | "thanks";
 
 type GreetingResponse =
   | { mode: "text"; text: string };
@@ -157,13 +439,6 @@ export function detectAck(raw: string | undefined | null): AckKind | null {
 
   if (/^(thanks|thx|merci|tks)$/.test(lower)) {
     return "thanks";
-  }
-
-  if (
-    text.length > 0 &&
-    Array.from(text).every(char => /[\p{Extended_Pictographic}\s]/u.test(char))
-  ) {
-    return "emoji";
   }
 
   return null;

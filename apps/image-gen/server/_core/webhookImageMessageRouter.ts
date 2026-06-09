@@ -27,8 +27,11 @@ import {
   setFlowState,
   setPendingStoredImage,
 } from "./messengerState";
-import { type FacebookWebhookEvent } from "./webhookHelpers";
-import { toLogUser } from "./privacy";
+import {
+  getAttachmentCategorySummary,
+  isImageAttachment,
+  type FacebookWebhookEvent,
+} from "./webhookHelpers";
 import type { HandlerContext } from "./webhookHandlerTypes";
 
 type FacebookWebhookMessage = NonNullable<FacebookWebhookEvent["message"]>;
@@ -183,7 +186,7 @@ function getInboundImageUrl(
   attachments: ImageMessageInput["attachments"]
 ): string | null {
   const imageAttachment = attachments?.find(
-    att => att.type === "image" && att.payload?.url
+    att => isImageAttachment(att) && att.payload?.url
   );
   return imageAttachment?.payload?.url ?? null;
 }
@@ -196,7 +199,7 @@ function logParsedImageMessage(
   const psidHash = anonymizePsid(input.psid).slice(0, 12);
   const attachmentHostname = ctx.getAttachmentHostname(inboundImageUrl);
   const attachmentType = input.attachments?.find(
-    att => att.type === "image" && att.payload?.url === inboundImageUrl
+    att => isImageAttachment(att) && att.payload?.url === inboundImageUrl
   )?.type;
   const attachmentPayloadUrl = summarizeSensitiveUrl(inboundImageUrl);
   safeLog("messenger_image_message_parsed", {
@@ -205,6 +208,9 @@ function logParsedImageMessage(
     attachmentType,
     attachmentHostname,
     attachmentPayloadUrl,
+    attachmentCategories: getAttachmentCategorySummary(input.attachments),
+    textLength: input.text?.trim().length ?? 0,
+    hasCaptionText: Boolean(input.text?.trim()),
   });
   ctx.debugWebhookLog({
     level: "debug",

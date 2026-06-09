@@ -2535,11 +2535,11 @@ describe("acknowledgement edgecases", () => {
     resetMessengerEventDedupe();
   });
 
-  it("detects legacy like, short acknowledgements, and emoji", () => {
+  it("detects legacy like and short acknowledgements", () => {
     expect(detectAck("(y)")).toBe("like");
     expect(detectAck("  jep ")).toBe("ok");
     expect(detectAck("Merci")).toBe("thanks");
-    expect(detectAck("👍")).toBe("emoji");
+    expect(detectAck("\u{1F44D}")).toBeNull();
     expect(detectAck("   ")).toBeNull();
     expect(detectAck("disco")).toBeNull();
   });
@@ -2563,25 +2563,183 @@ describe("acknowledgement edgecases", () => {
     expect(safeLogMock).toHaveBeenCalledWith("ack_ignored", { ack: "like" });
   });
 
-  it("ignores 👍 without sending text or quick replies", async () => {
+  it("treats emoji messages as normal text", async () => {
     await processFacebookWebhookPayload({
       entry: [
         {
           messaging: [
             {
               sender: { id: "ack-emoji-user" },
-              message: { mid: "mid-ack-emoji", text: "👍" },
+              message: { mid: "mid-emoji-text", text: "\u{1F44D}" },
             },
           ],
         },
       ],
     });
 
+    expect(sendImageMock).not.toHaveBeenCalled();
     expect(sendTextMock).not.toHaveBeenCalled();
-    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
-    expect(safeLogMock).toHaveBeenCalledWith("ack_ignored", { ack: "emoji" });
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
+      "ack-emoji-user",
+      expect.any(String),
+      expect.any(Array)
+    );
+    expect(safeLogMock).not.toHaveBeenCalledWith(
+      "ack_ignored",
+      expect.objectContaining({ ack: "emoji" })
+    );
   });
+
+  it("routes audio attachments as unsupportedAudio", async () => {
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: "unsupported-media-user" },
+              message: {
+                mid: "mid-unsupported-media",
+                text: "maak deze cyberpunk \u{2764}\uFE0F",
+                attachments: [
+                  {
+                    type: "audio",
+                    payload: { url: "https://audio.example/song.mp3" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(sendTextMock).toHaveBeenCalledWith(
+      "unsupported-media-user",
+      t("nl", "unsupportedAudio")
+    );
+    expect(sendImageMock).not.toHaveBeenCalled();
+    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_attachment_received",
+      expect.objectContaining({
+        attachmentKinds: ["audio"],
+        attachmentCount: 1,
+        hasText: true,
+        textLength: expect.any(Number),
+      })
+    );
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_attachment_unsupported",
+      expect.objectContaining({
+        attachmentKinds: ["audio"],
+        attachmentCount: 1,
+        hasText: true,
+      })
+    );
+    const unsupportedLog = safeLogMock.mock.calls.find(
+      ([event]) => event === "messenger_attachment_unsupported"
+    )?.[1];
+    expect(unsupportedLog).not.toHaveProperty("text");
+  });
+
+  const unsupportedMediaCases: Array<{
+    type: string;
+    expected: string;
+    attachmentType: string;
+    payload: Record<string, string>;
+    expectedKinds: string[];
+  }> = [
+    {
+      type: "gif",
+      expected: t("nl", "unsupportedGif"),
+      attachmentType: "image",
+      payload: {
+        url: "https://media.example/anim.gif",
+        mime_type: "image/gif",
+      },
+      expectedKinds: ["gif"],
+    },
+    {
+      type: "audio",
+      expected: t("nl", "unsupportedAudio"),
+      attachmentType: "audio",
+      payload: {
+        url: "https://media.example/song.mp3",
+      },
+      expectedKinds: ["audio"],
+    },
+    {
+      type: "video",
+      expected: t("nl", "unsupportedMedia"),
+      attachmentType: "video",
+      payload: {
+        url: "https://media.example/video.mp4",
+      },
+      expectedKinds: ["video"],
+    },
+    {
+      type: "file",
+      expected: t("nl", "unsupportedMedia"),
+      attachmentType: "file",
+      payload: {
+        url: "https://media.example/document.pdf",
+      },
+      expectedKinds: ["file"],
+    },
+    {
+      type: "sticker",
+      expected: t("nl", "unsupportedMedia"),
+      attachmentType: "sticker",
+      payload: {
+        sticker_id: "123",
+      },
+      expectedKinds: ["unknown"],
+    },
+  ];
+
+  it.each(unsupportedMediaCases)(
+    "routes $type attachments as unsupported response",
+    async ({ type, expected, attachmentType, payload, expectedKinds }) => {
+      await processFacebookWebhookPayload({
+        entry: [
+          {
+            messaging: [
+              {
+                sender: { id: `${type}-unsupported-media-user` },
+                message: {
+                  mid: `mid-unsupported-${type}`,
+                  text: "maak deze cyberpunk ❤️",
+                  attachments: [
+                    {
+                      type: attachmentType,
+                      payload,
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(sendTextMock).toHaveBeenCalledWith(
+        `${type}-unsupported-media-user`,
+        expected
+      );
+      expect(sendImageMock).not.toHaveBeenCalled();
+      expect(sendQuickRepliesMock).not.toHaveBeenCalled();
+      expect(safeLogMock).toHaveBeenCalledWith(
+        "messenger_attachment_unsupported",
+        expect.objectContaining({
+          attachmentKinds: expectedKinds,
+          attachmentCount: 1,
+          hasText: true,
+        })
+      );
+    }
+  );
 });
+
 
 describe("bot rate limit feature", () => {
   beforeEach(() => {

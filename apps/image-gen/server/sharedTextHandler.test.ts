@@ -441,4 +441,132 @@ describe("sharedTextHandler", () => {
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("treats emoji-only messages as normal text", async () => {
+    const result = await handleSharedTextMessage({
+      message: {
+        channel: "messenger",
+        senderId: "psid-emoji-only",
+        userId: "user-key-emoji-only",
+        messageType: "text",
+        textBody: "\u2764\uFE0F",
+      },
+      reqId: "req-emoji-only",
+      lang: "nl",
+      getState: async () =>
+        createState({
+          psid: "psid-emoji-only",
+          userKey: "user-key-emoji-only",
+          hasSeenIntro: true,
+        }),
+      setFlowState: async () => {},
+    });
+
+    expect(result).toEqual({
+      response: {
+        text: t("nl", "flowExplanation"),
+        actions: [
+          { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
+          { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
+          { id: "privacy", label: "Privacy", inputText: "Privacy" },
+        ],
+      },
+    });
+  });
+
+  it("treats text with emoji as normal text", async () => {
+    const result = await handleSharedTextMessage({
+      message: {
+        channel: "messenger",
+        senderId: "psid-text-emoji",
+        userId: "user-key-text-emoji",
+        messageType: "text",
+        textBody: "maak deze cyberpunk \ud83d\udca1",
+      },
+      reqId: "req-text-emoji",
+      lang: "nl",
+      getState: async () =>
+        createState({
+          psid: "psid-text-emoji",
+          userKey: "user-key-text-emoji",
+          hasSeenIntro: true,
+        }),
+      setFlowState: async () => {},
+    });
+
+    expect(result).toEqual({
+      response: {
+        text: t("nl", "flowExplanation"),
+        actions: [
+          { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
+          { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
+          { id: "privacy", label: "Privacy", inputText: "Privacy" },
+        ],
+      },
+    });
+  });
+
+  it("treats multi-codepoint emoji as normal text", async () => {
+    const multiCodepointEmoji = "\ud83d\udc69\u200d\ud83d\udc68\u200d\ud83d\udc67\ud83c\udffb";
+    const result = await handleSharedTextMessage({
+      message: {
+        channel: "messenger",
+        senderId: "psid-multi-emoji",
+        userId: "user-key-multi-emoji",
+        messageType: "text",
+        textBody: multiCodepointEmoji,
+      },
+      reqId: "req-multi-emoji",
+      lang: "nl",
+      getState: async () =>
+        createState({
+          psid: "psid-multi-emoji",
+          userKey: "user-key-multi-emoji",
+          hasSeenIntro: true,
+        }),
+      setFlowState: async () => {},
+    });
+
+    expect(result).toEqual({
+      response: {
+        text: t("nl", "flowExplanation"),
+        actions: [
+          { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
+          { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
+          { id: "privacy", label: "Privacy", inputText: "Privacy" },
+        ],
+      },
+    });
+  });
+  it("treats flag emoji as normal text", async () => {
+    const result = await handleSharedTextMessage({
+      message: {
+        channel: "messenger",
+        senderId: "psid-flag-emoji",
+        userId: "user-key-flag-emoji",
+        messageType: "text",
+        textBody: "\ud83c\uddfa\ud83c\uddf8",
+      },
+      reqId: "req-flag-emoji",
+      lang: "nl",
+      getState: async () =>
+        createState({
+          psid: "psid-flag-emoji",
+          userKey: "user-key-flag-emoji",
+          hasSeenIntro: true,
+        }),
+      setFlowState: async () => {},
+    });
+
+    expect(result).toEqual({
+      response: {
+        text: t("nl", "flowExplanation"),
+        actions: [
+          { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
+          { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
+          { id: "privacy", label: "Privacy", inputText: "Privacy" },
+        ],
+      },
+    });
+  });
 });
