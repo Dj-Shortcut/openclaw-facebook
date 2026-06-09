@@ -7,6 +7,7 @@ import {
   getNormalizedAttachmentTypes,
   hasAudioAttachment,
   hasFileAttachment,
+  hasLinkAttachment,
   hasGifAttachment,
   hasImageAttachment,
   hasReadableImageAttachment,
@@ -172,6 +173,7 @@ function resolveUnsupportedAttachmentRoute(
   if (
     hasVideoAttachment(attachments) ||
     hasFileAttachment(attachments) ||
+    hasLinkAttachment(attachments) ||
     hasUnknownAttachment(attachments)
   ) {
     return "unsupported_media";

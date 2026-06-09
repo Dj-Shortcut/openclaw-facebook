@@ -2687,6 +2687,16 @@ describe("acknowledgement edgecases", () => {
       expectedKinds: ["file"],
     },
     {
+      type: "link",
+      expected: t("nl", "unsupportedMedia"),
+      attachmentType: "fallback",
+      payload: {
+        url: "https://shared.example/story",
+        title: "Shared link",
+      },
+      expectedKinds: ["link"],
+    },
+    {
       type: "sticker",
       expected: t("nl", "unsupportedMedia"),
       attachmentType: "sticker",
