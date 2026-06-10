@@ -3,6 +3,7 @@ import type { ConversationState, MessengerUserState } from "./messengerState";
 import { safeLog } from "./messengerApi";
 import { detectAck, getGreetingResponse } from "./webhookHelpers";
 import { toLogUser } from "./privacy";
+import { isVideoAnimationIntent } from "./imageIntent";
 import type { NormalizedInboundMessage } from "./normalizedInboundMessage";
 import type { BotResponse } from "./botResponse";
 import {
@@ -151,6 +152,21 @@ function buildDefaultTextResponse(
   return { response: buildQuickStartResponse(lang) };
 }
 
+function tryHandleVideoAnimationIntent(
+  input: SharedTextHandlerInput,
+  normalizedText: string
+): SharedTextHandlerResult | null {
+  if (!isVideoAnimationIntent(normalizedText)) {
+    return null;
+  }
+
+  return {
+    response: {
+      text: t(input.lang, "unsupportedVideoOrAnimation"),
+    },
+  };
+}
+
 function hasEditableImage(state: MessengerUserState): boolean {
   return Boolean(
     state.lastPhotoUrl ??
@@ -186,6 +202,13 @@ export async function handleSharedTextMessage(
 
   const state = await input.getState();
   const hasPhoto = hasEditableImage(state);
+  const videoAnimationResult = tryHandleVideoAnimationIntent(
+    input,
+    normalizedText
+  );
+  if (videoAnimationResult) {
+    return videoAnimationResult;
+  }
   if (
     input.runTextFeatures &&
     (await input.runTextFeatures({

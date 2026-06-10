@@ -3,6 +3,12 @@ const PROMPT_WRITING_PATTERNS = [
   /\bprompt\s+(?:voor|for)\b/iu,
 ];
 
+const VIDEO_ANIMATION_PATTERNS = [
+  /\b(?:laat|laat\s+hem|laat\s+haar|laat\s+hen|maak|maak\s+een|maak\s+mij|maak\s+me)\b.*\b(?:video|animatie|beweeg|bewegen|dansen|zingen)\b/iu,
+  /\b(?:bewegen|bewegend)\s+(?:zoals|als)\s+\w+/iu,
+  /\b(?:laat|maak)\s+(?:hem|haar|hen|me)\s+(?:bewegen|dansen|zingen)\b/iu,
+];
+
 const EXPLICIT_SOURCE_EDIT_PATTERNS = [
   /\b(?:restyle|restylen|restijlen|restijl|bewerk|edit|pas\s+aan|retoucheer)\b/iu,
   /\b(?:bewerk\s+foto|bewerk\s+deze\s+foto|foto\s+bewerken|edit\s+image|edit\s+this\s+image|edit\s+photo|this\s+photo|deze\s+foto)\b/iu,
@@ -111,6 +117,10 @@ export function isVisualCorrectionRequest(text: string): boolean {
       normalized
     )
   );
+}
+
+export function isVideoAnimationIntent(text: string): boolean {
+  return VIDEO_ANIMATION_PATTERNS.some(pattern => pattern.test(text));
 }
 
 function hasArbitraryVisualSubject(text: string): boolean {

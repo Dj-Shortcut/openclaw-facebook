@@ -2590,6 +2590,34 @@ describe("acknowledgement edgecases", () => {
     );
   });
 
+  it.each(["laat hem dansen", "laat hem zingen", "laat hem bewegen"])(
+    "returns video-animation intent guidance for \"%s\"",
+    async text => {
+      await processFacebookWebhookPayload({
+        entry: [
+          {
+            messaging: [
+              {
+                sender: { id: "video-animation-user" },
+                message: {
+                  mid: `mid-${text.replace(/\s+/g, "-")}`,
+                  text,
+                },
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(sendTextMock).toHaveBeenCalledWith(
+        "video-animation-user",
+        t("nl", "unsupportedVideoOrAnimation")
+      );
+      expect(sendImageMock).not.toHaveBeenCalled();
+      expect(sendQuickRepliesMock).not.toHaveBeenCalled();
+    }
+  );
+
   it("routes audio attachments as unsupportedAudio", async () => {
     await processFacebookWebhookPayload({
       entry: [
@@ -2660,7 +2688,7 @@ describe("acknowledgement edgecases", () => {
     },
     {
       type: "video",
-      expected: t("nl", "unsupportedMedia"),
+      expected: t("nl", "unsupportedVideo"),
       attachmentType: "video",
       payload: {
         url: "https://media.example/video.mp4",
@@ -2669,7 +2697,7 @@ describe("acknowledgement edgecases", () => {
     },
     {
       type: "file",
-      expected: t("nl", "unsupportedMedia"),
+      expected: t("nl", "unsupportedFile"),
       attachmentType: "file",
       payload: {
         url: "https://media.example/document.pdf",
@@ -2678,7 +2706,7 @@ describe("acknowledgement edgecases", () => {
     },
     {
       type: "link",
-      expected: t("nl", "unsupportedMedia"),
+      expected: t("nl", "unsupportedShare"),
       attachmentType: "fallback",
       payload: {
         url: "https://shared.example/story",
@@ -2688,7 +2716,7 @@ describe("acknowledgement edgecases", () => {
     },
     {
       type: "sticker",
-      expected: t("nl", "unsupportedMedia"),
+      expected: t("nl", "unsupportedSticker"),
       attachmentType: "sticker",
       payload: {
         sticker_id: "123",

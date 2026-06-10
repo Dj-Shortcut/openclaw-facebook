@@ -34,6 +34,18 @@ type TranslationKey =
   | "missingInputImageWithEditableImage"
   | "messengerMissingInputImage"
   | "messengerMissingInputImageWithEditableImage"
+  | "unsupportedMediaWithEditableImage"
+  | "unsupportedVideo"
+  | "unsupportedVideoWithEditableImage"
+  | "unsupportedFile"
+  | "unsupportedFileWithEditableImage"
+  | "unsupportedShare"
+  | "unsupportedShareWithEditableImage"
+  | "unsupportedSticker"
+  | "unsupportedStickerWithEditableImage"
+  | "unsupportedUnknown"
+  | "unsupportedUnknownWithEditableImage"
+  | "unsupportedVideoOrAnimation"
   | "generatingImagePrompt"
   | "generationQueued"
   | "whatsappGenerationFollowup"
@@ -118,6 +130,30 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     errorFallback: "Er liep iets mis aan mijn kant. Probeer gerust opnieuw.",
     unsupportedMedia:
       "Ik werk voorlopig alleen met foto's. Stuur een foto in plaats van een video of ander bestand.",
+    unsupportedMediaWithEditableImage:
+      "Ik kan deze bijlage niet verwerken. Je kunt nu nog met je huidige foto verder: beschrijf de aanpassing of stuur een nieuwe foto.",
+    unsupportedVideo:
+      "Ik kan momenteel alleen foto’s bewerken. Video’s worden nog niet ondersteund. Stuur een foto om verder te gaan.",
+    unsupportedVideoWithEditableImage:
+      "Ik kan momenteel nog geen video maken. Je kunt wel nog doorgaan met de vorige foto: beschrijf een wijziging of stuur een nieuwe foto.",
+    unsupportedFile:
+      "Ik kan geen documenten of andere bestanden verwerken. Stuur een foto als je verder wilt gaan.",
+    unsupportedFileWithEditableImage:
+      "Ik kan geen documenten of andere bestanden verwerken. Je kunt wel nog met je vorige foto verder: beschrijf een wijziging of stuur een nieuwe foto.",
+    unsupportedShare:
+      "Ik kan gedeelde links nog niet als invoer gebruiken. Stuur een foto voor bewerking.",
+    unsupportedShareWithEditableImage:
+      "Ik kan gedeelde links nog niet als invoer gebruiken. Je kunt wel nog met je vorige foto verder.",
+    unsupportedSticker:
+      "Ik kan geen stickers verwerken. Stuur een foto als je wilt bewerken.",
+    unsupportedStickerWithEditableImage:
+      "Ik kan geen stickers verwerken. Je kunt wel nog met je vorige foto verder.",
+    unsupportedUnknown:
+      "Deze bijlage kan ik niet verwerken. Stuur een foto om te beginnen.",
+    unsupportedUnknownWithEditableImage:
+      "Deze bijlage kan ik niet verwerken. Je kunt wel nog met je vorige foto verder.",
+    unsupportedVideoOrAnimation:
+      "Ik kan nog geen video maken, maar ik kan wel een foto aanpassen. Wil je bijvoorbeeld een podium, disco-achtergrond of danspose?",
     unsupportedGif:
       "GIF ontvangen, stuur best een gewone foto voor bewerking.",
     unsupportedAudio:
@@ -186,6 +222,30 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     errorFallback: "Something went wrong on my side. Please try again.",
     unsupportedMedia:
       "I currently only work with photos. Please send a photo instead of a video or other file.",
+    unsupportedMediaWithEditableImage:
+      "I can't process this attachment. You can keep working with your current photo: describe the edit or send a new photo.",
+    unsupportedVideo:
+      "I currently only work with photos. Videos are not supported yet. Send a photo to continue.",
+    unsupportedVideoWithEditableImage:
+      "I can't create videos yet. You can continue with your previous photo: describe an edit or send a new photo.",
+    unsupportedFile:
+      "I can't process documents or other files. Send a photo to continue.",
+    unsupportedFileWithEditableImage:
+      "I can't process documents or other files. You can still continue with your previous photo: describe an edit or send a new photo.",
+    unsupportedShare:
+      "I still can't use shared links as input. Send a photo for editing.",
+    unsupportedShareWithEditableImage:
+      "I still can't use shared links as input. You can still continue with your previous photo.",
+    unsupportedSticker:
+      "I can't process stickers. Send a photo for editing.",
+    unsupportedStickerWithEditableImage:
+      "I can't process stickers. You can still continue with your previous photo.",
+    unsupportedUnknown:
+      "I can't process this attachment. Send a photo to continue.",
+    unsupportedUnknownWithEditableImage:
+      "I can't process this attachment. You can still continue with your previous photo.",
+    unsupportedVideoOrAnimation:
+      "I can’t create a video yet, but I can edit a photo. For example, send a disco stage, dance pose, or nightclub background request.",
     unsupportedGif:
       "I got your GIF, send a regular photo instead.",
     unsupportedAudio:

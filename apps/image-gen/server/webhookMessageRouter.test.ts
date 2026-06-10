@@ -44,6 +44,7 @@ import type { HandlerContext } from "./_core/webhookHandlerTypes";
 import { t } from "./_core/i18n";
 import { handleMessageEvent } from "./_core/webhookMessageRouter";
 import { type FacebookWebhookEvent } from "./_core/webhookHelpers";
+import { setLastGenerated } from "./_core/messengerState";
 
 type TestAttachment = Exclude<
   NonNullable<FacebookWebhookEvent["message"]>["attachments"],
@@ -172,7 +173,7 @@ describe("webhook message router", () => {
       "req-image-no-handler"
     );
     expect(findLogEvent("messenger_attachment_unsupported")).toMatchObject({
-      route: "unsupported_media",
+      route: "image",
       attachmentKinds: ["image"],
       attachmentCount: 1,
     });
@@ -238,7 +239,7 @@ describe("webhook message router", () => {
   }> = [
     {
       type: "video",
-      expected: t("nl", "unsupportedMedia"),
+      expected: t("nl", "unsupportedVideo"),
       attachment: {
         type: "video",
         payload: { url: "https://media.example/video.mp4" },
@@ -246,15 +247,15 @@ describe("webhook message router", () => {
     },
     {
       type: "file",
-      expected: t("nl", "unsupportedMedia"),
+      expected: t("nl", "unsupportedFile"),
       attachment: {
         type: "file",
         payload: { url: "https://media.example/document.pdf" },
       },
     },
     {
-      type: "unknown",
-      expected: t("nl", "unsupportedMedia"),
+      type: "sticker",
+      expected: t("nl", "unsupportedSticker"),
       attachment: {
         type: "sticker",
         payload: { sticker_id: "123" },
@@ -262,7 +263,7 @@ describe("webhook message router", () => {
     },
     {
       type: "link",
-      expected: t("nl", "unsupportedMedia"),
+      expected: t("nl", "unsupportedShare"),
       attachment: {
         type: "fallback",
         payload: { url: "https://shared.example/story", title: "Shared link" },
@@ -292,6 +293,59 @@ describe("webhook message router", () => {
       );
     }
   );
+
+  it("does not enqueue image handling when receiving video attachments", async () => {
+    const ctx = makeContext();
+
+    await handleMessageEvent(ctx, {
+      psid: "video-video-guard-user",
+      userId: "video-video-guard-user-key",
+      event: {
+        message: messageWithTextAndAttachments("laat hem dansen", [
+          { type: "video", payload: { url: "https://media.example/video.mp4" } },
+        ]),
+      },
+      reqId: "req-video-media-guard",
+      lang: "nl",
+    });
+
+    expect(tryHandleImageMessageMock).not.toHaveBeenCalled();
+    expect(tryHandleAudioMessageMock).not.toHaveBeenCalled();
+    expect(ctx.sendLoggedText).toHaveBeenCalledWith(
+      "video-video-guard-user",
+      t("nl", "unsupportedVideo"),
+      "req-video-media-guard"
+    );
+    expect(findLogEvent("messenger_attachment_routed")).toMatchObject({
+      route: "unsupported_video",
+      rejectedReason: "unsupported_video",
+      attachmentHasUrl: true,
+    });
+  });
+
+  it("keeps previous editable image context for unsupported video while explaining photo path", async () => {
+    const ctx = makeContext();
+    const psid = "video-unsupported-with-photo";
+    await setLastGenerated(psid, "https://img.example/existing-photo.jpg");
+
+    await handleMessageEvent(ctx, {
+      psid,
+      userId: `${psid}-key`,
+      event: {
+        message: messageWithTextAndAttachments("laat hem dansen", [
+          { type: "video", payload: { url: "https://media.example/video.mp4" } },
+        ]),
+      },
+      reqId: "req-video-unsupported-photo",
+      lang: "nl",
+    });
+
+    expect(ctx.sendLoggedText).toHaveBeenCalledWith(
+      psid,
+      t("nl", "unsupportedVideoWithEditableImage"),
+      "req-video-unsupported-photo"
+    );
+  });
 
   it("routes captioned audio as unsupported when audio handler declines", async () => {
     const ctx = makeContext();
