@@ -7,6 +7,8 @@ const VIDEO_ANIMATION_PATTERNS = [
   /\b(?:laat|laat\s+hem|laat\s+haar|laat\s+hen|maak|maak\s+een|maak\s+mij|maak\s+me)\b.*\b(?:video|animatie|beweeg|bewegen|dansen|zingen)\b/iu,
   /\b(?:bewegen|bewegend)\s+(?:zoals|als)\s+\w+/iu,
   /\b(?:laat|maak)\s+(?:hem|haar|hen|me)\s+(?:bewegen|dansen|zingen)\b/iu,
+  /\blet\b.*\b(?:him|her|them|it)\s+(?:dance|sing|move)\b/iu,
+  /\b(?:dance|sing|move)\s+(?:as|like)\s+\w+/iu,
 ];
 
 const EXPLICIT_SOURCE_EDIT_PATTERNS = [

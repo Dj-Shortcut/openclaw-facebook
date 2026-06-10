@@ -15,7 +15,8 @@
 
 ## Future video input support sketch
 
-- Add a separate `MessengerAttachmentRoute` branch for `video`.
+- Convert the existing `MessengerAttachmentRoute` branch `unsupported_video`
+  into a supported video processing path.
 - Add ingestion validation and normalization for short-form clips.
 - Decide where video content is temporarily stored:
   - short-lived encrypted object storage for source media
@@ -34,9 +35,9 @@
 
 ## Meta upload and delivery constraints to validate
 
-- Confirm allowed and blocked MIME/type combinations for Messenger attachments.
+- Validate allowed and blocked MIME/type combinations for Messenger attachments.
 - Confirm attachment URL TTL behavior for temporary media URLs.
-- Confirm whether uploaded media can be fetched server-side with current token model.
+- Determine whether uploaded media can be fetched server-side with current token model.
 - Validate whether video upload size and duration constraints differ from current image fetch assumptions.
 
 ## Storage, operations, and budget checks

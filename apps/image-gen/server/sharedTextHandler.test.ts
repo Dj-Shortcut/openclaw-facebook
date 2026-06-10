@@ -414,6 +414,18 @@ describe("sharedTextHandler", () => {
       text: "bewegen zoals Bruno",
       expected: t("nl", "unsupportedVideoOrAnimation"),
     },
+    {
+      text: "let him dance",
+      expected: t("nl", "unsupportedVideoOrAnimation"),
+    },
+    {
+      text: "let him sing",
+      expected: t("nl", "unsupportedVideoOrAnimation"),
+    },
+    {
+      text: "move like Bruno",
+      expected: t("nl", "unsupportedVideoOrAnimation"),
+    },
   ];
 
   it.each(videoAnimationRecoveryCases)(

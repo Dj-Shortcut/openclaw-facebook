@@ -1,9 +1,17 @@
+import { randomUUID } from "node:crypto";
 import { getDayKey } from "./messengerStateNormalization";
 import { getOrCreateState, type MessengerUserState } from "./messengerState";
-import { updateStoredState } from "./stateStore";
+import {
+  deleteEphemeralKeyIfValue,
+  setEphemeralKeyIfAbsent,
+  updateStoredState,
+} from "./stateStore";
 
 const DEFAULT_FREE_DAILY_LIMIT = 3;
 const DEFAULT_DAILY_AUDIO_TRANSCRIPTION_LIMIT = 3;
+const TRANSCRIPTION_QUOTA_LOCK_MS = 1_000;
+const TRANSCRIPTION_QUOTA_LOCK_MAX_RETRIES = 20;
+const TRANSCRIPTION_QUOTA_LOCK_RETRY_MS = 25;
 
 export function getFreeDailyLimit(): number {
   const configured = Number(process.env.MESSENGER_FREE_DAILY_LIMIT);
@@ -21,6 +29,38 @@ function getTranscriptionLimit(): number {
   }
 
   return DEFAULT_DAILY_AUDIO_TRANSCRIPTION_LIMIT;
+}
+
+function toSeconds(milliseconds: number): number {
+  return Math.max(1, Math.ceil(milliseconds / 1000));
+}
+
+function transcriptionQuotaLockKey(psid: string): string {
+  return `messenger:transcription-quota:${psid}`;
+}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise(resolve => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+async function reserveTranscriptionSlot(psid: string): Promise<string | null> {
+  const lockKey = transcriptionQuotaLockKey(psid);
+  const ttlSeconds = toSeconds(TRANSCRIPTION_QUOTA_LOCK_MS);
+
+  for (let attempt = 0; attempt < TRANSCRIPTION_QUOTA_LOCK_MAX_RETRIES; attempt += 1) {
+    const token = randomUUID();
+    if (await setEphemeralKeyIfAbsent(lockKey, token, ttlSeconds)) {
+      return token;
+    }
+
+    if (attempt < TRANSCRIPTION_QUOTA_LOCK_MAX_RETRIES - 1) {
+      await wait(TRANSCRIPTION_QUOTA_LOCK_RETRY_MS);
+    }
+  }
+
+  return null;
 }
 
 /** Returns whether a Messenger PSID or tenant-safe user key has exact quota bypass access. */
@@ -64,12 +104,7 @@ function withSyncedTranscriptionQuota(
   now = Date.now()
 ): MessengerUserState {
   const dayKey = getDayKey(now);
-  const transcriptionQuota = state.transcriptionQuota ?? {
-    dayKey,
-    count: 0,
-  };
-
-  if (transcriptionQuota.dayKey === dayKey) {
+  if (state.transcriptionQuota?.dayKey === dayKey) {
     return state;
   }
 
@@ -139,6 +174,54 @@ export async function canTranscribe(psid: string): Promise<boolean> {
   }
 
   return state.transcriptionQuota.count < getTranscriptionLimit();
+}
+
+export async function checkAndIncrementTranscription(
+  psid: string
+): Promise<boolean> {
+  const lockToken = await reserveTranscriptionSlot(psid);
+  if (!lockToken) {
+    return false;
+  }
+
+  try {
+    const now = Date.now();
+    const fallbackState = await Promise.resolve(getOrCreateState(psid));
+    const limit = getTranscriptionLimit();
+    let allowed = false;
+
+    await Promise.resolve(
+      updateStoredState<MessengerUserState>(psid, storedState => {
+        const baseState = withSyncedTranscriptionQuota(
+          withSyncedQuota(storedState ?? fallbackState, now),
+          now
+        );
+
+        if (hasQuotaBypass(psid, baseState.userKey)) {
+          allowed = true;
+          return baseState;
+        }
+
+        if (baseState.transcriptionQuota.count >= limit) {
+          return baseState;
+        }
+
+        allowed = true;
+        return {
+          ...baseState,
+          transcriptionQuota: {
+            ...baseState.transcriptionQuota,
+            count: baseState.transcriptionQuota.count + 1,
+          },
+          updatedAt: now,
+        };
+      })
+    );
+
+    return allowed;
+  } finally {
+    await deleteEphemeralKeyIfValue(transcriptionQuotaLockKey(psid), lockToken);
+  }
 }
 
 export async function increment(psid: string): Promise<void> {

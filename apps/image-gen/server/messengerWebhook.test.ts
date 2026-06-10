@@ -2590,7 +2590,14 @@ describe("acknowledgement edgecases", () => {
     );
   });
 
-  it.each(["laat hem dansen", "laat hem zingen", "laat hem bewegen"])(
+  it.each([
+    "laat hem dansen",
+    "laat hem zingen",
+    "laat hem bewegen",
+    "let him dance",
+    "let him sing",
+    "move like Bruno",
+  ])(
     "returns video-animation intent guidance for \"%s\"",
     async text => {
       await processFacebookWebhookPayload({
