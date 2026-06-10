@@ -3,6 +3,7 @@ import { getOrCreateState, type MessengerUserState } from "./messengerState";
 import { updateStoredState } from "./stateStore";
 
 const DEFAULT_FREE_DAILY_LIMIT = 3;
+const DEFAULT_DAILY_AUDIO_TRANSCRIPTION_LIMIT = 3;
 
 export function getFreeDailyLimit(): number {
   const configured = Number(process.env.MESSENGER_FREE_DAILY_LIMIT);
@@ -11,6 +12,15 @@ export function getFreeDailyLimit(): number {
   }
 
   return DEFAULT_FREE_DAILY_LIMIT;
+}
+
+function getTranscriptionLimit(): number {
+  const configured = Number(process.env.MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT);
+  if (Number.isFinite(configured) && configured >= 0) {
+    return Math.floor(configured);
+  }
+
+  return DEFAULT_DAILY_AUDIO_TRANSCRIPTION_LIMIT;
 }
 
 /** Returns whether a Messenger PSID or tenant-safe user key has exact quota bypass access. */
@@ -49,6 +59,30 @@ function withSyncedQuota(
   };
 }
 
+function withSyncedTranscriptionQuota(
+  state: MessengerUserState,
+  now = Date.now()
+): MessengerUserState {
+  const dayKey = getDayKey(now);
+  const transcriptionQuota = state.transcriptionQuota ?? {
+    dayKey,
+    count: 0,
+  };
+
+  if (transcriptionQuota.dayKey === dayKey) {
+    return state;
+  }
+
+  return {
+    ...state,
+    transcriptionQuota: {
+      dayKey,
+      count: 0,
+    },
+    updatedAt: now,
+  };
+}
+
 async function syncQuotaState(
   psid: string,
   now = Date.now()
@@ -69,6 +103,26 @@ async function syncQuotaState(
   );
 }
 
+async function syncTranscriptionQuotaState(
+  psid: string,
+  now = Date.now()
+): Promise<MessengerUserState> {
+  const current = withSyncedTranscriptionQuota(
+    await Promise.resolve(getOrCreateState(psid)),
+    now
+  );
+
+  return Promise.resolve(
+    updateStoredState<MessengerUserState>(psid, storedState => {
+      if (!storedState) {
+        return withSyncedTranscriptionQuota(current, now);
+      }
+
+      return withSyncedTranscriptionQuota(withSyncedQuota(storedState, now), now);
+    })
+  );
+}
+
 export async function canGenerate(psid: string): Promise<boolean> {
   const state = await syncQuotaState(psid);
   if (hasQuotaBypass(psid, state.userKey)) {
@@ -76,6 +130,15 @@ export async function canGenerate(psid: string): Promise<boolean> {
   }
 
   return state.quota.count < getFreeDailyLimit();
+}
+
+export async function canTranscribe(psid: string): Promise<boolean> {
+  const state = await syncTranscriptionQuotaState(psid);
+  if (hasQuotaBypass(psid, state.userKey)) {
+    return true;
+  }
+
+  return state.transcriptionQuota.count < getTranscriptionLimit();
 }
 
 export async function increment(psid: string): Promise<void> {
@@ -94,6 +157,32 @@ export async function increment(psid: string): Promise<void> {
         quota: {
           ...baseState.quota,
           count: baseState.quota.count + 1,
+        },
+        updatedAt: now,
+      };
+    })
+  );
+}
+
+export async function incrementTranscription(psid: string): Promise<void> {
+  const now = Date.now();
+  const current = await syncTranscriptionQuotaState(psid, now);
+  if (hasQuotaBypass(psid, current.userKey)) {
+    return;
+  }
+
+  await Promise.resolve(
+    updateStoredState<MessengerUserState>(psid, storedState => {
+      const baseState = withSyncedTranscriptionQuota(
+        withSyncedQuota(storedState ?? current, now),
+        now
+      );
+
+      return {
+        ...baseState,
+        transcriptionQuota: {
+          ...baseState.transcriptionQuota,
+          count: baseState.transcriptionQuota.count + 1,
         },
         updatedAt: now,
       };

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { canGenerate, increment } from "./_core/messengerQuota";
+import { canGenerate, canTranscribe, increment, incrementTranscription } from "./_core/messengerQuota";
 import { getOrCreateState, resetStateStore, setFlowState, setPendingImage } from "./_core/messengerState";
 
 const TEST_PEPPER = "ci-test-pepper";
@@ -15,6 +15,7 @@ describe("messenger quota dayKey", () => {
     vi.useRealTimers();
     delete process.env.MESSENGER_QUOTA_BYPASS_IDS;
     delete process.env.MESSENGER_FREE_DAILY_LIMIT;
+    delete process.env.MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT;
   });
 
   afterAll(() => {
@@ -117,6 +118,33 @@ describe("messenger quota dayKey", () => {
 
     expect(await canGenerate(userId)).toBe(false);
     expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(5);
+  });
+
+  it("tracks transcription quota independently from image quota", async () => {
+    const userId = "audio-quota-separate-user";
+
+    await increment(userId);
+    await incrementTranscription(userId);
+    await incrementTranscription(userId);
+
+    expect(await canTranscribe(userId)).toBe(true);
+    expect(await canGenerate(userId)).toBe(true);
+
+    await incrementTranscription(userId);
+
+    expect(await canTranscribe(userId)).toBe(false);
+    expect(await canGenerate(userId)).toBe(true);
+  });
+
+  it("uses configured transcription quota limit", async () => {
+    const userId = "configured-transcription-limit-user";
+    process.env.MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT = "1";
+
+    expect(await canTranscribe(userId)).toBe(true);
+
+    await incrementTranscription(userId);
+
+    expect(await canTranscribe(userId)).toBe(false);
   });
 
 });

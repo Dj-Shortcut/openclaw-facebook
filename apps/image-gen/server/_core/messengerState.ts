@@ -65,6 +65,7 @@ export type MessengerUserState = {
   pendingConversationActionsByMessageId?: Record<string, ConversationAction[]>;
   pendingEditIntent?: PendingEditIntent | null;
   quota: QuotaState;
+  transcriptionQuota: QuotaState;
   updatedAt: number;
 };
 

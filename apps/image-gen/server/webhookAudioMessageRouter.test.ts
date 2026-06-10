@@ -7,10 +7,16 @@ import {
   vi,
 } from "vitest";
 
-const { safeLogMock, handleTextMessageMock, canGenerateMock } = vi.hoisted(() => ({
+const {
+  safeLogMock,
+  handleTextMessageMock,
+  canTranscribeMock,
+  incrementTranscriptionMock,
+} = vi.hoisted(() => ({
   safeLogMock: vi.fn(),
   handleTextMessageMock: vi.fn(async () => undefined),
-  canGenerateMock: vi.fn(async () => true),
+  canTranscribeMock: vi.fn(async () => true),
+  incrementTranscriptionMock: vi.fn(async () => undefined),
 }));
 
 vi.mock("./_core/messengerApi", () => ({
@@ -34,7 +40,8 @@ vi.mock("./_core/image-generation/sourceImageFetcher", () => ({
 }));
 
 vi.mock("./_core/messengerQuota", () => ({
-  canGenerate: canGenerateMock,
+  canTranscribe: canTranscribeMock,
+  incrementTranscription: incrementTranscriptionMock,
 }));
 
 import type { HandlerContext } from "./_core/webhookHandlerTypes";
@@ -77,10 +84,11 @@ describe("webhook audio message router", () => {
   beforeEach(() => {
     safeLogMock.mockClear();
     handleTextMessageMock.mockClear();
+    canTranscribeMock.mockClear();
+    incrementTranscriptionMock.mockClear();
+    canTranscribeMock.mockResolvedValue(true);
     process.env.PRIVACY_PEPPER = "test-pepper";
     process.env.OPENAI_API_KEY = "dummy-key";
-    canGenerateMock.mockClear();
-    canGenerateMock.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -113,6 +121,7 @@ describe("webhook audio message router", () => {
 
     expect(result).toBe(false);
     expect(handleTextMessageMock).not.toHaveBeenCalled();
+    expect(incrementTranscriptionMock).not.toHaveBeenCalled();
   });
 
   it("transcribes audio and routes to text handler when text is absent", async () => {
@@ -149,6 +158,7 @@ describe("webhook audio message router", () => {
     });
 
     expect(result).toBe(true);
+    expect(incrementTranscriptionMock).toHaveBeenCalledTimes(1);
     expect(handleTextMessageMock).toHaveBeenCalledWith(
       ctx,
       expect.objectContaining({
@@ -159,9 +169,9 @@ describe("webhook audio message router", () => {
     );
   });
 
-  it("returns false when user is out of generation quota and sends out-of-credits message", async () => {
+  it("returns true when transcription quota is exhausted and sends out-of-credits message", async () => {
     const ctx = makeContext();
-    canGenerateMock.mockResolvedValue(false);
+    canTranscribeMock.mockResolvedValue(false);
 
     const result = await tryHandleAudioMessage(ctx, {
       psid: "psid-4",
@@ -180,6 +190,7 @@ describe("webhook audio message router", () => {
       t("nl", "outOfFreeCredits"),
       "req-audio-quota"
     );
+    expect(incrementTranscriptionMock).not.toHaveBeenCalled();
     expect(handleTextMessageMock).not.toHaveBeenCalled();
   });
 
@@ -199,6 +210,7 @@ describe("webhook audio message router", () => {
     });
 
     expect(result).toBe(false);
+    expect(incrementTranscriptionMock).not.toHaveBeenCalled();
     expect(safeLogMock).toHaveBeenCalledWith(
       "messenger_audio_transcription_skipped",
       expect.objectContaining({

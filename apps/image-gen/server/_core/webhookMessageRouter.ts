@@ -99,10 +99,10 @@ function getAfterRouteTextResponse(
 
 function hasEditableImage(state: MessengerUserState | null): boolean {
   return Boolean(
-    state.lastPhotoUrl ??
-      state.lastPhoto ??
-      state.lastGeneratedUrl ??
-      state.lastImageUrl
+    state?.lastPhotoUrl ??
+      state?.lastPhoto ??
+      state?.lastGeneratedUrl ??
+      state?.lastImageUrl
   );
 }
 

@@ -3,7 +3,7 @@ import { safeLog } from "./messengerApi";
 import { fetchExternalSourceImageForIngress } from "./image-generation/sourceImageFetcher";
 import { anonymizePsid } from "./messengerState";
 import { handleTextMessage } from "./webhookTextMessageRouter";
-import { canGenerate } from "./messengerQuota";
+import { canTranscribe, incrementTranscription } from "./messengerQuota";
 import { t } from "./i18n";
 import type { HandlerContext } from "./webhookHandlerTypes";
 import type { FacebookWebhookAttachment } from "./webhookHelpers";
@@ -33,15 +33,15 @@ export async function tryHandleAudioMessage(
     return false;
   }
 
-  const allowed = await canGenerate(input.psid);
-  if (!allowed) {
-    await ctx.sendLoggedText(input.psid, t(input.lang, "outOfFreeCredits"), input.reqId);
-    return true;
-  }
-
   const audioUrl = getInboundAudioUrl(input.attachments);
   if (!audioUrl) {
     return false;
+  }
+
+  const allowed = await canTranscribe(input.psid);
+  if (!allowed) {
+    await ctx.sendLoggedText(input.psid, t(input.lang, "outOfFreeCredits"), input.reqId);
+    return true;
   }
 
   const transcript = await transcribeAudioMessage(input.reqId, input.psid, audioUrl);
@@ -85,6 +85,8 @@ async function transcribeAudioMessage(
     });
     return null;
   }
+
+  await incrementTranscription(psid);
 
   let sourceAudio;
   try {

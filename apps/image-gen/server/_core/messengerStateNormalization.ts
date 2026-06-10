@@ -72,6 +72,10 @@ export function createDefaultState(
       dayKey: getDayKey(now),
       count: 0,
     },
+    transcriptionQuota: {
+      dayKey: getDayKey(now),
+      count: 0,
+    },
     updatedAt: now,
   };
 }
@@ -204,6 +208,18 @@ function resolveQuotaState(
   };
 }
 
+function resolveTranscriptionQuotaState(
+  ctx: NormalizationCtx
+): MessengerUserState["transcriptionQuota"] {
+  const { value, fallback } = ctx;
+
+  return {
+    dayKey:
+      value?.transcriptionQuota?.dayKey ?? fallback.transcriptionQuota.dayKey,
+    count: value?.transcriptionQuota?.count ?? fallback.transcriptionQuota.count,
+  };
+}
+
 function resolvePendingEditIntent(
   ctx: NormalizationCtx
 ): Pick<MessengerUserState, "pendingEditIntent"> {
@@ -237,6 +253,7 @@ function applyNormalizedStateShape(
     ...resolveSourceImageState(ctx),
     ...resolvePendingEditIntent(ctx),
     quota: resolveQuotaState(ctx),
+    transcriptionQuota: resolveTranscriptionQuotaState(ctx),
     updatedAt: value?.updatedAt ?? fallback.updatedAt,
   };
 }
