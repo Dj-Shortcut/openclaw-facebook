@@ -72,6 +72,7 @@ export function createDefaultState(
       dayKey: getDayKey(now),
       count: 0,
     },
+    imageGenerationQuotaReservation: null,
     transcriptionQuota: {
       dayKey: getDayKey(now),
       count: 0,
@@ -208,6 +209,25 @@ function resolveQuotaState(
   };
 }
 
+function resolveImageGenerationQuotaReservation(
+  ctx: NormalizationCtx
+): MessengerUserState["imageGenerationQuotaReservation"] {
+  const reservation = ctx.value?.imageGenerationQuotaReservation;
+  if (
+    reservation &&
+    typeof reservation.token === "string" &&
+    reservation.token.length > 0 &&
+    Number.isFinite(reservation.expiresAt)
+  ) {
+    return {
+      token: reservation.token,
+      expiresAt: reservation.expiresAt,
+    };
+  }
+
+  return ctx.fallback.imageGenerationQuotaReservation;
+}
+
 function resolveTranscriptionQuotaState(
   ctx: NormalizationCtx
 ): MessengerUserState["transcriptionQuota"] {
@@ -253,6 +273,8 @@ function applyNormalizedStateShape(
     ...resolveSourceImageState(ctx),
     ...resolvePendingEditIntent(ctx),
     quota: resolveQuotaState(ctx),
+    imageGenerationQuotaReservation:
+      resolveImageGenerationQuotaReservation(ctx),
     transcriptionQuota: resolveTranscriptionQuotaState(ctx),
     updatedAt: value?.updatedAt ?? fallback.updatedAt,
   };

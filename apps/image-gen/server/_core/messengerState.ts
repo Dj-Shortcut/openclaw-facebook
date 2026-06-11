@@ -27,6 +27,11 @@ export type QuotaState = {
   count: number;
 };
 
+export type QuotaReservationState = {
+  token: string;
+  expiresAt: number;
+};
+
 export type SourceImageOrigin = "external" | "stored";
 export type PendingEditIntent = "change_background";
 
@@ -65,6 +70,7 @@ export type MessengerUserState = {
   pendingConversationActionsByMessageId?: Record<string, ConversationAction[]>;
   pendingEditIntent?: PendingEditIntent | null;
   quota: QuotaState;
+  imageGenerationQuotaReservation?: QuotaReservationState | null;
   transcriptionQuota: QuotaState;
   updatedAt: number;
 };

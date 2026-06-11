@@ -134,22 +134,30 @@ describe("messenger quota dayKey", () => {
     expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(5);
   });
 
-  it("only increments reserved image quota on commit", async () => {
+  it("commits a normal reserved image quota success", async () => {
     const userId = "reserved-image-user";
     process.env.MESSENGER_FREE_DAILY_LIMIT = "1";
 
     const reservation = await reserveImageGenerationForAttempt(userId);
 
     expect(reservation).not.toBeNull();
-    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(0);
+    let state = await Promise.resolve(getOrCreateState(userId));
+    expect(state.quota.count).toBe(0);
+    expect(state.imageGenerationQuotaReservation?.token).toBe(
+      reservation!.token
+    );
 
-    await commitImageGenerationSuccess(userId, reservation!);
+    await expect(
+      commitImageGenerationSuccess(userId, reservation!)
+    ).resolves.toBe(true);
 
-    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(1);
+    state = await Promise.resolve(getOrCreateState(userId));
+    expect(state.quota.count).toBe(1);
+    expect(state.imageGenerationQuotaReservation).toBeNull();
     expect(await canGenerate(userId)).toBe(false);
   });
 
-  it("does not commit image quota without an active matching reservation", async () => {
+  it("rejects a fabricated image quota reservation token", async () => {
     const userId = "fabricated-image-reservation-user";
     process.env.MESSENGER_FREE_DAILY_LIMIT = "1";
 
@@ -161,7 +169,71 @@ describe("messenger quota dayKey", () => {
     expect(await canGenerate(userId)).toBe(true);
   });
 
-  it("releases reserved image quota without incrementing on failure", async () => {
+  it("rejects a stale image quota reservation", async () => {
+    const userId = "stale-image-reservation-user";
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "1";
+    const now = Date.now();
+
+    await Promise.resolve(getOrCreateState(userId));
+    await Promise.resolve(
+      updateStoredState(userId, storedState => ({
+        ...storedState!,
+        imageGenerationQuotaReservation: {
+          token: "stale-token",
+          expiresAt: now - 1,
+        },
+      }))
+    );
+
+    await expect(
+      commitImageGenerationSuccess(userId, { token: "stale-token" })
+    ).resolves.toBe(false);
+
+    const state = await Promise.resolve(getOrCreateState(userId));
+    expect(state.quota.count).toBe(0);
+    expect(state.imageGenerationQuotaReservation).toBeNull();
+    expect(await canGenerate(userId)).toBe(true);
+  });
+
+  it("rejects a double image quota commit", async () => {
+    const userId = "double-commit-image-reservation-user";
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "2";
+
+    const reservation = await reserveImageGenerationForAttempt(userId);
+
+    expect(reservation).not.toBeNull();
+    await expect(
+      commitImageGenerationSuccess(userId, reservation!)
+    ).resolves.toBe(true);
+    await expect(
+      commitImageGenerationSuccess(userId, reservation!)
+    ).resolves.toBe(false);
+
+    const state = await Promise.resolve(getOrCreateState(userId));
+    expect(state.quota.count).toBe(1);
+    expect(state.imageGenerationQuotaReservation).toBeNull();
+  });
+
+  it("tolerates releasing an image quota reservation after commit", async () => {
+    const userId = "release-after-commit-image-reservation-user";
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "2";
+
+    const reservation = await reserveImageGenerationForAttempt(userId);
+
+    expect(reservation).not.toBeNull();
+    await expect(
+      commitImageGenerationSuccess(userId, reservation!)
+    ).resolves.toBe(true);
+    await expect(
+      releaseImageGenerationReservation(userId, reservation!)
+    ).resolves.toBeUndefined();
+
+    const state = await Promise.resolve(getOrCreateState(userId));
+    expect(state.quota.count).toBe(1);
+    expect(state.imageGenerationQuotaReservation).toBeNull();
+  });
+
+  it("releases a normal reserved image quota failure without incrementing", async () => {
     const userId = "released-image-user";
     process.env.MESSENGER_FREE_DAILY_LIMIT = "1";
 
@@ -170,7 +242,9 @@ describe("messenger quota dayKey", () => {
     expect(reservation).not.toBeNull();
     await releaseImageGenerationReservation(userId, reservation!);
 
-    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(0);
+    const state = await Promise.resolve(getOrCreateState(userId));
+    expect(state.quota.count).toBe(0);
+    expect(state.imageGenerationQuotaReservation).toBeNull();
     expect(await canGenerate(userId)).toBe(true);
   });
 
