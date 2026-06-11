@@ -43,12 +43,19 @@ class WebhookIngressEnqueueTimeoutError extends Error {
   }
 }
 
-function getMetaVerifyToken(): string {
-  return (
+function getConfiguredVerifyTokens(path: string): string[] {
+  const sharedToken =
     process.env.META_VERIFY_TOKEN?.trim() ||
-    process.env.FB_VERIFY_TOKEN?.trim() ||
-    ""
-  );
+    process.env.FB_VERIFY_TOKEN?.trim();
+  const tokens = [
+    sharedToken,
+  ];
+
+  if (path === "/webhook/whatsapp") {
+    tokens.push(process.env.WHATSAPP_VERIFY_TOKEN?.trim());
+  }
+
+  return tokens.filter((token): token is string => Boolean(token));
 }
 
 function getWebhookIngressEnqueueTimeoutMs(): number {
@@ -76,21 +83,21 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 export function registerMetaWebhookRoutes(app: express.Express): void {
 
   const handleVerification: express.RequestHandler = (req, res) => {
-    const configuredToken = getMetaVerifyToken();
     const parsedQuery = webhookVerificationQuerySchema.safeParse(req.query);
     const path = req.path;
+    const configuredTokens = getConfiguredVerifyTokens(path);
 
     safeLog("meta_webhook_verification_requested", { path });
 
     if (
-      !configuredToken ||
+      configuredTokens.length === 0 ||
       !parsedQuery.success ||
-      parsedQuery.data["hub.verify_token"] !== configuredToken
+      !configuredTokens.includes(parsedQuery.data["hub.verify_token"])
     ) {
       safeLog("meta_webhook_verification_rejected", {
         level: "warn",
         path,
-        hasConfiguredToken: Boolean(configuredToken),
+        hasConfiguredToken: configuredTokens.length > 0,
         hasMode: typeof req.query["hub.mode"] === "string",
         hasChallenge: typeof req.query["hub.challenge"] === "string",
       });

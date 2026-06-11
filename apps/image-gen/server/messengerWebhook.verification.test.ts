@@ -114,6 +114,7 @@ describe("messenger webhook verification route", () => {
   afterEach(() => {
     delete process.env.FB_VERIFY_TOKEN;
     delete process.env.META_VERIFY_TOKEN;
+    delete process.env.WHATSAPP_VERIFY_TOKEN;
     delete process.env.FB_APP_SECRET;
     vi.restoreAllMocks();
     vi.resetModules();
@@ -149,6 +150,17 @@ describe("messenger webhook verification route", () => {
     expect(response.payload).toBe("abc123");
   });
 
+  it("treats FB_VERIFY_TOKEN as a fallback only when META_VERIFY_TOKEN is unset", async () => {
+    process.env.META_VERIFY_TOKEN = "meta-token";
+    process.env.FB_VERIFY_TOKEN = "old-fb-token";
+
+    const response = await getWebhook(
+      "/webhook/facebook?hub.mode=subscribe&hub.verify_token=old-fb-token&hub.challenge=stale-fb-token",
+    );
+
+    expect(response.status).toBe(403);
+  });
+
   it("returns the raw WhatsApp verification challenge as plain text", async () => {
     process.env.META_VERIFY_TOKEN = "test-token";
 
@@ -159,6 +171,29 @@ describe("messenger webhook verification route", () => {
     expect(response.status).toBe(200);
     expect(response.contentType).toContain("text/plain");
     expect(response.payload).toBe("wa-abc123");
+  });
+
+  it("accepts the dedicated WhatsApp verification token on the WhatsApp route", async () => {
+    process.env.META_VERIFY_TOKEN = "meta-token";
+    process.env.WHATSAPP_VERIFY_TOKEN = "whatsapp-token";
+
+    const response = await getWebhook(
+      "/webhook/whatsapp?hub.mode=subscribe&hub.verify_token=whatsapp-token&hub.challenge=wa-dedicated-token",
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.payload).toBe("wa-dedicated-token");
+  });
+
+  it("does not accept the dedicated WhatsApp verification token on the Facebook route", async () => {
+    process.env.META_VERIFY_TOKEN = "meta-token";
+    process.env.WHATSAPP_VERIFY_TOKEN = "whatsapp-token";
+
+    const response = await getWebhook(
+      "/webhook/facebook?hub.mode=subscribe&hub.verify_token=whatsapp-token&hub.challenge=fb-rejected-token",
+    );
+
+    expect(response.status).toBe(403);
   });
 
   it("allows WhatsApp GET verification through signature middleware without a signature header", async () => {
