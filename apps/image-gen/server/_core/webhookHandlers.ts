@@ -4,6 +4,7 @@ import { handleEntry } from "./webhookEventRouter";
 import { createHandlerContext } from "./webhookHandlerContext";
 import { createMessengerGenerationJobRunner } from "./webhookGenerationJobs";
 import { createMessengerVideoGenerationRunner } from "./videoGenerationFlow";
+import { t } from "./i18n";
 import { createInternalMessengerImageRequestHandler } from "./webhookInternalImageRequest";
 import type {
   HandlerContext,
@@ -50,7 +51,31 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
   ctx = createHandlerContext({
     defaultLang,
     runImageGeneration: generationRunner.runImageGeneration,
-    runVideoGeneration: videoGenerationRunner,
+    runVideoGeneration: async (
+      psid,
+      userId,
+      reqId,
+      lang,
+      sourceImageUrl,
+      promptHint
+    ) => {
+      const outcome = await ctx.sendLoggedText(
+        psid,
+        t(lang, "videoGenerationQueued"),
+        reqId
+      );
+      setTimeout(() => {
+        void videoGenerationRunner(
+          psid,
+          userId,
+          reqId,
+          lang,
+          sourceImageUrl,
+          promptHint
+        );
+      }, 0);
+      return outcome;
+    },
   });
   const internalRequestHandler =
     createInternalMessengerImageRequestHandler(ctx);

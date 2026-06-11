@@ -34,4 +34,5 @@ export type VideoProviderResult = VideoProviderSuccess | VideoProviderFailure;
 
 export type VideoProvider = {
   generateVideo(input: VideoProviderRequest): Promise<VideoProviderResult>;
+  deleteVideo?(providerJobId: string, reqId?: string): Promise<void>;
 };

@@ -13,13 +13,18 @@ const DEFAULT_OPENAI_VIDEO_SECONDS = "8";
 const DEFAULT_OPENAI_VIDEO_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_OPENAI_VIDEO_MAX_RETRIES = 1;
 const DEFAULT_OPENAI_VIDEO_RETRY_BASE_MS = 750;
-const DEFAULT_OPENAI_VIDEO_MAX_OUTPUT_BYTES = 60 * 1024 * 1024;
+const DEFAULT_OPENAI_VIDEO_MAX_OUTPUT_BYTES = 24 * 1024 * 1024;
 
 type OpenAiVideoJob = {
   id?: string;
   status?: string;
   error?: { message?: string; code?: string };
   duration_seconds?: number;
+};
+
+type ReferenceImage = {
+  bytes: Uint8Array;
+  contentType: string;
 };
 
 function readPositiveInt(name: string, fallback: number): number {
@@ -73,6 +78,44 @@ async function fetchWithTimeout(
   }
 }
 
+async function fetchReferenceImage(
+  imageUrl: string,
+  timeoutMs: number
+): Promise<ReferenceImage | VideoProviderFailure> {
+  const response = await fetchWithTimeout(
+    imageUrl,
+    {
+      method: "GET",
+      redirect: "manual",
+    },
+    timeoutMs
+  );
+
+  if (!response.ok) {
+    return {
+      kind: "failure",
+      provider: "openai",
+      errorClass: "provider",
+      retryable: false,
+    };
+  }
+
+  const contentType = response.headers.get("content-type")?.split(";")[0]?.trim();
+  if (!contentType?.startsWith("image/")) {
+    return {
+      kind: "failure",
+      provider: "openai",
+      errorClass: "provider",
+      retryable: false,
+    };
+  }
+
+  return {
+    bytes: new Uint8Array(await response.arrayBuffer()),
+    contentType,
+  };
+}
+
 function classifyResponse(status: number, body: string): VideoProviderFailure {
   const normalized = body.toLowerCase();
   if (status === 408) {
@@ -111,23 +154,30 @@ async function createVideoJob(
   input: VideoProviderRequest,
   timeoutMs: number
 ): Promise<OpenAiVideoJob | VideoProviderFailure> {
+  const referenceImage = await fetchReferenceImage(input.sourceImageUrl, timeoutMs);
+  if ("kind" in referenceImage) {
+    return referenceImage;
+  }
+
+  const formData = new FormData();
+  formData.append("model", getModel());
+  formData.append("prompt", input.prompt);
+  formData.append("size", getSize());
+  formData.append("seconds", getSeconds());
+  formData.append(
+    "input_reference",
+    new Blob([referenceImage.bytes], { type: referenceImage.contentType }),
+    `source.${referenceImage.contentType.split("/")[1] || "jpg"}`
+  );
+
   const response = await fetchWithTimeout(
     OPENAI_VIDEO_ENDPOINT,
     {
       method: "POST",
       headers: {
         Authorization: `Bearer ${getApiKey()}`,
-        "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model: getModel(),
-        prompt: input.prompt,
-        size: getSize(),
-        seconds: getSeconds(),
-        input_reference: {
-          image_url: input.sourceImageUrl,
-        },
-      }),
+      body: formData,
     },
     timeoutMs
   );
@@ -273,7 +323,7 @@ export class OpenAiVideoProvider implements VideoProvider {
           kind: "failure",
           provider: "openai",
           errorClass: "timeout",
-          retryable: true,
+          retryable: false,
         };
       }
 
@@ -303,5 +353,33 @@ export class OpenAiVideoProvider implements VideoProvider {
       contentType: "video/mp4",
       durationSeconds: current.duration_seconds,
     };
+  }
+
+  async deleteVideo(providerJobId: string, reqId?: string): Promise<void> {
+    const response = await fetchWithTimeout(
+      `${OPENAI_VIDEO_ENDPOINT}/${encodeURIComponent(providerJobId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${getApiKey()}`,
+        },
+      },
+      30_000
+    );
+
+    if (!response.ok && response.status !== 404) {
+      safeLog("openai_video_delete_failed", {
+        level: "warn",
+        reqId,
+        providerJobId,
+        status: response.status,
+      });
+      throw new Error(`OpenAI video delete failed (${response.status})`);
+    }
+
+    safeLog("openai_video_deleted", {
+      reqId,
+      providerJobId,
+    });
   }
 }

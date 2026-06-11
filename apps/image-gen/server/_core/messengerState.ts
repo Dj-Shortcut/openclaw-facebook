@@ -67,6 +67,7 @@ export type MessengerUserState = {
   lastGeneratedAt?: number;
   lastGeneratedVideoUrl?: string | null;
   lastGeneratedVideoAt?: number | null;
+  lastGeneratedVideoProvider?: string | null;
   lastGeneratedVideoProviderJobId?: string | null;
   lastVariantCursor?: number;
   pendingConversationActions?: ConversationAction[];
@@ -139,6 +140,7 @@ export function setFlowState(psid: string, nextState: MessengerFlowState): Maybe
 export function setLastGeneratedVideo(
   psid: string,
   videoUrl: string,
+  provider: string | null = null,
   providerJobId: string | null = null,
   now = Date.now()
 ): MaybePromise<void> {
@@ -147,6 +149,7 @@ export function setLastGeneratedVideo(
     {
       lastGeneratedVideoUrl: videoUrl,
       lastGeneratedVideoAt: now,
+      lastGeneratedVideoProvider: provider,
       lastGeneratedVideoProviderJobId: providerJobId,
     },
     now

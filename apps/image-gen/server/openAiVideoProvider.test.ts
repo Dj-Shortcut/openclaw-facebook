@@ -35,7 +35,19 @@ describe("OpenAiVideoProvider", () => {
   it("retries a retryable create failure and downloads completed video bytes", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([9, 8, 7]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        })
+      )
       .mockResolvedValueOnce(new Response("server error", { status: 500 }))
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([9, 8, 7]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        })
+      )
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ id: "video_1", status: "completed" }), {
           status: 200,
@@ -58,7 +70,12 @@ describe("OpenAiVideoProvider", () => {
       timeoutMs: 10_000,
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    const [, createRequest] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(createRequest.body).toBeInstanceOf(FormData);
+    expect((createRequest.body as FormData).get("input_reference")).toBeInstanceOf(
+      File
+    );
     expect(result).toMatchObject({
       kind: "success",
       provider: "openai",

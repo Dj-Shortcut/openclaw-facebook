@@ -19,3 +19,18 @@ export function getVideoProvider(): VideoProvider {
 
   throw new Error("MESSENGER_VIDEO_PROVIDER is not configured");
 }
+
+export async function deleteProviderVideoForUser(input: {
+  provider: string | null;
+  providerJobId: string;
+  reqId?: string;
+}): Promise<void> {
+  const providerName =
+    input.provider?.trim().toLowerCase() ||
+    process.env.MESSENGER_VIDEO_PROVIDER?.trim().toLowerCase();
+  if (providerName !== "openai") {
+    return;
+  }
+
+  await new OpenAiVideoProvider().deleteVideo(input.providerJobId, input.reqId);
+}

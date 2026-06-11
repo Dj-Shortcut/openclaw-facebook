@@ -13,6 +13,7 @@ const DEFAULT_GLOBAL_CONCURRENCY = 3;
 const DEFAULT_GLOBAL_LOCK_MS = 240000;
 const DEFAULT_PSID_COOLDOWN_MS = 0;
 const DEFAULT_PSID_LOCK_MS = 240000;
+const DEFAULT_VIDEO_PSID_LOCK_MS = 900000;
 const DEFAULT_GLOBAL_SLOT_WAIT_MS = 100;
 const DAILY_BUDGET_KEY_PREFIX = "messenger:daily-image-budget";
 const DAILY_VIDEO_BUDGET_KEY_PREFIX = "messenger:daily-video-budget";
@@ -117,6 +118,10 @@ function getGlobalLockMs(): number {
 
 function lockKey(psid: string): string {
   return `messenger:inflight:${psid}`;
+}
+
+function videoLockKey(psid: string): string {
+  return `messenger:video-inflight:${psid}`;
 }
 
 function cooldownKey(psid: string): string {
@@ -303,6 +308,32 @@ export async function runGuardedGeneration<T>(
   }
 }
 
+export async function runGuardedVideoGeneration<T>(
+  psid: string,
+  task: () => Promise<T>
+): Promise<T | null> {
+  const lockMs = readNonNegativeInt(
+    "MESSENGER_VIDEO_PSID_LOCK_TTL_MS",
+    DEFAULT_VIDEO_PSID_LOCK_MS
+  );
+
+  const lockToken = randomUUID();
+  const acquired = await setEphemeralKeyIfAbsent(
+    videoLockKey(psid),
+    lockToken,
+    toSeconds(lockMs)
+  );
+  if (!acquired) {
+    return null;
+  }
+
+  try {
+    return await runWithGlobalGenerationLimit(task);
+  } finally {
+    await deleteEphemeralKeyIfValue(videoLockKey(psid), lockToken);
+  }
+}
+
 export async function hasInFlightGeneration(psid: string): Promise<boolean> {
-  return hasEphemeralKey(lockKey(psid));
+  return (await hasEphemeralKey(lockKey(psid))) || (await hasEphemeralKey(videoLockKey(psid)));
 }

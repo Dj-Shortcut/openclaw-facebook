@@ -13,6 +13,7 @@ import {
   assertMessengerDailyVideoBudgetAvailable,
   MessengerDailyVideoBudgetExceededError,
   runGuardedGeneration,
+  runGuardedVideoGeneration,
 } from "./generationGuard";
 import { getMessengerVideoTimeoutMs } from "./video-generation/videoConfig";
 import { getVideoProvider } from "./video-generation/videoProviderRegistry";
@@ -88,7 +89,7 @@ export function createMessengerVideoGenerationRunner(
       return existingInFlight.outcome ?? sendOutcome;
     }
 
-    const didRun = await runGuardedGeneration(psid, async () => {
+    const didRun = await runGuardedVideoGeneration(psid, async () => {
       let reservation: VideoGenerationQuotaReservation | null = null;
       let quotaCommitted = false;
       try {
@@ -156,6 +157,7 @@ export function createMessengerVideoGenerationRunner(
           setLastGeneratedVideo(
             psid,
             storedVideo.url,
+            providerResult.provider,
             providerResult.providerJobId
           )
         );

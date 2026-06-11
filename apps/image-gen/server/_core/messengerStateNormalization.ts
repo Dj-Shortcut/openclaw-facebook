@@ -66,6 +66,7 @@ export function createDefaultState(
     lastGeneratedAt: undefined,
     lastGeneratedVideoUrl: null,
     lastGeneratedVideoAt: null,
+    lastGeneratedVideoProvider: null,
     lastGeneratedVideoProviderJobId: null,
     lastVariantCursor: undefined,
     pendingConversationActions: undefined,
