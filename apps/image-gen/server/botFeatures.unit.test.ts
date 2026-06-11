@@ -183,7 +183,9 @@ describe("freeformTransformFeature", () => {
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
       "https://img.example/generated.jpg",
-      expect.stringContaining("User requested transformation: Verander me in een nog sterkere samurai"),
+      expect.stringContaining(
+        "User requested transformation: Verander me in een nog sterkere samurai"
+      ),
       "source_image_edit"
     );
   });
@@ -336,7 +338,65 @@ describe("imageRequestFeature", () => {
     expect(runImageGeneration).not.toHaveBeenCalled();
   });
 
-  it("keeps ordinary visual requests prompt-first even with active photo context", async () => {
+  it("uses the uploaded photo for arbitrary edit prompt text while awaiting edits", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "cyberpunk samurai",
+        normalizedText: "cyberpunk samurai",
+        hasPhoto: true,
+        runImageGeneration,
+        state: makeState({
+          stage: "AWAITING_EDIT_PROMPT",
+          state: "AWAITING_EDIT_PROMPT",
+          lastPhotoUrl: "https://img.example/source.jpg",
+          lastPhoto: "https://img.example/source.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      "https://img.example/source.jpg",
+      "cyberpunk samurai",
+      "source_image_edit"
+    );
+  });
+
+  it.each([
+    ["help", "help"],
+    ["commands", "commands"],
+    ["Wat kan je", "wat kan je"],
+    ["what can you do", "what can you do"],
+  ])(
+    "does not steal %s control text while awaiting image edits",
+    async (messageText, normalizedText) => {
+      const runImageGeneration = vi.fn(async () => undefined);
+
+      const result = await imageRequestFeature.onText?.(
+        makeContext({
+          lang: "nl",
+          messageText,
+          normalizedText,
+          hasPhoto: true,
+          runImageGeneration,
+          state: makeState({
+            stage: "AWAITING_EDIT_PROMPT",
+            state: "AWAITING_EDIT_PROMPT",
+            lastPhotoUrl: "https://img.example/source.jpg",
+            lastPhoto: "https://img.example/source.jpg",
+          }),
+        })
+      );
+
+      expect(result).toEqual({ handled: false });
+      expect(runImageGeneration).not.toHaveBeenCalled();
+    }
+  );
+
+  it("defaults ordinary visual requests to source edits with active photo context", async () => {
     const runImageGeneration = vi.fn(async () => undefined);
 
     const result = await imageRequestFeature.onText?.(
@@ -355,9 +415,9 @@ describe("imageRequestFeature", () => {
 
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
-      undefined,
+      "https://img.example/source.jpg",
       "Maak een stoere poster voor mijn feest",
-      "text_to_image"
+      "source_image_edit"
     );
   });
 
@@ -388,7 +448,7 @@ describe("imageRequestFeature", () => {
     );
   });
 
-  it("keeps ambiguous make-me visual requests prompt-first with generated context", async () => {
+  it("defaults make-me visual requests to source edits with generated context", async () => {
     const runImageGeneration = vi.fn(async () => undefined);
 
     const result = await imageRequestFeature.onText?.(
@@ -408,9 +468,33 @@ describe("imageRequestFeature", () => {
 
     expect(result).toEqual({ handled: true });
     expect(runImageGeneration).toHaveBeenCalledWith(
-      undefined,
+      "https://img.example/generated-landscape.jpg",
       "Maak me een samurai aub",
-      "text_to_image"
+      "source_image_edit"
+    );
+  });
+
+  it("preserves explicit source references on fresh asset nouns", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        messageText: "Create a new avatar from this photo",
+        normalizedText: "create a new avatar from this photo",
+        hasPhoto: true,
+        runImageGeneration,
+        state: makeState({
+          lastPhotoUrl: "https://img.example/source.jpg",
+          lastPhoto: "https://img.example/source.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      "https://img.example/source.jpg",
+      "Create a new avatar from this photo",
+      "source_image_edit"
     );
   });
 
@@ -442,6 +526,7 @@ describe("imageRequestFeature", () => {
 
   it("keeps explicit fresh image requests source-less even with photo context", async () => {
     const runImageGeneration = vi.fn(async () => undefined);
+    const warn = vi.fn();
 
     const result = await imageRequestFeature.onText?.(
       makeContext({
@@ -450,6 +535,11 @@ describe("imageRequestFeature", () => {
         normalizedText: "maak een nieuwe afbeelding van een draak",
         hasPhoto: true,
         runImageGeneration,
+        logger: {
+          info: vi.fn(),
+          warn,
+          error: vi.fn(),
+        },
         state: makeState({
           stage: "AWAITING_EDIT_PROMPT",
           state: "AWAITING_EDIT_PROMPT",
@@ -465,6 +555,16 @@ describe("imageRequestFeature", () => {
       undefined,
       "Maak een nieuwe afbeelding van een draak",
       "text_to_image"
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "bot_feature_text_to_image_ignored_source_context",
+      expect.objectContaining({
+        promptChars: "Maak een nieuwe afbeelding van een draak".length,
+        stage: "AWAITING_EDIT_PROMPT",
+        hasGeneratedImage: false,
+        hasUploadedPhoto: true,
+        reason: "fresh_image_request",
+      })
     );
   });
 

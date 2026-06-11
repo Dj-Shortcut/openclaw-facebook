@@ -49,7 +49,7 @@ const VAGUE_OBJECT_PATTERNS = [
 ];
 
 const FRESH_IMAGE_PATTERNS = [
-  /\b(?:nieuwe|nieuw|new|fresh)\s+(?:afbeelding|foto|image|picture)\b/iu,
+  /\b(?:nieuwe|nieuw|new|fresh|brand-new|gloednieuwe|gloednieuw)\s+(?:afbeelding|foto|image|picture|avatar|poster|logo|sticker|illustratie|productfoto|scene|cover|portret|portrait)\b/iu,
   /\b(?:zonder|without)\s+(?:mijn|my|deze|this)\s+(?:foto|afbeelding|image|photo)\b/iu,
   /\b(?:from scratch|van nul|helemaal nieuw)\b/iu,
 ];

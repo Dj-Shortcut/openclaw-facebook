@@ -17,6 +17,10 @@ const HELP_COMMANDS = new Set([
   "help eens",
   "help me eens",
   "wat kan je",
+  "wat kan ik doen",
+  "wat kan ik doen?",
+  "wat kan ik nu doen",
+  "wat kan ik nu doen?",
   "wat doe ik",
   "wat doe ik?",
   "what can you do",
@@ -67,6 +71,17 @@ const PRIVACY_COMMANDS = new Set([
   "privacybeleid",
   "privacy policy",
 ]);
+
+export function isAssistantCommandText(normalizedText: string): boolean {
+  return (
+    HELP_COMMANDS.has(normalizedText) ||
+    SURPRISE_COMMANDS.has(normalizedText) ||
+    NEW_IMAGE_COMMANDS.has(normalizedText) ||
+    EDIT_PHOTO_COMMANDS.has(normalizedText) ||
+    CHANGE_BACKGROUND_COMMANDS.has(normalizedText) ||
+    PRIVACY_COMMANDS.has(normalizedText)
+  );
+}
 
 function resolvePrivacyPolicyUrl(): string | undefined {
   const configured = process.env.PRIVACY_POLICY_URL?.trim();
@@ -143,7 +158,9 @@ export const assistantCommandsFeature: BotFeature = {
     }
 
     if (PRIVACY_COMMANDS.has(ctx.normalizedText)) {
-      await ctx.sendText(t(ctx.lang, "privacy", { link: resolvePrivacyPolicyUrl() }));
+      await ctx.sendText(
+        t(ctx.lang, "privacy", { link: resolvePrivacyPolicyUrl() })
+      );
       return { handled: true };
     }
 

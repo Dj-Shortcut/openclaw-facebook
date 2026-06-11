@@ -1,5 +1,6 @@
 import type { BotFeature } from "../features";
 import type { BotTextContext } from "../../botContext";
+import { isAssistantCommandText } from "./assistantCommandsFeature";
 import {
   isExplicitSourceImageEditRequest,
   isFreshImageRequest,
@@ -19,26 +20,39 @@ function getSourcePhotoUrl(ctx: BotTextContext): string | undefined {
   );
 }
 
-function shouldUseExistingImageContext(ctx: BotTextContext, text: string): boolean {
+function shouldUseExistingImageContext(
+  ctx: BotTextContext,
+  text: string
+): boolean {
   const sourcePhotoUrl = getSourcePhotoUrl(ctx);
   if (!sourcePhotoUrl) {
     return false;
   }
 
-  if (
-    ctx.state.stage === "AWAITING_EDIT_PROMPT" &&
-    ctx.state.pendingEditIntent === "change_background" &&
-    !isFreshImageRequest(text)
-  ) {
-    return true;
+  return (
+    referencesExistingImage(text) ||
+    (ctx.channel === "messenger" && !isFreshImageRequest(text))
+  );
+}
+
+function logTextToImageWithIgnoredSourceContext(
+  ctx: BotTextContext,
+  text: string
+): void {
+  const sourcePhotoUrl = getSourcePhotoUrl(ctx);
+  if (!sourcePhotoUrl) {
+    return;
   }
 
-  return Boolean(
-    ctx.hasPhoto &&
-      sourcePhotoUrl &&
-      referencesExistingImage(text) &&
-      !isFreshImageRequest(text)
-  );
+  ctx.logger.warn("bot_feature_text_to_image_ignored_source_context", {
+    promptChars: text.length,
+    stage: ctx.state.stage,
+    hasGeneratedImage: Boolean(
+      ctx.state.lastGeneratedUrl ?? ctx.state.lastImageUrl
+    ),
+    hasUploadedPhoto: Boolean(ctx.state.lastPhotoUrl ?? ctx.state.lastPhoto),
+    reason: isFreshImageRequest(text) ? "fresh_image_request" : "unclassified",
+  });
 }
 
 function getPromptHint(ctx: BotTextContext, text: string): string {
@@ -52,6 +66,19 @@ function getPromptHint(ctx: BotTextContext, text: string): string {
   return text;
 }
 
+function shouldTreatAsEditableImagePrompt(
+  ctx: BotTextContext,
+  text: string
+): boolean {
+  return Boolean(
+    getSourcePhotoUrl(ctx) &&
+    ctx.state.stage === "AWAITING_EDIT_PROMPT" &&
+    ctx.channel === "messenger" &&
+    !isFreshImageRequest(text) &&
+    !isAssistantCommandText(ctx.normalizedText)
+  );
+}
+
 export const imageRequestFeature: BotFeature = {
   name: "imageRequest",
   async onText(ctx: BotTextContext) {
@@ -60,19 +87,32 @@ export const imageRequestFeature: BotFeature = {
       return { handled: false };
     }
 
-    if (isExplicitSourceImageEditRequest(text) || isLikelyNonImageArtifactRequest(text)) {
+    const imageGenerationRequest = isImageGenerationRequest(text);
+    if (
+      (isExplicitSourceImageEditRequest(text) && !imageGenerationRequest) ||
+      isLikelyNonImageArtifactRequest(text)
+    ) {
       return { handled: false };
     }
 
-    if (!isImageGenerationRequest(text)) {
+    if (
+      !imageGenerationRequest &&
+      !shouldTreatAsEditableImagePrompt(ctx, text)
+    ) {
       return { handled: false };
     }
-
-    ctx.logger.info("bot_feature_text_to_image", {
-      promptChars: text.length,
-    });
 
     if (shouldUseExistingImageContext(ctx, text)) {
+      ctx.logger.info("bot_feature_source_image_edit_default", {
+        promptChars: text.length,
+        stage: ctx.state.stage,
+        hasGeneratedImage: Boolean(
+          ctx.state.lastGeneratedUrl ?? ctx.state.lastImageUrl
+        ),
+        hasUploadedPhoto: Boolean(
+          ctx.state.lastPhotoUrl ?? ctx.state.lastPhoto
+        ),
+      });
       await ctx.runImageGeneration(
         getSourcePhotoUrl(ctx),
         getPromptHint(ctx, text),
@@ -88,11 +128,12 @@ export const imageRequestFeature: BotFeature = {
       await ctx.setPendingEditIntent(null);
     }
 
-    await ctx.runImageGeneration(
-      undefined,
-      text,
-      "text_to_image"
-    );
+    logTextToImageWithIgnoredSourceContext(ctx, text);
+    ctx.logger.info("bot_feature_text_to_image", {
+      promptChars: text.length,
+    });
+
+    await ctx.runImageGeneration(undefined, text, "text_to_image");
     return { handled: true };
   },
 };
