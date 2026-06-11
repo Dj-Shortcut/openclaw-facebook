@@ -42,6 +42,7 @@ describe("webhook text message router", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     resetStateStore();
     delete process.env.MESSENGER_VIDEO_GENERATION_ENABLED;
     if (originalPrivacyPepper === undefined) {
@@ -74,6 +75,7 @@ describe("webhook text message router", () => {
 
   it("runs generated video path for animation intent when feature flag is on and a photo exists", async () => {
     const psid = "video-flag-on-user";
+    vi.useFakeTimers();
     process.env.MESSENGER_VIDEO_GENERATION_ENABLED = "true";
     await setLastGenerated(psid, "https://img.example/source.jpg");
     const runVideoGeneration = vi.fn(async () => ({ sent: true as const }));
@@ -87,6 +89,7 @@ describe("webhook text message router", () => {
       text: "laat hem bewegen",
       timestamp: 1730000000000,
     });
+    await vi.runAllTimersAsync();
 
     expect(runVideoGeneration).toHaveBeenCalledWith(
       psid,
@@ -95,6 +98,11 @@ describe("webhook text message router", () => {
       "nl",
       "https://img.example/source.jpg",
       "laat hem bewegen"
+    );
+    expect(ctx.sendLoggedText).toHaveBeenCalledWith(
+      psid,
+      t("nl", "videoGenerationQueued"),
+      "req-video-flag-on"
     );
     expect(ctx.sendLoggedText).not.toHaveBeenCalledWith(
       psid,

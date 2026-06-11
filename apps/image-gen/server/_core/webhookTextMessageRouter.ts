@@ -158,14 +158,27 @@ async function handleSharedMessengerText(
         return true;
       }
 
-      await ctx.runVideoGeneration(
+      await ctx.sendLoggedText(
         input.psid,
-        input.userId,
-        input.reqId,
-        input.lang,
-        sourceImageUrl,
-        messageText
+        t(input.lang, "videoGenerationQueued"),
+        input.reqId
       );
+      setTimeout(() => {
+        void ctx.runVideoGeneration?.(
+          input.psid,
+          input.userId,
+          input.reqId,
+          input.lang,
+          sourceImageUrl,
+          messageText
+        ).catch(error => {
+          safeLog("messenger_video_generation_background_failed", {
+            level: "error",
+            reqId: input.reqId,
+            errorCode: error instanceof Error ? error.name : "UnknownError",
+          });
+        });
+      }, 0);
       return true;
     },
     logState: (state, context) => {
