@@ -23,6 +23,8 @@ const OPENAI_AUDIO_TRANSCRIPTION_ENDPOINT =
 const OPENAI_AUDIO_TRANSCRIPTION_MODEL = "whisper-1";
 const OPENAI_AUDIO_TRANSCRIPTION_TIMEOUT_MS = 30_000;
 const OPENAI_AUDIO_TRANSCRIPTION_MAX_RETRIES = 1;
+const DEFAULT_AUDIO_TRANSCRIPTION_MAX_BYTES = 20 * 1024 * 1024;
+const MIN_TRANSCRIPT_WORDS = 2;
 
 /** Attempts to transcribe voice/audio attachments and route as text input. */
 export async function tryHandleAudioMessage(
@@ -115,6 +117,17 @@ async function transcribeAudioMessage(
     sourceBytes: sourceAudio.incomingLen,
   };
 
+  const maxBytes = getAudioTranscriptionMaxBytes();
+  if (sourceAudio.incomingLen > maxBytes) {
+    safeLog("messenger_audio_transcription_skipped", {
+      ...attemptPayload,
+      route: "audio",
+      reason: "audio_too_large",
+      maxBytes,
+    });
+    return null;
+  }
+
   for (let attempt = 0; attempt <= OPENAI_AUDIO_TRANSCRIPTION_MAX_RETRIES; attempt += 1) {
     const controller = new AbortController();
     const timer = setTimeout(() => {
@@ -170,6 +183,19 @@ async function transcribeAudioMessage(
         return null;
       }
 
+      const wordCount = countTranscriptWords(transcript);
+      if (wordCount < MIN_TRANSCRIPT_WORDS) {
+        safeLog("messenger_audio_transcription_no_text", {
+          ...attemptPayload,
+          route: "audio",
+          reason: "transcript_too_short",
+          attempt,
+          textLength: transcript.length,
+          wordCount,
+        });
+        return null;
+      }
+
       safeLog("messenger_audio_transcription_complete", {
         ...attemptPayload,
         route: "audio",
@@ -201,6 +227,22 @@ async function transcribeAudioMessage(
   }
 
   return null;
+}
+
+function getAudioTranscriptionMaxBytes(): number {
+  const configured = Number.parseInt(
+    process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES ?? "",
+    10
+  );
+  if (Number.isFinite(configured) && configured > 0) {
+    return configured;
+  }
+
+  return DEFAULT_AUDIO_TRANSCRIPTION_MAX_BYTES;
+}
+
+function countTranscriptWords(transcript: string): number {
+  return transcript.split(/\s+/).filter(Boolean).length;
 }
 
 function waitForRetryDelay(attempt: number): Promise<void> {

@@ -44,6 +44,8 @@
 
 - Budget guard should enforce a separate quota namespace for video jobs.
 - Keep video generation out of the current image budget counters during spike unless explicitly merged.
+- Audio transcription uses a dedicated daily quota namespace and reserves a slot through `checkAndIncrementTranscription()` before calling OpenAI, guarded by a short-lived per-user lock to prevent concurrent quota bypass.
+- Existing image generation quota still uses the legacy `canGenerate()` plus post-generation `increment()` path; fixing that race requires a separate image-billing change because it would alter generation reservation timing.
 - Add queue capacity, timeout and retry constraints before piloting.
 - Add explicit storage cost estimate per minute/MB for temporary clip retention.
 

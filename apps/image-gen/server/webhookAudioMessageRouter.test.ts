@@ -11,10 +11,18 @@ const {
   safeLogMock,
   handleTextMessageMock,
   checkAndIncrementTranscriptionMock,
+  fetchExternalSourceImageForIngressMock,
 } = vi.hoisted(() => ({
   safeLogMock: vi.fn(),
   handleTextMessageMock: vi.fn(async () => undefined),
   checkAndIncrementTranscriptionMock: vi.fn(async () => true),
+  fetchExternalSourceImageForIngressMock: vi.fn().mockResolvedValue({
+    buffer: Buffer.from([1, 2, 3, 4]),
+    contentType: "audio/mpeg",
+    incomingLen: 4,
+    incomingSha256: "stubhash",
+    fbImageFetchMs: 12,
+  }),
 }));
 
 vi.mock("./_core/messengerApi", () => ({
@@ -26,15 +34,7 @@ vi.mock("./_core/webhookTextMessageRouter", () => ({
 }));
 
 vi.mock("./_core/image-generation/sourceImageFetcher", () => ({
-  fetchExternalSourceImageForIngress: vi
-    .fn()
-    .mockResolvedValue({
-      buffer: Buffer.from([1, 2, 3, 4]),
-      contentType: "audio/mpeg",
-      incomingLen: 4,
-      incomingSha256: "stubhash",
-      fbImageFetchMs: 12,
-    }),
+  fetchExternalSourceImageForIngress: fetchExternalSourceImageForIngressMock,
 }));
 
 vi.mock("./_core/messengerQuota", () => ({
@@ -77,14 +77,24 @@ function makeContext(): HandlerContext {
 describe("webhook audio message router", () => {
   const originalOpenAiKey = process.env.OPENAI_API_KEY;
   const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
+  const originalAudioMaxBytes = process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES;
 
   beforeEach(() => {
     safeLogMock.mockClear();
     handleTextMessageMock.mockClear();
     checkAndIncrementTranscriptionMock.mockClear();
     checkAndIncrementTranscriptionMock.mockResolvedValue(true);
+    fetchExternalSourceImageForIngressMock.mockClear();
+    fetchExternalSourceImageForIngressMock.mockResolvedValue({
+      buffer: Buffer.from([1, 2, 3, 4]),
+      contentType: "audio/mpeg",
+      incomingLen: 4,
+      incomingSha256: "stubhash",
+      fbImageFetchMs: 12,
+    });
     process.env.PRIVACY_PEPPER = "test-pepper";
     process.env.OPENAI_API_KEY = "dummy-key";
+    delete process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES;
   });
 
   afterEach(() => {
@@ -97,6 +107,11 @@ describe("webhook audio message router", () => {
       delete process.env.PRIVACY_PEPPER;
     } else {
       process.env.PRIVACY_PEPPER = originalPrivacyPepper;
+    }
+    if (originalAudioMaxBytes === undefined) {
+      delete process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES;
+    } else {
+      process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES = originalAudioMaxBytes;
     }
     vi.unstubAllGlobals();
   });
@@ -200,6 +215,89 @@ describe("webhook audio message router", () => {
 
     expect(result).toBe(false);
     expect(checkAndIncrementTranscriptionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips OpenAI transcription when downloaded audio exceeds the configured size limit", async () => {
+    const ctx = makeContext();
+    process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES = "3";
+    fetchExternalSourceImageForIngressMock.mockResolvedValue({
+      buffer: Buffer.from([1, 2, 3, 4]),
+      contentType: "audio/mpeg",
+      incomingLen: 4,
+      incomingSha256: "stubhash",
+      fbImageFetchMs: 12,
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await tryHandleAudioMessage(ctx, {
+      psid: "psid-large",
+      userId: "user-large",
+      reqId: "req-audio-large",
+      lang: "nl",
+      attachments: [
+        { type: "audio", payload: { url: "https://audio.example/message-large.mp3" } },
+      ],
+      text: "",
+    });
+
+    expect(result).toBe(false);
+    expect(checkAndIncrementTranscriptionMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_audio_transcription_skipped",
+      expect.objectContaining({
+        reason: "audio_too_large",
+        route: "audio",
+        maxBytes: 3,
+      })
+    );
+  });
+
+  it("does not route one-word transcripts to the text handler", async () => {
+    const ctx = makeContext();
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      const target = typeof url === "string" ? url : url.toString();
+      if (
+        target ===
+        "https://api.openai.com/v1/audio/transcriptions"
+      ) {
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({ text: "hallo" }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        headers: new Headers({ "content-type": "audio/mpeg" }),
+        arrayBuffer: async () => Buffer.from([1, 2, 3, 4]),
+      } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await tryHandleAudioMessage(ctx, {
+      psid: "psid-short",
+      userId: "user-short",
+      reqId: "req-audio-short",
+      lang: "nl",
+      attachments: [
+        { type: "audio", payload: { url: "https://audio.example/message-short.mp3" } },
+      ],
+      text: "",
+    });
+
+    expect(result).toBe(false);
+    expect(checkAndIncrementTranscriptionMock).toHaveBeenCalledTimes(1);
+    expect(handleTextMessageMock).not.toHaveBeenCalled();
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_audio_transcription_no_text",
+      expect.objectContaining({
+        reason: "transcript_too_short",
+        route: "audio",
+        wordCount: 1,
+      })
+    );
   });
 
   it("returns true when transcription quota is exhausted and sends out-of-credits message", async () => {
