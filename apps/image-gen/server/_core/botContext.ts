@@ -39,6 +39,10 @@ type BotContextBase = {
     promptHint?: string,
     generationKind?: GenerationKind
   ): Promise<void>;
+  runVideoGeneration?(
+    sourceImageUrl: string,
+    promptHint: string
+  ): Promise<void>;
   getRuntimeStats(): GenerationStatsSnapshot;
   logger: BotLogger;
 };

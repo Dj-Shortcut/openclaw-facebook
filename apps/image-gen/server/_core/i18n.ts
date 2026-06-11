@@ -46,6 +46,14 @@ type TranslationKey =
   | "unsupportedUnknown"
   | "unsupportedUnknownWithEditableImage"
   | "unsupportedVideoOrAnimation"
+  | "videoGenerationDisabled"
+  | "videoGenerationRequiresPhoto"
+  | "generatingVideoPrompt"
+  | "videoGenerationQueued"
+  | "videoGenerationTimeout"
+  | "videoGenerationUnavailable"
+  | "videoGenerationGenericFailure"
+  | "outOfVideoCredits"
   | "generatingImagePrompt"
   | "generationQueued"
   | "whatsappGenerationFollowup"
@@ -154,6 +162,22 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Deze bijlage kan ik niet verwerken. Je kunt wel nog met je vorige foto verder.",
     unsupportedVideoOrAnimation:
       "Ik kan nog geen video maken, maar ik kan wel een foto aanpassen. Wil je bijvoorbeeld een podium, disco-achtergrond of danspose?",
+    videoGenerationDisabled:
+      "Ik kan nog geen video maken, maar ik kan wel een foto aanpassen. Wil je bijvoorbeeld een podium, disco-achtergrond of danspose?",
+    videoGenerationRequiresPhoto:
+      "Ik kan hier een korte video van maken zodra je eerst een foto stuurt. Stuur een foto en zeg daarna wat er moet bewegen.",
+    generatingVideoPrompt:
+      "Ik maak nu een korte video van je foto. Dit kan wat langer duren.",
+    videoGenerationQueued:
+      "Ik zet je video in de wachtrij en stuur hem zodra hij klaar is.",
+    videoGenerationTimeout:
+      "De videomaker deed er te lang over. Probeer straks opnieuw met dezelfde foto.",
+    videoGenerationUnavailable:
+      "Video maken staat nog niet aan.",
+    videoGenerationGenericFailure:
+      "Ik kon die video nu niet maken. Je foto blijft bewaard, dus je kunt een andere aanpassing vragen.",
+    outOfVideoCredits:
+      "Je hebt je gratis videocredits voor vandaag opgebruikt. Probeer morgen opnieuw.",
     unsupportedGif:
       "GIF ontvangen, stuur best een gewone foto voor bewerking.",
     unsupportedAudio:
@@ -246,6 +270,22 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "I can't process this attachment. You can still continue with your previous photo.",
     unsupportedVideoOrAnimation:
       "I can’t create a video yet, but I can edit a photo. For example, send a disco stage, dance pose, or nightclub background request.",
+    videoGenerationDisabled:
+      "I can't create video yet, but I can edit a photo. For example, ask for a stage, disco background, or dance pose.",
+    videoGenerationRequiresPhoto:
+      "I can make a short video from this once you send a photo first. Send a photo, then tell me what should move.",
+    generatingVideoPrompt:
+      "I am making a short video from your photo now. This can take a bit longer.",
+    videoGenerationQueued:
+      "I queued your video and will send it as soon as it is ready.",
+    videoGenerationTimeout:
+      "The video provider took too long. Please try again later with the same photo.",
+    videoGenerationUnavailable:
+      "Video generation is not enabled yet.",
+    videoGenerationGenericFailure:
+      "I could not create that video right now. Your photo is still available, so you can ask for a different edit.",
+    outOfVideoCredits:
+      "You used your free video credits for today. Try again tomorrow.",
     unsupportedGif:
       "I got your GIF, send a regular photo instead.",
     unsupportedAudio:

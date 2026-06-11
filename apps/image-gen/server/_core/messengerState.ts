@@ -65,12 +65,17 @@ export type MessengerUserState = {
   lastGeneratedUrl?: string | null;
   lastPrompt?: string;
   lastGeneratedAt?: number;
+  lastGeneratedVideoUrl?: string | null;
+  lastGeneratedVideoAt?: number | null;
+  lastGeneratedVideoProviderJobId?: string | null;
   lastVariantCursor?: number;
   pendingConversationActions?: ConversationAction[];
   pendingConversationActionsByMessageId?: Record<string, ConversationAction[]>;
   pendingEditIntent?: PendingEditIntent | null;
   quota: QuotaState;
   imageGenerationQuotaReservation?: QuotaReservationState | null;
+  videoGenerationQuota: QuotaState;
+  videoGenerationQuotaReservation?: QuotaReservationState | null;
   transcriptionQuota: QuotaState;
   updatedAt: number;
 };
@@ -125,6 +130,27 @@ export function setFlowState(psid: string, nextState: MessengerFlowState): Maybe
     stage: nextState,
     state: nextState,
   });
+
+  if (isPromiseLike(result)) {
+    return result.then(() => undefined);
+  }
+}
+
+export function setLastGeneratedVideo(
+  psid: string,
+  videoUrl: string,
+  providerJobId: string | null = null,
+  now = Date.now()
+): MaybePromise<void> {
+  const result = patchState(
+    psid,
+    {
+      lastGeneratedVideoUrl: videoUrl,
+      lastGeneratedVideoAt: now,
+      lastGeneratedVideoProviderJobId: providerJobId,
+    },
+    now
+  );
 
   if (isPromiseLike(result)) {
     return result.then(() => undefined);

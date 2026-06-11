@@ -64,6 +64,9 @@ export function createDefaultState(
     lastGeneratedUrl: null,
     lastPrompt: undefined,
     lastGeneratedAt: undefined,
+    lastGeneratedVideoUrl: null,
+    lastGeneratedVideoAt: null,
+    lastGeneratedVideoProviderJobId: null,
     lastVariantCursor: undefined,
     pendingConversationActions: undefined,
     pendingConversationActionsByMessageId: undefined,
@@ -73,6 +76,11 @@ export function createDefaultState(
       count: 0,
     },
     imageGenerationQuotaReservation: null,
+    videoGenerationQuota: {
+      dayKey: getDayKey(now),
+      count: 0,
+    },
+    videoGenerationQuotaReservation: null,
     transcriptionQuota: {
       dayKey: getDayKey(now),
       count: 0,
@@ -228,6 +236,40 @@ function resolveImageGenerationQuotaReservation(
   return ctx.fallback.imageGenerationQuotaReservation;
 }
 
+function resolveVideoGenerationQuotaState(
+  ctx: NormalizationCtx
+): MessengerUserState["videoGenerationQuota"] {
+  const { value, fallback } = ctx;
+
+  return {
+    dayKey:
+      value?.videoGenerationQuota?.dayKey ??
+      fallback.videoGenerationQuota.dayKey,
+    count:
+      value?.videoGenerationQuota?.count ??
+      fallback.videoGenerationQuota.count,
+  };
+}
+
+function resolveVideoGenerationQuotaReservation(
+  ctx: NormalizationCtx
+): MessengerUserState["videoGenerationQuotaReservation"] {
+  const reservation = ctx.value?.videoGenerationQuotaReservation;
+  if (
+    reservation &&
+    typeof reservation.token === "string" &&
+    reservation.token.length > 0 &&
+    Number.isFinite(reservation.expiresAt)
+  ) {
+    return {
+      token: reservation.token,
+      expiresAt: reservation.expiresAt,
+    };
+  }
+
+  return ctx.fallback.videoGenerationQuotaReservation;
+}
+
 function resolveTranscriptionQuotaState(
   ctx: NormalizationCtx
 ): MessengerUserState["transcriptionQuota"] {
@@ -275,6 +317,9 @@ function applyNormalizedStateShape(
     quota: resolveQuotaState(ctx),
     imageGenerationQuotaReservation:
       resolveImageGenerationQuotaReservation(ctx),
+    videoGenerationQuota: resolveVideoGenerationQuotaState(ctx),
+    videoGenerationQuotaReservation:
+      resolveVideoGenerationQuotaReservation(ctx),
     transcriptionQuota: resolveTranscriptionQuotaState(ctx),
     updatedAt: value?.updatedAt ?? fallback.updatedAt,
   };

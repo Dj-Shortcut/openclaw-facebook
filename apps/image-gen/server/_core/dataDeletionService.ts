@@ -21,6 +21,7 @@ function getStateImageUrls(state: MessengerUserState): string[] {
     ...(state.pendingSourceImageDeleteUrls ?? []),
     state.lastGeneratedUrl,
     state.lastImageUrl,
+    state.lastGeneratedVideoUrl,
   ].filter((url): url is string => Boolean(url));
 }
 

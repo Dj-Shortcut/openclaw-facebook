@@ -15,11 +15,19 @@ const DEFAULT_PSID_COOLDOWN_MS = 0;
 const DEFAULT_PSID_LOCK_MS = 240000;
 const DEFAULT_GLOBAL_SLOT_WAIT_MS = 100;
 const DAILY_BUDGET_KEY_PREFIX = "messenger:daily-image-budget";
+const DAILY_VIDEO_BUDGET_KEY_PREFIX = "messenger:daily-video-budget";
 
 export class MessengerDailyImageBudgetExceededError extends Error {
   constructor(message = "Messenger daily image budget reached") {
     super(message);
     this.name = "MessengerDailyImageBudgetExceededError";
+  }
+}
+
+export class MessengerDailyVideoBudgetExceededError extends Error {
+  constructor(message = "Messenger daily video budget reached") {
+    super(message);
+    this.name = "MessengerDailyVideoBudgetExceededError";
   }
 }
 
@@ -232,6 +240,29 @@ export async function assertMessengerDailyImageBudgetAvailable(input: {
       count,
     });
     throw new MessengerDailyImageBudgetExceededError();
+  }
+}
+
+export async function assertMessengerDailyVideoBudgetAvailable(input: {
+  reqId: string;
+  now?: Date;
+}): Promise<void> {
+  const cap = readPositiveInt("MESSENGER_GLOBAL_DAILY_VIDEO_CAP");
+  if (!cap) {
+    return;
+  }
+
+  const now = input.now ?? new Date();
+  const key = `${DAILY_VIDEO_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
+  const count = await incrementExpiringCounter(key, secondsUntilNextUtcDay(now));
+  if (count > cap) {
+    safeLog("messenger_daily_video_budget_reached", {
+      level: "warn",
+      reqId: input.reqId,
+      cap,
+      count,
+    });
+    throw new MessengerDailyVideoBudgetExceededError();
   }
 }
 

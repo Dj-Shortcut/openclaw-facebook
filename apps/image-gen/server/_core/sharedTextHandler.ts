@@ -36,6 +36,12 @@ type SharedTextHandlerInput = {
     normalizedText: string;
     hasPhoto: boolean;
   }) => Promise<boolean>;
+  runVideoAnimationIntent?: (args: {
+    state: MessengerUserState;
+    messageText: string;
+    normalizedText: string;
+    hasPhoto: boolean;
+  }) => Promise<boolean>;
   logState?: (state: MessengerUserState, context: string) => void;
   logAckIgnored?: (ack: string) => void;
 };
@@ -152,12 +158,27 @@ function buildDefaultTextResponse(
   return { response: buildQuickStartResponse(lang) };
 }
 
-function tryHandleVideoAnimationIntent(
+async function tryHandleVideoAnimationIntent(
   input: SharedTextHandlerInput,
-  normalizedText: string
-): SharedTextHandlerResult | null {
+  trimmedText: string,
+  normalizedText: string,
+  state: MessengerUserState,
+  hasPhoto: boolean
+): Promise<SharedTextHandlerResult | null> {
   if (!isVideoAnimationIntent(normalizedText)) {
     return null;
+  }
+
+  if (
+    input.runVideoAnimationIntent &&
+    (await input.runVideoAnimationIntent({
+      state,
+      messageText: trimmedText,
+      normalizedText,
+      hasPhoto,
+    }))
+  ) {
+    return { response: null };
   }
 
   return {
@@ -202,9 +223,12 @@ export async function handleSharedTextMessage(
 
   const state = await input.getState();
   const hasPhoto = hasEditableImage(state);
-  const videoAnimationResult = tryHandleVideoAnimationIntent(
+  const videoAnimationResult = await tryHandleVideoAnimationIntent(
     input,
-    normalizedText
+    trimmedText,
+    normalizedText,
+    state,
+    hasPhoto
   );
   if (videoAnimationResult) {
     return videoAnimationResult;

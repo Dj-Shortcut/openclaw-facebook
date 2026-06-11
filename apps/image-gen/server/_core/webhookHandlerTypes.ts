@@ -97,6 +97,14 @@ export type HandlerContext = {
     promptHint?: string,
     generationKind?: GenerationKind
   ) => Promise<MessengerSendOutcome>;
+  runVideoGeneration?: (
+    psid: string,
+    userId: string,
+    reqId: string,
+    lang: Lang,
+    sourceImageUrl: string,
+    promptHint: string
+  ) => Promise<MessengerSendOutcome>;
   sendFaceMemoryConsentPrompt: (
     psid: string,
     lang: Lang,
@@ -110,6 +118,11 @@ export type HandlerContext = {
   sendLoggedImage: (
     psid: string,
     imageUrl: string,
+    reqId: string
+  ) => Promise<MessengerSendOutcome>;
+  sendLoggedVideo?: (
+    psid: string,
+    videoUrl: string,
     reqId: string
   ) => Promise<MessengerSendOutcome>;
   sendLoggedActions: (

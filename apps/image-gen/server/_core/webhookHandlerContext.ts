@@ -1,4 +1,4 @@
-import { sendImage, sendQuickReplies, sendText, safeLog } from "./messengerApi";
+import { sendImage, sendQuickReplies, sendText, sendVideo, safeLog } from "./messengerApi";
 import type { MessengerSendOutcome } from "./messengerApi";
 import {
   buildFaceMemoryConsentResponse,
@@ -29,6 +29,7 @@ type FeatureContextBase = Omit<BotPayloadContext, "payload">;
 type CreateHandlerContextInput = {
   defaultLang: Lang;
   runImageGeneration: HandlerContext["runImageGeneration"];
+  runVideoGeneration?: HandlerContext["runVideoGeneration"];
 };
 
 const IN_FLIGHT_NOTICE_COOLDOWN_MS = 30_000;
@@ -42,6 +43,7 @@ const MESSENGER_CAPABILITIES = Object.freeze({
 export function createHandlerContext({
   defaultLang,
   runImageGeneration,
+  runVideoGeneration,
 }: CreateHandlerContextInput): HandlerContext {
   function debugWebhookLog(message: Record<string, unknown>): void {
     if (!isDebugLogEnabled()) {
@@ -202,6 +204,21 @@ export function createHandlerContext({
     return await sendImage(psid, imageUrl);
   }
 
+  async function sendLoggedVideo(
+    psid: string,
+    videoUrl: string,
+    reqId: string
+  ): Promise<MessengerSendOutcome> {
+    debugWebhookLog({
+      level: "debug",
+      msg: "outgoing_message",
+      kind: "video",
+      reqId,
+      psidHash: anonymizePsid(psid).slice(0, 12),
+    });
+    return await sendVideo(psid, videoUrl);
+  }
+
   function createFeatureLogger(userId: string): BotLogger {
     return {
       info(event, details = {}) {
@@ -273,6 +290,18 @@ export function createHandlerContext({
           generationKind
         );
       },
+      runVideoGeneration: runVideoGeneration
+        ? async (sourceImageUrl, promptHint) => {
+            await runVideoGeneration(
+              psid,
+              userId,
+              reqId,
+              lang,
+              sourceImageUrl,
+              promptHint
+            );
+          }
+        : undefined,
       getRuntimeStats: () => getTodayRuntimeStats(),
       logger: createFeatureLogger(userId),
     };
@@ -395,10 +424,12 @@ export function createHandlerContext({
     logUserState,
     maybeSendInFlightMessage,
     runImageGeneration,
+    runVideoGeneration,
     sendFaceMemoryConsentPrompt,
     sendFlowExplanation: (userPsid, userLang, requestId) =>
       sendLoggedText(userPsid, t(userLang, "flowExplanation"), requestId),
     sendLoggedImage,
+    sendLoggedVideo,
     sendLoggedActions,
     sendLoggedText,
     sendPhotoReceivedPrompt,

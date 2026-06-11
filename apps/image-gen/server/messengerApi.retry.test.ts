@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sendImage, sendText } from "./_core/messengerApi";
+import { sendImage, sendText, sendVideo } from "./_core/messengerApi";
 import { resetStateStore, setLastUserMessageAt } from "./_core/messengerState";
 
 describe("messengerApi retries", () => {
@@ -104,6 +104,31 @@ describe("messengerApi retries", () => {
     await sendImage("psid-1", "https://img.example/generated.jpg");
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("sends Messenger video attachment payloads", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+
+    global.fetch = fetchMock;
+
+    await sendVideo("psid-1", "https://cdn.example/generated-video.mp4");
+
+    const [, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(request.body))).toMatchObject({
+      messaging_type: "RESPONSE",
+      recipient: { id: "psid-1" },
+      message: {
+        attachment: {
+          type: "video",
+          payload: {
+            url: "https://cdn.example/generated-video.mp4",
+            is_reusable: false,
+          },
+        },
+      },
+    });
   });
 
   it("retries transient network failures for image sends", async () => {
