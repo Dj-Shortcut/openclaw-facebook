@@ -14,7 +14,7 @@ import {
 } from "./_core/messengerQuota";
 import { getOrCreateState, resetStateStore, setFlowState, setPendingImage } from "./_core/messengerState";
 import { getDayKey } from "./_core/messengerStateNormalization";
-import { readState, updateStoredState } from "./_core/stateStore";
+import { deleteState, readState, updateStoredState } from "./_core/stateStore";
 
 const TEST_PEPPER = "ci-test-pepper";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
@@ -246,6 +246,36 @@ describe("messenger quota dayKey", () => {
     expect(state.quota.count).toBe(0);
     expect(state.imageGenerationQuotaReservation).toBeNull();
     expect(await canGenerate(userId)).toBe(true);
+  });
+
+  it("does not recreate deleted state when releasing an image reservation", async () => {
+    const userId = "deleted-release-image-reservation-user";
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "1";
+
+    const reservation = await reserveImageGenerationForAttempt(userId);
+
+    expect(reservation).not.toBeNull();
+    await Promise.resolve(deleteState(userId));
+    await expect(
+      releaseImageGenerationReservation(userId, reservation!)
+    ).resolves.toBeUndefined();
+
+    expect(await Promise.resolve(readState(userId))).toBeNull();
+  });
+
+  it("does not recreate deleted state when committing an image reservation", async () => {
+    const userId = "deleted-commit-image-reservation-user";
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "1";
+
+    const reservation = await reserveImageGenerationForAttempt(userId);
+
+    expect(reservation).not.toBeNull();
+    await Promise.resolve(deleteState(userId));
+    await expect(
+      commitImageGenerationSuccess(userId, reservation!)
+    ).resolves.toBe(false);
+
+    expect(await Promise.resolve(readState(userId))).toBeNull();
   });
 
   it("does not reserve image quota when the daily limit is exhausted", async () => {

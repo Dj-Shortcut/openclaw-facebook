@@ -5,6 +5,7 @@ import {
   deleteEphemeralKeyIfValue,
   hasEphemeralKeyValue,
   setEphemeralKeyIfAbsent,
+  updateExistingStoredState,
   updateStoredState,
 } from "./stateStore";
 
@@ -263,12 +264,11 @@ export async function commitImageGenerationSuccess(
   let committed = false;
   try {
     const now = Date.now();
-    const fallbackState = await Promise.resolve(getOrCreateState(psid));
     const limit = getFreeDailyLimit();
 
     await Promise.resolve(
-      updateStoredState<MessengerUserState>(psid, storedState => {
-        const baseState = withSyncedQuota(storedState ?? fallbackState, now);
+      updateExistingStoredState<MessengerUserState>(psid, storedState => {
+        const baseState = withSyncedQuota(storedState, now);
         const storedReservation = baseState.imageGenerationQuotaReservation;
         const hasValidStoredReservation =
           storedReservation?.token === reservation.token &&
@@ -319,10 +319,9 @@ export async function releaseImageGenerationReservation(
   );
 
   const now = Date.now();
-  const fallbackState = await Promise.resolve(getOrCreateState(psid));
   await Promise.resolve(
-    updateStoredState<MessengerUserState>(psid, storedState => {
-      const baseState = withSyncedQuota(storedState ?? fallbackState, now);
+    updateExistingStoredState<MessengerUserState>(psid, storedState => {
+      const baseState = withSyncedQuota(storedState, now);
       if (baseState.imageGenerationQuotaReservation?.token !== reservation.token) {
         return baseState;
       }

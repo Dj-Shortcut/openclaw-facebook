@@ -193,6 +193,37 @@ export function updateStoredState<T>(
   return next;
 }
 
+export function updateExistingStoredState<T>(
+  psid: string,
+  updater: (current: T) => T
+): MaybePromise<T | null> {
+  const current = readState<T>(psid);
+
+  if (isPromiseLike(current)) {
+    return current.then(existing => {
+      if (!existing) {
+        return null;
+      }
+
+      const next = updater(existing);
+      return Promise.resolve(writeState(psid, next)).then(() => next);
+    });
+  }
+
+  if (!current) {
+    return null;
+  }
+
+  const next = updater(current);
+  const saved = writeState(psid, next);
+
+  if (isPromiseLike(saved)) {
+    return saved.then(() => next);
+  }
+
+  return next;
+}
+
 export function findInMemoryState<T>(
   predicate: (value: T) => boolean
 ): T | null {
