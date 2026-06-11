@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isExplicitSourceImageEditRequest,
+  isFreshImageRequest,
   isImageGenerationRequest,
   isScreenshotUploadCaption,
   isSourceImageTransformRequest,
@@ -25,6 +26,8 @@ describe("image intent primitives", () => {
   it("separates source references from fresh image requests", () => {
     expect(referencesExistingImage("Maak een poster van dit resultaat")).toBe(true);
     expect(referencesExistingImage("Maak een nieuwe afbeelding van een draak")).toBe(false);
+    expect(isFreshImageRequest("Maak een nieuwe avatar van een draak")).toBe(true);
+    expect(isFreshImageRequest("Create a brand-new poster")).toBe(true);
   });
 
   it("detects missing-subject correction language", () => {

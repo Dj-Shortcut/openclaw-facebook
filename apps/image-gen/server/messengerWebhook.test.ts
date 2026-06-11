@@ -55,10 +55,7 @@ import {
   setPendingStoredImage,
   setFlowState,
 } from "./_core/messengerState";
-import {
-  detectAck,
-  getEventDedupeKey,
-} from "./_core/webhookHelpers";
+import { detectAck, getEventDedupeKey } from "./_core/webhookHelpers";
 import { getBotFeatures } from "./_core/bot/features";
 import { setSourceImageDnsLookupForTests } from "./_core/image-generation/sourceImageFetcher";
 import { processConsentedFacebookWebhookPayload } from "./testConsentHelpers";
@@ -79,8 +76,7 @@ const originalMessengerGenerationQueueEnabled =
   process.env.MESSENGER_GENERATION_QUEUE_ENABLED;
 const originalMessengerGenerationInlineFallback =
   process.env.MESSENGER_GENERATION_INLINE_FALLBACK;
-const originalFaceMemoryRetentionDays =
-  process.env.FACE_MEMORY_RETENTION_DAYS;
+const originalFaceMemoryRetentionDays = process.env.FACE_MEMORY_RETENTION_DAYS;
 
 const processFacebookWebhookPayload = processConsentedFacebookWebhookPayload(
   processFacebookWebhookPayloadBase
@@ -95,7 +91,9 @@ function promptFromOpenAiRequest(init: RequestInit | undefined): string {
     return "";
   }
   const payload = JSON.parse(init.body) as {
-    input?: string | Array<{ content?: Array<{ type?: string; text?: string }> }>;
+    input?:
+      | string
+      | Array<{ content?: Array<{ type?: string; text?: string }> }>;
   };
   if (typeof payload.input === "string") {
     return payload.input;
@@ -107,8 +105,7 @@ function promptFromOpenAiRequest(init: RequestInit | undefined): string {
     return firstInput.content;
   }
   return (
-    firstInput?.content?.find(part => part.type === "input_text")
-      ?.text ?? ""
+    firstInput?.content?.find(part => part.type === "input_text")?.text ?? ""
   );
 }
 
@@ -151,7 +148,11 @@ function installOpenAiSuccessFetchMock() {
 
     return {
       ok: true,
-      json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
+      json: async () => ({
+        output: [
+          { type: "image_generation_call", result: GENERATED_IMAGE_BASE64 },
+        ],
+      }),
     } as Response;
   });
 
@@ -170,7 +171,9 @@ function installImageIngressFetchMock() {
       } as Response;
     }
 
-    throw new Error(`Unexpected fetch in messengerWebhook.test: ${toUrlString(url)}`);
+    throw new Error(
+      `Unexpected fetch in messengerWebhook.test: ${toUrlString(url)}`
+    );
   });
 
   vi.stubGlobal("fetch", fetchMock);
@@ -228,9 +231,7 @@ const IN_FLIGHT_NOTICE = "Even geduld, ik ben nog bezig met je afbeelding.";
 
 function inFlightNoticeSendCount(psid: string): number {
   return sendTextMock.mock.calls.filter(
-    ([recipient, text]) =>
-      recipient === psid &&
-      text === IN_FLIGHT_NOTICE
+    ([recipient, text]) => recipient === psid && text === IN_FLIGHT_NOTICE
   ).length;
 }
 
@@ -369,10 +370,7 @@ describe("messenger webhook dedupe", () => {
       });
 
       expect(inFlightNoticeSendCount(psid)).toBe(1);
-      expect(sendTextMock).toHaveBeenLastCalledWith(
-        psid,
-        IN_FLIGHT_NOTICE
-      );
+      expect(sendTextMock).toHaveBeenLastCalledWith(psid, IN_FLIGHT_NOTICE);
 
       nowSpy.mockReturnValue(1_771_000_010_000);
       await processFacebookWebhookPayload({
@@ -408,10 +406,7 @@ describe("messenger webhook dedupe", () => {
       });
 
       expect(inFlightNoticeSendCount(psid)).toBe(2);
-      expect(sendTextMock).toHaveBeenLastCalledWith(
-        psid,
-        IN_FLIGHT_NOTICE
-      );
+      expect(sendTextMock).toHaveBeenLastCalledWith(psid, IN_FLIGHT_NOTICE);
     } finally {
       nowSpy.mockRestore();
       await deleteEphemeralKey(inFlightKey);
@@ -442,10 +437,7 @@ describe("messenger webhook dedupe", () => {
       });
 
       expect(inFlightNoticeSendCount(psid)).toBe(1);
-      expect(sendTextMock).toHaveBeenLastCalledWith(
-        psid,
-        IN_FLIGHT_NOTICE
-      );
+      expect(sendTextMock).toHaveBeenLastCalledWith(psid, IN_FLIGHT_NOTICE);
 
       await deleteEphemeralKey(inFlightKey);
       nowSpy.mockReturnValue(1_771_000_110_000);
@@ -479,10 +471,7 @@ describe("messenger webhook dedupe", () => {
       });
 
       expect(inFlightNoticeSendCount(psid)).toBe(1);
-      expect(sendTextMock).toHaveBeenLastCalledWith(
-        psid,
-        IN_FLIGHT_NOTICE
-      );
+      expect(sendTextMock).toHaveBeenLastCalledWith(psid, IN_FLIGHT_NOTICE);
     } finally {
       nowSpy.mockRestore();
       await deleteEphemeralKey(inFlightKey);
@@ -531,7 +520,9 @@ describe("messenger webhook dedupe", () => {
 
   it("does not resend a legacy completed generation without delivery status", async () => {
     const fetchMock = vi.fn(async () => {
-      throw new Error("legacy completed job should not call the image provider");
+      throw new Error(
+        "legacy completed job should not call the image provider"
+      );
     });
     vi.stubGlobal("fetch", fetchMock);
     await Promise.resolve(
@@ -570,7 +561,9 @@ describe("messenger webhook dedupe", () => {
 
   it("sends the cached image for a completed queued job that was not delivered", async () => {
     const fetchMock = vi.fn(async () => {
-      throw new Error("undelivered completed job should not call the image provider");
+      throw new Error(
+        "undelivered completed job should not call the image provider"
+      );
     });
     vi.stubGlobal("fetch", fetchMock);
     await Promise.resolve(
@@ -751,7 +744,8 @@ describe("messenger webhook dedupe", () => {
 
     expect(
       fetchMock.mock.calls.some(
-        ([url]) => toUrlString(url) === "https://img.example/retained-source.jpg"
+        ([url]) =>
+          toUrlString(url) === "https://img.example/retained-source.jpg"
       )
     ).toBe(true);
     const openAiCall = fetchMock.mock.calls.find(
@@ -900,7 +894,8 @@ describe("messenger webhook dedupe", () => {
 
     expect(
       fetchMock.mock.calls.some(
-        ([url]) => toUrlString(url) === "https://img.example/retained-source.jpg"
+        ([url]) =>
+          toUrlString(url) === "https://img.example/retained-source.jpg"
       )
     ).toBe(true);
     const openAiCall = fetchMock.mock.calls.find(
@@ -910,7 +905,9 @@ describe("messenger webhook dedupe", () => {
     const prompt = promptFromOpenAiRequest(openAiCall?.[1]);
     expect(prompt).toContain("Edit the uploaded/source image");
     expect(prompt).toContain(userPrompt);
-    expect(prompt).not.toContain("Transform this photo into a cyberpunk portrait");
+    expect(prompt).not.toContain(
+      "Transform this photo into a cyberpunk portrait"
+    );
     expect(safeLogMock).toHaveBeenCalledWith(
       "internal_image_request_received",
       expect.objectContaining({
@@ -1046,9 +1043,9 @@ describe("messenger webhook dedupe", () => {
       "messenger_generation_job_queued",
       expect.anything()
     );
-    expect((await Promise.resolve(getState("internal-source-fail-user")))?.stage).toBe(
-      "AWAITING_PHOTO"
-    );
+    expect(
+      (await Promise.resolve(getState("internal-source-fail-user")))?.stage
+    ).toBe("AWAITING_PHOTO");
   });
 
   it("dedupes on mid before the real message arrives when an echo already used it", async () => {
@@ -1436,7 +1433,11 @@ describe("messenger webhook dedupe", () => {
           title: "Pas foto aan",
           payload: "OPENCLAW_ACTION:Pas%20foto%20aan",
         },
-        { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
+        {
+          content_type: "text",
+          title: "Privacy",
+          payload: "OPENCLAW_ACTION:Privacy",
+        },
       ]
     );
     expect(
@@ -1445,7 +1446,6 @@ describe("messenger webhook dedupe", () => {
       )
     ).toBe(false);
   });
-
 });
 
 describe("messenger deterministic free text", () => {
@@ -1514,7 +1514,11 @@ describe("messenger deterministic free text", () => {
           title: "Nieuwe afbeelding",
           payload: "OPENCLAW_ACTION:new_image",
         },
-        { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
+        {
+          content_type: "text",
+          title: "Privacy",
+          payload: "OPENCLAW_ACTION:Privacy",
+        },
       ]
     );
   });
@@ -1583,7 +1587,9 @@ describe("messenger deterministic free text", () => {
                 attachments: [
                   {
                     type: "image",
-                    payload: { url: "https://img.example/typed-feature-action.jpg" },
+                    payload: {
+                      url: "https://img.example/typed-feature-action.jpg",
+                    },
                   },
                 ],
               },
@@ -1685,7 +1691,9 @@ describe("messenger deterministic free text", () => {
       "reply-action-user",
       t("nl", "newImagePrompt")
     );
-    expect(getState(anonymizePsid("reply-action-user"))?.lastPhotoUrl).toBeNull();
+    expect(
+      getState(anonymizePsid("reply-action-user"))?.lastPhotoUrl
+    ).toBeNull();
   });
 
   it("generates direct Messenger text image requests prompt-first", async () => {
@@ -1826,7 +1834,9 @@ describe("messenger deterministic free text", () => {
                 attachments: [
                   {
                     type: "image",
-                    payload: { url: "https://img.example/screenshot-intent.jpg" },
+                    payload: {
+                      url: "https://img.example/screenshot-intent.jpg",
+                    },
                   },
                 ],
               },
@@ -1884,7 +1894,9 @@ describe("messenger deterministic free text", () => {
                 attachments: [
                   {
                     type: "image",
-                    payload: { url: "https://img.example/screenshot-stale.jpg" },
+                    payload: {
+                      url: "https://img.example/screenshot-stale.jpg",
+                    },
                   },
                 ],
               },
@@ -1898,7 +1910,11 @@ describe("messenger deterministic free text", () => {
       psid,
       t("nl", "screenshotClarifyPrompt")
     );
-    expect(fetchMock.mock.calls.some(([url]) => toUrlString(url) === "https://api.openai.com/v1/responses")).toBe(false);
+    expect(
+      fetchMock.mock.calls.some(
+        ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
+      )
+    ).toBe(false);
     expect(sendImageMock).not.toHaveBeenCalledWith(
       psid,
       expect.stringMatching(
@@ -1912,7 +1928,9 @@ describe("messenger deterministic free text", () => {
     const psid = "screenshot-explicit-caption-user";
     const priorPrompt = "Maak iets grappigs voor mijn zus";
 
-    await Promise.resolve(setLastGenerationContext(psid, { prompt: priorPrompt }));
+    await Promise.resolve(
+      setLastGenerationContext(psid, { prompt: priorPrompt })
+    );
     await Promise.resolve(setFlowState(psid, "AWAITING_EDIT_PROMPT"));
 
     await processFacebookWebhookPayload({
@@ -1927,7 +1945,9 @@ describe("messenger deterministic free text", () => {
                 attachments: [
                   {
                     type: "image",
-                    payload: { url: "https://img.example/screenshot-explicit.jpg" },
+                    payload: {
+                      url: "https://img.example/screenshot-explicit.jpg",
+                    },
                   },
                 ],
               },
@@ -1980,7 +2000,9 @@ describe("messenger deterministic free text", () => {
                 attachments: [
                   {
                     type: "image",
-                    payload: { url: "https://img.example/screenshot-consent.jpg" },
+                    payload: {
+                      url: "https://img.example/screenshot-consent.jpg",
+                    },
                   },
                 ],
               },
@@ -2052,7 +2074,9 @@ describe("messenger deterministic free text", () => {
                 attachments: [
                   {
                     type: "image",
-                    payload: { url: "https://img.example/screenshot-consent-yes.jpg" },
+                    payload: {
+                      url: "https://img.example/screenshot-consent-yes.jpg",
+                    },
                   },
                 ],
               },
@@ -2121,7 +2145,9 @@ describe("messenger deterministic free text", () => {
                 attachments: [
                   {
                     type: "image",
-                    payload: { url: "https://img.example/screenshot-clarify.jpg" },
+                    payload: {
+                      url: "https://img.example/screenshot-clarify.jpg",
+                    },
                   },
                 ],
               },
@@ -2135,9 +2161,7 @@ describe("messenger deterministic free text", () => {
       psid,
       t("nl", "screenshotClarifyPrompt")
     );
-    expect(getState(anonymizePsid(psid))?.stage).toBe(
-      "AWAITING_EDIT_PROMPT"
-    );
+    expect(getState(anonymizePsid(psid))?.stage).toBe("AWAITING_EDIT_PROMPT");
     expect(sendImageMock).not.toHaveBeenCalled();
     expect(sendQuickRepliesMock).not.toHaveBeenCalled();
   });
@@ -2184,7 +2208,7 @@ describe("messenger deterministic free text", () => {
     );
   });
 
-  it("handles captioned fresh image requests without treating the photo as a style preset", async () => {
+  it("handles captioned image requests as source edits by default", async () => {
     const fetchMock = installOpenAiSuccessFetchMock();
 
     await processFacebookWebhookPayload({
@@ -2213,7 +2237,9 @@ describe("messenger deterministic free text", () => {
       ([url]) => toUrlString(url) === "https://api.openai.com/v1/responses"
     );
     const prompt = promptFromOpenAiRequest(openAiCall?.[1]);
-    expect(prompt).toContain("Create a new image from the user's request.");
+    expect(prompt).toContain(
+      "Edit the uploaded/source image according to the user's request."
+    );
     expect(prompt).toContain("User request: Maak een draak boven Antwerpen");
     expect(prompt).not.toContain("storybook");
     expect(sendImageMock).toHaveBeenCalledWith(
@@ -2234,7 +2260,10 @@ describe("messenger deterministic free text", () => {
           messaging: [
             {
               sender: { id: "deterministic-no-photo-user" },
-              message: { mid: "mid-deterministic-no-photo", text: "Wie ben jij?" },
+              message: {
+                mid: "mid-deterministic-no-photo",
+                text: "Wie ben jij?",
+              },
             },
           ],
         },
@@ -2255,7 +2284,11 @@ describe("messenger deterministic free text", () => {
           title: "Pas foto aan",
           payload: "OPENCLAW_ACTION:Pas%20foto%20aan",
         },
-        { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
+        {
+          content_type: "text",
+          title: "Privacy",
+          payload: "OPENCLAW_ACTION:Privacy",
+        },
       ]
     );
     expect(getState(anonymizePsid("deterministic-no-photo-user"))?.stage).toBe(
@@ -2263,7 +2296,6 @@ describe("messenger deterministic free text", () => {
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
-
 });
 
 describe("messenger greeting behavior", () => {
@@ -2309,7 +2341,11 @@ describe("messenger greeting behavior", () => {
           title: "Pas foto aan",
           payload: "OPENCLAW_ACTION:Pas%20foto%20aan",
         },
-        { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
+        {
+          content_type: "text",
+          title: "Privacy",
+          payload: "OPENCLAW_ACTION:Privacy",
+        },
       ])
     );
   });
@@ -2461,7 +2497,11 @@ describe("messenger greeting behavior", () => {
         title: "Andere achtergrond",
         payload: "OPENCLAW_ACTION:change_background",
       },
-      { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
+      {
+        content_type: "text",
+        title: "Privacy",
+        payload: "OPENCLAW_ACTION:Privacy",
+      },
     ]);
   });
 
@@ -2597,33 +2637,30 @@ describe("acknowledgement edgecases", () => {
     "let him dance",
     "let him sing",
     "move like Bruno",
-  ])(
-    "returns video-animation intent guidance for \"%s\"",
-    async text => {
-      await processFacebookWebhookPayload({
-        entry: [
-          {
-            messaging: [
-              {
-                sender: { id: "video-animation-user" },
-                message: {
-                  mid: `mid-${text.replace(/\s+/g, "-")}`,
-                  text,
-                },
+  ])('returns video-animation intent guidance for "%s"', async text => {
+    await processFacebookWebhookPayload({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: "video-animation-user" },
+              message: {
+                mid: `mid-${text.replace(/\s+/g, "-")}`,
+                text,
               },
-            ],
-          },
-        ],
-      });
+            },
+          ],
+        },
+      ],
+    });
 
-      expect(sendTextMock).toHaveBeenCalledWith(
-        "video-animation-user",
-        t("nl", "unsupportedVideoOrAnimation")
-      );
-      expect(sendImageMock).not.toHaveBeenCalled();
-      expect(sendQuickRepliesMock).not.toHaveBeenCalled();
-    }
-  );
+    expect(sendTextMock).toHaveBeenCalledWith(
+      "video-animation-user",
+      t("nl", "unsupportedVideoOrAnimation")
+    );
+    expect(sendImageMock).not.toHaveBeenCalled();
+    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
+  });
 
   it("routes audio attachments as unsupportedAudio", async () => {
     await processFacebookWebhookPayload({
@@ -2775,7 +2812,6 @@ describe("acknowledgement edgecases", () => {
   );
 });
 
-
 describe("bot rate limit feature", () => {
   beforeEach(() => {
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS = DEFAULT_ALLOWED_SOURCE_IMAGE_HOSTS;
@@ -2828,7 +2864,7 @@ describe("disabled bot features stay out of the runtime flow", () => {
     resetMessengerEventDedupe();
   });
 
-  it("does not treat free text as a conversational edit after a generation", async () => {
+  it("treats free text after a generation as a source edit by default", async () => {
     installOpenAiSuccessFetchMock();
 
     await processFacebookWebhookPayload({
@@ -2883,9 +2919,15 @@ describe("disabled bot features stay out of the runtime flow", () => {
       "edit-text-user",
       t("nl", "flowExplanation")
     );
+    expect(sendImageMock).toHaveBeenCalledWith(
+      "edit-text-user",
+      expect.stringMatching(
+        /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
+      )
+    );
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       "edit-text-user",
-      t("nl", "assistantQuickActions"),
+      t("nl", "success"),
       expect.arrayContaining([
         {
           content_type: "text",
@@ -2894,7 +2936,6 @@ describe("disabled bot features stay out of the runtime flow", () => {
         },
       ])
     );
-    expect(sendImageMock).not.toHaveBeenCalled();
   });
 
   it("turns surprise with a photo into explicit choices instead of auto-running", async () => {
@@ -2970,11 +3011,4 @@ describe("disabled bot features stay out of the runtime flow", () => {
       ]
     );
   });
-
-
-
-
-
-
 });
-
