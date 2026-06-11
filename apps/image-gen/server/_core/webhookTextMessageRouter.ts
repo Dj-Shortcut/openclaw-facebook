@@ -163,6 +163,10 @@ async function handleSharedMessengerText(
         t(input.lang, "videoGenerationQueued"),
         input.reqId
       );
+      // Video rendering is intentionally detached from the webhook path so
+      // ingress delivery is not blocked by long provider jobs. Any later
+      // success/failure notification still depends on the Messenger response
+      // window being open; the feature flag remains disabled by default.
       setTimeout(() => {
         void ctx.runVideoGeneration?.(
           input.psid,

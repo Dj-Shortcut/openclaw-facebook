@@ -89,6 +89,8 @@ describe("webhook text message router", () => {
       text: "laat hem bewegen",
       timestamp: 1730000000000,
     });
+
+    expect(runVideoGeneration).not.toHaveBeenCalled();
     await vi.runAllTimersAsync();
 
     expect(runVideoGeneration).toHaveBeenCalledWith(
