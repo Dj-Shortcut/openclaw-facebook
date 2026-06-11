@@ -1,6 +1,17 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { canGenerate, increment } from "./_core/messengerQuota";
+import {
+  canGenerate,
+  canTranscribe,
+  checkAndIncrementTranscription,
+  commitTranscriptionSuccess,
+  increment,
+  incrementTranscription,
+  releaseTranscriptionReservation,
+  reserveTranscriptionForAttempt,
+} from "./_core/messengerQuota";
 import { getOrCreateState, resetStateStore, setFlowState, setPendingImage } from "./_core/messengerState";
+import { getDayKey } from "./_core/messengerStateNormalization";
+import { readState, updateStoredState } from "./_core/stateStore";
 
 const TEST_PEPPER = "ci-test-pepper";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
@@ -15,6 +26,7 @@ describe("messenger quota dayKey", () => {
     vi.useRealTimers();
     delete process.env.MESSENGER_QUOTA_BYPASS_IDS;
     delete process.env.MESSENGER_FREE_DAILY_LIMIT;
+    delete process.env.MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT;
   });
 
   afterAll(() => {
@@ -117,6 +129,118 @@ describe("messenger quota dayKey", () => {
 
     expect(await canGenerate(userId)).toBe(false);
     expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(5);
+  });
+
+  it("tracks transcription quota independently from image quota", async () => {
+    const userId = "audio-quota-separate-user";
+
+    await increment(userId);
+    await incrementTranscription(userId);
+    await incrementTranscription(userId);
+
+    expect(await canTranscribe(userId)).toBe(true);
+    expect(await canGenerate(userId)).toBe(true);
+
+    await incrementTranscription(userId);
+
+    expect(await canTranscribe(userId)).toBe(false);
+    expect(await canGenerate(userId)).toBe(true);
+  });
+
+  it("uses configured transcription quota limit", async () => {
+    const userId = "configured-transcription-limit-user";
+    process.env.MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT = "1";
+
+    expect(await canTranscribe(userId)).toBe(true);
+
+    await incrementTranscription(userId);
+
+    expect(await canTranscribe(userId)).toBe(false);
+  });
+
+  it("prevents concurrent transcription quota bypass", async () => {
+    const userId = "concurrent-transcription-user";
+    process.env.MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT = "2";
+
+    const results = await Promise.all([
+      checkAndIncrementTranscription(userId),
+      checkAndIncrementTranscription(userId),
+      checkAndIncrementTranscription(userId),
+    ]);
+
+    expect(results.filter(Boolean)).toHaveLength(2);
+    expect(results.filter(result => !result)).toHaveLength(1);
+    expect(await canTranscribe(userId)).toBe(false);
+    expect((await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count).toBe(
+      2
+    );
+  });
+
+  it("only increments reserved transcription quota on commit", async () => {
+    const userId = "reserved-transcription-user";
+    process.env.MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT = "1";
+
+    const reservation = await reserveTranscriptionForAttempt(userId);
+
+    expect(reservation).not.toBeNull();
+    expect((await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count).toBe(
+      0
+    );
+
+    await commitTranscriptionSuccess(userId, reservation!);
+
+    expect((await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count).toBe(
+      1
+    );
+    expect(await canTranscribe(userId)).toBe(false);
+  });
+
+  it("releases reserved transcription quota without incrementing on failure", async () => {
+    const userId = "released-transcription-user";
+    process.env.MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT = "1";
+
+    const reservation = await reserveTranscriptionForAttempt(userId);
+
+    expect(reservation).not.toBeNull();
+    await releaseTranscriptionReservation(userId, reservation!);
+
+    expect((await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count).toBe(
+      0
+    );
+    expect(await canTranscribe(userId)).toBe(true);
+  });
+
+  it("backfills missing transcription quota from legacy state", async () => {
+    const userId = "legacy-transcription-user";
+    const dayKey = getDayKey();
+
+    await Promise.resolve(setFlowState(userId, "IDLE"));
+    await Promise.resolve(
+      updateStoredState(userId, storedState => {
+        const nextState = { ...(storedState as object) } as Record<string, unknown>;
+        delete nextState.transcriptionQuota;
+        return nextState as typeof storedState;
+      })
+    );
+
+    const legacyState = await readState<Record<string, unknown>>(userId);
+    expect(legacyState?.transcriptionQuota).toBeUndefined();
+
+    await canTranscribe(userId);
+
+    const hydratedState = await Promise.resolve(getOrCreateState(userId));
+    const persistedState = await readState<{
+      transcriptionQuota?: {
+        dayKey: string;
+        count: number;
+      };
+    }>(userId);
+
+    expect(hydratedState.transcriptionQuota).toEqual({
+      dayKey,
+      count: 0,
+    });
+    expect(persistedState?.transcriptionQuota?.dayKey).toBe(dayKey);
   });
 
 });

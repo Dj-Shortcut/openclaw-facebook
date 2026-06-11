@@ -3,6 +3,12 @@ import { safeLog } from "./messengerApi";
 import { fetchExternalSourceImageForIngress } from "./image-generation/sourceImageFetcher";
 import { anonymizePsid } from "./messengerState";
 import { handleTextMessage } from "./webhookTextMessageRouter";
+import {
+  commitTranscriptionSuccess,
+  releaseTranscriptionReservation,
+  reserveTranscriptionForAttempt,
+} from "./messengerQuota";
+import { t } from "./i18n";
 import type { HandlerContext } from "./webhookHandlerTypes";
 import type { FacebookWebhookAttachment } from "./webhookHelpers";
 
@@ -21,6 +27,8 @@ const OPENAI_AUDIO_TRANSCRIPTION_ENDPOINT =
 const OPENAI_AUDIO_TRANSCRIPTION_MODEL = "whisper-1";
 const OPENAI_AUDIO_TRANSCRIPTION_TIMEOUT_MS = 30_000;
 const OPENAI_AUDIO_TRANSCRIPTION_MAX_RETRIES = 1;
+const DEFAULT_AUDIO_TRANSCRIPTION_MAX_BYTES = 20 * 1024 * 1024;
+const MIN_TRANSCRIPT_WORDS = 2;
 
 /** Attempts to transcribe voice/audio attachments and route as text input. */
 export async function tryHandleAudioMessage(
@@ -36,20 +44,50 @@ export async function tryHandleAudioMessage(
     return false;
   }
 
-  const transcript = await transcribeAudioMessage(input.reqId, input.psid, audioUrl);
-  if (!transcript) {
+  const prepared = await prepareAudioForTranscription(
+    input.reqId,
+    input.psid,
+    audioUrl
+  );
+  if (!prepared) {
     return false;
   }
 
-  await handleTextMessage(ctx, {
-    psid: input.psid,
-    userId: input.userId,
-    reqId: input.reqId,
-    lang: input.lang,
-    text: transcript,
-    timestamp: input.timestamp,
-  });
-  return true;
+  const reservation = await reserveTranscriptionForAttempt(input.psid);
+  if (!reservation) {
+    await ctx.sendLoggedText(input.psid, t(input.lang, "outOfFreeCredits"), input.reqId);
+    return true;
+  }
+
+  let committed = false;
+  try {
+    const transcript = await transcribePreparedAudioMessage(
+      input.reqId,
+      input.psid,
+      audioUrl,
+      prepared
+    );
+    if (!transcript) {
+      return false;
+    }
+
+    await commitTranscriptionSuccess(input.psid, reservation);
+    committed = true;
+
+    await handleTextMessage(ctx, {
+      psid: input.psid,
+      userId: input.userId,
+      reqId: input.reqId,
+      lang: input.lang,
+      text: transcript,
+      timestamp: input.timestamp,
+    });
+    return true;
+  } finally {
+    if (!committed) {
+      await releaseTranscriptionReservation(input.psid, reservation);
+    }
+  }
 }
 
 function getInboundAudioUrl(
@@ -61,11 +99,20 @@ function getInboundAudioUrl(
   return typeof audio?.payload?.url === "string" ? audio.payload.url : null;
 }
 
-async function transcribeAudioMessage(
+type PreparedAudioForTranscription = {
+  apiKey: string;
+  sourceAudio: {
+    buffer: Buffer;
+    contentType?: string;
+    incomingLen: number;
+  };
+};
+
+async function prepareAudioForTranscription(
   reqId: string,
   psid: string,
   audioUrl: string
-): Promise<string | null> {
+): Promise<PreparedAudioForTranscription | null> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) {
     safeLog("messenger_audio_transcription_skipped", {
@@ -97,6 +144,37 @@ async function transcribeAudioMessage(
     return null;
   }
 
+  const attemptPayload = {
+    reqId,
+    psidHash: anonymizePsid(psid).slice(0, 12),
+    attachment: summarizeSensitiveUrl(audioUrl),
+    endpoint: OPENAI_AUDIO_TRANSCRIPTION_ENDPOINT,
+    model: OPENAI_AUDIO_TRANSCRIPTION_MODEL,
+    contentType: sourceAudio.contentType,
+    sourceBytes: sourceAudio.incomingLen,
+  };
+
+  const maxBytes = getAudioTranscriptionMaxBytes();
+  if (sourceAudio.incomingLen > maxBytes) {
+    safeLog("messenger_audio_transcription_skipped", {
+      ...attemptPayload,
+      route: "audio",
+      reason: "audio_too_large",
+      maxBytes,
+    });
+    return null;
+  }
+
+  return { apiKey, sourceAudio };
+}
+
+async function transcribePreparedAudioMessage(
+  reqId: string,
+  psid: string,
+  audioUrl: string,
+  prepared: PreparedAudioForTranscription
+): Promise<string | null> {
+  const { apiKey, sourceAudio } = prepared;
   const attemptPayload = {
     reqId,
     psidHash: anonymizePsid(psid).slice(0, 12),
@@ -162,6 +240,19 @@ async function transcribeAudioMessage(
         return null;
       }
 
+      const wordCount = countTranscriptWords(transcript);
+      if (wordCount < MIN_TRANSCRIPT_WORDS) {
+        safeLog("messenger_audio_transcription_no_text", {
+          ...attemptPayload,
+          route: "audio",
+          reason: "transcript_too_short",
+          attempt,
+          textLength: transcript.length,
+          wordCount,
+        });
+        return null;
+      }
+
       safeLog("messenger_audio_transcription_complete", {
         ...attemptPayload,
         route: "audio",
@@ -193,6 +284,22 @@ async function transcribeAudioMessage(
   }
 
   return null;
+}
+
+function getAudioTranscriptionMaxBytes(): number {
+  const configured = Number.parseInt(
+    process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES ?? "",
+    10
+  );
+  if (Number.isFinite(configured) && configured > 0) {
+    return configured;
+  }
+
+  return DEFAULT_AUDIO_TRANSCRIPTION_MAX_BYTES;
+}
+
+function countTranscriptWords(transcript: string): number {
+  return transcript.split(/\s+/).filter(Boolean).length;
 }
 
 function waitForRetryDelay(attempt: number): Promise<void> {

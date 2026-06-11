@@ -54,6 +54,20 @@ export type MessengerAttachmentCategory =
   | "link"
   | "unknown";
 
+export type MessengerAttachmentRoute =
+  | "image"
+  | "audio"
+  | "unsupported_video"
+  | "unsupported_file"
+  | "unsupported_share"
+  | "unsupported_sticker"
+  | "unsupported_unknown";
+
+export type MessengerAttachmentRouteDecision = {
+  route: MessengerAttachmentRoute;
+  rejectedReason?: string;
+};
+
 const GIF_MIME_HINT = /gif/i;
 const LINK_ATTACHMENT_TYPES = new Set(["file_share", "link", "share", "fallback"]);
 const EMPTY_ATTACHMENT_TYPE = "unknown";
@@ -211,6 +225,64 @@ export function getNormalizedAttachmentTypes(
   }
 
   return Array.from(new Set(attachments.map(att => att.type))).sort();
+}
+
+export function resolveMessengerAttachmentRoute(
+  attachments: MessengerNormalizedAttachment[] | undefined
+): MessengerAttachmentRouteDecision | null {
+  if (!attachments?.length) {
+    return null;
+  }
+
+  if (hasImageAttachment(attachments)) {
+    return { route: "image" };
+  }
+
+  if (hasAudioAttachment(attachments)) {
+    return { route: "audio" };
+  }
+
+  if (hasVideoAttachment(attachments)) {
+    return { route: "unsupported_video", rejectedReason: "unsupported_video" };
+  }
+
+  if (hasFileAttachment(attachments)) {
+    return { route: "unsupported_file", rejectedReason: "unsupported_file" };
+  }
+
+  if (hasLinkAttachment(attachments)) {
+    return { route: "unsupported_share", rejectedReason: "unsupported_share" };
+  }
+
+  if (hasStickerAttachment(attachments)) {
+    return { route: "unsupported_sticker", rejectedReason: "unsupported_sticker" };
+  }
+
+  if (hasUnknownAttachment(attachments)) {
+    return {
+      route: "unsupported_unknown",
+      rejectedReason: "unsupported_payload",
+    };
+  }
+
+  return null;
+}
+
+export function hasAttachmentUrl(
+  attachments: MessengerNormalizedAttachment[] | undefined
+): boolean {
+  return attachments?.some(att => typeof att.url === "string" && att.url.trim() !== "")
+    ?? false;
+}
+
+function hasStickerAttachment(
+  attachments: MessengerNormalizedAttachment[] | undefined
+): boolean {
+  return (
+    attachments?.some(
+      att => att.type === "unknown" && att.rawType === "sticker"
+    ) ?? false
+  );
 }
 
 export function hasImageAttachment(

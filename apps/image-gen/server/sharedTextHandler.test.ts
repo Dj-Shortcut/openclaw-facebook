@@ -397,6 +397,62 @@ describe("sharedTextHandler", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  const videoAnimationRecoveryCases: Array<{ text: string; expected: string }> = [
+    {
+      text: "laat hem dansen",
+      expected: t("nl", "unsupportedVideoOrAnimation"),
+    },
+    {
+      text: "laat hem zingen",
+      expected: t("nl", "unsupportedVideoOrAnimation"),
+    },
+    {
+      text: "laat hem bewegen",
+      expected: t("nl", "unsupportedVideoOrAnimation"),
+    },
+    {
+      text: "bewegen zoals Bruno",
+      expected: t("nl", "unsupportedVideoOrAnimation"),
+    },
+    {
+      text: "let him dance",
+      expected: t("nl", "unsupportedVideoOrAnimation"),
+    },
+    {
+      text: "let him sing",
+      expected: t("nl", "unsupportedVideoOrAnimation"),
+    },
+    {
+      text: "move like Bruno",
+      expected: t("nl", "unsupportedVideoOrAnimation"),
+    },
+  ];
+
+  it.each(videoAnimationRecoveryCases)(
+    "returns video-animation intent guidance for \"$text\"",
+    async ({ text, expected }) => {
+      const result = await handleSharedTextMessage({
+        message: {
+          channel: "messenger",
+          senderId: "psid-video-anim",
+          userId: "user-key-video-anim",
+          messageType: "text",
+          textBody: text,
+        },
+        reqId: "req-video-anim",
+        lang: "nl",
+        getState: async () =>
+          createState({
+            psid: "psid-video-anim",
+            userKey: "user-key-video-anim",
+          }),
+        setFlowState: async () => {},
+      });
+
+      expect(result).toEqual({ response: { text: expected } });
+    }
+  );
+
   it("returns contextual actions for free text with an existing image", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
