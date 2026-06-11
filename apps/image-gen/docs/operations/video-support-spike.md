@@ -49,6 +49,12 @@
 - Add queue capacity, timeout and retry constraints before piloting.
 - Add explicit storage cost estimate per minute/MB for temporary clip retention.
 
+## Follow-up: unified paid-operation quota reservations
+
+- Unify paid operation quota reservations across image, audio and future video generation.
+- Image generation still uses the legacy `canGenerate()` plus post-generation `increment()` path in PR #198.
+- Future video generation must use reserve/commit/release semantics from the start and must not copy the legacy image quota model.
+
 ## UX copy baseline for pilot
 
 - Input: current user-facing copy remains
