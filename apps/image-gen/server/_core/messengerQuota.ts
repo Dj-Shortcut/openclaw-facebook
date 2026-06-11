@@ -5,6 +5,7 @@ import {
   deleteEphemeralKeyIfValue,
   hasEphemeralKeyValue,
   setEphemeralKeyIfAbsent,
+  updateExistingStoredState,
   updateStoredState,
 } from "./stateStore";
 
@@ -51,6 +52,10 @@ function transcriptionQuotaLockKey(psid: string): string {
 
 function imageGenerationQuotaLockKey(psid: string): string {
   return `messenger:image-generation-quota:${psid}`;
+}
+
+function imageGenerationReservationExpiresAt(now = Date.now()): number {
+  return now + IMAGE_GENERATION_QUOTA_LOCK_MS;
 }
 
 function wait(milliseconds: number): Promise<void> {
@@ -206,6 +211,10 @@ export async function reserveImageGenerationForAttempt(
     const fallbackState = await Promise.resolve(getOrCreateState(psid));
     const limit = getFreeDailyLimit();
     let allowed = false;
+    const reservationState = {
+      token: lockToken,
+      expiresAt: imageGenerationReservationExpiresAt(now),
+    };
 
     await Promise.resolve(
       updateStoredState<MessengerUserState>(psid, storedState => {
@@ -213,7 +222,11 @@ export async function reserveImageGenerationForAttempt(
 
         if (hasQuotaBypass(psid, baseState.userKey)) {
           allowed = true;
-          return baseState;
+          return {
+            ...baseState,
+            imageGenerationQuotaReservation: reservationState,
+            updatedAt: now,
+          };
         }
 
         if (baseState.quota.count >= limit) {
@@ -221,7 +234,11 @@ export async function reserveImageGenerationForAttempt(
         }
 
         allowed = true;
-        return baseState;
+        return {
+          ...baseState,
+          imageGenerationQuotaReservation: reservationState,
+          updatedAt: now,
+        };
       })
     );
 
@@ -244,30 +261,40 @@ export async function commitImageGenerationSuccess(
   psid: string,
   reservation: ImageGenerationQuotaReservation
 ): Promise<boolean> {
-  const lockKey = imageGenerationQuotaLockKey(psid);
-  if (!(await hasEphemeralKeyValue(lockKey, reservation.token))) {
-    return false;
-  }
-
+  let committed = false;
   try {
     const now = Date.now();
-    const fallbackState = await Promise.resolve(getOrCreateState(psid));
     const limit = getFreeDailyLimit();
 
     await Promise.resolve(
-      updateStoredState<MessengerUserState>(psid, storedState => {
-        const baseState = withSyncedQuota(storedState ?? fallbackState, now);
+      updateExistingStoredState<MessengerUserState>(psid, storedState => {
+        const baseState = withSyncedQuota(storedState, now);
+        const storedReservation = baseState.imageGenerationQuotaReservation;
+        const hasValidStoredReservation =
+          storedReservation?.token === reservation.token &&
+          storedReservation.expiresAt > now;
+
+        if (!hasValidStoredReservation) {
+          return baseState;
+        }
 
         if (hasQuotaBypass(psid, baseState.userKey)) {
-          return baseState;
+          committed = true;
+          return {
+            ...baseState,
+            imageGenerationQuotaReservation: null,
+            updatedAt: now,
+          };
         }
 
         if (baseState.quota.count >= limit) {
           return baseState;
         }
 
+        committed = true;
         return {
           ...baseState,
+          imageGenerationQuotaReservation: null,
           quota: {
             ...baseState.quota,
             count: baseState.quota.count + 1,
@@ -276,7 +303,7 @@ export async function commitImageGenerationSuccess(
         };
       })
     );
-    return true;
+    return committed;
   } finally {
     await releaseImageGenerationReservation(psid, reservation);
   }
@@ -289,6 +316,22 @@ export async function releaseImageGenerationReservation(
   await deleteEphemeralKeyIfValue(
     imageGenerationQuotaLockKey(psid),
     reservation.token
+  );
+
+  const now = Date.now();
+  await Promise.resolve(
+    updateExistingStoredState<MessengerUserState>(psid, storedState => {
+      const baseState = withSyncedQuota(storedState, now);
+      if (baseState.imageGenerationQuotaReservation?.token !== reservation.token) {
+        return baseState;
+      }
+
+      return {
+        ...baseState,
+        imageGenerationQuotaReservation: null,
+        updatedAt: now,
+      };
+    })
   );
 }
 
