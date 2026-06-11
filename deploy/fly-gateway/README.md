@@ -20,6 +20,10 @@ redeploy workflow with operator approval, scoped credentials, audit logging, and
 rollback guidance. They should not edit runtime files inside the running
 container.
 
+See [`managed-redeploy-handoff.md`](managed-redeploy-handoff.md) for the
+operator approval, credential scope, redacted audit, verification, and rollback
+contract.
+
 ## Deploy
 
 Run from the `openclaw-facebook` repository root:
