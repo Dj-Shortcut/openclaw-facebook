@@ -61,7 +61,7 @@
     "superjson": "^2.2.6",
     "tailwind-merge": "^3.5.0",
     "wouter": "3.9.0",
-    "zod": "^4.3.6"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@builder.io/vite-plugin-jsx-loc": "^0.1.1",
