@@ -209,6 +209,12 @@ function classifyError(error: unknown): VideoProviderFailure {
   return { kind: "failure", provider: "openai", errorClass: "unknown", retryable: false };
 }
 
+function copyBytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(copy).set(bytes);
+  return copy;
+}
+
 async function readErrorBody(response: Response): Promise<string> {
   return await response.text().catch(() => response.statusText);
 }
@@ -229,7 +235,9 @@ async function createVideoJob(
   formData.append("seconds", getSeconds());
   formData.append(
     "input_reference",
-    new Blob([referenceImage.bytes], { type: referenceImage.contentType }),
+    new Blob([copyBytesToArrayBuffer(referenceImage.bytes)], {
+      type: referenceImage.contentType,
+    }),
     `source.${referenceImage.contentType.split("/")[1] || "jpg"}`
   );
 

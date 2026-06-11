@@ -16,7 +16,20 @@ These variables are the first things to verify when the bot does not reply or Me
 | `ENABLE_FACE_MEMORY` | Optional Messenger source-photo reuse | Keep `false` until legal approves consent, privacy, and deletion copy. |
 | `FACE_MEMORY_RETENTION_DAYS` | Optional face-memory retention window | Defaults to `30`; positive whole numbers only. Invalid values fall back to `30`; values above `30` are capped at `30`. |
 
-## 2. OpenAI paths
+## 2. WhatsApp runtime
+
+These variables are required for the public Leaderbot WhatsApp number. See
+`whatsapp-setup.md` for the full verification checklist.
+
+| Variable | Required for | Notes |
+| --- | --- | --- |
+| `WHATSAPP_ACCESS_TOKEN` | WhatsApp Cloud API sends and media downloads | If wrong or expired, outbound replies and media downloads fail. |
+| `WHATSAPP_PHONE_NUMBER_ID` | WhatsApp Cloud API `/messages` endpoint | Must be the public number's phone-number ID, not the display number. |
+| `META_VERIFY_TOKEN` | Shared Meta webhook verification | Accepted on Messenger and WhatsApp routes. |
+| `WHATSAPP_VERIFY_TOKEN` | Dedicated WhatsApp webhook verification | Accepted only on `/webhook/whatsapp`; useful when Meta's WhatsApp setup uses a channel-specific token. |
+| `WHATSAPP_BUSINESS_ACCOUNT_ID` | Meta Business diagnostics | Not required by runtime sends, but useful for setup checks. |
+
+## 3. OpenAI paths
 
 These variables control whether the OpenAI-backed parts of the bot actually run.
 
@@ -27,7 +40,7 @@ These variables control whether the OpenAI-backed parts of the bot actually run.
 | `OPENAI_EDIT_INTERPRETER_MODEL` | Conversational edit classifier | Optional; free text still stays deterministic and does not use an OpenAI chat brain. |
 | `SOURCE_IMAGE_ALLOWED_HOSTS` | Downloading inbound images before generation | If the exact host is not allowlisted, generation fails before OpenAI is called. |
 
-## 3. Optional but easy to confuse
+## 4. Optional but easy to confuse
 
 These show up in the repo and can be mistaken for the main OpenAI path.
 
@@ -39,7 +52,7 @@ These show up in the repo and can be mistaken for the main OpenAI path.
 | `REDIS_URL` | Replay protection, rate limiting, state storage | Required in production for replay protection. |
 | `ADMIN_TOKEN` | Debug/admin endpoints | Required for `/admin/disable-face-memory` and `/debug/build`; those endpoints also have a stricter admin-auth rate limit. |
 
-## 4. Fast triage
+## 5. Fast triage
 
 When the bot seems broken, check in this order:
 
@@ -57,7 +70,14 @@ If face memory is involved, also check:
 9. `ADMIN_TOKEN`
 10. Storage proxy delete support: `DELETE /v1/storage/object`
 
-## 5. Current local-dev gotchas
+If WhatsApp is involved, also check:
+
+11. `WHATSAPP_ACCESS_TOKEN`
+12. `WHATSAPP_PHONE_NUMBER_ID`
+13. `META_VERIFY_TOKEN` or `WHATSAPP_VERIFY_TOKEN`
+14. Meta callback URL: `https://leaderbot-fb-image-gen.fly.dev/webhook/whatsapp`
+
+## 6. Current local-dev gotchas
 
 Based on the current local `.env` in this repo:
 
@@ -66,7 +86,7 @@ Based on the current local `.env` in this repo:
 - `BUILT_IN_FORGE_API_URL` and `BUILT_IN_FORGE_API_KEY` are blank, so storage proxy features are unavailable.
 - `ENABLE_FACE_MEMORY=false`, so photo uploads skip the explicit face-memory consent prompt and ask for a natural-language edit prompt.
 
-## 6. What to ignore at first
+## 7. What to ignore at first
 
 Do not start debugging with these unless you are working on those specific subsystems:
 
