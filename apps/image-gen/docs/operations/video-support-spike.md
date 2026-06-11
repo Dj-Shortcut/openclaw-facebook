@@ -45,15 +45,15 @@
 - Budget guard should enforce a separate quota namespace for video jobs.
 - Keep video generation out of the current image budget counters during spike unless explicitly merged.
 - Audio transcription uses a dedicated daily quota namespace. It checks quota through `reserveTranscriptionForAttempt()`, holds a per-user lock during transcription, and only increments through `commitTranscriptionSuccess()` after a usable transcript exists.
-- Existing image generation quota still uses the legacy `canGenerate()` plus post-generation `increment()` path; fixing that race requires a separate image-billing change because it would alter generation reservation timing.
+- Messenger image generation uses the reservation/commit/release quota pattern in PR #199: `executeImageGenerationJob` reserves before generation, releases in `finally` on failure, and commits only from the success handler after a usable image result exists.
 - Add queue capacity, timeout and retry constraints before piloting.
 - Add explicit storage cost estimate per minute/MB for temporary clip retention.
 
 ## Follow-up: unified paid-operation quota reservations
 
-- Unify paid operation quota reservations across image, audio and future video generation.
-- Image generation still uses the legacy `canGenerate()` plus post-generation `increment()` path in PR #198.
-- Future video generation must use reserve/commit/release semantics from the start and must not copy the legacy image quota model.
+- Keep paid operation quota reservations consistent across image, audio and future video generation.
+- Messenger image generation and audio transcription use reserve/commit/release semantics as of PR #199.
+- Future video generation must use reserve/commit/release semantics from the start and must not introduce a check-then-increment quota path.
 
 ## UX copy baseline for pilot
 

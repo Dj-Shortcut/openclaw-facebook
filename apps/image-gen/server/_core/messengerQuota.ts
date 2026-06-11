@@ -3,15 +3,21 @@ import { getDayKey } from "./messengerStateNormalization";
 import { getOrCreateState, type MessengerUserState } from "./messengerState";
 import {
   deleteEphemeralKeyIfValue,
+  hasEphemeralKeyValue,
   setEphemeralKeyIfAbsent,
   updateStoredState,
 } from "./stateStore";
 
 const DEFAULT_FREE_DAILY_LIMIT = 3;
 const DEFAULT_DAILY_AUDIO_TRANSCRIPTION_LIMIT = 3;
+const IMAGE_GENERATION_QUOTA_LOCK_MS = 240_000;
 const TRANSCRIPTION_QUOTA_LOCK_MS = 90_000;
 const TRANSCRIPTION_QUOTA_LOCK_MAX_RETRIES = 20;
 const TRANSCRIPTION_QUOTA_LOCK_RETRY_MS = 25;
+
+export type ImageGenerationQuotaReservation = {
+  token: string;
+};
 
 export type TranscriptionQuotaReservation = {
   token: string;
@@ -43,6 +49,10 @@ function transcriptionQuotaLockKey(psid: string): string {
   return `messenger:transcription-quota:${psid}`;
 }
 
+function imageGenerationQuotaLockKey(psid: string): string {
+  return `messenger:image-generation-quota:${psid}`;
+}
+
 function wait(milliseconds: number): Promise<void> {
   return new Promise(resolve => {
     setTimeout(resolve, milliseconds);
@@ -62,6 +72,18 @@ async function reserveTranscriptionSlot(psid: string): Promise<string | null> {
     if (attempt < TRANSCRIPTION_QUOTA_LOCK_MAX_RETRIES - 1) {
       await wait(TRANSCRIPTION_QUOTA_LOCK_RETRY_MS);
     }
+  }
+
+  return null;
+}
+
+async function reserveImageGenerationSlot(psid: string): Promise<string | null> {
+  const lockKey = imageGenerationQuotaLockKey(psid);
+  const ttlSeconds = toSeconds(IMAGE_GENERATION_QUOTA_LOCK_MS);
+  const token = randomUUID();
+
+  if (await setEphemeralKeyIfAbsent(lockKey, token, ttlSeconds)) {
+    return token;
   }
 
   return null;
@@ -171,6 +193,105 @@ export async function canGenerate(psid: string): Promise<boolean> {
   return state.quota.count < getFreeDailyLimit();
 }
 
+export async function reserveImageGenerationForAttempt(
+  psid: string
+): Promise<ImageGenerationQuotaReservation | null> {
+  const lockToken = await reserveImageGenerationSlot(psid);
+  if (!lockToken) {
+    return null;
+  }
+
+  try {
+    const now = Date.now();
+    const fallbackState = await Promise.resolve(getOrCreateState(psid));
+    const limit = getFreeDailyLimit();
+    let allowed = false;
+
+    await Promise.resolve(
+      updateStoredState<MessengerUserState>(psid, storedState => {
+        const baseState = withSyncedQuota(storedState ?? fallbackState, now);
+
+        if (hasQuotaBypass(psid, baseState.userKey)) {
+          allowed = true;
+          return baseState;
+        }
+
+        if (baseState.quota.count >= limit) {
+          return baseState;
+        }
+
+        allowed = true;
+        return baseState;
+      })
+    );
+
+    if (!allowed) {
+      await deleteEphemeralKeyIfValue(
+        imageGenerationQuotaLockKey(psid),
+        lockToken
+      );
+      return null;
+    }
+
+    return { token: lockToken };
+  } catch (error) {
+    await deleteEphemeralKeyIfValue(imageGenerationQuotaLockKey(psid), lockToken);
+    throw error;
+  }
+}
+
+export async function commitImageGenerationSuccess(
+  psid: string,
+  reservation: ImageGenerationQuotaReservation
+): Promise<boolean> {
+  const lockKey = imageGenerationQuotaLockKey(psid);
+  if (!(await hasEphemeralKeyValue(lockKey, reservation.token))) {
+    return false;
+  }
+
+  try {
+    const now = Date.now();
+    const fallbackState = await Promise.resolve(getOrCreateState(psid));
+    const limit = getFreeDailyLimit();
+
+    await Promise.resolve(
+      updateStoredState<MessengerUserState>(psid, storedState => {
+        const baseState = withSyncedQuota(storedState ?? fallbackState, now);
+
+        if (hasQuotaBypass(psid, baseState.userKey)) {
+          return baseState;
+        }
+
+        if (baseState.quota.count >= limit) {
+          return baseState;
+        }
+
+        return {
+          ...baseState,
+          quota: {
+            ...baseState.quota,
+            count: baseState.quota.count + 1,
+          },
+          updatedAt: now,
+        };
+      })
+    );
+    return true;
+  } finally {
+    await releaseImageGenerationReservation(psid, reservation);
+  }
+}
+
+export async function releaseImageGenerationReservation(
+  psid: string,
+  reservation: ImageGenerationQuotaReservation
+): Promise<void> {
+  await deleteEphemeralKeyIfValue(
+    imageGenerationQuotaLockKey(psid),
+    reservation.token
+  );
+}
+
 export async function canTranscribe(psid: string): Promise<boolean> {
   const state = await syncTranscriptionQuotaState(psid);
   if (hasQuotaBypass(psid, state.userKey)) {
@@ -188,8 +309,7 @@ export async function checkAndIncrementTranscription(
     return false;
   }
 
-  await commitTranscriptionSuccess(psid, reservation);
-  return true;
+  return await commitTranscriptionSuccess(psid, reservation);
 }
 
 export async function reserveTranscriptionForAttempt(
@@ -242,7 +362,12 @@ export async function reserveTranscriptionForAttempt(
 export async function commitTranscriptionSuccess(
   psid: string,
   reservation: TranscriptionQuotaReservation
-): Promise<void> {
+): Promise<boolean> {
+  const lockKey = transcriptionQuotaLockKey(psid);
+  if (!(await hasEphemeralKeyValue(lockKey, reservation.token))) {
+    return false;
+  }
+
   try {
     const now = Date.now();
     const fallbackState = await Promise.resolve(getOrCreateState(psid));
@@ -273,6 +398,7 @@ export async function commitTranscriptionSuccess(
         };
       })
     );
+    return true;
   } finally {
     await releaseTranscriptionReservation(psid, reservation);
   }
