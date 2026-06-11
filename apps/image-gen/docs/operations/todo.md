@@ -38,6 +38,11 @@
 - [ ] Observe generic text-to-image quality before removing remaining internal style-preset backend compatibility
 - [ ] Create "upgrade to premium" prompt when limit reached
 - [ ] Add image gallery/history for users
+- [ ] Plan Messenger generated-video support before implementation
+  - Uploaded Messenger videos remain unsupported input.
+  - Generated video is future output only, behind a feature flag.
+  - Future video provider calls must reserve quota before any paid external request, commit on usable success, and release or expire on failure.
+  - See `apps/image-gen/docs/operations/messenger-video-support-spike.md`.
 
 ### Kosten & quota
 
@@ -63,6 +68,7 @@ Open cost-control work:
 9. [ ] Add monthly cost cap enforcement.
 10. [ ] Send cost alerts to owner.
 11. [x] Add external uptime monitor for `/healthz`.
+12. [ ] Add a dedicated generated-video quota namespace before enabling any video provider call.
 
 ### Opslag & platform
 
