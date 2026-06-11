@@ -10,12 +10,16 @@ import {
 const {
   safeLogMock,
   handleTextMessageMock,
-  checkAndIncrementTranscriptionMock,
+  reserveTranscriptionForAttemptMock,
+  commitTranscriptionSuccessMock,
+  releaseTranscriptionReservationMock,
   fetchExternalSourceImageForIngressMock,
 } = vi.hoisted(() => ({
   safeLogMock: vi.fn(),
   handleTextMessageMock: vi.fn(async () => undefined),
-  checkAndIncrementTranscriptionMock: vi.fn(async () => true),
+  reserveTranscriptionForAttemptMock: vi.fn(async () => ({ token: "quota-lock" })),
+  commitTranscriptionSuccessMock: vi.fn(async () => undefined),
+  releaseTranscriptionReservationMock: vi.fn(async () => undefined),
   fetchExternalSourceImageForIngressMock: vi.fn().mockResolvedValue({
     buffer: Buffer.from([1, 2, 3, 4]),
     contentType: "audio/mpeg",
@@ -38,7 +42,9 @@ vi.mock("./_core/image-generation/sourceImageFetcher", () => ({
 }));
 
 vi.mock("./_core/messengerQuota", () => ({
-  checkAndIncrementTranscription: checkAndIncrementTranscriptionMock,
+  reserveTranscriptionForAttempt: reserveTranscriptionForAttemptMock,
+  commitTranscriptionSuccess: commitTranscriptionSuccessMock,
+  releaseTranscriptionReservation: releaseTranscriptionReservationMock,
 }));
 
 import type { HandlerContext } from "./_core/webhookHandlerTypes";
@@ -82,8 +88,10 @@ describe("webhook audio message router", () => {
   beforeEach(() => {
     safeLogMock.mockClear();
     handleTextMessageMock.mockClear();
-    checkAndIncrementTranscriptionMock.mockClear();
-    checkAndIncrementTranscriptionMock.mockResolvedValue(true);
+    reserveTranscriptionForAttemptMock.mockClear();
+    reserveTranscriptionForAttemptMock.mockResolvedValue({ token: "quota-lock" });
+    commitTranscriptionSuccessMock.mockClear();
+    releaseTranscriptionReservationMock.mockClear();
     fetchExternalSourceImageForIngressMock.mockClear();
     fetchExternalSourceImageForIngressMock.mockResolvedValue({
       buffer: Buffer.from([1, 2, 3, 4]),
@@ -132,7 +140,7 @@ describe("webhook audio message router", () => {
 
     expect(result).toBe(false);
     expect(handleTextMessageMock).not.toHaveBeenCalled();
-    expect(checkAndIncrementTranscriptionMock).not.toHaveBeenCalled();
+    expect(reserveTranscriptionForAttemptMock).not.toHaveBeenCalled();
   });
 
   it("transcribes audio and routes to text handler when text is absent", async () => {
@@ -169,7 +177,9 @@ describe("webhook audio message router", () => {
     });
 
     expect(result).toBe(true);
-    expect(checkAndIncrementTranscriptionMock).toHaveBeenCalledTimes(1);
+    expect(reserveTranscriptionForAttemptMock).toHaveBeenCalledTimes(1);
+    expect(commitTranscriptionSuccessMock).toHaveBeenCalledTimes(1);
+    expect(releaseTranscriptionReservationMock).not.toHaveBeenCalled();
     expect(handleTextMessageMock).toHaveBeenCalledWith(
       ctx,
       expect.objectContaining({
@@ -180,7 +190,7 @@ describe("webhook audio message router", () => {
     );
   });
 
-  it("reserves quota before transcription even when transcript is empty", async () => {
+  it("releases reserved quota when transcript is empty", async () => {
     const ctx = makeContext();
     const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const target = typeof url === "string" ? url : url.toString();
@@ -214,7 +224,9 @@ describe("webhook audio message router", () => {
     });
 
     expect(result).toBe(false);
-    expect(checkAndIncrementTranscriptionMock).toHaveBeenCalledTimes(1);
+    expect(reserveTranscriptionForAttemptMock).toHaveBeenCalledTimes(1);
+    expect(commitTranscriptionSuccessMock).not.toHaveBeenCalled();
+    expect(releaseTranscriptionReservationMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips OpenAI transcription when downloaded audio exceeds the configured size limit", async () => {
@@ -242,7 +254,9 @@ describe("webhook audio message router", () => {
     });
 
     expect(result).toBe(false);
-    expect(checkAndIncrementTranscriptionMock).toHaveBeenCalledTimes(1);
+    expect(reserveTranscriptionForAttemptMock).not.toHaveBeenCalled();
+    expect(commitTranscriptionSuccessMock).not.toHaveBeenCalled();
+    expect(releaseTranscriptionReservationMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(safeLogMock).toHaveBeenCalledWith(
       "messenger_audio_transcription_skipped",
@@ -288,7 +302,9 @@ describe("webhook audio message router", () => {
     });
 
     expect(result).toBe(false);
-    expect(checkAndIncrementTranscriptionMock).toHaveBeenCalledTimes(1);
+    expect(reserveTranscriptionForAttemptMock).toHaveBeenCalledTimes(1);
+    expect(commitTranscriptionSuccessMock).not.toHaveBeenCalled();
+    expect(releaseTranscriptionReservationMock).toHaveBeenCalledTimes(1);
     expect(handleTextMessageMock).not.toHaveBeenCalled();
     expect(safeLogMock).toHaveBeenCalledWith(
       "messenger_audio_transcription_no_text",
@@ -302,7 +318,7 @@ describe("webhook audio message router", () => {
 
   it("returns true when transcription quota is exhausted and sends out-of-credits message", async () => {
     const ctx = makeContext();
-    checkAndIncrementTranscriptionMock.mockResolvedValue(false);
+    reserveTranscriptionForAttemptMock.mockResolvedValue(null);
 
     const result = await tryHandleAudioMessage(ctx, {
       psid: "psid-4",
@@ -321,7 +337,9 @@ describe("webhook audio message router", () => {
       t("nl", "outOfFreeCredits"),
       "req-audio-quota"
     );
-    expect(checkAndIncrementTranscriptionMock).toHaveBeenCalledTimes(1);
+    expect(reserveTranscriptionForAttemptMock).toHaveBeenCalledTimes(1);
+    expect(commitTranscriptionSuccessMock).not.toHaveBeenCalled();
+    expect(releaseTranscriptionReservationMock).not.toHaveBeenCalled();
     expect(handleTextMessageMock).not.toHaveBeenCalled();
   });
 
@@ -341,7 +359,7 @@ describe("webhook audio message router", () => {
     });
 
     expect(result).toBe(false);
-    expect(checkAndIncrementTranscriptionMock).toHaveBeenCalledTimes(1);
+    expect(reserveTranscriptionForAttemptMock).not.toHaveBeenCalled();
     expect(safeLogMock).toHaveBeenCalledWith(
       "messenger_audio_transcription_skipped",
       expect.objectContaining({

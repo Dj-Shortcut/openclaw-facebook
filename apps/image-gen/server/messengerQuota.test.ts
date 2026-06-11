@@ -3,8 +3,11 @@ import {
   canGenerate,
   canTranscribe,
   checkAndIncrementTranscription,
+  commitTranscriptionSuccess,
   increment,
   incrementTranscription,
+  releaseTranscriptionReservation,
+  reserveTranscriptionForAttempt,
 } from "./_core/messengerQuota";
 import { getOrCreateState, resetStateStore, setFlowState, setPendingImage } from "./_core/messengerState";
 import { getDayKey } from "./_core/messengerStateNormalization";
@@ -165,11 +168,46 @@ describe("messenger quota dayKey", () => {
       checkAndIncrementTranscription(userId),
     ]);
 
-    expect(results).toEqual([true, true, false]);
+    expect(results.filter(Boolean)).toHaveLength(2);
+    expect(results.filter(result => !result)).toHaveLength(1);
     expect(await canTranscribe(userId)).toBe(false);
     expect((await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count).toBe(
       2
     );
+  });
+
+  it("only increments reserved transcription quota on commit", async () => {
+    const userId = "reserved-transcription-user";
+    process.env.MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT = "1";
+
+    const reservation = await reserveTranscriptionForAttempt(userId);
+
+    expect(reservation).not.toBeNull();
+    expect((await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count).toBe(
+      0
+    );
+
+    await commitTranscriptionSuccess(userId, reservation!);
+
+    expect((await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count).toBe(
+      1
+    );
+    expect(await canTranscribe(userId)).toBe(false);
+  });
+
+  it("releases reserved transcription quota without incrementing on failure", async () => {
+    const userId = "released-transcription-user";
+    process.env.MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT = "1";
+
+    const reservation = await reserveTranscriptionForAttempt(userId);
+
+    expect(reservation).not.toBeNull();
+    await releaseTranscriptionReservation(userId, reservation!);
+
+    expect((await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count).toBe(
+      0
+    );
+    expect(await canTranscribe(userId)).toBe(true);
   });
 
   it("backfills missing transcription quota from legacy state", async () => {

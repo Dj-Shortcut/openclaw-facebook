@@ -9,9 +9,13 @@ import {
 
 const DEFAULT_FREE_DAILY_LIMIT = 3;
 const DEFAULT_DAILY_AUDIO_TRANSCRIPTION_LIMIT = 3;
-const TRANSCRIPTION_QUOTA_LOCK_MS = 1_000;
+const TRANSCRIPTION_QUOTA_LOCK_MS = 90_000;
 const TRANSCRIPTION_QUOTA_LOCK_MAX_RETRIES = 20;
 const TRANSCRIPTION_QUOTA_LOCK_RETRY_MS = 25;
+
+export type TranscriptionQuotaReservation = {
+  token: string;
+};
 
 export function getFreeDailyLimit(): number {
   const configured = Number(process.env.MESSENGER_FREE_DAILY_LIMIT);
@@ -179,9 +183,21 @@ export async function canTranscribe(psid: string): Promise<boolean> {
 export async function checkAndIncrementTranscription(
   psid: string
 ): Promise<boolean> {
+  const reservation = await reserveTranscriptionForAttempt(psid);
+  if (!reservation) {
+    return false;
+  }
+
+  await commitTranscriptionSuccess(psid, reservation);
+  return true;
+}
+
+export async function reserveTranscriptionForAttempt(
+  psid: string
+): Promise<TranscriptionQuotaReservation | null> {
   const lockToken = await reserveTranscriptionSlot(psid);
   if (!lockToken) {
-    return false;
+    return null;
   }
 
   try {
@@ -207,6 +223,46 @@ export async function checkAndIncrementTranscription(
         }
 
         allowed = true;
+        return baseState;
+      })
+    );
+
+    if (!allowed) {
+      await deleteEphemeralKeyIfValue(transcriptionQuotaLockKey(psid), lockToken);
+      return null;
+    }
+
+    return { token: lockToken };
+  } catch (error) {
+    await deleteEphemeralKeyIfValue(transcriptionQuotaLockKey(psid), lockToken);
+    throw error;
+  }
+}
+
+export async function commitTranscriptionSuccess(
+  psid: string,
+  reservation: TranscriptionQuotaReservation
+): Promise<void> {
+  try {
+    const now = Date.now();
+    const fallbackState = await Promise.resolve(getOrCreateState(psid));
+    const limit = getTranscriptionLimit();
+
+    await Promise.resolve(
+      updateStoredState<MessengerUserState>(psid, storedState => {
+        const baseState = withSyncedTranscriptionQuota(
+          withSyncedQuota(storedState ?? fallbackState, now),
+          now
+        );
+
+        if (hasQuotaBypass(psid, baseState.userKey)) {
+          return baseState;
+        }
+
+        if (baseState.transcriptionQuota.count >= limit) {
+          return baseState;
+        }
+
         return {
           ...baseState,
           transcriptionQuota: {
@@ -217,11 +273,19 @@ export async function checkAndIncrementTranscription(
         };
       })
     );
-
-    return allowed;
   } finally {
-    await deleteEphemeralKeyIfValue(transcriptionQuotaLockKey(psid), lockToken);
+    await releaseTranscriptionReservation(psid, reservation);
   }
+}
+
+export async function releaseTranscriptionReservation(
+  psid: string,
+  reservation: TranscriptionQuotaReservation
+): Promise<void> {
+  await deleteEphemeralKeyIfValue(
+    transcriptionQuotaLockKey(psid),
+    reservation.token
+  );
 }
 
 export async function increment(psid: string): Promise<void> {
