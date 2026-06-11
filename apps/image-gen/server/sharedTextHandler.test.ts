@@ -29,6 +29,16 @@ function createState(
       dayKey: "2026-03-20",
       count: 0,
     },
+    imageGenerationQuotaReservation: null,
+    videoGenerationQuota: {
+      dayKey: "2026-03-20",
+      count: 0,
+    },
+    videoGenerationQuotaReservation: null,
+    transcriptionQuota: {
+      dayKey: "2026-03-20",
+      count: 0,
+    },
     updatedAt: Date.now(),
     ...overrides,
   };

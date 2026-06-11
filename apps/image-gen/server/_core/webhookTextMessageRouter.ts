@@ -1,6 +1,6 @@
 import { sendMessengerBotResponse } from "./botResponseAdapters";
 import { getBotFeatures } from "./bot/features";
-import type { Lang } from "./i18n";
+import { t, type Lang } from "./i18n";
 import type { NormalizedInboundMessage } from "./normalizedInboundMessage";
 import { resolveConversationActionInput } from "./conversationActionSelection";
 import { safeLog } from "./messengerApi";
@@ -13,6 +13,7 @@ import {
 } from "./messengerState";
 import { toLogUser } from "./privacy";
 import { handleSharedTextMessage } from "./sharedTextHandler";
+import { isMessengerVideoGenerationEnabled } from "./video-generation/videoConfig";
 import type { HandlerContext } from "./webhookHandlerTypes";
 
 type TextMessageInput = {
@@ -128,6 +129,61 @@ async function handleSharedMessengerText(
       }
 
       return false;
+    },
+    runVideoAnimationIntent: async ({ state, messageText, hasPhoto }) => {
+      if (!isMessengerVideoGenerationEnabled()) {
+        return false;
+      }
+
+      if (!hasPhoto) {
+        await ctx.sendLoggedText(
+          input.psid,
+          t(input.lang, "videoGenerationRequiresPhoto"),
+          input.reqId
+        );
+        return true;
+      }
+
+      const sourceImageUrl =
+        state.lastPhotoUrl ??
+        state.lastPhoto ??
+        state.lastGeneratedUrl ??
+        state.lastImageUrl;
+      if (!sourceImageUrl || !ctx.runVideoGeneration) {
+        await ctx.sendLoggedText(
+          input.psid,
+          t(input.lang, "videoGenerationUnavailable"),
+          input.reqId
+        );
+        return true;
+      }
+
+      await ctx.sendLoggedText(
+        input.psid,
+        t(input.lang, "videoGenerationQueued"),
+        input.reqId
+      );
+      // Video rendering is intentionally detached from the webhook path so
+      // ingress delivery is not blocked by long provider jobs. Any later
+      // success/failure notification still depends on the Messenger response
+      // window being open; the feature flag remains disabled by default.
+      setTimeout(() => {
+        void ctx.runVideoGeneration?.(
+          input.psid,
+          input.userId,
+          input.reqId,
+          input.lang,
+          sourceImageUrl,
+          messageText
+        ).catch(error => {
+          safeLog("messenger_video_generation_background_failed", {
+            level: "error",
+            reqId: input.reqId,
+            errorCode: error instanceof Error ? error.name : "UnknownError",
+          });
+        });
+      }, 0);
+      return true;
     },
     logState: (state, context) => {
       ctx.logUserState(input.psid, input.userId, state, input.reqId, context);

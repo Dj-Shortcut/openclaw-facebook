@@ -3,6 +3,7 @@ import { deleteFaceMemoryForUser } from "./faceMemory";
 import { safeLog } from "./messengerApi";
 import { deleteMessengerGenerationCompletionsForUser } from "./messengerGenerationCompletion";
 import { deleteScopedState } from "./stateStore";
+import { deleteProviderVideoForUser } from "./video-generation/videoProviderRegistry";
 import {
   clearUserState,
   getState,
@@ -21,6 +22,7 @@ function getStateImageUrls(state: MessengerUserState): string[] {
     ...(state.pendingSourceImageDeleteUrls ?? []),
     state.lastGeneratedUrl,
     state.lastImageUrl,
+    state.lastGeneratedVideoUrl,
   ].filter((url): url is string => Boolean(url));
 }
 
@@ -77,6 +79,15 @@ export async function deleteUserData(psid: string): Promise<void> {
   await runStep("messenger_generation_completion", () =>
     deleteMessengerGenerationCompletionsForUser(state.userKey)
   );
+  if (state.lastGeneratedVideoProviderJobId) {
+    await runStep("video_provider_artifact", () =>
+      deleteProviderVideoForUser({
+        provider: state.lastGeneratedVideoProvider ?? null,
+        providerJobId: state.lastGeneratedVideoProviderJobId!,
+        reqId: "delete-my-data",
+      })
+    );
+  }
 
   const failedDeletes = deleteResults
     .filter(result => !result.deleted)

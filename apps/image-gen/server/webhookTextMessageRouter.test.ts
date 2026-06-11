@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleTextMessage } from "./_core/webhookTextMessageRouter";
 import { t } from "./_core/i18n";
-import { getState, resetStateStore } from "./_core/messengerState";
+import { getState, resetStateStore, setLastGenerated } from "./_core/messengerState";
 import type { HandlerContext } from "./_core/webhookHandlerTypes";
 
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
@@ -42,12 +42,75 @@ describe("webhook text message router", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     resetStateStore();
+    delete process.env.MESSENGER_VIDEO_GENERATION_ENABLED;
     if (originalPrivacyPepper === undefined) {
       delete process.env.PRIVACY_PEPPER;
     } else {
       process.env.PRIVACY_PEPPER = originalPrivacyPepper;
     }
+  });
+
+  it("keeps animation intent recovery copy when video feature flag is off", async () => {
+    const psid = "video-flag-off-user";
+    const ctx = makeHandlerContext();
+
+    await handleTextMessage(ctx, {
+      psid,
+      userId: "video-flag-off-user-key",
+      reqId: "req-video-flag-off",
+      lang: "nl",
+      text: "laat hem dansen",
+      timestamp: 1730000000000,
+    });
+
+    expect(ctx.runVideoGeneration).toBeUndefined();
+    expect(ctx.sendLoggedText).toHaveBeenCalledWith(
+      psid,
+      t("nl", "unsupportedVideoOrAnimation"),
+      "req-video-flag-off"
+    );
+  });
+
+  it("runs generated video path for animation intent when feature flag is on and a photo exists", async () => {
+    const psid = "video-flag-on-user";
+    vi.useFakeTimers();
+    process.env.MESSENGER_VIDEO_GENERATION_ENABLED = "true";
+    await setLastGenerated(psid, "https://img.example/source.jpg");
+    const runVideoGeneration = vi.fn(async () => ({ sent: true as const }));
+    const ctx = makeHandlerContext({ runVideoGeneration });
+
+    await handleTextMessage(ctx, {
+      psid,
+      userId: "video-flag-on-user-key",
+      reqId: "req-video-flag-on",
+      lang: "nl",
+      text: "laat hem bewegen",
+      timestamp: 1730000000000,
+    });
+
+    expect(runVideoGeneration).not.toHaveBeenCalled();
+    await vi.runAllTimersAsync();
+
+    expect(runVideoGeneration).toHaveBeenCalledWith(
+      psid,
+      "video-flag-on-user-key",
+      "req-video-flag-on",
+      "nl",
+      "https://img.example/source.jpg",
+      "laat hem bewegen"
+    );
+    expect(ctx.sendLoggedText).toHaveBeenCalledWith(
+      psid,
+      t("nl", "videoGenerationQueued"),
+      "req-video-flag-on"
+    );
+    expect(ctx.sendLoggedText).not.toHaveBeenCalledWith(
+      psid,
+      t("nl", "unsupportedVideoOrAnimation"),
+      "req-video-flag-on"
+    );
   });
 
   it("sends action prompts, stores pending actions, and applies after-send state", async () => {

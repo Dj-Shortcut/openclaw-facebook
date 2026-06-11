@@ -11,12 +11,18 @@ import {
 
 const DEFAULT_FREE_DAILY_LIMIT = 3;
 const DEFAULT_DAILY_AUDIO_TRANSCRIPTION_LIMIT = 3;
+const DEFAULT_DAILY_VIDEO_GENERATION_LIMIT = 1;
 const IMAGE_GENERATION_QUOTA_LOCK_MS = 240_000;
+const VIDEO_GENERATION_QUOTA_LOCK_MS = 600_000;
 const TRANSCRIPTION_QUOTA_LOCK_MS = 90_000;
 const TRANSCRIPTION_QUOTA_LOCK_MAX_RETRIES = 20;
 const TRANSCRIPTION_QUOTA_LOCK_RETRY_MS = 25;
 
 export type ImageGenerationQuotaReservation = {
+  token: string;
+};
+
+export type VideoGenerationQuotaReservation = {
   token: string;
 };
 
@@ -42,6 +48,15 @@ function getTranscriptionLimit(): number {
   return DEFAULT_DAILY_AUDIO_TRANSCRIPTION_LIMIT;
 }
 
+function getVideoGenerationLimit(): number {
+  const configured = Number(process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT);
+  if (Number.isFinite(configured) && configured >= 0) {
+    return Math.floor(configured);
+  }
+
+  return DEFAULT_DAILY_VIDEO_GENERATION_LIMIT;
+}
+
 function toSeconds(milliseconds: number): number {
   return Math.max(1, Math.ceil(milliseconds / 1000));
 }
@@ -54,8 +69,16 @@ function imageGenerationQuotaLockKey(psid: string): string {
   return `messenger:image-generation-quota:${psid}`;
 }
 
+function videoGenerationQuotaLockKey(psid: string): string {
+  return `messenger:video-generation-quota:${psid}`;
+}
+
 function imageGenerationReservationExpiresAt(now = Date.now()): number {
   return now + IMAGE_GENERATION_QUOTA_LOCK_MS;
+}
+
+function videoGenerationReservationExpiresAt(now = Date.now()): number {
+  return now + VIDEO_GENERATION_QUOTA_LOCK_MS;
 }
 
 function wait(milliseconds: number): Promise<void> {
@@ -85,6 +108,18 @@ async function reserveTranscriptionSlot(psid: string): Promise<string | null> {
 async function reserveImageGenerationSlot(psid: string): Promise<string | null> {
   const lockKey = imageGenerationQuotaLockKey(psid);
   const ttlSeconds = toSeconds(IMAGE_GENERATION_QUOTA_LOCK_MS);
+  const token = randomUUID();
+
+  if (await setEphemeralKeyIfAbsent(lockKey, token, ttlSeconds)) {
+    return token;
+  }
+
+  return null;
+}
+
+async function reserveVideoGenerationSlot(psid: string): Promise<string | null> {
+  const lockKey = videoGenerationQuotaLockKey(psid);
+  const ttlSeconds = toSeconds(VIDEO_GENERATION_QUOTA_LOCK_MS);
   const token = randomUUID();
 
   if (await setEphemeralKeyIfAbsent(lockKey, token, ttlSeconds)) {
@@ -142,6 +177,25 @@ function withSyncedTranscriptionQuota(
   return {
     ...state,
     transcriptionQuota: {
+      dayKey,
+      count: 0,
+    },
+    updatedAt: now,
+  };
+}
+
+function withSyncedVideoGenerationQuota(
+  state: MessengerUserState,
+  now = Date.now()
+): MessengerUserState {
+  const dayKey = getDayKey(now);
+  if (state.videoGenerationQuota?.dayKey === dayKey) {
+    return state;
+  }
+
+  return {
+    ...state,
+    videoGenerationQuota: {
       dayKey,
       count: 0,
     },
@@ -329,6 +383,176 @@ export async function releaseImageGenerationReservation(
       return {
         ...baseState,
         imageGenerationQuotaReservation: null,
+        updatedAt: now,
+      };
+    })
+  );
+}
+
+export async function canGenerateVideo(psid: string): Promise<boolean> {
+  const now = Date.now();
+  const current = withSyncedVideoGenerationQuota(
+    withSyncedQuota(await Promise.resolve(getOrCreateState(psid)), now),
+    now
+  );
+
+  const state = await Promise.resolve(
+    updateStoredState<MessengerUserState>(psid, storedState => {
+      if (!storedState) {
+        return current;
+      }
+
+      return withSyncedVideoGenerationQuota(
+        withSyncedQuota(storedState, now),
+        now
+      );
+    })
+  );
+
+  if (hasQuotaBypass(psid, state.userKey)) {
+    return true;
+  }
+
+  return state.videoGenerationQuota.count < getVideoGenerationLimit();
+}
+
+export async function reserveVideoGenerationForAttempt(
+  psid: string
+): Promise<VideoGenerationQuotaReservation | null> {
+  const lockToken = await reserveVideoGenerationSlot(psid);
+  if (!lockToken) {
+    return null;
+  }
+
+  try {
+    const now = Date.now();
+    const fallbackState = await Promise.resolve(getOrCreateState(psid));
+    const limit = getVideoGenerationLimit();
+    let allowed = false;
+    const reservationState = {
+      token: lockToken,
+      expiresAt: videoGenerationReservationExpiresAt(now),
+    };
+
+    await Promise.resolve(
+      updateStoredState<MessengerUserState>(psid, storedState => {
+        const baseState = withSyncedVideoGenerationQuota(
+          withSyncedQuota(storedState ?? fallbackState, now),
+          now
+        );
+
+        if (hasQuotaBypass(psid, baseState.userKey)) {
+          allowed = true;
+          return {
+            ...baseState,
+            videoGenerationQuotaReservation: reservationState,
+            updatedAt: now,
+          };
+        }
+
+        if (baseState.videoGenerationQuota.count >= limit) {
+          return baseState;
+        }
+
+        allowed = true;
+        return {
+          ...baseState,
+          videoGenerationQuotaReservation: reservationState,
+          updatedAt: now,
+        };
+      })
+    );
+
+    if (!allowed) {
+      await deleteEphemeralKeyIfValue(videoGenerationQuotaLockKey(psid), lockToken);
+      return null;
+    }
+
+    return { token: lockToken };
+  } catch (error) {
+    await deleteEphemeralKeyIfValue(videoGenerationQuotaLockKey(psid), lockToken);
+    throw error;
+  }
+}
+
+export async function commitVideoGenerationSuccess(
+  psid: string,
+  reservation: VideoGenerationQuotaReservation
+): Promise<boolean> {
+  let committed = false;
+  try {
+    const now = Date.now();
+    const limit = getVideoGenerationLimit();
+
+    await Promise.resolve(
+      updateExistingStoredState<MessengerUserState>(psid, storedState => {
+        const baseState = withSyncedVideoGenerationQuota(
+          withSyncedQuota(storedState, now),
+          now
+        );
+        const storedReservation = baseState.videoGenerationQuotaReservation;
+        const hasValidStoredReservation =
+          storedReservation?.token === reservation.token &&
+          storedReservation.expiresAt > now;
+
+        if (!hasValidStoredReservation) {
+          return baseState;
+        }
+
+        if (hasQuotaBypass(psid, baseState.userKey)) {
+          committed = true;
+          return {
+            ...baseState,
+            videoGenerationQuotaReservation: null,
+            updatedAt: now,
+          };
+        }
+
+        if (baseState.videoGenerationQuota.count >= limit) {
+          return baseState;
+        }
+
+        committed = true;
+        return {
+          ...baseState,
+          videoGenerationQuotaReservation: null,
+          videoGenerationQuota: {
+            ...baseState.videoGenerationQuota,
+            count: baseState.videoGenerationQuota.count + 1,
+          },
+          updatedAt: now,
+        };
+      })
+    );
+    return committed;
+  } finally {
+    await releaseVideoGenerationReservation(psid, reservation);
+  }
+}
+
+export async function releaseVideoGenerationReservation(
+  psid: string,
+  reservation: VideoGenerationQuotaReservation
+): Promise<void> {
+  await deleteEphemeralKeyIfValue(
+    videoGenerationQuotaLockKey(psid),
+    reservation.token
+  );
+
+  const now = Date.now();
+  await Promise.resolve(
+    updateExistingStoredState<MessengerUserState>(psid, storedState => {
+      const baseState = withSyncedVideoGenerationQuota(
+        withSyncedQuota(storedState, now),
+        now
+      );
+      if (baseState.videoGenerationQuotaReservation?.token !== reservation.token) {
+        return baseState;
+      }
+
+      return {
+        ...baseState,
+        videoGenerationQuotaReservation: null,
         updatedAt: now,
       };
     })

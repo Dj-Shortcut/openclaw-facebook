@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { storageDeleteMock } = vi.hoisted(() => ({
+const { storageDeleteMock, deleteProviderVideoForUserMock } = vi.hoisted(() => ({
   storageDeleteMock: vi.fn(async () => undefined),
+  deleteProviderVideoForUserMock: vi.fn(async () => undefined),
 }));
 
 vi.mock("./storage", async importOriginal => {
@@ -9,6 +10,13 @@ vi.mock("./storage", async importOriginal => {
   return {
     ...actual,
     storageDelete: storageDeleteMock,
+  };
+});
+vi.mock("./_core/video-generation/videoProviderRegistry", async importOriginal => {
+  const actual = await importOriginal<typeof import("./_core/video-generation/videoProviderRegistry")>();
+  return {
+    ...actual,
+    deleteProviderVideoForUser: deleteProviderVideoForUserMock,
   };
 });
 import { deleteUserData } from "./_core/dataDeletionService";
@@ -38,6 +46,7 @@ describe("data deletion service", () => {
   afterEach(() => {
     resetStateStore();
     storageDeleteMock.mockReset();
+    deleteProviderVideoForUserMock.mockReset();
     if (originalRedisUrl === undefined) {
       delete process.env.REDIS_URL;
     } else {
@@ -178,6 +187,30 @@ describe("data deletion service", () => {
       "generated/images/result.jpg"
     );
     expect(storageDeleteMock).toHaveBeenCalledWith("generated/legacy-result.jpg");
+    expect(await Promise.resolve(getState(psid))).toBeNull();
+  });
+
+  it("deletes provider-side generated video artifacts during user erasure", async () => {
+    const psid = "delete-provider-video-user";
+    const generatedVideoUrl = "https://assets.example/generated/videos/result.mp4";
+
+    writeState(psid, {
+      ...(await Promise.resolve(getOrCreateState(psid))),
+      lastGeneratedVideoUrl: generatedVideoUrl,
+      lastGeneratedVideoProvider: "openai",
+      lastGeneratedVideoProviderJobId: "video_job_delete_me",
+    });
+
+    await deleteUserData(psid);
+
+    expect(storageDeleteMock).toHaveBeenCalledWith(
+      "generated/videos/result.mp4"
+    );
+    expect(deleteProviderVideoForUserMock).toHaveBeenCalledWith({
+      provider: "openai",
+      providerJobId: "video_job_delete_me",
+      reqId: "delete-my-data",
+    });
     expect(await Promise.resolve(getState(psid))).toBeNull();
   });
 });

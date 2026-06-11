@@ -99,6 +99,20 @@ function decorateFeatureContext<TContext extends FeatureContext>(
         generationKind
       );
     },
+    runVideoGeneration: featureCtx.runVideoGeneration
+      ? async (sourceImageUrl, promptHint) => {
+          if (trackedCtx.runVideoGeneration) {
+            await trackedCtx.runVideoGeneration(
+              userPsid,
+              featureUserId,
+              requestId,
+              userLang,
+              sourceImageUrl,
+              promptHint
+            );
+          }
+        }
+      : undefined,
   };
 }
 
@@ -222,6 +236,27 @@ export function createTrackedHandlerContext(
       markResponseSentFromOutcome(outcome);
       return outcome;
     },
+    runVideoGeneration: ctx.runVideoGeneration
+      ? async (
+          userPsid,
+          featureUserId,
+          requestId,
+          userLang,
+          sourceImageUrl,
+          promptHint
+        ) => {
+          const outcome = await ctx.runVideoGeneration?.(
+            userPsid,
+            featureUserId,
+            requestId,
+            userLang,
+            sourceImageUrl,
+            promptHint
+          );
+          markResponseSentFromOutcome(outcome);
+          return outcome ?? { sent: false, reason: "response_window_closed" };
+        }
+      : undefined,
     sendLoggedText: async (userPsid, text, requestId) => {
       logMessengerWebhookTrace("before_send", {
         reqId: requestId,
@@ -278,6 +313,29 @@ export function createTrackedHandlerContext(
       });
       return outcome;
     },
+    sendLoggedVideo: ctx.sendLoggedVideo
+      ? async (userPsid, videoUrl, requestId) => {
+          logMessengerWebhookTrace("before_send", {
+            reqId: requestId,
+            user: toLogUser(toUserKey(userPsid)),
+            kind: "video",
+          });
+          const outcome = await ctx.sendLoggedVideo?.(
+            userPsid,
+            videoUrl,
+            requestId
+          );
+          markResponseSentFromOutcome(outcome);
+          logMessengerWebhookTrace("after_send", {
+            reqId: requestId,
+            user: toLogUser(toUserKey(userPsid)),
+            kind: "video",
+            sent: outcome?.sent ?? false,
+            ...(outcome && !outcome.sent ? { reason: outcome.reason } : {}),
+          });
+          return outcome ?? { sent: false, reason: "response_window_closed" };
+        }
+      : undefined,
     sendFaceMemoryConsentPrompt: async (userPsid, userLang, requestId) => {
       const outcome = await ctx.sendFaceMemoryConsentPrompt(
         userPsid,

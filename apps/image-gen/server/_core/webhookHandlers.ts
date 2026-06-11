@@ -3,6 +3,7 @@ import type { FacebookWebhookEntry } from "./webhookHelpers";
 import { handleEntry } from "./webhookEventRouter";
 import { createHandlerContext } from "./webhookHandlerContext";
 import { createMessengerGenerationJobRunner } from "./webhookGenerationJobs";
+import { createMessengerVideoGenerationRunner } from "./videoGenerationFlow";
 import { createInternalMessengerImageRequestHandler } from "./webhookInternalImageRequest";
 import type {
   HandlerContext,
@@ -36,9 +37,22 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
     sendLoggedText: (psid, text, reqId) =>
       ctx.sendLoggedText(psid, text, reqId),
   });
+  const videoGenerationRunner = createMessengerVideoGenerationRunner({
+    maybeSendInFlightMessage: (psid, reqId, lang) =>
+      ctx.maybeSendInFlightMessage(psid, reqId, lang),
+    sendLoggedText: (psid, text, reqId) =>
+      ctx.sendLoggedText(psid, text, reqId),
+    sendLoggedVideo: (psid, videoUrl, reqId) => {
+      if (!ctx.sendLoggedVideo) {
+        throw new Error("Messenger video sender is not configured");
+      }
+      return ctx.sendLoggedVideo(psid, videoUrl, reqId);
+    },
+  });
   ctx = createHandlerContext({
     defaultLang,
     runImageGeneration: generationRunner.runImageGeneration,
+    runVideoGeneration: videoGenerationRunner,
   });
   const internalRequestHandler =
     createInternalMessengerImageRequestHandler(ctx);

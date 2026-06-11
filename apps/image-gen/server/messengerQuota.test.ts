@@ -1,16 +1,20 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   canGenerate,
+  canGenerateVideo,
   canTranscribe,
   checkAndIncrementTranscription,
   commitImageGenerationSuccess,
   commitTranscriptionSuccess,
+  commitVideoGenerationSuccess,
   increment,
   incrementTranscription,
   releaseImageGenerationReservation,
   releaseTranscriptionReservation,
+  releaseVideoGenerationReservation,
   reserveImageGenerationForAttempt,
   reserveTranscriptionForAttempt,
+  reserveVideoGenerationForAttempt,
 } from "./_core/messengerQuota";
 import { getOrCreateState, resetStateStore, setFlowState, setPendingImage } from "./_core/messengerState";
 import { getDayKey } from "./_core/messengerStateNormalization";
@@ -30,6 +34,7 @@ describe("messenger quota dayKey", () => {
     delete process.env.MESSENGER_QUOTA_BYPASS_IDS;
     delete process.env.MESSENGER_FREE_DAILY_LIMIT;
     delete process.env.MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT;
+    delete process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT;
   });
 
   afterAll(() => {
@@ -318,6 +323,84 @@ describe("messenger quota dayKey", () => {
 
     expect(await canGenerate(userId)).toBe(true);
     expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(0);
+  });
+
+  it("commits a normal reserved video quota success", async () => {
+    const userId = "reserved-video-user";
+    process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT = "1";
+
+    const reservation = await reserveVideoGenerationForAttempt(userId);
+
+    expect(reservation).not.toBeNull();
+    let state = await Promise.resolve(getOrCreateState(userId));
+    expect(state.videoGenerationQuota.count).toBe(0);
+    expect(state.videoGenerationQuotaReservation?.token).toBe(
+      reservation!.token
+    );
+
+    await expect(
+      commitVideoGenerationSuccess(userId, reservation!)
+    ).resolves.toBe(true);
+
+    state = await Promise.resolve(getOrCreateState(userId));
+    expect(state.videoGenerationQuota.count).toBe(1);
+    expect(state.videoGenerationQuotaReservation).toBeNull();
+    expect(await canGenerateVideo(userId)).toBe(false);
+  });
+
+  it("does not reserve video quota when the daily limit is exhausted", async () => {
+    const userId = "video-quota-exhausted-user";
+    process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT = "1";
+
+    const reservation = await reserveVideoGenerationForAttempt(userId);
+    expect(reservation).not.toBeNull();
+    await expect(
+      commitVideoGenerationSuccess(userId, reservation!)
+    ).resolves.toBe(true);
+
+    await expect(reserveVideoGenerationForAttempt(userId)).resolves.toBeNull();
+  });
+
+  it("rejects a double video quota commit and tolerates release after commit", async () => {
+    const userId = "double-video-commit-user";
+    process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT = "2";
+
+    const reservation = await reserveVideoGenerationForAttempt(userId);
+
+    expect(reservation).not.toBeNull();
+    await expect(
+      commitVideoGenerationSuccess(userId, reservation!)
+    ).resolves.toBe(true);
+    await expect(
+      commitVideoGenerationSuccess(userId, reservation!)
+    ).resolves.toBe(false);
+    await expect(
+      releaseVideoGenerationReservation(userId, reservation!)
+    ).resolves.toBeUndefined();
+
+    const state = await Promise.resolve(getOrCreateState(userId));
+    expect(state.videoGenerationQuota.count).toBe(1);
+    expect(state.videoGenerationQuotaReservation).toBeNull();
+  });
+
+  it("prevents concurrent active video quota reservations", async () => {
+    const userId = "concurrent-video-reservation-user";
+    process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT = "2";
+
+    const results = await Promise.all([
+      reserveVideoGenerationForAttempt(userId),
+      reserveVideoGenerationForAttempt(userId),
+    ]);
+    const reservations = results.filter(result => result !== null);
+
+    expect(reservations).toHaveLength(1);
+    expect((await Promise.resolve(getOrCreateState(userId))).videoGenerationQuota.count).toBe(
+      0
+    );
+
+    await releaseVideoGenerationReservation(userId, reservations[0]!);
+
+    await expect(reserveVideoGenerationForAttempt(userId)).resolves.not.toBeNull();
   });
 
   it("tracks transcription quota independently from image quota", async () => {

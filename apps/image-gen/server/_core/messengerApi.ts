@@ -297,6 +297,56 @@ export async function sendImage(
   return outcome;
 }
 
+export async function sendVideo(
+  psid: string,
+  videoUrl: string
+): Promise<MessengerSendOutcome> {
+  const videoUrlSummary = summarizeSensitiveUrl(videoUrl);
+  const startedAt = Date.now();
+  safeLog("messenger_video_send_started", { videoUrl: videoUrlSummary });
+
+  const outcome = await sendMessage(
+    psid,
+    {
+      attachment: {
+        type: "video",
+        payload: {
+          url: videoUrl,
+          is_reusable: false,
+        },
+      },
+    },
+    {
+      maxRetries: 2,
+      retryBaseMs: 150,
+      onRetry: (attempt, maxAttempts, error) => {
+        safeLog("messenger_video_retry", {
+          level: "warn",
+          attempt,
+          maxAttempts,
+          videoUrl: videoUrlSummary,
+          errorCode: error.name,
+        });
+      },
+      onFinalFailure: (attempts, _maxAttempts, error) => {
+        safeLog("messenger_video_send_failed", {
+          level: "error",
+          attempts,
+          videoUrl: videoUrlSummary,
+          errorCode: error.name,
+        });
+      },
+    }
+  );
+  safeLog("messenger_video_send_completed", {
+    videoUrl: videoUrlSummary,
+    durationMs: Date.now() - startedAt,
+    sent: outcome.sent,
+    reason: outcome.sent ? undefined : outcome.reason,
+  });
+  return outcome;
+}
+
 export type {
   QuickReply,
   MessengerSendOutcome,
