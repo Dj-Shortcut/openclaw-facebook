@@ -12,7 +12,6 @@ import {
 import {
   assertMessengerDailyVideoBudgetAvailable,
   MessengerDailyVideoBudgetExceededError,
-  runGuardedGeneration,
   runGuardedVideoGeneration,
 } from "./generationGuard";
 import { getMessengerVideoTimeoutMs } from "./video-generation/videoConfig";

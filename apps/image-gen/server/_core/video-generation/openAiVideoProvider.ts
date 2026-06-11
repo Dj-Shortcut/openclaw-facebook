@@ -14,6 +14,7 @@ const DEFAULT_OPENAI_VIDEO_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_OPENAI_VIDEO_MAX_RETRIES = 1;
 const DEFAULT_OPENAI_VIDEO_RETRY_BASE_MS = 750;
 const DEFAULT_OPENAI_VIDEO_MAX_OUTPUT_BYTES = 24 * 1024 * 1024;
+const DEFAULT_OPENAI_VIDEO_MAX_REFERENCE_IMAGE_BYTES = 12 * 1024 * 1024;
 
 type OpenAiVideoJob = {
   id?: string;
@@ -67,7 +68,7 @@ async function fetchWithTimeout(
   timeoutMs: number
 ): Promise<Response> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const timeout = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
   try {
     return await fetch(input, {
       ...init,
@@ -76,6 +77,54 @@ async function fetchWithTimeout(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function remainingTimeoutMs(deadline: number): number {
+  return Math.max(1, deadline - Date.now());
+}
+
+async function readBoundedBytes(
+  response: Response,
+  maxBytes: number
+): Promise<Uint8Array | null> {
+  const contentLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    return null;
+  }
+
+  if (!response.body) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return bytes.length > maxBytes ? null : bytes;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      totalBytes += value.length;
+      if (totalBytes > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const output = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return output;
 }
 
 async function fetchReferenceImage(
@@ -110,8 +159,22 @@ async function fetchReferenceImage(
     };
   }
 
+  const maxBytes = readPositiveInt(
+    "OPENAI_VIDEO_MAX_REFERENCE_IMAGE_BYTES",
+    DEFAULT_OPENAI_VIDEO_MAX_REFERENCE_IMAGE_BYTES
+  );
+  const bytes = await readBoundedBytes(response, maxBytes);
+  if (!bytes || bytes.length <= 0) {
+    return {
+      kind: "failure",
+      provider: "openai",
+      errorClass: "provider",
+      retryable: false,
+    };
+  }
+
   return {
-    bytes: new Uint8Array(await response.arrayBuffer()),
+    bytes,
     contentType,
   };
 }
@@ -287,7 +350,8 @@ export class OpenAiVideoProvider implements VideoProvider {
     input: VideoProviderRequest
   ): Promise<VideoProviderResult> {
     safeLog("openai_video_request_started", { reqId: input.reqId });
-    const job = await createVideoJob(input, input.timeoutMs);
+    const deadline = Date.now() + input.timeoutMs;
+    const job = await createVideoJob(input, remainingTimeoutMs(deadline));
     if ("kind" in job) {
       return job;
     }
@@ -302,7 +366,6 @@ export class OpenAiVideoProvider implements VideoProvider {
       };
     }
 
-    const deadline = Date.now() + input.timeoutMs;
     const pollIntervalMs = readPositiveInt(
       "OPENAI_VIDEO_POLL_INTERVAL_MS",
       DEFAULT_OPENAI_VIDEO_POLL_INTERVAL_MS
@@ -328,14 +391,17 @@ export class OpenAiVideoProvider implements VideoProvider {
       }
 
       await wait(pollIntervalMs);
-      const polled = await retrieveVideoJob(videoId, input.timeoutMs);
+      const polled = await retrieveVideoJob(
+        videoId,
+        remainingTimeoutMs(deadline)
+      );
       if ("kind" in polled) {
         return polled;
       }
       current = polled;
     }
 
-    const bytes = await downloadVideo(videoId, input.timeoutMs);
+    const bytes = await downloadVideo(videoId, remainingTimeoutMs(deadline));
     if ("kind" in bytes) {
       return bytes;
     }
