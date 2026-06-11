@@ -97,6 +97,11 @@ Open cost-control work:
 
 Run each pass as a separate, reviewable PR validated with `pnpm --dir apps/image-gen check`, `pnpm --dir apps/image-gen test`, `pnpm --dir apps/image-gen fallow:report`, and `pnpm --dir apps/image-gen fallow:gate`.
 
+0. OpenClaw runtime upgrades for Fly/Docker installs
+   - Current OpenClaw dashboard updates can return `not-git-install` for package-root installs inside Docker images.
+   - Improve upstream OpenClaw detection and copy so image-managed installs are not presented as broken or non-updatable.
+   - Minimal first step: distinguish git, package-manager, and external/image-managed installs, then point Fly/Docker operators to the repo bump + redeploy path.
+   - Follow-up: design a managed redeploy handoff with explicit operator approval, scoped deploy credentials, redacted audit logs, and rollback guidance. Do not mutate `/app/node_modules/openclaw` inside a running Fly machine.
 1. Unused dependencies / package cleanup
    - Fallow currently reports `unused_dependencies: 0`; do not remove `express` while runtime/tests still import it.
    - Re-run Fallow after each dependency update and verify package-lock/pnpm-lock changes stay scoped.

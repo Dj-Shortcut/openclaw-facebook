@@ -8,6 +8,18 @@ OpenClaw and the official Codex harness plugin are installed as pinned package d
 Edit `OPENCLAW_VERSION` in `deploy/fly-gateway/Dockerfile`, then build/deploy.
 Keep the Facebook plugin package peer range compatible with that OpenClaw release.
 
+The OpenClaw dashboard update action is not the update path for this Fly/Docker
+gateway. This image installs OpenClaw during Docker build, so a dashboard
+`not-git-install` or package-root update skip means the runtime cannot safely
+mutate `/app/node_modules/openclaw` in place. Treat the running Fly machine as
+read-only: update the pinned package version in this repository, merge the PR,
+then redeploy the image.
+
+Future managed dashboard updates for Fly/Docker should hand off to an explicit
+redeploy workflow with operator approval, scoped credentials, audit logging, and
+rollback guidance. They should not edit runtime files inside the running
+container.
+
 ## Deploy
 
 Run from the `openclaw-facebook` repository root:
