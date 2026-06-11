@@ -3,6 +3,7 @@ import { getDayKey } from "./messengerStateNormalization";
 import { getOrCreateState, type MessengerUserState } from "./messengerState";
 import {
   deleteEphemeralKeyIfValue,
+  hasEphemeralKeyValue,
   setEphemeralKeyIfAbsent,
   updateStoredState,
 } from "./stateStore";
@@ -242,7 +243,12 @@ export async function reserveImageGenerationForAttempt(
 export async function commitImageGenerationSuccess(
   psid: string,
   reservation: ImageGenerationQuotaReservation
-): Promise<void> {
+): Promise<boolean> {
+  const lockKey = imageGenerationQuotaLockKey(psid);
+  if (!(await hasEphemeralKeyValue(lockKey, reservation.token))) {
+    return false;
+  }
+
   try {
     const now = Date.now();
     const fallbackState = await Promise.resolve(getOrCreateState(psid));
@@ -270,6 +276,7 @@ export async function commitImageGenerationSuccess(
         };
       })
     );
+    return true;
   } finally {
     await releaseImageGenerationReservation(psid, reservation);
   }
@@ -302,8 +309,7 @@ export async function checkAndIncrementTranscription(
     return false;
   }
 
-  await commitTranscriptionSuccess(psid, reservation);
-  return true;
+  return await commitTranscriptionSuccess(psid, reservation);
 }
 
 export async function reserveTranscriptionForAttempt(
@@ -356,7 +362,12 @@ export async function reserveTranscriptionForAttempt(
 export async function commitTranscriptionSuccess(
   psid: string,
   reservation: TranscriptionQuotaReservation
-): Promise<void> {
+): Promise<boolean> {
+  const lockKey = transcriptionQuotaLockKey(psid);
+  if (!(await hasEphemeralKeyValue(lockKey, reservation.token))) {
+    return false;
+  }
+
   try {
     const now = Date.now();
     const fallbackState = await Promise.resolve(getOrCreateState(psid));
@@ -387,6 +398,7 @@ export async function commitTranscriptionSuccess(
         };
       })
     );
+    return true;
   } finally {
     await releaseTranscriptionReservation(psid, reservation);
   }

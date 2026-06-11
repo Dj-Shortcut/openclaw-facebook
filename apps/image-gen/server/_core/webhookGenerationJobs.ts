@@ -77,6 +77,13 @@ class MessengerGenerationDeliveryError extends Error {
   }
 }
 
+class MessengerGenerationQuotaCommitError extends Error {
+  constructor() {
+    super("Messenger image quota reservation could not be committed");
+    this.name = "MessengerGenerationQuotaCommitError";
+  }
+}
+
 /** Creates the Messenger image-generation job runner and queue/dead-letter entry points. */
 export function createMessengerGenerationJobRunner(
   deps: GenerationJobRunnerDeps
@@ -568,7 +575,13 @@ async function handleGenerationSuccess(input: {
   await Promise.resolve(
     markMessengerGenerationCompleted(input.reqId, imageUrl, input.userId)
   );
-  await commitImageGenerationSuccess(input.psid, input.quotaReservation);
+  const quotaCommitted = await commitImageGenerationSuccess(
+    input.psid,
+    input.quotaReservation
+  );
+  if (!quotaCommitted) {
+    throw new MessengerGenerationQuotaCommitError();
+  }
   input.markQuotaCommitted();
   await setLastGenerated(input.psid, imageUrl);
   await setLastGenerationContext(input.psid, { prompt: input.promptHint });

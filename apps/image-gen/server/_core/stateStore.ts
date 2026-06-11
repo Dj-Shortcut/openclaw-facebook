@@ -289,6 +289,19 @@ export async function hasEphemeralKey(key: string): Promise<boolean> {
   return (await redis.get(key)) !== null;
 }
 
+export async function hasEphemeralKeyValue(
+  key: string,
+  expectedValue: string
+): Promise<boolean> {
+  if (!isRedisStateStoreEnabled()) {
+    clearExpiredMemoryEphemeral();
+    return memoryEphemeral.get(key)?.value === expectedValue;
+  }
+
+  const redis = await getRedisClient();
+  return (await redis.get(key)) === expectedValue;
+}
+
 export async function setEphemeralKey(
   key: string,
   value: string,

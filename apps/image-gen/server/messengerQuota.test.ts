@@ -149,6 +149,18 @@ describe("messenger quota dayKey", () => {
     expect(await canGenerate(userId)).toBe(false);
   });
 
+  it("does not commit image quota without an active matching reservation", async () => {
+    const userId = "fabricated-image-reservation-user";
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "1";
+
+    await expect(
+      commitImageGenerationSuccess(userId, { token: "fabricated-token" })
+    ).resolves.toBe(false);
+
+    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(0);
+    expect(await canGenerate(userId)).toBe(true);
+  });
+
   it("releases reserved image quota without incrementing on failure", async () => {
     const userId = "released-image-user";
     process.env.MESSENGER_FREE_DAILY_LIMIT = "1";
@@ -266,6 +278,20 @@ describe("messenger quota dayKey", () => {
       1
     );
     expect(await canTranscribe(userId)).toBe(false);
+  });
+
+  it("does not commit transcription quota without an active matching reservation", async () => {
+    const userId = "fabricated-transcription-reservation-user";
+    process.env.MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT = "1";
+
+    await expect(
+      commitTranscriptionSuccess(userId, { token: "fabricated-token" })
+    ).resolves.toBe(false);
+
+    expect((await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count).toBe(
+      0
+    );
+    expect(await canTranscribe(userId)).toBe(true);
   });
 
   it("releases reserved transcription quota without incrementing on failure", async () => {
