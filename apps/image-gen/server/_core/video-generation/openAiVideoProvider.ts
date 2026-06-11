@@ -24,7 +24,7 @@ type OpenAiVideoJob = {
 };
 
 type ReferenceImage = {
-  bytes: Uint8Array;
+  bytes: Uint8Array<ArrayBuffer>;
   contentType: string;
 };
 
@@ -86,7 +86,7 @@ function remainingTimeoutMs(deadline: number): number {
 async function readBoundedBytes(
   response: Response,
   maxBytes: number
-): Promise<Uint8Array | null> {
+): Promise<Uint8Array<ArrayBuffer> | null> {
   const contentLength = Number(response.headers.get("content-length"));
   if (Number.isFinite(contentLength) && contentLength > maxBytes) {
     return null;
@@ -209,12 +209,6 @@ function classifyError(error: unknown): VideoProviderFailure {
   return { kind: "failure", provider: "openai", errorClass: "unknown", retryable: false };
 }
 
-function copyBytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  const copy = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(copy).set(bytes);
-  return copy;
-}
-
 async function readErrorBody(response: Response): Promise<string> {
   return await response.text().catch(() => response.statusText);
 }
@@ -235,7 +229,7 @@ async function createVideoJob(
   formData.append("seconds", getSeconds());
   formData.append(
     "input_reference",
-    new Blob([copyBytesToArrayBuffer(referenceImage.bytes)], {
+    new Blob([referenceImage.bytes.buffer], {
       type: referenceImage.contentType,
     }),
     `source.${referenceImage.contentType.split("/")[1] || "jpg"}`

@@ -44,9 +44,11 @@ class WebhookIngressEnqueueTimeoutError extends Error {
 }
 
 function getConfiguredVerifyTokens(path: string): string[] {
+  const sharedToken =
+    process.env.META_VERIFY_TOKEN?.trim() ||
+    process.env.FB_VERIFY_TOKEN?.trim();
   const tokens = [
-    process.env.META_VERIFY_TOKEN?.trim(),
-    process.env.FB_VERIFY_TOKEN?.trim(),
+    sharedToken,
   ];
 
   if (path === "/webhook/whatsapp") {

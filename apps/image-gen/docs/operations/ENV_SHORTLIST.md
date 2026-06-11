@@ -72,10 +72,10 @@ If face memory is involved, also check:
 
 If WhatsApp is involved, also check:
 
-11. `WHATSAPP_ACCESS_TOKEN`
-12. `WHATSAPP_PHONE_NUMBER_ID`
-13. `META_VERIFY_TOKEN` or `WHATSAPP_VERIFY_TOKEN`
-14. Meta callback URL: `https://leaderbot-fb-image-gen.fly.dev/webhook/whatsapp`
+1. `WHATSAPP_ACCESS_TOKEN`
+2. `WHATSAPP_PHONE_NUMBER_ID`
+3. `META_VERIFY_TOKEN` or `WHATSAPP_VERIFY_TOKEN`
+4. Meta callback URL: `https://leaderbot-fb-image-gen.fly.dev/webhook/whatsapp`
 
 ## 6. Current local-dev gotchas
 

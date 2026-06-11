@@ -150,6 +150,17 @@ describe("messenger webhook verification route", () => {
     expect(response.payload).toBe("abc123");
   });
 
+  it("treats FB_VERIFY_TOKEN as a fallback only when META_VERIFY_TOKEN is unset", async () => {
+    process.env.META_VERIFY_TOKEN = "meta-token";
+    process.env.FB_VERIFY_TOKEN = "old-fb-token";
+
+    const response = await getWebhook(
+      "/webhook/facebook?hub.mode=subscribe&hub.verify_token=old-fb-token&hub.challenge=stale-fb-token",
+    );
+
+    expect(response.status).toBe(403);
+  });
+
   it("returns the raw WhatsApp verification challenge as plain text", async () => {
     process.env.META_VERIFY_TOKEN = "test-token";
 
