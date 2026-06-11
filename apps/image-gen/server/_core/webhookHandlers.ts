@@ -42,10 +42,12 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       ctx.maybeSendInFlightMessage(psid, reqId, lang),
     sendLoggedText: (psid, text, reqId) =>
       ctx.sendLoggedText(psid, text, reqId),
-    sendLoggedVideo: (psid, videoUrl, reqId) =>
-      ctx.sendLoggedVideo
-        ? ctx.sendLoggedVideo(psid, videoUrl, reqId)
-        : ctx.sendLoggedText(psid, "Video delivery is unavailable.", reqId),
+    sendLoggedVideo: (psid, videoUrl, reqId) => {
+      if (!ctx.sendLoggedVideo) {
+        throw new Error("Messenger video sender is not configured");
+      }
+      return ctx.sendLoggedVideo(psid, videoUrl, reqId);
+    },
   });
   ctx = createHandlerContext({
     defaultLang,

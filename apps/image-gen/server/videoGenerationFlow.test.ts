@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { storagePutMock } = vi.hoisted(() => ({
+const { safeLogMock, storagePutMock } = vi.hoisted(() => ({
+  safeLogMock: vi.fn(),
   storagePutMock: vi.fn(async () => ({
     key: "generated/videos/test.mp4",
     url: "https://cdn.example/generated/videos/test.mp4",
@@ -15,6 +16,14 @@ vi.mock("./storage", async importOriginal => {
   };
 });
 
+vi.mock("./_core/messengerApi", async importOriginal => {
+  const actual = await importOriginal<typeof import("./_core/messengerApi")>();
+  return {
+    ...actual,
+    safeLog: safeLogMock,
+  };
+});
+
 import { t } from "./_core/i18n";
 import { getOrCreateState, resetStateStore } from "./_core/messengerState";
 import { commitVideoGenerationSuccess, reserveVideoGenerationForAttempt } from "./_core/messengerQuota";
@@ -25,6 +34,17 @@ import type { VideoProvider } from "./_core/video-generation/videoProvider";
 function makeProvider(result: Awaited<ReturnType<VideoProvider["generateVideo"]>>): VideoProvider {
   return {
     generateVideo: vi.fn(async () => result),
+  };
+}
+
+function makeDelayedProvider(
+  delayMs: number,
+  result: Awaited<ReturnType<VideoProvider["generateVideo"]>>
+): VideoProvider {
+  return {
+    generateVideo: vi.fn(
+      () => new Promise(resolve => setTimeout(() => resolve(result), delayMs))
+    ),
   };
 }
 
@@ -43,6 +63,7 @@ describe("messenger video generation flow", () => {
     process.env.MESSENGER_PSID_LOCK_TTL_MS = "1000";
     resetStateStore();
     storagePutMock.mockClear();
+    safeLogMock.mockClear();
     setVideoProviderForTests(null);
   });
 
@@ -52,6 +73,8 @@ describe("messenger video generation flow", () => {
     delete process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT;
     delete process.env.MESSENGER_PSID_LOCK_TTL_MS;
     delete process.env.MESSENGER_GLOBAL_DAILY_VIDEO_CAP;
+    delete process.env.MESSENGER_VIDEO_FLOW_TIMEOUT_MS;
+    vi.useRealTimers();
   });
 
   it("generates, stores, commits quota, and sends a Messenger video", async () => {
@@ -197,6 +220,88 @@ describe("messenger video generation flow", () => {
     const state = await Promise.resolve(getOrCreateState("video-timeout-user"));
     expect(state.videoGenerationQuota.count).toBe(0);
     expect(state.videoGenerationQuotaReservation).toBeNull();
+  });
+
+  it("uses timeout copy and releases reservation when the full video flow exceeds its deadline", async () => {
+    vi.useFakeTimers();
+    process.env.MESSENGER_VIDEO_FLOW_TIMEOUT_MS = "5";
+    const provider = makeDelayedProvider(10, {
+      kind: "success",
+      provider: "test",
+      providerJobId: "video-job-too-slow",
+      videoBytes: new Uint8Array([1, 2, 3]),
+      contentType: "video/mp4",
+    });
+    setVideoProviderForTests(provider);
+    const deps = makeDeps();
+    const runVideoGeneration = createMessengerVideoGenerationRunner(deps);
+
+    const runPromise = runVideoGeneration(
+      "video-flow-timeout-user",
+      "video-flow-timeout-user-key",
+      "req-video-flow-timeout",
+      "nl",
+      "https://img.example/source.jpg",
+      "laat hem dansen"
+    );
+    await vi.advanceTimersByTimeAsync(10);
+    await runPromise;
+
+    expect(storagePutMock).not.toHaveBeenCalled();
+    expect(deps.sendLoggedVideo).not.toHaveBeenCalled();
+    expect(deps.sendLoggedText).toHaveBeenCalledWith(
+      "video-flow-timeout-user",
+      t("nl", "videoGenerationTimeout"),
+      "req-video-flow-timeout"
+    );
+    const state = await Promise.resolve(
+      getOrCreateState("video-flow-timeout-user")
+    );
+    expect(state.videoGenerationQuota.count).toBe(0);
+    expect(state.videoGenerationQuotaReservation).toBeNull();
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_video_generation_flow_timeout",
+      expect.objectContaining({
+        reqId: "req-video-flow-timeout",
+        timeoutMs: 5,
+      })
+    );
+  });
+
+  it("logs when a post-webhook failure notification cannot be delivered", async () => {
+    const provider = makeProvider({
+      kind: "failure",
+      provider: "test",
+      errorClass: "provider",
+      retryable: false,
+    });
+    setVideoProviderForTests(provider);
+    const deps = makeDeps();
+    deps.sendLoggedText.mockResolvedValueOnce({ sent: true });
+    deps.sendLoggedText.mockResolvedValueOnce({
+      sent: false,
+      reason: "response_window_closed",
+    });
+    const runVideoGeneration = createMessengerVideoGenerationRunner(deps);
+
+    await runVideoGeneration(
+      "video-window-closed-user",
+      "video-window-closed-user-key",
+      "req-video-window-closed",
+      "nl",
+      "https://img.example/source.jpg",
+      "laat hem bewegen"
+    );
+
+    expect(deps.sendLoggedVideo).not.toHaveBeenCalled();
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_video_generation_notification_skipped",
+      expect.objectContaining({
+        reqId: "req-video-window-closed",
+        phase: "provider_failed",
+        reason: "response_window_closed",
+      })
+    );
   });
 
   it("releases reservation when generated video storage fails", async () => {
