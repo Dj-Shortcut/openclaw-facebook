@@ -17,10 +17,12 @@ import { t } from "./i18n";
 import { toLogUser } from "./privacy";
 import { runGuardedGeneration } from "./generationGuard";
 import {
-  canGenerate,
+  commitImageGenerationSuccess,
   getFreeDailyLimit,
   hasQuotaBypass,
-  increment,
+  releaseImageGenerationReservation,
+  reserveImageGenerationForAttempt,
+  type ImageGenerationQuotaReservation,
 } from "./messengerQuota";
 import {
   recordGenerationError,
@@ -118,80 +120,90 @@ export function createMessengerGenerationJobRunner(
           return;
         }
 
-        if (
-          !(await reserveGenerationQuota({
-            deps,
-            psid,
-            reqId,
-            lang,
-            rememberSendOutcome,
-          }))
-        ) {
+        const quotaReservation = await reserveGenerationQuota({
+          deps,
+          psid,
+          reqId,
+          lang,
+          rememberSendOutcome,
+        });
+        if (!quotaReservation) {
           return;
         }
 
-        await setFlowState(psid, "PROCESSING");
-        await sendGenerationStartedAck({
-          deps,
-          psid,
-          userId,
-          reqId,
-          lang,
-          resolvedGenerationKind,
-          rememberSendOutcome,
-        });
+        let quotaCommitted = false;
+        try {
+          await setFlowState(psid, "PROCESSING");
+          await sendGenerationStartedAck({
+            deps,
+            psid,
+            userId,
+            reqId,
+            lang,
+            resolvedGenerationKind,
+            rememberSendOutcome,
+          });
 
-        const state = await getOrCreateState(psid);
-        const shouldSendSourceImage =
-          resolvedGenerationKind === "source_image_edit";
-        const sourceIsGeneratedResult = Boolean(
-          shouldSendSourceImage &&
-          sourceImageUrl &&
-          (sourceImageUrl === state.lastGeneratedUrl ||
-            sourceImageUrl === state.lastImageUrl)
-        );
-        const generationResult = await executeGenerationFlow({
-          generationKind: resolvedGenerationKind,
-          userId,
-          reqId,
-          promptHint,
-          sourceImageUrl: shouldSendSourceImage ? sourceImageUrl : undefined,
-          lastPhotoUrl: shouldSendSourceImage
-            ? sourceIsGeneratedResult
-              ? sourceImageUrl
-              : state.lastPhotoUrl
-            : undefined,
-          lastPhotoSource: shouldSendSourceImage
-            ? sourceIsGeneratedResult
-              ? "stored"
-              : state.lastPhotoSource
-            : undefined,
-        });
+          const state = await getOrCreateState(psid);
+          const shouldSendSourceImage =
+            resolvedGenerationKind === "source_image_edit";
+          const sourceIsGeneratedResult = Boolean(
+            shouldSendSourceImage &&
+            sourceImageUrl &&
+            (sourceImageUrl === state.lastGeneratedUrl ||
+              sourceImageUrl === state.lastImageUrl)
+          );
+          const generationResult = await executeGenerationFlow({
+            generationKind: resolvedGenerationKind,
+            userId,
+            reqId,
+            promptHint,
+            sourceImageUrl: shouldSendSourceImage ? sourceImageUrl : undefined,
+            lastPhotoUrl: shouldSendSourceImage
+              ? sourceIsGeneratedResult
+                ? sourceImageUrl
+                : state.lastPhotoUrl
+              : undefined,
+            lastPhotoSource: shouldSendSourceImage
+              ? sourceIsGeneratedResult
+                ? "stored"
+                : state.lastPhotoSource
+              : undefined,
+          });
 
-        if (generationResult.kind === "success") {
-          await handleGenerationSuccess({
+          if (generationResult.kind === "success") {
+            await handleGenerationSuccess({
+              deps,
+              generationResult,
+              promptHint,
+              psid,
+              reqId,
+              resolvedGenerationKind,
+              userId,
+              lang,
+              quotaReservation,
+              markQuotaCommitted: () => {
+                quotaCommitted = true;
+              },
+              rememberSendOutcome,
+            });
+            return;
+          }
+
+          await handleGenerationFailure({
             deps,
             generationResult,
-            promptHint,
             psid,
             reqId,
             resolvedGenerationKind,
-            userId,
             lang,
             rememberSendOutcome,
           });
-          return;
+        } finally {
+          if (!quotaCommitted) {
+            await releaseImageGenerationReservation(psid, quotaReservation);
+          }
         }
-
-        await handleGenerationFailure({
-          deps,
-          generationResult,
-          psid,
-          reqId,
-          resolvedGenerationKind,
-          lang,
-          rememberSendOutcome,
-        });
       });
     } catch (error) {
       if (error instanceof MessengerGenerationDeliveryError) {
@@ -475,20 +487,21 @@ async function reserveGenerationQuota(input: {
   reqId: string;
   lang: MessengerGenerationJob["lang"];
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
-}): Promise<boolean> {
-  const allowed = await canGenerate(input.psid);
+}): Promise<ImageGenerationQuotaReservation | null> {
+  const reservation = await reserveImageGenerationForAttempt(input.psid);
   const quotaState = await getOrCreateState(input.psid);
   const bypassApplied = hasQuotaBypass(input.psid, quotaState.userKey);
+  const allowed = Boolean(reservation);
   safeLog("quota_decision", {
-    action: "check",
+    action: "reserve",
     psidHash: anonymizePsid(input.psid).slice(0, 12),
     count: quotaState.quota.count,
     limit: getFreeDailyLimit(),
     bypassApplied,
     allowed,
   });
-  if (allowed) {
-    return true;
+  if (reservation) {
+    return reservation;
   }
 
   input.rememberSendOutcome(
@@ -499,7 +512,7 @@ async function reserveGenerationQuota(input: {
     )
   );
   await setFlowState(input.psid, "AWAITING_EDIT_PROMPT");
-  return false;
+  return null;
 }
 
 async function handleGenerationSuccess(input: {
@@ -514,6 +527,8 @@ async function handleGenerationSuccess(input: {
   resolvedGenerationKind: GenerationKind;
   userId: string;
   lang: MessengerGenerationJob["lang"];
+  quotaReservation: ImageGenerationQuotaReservation;
+  markQuotaCommitted: () => void;
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
 }): Promise<void> {
   const { imageUrl, metrics, mode, proof } = input.generationResult;
@@ -553,7 +568,8 @@ async function handleGenerationSuccess(input: {
   await Promise.resolve(
     markMessengerGenerationCompleted(input.reqId, imageUrl, input.userId)
   );
-  await increment(input.psid);
+  await commitImageGenerationSuccess(input.psid, input.quotaReservation);
+  input.markQuotaCommitted();
   await setLastGenerated(input.psid, imageUrl);
   await setLastGenerationContext(input.psid, { prompt: input.promptHint });
 

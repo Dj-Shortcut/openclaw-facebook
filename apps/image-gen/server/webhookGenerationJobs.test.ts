@@ -36,14 +36,25 @@ import type { HandlerContext } from "./_core/webhookHandlerTypes";
 
 const IN_FLIGHT_NOTICE = "Even geduld, ik ben nog bezig met je afbeelding.";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
+const originalFreeDailyLimit = process.env.MESSENGER_FREE_DAILY_LIMIT;
+const originalQuotaBypassIds = process.env.MESSENGER_QUOTA_BYPASS_IDS;
 
 afterAll(() => {
   if (originalPrivacyPepper === undefined) {
     delete process.env.PRIVACY_PEPPER;
-    return;
+  } else {
+    process.env.PRIVACY_PEPPER = originalPrivacyPepper;
   }
-
-  process.env.PRIVACY_PEPPER = originalPrivacyPepper;
+  if (originalFreeDailyLimit === undefined) {
+    delete process.env.MESSENGER_FREE_DAILY_LIMIT;
+  } else {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = originalFreeDailyLimit;
+  }
+  if (originalQuotaBypassIds === undefined) {
+    delete process.env.MESSENGER_QUOTA_BYPASS_IDS;
+  } else {
+    process.env.MESSENGER_QUOTA_BYPASS_IDS = originalQuotaBypassIds;
+  }
 });
 
 beforeEach(() => {
@@ -57,6 +68,8 @@ beforeEach(() => {
   sendTextMock.mockReset();
   sendTextMock.mockResolvedValue({ sent: true });
   resetStateStore();
+  delete process.env.MESSENGER_FREE_DAILY_LIMIT;
+  delete process.env.MESSENGER_QUOTA_BYPASS_IDS;
 });
 
 describe("messenger generation job safety", () => {
@@ -74,6 +87,7 @@ describe("messenger generation job safety", () => {
     });
 
     expect(getState("throwing-flow-user")?.stage).toBe("FAILURE");
+    expect(getState("throwing-flow-user")?.quota.count).toBe(0);
     expect(getState("throwing-flow-user")?.stage).not.toBe("PROCESSING");
     expect(safeLogMock).toHaveBeenCalledWith(
       "messenger_generation_unexpected_error",
@@ -118,6 +132,7 @@ describe("messenger generation job safety", () => {
         Promise.resolve(getMessengerGenerationCompletion(reqId))
       ).resolves.not.toHaveProperty("deliveredAt");
       expect(getState(psid)?.stage).toBe("IDLE");
+      expect(getState(psid)?.quota.count).toBe(1);
       expect(safeLogMock).toHaveBeenCalledWith(
         "messenger_generation_image_delivery_failed",
         expect.objectContaining({
@@ -135,6 +150,7 @@ describe("messenger generation job safety", () => {
       });
       expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
       expect(sendImageMock).toHaveBeenCalledTimes(2);
+      expect(getState(psid)?.quota.count).toBe(1);
       await expect(
         Promise.resolve(getMessengerGenerationCompletion(reqId))
       ).resolves.toEqual(
@@ -230,6 +246,37 @@ describe("messenger generation job safety", () => {
       })
     );
     expect(getState("inline-ack-fails-user")?.stage).toBe("IDLE");
+    expect(getState("inline-ack-fails-user")?.quota.count).toBe(1);
+  });
+
+  it("commits image quota once when generation succeeds", async () => {
+    const runner = createTestRunner();
+    executeGenerationFlowMock.mockResolvedValueOnce(successGenerationResult());
+
+    await runner.processMessengerGenerationJob({
+      psid: "quota-success-user",
+      userId: "quota-success-user-key",
+      reqId: "req-quota-success",
+      lang: "nl",
+    });
+
+    expect(getState("quota-success-user")?.quota.count).toBe(1);
+    expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases image quota when generation returns a provider failure", async () => {
+    const runner = createTestRunner();
+    executeGenerationFlowMock.mockResolvedValueOnce(failureGenerationResult());
+
+    await runner.processMessengerGenerationJob({
+      psid: "quota-provider-failure-user",
+      userId: "quota-provider-failure-user-key",
+      reqId: "req-quota-provider-failure",
+      lang: "nl",
+    });
+
+    expect(getState("quota-provider-failure-user")?.quota.count).toBe(0);
+    expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
   });
 
   it("logs quota bypass with exact id matching", async () => {
