@@ -142,7 +142,7 @@ async function tryHandleGreetingOrSmalltalk(
   }
 
   return {
-    response: { kind: "text", text: response.text },
+    response: { text: response.text },
     replyState: state.stage,
   };
 }
