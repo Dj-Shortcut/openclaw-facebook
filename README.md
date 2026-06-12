@@ -168,7 +168,7 @@ channel.
 
 ## Development
 
-Use Node.js `>=24.0.0`, matching the package runtime contract, before installing
+Use Node.js `>=24.15.0`, matching the package runtime contract, before installing
 dependencies.
 
 ```bash

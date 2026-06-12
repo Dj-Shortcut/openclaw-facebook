@@ -28,7 +28,7 @@ remains a separate release decision.
 
 ## Preflight
 
-Use Node.js `>=24.0.0` before installing or packing; this matches the current
+Use Node.js `>=24.15.0` before installing or packing; this matches the current
 repository runtime contract in [openclaw-update.md](openclaw-update.md).
 
 Run the package checks before publishing:

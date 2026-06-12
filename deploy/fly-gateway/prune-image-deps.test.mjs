@@ -163,11 +163,11 @@ describe('Fly gateway image dependency pruning', () => {
   it('validates the gateway runtime contract without patching installed packages', () => {
     const appRoot = makeTempApp();
     writeFixtureFile(appRoot, 'package.json', '{"name":"runtime-fixture"}');
-    writeFixtureFile(appRoot, 'node_modules/openclaw/package.json', '{"name":"openclaw","version":"2026.6.5"}');
+    writeFixtureFile(appRoot, 'node_modules/openclaw/package.json', '{"name":"openclaw","version":"2026.6.6"}');
     writeFixtureFile(appRoot, 'node_modules/openclaw/openclaw.mjs', '#!/usr/bin/env node\n');
     writeOpenClawTemplateFixture(appRoot);
-    writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/package.json', '{"name":"@openclaw/codex","version":"2026.6.5"}');
-    writeFixtureFile(appRoot, 'node_modules/@dj-shortcut/facebook/package.json', '{"name":"@dj-shortcut/facebook","version":"2026.6.5"}');
+    writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/package.json', '{"name":"@openclaw/codex","version":"2026.6.6"}');
+    writeFixtureFile(appRoot, 'node_modules/@dj-shortcut/facebook/package.json', '{"name":"@dj-shortcut/facebook","version":"2026.6.6"}');
     writeFixtureFile(appRoot, 'node_modules/@dj-shortcut/facebook/dist/index.js');
     writeFixtureFile(appRoot, 'node_modules/@dj-shortcut/facebook/dist/setup-entry.js');
     writeFixtureFile(appRoot, 'node_modules/@dj-shortcut/facebook/openclaw.plugin.json', '{}');
@@ -179,7 +179,7 @@ describe('Fly gateway image dependency pruning', () => {
         encoding: 'utf8',
         env: {
           ...process.env,
-          EXPECTED_OPENCLAW_VERSION: '2026.6.5',
+          EXPECTED_OPENCLAW_VERSION: '2026.6.6',
           NODE_OPTIONS: '',
         },
       },
@@ -190,7 +190,7 @@ describe('Fly gateway image dependency pruning', () => {
     expect(JSON.parse(result.stdout)).toMatchObject({
       ok: true,
       mode: 'gateway',
-      openclawVersion: '2026.6.5',
+      openclawVersion: '2026.6.6',
     });
   });
 
