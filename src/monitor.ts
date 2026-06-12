@@ -36,6 +36,11 @@ import {
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveDefaultMessengerAccountId } from "./accounts.js";
 import {
+  forwardLeaderbotMessengerEvent,
+  requestLeaderbotImageGeneration,
+  type LeaderbotBridgeTrace,
+} from "./leaderbot-bridge.js";
+import {
   DEFAULT_FACEBOOK_WEBHOOK_PATH,
   FACEBOOK_CHANNEL_ID,
   stripFacebookTargetPrefix,
@@ -60,6 +65,15 @@ import {
   extractMessengerInboundMessages,
   handleMessengerWebhookVerification,
 } from "./webhook.js";
+
+export {
+  DEFAULT_IMAGE_GEN_URL,
+  IMAGE_GEN_REQUEST_TIMEOUT_MS,
+  forwardLeaderbotMessengerEvent,
+  requestLeaderbotImageGeneration,
+  resolveImageGenRequestConfig,
+  type LeaderbotBridgeTrace,
+} from "./leaderbot-bridge.js";
 
 export interface MonitorMessengerProviderOptions {
   account: ResolvedMessengerAccount;
@@ -98,12 +112,7 @@ let activeMessengerEventJobs = 0;
 
 messengerEventLoopDelay.enable();
 
-type MessengerTrace = {
-  reqId: string;
-  psidHash: string;
-  accountId: string;
-  startedAt: number;
-};
+type MessengerTrace = LeaderbotBridgeTrace;
 
 type MessengerFastLaneIntent = "greeting" | "help" | "status" | "image";
 
@@ -112,8 +121,6 @@ export type MessengerAudioTranscript = {
   text: string;
 };
 
-const DEFAULT_IMAGE_GEN_URL = "https://leaderbot-fb-image-gen.fly.dev";
-const IMAGE_GEN_REQUEST_TIMEOUT_MS = 5_000;
 const MESSENGER_IMAGE_FETCH_TIMEOUT_MS = 10_000;
 const MESSENGER_IMAGE_FETCH_MAX_BYTES = 10 * 1024 * 1024;
 const MESSENGER_MEDIA_FETCH_MAX_BYTES = 25 * 1024 * 1024;
@@ -1106,116 +1113,6 @@ export function normalizeMessengerReplyPayloadForDelivery(
   };
 }
 
-function resolveImageGenRequestConfig():
-  | { ok: true; endpoint: string; token: string }
-  | { ok: false; reason: "missing_token" | "invalid_url" } {
-  const token =
-    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN?.trim() ||
-    process.env.INTERNAL_IMAGE_REQUEST_TOKEN?.trim() ||
-    "";
-  if (!token) {
-    return { ok: false, reason: "missing_token" };
-  }
-  try {
-    const baseUrl = new URL(
-      process.env.LEADERBOT_IMAGE_GEN_URL?.trim() || DEFAULT_IMAGE_GEN_URL,
-    );
-    const isLocalhost =
-      baseUrl.hostname === "localhost" || baseUrl.hostname === "127.0.0.1";
-    if (baseUrl.protocol !== "https:" && !isLocalhost) {
-      return { ok: false, reason: "invalid_url" };
-    }
-    const endpoint = new URL("/internal/messenger/image-request", baseUrl);
-    return { ok: true, endpoint: endpoint.toString(), token };
-  } catch {
-    return { ok: false, reason: "invalid_url" };
-  }
-}
-
-async function requestLeaderbotImageGeneration(params: {
-  psid: string;
-  prompt: string;
-  reqId: string;
-  timestamp: number;
-  trace: MessengerTrace;
-  sourceImageUrl?: string;
-}): Promise<boolean> {
-  const config = resolveImageGenRequestConfig();
-  if (!config.ok) {
-    logMessengerStage(params.trace, "image_gen_request_skipped", { reason: config.reason });
-    return false;
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), IMAGE_GEN_REQUEST_TIMEOUT_MS);
-  try {
-    const response = await fetch(config.endpoint, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        Authorization: `Bearer ${config.token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        psid: params.psid,
-        prompt: params.prompt,
-        reqId: params.reqId,
-        lang: "nl",
-        timestamp: params.timestamp,
-        sourceImageUrl: params.sourceImageUrl,
-      }),
-    });
-    logMessengerStage(params.trace, "image_gen_request_sent", {
-      status: response.status,
-    });
-    return response.ok;
-  } catch (error) {
-    logMessengerStage(params.trace, "image_gen_request_failed", {
-      error: error instanceof Error ? error.name : "unknown",
-    });
-    return false;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function forwardLeaderbotMessengerEvent(params: {
-  event: MessengerWebhookMessaging;
-  trace: MessengerTrace;
-}): Promise<boolean> {
-  const config = resolveImageGenRequestConfig();
-  if (!config.ok) {
-    logMessengerStage(params.trace, "messenger_event_forward_skipped", { reason: config.reason });
-    return false;
-  }
-
-  const endpoint = new URL("/internal/messenger/webhook-event", config.endpoint);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), IMAGE_GEN_REQUEST_TIMEOUT_MS);
-  try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        Authorization: `Bearer ${config.token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ event: params.event }),
-    });
-    logMessengerStage(params.trace, "messenger_event_forward_sent", {
-      status: response.status,
-    });
-    return response.ok;
-  } catch (error) {
-    logMessengerStage(params.trace, "messenger_event_forward_failed", {
-      error: error instanceof Error ? error.name : "unknown",
-    });
-    return false;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 function hasMessengerInteractivePayload(event: MessengerWebhookMessaging): boolean {
   return Boolean(event.message?.quick_reply?.payload?.trim() || event.postback?.payload?.trim());
 }
@@ -1452,7 +1349,13 @@ export async function processMessengerEvent(params: {
       logMessengerStage(params.trace, "messenger_event_forward_started", {
         reason: "unknown_sender_leaderbot_free_tier",
       });
-      if (await forwardLeaderbotMessengerEvent({ event: params.event, trace: params.trace })) {
+      if (
+        await forwardLeaderbotMessengerEvent({
+          event: params.event,
+          trace: params.trace,
+          logStage: logMessengerStage,
+        })
+      ) {
         return;
       }
       await sendMessengerText(
@@ -1483,7 +1386,13 @@ export async function processMessengerEvent(params: {
         quickReply: Boolean(params.event.message?.quick_reply?.payload),
         postback: Boolean(params.event.postback?.payload),
       });
-      if (await forwardLeaderbotMessengerEvent({ event: params.event, trace: params.trace })) {
+      if (
+        await forwardLeaderbotMessengerEvent({
+          event: params.event,
+          trace: params.trace,
+          logStage: logMessengerStage,
+        })
+      ) {
         return;
       }
       await sendMessengerText(
@@ -1512,7 +1421,13 @@ export async function processMessengerEvent(params: {
         reason: "source_image_without_prompt",
         sourceImage: true,
       });
-      if (await forwardLeaderbotMessengerEvent({ event: params.event, trace: params.trace })) {
+      if (
+        await forwardLeaderbotMessengerEvent({
+          event: params.event,
+          trace: params.trace,
+          logStage: logMessengerStage,
+        })
+      ) {
         return;
       }
     }
@@ -1522,7 +1437,13 @@ export async function processMessengerEvent(params: {
         sourceImage: true,
         hasPrompt: true,
       });
-      if (await forwardLeaderbotMessengerEvent({ event: params.event, trace: params.trace })) {
+      if (
+        await forwardLeaderbotMessengerEvent({
+          event: params.event,
+          trace: params.trace,
+          logStage: logMessengerStage,
+        })
+      ) {
         return;
       }
       await sendMessengerText(
@@ -1549,7 +1470,13 @@ export async function processMessengerEvent(params: {
         isSourceImageEdit: false,
         hasPrompt: true,
       });
-      if (await forwardLeaderbotMessengerEvent({ event: params.event, trace: params.trace })) {
+      if (
+        await forwardLeaderbotMessengerEvent({
+          event: params.event,
+          trace: params.trace,
+          logStage: logMessengerStage,
+        })
+      ) {
         return;
       }
       await sendMessengerText(
@@ -1587,6 +1514,7 @@ export async function processMessengerEvent(params: {
         reqId: params.trace.reqId,
         timestamp,
         trace: params.trace,
+        logStage: logMessengerStage,
       });
       if (queued) {
         return;
@@ -1655,7 +1583,13 @@ export async function processMessengerEvent(params: {
         sourceImage: false,
         hasPrompt: true,
       });
-      if (await forwardLeaderbotMessengerEvent({ event: params.event, trace: params.trace })) {
+      if (
+        await forwardLeaderbotMessengerEvent({
+          event: params.event,
+          trace: params.trace,
+          logStage: logMessengerStage,
+        })
+      ) {
         return;
       }
       await sendMessengerText(
