@@ -5,8 +5,10 @@ OpenClaw and the official Codex harness plugin are installed as pinned package d
 
 ## Update OpenClaw
 
-Edit `OPENCLAW_VERSION` in `deploy/fly-gateway/Dockerfile`, then build/deploy.
-Keep the Facebook plugin package peer range compatible with that OpenClaw release.
+Use the single supported workflow in
+[`../../docs/openclaw-update.md`](../../docs/openclaw-update.md). Do not edit
+`OPENCLAW_VERSION` by hand except through `npm run openclaw:update -- <version>`.
+That script keeps package metadata, tests, and the Fly gateway build arg aligned.
 
 The OpenClaw dashboard update action is not the update path for this Fly/Docker
 gateway. This image installs OpenClaw during Docker build, so a dashboard
@@ -20,9 +22,9 @@ redeploy workflow with operator approval, scoped credentials, audit logging, and
 rollback guidance. They should not edit runtime files inside the running
 container.
 
-See [`managed-redeploy-handoff.md`](managed-redeploy-handoff.md) for the
-operator approval, credential scope, redacted audit, verification, and rollback
-contract.
+See [`managed-redeploy-handoff.md`](managed-redeploy-handoff.md) for future
+dashboard handoff design. The current authoritative operator workflow is
+[`../../docs/openclaw-update.md`](../../docs/openclaw-update.md).
 
 ## Deploy
 

@@ -28,16 +28,14 @@ remains a separate release decision.
 
 ## Preflight
 
-Use Node.js `22.19.0` before installing or packing; this matches the current
-OpenClaw runtime requirement.
+Use Node.js `>=24.0.0` before installing or packing; this matches the current
+repository runtime contract in [openclaw-update.md](openclaw-update.md).
 
 Run the package checks before publishing:
 
 ```bash
 npm ci
-npm run build
-npm test
-npm run pack:dry
+npm run openclaw:release-check
 npm pack
 ```
 
@@ -77,8 +75,9 @@ Or run the GitHub Actions workflow:
 3. Run it with `publish` left unchecked.
 4. Inspect the generated package artifact and ClawHub validation output.
 
-Only publish for real after the dry run succeeds and the package owner is
-confirmed as `@dj-shortcut`:
+Only publish for real after the dry run succeeds, the package owner is confirmed
+as `@dj-shortcut`, and the release checklist in
+[openclaw-update.md](openclaw-update.md) has been completed:
 
 ```bash
 clawhub package publish @dj-shortcut/facebook

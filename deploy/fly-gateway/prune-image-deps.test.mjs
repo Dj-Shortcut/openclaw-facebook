@@ -8,9 +8,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 const repoRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const pruneScript = join(repoRoot, 'deploy/fly-gateway/bin/prune-image-deps.mjs');
 const codexTargetsSource = join(repoRoot, 'deploy/fly-gateway/bin/codex-targets.cjs');
-const ensureTemplatesScript = join(repoRoot, 'deploy/fly-gateway/bin/ensure-openclaw-runtime-templates.mjs');
+const validateOpenClawRuntimeScript = join(repoRoot, 'scripts/validate-openclaw-runtime.mjs');
 const verifyScriptSource = join(repoRoot, 'deploy/fly-gateway/bin/verify-codex-native-deps.cjs');
-const ensureScriptSource = join(repoRoot, 'deploy/fly-gateway/bin/ensure-codex-native-deps.cjs');
 
 const tempDirs = [];
 
@@ -48,6 +47,17 @@ module.exports = { TARGETS };
 function writeFixtureScript(appRoot, scriptPath, sourcePath) {
   writeFixtureFile(appRoot, 'deploy/fly-gateway/bin/codex-targets.cjs', codexTargetsFixture());
   writeFileSync(scriptPath, readFileSync(sourcePath));
+}
+
+function writeOpenClawTemplateFixture(appRoot) {
+  writeFixtureFile(appRoot, 'node_modules/openclaw/src/agents/templates/HEARTBEAT.md', '# Heartbeat\n');
+  for (const fileName of ['AGENTS.md', 'SOUL.md', 'TOOLS.md', 'IDENTITY.md', 'USER.md', 'BOOTSTRAP.md']) {
+    writeFixtureFile(
+      appRoot,
+      `node_modules/openclaw/docs/reference/templates/${fileName}`,
+      `# ${fileName}\n`,
+    );
+  }
 }
 
 afterEach(() => {
@@ -121,45 +131,14 @@ describe('Fly gateway image dependency pruning', () => {
   it('keeps OpenClaw runtime workspace templates while pruning ordinary docs', () => {
     const appRoot = makeTempApp();
     writeFixtureFile(appRoot, 'node_modules/plain-package/docs/readme.md');
-    writeFixtureFile(
-      appRoot,
-      'node_modules/openclaw/src/agents/templates/HEARTBEAT.md',
-      '# Heartbeat\n',
-    );
-    writeFixtureFile(
-      appRoot,
-      'node_modules/openclaw/docs/reference/templates/SOUL.md',
-      '# Soul\n',
-    );
-    writeFixtureFile(
-      appRoot,
-      'node_modules/openclaw/docs/reference/templates/IDENTITY.md',
-      '# Identity\n',
-    );
-
-    const ensureResult = spawnSync(process.execPath, [ensureTemplatesScript, appRoot], {
-      encoding: 'utf8',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
+    writeOpenClawTemplateFixture(appRoot);
     const pruneResult = spawnSync(process.execPath, [pruneScript, appRoot], {
       encoding: 'utf8',
       env: { ...process.env, NODE_OPTIONS: '' },
     });
-    const verifyResult = spawnSync(
-      process.execPath,
-      [ensureTemplatesScript, appRoot, '--verify-only'],
-      {
-        encoding: 'utf8',
-        env: { ...process.env, NODE_OPTIONS: '' },
-      },
-    );
 
-    expect(ensureResult.stderr).toBe('');
-    expect(ensureResult.status).toBe(0);
     expect(pruneResult.stderr).toBe('');
     expect(pruneResult.status).toBe(0);
-    expect(verifyResult.stderr).toBe('');
-    expect(verifyResult.status).toBe(0);
     expect(() => readFileSync(join(appRoot, 'node_modules/plain-package/docs/readme.md'))).toThrow();
     expect(
       readFileSync(
@@ -169,16 +148,50 @@ describe('Fly gateway image dependency pruning', () => {
     ).toBe('# Heartbeat\n');
     expect(
       readFileSync(
-        join(appRoot, 'node_modules/openclaw/src/agents/templates/SOUL.md'),
+        join(appRoot, 'node_modules/openclaw/docs/reference/templates/SOUL.md'),
         'utf8',
       ),
-    ).toBe('# Soul\n');
+    ).toBe('# SOUL.md\n');
     expect(
       readFileSync(
-        join(appRoot, 'node_modules/openclaw/src/agents/templates/IDENTITY.md'),
+        join(appRoot, 'node_modules/openclaw/docs/reference/templates/IDENTITY.md'),
         'utf8',
       ),
-    ).toBe('# Identity\n');
+    ).toBe('# IDENTITY.md\n');
+  });
+
+  it('validates the gateway runtime contract without patching installed packages', () => {
+    const appRoot = makeTempApp();
+    writeFixtureFile(appRoot, 'package.json', '{"name":"runtime-fixture"}');
+    writeFixtureFile(appRoot, 'node_modules/openclaw/package.json', '{"name":"openclaw","version":"2026.6.5"}');
+    writeFixtureFile(appRoot, 'node_modules/openclaw/openclaw.mjs', '#!/usr/bin/env node\n');
+    writeOpenClawTemplateFixture(appRoot);
+    writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/package.json', '{"name":"@openclaw/codex","version":"2026.6.5"}');
+    writeFixtureFile(appRoot, 'node_modules/@dj-shortcut/facebook/package.json', '{"name":"@dj-shortcut/facebook","version":"2026.6.5"}');
+    writeFixtureFile(appRoot, 'node_modules/@dj-shortcut/facebook/dist/index.js');
+    writeFixtureFile(appRoot, 'node_modules/@dj-shortcut/facebook/dist/setup-entry.js');
+    writeFixtureFile(appRoot, 'node_modules/@dj-shortcut/facebook/openclaw.plugin.json', '{}');
+
+    const result = spawnSync(
+      process.execPath,
+      [validateOpenClawRuntimeScript, appRoot, '--gateway'],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          EXPECTED_OPENCLAW_VERSION: '2026.6.5',
+          NODE_OPTIONS: '',
+        },
+      },
+    );
+
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      mode: 'gateway',
+      openclawVersion: '2026.6.5',
+    });
   });
 
   it('verifies the Codex Linux native package from the runtime app root', () => {
@@ -222,24 +235,4 @@ describe('Fly gateway image dependency pruning', () => {
     expect(result.stderr).toContain('Missing Codex native executable');
   });
 
-  it('accepts an already installed Codex native runtime in the repair script', () => {
-    const appRoot = makeTempApp();
-    const ensureScript = join(appRoot, 'deploy/fly-gateway/bin/ensure-codex-native-deps.cjs');
-    writeFixtureFile(appRoot, 'deploy/fly-gateway/bin/.keep');
-    writeFixtureScript(appRoot, ensureScript, ensureScriptSource);
-    writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/package.json', '{"name":"@openclaw/codex"}');
-    writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/node_modules/@openai/codex/package.json', '{"name":"@openai/codex","optionalDependencies":{"@openai/codex-linux-x64":"npm:@openai/codex@0.0.0-linux-x64"}}');
-    writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/node_modules/@openai/codex-linux-x64/package.json', '{"name":"@openai/codex-linux-x64"}');
-    chmodSync(writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex'), 0o755);
-
-    const result = spawnSync(process.execPath, [ensureScript], {
-      cwd: appRoot,
-      encoding: 'utf8',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
-
-    expect(result.stderr).toBe('');
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('Codex native runtime already present: @openai/codex-linux-x64');
-  });
 });
