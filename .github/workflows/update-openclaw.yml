@@ -45,39 +45,7 @@ jobs:
         if: steps.latest.outputs.changed == 'true'
         env:
           OPENCLAW_VERSION: ${{ steps.latest.outputs.latest }}
-        run: |
-          node <<'NODE'
-          const fs = require("node:fs");
-          const version = process.env.OPENCLAW_VERSION;
-
-          const pkgPath = "package.json";
-          const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-          pkg.version = version;
-          pkg.devDependencies.openclaw = `^${version}`;
-          pkg.openclaw.build.openclawVersion = version;
-          pkg.openclaw.build.pluginSdkVersion = version;
-          fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
-
-          const manifestTestPath = "manifest.test.ts";
-          let manifestTest = fs.readFileSync(manifestTestPath, "utf8");
-          manifestTest = manifestTest.replace(
-            /openclawVersion: "(\d{4}\.\d+\.\d+(?:-[^"]+)?)"/,
-            `openclawVersion: "${version}"`,
-          );
-          manifestTest = manifestTest.replace(
-            /pluginSdkVersion: "(\d{4}\.\d+\.\d+(?:-[^"]+)?)"/,
-            `pluginSdkVersion: "${version}"`,
-          );
-          fs.writeFileSync(manifestTestPath, manifestTest);
-
-          const dockerfilePath = "deploy/fly-gateway/Dockerfile";
-          let dockerfile = fs.readFileSync(dockerfilePath, "utf8");
-          dockerfile = dockerfile.replace(
-            /^ARG OPENCLAW_VERSION=.*$/m,
-            `ARG OPENCLAW_VERSION=${version}`,
-          );
-          fs.writeFileSync(dockerfilePath, dockerfile);
-          NODE
+        run: npm run openclaw:update -- "$OPENCLAW_VERSION"
 
       - name: Update lockfile
         if: steps.latest.outputs.changed == 'true'
@@ -90,6 +58,10 @@ jobs:
       - name: Build
         if: steps.latest.outputs.changed == 'true'
         run: npm run build
+
+      - name: Validate OpenClaw runtime contract
+        if: steps.latest.outputs.changed == 'true'
+        run: npm run openclaw:validate
 
       - name: Test
         if: steps.latest.outputs.changed == 'true'
@@ -107,9 +79,9 @@ jobs:
           cat > /tmp/openclaw-update-pr-body.md <<EOF
           Automated OpenClaw update.
 
-          - Updates package metadata and lockfile to ${OPENCLAW_VERSION}
-          - Updates the Fly gateway Docker build arg
-          - Runs build, tests, and pack dry-run
+          - Updates package metadata, lockfile, manifest expectations, and Fly gateway build arg to ${OPENCLAW_VERSION}
+          - Runs build, runtime-contract validation, tests, and pack dry-run
+          - Follow docs/openclaw-update.md for review, deploy verification, ClawHub/npm release, and rollback
           EOF
 
       - name: Create pull request

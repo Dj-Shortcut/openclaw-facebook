@@ -5,6 +5,11 @@ Fly/Docker gateway. The running machine is image-managed, so updates must create
 and deploy a new image. Do not edit, reinstall, or replace
 `/app/node_modules/openclaw` inside a running Fly machine.
 
+The current authoritative maintainer/operator workflow is
+[`../../docs/openclaw-update.md`](../../docs/openclaw-update.md). This document
+only describes a future dashboard handoff that must preserve that workflow's
+approval, validation, and rollback guarantees.
+
 ## Goals
 
 - Require explicit operator approval before any production redeploy.
@@ -38,7 +43,7 @@ Required request fields:
 - `target_openclaw_version`: requested package version.
 - `current_image`: image reference from `fly releases --image`.
 - `rollback_image`: previous known-good image reference.
-- `repo_ref`: commit or PR that changes `OPENCLAW_VERSION`.
+- `repo_ref`: commit or PR produced by `npm run openclaw:update -- <version>`.
 - `verification_plan`: commands/checks to run after deploy.
 - `approval_status`: `pending`, `approved`, `rejected`, or `expired`.
 - `approved_by`: operator id, present only after approval.
@@ -75,9 +80,9 @@ comments, or dashboard-visible status details.
    updated in place.
 2. Dashboard creates a redeploy request with the fields above and marks it
    `pending`.
-3. Automation opens or updates a PR that bumps `OPENCLAW_VERSION` in
-   `deploy/fly-gateway/Dockerfile` and keeps the Facebook plugin peer range
-   compatible with that OpenClaw release.
+3. Automation opens or updates a PR by running
+   `npm run openclaw:update -- <version>` and keeps the Facebook plugin peer
+   range compatible with that OpenClaw release.
 4. CI verifies the PR with the gateway checks and any targeted compatibility
    tests.
 5. Operator reviews the diff, Meta/webhook impact, rollback image, and
@@ -180,4 +185,3 @@ When an image-managed install requests an OpenClaw update, show:
 > operator-approved redeploy that bumps the pinned OpenClaw version in the repo,
 > builds a new image, records redacted audit metadata, and keeps the previous
 > image available for rollback.
-

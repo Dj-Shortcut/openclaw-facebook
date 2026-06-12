@@ -101,6 +101,8 @@ See [`docs/setup.md`](docs/setup.md) for the short setup tutorial, and
 [`docs/facebook-complete-tutorial.md`](docs/facebook-complete-tutorial.md) for
 the full Meta-side guide covering the app, Page identity, permissions, review,
 Messenger rules, production checks, and troubleshooting.
+See [`docs/openclaw-update.md`](docs/openclaw-update.md) for the single
+supported OpenClaw update, rollback, runtime validation, and release workflow.
 See [`docs/clawhub.md`](docs/clawhub.md) for ClawHub release preparation.
 See [`docs/cost-control-plan.md`](docs/cost-control-plan.md) for the recommended
 budget, usage-ledger, and payment boundaries for public Facebook assistants.
@@ -166,13 +168,15 @@ channel.
 
 ## Development
 
-Use Node.js `22.19.0` (see `.nvmrc` / `.node-version`) before installing dependencies.
+Use Node.js `>=24.0.0`, matching the package runtime contract, before installing
+dependencies.
 
 ```bash
 npm install
 npm run build
 npm test
 npm run pack:dry
+npm run openclaw:validate
 ```
 
 Run Fallow from the repository root when you want a repo-wide dead-code and
