@@ -11,7 +11,7 @@ The repository supports one OpenClaw runtime contract:
 
 | Requirement | Contract |
 | --- | --- |
-| Node.js | `>=24.0.0` |
+| Node.js | `>=24.15.0` |
 | Package manager | npm for the root plugin package; pnpm only for subapps that already use pnpm |
 | OpenClaw package | `openclaw` version recorded in `package.json` at `openclaw.build.openclawVersion` |
 | Plugin SDK version | same version as `openclaw.build.openclawVersion` |

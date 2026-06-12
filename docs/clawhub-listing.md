@@ -64,9 +64,9 @@ not appear as a separate channel.
 ## Compatibility
 
 - OpenClaw host: `>=2026.5.19`
-- OpenClaw build tested with: `2026.6.5`
-- Node.js: `>=24.0.0`
-- Plugin version: `2026.6.5`
+- OpenClaw build tested with: `2026.6.6`
+- Node.js: `>=24.15.0`
+- Plugin version: `2026.6.6`
 
 ## Basic Configuration
 
@@ -172,12 +172,12 @@ Not included:
 - Production readiness: `docs/production-readiness.md`
 - ClawHub release prep: `docs/clawhub.md`
 
-## Release Notes For 2026.6.5
+## Release Notes For 2026.6.6
 
 - Prepared the package for ClawHub installation as
   `clawhub:@dj-shortcut/facebook`.
 - Keeps the canonical channel id as `facebook`.
 - Preserves legacy `messenger` compatibility without exposing a second new
   channel.
-- Requires Node.js `>=24.0.0`, matching the current repository runtime contract.
-- Verified local package install from `dj-shortcut-facebook-2026.6.5.tgz`.
+- Requires Node.js `>=24.15.0`, matching the current repository runtime contract.
+- Verified local package install from `dj-shortcut-facebook-2026.6.6.tgz`.
