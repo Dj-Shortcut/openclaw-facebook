@@ -229,6 +229,34 @@ describe("sharedTextHandler", () => {
     });
   });
 
+  it("returns in-progress greeting copy as a channel-neutral response", async () => {
+    const result = await handleSharedTextMessage({
+      message: {
+        channel: "messenger",
+        senderId: "psid-processing",
+        userId: "user-key-processing",
+        messageType: "text",
+        textBody: "Hello",
+      },
+      reqId: "req-processing",
+      lang: "nl",
+      getState: async () =>
+        createState({
+          psid: "psid-processing",
+          userKey: "user-key-processing",
+          stage: "PROCESSING",
+          state: "PROCESSING",
+          hasSeenIntro: true,
+        }),
+      setFlowState: async () => {},
+    });
+
+    expect(result).toEqual({
+      response: { text: t("nl", "processingBlocked") },
+      replyState: "PROCESSING",
+    });
+  });
+
   it("returns failure follow-up choices as conversation actions", async () => {
     const result = await handleSharedTextMessage({
       message: {
