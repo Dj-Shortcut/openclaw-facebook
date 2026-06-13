@@ -17,14 +17,16 @@ import { t } from "./i18n";
 import { toLogUser } from "./privacy";
 import { runGuardedGeneration } from "./generationGuard";
 import {
-  commitImageGenerationSuccess,
   getFreeDailyLimit,
   hasQuotaBypass,
   MessengerQuotaReservationCommitError,
-  releaseImageGenerationReservation,
-  reserveImageGenerationForAttempt,
-  type ImageGenerationQuotaReservation,
 } from "./messengerQuota";
+import {
+  commitImageGenerationUsage,
+  releaseImageGenerationUsage,
+  reserveImageGenerationUsage,
+  type ImageGenerationQuotaReservation,
+} from "./limits/generationQuota";
 import {
   recordGenerationError,
   recordGenerationSuccess,
@@ -159,10 +161,11 @@ export function createMessengerGenerationJobRunner(
               return;
             }
 
-            const committed = await commitImageGenerationSuccess(
-              psid,
-              quotaReservation
-            );
+            const committed = await commitImageGenerationUsage({
+              channel: "messenger",
+              senderId: psid,
+              reservation: quotaReservation,
+            });
             if (!committed) {
               throw new MessengerQuotaReservationCommitError();
             }
@@ -222,7 +225,11 @@ export function createMessengerGenerationJobRunner(
           });
         } finally {
           if (!quotaCommitted) {
-            await releaseImageGenerationReservation(psid, quotaReservation);
+            await releaseImageGenerationUsage({
+              channel: "messenger",
+              senderId: psid,
+              reservation: quotaReservation,
+            });
           }
         }
       });
@@ -509,7 +516,10 @@ async function reserveGenerationQuota(input: {
   lang: MessengerGenerationJob["lang"];
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
 }): Promise<ImageGenerationQuotaReservation | null> {
-  const reservation = await reserveImageGenerationForAttempt(input.psid);
+  const reservation = await reserveImageGenerationUsage({
+    channel: "messenger",
+    senderId: input.psid,
+  });
   const quotaState = await getOrCreateState(input.psid);
   const bypassApplied = hasQuotaBypass(input.psid, quotaState.userKey);
   const allowed = Boolean(reservation);
