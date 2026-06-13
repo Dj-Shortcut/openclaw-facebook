@@ -63,6 +63,7 @@ interface ImageGenerator {
     };
     promptHint?: string;
     previousResponseId?: string;
+    onProviderAttempt?: () => Promise<void>;
     userKey: string;
     reqId: string;
   }): Promise<{
@@ -88,6 +89,7 @@ type GeneratorInput = {
   };
   promptHint?: string;
   previousResponseId?: string;
+  onProviderAttempt?: () => Promise<void>;
   userKey: string;
   reqId: string;
 };
@@ -272,6 +274,7 @@ export class OpenAiImageGenerator implements ImageGenerator {
       });
 
       await assertMessengerDailyImageBudgetAvailable({ reqId: input.reqId });
+      await input.onProviderAttempt?.();
       const response = await fetchOpenAiImageResponse(requestContext, {
         reqId: input.reqId,
         startedAt,

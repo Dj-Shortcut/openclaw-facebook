@@ -20,6 +20,7 @@ import {
   commitImageGenerationSuccess,
   getFreeDailyLimit,
   hasQuotaBypass,
+  MessengerQuotaReservationCommitError,
   releaseImageGenerationReservation,
   reserveImageGenerationForAttempt,
   type ImageGenerationQuotaReservation,
@@ -74,13 +75,6 @@ class MessengerGenerationDeliveryError extends Error {
     super("Messenger image delivery failed");
     this.name = "MessengerGenerationDeliveryError";
     this.cause = cause;
-  }
-}
-
-class MessengerGenerationQuotaCommitError extends Error {
-  constructor() {
-    super("Messenger image quota reservation could not be committed");
-    this.name = "MessengerGenerationQuotaCommitError";
   }
 }
 
@@ -160,6 +154,28 @@ export function createMessengerGenerationJobRunner(
             (sourceImageUrl === state.lastGeneratedUrl ||
               sourceImageUrl === state.lastImageUrl)
           );
+          const commitProviderAttemptQuota = async () => {
+            if (quotaCommitted) {
+              return;
+            }
+
+            const committed = await commitImageGenerationSuccess(
+              psid,
+              quotaReservation
+            );
+            if (!committed) {
+              throw new MessengerQuotaReservationCommitError();
+            }
+
+            quotaCommitted = true;
+            safeLog("quota_decision", {
+              action: "commit_provider_attempt",
+              psidHash: anonymizePsid(psid).slice(0, 12),
+              generationKind: resolvedGenerationKind,
+              allowed: true,
+            });
+          };
+
           const generationResult = await executeGenerationFlow({
             generationKind: resolvedGenerationKind,
             userId,
@@ -176,9 +192,11 @@ export function createMessengerGenerationJobRunner(
                 ? "stored"
                 : state.lastPhotoSource
               : undefined,
+            onProviderAttempt: commitProviderAttemptQuota,
           });
 
           if (generationResult.kind === "success") {
+            await commitProviderAttemptQuota();
             await handleGenerationSuccess({
               deps,
               generationResult,
@@ -188,10 +206,6 @@ export function createMessengerGenerationJobRunner(
               resolvedGenerationKind,
               userId,
               lang,
-              quotaReservation,
-              markQuotaCommitted: () => {
-                quotaCommitted = true;
-              },
               rememberSendOutcome,
             });
             return;
@@ -534,8 +548,6 @@ async function handleGenerationSuccess(input: {
   resolvedGenerationKind: GenerationKind;
   userId: string;
   lang: MessengerGenerationJob["lang"];
-  quotaReservation: ImageGenerationQuotaReservation;
-  markQuotaCommitted: () => void;
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
 }): Promise<void> {
   const { imageUrl, metrics, mode, proof } = input.generationResult;
@@ -575,14 +587,6 @@ async function handleGenerationSuccess(input: {
   await Promise.resolve(
     markMessengerGenerationCompleted(input.reqId, imageUrl, input.userId)
   );
-  const quotaCommitted = await commitImageGenerationSuccess(
-    input.psid,
-    input.quotaReservation
-  );
-  if (!quotaCommitted) {
-    throw new MessengerGenerationQuotaCommitError();
-  }
-  input.markQuotaCommitted();
   await setLastGenerated(input.psid, imageUrl);
   await setLastGenerationContext(input.psid, { prompt: input.promptHint });
 

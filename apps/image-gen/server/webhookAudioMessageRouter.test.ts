@@ -18,7 +18,7 @@ const {
   safeLogMock: vi.fn(),
   handleTextMessageMock: vi.fn(async () => undefined),
   reserveTranscriptionForAttemptMock: vi.fn(async () => ({ token: "quota-lock" })),
-  commitTranscriptionSuccessMock: vi.fn(async () => undefined),
+  commitTranscriptionSuccessMock: vi.fn(async () => true),
   releaseTranscriptionReservationMock: vi.fn(async () => undefined),
   fetchExternalSourceImageForIngressMock: vi.fn().mockResolvedValue({
     buffer: Buffer.from([1, 2, 3, 4]),
@@ -45,6 +45,7 @@ vi.mock("./_core/messengerQuota", () => ({
   reserveTranscriptionForAttempt: reserveTranscriptionForAttemptMock,
   commitTranscriptionSuccess: commitTranscriptionSuccessMock,
   releaseTranscriptionReservation: releaseTranscriptionReservationMock,
+  MessengerQuotaReservationCommitError: class MessengerQuotaReservationCommitError extends Error {},
 }));
 
 import type { HandlerContext } from "./_core/webhookHandlerTypes";
@@ -91,6 +92,7 @@ describe("webhook audio message router", () => {
     reserveTranscriptionForAttemptMock.mockClear();
     reserveTranscriptionForAttemptMock.mockResolvedValue({ token: "quota-lock" });
     commitTranscriptionSuccessMock.mockClear();
+    commitTranscriptionSuccessMock.mockResolvedValue(true);
     releaseTranscriptionReservationMock.mockClear();
     fetchExternalSourceImageForIngressMock.mockClear();
     fetchExternalSourceImageForIngressMock.mockResolvedValue({
@@ -190,7 +192,7 @@ describe("webhook audio message router", () => {
     );
   });
 
-  it("releases reserved quota when transcript is empty", async () => {
+  it("counts the provider attempt when transcript is empty", async () => {
     const ctx = makeContext();
     const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const target = typeof url === "string" ? url : url.toString();
@@ -225,8 +227,8 @@ describe("webhook audio message router", () => {
 
     expect(result).toBe(false);
     expect(reserveTranscriptionForAttemptMock).toHaveBeenCalledTimes(1);
-    expect(commitTranscriptionSuccessMock).not.toHaveBeenCalled();
-    expect(releaseTranscriptionReservationMock).toHaveBeenCalledTimes(1);
+    expect(commitTranscriptionSuccessMock).toHaveBeenCalledTimes(1);
+    expect(releaseTranscriptionReservationMock).not.toHaveBeenCalled();
   });
 
   it("skips OpenAI transcription when downloaded audio exceeds the configured size limit", async () => {
@@ -303,8 +305,8 @@ describe("webhook audio message router", () => {
 
     expect(result).toBe(false);
     expect(reserveTranscriptionForAttemptMock).toHaveBeenCalledTimes(1);
-    expect(commitTranscriptionSuccessMock).not.toHaveBeenCalled();
-    expect(releaseTranscriptionReservationMock).toHaveBeenCalledTimes(1);
+    expect(commitTranscriptionSuccessMock).toHaveBeenCalledTimes(1);
+    expect(releaseTranscriptionReservationMock).not.toHaveBeenCalled();
     expect(handleTextMessageMock).not.toHaveBeenCalled();
     expect(safeLogMock).toHaveBeenCalledWith(
       "messenger_audio_transcription_no_text",

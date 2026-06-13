@@ -1,13 +1,32 @@
 import type { BotFeature } from "../features";
-import { readScopedState, writeScopedState } from "../../stateStore";
+import {
+  checkFeatureRateLimit,
+  getFeatureRateLimitConfig,
+} from "../../featureRateLimit";
 
-const RATE_WINDOW_SECONDS = 60;
-const RATE_LIMIT = 10;
+const DEFAULT_RATE_WINDOW_SECONDS = 60;
+const DEFAULT_RATE_LIMIT = 10;
+const FEATURE_NAME = "botText";
 
-type RateLimitBucket = {
-  count: number;
-  resetAt: number;
-};
+export function getBotTextRateLimitConfig(): {
+  enabled: boolean;
+  maxMessages: number;
+  windowSeconds: number;
+} {
+  const config = getFeatureRateLimitConfig({
+    featureName: FEATURE_NAME,
+    defaultMaxAttempts: DEFAULT_RATE_LIMIT,
+    defaultWindowSeconds: DEFAULT_RATE_WINDOW_SECONDS,
+    maxEnv: "BOT_TEXT_RATE_LIMIT_MAX",
+    windowSecondsEnv: "BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS",
+  });
+
+  return {
+    enabled: config.enabled,
+    maxMessages: config.maxAttempts,
+    windowSeconds: config.windowSeconds,
+  };
+}
 
 export const rateLimitFeature: BotFeature = {
   name: "rateLimit",
@@ -16,37 +35,26 @@ export const rateLimitFeature: BotFeature = {
       return { handled: false };
     }
 
-    const key = `rate:${context.senderId}`;
-    const now = Date.now();
-    const current =
-      (await Promise.resolve(readScopedState<RateLimitBucket>("bot", key))) ?? null;
-    const activeBucket =
-      current && current.resetAt > now
-        ? current
-        : { count: 0, resetAt: now + RATE_WINDOW_SECONDS * 1000 };
-    const nextCount = activeBucket.count + 1;
-
-    await Promise.resolve(
-      writeScopedState(
-        "bot",
-        key,
-        {
-          count: nextCount,
-          resetAt: activeBucket.resetAt,
-        },
-        RATE_WINDOW_SECONDS
-      )
-    );
-
-    if (nextCount <= RATE_LIMIT) {
+    const decision = await checkFeatureRateLimit({
+      scope: "bot",
+      featureName: FEATURE_NAME,
+      subjectId: context.senderId,
+      defaultMaxAttempts: DEFAULT_RATE_LIMIT,
+      defaultWindowSeconds: DEFAULT_RATE_WINDOW_SECONDS,
+      maxEnv: "BOT_TEXT_RATE_LIMIT_MAX",
+      windowSecondsEnv: "BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS",
+    });
+    if (decision.allowed) {
       return { handled: false };
     }
 
     context.logger.warn("bot_feature_rate_limited", {
       user: context.userId,
-      count: nextCount,
+      count: decision.count,
+      maxMessages: decision.config.maxAttempts,
+      windowSeconds: decision.config.windowSeconds,
     });
-    await context.sendText("⏳ Slow down a bit.");
+    await context.sendText("Slow down a bit.");
     return { handled: true };
   },
 };

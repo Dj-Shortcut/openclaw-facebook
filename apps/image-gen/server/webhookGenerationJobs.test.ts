@@ -264,7 +264,7 @@ describe("messenger generation job safety", () => {
     expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
   });
 
-  it("releases image quota when generation returns a provider failure", async () => {
+  it("keeps image quota uncommitted when generation fails before provider attempt", async () => {
     const runner = createTestRunner();
     executeGenerationFlowMock.mockResolvedValueOnce(failureGenerationResult());
 
@@ -276,6 +276,24 @@ describe("messenger generation job safety", () => {
     });
 
     expect(getState("quota-provider-failure-user")?.quota.count).toBe(0);
+    expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("commits image quota when generation fails after provider attempt starts", async () => {
+    const runner = createTestRunner();
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      await input.onProviderAttempt();
+      return failureGenerationResult();
+    });
+
+    await runner.processMessengerGenerationJob({
+      psid: "quota-provider-attempt-failure-user",
+      userId: "quota-provider-attempt-failure-user-key",
+      reqId: "req-quota-provider-attempt-failure",
+      lang: "nl",
+    });
+
+    expect(getState("quota-provider-attempt-failure-user")?.quota.count).toBe(1);
     expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
   });
 

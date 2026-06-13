@@ -40,6 +40,8 @@ describe("bot features", () => {
     sendQuickRepliesMock.mockClear();
     sendTextMock.mockClear();
     safeLogMock.mockClear();
+    delete process.env.BOT_TEXT_RATE_LIMIT_MAX;
+    delete process.env.BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS;
   });
 
   it("rate limits inbound text spam after 10 messages", async () => {
@@ -60,7 +62,7 @@ describe("bot features", () => {
       });
     }
 
-    expect(sendTextMock).toHaveBeenCalledWith(psid, "⏳ Slow down a bit.");
+    expect(sendTextMock).toHaveBeenCalledWith(psid, "Slow down a bit.");
     const textExecutions = safeLogMock.mock.calls.filter(
       ([event]) => event === "shared_text_executing"
     );

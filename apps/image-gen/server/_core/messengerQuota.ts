@@ -30,6 +30,13 @@ export type TranscriptionQuotaReservation = {
   token: string;
 };
 
+export class MessengerQuotaReservationCommitError extends Error {
+  constructor(message = "Messenger quota reservation could not be committed") {
+    super(message);
+    this.name = "MessengerQuotaReservationCommitError";
+  }
+}
+
 export function getFreeDailyLimit(): number {
   const configured = Number(process.env.MESSENGER_FREE_DAILY_LIMIT);
   if (Number.isFinite(configured) && configured >= 0) {

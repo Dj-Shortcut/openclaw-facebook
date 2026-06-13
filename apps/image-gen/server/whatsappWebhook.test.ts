@@ -40,6 +40,7 @@ const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
 const originalAppBaseUrl = process.env.APP_BASE_URL;
 const originalAllowedHosts = process.env.SOURCE_IMAGE_ALLOWED_HOSTS;
 const originalOpenAiKey = process.env.OPENAI_API_KEY;
+const originalFreeDailyLimit = process.env.MESSENGER_FREE_DAILY_LIMIT;
 
 const processWhatsAppWebhookPayload = processConsentedWhatsAppWebhookPayload(
   processWhatsAppWebhookPayloadBase
@@ -90,6 +91,12 @@ afterAll(() => {
   } else {
     process.env.OPENAI_API_KEY = originalOpenAiKey;
   }
+
+  if (originalFreeDailyLimit === undefined) {
+    delete process.env.MESSENGER_FREE_DAILY_LIMIT;
+  } else {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = originalFreeDailyLimit;
+  }
 });
 
 afterEach(() => {
@@ -101,6 +108,7 @@ describe("whatsapp webhook flow", () => {
     process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS = "leaderbot-fb-image-gen.fly.dev";
     process.env.OPENAI_API_KEY = "dummy-key";
+    delete process.env.MESSENGER_FREE_DAILY_LIMIT;
     downloadWhatsAppMediaMock.mockReset();
     sendWhatsAppButtonsMock.mockClear();
     sendWhatsAppImageMock.mockClear();
@@ -408,6 +416,47 @@ describe("whatsapp webhook flow", () => {
           String(text).includes("Old Money")
         )
       ).toBe(false);
+    } finally {
+      generateSpy.mockRestore();
+    }
+  });
+
+  it("counts failed WhatsApp image provider attempts against the free quota", async () => {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "1";
+    const generateSpy = vi
+      .spyOn(OpenAiImageGenerator.prototype, "generate")
+      .mockImplementation(async input => {
+        await input.onProviderAttempt?.();
+        throw new Error("provider failed after billable attempt");
+      });
+
+    try {
+      await runWhatsAppImageGeneration({
+        senderId: "wa-provider-attempt-failure",
+        userId: "wa-provider-attempt-failure",
+        reqId: "req-wa-provider-attempt-failure",
+        lang: "nl",
+        promptHint: "Maak een testbeeld",
+        generationKind: "text_to_image",
+      });
+
+      expect(getState("wa-provider-attempt-failure")?.quota.count).toBe(1);
+      sendWhatsAppTextMock.mockClear();
+
+      await runWhatsAppImageGeneration({
+        senderId: "wa-provider-attempt-failure",
+        userId: "wa-provider-attempt-failure",
+        reqId: "req-wa-provider-attempt-blocked",
+        lang: "nl",
+        promptHint: "Maak nog een testbeeld",
+        generationKind: "text_to_image",
+      });
+
+      expect(generateSpy).toHaveBeenCalledTimes(1);
+      expect(sendWhatsAppTextMock).toHaveBeenCalledWith(
+        "wa-provider-attempt-failure",
+        "Je hebt je gratis credits voor vandaag opgebruikt. Kom morgen terug."
+      );
     } finally {
       generateSpy.mockRestore();
     }

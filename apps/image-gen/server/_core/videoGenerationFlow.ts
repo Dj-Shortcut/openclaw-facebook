@@ -5,6 +5,7 @@ import { t, type Lang } from "./i18n";
 import { toLogUser } from "./privacy";
 import {
   commitVideoGenerationSuccess,
+  MessengerQuotaReservationCommitError,
   releaseVideoGenerationReservation,
   reserveVideoGenerationForAttempt,
   type VideoGenerationQuotaReservation,
@@ -180,6 +181,27 @@ export function createMessengerVideoGenerationRunner(
           "generation_started"
         );
         await assertMessengerDailyVideoBudgetAvailable({ reqId });
+        const commitProviderAttemptQuota = async () => {
+          if (quotaCommitted || !reservation) {
+            return true;
+          }
+
+          quotaCommitted = await commitVideoGenerationSuccess(psid, reservation);
+          if (!quotaCommitted) {
+            throw new MessengerQuotaReservationCommitError(
+              "Messenger video quota reservation could not be committed"
+            );
+          }
+
+          safeLog("messenger_video_quota_decision", {
+            action: "commit_provider_attempt",
+            reqId,
+            user: toLogUser(userId),
+            allowed: true,
+          });
+          return true;
+        };
+        await commitProviderAttemptQuota();
         safeLog("messenger_video_generation_started", {
           reqId,
           user: toLogUser(userId),
@@ -268,18 +290,6 @@ export function createMessengerVideoGenerationRunner(
           return;
         }
 
-        quotaCommitted = await commitVideoGenerationSuccess(psid, reservation);
-        if (!quotaCommitted) {
-          sendOutcome = await sendVideoText(
-            deps,
-            psid,
-            t(lang, "outOfVideoCredits"),
-            reqId,
-            "quota_exhausted"
-          );
-          return;
-        }
-
         await Promise.resolve(
           setLastGeneratedVideo(
             psid,
@@ -305,7 +315,8 @@ export function createMessengerVideoGenerationRunner(
         sendOutcome = await sendVideoText(
           deps,
           psid,
-          error instanceof MessengerDailyVideoBudgetExceededError
+          error instanceof MessengerDailyVideoBudgetExceededError ||
+            error instanceof MessengerQuotaReservationCommitError
             ? t(lang, "outOfVideoCredits")
             : t(lang, "videoGenerationGenericFailure"),
           reqId,

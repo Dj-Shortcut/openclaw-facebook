@@ -21,6 +21,7 @@ import type { GenerationKind } from "./image-generation/generationTypes";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import { storageGet, storageKeyFromPublicUrl } from "../storage";
 import { MessengerDailyImageBudgetExceededError } from "./generationGuard";
+import { MessengerQuotaReservationCommitError } from "./messengerQuota";
 import { safeLog } from "./logger";
 
 type GenerationProof = {
@@ -80,6 +81,7 @@ type ExecuteGenerationFlowInput = {
   sourceImageUrl?: string;
   lastPhotoUrl?: string | null;
   lastPhotoSource?: SourceImageOrigin | null;
+  onProviderAttempt?: () => Promise<void>;
 };
 
 type RuntimeSourceInput = {
@@ -218,6 +220,10 @@ function classifyGenerationError(error: unknown): GenerationFlowFailureKind {
     return "generation_budget_reached";
   }
 
+  if (error instanceof MessengerQuotaReservationCommitError) {
+    return "generation_budget_reached";
+  }
+
   return "generation_failed";
 }
 
@@ -272,6 +278,7 @@ export async function executeGenerationFlow(
       trustedSourceImageUrl,
       sourceImageProvenance: trustedSourceImageUrl ? "storeInbound" : undefined,
       promptHint: input.promptHint,
+      onProviderAttempt: input.onProviderAttempt,
       userKey: input.userId,
       reqId: input.reqId,
     });
