@@ -17,14 +17,16 @@ import { t } from "./i18n";
 import { toLogUser } from "./privacy";
 import { runGuardedGeneration } from "./generationGuard";
 import {
-  commitImageGenerationSuccess,
   getFreeDailyLimit,
   hasQuotaBypass,
   MessengerQuotaReservationCommitError,
-  releaseImageGenerationReservation,
-  reserveImageGenerationForAttempt,
-  type ImageGenerationQuotaReservation,
 } from "./messengerQuota";
+import {
+  commitImageGeneration,
+  releaseImageGeneration,
+  reserveImageGeneration,
+  type GenerationQuotaReservation,
+} from "./limits/generationQuota";
 import {
   recordGenerationError,
   recordGenerationSuccess,
@@ -159,8 +161,8 @@ export function createMessengerGenerationJobRunner(
               return;
             }
 
-            const committed = await commitImageGenerationSuccess(
-              psid,
+            const committed = await commitImageGeneration(
+              { channel: "messenger", senderId: psid },
               quotaReservation
             );
             if (!committed) {
@@ -222,7 +224,10 @@ export function createMessengerGenerationJobRunner(
           });
         } finally {
           if (!quotaCommitted) {
-            await releaseImageGenerationReservation(psid, quotaReservation);
+            await releaseImageGeneration(
+              { channel: "messenger", senderId: psid },
+              quotaReservation
+            );
           }
         }
       });
@@ -508,8 +513,11 @@ async function reserveGenerationQuota(input: {
   reqId: string;
   lang: MessengerGenerationJob["lang"];
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
-}): Promise<ImageGenerationQuotaReservation | null> {
-  const reservation = await reserveImageGenerationForAttempt(input.psid);
+}): Promise<GenerationQuotaReservation | null> {
+  const reservation = await reserveImageGeneration({
+    channel: "messenger",
+    senderId: input.psid,
+  });
   const quotaState = await getOrCreateState(input.psid);
   const bypassApplied = hasQuotaBypass(input.psid, quotaState.userKey);
   const allowed = Boolean(reservation);

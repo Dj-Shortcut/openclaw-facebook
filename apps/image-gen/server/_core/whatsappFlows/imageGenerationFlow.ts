@@ -4,12 +4,12 @@ import type { GenerationKind } from "../image-generation/generationTypes";
 import { runGuardedGeneration } from "../generationGuard";
 import { t, type Lang } from "../i18n";
 import type { SourceImageOrigin } from "../messengerState";
+import { MessengerQuotaReservationCommitError } from "../messengerQuota";
 import {
-  commitImageGenerationSuccess,
-  MessengerQuotaReservationCommitError,
-  releaseImageGenerationReservation,
-  reserveImageGenerationForAttempt,
-} from "../messengerQuota";
+  commitImageGeneration,
+  releaseImageGeneration,
+  reserveImageGeneration,
+} from "../limits/generationQuota";
 import {
   clearPendingImageState,
   getOrCreateState,
@@ -81,7 +81,8 @@ async function prepareGeneration(input: ImageGenerationInput): Promise<{
   lastPhotoSource?: SourceImageOrigin | null;
 }> {
   const state = await Promise.resolve(getOrCreateState(input.senderId));
-  const resolvedSourceImageUrl = input.sourceImageUrl ?? state.lastPhotoUrl ?? undefined;
+  const resolvedSourceImageUrl =
+    input.sourceImageUrl ?? state.lastPhotoUrl ?? undefined;
 
   logGenerationRequested({
     userId: input.userId,
@@ -129,7 +130,8 @@ function logGenerationFailure(input: {
   userId: string;
   result: GenerationFailure;
 }): void {
-  const metrics = input.result.metrics ?? getGenerationMetrics(input.result.error);
+  const metrics =
+    input.result.metrics ?? getGenerationMetrics(input.result.error);
   safeLog("whatsapp_generation_failed", {
     level: "error",
     user: input.userId,
@@ -155,7 +157,9 @@ function logRejectedSourceImage(input: {
   safeLog("whatsapp_source_image_rejected", {
     level: "error",
     user: input.userId,
-    sourceImageLocation: summarizeSensitiveUrl(input.result.resolvedSourceImageUrl),
+    sourceImageLocation: summarizeSensitiveUrl(
+      input.result.resolvedSourceImageUrl
+    ),
   });
 }
 
@@ -248,7 +252,10 @@ async function runWhatsAppImageGenerationOnce(
     promptHint,
     generationKind,
   } = input;
-  const quotaReservation = await reserveImageGenerationForAttempt(senderId);
+  const quotaReservation = await reserveImageGeneration({
+    channel: "whatsapp",
+    senderId,
+  });
   if (!quotaReservation) {
     await sendQuotaExceededReply(senderId, lang);
     return;
@@ -260,8 +267,8 @@ async function runWhatsAppImageGenerationOnce(
       return;
     }
 
-    const committed = await commitImageGenerationSuccess(
-      senderId,
+    const committed = await commitImageGeneration(
+      { channel: "whatsapp", senderId },
       quotaReservation
     );
     if (!committed) {
@@ -314,7 +321,10 @@ async function runWhatsAppImageGenerationOnce(
     });
   } finally {
     if (!quotaCommitted) {
-      await releaseImageGenerationReservation(senderId, quotaReservation);
+      await releaseImageGeneration(
+        { channel: "whatsapp", senderId },
+        quotaReservation
+      );
     }
   }
 }
