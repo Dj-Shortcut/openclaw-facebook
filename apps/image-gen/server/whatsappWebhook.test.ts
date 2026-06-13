@@ -1,13 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   downloadWhatsAppMediaMock,
@@ -126,10 +117,9 @@ describe("whatsapp webhook flow", () => {
     resetMessengerEventDedupe();
   });
 
+
   it("recovers with a user-facing retry prompt when WhatsApp media download fails", async () => {
-    downloadWhatsAppMediaMock.mockRejectedValue(
-      new Error("media fetch failed")
-    );
+    downloadWhatsAppMediaMock.mockRejectedValue(new Error("media fetch failed"));
 
     await processWhatsAppWebhookPayload(
       createWhatsAppPayload({
@@ -144,11 +134,18 @@ describe("whatsapp webhook flow", () => {
       "wa-user-image-fail",
       t("nl", "missingInputImage")
     );
-    expect(getState(anonymizePsid("wa-user-image-fail"))?.stage).toBe(
-      "AWAITING_PHOTO"
-    );
+    expect(getState(anonymizePsid("wa-user-image-fail"))?.stage).toBe("AWAITING_PHOTO");
     expect(sendWhatsAppButtonsMock).not.toHaveBeenCalled();
   });
+
+
+
+
+
+
+
+
+
 
   it("runs shared help commands on WhatsApp with state-aware fallback options", async () => {
     downloadWhatsAppMediaMock.mockResolvedValue({
@@ -197,8 +194,7 @@ describe("whatsapp webhook flow", () => {
     const generateSpy = vi
       .spyOn(OpenAiImageGenerator.prototype, "generate")
       .mockResolvedValue({
-        imageUrl:
-          "https://leaderbot-fb-image-gen.fly.dev/generated/surprise.jpg",
+        imageUrl: "https://leaderbot-fb-image-gen.fly.dev/generated/surprise.jpg",
       });
 
     try {
@@ -250,8 +246,7 @@ describe("whatsapp webhook flow", () => {
       const generateSpy = vi
         .spyOn(OpenAiImageGenerator.prototype, "generate")
         .mockResolvedValue({
-          imageUrl:
-            "https://leaderbot-fb-image-gen.fly.dev/generated/director-shortcut.jpg",
+          imageUrl: "https://leaderbot-fb-image-gen.fly.dev/generated/director-shortcut.jpg",
         });
       const fetchMock = vi.fn(async () => ({
         ok: true,
@@ -356,18 +351,16 @@ describe("whatsapp webhook flow", () => {
 
     await processWhatsAppWebhookPayload(
       createWhatsAppPayload({
-        from: "wa-user-7",
-        timestamp: "1710000013",
-        type: "text",
-        text: { body: "3" },
-      })
-    );
+          from: "wa-user-7",
+          timestamp: "1710000013",
+          type: "text",
+          text: { body: "3" },
+        })
+      );
 
     expect(sendWhatsAppTextMock).toHaveBeenCalledWith(
       "wa-user-7",
-      expect.stringContaining(
-        "Privacybeleid: https://leaderbot-fb-image-gen.fly.dev/privacy"
-      )
+      expect.stringContaining("Privacybeleid: https://leaderbot-fb-image-gen.fly.dev/privacy")
     );
   });
 
@@ -393,8 +386,7 @@ describe("whatsapp webhook flow", () => {
     const generateSpy = vi
       .spyOn(OpenAiImageGenerator.prototype, "generate")
       .mockResolvedValue({
-        imageUrl:
-          "https://leaderbot-fb-image-gen.fly.dev/generated/whatsapp-prompt-first.jpg",
+        imageUrl: "https://leaderbot-fb-image-gen.fly.dev/generated/whatsapp-prompt-first.jpg",
       });
     const fetchMock = vi.fn(async () => {
       throw new Error("director social copy should not run");
@@ -471,3 +463,4 @@ describe("whatsapp webhook flow", () => {
     }
   });
 });
+
