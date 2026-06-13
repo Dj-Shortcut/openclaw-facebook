@@ -4,7 +4,12 @@ import type { GenerationKind } from "../image-generation/generationTypes";
 import { runGuardedGeneration } from "../generationGuard";
 import { t, type Lang } from "../i18n";
 import type { SourceImageOrigin } from "../messengerState";
-import { canGenerate, increment } from "../messengerQuota";
+import {
+  commitImageGenerationSuccess,
+  MessengerQuotaReservationCommitError,
+  releaseImageGenerationReservation,
+  reserveImageGenerationForAttempt,
+} from "../messengerQuota";
 import {
   clearPendingImageState,
   getOrCreateState,
@@ -109,7 +114,6 @@ async function handleGenerationSuccess(input: {
   reqId: string;
 }): Promise<void> {
   await sendWhatsAppImageReply(input.senderId, input.imageUrl);
-  await increment(input.senderId);
   await setLastGenerated(input.senderId, input.imageUrl);
   await setLastGenerationContext(input.senderId, {
     prompt: input.promptHint,
@@ -244,42 +248,73 @@ async function runWhatsAppImageGenerationOnce(
     promptHint,
     generationKind,
   } = input;
-  const allowed = await canGenerate(senderId);
-  if (!allowed) {
+  const quotaReservation = await reserveImageGenerationForAttempt(senderId);
+  if (!quotaReservation) {
     await sendQuotaExceededReply(senderId, lang);
     return;
   }
 
-  const generationContext = await prepareGeneration(input);
+  let quotaCommitted = false;
+  const commitProviderAttemptQuota = async () => {
+    if (quotaCommitted) {
+      return;
+    }
 
-  const result = await executeGenerationFlow({
-    userId,
-    reqId,
-    generationKind,
-    promptHint,
-    sourceImageUrl,
-    lastPhotoUrl: generationContext.lastPhotoUrl,
-    lastPhotoSource: generationContext.lastPhotoSource,
-  });
-
-  if (result.kind === "success") {
-    await handleGenerationSuccess({
+    const committed = await commitImageGenerationSuccess(
       senderId,
-      lang,
+      quotaReservation
+    );
+    if (!committed) {
+      throw new MessengerQuotaReservationCommitError();
+    }
+
+    quotaCommitted = true;
+    safeLog("whatsapp_quota_decision", {
+      action: "commit_provider_attempt",
+      user: userId,
+      generationKind: generationKind ?? null,
+      allowed: true,
+    });
+  };
+
+  try {
+    const generationContext = await prepareGeneration(input);
+
+    const result = await executeGenerationFlow({
+      userId,
+      reqId,
       generationKind,
       promptHint,
-      imageUrl: result.imageUrl,
-      reqId,
+      sourceImageUrl,
+      lastPhotoUrl: generationContext.lastPhotoUrl,
+      lastPhotoSource: generationContext.lastPhotoSource,
+      onProviderAttempt: commitProviderAttemptQuota,
     });
-    return;
-  }
 
-  await handleGenerationFailure({
-    senderId,
-    userId,
-    lang,
-    sourceImageUrl,
-    lastPhotoUrl: generationContext.lastPhotoUrl,
-    result,
-  });
+    if (result.kind === "success") {
+      await commitProviderAttemptQuota();
+      await handleGenerationSuccess({
+        senderId,
+        lang,
+        generationKind,
+        promptHint,
+        imageUrl: result.imageUrl,
+        reqId,
+      });
+      return;
+    }
+
+    await handleGenerationFailure({
+      senderId,
+      userId,
+      lang,
+      sourceImageUrl,
+      lastPhotoUrl: generationContext.lastPhotoUrl,
+      result,
+    });
+  } finally {
+    if (!quotaCommitted) {
+      await releaseImageGenerationReservation(senderId, quotaReservation);
+    }
+  }
 }

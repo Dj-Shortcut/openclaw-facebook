@@ -5,6 +5,7 @@ import { anonymizePsid } from "./messengerState";
 import { handleTextMessage } from "./webhookTextMessageRouter";
 import {
   commitTranscriptionSuccess,
+  MessengerQuotaReservationCommitError,
   releaseTranscriptionReservation,
   reserveTranscriptionForAttempt,
 } from "./messengerQuota";
@@ -61,6 +62,13 @@ export async function tryHandleAudioMessage(
 
   let committed = false;
   try {
+    committed = await commitTranscriptionSuccess(input.psid, reservation);
+    if (!committed) {
+      throw new MessengerQuotaReservationCommitError(
+        "Messenger audio transcription quota reservation could not be committed"
+      );
+    }
+
     const transcript = await transcribePreparedAudioMessage(
       input.reqId,
       input.psid,
@@ -70,9 +78,6 @@ export async function tryHandleAudioMessage(
     if (!transcript) {
       return false;
     }
-
-    await commitTranscriptionSuccess(input.psid, reservation);
-    committed = true;
 
     await handleTextMessage(ctx, {
       psid: input.psid,

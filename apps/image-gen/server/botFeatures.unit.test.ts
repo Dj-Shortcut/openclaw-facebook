@@ -1,10 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureDefaultBotFeaturesRegistered } from "./_core/bot/defaultFeatures";
 import { assistantCommandsFeature } from "./_core/bot/features/assistantCommandsFeature";
 import { conversationalEditingFeature } from "./_core/bot/features/conversationalEditingFeature";
 import { freeformTransformFeature } from "./_core/bot/features/freeformTransformFeature";
 import { imageRequestFeature } from "./_core/bot/features/imageRequestFeature";
-import { rateLimitFeature } from "./_core/bot/features/rateLimitFeature";
+import {
+  getBotTextRateLimitConfig,
+  rateLimitFeature,
+} from "./_core/bot/features/rateLimitFeature";
 import { statsFeature } from "./_core/bot/features/statsFeature";
 import { getBotFeatures } from "./_core/bot/features";
 import { t } from "./_core/i18n";
@@ -78,6 +81,13 @@ describe("default feature registration", () => {
 });
 
 describe("rateLimitFeature", () => {
+  afterEach(() => {
+    delete process.env.BOT_TEXT_RATE_LIMIT_MAX;
+    delete process.env.BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS;
+    delete process.env.FEATURE_RATE_LIMIT_BOT_TEXT_MAX;
+    delete process.env.FEATURE_RATE_LIMIT_BOT_TEXT_WINDOW_SECONDS;
+  });
+
   it("resets the in-memory bucket after the 60 second window", async () => {
     resetStateStore();
 
@@ -119,6 +129,58 @@ describe("rateLimitFeature", () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it("uses configured text rate limit caps", async () => {
+    resetStateStore();
+    process.env.BOT_TEXT_RATE_LIMIT_MAX = "2";
+    process.env.BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS = "30";
+    const sendText = vi.fn(async () => undefined);
+
+    for (let index = 0; index < 3; index += 1) {
+      await rateLimitFeature.onText?.(
+        makeContext({
+          senderId: "configured-rate-limit-user",
+          userId: "u-rate-configured",
+          messageText: `hello-${index}`,
+          normalizedText: `hello-${index}`,
+          sendText,
+        })
+      );
+    }
+
+    expect(sendText).toHaveBeenCalledWith("Slow down a bit.");
+  });
+
+  it("can be disabled with BOT_TEXT_RATE_LIMIT_MAX=0", async () => {
+    resetStateStore();
+    process.env.BOT_TEXT_RATE_LIMIT_MAX = "0";
+    const sendText = vi.fn(async () => undefined);
+
+    for (let index = 0; index < 12; index += 1) {
+      await rateLimitFeature.onText?.(
+        makeContext({
+          senderId: "disabled-rate-limit-user",
+          userId: "u-rate-disabled",
+          messageText: `hello-${index}`,
+          normalizedText: `hello-${index}`,
+          sendText,
+        })
+      );
+    }
+
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it("supports the generic feature rate-limit env convention", () => {
+    process.env.FEATURE_RATE_LIMIT_BOT_TEXT_MAX = "4";
+    process.env.FEATURE_RATE_LIMIT_BOT_TEXT_WINDOW_SECONDS = "45";
+
+    expect(getBotTextRateLimitConfig()).toEqual({
+      enabled: true,
+      maxMessages: 4,
+      windowSeconds: 45,
+    });
   });
 });
 

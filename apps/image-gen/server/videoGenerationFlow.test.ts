@@ -157,7 +157,7 @@ describe("messenger video generation flow", () => {
     );
   });
 
-  it("releases reservation and sends specific copy on provider failure", async () => {
+  it("counts quota and sends specific copy on provider failure", async () => {
     const provider = makeProvider({
       kind: "failure",
       provider: "test",
@@ -187,11 +187,11 @@ describe("messenger video generation flow", () => {
     const state = await Promise.resolve(
       getOrCreateState("video-provider-failure-user")
     );
-    expect(state.videoGenerationQuota.count).toBe(0);
+    expect(state.videoGenerationQuota.count).toBe(1);
     expect(state.videoGenerationQuotaReservation).toBeNull();
   });
 
-  it("uses timeout copy and releases reservation on provider timeout", async () => {
+  it("uses timeout copy and counts quota on provider timeout", async () => {
     const provider = makeProvider({
       kind: "failure",
       provider: "test",
@@ -218,11 +218,11 @@ describe("messenger video generation flow", () => {
       "req-video-timeout"
     );
     const state = await Promise.resolve(getOrCreateState("video-timeout-user"));
-    expect(state.videoGenerationQuota.count).toBe(0);
+    expect(state.videoGenerationQuota.count).toBe(1);
     expect(state.videoGenerationQuotaReservation).toBeNull();
   });
 
-  it("uses timeout copy and releases reservation when the full video flow exceeds its deadline", async () => {
+  it("uses timeout copy and counts quota when the full video flow exceeds its deadline", async () => {
     vi.useFakeTimers();
     process.env.MESSENGER_VIDEO_FLOW_TIMEOUT_MS = "5";
     const provider = makeDelayedProvider(10, {
@@ -257,7 +257,7 @@ describe("messenger video generation flow", () => {
     const state = await Promise.resolve(
       getOrCreateState("video-flow-timeout-user")
     );
-    expect(state.videoGenerationQuota.count).toBe(0);
+    expect(state.videoGenerationQuota.count).toBe(1);
     expect(state.videoGenerationQuotaReservation).toBeNull();
     expect(safeLogMock).toHaveBeenCalledWith(
       "messenger_video_generation_flow_timeout",
@@ -304,7 +304,7 @@ describe("messenger video generation flow", () => {
     );
   });
 
-  it("releases reservation when generated video storage fails", async () => {
+  it("counts quota when generated video storage fails after provider success", async () => {
     storagePutMock.mockRejectedValueOnce(new Error("storage unavailable"));
     const provider = makeProvider({
       kind: "success",
@@ -335,7 +335,7 @@ describe("messenger video generation flow", () => {
     const state = await Promise.resolve(
       getOrCreateState("video-storage-failure-user")
     );
-    expect(state.videoGenerationQuota.count).toBe(0);
+    expect(state.videoGenerationQuota.count).toBe(1);
     expect(state.videoGenerationQuotaReservation).toBeNull();
   });
 });

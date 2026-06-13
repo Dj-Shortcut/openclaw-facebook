@@ -174,17 +174,23 @@ When enabled, the first photo upload asks the user whether Leaderbot may keep th
 
 For the full legal/ops checklist, rollout guidance, and kill-switch procedure, see [`docs/face-memory.md`](docs/face-memory.md).
 
-## Quota model
+## Quota and rate-limit model
 
-There are two quota layers in the codebase, each with a 2-image/day free limit:
+There are multiple quota and rate-limit layers in the codebase:
 
-1. **Messenger flow quota in state** (`server/_core/messengerQuota.ts`)
+1. **Channel user quota in state** (`server/_core/messengerQuota.ts`)
    - Stored with `quota.dayKey` + `quota.count` in the user conversation state.
    - Resets by UTC day key.
+   - Messenger and WhatsApp image-generation attempts reserve quota before work starts and commit the quota when the OpenAI provider request is about to run. Messenger audio transcription and generated-video attempts follow the same rule. Preflight failures such as missing/invalid source images, missing API keys, oversized audio, or unsupported media can be retried without burning credits; provider attempts, timeouts, parse/upload failures, and delivery failures are counted.
 
 2. **Database-backed quota** (`dailyQuota` table, used by DB helpers)
    - Tracks per-user daily usage (`YYYY-MM-DD`, UTC).
    - Includes atomic reserve/release helpers for safer concurrent updates.
+
+3. **Provider and bot rate limits**
+   - Global image/video caps and concurrency locks bound costly provider calls.
+   - Bot text rate limiting is feature-scoped and configurable so new bot features can use the same env-driven balancing pattern instead of hardcoded limits.
+   - New feature-specific limiters should use `server/_core/featureRateLimit.ts` and the `FEATURE_RATE_LIMIT_<FEATURE>_MAX` / `FEATURE_RATE_LIMIT_<FEATURE>_WINDOW_SECONDS` env convention, with explicit aliases only when needed for backwards compatibility.
 
 Related files:
 
@@ -227,9 +233,18 @@ Operational env shortlist: [`docs/operations/ENV_SHORTLIST.md`](docs/operations/
 - `DEFAULT_MESSENGER_LANG` (`nl`/`en` fallback behavior)
 - `PRIVACY_POLICY_URL` (link sent in privacy quick reply)
 - `MESSENGER_MAX_IMAGE_JOBS` (global cap for concurrent image generations, default `3`; Redis-backed across instances when `REDIS_URL` is set)
-- `MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS` (Redis-backed global generation slot TTL, default `120000`)
+- `MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS` (Redis-backed global generation slot TTL, default `240000`)
 - `MESSENGER_PSID_COOLDOWN_MS` (optional per-PSID cooldown between generations, default `0`)
-- `MESSENGER_PSID_LOCK_TTL_MS` (per-PSID in-flight lock TTL, default `120000`)
+- `MESSENGER_PSID_LOCK_TTL_MS` (per-PSID image in-flight lock TTL, default `240000`)
+- `MESSENGER_VIDEO_PSID_LOCK_TTL_MS` (per-PSID video in-flight lock TTL, default `900000`)
+- `MESSENGER_FREE_DAILY_LIMIT` (per-user daily image-generation provider-attempt cap, default `3`)
+- `MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT` (per-user daily audio transcription cap, default `3`)
+- `MESSENGER_VIDEO_GENERATION_DAILY_LIMIT` (per-user daily video-generation cap, default `1`)
+- `MESSENGER_GLOBAL_DAILY_IMAGE_CAP` (optional global daily image provider-attempt cap)
+- `MESSENGER_GLOBAL_DAILY_VIDEO_CAP` (optional global daily video provider-attempt cap)
+- `BOT_TEXT_RATE_LIMIT_MAX` (shared bot text-message limit per sender/window, default `10`; set `0` to disable this text limiter)
+- `BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS` (shared bot text rate-limit window, default `60`)
+- `FEATURE_RATE_LIMIT_<FEATURE>_MAX`, `FEATURE_RATE_LIMIT_<FEATURE>_WINDOW_SECONDS` (generic convention for new feature-scoped rate limits; feature names are uppercased with non-alphanumeric separators converted to `_`)
 - `GRAPH_API_MAX_RETRIES`, `GRAPH_API_RETRY_BASE_MS` (retry policy for Meta Graph API `429`/`5xx` responses)
 - `ADMIN_TOKEN` (protects `/debug/build`)
 - `NODE_ENV` (set to `production` to enforce production-only checks such as required `REDIS_URL`)

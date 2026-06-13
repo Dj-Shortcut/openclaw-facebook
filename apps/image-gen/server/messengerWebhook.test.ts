@@ -2845,7 +2845,7 @@ describe("bot rate limit feature", () => {
 
     expect(sendTextMock).toHaveBeenLastCalledWith(
       senderId,
-      "⏳ Slow down a bit."
+      "Slow down a bit."
     );
   });
 });
