@@ -181,6 +181,7 @@ export function createMessengerVideoGenerationRunner(
           "generation_started"
         );
         await assertMessengerDailyVideoBudgetAvailable({ reqId });
+        const provider = getVideoProvider();
         const commitProviderAttemptQuota = async () => {
           if (quotaCommitted || !reservation) {
             return true;
@@ -208,7 +209,7 @@ export function createMessengerVideoGenerationRunner(
           psidHash: anonymizePsid(psid).slice(0, 12),
         });
 
-        const providerResult = await getVideoProvider().generateVideo({
+        const providerResult = await provider.generateVideo({
           prompt: promptHint,
           sourceImageUrl,
           reqId,

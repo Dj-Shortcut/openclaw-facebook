@@ -157,6 +157,34 @@ describe("messenger video generation flow", () => {
     );
   });
 
+  it("does not count quota when video provider configuration is missing", async () => {
+    setVideoProviderForTests(null);
+    const deps = makeDeps();
+    const runVideoGeneration = createMessengerVideoGenerationRunner(deps);
+
+    await runVideoGeneration(
+      "video-provider-config-missing-user",
+      "video-provider-config-missing-user-key",
+      "req-video-provider-config-missing",
+      "nl",
+      "https://img.example/source.jpg",
+      "laat hem bewegen"
+    );
+
+    expect(storagePutMock).not.toHaveBeenCalled();
+    expect(deps.sendLoggedVideo).not.toHaveBeenCalled();
+    expect(deps.sendLoggedText).toHaveBeenCalledWith(
+      "video-provider-config-missing-user",
+      t("nl", "videoGenerationGenericFailure"),
+      "req-video-provider-config-missing"
+    );
+    const state = await Promise.resolve(
+      getOrCreateState("video-provider-config-missing-user")
+    );
+    expect(state.videoGenerationQuota.count).toBe(0);
+    expect(state.videoGenerationQuotaReservation).toBeNull();
+  });
+
   it("counts quota and sends specific copy on provider failure", async () => {
     const provider = makeProvider({
       kind: "failure",
