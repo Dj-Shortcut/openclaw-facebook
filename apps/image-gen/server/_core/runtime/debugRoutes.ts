@@ -32,6 +32,14 @@ export function registerVersionRoute(
   });
 }
 
+export function registerSentryDebugRoute(app: express.Express) {
+  if (process.env.NODE_ENV !== "production") {
+    app.get("/debug/sentry", () => {
+      throw new Error("Sentry smoke test");
+    });
+  }
+}
+
 export function registerDebugRoutes(app: express.Express, gitSha: string) {
   app.get(
     "/debug/build",

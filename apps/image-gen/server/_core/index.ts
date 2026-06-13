@@ -56,6 +56,7 @@ import { safeLog } from "./logger";
 import {
   buildVersionPayload,
   registerDebugRoutes,
+  registerSentryDebugRoute,
   registerVersionRoute,
 } from "./runtime/debugRoutes";
 import { registerHealthRoutes } from "./runtime/healthRoutes";
@@ -175,11 +176,7 @@ async function startServer() {
 
   app.use(createRequestMetricsMiddleware());
 
-  if (process.env.NODE_ENV !== "production") {
-    app.get("/debug/sentry", () => {
-      throw new Error("Sentry smoke test");
-    });
-  }
+  registerSentryDebugRoute(app);
 
   app.use(
     express.json({
