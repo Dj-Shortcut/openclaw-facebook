@@ -22,10 +22,10 @@ import {
   MessengerQuotaReservationCommitError,
 } from "./messengerQuota";
 import {
-  commitImageGeneration,
-  releaseImageGeneration,
-  reserveImageGeneration,
-  type GenerationQuotaReservation,
+  commitImageGenerationUsage,
+  releaseImageGenerationUsage,
+  reserveImageGenerationUsage,
+  type ImageGenerationQuotaReservation,
 } from "./limits/generationQuota";
 import {
   recordGenerationError,
@@ -161,10 +161,11 @@ export function createMessengerGenerationJobRunner(
               return;
             }
 
-            const committed = await commitImageGeneration(
-              { channel: "messenger", senderId: psid },
-              quotaReservation
-            );
+            const committed = await commitImageGenerationUsage({
+              channel: "messenger",
+              senderId: psid,
+              reservation: quotaReservation,
+            });
             if (!committed) {
               throw new MessengerQuotaReservationCommitError();
             }
@@ -224,10 +225,11 @@ export function createMessengerGenerationJobRunner(
           });
         } finally {
           if (!quotaCommitted) {
-            await releaseImageGeneration(
-              { channel: "messenger", senderId: psid },
-              quotaReservation
-            );
+            await releaseImageGenerationUsage({
+              channel: "messenger",
+              senderId: psid,
+              reservation: quotaReservation,
+            });
           }
         }
       });
@@ -513,8 +515,8 @@ async function reserveGenerationQuota(input: {
   reqId: string;
   lang: MessengerGenerationJob["lang"];
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
-}): Promise<GenerationQuotaReservation | null> {
-  const reservation = await reserveImageGeneration({
+}): Promise<ImageGenerationQuotaReservation | null> {
+  const reservation = await reserveImageGenerationUsage({
     channel: "messenger",
     senderId: input.psid,
   });

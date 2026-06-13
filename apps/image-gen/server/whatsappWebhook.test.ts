@@ -411,6 +411,7 @@ describe("whatsapp webhook flow", () => {
       expect(getState("wa-stale-director-success")?.lastPrompt).toBe(
         "Maak een krachtige samurai als hoofdonderwerp"
       );
+      expect(getState("wa-stale-director-success")?.quota.count).toBe(1);
       expect(
         sendWhatsAppTextMock.mock.calls.some(([, text]) =>
           String(text).includes("Old Money")

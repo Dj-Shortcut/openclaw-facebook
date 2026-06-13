@@ -1,41 +1,62 @@
 import {
   canGenerate,
   commitImageGenerationSuccess,
+  increment,
+  MessengerQuotaReservationCommitError,
   releaseImageGenerationReservation,
   reserveImageGenerationForAttempt,
   type ImageGenerationQuotaReservation,
 } from "../messengerQuota";
 
-export type GenerationQuotaSubject = {
-  channel: "messenger" | "whatsapp";
+export type ImageGenerationQuotaChannel = "messenger" | "whatsapp";
+
+export type ImageGenerationQuotaInput = {
+  channel: ImageGenerationQuotaChannel;
   senderId: string;
-  workspaceId?: string;
 };
 
-export type GenerationQuotaReservation = ImageGenerationQuotaReservation;
+export { MessengerQuotaReservationCommitError };
+export type { ImageGenerationQuotaReservation };
+
+function quotaIdentity(input: ImageGenerationQuotaInput): string {
+  return input.senderId;
+}
 
 export async function canUseImageGeneration(
-  subject: GenerationQuotaSubject
+  input: ImageGenerationQuotaInput
 ): Promise<boolean> {
-  return canGenerate(subject.senderId);
+  return canGenerate(quotaIdentity(input));
 }
 
-export async function reserveImageGeneration(
-  subject: GenerationQuotaSubject
-): Promise<GenerationQuotaReservation | null> {
-  return reserveImageGenerationForAttempt(subject.senderId);
+export async function reserveImageGenerationUsage(
+  input: ImageGenerationQuotaInput
+): Promise<ImageGenerationQuotaReservation | null> {
+  return reserveImageGenerationForAttempt(quotaIdentity(input));
 }
 
-export async function commitImageGeneration(
-  subject: GenerationQuotaSubject,
-  reservation: GenerationQuotaReservation
+export async function commitImageGenerationUsage(
+  input: ImageGenerationQuotaInput & {
+    reservation?: ImageGenerationQuotaReservation;
+  }
 ): Promise<boolean> {
-  return commitImageGenerationSuccess(subject.senderId, reservation);
+  if (input.reservation) {
+    return commitImageGenerationSuccess(
+      quotaIdentity(input),
+      input.reservation
+    );
+  }
+
+  await increment(quotaIdentity(input));
+  return true;
 }
 
-export async function releaseImageGeneration(
-  subject: GenerationQuotaSubject,
-  reservation: GenerationQuotaReservation
+export async function releaseImageGenerationUsage(
+  input: ImageGenerationQuotaInput & {
+    reservation: ImageGenerationQuotaReservation;
+  }
 ): Promise<void> {
-  await releaseImageGenerationReservation(subject.senderId, reservation);
+  await releaseImageGenerationReservation(
+    quotaIdentity(input),
+    input.reservation
+  );
 }

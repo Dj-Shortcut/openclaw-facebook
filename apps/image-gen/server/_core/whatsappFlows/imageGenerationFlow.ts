@@ -4,11 +4,12 @@ import type { GenerationKind } from "../image-generation/generationTypes";
 import { runGuardedGeneration } from "../generationGuard";
 import { t, type Lang } from "../i18n";
 import type { SourceImageOrigin } from "../messengerState";
-import { MessengerQuotaReservationCommitError } from "../messengerQuota";
 import {
-  commitImageGeneration,
-  releaseImageGeneration,
-  reserveImageGeneration,
+  canUseImageGeneration,
+  commitImageGenerationUsage,
+  MessengerQuotaReservationCommitError,
+  releaseImageGenerationUsage,
+  reserveImageGenerationUsage,
 } from "../limits/generationQuota";
 import {
   clearPendingImageState,
@@ -252,10 +253,13 @@ async function runWhatsAppImageGenerationOnce(
     promptHint,
     generationKind,
   } = input;
-  const quotaReservation = await reserveImageGeneration({
-    channel: "whatsapp",
-    senderId,
-  });
+  const quotaInput = { channel: "whatsapp" as const, senderId };
+  if (!(await canUseImageGeneration(quotaInput))) {
+    await sendQuotaExceededReply(senderId, lang);
+    return;
+  }
+
+  const quotaReservation = await reserveImageGenerationUsage(quotaInput);
   if (!quotaReservation) {
     await sendQuotaExceededReply(senderId, lang);
     return;
@@ -267,10 +271,10 @@ async function runWhatsAppImageGenerationOnce(
       return;
     }
 
-    const committed = await commitImageGeneration(
-      { channel: "whatsapp", senderId },
-      quotaReservation
-    );
+    const committed = await commitImageGenerationUsage({
+      ...quotaInput,
+      reservation: quotaReservation,
+    });
     if (!committed) {
       throw new MessengerQuotaReservationCommitError();
     }
@@ -321,10 +325,10 @@ async function runWhatsAppImageGenerationOnce(
     });
   } finally {
     if (!quotaCommitted) {
-      await releaseImageGeneration(
-        { channel: "whatsapp", senderId },
-        quotaReservation
-      );
+      await releaseImageGenerationUsage({
+        ...quotaInput,
+        reservation: quotaReservation,
+      });
     }
   }
 }
