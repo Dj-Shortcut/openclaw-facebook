@@ -62,15 +62,18 @@ describe("OpenAiVideoProvider", () => {
       );
     global.fetch = fetchMock;
 
+    const onProviderAttempt = vi.fn(async () => undefined);
     const result = await new OpenAiVideoProvider().generateVideo({
       prompt: "make it dance",
       sourceImageUrl: "https://img.example/source.jpg",
       reqId: "req-openai-video-retry",
       userKey: "user-key",
       timeoutMs: 10_000,
+      onProviderAttempt,
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(onProviderAttempt).toHaveBeenCalledTimes(2);
     const [, createRequest] = fetchMock.mock.calls[1] as [string, RequestInit];
     expect(createRequest.body).toBeInstanceOf(FormData);
     expect((createRequest.body as FormData).get("input_reference")).toBeInstanceOf(
@@ -87,5 +90,34 @@ describe("OpenAiVideoProvider", () => {
       2,
       3,
     ]);
+  });
+
+  it("does not report a provider attempt when OpenAI preflight fails", async () => {
+    delete process.env.OPENAI_API_KEY;
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(new Uint8Array([9, 8, 7]), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      })
+    );
+    global.fetch = fetchMock;
+    const onProviderAttempt = vi.fn(async () => undefined);
+
+    const result = await new OpenAiVideoProvider().generateVideo({
+      prompt: "make it dance",
+      sourceImageUrl: "https://img.example/source.jpg",
+      reqId: "req-openai-video-missing-key",
+      userKey: "user-key",
+      timeoutMs: 10_000,
+      onProviderAttempt,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(onProviderAttempt).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      kind: "failure",
+      provider: "openai",
+      errorClass: "unknown",
+    });
   });
 });

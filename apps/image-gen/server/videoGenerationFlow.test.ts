@@ -33,7 +33,10 @@ import type { VideoProvider } from "./_core/video-generation/videoProvider";
 
 function makeProvider(result: Awaited<ReturnType<VideoProvider["generateVideo"]>>): VideoProvider {
   return {
-    generateVideo: vi.fn(async () => result),
+    generateVideo: vi.fn(async input => {
+      await input.onProviderAttempt?.();
+      return result;
+    }),
   };
 }
 
@@ -43,7 +46,13 @@ function makeDelayedProvider(
 ): VideoProvider {
   return {
     generateVideo: vi.fn(
-      () => new Promise(resolve => setTimeout(() => resolve(result), delayMs))
+      input =>
+        new Promise(resolve =>
+          setTimeout(async () => {
+            await input.onProviderAttempt?.();
+            resolve(result);
+          }, delayMs)
+        )
     ),
   };
 }

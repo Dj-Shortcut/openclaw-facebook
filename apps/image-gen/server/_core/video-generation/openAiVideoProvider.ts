@@ -235,12 +235,14 @@ async function createVideoJob(
     `source.${referenceImage.contentType.split("/")[1] || "jpg"}`
   );
 
+  const apiKey = getApiKey();
+  await input.onProviderAttempt?.();
   const response = await fetchWithTimeout(
     OPENAI_VIDEO_ENDPOINT,
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${getApiKey()}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: formData,
     },
@@ -324,7 +326,15 @@ export class OpenAiVideoProvider implements VideoProvider {
     );
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-      const result = await this.tryGenerateVideo(input).catch(classifyError);
+      const result = await this.tryGenerateVideo(input).catch(error => {
+        if (
+          error instanceof Error &&
+          error.name === "MessengerQuotaReservationCommitError"
+        ) {
+          throw error;
+        }
+        return classifyError(error);
+      });
       if (result.kind === "success" || !result.retryable || attempt >= maxRetries) {
         return result;
       }

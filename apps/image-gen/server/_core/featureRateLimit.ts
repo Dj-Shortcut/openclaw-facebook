@@ -1,9 +1,4 @@
-import { readScopedState, writeScopedState } from "./stateStore";
-
-type RateLimitBucket = {
-  count: number;
-  resetAt: number;
-};
+import { incrementExpiringCounter } from "./stateStore";
 
 export type FeatureRateLimitConfig = {
   enabled: boolean;
@@ -83,28 +78,8 @@ export async function checkFeatureRateLimit(input: {
     return { allowed: true, count: 0, config };
   }
 
-  const key = `feature-rate:${input.featureName}:${input.subjectId}`;
-  const now = Date.now();
-  const current =
-    (await Promise.resolve(readScopedState<RateLimitBucket>(input.scope, key))) ??
-    null;
-  const activeBucket =
-    current && current.resetAt > now
-      ? current
-      : { count: 0, resetAt: now + config.windowSeconds * 1000 };
-  const nextCount = activeBucket.count + 1;
-
-  await Promise.resolve(
-    writeScopedState(
-      input.scope,
-      key,
-      {
-        count: nextCount,
-        resetAt: activeBucket.resetAt,
-      },
-      config.windowSeconds
-    )
-  );
+  const key = `feature-rate:${input.scope}:${input.featureName}:${input.subjectId}`;
+  const nextCount = await incrementExpiringCounter(key, config.windowSeconds);
 
   return {
     allowed: nextCount <= config.maxAttempts,

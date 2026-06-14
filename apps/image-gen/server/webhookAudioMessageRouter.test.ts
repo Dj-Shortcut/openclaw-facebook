@@ -180,8 +180,19 @@ describe("webhook audio message router", () => {
 
     expect(result).toBe(true);
     expect(reserveTranscriptionForAttemptMock).toHaveBeenCalledTimes(1);
-    expect(commitTranscriptionSuccessMock).toHaveBeenCalledTimes(1);
-    expect(releaseTranscriptionReservationMock).not.toHaveBeenCalled();
+    expect(commitTranscriptionSuccessMock).toHaveBeenCalledWith(
+      "psid-2",
+      { token: "quota-lock" },
+      { releaseReservation: false }
+    );
+    expect(releaseTranscriptionReservationMock).toHaveBeenCalledTimes(1);
+    expect(releaseTranscriptionReservationMock).toHaveBeenCalledWith(
+      "psid-2",
+      { token: "quota-lock" }
+    );
+    expect(
+      releaseTranscriptionReservationMock.mock.invocationCallOrder[0]
+    ).toBeGreaterThan(fetchMock.mock.invocationCallOrder[0]);
     expect(handleTextMessageMock).toHaveBeenCalledWith(
       ctx,
       expect.objectContaining({
@@ -228,7 +239,7 @@ describe("webhook audio message router", () => {
     expect(result).toBe(false);
     expect(reserveTranscriptionForAttemptMock).toHaveBeenCalledTimes(1);
     expect(commitTranscriptionSuccessMock).toHaveBeenCalledTimes(1);
-    expect(releaseTranscriptionReservationMock).not.toHaveBeenCalled();
+    expect(releaseTranscriptionReservationMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips OpenAI transcription when downloaded audio exceeds the configured size limit", async () => {
@@ -306,7 +317,7 @@ describe("webhook audio message router", () => {
     expect(result).toBe(false);
     expect(reserveTranscriptionForAttemptMock).toHaveBeenCalledTimes(1);
     expect(commitTranscriptionSuccessMock).toHaveBeenCalledTimes(1);
-    expect(releaseTranscriptionReservationMock).not.toHaveBeenCalled();
+    expect(releaseTranscriptionReservationMock).toHaveBeenCalledTimes(1);
     expect(handleTextMessageMock).not.toHaveBeenCalled();
     expect(safeLogMock).toHaveBeenCalledWith(
       "messenger_audio_transcription_no_text",
