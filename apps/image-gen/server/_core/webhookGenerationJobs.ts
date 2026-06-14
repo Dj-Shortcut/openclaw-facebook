@@ -17,15 +17,6 @@ import { t } from "./i18n";
 import { toLogUser } from "./privacy";
 import { runGuardedGeneration } from "./generationGuard";
 import {
-  commitImageGenerationSuccess,
-  getFreeDailyLimit,
-  hasQuotaBypass,
-  MessengerQuotaReservationCommitError,
-  releaseImageGenerationReservation,
-  reserveImageGenerationForAttempt,
-  type ImageGenerationQuotaReservation,
-} from "./messengerQuota";
-import {
   recordGenerationError,
   recordGenerationSuccess,
 } from "./botRuntimeStats";
@@ -33,6 +24,16 @@ import { emitGenerationDiagnostic } from "./generationDiagnostics";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
 import type { GenerationKind } from "./image-generation/generationTypes";
+import type { ImageGenerationQuotaReservation } from "./limits/generationQuota";
+import {
+  buildGenerationFailureDiagnosticPayload,
+  buildGenerationSuccessDiagnosticPayload,
+  commitMessengerGenerationQuota,
+  getGenerationFailureMessage,
+  releaseMessengerGenerationQuota,
+  reserveMessengerGenerationQuota,
+  resolveGenerationKind,
+} from "./generation/generationJobCore";
 import {
   enqueueOrRunMessengerGenerationJob,
   isMessengerGenerationQueueEnabled,
@@ -94,9 +95,10 @@ export function createMessengerGenerationJobRunner(
       sourceImageUrl,
       promptHint,
     } = job;
-    const resolvedGenerationKind: GenerationKind =
-      generationKind ??
-      (sourceImageUrl ? "source_image_edit" : "text_to_image");
+    const resolvedGenerationKind = resolveGenerationKind({
+      generationKind,
+      sourceImageUrl,
+    });
     let sendOutcome: MessengerSendOutcome = MESSENGER_SEND_SKIPPED;
     const rememberSendOutcome = (outcome: MessengerSendOutcome) => {
       sendOutcome = combineMessengerSendOutcomes(sendOutcome, outcome);
@@ -159,21 +161,12 @@ export function createMessengerGenerationJobRunner(
               return;
             }
 
-            const committed = await commitImageGenerationSuccess(
+            await commitMessengerGenerationQuota({
               psid,
-              quotaReservation
-            );
-            if (!committed) {
-              throw new MessengerQuotaReservationCommitError();
-            }
-
-            quotaCommitted = true;
-            safeLog("quota_decision", {
-              action: "commit_provider_attempt",
-              psidHash: anonymizePsid(psid).slice(0, 12),
+              reservation: quotaReservation,
               generationKind: resolvedGenerationKind,
-              allowed: true,
             });
+            quotaCommitted = true;
           };
 
           const generationResult = await executeGenerationFlow({
@@ -222,7 +215,10 @@ export function createMessengerGenerationJobRunner(
           });
         } finally {
           if (!quotaCommitted) {
-            await releaseImageGenerationReservation(psid, quotaReservation);
+            await releaseMessengerGenerationQuota({
+              psid,
+              reservation: quotaReservation,
+            });
           }
         }
       });
@@ -276,9 +272,10 @@ export function createMessengerGenerationJobRunner(
     promptHint?: string,
     generationKind?: GenerationKind
   ): Promise<MessengerSendOutcome> {
-    const resolvedGenerationKind: GenerationKind =
-      generationKind ??
-      (sourceImageUrl ? "source_image_edit" : "text_to_image");
+    const resolvedGenerationKind = resolveGenerationKind({
+      generationKind,
+      sourceImageUrl,
+    });
     const result = await enqueueOrRunMessengerGenerationJob(
       {
         psid,
@@ -509,17 +506,11 @@ async function reserveGenerationQuota(input: {
   lang: MessengerGenerationJob["lang"];
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
 }): Promise<ImageGenerationQuotaReservation | null> {
-  const reservation = await reserveImageGenerationForAttempt(input.psid);
   const quotaState = await getOrCreateState(input.psid);
-  const bypassApplied = hasQuotaBypass(input.psid, quotaState.userKey);
-  const allowed = Boolean(reservation);
-  safeLog("quota_decision", {
-    action: "reserve",
-    psidHash: anonymizePsid(input.psid).slice(0, 12),
-    count: quotaState.quota.count,
-    limit: getFreeDailyLimit(),
-    bypassApplied,
-    allowed,
+  const reservation = await reserveMessengerGenerationQuota({
+    psid: input.psid,
+    userKey: quotaState.userKey,
+    quotaCount: quotaState.quota.count,
   });
   if (reservation) {
     return reservation;
@@ -606,22 +597,15 @@ async function handleGenerationSuccess(input: {
     lang: input.lang,
     rememberSendOutcome: input.rememberSendOutcome,
   });
-  emitGenerationDiagnostic({
-    generationId: input.reqId,
-    senderId: input.psid,
-    style: input.resolvedGenerationKind,
-    success: true,
-    durationsMs: {
-      source_image_downloaded: metrics.fbImageFetchMs ?? 0,
-      prompt_built: metrics.promptBuildMs ?? 0,
-      provider_payload_built: metrics.openAiPayloadBuildMs ?? 0,
-      provider_request: metrics.openAiMs ?? 0,
-      provider_response_parsed: metrics.openAiParseMs ?? 0,
-      result_uploaded_or_stored: metrics.uploadOrServeMs ?? 0,
-      messenger_send: messengerSendMs,
-      total: metrics.totalMs + messengerSendMs,
-    },
-  });
+  emitGenerationDiagnostic(
+    buildGenerationSuccessDiagnosticPayload({
+      reqId: input.reqId,
+      psid: input.psid,
+      generationKind: input.resolvedGenerationKind,
+      metrics,
+      messengerSendMs,
+    })
+  );
   await setFlowState(input.psid, "IDLE");
 }
 
@@ -719,22 +703,15 @@ async function handleGenerationFailure(input: {
     errorCode: errorClass,
     totalMs: metrics.totalMs,
   });
-  emitGenerationDiagnostic({
-    generationId: input.reqId,
-    senderId: input.psid,
-    style: input.resolvedGenerationKind,
-    success: false,
-    failureReason: input.generationResult.errorKind,
-    durationsMs: {
-      source_image_downloaded: metrics.fbImageFetchMs ?? 0,
-      prompt_built: metrics.promptBuildMs ?? 0,
-      provider_payload_built: metrics.openAiPayloadBuildMs ?? 0,
-      provider_request: metrics.openAiMs ?? 0,
-      provider_response_parsed: metrics.openAiParseMs ?? 0,
-      result_uploaded_or_stored: metrics.uploadOrServeMs ?? 0,
-      total: metrics.totalMs,
-    },
-  });
+  emitGenerationDiagnostic(
+    buildGenerationFailureDiagnosticPayload({
+      reqId: input.reqId,
+      psid: input.psid,
+      generationKind: input.resolvedGenerationKind,
+      metrics,
+      failureReason: input.generationResult.errorKind,
+    })
+  );
   recordGenerationError();
 
   const failure = getGenerationFailureMessage(
@@ -772,62 +749,4 @@ async function handleGenerationFailure(input: {
       input.reqId
     )
   );
-}
-
-function getGenerationFailureMessage(
-  errorKind: Extract<
-    Awaited<ReturnType<typeof executeGenerationFlow>>,
-    { kind: "error" }
-  >["errorKind"],
-  lang: MessengerGenerationJob["lang"]
-):
-  | {
-      handled: true;
-      text: string;
-      nextState: "AWAITING_PHOTO" | "AWAITING_EDIT_PROMPT";
-    }
-  | { handled: false; failureText: string; sendGenericFailureLead: boolean } {
-  if (errorKind === "missing_source_image") {
-    return {
-      handled: true,
-      text: t(lang, "editRequiresPhoto"),
-      nextState: "AWAITING_PHOTO",
-    };
-  }
-  if (
-    errorKind === "missing_input_image" ||
-    errorKind === "invalid_source_image"
-  ) {
-    return {
-      handled: true,
-      text: t(lang, "missingInputImage"),
-      nextState: "AWAITING_PHOTO",
-    };
-  }
-  if (errorKind === "generation_budget_reached") {
-    return {
-      handled: true,
-      text: t(lang, "generationBudgetReached"),
-      nextState: "AWAITING_EDIT_PROMPT",
-    };
-  }
-  if (errorKind === "generation_unavailable") {
-    return {
-      handled: false,
-      failureText: t(lang, "generationUnavailable"),
-      sendGenericFailureLead: true,
-    };
-  }
-  if (errorKind === "generation_timeout") {
-    return {
-      handled: false,
-      failureText: t(lang, "generationTimeout"),
-      sendGenericFailureLead: false,
-    };
-  }
-  return {
-    handled: false,
-    failureText: t(lang, "generationGenericFailure"),
-    sendGenericFailureLead: true,
-  };
 }
