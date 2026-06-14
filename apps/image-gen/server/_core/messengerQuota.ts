@@ -635,8 +635,10 @@ export async function reserveTranscriptionForAttempt(
 
 export async function commitTranscriptionSuccess(
   psid: string,
-  reservation: TranscriptionQuotaReservation
+  reservation: TranscriptionQuotaReservation,
+  options: { releaseReservation?: boolean } = {}
 ): Promise<boolean> {
+  const releaseReservation = options.releaseReservation ?? true;
   const lockKey = transcriptionQuotaLockKey(psid);
   if (!(await hasEphemeralKeyValue(lockKey, reservation.token))) {
     return false;
@@ -674,7 +676,9 @@ export async function commitTranscriptionSuccess(
     );
     return true;
   } finally {
-    await releaseTranscriptionReservation(psid, reservation);
+    if (releaseReservation) {
+      await releaseTranscriptionReservation(psid, reservation);
+    }
   }
 }
 

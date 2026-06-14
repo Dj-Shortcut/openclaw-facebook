@@ -62,7 +62,9 @@ export async function tryHandleAudioMessage(
 
   let committed = false;
   try {
-    committed = await commitTranscriptionSuccess(input.psid, reservation);
+    committed = await commitTranscriptionSuccess(input.psid, reservation, {
+      releaseReservation: false,
+    });
     if (!committed) {
       throw new MessengerQuotaReservationCommitError(
         "Messenger audio transcription quota reservation could not be committed"
@@ -89,9 +91,7 @@ export async function tryHandleAudioMessage(
     });
     return true;
   } finally {
-    if (!committed) {
-      await releaseTranscriptionReservation(input.psid, reservation);
-    }
+    await releaseTranscriptionReservation(input.psid, reservation);
   }
 }
 

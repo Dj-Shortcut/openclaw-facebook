@@ -202,7 +202,6 @@ export function createMessengerVideoGenerationRunner(
           });
           return true;
         };
-        await commitProviderAttemptQuota();
         safeLog("messenger_video_generation_started", {
           reqId,
           user: toLogUser(userId),
@@ -215,6 +214,7 @@ export function createMessengerVideoGenerationRunner(
           reqId,
           userKey: userId,
           timeoutMs: getMessengerVideoTimeoutMs(),
+          onProviderAttempt: commitProviderAttemptQuota,
         });
 
         if (hasVideoFlowTimedOut(flowDeadline)) {

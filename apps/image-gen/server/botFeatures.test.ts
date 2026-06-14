@@ -42,6 +42,8 @@ describe("bot features", () => {
     safeLogMock.mockClear();
     delete process.env.BOT_TEXT_RATE_LIMIT_MAX;
     delete process.env.BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS;
+    delete process.env.FEATURE_RATE_LIMIT_BOT_TEXT_MAX;
+    delete process.env.FEATURE_RATE_LIMIT_BOT_TEXT_WINDOW_SECONDS;
   });
 
   it("rate limits inbound text spam after 10 messages", async () => {
