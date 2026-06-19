@@ -66,6 +66,7 @@ Validated controls:
 8. [x] Messenger generated-video and audio-transcription quota also commits when provider attempts start, closing the same retry leak for newer paid features.
 9. [x] Shared bot text rate limiting is configurable via `BOT_TEXT_RATE_LIMIT_MAX` and `BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS` instead of hardcoded limits.
 10. [x] New bot features have a reusable feature-scoped limiter helper and generic `FEATURE_RATE_LIMIT_<FEATURE>_*` env convention.
+11. [x] Free-tier product targets are documented before runtime changes: `20` image provider attempts per UTC day, `30` bot text messages per `60` seconds, `5` audio transcription attempts per UTC day, and `1` video generation attempt per UTC day.
 
 Open cost-control work:
 
