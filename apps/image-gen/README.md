@@ -178,6 +178,14 @@ For the full legal/ops checklist, rollout guidance, and kill-switch procedure, s
 
 There are multiple quota and rate-limit layers in the codebase:
 
+Free Leaderbot users should be generous enough to complete a real creative loop while still bounded by abuse and budget controls:
+
+- Image generation: `20` provider attempts per sender/user identity per UTC day.
+- Bot text messages: `30` messages per sender per `60` seconds.
+- Audio transcription: `5` provider attempts per sender/user identity per UTC day.
+- Video generation: `1` provider attempt per sender/user identity per UTC day.
+- Global daily image/video caps remain operator-configured emergency brakes, not the user-facing free-tier promise.
+
 1. **Channel user quota in state** (`server/_core/messengerQuota.ts`)
    - Stored with `quota.dayKey` + `quota.count` in the user conversation state.
    - Resets by UTC day key.
@@ -237,13 +245,13 @@ Operational env shortlist: [`docs/operations/ENV_SHORTLIST.md`](docs/operations/
 - `MESSENGER_PSID_COOLDOWN_MS` (optional per-PSID cooldown between generations, default `0`)
 - `MESSENGER_PSID_LOCK_TTL_MS` (per-PSID image in-flight lock TTL, default `240000`)
 - `MESSENGER_VIDEO_PSID_LOCK_TTL_MS` (per-PSID video in-flight lock TTL, default `900000`)
-- `MESSENGER_FREE_DAILY_LIMIT` (per-user daily image-generation provider-attempt cap, default `3`)
-- `MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT` (per-user daily audio transcription cap, default `3`)
+- `MESSENGER_FREE_DAILY_LIMIT` (per-user daily image-generation provider-attempt cap, free-tier target `20`)
+- `MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT` (per-user daily audio transcription cap, free-tier target `5`)
 - `MESSENGER_VIDEO_GENERATION_DAILY_LIMIT` (per-user daily video-generation cap, default `1`)
 - `MESSENGER_GLOBAL_DAILY_IMAGE_CAP` (optional global daily image provider-attempt cap)
 - `MESSENGER_GLOBAL_DAILY_VIDEO_CAP` (optional global daily video provider-attempt cap)
-- `BOT_TEXT_RATE_LIMIT_MAX` (shared bot text-message limit per sender/window, default `10`; set `0` to disable this text limiter)
-- `BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS` (shared bot text rate-limit window, default `60`)
+- `BOT_TEXT_RATE_LIMIT_MAX` (shared bot text-message limit per sender/window, free-tier target `30`; set `0` to disable this text limiter)
+- `BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS` (shared bot text rate-limit window, free-tier target `60`)
 - `FEATURE_RATE_LIMIT_<FEATURE>_MAX`, `FEATURE_RATE_LIMIT_<FEATURE>_WINDOW_SECONDS` (generic convention for new feature-scoped rate limits; feature names are uppercased with non-alphanumeric separators converted to `_`)
 - `GRAPH_API_MAX_RETRIES`, `GRAPH_API_RETRY_BASE_MS` (retry policy for Meta Graph API `429`/`5xx` responses)
 - `ADMIN_TOKEN` (protects `/debug/build`)
