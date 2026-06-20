@@ -26,6 +26,10 @@ function mockDailyQuotaRows(rows: Array<{ imagesGenerated: number }>) {
   dbMock.select.mockReturnValue({ from });
 }
 
+/**
+ * Test suite for daily quota enforcement
+ * Ensures users can only generate up to the configured image provider-attempt cap per UTC day.
+ */
 describe("Daily Quota System", () => {
   const testUserId = 999;
 

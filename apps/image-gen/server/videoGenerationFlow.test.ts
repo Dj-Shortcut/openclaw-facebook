@@ -294,41 +294,6 @@ describe("messenger video generation flow", () => {
     );
   });
 
-  it("checks the global video budget for each provider attempt", async () => {
-    process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT = "2";
-    process.env.MESSENGER_GLOBAL_DAILY_VIDEO_CAP = "1";
-    const provider: VideoProvider = {
-      generateVideo: vi.fn(async input => {
-        await input.onProviderAttempt?.();
-        await input.onProviderAttempt?.();
-        throw new Error("second provider attempt should be rejected by global budget");
-      }),
-    };
-    setVideoProviderForTests(provider);
-    const deps = makeDeps();
-    const runVideoGeneration = createMessengerVideoGenerationRunner(deps);
-
-    await runVideoGeneration(
-      "video-global-retry-exhausted-user",
-      "video-global-retry-exhausted-user-key",
-      "req-video-global-retry-exhausted",
-      "nl",
-      "https://img.example/source.jpg",
-      "laat hem bewegen"
-    );
-
-    const state = await Promise.resolve(
-      getOrCreateState("video-global-retry-exhausted-user")
-    );
-    expect(state.videoGenerationQuota.count).toBe(1);
-    expect(state.videoGenerationQuotaReservation).toBeNull();
-    expect(deps.sendLoggedText).toHaveBeenCalledWith(
-      "video-global-retry-exhausted-user",
-      t("nl", "outOfVideoCredits"),
-      "req-video-global-retry-exhausted"
-    );
-  });
-
   it("uses timeout copy and counts quota on provider timeout", async () => {
     const provider = makeProvider({
       kind: "failure",

@@ -279,17 +279,8 @@ export class OpenAiImageGenerator implements ImageGenerator {
         startedAt,
         partialMetrics,
         onProviderAttempt: async () => {
-          const budgetNow = new Date();
-          await assertMessengerDailyImageBudgetAvailable({
-            reqId: input.reqId,
-            now: budgetNow,
-          });
-          try {
-            await input.onProviderAttempt?.();
-          } catch (error) {
-            await releaseMessengerDailyImageBudgetReservation({ now: budgetNow });
-            throw error;
-          }
+          await input.onProviderAttempt?.();
+          await assertMessengerDailyImageBudgetAvailable({ reqId: input.reqId });
         },
       });
       safeLog("image_generation_cost_estimate", {
