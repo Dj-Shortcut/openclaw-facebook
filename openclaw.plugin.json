@@ -48,6 +48,10 @@
             "type": "string",
             "enum": ["pairing", "leaderbot_free_tier"]
           },
+          "leaderbotBridgeEnabled": {
+            "type": "boolean",
+            "default": false
+          },
           "responsePrefix": { "type": "string" },
           "webhookPath": { "type": "string" },
           "defaultTo": { "type": "string" },
@@ -81,6 +85,10 @@
                   "type": "string",
                   "enum": ["pairing", "leaderbot_free_tier"]
                 },
+                "leaderbotBridgeEnabled": {
+                  "type": "boolean",
+                  "default": false
+                },
                 "responsePrefix": { "type": "string" },
                 "webhookPath": { "type": "string" },
                 "defaultTo": { "type": "string" },
@@ -101,6 +109,7 @@
         "webhookPath": { "label": "Webhook path", "placeholder": "/facebook/webhook" },
         "dmPolicy": { "label": "Direct message policy" },
         "unknownSenderMode": { "label": "Unknown sender mode" },
+        "leaderbotBridgeEnabled": { "label": "Enable Leaderbot image-generation bridge" },
         "allowFrom": { "label": "Allowed Page-scoped sender IDs" }
       }
     }

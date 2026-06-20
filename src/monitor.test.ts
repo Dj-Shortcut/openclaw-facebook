@@ -722,6 +722,7 @@ describe("processMessengerEvent unknown sender access policy", () => {
       dmPolicy: "pairing",
       allowFrom: undefined,
       unknownSenderMode: "leaderbot_free_tier",
+      leaderbotBridgeEnabled: true,
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -738,6 +739,38 @@ describe("processMessengerEvent unknown sender access policy", () => {
       },
     });
     expect(upsertPairingRequest).not.toHaveBeenCalled();
+    expect(inboundRun).not.toHaveBeenCalled();
+  });
+
+  it("keeps unknown senders in pairing when the Leaderbot bridge is not enabled", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    const inboundRun = vi.fn();
+    const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR-1", created: true }));
+    setGatewayRuntime(inboundRun, { upsertPairingRequest });
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
+      return new Response(
+        JSON.stringify({
+          message_id: "pairing-message",
+          recipient_id: "sender-mid-free-tier-disabled",
+        }),
+        {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(messengerTextEvent("mid-free-tier-disabled", "Hi"), {
+      dmPolicy: "pairing",
+      allowFrom: undefined,
+      unknownSenderMode: "leaderbot_free_tier",
+    });
+
+    expect(upsertPairingRequest).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(inboundRun).not.toHaveBeenCalled();
   });
 
@@ -772,6 +805,7 @@ describe("processMessengerEvent unknown sender access policy", () => {
           dmPolicy: "pairing",
           allowFrom: undefined,
           unknownSenderMode: "leaderbot_free_tier",
+          leaderbotBridgeEnabled: true,
         },
         { error: runtimeError },
       ),
@@ -808,6 +842,7 @@ describe("processMessengerEvent unknown sender access policy", () => {
         dmPolicy: "pairing",
         allowFrom: undefined,
         unknownSenderMode: "leaderbot_free_tier",
+        leaderbotBridgeEnabled: true,
       },
     );
 
@@ -830,11 +865,42 @@ describe("processMessengerEvent image intents", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await processGatewayTestEvent(messengerImagePromptEvent("mid-image-forward"));
+    await processGatewayTestEvent(messengerImagePromptEvent("mid-image-forward"), {
+      leaderbotBridgeEnabled: true,
+    });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
     expect(inboundRun).not.toHaveBeenCalled();
+  });
+
+  it("does not forward Messenger image prompts when the Leaderbot bridge is disabled", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    const inboundRun = vi.fn(async () => ({ dispatched: false }));
+    setGatewayRuntime(inboundRun);
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
+      return new Response(
+        JSON.stringify({
+          message_id: "typing-message",
+          recipient_id: "sender-mid-image-forward-disabled",
+        }),
+        {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(messengerImagePromptEvent("mid-image-forward-disabled"));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "https://graph.facebook.com/v20.0/page-1/messages",
+    );
+    expect(inboundRun).toHaveBeenCalledTimes(1);
   });
 
   it("sends only the image-generator-unavailable message when forwarding fails", async () => {
@@ -865,7 +931,9 @@ describe("processMessengerEvent image intents", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await processGatewayTestEvent(messengerImagePromptEvent("mid-image-forward-failure"));
+    await processGatewayTestEvent(messengerImagePromptEvent("mid-image-forward-failure"), {
+      leaderbotBridgeEnabled: true,
+    });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "POST" });

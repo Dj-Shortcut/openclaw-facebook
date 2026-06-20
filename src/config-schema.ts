@@ -23,6 +23,7 @@ const MessengerCommonConfigSchemaBase = z.object({
   allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   dmPolicy: DmPolicySchema.optional().default("pairing"),
   unknownSenderMode: UnknownSenderModeSchema.optional(),
+  leaderbotBridgeEnabled: z.boolean().optional().default(false),
   responsePrefix: z.string().optional(),
   webhookPath: z.string().optional(),
   defaultTo: z.string().optional(),

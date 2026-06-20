@@ -183,13 +183,15 @@ describe("Fly gateway startup", () => {
     configureTempGatewayEnv();
     const result = runPrepareGatewayConfig({
       OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE: "leaderbot_free_tier",
+      OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED: "1",
     });
 
     expect(result.config.channels.facebook.dmPolicy).toBe("pairing");
     expect(result.config.channels.facebook.unknownSenderMode).toBe("leaderbot_free_tier");
+    expect(result.config.channels.facebook.leaderbotBridgeEnabled).toBe(true);
   }, prepareGatewayConfigTimeoutMs);
 
-  it("keeps explicit pairing-only unknown sender mode", () => {
+  it("keeps explicit pairing-only unknown sender mode and bridge setting", () => {
     const { stateDir } = configureTempGatewayEnv();
     fs.mkdirSync(stateDir, { recursive: true });
     fs.writeFileSync(
@@ -199,6 +201,7 @@ describe("Fly gateway startup", () => {
           facebook: {
             dmPolicy: "pairing",
             unknownSenderMode: "pairing",
+            leaderbotBridgeEnabled: false,
           },
         },
       })}\n`,
@@ -210,6 +213,7 @@ describe("Fly gateway startup", () => {
 
     expect(result.config.channels.facebook.dmPolicy).toBe("pairing");
     expect(result.config.channels.facebook.unknownSenderMode).toBe("pairing");
+    expect(result.config.channels.facebook.leaderbotBridgeEnabled).toBe(false);
   }, prepareGatewayConfigTimeoutMs);
 
   it("keeps an existing persistent memory file", () => {

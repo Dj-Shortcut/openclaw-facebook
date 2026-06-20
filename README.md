@@ -13,8 +13,9 @@ Facebook Page Messenger DMs through Meta webhooks.
 
 V1 is intentionally focused: Facebook Page Messenger direct messages only. It
 does not yet implement comments, Private Replies/comment-to-DM flows, Instagram
-DMs, broader Meta automation, or general attachment workflows. Inbound media
-attachments are handled only as supported Messenger payloads for DM ingestion.
+DMs, broader Meta automation, or general OpenClaw attachment workflows. Inbound
+media attachments are handled only as supported Messenger payloads for DM
+ingestion, unless the optional Leaderbot bridge is explicitly enabled.
 
 The plugin is called `facebook` because this is the Facebook/Meta integration
 surface. Legacy `messenger`, `fb`, and `fbm` aliases remain temporarily for
@@ -116,7 +117,9 @@ repository; it is not required for Facebook Page Messenger DMs.
 
 Default setup uses `dmPolicy: "pairing"` so unknown Facebook users receive a
 pairing code before they can talk to the assistant. For a public Page bot, use
-`dmPolicy: "open"` with `allowFrom: ["*"]` to let anyone message the Page.
+`dmPolicy: "open"` with `allowFrom: ["*"]` to let anyone message the Page only
+after you have published privacy and data-retention terms for that public
+Messenger experience. For private installs, prefer `pairing` or `allowlist`.
 
 Open means the conversation entry point is public; it should not grant unknown users
 privileged tools, private memory, files, git/deploy access, or admin actions.
@@ -129,6 +132,33 @@ handling where required, and decide what data is retained, deleted, or shared
 with third-party providers before enabling this for a public Page.
 For paid or public assistants, keep billing, credits, model selection, and tool
 budgets in the OpenClaw host runtime where provider calls execute.
+
+## Optional Leaderbot image-generation bridge
+
+This package can optionally forward Messenger events and image-generation
+prompts to the separate Leaderbot image-generation service. That path can send
+Messenger event payloads, Page-scoped sender IDs, prompt text, and Messenger
+media URLs outside the OpenClaw host. It is disabled by default for ClawHub and
+private installs, even if `LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN` or
+`INTERNAL_IMAGE_REQUEST_TOKEN` exists in the host environment.
+
+Enable it only when the Page is intentionally using Leaderbot image generation
+and the Page's privacy/data-retention terms disclose that processing:
+
+```json5
+{
+  channels: {
+    facebook: {
+      dmPolicy: "pairing",
+      leaderbotBridgeEnabled: true,
+      unknownSenderMode: "leaderbot_free_tier"
+    }
+  }
+}
+```
+
+The bridge still requires a valid internal token and an HTTPS
+`LEADERBOT_IMAGE_GEN_URL` unless you are using localhost for development.
 
 ## Conversation Actions
 

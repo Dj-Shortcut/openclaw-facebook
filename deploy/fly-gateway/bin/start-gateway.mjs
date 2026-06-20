@@ -21,6 +21,8 @@ const pluginPath = process.env.OPENCLAW_FACEBOOK_PLUGIN_PATH || "/app/node_modul
 const codexPluginPath = process.env.OPENCLAW_CODEX_PLUGIN_PATH || "/app/node_modules/@openclaw/codex";
 const defaultDmPolicy = process.env.OPENCLAW_FACEBOOK_DEFAULT_DM_POLICY || "pairing";
 const defaultUnknownSenderMode = process.env.OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE || "";
+const defaultLeaderbotBridgeEnabled =
+  process.env.OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED || "";
 const defaultAgentModel = process.env.OPENCLAW_AGENT_MODEL || "";
 const defaultAgentThinking = process.env.OPENCLAW_AGENT_THINKING_DEFAULT || "";
 const allowOpen = process.env.OPENCLAW_FACEBOOK_ALLOW_OPEN === "1";
@@ -94,6 +96,22 @@ function resolveDefaultUnknownSenderMode() {
     );
   }
   return mode;
+}
+
+function resolveDefaultLeaderbotBridgeEnabled() {
+  const value = defaultLeaderbotBridgeEnabled.trim().toLowerCase();
+  if (!value) {
+    return undefined;
+  }
+  if (value === "1" || value === "true") {
+    return true;
+  }
+  if (value === "0" || value === "false") {
+    return false;
+  }
+  throw new Error(
+    'OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED must be "1", "0", "true", or "false".',
+  );
 }
 
 function copyIfMissing(sourcePath, destPath) {
@@ -198,6 +216,13 @@ function ensurePublicMessengerBaseline(config) {
   const unknownSenderMode = resolveDefaultUnknownSenderMode();
   if (unknownSenderMode && config.channels.facebook.unknownSenderMode === undefined) {
     config.channels.facebook.unknownSenderMode = unknownSenderMode;
+  }
+  const leaderbotBridgeEnabled = resolveDefaultLeaderbotBridgeEnabled();
+  if (
+    leaderbotBridgeEnabled !== undefined &&
+    config.channels.facebook.leaderbotBridgeEnabled === undefined
+  ) {
+    config.channels.facebook.leaderbotBridgeEnabled = leaderbotBridgeEnabled;
   }
 
   ensureAgentDefaults(config);

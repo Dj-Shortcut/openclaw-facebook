@@ -3,9 +3,14 @@ export const IMAGE_GEN_REQUEST_TIMEOUT_MS = 5_000;
 
 export type LeaderbotImageGenRequestConfig =
   | { ok: true; endpoint: string; token: string }
-  | { ok: false; reason: "missing_token" | "invalid_url" };
+  | { ok: false; reason: "disabled_by_config" | "missing_token" | "invalid_url" };
 
-export function resolveImageGenRequestConfig(): LeaderbotImageGenRequestConfig {
+export function resolveImageGenRequestConfig(params: {
+  leaderbotBridgeEnabled?: boolean;
+} = {}): LeaderbotImageGenRequestConfig {
+  if (params.leaderbotBridgeEnabled !== true) {
+    return { ok: false, reason: "disabled_by_config" };
+  }
   const token =
     process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN?.trim() ||
     process.env.INTERNAL_IMAGE_REQUEST_TOKEN?.trim() ||

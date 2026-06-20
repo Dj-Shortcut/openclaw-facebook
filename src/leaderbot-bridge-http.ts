@@ -31,10 +31,13 @@ export async function requestLeaderbotImageGeneration(params: {
   reqId: string;
   timestamp: number;
   trace: LeaderbotBridgeTrace;
+  leaderbotBridgeEnabled?: boolean;
   sourceImageUrl?: string;
   logStage?: LeaderbotBridgeStageLogger;
 }): Promise<boolean> {
-  const config = resolveImageGenRequestConfig();
+  const config = resolveImageGenRequestConfig({
+    leaderbotBridgeEnabled: params.leaderbotBridgeEnabled,
+  });
   if (!config.ok) {
     logLeaderbotBridgeStage(params, "image_gen_request_skipped", {
       reason: config.reason,
@@ -78,9 +81,12 @@ export async function requestLeaderbotImageGeneration(params: {
 export async function forwardLeaderbotMessengerEvent(params: {
   event: MessengerWebhookMessaging;
   trace: LeaderbotBridgeTrace;
+  leaderbotBridgeEnabled?: boolean;
   logStage?: LeaderbotBridgeStageLogger;
 }): Promise<boolean> {
-  const config = resolveImageGenRequestConfig();
+  const config = resolveImageGenRequestConfig({
+    leaderbotBridgeEnabled: params.leaderbotBridgeEnabled,
+  });
   if (!config.ok) {
     logLeaderbotBridgeStage(params, "messenger_event_forward_skipped", {
       reason: config.reason,

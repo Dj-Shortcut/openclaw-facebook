@@ -30,10 +30,12 @@ describe("openclaw plugin manifest", () => {
     const facebookSchema = manifest.channelConfigs?.facebook?.schema as {
       properties?: {
         dmPolicy?: { default?: unknown };
+        leaderbotBridgeEnabled?: { default?: unknown };
         accounts?: {
           additionalProperties?: {
             properties?: {
               dmPolicy?: { default?: unknown };
+              leaderbotBridgeEnabled?: { default?: unknown };
             };
           };
         };
@@ -43,6 +45,11 @@ describe("openclaw plugin manifest", () => {
     expect(
       facebookSchema.properties?.accounts?.additionalProperties?.properties?.dmPolicy?.default,
     ).toBe("pairing");
+    expect(facebookSchema.properties?.leaderbotBridgeEnabled?.default).toBe(false);
+    expect(
+      facebookSchema.properties?.accounts?.additionalProperties?.properties
+        ?.leaderbotBridgeEnabled?.default,
+    ).toBe(false);
     expect(manifest.channelEnvVars?.facebook).toEqual(
       expect.arrayContaining([
         "FACEBOOK_PAGE_ID",
@@ -107,6 +114,7 @@ describe("facebook config safety defaults", () => {
     const parsed = MessengerConfigSchema.parse({});
 
     expect(parsed.dmPolicy).toBe("pairing");
+    expect(parsed.leaderbotBridgeEnabled).toBe(false);
     expect(parsed.allowFrom).toBeUndefined();
   });
 });
