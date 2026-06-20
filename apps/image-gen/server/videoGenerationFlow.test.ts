@@ -228,6 +228,72 @@ describe("messenger video generation flow", () => {
     expect(state.videoGenerationQuotaReservation).toBeNull();
   });
 
+  it("counts each video provider retry against quota", async () => {
+    process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT = "2";
+    const provider: VideoProvider = {
+      generateVideo: vi.fn(async input => {
+        await input.onProviderAttempt?.();
+        await input.onProviderAttempt?.();
+        return {
+          kind: "failure",
+          provider: "test",
+          errorClass: "provider",
+          retryable: false,
+        };
+      }),
+    };
+    setVideoProviderForTests(provider);
+    const deps = makeDeps();
+    const runVideoGeneration = createMessengerVideoGenerationRunner(deps);
+
+    await runVideoGeneration(
+      "video-provider-retry-user",
+      "video-provider-retry-user-key",
+      "req-video-provider-retry",
+      "nl",
+      "https://img.example/source.jpg",
+      "laat hem bewegen"
+    );
+
+    const state = await Promise.resolve(getOrCreateState("video-provider-retry-user"));
+    expect(state.videoGenerationQuota.count).toBe(2);
+    expect(state.videoGenerationQuotaReservation).toBeNull();
+  });
+
+  it("stops video provider retries when quota is exhausted", async () => {
+    process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT = "1";
+    const provider: VideoProvider = {
+      generateVideo: vi.fn(async input => {
+        await input.onProviderAttempt?.();
+        await input.onProviderAttempt?.();
+        throw new Error("second provider attempt should be rejected by quota");
+      }),
+    };
+    setVideoProviderForTests(provider);
+    const deps = makeDeps();
+    const runVideoGeneration = createMessengerVideoGenerationRunner(deps);
+
+    await runVideoGeneration(
+      "video-provider-retry-exhausted-user",
+      "video-provider-retry-exhausted-user-key",
+      "req-video-provider-retry-exhausted",
+      "nl",
+      "https://img.example/source.jpg",
+      "laat hem bewegen"
+    );
+
+    const state = await Promise.resolve(
+      getOrCreateState("video-provider-retry-exhausted-user")
+    );
+    expect(state.videoGenerationQuota.count).toBe(1);
+    expect(state.videoGenerationQuotaReservation).toBeNull();
+    expect(deps.sendLoggedText).toHaveBeenCalledWith(
+      "video-provider-retry-exhausted-user",
+      t("nl", "outOfVideoCredits"),
+      "req-video-provider-retry-exhausted"
+    );
+  });
+
   it("uses timeout copy and counts quota on provider timeout", async () => {
     const provider = makeProvider({
       kind: "failure",

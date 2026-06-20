@@ -18,6 +18,11 @@ import {
 } from "./_core/messengerQuota";
 import { getOrCreateState, resetStateStore, setFlowState, setPendingImage } from "./_core/messengerState";
 import { getDayKey } from "./_core/messengerStateNormalization";
+import {
+  getAudioTranscriptionDailyLimit,
+  getImageGenerationDailyLimit,
+  getVideoGenerationDailyLimit,
+} from "./_core/quotaPolicy";
 import { deleteState, readState, updateStoredState } from "./_core/stateStore";
 
 const TEST_PEPPER = "ci-test-pepper";
@@ -149,6 +154,16 @@ describe("messenger quota dayKey", () => {
 
     expect(await canGenerate(userId)).toBe(false);
     expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(20);
+  });
+
+  it("falls back to documented limits for blank quota env values", () => {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = " ";
+    process.env.MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT = "";
+    process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT = "\t";
+
+    expect(getImageGenerationDailyLimit()).toBe(20);
+    expect(getAudioTranscriptionDailyLimit()).toBe(5);
+    expect(getVideoGenerationDailyLimit()).toBe(1);
   });
 
   it("commits a normal reserved image quota success", async () => {

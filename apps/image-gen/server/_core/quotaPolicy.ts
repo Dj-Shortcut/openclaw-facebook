@@ -5,7 +5,12 @@ export const DEFAULT_BOT_TEXT_RATE_LIMIT_MAX = 30;
 export const DEFAULT_BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS = 60;
 
 function readNonNegativeInt(name: string, fallback: number): number {
-  const configured = Number(process.env[name]);
+  const raw = process.env[name];
+  if (typeof raw !== "string" || raw.trim() === "") {
+    return fallback;
+  }
+
+  const configured = Number(raw);
   if (Number.isFinite(configured) && configured >= 0) {
     return Math.floor(configured);
   }
