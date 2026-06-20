@@ -431,4 +431,29 @@ export async function incrementExpiringCounter(
   return value;
 }
 
+export async function decrementExpiringCounter(key: string): Promise<number> {
+  if (!isRedisStateStoreEnabled()) {
+    clearExpiredMemoryCounters();
+    const existing = memoryCounters.get(key);
+    const value = Math.max(0, (existing?.value ?? 0) - 1);
+    if (!existing || value === 0) {
+      memoryCounters.delete(key);
+      return 0;
+    }
+    memoryCounters.set(key, {
+      value,
+      expiresAt: existing.expiresAt,
+    });
+    return value;
+  }
+
+  const redis = await getRedisClient();
+  const value = await redis.eval(
+    "if redis.call('exists', KEYS[1]) == 0 then return 0 end local value = redis.call('decr', KEYS[1]) if value <= 0 then redis.call('del', KEYS[1]) return 0 end return value",
+    1,
+    key
+  );
+  return typeof value === "number" ? value : Number(value);
+}
+
 export { isPromiseLike };

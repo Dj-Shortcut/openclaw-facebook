@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   deleteEphemeralKeyIfValue,
+  decrementExpiringCounter,
   hasEphemeralKey,
   incrementExpiringCounter,
   isRedisStateStoreEnabled,
@@ -238,6 +239,7 @@ export async function assertMessengerDailyImageBudgetAvailable(input: {
   const key = `${DAILY_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
   const count = await incrementExpiringCounter(key, secondsUntilNextUtcDay(now));
   if (count > cap) {
+    await decrementExpiringCounter(key);
     safeLog("messenger_daily_image_budget_reached", {
       level: "warn",
       reqId: input.reqId,
@@ -246,6 +248,19 @@ export async function assertMessengerDailyImageBudgetAvailable(input: {
     });
     throw new MessengerDailyImageBudgetExceededError();
   }
+}
+
+export async function releaseMessengerDailyImageBudgetReservation(input: {
+  now?: Date;
+} = {}): Promise<void> {
+  const { cap } = getMessengerDailyImageBudgetConfig();
+  if (!cap) {
+    return;
+  }
+
+  const now = input.now ?? new Date();
+  const key = `${DAILY_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
+  await decrementExpiringCounter(key);
 }
 
 export async function assertMessengerDailyVideoBudgetAvailable(input: {
@@ -261,6 +276,7 @@ export async function assertMessengerDailyVideoBudgetAvailable(input: {
   const key = `${DAILY_VIDEO_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
   const count = await incrementExpiringCounter(key, secondsUntilNextUtcDay(now));
   if (count > cap) {
+    await decrementExpiringCounter(key);
     safeLog("messenger_daily_video_budget_reached", {
       level: "warn",
       reqId: input.reqId,
@@ -269,6 +285,19 @@ export async function assertMessengerDailyVideoBudgetAvailable(input: {
     });
     throw new MessengerDailyVideoBudgetExceededError();
   }
+}
+
+export async function releaseMessengerDailyVideoBudgetReservation(input: {
+  now?: Date;
+} = {}): Promise<void> {
+  const cap = readPositiveInt("MESSENGER_GLOBAL_DAILY_VIDEO_CAP");
+  if (!cap) {
+    return;
+  }
+
+  const now = input.now ?? new Date();
+  const key = `${DAILY_VIDEO_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
+  await decrementExpiringCounter(key);
 }
 
 export async function runGuardedGeneration<T>(

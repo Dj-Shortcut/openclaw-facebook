@@ -45,6 +45,7 @@ The container preserves `/data/openclaw.json` and only seeds non-secret defaults
 - `plugins.entries.facebook.enabled` defaults to `true`.
 - `channels.facebook.dmPolicy` defaults to `pairing`.
 - `channels.facebook.unknownSenderMode` is seeded from `OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE` when missing. The public Leaderbot gateway sets this to `leaderbot_free_tier` so new Page senders enter the free-tier image flow while private installs can keep or set `pairing`.
+- `channels.facebook.leaderbotBridgeEnabled` is seeded from `OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED` when missing. Keep it unset/false for ClawHub and private installs; set it only for the intentional public Leaderbot gateway where Messenger content and identifiers are disclosed as being processed by the separate image-generation service.
 - `agents.defaults.model.primary` defaults to `OPENCLAW_AGENT_MODEL` when set.
 - `agents.defaults.thinkingDefault` defaults to `OPENCLAW_AGENT_THINKING_DEFAULT` when set.
 - `tools.deny` includes `image_generate` so this public Messenger gateway cannot invoke OpenClaw's built-in image-generation tool; Messenger image generation is routed through the separate Leaderbot image-gen service.

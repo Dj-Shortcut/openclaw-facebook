@@ -26,6 +26,19 @@ This repo still keeps `private: true` to avoid accidental npm publication.
 ClawHub publication is the next public-distribution path; npm publication
 remains a separate release decision.
 
+## Safety Disclosure
+
+Before publishing, verify the listing and README disclose the optional
+Leaderbot image-generation bridge. ClawHub installs must keep
+`leaderbotBridgeEnabled` disabled by default so host-level
+`LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN` or `INTERNAL_IMAGE_REQUEST_TOKEN` values do
+not unexpectedly forward Messenger events, Page-scoped sender IDs, prompts, or
+media URLs to the separate Leaderbot service.
+
+Public Pages should use `pairing` or `allowlist` for controlled setup. Use
+`open` mode or `unknownSenderMode: "leaderbot_free_tier"` only when the Page has
+clear privacy and data-retention terms for public Messenger users.
+
 ## Preflight
 
 Use Node.js `>=24.15.0` before installing or packing; this matches the current

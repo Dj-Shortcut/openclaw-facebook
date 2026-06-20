@@ -38,12 +38,23 @@ afterEach(() => {
 });
 
 describe("resolveImageGenRequestConfig", () => {
-  it("uses the production Leaderbot URL by default with the primary internal token", () => {
+  it("does not use host tokens unless the Leaderbot bridge is enabled", () => {
     process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = " internal-token ";
     delete process.env.INTERNAL_IMAGE_REQUEST_TOKEN;
     delete process.env.LEADERBOT_IMAGE_GEN_URL;
 
     expect(resolveImageGenRequestConfig()).toEqual({
+      ok: false,
+      reason: "disabled_by_config",
+    });
+  });
+
+  it("uses the production Leaderbot URL by default with the primary internal token when enabled", () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = " internal-token ";
+    delete process.env.INTERNAL_IMAGE_REQUEST_TOKEN;
+    delete process.env.LEADERBOT_IMAGE_GEN_URL;
+
+    expect(resolveImageGenRequestConfig({ leaderbotBridgeEnabled: true })).toEqual({
       ok: true,
       endpoint: `${DEFAULT_IMAGE_GEN_URL}/internal/messenger/image-request`,
       token: "internal-token",
@@ -55,7 +66,7 @@ describe("resolveImageGenRequestConfig", () => {
     process.env.INTERNAL_IMAGE_REQUEST_TOKEN = " fallback-token ";
     process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test/base";
 
-    expect(resolveImageGenRequestConfig()).toEqual({
+    expect(resolveImageGenRequestConfig({ leaderbotBridgeEnabled: true })).toEqual({
       ok: true,
       endpoint: "https://image-gen.example.test/internal/messenger/image-request",
       token: "fallback-token",
@@ -67,19 +78,25 @@ describe("resolveImageGenRequestConfig", () => {
     delete process.env.INTERNAL_IMAGE_REQUEST_TOKEN;
     process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
 
-    expect(resolveImageGenRequestConfig()).toEqual({ ok: false, reason: "missing_token" });
+    expect(resolveImageGenRequestConfig({ leaderbotBridgeEnabled: true })).toEqual({
+      ok: false,
+      reason: "missing_token",
+    });
 
     process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
     process.env.LEADERBOT_IMAGE_GEN_URL = "http://image-gen.example.test";
 
-    expect(resolveImageGenRequestConfig()).toEqual({ ok: false, reason: "invalid_url" });
+    expect(resolveImageGenRequestConfig({ leaderbotBridgeEnabled: true })).toEqual({
+      ok: false,
+      reason: "invalid_url",
+    });
   });
 
   it("allows localhost HTTP endpoints for local bridge development", () => {
     process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
     process.env.LEADERBOT_IMAGE_GEN_URL = "http://localhost:8787";
 
-    expect(resolveImageGenRequestConfig()).toEqual({
+    expect(resolveImageGenRequestConfig({ leaderbotBridgeEnabled: true })).toEqual({
       ok: true,
       endpoint: "http://localhost:8787/internal/messenger/image-request",
       token: "internal-token",
@@ -88,6 +105,56 @@ describe("resolveImageGenRequestConfig", () => {
 });
 
 describe("Leaderbot bridge requests", () => {
+  it("does not send image-generation requests when only the host token is present", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    const logStage = vi.fn();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      requestLeaderbotImageGeneration({
+        psid: "psid-1",
+        prompt: "Maak een robot",
+        reqId: "req-1",
+        timestamp: 1_700_000_000_000,
+        trace,
+        logStage,
+      }),
+    ).resolves.toBe(false);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(logStage).toHaveBeenCalledWith(trace, "image_gen_request_skipped", {
+      reason: "disabled_by_config",
+    });
+  });
+
+  it("does not forward Messenger events when only the host token is present", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    const logStage = vi.fn();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      forwardLeaderbotMessengerEvent({
+        event: {
+          sender: { id: "sender-1" },
+          recipient: { id: "page-1" },
+          timestamp: 1_700_000_000_000,
+          message: { mid: "mid-1", text: "Maak een robot" },
+        },
+        trace,
+        logStage,
+      }),
+    ).resolves.toBe(false);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(logStage).toHaveBeenCalledWith(trace, "messenger_event_forward_skipped", {
+      reason: "disabled_by_config",
+    });
+  });
+
   it("sends image-generation requests to the image-request endpoint", async () => {
     process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
     process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
@@ -104,6 +171,7 @@ describe("Leaderbot bridge requests", () => {
         reqId: "req-1",
         timestamp: 1_700_000_000_000,
         trace,
+        leaderbotBridgeEnabled: true,
         sourceImageUrl: "https://cdn.example.test/image.jpg",
         logStage,
       }),
@@ -151,6 +219,7 @@ describe("Leaderbot bridge requests", () => {
           message: { mid: "mid-1", text: "Maak een robot" },
         },
         trace,
+        leaderbotBridgeEnabled: true,
         logStage,
       }),
     ).resolves.toBe(false);

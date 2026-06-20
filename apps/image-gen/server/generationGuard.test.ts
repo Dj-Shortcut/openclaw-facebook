@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const stateStoreMocks = vi.hoisted(() => ({
+  decrementExpiringCounter: vi.fn(),
   deleteEphemeralKeyIfValue: vi.fn(),
   hasEphemeralKey: vi.fn(),
   incrementExpiringCounter: vi.fn(),
@@ -16,6 +17,7 @@ describe("generationGuard", () => {
     vi.resetModules();
     vi.doMock("./_core/stateStore", () => stateStoreMocks);
     stateStoreMocks.hasEphemeralKey.mockResolvedValue(false);
+    stateStoreMocks.decrementExpiringCounter.mockResolvedValue(1);
     stateStoreMocks.incrementExpiringCounter.mockResolvedValue(1);
     stateStoreMocks.isRedisStateStoreEnabled.mockReturnValue(false);
     stateStoreMocks.setEphemeralKeyIfAbsent.mockResolvedValue(true);
@@ -170,5 +172,8 @@ describe("generationGuard", () => {
         now: new Date("2026-06-01T12:00:00.000Z"),
       })
     ).rejects.toBeInstanceOf(guard.MessengerDailyImageBudgetExceededError);
+    expect(stateStoreMocks.decrementExpiringCounter).toHaveBeenCalledWith(
+      "messenger:daily-image-budget:2026-06-01"
+    );
   });
 });

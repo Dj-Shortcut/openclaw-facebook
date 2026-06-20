@@ -25,7 +25,9 @@ API.
 
 This plugin is focused on Facebook Page Messenger DMs. It is a channel plugin,
 not a generic Meta automation suite. It does not add Instagram DMs, Page comment
-automation, Private Replies, attachment handling, or broad Meta campaign tools.
+automation, Private Replies, general OpenClaw attachment handling, or broad Meta
+campaign tools. Optional Leaderbot image-generation handling exists only behind
+an explicit bridge setting.
 
 The plugin is named `facebook` because the setup is tied to a Facebook Page and
 Meta app. Legacy `messenger`, `fb`, and `fbm` aliases remain only for existing
@@ -44,6 +46,7 @@ install compatibility.
   replies.
 - Keeps new installs on the `facebook` channel; `messenger` remains a legacy
   compatibility alias only.
+- Keeps the external Leaderbot image-generation bridge disabled by default.
 
 ## Install
 
@@ -121,6 +124,9 @@ validates Meta's `X-Hub-Signature-256` header with `appSecret`.
 Default mode is `pairing`, which is safest for private testing. Unknown senders
 receive a pairing code before they can talk to the assistant.
 
+`allowlist` is also appropriate for controlled private Pages where you already
+know the Page-scoped sender IDs that may use the assistant.
+
 For public Page bots, configure:
 
 ```json5
@@ -132,6 +138,30 @@ Opening the Page only opens the message entry point. Keep private memory,
 workspace files, deployment tools, billing controls, and administrative actions
 restricted through the OpenClaw host permissions.
 
+Publish privacy and data-retention terms before enabling a public Page bot.
+People may send sensitive information through Messenger, and the host runtime
+may pass messages to model providers or tools according to your configuration.
+
+## Optional Leaderbot Image Generation
+
+The package contains a guarded bridge for Leaderbot image generation. When
+`leaderbotBridgeEnabled: true` is configured, a valid internal token is present,
+and `LEADERBOT_IMAGE_GEN_URL` points to the image-generation service (or
+localhost during development), selected Messenger events and image prompts may
+be sent to the separate Leaderbot image-generation service. That forwarded data
+can include Messenger event payloads, Page-scoped sender IDs, prompt text, and
+Messenger media URLs.
+
+Forwarded scenarios include unknown-sender free-tier routing, legacy/bridge
+interactive payloads, image-only source uploads for storage, source-image edit
+requests, media messages paired with image-generation prompts, referenced
+assistant prompt image requests, and text-to-image intents.
+
+The bridge is disabled by default, even if `LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN`
+or `INTERNAL_IMAGE_REQUEST_TOKEN` is set on the host. Do not enable it unless
+you intend Messenger content and identifiers to be processed by that external
+service and have disclosed the behavior to Page users.
+
 ## Production Notes
 
 Before broad public launch:
@@ -142,6 +172,8 @@ Before broad public launch:
 - publish a privacy policy and disclose automated or AI handling where required;
 - decide how Messenger messages are retained, deleted, logged, and shared with
   model providers;
+- keep the Leaderbot bridge disabled unless external image generation is an
+  intentional, disclosed part of the Page experience;
 - add quota, abuse, and billing controls for public or paid assistants.
 
 Messenger messages are subject to Meta platform rules, including response-window
@@ -162,7 +194,8 @@ Not included:
 - Instagram DMs;
 - Facebook Page comment handling;
 - Meta Private Replies or comment-to-DM flows;
-- attachments, templates, media messages, or generic Meta automation;
+- general OpenClaw attachments, templates, media messages, or generic Meta
+  automation;
 - automatic Meta app or Page subscription setup.
 
 ## Support Links

@@ -616,6 +616,10 @@ async function reserveUserDailyQuota(userId: number): Promise<boolean> {
 
   const today = getTodayUTC();
   const now = new Date();
+  const dailyLimit = getImageGenerationDailyLimit();
+  if (dailyLimit <= 0) {
+    return false;
+  }
 
   try {
     await db.insert(dailyQuota).values({
@@ -636,7 +640,7 @@ async function reserveUserDailyQuota(userId: number): Promise<boolean> {
         updatedAt = NOW()
     WHERE userId = ${userId}
       AND date = ${today}
-      AND imagesGenerated < ${getImageGenerationDailyLimit()}
+      AND imagesGenerated < ${dailyLimit}
   `);
 
   const getAffectedRows = (value: unknown): number => {

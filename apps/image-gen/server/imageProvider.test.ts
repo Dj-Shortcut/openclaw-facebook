@@ -490,14 +490,17 @@ describe("image provider boundary", () => {
     ).resolves.toBeDefined();
 
     process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "1";
+    const onProviderAttempt = vi.fn(async () => undefined);
     await expect(
       generator.generate({
         userKey: "user-budget-cap",
         reqId: "req-budget-over-cap",
+        onProviderAttempt,
       })
     ).rejects.toThrow("Messenger daily image budget reached");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(onProviderAttempt).not.toHaveBeenCalled();
   });
 
   it("uses OPENAI_IMAGE_MODEL and image_generation tool when source image data is provided", async () => {

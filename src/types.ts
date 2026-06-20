@@ -17,6 +17,7 @@ interface MessengerAccountBaseConfig {
   allowFrom?: Array<string | number>;
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
   unknownSenderMode?: MessengerUnknownSenderMode;
+  leaderbotBridgeEnabled?: boolean;
   responsePrefix?: string;
   webhookPath?: string;
   defaultTo?: string;

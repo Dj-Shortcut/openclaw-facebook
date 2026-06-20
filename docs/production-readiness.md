@@ -12,7 +12,7 @@ Last updated: 2026-05-30
 4. Inbound events are acknowledged quickly with `200 {"status":"ok"}` and processed in the background.
 5. `dmPolicy` gates senders through OpenClaw pairing/allowlist/open access before assistant dispatch.
 6. Text-only fast-lane messages can reply directly for greeting/help/status/image intent.
-7. Messenger image-generation intents are routed to the separate Leaderbot image-generation service as prompt-first text-to-image requests.
+7. Messenger image-generation intents are routed to the separate Leaderbot image-generation service only when `leaderbotBridgeEnabled: true` and a valid internal bridge token are configured.
 8. Source-photo generation only uses an uploaded/stored photo when the prompt explicitly asks to edit/restyle that photo.
 9. Photo-only/image-analysis messages stay in the OpenClaw assistant path instead of auto-restyling.
 10. Assistant replies are sent through Graph API `/{pageId}/messages` as `messaging_type: RESPONSE`.
@@ -53,11 +53,17 @@ Important env:
 - `OPENCLAW_CONFIG_PATH=/data/openclaw.json`
 - `OPENCLAW_WORKSPACE_DIR=/data/workspace`
 - `OPENCLAW_PUBLIC_GATEWAY_GUARD=1`
+- `OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED=1` only for the intentional public Leaderbot gateway
 - `LEADERBOT_IMAGE_GEN_URL=https://leaderbot-fb-image-gen.fly.dev`
 
 Image-gen app must have matching internal token:
 
 - `INTERNAL_IMAGE_REQUEST_TOKEN` must match `LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN`.
+
+The token alone must not enable forwarding. The Facebook channel config also
+needs `leaderbotBridgeEnabled: true` for any Messenger event, Page-scoped sender
+ID, prompt, or media URL to be sent to the separate Leaderbot image-generation
+service.
 
 ## Deploy Command
 
@@ -111,6 +117,10 @@ The workspace migration is non-destructive: it only copies missing files into `/
 ## Known Risks
 
 - Public `dmPolicy: "open"` should not be enabled until paywall, consent, deletion, quota, and abuse controls are product-ready.
+- Public Pages need clear privacy/data-retention terms before open mode or
+  Leaderbot free-tier image generation is enabled.
+- Keep `leaderbotBridgeEnabled` false unless external Leaderbot processing is
+  intended and disclosed.
 - Messenger `RESPONSE` messages are constrained by Meta's response window.
 - Provider/API billing failures surface as assistant/image-generation failures; smoke tests must include the live keys.
 - The current local validation does not replace Meta App Review, Page permission, and webhook subscription checks.

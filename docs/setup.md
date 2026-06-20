@@ -10,11 +10,12 @@ OpenClaw to Facebook Page Messenger direct messages through Meta webhooks:
   Graph API.
 
 It does not yet implement Instagram DMs, Page comment handling, Meta Private
-Replies/comment-to-DM flows, attachments, or general Meta automation. Those are
-real Meta surfaces, but V1 of this plugin only supports normal Facebook Page
-Messenger DMs. The plugin is named `facebook` because the setup is a
-Facebook/Meta integration, even though the first supported surface is Facebook
-Page Messenger DMs.
+Replies/comment-to-DM flows, general OpenClaw attachment handling, or general
+Meta automation. Messenger media payloads are accepted only for supported DM
+ingestion paths, with optional Leaderbot image-generation handling disabled by
+default. The plugin is named `facebook` because the setup is a Facebook/Meta
+integration, even though the first supported surface is Facebook Page Messenger
+DMs.
 
 This is the short setup path. For a complete guide to the Meta app, Facebook
 Page identity, permissions, review, Messenger rules, production checks, and
@@ -140,6 +141,17 @@ Use `channels.facebook` for new installs:
   }
 }
 ```
+
+Keep `dmPolicy: "pairing"` for private testing. Use `allowlist` when you know
+which Page-scoped sender IDs may use the assistant. Use `open` for a public Page
+only after publishing privacy and data-retention terms.
+
+The optional Leaderbot image-generation bridge is off by default. If you enable
+`leaderbotBridgeEnabled: true`, selected Messenger events, Page-scoped sender
+IDs, image prompts, and Messenger media URLs can be forwarded to the separate
+Leaderbot image-generation service. Do not enable that bridge unless the Page is
+intended to use external Leaderbot image generation and the behavior is
+disclosed to users.
 
 You can also provide the same values through the default environment variables:
 

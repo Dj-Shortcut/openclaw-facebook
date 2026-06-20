@@ -978,6 +978,10 @@ async function sendMessengerPairingReply(params: {
 
 type MessengerIngressDecision = "process" | "leaderbot_free_tier" | "stop";
 
+function isLeaderbotBridgeEnabled(account: ResolvedMessengerAccount): boolean {
+  return account.config.leaderbotBridgeEnabled === true;
+}
+
 function shouldRouteUnknownSenderToLeaderbotFreeTier(params: {
   account: ResolvedMessengerAccount;
   dmPolicy: string;
@@ -986,6 +990,7 @@ function shouldRouteUnknownSenderToLeaderbotFreeTier(params: {
   return (
     params.dmPolicy === "pairing" &&
     params.senderId.trim().length > 0 &&
+    isLeaderbotBridgeEnabled(params.account) &&
     params.account.config.unknownSenderMode === "leaderbot_free_tier"
   );
 }
@@ -1109,6 +1114,7 @@ export async function processMessengerEvent(params: {
     }
     const attachments = extractMessengerAttachmentUrls(params.event);
     const rawAttachmentCount = params.event.message?.attachments?.length ?? 0;
+    const leaderbotBridgeEnabled = isLeaderbotBridgeEnabled(params.account);
     if (rawAttachmentCount > 0 && attachments.length === 0 && !text.trim()) {
       logMessengerStage(params.trace, "messenger_event_forward_skipped", {
         reason: "attachments_missing_payload_url",
@@ -1131,6 +1137,7 @@ export async function processMessengerEvent(params: {
         await forwardLeaderbotMessengerEvent({
           event: params.event,
           trace: params.trace,
+          leaderbotBridgeEnabled,
           logStage: logMessengerStage,
         })
       ) {
@@ -1164,24 +1171,32 @@ export async function processMessengerEvent(params: {
         quickReply: Boolean(params.event.message?.quick_reply?.payload),
         postback: Boolean(params.event.postback?.payload),
       });
-      if (
-        await forwardLeaderbotMessengerEvent({
-          event: params.event,
-          trace: params.trace,
-          logStage: logMessengerStage,
-        })
-      ) {
+      if (leaderbotBridgeEnabled) {
+        if (
+          await forwardLeaderbotMessengerEvent({
+            event: params.event,
+            trace: params.trace,
+            leaderbotBridgeEnabled,
+            logStage: logMessengerStage,
+          })
+        ) {
+          return;
+        }
+        await sendMessengerText(
+          senderId,
+          "Ik kon deze knopactie nu niet verwerken. Probeer zo meteen opnieuw.",
+          {
+            cfg: params.cfg,
+            accountId: params.account.accountId,
+          },
+        ).catch((err: unknown) => {
+          params.runtime.error?.(danger(`messenger interactive fallback failed: ${String(err)}`));
+        });
         return;
       }
-      await sendMessengerText(
-        senderId,
-        "Ik kon deze knopactie nu niet verwerken. Probeer zo meteen opnieuw.",
-        {
-          cfg: params.cfg,
-          accountId: params.account.accountId,
-        },
-      ).catch((err: unknown) => {
-        params.runtime.error?.(danger(`messenger interactive fallback failed: ${String(err)}`));
+      logMessengerStage(params.trace, "messenger_event_forward_skipped", {
+        reason: "disabled_by_config",
+        route: "interactive_payload",
       });
       return;
     }
@@ -1190,6 +1205,7 @@ export async function processMessengerEvent(params: {
       text,
     });
     if (
+      leaderbotBridgeEnabled &&
       shouldForwardMessengerImageOnlyEventToImageGen({
         hasSourceImage: Boolean(sourceImageAttachment),
         text,
@@ -1203,13 +1219,25 @@ export async function processMessengerEvent(params: {
         await forwardLeaderbotMessengerEvent({
           event: params.event,
           trace: params.trace,
+          leaderbotBridgeEnabled,
           logStage: logMessengerStage,
         })
       ) {
         return;
       }
+    } else if (
+      !leaderbotBridgeEnabled &&
+      shouldForwardMessengerImageOnlyEventToImageGen({
+        hasSourceImage: Boolean(sourceImageAttachment),
+        text,
+      })
+    ) {
+      logMessengerStage(params.trace, "messenger_event_forward_skipped", {
+        reason: "disabled_by_config",
+        route: "source_image_without_prompt",
+      });
     }
-    if (sourceImageAttachment && sourceImageGenerationPrompt) {
+    if (leaderbotBridgeEnabled && sourceImageAttachment && sourceImageGenerationPrompt) {
       logMessengerStage(params.trace, "messenger_event_forward_started", {
         reason: "source_image_with_prompt",
         sourceImage: true,
@@ -1219,6 +1247,7 @@ export async function processMessengerEvent(params: {
         await forwardLeaderbotMessengerEvent({
           event: params.event,
           trace: params.trace,
+          leaderbotBridgeEnabled,
           logStage: logMessengerStage,
         })
       ) {
@@ -1237,8 +1266,14 @@ export async function processMessengerEvent(params: {
         );
       });
       return;
+    } else if (!leaderbotBridgeEnabled && sourceImageAttachment && sourceImageGenerationPrompt) {
+      logMessengerStage(params.trace, "messenger_event_forward_skipped", {
+        reason: "disabled_by_config",
+        route: "source_image_with_prompt",
+      });
     }
     if (
+      leaderbotBridgeEnabled &&
       attachments.length > 0 &&
       !sourceImageGenerationPrompt &&
       hasMessengerImageGenerationIntent(text)
@@ -1252,6 +1287,7 @@ export async function processMessengerEvent(params: {
         await forwardLeaderbotMessengerEvent({
           event: params.event,
           trace: params.trace,
+          leaderbotBridgeEnabled,
           logStage: logMessengerStage,
         })
       ) {
@@ -1270,6 +1306,16 @@ export async function processMessengerEvent(params: {
         );
       });
       return;
+    } else if (
+      !leaderbotBridgeEnabled &&
+      attachments.length > 0 &&
+      !sourceImageGenerationPrompt &&
+      hasMessengerImageGenerationIntent(text)
+    ) {
+      logMessengerStage(params.trace, "messenger_event_forward_skipped", {
+        reason: "disabled_by_config",
+        route: "media_with_image_prompt",
+      });
     }
     const referencedPrompt = resolveMessengerImagePromptFromUserText({
       senderId,
@@ -1277,6 +1323,7 @@ export async function processMessengerEvent(params: {
       replyToMessageId,
     });
     if (
+      leaderbotBridgeEnabled &&
       attachments.length === 0 &&
       referencedPrompt &&
       referencedPrompt !== text.trim()
@@ -1292,6 +1339,7 @@ export async function processMessengerEvent(params: {
         reqId: params.trace.reqId,
         timestamp,
         trace: params.trace,
+        leaderbotBridgeEnabled,
         logStage: logMessengerStage,
       });
       if (queued) {
@@ -1306,6 +1354,16 @@ export async function processMessengerEvent(params: {
         },
       );
       return;
+    } else if (
+      !leaderbotBridgeEnabled &&
+      attachments.length === 0 &&
+      referencedPrompt &&
+      referencedPrompt !== text.trim()
+    ) {
+      logMessengerStage(params.trace, "image_gen_request_skipped", {
+        reason: "disabled_by_config",
+        promptSource: replyToMessageId ? "messenger_reply" : "assistant_reference",
+      });
     }
     if (
       attachments.length === 0 &&
@@ -1355,7 +1413,7 @@ export async function processMessengerEvent(params: {
     ]
       .filter(Boolean)
       .join("\n");
-    if (!hasMedia && shouldForwardMessengerTextToImageGen(text)) {
+    if (leaderbotBridgeEnabled && !hasMedia && shouldForwardMessengerTextToImageGen(text)) {
       logMessengerStage(params.trace, "messenger_event_forward_started", {
         reason: "text_image_intent",
         sourceImage: false,
@@ -1365,6 +1423,7 @@ export async function processMessengerEvent(params: {
         await forwardLeaderbotMessengerEvent({
           event: params.event,
           trace: params.trace,
+          leaderbotBridgeEnabled,
           logStage: logMessengerStage,
         })
       ) {
@@ -1379,6 +1438,11 @@ export async function processMessengerEvent(params: {
         },
       );
       return;
+    } else if (!leaderbotBridgeEnabled && !hasMedia && shouldForwardMessengerTextToImageGen(text)) {
+      logMessengerStage(params.trace, "messenger_event_forward_skipped", {
+        reason: "disabled_by_config",
+        route: "text_image_intent",
+      });
     }
     const fastLane = hasMedia ? null : resolveMessengerFastLaneReply(text);
     if (fastLane) {

@@ -13,6 +13,7 @@ import {
 import {
   assertMessengerDailyVideoBudgetAvailable,
   MessengerDailyVideoBudgetExceededError,
+  releaseMessengerDailyVideoBudgetReservation,
   runGuardedVideoGeneration,
 } from "./generationGuard";
 import {
@@ -179,36 +180,42 @@ export function createMessengerVideoGenerationRunner(
           reqId,
           "generation_started"
         );
-        await assertMessengerDailyVideoBudgetAvailable({ reqId });
         const provider = getVideoProvider();
         const commitProviderAttemptQuota = async () => {
-          const reservationForAttempt =
-            pendingQuotaReservation ?? (await reserveVideoGenerationForAttempt(psid));
-          if (!reservationForAttempt) {
-            throw new MessengerQuotaReservationCommitError(
-              "Messenger video quota reservation could not be committed"
-            );
-          }
+          const budgetNow = new Date();
+          await assertMessengerDailyVideoBudgetAvailable({ reqId, now: budgetNow });
+          try {
+            const reservationForAttempt =
+              pendingQuotaReservation ?? (await reserveVideoGenerationForAttempt(psid));
+            if (!reservationForAttempt) {
+              throw new MessengerQuotaReservationCommitError(
+                "Messenger video quota reservation could not be committed"
+              );
+            }
 
-          const committed = await commitVideoGenerationSuccess(
-            psid,
-            reservationForAttempt
-          );
-          if (!committed) {
-            throw new MessengerQuotaReservationCommitError(
-              "Messenger video quota reservation could not be committed"
+            const committed = await commitVideoGenerationSuccess(
+              psid,
+              reservationForAttempt
             );
-          }
-          if (pendingQuotaReservation?.token === reservationForAttempt.token) {
-            pendingQuotaReservation = null;
-          }
+            if (!committed) {
+              throw new MessengerQuotaReservationCommitError(
+                "Messenger video quota reservation could not be committed"
+              );
+            }
+            if (pendingQuotaReservation?.token === reservationForAttempt.token) {
+              pendingQuotaReservation = null;
+            }
 
-          safeLog("messenger_video_quota_decision", {
-            action: "commit_provider_attempt",
-            reqId,
-            user: toLogUser(userId),
-            allowed: true,
-          });
+            safeLog("messenger_video_quota_decision", {
+              action: "commit_provider_attempt",
+              reqId,
+              user: toLogUser(userId),
+              allowed: true,
+            });
+          } catch (error) {
+            await releaseMessengerDailyVideoBudgetReservation({ now: budgetNow });
+            throw error;
+          }
         };
         safeLog("messenger_video_generation_started", {
           reqId,
