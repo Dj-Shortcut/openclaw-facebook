@@ -185,6 +185,11 @@ The update workflow and release workflow use the same validation gate.
      clawhub package publish @dj-shortcut/facebook
      ```
 
+     Prefer the **Publish Plugin to ClawHub** GitHub Actions workflow with
+     `publish` checked for real releases so ClawHub can use GitHub OIDC
+     provenance. Tag-triggered publishes remain available as the
+     `CLAWHUB_TOKEN` fallback path.
+
    - npm publication is a separate release decision. This package remains
      `private: true`; remove that only in a dedicated release PR that documents
      scope, ownership, package name, and compatibility impact.

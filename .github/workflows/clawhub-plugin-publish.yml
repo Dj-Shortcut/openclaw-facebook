@@ -63,7 +63,7 @@ jobs:
         id: pack
         run: |
           npm pack
-          tarball="$(ls dj-shortcut-facebook-*.tgz | head -n 1)"
+          tarball="$(find . -maxdepth 1 -name 'dj-shortcut-facebook-*.tgz' -print -quit)"
           test -n "$tarball"
           echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
 
@@ -101,8 +101,18 @@ jobs:
     with:
       dry_run: true
 
-  clawhub-publish:
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
+  clawhub-publish-trusted:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish == true
+    needs: package-artifact
+    permissions:
+      contents: read
+      id-token: write
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@v0.12.0
+    with:
+      dry_run: false
+
+  clawhub-publish-token:
+    if: github.event_name == 'push'
     needs: package-artifact
     permissions:
       contents: read

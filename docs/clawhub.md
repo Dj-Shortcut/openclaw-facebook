@@ -96,11 +96,12 @@ as `@dj-shortcut`, and the release checklist in
 clawhub package publish @dj-shortcut/facebook
 ```
 
-To publish from CI, rerun **Publish Plugin to ClawHub** with `publish` checked,
-or push a trusted `v*` tag. The workflow builds, tests, packs, validates the
-tarball contents, installs the tarball into an isolated OpenClaw profile,
-uploads the tarball as an artifact, and then calls OpenClaw's official
-`package-publish.yml` reusable ClawHub workflow.
+To publish from CI with GitHub OIDC provenance, rerun **Publish Plugin to
+ClawHub** with `publish` checked. Pushing a trusted `v*` tag also publishes, but
+uses the `CLAWHUB_TOKEN` fallback path for compatibility. The workflow builds,
+tests, packs, validates the tarball contents, installs the tarball into an
+isolated OpenClaw profile, uploads the tarball as an artifact, and then calls
+OpenClaw's official `package-publish.yml` reusable ClawHub workflow.
 
 ## Post-Publish Smoke Test
 
