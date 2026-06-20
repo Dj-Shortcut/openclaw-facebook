@@ -58,6 +58,7 @@ describe("messenger quota dayKey", () => {
 
   it("keeps the same dayKey throughout the same UTC day", async () => {
     const userId = "same-day-user";
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "3";
     const initialDayKey = (await Promise.resolve(getOrCreateState(userId))).quota.dayKey;
 
     await increment(userId);
@@ -137,6 +138,17 @@ describe("messenger quota dayKey", () => {
 
     expect(await canGenerate(userId)).toBe(false);
     expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(5);
+  });
+
+  it("uses 20 image provider attempts as the default daily quota limit", async () => {
+    const userId = "default-image-limit-user";
+
+    for (let index = 0; index < 20; index += 1) {
+      await increment(userId);
+    }
+
+    expect(await canGenerate(userId)).toBe(false);
+    expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(20);
   });
 
   it("commits a normal reserved image quota success", async () => {
@@ -405,6 +417,7 @@ describe("messenger quota dayKey", () => {
 
   it("tracks transcription quota independently from image quota", async () => {
     const userId = "audio-quota-separate-user";
+    process.env.MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT = "3";
 
     await increment(userId);
     await incrementTranscription(userId);
@@ -428,6 +441,19 @@ describe("messenger quota dayKey", () => {
     await incrementTranscription(userId);
 
     expect(await canTranscribe(userId)).toBe(false);
+  });
+
+  it("uses 5 audio transcription provider attempts as the default daily quota limit", async () => {
+    const userId = "default-audio-limit-user";
+
+    for (let index = 0; index < 5; index += 1) {
+      await incrementTranscription(userId);
+    }
+
+    expect(await canTranscribe(userId)).toBe(false);
+    expect((await Promise.resolve(getOrCreateState(userId))).transcriptionQuota.count).toBe(
+      5
+    );
   });
 
   it("prevents concurrent transcription quota bypass", async () => {

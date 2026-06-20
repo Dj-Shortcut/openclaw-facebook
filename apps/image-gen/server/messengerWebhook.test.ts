@@ -2828,7 +2828,7 @@ describe("bot rate limit feature", () => {
   it("blocks text spam after the configured in-memory threshold", async () => {
     const senderId = "rate-limit-user";
 
-    for (let index = 0; index < 11; index += 1) {
+    for (let index = 0; index < 31; index += 1) {
       await processFacebookWebhookPayload({
         entry: [
           {

@@ -239,9 +239,11 @@ describe("image provider boundary", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const generator = new OpenAiImageGenerator();
+    const onProviderAttempt = vi.fn(async () => undefined);
     const result = await generateWithSourceImageData(generator, {
       userKey: "user-1",
       reqId: "req-provider-log",
+      onProviderAttempt,
     });
 
     const providerLogs = logSpy.mock.calls
@@ -254,6 +256,7 @@ describe("image provider boundary", () => {
       /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(onProviderAttempt).toHaveBeenCalledTimes(2);
     expect(providerLogs).toEqual([
       {
         level: "info",

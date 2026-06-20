@@ -273,12 +273,14 @@ export class OpenAiImageGenerator implements ImageGenerator {
         payloadBytes,
       });
 
-      await assertMessengerDailyImageBudgetAvailable({ reqId: input.reqId });
-      await input.onProviderAttempt?.();
       const response = await fetchOpenAiImageResponse(requestContext, {
         reqId: input.reqId,
         startedAt,
         partialMetrics,
+        onProviderAttempt: async () => {
+          await assertMessengerDailyImageBudgetAvailable({ reqId: input.reqId });
+          await input.onProviderAttempt?.();
+        },
       });
       safeLog("image_generation_cost_estimate", {
         reqId: input.reqId,

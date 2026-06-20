@@ -39,6 +39,7 @@ type OpenAiResponseContext = {
   reqId: string;
   startedAt: number;
   partialMetrics: Omit<GenerationMetrics, "totalMs">;
+  onProviderAttempt?: () => Promise<void>;
 };
 
 const OPENAI_RETRY_LIMIT_DEFAULT = 1;
@@ -398,6 +399,7 @@ export async function fetchOpenAiImageResponse(
         reqId: context.reqId,
         attempt: attempt + 1,
       });
+      await context.onProviderAttempt?.();
       const response = await fetchWithTimeout(
         requestContext.endpoint,
         requestContext.requestInit,

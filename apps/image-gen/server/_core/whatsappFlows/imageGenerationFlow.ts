@@ -265,21 +265,27 @@ async function runWhatsAppImageGenerationOnce(
     return;
   }
 
-  let quotaCommitted = false;
+  let pendingQuotaReservation: typeof quotaReservation | null = quotaReservation;
+  let providerAttemptsCommitted = 0;
   const commitProviderAttemptQuota = async () => {
-    if (quotaCommitted) {
-      return;
+    const reservationForAttempt =
+      pendingQuotaReservation ?? (await reserveImageGenerationUsage(quotaInput));
+    if (!reservationForAttempt) {
+      throw new MessengerQuotaReservationCommitError();
     }
 
     const committed = await commitImageGenerationUsage({
       ...quotaInput,
-      reservation: quotaReservation,
+      reservation: reservationForAttempt,
     });
     if (!committed) {
       throw new MessengerQuotaReservationCommitError();
     }
 
-    quotaCommitted = true;
+    providerAttemptsCommitted += 1;
+    if (pendingQuotaReservation?.token === reservationForAttempt.token) {
+      pendingQuotaReservation = null;
+    }
     safeLog("whatsapp_quota_decision", {
       action: "commit_provider_attempt",
       user: userId,
@@ -303,7 +309,9 @@ async function runWhatsAppImageGenerationOnce(
     });
 
     if (result.kind === "success") {
-      await commitProviderAttemptQuota();
+      if (providerAttemptsCommitted === 0) {
+        await commitProviderAttemptQuota();
+      }
       await handleGenerationSuccess({
         senderId,
         lang,
@@ -324,10 +332,10 @@ async function runWhatsAppImageGenerationOnce(
       result,
     });
   } finally {
-    if (!quotaCommitted) {
+    if (pendingQuotaReservation) {
       await releaseImageGenerationUsage({
         ...quotaInput,
-        reservation: quotaReservation,
+        reservation: pendingQuotaReservation,
       });
     }
   }

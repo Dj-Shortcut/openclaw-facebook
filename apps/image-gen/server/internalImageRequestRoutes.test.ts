@@ -128,6 +128,7 @@ describe("internal Messenger image request route", () => {
       const response = await postInternalImageRequest(baseUrl, "wrongtoken");
 
       expect(response.status).toBe(403);
+      await response.text();
     });
 
     expect(acceptInternalMessengerImageRequestMock).not.toHaveBeenCalled();

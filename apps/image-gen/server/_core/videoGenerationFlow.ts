@@ -184,7 +184,7 @@ export function createMessengerVideoGenerationRunner(
         const provider = getVideoProvider();
         const commitProviderAttemptQuota = async () => {
           if (quotaCommitted || !reservation) {
-            return true;
+            return;
           }
 
           quotaCommitted = await commitVideoGenerationSuccess(psid, reservation);
@@ -200,7 +200,6 @@ export function createMessengerVideoGenerationRunner(
             user: toLogUser(userId),
             allowed: true,
           });
-          return true;
         };
         safeLog("messenger_video_generation_started", {
           reqId,
