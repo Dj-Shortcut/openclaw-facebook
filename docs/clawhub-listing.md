@@ -152,6 +152,11 @@ be sent to the separate Leaderbot image-generation service. That forwarded data
 can include Messenger event payloads, Page-scoped sender IDs, prompt text, and
 Messenger media URLs.
 
+Forwarded scenarios include unknown-sender free-tier routing, legacy/bridge
+interactive payloads, image-only source uploads for storage, source-image edit
+requests, media messages paired with image-generation prompts, referenced
+assistant prompt image requests, and text-to-image intents.
+
 The bridge is disabled by default, even if `LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN`
 or `INTERNAL_IMAGE_REQUEST_TOKEN` is set on the host. Do not enable it unless
 you intend Messenger content and identifiers to be processed by that external
