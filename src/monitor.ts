@@ -1198,6 +1198,7 @@ export async function processMessengerEvent(params: {
         reason: "disabled_by_config",
         route: "interactive_payload",
       });
+      return;
     }
     const sourceImageGenerationPrompt = resolveMessengerSourceImageGenerationPrompt({
       hasSourceImage: Boolean(sourceImageAttachment),

@@ -148,6 +148,18 @@ function messengerTextEvent(mid: string, text = "Hallo"): MessengerWebhookMessag
   };
 }
 
+function messengerPostbackEvent(mid: string): MessengerWebhookMessaging {
+  return {
+    sender: { id: `sender-${mid}` },
+    recipient: { id: "page-1" },
+    timestamp: 1_700_000_000_000,
+    postback: {
+      payload: "LEGACY_PAYLOAD",
+      title: "Legacy action",
+    },
+  };
+}
+
 function setGatewayRuntime(
   inboundRun = vi.fn(),
   options: {
@@ -945,6 +957,23 @@ describe("processMessengerEvent image intents", () => {
       },
       recipient: { id: "sender-mid-image-forward-failure" },
     });
+    expect(inboundRun).not.toHaveBeenCalled();
+  });
+});
+
+describe("processMessengerEvent interactive payloads", () => {
+  it("does not create an empty OpenClaw turn for disabled bridge postbacks", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    const inboundRun = setGatewayRuntime();
+    const fetchMock = vi.fn(async () => {
+      throw new Error("postback should not be sent anywhere");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(messengerPostbackEvent("mid-postback-disabled"));
+
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(inboundRun).not.toHaveBeenCalled();
   });
 });

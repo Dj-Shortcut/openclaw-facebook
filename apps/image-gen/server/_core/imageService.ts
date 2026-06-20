@@ -36,6 +36,7 @@ import {
   assertMessengerDailyImageBudgetAvailable,
   getMessengerDailyImageBudgetConfig,
   getMessengerGenerationGlobalLimitConfig,
+  releaseMessengerDailyImageBudgetReservation,
 } from "./generationGuard";
 import {
   isMessengerGenerationInlineFallbackEnabled,
@@ -278,8 +279,17 @@ export class OpenAiImageGenerator implements ImageGenerator {
         startedAt,
         partialMetrics,
         onProviderAttempt: async () => {
-          await input.onProviderAttempt?.();
-          await assertMessengerDailyImageBudgetAvailable({ reqId: input.reqId });
+          const budgetNow = new Date();
+          await assertMessengerDailyImageBudgetAvailable({
+            reqId: input.reqId,
+            now: budgetNow,
+          });
+          try {
+            await input.onProviderAttempt?.();
+          } catch (error) {
+            await releaseMessengerDailyImageBudgetReservation({ now: budgetNow });
+            throw error;
+          }
         },
       });
       safeLog("image_generation_cost_estimate", {

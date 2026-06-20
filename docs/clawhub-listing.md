@@ -145,10 +145,12 @@ may pass messages to model providers or tools according to your configuration.
 ## Optional Leaderbot Image Generation
 
 The package contains a guarded bridge for Leaderbot image generation. When
-`leaderbotBridgeEnabled: true` is configured and a valid internal token is
-present, selected Messenger events and image prompts may be sent to the separate
-Leaderbot image-generation service. That forwarded data can include Messenger
-event payloads, Page-scoped sender IDs, prompt text, and Messenger media URLs.
+`leaderbotBridgeEnabled: true` is configured, a valid internal token is present,
+and `LEADERBOT_IMAGE_GEN_URL` points to the image-generation service (or
+localhost during development), selected Messenger events and image prompts may
+be sent to the separate Leaderbot image-generation service. That forwarded data
+can include Messenger event payloads, Page-scoped sender IDs, prompt text, and
+Messenger media URLs.
 
 The bridge is disabled by default, even if `LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN`
 or `INTERNAL_IMAGE_REQUEST_TOKEN` is set on the host. Do not enable it unless

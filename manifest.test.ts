@@ -49,7 +49,7 @@ describe("openclaw plugin manifest", () => {
     expect(
       facebookSchema.properties?.accounts?.additionalProperties?.properties
         ?.leaderbotBridgeEnabled?.default,
-    ).toBe(false);
+    ).toBeUndefined();
     expect(manifest.channelEnvVars?.facebook).toEqual(
       expect.arrayContaining([
         "FACEBOOK_PAGE_ID",
@@ -116,5 +116,19 @@ describe("facebook config safety defaults", () => {
     expect(parsed.dmPolicy).toBe("pairing");
     expect(parsed.leaderbotBridgeEnabled).toBe(false);
     expect(parsed.allowFrom).toBeUndefined();
+  });
+
+  it("does not materialize a false Leaderbot bridge override for named accounts", () => {
+    const parsed = MessengerConfigSchema.parse({
+      leaderbotBridgeEnabled: true,
+      accounts: {
+        public: {
+          dmPolicy: "pairing",
+        },
+      },
+    });
+
+    expect(parsed.leaderbotBridgeEnabled).toBe(true);
+    expect(parsed.accounts?.public?.leaderbotBridgeEnabled).toBeUndefined();
   });
 });

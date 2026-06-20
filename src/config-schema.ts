@@ -10,7 +10,7 @@ import type { ResolvedMessengerAccount } from "./types.js";
 const DmPolicySchema = z.enum(["open", "allowlist", "pairing", "disabled"]);
 const UnknownSenderModeSchema = z.enum(["pairing", "leaderbot_free_tier"]);
 
-const MessengerCommonConfigSchemaBase = z.object({
+const MessengerCommonConfigShape = {
   enabled: z.boolean().optional(),
   pageId: z.string().optional(),
   pageAccessToken: z.string().optional(),
@@ -28,10 +28,17 @@ const MessengerCommonConfigSchemaBase = z.object({
   webhookPath: z.string().optional(),
   defaultTo: z.string().optional(),
   graphApiVersion: z.string().optional(),
-});
+};
 
-const MessengerAccountConfigSchema = MessengerCommonConfigSchemaBase.strict().superRefine(
-  (value, ctx) => {
+const MessengerCommonConfigSchemaBase = z.object(MessengerCommonConfigShape);
+
+const MessengerAccountConfigSchema = z
+  .object({
+    ...MessengerCommonConfigShape,
+    leaderbotBridgeEnabled: z.boolean().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
     requireChannelOpenAllowFrom({
       channel: "facebook",
       policy: value.dmPolicy,
@@ -39,8 +46,7 @@ const MessengerAccountConfigSchema = MessengerCommonConfigSchemaBase.strict().su
       ctx,
       requireOpenAllowFrom,
     });
-  },
-);
+  });
 
 export const MessengerConfigSchema = MessengerCommonConfigSchemaBase.extend({
   accounts: z.record(z.string(), MessengerAccountConfigSchema.optional()).optional(),

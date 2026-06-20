@@ -129,6 +129,32 @@ describe("Leaderbot bridge requests", () => {
     });
   });
 
+  it("does not forward Messenger events when only the host token is present", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    const logStage = vi.fn();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      forwardLeaderbotMessengerEvent({
+        event: {
+          sender: { id: "sender-1" },
+          recipient: { id: "page-1" },
+          timestamp: 1_700_000_000_000,
+          message: { mid: "mid-1", text: "Maak een robot" },
+        },
+        trace,
+        logStage,
+      }),
+    ).resolves.toBe(false);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(logStage).toHaveBeenCalledWith(trace, "messenger_event_forward_skipped", {
+      reason: "disabled_by_config",
+    });
+  });
+
   it("sends image-generation requests to the image-request endpoint", async () => {
     process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
     process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";

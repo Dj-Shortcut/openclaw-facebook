@@ -86,8 +86,7 @@
                   "enum": ["pairing", "leaderbot_free_tier"]
                 },
                 "leaderbotBridgeEnabled": {
-                  "type": "boolean",
-                  "default": false
+                  "type": "boolean"
                 },
                 "responsePrefix": { "type": "string" },
                 "webhookPath": { "type": "string" },
