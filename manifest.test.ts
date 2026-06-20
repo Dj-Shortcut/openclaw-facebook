@@ -74,6 +74,10 @@ describe("package openclaw metadata", () => {
       openclaw?: {
         compat?: unknown;
         build?: unknown;
+        extensions?: unknown;
+        runtimeExtensions?: unknown;
+        setupEntry?: unknown;
+        runtimeSetupEntry?: unknown;
         install?: unknown;
         channel?: {
           exposure?: unknown;
@@ -100,6 +104,10 @@ describe("package openclaw metadata", () => {
       defaultChoice: "clawhub",
       minHostVersion: ">=2026.5.19",
     });
+    expect(pkg.openclaw?.extensions).toEqual(["./dist/index.js"]);
+    expect(pkg.openclaw?.runtimeExtensions).toEqual(["./dist/index.js"]);
+    expect(pkg.openclaw?.setupEntry).toBe("./dist/setup-entry.js");
+    expect(pkg.openclaw?.runtimeSetupEntry).toBe("./dist/setup-entry.js");
     expect(pkg.openclaw?.channel?.preferOver).toEqual(["messenger"]);
     expect(pkg.openclaw?.channel?.exposure).toEqual({
       configured: true,

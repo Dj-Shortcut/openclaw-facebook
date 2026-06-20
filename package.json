@@ -97,12 +97,12 @@
       "minHostVersion": ">=2026.5.19"
     },
     "extensions": [
-      "./index.ts"
+      "./dist/index.js"
     ],
     "runtimeExtensions": [
       "./dist/index.js"
     ],
-    "setupEntry": "./setup-entry.ts",
+    "setupEntry": "./dist/setup-entry.js",
     "runtimeSetupEntry": "./dist/setup-entry.js",
     "channel": {
       "id": "facebook",
