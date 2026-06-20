@@ -1,0 +1,123 @@
+name: Codex PR follow-up
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize, labeled]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  check_suite:
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  checks: read
+  statuses: read
+
+concurrency:
+  group: codex-pr-followup-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  queue-from-pr-event:
+    name: Queue Codex from PR event
+    if: github.event_name != 'check_suite' && github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Wait briefly after PR open
+        if: github.event_name == 'pull_request_target' && github.event.action == 'opened'
+        run: sleep 300
+
+      - name: Ensure automation labels exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh label create codex-autofix \
+            --repo "$REPO" \
+            --description "Allow Codex to address review comments, conflicts, and CI failures" \
+            --color "0969da" || true
+          gh label create codex-automerge \
+            --repo "$REPO" \
+            --description "Allow Codex to merge after review feedback is handled and required checks pass" \
+            --color "0e8a16" || true
+          gh label create codex-followup-queued \
+            --repo "$REPO" \
+            --description "Codex follow-up has been requested for this pull request" \
+            --color "5319e7" || true
+
+      - name: Queue Codex follow-up
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          SAME_REPO_PR: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+        run: |
+          labels="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')"
+
+          if [ "$SAME_REPO_PR" != "true" ] && ! printf '%s' "$labels" | grep -Eq '(^|,)codex-autofix(,|$)'; then
+            echo "PR #$PR_NUMBER is from a fork and is not labeled codex-autofix; leaving it untouched."
+            exit 0
+          fi
+
+          gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label codex-followup-queued
+
+          cat > /tmp/codex-followup.md <<'EOF'
+          @codex Please follow up on this pull request.
+
+          Wait for and inspect review feedback, unresolved review threads, merge-conflict state, branch freshness, and CI/check status. Decide whether each review comment is valid. For valid comments, make the smallest safe fix and push to this PR branch. For comments that are already addressed, not applicable, or intentionally declined, reply with a concise explanation.
+
+          Preserve this repository's AGENTS.md rules, especially tenant isolation, privacy, Messenger compliance, quota/billing protections, and production safety. Do not log raw customer content, tokens, PSIDs, tenant secrets, private messages, generated prompts, or generated outputs.
+
+          Resolve merge conflicts safely without discarding user changes. Run the repository's established checks before pushing; at minimum prefer `npm run check` at the root, and when touching `apps/image-gen`, also run `npm run image-gen:check`, `npm run image-gen:test`, and `npm run image-gen:build`.
+
+          After pushing, re-check CI and continue addressing review comments, conflicts, and CI failures until the PR is clean or a real blocker remains. Only merge if this PR has the `codex-automerge` label, all required checks are green, review feedback has been handled or answered, there are no unresolved conflicts, and repository policy allows the merge. If `codex-automerge` is absent, leave the PR ready and report what remains.
+          EOF
+
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/codex-followup.md
+          echo "Queued Codex follow-up for PR #$PR_NUMBER from $EVENT_NAME/$EVENT_ACTION."
+
+  queue-from-check-suite:
+    name: Queue Codex from completed checks
+    if: github.event_name == 'check_suite'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Queue Codex follow-up for failing checks
+        if: github.event.check_suite.conclusion != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.check_suite.pull_requests[0].number }}
+          CHECK_CONCLUSION: ${{ github.event.check_suite.conclusion }}
+        run: |
+          if [ -z "$PR_NUMBER" ]; then
+            echo "Completed check suite is not attached to a pull request; leaving it untouched."
+            exit 0
+          fi
+
+          pr_json="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json isCrossRepository,labels)"
+          labels="$(printf '%s' "$pr_json" | jq -r '[.labels[].name] | join(",")')"
+          is_cross_repository="$(printf '%s' "$pr_json" | jq -r '.isCrossRepository')"
+
+          if [ "$is_cross_repository" = "true" ] && ! printf '%s' "$labels" | grep -Eq '(^|,)codex-autofix(,|$)'; then
+            echo "PR #$PR_NUMBER is from a fork and is not labeled codex-autofix; leaving it untouched."
+            exit 0
+          fi
+
+          gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label codex-followup-queued
+
+          cat > /tmp/codex-ci-followup.md <<EOF
+          @codex CI completed with conclusion \`$CHECK_CONCLUSION\` on this pull request. Please inspect the failing checks, make the smallest safe fixes, run the relevant local checks, push to this PR branch, and re-check CI.
+
+          Preserve AGENTS.md rules, especially tenant isolation, privacy, Messenger compliance, quota/billing protections, and production safety. Only merge if this PR has the \`codex-automerge\` label, all required checks are green, review feedback has been handled or answered, there are no unresolved conflicts, and repository policy allows the merge.
+          EOF
+
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/codex-ci-followup.md
+          echo "Queued Codex CI follow-up for PR #$PR_NUMBER."
