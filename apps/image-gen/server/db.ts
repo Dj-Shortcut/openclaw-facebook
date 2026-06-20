@@ -29,9 +29,9 @@ import {
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { safeLog } from "./_core/logger";
+import { getImageGenerationDailyLimit } from "./_core/quotaPolicy";
 
 let _db: ReturnType<typeof drizzle> | null = null;
-const FREE_DAILY_LIMIT = 3;
 
 function logDatabaseUnavailable(operation: string): void {
   safeLog("database_unavailable", {
@@ -564,7 +564,7 @@ export async function canUserGenerateImage(userId: number): Promise<boolean> {
     return true; // No quota record yet, user can generate
   }
 
-  return quota[0].imagesGenerated < FREE_DAILY_LIMIT;
+  return quota[0].imagesGenerated < getImageGenerationDailyLimit();
 }
 
 /**
@@ -636,7 +636,7 @@ async function reserveUserDailyQuota(userId: number): Promise<boolean> {
         updatedAt = NOW()
     WHERE userId = ${userId}
       AND date = ${today}
-      AND imagesGenerated < ${FREE_DAILY_LIMIT}
+      AND imagesGenerated < ${getImageGenerationDailyLimit()}
   `);
 
   const getAffectedRows = (value: unknown): number => {

@@ -60,9 +60,8 @@ export async function tryHandleAudioMessage(
     return true;
   }
 
-  let committed = false;
-  try {
-    committed = await commitTranscriptionSuccess(input.psid, reservation, {
+  const commitProviderAttemptQuota = async () => {
+    const committed = await commitTranscriptionSuccess(input.psid, reservation, {
       releaseReservation: false,
     });
     if (!committed) {
@@ -70,12 +69,15 @@ export async function tryHandleAudioMessage(
         "Messenger audio transcription quota reservation could not be committed"
       );
     }
+  };
 
+  try {
     const transcript = await transcribePreparedAudioMessage(
       input.reqId,
       input.psid,
       audioUrl,
-      prepared
+      prepared,
+      commitProviderAttemptQuota
     );
     if (!transcript) {
       return false;
@@ -90,6 +92,13 @@ export async function tryHandleAudioMessage(
       timestamp: input.timestamp,
     });
     return true;
+  } catch (error) {
+    if (error instanceof MessengerQuotaReservationCommitError) {
+      await ctx.sendLoggedText(input.psid, t(input.lang, "outOfFreeCredits"), input.reqId);
+      return true;
+    }
+
+    throw error;
   } finally {
     await releaseTranscriptionReservation(input.psid, reservation);
   }
@@ -177,7 +186,8 @@ async function transcribePreparedAudioMessage(
   reqId: string,
   psid: string,
   audioUrl: string,
-  prepared: PreparedAudioForTranscription
+  prepared: PreparedAudioForTranscription,
+  onProviderAttempt: () => Promise<void>
 ): Promise<string | null> {
   const { apiKey, sourceAudio } = prepared;
   const attemptPayload = {
@@ -191,6 +201,7 @@ async function transcribePreparedAudioMessage(
   };
 
   for (let attempt = 0; attempt <= OPENAI_AUDIO_TRANSCRIPTION_MAX_RETRIES; attempt += 1) {
+    await onProviderAttempt();
     const controller = new AbortController();
     const timer = setTimeout(() => {
       controller.abort();

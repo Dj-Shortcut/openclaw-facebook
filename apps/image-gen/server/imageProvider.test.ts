@@ -239,9 +239,11 @@ describe("image provider boundary", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const generator = new OpenAiImageGenerator();
+    const onProviderAttempt = vi.fn(async () => undefined);
     const result = await generateWithSourceImageData(generator, {
       userKey: "user-1",
       reqId: "req-provider-log",
+      onProviderAttempt,
     });
 
     const providerLogs = logSpy.mock.calls
@@ -254,6 +256,7 @@ describe("image provider boundary", () => {
       /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(onProviderAttempt).toHaveBeenCalledTimes(2);
     expect(providerLogs).toEqual([
       {
         level: "info",
@@ -263,6 +266,43 @@ describe("image provider boundary", () => {
         hasSourceImage: true,
       },
     ]);
+  });
+
+  it("does not burn the global image cap when user quota rejects before fetch", async () => {
+    configureOpenAiImagesEnv();
+    process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "1";
+
+    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generator = new OpenAiImageGenerator();
+    await expect(
+      generator.generate({
+        userKey: "user-quota-rejected",
+        reqId: "req-user-quota-rejected",
+        onProviderAttempt: async () => {
+          throw new Error("user quota exhausted");
+        },
+      })
+    ).rejects.toThrow("user quota exhausted");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await expect(
+      generator.generate({
+        userKey: "user-cap-still-available",
+        reqId: "req-cap-still-available",
+        onProviderAttempt: async () => undefined,
+      })
+    ).resolves.toEqual(
+      expect.objectContaining({
+        imageUrl: expect.stringMatching(
+          /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
+        ),
+      })
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("uses prompt-first source-image edits when stale style jobs have no director mode", async () => {

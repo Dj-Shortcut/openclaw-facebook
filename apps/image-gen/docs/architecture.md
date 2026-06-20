@@ -200,10 +200,10 @@ There are two quota strategies represented in code:
 
 - Implemented in `server/_core/messengerQuota.ts`.
 - Daily key derived in UTC (`YYYY-MM-DD`).
-- Free-tier image generation target: `20` provider attempts per sender/user identity per UTC day.
-- Free-tier audio transcription target: `5` provider attempts per sender/user identity per UTC day.
-- Free-tier video generation target: `1` provider attempt per sender/user identity per UTC day.
-- Bot text rate-limit target: `30` messages per sender per `60` seconds.
+- Free-tier image generation default: `20` provider attempts per sender/user identity per UTC day.
+- Free-tier audio transcription default: `5` provider attempts per sender/user identity per UTC day.
+- Free-tier video generation default: `1` provider attempt per sender/user identity per UTC day.
+- Bot text rate-limit default: `30` messages per sender per `60` seconds.
 - Provider attempts count when the paid provider call is about to run. Preflight failures such as missing or invalid source images remain retryable without burning credits; provider failures, timeouts, parse/upload failures, and delivery failures after provider attempt start are counted.
 - Used with state store abstraction.
 

@@ -25,6 +25,7 @@ import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
 import type { GenerationKind } from "./image-generation/generationTypes";
 import type { ImageGenerationQuotaReservation } from "./limits/generationQuota";
+import { MessengerQuotaReservationCommitError } from "./messengerQuota";
 import {
   buildGenerationFailureDiagnosticPayload,
   buildGenerationSuccessDiagnosticPayload,
@@ -134,7 +135,10 @@ export function createMessengerGenerationJobRunner(
           return;
         }
 
-        let quotaCommitted = false;
+        let pendingQuotaReservation:
+          | ImageGenerationQuotaReservation
+          | null = quotaReservation;
+        let providerAttemptsCommitted = 0;
         try {
           await setFlowState(psid, "PROCESSING");
           await sendGenerationStartedAck({
@@ -157,16 +161,27 @@ export function createMessengerGenerationJobRunner(
               sourceImageUrl === state.lastImageUrl)
           );
           const commitProviderAttemptQuota = async () => {
-            if (quotaCommitted) {
-              return;
+            const reservationForAttempt =
+              pendingQuotaReservation ??
+              (await reserveMessengerGenerationQuota({
+                psid,
+                userKey: userId,
+                quotaCount: (await getOrCreateState(psid)).quota.count,
+              }));
+
+            if (!reservationForAttempt) {
+              throw new MessengerQuotaReservationCommitError();
             }
 
             await commitMessengerGenerationQuota({
               psid,
-              reservation: quotaReservation,
+              reservation: reservationForAttempt,
               generationKind: resolvedGenerationKind,
             });
-            quotaCommitted = true;
+            providerAttemptsCommitted += 1;
+            if (pendingQuotaReservation?.token === reservationForAttempt.token) {
+              pendingQuotaReservation = null;
+            }
           };
 
           const generationResult = await executeGenerationFlow({
@@ -189,7 +204,9 @@ export function createMessengerGenerationJobRunner(
           });
 
           if (generationResult.kind === "success") {
-            await commitProviderAttemptQuota();
+            if (providerAttemptsCommitted === 0) {
+              await commitProviderAttemptQuota();
+            }
             await handleGenerationSuccess({
               deps,
               generationResult,
@@ -214,10 +231,10 @@ export function createMessengerGenerationJobRunner(
             rememberSendOutcome,
           });
         } finally {
-          if (!quotaCommitted) {
+          if (pendingQuotaReservation) {
             await releaseMessengerGenerationQuota({
               psid,
-              reservation: quotaReservation,
+              reservation: pendingQuotaReservation,
             });
           }
         }

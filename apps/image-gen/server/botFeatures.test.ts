@@ -46,10 +46,10 @@ describe("bot features", () => {
     delete process.env.FEATURE_RATE_LIMIT_BOT_TEXT_WINDOW_SECONDS;
   });
 
-  it("rate limits inbound text spam after 10 messages", async () => {
+  it("rate limits inbound text spam after 30 messages by default", async () => {
     const psid = "rate-user";
 
-    for (let index = 0; index < 11; index += 1) {
+    for (let index = 0; index < 31; index += 1) {
       await processFacebookWebhookPayload({
         entry: [
           {
@@ -68,7 +68,7 @@ describe("bot features", () => {
     const textExecutions = safeLogMock.mock.calls.filter(
       ([event]) => event === "shared_text_executing"
     );
-    expect(textExecutions).toHaveLength(11);
+    expect(textExecutions).toHaveLength(31);
   });
 
   it("lets remix text fall back to prompt-first quick actions", async () => {

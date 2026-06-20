@@ -3,9 +3,11 @@ import {
   checkFeatureRateLimit,
   getFeatureRateLimitConfig,
 } from "../../featureRateLimit";
+import {
+  DEFAULT_BOT_TEXT_RATE_LIMIT_MAX,
+  DEFAULT_BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS,
+} from "../../quotaPolicy";
 
-const DEFAULT_RATE_WINDOW_SECONDS = 60;
-const DEFAULT_RATE_LIMIT = 10;
 const FEATURE_NAME = "botText";
 
 export function getBotTextRateLimitConfig(): {
@@ -15,8 +17,8 @@ export function getBotTextRateLimitConfig(): {
 } {
   const config = getFeatureRateLimitConfig({
     featureName: FEATURE_NAME,
-    defaultMaxAttempts: DEFAULT_RATE_LIMIT,
-    defaultWindowSeconds: DEFAULT_RATE_WINDOW_SECONDS,
+    defaultMaxAttempts: DEFAULT_BOT_TEXT_RATE_LIMIT_MAX,
+    defaultWindowSeconds: DEFAULT_BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS,
     maxEnv: "BOT_TEXT_RATE_LIMIT_MAX",
     windowSecondsEnv: "BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS",
   });
@@ -39,8 +41,8 @@ export const rateLimitFeature: BotFeature = {
       scope: "bot",
       featureName: FEATURE_NAME,
       subjectId: context.senderId,
-      defaultMaxAttempts: DEFAULT_RATE_LIMIT,
-      defaultWindowSeconds: DEFAULT_RATE_WINDOW_SECONDS,
+      defaultMaxAttempts: DEFAULT_BOT_TEXT_RATE_LIMIT_MAX,
+      defaultWindowSeconds: DEFAULT_BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS,
       maxEnv: "BOT_TEXT_RATE_LIMIT_MAX",
       windowSecondsEnv: "BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS",
     });

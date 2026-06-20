@@ -97,7 +97,7 @@ describe("rateLimitFeature", () => {
 
     try {
       nowSpy.mockReturnValue(baseTime);
-      for (let index = 0; index < 11; index += 1) {
+      for (let index = 0; index < 31; index += 1) {
         await rateLimitFeature.onText?.(
           makeContext({
             senderId: "rate-limit-memory-user",
@@ -131,6 +131,14 @@ describe("rateLimitFeature", () => {
     }
   });
 
+  it("uses 30 messages per 60 seconds as the default text rate limit", () => {
+    expect(getBotTextRateLimitConfig()).toEqual({
+      enabled: true,
+      maxMessages: 30,
+      windowSeconds: 60,
+    });
+  });
+
   it("uses configured text rate limit caps", async () => {
     resetStateStore();
     process.env.BOT_TEXT_RATE_LIMIT_MAX = "2";
@@ -157,7 +165,7 @@ describe("rateLimitFeature", () => {
     process.env.BOT_TEXT_RATE_LIMIT_MAX = "0";
     const sendText = vi.fn(async () => undefined);
 
-    for (let index = 0; index < 12; index += 1) {
+    for (let index = 0; index < 32; index += 1) {
       await rateLimitFeature.onText?.(
         makeContext({
           senderId: "disabled-rate-limit-user",

@@ -242,6 +242,84 @@ describe("webhook audio message router", () => {
     expect(releaseTranscriptionReservationMock).toHaveBeenCalledTimes(1);
   });
 
+  it("counts each retried audio transcription provider attempt", async () => {
+    const ctx = makeContext();
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      const target = typeof url === "string" ? url : url.toString();
+      if (
+        target ===
+        "https://api.openai.com/v1/audio/transcriptions"
+      ) {
+        if (fetchMock.mock.calls.length === 1) {
+          return {
+            ok: false,
+            status: 500,
+            headers: new Headers({ "content-type": "application/json" }),
+            text: async () => "temporary provider failure",
+          } as Response;
+        }
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({ text: "maak een foto van een robot" }),
+        } as Response;
+      }
+      throw new Error(`Unexpected fetch URL: ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await tryHandleAudioMessage(ctx, {
+      psid: "psid-audio-retry",
+      userId: "user-audio-retry",
+      reqId: "req-audio-retry",
+      lang: "nl",
+      attachments: [
+        { type: "audio", payload: { url: "https://audio.example/message-retry.mp3" } },
+      ],
+      text: "",
+    });
+
+    expect(result).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(commitTranscriptionSuccessMock).toHaveBeenCalledTimes(2);
+    expect(handleTextMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops audio transcription retries when quota is exhausted", async () => {
+    const ctx = makeContext();
+    commitTranscriptionSuccessMock
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 500,
+      headers: new Headers({ "content-type": "application/json" }),
+      text: async () => "temporary provider failure",
+    }) as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await tryHandleAudioMessage(ctx, {
+      psid: "psid-audio-retry-exhausted",
+      userId: "user-audio-retry-exhausted",
+      reqId: "req-audio-retry-exhausted",
+      lang: "nl",
+      attachments: [
+        { type: "audio", payload: { url: "https://audio.example/message-retry-exhausted.mp3" } },
+      ],
+      text: "",
+    });
+
+    expect(result).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(commitTranscriptionSuccessMock).toHaveBeenCalledTimes(2);
+    expect(ctx.sendLoggedText).toHaveBeenCalledWith(
+      "psid-audio-retry-exhausted",
+      t("nl", "outOfFreeCredits"),
+      "req-audio-retry-exhausted"
+    );
+    expect(handleTextMessageMock).not.toHaveBeenCalled();
+  });
+
   it("skips OpenAI transcription when downloaded audio exceeds the configured size limit", async () => {
     const ctx = makeContext();
     process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES = "3";

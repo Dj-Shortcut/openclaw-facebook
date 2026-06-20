@@ -84,6 +84,15 @@ Open cost-control work:
 12. [x] Add a dedicated generated-video quota namespace before enabling any video provider call.
 13. [ ] Move remaining feature-specific quota counters toward a single channel-neutral usage ledger before paid rollout.
 
+Quota drift investigation note:
+
+- Root cause: free-tier product targets were documented before runtime defaults changed, while older constants and tests still encoded `3` image/audio attempts and `10` bot text messages. Image and audio provider retry loops also reported only one quota commit for a multi-attempt provider operation.
+- Affected paths reviewed: Messenger primary image generation, queued/background generation, internal Messenger image requests, duplicate delivery recovery, WhatsApp text-to-image and source-image edits, audio transcription, generated video, bot text rate limiting, global daily image/video caps, and provider-attempt callbacks.
+- Bypasses closed: image and audio provider retries now require quota before each external provider call; preflight failures still release reservations without burning credits; duplicate completed deliveries still return before quota reserve/commit.
+- Duplicated logic found: state quota in `messengerQuota.ts`, channel-neutral wrappers in `limits/generationQuota.ts`, global caps/concurrency in `generationGuard.ts`, feature rate limits in `featureRateLimit.ts`, and legacy DB daily quota helpers in `server/db.ts`.
+- Concurrency risks remaining: state-store reservation locks reduce same-sender overlap, but global budget counters can overcount after failed attempts, reservation TTL expiry can still strand in-flight work during long provider calls, and multi-instance behavior depends on Redis-backed state being enabled in production.
+- Follow-up: replace scattered quota constants/counters with one channel-neutral usage ledger/reservation service keyed by channel, sender/user identity, workspace/tenant, operation type, provider/model, reservation token, attempt status, estimated/final cost, and UTC period.
+
 ### Opslag & platform
 
 - [x] Use durable storage proxy for generated images and retained source images

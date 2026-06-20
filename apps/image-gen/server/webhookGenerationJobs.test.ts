@@ -297,6 +297,47 @@ describe("messenger generation job safety", () => {
     expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not let provider retries bypass exhausted image quota", async () => {
+    const originalLimit = process.env.MESSENGER_FREE_DAILY_LIMIT;
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "1";
+    const runner = createTestRunner();
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      await input.onProviderAttempt();
+      try {
+        await input.onProviderAttempt();
+      } catch (error) {
+        return {
+          kind: "error",
+          errorKind: "generation_budget_reached",
+          error,
+          trustedSourceImageUrl: false,
+        };
+      }
+      return failureGenerationResult();
+    });
+
+    try {
+      await runner.processMessengerGenerationJob({
+        psid: "quota-provider-retry-exhausted-user",
+        userId: "quota-provider-retry-exhausted-user-key",
+        reqId: "req-quota-provider-retry-exhausted",
+        lang: "en",
+      });
+    } finally {
+      if (originalLimit === undefined) {
+        delete process.env.MESSENGER_FREE_DAILY_LIMIT;
+      } else {
+        process.env.MESSENGER_FREE_DAILY_LIMIT = originalLimit;
+      }
+    }
+
+    expect(getState("quota-provider-retry-exhausted-user")?.quota.count).toBe(1);
+    expect(sendTextMock).toHaveBeenCalledWith(
+      "quota-provider-retry-exhausted-user",
+      t("en", "generationBudgetReached")
+    );
+  });
+
   it("logs quota bypass with exact id matching", async () => {
     const originalBypassIds = process.env.MESSENGER_QUOTA_BYPASS_IDS;
     process.env.MESSENGER_QUOTA_BYPASS_IDS = "quota-user-1234";

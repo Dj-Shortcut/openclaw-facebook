@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import { getDayKey } from "./messengerStateNormalization";
 import { getOrCreateState, type MessengerUserState } from "./messengerState";
 import {
+  getAudioTranscriptionDailyLimit,
+  getImageGenerationDailyLimit,
+  getVideoGenerationDailyLimit,
+} from "./quotaPolicy";
+import {
   deleteEphemeralKeyIfValue,
   hasEphemeralKeyValue,
   setEphemeralKeyIfAbsent,
@@ -9,9 +14,6 @@ import {
   updateStoredState,
 } from "./stateStore";
 
-const DEFAULT_FREE_DAILY_LIMIT = 3;
-const DEFAULT_DAILY_AUDIO_TRANSCRIPTION_LIMIT = 3;
-const DEFAULT_DAILY_VIDEO_GENERATION_LIMIT = 1;
 const IMAGE_GENERATION_QUOTA_LOCK_MS = 240_000;
 const VIDEO_GENERATION_QUOTA_LOCK_MS = 600_000;
 const TRANSCRIPTION_QUOTA_LOCK_MS = 90_000;
@@ -38,30 +40,15 @@ export class MessengerQuotaReservationCommitError extends Error {
 }
 
 export function getFreeDailyLimit(): number {
-  const configured = Number(process.env.MESSENGER_FREE_DAILY_LIMIT);
-  if (Number.isFinite(configured) && configured >= 0) {
-    return Math.floor(configured);
-  }
-
-  return DEFAULT_FREE_DAILY_LIMIT;
+  return getImageGenerationDailyLimit();
 }
 
 function getTranscriptionLimit(): number {
-  const configured = Number(process.env.MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT);
-  if (Number.isFinite(configured) && configured >= 0) {
-    return Math.floor(configured);
-  }
-
-  return DEFAULT_DAILY_AUDIO_TRANSCRIPTION_LIMIT;
+  return getAudioTranscriptionDailyLimit();
 }
 
 function getVideoGenerationLimit(): number {
-  const configured = Number(process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT);
-  if (Number.isFinite(configured) && configured >= 0) {
-    return Math.floor(configured);
-  }
-
-  return DEFAULT_DAILY_VIDEO_GENERATION_LIMIT;
+  return getVideoGenerationDailyLimit();
 }
 
 function toSeconds(milliseconds: number): number {
@@ -644,6 +631,7 @@ export async function commitTranscriptionSuccess(
     return false;
   }
 
+  let committed = false;
   try {
     const now = Date.now();
     const fallbackState = await Promise.resolve(getOrCreateState(psid));
@@ -657,6 +645,7 @@ export async function commitTranscriptionSuccess(
         );
 
         if (hasQuotaBypass(psid, baseState.userKey)) {
+          committed = true;
           return baseState;
         }
 
@@ -664,6 +653,7 @@ export async function commitTranscriptionSuccess(
           return baseState;
         }
 
+        committed = true;
         return {
           ...baseState,
           transcriptionQuota: {
@@ -674,7 +664,7 @@ export async function commitTranscriptionSuccess(
         };
       })
     );
-    return true;
+    return committed;
   } finally {
     if (releaseReservation) {
       await releaseTranscriptionReservation(psid, reservation);

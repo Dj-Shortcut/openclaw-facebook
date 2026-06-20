@@ -3,7 +3,7 @@ import { canUserGenerateImage, incrementUserQuota } from "./db";
 
 /**
  * Test suite for daily quota enforcement
- * Ensures users can only generate 3 images per UTC day
+ * Ensures users can only generate up to the configured image provider-attempt cap per UTC day.
  */
 describe("Daily Quota System", () => {
   const testUserId = 999;
@@ -22,10 +22,10 @@ describe("Daily Quota System", () => {
     expect(result).toBeDefined();
   });
 
-  it("should prevent a user from generating more than 3 images per day", async () => {
-    // Test that after generating 3 images, canUserGenerateImage returns false
+  it("should prevent a user from generating more than the daily image cap", async () => {
+    // Test that after generating the configured number of images, canUserGenerateImage returns false
     // This would require:
-    // 1. Create a quota record with imagesGenerated = 3
+    // 1. Create a quota record with imagesGenerated equal to the configured cap
     // 2. Call canUserGenerateImage
     // 3. Expect it to return false
     expect(true).toBe(true); // Placeholder

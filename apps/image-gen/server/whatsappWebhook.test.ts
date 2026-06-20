@@ -462,5 +462,34 @@ describe("whatsapp webhook flow", () => {
       generateSpy.mockRestore();
     }
   });
-});
 
+  it("does not let WhatsApp image provider retries bypass exhausted quota", async () => {
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "1";
+    const generateSpy = vi
+      .spyOn(OpenAiImageGenerator.prototype, "generate")
+      .mockImplementation(async input => {
+        await input.onProviderAttempt?.();
+        await input.onProviderAttempt?.();
+        throw new Error("retry should not reach provider when quota is exhausted");
+      });
+
+    try {
+      await runWhatsAppImageGeneration({
+        senderId: "wa-provider-retry-exhausted",
+        userId: "wa-provider-retry-exhausted",
+        reqId: "req-wa-provider-retry-exhausted",
+        lang: "nl",
+        promptHint: "Maak een testbeeld",
+        generationKind: "text_to_image",
+      });
+
+      expect(getState("wa-provider-retry-exhausted")?.quota.count).toBe(1);
+      expect(sendWhatsAppTextMock).toHaveBeenCalledWith(
+        "wa-provider-retry-exhausted",
+        "Even pauze, ons maandbudget is bereikt. Probeer later opnieuw."
+      );
+    } finally {
+      generateSpy.mockRestore();
+    }
+  });
+});

@@ -157,12 +157,11 @@ export function createMessengerVideoGenerationRunner(
     }
 
     const didRun = await runGuardedVideoGeneration(psid, async () => {
-      let reservation: VideoGenerationQuotaReservation | null = null;
-      let quotaCommitted = false;
+      let pendingQuotaReservation: VideoGenerationQuotaReservation | null = null;
       const flowDeadline = createVideoFlowDeadline();
       try {
-        reservation = await reserveVideoGenerationForAttempt(psid);
-        if (!reservation) {
+        pendingQuotaReservation = await reserveVideoGenerationForAttempt(psid);
+        if (!pendingQuotaReservation) {
           sendOutcome = await sendVideoText(
             deps,
             psid,
@@ -183,15 +182,25 @@ export function createMessengerVideoGenerationRunner(
         await assertMessengerDailyVideoBudgetAvailable({ reqId });
         const provider = getVideoProvider();
         const commitProviderAttemptQuota = async () => {
-          if (quotaCommitted || !reservation) {
-            return true;
-          }
-
-          quotaCommitted = await commitVideoGenerationSuccess(psid, reservation);
-          if (!quotaCommitted) {
+          const reservationForAttempt =
+            pendingQuotaReservation ?? (await reserveVideoGenerationForAttempt(psid));
+          if (!reservationForAttempt) {
             throw new MessengerQuotaReservationCommitError(
               "Messenger video quota reservation could not be committed"
             );
+          }
+
+          const committed = await commitVideoGenerationSuccess(
+            psid,
+            reservationForAttempt
+          );
+          if (!committed) {
+            throw new MessengerQuotaReservationCommitError(
+              "Messenger video quota reservation could not be committed"
+            );
+          }
+          if (pendingQuotaReservation?.token === reservationForAttempt.token) {
+            pendingQuotaReservation = null;
           }
 
           safeLog("messenger_video_quota_decision", {
@@ -200,7 +209,6 @@ export function createMessengerVideoGenerationRunner(
             user: toLogUser(userId),
             allowed: true,
           });
-          return true;
         };
         safeLog("messenger_video_generation_started", {
           reqId,
@@ -324,8 +332,8 @@ export function createMessengerVideoGenerationRunner(
           "budget_or_internal_failed"
         );
       } finally {
-        if (!quotaCommitted) {
-          await releaseReservation(psid, reservation);
+        if (pendingQuotaReservation) {
+          await releaseReservation(psid, pendingQuotaReservation);
         }
       }
     });
