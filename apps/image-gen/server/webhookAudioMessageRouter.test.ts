@@ -614,6 +614,10 @@ describe("webhook audio message router", () => {
   it("returns true when transcription quota is exhausted and sends out-of-credits message", async () => {
     const ctx = makeContext();
     reserveTranscriptionForAttemptMock.mockResolvedValue(null);
+    const fetchMock = vi.fn(async () => {
+      throw new Error("transcription provider should not be called");
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
     const result = await tryHandleAudioMessage(ctx, {
       psid: "psid-4",
@@ -635,7 +639,90 @@ describe("webhook audio message router", () => {
     expect(reserveTranscriptionForAttemptMock).toHaveBeenCalledTimes(1);
     expect(commitTranscriptionSuccessMock).not.toHaveBeenCalled();
     expect(releaseTranscriptionReservationMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(handleTextMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps audio transcription blocked by transcription daily cap even when spend caps are unset", async () => {
+    const ctx = makeContext();
+    reserveTranscriptionForAttemptMock.mockResolvedValue(null);
+    delete process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD;
+    delete process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD;
+    delete process.env.MESSENGER_USER_DAILY_SPEND_CAP_USD;
+
+    const fetchMock = vi.fn(async () => {
+      throw new Error("transcription provider should not be called");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await tryHandleAudioMessage(ctx, {
+      psid: "psid-4-daily-cap",
+      userId: "user-4-daily-cap",
+      reqId: "req-audio-cap-without-spend-caps",
+      lang: "nl",
+      attachments: [
+        { type: "audio", payload: { url: "https://audio.example/message.mp3" } },
+      ],
+      text: "",
+    });
+
+    expect(result).toBe(true);
+    expect(reserveTranscriptionForAttemptMock).toHaveBeenCalledTimes(1);
+    expect(commitTranscriptionSuccessMock).not.toHaveBeenCalled();
+    expect(releaseTranscriptionReservationMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(ctx.sendLoggedText).toHaveBeenCalledWith(
+      "psid-4-daily-cap",
+      t("nl", "outOfFreeCredits"),
+      "req-audio-cap-without-spend-caps"
+    );
+  });
+
+  it("still runs transcription when USD spend caps are unset", async () => {
+    const ctx = makeContext();
+    delete process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD;
+    delete process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD;
+    delete process.env.MESSENGER_USER_DAILY_SPEND_CAP_USD;
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      const target = typeof url === "string" ? url : url.toString();
+      if (target === "https://api.openai.com/v1/audio/transcriptions") {
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({ text: "maak een foto van een drone" }),
+        } as Response;
+      }
+      return {
+        ok: true,
+        headers: new Headers({ "content-type": "audio/mpeg" }),
+        arrayBuffer: async () => Buffer.from([1, 2, 3, 4]),
+      } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await tryHandleAudioMessage(ctx, {
+      psid: "psid-4-no-spend-cap",
+      userId: "user-4-no-spend-cap",
+      reqId: "req-audio-without-spend-caps",
+      lang: "nl",
+      attachments: [
+        { type: "audio", payload: { url: "https://audio.example/message.mp3" } },
+      ],
+      text: "",
+    });
+
+    expect(result).toBe(true);
+    expect(reserveTranscriptionForAttemptMock).toHaveBeenCalledTimes(1);
+    expect(commitTranscriptionSuccessMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalled();
+    expect(handleTextMessageMock).toHaveBeenCalledWith(
+      ctx,
+      expect.objectContaining({
+        psid: "psid-4-no-spend-cap",
+        userId: "user-4-no-spend-cap",
+        text: "maak een foto van een drone",
+      })
+    );
   });
 
   it("returns false when OPENAI API key is missing", async () => {
