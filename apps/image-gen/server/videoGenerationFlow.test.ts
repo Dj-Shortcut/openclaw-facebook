@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 
 const { safeLogMock, storagePutMock } = vi.hoisted(() => ({
   safeLogMock: vi.fn(),
@@ -31,6 +32,10 @@ import { commitVideoGenerationSuccess, reserveVideoGenerationForAttempt } from "
 import { createMessengerVideoGenerationRunner } from "./_core/videoGenerationFlow";
 import { setVideoProviderForTests } from "./_core/video-generation/videoProviderRegistry";
 import type { VideoProvider } from "./_core/video-generation/videoProvider";
+
+function requestSummaryKey(reqId: string): string {
+  return `sha256:${createHash("sha256").update(reqId).digest("hex").slice(0, 12)}`;
+}
 
 const FIXED_LEDGER_NOW = new Date("2026-06-21T12:00:00.000Z");
 const FIXED_LEDGER_PERIOD = "2026-06-21";
@@ -170,7 +175,7 @@ describe("messenger video generation flow", () => {
         provider: "video-provider",
         model: null,
         userKey: "video-priced-user-key",
-        reqId: "req-video-priced",
+        reqId: requestSummaryKey("req-video-priced"),
         status: "provider_attempt_succeeded",
         estimatedCostUsd: 0.12,
         estimatedOutputCostUsd: null,
@@ -360,7 +365,7 @@ describe("messenger video generation flow", () => {
         provider: "video-provider",
         model: null,
         userKey: "video-provider-retry-user-key",
-        reqId: "req-video-provider-retry",
+        reqId: requestSummaryKey("req-video-provider-retry"),
         status: "provider_attempt_failed",
         costEstimateComplete: false,
         estimateSource: "unpriced",
