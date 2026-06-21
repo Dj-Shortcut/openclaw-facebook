@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   deleteEphemeralKeyIfValue,
   decrementExpiringCounter,
@@ -25,6 +26,11 @@ const DEFAULT_VIDEO_PSID_LOCK_MS = 900000;
 const DEFAULT_GLOBAL_SLOT_WAIT_MS = 100;
 const DAILY_BUDGET_KEY_PREFIX = "messenger:daily-image-budget";
 const DAILY_VIDEO_BUDGET_KEY_PREFIX = "messenger:daily-video-budget";
+
+function hashRequestId(reqId: string): string {
+  const digest = createHash("sha256").update(reqId).digest("hex").slice(0, 24);
+  return `req_${digest}`;
+}
 
 export class MessengerDailyImageBudgetExceededError extends Error {
   constructor(message = "Messenger daily image budget reached") {
@@ -375,7 +381,7 @@ export async function assertMessengerDailySpendBudgetAvailable(input: {
   if (!Number.isFinite(attemptEstimate) || attemptEstimate <= 0) {
     safeLog("messenger_daily_spend_budget_unpriced_attempt_blocked", {
       level: "warn",
-      reqId: input.reqId,
+      reqId: hashRequestId(input.reqId),
       capUsd,
     });
     await notifyOwnerCostAlert({
@@ -394,7 +400,7 @@ export async function assertMessengerDailySpendBudgetAvailable(input: {
   if (projectedSpendUsd > capUsd) {
     safeLog("messenger_daily_spend_budget_reached", {
       level: "warn",
-      reqId: input.reqId,
+      reqId: hashRequestId(input.reqId),
       capUsd,
       currentSpendUsd: summary.estimatedCostUsd,
       attemptEstimateUsd: attemptEstimate,
@@ -431,7 +437,7 @@ export async function assertMessengerMonthlySpendBudgetAvailable(input: {
   if (!Number.isFinite(attemptEstimate) || attemptEstimate <= 0) {
     safeLog("messenger_monthly_spend_budget_unpriced_attempt_blocked", {
       level: "warn",
-      reqId: input.reqId,
+      reqId: hashRequestId(input.reqId),
       capUsd,
     });
     await notifyOwnerCostAlert({
@@ -453,7 +459,7 @@ export async function assertMessengerMonthlySpendBudgetAvailable(input: {
   if (projectedSpendUsd > capUsd) {
     safeLog("messenger_monthly_spend_budget_reached", {
       level: "warn",
-      reqId: input.reqId,
+      reqId: hashRequestId(input.reqId),
       capUsd,
       currentSpendUsd: summary.estimatedCostUsd,
       attemptEstimateUsd: attemptEstimate,
@@ -491,7 +497,7 @@ export async function assertMessengerUserDailySpendBudgetAvailable(input: {
   if (!Number.isFinite(attemptEstimate) || attemptEstimate <= 0) {
     safeLog("messenger_user_daily_spend_budget_unpriced_attempt_blocked", {
       level: "warn",
-      reqId: input.reqId,
+      reqId: hashRequestId(input.reqId),
       user: logUser,
       capUsd,
     });
@@ -512,7 +518,7 @@ export async function assertMessengerUserDailySpendBudgetAvailable(input: {
   if (projectedSpendUsd > capUsd) {
     safeLog("messenger_user_daily_spend_budget_reached", {
       level: "warn",
-      reqId: input.reqId,
+      reqId: hashRequestId(input.reqId),
       user: logUser,
       capUsd,
       currentSpendUsd: summary.estimatedCostUsd,
@@ -549,7 +555,7 @@ export async function assertMessengerDailyImageBudgetAvailable(input: {
     await decrementExpiringCounter(key);
     safeLog("messenger_daily_image_budget_reached", {
       level: "warn",
-      reqId: input.reqId,
+      reqId: hashRequestId(input.reqId),
       cap,
       count,
     });
@@ -586,7 +592,7 @@ export async function assertMessengerDailyVideoBudgetAvailable(input: {
     await decrementExpiringCounter(key);
     safeLog("messenger_daily_video_budget_reached", {
       level: "warn",
-      reqId: input.reqId,
+      reqId: hashRequestId(input.reqId),
       cap,
       count,
     });

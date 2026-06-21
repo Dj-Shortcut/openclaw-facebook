@@ -39,6 +39,30 @@ function entry(overrides: Partial<CostLedgerEntry>): CostLedgerEntry {
 }
 
 describe("cost ledger", () => {
+  it("stores a stable request-id hash for repeated raw request IDs", async () => {
+    await appendCostLedgerEntry(
+      {
+        ...entry({ reqId: "req-stable-id" }),
+        id: "req-stable:attempt-1",
+      },
+      new Date("2026-06-21T10:00:00.000Z")
+    );
+    await appendCostLedgerEntry(
+      {
+        ...entry({ reqId: "req-stable-id" }),
+        id: "req-stable:attempt-2",
+      },
+      new Date("2026-06-21T10:01:00.000Z")
+    );
+
+    const entries = await readCostLedgerPeriod("2026-06-21");
+    const hashValues = entries.map(ledgerEntry => ledgerEntry.reqId);
+
+    expect(new Set(hashValues)).toHaveLength(1);
+    expect(hashValues[0]).toMatch(/^sha256:[a-f0-9]{12}$/);
+    expect(hashValues.join(",")).not.toContain("req-stable-id");
+  });
+
   it("stores provider attempt metadata by UTC period", async () => {
     await appendCostLedgerEntry(
       entry({ id: "req-cost:attempt-1" }),
@@ -59,7 +83,112 @@ describe("cost ledger", () => {
     ]);
   });
 
-  it("serializes concurrent same-period appends without dropping entries", async () => {
+  it("summarizes owner-safe spend metadata without user content", async () => {
+    await appendCostLedgerEntry(
+      {
+        id: "req-image:attempt-1",
+        channel: "facebook_messenger",
+        operation: "image_generation",
+        provider: "openai-images",
+        model: "gpt-image-2",
+        pricingModel: "gpt-image-1",
+        userKey: "user-key-1",
+        reqId: "req-image",
+        generationKind: "text_to_image",
+        status: "provider_attempt_started",
+        estimatedCostUsd: 0.025,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: null,
+        costEstimateComplete: true,
+        estimateSource: "env_override",
+        unpricedCostComponents: [],
+      },
+      new Date("2026-06-21T01:00:00.000Z")
+    );
+    await appendCostLedgerEntry(
+      {
+        id: "req-audio:attempt-1",
+        channel: "facebook_messenger",
+        operation: "audio_transcription",
+        provider: "openai-audio",
+        model: "whisper-1",
+        userKey: "user-key-2",
+        reqId: "req-audio",
+        status: "provider_attempt_started",
+        estimatedCostUsd: null,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: null,
+        costEstimateComplete: false,
+        estimateSource: "unpriced",
+        unpricedCostComponents: ["audio_duration"],
+      },
+      new Date("2026-06-21T02:00:00.000Z")
+    );
+    await appendCostLedgerEntry(
+      {
+        id: "req-image-edit:attempt-1",
+        channel: "facebook_messenger",
+        operation: "image_generation",
+        provider: "openai-images",
+        model: "gpt-5",
+        pricingModel: "gpt-image-1",
+        userKey: "user-key-1",
+        reqId: "req-image-edit",
+        generationKind: "source_image_edit",
+        status: "provider_attempt_started",
+        estimatedCostUsd: null,
+        estimatedOutputCostUsd: 0.042,
+        finalCostUsd: null,
+        costEstimateComplete: false,
+        estimateSource: "partial_source_image_input_unpriced",
+        unpricedCostComponents: ["source_image_input"],
+      },
+      new Date("2026-06-21T03:00:00.000Z")
+    );
+
+    const summary = await summarizeCostLedgerPeriod("2026-06-21");
+
+    expect(summary).toMatchObject({
+      period: "2026-06-21",
+      totalEntries: 3,
+      uniqueUserCount: 2,
+      estimatedCostUsd: 0.067,
+      finalCostUsd: 0,
+      completeEstimateEntries: 1,
+      incompleteEstimateEntries: 2,
+      unpricedCostComponents: ["audio_duration", "source_image_input"],
+      byOperation: {
+        image_generation: {
+          attempts: 2,
+          estimatedCostUsd: 0.067,
+          finalCostUsd: 0,
+        },
+        audio_transcription: {
+          attempts: 1,
+          estimatedCostUsd: 0,
+          finalCostUsd: 0,
+        },
+      },
+      byProvider: {
+        "openai-images": {
+          attempts: 2,
+          estimatedCostUsd: 0.067,
+          finalCostUsd: 0,
+        },
+        "openai-audio": {
+          attempts: 1,
+          estimatedCostUsd: 0,
+          finalCostUsd: 0,
+        },
+      },
+    });
+    expect(JSON.stringify(summary)).not.toContain("prompt");
+    expect(JSON.stringify(summary)).not.toContain("private");
+    expect(JSON.stringify(summary)).not.toContain("https://");
+    expect(JSON.stringify(summary)).not.toContain("facebook:");
+  });
+
+  it("serializes concurrent in-memory appends for the same period", async () => {
     await Promise.all(
       Array.from({ length: 25 }, (_, index) =>
         appendCostLedgerEntry(

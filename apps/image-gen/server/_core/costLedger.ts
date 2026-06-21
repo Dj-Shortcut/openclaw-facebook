@@ -86,6 +86,14 @@ function periodFromDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+function normalizeStoredReqId(reqId: string): string {
+  return toRequestSummaryKey(reqId);
+}
+
+function summarizeRequestId(reqId: string): string {
+  return reqId.startsWith("sha256:") ? reqId : toRequestSummaryKey(reqId);
+}
+
 function dateFromPeriod(period: string): Date {
   return new Date(`${period}T00:00:00.000Z`);
 }
@@ -246,7 +254,7 @@ function addToRequestBucket(
   target: Record<string, CostRequestSummaryBucket>,
   entry: StoredCostLedgerEntry
 ): void {
-  const key = toRequestSummaryKey(entry.reqId);
+  const key = summarizeRequestId(entry.reqId);
   const bucket =
     target[key] ??
     (target[key] = {
@@ -320,6 +328,7 @@ export async function appendCostLedgerEntry(
   return await withCostLedgerPeriodLock(period, async () => {
     const storedEntry: StoredCostLedgerEntry = {
       ...entry,
+      reqId: normalizeStoredReqId(entry.reqId),
       period,
       recordedAt: recordedAt.toISOString(),
     };

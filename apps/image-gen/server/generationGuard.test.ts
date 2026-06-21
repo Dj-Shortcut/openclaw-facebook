@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 
 const stateStoreMocks = vi.hoisted(() => ({
   decrementExpiringCounter: vi.fn(),
@@ -16,13 +17,24 @@ const notificationMocks = vi.hoisted(() => ({
   notifyOwner: vi.fn(),
 }));
 
+const loggerMocks = vi.hoisted(() => ({
+  safeLog: vi.fn(),
+}));
+
+function hashRequestId(reqId: string): string {
+  const digest = createHash("sha256").update(reqId).digest("hex").slice(0, 24);
+  return `req_${digest}`;
+}
+
 describe("generationGuard", () => {
   let guard: typeof import("./_core/generationGuard");
 
   beforeEach(async () => {
     vi.resetModules();
     vi.doMock("./_core/stateStore", () => stateStoreMocks);
+    vi.doMock("./_core/logger", () => loggerMocks);
     vi.doMock("./_core/notification", () => notificationMocks);
+    vi.doMock("./_core/logger", () => loggerMocks);
     stateStoreMocks.hasEphemeralKey.mockResolvedValue(false);
     stateStoreMocks.decrementExpiringCounter.mockResolvedValue(1);
     stateStoreMocks.incrementExpiringCounter.mockResolvedValue(1);
@@ -39,6 +51,7 @@ describe("generationGuard", () => {
     delete process.env.MESSENGER_MAX_IMAGE_JOBS;
     delete process.env.MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS;
     delete process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP;
+    delete process.env.MESSENGER_GLOBAL_DAILY_VIDEO_CAP;
     delete process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD;
     delete process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD;
     delete process.env.MESSENGER_USER_DAILY_SPEND_CAP_USD;
@@ -47,7 +60,9 @@ describe("generationGuard", () => {
     delete process.env.MESSENGER_PSID_LOCK_TTL_MS;
     vi.restoreAllMocks();
     vi.doUnmock("./_core/stateStore");
+    vi.doUnmock("./_core/logger");
     vi.doUnmock("./_core/notification");
+    vi.doUnmock("./_core/logger");
     vi.clearAllMocks();
   });
 
@@ -190,6 +205,16 @@ describe("generationGuard", () => {
     expect(stateStoreMocks.decrementExpiringCounter).toHaveBeenCalledWith(
       "messenger:daily-image-budget:2026-06-01"
     );
+    expect(loggerMocks.safeLog).toHaveBeenCalledWith(
+      "messenger_daily_image_budget_reached",
+      expect.objectContaining({
+        reqId: hashRequestId("req-over-budget"),
+        cap: 1,
+        count: 2,
+        level: "warn",
+      })
+    );
+    expect(loggerMocks.safeLog).toHaveBeenCalledTimes(1);
   });
 
   it("reports whether the daily spend budget cap is enabled", () => {
@@ -493,6 +518,15 @@ describe("generationGuard", () => {
         now: new Date("2026-06-01T12:00:00.000Z"),
       })
     ).rejects.toBeInstanceOf(guard.MessengerSpendBudgetExceededError);
+    expect(loggerMocks.safeLog).toHaveBeenCalledWith(
+      "messenger_user_daily_spend_budget_reached",
+      expect.objectContaining({
+        reqId: hashRequestId("req-user-spend-over"),
+        capUsd: 0.03,
+        user: expect.any(String),
+        level: "warn",
+      })
+    );
   });
 
   it("fails closed for unpriced provider attempts when the per-user spend cap is enabled", async () => {
