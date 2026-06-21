@@ -39,10 +39,10 @@ export class MessengerDailyVideoBudgetExceededError extends Error {
   }
 }
 
-export class MessengerDailySpendBudgetExceededError extends Error {
-  constructor(message = "Messenger daily spend budget reached") {
+export class MessengerSpendBudgetExceededError extends Error {
+  constructor(message = "Messenger spend budget reached") {
     super(message);
-    this.name = "MessengerDailySpendBudgetExceededError";
+    this.name = "MessengerSpendBudgetExceededError";
   }
 }
 
@@ -315,7 +315,7 @@ export async function assertMessengerDailySpendBudgetAvailable(input: {
       reqId: input.reqId,
       capUsd,
     });
-    throw new MessengerDailySpendBudgetExceededError(
+    throw new MessengerSpendBudgetExceededError(
       "Messenger daily spend budget requires priced provider attempts"
     );
   }
@@ -332,7 +332,7 @@ export async function assertMessengerDailySpendBudgetAvailable(input: {
       attemptEstimateUsd: attemptEstimate,
       projectedSpendUsd,
     });
-    throw new MessengerDailySpendBudgetExceededError();
+    throw new MessengerSpendBudgetExceededError();
   }
 }
 
@@ -355,7 +355,7 @@ export async function assertMessengerMonthlySpendBudgetAvailable(input: {
       reqId: input.reqId,
       capUsd,
     });
-    throw new MessengerDailySpendBudgetExceededError(
+    throw new MessengerSpendBudgetExceededError(
       "Messenger monthly spend budget requires priced provider attempts"
     );
   }
@@ -375,7 +375,7 @@ export async function assertMessengerMonthlySpendBudgetAvailable(input: {
       attemptEstimateUsd: attemptEstimate,
       projectedSpendUsd,
     });
-    throw new MessengerDailySpendBudgetExceededError();
+    throw new MessengerSpendBudgetExceededError();
   }
 }
 
@@ -400,7 +400,7 @@ export async function assertMessengerUserDailySpendBudgetAvailable(input: {
       user: toLogUser(input.userKey),
       capUsd,
     });
-    throw new MessengerDailySpendBudgetExceededError(
+    throw new MessengerSpendBudgetExceededError(
       "Messenger user daily spend budget requires priced provider attempts"
     );
   }
@@ -418,7 +418,7 @@ export async function assertMessengerUserDailySpendBudgetAvailable(input: {
       attemptEstimateUsd: attemptEstimate,
       projectedSpendUsd,
     });
-    throw new MessengerDailySpendBudgetExceededError();
+    throw new MessengerSpendBudgetExceededError();
   }
 }
 

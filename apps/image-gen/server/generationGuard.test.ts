@@ -260,7 +260,7 @@ describe("generationGuard", () => {
         estimatedCostUsd: 0.025,
         now: new Date("2026-06-01T12:00:00.000Z"),
       })
-    ).rejects.toBeInstanceOf(guard.MessengerDailySpendBudgetExceededError);
+    ).rejects.toBeInstanceOf(guard.MessengerSpendBudgetExceededError);
   });
 
   it("fails closed for unpriced provider attempts when the daily spend cap is enabled", async () => {
@@ -272,7 +272,7 @@ describe("generationGuard", () => {
         reqId: "req-unpriced",
         estimatedCostUsd: null,
       })
-    ).rejects.toBeInstanceOf(guard.MessengerDailySpendBudgetExceededError);
+    ).rejects.toBeInstanceOf(guard.MessengerSpendBudgetExceededError);
   });
 
   it("reports whether the monthly spend budget cap is enabled", () => {
@@ -323,7 +323,7 @@ describe("generationGuard", () => {
         estimatedCostUsd: 0.025,
         now: new Date("2026-06-15T12:00:00.000Z"),
       })
-    ).rejects.toBeInstanceOf(guard.MessengerDailySpendBudgetExceededError);
+    ).rejects.toBeInstanceOf(guard.MessengerSpendBudgetExceededError);
   });
 
   it("fails closed for unpriced provider attempts when the monthly spend cap is enabled", async () => {
@@ -335,7 +335,7 @@ describe("generationGuard", () => {
         reqId: "req-monthly-unpriced",
         estimatedCostUsd: null,
       })
-    ).rejects.toBeInstanceOf(guard.MessengerDailySpendBudgetExceededError);
+    ).rejects.toBeInstanceOf(guard.MessengerSpendBudgetExceededError);
   });
 
   it("reports whether the per-user daily spend budget cap is enabled", () => {
@@ -434,7 +434,7 @@ describe("generationGuard", () => {
         estimatedCostUsd: 0.025,
         now: new Date("2026-06-01T12:00:00.000Z"),
       })
-    ).rejects.toBeInstanceOf(guard.MessengerDailySpendBudgetExceededError);
+    ).rejects.toBeInstanceOf(guard.MessengerSpendBudgetExceededError);
   });
 
   it("fails closed for unpriced provider attempts when the per-user spend cap is enabled", async () => {
@@ -447,6 +447,6 @@ describe("generationGuard", () => {
         userKey: "user-key",
         estimatedCostUsd: null,
       })
-    ).rejects.toBeInstanceOf(guard.MessengerDailySpendBudgetExceededError);
+    ).rejects.toBeInstanceOf(guard.MessengerSpendBudgetExceededError);
   });
 });

@@ -212,6 +212,7 @@ describe("data deletion service", () => {
     expect(serializedLogs).toContain("user_data_storage_delete_failed");
     expect(serializedLogs).not.toContain(psid);
     expect(serializedLogs).not.toContain("psid");
+    logSpy.mockRestore();
   });
 
   it("keeps every failed object deletion marker during user erasure", async () => {

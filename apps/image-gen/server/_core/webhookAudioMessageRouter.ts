@@ -11,7 +11,7 @@ import {
   assertMessengerDailySpendBudgetAvailable,
   assertMessengerMonthlySpendBudgetAvailable,
   assertMessengerUserDailySpendBudgetAvailable,
-  MessengerDailySpendBudgetExceededError,
+  MessengerSpendBudgetExceededError,
 } from "./generationGuard";
 import {
   commitTranscriptionSuccess,
@@ -106,7 +106,7 @@ export async function tryHandleAudioMessage(
   } catch (error) {
     if (
       error instanceof MessengerQuotaReservationCommitError ||
-      error instanceof MessengerDailySpendBudgetExceededError
+      error instanceof MessengerSpendBudgetExceededError
     ) {
       await ctx.sendLoggedText(input.psid, t(input.lang, "outOfFreeCredits"), input.reqId);
       return true;

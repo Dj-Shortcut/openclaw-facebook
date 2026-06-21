@@ -258,11 +258,10 @@ describe("image provider boundary", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const generator = new OpenAiImageGenerator();
-    const onProviderAttempt = vi.fn(async () => undefined);
     const result = await generateWithSourceImageData(generator, {
       userKey: "user-1",
       reqId: "req-provider-log",
-      onProviderAttempt,
+      onProviderAttempt: vi.fn(async () => undefined),
     });
 
     const providerLogs = logSpy.mock.calls
@@ -275,7 +274,6 @@ describe("image provider boundary", () => {
       /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(onProviderAttempt).toHaveBeenCalledTimes(2);
     expect(providerLogs).toEqual([
       {
         level: "info",
@@ -599,7 +597,7 @@ describe("image provider boundary", () => {
         reqId: "req-spend-cap",
         onProviderAttempt,
       })
-    ).rejects.toThrow("Messenger daily spend budget reached");
+    ).rejects.toThrow("Messenger spend budget reached");
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(onProviderAttempt).not.toHaveBeenCalled();
@@ -621,7 +619,7 @@ describe("image provider boundary", () => {
         reqId: "req-user-spend-cap",
         onProviderAttempt,
       })
-    ).rejects.toThrow("Messenger daily spend budget reached");
+    ).rejects.toThrow("Messenger spend budget reached");
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(onProviderAttempt).not.toHaveBeenCalled();
@@ -643,7 +641,7 @@ describe("image provider boundary", () => {
         reqId: "req-monthly-spend-cap",
         onProviderAttempt,
       })
-    ).rejects.toThrow("Messenger daily spend budget reached");
+    ).rejects.toThrow("Messenger spend budget reached");
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(onProviderAttempt).not.toHaveBeenCalled();

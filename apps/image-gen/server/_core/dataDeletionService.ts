@@ -7,6 +7,7 @@ import { toLogUser } from "./privacy";
 import { deleteScopedState } from "./stateStore";
 import { deleteProviderVideoForUser } from "./video-generation/videoProviderRegistry";
 import {
+  anonymizePsid,
   clearUserState,
   getState,
   setPendingSourceImageDeleteUrls,
@@ -49,13 +50,8 @@ async function deleteStoredUrl(logUser: string, imageUrl: string): Promise<boole
 
 export async function deleteUserData(psid: string): Promise<void> {
   const state = await getState(psid);
-  if (!state) {
-    await Promise.resolve(clearUserState(psid));
-    return;
-  }
-
-  const urls = Array.from(new Set(getStateImageUrls(state)));
-  const logUser = toLogUser(state.userKey);
+  const userKey = state?.userKey ?? anonymizePsid(psid);
+  const logUser = toLogUser(userKey);
 
   const runStep = async (step: string, fn: () => Promise<void>) => {
     try {
@@ -68,6 +64,17 @@ export async function deleteUserData(psid: string): Promise<void> {
       });
     }
   };
+
+  await runStep("cost_ledger", async () => {
+    await deleteCostLedgerEntriesForUser(userKey);
+  });
+
+  if (!state) {
+    await Promise.resolve(clearUserState(psid));
+    return;
+  }
+
+  const urls = Array.from(new Set(getStateImageUrls(state)));
 
   await runStep("face_memory", () => deleteFaceMemoryForUser(psid));
   const deleteResults = await Promise.all(
@@ -82,9 +89,6 @@ export async function deleteUserData(psid: string): Promise<void> {
   await runStep("messenger_generation_completion", () =>
     deleteMessengerGenerationCompletionsForUser(state.userKey)
   );
-  await runStep("cost_ledger", async () => {
-    await deleteCostLedgerEntriesForUser(state.userKey);
-  });
   if (state.lastGeneratedVideoProviderJobId) {
     await runStep("video_provider_artifact", () =>
       deleteProviderVideoForUser({

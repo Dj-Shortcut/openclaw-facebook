@@ -22,7 +22,7 @@ import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import { storageGet, storageKeyFromPublicUrl } from "../storage";
 import {
   MessengerDailyImageBudgetExceededError,
-  MessengerDailySpendBudgetExceededError,
+  MessengerSpendBudgetExceededError,
 } from "./generationGuard";
 import { MessengerQuotaReservationCommitError } from "./messengerQuota";
 import { safeLog } from "./logger";
@@ -221,7 +221,7 @@ function classifyGenerationError(error: unknown): GenerationFlowFailureKind {
 
   if (
     error instanceof MessengerDailyImageBudgetExceededError ||
-    error instanceof MessengerDailySpendBudgetExceededError
+    error instanceof MessengerSpendBudgetExceededError
   ) {
     return "generation_budget_reached";
   }

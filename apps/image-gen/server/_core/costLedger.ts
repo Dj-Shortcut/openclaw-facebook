@@ -285,7 +285,7 @@ export async function safelyAppendCostLedgerEntry(
     return await appendCostLedgerEntry(entry, recordedAt);
   } catch (error) {
     safeLog("cost_ledger_append_failed", {
-      reqId: entry.reqId,
+      reqId: toRequestSummaryKey(entry.reqId),
       channel: entry.channel,
       operation: entry.operation,
       provider: entry.provider,

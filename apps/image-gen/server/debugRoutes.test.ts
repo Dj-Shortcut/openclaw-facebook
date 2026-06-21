@@ -1,9 +1,10 @@
 import http from "node:http";
 import express from "express";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { bindTestHttpServer } from "./testHttpServer";
 import { registerDebugRoutes } from "./_core/runtime/debugRoutes";
 import { appendCostLedgerEntry } from "./_core/costLedger";
+import * as costLedger from "./_core/costLedger";
 import { clearStateStore } from "./_core/stateStore";
 import { resetAdminAuthRateLimiterForTests } from "./_core/adminAuth";
 
@@ -108,6 +109,30 @@ describe("debug/admin routes", () => {
       expect(JSON.stringify(payload)).not.toContain("facebook:");
       expect(JSON.stringify(payload)).not.toContain("secret-admin-token");
     } finally {
+      await server.close();
+    }
+  });
+
+  it("returns 500 when cost summary generation fails", async () => {
+    process.env.ADMIN_TOKEN = "secret-admin-token";
+    const summaryMock = vi
+      .spyOn(costLedger, "summarizeCostLedgerPeriod")
+      .mockRejectedValue(new Error("summary failed"));
+    const server = await startServer();
+
+    try {
+      const response = await fetch(
+        `${server.baseUrl}/admin/cost-summary?period=2026-06-21`,
+        { headers: { "x-admin-token": "secret-admin-token" } }
+      );
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({
+        error: "Failed to summarize cost period",
+        requestId: "summary failed",
+      });
+    } finally {
+      summaryMock.mockRestore();
       await server.close();
     }
   });

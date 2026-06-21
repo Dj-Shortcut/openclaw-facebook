@@ -126,8 +126,16 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
       }
 
       const period = parsedQuery.data.period ?? currentUtcPeriod();
-      const summary = await summarizeCostLedgerPeriod(period);
-      return res.status(200).json(summary);
+      try {
+        const summary = await summarizeCostLedgerPeriod(period);
+        return res.status(200).json(summary);
+      } catch (error) {
+        return res.status(500).json({
+          error: "Failed to summarize cost period",
+          requestId:
+            error instanceof Error ? error.message : "Unknown error",
+        });
+      }
     }
   );
 }

@@ -19,7 +19,7 @@ import {
   assertMessengerDailyVideoBudgetAvailable,
   assertMessengerMonthlySpendBudgetAvailable,
   assertMessengerUserDailySpendBudgetAvailable,
-  MessengerDailySpendBudgetExceededError,
+  MessengerSpendBudgetExceededError,
   MessengerDailyVideoBudgetExceededError,
   releaseMessengerDailyVideoBudgetReservation,
   runGuardedVideoGeneration,
@@ -29,7 +29,30 @@ import {
   getMessengerVideoTimeoutMs,
 } from "./video-generation/videoConfig";
 import { getVideoProvider } from "./video-generation/videoProviderRegistry";
+import type { VideoProvider } from "./video-generation/videoProvider";
 import type { MessengerSendOutcome } from "./messengerApi";
+
+function getVideoProviderName(provider: VideoProvider): string {
+  const configuredProvider = process.env.MESSENGER_VIDEO_PROVIDER?.trim().toLowerCase();
+  if (configuredProvider) {
+    return configuredProvider;
+  }
+
+  const providerName = (provider as { name?: string }).name?.trim();
+  if (providerName) {
+    return providerName.toLowerCase();
+  }
+
+  if (provider.constructor.name === "OpenAiVideoProvider") {
+    return "openai";
+  }
+
+  if (!provider.constructor.name || provider.constructor.name === "Object") {
+    return "video-provider";
+  }
+
+  return provider.constructor.name.toLowerCase();
+}
 
 type VideoGenerationDeps = {
   maybeSendInFlightMessage: (
@@ -256,7 +279,7 @@ export function createMessengerVideoGenerationRunner(
                 id: ledgerEntryId,
                 channel: "facebook_messenger",
                 operation: "video_generation",
-                provider: "video-provider",
+                provider: getVideoProviderName(provider),
                 model: null,
                 userKey: userId,
                 reqId,
@@ -434,7 +457,7 @@ export function createMessengerVideoGenerationRunner(
           deps,
           psid,
           error instanceof MessengerDailyVideoBudgetExceededError ||
-            error instanceof MessengerDailySpendBudgetExceededError ||
+            error instanceof MessengerSpendBudgetExceededError ||
             error instanceof MessengerQuotaReservationCommitError
             ? t(lang, "outOfVideoCredits")
             : t(lang, "videoGenerationGenericFailure"),
