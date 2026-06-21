@@ -65,7 +65,7 @@ access:
 7. [ ] Add owner cost alerts and an owner dashboard for spend, quota blocks, duplicate skips, provider failures, queue health, and delivery failures.
 8. [ ] Continue verifying storage-proxy delivery under Messenger crawler constraints, including generated outputs and retained source images.
 9. [ ] Evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory.
-10. [ ] Keep public legal pages current (`/privacy`, `/terms`, `/data-deletion`) and aligned with Meta App Review, face-memory status, retention, and deletion behavior.
+10. [x] Keep public legal pages current (`/privacy`, `/terms`, `/data-deletion`) and aligned with Meta App Review, face-memory status, retention, and deletion behavior. Current image-gen runtime legal pages include tested privacy, terms, and data-deletion routes; future portal relocation remains a Gate 3 task.
 11. [ ] Document Meta App Review impact for each new Messenger capability and avoid permission expansion unless product/policy approval is explicit.
 
 Exit criteria: all paid/provider calls are budget-gated and ledgered, public legal
