@@ -42,7 +42,7 @@ Required before any broader traffic, marketing, or customer onboarding:
 6. [x] Keep face memory disabled by default and retain the protected emergency disable route for rollback.
 7. [x] Maintain the documented Fly rollback workflow and non-destructive workspace migration behavior.
 8. [ ] Run and record a live Messenger smoke after each production deploy: webhook verification, signed POST delivery, text reply, prompt-first text-to-image, source-photo edit, quota-exhausted path, and Graph API send failure handling.
-9. [ ] Verify GDPR consent and `delete-my-data` behavior end-to-end with live or production-equivalent state, including generated assets, retained source images, face-memory state, and tenant/customer portal records.
+9. [ ] Verify GDPR consent and `delete-my-data` behavior end-to-end with live or production-equivalent state, including generated assets, retained source images, face-memory state, and tenant/customer portal records. The smoke evidence validator now requires these deletion-proof checks before Gate 1 exit.
 10. [x] Add a release checklist entry that confirms `/healthz`, `/readyz`, `/metrics`, queue depth, failed/dead-lettered jobs, and event-loop p95/p99 before and after deploy.
 
 Exit criteria: live smoke passes, deletion proof is recorded, no public route
