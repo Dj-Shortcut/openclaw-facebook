@@ -12,7 +12,10 @@ vi.mock("./storage", async importOriginal => {
   };
 });
 
-import { handleMessengerConsentGate } from "./_core/consentService";
+import {
+  handleMessengerConsentGate,
+  handleWhatsAppConsentGate,
+} from "./_core/consentService";
 import {
   anonymizePsid,
   getOrCreateState,
@@ -127,5 +130,105 @@ describe("Messenger consent deletion flow", () => {
     expect(sendText).toHaveBeenCalledWith(
       expect.stringContaining("Your data has been deleted")
     );
+  });
+
+  it("accepts polite delete-data command variants used in Messenger smoke tests", async () => {
+    const psid = "messenger-delete-command-variant-user";
+    const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
+
+    await Promise.resolve(getOrCreateState(psid));
+    await Promise.resolve(setConsentState(psid, true));
+
+    const initialState = await Promise.resolve(getState(psid));
+    expect(initialState).not.toBeNull();
+
+    await expect(
+      handleMessengerConsentGate({
+        psid,
+        lang: "en",
+        text: "Delete my data aub",
+        state: initialState!,
+        sendText,
+        sendActions,
+      })
+    ).resolves.toBe(true);
+
+    expect(sendActions).toHaveBeenCalledWith(
+      expect.stringContaining("This will delete all data"),
+      expect.arrayContaining([
+        expect.objectContaining({ id: "GDPR_DELETE_CONFIRM" }),
+      ])
+    );
+    expect((await Promise.resolve(getState(psid)))?.pendingDeleteConfirm).toBe(true);
+  });
+
+  it("accepts Dutch delete-data command variants already classified by the gateway", async () => {
+    const psid = "messenger-delete-command-gegevens-user";
+    const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
+
+    await Promise.resolve(getOrCreateState(psid));
+    await Promise.resolve(setConsentState(psid, true));
+
+    const initialState = await Promise.resolve(getState(psid));
+    expect(initialState).not.toBeNull();
+
+    await expect(
+      handleMessengerConsentGate({
+        psid,
+        lang: "nl",
+        text: "verwijder mijn gegevens a.u.b.",
+        state: initialState!,
+        sendText,
+        sendActions,
+      })
+    ).resolves.toBe(true);
+
+    expect(sendActions).toHaveBeenCalledWith(
+      expect.stringContaining("Dit verwijdert alle data"),
+      expect.arrayContaining([
+        expect.objectContaining({ id: "GDPR_DELETE_CONFIRM" }),
+      ])
+    );
+    expect((await Promise.resolve(getState(psid)))?.pendingDeleteConfirm).toBe(true);
+  });
+
+  it("accepts polite WhatsApp delete-data command variants", async () => {
+    const senderId = "whatsapp-delete-command-variant-user";
+    const sendText = vi.fn(async () => undefined);
+    const sendButtons = vi.fn(async () => undefined);
+
+    await Promise.resolve(getOrCreateState(senderId));
+    await Promise.resolve(setConsentState(senderId, true));
+
+    const initialState = await Promise.resolve(getState(senderId));
+    expect(initialState).not.toBeNull();
+
+    await expect(
+      handleWhatsAppConsentGate({
+        event: {
+          channel: "whatsapp",
+          messageId: "wamid-delete-command-variant",
+          messageType: "text",
+          senderId,
+          userId: senderId,
+          textBody: "delete my data please",
+          timestamp: 1_771_000_000,
+        },
+        lang: "en",
+        state: initialState!,
+        sendText,
+        sendButtons,
+      })
+    ).resolves.toBe(true);
+
+    expect(sendButtons).toHaveBeenCalledWith(
+      expect.stringContaining("This will delete all data"),
+      expect.arrayContaining([
+        expect.objectContaining({ id: "GDPR_DELETE_CONFIRM" }),
+      ])
+    );
+    expect((await Promise.resolve(getState(senderId)))?.pendingDeleteConfirm).toBe(true);
   });
 });
