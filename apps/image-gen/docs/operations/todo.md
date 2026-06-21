@@ -5,8 +5,8 @@
 
 ## Verified snapshot
 
-- Last reviewed against code: **2026-06-01**
-- Verified commit: **`a341b4e`**
+- Last reviewed against code: **2026-06-21**
+- Verified commit: **`6e2ceb0`**
 - Current direction: generic prompt-first image generation; legacy style-picker UI, quick-reply flows, and director-mode preset plumbing are removed. Internal style-preset compatibility may remain only as backend fallback.
 - Product direction: `leaderbot.live` becomes a tenant/customer portal for managing each customer's own AI. The OpenClaw/Messenger gateway remains shielded and is not the customer-facing app.
 - Historical audit and inventory files are not active plans. Keep valid open work here instead of reviving stale audit snapshots.
@@ -18,6 +18,80 @@
 - Leaderbot-specific bridge code that currently lives in `src/monitor.ts` is temporary. It must stay behind an adapter boundary and remain explicitly opt-in (`leaderbotBridgeEnabled`) so ClawHub/private installs do not forward Messenger content to the external image-generation service just because host-level bridge tokens exist.
 - Conversation modules must not import Messenger or WhatsApp transport APIs. They should expose channel-neutral conversation responses/actions for renderers to translate into platform-specific controls.
 - State, quota, and storage boundaries must later become explicitly tenant-, workspace-, and channel-scoped before broader customer rollout, with no shared customer-content paths across tenants.
+
+## Production release strategy
+
+Leaderbot is already publicly reachable, so release work is gated by live-safety
+risk rather than feature ambition. Each gate should be completed as small PRs
+with targeted tests and metadata-only observability. Do not expand public access,
+Meta permissions, paid provider usage, or customer self-serve features until the
+prior gate is proven in production.
+
+### Gate 1: immediate stabilization
+
+Goal: keep the live Messenger bot reliable, bounded, and reversible while it is
+reachable by real users.
+
+Required before any broader traffic, marketing, or customer onboarding:
+
+1. [x] Preserve Meta webhook verification, POST signature validation, request-size limits, fast ACK behavior, and Messenger response-window compatibility.
+2. [x] Keep the OpenClaw public gateway shielded: expose only required webhook/health routes and deny built-in high-cost `image_generate` on the gateway.
+3. [x] Keep Messenger image/audio/video quota commits tied to provider attempts, with retryable preflight failures releasing reservations.
+4. [x] Keep Redis-backed webhook ingress, generation queue dedupe, worker lease/reclaim behavior, and queue metrics enabled for production image-generation traffic.
+5. [x] Keep privacy-safe logging defaults: hashed/pseudonymous sender identifiers, redacted errors, and no raw PSIDs, tokens, customer messages, uploaded knowledge, or generated prompts/outputs in logs.
+6. [x] Keep face memory disabled by default and retain the protected emergency disable route for rollback.
+7. [x] Maintain the documented Fly rollback workflow and non-destructive workspace migration behavior.
+8. [ ] Run and record a live Messenger smoke after each production deploy: webhook verification, signed POST delivery, text reply, prompt-first text-to-image, source-photo edit, quota-exhausted path, and Graph API send failure handling.
+9. [ ] Verify GDPR consent and `delete-my-data` behavior end-to-end with live or production-equivalent state, including generated assets, retained source images, face-memory state, and tenant/customer portal records.
+10. [x] Add a release checklist entry that confirms `/healthz`, `/readyz`, `/metrics`, queue depth, failed/dead-lettered jobs, and event-loop p95/p99 before and after deploy.
+
+Exit criteria: live smoke passes, deletion proof is recorded, no public route
+regression is found, cost/quota metrics are visible, and rollback target is known
+before deployment.
+
+### Gate 2: public hardening
+
+Goal: make the public bot safe for sustained usage beyond controlled smoke.
+
+Required before enabling open `dmPolicy`, public promotion, or broader free-tier
+access:
+
+1. [ ] Implement per-image/request cost tracking.
+2. [ ] Add full host-level budget gates before all expensive model/image/tool calls.
+3. [ ] Add default-deny tool policy for all high-cost tools exposed to untrusted Facebook-originated users.
+4. [ ] Add per-user daily spend caps, a global Facebook daily spend cap, and monthly cost cap enforcement.
+5. [ ] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, usage, estimated cost, final cost, status, and UTC period.
+6. [ ] Add owner cost alerts and an owner dashboard for spend, quota blocks, duplicate skips, provider failures, queue health, and delivery failures.
+7. [ ] Continue verifying storage-proxy delivery under Messenger crawler constraints, including generated outputs and retained source images.
+8. [ ] Evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory.
+9. [ ] Keep public legal pages current (`/privacy`, `/terms`, `/data-deletion`) and aligned with Meta App Review, face-memory status, retention, and deletion behavior.
+10. [ ] Document Meta App Review impact for each new Messenger capability and avoid permission expansion unless product/policy approval is explicit.
+
+Exit criteria: all paid/provider calls are budget-gated and ledgered, public legal
+copy matches behavior, owner monitoring can detect cost/reliability regressions,
+and Meta review/demo notes are reproducible.
+
+### Gate 3: customer-platform expansion
+
+Goal: turn `leaderbot.live` into a tenant-owned customer platform without
+exposing internal gateway controls or cross-tenant data.
+
+Required before broad customer launch:
+
+1. [ ] Design the `leaderbot.live` tenant/customer portal as a real app, not a brochure site.
+2. [ ] Define the tenant model for customer workspace, owned AI identity, channel connections, knowledge, usage, billing, and privacy controls.
+3. [ ] Add portal authentication.
+4. [ ] Add billing and usage controls, including user-facing balance/spend overview and upgrade prompts.
+5. [ ] Move public legal routes (`/privacy`, `/terms`, `/data-deletion`) into the portal surface before pointing customer traffic there.
+6. [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health/legal/customer-app surfaces.
+7. [ ] Move remaining feature-specific quota counters toward a single channel-neutral, tenant/workspace-scoped usage ledger before paid rollout.
+8. [ ] Verify tenant isolation across uploaded knowledge, extracted text, embeddings/retrieval artifacts, assistant memory, conversations, channel identifiers, generated prompts/outputs, billing, logs, support access, export, and deletion paths.
+9. [ ] Provide customer-facing bot instructions, current generic prompt behavior copy, privacy controls, and export/deletion instructions.
+10. [ ] Keep legacy style-picker/campaign assets removed and do not reintroduce style catalogs unless explicitly requested.
+
+Exit criteria: customer data is tenant-scoped by design, support/break-glass access
+is explicit and auditable, customer billing/privacy controls exist, and public
+traffic cannot reach internal gateway admin/API surfaces.
 
 ## Actieve backlog (open)
 

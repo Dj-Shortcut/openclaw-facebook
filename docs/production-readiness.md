@@ -2,7 +2,11 @@
 
 Status: Not ready for broad public launch; ready for controlled production smoke after deploy.
 
-Last updated: 2026-05-30
+Last updated: 2026-06-21
+
+Canonical release strategy and open work are tracked in
+[`apps/image-gen/docs/operations/todo.md`](../apps/image-gen/docs/operations/todo.md).
+This document is the deploy/smoke checklist for the current gateway surface.
 
 ## Production Flow
 
@@ -77,6 +81,14 @@ Health:
 
 ```bash
 curl -I https://leaderbot-openclaw-gateway.fly.dev/healthz
+curl -I https://leaderbot-fb-image-gen.fly.dev/healthz
+```
+
+Image-gen readiness and metrics:
+
+```bash
+curl -fsS https://leaderbot-fb-image-gen.fly.dev/readyz
+curl -fsS https://leaderbot-fb-image-gen.fly.dev/metrics
 ```
 
 Check persistent workspace path after deploy:
@@ -92,6 +104,26 @@ Check logs:
 ```bash
 fly logs -a leaderbot-openclaw-gateway
 ```
+
+## Release Gate Checklist
+
+Before deploy:
+
+- Confirm rollback target with `fly releases -a leaderbot-openclaw-gateway`.
+- Confirm the gateway `/healthz` route is reachable and no additional gateway UI/API routes are publicly exposed.
+- Confirm image-gen `/healthz`, `/readyz`, and `/metrics` are reachable.
+- Confirm image-gen queue metrics show bounded `messenger_generation_queue_jobs{state="queued"}`, `messenger_generation_queue_jobs{state="processing"}`, and `messenger_generation_global_slots{state="active"}`.
+- Confirm failed/dead-lettered generation jobs are zero or have an owner-reviewed incident note.
+- Confirm recent logs contain no raw PSIDs, access tokens, customer messages, uploaded knowledge, generated prompts, or generated outputs.
+- Confirm no public route exposure drift from the intended webhook/health/legal/customer-app surfaces.
+
+After deploy:
+
+- Re-run gateway `/healthz` and image-gen `/healthz`, `/readyz`, and `/metrics`.
+- Confirm `webhook_ack_sent` latency stays within the current production target and event-loop p95/p99 remains below the documented rollout threshold.
+- Confirm queue depth drains normally, failed/dead-lettered job counts do not increase, and worker lease/reclaim logs are healthy after a worker restart or deploy event.
+- Run the manual Messenger smoke below with the real Page.
+- Record metadata-only release notes: commit, image/release id, smoke result, rollback target, and any cost/quota anomalies.
 
 Manual Messenger smoke:
 
