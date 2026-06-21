@@ -31,6 +31,7 @@ import { getOrCreateState, resetStateStore } from "./_core/messengerState";
 import { commitVideoGenerationSuccess, reserveVideoGenerationForAttempt } from "./_core/messengerQuota";
 import { createMessengerVideoGenerationRunner } from "./_core/videoGenerationFlow";
 import { setVideoProviderForTests } from "./_core/video-generation/videoProviderRegistry";
+import { OpenAiVideoProvider } from "./_core/video-generation/openAiVideoProvider";
 import type { VideoProvider } from "./_core/video-generation/videoProvider";
 
 function requestSummaryKey(reqId: string): string {
@@ -379,6 +380,96 @@ describe("messenger video generation flow", () => {
     ]);
     expect(JSON.stringify(ledgerEntries)).not.toContain("laat hem bewegen");
     expect(JSON.stringify(ledgerEntries)).not.toContain("https://img.example/source.jpg");
+  });
+
+  it("records OpenAI video attempts once when provider writes its own ledger entry", async () => {
+    process.env.OPENAI_API_KEY = "openai-key";
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_LEDGER_NOW);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "video_1", status: "completed" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        })
+      );
+    global.fetch = fetchMock as typeof global.fetch;
+    setVideoProviderForTests(new OpenAiVideoProvider());
+    const deps = makeDeps();
+    const runVideoGeneration = createMessengerVideoGenerationRunner(deps);
+
+    await runVideoGeneration(
+      "video-openai-user",
+      "video-openai-user-key",
+      "req-video-openai-single",
+      "nl",
+      "https://img.example/source.jpg",
+      "laat hem dansen"
+    );
+
+    const ledgerEntries = await readCostLedgerPeriod(FIXED_LEDGER_PERIOD);
+    expect(ledgerEntries).toHaveLength(1);
+    expect(ledgerEntries[0]).toMatchObject({
+      id: "req-video-openai-single:video:1",
+      operation: "video_generation",
+      provider: "openai-video",
+      status: "provider_attempt_succeeded",
+      reqId: requestSummaryKey("req-video-openai-single"),
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("marks OpenAI video attempts failed as failed, not duplicated", async () => {
+    process.env.OPENAI_API_KEY = "openai-key";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        })
+      )
+      .mockResolvedValueOnce(new Response("provider error", { status: 500 }));
+    global.fetch = fetchMock as typeof global.fetch;
+    setVideoProviderForTests(new OpenAiVideoProvider());
+    const deps = makeDeps();
+    const runVideoGeneration = createMessengerVideoGenerationRunner(deps);
+
+    await runVideoGeneration(
+      "video-openai-failed-user",
+      "video-openai-failed-user-key",
+      "req-video-openai-failed",
+      "nl",
+      "https://img.example/source.jpg",
+      "laat hem dansen"
+    );
+
+    expect(await readCostLedgerPeriod(FIXED_LEDGER_PERIOD)).toEqual([
+      expect.objectContaining({
+        id: "req-video-openai-failed:video:1",
+        status: "provider_attempt_failed",
+        reqId: requestSummaryKey("req-video-openai-failed"),
+      }),
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(deps.sendLoggedText).toHaveBeenCalledWith(
+      "video-openai-failed-user",
+      t("nl", "videoGenerationGenericFailure"),
+      "req-video-openai-failed"
+    );
   });
 
   it("stops video provider retries when quota is exhausted", async () => {
