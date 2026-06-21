@@ -32,6 +32,7 @@ import {
 import { processConsentedFacebookWebhookPayload } from "./testConsentHelpers";
 
 const TEST_PEPPER = "ci-test-pepper";
+const TEST_SOURCE_IMAGE_FETCH_URL = "https://source-image.test/mock.jpg";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
 const originalEnableFaceMemory = process.env.ENABLE_FACE_MEMORY;
 const originalFaceMemoryRetentionDays =
@@ -42,8 +43,10 @@ const processFacebookWebhookPayload = processConsentedFacebookWebhookPayload(
 );
 
 function installSourceImageRequestHook(): void {
-  setSourceImageRequestForTests(async sourceImageUrl => {
-    const response = await fetch(sourceImageUrl, { redirect: "manual" });
+  setSourceImageRequestForTests(async () => {
+    const response = await fetch(TEST_SOURCE_IMAGE_FETCH_URL, {
+      redirect: "manual",
+    });
     return {
       response,
       contentType: response.headers.get("content-type") ?? "application/octet-stream",
@@ -75,6 +78,7 @@ describe("photo-first onboarding", () => {
       vi.fn(async (url: string | URL) => {
         const urlString = typeof url === "string" ? url : url.toString();
         if (
+          urlString === TEST_SOURCE_IMAGE_FETCH_URL ||
           urlString.startsWith("https://img.example/") ||
           urlString.startsWith("https://leaderbot-fb-image-gen.fly.dev/generated/")
         ) {

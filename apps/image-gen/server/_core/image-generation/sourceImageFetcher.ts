@@ -99,7 +99,18 @@ function isTransientNetworkError(error: unknown): boolean {
     return false;
   }
 
-  return error.name === "AbortError" || error instanceof TypeError;
+  const code =
+    "code" in error && typeof error.code === "string" ? error.code : undefined;
+
+  return (
+    error.name === "AbortError" ||
+    error instanceof TypeError ||
+    code === "ECONNRESET" ||
+    code === "ETIMEDOUT" ||
+    code === "ENETUNREACH" ||
+    code === "EHOSTUNREACH" ||
+    code === "ECONNREFUSED"
+  );
 }
 
 function parseAllowedHostsFromEnv(): string[] {
@@ -243,8 +254,7 @@ function blockSourceImageUrl(
 
 function validateSourceImageUrlOrThrow(
   sourceImageUrl: string,
-  reqId?: string,
-  options?: SourceImageDownloadOptions
+  reqId?: string
 ): ValidatedSourceImageRequest {
   let parsedUrl: URL;
 
@@ -307,13 +317,39 @@ async function fetchSourceImageAttempt(
   timeoutMs: number,
   reqId: string
 ): Promise<SourceImageFetchAttemptResult> {
-  const resolvedIpAddress = resolvedIpAddresses[0];
-  if (!resolvedIpAddress) {
+  if (resolvedIpAddresses.length === 0) {
     return blockSourceImageUrl(reqId, "dns_lookup_empty", {
       hostname: sourceImageUrl.hostname,
     });
   }
 
+  let lastError: unknown;
+  for (const resolvedIpAddress of resolvedIpAddresses) {
+    try {
+      return await fetchSourceImageAttemptForAddress(
+        sourceImageUrl,
+        resolvedIpAddress,
+        timeoutMs
+      );
+    } catch (error) {
+      lastError = error;
+      if (!isTransientNetworkError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+  throw new MissingInputImageError("Failed to download source image");
+}
+
+async function fetchSourceImageAttemptForAddress(
+  sourceImageUrl: URL,
+  resolvedIpAddress: string,
+  timeoutMs: number
+): Promise<SourceImageFetchAttemptResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => {
     controller.abort();
@@ -674,8 +710,7 @@ async function downloadSourceImageOrThrow(
 ): Promise<DownloadedSourceImage> {
   const validatedSourceImageUrl = validateSourceImageUrlOrThrow(
     sourceImageUrl,
-    reqId,
-    options
+    reqId
   );
   const timeoutMs = getInboundImageTimeoutMs();
   let totalFetchMs = 0;
@@ -695,9 +730,15 @@ async function downloadSourceImageOrThrow(
         timeoutMs,
         reqId
       );
-      assertNoRedirectResponse(response, reqId);
+      try {
+        assertNoRedirectResponse(response, reqId);
+      } catch (error) {
+        await response.body?.cancel();
+        throw error;
+      }
 
       if (!response.ok) {
+        await response.body?.cancel();
         totalFetchMs += Date.now() - attemptStartedAt;
         if (shouldRetrySourceImageStatus(attempt, response, reqId)) {
           continue;

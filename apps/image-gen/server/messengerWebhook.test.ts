@@ -115,17 +115,22 @@ function promptFromOpenAiRequest(init: RequestInit | undefined): string {
 const GENERATED_IMAGE_BASE64 = Buffer.from("fake-png").toString("base64");
 const GENERATED_SOURCE_IMAGE_URL_PREFIX =
   "https://leaderbot-fb-image-gen.fly.dev/generated/";
+const TEST_SOURCE_IMAGE_FETCH_URL = "https://source-image.test/mock.jpg";
 const DEFAULT_ALLOWED_SOURCE_IMAGE_HOSTS =
   "img.example,lookaside.fbsbx.com,leaderbot-fb-image-gen.fly.dev";
+const sourceImageRequestMock = vi.fn();
 
 function installSourceImageRequestHook(): void {
-  setSourceImageRequestForTests(async sourceImageUrl => {
-    const response = await fetch(sourceImageUrl, { redirect: "manual" });
+  sourceImageRequestMock.mockImplementation(async () => {
+    const response = await fetch(TEST_SOURCE_IMAGE_FETCH_URL, {
+      redirect: "manual",
+    });
     return {
       response,
       contentType: response.headers.get("content-type") ?? "application/octet-stream",
     };
   });
+  setSourceImageRequestForTests(sourceImageRequestMock);
 }
 
 function isNormalizedSourceImageUrl(url: string | URL): boolean {
@@ -137,6 +142,10 @@ function isSourceImageFetchUrl(
   exactExternalUrl?: string
 ): boolean {
   const urlString = toUrlString(url);
+  if (urlString === TEST_SOURCE_IMAGE_FETCH_URL) {
+    return true;
+  }
+
   if (isNormalizedSourceImageUrl(urlString)) {
     return true;
   }
@@ -273,6 +282,7 @@ afterAll(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  sourceImageRequestMock.mockReset();
   setSourceImageRequestForTests(null);
   setSourceImageDnsLookupForTests(null);
   delete process.env.OPENAI_API_KEY;
@@ -629,7 +639,7 @@ describe("messenger webhook dedupe", () => {
     });
 
     expect(
-      fetchMock.mock.calls.some(
+      sourceImageRequestMock.mock.calls.some(
         ([url]) => toUrlString(url) === "https://img.example/source.jpg"
       )
     ).toBe(true);
@@ -758,7 +768,7 @@ describe("messenger webhook dedupe", () => {
     });
 
     expect(
-      fetchMock.mock.calls.some(
+      sourceImageRequestMock.mock.calls.some(
         ([url]) =>
           toUrlString(url) === "https://img.example/retained-source.jpg"
       )
@@ -817,7 +827,7 @@ describe("messenger webhook dedupe", () => {
     });
 
     expect(
-      fetchMock.mock.calls.some(
+      sourceImageRequestMock.mock.calls.some(
         ([url]) =>
           toUrlString(url) ===
           "https://leaderbot-fb-image-gen.fly.dev/generated/generated-landscape.jpg"
@@ -908,7 +918,7 @@ describe("messenger webhook dedupe", () => {
     });
 
     expect(
-      fetchMock.mock.calls.some(
+      sourceImageRequestMock.mock.calls.some(
         ([url]) =>
           toUrlString(url) === "https://img.example/retained-source.jpg"
       )
@@ -1809,7 +1819,7 @@ describe("messenger deterministic free text", () => {
     });
 
     expect(
-      fetchMock.mock.calls.some(
+      sourceImageRequestMock.mock.calls.some(
         ([url]) => toUrlString(url) === "https://img.example/caption-source.jpg"
       )
     ).toBe(true);

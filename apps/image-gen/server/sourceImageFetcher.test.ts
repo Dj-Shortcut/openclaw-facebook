@@ -89,6 +89,70 @@ describe("source image fetcher", () => {
     });
   });
 
+  it("tries another validated public DNS address when the first connection fails", async () => {
+    process.env.SOURCE_IMAGE_ALLOWED_HOSTS = "scontent.xx.fbcdn.net";
+    setSourceImageDnsLookupForTests(async () => [
+      { address: "2001:db8::1", family: 6 },
+      { address: "31.13.84.36", family: 4 },
+    ]);
+
+    const fixture = Buffer.alloc(7000, 9);
+    mockHttpsRequest.mockImplementation((input: unknown, callback?: (res: IncomingMessage) => void) => {
+      const requestOptions = input as { hostname?: string };
+      const request = new PassThrough() as ClientRequest;
+      if (requestOptions.hostname === "2001:db8::1") {
+        process.nextTick(() => {
+          request.emit("error", Object.assign(new Error("unreachable"), { code: "ENETUNREACH" }));
+        });
+        return request;
+      }
+
+      callback?.(
+        createHttpResponse({
+          statusCode: 200,
+          statusMessage: "OK",
+          headers: { "content-type": "image/jpeg" },
+          body: fixture,
+        })
+      );
+      return request;
+    });
+
+    const downloaded = await fetchExternalSourceImageForIngress({
+      sourceImageUrl:
+        "https://scontent-atl3-3.xx.fbcdn.net/v/t39.30808-6/photo.jpg?stp=dst-jpg",
+      reqId: "req-meta-scontent-ip-fallback",
+    });
+
+    expect(downloaded.buffer).toEqual(fixture);
+    expect(mockHttpsRequest).toHaveBeenCalledTimes(2);
+    expect(mockHttpsRequest.mock.calls.map(call => (call[0] as { hostname?: string }).hostname)).toEqual([
+      "2001:db8::1",
+      "31.13.84.36",
+    ]);
+  });
+
+  it("normalizes pinned request network failures to missing input image errors", async () => {
+    process.env.SOURCE_IMAGE_ALLOWED_HOSTS = "scontent.xx.fbcdn.net";
+    setSourceImageDnsLookupForTests(async () => [{ address: "31.13.84.36", family: 4 }]);
+
+    mockHttpsRequest.mockImplementation(() => {
+      const request = new PassThrough() as ClientRequest;
+      process.nextTick(() => {
+        request.emit("error", Object.assign(new Error("reset"), { code: "ECONNRESET" }));
+      });
+      return request;
+    });
+
+    await expect(
+      fetchExternalSourceImageForIngress({
+        sourceImageUrl:
+          "https://scontent-atl3-3.xx.fbcdn.net/v/t39.30808-6/photo.jpg?stp=dst-jpg",
+        reqId: "req-source-network-error",
+      })
+    ).rejects.toThrow("Failed to download source image");
+  });
+
   it("blocks source-image fetches when DNS resolves to private addresses", async () => {
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS = "scontent.xx.fbcdn.net";
     setSourceImageDnsLookupForTests(async () => [{ address: "10.0.0.1", family: 4 }]);

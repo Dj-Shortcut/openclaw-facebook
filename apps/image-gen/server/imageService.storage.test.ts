@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setSourceImageDnsLookupForTests } from "./_core/image-generation/sourceImageFetcher";
+import {
+  setSourceImageDnsLookupForTests,
+  setSourceImageRequestForTests,
+} from "./_core/image-generation/sourceImageFetcher";
 
 const GENERATED_IMAGE_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0ioAAAAASUVORK5CYII=";
 const STORED_SOURCE_IMAGE_URL =
   "https://leaderbot-fb-image-gen.fly.dev/generated/source.jpg";
+const TEST_SOURCE_IMAGE_FETCH_URL = "https://source-image.test/mock.jpg";
 
 function toUrlString(url: string | URL): string {
   return typeof url === "string" ? url : url.toString();
@@ -14,12 +18,22 @@ describe("OpenAi image delivery via object storage", () => {
     setSourceImageDnsLookupForTests(async () => [
       { address: "93.184.216.34", family: 4 },
     ]);
+    setSourceImageRequestForTests(async () => {
+      const response = await fetch(TEST_SOURCE_IMAGE_FETCH_URL, {
+        redirect: "manual",
+      });
+      return {
+        response,
+        contentType: response.headers.get("content-type") ?? "application/octet-stream",
+      };
+    });
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.resetModules();
     setSourceImageDnsLookupForTests(null);
+    setSourceImageRequestForTests(null);
     delete process.env.NODE_ENV;
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_IMAGE_OUTPUT_FORMAT;
@@ -40,7 +54,7 @@ describe("OpenAi image delivery via object storage", () => {
 
     const sourceImage = Buffer.alloc(7000, 8);
     const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
-      if (toUrlString(url) === STORED_SOURCE_IMAGE_URL) {
+      if (toUrlString(url) === TEST_SOURCE_IMAGE_FETCH_URL) {
         return {
           ok: true,
           headers: new Headers({ "content-type": "image/jpeg" }),

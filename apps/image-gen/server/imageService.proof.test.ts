@@ -13,6 +13,7 @@ const GENERATED_IMAGE_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0ioAAAAASUVORK5CYII=";
 const STORED_SOURCE_IMAGE_URL =
   "https://leaderbot-fb-image-gen.fly.dev/generated/source.jpg";
+const TEST_SOURCE_IMAGE_FETCH_URL = "https://source-image.test/mock.jpg";
 const STORED_SOURCE_IMAGE_ALLOWED_HOSTS =
   "leaderbot-fb-image-gen.fly.dev,lookaside.fbsbx.com";
 
@@ -80,7 +81,7 @@ function createOpenAiEditsFetchMock(options?: {
   let openAiCallCount = 0;
 
   const fetchMock = vi.fn(async (url: string | URL) => {
-    if (toUrlString(url) === STORED_SOURCE_IMAGE_URL) {
+    if (toUrlString(url) === TEST_SOURCE_IMAGE_FETCH_URL) {
       return {
         ok: true,
         headers: new Headers({ "content-type": "image/jpeg" }),
@@ -139,7 +140,7 @@ function installStoredSourcePromptFetchMock(
 
   const fixture = Buffer.alloc(7000, 9);
   const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
-    if (toUrlString(url) === STORED_SOURCE_IMAGE_URL) {
+    if (toUrlString(url) === TEST_SOURCE_IMAGE_FETCH_URL) {
       return {
         ok: true,
         headers: new Headers({ "content-type": "image/jpeg" }),
@@ -161,8 +162,10 @@ function installStoredSourcePromptFetchMock(
 
 describe("OpenAi image-to-image proof", () => {
   const installSourceImageRequestHook = () => {
-    setSourceImageRequestForTests(async sourceImageUrl => {
-      const response = await fetch(sourceImageUrl, { redirect: "manual" });
+    setSourceImageRequestForTests(async () => {
+      const response = await fetch(TEST_SOURCE_IMAGE_FETCH_URL, {
+        redirect: "manual",
+      });
       return {
         response,
         contentType: response.headers.get("content-type") ?? "application/octet-stream",
@@ -245,7 +248,7 @@ describe("OpenAi image-to-image proof", () => {
       const promptHint = "neon rain";
 
       const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
-        if (toUrlString(url) === STORED_SOURCE_IMAGE_URL) {
+        if (toUrlString(url) === TEST_SOURCE_IMAGE_FETCH_URL) {
           expect(init?.redirect).toBe("manual");
           return {
             ok: true,
@@ -302,7 +305,7 @@ describe("OpenAi image-to-image proof", () => {
 
     const tinyFixture = Buffer.alloc(1024, 1);
     const fetchMock = vi.fn(async (url: string | URL) => {
-      if (toUrlString(url) === STORED_SOURCE_IMAGE_URL) {
+      if (toUrlString(url) === TEST_SOURCE_IMAGE_FETCH_URL) {
         return {
           ok: true,
           headers: new Headers({ "content-type": "image/jpeg" }),
@@ -337,7 +340,7 @@ describe("OpenAi image-to-image proof", () => {
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS = STORED_SOURCE_IMAGE_ALLOWED_HOSTS;
 
     const fetchMock = vi.fn(async (url: string | URL) => {
-      if (toUrlString(url) === STORED_SOURCE_IMAGE_URL) {
+      if (toUrlString(url) === TEST_SOURCE_IMAGE_FETCH_URL) {
         return {
           ok: true,
           headers: new Headers({
@@ -378,13 +381,13 @@ describe("OpenAi image-to-image proof", () => {
     const fixture = Buffer.alloc(7000, 9);
     const fetchMock = vi.fn(async (url: string | URL) => {
       if (
-        toUrlString(url) === STORED_SOURCE_IMAGE_URL &&
+        toUrlString(url) === TEST_SOURCE_IMAGE_FETCH_URL &&
         fetchMock.mock.calls.length === 1
       ) {
         throw new TypeError("temporary network failure");
       }
 
-      if (toUrlString(url) === STORED_SOURCE_IMAGE_URL) {
+      if (toUrlString(url) === TEST_SOURCE_IMAGE_FETCH_URL) {
         return {
           ok: true,
           headers: new Headers({ "content-type": "image/jpeg" }),
@@ -442,7 +445,7 @@ describe("OpenAi image-to-image proof", () => {
 
     const fixture = Buffer.alloc(7000, 9);
     const fetchMock = vi.fn(async (url: string | URL) => {
-      if (toUrlString(url) === STORED_SOURCE_IMAGE_URL) {
+      if (toUrlString(url) === TEST_SOURCE_IMAGE_FETCH_URL) {
         return {
           ok: true,
           headers: new Headers({ "content-type": "image/jpeg" }),
@@ -649,7 +652,7 @@ describe("OpenAi image-to-image proof", () => {
 
     const fixture = Buffer.alloc(7000, 9);
     const fetchMock = vi.fn(async (url: string | URL) => {
-      if (toUrlString(url) === STORED_SOURCE_IMAGE_URL) {
+      if (toUrlString(url) === TEST_SOURCE_IMAGE_FETCH_URL) {
         return {
           ok: true,
           headers: new Headers({ "content-type": "image/jpeg" }),
@@ -702,7 +705,7 @@ describe("OpenAi image-to-image proof", () => {
     const fixture = Buffer.alloc(7000, 9);
     let openAiCallCount = 0;
     const fetchMock = vi.fn(async (url: string | URL) => {
-      if (toUrlString(url) === STORED_SOURCE_IMAGE_URL) {
+      if (toUrlString(url) === TEST_SOURCE_IMAGE_FETCH_URL) {
         return {
           ok: true,
           headers: new Headers({ "content-type": "image/jpeg" }),
@@ -751,7 +754,7 @@ describe("OpenAi image-to-image proof", () => {
 
     const fixture = Buffer.alloc(7000, 9);
     const fetchMock = vi.fn(async (url: string | URL) => {
-      if (toUrlString(url) === STORED_SOURCE_IMAGE_URL) {
+      if (toUrlString(url) === TEST_SOURCE_IMAGE_FETCH_URL) {
         return {
           ok: true,
           headers: new Headers({ "content-type": "image/jpeg" }),
@@ -814,7 +817,7 @@ describe("OpenAi image-to-image proof", () => {
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS = STORED_SOURCE_IMAGE_ALLOWED_HOSTS;
 
     const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
-      if (toUrlString(url) === STORED_SOURCE_IMAGE_URL) {
+      if (toUrlString(url) === TEST_SOURCE_IMAGE_FETCH_URL) {
         expect(init?.redirect).toBe("manual");
         return {
           ok: false,
@@ -844,7 +847,7 @@ describe("OpenAi image-to-image proof", () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      new URL(STORED_SOURCE_IMAGE_URL),
+      TEST_SOURCE_IMAGE_FETCH_URL,
       expect.objectContaining({ redirect: "manual" })
     );
   });
@@ -888,7 +891,7 @@ describe("OpenAi image-to-image proof", () => {
 
     const fixture = Buffer.alloc(7000, 9);
     const fetchMock = vi.fn(async (url: string | URL) => {
-      if (toUrlString(url) === STORED_SOURCE_IMAGE_URL) {
+      if (toUrlString(url) === TEST_SOURCE_IMAGE_FETCH_URL) {
         return {
           ok: true,
           headers: new Headers({ "content-type": "image/jpeg" }),
@@ -928,7 +931,7 @@ describe("OpenAi image-to-image proof", () => {
     const fixture = Buffer.alloc(7000, 9);
     const oversizedImage = Buffer.alloc(9, 1).toString("base64");
     const fetchMock = vi.fn(async (url: string | URL) => {
-      if (toUrlString(url) === STORED_SOURCE_IMAGE_URL) {
+      if (toUrlString(url) === TEST_SOURCE_IMAGE_FETCH_URL) {
         return {
           ok: true,
           headers: new Headers({ "content-type": "image/jpeg" }),
