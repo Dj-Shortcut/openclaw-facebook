@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
+import type { IncomingMessage } from "node:http";
 import { lookup } from "node:dns/promises";
+import * as https from "node:https";
 import net from "node:net";
 import os from "node:os";
+import { Readable } from "node:stream";
 import fs from "fs/promises";
 import path from "path";
 import { safeLen, sha256 } from "../imageProof";
@@ -25,6 +28,13 @@ type SourceImageFetchAttemptResult = {
   response: Response;
   contentType: string;
 };
+
+type SourceImageRequestAttempt = (
+  sourceImageUrl: URL,
+  resolvedIpAddresses: string[],
+  timeoutMs: number,
+  reqId: string
+) => Promise<SourceImageFetchAttemptResult>;
 
 type SourceImageDownloadOptions = {
   trustedSourceImageUrl?: boolean;
@@ -53,6 +63,7 @@ const MIN_INPUT_IMAGE_BYTES = 5 * 1024;
 const MAX_INBOUND_IMAGE_BYTES = 20 * 1024 * 1024;
 const FB_IMAGE_FETCH_RETRY_LIMIT = 1;
 let dnsLookup: SourceImageDnsLookup = lookup as SourceImageDnsLookup;
+let fetchSourceImageAttemptForTests: SourceImageRequestAttempt = fetchSourceImageAttempt;
 
 function getSourceUrlDiagnostics(sourceImageUrl: string): {
   hostname?: string;
@@ -88,7 +99,18 @@ function isTransientNetworkError(error: unknown): boolean {
     return false;
   }
 
-  return error.name === "AbortError" || error instanceof TypeError;
+  const code =
+    "code" in error && typeof error.code === "string" ? error.code : undefined;
+
+  return (
+    error.name === "AbortError" ||
+    error instanceof TypeError ||
+    code === "ECONNRESET" ||
+    code === "ETIMEDOUT" ||
+    code === "ENETUNREACH" ||
+    code === "EHOSTUNREACH" ||
+    code === "ECONNREFUSED"
+  );
 }
 
 function parseAllowedHostsFromEnv(): string[] {
@@ -232,8 +254,7 @@ function blockSourceImageUrl(
 
 function validateSourceImageUrlOrThrow(
   sourceImageUrl: string,
-  reqId?: string,
-  options?: SourceImageDownloadOptions
+  reqId?: string
 ): ValidatedSourceImageRequest {
   let parsedUrl: URL;
 
@@ -292,38 +313,115 @@ function validateSourceImageUrlOrThrow(
 
 async function fetchSourceImageAttempt(
   sourceImageUrl: URL,
+  resolvedIpAddresses: string[],
   timeoutMs: number,
   reqId: string
+): Promise<SourceImageFetchAttemptResult> {
+  if (resolvedIpAddresses.length === 0) {
+    return blockSourceImageUrl(reqId, "dns_lookup_empty", {
+      hostname: sourceImageUrl.hostname,
+    });
+  }
+
+  let lastError: unknown;
+  for (const resolvedIpAddress of resolvedIpAddresses) {
+    try {
+      return await fetchSourceImageAttemptForAddress(
+        sourceImageUrl,
+        resolvedIpAddress,
+        timeoutMs
+      );
+    } catch (error) {
+      lastError = error;
+      if (!isTransientNetworkError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+  throw new MissingInputImageError("Failed to download source image");
+}
+
+async function fetchSourceImageAttemptForAddress(
+  sourceImageUrl: URL,
+  resolvedIpAddress: string,
+  timeoutMs: number
 ): Promise<SourceImageFetchAttemptResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => {
     controller.abort();
   }, timeoutMs);
-  let response: Response;
+
+  const contentPath = `${sourceImageUrl.pathname}${sourceImageUrl.search}`;
   try {
-    response = await fetch(sourceImageUrl, {
-      redirect: "manual",
-      signal: controller.signal,
+    const response = await new Promise<IncomingMessage>((resolve, reject) => {
+      const request = https.request(
+        {
+          protocol: "https:",
+          method: "GET",
+          hostname: resolvedIpAddress,
+          port: sourceImageUrl.port || "443",
+          path: contentPath || "/",
+          headers: {
+            host: sourceImageUrl.host,
+          },
+          servername: sourceImageUrl.hostname,
+          signal: controller.signal,
+        },
+        responseMessage => {
+          resolve(responseMessage);
+        }
+      );
+
+      request.on("error", error => {
+        reject(error);
+      });
+
+      request.end();
     });
+    const responseHeaders = new Headers();
+    for (const [key, rawValue] of Object.entries(response.headers)) {
+      if (Array.isArray(rawValue)) {
+        for (const headerValue of rawValue) {
+          responseHeaders.append(key, headerValue);
+        }
+      } else if (typeof rawValue === "string") {
+        responseHeaders.append(key, rawValue);
+      }
+    }
+
+    return {
+      response: new Response(Readable.toWeb(response) as unknown as BodyInit, {
+        status: response.statusCode ?? 502,
+        statusText: response.statusMessage ?? "",
+        headers: responseHeaders,
+      }),
+      contentType: responseHeaders.get("content-type") ?? "application/octet-stream",
+    };
   } finally {
     clearTimeout(timeout);
   }
-
-  return {
-    response,
-    contentType:
-      response.headers.get("content-type") ?? "application/octet-stream",
-  };
 }
 
 async function assertHostnameResolvesToPublicIpOrThrow(
   sourceImageUrl: URL,
   reqId: string
-): Promise<void> {
+): Promise<string[]> {
   const hostname = sourceImageUrl.hostname.toLowerCase();
+  const hostnameIpType = net.isIP(hostname);
 
-  if (net.isIP(hostname)) {
-    return;
+  if (hostnameIpType) {
+    if (isBlockedIpAddress(hostname)) {
+      return blockSourceImageUrl(reqId, "dns_resolved_private_ip", {
+        hostname,
+        address: hostname,
+        family: hostnameIpType,
+      });
+    }
+    return [hostname];
   }
 
   let addresses: Array<{ address: string; family: 4 | 6 }>;
@@ -351,6 +449,8 @@ async function assertHostnameResolvesToPublicIpOrThrow(
       family: blockedAddress.family,
     });
   }
+
+  return addresses.map(address => address.address);
 }
 
 export function setSourceImageDnsLookupForTests(
@@ -457,6 +557,13 @@ function assertSourceImageSizeOrThrow(
   throw new MissingInputImageError(
     `Source image too small (${incomingByteLen} bytes)`
   );
+}
+
+export function setSourceImageRequestForTests(
+  override: SourceImageRequestAttempt | null
+): void {
+  fetchSourceImageAttemptForTests =
+    override ?? fetchSourceImageAttempt;
 }
 
 function assertInboundImageWithinLimit(
@@ -611,8 +718,7 @@ async function downloadSourceImageOrThrow(
 ): Promise<DownloadedSourceImage> {
   const validatedSourceImageUrl = validateSourceImageUrlOrThrow(
     sourceImageUrl,
-    reqId,
-    options
+    reqId
   );
   const timeoutMs = getInboundImageTimeoutMs();
   let totalFetchMs = 0;
@@ -622,15 +728,25 @@ async function downloadSourceImageOrThrow(
     const attemptStartedAt = Date.now();
 
     try {
-      await assertHostnameResolvesToPublicIpOrThrow(validatedSourceImageUrl.url, reqId);
-      const { response, contentType } = await fetchSourceImageAttempt(
+      const resolvedIpAddresses = await assertHostnameResolvesToPublicIpOrThrow(
         validatedSourceImageUrl.url,
+        reqId
+      );
+      const { response, contentType } = await fetchSourceImageAttemptForTests(
+        validatedSourceImageUrl.url,
+        resolvedIpAddresses,
         timeoutMs,
         reqId
       );
-      assertNoRedirectResponse(response, reqId);
+      try {
+        assertNoRedirectResponse(response, reqId);
+      } catch (error) {
+        await response.body?.cancel();
+        throw error;
+      }
 
       if (!response.ok) {
+        await response.body?.cancel();
         totalFetchMs += Date.now() - attemptStartedAt;
         if (shouldRetrySourceImageStatus(attempt, response, reqId)) {
           continue;

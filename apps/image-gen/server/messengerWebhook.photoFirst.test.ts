@@ -25,10 +25,14 @@ import {
 } from "./_core/messengerWebhook";
 import { t } from "./_core/i18n";
 import { anonymizePsid, getState, resetStateStore } from "./_core/messengerState";
-import { setSourceImageDnsLookupForTests } from "./_core/image-generation/sourceImageFetcher";
+import {
+  setSourceImageDnsLookupForTests,
+  setSourceImageRequestForTests,
+} from "./_core/image-generation/sourceImageFetcher";
 import { processConsentedFacebookWebhookPayload } from "./testConsentHelpers";
 
 const TEST_PEPPER = "ci-test-pepper";
+const TEST_SOURCE_IMAGE_FETCH_URL = "https://source-image.test/mock.jpg";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
 const originalEnableFaceMemory = process.env.ENABLE_FACE_MEMORY;
 const originalFaceMemoryRetentionDays =
@@ -37,6 +41,18 @@ const originalFaceMemoryRetentionDays =
 const processFacebookWebhookPayload = processConsentedFacebookWebhookPayload(
   processFacebookWebhookPayloadBase
 );
+
+function installSourceImageRequestHook(): void {
+  setSourceImageRequestForTests(async () => {
+    const response = await fetch(TEST_SOURCE_IMAGE_FETCH_URL, {
+      redirect: "manual",
+    });
+    return {
+      response,
+      contentType: response.headers.get("content-type") ?? "application/octet-stream",
+    };
+  });
+}
 
 describe("photo-first onboarding", () => {
   beforeAll(() => {
@@ -47,6 +63,7 @@ describe("photo-first onboarding", () => {
     setSourceImageDnsLookupForTests(async () => [
       { address: "93.184.216.34", family: 4 },
     ]);
+    installSourceImageRequestHook();
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS =
       "img.example,lookaside.fbsbx.com,leaderbot-fb-image-gen.fly.dev";
     process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
@@ -61,6 +78,7 @@ describe("photo-first onboarding", () => {
       vi.fn(async (url: string | URL) => {
         const urlString = typeof url === "string" ? url : url.toString();
         if (
+          urlString === TEST_SOURCE_IMAGE_FETCH_URL ||
           urlString.startsWith("https://img.example/") ||
           urlString.startsWith("https://leaderbot-fb-image-gen.fly.dev/generated/")
         ) {
@@ -79,6 +97,7 @@ describe("photo-first onboarding", () => {
   });
 
   afterEach(() => {
+    setSourceImageRequestForTests(null);
     setSourceImageDnsLookupForTests(null);
     vi.unstubAllGlobals();
     if (originalEnableFaceMemory === undefined) {
