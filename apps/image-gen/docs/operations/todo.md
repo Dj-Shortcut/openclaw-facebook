@@ -159,13 +159,17 @@ Open cost-control work:
 4. [x] Add per-user daily spend caps for paired Facebook users.
 5. [x] Add global Facebook daily spend cap.
 6. [ ] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, usage, estimated cost, final cost, and status. Image, audio transcription, and generated-video attempts now write metadata-only entries and reconcile success/failure status; image attempts populate final cost when the estimate is complete. Audio/video final cost and richer usage dimensions remain open.
-7. [ ] Add owner dashboard for Facebook spend by day/month, account/page, `userKey`, blocked attempts, duplicate skips, and provider failures. The admin-only cost summary route now exists for stored ledger records; provider integration and dashboard UX remain open.
-8. [ ] Add user-facing balance/spend overview before paid rollout.
-9. [x] Add monthly cost cap enforcement.
-10. [ ] Send cost alerts to owner.
-11. [x] Add external uptime monitor for `/healthz`.
-12. [x] Add a dedicated generated-video quota namespace before enabling any video provider call.
-13. [ ] Move remaining feature-specific quota counters toward a single channel-neutral usage ledger before paid rollout.
+7. [ ] Handle cost-ledger per-period overflow explicitly: when entries exceed cap, emit structured warnings + metric, report dropped entries, and keep owner operators from silently losing spend history.
+8. [ ] Make cost-ledger append/update writes resilient to concurrent requests per period (single-writer semantics or safe retry strategy) so entries are never lost under same-period load.
+9. [ ] Make provider-attempt updates period-safe across retries: when status/final-cost updates target an entry across midnight, reconcile by entry identity rather than strict current-period assumptions.
+10. [ ] Reduce worst-case delete-my-data ledger cleanup latency by making `deleteCostLedgerEntriesForUser` bounded/performance-safe under high historical per-user volume.
+11. [ ] Add owner dashboard for Facebook spend by day/month, account/page, `userKey`, blocked attempts, duplicate skips, and provider failures. The admin-only cost summary route now exists for stored ledger records; provider integration and dashboard UX remain open.
+12. [ ] Add user-facing balance/spend overview before paid rollout.
+13. [x] Add monthly cost cap enforcement.
+14. [ ] Send cost alerts to owner.
+15. [x] Add external uptime monitor for `/healthz`.
+16. [x] Add a dedicated generated-video quota namespace before enabling any video provider call.
+17. [ ] Move remaining feature-specific quota counters toward a single channel-neutral usage ledger before paid rollout.
 
 Quota drift investigation note:
 
@@ -194,6 +198,11 @@ Quota drift investigation note:
 ### Testing & docs
 
 - [ ] Test cost tracking
+- [ ] Add targeted cost-ledger reliability tests:
+  - concurrent append/update to same period does not drop writes;
+  - cap overflow logs/metrics are emitted and observable;
+  - append/update cross-midnight path resolves updates correctly;
+  - `deleteCostLedgerEntriesForUser` completes within defined latency bounds under repeated-period user histories.
 - [x] Create setup guide for Meta configuration
 - [ ] Document current generic image prompt behavior for user-facing copy
 - [ ] Provide cost monitoring dashboard
