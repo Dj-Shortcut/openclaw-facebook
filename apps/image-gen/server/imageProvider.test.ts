@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import {
   createImageGenerator,
   getGeneratorStartupConfig,
@@ -84,6 +85,10 @@ function configureOpenAiImagesEnv(imageModel?: string): void {
   if (imageModel) {
     process.env.OPENAI_IMAGE_MODEL = imageModel;
   }
+}
+
+function requestSummaryKey(reqId: string): string {
+  return `sha256:${createHash("sha256").update(reqId).digest("hex").slice(0, 12)}`;
 }
 
 function createGeneratedImageResponse(): Response {
@@ -449,7 +454,7 @@ describe("image provider boundary", () => {
         provider: "openai-images",
         model: "gpt-image-2",
         userKey: "testuser",
-        reqId: "req-cost-estimate",
+        reqId: requestSummaryKey("req-cost-estimate"),
         status: "provider_attempt_succeeded",
         estimatedCostUsd: 0.025,
         estimatedOutputCostUsd: null,
@@ -494,7 +499,7 @@ describe("image provider boundary", () => {
       expect.objectContaining({
         id: "req-cost-failed:openai-image:1",
         userKey: "failed-cost-user",
-        reqId: "req-cost-failed",
+        reqId: requestSummaryKey("req-cost-failed"),
         status: "provider_attempt_failed",
         estimatedCostUsd: 0.025,
         finalCostUsd: null,

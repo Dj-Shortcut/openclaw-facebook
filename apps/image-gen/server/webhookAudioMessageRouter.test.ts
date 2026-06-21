@@ -6,6 +6,7 @@ import {
   it,
   vi,
 } from "vitest";
+import { createHash } from "node:crypto";
 
 const {
   safeLogMock,
@@ -57,6 +58,10 @@ import { type FacebookWebhookEvent } from "./_core/webhookHelpers";
 import { t } from "./_core/i18n";
 import { appendCostLedgerEntry, readCostLedgerPeriod } from "./_core/costLedger";
 import { clearStateStore } from "./_core/stateStore";
+
+function requestSummaryKey(reqId: string): string {
+  return `sha256:${createHash("sha256").update(reqId).digest("hex").slice(0, 12)}`;
+}
 
 type TestAttachment = Exclude<
   NonNullable<FacebookWebhookEvent["message"]>["attachments"],
@@ -370,7 +375,7 @@ describe("webhook audio message router", () => {
         provider: "openai-audio",
         model: "whisper-1",
         userKey: "user-audio-retry",
-        reqId: "req-audio-retry",
+        reqId: requestSummaryKey("req-audio-retry"),
         status: "provider_attempt_failed",
         costEstimateComplete: false,
         estimateSource: "unpriced",

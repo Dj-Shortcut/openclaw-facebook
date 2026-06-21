@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { OpenAiVideoProvider } from "./_core/video-generation/openAiVideoProvider";
 import { readCostLedgerPeriod } from "./_core/costLedger";
 import { clearStateStore } from "./_core/stateStore";
+
+function requestSummaryKey(reqId: string): string {
+  return `sha256:${createHash("sha256").update(reqId).digest("hex").slice(0, 12)}`;
+}
 
 describe("OpenAiVideoProvider", () => {
   const originalFetch = global.fetch;
@@ -102,7 +107,7 @@ describe("OpenAiVideoProvider", () => {
         provider: "openai-video",
         model: "sora-2",
         userKey: "user-key",
-        reqId: "req-openai-video-retry",
+        reqId: requestSummaryKey("req-openai-video-retry"),
         status: "provider_attempt_started",
         estimatedCostUsd: null,
         estimatedOutputCostUsd: null,
@@ -113,7 +118,7 @@ describe("OpenAiVideoProvider", () => {
       }),
       expect.objectContaining({
         operation: "video_generation",
-        reqId: "req-openai-video-retry",
+        reqId: requestSummaryKey("req-openai-video-retry"),
         status: "provider_attempt_started",
         userKey: "user-key",
       }),
