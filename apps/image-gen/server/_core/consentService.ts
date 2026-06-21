@@ -59,7 +59,16 @@ function normalizeControlText(text: string | null | undefined): string {
 }
 
 function isDeleteCommand(text: string | null | undefined): boolean {
-  return DELETE_COMMANDS.has(normalizeControlText(text));
+  const normalized = normalizeControlText(text);
+  return (
+    DELETE_COMMANDS.has(normalized) ||
+    /^(?:delete|remove|erase)\s+(?:my\s+)?data(?:\s+(?:aub|a\s+u\s+b|please|pls))?$/.test(
+      normalized
+    ) ||
+    /^(?:verwijder|wis)\s+(?:mijn\s+)?(?:data|gegevens)(?:\s+(?:aub|a\s+u\s+b|alsjeblieft))?$/.test(
+      normalized
+    )
+  );
 }
 
 function isDeleteConfirmText(text: string | null | undefined): boolean {
