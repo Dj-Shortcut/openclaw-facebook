@@ -4,7 +4,10 @@ import { buildOpenAiImageGenerationPayload } from "./_core/image-generation/open
 import { GenerationTimeoutError } from "./_core/image-generation/imageServiceErrors";
 import { InvalidSourceImageUrlError } from "./_core/image-generation/sourceImageFetcher";
 import { sha256 } from "./_core/imageProof";
-import { setSourceImageDnsLookupForTests } from "./_core/image-generation/sourceImageFetcher";
+import {
+  setSourceImageDnsLookupForTests,
+  setSourceImageRequestForTests,
+} from "./_core/image-generation/sourceImageFetcher";
 
 const GENERATED_IMAGE_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0ioAAAAASUVORK5CYII=";
@@ -157,10 +160,21 @@ function installStoredSourcePromptFetchMock(
 }
 
 describe("OpenAi image-to-image proof", () => {
+  const installSourceImageRequestHook = () => {
+    setSourceImageRequestForTests(async sourceImageUrl => {
+      const response = await fetch(sourceImageUrl, { redirect: "manual" });
+      return {
+        response,
+        contentType: response.headers.get("content-type") ?? "application/octet-stream",
+      };
+    });
+  };
+
   beforeEach(() => {
     setSourceImageDnsLookupForTests(async () => [
       { address: "93.184.216.34", family: 4 },
     ]);
+    installSourceImageRequestHook();
   });
 
   afterEach(() => {
@@ -184,6 +198,7 @@ describe("OpenAi image-to-image proof", () => {
     delete process.env.SOURCE_IMAGE_ALLOWED_HOSTS;
     delete process.env.BUILT_IN_FORGE_API_URL;
     delete process.env.BUILT_IN_FORGE_API_KEY;
+    setSourceImageRequestForTests(null);
   });
 
   it("adds configured image-generation speed knobs to the OpenAI payload", () => {

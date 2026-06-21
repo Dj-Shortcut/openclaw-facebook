@@ -25,7 +25,10 @@ import {
 } from "./_core/messengerWebhook";
 import { t } from "./_core/i18n";
 import { anonymizePsid, getState, resetStateStore } from "./_core/messengerState";
-import { setSourceImageDnsLookupForTests } from "./_core/image-generation/sourceImageFetcher";
+import {
+  setSourceImageDnsLookupForTests,
+  setSourceImageRequestForTests,
+} from "./_core/image-generation/sourceImageFetcher";
 import { processConsentedFacebookWebhookPayload } from "./testConsentHelpers";
 
 const TEST_PEPPER = "ci-test-pepper";
@@ -38,6 +41,16 @@ const processFacebookWebhookPayload = processConsentedFacebookWebhookPayload(
   processFacebookWebhookPayloadBase
 );
 
+function installSourceImageRequestHook(): void {
+  setSourceImageRequestForTests(async sourceImageUrl => {
+    const response = await fetch(sourceImageUrl, { redirect: "manual" });
+    return {
+      response,
+      contentType: response.headers.get("content-type") ?? "application/octet-stream",
+    };
+  });
+}
+
 describe("photo-first onboarding", () => {
   beforeAll(() => {
     process.env.PRIVACY_PEPPER = TEST_PEPPER;
@@ -47,6 +60,7 @@ describe("photo-first onboarding", () => {
     setSourceImageDnsLookupForTests(async () => [
       { address: "93.184.216.34", family: 4 },
     ]);
+    installSourceImageRequestHook();
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS =
       "img.example,lookaside.fbsbx.com,leaderbot-fb-image-gen.fly.dev";
     process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
@@ -79,6 +93,7 @@ describe("photo-first onboarding", () => {
   });
 
   afterEach(() => {
+    setSourceImageRequestForTests(null);
     setSourceImageDnsLookupForTests(null);
     vi.unstubAllGlobals();
     if (originalEnableFaceMemory === undefined) {

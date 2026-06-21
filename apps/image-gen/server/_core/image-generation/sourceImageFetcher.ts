@@ -29,6 +29,13 @@ type SourceImageFetchAttemptResult = {
   contentType: string;
 };
 
+type SourceImageRequestAttempt = (
+  sourceImageUrl: URL,
+  resolvedIpAddresses: string[],
+  timeoutMs: number,
+  reqId: string
+) => Promise<SourceImageFetchAttemptResult>;
+
 type SourceImageDownloadOptions = {
   trustedSourceImageUrl?: boolean;
   sourceImageProvenance?: "storeInbound";
@@ -56,6 +63,7 @@ const MIN_INPUT_IMAGE_BYTES = 5 * 1024;
 const MAX_INBOUND_IMAGE_BYTES = 20 * 1024 * 1024;
 const FB_IMAGE_FETCH_RETRY_LIMIT = 1;
 let dnsLookup: SourceImageDnsLookup = lookup as SourceImageDnsLookup;
+let fetchSourceImageAttemptForTests: SourceImageRequestAttempt = fetchSourceImageAttempt;
 
 function getSourceUrlDiagnostics(sourceImageUrl: string): {
   hostname?: string;
@@ -507,6 +515,13 @@ function assertSourceImageSizeOrThrow(
   );
 }
 
+export function setSourceImageRequestForTests(
+  override: SourceImageRequestAttempt | null
+): void {
+  fetchSourceImageAttemptForTests =
+    override ?? fetchSourceImageAttempt;
+}
+
 function assertInboundImageWithinLimit(
   reqId: string,
   incomingByteLen: number
@@ -670,11 +685,11 @@ async function downloadSourceImageOrThrow(
     const attemptStartedAt = Date.now();
 
     try {
-    const resolvedIpAddresses = await assertHostnameResolvesToPublicIpOrThrow(
-      validatedSourceImageUrl.url,
-      reqId
-    );
-      const { response, contentType } = await fetchSourceImageAttempt(
+      const resolvedIpAddresses = await assertHostnameResolvesToPublicIpOrThrow(
+        validatedSourceImageUrl.url,
+        reqId
+      );
+      const { response, contentType } = await fetchSourceImageAttemptForTests(
         validatedSourceImageUrl.url,
         resolvedIpAddresses,
         timeoutMs,

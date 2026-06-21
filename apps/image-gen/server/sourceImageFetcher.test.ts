@@ -5,6 +5,7 @@ import {
   InvalidSourceImageUrlError,
   fetchExternalSourceImageForIngress,
   setSourceImageDnsLookupForTests,
+  setSourceImageRequestForTests,
 } from "./_core/image-generation/sourceImageFetcher";
 
 const { mockHttpsRequest } = vi.hoisted(() => ({
@@ -44,6 +45,7 @@ describe("source image fetcher", () => {
     mockHttpsRequest.mockReset();
     delete process.env.SOURCE_IMAGE_ALLOWED_HOSTS;
     setSourceImageDnsLookupForTests(null);
+    setSourceImageRequestForTests(null);
     vi.restoreAllMocks();
   });
 

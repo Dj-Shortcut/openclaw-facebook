@@ -57,7 +57,10 @@ import {
 } from "./_core/messengerState";
 import { detectAck, getEventDedupeKey } from "./_core/webhookHelpers";
 import { getBotFeatures } from "./_core/bot/features";
-import { setSourceImageDnsLookupForTests } from "./_core/image-generation/sourceImageFetcher";
+import {
+  setSourceImageDnsLookupForTests,
+  setSourceImageRequestForTests,
+} from "./_core/image-generation/sourceImageFetcher";
 import { processConsentedFacebookWebhookPayload } from "./testConsentHelpers";
 import {
   markMessengerGenerationCompleted,
@@ -114,6 +117,16 @@ const GENERATED_SOURCE_IMAGE_URL_PREFIX =
   "https://leaderbot-fb-image-gen.fly.dev/generated/";
 const DEFAULT_ALLOWED_SOURCE_IMAGE_HOSTS =
   "img.example,lookaside.fbsbx.com,leaderbot-fb-image-gen.fly.dev";
+
+function installSourceImageRequestHook(): void {
+  setSourceImageRequestForTests(async sourceImageUrl => {
+    const response = await fetch(sourceImageUrl, { redirect: "manual" });
+    return {
+      response,
+      contentType: response.headers.get("content-type") ?? "application/octet-stream",
+    };
+  });
+}
 
 function isNormalizedSourceImageUrl(url: string | URL): boolean {
   return toUrlString(url).startsWith(GENERATED_SOURCE_IMAGE_URL_PREFIX);
@@ -260,6 +273,7 @@ afterAll(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  setSourceImageRequestForTests(null);
   setSourceImageDnsLookupForTests(null);
   delete process.env.OPENAI_API_KEY;
   delete process.env.APP_BASE_URL;
@@ -290,6 +304,7 @@ afterEach(() => {
 
 beforeEach(() => {
   delete process.env.FACE_MEMORY_RETENTION_DAYS;
+  installSourceImageRequestHook();
   setSourceImageDnsLookupForTests(async () => [
     { address: "93.184.216.34", family: 4 },
   ]);
