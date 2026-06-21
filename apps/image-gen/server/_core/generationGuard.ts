@@ -381,7 +381,7 @@ export async function assertMessengerDailySpendBudgetAvailable(input: {
   if (!Number.isFinite(attemptEstimate) || attemptEstimate <= 0) {
     safeLog("messenger_daily_spend_budget_unpriced_attempt_blocked", {
       level: "warn",
-      reqId: input.reqId,
+      reqId: hashRequestId(input.reqId),
       capUsd,
     });
     await notifyOwnerCostAlert({
@@ -400,7 +400,7 @@ export async function assertMessengerDailySpendBudgetAvailable(input: {
   if (projectedSpendUsd > capUsd) {
     safeLog("messenger_daily_spend_budget_reached", {
       level: "warn",
-      reqId: input.reqId,
+      reqId: hashRequestId(input.reqId),
       capUsd,
       currentSpendUsd: summary.estimatedCostUsd,
       attemptEstimateUsd: attemptEstimate,
@@ -437,7 +437,7 @@ export async function assertMessengerMonthlySpendBudgetAvailable(input: {
   if (!Number.isFinite(attemptEstimate) || attemptEstimate <= 0) {
     safeLog("messenger_monthly_spend_budget_unpriced_attempt_blocked", {
       level: "warn",
-      reqId: input.reqId,
+      reqId: hashRequestId(input.reqId),
       capUsd,
     });
     await notifyOwnerCostAlert({
@@ -459,7 +459,7 @@ export async function assertMessengerMonthlySpendBudgetAvailable(input: {
   if (projectedSpendUsd > capUsd) {
     safeLog("messenger_monthly_spend_budget_reached", {
       level: "warn",
-      reqId: input.reqId,
+      reqId: hashRequestId(input.reqId),
       capUsd,
       currentSpendUsd: summary.estimatedCostUsd,
       attemptEstimateUsd: attemptEstimate,
@@ -497,7 +497,7 @@ export async function assertMessengerUserDailySpendBudgetAvailable(input: {
   if (!Number.isFinite(attemptEstimate) || attemptEstimate <= 0) {
     safeLog("messenger_user_daily_spend_budget_unpriced_attempt_blocked", {
       level: "warn",
-      reqId: input.reqId,
+      reqId: hashRequestId(input.reqId),
       user: logUser,
       capUsd,
     });
@@ -518,7 +518,7 @@ export async function assertMessengerUserDailySpendBudgetAvailable(input: {
   if (projectedSpendUsd > capUsd) {
     safeLog("messenger_user_daily_spend_budget_reached", {
       level: "warn",
-      reqId: input.reqId,
+      reqId: hashRequestId(input.reqId),
       user: logUser,
       capUsd,
       currentSpendUsd: summary.estimatedCostUsd,

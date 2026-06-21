@@ -34,6 +34,7 @@ describe("generationGuard", () => {
     vi.doMock("./_core/stateStore", () => stateStoreMocks);
     vi.doMock("./_core/logger", () => loggerMocks);
     vi.doMock("./_core/notification", () => notificationMocks);
+    vi.doMock("./_core/logger", () => loggerMocks);
     stateStoreMocks.hasEphemeralKey.mockResolvedValue(false);
     stateStoreMocks.decrementExpiringCounter.mockResolvedValue(1);
     stateStoreMocks.incrementExpiringCounter.mockResolvedValue(1);
@@ -61,6 +62,7 @@ describe("generationGuard", () => {
     vi.doUnmock("./_core/stateStore");
     vi.doUnmock("./_core/logger");
     vi.doUnmock("./_core/notification");
+    vi.doUnmock("./_core/logger");
     vi.clearAllMocks();
   });
 
@@ -516,6 +518,15 @@ describe("generationGuard", () => {
         now: new Date("2026-06-01T12:00:00.000Z"),
       })
     ).rejects.toBeInstanceOf(guard.MessengerSpendBudgetExceededError);
+    expect(loggerMocks.safeLog).toHaveBeenCalledWith(
+      "messenger_user_daily_spend_budget_reached",
+      expect.objectContaining({
+        reqId: hashRequestId("req-user-spend-over"),
+        capUsd: 0.03,
+        user: expect.any(String),
+        level: "warn",
+      })
+    );
   });
 
   it("fails closed for unpriced provider attempts when the per-user spend cap is enabled", async () => {

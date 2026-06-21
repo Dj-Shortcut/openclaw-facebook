@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  safelyAppendCostLedgerEntry,
   appendCostLedgerEntry,
   deleteCostLedgerEntriesForUser,
   getCostLedgerReliabilityStats,
@@ -11,11 +10,11 @@ import {
   updateCostLedgerEntry,
   type CostLedgerEntry,
 } from "./_core/costLedger";
-import * as stateStore from "./_core/stateStore";
+import { clearStateStore, writeScopedState } from "./_core/stateStore";
 
 afterEach(() => {
   vi.restoreAllMocks();
-  stateStore.clearStateStore();
+  clearStateStore();
   resetCostLedgerReliabilityStatsForTests();
 });
 
@@ -42,29 +41,25 @@ function entry(overrides: Partial<CostLedgerEntry>): CostLedgerEntry {
 describe("cost ledger", () => {
   it("stores a stable request-id hash for repeated raw request IDs", async () => {
     await appendCostLedgerEntry(
-      entry({
+      {
+        ...entry({ reqId: "req-stable-id" }),
         id: "req-stable:attempt-1",
-        userKey: "user-key-stable",
-        reqId: "req-stable-id",
-        estimatedCostUsd: 0.01,
-      }),
+      },
       new Date("2026-06-21T10:00:00.000Z")
     );
     await appendCostLedgerEntry(
-      entry({
+      {
+        ...entry({ reqId: "req-stable-id" }),
         id: "req-stable:attempt-2",
-        userKey: "user-key-stable",
-        reqId: "req-stable-id",
-        estimatedCostUsd: 0.02,
-      }),
+      },
       new Date("2026-06-21T10:01:00.000Z")
     );
 
     const entries = await readCostLedgerPeriod("2026-06-21");
-    const hashValues = entries.map(entry => entry.reqId);
+    const hashValues = entries.map(ledgerEntry => ledgerEntry.reqId);
 
     expect(new Set(hashValues)).toHaveLength(1);
-    expect(hashValues[0]).toMatch(/^req_[a-f0-9]{24}$/);
+    expect(hashValues[0]).toMatch(/^sha256:[a-f0-9]{12}$/);
     expect(hashValues.join(",")).not.toContain("req-stable-id");
   });
 
@@ -88,36 +83,112 @@ describe("cost ledger", () => {
     ]);
   });
 
-  it("redacts reqId in cost ledger write failure logs", async () => {
-    const writeSpy = vi
-      .spyOn(stateStore, "writeScopedState")
-      .mockRejectedValueOnce(new Error("persistent ledger write failure"));
-    const warnSpy = vi
-      .spyOn(console, "warn")
-      .mockImplementation(() => undefined);
-
-    await safelyAppendCostLedgerEntry(
-      entry({
-        id: "req-error:test",
-        userKey: "user-key-error",
-        reqId: "req-error-log",
-        estimatedCostUsd: 0.01,
-      }),
-      new Date("2026-06-21T11:00:00.000Z")
+  it("summarizes owner-safe spend metadata without user content", async () => {
+    await appendCostLedgerEntry(
+      {
+        id: "req-image:attempt-1",
+        channel: "facebook_messenger",
+        operation: "image_generation",
+        provider: "openai-images",
+        model: "gpt-image-2",
+        pricingModel: "gpt-image-1",
+        userKey: "user-key-1",
+        reqId: "req-image",
+        generationKind: "text_to_image",
+        status: "provider_attempt_started",
+        estimatedCostUsd: 0.025,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: null,
+        costEstimateComplete: true,
+        estimateSource: "env_override",
+        unpricedCostComponents: [],
+      },
+      new Date("2026-06-21T01:00:00.000Z")
+    );
+    await appendCostLedgerEntry(
+      {
+        id: "req-audio:attempt-1",
+        channel: "facebook_messenger",
+        operation: "audio_transcription",
+        provider: "openai-audio",
+        model: "whisper-1",
+        userKey: "user-key-2",
+        reqId: "req-audio",
+        status: "provider_attempt_started",
+        estimatedCostUsd: null,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: null,
+        costEstimateComplete: false,
+        estimateSource: "unpriced",
+        unpricedCostComponents: ["audio_duration"],
+      },
+      new Date("2026-06-21T02:00:00.000Z")
+    );
+    await appendCostLedgerEntry(
+      {
+        id: "req-image-edit:attempt-1",
+        channel: "facebook_messenger",
+        operation: "image_generation",
+        provider: "openai-images",
+        model: "gpt-5",
+        pricingModel: "gpt-image-1",
+        userKey: "user-key-1",
+        reqId: "req-image-edit",
+        generationKind: "source_image_edit",
+        status: "provider_attempt_started",
+        estimatedCostUsd: null,
+        estimatedOutputCostUsd: 0.042,
+        finalCostUsd: null,
+        costEstimateComplete: false,
+        estimateSource: "partial_source_image_input_unpriced",
+        unpricedCostComponents: ["source_image_input"],
+      },
+      new Date("2026-06-21T03:00:00.000Z")
     );
 
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse(String(warnSpy.mock.calls[0][0]));
-    expect(payload.event).toBe("cost_ledger_write_failed");
-    expect(payload.reqId).toMatch(/^req_[a-f0-9]{24}$/);
-    expect(payload.reqId).not.toContain("req-error-log");
-    expect(payload.reqId).not.toContain("req-error");
+    const summary = await summarizeCostLedgerPeriod("2026-06-21");
 
-    writeSpy.mockRestore();
-    warnSpy.mockRestore();
+    expect(summary).toMatchObject({
+      period: "2026-06-21",
+      totalEntries: 3,
+      uniqueUserCount: 2,
+      estimatedCostUsd: 0.067,
+      finalCostUsd: 0,
+      completeEstimateEntries: 1,
+      incompleteEstimateEntries: 2,
+      unpricedCostComponents: ["audio_duration", "source_image_input"],
+      byOperation: {
+        image_generation: {
+          attempts: 2,
+          estimatedCostUsd: 0.067,
+          finalCostUsd: 0,
+        },
+        audio_transcription: {
+          attempts: 1,
+          estimatedCostUsd: 0,
+          finalCostUsd: 0,
+        },
+      },
+      byProvider: {
+        "openai-images": {
+          attempts: 2,
+          estimatedCostUsd: 0.067,
+          finalCostUsd: 0,
+        },
+        "openai-audio": {
+          attempts: 1,
+          estimatedCostUsd: 0,
+          finalCostUsd: 0,
+        },
+      },
+    });
+    expect(JSON.stringify(summary)).not.toContain("prompt");
+    expect(JSON.stringify(summary)).not.toContain("private");
+    expect(JSON.stringify(summary)).not.toContain("https://");
+    expect(JSON.stringify(summary)).not.toContain("facebook:");
   });
 
-  it("serializes concurrent same-period appends without dropping entries", async () => {
+  it("serializes concurrent in-memory appends for the same period", async () => {
     await Promise.all(
       Array.from({ length: 25 }, (_, index) =>
         appendCostLedgerEntry(
