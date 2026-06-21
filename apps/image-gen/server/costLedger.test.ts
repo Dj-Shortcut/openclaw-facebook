@@ -1,14 +1,59 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  safelyAppendCostLedgerEntry,
   appendCostLedgerEntry,
   readCostLedgerPeriod,
   summarizeCostLedgerPeriod,
 } from "./_core/costLedger";
-import { clearStateStore } from "./_core/stateStore";
+import * as stateStore from "./_core/stateStore";
 
 describe("cost ledger", () => {
   afterEach(() => {
-    clearStateStore();
+    stateStore.clearStateStore();
+  });
+
+  it("stores a stable request-id hash for repeated raw request IDs", async () => {
+    await appendCostLedgerEntry(
+      {
+        id: "req-stable:attempt-1",
+        channel: "facebook_messenger",
+        operation: "image_generation",
+        provider: "openai-images",
+        model: "gpt-image-2",
+        userKey: "user-key-stable",
+        reqId: "req-stable-id",
+        status: "provider_attempt_started",
+        estimatedCostUsd: 0.01,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: null,
+        costEstimateComplete: true,
+      },
+      new Date("2026-06-21T10:00:00.000Z")
+    );
+    await appendCostLedgerEntry(
+      {
+        id: "req-stable:attempt-2",
+        channel: "facebook_messenger",
+        operation: "image_generation",
+        provider: "openai-images",
+        model: "gpt-image-2",
+        userKey: "user-key-stable",
+        reqId: "req-stable-id",
+        status: "provider_attempt_started",
+        estimatedCostUsd: 0.02,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: null,
+        costEstimateComplete: true,
+      },
+      new Date("2026-06-21T10:01:00.000Z")
+    );
+
+    const entries = await readCostLedgerPeriod("2026-06-21");
+    const hashValues = entries.map(entry => entry.reqId);
+
+    expect(new Set(hashValues)).toHaveLength(1);
+    expect(hashValues[0]).toMatch(/^req_[a-f0-9]{24}$/);
+    expect(hashValues.join(",")).not.toContain("req-stable-id");
   });
 
   it("stores metadata-only provider attempt entries by UTC period", async () => {
@@ -55,6 +100,43 @@ describe("cost ledger", () => {
     expect(JSON.stringify(entries)).not.toContain("prompt");
     expect(JSON.stringify(entries)).not.toContain("raw");
     expect(JSON.stringify(entries)).not.toContain("facebook:");
+  });
+
+  it("redacts reqId in cost ledger write failure logs", async () => {
+    const writeSpy = vi
+      .spyOn(stateStore, "writeScopedState")
+      .mockRejectedValueOnce(new Error("persistent ledger write failure"));
+    const warnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
+
+    await safelyAppendCostLedgerEntry(
+      {
+        id: "req-error:test",
+        channel: "facebook_messenger",
+        operation: "image_generation",
+        provider: "openai-images",
+        model: "gpt-image-2",
+        userKey: "user-key-error",
+        reqId: "req-error-log",
+        status: "provider_attempt_started",
+        estimatedCostUsd: 0.01,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: null,
+        costEstimateComplete: true,
+      },
+      new Date("2026-06-21T11:00:00.000Z")
+    );
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const payload = JSON.parse(String(warnSpy.mock.calls[0][0]));
+    expect(payload.event).toBe("cost_ledger_write_failed");
+    expect(payload.reqId).toMatch(/^req_[a-f0-9]{24}$/);
+    expect(payload.reqId).not.toContain("req-error-log");
+    expect(payload.reqId).not.toContain("req-error");
+
+    writeSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 
   it("summarizes owner-safe spend metadata without user content", async () => {

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   deleteEphemeralKeyIfValue,
   decrementExpiringCounter,
@@ -19,6 +20,11 @@ const DEFAULT_GLOBAL_SLOT_WAIT_MS = 100;
 const DAILY_BUDGET_KEY_PREFIX = "messenger:daily-image-budget";
 const DAILY_VIDEO_BUDGET_KEY_PREFIX = "messenger:daily-video-budget";
 const DAILY_AUDIO_BUDGET_KEY_PREFIX = "messenger:daily-audio-budget";
+
+function hashRequestId(reqId: string): string {
+  const digest = createHash("sha256").update(reqId).digest("hex").slice(0, 24);
+  return `req_${digest}`;
+}
 
 export class MessengerDailyImageBudgetExceededError extends Error {
   constructor(message = "Messenger daily image budget reached") {
@@ -263,7 +269,7 @@ export async function assertMessengerDailyImageBudgetAvailable(input: {
     await decrementExpiringCounter(key);
     safeLog("messenger_daily_image_budget_reached", {
       level: "warn",
-      reqId: input.reqId,
+      reqId: hashRequestId(input.reqId),
       cap,
       count,
     });
@@ -300,7 +306,7 @@ export async function assertMessengerDailyVideoBudgetAvailable(input: {
     await decrementExpiringCounter(key);
     safeLog("messenger_daily_video_budget_reached", {
       level: "warn",
-      reqId: input.reqId,
+      reqId: hashRequestId(input.reqId),
       cap,
       count,
     });
@@ -337,7 +343,7 @@ export async function assertMessengerDailyAudioBudgetAvailable(input: {
     await decrementExpiringCounter(key);
     safeLog("messenger_daily_audio_budget_reached", {
       level: "warn",
-      reqId: input.reqId,
+      reqId: hashRequestId(input.reqId),
       cap,
       count,
     });
