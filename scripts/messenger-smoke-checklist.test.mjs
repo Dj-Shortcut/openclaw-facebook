@@ -55,6 +55,12 @@ describe("Messenger smoke checklist", () => {
         "source_photo_edit",
         "quota_exhaustion",
         "graph_api_failure",
+        "gdpr_consent_gate",
+        "delete_my_data_generated_assets",
+        "delete_my_data_retained_sources",
+        "delete_my_data_face_memory",
+        "delete_my_data_runtime_records",
+        "delete_my_data_portal_scope",
         "rollback_target",
       ])
     );
@@ -70,6 +76,17 @@ describe("Messenger smoke checklist", () => {
 
     expect(validateSmokeEvidence(evidence)).toContain(
       "missing required smoke check: quota_exhaustion"
+    );
+  });
+
+  it("rejects missing delete-my-data production-equivalent proof", () => {
+    const evidence = completeTemplate();
+    evidence.checks = evidence.checks.filter(
+      check => check.id !== "delete_my_data_runtime_records"
+    );
+
+    expect(validateSmokeEvidence(evidence)).toContain(
+      "missing required smoke check: delete_my_data_runtime_records"
     );
   });
 

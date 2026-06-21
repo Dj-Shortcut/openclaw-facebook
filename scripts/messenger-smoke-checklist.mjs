@@ -39,6 +39,30 @@ export const REQUIRED_SMOKE_CHECKS = [
     title: "Graph API send failure is observable and redacted",
   },
   {
+    id: "gdpr_consent_gate",
+    title: "GDPR consent gate is shown before data processing",
+  },
+  {
+    id: "delete_my_data_generated_assets",
+    title: "Delete-my-data removes generated asset records and stored objects",
+  },
+  {
+    id: "delete_my_data_retained_sources",
+    title: "Delete-my-data removes retained source images and retry markers are metadata-only",
+  },
+  {
+    id: "delete_my_data_face_memory",
+    title: "Delete-my-data clears face-memory consent and retained face state",
+  },
+  {
+    id: "delete_my_data_runtime_records",
+    title: "Delete-my-data removes cost-ledger entries and generation completion markers",
+  },
+  {
+    id: "delete_my_data_portal_scope",
+    title: "Tenant/customer portal records are verified as erased or intentionally out of Messenger PSID scope",
+  },
+  {
     id: "rollback_target",
     title: "Rollback target is recorded before deploy",
   },
