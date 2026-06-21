@@ -2,11 +2,7 @@ name: Codex PR follow-up
 
 on:
   pull_request_target:
-    types: [opened, reopened, ready_for_review, synchronize, labeled]
-  pull_request_review:
-    types: [submitted]
-  pull_request_review_comment:
-    types: [created]
+    types: [labeled]
   check_suite:
     types: [completed]
 
@@ -24,14 +20,10 @@ concurrency:
 jobs:
   queue-from-pr-event:
     name: Queue Codex from PR event
-    if: github.event_name != 'check_suite' && github.event.pull_request.draft == false
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.draft == false && github.event.action == 'labeled' && github.event.label.name == 'codex-autofix'
     runs-on: ubuntu-latest
 
     steps:
-      - name: Wait briefly after PR open
-        if: github.event_name == 'pull_request_target' && github.event.action == 'opened'
-        run: sleep 300
-
       - name: Ensure automation labels exist
         env:
           GH_TOKEN: ${{ github.token }}
@@ -60,6 +52,11 @@ jobs:
           SAME_REPO_PR: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           labels="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")')"
+
+          if printf '%s' "$labels" | grep -Eq '(^|,)codex-followup-queued(,|$)'; then
+            echo "PR #$PR_NUMBER already has codex-followup-queued; leaving it untouched."
+            exit 0
+          fi
 
           if [ "$SAME_REPO_PR" != "true" ] && ! printf '%s' "$labels" | grep -Eq '(^|,)codex-autofix(,|$)'; then
             echo "PR #$PR_NUMBER is from a fork and is not labeled codex-autofix; leaving it untouched."
@@ -105,6 +102,16 @@ jobs:
           pr_json="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json isCrossRepository,labels)"
           labels="$(printf '%s' "$pr_json" | jq -r '[.labels[].name] | join(",")')"
           is_cross_repository="$(printf '%s' "$pr_json" | jq -r '.isCrossRepository')"
+
+          if ! printf '%s' "$labels" | grep -Eq '(^|,)codex-autofix(,|$)'; then
+            echo "PR #$PR_NUMBER is not labeled codex-autofix; leaving it untouched."
+            exit 0
+          fi
+
+          if printf '%s' "$labels" | grep -Eq '(^|,)codex-followup-queued(,|$)'; then
+            echo "PR #$PR_NUMBER already has codex-followup-queued; leaving it untouched."
+            exit 0
+          fi
 
           if [ "$is_cross_repository" = "true" ] && ! printf '%s' "$labels" | grep -Eq '(^|,)codex-autofix(,|$)'; then
             echo "PR #$PR_NUMBER is from a fork and is not labeled codex-autofix; leaving it untouched."
