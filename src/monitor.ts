@@ -41,6 +41,7 @@ import {
   type LeaderbotBridgeTrace,
 } from "./leaderbot-bridge.js";
 import {
+  classifyMessengerFastLaneIntent,
   hasMessengerImageGenerationIntent,
   normalizeFastLaneText,
   resolveMessengerFastLaneReply,
@@ -127,12 +128,33 @@ const recentMessengerAssistantRepliesByMessage = new Map<
   { text: string; expiresAt: number }
 >();
 const recentMessengerAssistantReplies = new Map<string, { text: string; expiresAt: number }>();
+const FACEBOOK_UNTRUSTED_TOOL_DENY = [
+  "image_generate",
+  "video_generate",
+  "music_generate",
+  "browser",
+  "canvas",
+  "exec",
+  "process",
+  "write",
+  "edit",
+  "apply_patch",
+  "group:runtime",
+  "group:fs",
+] as const;
 const messengerEventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
 let activeMessengerEventJobs = 0;
 
 messengerEventLoopDelay.enable();
 
 type MessengerTrace = LeaderbotBridgeTrace;
+
+export type FacebookInboundToolPolicy = {
+  source: "facebook_untrusted_default";
+  tools: {
+    deny: string[];
+  };
+};
 
 export type MessengerAudioTranscript = {
   mediaIndex: number;
@@ -145,18 +167,6 @@ const MESSENGER_MEDIA_FETCH_MAX_BYTES = 25 * 1024 * 1024;
 const MESSENGER_MEDIA_FETCH_MAX_REDIRECTS = 2;
 const MISSING_REFERENCED_PROMPT_REPLY =
   "Ik vind die prompt niet meer terug. Plak hem even opnieuw, dan maak ik de afbeelding.";
-export const FACEBOOK_PUBLIC_DM_DENIED_TOOLS = [
-  "image_generate",
-  "browser",
-  "canvas",
-  "web_fetch",
-  "firecrawl",
-  "exec",
-  "write",
-  "edit",
-  "apply_patch",
-  "group:fs",
-] as const;
 
 export function redactMessengerIdentifier(value: string | undefined): string {
   const normalized = value?.trim();
@@ -189,34 +199,6 @@ function pruneProcessedMessengerMessageIds(now: number): void {
       processedMessengerMessageIds.delete(key);
     }
   }
-}
-
-function hasWildcardAllowFrom(allowFrom: unknown): boolean {
-  return Array.isArray(allowFrom) && allowFrom.some((entry) => String(entry).trim() === "*");
-}
-
-function isPublicOpenMessengerAccount(account: ResolvedMessengerAccount): boolean {
-  return account.config?.dmPolicy === "open" && hasWildcardAllowFrom(account.config?.allowFrom);
-}
-
-export function applyFacebookPublicDmToolPolicy(
-  cfg: OpenClawConfig,
-  account: ResolvedMessengerAccount,
-): OpenClawConfig {
-  if (!isPublicOpenMessengerAccount(account)) {
-    return cfg;
-  }
-
-  const currentTools = (cfg as { tools?: { deny?: readonly string[] } }).tools ?? {};
-  const existingDeny = Array.isArray(currentTools.deny) ? currentTools.deny : [];
-  const deny = [...new Set([...existingDeny, ...FACEBOOK_PUBLIC_DM_DENIED_TOOLS])];
-  return {
-    ...cfg,
-    tools: {
-      ...currentTools,
-      deny,
-    },
-  } as OpenClawConfig;
 }
 
 function logMessengerWebhookRejected(reason: string, path: string): void {
@@ -898,6 +880,18 @@ export function shouldDeliverMessengerReplyPayload(
   return true;
 }
 
+export function resolveFacebookInboundToolPolicy(params: {
+  commandAuthorized: boolean;
+}): FacebookInboundToolPolicy | null {
+  if (params.commandAuthorized) {
+    return null;
+  }
+  return {
+    source: "facebook_untrusted_default",
+    tools: { deny: [...FACEBOOK_UNTRUSTED_TOOL_DENY] },
+  };
+}
+
 function isMessengerToolFeedbackPayload(payload: ReplyPayload & { text: string }): boolean {
   if (isReplyPayloadNonTerminalToolErrorWarning(payload)) {
     return true;
@@ -907,14 +901,6 @@ function isMessengerToolFeedbackPayload(payload: ReplyPayload & { text: string }
     /\b(?:run|search|open|find|read|write|edit|tool)\b/i.test(payload.text) &&
     /\b(?:failed|error|mislukt)\b/i.test(payload.text)
   );
-}
-
-function redactMessengerToolFeedbackText(text: string): string {
-  return text
-    .replace(/"[^"]*(?:facebook:\d{6,}|\b\d{8,}\b|sender_id)[^"]*"/gi, '"[redacted]"')
-    .replace(/\bfacebook:\d{6,}\b/gi, "facebook:[redacted]")
-    .replace(/\bsender_id\b/gi, "sender_id:[redacted]")
-    .replace(/\b\d{8,}\b/g, "[redacted-id]");
 }
 
 export function normalizeMessengerReplyPayloadForDelivery(
@@ -928,14 +914,9 @@ export function normalizeMessengerReplyPayloadForDelivery(
     return renderedPayload;
   }
 
-  const cleaned = redactMessengerToolFeedbackText(renderedPayload.text)
-    .replace(/^[\s!*\-:]+/u, "")
-    .replace(/\s+/g, " ")
-    .replace(/\bfailed\b/i, "is mislukt")
-    .trim();
   return {
     ...renderedPayload,
-    text: cleaned ? `Toolfeedback: ${cleaned}` : "Toolfeedback: actie is mislukt.",
+    text: "Ik kon een interne actie niet uitvoeren. Probeer het zo meteen opnieuw.",
   };
 }
 
@@ -1174,6 +1155,34 @@ export async function processMessengerEvent(params: {
         )} account=${params.account.accountId} message=${redactMessengerIdentifier(
           params.event.message?.mid ?? `${senderId}:${timestamp}`,
         )} rawAttachments=${rawAttachmentCount}`,
+      );
+      return;
+    }
+    if (
+      leaderbotBridgeEnabled &&
+      attachments.length === 0 &&
+      classifyMessengerFastLaneIntent(text) === "delete_data"
+    ) {
+      logMessengerStage(params.trace, "messenger_event_forward_started", {
+        reason: "delete_data_request",
+      });
+      if (
+        await forwardLeaderbotMessengerEvent({
+          event: params.event,
+          trace: params.trace,
+          leaderbotBridgeEnabled,
+          logStage: logMessengerStage,
+        })
+      ) {
+        return;
+      }
+      await sendMessengerText(
+        senderId,
+        "Ik kon je verwijderverzoek nu niet automatisch verwerken. Mail privacy@leaderbot.live met je verzoek, dan behandelen we het via de privacyflow.",
+        {
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+        },
       );
       return;
     }
@@ -1512,17 +1521,14 @@ export async function processMessengerEvent(params: {
       params.runtime.error?.(danger(`messenger typing_on failed: ${String(err)}`));
     });
     logMessengerStage(params.trace, "messenger_response_sent", { senderAction: "typing_on" });
-  const inboundCfg = applyFacebookPublicDmToolPolicy(params.cfg, params.account);
-  const publicDmToolPolicy =
-    inboundCfg === params.cfg ? undefined : "facebook_public_high_cost_deny";
   const route = resolveAgentRoute({
-    cfg: inboundCfg,
+    cfg: params.cfg,
     channel: FACEBOOK_CHANNEL_ID,
     accountId: params.account.accountId,
     peer: { kind: "direct", id: senderId },
   });
   const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
-    cfg: inboundCfg,
+    cfg: params.cfg,
     agentId: route.agentId,
     sessionKey: route.sessionKey,
   });
@@ -1536,6 +1542,8 @@ export async function processMessengerEvent(params: {
     previousTimestamp,
     envelope: envelopeOptions,
   });
+  const commandAuthorized = shouldComputeCommandAuthorized(text, params.cfg);
+  const facebookToolPolicy = resolveFacebookInboundToolPolicy({ commandAuthorized });
   const ctxPayload = finalizeInboundContext({
     Body: body,
     BodyForAgent: textForAgent,
@@ -1552,10 +1560,16 @@ export async function processMessengerEvent(params: {
     Surface: FACEBOOK_CHANNEL_ID,
     MessageSid: normalizeOptionalString(params.event.message?.mid) ?? `${senderId}:${timestamp}`,
     Timestamp: timestamp,
-    CommandAuthorized: shouldComputeCommandAuthorized(text, params.cfg),
+    CommandAuthorized: commandAuthorized,
     OriginatingChannel: FACEBOOK_CHANNEL_ID,
     OriginatingTo: `facebook:${senderId}`,
-    ToolPolicy: publicDmToolPolicy,
+    ...(facebookToolPolicy
+      ? {
+          ToolPolicy: facebookToolPolicy,
+          Tools: facebookToolPolicy.tools,
+          ToolPolicySource: facebookToolPolicy.source,
+        }
+      : {}),
     ...mediaPayload,
   });
   const core = getMessengerRuntime();
@@ -1577,7 +1591,7 @@ export async function processMessengerEvent(params: {
         textForCommands: text,
       }),
       resolveTurn: () => ({
-        cfg: inboundCfg,
+        cfg: params.cfg,
         channel: FACEBOOK_CHANNEL_ID,
         accountId: route.accountId,
         agentId: route.agentId,

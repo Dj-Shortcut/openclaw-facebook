@@ -38,11 +38,11 @@ Required before any broader traffic, marketing, or customer onboarding:
 2. [x] Keep the OpenClaw public gateway shielded: expose only required webhook/health routes and deny built-in high-cost `image_generate` on the gateway.
 3. [x] Keep Messenger image/audio/video quota commits tied to provider attempts, with retryable preflight failures releasing reservations.
 4. [x] Keep Redis-backed webhook ingress, generation queue dedupe, worker lease/reclaim behavior, and queue metrics enabled for production image-generation traffic.
-5. [x] Keep privacy-safe logging defaults, including `delete-my-data` failure paths and Messenger-delivered tool feedback: hashed/pseudonymous sender identifiers, redacted errors, and no raw PSIDs, tokens, customer messages, uploaded knowledge, or generated prompts/outputs in logs or user-visible diagnostics.
+5. [x] Keep privacy-safe logging defaults: hashed/pseudonymous sender identifiers, redacted errors, and no raw PSIDs, tokens, customer messages, uploaded knowledge, or generated prompts/outputs in logs.
 6. [x] Keep face memory disabled by default and retain the protected emergency disable route for rollback.
 7. [x] Maintain the documented Fly rollback workflow and non-destructive workspace migration behavior.
-8. [ ] Run and record a live Messenger smoke after each production deploy: webhook verification, signed POST delivery, text reply, prompt-first text-to-image, source-photo edit, quota-exhausted path, and Graph API send failure handling. A metadata-only smoke evidence template/validator now exists via `npm run messenger:smoke-template` and `npm run messenger:smoke-validate -- <file>`, but live evidence is still required after deploy.
-9. [ ] Verify GDPR consent and `delete-my-data` behavior end-to-end with live or production-equivalent state, including generated assets, retained source images, face-memory state, and tenant/customer portal records. Local coverage now proves the Messenger delete command confirmation path clears state, retained source assets, generated asset references, and completion markers, the deletion service has an explicit portal-customer-data cleanup hook for verified portal flows, and the public Messenger gateway recognizes polite delete-my-data variants before assistant/tool routing. Live or production-equivalent deletion evidence is still required before launch.
+8. [ ] Run and record a live Messenger smoke after each production deploy: webhook verification, signed POST delivery, text reply, prompt-first text-to-image, source-photo edit, quota-exhausted path, and Graph API send failure handling.
+9. [ ] Verify GDPR consent and `delete-my-data` behavior end-to-end with live or production-equivalent state, including generated assets, retained source images, face-memory state, and tenant/customer portal records.
 10. [x] Add a release checklist entry that confirms `/healthz`, `/readyz`, `/metrics`, queue depth, failed/dead-lettered jobs, and event-loop p95/p99 before and after deploy.
 
 Exit criteria: live smoke passes, deletion proof is recorded, no public route
@@ -56,12 +56,12 @@ Goal: make the public bot safe for sustained usage beyond controlled smoke.
 Required before enabling open `dmPolicy`, public promotion, or broader free-tier
 access:
 
-1. [ ] Implement per-image/request cost tracking. OpenAI image, audio transcription, and video provider attempts now write metadata-only daily cost ledger entries with pseudonymous `userKey`, provider/model, estimate metadata, status, and UTC period; final-cost coverage is still outstanding.
+1. [x] Implement per-image/request cost tracking.
 2. [ ] Add full host-level budget gates before all expensive model/image/tool calls.
-3. [x] Add default-deny tool policy for high-cost tools exposed to untrusted Facebook-originated users: public-open Facebook DM turns now add a root OpenClaw denylist for image generation, browser/canvas/web fetch/firecrawl, exec, and filesystem mutation tools while Messenger image generation remains routed through the bounded Leaderbot image-gen service.
-4. [ ] Add per-user daily spend caps, a global Facebook daily spend cap, and monthly cost cap enforcement.
-5. [ ] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, usage, estimated cost, final cost, status, and UTC period. OpenAI image, audio, and video attempts now ledger estimate/status metadata before the provider call; usage details and final-cost reconciliation remain.
-6. [ ] Add owner cost alerts and an owner dashboard for spend, quota blocks, duplicate skips, provider failures, queue health, and delivery failures. The cost ledger now exposes an owner-safe UTC-period summary for attempts, unique pseudonymous users, estimated spend, incomplete estimates, and unpriced components; route/UI/alerts remain outstanding.
+3. [x] Add default-deny tool policy for all high-cost tools exposed to untrusted Facebook-originated users.
+4. [x] Add per-user daily spend caps, a global Facebook daily spend cap, and monthly cost cap enforcement.
+5. [ ] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, usage, estimated cost, final cost, status, and UTC period.
+6. [ ] Add owner cost alerts and an owner dashboard for spend, quota blocks, duplicate skips, provider failures, queue health, and delivery failures.
 7. [ ] Continue verifying storage-proxy delivery under Messenger crawler constraints, including generated outputs and retained source images.
 8. [ ] Evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory.
 9. [ ] Keep public legal pages current (`/privacy`, `/terms`, `/data-deletion`) and aligned with Meta App Review, face-memory status, retention, and deletion behavior.
@@ -136,26 +136,32 @@ Validated controls:
 4. [x] Production queue metrics expose queued, processing, failed, global-slot, Redis-backed, and scrape-error state.
 5. [x] Public OpenClaw gateway denies the built-in `image_generate` tool; Messenger image generation routes through the separate image-gen service.
 6. [x] Optional global daily Messenger image cap (`MESSENGER_GLOBAL_DAILY_IMAGE_CAP`) blocks OpenAI image requests before the provider call.
-7. [x] Optional global daily Messenger audio cap (`MESSENGER_GLOBAL_DAILY_AUDIO_CAP`) blocks OpenAI transcription requests before the provider call.
-8. [x] Messenger and WhatsApp image quota now commits when a provider attempt starts, so billable provider failures/timeouts count against user limits while preflight source-image validation failures remain retryable.
-9. [x] Messenger generated-video and audio-transcription quota also commits when provider attempts start, closing the same retry leak for newer paid features.
-10. [x] Shared bot text rate limiting is configurable via `BOT_TEXT_RATE_LIMIT_MAX` and `BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS` instead of hardcoded limits.
-11. [x] New bot features have a reusable feature-scoped limiter helper and generic `FEATURE_RATE_LIMIT_<FEATURE>_*` env convention.
-12. [x] Free-tier product targets are documented before runtime changes: `20` image provider attempts per UTC day, `30` bot text messages per `60` seconds, `5` audio transcription attempts per UTC day, and `1` video generation attempt per UTC day.
-13. [x] OpenAI image, audio transcription, and video provider attempts write metadata-only cost ledger entries keyed by UTC day, with pseudonymous `userKey`, provider/model, estimate source, status, and no prompt/transcript/source URL/output content.
-14. [x] Cost ledger period summaries aggregate attempts, estimated spend, final-cost placeholders, incomplete estimates, unpriced components, operation/provider breakdowns, and unique pseudonymous user counts without exposing user content.
+7. [x] Messenger and WhatsApp image quota now commits when a provider attempt starts, so billable provider failures/timeouts count against user limits while preflight source-image validation failures remain retryable.
+8. [x] Messenger generated-video and audio-transcription quota also commits when provider attempts start, closing the same retry leak for newer paid features.
+9. [x] Shared bot text rate limiting is configurable via `BOT_TEXT_RATE_LIMIT_MAX` and `BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS` instead of hardcoded limits.
+10. [x] New bot features have a reusable feature-scoped limiter helper and generic `FEATURE_RATE_LIMIT_<FEATURE>_*` env convention.
+11. [x] Free-tier product targets are documented before runtime changes: `20` image provider attempts per UTC day, `30` bot text messages per `60` seconds, `5` audio transcription attempts per UTC day, and `1` video generation attempt per UTC day.
+12. [x] Admin-only `/admin/cost-summary` exposes owner-safe aggregate cost ledger summaries without raw PSIDs, prompts, tokens, or customer content.
+13. [x] OpenAI image, audio transcription, and generated-video provider attempts append metadata-only cost ledger entries after quota/budget checks and before external provider calls.
+14. [x] Optional global daily Messenger provider spend cap (`MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD`) blocks priced attempts that would exceed the cap and fails closed for unpriced attempts.
+15. [x] Optional per-user daily Messenger provider spend cap (`MESSENGER_USER_DAILY_SPEND_CAP_USD`) blocks priced attempts per `userKey` and fails closed for unpriced attempts.
+16. [x] Root Facebook gateway stamps untrusted inbound turns with a default-deny `tools.deny` policy for high-cost, runtime, and filesystem tools.
+17. [x] Cost ledger summaries roll up provider-attempt cost metadata per request using hashed request keys instead of raw Messenger message IDs.
+18. [x] Optional global monthly Messenger provider spend cap (`MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD`) blocks image/audio/video provider attempts before external calls and is exposed in metrics.
+19. [x] `delete-my-data` erasure removes the erased user's cost-ledger entries and deletion failure logs use pseudonymous `user` metadata instead of raw PSIDs.
+20. [x] Image, audio transcription, and generated-video cost-ledger entries are reconciled from `provider_attempt_started` to success/failure status, with image final cost populated when the estimate is complete.
 
 Open cost-control work:
 
-1. [ ] Implement per-image/request cost tracking. OpenAI image, audio transcription, and video provider attempts now have metadata-only daily ledger entries; final-cost reconciliation is still open.
+1. [x] Implement per-image/request cost tracking.
 2. [ ] Add full host-level budget gates before all expensive model/image/tool calls.
-3. [x] Add default-deny tool policy for high-cost tools exposed to untrusted Facebook-originated users.
-4. [ ] Add per-user daily spend caps for paired Facebook users.
-5. [ ] Add global Facebook daily spend cap.
-6. [ ] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, usage, estimated cost, final cost, and status. OpenAI image, audio transcription, and video provider attempts now write ledger records; final usage/cost reconciliation remains.
-7. [ ] Add owner dashboard for Facebook spend by day/month, account/page, `userKey`, blocked attempts, duplicate skips, and provider failures. Ledger summary aggregation now exists; owner route/UI remains outstanding.
+3. [x] Add default-deny tool policy for all high-cost tools exposed to untrusted Facebook-originated users.
+4. [x] Add per-user daily spend caps for paired Facebook users.
+5. [x] Add global Facebook daily spend cap.
+6. [ ] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, usage, estimated cost, final cost, and status. Image, audio transcription, and generated-video attempts now write metadata-only entries and reconcile success/failure status; image attempts populate final cost when the estimate is complete. Audio/video final cost and richer usage dimensions remain open.
+7. [ ] Add owner dashboard for Facebook spend by day/month, account/page, `userKey`, blocked attempts, duplicate skips, and provider failures. The admin-only cost summary route now exists for stored ledger records; provider integration and dashboard UX remain open.
 8. [ ] Add user-facing balance/spend overview before paid rollout.
-9. [ ] Add monthly cost cap enforcement.
+9. [x] Add monthly cost cap enforcement.
 10. [ ] Send cost alerts to owner.
 11. [x] Add external uptime monitor for `/healthz`.
 12. [x] Add a dedicated generated-video quota namespace before enabling any video provider call.

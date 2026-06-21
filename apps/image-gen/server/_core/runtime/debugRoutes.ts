@@ -1,6 +1,7 @@
 import type express from "express";
 import { z } from "zod";
 import { createAdminAuthRateLimiter, verifyAdminToken } from "../adminAuth";
+import { summarizeCostLedgerPeriod } from "../costLedger";
 import { isRedisHttpRateLimitEnabled } from "../httpRateLimit";
 import { isRedisReplayProtectionEnabled } from "../webhookReplayProtection";
 
@@ -12,6 +13,20 @@ type VersionPayload = {
 const debugBuildHeadersSchema = z.object({
   "x-admin-token": z.string().min(1).optional(),
 });
+const costSummaryQuerySchema = z.object({
+  period: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+function currentUtcPeriod(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function readAdminTokenHeader(req: express.Request): string | undefined {
+  const parsedHeaders = debugBuildHeadersSchema.safeParse(req.headers);
+  return parsedHeaders.success
+    ? parsedHeaders.data["x-admin-token"]
+    : undefined;
+}
 
 export function buildVersionPayload(
   gitSha: string,
@@ -45,14 +60,9 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
     "/debug/build",
     createAdminAuthRateLimiter({ eventName: "debug_build_auth_rate_limited" }),
     (req, res) => {
-      const parsedHeaders = debugBuildHeadersSchema.safeParse(req.headers);
-      const providedToken = parsedHeaders.success
-        ? parsedHeaders.data["x-admin-token"]
-        : undefined;
-
       if (
         !verifyAdminToken({
-          providedToken,
+          providedToken: readAdminTokenHeader(req),
           eventName: "debug_build_auth_failed",
         })
       ) {
@@ -85,6 +95,30 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
           traceparentPropagationEnabled: true,
         },
       });
+    }
+  );
+
+  app.get(
+    "/admin/cost-summary",
+    createAdminAuthRateLimiter({ eventName: "admin_cost_summary_auth_rate_limited" }),
+    async (req, res) => {
+      if (
+        !verifyAdminToken({
+          providedToken: readAdminTokenHeader(req),
+          eventName: "admin_cost_summary_auth_failed",
+        })
+      ) {
+        return res.sendStatus(403);
+      }
+
+      const parsedQuery = costSummaryQuerySchema.safeParse(req.query);
+      if (!parsedQuery.success) {
+        return res.status(400).json({ error: "invalid period" });
+      }
+
+      const period = parsedQuery.data.period ?? currentUtcPeriod();
+      const summary = await summarizeCostLedgerPeriod(period);
+      return res.status(200).json(summary);
     }
   );
 }

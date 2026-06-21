@@ -148,6 +148,12 @@ describe("observability", () => {
       expect(body).toContain("messenger_generation_global_slots_redis_backed 0");
       expect(body).toContain("messenger_generation_daily_budget_enabled 0");
       expect(body).toContain("messenger_generation_daily_budget_cap 0");
+      expect(body).toContain("messenger_generation_daily_spend_budget_enabled 0");
+      expect(body).toContain("messenger_generation_daily_spend_budget_cap_usd 0");
+      expect(body).toContain("messenger_generation_monthly_spend_budget_enabled 0");
+      expect(body).toContain("messenger_generation_monthly_spend_budget_cap_usd 0");
+      expect(body).toContain("messenger_generation_user_daily_spend_budget_enabled 0");
+      expect(body).toContain("messenger_generation_user_daily_spend_budget_cap_usd 0");
       expect(body).toContain("messenger_generation_queue_enabled 0");
       expect(body).toContain('messenger_generation_queue_jobs{state="queued"} 0');
       expect(body).toContain('messenger_generation_queue_jobs{state="processing"} 0');

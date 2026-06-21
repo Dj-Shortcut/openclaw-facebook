@@ -8,7 +8,13 @@ import {
   setEphemeralKey,
   setEphemeralKeyIfAbsent,
 } from "./stateStore";
+import {
+  summarizeCostLedgerPeriod,
+  summarizeCostLedgerPeriods,
+  summarizeCostLedgerPeriodForUser,
+} from "./costLedger";
 import { safeLog } from "./logger";
+import { toLogUser } from "./privacy";
 
 const DEFAULT_GLOBAL_CONCURRENCY = 3;
 const DEFAULT_GLOBAL_LOCK_MS = 240000;
@@ -18,7 +24,6 @@ const DEFAULT_VIDEO_PSID_LOCK_MS = 900000;
 const DEFAULT_GLOBAL_SLOT_WAIT_MS = 100;
 const DAILY_BUDGET_KEY_PREFIX = "messenger:daily-image-budget";
 const DAILY_VIDEO_BUDGET_KEY_PREFIX = "messenger:daily-video-budget";
-const DAILY_AUDIO_BUDGET_KEY_PREFIX = "messenger:daily-audio-budget";
 
 export class MessengerDailyImageBudgetExceededError extends Error {
   constructor(message = "Messenger daily image budget reached") {
@@ -34,10 +39,10 @@ export class MessengerDailyVideoBudgetExceededError extends Error {
   }
 }
 
-export class MessengerDailyAudioBudgetExceededError extends Error {
-  constructor(message = "Messenger daily audio budget reached") {
+export class MessengerDailySpendBudgetExceededError extends Error {
+  constructor(message = "Messenger daily spend budget reached") {
     super(message);
-    this.name = "MessengerDailyAudioBudgetExceededError";
+    this.name = "MessengerDailySpendBudgetExceededError";
   }
 }
 
@@ -51,8 +56,26 @@ function readPositiveInt(name: string): number | null {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : null;
 }
 
+function readPositiveUsd(name: string): number | null {
+  const raw = Number(process.env[name]);
+  return Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
 function getUtcDayKey(now = new Date()): string {
   return now.toISOString().slice(0, 10);
+}
+
+function getUtcMonthKey(now = new Date()): string {
+  return now.toISOString().slice(0, 7);
+}
+
+function getUtcMonthDayPeriods(now = new Date()): string[] {
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth();
+  const dayCount = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return Array.from({ length: dayCount }, (_, index) =>
+    new Date(Date.UTC(year, month, index + 1)).toISOString().slice(0, 10)
+  );
 }
 
 function secondsUntilNextUtcDay(now = new Date()): number {
@@ -111,9 +134,19 @@ type MessengerDailyImageBudgetConfig = {
   cap: number | null;
 };
 
-type MessengerDailyAudioBudgetConfig = {
+type MessengerDailySpendBudgetConfig = {
   enabled: boolean;
-  cap: number | null;
+  capUsd: number | null;
+};
+
+type MessengerMonthlySpendBudgetConfig = {
+  enabled: boolean;
+  capUsd: number | null;
+};
+
+type MessengerUserDailySpendBudgetConfig = {
+  enabled: boolean;
+  capUsd: number | null;
 };
 
 function getGlobalMaxConcurrency(): number {
@@ -239,12 +272,154 @@ export function getMessengerDailyImageBudgetConfig(): MessengerDailyImageBudgetC
   };
 }
 
-export function getMessengerDailyAudioBudgetConfig(): MessengerDailyAudioBudgetConfig {
-  const cap = readPositiveInt("MESSENGER_GLOBAL_DAILY_AUDIO_CAP");
+export function getMessengerDailySpendBudgetConfig(): MessengerDailySpendBudgetConfig {
+  const capUsd = readPositiveUsd("MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD");
   return {
-    enabled: cap !== null,
-    cap,
+    enabled: capUsd !== null,
+    capUsd,
   };
+}
+
+export function getMessengerMonthlySpendBudgetConfig(): MessengerMonthlySpendBudgetConfig {
+  const capUsd = readPositiveUsd("MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD");
+  return {
+    enabled: capUsd !== null,
+    capUsd,
+  };
+}
+
+export function getMessengerUserDailySpendBudgetConfig(): MessengerUserDailySpendBudgetConfig {
+  const capUsd = readPositiveUsd("MESSENGER_USER_DAILY_SPEND_CAP_USD");
+  return {
+    enabled: capUsd !== null,
+    capUsd,
+  };
+}
+
+export async function assertMessengerDailySpendBudgetAvailable(input: {
+  reqId: string;
+  estimatedCostUsd: number | null;
+  estimatedOutputCostUsd?: number | null;
+  now?: Date;
+}): Promise<void> {
+  const { capUsd } = getMessengerDailySpendBudgetConfig();
+  if (!capUsd) {
+    return;
+  }
+
+  const attemptEstimate =
+    (input.estimatedCostUsd ?? 0) + (input.estimatedOutputCostUsd ?? 0);
+  if (!Number.isFinite(attemptEstimate) || attemptEstimate <= 0) {
+    safeLog("messenger_daily_spend_budget_unpriced_attempt_blocked", {
+      level: "warn",
+      reqId: input.reqId,
+      capUsd,
+    });
+    throw new MessengerDailySpendBudgetExceededError(
+      "Messenger daily spend budget requires priced provider attempts"
+    );
+  }
+
+  const period = getUtcDayKey(input.now ?? new Date());
+  const summary = await summarizeCostLedgerPeriod(period);
+  const projectedSpendUsd = summary.estimatedCostUsd + attemptEstimate;
+  if (projectedSpendUsd > capUsd) {
+    safeLog("messenger_daily_spend_budget_reached", {
+      level: "warn",
+      reqId: input.reqId,
+      capUsd,
+      currentSpendUsd: summary.estimatedCostUsd,
+      attemptEstimateUsd: attemptEstimate,
+      projectedSpendUsd,
+    });
+    throw new MessengerDailySpendBudgetExceededError();
+  }
+}
+
+export async function assertMessengerMonthlySpendBudgetAvailable(input: {
+  reqId: string;
+  estimatedCostUsd: number | null;
+  estimatedOutputCostUsd?: number | null;
+  now?: Date;
+}): Promise<void> {
+  const { capUsd } = getMessengerMonthlySpendBudgetConfig();
+  if (!capUsd) {
+    return;
+  }
+
+  const attemptEstimate =
+    (input.estimatedCostUsd ?? 0) + (input.estimatedOutputCostUsd ?? 0);
+  if (!Number.isFinite(attemptEstimate) || attemptEstimate <= 0) {
+    safeLog("messenger_monthly_spend_budget_unpriced_attempt_blocked", {
+      level: "warn",
+      reqId: input.reqId,
+      capUsd,
+    });
+    throw new MessengerDailySpendBudgetExceededError(
+      "Messenger monthly spend budget requires priced provider attempts"
+    );
+  }
+
+  const now = input.now ?? new Date();
+  const summary = await summarizeCostLedgerPeriods(
+    getUtcMonthDayPeriods(now),
+    getUtcMonthKey(now)
+  );
+  const projectedSpendUsd = summary.estimatedCostUsd + attemptEstimate;
+  if (projectedSpendUsd > capUsd) {
+    safeLog("messenger_monthly_spend_budget_reached", {
+      level: "warn",
+      reqId: input.reqId,
+      capUsd,
+      currentSpendUsd: summary.estimatedCostUsd,
+      attemptEstimateUsd: attemptEstimate,
+      projectedSpendUsd,
+    });
+    throw new MessengerDailySpendBudgetExceededError();
+  }
+}
+
+export async function assertMessengerUserDailySpendBudgetAvailable(input: {
+  reqId: string;
+  userKey: string;
+  estimatedCostUsd: number | null;
+  estimatedOutputCostUsd?: number | null;
+  now?: Date;
+}): Promise<void> {
+  const { capUsd } = getMessengerUserDailySpendBudgetConfig();
+  if (!capUsd) {
+    return;
+  }
+
+  const attemptEstimate =
+    (input.estimatedCostUsd ?? 0) + (input.estimatedOutputCostUsd ?? 0);
+  if (!Number.isFinite(attemptEstimate) || attemptEstimate <= 0) {
+    safeLog("messenger_user_daily_spend_budget_unpriced_attempt_blocked", {
+      level: "warn",
+      reqId: input.reqId,
+      user: toLogUser(input.userKey),
+      capUsd,
+    });
+    throw new MessengerDailySpendBudgetExceededError(
+      "Messenger user daily spend budget requires priced provider attempts"
+    );
+  }
+
+  const period = getUtcDayKey(input.now ?? new Date());
+  const summary = await summarizeCostLedgerPeriodForUser(period, input.userKey);
+  const projectedSpendUsd = summary.estimatedCostUsd + attemptEstimate;
+  if (projectedSpendUsd > capUsd) {
+    safeLog("messenger_user_daily_spend_budget_reached", {
+      level: "warn",
+      reqId: input.reqId,
+      user: toLogUser(input.userKey),
+      capUsd,
+      currentSpendUsd: summary.estimatedCostUsd,
+      attemptEstimateUsd: attemptEstimate,
+      projectedSpendUsd,
+    });
+    throw new MessengerDailySpendBudgetExceededError();
+  }
 }
 
 export async function assertMessengerDailyImageBudgetAvailable(input: {
@@ -318,43 +493,6 @@ export async function releaseMessengerDailyVideoBudgetReservation(input: {
 
   const now = input.now ?? new Date();
   const key = `${DAILY_VIDEO_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
-  await decrementExpiringCounter(key);
-}
-
-export async function assertMessengerDailyAudioBudgetAvailable(input: {
-  reqId: string;
-  now?: Date;
-}): Promise<void> {
-  const { cap } = getMessengerDailyAudioBudgetConfig();
-  if (!cap) {
-    return;
-  }
-
-  const now = input.now ?? new Date();
-  const key = `${DAILY_AUDIO_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
-  const count = await incrementExpiringCounter(key, secondsUntilNextUtcDay(now));
-  if (count > cap) {
-    await decrementExpiringCounter(key);
-    safeLog("messenger_daily_audio_budget_reached", {
-      level: "warn",
-      reqId: input.reqId,
-      cap,
-      count,
-    });
-    throw new MessengerDailyAudioBudgetExceededError();
-  }
-}
-
-export async function releaseMessengerDailyAudioBudgetReservation(input: {
-  now?: Date;
-} = {}): Promise<void> {
-  const { cap } = getMessengerDailyAudioBudgetConfig();
-  if (!cap) {
-    return;
-  }
-
-  const now = input.now ?? new Date();
-  const key = `${DAILY_AUDIO_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
   await decrementExpiringCounter(key);
 }
 
