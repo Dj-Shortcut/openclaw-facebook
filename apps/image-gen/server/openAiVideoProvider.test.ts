@@ -102,7 +102,7 @@ describe("OpenAiVideoProvider", () => {
         provider: "openai-video",
         model: "sora-2",
         userKey: "user-key",
-        reqId: expect.stringMatching(/^req_[a-f0-9]{24}$/),
+        reqId: "req-openai-video-retry",
         status: "provider_attempt_started",
         estimatedCostUsd: null,
         estimatedOutputCostUsd: null,
@@ -113,7 +113,8 @@ describe("OpenAiVideoProvider", () => {
       }),
       expect.objectContaining({
         operation: "video_generation",
-        reqId: expect.stringMatching(/^req_[a-f0-9]{24}$/),
+        reqId: "req-openai-video-retry",
+        status: "provider_attempt_started",
         userKey: "user-key",
       }),
     ]);

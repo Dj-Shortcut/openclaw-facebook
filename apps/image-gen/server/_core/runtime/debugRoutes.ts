@@ -1,7 +1,11 @@
+import { randomUUID } from "node:crypto";
 import type express from "express";
+import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { createAdminAuthRateLimiter, verifyAdminToken } from "../adminAuth";
+import { summarizeCostLedgerPeriod } from "../costLedger";
 import { isRedisHttpRateLimitEnabled } from "../httpRateLimit";
+import { safeLog } from "../messengerApi";
 import { isRedisReplayProtectionEnabled } from "../webhookReplayProtection";
 
 type VersionPayload = {
@@ -12,6 +16,35 @@ type VersionPayload = {
 const debugBuildHeadersSchema = z.object({
   "x-admin-token": z.string().min(1).optional(),
 });
+function isValidUtcPeriod(period: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(period)) {
+    return false;
+  }
+  const date = new Date(`${period}T00:00:00.000Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === period;
+}
+
+const costSummaryQuerySchema = z.object({
+  period: z.string().refine(isValidUtcPeriod).optional(),
+});
+
+const adminCostSummaryRouteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+function currentUtcPeriod(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function readAdminTokenHeader(req: express.Request): string | undefined {
+  const parsedHeaders = debugBuildHeadersSchema.safeParse(req.headers);
+  return parsedHeaders.success
+    ? parsedHeaders.data["x-admin-token"]
+    : undefined;
+}
 
 export function buildVersionPayload(
   gitSha: string,
@@ -45,14 +78,9 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
     "/debug/build",
     createAdminAuthRateLimiter({ eventName: "debug_build_auth_rate_limited" }),
     (req, res) => {
-      const parsedHeaders = debugBuildHeadersSchema.safeParse(req.headers);
-      const providedToken = parsedHeaders.success
-        ? parsedHeaders.data["x-admin-token"]
-        : undefined;
-
       if (
         !verifyAdminToken({
-          providedToken,
+          providedToken: readAdminTokenHeader(req),
           eventName: "debug_build_auth_failed",
         })
       ) {
@@ -85,6 +113,45 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
           traceparentPropagationEnabled: true,
         },
       });
+    }
+  );
+
+  app.get(
+    "/admin/cost-summary",
+    adminCostSummaryRouteLimiter,
+    createAdminAuthRateLimiter({ eventName: "admin_cost_summary_auth_rate_limited" }),
+    async (req, res) => {
+      if (
+        !verifyAdminToken({
+          providedToken: readAdminTokenHeader(req),
+          eventName: "admin_cost_summary_auth_failed",
+        })
+      ) {
+        return res.sendStatus(403);
+      }
+
+      const parsedQuery = costSummaryQuerySchema.safeParse(req.query);
+      if (!parsedQuery.success) {
+        return res.status(400).json({ error: "invalid period" });
+      }
+
+      const period = parsedQuery.data.period ?? currentUtcPeriod();
+      try {
+        const summary = await summarizeCostLedgerPeriod(period);
+        return res.status(200).json(summary);
+      } catch (error) {
+        const requestId = `cost_summary_${randomUUID()}`;
+        safeLog("admin_cost_summary_failed", {
+          level: "error",
+          requestId,
+          period,
+          errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
+        });
+        return res.status(500).json({
+          error: "Failed to summarize cost period",
+          requestId,
+        });
+      }
     }
   );
 }

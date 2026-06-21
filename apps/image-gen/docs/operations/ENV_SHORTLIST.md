@@ -40,8 +40,14 @@ These variables control whether the OpenAI-backed parts of the bot actually run.
 | `OPENAI_EDIT_INTERPRETER_MODEL` | Conversational edit classifier | Optional; free text still stays deterministic and does not use an OpenAI chat brain. |
 | `SOURCE_IMAGE_ALLOWED_HOSTS` | Downloading inbound images before generation | If the exact host is not allowlisted, generation fails before OpenAI is called. |
 | `MESSENGER_GLOBAL_DAILY_IMAGE_CAP` | Optional global Messenger image provider-attempt cap | Set for public smoke so one account cannot burn the whole OpenAI image budget. |
+| `MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP` | Optional root-gateway image forward cap | Host-level safety valve before the OpenClaw Facebook plugin forwards image intents to Leaderbot image-gen. |
 | `MESSENGER_GLOBAL_DAILY_AUDIO_CAP` | Optional global Messenger audio transcription provider-attempt cap | Set for public smoke if audio messages are enabled; blocks before OpenAI transcription. |
+| `MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP` | Optional root-gateway audio transcription cap | Host-level safety valve before the OpenClaw Facebook plugin downloads/transcribes Messenger voice attachments. |
+| `OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD` | Optional audio transcription cost estimate | Enables priced audio spend-cap checks and final-cost ledger reconciliation per OpenAI transcription attempt. |
+| `MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP` | Optional root-gateway Leaderbot event forward cap | Host-level safety valve before generic free-tier/interactive Messenger events are forwarded to Leaderbot image-gen. Does not block delete-data forwards. |
 | `MESSENGER_GLOBAL_DAILY_VIDEO_CAP` | Optional global Messenger video provider-attempt cap | Set before video generation is exposed to public Messenger traffic. |
+| `OPENAI_VIDEO_GENERATION_ESTIMATED_COST_USD` | Optional video generation cost estimate | Enables priced video spend-cap checks and final-cost ledger reconciliation per generated-video attempt. |
+| `MESSENGER_OWNER_COST_ALERTS` | Optional owner notification for spend-cap blocks | Set to `1` only when `BUILT_IN_FORGE_API_URL` and `BUILT_IN_FORGE_API_KEY` are configured; alerts include metadata-only budget details. |
 
 ## 4. Optional but easy to confuse
 

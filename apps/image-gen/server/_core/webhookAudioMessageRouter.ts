@@ -1,20 +1,24 @@
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import { safeLog } from "./messengerApi";
+import {
+  safelyAppendCostLedgerEntry,
+  safelyUpdateCostLedgerEntry,
+} from "./costLedger";
 import { fetchExternalSourceImageForIngress } from "./image-generation/sourceImageFetcher";
 import { anonymizePsid } from "./messengerState";
 import { handleTextMessage } from "./webhookTextMessageRouter";
+import {
+  assertMessengerDailySpendBudgetAvailable,
+  assertMessengerMonthlySpendBudgetAvailable,
+  assertMessengerUserDailySpendBudgetAvailable,
+  MessengerSpendBudgetExceededError,
+} from "./generationGuard";
 import {
   commitTranscriptionSuccess,
   MessengerQuotaReservationCommitError,
   releaseTranscriptionReservation,
   reserveTranscriptionForAttempt,
 } from "./messengerQuota";
-import {
-  assertMessengerDailyAudioBudgetAvailable,
-  MessengerDailyAudioBudgetExceededError,
-  releaseMessengerDailyAudioBudgetReservation,
-} from "./generationGuard";
-import { safelyAppendCostLedgerEntry } from "./costLedger";
 import { t } from "./i18n";
 import type { HandlerContext } from "./webhookHandlerTypes";
 import type { FacebookWebhookAttachment } from "./webhookHelpers";
@@ -67,39 +71,13 @@ export async function tryHandleAudioMessage(
   }
 
   const commitProviderAttemptQuota = async () => {
-    const budgetNow = new Date();
-    await assertMessengerDailyAudioBudgetAvailable({ reqId: input.reqId, now: budgetNow });
-    try {
-      const committed = await commitTranscriptionSuccess(input.psid, reservation, {
-        releaseReservation: false,
-      });
-      if (!committed) {
-        throw new MessengerQuotaReservationCommitError(
-          "Messenger audio transcription quota reservation could not be committed"
-        );
-      }
-      await safelyAppendCostLedgerEntry(
-        {
-          id: `${input.reqId}:${budgetNow.toISOString()}`,
-          channel: "facebook_messenger",
-          operation: "audio_transcription",
-          provider: "openai-audio",
-          model: OPENAI_AUDIO_TRANSCRIPTION_MODEL,
-          userKey: input.userId,
-          reqId: input.reqId,
-          status: "provider_attempt_started",
-          estimatedCostUsd: null,
-          estimatedOutputCostUsd: null,
-          finalCostUsd: null,
-          costEstimateComplete: false,
-          estimateSource: "unpriced",
-          unpricedCostComponents: ["audio_duration"],
-        },
-        budgetNow
+    const committed = await commitTranscriptionSuccess(input.psid, reservation, {
+      releaseReservation: false,
+    });
+    if (!committed) {
+      throw new MessengerQuotaReservationCommitError(
+        "Messenger audio transcription quota reservation could not be committed"
       );
-    } catch (error) {
-      await releaseMessengerDailyAudioBudgetReservation({ now: budgetNow });
-      throw error;
     }
   };
 
@@ -107,6 +85,7 @@ export async function tryHandleAudioMessage(
     const transcript = await transcribePreparedAudioMessage(
       input.reqId,
       input.psid,
+      input.userId,
       audioUrl,
       prepared,
       commitProviderAttemptQuota
@@ -127,7 +106,7 @@ export async function tryHandleAudioMessage(
   } catch (error) {
     if (
       error instanceof MessengerQuotaReservationCommitError ||
-      error instanceof MessengerDailyAudioBudgetExceededError
+      error instanceof MessengerSpendBudgetExceededError
     ) {
       await ctx.sendLoggedText(input.psid, t(input.lang, "outOfFreeCredits"), input.reqId);
       return true;
@@ -220,11 +199,13 @@ async function prepareAudioForTranscription(
 async function transcribePreparedAudioMessage(
   reqId: string,
   psid: string,
+  userId: string,
   audioUrl: string,
   prepared: PreparedAudioForTranscription,
   onProviderAttempt: () => Promise<void>
 ): Promise<string | null> {
   const { apiKey, sourceAudio } = prepared;
+  const costEstimate = estimateAudioTranscriptionAttemptCost();
   const attemptPayload = {
     reqId,
     psidHash: anonymizePsid(psid).slice(0, 12),
@@ -236,7 +217,47 @@ async function transcribePreparedAudioMessage(
   };
 
   for (let attempt = 0; attempt <= OPENAI_AUDIO_TRANSCRIPTION_MAX_RETRIES; attempt += 1) {
+    const attemptNow = new Date();
+    await assertMessengerDailySpendBudgetAvailable({
+      reqId,
+      estimatedCostUsd: costEstimate.estimatedCostUsd,
+      estimatedOutputCostUsd: null,
+      now: attemptNow,
+    });
+    await assertMessengerMonthlySpendBudgetAvailable({
+      reqId,
+      estimatedCostUsd: costEstimate.estimatedCostUsd,
+      estimatedOutputCostUsd: null,
+      now: attemptNow,
+    });
+    await assertMessengerUserDailySpendBudgetAvailable({
+      reqId,
+      userKey: userId,
+      estimatedCostUsd: costEstimate.estimatedCostUsd,
+      estimatedOutputCostUsd: null,
+      now: attemptNow,
+    });
     await onProviderAttempt();
+    const ledgerEntryId = `${reqId}:openai-audio:${attempt + 1}`;
+    await safelyAppendCostLedgerEntry(
+      {
+        id: ledgerEntryId,
+        channel: "facebook_messenger",
+        operation: "audio_transcription",
+        provider: "openai-audio",
+        model: OPENAI_AUDIO_TRANSCRIPTION_MODEL,
+        userKey: userId,
+        reqId,
+        status: "provider_attempt_started",
+        estimatedCostUsd: costEstimate.estimatedCostUsd,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: null,
+        costEstimateComplete: costEstimate.costEstimateComplete,
+        estimateSource: costEstimate.estimateSource,
+        unpricedCostComponents: costEstimate.unpricedCostComponents,
+      },
+      attemptNow
+    );
     const controller = new AbortController();
     const timer = setTimeout(() => {
       controller.abort();
@@ -259,6 +280,11 @@ async function transcribePreparedAudioMessage(
       });
       if (!response.ok) {
         if (attempt < OPENAI_AUDIO_TRANSCRIPTION_MAX_RETRIES && isRetryableStatus(response.status)) {
+          await safelyUpdateCostLedgerEntry(
+            ledgerEntryId,
+            { status: "provider_attempt_failed" },
+            attemptNow
+          );
           safeLog("messenger_audio_transcription_retry", {
             ...attemptPayload,
             route: "audio",
@@ -275,6 +301,11 @@ async function transcribePreparedAudioMessage(
           attempt,
           reason: "http_error",
         });
+        await safelyUpdateCostLedgerEntry(
+          ledgerEntryId,
+          { status: "provider_attempt_failed" },
+          attemptNow
+        );
         return null;
       }
 
@@ -288,6 +319,11 @@ async function transcribePreparedAudioMessage(
           reason: "empty_transcript",
           attempt,
         });
+        await safelyUpdateCostLedgerEntry(
+          ledgerEntryId,
+          { status: "provider_attempt_failed" },
+          attemptNow
+        );
         return null;
       }
 
@@ -301,9 +337,22 @@ async function transcribePreparedAudioMessage(
           textLength: transcript.length,
           wordCount,
         });
+        await safelyUpdateCostLedgerEntry(
+          ledgerEntryId,
+          { status: "provider_attempt_failed" },
+          attemptNow
+        );
         return null;
       }
 
+      await safelyUpdateCostLedgerEntry(
+        ledgerEntryId,
+        {
+          status: "provider_attempt_succeeded",
+          finalCostUsd: costEstimate.finalCostUsd,
+        },
+        attemptNow
+      );
       safeLog("messenger_audio_transcription_complete", {
         ...attemptPayload,
         route: "audio",
@@ -313,6 +362,11 @@ async function transcribePreparedAudioMessage(
       return transcript;
     } catch (error) {
       if (attempt < OPENAI_AUDIO_TRANSCRIPTION_MAX_RETRIES && isTransientError(error)) {
+        await safelyUpdateCostLedgerEntry(
+          ledgerEntryId,
+          { status: "provider_attempt_failed" },
+          attemptNow
+        );
         safeLog("messenger_audio_transcription_retry", {
           ...attemptPayload,
           route: "audio",
@@ -328,6 +382,11 @@ async function transcribePreparedAudioMessage(
         attempt,
         reason: error instanceof Error ? error.name : "unknown_error",
       });
+      await safelyUpdateCostLedgerEntry(
+        ledgerEntryId,
+        { status: "provider_attempt_failed" },
+        attemptNow
+      );
       return null;
     } finally {
       clearTimeout(timer);
@@ -347,6 +406,43 @@ function getAudioTranscriptionMaxBytes(): number {
   }
 
   return DEFAULT_AUDIO_TRANSCRIPTION_MAX_BYTES;
+}
+
+function readUsdEnv(name: string): number | null {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return null;
+  }
+
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function estimateAudioTranscriptionAttemptCost(): {
+  estimatedCostUsd: number | null;
+  finalCostUsd: number | null;
+  costEstimateComplete: boolean;
+  estimateSource: string;
+  unpricedCostComponents: string[];
+} {
+  const override = readUsdEnv("OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD");
+  if (override !== null) {
+    return {
+      estimatedCostUsd: override,
+      finalCostUsd: override,
+      costEstimateComplete: true,
+      estimateSource: "env_override",
+      unpricedCostComponents: [],
+    };
+  }
+
+  return {
+    estimatedCostUsd: null,
+    finalCostUsd: null,
+    costEstimateComplete: false,
+    estimateSource: "unpriced",
+    unpricedCostComponents: ["audio_seconds"],
+  };
 }
 
 function countTranscriptWords(transcript: string): number {

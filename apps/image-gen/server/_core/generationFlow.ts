@@ -20,7 +20,10 @@ import type { SourceImageOrigin } from "./messengerState";
 import type { GenerationKind } from "./image-generation/generationTypes";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import { storageGet, storageKeyFromPublicUrl } from "../storage";
-import { MessengerDailyImageBudgetExceededError } from "./generationGuard";
+import {
+  MessengerDailyImageBudgetExceededError,
+  MessengerSpendBudgetExceededError,
+} from "./generationGuard";
 import { MessengerQuotaReservationCommitError } from "./messengerQuota";
 import { safeLog } from "./logger";
 
@@ -216,7 +219,10 @@ function classifyGenerationError(error: unknown): GenerationFlowFailureKind {
     return "generation_budget_reached";
   }
 
-  if (error instanceof MessengerDailyImageBudgetExceededError) {
+  if (
+    error instanceof MessengerDailyImageBudgetExceededError ||
+    error instanceof MessengerSpendBudgetExceededError
+  ) {
     return "generation_budget_reached";
   }
 

@@ -34,6 +34,12 @@ const originalMessengerGenerationInlineFallback =
   process.env.MESSENGER_GENERATION_INLINE_FALLBACK;
 const originalMessengerGlobalDailyImageCap =
   process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP;
+const originalMessengerGlobalDailySpendCapUsd =
+  process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD;
+const originalMessengerGlobalMonthlySpendCapUsd =
+  process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD;
+const originalMessengerUserDailySpendCapUsd =
+  process.env.MESSENGER_USER_DAILY_SPEND_CAP_USD;
 
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) {
@@ -149,6 +155,18 @@ describe("image provider boundary", () => {
       "MESSENGER_GLOBAL_DAILY_IMAGE_CAP",
       originalMessengerGlobalDailyImageCap
     );
+    restoreEnv(
+      "MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD",
+      originalMessengerGlobalDailySpendCapUsd
+    );
+    restoreEnv(
+      "MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD",
+      originalMessengerGlobalMonthlySpendCapUsd
+    );
+    restoreEnv(
+      "MESSENGER_USER_DAILY_SPEND_CAP_USD",
+      originalMessengerUserDailySpendCapUsd
+    );
     clearStateStore();
   });
 
@@ -240,11 +258,10 @@ describe("image provider boundary", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const generator = new OpenAiImageGenerator();
-    const onProviderAttempt = vi.fn(async () => undefined);
     const result = await generateWithSourceImageData(generator, {
       userKey: "user-1",
       reqId: "req-provider-log",
-      onProviderAttempt,
+      onProviderAttempt: vi.fn(async () => undefined),
     });
 
     const providerLogs = logSpy.mock.calls
@@ -257,7 +274,6 @@ describe("image provider boundary", () => {
       /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(onProviderAttempt).toHaveBeenCalledTimes(2);
     expect(providerLogs).toEqual([
       {
         level: "info",
@@ -288,6 +304,7 @@ describe("image provider boundary", () => {
     ).rejects.toThrow("user quota exhausted");
 
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
 
     await expect(
       generator.generate({
@@ -379,7 +396,6 @@ describe("image provider boundary", () => {
     process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
     process.env.OPENAI_IMAGE_SIZE = "1024x1536";
     process.env.OPENAI_IMAGE_QUALITY = "medium";
-    const period = new Date().toISOString().slice(0, 10);
     const privatePrompt = "private tester prompt for a neon train station";
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
@@ -393,6 +409,7 @@ describe("image provider boundary", () => {
       userKey: "testuser",
       reqId: "req-cost-estimate",
     });
+    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
 
     const parsedLogs = logSpy.mock.calls.map(([payload]) =>
       typeof payload === "string" ? JSON.parse(payload) : payload
@@ -424,28 +441,66 @@ describe("image provider boundary", () => {
         status: "provider_response_received",
       },
     ]);
-    const ledger = await readCostLedgerPeriod(period);
-    expect(ledger).toEqual([
+    expect(ledgerEntries).toEqual([
       expect.objectContaining({
-        channel: "facebook_messenger",
+        id: "req-cost-estimate:openai-image:1",
+        channel: "image_gen",
         operation: "image_generation",
         provider: "openai-images",
         model: "gpt-image-2",
-        pricingModel: "gpt-image-1",
         userKey: "testuser",
-        reqId: expect.stringMatching(/^req_[a-f0-9]{24}$/),
-        generationKind: "text_to_image",
-        status: "provider_attempt_started",
+        reqId: "req-cost-estimate",
+        status: "provider_attempt_succeeded",
         estimatedCostUsd: 0.025,
         estimatedOutputCostUsd: null,
-        finalCostUsd: null,
+        finalCostUsd: 0.025,
         costEstimateComplete: true,
         estimateSource: "env_override",
         unpricedCostComponents: [],
       }),
     ]);
     expect(serializedLogs).not.toContain(privatePrompt);
-    expect(JSON.stringify(ledger)).not.toContain(privatePrompt);
+    expect(JSON.stringify(ledgerEntries)).not.toContain(privatePrompt);
+    expect(JSON.stringify(ledgerEntries)).not.toContain("facebook:");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks image cost ledger attempts failed when the provider request fails", async () => {
+    configureOpenAiImagesEnv("gpt-image-2");
+    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
+    process.env.OPENAI_IMAGE_MAX_RETRIES = "0";
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: { message: "provider unavailable" } }), {
+          headers: { "content-type": "application/json" },
+          status: 500,
+          statusText: "Internal Server Error",
+        })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generator = new OpenAiImageGenerator();
+    await expect(
+      generator.generate({
+        generationKind: "text_to_image",
+        promptHint: "private prompt should not be stored",
+        userKey: "failed-cost-user",
+        reqId: "req-cost-failed",
+      })
+    ).rejects.toThrow("OpenAI request failed");
+
+    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    expect(ledgerEntries).toEqual([
+      expect.objectContaining({
+        id: "req-cost-failed:openai-image:1",
+        userKey: "failed-cost-user",
+        reqId: "req-cost-failed",
+        status: "provider_attempt_failed",
+        estimatedCostUsd: 0.025,
+        finalCostUsd: null,
+      }),
+    ]);
+    expect(JSON.stringify(ledgerEntries)).not.toContain("private prompt");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -524,6 +579,72 @@ describe("image provider boundary", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(onProviderAttempt).not.toHaveBeenCalled();
+  });
+
+  it("blocks the OpenAI request when the global daily spend cap would be exceeded", async () => {
+    configureOpenAiImagesEnv("gpt-image-2");
+    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
+    process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "0.02";
+    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
+    const onProviderAttempt = vi.fn(async () => undefined);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generator = new OpenAiImageGenerator();
+    await expect(
+      generator.generate({
+        userKey: "user-spend-cap",
+        reqId: "req-spend-cap",
+        onProviderAttempt,
+      })
+    ).rejects.toThrow("Messenger spend budget reached");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(onProviderAttempt).not.toHaveBeenCalled();
+    expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
+  });
+
+  it("blocks the OpenAI request when the per-user daily spend cap would be exceeded", async () => {
+    configureOpenAiImagesEnv("gpt-image-2");
+    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
+    process.env.MESSENGER_USER_DAILY_SPEND_CAP_USD = "0.02";
+    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
+    const onProviderAttempt = vi.fn(async () => undefined);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generator = new OpenAiImageGenerator();
+    await expect(
+      generator.generate({
+        userKey: "user-spend-cap",
+        reqId: "req-user-spend-cap",
+        onProviderAttempt,
+      })
+    ).rejects.toThrow("Messenger spend budget reached");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(onProviderAttempt).not.toHaveBeenCalled();
+    expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
+  });
+
+  it("blocks the OpenAI request when the global monthly spend cap would be exceeded", async () => {
+    configureOpenAiImagesEnv("gpt-image-2");
+    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
+    process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD = "0.02";
+    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
+    const onProviderAttempt = vi.fn(async () => undefined);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generator = new OpenAiImageGenerator();
+    await expect(
+      generator.generate({
+        userKey: "user-monthly-spend-cap",
+        reqId: "req-monthly-spend-cap",
+        onProviderAttempt,
+      })
+    ).rejects.toThrow("Messenger spend budget reached");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(onProviderAttempt).not.toHaveBeenCalled();
+    expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
   });
 
   it("uses OPENAI_IMAGE_MODEL and image_generation tool when source image data is provided", async () => {

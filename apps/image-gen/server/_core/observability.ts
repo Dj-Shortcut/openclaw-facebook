@@ -3,7 +3,10 @@ import type express from "express";
 import { isDebugLogEnabled } from "./logLevel";
 import {
   getMessengerDailyImageBudgetConfig,
+  getMessengerDailySpendBudgetConfig,
   getMessengerGenerationGlobalLimitStats,
+  getMessengerMonthlySpendBudgetConfig,
+  getMessengerUserDailySpendBudgetConfig,
 } from "./generationGuard";
 import {
   getMessengerGenerationQueueStats,
@@ -14,6 +17,7 @@ import {
 import { getTodayRuntimeStats } from "./botRuntimeStats";
 import { safeLog } from "./logger";
 import { hashGeneratedImageToken } from "./generatedImageStore";
+import { getCostLedgerReliabilityStats } from "./costLedger";
 
 type RequestWithId = express.Request & {
   requestId?: string;
@@ -179,6 +183,9 @@ async function renderMessengerGenerationQueueMetrics(): Promise<string[]> {
     const stats = await getMessengerGenerationQueueStats();
     const globalLimitStats = await getMessengerGenerationGlobalLimitStats();
     const dailyBudget = getMessengerDailyImageBudgetConfig();
+    const dailySpendBudget = getMessengerDailySpendBudgetConfig();
+    const monthlySpendBudget = getMessengerMonthlySpendBudgetConfig();
+    const userDailySpendBudget = getMessengerUserDailySpendBudgetConfig();
     return [
       "# HELP messenger_generation_queue_enabled Whether the Messenger generation queue is enabled",
       "# TYPE messenger_generation_queue_enabled gauge",
@@ -210,6 +217,24 @@ async function renderMessengerGenerationQueueMetrics(): Promise<string[]> {
       "# HELP messenger_generation_daily_budget_cap Configured optional daily Messenger image request cap, or 0 when disabled",
       "# TYPE messenger_generation_daily_budget_cap gauge",
       `messenger_generation_daily_budget_cap ${dailyBudget.cap ?? 0}`,
+      "# HELP messenger_generation_daily_spend_budget_enabled Whether the optional daily Messenger provider spend cap is enabled",
+      "# TYPE messenger_generation_daily_spend_budget_enabled gauge",
+      `messenger_generation_daily_spend_budget_enabled ${dailySpendBudget.enabled ? 1 : 0}`,
+      "# HELP messenger_generation_daily_spend_budget_cap_usd Configured optional daily Messenger provider spend cap in USD, or 0 when disabled",
+      "# TYPE messenger_generation_daily_spend_budget_cap_usd gauge",
+      `messenger_generation_daily_spend_budget_cap_usd ${dailySpendBudget.capUsd ?? 0}`,
+      "# HELP messenger_generation_monthly_spend_budget_enabled Whether the optional monthly Messenger provider spend cap is enabled",
+      "# TYPE messenger_generation_monthly_spend_budget_enabled gauge",
+      `messenger_generation_monthly_spend_budget_enabled ${monthlySpendBudget.enabled ? 1 : 0}`,
+      "# HELP messenger_generation_monthly_spend_budget_cap_usd Configured optional monthly Messenger provider spend cap in USD, or 0 when disabled",
+      "# TYPE messenger_generation_monthly_spend_budget_cap_usd gauge",
+      `messenger_generation_monthly_spend_budget_cap_usd ${monthlySpendBudget.capUsd ?? 0}`,
+      "# HELP messenger_generation_user_daily_spend_budget_enabled Whether the optional per-user daily Messenger provider spend cap is enabled",
+      "# TYPE messenger_generation_user_daily_spend_budget_enabled gauge",
+      `messenger_generation_user_daily_spend_budget_enabled ${userDailySpendBudget.enabled ? 1 : 0}`,
+      "# HELP messenger_generation_user_daily_spend_budget_cap_usd Configured optional per-user daily Messenger provider spend cap in USD, or 0 when disabled",
+      "# TYPE messenger_generation_user_daily_spend_budget_cap_usd gauge",
+      `messenger_generation_user_daily_spend_budget_cap_usd ${userDailySpendBudget.capUsd ?? 0}`,
       "# HELP messenger_generation_queue_scrape_error Whether queue metric collection failed",
       "# TYPE messenger_generation_queue_scrape_error gauge",
       "messenger_generation_queue_scrape_error 0",
@@ -225,6 +250,7 @@ async function renderMessengerGenerationQueueMetrics(): Promise<string[]> {
 
 async function renderPrometheusMetrics(): Promise<string> {
   const runtimeStats = getTodayRuntimeStats();
+  const costLedgerReliability = getCostLedgerReliabilityStats();
   const lines: string[] = [
     "# HELP http_requests_total Total HTTP requests handled by the server",
     "# TYPE http_requests_total counter",
@@ -263,6 +289,13 @@ async function renderPrometheusMetrics(): Promise<string> {
   for (const [labels, value] of webhookAckDurationCounts.entries()) {
     lines.push(`webhook_ack_duration_seconds_count{${labels}} ${value}`);
   }
+
+  lines.push("# HELP cost_ledger_dropped_entries_total Cost ledger entries dropped because the per-period cap was exceeded");
+  lines.push("# TYPE cost_ledger_dropped_entries_total counter");
+  lines.push(`cost_ledger_dropped_entries_total ${costLedgerReliability.droppedEntryCount}`);
+  lines.push("# HELP cost_ledger_max_entries_per_period Configured maximum cost ledger entries retained per period");
+  lines.push("# TYPE cost_ledger_max_entries_per_period gauge");
+  lines.push(`cost_ledger_max_entries_per_period ${costLedgerReliability.maxEntriesPerPeriod}`);
 
   lines.push(...await renderMessengerGenerationQueueMetrics());
   lines.push("# HELP messenger_generation_today_total Successful Messenger image generations recorded by this process today");
