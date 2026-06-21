@@ -21,6 +21,11 @@ vi.mock("./_core/video-generation/videoProviderRegistry", async importOriginal =
 });
 import { deleteUserData } from "./_core/dataDeletionService";
 import {
+  appendCostLedgerEntry,
+  readCostLedgerPeriod,
+} from "./_core/costLedger";
+import * as costLedger from "./_core/costLedger";
+import {
   getMessengerGenerationCompletion,
   markMessengerGenerationCompleted,
 } from "./_core/messengerGenerationCompletion";
@@ -110,45 +115,129 @@ describe("data deletion service", () => {
     ).toBeNull();
   });
 
-  it("runs explicit portal customer data deletion during user erasure", async () => {
-    const psid = "delete-portal-data-user";
+  it("deletes cost ledger entries for the erased user", async () => {
+    const psid = "delete-cost-ledger-user";
     const userKey = anonymizePsid(psid);
-    const deletePortalCustomerData = vi.fn(async () => undefined);
+    const otherUserKey = anonymizePsid("other-cost-ledger-user");
+    const recordedAt = new Date();
+    const period = recordedAt.toISOString().slice(0, 10);
 
     await Promise.resolve(getOrCreateState(psid));
+    await appendCostLedgerEntry(
+      {
+        id: "req-delete-cost:attempt-1",
+        channel: "facebook_messenger",
+        operation: "image_generation",
+        provider: "openai-images",
+        model: "gpt-image-2",
+        userKey,
+        reqId: "req-delete-cost",
+        status: "provider_attempt_started",
+        estimatedCostUsd: 0.025,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: null,
+        costEstimateComplete: true,
+        estimateSource: "env_override",
+        unpricedCostComponents: [],
+      },
+      recordedAt
+    );
+    await appendCostLedgerEntry(
+      {
+        id: "req-keep-cost:attempt-1",
+        channel: "facebook_messenger",
+        operation: "image_generation",
+        provider: "openai-images",
+        model: "gpt-image-2",
+        userKey: otherUserKey,
+        reqId: "req-keep-cost",
+        status: "provider_attempt_started",
+        estimatedCostUsd: 0.025,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: null,
+        costEstimateComplete: true,
+        estimateSource: "env_override",
+        unpricedCostComponents: [],
+      },
+      recordedAt
+    );
 
-    await deleteUserData(psid, { deletePortalCustomerData });
+    await deleteUserData(psid);
 
-    expect(deletePortalCustomerData).toHaveBeenCalledWith({ userKey });
-    expect(await Promise.resolve(getState(psid))).toBeNull();
+    const remainingEntries = await readCostLedgerPeriod(period);
+    expect(remainingEntries).toEqual([
+      expect.objectContaining({
+        id: "req-keep-cost:attempt-1",
+        userKey: otherUserKey,
+      }),
+    ]);
   });
 
-  it("retains Messenger state when explicit portal data deletion fails", async () => {
-    const psid = "delete-portal-data-failure-user";
-    const userKey = anonymizePsid(psid);
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const deletePortalCustomerData = vi.fn(async () => {
-      throw new Error("portal cleanup failed");
+  it("keeps user state when a required deletion step fails", async () => {
+    const psid = "delete-step-failure-user";
+    const imageUrl = "https://assets.example/inbound-source/fail-step.jpg";
+    let state = await Promise.resolve(getOrCreateState(psid));
+
+    await Promise.resolve(
+      setPendingImage(
+        psid,
+        imageUrl,
+        Date.now(),
+        "stored"
+      )
+    );
+    state = await Promise.resolve(getState(psid));
+    await Promise.resolve(
+      writeState(psid, {
+        ...state,
+        lastGeneratedVideoProvider: "openai",
+        lastGeneratedVideoProviderJobId: "video_job_fail",
+      })
+    );
+
+    deleteProviderVideoForUserMock.mockRejectedValueOnce(
+      new Error("temporary video artifact deletion failure")
+    );
+
+    await deleteUserData(psid);
+
+    expect(await Promise.resolve(getState(psid))).toMatchObject({
+      userKey: state.userKey,
+      pendingImageUrl: imageUrl,
     });
+  });
 
-    try {
-      await Promise.resolve(getOrCreateState(psid));
+  it("keeps retry state when a required deletion step fails", async () => {
+    const psid = "delete-step-failure-retry-state-user";
+    const imageUrl = "https://assets.example/inbound-source/delete-my-data.jpg";
+    let state = await Promise.resolve(getOrCreateState(psid));
 
-      await deleteUserData(psid, { deletePortalCustomerData });
+    await Promise.resolve(
+      setPendingImage(psid, imageUrl, Date.now(), "stored")
+    );
+    state = await Promise.resolve(getState(psid));
 
-      const serializedLogs = logSpy.mock.calls.map(call => String(call[0]));
-      expect(deletePortalCustomerData).toHaveBeenCalledWith({ userKey });
-      expect(await Promise.resolve(getState(psid))).not.toBeNull();
-      expect(serializedLogs.join("\n")).not.toContain(psid);
-      expect(serializedLogs).toContainEqual(
-        expect.stringContaining('"step":"portal_customer_data"')
-      );
-      expect(serializedLogs).toContainEqual(
-        expect.stringContaining(`"user":"${userKey.slice(0, 8)}"`)
-      );
-    } finally {
-      logSpy.mockRestore();
-    }
+    await Promise.resolve(writeState(psid, {
+      ...state,
+      lastGeneratedVideoProvider: "openai",
+      lastGeneratedVideoProviderJobId: "video_job_retry_state_fail",
+    }));
+
+    deleteProviderVideoForUserMock.mockRejectedValueOnce(
+      new Error("temporary video artifact deletion failure")
+    );
+    await deleteUserData(psid);
+
+    const stateAfter = await Promise.resolve(getState(psid));
+    expect(stateAfter).toEqual(
+      expect.objectContaining({
+        userKey: state.userKey,
+        lastPhotoUrl: imageUrl,
+        lastPhoto: imageUrl,
+        pendingImageUrl: imageUrl,
+        pendingImageAt: expect.any(Number),
+      })
+    );
   });
 
   it("keeps a pending deletion marker when object storage deletion fails", async () => {
@@ -171,32 +260,27 @@ describe("data deletion service", () => {
     );
   });
 
-  it("logs storage deletion failures with a pseudonymous user key", async () => {
-    const psid = "delete-storage-failure-log-user";
-    const userKey = anonymizePsid(psid);
+  it("does not log raw PSIDs when object storage deletion fails", async () => {
+    const psid = "delete-storage-log-user";
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     storageDeleteMock.mockRejectedValueOnce(new Error("delete failed"));
 
-    try {
-      await Promise.resolve(
-        setPendingImage(
-          psid,
-          "https://assets.example/inbound-source/delete-me.jpg",
-          Date.now(),
-          "stored"
-        )
-      );
+    await Promise.resolve(
+      setPendingImage(
+        psid,
+        "https://assets.example/inbound-source/delete-log.jpg",
+        Date.now(),
+        "stored"
+      )
+    );
 
-      await deleteUserData(psid);
+    await deleteUserData(psid);
 
-      const serializedLogs = logSpy.mock.calls.map(call => String(call[0]));
-      expect(serializedLogs.join("\n")).not.toContain(psid);
-      expect(serializedLogs).toContainEqual(
-        expect.stringContaining(`"user":"${userKey.slice(0, 8)}"`)
-      );
-    } finally {
-      logSpy.mockRestore();
-    }
+    const serializedLogs = JSON.stringify(logSpy.mock.calls);
+    expect(serializedLogs).toContain("user_data_storage_delete_failed");
+    expect(serializedLogs).not.toContain(psid);
+    expect(serializedLogs).not.toContain("psid");
+    logSpy.mockRestore();
   });
 
   it("keeps every failed object deletion marker during user erasure", async () => {
