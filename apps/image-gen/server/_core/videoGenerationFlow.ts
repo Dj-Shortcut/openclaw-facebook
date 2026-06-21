@@ -54,6 +54,43 @@ function getVideoProviderName(provider: VideoProvider): string {
   return provider.constructor.name.toLowerCase();
 }
 
+function readUsdEnv(name: string): number | null {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return null;
+  }
+
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function estimateVideoGenerationAttemptCost(): {
+  estimatedCostUsd: number | null;
+  finalCostUsd: number | null;
+  costEstimateComplete: boolean;
+  estimateSource: string;
+  unpricedCostComponents: string[];
+} {
+  const override = readUsdEnv("OPENAI_VIDEO_GENERATION_ESTIMATED_COST_USD");
+  if (override !== null) {
+    return {
+      estimatedCostUsd: override,
+      finalCostUsd: override,
+      costEstimateComplete: true,
+      estimateSource: "env_override",
+      unpricedCostComponents: [],
+    };
+  }
+
+  return {
+    estimatedCostUsd: null,
+    finalCostUsd: null,
+    costEstimateComplete: false,
+    estimateSource: "unpriced",
+    unpricedCostComponents: ["video_generation"],
+  };
+}
+
 type VideoGenerationDeps = {
   maybeSendInFlightMessage: (
     psid: string,
@@ -214,6 +251,7 @@ export function createMessengerVideoGenerationRunner(
           "generation_started"
         );
         const provider = getVideoProvider();
+        const costEstimate = estimateVideoGenerationAttemptCost();
         let providerAttemptCount = 0;
         const commitProviderAttemptQuota = async () => {
           const budgetNow = new Date();
@@ -221,20 +259,20 @@ export function createMessengerVideoGenerationRunner(
           try {
             await assertMessengerDailySpendBudgetAvailable({
               reqId,
-              estimatedCostUsd: null,
+              estimatedCostUsd: costEstimate.estimatedCostUsd,
               estimatedOutputCostUsd: null,
               now: budgetNow,
             });
             await assertMessengerMonthlySpendBudgetAvailable({
               reqId,
-              estimatedCostUsd: null,
+              estimatedCostUsd: costEstimate.estimatedCostUsd,
               estimatedOutputCostUsd: null,
               now: budgetNow,
             });
             await assertMessengerUserDailySpendBudgetAvailable({
               reqId,
               userKey: userId,
-              estimatedCostUsd: null,
+              estimatedCostUsd: costEstimate.estimatedCostUsd,
               estimatedOutputCostUsd: null,
               now: budgetNow,
             });
@@ -284,12 +322,12 @@ export function createMessengerVideoGenerationRunner(
                 userKey: userId,
                 reqId,
                 status: "provider_attempt_started",
-                estimatedCostUsd: null,
+                estimatedCostUsd: costEstimate.estimatedCostUsd,
                 estimatedOutputCostUsd: null,
                 finalCostUsd: null,
-                costEstimateComplete: false,
-                estimateSource: "unpriced",
-                unpricedCostComponents: ["video_generation"],
+                costEstimateComplete: costEstimate.costEstimateComplete,
+                estimateSource: costEstimate.estimateSource,
+                unpricedCostComponents: costEstimate.unpricedCostComponents,
               },
               budgetNow
             );
@@ -429,7 +467,10 @@ export function createMessengerVideoGenerationRunner(
         if (lastVideoLedgerEntryId && lastVideoLedgerEntryRecordedAt) {
           await safelyUpdateCostLedgerEntry(
             lastVideoLedgerEntryId,
-            { status: "provider_attempt_succeeded" },
+            {
+              status: "provider_attempt_succeeded",
+              finalCostUsd: costEstimate.finalCostUsd,
+            },
             lastVideoLedgerEntryRecordedAt
           );
         }

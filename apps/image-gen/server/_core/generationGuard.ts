@@ -14,6 +14,7 @@ import {
   summarizeCostLedgerPeriodForUser,
 } from "./costLedger";
 import { safeLog } from "./logger";
+import { notifyOwner } from "./notification";
 import { toLogUser } from "./privacy";
 
 const DEFAULT_GLOBAL_CONCURRENCY = 3;
@@ -61,6 +62,10 @@ function readPositiveUsd(name: string): number | null {
   return Number.isFinite(raw) && raw > 0 ? raw : null;
 }
 
+function areOwnerCostAlertsEnabled(): boolean {
+  return process.env.MESSENGER_OWNER_COST_ALERTS === "1";
+}
+
 function getUtcDayKey(now = new Date()): string {
   return now.toISOString().slice(0, 10);
 }
@@ -85,6 +90,63 @@ function secondsUntilNextUtcDay(now = new Date()): number {
     now.getUTCDate() + 1
   );
   return Math.max(1, Math.ceil((nextDay - now.getTime()) / 1000));
+}
+
+async function notifyOwnerCostAlert(input: {
+  scope: "global_daily" | "global_monthly" | "user_daily";
+  reason: "cap_reached" | "unpriced_attempt_blocked";
+  period: string;
+  capUsd: number;
+  currentSpendUsd?: number;
+  attemptEstimateUsd?: number;
+  projectedSpendUsd?: number;
+  user?: string;
+}): Promise<void> {
+  if (!areOwnerCostAlertsEnabled()) {
+    return;
+  }
+
+  const lines = [
+    `scope=${input.scope}`,
+    `reason=${input.reason}`,
+    `period=${input.period}`,
+    `capUsd=${input.capUsd}`,
+  ];
+  if (typeof input.currentSpendUsd === "number") {
+    lines.push(`currentSpendUsd=${input.currentSpendUsd}`);
+  }
+  if (typeof input.attemptEstimateUsd === "number") {
+    lines.push(`attemptEstimateUsd=${input.attemptEstimateUsd}`);
+  }
+  if (typeof input.projectedSpendUsd === "number") {
+    lines.push(`projectedSpendUsd=${input.projectedSpendUsd}`);
+  }
+  if (input.user) {
+    lines.push(`user=${input.user}`);
+  }
+
+  try {
+    const sent = await notifyOwner({
+      title: "Messenger cost alert",
+      content: lines.join("\n"),
+    });
+    if (!sent) {
+      safeLog("messenger_owner_cost_alert_not_sent", {
+        level: "warn",
+        scope: input.scope,
+        reason: input.reason,
+        period: input.period,
+      });
+    }
+  } catch (error) {
+    safeLog("messenger_owner_cost_alert_failed", {
+      level: "warn",
+      scope: input.scope,
+      reason: input.reason,
+      period: input.period,
+      error,
+    });
+  }
 }
 
 class ConcurrencyLimiter {
@@ -309,10 +371,17 @@ export async function assertMessengerDailySpendBudgetAvailable(input: {
 
   const attemptEstimate =
     (input.estimatedCostUsd ?? 0) + (input.estimatedOutputCostUsd ?? 0);
+  const period = getUtcDayKey(input.now ?? new Date());
   if (!Number.isFinite(attemptEstimate) || attemptEstimate <= 0) {
     safeLog("messenger_daily_spend_budget_unpriced_attempt_blocked", {
       level: "warn",
       reqId: input.reqId,
+      capUsd,
+    });
+    await notifyOwnerCostAlert({
+      scope: "global_daily",
+      reason: "unpriced_attempt_blocked",
+      period,
       capUsd,
     });
     throw new MessengerSpendBudgetExceededError(
@@ -320,13 +389,21 @@ export async function assertMessengerDailySpendBudgetAvailable(input: {
     );
   }
 
-  const period = getUtcDayKey(input.now ?? new Date());
   const summary = await summarizeCostLedgerPeriod(period);
   const projectedSpendUsd = summary.estimatedCostUsd + attemptEstimate;
   if (projectedSpendUsd > capUsd) {
     safeLog("messenger_daily_spend_budget_reached", {
       level: "warn",
       reqId: input.reqId,
+      capUsd,
+      currentSpendUsd: summary.estimatedCostUsd,
+      attemptEstimateUsd: attemptEstimate,
+      projectedSpendUsd,
+    });
+    await notifyOwnerCostAlert({
+      scope: "global_daily",
+      reason: "cap_reached",
+      period,
       capUsd,
       currentSpendUsd: summary.estimatedCostUsd,
       attemptEstimateUsd: attemptEstimate,
@@ -349,10 +426,18 @@ export async function assertMessengerMonthlySpendBudgetAvailable(input: {
 
   const attemptEstimate =
     (input.estimatedCostUsd ?? 0) + (input.estimatedOutputCostUsd ?? 0);
+  const now = input.now ?? new Date();
+  const monthPeriod = getUtcMonthKey(now);
   if (!Number.isFinite(attemptEstimate) || attemptEstimate <= 0) {
     safeLog("messenger_monthly_spend_budget_unpriced_attempt_blocked", {
       level: "warn",
       reqId: input.reqId,
+      capUsd,
+    });
+    await notifyOwnerCostAlert({
+      scope: "global_monthly",
+      reason: "unpriced_attempt_blocked",
+      period: monthPeriod,
       capUsd,
     });
     throw new MessengerSpendBudgetExceededError(
@@ -360,16 +445,24 @@ export async function assertMessengerMonthlySpendBudgetAvailable(input: {
     );
   }
 
-  const now = input.now ?? new Date();
   const summary = await summarizeCostLedgerPeriods(
     getUtcMonthDayPeriods(now),
-    getUtcMonthKey(now)
+    monthPeriod
   );
   const projectedSpendUsd = summary.estimatedCostUsd + attemptEstimate;
   if (projectedSpendUsd > capUsd) {
     safeLog("messenger_monthly_spend_budget_reached", {
       level: "warn",
       reqId: input.reqId,
+      capUsd,
+      currentSpendUsd: summary.estimatedCostUsd,
+      attemptEstimateUsd: attemptEstimate,
+      projectedSpendUsd,
+    });
+    await notifyOwnerCostAlert({
+      scope: "global_monthly",
+      reason: "cap_reached",
+      period: monthPeriod,
       capUsd,
       currentSpendUsd: summary.estimatedCostUsd,
       attemptEstimateUsd: attemptEstimate,
@@ -393,30 +486,48 @@ export async function assertMessengerUserDailySpendBudgetAvailable(input: {
 
   const attemptEstimate =
     (input.estimatedCostUsd ?? 0) + (input.estimatedOutputCostUsd ?? 0);
+  const period = getUtcDayKey(input.now ?? new Date());
+  const logUser = toLogUser(input.userKey);
   if (!Number.isFinite(attemptEstimate) || attemptEstimate <= 0) {
     safeLog("messenger_user_daily_spend_budget_unpriced_attempt_blocked", {
       level: "warn",
       reqId: input.reqId,
-      user: toLogUser(input.userKey),
+      user: logUser,
       capUsd,
+    });
+    await notifyOwnerCostAlert({
+      scope: "user_daily",
+      reason: "unpriced_attempt_blocked",
+      period,
+      capUsd,
+      user: logUser,
     });
     throw new MessengerSpendBudgetExceededError(
       "Messenger user daily spend budget requires priced provider attempts"
     );
   }
 
-  const period = getUtcDayKey(input.now ?? new Date());
   const summary = await summarizeCostLedgerPeriodForUser(period, input.userKey);
   const projectedSpendUsd = summary.estimatedCostUsd + attemptEstimate;
   if (projectedSpendUsd > capUsd) {
     safeLog("messenger_user_daily_spend_budget_reached", {
       level: "warn",
       reqId: input.reqId,
-      user: toLogUser(input.userKey),
+      user: logUser,
       capUsd,
       currentSpendUsd: summary.estimatedCostUsd,
       attemptEstimateUsd: attemptEstimate,
       projectedSpendUsd,
+    });
+    await notifyOwnerCostAlert({
+      scope: "user_daily",
+      reason: "cap_reached",
+      period,
+      capUsd,
+      currentSpendUsd: summary.estimatedCostUsd,
+      attemptEstimateUsd: attemptEstimate,
+      projectedSpendUsd,
+      user: logUser,
     });
     throw new MessengerSpendBudgetExceededError();
   }

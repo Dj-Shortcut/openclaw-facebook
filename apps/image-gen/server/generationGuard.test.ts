@@ -12,12 +12,17 @@ const stateStoreMocks = vi.hoisted(() => ({
   writeScopedState: vi.fn(),
 }));
 
+const notificationMocks = vi.hoisted(() => ({
+  notifyOwner: vi.fn(),
+}));
+
 describe("generationGuard", () => {
   let guard: typeof import("./_core/generationGuard");
 
   beforeEach(async () => {
     vi.resetModules();
     vi.doMock("./_core/stateStore", () => stateStoreMocks);
+    vi.doMock("./_core/notification", () => notificationMocks);
     stateStoreMocks.hasEphemeralKey.mockResolvedValue(false);
     stateStoreMocks.decrementExpiringCounter.mockResolvedValue(1);
     stateStoreMocks.incrementExpiringCounter.mockResolvedValue(1);
@@ -26,6 +31,7 @@ describe("generationGuard", () => {
     stateStoreMocks.setEphemeralKeyIfAbsent.mockResolvedValue(true);
     stateStoreMocks.writeScopedState.mockResolvedValue(undefined);
     stateStoreMocks.deleteEphemeralKeyIfValue.mockResolvedValue(true);
+    notificationMocks.notifyOwner.mockResolvedValue(true);
     guard = await import("./_core/generationGuard");
   });
 
@@ -36,10 +42,12 @@ describe("generationGuard", () => {
     delete process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD;
     delete process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD;
     delete process.env.MESSENGER_USER_DAILY_SPEND_CAP_USD;
+    delete process.env.MESSENGER_OWNER_COST_ALERTS;
     delete process.env.MESSENGER_PSID_COOLDOWN_MS;
     delete process.env.MESSENGER_PSID_LOCK_TTL_MS;
     vi.restoreAllMocks();
     vi.doUnmock("./_core/stateStore");
+    vi.doUnmock("./_core/notification");
     vi.clearAllMocks();
   });
 
@@ -261,6 +269,56 @@ describe("generationGuard", () => {
         now: new Date("2026-06-01T12:00:00.000Z"),
       })
     ).rejects.toBeInstanceOf(guard.MessengerSpendBudgetExceededError);
+  });
+
+  it("sends an owner cost alert when an opted-in daily spend cap is reached", async () => {
+    process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "0.03";
+    process.env.MESSENGER_OWNER_COST_ALERTS = "1";
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    stateStoreMocks.readScopedState.mockResolvedValue([
+      {
+        id: "existing",
+        channel: "facebook_messenger",
+        operation: "image_generation",
+        provider: "openai-images",
+        model: "gpt-image-2",
+        userKey: "user-key",
+        reqId: "req-existing",
+        status: "provider_attempt_started",
+        estimatedCostUsd: 0.02,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: null,
+        costEstimateComplete: true,
+        estimateSource: "env_override",
+        unpricedCostComponents: [],
+        period: "2026-06-01",
+        recordedAt: "2026-06-01T10:00:00.000Z",
+      },
+    ]);
+
+    await expect(
+      guard.assertMessengerDailySpendBudgetAvailable({
+        reqId: "req-spend-alert-private",
+        estimatedCostUsd: 0.025,
+        now: new Date("2026-06-01T12:00:00.000Z"),
+      })
+    ).rejects.toBeInstanceOf(guard.MessengerSpendBudgetExceededError);
+
+    expect(notificationMocks.notifyOwner).toHaveBeenCalledWith({
+      title: "Messenger cost alert",
+      content: [
+        "scope=global_daily",
+        "reason=cap_reached",
+        "period=2026-06-01",
+        "capUsd=0.03",
+        "currentSpendUsd=0.02",
+        "attemptEstimateUsd=0.025",
+        "projectedSpendUsd=0.045",
+      ].join("\n"),
+    });
+    expect(
+      JSON.stringify(notificationMocks.notifyOwner.mock.calls[0]?.[0])
+    ).not.toContain("req-spend-alert-private");
   });
 
   it("fails closed for unpriced provider attempts when the daily spend cap is enabled", async () => {

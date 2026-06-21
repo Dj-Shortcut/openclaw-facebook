@@ -1,16 +1,21 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendCostLedgerEntry,
+  deleteCostLedgerEntriesForUser,
+  getCostLedgerReliabilityStats,
   readCostLedgerPeriod,
+  resetCostLedgerReliabilityStatsForTests,
   summarizeCostLedgerPeriod,
   summarizeCostLedgerPeriods,
   updateCostLedgerEntry,
   type CostLedgerEntry,
 } from "./_core/costLedger";
-import { clearStateStore } from "./_core/stateStore";
+import { clearStateStore, writeScopedState } from "./_core/stateStore";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   clearStateStore();
+  resetCostLedgerReliabilityStatsForTests();
 });
 
 function entry(overrides: Partial<CostLedgerEntry>): CostLedgerEntry {
@@ -54,6 +59,25 @@ describe("cost ledger", () => {
     ]);
   });
 
+  it("serializes concurrent same-period appends without dropping entries", async () => {
+    await Promise.all(
+      Array.from({ length: 25 }, (_, index) =>
+        appendCostLedgerEntry(
+          entry({
+            id: `req-concurrent:attempt-${index}`,
+            reqId: `req-concurrent-${index}`,
+          }),
+          new Date("2026-06-21T12:00:00.000Z")
+        )
+      )
+    );
+
+    const entries = await readCostLedgerPeriod("2026-06-21");
+
+    expect(entries).toHaveLength(25);
+    expect(new Set(entries.map(ledgerEntry => ledgerEntry.id)).size).toBe(25);
+  });
+
   it("summarizes owner-safe spend metadata", async () => {
     await appendCostLedgerEntry(
       entry({
@@ -71,6 +95,7 @@ describe("cost ledger", () => {
         provider: "openai-audio",
         model: "gpt-4o-transcribe",
         userKey: "user-key-2",
+        status: "provider_attempt_failed",
         estimatedCostUsd: null,
         costEstimateComplete: false,
         estimateSource: null,
@@ -82,30 +107,52 @@ describe("cost ledger", () => {
       entry({
         id: "req-image:attempt-2",
         userKey: "user-key-1",
+        status: "provider_attempt_succeeded",
         estimatedCostUsd: null,
         estimatedOutputCostUsd: 0.042,
+        finalCostUsd: 0.042,
         costEstimateComplete: false,
         unpricedCostComponents: ["input_tokens"],
       }),
       new Date("2026-06-21T12:02:00.000Z")
+    );
+    await appendCostLedgerEntry(
+      entry({
+        id: "req-blocked:attempt-1",
+        reqId: "req-blocked",
+        userKey: "user-key-3",
+        status: "blocked",
+        estimatedCostUsd: null,
+        costEstimateComplete: false,
+      }),
+      new Date("2026-06-21T12:03:00.000Z")
     );
 
     const summary = await summarizeCostLedgerPeriod("2026-06-21");
 
     expect(summary).toMatchObject({
       period: "2026-06-21",
-      totalEntries: 3,
-      uniqueUserCount: 2,
+      totalEntries: 4,
+      uniqueUserCount: 3,
       estimatedCostUsd: 0.067,
-      finalCostUsd: 0,
+      finalCostUsd: 0.042,
+      openAttemptEntries: 1,
+      failedAttemptEntries: 1,
+      blockedEntries: 1,
       completeEstimateEntries: 1,
-      incompleteEstimateEntries: 2,
+      incompleteEstimateEntries: 3,
       unpricedCostComponents: ["audio_seconds", "input_tokens"],
+      byStatus: {
+        provider_attempt_started: 1,
+        provider_attempt_succeeded: 1,
+        provider_attempt_failed: 1,
+        blocked: 1,
+      },
       byOperation: {
         image_generation: {
-          attempts: 2,
+          attempts: 3,
           estimatedCostUsd: 0.067,
-          finalCostUsd: 0,
+          finalCostUsd: 0.042,
         },
         audio_transcription: {
           attempts: 1,
@@ -115,9 +162,9 @@ describe("cost ledger", () => {
       },
       byProvider: {
         "openai-images": {
-          attempts: 2,
+          attempts: 3,
           estimatedCostUsd: 0.067,
-          finalCostUsd: 0,
+          finalCostUsd: 0.042,
         },
         "openai-audio": {
           attempts: 1,
@@ -126,7 +173,7 @@ describe("cost ledger", () => {
         },
       },
     });
-    expect(Object.keys(summary.byRequest)).toHaveLength(1);
+    expect(Object.keys(summary.byRequest)).toHaveLength(2);
     expect(JSON.stringify(summary)).not.toContain("prompt");
     expect(JSON.stringify(summary)).not.toContain("facebook:");
     expect(JSON.stringify(summary)).not.toContain("secret");
@@ -241,5 +288,137 @@ describe("cost ledger", () => {
         finalCostUsd: 0.025,
       }),
     ]);
+  });
+
+  it("updates provider attempts across UTC midnight by entry id", async () => {
+    await appendCostLedgerEntry(
+      entry({
+        id: "req-midnight:attempt-1",
+        reqId: "req-midnight",
+        status: "provider_attempt_started",
+      }),
+      new Date("2026-06-21T23:59:59.000Z")
+    );
+
+    await expect(
+      updateCostLedgerEntry(
+        "req-midnight:attempt-1",
+        { status: "provider_attempt_succeeded" },
+        new Date("2026-06-22T00:00:01.000Z")
+      )
+    ).resolves.toMatchObject({
+      id: "req-midnight:attempt-1",
+      period: "2026-06-21",
+      status: "provider_attempt_succeeded",
+    });
+
+    expect(await readCostLedgerPeriod("2026-06-21")).toEqual([
+      expect.objectContaining({
+        id: "req-midnight:attempt-1",
+        status: "provider_attempt_succeeded",
+      }),
+    ]);
+    expect(await readCostLedgerPeriod("2026-06-22")).toEqual([]);
+  });
+
+  it("warns and reports dropped entries when a period exceeds the retention cap", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const recordedAt = new Date("2026-06-21T12:00:00.000Z");
+    await writeScopedState(
+      "cost:ledger:period",
+      "2026-06-21",
+      Array.from({ length: 5_000 }, (_, index) => ({
+        ...entry({
+          id: `req-overflow:attempt-${index}`,
+          reqId: `req-overflow-${index}`,
+        }),
+        period: "2026-06-21",
+        recordedAt: recordedAt.toISOString(),
+      })),
+      60
+    );
+
+    await appendCostLedgerEntry(
+      entry({
+        id: "req-overflow:attempt-5000",
+        reqId: "req-overflow-5000",
+      }),
+      recordedAt
+    );
+
+    const periodEntries = await readCostLedgerPeriod("2026-06-21");
+    const loggedPayload = JSON.parse(String(warnSpy.mock.calls[0]?.[0]));
+
+    expect(periodEntries).toHaveLength(5_000);
+    expect(periodEntries[0]?.id).toBe("req-overflow:attempt-1");
+    expect(periodEntries.at(-1)?.id).toBe("req-overflow:attempt-5000");
+    expect(getCostLedgerReliabilityStats()).toEqual({
+      droppedEntryCount: 1,
+      maxEntriesPerPeriod: 5_000,
+    });
+    expect(loggedPayload).toMatchObject({
+      event: "cost_ledger_period_overflow",
+      period: "2026-06-21",
+      droppedEntries: 1,
+      maxEntriesPerPeriod: 5_000,
+      totalDroppedEntries: 1,
+    });
+    expect(JSON.stringify(loggedPayload)).not.toContain("facebook:");
+    expect(JSON.stringify(loggedPayload)).not.toContain("prompt");
+  });
+
+  it("bounds delete-my-data cleanup to periods containing the user", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const targetUserKey = "target-user-key-private";
+
+    await appendCostLedgerEntry(
+      entry({
+        id: "req-delete-a:attempt-1",
+        reqId: "req-delete-a",
+        userKey: targetUserKey,
+      }),
+      new Date("2026-06-21T12:00:00.000Z")
+    );
+    await appendCostLedgerEntry(
+      entry({
+        id: "req-delete-b:attempt-1",
+        reqId: "req-delete-b",
+        userKey: targetUserKey,
+      }),
+      new Date("2026-06-19T12:00:00.000Z")
+    );
+    await appendCostLedgerEntry(
+      entry({
+        id: "req-other-user:attempt-1",
+        reqId: "req-other-user",
+        userKey: "other-user-key",
+      }),
+      new Date("2026-06-20T12:00:00.000Z")
+    );
+
+    await expect(
+      deleteCostLedgerEntriesForUser(
+        targetUserKey,
+        new Date("2026-06-21T23:59:59.000Z")
+      )
+    ).resolves.toBe(2);
+
+    expect(await readCostLedgerPeriod("2026-06-21")).toEqual([]);
+    expect(await readCostLedgerPeriod("2026-06-19")).toEqual([]);
+    expect(await readCostLedgerPeriod("2026-06-20")).toEqual([
+      expect.objectContaining({
+        id: "req-other-user:attempt-1",
+        userKey: "other-user-key",
+      }),
+    ]);
+
+    const loggedPayload = JSON.parse(String(logSpy.mock.calls.at(-1)?.[0]));
+    expect(loggedPayload).toMatchObject({
+      event: "cost_ledger_user_delete_completed",
+      scannedPeriods: 90,
+      touchedPeriods: 2,
+      deletedEntries: 2,
+    });
+    expect(JSON.stringify(loggedPayload)).not.toContain(targetUserKey);
   });
 });

@@ -1,11 +1,19 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { safeLog } from "./messengerApi";
 import { toLogUser } from "./privacy";
-import { readScopedState, writeScopedState } from "./stateStore";
+import {
+  deleteEphemeralKeyIfValue,
+  readScopedState,
+  setEphemeralKeyIfAbsent,
+  writeScopedState,
+} from "./stateStore";
 
 const COST_LEDGER_SCOPE = "cost:ledger:period";
 const COST_LEDGER_TTL_SECONDS = 90 * 24 * 60 * 60;
 const COST_LEDGER_MAX_ENTRIES_PER_PERIOD = 5_000;
+const COST_LEDGER_PERIOD_LOCK_TTL_SECONDS = 5;
+const COST_LEDGER_PERIOD_LOCK_MAX_ATTEMPTS = 20;
+let costLedgerDroppedEntryCount = 0;
 
 export type CostLedgerStatus =
   | "provider_attempt_started"
@@ -35,6 +43,11 @@ export type StoredCostLedgerEntry = CostLedgerEntry & {
   recordedAt: string;
 };
 
+export type CostLedgerReliabilityStats = {
+  droppedEntryCount: number;
+  maxEntriesPerPeriod: number;
+};
+
 type CostSummaryBucket = {
   attempts: number;
   estimatedCostUsd: number;
@@ -56,9 +69,13 @@ export type CostLedgerSummary = {
   uniqueUserCount: number;
   estimatedCostUsd: number;
   finalCostUsd: number;
+  openAttemptEntries: number;
+  failedAttemptEntries: number;
+  blockedEntries: number;
   completeEstimateEntries: number;
   incompleteEstimateEntries: number;
   unpricedCostComponents: string[];
+  byStatus: Record<CostLedgerStatus, number>;
   byOperation: Record<string, CostSummaryBucket>;
   byProvider: Record<string, CostSummaryBucket>;
   byRequest: Record<string, CostRequestSummaryBucket>;
@@ -66,6 +83,30 @@ export type CostLedgerSummary = {
 
 function periodFromDate(date: Date): string {
   return date.toISOString().slice(0, 10);
+}
+
+function dateFromPeriod(period: string): Date {
+  return new Date(`${period}T00:00:00.000Z`);
+}
+
+function addUtcDays(date: Date, days: number): Date {
+  return new Date(Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    date.getUTCDate() + days
+  ));
+}
+
+function candidateUpdatePeriods(periodDate: Date): string[] {
+  const period = periodFromDate(periodDate);
+  const periodStart = dateFromPeriod(period);
+  return Array.from(
+    new Set([
+      period,
+      periodFromDate(addUtcDays(periodStart, -1)),
+      periodFromDate(addUtcDays(periodStart, 1)),
+    ])
+  );
 }
 
 function costValue(value: number | null): number {
@@ -82,6 +123,42 @@ function toRequestSummaryKey(reqId: string): string {
 
 function createStringRecord<T>(): Record<string, T> {
   return Object.create(null);
+}
+
+function costLedgerPeriodLockKey(period: string): string {
+  return `lock:${COST_LEDGER_SCOPE}:${period}`;
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function withCostLedgerPeriodLock<T>(
+  period: string,
+  action: () => Promise<T>
+): Promise<T> {
+  const lockKey = costLedgerPeriodLockKey(period);
+  const token = randomUUID();
+
+  for (let attempt = 0; attempt < COST_LEDGER_PERIOD_LOCK_MAX_ATTEMPTS; attempt += 1) {
+    if (await setEphemeralKeyIfAbsent(lockKey, token, COST_LEDGER_PERIOD_LOCK_TTL_SECONDS)) {
+      try {
+        return await action();
+      } finally {
+        await deleteEphemeralKeyIfValue(lockKey, token);
+      }
+    }
+
+    await wait(10);
+  }
+
+  safeLog("cost_ledger_period_lock_timeout", {
+    level: "warn",
+    period,
+  });
+  throw new Error("Timed out waiting for cost ledger period lock");
 }
 
 function mergeSummaryLabel(previous: string, next: string): string {
@@ -182,38 +259,25 @@ export async function appendCostLedgerEntry(
   recordedAt = new Date()
 ): Promise<StoredCostLedgerEntry> {
   const period = periodFromDate(recordedAt);
-  const storedEntry: StoredCostLedgerEntry = {
-    ...entry,
-    period,
-    recordedAt: recordedAt.toISOString(),
-  };
-  const current = await readCostLedgerPeriod(period);
-  const next = [...current, storedEntry].slice(-COST_LEDGER_MAX_ENTRIES_PER_PERIOD);
-  await Promise.resolve(
-    writeScopedState(
-      COST_LEDGER_SCOPE,
+  return await withCostLedgerPeriodLock(period, async () => {
+    const storedEntry: StoredCostLedgerEntry = {
+      ...entry,
       period,
-      next,
-      COST_LEDGER_TTL_SECONDS
-    )
-  );
-  return storedEntry;
-}
-
-export async function deleteCostLedgerEntriesForUser(
-  userKey: string,
-  now = new Date()
-): Promise<number> {
-  let deleted = 0;
-  for (const period of getRetainedLedgerPeriods(now)) {
+      recordedAt: recordedAt.toISOString(),
+    };
     const current = await readCostLedgerPeriod(period);
-    if (!current.length) {
-      continue;
-    }
-    const next = current.filter(entry => entry.userKey !== userKey);
-    deleted += current.length - next.length;
-    if (next.length === current.length) {
-      continue;
+    const appended = [...current, storedEntry];
+    const droppedEntries = Math.max(0, appended.length - COST_LEDGER_MAX_ENTRIES_PER_PERIOD);
+    const next = appended.slice(-COST_LEDGER_MAX_ENTRIES_PER_PERIOD);
+    if (droppedEntries > 0) {
+      costLedgerDroppedEntryCount += droppedEntries;
+      safeLog("cost_ledger_period_overflow", {
+        level: "warn",
+        period,
+        droppedEntries,
+        maxEntriesPerPeriod: COST_LEDGER_MAX_ENTRIES_PER_PERIOD,
+        totalDroppedEntries: costLedgerDroppedEntryCount,
+      });
     }
     await Promise.resolve(
       writeScopedState(
@@ -223,7 +287,66 @@ export async function deleteCostLedgerEntriesForUser(
         COST_LEDGER_TTL_SECONDS
       )
     );
+    return storedEntry;
+  });
+}
+
+export function getCostLedgerReliabilityStats(): CostLedgerReliabilityStats {
+  return {
+    droppedEntryCount: costLedgerDroppedEntryCount,
+    maxEntriesPerPeriod: COST_LEDGER_MAX_ENTRIES_PER_PERIOD,
+  };
+}
+
+export function resetCostLedgerReliabilityStatsForTests(): void {
+  costLedgerDroppedEntryCount = 0;
+}
+
+export async function deleteCostLedgerEntriesForUser(
+  userKey: string,
+  now = new Date()
+): Promise<number> {
+  let deleted = 0;
+  let scannedPeriods = 0;
+  let touchedPeriods = 0;
+  for (const period of getRetainedLedgerPeriods(now)) {
+    scannedPeriods += 1;
+    const currentBeforeLock = await readCostLedgerPeriod(period);
+    if (
+      !currentBeforeLock.length ||
+      !currentBeforeLock.some(entry => entry.userKey === userKey)
+    ) {
+      continue;
+    }
+
+    touchedPeriods += 1;
+    deleted += await withCostLedgerPeriodLock(period, async () => {
+      const current = await readCostLedgerPeriod(period);
+      if (!current.length) {
+        return 0;
+      }
+      const next = current.filter(entry => entry.userKey !== userKey);
+      const deletedInPeriod = current.length - next.length;
+      if (deletedInPeriod === 0) {
+        return 0;
+      }
+      await Promise.resolve(
+        writeScopedState(
+          COST_LEDGER_SCOPE,
+          period,
+          next,
+          COST_LEDGER_TTL_SECONDS
+        )
+      );
+      return deletedInPeriod;
+    });
   }
+  safeLog("cost_ledger_user_delete_completed", {
+    user: toLogUser(userKey),
+    scannedPeriods,
+    touchedPeriods,
+    deletedEntries: deleted,
+  });
   return deleted;
 }
 
@@ -234,28 +357,36 @@ export async function updateCostLedgerEntry(
   >,
   periodDate = new Date()
 ): Promise<StoredCostLedgerEntry | null> {
-  const period = periodFromDate(periodDate);
-  const current = await readCostLedgerPeriod(period);
-  const index = current.findIndex(entry => entry.id === id);
-  if (index < 0) {
-    return null;
+  for (const period of candidateUpdatePeriods(periodDate)) {
+    const updated = await withCostLedgerPeriodLock(period, async () => {
+      const current = await readCostLedgerPeriod(period);
+      const index = current.findIndex(entry => entry.id === id);
+      if (index < 0) {
+        return null;
+      }
+
+      const updatedEntry: StoredCostLedgerEntry = {
+        ...current[index],
+        ...updates,
+      };
+      const next = [...current];
+      next[index] = updatedEntry;
+      await Promise.resolve(
+        writeScopedState(
+          COST_LEDGER_SCOPE,
+          period,
+          next,
+          COST_LEDGER_TTL_SECONDS
+        )
+      );
+      return updatedEntry;
+    });
+    if (updated) {
+      return updated;
+    }
   }
 
-  const updatedEntry: StoredCostLedgerEntry = {
-    ...current[index],
-    ...updates,
-  };
-  const next = [...current];
-  next[index] = updatedEntry;
-  await Promise.resolve(
-    writeScopedState(
-      COST_LEDGER_SCOPE,
-      period,
-      next,
-      COST_LEDGER_TTL_SECONDS
-    )
-  );
-  return updatedEntry;
+  return null;
 }
 
 export async function safelyUpdateCostLedgerEntry(
@@ -308,12 +439,19 @@ function summarizeCostLedgerEntries(
   const byProvider: Record<string, CostSummaryBucket> = createStringRecord();
   const byRequest: Record<string, CostRequestSummaryBucket> =
     createStringRecord<CostRequestSummaryBucket>();
+  const byStatus: Record<CostLedgerStatus, number> = {
+    provider_attempt_started: 0,
+    provider_attempt_succeeded: 0,
+    provider_attempt_failed: 0,
+    blocked: 0,
+  };
   let estimatedCostUsd = 0;
   let finalCostUsd = 0;
   let completeEstimateEntries = 0;
   let incompleteEstimateEntries = 0;
 
   for (const entry of entries) {
+    byStatus[entry.status] += 1;
     users.add(entry.userKey);
     estimatedCostUsd +=
       costValue(entry.estimatedCostUsd) + costValue(entry.estimatedOutputCostUsd);
@@ -337,9 +475,13 @@ function summarizeCostLedgerEntries(
     uniqueUserCount: users.size,
     estimatedCostUsd: roundUsd(estimatedCostUsd),
     finalCostUsd: roundUsd(finalCostUsd),
+    openAttemptEntries: byStatus.provider_attempt_started,
+    failedAttemptEntries: byStatus.provider_attempt_failed,
+    blockedEntries: byStatus.blocked,
     completeEstimateEntries,
     incompleteEstimateEntries,
     unpricedCostComponents: [...unpriced].sort(),
+    byStatus,
     byOperation,
     byProvider,
     byRequest,

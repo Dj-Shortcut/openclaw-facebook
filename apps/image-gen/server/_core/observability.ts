@@ -17,6 +17,7 @@ import {
 import { getTodayRuntimeStats } from "./botRuntimeStats";
 import { safeLog } from "./logger";
 import { hashGeneratedImageToken } from "./generatedImageStore";
+import { getCostLedgerReliabilityStats } from "./costLedger";
 
 type RequestWithId = express.Request & {
   requestId?: string;
@@ -249,6 +250,7 @@ async function renderMessengerGenerationQueueMetrics(): Promise<string[]> {
 
 async function renderPrometheusMetrics(): Promise<string> {
   const runtimeStats = getTodayRuntimeStats();
+  const costLedgerReliability = getCostLedgerReliabilityStats();
   const lines: string[] = [
     "# HELP http_requests_total Total HTTP requests handled by the server",
     "# TYPE http_requests_total counter",
@@ -287,6 +289,13 @@ async function renderPrometheusMetrics(): Promise<string> {
   for (const [labels, value] of webhookAckDurationCounts.entries()) {
     lines.push(`webhook_ack_duration_seconds_count{${labels}} ${value}`);
   }
+
+  lines.push("# HELP cost_ledger_dropped_entries_total Cost ledger entries dropped because the per-period cap was exceeded");
+  lines.push("# TYPE cost_ledger_dropped_entries_total counter");
+  lines.push(`cost_ledger_dropped_entries_total ${costLedgerReliability.droppedEntryCount}`);
+  lines.push("# HELP cost_ledger_max_entries_per_period Configured maximum cost ledger entries retained per period");
+  lines.push("# TYPE cost_ledger_max_entries_per_period gauge");
+  lines.push(`cost_ledger_max_entries_per_period ${costLedgerReliability.maxEntriesPerPeriod}`);
 
   lines.push(...await renderMessengerGenerationQueueMetrics());
   lines.push("# HELP messenger_generation_today_total Successful Messenger image generations recorded by this process today");

@@ -128,6 +128,18 @@ const recentMessengerAssistantRepliesByMessage = new Map<
   { text: string; expiresAt: number }
 >();
 const recentMessengerAssistantReplies = new Map<string, { text: string; expiresAt: number }>();
+const messengerGatewayDailyImageForwardCounts = new Map<
+  string,
+  { count: number; expiresAt: number }
+>();
+const messengerGatewayDailyAudioTranscriptionCounts = new Map<
+  string,
+  { count: number; expiresAt: number }
+>();
+const messengerGatewayDailyLeaderbotEventForwardCounts = new Map<
+  string,
+  { count: number; expiresAt: number }
+>();
 const FACEBOOK_UNTRUSTED_TOOL_DENY = [
   "image_generate",
   "video_generate",
@@ -167,6 +179,12 @@ const MESSENGER_MEDIA_FETCH_MAX_BYTES = 25 * 1024 * 1024;
 const MESSENGER_MEDIA_FETCH_MAX_REDIRECTS = 2;
 const MISSING_REFERENCED_PROMPT_REPLY =
   "Ik vind die prompt niet meer terug. Plak hem even opnieuw, dan maak ik de afbeelding.";
+const MESSENGER_GATEWAY_IMAGE_BUDGET_REPLY =
+  "Even pauze, ons dagbudget voor afbeeldingen is bereikt. Probeer later opnieuw.";
+const MESSENGER_GATEWAY_AUDIO_BUDGET_REPLY =
+  "Even pauze, ons dagbudget voor voiceberichten is bereikt. Typ je bericht even uit, dan help ik meteen verder.";
+const MESSENGER_GATEWAY_EVENT_FORWARD_BUDGET_REPLY =
+  "Even pauze, ons dagbudget is bereikt. Probeer later opnieuw.";
 
 export function redactMessengerIdentifier(value: string | undefined): string {
   const normalized = value?.trim();
@@ -203,6 +221,103 @@ function pruneProcessedMessengerMessageIds(now: number): void {
 
 function logMessengerWebhookRejected(reason: string, path: string): void {
   logVerbose(`messenger webhook rejected: ${reason} path=${path}`);
+}
+
+function readPositiveIntEnv(name: string): number | null {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
+}
+
+function utcDayKey(now = Date.now()): string {
+  return new Date(now).toISOString().slice(0, 10);
+}
+
+function nextUtcDayTimestamp(now = Date.now()): number {
+  const date = new Date(now);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + 1);
+}
+
+function pruneMessengerGatewayDailyBudgetCounts(now = Date.now()): void {
+  for (const counters of [
+    messengerGatewayDailyImageForwardCounts,
+    messengerGatewayDailyAudioTranscriptionCounts,
+    messengerGatewayDailyLeaderbotEventForwardCounts,
+  ]) {
+    for (const [key, value] of counters) {
+      if (value.expiresAt <= now) {
+        counters.delete(key);
+      }
+    }
+  }
+}
+
+export function resetMessengerGatewayDailyImageForwardBudgetForTests(): void {
+  messengerGatewayDailyImageForwardCounts.clear();
+  messengerGatewayDailyAudioTranscriptionCounts.clear();
+  messengerGatewayDailyLeaderbotEventForwardCounts.clear();
+}
+
+function reserveMessengerGatewayDailyBudget(params: {
+  accountId: string;
+  envName: string;
+  counters: Map<string, { count: number; expiresAt: number }>;
+  now?: number;
+}): { ok: true; count: number; cap: number | null } | { ok: false; count: number; cap: number } {
+  const cap = readPositiveIntEnv(params.envName);
+  if (!cap) {
+    return { ok: true, count: 0, cap: null };
+  }
+
+  const now = params.now ?? Date.now();
+  pruneMessengerGatewayDailyBudgetCounts(now);
+  const key = `${params.accountId}:${utcDayKey(now)}`;
+  const current = params.counters.get(key);
+  const next = {
+    count: (current?.count ?? 0) + 1,
+    expiresAt: current?.expiresAt ?? nextUtcDayTimestamp(now),
+  };
+  params.counters.set(key, next);
+
+  if (next.count > cap) {
+    return { ok: false, count: next.count, cap };
+  }
+  return { ok: true, count: next.count, cap };
+}
+
+export function reserveMessengerGatewayDailyImageForwardBudget(params: {
+  accountId: string;
+  now?: number;
+}): { ok: true; count: number; cap: number | null } | { ok: false; count: number; cap: number } {
+  return reserveMessengerGatewayDailyBudget({
+    accountId: params.accountId,
+    envName: "MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP",
+    counters: messengerGatewayDailyImageForwardCounts,
+    now: params.now,
+  });
+}
+
+export function reserveMessengerGatewayDailyAudioTranscriptionBudget(params: {
+  accountId: string;
+  now?: number;
+}): { ok: true; count: number; cap: number | null } | { ok: false; count: number; cap: number } {
+  return reserveMessengerGatewayDailyBudget({
+    accountId: params.accountId,
+    envName: "MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP",
+    counters: messengerGatewayDailyAudioTranscriptionCounts,
+    now: params.now,
+  });
+}
+
+export function reserveMessengerGatewayDailyLeaderbotEventForwardBudget(params: {
+  accountId: string;
+  now?: number;
+}): { ok: true; count: number; cap: number | null } | { ok: false; count: number; cap: number } {
+  return reserveMessengerGatewayDailyBudget({
+    accountId: params.accountId,
+    envName: "MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP",
+    counters: messengerGatewayDailyLeaderbotEventForwardCounts,
+    now: params.now,
+  });
 }
 
 function hashTracePart(value: string | undefined, fallback: string): string {
@@ -920,6 +1035,85 @@ export function normalizeMessengerReplyPayloadForDelivery(
   };
 }
 
+async function reserveMessengerGatewayImageForwardOrReply(params: {
+  senderId: string;
+  cfg: OpenClawConfig;
+  accountId: string;
+  trace: MessengerTrace;
+  route: string;
+}): Promise<boolean> {
+  const reservation = reserveMessengerGatewayDailyImageForwardBudget({
+    accountId: params.accountId,
+  });
+  if (reservation.ok) {
+    return true;
+  }
+
+  logMessengerStage(params.trace, "image_gen_request_skipped", {
+    reason: "gateway_daily_image_forward_cap",
+    route: params.route,
+    cap: reservation.cap,
+    count: reservation.count,
+  });
+  await sendMessengerText(params.senderId, MESSENGER_GATEWAY_IMAGE_BUDGET_REPLY, {
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  return false;
+}
+
+async function reserveMessengerGatewayAudioTranscriptionOrReply(params: {
+  senderId: string;
+  cfg: OpenClawConfig;
+  accountId: string;
+  trace: MessengerTrace;
+}): Promise<boolean> {
+  const reservation = reserveMessengerGatewayDailyAudioTranscriptionBudget({
+    accountId: params.accountId,
+  });
+  if (reservation.ok) {
+    return true;
+  }
+
+  logMessengerStage(params.trace, "audio_transcription_skipped", {
+    reason: "gateway_daily_audio_transcription_cap",
+    cap: reservation.cap,
+    count: reservation.count,
+  });
+  await sendMessengerText(params.senderId, MESSENGER_GATEWAY_AUDIO_BUDGET_REPLY, {
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  return false;
+}
+
+async function reserveMessengerGatewayLeaderbotEventForwardOrReply(params: {
+  senderId: string;
+  cfg: OpenClawConfig;
+  accountId: string;
+  trace: MessengerTrace;
+  route: string;
+}): Promise<boolean> {
+  const reservation = reserveMessengerGatewayDailyLeaderbotEventForwardBudget({
+    accountId: params.accountId,
+  });
+  if (reservation.ok) {
+    return true;
+  }
+
+  logMessengerStage(params.trace, "messenger_event_forward_skipped", {
+    reason: "gateway_daily_leaderbot_event_forward_cap",
+    route: params.route,
+    cap: reservation.cap,
+    count: reservation.count,
+  });
+  await sendMessengerText(params.senderId, MESSENGER_GATEWAY_EVENT_FORWARD_BUDGET_REPLY, {
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  return false;
+}
+
 function hasMessengerInteractivePayload(event: MessengerWebhookMessaging): boolean {
   return Boolean(event.message?.quick_reply?.payload?.trim() || event.postback?.payload?.trim());
 }
@@ -1187,6 +1381,17 @@ export async function processMessengerEvent(params: {
       return;
     }
     if (ingressDecision === "leaderbot_free_tier") {
+      if (
+        !(await reserveMessengerGatewayLeaderbotEventForwardOrReply({
+          senderId,
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+          trace: params.trace,
+          route: "unknown_sender_leaderbot_free_tier",
+        }))
+      ) {
+        return;
+      }
       logMessengerStage(params.trace, "messenger_event_forward_started", {
         reason: "unknown_sender_leaderbot_free_tier",
       });
@@ -1230,6 +1435,17 @@ export async function processMessengerEvent(params: {
       });
       if (leaderbotBridgeEnabled) {
         if (
+          !(await reserveMessengerGatewayLeaderbotEventForwardOrReply({
+            senderId,
+            cfg: params.cfg,
+            accountId: params.account.accountId,
+            trace: params.trace,
+            route: "interactive_payload",
+          }))
+        ) {
+          return;
+        }
+        if (
           await forwardLeaderbotMessengerEvent({
             event: params.event,
             trace: params.trace,
@@ -1268,6 +1484,17 @@ export async function processMessengerEvent(params: {
         text,
       })
     ) {
+      if (
+        !(await reserveMessengerGatewayImageForwardOrReply({
+          senderId,
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+          trace: params.trace,
+          route: "source_image_without_prompt",
+        }))
+      ) {
+        return;
+      }
       logMessengerStage(params.trace, "messenger_event_forward_started", {
         reason: "source_image_without_prompt",
         sourceImage: true,
@@ -1295,6 +1522,17 @@ export async function processMessengerEvent(params: {
       });
     }
     if (leaderbotBridgeEnabled && sourceImageAttachment && sourceImageGenerationPrompt) {
+      if (
+        !(await reserveMessengerGatewayImageForwardOrReply({
+          senderId,
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+          trace: params.trace,
+          route: "source_image_with_prompt",
+        }))
+      ) {
+        return;
+      }
       logMessengerStage(params.trace, "messenger_event_forward_started", {
         reason: "source_image_with_prompt",
         sourceImage: true,
@@ -1335,6 +1573,17 @@ export async function processMessengerEvent(params: {
       !sourceImageGenerationPrompt &&
       hasMessengerImageGenerationIntent(text)
     ) {
+      if (
+        !(await reserveMessengerGatewayImageForwardOrReply({
+          senderId,
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+          trace: params.trace,
+          route: "media_with_image_prompt",
+        }))
+      ) {
+        return;
+      }
       logMessengerStage(params.trace, "messenger_event_forward_started", {
         reason: "media_with_image_prompt",
         isSourceImageEdit: false,
@@ -1385,6 +1634,17 @@ export async function processMessengerEvent(params: {
       referencedPrompt &&
       referencedPrompt !== text.trim()
     ) {
+      if (
+        !(await reserveMessengerGatewayImageForwardOrReply({
+          senderId,
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+          trace: params.trace,
+          route: "assistant_reference_prompt",
+        }))
+      ) {
+        return;
+      }
       logMessengerStage(params.trace, "image_gen_request_started", {
         sourceImage: false,
         hasPrompt: true,
@@ -1433,6 +1693,18 @@ export async function processMessengerEvent(params: {
       });
       return;
     }
+    const hasAudioAttachment = attachments.some((attachment) => attachment.kind === "audio");
+    if (
+      hasAudioAttachment &&
+      !(await reserveMessengerGatewayAudioTranscriptionOrReply({
+        senderId,
+        cfg: params.cfg,
+        accountId: params.account.accountId,
+        trace: params.trace,
+      }))
+    ) {
+      return;
+    }
     const media = await resolveMessengerMedia({ attachments, trace: params.trace });
     const audioTranscripts = await resolveMessengerAudioTranscripts({
       media,
@@ -1443,7 +1715,6 @@ export async function processMessengerEvent(params: {
       toInboundMediaFacts(media, { messageId: params.event.message?.mid }),
     );
     const hasMedia = attachments.length > 0;
-    const hasAudioAttachment = attachments.some((attachment) => attachment.kind === "audio");
     if (hasAudioAttachment && !text.trim() && audioTranscripts.length === 0) {
       await sendMessengerText(
         senderId,
@@ -1471,6 +1742,17 @@ export async function processMessengerEvent(params: {
       .filter(Boolean)
       .join("\n");
     if (leaderbotBridgeEnabled && !hasMedia && shouldForwardMessengerTextToImageGen(text)) {
+      if (
+        !(await reserveMessengerGatewayImageForwardOrReply({
+          senderId,
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+          trace: params.trace,
+          route: "text_image_intent",
+        }))
+      ) {
+        return;
+      }
       logMessengerStage(params.trace, "messenger_event_forward_started", {
         reason: "text_image_intent",
         sourceImage: false,

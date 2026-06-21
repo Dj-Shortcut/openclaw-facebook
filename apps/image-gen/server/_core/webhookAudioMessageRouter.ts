@@ -205,6 +205,7 @@ async function transcribePreparedAudioMessage(
   onProviderAttempt: () => Promise<void>
 ): Promise<string | null> {
   const { apiKey, sourceAudio } = prepared;
+  const costEstimate = estimateAudioTranscriptionAttemptCost();
   const attemptPayload = {
     reqId,
     psidHash: anonymizePsid(psid).slice(0, 12),
@@ -219,20 +220,20 @@ async function transcribePreparedAudioMessage(
     const attemptNow = new Date();
     await assertMessengerDailySpendBudgetAvailable({
       reqId,
-      estimatedCostUsd: null,
+      estimatedCostUsd: costEstimate.estimatedCostUsd,
       estimatedOutputCostUsd: null,
       now: attemptNow,
     });
     await assertMessengerMonthlySpendBudgetAvailable({
       reqId,
-      estimatedCostUsd: null,
+      estimatedCostUsd: costEstimate.estimatedCostUsd,
       estimatedOutputCostUsd: null,
       now: attemptNow,
     });
     await assertMessengerUserDailySpendBudgetAvailable({
       reqId,
       userKey: userId,
-      estimatedCostUsd: null,
+      estimatedCostUsd: costEstimate.estimatedCostUsd,
       estimatedOutputCostUsd: null,
       now: attemptNow,
     });
@@ -248,12 +249,12 @@ async function transcribePreparedAudioMessage(
         userKey: userId,
         reqId,
         status: "provider_attempt_started",
-        estimatedCostUsd: null,
+        estimatedCostUsd: costEstimate.estimatedCostUsd,
         estimatedOutputCostUsd: null,
         finalCostUsd: null,
-        costEstimateComplete: false,
-        estimateSource: "unpriced",
-        unpricedCostComponents: ["audio_seconds"],
+        costEstimateComplete: costEstimate.costEstimateComplete,
+        estimateSource: costEstimate.estimateSource,
+        unpricedCostComponents: costEstimate.unpricedCostComponents,
       },
       attemptNow
     );
@@ -346,7 +347,10 @@ async function transcribePreparedAudioMessage(
 
       await safelyUpdateCostLedgerEntry(
         ledgerEntryId,
-        { status: "provider_attempt_succeeded" },
+        {
+          status: "provider_attempt_succeeded",
+          finalCostUsd: costEstimate.finalCostUsd,
+        },
         attemptNow
       );
       safeLog("messenger_audio_transcription_complete", {
@@ -402,6 +406,43 @@ function getAudioTranscriptionMaxBytes(): number {
   }
 
   return DEFAULT_AUDIO_TRANSCRIPTION_MAX_BYTES;
+}
+
+function readUsdEnv(name: string): number | null {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return null;
+  }
+
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function estimateAudioTranscriptionAttemptCost(): {
+  estimatedCostUsd: number | null;
+  finalCostUsd: number | null;
+  costEstimateComplete: boolean;
+  estimateSource: string;
+  unpricedCostComponents: string[];
+} {
+  const override = readUsdEnv("OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD");
+  if (override !== null) {
+    return {
+      estimatedCostUsd: override,
+      finalCostUsd: override,
+      costEstimateComplete: true,
+      estimateSource: "env_override",
+      unpricedCostComponents: [],
+    };
+  }
+
+  return {
+    estimatedCostUsd: null,
+    finalCostUsd: null,
+    costEstimateComplete: false,
+    estimateSource: "unpriced",
+    unpricedCostComponents: ["audio_seconds"],
+  };
 }
 
 function countTranscriptWords(transcript: string): number {

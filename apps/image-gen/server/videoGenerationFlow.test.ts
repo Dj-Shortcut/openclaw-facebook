@@ -25,7 +25,7 @@ vi.mock("./_core/messengerApi", async importOriginal => {
 });
 
 import { t } from "./_core/i18n";
-import { readCostLedgerPeriod } from "./_core/costLedger";
+import { appendCostLedgerEntry, readCostLedgerPeriod } from "./_core/costLedger";
 import { getOrCreateState, resetStateStore } from "./_core/messengerState";
 import { commitVideoGenerationSuccess, reserveVideoGenerationForAttempt } from "./_core/messengerQuota";
 import { createMessengerVideoGenerationRunner } from "./_core/videoGenerationFlow";
@@ -85,6 +85,7 @@ describe("messenger video generation flow", () => {
     delete process.env.MESSENGER_GLOBAL_DAILY_VIDEO_CAP;
     delete process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD;
     delete process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD;
+    delete process.env.OPENAI_VIDEO_GENERATION_ESTIMATED_COST_USD;
     delete process.env.MESSENGER_VIDEO_FLOW_TIMEOUT_MS;
     vi.useRealTimers();
   });
@@ -132,6 +133,51 @@ describe("messenger video generation flow", () => {
     expect(state.lastGeneratedVideoUrl).toBe(
       "https://cdn.example/generated/videos/test.mp4"
     );
+  });
+
+  it("records priced video attempts with final cost when configured", async () => {
+    process.env.OPENAI_VIDEO_GENERATION_ESTIMATED_COST_USD = "0.12";
+    const provider = makeProvider({
+      kind: "success",
+      provider: "test",
+      providerJobId: "video-job-priced",
+      videoBytes: new Uint8Array([1, 2, 3]),
+      contentType: "video/mp4",
+    });
+    setVideoProviderForTests(provider);
+    const deps = makeDeps();
+    const runVideoGeneration = createMessengerVideoGenerationRunner(deps);
+
+    await runVideoGeneration(
+      "video-priced-user",
+      "video-priced-user-key",
+      "req-video-priced",
+      "nl",
+      "https://img.example/source.jpg",
+      "laat hem zwaaien"
+    );
+
+    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    expect(ledgerEntries).toEqual([
+      expect.objectContaining({
+        id: "req-video-priced:video:1",
+        operation: "video_generation",
+        provider: "video-provider",
+        model: null,
+        userKey: "video-priced-user-key",
+        reqId: "req-video-priced",
+        status: "provider_attempt_succeeded",
+        estimatedCostUsd: 0.12,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: 0.12,
+        costEstimateComplete: true,
+        estimateSource: "env_override",
+        unpricedCostComponents: [],
+      }),
+    ]);
+    expect(JSON.stringify(ledgerEntries)).not.toContain("laat hem zwaaien");
+    expect(JSON.stringify(ledgerEntries)).not.toContain("https://img.example/source.jpg");
+    expect(JSON.stringify(ledgerEntries)).not.toContain("video-priced-user\"");
   });
 
   it("does not call the provider when video quota is exhausted", async () => {
@@ -358,6 +404,60 @@ describe("messenger video generation flow", () => {
       "req-video-spend-cap"
     );
     expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
+  });
+
+  it("uses configured video generation estimates for spend cap checks", async () => {
+    process.env.OPENAI_VIDEO_GENERATION_ESTIMATED_COST_USD = "0.025";
+    process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "0.03";
+    await appendCostLedgerEntry(
+      {
+        id: "req-existing-video-spend:attempt-1",
+        channel: "facebook_messenger",
+        operation: "video_generation",
+        provider: "video-provider",
+        model: null,
+        userKey: "other-user",
+        reqId: "req-existing-video-spend",
+        status: "provider_attempt_started",
+        estimatedCostUsd: 0.02,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: null,
+        costEstimateComplete: true,
+        estimateSource: "env_override",
+        unpricedCostComponents: [],
+      },
+      new Date()
+    );
+    const provider: VideoProvider = {
+      generateVideo: vi.fn(async input => {
+        await input.onProviderAttempt?.();
+        throw new Error("video provider should not continue after spend cap");
+      }),
+    };
+    setVideoProviderForTests(provider);
+    const deps = makeDeps();
+    const runVideoGeneration = createMessengerVideoGenerationRunner(deps);
+
+    await runVideoGeneration(
+      "video-priced-spend-cap-user",
+      "video-priced-spend-cap-user-key",
+      "req-video-priced-spend-cap",
+      "nl",
+      "https://img.example/source.jpg",
+      "laat hem bewegen"
+    );
+
+    const state = await Promise.resolve(getOrCreateState("video-priced-spend-cap-user"));
+    expect(state.videoGenerationQuota.count).toBe(0);
+    expect(state.videoGenerationQuotaReservation).toBeNull();
+    expect(deps.sendLoggedText).toHaveBeenCalledWith(
+      "video-priced-spend-cap-user",
+      t("nl", "outOfVideoCredits"),
+      "req-video-priced-spend-cap"
+    );
+    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    expect(ledgerEntries).toHaveLength(1);
+    expect(ledgerEntries[0]?.id).toBe("req-existing-video-spend:attempt-1");
   });
 
   it("uses timeout copy and counts quota on provider timeout", async () => {

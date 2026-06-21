@@ -98,6 +98,15 @@ describe("debug/admin routes", () => {
         totalEntries: 1,
         uniqueUserCount: 1,
         estimatedCostUsd: 0.025,
+        openAttemptEntries: 1,
+        failedAttemptEntries: 0,
+        blockedEntries: 0,
+        byStatus: {
+          provider_attempt_started: 1,
+          provider_attempt_succeeded: 0,
+          provider_attempt_failed: 0,
+          blocked: 0,
+        },
         byOperation: {
           image_generation: {
             attempts: 1,

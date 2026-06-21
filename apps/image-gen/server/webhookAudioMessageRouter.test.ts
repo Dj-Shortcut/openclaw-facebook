@@ -52,7 +52,7 @@ import type { HandlerContext } from "./_core/webhookHandlerTypes";
 import { tryHandleAudioMessage } from "./_core/webhookAudioMessageRouter";
 import { type FacebookWebhookEvent } from "./_core/webhookHelpers";
 import { t } from "./_core/i18n";
-import { readCostLedgerPeriod } from "./_core/costLedger";
+import { appendCostLedgerEntry, readCostLedgerPeriod } from "./_core/costLedger";
 import { clearStateStore } from "./_core/stateStore";
 
 type TestAttachment = Exclude<
@@ -87,6 +87,7 @@ describe("webhook audio message router", () => {
   const originalOpenAiKey = process.env.OPENAI_API_KEY;
   const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
   const originalAudioMaxBytes = process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES;
+  const originalAudioEstimateUsd = process.env.OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD;
   const originalSpendCapUsd = process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD;
   const originalMonthlySpendCapUsd = process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD;
 
@@ -109,6 +110,7 @@ describe("webhook audio message router", () => {
     process.env.PRIVACY_PEPPER = "test-pepper";
     process.env.OPENAI_API_KEY = "dummy-key";
     delete process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES;
+    delete process.env.OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD;
   });
 
   afterEach(() => {
@@ -126,6 +128,11 @@ describe("webhook audio message router", () => {
       delete process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES;
     } else {
       process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES = originalAudioMaxBytes;
+    }
+    if (originalAudioEstimateUsd === undefined) {
+      delete process.env.OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD;
+    } else {
+      process.env.OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD = originalAudioEstimateUsd;
     }
     if (originalSpendCapUsd === undefined) {
       delete process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD;
@@ -216,6 +223,56 @@ describe("webhook audio message router", () => {
         text: "maak een foto van een cyberpunk stadslandschap",
       })
     );
+  });
+
+  it("records priced audio transcription attempts with final cost when configured", async () => {
+    const ctx = makeContext();
+    process.env.OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD = "0.0042";
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      const target = typeof url === "string" ? url : url.toString();
+      if (target === "https://api.openai.com/v1/audio/transcriptions") {
+        return {
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({ text: "maak een foto van een astronaut" }),
+        } as Response;
+      }
+      throw new Error(`Unexpected fetch URL: ${target}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await tryHandleAudioMessage(ctx, {
+      psid: "psid-audio-priced",
+      userId: "user-audio-priced",
+      reqId: "req-audio-priced",
+      lang: "nl",
+      attachments: [
+        { type: "audio", payload: { url: "https://audio.example/message-priced.mp3" } },
+      ],
+      text: "",
+    });
+
+    expect(result).toBe(true);
+    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    expect(ledgerEntries).toEqual([
+      expect.objectContaining({
+        id: "req-audio-priced:openai-audio:1",
+        operation: "audio_transcription",
+        provider: "openai-audio",
+        model: "whisper-1",
+        userKey: "user-audio-priced",
+        status: "provider_attempt_succeeded",
+        estimatedCostUsd: 0.0042,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: 0.0042,
+        costEstimateComplete: true,
+        estimateSource: "env_override",
+        unpricedCostComponents: [],
+      }),
+    ]);
+    expect(JSON.stringify(ledgerEntries)).not.toContain("maak een foto");
+    expect(JSON.stringify(ledgerEntries)).not.toContain("message-priced.mp3");
+    expect(JSON.stringify(ledgerEntries)).not.toContain("psid-audio-priced");
   });
 
   it("counts the provider attempt when transcript is empty", async () => {
@@ -399,6 +456,58 @@ describe("webhook audio message router", () => {
       "req-audio-spend-cap"
     );
     expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
+  });
+
+  it("uses configured audio transcription estimates for spend cap checks", async () => {
+    const ctx = makeContext();
+    process.env.OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD = "0.025";
+    process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "0.03";
+    await appendCostLedgerEntry(
+      {
+        id: "req-existing-audio-spend:attempt-1",
+        channel: "facebook_messenger",
+        operation: "audio_transcription",
+        provider: "openai-audio",
+        model: "whisper-1",
+        userKey: "other-user",
+        reqId: "req-existing-audio-spend",
+        status: "provider_attempt_started",
+        estimatedCostUsd: 0.02,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: null,
+        costEstimateComplete: true,
+        estimateSource: "env_override",
+        unpricedCostComponents: [],
+      },
+      new Date()
+    );
+    const fetchMock = vi.fn(async () => {
+      throw new Error("transcription provider should not be called");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await tryHandleAudioMessage(ctx, {
+      psid: "psid-audio-priced-spend-cap",
+      userId: "user-audio-priced-spend-cap",
+      reqId: "req-audio-priced-spend-cap",
+      lang: "nl",
+      attachments: [
+        { type: "audio", payload: { url: "https://audio.example/message-priced-cap.mp3" } },
+      ],
+      text: "",
+    });
+
+    expect(result).toBe(true);
+    expect(commitTranscriptionSuccessMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(ctx.sendLoggedText).toHaveBeenCalledWith(
+      "psid-audio-priced-spend-cap",
+      t("nl", "outOfFreeCredits"),
+      "req-audio-priced-spend-cap"
+    );
+    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    expect(ledgerEntries).toHaveLength(1);
+    expect(ledgerEntries[0]?.id).toBe("req-existing-audio-spend:attempt-1");
   });
 
   it("skips OpenAI transcription when downloaded audio exceeds the configured size limit", async () => {

@@ -57,7 +57,7 @@ Required before enabling open `dmPolicy`, public promotion, or broader free-tier
 access:
 
 1. [x] Implement per-image/request cost tracking.
-2. [ ] Add full host-level budget gates before all expensive model/image/tool calls.
+2. [x] Add full host-level budget gates before all expensive model/image/tool calls. Current Facebook-host expensive paths are covered by default-deny OpenClaw tool policy plus optional root-gateway caps for image-intent forwards, voice transcription, and generic Leaderbot event forwards; image-gen runtime provider calls keep their quota/spend gates.
 3. [x] Add default-deny tool policy for all high-cost tools exposed to untrusted Facebook-originated users.
 4. [x] Add per-user daily spend caps, a global Facebook daily spend cap, and monthly cost cap enforcement.
 5. [ ] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, usage, estimated cost, final cost, status, and UTC period.
@@ -150,29 +150,36 @@ Validated controls:
 18. [x] Optional global monthly Messenger provider spend cap (`MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD`) blocks image/audio/video provider attempts before external calls and is exposed in metrics.
 19. [x] `delete-my-data` erasure removes the erased user's cost-ledger entries and deletion failure logs use pseudonymous `user` metadata instead of raw PSIDs.
 20. [x] Image, audio transcription, and generated-video cost-ledger entries are reconciled from `provider_attempt_started` to success/failure status, with image final cost populated when the estimate is complete.
+21. [x] Admin cost summaries expose owner-safe open, failed, blocked, and per-status provider-attempt counts for monitoring regressions without raw PSIDs or prompts.
+22. [x] Optional owner cost alerts (`MESSENGER_OWNER_COST_ALERTS=1`) notify on daily/monthly/user spend-cap blocks with metadata-only budget details.
+23. [x] Optional root-gateway daily image forward cap (`MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP`) blocks Facebook image-intent bridge calls before they reach Leaderbot image-gen.
+24. [x] Optional root-gateway daily audio transcription cap (`MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP`) blocks Facebook voice attachment transcription before media download or model transcription.
+25. [x] Optional root-gateway daily Leaderbot event forward cap (`MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP`) blocks generic free-tier/interactive Messenger event forwards before they reach Leaderbot image-gen, while preserving delete-data forwards.
+26. [x] Optional audio transcription cost estimate (`OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD`) feeds spend-cap checks and reconciles successful audio ledger attempts with final cost.
+27. [x] Optional video generation cost estimate (`OPENAI_VIDEO_GENERATION_ESTIMATED_COST_USD`) feeds spend-cap checks and reconciles successful video ledger attempts with final cost.
 
 Open cost-control work:
 
 1. [x] Implement per-image/request cost tracking.
-2. [ ] Add full host-level budget gates before all expensive model/image/tool calls.
+2. [x] Add full host-level budget gates before all expensive model/image/tool calls. Current Facebook-host expensive paths are covered by default-deny OpenClaw tool policy plus optional root-gateway caps for image-intent forwards, voice transcription, and generic Leaderbot event forwards; image-gen runtime provider calls keep their quota/spend gates.
 3. [x] Add default-deny tool policy for all high-cost tools exposed to untrusted Facebook-originated users.
 4. [x] Add per-user daily spend caps for paired Facebook users.
 5. [x] Add global Facebook daily spend cap.
-6. [ ] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, usage, estimated cost, final cost, and status. Image, audio transcription, and generated-video attempts now write metadata-only entries and reconcile success/failure status; image attempts populate final cost when the estimate is complete. Audio/video final cost and richer usage dimensions remain open.
-7. [ ] Add owner dashboard for Facebook spend by day/month, account/page, `userKey`, blocked attempts, duplicate skips, and provider failures. The admin-only cost summary route now exists for stored ledger records; provider integration and dashboard UX remain open.
+6. [ ] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, usage, estimated cost, final cost, and status. Image, audio transcription, and generated-video attempts now write metadata-only entries and reconcile success/failure status; image plus optionally-priced audio/video attempts populate final cost when the estimate is complete. Richer usage dimensions remain open.
+7. [ ] Add owner dashboard for Facebook spend by day/month, account/page, `userKey`, blocked attempts, duplicate skips, and provider failures. The admin-only cost summary route now includes stored spend plus open/failed/blocked/status counts; dashboard UX remains open.
 8. [ ] Add user-facing balance/spend overview before paid rollout.
 9. [x] Add monthly cost cap enforcement.
-10. [ ] Send cost alerts to owner.
+10. [x] Send cost alerts to owner for spend-cap blocks.
 11. [x] Add external uptime monitor for `/healthz`.
 12. [x] Add a dedicated generated-video quota namespace before enabling any video provider call.
 13. [ ] Move remaining feature-specific quota counters toward a single channel-neutral usage ledger before paid rollout.
 
 ### Cost Ledger Reliability Hardening (Phase 2)
 
-- [ ] P1 | owner: image-gen-runtime | Handle cost-ledger per-period overflow explicitly. Emit structured warnings + metric and report dropped-entry count when cap truncation occurs.
-- [ ] P1 | owner: image-gen-runtime | Make cost-ledger append/update writes resilient under same-period concurrent updates using single-writer or safe retry semantics.
-- [ ] P2 | owner: image-gen-runtime | Make provider-attempt updates period-safe across midnight retries by reconciling by entry identity rather than current-period-only assumptions.
-- [ ] P2 | owner: image-gen-runtime, storage-platform | Reduce worst-case delete-my-data ledger cleanup latency by making `deleteCostLedgerEntriesForUser` bounded/performance-safe for high-history users.
+- [x] P1 | owner: image-gen-runtime | Handle cost-ledger per-period overflow explicitly. Emit structured warnings + metric and report dropped-entry count when cap truncation occurs.
+- [x] P1 | owner: image-gen-runtime | Make cost-ledger append/update writes resilient under same-period concurrent updates using single-writer or safe retry semantics.
+- [x] P2 | owner: image-gen-runtime | Make provider-attempt updates period-safe across midnight retries by reconciling by entry identity rather than current-period-only assumptions.
+- [x] P2 | owner: image-gen-runtime, storage-platform | Reduce worst-case delete-my-data ledger cleanup latency by making `deleteCostLedgerEntriesForUser` bounded/performance-safe for high-history users. Cleanup now scans the fixed 90-day retention window, skips locks for periods without matching user entries, and emits metadata-only completion counts.
 
 Quota drift investigation note:
 

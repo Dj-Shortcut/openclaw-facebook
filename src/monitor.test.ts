@@ -23,6 +23,9 @@ import {
   normalizeMessengerReplyPayloadForDelivery,
   processMessengerEvent,
   rememberMessengerAssistantPrompt,
+  reserveMessengerGatewayDailyAudioTranscriptionBudget,
+  reserveMessengerGatewayDailyLeaderbotEventForwardBudget,
+  resetMessengerGatewayDailyImageForwardBudgetForTests,
   shouldDeliverMessengerReplyPayload,
   shouldForwardMessengerImageOnlyEventToImageGen,
   shouldForwardMessengerTextToImageGen,
@@ -36,6 +39,11 @@ import type { MessengerWebhookMessaging, ResolvedMessengerAccount } from "./type
 const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
 const originalImageGenToken = process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN;
 const originalImageGenUrl = process.env.LEADERBOT_IMAGE_GEN_URL;
+const originalGatewayImageForwardCap = process.env.MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP;
+const originalGatewayAudioTranscriptionCap =
+  process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP;
+const originalGatewayLeaderbotEventForwardCap =
+  process.env.MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP;
 let temporaryStateDir: string | null = null;
 
 beforeEach(async () => {
@@ -60,6 +68,24 @@ afterEach(async () => {
   } else {
     process.env.LEADERBOT_IMAGE_GEN_URL = originalImageGenUrl;
   }
+  if (originalGatewayImageForwardCap === undefined) {
+    delete process.env.MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP;
+  } else {
+    process.env.MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP = originalGatewayImageForwardCap;
+  }
+  if (originalGatewayAudioTranscriptionCap === undefined) {
+    delete process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP;
+  } else {
+    process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP =
+      originalGatewayAudioTranscriptionCap;
+  }
+  if (originalGatewayLeaderbotEventForwardCap === undefined) {
+    delete process.env.MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP;
+  } else {
+    process.env.MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP =
+      originalGatewayLeaderbotEventForwardCap;
+  }
+  resetMessengerGatewayDailyImageForwardBudgetForTests();
   clearMessengerRuntime();
   if (temporaryStateDir) {
     await rm(temporaryStateDir, { force: true, recursive: true });
@@ -157,6 +183,23 @@ function messengerPostbackEvent(mid: string): MessengerWebhookMessaging {
     postback: {
       payload: "LEGACY_PAYLOAD",
       title: "Legacy action",
+    },
+  };
+}
+
+function messengerAudioEvent(mid: string): MessengerWebhookMessaging {
+  return {
+    sender: { id: `sender-${mid}` },
+    recipient: { id: "page-1" },
+    timestamp: 1_700_000_000_000,
+    message: {
+      mid,
+      attachments: [
+        {
+          type: "audio",
+          payload: { url: "https://cdn.fbsbx.com/voice-message.mp4" },
+        },
+      ],
     },
   };
 }
@@ -795,6 +838,51 @@ describe("processMessengerEvent unknown sender access policy", () => {
     expect(inboundRun).not.toHaveBeenCalled();
   });
 
+  it("blocks free-tier Leaderbot event forwards at the gateway daily cap", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    process.env.MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP = "1";
+    expect(
+      reserveMessengerGatewayDailyLeaderbotEventForwardBudget({ accountId: "default" }),
+    ).toMatchObject({ ok: true, count: 1, cap: 1 });
+    const inboundRun = vi.fn();
+    const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR-1", created: true }));
+    setGatewayRuntime(inboundRun, { upsertPairingRequest });
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
+      return new Response(
+        JSON.stringify({
+          message_id: "event-budget-reply",
+          recipient_id: "sender-mid-free-tier-cap",
+        }),
+        {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(messengerTextEvent("mid-free-tier-cap", "Hi"), {
+      dmPolicy: "pairing",
+      allowFrom: undefined,
+      unknownSenderMode: "leaderbot_free_tier",
+      leaderbotBridgeEnabled: true,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const sendBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    expect(sendBody).toMatchObject({
+      messaging_type: "RESPONSE",
+      message: { text: "Even pauze, ons dagbudget is bereikt. Probeer later opnieuw." },
+      recipient: { id: "sender-mid-free-tier-cap" },
+    });
+    expect(sendBody.message.text).not.toContain("Hi");
+    expect(sendBody.message.text).not.toContain("mid-free-tier-cap");
+    expect(upsertPairingRequest).not.toHaveBeenCalled();
+    expect(inboundRun).not.toHaveBeenCalled();
+  });
+
   it("logs and returns when free-tier bridge and fallback send both fail", async () => {
     process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
     process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
@@ -895,6 +983,38 @@ describe("processMessengerEvent image intents", () => {
     expect(inboundRun).not.toHaveBeenCalled();
   });
 
+  it("does not budget-block delete-data forwards", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    process.env.MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP = "1";
+    expect(
+      reserveMessengerGatewayDailyLeaderbotEventForwardBudget({ accountId: "default" }),
+    ).toMatchObject({ ok: true, count: 1, cap: 1 });
+    const inboundRun = setGatewayRuntime();
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      expect(String(url)).toBe("https://image-gen.example.test/internal/messenger/webhook-event");
+      return new Response(JSON.stringify({ status: "queued" }), {
+        headers: { "content-type": "application/json" },
+        status: 202,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(messengerTextEvent("mid-delete-data-budget", "Delete my data aub"), {
+      leaderbotBridgeEnabled: true,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const bridgeBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    expect(bridgeBody).toMatchObject({
+      event: {
+        sender: { id: "sender-mid-delete-data-budget" },
+        message: { mid: "mid-delete-data-budget", text: "Delete my data aub" },
+      },
+    });
+    expect(inboundRun).not.toHaveBeenCalled();
+  });
+
   it("handles delete-data smoke requests before the OpenClaw inbound turn", async () => {
     const inboundRun = setGatewayRuntime();
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
@@ -941,6 +1061,97 @@ describe("processMessengerEvent image intents", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
+    expect(inboundRun).not.toHaveBeenCalled();
+  });
+
+  it("blocks image prompt forwarding at the gateway daily cap before calling Leaderbot", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    process.env.MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP = "1";
+    const inboundRun = setGatewayRuntime();
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      const href = String(url);
+      if (href === "https://image-gen.example.test/internal/messenger/webhook-event") {
+        return new Response(JSON.stringify({ status: "queued" }), {
+          headers: { "content-type": "application/json" },
+          status: 202,
+        });
+      }
+      if (href === "https://graph.facebook.com/v20.0/page-1/messages") {
+        return new Response(
+          JSON.stringify({
+            message_id: "gateway-budget-reply",
+            recipient_id: "sender-mid-image-forward-cap-b",
+          }),
+          {
+            headers: { "content-type": "application/json" },
+            status: 200,
+          },
+        );
+      }
+      throw new Error(`unexpected fetch ${href}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(messengerImagePromptEvent("mid-image-forward-cap-a"), {
+      leaderbotBridgeEnabled: true,
+    });
+    await processGatewayTestEvent(messengerImagePromptEvent("mid-image-forward-cap-b"), {
+      leaderbotBridgeEnabled: true,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "https://image-gen.example.test/internal/messenger/webhook-event",
+    );
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
+      "https://graph.facebook.com/v20.0/page-1/messages",
+    );
+    const sendBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body));
+    expect(sendBody).toMatchObject({
+      messaging_type: "RESPONSE",
+      message: {
+        text: "Even pauze, ons dagbudget voor afbeeldingen is bereikt. Probeer later opnieuw.",
+      },
+      recipient: { id: "sender-mid-image-forward-cap-b" },
+    });
+    expect(JSON.stringify(sendBody)).not.toContain("mid-image-forward-cap-a");
+    expect(inboundRun).not.toHaveBeenCalled();
+  });
+
+  it("blocks audio transcription at the gateway daily cap before downloading media", async () => {
+    process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP = "1";
+    expect(
+      reserveMessengerGatewayDailyAudioTranscriptionBudget({ accountId: "default" }),
+    ).toMatchObject({ ok: true, count: 1, cap: 1 });
+    const inboundRun = setGatewayRuntime();
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
+      return new Response(
+        JSON.stringify({
+          message_id: "audio-budget-reply",
+          recipient_id: "sender-mid-audio-cap",
+        }),
+        {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(messengerAudioEvent("mid-audio-cap"));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const sendBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    expect(sendBody).toMatchObject({
+      messaging_type: "RESPONSE",
+      message: {
+        text: "Even pauze, ons dagbudget voor voiceberichten is bereikt. Typ je bericht even uit, dan help ik meteen verder.",
+      },
+      recipient: { id: "sender-mid-audio-cap" },
+    });
+    expect(JSON.stringify(sendBody)).not.toContain("https://cdn.fbsbx.com/voice-message.mp4");
     expect(inboundRun).not.toHaveBeenCalled();
   });
 
