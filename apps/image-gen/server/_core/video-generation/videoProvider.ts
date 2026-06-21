@@ -12,7 +12,7 @@ export type VideoProviderRequest = {
   reqId: string;
   userKey: string;
   timeoutMs: number;
-  onProviderAttempt?: () => Promise<void>;
+  onProviderAttempt?: () => Promise<string | undefined>;
 };
 
 export type VideoProviderSuccess = {

@@ -238,10 +238,11 @@ async function createVideoJob(
 
   const apiKey = getApiKey();
   const attemptNow = new Date();
-  await input.onProviderAttempt?.();
+  const suppliedEntryId = await input.onProviderAttempt?.();
+  const ledgerEntryId = suppliedEntryId || `${input.reqId}:${attemptNow.toISOString()}`;
   await safelyAppendCostLedgerEntry(
     {
-      id: `${input.reqId}:${attemptNow.toISOString()}`,
+      id: ledgerEntryId,
       channel: "facebook_messenger",
       operation: "video_generation",
       provider: "openai-video",

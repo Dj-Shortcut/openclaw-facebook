@@ -254,6 +254,8 @@ export function createMessengerVideoGenerationRunner(
         const provider = getVideoProvider();
         const costEstimate = estimateVideoGenerationAttemptCost();
         let providerAttemptCount = 0;
+        const providerHandlesLedgerEntries =
+          getVideoProviderName(provider) === "openai";
         const commitProviderAttemptQuota = async () => {
           const budgetNow = new Date();
           await assertMessengerDailyVideoBudgetAvailable({ reqId, now: budgetNow });
@@ -313,28 +315,31 @@ export function createMessengerVideoGenerationRunner(
             }
             providerAttemptCount += 1;
             const ledgerEntryId = `${reqId}:video:${providerAttemptCount}`;
-            await safelyAppendCostLedgerEntry(
-              {
-                id: ledgerEntryId,
-                channel: "facebook_messenger",
-                operation: "video_generation",
-                provider: getVideoProviderName(provider),
-                model: null,
-                userKey: userId,
-                reqId,
-                status: "provider_attempt_started",
-                estimatedCostUsd: costEstimate.estimatedCostUsd,
-                estimatedOutputCostUsd: null,
-                finalCostUsd: null,
-                costEstimateComplete: costEstimate.costEstimateComplete,
-                estimateSource: costEstimate.estimateSource,
-                unpricedCostComponents: costEstimate.unpricedCostComponents,
-              },
-              budgetNow
-            );
+            if (!providerHandlesLedgerEntries) {
+              await safelyAppendCostLedgerEntry(
+                {
+                  id: ledgerEntryId,
+                  channel: "facebook_messenger",
+                  operation: "video_generation",
+                  provider: getVideoProviderName(provider),
+                  model: null,
+                  userKey: userId,
+                  reqId,
+                  status: "provider_attempt_started",
+                  estimatedCostUsd: costEstimate.estimatedCostUsd,
+                  estimatedOutputCostUsd: null,
+                  finalCostUsd: null,
+                  costEstimateComplete: costEstimate.costEstimateComplete,
+                  estimateSource: costEstimate.estimateSource,
+                  unpricedCostComponents: costEstimate.unpricedCostComponents,
+                },
+                budgetNow
+              );
+            }
             lastVideoLedgerEntryId = ledgerEntryId;
             lastVideoLedgerEntryRecordedAt = budgetNow;
             lastVideoLedgerEntrySucceeded = false;
+            return ledgerEntryId;
           } catch (error) {
             await releaseMessengerDailyVideoBudgetReservation({ now: budgetNow });
             throw error;
