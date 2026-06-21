@@ -38,7 +38,7 @@ describe("cost ledger", () => {
 
     expect(entries).toEqual([
       expect.objectContaining({
-        id: "req-cost-ledger:attempt-1",
+        id: expect.stringMatching(/^ledger_[a-f0-9]{24}$/),
         createdAt: "2026-06-21T12:34:56.000Z",
         period: "2026-06-21",
         channel: "facebook_messenger",
@@ -46,9 +46,12 @@ describe("cost ledger", () => {
         provider: "openai-images",
         model: "gpt-image-2",
         userKey: "pseudonymous-user-key",
+        reqId: expect.stringMatching(/^req_[a-f0-9]{24}$/),
         status: "provider_attempt_started",
       }),
     ]);
+    expect(JSON.stringify(entries)).not.toContain("req-cost-ledger");
+    expect(JSON.stringify(entries)).not.toContain("req-cost-ledger:attempt-1");
     expect(JSON.stringify(entries)).not.toContain("prompt");
     expect(JSON.stringify(entries)).not.toContain("raw");
     expect(JSON.stringify(entries)).not.toContain("facebook:");
@@ -164,5 +167,35 @@ describe("cost ledger", () => {
     expect(JSON.stringify(summary)).not.toContain("private");
     expect(JSON.stringify(summary)).not.toContain("https://");
     expect(JSON.stringify(summary)).not.toContain("facebook:");
+  });
+
+  it("serializes concurrent in-memory appends for the same period", async () => {
+    await Promise.all(
+      Array.from({ length: 20 }, (_, index) =>
+        appendCostLedgerEntry(
+          {
+            id: `req-concurrent:attempt-${index}`,
+            channel: "facebook_messenger",
+            operation: "image_generation",
+            provider: "openai-images",
+            model: "gpt-image-2",
+            userKey: `user-key-${index}`,
+            reqId: `req-concurrent-${index}`,
+            status: "provider_attempt_started",
+            estimatedCostUsd: null,
+            estimatedOutputCostUsd: null,
+            finalCostUsd: null,
+            costEstimateComplete: false,
+          },
+          new Date("2026-06-21T04:00:00.000Z")
+        )
+      )
+    );
+
+    const entries = await readCostLedgerPeriod("2026-06-21");
+
+    expect(entries).toHaveLength(20);
+    expect(new Set(entries.map(entry => entry.userKey)).size).toBe(20);
+    expect(JSON.stringify(entries)).not.toContain("req-concurrent");
   });
 });

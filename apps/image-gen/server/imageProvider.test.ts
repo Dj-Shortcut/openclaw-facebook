@@ -379,6 +379,7 @@ describe("image provider boundary", () => {
     process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
     process.env.OPENAI_IMAGE_SIZE = "1024x1536";
     process.env.OPENAI_IMAGE_QUALITY = "medium";
+    const period = new Date().toISOString().slice(0, 10);
     const privatePrompt = "private tester prompt for a neon train station";
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
@@ -423,7 +424,7 @@ describe("image provider boundary", () => {
         status: "provider_response_received",
       },
     ]);
-    const ledger = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const ledger = await readCostLedgerPeriod(period);
     expect(ledger).toEqual([
       expect.objectContaining({
         channel: "facebook_messenger",
@@ -432,7 +433,7 @@ describe("image provider boundary", () => {
         model: "gpt-image-2",
         pricingModel: "gpt-image-1",
         userKey: "testuser",
-        reqId: "req-cost-estimate",
+        reqId: expect.stringMatching(/^req_[a-f0-9]{24}$/),
         generationKind: "text_to_image",
         status: "provider_attempt_started",
         estimatedCostUsd: 0.025,

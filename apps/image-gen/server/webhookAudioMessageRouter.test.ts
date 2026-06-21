@@ -226,7 +226,8 @@ describe("webhook audio message router", () => {
         text: "maak een foto van een cyberpunk stadslandschap",
       })
     );
-    const ledger = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const period = new Date().toISOString().slice(0, 10);
+    const ledger = await readCostLedgerPeriod(period);
     expect(ledger).toEqual([
       expect.objectContaining({
         channel: "facebook_messenger",
@@ -234,7 +235,7 @@ describe("webhook audio message router", () => {
         provider: "openai-audio",
         model: "whisper-1",
         userKey: "user-2",
-        reqId: "req-audio-ok",
+        reqId: expect.stringMatching(/^req_[a-f0-9]{24}$/),
         status: "provider_attempt_started",
         estimatedCostUsd: null,
         estimatedOutputCostUsd: null,
@@ -328,17 +329,18 @@ describe("webhook audio message router", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(commitTranscriptionSuccessMock).toHaveBeenCalledTimes(2);
     expect(handleTextMessageMock).toHaveBeenCalledTimes(1);
-    const ledger = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const period = new Date().toISOString().slice(0, 10);
+    const ledger = await readCostLedgerPeriod(period);
     expect(ledger).toHaveLength(2);
     expect(ledger).toEqual([
       expect.objectContaining({
         operation: "audio_transcription",
-        reqId: "req-audio-retry",
+        reqId: expect.stringMatching(/^req_[a-f0-9]{24}$/),
         userKey: "user-audio-retry",
       }),
       expect.objectContaining({
         operation: "audio_transcription",
-        reqId: "req-audio-retry",
+        reqId: expect.stringMatching(/^req_[a-f0-9]{24}$/),
         userKey: "user-audio-retry",
       }),
     ]);

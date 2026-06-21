@@ -134,8 +134,8 @@ export function validateSmokeEvidence(evidence) {
   return errors;
 }
 
-function printUsage() {
-  console.error("Usage: node scripts/messenger-smoke-checklist.mjs --template | --validate <file>");
+function printUsage(io = { stderr: process.stderr }) {
+  io.stderr.write("Usage: node scripts/messenger-smoke-checklist.mjs --template | --validate <file>\n");
 }
 
 export function runCli(argv = process.argv.slice(2), io = { stdout: process.stdout, stderr: process.stderr }) {
@@ -155,7 +155,7 @@ export function runCli(argv = process.argv.slice(2), io = { stdout: process.stdo
     return 0;
   }
 
-  printUsage();
+  printUsage(io);
   return 1;
 }
 

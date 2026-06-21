@@ -63,11 +63,13 @@ export async function deleteUserData(
   }
 
   const urls = Array.from(new Set(getStateImageUrls(state)));
+  const failedSteps: string[] = [];
 
   const runStep = async (step: string, fn: () => Promise<void>) => {
     try {
       await fn();
     } catch (error) {
+      failedSteps.push(step);
       safeLog("user_data_delete_step_failed", {
         user: toLogUser(state.userKey),
         step,
@@ -112,6 +114,9 @@ export async function deleteUserData(
     await Promise.resolve(
       setPendingSourceImageDeleteUrls(psid, failedDeletes)
     );
+    return;
+  }
+  if (failedSteps.length) {
     return;
   }
 

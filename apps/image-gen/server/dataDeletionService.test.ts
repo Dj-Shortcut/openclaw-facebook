@@ -123,7 +123,7 @@ describe("data deletion service", () => {
     expect(await Promise.resolve(getState(psid))).toBeNull();
   });
 
-  it("continues Messenger erasure when explicit portal data deletion fails", async () => {
+  it("retains Messenger state when explicit portal data deletion fails", async () => {
     const psid = "delete-portal-data-failure-user";
     const userKey = anonymizePsid(psid);
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -138,7 +138,7 @@ describe("data deletion service", () => {
 
       const serializedLogs = logSpy.mock.calls.map(call => String(call[0]));
       expect(deletePortalCustomerData).toHaveBeenCalledWith({ userKey });
-      expect(await Promise.resolve(getState(psid))).toBeNull();
+      expect(await Promise.resolve(getState(psid))).not.toBeNull();
       expect(serializedLogs.join("\n")).not.toContain(psid);
       expect(serializedLogs).toContainEqual(
         expect.stringContaining('"step":"portal_customer_data"')

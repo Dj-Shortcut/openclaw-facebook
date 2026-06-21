@@ -70,10 +70,10 @@ When the bot seems broken, check in this order:
 
 If face memory is involved, also check:
 
-9. `ENABLE_FACE_MEMORY`
-10. `FACE_MEMORY_RETENTION_DAYS`
-11. `ADMIN_TOKEN`
-12. Storage proxy delete support: `DELETE /v1/storage/object`
+1. `ENABLE_FACE_MEMORY`
+2. `FACE_MEMORY_RETENTION_DAYS`
+3. `ADMIN_TOKEN`
+4. Storage proxy delete support: `DELETE /v1/storage/object`
 
 If WhatsApp is involved, also check:
 

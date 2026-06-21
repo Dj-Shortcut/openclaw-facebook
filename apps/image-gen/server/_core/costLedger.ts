@@ -1,10 +1,17 @@
-import { readScopedState, writeScopedState } from "./stateStore";
+import { createHash } from "node:crypto";
+import {
+  isRedisStateStoreEnabled,
+  readScopedState,
+  writeScopedState,
+} from "./stateStore";
+import { getRedisClient } from "./redis";
 import { safeLog } from "./logger";
 import { toLogUser } from "./privacy";
 
 const COST_LEDGER_SCOPE = "cost:ledger:period";
 const COST_LEDGER_TTL_SECONDS = 90 * 24 * 60 * 60;
 const MAX_LEDGER_ENTRIES_PER_PERIOD = 5000;
+const memoryAppendLocks = new Map<string, Promise<void>>();
 
 export type CostLedgerEntry = {
   id: string;
@@ -54,6 +61,25 @@ function utcPeriod(now: Date): string {
   return now.toISOString().slice(0, 10);
 }
 
+function scopedLedgerKey(period: string): string {
+  return `${COST_LEDGER_SCOPE}:${period}`;
+}
+
+function hashReference(prefix: string, value: string): string {
+  const digest = createHash("sha256").update(value).digest("hex").slice(0, 24);
+  return `${prefix}_${digest}`;
+}
+
+function sanitizeLedgerEntry(
+  entry: Omit<CostLedgerEntry, "createdAt" | "period">
+): Omit<CostLedgerEntry, "createdAt" | "period"> {
+  return {
+    ...entry,
+    id: hashReference("ledger", entry.id),
+    reqId: hashReference("req", entry.reqId),
+  };
+}
+
 function costValue(value: number | null | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
@@ -82,24 +108,62 @@ function addToAggregate(aggregate: CostLedgerAggregate, entry: CostLedgerEntry):
   }
 }
 
+async function appendRedisLedgerEntry(
+  period: string,
+  fullEntry: CostLedgerEntry
+): Promise<void> {
+  const redis = await getRedisClient();
+  await redis.eval(
+    "redis.call('rpush', KEYS[1], ARGV[1]); redis.call('ltrim', KEYS[1], -tonumber(ARGV[2]), -1); redis.call('expire', KEYS[1], tonumber(ARGV[3])); return 1",
+    1,
+    scopedLedgerKey(period),
+    JSON.stringify(fullEntry),
+    String(MAX_LEDGER_ENTRIES_PER_PERIOD),
+    String(COST_LEDGER_TTL_SECONDS)
+  );
+}
+
+async function appendMemoryLedgerEntry(
+  period: string,
+  fullEntry: CostLedgerEntry
+): Promise<void> {
+  const previous = memoryAppendLocks.get(period) ?? Promise.resolve();
+  const currentAppend = previous.catch(() => undefined).then(async () => {
+    const current =
+      (await Promise.resolve(
+        readScopedState<CostLedgerEntry[]>(COST_LEDGER_SCOPE, period)
+      )) ?? [];
+    const next = [...current, fullEntry].slice(-MAX_LEDGER_ENTRIES_PER_PERIOD);
+    await Promise.resolve(
+      writeScopedState(COST_LEDGER_SCOPE, period, next, COST_LEDGER_TTL_SECONDS)
+    );
+  });
+  memoryAppendLocks.set(
+    period,
+    currentAppend.finally(() => {
+      if (memoryAppendLocks.get(period) === currentAppend) {
+        memoryAppendLocks.delete(period);
+      }
+    })
+  );
+  await currentAppend;
+}
+
 export async function appendCostLedgerEntry(
   entry: Omit<CostLedgerEntry, "createdAt" | "period">,
   now = new Date()
 ): Promise<void> {
   const period = utcPeriod(now);
   const fullEntry: CostLedgerEntry = {
-    ...entry,
+    ...sanitizeLedgerEntry(entry),
     createdAt: now.toISOString(),
     period,
   };
-  const current =
-    (await Promise.resolve(
-      readScopedState<CostLedgerEntry[]>(COST_LEDGER_SCOPE, period)
-    )) ?? [];
-  const next = [...current, fullEntry].slice(-MAX_LEDGER_ENTRIES_PER_PERIOD);
-  await Promise.resolve(
-    writeScopedState(COST_LEDGER_SCOPE, period, next, COST_LEDGER_TTL_SECONDS)
-  );
+  if (isRedisStateStoreEnabled()) {
+    await appendRedisLedgerEntry(period, fullEntry);
+    return;
+  }
+  await appendMemoryLedgerEntry(period, fullEntry);
 }
 
 export async function safelyAppendCostLedgerEntry(
@@ -111,7 +175,7 @@ export async function safelyAppendCostLedgerEntry(
   } catch (error) {
     safeLog("cost_ledger_write_failed", {
       level: "warn",
-      reqId: entry.reqId,
+      reqId: hashReference("req", entry.reqId),
       user: toLogUser(entry.userKey),
       operation: entry.operation,
       provider: entry.provider,
@@ -124,6 +188,12 @@ export async function safelyAppendCostLedgerEntry(
 export async function readCostLedgerPeriod(
   period: string
 ): Promise<CostLedgerEntry[]> {
+  if (isRedisStateStoreEnabled()) {
+    const redis = await getRedisClient();
+    const values = await redis.lrange(scopedLedgerKey(period), 0, -1);
+    return values.map(value => JSON.parse(value) as CostLedgerEntry);
+  }
+
   return (
     (await Promise.resolve(
       readScopedState<CostLedgerEntry[]>(COST_LEDGER_SCOPE, period)
