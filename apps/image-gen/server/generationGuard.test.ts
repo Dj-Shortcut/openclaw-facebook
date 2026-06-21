@@ -29,6 +29,7 @@ describe("generationGuard", () => {
     delete process.env.MESSENGER_MAX_IMAGE_JOBS;
     delete process.env.MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS;
     delete process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP;
+    delete process.env.MESSENGER_GLOBAL_DAILY_AUDIO_CAP;
     delete process.env.MESSENGER_PSID_COOLDOWN_MS;
     delete process.env.MESSENGER_PSID_LOCK_TTL_MS;
     vi.restoreAllMocks();
@@ -174,6 +175,50 @@ describe("generationGuard", () => {
     ).rejects.toBeInstanceOf(guard.MessengerDailyImageBudgetExceededError);
     expect(stateStoreMocks.decrementExpiringCounter).toHaveBeenCalledWith(
       "messenger:daily-image-budget:2026-06-01"
+    );
+  });
+
+  it("reports whether the daily audio budget cap is enabled", () => {
+    expect(guard.getMessengerDailyAudioBudgetConfig()).toEqual({
+      enabled: false,
+      cap: null,
+    });
+
+    process.env.MESSENGER_GLOBAL_DAILY_AUDIO_CAP = "5";
+
+    expect(guard.getMessengerDailyAudioBudgetConfig()).toEqual({
+      enabled: true,
+      cap: 5,
+    });
+  });
+
+  it("reserves audio budget in a UTC daily counter when a cap is configured", async () => {
+    process.env.MESSENGER_GLOBAL_DAILY_AUDIO_CAP = "2";
+    const now = new Date("2026-06-01T23:59:30.000Z");
+
+    await expect(
+      guard.assertMessengerDailyAudioBudgetAvailable({ reqId: "req-audio-budget", now })
+    ).resolves.toBeUndefined();
+
+    expect(stateStoreMocks.incrementExpiringCounter).toHaveBeenCalledWith(
+      "messenger:daily-audio-budget:2026-06-01",
+      30
+    );
+  });
+
+  it("throws when the configured daily audio budget is exceeded", async () => {
+    process.env.MESSENGER_GLOBAL_DAILY_AUDIO_CAP = "1";
+    stateStoreMocks.incrementExpiringCounter.mockResolvedValue(2);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await expect(
+      guard.assertMessengerDailyAudioBudgetAvailable({
+        reqId: "req-audio-over-budget",
+        now: new Date("2026-06-01T12:00:00.000Z"),
+      })
+    ).rejects.toBeInstanceOf(guard.MessengerDailyAudioBudgetExceededError);
+    expect(stateStoreMocks.decrementExpiringCounter).toHaveBeenCalledWith(
+      "messenger:daily-audio-budget:2026-06-01"
     );
   });
 });

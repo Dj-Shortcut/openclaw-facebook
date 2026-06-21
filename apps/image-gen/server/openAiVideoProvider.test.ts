@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OpenAiVideoProvider } from "./_core/video-generation/openAiVideoProvider";
+import { readCostLedgerPeriod } from "./_core/costLedger";
+import { clearStateStore } from "./_core/stateStore";
 
 describe("OpenAiVideoProvider", () => {
   const originalFetch = global.fetch;
@@ -14,6 +16,7 @@ describe("OpenAiVideoProvider", () => {
   });
 
   afterEach(() => {
+    clearStateStore();
     global.fetch = originalFetch;
     if (originalApiKey === undefined) {
       delete process.env.OPENAI_API_KEY;
@@ -90,6 +93,31 @@ describe("OpenAiVideoProvider", () => {
       2,
       3,
     ]);
+    const ledger = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    expect(ledger).toEqual([
+      expect.objectContaining({
+        channel: "facebook_messenger",
+        operation: "video_generation",
+        provider: "openai-video",
+        model: "sora-2",
+        userKey: "user-key",
+        reqId: "req-openai-video-retry",
+        status: "provider_attempt_started",
+        estimatedCostUsd: null,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: null,
+        costEstimateComplete: false,
+        estimateSource: "unpriced",
+        unpricedCostComponents: ["video_generation"],
+      }),
+      expect.objectContaining({
+        operation: "video_generation",
+        reqId: "req-openai-video-retry",
+        userKey: "user-key",
+      }),
+    ]);
+    expect(JSON.stringify(ledger)).not.toContain("make it dance");
+    expect(JSON.stringify(ledger)).not.toContain("https://img.example");
   });
 
   it("does not report a provider attempt when OpenAI preflight fails", async () => {
@@ -114,6 +142,7 @@ describe("OpenAiVideoProvider", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(onProviderAttempt).not.toHaveBeenCalled();
+    expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
     expect(result).toMatchObject({
       kind: "failure",
       provider: "openai",

@@ -249,6 +249,7 @@ Operational env shortlist: [`docs/operations/ENV_SHORTLIST.md`](docs/operations/
 - `MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT` (per-user daily audio transcription cap, default `5`)
 - `MESSENGER_VIDEO_GENERATION_DAILY_LIMIT` (per-user daily video-generation cap, default `1`)
 - `MESSENGER_GLOBAL_DAILY_IMAGE_CAP` (optional global daily image provider-attempt cap)
+- `MESSENGER_GLOBAL_DAILY_AUDIO_CAP` (optional global daily audio transcription provider-attempt cap)
 - `MESSENGER_GLOBAL_DAILY_VIDEO_CAP` (optional global daily video provider-attempt cap)
 - `BOT_TEXT_RATE_LIMIT_MAX` (shared bot text-message limit per sender/window, default `30`; set `0` to disable this text limiter)
 - `BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS` (shared bot text rate-limit window, default `60`)

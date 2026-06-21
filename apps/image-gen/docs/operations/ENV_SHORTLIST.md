@@ -39,6 +39,9 @@ These variables control whether the OpenAI-backed parts of the bot actually run.
 | `IMAGE_PROVIDER` | Image provider boundary | Optional; currently only `openai-images` is supported. |
 | `OPENAI_EDIT_INTERPRETER_MODEL` | Conversational edit classifier | Optional; free text still stays deterministic and does not use an OpenAI chat brain. |
 | `SOURCE_IMAGE_ALLOWED_HOSTS` | Downloading inbound images before generation | If the exact host is not allowlisted, generation fails before OpenAI is called. |
+| `MESSENGER_GLOBAL_DAILY_IMAGE_CAP` | Optional global Messenger image provider-attempt cap | Set for public smoke so one account cannot burn the whole OpenAI image budget. |
+| `MESSENGER_GLOBAL_DAILY_AUDIO_CAP` | Optional global Messenger audio transcription provider-attempt cap | Set for public smoke if audio messages are enabled; blocks before OpenAI transcription. |
+| `MESSENGER_GLOBAL_DAILY_VIDEO_CAP` | Optional global Messenger video provider-attempt cap | Set before video generation is exposed to public Messenger traffic. |
 
 ## 4. Optional but easy to confuse
 
@@ -62,13 +65,15 @@ When the bot seems broken, check in this order:
 4. `APP_BASE_URL`
 5. `IMAGE_PROVIDER`
 6. `SOURCE_IMAGE_ALLOWED_HOSTS`
+7. `MESSENGER_GLOBAL_DAILY_IMAGE_CAP`
+8. `MESSENGER_GLOBAL_DAILY_AUDIO_CAP`
 
 If face memory is involved, also check:
 
-7. `ENABLE_FACE_MEMORY`
-8. `FACE_MEMORY_RETENTION_DAYS`
-9. `ADMIN_TOKEN`
-10. Storage proxy delete support: `DELETE /v1/storage/object`
+9. `ENABLE_FACE_MEMORY`
+10. `FACE_MEMORY_RETENTION_DAYS`
+11. `ADMIN_TOKEN`
+12. Storage proxy delete support: `DELETE /v1/storage/object`
 
 If WhatsApp is involved, also check:
 

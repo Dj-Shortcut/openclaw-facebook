@@ -110,6 +110,47 @@ describe("data deletion service", () => {
     ).toBeNull();
   });
 
+  it("runs explicit portal customer data deletion during user erasure", async () => {
+    const psid = "delete-portal-data-user";
+    const userKey = anonymizePsid(psid);
+    const deletePortalCustomerData = vi.fn(async () => undefined);
+
+    await Promise.resolve(getOrCreateState(psid));
+
+    await deleteUserData(psid, { deletePortalCustomerData });
+
+    expect(deletePortalCustomerData).toHaveBeenCalledWith({ userKey });
+    expect(await Promise.resolve(getState(psid))).toBeNull();
+  });
+
+  it("continues Messenger erasure when explicit portal data deletion fails", async () => {
+    const psid = "delete-portal-data-failure-user";
+    const userKey = anonymizePsid(psid);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const deletePortalCustomerData = vi.fn(async () => {
+      throw new Error("portal cleanup failed");
+    });
+
+    try {
+      await Promise.resolve(getOrCreateState(psid));
+
+      await deleteUserData(psid, { deletePortalCustomerData });
+
+      const serializedLogs = logSpy.mock.calls.map(call => String(call[0]));
+      expect(deletePortalCustomerData).toHaveBeenCalledWith({ userKey });
+      expect(await Promise.resolve(getState(psid))).toBeNull();
+      expect(serializedLogs.join("\n")).not.toContain(psid);
+      expect(serializedLogs).toContainEqual(
+        expect.stringContaining('"step":"portal_customer_data"')
+      );
+      expect(serializedLogs).toContainEqual(
+        expect.stringContaining(`"user":"${userKey.slice(0, 8)}"`)
+      );
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   it("keeps a pending deletion marker when object storage deletion fails", async () => {
     const psid = "delete-storage-failure-user";
     storageDeleteMock.mockRejectedValueOnce(new Error("delete failed"));
@@ -128,6 +169,34 @@ describe("data deletion service", () => {
     expect((await Promise.resolve(getState(psid)))?.pendingSourceImageDeleteUrl).toBe(
       "https://assets.example/inbound-source/delete-me.jpg"
     );
+  });
+
+  it("logs storage deletion failures with a pseudonymous user key", async () => {
+    const psid = "delete-storage-failure-log-user";
+    const userKey = anonymizePsid(psid);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    storageDeleteMock.mockRejectedValueOnce(new Error("delete failed"));
+
+    try {
+      await Promise.resolve(
+        setPendingImage(
+          psid,
+          "https://assets.example/inbound-source/delete-me.jpg",
+          Date.now(),
+          "stored"
+        )
+      );
+
+      await deleteUserData(psid);
+
+      const serializedLogs = logSpy.mock.calls.map(call => String(call[0]));
+      expect(serializedLogs.join("\n")).not.toContain(psid);
+      expect(serializedLogs).toContainEqual(
+        expect.stringContaining(`"user":"${userKey.slice(0, 8)}"`)
+      );
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   it("keeps every failed object deletion marker during user erasure", async () => {

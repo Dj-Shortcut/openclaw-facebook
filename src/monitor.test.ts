@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  FACEBOOK_PUBLIC_DM_DENIED_TOOLS,
+  applyFacebookPublicDmToolPolicy,
   buildMessengerAgentTextForAttachments,
   classifyMessengerFastLaneIntent,
   downloadMessengerMediaAttachment,
@@ -177,6 +179,12 @@ function setGatewayRuntime(
       inbound: {
         run: inboundRun,
       },
+      session: {
+        recordInboundSession: vi.fn(async () => undefined),
+      },
+      reply: {
+        dispatchReplyWithBufferedBlockDispatcher: vi.fn(async () => ({ dispatched: false })),
+      },
     },
   } as never);
   return inboundRun;
@@ -210,6 +218,36 @@ async function processGatewayTestEvent(
     },
   } as never);
 }
+
+describe("applyFacebookPublicDmToolPolicy", () => {
+  it("adds default high-cost tool denies for public-open Facebook DMs", () => {
+    const cfg = {
+      tools: { deny: ["custom_expensive_tool"] },
+      channels: { facebook: {} },
+    } as never;
+
+    const guarded = applyFacebookPublicDmToolPolicy(cfg, messengerTestAccount());
+
+    expect(guarded).not.toBe(cfg);
+    expect((guarded as { tools?: { deny?: string[] } }).tools?.deny).toEqual(
+      expect.arrayContaining(["custom_expensive_tool", ...FACEBOOK_PUBLIC_DM_DENIED_TOOLS]),
+    );
+  });
+
+  it("leaves non-public Facebook DMs on the host tool policy", () => {
+    const cfg = {
+      tools: { deny: ["custom_expensive_tool"] },
+      channels: { facebook: {} },
+    } as never;
+
+    const guarded = applyFacebookPublicDmToolPolicy(
+      cfg,
+      messengerTestAccount({ dmPolicy: "allowlist", allowFrom: ["sender-1"] }),
+    );
+
+    expect(guarded).toBe(cfg);
+  });
+});
 
 describe("resolveMessengerEventTarget", () => {
   it("uses recipient page id to choose between same-path accounts", () => {
@@ -365,6 +403,8 @@ describe("classifyMessengerFastLaneIntent", () => {
     ["wat kan je?", "help"],
     ["ben je online", "status"],
     ["maak afbeelding van een robot", "image"],
+    ["Delete my data aub", "delete_data"],
+    ["Verwijder mijn gegevens a.u.b.", "delete_data"],
   ] as const)("classifies %s as %s", (text, intent) => {
     expect(classifyMessengerFastLaneIntent(text)).toBe(intent);
   });
@@ -863,6 +903,46 @@ describe("processMessengerEvent unknown sender access policy", () => {
   });
 });
 
+describe("processMessengerEvent public Facebook tool policy", () => {
+  it("applies high-cost tool denies to normal public-open OpenClaw turns", async () => {
+    const inboundRun = vi.fn(async (params: { adapter: { resolveTurn: () => unknown } }) => {
+      const turn = params.adapter.resolveTurn() as {
+        cfg: { tools?: { deny?: string[] } };
+        ctxPayload: { ToolPolicy?: string; CommandAuthorized?: boolean };
+      };
+
+      expect(turn.cfg.tools?.deny).toEqual(
+        expect.arrayContaining([...FACEBOOK_PUBLIC_DM_DENIED_TOOLS]),
+      );
+      expect(turn.ctxPayload.ToolPolicy).toBe("facebook_public_high_cost_deny");
+      expect(turn.ctxPayload.CommandAuthorized).toBe(false);
+      return { dispatched: false };
+    });
+    setGatewayRuntime(inboundRun);
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
+      return new Response(
+        JSON.stringify({
+          message_id: "typing-message",
+          recipient_id: "sender-mid-public-tool-policy",
+        }),
+        {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(
+      messengerTextEvent("mid-public-tool-policy", "Schrijf een planning voor morgen"),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(inboundRun).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("processMessengerEvent image intents", () => {
   it("forwards Messenger text-to-image prompts without entering OpenClaw inbound", async () => {
     process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
@@ -1085,6 +1165,14 @@ describe("resolveMessengerFastLaneReply", () => {
     expect(result?.reply).toContain("korte vragen");
   });
 
+  it("recognizes delete-my-data variants before assistant routing", () => {
+    const result = resolveMessengerFastLaneReply("Delete my data aub");
+
+    expect(result?.intent).toBe("delete_data");
+    expect(result?.reply).toContain("verwijderverzoek");
+    expect(result?.reply).toContain("niet door naar tools");
+  });
+
   it("does not create a separate text reply for image intents", () => {
     expect(resolveMessengerFastLaneReply("maak afbeelding van een robot")).toBeNull();
   });
@@ -1132,6 +1220,20 @@ describe("normalizeMessengerReplyPayloadForDelivery", () => {
         isStatusNotice: true,
       })?.text,
     ).toBe("Gewone statusupdate");
+  });
+
+  it("redacts Messenger identifiers from tool feedback before delivery", () => {
+    const payload = normalizeMessengerReplyPayloadForDelivery({
+      text:
+        'search "26100858686271223| sender_id| facebook:26100858686271223" ' +
+        "in /data/workspace (workspace) failed",
+      isStatusNotice: true,
+    });
+
+    expect(payload?.text).toContain("Toolfeedback:");
+    expect(payload?.text).toContain('"[redacted]"');
+    expect(payload?.text).not.toContain("26100858686271223");
+    expect(payload?.text).not.toContain("facebook:26100858686271223");
   });
 
   it("renders generic conversation actions as Messenger quick replies", () => {

@@ -18,6 +18,7 @@ const DEFAULT_VIDEO_PSID_LOCK_MS = 900000;
 const DEFAULT_GLOBAL_SLOT_WAIT_MS = 100;
 const DAILY_BUDGET_KEY_PREFIX = "messenger:daily-image-budget";
 const DAILY_VIDEO_BUDGET_KEY_PREFIX = "messenger:daily-video-budget";
+const DAILY_AUDIO_BUDGET_KEY_PREFIX = "messenger:daily-audio-budget";
 
 export class MessengerDailyImageBudgetExceededError extends Error {
   constructor(message = "Messenger daily image budget reached") {
@@ -30,6 +31,13 @@ export class MessengerDailyVideoBudgetExceededError extends Error {
   constructor(message = "Messenger daily video budget reached") {
     super(message);
     this.name = "MessengerDailyVideoBudgetExceededError";
+  }
+}
+
+export class MessengerDailyAudioBudgetExceededError extends Error {
+  constructor(message = "Messenger daily audio budget reached") {
+    super(message);
+    this.name = "MessengerDailyAudioBudgetExceededError";
   }
 }
 
@@ -99,6 +107,11 @@ type MessengerGenerationGlobalLimitConfig = {
 };
 
 type MessengerDailyImageBudgetConfig = {
+  enabled: boolean;
+  cap: number | null;
+};
+
+type MessengerDailyAudioBudgetConfig = {
   enabled: boolean;
   cap: number | null;
 };
@@ -226,6 +239,14 @@ export function getMessengerDailyImageBudgetConfig(): MessengerDailyImageBudgetC
   };
 }
 
+export function getMessengerDailyAudioBudgetConfig(): MessengerDailyAudioBudgetConfig {
+  const cap = readPositiveInt("MESSENGER_GLOBAL_DAILY_AUDIO_CAP");
+  return {
+    enabled: cap !== null,
+    cap,
+  };
+}
+
 export async function assertMessengerDailyImageBudgetAvailable(input: {
   reqId: string;
   now?: Date;
@@ -297,6 +318,43 @@ export async function releaseMessengerDailyVideoBudgetReservation(input: {
 
   const now = input.now ?? new Date();
   const key = `${DAILY_VIDEO_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
+  await decrementExpiringCounter(key);
+}
+
+export async function assertMessengerDailyAudioBudgetAvailable(input: {
+  reqId: string;
+  now?: Date;
+}): Promise<void> {
+  const { cap } = getMessengerDailyAudioBudgetConfig();
+  if (!cap) {
+    return;
+  }
+
+  const now = input.now ?? new Date();
+  const key = `${DAILY_AUDIO_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
+  const count = await incrementExpiringCounter(key, secondsUntilNextUtcDay(now));
+  if (count > cap) {
+    await decrementExpiringCounter(key);
+    safeLog("messenger_daily_audio_budget_reached", {
+      level: "warn",
+      reqId: input.reqId,
+      cap,
+      count,
+    });
+    throw new MessengerDailyAudioBudgetExceededError();
+  }
+}
+
+export async function releaseMessengerDailyAudioBudgetReservation(input: {
+  now?: Date;
+} = {}): Promise<void> {
+  const { cap } = getMessengerDailyAudioBudgetConfig();
+  if (!cap) {
+    return;
+  }
+
+  const now = input.now ?? new Date();
+  const key = `${DAILY_AUDIO_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
   await decrementExpiringCounter(key);
 }
 

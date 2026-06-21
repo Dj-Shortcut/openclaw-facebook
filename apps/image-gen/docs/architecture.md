@@ -205,6 +205,9 @@ There are two quota strategies represented in code:
 - Free-tier video generation default: `1` provider attempt per sender/user identity per UTC day.
 - Bot text rate-limit default: `30` messages per sender per `60` seconds.
 - Provider attempts count when the paid provider call is about to run. Preflight failures such as missing or invalid source images remain retryable without burning credits; provider failures, timeouts, parse/upload failures, and delivery failures after provider attempt start are counted.
+- Optional global UTC-day caps block provider calls before OpenAI for image generation (`MESSENGER_GLOBAL_DAILY_IMAGE_CAP`), audio transcription (`MESSENGER_GLOBAL_DAILY_AUDIO_CAP`), and video generation (`MESSENGER_GLOBAL_DAILY_VIDEO_CAP`).
+- OpenAI image, audio transcription, and video provider attempts also write metadata-only UTC-day cost ledger entries with pseudonymous `userKey`, provider/model, estimate metadata, and status. Ledger records must not include prompts, transcripts, raw PSIDs, source media URLs, generated outputs, or customer message text.
+- Cost ledger summaries aggregate attempts, unique pseudonymous users, estimated/final-cost fields, incomplete estimates, and operation/provider breakdowns for owner monitoring without exposing user content.
 - Used with state store abstraction.
 
 ### B. DB-backed quota
