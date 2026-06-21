@@ -173,19 +173,71 @@ describe("data deletion service", () => {
     ]);
   });
 
-  it("keeps user state when a critical deletion step fails", async () => {
+  it("keeps user state when a required deletion step fails", async () => {
     const psid = "delete-step-failure-user";
-    const state = await Promise.resolve(getOrCreateState(psid));
-    const deleteCostLedgerSpy = vi
-      .spyOn(costLedger, "deleteCostLedgerEntriesForUser")
-      .mockRejectedValueOnce(new Error("temporary ledger failure"));
+    const imageUrl = "https://assets.example/inbound-source/fail-step.jpg";
+    let state = await Promise.resolve(getOrCreateState(psid));
+
+    await Promise.resolve(
+      setPendingImage(
+        psid,
+        imageUrl,
+        Date.now(),
+        "stored"
+      )
+    );
+    state = await Promise.resolve(getState(psid));
+    await Promise.resolve(
+      writeState(psid, {
+        ...state,
+        lastGeneratedVideoProvider: "openai",
+        lastGeneratedVideoProviderJobId: "video_job_fail",
+      })
+    );
+
+    deleteProviderVideoForUserMock.mockRejectedValueOnce(
+      new Error("temporary video artifact deletion failure")
+    );
 
     await deleteUserData(psid);
 
     expect(await Promise.resolve(getState(psid))).toMatchObject({
       userKey: state.userKey,
+      pendingImageUrl: imageUrl,
     });
-    deleteCostLedgerSpy.mockRestore();
+  });
+
+  it("keeps retry state when a required deletion step fails", async () => {
+    const psid = "delete-step-failure-retry-state-user";
+    const imageUrl = "https://assets.example/inbound-source/delete-my-data.jpg";
+    let state = await Promise.resolve(getOrCreateState(psid));
+
+    await Promise.resolve(
+      setPendingImage(psid, imageUrl, Date.now(), "stored")
+    );
+    state = await Promise.resolve(getState(psid));
+
+    await Promise.resolve(writeState(psid, {
+      ...state,
+      lastGeneratedVideoProvider: "openai",
+      lastGeneratedVideoProviderJobId: "video_job_retry_state_fail",
+    }));
+
+    deleteProviderVideoForUserMock.mockRejectedValueOnce(
+      new Error("temporary video artifact deletion failure")
+    );
+    await deleteUserData(psid);
+
+    const stateAfter = await Promise.resolve(getState(psid));
+    expect(stateAfter).toEqual(
+      expect.objectContaining({
+        userKey: state.userKey,
+        lastPhotoUrl: imageUrl,
+        lastPhoto: imageUrl,
+        pendingImageUrl: imageUrl,
+        pendingImageAt: expect.any(Number),
+      })
+    );
   });
 
   it("keeps a pending deletion marker when object storage deletion fails", async () => {

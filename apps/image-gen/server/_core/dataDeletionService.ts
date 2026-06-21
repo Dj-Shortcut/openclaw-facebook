@@ -4,7 +4,7 @@ import { deleteFaceMemoryForUser } from "./faceMemory";
 import { safeLog } from "./messengerApi";
 import { deleteMessengerGenerationCompletionsForUser } from "./messengerGenerationCompletion";
 import { toLogUser } from "./privacy";
-import { deleteScopedState } from "./stateStore";
+import { deleteScopedState, writeState } from "./stateStore";
 import { deleteProviderVideoForUser } from "./video-generation/videoProviderRegistry";
 import {
   anonymizePsid,
@@ -52,6 +52,21 @@ export async function deleteUserData(psid: string): Promise<void> {
   const state = await getState(psid);
   const userKey = state?.userKey ?? anonymizePsid(psid);
   const logUser = toLogUser(userKey);
+  const retryContext = state
+    ? {
+        lastPhotoUrl: state.lastPhotoUrl,
+        lastPhoto: state.lastPhoto,
+        lastPhotoSource: state.lastPhotoSource,
+        lastImageUrl: state.lastImageUrl,
+        lastGeneratedUrl: state.lastGeneratedUrl,
+        pendingImageUrl: state.pendingImageUrl,
+        pendingImageAt: state.pendingImageAt,
+        stage: state.stage,
+        state: state.state,
+        pendingScreenshotIntentContinuation: state.pendingScreenshotIntentContinuation,
+        pendingEditIntent: state.pendingEditIntent,
+      }
+    : null;
 
   const runStep = async (step: string, fn: () => Promise<void>): Promise<boolean> => {
     try {
@@ -118,6 +133,19 @@ export async function deleteUserData(psid: string): Promise<void> {
   }
 
   if (!deleteStepsSucceeded) {
+    // Keep retry-related state when required deletion steps fail; allow
+    // delete-my-data operations to be retried without losing in-flight context.
+    if (state && retryContext) {
+      const currentState = await getState(psid);
+      if (currentState) {
+        await Promise.resolve(
+          writeState(psid, {
+            ...currentState,
+            ...retryContext,
+          })
+        );
+      }
+    }
     return;
   }
 
