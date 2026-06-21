@@ -4,6 +4,7 @@ import { safeLog } from "./messengerApi";
 import { deleteMessengerGenerationCompletionsForUser } from "./messengerGenerationCompletion";
 import { deleteScopedState } from "./stateStore";
 import { deleteProviderVideoForUser } from "./video-generation/videoProviderRegistry";
+import { toLogUser } from "./privacy";
 import {
   clearUserState,
   getState,
@@ -12,6 +13,12 @@ import {
 } from "./messengerState";
 
 const LEGACY_CHAT_HISTORY_SCOPE = "chat:history";
+
+type DeleteUserDataOptions = {
+  deletePortalCustomerData?: (input: {
+    userKey: string;
+  }) => Promise<void>;
+};
 
 function getStateImageUrls(state: MessengerUserState): string[] {
   return [
@@ -26,7 +33,7 @@ function getStateImageUrls(state: MessengerUserState): string[] {
   ].filter((url): url is string => Boolean(url));
 }
 
-async function deleteStoredUrl(psid: string, imageUrl: string): Promise<boolean> {
+async function deleteStoredUrl(userKey: string, imageUrl: string): Promise<boolean> {
   const key = storageKeyFromPublicUrl(imageUrl);
   if (!key) {
     return true;
@@ -37,7 +44,7 @@ async function deleteStoredUrl(psid: string, imageUrl: string): Promise<boolean>
     return true;
   } catch (error) {
     safeLog("user_data_storage_delete_failed", {
-      psid,
+      user: toLogUser(userKey),
       key,
       errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
     });
@@ -45,7 +52,10 @@ async function deleteStoredUrl(psid: string, imageUrl: string): Promise<boolean>
   }
 }
 
-export async function deleteUserData(psid: string): Promise<void> {
+export async function deleteUserData(
+  psid: string,
+  options: DeleteUserDataOptions = {}
+): Promise<void> {
   const state = await getState(psid);
   if (!state) {
     await Promise.resolve(clearUserState(psid));
@@ -53,13 +63,15 @@ export async function deleteUserData(psid: string): Promise<void> {
   }
 
   const urls = Array.from(new Set(getStateImageUrls(state)));
+  const failedSteps: string[] = [];
 
   const runStep = async (step: string, fn: () => Promise<void>) => {
     try {
       await fn();
     } catch (error) {
+      failedSteps.push(step);
       safeLog("user_data_delete_step_failed", {
-        psid,
+        user: toLogUser(state.userKey),
         step,
         errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
       });
@@ -70,7 +82,7 @@ export async function deleteUserData(psid: string): Promise<void> {
   const deleteResults = await Promise.all(
     urls.map(async url => ({
       url,
-      deleted: await deleteStoredUrl(psid, url),
+      deleted: await deleteStoredUrl(state.userKey, url),
     }))
   );
   await runStep("legacy_chat_history", () =>
@@ -79,6 +91,12 @@ export async function deleteUserData(psid: string): Promise<void> {
   await runStep("messenger_generation_completion", () =>
     deleteMessengerGenerationCompletionsForUser(state.userKey)
   );
+  const deletePortalCustomerData = options.deletePortalCustomerData;
+  if (deletePortalCustomerData) {
+    await runStep("portal_customer_data", () =>
+      deletePortalCustomerData({ userKey: state.userKey })
+    );
+  }
   if (state.lastGeneratedVideoProviderJobId) {
     await runStep("video_provider_artifact", () =>
       deleteProviderVideoForUser({
@@ -96,6 +114,9 @@ export async function deleteUserData(psid: string): Promise<void> {
     await Promise.resolve(
       setPendingSourceImageDeleteUrls(psid, failedDeletes)
     );
+    return;
+  }
+  if (failedSteps.length) {
     return;
   }
 

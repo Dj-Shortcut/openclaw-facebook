@@ -66,6 +66,7 @@ jobs:
           tarball="$(find . -maxdepth 1 -name 'dj-shortcut-facebook-*.tgz' -print -quit)"
           test -n "$tarball"
           echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+          echo "tarball_name=${tarball#./}" >> "$GITHUB_OUTPUT"
 
       - name: Validate tarball contents
         run: |
@@ -90,7 +91,7 @@ jobs:
       - name: Upload package artifact
         uses: actions/upload-artifact@v5
         with:
-          name: ${{ steps.pack.outputs.tarball }}
+          name: ${{ steps.pack.outputs.tarball_name }}
           path: ${{ steps.pack.outputs.tarball }}
           if-no-files-found: error
 

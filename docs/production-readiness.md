@@ -29,6 +29,7 @@ This document is the deploy/smoke checklist for the current gateway surface.
 - Kept existing persistent workspace files safe: migration only copies missing files.
 - Repaired persisted config when it contains the known legacy default workspace path.
 - Kept OpenClaw built-in `image_generate` denied on the public gateway; Messenger image generation stays routed through Leaderbot image-gen.
+- Added a public-open Facebook DM tool denylist for high-cost/risky OpenClaw tools (`image_generate`, browser/canvas/web fetch/firecrawl, exec, and filesystem mutation tools).
 - Added the Fly public route guard: only `/facebook/webhook`, `/messenger/webhook`, and `/healthz` are exposed publicly; the broader gateway UI/API is not reachable from the internet.
 
 ## Remaining Blockers
@@ -116,6 +117,7 @@ Before deploy:
 - Confirm failed/dead-lettered generation jobs are zero or have an owner-reviewed incident note.
 - Confirm recent logs contain no raw PSIDs, access tokens, customer messages, uploaded knowledge, generated prompts, or generated outputs.
 - Confirm no public route exposure drift from the intended webhook/health/legal/customer-app surfaces.
+- Create a metadata-only smoke evidence file with `npm run messenger:smoke-template > smoke-evidence.json`.
 
 After deploy:
 
@@ -124,6 +126,7 @@ After deploy:
 - Confirm queue depth drains normally, failed/dead-lettered job counts do not increase, and worker lease/reclaim logs are healthy after a worker restart or deploy event.
 - Run the manual Messenger smoke below with the real Page.
 - Record metadata-only release notes: commit, image/release id, smoke result, rollback target, and any cost/quota anomalies.
+- Validate the smoke evidence before sharing or archiving it with `npm run messenger:smoke-validate -- smoke-evidence.json`.
 
 Manual Messenger smoke:
 

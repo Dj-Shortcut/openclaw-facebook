@@ -9,6 +9,12 @@ import {
   releaseTranscriptionReservation,
   reserveTranscriptionForAttempt,
 } from "./messengerQuota";
+import {
+  assertMessengerDailyAudioBudgetAvailable,
+  MessengerDailyAudioBudgetExceededError,
+  releaseMessengerDailyAudioBudgetReservation,
+} from "./generationGuard";
+import { safelyAppendCostLedgerEntry } from "./costLedger";
 import { t } from "./i18n";
 import type { HandlerContext } from "./webhookHandlerTypes";
 import type { FacebookWebhookAttachment } from "./webhookHelpers";
@@ -61,13 +67,39 @@ export async function tryHandleAudioMessage(
   }
 
   const commitProviderAttemptQuota = async () => {
-    const committed = await commitTranscriptionSuccess(input.psid, reservation, {
-      releaseReservation: false,
-    });
-    if (!committed) {
-      throw new MessengerQuotaReservationCommitError(
-        "Messenger audio transcription quota reservation could not be committed"
+    const budgetNow = new Date();
+    await assertMessengerDailyAudioBudgetAvailable({ reqId: input.reqId, now: budgetNow });
+    try {
+      const committed = await commitTranscriptionSuccess(input.psid, reservation, {
+        releaseReservation: false,
+      });
+      if (!committed) {
+        throw new MessengerQuotaReservationCommitError(
+          "Messenger audio transcription quota reservation could not be committed"
+        );
+      }
+      await safelyAppendCostLedgerEntry(
+        {
+          id: `${input.reqId}:${budgetNow.toISOString()}`,
+          channel: "facebook_messenger",
+          operation: "audio_transcription",
+          provider: "openai-audio",
+          model: OPENAI_AUDIO_TRANSCRIPTION_MODEL,
+          userKey: input.userId,
+          reqId: input.reqId,
+          status: "provider_attempt_started",
+          estimatedCostUsd: null,
+          estimatedOutputCostUsd: null,
+          finalCostUsd: null,
+          costEstimateComplete: false,
+          estimateSource: "unpriced",
+          unpricedCostComponents: ["audio_duration"],
+        },
+        budgetNow
       );
+    } catch (error) {
+      await releaseMessengerDailyAudioBudgetReservation({ now: budgetNow });
+      throw error;
     }
   };
 
@@ -93,7 +125,10 @@ export async function tryHandleAudioMessage(
     });
     return true;
   } catch (error) {
-    if (error instanceof MessengerQuotaReservationCommitError) {
+    if (
+      error instanceof MessengerQuotaReservationCommitError ||
+      error instanceof MessengerDailyAudioBudgetExceededError
+    ) {
       await ctx.sendLoggedText(input.psid, t(input.lang, "outOfFreeCredits"), input.reqId);
       return true;
     }

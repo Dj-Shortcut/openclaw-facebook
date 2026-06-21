@@ -1,4 +1,4 @@
-export type MessengerFastLaneIntent = "greeting" | "help" | "status" | "image";
+export type MessengerFastLaneIntent = "greeting" | "help" | "status" | "image" | "delete_data";
 
 export function normalizeFastLaneText(text: string): string {
   return text
@@ -12,6 +12,9 @@ export function normalizeFastLaneText(text: string): string {
 }
 
 export function classifyMessengerFastLaneIntent(text: string): MessengerFastLaneIntent | null {
+  if (hasMessengerDeleteDataIntent(text)) {
+    return "delete_data";
+  }
   const intent = resolveMessengerConversationIntent({ text });
   if (intent.kind === "generate_image" || intent.kind === "edit_source_image") {
     return "image";
@@ -29,6 +32,13 @@ export function hasMessengerImageGenerationIntent(text: string): boolean {
 
 export function shouldForwardMessengerTextToImageGen(text: string): boolean {
   return hasMessengerImageGenerationIntent(text);
+}
+
+export function hasMessengerDeleteDataIntent(text: string): boolean {
+  const normalized = normalizeFastLaneText(text);
+  return /^(?:delete|remove|erase|wis|verwijder)\s+(?:my|mijn)?\s*(?:data|gegevens)(?:\s+(?:please|aub|a u b))?$/.test(
+    normalized,
+  );
 }
 
 type MessengerConversationIntentKind =
@@ -219,6 +229,12 @@ export function resolveMessengerFastLaneReply(
 ): { intent: MessengerFastLaneIntent; reply: string } | null {
   const intent = classifyMessengerFastLaneIntent(text);
   switch (intent) {
+    case "delete_data":
+      return {
+        intent,
+        reply:
+          "Ik heb je verwijderverzoek herkend en stuur dit niet door naar tools. Deze Messenger-gateway kan Facebook-chatgeschiedenis niet wissen; gebruik de Leaderbot delete-flow of privacy@leaderbot.live voor volledige verwijdering.",
+      };
     case "greeting":
       return {
         intent,
@@ -239,4 +255,3 @@ export function resolveMessengerFastLaneReply(
       return null;
   }
 }
-

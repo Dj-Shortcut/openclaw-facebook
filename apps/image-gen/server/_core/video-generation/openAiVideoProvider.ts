@@ -1,4 +1,5 @@
 import { safeLog } from "../logger";
+import { safelyAppendCostLedgerEntry } from "../costLedger";
 import type {
   VideoProvider,
   VideoProviderFailure,
@@ -236,7 +237,27 @@ async function createVideoJob(
   );
 
   const apiKey = getApiKey();
+  const attemptNow = new Date();
   await input.onProviderAttempt?.();
+  await safelyAppendCostLedgerEntry(
+    {
+      id: `${input.reqId}:${attemptNow.toISOString()}`,
+      channel: "facebook_messenger",
+      operation: "video_generation",
+      provider: "openai-video",
+      model: getModel(),
+      userKey: input.userKey,
+      reqId: input.reqId,
+      status: "provider_attempt_started",
+      estimatedCostUsd: null,
+      estimatedOutputCostUsd: null,
+      finalCostUsd: null,
+      costEstimateComplete: false,
+      estimateSource: "unpriced",
+      unpricedCostComponents: ["video_generation"],
+    },
+    attemptNow
+  );
   const response = await fetchWithTimeout(
     OPENAI_VIDEO_ENDPOINT,
     {

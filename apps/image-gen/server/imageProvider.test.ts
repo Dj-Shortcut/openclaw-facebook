@@ -4,6 +4,7 @@ import {
   getGeneratorStartupConfig,
   OpenAiImageGenerator,
 } from "./_core/imageService";
+import { readCostLedgerPeriod } from "./_core/costLedger";
 import { clearStateStore } from "./_core/stateStore";
 
 const GENERATED_IMAGE_BASE64 =
@@ -378,6 +379,7 @@ describe("image provider boundary", () => {
     process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
     process.env.OPENAI_IMAGE_SIZE = "1024x1536";
     process.env.OPENAI_IMAGE_QUALITY = "medium";
+    const period = new Date().toISOString().slice(0, 10);
     const privatePrompt = "private tester prompt for a neon train station";
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
@@ -422,7 +424,28 @@ describe("image provider boundary", () => {
         status: "provider_response_received",
       },
     ]);
+    const ledger = await readCostLedgerPeriod(period);
+    expect(ledger).toEqual([
+      expect.objectContaining({
+        channel: "facebook_messenger",
+        operation: "image_generation",
+        provider: "openai-images",
+        model: "gpt-image-2",
+        pricingModel: "gpt-image-1",
+        userKey: "testuser",
+        reqId: expect.stringMatching(/^req_[a-f0-9]{24}$/),
+        generationKind: "text_to_image",
+        status: "provider_attempt_started",
+        estimatedCostUsd: 0.025,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: null,
+        costEstimateComplete: true,
+        estimateSource: "env_override",
+        unpricedCostComponents: [],
+      }),
+    ]);
     expect(serializedLogs).not.toContain(privatePrompt);
+    expect(JSON.stringify(ledger)).not.toContain(privatePrompt);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 

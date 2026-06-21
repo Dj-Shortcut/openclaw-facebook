@@ -26,6 +26,7 @@ import {
   estimateOpenAiImageRequestCost,
   readOpenAiImageCostOptionsFromRequestBody,
 } from "./image-generation/imageCostEstimate";
+import { safelyAppendCostLedgerEntry } from "./costLedger";
 import { publishGeneratedImage } from "./image-generation/generatedImagePublisher";
 import type { GenerationKind } from "./image-generation/generationTypes";
 import {
@@ -286,6 +287,29 @@ export class OpenAiImageGenerator implements ImageGenerator {
           });
           try {
             await input.onProviderAttempt?.();
+            await safelyAppendCostLedgerEntry(
+              {
+                id: `${input.reqId}:${budgetNow.toISOString()}`,
+                channel: "facebook_messenger",
+                operation: "image_generation",
+                provider,
+                model: costEstimate.model,
+                pricingModel: costEstimate.pricingModel,
+                userKey: input.userKey,
+                reqId: input.reqId,
+                generationKind: input.generationKind ?? null,
+                status: "provider_attempt_started",
+                estimatedCostUsd: costEstimate.estimatedCostUsd ?? null,
+                estimatedOutputCostUsd:
+                  costEstimate.estimatedOutputCostUsd ?? null,
+                finalCostUsd: null,
+                costEstimateComplete: costEstimate.costEstimateComplete,
+                estimateSource: costEstimate.estimateSource,
+                unpricedCostComponents:
+                  costEstimate.unpricedCostComponents ?? [],
+              },
+              budgetNow
+            );
           } catch (error) {
             await releaseMessengerDailyImageBudgetReservation({ now: budgetNow });
             throw error;

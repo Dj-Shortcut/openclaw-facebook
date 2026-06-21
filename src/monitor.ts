@@ -145,6 +145,18 @@ const MESSENGER_MEDIA_FETCH_MAX_BYTES = 25 * 1024 * 1024;
 const MESSENGER_MEDIA_FETCH_MAX_REDIRECTS = 2;
 const MISSING_REFERENCED_PROMPT_REPLY =
   "Ik vind die prompt niet meer terug. Plak hem even opnieuw, dan maak ik de afbeelding.";
+export const FACEBOOK_PUBLIC_DM_DENIED_TOOLS = [
+  "image_generate",
+  "browser",
+  "canvas",
+  "web_fetch",
+  "firecrawl",
+  "exec",
+  "write",
+  "edit",
+  "apply_patch",
+  "group:fs",
+] as const;
 
 export function redactMessengerIdentifier(value: string | undefined): string {
   const normalized = value?.trim();
@@ -177,6 +189,34 @@ function pruneProcessedMessengerMessageIds(now: number): void {
       processedMessengerMessageIds.delete(key);
     }
   }
+}
+
+function hasWildcardAllowFrom(allowFrom: unknown): boolean {
+  return Array.isArray(allowFrom) && allowFrom.some((entry) => String(entry).trim() === "*");
+}
+
+function isPublicOpenMessengerAccount(account: ResolvedMessengerAccount): boolean {
+  return account.config?.dmPolicy === "open" && hasWildcardAllowFrom(account.config?.allowFrom);
+}
+
+export function applyFacebookPublicDmToolPolicy(
+  cfg: OpenClawConfig,
+  account: ResolvedMessengerAccount,
+): OpenClawConfig {
+  if (!isPublicOpenMessengerAccount(account)) {
+    return cfg;
+  }
+
+  const currentTools = (cfg as { tools?: { deny?: readonly string[] } }).tools ?? {};
+  const existingDeny = Array.isArray(currentTools.deny) ? currentTools.deny : [];
+  const deny = [...new Set([...existingDeny, ...FACEBOOK_PUBLIC_DM_DENIED_TOOLS])];
+  return {
+    ...cfg,
+    tools: {
+      ...currentTools,
+      deny,
+    },
+  } as OpenClawConfig;
 }
 
 function logMessengerWebhookRejected(reason: string, path: string): void {
@@ -869,6 +909,14 @@ function isMessengerToolFeedbackPayload(payload: ReplyPayload & { text: string }
   );
 }
 
+function redactMessengerToolFeedbackText(text: string): string {
+  return text
+    .replace(/"[^"]*(?:facebook:\d{6,}|\b\d{8,}\b|sender_id)[^"]*"/gi, '"[redacted]"')
+    .replace(/\bfacebook:\d{6,}\b/gi, "facebook:[redacted]")
+    .replace(/\bsender_id\b/gi, "sender_id:[redacted]")
+    .replace(/\b\d{8,}\b/g, "[redacted-id]");
+}
+
 export function normalizeMessengerReplyPayloadForDelivery(
   payload: ReplyPayload,
 ): (ReplyPayload & { text: string }) | null {
@@ -880,7 +928,7 @@ export function normalizeMessengerReplyPayloadForDelivery(
     return renderedPayload;
   }
 
-  const cleaned = renderedPayload.text
+  const cleaned = redactMessengerToolFeedbackText(renderedPayload.text)
     .replace(/^[\s!*\-:]+/u, "")
     .replace(/\s+/g, " ")
     .replace(/\bfailed\b/i, "is mislukt")
@@ -1464,14 +1512,17 @@ export async function processMessengerEvent(params: {
       params.runtime.error?.(danger(`messenger typing_on failed: ${String(err)}`));
     });
     logMessengerStage(params.trace, "messenger_response_sent", { senderAction: "typing_on" });
+  const inboundCfg = applyFacebookPublicDmToolPolicy(params.cfg, params.account);
+  const publicDmToolPolicy =
+    inboundCfg === params.cfg ? undefined : "facebook_public_high_cost_deny";
   const route = resolveAgentRoute({
-    cfg: params.cfg,
+    cfg: inboundCfg,
     channel: FACEBOOK_CHANNEL_ID,
     accountId: params.account.accountId,
     peer: { kind: "direct", id: senderId },
   });
   const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
-    cfg: params.cfg,
+    cfg: inboundCfg,
     agentId: route.agentId,
     sessionKey: route.sessionKey,
   });
@@ -1504,6 +1555,7 @@ export async function processMessengerEvent(params: {
     CommandAuthorized: shouldComputeCommandAuthorized(text, params.cfg),
     OriginatingChannel: FACEBOOK_CHANNEL_ID,
     OriginatingTo: `facebook:${senderId}`,
+    ToolPolicy: publicDmToolPolicy,
     ...mediaPayload,
   });
   const core = getMessengerRuntime();
@@ -1525,7 +1577,7 @@ export async function processMessengerEvent(params: {
         textForCommands: text,
       }),
       resolveTurn: () => ({
-        cfg: params.cfg,
+        cfg: inboundCfg,
         channel: FACEBOOK_CHANNEL_ID,
         accountId: route.accountId,
         agentId: route.agentId,
