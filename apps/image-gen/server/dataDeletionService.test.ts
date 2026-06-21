@@ -24,6 +24,7 @@ import {
   appendCostLedgerEntry,
   readCostLedgerPeriod,
 } from "./_core/costLedger";
+import * as costLedger from "./_core/costLedger";
 import {
   getMessengerGenerationCompletion,
   markMessengerGenerationCompleted,
@@ -170,6 +171,21 @@ describe("data deletion service", () => {
         userKey: otherUserKey,
       }),
     ]);
+  });
+
+  it("keeps user state when a critical deletion step fails", async () => {
+    const psid = "delete-step-failure-user";
+    const state = await Promise.resolve(getOrCreateState(psid));
+    const deleteCostLedgerSpy = vi
+      .spyOn(costLedger, "deleteCostLedgerEntriesForUser")
+      .mockRejectedValueOnce(new Error("temporary ledger failure"));
+
+    await deleteUserData(psid);
+
+    expect(await Promise.resolve(getState(psid))).toMatchObject({
+      userKey: state.userKey,
+    });
+    deleteCostLedgerSpy.mockRestore();
   });
 
   it("keeps a pending deletion marker when object storage deletion fails", async () => {

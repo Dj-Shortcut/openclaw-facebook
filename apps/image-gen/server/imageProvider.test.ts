@@ -290,7 +290,6 @@ describe("image provider boundary", () => {
     process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "1";
 
     const fetchMock = vi.fn(async () => createGeneratedImageResponse());
-    const onProviderAttempt = vi.fn(async () => undefined);
     vi.stubGlobal("fetch", fetchMock);
 
     const generator = new OpenAiImageGenerator();

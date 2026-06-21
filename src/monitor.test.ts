@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMessengerAgentTextForAttachments,
+  applyFacebookInboundToolPolicyToConfig,
   classifyMessengerFastLaneIntent,
   downloadMessengerMediaAttachment,
   extractImagePromptFromAssistantReply,
@@ -49,6 +50,9 @@ let temporaryStateDir: string | null = null;
 beforeEach(async () => {
   temporaryStateDir = await mkdtemp(join(tmpdir(), "openclaw-facebook-test-"));
   process.env.OPENCLAW_STATE_DIR = temporaryStateDir;
+  delete process.env.MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP;
+  delete process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP;
+  delete process.env.MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP;
 });
 
 afterEach(async () => {
@@ -417,6 +421,7 @@ describe("classifyMessengerFastLaneIntent", () => {
     ["maak afbeelding van een robot", "image"],
     ["Delete my data aub", "delete_data"],
     ["verwijder mijn data", "delete_data"],
+    ["verwijder mijn gegevens a.u.b.", "delete_data"],
   ] as const)("classifies %s as %s", (text, intent) => {
     expect(classifyMessengerFastLaneIntent(text)).toBe(intent);
   });
@@ -983,6 +988,37 @@ describe("processMessengerEvent image intents", () => {
     expect(inboundRun).not.toHaveBeenCalled();
   });
 
+  it("forwards delete-data requests with attachments to the privacy handler when enabled", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    const inboundRun = setGatewayRuntime();
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      expect(String(url)).toBe("https://image-gen.example.test/internal/messenger/webhook-event");
+      return new Response(JSON.stringify({ status: "queued" }), {
+        headers: { "content-type": "application/json" },
+        status: 202,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const event = messengerTextEvent("mid-delete-data-attachment", "Delete my data aub");
+    event.message = {
+      ...event.message,
+      attachments: [
+        {
+          type: "image",
+          payload: { url: "https://lookaside.facebook.com/delete-data-proof.jpg" },
+        },
+      ],
+    };
+
+    await processGatewayTestEvent(event, {
+      leaderbotBridgeEnabled: true,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(inboundRun).not.toHaveBeenCalled();
+  });
+
   it("does not budget-block delete-data forwards", async () => {
     process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
     process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
@@ -1491,6 +1527,21 @@ describe("resolveFacebookInboundToolPolicy", () => {
   it("does not add a deny policy for command-authorized turns", () => {
     expect(resolveFacebookInboundToolPolicy({ commandAuthorized: true })).toBeNull();
   });
+
+  it("merges the default deny policy into OpenClaw runtime config", () => {
+    const policy = resolveFacebookInboundToolPolicy({ commandAuthorized: false });
+    const hardened = applyFacebookInboundToolPolicyToConfig(
+      {
+        tools: { deny: ["existing_tool"], allow: ["safe_tool"] },
+      } as never,
+      policy
+    ) as { tools: { deny: string[]; allow: string[] } };
+
+    expect(hardened.tools.allow).toEqual(["safe_tool"]);
+    expect(hardened.tools.deny).toEqual(
+      expect.arrayContaining(["existing_tool", "image_generate", "exec", "group:fs"])
+    );
+  });
 });
 
 describe("processMessengerEvent tool policy", () => {
@@ -1512,11 +1563,20 @@ describe("processMessengerEvent tool policy", () => {
 
     expect(inboundRun).toHaveBeenCalledTimes(1);
     const runArg = inboundRun.mock.calls[0]?.[0] as {
-      adapter: { resolveTurn: () => { ctxPayload: Record<string, unknown> } };
+      adapter: {
+        resolveTurn: () => {
+          cfg: { tools?: { deny?: string[] } };
+          ctxPayload: Record<string, unknown>;
+        };
+      };
     };
-    const ctxPayload = runArg.adapter.resolveTurn().ctxPayload;
+    const resolvedTurn = runArg.adapter.resolveTurn();
+    const ctxPayload = resolvedTurn.ctxPayload;
 
     expect(ctxPayload.CommandAuthorized).toBe(false);
+    expect(resolvedTurn.cfg.tools?.deny).toEqual(
+      expect.arrayContaining(["image_generate", "video_generate", "exec", "group:fs"])
+    );
     expect(ctxPayload.ToolPolicy).toMatchObject({
       source: "facebook_untrusted_default",
       tools: {

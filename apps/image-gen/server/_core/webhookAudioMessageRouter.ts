@@ -414,8 +414,8 @@ function readUsdEnv(name: string): number | null {
     return null;
   }
 
-  const parsed = Number.parseFloat(raw);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function estimateAudioTranscriptionAttemptCost(): {

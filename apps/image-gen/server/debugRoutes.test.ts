@@ -62,6 +62,23 @@ describe("debug/admin routes", () => {
     }
   });
 
+  it("rejects impossible cost summary calendar dates", async () => {
+    process.env.ADMIN_TOKEN = "secret-admin-token";
+    const server = await startServer();
+
+    try {
+      const response = await fetch(
+        `${server.baseUrl}/admin/cost-summary?period=2026-13-99`,
+        { headers: { "x-admin-token": "secret-admin-token" } }
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "invalid period" });
+    } finally {
+      await server.close();
+    }
+  });
+
   it("returns owner-safe cost summary aggregates", async () => {
     process.env.ADMIN_TOKEN = "secret-admin-token";
     await appendCostLedgerEntry(
@@ -136,10 +153,12 @@ describe("debug/admin routes", () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({
+      const payload = await response.json();
+      expect(payload).toEqual({
         error: "Failed to summarize cost period",
-        requestId: "summary failed",
+        requestId: expect.stringMatching(/^cost_summary_[0-9a-f-]{36}$/),
       });
+      expect(JSON.stringify(payload)).not.toContain("summary failed");
     } finally {
       summaryMock.mockRestore();
       await server.close();

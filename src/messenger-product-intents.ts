@@ -19,8 +19,8 @@ export function normalizeFastLaneText(text: string): string {
 export function classifyMessengerFastLaneIntent(text: string): MessengerFastLaneIntent | null {
   const normalized = normalizeFastLaneText(text);
   if (
-    /^(?:delete|remove|erase)\s+(?:my\s+)?data(?:\s+(?:aub|please|pls))?$/.test(normalized) ||
-    /^(?:verwijder|wis)\s+(?:mijn\s+)?data(?:\s+(?:aub|alsjeblieft))?$/.test(normalized)
+    /^(?:delete|remove|erase)\s+(?:my\s+)?data(?:\s+(?:aub|a\s+u\s+b|please|pls))?$/.test(normalized) ||
+    /^(?:verwijder|wis)\s+(?:mijn\s+)?(?:data|gegevens)(?:\s+(?:aub|a\s+u\s+b|alsjeblieft))?$/.test(normalized)
   ) {
     return "delete_data";
   }

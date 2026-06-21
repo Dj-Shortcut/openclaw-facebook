@@ -50,6 +50,9 @@ vi.mock("./_core/messengerQuota", () => ({
 
 import type { HandlerContext } from "./_core/webhookHandlerTypes";
 import { tryHandleAudioMessage } from "./_core/webhookAudioMessageRouter";
+
+const FIXED_LEDGER_NOW = new Date("2026-06-21T12:00:00.000Z");
+const FIXED_LEDGER_PERIOD = "2026-06-21";
 import { type FacebookWebhookEvent } from "./_core/webhookHelpers";
 import { t } from "./_core/i18n";
 import { appendCostLedgerEntry, readCostLedgerPeriod } from "./_core/costLedger";
@@ -146,6 +149,7 @@ describe("webhook audio message router", () => {
     }
     vi.unstubAllGlobals();
     clearStateStore();
+    vi.useRealTimers();
   });
 
   it("returns false for captioned audio and does not invoke transcription", async () => {
@@ -226,6 +230,8 @@ describe("webhook audio message router", () => {
   });
 
   it("records priced audio transcription attempts with final cost when configured", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_LEDGER_NOW);
     const ctx = makeContext();
     process.env.OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD = "0.0042";
     const fetchMock = vi.fn(async (url: string | URL) => {
@@ -253,7 +259,7 @@ describe("webhook audio message router", () => {
     });
 
     expect(result).toBe(true);
-    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const ledgerEntries = await readCostLedgerPeriod(FIXED_LEDGER_PERIOD);
     expect(ledgerEntries).toEqual([
       expect.objectContaining({
         id: "req-audio-priced:openai-audio:1",
@@ -424,8 +430,9 @@ describe("webhook audio message router", () => {
     });
   });
 
-  it("blocks unpriced audio transcription when the global daily spend cap is enabled", async () => {
+  it("blocks misconfigured audio transcription cost overrides when spend caps are enabled", async () => {
     const ctx = makeContext();
+    process.env.OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD = "0";
     process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "1";
     const fetchMock = vi.fn(async () => {
       throw new Error("transcription provider should not be called");
@@ -459,6 +466,8 @@ describe("webhook audio message router", () => {
   });
 
   it("uses configured audio transcription estimates for spend cap checks", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_LEDGER_NOW);
     const ctx = makeContext();
     process.env.OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD = "0.025";
     process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "0.03";
@@ -479,7 +488,7 @@ describe("webhook audio message router", () => {
         estimateSource: "env_override",
         unpricedCostComponents: [],
       },
-      new Date()
+      FIXED_LEDGER_NOW
     );
     const fetchMock = vi.fn(async () => {
       throw new Error("transcription provider should not be called");
@@ -505,7 +514,7 @@ describe("webhook audio message router", () => {
       t("nl", "outOfFreeCredits"),
       "req-audio-priced-spend-cap"
     );
-    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const ledgerEntries = await readCostLedgerPeriod(FIXED_LEDGER_PERIOD);
     expect(ledgerEntries).toHaveLength(1);
     expect(ledgerEntries[0]?.id).toBe("req-existing-audio-spend:attempt-1");
   });

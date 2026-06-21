@@ -60,12 +60,13 @@ access:
 2. [x] Add full host-level budget gates before all expensive model/image/tool calls. Current Facebook-host expensive paths are covered by default-deny OpenClaw tool policy plus optional root-gateway caps for image-intent forwards, voice transcription, and generic Leaderbot event forwards; image-gen runtime provider calls keep their quota/spend gates.
 3. [x] Add default-deny tool policy for all high-cost tools exposed to untrusted Facebook-originated users.
 4. [x] Add per-user daily spend caps, a global Facebook daily spend cap, and monthly cost cap enforcement.
-5. [ ] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, usage, estimated cost, final cost, status, and UTC period.
-6. [ ] Add owner cost alerts and an owner dashboard for spend, quota blocks, duplicate skips, provider failures, queue health, and delivery failures.
-7. [ ] Continue verifying storage-proxy delivery under Messenger crawler constraints, including generated outputs and retained source images.
-8. [ ] Evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory.
-9. [ ] Keep public legal pages current (`/privacy`, `/terms`, `/data-deletion`) and aligned with Meta App Review, face-memory status, retention, and deletion behavior.
-10. [ ] Document Meta App Review impact for each new Messenger capability and avoid permission expansion unless product/policy approval is explicit.
+5. [x] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, estimated cost, final cost, status, and UTC period.
+6. [ ] Add richer provider usage dimensions to cost-ledger entries where providers expose safe metadata.
+7. [ ] Add owner cost alerts and an owner dashboard for spend, quota blocks, duplicate skips, provider failures, queue health, and delivery failures.
+8. [ ] Continue verifying storage-proxy delivery under Messenger crawler constraints, including generated outputs and retained source images.
+9. [ ] Evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory.
+10. [ ] Keep public legal pages current (`/privacy`, `/terms`, `/data-deletion`) and aligned with Meta App Review, face-memory status, retention, and deletion behavior.
+11. [ ] Document Meta App Review impact for each new Messenger capability and avoid permission expansion unless product/policy approval is explicit.
 
 Exit criteria: all paid/provider calls are budget-gated and ledgered, public legal
 copy matches behavior, owner monitoring can detect cost/reliability regressions,
@@ -165,14 +166,15 @@ Open cost-control work:
 3. [x] Add default-deny tool policy for all high-cost tools exposed to untrusted Facebook-originated users.
 4. [x] Add per-user daily spend caps for paired Facebook users.
 5. [x] Add global Facebook daily spend cap.
-6. [ ] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, usage, estimated cost, final cost, and status. Image, audio transcription, and generated-video attempts now write metadata-only entries and reconcile success/failure status; image plus optionally-priced audio/video attempts populate final cost when the estimate is complete. Richer usage dimensions remain open.
-7. [ ] Add owner dashboard for Facebook spend by day/month, account/page, `userKey`, blocked attempts, duplicate skips, and provider failures. The admin-only cost summary route now includes stored spend plus open/failed/blocked/status counts; dashboard UX remains open.
-8. [ ] Add user-facing balance/spend overview before paid rollout.
-9. [x] Add monthly cost cap enforcement.
-10. [x] Send cost alerts to owner for spend-cap blocks.
-11. [x] Add external uptime monitor for `/healthz`.
-12. [x] Add a dedicated generated-video quota namespace before enabling any video provider call.
-13. [ ] Move remaining feature-specific quota counters toward a single channel-neutral usage ledger before paid rollout.
+6. [x] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, estimated cost, final cost, and status. Image, audio transcription, and generated-video attempts now write metadata-only entries and reconcile success/failure status; image plus optionally-priced audio/video attempts populate final cost when the estimate is complete.
+7. [ ] Add richer provider usage dimensions to cost-ledger entries where providers expose safe metadata.
+8. [ ] Add owner dashboard for Facebook spend by day/month, account/page, `userKey`, blocked attempts, duplicate skips, and provider failures. The admin-only cost summary route now includes stored spend plus open/failed/blocked/status counts; dashboard UX remains open.
+9. [ ] Add user-facing balance/spend overview before paid rollout.
+10. [x] Add monthly cost cap enforcement.
+11. [x] Send cost alerts to owner for spend-cap blocks.
+12. [x] Add external uptime monitor for `/healthz`.
+13. [x] Add a dedicated generated-video quota namespace before enabling any video provider call.
+14. [ ] Move remaining feature-specific quota counters toward a single channel-neutral usage ledger before paid rollout.
 
 ### Cost Ledger Reliability Hardening (Phase 2)
 

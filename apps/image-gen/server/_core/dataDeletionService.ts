@@ -53,50 +53,58 @@ export async function deleteUserData(psid: string): Promise<void> {
   const userKey = state?.userKey ?? anonymizePsid(psid);
   const logUser = toLogUser(userKey);
 
-  const runStep = async (step: string, fn: () => Promise<void>) => {
+  const runStep = async (step: string, fn: () => Promise<void>): Promise<boolean> => {
     try {
       await fn();
+      return true;
     } catch (error) {
       safeLog("user_data_delete_step_failed", {
         user: logUser,
         step,
         errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
       });
+      return false;
     }
   };
 
-  await runStep("cost_ledger", async () => {
+  let deleteStepsSucceeded = true;
+
+  deleteStepsSucceeded = (await runStep("cost_ledger", async () => {
     await deleteCostLedgerEntriesForUser(userKey);
-  });
+  })) && deleteStepsSucceeded;
 
   if (!state) {
-    await Promise.resolve(clearUserState(psid));
+    if (deleteStepsSucceeded) {
+      await Promise.resolve(clearUserState(psid));
+    }
     return;
   }
 
   const urls = Array.from(new Set(getStateImageUrls(state)));
 
-  await runStep("face_memory", () => deleteFaceMemoryForUser(psid));
+  deleteStepsSucceeded = (await runStep("face_memory", () =>
+    deleteFaceMemoryForUser(psid)
+  )) && deleteStepsSucceeded;
   const deleteResults = await Promise.all(
     urls.map(async url => ({
       url,
       deleted: await deleteStoredUrl(logUser, url),
     }))
   );
-  await runStep("legacy_chat_history", () =>
+  deleteStepsSucceeded = (await runStep("legacy_chat_history", () =>
     Promise.resolve(deleteScopedState(LEGACY_CHAT_HISTORY_SCOPE, state.userKey))
-  );
-  await runStep("messenger_generation_completion", () =>
+  )) && deleteStepsSucceeded;
+  deleteStepsSucceeded = (await runStep("messenger_generation_completion", () =>
     deleteMessengerGenerationCompletionsForUser(state.userKey)
-  );
+  )) && deleteStepsSucceeded;
   if (state.lastGeneratedVideoProviderJobId) {
-    await runStep("video_provider_artifact", () =>
+    deleteStepsSucceeded = (await runStep("video_provider_artifact", () =>
       deleteProviderVideoForUser({
         provider: state.lastGeneratedVideoProvider ?? null,
         providerJobId: state.lastGeneratedVideoProviderJobId!,
         reqId: "delete-my-data",
       })
-    );
+    )) && deleteStepsSucceeded;
   }
 
   const failedDeletes = deleteResults
@@ -106,6 +114,10 @@ export async function deleteUserData(psid: string): Promise<void> {
     await Promise.resolve(
       setPendingSourceImageDeleteUrls(psid, failedDeletes)
     );
+    return;
+  }
+
+  if (!deleteStepsSucceeded) {
     return;
   }
 

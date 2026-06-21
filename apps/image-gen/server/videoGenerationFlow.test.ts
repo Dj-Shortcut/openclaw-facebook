@@ -32,6 +32,9 @@ import { createMessengerVideoGenerationRunner } from "./_core/videoGenerationFlo
 import { setVideoProviderForTests } from "./_core/video-generation/videoProviderRegistry";
 import type { VideoProvider } from "./_core/video-generation/videoProvider";
 
+const FIXED_LEDGER_NOW = new Date("2026-06-21T12:00:00.000Z");
+const FIXED_LEDGER_PERIOD = "2026-06-21";
+
 function makeProvider(result: Awaited<ReturnType<VideoProvider["generateVideo"]>>): VideoProvider {
   return {
     generateVideo: vi.fn(async input => {
@@ -136,6 +139,8 @@ describe("messenger video generation flow", () => {
   });
 
   it("records priced video attempts with final cost when configured", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_LEDGER_NOW);
     process.env.OPENAI_VIDEO_GENERATION_ESTIMATED_COST_USD = "0.12";
     const provider = makeProvider({
       kind: "success",
@@ -157,7 +162,7 @@ describe("messenger video generation flow", () => {
       "laat hem zwaaien"
     );
 
-    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const ledgerEntries = await readCostLedgerPeriod(FIXED_LEDGER_PERIOD);
     expect(ledgerEntries).toEqual([
       expect.objectContaining({
         id: "req-video-priced:video:1",
@@ -178,6 +183,45 @@ describe("messenger video generation flow", () => {
     expect(JSON.stringify(ledgerEntries)).not.toContain("laat hem zwaaien");
     expect(JSON.stringify(ledgerEntries)).not.toContain("https://img.example/source.jpg");
     expect(JSON.stringify(ledgerEntries)).not.toContain("video-priced-user\"");
+  });
+
+  it("keeps provider success ledger status when downstream video storage fails", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_LEDGER_NOW);
+    process.env.OPENAI_VIDEO_GENERATION_ESTIMATED_COST_USD = "0.12";
+    storagePutMock.mockRejectedValueOnce(new Error("storage unavailable"));
+    const provider = makeProvider({
+      kind: "success",
+      provider: "test",
+      providerJobId: "video-job-storage-fails",
+      videoBytes: new Uint8Array([1, 2, 3]),
+      contentType: "video/mp4",
+    });
+    setVideoProviderForTests(provider);
+    const deps = makeDeps();
+    const runVideoGeneration = createMessengerVideoGenerationRunner(deps);
+
+    await runVideoGeneration(
+      "video-storage-failure-user",
+      "video-storage-failure-user-key",
+      "req-video-storage-failure",
+      "nl",
+      "https://img.example/source.jpg",
+      "laat hem zwaaien"
+    );
+
+    expect(deps.sendLoggedText).toHaveBeenCalledWith(
+      "video-storage-failure-user",
+      t("nl", "videoGenerationGenericFailure"),
+      "req-video-storage-failure"
+    );
+    expect(await readCostLedgerPeriod(FIXED_LEDGER_PERIOD)).toEqual([
+      expect.objectContaining({
+        id: "req-video-storage-failure:video:1",
+        status: "provider_attempt_succeeded",
+        finalCostUsd: 0.12,
+      }),
+    ]);
   });
 
   it("does not call the provider when video quota is exhausted", async () => {
@@ -374,7 +418,8 @@ describe("messenger video generation flow", () => {
     });
   });
 
-  it("blocks unpriced video generation when the global daily spend cap is enabled", async () => {
+  it("blocks misconfigured video generation cost overrides when spend caps are enabled", async () => {
+    process.env.OPENAI_VIDEO_GENERATION_ESTIMATED_COST_USD = "0.025usd";
     process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "1";
     const provider: VideoProvider = {
       generateVideo: vi.fn(async input => {
@@ -407,6 +452,8 @@ describe("messenger video generation flow", () => {
   });
 
   it("uses configured video generation estimates for spend cap checks", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_LEDGER_NOW);
     process.env.OPENAI_VIDEO_GENERATION_ESTIMATED_COST_USD = "0.025";
     process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "0.03";
     await appendCostLedgerEntry(
@@ -426,7 +473,7 @@ describe("messenger video generation flow", () => {
         estimateSource: "env_override",
         unpricedCostComponents: [],
       },
-      new Date()
+      FIXED_LEDGER_NOW
     );
     const provider: VideoProvider = {
       generateVideo: vi.fn(async input => {
@@ -455,7 +502,7 @@ describe("messenger video generation flow", () => {
       t("nl", "outOfVideoCredits"),
       "req-video-priced-spend-cap"
     );
-    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const ledgerEntries = await readCostLedgerPeriod(FIXED_LEDGER_PERIOD);
     expect(ledgerEntries).toHaveLength(1);
     expect(ledgerEntries[0]?.id).toBe("req-existing-video-spend:attempt-1");
   });

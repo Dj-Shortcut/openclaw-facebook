@@ -1007,6 +1007,28 @@ export function resolveFacebookInboundToolPolicy(params: {
   };
 }
 
+export function applyFacebookInboundToolPolicyToConfig(
+  cfg: OpenClawConfig,
+  policy: FacebookInboundToolPolicy | null
+): OpenClawConfig {
+  if (!policy) {
+    return cfg;
+  }
+
+  const currentTools = (cfg as { tools?: Record<string, unknown> }).tools ?? {};
+  const currentDeny = Array.isArray(currentTools.deny)
+    ? currentTools.deny.filter((tool): tool is string => typeof tool === "string")
+    : [];
+
+  return {
+    ...cfg,
+    tools: {
+      ...currentTools,
+      deny: [...new Set([...currentDeny, ...policy.tools.deny])],
+    },
+  } as OpenClawConfig;
+}
+
 function isMessengerToolFeedbackPayload(payload: ReplyPayload & { text: string }): boolean {
   if (isReplyPayloadNonTerminalToolErrorWarning(payload)) {
     return true;
@@ -1354,7 +1376,6 @@ export async function processMessengerEvent(params: {
     }
     if (
       leaderbotBridgeEnabled &&
-      attachments.length === 0 &&
       classifyMessengerFastLaneIntent(text) === "delete_data"
     ) {
       logMessengerStage(params.trace, "messenger_event_forward_started", {
@@ -1803,14 +1824,20 @@ export async function processMessengerEvent(params: {
       params.runtime.error?.(danger(`messenger typing_on failed: ${String(err)}`));
     });
     logMessengerStage(params.trace, "messenger_response_sent", { senderAction: "typing_on" });
+  const commandAuthorized = shouldComputeCommandAuthorized(text, params.cfg);
+  const facebookToolPolicy = resolveFacebookInboundToolPolicy({ commandAuthorized });
+  const inboundCfg = applyFacebookInboundToolPolicyToConfig(
+    params.cfg,
+    facebookToolPolicy
+  );
   const route = resolveAgentRoute({
-    cfg: params.cfg,
+    cfg: inboundCfg,
     channel: FACEBOOK_CHANNEL_ID,
     accountId: params.account.accountId,
     peer: { kind: "direct", id: senderId },
   });
   const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
-    cfg: params.cfg,
+    cfg: inboundCfg,
     agentId: route.agentId,
     sessionKey: route.sessionKey,
   });
@@ -1824,8 +1851,6 @@ export async function processMessengerEvent(params: {
     previousTimestamp,
     envelope: envelopeOptions,
   });
-  const commandAuthorized = shouldComputeCommandAuthorized(text, params.cfg);
-  const facebookToolPolicy = resolveFacebookInboundToolPolicy({ commandAuthorized });
   const ctxPayload = finalizeInboundContext({
     Body: body,
     BodyForAgent: textForAgent,
@@ -1873,7 +1898,7 @@ export async function processMessengerEvent(params: {
         textForCommands: text,
       }),
       resolveTurn: () => ({
-        cfg: params.cfg,
+        cfg: inboundCfg,
         channel: FACEBOOK_CHANNEL_ID,
         accountId: route.accountId,
         agentId: route.agentId,

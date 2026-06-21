@@ -60,8 +60,8 @@ function readUsdEnv(name: string): number | null {
     return null;
   }
 
-  const parsed = Number.parseFloat(raw);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function estimateVideoGenerationAttemptCost(): {
@@ -229,6 +229,7 @@ export function createMessengerVideoGenerationRunner(
       let pendingQuotaReservation: VideoGenerationQuotaReservation | null = null;
       let lastVideoLedgerEntryId: string | null = null;
       let lastVideoLedgerEntryRecordedAt: Date | null = null;
+      let lastVideoLedgerEntrySucceeded = false;
       const flowDeadline = createVideoFlowDeadline();
       try {
         pendingQuotaReservation = await reserveVideoGenerationForAttempt(psid);
@@ -333,6 +334,7 @@ export function createMessengerVideoGenerationRunner(
             );
             lastVideoLedgerEntryId = ledgerEntryId;
             lastVideoLedgerEntryRecordedAt = budgetNow;
+            lastVideoLedgerEntrySucceeded = false;
           } catch (error) {
             await releaseMessengerDailyVideoBudgetReservation({ now: budgetNow });
             throw error;
@@ -352,29 +354,6 @@ export function createMessengerVideoGenerationRunner(
           timeoutMs: getMessengerVideoTimeoutMs(),
           onProviderAttempt: commitProviderAttemptQuota,
         });
-
-        if (hasVideoFlowTimedOut(flowDeadline)) {
-          if (lastVideoLedgerEntryId && lastVideoLedgerEntryRecordedAt) {
-            await safelyUpdateCostLedgerEntry(
-              lastVideoLedgerEntryId,
-              { status: "provider_attempt_failed" },
-              lastVideoLedgerEntryRecordedAt
-            );
-          }
-          safeLog("messenger_video_generation_flow_timeout", {
-            level: "warn",
-            reqId,
-            timeoutMs: flowDeadline.timeoutMs,
-          });
-          sendOutcome = await sendVideoText(
-            deps,
-            psid,
-            t(lang, "videoGenerationTimeout"),
-            reqId,
-            "flow_timeout"
-          );
-          return;
-        }
 
         if (providerResult.kind === "failure") {
           if (lastVideoLedgerEntryId && lastVideoLedgerEntryRecordedAt) {
@@ -403,8 +382,24 @@ export function createMessengerVideoGenerationRunner(
           return;
         }
 
+        if (lastVideoLedgerEntryId && lastVideoLedgerEntryRecordedAt) {
+          await safelyUpdateCostLedgerEntry(
+            lastVideoLedgerEntryId,
+            {
+              status: "provider_attempt_succeeded",
+              finalCostUsd: costEstimate.finalCostUsd,
+            },
+            lastVideoLedgerEntryRecordedAt
+          );
+          lastVideoLedgerEntrySucceeded = true;
+        }
+
         if (hasVideoFlowTimedOut(flowDeadline)) {
-          if (lastVideoLedgerEntryId && lastVideoLedgerEntryRecordedAt) {
+          if (
+            lastVideoLedgerEntryId &&
+            lastVideoLedgerEntryRecordedAt &&
+            !lastVideoLedgerEntrySucceeded
+          ) {
             await safelyUpdateCostLedgerEntry(
               lastVideoLedgerEntryId,
               { status: "provider_attempt_failed" },
@@ -433,7 +428,11 @@ export function createMessengerVideoGenerationRunner(
         });
 
         if (hasVideoFlowTimedOut(flowDeadline)) {
-          if (lastVideoLedgerEntryId && lastVideoLedgerEntryRecordedAt) {
+          if (
+            lastVideoLedgerEntryId &&
+            lastVideoLedgerEntryRecordedAt &&
+            !lastVideoLedgerEntrySucceeded
+          ) {
             await safelyUpdateCostLedgerEntry(
               lastVideoLedgerEntryId,
               { status: "provider_attempt_failed" },
@@ -464,16 +463,6 @@ export function createMessengerVideoGenerationRunner(
           )
         );
         sendOutcome = await sendVideoAttachment(deps, psid, storedVideo.url, reqId);
-        if (lastVideoLedgerEntryId && lastVideoLedgerEntryRecordedAt) {
-          await safelyUpdateCostLedgerEntry(
-            lastVideoLedgerEntryId,
-            {
-              status: "provider_attempt_succeeded",
-              finalCostUsd: costEstimate.finalCostUsd,
-            },
-            lastVideoLedgerEntryRecordedAt
-          );
-        }
         safeLog("messenger_video_generation_completed", {
           reqId,
           provider: providerResult.provider,
@@ -482,7 +471,11 @@ export function createMessengerVideoGenerationRunner(
           sent: sendOutcome.sent,
         });
       } catch (error) {
-        if (lastVideoLedgerEntryId && lastVideoLedgerEntryRecordedAt) {
+        if (
+          lastVideoLedgerEntryId &&
+          lastVideoLedgerEntryRecordedAt &&
+          !lastVideoLedgerEntrySucceeded
+        ) {
           await safelyUpdateCostLedgerEntry(
             lastVideoLedgerEntryId,
             { status: "provider_attempt_failed" },

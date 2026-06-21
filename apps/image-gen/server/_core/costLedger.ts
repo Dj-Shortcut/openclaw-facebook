@@ -7,6 +7,7 @@ import {
   setEphemeralKeyIfAbsent,
   writeScopedState,
 } from "./stateStore";
+import { getRedisClient, isRedisEnabled } from "./redis";
 
 const COST_LEDGER_SCOPE = "cost:ledger:period";
 const COST_LEDGER_TTL_SECONDS = 90 * 24 * 60 * 60;
@@ -129,6 +130,56 @@ function costLedgerPeriodLockKey(period: string): string {
   return `lock:${COST_LEDGER_SCOPE}:${period}`;
 }
 
+function costLedgerPeriodStorageKey(period: string): string {
+  return `${COST_LEDGER_SCOPE}:${period}`;
+}
+
+function isRedisWrongTypeError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /\bWRONGTYPE\b/i.test(error.message)
+  );
+}
+
+async function readLegacyRedisListLedgerPeriod(
+  period: string
+): Promise<StoredCostLedgerEntry[]> {
+  if (!isRedisEnabled()) {
+    throw new Error("Redis is not enabled");
+  }
+
+  const redis = await getRedisClient();
+  const payloads = await redis.lrange(costLedgerPeriodStorageKey(period), 0, -1);
+  const entries: StoredCostLedgerEntry[] = [];
+  let malformedEntries = 0;
+
+  for (const payload of payloads) {
+    try {
+      entries.push(JSON.parse(payload) as StoredCostLedgerEntry);
+    } catch {
+      malformedEntries += 1;
+    }
+  }
+
+  if (malformedEntries > 0) {
+    safeLog("cost_ledger_legacy_list_entry_parse_failed", {
+      level: "warn",
+      period,
+      malformedEntries,
+    });
+  }
+
+  if (entries.length > 0) {
+    safeLog("cost_ledger_legacy_list_read", {
+      level: "warn",
+      period,
+      entries: entries.length,
+    });
+  }
+
+  return entries;
+}
+
 function wait(ms: number): Promise<void> {
   return new Promise(resolve => {
     setTimeout(resolve, ms);
@@ -237,11 +288,18 @@ function addToRequestBucket(
 export async function readCostLedgerPeriod(
   period: string
 ): Promise<StoredCostLedgerEntry[]> {
-  return (
-    (await Promise.resolve(
-      readScopedState<StoredCostLedgerEntry[]>(COST_LEDGER_SCOPE, period)
-    )) ?? []
-  );
+  try {
+    return (
+      (await Promise.resolve(
+        readScopedState<StoredCostLedgerEntry[]>(COST_LEDGER_SCOPE, period)
+      )) ?? []
+    );
+  } catch (error) {
+    if (isRedisWrongTypeError(error)) {
+      return await readLegacyRedisListLedgerPeriod(period);
+    }
+    throw error;
+  }
 }
 
 function getRetainedLedgerPeriods(now = new Date()): string[] {
