@@ -1,4 +1,5 @@
 import type express from "express";
+import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { createAdminAuthRateLimiter, verifyAdminToken } from "../adminAuth";
 import { summarizeCostLedgerPeriod } from "../costLedger";
@@ -15,6 +16,13 @@ const debugBuildHeadersSchema = z.object({
 });
 const costSummaryQuerySchema = z.object({
   period: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+const adminCostSummaryRouteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
 function currentUtcPeriod(): string {
@@ -100,6 +108,7 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
 
   app.get(
     "/admin/cost-summary",
+    adminCostSummaryRouteLimiter,
     createAdminAuthRateLimiter({ eventName: "admin_cost_summary_auth_rate_limited" }),
     async (req, res) => {
       if (

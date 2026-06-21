@@ -80,6 +80,10 @@ function toRequestSummaryKey(reqId: string): string {
   return `sha256:${createHash("sha256").update(reqId).digest("hex").slice(0, 12)}`;
 }
 
+function createStringRecord<T>(): Record<string, T> {
+  return Object.create(null);
+}
+
 function mergeSummaryLabel(previous: string, next: string): string {
   if (previous === next) {
     return previous;
@@ -123,7 +127,7 @@ function addToRequestBucket(
       finalCostUsd: 0,
       operation: entry.operation,
       provider: entry.provider,
-      statuses: {},
+      statuses: createStringRecord<number>(),
       completeEstimateEntries: 0,
       incompleteEstimateEntries: 0,
       unpricedCostComponents: [],
@@ -300,9 +304,10 @@ function summarizeCostLedgerEntries(
 ): CostLedgerSummary {
   const users = new Set<string>();
   const unpriced = new Set<string>();
-  const byOperation: Record<string, CostSummaryBucket> = {};
-  const byProvider: Record<string, CostSummaryBucket> = {};
-  const byRequest: Record<string, CostRequestSummaryBucket> = {};
+  const byOperation: Record<string, CostSummaryBucket> = createStringRecord();
+  const byProvider: Record<string, CostSummaryBucket> = createStringRecord();
+  const byRequest: Record<string, CostRequestSummaryBucket> =
+    createStringRecord<CostRequestSummaryBucket>();
   let estimatedCostUsd = 0;
   let finalCostUsd = 0;
   let completeEstimateEntries = 0;
