@@ -168,6 +168,19 @@ describe("source image fetcher", () => {
     expect(mockHttpsRequest).not.toHaveBeenCalled();
   });
 
+  it("blocks private IP literals even when they are allowlisted", async () => {
+    process.env.SOURCE_IMAGE_ALLOWED_HOSTS = "127.0.0.1";
+
+    await expect(
+      fetchExternalSourceImageForIngress({
+        sourceImageUrl: "https://127.0.0.1/source.jpg",
+        reqId: "req-source-private-literal",
+      })
+    ).rejects.toBeInstanceOf(InvalidSourceImageUrlError);
+
+    expect(mockHttpsRequest).not.toHaveBeenCalled();
+  });
+
   it("keeps redirects blocked for source-image fetches", async () => {
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS = "scontent.xx.fbcdn.net";
     setSourceImageDnsLookupForTests(async () => [{ address: "31.13.84.36", family: 4 }]);

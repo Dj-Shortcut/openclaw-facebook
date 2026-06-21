@@ -411,8 +411,16 @@ async function assertHostnameResolvesToPublicIpOrThrow(
   reqId: string
 ): Promise<string[]> {
   const hostname = sourceImageUrl.hostname.toLowerCase();
+  const hostnameIpType = net.isIP(hostname);
 
-  if (net.isIP(hostname)) {
+  if (hostnameIpType) {
+    if (isBlockedIpAddress(hostname)) {
+      return blockSourceImageUrl(reqId, "dns_resolved_private_ip", {
+        hostname,
+        address: hostname,
+        family: hostnameIpType,
+      });
+    }
     return [hostname];
   }
 
