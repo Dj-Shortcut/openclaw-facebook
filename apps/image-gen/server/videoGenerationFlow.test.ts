@@ -448,6 +448,7 @@ describe("messenger video generation flow", () => {
     const deps = makeDeps();
     const runVideoGeneration = createMessengerVideoGenerationRunner(deps);
 
+    const periodBeforeRun = new Date().toISOString().slice(0, 10);
     await runVideoGeneration(
       "video-openai-failed-user",
       "video-openai-failed-user-key",
@@ -456,8 +457,20 @@ describe("messenger video generation flow", () => {
       "https://img.example/source.jpg",
       "laat hem dansen"
     );
+    const periodAfterRun = new Date().toISOString().slice(0, 10);
+    const ledgerEntries = (
+      await Promise.all(
+        [...new Set([periodBeforeRun, periodAfterRun])].map(period =>
+          readCostLedgerPeriod(period)
+        )
+      )
+    )
+      .flat()
+      .filter(
+        entry => entry.reqId === requestSummaryKey("req-video-openai-failed")
+      );
 
-    expect(await readCostLedgerPeriod(FIXED_LEDGER_PERIOD)).toEqual([
+    expect(ledgerEntries).toEqual([
       expect.objectContaining({
         id: "req-video-openai-failed:video:1",
         status: "provider_attempt_failed",
