@@ -5,6 +5,7 @@ import { bindTestHttpServer } from "./testHttpServer";
 import { registerDebugRoutes } from "./_core/runtime/debugRoutes";
 import { appendCostLedgerEntry } from "./_core/costLedger";
 import * as costLedger from "./_core/costLedger";
+import * as messengerGenerationQueue from "./_core/messengerGenerationQueue";
 import { clearStateStore } from "./_core/stateStore";
 import { resetAdminAuthRateLimiterForTests } from "./_core/adminAuth";
 
@@ -141,6 +142,60 @@ describe("debug/admin routes", () => {
       expect(JSON.stringify(payload)).not.toContain("facebook:");
       expect(JSON.stringify(payload)).not.toContain("secret-admin-token");
     } finally {
+      await server.close();
+    }
+  });
+
+  it("keeps cost summaries available when queue health cannot be scraped", async () => {
+    process.env.ADMIN_TOKEN = "secret-admin-token";
+    await appendCostLedgerEntry(
+      {
+        id: "req-cost-route-queue-fail:attempt-1",
+        channel: "facebook_messenger",
+        operation: "image_generation",
+        provider: "openai-images",
+        model: "gpt-image-2",
+        userKey: "user-key-1",
+        reqId: "req-cost-route-queue-fail",
+        status: "provider_attempt_started",
+        estimatedCostUsd: 0.025,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: null,
+        costEstimateComplete: true,
+        estimateSource: "env_override",
+        unpricedCostComponents: [],
+      },
+      new Date("2026-06-21T12:00:00.000Z")
+    );
+    const queueStatsMock = vi
+      .spyOn(messengerGenerationQueue, "getMessengerGenerationQueueStats")
+      .mockRejectedValue(new Error("queue scrape failed"));
+    const server = await startServer();
+
+    try {
+      const response = await fetch(
+        `${server.baseUrl}/admin/cost-summary?period=2026-06-21`,
+        { headers: { "x-admin-token": "secret-admin-token" } }
+      );
+      const payload = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(payload).toMatchObject({
+        period: "2026-06-21",
+        totalEntries: 1,
+        estimatedCostUsd: 0.025,
+        queueHealth: {
+          available: false,
+          scrapeError: true,
+          enabled: true,
+          queued: 0,
+          processing: 0,
+          failed: 0,
+        },
+      });
+      expect(JSON.stringify(payload)).not.toContain("queue scrape failed");
+    } finally {
+      queueStatsMock.mockRestore();
       await server.close();
     }
   });

@@ -6,7 +6,10 @@ import { createAdminAuthRateLimiter, verifyAdminToken } from "../adminAuth";
 import { summarizeCostLedgerPeriod } from "../costLedger";
 import { isRedisHttpRateLimitEnabled } from "../httpRateLimit";
 import { safeLog } from "../messengerApi";
-import { getMessengerGenerationQueueStats } from "../messengerGenerationQueue";
+import {
+  getMessengerGenerationQueueStats,
+  type MessengerGenerationQueueStats,
+} from "../messengerGenerationQueue";
 import { isRedisReplayProtectionEnabled } from "../webhookReplayProtection";
 
 type VersionPayload = {
@@ -38,6 +41,35 @@ const adminCostSummaryRouteLimiter = rateLimit({
 
 function currentUtcPeriod(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+type AdminCostSummaryQueueHealth =
+  | (MessengerGenerationQueueStats & { available?: true })
+  | (MessengerGenerationQueueStats & {
+      available: false;
+      scrapeError: true;
+    });
+
+async function readAdminCostSummaryQueueHealth(
+  period: string
+): Promise<AdminCostSummaryQueueHealth> {
+  try {
+    return await getMessengerGenerationQueueStats();
+  } catch (error) {
+    safeLog("admin_cost_summary_queue_health_unavailable", {
+      level: "warn",
+      period,
+      errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
+    });
+    return {
+      available: false,
+      scrapeError: true,
+      enabled: true,
+      queued: 0,
+      processing: 0,
+      failed: 0,
+    };
+  }
 }
 
 function readAdminTokenHeader(req: express.Request): string | undefined {
@@ -138,10 +170,8 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
 
       const period = parsedQuery.data.period ?? currentUtcPeriod();
       try {
-        const [summary, queueHealth] = await Promise.all([
-          summarizeCostLedgerPeriod(period),
-          getMessengerGenerationQueueStats(),
-        ]);
+        const summary = await summarizeCostLedgerPeriod(period);
+        const queueHealth = await readAdminCostSummaryQueueHealth(period);
         return res.status(200).json({
           ...summary,
           queueHealth,
