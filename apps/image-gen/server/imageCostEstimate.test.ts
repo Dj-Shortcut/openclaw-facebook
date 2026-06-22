@@ -44,6 +44,30 @@ describe("image cost estimates", () => {
     });
   });
 
+  it.each(["0", "0.019usd"])(
+    "ignores invalid explicit per-image estimate override %s",
+    override => {
+      process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = override;
+
+      expect(
+        estimateOpenAiImageRequestCost({
+          model: "gpt-5",
+          pricingModel: "gpt-image-1",
+          size: "1024x1024",
+          quality: "low",
+        })
+      ).toEqual({
+        model: "gpt-5",
+        pricingModel: "gpt-image-1",
+        size: "1024x1024",
+        quality: "low",
+        estimatedCostUsd: 0.011,
+        costEstimateComplete: true,
+        estimateSource: "gpt_image_1_table",
+      });
+    }
+  );
+
   it("prices image-generation tool output separately from the Responses model", () => {
     expect(
       estimateOpenAiImageRequestCost({

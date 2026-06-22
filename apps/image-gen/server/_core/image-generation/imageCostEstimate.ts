@@ -43,8 +43,8 @@ function readUsdEnv(name: string): number | undefined {
     return undefined;
   }
 
-  const parsed = Number.parseFloat(raw);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function readString(value: unknown): string | undefined {
