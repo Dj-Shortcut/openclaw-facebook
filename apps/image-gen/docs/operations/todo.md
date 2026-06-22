@@ -168,7 +168,7 @@ Open cost-control work:
 5. [x] Add global Facebook daily spend cap.
 6. [x] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, estimated cost, final cost, and status. Image, audio transcription, and generated-video attempts now write metadata-only entries and reconcile success/failure status; image plus optionally-priced audio/video attempts populate final cost when the estimate is complete.
 7. [ ] Add richer provider usage dimensions to cost-ledger entries where providers expose safe metadata.
-8. [ ] Add owner dashboard for Facebook spend by day/month, account/page, `userKey`, blocked attempts, duplicate skips, and provider failures. The admin-only cost summary route now includes stored spend plus open/failed/blocked/status counts; dashboard UX remains open.
+8. [ ] Add owner dashboard for Facebook spend by day/month, account/page, `userKey`, blocked attempts, duplicate skips, and provider failures. The admin-only cost summary route now includes stored spend plus open/failed/blocked/status counts and Messenger generation queue health; dashboard UX remains open.
 9. [ ] Add user-facing balance/spend overview before paid rollout.
 10. [x] Add monthly cost cap enforcement.
 11. [x] Send cost alerts to owner for spend-cap blocks.
