@@ -457,7 +457,7 @@ describe("messenger video generation flow", () => {
       "laat hem dansen"
     );
 
-    expect(await readCostLedgerPeriod(FIXED_LEDGER_PERIOD)).toEqual([
+    expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([
       expect.objectContaining({
         id: "req-video-openai-failed:video:1",
         status: "provider_attempt_failed",
