@@ -97,17 +97,33 @@ jobs:
           git add package.json package-lock.json manifest.test.ts deploy/fly-gateway/Dockerfile
           git commit -m "Update OpenClaw to ${OPENCLAW_VERSION}"
           git push --force-with-lease origin "$branch"
+          is_pr_policy_denial() {
+            local operation="$1"
+            local error_output="$2"
+            grep -qiE "Resource not accessible by integration|GraphQL.*${operation}|${operation}.*(forbidden|not authorized|permission)" <<<"$error_output"
+          }
+
           if gh pr view "$branch" >/dev/null 2>&1; then
-            if ! gh pr edit "$branch" \
+            if ! edit_err="$(gh pr edit "$branch" \
               --title "Update OpenClaw to ${OPENCLAW_VERSION}" \
-              --body-file /tmp/openclaw-update-pr-body.md; then
-              echo "::notice::Updated branch $branch, but GitHub token policy blocked PR editing. Open or update the PR manually."
+              --body-file /tmp/openclaw-update-pr-body.md 2>&1)"; then
+              if is_pr_policy_denial "updatePullRequest" "$edit_err"; then
+                echo "::notice::Updated branch $branch, but GitHub token policy blocked PR editing. Open or update the PR manually."
+              else
+                echo "$edit_err" >&2
+                exit 1
+              fi
             fi
-          elif ! gh pr create \
+          elif ! create_err="$(gh pr create \
             --base main \
             --head "$branch" \
             --title "Update OpenClaw to ${OPENCLAW_VERSION}" \
-            --body-file /tmp/openclaw-update-pr-body.md; then
-            echo "::notice::Pushed $branch, but GitHub token policy blocked PR creation. Open the PR manually from the pushed branch."
+            --body-file /tmp/openclaw-update-pr-body.md 2>&1)"; then
+            if is_pr_policy_denial "createPullRequest" "$create_err"; then
+              echo "::notice::Pushed $branch, but GitHub token policy blocked PR creation. Open the PR manually from the pushed branch."
+            else
+              echo "$create_err" >&2
+              exit 1
+            fi
           fi
         shell: bash
