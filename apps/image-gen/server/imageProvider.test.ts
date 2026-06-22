@@ -453,6 +453,14 @@ describe("image provider boundary", () => {
         operation: "image_generation",
         provider: "openai-images",
         model: "gpt-image-2",
+        providerUsage: {
+          pricingModel: "gpt-image-1",
+          generationKind: "text_to_image",
+          hasSourceImage: false,
+          size: "1024x1536",
+          quality: "medium",
+          inputFidelity: null,
+        },
         userKey: "testuser",
         reqId: requestSummaryKey("req-cost-estimate"),
         status: "provider_attempt_succeeded",
@@ -580,6 +588,7 @@ describe("image provider boundary", () => {
         typeof payload === "string" ? JSON.parse(payload) : payload
       )
       .filter(payload => payload?.event === "image_generation_cost_estimate");
+    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
 
     expect(costLogs).toEqual([
       {
@@ -603,6 +612,27 @@ describe("image provider boundary", () => {
         status: "provider_response_received",
       },
     ]);
+    expect(ledgerEntries).toEqual([
+      expect.objectContaining({
+        id: "req-source-edit-cost-estimate:openai-image:1",
+        userKey: "source-edit-user",
+        reqId: requestSummaryKey("req-source-edit-cost-estimate"),
+        providerUsage: {
+          pricingModel: "gpt-image-1",
+          generationKind: "source_image_edit",
+          hasSourceImage: true,
+          size: "1024x1024",
+          quality: "medium",
+          inputFidelity: "high",
+        },
+        estimatedCostUsd: null,
+        estimatedOutputCostUsd: 0.042,
+        costEstimateComplete: false,
+        unpricedCostComponents: ["source_image_input"],
+      }),
+    ]);
+    expect(JSON.stringify(ledgerEntries)).not.toContain("make the product shot brighter");
+    expect(JSON.stringify(ledgerEntries)).not.toContain("https://");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 

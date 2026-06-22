@@ -28,6 +28,7 @@ export type CostLedgerEntry = {
   operation: string;
   provider: string;
   model: string | null;
+  providerUsage?: Record<string, string | number | boolean | null>;
   userKey: string;
   reqId: string;
   status: CostLedgerStatus;
