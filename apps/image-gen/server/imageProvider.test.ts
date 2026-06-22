@@ -509,6 +509,54 @@ describe("image provider boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("closes failed image cost ledger attempts before retrying", async () => {
+    configureOpenAiImagesEnv("gpt-image-2");
+    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
+    process.env.OPENAI_IMAGE_MAX_RETRIES = "1";
+    process.env.OPENAI_IMAGE_RETRY_BASE_MS = "1";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: "try again" } }), {
+          headers: { "content-type": "application/json" },
+          status: 500,
+          statusText: "Internal Server Error",
+        })
+      )
+      .mockResolvedValueOnce(createGeneratedImageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generator = new OpenAiImageGenerator();
+    await generator.generate({
+      generationKind: "text_to_image",
+      promptHint: "private prompt should not be stored",
+      userKey: "retry-cost-user",
+      reqId: "req-cost-retry",
+    });
+
+    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    expect(ledgerEntries).toEqual([
+      expect.objectContaining({
+        id: "req-cost-retry:openai-image:1",
+        userKey: "retry-cost-user",
+        reqId: requestSummaryKey("req-cost-retry"),
+        status: "provider_attempt_failed",
+        estimatedCostUsd: 0.025,
+        finalCostUsd: null,
+      }),
+      expect.objectContaining({
+        id: "req-cost-retry:openai-image:2",
+        userKey: "retry-cost-user",
+        reqId: requestSummaryKey("req-cost-retry"),
+        status: "provider_attempt_succeeded",
+        estimatedCostUsd: 0.025,
+        finalCostUsd: 0.025,
+      }),
+    ]);
+    expect(JSON.stringify(ledgerEntries)).not.toContain("private prompt");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("marks source-image edit cost estimates as partial input-unpriced metadata", async () => {
     configureOpenAiImagesEnv("gpt-5");
     process.env.OPENAI_IMAGE_SIZE = "1024x1024";
