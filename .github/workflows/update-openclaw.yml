@@ -98,14 +98,16 @@ jobs:
           git commit -m "Update OpenClaw to ${OPENCLAW_VERSION}"
           git push --force-with-lease origin "$branch"
           if gh pr view "$branch" >/dev/null 2>&1; then
-            gh pr edit "$branch" \
+            if ! gh pr edit "$branch" \
               --title "Update OpenClaw to ${OPENCLAW_VERSION}" \
-              --body-file /tmp/openclaw-update-pr-body.md
-          else
-            gh pr create \
-              --base main \
-              --head "$branch" \
-              --title "Update OpenClaw to ${OPENCLAW_VERSION}" \
-              --body-file /tmp/openclaw-update-pr-body.md
+              --body-file /tmp/openclaw-update-pr-body.md; then
+              echo "::notice::Updated branch $branch, but GitHub token policy blocked PR editing. Open or update the PR manually."
+            fi
+          elif ! gh pr create \
+            --base main \
+            --head "$branch" \
+            --title "Update OpenClaw to ${OPENCLAW_VERSION}" \
+            --body-file /tmp/openclaw-update-pr-body.md; then
+            echo "::notice::Pushed $branch, but GitHub token policy blocked PR creation. Open the PR manually from the pushed branch."
           fi
         shell: bash
