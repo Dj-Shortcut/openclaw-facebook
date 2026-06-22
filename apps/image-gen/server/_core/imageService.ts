@@ -333,6 +333,16 @@ export class OpenAiImageGenerator implements ImageGenerator {
             throw error;
           }
           providerAttemptCount += 1;
+          if (lastCostLedgerEntryId && lastCostLedgerEntryRecordedAt) {
+            await safelyUpdateCostLedgerEntry(
+              lastCostLedgerEntryId,
+              {
+                status: "provider_attempt_failed",
+                finalCostUsd: null,
+              },
+              lastCostLedgerEntryRecordedAt
+            );
+          }
           const costLedgerEntryId = `${input.reqId}:openai-image:${providerAttemptCount}`;
           await safelyAppendCostLedgerEntry(
             {
