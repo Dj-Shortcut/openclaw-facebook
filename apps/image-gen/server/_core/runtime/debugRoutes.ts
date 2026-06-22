@@ -6,6 +6,7 @@ import { createAdminAuthRateLimiter, verifyAdminToken } from "../adminAuth";
 import { summarizeCostLedgerPeriod } from "../costLedger";
 import { isRedisHttpRateLimitEnabled } from "../httpRateLimit";
 import { safeLog } from "../messengerApi";
+import { getMessengerGenerationQueueStats } from "../messengerGenerationQueue";
 import { isRedisReplayProtectionEnabled } from "../webhookReplayProtection";
 
 type VersionPayload = {
@@ -137,8 +138,14 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
 
       const period = parsedQuery.data.period ?? currentUtcPeriod();
       try {
-        const summary = await summarizeCostLedgerPeriod(period);
-        return res.status(200).json(summary);
+        const [summary, queueHealth] = await Promise.all([
+          summarizeCostLedgerPeriod(period),
+          getMessengerGenerationQueueStats(),
+        ]);
+        return res.status(200).json({
+          ...summary,
+          queueHealth,
+        });
       } catch (error) {
         const requestId = `cost_summary_${randomUUID()}`;
         safeLog("admin_cost_summary_failed", {

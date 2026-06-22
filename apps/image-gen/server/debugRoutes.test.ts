@@ -130,6 +130,12 @@ describe("debug/admin routes", () => {
             estimatedCostUsd: 0.025,
           },
         },
+        queueHealth: {
+          enabled: false,
+          queued: 0,
+          processing: 0,
+          failed: 0,
+        },
       });
       expect(JSON.stringify(payload)).not.toContain("prompt");
       expect(JSON.stringify(payload)).not.toContain("facebook:");
