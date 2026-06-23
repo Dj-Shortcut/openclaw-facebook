@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   registerWorkspaceKnowledgeSource: vi.fn(),
   getWorkspacePrivacySettings: vi.fn(),
   updateWorkspacePrivacySettings: vi.fn(),
+  listWorkspacePrivacyRequests: vi.fn(),
+  createWorkspacePrivacyRequest: vi.fn(),
   insertAuditLog: vi.fn(),
 }));
 
@@ -29,6 +31,8 @@ vi.mock("./db", () => ({
   registerWorkspaceKnowledgeSource: mocks.registerWorkspaceKnowledgeSource,
   getWorkspacePrivacySettings: mocks.getWorkspacePrivacySettings,
   updateWorkspacePrivacySettings: mocks.updateWorkspacePrivacySettings,
+  listWorkspacePrivacyRequests: mocks.listWorkspacePrivacyRequests,
+  createWorkspacePrivacyRequest: mocks.createWorkspacePrivacyRequest,
   insertAuditLog: mocks.insertAuditLog,
 }));
 
@@ -66,6 +70,12 @@ const knowledgeSourceInput = {
   sourceType: "website" as const,
   name: "Support docs",
   sourceReference: "https://example.com/help",
+};
+
+const privacyRequestInput = {
+  workspaceId,
+  requestType: "deletion" as const,
+  note: "Please delete the customer workspace data.",
 };
 
 function createCaller() {
@@ -114,13 +124,15 @@ describe("portal router tenant isolation", () => {
     await expectForbidden(() => caller.knowledge.list({ workspaceId }));
     await expectForbidden(() => caller.knowledge.summary({ workspaceId }));
     await expectForbidden(() => caller.privacy.controls({ workspaceId }));
+    await expectForbidden(() => caller.privacy.requests({ workspaceId }));
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledTimes(6);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledTimes(7);
     expect(mocks.listChannelConnections).not.toHaveBeenCalled();
     expect(mocks.getWorkspaceUsageSummary).not.toHaveBeenCalled();
     expect(mocks.listWorkspaceKnowledgeSources).not.toHaveBeenCalled();
     expect(mocks.getWorkspaceKnowledgeSummary).not.toHaveBeenCalled();
     expect(mocks.getWorkspacePrivacySettings).not.toHaveBeenCalled();
+    expect(mocks.listWorkspacePrivacyRequests).not.toHaveBeenCalled();
   });
 
   it("rejects cross-workspace Facebook connect starts before creating state or audit logs", async () => {
@@ -151,6 +163,16 @@ describe("portal router tenant isolation", () => {
 
     expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
     expect(mocks.registerWorkspaceKnowledgeSource).not.toHaveBeenCalled();
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("rejects cross-workspace privacy requests before mutating data", async () => {
+    const caller = createCaller();
+
+    await expectForbidden(() => caller.privacy.createRequest(privacyRequestInput));
+
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.createWorkspacePrivacyRequest).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 });
@@ -285,6 +307,45 @@ describe("portal router audit logging", () => {
         metadata: expect.objectContaining({
           name: expect.any(String),
           sourceReference: expect.any(String),
+        }),
+      })
+    );
+  });
+
+  it("records a privacy-safe audit log when a data privacy request is created", async () => {
+    const caller = createCaller();
+    const createdRequest = {
+      id: 12,
+      ...privacyRequestInput,
+      userId: user.id,
+      status: "requested",
+      createdAt: new Date(0),
+      updatedAt: new Date(1),
+      completedAt: null,
+    };
+    mocks.createWorkspacePrivacyRequest.mockResolvedValue(createdRequest);
+
+    await expect(caller.privacy.createRequest(privacyRequestInput)).resolves.toEqual(
+      createdRequest
+    );
+
+    expect(mocks.createWorkspacePrivacyRequest).toHaveBeenCalledWith(workspaceId, user.id, {
+      requestType: "deletion",
+      note: "Please delete the customer workspace data.",
+    });
+    expect(mocks.insertAuditLog).toHaveBeenCalledWith({
+      workspaceId,
+      userId: user.id,
+      event: "privacy_request.created",
+      metadata: {
+        requestType: "deletion",
+        status: "requested",
+      },
+    });
+    expect(mocks.insertAuditLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          note: expect.any(String),
         }),
       })
     );

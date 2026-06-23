@@ -5,12 +5,14 @@ import { trpc } from "@/lib/trpc";
 import {
   Bot,
   Database,
+  FileDown,
   LogIn,
   MessageCircle,
   Pencil,
   Save,
   ShieldCheck,
   SlidersHorizontal,
+  Trash2,
   X,
 } from "lucide-react";
 import { useState } from "react";
@@ -80,10 +82,20 @@ function Home() {
     { workspaceId: workspaceId ?? 0 },
     { enabled: Boolean(workspaceId) }
   );
+  const privacyRequestsQuery = trpc.portal.privacy.requests.useQuery(
+    { workspaceId: workspaceId ?? 0 },
+    { enabled: Boolean(workspaceId) }
+  );
   const privacyMutation = trpc.portal.privacy.updateControls.useMutation({
     onSuccess: async () => {
       if (!workspaceId) return;
       await utils.portal.privacy.controls.invalidate({ workspaceId });
+    },
+  });
+  const privacyRequestMutation = trpc.portal.privacy.createRequest.useMutation({
+    onSuccess: async () => {
+      if (!workspaceId) return;
+      await utils.portal.privacy.requests.invalidate({ workspaceId });
     },
   });
   const aiIdentityMutation = trpc.portal.aiIdentity.update.useMutation({
@@ -95,6 +107,7 @@ function Home() {
   });
 
   const privacy = privacyQuery.data;
+  const privacyRequests = privacyRequestsQuery.data ?? [];
   const updatePrivacy = (
     updates: Partial<{
       allowKnowledgeIndexing: boolean;
@@ -122,6 +135,14 @@ function Home() {
       modelDefault: identity.modelDefault,
     });
     setIsEditingIdentity(true);
+  };
+  const createPrivacyRequest = (requestType: "export" | "deletion") => {
+    if (!workspaceId) return;
+    privacyRequestMutation.mutate({
+      workspaceId,
+      requestType,
+      note: null,
+    });
   };
   const saveIdentity = async () => {
     if (!workspaceId) return;
@@ -172,7 +193,8 @@ function Home() {
     channelStatusQuery.isLoading ||
     usageQuery.isLoading ||
     knowledgeQuery.isLoading ||
-    privacyQuery.isLoading;
+    privacyQuery.isLoading ||
+    privacyRequestsQuery.isLoading;
 
   return (
     <main className="min-h-full bg-slate-950 px-4 py-6 text-slate-100 sm:px-6 lg:px-8">
@@ -443,6 +465,64 @@ function Home() {
                     }
                   />
                 </label>
+              </div>
+            </section>
+
+            <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5 lg:col-span-3">
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div className="flex items-center gap-3">
+                  <ShieldCheck className="h-5 w-5 text-cyan-200" />
+                  <h2 className="text-lg font-semibold text-slate-50">
+                    Data requests
+                  </h2>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    className="bg-slate-100 text-slate-950 hover:bg-white"
+                    size="sm"
+                    type="button"
+                    disabled={!workspaceId || privacyRequestMutation.isPending}
+                    onClick={() => createPrivacyRequest("export")}
+                  >
+                    <FileDown className="h-4 w-4" />
+                    Export
+                  </Button>
+                  <Button
+                    className="border-red-400/40 text-red-100 hover:bg-red-500/10"
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    disabled={!workspaceId || privacyRequestMutation.isPending}
+                    onClick={() => createPrivacyRequest("deletion")}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Delete data
+                  </Button>
+                </div>
+              </div>
+              <div className="mt-5 overflow-hidden rounded-lg border border-slate-800">
+                {privacyRequests.length === 0 ? (
+                  <div className="bg-slate-950/60 px-4 py-3 text-sm text-slate-400">
+                    No data requests yet.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-800">
+                    {privacyRequests.slice(0, 4).map(request => (
+                      <div
+                        className="grid gap-2 bg-slate-950/60 px-4 py-3 text-sm sm:grid-cols-[1fr_auto_auto]"
+                        key={request.id}
+                      >
+                        <span className="font-medium capitalize text-slate-100">
+                          {request.requestType}
+                        </span>
+                        <span className="text-slate-400">
+                          {new Date(request.createdAt).toLocaleDateString()}
+                        </span>
+                        <StatusPill value={request.status} />
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </section>
 

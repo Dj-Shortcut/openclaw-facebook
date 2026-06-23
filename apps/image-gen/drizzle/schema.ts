@@ -247,6 +247,23 @@ export const workspacePrivacySettings = mysqlTable(
 export type WorkspacePrivacySetting = typeof workspacePrivacySettings.$inferSelect;
 export type InsertWorkspacePrivacySetting = typeof workspacePrivacySettings.$inferInsert;
 
+export const workspacePrivacyRequests = mysqlTable("workspacePrivacyRequests", {
+  id: int("id").autoincrement().primaryKey(),
+  workspaceId: int("workspaceId").notNull(),
+  userId: int("userId").notNull(),
+  requestType: mysqlEnum("requestType", ["export", "deletion"]).notNull(),
+  status: mysqlEnum("status", ["requested", "processing", "completed", "rejected"])
+    .default("requested")
+    .notNull(),
+  note: varchar("note", { length: 500 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  completedAt: timestamp("completedAt"),
+});
+
+export type WorkspacePrivacyRequest = typeof workspacePrivacyRequests.$inferSelect;
+export type InsertWorkspacePrivacyRequest = typeof workspacePrivacyRequests.$inferInsert;
+
 export const workspaceUsageDaily = mysqlTable(
   "workspaceUsageDaily",
   {

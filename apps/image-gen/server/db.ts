@@ -1,4 +1,4 @@
-import { eq, and, sql } from "drizzle-orm";
+import { desc, eq, and, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   aiIdentities,
@@ -18,12 +18,14 @@ import {
   InsertWorkspaceKnowledgeSource,
   InsertWorkspaceMember,
   InsertWorkspacePrivacySetting,
+  InsertWorkspacePrivacyRequest,
   messengerState,
   notificationLog,
   usageStats,
   users,
   workspaceMembers,
   workspacePrivacySettings,
+  workspacePrivacyRequests,
   workspaceKnowledgeSources,
   workspaces,
   workspaceUsageDaily,
@@ -563,6 +565,71 @@ export async function updateWorkspacePrivacySettings(
   });
 
   return getWorkspacePrivacySettings(workspaceId);
+}
+
+export async function listWorkspacePrivacyRequests(workspaceId: number) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("list_workspace_privacy_requests");
+    return [];
+  }
+
+  const result = await db
+    .select()
+    .from(workspacePrivacyRequests)
+    .where(eq(workspacePrivacyRequests.workspaceId, workspaceId))
+    .orderBy(desc(workspacePrivacyRequests.id));
+
+  return result;
+}
+
+export async function createWorkspacePrivacyRequest(
+  workspaceId: number,
+  userId: number,
+  values: Pick<InsertWorkspacePrivacyRequest, "requestType" | "note">
+) {
+  const db = await getDb();
+  const now = new Date();
+  const request: InsertWorkspacePrivacyRequest = {
+    workspaceId,
+    userId,
+    requestType: values.requestType,
+    note: values.note ?? null,
+    status: "requested",
+  };
+
+  if (!db) {
+    logDatabaseUnavailable("create_workspace_privacy_request");
+    return {
+      id: workspaceId,
+      ...request,
+      createdAt: new Date(0),
+      updatedAt: now,
+      completedAt: null,
+    };
+  }
+
+  await db.insert(workspacePrivacyRequests).values(request);
+  const created = await db
+    .select()
+    .from(workspacePrivacyRequests)
+    .where(
+      and(
+        eq(workspacePrivacyRequests.workspaceId, workspaceId),
+        eq(workspacePrivacyRequests.userId, userId),
+        eq(workspacePrivacyRequests.requestType, request.requestType)
+      )
+    )
+    .orderBy(desc(workspacePrivacyRequests.id))
+    .limit(1);
+
+  return created[0] ?? {
+    id: workspaceId,
+    ...request,
+    createdAt: new Date(0),
+    updatedAt: now,
+    completedAt: null,
+  };
 }
 
 export async function upsertChannelConnection(values: InsertChannelConnection) {
