@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   updateAiIdentity: vi.fn(),
   listChannelConnections: vi.fn(),
   getWorkspaceUsageSummary: vi.fn(),
+  getWorkspacePrivacySettings: vi.fn(),
+  updateWorkspacePrivacySettings: vi.fn(),
   insertAuditLog: vi.fn(),
 }));
 
@@ -19,6 +21,8 @@ vi.mock("./db", () => ({
   updateAiIdentity: mocks.updateAiIdentity,
   listChannelConnections: mocks.listChannelConnections,
   getWorkspaceUsageSummary: mocks.getWorkspaceUsageSummary,
+  getWorkspacePrivacySettings: mocks.getWorkspacePrivacySettings,
+  updateWorkspacePrivacySettings: mocks.updateWorkspacePrivacySettings,
   insertAuditLog: mocks.insertAuditLog,
 }));
 
@@ -42,6 +46,13 @@ const aiIdentityUpdateInput = {
   tone: "Helpful",
   language: "nl",
   modelDefault: "default",
+};
+
+const privacyControlsUpdateInput = {
+  workspaceId,
+  allowKnowledgeIndexing: false,
+  allowUsageAnalytics: true,
+  imageMemoryRetentionDays: 14,
 };
 
 function createCaller() {
@@ -87,10 +98,12 @@ describe("portal router tenant isolation", () => {
     await expectForbidden(() => caller.channels.list({ workspaceId }));
     await expectForbidden(() => caller.channels.status({ workspaceId }));
     await expectForbidden(() => caller.usage.summary({ workspaceId }));
+    await expectForbidden(() => caller.privacy.controls({ workspaceId }));
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledTimes(3);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledTimes(4);
     expect(mocks.listChannelConnections).not.toHaveBeenCalled();
     expect(mocks.getWorkspaceUsageSummary).not.toHaveBeenCalled();
+    expect(mocks.getWorkspacePrivacySettings).not.toHaveBeenCalled();
   });
 
   it("rejects cross-workspace Facebook connect starts before creating state or audit logs", async () => {
@@ -99,6 +112,18 @@ describe("portal router tenant isolation", () => {
     await expectForbidden(() => caller.facebook.startConnect({ workspaceId }));
 
     expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("rejects cross-workspace privacy updates before mutating data", async () => {
+    const caller = createCaller();
+
+    await expectForbidden(() =>
+      caller.privacy.updateControls(privacyControlsUpdateInput)
+    );
+
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.updateWorkspacePrivacySettings).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 });
@@ -160,6 +185,38 @@ describe("portal router audit logging", () => {
       event: "facebook_connect.started",
       metadata: {
         scopes: ["pages_show_list", "pages_manage_metadata", "pages_messaging"],
+      },
+    });
+  });
+
+  it("records an audit log when workspace privacy controls are updated", async () => {
+    const caller = createCaller();
+    const updatedControls = {
+      ...privacyControlsUpdateInput,
+      createdAt: new Date(0),
+      updatedAt: new Date(1),
+    };
+    mocks.updateWorkspacePrivacySettings.mockResolvedValue(updatedControls);
+
+    await expect(
+      caller.privacy.updateControls(privacyControlsUpdateInput)
+    ).resolves.toEqual(updatedControls);
+
+    expect(mocks.updateWorkspacePrivacySettings).toHaveBeenCalledWith(workspaceId, {
+      allowKnowledgeIndexing: false,
+      allowUsageAnalytics: true,
+      imageMemoryRetentionDays: 14,
+    });
+    expect(mocks.insertAuditLog).toHaveBeenCalledWith({
+      workspaceId,
+      userId: user.id,
+      event: "privacy_controls.updated",
+      metadata: {
+        fields: [
+          "allowKnowledgeIndexing",
+          "allowUsageAnalytics",
+          "imageMemoryRetentionDays",
+        ],
       },
     });
   });

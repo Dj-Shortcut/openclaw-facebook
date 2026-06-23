@@ -26,6 +26,12 @@ const aiIdentityUpdateInput = workspaceInput.extend({
   modelDefault: z.string().trim().min(1).max(80),
 });
 
+const privacyControlsUpdateInput = workspaceInput.extend({
+  allowKnowledgeIndexing: z.boolean(),
+  allowUsageAnalytics: z.boolean(),
+  imageMemoryRetentionDays: z.number().int().min(0).max(365),
+});
+
 async function requireWorkspace(
   ctx: { user: { id: number; name: string | null } },
   workspaceId?: number
@@ -252,5 +258,34 @@ export const portalRouter = router({
       exportRequest: "mailto:privacy@leaderbot.live?subject=Leaderbot data export",
       deletionRequest: "mailto:privacy@leaderbot.live?subject=Leaderbot data deletion",
     })),
+
+    controls: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
+      await requireWorkspace(ctx, input.workspaceId);
+      return db.getWorkspacePrivacySettings(input.workspaceId);
+    }),
+
+    updateControls: protectedProcedure
+      .input(privacyControlsUpdateInput)
+      .mutation(async ({ ctx, input }) => {
+        await requireWorkspace(ctx, input.workspaceId);
+        const updated = await db.updateWorkspacePrivacySettings(input.workspaceId, {
+          allowKnowledgeIndexing: input.allowKnowledgeIndexing,
+          allowUsageAnalytics: input.allowUsageAnalytics,
+          imageMemoryRetentionDays: input.imageMemoryRetentionDays,
+        });
+        await db.insertAuditLog({
+          workspaceId: input.workspaceId,
+          userId: ctx.user.id,
+          event: "privacy_controls.updated",
+          metadata: {
+            fields: [
+              "allowKnowledgeIndexing",
+              "allowUsageAnalytics",
+              "imageMemoryRetentionDays",
+            ],
+          },
+        });
+        return updated;
+      }),
   }),
 });

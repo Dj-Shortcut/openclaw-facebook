@@ -466,6 +466,43 @@ export async function getWorkspacePrivacySettings(workspaceId: number) {
   };
 }
 
+export async function updateWorkspacePrivacySettings(
+  workspaceId: number,
+  updates: {
+    allowKnowledgeIndexing: boolean;
+    allowUsageAnalytics: boolean;
+    imageMemoryRetentionDays: number;
+  }
+) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("update_workspace_privacy_settings");
+    return {
+      workspaceId,
+      ...updates,
+      createdAt: new Date(0),
+      updatedAt: new Date(),
+    };
+  }
+
+  const values: InsertWorkspacePrivacySetting = {
+    workspaceId,
+    allowKnowledgeIndexing: updates.allowKnowledgeIndexing ? 1 : 0,
+    allowUsageAnalytics: updates.allowUsageAnalytics ? 1 : 0,
+    imageMemoryRetentionDays: updates.imageMemoryRetentionDays,
+  };
+
+  await db.insert(workspacePrivacySettings).values(values).onDuplicateKeyUpdate({
+    set: {
+      allowKnowledgeIndexing: values.allowKnowledgeIndexing,
+      allowUsageAnalytics: values.allowUsageAnalytics,
+      imageMemoryRetentionDays: values.imageMemoryRetentionDays,
+    },
+  });
+
+  return getWorkspacePrivacySettings(workspaceId);
+}
+
 export async function upsertChannelConnection(values: InsertChannelConnection) {
   const db = await getDb();
   if (!db) {
