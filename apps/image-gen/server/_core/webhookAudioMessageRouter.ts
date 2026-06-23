@@ -286,6 +286,12 @@ async function transcribePreparedAudioMessage(
         costEstimateComplete: costEstimate.costEstimateComplete,
         estimateSource: costEstimate.estimateSource,
         unpricedCostComponents: costEstimate.unpricedCostComponents,
+        providerUsage: {
+          pricingModel: costEstimate.estimateSource,
+          retryAttempt: attempt + 1,
+          contentType: sourceAudio.contentType ?? null,
+          sourceBytes: sourceAudio.incomingLen,
+        },
       },
       attemptNow
     );

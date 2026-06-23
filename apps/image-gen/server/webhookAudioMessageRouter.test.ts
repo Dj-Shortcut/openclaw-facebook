@@ -287,10 +287,17 @@ describe("webhook audio message router", () => {
         costEstimateComplete: true,
         estimateSource: "env_override",
         unpricedCostComponents: [],
+        providerUsage: {
+          pricingModel: "env_override",
+          retryAttempt: 1,
+          contentType: "audio/mpeg",
+          sourceBytes: 4,
+        },
       }),
     ]);
     expect(JSON.stringify(ledgerEntries)).not.toContain("maak een foto");
     expect(JSON.stringify(ledgerEntries)).not.toContain("message-priced.mp3");
+    expect(JSON.stringify(ledgerEntries)).not.toContain("https://audio.example");
     expect(JSON.stringify(ledgerEntries)).not.toContain("psid-audio-priced");
   });
 
