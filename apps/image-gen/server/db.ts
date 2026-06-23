@@ -402,26 +402,23 @@ function normalizeWorkspacePrivacySettings(
 }
 
 function getInsertedId(result: unknown, label: string): number {
-  if (Array.isArray(result)) {
-    const header = result[0] as { insertId?: unknown } | undefined;
-    const insertId = header?.insertId;
+  const insertId = (result as { insertId?: unknown } | undefined)?.insertId;
 
-    if (typeof insertId === "number" && Number.isSafeInteger(insertId) && insertId > 0) {
-      return insertId;
+  if (typeof insertId === "number" && Number.isSafeInteger(insertId) && insertId > 0) {
+    return insertId;
+  }
+
+  if (typeof insertId === "bigint" && insertId > BigInt(0)) {
+    const numericId = Number(insertId);
+    if (Number.isSafeInteger(numericId)) {
+      return numericId;
     }
+  }
 
-    if (typeof insertId === "bigint" && insertId > BigInt(0)) {
-      const numericId = Number(insertId);
-      if (Number.isSafeInteger(numericId)) {
-        return numericId;
-      }
-    }
-
-    if (typeof insertId === "string") {
-      const numericId = Number(insertId);
-      if (Number.isSafeInteger(numericId) && numericId > 0) {
-        return numericId;
-      }
+  if (typeof insertId === "string") {
+    const numericId = Number(insertId);
+    if (Number.isSafeInteger(numericId) && numericId > 0) {
+      return numericId;
     }
   }
 

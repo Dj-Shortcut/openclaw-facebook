@@ -505,7 +505,11 @@ function Home() {
                 </div>
               </div>
               <div className="mt-5 overflow-hidden rounded-lg border border-slate-800">
-                {privacyRequestsError ? (
+                {privacyRequestMutation.error ? (
+                  <div className="bg-slate-950/60 px-4 py-3 text-sm text-red-300">
+                    Unable to create data request. Please try again.
+                  </div>
+                ) : privacyRequestsError ? (
                   <div className="bg-slate-950/60 px-4 py-3 text-sm text-red-300">
                     Unable to load data requests. Please try again.
                   </div>
