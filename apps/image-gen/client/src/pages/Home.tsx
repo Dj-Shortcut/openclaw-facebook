@@ -7,9 +7,13 @@ import {
   Database,
   LogIn,
   MessageCircle,
+  Pencil,
+  Save,
   ShieldCheck,
   SlidersHorizontal,
+  X,
 } from "lucide-react";
+import { useState } from "react";
 
 function StatusPill({ value }: { value: string }) {
   const isConnected = value === "connected";
@@ -44,6 +48,14 @@ function MetricTile({
 function Home() {
   const auth = useAuth();
   const utils = trpc.useUtils();
+  const [isEditingIdentity, setIsEditingIdentity] = useState(false);
+  const [identityForm, setIdentityForm] = useState({
+    name: "",
+    instructions: "",
+    tone: "",
+    language: "",
+    modelDefault: "",
+  });
   const workspaceQuery = trpc.portal.workspace.current.useQuery(undefined, {
     enabled: auth.isAuthenticated,
   });
@@ -74,6 +86,13 @@ function Home() {
       await utils.portal.privacy.controls.invalidate({ workspaceId });
     },
   });
+  const aiIdentityMutation = trpc.portal.aiIdentity.update.useMutation({
+    onSuccess: async () => {
+      if (!workspaceId) return;
+      setIsEditingIdentity(false);
+      await utils.portal.aiIdentity.get.invalidate({ workspaceId });
+    },
+  });
 
   const privacy = privacyQuery.data;
   const updatePrivacy = (
@@ -90,6 +109,29 @@ function Home() {
       allowUsageAnalytics: updates.allowUsageAnalytics ?? privacy.allowUsageAnalytics,
       imageMemoryRetentionDays:
         updates.imageMemoryRetentionDays ?? privacy.imageMemoryRetentionDays,
+    });
+  };
+  const startEditingIdentity = () => {
+    const identity = aiIdentityQuery.data;
+    if (!identity) return;
+    setIdentityForm({
+      name: identity.name,
+      instructions: identity.instructions ?? "",
+      tone: identity.tone,
+      language: identity.language,
+      modelDefault: identity.modelDefault,
+    });
+    setIsEditingIdentity(true);
+  };
+  const saveIdentity = async () => {
+    if (!workspaceId) return;
+    await aiIdentityMutation.mutateAsync({
+      workspaceId,
+      name: identityForm.name,
+      instructions: identityForm.instructions.trim() ? identityForm.instructions : null,
+      tone: identityForm.tone,
+      language: identityForm.language,
+      modelDefault: identityForm.modelDefault,
     });
   };
 
@@ -160,23 +202,149 @@ function Home() {
         ) : (
           <div className="grid gap-4 py-6 lg:grid-cols-3">
             <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5 lg:col-span-2">
-              <div className="flex items-start gap-3">
-                <Bot className="mt-1 h-5 w-5 text-cyan-200" />
-                <div>
-                  <h2 className="text-lg font-semibold text-slate-50">
-                    {aiIdentityQuery.data?.name ?? "Leaderbot"}
-                  </h2>
-                  <p className="mt-1 text-sm text-slate-300">
-                    {aiIdentityQuery.data?.tone ?? "Helpful"} ·{" "}
-                    {aiIdentityQuery.data?.language ?? "nl"} ·{" "}
-                    {aiIdentityQuery.data?.modelDefault ?? "default"}
-                  </p>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <Bot className="mt-1 h-5 w-5 text-cyan-200" />
+                  <div>
+                    <h2 className="text-lg font-semibold text-slate-50">
+                      {aiIdentityQuery.data?.name ?? "Leaderbot"}
+                    </h2>
+                    <p className="mt-1 text-sm text-slate-300">
+                      {aiIdentityQuery.data?.tone ?? "Helpful"} ·{" "}
+                      {aiIdentityQuery.data?.language ?? "nl"} ·{" "}
+                      {aiIdentityQuery.data?.modelDefault ?? "default"}
+                    </p>
+                  </div>
                 </div>
+                {!isEditingIdentity ? (
+                  <Button
+                    className="gap-2"
+                    size="sm"
+                    variant="outline"
+                    onClick={startEditingIdentity}
+                  >
+                    <Pencil className="h-4 w-4" />
+                    Edit
+                  </Button>
+                ) : null}
               </div>
-              <div className="mt-5 rounded-lg border border-slate-800 bg-slate-950/60 p-4 text-sm leading-6 text-slate-300">
-                {aiIdentityQuery.data?.instructions ??
-                  "No custom assistant instructions have been saved yet."}
-              </div>
+              {isEditingIdentity ? (
+                <form
+                  className="mt-5 grid gap-4"
+                  onSubmit={event => {
+                    event.preventDefault();
+                    void saveIdentity();
+                  }}
+                >
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <label className="grid gap-2 text-sm text-slate-300">
+                      Name
+                      <input
+                        className="rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
+                        maxLength={120}
+                        required
+                        value={identityForm.name}
+                        onChange={event =>
+                          setIdentityForm(current => ({
+                            ...current,
+                            name: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="grid gap-2 text-sm text-slate-300">
+                      Tone
+                      <input
+                        className="rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
+                        maxLength={80}
+                        required
+                        value={identityForm.tone}
+                        onChange={event =>
+                          setIdentityForm(current => ({
+                            ...current,
+                            tone: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="grid gap-2 text-sm text-slate-300">
+                      Language
+                      <input
+                        className="rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
+                        maxLength={16}
+                        minLength={2}
+                        required
+                        value={identityForm.language}
+                        onChange={event =>
+                          setIdentityForm(current => ({
+                            ...current,
+                            language: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="grid gap-2 text-sm text-slate-300">
+                      Model default
+                      <input
+                        className="rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
+                        maxLength={80}
+                        required
+                        value={identityForm.modelDefault}
+                        onChange={event =>
+                          setIdentityForm(current => ({
+                            ...current,
+                            modelDefault: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                  </div>
+                  <label className="grid gap-2 text-sm text-slate-300">
+                    Instructions
+                    <textarea
+                      className="min-h-36 rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
+                      maxLength={8000}
+                      value={identityForm.instructions}
+                      onChange={event =>
+                        setIdentityForm(current => ({
+                          ...current,
+                          instructions: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  {aiIdentityMutation.error ? (
+                    <div className="text-sm text-red-300">
+                      {aiIdentityMutation.error.message}
+                    </div>
+                  ) : null}
+                  <div className="flex flex-wrap gap-3">
+                    <Button
+                      className="gap-2"
+                      disabled={aiIdentityMutation.isPending}
+                      type="submit"
+                    >
+                      <Save className="h-4 w-4" />
+                      Save
+                    </Button>
+                    <Button
+                      className="gap-2"
+                      disabled={aiIdentityMutation.isPending}
+                      type="button"
+                      variant="outline"
+                      onClick={() => setIsEditingIdentity(false)}
+                    >
+                      <X className="h-4 w-4" />
+                      Cancel
+                    </Button>
+                  </div>
+                </form>
+              ) : (
+                <div className="mt-5 rounded-lg border border-slate-800 bg-slate-950/60 p-4 text-sm leading-6 text-slate-300">
+                  {aiIdentityQuery.data?.instructions ??
+                    "No custom assistant instructions have been saved yet."}
+                </div>
+              )}
             </section>
 
             <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5">
