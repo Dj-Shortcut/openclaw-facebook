@@ -4,6 +4,7 @@ import { getLoginUrl } from "@/const";
 import { trpc } from "@/lib/trpc";
 import {
   Bot,
+  CreditCard,
   Database,
   FileDown,
   LogIn,
@@ -38,14 +39,17 @@ function StatusPill({ value }: { value: string }) {
 function MetricTile({
   label,
   value,
+  detail,
 }: {
   label: string;
   value: string | number;
+  detail?: string;
 }) {
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-900/75 p-4">
       <div className="text-sm text-slate-400">{label}</div>
       <div className="mt-2 text-2xl font-semibold text-slate-50">{value}</div>
+      {detail ? <div className="mt-2 text-xs text-slate-500">{detail}</div> : null}
     </div>
   );
 }
@@ -110,8 +114,15 @@ function Home() {
   });
 
   const privacy = privacyQuery.data;
+  const usage = usageQuery.data;
   const privacyRequests = privacyRequestsQuery.data ?? [];
   const privacyRequestsError = privacyRequestsQuery.error;
+  const imageLimit = usage?.limits.imagesPerDay ?? 0;
+  const imagesRemaining = usage?.remaining.imagesToday ?? 0;
+  const imageProgress =
+    imageLimit > 0
+      ? Math.min(100, Math.round(((usage?.imageCount ?? 0) / imageLimit) * 100))
+      : 0;
   const updatePrivacy = (
     updates: Partial<{
       allowKnowledgeIndexing: boolean;
@@ -394,10 +405,62 @@ function Home() {
               </div>
             </section>
 
-            <section className="grid gap-4 sm:grid-cols-3 lg:col-span-3">
-              <MetricTile label="Messages today" value={usageQuery.data?.messageCount ?? 0} />
-              <MetricTile label="Images today" value={usageQuery.data?.imageCount ?? 0} />
-              <MetricTile label="Blocked today" value={usageQuery.data?.blockedCount ?? 0} />
+            <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5 lg:col-span-3">
+              <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                <div className="flex items-center gap-3">
+                  <CreditCard className="h-5 w-5 text-cyan-200" />
+                  <div>
+                    <h2 className="text-lg font-semibold text-slate-50">
+                      Usage and balance
+                    </h2>
+                    <p className="mt-1 text-sm text-slate-400">
+                      {usage?.plan.name ?? "Free"} plan
+                    </p>
+                  </div>
+                </div>
+                {usage?.upgrade.recommended ? (
+                  <Button
+                    className="gap-2"
+                    size="sm"
+                    type="button"
+                    onClick={() => {
+                      window.location.href =
+                        "mailto:privacy@leaderbot.live?subject=Leaderbot plan upgrade";
+                    }}
+                  >
+                    Upgrade
+                  </Button>
+                ) : null}
+              </div>
+              <div className="mt-5 grid gap-4 sm:grid-cols-3">
+                <MetricTile
+                  label="Images remaining"
+                  value={imagesRemaining}
+                  detail={`${usage?.imageCount ?? 0} of ${imageLimit} used today`}
+                />
+                <MetricTile
+                  label="Messages today"
+                  value={usage?.messageCount ?? 0}
+                  detail={`${usage?.limits.messagesPerWindow ?? 0} per ${
+                    usage?.limits.messageWindowSeconds ?? 0
+                  } seconds`}
+                />
+                <MetricTile
+                  label="Blocked today"
+                  value={usage?.blockedCount ?? 0}
+                  detail={
+                    usage?.upgrade.reason === "blocked_usage"
+                      ? "Action may be needed"
+                      : "No blocks recorded"
+                  }
+                />
+              </div>
+              <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-950">
+                <div
+                  className="h-full rounded-full bg-cyan-300"
+                  style={{ width: `${imageProgress}%` }}
+                />
+              </div>
             </section>
 
             <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5 lg:col-span-3">

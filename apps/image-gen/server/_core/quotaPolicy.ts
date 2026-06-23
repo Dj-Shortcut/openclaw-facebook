@@ -38,3 +38,14 @@ export function getVideoGenerationDailyLimit(): number {
     DEFAULT_VIDEO_GENERATION_DAILY_LIMIT
   );
 }
+
+export function getBotTextRateLimitMax(): number {
+  return readNonNegativeInt("BOT_TEXT_RATE_LIMIT_MAX", DEFAULT_BOT_TEXT_RATE_LIMIT_MAX);
+}
+
+export function getBotTextRateLimitWindowSeconds(): number {
+  return readNonNegativeInt(
+    "BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS",
+    DEFAULT_BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS
+  );
+}
