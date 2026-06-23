@@ -8,6 +8,7 @@ import {
   Database,
   FileDown,
   FileText,
+  Info,
   LogIn,
   MessageCircle,
   Pencil,
@@ -435,6 +436,44 @@ function Home() {
                   <span className="text-right text-slate-200">
                     {channelStatusQuery.data?.facebook.pageName ?? "Not connected"}
                   </span>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5 lg:col-span-3">
+              <div className="flex items-center gap-3">
+                <Info className="h-5 w-5 text-cyan-200" />
+                <h2 className="text-lg font-semibold text-slate-50">
+                  Bot instructions
+                </h2>
+              </div>
+              <div className="mt-5 grid gap-4 md:grid-cols-3">
+                <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
+                  <h3 className="text-sm font-medium text-slate-100">
+                    Prompt-first images
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-400">
+                    Ask naturally in Messenger. Describe the image or edit you want;
+                    no style menu is required.
+                  </p>
+                </div>
+                <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
+                  <h3 className="text-sm font-medium text-slate-100">
+                    Workspace context
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-400">
+                    The assistant uses this workspace's identity, instructions, and
+                    active knowledge sources.
+                  </p>
+                </div>
+                <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
+                  <h3 className="text-sm font-medium text-slate-100">
+                    Data controls
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-400">
+                    Use the portal to request exports or deletion. Messenger users can
+                    also send "delete my data".
+                  </p>
                 </div>
               </div>
             </section>

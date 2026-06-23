@@ -519,14 +519,14 @@ describe("photo-first onboarding", () => {
     expect(sendTextMock).toHaveBeenCalledWith(
       psid,
       [
-        "Je foto wordt enkel gebruikt om de afbeelding te maken.",
-        "Ze wordt daarna niet bewaard.",
+        "Je berichten, prompts en eventuele foto's worden alleen gebruikt om Leaderbot te laten antwoorden of afbeeldingen te maken.",
+        "Je kan je data verwijderen door 'verwijder mijn data' te sturen.",
         "Privacybeleid: https://leaderbot-fb-image-gen.fly.dev/privacy",
       ].join("\n")
     );
   });
 
-  it("routes free-form user text without photo into prompt-first quick actions", async () => {
+  it("routes direct free-form text without photo into prompt-first quick actions", async () => {
     const psid = "about-user";
 
     await processFacebookWebhookPayload({
@@ -604,8 +604,8 @@ describe("photo-first onboarding", () => {
     expect(sendTextMock).toHaveBeenLastCalledWith(
       psid,
       [
-        "Your photo is only used to make the image.",
-        "It is not stored afterwards.",
+        "Your messages, prompts, and any photos are only used so Leaderbot can reply or create images.",
+        "You can delete your data by sending 'delete my data'.",
         "Privacy policy: https://leaderbot-fb-image-gen.fly.dev/privacy",
       ].join("\n")
     );
