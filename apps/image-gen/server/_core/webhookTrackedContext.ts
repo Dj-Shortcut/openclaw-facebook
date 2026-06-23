@@ -274,6 +274,9 @@ export function createTrackedHandlerContext(
       });
       return outcome;
     },
+    markEventHandledWithoutResponse: () => {
+      markResponseSentFromOutcome({ sent: true });
+    },
     sendLoggedActions: async (userPsid, text, actions, requestId) => {
       logMessengerWebhookTrace("before_send", {
         reqId: requestId,

@@ -136,6 +136,7 @@ export type HandlerContext = {
     text: string,
     reqId: string
   ) => Promise<MessengerSendOutcome>;
+  markEventHandledWithoutResponse?: () => void;
   sendPhotoReceivedPrompt: (
     psid: string,
     lang: Lang,

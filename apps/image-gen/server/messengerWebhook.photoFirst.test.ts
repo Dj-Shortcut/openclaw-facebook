@@ -519,14 +519,14 @@ describe("photo-first onboarding", () => {
     expect(sendTextMock).toHaveBeenCalledWith(
       psid,
       [
-        "Je foto wordt enkel gebruikt om de afbeelding te maken.",
-        "Ze wordt daarna niet bewaard.",
+        "Je berichten, prompts en eventuele foto's worden alleen gebruikt om Leaderbot te laten antwoorden of afbeeldingen te maken.",
+        "Je kan je data verwijderen door 'verwijder mijn data' te sturen.",
         "Privacybeleid: https://leaderbot-fb-image-gen.fly.dev/privacy",
       ].join("\n")
     );
   });
 
-  it("routes free-form user text without photo into prompt-first quick actions", async () => {
+  it("leaves ordinary free-form user text without photo for OpenClaw", async () => {
     const psid = "about-user";
 
     await processFacebookWebhookPayload({
@@ -542,23 +542,8 @@ describe("photo-first onboarding", () => {
       ],
     });
 
-    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
-      psid,
-      t("nl", "flowExplanation"),
-      [
-        {
-          content_type: "text",
-          title: "Nieuwe afbeelding",
-          payload: "OPENCLAW_ACTION:new_image",
-        },
-        {
-          content_type: "text",
-          title: "Pas foto aan",
-          payload: "OPENCLAW_ACTION:Pas%20foto%20aan",
-        },
-        { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
-      ]
-    );
+    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
+    expect(sendTextMock).not.toHaveBeenCalled();
   });
 
   it("uses sender locale when provided and reuses it for later events", async () => {
@@ -604,8 +589,8 @@ describe("photo-first onboarding", () => {
     expect(sendTextMock).toHaveBeenLastCalledWith(
       psid,
       [
-        "Your photo is only used to make the image.",
-        "It is not stored afterwards.",
+        "Your messages, prompts, and any photos are only used so Leaderbot can reply or create images.",
+        "You can delete your data by sending 'delete my data'.",
         "Privacy policy: https://leaderbot-fb-image-gen.fly.dev/privacy",
       ].join("\n")
     );

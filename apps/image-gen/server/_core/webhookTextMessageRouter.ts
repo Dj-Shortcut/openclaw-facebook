@@ -41,6 +41,9 @@ export async function handleTextMessage(
     normalizedMessage
   );
   await sendSharedMessengerTextResponse(ctx, resolvedInput, result);
+  if (result.suppressEventFallback) {
+    ctx.markEventHandledWithoutResponse?.();
+  }
   await applyTextAfterSend(result, resolvedInput);
 }
 
@@ -101,6 +104,7 @@ async function handleSharedMessengerText(
     message: normalizedMessage,
     reqId: input.reqId,
     lang: input.lang,
+    unhandledTextFallback: "none",
     getState: () => Promise.resolve(getOrCreateState(input.psid)),
     setFlowState: nextState =>
       Promise.resolve(setFlowState(input.psid, nextState)),

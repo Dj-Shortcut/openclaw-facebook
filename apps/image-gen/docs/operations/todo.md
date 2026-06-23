@@ -117,6 +117,8 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Add tenant-scoped portal export/deletion request tracking for customer data controls
 - [x] Add initial customer-facing free-plan usage balance and upgrade prompt to the portal dashboard
 - [x] Add portal-rendered privacy, terms, and data-deletion pages with local footer links
+- [x] Add customer-facing bot instructions for prompt-first image use, workspace context, and data controls
+- [x] Keep ordinary Messenger conversations on the OpenClaw turn instead of falling back to image-generation help copy
 - [ ] Add portal authentication before broad customer launch
 - [x] Add tenant isolation tests before broad customer launch
 - [x] Add portal audit logging before broad customer launch

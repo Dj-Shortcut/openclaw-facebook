@@ -435,6 +435,47 @@ describe("sharedTextHandler", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("can leave ordinary Messenger text unhandled for the OpenClaw turn", async () => {
+    const runTextFeatures = vi.fn(async () => false);
+    const logState = vi.fn();
+
+    const result = await handleSharedTextMessage({
+      message: {
+        channel: "messenger",
+        senderId: "psid-openclaw-turn",
+        userId: "user-key-openclaw-turn",
+        messageType: "text",
+        textBody:
+          "Hey leaderbot kan jij mij een trucje tonen hoe ik op mijn oude xbox 360 gratis kan gamen",
+      },
+      reqId: "req-openclaw-turn",
+      lang: "nl",
+      unhandledTextFallback: "none",
+      getState: async () =>
+        createState({
+          psid: "psid-openclaw-turn",
+          userKey: "user-key-openclaw-turn",
+          hasSeenIntro: true,
+        }),
+      setFlowState: async () => {},
+      runTextFeatures,
+      logState,
+    });
+
+    expect(result).toEqual({ response: null, suppressEventFallback: true });
+    expect(runTextFeatures).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageText:
+          "Hey leaderbot kan jij mij een trucje tonen hoe ik op mijn oude xbox 360 gratis kan gamen",
+        hasPhoto: false,
+      })
+    );
+    expect(logState).toHaveBeenCalledWith(
+      expect.objectContaining({ psid: "psid-openclaw-turn" }),
+      "text_message"
+    );
+  });
+
   const videoAnimationRecoveryCases: Array<{ text: string; expected: string }> = [
     {
       text: "laat hem dansen",

@@ -736,6 +736,11 @@ describe("shouldForwardMessengerTextToImageGen", () => {
     expect(shouldForwardMessengerTextToImageGen("Maak een prompt voor een afbeelding")).toBe(false);
     expect(shouldForwardMessengerTextToImageGen("Schrijf een planning voor morgen")).toBe(false);
     expect(shouldForwardMessengerTextToImageGen("Wat zie je op deze foto?")).toBe(false);
+    expect(
+      shouldForwardMessengerTextToImageGen(
+        "Hey leaderbot kan jij mij een trucje tonen hoe ik op mijn oude xbox 360 gratis kan gamen",
+      ),
+    ).toBe(false);
   });
 });
 

@@ -104,8 +104,8 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Beschrijf welke afbeelding je wilt maken, of stuur een foto als je die wilt bewerken.",
     privacy: ({ link }) =>
       [
-        "Je foto wordt enkel gebruikt om de afbeelding te maken.",
-        "Ze wordt daarna niet bewaard.",
+        "Je berichten, prompts en eventuele foto's worden alleen gebruikt om Leaderbot te laten antwoorden of afbeeldingen te maken.",
+        "Je kan je data verwijderen door 'verwijder mijn data' te sturen.",
         ...(link ? [`Privacybeleid: ${link}`] : []),
       ].join("\n"),
     aboutLeaderbot:
@@ -214,8 +214,8 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Describe the image you want to make, or send a photo if you want me to edit it.",
     privacy: ({ link }) =>
       [
-        "Your photo is only used to make the image.",
-        "It is not stored afterwards.",
+        "Your messages, prompts, and any photos are only used so Leaderbot can reply or create images.",
+        "You can delete your data by sending 'delete my data'.",
         ...(link ? [`Privacy policy: ${link}`] : []),
       ].join("\n"),
     aboutLeaderbot:
