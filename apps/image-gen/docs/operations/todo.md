@@ -123,13 +123,14 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Add tenant-checked portal auth session metadata for customer workspace membership
 - [x] Add tenant isolation tests before broad customer launch
 - [x] Add portal audit logging before broad customer launch
+- [x] Add tenant-checked portal upgrade request control with privacy-safe billing audit metadata
 - [ ] Add billing and usage controls before broad customer launch
 - [ ] Verify GDPR deletion end-to-end before broad customer launch
 - [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health routes
 - [ ] Move public legal routes (`/privacy`, `/terms`, `/data-deletion`) into the portal surface before pointing customer traffic there. Initial React portal pages and local footer links exist; production routing and Meta review verification remain open.
 - [x] Remove legacy campaign/style assets that do not support the portal direction
 - [ ] Observe generic text-to-image quality before removing remaining internal style-preset backend compatibility
-- [ ] Create "upgrade to premium" prompt when limit reached
+- [x] Create "upgrade to premium" prompt when limit reached
 - [ ] Add image gallery/history for users
 - [ ] Plan Messenger generated-video support before implementation
   - Uploaded Messenger videos remain unsupported input.
@@ -226,9 +227,8 @@ Quota drift investigation note:
 - [ ] Test cost tracking
 - [ ] P1/P2 [owner: image-gen-runtime-test] Add targeted cost-ledger reliability tests for concurrent append/update behavior, overflow observability, midnight-crossing update reconciliation, and delete-cleanup latency under multi-period user history.
 - [x] Create setup guide for Meta configuration
-- [ ] Document current generic image prompt behavior for user-facing copy
+- [ ] Document operator-facing prompt routing and OpenClaw-vs-image-generation fallback behavior separately from the completed customer-facing bot instructions
 - [ ] Provide cost monitoring dashboard
-- [x] Create user-facing bot instructions. Covered by the portal bot-instructions panel and the customer-facing data controls/export/deletion copy.
 
 ### Maintenance backlog
 

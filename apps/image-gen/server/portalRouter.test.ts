@@ -139,12 +139,13 @@ describe("portal router tenant isolation", () => {
     await expectForbidden(() => caller.channels.list({ workspaceId }));
     await expectForbidden(() => caller.channels.status({ workspaceId }));
     await expectForbidden(() => caller.usage.summary({ workspaceId }));
+    await expectForbidden(() => caller.usage.requestUpgrade({ workspaceId }));
     await expectForbidden(() => caller.knowledge.list({ workspaceId }));
     await expectForbidden(() => caller.knowledge.summary({ workspaceId }));
     await expectForbidden(() => caller.privacy.controls({ workspaceId }));
     await expectForbidden(() => caller.privacy.requests({ workspaceId }));
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledTimes(7);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledTimes(8);
     expect(mocks.listChannelConnections).not.toHaveBeenCalled();
     expect(mocks.getWorkspaceUsageSummary).not.toHaveBeenCalled();
     expect(mocks.listWorkspaceKnowledgeSources).not.toHaveBeenCalled();
@@ -318,6 +319,54 @@ describe("portal router audit logging", () => {
     expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
     expect(mocks.getWorkspaceUsageSummary).toHaveBeenCalledWith(workspaceId);
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("records a privacy-safe audit log when a workspace upgrade is requested", async () => {
+    const caller = createCaller();
+    const usageSummary = {
+      workspaceId,
+      period: "today",
+      plan: {
+        name: "Free",
+        billingStatus: "free",
+      },
+      messageCount: 18,
+      imageCount: 20,
+      blockedCount: 1,
+      limits: {
+        imagesPerDay: 20,
+        messagesPerWindow: 30,
+        messageWindowSeconds: 60,
+      },
+      remaining: {
+        imagesToday: 0,
+      },
+      upgrade: {
+        recommended: true,
+        reason: "image_limit_reached",
+      },
+    };
+    mocks.getWorkspaceUsageSummary.mockResolvedValue(usageSummary);
+
+    await expect(caller.usage.requestUpgrade({ workspaceId })).resolves.toEqual({
+      success: true,
+      status: "requested",
+    });
+
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceUsageSummary).toHaveBeenCalledWith(workspaceId);
+    expect(mocks.insertAuditLog).toHaveBeenCalledWith({
+      workspaceId,
+      userId: user.id,
+      event: "billing_upgrade.requested",
+      metadata: {
+        planName: "Free",
+        billingStatus: "free",
+        upgradeReason: "image_limit_reached",
+        imagesRemainingToday: 0,
+        blockedToday: 1,
+      },
+    });
   });
 
   it("returns tenant-scoped knowledge sources without auditing a read", async () => {
