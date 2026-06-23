@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   getOrCreateAiIdentity: vi.fn(),
   updateAiIdentity: vi.fn(),
   listChannelConnections: vi.fn(),
+  disconnectChannelConnection: vi.fn(),
   getWorkspaceUsageSummary: vi.fn(),
   listWorkspaceKnowledgeSources: vi.fn(),
   getWorkspaceKnowledgeSummary: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock("./db", () => ({
   getOrCreateAiIdentity: mocks.getOrCreateAiIdentity,
   updateAiIdentity: mocks.updateAiIdentity,
   listChannelConnections: mocks.listChannelConnections,
+  disconnectChannelConnection: mocks.disconnectChannelConnection,
   getWorkspaceUsageSummary: mocks.getWorkspaceUsageSummary,
   listWorkspaceKnowledgeSources: mocks.listWorkspaceKnowledgeSources,
   getWorkspaceKnowledgeSummary: mocks.getWorkspaceKnowledgeSummary,
@@ -163,6 +165,17 @@ describe("portal router tenant isolation", () => {
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 
+  it("rejects cross-workspace Facebook disconnects before mutating channel state", async () => {
+    const caller = createCaller();
+
+    await expectForbidden(() => caller.facebook.disconnect({ workspaceId }));
+
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.listChannelConnections).not.toHaveBeenCalled();
+    expect(mocks.disconnectChannelConnection).not.toHaveBeenCalled();
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
+  });
+
   it("rejects cross-workspace privacy updates before mutating data", async () => {
     const caller = createCaller();
 
@@ -285,6 +298,52 @@ describe("portal router audit logging", () => {
         scopes: ["pages_show_list", "pages_manage_metadata", "pages_messaging"],
       },
     });
+  });
+
+  it("disconnects Facebook Messenger and records privacy-safe channel audit metadata", async () => {
+    const caller = createCaller();
+    mocks.listChannelConnections.mockResolvedValue([
+      {
+        id: 5,
+        workspaceId,
+        channel: "facebook_messenger",
+        status: "connected",
+        externalId: "page-123",
+        displayName: "Tenant Page",
+        encryptedAccessToken: "sealed-token",
+        grantedScopes: ["pages_messaging"],
+        lastCheckedAt: new Date(1),
+        createdAt: new Date(0),
+        updatedAt: new Date(1),
+      },
+    ]);
+    mocks.disconnectChannelConnection.mockResolvedValue([]);
+
+    await expect(caller.facebook.disconnect({ workspaceId })).resolves.toEqual({
+      success: true,
+      status: "disconnected",
+    });
+
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.disconnectChannelConnection).toHaveBeenCalledWith(
+      workspaceId,
+      "facebook_messenger"
+    );
+    expect(mocks.insertAuditLog).toHaveBeenCalledWith({
+      workspaceId,
+      userId: user.id,
+      event: "facebook_page.disconnected",
+      metadata: {
+        previousStatus: "connected",
+      },
+    });
+    expect(mocks.insertAuditLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          pageId: expect.any(String),
+        }),
+      })
+    );
   });
 
   it("returns the tenant-checked workspace usage balance without audit logging", async () => {

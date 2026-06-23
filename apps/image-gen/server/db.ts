@@ -679,6 +679,39 @@ export async function upsertChannelConnection(values: InsertChannelConnection) {
   return listChannelConnections(values.workspaceId);
 }
 
+export async function disconnectChannelConnection(
+  workspaceId: number,
+  channel: "facebook_messenger" | "whatsapp" | "web"
+) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("disconnect_channel_connection");
+    throw new Error("Database unavailable: channel connection was not disconnected");
+  }
+
+  await db.insert(channelConnections).values({
+    workspaceId,
+    channel,
+    status: "disconnected",
+    externalId: null,
+    displayName: null,
+    encryptedAccessToken: null,
+    grantedScopes: null,
+    lastCheckedAt: new Date(),
+  }).onDuplicateKeyUpdate({
+    set: {
+      status: "disconnected",
+      externalId: null,
+      displayName: null,
+      encryptedAccessToken: null,
+      grantedScopes: null,
+      lastCheckedAt: new Date(),
+    },
+  });
+
+  return listChannelConnections(workspaceId);
+}
+
 export async function getWorkspaceUsageSummary(workspaceId: number) {
   const imageDailyLimit = getImageGenerationDailyLimit();
   const messageRateLimit = getBotTextRateLimitMax();
