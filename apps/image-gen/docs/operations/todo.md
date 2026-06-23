@@ -87,7 +87,7 @@ Required before broad customer launch:
 6. [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health/legal/customer-app surfaces.
 7. [ ] Move remaining feature-specific quota counters toward a single channel-neutral, tenant/workspace-scoped usage ledger before paid rollout.
 8. [ ] Verify tenant isolation across uploaded knowledge, extracted text, embeddings/retrieval artifacts, assistant memory, conversations, channel identifiers, generated prompts/outputs, billing, logs, support access, export, and deletion paths.
-9. [ ] Provide customer-facing bot instructions, current generic prompt behavior copy, privacy controls, and export/deletion instructions.
+9. [x] Provide customer-facing bot instructions, current generic prompt behavior copy, privacy controls, and export/deletion instructions.
 10. [ ] Keep legacy style-picker/campaign assets removed and do not reintroduce style catalogs unless explicitly requested.
 
 Exit criteria: customer data is tenant-scoped by design, support/break-glass access
@@ -227,7 +227,7 @@ Quota drift investigation note:
 - [x] Create setup guide for Meta configuration
 - [ ] Document current generic image prompt behavior for user-facing copy
 - [ ] Provide cost monitoring dashboard
-- [ ] Create user-facing bot instructions
+- [x] Create user-facing bot instructions. Covered by the portal bot-instructions panel and the customer-facing data controls/export/deletion copy.
 
 ### Maintenance backlog
 

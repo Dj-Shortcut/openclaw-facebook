@@ -526,7 +526,7 @@ describe("photo-first onboarding", () => {
     );
   });
 
-  it("leaves ordinary free-form user text without photo for OpenClaw", async () => {
+  it("routes direct free-form text without photo into prompt-first quick actions", async () => {
     const psid = "about-user";
 
     await processFacebookWebhookPayload({
@@ -542,8 +542,23 @@ describe("photo-first onboarding", () => {
       ],
     });
 
-    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
-    expect(sendTextMock).not.toHaveBeenCalled();
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
+      psid,
+      t("nl", "flowExplanation"),
+      [
+        {
+          content_type: "text",
+          title: "Nieuwe afbeelding",
+          payload: "OPENCLAW_ACTION:new_image",
+        },
+        {
+          content_type: "text",
+          title: "Pas foto aan",
+          payload: "OPENCLAW_ACTION:Pas%20foto%20aan",
+        },
+        { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
+      ]
+    );
   });
 
   it("uses sender locale when provided and reuses it for later events", async () => {

@@ -746,7 +746,7 @@ describe("shouldForwardMessengerTextToImageGen", () => {
 
 describe("processMessengerEvent unknown sender access policy", () => {
   it("keeps private pairing mode unchanged for unknown senders", async () => {
-    const inboundRun = vi.fn();
+    const inboundRun = vi.fn(async () => ({ dispatched: false }));
     const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR-1", created: true }));
     setGatewayRuntime(inboundRun, { upsertPairingRequest });
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
@@ -777,22 +777,22 @@ describe("processMessengerEvent unknown sender access policy", () => {
     expect(inboundRun).not.toHaveBeenCalled();
   });
 
-  it("routes unknown senders to the existing Leaderbot event bridge only when free-tier mode is explicit", async () => {
+  it("keeps ordinary unknown-sender free-tier text in the OpenClaw turn", async () => {
     process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
     process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
-    const inboundRun = vi.fn();
+    const inboundRun = vi.fn(async () => ({ dispatched: false }));
     const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR-1", created: true }));
     setGatewayRuntime(inboundRun, { upsertPairingRequest });
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
-      expect(String(url)).toBe("https://image-gen.example.test/internal/messenger/webhook-event");
-      return new Response(JSON.stringify({ status: "queued" }), {
+      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
+      return new Response(JSON.stringify({ recipient_id: "sender-mid-free-tier" }), {
         headers: { "content-type": "application/json" },
-        status: 202,
+        status: 200,
       });
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await processGatewayTestEvent(messengerTextEvent("mid-free-tier", "Hi"), {
+    await processGatewayTestEvent(messengerTextEvent("mid-free-tier", "Wie ben jij?"), {
       dmPolicy: "pairing",
       allowFrom: undefined,
       unknownSenderMode: "leaderbot_free_tier",
@@ -800,20 +800,41 @@ describe("processMessengerEvent unknown sender access policy", () => {
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
-    const bridgeBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
-    expect(bridgeBody).toMatchObject({
-      event: {
-        sender: { id: "sender-mid-free-tier" },
-        recipient: { id: "page-1" },
-        message: {
-          mid: "mid-free-tier",
-          text: "Hi",
-        },
-      },
-    });
+    const sendBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    expect(sendBody.sender_action).toBe("typing_on");
     expect(upsertPairingRequest).not.toHaveBeenCalled();
-    expect(inboundRun).not.toHaveBeenCalled();
+    expect(inboundRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps ordinary smoke-test questions in OpenClaw instead of the Leaderbot bridge", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    const inboundRun = vi.fn(async () => ({ dispatched: false }));
+    setGatewayRuntime(inboundRun);
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
+      return new Response(JSON.stringify({ recipient_id: "sender-mid-free-tier-xbox" }), {
+        headers: { "content-type": "application/json" },
+        status: 200,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(
+      messengerTextEvent(
+        "mid-free-tier-xbox",
+        "Hey leaderbot kan jij mij een trucje tonen hoe ik op mijn oude xbox 360 gratis kan gamen",
+      ),
+      {
+        dmPolicy: "pairing",
+        allowFrom: undefined,
+        unknownSenderMode: "leaderbot_free_tier",
+        leaderbotBridgeEnabled: true,
+      },
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(inboundRun).toHaveBeenCalledTimes(1);
   });
 
   it("keeps unknown senders in pairing when the Leaderbot bridge is not enabled", async () => {
@@ -873,7 +894,7 @@ describe("processMessengerEvent unknown sender access policy", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await processGatewayTestEvent(messengerTextEvent("mid-free-tier-cap", "Hi"), {
+    await processGatewayTestEvent(messengerImagePromptEvent("mid-free-tier-cap"), {
       dmPolicy: "pairing",
       allowFrom: undefined,
       unknownSenderMode: "leaderbot_free_tier",
@@ -919,7 +940,7 @@ describe("processMessengerEvent unknown sender access policy", () => {
 
     await expect(
       processGatewayTestEvent(
-        messengerTextEvent("mid-free-tier-fallback-failure", "Hi"),
+        messengerImagePromptEvent("mid-free-tier-fallback-failure"),
         {
           dmPolicy: "pairing",
           allowFrom: undefined,

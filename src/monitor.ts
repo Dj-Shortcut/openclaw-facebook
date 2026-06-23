@@ -1230,14 +1230,34 @@ function isLeaderbotBridgeEnabled(account: ResolvedMessengerAccount): boolean {
 function shouldRouteUnknownSenderToLeaderbotFreeTier(params: {
   account: ResolvedMessengerAccount;
   dmPolicy: string;
+  event: MessengerWebhookMessaging;
   senderId: string;
+  text: string;
 }): boolean {
   return (
     params.dmPolicy === "pairing" &&
     params.senderId.trim().length > 0 &&
     isLeaderbotBridgeEnabled(params.account) &&
-    params.account.config.unknownSenderMode === "leaderbot_free_tier"
+    params.account.config.unknownSenderMode === "leaderbot_free_tier" &&
+    shouldForwardUnknownSenderEventToLeaderbot(params.event, params.text)
   );
+}
+
+function shouldForwardUnknownSenderEventToLeaderbot(
+  event: MessengerWebhookMessaging,
+  text: string,
+): boolean {
+  if (classifyMessengerFastLaneIntent(text) === "delete_data") {
+    return true;
+  }
+  if (hasMessengerInteractivePayload(event)) {
+    return true;
+  }
+  const attachments = event.message?.attachments ?? [];
+  if (attachments.length > 0) {
+    return true;
+  }
+  return shouldForwardMessengerTextToImageGen(text);
 }
 
 async function shouldProcessMessengerEvent(params: {
@@ -1297,7 +1317,15 @@ async function shouldProcessMessengerEvent(params: {
     return "process";
   }
   if (access.senderAccess.decision === "pairing") {
-    if (shouldRouteUnknownSenderToLeaderbotFreeTier({ account: params.account, dmPolicy, senderId })) {
+    if (
+      shouldRouteUnknownSenderToLeaderbotFreeTier({
+        account: params.account,
+        dmPolicy,
+        event: params.event,
+        senderId,
+        text: rawText,
+      })
+    ) {
       params.trace &&
         logMessengerStage(params.trace, "intent_classified", {
           decision: "leaderbot_free_tier",
@@ -1308,6 +1336,20 @@ async function shouldProcessMessengerEvent(params: {
         )} to Leaderbot free tier account=${params.account.accountId}`,
       );
       return "leaderbot_free_tier";
+    }
+    if (
+      dmPolicy === "pairing" &&
+      senderId.trim().length > 0 &&
+      isLeaderbotBridgeEnabled(params.account) &&
+      params.account.config.unknownSenderMode === "leaderbot_free_tier"
+    ) {
+      params.trace && logMessengerStage(params.trace, "intent_classified", { decision: "allow" });
+      logVerbose(
+        `messenger: routing unknown sender ${redactMessengerIdentifier(
+          senderId,
+        )} to OpenClaw turn account=${params.account.accountId}`,
+      );
+      return "process";
     }
     params.trace && logMessengerStage(params.trace, "intent_classified", { decision: "pairing" });
     if (senderId) {

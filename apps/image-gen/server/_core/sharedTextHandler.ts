@@ -28,7 +28,6 @@ type SharedTextHandlerInput = {
   message: NormalizedInboundMessage;
   reqId: string;
   lang: Lang;
-  unhandledTextFallback?: "imageHelp" | "none";
   getState: () => Promise<MessengerUserState>;
   setFlowState: (state: ConversationState) => Promise<void>;
   runTextFeatures?: (args: {
@@ -56,7 +55,6 @@ type SharedTextHandlerResult = {
   response: BotResponse | null;
   replyState?: ConversationState;
   afterSend?: "markIntroSeen";
-  suppressEventFallback?: boolean;
 };
 
 type PreparedSharedTextMessage = {
@@ -160,26 +158,6 @@ function buildDefaultTextResponse(
   return { response: buildQuickStartResponse(lang) };
 }
 
-function buildUnhandledTextResponse(
-  input: SharedTextHandlerInput,
-  trimmedText: string,
-  hasPhoto: boolean
-): SharedTextHandlerResult {
-  if (input.unhandledTextFallback === "none") {
-    if (shouldKeepImageHelpForLegacyShortcut(trimmedText)) {
-      return buildDefaultTextResponse(input.lang, hasPhoto);
-    }
-
-    return { response: null, suppressEventFallback: true };
-  }
-
-  return buildDefaultTextResponse(input.lang, hasPhoto);
-}
-
-function shouldKeepImageHelpForLegacyShortcut(trimmedText: string): boolean {
-  return trimmedText.split(/\s+/u).length === 1;
-}
-
 async function tryHandleVideoAnimationIntent(
   input: SharedTextHandlerInput,
   trimmedText: string,
@@ -268,5 +246,5 @@ export async function handleSharedTextMessage(
   }
 
   input.logState?.(state, "text_message");
-  return buildUnhandledTextResponse(input, trimmedText, hasPhoto);
+  return buildDefaultTextResponse(input.lang, hasPhoto);
 }
