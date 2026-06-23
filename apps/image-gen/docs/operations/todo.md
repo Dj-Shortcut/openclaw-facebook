@@ -116,13 +116,14 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Add tested REST portal auth guard for snapshot and customer-owned mutations
 - [x] Add tenant-scoped portal export/deletion request tracking for customer data controls
 - [x] Add initial customer-facing free-plan usage balance and upgrade prompt to the portal dashboard
+- [x] Add portal-rendered privacy, terms, and data-deletion pages with local footer links
 - [ ] Add portal authentication before broad customer launch
 - [x] Add tenant isolation tests before broad customer launch
 - [x] Add portal audit logging before broad customer launch
 - [ ] Add billing and usage controls before broad customer launch
 - [ ] Verify GDPR deletion end-to-end before broad customer launch
 - [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health routes
-- [ ] Move public legal routes (`/privacy`, `/terms`, `/data-deletion`) into the portal surface before pointing customer traffic there
+- [ ] Move public legal routes (`/privacy`, `/terms`, `/data-deletion`) into the portal surface before pointing customer traffic there. Initial React portal pages and local footer links exist; production routing and Meta review verification remain open.
 - [x] Remove legacy campaign/style assets that do not support the portal direction
 - [ ] Observe generic text-to-image quality before removing remaining internal style-preset backend compatibility
 - [ ] Create "upgrade to premium" prompt when limit reached
