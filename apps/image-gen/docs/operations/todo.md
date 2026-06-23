@@ -187,6 +187,10 @@ Open cost-control work:
 - [x] P2 | owner: image-gen-runtime | Make provider-attempt updates period-safe across midnight retries by reconciling by entry identity rather than current-period-only assumptions.
 - [x] P2 | owner: image-gen-runtime, storage-platform | Reduce worst-case delete-my-data ledger cleanup latency by making `deleteCostLedgerEntriesForUser` bounded/performance-safe for high-history users. Cleanup now scans the fixed 90-day retention window, skips locks for periods without matching user entries, and emits metadata-only completion counts.
 
+Historical branch review note:
+
+- [x] Reviewed stale branch `chore/image-gen-cost-ledger` on 2026-06-23. Do not merge or revive it wholesale: it predates the current portal/privacy work and would remove newer customer-portal, privacy-request, and OpenClaw login changes. Useful ideas from that branch are already represented on `main`: Redis legacy cost-ledger compatibility, deletion retry safety, admin cost-summary validation, Facebook inbound tool-policy config merging, delete-data attachment forwarding, and stricter positive USD cost estimate parsing.
+
 Quota drift investigation note:
 
 - Root cause: free-tier product targets were documented before runtime defaults changed, while older constants and tests still encoded `3` image/audio attempts and `10` bot text messages. Image and audio provider retry loops also reported only one quota commit for a multi-attempt provider operation.
