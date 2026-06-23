@@ -322,6 +322,29 @@ export const portalRouter = router({
       await requireWorkspace(ctx, input.workspaceId);
       return db.getWorkspaceUsageSummary(input.workspaceId);
     }),
+
+    requestUpgrade: protectedProcedure
+      .input(workspaceInput)
+      .mutation(async ({ ctx, input }) => {
+        await requireWorkspace(ctx, input.workspaceId);
+        const usage = await db.getWorkspaceUsageSummary(input.workspaceId);
+        await db.insertAuditLog({
+          workspaceId: input.workspaceId,
+          userId: ctx.user.id,
+          event: "billing_upgrade.requested",
+          metadata: {
+            planName: usage.plan.name,
+            billingStatus: usage.plan.billingStatus,
+            upgradeReason: usage.upgrade.reason,
+            imagesRemainingToday: usage.remaining.imagesToday,
+            blockedToday: usage.blockedCount,
+          },
+        });
+        return {
+          success: true,
+          status: "requested",
+        } as const;
+      }),
   }),
 
   knowledge: router({

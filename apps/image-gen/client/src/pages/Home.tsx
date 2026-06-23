@@ -120,6 +120,12 @@ function Home() {
       await utils.portal.privacy.requests.invalidate({ workspaceId });
     },
   });
+  const upgradeRequestMutation = trpc.portal.usage.requestUpgrade.useMutation({
+    onSuccess: async () => {
+      if (!workspaceId) return;
+      await utils.portal.usage.summary.invalidate({ workspaceId });
+    },
+  });
   const aiIdentityMutation = trpc.portal.aiIdentity.update.useMutation({
     onSuccess: async () => {
       if (!workspaceId) return;
@@ -185,6 +191,10 @@ function Home() {
       requestType,
       note: null,
     });
+  };
+  const requestUpgrade = () => {
+    if (!workspaceId) return;
+    upgradeRequestMutation.mutate({ workspaceId });
   };
   const saveIdentity = async () => {
     if (!workspaceId) return;
@@ -507,14 +517,12 @@ function Home() {
                 {usage?.upgrade.recommended ? (
                   <Button
                     className="gap-2"
+                    disabled={!workspaceId || upgradeRequestMutation.isPending}
                     size="sm"
                     type="button"
-                    onClick={() => {
-                      window.location.href =
-                        "mailto:privacy@leaderbot.live?subject=Leaderbot plan upgrade";
-                    }}
+                    onClick={requestUpgrade}
                   >
-                    Upgrade
+                    {upgradeRequestMutation.isPending ? "Requesting" : "Upgrade"}
                   </Button>
                 ) : null}
               </div>
@@ -547,6 +555,15 @@ function Home() {
                   style={{ width: `${imageProgress}%` }}
                 />
               </div>
+              {upgradeRequestMutation.isSuccess ? (
+                <p className="mt-4 text-sm text-emerald-200">
+                  Upgrade request recorded for this workspace.
+                </p>
+              ) : upgradeRequestMutation.error ? (
+                <p className="mt-4 text-sm text-red-200">
+                  Unable to record the upgrade request. Please try again.
+                </p>
+              ) : null}
             </section>
 
             <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5 lg:col-span-3">
