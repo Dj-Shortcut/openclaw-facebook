@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   updateAiIdentity: vi.fn(),
   listChannelConnections: vi.fn(),
   getWorkspaceUsageSummary: vi.fn(),
+  getWorkspaceKnowledgeSummary: vi.fn(),
   getWorkspacePrivacySettings: vi.fn(),
   updateWorkspacePrivacySettings: vi.fn(),
   insertAuditLog: vi.fn(),
@@ -21,6 +22,7 @@ vi.mock("./db", () => ({
   updateAiIdentity: mocks.updateAiIdentity,
   listChannelConnections: mocks.listChannelConnections,
   getWorkspaceUsageSummary: mocks.getWorkspaceUsageSummary,
+  getWorkspaceKnowledgeSummary: mocks.getWorkspaceKnowledgeSummary,
   getWorkspacePrivacySettings: mocks.getWorkspacePrivacySettings,
   updateWorkspacePrivacySettings: mocks.updateWorkspacePrivacySettings,
   insertAuditLog: mocks.insertAuditLog,
@@ -98,11 +100,13 @@ describe("portal router tenant isolation", () => {
     await expectForbidden(() => caller.channels.list({ workspaceId }));
     await expectForbidden(() => caller.channels.status({ workspaceId }));
     await expectForbidden(() => caller.usage.summary({ workspaceId }));
+    await expectForbidden(() => caller.knowledge.summary({ workspaceId }));
     await expectForbidden(() => caller.privacy.controls({ workspaceId }));
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledTimes(4);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledTimes(5);
     expect(mocks.listChannelConnections).not.toHaveBeenCalled();
     expect(mocks.getWorkspaceUsageSummary).not.toHaveBeenCalled();
+    expect(mocks.getWorkspaceKnowledgeSummary).not.toHaveBeenCalled();
     expect(mocks.getWorkspacePrivacySettings).not.toHaveBeenCalled();
   });
 

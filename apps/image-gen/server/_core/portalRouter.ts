@@ -250,6 +250,13 @@ export const portalRouter = router({
     }),
   }),
 
+  knowledge: router({
+    summary: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
+      await requireWorkspace(ctx, input.workspaceId);
+      return db.getWorkspaceKnowledgeSummary(input.workspaceId);
+    }),
+  }),
+
   privacy: router({
     links: publicProcedure.query(() => ({
       privacy: "/privacy",
