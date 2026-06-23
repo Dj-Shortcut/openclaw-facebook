@@ -115,12 +115,24 @@ describe("OpenAiVideoProvider", () => {
         costEstimateComplete: false,
         estimateSource: "unpriced",
         unpricedCostComponents: ["video_generation"],
+        providerUsage: {
+          pricingModel: "unpriced",
+          size: "1280x720",
+          seconds: 8,
+          sourceContentType: "image/jpeg",
+          sourceBytes: 3,
+        },
       }),
       expect.objectContaining({
         operation: "video_generation",
         reqId: requestSummaryKey("req-openai-video-retry"),
         status: "provider_attempt_started",
         userKey: "user-key",
+        providerUsage: expect.objectContaining({
+          pricingModel: "unpriced",
+          size: "1280x720",
+          seconds: 8,
+        }),
       }),
     ]);
     expect(JSON.stringify(ledger)).not.toContain("make it dance");

@@ -256,6 +256,13 @@ async function createVideoJob(
       costEstimateComplete: false,
       estimateSource: "unpriced",
       unpricedCostComponents: ["video_generation"],
+      providerUsage: {
+        pricingModel: "unpriced",
+        size: getSize(),
+        seconds: Number(getSeconds()),
+        sourceContentType: referenceImage.contentType,
+        sourceBytes: referenceImage.bytes.byteLength,
+      },
     },
     attemptNow
   );
