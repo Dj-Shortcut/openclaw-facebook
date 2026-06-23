@@ -1,0 +1,35 @@
+import type { Request, Response } from "express";
+import * as db from "../db";
+import { sdk } from "./sdk";
+
+type PortalUser = {
+  id: number;
+  name: string | null;
+};
+
+export async function authenticatePortalRequest(req: Request, res: Response) {
+  try {
+    return await sdk.authenticateRequest(req);
+  } catch {
+    res.status(401).json({ error: "unauthenticated" });
+    return null;
+  }
+}
+
+export async function requirePortalWorkspace(
+  user: PortalUser,
+  res: Response,
+  workspaceId?: number
+) {
+  const workspace = workspaceId
+    ? { id: workspaceId }
+    : await db.getOrCreateUserWorkspace(user);
+  const membership = await db.getWorkspaceMembership(workspace.id, user.id);
+
+  if (!membership) {
+    res.status(403).json({ error: "workspace access denied" });
+    return null;
+  }
+
+  return workspaceId ? workspace : db.getOrCreateUserWorkspace(user);
+}

@@ -1,4 +1,4 @@
-import type { Express, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 import { z } from "zod";
 import * as db from "../db";
 import {
@@ -7,7 +7,7 @@ import {
   startFacebookConnect,
   storeFacebookAuthorizationCode,
 } from "./facebookConnectStore";
-import { sdk } from "./sdk";
+import { authenticatePortalRequest, requirePortalWorkspace } from "./portalAuth";
 
 const aiIdentityUpdateSchema = z.object({
   workspaceId: z.number().int().positive(),
@@ -27,27 +27,20 @@ const facebookCallbackSchema = z.object({
   state: z.string().min(16),
 });
 
-async function getAuthenticatedUser(req: Request, res: Response) {
-  try {
-    return await sdk.authenticateRequest(req);
-  } catch {
-    res.status(401).json({ error: "unauthenticated" });
-    return null;
-  }
+function asyncRoute(
+  handler: (req: Request, res: Response) => Promise<void>
+): (req: Request, res: Response, next: NextFunction) => void {
+  return (req, res, next) => {
+    void handler(req, res).catch(next);
+  };
 }
 
-async function requireWorkspace(
-  user: { id: number; name: string | null },
-  workspaceId?: number
+function redactChannelAccessToken<T extends { encryptedAccessToken?: unknown }>(
+  channel: T
 ) {
-  const workspace = workspaceId
-    ? { id: workspaceId }
-    : await db.getOrCreateUserWorkspace(user);
-  const membership = await db.getWorkspaceMembership(workspace.id, user.id);
-  if (!membership) {
-    return null;
-  }
-  return workspaceId ? workspace : await db.getOrCreateUserWorkspace(user);
+  const { encryptedAccessToken, ...redactedChannel } = channel;
+  void encryptedAccessToken;
+  return redactedChannel;
 }
 
 export function registerPortalRoutes(app: Express) {
@@ -85,15 +78,12 @@ export function registerPortalRoutes(app: Express) {
 </html>`);
   });
 
-  app.get("/api/portal/snapshot", async (req, res) => {
-    const user = await getAuthenticatedUser(req, res);
+  app.get("/api/portal/snapshot", asyncRoute(async (req, res) => {
+    const user = await authenticatePortalRequest(req, res);
     if (!user) return;
 
-    const workspace = await requireWorkspace(user);
-    if (!workspace) {
-      res.status(403).json({ error: "workspace access denied" });
-      return;
-    }
+    const workspace = await requirePortalWorkspace(user, res);
+    if (!workspace) return;
 
     const [identity, channels, usage, knowledge, privacySettings] = await Promise.all([
       db.getOrCreateAiIdentity(workspace.id),
@@ -111,7 +101,7 @@ export function registerPortalRoutes(app: Express) {
       },
       workspace,
       aiIdentity: identity,
-      channels: channels.map(({ encryptedAccessToken: _token, ...channel }) => channel),
+      channels: channels.map(redactChannelAccessToken),
       usage,
       knowledgeStore: {
         ...knowledge,
@@ -125,10 +115,10 @@ export function registerPortalRoutes(app: Express) {
         controls: privacySettings,
       },
     });
-  });
+  }));
 
-  app.post("/api/portal/ai-identity", async (req, res) => {
-    const user = await getAuthenticatedUser(req, res);
+  app.post("/api/portal/ai-identity", asyncRoute(async (req, res) => {
+    const user = await authenticatePortalRequest(req, res);
     if (!user) return;
 
     const parsed = aiIdentityUpdateSchema.safeParse(req.body);
@@ -137,11 +127,8 @@ export function registerPortalRoutes(app: Express) {
       return;
     }
 
-    const workspace = await requireWorkspace(user, parsed.data.workspaceId);
-    if (!workspace) {
-      res.status(403).json({ error: "workspace access denied" });
-      return;
-    }
+    const workspace = await requirePortalWorkspace(user, res, parsed.data.workspaceId);
+    if (!workspace) return;
 
     const updated = await db.updateAiIdentity(parsed.data.workspaceId, {
       name: parsed.data.name,
@@ -158,10 +145,10 @@ export function registerPortalRoutes(app: Express) {
     });
 
     res.status(200).json(updated);
-  });
+  }));
 
-  app.post("/api/portal/facebook/start", async (req, res) => {
-    const user = await getAuthenticatedUser(req, res);
+  app.post("/api/portal/facebook/start", asyncRoute(async (req, res) => {
+    const user = await authenticatePortalRequest(req, res);
     if (!user) return;
 
     const parsed = facebookStartSchema.safeParse(req.body);
@@ -170,11 +157,8 @@ export function registerPortalRoutes(app: Express) {
       return;
     }
 
-    const workspace = await requireWorkspace(user, parsed.data.workspaceId);
-    if (!workspace) {
-      res.status(403).json({ error: "workspace access denied" });
-      return;
-    }
+    const workspace = await requirePortalWorkspace(user, res, parsed.data.workspaceId);
+    if (!workspace) return;
 
     const state = startFacebookConnect({
       workspaceId: parsed.data.workspaceId,
@@ -192,5 +176,5 @@ export function registerPortalRoutes(app: Express) {
       authorizationUrl: getFacebookOAuthUrl(state.state),
       requiredScopes: REQUIRED_FACEBOOK_SCOPES,
     });
-  });
+  }));
 }
