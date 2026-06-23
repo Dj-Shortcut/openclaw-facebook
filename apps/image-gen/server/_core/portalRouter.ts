@@ -32,6 +32,11 @@ const privacyControlsUpdateInput = workspaceInput.extend({
   imageMemoryRetentionDays: z.number().int().min(0).max(365),
 });
 
+const privacyRequestInput = workspaceInput.extend({
+  requestType: z.enum(["export", "deletion"]),
+  note: z.string().trim().max(500).nullable().optional(),
+});
+
 const knowledgeSourceInput = workspaceInput.extend({
   sourceType: z.enum(["upload", "website", "manual_text", "integration"]),
   name: z.string().trim().min(1).max(200),
@@ -62,6 +67,20 @@ function badRequest(error: unknown, fallback: string) {
     code: "BAD_REQUEST",
     message: error instanceof Error ? error.message : fallback,
   });
+}
+
+function redactChannelAccessToken<T extends { encryptedAccessToken?: unknown }>(
+  channel: T
+) {
+  const { encryptedAccessToken, ...redactedChannel } = channel;
+  void encryptedAccessToken;
+  return redactedChannel;
+}
+
+function redactFacebookPageToken<T extends { accessToken?: unknown }>(page: T) {
+  const { accessToken, ...redactedPage } = page;
+  void accessToken;
+  return redactedPage;
 }
 
 export const portalRouter = router({
@@ -104,7 +123,7 @@ export const portalRouter = router({
     list: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
       await requireWorkspace(ctx, input.workspaceId);
       const connections = await db.listChannelConnections(input.workspaceId);
-      return connections.map(({ encryptedAccessToken: _token, ...connection }) => connection);
+      return connections.map(redactChannelAccessToken);
     }),
 
     status: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
@@ -197,7 +216,7 @@ export const portalRouter = router({
         });
 
         return {
-          pages: pages.map(({ accessToken: _token, ...page }) => page),
+          pages: pages.map(redactFacebookPageToken),
         };
       }),
 
@@ -302,6 +321,33 @@ export const portalRouter = router({
       await requireWorkspace(ctx, input.workspaceId);
       return db.getWorkspacePrivacySettings(input.workspaceId);
     }),
+
+    requests: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
+      await requireWorkspace(ctx, input.workspaceId);
+      return db.listWorkspacePrivacyRequests(input.workspaceId);
+    }),
+
+    createRequest: protectedProcedure
+      .input(privacyRequestInput)
+      .mutation(async ({ ctx, input }) => {
+        await requireWorkspace(ctx, input.workspaceId);
+        const request = await db.createWorkspacePrivacyRequest(
+          input.workspaceId,
+          ctx.user.id,
+          {
+            requestType: input.requestType,
+            note: input.note || null,
+          },
+          {
+            event: "privacy_request.created",
+            metadata: {
+              requestType: input.requestType,
+              status: "requested",
+            },
+          }
+        );
+        return request;
+      }),
 
     updateControls: protectedProcedure
       .input(privacyControlsUpdateInput)

@@ -1,4 +1,4 @@
-import { eq, and, sql } from "drizzle-orm";
+import { desc, eq, and, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   aiIdentities,
@@ -18,12 +18,14 @@ import {
   InsertWorkspaceKnowledgeSource,
   InsertWorkspaceMember,
   InsertWorkspacePrivacySetting,
+  InsertWorkspacePrivacyRequest,
   messengerState,
   notificationLog,
   usageStats,
   users,
   workspaceMembers,
   workspacePrivacySettings,
+  workspacePrivacyRequests,
   workspaceKnowledgeSources,
   workspaces,
   workspaceUsageDaily,
@@ -399,6 +401,30 @@ function normalizeWorkspacePrivacySettings(
   };
 }
 
+function getInsertedId(result: unknown, label: string): number {
+  const insertId = (result as { insertId?: unknown } | undefined)?.insertId;
+
+  if (typeof insertId === "number" && Number.isSafeInteger(insertId) && insertId > 0) {
+    return insertId;
+  }
+
+  if (typeof insertId === "bigint" && insertId > BigInt(0)) {
+    const numericId = Number(insertId);
+    if (Number.isSafeInteger(numericId)) {
+      return numericId;
+    }
+  }
+
+  if (typeof insertId === "string") {
+    const numericId = Number(insertId);
+    if (Number.isSafeInteger(numericId) && numericId > 0) {
+      return numericId;
+    }
+  }
+
+  throw new Error(`${label} insert did not return an id`);
+}
+
 export async function listWorkspaceKnowledgeSources(workspaceId: number) {
   const db = await getDb();
   if (!db) {
@@ -563,6 +589,69 @@ export async function updateWorkspacePrivacySettings(
   });
 
   return getWorkspacePrivacySettings(workspaceId);
+}
+
+export async function listWorkspacePrivacyRequests(workspaceId: number) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("list_workspace_privacy_requests");
+    return [];
+  }
+
+  const result = await db
+    .select()
+    .from(workspacePrivacyRequests)
+    .where(eq(workspacePrivacyRequests.workspaceId, workspaceId))
+    .orderBy(desc(workspacePrivacyRequests.id));
+
+  return result;
+}
+
+export async function createWorkspacePrivacyRequest(
+  workspaceId: number,
+  userId: number,
+  values: Pick<InsertWorkspacePrivacyRequest, "requestType" | "note">,
+  audit?: Pick<InsertAuditLog, "event" | "metadata">
+) {
+  const db = await getDb();
+  const request: InsertWorkspacePrivacyRequest = {
+    workspaceId,
+    userId,
+    requestType: values.requestType,
+    note: values.note ?? null,
+    status: "requested",
+  };
+
+  if (!db) {
+    logDatabaseUnavailable("create_workspace_privacy_request");
+    throw new Error("Database unavailable: privacy request was not persisted");
+  }
+
+  return db.transaction(async tx => {
+    const insertResult = await tx.insert(workspacePrivacyRequests).values(request);
+    const insertedId = getInsertedId(insertResult, "privacy request");
+
+    if (audit) {
+      await tx.insert(auditLog).values({
+        workspaceId,
+        userId,
+        event: audit.event,
+        metadata: audit.metadata,
+      });
+    }
+
+    const created = await tx
+      .select()
+      .from(workspacePrivacyRequests)
+      .where(eq(workspacePrivacyRequests.id, insertedId))
+      .limit(1);
+
+    if (!created[0]) {
+      throw new Error("Privacy request insert succeeded but read-back failed");
+    }
+
+    return created[0];
+  });
 }
 
 export async function upsertChannelConnection(values: InsertChannelConnection) {

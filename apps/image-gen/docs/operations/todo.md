@@ -113,6 +113,7 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Replace the marketing-style home screen with an authenticated customer portal dashboard and customer-editable AI identity/instructions
 - [x] Add initial Facebook Page Connect authorization entrypoint for customer workspaces
 - [x] Add tested REST portal auth guard for snapshot and customer-owned mutations
+- [x] Add tenant-scoped portal export/deletion request tracking for customer data controls
 - [ ] Add portal authentication before broad customer launch
 - [x] Add tenant isolation tests before broad customer launch
 - [x] Add portal audit logging before broad customer launch

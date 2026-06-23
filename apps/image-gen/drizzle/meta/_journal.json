@@ -43,6 +43,13 @@
       "when": 1780636800000,
       "tag": "0005_workspace_tenant_model",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1780982400000,
+      "tag": "0006_workspace_privacy_requests",
+      "breakpoints": true
     }
   ]
 }
