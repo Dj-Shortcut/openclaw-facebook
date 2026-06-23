@@ -108,6 +108,7 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [ ] Design the `leaderbot.live` tenant/customer portal as a real app, not a brochure site
 - [ ] Define tenant model: customer workspace, owned AI identity, channel connections, knowledge, usage, and privacy controls
 - [x] Add tenant model foundation: knowledge sources + privacy controls persistence and portal snapshot exposure
+- [x] Add tenant-checked customer portal API for knowledge source registration and listing
 - [x] Scaffold customer-facing Tauri portal app with tenant-scoped portal API surfaces
 - [x] Add initial Facebook Page Connect authorization entrypoint for customer workspaces
 - [ ] Add portal authentication before broad customer launch

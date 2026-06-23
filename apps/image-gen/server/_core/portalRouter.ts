@@ -32,6 +32,12 @@ const privacyControlsUpdateInput = workspaceInput.extend({
   imageMemoryRetentionDays: z.number().int().min(0).max(365),
 });
 
+const knowledgeSourceInput = workspaceInput.extend({
+  sourceType: z.enum(["upload", "website", "manual_text", "integration"]),
+  name: z.string().trim().min(1).max(200),
+  sourceReference: z.string().trim().max(1024).nullable().optional(),
+});
+
 async function requireWorkspace(
   ctx: { user: { id: number; name: string | null } },
   workspaceId?: number
@@ -251,10 +257,36 @@ export const portalRouter = router({
   }),
 
   knowledge: router({
+    list: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
+      await requireWorkspace(ctx, input.workspaceId);
+      return db.listWorkspaceKnowledgeSources(input.workspaceId);
+    }),
+
     summary: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
       await requireWorkspace(ctx, input.workspaceId);
       return db.getWorkspaceKnowledgeSummary(input.workspaceId);
     }),
+
+    registerSource: protectedProcedure
+      .input(knowledgeSourceInput)
+      .mutation(async ({ ctx, input }) => {
+        await requireWorkspace(ctx, input.workspaceId);
+        const source = await db.registerWorkspaceKnowledgeSource(input.workspaceId, {
+          sourceType: input.sourceType,
+          name: input.name,
+          sourceReference: input.sourceReference || null,
+        });
+        await db.insertAuditLog({
+          workspaceId: input.workspaceId,
+          userId: ctx.user.id,
+          event: "knowledge_source.registered",
+          metadata: {
+            sourceType: input.sourceType,
+            status: source.status,
+          },
+        });
+        return source;
+      }),
   }),
 
   privacy: router({

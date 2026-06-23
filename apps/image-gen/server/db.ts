@@ -15,6 +15,7 @@ import {
   InsertUsageStats,
   InsertUser,
   InsertWorkspace,
+  InsertWorkspaceKnowledgeSource,
   InsertWorkspaceMember,
   InsertWorkspacePrivacySetting,
   messengerState,
@@ -412,6 +413,67 @@ export async function listWorkspaceKnowledgeSources(workspaceId: number) {
     .orderBy((table) => table.name);
 
   return result;
+}
+
+export async function registerWorkspaceKnowledgeSource(
+  workspaceId: number,
+  values: Pick<
+    InsertWorkspaceKnowledgeSource,
+    "sourceType" | "name" | "sourceReference"
+  >
+) {
+  const db = await getDb();
+  const now = new Date();
+  const source: InsertWorkspaceKnowledgeSource = {
+    workspaceId,
+    sourceType: values.sourceType,
+    name: values.name,
+    sourceReference: values.sourceReference ?? null,
+    status: "queued",
+    itemCount: 0,
+  };
+
+  if (!db) {
+    logDatabaseUnavailable("register_workspace_knowledge_source");
+    return {
+      id: workspaceId,
+      ...source,
+      lastIndexedAt: null,
+      metadata: null,
+      createdAt: new Date(0),
+      updatedAt: now,
+    };
+  }
+
+  await db.insert(workspaceKnowledgeSources).values(source).onDuplicateKeyUpdate({
+    set: {
+      sourceType: source.sourceType,
+      sourceReference: source.sourceReference,
+      status: "queued",
+      itemCount: 0,
+      lastIndexedAt: null,
+    },
+  });
+
+  const created = await db
+    .select()
+    .from(workspaceKnowledgeSources)
+    .where(
+      and(
+        eq(workspaceKnowledgeSources.workspaceId, workspaceId),
+        eq(workspaceKnowledgeSources.name, source.name)
+      )
+    )
+    .limit(1);
+
+  return created[0] ?? {
+    id: workspaceId,
+    ...source,
+    lastIndexedAt: null,
+    metadata: null,
+    createdAt: new Date(0),
+    updatedAt: now,
+  };
 }
 
 export async function getWorkspaceKnowledgeSummary(workspaceId: number) {
