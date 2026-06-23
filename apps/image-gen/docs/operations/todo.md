@@ -61,7 +61,7 @@ access:
 3. [x] Add default-deny tool policy for all high-cost tools exposed to untrusted Facebook-originated users.
 4. [x] Add per-user daily spend caps, a global Facebook daily spend cap, and monthly cost cap enforcement.
 5. [x] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, estimated cost, final cost, status, and UTC period.
-6. [ ] Add richer provider usage dimensions to cost-ledger entries where providers expose safe metadata.
+6. [x] Add richer provider usage dimensions to cost-ledger entries where providers expose safe metadata.
 7. [ ] Add owner cost alerts and an owner dashboard for spend, quota blocks, duplicate skips, provider failures, queue health, and delivery failures.
 8. [ ] Continue verifying storage-proxy delivery under Messenger crawler constraints, including generated outputs and retained source images.
 9. [ ] Evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory.
@@ -167,7 +167,7 @@ Open cost-control work:
 4. [x] Add per-user daily spend caps for paired Facebook users.
 5. [x] Add global Facebook daily spend cap.
 6. [x] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, estimated cost, final cost, and status. Image, audio transcription, and generated-video attempts now write metadata-only entries and reconcile success/failure status; image plus optionally-priced audio/video attempts populate final cost when the estimate is complete.
-7. [ ] Add richer provider usage dimensions to cost-ledger entries where providers expose safe metadata.
+7. [x] Add richer provider usage dimensions to cost-ledger entries where providers expose safe metadata.
 8. [ ] Add owner dashboard for Facebook spend by day/month, account/page, `userKey`, blocked attempts, duplicate skips, and provider failures. The admin-only cost summary route now includes stored spend plus open/failed/blocked/status counts and Messenger generation queue health; dashboard UX remains open.
 9. [ ] Add user-facing balance/spend overview before paid rollout.
 10. [x] Add monthly cost cap enforcement.
