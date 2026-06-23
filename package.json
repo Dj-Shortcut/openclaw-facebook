@@ -54,6 +54,7 @@
     "pack:dry": "npm pack --dry-run",
     "check": "npm run build && npm test && npm run pack:dry",
     "openclaw:update": "node scripts/update-openclaw.mjs",
+    "openclaw:login": "node scripts/openclaw-login.mjs",
     "openclaw:validate": "node scripts/validate-openclaw-runtime.mjs",
     "release:validate-versions": "node scripts/validate-release-versions.mjs",
     "openclaw:release-check": "npm run openclaw:validate && npm run release:validate-versions && npm run check",
