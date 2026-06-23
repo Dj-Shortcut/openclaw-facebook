@@ -5,6 +5,7 @@ import { portalRouter } from "./_core/portalRouter";
 const mocks = vi.hoisted(() => ({
   getOrCreateUserWorkspace: vi.fn(),
   getWorkspaceMembership: vi.fn(),
+  updateWorkspace: vi.fn(),
   getOrCreateAiIdentity: vi.fn(),
   updateAiIdentity: vi.fn(),
   listChannelConnections: vi.fn(),
@@ -23,6 +24,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./db", () => ({
   getOrCreateUserWorkspace: mocks.getOrCreateUserWorkspace,
   getWorkspaceMembership: mocks.getWorkspaceMembership,
+  updateWorkspace: mocks.updateWorkspace,
   getOrCreateAiIdentity: mocks.getOrCreateAiIdentity,
   updateAiIdentity: mocks.updateAiIdentity,
   listChannelConnections: mocks.listChannelConnections,
@@ -66,6 +68,11 @@ const aiIdentityUpdateInput = {
   tone: "Helpful",
   language: "nl",
   modelDefault: "default",
+};
+
+const workspaceUpdateInput = {
+  workspaceId,
+  name: "Leaderbot Support Workspace",
 };
 
 const privacyControlsUpdateInput = {
@@ -133,6 +140,16 @@ describe("portal router tenant isolation", () => {
 
     expect(mocks.getOrCreateUserWorkspace).toHaveBeenCalledWith(user);
     expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+  });
+
+  it("rejects cross-workspace workspace updates before mutating data", async () => {
+    const caller = createCaller();
+
+    await expectForbidden(() => caller.workspace.update(workspaceUpdateInput));
+
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.updateWorkspace).not.toHaveBeenCalled();
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 
   it("rejects cross-workspace channel and usage reads before returning tenant data", async () => {
@@ -237,6 +254,33 @@ describe("portal router audit logging", () => {
       event: "ai_identity.updated",
       metadata: {
         fields: ["name", "instructions", "tone", "language", "modelDefault"],
+      },
+    });
+  });
+
+  it("records a privacy-safe audit log when workspace details are updated", async () => {
+    const caller = createCaller();
+    const updatedWorkspace = {
+      ...workspace,
+      name: workspaceUpdateInput.name,
+      updatedAt: new Date(1),
+    };
+    mocks.updateWorkspace.mockResolvedValue(updatedWorkspace);
+
+    await expect(caller.workspace.update(workspaceUpdateInput)).resolves.toEqual(
+      updatedWorkspace
+    );
+
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.updateWorkspace).toHaveBeenCalledWith(workspaceId, {
+      name: workspaceUpdateInput.name,
+    });
+    expect(mocks.insertAuditLog).toHaveBeenCalledWith({
+      workspaceId,
+      userId: user.id,
+      event: "workspace.updated",
+      metadata: {
+        fields: ["name"],
       },
     });
   });

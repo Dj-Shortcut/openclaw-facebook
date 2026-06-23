@@ -112,6 +112,7 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Add customer-facing knowledge source registration and status list to the portal dashboard
 - [x] Scaffold customer-facing Tauri portal app with tenant-scoped portal API surfaces
 - [x] Replace the marketing-style home screen with an authenticated customer portal dashboard and customer-editable AI identity/instructions
+- [x] Add tenant-checked workspace name management in the customer portal
 - [x] Add initial Facebook Page Connect authorization entrypoint for customer workspaces
 - [x] Add tested REST portal auth guard for snapshot and customer-owned mutations
 - [x] Add tenant-scoped portal export/deletion request tracking for customer data controls

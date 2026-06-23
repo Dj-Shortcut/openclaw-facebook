@@ -68,6 +68,8 @@ function Home() {
     language: "",
     modelDefault: "",
   });
+  const [isEditingWorkspace, setIsEditingWorkspace] = useState(false);
+  const [workspaceName, setWorkspaceName] = useState("");
   const [knowledgeForm, setKnowledgeForm] = useState<{
     sourceType: "website" | "manual_text" | "integration";
     name: string;
@@ -84,6 +86,10 @@ function Home() {
     enabled: auth.isAuthenticated,
   });
   const workspaceId = workspaceQuery.data?.id;
+  const workspaceDisplayName =
+    portalSessionQuery.data?.workspace.name ??
+    workspaceQuery.data?.name ??
+    "Leaderbot workspace";
   const aiIdentityQuery = trpc.portal.aiIdentity.get.useQuery(
     { workspaceId: workspaceId ?? 0 },
     { enabled: Boolean(workspaceId) }
@@ -139,6 +145,13 @@ function Home() {
       await utils.portal.aiIdentity.get.invalidate({ workspaceId });
     },
   });
+  const workspaceMutation = trpc.portal.workspace.update.useMutation({
+    onSuccess: async () => {
+      setIsEditingWorkspace(false);
+      await utils.portal.workspace.current.invalidate();
+      await utils.portal.auth.session.invalidate();
+    },
+  });
   const knowledgeMutation = trpc.portal.knowledge.registerSource.useMutation({
     onSuccess: async () => {
       if (!workspaceId) return;
@@ -191,6 +204,10 @@ function Home() {
     });
     setIsEditingIdentity(true);
   };
+  const startEditingWorkspace = () => {
+    setWorkspaceName(workspaceDisplayName);
+    setIsEditingWorkspace(true);
+  };
   const createPrivacyRequest = (requestType: "export" | "deletion") => {
     if (!workspaceId) return;
     privacyRequestMutation.mutate({
@@ -216,6 +233,13 @@ function Home() {
       tone: identityForm.tone,
       language: identityForm.language,
       modelDefault: identityForm.modelDefault,
+    });
+  };
+  const saveWorkspace = async () => {
+    if (!workspaceId) return;
+    await workspaceMutation.mutateAsync({
+      workspaceId,
+      name: workspaceName,
     });
   };
   const registerKnowledgeSource = async () => {
@@ -277,11 +301,59 @@ function Home() {
         <header className="flex flex-col gap-4 border-b border-slate-800 pb-6 md:flex-row md:items-end md:justify-between">
           <div>
             <p className="text-sm text-cyan-200">Workspace</p>
-            <h1 className="mt-1 text-3xl font-semibold text-slate-50">
-              {portalSessionQuery.data?.workspace.name ??
-                workspaceQuery.data?.name ??
-                "Leaderbot workspace"}
-            </h1>
+            {isEditingWorkspace ? (
+              <form
+                className="mt-2 flex max-w-xl flex-col gap-3 sm:flex-row"
+                onSubmit={event => {
+                  event.preventDefault();
+                  void saveWorkspace();
+                }}
+              >
+                <input
+                  className="min-h-10 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 text-base text-slate-50 outline-none focus:border-cyan-300"
+                  value={workspaceName}
+                  maxLength={160}
+                  onChange={event => setWorkspaceName(event.target.value)}
+                />
+                <div className="flex gap-2">
+                  <Button
+                    className="gap-2"
+                    disabled={!workspaceName.trim() || workspaceMutation.isPending}
+                    size="sm"
+                    type="submit"
+                  >
+                    <Save className="h-4 w-4" />
+                    Save
+                  </Button>
+                  <Button
+                    disabled={workspaceMutation.isPending}
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                    onClick={() => setIsEditingWorkspace(false)}
+                  >
+                    <X className="h-4 w-4" />
+                    Cancel
+                  </Button>
+                </div>
+              </form>
+            ) : (
+              <div className="mt-1 flex flex-wrap items-center gap-3">
+                <h1 className="text-3xl font-semibold text-slate-50">
+                  {workspaceDisplayName}
+                </h1>
+                <Button
+                  className="gap-2"
+                  size="sm"
+                  type="button"
+                  variant="outline"
+                  onClick={startEditingWorkspace}
+                >
+                  <Pencil className="h-4 w-4" />
+                  Rename
+                </Button>
+              </div>
+            )}
             <p className="mt-2 text-sm text-slate-400">
               Signed in as{" "}
               {portalSessionQuery.data?.user.email ??
@@ -292,6 +364,11 @@ function Home() {
                 ? ` · ${portalSessionQuery.data.membership.role}`
                 : ""}
             </p>
+            {workspaceMutation.error ? (
+              <p className="mt-2 text-sm text-red-200">
+                Unable to update the workspace name. Please try again.
+              </p>
+            ) : null}
           </div>
           <Button
             variant="outline"
