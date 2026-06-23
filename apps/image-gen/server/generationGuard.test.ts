@@ -51,6 +51,7 @@ describe("generationGuard", () => {
     delete process.env.MESSENGER_MAX_IMAGE_JOBS;
     delete process.env.MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS;
     delete process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP;
+    delete process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP;
     delete process.env.MESSENGER_GLOBAL_DAILY_VIDEO_CAP;
     delete process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD;
     delete process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD;
@@ -215,6 +216,50 @@ describe("generationGuard", () => {
       })
     );
     expect(loggerMocks.safeLog).toHaveBeenCalledTimes(1);
+  });
+
+  it("reserves audio transcription budget in a UTC daily counter", async () => {
+    process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP = "2";
+    const now = new Date("2026-06-01T23:59:30.000Z");
+
+    await expect(
+      guard.assertMessengerDailyAudioTranscriptionBudgetAvailable({
+        reqId: "req-audio-budget",
+        now,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(stateStoreMocks.incrementExpiringCounter).toHaveBeenCalledWith(
+      "messenger:daily-audio-transcription-budget:2026-06-01",
+      30
+    );
+  });
+
+  it("throws when the configured daily audio transcription budget is exceeded", async () => {
+    process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP = "1";
+    stateStoreMocks.incrementExpiringCounter.mockResolvedValue(2);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await expect(
+      guard.assertMessengerDailyAudioTranscriptionBudgetAvailable({
+        reqId: "req-audio-over-budget",
+        now: new Date("2026-06-01T12:00:00.000Z"),
+      })
+    ).rejects.toBeInstanceOf(
+      guard.MessengerDailyAudioTranscriptionBudgetExceededError
+    );
+    expect(stateStoreMocks.decrementExpiringCounter).toHaveBeenCalledWith(
+      "messenger:daily-audio-transcription-budget:2026-06-01"
+    );
+    expect(loggerMocks.safeLog).toHaveBeenCalledWith(
+      "messenger_daily_audio_transcription_budget_reached",
+      expect.objectContaining({
+        reqId: hashRequestId("req-audio-over-budget"),
+        cap: 1,
+        count: 2,
+        level: "warn",
+      })
+    );
   });
 
   it("reports whether the daily spend budget cap is enabled", () => {

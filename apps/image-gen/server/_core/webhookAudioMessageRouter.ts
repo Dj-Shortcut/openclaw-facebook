@@ -8,10 +8,13 @@ import { fetchExternalSourceImageForIngress } from "./image-generation/sourceIma
 import { anonymizePsid } from "./messengerState";
 import { handleTextMessage } from "./webhookTextMessageRouter";
 import {
+  assertMessengerDailyAudioTranscriptionBudgetAvailable,
   assertMessengerDailySpendBudgetAvailable,
   assertMessengerMonthlySpendBudgetAvailable,
   assertMessengerUserDailySpendBudgetAvailable,
+  MessengerDailyAudioTranscriptionBudgetExceededError,
   MessengerSpendBudgetExceededError,
+  releaseMessengerDailyAudioTranscriptionBudgetReservation,
 } from "./generationGuard";
 import {
   commitTranscriptionSuccess,
@@ -55,17 +58,39 @@ export async function tryHandleAudioMessage(
     return false;
   }
 
+  const audioBudgetNow = new Date();
+  try {
+    await assertMessengerDailyAudioTranscriptionBudgetAvailable({
+      reqId: input.reqId,
+      now: audioBudgetNow,
+    });
+  } catch (error) {
+    if (error instanceof MessengerDailyAudioTranscriptionBudgetExceededError) {
+      await ctx.sendLoggedText(input.psid, t(input.lang, "outOfFreeCredits"), input.reqId);
+      return true;
+    }
+
+    throw error;
+  }
+  let audioBudgetCommitted = false;
+
   const prepared = await prepareAudioForTranscription(
     input.reqId,
     input.psid,
     audioUrl
   );
   if (!prepared) {
+    await releaseMessengerDailyAudioTranscriptionBudgetReservation({
+      now: audioBudgetNow,
+    });
     return false;
   }
 
   const reservation = await reserveTranscriptionForAttempt(input.psid);
   if (!reservation) {
+    await releaseMessengerDailyAudioTranscriptionBudgetReservation({
+      now: audioBudgetNow,
+    });
     await ctx.sendLoggedText(input.psid, t(input.lang, "outOfFreeCredits"), input.reqId);
     return true;
   }
@@ -79,6 +104,7 @@ export async function tryHandleAudioMessage(
         "Messenger audio transcription quota reservation could not be committed"
       );
     }
+    audioBudgetCommitted = true;
   };
 
   try {
@@ -115,6 +141,11 @@ export async function tryHandleAudioMessage(
     throw error;
   } finally {
     await releaseTranscriptionReservation(input.psid, reservation);
+    if (!audioBudgetCommitted) {
+      await releaseMessengerDailyAudioTranscriptionBudgetReservation({
+        now: audioBudgetNow,
+      });
+    }
   }
 }
 

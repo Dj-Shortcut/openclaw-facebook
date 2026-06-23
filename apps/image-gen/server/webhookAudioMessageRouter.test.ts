@@ -57,7 +57,7 @@ const FIXED_LEDGER_PERIOD = "2026-06-21";
 import { type FacebookWebhookEvent } from "./_core/webhookHelpers";
 import { t } from "./_core/i18n";
 import { appendCostLedgerEntry, readCostLedgerPeriod } from "./_core/costLedger";
-import { clearStateStore } from "./_core/stateStore";
+import { clearStateStore, incrementExpiringCounter } from "./_core/stateStore";
 
 function requestSummaryKey(reqId: string): string {
   return `sha256:${createHash("sha256").update(reqId).digest("hex").slice(0, 12)}`;
@@ -98,6 +98,8 @@ describe("webhook audio message router", () => {
   const originalAudioEstimateUsd = process.env.OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD;
   const originalSpendCapUsd = process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD;
   const originalMonthlySpendCapUsd = process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD;
+  const originalGatewayAudioCap =
+    process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP;
 
   beforeEach(() => {
     safeLogMock.mockClear();
@@ -119,6 +121,7 @@ describe("webhook audio message router", () => {
     process.env.OPENAI_API_KEY = "dummy-key";
     delete process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES;
     delete process.env.OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD;
+    delete process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP;
   });
 
   afterEach(() => {
@@ -151,6 +154,11 @@ describe("webhook audio message router", () => {
       delete process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD;
     } else {
       process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD = originalMonthlySpendCapUsd;
+    }
+    if (originalGatewayAudioCap === undefined) {
+      delete process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP;
+    } else {
+      process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP = originalGatewayAudioCap;
     }
     vi.unstubAllGlobals();
     clearStateStore();
@@ -641,6 +649,43 @@ describe("webhook audio message router", () => {
     expect(releaseTranscriptionReservationMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
     expect(handleTextMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks audio transcription at the gateway cap before downloading media", async () => {
+    const ctx = makeContext();
+    process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP = "1";
+    const period = new Date().toISOString().slice(0, 10);
+    await incrementExpiringCounter(
+      `messenger:daily-audio-transcription-budget:${period}`,
+      86400
+    );
+    const fetchMock = vi.fn(async () => {
+      throw new Error("transcription provider should not be called");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await tryHandleAudioMessage(ctx, {
+      psid: "psid-audio-gateway-cap",
+      userId: "user-audio-gateway-cap",
+      reqId: "req-audio-gateway-cap",
+      lang: "nl",
+      attachments: [
+        { type: "audio", payload: { url: "https://audio.example/message-gateway-cap.mp3" } },
+      ],
+      text: "",
+    });
+
+    expect(result).toBe(true);
+    expect(fetchExternalSourceImageForIngressMock).not.toHaveBeenCalled();
+    expect(reserveTranscriptionForAttemptMock).not.toHaveBeenCalled();
+    expect(commitTranscriptionSuccessMock).not.toHaveBeenCalled();
+    expect(releaseTranscriptionReservationMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(ctx.sendLoggedText).toHaveBeenCalledWith(
+      "psid-audio-gateway-cap",
+      t("nl", "outOfFreeCredits"),
+      "req-audio-gateway-cap"
+    );
   });
 
   it("keeps audio transcription blocked by transcription daily cap even when spend caps are unset", async () => {

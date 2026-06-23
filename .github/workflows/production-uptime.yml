@@ -1,4 +1,5 @@
 name: Production Uptime
+run-name: Production uptime health check
 
 on:
   schedule:

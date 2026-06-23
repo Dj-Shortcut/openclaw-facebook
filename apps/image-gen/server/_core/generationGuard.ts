@@ -26,6 +26,8 @@ const DEFAULT_VIDEO_PSID_LOCK_MS = 900000;
 const DEFAULT_GLOBAL_SLOT_WAIT_MS = 100;
 const DAILY_BUDGET_KEY_PREFIX = "messenger:daily-image-budget";
 const DAILY_VIDEO_BUDGET_KEY_PREFIX = "messenger:daily-video-budget";
+const DAILY_AUDIO_TRANSCRIPTION_BUDGET_KEY_PREFIX =
+  "messenger:daily-audio-transcription-budget";
 
 function hashRequestId(reqId: string): string {
   const digest = createHash("sha256").update(reqId).digest("hex").slice(0, 24);
@@ -43,6 +45,13 @@ export class MessengerDailyVideoBudgetExceededError extends Error {
   constructor(message = "Messenger daily video budget reached") {
     super(message);
     this.name = "MessengerDailyVideoBudgetExceededError";
+  }
+}
+
+export class MessengerDailyAudioTranscriptionBudgetExceededError extends Error {
+  constructor(message = "Messenger daily audio transcription budget reached") {
+    super(message);
+    this.name = "MessengerDailyAudioTranscriptionBudgetExceededError";
   }
 }
 
@@ -610,6 +619,43 @@ export async function releaseMessengerDailyVideoBudgetReservation(input: {
 
   const now = input.now ?? new Date();
   const key = `${DAILY_VIDEO_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
+  await decrementExpiringCounter(key);
+}
+
+export async function assertMessengerDailyAudioTranscriptionBudgetAvailable(input: {
+  reqId: string;
+  now?: Date;
+}): Promise<void> {
+  const cap = readPositiveInt("MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP");
+  if (!cap) {
+    return;
+  }
+
+  const now = input.now ?? new Date();
+  const key = `${DAILY_AUDIO_TRANSCRIPTION_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
+  const count = await incrementExpiringCounter(key, secondsUntilNextUtcDay(now));
+  if (count > cap) {
+    await decrementExpiringCounter(key);
+    safeLog("messenger_daily_audio_transcription_budget_reached", {
+      level: "warn",
+      reqId: hashRequestId(input.reqId),
+      cap,
+      count,
+    });
+    throw new MessengerDailyAudioTranscriptionBudgetExceededError();
+  }
+}
+
+export async function releaseMessengerDailyAudioTranscriptionBudgetReservation(input: {
+  now?: Date;
+} = {}): Promise<void> {
+  const cap = readPositiveInt("MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP");
+  if (!cap) {
+    return;
+  }
+
+  const now = input.now ?? new Date();
+  const key = `${DAILY_AUDIO_TRANSCRIPTION_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
   await decrementExpiringCounter(key);
 }
 

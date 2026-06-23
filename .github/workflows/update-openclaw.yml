@@ -1,4 +1,5 @@
 name: Update OpenClaw
+run-name: Update OpenClaw dependency check
 
 on:
   workflow_dispatch:
@@ -40,6 +41,17 @@ jobs:
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Report no OpenClaw update
+        if: steps.latest.outputs.changed == 'false'
+        run: |
+          {
+            echo "## No OpenClaw update available"
+            echo ""
+            echo "- Current version: ${{ steps.latest.outputs.current }}"
+            echo "- Latest version: ${{ steps.latest.outputs.latest }}"
+            echo "- No pull request was opened because the repository is already current."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Update version references
         if: steps.latest.outputs.changed == 'true'
