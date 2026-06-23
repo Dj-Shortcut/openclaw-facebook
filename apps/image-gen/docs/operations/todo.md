@@ -109,6 +109,7 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [ ] Define tenant model: customer workspace, owned AI identity, channel connections, knowledge, usage, and privacy controls
 - [x] Add tenant model foundation: knowledge sources + privacy controls persistence and portal snapshot exposure
 - [x] Add tenant-checked customer portal API for knowledge source registration and listing
+- [x] Add customer-facing knowledge source registration and status list to the portal dashboard
 - [x] Scaffold customer-facing Tauri portal app with tenant-scoped portal API surfaces
 - [x] Replace the marketing-style home screen with an authenticated customer portal dashboard and customer-editable AI identity/instructions
 - [x] Add initial Facebook Page Connect authorization entrypoint for customer workspaces

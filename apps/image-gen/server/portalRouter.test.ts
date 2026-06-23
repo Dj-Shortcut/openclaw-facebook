@@ -272,6 +272,33 @@ describe("portal router audit logging", () => {
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 
+  it("returns tenant-scoped knowledge sources without auditing a read", async () => {
+    const caller = createCaller();
+    const sources = [
+      {
+        id: 11,
+        workspaceId,
+        sourceType: "website",
+        name: "Support docs",
+        sourceReference: "https://example.com/help",
+        status: "active",
+        itemCount: 4,
+        lastIndexedAt: new Date(1),
+        metadata: null,
+        createdAt: new Date(0),
+        updatedAt: new Date(1),
+      },
+    ];
+    mocks.listWorkspaceKnowledgeSources.mockResolvedValue(sources);
+
+    await expect(caller.knowledge.list({ workspaceId })).resolves.toEqual(sources);
+
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.listWorkspaceKnowledgeSources).toHaveBeenCalledWith(workspaceId);
+    expect(mocks.registerWorkspaceKnowledgeSource).not.toHaveBeenCalled();
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
+  });
+
   it("records an audit log when workspace privacy controls are updated", async () => {
     const caller = createCaller();
     const updatedControls = {

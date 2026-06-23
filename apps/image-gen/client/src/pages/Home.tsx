@@ -7,9 +7,11 @@ import {
   CreditCard,
   Database,
   FileDown,
+  FileText,
   LogIn,
   MessageCircle,
   Pencil,
+  Plus,
   Save,
   ShieldCheck,
   SlidersHorizontal,
@@ -65,6 +67,15 @@ function Home() {
     language: "",
     modelDefault: "",
   });
+  const [knowledgeForm, setKnowledgeForm] = useState<{
+    sourceType: "website" | "manual_text" | "integration";
+    name: string;
+    sourceReference: string;
+  }>({
+    sourceType: "website",
+    name: "",
+    sourceReference: "",
+  });
   const workspaceQuery = trpc.portal.workspace.current.useQuery(undefined, {
     enabled: auth.isAuthenticated,
   });
@@ -112,9 +123,21 @@ function Home() {
       await utils.portal.aiIdentity.get.invalidate({ workspaceId });
     },
   });
+  const knowledgeMutation = trpc.portal.knowledge.registerSource.useMutation({
+    onSuccess: async () => {
+      if (!workspaceId) return;
+      setKnowledgeForm({
+        sourceType: "website",
+        name: "",
+        sourceReference: "",
+      });
+      await utils.portal.knowledge.summary.invalidate({ workspaceId });
+    },
+  });
 
   const privacy = privacyQuery.data;
   const usage = usageQuery.data;
+  const knowledgeSources = knowledgeQuery.data?.sources ?? [];
   const privacyRequests = privacyRequestsQuery.data ?? [];
   const privacyRequestsError = privacyRequestsQuery.error;
   const imageLimit = usage?.limits.imagesPerDay ?? 0;
@@ -168,6 +191,17 @@ function Home() {
       tone: identityForm.tone,
       language: identityForm.language,
       modelDefault: identityForm.modelDefault,
+    });
+  };
+  const registerKnowledgeSource = async () => {
+    if (!workspaceId) return;
+    await knowledgeMutation.mutateAsync({
+      workspaceId,
+      sourceType: knowledgeForm.sourceType,
+      name: knowledgeForm.name,
+      sourceReference: knowledgeForm.sourceReference.trim()
+        ? knowledgeForm.sourceReference
+        : null,
     });
   };
 
@@ -617,6 +651,108 @@ function Home() {
                       : "-"
                   }
                 />
+              </div>
+              <form
+                className="mt-5 grid gap-3 rounded-lg border border-slate-800 bg-slate-950/60 p-4 md:grid-cols-[160px_1fr_1fr_auto]"
+                onSubmit={event => {
+                  event.preventDefault();
+                  void registerKnowledgeSource();
+                }}
+              >
+                <label className="grid gap-2 text-sm text-slate-300">
+                  Type
+                  <select
+                    className="h-10 rounded border border-slate-700 bg-slate-950 px-3 text-slate-100"
+                    value={knowledgeForm.sourceType}
+                    disabled={knowledgeMutation.isPending}
+                    onChange={event =>
+                      setKnowledgeForm(current => ({
+                        ...current,
+                        sourceType: event.target.value as typeof knowledgeForm.sourceType,
+                      }))
+                    }
+                  >
+                    <option value="website">Website</option>
+                    <option value="manual_text">Manual text</option>
+                    <option value="integration">Integration</option>
+                  </select>
+                </label>
+                <label className="grid gap-2 text-sm text-slate-300">
+                  Name
+                  <input
+                    className="h-10 rounded border border-slate-700 bg-slate-950 px-3 text-slate-100"
+                    maxLength={200}
+                    required
+                    value={knowledgeForm.name}
+                    disabled={knowledgeMutation.isPending}
+                    onChange={event =>
+                      setKnowledgeForm(current => ({
+                        ...current,
+                        name: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label className="grid gap-2 text-sm text-slate-300">
+                  Reference
+                  <input
+                    className="h-10 rounded border border-slate-700 bg-slate-950 px-3 text-slate-100"
+                    maxLength={1024}
+                    value={knowledgeForm.sourceReference}
+                    disabled={knowledgeMutation.isPending}
+                    onChange={event =>
+                      setKnowledgeForm(current => ({
+                        ...current,
+                        sourceReference: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <div className="flex items-end">
+                  <Button
+                    className="h-10 gap-2"
+                    disabled={knowledgeMutation.isPending}
+                    type="submit"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add
+                  </Button>
+                </div>
+              </form>
+              {knowledgeMutation.error ? (
+                <div className="mt-3 text-sm text-red-300">
+                  Unable to save knowledge source. Please try again.
+                </div>
+              ) : null}
+              <div className="mt-5 overflow-hidden rounded-lg border border-slate-800">
+                {knowledgeSources.length === 0 ? (
+                  <div className="bg-slate-950/60 px-4 py-3 text-sm text-slate-400">
+                    No knowledge sources yet.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-800">
+                    {knowledgeSources.slice(0, 5).map(source => (
+                      <div
+                        className="grid gap-2 bg-slate-950/60 px-4 py-3 text-sm md:grid-cols-[1fr_auto_auto]"
+                        key={source.id}
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 font-medium text-slate-100">
+                            <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+                            <span className="truncate">{source.name}</span>
+                          </div>
+                          <div className="mt-1 truncate text-xs text-slate-500">
+                            {source.sourceReference || source.sourceType.replace(/_/g, " ")}
+                          </div>
+                        </div>
+                        <span className="text-slate-400">
+                          {source.sourceType.replace(/_/g, " ")}
+                        </span>
+                        <StatusPill value={source.status} />
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </section>
           </div>
