@@ -49,6 +49,14 @@ const user: NonNullable<TrpcContext["user"]> = {
 };
 
 const workspaceId = 42;
+const workspace = {
+  id: workspaceId,
+  ownerUserId: user.id,
+  slug: "portal-user",
+  name: "Portal User Workspace",
+  createdAt: new Date(0),
+  updatedAt: new Date(0),
+};
 const aiIdentityUpdateInput = {
   workspaceId,
   name: "Leaderbot Support",
@@ -113,6 +121,16 @@ describe("portal router tenant isolation", () => {
     expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
     expect(mocks.updateAiIdentity).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("rejects portal auth sessions when the user has no workspace membership", async () => {
+    const caller = createCaller();
+    mocks.getOrCreateUserWorkspace.mockResolvedValue(workspace);
+
+    await expectForbidden(() => caller.auth.session());
+
+    expect(mocks.getOrCreateUserWorkspace).toHaveBeenCalledWith(user);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
   });
 
   it("rejects cross-workspace channel and usage reads before returning tenant data", async () => {
@@ -207,6 +225,36 @@ describe("portal router audit logging", () => {
         fields: ["name", "instructions", "tone", "language", "modelDefault"],
       },
     });
+  });
+
+  it("returns the tenant-checked portal auth session without tenant content", async () => {
+    const caller = createCaller();
+    mocks.getOrCreateUserWorkspace.mockResolvedValue(workspace);
+
+    await expect(caller.auth.session()).resolves.toEqual({
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+      },
+      workspace: {
+        id: workspace.id,
+        name: workspace.name,
+        slug: workspace.slug,
+      },
+      membership: {
+        role: "owner",
+      },
+    });
+
+    expect(mocks.getOrCreateUserWorkspace).toHaveBeenCalledWith(user);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getOrCreateAiIdentity).not.toHaveBeenCalled();
+    expect(mocks.listChannelConnections).not.toHaveBeenCalled();
+    expect(mocks.listWorkspaceKnowledgeSources).not.toHaveBeenCalled();
+    expect(mocks.getWorkspacePrivacySettings).not.toHaveBeenCalled();
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 
   it("records an audit log when Facebook connect is started", async () => {

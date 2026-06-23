@@ -47,6 +47,14 @@ async function requireWorkspace(
   ctx: { user: { id: number; name: string | null } },
   workspaceId?: number
 ) {
+  const { workspace } = await requireWorkspaceMembership(ctx, workspaceId);
+  return workspace;
+}
+
+async function requireWorkspaceMembership(
+  ctx: { user: { id: number; name: string | null } },
+  workspaceId?: number
+) {
   const workspace = workspaceId
     ? { id: workspaceId }
     : await db.getOrCreateUserWorkspace(ctx.user);
@@ -59,7 +67,26 @@ async function requireWorkspace(
     });
   }
 
-  return workspaceId ? { id: workspaceId } : db.getOrCreateUserWorkspace(ctx.user);
+  return {
+    workspace: workspaceId ? workspace : await db.getOrCreateUserWorkspace(ctx.user),
+    membership,
+  };
+}
+
+async function requireCurrentWorkspaceMembership(ctx: {
+  user: { id: number; name: string | null };
+}) {
+  const workspace = await db.getOrCreateUserWorkspace(ctx.user);
+  const membership = await db.getWorkspaceMembership(workspace.id, ctx.user.id);
+
+  if (!membership) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "workspace access denied",
+    });
+  }
+
+  return { workspace, membership };
 }
 
 function badRequest(error: unknown, fallback: string) {
@@ -84,6 +111,28 @@ function redactFacebookPageToken<T extends { accessToken?: unknown }>(page: T) {
 }
 
 export const portalRouter = router({
+  auth: router({
+    session: protectedProcedure.query(async ({ ctx }) => {
+      const { workspace, membership } = await requireCurrentWorkspaceMembership(ctx);
+      return {
+        user: {
+          id: ctx.user.id,
+          email: ctx.user.email,
+          name: ctx.user.name,
+          role: ctx.user.role,
+        },
+        workspace: {
+          id: workspace.id,
+          name: workspace.name,
+          slug: workspace.slug,
+        },
+        membership: {
+          role: membership.role,
+        },
+      };
+    }),
+  }),
+
   workspace: router({
     current: protectedProcedure.query(async ({ ctx }) => {
       return db.getOrCreateUserWorkspace(ctx.user);
