@@ -337,17 +337,15 @@ export const portalRouter = router({
           {
             requestType: input.requestType,
             note: input.note || null,
+          },
+          {
+            event: "privacy_request.created",
+            metadata: {
+              requestType: input.requestType,
+              status: "requested",
+            },
           }
         );
-        await db.insertAuditLog({
-          workspaceId: input.workspaceId,
-          userId: ctx.user.id,
-          event: "privacy_request.created",
-          metadata: {
-            requestType: input.requestType,
-            status: request.status,
-          },
-        });
         return request;
       }),
 

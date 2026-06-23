@@ -401,6 +401,33 @@ function normalizeWorkspacePrivacySettings(
   };
 }
 
+function getInsertedId(result: unknown, label: string): number {
+  if (Array.isArray(result)) {
+    const header = result[0] as { insertId?: unknown } | undefined;
+    const insertId = header?.insertId;
+
+    if (typeof insertId === "number" && Number.isSafeInteger(insertId) && insertId > 0) {
+      return insertId;
+    }
+
+    if (typeof insertId === "bigint" && insertId > BigInt(0)) {
+      const numericId = Number(insertId);
+      if (Number.isSafeInteger(numericId)) {
+        return numericId;
+      }
+    }
+
+    if (typeof insertId === "string") {
+      const numericId = Number(insertId);
+      if (Number.isSafeInteger(numericId) && numericId > 0) {
+        return numericId;
+      }
+    }
+  }
+
+  throw new Error(`${label} insert did not return an id`);
+}
+
 export async function listWorkspaceKnowledgeSources(workspaceId: number) {
   const db = await getDb();
   if (!db) {
@@ -586,10 +613,10 @@ export async function listWorkspacePrivacyRequests(workspaceId: number) {
 export async function createWorkspacePrivacyRequest(
   workspaceId: number,
   userId: number,
-  values: Pick<InsertWorkspacePrivacyRequest, "requestType" | "note">
+  values: Pick<InsertWorkspacePrivacyRequest, "requestType" | "note">,
+  audit?: Pick<InsertAuditLog, "event" | "metadata">
 ) {
   const db = await getDb();
-  const now = new Date();
   const request: InsertWorkspacePrivacyRequest = {
     workspaceId,
     userId,
@@ -600,36 +627,34 @@ export async function createWorkspacePrivacyRequest(
 
   if (!db) {
     logDatabaseUnavailable("create_workspace_privacy_request");
-    return {
-      id: workspaceId,
-      ...request,
-      createdAt: new Date(0),
-      updatedAt: now,
-      completedAt: null,
-    };
+    throw new Error("Database unavailable: privacy request was not persisted");
   }
 
-  await db.insert(workspacePrivacyRequests).values(request);
-  const created = await db
-    .select()
-    .from(workspacePrivacyRequests)
-    .where(
-      and(
-        eq(workspacePrivacyRequests.workspaceId, workspaceId),
-        eq(workspacePrivacyRequests.userId, userId),
-        eq(workspacePrivacyRequests.requestType, request.requestType)
-      )
-    )
-    .orderBy(desc(workspacePrivacyRequests.id))
-    .limit(1);
+  return db.transaction(async tx => {
+    const insertResult = await tx.insert(workspacePrivacyRequests).values(request);
+    const insertedId = getInsertedId(insertResult, "privacy request");
 
-  return created[0] ?? {
-    id: workspaceId,
-    ...request,
-    createdAt: new Date(0),
-    updatedAt: now,
-    completedAt: null,
-  };
+    if (audit) {
+      await tx.insert(auditLog).values({
+        workspaceId,
+        userId,
+        event: audit.event,
+        metadata: audit.metadata,
+      });
+    }
+
+    const created = await tx
+      .select()
+      .from(workspacePrivacyRequests)
+      .where(eq(workspacePrivacyRequests.id, insertedId))
+      .limit(1);
+
+    if (!created[0]) {
+      throw new Error("Privacy request insert succeeded but read-back failed");
+    }
+
+    return created[0];
+  });
 }
 
 export async function upsertChannelConnection(values: InsertChannelConnection) {

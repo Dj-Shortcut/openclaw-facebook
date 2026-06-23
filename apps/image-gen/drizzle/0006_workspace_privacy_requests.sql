@@ -8,5 +8,6 @@ CREATE TABLE `workspacePrivacyRequests` (
   `createdAt` timestamp NOT NULL DEFAULT (now()),
   `updatedAt` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
   `completedAt` timestamp,
-  CONSTRAINT `workspacePrivacyRequests_id` PRIMARY KEY(`id`)
+  CONSTRAINT `workspacePrivacyRequests_id` PRIMARY KEY(`id`),
+  KEY `workspacePrivacyRequests_workspaceId_id_idx` (`workspaceId`,`id`)
 );

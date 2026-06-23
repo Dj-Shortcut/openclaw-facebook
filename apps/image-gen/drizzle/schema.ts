@@ -1,4 +1,4 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, json, uniqueIndex } from "drizzle-orm/mysql-core";
+import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, json, index, uniqueIndex } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -247,19 +247,27 @@ export const workspacePrivacySettings = mysqlTable(
 export type WorkspacePrivacySetting = typeof workspacePrivacySettings.$inferSelect;
 export type InsertWorkspacePrivacySetting = typeof workspacePrivacySettings.$inferInsert;
 
-export const workspacePrivacyRequests = mysqlTable("workspacePrivacyRequests", {
-  id: int("id").autoincrement().primaryKey(),
-  workspaceId: int("workspaceId").notNull(),
-  userId: int("userId").notNull(),
-  requestType: mysqlEnum("requestType", ["export", "deletion"]).notNull(),
-  status: mysqlEnum("status", ["requested", "processing", "completed", "rejected"])
-    .default("requested")
-    .notNull(),
-  note: varchar("note", { length: 500 }),
-  createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-  completedAt: timestamp("completedAt"),
-});
+export const workspacePrivacyRequests = mysqlTable(
+  "workspacePrivacyRequests",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    requestType: mysqlEnum("requestType", ["export", "deletion"]).notNull(),
+    status: mysqlEnum("status", ["requested", "processing", "completed", "rejected"])
+      .default("requested")
+      .notNull(),
+    note: varchar("note", { length: 500 }),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    completedAt: timestamp("completedAt"),
+  },
+  table => ({
+    workspacePrivacyRequestsWorkspaceIdIdx: index(
+      "workspacePrivacyRequests_workspaceId_id_idx"
+    ).on(table.workspaceId, table.id),
+  })
+);
 
 export type WorkspacePrivacyRequest = typeof workspacePrivacyRequests.$inferSelect;
 export type InsertWorkspacePrivacyRequest = typeof workspacePrivacyRequests.$inferInsert;

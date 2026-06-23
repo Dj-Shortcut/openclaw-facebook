@@ -329,20 +329,25 @@ describe("portal router audit logging", () => {
       createdRequest
     );
 
-    expect(mocks.createWorkspacePrivacyRequest).toHaveBeenCalledWith(workspaceId, user.id, {
-      requestType: "deletion",
-      note: "Please delete the customer workspace data.",
-    });
-    expect(mocks.insertAuditLog).toHaveBeenCalledWith({
+    expect(mocks.createWorkspacePrivacyRequest).toHaveBeenCalledWith(
       workspaceId,
-      userId: user.id,
-      event: "privacy_request.created",
-      metadata: {
+      user.id,
+      {
         requestType: "deletion",
-        status: "requested",
+        note: "Please delete the customer workspace data.",
       },
-    });
-    expect(mocks.insertAuditLog).not.toHaveBeenCalledWith(
+      {
+        event: "privacy_request.created",
+        metadata: {
+          requestType: "deletion",
+          status: "requested",
+        },
+      }
+    );
+    expect(mocks.createWorkspacePrivacyRequest).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
       expect.objectContaining({
         metadata: expect.objectContaining({
           note: expect.any(String),

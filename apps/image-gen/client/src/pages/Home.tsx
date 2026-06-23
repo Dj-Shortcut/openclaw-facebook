@@ -18,14 +18,17 @@ import {
 import { useState } from "react";
 
 function StatusPill({ value }: { value: string }) {
-  const isConnected = value === "connected";
+  const toneClass =
+    value === "connected" || value === "completed"
+      ? "bg-emerald-500/15 text-emerald-200"
+      : value === "rejected"
+        ? "bg-red-500/15 text-red-200"
+        : value === "processing"
+          ? "bg-sky-500/15 text-sky-200"
+          : "bg-amber-500/15 text-amber-200";
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${
-        isConnected
-          ? "bg-emerald-500/15 text-emerald-200"
-          : "bg-amber-500/15 text-amber-200"
-      }`}
+      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${toneClass}`}
     >
       {value.replace(/_/g, " ")}
     </span>
@@ -108,6 +111,7 @@ function Home() {
 
   const privacy = privacyQuery.data;
   const privacyRequests = privacyRequestsQuery.data ?? [];
+  const privacyRequestsError = privacyRequestsQuery.error;
   const updatePrivacy = (
     updates: Partial<{
       allowKnowledgeIndexing: boolean;
@@ -501,7 +505,11 @@ function Home() {
                 </div>
               </div>
               <div className="mt-5 overflow-hidden rounded-lg border border-slate-800">
-                {privacyRequests.length === 0 ? (
+                {privacyRequestsError ? (
+                  <div className="bg-slate-950/60 px-4 py-3 text-sm text-red-300">
+                    Unable to load data requests. Please try again.
+                  </div>
+                ) : privacyRequests.length === 0 ? (
                   <div className="bg-slate-950/60 px-4 py-3 text-sm text-slate-400">
                     No data requests yet.
                   </div>
