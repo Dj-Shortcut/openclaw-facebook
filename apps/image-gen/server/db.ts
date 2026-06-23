@@ -32,7 +32,11 @@ import {
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { safeLog } from "./_core/logger";
-import { getImageGenerationDailyLimit } from "./_core/quotaPolicy";
+import {
+  getBotTextRateLimitMax,
+  getBotTextRateLimitWindowSeconds,
+  getImageGenerationDailyLimit,
+} from "./_core/quotaPolicy";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -676,16 +680,54 @@ export async function upsertChannelConnection(values: InsertChannelConnection) {
 }
 
 export async function getWorkspaceUsageSummary(workspaceId: number) {
-  const db = await getDb();
-  if (!db) {
-    logDatabaseUnavailable("get_workspace_usage_summary");
+  const imageDailyLimit = getImageGenerationDailyLimit();
+  const messageRateLimit = getBotTextRateLimitMax();
+  const messageRateLimitWindowSeconds = getBotTextRateLimitWindowSeconds();
+
+  const buildSummary = (usage?: {
+    messageCount?: number | null;
+    imageCount?: number | null;
+    blockedCount?: number | null;
+  }) => {
+    const messageCount = usage?.messageCount ?? 0;
+    const imageCount = usage?.imageCount ?? 0;
+    const blockedCount = usage?.blockedCount ?? 0;
+    const imagesRemainingToday = Math.max(0, imageDailyLimit - imageCount);
+    const isImageLimitReached = imageDailyLimit > 0 && imagesRemainingToday === 0;
+
     return {
       workspaceId,
       period: "today" as const,
-      messageCount: 0,
-      imageCount: 0,
-      blockedCount: 0,
+      plan: {
+        name: "Free",
+        billingStatus: "free" as const,
+      },
+      messageCount,
+      imageCount,
+      blockedCount,
+      limits: {
+        imagesPerDay: imageDailyLimit,
+        messagesPerWindow: messageRateLimit,
+        messageWindowSeconds: messageRateLimitWindowSeconds,
+      },
+      remaining: {
+        imagesToday: imagesRemainingToday,
+      },
+      upgrade: {
+        recommended: isImageLimitReached || blockedCount > 0,
+        reason: isImageLimitReached
+          ? "image_limit_reached"
+          : blockedCount > 0
+            ? "blocked_usage"
+            : null,
+      },
     };
+  };
+
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("get_workspace_usage_summary");
+    return buildSummary();
   }
 
   const today = getTodayUTC();
@@ -701,13 +743,7 @@ export async function getWorkspaceUsageSummary(workspaceId: number) {
     .limit(1);
 
   const usage = result[0];
-  return {
-    workspaceId,
-    period: "today" as const,
-    messageCount: usage?.messageCount ?? 0,
-    imageCount: usage?.imageCount ?? 0,
-    blockedCount: usage?.blockedCount ?? 0,
-  };
+  return buildSummary(usage);
 }
 
 export async function insertAuditLog(values: InsertAuditLog) {

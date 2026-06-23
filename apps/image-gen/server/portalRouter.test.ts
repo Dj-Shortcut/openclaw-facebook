@@ -238,6 +238,40 @@ describe("portal router audit logging", () => {
     });
   });
 
+  it("returns the tenant-checked workspace usage balance without audit logging", async () => {
+    const caller = createCaller();
+    const usageSummary = {
+      workspaceId,
+      period: "today",
+      plan: {
+        name: "Free",
+        billingStatus: "free",
+      },
+      messageCount: 18,
+      imageCount: 20,
+      blockedCount: 1,
+      limits: {
+        imagesPerDay: 20,
+        messagesPerWindow: 30,
+        messageWindowSeconds: 60,
+      },
+      remaining: {
+        imagesToday: 0,
+      },
+      upgrade: {
+        recommended: true,
+        reason: "image_limit_reached",
+      },
+    };
+    mocks.getWorkspaceUsageSummary.mockResolvedValue(usageSummary);
+
+    await expect(caller.usage.summary({ workspaceId })).resolves.toEqual(usageSummary);
+
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceUsageSummary).toHaveBeenCalledWith(workspaceId);
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
+  });
+
   it("records an audit log when workspace privacy controls are updated", async () => {
     const caller = createCaller();
     const updatedControls = {

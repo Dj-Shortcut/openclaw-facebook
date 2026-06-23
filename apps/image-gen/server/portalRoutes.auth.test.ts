@@ -194,9 +194,25 @@ describe("portal REST route authentication", () => {
     mocks.getWorkspaceUsageSummary.mockResolvedValue({
       workspaceId: workspace.id,
       period: "today",
+      plan: {
+        name: "Free",
+        billingStatus: "free",
+      },
       messageCount: 3,
       imageCount: 1,
       blockedCount: 0,
+      limits: {
+        imagesPerDay: 20,
+        messagesPerWindow: 30,
+        messageWindowSeconds: 60,
+      },
+      remaining: {
+        imagesToday: 19,
+      },
+      upgrade: {
+        recommended: false,
+        reason: null,
+      },
     });
     mocks.getWorkspaceKnowledgeSummary.mockResolvedValue({
       workspaceId: workspace.id,
@@ -230,6 +246,18 @@ describe("portal REST route authentication", () => {
           externalId: "page-1",
         },
       ],
+      usage: {
+        plan: {
+          name: "Free",
+          billingStatus: "free",
+        },
+        remaining: {
+          imagesToday: 19,
+        },
+        upgrade: {
+          recommended: false,
+        },
+      },
     });
     expect(JSON.stringify(response.json)).not.toContain("sealed-token");
   });
