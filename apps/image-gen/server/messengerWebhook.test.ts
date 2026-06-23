@@ -2275,7 +2275,7 @@ describe("messenger deterministic free text", () => {
     );
   });
 
-  it("keeps free-text deterministic without a photo and does not call fetch", async () => {
+  it("leaves deterministic free text without a photo for the OpenClaw turn", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
@@ -2295,27 +2295,8 @@ describe("messenger deterministic free text", () => {
       ],
     });
 
-    expect(sendQuickRepliesMock).toHaveBeenLastCalledWith(
-      "deterministic-no-photo-user",
-      t("nl", "flowExplanation"),
-      [
-        {
-          content_type: "text",
-          title: "Nieuwe afbeelding",
-          payload: "OPENCLAW_ACTION:new_image",
-        },
-        {
-          content_type: "text",
-          title: "Pas foto aan",
-          payload: "OPENCLAW_ACTION:Pas%20foto%20aan",
-        },
-        {
-          content_type: "text",
-          title: "Privacy",
-          payload: "OPENCLAW_ACTION:Privacy",
-        },
-      ]
-    );
+    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
+    expect(sendTextMock).not.toHaveBeenCalled();
     expect(getState(anonymizePsid("deterministic-no-photo-user"))?.stage).toBe(
       "IDLE"
     );

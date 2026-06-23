@@ -71,7 +71,7 @@ describe("bot features", () => {
     expect(textExecutions).toHaveLength(31);
   });
 
-  it("lets remix text fall back to prompt-first quick actions", async () => {
+  it("leaves remix-style free text for the OpenClaw turn", async () => {
     const psid = "remix-fallback-user";
 
     await processFacebookWebhookPayload({
@@ -87,15 +87,8 @@ describe("bot features", () => {
       ],
     });
 
-    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
-      psid,
-      t("nl", "flowExplanation"),
-      expect.arrayContaining([
-        expect.objectContaining({ payload: "OPENCLAW_ACTION:new_image" }),
-        expect.objectContaining({ payload: "OPENCLAW_ACTION:Pas%20foto%20aan" }),
-        expect.objectContaining({ payload: "OPENCLAW_ACTION:Privacy" }),
-      ])
-    );
+    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
+    expect(sendTextMock).not.toHaveBeenCalled();
   });
 
   it("handles help command via bot feature without OpenAI text", async () => {
