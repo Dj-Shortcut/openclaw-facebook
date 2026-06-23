@@ -119,6 +119,7 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Add portal-rendered privacy, terms, and data-deletion pages with local footer links
 - [x] Add customer-facing bot instructions for prompt-first image use, workspace context, and data controls
 - [x] Keep ordinary Messenger conversations on the OpenClaw turn instead of falling back to image-generation help copy
+- [x] Add tenant-checked Messenger disconnect control that clears stored page token data
 - [x] Add portal authentication before broad customer launch
 - [x] Add tenant-checked portal auth session metadata for customer workspace membership
 - [x] Add tenant isolation tests before broad customer launch

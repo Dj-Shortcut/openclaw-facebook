@@ -126,6 +126,12 @@ function Home() {
       await utils.portal.usage.summary.invalidate({ workspaceId });
     },
   });
+  const facebookDisconnectMutation = trpc.portal.facebook.disconnect.useMutation({
+    onSuccess: async () => {
+      if (!workspaceId) return;
+      await utils.portal.channels.status.invalidate({ workspaceId });
+    },
+  });
   const aiIdentityMutation = trpc.portal.aiIdentity.update.useMutation({
     onSuccess: async () => {
       if (!workspaceId) return;
@@ -147,6 +153,7 @@ function Home() {
 
   const privacy = privacyQuery.data;
   const usage = usageQuery.data;
+  const facebookStatus = channelStatusQuery.data?.facebook.status ?? "disconnected";
   const knowledgeSources = knowledgeQuery.data?.sources ?? [];
   const privacyRequests = privacyRequestsQuery.data ?? [];
   const privacyRequestsError = privacyRequestsQuery.error;
@@ -195,6 +202,10 @@ function Home() {
   const requestUpgrade = () => {
     if (!workspaceId) return;
     upgradeRequestMutation.mutate({ workspaceId });
+  };
+  const disconnectFacebook = () => {
+    if (!workspaceId) return;
+    facebookDisconnectMutation.mutate({ workspaceId });
   };
   const saveIdentity = async () => {
     if (!workspaceId) return;
@@ -443,15 +454,28 @@ function Home() {
             </section>
 
             <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5">
-              <div className="flex items-center gap-3">
-                <MessageCircle className="h-5 w-5 text-cyan-200" />
-                <h2 className="text-lg font-semibold text-slate-50">Messenger</h2>
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <MessageCircle className="h-5 w-5 text-cyan-200" />
+                  <h2 className="text-lg font-semibold text-slate-50">Messenger</h2>
+                </div>
+                {facebookStatus !== "disconnected" ? (
+                  <Button
+                    disabled={!workspaceId || facebookDisconnectMutation.isPending}
+                    size="sm"
+                    type="button"
+                    variant="outline"
+                    onClick={disconnectFacebook}
+                  >
+                    {facebookDisconnectMutation.isPending ? "Disconnecting" : "Disconnect"}
+                  </Button>
+                ) : null}
               </div>
               <div className="mt-5 space-y-3 text-sm">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-slate-400">Status</span>
                   <StatusPill
-                    value={channelStatusQuery.data?.facebook.status ?? "disconnected"}
+                    value={facebookStatus}
                   />
                 </div>
                 <div className="flex items-center justify-between gap-3">
@@ -461,6 +485,15 @@ function Home() {
                   </span>
                 </div>
               </div>
+              {facebookDisconnectMutation.isSuccess ? (
+                <p className="mt-4 text-sm text-emerald-200">
+                  Messenger disconnected for this workspace.
+                </p>
+              ) : facebookDisconnectMutation.error ? (
+                <p className="mt-4 text-sm text-red-200">
+                  Unable to disconnect Messenger. Please try again.
+                </p>
+              ) : null}
             </section>
 
             <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5 lg:col-span-3">

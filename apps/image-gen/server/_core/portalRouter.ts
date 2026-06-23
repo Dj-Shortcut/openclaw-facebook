@@ -315,6 +315,26 @@ export const portalRouter = router({
         });
         return { success: true } as const;
       }),
+
+    disconnect: protectedProcedure
+      .input(workspaceInput)
+      .mutation(async ({ ctx, input }) => {
+        await requireWorkspace(ctx, input.workspaceId);
+        const connections = await db.listChannelConnections(input.workspaceId);
+        const facebook = connections.find(
+          connection => connection.channel === "facebook_messenger"
+        );
+        await db.disconnectChannelConnection(input.workspaceId, "facebook_messenger");
+        await db.insertAuditLog({
+          workspaceId: input.workspaceId,
+          userId: ctx.user.id,
+          event: "facebook_page.disconnected",
+          metadata: {
+            previousStatus: facebook?.status ?? "disconnected",
+          },
+        });
+        return { success: true, status: "disconnected" } as const;
+      }),
   }),
 
   usage: router({
