@@ -77,6 +77,9 @@ function Home() {
     name: "",
     sourceReference: "",
   });
+  const portalSessionQuery = trpc.portal.auth.session.useQuery(undefined, {
+    enabled: auth.isAuthenticated,
+  });
   const workspaceQuery = trpc.portal.workspace.current.useQuery(undefined, {
     enabled: auth.isAuthenticated,
   });
@@ -238,6 +241,7 @@ function Home() {
 
   const isLoading =
     auth.loading ||
+    portalSessionQuery.isLoading ||
     workspaceQuery.isLoading ||
     aiIdentityQuery.isLoading ||
     channelStatusQuery.isLoading ||
@@ -253,10 +257,19 @@ function Home() {
           <div>
             <p className="text-sm text-cyan-200">Workspace</p>
             <h1 className="mt-1 text-3xl font-semibold text-slate-50">
-              {workspaceQuery.data?.name ?? "Leaderbot workspace"}
+              {portalSessionQuery.data?.workspace.name ??
+                workspaceQuery.data?.name ??
+                "Leaderbot workspace"}
             </h1>
             <p className="mt-2 text-sm text-slate-400">
-              Signed in as {auth.user?.email ?? auth.user?.name ?? "customer"}
+              Signed in as{" "}
+              {portalSessionQuery.data?.user.email ??
+                auth.user?.email ??
+                auth.user?.name ??
+                "customer"}
+              {portalSessionQuery.data?.membership.role
+                ? ` · ${portalSessionQuery.data.membership.role}`
+                : ""}
             </p>
           </div>
           <Button
