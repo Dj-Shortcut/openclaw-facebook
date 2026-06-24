@@ -49,7 +49,7 @@ const user: NonNullable<TrpcContext["user"]> = {
   openId: "portal-user-7",
   email: "portal-user@example.com",
   name: "Portal User",
-  loginMethod: "manus",
+  loginMethod: "facebook",
   role: "user",
   createdAt: new Date(0),
   updatedAt: new Date(0),
@@ -99,11 +99,12 @@ const privacyRequestInput = {
   note: "Please delete the customer workspace data.",
 };
 
-function createCaller() {
+function createCaller(overrides: Partial<TrpcContext> = {}) {
   return portalRouter.createCaller({
     user,
     req: { protocol: "https", headers: {} } as TrpcContext["req"],
     res: {} as TrpcContext["res"],
+    ...overrides,
   });
 }
 
@@ -111,6 +112,13 @@ async function expectForbidden(call: () => Promise<unknown>) {
   await expect(call()).rejects.toMatchObject({
     code: "FORBIDDEN",
     message: "workspace access denied",
+  });
+}
+
+async function expectFacebookLoginRequired(call: () => Promise<unknown>) {
+  await expect(call()).rejects.toMatchObject({
+    code: "FORBIDDEN",
+    message: "facebook login required",
   });
 }
 
@@ -144,6 +152,20 @@ describe("portal router tenant isolation", () => {
 
     expect(mocks.getOrCreateUserWorkspace).toHaveBeenCalledWith(user);
     expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+  });
+
+  it("rejects non-Facebook customer sessions before creating a workspace", async () => {
+    const caller = createCaller({
+      user: {
+        ...user,
+        loginMethod: "email",
+      },
+    });
+
+    await expectFacebookLoginRequired(() => caller.auth.session());
+
+    expect(mocks.getOrCreateUserWorkspace).not.toHaveBeenCalled();
+    expect(mocks.getWorkspaceMembership).not.toHaveBeenCalled();
   });
 
   it("rejects cross-workspace workspace updates before mutating data", async () => {

@@ -109,8 +109,8 @@ describe("OAuth callback security", () => {
       openId: "open-id-1",
       name: "Test User",
       email: "test@example.com",
-      loginMethod: "email",
-      platform: "email",
+      loginMethod: "facebook",
+      platform: "facebook",
     });
     mocks.createSessionToken.mockResolvedValue("session-token");
 
@@ -125,7 +125,38 @@ describe("OAuth callback security", () => {
 
     expect(response.status).toBe(302);
     expect(mocks.exchangeCodeForToken).toHaveBeenCalledWith("code-2", redirectUri);
+    expect(mocks.upsertUser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        openId: "open-id-1",
+        loginMethod: "facebook",
+      })
+    );
     expect(mocks.createSessionToken).toHaveBeenCalled();
+  });
+
+  it("rejects non-Facebook OAuth identities before creating a portal session", async () => {
+    mocks.exchangeCodeForToken.mockResolvedValue({ accessToken: "access-token" });
+    mocks.getUserInfo.mockResolvedValue({
+      openId: "open-id-email",
+      name: "Email User",
+      email: "email@example.com",
+      loginMethod: "email",
+      platform: "email",
+    });
+
+    const nonce = "nonce-1234567890abcdef";
+    const redirectUri = "https://leaderbot.example/api/oauth/callback";
+    const state = buildState(redirectUri, nonce);
+    const response = await sendCallbackRequest({
+      code: "code-email",
+      state,
+      cookie: `${OAUTH_STATE_COOKIE_NAME}=${nonce}`,
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.payload).toContain("Facebook Login is required");
+    expect(mocks.upsertUser).not.toHaveBeenCalled();
+    expect(mocks.createSessionToken).not.toHaveBeenCalled();
   });
 
   it("rejects malformed state payloads through the callback route", async () => {

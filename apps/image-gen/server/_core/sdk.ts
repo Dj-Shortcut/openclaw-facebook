@@ -8,6 +8,7 @@ import type { User } from "../../drizzle/schema";
 import * as db from "../db";
 import { ENV, getConfiguredJwtSecret } from "./env";
 import { safeLog } from "./logger";
+import { normalizeLoginMethod } from "./portalAuthPolicy";
 import type {
   ExchangeTokenRequest,
   ExchangeTokenResponse,
@@ -100,8 +101,15 @@ class SDKServer {
     if (fallback && fallback.length > 0) return fallback;
     if (!Array.isArray(platforms) || platforms.length === 0) return null;
     const set = new Set<string>(
-      platforms.filter((p): p is string => typeof p === "string")
+      platforms
+        .filter((p): p is string => typeof p === "string")
+        .map(p => p.toUpperCase())
     );
+    if (
+      set.has("REGISTERED_PLATFORM_FACEBOOK") ||
+      set.has("REGISTERED_PLATFORM_META")
+    )
+      return "facebook";
     if (set.has("REGISTERED_PLATFORM_EMAIL")) return "email";
     if (set.has("REGISTERED_PLATFORM_GOOGLE")) return "google";
     if (set.has("REGISTERED_PLATFORM_APPLE")) return "apple";
@@ -112,13 +120,13 @@ class SDKServer {
       return "microsoft";
     if (set.has("REGISTERED_PLATFORM_GITHUB")) return "github";
     const first = Array.from(set)[0];
-    return first ? first.toLowerCase() : null;
+    return first ? normalizeLoginMethod(first) : null;
   }
 
   private withLoginMethod<T extends UserInfoWithPlatforms>(data: T): T {
     const loginMethod = this.deriveLoginMethod(
       data.platforms,
-      data.platform ?? null
+      normalizeLoginMethod(data.loginMethod ?? data.platform ?? null)
     );
 
     return {

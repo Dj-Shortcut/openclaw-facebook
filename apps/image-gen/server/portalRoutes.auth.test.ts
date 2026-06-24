@@ -40,7 +40,7 @@ const user = {
   openId: "portal-user-7",
   email: "portal@example.com",
   name: "Portal User",
-  loginMethod: "manus",
+  loginMethod: "facebook",
   role: "user",
   createdAt: new Date(0),
   updatedAt: new Date(0),
@@ -120,6 +120,24 @@ describe("portal REST route authentication", () => {
 
     expect(response.status).toBe(401);
     expect(response.json).toEqual({ error: "unauthenticated" });
+    expect(mocks.getOrCreateUserWorkspace).not.toHaveBeenCalled();
+    expect(mocks.getWorkspaceMembership).not.toHaveBeenCalled();
+    expect(mocks.getOrCreateAiIdentity).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-Facebook portal snapshots before reading workspace data", async () => {
+    mocks.authenticateRequest.mockResolvedValue({
+      ...user,
+      loginMethod: "email",
+    });
+
+    const response = await sendPortalRequest({
+      method: "GET",
+      path: "/api/portal/snapshot",
+    });
+
+    expect(response.status).toBe(403);
+    expect(response.json).toEqual({ error: "facebook_login_required" });
     expect(mocks.getOrCreateUserWorkspace).not.toHaveBeenCalled();
     expect(mocks.getWorkspaceMembership).not.toHaveBeenCalled();
     expect(mocks.getOrCreateAiIdentity).not.toHaveBeenCalled();
