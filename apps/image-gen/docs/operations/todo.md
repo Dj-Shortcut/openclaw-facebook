@@ -110,6 +110,7 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Add tenant model foundation: knowledge sources + privacy controls persistence and portal snapshot exposure
 - [x] Add tenant-checked customer portal API for knowledge source registration and listing
 - [x] Add customer-facing knowledge source registration and status list to the portal dashboard
+- [x] Add tenant-checked customer control to disable knowledge sources
 - [x] Scaffold customer-facing Tauri portal app with tenant-scoped portal API surfaces
 - [x] Replace the marketing-style home screen with an authenticated customer portal dashboard and customer-editable AI identity/instructions
 - [x] Add tenant-checked workspace name management in the customer portal

@@ -182,6 +182,12 @@ function Home() {
       await utils.portal.knowledge.summary.invalidate({ workspaceId });
     },
   });
+  const knowledgeDisableMutation = trpc.portal.knowledge.disableSource.useMutation({
+    onSuccess: async () => {
+      if (!workspaceId) return;
+      await utils.portal.knowledge.summary.invalidate({ workspaceId });
+    },
+  });
 
   const privacy = privacyQuery.data;
   const usage = usageQuery.data;
@@ -275,6 +281,10 @@ function Home() {
         ? knowledgeForm.sourceReference
         : null,
     });
+  };
+  const disableKnowledgeSource = (sourceId: number) => {
+    if (!workspaceId) return;
+    knowledgeDisableMutation.mutate({ workspaceId, sourceId });
   };
 
   if (!auth.isAuthenticated) {
@@ -990,9 +1000,17 @@ function Home() {
                 <div className="mt-3 text-sm text-red-300">
                   Unable to save knowledge source. Please try again.
                 </div>
+              ) : knowledgeDisableMutation.error ? (
+                <div className="mt-3 text-sm text-red-300">
+                  Unable to disable knowledge source. Please try again.
+                </div>
               ) : null}
               <div className="mt-5 overflow-hidden rounded-lg border border-slate-800">
-                {knowledgeSources.length === 0 ? (
+                {knowledgeQuery.error ? (
+                  <div className="bg-slate-950/60 px-4 py-3 text-sm text-red-300">
+                    Unable to load knowledge sources. Please try again.
+                  </div>
+                ) : knowledgeSources.length === 0 ? (
                   <div className="bg-slate-950/60 px-4 py-3 text-sm text-slate-400">
                     No knowledge sources yet.
                   </div>
@@ -1000,7 +1018,7 @@ function Home() {
                   <div className="divide-y divide-slate-800">
                     {knowledgeSources.slice(0, 5).map(source => (
                       <div
-                        className="grid gap-2 bg-slate-950/60 px-4 py-3 text-sm md:grid-cols-[1fr_auto_auto]"
+                        className="grid gap-2 bg-slate-950/60 px-4 py-3 text-sm md:grid-cols-[1fr_auto_auto_auto]"
                         key={source.id}
                       >
                         <div className="min-w-0">
@@ -1016,6 +1034,19 @@ function Home() {
                           {source.sourceType.replace(/_/g, " ")}
                         </span>
                         <StatusPill value={source.status} />
+                        {source.status === "disabled" ? (
+                          <span className="text-xs text-slate-500">Disabled</span>
+                        ) : (
+                          <Button
+                            size="sm"
+                            type="button"
+                            variant="outline"
+                            disabled={knowledgeDisableMutation.isPending}
+                            onClick={() => disableKnowledgeSource(source.id)}
+                          >
+                            Disable
+                          </Button>
+                        )}
                       </div>
                     ))}
                   </div>

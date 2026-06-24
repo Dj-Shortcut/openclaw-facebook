@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   listWorkspaceKnowledgeSources: vi.fn(),
   getWorkspaceKnowledgeSummary: vi.fn(),
   registerWorkspaceKnowledgeSource: vi.fn(),
+  disableWorkspaceKnowledgeSource: vi.fn(),
   getWorkspacePrivacySettings: vi.fn(),
   updateWorkspacePrivacySettings: vi.fn(),
   listWorkspacePrivacyRequests: vi.fn(),
@@ -35,6 +36,7 @@ vi.mock("./db", () => ({
   listWorkspaceKnowledgeSources: mocks.listWorkspaceKnowledgeSources,
   getWorkspaceKnowledgeSummary: mocks.getWorkspaceKnowledgeSummary,
   registerWorkspaceKnowledgeSource: mocks.registerWorkspaceKnowledgeSource,
+  disableWorkspaceKnowledgeSource: mocks.disableWorkspaceKnowledgeSource,
   getWorkspacePrivacySettings: mocks.getWorkspacePrivacySettings,
   updateWorkspacePrivacySettings: mocks.updateWorkspacePrivacySettings,
   listWorkspacePrivacyRequests: mocks.listWorkspacePrivacyRequests,
@@ -224,6 +226,18 @@ describe("portal router tenant isolation", () => {
 
     expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
     expect(mocks.registerWorkspaceKnowledgeSource).not.toHaveBeenCalled();
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("rejects cross-workspace knowledge source disable before mutating data", async () => {
+    const caller = createCaller();
+
+    await expectForbidden(() =>
+      caller.knowledge.disableSource({ workspaceId, sourceId: 11 })
+    );
+
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.disableWorkspaceKnowledgeSource).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 
@@ -566,6 +580,21 @@ describe("portal router audit logging", () => {
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 
+  it("propagates knowledge source load failures instead of returning an empty list", async () => {
+    const caller = createCaller();
+    mocks.listWorkspaceKnowledgeSources.mockRejectedValue(
+      new Error("Database unavailable: knowledge sources were not loaded")
+    );
+
+    await expect(caller.knowledge.list({ workspaceId })).rejects.toThrow(
+      "Database unavailable: knowledge sources were not loaded"
+    );
+
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.listWorkspaceKnowledgeSources).toHaveBeenCalledWith(workspaceId);
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
+  });
+
   it("records an audit log when workspace privacy controls are updated", async () => {
     const caller = createCaller();
     const updatedControls = {
@@ -628,6 +657,47 @@ describe("portal router audit logging", () => {
       metadata: {
         sourceType: "website",
         status: "queued",
+      },
+    });
+    expect(mocks.insertAuditLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          name: expect.any(String),
+          sourceReference: expect.any(String),
+        }),
+      })
+    );
+  });
+
+  it("records a privacy-safe audit log when a knowledge source is disabled", async () => {
+    const caller = createCaller();
+    const disabledSource = {
+      id: 9,
+      ...knowledgeSourceInput,
+      status: "disabled",
+      itemCount: 0,
+      lastIndexedAt: null,
+      metadata: null,
+      createdAt: new Date(0),
+      updatedAt: new Date(1),
+    };
+    mocks.disableWorkspaceKnowledgeSource.mockResolvedValue(disabledSource);
+
+    await expect(
+      caller.knowledge.disableSource({ workspaceId, sourceId: disabledSource.id })
+    ).resolves.toEqual(disabledSource);
+
+    expect(mocks.disableWorkspaceKnowledgeSource).toHaveBeenCalledWith(
+      workspaceId,
+      disabledSource.id
+    );
+    expect(mocks.insertAuditLog).toHaveBeenCalledWith({
+      workspaceId,
+      userId: user.id,
+      event: "knowledge_source.disabled",
+      metadata: {
+        sourceType: "website",
+        status: "disabled",
       },
     });
     expect(mocks.insertAuditLog).not.toHaveBeenCalledWith(

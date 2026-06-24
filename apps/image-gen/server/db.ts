@@ -483,7 +483,7 @@ export async function listWorkspaceKnowledgeSources(workspaceId: number) {
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("list_workspace_knowledge_sources");
-    return [];
+    throw new Error("Database unavailable: knowledge sources were not loaded");
   }
 
   const result = await db
@@ -554,6 +554,44 @@ export async function registerWorkspaceKnowledgeSource(
     createdAt: new Date(0),
     updatedAt: now,
   };
+}
+
+export async function disableWorkspaceKnowledgeSource(
+  workspaceId: number,
+  sourceId: number
+) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("disable_workspace_knowledge_source");
+    throw new Error("Database unavailable: knowledge source was not disabled");
+  }
+
+  await db
+    .update(workspaceKnowledgeSources)
+    .set({ status: "disabled" })
+    .where(
+      and(
+        eq(workspaceKnowledgeSources.workspaceId, workspaceId),
+        eq(workspaceKnowledgeSources.id, sourceId)
+      )
+    );
+
+  const result = await db
+    .select()
+    .from(workspaceKnowledgeSources)
+    .where(
+      and(
+        eq(workspaceKnowledgeSources.workspaceId, workspaceId),
+        eq(workspaceKnowledgeSources.id, sourceId)
+      )
+    )
+    .limit(1);
+
+  if (!result[0]) {
+    throw new Error("Knowledge source not found for workspace");
+  }
+
+  return result[0];
 }
 
 export async function getWorkspaceKnowledgeSummary(workspaceId: number) {
