@@ -125,6 +125,7 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Keep ordinary Messenger conversations on the OpenClaw turn instead of falling back to image-generation help copy
 - [x] Add tenant-checked Messenger disconnect control that clears stored page token data
 - [x] Add portal authentication before broad customer launch
+- [x] Enforce Facebook Login-only customer portal sessions
 - [x] Add tenant-checked portal auth session metadata for customer workspace membership
 - [x] Add tenant isolation tests before broad customer launch
 - [x] Add portal audit logging before broad customer launch

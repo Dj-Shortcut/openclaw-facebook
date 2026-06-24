@@ -12,6 +12,7 @@ import {
   storeFacebookPages,
   validateStoredFacebookState,
 } from "./facebookConnectStore";
+import { isFacebookLoginMethod } from "./portalAuthPolicy";
 import { protectedProcedure, publicProcedure, router } from "./trpc";
 
 const workspaceInput = z.object({
@@ -52,17 +53,19 @@ const knowledgeSourceActionInput = workspaceInput.extend({
 });
 
 async function requireWorkspace(
-  ctx: { user: { id: number; name: string | null } },
+  ctx: { user: { id: number; name: string | null; loginMethod?: string | null } },
   workspaceId?: number
 ) {
+  requireFacebookPortalUser(ctx);
   const { workspace } = await requireWorkspaceMembership(ctx, workspaceId);
   return workspace;
 }
 
 async function requireWorkspaceMembership(
-  ctx: { user: { id: number; name: string | null } },
+  ctx: { user: { id: number; name: string | null; loginMethod?: string | null } },
   workspaceId?: number
 ) {
+  requireFacebookPortalUser(ctx);
   const workspace = workspaceId
     ? { id: workspaceId }
     : await db.getOrCreateUserWorkspace(ctx.user);
@@ -82,8 +85,9 @@ async function requireWorkspaceMembership(
 }
 
 async function requireCurrentWorkspaceMembership(ctx: {
-  user: { id: number; name: string | null };
+  user: { id: number; name: string | null; loginMethod?: string | null };
 }) {
+  requireFacebookPortalUser(ctx);
   const workspace = await db.getOrCreateUserWorkspace(ctx.user);
   const membership = await db.getWorkspaceMembership(workspace.id, ctx.user.id);
 
@@ -95,6 +99,17 @@ async function requireCurrentWorkspaceMembership(ctx: {
   }
 
   return { workspace, membership };
+}
+
+function requireFacebookPortalUser(ctx: {
+  user: { loginMethod?: string | null };
+}) {
+  if (!isFacebookLoginMethod(ctx.user.loginMethod)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "facebook login required",
+    });
+  }
 }
 
 function badRequest(error: unknown, fallback: string) {

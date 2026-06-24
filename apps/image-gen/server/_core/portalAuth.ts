@@ -1,15 +1,22 @@
 import type { Request, Response } from "express";
 import * as db from "../db";
+import { isFacebookLoginMethod } from "./portalAuthPolicy";
 import { sdk } from "./sdk";
 
 type PortalUser = {
   id: number;
   name: string | null;
+  loginMethod?: string | null;
 };
 
 export async function authenticatePortalRequest(req: Request, res: Response) {
   try {
-    return await sdk.authenticateRequest(req);
+    const user = await sdk.authenticateRequest(req);
+    if (!isFacebookLoginMethod(user.loginMethod)) {
+      res.status(403).json({ error: "facebook_login_required" });
+      return null;
+    }
+    return user;
   } catch {
     res.status(401).json({ error: "unauthenticated" });
     return null;

@@ -299,8 +299,8 @@ function Home() {
               Leaderbot customer portal
             </h1>
             <p className="mt-4 max-w-2xl text-base leading-7 text-slate-300">
-              Sign in to manage your workspace, AI identity, Messenger channel,
-              usage, knowledge, and privacy controls.
+              Continue with Facebook to manage your workspace, AI identity,
+              Messenger channel, usage, knowledge, and privacy controls.
             </p>
             <Button
               className="mt-8 gap-2"
@@ -309,7 +309,7 @@ function Home() {
               }}
             >
               <LogIn className="h-4 w-4" />
-              Sign in
+              Continue with Facebook
             </Button>
           </section>
         </div>

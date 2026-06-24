@@ -5,6 +5,7 @@ import { z } from "zod";
 import * as db from "../db";
 import { getSessionCookieOptions } from "./cookies";
 import { safeLog } from "./logger";
+import { isFacebookLoginMethod } from "./portalAuthPolicy";
 
 const OAUTH_STATE_COOKIE_NAME = "lb_oauth_state_nonce";
 
@@ -108,6 +109,7 @@ export function registerOAuthRoutes(app: Express) {
           validatedState.redirectUri
         );
         const userInfo = await sdk.getUserInfo(tokenResponse.accessToken);
+        const loginMethod = userInfo.loginMethod ?? userInfo.platform ?? null;
 
         if (!userInfo.openId) {
           clearOAuthStateCookie(req, res);
@@ -115,11 +117,17 @@ export function registerOAuthRoutes(app: Express) {
           return;
         }
 
+        if (!isFacebookLoginMethod(loginMethod)) {
+          clearOAuthStateCookie(req, res);
+          res.status(403).json({ error: "Facebook Login is required" });
+          return;
+        }
+
         await db.upsertUser({
           openId: userInfo.openId,
           name: userInfo.name || null,
           email: userInfo.email ?? null,
-          loginMethod: userInfo.loginMethod ?? userInfo.platform ?? null,
+          loginMethod: "facebook",
           lastSignedIn: new Date(),
         });
 
