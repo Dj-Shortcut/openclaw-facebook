@@ -261,7 +261,7 @@ export async function listWorkspaceMembers(workspaceId: number) {
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("list_workspace_members");
-    return [];
+    throw new Error("Database unavailable: workspace members were not loaded");
   }
 
   return db

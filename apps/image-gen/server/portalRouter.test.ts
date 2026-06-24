@@ -317,6 +317,21 @@ describe("portal router audit logging", () => {
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 
+  it("propagates workspace member load failures instead of returning an empty list", async () => {
+    const caller = createCaller();
+    mocks.listWorkspaceMembers.mockRejectedValue(
+      new Error("Database unavailable: workspace members were not loaded")
+    );
+
+    await expect(caller.workspace.members({ workspaceId })).rejects.toThrow(
+      "Database unavailable: workspace members were not loaded"
+    );
+
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.listWorkspaceMembers).toHaveBeenCalledWith(workspaceId);
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
+  });
+
   it("returns the tenant-checked portal auth session without tenant content", async () => {
     const caller = createCaller();
     mocks.getOrCreateUserWorkspace.mockResolvedValue(workspace);
