@@ -142,6 +142,11 @@ export const portalRouter = router({
       return db.getOrCreateUserWorkspace(ctx.user);
     }),
 
+    members: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
+      await requireWorkspace(ctx, input.workspaceId);
+      return db.listWorkspaceMembers(input.workspaceId);
+    }),
+
     update: protectedProcedure
       .input(workspaceUpdateInput)
       .mutation(async ({ ctx, input }) => {

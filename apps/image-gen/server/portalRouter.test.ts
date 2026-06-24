@@ -5,6 +5,7 @@ import { portalRouter } from "./_core/portalRouter";
 const mocks = vi.hoisted(() => ({
   getOrCreateUserWorkspace: vi.fn(),
   getWorkspaceMembership: vi.fn(),
+  listWorkspaceMembers: vi.fn(),
   updateWorkspace: vi.fn(),
   getOrCreateAiIdentity: vi.fn(),
   updateAiIdentity: vi.fn(),
@@ -24,6 +25,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./db", () => ({
   getOrCreateUserWorkspace: mocks.getOrCreateUserWorkspace,
   getWorkspaceMembership: mocks.getWorkspaceMembership,
+  listWorkspaceMembers: mocks.listWorkspaceMembers,
   updateWorkspace: mocks.updateWorkspace,
   getOrCreateAiIdentity: mocks.getOrCreateAiIdentity,
   updateAiIdentity: mocks.updateAiIdentity,
@@ -149,6 +151,16 @@ describe("portal router tenant isolation", () => {
 
     expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
     expect(mocks.updateWorkspace).not.toHaveBeenCalled();
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("rejects cross-workspace workspace member reads before returning account data", async () => {
+    const caller = createCaller();
+
+    await expectForbidden(() => caller.workspace.members({ workspaceId }));
+
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.listWorkspaceMembers).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 
@@ -283,6 +295,41 @@ describe("portal router audit logging", () => {
         fields: ["name"],
       },
     });
+  });
+
+  it("returns tenant-checked workspace members without auditing a read", async () => {
+    const caller = createCaller();
+    const members = [
+      {
+        userId: user.id,
+        role: "owner",
+        name: user.name,
+        email: user.email,
+        createdAt: new Date(0),
+      },
+    ];
+    mocks.listWorkspaceMembers.mockResolvedValue(members);
+
+    await expect(caller.workspace.members({ workspaceId })).resolves.toEqual(members);
+
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.listWorkspaceMembers).toHaveBeenCalledWith(workspaceId);
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("propagates workspace member load failures instead of returning an empty list", async () => {
+    const caller = createCaller();
+    mocks.listWorkspaceMembers.mockRejectedValue(
+      new Error("Database unavailable: workspace members were not loaded")
+    );
+
+    await expect(caller.workspace.members({ workspaceId })).rejects.toThrow(
+      "Database unavailable: workspace members were not loaded"
+    );
+
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.listWorkspaceMembers).toHaveBeenCalledWith(workspaceId);
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 
   it("returns the tenant-checked portal auth session without tenant content", async () => {
