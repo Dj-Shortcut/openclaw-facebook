@@ -1,2 +1,1 @@
-ALTER TABLE `dailyQuota` DROP INDEX `dailyQuota_userId_unique`;
-ALTER TABLE `dailyQuota` ADD UNIQUE INDEX `dailyQuota_userId_date_unique`(`userId`,`date`);
+ALTER TABLE `dailyQuota` DROP INDEX IF EXISTS `dailyQuota_userId_unique`;\nALTER TABLE `dailyQuota` DROP INDEX IF EXISTS `dailyQuota_userId_date_unique`;\n--> statement-breakpoint\nALTER TABLE `dailyQuota` ADD UNIQUE INDEX `dailyQuota_userId_date_unique`(`userId`,`date`);
