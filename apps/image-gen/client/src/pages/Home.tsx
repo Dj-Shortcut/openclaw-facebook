@@ -57,6 +57,21 @@ function MetricTile({
   );
 }
 
+function formatDate(value?: string | Date | null) {
+  if (!value) return "Not set";
+  return new Date(value).toLocaleDateString();
+}
+
+function addDays(value: string | Date, days: number) {
+  const date = new Date(value);
+  date.setDate(date.getDate() + days);
+  return date;
+}
+
+function isOpenPrivacyRequest(status: string) {
+  return status === "requested" || status === "processing";
+}
+
 function Home() {
   const auth = useAuth();
   const utils = trpc.useUtils();
@@ -174,6 +189,10 @@ function Home() {
   const knowledgeSources = knowledgeQuery.data?.sources ?? [];
   const privacyRequests = privacyRequestsQuery.data ?? [];
   const privacyRequestsError = privacyRequestsQuery.error;
+  const openPrivacyRequests = privacyRequests.filter(request =>
+    isOpenPrivacyRequest(request.status)
+  );
+  const latestPrivacyRequest = privacyRequests[0];
   const imageLimit = usage?.limits.imagesPerDay ?? 0;
   const imagesRemaining = usage?.remaining.imagesToday ?? 0;
   const imageProgress =
@@ -821,6 +840,34 @@ function Home() {
                   </Button>
                 </div>
               </div>
+              <div className="mt-5 grid gap-4 sm:grid-cols-3">
+                <MetricTile
+                  label="Open requests"
+                  value={openPrivacyRequests.length}
+                  detail="Export or deletion requests in progress"
+                />
+                <MetricTile
+                  label="Latest request"
+                  value={latestPrivacyRequest?.requestType ?? "None"}
+                  detail={
+                    latestPrivacyRequest
+                      ? `${latestPrivacyRequest.status} · ${formatDate(
+                          latestPrivacyRequest.createdAt
+                        )}`
+                      : "No data requests yet"
+                  }
+                />
+                <MetricTile
+                  label="Target date"
+                  value={
+                    latestPrivacyRequest &&
+                    isOpenPrivacyRequest(latestPrivacyRequest.status)
+                      ? formatDate(addDays(latestPrivacyRequest.createdAt, 30))
+                      : "None"
+                  }
+                  detail="Standard 30-day response target"
+                />
+              </div>
               <div className="mt-5 overflow-hidden rounded-lg border border-slate-800">
                 {privacyRequestMutation.error ? (
                   <div className="bg-slate-950/60 px-4 py-3 text-sm text-red-300">
@@ -845,7 +892,7 @@ function Home() {
                           {request.requestType}
                         </span>
                         <span className="text-slate-400">
-                          {new Date(request.createdAt).toLocaleDateString()}
+                          {formatDate(request.createdAt)}
                         </span>
                         <StatusPill value={request.status} />
                       </div>

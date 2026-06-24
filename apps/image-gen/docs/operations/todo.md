@@ -117,6 +117,7 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Add initial Facebook Page Connect authorization entrypoint for customer workspaces
 - [x] Add tested REST portal auth guard for snapshot and customer-owned mutations
 - [x] Add tenant-scoped portal export/deletion request tracking for customer data controls
+- [x] Add customer-visible data request status summary and outage-safe request loading
 - [x] Add initial customer-facing free-plan usage balance and upgrade prompt to the portal dashboard
 - [x] Add portal-rendered privacy, terms, and data-deletion pages with local footer links
 - [x] Add customer-facing bot instructions for prompt-first image use, workspace context, and data controls
