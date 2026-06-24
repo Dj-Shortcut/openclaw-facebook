@@ -150,16 +150,6 @@ async function getUserById(id: number) {
   return result.length > 0 ? result[0] : undefined;
 }
 
-function fallbackWorkspaceForUser(userId: number, name?: string | null) {
-  return {
-    id: userId,
-    name: name ? `${name}'s workspace` : "Leaderbot workspace",
-    slug: `workspace-${userId}`,
-    createdAt: new Date(0),
-    updatedAt: new Date(0),
-  };
-}
-
 export async function getOrCreateUserWorkspace(user: {
   id: number;
   name?: string | null;
@@ -167,7 +157,7 @@ export async function getOrCreateUserWorkspace(user: {
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("get_or_create_user_workspace");
-    return fallbackWorkspaceForUser(user.id, user.name);
+    throw new Error("Database unavailable: workspace was not loaded");
   }
 
   const existing = await db
@@ -196,12 +186,21 @@ export async function getOrCreateUserWorkspace(user: {
   });
 
   const created = await db
-    .select()
+    .select({
+      id: workspaces.id,
+      name: workspaces.name,
+      slug: workspaces.slug,
+      createdAt: workspaces.createdAt,
+      updatedAt: workspaces.updatedAt,
+    })
     .from(workspaces)
     .where(eq(workspaces.slug, workspaceValues.slug))
     .limit(1);
 
-  const workspace = created[0] ?? fallbackWorkspaceForUser(user.id, user.name);
+  const workspace = created[0];
+  if (!workspace) {
+    throw new Error("Workspace was not persisted");
+  }
   const memberValues: InsertWorkspaceMember = {
     workspaceId: workspace.id,
     userId: user.id,
@@ -240,7 +239,7 @@ export async function getWorkspaceMembership(workspaceId: number, userId: number
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("get_workspace_membership");
-    return workspaceId === userId ? { workspaceId, userId, role: "owner" as const } : null;
+    throw new Error("Database unavailable: workspace membership was not loaded");
   }
 
   const result = await db

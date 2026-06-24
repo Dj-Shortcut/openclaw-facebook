@@ -126,6 +126,7 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Add tenant-checked Messenger disconnect control that clears stored page token data
 - [x] Add portal authentication before broad customer launch
 - [x] Enforce Facebook Login-only customer portal sessions
+- [x] Create or load a persisted customer workspace during Facebook Login before issuing the portal session
 - [x] Add tenant-checked portal auth session metadata for customer workspace membership
 - [x] Add tenant isolation tests before broad customer launch
 - [x] Add portal audit logging before broad customer launch
