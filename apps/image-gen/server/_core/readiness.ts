@@ -9,6 +9,7 @@ import { ensureHttpRateLimiterReady } from "./httpRateLimit";
 import { ensureStateStoreReady } from "./stateStore";
 import { ensureWebhookIngressQueueReady } from "./meta/webhookIngressQueue";
 import { ensureWebhookReplayProtectionReady } from "./webhookReplayProtection";
+import { assertPortalDatabaseConfig } from "./env";
 
 export type ReadinessCheck = {
   name: string;
@@ -56,13 +57,16 @@ async function runReadinessChecks(
 export function createReadinessHandler(
   checks: readonly ReadinessCheck[]
 ): express.RequestHandler {
-  return async (_req, res) => {
-    const checkResults = await runReadinessChecks(checks);
-    const ok = checkResults.every(result => result.ok);
-    res.status(ok ? 200 : 503).json({
-      ok,
-      checks: checkResults,
-    });
+  return (_req, res, next) => {
+    void runReadinessChecks(checks)
+      .then(checkResults => {
+        const ok = checkResults.every(result => result.ok);
+        res.status(ok ? 200 : 503).json({
+          ok,
+          checks: checkResults,
+        });
+      })
+      .catch(next);
   };
 }
 
@@ -77,6 +81,10 @@ export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
     {
       name: "state_store",
       check: ensureStateStoreReady,
+    },
+    {
+      name: "portal_database_config",
+      check: assertPortalDatabaseConfig,
     },
     {
       name: "webhook_replay_protection",
