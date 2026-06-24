@@ -47,6 +47,10 @@ const knowledgeSourceInput = workspaceInput.extend({
   sourceReference: z.string().trim().max(1024).nullable().optional(),
 });
 
+const knowledgeSourceActionInput = workspaceInput.extend({
+  sourceId: z.number().int().positive(),
+});
+
 async function requireWorkspace(
   ctx: { user: { id: number; name: string | null } },
   workspaceId?: number
@@ -420,6 +424,26 @@ export const portalRouter = router({
           event: "knowledge_source.registered",
           metadata: {
             sourceType: input.sourceType,
+            status: source.status,
+          },
+        });
+        return source;
+      }),
+
+    disableSource: protectedProcedure
+      .input(knowledgeSourceActionInput)
+      .mutation(async ({ ctx, input }) => {
+        await requireWorkspace(ctx, input.workspaceId);
+        const source = await db.disableWorkspaceKnowledgeSource(
+          input.workspaceId,
+          input.sourceId
+        );
+        await db.insertAuditLog({
+          workspaceId: input.workspaceId,
+          userId: ctx.user.id,
+          event: "knowledge_source.disabled",
+          metadata: {
+            sourceType: source.sourceType,
             status: source.status,
           },
         });
