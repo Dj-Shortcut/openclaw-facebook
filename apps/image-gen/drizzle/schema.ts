@@ -272,6 +272,37 @@ export const workspacePrivacyRequests = mysqlTable(
 export type WorkspacePrivacyRequest = typeof workspacePrivacyRequests.$inferSelect;
 export type InsertWorkspacePrivacyRequest = typeof workspacePrivacyRequests.$inferInsert;
 
+export const workspaceUpgradeRequests = mysqlTable(
+  "workspaceUpgradeRequests",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    userId: int("userId").notNull(),
+    status: mysqlEnum("status", ["requested", "contacted", "completed", "rejected"])
+      .default("requested")
+      .notNull(),
+    currentPlanName: varchar("currentPlanName", { length: 80 }).notNull(),
+    billingStatus: varchar("billingStatus", { length: 80 }).notNull(),
+    upgradeReason: varchar("upgradeReason", { length: 120 }),
+    imagesRemainingToday: int("imagesRemainingToday").default(0).notNull(),
+    blockedToday: int("blockedToday").default(0).notNull(),
+    requestedPlanName: varchar("requestedPlanName", { length: 80 })
+      .default("Premium")
+      .notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+    completedAt: timestamp("completedAt"),
+  },
+  table => ({
+    workspaceUpgradeRequestsWorkspaceIdIdx: index(
+      "workspaceUpgradeRequests_workspaceId_id_idx"
+    ).on(table.workspaceId, table.id),
+  })
+);
+
+export type WorkspaceUpgradeRequest = typeof workspaceUpgradeRequests.$inferSelect;
+export type InsertWorkspaceUpgradeRequest = typeof workspaceUpgradeRequests.$inferInsert;
+
 export const workspaceUsageDaily = mysqlTable(
   "workspaceUsageDaily",
   {

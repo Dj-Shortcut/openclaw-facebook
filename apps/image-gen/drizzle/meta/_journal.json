@@ -50,6 +50,13 @@
       "when": 1780982400000,
       "tag": "0006_workspace_privacy_requests",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1782316800000,
+      "tag": "0007_workspace_upgrade_requests",
+      "breakpoints": true
     }
   ]
 }
