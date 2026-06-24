@@ -257,6 +257,26 @@ export async function getWorkspaceMembership(workspaceId: number, userId: number
   return result[0] ?? null;
 }
 
+export async function listWorkspaceMembers(workspaceId: number) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("list_workspace_members");
+    return [];
+  }
+
+  return db
+    .select({
+      userId: workspaceMembers.userId,
+      role: workspaceMembers.role,
+      createdAt: workspaceMembers.createdAt,
+      name: users.name,
+      email: users.email,
+    })
+    .from(workspaceMembers)
+    .innerJoin(users, eq(workspaceMembers.userId, users.id))
+    .where(eq(workspaceMembers.workspaceId, workspaceId));
+}
+
 export async function updateWorkspace(workspaceId: number, values: { name: string }) {
   const db = await getDb();
   if (!db) {

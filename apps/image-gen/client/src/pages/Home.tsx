@@ -90,6 +90,10 @@ function Home() {
     portalSessionQuery.data?.workspace.name ??
     workspaceQuery.data?.name ??
     "Leaderbot workspace";
+  const workspaceMembersQuery = trpc.portal.workspace.members.useQuery(
+    { workspaceId: workspaceId ?? 0 },
+    { enabled: Boolean(workspaceId) }
+  );
   const aiIdentityQuery = trpc.portal.aiIdentity.get.useQuery(
     { workspaceId: workspaceId ?? 0 },
     { enabled: Boolean(workspaceId) }
@@ -288,6 +292,7 @@ function Home() {
     auth.loading ||
     portalSessionQuery.isLoading ||
     workspaceQuery.isLoading ||
+    workspaceMembersQuery.isLoading ||
     aiIdentityQuery.isLoading ||
     channelStatusQuery.isLoading ||
     usageQuery.isLoading ||
@@ -384,6 +389,42 @@ function Home() {
           <div className="py-12 text-sm text-slate-400">Loading workspace...</div>
         ) : (
           <div className="grid gap-4 py-6 lg:grid-cols-3">
+            <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5 lg:col-span-3">
+              <div className="flex items-center gap-3">
+                <ShieldCheck className="h-5 w-5 text-cyan-200" />
+                <h2 className="text-lg font-semibold text-slate-50">
+                  Workspace access
+                </h2>
+              </div>
+              <div className="mt-5 grid gap-3 md:grid-cols-2">
+                {(workspaceMembersQuery.data ?? []).map(member => (
+                  <div
+                    className="flex items-center justify-between gap-4 rounded-lg border border-slate-800 bg-slate-950/60 p-4"
+                    key={member.userId}
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-slate-100">
+                        {member.name ?? member.email ?? `User ${member.userId}`}
+                      </div>
+                      <div className="mt-1 truncate text-xs text-slate-500">
+                        {member.email ?? "No email on file"}
+                      </div>
+                    </div>
+                    <StatusPill value={member.role} />
+                  </div>
+                ))}
+              </div>
+              {workspaceMembersQuery.error ? (
+                <p className="mt-4 text-sm text-red-200">
+                  Unable to load workspace access.
+                </p>
+              ) : (workspaceMembersQuery.data ?? []).length === 0 ? (
+                <p className="mt-4 text-sm text-slate-400">
+                  No workspace members found.
+                </p>
+              ) : null}
+            </section>
+
             <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5 lg:col-span-2">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-start gap-3">
