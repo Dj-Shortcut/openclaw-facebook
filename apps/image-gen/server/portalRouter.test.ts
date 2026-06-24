@@ -236,6 +236,26 @@ describe("portal router tenant isolation", () => {
     expect(mocks.createWorkspacePrivacyRequest).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
+
+  it("propagates privacy request load failures instead of returning an empty list", async () => {
+    const caller = createCaller();
+    mocks.getWorkspaceMembership.mockResolvedValue({
+      workspaceId,
+      userId: user.id,
+      role: "owner",
+    });
+    mocks.listWorkspacePrivacyRequests.mockRejectedValue(
+      new Error("Database unavailable: privacy requests were not loaded")
+    );
+
+    await expect(caller.privacy.requests({ workspaceId })).rejects.toThrow(
+      "Database unavailable: privacy requests were not loaded"
+    );
+
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.listWorkspacePrivacyRequests).toHaveBeenCalledWith(workspaceId);
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
+  });
 });
 
 describe("portal router audit logging", () => {

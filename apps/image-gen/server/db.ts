@@ -649,7 +649,7 @@ export async function listWorkspacePrivacyRequests(workspaceId: number) {
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("list_workspace_privacy_requests");
-    return [];
+    throw new Error("Database unavailable: privacy requests were not loaded");
   }
 
   const result = await db
