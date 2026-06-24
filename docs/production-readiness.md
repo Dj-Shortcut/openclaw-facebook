@@ -30,7 +30,7 @@ This document is the deploy/smoke checklist for the current gateway surface.
 - Repaired persisted config when it contains the known legacy default workspace path.
 - Kept OpenClaw built-in `image_generate` denied on the public gateway; Messenger image generation stays routed through Leaderbot image-gen.
 - Added a public-open Facebook DM tool denylist for high-cost/risky OpenClaw tools (`image_generate`, browser/canvas/web fetch/firecrawl, exec, and filesystem mutation tools).
-- Added the Fly public route guard: only `/facebook/webhook`, `/messenger/webhook`, and `/healthz` are exposed publicly; the broader gateway UI/API is not reachable from the internet.
+- Added the Fly public route guard: webhook and health routes stay public, customer portal/legal routes can be proxied to Leaderbot, and the broader OpenClaw gateway UI/API is not reachable from the internet.
 
 ## Remaining Blockers
 
