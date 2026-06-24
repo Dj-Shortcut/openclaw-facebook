@@ -130,6 +130,11 @@ export function registerOAuthRoutes(app: Express) {
           loginMethod: "facebook",
           lastSignedIn: new Date(),
         });
+        const portalUser = await db.getUserByOpenId(userInfo.openId);
+        if (!portalUser) {
+          throw new Error("portal customer was not persisted");
+        }
+        await db.getOrCreateUserWorkspace(portalUser);
 
         const sessionToken = await sdk.createSessionToken(userInfo.openId, {
           name: userInfo.name || "",

@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   getUserInfo: vi.fn(),
   createSessionToken: vi.fn(),
   upsertUser: vi.fn(),
+  getUserByOpenId: vi.fn(),
+  getOrCreateUserWorkspace: vi.fn(),
 }));
 
 vi.mock("./_core/sdk", () => ({
@@ -23,6 +25,8 @@ vi.mock("./_core/sdk", () => ({
 
 vi.mock("./db", () => ({
   upsertUser: mocks.upsertUser,
+  getUserByOpenId: mocks.getUserByOpenId,
+  getOrCreateUserWorkspace: mocks.getOrCreateUserWorkspace,
 }));
 
 function buildState(redirectUri: string, nonce: string): string {
@@ -83,6 +87,8 @@ describe("OAuth callback security", () => {
     mocks.getUserInfo.mockReset();
     mocks.createSessionToken.mockReset();
     mocks.upsertUser.mockReset();
+    mocks.getUserByOpenId.mockReset();
+    mocks.getOrCreateUserWorkspace.mockReset();
   });
 
   afterEach(() => {
@@ -112,6 +118,24 @@ describe("OAuth callback security", () => {
       loginMethod: "facebook",
       platform: "facebook",
     });
+    mocks.getUserByOpenId.mockResolvedValue({
+      id: 7,
+      openId: "open-id-1",
+      name: "Test User",
+      email: "test@example.com",
+      loginMethod: "facebook",
+      role: "user",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+      lastSignedIn: new Date(0),
+    });
+    mocks.getOrCreateUserWorkspace.mockResolvedValue({
+      id: 42,
+      name: "Test User's workspace",
+      slug: "workspace-7",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    });
     mocks.createSessionToken.mockResolvedValue("session-token");
 
     const nonce = "nonce-1234567890abcdef";
@@ -131,7 +155,52 @@ describe("OAuth callback security", () => {
         loginMethod: "facebook",
       })
     );
+    expect(mocks.getUserByOpenId).toHaveBeenCalledWith("open-id-1");
+    expect(mocks.getOrCreateUserWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 7,
+        openId: "open-id-1",
+        loginMethod: "facebook",
+      })
+    );
     expect(mocks.createSessionToken).toHaveBeenCalled();
+  });
+
+  it("fails the callback before session creation when the workspace is not persisted", async () => {
+    mocks.exchangeCodeForToken.mockResolvedValue({ accessToken: "access-token" });
+    mocks.getUserInfo.mockResolvedValue({
+      openId: "open-id-1",
+      name: "Test User",
+      email: "test@example.com",
+      loginMethod: "facebook",
+      platform: "facebook",
+    });
+    mocks.getUserByOpenId.mockResolvedValue({
+      id: 7,
+      openId: "open-id-1",
+      name: "Test User",
+      email: "test@example.com",
+      loginMethod: "facebook",
+      role: "user",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+      lastSignedIn: new Date(0),
+    });
+    mocks.getOrCreateUserWorkspace.mockRejectedValue(
+      new Error("Database unavailable: workspace was not loaded")
+    );
+
+    const nonce = "nonce-1234567890abcdef";
+    const redirectUri = "https://leaderbot.example/api/oauth/callback";
+    const state = buildState(redirectUri, nonce);
+    const response = await sendCallbackRequest({
+      code: "code-workspace-fail",
+      state,
+      cookie: `${OAUTH_STATE_COOKIE_NAME}=${nonce}`,
+    });
+
+    expect(response.status).toBe(500);
+    expect(mocks.createSessionToken).not.toHaveBeenCalled();
   });
 
   it("rejects non-Facebook OAuth identities before creating a portal session", async () => {
@@ -156,6 +225,8 @@ describe("OAuth callback security", () => {
     expect(response.status).toBe(403);
     expect(response.payload).toContain("Facebook Login is required");
     expect(mocks.upsertUser).not.toHaveBeenCalled();
+    expect(mocks.getUserByOpenId).not.toHaveBeenCalled();
+    expect(mocks.getOrCreateUserWorkspace).not.toHaveBeenCalled();
     expect(mocks.createSessionToken).not.toHaveBeenCalled();
   });
 
