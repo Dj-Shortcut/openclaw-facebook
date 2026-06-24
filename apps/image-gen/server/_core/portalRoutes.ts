@@ -85,10 +85,18 @@ export function registerPortalRoutes(app: Express) {
     const workspace = await requirePortalWorkspace(user, res);
     if (!workspace) return;
 
-    const [identity, channels, usage, knowledge, privacySettings] = await Promise.all([
+    const [
+      identity,
+      channels,
+      usage,
+      upgradeRequests,
+      knowledge,
+      privacySettings,
+    ] = await Promise.all([
       db.getOrCreateAiIdentity(workspace.id),
       db.listChannelConnections(workspace.id),
       db.getWorkspaceUsageSummary(workspace.id),
+      db.listWorkspaceUpgradeRequests(workspace.id),
       db.getWorkspaceKnowledgeSummary(workspace.id),
       db.getWorkspacePrivacySettings(workspace.id),
     ]);
@@ -102,7 +110,10 @@ export function registerPortalRoutes(app: Express) {
       workspace,
       aiIdentity: identity,
       channels: channels.map(redactChannelAccessToken),
-      usage,
+      usage: {
+        ...usage,
+        upgradeRequests,
+      },
       knowledgeStore: {
         ...knowledge,
       },

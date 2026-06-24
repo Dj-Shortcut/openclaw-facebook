@@ -389,27 +389,42 @@ export const portalRouter = router({
       return db.getWorkspaceUsageSummary(input.workspaceId);
     }),
 
+    upgradeRequests: protectedProcedure
+      .input(workspaceInput)
+      .query(async ({ ctx, input }) => {
+        await requireWorkspace(ctx, input.workspaceId);
+        return db.listWorkspaceUpgradeRequests(input.workspaceId);
+      }),
+
     requestUpgrade: protectedProcedure
       .input(workspaceInput)
       .mutation(async ({ ctx, input }) => {
         await requireWorkspace(ctx, input.workspaceId);
         const usage = await db.getWorkspaceUsageSummary(input.workspaceId);
-        await db.insertAuditLog({
-          workspaceId: input.workspaceId,
-          userId: ctx.user.id,
-          event: "billing_upgrade.requested",
-          metadata: {
-            planName: usage.plan.name,
+        const request = await db.createWorkspaceUpgradeRequest(
+          input.workspaceId,
+          ctx.user.id,
+          {
+            currentPlanName: usage.plan.name,
             billingStatus: usage.plan.billingStatus,
             upgradeReason: usage.upgrade.reason,
             imagesRemainingToday: usage.remaining.imagesToday,
             blockedToday: usage.blockedCount,
+            requestedPlanName: "Premium",
           },
-        });
-        return {
-          success: true,
-          status: "requested",
-        } as const;
+          {
+            event: "billing_upgrade.requested",
+            metadata: {
+              currentPlanName: usage.plan.name,
+              billingStatus: usage.plan.billingStatus,
+              upgradeReason: usage.upgrade.reason,
+              imagesRemainingToday: usage.remaining.imagesToday,
+              blockedToday: usage.blockedCount,
+              requestedPlanName: "Premium",
+            },
+          }
+        );
+        return request;
       }),
   }),
 

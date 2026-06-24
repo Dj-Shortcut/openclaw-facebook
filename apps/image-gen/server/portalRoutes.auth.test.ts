@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   getOrCreateAiIdentity: vi.fn(),
   listChannelConnections: vi.fn(),
   getWorkspaceUsageSummary: vi.fn(),
+  listWorkspaceUpgradeRequests: vi.fn(),
   getWorkspaceKnowledgeSummary: vi.fn(),
   getWorkspacePrivacySettings: vi.fn(),
   updateAiIdentity: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock("./db", () => ({
   getOrCreateAiIdentity: mocks.getOrCreateAiIdentity,
   listChannelConnections: mocks.listChannelConnections,
   getWorkspaceUsageSummary: mocks.getWorkspaceUsageSummary,
+  listWorkspaceUpgradeRequests: mocks.listWorkspaceUpgradeRequests,
   getWorkspaceKnowledgeSummary: mocks.getWorkspaceKnowledgeSummary,
   getWorkspacePrivacySettings: mocks.getWorkspacePrivacySettings,
   updateAiIdentity: mocks.updateAiIdentity,
@@ -232,6 +234,23 @@ describe("portal REST route authentication", () => {
         reason: null,
       },
     });
+    mocks.listWorkspaceUpgradeRequests.mockResolvedValue([
+      {
+        id: 3,
+        workspaceId: workspace.id,
+        userId: user.id,
+        status: "requested",
+        currentPlanName: "Free",
+        billingStatus: "free",
+        upgradeReason: "blocked_usage",
+        imagesRemainingToday: 19,
+        blockedToday: 1,
+        requestedPlanName: "Premium",
+        createdAt: new Date(0),
+        updatedAt: new Date(0),
+        completedAt: null,
+      },
+    ]);
     mocks.getWorkspaceKnowledgeSummary.mockResolvedValue({
       workspaceId: workspace.id,
       totalSources: 0,
@@ -275,8 +294,15 @@ describe("portal REST route authentication", () => {
         upgrade: {
           recommended: false,
         },
+        upgradeRequests: [
+          {
+            status: "requested",
+            requestedPlanName: "Premium",
+          },
+        ],
       },
     });
     expect(JSON.stringify(response.json)).not.toContain("sealed-token");
+    expect(mocks.listWorkspaceUpgradeRequests).toHaveBeenCalledWith(workspace.id);
   });
 });

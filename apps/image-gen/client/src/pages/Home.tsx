@@ -121,6 +121,10 @@ function Home() {
     { workspaceId: workspaceId ?? 0 },
     { enabled: Boolean(workspaceId) }
   );
+  const upgradeRequestsQuery = trpc.portal.usage.upgradeRequests.useQuery(
+    { workspaceId: workspaceId ?? 0 },
+    { enabled: Boolean(workspaceId) }
+  );
   const knowledgeQuery = trpc.portal.knowledge.summary.useQuery(
     { workspaceId: workspaceId ?? 0 },
     { enabled: Boolean(workspaceId) }
@@ -149,6 +153,7 @@ function Home() {
     onSuccess: async () => {
       if (!workspaceId) return;
       await utils.portal.usage.summary.invalidate({ workspaceId });
+      await utils.portal.usage.upgradeRequests.invalidate({ workspaceId });
     },
   });
   const facebookDisconnectMutation = trpc.portal.facebook.disconnect.useMutation({
@@ -191,6 +196,8 @@ function Home() {
 
   const privacy = privacyQuery.data;
   const usage = usageQuery.data;
+  const upgradeRequests = upgradeRequestsQuery.data ?? [];
+  const latestUpgradeRequest = upgradeRequests[0];
   const facebookStatus = channelStatusQuery.data?.facebook.status ?? "disconnected";
   const knowledgeSources = knowledgeQuery.data?.sources ?? [];
   const privacyRequests = privacyRequestsQuery.data ?? [];
@@ -325,6 +332,7 @@ function Home() {
     aiIdentityQuery.isLoading ||
     channelStatusQuery.isLoading ||
     usageQuery.isLoading ||
+    upgradeRequestsQuery.isLoading ||
     knowledgeQuery.isLoading ||
     privacyQuery.isLoading ||
     privacyRequestsQuery.isLoading;
@@ -742,6 +750,47 @@ function Home() {
               ) : upgradeRequestMutation.error ? (
                 <p className="mt-4 text-sm text-red-200">
                   Unable to record the upgrade request. Please try again.
+                </p>
+              ) : null}
+              <div className="mt-5 overflow-hidden rounded-lg border border-slate-800">
+                {upgradeRequestsQuery.error ? (
+                  <div className="bg-slate-950/60 px-4 py-3 text-sm text-red-300">
+                    Unable to load upgrade requests. Please try again.
+                  </div>
+                ) : upgradeRequests.length === 0 ? (
+                  <div className="bg-slate-950/60 px-4 py-3 text-sm text-slate-400">
+                    No upgrade requests yet.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-800">
+                    {upgradeRequests.slice(0, 3).map(request => (
+                      <div
+                        className="grid gap-2 bg-slate-950/60 px-4 py-3 text-sm md:grid-cols-[1fr_auto_auto]"
+                        key={request.id}
+                      >
+                        <div>
+                          <div className="font-medium text-slate-100">
+                            {request.requestedPlanName} upgrade
+                          </div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {request.upgradeReason?.replace(/_/g, " ") ??
+                              "Customer requested"}
+                          </div>
+                        </div>
+                        <span className="text-slate-400">
+                          {formatDate(request.createdAt)}
+                        </span>
+                        <StatusPill value={request.status} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {latestUpgradeRequest ? (
+                <p className="mt-3 text-xs text-slate-500">
+                  Latest upgrade request: {latestUpgradeRequest.status.replace(/_/g, " ")}
+                  {" · "}
+                  {formatDate(latestUpgradeRequest.createdAt)}
                 </p>
               ) : null}
             </section>

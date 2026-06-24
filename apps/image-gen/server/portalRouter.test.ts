@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   listChannelConnections: vi.fn(),
   disconnectChannelConnection: vi.fn(),
   getWorkspaceUsageSummary: vi.fn(),
+  listWorkspaceUpgradeRequests: vi.fn(),
+  createWorkspaceUpgradeRequest: vi.fn(),
   listWorkspaceKnowledgeSources: vi.fn(),
   getWorkspaceKnowledgeSummary: vi.fn(),
   registerWorkspaceKnowledgeSource: vi.fn(),
@@ -33,6 +35,8 @@ vi.mock("./db", () => ({
   listChannelConnections: mocks.listChannelConnections,
   disconnectChannelConnection: mocks.disconnectChannelConnection,
   getWorkspaceUsageSummary: mocks.getWorkspaceUsageSummary,
+  listWorkspaceUpgradeRequests: mocks.listWorkspaceUpgradeRequests,
+  createWorkspaceUpgradeRequest: mocks.createWorkspaceUpgradeRequest,
   listWorkspaceKnowledgeSources: mocks.listWorkspaceKnowledgeSources,
   getWorkspaceKnowledgeSummary: mocks.getWorkspaceKnowledgeSummary,
   registerWorkspaceKnowledgeSource: mocks.registerWorkspaceKnowledgeSource,
@@ -194,15 +198,18 @@ describe("portal router tenant isolation", () => {
     await expectForbidden(() => caller.channels.list({ workspaceId }));
     await expectForbidden(() => caller.channels.status({ workspaceId }));
     await expectForbidden(() => caller.usage.summary({ workspaceId }));
+    await expectForbidden(() => caller.usage.upgradeRequests({ workspaceId }));
     await expectForbidden(() => caller.usage.requestUpgrade({ workspaceId }));
     await expectForbidden(() => caller.knowledge.list({ workspaceId }));
     await expectForbidden(() => caller.knowledge.summary({ workspaceId }));
     await expectForbidden(() => caller.privacy.controls({ workspaceId }));
     await expectForbidden(() => caller.privacy.requests({ workspaceId }));
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledTimes(8);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledTimes(9);
     expect(mocks.listChannelConnections).not.toHaveBeenCalled();
     expect(mocks.getWorkspaceUsageSummary).not.toHaveBeenCalled();
+    expect(mocks.listWorkspaceUpgradeRequests).not.toHaveBeenCalled();
+    expect(mocks.createWorkspaceUpgradeRequest).not.toHaveBeenCalled();
     expect(mocks.listWorkspaceKnowledgeSources).not.toHaveBeenCalled();
     expect(mocks.getWorkspaceKnowledgeSummary).not.toHaveBeenCalled();
     expect(mocks.getWorkspacePrivacySettings).not.toHaveBeenCalled();
@@ -552,27 +559,84 @@ describe("portal router audit logging", () => {
         reason: "image_limit_reached",
       },
     };
-    mocks.getWorkspaceUsageSummary.mockResolvedValue(usageSummary);
-
-    await expect(caller.usage.requestUpgrade({ workspaceId })).resolves.toEqual({
-      success: true,
+    const createdRequest = {
+      id: 21,
+      workspaceId,
+      userId: user.id,
       status: "requested",
-    });
+      currentPlanName: "Free",
+      billingStatus: "free",
+      upgradeReason: "image_limit_reached",
+      imagesRemainingToday: 0,
+      blockedToday: 1,
+      requestedPlanName: "Premium",
+      createdAt: new Date(0),
+      updatedAt: new Date(1),
+      completedAt: null,
+    };
+    mocks.getWorkspaceUsageSummary.mockResolvedValue(usageSummary);
+    mocks.createWorkspaceUpgradeRequest.mockResolvedValue(createdRequest);
+
+    await expect(caller.usage.requestUpgrade({ workspaceId })).resolves.toEqual(
+      createdRequest
+    );
 
     expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
     expect(mocks.getWorkspaceUsageSummary).toHaveBeenCalledWith(workspaceId);
-    expect(mocks.insertAuditLog).toHaveBeenCalledWith({
+    expect(mocks.createWorkspaceUpgradeRequest).toHaveBeenCalledWith(
       workspaceId,
-      userId: user.id,
-      event: "billing_upgrade.requested",
-      metadata: {
-        planName: "Free",
+      user.id,
+      {
+        currentPlanName: "Free",
         billingStatus: "free",
         upgradeReason: "image_limit_reached",
         imagesRemainingToday: 0,
         blockedToday: 1,
+        requestedPlanName: "Premium",
       },
-    });
+      {
+        event: "billing_upgrade.requested",
+        metadata: {
+          currentPlanName: "Free",
+          billingStatus: "free",
+          upgradeReason: "image_limit_reached",
+          imagesRemainingToday: 0,
+          blockedToday: 1,
+          requestedPlanName: "Premium",
+        },
+      }
+    );
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("returns tenant-scoped upgrade requests without auditing a read", async () => {
+    const caller = createCaller();
+    const requests = [
+      {
+        id: 21,
+        workspaceId,
+        userId: user.id,
+        status: "requested",
+        currentPlanName: "Free",
+        billingStatus: "free",
+        upgradeReason: "blocked_usage",
+        imagesRemainingToday: 4,
+        blockedToday: 2,
+        requestedPlanName: "Premium",
+        createdAt: new Date(0),
+        updatedAt: new Date(1),
+        completedAt: null,
+      },
+    ];
+    mocks.listWorkspaceUpgradeRequests.mockResolvedValue(requests);
+
+    await expect(caller.usage.upgradeRequests({ workspaceId })).resolves.toEqual(
+      requests
+    );
+
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.listWorkspaceUpgradeRequests).toHaveBeenCalledWith(workspaceId);
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 
   it("returns tenant-scoped knowledge sources without auditing a read", async () => {
