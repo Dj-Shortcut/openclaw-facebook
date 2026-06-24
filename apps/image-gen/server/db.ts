@@ -186,7 +186,13 @@ export async function getOrCreateUserWorkspace(user: {
   });
 
   const created = await db
-    .select()
+    .select({
+      id: workspaces.id,
+      name: workspaces.name,
+      slug: workspaces.slug,
+      createdAt: workspaces.createdAt,
+      updatedAt: workspaces.updatedAt,
+    })
     .from(workspaces)
     .where(eq(workspaces.slug, workspaceValues.slug))
     .limit(1);

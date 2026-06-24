@@ -203,6 +203,31 @@ describe("OAuth callback security", () => {
     expect(mocks.createSessionToken).not.toHaveBeenCalled();
   });
 
+  it("fails the callback before session creation when the portal customer is not persisted", async () => {
+    mocks.exchangeCodeForToken.mockResolvedValue({ accessToken: "access-token" });
+    mocks.getUserInfo.mockResolvedValue({
+      openId: "open-id-missing",
+      name: "Missing User",
+      email: "missing@example.com",
+      loginMethod: "facebook",
+      platform: "facebook",
+    });
+    mocks.getUserByOpenId.mockResolvedValue(null);
+
+    const nonce = "nonce-1234567890abcdef";
+    const redirectUri = "https://leaderbot.example/api/oauth/callback";
+    const state = buildState(redirectUri, nonce);
+    const response = await sendCallbackRequest({
+      code: "code-missing-user",
+      state,
+      cookie: `${OAUTH_STATE_COOKIE_NAME}=${nonce}`,
+    });
+
+    expect(response.status).toBe(500);
+    expect(mocks.getOrCreateUserWorkspace).not.toHaveBeenCalled();
+    expect(mocks.createSessionToken).not.toHaveBeenCalled();
+  });
+
   it("rejects non-Facebook OAuth identities before creating a portal session", async () => {
     mocks.exchangeCodeForToken.mockResolvedValue({ accessToken: "access-token" });
     mocks.getUserInfo.mockResolvedValue({
