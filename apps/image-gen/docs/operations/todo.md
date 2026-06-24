@@ -134,6 +134,7 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Add tenant-scoped portal upgrade request tracking and customer-visible request status history
 - [x] Add production readiness guard for the customer portal database configuration
 - [x] Document the production customer portal database secret, migration, readiness, and smoke-test rollout order
+- [x] Add a production portal verifier for DATABASE_URL readiness and public endpoint checks
 - [ ] Add billing and usage controls before broad customer launch
 - [ ] Deploy and verify the `leaderbot.live` customer portal in production.
   - `leaderbot.live` must route to the tenant/customer portal, not the old gateway or brochure surface.

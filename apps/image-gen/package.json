@@ -13,6 +13,7 @@
     "db:push": "drizzle-kit generate && drizzle-kit migrate",
     "dev": "cross-env NODE_ENV=development tsx watch server/_core/index.ts",
     "deploy:check-docker": "node scripts/check-docker-host.mjs",
+    "deploy:verify-portal": "node scripts/verify-portal-production.mjs",
     "fallow": "npx --yes fallow@2.27.0 --root .",
     "fallow:list": "npx --yes fallow@2.27.0 --root . list",
     "fallow:production": "npx --yes fallow@2.27.0 --root . --production",

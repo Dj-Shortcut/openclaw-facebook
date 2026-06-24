@@ -434,10 +434,16 @@ Use this order for `leaderbot-fb-image-gen`:
 5. Verify readiness and the public portal:
 
    ```bash
+   npm run deploy:verify-portal
    curl -fsS https://leaderbot-fb-image-gen.fly.dev/readyz
    curl -fsSI https://leaderbot.live/
    curl -fsS https://leaderbot.live/healthz
    ```
+
+   `npm run deploy:verify-portal` checks for the `DATABASE_URL` Fly secret by
+   name only, verifies that `/readyz` reports `portal_database_config` as ready,
+   and checks the public portal root plus `/healthz` without printing secret
+   values.
 
 6. Smoke the authenticated portal with Facebook Login: session loads, one
    workspace loads, AI identity/instructions load and save, Messenger status
