@@ -35,6 +35,22 @@ export function assertAuthConfig(): void {
   }
 }
 
+export function assertPortalDatabaseConfig(): void {
+  if (process.env.NODE_ENV !== "production") {
+    return;
+  }
+
+  const databaseUrl = process.env.DATABASE_URL?.trim() ?? "";
+  if (!databaseUrl) {
+    throw new Error("DATABASE_URL is required for the production customer portal");
+  }
+
+  const parsed = parseUrlOrThrow(databaseUrl, "DATABASE_URL");
+  if (parsed.protocol !== "mysql:" && parsed.protocol !== "mysql2:") {
+    throw new Error("DATABASE_URL must use a MySQL-compatible URL");
+  }
+}
+
 export function assertWhatsAppConfig(): void {
   getEnv("WHATSAPP_ACCESS_TOKEN");
   getEnv("WHATSAPP_PHONE_NUMBER_ID");
