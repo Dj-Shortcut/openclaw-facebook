@@ -400,10 +400,57 @@ fly deploy -a <app-name>
 fly logs -a <app-name>
 ```
 
+Customer portal database rollout:
+
+The `leaderbot.live` customer portal is DB-backed. Production needs a
+MySQL-compatible `DATABASE_URL` before the portal can be considered ready.
+Without it, `/readyz` must fail the `portal_database_config` check so the app
+does not look healthy while workspace, privacy, knowledge, and upgrade-request
+data cannot persist.
+
+Use this order for `leaderbot-fb-image-gen`:
+
+1. Provision or select the production MySQL-compatible database for the customer
+   portal. Treat the connection string as a secret.
+2. Set the Fly secret:
+
+   ```bash
+   fly secrets set DATABASE_URL='mysql://<user>:<password>@<host>:<port>/<database>' \
+     -a leaderbot-fb-image-gen
+   ```
+
+3. Run migrations from a trusted operator shell with the same `DATABASE_URL`:
+
+   ```bash
+   DATABASE_URL='mysql://<user>:<password>@<host>:<port>/<database>' pnpm db:push
+   ```
+
+4. Deploy image-gen only after the migration succeeds:
+
+   ```bash
+   fly deploy -a leaderbot-fb-image-gen
+   ```
+
+5. Verify readiness and the public portal:
+
+   ```bash
+   curl -fsS https://leaderbot-fb-image-gen.fly.dev/readyz
+   curl -fsSI https://leaderbot.live/
+   curl -fsS https://leaderbot.live/healthz
+   ```
+
+6. Smoke the authenticated portal with Facebook Login: session loads, one
+   workspace loads, AI identity/instructions load and save, Messenger status
+   loads, knowledge sources load, usage and upgrade request history load, privacy
+   controls load, and export/delete-data request history loads.
+
 Operational notes:
 
 - `NODE_ENV=production` and `PORT=8080` are expected in runtime.
 - `REDIS_URL` must be set in Fly secrets before deploy; production startup now fails without it.
+- `DATABASE_URL` must be set in Fly secrets before treating the customer portal
+  as production-ready; `/readyz` reports `portal_database_config` when it is
+  missing or not MySQL-compatible.
 - `WHATSAPP_ACCESS_TOKEN` and `WHATSAPP_PHONE_NUMBER_ID` must be set in Fly secrets before deploy; startup now fails when either is missing.
 - Liveness endpoint is `/healthz`; dependency readiness is exposed at `/readyz`.
 - `/metrics` exposes Prometheus-style request counters and latency histograms.
