@@ -18,6 +18,10 @@ const workspaceInput = z.object({
   workspaceId: z.number().int().positive(),
 });
 
+const workspaceUpdateInput = workspaceInput.extend({
+  name: z.string().trim().min(1).max(160),
+});
+
 const aiIdentityUpdateInput = workspaceInput.extend({
   name: z.string().trim().min(1).max(120),
   instructions: z.string().trim().max(8000).nullable(),
@@ -137,6 +141,24 @@ export const portalRouter = router({
     current: protectedProcedure.query(async ({ ctx }) => {
       return db.getOrCreateUserWorkspace(ctx.user);
     }),
+
+    update: protectedProcedure
+      .input(workspaceUpdateInput)
+      .mutation(async ({ ctx, input }) => {
+        await requireWorkspace(ctx, input.workspaceId);
+        const updated = await db.updateWorkspace(input.workspaceId, {
+          name: input.name,
+        });
+        await db.insertAuditLog({
+          workspaceId: input.workspaceId,
+          userId: ctx.user.id,
+          event: "workspace.updated",
+          metadata: {
+            fields: ["name"],
+          },
+        });
+        return updated;
+      }),
   }),
 
   aiIdentity: router({

@@ -257,6 +257,36 @@ export async function getWorkspaceMembership(workspaceId: number, userId: number
   return result[0] ?? null;
 }
 
+export async function updateWorkspace(workspaceId: number, values: { name: string }) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("update_workspace");
+    return {
+      id: workspaceId,
+      name: values.name,
+      slug: `workspace-${workspaceId}`,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    };
+  }
+
+  await db.update(workspaces).set({ name: values.name }).where(eq(workspaces.id, workspaceId));
+
+  const result = await db
+    .select()
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+
+  return result[0] ?? {
+    id: workspaceId,
+    name: values.name,
+    slug: `workspace-${workspaceId}`,
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  };
+}
+
 export async function getOrCreateAiIdentity(workspaceId: number) {
   const db = await getDb();
   if (!db) {
