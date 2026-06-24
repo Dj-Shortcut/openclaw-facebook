@@ -129,6 +129,11 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Add portal audit logging before broad customer launch
 - [x] Add tenant-checked portal upgrade request control with privacy-safe billing audit metadata
 - [ ] Add billing and usage controls before broad customer launch
+- [ ] Deploy and verify the `leaderbot.live` customer portal in production.
+  - `leaderbot.live` must route to the tenant/customer portal, not the old gateway or brochure surface.
+  - Production auth/session/env config must allow a customer to sign in and load their own workspace.
+  - Production portal smoke must cover workspace details, AI identity/instructions, Messenger status/connect controls, usage, privacy controls, and export/deletion request status.
+  - Public production surface must expose only the customer portal, legal pages, health/readiness/metrics as intended, and required webhook routes; internal gateway/admin APIs must remain shielded.
 - [ ] Verify GDPR deletion end-to-end before broad customer launch
 - [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health routes
 - [ ] Move public legal routes (`/privacy`, `/terms`, `/data-deletion`) into the portal surface before pointing customer traffic there. Initial React portal pages and local footer links exist; production routing and Meta review verification remain open.
