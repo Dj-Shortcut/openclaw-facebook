@@ -269,7 +269,7 @@ describe("Fly gateway startup", () => {
     });
   }, 15000);
 
-  it("only proxies the public webhook and health routes", async () => {
+  it("only proxies the public webhook and health routes by default", async () => {
     const seenPaths = [];
     const target = http.createServer((req, res) => {
       seenPaths.push(req.url);
@@ -298,6 +298,67 @@ describe("Fly gateway startup", () => {
 
     await closeServer(guard);
     await closeServer(target);
+  }, 15000);
+
+  it("proxies customer portal routes to the configured portal origin without exposing gateway UI", async () => {
+    const seenGatewayPaths = [];
+    const gatewayTarget = http.createServer((req, res) => {
+      seenGatewayPaths.push(req.url);
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ target: "gateway", path: req.url }));
+    });
+    gatewayTarget.listen(0, "127.0.0.1");
+    await waitForListening(gatewayTarget);
+
+    const seenPortalPaths = [];
+    const portalTarget = http.createServer((req, res) => {
+      seenPortalPaths.push(req.url);
+      res.setHeader("content-type", "text/plain");
+      res.end(`portal:${req.url}`);
+    });
+    portalTarget.listen(0, "127.0.0.1");
+    await waitForListening(portalTarget);
+
+    const guard = startPublicRouteGuard({
+      publicPort: 0,
+      targetPort: gatewayTarget.address().port,
+      env: {
+        LEADERBOT_PORTAL_ORIGIN: `http://127.0.0.1:${portalTarget.address().port}`,
+      },
+    });
+    await waitForListening(guard);
+
+    const publicPort = guard.address().port;
+    const portalRoot = await fetch(`http://127.0.0.1:${publicPort}/`);
+    const portalAsset = await fetch(`http://127.0.0.1:${publicPort}/assets/app.js`);
+    const portalApi = await fetch(`http://127.0.0.1:${publicPort}/api/trpc/portal.auth.session`);
+    const webhookResponse = await fetch(`http://127.0.0.1:${publicPort}/facebook/webhook?hub.challenge=ok`);
+    const blockedDashboard = await fetch(`http://127.0.0.1:${publicPort}/dashboard`);
+    const blockedDebug = await fetch(`http://127.0.0.1:${publicPort}/debug/build`);
+
+    expect(portalRoot.status).toBe(200);
+    expect(await portalRoot.text()).toBe("portal:/");
+    expect(portalAsset.status).toBe(200);
+    expect(await portalAsset.text()).toBe("portal:/assets/app.js");
+    expect(portalApi.status).toBe(200);
+    expect(await portalApi.text()).toBe("portal:/api/trpc/portal.auth.session");
+    expect(webhookResponse.status).toBe(200);
+    expect(await webhookResponse.json()).toEqual({
+      target: "gateway",
+      path: "/facebook/webhook?hub.challenge=ok",
+    });
+    expect(blockedDashboard.status).toBe(404);
+    expect(blockedDebug.status).toBe(404);
+    expect(seenGatewayPaths).toEqual(["/facebook/webhook?hub.challenge=ok"]);
+    expect(seenPortalPaths).toEqual([
+      "/",
+      "/assets/app.js",
+      "/api/trpc/portal.auth.session",
+    ]);
+
+    await closeServer(guard);
+    await closeServer(portalTarget);
+    await closeServer(gatewayTarget);
   }, 15000);
 
   it("keeps admin login disabled until an admin token is configured", async () => {
