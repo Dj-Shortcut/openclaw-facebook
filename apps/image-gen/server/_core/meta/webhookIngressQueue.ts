@@ -13,6 +13,7 @@ const WEBHOOK_INGRESS_PROCESSING_KEY = "meta-webhook-ingress:processing";
 const WEBHOOK_INGRESS_DEAD_LETTER_KEY = "meta-webhook-ingress:dead";
 const DEFAULT_WEBHOOK_INGRESS_DELIVERY_LEASE_SECONDS = 15 * 60;
 const DEFAULT_WEBHOOK_INGRESS_MAX_ATTEMPTS = 3;
+const DEFAULT_WEBHOOK_INGRESS_RETRY_DELAY_MS = 1_000;
 
 type WebhookChannel = "facebook" | "whatsapp";
 
@@ -58,6 +59,13 @@ function getWebhookIngressMaxAttempts(): number {
   return Number.isFinite(configured) && configured > 0
     ? Math.floor(configured)
     : DEFAULT_WEBHOOK_INGRESS_MAX_ATTEMPTS;
+}
+
+function getWebhookIngressRetryDelayMs(): number {
+  const configured = Number(process.env.WEBHOOK_INGRESS_RETRY_DELAY_MS);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.floor(configured)
+    : DEFAULT_WEBHOOK_INGRESS_RETRY_DELAY_MS;
 }
 
 function getWebhookIngressDeliveryLeaseKey(rawDelivery: string): string {
@@ -267,7 +275,7 @@ async function releaseFailedWebhookIngressDelivery(
     reserved,
     WEBHOOK_INGRESS_QUEUE_KEY,
     serializedRetryDelivery,
-    "LPUSH"
+    "RPUSH"
   );
   safeLog("webhook_queued_delivery_requeued", {
     channel: reserved.delivery.channel,
@@ -333,7 +341,12 @@ export function scheduleWebhookIngressDrain(): void {
             await processQueuedWebhookDelivery(reserved.delivery);
           } catch (error) {
             await releaseFailedWebhookIngressDelivery(redis, reserved, error);
-            continue;
+            setTimeout(() => {
+              if (!drainPromise) {
+                scheduleWebhookIngressDrain();
+              }
+            }, getWebhookIngressRetryDelayMs());
+            return;
           }
 
           await completeWebhookIngressDelivery(redis, reserved.raw);

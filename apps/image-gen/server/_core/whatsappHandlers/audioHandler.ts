@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { t } from "../i18n";
 import { safeLog } from "../logger";
 import type { NormalizedWhatsAppEvent, WhatsAppHandlerContext } from "../whatsappTypes";
@@ -35,23 +36,6 @@ export async function handleWhatsAppAudioEvent(
     return;
   }
 
-  let sourceAudioBuffer: Buffer;
-  let sourceAudioContentType: string | undefined;
-  try {
-    const downloaded = await downloadWhatsAppMedia(event.audioId);
-    sourceAudioBuffer = downloaded.buffer;
-    sourceAudioContentType = downloaded.contentType;
-  } catch (error) {
-    safeLog("whatsapp_audio_media_download_failed", {
-      user: toLogUser(event.userId),
-      reqId: context.reqId,
-      error: error instanceof Error ? error.name : "unknown_error",
-      audioId: event.audioId,
-    });
-    await sendWhatsAppTextReply(event.senderId, t(context.lang, "unsupportedAudio"));
-    return;
-  }
-
   const audioBudgetNow = new Date();
   try {
     await assertMessengerDailyAudioTranscriptionBudgetAvailable({
@@ -64,6 +48,31 @@ export async function handleWhatsAppAudioEvent(
       return;
     }
     throw error;
+  }
+
+  if (!process.env.OPENAI_API_KEY?.trim()) {
+    await sendWhatsAppTextReply(event.senderId, t(context.lang, "unsupportedAudio"));
+    return;
+  }
+
+  let sourceAudioBuffer: Buffer;
+  let sourceAudioContentType: string | undefined;
+  try {
+    const downloaded = await downloadWhatsAppMedia(event.audioId);
+    sourceAudioBuffer = downloaded.buffer;
+    sourceAudioContentType = downloaded.contentType;
+  } catch (error) {
+    safeLog("whatsapp_audio_media_download_failed", {
+      user: toLogUser(event.userId),
+      reqId: context.reqId,
+      error: error instanceof Error ? error.name : "unknown_error",
+      audioIdHash: createHash("sha256")
+        .update(event.audioId)
+        .digest("hex")
+        .slice(0, 12),
+    });
+    await sendWhatsAppTextReply(event.senderId, t(context.lang, "unsupportedAudio"));
+    return;
   }
 
   const preparedAudio = prepareAudioForTranscriptionFromBuffer(

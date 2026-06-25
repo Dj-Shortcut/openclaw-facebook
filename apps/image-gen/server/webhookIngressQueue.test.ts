@@ -155,18 +155,18 @@ describe("webhookIngressQueue", () => {
     scheduleWebhookIngressDrain();
 
     await vi.waitFor(() => {
-      expect(redis.lpush).toHaveBeenCalledWith(
+      expect(redis.rpush).toHaveBeenCalledWith(
         "meta-webhook-ingress",
         expect.any(String)
       );
     });
 
     expect(processing).toEqual([]);
-    expect(queue).toHaveLength(0);
-    expect(dead).toHaveLength(1);
-    expect(JSON.parse(dead[0])).toMatchObject({
+    expect(queue).toHaveLength(1);
+    expect(dead).toHaveLength(0);
+    expect(JSON.parse(queue[0])).toMatchObject({
       channel: "facebook",
-      attempts: 3,
+      attempts: 1,
       payload: { entry: [{ id: "failed" }] },
     });
     expect(safeLogMock).not.toHaveBeenCalledWith(
