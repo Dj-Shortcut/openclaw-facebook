@@ -42,77 +42,67 @@ export async function handleWhatsAppAudioEvent(
       reqId: context.reqId,
       now: audioBudgetNow,
     });
-  } catch (error) {
-    if (error instanceof MessengerDailyAudioTranscriptionBudgetExceededError) {
+    let sourceAudioBuffer: Buffer | undefined;
+    let sourceAudioContentType: string | undefined;
+    let reservation: Awaited<ReturnType<typeof reserveTranscriptionForAttempt>> | null = null;
+    let audioBudgetCommitted = false;
+
+    if (!process.env.OPENAI_API_KEY?.trim()) {
+      await sendWhatsAppTextReply(event.senderId, t(context.lang, "unsupportedAudio"));
+      return;
+    }
+
+    reservation = await reserveTranscriptionForAttempt(event.senderId);
+    if (!reservation) {
       await sendWhatsAppTextReply(event.senderId, t(context.lang, "outOfFreeCredits"));
       return;
     }
-    throw error;
-  }
 
-  if (!process.env.OPENAI_API_KEY?.trim()) {
-    await sendWhatsAppTextReply(event.senderId, t(context.lang, "unsupportedAudio"));
-    return;
-  }
-
-  let sourceAudioBuffer: Buffer;
-  let sourceAudioContentType: string | undefined;
-  try {
-    const downloaded = await downloadWhatsAppMedia(event.audioId);
-    sourceAudioBuffer = downloaded.buffer;
-    sourceAudioContentType = downloaded.contentType;
-  } catch (error) {
-    safeLog("whatsapp_audio_media_download_failed", {
-      user: toLogUser(event.userId),
-      reqId: context.reqId,
-      error: error instanceof Error ? error.name : "unknown_error",
-      audioIdHash: createHash("sha256")
-        .update(event.audioId)
-        .digest("hex")
-        .slice(0, 12),
-    });
-    await sendWhatsAppTextReply(event.senderId, t(context.lang, "unsupportedAudio"));
-    return;
-  }
-
-  const preparedAudio = prepareAudioForTranscriptionFromBuffer(
-    context.reqId,
-    event.senderId,
-    event.audioId,
-    sourceAudioBuffer,
-    sourceAudioContentType
-  );
-  if (!preparedAudio) {
-    await releaseMessengerDailyAudioTranscriptionBudgetReservation({
-      now: audioBudgetNow,
-    });
-    await sendWhatsAppTextReply(event.senderId, t(context.lang, "unsupportedAudio"));
-    return;
-  }
-
-  const reservation = await reserveTranscriptionForAttempt(event.senderId);
-  if (!reservation) {
-    await releaseMessengerDailyAudioTranscriptionBudgetReservation({
-      now: audioBudgetNow,
-    });
-    await sendWhatsAppTextReply(event.senderId, t(context.lang, "outOfFreeCredits"));
-    return;
-  }
-
-  let audioBudgetCommitted = false;
-  const commitProviderAttemptQuota = async () => {
-    const committed = await commitTranscriptionSuccess(event.senderId, reservation, {
-      releaseReservation: false,
-    });
-    if (!committed) {
-      throw new MessengerQuotaReservationCommitError(
-        "Messenger audio transcription quota reservation could not be committed"
-      );
+    try {
+      const downloaded = await downloadWhatsAppMedia(event.audioId);
+      sourceAudioBuffer = downloaded.buffer;
+      sourceAudioContentType = downloaded.contentType;
+    } catch (error) {
+      safeLog("whatsapp_audio_media_download_failed", {
+        user: toLogUser(event.userId),
+        reqId: context.reqId,
+        error: error instanceof Error ? error.name : "unknown_error",
+        audioIdHash: createHash("sha256")
+          .update(event.audioId)
+          .digest("hex")
+          .slice(0, 12),
+      });
+      await sendWhatsAppTextReply(event.senderId, t(context.lang, "unsupportedAudio"));
+      return;
     }
-    audioBudgetCommitted = true;
-  };
 
-  try {
+    const preparedAudio = prepareAudioForTranscriptionFromBuffer(
+      context.reqId,
+      event.senderId,
+      event.audioId,
+      sourceAudioBuffer!,
+      sourceAudioContentType
+    );
+    if (!preparedAudio) {
+      await sendWhatsAppTextReply(event.senderId, t(context.lang, "unsupportedAudio"));
+      return;
+    }
+
+    const commitProviderAttemptQuota = async () => {
+      if (!reservation) {
+        throw new MessengerQuotaReservationCommitError("Missing transcription reservation");
+      }
+      const committed = await commitTranscriptionSuccess(event.senderId, reservation, {
+        releaseReservation: false,
+      });
+      if (!committed) {
+        throw new MessengerQuotaReservationCommitError(
+          "Messenger audio transcription quota reservation could not be committed"
+        );
+      }
+      audioBudgetCommitted = true;
+    };
+
     const transcript = await transcribePreparedAudioMessage(
       context.reqId,
       event.senderId,
@@ -136,6 +126,10 @@ export async function handleWhatsAppAudioEvent(
       context
     );
   } catch (error) {
+    if (error instanceof MessengerDailyAudioTranscriptionBudgetExceededError) {
+      await sendWhatsAppTextReply(event.senderId, t(context.lang, "outOfFreeCredits"));
+      return;
+    }
     if (
       error instanceof MessengerQuotaReservationCommitError ||
       error instanceof MessengerSpendBudgetExceededError
@@ -146,7 +140,9 @@ export async function handleWhatsAppAudioEvent(
 
     throw error;
   } finally {
-    await releaseTranscriptionReservation(event.senderId, reservation);
+    if (reservation) {
+      await releaseTranscriptionReservation(event.senderId, reservation);
+    }
     if (!audioBudgetCommitted) {
       await releaseMessengerDailyAudioTranscriptionBudgetReservation({
         now: audioBudgetNow,

@@ -61,7 +61,7 @@ secret names present. Secret values were not printed or copied.
 3. The route accepts payloads where `object` is `whatsapp_business_account`.
 4. WhatsApp messages are normalized from `entry[].changes[].value.messages[]`.
 5. Text and interactive reply messages run through the shared Leaderbot text handling and bot features.
-6. Voice/Audio messages are normalized as `audio` (`audio`/`voice`) and transcribed before routing to text handling.
+6. Voice/Audio messages are normalized as `audio` (`audio`/`voice`/`ptt`) and transcribed before routing to text handling.
 7. Image messages are downloaded through the WhatsApp Cloud API media endpoint,
    persisted as application-owned inbound source images, then used by the
    prompt-first image generation flow after the user sends an edit prompt.
