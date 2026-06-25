@@ -60,11 +60,12 @@ secret names present. Secret values were not printed or copied.
 2. Meta sends signed POST deliveries to `/webhook/whatsapp`.
 3. The route accepts payloads where `object` is `whatsapp_business_account`.
 4. WhatsApp messages are normalized from `entry[].changes[].value.messages[]`.
-5. Text messages run through the shared Leaderbot text handling and bot features.
-6. Image messages are downloaded through the WhatsApp Cloud API media endpoint,
+5. Text and interactive reply messages run through the shared Leaderbot text handling and bot features.
+6. Voice/Audio messages are normalized as `audio` (`audio`/`voice`/`ptt`) and transcribed before routing to text handling.
+7. Image messages are downloaded through the WhatsApp Cloud API media endpoint,
    persisted as application-owned inbound source images, then used by the
    prompt-first image generation flow after the user sends an edit prompt.
-7. Unsupported media types return a clear text reply asking for a photo.
+8. Unsupported media types return a clear text reply asking for a photo.
 
 ## Outbound Flow
 
@@ -93,9 +94,37 @@ Use metadata-only checks:
    `whatsapp_webhook_post_delivery_received`,
    `whatsapp_inbound_payload_summary`, `whatsapp_normalized_inbound_event`, and
    `webhook_ack_sent` with channel `whatsapp`.
-6. After sending a WhatsApp photo, logs should show `whatsapp_image_downloaded`
+6. After sending a WhatsApp voice note, recent logs should show `messenger_audio_transcription_request`
+   and `messenger_audio_transcription_complete`, or a fallback message such as
+   `unsupportedAudio` if media download/transcription is blocked by budget/format.
+7. After sending a WhatsApp photo, logs should show `whatsapp_image_downloaded`
    and `whatsapp_image_persisted`, or `whatsapp_inbound_image_processing_failed`
    followed by a user-facing retry message.
+
+## Production smoke checklist (copy/paste)
+
+Run this in order:
+
+1. Health:
+   - `GET https://leaderbot-fb-image-gen.fly.dev/healthz` → 200 ok
+   - `GET https://leaderbot-fb-image-gen.fly.dev/webhook/whatsapp?hub.mode=subscribe&hub.verify_token=<token>&hub.challenge=<challenge>` → challenge
+   - same request with wrong token → 403
+2. Webhook ingress:
+   - send a WhatsApp text message
+   - confirm logs include `whatsapp_webhook_post_delivery_received`, `whatsapp_normalized_inbound_event`, `webhook_ack_sent` (`channel: whatsapp`)
+3. Image ingest:
+   - send a WhatsApp photo
+   - confirm `whatsapp_image_downloaded` and `whatsapp_image_persisted`
+4. Voice ingest:
+   - send a WhatsApp voice note
+   - confirm `messenger_audio_transcription_request` and `messenger_audio_transcription_complete`
+   - if blocked, confirm user-facing fallback key in logs (`unsupportedAudio` or budget keys)
+5. Failure diagnostics:
+   - inspect metadata-only errors:
+     - `whatsapp_audio_media_download_failed`
+     - `whatsapp_audio_event_missing_audio_id`
+     - `meta_webhook_signature_validation_failed`
+     - `whatsapp_send_failed`
 
 Do not log or paste raw phone numbers, tokens, message text, media URLs, or
 uploaded image contents while verifying production traffic.

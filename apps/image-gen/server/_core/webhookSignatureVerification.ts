@@ -105,7 +105,12 @@ export function captureMetaWebhookRawBody(
   _res: Response,
   buf: Buffer
 ): void {
-  if (!req.originalUrl.startsWith("/webhook")) {
+  const path = req.originalUrl;
+  if (
+    !path.startsWith("/webhook") &&
+    !path.startsWith("/facebook/webhook") &&
+    !path.startsWith("/messenger/webhook")
+  ) {
     return;
   }
 

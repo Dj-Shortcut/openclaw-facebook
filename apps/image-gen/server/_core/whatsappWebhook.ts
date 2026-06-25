@@ -5,6 +5,7 @@ import { toLogUser } from "./privacy";
 import { handleWhatsAppConsentGate } from "./consentService";
 import { extractWhatsAppEvents, logWhatsAppWebhookPayload } from "./inbound/whatsappInbound";
 import { handleWhatsAppImageEvent } from "./whatsappHandlers/imageHandler";
+import { handleWhatsAppAudioEvent } from "./whatsappHandlers/audioHandler";
 import { handleWhatsAppInteractiveEvent } from "./whatsappHandlers/interactiveHandler";
 import { handleWhatsAppTextEvent } from "./whatsappHandlers/textHandler";
 import { sendWhatsAppButtonsReply, sendWhatsAppTextReply } from "./whatsappResponseService";
@@ -53,6 +54,16 @@ async function dispatchWhatsAppEvent(
 ): Promise<void> {
   if (event.messageType === "image") {
     await handleWhatsAppImageEvent(event, context);
+    return;
+  }
+
+  if (event.messageType === "audio") {
+    await handleWhatsAppAudioEvent(event, context);
+    return;
+  }
+
+  if (event.audioId) {
+    await handleWhatsAppAudioEvent(event, context);
     return;
   }
 
@@ -125,7 +136,7 @@ function getWhatsAppEventReplayKey(event: NormalizedWhatsAppEvent): string {
           event.senderId,
           event.timestamp ?? "no-ts",
           event.rawMessageType ?? "unknown",
-          event.imageId ?? event.textBody ?? "no-body",
+          event.imageId ?? event.audioId ?? event.textBody ?? "no-body",
         ].join(":")
       )
       .digest("hex")

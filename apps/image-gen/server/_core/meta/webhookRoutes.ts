@@ -36,6 +36,8 @@ const webhookDeliveryLimiter = rateLimit({
 
 const DEFAULT_WEBHOOK_INGRESS_ENQUEUE_TIMEOUT_MS = 450;
 
+type WebhookVerificationMode = "generic" | "whatsapp";
+
 class WebhookIngressEnqueueTimeoutError extends Error {
   constructor(timeoutMs: number) {
     super(`webhook ingress enqueue timed out after ${timeoutMs}ms`);
@@ -43,7 +45,7 @@ class WebhookIngressEnqueueTimeoutError extends Error {
   }
 }
 
-function getConfiguredVerifyTokens(path: string): string[] {
+function getConfiguredVerifyTokens(mode: WebhookVerificationMode): string[] {
   const sharedToken =
     process.env.META_VERIFY_TOKEN?.trim() ||
     process.env.FB_VERIFY_TOKEN?.trim();
@@ -51,7 +53,7 @@ function getConfiguredVerifyTokens(path: string): string[] {
     sharedToken,
   ];
 
-  if (path === "/webhook/whatsapp") {
+  if (mode === "whatsapp") {
     tokens.push(process.env.WHATSAPP_VERIFY_TOKEN?.trim());
   }
 
@@ -81,11 +83,20 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 }
 
 export function registerMetaWebhookRoutes(app: express.Express): void {
+  const webhookRoutes: Array<{ path: string; mode: WebhookVerificationMode }> = [
+    { path: "/webhook", mode: "generic" },
+    { path: "/webhook/facebook", mode: "generic" },
+    { path: "/webhook/whatsapp", mode: "whatsapp" },
+    { path: "/facebook/webhook", mode: "generic" },
+    { path: "/messenger/webhook", mode: "generic" },
+  ];
 
-  const handleVerification: express.RequestHandler = (req, res) => {
+  const createVerificationHandler =
+    (mode: WebhookVerificationMode): express.RequestHandler =>
+    (req, res) => {
     const parsedQuery = webhookVerificationQuerySchema.safeParse(req.query);
     const path = req.path;
-    const configuredTokens = getConfiguredVerifyTokens(path);
+    const configuredTokens = getConfiguredVerifyTokens(mode);
 
     safeLog("meta_webhook_verification_requested", { path });
 
@@ -111,9 +122,9 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
       .send(parsedQuery.data["hub.challenge"]);
   };
 
-  app.get("/webhook", webhookLimiter, handleVerification);
-  app.get("/webhook/facebook", webhookLimiter, handleVerification);
-  app.get("/webhook/whatsapp", webhookLimiter, handleVerification); // NIEUW
+  for (const route of webhookRoutes) {
+    app.get(route.path, webhookLimiter, createVerificationHandler(route.mode));
+  }
 
   // Keep this dispatch branch local for now; it is the narrow seam for a later helper extraction.
   const handleWebhookPost: express.RequestHandler = async (req, res) => {
@@ -197,7 +208,7 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
     await enqueueOrFallback("facebook");
   };
 
-  app.post("/webhook", webhookDeliveryLimiter, handleWebhookPost);
-  app.post("/webhook/facebook", webhookDeliveryLimiter, handleWebhookPost);
-  app.post("/webhook/whatsapp", webhookDeliveryLimiter, handleWebhookPost); // NIEUW
+  for (const route of webhookRoutes) {
+    app.post(route.path, webhookDeliveryLimiter, handleWebhookPost);
+  }
 }

@@ -10,10 +10,11 @@ export type NormalizedInboundMessage = {
   senderId: string;
   userId: string;
   channelCapabilities?: BotChannelCapabilities;
-  messageType: "text" | "image" | "unknown";
+  messageType: "text" | "image" | "audio" | "unknown";
   rawMessageType?: string;
   messageId?: string;
   textBody?: string;
+  audioId?: string;
   imageUrl?: string;
   imageId?: string;
   timestamp?: number;
