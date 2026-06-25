@@ -37,16 +37,16 @@ export async function handleWhatsAppAudioEvent(
   }
 
   const audioBudgetNow = new Date();
+  let sourceAudioBuffer: Buffer | undefined;
+  let sourceAudioContentType: string | undefined;
+  let reservation: Awaited<ReturnType<typeof reserveTranscriptionForAttempt>> | null = null;
+  let audioBudgetCommitted = false;
+
   try {
     await assertMessengerDailyAudioTranscriptionBudgetAvailable({
       reqId: context.reqId,
       now: audioBudgetNow,
     });
-    let sourceAudioBuffer: Buffer | undefined;
-    let sourceAudioContentType: string | undefined;
-    let reservation: Awaited<ReturnType<typeof reserveTranscriptionForAttempt>> | null = null;
-    let audioBudgetCommitted = false;
-
     if (!process.env.OPENAI_API_KEY?.trim()) {
       await sendWhatsAppTextReply(event.senderId, t(context.lang, "unsupportedAudio"));
       return;
