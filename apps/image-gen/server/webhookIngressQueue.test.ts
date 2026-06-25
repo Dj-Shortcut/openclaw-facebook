@@ -137,6 +137,7 @@ describe("webhookIngressQueue", () => {
 
   it("does not silently complete a delivery when processing fails", async () => {
     isRedisEnabledMock.mockReturnValue(true);
+    process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS = "3";
     const processingError = new TypeError("handler exploded");
     processFacebookWebhookPayloadMock.mockRejectedValue(processingError);
 
@@ -161,13 +162,13 @@ describe("webhookIngressQueue", () => {
     });
 
     expect(processing).toEqual([]);
-    expect(queue).toHaveLength(1);
-    expect(JSON.parse(queue[0])).toMatchObject({
+    expect(queue).toHaveLength(0);
+    expect(dead).toHaveLength(1);
+    expect(JSON.parse(dead[0])).toMatchObject({
       channel: "facebook",
-      attempts: 1,
+      attempts: 3,
       payload: { entry: [{ id: "failed" }] },
     });
-    expect(dead).toEqual([]);
     expect(safeLogMock).not.toHaveBeenCalledWith(
       "webhook_async_processing_failed",
       expect.any(Object)
@@ -230,6 +231,7 @@ describe("webhookIngressQueue", () => {
 
   it("requeues a failed delivery with an incremented attempt count", async () => {
     isRedisEnabledMock.mockReturnValue(true);
+    process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS = "2";
     processWhatsAppWebhookPayloadMock.mockRejectedValue(new Error("try again"));
 
     const delivery = JSON.stringify({
@@ -247,21 +249,17 @@ describe("webhookIngressQueue", () => {
     scheduleWebhookIngressDrain();
 
     await vi.waitFor(() => {
-      expect(redis.lpush).toHaveBeenCalledWith(
-        "meta-webhook-ingress",
+      expect(redis.rpush).toHaveBeenCalledWith(
+        "meta-webhook-ingress:dead",
         expect.any(String)
       );
     });
 
-    expect(queue).toHaveLength(1);
-    expect(JSON.parse(queue[0])).toMatchObject({
-      channel: "whatsapp",
-      attempts: 2,
-    });
+    expect(queue).toHaveLength(0);
     expect(processing).toEqual([]);
-    expect(dead).toEqual([]);
+    expect(dead).toHaveLength(1);
     expect(safeLogMock).toHaveBeenCalledWith(
-      "webhook_queued_delivery_requeued",
+      "webhook_queued_delivery_dead_lettered",
       expect.objectContaining({
         channel: "whatsapp",
         attempts: 2,
