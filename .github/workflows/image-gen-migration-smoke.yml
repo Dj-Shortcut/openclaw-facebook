@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - 'apps/image-gen/drizzle/**'
+      - 'apps/image-gen/drizzle.config.ts'
       - 'apps/image-gen/package.json'
       - 'apps/image-gen/pnpm-lock.yaml'
       - '.github/workflows/image-gen-migration-smoke.yml'
@@ -18,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       mysql:
-        image: mysql:8.4
+        image: mysql:8.4@sha256:02aa6476f6b675e5d4d19c5b437798b1b8a4048ae39383eac609814998ed15b8
         env:
           MYSQL_ROOT_PASSWORD: root
           MYSQL_DATABASE: test_image_gen
@@ -32,10 +33,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24'
           cache: 'pnpm'
@@ -55,8 +58,27 @@ jobs:
 
       - name: Verify dailyQuota composite index exists
         run: |
-          mysql -h127.0.0.1 -uroot -proot test_image_gen -e "SHOW INDEX FROM dailyQuota WHERE Key_name = 'dailyQuota_userId_date_unique'" | tee index-check.out
-          if ! grep -q 'dailyQuota_userId_date_unique' index-check.out; then
-            echo 'Expected index dailyQuota_userId_date_unique missing';
+          index_contract=$(
+            mysql -h127.0.0.1 -uroot -proot test_image_gen -Nse "SELECT
+              COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+              WHERE TABLE_SCHEMA = DATABASE()
+                AND TABLE_NAME = 'dailyQuota'
+                AND INDEX_NAME = 'dailyQuota_userId_date_unique'
+                AND NON_UNIQUE = 0
+                AND ((SEQ_IN_INDEX = 1 AND COLUMN_NAME = 'userId')
+                  OR (SEQ_IN_INDEX = 2 AND COLUMN_NAME = 'date'));"
+          )
+
+          column_count=$(
+            mysql -h127.0.0.1 -uroot -proot test_image_gen -Nse "SELECT
+              COUNT(*)
+              FROM INFORMATION_SCHEMA.STATISTICS
+              WHERE TABLE_SCHEMA = DATABASE()
+                AND TABLE_NAME = 'dailyQuota'
+                AND INDEX_NAME = 'dailyQuota_userId_date_unique';"
+          )
+
+          if [ "$index_contract" != "2" ] || [ "$column_count" != "2" ]; then
+            echo 'Expected unique index dailyQuota_userId_date_unique(userId, date) missing or malformed';
             exit 1;
           fi

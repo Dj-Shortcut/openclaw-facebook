@@ -11,6 +11,8 @@ SET @drop_userId_unique_sql := (
   END
 );
 
+--> statement-breakpoint
+
 SET @drop_userId_date_unique_sql := (
   SELECT CASE
     WHEN EXISTS (
@@ -24,12 +26,28 @@ SET @drop_userId_date_unique_sql := (
   END
 );
 
+--> statement-breakpoint
+
 PREPARE drop_userId_unique_statement FROM @drop_userId_unique_sql;
+
+--> statement-breakpoint
+
 EXECUTE drop_userId_unique_statement;
+
+--> statement-breakpoint
+
 DEALLOCATE PREPARE drop_userId_unique_statement;
 
+--> statement-breakpoint
+
 PREPARE drop_userId_date_unique_statement FROM @drop_userId_date_unique_sql;
+
+--> statement-breakpoint
+
 EXECUTE drop_userId_date_unique_statement;
+
+--> statement-breakpoint
+
 DEALLOCATE PREPARE drop_userId_date_unique_statement;
 
 --> statement-breakpoint
