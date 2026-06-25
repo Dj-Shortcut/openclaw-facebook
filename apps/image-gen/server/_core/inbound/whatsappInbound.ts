@@ -86,12 +86,28 @@ function readMessageTimestamp(message: unknown): number | undefined {
   return Number.isFinite(timestamp) ? timestamp! * 1000 : undefined;
 }
 
-function normalizeMessageType(rawType: string): "text" | "image" | "unknown" {
+function normalizeMessageType(
+  rawType: string
+): "text" | "image" | "audio" | "unknown" {
   if (rawType === "text" || rawType === "interactive") {
     return "text";
   }
 
-  return rawType === "image" ? "image" : "unknown";
+  if (rawType === "image") {
+    return "image";
+  }
+
+  return rawType === "audio" || rawType === "voice" || rawType === "ptt"
+    ? "audio"
+    : "unknown";
+}
+
+function readAudioId(message: unknown): string | null {
+  return (
+    stringProperty(getNestedObject(message, "audio"), "id") ??
+    stringProperty(getNestedObject(message, "voice"), "id")
+    ?? stringProperty(getNestedObject(message, "ptt"), "id")
+  );
 }
 
 function buildWhatsAppEvent(message: unknown): NormalizedInboundMessage | null {
@@ -105,6 +121,7 @@ function buildWhatsAppEvent(message: unknown): NormalizedInboundMessage | null {
   const textBody = stringProperty(getNestedObject(message, "text"), "body");
   const interactiveReply = readInteractiveReply(message);
   const imageId = stringProperty(getNestedObject(message, "image"), "id");
+  const audioId = readAudioId(message);
 
   return {
     channel: "whatsapp",
@@ -120,6 +137,7 @@ function buildWhatsAppEvent(message: unknown): NormalizedInboundMessage | null {
     textBody:
       interactiveReply.id ?? interactiveReply.title ?? textBody ?? undefined,
     imageId: imageId ?? undefined,
+    audioId: audioId ?? undefined,
     timestamp: readMessageTimestamp(message),
     ...(interactiveReply.id || interactiveReply.title
       ? {

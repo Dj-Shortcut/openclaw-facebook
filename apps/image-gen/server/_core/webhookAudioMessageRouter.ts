@@ -44,6 +44,15 @@ const OPENAI_AUDIO_TRANSCRIPTION_MAX_RETRIES = 1;
 const DEFAULT_AUDIO_TRANSCRIPTION_MAX_BYTES = 20 * 1024 * 1024;
 const MIN_TRANSCRIPT_WORDS = 2;
 
+export type PreparedAudioForTranscription = {
+  apiKey: string;
+  sourceAudio: {
+    buffer: Buffer;
+    contentType?: string;
+    incomingLen: number;
+  };
+};
+
 /** Attempts to transcribe voice/audio attachments and route as text input. */
 export async function tryHandleAudioMessage(
   ctx: HandlerContext,
@@ -158,14 +167,74 @@ function getInboundAudioUrl(
   return typeof audio?.payload?.url === "string" ? audio.payload.url : null;
 }
 
-type PreparedAudioForTranscription = {
-  apiKey: string;
-  sourceAudio: {
-    buffer: Buffer;
-    contentType?: string;
-    incomingLen: number;
-  };
+type AudioSourceForTranscription = {
+  buffer: Buffer;
+  contentType?: string;
+  incomingLen: number;
 };
+
+function createPreparedAudioForTranscription(
+  reqId: string,
+  psid: string,
+  audioUrl: string,
+  apiKey: string,
+  sourceAudio: AudioSourceForTranscription
+): PreparedAudioForTranscription | null {
+  const attemptPayload = {
+    reqId,
+    psidHash: anonymizePsid(psid).slice(0, 12),
+    attachment: summarizeSensitiveUrl(audioUrl),
+    endpoint: OPENAI_AUDIO_TRANSCRIPTION_ENDPOINT,
+    model: OPENAI_AUDIO_TRANSCRIPTION_MODEL,
+    contentType: sourceAudio.contentType,
+    sourceBytes: sourceAudio.incomingLen,
+  };
+
+  const maxBytes = getAudioTranscriptionMaxBytes();
+  if (sourceAudio.incomingLen > maxBytes) {
+    safeLog("messenger_audio_transcription_skipped", {
+      ...attemptPayload,
+      route: "audio",
+      reason: "audio_too_large",
+      maxBytes,
+    });
+    return null;
+  }
+
+  return { apiKey, sourceAudio };
+}
+
+export function prepareAudioForTranscriptionFromBuffer(
+  reqId: string,
+  psid: string,
+  audioUrl: string,
+  audioBuffer: Buffer,
+  contentType?: string
+): PreparedAudioForTranscription | null {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) {
+    safeLog("messenger_audio_transcription_skipped", {
+      reqId,
+      route: "audio",
+      reason: "missing_openai_api_key",
+      psidHash: anonymizePsid(psid).slice(0, 12),
+      attachment: summarizeSensitiveUrl(audioUrl),
+    });
+    return null;
+  }
+
+  return createPreparedAudioForTranscription(
+    reqId,
+    psid,
+    audioUrl,
+    apiKey,
+    {
+      buffer: audioBuffer,
+      contentType,
+      incomingLen: audioBuffer.length,
+    }
+  );
+}
 
 async function prepareAudioForTranscription(
   reqId: string,
@@ -203,37 +272,23 @@ async function prepareAudioForTranscription(
     return null;
   }
 
-  const attemptPayload = {
+  return createPreparedAudioForTranscription(
     reqId,
-    psidHash: anonymizePsid(psid).slice(0, 12),
-    attachment: summarizeSensitiveUrl(audioUrl),
-    endpoint: OPENAI_AUDIO_TRANSCRIPTION_ENDPOINT,
-    model: OPENAI_AUDIO_TRANSCRIPTION_MODEL,
-    contentType: sourceAudio.contentType,
-    sourceBytes: sourceAudio.incomingLen,
-  };
-
-  const maxBytes = getAudioTranscriptionMaxBytes();
-  if (sourceAudio.incomingLen > maxBytes) {
-    safeLog("messenger_audio_transcription_skipped", {
-      ...attemptPayload,
-      route: "audio",
-      reason: "audio_too_large",
-      maxBytes,
-    });
-    return null;
-  }
-
-  return { apiKey, sourceAudio };
+    psid,
+    audioUrl,
+    apiKey,
+    sourceAudio
+  );
 }
 
-async function transcribePreparedAudioMessage(
+export async function transcribePreparedAudioMessage(
   reqId: string,
   psid: string,
   userId: string,
   audioUrl: string,
   prepared: PreparedAudioForTranscription,
-  onProviderAttempt: () => Promise<void>
+  onProviderAttempt: () => Promise<void>,
+  channel = "facebook_messenger"
 ): Promise<string | null> {
   const { apiKey, sourceAudio } = prepared;
   const costEstimate = estimateAudioTranscriptionAttemptCost();
@@ -273,7 +328,7 @@ async function transcribePreparedAudioMessage(
     await safelyAppendCostLedgerEntry(
       {
         id: ledgerEntryId,
-        channel: "facebook_messenger",
+        channel,
         operation: "audio_transcription",
         provider: "openai-audio",
         model: OPENAI_AUDIO_TRANSCRIPTION_MODEL,
