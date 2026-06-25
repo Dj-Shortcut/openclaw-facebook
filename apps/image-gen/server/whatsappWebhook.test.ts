@@ -9,6 +9,10 @@ const {
   setLastUserMessageAtMock,
   sendWhatsAppButtonsReplyMock,
   sendWhatsAppTextReplyMock,
+  handleWhatsAppImageEventMock,
+  handleWhatsAppAudioEventMock,
+  handleWhatsAppInteractiveEventMock,
+  handleWhatsAppTextEventMock,
   safeLogMock,
 } = vi.hoisted(() => ({
   extractWhatsAppEventsMock: vi.fn(),
@@ -19,6 +23,10 @@ const {
   setLastUserMessageAtMock: vi.fn(),
   sendWhatsAppButtonsReplyMock: vi.fn(),
   sendWhatsAppTextReplyMock: vi.fn(),
+  handleWhatsAppImageEventMock: vi.fn(),
+  handleWhatsAppAudioEventMock: vi.fn(),
+  handleWhatsAppInteractiveEventMock: vi.fn(),
+  handleWhatsAppTextEventMock: vi.fn(),
   safeLogMock: vi.fn(),
 }));
 
@@ -48,6 +56,22 @@ vi.mock("./_core/whatsappResponseService", () => ({
   sendWhatsAppTextReply: sendWhatsAppTextReplyMock,
 }));
 
+vi.mock("./_core/whatsappHandlers/imageHandler", () => ({
+  handleWhatsAppImageEvent: handleWhatsAppImageEventMock,
+}));
+
+vi.mock("./_core/whatsappHandlers/audioHandler", () => ({
+  handleWhatsAppAudioEvent: handleWhatsAppAudioEventMock,
+}));
+
+vi.mock("./_core/whatsappHandlers/interactiveHandler", () => ({
+  handleWhatsAppInteractiveEvent: handleWhatsAppInteractiveEventMock,
+}));
+
+vi.mock("./_core/whatsappHandlers/textHandler", () => ({
+  handleWhatsAppTextEvent: handleWhatsAppTextEventMock,
+}));
+
 vi.mock("./_core/logger", async () => {
   const actual = await vi.importActual<typeof import("./_core/logger")>(
     "./_core/logger"
@@ -73,6 +97,10 @@ afterEach(() => {
   setLastUserMessageAtMock.mockReset();
   sendWhatsAppButtonsReplyMock.mockReset();
   sendWhatsAppTextReplyMock.mockReset();
+  handleWhatsAppImageEventMock.mockReset();
+  handleWhatsAppAudioEventMock.mockReset();
+  handleWhatsAppInteractiveEventMock.mockReset();
+  handleWhatsAppTextEventMock.mockReset();
   safeLogMock.mockReset();
   vi.restoreAllMocks();
 });
@@ -91,18 +119,6 @@ describe("whatsappWebhook", () => {
   });
 
   it("routes explicit audio message types to the audio handler", async () => {
-    const [audioHandler, imageHandler, interactiveHandler, textHandler] = await Promise.all([
-      import("./_core/whatsappHandlers/audioHandler"),
-      import("./_core/whatsappHandlers/imageHandler"),
-      import("./_core/whatsappHandlers/interactiveHandler"),
-      import("./_core/whatsappHandlers/textHandler"),
-    ]);
-    const imageSpy = vi.spyOn(imageHandler, "handleWhatsAppImageEvent");
-    const interactiveSpy = vi.spyOn(interactiveHandler, "handleWhatsAppInteractiveEvent");
-    const textSpy = vi.spyOn(textHandler, "handleWhatsAppTextEvent");
-    const audioSpy = vi
-      .spyOn(audioHandler, "handleWhatsAppAudioEvent")
-      .mockResolvedValue(undefined);
     extractWhatsAppEventsMock.mockReturnValue([
       {
         channel: "whatsapp",
@@ -120,17 +136,13 @@ describe("whatsappWebhook", () => {
     const { processWhatsAppWebhookPayload } = await import("./_core/whatsappWebhook");
     await processWhatsAppWebhookPayload({ object: "whatsapp_business_account" });
 
-    expect(audioSpy).toHaveBeenCalledTimes(1);
-    expect(imageSpy).not.toHaveBeenCalled();
-    expect(textSpy).not.toHaveBeenCalled();
-    expect(interactiveSpy).not.toHaveBeenCalled();
+    expect(handleWhatsAppAudioEventMock).toHaveBeenCalledTimes(1);
+    expect(handleWhatsAppImageEventMock).not.toHaveBeenCalled();
+    expect(handleWhatsAppTextEventMock).not.toHaveBeenCalled();
+    expect(handleWhatsAppInteractiveEventMock).not.toHaveBeenCalled();
   });
 
   it("routes unknown message types that contain audioId to the audio handler", async () => {
-    const audioHandler = await import("./_core/whatsappHandlers/audioHandler");
-    const audioSpy = vi
-      .spyOn(audioHandler, "handleWhatsAppAudioEvent")
-      .mockResolvedValue(undefined);
     extractWhatsAppEventsMock.mockReturnValue([
       {
         channel: "whatsapp",
@@ -148,6 +160,6 @@ describe("whatsappWebhook", () => {
     const { processWhatsAppWebhookPayload } = await import("./_core/whatsappWebhook");
     await processWhatsAppWebhookPayload({ object: "whatsapp_business_account" });
 
-    expect(audioSpy).toHaveBeenCalledTimes(1);
+    expect(handleWhatsAppAudioEventMock).toHaveBeenCalledTimes(1);
   });
 });
