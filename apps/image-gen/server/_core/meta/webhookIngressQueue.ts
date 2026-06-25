@@ -333,7 +333,7 @@ export function scheduleWebhookIngressDrain(): void {
             await processQueuedWebhookDelivery(reserved.delivery);
           } catch (error) {
             await releaseFailedWebhookIngressDelivery(redis, reserved, error);
-            return;
+            continue;
           }
 
           await completeWebhookIngressDelivery(redis, reserved.raw);
