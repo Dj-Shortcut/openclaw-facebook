@@ -177,8 +177,8 @@ describe("debug/admin routes", () => {
       {
         id: "req-dashboard-blocked:attempt-1",
         channel: "facebook_messenger",
-        operation: "audio_transcription",
-        provider: "openai-audio",
+        operation: "audio_<script>alert(1)</script>",
+        provider: "openai-audio<img src=x onerror=alert(1)>",
         model: "gpt-4o-transcribe",
         userKey: "user-key-dashboard-2",
         reqId: "raw-request-id-that-must-not-render",
@@ -217,9 +217,11 @@ describe("debug/admin routes", () => {
       expect(body).toContain("Delivery failures today");
       expect(body).toContain("Duplicate skips today");
       expect(body).toContain("image_generation");
-      expect(body).toContain("audio_transcription");
+      expect(body).toContain("audio_&lt;script&gt;alert(1)&lt;/script&gt;");
       expect(body).toContain("openai-images");
-      expect(body).toContain("openai-audio");
+      expect(body).toContain("openai-audio&lt;img src=x onerror=alert(1)&gt;");
+      expect(body).not.toContain("<script>alert(1)</script>");
+      expect(body).not.toContain("<img src=x onerror=alert(1)>");
       expect(body).not.toContain("secret-admin-token");
       expect(body).not.toContain("raw-request-id-that-must-not-render");
       expect(body).not.toContain("make me a robot");

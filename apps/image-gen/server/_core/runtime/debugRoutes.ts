@@ -100,6 +100,10 @@ function formatUsd(value: number): string {
   return `$${value.toFixed(4)}`;
 }
 
+function htmlValue(value: unknown): string {
+  return escapeHtml(value);
+}
+
 function renderSummaryBuckets(
   title: string,
   buckets: Record<string, { attempts: number; estimatedCostUsd: number; finalCostUsd: number }>
@@ -113,9 +117,9 @@ function renderSummaryBuckets(
         .map(
           ([label, bucket]) => `<tr>
             <td>${escapeHtml(label)}</td>
-            <td>${bucket.attempts}</td>
-            <td>${formatUsd(bucket.estimatedCostUsd)}</td>
-            <td>${formatUsd(bucket.finalCostUsd)}</td>
+            <td>${htmlValue(bucket.attempts)}</td>
+            <td>${htmlValue(formatUsd(bucket.estimatedCostUsd))}</td>
+            <td>${htmlValue(formatUsd(bucket.finalCostUsd))}</td>
           </tr>`
         )
         .join("")
@@ -134,7 +138,7 @@ function renderSummaryBuckets(
 
 function renderStatusList(summary: CostLedgerSummary): string {
   return Object.entries(summary.byStatus)
-    .map(([status, count]) => `<li><span>${escapeHtml(status)}</span><strong>${count}</strong></li>`)
+    .map(([status, count]) => `<li><span>${escapeHtml(status)}</span><strong>${htmlValue(count)}</strong></li>`)
     .join("");
 }
 
@@ -201,16 +205,16 @@ function renderAdminCostDashboardHtml(params: {
       </header>
 
       <section class="metrics" aria-label="Cost summary metrics">
-        <div class="metric"><span>Estimated spend</span><strong>${formatUsd(summary.estimatedCostUsd)}</strong></div>
-        <div class="metric"><span>Final spend</span><strong>${formatUsd(summary.finalCostUsd)}</strong></div>
-        <div class="metric"><span>Ledger entries</span><strong>${summary.totalEntries}</strong></div>
-        <div class="metric"><span>Unique users</span><strong>${summary.uniqueUserCount}</strong></div>
-        <div class="metric"><span>Open attempts</span><strong>${summary.openAttemptEntries}</strong></div>
-        <div class="metric"><span>Failed attempts</span><strong>${summary.failedAttemptEntries}</strong></div>
-        <div class="metric"><span>Blocked attempts</span><strong>${summary.blockedEntries}</strong></div>
-        <div class="metric"><span>Delivery failures today</span><strong>${runtimeStats.deliveryFailureCountToday}</strong></div>
-        <div class="metric"><span>Duplicate skips today</span><strong>${runtimeStats.duplicateSkipCountToday}</strong></div>
-        <div class="metric"><span>Queue failed</span><strong>${queueHealth.failed}</strong></div>
+        <div class="metric"><span>Estimated spend</span><strong>${htmlValue(formatUsd(summary.estimatedCostUsd))}</strong></div>
+        <div class="metric"><span>Final spend</span><strong>${htmlValue(formatUsd(summary.finalCostUsd))}</strong></div>
+        <div class="metric"><span>Ledger entries</span><strong>${htmlValue(summary.totalEntries)}</strong></div>
+        <div class="metric"><span>Unique users</span><strong>${htmlValue(summary.uniqueUserCount)}</strong></div>
+        <div class="metric"><span>Open attempts</span><strong>${htmlValue(summary.openAttemptEntries)}</strong></div>
+        <div class="metric"><span>Failed attempts</span><strong>${htmlValue(summary.failedAttemptEntries)}</strong></div>
+        <div class="metric"><span>Blocked attempts</span><strong>${htmlValue(summary.blockedEntries)}</strong></div>
+        <div class="metric"><span>Delivery failures today</span><strong>${htmlValue(runtimeStats.deliveryFailureCountToday)}</strong></div>
+        <div class="metric"><span>Duplicate skips today</span><strong>${htmlValue(runtimeStats.duplicateSkipCountToday)}</strong></div>
+        <div class="metric"><span>Queue failed</span><strong>${htmlValue(queueHealth.failed)}</strong></div>
       </section>
 
       <section>
@@ -221,10 +225,10 @@ function renderAdminCostDashboardHtml(params: {
       <section>
         <h2>Queue Health</h2>
         <ul class="status">
-          <li><span>Enabled</span><strong>${queueHealth.enabled ? "yes" : "no"}</strong></li>
-          <li><span>Queued</span><strong>${queueHealth.queued}</strong></li>
-          <li><span>Processing</span><strong>${queueHealth.processing}</strong></li>
-          <li><span>Failed/dead-lettered</span><strong>${queueHealth.failed}</strong></li>
+          <li><span>Enabled</span><strong>${htmlValue(queueHealth.enabled ? "yes" : "no")}</strong></li>
+          <li><span>Queued</span><strong>${htmlValue(queueHealth.queued)}</strong></li>
+          <li><span>Processing</span><strong>${htmlValue(queueHealth.processing)}</strong></li>
+          <li><span>Failed/dead-lettered</span><strong>${htmlValue(queueHealth.failed)}</strong></li>
         </ul>
       </section>
 
