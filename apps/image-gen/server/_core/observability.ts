@@ -307,6 +307,9 @@ async function renderPrometheusMetrics(): Promise<string> {
   lines.push("# HELP messenger_delivery_failures_today_total Failed Messenger delivery attempts recorded by this process today");
   lines.push("# TYPE messenger_delivery_failures_today_total gauge");
   lines.push(`messenger_delivery_failures_today_total ${runtimeStats.deliveryFailureCountToday}`);
+  lines.push("# HELP messenger_duplicate_skips_today_total Duplicate Messenger generation attempts skipped by this process today");
+  lines.push("# TYPE messenger_duplicate_skips_today_total gauge");
+  lines.push(`messenger_duplicate_skips_today_total ${runtimeStats.duplicateSkipCountToday}`);
   lines.push("# HELP messenger_generation_active_users_today Active Messenger users recorded by this process today");
   lines.push("# TYPE messenger_generation_active_users_today gauge");
   lines.push(`messenger_generation_active_users_today ${runtimeStats.activeUsersToday}`);

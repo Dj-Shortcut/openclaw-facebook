@@ -10,6 +10,7 @@ import { clearStateStore } from "./_core/stateStore";
 import { resetAdminAuthRateLimiterForTests } from "./_core/adminAuth";
 import {
   recordMessengerDeliveryFailure,
+  recordMessengerDuplicateSkip,
   resetRuntimeStatsForTests,
 } from "./_core/botRuntimeStats";
 
@@ -192,6 +193,7 @@ describe("debug/admin routes", () => {
       new Date("2026-06-21T13:00:00.000Z")
     );
     recordMessengerDeliveryFailure();
+    recordMessengerDuplicateSkip();
     const server = await startServer();
 
     try {
@@ -211,7 +213,9 @@ describe("debug/admin routes", () => {
       expect(body).toContain("1 budget or quota blocks");
       expect(body).toContain("1 incomplete cost estimates");
       expect(body).toContain("1 Messenger delivery failures today");
+      expect(body).toContain("1 duplicate generation skips today");
       expect(body).toContain("Delivery failures today");
+      expect(body).toContain("Duplicate skips today");
       expect(body).toContain("image_generation");
       expect(body).toContain("audio_transcription");
       expect(body).toContain("openai-images");

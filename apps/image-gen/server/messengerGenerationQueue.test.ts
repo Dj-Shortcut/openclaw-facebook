@@ -21,6 +21,10 @@ import {
   resetMessengerGenerationQueueForTests,
   scheduleMessengerGenerationQueueDrain,
 } from "./_core/messengerGenerationQueue";
+import {
+  getTodayRuntimeStats,
+  resetRuntimeStatsForTests,
+} from "./_core/botRuntimeStats";
 import type { MessengerGenerationJob } from "./_core/messengerGenerationJob";
 
 function createJob(overrides: Partial<MessengerGenerationJob> = {}): MessengerGenerationJob {
@@ -128,6 +132,7 @@ describe("messengerGenerationQueue", () => {
     getRedisClientMock.mockReset();
     isRedisEnabledMock.mockReset();
     isRedisEnabledMock.mockReturnValue(false);
+    resetRuntimeStatsForTests();
     resetMessengerGenerationQueueForTests();
   });
 
@@ -227,6 +232,7 @@ describe("messengerGenerationQueue", () => {
       "messenger-generation-jobs",
       JSON.stringify(job)
     );
+    expect(getTodayRuntimeStats().duplicateSkipCountToday).toBe(1);
   });
 
   it("enqueues and drains Redis jobs", async () => {

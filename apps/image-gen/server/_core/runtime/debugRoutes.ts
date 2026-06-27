@@ -154,6 +154,9 @@ function renderAdminCostDashboardHtml(params: {
     runtimeStats.deliveryFailureCountToday > 0
       ? `${runtimeStats.deliveryFailureCountToday} Messenger delivery failures today`
       : null,
+    runtimeStats.duplicateSkipCountToday > 0
+      ? `${runtimeStats.duplicateSkipCountToday} duplicate generation skips today`
+      : null,
     queueHealth.failed > 0 ? `${queueHealth.failed} failed queue jobs` : null,
     "available" in queueHealth && queueHealth.available === false
       ? "queue health unavailable"
@@ -206,6 +209,7 @@ function renderAdminCostDashboardHtml(params: {
         <div class="metric"><span>Failed attempts</span><strong>${summary.failedAttemptEntries}</strong></div>
         <div class="metric"><span>Blocked attempts</span><strong>${summary.blockedEntries}</strong></div>
         <div class="metric"><span>Delivery failures today</span><strong>${runtimeStats.deliveryFailureCountToday}</strong></div>
+        <div class="metric"><span>Duplicate skips today</span><strong>${runtimeStats.duplicateSkipCountToday}</strong></div>
         <div class="metric"><span>Queue failed</span><strong>${queueHealth.failed}</strong></div>
       </section>
 

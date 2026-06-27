@@ -62,7 +62,7 @@ access:
 4. [x] Add per-user daily spend caps, a global Facebook daily spend cap, and monthly cost cap enforcement.
 5. [x] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, estimated cost, final cost, status, and UTC period.
 6. [x] Add richer provider usage dimensions to cost-ledger entries where providers expose safe metadata.
-7. [ ] Add owner cost alerts and an owner dashboard for spend, quota blocks, duplicate skips, provider failures, queue health, and delivery failures. Initial admin-only aggregate cost dashboard exists at `/admin/cost-dashboard` with delivery-failure counts; richer duplicate-skip and delivery-failure drilldown UX remains open.
+7. [ ] Add owner cost alerts and an owner dashboard for spend, quota blocks, duplicate skips, provider failures, queue health, and delivery failures. Initial admin-only aggregate cost dashboard exists at `/admin/cost-dashboard` with duplicate-skip and delivery-failure counts; richer failure drilldown UX remains open.
 8. [ ] Continue verifying storage-proxy delivery under Messenger crawler constraints, including generated outputs and retained source images.
 9. [ ] Evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory.
 10. [x] Keep public legal pages current (`/privacy`, `/terms`, `/data-deletion`) and aligned with Meta App Review, face-memory status, retention, and deletion behavior. Current image-gen runtime legal pages include tested privacy, terms, and data-deletion routes; future portal relocation remains a Gate 3 task.
@@ -195,7 +195,7 @@ Open cost-control work:
 5. [x] Add global Facebook daily spend cap.
 6. [x] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, estimated cost, final cost, and status. Image, audio transcription, and generated-video attempts now write metadata-only entries and reconcile success/failure status; image plus optionally-priced audio/video attempts populate final cost when the estimate is complete.
 7. [x] Add richer provider usage dimensions to cost-ledger entries where providers expose safe metadata.
-8. [ ] Add owner dashboard for Facebook spend by day/month, account/page, `userKey`, blocked attempts, duplicate skips, and provider failures. The admin-only cost summary route now includes stored spend plus open/failed/blocked/status counts and Messenger generation queue health; `/admin/cost-dashboard` now renders an initial aggregate owner view without raw identifiers or prompt content.
+8. [ ] Add owner dashboard for Facebook spend by day/month, account/page, `userKey`, blocked attempts, duplicate skips, and provider failures. The admin-only cost summary route now includes stored spend plus open/failed/blocked/status counts and Messenger generation queue health; `/admin/cost-dashboard` now renders an initial aggregate owner view with duplicate-skip and delivery-failure counts without raw identifiers or prompt content.
 9. [ ] Add user-facing balance/spend overview before paid rollout. Initial free-plan image balance, rate-limit context, blocked count, and upgrade prompt are now visible in the customer portal; paid spend and billing integration remain open.
 10. [x] Add monthly cost cap enforcement.
 11. [x] Send cost alerts to owner for spend-cap blocks.
@@ -244,7 +244,7 @@ Quota drift investigation note:
 - [ ] P1/P2 [owner: image-gen-runtime-test] Add targeted cost-ledger reliability tests for concurrent append/update behavior, overflow observability, midnight-crossing update reconciliation, and delete-cleanup latency under multi-period user history.
 - [x] Create setup guide for Meta configuration
 - [x] Document operator-facing prompt routing and OpenClaw-vs-image-generation fallback behavior separately from the completed customer-facing bot instructions. See `docs/operator-prompt-routing.md`.
-- [ ] Provide cost monitoring dashboard. Initial admin-only aggregate view exists at `/admin/cost-dashboard` with delivery-failure counts; production dashboard polish and failure drilldowns remain open.
+- [ ] Provide cost monitoring dashboard. Initial admin-only aggregate view exists at `/admin/cost-dashboard` with duplicate-skip and delivery-failure counts; production dashboard polish and failure drilldowns remain open.
 
 ### Maintenance backlog
 

@@ -1,5 +1,6 @@
 import { getRedisClient, isRedisEnabled, type RedisLike } from "./redis";
 import { safeLog } from "./messengerApi";
+import { recordMessengerDuplicateSkip } from "./botRuntimeStats";
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
 import {
   parseReservedGenerationJob,
@@ -140,6 +141,7 @@ export async function enqueueMessengerGenerationJob(
     "NX"
   );
   if (accepted !== "OK") {
+    recordMessengerDuplicateSkip();
     safeLog("messenger_generation_job_duplicate_enqueue_ignored", {
       reqId: job.reqId,
       generationKind: job.generationKind ?? null,

@@ -147,6 +147,7 @@ describe("messenger generation job safety", () => {
         })
       );
       expect(getTodayRuntimeStats().deliveryFailureCountToday).toBe(1);
+      expect(getTodayRuntimeStats().duplicateSkipCountToday).toBe(0);
 
       await runner.processMessengerGenerationJob({
         psid,
@@ -157,6 +158,7 @@ describe("messenger generation job safety", () => {
       expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
       expect(sendImageMock).toHaveBeenCalledTimes(2);
       expect(getTodayRuntimeStats().deliveryFailureCountToday).toBe(1);
+      expect(getTodayRuntimeStats().duplicateSkipCountToday).toBe(1);
       expect(getState(psid)?.quota.count).toBe(1);
       await expect(
         Promise.resolve(getMessengerGenerationCompletion(reqId))

@@ -20,6 +20,7 @@ import {
   recordGenerationError,
   recordGenerationSuccess,
   recordMessengerDeliveryFailure,
+  recordMessengerDuplicateSkip,
 } from "./botRuntimeStats";
 import { emitGenerationDiagnostic } from "./generationDiagnostics";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
@@ -490,6 +491,7 @@ async function finishDuplicateGenerationIfCompleted(input: {
     generationKind: input.resolvedGenerationKind,
     deliveryStatus: completedGeneration.deliveryStatus ?? "legacy_completed",
   });
+  recordMessengerDuplicateSkip();
   await setLastGenerated(input.psid, completedGeneration.imageUrl);
   await setLastGenerationContext(input.psid, { prompt: input.promptHint });
   if (completedGeneration.deliveryStatus === "pending") {
