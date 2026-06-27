@@ -1,12 +1,12 @@
 import { incrementExpiringCounter } from "./stateStore";
 
-export type FeatureRateLimitConfig = {
+type FeatureRateLimitConfig = {
   enabled: boolean;
   maxAttempts: number;
   windowSeconds: number;
 };
 
-export type FeatureRateLimitDecision = {
+type FeatureRateLimitDecision = {
   allowed: boolean;
   count: number;
   config: FeatureRateLimitConfig;
