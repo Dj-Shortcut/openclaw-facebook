@@ -699,6 +699,54 @@ describe("webhook audio message router", () => {
     );
   });
 
+  it("releases the gateway audio cap when preparation throws", async () => {
+    const ctx = makeContext();
+    process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP = "1";
+    fetchExternalSourceImageForIngressMock.mockRejectedValueOnce(
+      new Error("audio download failed")
+    );
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => ({ text: "maak een foto van een robot" }),
+    }) as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      tryHandleAudioMessage(ctx, {
+        psid: "psid-audio-prepare-throws",
+        userId: "user-audio-prepare-throws",
+        reqId: "req-audio-prepare-throws",
+        lang: "nl",
+        attachments: [
+          { type: "audio", payload: { url: "https://audio.example/throws.mp3" } },
+        ],
+        text: "",
+      })
+    ).resolves.toBe(false);
+
+    const result = await tryHandleAudioMessage(ctx, {
+      psid: "psid-audio-after-throw",
+      userId: "user-audio-after-throw",
+      reqId: "req-audio-after-throw",
+      lang: "nl",
+      attachments: [
+        { type: "audio", payload: { url: "https://audio.example/after-throw.mp3" } },
+      ],
+      text: "",
+    });
+
+    expect(result).toBe(true);
+    expect(ctx.sendLoggedText).not.toHaveBeenCalledWith(
+      "psid-audio-after-throw",
+      t("nl", "outOfFreeCredits"),
+      "req-audio-after-throw"
+    );
+    expect(fetchExternalSourceImageForIngressMock).toHaveBeenCalledTimes(2);
+    expect(reserveTranscriptionForAttemptMock).toHaveBeenCalledTimes(1);
+    expect(commitTranscriptionSuccessMock).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps audio transcription blocked by transcription daily cap even when spend caps are unset", async () => {
     const ctx = makeContext();
     reserveTranscriptionForAttemptMock.mockResolvedValue(null);

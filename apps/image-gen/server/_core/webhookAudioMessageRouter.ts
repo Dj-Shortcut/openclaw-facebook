@@ -81,45 +81,43 @@ export async function tryHandleAudioMessage(
 
     throw error;
   }
+  let reservation: Awaited<ReturnType<typeof reserveTranscriptionForAttempt>> | null = null;
   let audioBudgetCommitted = false;
 
-  const prepared = await prepareAudioForTranscription(
-    input.reqId,
-    input.psid,
-    audioUrl
-  );
-  if (!prepared) {
-    await releaseMessengerDailyAudioTranscriptionBudgetReservation({
-      now: audioBudgetNow,
-    });
-    return false;
-  }
-
-  const reservation = await reserveTranscriptionForAttempt(input.psid);
-  if (!reservation) {
-    await releaseMessengerDailyAudioTranscriptionBudgetReservation({
-      now: audioBudgetNow,
-    });
-    await ctx.sendLoggedText(input.psid, t(input.lang, "outOfFreeCredits"), input.reqId);
-    return true;
-  }
-
-  const commitProviderAttemptQuota = async () => {
-    if (audioBudgetCommitted) {
-      return;
-    }
-    const committed = await commitTranscriptionSuccess(input.psid, reservation, {
-      releaseReservation: false,
-    });
-    if (!committed) {
-      throw new MessengerQuotaReservationCommitError(
-        "Messenger audio transcription quota reservation could not be committed"
-      );
-    }
-    audioBudgetCommitted = true;
-  };
-
   try {
+    const prepared = await prepareAudioForTranscription(
+      input.reqId,
+      input.psid,
+      audioUrl
+    );
+    if (!prepared) {
+      return false;
+    }
+
+    reservation = await reserveTranscriptionForAttempt(input.psid);
+    if (!reservation) {
+      await ctx.sendLoggedText(input.psid, t(input.lang, "outOfFreeCredits"), input.reqId);
+      return true;
+    }
+
+    const commitProviderAttemptQuota = async () => {
+      if (audioBudgetCommitted) {
+        return;
+      }
+      if (!reservation) {
+        throw new MessengerQuotaReservationCommitError("Missing transcription reservation");
+      }
+      const committed = await commitTranscriptionSuccess(input.psid, reservation, {
+        releaseReservation: false,
+      });
+      if (!committed) {
+        throw new MessengerQuotaReservationCommitError(
+          "Messenger audio transcription quota reservation could not be committed"
+        );
+      }
+      audioBudgetCommitted = true;
+    };
+
     const transcript = await transcribePreparedAudioMessage(
       input.reqId,
       input.psid,
@@ -152,7 +150,9 @@ export async function tryHandleAudioMessage(
 
     throw error;
   } finally {
-    await releaseTranscriptionReservation(input.psid, reservation);
+    if (reservation) {
+      await releaseTranscriptionReservation(input.psid, reservation);
+    }
     if (!audioBudgetCommitted) {
       await releaseMessengerDailyAudioTranscriptionBudgetReservation({
         now: audioBudgetNow,
