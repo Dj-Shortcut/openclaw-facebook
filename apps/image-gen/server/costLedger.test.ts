@@ -419,6 +419,50 @@ describe("cost ledger", () => {
     ]);
   });
 
+  it("serializes concurrent provider-attempt updates for the same period", async () => {
+    await Promise.all(
+      Array.from({ length: 20 }, (_, index) =>
+        appendCostLedgerEntry(
+          entry({
+            id: `req-update-concurrent:attempt-${index}`,
+            reqId: `req-update-concurrent-${index}`,
+            status: "provider_attempt_started",
+            finalCostUsd: null,
+          }),
+          new Date("2026-06-21T12:00:00.000Z")
+        )
+      )
+    );
+
+    await Promise.all(
+      Array.from({ length: 20 }, (_, index) =>
+        updateCostLedgerEntry(
+          `req-update-concurrent:attempt-${index}`,
+          {
+            status: "provider_attempt_succeeded",
+            finalCostUsd: index / 100,
+          },
+          new Date("2026-06-21T12:01:00.000Z")
+        )
+      )
+    );
+
+    const entries = await readCostLedgerPeriod("2026-06-21");
+
+    expect(entries).toHaveLength(20);
+    expect(entries).toEqual(
+      expect.arrayContaining(
+        Array.from({ length: 20 }, (_, index) =>
+          expect.objectContaining({
+            id: `req-update-concurrent:attempt-${index}`,
+            status: "provider_attempt_succeeded",
+            finalCostUsd: index / 100,
+          })
+        )
+      )
+    );
+  });
+
   it("updates provider attempts across UTC midnight by entry id", async () => {
     await appendCostLedgerEntry(
       entry({
