@@ -3,7 +3,7 @@ import type express from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { createAdminAuthRateLimiter, verifyAdminToken } from "../adminAuth";
-import { summarizeCostLedgerPeriod } from "../costLedger";
+import { summarizeCostLedgerPeriod, type CostLedgerSummary } from "../costLedger";
 import { isRedisHttpRateLimitEnabled } from "../httpRateLimit";
 import { safeLog } from "../messengerApi";
 import {
@@ -35,6 +35,13 @@ const costSummaryQuerySchema = z.object({
 const adminCostSummaryRouteLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const adminCostDashboardRouteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -77,6 +84,150 @@ function readAdminTokenHeader(req: express.Request): string | undefined {
   return parsedHeaders.success
     ? parsedHeaders.data["x-admin-token"]
     : undefined;
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function formatUsd(value: number): string {
+  return `$${value.toFixed(4)}`;
+}
+
+function renderSummaryBuckets(
+  title: string,
+  buckets: Record<string, { attempts: number; estimatedCostUsd: number; finalCostUsd: number }>
+): string {
+  const entries = Object.entries(buckets).sort((left, right) => {
+    const byCost = right[1].estimatedCostUsd - left[1].estimatedCostUsd;
+    return byCost || left[0].localeCompare(right[0]);
+  });
+  const rows = entries.length
+    ? entries
+        .map(
+          ([label, bucket]) => `<tr>
+            <td>${escapeHtml(label)}</td>
+            <td>${bucket.attempts}</td>
+            <td>${formatUsd(bucket.estimatedCostUsd)}</td>
+            <td>${formatUsd(bucket.finalCostUsd)}</td>
+          </tr>`
+        )
+        .join("")
+    : `<tr><td colspan="4">No entries</td></tr>`;
+
+  return `<section>
+    <h2>${escapeHtml(title)}</h2>
+    <table>
+      <thead>
+        <tr><th>Name</th><th>Attempts</th><th>Estimated</th><th>Final</th></tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </section>`;
+}
+
+function renderStatusList(summary: CostLedgerSummary): string {
+  return Object.entries(summary.byStatus)
+    .map(([status, count]) => `<li><span>${escapeHtml(status)}</span><strong>${count}</strong></li>`)
+    .join("");
+}
+
+function renderAdminCostDashboardHtml(params: {
+  summary: CostLedgerSummary;
+  queueHealth: AdminCostSummaryQueueHealth;
+}): string {
+  const { summary, queueHealth } = params;
+  const attentionItems = [
+    summary.openAttemptEntries > 0 ? `${summary.openAttemptEntries} open provider attempts` : null,
+    summary.failedAttemptEntries > 0 ? `${summary.failedAttemptEntries} failed provider attempts` : null,
+    summary.blockedEntries > 0 ? `${summary.blockedEntries} budget or quota blocks` : null,
+    summary.incompleteEstimateEntries > 0
+      ? `${summary.incompleteEstimateEntries} incomplete cost estimates`
+      : null,
+    queueHealth.failed > 0 ? `${queueHealth.failed} failed queue jobs` : null,
+    "available" in queueHealth && queueHealth.available === false
+      ? "queue health unavailable"
+      : null,
+  ].filter((item): item is string => Boolean(item));
+
+  const attentionMarkup = attentionItems.length
+    ? attentionItems.map(item => `<li>${escapeHtml(item)}</li>`).join("")
+    : "<li>No immediate cost or queue attention items.</li>";
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Leaderbot Cost Dashboard</title>
+    <style>
+      :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+      body { margin: 0; padding: 24px; background: #101318; color: #f6f7f9; }
+      main { max-width: 1040px; margin: 0 auto; display: grid; gap: 20px; }
+      header, section { border: 1px solid #2d3542; border-radius: 8px; padding: 18px; background: #171c24; }
+      h1, h2 { margin: 0 0 12px; }
+      p { color: #b8c0cc; }
+      .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+      .metric { border: 1px solid #2d3542; border-radius: 6px; padding: 12px; }
+      .metric span { display: block; color: #b8c0cc; font-size: 13px; }
+      .metric strong { display: block; margin-top: 6px; font-size: 24px; }
+      ul { margin: 0; padding-left: 20px; }
+      .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; padding-left: 0; list-style: none; }
+      .status li { display: flex; justify-content: space-between; border-bottom: 1px solid #2d3542; padding: 8px 0; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { border-bottom: 1px solid #2d3542; padding: 10px 8px; text-align: left; }
+      th { color: #b8c0cc; font-weight: 600; }
+      code { color: #d6e2ff; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Leaderbot Cost Dashboard</h1>
+        <p>Period <code>${escapeHtml(summary.period)}</code>. Aggregate owner view only; no prompts, raw PSIDs, tokens, or generated content are included.</p>
+      </header>
+
+      <section class="metrics" aria-label="Cost summary metrics">
+        <div class="metric"><span>Estimated spend</span><strong>${formatUsd(summary.estimatedCostUsd)}</strong></div>
+        <div class="metric"><span>Final spend</span><strong>${formatUsd(summary.finalCostUsd)}</strong></div>
+        <div class="metric"><span>Ledger entries</span><strong>${summary.totalEntries}</strong></div>
+        <div class="metric"><span>Unique users</span><strong>${summary.uniqueUserCount}</strong></div>
+        <div class="metric"><span>Open attempts</span><strong>${summary.openAttemptEntries}</strong></div>
+        <div class="metric"><span>Failed attempts</span><strong>${summary.failedAttemptEntries}</strong></div>
+        <div class="metric"><span>Blocked attempts</span><strong>${summary.blockedEntries}</strong></div>
+        <div class="metric"><span>Queue failed</span><strong>${queueHealth.failed}</strong></div>
+      </section>
+
+      <section>
+        <h2>Needs Attention</h2>
+        <ul>${attentionMarkup}</ul>
+      </section>
+
+      <section>
+        <h2>Queue Health</h2>
+        <ul class="status">
+          <li><span>Enabled</span><strong>${queueHealth.enabled ? "yes" : "no"}</strong></li>
+          <li><span>Queued</span><strong>${queueHealth.queued}</strong></li>
+          <li><span>Processing</span><strong>${queueHealth.processing}</strong></li>
+          <li><span>Failed/dead-lettered</span><strong>${queueHealth.failed}</strong></li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Status Counts</h2>
+        <ul class="status">${renderStatusList(summary)}</ul>
+      </section>
+
+      ${renderSummaryBuckets("Operations", summary.byOperation)}
+      ${renderSummaryBuckets("Providers", summary.byProvider)}
+    </main>
+  </body>
+</html>`;
 }
 
 export function buildVersionPayload(
@@ -188,6 +339,45 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
           error: "Failed to summarize cost period",
           requestId,
         });
+      }
+    }
+  );
+
+  app.get(
+    "/admin/cost-dashboard",
+    adminCostDashboardRouteLimiter,
+    createAdminAuthRateLimiter({ eventName: "admin_cost_dashboard_auth_rate_limited" }),
+    async (req, res) => {
+      if (
+        !verifyAdminToken({
+          providedToken: readAdminTokenHeader(req),
+          eventName: "admin_cost_dashboard_auth_failed",
+        })
+      ) {
+        return res.sendStatus(403);
+      }
+
+      const parsedQuery = costSummaryQuerySchema.safeParse(req.query);
+      if (!parsedQuery.success) {
+        return res.status(400).send("invalid period");
+      }
+
+      const period = parsedQuery.data.period ?? currentUtcPeriod();
+      try {
+        const summary = await summarizeCostLedgerPeriod(period);
+        const queueHealth = await readAdminCostSummaryQueueHealth(period);
+        res.setHeader("cache-control", "no-store");
+        res.setHeader("content-type", "text/html; charset=utf-8");
+        return res.status(200).send(renderAdminCostDashboardHtml({ summary, queueHealth }));
+      } catch (error) {
+        const requestId = `cost_dashboard_${randomUUID()}`;
+        safeLog("admin_cost_dashboard_failed", {
+          level: "error",
+          requestId,
+          period,
+          errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
+        });
+        return res.status(500).send(`Failed to render cost dashboard. Request id: ${requestId}`);
       }
     }
   );
