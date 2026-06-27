@@ -105,6 +105,9 @@ export async function tryHandleAudioMessage(
   }
 
   const commitProviderAttemptQuota = async () => {
+    if (audioBudgetCommitted) {
+      return;
+    }
     const committed = await commitTranscriptionSuccess(input.psid, reservation, {
       releaseReservation: false,
     });

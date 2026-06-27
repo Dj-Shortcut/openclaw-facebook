@@ -212,10 +212,10 @@ describe("debug/admin routes", () => {
       expect(body).toContain("1 failed provider attempts");
       expect(body).toContain("1 budget or quota blocks");
       expect(body).toContain("1 incomplete cost estimates");
-      expect(body).toContain("1 Messenger delivery failures today");
-      expect(body).toContain("1 duplicate generation skips today");
-      expect(body).toContain("Delivery failures today");
-      expect(body).toContain("Duplicate skips today");
+      expect(body).toContain("1 process-local Messenger delivery failures today");
+      expect(body).toContain("1 process-local duplicate generation skips today");
+      expect(body).toContain("Process-local delivery failures today");
+      expect(body).toContain("Process-local duplicate skips today");
       expect(body).toContain("image_generation");
       expect(body).toContain("audio_scriptalert(1)/script");
       expect(body).toContain("openai-images");

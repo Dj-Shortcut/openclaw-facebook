@@ -89,6 +89,9 @@ export async function handleWhatsAppAudioEvent(
     }
 
     const commitProviderAttemptQuota = async () => {
+      if (audioBudgetCommitted) {
+        return;
+      }
       if (!reservation) {
         throw new MessengerQuotaReservationCommitError("Missing transcription reservation");
       }

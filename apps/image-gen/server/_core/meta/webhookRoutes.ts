@@ -11,6 +11,7 @@ import {
   processWebhookDeliveryInline,
   scheduleWebhookIngressDrain,
 } from "./webhookIngressQueue";
+import { metaWebhookRoutes, type MetaWebhookVerificationMode } from "./webhookPaths";
 import { recordWebhookAckMetric } from "../observability";
 import { safeLog } from "../logger";
 
@@ -36,8 +37,6 @@ const webhookDeliveryLimiter = rateLimit({
 
 const DEFAULT_WEBHOOK_INGRESS_ENQUEUE_TIMEOUT_MS = 450;
 
-type WebhookVerificationMode = "generic" | "whatsapp";
-
 class WebhookIngressEnqueueTimeoutError extends Error {
   constructor(timeoutMs: number) {
     super(`webhook ingress enqueue timed out after ${timeoutMs}ms`);
@@ -45,7 +44,7 @@ class WebhookIngressEnqueueTimeoutError extends Error {
   }
 }
 
-function getConfiguredVerifyTokens(mode: WebhookVerificationMode): string[] {
+function getConfiguredVerifyTokens(mode: MetaWebhookVerificationMode): string[] {
   const sharedToken =
     process.env.META_VERIFY_TOKEN?.trim() ||
     process.env.FB_VERIFY_TOKEN?.trim();
@@ -83,16 +82,8 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 }
 
 export function registerMetaWebhookRoutes(app: express.Express): void {
-  const webhookRoutes: Array<{ path: string; mode: WebhookVerificationMode }> = [
-    { path: "/webhook", mode: "generic" },
-    { path: "/webhook/facebook", mode: "generic" },
-    { path: "/webhook/whatsapp", mode: "whatsapp" },
-    { path: "/facebook/webhook", mode: "generic" },
-    { path: "/messenger/webhook", mode: "generic" },
-  ];
-
   const createVerificationHandler =
-    (mode: WebhookVerificationMode): express.RequestHandler =>
+    (mode: MetaWebhookVerificationMode): express.RequestHandler =>
     (req, res) => {
     const parsedQuery = webhookVerificationQuerySchema.safeParse(req.query);
     const path = req.path;
@@ -122,7 +113,7 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
       .send(parsedQuery.data["hub.challenge"]);
   };
 
-  for (const route of webhookRoutes) {
+  for (const route of metaWebhookRoutes) {
     app.get(route.path, webhookLimiter, createVerificationHandler(route.mode));
   }
 
@@ -208,7 +199,7 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
     await enqueueOrFallback("facebook");
   };
 
-  for (const route of webhookRoutes) {
+  for (const route of metaWebhookRoutes) {
     app.post(route.path, webhookDeliveryLimiter, handleWebhookPost);
   }
 }

@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
 import { safeLog } from "./logger";
+import { metaWebhookPublicPaths } from "./meta/webhookPaths";
 
 type MetaWebhookRequest = Request & { rawBody?: Buffer };
 
@@ -106,11 +107,7 @@ export function captureMetaWebhookRawBody(
   buf: Buffer
 ): void {
   const path = req.originalUrl;
-  if (
-    !path.startsWith("/webhook") &&
-    !path.startsWith("/facebook/webhook") &&
-    !path.startsWith("/messenger/webhook")
-  ) {
+  if (!metaWebhookPublicPaths.some(publicPath => path.startsWith(publicPath))) {
     return;
   }
 

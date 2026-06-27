@@ -63,8 +63,9 @@ function getWebhookIngressMaxAttempts(): number {
 
 function getWebhookIngressRetryDelayMs(): number {
   const configured = Number(process.env.WEBHOOK_INGRESS_RETRY_DELAY_MS);
-  return Number.isFinite(configured) && configured > 0
-    ? Math.floor(configured)
+  const delayMs = Math.floor(configured);
+  return Number.isFinite(delayMs) && delayMs >= 1
+    ? delayMs
     : DEFAULT_WEBHOOK_INGRESS_RETRY_DELAY_MS;
 }
 

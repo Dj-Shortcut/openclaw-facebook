@@ -138,10 +138,10 @@ function renderAdminCostDashboardText(params: {
       ? `${summary.incompleteEstimateEntries} incomplete cost estimates`
       : null,
     runtimeStats.deliveryFailureCountToday > 0
-      ? `${runtimeStats.deliveryFailureCountToday} Messenger delivery failures today`
+      ? `${runtimeStats.deliveryFailureCountToday} process-local Messenger delivery failures today`
       : null,
     runtimeStats.duplicateSkipCountToday > 0
-      ? `${runtimeStats.duplicateSkipCountToday} duplicate generation skips today`
+      ? `${runtimeStats.duplicateSkipCountToday} process-local duplicate generation skips today`
       : null,
     queueHealth.failed > 0 ? `${queueHealth.failed} failed queue jobs` : null,
     "available" in queueHealth && queueHealth.available === false
@@ -166,8 +166,8 @@ function renderAdminCostDashboardText(params: {
     `- Open attempts: ${summary.openAttemptEntries}`,
     `- Failed attempts: ${summary.failedAttemptEntries}`,
     `- Blocked attempts: ${summary.blockedEntries}`,
-    `- Delivery failures today: ${runtimeStats.deliveryFailureCountToday}`,
-    `- Duplicate skips today: ${runtimeStats.duplicateSkipCountToday}`,
+    `- Process-local delivery failures today: ${runtimeStats.deliveryFailureCountToday}`,
+    `- Process-local duplicate skips today: ${runtimeStats.duplicateSkipCountToday}`,
     `- Queue failed: ${queueHealth.failed}`,
     "",
     "Needs Attention",
