@@ -45,7 +45,7 @@ function buildWhatsAppActionListText(
   ].join("\n");
 }
 
-export async function sendWhatsAppStateText(
+async function sendWhatsAppStateText(
   senderId: string,
   _state: ConversationState,
   text: string
