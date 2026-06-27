@@ -30,25 +30,10 @@ function getMessengerEvents(payload: unknown): unknown[] {
   );
 }
 
-function getWhatsAppMessages(payload: unknown): unknown[] {
-  return getPayloadEntries(payload)
-    .flatMap(entry => asArray((entry as { changes?: unknown[] })?.changes))
-    .flatMap(change =>
-      asArray((change as { value?: { messages?: unknown[] } })?.value?.messages)
-    );
-}
-
 function getMessengerSenderIds(payload: unknown): string[] {
   return collectSenderIds(
     getMessengerEvents(payload),
     event => (event as { sender?: { id?: unknown } })?.sender?.id
-  );
-}
-
-function getWhatsAppSenderIds(payload: unknown): string[] {
-  return collectSenderIds(
-    getWhatsAppMessages(payload),
-    message => (message as { from?: unknown })?.from
   );
 }
 
@@ -90,6 +75,3 @@ function createConsentedWebhookPayloadProcessor(
 
 export const processConsentedFacebookWebhookPayload =
   createConsentedWebhookPayloadProcessor(getMessengerSenderIds);
-
-export const processConsentedWhatsAppWebhookPayload =
-  createConsentedWebhookPayloadProcessor(getWhatsAppSenderIds);
