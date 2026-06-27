@@ -152,7 +152,7 @@ describe("debug/admin routes", () => {
     }
   });
 
-  it("renders an owner cost dashboard with aggregate-only production signals", async () => {
+  it("renders an owner cost dashboard as aggregate-only plain text", async () => {
     process.env.ADMIN_TOKEN = "secret-admin-token";
     await appendCostLedgerEntry(
       {
@@ -204,10 +204,10 @@ describe("debug/admin routes", () => {
       const body = await response.text();
 
       expect(response.status).toBe(200);
-      expect(response.headers.get("content-type")).toContain("text/html");
+      expect(response.headers.get("content-type")).toContain("text/plain");
       expect(response.headers.get("cache-control")).toBe("no-store");
       expect(body).toContain("Leaderbot Cost Dashboard");
-      expect(body).toContain("Period <code>2026-06-21</code>");
+      expect(body).toContain("Period: 2026-06-21");
       expect(body).toContain("$0.0250");
       expect(body).toContain("1 failed provider attempts");
       expect(body).toContain("1 budget or quota blocks");
@@ -217,9 +217,9 @@ describe("debug/admin routes", () => {
       expect(body).toContain("Delivery failures today");
       expect(body).toContain("Duplicate skips today");
       expect(body).toContain("image_generation");
-      expect(body).toContain("audio_&lt;script&gt;alert(1)&lt;/script&gt;");
+      expect(body).toContain("audio_scriptalert(1)/script");
       expect(body).toContain("openai-images");
-      expect(body).toContain("openai-audio&lt;img src=x onerror=alert(1)&gt;");
+      expect(body).toContain("openai-audioimg src=x onerror=alert(1)");
       expect(body).not.toContain("<script>alert(1)</script>");
       expect(body).not.toContain("<img src=x onerror=alert(1)>");
       expect(body).not.toContain("secret-admin-token");
