@@ -62,7 +62,7 @@ access:
 4. [x] Add per-user daily spend caps, a global Facebook daily spend cap, and monthly cost cap enforcement.
 5. [x] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, estimated cost, final cost, status, and UTC period.
 6. [x] Add richer provider usage dimensions to cost-ledger entries where providers expose safe metadata.
-7. [ ] Add owner cost alerts and an owner dashboard for spend, quota blocks, duplicate skips, provider failures, queue health, and delivery failures. Initial admin-only aggregate cost dashboard exists at `/admin/cost-dashboard`; richer duplicate-skip and delivery-failure UX remains open.
+7. [ ] Add owner cost alerts and an owner dashboard for spend, quota blocks, duplicate skips, provider failures, queue health, and delivery failures. Initial admin-only aggregate cost dashboard exists at `/admin/cost-dashboard` with delivery-failure counts; richer duplicate-skip and delivery-failure drilldown UX remains open.
 8. [ ] Continue verifying storage-proxy delivery under Messenger crawler constraints, including generated outputs and retained source images.
 9. [ ] Evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory.
 10. [x] Keep public legal pages current (`/privacy`, `/terms`, `/data-deletion`) and aligned with Meta App Review, face-memory status, retention, and deletion behavior. Current image-gen runtime legal pages include tested privacy, terms, and data-deletion routes; future portal relocation remains a Gate 3 task.
@@ -244,7 +244,7 @@ Quota drift investigation note:
 - [ ] P1/P2 [owner: image-gen-runtime-test] Add targeted cost-ledger reliability tests for concurrent append/update behavior, overflow observability, midnight-crossing update reconciliation, and delete-cleanup latency under multi-period user history.
 - [x] Create setup guide for Meta configuration
 - [x] Document operator-facing prompt routing and OpenClaw-vs-image-generation fallback behavior separately from the completed customer-facing bot instructions. See `docs/operator-prompt-routing.md`.
-- [ ] Provide cost monitoring dashboard. Initial admin-only aggregate view exists at `/admin/cost-dashboard`; production dashboard polish and delivery-failure drilldowns remain open.
+- [ ] Provide cost monitoring dashboard. Initial admin-only aggregate view exists at `/admin/cost-dashboard` with delivery-failure counts; production dashboard polish and failure drilldowns remain open.
 
 ### Maintenance backlog
 

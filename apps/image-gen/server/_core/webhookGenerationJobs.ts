@@ -19,6 +19,7 @@ import { runGuardedGeneration } from "./generationGuard";
 import {
   recordGenerationError,
   recordGenerationSuccess,
+  recordMessengerDeliveryFailure,
 } from "./botRuntimeStats";
 import { emitGenerationDiagnostic } from "./generationDiagnostics";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
@@ -241,6 +242,7 @@ export function createMessengerGenerationJobRunner(
       });
     } catch (error) {
       if (error instanceof MessengerGenerationDeliveryError) {
+        recordMessengerDeliveryFailure();
         safeLog("messenger_generation_image_delivery_failed", {
           level: "error",
           reqId,

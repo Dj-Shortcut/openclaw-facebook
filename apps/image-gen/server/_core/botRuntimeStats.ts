@@ -6,12 +6,14 @@ export type GenerationStatsSnapshot = {
   activeUsersToday: number;
   generationKindsUsedToday: number;
   errorCountToday: number;
+  deliveryFailureCountToday: number;
   averageGenerationLatencyMs: number | null;
 };
 
 type DayStats = {
   imagesGenerated: number;
   errors: number;
+  deliveryFailures: number;
   latencyTotalMs: number;
   latencyCount: number;
   activeUsers: Set<string>;
@@ -34,6 +36,7 @@ function getDayStats(now = Date.now()): DayStats {
   const created: DayStats = {
     imagesGenerated: 0,
     errors: 0,
+    deliveryFailures: 0,
     latencyTotalMs: 0,
     latencyCount: 0,
     activeUsers: new Set<string>(),
@@ -66,6 +69,10 @@ export function recordGenerationError(now = Date.now()): void {
   getDayStats(now).errors += 1;
 }
 
+export function recordMessengerDeliveryFailure(now = Date.now()): void {
+  getDayStats(now).deliveryFailures += 1;
+}
+
 export function getTodayRuntimeStats(now = Date.now()): GenerationStatsSnapshot {
   const day = getDayKey(now);
   const stats = getDayStats(now);
@@ -76,6 +83,7 @@ export function getTodayRuntimeStats(now = Date.now()): GenerationStatsSnapshot 
     activeUsersToday: stats.activeUsers.size,
     generationKindsUsedToday: stats.generationKindsUsed.size,
     errorCountToday: stats.errors,
+    deliveryFailureCountToday: stats.deliveryFailures,
     averageGenerationLatencyMs:
       stats.latencyCount > 0 ? Math.round(stats.latencyTotalMs / stats.latencyCount) : null,
   };
@@ -84,4 +92,3 @@ export function getTodayRuntimeStats(now = Date.now()): GenerationStatsSnapshot 
 export function resetRuntimeStatsForTests(): void {
   statsByDay.clear();
 }
-

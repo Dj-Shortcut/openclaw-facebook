@@ -31,6 +31,10 @@ import { getState, resetStateStore } from "./_core/messengerState";
 import { deleteEphemeralKey, setEphemeralKey } from "./_core/stateStore";
 import { t } from "./_core/i18n";
 import { getMessengerGenerationCompletion } from "./_core/messengerGenerationCompletion";
+import {
+  getTodayRuntimeStats,
+  resetRuntimeStatsForTests,
+} from "./_core/botRuntimeStats";
 import type { MessengerSendOutcome } from "./_core/messengerApi";
 import type { HandlerContext } from "./_core/webhookHandlerTypes";
 
@@ -68,6 +72,7 @@ beforeEach(() => {
   sendTextMock.mockReset();
   sendTextMock.mockResolvedValue({ sent: true });
   resetStateStore();
+  resetRuntimeStatsForTests();
   delete process.env.MESSENGER_FREE_DAILY_LIMIT;
   delete process.env.MESSENGER_QUOTA_BYPASS_IDS;
 });
@@ -141,6 +146,7 @@ describe("messenger generation job safety", () => {
           queueEnabled: false,
         })
       );
+      expect(getTodayRuntimeStats().deliveryFailureCountToday).toBe(1);
 
       await runner.processMessengerGenerationJob({
         psid,
@@ -150,6 +156,7 @@ describe("messenger generation job safety", () => {
       });
       expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
       expect(sendImageMock).toHaveBeenCalledTimes(2);
+      expect(getTodayRuntimeStats().deliveryFailureCountToday).toBe(1);
       expect(getState(psid)?.quota.count).toBe(1);
       await expect(
         Promise.resolve(getMessengerGenerationCompletion(reqId))

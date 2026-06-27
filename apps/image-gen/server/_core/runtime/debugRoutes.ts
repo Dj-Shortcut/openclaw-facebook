@@ -3,6 +3,7 @@ import type express from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { createAdminAuthRateLimiter, verifyAdminToken } from "../adminAuth";
+import { getTodayRuntimeStats } from "../botRuntimeStats";
 import { summarizeCostLedgerPeriod, type CostLedgerSummary } from "../costLedger";
 import { isRedisHttpRateLimitEnabled } from "../httpRateLimit";
 import { safeLog } from "../messengerApi";
@@ -142,12 +143,16 @@ function renderAdminCostDashboardHtml(params: {
   queueHealth: AdminCostSummaryQueueHealth;
 }): string {
   const { summary, queueHealth } = params;
+  const runtimeStats = getTodayRuntimeStats();
   const attentionItems = [
     summary.openAttemptEntries > 0 ? `${summary.openAttemptEntries} open provider attempts` : null,
     summary.failedAttemptEntries > 0 ? `${summary.failedAttemptEntries} failed provider attempts` : null,
     summary.blockedEntries > 0 ? `${summary.blockedEntries} budget or quota blocks` : null,
     summary.incompleteEstimateEntries > 0
       ? `${summary.incompleteEstimateEntries} incomplete cost estimates`
+      : null,
+    runtimeStats.deliveryFailureCountToday > 0
+      ? `${runtimeStats.deliveryFailureCountToday} Messenger delivery failures today`
       : null,
     queueHealth.failed > 0 ? `${queueHealth.failed} failed queue jobs` : null,
     "available" in queueHealth && queueHealth.available === false
@@ -200,6 +205,7 @@ function renderAdminCostDashboardHtml(params: {
         <div class="metric"><span>Open attempts</span><strong>${summary.openAttemptEntries}</strong></div>
         <div class="metric"><span>Failed attempts</span><strong>${summary.failedAttemptEntries}</strong></div>
         <div class="metric"><span>Blocked attempts</span><strong>${summary.blockedEntries}</strong></div>
+        <div class="metric"><span>Delivery failures today</span><strong>${runtimeStats.deliveryFailureCountToday}</strong></div>
         <div class="metric"><span>Queue failed</span><strong>${queueHealth.failed}</strong></div>
       </section>
 
