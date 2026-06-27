@@ -19,6 +19,8 @@ import { runGuardedGeneration } from "./generationGuard";
 import {
   recordGenerationError,
   recordGenerationSuccess,
+  recordMessengerDeliveryFailure,
+  recordMessengerDuplicateSkip,
 } from "./botRuntimeStats";
 import { emitGenerationDiagnostic } from "./generationDiagnostics";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
@@ -241,6 +243,7 @@ export function createMessengerGenerationJobRunner(
       });
     } catch (error) {
       if (error instanceof MessengerGenerationDeliveryError) {
+        recordMessengerDeliveryFailure();
         safeLog("messenger_generation_image_delivery_failed", {
           level: "error",
           reqId,
@@ -488,6 +491,7 @@ async function finishDuplicateGenerationIfCompleted(input: {
     generationKind: input.resolvedGenerationKind,
     deliveryStatus: completedGeneration.deliveryStatus ?? "legacy_completed",
   });
+  recordMessengerDuplicateSkip();
   await setLastGenerated(input.psid, completedGeneration.imageUrl);
   await setLastGenerationContext(input.psid, { prompt: input.promptHint });
   if (completedGeneration.deliveryStatus === "pending") {

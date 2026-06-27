@@ -14,6 +14,8 @@ import {
   recordActiveUserToday,
   recordGenerationError,
   recordGenerationSuccess,
+  recordMessengerDeliveryFailure,
+  recordMessengerDuplicateSkip,
   resetRuntimeStatsForTests,
 } from "./_core/botRuntimeStats";
 import { bindTestHttpServer } from "./testHttpServer";
@@ -116,6 +118,8 @@ describe("observability", () => {
     recordActiveUserToday("user-2");
     recordGenerationSuccess("text_to_image", 1234);
     recordGenerationError();
+    recordMessengerDeliveryFailure();
+    recordMessengerDuplicateSkip();
     const server = await startServer(app => {
       app.get("/ok", (_req, res) => {
         res.status(200).json({ ok: true });
@@ -159,6 +163,8 @@ describe("observability", () => {
       expect(body).toContain('messenger_generation_queue_jobs{state="processing"} 0');
       expect(body).toContain("messenger_generation_today_total 1");
       expect(body).toContain("messenger_generation_errors_today_total 1");
+      expect(body).toContain("messenger_delivery_failures_today_total 1");
+      expect(body).toContain("messenger_duplicate_skips_today_total 1");
       expect(body).toContain("messenger_generation_active_users_today 2");
       expect(body).toContain("messenger_generation_kinds_used_today 1");
       expect(body).toContain("messenger_generation_average_latency_seconds 1.234000");

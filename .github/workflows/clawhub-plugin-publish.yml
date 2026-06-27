@@ -101,7 +101,9 @@ jobs:
     uses: openclaw/clawhub/.github/workflows/package-publish.yml@v0.12.0
     with:
       dry_run: true
-      source_ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || github.ref }}
+      source_repo: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+      source_commit: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      source_ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || github.ref_name }}
 
   clawhub-publish-trusted:
     if: github.event_name == 'workflow_dispatch' && inputs.publish == true

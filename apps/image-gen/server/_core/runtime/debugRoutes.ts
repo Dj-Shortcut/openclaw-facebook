@@ -3,7 +3,8 @@ import type express from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { createAdminAuthRateLimiter, verifyAdminToken } from "../adminAuth";
-import { summarizeCostLedgerPeriod } from "../costLedger";
+import { getTodayRuntimeStats } from "../botRuntimeStats";
+import { summarizeCostLedgerPeriod, type CostLedgerSummary } from "../costLedger";
 import { isRedisHttpRateLimitEnabled } from "../httpRateLimit";
 import { safeLog } from "../messengerApi";
 import {
@@ -35,6 +36,13 @@ const costSummaryQuerySchema = z.object({
 const adminCostSummaryRouteLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const adminCostDashboardRouteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -77,6 +85,108 @@ function readAdminTokenHeader(req: express.Request): string | undefined {
   return parsedHeaders.success
     ? parsedHeaders.data["x-admin-token"]
     : undefined;
+}
+
+function formatUsd(value: number): string {
+  return `$${value.toFixed(4)}`;
+}
+
+function textValue(value: unknown): string {
+  return String(value)
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[<>]/g, "")
+    .trim();
+}
+
+function renderSummaryBucketsText(
+  title: string,
+  buckets: Record<string, { attempts: number; estimatedCostUsd: number; finalCostUsd: number }>
+): string {
+  const entries = Object.entries(buckets).sort((left, right) => {
+    const byCost = right[1].estimatedCostUsd - left[1].estimatedCostUsd;
+    return byCost || left[0].localeCompare(right[0]);
+  });
+  const rows = entries.length
+    ? entries.map(
+        ([label, bucket]) =>
+          `- ${textValue(label)}: ${bucket.attempts} attempts, estimated ${formatUsd(
+            bucket.estimatedCostUsd
+          )}, final ${formatUsd(bucket.finalCostUsd)}`
+      )
+    : ["- No entries"];
+
+  return [title, ...rows].join("\n");
+}
+
+function renderStatusListText(summary: CostLedgerSummary): string {
+  return Object.entries(summary.byStatus)
+    .map(([status, count]) => `- ${textValue(status)}: ${count}`)
+    .join("\n");
+}
+
+function renderAdminCostDashboardText(params: {
+  summary: CostLedgerSummary;
+  queueHealth: AdminCostSummaryQueueHealth;
+}): string {
+  const { summary, queueHealth } = params;
+  const runtimeStats = getTodayRuntimeStats();
+  const attentionItems = [
+    summary.openAttemptEntries > 0 ? `${summary.openAttemptEntries} open provider attempts` : null,
+    summary.failedAttemptEntries > 0 ? `${summary.failedAttemptEntries} failed provider attempts` : null,
+    summary.blockedEntries > 0 ? `${summary.blockedEntries} budget or quota blocks` : null,
+    summary.incompleteEstimateEntries > 0
+      ? `${summary.incompleteEstimateEntries} incomplete cost estimates`
+      : null,
+    runtimeStats.deliveryFailureCountToday > 0
+      ? `${runtimeStats.deliveryFailureCountToday} process-local Messenger delivery failures today`
+      : null,
+    runtimeStats.duplicateSkipCountToday > 0
+      ? `${runtimeStats.duplicateSkipCountToday} process-local duplicate generation skips today`
+      : null,
+    queueHealth.failed > 0 ? `${queueHealth.failed} failed queue jobs` : null,
+    "available" in queueHealth && queueHealth.available === false
+      ? "queue health unavailable"
+      : null,
+  ].filter((item): item is string => Boolean(item));
+
+  const attentionLines = attentionItems.length
+    ? attentionItems.map(item => `- ${textValue(item)}`)
+    : ["- No immediate cost or queue attention items."];
+
+  return [
+    "Leaderbot Cost Dashboard",
+    `Period: ${textValue(summary.period)}`,
+    "Aggregate owner view only; no prompts, raw PSIDs, tokens, or generated content are included.",
+    "",
+    "Metrics",
+    `- Estimated spend: ${formatUsd(summary.estimatedCostUsd)}`,
+    `- Final spend: ${formatUsd(summary.finalCostUsd)}`,
+    `- Ledger entries: ${summary.totalEntries}`,
+    `- Unique users: ${summary.uniqueUserCount}`,
+    `- Open attempts: ${summary.openAttemptEntries}`,
+    `- Failed attempts: ${summary.failedAttemptEntries}`,
+    `- Blocked attempts: ${summary.blockedEntries}`,
+    `- Process-local delivery failures today: ${runtimeStats.deliveryFailureCountToday}`,
+    `- Process-local duplicate skips today: ${runtimeStats.duplicateSkipCountToday}`,
+    `- Queue failed: ${queueHealth.failed}`,
+    "",
+    "Needs Attention",
+    ...attentionLines,
+    "",
+    "Queue Health",
+    `- Enabled: ${queueHealth.enabled ? "yes" : "no"}`,
+    `- Queued: ${queueHealth.queued}`,
+    `- Processing: ${queueHealth.processing}`,
+    `- Failed/dead-lettered: ${queueHealth.failed}`,
+    "",
+    "Status Counts",
+    renderStatusListText(summary),
+    "",
+    renderSummaryBucketsText("Operations", summary.byOperation),
+    "",
+    renderSummaryBucketsText("Providers", summary.byProvider),
+    "",
+  ].join("\n");
 }
 
 export function buildVersionPayload(
@@ -188,6 +298,45 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
           error: "Failed to summarize cost period",
           requestId,
         });
+      }
+    }
+  );
+
+  app.get(
+    "/admin/cost-dashboard",
+    adminCostDashboardRouteLimiter,
+    createAdminAuthRateLimiter({ eventName: "admin_cost_dashboard_auth_rate_limited" }),
+    async (req, res) => {
+      if (
+        !verifyAdminToken({
+          providedToken: readAdminTokenHeader(req),
+          eventName: "admin_cost_dashboard_auth_failed",
+        })
+      ) {
+        return res.sendStatus(403);
+      }
+
+      const parsedQuery = costSummaryQuerySchema.safeParse(req.query);
+      if (!parsedQuery.success) {
+        return res.status(400).send("invalid period");
+      }
+
+      const period = parsedQuery.data.period ?? currentUtcPeriod();
+      try {
+        const summary = await summarizeCostLedgerPeriod(period);
+        const queueHealth = await readAdminCostSummaryQueueHealth(period);
+        res.setHeader("cache-control", "no-store");
+        res.setHeader("content-type", "text/plain; charset=utf-8");
+        return res.status(200).send(renderAdminCostDashboardText({ summary, queueHealth }));
+      } catch (error) {
+        const requestId = `cost_dashboard_${randomUUID()}`;
+        safeLog("admin_cost_dashboard_failed", {
+          level: "error",
+          requestId,
+          period,
+          errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
+        });
+        return res.status(500).send(`Failed to render cost dashboard. Request id: ${requestId}`);
       }
     }
   );

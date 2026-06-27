@@ -117,6 +117,11 @@ Before deploy:
 - Confirm failed/dead-lettered generation jobs are zero or have an owner-reviewed incident note.
 - Confirm recent logs contain no raw PSIDs, access tokens, customer messages, uploaded knowledge, generated prompts, or generated outputs.
 - Confirm no public route exposure drift from the intended webhook/health/legal/customer-app surfaces.
+- Confirm Messenger prompt routing follows the operator-facing routing guide:
+  ordinary conversation stays on OpenClaw, prompt-first image generation and
+  source-photo edits are forwarded only through the explicit Leaderbot bridge,
+  and cap/failure fallbacks are visible through metadata-only trace stages. See
+  [`operator-prompt-routing.md`](operator-prompt-routing.md).
 - Create a metadata-only smoke evidence file with `npm run messenger:smoke-template > smoke-evidence.json`.
 
 After deploy:

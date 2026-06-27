@@ -13,6 +13,10 @@ on:
       - '.github/workflows/image-gen-migration-smoke.yml'
   workflow_dispatch:
 
+concurrency:
+  group: image-gen-migration-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   migrate:
     name: Drizzle migration smoke
@@ -84,5 +88,19 @@ jobs:
 
           if [ "$index_contract" != "2" ] || [ "$column_count" != "2" ]; then
             echo 'Expected unique index dailyQuota_userId_date_unique(userId, date) missing or malformed';
+            exit 1;
+          fi
+
+          legacy_index_count=$(
+            mysql -h127.0.0.1 -uroot -proot test_image_gen -Nse "SELECT
+              COUNT(*)
+              FROM INFORMATION_SCHEMA.STATISTICS
+              WHERE TABLE_SCHEMA = DATABASE()
+                AND TABLE_NAME = 'dailyQuota'
+                AND INDEX_NAME = 'dailyQuota_userId_unique';"
+          )
+
+          if [ "$legacy_index_count" != "0" ]; then
+            echo 'Legacy unique index dailyQuota_userId_unique must be absent';
             exit 1;
           fi

@@ -380,7 +380,7 @@ describe("webhook audio message router", () => {
     expect(result).toBe(true);
     const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(commitTranscriptionSuccessMock).toHaveBeenCalledTimes(2);
+    expect(commitTranscriptionSuccessMock).toHaveBeenCalledTimes(1);
     expect(handleTextMessageMock).toHaveBeenCalledTimes(1);
     expect(ledgerEntries).toEqual([
       expect.objectContaining({
@@ -407,11 +407,8 @@ describe("webhook audio message router", () => {
     expect(JSON.stringify(ledgerEntries)).not.toContain("psid-audio-retry");
   });
 
-  it("stops audio transcription retries when quota is exhausted", async () => {
+  it("does not recommit audio transcription quota across provider retries", async () => {
     const ctx = makeContext();
-    commitTranscriptionSuccessMock
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(false);
     const fetchMock = vi.fn(async () => ({
       ok: false,
       status: 500,
@@ -431,23 +428,30 @@ describe("webhook audio message router", () => {
       text: "",
     });
 
-    expect(result).toBe(true);
+    expect(result).toBe(false);
     const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(commitTranscriptionSuccessMock).toHaveBeenCalledTimes(2);
-    expect(ctx.sendLoggedText).toHaveBeenCalledWith(
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(commitTranscriptionSuccessMock).toHaveBeenCalledTimes(1);
+    expect(ctx.sendLoggedText).not.toHaveBeenCalledWith(
       "psid-audio-retry-exhausted",
       t("nl", "outOfFreeCredits"),
       "req-audio-retry-exhausted"
     );
     expect(handleTextMessageMock).not.toHaveBeenCalled();
-    expect(ledgerEntries).toHaveLength(1);
-    expect(ledgerEntries[0]).toMatchObject({
-      id: "req-audio-retry-exhausted:openai-audio:1",
-      operation: "audio_transcription",
-      userKey: "user-audio-retry-exhausted",
-      status: "provider_attempt_failed",
-    });
+    expect(ledgerEntries).toEqual([
+      expect.objectContaining({
+        id: "req-audio-retry-exhausted:openai-audio:1",
+        operation: "audio_transcription",
+        userKey: "user-audio-retry-exhausted",
+        status: "provider_attempt_failed",
+      }),
+      expect.objectContaining({
+        id: "req-audio-retry-exhausted:openai-audio:2",
+        operation: "audio_transcription",
+        userKey: "user-audio-retry-exhausted",
+        status: "provider_attempt_failed",
+      }),
+    ]);
   });
 
   it("blocks misconfigured audio transcription cost overrides when spend caps are enabled", async () => {
