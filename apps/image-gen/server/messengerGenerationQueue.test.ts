@@ -42,22 +42,18 @@ function createDrainRedis(
   options: {
     processing?: string[];
     dead?: string[];
-    leaseValue?: string | null;
+    leases?: Record<string, string>;
   } = {}
 ) {
   const processing = options.processing ?? [];
   const dead = options.dead ?? [];
-  const leases = new Map<string, string>();
+  const leases = new Map<string, string>(Object.entries(options.leases ?? {}));
   const redis = {
     del: vi.fn(async (key: string) => {
       const existed = leases.delete(key);
       return existed ? 1 : 0;
     }),
-    get: vi.fn(async (key: string) =>
-      options.leaseValue !== undefined
-        ? options.leaseValue
-        : leases.get(key) ?? null
-    ),
+    get: vi.fn(async (key: string) => leases.get(key) ?? null),
     set: vi.fn(async (key: string, value: string) => {
       leases.set(key, value);
       return "OK";
@@ -597,7 +593,11 @@ describe("messengerGenerationQueue", () => {
     isRedisEnabledMock.mockReturnValue(true);
     const job = createJob({ reqId: "req-dead-callback" });
     const queue: string[] = [JSON.stringify(job)];
-    const { dead, redis } = createDrainRedis(queue, { leaseValue: "1" });
+    const { dead, redis } = createDrainRedis(queue, {
+      leases: {
+        "messenger-generation-job-lease:req-dead-callback": "1",
+      },
+    });
     getRedisClientMock.mockResolvedValue(redis);
 
     await expect(
@@ -668,7 +668,9 @@ describe("messengerGenerationQueue", () => {
     const processing = [reserved];
     const { redis } = createDrainRedis(queue, {
       processing,
-      leaseValue: "1",
+      leases: {
+        "messenger-generation-job-lease:req-active": "1",
+      },
     });
     getRedisClientMock.mockResolvedValue(redis);
 
