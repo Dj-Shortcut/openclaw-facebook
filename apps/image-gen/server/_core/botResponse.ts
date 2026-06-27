@@ -4,7 +4,7 @@ export type ConversationAction = {
   inputText?: string;
 };
 
-export type ImageOutput = {
+type ImageOutput = {
   imageUrl: string;
   caption?: string;
 };
