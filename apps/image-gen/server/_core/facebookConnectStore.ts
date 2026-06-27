@@ -12,16 +12,16 @@ export const REQUIRED_FACEBOOK_SCOPES = [
   "pages_messaging",
 ] as const;
 
-export type RequiredFacebookScope = (typeof REQUIRED_FACEBOOK_SCOPES)[number];
+type RequiredFacebookScope = (typeof REQUIRED_FACEBOOK_SCOPES)[number];
 
-export type FacebookConnectPage = {
+type FacebookConnectPage = {
   id: string;
   name: string;
   grantedScopes: RequiredFacebookScope[];
   accessToken: string;
 };
 
-export type StoredFacebookConnectState = FacebookConnectState & {
+type StoredFacebookConnectState = FacebookConnectState & {
   authorizationCode?: string;
   pages?: FacebookConnectPage[];
 };
@@ -103,10 +103,6 @@ export function consumeFacebookPage(input: {
   return page;
 }
 
-export function deleteFacebookConnectState(state: string) {
-  facebookConnectStates.delete(state);
-}
-
 function getFacebookApiVersion() {
   return process.env.FB_GRAPH_API_VERSION?.trim() || "v21.0";
 }
@@ -115,7 +111,7 @@ function getPortalBaseUrl() {
   return (process.env.PORTAL_BASE_URL ?? process.env.APP_BASE_URL ?? "http://localhost:8080").replace(/\/$/, "");
 }
 
-export function getFacebookRedirectUri() {
+function getFacebookRedirectUri() {
   return `${getPortalBaseUrl()}/api/facebook/connect/callback`;
 }
 
