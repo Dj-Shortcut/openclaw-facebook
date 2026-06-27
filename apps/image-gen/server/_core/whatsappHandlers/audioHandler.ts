@@ -40,6 +40,7 @@ export async function handleWhatsAppAudioEvent(
   let sourceAudioBuffer: Buffer | undefined;
   let sourceAudioContentType: string | undefined;
   let reservation: Awaited<ReturnType<typeof reserveTranscriptionForAttempt>> | null = null;
+  let audioBudgetReserved = false;
   let audioBudgetCommitted = false;
 
   try {
@@ -47,6 +48,7 @@ export async function handleWhatsAppAudioEvent(
       reqId: context.reqId,
       now: audioBudgetNow,
     });
+    audioBudgetReserved = true;
     if (!process.env.OPENAI_API_KEY?.trim()) {
       await sendWhatsAppTextReply(event.senderId, t(context.lang, "unsupportedAudio"));
       return;
@@ -146,7 +148,7 @@ export async function handleWhatsAppAudioEvent(
     if (reservation) {
       await releaseTranscriptionReservation(event.senderId, reservation);
     }
-    if (!audioBudgetCommitted) {
+    if (audioBudgetReserved && !audioBudgetCommitted) {
       await releaseMessengerDailyAudioTranscriptionBudgetReservation({
         now: audioBudgetNow,
       });

@@ -341,7 +341,10 @@ export function scheduleWebhookIngressDrain(): void {
           try {
             await processQueuedWebhookDelivery(reserved.delivery);
           } catch (error) {
-            await releaseFailedWebhookIngressDelivery(redis, reserved, error);
+            const result = await releaseFailedWebhookIngressDelivery(redis, reserved, error);
+            if (result === "dead_lettered") {
+              continue;
+            }
             setTimeout(() => {
               if (!drainPromise) {
                 scheduleWebhookIngressDrain();

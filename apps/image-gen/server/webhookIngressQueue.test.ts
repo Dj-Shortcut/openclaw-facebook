@@ -296,9 +296,9 @@ describe("webhookIngressQueue", () => {
   it("moves a delivery to dead-letter after max attempts", async () => {
     process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS = "2";
     isRedisEnabledMock.mockReturnValue(true);
-    processFacebookWebhookPayloadMock.mockRejectedValue(
-      new RangeError("too many")
-    );
+    processFacebookWebhookPayloadMock
+      .mockRejectedValueOnce(new RangeError("too many"))
+      .mockResolvedValueOnce(undefined);
 
     const delivery = JSON.stringify({
       channel: "facebook",
@@ -306,7 +306,12 @@ describe("webhookIngressQueue", () => {
       receivedAt: "2026-05-28T00:00:00.000Z",
       attempts: 1,
     });
-    const queue = [delivery];
+    const nextDelivery = JSON.stringify({
+      channel: "facebook",
+      payload: { entry: [{ id: "next" }] },
+      receivedAt: "2026-05-28T00:00:01.000Z",
+    });
+    const queue = [delivery, nextDelivery];
     const processing: string[] = [];
     const dead: string[] = [];
     const redis = createQueueRedis(queue, processing, dead);
@@ -320,6 +325,9 @@ describe("webhookIngressQueue", () => {
         expect.any(String)
       );
     });
+    await vi.waitFor(() => {
+      expect(processFacebookWebhookPayloadMock).toHaveBeenCalledTimes(2);
+    });
 
     expect(queue).toEqual([]);
     expect(processing).toEqual([]);
@@ -329,6 +337,9 @@ describe("webhookIngressQueue", () => {
       attempts: 2,
     });
     expect(redis.lpush).not.toHaveBeenCalled();
+    expect(processFacebookWebhookPayloadMock).toHaveBeenNthCalledWith(2, {
+      entry: [{ id: "next" }],
+    });
     expect(safeLogMock).toHaveBeenCalledWith(
       "webhook_queued_delivery_dead_lettered",
       expect.objectContaining({
