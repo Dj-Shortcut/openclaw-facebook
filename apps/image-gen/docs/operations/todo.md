@@ -243,7 +243,7 @@ Quota drift investigation note:
 - [ ] Test cost tracking
 - [ ] P1/P2 [owner: image-gen-runtime-test] Add targeted cost-ledger reliability tests for concurrent append/update behavior, overflow observability, midnight-crossing update reconciliation, and delete-cleanup latency under multi-period user history.
 - [x] Create setup guide for Meta configuration
-- [ ] Document operator-facing prompt routing and OpenClaw-vs-image-generation fallback behavior separately from the completed customer-facing bot instructions
+- [x] Document operator-facing prompt routing and OpenClaw-vs-image-generation fallback behavior separately from the completed customer-facing bot instructions. See `docs/operator-prompt-routing.md`.
 - [ ] Provide cost monitoring dashboard
 
 ### Maintenance backlog
