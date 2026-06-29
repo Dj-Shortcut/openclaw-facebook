@@ -112,7 +112,7 @@ export function createHandlerContext({
           hasUrl: Boolean(attachment.payload?.url),
         })) ?? [],
       postbackPayload: event.postback?.payload ?? null,
-      referralRef: event.postback?.referral?.ref ?? event.referral?.ref ?? null,
+      hasReferralRef: Boolean(event.postback?.referral?.ref ?? event.referral?.ref),
     });
   }
 
