@@ -68,11 +68,9 @@ const OPENAI_IMAGE_ALLOWED_BACKGROUNDS = new Set([
 const OPENAI_IMAGE_ALLOWED_ACTIONS = new Set(["auto", "generate", "edit"]);
 const OPENAI_IMAGE_ALLOWED_INPUT_FIDELITIES = new Set(["low", "high"]);
 
-/** @public */
-export type OpenAiImageOutputFormat = "png" | "jpeg" | "webp";
+type OpenAiImageOutputFormat = "png" | "jpeg" | "webp";
 
-/** @public */
-export function getOpenAiImageOutputFormat(): OpenAiImageOutputFormat {
+function getOpenAiImageOutputFormat(): OpenAiImageOutputFormat {
   return readEnumEnv(
     "OPENAI_IMAGE_OUTPUT_FORMAT",
     OPENAI_IMAGE_ALLOWED_FORMATS,
