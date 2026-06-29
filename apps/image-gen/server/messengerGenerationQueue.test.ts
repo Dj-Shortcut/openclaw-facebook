@@ -37,10 +37,17 @@ function createJob(overrides: Partial<MessengerGenerationJob> = {}): MessengerGe
   };
 }
 
-function createDrainRedis(queue: string[]) {
-  const processing: string[] = [];
-  const dead: string[] = [];
-  const leases = new Map<string, string>();
+function createDrainRedis(
+  queue: string[],
+  options: {
+    processing?: string[];
+    dead?: string[];
+    leases?: Record<string, string>;
+  } = {}
+) {
+  const processing = options.processing ?? [];
+  const dead = options.dead ?? [];
+  const leases = new Map<string, string>(Object.entries(options.leases ?? {}));
   const redis = {
     del: vi.fn(async (key: string) => {
       const existed = leases.delete(key);
@@ -62,6 +69,15 @@ function createDrainRedis(queue: string[]) {
       processing.splice(index, 1);
       return 1;
     }),
+    lpush: vi.fn(async (key: string, value: string) => {
+      if (key.endsWith(":processing")) {
+        processing.unshift(value);
+      } else {
+        queue.unshift(value);
+      }
+      return queue.length;
+    }),
+    lrange: vi.fn(async () => [...processing]),
     rpoplpush: vi.fn(async () => {
       const value = queue.pop() ?? null;
       if (value) {
@@ -328,38 +344,7 @@ describe("messengerGenerationQueue", () => {
       promptHint: "Maak een draak boven Antwerpen",
     });
     const queue: string[] = [JSON.stringify(job)];
-    const processing: string[] = [];
-    const redis = {
-      del: vi.fn(async () => 1),
-      get: vi.fn(async () => null),
-      llen: vi.fn(async (key: string) =>
-        key.endsWith(":processing") ? processing.length : queue.length
-      ),
-      lrange: vi.fn(async () => processing),
-      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
-        const index = processing.indexOf(value);
-        if (index === -1) return 0;
-        processing.splice(index, 1);
-        return 1;
-      }),
-      lpush: vi.fn(async (_key: string, value: string) => {
-        queue.unshift(value);
-        return queue.length;
-      }),
-      lpush: vi.fn(async (_key: string, value: string) => {
-        queue.unshift(value);
-        return queue.length;
-      }),
-      set: vi.fn(async () => "OK"),
-      rpoplpush: vi.fn(async () => {
-        const value = queue.pop() ?? null;
-        if (value) {
-          processing.unshift(value);
-        }
-        return value;
-      }),
-      set: vi.fn(async () => "OK"),
-    };
+    const { processing, redis } = createDrainRedis(queue);
     getRedisClientMock.mockResolvedValue(redis);
     const processor = vi.fn(async () => undefined);
 
@@ -376,34 +361,7 @@ describe("messengerGenerationQueue", () => {
     isRedisEnabledMock.mockReturnValue(true);
     const job = createJob({ reqId: "req-custom-lease" });
     const queue: string[] = [JSON.stringify(job)];
-    const processing: string[] = [];
-    const redis = {
-      del: vi.fn(async () => 1),
-      get: vi.fn(async () => null),
-      llen: vi.fn(async (key: string) =>
-        key.endsWith(":processing") ? processing.length : queue.length
-      ),
-      lrange: vi.fn(async () => processing),
-      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
-        const index = processing.indexOf(value);
-        if (index === -1) return 0;
-        processing.splice(index, 1);
-        return 1;
-      }),
-      lpush: vi.fn(async (_key: string, value: string) => {
-        queue.unshift(value);
-        return queue.length;
-      }),
-      set: vi.fn(async () => "OK"),
-      rpoplpush: vi.fn(async () => {
-        const value = queue.pop() ?? null;
-        if (value) {
-          processing.unshift(value);
-        }
-        return value;
-      }),
-      set: vi.fn(async () => "OK"),
-    };
+    const { redis } = createDrainRedis(queue);
     getRedisClientMock.mockResolvedValue(redis);
 
     await drainMessengerGenerationQueue(vi.fn(async () => undefined));
@@ -423,29 +381,7 @@ describe("messengerGenerationQueue", () => {
     isRedisEnabledMock.mockReturnValue(true);
     const job = createJob({ reqId: "req-derived-lease" });
     const queue: string[] = [JSON.stringify(job)];
-    const processing: string[] = [];
-    const redis = {
-      del: vi.fn(async () => 1),
-      get: vi.fn(async () => null),
-      llen: vi.fn(async (key: string) =>
-        key.endsWith(":processing") ? processing.length : queue.length
-      ),
-      lrange: vi.fn(async () => processing),
-      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
-        const index = processing.indexOf(value);
-        if (index === -1) return 0;
-        processing.splice(index, 1);
-        return 1;
-      }),
-      rpoplpush: vi.fn(async () => {
-        const value = queue.pop() ?? null;
-        if (value) {
-          processing.unshift(value);
-        }
-        return value;
-      }),
-      set: vi.fn(async () => "OK"),
-    };
+    const { redis } = createDrainRedis(queue);
     getRedisClientMock.mockResolvedValue(redis);
 
     await drainMessengerGenerationQueue(vi.fn(async () => undefined));
@@ -464,51 +400,7 @@ describe("messengerGenerationQueue", () => {
     isRedisEnabledMock.mockReturnValue(true);
     const job = createJob({ reqId: "req-retry" });
     const queue: string[] = [JSON.stringify(job)];
-    const processing: string[] = [];
-    const dead: string[] = [];
-    const leases = new Map<string, string>();
-    const redis = {
-      del: vi.fn(async (key: string) => {
-        const existed = leases.delete(key);
-        return existed ? 1 : 0;
-      }),
-      get: vi.fn(async (key: string) => leases.get(key) ?? null),
-      llen: vi.fn(async (key: string) => {
-        if (key.endsWith(":processing")) return processing.length;
-        if (key.endsWith(":dead")) return dead.length;
-        return queue.length;
-      }),
-      lpush: vi.fn(async (key: string, value: string) => {
-        if (key.endsWith(":processing")) {
-          processing.unshift(value);
-        } else {
-          queue.unshift(value);
-        }
-        return queue.length;
-      }),
-      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
-        const index = processing.indexOf(value);
-        if (index === -1) return 0;
-        processing.splice(index, 1);
-        return 1;
-      }),
-      rpoplpush: vi.fn(async () => {
-        const value = queue.pop() ?? null;
-        if (value) {
-          processing.unshift(value);
-        }
-        return value;
-      }),
-      set: vi.fn(async () => "OK"),
-      rpush: vi.fn(async (_key: string, value: string) => {
-        dead.push(value);
-        return dead.length;
-      }),
-      set: vi.fn(async (key: string, value: string) => {
-        leases.set(key, value);
-        return "OK";
-      }),
-    };
+    const { dead, processing, redis } = createDrainRedis(queue);
     getRedisClientMock.mockResolvedValue(redis);
 
     const processor = vi.fn(async () => {
@@ -533,39 +425,7 @@ describe("messengerGenerationQueue", () => {
       createJob({ reqId: "req-batch-3" }),
     ];
     const queue = jobs.map(job => JSON.stringify(job)).reverse();
-    const processing: string[] = [];
-    const leases = new Map<string, string>();
-    const redis = {
-      del: vi.fn(async (key: string) => {
-        const existed = leases.delete(key);
-        return existed ? 1 : 0;
-      }),
-      get: vi.fn(async (key: string) => leases.get(key) ?? null),
-      llen: vi.fn(async (key: string) =>
-        key.endsWith(":processing") ? processing.length : queue.length
-      ),
-      lpush: vi.fn(async (_key: string, value: string) => {
-        queue.unshift(value);
-        return queue.length;
-      }),
-      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
-        const index = processing.indexOf(value);
-        if (index === -1) return 0;
-        processing.splice(index, 1);
-        return 1;
-      }),
-      rpoplpush: vi.fn(async () => {
-        const value = queue.pop() ?? null;
-        if (value) {
-          processing.unshift(value);
-        }
-        return value;
-      }),
-      set: vi.fn(async (key: string, value: string) => {
-        leases.set(key, value);
-        return "OK";
-      }),
-    };
+    const { processing, redis } = createDrainRedis(queue);
     getRedisClientMock.mockResolvedValue(redis);
     const processor = vi.fn(async () => undefined);
 
@@ -585,50 +445,7 @@ describe("messengerGenerationQueue", () => {
     isRedisEnabledMock.mockReturnValue(true);
     const job = createJob({ reqId: "req-dead", attempts: 1 });
     const queue: string[] = [JSON.stringify(job)];
-    const processing: string[] = [];
-    const dead: string[] = [];
-    const leases = new Map<string, string>();
-    const redis = {
-      del: vi.fn(async (key: string) => {
-        const existed = leases.delete(key);
-        return existed ? 1 : 0;
-      }),
-      get: vi.fn(async (key: string) => leases.get(key) ?? null),
-      llen: vi.fn(async (key: string) => {
-        if (key.endsWith(":processing")) return processing.length;
-        if (key.endsWith(":dead")) return dead.length;
-        return queue.length;
-      }),
-      lpush: vi.fn(async (_key: string, value: string) => {
-        queue.unshift(value);
-        return queue.length;
-      }),
-      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
-        const index = processing.indexOf(value);
-        if (index === -1) return 0;
-        processing.splice(index, 1);
-        return 1;
-      }),
-      rpoplpush: vi.fn(async () => {
-        const value = queue.pop() ?? null;
-        if (value) {
-          processing.unshift(value);
-        }
-        return value;
-      }),
-      lpush: vi.fn(async (_key: string, value: string) => {
-        queue.unshift(value);
-        return queue.length;
-      }),
-      rpush: vi.fn(async (_key: string, value: string) => {
-        dead.push(value);
-        return dead.length;
-      }),
-      set: vi.fn(async (key: string, value: string) => {
-        leases.set(key, value);
-        return "OK";
-      }),
-    };
+    const { dead, processing, redis } = createDrainRedis(queue);
     getRedisClientMock.mockResolvedValue(redis);
 
     const processor = vi.fn(async () => {
@@ -657,35 +474,7 @@ describe("messengerGenerationQueue", () => {
     isRedisEnabledMock.mockReturnValue(true);
     const invalidJob = "{not-json";
     const queue: string[] = [invalidJob];
-    const processing: string[] = [];
-    const dead: string[] = [];
-    const redis = {
-      del: vi.fn(async () => 0),
-      get: vi.fn(async () => null),
-      set: vi.fn(async () => "OK"),
-      llen: vi.fn(async (key: string) => {
-        if (key.endsWith(":processing")) return processing.length;
-        if (key.endsWith(":dead")) return dead.length;
-        return queue.length;
-      }),
-      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
-        const index = processing.indexOf(value);
-        if (index === -1) return 0;
-        processing.splice(index, 1);
-        return 1;
-      }),
-      rpoplpush: vi.fn(async () => {
-        const value = queue.pop() ?? null;
-        if (value) {
-          processing.unshift(value);
-        }
-        return value;
-      }),
-      rpush: vi.fn(async (_key: string, value: string) => {
-        dead.push(value);
-        return dead.length;
-      }),
-    };
+    const { dead, processing, redis } = createDrainRedis(queue);
     getRedisClientMock.mockResolvedValue(redis);
     const processor = vi.fn(async () => undefined);
 
@@ -755,35 +544,7 @@ describe("messengerGenerationQueue", () => {
       promptHint: "make it brighter",
     });
     const queue: string[] = [legacyJob];
-    const processing: string[] = [];
-    const dead: string[] = [];
-    const redis = {
-      del: vi.fn(async () => 0),
-      get: vi.fn(async () => null),
-      set: vi.fn(async () => "OK"),
-      llen: vi.fn(async (key: string) => {
-        if (key.endsWith(":processing")) return processing.length;
-        if (key.endsWith(":dead")) return dead.length;
-        return queue.length;
-      }),
-      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
-        const index = processing.indexOf(value);
-        if (index === -1) return 0;
-        processing.splice(index, 1);
-        return 1;
-      }),
-      rpoplpush: vi.fn(async () => {
-        const value = queue.pop() ?? null;
-        if (value) {
-          processing.unshift(value);
-        }
-        return value;
-      }),
-      rpush: vi.fn(async (_key: string, value: string) => {
-        dead.push(value);
-        return dead.length;
-      }),
-    };
+    const { dead, redis } = createDrainRedis(queue);
     getRedisClientMock.mockResolvedValue(redis);
     const processor = vi.fn(async () => undefined);
 
@@ -811,40 +572,7 @@ describe("messengerGenerationQueue", () => {
       lang: "nl",
     });
     const queue: string[] = [staleJob];
-    const processing: string[] = [];
-    const dead: string[] = [];
-    const redis = {
-      del: vi.fn(async () => 0),
-      get: vi.fn(async () => null),
-      set: vi.fn(async () => "OK"),
-      llen: vi.fn(async (key: string) => {
-        if (key.endsWith(":processing")) return processing.length;
-        if (key.endsWith(":dead")) return dead.length;
-        return queue.length;
-      }),
-      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
-        const index = processing.indexOf(value);
-        if (index === -1) return 0;
-        processing.splice(index, 1);
-        return 1;
-      }),
-      lpush: vi.fn(async (_key: string, value: string) => {
-        queue.unshift(value);
-        return queue.length;
-      }),
-      set: vi.fn(async () => "OK"),
-      rpoplpush: vi.fn(async () => {
-        const value = queue.pop() ?? null;
-        if (value) {
-          processing.unshift(value);
-        }
-        return value;
-      }),
-      rpush: vi.fn(async (_key: string, value: string) => {
-        dead.push(value);
-        return dead.length;
-      }),
-    };
+    const { dead, processing, redis } = createDrainRedis(queue);
     getRedisClientMock.mockResolvedValue(redis);
     const processor = vi.fn(async () => undefined);
 
@@ -865,39 +593,11 @@ describe("messengerGenerationQueue", () => {
     isRedisEnabledMock.mockReturnValue(true);
     const job = createJob({ reqId: "req-dead-callback" });
     const queue: string[] = [JSON.stringify(job)];
-    const processing: string[] = [];
-    const dead: string[] = [];
-    const redis = {
-      del: vi.fn(async () => 1),
-      get: vi.fn(async () => "1"),
-      llen: vi.fn(async (key: string) => {
-        if (key.endsWith(":processing")) return processing.length;
-        if (key.endsWith(":dead")) return dead.length;
-        return queue.length;
-      }),
-      lpush: vi.fn(async (_key: string, value: string) => {
-        queue.unshift(value);
-        return queue.length;
-      }),
-      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
-        const index = processing.indexOf(value);
-        if (index === -1) return 0;
-        processing.splice(index, 1);
-        return 1;
-      }),
-      rpoplpush: vi.fn(async () => {
-        const value = queue.pop() ?? null;
-        if (value) {
-          processing.unshift(value);
-        }
-        return value;
-      }),
-      rpush: vi.fn(async (_key: string, value: string) => {
-        dead.push(value);
-        return dead.length;
-      }),
-      set: vi.fn(async () => "OK"),
-    };
+    const { dead, redis } = createDrainRedis(queue, {
+      leases: {
+        "messenger-generation-job-lease:req-dead-callback": "1",
+      },
+    });
     getRedisClientMock.mockResolvedValue(redis);
 
     await expect(
@@ -924,32 +624,7 @@ describe("messengerGenerationQueue", () => {
     const queue: string[] = [];
     const dead: string[] = [];
     const processing = [reserved];
-    const redis = {
-      del: vi.fn(async () => 0),
-      get: vi.fn(async () => null),
-      llen: vi.fn(async (key: string) =>
-        key.endsWith(":processing")
-          ? processing.length
-          : key.endsWith(":dead")
-            ? dead.length
-            : queue.length
-      ),
-      lrange: vi.fn(async () => [...processing]),
-      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
-        const index = processing.indexOf(value);
-        if (index === -1) return 0;
-        processing.splice(index, 1);
-        return 1;
-      }),
-      lpush: vi.fn(async (_key: string, value: string) => {
-        queue.unshift(value);
-        return queue.length;
-      }),
-      rpush: vi.fn(async (_key: string, value: string) => {
-        dead.push(value);
-        return dead.length;
-      }),
-    };
+    const { redis } = createDrainRedis(queue, { dead, processing });
     getRedisClientMock.mockResolvedValue(redis);
 
     await expect(reclaimReservedMessengerGenerationJobs()).resolves.toBe(1);
@@ -968,32 +643,7 @@ describe("messengerGenerationQueue", () => {
     const queue: string[] = [];
     const dead: string[] = [];
     const processing = [reserved];
-    const redis = {
-      del: vi.fn(async () => 0),
-      get: vi.fn(async () => null),
-      llen: vi.fn(async (key: string) =>
-        key.endsWith(":processing")
-          ? processing.length
-          : key.endsWith(":dead")
-            ? dead.length
-            : queue.length
-      ),
-      lrange: vi.fn(async () => [...processing]),
-      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
-        const index = processing.indexOf(value);
-        if (index === -1) return 0;
-        processing.splice(index, 1);
-        return 1;
-      }),
-      lpush: vi.fn(async (_key: string, value: string) => {
-        queue.unshift(value);
-        return queue.length;
-      }),
-      rpush: vi.fn(async (_key: string, value: string) => {
-        dead.push(value);
-        return dead.length;
-      }),
-    };
+    const { redis } = createDrainRedis(queue, { dead, processing });
     getRedisClientMock.mockResolvedValue(redis);
     const onDeadLetter = vi.fn(async () => undefined);
 
@@ -1016,20 +666,12 @@ describe("messengerGenerationQueue", () => {
     const reserved = JSON.stringify(createJob({ reqId: "req-active" }));
     const queue: string[] = [];
     const processing = [reserved];
-    const redis = {
-      get: vi.fn(async () => "1"),
-      lrange: vi.fn(async () => [...processing]),
-      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
-        const index = processing.indexOf(value);
-        if (index === -1) return 0;
-        processing.splice(index, 1);
-        return 1;
-      }),
-      lpush: vi.fn(async (_key: string, value: string) => {
-        queue.unshift(value);
-        return queue.length;
-      }),
-    };
+    const { redis } = createDrainRedis(queue, {
+      processing,
+      leases: {
+        "messenger-generation-job-lease:req-active": "1",
+      },
+    });
     getRedisClientMock.mockResolvedValue(redis);
 
     await expect(reclaimReservedMessengerGenerationJobs()).resolves.toBe(0);
@@ -1047,46 +689,7 @@ describe("messengerGenerationQueue", () => {
     const rawJob = JSON.stringify(job);
     const queue: string[] = [];
     const processing = [rawJob];
-    const leases = new Map<string, string>();
-    const redis = {
-      del: vi.fn(async (key: string) => {
-        const existed = leases.delete(key);
-        return existed ? 1 : 0;
-      }),
-      get: vi.fn(async () => null),
-      llen: vi.fn(async (key: string) => {
-        if (key.endsWith(":processing")) return processing.length;
-        if (key.endsWith(":dead")) return 0;
-        return queue.length;
-      }),
-      lpush: vi.fn(async (key: string, value: string) => {
-        if (key.endsWith(":processing")) {
-          processing.unshift(value);
-        } else {
-          queue.unshift(value);
-        }
-        return queue.length;
-      }),
-      lrange: vi.fn(async () => [...processing]),
-      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
-        const index = processing.indexOf(value);
-        if (index === -1) return 0;
-        processing.splice(index, 1);
-        return 1;
-      }),
-      rpoplpush: vi.fn(async () => {
-        const value = queue.pop() ?? null;
-        if (value) {
-          processing.unshift(value);
-        }
-        return value;
-      }),
-      rpush: vi.fn(async () => 1),
-      set: vi.fn(async (key: string, value: string) => {
-        leases.set(key, value);
-        return "OK";
-      }),
-    };
+    const { redis } = createDrainRedis(queue, { processing });
     getRedisClientMock.mockResolvedValue(redis);
     const processor = vi.fn(async () => undefined);
 
@@ -1110,51 +713,7 @@ describe("messengerGenerationQueue", () => {
     isRedisEnabledMock.mockReturnValue(true);
     const job = createJob({ reqId: "req-scheduled-dead" });
     const queue: string[] = [JSON.stringify(job)];
-    const processing: string[] = [];
-    const dead: string[] = [];
-    const leases = new Map<string, string>();
-    const redis = {
-      del: vi.fn(async (key: string) => {
-        const existed = leases.delete(key);
-        return existed ? 1 : 0;
-      }),
-      get: vi.fn(async () => null),
-      llen: vi.fn(async (key: string) => {
-        if (key.endsWith(":processing")) return processing.length;
-        if (key.endsWith(":dead")) return dead.length;
-        return queue.length;
-      }),
-      lpush: vi.fn(async (key: string, value: string) => {
-        if (key.endsWith(":processing")) {
-          processing.unshift(value);
-        } else {
-          queue.unshift(value);
-        }
-        return queue.length;
-      }),
-      lrange: vi.fn(async () => []),
-      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
-        const index = processing.indexOf(value);
-        if (index === -1) return 0;
-        processing.splice(index, 1);
-        return 1;
-      }),
-      rpoplpush: vi.fn(async () => {
-        const value = queue.pop() ?? null;
-        if (value) {
-          processing.unshift(value);
-        }
-        return value;
-      }),
-      rpush: vi.fn(async (_key: string, value: string) => {
-        dead.push(value);
-        return dead.length;
-      }),
-      set: vi.fn(async (key: string, value: string) => {
-        leases.set(key, value);
-        return "OK";
-      }),
-    };
+    const { dead, redis } = createDrainRedis(queue);
     getRedisClientMock.mockResolvedValue(redis);
     const processorError = new Error("scheduled worker failure");
     const processor = vi.fn(async () => {
