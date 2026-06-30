@@ -252,7 +252,7 @@ export const portalRouter = router({
       .input(workspaceInput)
       .mutation(async ({ ctx, input }) => {
         await requireWorkspace(ctx, input.workspaceId);
-        const state = startFacebookConnect({
+        const state = await startFacebookConnect({
           workspaceId: input.workspaceId,
           userId: ctx.user.id,
         });
@@ -281,7 +281,7 @@ export const portalRouter = router({
       .mutation(async ({ ctx, input }) => {
         await requireWorkspace(ctx, input.workspaceId);
         try {
-          validateStoredFacebookState({
+          await validateStoredFacebookState({
             state: input.state,
             workspaceId: input.workspaceId,
             userId: ctx.user.id,
@@ -290,8 +290,9 @@ export const portalRouter = router({
           throw badRequest(error, "invalid facebook connect state");
         }
 
-        const code = input.code ?? getStoredFacebookState(input.state)?.authorizationCode;
-        if (!code || code !== getStoredFacebookState(input.state)?.authorizationCode) {
+        const stored = await getStoredFacebookState(input.state);
+        const code = input.code ?? stored?.authorizationCode;
+        if (!code || code !== stored?.authorizationCode) {
           throw badRequest(null, "facebook authorization code missing or mismatched");
         }
 
@@ -302,7 +303,7 @@ export const portalRouter = router({
           throw badRequest(error, "facebook token exchange failed");
         }
 
-        storeFacebookPages({ state: input.state, pages });
+        await storeFacebookPages({ state: input.state, pages });
         await db.insertAuditLog({
           workspaceId: input.workspaceId,
           userId: ctx.user.id,
@@ -326,7 +327,7 @@ export const portalRouter = router({
         await requireWorkspace(ctx, input.workspaceId);
         let page;
         try {
-          page = consumeFacebookPage({
+          page = await consumeFacebookPage({
             state: input.state,
             workspaceId: input.workspaceId,
             userId: ctx.user.id,

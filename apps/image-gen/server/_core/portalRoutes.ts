@@ -44,7 +44,7 @@ function redactChannelAccessToken<T extends { encryptedAccessToken?: unknown }>(
 }
 
 export function registerPortalRoutes(app: Express) {
-  app.get("/api/facebook/connect/callback", (req, res) => {
+  app.get("/api/facebook/connect/callback", asyncRoute(async (req, res) => {
     const parsed = facebookCallbackSchema.safeParse({
       code: typeof req.query.code === "string" ? req.query.code : undefined,
       state: typeof req.query.state === "string" ? req.query.state : undefined,
@@ -52,10 +52,10 @@ export function registerPortalRoutes(app: Express) {
 
     if (
       !parsed.success ||
-      !storeFacebookAuthorizationCode({
+      !(await storeFacebookAuthorizationCode({
         state: parsed.data.state,
         code: parsed.data.code,
-      })
+      }))
     ) {
       res.status(400).type("html").send("<h1>Invalid Facebook authorization</h1>");
       return;
@@ -74,9 +74,10 @@ export function registerPortalRoutes(app: Express) {
   <body>
     <h1>Facebook authorization received</h1>
     <p>You can return to Leaderbot to finish selecting the Page.</p>
+    <p><a href="/">Return to Leaderbot</a></p>
   </body>
 </html>`);
-  });
+  }));
 
   app.get("/api/portal/snapshot", asyncRoute(async (req, res) => {
     const user = await authenticatePortalRequest(req, res);
@@ -171,7 +172,7 @@ export function registerPortalRoutes(app: Express) {
     const workspace = await requirePortalWorkspace(user, res, parsed.data.workspaceId);
     if (!workspace) return;
 
-    const state = startFacebookConnect({
+    const state = await startFacebookConnect({
       workspaceId: parsed.data.workspaceId,
       userId: user.id,
     });

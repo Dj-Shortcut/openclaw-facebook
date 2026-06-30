@@ -65,30 +65,32 @@ describe("portal security", () => {
     ).toThrow("facebook connect state expired");
   });
 
-  it("shares facebook connect state across start, callback code, and page selection", () => {
+  it("shares facebook connect state across start, callback code, and page selection", async () => {
     const now = Date.now();
-    const state = startFacebookConnect({
+    const state = await startFacebookConnect({
       workspaceId: 12,
       userId: 9,
       now,
     });
 
     expect(
-      storeFacebookAuthorizationCode({
+      await storeFacebookAuthorizationCode({
         state: state.state,
         code: "oauth-code",
       })
     ).toBe(true);
     expect(
-      validateStoredFacebookState({
-        state: state.state,
-        workspaceId: 12,
-        userId: 9,
-        now: now + 1000,
-      }).authorizationCode
+      (
+        await validateStoredFacebookState({
+          state: state.state,
+          workspaceId: 12,
+          userId: 9,
+          now: now + 1000,
+        })
+      ).authorizationCode
     ).toBe("oauth-code");
 
-    storeFacebookPages({
+    await storeFacebookPages({
       state: state.state,
       pages: [
         {
@@ -105,7 +107,7 @@ describe("portal security", () => {
     });
 
     expect(
-      consumeFacebookPage({
+      await consumeFacebookPage({
         state: state.state,
         workspaceId: 12,
         userId: 9,

@@ -5,6 +5,7 @@ import {
   validateFacebookConnectState,
   type FacebookConnectState,
 } from "./portalSecurity";
+import { getRedisClient, isRedisEnabled } from "./redis";
 
 export const REQUIRED_FACEBOOK_SCOPES = [
   "pages_show_list",
@@ -27,79 +28,124 @@ type StoredFacebookConnectState = FacebookConnectState & {
 };
 
 const facebookConnectStates = new Map<string, StoredFacebookConnectState>();
+const FACEBOOK_CONNECT_STATE_TTL_SECONDS = 10 * 60;
 
-export function startFacebookConnect(input: {
+function getFacebookConnectKey(state: string) {
+  return `portal:facebook_connect:${state}`;
+}
+
+async function readFacebookConnectState(
+  state: string
+): Promise<StoredFacebookConnectState | null> {
+  if (!isRedisEnabled()) {
+    return facebookConnectStates.get(state) ?? null;
+  }
+
+  const redis = await getRedisClient();
+  const value = await redis.get(getFacebookConnectKey(state));
+  if (!value) return null;
+  return JSON.parse(value) as StoredFacebookConnectState;
+}
+
+async function writeFacebookConnectState(
+  state: StoredFacebookConnectState
+): Promise<void> {
+  if (!isRedisEnabled()) {
+    facebookConnectStates.set(state.state, state);
+    return;
+  }
+
+  const redis = await getRedisClient();
+  await redis.set(
+    getFacebookConnectKey(state.state),
+    JSON.stringify(state),
+    "EX",
+    FACEBOOK_CONNECT_STATE_TTL_SECONDS
+  );
+}
+
+async function deleteFacebookConnectState(state: string): Promise<void> {
+  if (!isRedisEnabled()) {
+    facebookConnectStates.delete(state);
+    return;
+  }
+
+  const redis = await getRedisClient();
+  await redis.del(getFacebookConnectKey(state));
+}
+
+export async function startFacebookConnect(input: {
   workspaceId: number;
   userId: number;
   now?: number;
 }) {
   const state = createFacebookConnectState(input);
-  facebookConnectStates.set(state.state, state);
+  await writeFacebookConnectState(state);
   return state;
 }
 
-export function storeFacebookAuthorizationCode(input: {
+export async function storeFacebookAuthorizationCode(input: {
   state: string;
   code: string;
 }) {
-  const stored = facebookConnectStates.get(input.state);
+  const stored = await readFacebookConnectState(input.state);
   if (!stored) {
     return false;
   }
 
-  facebookConnectStates.set(input.state, {
+  await writeFacebookConnectState({
     ...stored,
     authorizationCode: input.code,
   });
   return true;
 }
 
-export function validateStoredFacebookState(input: {
+export async function validateStoredFacebookState(input: {
   state: string;
   workspaceId: number;
   userId: number;
   now?: number;
 }) {
-  validateFacebookConnectState(facebookConnectStates.get(input.state), input);
-  const stored = facebookConnectStates.get(input.state);
+  const stored = await readFacebookConnectState(input.state);
+  validateFacebookConnectState(stored, input);
   if (!stored) {
     throw new Error("invalid facebook connect state");
   }
   return stored;
 }
 
-export function getStoredFacebookState(state: string) {
-  return facebookConnectStates.get(state) ?? null;
+export async function getStoredFacebookState(state: string) {
+  return readFacebookConnectState(state);
 }
 
-export function storeFacebookPages(input: {
+export async function storeFacebookPages(input: {
   state: string;
   pages: FacebookConnectPage[];
 }) {
-  const stored = facebookConnectStates.get(input.state);
+  const stored = await readFacebookConnectState(input.state);
   if (!stored) {
     throw new Error("invalid facebook connect state");
   }
 
-  facebookConnectStates.set(input.state, {
+  await writeFacebookConnectState({
     ...stored,
     pages: input.pages,
   });
 }
 
-export function consumeFacebookPage(input: {
+export async function consumeFacebookPage(input: {
   state: string;
   workspaceId: number;
   userId: number;
   pageId: string;
 }) {
-  const stored = validateStoredFacebookState(input);
+  const stored = await validateStoredFacebookState(input);
   const page = stored.pages?.find(candidate => candidate.id === input.pageId);
   if (!page) {
     throw new Error("facebook page was not authorized in this connect flow");
   }
 
-  facebookConnectStates.delete(input.state);
+  await deleteFacebookConnectState(input.state);
   return page;
 }
 

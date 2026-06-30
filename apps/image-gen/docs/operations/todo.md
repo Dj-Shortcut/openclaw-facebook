@@ -46,6 +46,9 @@ customer launch is allowed when these checks are true:
    admin APIs, and unreviewed OpenClaw routes are not publicly reachable.
 3. First billing mode is manual upgrade requests, using the already-built
    tenant-scoped upgrade request flow. Stripe/subscription billing is deferred.
+   Customers who start in Messenger should receive a low-friction portal
+   handoff link after manual approval/payment; KBO-dependent paid automation is
+   deferred.
 4. Owner monitoring is good enough for launch when `/admin/cost-dashboard` or
    `/admin/cost-summary` shows spend, quota blocks, provider failures, queue
    health, duplicate skips, and delivery failures without raw identifiers,
@@ -126,6 +129,7 @@ Required before broad customer launch:
 8. [ ] Verify tenant isolation across uploaded knowledge, extracted text, embeddings/retrieval artifacts, assistant memory, conversations, channel identifiers, generated prompts/outputs, billing, logs, support access, export, and deletion paths.
 9. [x] Provide customer-facing bot instructions, current generic prompt behavior copy, privacy controls, and export/deletion instructions.
 10. [x] Keep legacy style-picker/campaign assets removed and do not reintroduce style catalogs unless explicitly requested.
+11. [ ] Add secure Messenger-to-portal customer handoff after manual approval/payment, using a short-lived single-use link that opens the customer's workspace setup with minimal friction and without exposing raw PSIDs or customer content.
 
 Exit criteria: customer data is tenant-scoped by design, support/break-glass access
 is explicit and auditable, customer billing/privacy controls exist, and public
@@ -153,6 +157,7 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Add tenant-checked workspace name management in the customer portal
 - [x] Add tenant-checked workspace member visibility in the customer portal
 - [x] Add initial Facebook Page Connect authorization entrypoint for customer workspaces
+- [x] Add customer-facing Facebook Page Connect completion and Page selection controls
 - [x] Add tested REST portal auth guard for snapshot and customer-owned mutations
 - [x] Add tenant-scoped portal export/deletion request tracking for customer data controls
 - [x] Add customer-visible data request status summary and outage-safe request loading
@@ -173,6 +178,11 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Document the production customer portal database secret, migration, readiness, and smoke-test rollout order
 - [x] Add a production portal verifier for DATABASE_URL readiness and public endpoint checks
 - [x] Add launch billing and usage controls before broad customer launch. Current launch mode is manual upgrade requests with customer-visible free-plan usage; paid subscriptions are deferred.
+- [ ] Add zero-friction Messenger-to-portal handoff for approved customers before relying on the portal for onboarding
+  - Messenger presence alone is not portal authentication.
+  - Send a short-lived, single-use portal link in Messenger after manual approval/payment.
+  - Do not put raw PSIDs, tokens, message text, or tenant content in links/logs.
+  - Request Facebook Login/Meta OAuth only when needed for persistent account access or Page connection permissions.
 - [ ] Deploy and verify the `leaderbot.live` customer portal in production.
   - `leaderbot.live` must route to the tenant/customer portal, not the old gateway or brochure surface.
   - Production auth/session/env config must allow a customer to sign in and load their own workspace.

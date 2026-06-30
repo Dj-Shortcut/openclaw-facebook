@@ -46,6 +46,31 @@ Portal v1 is complete when a real customer can:
 12. Create export/deletion requests and see request history/status.
 13. Access `/privacy`, `/terms`, and `/data-deletion` from the portal surface.
 
+## Messenger-Origin Customer Handoff
+
+Many customers will first meet Leaderbot inside Messenger, not by typing
+`leaderbot.live` into a browser. Messenger presence is not the same thing as a
+portal login: Meta gives the app a Page-scoped sender identifier for the
+conversation, but that does not prove business ownership of a customer workspace
+or grant Page-management permissions.
+
+The intended low-friction path is:
+
+1. A customer starts in Messenger.
+2. After manual approval/payment, Leaderbot sends a customer-facing portal link
+   inside Messenger.
+3. That link contains a short-lived, single-use, signed handoff token tied to
+   the Messenger conversation and the intended workspace setup.
+4. Opening the link creates or resumes the customer's portal session and lands
+   directly in the workspace setup surface.
+5. Facebook Login or Meta OAuth is requested only when it is needed for account
+   recovery, persistent member access, or Page connection permissions.
+
+The handoff token must not expose raw PSIDs, access tokens, customer messages,
+or tenant content in the URL, logs, analytics, or support tooling. Tokens must
+expire quickly, be auditable, and be consumed once. Portal actions after handoff
+must still enforce workspace membership and tenant boundaries.
+
 Portal v1 passes production verification when:
 
 ```bash
@@ -59,6 +84,9 @@ passes against production URLs, and a manual portal smoke confirms:
 - AI identity changes persist and reload.
 - Workspace rename persists and reloads.
 - Messenger status/connect/disconnect controls are tenant-scoped.
+- Messenger-origin customers can follow the portal handoff with minimal friction
+  after manual approval/payment, while privileged Page connection still uses
+  Meta authorization.
 - Usage, upgrade request history, knowledge sources, privacy controls, and
   export/deletion request status load without cross-tenant data.
 - Public routing exposes only the portal, legal pages, intended health/readiness

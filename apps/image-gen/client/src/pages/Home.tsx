@@ -4,8 +4,10 @@ import { getLoginUrl } from "@/const";
 import { trpc } from "@/lib/trpc";
 import {
   Bot,
+  CheckCircle2,
   CreditCard,
   Database,
+  ExternalLink,
   FileDown,
   FileText,
   Info,
@@ -20,6 +22,14 @@ import {
   X,
 } from "lucide-react";
 import { useState } from "react";
+
+const FACEBOOK_CONNECT_STATE_KEY = "leaderbot.facebookConnectState";
+
+type FacebookConnectPage = {
+  id: string;
+  name: string;
+  grantedScopes: string[];
+};
 
 function StatusPill({ value }: { value: string }) {
   const toneClass =
@@ -94,6 +104,13 @@ function Home() {
     name: "",
     sourceReference: "",
   });
+  const [facebookConnectState, setFacebookConnectState] = useState<string | null>(() =>
+    typeof window === "undefined"
+      ? null
+      : window.localStorage.getItem(FACEBOOK_CONNECT_STATE_KEY)
+  );
+  const [facebookConnectPages, setFacebookConnectPages] = useState<FacebookConnectPage[]>([]);
+  const [facebookConnectIssue, setFacebookConnectIssue] = useState<string | null>(null);
   const portalSessionQuery = trpc.portal.auth.session.useQuery(undefined, {
     enabled: auth.isAuthenticated,
   });
@@ -156,9 +173,42 @@ function Home() {
       await utils.portal.usage.upgradeRequests.invalidate({ workspaceId });
     },
   });
+  const facebookStartMutation = trpc.portal.facebook.startConnect.useMutation({
+    onSuccess: data => {
+      setFacebookConnectIssue(null);
+      setFacebookConnectState(data.state);
+      setFacebookConnectPages([]);
+      window.localStorage.setItem(FACEBOOK_CONNECT_STATE_KEY, data.state);
+      if (data.authorizationUrl) {
+        window.location.assign(data.authorizationUrl);
+      } else {
+        setFacebookConnectIssue("Facebook OAuth is not configured for this portal.");
+      }
+    },
+  });
+  const facebookCompleteMutation = trpc.portal.facebook.completeConnect.useMutation({
+    onSuccess: data => {
+      setFacebookConnectIssue(null);
+      setFacebookConnectPages(data.pages);
+    },
+  });
+  const facebookSelectPageMutation = trpc.portal.facebook.selectPage.useMutation({
+    onSuccess: async () => {
+      if (!workspaceId) return;
+      setFacebookConnectIssue(null);
+      setFacebookConnectState(null);
+      setFacebookConnectPages([]);
+      window.localStorage.removeItem(FACEBOOK_CONNECT_STATE_KEY);
+      await utils.portal.channels.status.invalidate({ workspaceId });
+    },
+  });
   const facebookDisconnectMutation = trpc.portal.facebook.disconnect.useMutation({
     onSuccess: async () => {
       if (!workspaceId) return;
+      setFacebookConnectIssue(null);
+      setFacebookConnectState(null);
+      setFacebookConnectPages([]);
+      window.localStorage.removeItem(FACEBOOK_CONNECT_STATE_KEY);
       await utils.portal.channels.status.invalidate({ workspaceId });
     },
   });
@@ -255,6 +305,28 @@ function Home() {
   const requestUpgrade = () => {
     if (!workspaceId) return;
     upgradeRequestMutation.mutate({ workspaceId });
+  };
+  const startFacebookConnectFlow = () => {
+    if (!workspaceId) return;
+    setFacebookConnectIssue(null);
+    facebookStartMutation.mutate({ workspaceId });
+  };
+  const finishFacebookConnectFlow = () => {
+    if (!workspaceId || !facebookConnectState) return;
+    setFacebookConnectIssue(null);
+    facebookCompleteMutation.mutate({
+      workspaceId,
+      state: facebookConnectState,
+    });
+  };
+  const selectFacebookPage = (pageId: string) => {
+    if (!workspaceId || !facebookConnectState) return;
+    setFacebookConnectIssue(null);
+    facebookSelectPageMutation.mutate({
+      workspaceId,
+      state: facebookConnectState,
+      pageId,
+    });
   };
   const disconnectFacebook = () => {
     if (!workspaceId) return;
@@ -614,7 +686,18 @@ function Home() {
                   <MessageCircle className="h-5 w-5 text-cyan-200" />
                   <h2 className="text-lg font-semibold text-slate-50">Messenger</h2>
                 </div>
-                {facebookStatus !== "disconnected" ? (
+                {facebookStatus !== "connected" ? (
+                  <Button
+                    className="gap-2"
+                    disabled={!workspaceId || facebookStartMutation.isPending}
+                    size="sm"
+                    type="button"
+                    onClick={startFacebookConnectFlow}
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                    {facebookStatus === "disconnected" ? "Connect Page" : "Reconnect"}
+                  </Button>
+                ) : (
                   <Button
                     disabled={!workspaceId || facebookDisconnectMutation.isPending}
                     size="sm"
@@ -624,7 +707,7 @@ function Home() {
                   >
                     {facebookDisconnectMutation.isPending ? "Disconnecting" : "Disconnect"}
                   </Button>
-                ) : null}
+                )}
               </div>
               <div className="mt-5 space-y-3 text-sm">
                 <div className="flex items-center justify-between gap-3">
@@ -640,7 +723,79 @@ function Home() {
                   </span>
                 </div>
               </div>
-              {facebookDisconnectMutation.isSuccess ? (
+              {facebookConnectState && facebookStatus !== "connected" ? (
+                <div className="mt-5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div className="text-sm font-medium text-cyan-100">
+                        Facebook authorization pending
+                      </div>
+                      <div className="mt-1 text-sm text-cyan-100/75">
+                        Finish setup after returning from Meta.
+                      </div>
+                    </div>
+                    <Button
+                      className="gap-2 bg-cyan-200 text-slate-950 hover:bg-cyan-100"
+                      disabled={!workspaceId || facebookCompleteMutation.isPending}
+                      size="sm"
+                      type="button"
+                      onClick={finishFacebookConnectFlow}
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                      {facebookCompleteMutation.isPending ? "Checking" : "Finish setup"}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+              {facebookConnectPages.length > 0 ? (
+                <div className="mt-4 space-y-2">
+                  {facebookConnectPages.map(page => {
+                    const isSelecting =
+                      facebookSelectPageMutation.isPending &&
+                      facebookSelectPageMutation.variables?.pageId === page.id;
+                    return (
+                      <button
+                        className="flex w-full items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-left hover:border-cyan-400/60 disabled:opacity-60"
+                        disabled={facebookSelectPageMutation.isPending}
+                        key={page.id}
+                        type="button"
+                        onClick={() => selectFacebookPage(page.id)}
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium text-slate-100">
+                            {page.name}
+                          </span>
+                          <span className="mt-1 block text-xs text-slate-500">
+                            {page.grantedScopes.length} permissions granted
+                          </span>
+                        </span>
+                        <span className="text-sm text-cyan-200">
+                          {isSelecting ? "Connecting" : "Select"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {facebookConnectIssue ? (
+                <p className="mt-4 text-sm text-red-200">{facebookConnectIssue}</p>
+              ) : facebookStartMutation.error ? (
+                <p className="mt-4 text-sm text-red-200">
+                  Unable to start Facebook connection. Please try again.
+                </p>
+              ) : facebookCompleteMutation.error ? (
+                <p className="mt-4 text-sm text-red-200">
+                  Unable to finish Facebook connection. Please start again.
+                </p>
+              ) : facebookSelectPageMutation.error ? (
+                <p className="mt-4 text-sm text-red-200">
+                  Unable to connect that Page. Please try again.
+                </p>
+              ) : facebookSelectPageMutation.isSuccess ? (
+                <p className="mt-4 text-sm text-emerald-200">
+                  Messenger connected for this workspace.
+                </p>
+              ) : facebookDisconnectMutation.isSuccess ? (
                 <p className="mt-4 text-sm text-emerald-200">
                   Messenger disconnected for this workspace.
                 </p>
