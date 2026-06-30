@@ -27,6 +27,7 @@ These variables are required for the public Leaderbot WhatsApp number. See
 | `WHATSAPP_PHONE_NUMBER_ID` | WhatsApp Cloud API `/messages` endpoint | Must be the public number's phone-number ID, not the display number. |
 | `META_VERIFY_TOKEN` | Shared Meta webhook verification | Accepted on Messenger and WhatsApp routes. |
 | `WHATSAPP_VERIFY_TOKEN` | Dedicated WhatsApp webhook verification | Accepted only on `/webhook/whatsapp`; useful when Meta's WhatsApp setup uses a channel-specific token. |
+| `WHATSAPP_APP_SECRET` | Optional dedicated WhatsApp POST signature validation | Set this when WhatsApp is configured under a different Meta app than Messenger; otherwise `FB_APP_SECRET` is used. |
 | `WHATSAPP_BUSINESS_ACCOUNT_ID` | Meta Business diagnostics | Not required by runtime sends, but useful for setup checks. |
 
 ## 3. OpenAI paths

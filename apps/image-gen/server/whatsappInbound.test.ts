@@ -1,6 +1,9 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 
-import { extractWhatsAppEvents } from "./_core/inbound/whatsappInbound";
+import {
+  extractWhatsAppEvents,
+  logWhatsAppWebhookPayload,
+} from "./_core/inbound/whatsappInbound";
 
 const TEST_PRIVACY_PEPPER = "ci-whatsapp-pepper";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
@@ -114,5 +117,54 @@ describe("whatsappInbound audio normalization", () => {
 
     expect(events[0]?.messageType).toBe("audio");
     expect(events[0]?.audioId).toBe("ptt-id-1");
+  });
+});
+
+describe("whatsappInbound status logging", () => {
+  it("summarizes status webhooks without raw recipient or message identifiers", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const payload = {
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                statuses: [
+                  {
+                    id: "wamid.raw-message-id",
+                    recipient_id: "32469792656",
+                    status: "failed",
+                    errors: [
+                      {
+                        code: 131026,
+                        title: "Message undeliverable",
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    try {
+      logWhatsAppWebhookPayload(payload);
+      const loggedText = logSpy.mock.calls
+        .map(call => call.map(value => String(value)).join(" "))
+        .join("\n");
+
+      expect(loggedText).toContain("whatsapp_inbound_payload_summary");
+      expect(loggedText).toContain('"statusCount":1');
+      expect(loggedText).toContain('"failed":1');
+      expect(loggedText).toContain('"code":131026');
+      expect(loggedText).toContain("Message undeliverable");
+      expect(loggedText).not.toContain("32469792656");
+      expect(loggedText).not.toContain("wamid.raw-message-id");
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 });

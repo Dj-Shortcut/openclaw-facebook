@@ -79,6 +79,7 @@ async function postWebhook(
 describe("Meta webhook signature verification", () => {
   afterEach(() => {
     delete process.env.FB_APP_SECRET;
+    delete process.env.WHATSAPP_APP_SECRET;
   });
 
   it("rejects webhook requests with a missing signature", async () => {
@@ -126,6 +127,50 @@ describe("Meta webhook signature verification", () => {
     expect(response.status).toBe(200);
     expect(response.payload).toContain('"channel":"whatsapp"');
     expect(response.payload).toContain('"ok":true');
+  });
+
+  it("uses the dedicated WhatsApp app secret for WhatsApp webhook requests", async () => {
+    process.env.FB_APP_SECRET = "facebook-secret";
+    process.env.WHATSAPP_APP_SECRET = "whatsapp-secret";
+
+    const body = JSON.stringify({ object: "whatsapp_business_account", entry: [] });
+    const response = await postWebhook(
+      body,
+      buildSignature(body, "whatsapp-secret"),
+      "/webhook/whatsapp"
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.payload).toContain('"channel":"whatsapp"');
+  });
+
+  it("rejects WhatsApp webhook requests signed with the Facebook secret when a WhatsApp secret is configured", async () => {
+    process.env.FB_APP_SECRET = "facebook-secret";
+    process.env.WHATSAPP_APP_SECRET = "whatsapp-secret";
+
+    const body = JSON.stringify({ object: "whatsapp_business_account", entry: [] });
+    const response = await postWebhook(
+      body,
+      buildSignature(body, "facebook-secret"),
+      "/webhook/whatsapp"
+    );
+
+    expect(response.status).toBe(403);
+    expect(response.payload).toContain("Signature verification failed");
+  });
+
+  it("accepts WhatsApp webhook requests with only the dedicated WhatsApp app secret configured", async () => {
+    process.env.WHATSAPP_APP_SECRET = "whatsapp-secret";
+
+    const body = JSON.stringify({ object: "whatsapp_business_account", entry: [] });
+    const response = await postWebhook(
+      body,
+      buildSignature(body, "whatsapp-secret"),
+      "/webhook/whatsapp"
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.payload).toContain('"channel":"whatsapp"');
   });
 
   it("rejects webhook requests with an invalid signature", async () => {

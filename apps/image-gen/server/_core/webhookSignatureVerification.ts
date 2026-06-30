@@ -5,6 +5,19 @@ import { metaWebhookPublicPaths } from "./meta/webhookPaths";
 
 type MetaWebhookRequest = Request & { rawBody?: Buffer };
 
+function isWhatsAppWebhookRequest(req: Request): boolean {
+  const originalPath = req.originalUrl.split("?")[0] ?? "";
+  return originalPath === "/webhook/whatsapp" || originalPath.startsWith("/webhook/whatsapp/");
+}
+
+function getMetaWebhookAppSecret(req: Request): string {
+  if (isWhatsAppWebhookRequest(req)) {
+    return process.env.WHATSAPP_APP_SECRET?.trim() || process.env.FB_APP_SECRET?.trim() || "";
+  }
+
+  return process.env.FB_APP_SECRET?.trim() ?? "";
+}
+
 /**
  * Verifies Meta webhook signature using HMAC-SHA256
  * Protects against forged webhook events
@@ -20,7 +33,7 @@ export function verifyMetaWebhookSignature(
   }
 
   const signature = req.headers["x-hub-signature-256"];
-  const appSecret = process.env.FB_APP_SECRET;
+  const appSecret = getMetaWebhookAppSecret(req);
 
   // Fail closed if app secret is not configured
   if (!appSecret) {

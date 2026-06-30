@@ -26,7 +26,9 @@ is accepted only on `/webhook/whatsapp`, so it does not broaden Facebook webhook
 verification.
 
 Meta POST deliveries must include `X-Hub-Signature-256`. The app validates that
-signature with `FB_APP_SECRET` before dispatching the payload.
+signature with `WHATSAPP_APP_SECRET` when configured, falling back to
+`FB_APP_SECRET` for deployments where Messenger and WhatsApp use the same Meta
+app.
 
 ## Required Runtime Env Vars
 
@@ -36,7 +38,7 @@ These must be deployed as Fly secrets:
 | --- | --- |
 | `WHATSAPP_ACCESS_TOKEN` | WhatsApp Cloud API sends and media download |
 | `WHATSAPP_PHONE_NUMBER_ID` | WhatsApp Cloud API `/messages` endpoint |
-| `FB_APP_SECRET` | Meta webhook signature verification |
+| `WHATSAPP_APP_SECRET` or `FB_APP_SECRET` | Meta webhook POST signature verification |
 | `META_VERIFY_TOKEN` or `WHATSAPP_VERIFY_TOKEN` | Meta webhook GET verification |
 | `APP_BASE_URL` | Public generated/source image URLs |
 | `SOURCE_IMAGE_ALLOWED_HOSTS` | Source-image fetch allowlist |
@@ -50,6 +52,11 @@ Operationally useful:
 | --- | --- |
 | `WHATSAPP_BUSINESS_ACCOUNT_ID` | Meta Business Manager diagnostics |
 | `FB_APP_ID` | Meta app diagnostics |
+
+Use `WHATSAPP_APP_SECRET` when the WhatsApp Business Account / phone number is
+configured under a different Meta app than the Messenger Page integration. A
+wrong app secret causes real POST deliveries to fail signature validation even
+when webhook GET verification succeeds.
 
 Current Fly secret-name check on 2026-06-11 found all required WhatsApp runtime
 secret names present. Secret values were not printed or copied.
