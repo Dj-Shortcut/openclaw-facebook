@@ -1,4 +1,5 @@
 import { storageDelete, storageKeyFromPublicUrl } from "../storage";
+import { deletePortalHandoffTokensForMessengerUserKey } from "../db";
 import { deleteCostLedgerEntriesForUser } from "./costLedger";
 import { deleteFaceMemoryForUser } from "./faceMemory";
 import { safeLog } from "./messengerApi";
@@ -86,6 +87,10 @@ export async function deleteUserData(psid: string): Promise<void> {
 
   deleteStepsSucceeded = (await runStep("cost_ledger", async () => {
     await deleteCostLedgerEntriesForUser(userKey);
+  })) && deleteStepsSucceeded;
+
+  deleteStepsSucceeded = (await runStep("portal_handoff_tokens", async () => {
+    await deletePortalHandoffTokensForMessengerUserKey(userKey);
   })) && deleteStepsSucceeded;
 
   if (!state) {

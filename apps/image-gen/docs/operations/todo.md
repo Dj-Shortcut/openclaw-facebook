@@ -181,6 +181,9 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [ ] Add zero-friction Messenger-to-portal handoff for approved customers before relying on the portal for onboarding
   - Messenger presence alone is not portal authentication.
   - Send a short-lived, single-use portal link in Messenger after manual approval/payment.
+  - Storage boundary: `portalHandoffTokens` rows are scoped to one `workspaceId`; the opaque token is never stored, only its hash is persisted, and Messenger identity may be stored only as the privacy-peppered `messengerSenderUserKey`.
+  - Deletion boundary: `delete-my-data` must delete handoff rows for the erased Messenger `userKey`, including pending and consumed links.
+  - Consumption boundary: only the portal handoff route may consume a pending, unexpired token and convert it into that workspace's onboarding/session flow.
   - Do not put raw PSIDs, tokens, message text, or tenant content in links/logs.
   - Request Facebook Login/Meta OAuth only when needed for persistent account access or Page connection permissions.
 - [ ] Deploy and verify the `leaderbot.live` customer portal in production.
