@@ -1,8 +1,8 @@
 # Production Readiness
 
-Status: Not ready for broad public launch; ready for controlled production smoke after deploy.
+Status: Not ready for broad customer launch; live Messenger smoke and delete-data flow are operator-verified for controlled production operation.
 
-Last updated: 2026-06-21
+Last updated: 2026-06-30
 
 Canonical release strategy and open work are tracked in
 [`apps/image-gen/docs/operations/todo.md`](../apps/image-gen/docs/operations/todo.md).
@@ -34,10 +34,15 @@ This document is the deploy/smoke checklist for the current gateway surface.
 
 ## Remaining Blockers
 
-- Live Meta webhook and Graph API delivery still require manual smoke tests with the real Page.
 - Live image generation requires the separate `leaderbot-fb-image-gen` service key and OpenAI billing/key state to be healthy.
 - `npm audit --omit=dev --audit-level=high` could not complete from this Windows environment because the registry audit endpoint request failed with `EACCES`; rerun from CI or another network before broad launch.
-- GDPR consent/delete-my-data behavior must be verified at product level before broad public launch; the current plugin preserves access gating but does not implement a full public billing/privacy product by itself.
+- Broad customer launch still requires the remaining portal, billing, usage-control, monitoring, and tenant-isolation work tracked in the canonical backlog.
+
+## Latest Operator Verification
+
+- Live Messenger smoke was verified by operator on 2026-06-30 with the real Page.
+- `delete-my-data` / GDPR deletion behavior was verified by operator on 2026-06-30.
+- Messenger photo forwarding and storage-proxy delivery for generated/source images were verified by operator on 2026-06-30 with tester photo forwards.
 
 ## Required Fly Secrets / Env Vars
 

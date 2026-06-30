@@ -7,6 +7,7 @@
 
 - Last reviewed against code: **2026-06-21**
 - Verified commit: **`6e2ceb0`**
+- Latest operator production verification: **2026-06-30** live Messenger smoke and `delete-my-data` flow verified by operator.
 - Current direction: generic prompt-first image generation; legacy style-picker UI, quick-reply flows, and director-mode preset plumbing are removed. Internal style-preset compatibility may remain only as backend fallback.
 - Product direction: `leaderbot.live` becomes a tenant/customer portal for managing each customer's own AI. The OpenClaw/Messenger gateway remains shielded and is not the customer-facing app.
 - Historical audit and inventory files are not active plans. Keep valid open work here instead of reviving stale audit snapshots.
@@ -27,6 +28,42 @@ with targeted tests and metadata-only observability. Do not expand public access
 Meta permissions, paid provider usage, or customer self-serve features until the
 prior gate is proven in production.
 
+## Finish cut - 2026-06-30
+
+The controlled Messenger/image-generation launch is effectively through Gate 1:
+live Messenger smoke, source-photo delivery, storage-proxy delivery, and
+`delete-my-data` have been operator-verified.
+
+The remaining work is not "build the product"; it is release closure. Broad
+customer launch is allowed when these checks are true:
+
+1. `leaderbot.live` resolves to the customer portal and passes:
+   `pnpm --dir apps/image-gen deploy:verify-portal`.
+   Portal v1 scope is defined in `docs/leaderbot-portal.md`; do not expand it
+   during launch closure.
+2. Public route audit is recorded: portal root, legal pages, health/readiness,
+   metrics, and required Meta webhook routes are reachable; internal gateway UI,
+   admin APIs, and unreviewed OpenClaw routes are not publicly reachable.
+3. First billing mode is manual upgrade requests, using the already-built
+   tenant-scoped upgrade request flow. Stripe/subscription billing is deferred.
+4. Owner monitoring is good enough for launch when `/admin/cost-dashboard` or
+   `/admin/cost-summary` shows spend, quota blocks, provider failures, queue
+   health, duplicate skips, and delivery failures without raw identifiers,
+   prompts, tokens, source media, generated images, or customer messages.
+5. Tenant-isolation audit is recorded for portal data, knowledge, channel
+   identifiers, generated assets, deletion/export paths, billing metadata, logs,
+   support access, and break-glass behavior. Existing tenant-isolation tests must
+   pass before this is signed off.
+
+Explicitly defer these unless they become necessary for the launch decision:
+
+- exactly-once Messenger outbox semantics
+- channel-neutral usage-ledger consolidation
+- image gallery/history
+- generated-video support
+- full premium subscription management
+- removing remaining internal style-preset backend compatibility
+
 ### Gate 1: immediate stabilization
 
 Goal: keep the live Messenger bot reliable, bounded, and reversible while it is
@@ -41,8 +78,8 @@ Required before any broader traffic, marketing, or customer onboarding:
 5. [x] Keep privacy-safe logging defaults: hashed/pseudonymous sender identifiers, redacted errors, and no raw PSIDs, tokens, customer messages, uploaded knowledge, or generated prompts/outputs in logs.
 6. [x] Keep face memory disabled by default and retain the protected emergency disable route for rollback.
 7. [x] Maintain the documented Fly rollback workflow and non-destructive workspace migration behavior.
-8. [ ] Run and record a live Messenger smoke after each production deploy: webhook verification, signed POST delivery, text reply, prompt-first text-to-image, source-photo edit, quota-exhausted path, and Graph API send failure handling.
-9. [ ] Verify GDPR consent and `delete-my-data` behavior end-to-end with live or production-equivalent state, including generated assets, retained source images, face-memory state, and tenant/customer portal records. The smoke evidence validator now requires these deletion-proof checks before Gate 1 exit.
+8. [x] Run and record a live Messenger smoke after each production deploy: webhook verification, signed POST delivery, text reply, prompt-first text-to-image, source-photo edit, quota-exhausted path, and Graph API send failure handling. Operator-verified on 2026-06-30.
+9. [x] Verify GDPR consent and `delete-my-data` behavior end-to-end with live or production-equivalent state, including generated assets, retained source images, face-memory state, and tenant/customer portal records. Operator-verified on 2026-06-30.
 10. [x] Add a release checklist entry that confirms `/healthz`, `/readyz`, `/metrics`, queue depth, failed/dead-lettered jobs, and event-loop p95/p99 before and after deploy.
 
 Exit criteria: live smoke passes, deletion proof is recorded, no public route
@@ -62,9 +99,9 @@ access:
 4. [x] Add per-user daily spend caps, a global Facebook daily spend cap, and monthly cost cap enforcement.
 5. [x] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, estimated cost, final cost, status, and UTC period.
 6. [x] Add richer provider usage dimensions to cost-ledger entries where providers expose safe metadata.
-7. [ ] Add owner cost alerts and an owner dashboard for spend, quota blocks, duplicate skips, provider failures, queue health, and delivery failures. Initial admin-only aggregate cost dashboard exists at `/admin/cost-dashboard` with duplicate-skip and delivery-failure counts; richer failure drilldown UX remains open.
-8. [ ] Continue verifying storage-proxy delivery under Messenger crawler constraints, including generated outputs and retained source images.
-9. [ ] Evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory.
+7. [x] Add owner cost alerts and an owner dashboard for spend, quota blocks, duplicate skips, provider failures, queue health, and delivery failures. Admin-only aggregate cost monitoring exists at `/admin/cost-summary` and `/admin/cost-dashboard`; richer failure drilldown UX is deferred.
+8. [x] Continue verifying storage-proxy delivery under Messenger crawler constraints, including generated outputs and retained source images. Operator-verified on 2026-06-30 with tester photo forwards through Messenger.
+9. [ ] Deferred: evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory.
 10. [x] Keep public legal pages current (`/privacy`, `/terms`, `/data-deletion`) and aligned with Meta App Review, face-memory status, retention, and deletion behavior. Current image-gen runtime legal pages include tested privacy, terms, and data-deletion routes; future portal relocation remains a Gate 3 task.
 11. [x] Document Meta App Review impact for each new Messenger capability and avoid permission expansion unless product/policy approval is explicit. Current review notes live in `apps/image-gen/docs/operations/meta-app-review.md`; keep them updated for future Messenger capability changes.
 
@@ -79,16 +116,16 @@ exposing internal gateway controls or cross-tenant data.
 
 Required before broad customer launch:
 
-1. [ ] Design the `leaderbot.live` tenant/customer portal as a real app, not a brochure site.
-2. [ ] Define the tenant model for customer workspace, owned AI identity, channel connections, knowledge, usage, billing, and privacy controls.
-3. [ ] Add portal authentication.
-4. [ ] Add billing and usage controls, including user-facing balance/spend overview and upgrade prompts.
-5. [ ] Move public legal routes (`/privacy`, `/terms`, `/data-deletion`) into the portal surface before pointing customer traffic there.
+1. [x] Design the `leaderbot.live` tenant/customer portal as a real app, not a brochure site.
+2. [x] Define the tenant model for customer workspace, owned AI identity, channel connections, knowledge, usage, billing, and privacy controls.
+3. [x] Add portal authentication.
+4. [x] Add launch billing and usage controls: free-plan balance, upgrade prompt, tenant-scoped manual upgrade requests, and owner audit metadata. Paid Stripe/subscription billing is deferred.
+5. [x] Move public legal routes (`/privacy`, `/terms`, `/data-deletion`) into the portal surface before pointing customer traffic there. React portal pages and local footer links exist; production routing verification remains part of the public route audit.
 6. [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health/legal/customer-app surfaces.
-7. [ ] Move remaining feature-specific quota counters toward a single channel-neutral, tenant/workspace-scoped usage ledger before paid rollout.
+7. [ ] Move remaining feature-specific quota counters toward a single channel-neutral, tenant/workspace-scoped usage ledger before paid rollout. Deferred unless paid rollout starts.
 8. [ ] Verify tenant isolation across uploaded knowledge, extracted text, embeddings/retrieval artifacts, assistant memory, conversations, channel identifiers, generated prompts/outputs, billing, logs, support access, export, and deletion paths.
 9. [x] Provide customer-facing bot instructions, current generic prompt behavior copy, privacy controls, and export/deletion instructions.
-10. [ ] Keep legacy style-picker/campaign assets removed and do not reintroduce style catalogs unless explicitly requested.
+10. [x] Keep legacy style-picker/campaign assets removed and do not reintroduce style catalogs unless explicitly requested.
 
 Exit criteria: customer data is tenant-scoped by design, support/break-glass access
 is explicit and auditable, customer billing/privacy controls exist, and public
@@ -105,8 +142,8 @@ traffic cannot reach internal gateway admin/API surfaces.
 
 ### Product & bot-ervaring
 
-- [ ] Design the `leaderbot.live` tenant/customer portal as a real app, not a brochure site
-- [ ] Define tenant model: customer workspace, owned AI identity, channel connections, knowledge, usage, and privacy controls
+- [x] Design the `leaderbot.live` tenant/customer portal as a real app, not a brochure site
+- [x] Define tenant model: customer workspace, owned AI identity, channel connections, knowledge, usage, and privacy controls
 - [x] Add tenant model foundation: knowledge sources + privacy controls persistence and portal snapshot exposure
 - [x] Add tenant-checked customer portal API for knowledge source registration and listing
 - [x] Add customer-facing knowledge source registration and status list to the portal dashboard
@@ -135,20 +172,20 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Add production readiness guard for the customer portal database configuration
 - [x] Document the production customer portal database secret, migration, readiness, and smoke-test rollout order
 - [x] Add a production portal verifier for DATABASE_URL readiness and public endpoint checks
-- [ ] Add billing and usage controls before broad customer launch
+- [x] Add launch billing and usage controls before broad customer launch. Current launch mode is manual upgrade requests with customer-visible free-plan usage; paid subscriptions are deferred.
 - [ ] Deploy and verify the `leaderbot.live` customer portal in production.
   - `leaderbot.live` must route to the tenant/customer portal, not the old gateway or brochure surface.
   - Production auth/session/env config must allow a customer to sign in and load their own workspace.
   - Production portal smoke must cover workspace details, AI identity/instructions, Messenger status/connect controls, usage, privacy controls, and export/deletion request status.
   - Public production surface must expose only the customer portal, legal pages, health/readiness/metrics as intended, and required webhook routes; internal gateway/admin APIs must remain shielded.
-- [ ] Verify GDPR deletion end-to-end before broad customer launch
+- [x] Verify GDPR deletion end-to-end before broad customer launch. Operator-verified on 2026-06-30.
 - [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health routes
-- [ ] Move public legal routes (`/privacy`, `/terms`, `/data-deletion`) into the portal surface before pointing customer traffic there. Initial React portal pages and local footer links exist; production routing and Meta review verification remain open.
+- [x] Move public legal routes (`/privacy`, `/terms`, `/data-deletion`) into the portal surface before pointing customer traffic there. React portal pages and local footer links exist; production route verification remains part of the public route audit.
 - [x] Remove legacy campaign/style assets that do not support the portal direction
-- [ ] Observe generic text-to-image quality before removing remaining internal style-preset backend compatibility
+- [ ] Deferred: observe generic text-to-image quality before removing remaining internal style-preset backend compatibility
 - [x] Create "upgrade to premium" prompt when limit reached
-- [ ] Add image gallery/history for users
-- [ ] Plan Messenger generated-video support before implementation
+- [ ] Deferred: add image gallery/history for users
+- [ ] Deferred: plan Messenger generated-video support before implementation
   - Uploaded Messenger videos remain unsupported input.
   - Generated video is future output only, behind a feature flag.
   - Future video provider calls must reserve quota before any paid external request, commit on usable success, and release or expire on failure.
@@ -195,13 +232,13 @@ Open cost-control work:
 5. [x] Add global Facebook daily spend cap.
 6. [x] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, estimated cost, final cost, and status. Image, audio transcription, and generated-video attempts now write metadata-only entries and reconcile success/failure status; image plus optionally-priced audio/video attempts populate final cost when the estimate is complete.
 7. [x] Add richer provider usage dimensions to cost-ledger entries where providers expose safe metadata.
-8. [ ] Add owner dashboard for Facebook spend by day/month, account/page, `userKey`, blocked attempts, duplicate skips, and provider failures. The admin-only cost summary route now includes stored spend plus open/failed/blocked/status counts and Messenger generation queue health; `/admin/cost-dashboard` now renders an initial aggregate owner view with duplicate-skip and delivery-failure counts without raw identifiers or prompt content.
-9. [ ] Add user-facing balance/spend overview before paid rollout. Initial free-plan image balance, rate-limit context, blocked count, and upgrade prompt are now visible in the customer portal; paid spend and billing integration remain open.
+8. [x] Add owner dashboard for Facebook spend by day/month, account/page, `userKey`, blocked attempts, duplicate skips, and provider failures. The admin-only cost summary route includes stored spend plus open/failed/blocked/status counts and Messenger generation queue health; `/admin/cost-dashboard` renders an aggregate owner view with duplicate-skip and delivery-failure counts without raw identifiers or prompt content. Richer drilldowns are deferred.
+9. [x] Add user-facing balance/spend overview before paid rollout. Initial free-plan image balance, rate-limit context, blocked count, and upgrade prompt are visible in the customer portal; paid spend and subscription billing are deferred.
 10. [x] Add monthly cost cap enforcement.
 11. [x] Send cost alerts to owner for spend-cap blocks.
 12. [x] Add external uptime monitor for `/healthz`.
 13. [x] Add a dedicated generated-video quota namespace before enabling any video provider call.
-14. [ ] Move remaining feature-specific quota counters toward a single channel-neutral usage ledger before paid rollout.
+14. [ ] Deferred: move remaining feature-specific quota counters toward a single channel-neutral usage ledger before paid rollout.
 
 ### Cost Ledger Reliability Hardening (Phase 2)
 
@@ -226,25 +263,25 @@ Quota drift investigation note:
 ### Opslag & platform
 
 - [x] Use durable storage proxy for generated images and retained source images
-- [ ] Continue verifying storage-proxy delivery under Messenger crawler constraints
+- [x] Continue verifying storage-proxy delivery under Messenger crawler constraints. Operator-verified on 2026-06-30 with tester photo forwards through Messenger.
 - [x] Run dedicated Messenger image-generation worker in production with Redis-backed queue enabled
-- [ ] Evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory
+- [ ] Deferred: evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory
 
 ### Premium tier (ready but inactive)
 
-- [ ] Design premium tier database schema
-- [ ] Implement payment integration
-- [ ] Create premium subscription management
-- [ ] Implement premium quota limits
-- [ ] Add premium feature flags
+- [ ] Deferred: design premium tier database schema
+- [ ] Deferred: implement payment integration
+- [ ] Deferred: create premium subscription management
+- [ ] Deferred: implement premium quota limits
+- [ ] Deferred: add premium feature flags
 
 ### Testing & docs
 
-- [ ] Test cost tracking
+- [x] Test cost tracking
 - [x] P1/P2 [owner: image-gen-runtime-test] Add targeted cost-ledger reliability tests for concurrent append/update behavior, overflow observability, midnight-crossing update reconciliation, and delete-cleanup latency under multi-period user history.
 - [x] Create setup guide for Meta configuration
 - [x] Document operator-facing prompt routing and OpenClaw-vs-image-generation fallback behavior separately from the completed customer-facing bot instructions. See `../../../../docs/operator-prompt-routing.md`.
-- [ ] Provide cost monitoring dashboard. Initial admin-only aggregate view exists at `/admin/cost-dashboard` with duplicate-skip and delivery-failure counts; production dashboard polish and failure drilldowns remain open.
+- [x] Provide cost monitoring dashboard. Admin-only aggregate view exists at `/admin/cost-dashboard` with duplicate-skip and delivery-failure counts; production dashboard polish and failure drilldowns are deferred.
 
 ### Maintenance backlog
 
