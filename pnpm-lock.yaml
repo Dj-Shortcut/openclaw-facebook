@@ -16,7 +16,7 @@ importers:
         specifier: ^26.0.1
         version: 26.0.1
       openclaw:
-        specifier: ^2026.6.10
+        specifier: ^2026.6.11
         version: 2026.6.11
       typescript:
         specifier: ^6.0.3
