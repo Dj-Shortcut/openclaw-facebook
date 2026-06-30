@@ -2,6 +2,7 @@ node_modules/
 .pnpm-store/
 dist/
 coverage/
+reports/
 *.tsbuildinfo
 .fallow/report*.json
 .fallow/*-report*.json
