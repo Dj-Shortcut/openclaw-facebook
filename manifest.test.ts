@@ -5,15 +5,19 @@ import { MessengerConfigSchema } from "./src/config-schema.js";
 describe("openclaw plugin manifest", () => {
   it("publishes facebook as the only active channel", () => {
     const manifest = JSON.parse(readFileSync("openclaw.plugin.json", "utf8")) as {
+      name?: unknown;
+      description?: unknown;
       channels?: unknown;
       legacyPluginIds?: unknown;
       channelEnvVars?: Record<string, unknown>;
       channelConfigs?: Record<string, { schema?: unknown; preferOver?: unknown }>;
     };
 
+    expect(manifest.name).toBe("Facebook");
+    expect(manifest.description).toBe("Facebook Page Messenger direct messages via Meta webhooks.");
     expect(manifest.channels).toEqual(["facebook"]);
     expect(manifest.legacyPluginIds).toEqual(["messenger"]);
-    expect(Object.keys(manifest.channelEnvVars ?? {})).toEqual(["facebook"]);
+    expect(manifest.channelEnvVars).toBeUndefined();
     expect(Object.keys(manifest.channelConfigs ?? {})).toEqual(["facebook"]);
     expect(manifest.channelConfigs?.facebook?.preferOver).toEqual(["messenger"]);
     expect(manifest.channelConfigs?.facebook?.schema).toMatchObject({
@@ -50,18 +54,6 @@ describe("openclaw plugin manifest", () => {
       facebookSchema.properties?.accounts?.additionalProperties?.properties
         ?.leaderbotBridgeEnabled?.default,
     ).toBeUndefined();
-    expect(manifest.channelEnvVars?.facebook).toEqual(
-      expect.arrayContaining([
-        "FACEBOOK_PAGE_ID",
-        "FACEBOOK_PAGE_ACCESS_TOKEN",
-        "FACEBOOK_APP_SECRET",
-        "FACEBOOK_VERIFY_TOKEN",
-        "MESSENGER_PAGE_ID",
-        "MESSENGER_PAGE_ACCESS_TOKEN",
-        "MESSENGER_APP_SECRET",
-        "MESSENGER_VERIFY_TOKEN",
-      ]),
-    );
   });
 });
 
@@ -92,8 +84,8 @@ describe("package openclaw metadata", () => {
       node: ">=24.15.0",
     });
     expect(pkg.openclaw?.compat).toEqual({
-      pluginApi: ">=2026.5.19",
-      minGatewayVersion: "2026.5.19",
+      pluginApi: ">=2026.6.10",
+      minGatewayVersion: "2026.6.10",
     });
     expect(pkg.openclaw?.build).toEqual({
       openclawVersion: "2026.6.10",
@@ -102,7 +94,7 @@ describe("package openclaw metadata", () => {
     expect(pkg.openclaw?.install).toEqual({
       clawhubSpec: "clawhub:@dj-shortcut/facebook",
       defaultChoice: "clawhub",
-      minHostVersion: ">=2026.5.19",
+      minHostVersion: ">=2026.6.10",
     });
     expect(pkg.openclaw?.extensions).toEqual(["./dist/index.js"]);
     expect(pkg.openclaw?.runtimeExtensions).toEqual(["./dist/index.js"]);

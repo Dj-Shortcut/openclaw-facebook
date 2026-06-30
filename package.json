@@ -78,7 +78,7 @@
     "zod": "^4.4.3"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.19"
+    "openclaw": ">=2026.6.10"
   },
   "devDependencies": {
     "@types/node": "^25.9.4",
@@ -88,8 +88,8 @@
   },
   "openclaw": {
     "compat": {
-      "pluginApi": ">=2026.5.19",
-      "minGatewayVersion": "2026.5.19"
+      "pluginApi": ">=2026.6.10",
+      "minGatewayVersion": "2026.6.10"
     },
     "build": {
       "openclawVersion": "2026.6.10",
@@ -98,7 +98,7 @@
     "install": {
       "clawhubSpec": "clawhub:@dj-shortcut/facebook",
       "defaultChoice": "clawhub",
-      "minHostVersion": ">=2026.5.19"
+      "minHostVersion": ">=2026.6.10"
     },
     "extensions": [
       "./dist/index.js"
