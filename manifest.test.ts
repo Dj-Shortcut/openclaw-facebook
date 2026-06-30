@@ -84,17 +84,17 @@ describe("package openclaw metadata", () => {
       node: ">=24.15.0",
     });
     expect(pkg.openclaw?.compat).toEqual({
-      pluginApi: ">=2026.6.10",
-      minGatewayVersion: "2026.6.10",
+      pluginApi: ">=2026.6.11",
+      minGatewayVersion: "2026.6.11",
     });
     expect(pkg.openclaw?.build).toEqual({
-      openclawVersion: "2026.6.10",
-      pluginSdkVersion: "2026.6.10",
+      openclawVersion: "2026.6.11",
+      pluginSdkVersion: "2026.6.11",
     });
     expect(pkg.openclaw?.install).toEqual({
       clawhubSpec: "clawhub:@dj-shortcut/facebook",
       defaultChoice: "clawhub",
-      minHostVersion: ">=2026.6.10",
+      minHostVersion: ">=2026.6.11",
     });
     expect(pkg.openclaw?.extensions).toEqual(["./dist/index.js"]);
     expect(pkg.openclaw?.runtimeExtensions).toEqual(["./dist/index.js"]);
