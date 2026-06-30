@@ -303,6 +303,37 @@ export const workspaceUpgradeRequests = mysqlTable(
 export type WorkspaceUpgradeRequest = typeof workspaceUpgradeRequests.$inferSelect;
 export type InsertWorkspaceUpgradeRequest = typeof workspaceUpgradeRequests.$inferInsert;
 
+export const portalHandoffTokens = mysqlTable(
+  "portalHandoffTokens",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspaceId").notNull(),
+    tokenHash: varchar("tokenHash", { length: 96 }).notNull(),
+    messengerSenderUserKey: varchar("messengerSenderUserKey", { length: 96 }),
+    purpose: mysqlEnum("purpose", ["workspace_onboarding"]).notNull(),
+    status: mysqlEnum("status", ["pending", "consumed", "expired", "revoked"])
+      .default("pending")
+      .notNull(),
+    expiresAt: timestamp("expiresAt").notNull(),
+    consumedAt: timestamp("consumedAt"),
+    createdByUserId: int("createdByUserId"),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+    updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    tokenHashUnique: uniqueIndex("portalHandoffTokens_tokenHash_unique").on(
+      table.tokenHash
+    ),
+    workspaceStatusIdx: index("portalHandoffTokens_workspace_status_idx").on(
+      table.workspaceId,
+      table.status
+    ),
+  })
+);
+
+export type PortalHandoffToken = typeof portalHandoffTokens.$inferSelect;
+export type InsertPortalHandoffToken = typeof portalHandoffTokens.$inferInsert;
+
 export const workspaceUsageDaily = mysqlTable(
   "workspaceUsageDaily",
   {

@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { storageDeleteMock, deleteProviderVideoForUserMock } = vi.hoisted(() => ({
+const {
+  storageDeleteMock,
+  deleteProviderVideoForUserMock,
+  deletePortalHandoffTokensForMessengerUserKeyMock,
+} = vi.hoisted(() => ({
   storageDeleteMock: vi.fn(async () => undefined),
   deleteProviderVideoForUserMock: vi.fn(async () => undefined),
+  deletePortalHandoffTokensForMessengerUserKeyMock: vi.fn(async () => 0),
 }));
 
 vi.mock("./storage", async importOriginal => {
@@ -10,6 +15,14 @@ vi.mock("./storage", async importOriginal => {
   return {
     ...actual,
     storageDelete: storageDeleteMock,
+  };
+});
+vi.mock("./db", async importOriginal => {
+  const actual = await importOriginal<typeof import("./db")>();
+  return {
+    ...actual,
+    deletePortalHandoffTokensForMessengerUserKey:
+      deletePortalHandoffTokensForMessengerUserKeyMock,
   };
 });
 vi.mock("./_core/video-generation/videoProviderRegistry", async importOriginal => {
@@ -52,6 +65,8 @@ describe("data deletion service", () => {
     resetStateStore();
     storageDeleteMock.mockReset();
     deleteProviderVideoForUserMock.mockReset();
+    deletePortalHandoffTokensForMessengerUserKeyMock.mockReset();
+    deletePortalHandoffTokensForMessengerUserKeyMock.mockResolvedValue(0);
     if (originalRedisUrl === undefined) {
       delete process.env.REDIS_URL;
     } else {
@@ -171,6 +186,19 @@ describe("data deletion service", () => {
         userKey: otherUserKey,
       }),
     ]);
+  });
+
+  it("deletes portal handoff tokens for the erased Messenger user key", async () => {
+    const psid = "delete-handoff-token-user";
+    const userKey = anonymizePsid(psid);
+
+    await Promise.resolve(getOrCreateState(psid));
+
+    await deleteUserData(psid);
+
+    expect(deletePortalHandoffTokensForMessengerUserKeyMock).toHaveBeenCalledWith(
+      userKey
+    );
   });
 
   it("keeps user state when a required deletion step fails", async () => {

@@ -12,6 +12,7 @@ import {
   InsertImageRequest,
   InsertMessengerState,
   InsertNotificationLog,
+  InsertPortalHandoffToken,
   InsertUsageStats,
   InsertUser,
   InsertWorkspace,
@@ -22,6 +23,7 @@ import {
   InsertWorkspaceUpgradeRequest,
   messengerState,
   notificationLog,
+  portalHandoffTokens,
   usageStats,
   users,
   workspaceMembers,
@@ -456,8 +458,13 @@ function normalizeWorkspacePrivacySettings(
   };
 }
 
+function unwrapDriverResult(result: unknown): unknown {
+  return Array.isArray(result) ? result[0] : result;
+}
+
 function getInsertedId(result: unknown, label: string): number {
-  const insertId = (result as { insertId?: unknown } | undefined)?.insertId;
+  const driverResult = unwrapDriverResult(result);
+  const insertId = (driverResult as { insertId?: unknown } | undefined)?.insertId;
 
   if (typeof insertId === "number" && Number.isSafeInteger(insertId) && insertId > 0) {
     return insertId;
@@ -478,6 +485,28 @@ function getInsertedId(result: unknown, label: string): number {
   }
 
   throw new Error(`${label} insert did not return an id`);
+}
+
+function getAffectedRows(result: unknown): number {
+  const driverResult = unwrapDriverResult(result);
+  const affectedRows = (driverResult as { affectedRows?: unknown } | undefined)
+    ?.affectedRows;
+
+  if (typeof affectedRows === "number" && Number.isSafeInteger(affectedRows)) {
+    return affectedRows;
+  }
+
+  if (typeof affectedRows === "bigint") {
+    const numericRows = Number(affectedRows);
+    return Number.isSafeInteger(numericRows) ? numericRows : 0;
+  }
+
+  if (typeof affectedRows === "string") {
+    const numericRows = Number(affectedRows);
+    return Number.isSafeInteger(numericRows) ? numericRows : 0;
+  }
+
+  return 0;
 }
 
 export async function listWorkspaceKnowledgeSources(workspaceId: number) {
@@ -818,6 +847,88 @@ export async function createWorkspaceUpgradeRequest(
 
     return created[0];
   });
+}
+
+export async function createPortalHandoffToken(values: InsertPortalHandoffToken) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("create_portal_handoff_token");
+    throw new Error("Database unavailable: portal handoff token was not persisted");
+  }
+
+  const insertResult = await db.insert(portalHandoffTokens).values(values);
+  const insertedId = getInsertedId(insertResult, "portal handoff token");
+
+  const created = await db
+    .select()
+    .from(portalHandoffTokens)
+    .where(eq(portalHandoffTokens.id, insertedId))
+    .limit(1);
+
+  if (!created[0]) {
+    throw new Error("Portal handoff token insert succeeded but read-back failed");
+  }
+
+  return created[0];
+}
+
+export async function getPortalHandoffTokenByHash(tokenHash: string) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("get_portal_handoff_token_by_hash");
+    throw new Error("Database unavailable: portal handoff token was not loaded");
+  }
+
+  const result = await db
+    .select()
+    .from(portalHandoffTokens)
+    .where(eq(portalHandoffTokens.tokenHash, tokenHash))
+    .limit(1);
+
+  return result[0] ?? null;
+}
+
+export async function markPortalHandoffTokenConsumed(tokenHash: string) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("mark_portal_handoff_token_consumed");
+    throw new Error("Database unavailable: portal handoff token was not consumed");
+  }
+
+  const now = new Date();
+  const result = await db
+    .update(portalHandoffTokens)
+    .set({
+      status: "consumed",
+      consumedAt: now,
+    })
+    .where(
+      and(
+        eq(portalHandoffTokens.tokenHash, tokenHash),
+        eq(portalHandoffTokens.status, "pending")
+      )
+    );
+
+  return getAffectedRows(result) > 0;
+}
+
+export async function deletePortalHandoffTokensForMessengerUserKey(
+  messengerSenderUserKey: string
+) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("delete_portal_handoff_tokens_for_messenger_user");
+    if (process.env.NODE_ENV !== "production") {
+      return 0;
+    }
+    throw new Error("Database unavailable: portal handoff tokens were not deleted");
+  }
+
+  const result = await db
+    .delete(portalHandoffTokens)
+    .where(eq(portalHandoffTokens.messengerSenderUserKey, messengerSenderUserKey));
+
+  return getAffectedRows(result);
 }
 
 export async function upsertChannelConnection(values: InsertChannelConnection) {
