@@ -47,6 +47,13 @@ const adminCostDashboardRouteLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+const debugBuildRouteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 function currentUtcPeriod(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -219,6 +226,7 @@ export function registerSentryDebugRoute(app: express.Express) {
 export function registerDebugRoutes(app: express.Express, gitSha: string) {
   app.get(
     "/debug/build",
+    debugBuildRouteLimiter,
     createAdminAuthRateLimiter({ eventName: "debug_build_auth_rate_limited" }),
     (req, res) => {
       if (

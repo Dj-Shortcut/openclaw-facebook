@@ -223,9 +223,21 @@ function logMessengerWebhookRejected(reason: string, path: string): void {
   logVerbose(`messenger webhook rejected: ${reason} path=${path}`);
 }
 
-function readPositiveIntEnv(name: string): number | null {
-  const value = Number(process.env[name]);
-  return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
+function readPositiveIntEnvValue(value: string | undefined): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
+}
+
+function readMessengerGatewayDailyImageForwardCap(): number | null {
+  return readPositiveIntEnvValue(process.env.MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP);
+}
+
+function readMessengerGatewayDailyAudioTranscriptionCap(): number | null {
+  return readPositiveIntEnvValue(process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP);
+}
+
+function readMessengerGatewayDailyLeaderbotEventForwardCap(): number | null {
+  return readPositiveIntEnvValue(process.env.MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP);
 }
 
 function utcDayKey(now = Date.now()): string {
@@ -259,11 +271,11 @@ export function resetMessengerGatewayDailyImageForwardBudgetForTests(): void {
 
 function reserveMessengerGatewayDailyBudget(params: {
   accountId: string;
-  envName: string;
+  cap: number | null;
   counters: Map<string, { count: number; expiresAt: number }>;
   now?: number;
 }): { ok: true; count: number; cap: number | null } | { ok: false; count: number; cap: number } {
-  const cap = readPositiveIntEnv(params.envName);
+  const cap = params.cap;
   if (!cap) {
     return { ok: true, count: 0, cap: null };
   }
@@ -290,7 +302,7 @@ export function reserveMessengerGatewayDailyImageForwardBudget(params: {
 }): { ok: true; count: number; cap: number | null } | { ok: false; count: number; cap: number } {
   return reserveMessengerGatewayDailyBudget({
     accountId: params.accountId,
-    envName: "MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP",
+    cap: readMessengerGatewayDailyImageForwardCap(),
     counters: messengerGatewayDailyImageForwardCounts,
     now: params.now,
   });
@@ -302,7 +314,7 @@ export function reserveMessengerGatewayDailyAudioTranscriptionBudget(params: {
 }): { ok: true; count: number; cap: number | null } | { ok: false; count: number; cap: number } {
   return reserveMessengerGatewayDailyBudget({
     accountId: params.accountId,
-    envName: "MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP",
+    cap: readMessengerGatewayDailyAudioTranscriptionCap(),
     counters: messengerGatewayDailyAudioTranscriptionCounts,
     now: params.now,
   });
@@ -314,7 +326,7 @@ export function reserveMessengerGatewayDailyLeaderbotEventForwardBudget(params: 
 }): { ok: true; count: number; cap: number | null } | { ok: false; count: number; cap: number } {
   return reserveMessengerGatewayDailyBudget({
     accountId: params.accountId,
-    envName: "MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP",
+    cap: readMessengerGatewayDailyLeaderbotEventForwardCap(),
     counters: messengerGatewayDailyLeaderbotEventForwardCounts,
     now: params.now,
   });

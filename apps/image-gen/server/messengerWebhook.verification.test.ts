@@ -42,6 +42,7 @@ async function getWebhook(
   let signatureMiddlewareCalls = 0;
 
   if (options.includeSignatureMiddleware) {
+    // lgtm[js/missing-rate-limiting] Test-only route wrapper used to count signature middleware calls.
     app.use("/webhook", (req, res, next) => {
       signatureMiddlewareCalls += 1;
       verifyMetaWebhookSignature(req, res, next);

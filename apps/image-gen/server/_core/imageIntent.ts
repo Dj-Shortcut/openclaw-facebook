@@ -67,8 +67,40 @@ const SOURCE_IMAGE_TRANSFORM_PATTERNS = [
   /\bzet\s+(?:me|mij|hem|haar|ons)\s+(?:neer\s+)?als\b/iu,
 ];
 
-const VISUAL_CORRECTION_SUBJECT =
-  "(?:samurai|samoerai|persoon|mens|man|vrouw|gezicht|paard|robot|soldaat|krijger|gladiator|ninja|stad|landschap|logo|poster|tekst|titel|zwaard|katana|helm|subject|person|face|horse|warrior|city|landscape|text|title|sword)";
+const VISUAL_CORRECTION_SUBJECT_WORDS = new Set([
+  "samurai",
+  "samoerai",
+  "persoon",
+  "mens",
+  "man",
+  "vrouw",
+  "gezicht",
+  "paard",
+  "robot",
+  "soldaat",
+  "krijger",
+  "gladiator",
+  "ninja",
+  "stad",
+  "landschap",
+  "logo",
+  "poster",
+  "tekst",
+  "titel",
+  "zwaard",
+  "katana",
+  "helm",
+  "subject",
+  "person",
+  "face",
+  "horse",
+  "warrior",
+  "city",
+  "landscape",
+  "text",
+  "title",
+  "sword",
+]);
 
 const SCREEN_REFERENCE_PATTERNS = [/\b(?:screenshot|screen)\b/iu];
 
@@ -100,24 +132,38 @@ export function isSourceImageTransformRequest(text: string): boolean {
   return SOURCE_IMAGE_TRANSFORM_PATTERNS.some(pattern => pattern.test(text));
 }
 
+function tokenizeIntentText(text: string): string[] {
+  return text.split(/[^\p{L}\p{N}']+/u).filter(Boolean);
+}
+
+function hasVisualCorrectionSubject(tokens: readonly string[]): boolean {
+  return tokens.some(token => VISUAL_CORRECTION_SUBJECT_WORDS.has(token));
+}
+
 export function isVisualCorrectionRequest(text: string): boolean {
   const normalized = normalizeImageIntentText(text);
+  const tokens = tokenizeIntentText(normalized);
+  if (!hasVisualCorrectionSubject(tokens)) {
+    return false;
+  }
+
   return (
-    new RegExp(`\\b(?:ik\\s+zie|zie)\\s+(?:geen|niet\\s+de)\\s+${VISUAL_CORRECTION_SUBJECT}\\b`).test(
-      normalized
-    ) ||
-    new RegExp(`\\b(?:maar|wel\\s+mooi\\s+maar|mooi\\s+maar)\\s+(?:geen|niet\\s+de)\\s+${VISUAL_CORRECTION_SUBJECT}\\b`).test(
-      normalized
-    ) ||
-    new RegExp(`\\b(?:er\\s+mist|mist|ontbreekt)\\s+(?:een\\s+|de\\s+)?${VISUAL_CORRECTION_SUBJECT}\\b`).test(
-      normalized
-    ) ||
-    new RegExp(`\\b(?:i\\s+do\\s+not\\s+see|i\\s+don't\\s+see|no|missing)\\s+(?:a\\s+|the\\s+)?${VISUAL_CORRECTION_SUBJECT}\\b`).test(
-      normalized
-    ) ||
-    new RegExp(`\\b(?:a\\s+|the\\s+)?${VISUAL_CORRECTION_SUBJECT}\\s+(?:is\\s+|are\\s+)?(?:missing|not\\s+visible)\\b`).test(
-      normalized
-    )
+    normalized.includes("ik zie geen") ||
+    normalized.includes("zie geen") ||
+    normalized.includes("ik zie niet de") ||
+    normalized.includes("zie niet de") ||
+    normalized.includes("maar geen") ||
+    normalized.includes("wel mooi maar geen") ||
+    normalized.includes("mooi maar geen") ||
+    normalized.includes("maar niet de") ||
+    normalized.includes("er mist") ||
+    tokens.includes("mist") ||
+    tokens.includes("ontbreekt") ||
+    normalized.includes("i do not see") ||
+    normalized.includes("i don't see") ||
+    tokens.includes("no") ||
+    tokens.includes("missing") ||
+    normalized.includes("not visible")
   );
 }
 

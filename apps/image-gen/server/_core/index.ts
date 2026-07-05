@@ -172,6 +172,7 @@ async function startServer() {
 
   applySecurityHeaders(app);
   app.use(attachRequestTracing());
+  // lgtm[js/missing-rate-limiting] This middleware is the global HTTP rate limiter; Redis access stores limiter buckets.
   app.use(createGlobalHttpRateLimiter());
 
   app.use(createRequestMetricsMiddleware());

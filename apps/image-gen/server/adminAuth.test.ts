@@ -42,6 +42,7 @@ afterEach(() => {
 async function startServer() {
   const app = express();
   app.set("trust proxy", 1);
+  // lgtm[js/missing-rate-limiting] Test-only route used to verify admin auth rate limiting.
   app.get(
     "/admin/test",
     createAdminAuthRateLimiter({ eventName: "admin_test_rate_limited" }),

@@ -1,9 +1,9 @@
 export default function Footer() {
   return (
-    <footer className="border-t border-slate-800/50 bg-transparent py-3 text-center text-xs text-slate-400">
+    <footer className="border-t border-stone-200 bg-[#f6f2ea] py-3 text-center text-xs text-stone-500">
       <a
         href="/privacy"
-        className="transition-colors hover:text-slate-200 hover:underline"
+        className="transition-colors hover:text-stone-900 hover:underline"
       >
         Privacy Policy
       </a>
@@ -12,7 +12,7 @@ export default function Footer() {
 
       <a
         href="/terms"
-        className="transition-colors hover:text-slate-200 hover:underline"
+        className="transition-colors hover:text-stone-900 hover:underline"
       >
         Terms of Service
       </a>
@@ -21,7 +21,7 @@ export default function Footer() {
 
       <a
         href="/data-deletion"
-        className="transition-colors hover:text-slate-200 hover:underline"
+        className="transition-colors hover:text-stone-900 hover:underline"
       >
         Data Deletion
       </a>

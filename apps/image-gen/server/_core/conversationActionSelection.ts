@@ -1,7 +1,13 @@
 import type { ConversationAction } from "./botResponse";
 
-const ACTION_SELECTION_PATTERN =
-  /^(?:(?:nr|nummer|optie|keuze|choice|option)\s*)?(\d{1,2})(?:\b|\s|[.!?])/iu;
+const ACTION_SELECTION_PREFIXES = new Set([
+  "nr",
+  "nummer",
+  "optie",
+  "keuze",
+  "choice",
+  "option",
+]);
 
 function normalizeActionLabel(value: string): string {
   return value
@@ -9,6 +15,16 @@ function normalizeActionLabel(value: string): string {
     .toLowerCase()
     .replace(/[.!?]+$/u, "")
     .replace(/\s+/gu, " ");
+}
+
+function readActionSelectionIndex(value: string): number | undefined {
+  const [first = "", second = ""] = value.split(" ");
+  const candidate = ACTION_SELECTION_PREFIXES.has(first) ? second : first;
+  if (!/^\d{1,2}$/u.test(candidate)) {
+    return undefined;
+  }
+
+  return Number.parseInt(candidate, 10) - 1;
 }
 
 export function resolveConversationActionInput(
@@ -20,9 +36,8 @@ export function resolveConversationActionInput(
   }
 
   const normalizedText = normalizeActionLabel(text);
-  const numberMatch = ACTION_SELECTION_PATTERN.exec(normalizedText);
-  if (numberMatch) {
-    const actionIndex = Number.parseInt(numberMatch[1] ?? "", 10) - 1;
+  const actionIndex = readActionSelectionIndex(normalizedText);
+  if (actionIndex !== undefined) {
     const action = actions[actionIndex];
     return action?.inputText ?? action?.label;
   }

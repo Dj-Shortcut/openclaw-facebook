@@ -1,4 +1,5 @@
 import type express from "express";
+import rateLimit from "express-rate-limit";
 import {
   clearPendingSourceImageDeleteUrls,
   clearFaceMemoryState,
@@ -18,6 +19,13 @@ import { safeLog } from "./messengerApi";
 export const FACE_MEMORY_CONSENT_YES = "CONSENT_FACE_YES";
 export const FACE_MEMORY_CONSENT_NO = "CONSENT_FACE_NO";
 const INBOUND_SOURCE_PREFIX = "inbound-source/";
+
+const faceMemoryAdminRouteLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 export function isFaceMemoryEnabled(): boolean {
   return process.env.ENABLE_FACE_MEMORY === "true";
@@ -210,6 +218,7 @@ export async function updateConsentedFaceMemorySource(
 export function registerFaceMemoryAdminRoutes(app: express.Express): void {
   app.post(
     "/admin/disable-face-memory",
+    faceMemoryAdminRouteLimiter,
     createAdminAuthRateLimiter({
       eventName: "face_memory_kill_switch_auth_rate_limited",
     }),

@@ -40,9 +40,11 @@ async function startServer(options?: { forceIp?: string; pathPrefix?: string }) 
 
   app.use(rateLimiter);
 
+  // lgtm[js/missing-rate-limiting] Test-only route used to verify the global limiter middleware.
   app.get(limitedPath, (_req, res) => {
     res.status(200).json({ ok: true });
   });
+  // lgtm[js/missing-rate-limiting] Health check route is intentionally exempt from the limiter under test.
   app.get(healthPath, rateLimiter, (_req, res) => {
     res.status(200).send("ok");
   });

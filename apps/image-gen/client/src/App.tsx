@@ -19,7 +19,7 @@ const TermsPage = lazy(() =>
 );
 
 function RouteFallback() {
-  return <div className="min-h-full bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950" />;
+  return <div className="min-h-full bg-[#f6f2ea]" />;
 }
 
 function Router() {
@@ -41,11 +41,11 @@ function Router() {
 function App() {
   return (
     <ErrorBoundary>
-      <ThemeProvider defaultTheme="dark">
+      <ThemeProvider defaultTheme="light">
         <TooltipProvider>
-          <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-foreground">
+          <div className="min-h-screen flex flex-col bg-[#f6f2ea] text-foreground">
             <Toaster />
-            <div className="grow bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
+            <div className="grow bg-[#f6f2ea]">
               <Router />
             </div>
             <Footer />

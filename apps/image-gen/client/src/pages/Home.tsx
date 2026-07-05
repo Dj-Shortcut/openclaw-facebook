@@ -34,12 +34,12 @@ type FacebookConnectPage = {
 function StatusPill({ value }: { value: string }) {
   const toneClass =
     value === "connected" || value === "completed"
-      ? "bg-emerald-500/15 text-emerald-200"
+      ? "bg-emerald-100 text-emerald-800"
       : value === "rejected"
-        ? "bg-red-500/15 text-red-200"
+        ? "bg-red-100 text-red-800"
         : value === "processing"
-          ? "bg-sky-500/15 text-sky-200"
-          : "bg-amber-500/15 text-amber-200";
+          ? "bg-sky-100 text-sky-800"
+          : "bg-amber-100 text-amber-800";
   return (
     <span
       className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${toneClass}`}
@@ -59,10 +59,10 @@ function MetricTile({
   detail?: string;
 }) {
   return (
-    <div className="rounded-lg border border-slate-800 bg-slate-900/75 p-4">
-      <div className="text-sm text-slate-400">{label}</div>
-      <div className="mt-2 text-2xl font-semibold text-slate-50">{value}</div>
-      {detail ? <div className="mt-2 text-xs text-slate-500">{detail}</div> : null}
+    <div className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
+      <div className="text-sm text-stone-600">{label}</div>
+      <div className="mt-2 text-2xl font-semibold text-stone-950">{value}</div>
+      {detail ? <div className="mt-2 text-xs text-stone-500">{detail}</div> : null}
     </div>
   );
 }
@@ -368,16 +368,16 @@ function Home() {
 
   if (!auth.isAuthenticated) {
     return (
-      <main className="min-h-full bg-slate-950 px-6 py-10 text-slate-100">
+      <main className="min-h-full bg-[#f6f2ea] px-6 py-10 text-stone-950">
         <div className="mx-auto flex min-h-[70vh] max-w-5xl items-center">
-          <section className="w-full">
-            <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-lg bg-cyan-500/15 text-cyan-200">
+          <section className="w-full rounded-lg border border-stone-200 bg-white p-8 shadow-sm">
+            <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-lg bg-teal-100 text-teal-700">
               <ShieldCheck className="h-6 w-6" />
             </div>
-            <h1 className="max-w-2xl text-4xl font-semibold text-slate-50">
+            <h1 className="max-w-2xl text-4xl font-semibold text-stone-950">
               Leaderbot customer portal
             </h1>
-            <p className="mt-4 max-w-2xl text-base leading-7 text-slate-300">
+            <p className="mt-4 max-w-2xl text-base leading-7 text-stone-600">
               Continue with Facebook to manage your workspace, AI identity,
               Messenger channel, usage, knowledge, and privacy controls.
             </p>
@@ -410,11 +410,11 @@ function Home() {
     privacyRequestsQuery.isLoading;
 
   return (
-    <main className="min-h-full bg-slate-950 px-4 py-6 text-slate-100 sm:px-6 lg:px-8">
+    <main className="min-h-full bg-[#f6f2ea] px-4 py-6 text-stone-950 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl">
-        <header className="flex flex-col gap-4 border-b border-slate-800 pb-6 md:flex-row md:items-end md:justify-between">
+        <header className="flex flex-col gap-4 border-b border-stone-200 pb-6 md:flex-row md:items-end md:justify-between">
           <div>
-            <p className="text-sm text-cyan-200">Workspace</p>
+            <p className="text-sm font-medium text-teal-700">Workspace</p>
             {isEditingWorkspace ? (
               <form
                 className="mt-2 flex max-w-xl flex-col gap-3 sm:flex-row"
@@ -424,7 +424,7 @@ function Home() {
                 }}
               >
                 <input
-                  className="min-h-10 flex-1 rounded-md border border-slate-700 bg-slate-950 px-3 text-base text-slate-50 outline-none focus:border-cyan-300"
+                  className="min-h-10 flex-1 rounded-md border border-stone-300 bg-white px-3 text-base text-stone-950 outline-none focus:border-teal-600"
                   value={workspaceName}
                   maxLength={160}
                   onChange={event => setWorkspaceName(event.target.value)}
@@ -453,7 +453,7 @@ function Home() {
               </form>
             ) : (
               <div className="mt-1 flex flex-wrap items-center gap-3">
-                <h1 className="text-3xl font-semibold text-slate-50">
+                <h1 className="text-3xl font-semibold text-stone-950">
                   {workspaceDisplayName}
                 </h1>
                 <Button
@@ -468,7 +468,7 @@ function Home() {
                 </Button>
               </div>
             )}
-            <p className="mt-2 text-sm text-slate-400">
+            <p className="mt-2 text-sm text-stone-600">
               Signed in as{" "}
               {portalSessionQuery.data?.user.email ??
                 auth.user?.email ??
@@ -479,7 +479,7 @@ function Home() {
                 : ""}
             </p>
             {workspaceMutation.error ? (
-              <p className="mt-2 text-sm text-red-200">
+              <p className="mt-2 text-sm text-red-700">
                 Unable to update the workspace name. Please try again.
               </p>
             ) : null}
@@ -495,27 +495,27 @@ function Home() {
         </header>
 
         {isLoading ? (
-          <div className="py-12 text-sm text-slate-400">Loading workspace...</div>
+          <div className="py-12 text-sm text-stone-600">Loading workspace...</div>
         ) : (
           <div className="grid gap-4 py-6 lg:grid-cols-3">
-            <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5 lg:col-span-3">
+            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
               <div className="flex items-center gap-3">
-                <ShieldCheck className="h-5 w-5 text-cyan-200" />
-                <h2 className="text-lg font-semibold text-slate-50">
+                <ShieldCheck className="h-5 w-5 text-teal-700" />
+                <h2 className="text-lg font-semibold text-stone-950">
                   Workspace access
                 </h2>
               </div>
               <div className="mt-5 grid gap-3 md:grid-cols-2">
                 {(workspaceMembersQuery.data ?? []).map(member => (
                   <div
-                    className="flex items-center justify-between gap-4 rounded-lg border border-slate-800 bg-slate-950/60 p-4"
+                    className="flex items-center justify-between gap-4 rounded-lg border border-stone-200 bg-stone-50 p-4"
                     key={member.userId}
                   >
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-slate-100">
+                      <div className="truncate text-sm font-medium text-stone-900">
                         {member.name ?? member.email ?? `User ${member.userId}`}
                       </div>
-                      <div className="mt-1 truncate text-xs text-slate-500">
+                      <div className="mt-1 truncate text-xs text-stone-500">
                         {member.email ?? "No email on file"}
                       </div>
                     </div>
@@ -524,25 +524,25 @@ function Home() {
                 ))}
               </div>
               {workspaceMembersQuery.error ? (
-                <p className="mt-4 text-sm text-red-200">
+                <p className="mt-4 text-sm text-red-700">
                   Unable to load workspace access.
                 </p>
               ) : (workspaceMembersQuery.data ?? []).length === 0 ? (
-                <p className="mt-4 text-sm text-slate-400">
+                <p className="mt-4 text-sm text-stone-600">
                   No workspace members found.
                 </p>
               ) : null}
             </section>
 
-            <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5 lg:col-span-2">
+            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-2">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-start gap-3">
-                  <Bot className="mt-1 h-5 w-5 text-cyan-200" />
+                  <Bot className="mt-1 h-5 w-5 text-teal-700" />
                   <div>
-                    <h2 className="text-lg font-semibold text-slate-50">
+                    <h2 className="text-lg font-semibold text-stone-950">
                       {aiIdentityQuery.data?.name ?? "Leaderbot"}
                     </h2>
-                    <p className="mt-1 text-sm text-slate-300">
+                    <p className="mt-1 text-sm text-stone-600">
                       {aiIdentityQuery.data?.tone ?? "Helpful"} ·{" "}
                       {aiIdentityQuery.data?.language ?? "nl"} ·{" "}
                       {aiIdentityQuery.data?.modelDefault ?? "default"}
@@ -570,10 +570,10 @@ function Home() {
                   }}
                 >
                   <div className="grid gap-4 md:grid-cols-2">
-                    <label className="grid gap-2 text-sm text-slate-300">
+                    <label className="grid gap-2 text-sm text-stone-700">
                       Name
                       <input
-                        className="rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
+                        className="rounded border border-stone-300 bg-white px-3 py-2 text-stone-950"
                         maxLength={120}
                         required
                         value={identityForm.name}
@@ -585,10 +585,10 @@ function Home() {
                         }
                       />
                     </label>
-                    <label className="grid gap-2 text-sm text-slate-300">
+                    <label className="grid gap-2 text-sm text-stone-700">
                       Tone
                       <input
-                        className="rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
+                        className="rounded border border-stone-300 bg-white px-3 py-2 text-stone-950"
                         maxLength={80}
                         required
                         value={identityForm.tone}
@@ -600,10 +600,10 @@ function Home() {
                         }
                       />
                     </label>
-                    <label className="grid gap-2 text-sm text-slate-300">
+                    <label className="grid gap-2 text-sm text-stone-700">
                       Language
                       <input
-                        className="rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
+                        className="rounded border border-stone-300 bg-white px-3 py-2 text-stone-950"
                         maxLength={16}
                         minLength={2}
                         required
@@ -616,10 +616,10 @@ function Home() {
                         }
                       />
                     </label>
-                    <label className="grid gap-2 text-sm text-slate-300">
+                    <label className="grid gap-2 text-sm text-stone-700">
                       Model default
                       <input
-                        className="rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
+                        className="rounded border border-stone-300 bg-white px-3 py-2 text-stone-950"
                         maxLength={80}
                         required
                         value={identityForm.modelDefault}
@@ -632,10 +632,10 @@ function Home() {
                       />
                     </label>
                   </div>
-                  <label className="grid gap-2 text-sm text-slate-300">
+                  <label className="grid gap-2 text-sm text-stone-700">
                     Instructions
                     <textarea
-                      className="min-h-36 rounded border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
+                      className="min-h-36 rounded border border-stone-300 bg-white px-3 py-2 text-stone-950"
                       maxLength={8000}
                       value={identityForm.instructions}
                       onChange={event =>
@@ -647,7 +647,7 @@ function Home() {
                     />
                   </label>
                   {aiIdentityMutation.error ? (
-                    <div className="text-sm text-red-300">
+                    <div className="text-sm text-red-700">
                       {aiIdentityMutation.error.message}
                     </div>
                   ) : null}
@@ -673,18 +673,18 @@ function Home() {
                   </div>
                 </form>
               ) : (
-                <div className="mt-5 rounded-lg border border-slate-800 bg-slate-950/60 p-4 text-sm leading-6 text-slate-300">
+                <div className="mt-5 rounded-lg border border-stone-200 bg-stone-50 p-4 text-sm leading-6 text-stone-700">
                   {aiIdentityQuery.data?.instructions ??
                     "No custom assistant instructions have been saved yet."}
                 </div>
               )}
             </section>
 
-            <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5">
+            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
               <div className="flex items-start justify-between gap-4">
                 <div className="flex items-center gap-3">
-                  <MessageCircle className="h-5 w-5 text-cyan-200" />
-                  <h2 className="text-lg font-semibold text-slate-50">Messenger</h2>
+                  <MessageCircle className="h-5 w-5 text-teal-700" />
+                  <h2 className="text-lg font-semibold text-stone-950">Messenger</h2>
                 </div>
                 {facebookStatus !== "connected" ? (
                   <Button
@@ -711,31 +711,31 @@ function Home() {
               </div>
               <div className="mt-5 space-y-3 text-sm">
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-400">Status</span>
+                  <span className="text-stone-600">Status</span>
                   <StatusPill
                     value={facebookStatus}
                   />
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-400">Page</span>
-                  <span className="text-right text-slate-200">
+                  <span className="text-stone-600">Page</span>
+                  <span className="text-right text-stone-800">
                     {channelStatusQuery.data?.facebook.pageName ?? "Not connected"}
                   </span>
                 </div>
               </div>
               {facebookConnectState && facebookStatus !== "connected" ? (
-                <div className="mt-5 rounded-lg border border-cyan-500/30 bg-cyan-500/10 p-4">
+                <div className="mt-5 rounded-lg border border-teal-200 bg-teal-50 p-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                      <div className="text-sm font-medium text-cyan-100">
+                      <div className="text-sm font-medium text-teal-900">
                         Facebook authorization pending
                       </div>
-                      <div className="mt-1 text-sm text-cyan-100/75">
+                      <div className="mt-1 text-sm text-teal-700">
                         Finish setup after returning from Meta.
                       </div>
                     </div>
                     <Button
-                      className="gap-2 bg-cyan-200 text-slate-950 hover:bg-cyan-100"
+                      className="gap-2 bg-teal-700 text-white hover:bg-teal-800"
                       disabled={!workspaceId || facebookCompleteMutation.isPending}
                       size="sm"
                       type="button"
@@ -755,21 +755,21 @@ function Home() {
                       facebookSelectPageMutation.variables?.pageId === page.id;
                     return (
                       <button
-                        className="flex w-full items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-left hover:border-cyan-400/60 disabled:opacity-60"
+                        className="flex w-full items-center justify-between gap-3 rounded-lg border border-stone-200 bg-stone-50 p-3 text-left hover:border-teal-500 disabled:opacity-60"
                         disabled={facebookSelectPageMutation.isPending}
                         key={page.id}
                         type="button"
                         onClick={() => selectFacebookPage(page.id)}
                       >
                         <span className="min-w-0">
-                          <span className="block truncate text-sm font-medium text-slate-100">
+                          <span className="block truncate text-sm font-medium text-stone-900">
                             {page.name}
                           </span>
-                          <span className="mt-1 block text-xs text-slate-500">
+                          <span className="mt-1 block text-xs text-stone-500">
                             {page.grantedScopes.length} permissions granted
                           </span>
                         </span>
-                        <span className="text-sm text-cyan-200">
+                        <span className="text-sm text-teal-700">
                           {isSelecting ? "Connecting" : "Select"}
                         </span>
                       </button>
@@ -778,65 +778,65 @@ function Home() {
                 </div>
               ) : null}
               {facebookConnectIssue ? (
-                <p className="mt-4 text-sm text-red-200">{facebookConnectIssue}</p>
+                <p className="mt-4 text-sm text-red-700">{facebookConnectIssue}</p>
               ) : facebookStartMutation.error ? (
-                <p className="mt-4 text-sm text-red-200">
+                <p className="mt-4 text-sm text-red-700">
                   Unable to start Facebook connection. Please try again.
                 </p>
               ) : facebookCompleteMutation.error ? (
-                <p className="mt-4 text-sm text-red-200">
+                <p className="mt-4 text-sm text-red-700">
                   Unable to finish Facebook connection. Please start again.
                 </p>
               ) : facebookSelectPageMutation.error ? (
-                <p className="mt-4 text-sm text-red-200">
+                <p className="mt-4 text-sm text-red-700">
                   Unable to connect that Page. Please try again.
                 </p>
               ) : facebookSelectPageMutation.isSuccess ? (
-                <p className="mt-4 text-sm text-emerald-200">
+                <p className="mt-4 text-sm text-emerald-700">
                   Messenger connected for this workspace.
                 </p>
               ) : facebookDisconnectMutation.isSuccess ? (
-                <p className="mt-4 text-sm text-emerald-200">
+                <p className="mt-4 text-sm text-emerald-700">
                   Messenger disconnected for this workspace.
                 </p>
               ) : facebookDisconnectMutation.error ? (
-                <p className="mt-4 text-sm text-red-200">
+                <p className="mt-4 text-sm text-red-700">
                   Unable to disconnect Messenger. Please try again.
                 </p>
               ) : null}
             </section>
 
-            <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5 lg:col-span-3">
+            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
               <div className="flex items-center gap-3">
-                <Info className="h-5 w-5 text-cyan-200" />
-                <h2 className="text-lg font-semibold text-slate-50">
+                <Info className="h-5 w-5 text-teal-700" />
+                <h2 className="text-lg font-semibold text-stone-950">
                   Bot instructions
                 </h2>
               </div>
               <div className="mt-5 grid gap-4 md:grid-cols-3">
-                <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
-                  <h3 className="text-sm font-medium text-slate-100">
+                <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
+                  <h3 className="text-sm font-medium text-stone-900">
                     Prompt-first images
                   </h3>
-                  <p className="mt-2 text-sm leading-6 text-slate-400">
+                  <p className="mt-2 text-sm leading-6 text-stone-600">
                     Ask naturally in Messenger. Describe the image or edit you want;
                     no style menu is required.
                   </p>
                 </div>
-                <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
-                  <h3 className="text-sm font-medium text-slate-100">
+                <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
+                  <h3 className="text-sm font-medium text-stone-900">
                     Workspace context
                   </h3>
-                  <p className="mt-2 text-sm leading-6 text-slate-400">
+                  <p className="mt-2 text-sm leading-6 text-stone-600">
                     The assistant uses this workspace's identity, instructions, and
                     active knowledge sources.
                   </p>
                 </div>
-                <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
-                  <h3 className="text-sm font-medium text-slate-100">
+                <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
+                  <h3 className="text-sm font-medium text-stone-900">
                     Data controls
                   </h3>
-                  <p className="mt-2 text-sm leading-6 text-slate-400">
+                  <p className="mt-2 text-sm leading-6 text-stone-600">
                     Use the portal to request exports or deletion. Messenger users can
                     also send "delete my data".
                   </p>
@@ -844,15 +844,15 @@ function Home() {
               </div>
             </section>
 
-            <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5 lg:col-span-3">
+            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
               <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                 <div className="flex items-center gap-3">
-                  <CreditCard className="h-5 w-5 text-cyan-200" />
+                  <CreditCard className="h-5 w-5 text-teal-700" />
                   <div>
-                    <h2 className="text-lg font-semibold text-slate-50">
+                    <h2 className="text-lg font-semibold text-stone-950">
                       Usage and balance
                     </h2>
-                    <p className="mt-1 text-sm text-slate-400">
+                    <p className="mt-1 text-sm text-stone-600">
                       {usage?.plan.name ?? "Free"} plan
                     </p>
                   </div>
@@ -892,47 +892,47 @@ function Home() {
                   }
                 />
               </div>
-              <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-950">
+              <div className="mt-5 h-2 overflow-hidden rounded-full bg-stone-200">
                 <div
-                  className="h-full rounded-full bg-cyan-300"
+                  className="h-full rounded-full bg-teal-600"
                   style={{ width: `${imageProgress}%` }}
                 />
               </div>
               {upgradeRequestMutation.isSuccess ? (
-                <p className="mt-4 text-sm text-emerald-200">
+                <p className="mt-4 text-sm text-emerald-700">
                   Upgrade request recorded for this workspace.
                 </p>
               ) : upgradeRequestMutation.error ? (
-                <p className="mt-4 text-sm text-red-200">
+                <p className="mt-4 text-sm text-red-700">
                   Unable to record the upgrade request. Please try again.
                 </p>
               ) : null}
-              <div className="mt-5 overflow-hidden rounded-lg border border-slate-800">
+              <div className="mt-5 overflow-hidden rounded-lg border border-stone-200">
                 {upgradeRequestsQuery.error ? (
-                  <div className="bg-slate-950/60 px-4 py-3 text-sm text-red-300">
+                  <div className="bg-red-50 px-4 py-3 text-sm text-red-700">
                     Unable to load upgrade requests. Please try again.
                   </div>
                 ) : upgradeRequests.length === 0 ? (
-                  <div className="bg-slate-950/60 px-4 py-3 text-sm text-slate-400">
+                  <div className="bg-stone-50 px-4 py-3 text-sm text-stone-600">
                     No upgrade requests yet.
                   </div>
                 ) : (
-                  <div className="divide-y divide-slate-800">
+                  <div className="divide-y divide-stone-200">
                     {upgradeRequests.slice(0, 3).map(request => (
                       <div
-                        className="grid gap-2 bg-slate-950/60 px-4 py-3 text-sm md:grid-cols-[1fr_auto_auto]"
+                        className="grid gap-2 bg-stone-50 px-4 py-3 text-sm md:grid-cols-[1fr_auto_auto]"
                         key={request.id}
                       >
                         <div>
-                          <div className="font-medium text-slate-100">
+                          <div className="font-medium text-stone-900">
                             {request.requestedPlanName} upgrade
                           </div>
-                          <div className="mt-1 text-xs text-slate-500">
+                          <div className="mt-1 text-xs text-stone-500">
                             {request.upgradeReason?.replace(/_/g, " ") ??
                               "Customer requested"}
                           </div>
                         </div>
-                        <span className="text-slate-400">
+                        <span className="text-stone-600">
                           {formatDate(request.createdAt)}
                         </span>
                         <StatusPill value={request.status} />
@@ -942,7 +942,7 @@ function Home() {
                 )}
               </div>
               {latestUpgradeRequest ? (
-                <p className="mt-3 text-xs text-slate-500">
+                <p className="mt-3 text-xs text-stone-500">
                   Latest upgrade request: {latestUpgradeRequest.status.replace(/_/g, " ")}
                   {" · "}
                   {formatDate(latestUpgradeRequest.createdAt)}
@@ -950,20 +950,20 @@ function Home() {
               ) : null}
             </section>
 
-            <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5 lg:col-span-3">
+            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
               <div className="flex items-center gap-3">
-                <SlidersHorizontal className="h-5 w-5 text-cyan-200" />
-                <h2 className="text-lg font-semibold text-slate-50">
+                <SlidersHorizontal className="h-5 w-5 text-teal-700" />
+                <h2 className="text-lg font-semibold text-stone-950">
                   Privacy controls
                 </h2>
               </div>
               <div className="mt-5 grid gap-4 md:grid-cols-3">
-                <label className="flex min-h-24 items-start justify-between gap-4 rounded-lg border border-slate-800 bg-slate-950/60 p-4">
+                <label className="flex min-h-24 items-start justify-between gap-4 rounded-lg border border-stone-200 bg-stone-50 p-4">
                   <span>
-                    <span className="block text-sm font-medium text-slate-100">
+                    <span className="block text-sm font-medium text-stone-900">
                       Knowledge indexing
                     </span>
-                    <span className="mt-1 block text-sm text-slate-400">
+                    <span className="mt-1 block text-sm text-stone-600">
                       Allow uploaded knowledge to be indexed.
                     </span>
                   </span>
@@ -977,12 +977,12 @@ function Home() {
                     }
                   />
                 </label>
-                <label className="flex min-h-24 items-start justify-between gap-4 rounded-lg border border-slate-800 bg-slate-950/60 p-4">
+                <label className="flex min-h-24 items-start justify-between gap-4 rounded-lg border border-stone-200 bg-stone-50 p-4">
                   <span>
-                    <span className="block text-sm font-medium text-slate-100">
+                    <span className="block text-sm font-medium text-stone-900">
                       Usage analytics
                     </span>
-                    <span className="mt-1 block text-sm text-slate-400">
+                    <span className="mt-1 block text-sm text-stone-600">
                       Allow workspace usage analytics.
                     </span>
                   </span>
@@ -996,17 +996,17 @@ function Home() {
                     }
                   />
                 </label>
-                <label className="flex min-h-24 items-start justify-between gap-4 rounded-lg border border-slate-800 bg-slate-950/60 p-4">
+                <label className="flex min-h-24 items-start justify-between gap-4 rounded-lg border border-stone-200 bg-stone-50 p-4">
                   <span>
-                    <span className="block text-sm font-medium text-slate-100">
+                    <span className="block text-sm font-medium text-stone-900">
                       Image memory retention
                     </span>
-                    <span className="mt-1 block text-sm text-slate-400">
+                    <span className="mt-1 block text-sm text-stone-600">
                       Days retained: {privacy?.imageMemoryRetentionDays ?? 0}
                     </span>
                   </span>
                   <input
-                    className="w-24 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-right text-sm text-slate-100"
+                    className="w-24 rounded border border-stone-300 bg-white px-2 py-1 text-right text-sm text-stone-950"
                     type="number"
                     min={0}
                     max={365}
@@ -1022,17 +1022,17 @@ function Home() {
               </div>
             </section>
 
-            <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5 lg:col-span-3">
+            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
               <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                 <div className="flex items-center gap-3">
-                  <ShieldCheck className="h-5 w-5 text-cyan-200" />
-                  <h2 className="text-lg font-semibold text-slate-50">
+                  <ShieldCheck className="h-5 w-5 text-teal-700" />
+                  <h2 className="text-lg font-semibold text-stone-950">
                     Data requests
                   </h2>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Button
-                    className="bg-slate-100 text-slate-950 hover:bg-white"
+                    className="bg-stone-900 text-white hover:bg-stone-800"
                     size="sm"
                     type="button"
                     disabled={!workspaceId || privacyRequestMutation.isPending}
@@ -1042,7 +1042,7 @@ function Home() {
                     Export
                   </Button>
                   <Button
-                    className="border-red-400/40 text-red-100 hover:bg-red-500/10"
+                    className="border-red-300 text-red-700 hover:bg-red-50"
                     variant="outline"
                     size="sm"
                     type="button"
@@ -1082,30 +1082,30 @@ function Home() {
                   detail="Standard 30-day response target"
                 />
               </div>
-              <div className="mt-5 overflow-hidden rounded-lg border border-slate-800">
+              <div className="mt-5 overflow-hidden rounded-lg border border-stone-200">
                 {privacyRequestMutation.error ? (
-                  <div className="bg-slate-950/60 px-4 py-3 text-sm text-red-300">
+                  <div className="bg-red-50 px-4 py-3 text-sm text-red-700">
                     Unable to create data request. Please try again.
                   </div>
                 ) : privacyRequestsError ? (
-                  <div className="bg-slate-950/60 px-4 py-3 text-sm text-red-300">
+                  <div className="bg-red-50 px-4 py-3 text-sm text-red-700">
                     Unable to load data requests. Please try again.
                   </div>
                 ) : privacyRequests.length === 0 ? (
-                  <div className="bg-slate-950/60 px-4 py-3 text-sm text-slate-400">
+                  <div className="bg-stone-50 px-4 py-3 text-sm text-stone-600">
                     No data requests yet.
                   </div>
                 ) : (
-                  <div className="divide-y divide-slate-800">
+                  <div className="divide-y divide-stone-200">
                     {privacyRequests.slice(0, 4).map(request => (
                       <div
-                        className="grid gap-2 bg-slate-950/60 px-4 py-3 text-sm sm:grid-cols-[1fr_auto_auto]"
+                        className="grid gap-2 bg-stone-50 px-4 py-3 text-sm sm:grid-cols-[1fr_auto_auto]"
                         key={request.id}
                       >
-                        <span className="font-medium capitalize text-slate-100">
+                        <span className="font-medium capitalize text-stone-900">
                           {request.requestType}
                         </span>
-                        <span className="text-slate-400">
+                        <span className="text-stone-600">
                           {formatDate(request.createdAt)}
                         </span>
                         <StatusPill value={request.status} />
@@ -1116,10 +1116,10 @@ function Home() {
               </div>
             </section>
 
-            <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-5 lg:col-span-3">
+            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
               <div className="flex items-center gap-3">
-                <Database className="h-5 w-5 text-cyan-200" />
-                <h2 className="text-lg font-semibold text-slate-50">Knowledge base</h2>
+                <Database className="h-5 w-5 text-teal-700" />
+                <h2 className="text-lg font-semibold text-stone-950">Knowledge base</h2>
               </div>
               <div className="mt-5 grid gap-4 sm:grid-cols-3">
                 <MetricTile label="Sources" value={knowledgeQuery.data?.totalSources ?? 0} />
@@ -1134,16 +1134,16 @@ function Home() {
                 />
               </div>
               <form
-                className="mt-5 grid gap-3 rounded-lg border border-slate-800 bg-slate-950/60 p-4 md:grid-cols-[160px_1fr_1fr_auto]"
+                className="mt-5 grid gap-3 rounded-lg border border-stone-200 bg-stone-50 p-4 md:grid-cols-[160px_1fr_1fr_auto]"
                 onSubmit={event => {
                   event.preventDefault();
                   void registerKnowledgeSource();
                 }}
               >
-                <label className="grid gap-2 text-sm text-slate-300">
+                <label className="grid gap-2 text-sm text-stone-700">
                   Type
                   <select
-                    className="h-10 rounded border border-slate-700 bg-slate-950 px-3 text-slate-100"
+                    className="h-10 rounded border border-stone-300 bg-white px-3 text-stone-950"
                     value={knowledgeForm.sourceType}
                     disabled={knowledgeMutation.isPending}
                     onChange={event =>
@@ -1158,10 +1158,10 @@ function Home() {
                     <option value="integration">Integration</option>
                   </select>
                 </label>
-                <label className="grid gap-2 text-sm text-slate-300">
+                <label className="grid gap-2 text-sm text-stone-700">
                   Name
                   <input
-                    className="h-10 rounded border border-slate-700 bg-slate-950 px-3 text-slate-100"
+                    className="h-10 rounded border border-stone-300 bg-white px-3 text-stone-950"
                     maxLength={200}
                     required
                     value={knowledgeForm.name}
@@ -1174,10 +1174,10 @@ function Home() {
                     }
                   />
                 </label>
-                <label className="grid gap-2 text-sm text-slate-300">
+                <label className="grid gap-2 text-sm text-stone-700">
                   Reference
                   <input
-                    className="h-10 rounded border border-slate-700 bg-slate-950 px-3 text-slate-100"
+                    className="h-10 rounded border border-stone-300 bg-white px-3 text-stone-950"
                     maxLength={1024}
                     value={knowledgeForm.sourceReference}
                     disabled={knowledgeMutation.isPending}
@@ -1201,45 +1201,45 @@ function Home() {
                 </div>
               </form>
               {knowledgeMutation.error ? (
-                <div className="mt-3 text-sm text-red-300">
+                <div className="mt-3 text-sm text-red-700">
                   Unable to save knowledge source. Please try again.
                 </div>
               ) : knowledgeDisableMutation.error ? (
-                <div className="mt-3 text-sm text-red-300">
+                <div className="mt-3 text-sm text-red-700">
                   Unable to disable knowledge source. Please try again.
                 </div>
               ) : null}
-              <div className="mt-5 overflow-hidden rounded-lg border border-slate-800">
+              <div className="mt-5 overflow-hidden rounded-lg border border-stone-200">
                 {knowledgeQuery.error ? (
-                  <div className="bg-slate-950/60 px-4 py-3 text-sm text-red-300">
+                  <div className="bg-red-50 px-4 py-3 text-sm text-red-700">
                     Unable to load knowledge sources. Please try again.
                   </div>
                 ) : knowledgeSources.length === 0 ? (
-                  <div className="bg-slate-950/60 px-4 py-3 text-sm text-slate-400">
+                  <div className="bg-stone-50 px-4 py-3 text-sm text-stone-600">
                     No knowledge sources yet.
                   </div>
                 ) : (
-                  <div className="divide-y divide-slate-800">
+                  <div className="divide-y divide-stone-200">
                     {knowledgeSources.slice(0, 5).map(source => (
                       <div
-                        className="grid gap-2 bg-slate-950/60 px-4 py-3 text-sm md:grid-cols-[1fr_auto_auto_auto]"
+                        className="grid gap-2 bg-stone-50 px-4 py-3 text-sm md:grid-cols-[1fr_auto_auto_auto]"
                         key={source.id}
                       >
                         <div className="min-w-0">
-                          <div className="flex items-center gap-2 font-medium text-slate-100">
-                            <FileText className="h-4 w-4 shrink-0 text-slate-400" />
+                          <div className="flex items-center gap-2 font-medium text-stone-900">
+                            <FileText className="h-4 w-4 shrink-0 text-stone-500" />
                             <span className="truncate">{source.name}</span>
                           </div>
-                          <div className="mt-1 truncate text-xs text-slate-500">
+                          <div className="mt-1 truncate text-xs text-stone-500">
                             {source.sourceReference || source.sourceType.replace(/_/g, " ")}
                           </div>
                         </div>
-                        <span className="text-slate-400">
+                        <span className="text-stone-600">
                           {source.sourceType.replace(/_/g, " ")}
                         </span>
                         <StatusPill value={source.status} />
                         {source.status === "disabled" ? (
-                          <span className="text-xs text-slate-500">Disabled</span>
+                          <span className="text-xs text-stone-500">Disabled</span>
                         ) : (
                           <Button
                             size="sm"
