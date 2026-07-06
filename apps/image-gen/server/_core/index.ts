@@ -81,7 +81,7 @@ function getHttpRateLimiterGuardKey(req: express.Request): string {
 const redisBackedHttpRateLimiterGuard = rateLimit({
   windowMs: getHttpRateLimitWindowMs(),
   max: getHttpRateLimitGuardMaxRequests,
-  standardHeaders: true,
+  standardHeaders: false,
   legacyHeaders: false,
   keyGenerator: getHttpRateLimiterGuardKey,
   skip: req => shouldSkipHttpRateLimit(req) || !isRedisHttpRateLimitEnabled(),
