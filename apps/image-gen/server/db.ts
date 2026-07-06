@@ -218,6 +218,50 @@ export async function getOrCreateUserWorkspace(user: {
   return workspace;
 }
 
+export async function getWorkspaceById(workspaceId: number) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("get_workspace_by_id");
+    throw new Error("Database unavailable: workspace was not loaded");
+  }
+
+  const result = await db
+    .select({
+      id: workspaces.id,
+      name: workspaces.name,
+      slug: workspaces.slug,
+      createdAt: workspaces.createdAt,
+      updatedAt: workspaces.updatedAt,
+    })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+
+  return result[0] ?? null;
+}
+
+export async function addWorkspaceMember(values: InsertWorkspaceMember) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("add_workspace_member");
+    throw new Error("Database unavailable: workspace membership was not persisted");
+  }
+
+  await db.insert(workspaceMembers).values(values).onDuplicateKeyUpdate({
+    set: {
+      role: values.role ?? "member",
+    },
+  });
+  await seedWorkspacePrivacyDefaults(values.workspaceId);
+
+  const membership = await getWorkspaceMembership(values.workspaceId, values.userId);
+  if (!membership) {
+    throw new Error("Workspace membership insert succeeded but read-back failed");
+  }
+
+  return membership;
+}
+
 async function seedWorkspacePrivacyDefaults(workspaceId: number) {
   const db = await getDb();
   if (!db) {
@@ -901,6 +945,28 @@ export async function markPortalHandoffTokenConsumed(tokenHash: string) {
     .set({
       status: "consumed",
       consumedAt: now,
+    })
+    .where(
+      and(
+        eq(portalHandoffTokens.tokenHash, tokenHash),
+        eq(portalHandoffTokens.status, "pending")
+      )
+    );
+
+  return getAffectedRows(result) > 0;
+}
+
+export async function revokePortalHandoffToken(tokenHash: string) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("revoke_portal_handoff_token");
+    throw new Error("Database unavailable: portal handoff token was not revoked");
+  }
+
+  const result = await db
+    .update(portalHandoffTokens)
+    .set({
+      status: "revoked",
     })
     .where(
       and(

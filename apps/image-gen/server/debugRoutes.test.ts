@@ -14,9 +14,19 @@ import {
   resetRuntimeStatsForTests,
 } from "./_core/botRuntimeStats";
 
+const mocks = vi.hoisted(() => ({
+  sendPortalHandoffLink: vi.fn(),
+}));
+
+vi.mock("./_core/portalHandoffDelivery", () => ({
+  sendPortalHandoffLink: mocks.sendPortalHandoffLink,
+}));
+
 const originalAdminToken = process.env.ADMIN_TOKEN;
+const messengerSenderUserKey = "a".repeat(64);
 
 afterEach(() => {
+  mocks.sendPortalHandoffLink.mockReset();
   resetAdminAuthRateLimiterForTests();
   resetRuntimeStatsForTests();
   clearStateStore();
@@ -29,6 +39,7 @@ afterEach(() => {
 
 async function startServer() {
   const app = express();
+  app.use(express.json());
   registerDebugRoutes(app, "test-sha");
   const server = http.createServer(app);
   const boundServer = await bindTestHttpServer(server);
@@ -337,6 +348,123 @@ describe("debug/admin routes", () => {
       expect(JSON.stringify(payload)).not.toContain("summary failed");
     } finally {
       summaryMock.mockRestore();
+      await server.close();
+    }
+  });
+
+  it("protects the portal handoff sender behind the admin token", async () => {
+    process.env.ADMIN_TOKEN = "secret-admin-token";
+    const server = await startServer();
+
+    try {
+      const response = await fetch(`${server.baseUrl}/admin/portal-handoff/send`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          workspaceId: 42,
+          messengerSenderUserKey,
+        }),
+      });
+
+      expect(response.status).toBe(403);
+      expect(mocks.sendPortalHandoffLink).not.toHaveBeenCalled();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("rejects invalid portal handoff sender input before creating links", async () => {
+    process.env.ADMIN_TOKEN = "secret-admin-token";
+    const server = await startServer();
+
+    try {
+      const response = await fetch(`${server.baseUrl}/admin/portal-handoff/send`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": "secret-admin-token",
+        },
+        body: JSON.stringify({
+          workspaceId: 42,
+          messengerSenderUserKey: "raw-psid-is-not-accepted",
+        }),
+      });
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "invalid handoff request" });
+      expect(mocks.sendPortalHandoffLink).not.toHaveBeenCalled();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("sends approved portal handoff links without returning the token or link", async () => {
+    process.env.ADMIN_TOKEN = "secret-admin-token";
+    const expiresAt = new Date("2026-07-06T11:30:00.000Z");
+    mocks.sendPortalHandoffLink.mockResolvedValue({
+      ok: true,
+      sent: true,
+      expiresAt,
+    });
+    const server = await startServer();
+
+    try {
+      const response = await fetch(`${server.baseUrl}/admin/portal-handoff/send`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": "secret-admin-token",
+        },
+        body: JSON.stringify({
+          workspaceId: 42,
+          messengerSenderUserKey,
+          createdByUserId: 7,
+        }),
+      });
+      const payload = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(payload).toEqual({
+        sent: true,
+        expiresAt: expiresAt.toISOString(),
+      });
+      expect(mocks.sendPortalHandoffLink).toHaveBeenCalledWith({
+        workspaceId: 42,
+        messengerSenderUserKey,
+        createdByUserId: 7,
+      });
+      expect(JSON.stringify(payload)).not.toContain("handoff");
+      expect(JSON.stringify(payload)).not.toContain("token");
+      expect(JSON.stringify(payload)).not.toContain(messengerSenderUserKey);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("reports closed Messenger response windows without creating a public link", async () => {
+    process.env.ADMIN_TOKEN = "secret-admin-token";
+    mocks.sendPortalHandoffLink.mockResolvedValue({
+      ok: false,
+      reason: "response_window_closed",
+    });
+    const server = await startServer();
+
+    try {
+      const response = await fetch(`${server.baseUrl}/admin/portal-handoff/send`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": "secret-admin-token",
+        },
+        body: JSON.stringify({
+          workspaceId: 42,
+          messengerSenderUserKey,
+        }),
+      });
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: "response_window_closed" });
+    } finally {
       await server.close();
     }
   });

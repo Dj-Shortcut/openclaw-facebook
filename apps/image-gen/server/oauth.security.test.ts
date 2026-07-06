@@ -29,8 +29,19 @@ vi.mock("./db", () => ({
   getOrCreateUserWorkspace: mocks.getOrCreateUserWorkspace,
 }));
 
-function buildState(redirectUri: string, nonce: string): string {
-  return Buffer.from(JSON.stringify({ redirectUri, nonce }), "utf8").toString("base64");
+function buildState(
+  redirectUri: string,
+  nonce: string,
+  returnTo?: string
+): string {
+  return Buffer.from(
+    JSON.stringify({
+      redirectUri,
+      nonce,
+      ...(returnTo ? { returnTo } : {}),
+    }),
+    "utf8"
+  ).toString("base64");
 }
 
 async function sendCallbackRequest(params: {
@@ -164,6 +175,90 @@ describe("OAuth callback security", () => {
       })
     );
     expect(mocks.createSessionToken).toHaveBeenCalled();
+  });
+
+  it("redirects to a safe relative return path after login", async () => {
+    mocks.exchangeCodeForToken.mockResolvedValue({ accessToken: "access-token" });
+    mocks.getUserInfo.mockResolvedValue({
+      openId: "open-id-1",
+      name: "Test User",
+      email: "test@example.com",
+      loginMethod: "facebook",
+      platform: "facebook",
+    });
+    mocks.getUserByOpenId.mockResolvedValue({
+      id: 7,
+      openId: "open-id-1",
+      name: "Test User",
+      email: "test@example.com",
+      loginMethod: "facebook",
+      role: "user",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+      lastSignedIn: new Date(0),
+    });
+    mocks.getOrCreateUserWorkspace.mockResolvedValue({
+      id: 42,
+      name: "Test User's workspace",
+      slug: "workspace-7",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    });
+    mocks.createSessionToken.mockResolvedValue("session-token");
+
+    const nonce = "nonce-1234567890abcdef";
+    const redirectUri = "https://leaderbot.example/api/oauth/callback";
+    const state = buildState(redirectUri, nonce, "/handoff");
+    const response = await sendCallbackRequest({
+      code: "code-return",
+      state,
+      cookie: `${OAUTH_STATE_COOKIE_NAME}=${nonce}`,
+    });
+
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe("/handoff");
+  });
+
+  it("falls back to the portal root for unsafe return paths", async () => {
+    mocks.exchangeCodeForToken.mockResolvedValue({ accessToken: "access-token" });
+    mocks.getUserInfo.mockResolvedValue({
+      openId: "open-id-1",
+      name: "Test User",
+      email: "test@example.com",
+      loginMethod: "facebook",
+      platform: "facebook",
+    });
+    mocks.getUserByOpenId.mockResolvedValue({
+      id: 7,
+      openId: "open-id-1",
+      name: "Test User",
+      email: "test@example.com",
+      loginMethod: "facebook",
+      role: "user",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+      lastSignedIn: new Date(0),
+    });
+    mocks.getOrCreateUserWorkspace.mockResolvedValue({
+      id: 42,
+      name: "Test User's workspace",
+      slug: "workspace-7",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    });
+    mocks.createSessionToken.mockResolvedValue("session-token");
+
+    const nonce = "nonce-1234567890abcdef";
+    const redirectUri = "https://leaderbot.example/api/oauth/callback";
+    const state = buildState(redirectUri, nonce, "//evil.example/handoff");
+    const response = await sendCallbackRequest({
+      code: "code-unsafe-return",
+      state,
+      cookie: `${OAUTH_STATE_COOKIE_NAME}=${nonce}`,
+    });
+
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe("/");
   });
 
   it("fails the callback before session creation when the workspace is not persisted", async () => {

@@ -24,8 +24,26 @@ export function createOAuthNonce(): string {
   throw new Error("Secure random generator unavailable for OAuth state nonce");
 }
 
-function encodeOAuthState(redirectUri: string, nonce: string): string {
-  return btoa(JSON.stringify({ redirectUri, nonce }));
+function getSafeReturnTo(returnTo?: string): string | undefined {
+  if (!returnTo) return undefined;
+  if (!returnTo.startsWith("/") || returnTo.startsWith("//")) return undefined;
+  if (returnTo.includes("\\")) return undefined;
+  return returnTo.slice(0, 200);
+}
+
+function encodeOAuthState(
+  redirectUri: string,
+  nonce: string,
+  returnTo?: string
+): string {
+  const safeReturnTo = getSafeReturnTo(returnTo);
+  return btoa(
+    JSON.stringify({
+      redirectUri,
+      nonce,
+      ...(safeReturnTo ? { returnTo: safeReturnTo } : {}),
+    })
+  );
 }
 
 function persistOAuthStateNonce(nonce: string): void {
@@ -34,18 +52,25 @@ function persistOAuthStateNonce(nonce: string): void {
     `${OAUTH_STATE_COOKIE_NAME}=${encodeURIComponent(nonce)}; Path=/api/oauth/callback; Max-Age=600; SameSite=Lax${secure}`;
 }
 
+export function isLoginConfigured(): boolean {
+  return Boolean(
+    getOptionalEnvString(import.meta.env.VITE_OAUTH_PORTAL_URL) &&
+      getOptionalEnvString(import.meta.env.VITE_APP_ID)
+  );
+}
+
 // Generate login URL at runtime so redirect URI reflects the current origin.
-export const getLoginUrl = () => {
+export const getLoginUrl = (returnTo?: string) => {
   const oauthPortalUrl = getOptionalEnvString(import.meta.env.VITE_OAUTH_PORTAL_URL);
   const appId = getOptionalEnvString(import.meta.env.VITE_APP_ID);
   const redirectUri = `${window.location.origin}/api/oauth/callback`;
 
   if (!oauthPortalUrl || !appId) {
-    return redirectUri;
+    return null;
   }
 
   const nonce = createOAuthNonce();
-  const state = encodeOAuthState(redirectUri, nonce);
+  const state = encodeOAuthState(redirectUri, nonce, returnTo);
   persistOAuthStateNonce(nonce);
 
   const url = new URL(`${oauthPortalUrl}/app-auth`);

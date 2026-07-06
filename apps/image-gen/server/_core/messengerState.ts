@@ -3,6 +3,7 @@ import type { ConversationAction } from "./botResponse";
 import {
   clearStateStore,
   deleteState,
+  forEachStoredState,
   isPromiseLike,
   type MaybePromise,
 } from "./stateStore";
@@ -96,6 +97,26 @@ function getMessengerResponseWindowMs(): number {
 
 export function getState(psid: string): MaybePromise<MessengerUserState | null> {
   return getPersistedState(psid);
+}
+
+export async function findStateByUserKey(
+  userKey: string
+): Promise<MessengerUserState | null> {
+  let matchedPsid: string | null = null;
+
+  await forEachStoredState<Partial<MessengerUserState>>((psid, state) => {
+    if (matchedPsid || state.userKey !== userKey) {
+      return;
+    }
+
+    matchedPsid = typeof state.psid === "string" && state.psid ? state.psid : psid;
+  });
+
+  if (!matchedPsid) {
+    return null;
+  }
+
+  return await Promise.resolve(getPersistedState(matchedPsid));
 }
 
 export function clearUserState(psid: string): MaybePromise<void> {

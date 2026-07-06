@@ -4,6 +4,8 @@ import { portalRouter } from "./_core/portalRouter";
 
 const mocks = vi.hoisted(() => ({
   getOrCreateUserWorkspace: vi.fn(),
+  getWorkspaceById: vi.fn(),
+  addWorkspaceMember: vi.fn(),
   getWorkspaceMembership: vi.fn(),
   listWorkspaceMembers: vi.fn(),
   updateWorkspace: vi.fn(),
@@ -23,10 +25,13 @@ const mocks = vi.hoisted(() => ({
   listWorkspacePrivacyRequests: vi.fn(),
   createWorkspacePrivacyRequest: vi.fn(),
   insertAuditLog: vi.fn(),
+  consumePortalHandoffToken: vi.fn(),
 }));
 
 vi.mock("./db", () => ({
   getOrCreateUserWorkspace: mocks.getOrCreateUserWorkspace,
+  getWorkspaceById: mocks.getWorkspaceById,
+  addWorkspaceMember: mocks.addWorkspaceMember,
   getWorkspaceMembership: mocks.getWorkspaceMembership,
   listWorkspaceMembers: mocks.listWorkspaceMembers,
   updateWorkspace: mocks.updateWorkspace,
@@ -46,6 +51,10 @@ vi.mock("./db", () => ({
   listWorkspacePrivacyRequests: mocks.listWorkspacePrivacyRequests,
   createWorkspacePrivacyRequest: mocks.createWorkspacePrivacyRequest,
   insertAuditLog: mocks.insertAuditLog,
+}));
+
+vi.mock("./_core/portalHandoff", () => ({
+  consumePortalHandoffToken: mocks.consumePortalHandoffToken,
 }));
 
 const user: NonNullable<TrpcContext["user"]> = {
@@ -422,6 +431,112 @@ describe("portal router audit logging", () => {
     expect(mocks.listChannelConnections).not.toHaveBeenCalled();
     expect(mocks.listWorkspaceKnowledgeSources).not.toHaveBeenCalled();
     expect(mocks.getWorkspacePrivacySettings).not.toHaveBeenCalled();
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("returns a tenant-checked portal auth session for an active handoff workspace", async () => {
+    const caller = createCaller();
+    mocks.getWorkspaceById.mockResolvedValue(workspace);
+
+    await expect(caller.auth.session({ workspaceId })).resolves.toMatchObject({
+      workspace: {
+        id: workspace.id,
+        name: workspace.name,
+        slug: workspace.slug,
+      },
+      membership: {
+        role: "owner",
+      },
+    });
+
+    expect(mocks.getOrCreateUserWorkspace).not.toHaveBeenCalled();
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceById).toHaveBeenCalledWith(workspaceId);
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("claims a Messenger handoff token into the authenticated customer workspace", async () => {
+    const caller = createCaller();
+    const token = "opaque-portal-handoff-token-value";
+    mocks.consumePortalHandoffToken.mockResolvedValue({
+      ok: true,
+      workspaceId,
+      purpose: "workspace_onboarding",
+      messengerSenderUserKey: "hashed-sender-key",
+    });
+    mocks.addWorkspaceMember.mockResolvedValue({
+      workspaceId,
+      userId: user.id,
+      role: "owner",
+    });
+    mocks.getWorkspaceById.mockResolvedValue(workspace);
+
+    await expect(caller.handoff.claim({ token })).resolves.toEqual({
+      workspace: {
+        id: workspace.id,
+        name: workspace.name,
+        slug: workspace.slug,
+      },
+      membership: {
+        role: "owner",
+      },
+    });
+
+    expect(mocks.consumePortalHandoffToken).toHaveBeenCalledWith(token);
+    expect(mocks.addWorkspaceMember).toHaveBeenCalledWith({
+      workspaceId,
+      userId: user.id,
+      role: "owner",
+    });
+    expect(mocks.insertAuditLog).toHaveBeenCalledWith({
+      workspaceId,
+      userId: user.id,
+      event: "portal_handoff.claimed",
+      metadata: {
+        purpose: "workspace_onboarding",
+        source: "messenger_handoff",
+        hasMessengerSenderUserKey: true,
+        membershipRole: "owner",
+      },
+    });
+    expect(JSON.stringify(mocks.insertAuditLog.mock.calls)).not.toContain(token);
+    expect(JSON.stringify(mocks.insertAuditLog.mock.calls)).not.toContain(
+      "hashed-sender-key"
+    );
+  });
+
+  it("rejects non-Facebook handoff claims before consuming the token", async () => {
+    const caller = createCaller({
+      user: {
+        ...user,
+        loginMethod: "email",
+      },
+    });
+
+    await expectFacebookLoginRequired(() =>
+      caller.handoff.claim({ token: "opaque-portal-handoff-token-value" })
+    );
+
+    expect(mocks.consumePortalHandoffToken).not.toHaveBeenCalled();
+    expect(mocks.addWorkspaceMember).not.toHaveBeenCalled();
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid handoff tokens before granting workspace membership", async () => {
+    const caller = createCaller();
+    mocks.consumePortalHandoffToken.mockResolvedValue({
+      ok: false,
+      reason: "invalid",
+    });
+
+    await expect(
+      caller.handoff.claim({ token: "opaque-portal-handoff-token-value" })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: "portal handoff invalid",
+    });
+
+    expect(mocks.addWorkspaceMember).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 
