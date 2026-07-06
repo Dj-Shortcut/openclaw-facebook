@@ -30,6 +30,12 @@ describe("conversation action selection", () => {
     );
   });
 
+  it("normalizes long trailing punctuation runs without regex backtracking", () => {
+    expect(
+      resolveConversationActionInput(`tekstprompt${"!".repeat(10_000)}`, actions)
+    ).toBe("Schrijf een tekstprompt");
+  });
+
   it("ignores unknown choices", () => {
     expect(resolveConversationActionInput("nr 9", actions)).toBeUndefined();
     expect(resolveConversationActionInput("maak iets anders", actions)).toBeUndefined();

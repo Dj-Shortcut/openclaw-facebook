@@ -9,12 +9,38 @@ const ACTION_SELECTION_PREFIXES = new Set([
   "option",
 ]);
 
+function stripTrailingActionPunctuation(value: string): string {
+  let end = value.length;
+  while (end > 0 && ".!?".includes(value[end - 1])) {
+    end -= 1;
+  }
+
+  return end === value.length ? value : value.slice(0, end);
+}
+
+function collapseWhitespace(value: string): string {
+  const result: string[] = [];
+  let previousWasWhitespace = false;
+
+  for (const character of value) {
+    const isWhitespace = character.trim() === "";
+    if (isWhitespace) {
+      if (!previousWasWhitespace) {
+        result.push(" ");
+      }
+    } else {
+      result.push(character);
+    }
+    previousWasWhitespace = isWhitespace;
+  }
+
+  return result.join("");
+}
+
 function normalizeActionLabel(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[.!?]+$/u, "")
-    .replace(/\s+/gu, " ");
+  return collapseWhitespace(
+    stripTrailingActionPunctuation(value.trim().toLowerCase())
+  );
 }
 
 function readActionSelectionIndex(value: string): number | undefined {

@@ -17,6 +17,12 @@ describe("image intent primitives", () => {
     expect(isSourceImageTransformRequest("Kan je me een samurai maken")).toBe(false);
   });
 
+  it("accepts arbitrary visual prompts with long trailing punctuation runs", () => {
+    expect(isImageGenerationRequest(`Maak een samurai${"!".repeat(10_000)}`)).toBe(
+      true
+    );
+  });
+
   it("detects explicit source-image edits and transforms", () => {
     expect(isExplicitSourceImageEditRequest("Bewerk deze foto cinematic")).toBe(true);
     expect(isSourceImageTransformRequest("Verander me in een samurai")).toBe(true);
