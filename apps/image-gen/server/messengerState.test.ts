@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   anonymizePsid,
   clearPendingImageState,
+  findStateByUserKey,
   getOrCreateState,
   resetStateStore,
   setPendingImage,
@@ -77,5 +78,16 @@ describe("messenger state flow", () => {
     expect(first).toHaveLength(64);
     expect(first).toBe(second);
     expect(first).not.toBe(other);
+  });
+
+  it("finds an existing Messenger state by privacy-peppered user key", async () => {
+    const psid = "lookup-user-by-key";
+    const state = getOrCreateState(psid);
+
+    await expect(findStateByUserKey(state.userKey)).resolves.toMatchObject({
+      psid,
+      userKey: state.userKey,
+    });
+    await expect(findStateByUserKey(anonymizePsid("missing-user"))).resolves.toBeNull();
   });
 });

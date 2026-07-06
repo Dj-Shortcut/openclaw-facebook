@@ -33,6 +33,9 @@ import {
   workspaceKnowledgeSources,
   workspaces,
   workspaceUsageDaily,
+  type PortalHandoffToken,
+  type Workspace,
+  type WorkspaceMember,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
 import { safeLog } from "./_core/logger";
@@ -175,6 +178,7 @@ export async function getOrCreateUserWorkspace(user: {
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaceMembers.workspaceId, workspaces.id))
     .where(eq(workspaceMembers.userId, user.id))
+    .orderBy(desc(workspaceMembers.id))
     .limit(1);
 
   if (existing.length > 0) {
@@ -216,6 +220,50 @@ export async function getOrCreateUserWorkspace(user: {
   await seedWorkspacePrivacyDefaults(workspace.id);
 
   return workspace;
+}
+
+export async function getWorkspaceById(workspaceId: number) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("get_workspace_by_id");
+    throw new Error("Database unavailable: workspace was not loaded");
+  }
+
+  const result = await db
+    .select({
+      id: workspaces.id,
+      name: workspaces.name,
+      slug: workspaces.slug,
+      createdAt: workspaces.createdAt,
+      updatedAt: workspaces.updatedAt,
+    })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+
+  return result[0] ?? null;
+}
+
+export async function addWorkspaceMember(values: InsertWorkspaceMember) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("add_workspace_member");
+    throw new Error("Database unavailable: workspace membership was not persisted");
+  }
+
+  await db.insert(workspaceMembers).values(values).onDuplicateKeyUpdate({
+    set: {
+      role: values.role ?? "member",
+    },
+  });
+  await seedWorkspacePrivacyDefaults(values.workspaceId);
+
+  const membership = await getWorkspaceMembership(values.workspaceId, values.userId);
+  if (!membership) {
+    throw new Error("Workspace membership insert succeeded but read-back failed");
+  }
+
+  return membership;
 }
 
 async function seedWorkspacePrivacyDefaults(workspaceId: number) {
@@ -901,6 +949,171 @@ export async function markPortalHandoffTokenConsumed(tokenHash: string) {
     .set({
       status: "consumed",
       consumedAt: now,
+    })
+    .where(
+      and(
+        eq(portalHandoffTokens.tokenHash, tokenHash),
+        eq(portalHandoffTokens.status, "pending")
+      )
+    );
+
+  return getAffectedRows(result) > 0;
+}
+
+export type ClaimPortalHandoffTokenForUserResult =
+  | {
+      ok: true;
+      workspace: Pick<Workspace, "id" | "name" | "slug" | "createdAt" | "updatedAt">;
+      membership: WorkspaceMember;
+      purpose: PortalHandoffToken["purpose"];
+      messengerSenderUserKey: string | null;
+    }
+  | {
+      ok: false;
+      reason: "invalid" | "expired" | "already_used" | "workspace_not_found";
+    };
+
+export async function claimPortalHandoffTokenForUser(input: {
+  tokenHash: string;
+  userId: number;
+  role?: InsertWorkspaceMember["role"];
+  now?: Date;
+}): Promise<ClaimPortalHandoffTokenForUserResult> {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("claim_portal_handoff_token_for_user");
+    throw new Error("Database unavailable: portal handoff token was not claimed");
+  }
+
+  const now = input.now ?? new Date();
+  const role = input.role ?? "owner";
+
+  return db.transaction(async tx => {
+    const tokens = await tx
+      .select()
+      .from(portalHandoffTokens)
+      .where(eq(portalHandoffTokens.tokenHash, input.tokenHash))
+      .limit(1);
+    const stored = tokens[0];
+
+    if (!stored) {
+      return { ok: false, reason: "invalid" };
+    }
+
+    if (stored.status !== "pending") {
+      return { ok: false, reason: "already_used" };
+    }
+
+    if (stored.expiresAt.getTime() <= now.getTime()) {
+      return { ok: false, reason: "expired" };
+    }
+
+    const workspaceRows = await tx
+      .select({
+        id: workspaces.id,
+        name: workspaces.name,
+        slug: workspaces.slug,
+        createdAt: workspaces.createdAt,
+        updatedAt: workspaces.updatedAt,
+      })
+      .from(workspaces)
+      .where(eq(workspaces.id, stored.workspaceId))
+      .limit(1);
+    const workspace = workspaceRows[0];
+
+    if (!workspace) {
+      return { ok: false, reason: "workspace_not_found" };
+    }
+
+    const consumeResult = await tx
+      .update(portalHandoffTokens)
+      .set({
+        status: "consumed",
+        consumedAt: now,
+      })
+      .where(
+        and(
+          eq(portalHandoffTokens.tokenHash, input.tokenHash),
+          eq(portalHandoffTokens.status, "pending")
+        )
+      );
+
+    if (getAffectedRows(consumeResult) === 0) {
+      return { ok: false, reason: "already_used" };
+    }
+
+    const memberValues: InsertWorkspaceMember = {
+      workspaceId: stored.workspaceId,
+      userId: input.userId,
+      role,
+    };
+    await tx.insert(workspaceMembers).values(memberValues).onDuplicateKeyUpdate({
+      set: {
+        role,
+      },
+    });
+
+    const privacyDefaults: InsertWorkspacePrivacySetting = {
+      workspaceId: stored.workspaceId,
+      allowKnowledgeIndexing: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowKnowledgeIndexing ? 1 : 0,
+      allowUsageAnalytics: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowUsageAnalytics ? 1 : 0,
+      imageMemoryRetentionDays: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.imageMemoryRetentionDays,
+    };
+    await tx.insert(workspacePrivacySettings).values(privacyDefaults).onDuplicateKeyUpdate({
+      set: {
+        workspaceId: stored.workspaceId,
+      },
+    });
+
+    await tx.insert(auditLog).values({
+      workspaceId: stored.workspaceId,
+      userId: input.userId,
+      event: "portal_handoff.claimed",
+      metadata: {
+        purpose: stored.purpose,
+        source: "messenger_handoff",
+        hasMessengerSenderUserKey: Boolean(stored.messengerSenderUserKey),
+        membershipRole: role,
+      },
+    });
+
+    const memberships = await tx
+      .select()
+      .from(workspaceMembers)
+      .where(
+        and(
+          eq(workspaceMembers.workspaceId, stored.workspaceId),
+          eq(workspaceMembers.userId, input.userId)
+        )
+      )
+      .limit(1);
+    const membership = memberships[0];
+
+    if (!membership) {
+      throw new Error("Workspace membership insert succeeded but read-back failed");
+    }
+
+    return {
+      ok: true,
+      workspace,
+      membership,
+      purpose: stored.purpose,
+      messengerSenderUserKey: stored.messengerSenderUserKey,
+    };
+  });
+}
+
+export async function revokePortalHandoffToken(tokenHash: string) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("revoke_portal_handoff_token");
+    throw new Error("Database unavailable: portal handoff token was not revoked");
+  }
+
+  const result = await db
+    .update(portalHandoffTokens)
+    .set({
+      status: "revoked",
     })
     .where(
       and(

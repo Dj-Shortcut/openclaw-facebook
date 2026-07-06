@@ -12,11 +12,22 @@ import {
   storeFacebookPages,
   validateStoredFacebookState,
 } from "./facebookConnectStore";
+import { claimPortalHandoffToken } from "./portalHandoff";
 import { isFacebookLoginMethod } from "./portalAuthPolicy";
 import { protectedProcedure, publicProcedure, router } from "./trpc";
 
 const workspaceInput = z.object({
   workspaceId: z.number().int().positive(),
+});
+
+const optionalWorkspaceInput = z
+  .object({
+    workspaceId: z.number().int().positive().optional(),
+  })
+  .optional();
+
+const portalHandoffClaimInput = z.object({
+  token: z.string().trim().min(20).max(512),
 });
 
 const workspaceUpdateInput = workspaceInput.extend({
@@ -101,6 +112,35 @@ async function requireCurrentWorkspaceMembership(ctx: {
   return { workspace, membership };
 }
 
+async function requireWorkspaceDetails(
+  ctx: { user: { id: number; name: string | null; loginMethod?: string | null } },
+  workspaceId?: number
+) {
+  requireFacebookPortalUser(ctx);
+
+  if (!workspaceId) {
+    return requireCurrentWorkspaceMembership(ctx);
+  }
+
+  const membership = await db.getWorkspaceMembership(workspaceId, ctx.user.id);
+  if (!membership) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "workspace access denied",
+    });
+  }
+
+  const workspace = await db.getWorkspaceById(workspaceId);
+  if (!workspace) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "workspace not found",
+    });
+  }
+
+  return { workspace, membership };
+}
+
 function requireFacebookPortalUser(ctx: {
   user: { loginMethod?: string | null };
 }) {
@@ -135,30 +175,40 @@ function redactFacebookPageToken<T extends { accessToken?: unknown }>(page: T) {
 
 export const portalRouter = router({
   auth: router({
-    session: protectedProcedure.query(async ({ ctx }) => {
-      const { workspace, membership } = await requireCurrentWorkspaceMembership(ctx);
-      return {
-        user: {
-          id: ctx.user.id,
-          email: ctx.user.email,
-          name: ctx.user.name,
-          role: ctx.user.role,
-        },
-        workspace: {
-          id: workspace.id,
-          name: workspace.name,
-          slug: workspace.slug,
-        },
-        membership: {
-          role: membership.role,
-        },
-      };
-    }),
+    session: protectedProcedure
+      .input(optionalWorkspaceInput)
+      .query(async ({ ctx, input }) => {
+        const { workspace, membership } = await requireWorkspaceDetails(
+          ctx,
+          input?.workspaceId
+        );
+        return {
+          user: {
+            id: ctx.user.id,
+            email: ctx.user.email,
+            name: ctx.user.name,
+            role: ctx.user.role,
+          },
+          workspace: {
+            id: workspace.id,
+            name: workspace.name,
+            slug: workspace.slug,
+          },
+          membership: {
+            role: membership.role,
+          },
+        };
+      }),
   }),
 
   workspace: router({
     current: protectedProcedure.query(async ({ ctx }) => {
       return db.getOrCreateUserWorkspace(ctx.user);
+    }),
+
+    get: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
+      const { workspace } = await requireWorkspaceDetails(ctx, input.workspaceId);
+      return workspace;
     }),
 
     members: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
@@ -381,6 +431,39 @@ export const portalRouter = router({
           },
         });
         return { success: true, status: "disconnected" } as const;
+      }),
+  }),
+
+  handoff: router({
+    claim: protectedProcedure
+      .input(portalHandoffClaimInput)
+      .mutation(async ({ ctx, input }) => {
+        requireFacebookPortalUser(ctx);
+
+        const claimed = await claimPortalHandoffToken(input.token, ctx.user.id);
+        if (!claimed.ok) {
+          if (claimed.reason === "workspace_not_found") {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "workspace not found",
+            });
+          }
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `portal handoff ${claimed.reason}`,
+          });
+        }
+
+        return {
+          workspace: {
+            id: claimed.workspace.id,
+            name: claimed.workspace.name,
+            slug: claimed.workspace.slug,
+          },
+          membership: {
+            role: claimed.membership.role,
+          },
+        };
       }),
   }),
 

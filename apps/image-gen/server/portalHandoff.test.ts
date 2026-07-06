@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  claimPortalHandoffToken,
   consumePortalHandoffToken,
   createPortalHandoffToken,
   hashMessengerSenderForHandoff,
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   createPortalHandoffToken: vi.fn(),
   getPortalHandoffTokenByHash: vi.fn(),
   markPortalHandoffTokenConsumed: vi.fn(),
+  claimPortalHandoffTokenForUser: vi.fn(),
   insertAuditLog: vi.fn(),
 }));
 
@@ -19,6 +21,7 @@ vi.mock("./db", () => ({
   createPortalHandoffToken: mocks.createPortalHandoffToken,
   getPortalHandoffTokenByHash: mocks.getPortalHandoffTokenByHash,
   markPortalHandoffTokenConsumed: mocks.markPortalHandoffTokenConsumed,
+  claimPortalHandoffTokenForUser: mocks.claimPortalHandoffTokenForUser,
   insertAuditLog: mocks.insertAuditLog,
 }));
 
@@ -141,5 +144,43 @@ describe("portal handoff tokens", () => {
       ok: false,
       reason: "already_used",
     });
+  });
+
+  it("claims tokens through the atomic database helper without exposing the token", async () => {
+    const token = "handoff-token";
+    const tokenHash = hashPortalHandoffToken(token);
+    const now = new Date("2026-06-30T10:00:00.000Z");
+    const claimed = {
+      ok: true,
+      workspace: {
+        id: 42,
+        name: "Premium Workspace",
+        slug: "premium-workspace",
+        createdAt: new Date("2026-06-30T09:00:00.000Z"),
+        updatedAt: new Date("2026-06-30T09:00:00.000Z"),
+      },
+      membership: {
+        id: 8,
+        workspaceId: 42,
+        userId: 7,
+        role: "owner",
+        createdAt: new Date("2026-06-30T10:00:00.000Z"),
+      },
+      purpose: "workspace_onboarding",
+      messengerSenderUserKey: "hashed-sender-key",
+    };
+    mocks.claimPortalHandoffTokenForUser.mockResolvedValue(claimed);
+
+    await expect(claimPortalHandoffToken(token, 7, now)).resolves.toEqual(claimed);
+
+    expect(mocks.claimPortalHandoffTokenForUser).toHaveBeenCalledWith({
+      tokenHash,
+      userId: 7,
+      role: "owner",
+      now,
+    });
+    expect(JSON.stringify(mocks.claimPortalHandoffTokenForUser.mock.calls)).not.toContain(
+      token
+    );
   });
 });

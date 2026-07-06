@@ -1,6 +1,12 @@
 import { useAuth } from "@/_core/hooks/useAuth";
+import {
+  clearActiveWorkspaceId,
+  getWorkspaceIdFromLocation,
+  readActiveWorkspaceId,
+  writeActiveWorkspaceId,
+} from "@/_core/portalWorkspace";
 import { Button } from "@/components/ui/button";
-import { getLoginUrl } from "@/const";
+import { getLoginUrl, isLoginConfigured } from "@/const";
 import { trpc } from "@/lib/trpc";
 import {
   Bot,
@@ -21,7 +27,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const FACEBOOK_CONNECT_STATE_KEY = "leaderbot.facebookConnectState";
 
@@ -82,9 +88,19 @@ function isOpenPrivacyRequest(status: string) {
   return status === "requested" || status === "processing";
 }
 
+function hasHandoffOnboardingFlag() {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("onboarding") === "handoff";
+}
+
 function Home() {
   const auth = useAuth();
   const utils = trpc.useUtils();
+  const loginConfigured = isLoginConfigured();
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<number | null>(
+    () => getWorkspaceIdFromLocation() ?? readActiveWorkspaceId()
+  );
+  const [showHandoffBanner] = useState(hasHandoffOnboardingFlag);
   const [isEditingIdentity, setIsEditingIdentity] = useState(false);
   const [identityForm, setIdentityForm] = useState({
     name: "",
@@ -111,17 +127,45 @@ function Home() {
   );
   const [facebookConnectPages, setFacebookConnectPages] = useState<FacebookConnectPage[]>([]);
   const [facebookConnectIssue, setFacebookConnectIssue] = useState<string | null>(null);
-  const portalSessionQuery = trpc.portal.auth.session.useQuery(undefined, {
-    enabled: auth.isAuthenticated,
+  const portalSessionQuery = trpc.portal.auth.session.useQuery(
+    activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
+    {
+      enabled: auth.isAuthenticated,
+    }
+  );
+  const currentWorkspaceQuery = trpc.portal.workspace.current.useQuery(undefined, {
+    enabled: auth.isAuthenticated && !activeWorkspaceId,
   });
-  const workspaceQuery = trpc.portal.workspace.current.useQuery(undefined, {
-    enabled: auth.isAuthenticated,
-  });
-  const workspaceId = workspaceQuery.data?.id;
+  const activeWorkspaceQuery = trpc.portal.workspace.get.useQuery(
+    { workspaceId: activeWorkspaceId ?? 0 },
+    {
+      enabled: auth.isAuthenticated && Boolean(activeWorkspaceId),
+    }
+  );
+  const workspace = activeWorkspaceQuery.data ?? currentWorkspaceQuery.data;
+  const workspaceId = workspace?.id ?? portalSessionQuery.data?.workspace.id;
   const workspaceDisplayName =
     portalSessionQuery.data?.workspace.name ??
-    workspaceQuery.data?.name ??
+    workspace?.name ??
     "Leaderbot workspace";
+
+  useEffect(() => {
+    if (!activeWorkspaceId) return;
+    writeActiveWorkspaceId(activeWorkspaceId);
+  }, [activeWorkspaceId]);
+
+  useEffect(() => {
+    if (!activeWorkspaceId || !activeWorkspaceQuery.error) return;
+    clearActiveWorkspaceId();
+    setActiveWorkspaceId(null);
+    if (typeof window !== "undefined" && window.location.search) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("workspaceId");
+      window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+  }, [activeWorkspaceId, activeWorkspaceQuery.error]);
+
+  const workspaceQuery = activeWorkspaceId ? activeWorkspaceQuery : currentWorkspaceQuery;
   const workspaceMembersQuery = trpc.portal.workspace.members.useQuery(
     { workspaceId: workspaceId ?? 0 },
     { enabled: Boolean(workspaceId) }
@@ -222,6 +266,9 @@ function Home() {
   const workspaceMutation = trpc.portal.workspace.update.useMutation({
     onSuccess: async () => {
       setIsEditingWorkspace(false);
+      if (workspaceId) {
+        await utils.portal.workspace.get.invalidate({ workspaceId });
+      }
       await utils.portal.workspace.current.invalidate();
       await utils.portal.auth.session.invalidate();
     },
@@ -383,13 +430,21 @@ function Home() {
             </p>
             <Button
               className="mt-8 gap-2"
+              disabled={!loginConfigured}
               onClick={() => {
-                window.location.href = getLoginUrl();
+                const loginUrl = getLoginUrl();
+                if (!loginUrl) return;
+                window.location.href = loginUrl;
               }}
             >
               <LogIn className="h-4 w-4" />
               Continue with Facebook
             </Button>
+            {!loginConfigured ? (
+              <p className="mt-4 text-sm text-amber-700">
+                Facebook Login is not configured for this local environment.
+              </p>
+            ) : null}
           </section>
         </div>
       </main>
@@ -493,6 +548,21 @@ function Home() {
             Sign out
           </Button>
         </header>
+
+        {showHandoffBanner ? (
+          <section className="mt-5 rounded-lg border border-teal-200 bg-teal-50 p-4 text-teal-950">
+            <div className="flex items-start gap-3">
+              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-teal-700" />
+              <div>
+                <h2 className="text-sm font-semibold">Premium workspace claimed</h2>
+                <p className="mt-1 text-sm leading-6 text-teal-800">
+                  Your Messenger setup link is secured to this workspace. Finish the
+                  AI identity, knowledge, channel, and privacy settings here.
+                </p>
+              </div>
+            </div>
+          </section>
+        ) : null}
 
         {isLoading ? (
           <div className="py-12 text-sm text-stone-600">Loading workspace...</div>

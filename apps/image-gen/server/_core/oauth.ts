@@ -12,6 +12,7 @@ const OAUTH_STATE_COOKIE_NAME = "lb_oauth_state_nonce";
 type OAuthStatePayload = {
   nonce: string;
   redirectUri: string;
+  returnTo?: string;
 };
 
 const oauthCallbackQuerySchema = z.object({
@@ -22,7 +23,20 @@ const oauthCallbackQuerySchema = z.object({
 const oauthStateSchema = z.object({
   nonce: z.string().min(16),
   redirectUri: z.string().url(),
+  returnTo: z.string().max(200).optional(),
 });
+
+function getSafeReturnTo(returnTo: string | undefined): string {
+  if (!returnTo) return "/";
+  if (!returnTo.startsWith("/") || returnTo.startsWith("//")) return "/";
+  if (returnTo.includes("\\")) return "/";
+  return returnTo;
+}
+
+function isHandoffReturn(returnTo: string | undefined): boolean {
+  const safeReturnTo = getSafeReturnTo(returnTo);
+  return safeReturnTo === "/handoff" || safeReturnTo.startsWith("/handoff/");
+}
 
 function getQueryParam(req: Request, key: string): string | undefined {
   const value = req.query[key];
@@ -134,7 +148,9 @@ export function registerOAuthRoutes(app: Express) {
         if (!portalUser) {
           throw new Error("portal customer was not persisted");
         }
-        await db.getOrCreateUserWorkspace(portalUser);
+        if (!isHandoffReturn(validatedState.returnTo)) {
+          await db.getOrCreateUserWorkspace(portalUser);
+        }
 
         const sessionToken = await sdk.createSessionToken(userInfo.openId, {
           name: userInfo.name || "",
@@ -148,7 +164,7 @@ export function registerOAuthRoutes(app: Express) {
         });
         clearOAuthStateCookie(req, res);
 
-        res.redirect(302, "/");
+        res.redirect(302, getSafeReturnTo(validatedState.returnTo));
       } catch (error) {
         clearOAuthStateCookie(req, res);
         safeLog("oauth_callback_failed", {

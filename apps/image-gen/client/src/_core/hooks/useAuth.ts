@@ -82,6 +82,7 @@ export function useAuth(options?: UseAuthOptions) {
     if (state.user) return;
     if (typeof window === "undefined") return;
     const nextRedirectPath = redirectPath ?? getLoginUrl();
+    if (!nextRedirectPath) return;
     if (window.location.pathname === nextRedirectPath) return;
 
     window.location.href = nextRedirectPath;

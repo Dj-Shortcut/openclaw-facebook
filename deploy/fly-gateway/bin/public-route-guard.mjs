@@ -10,7 +10,8 @@ const PORTAL_ROUTE_PREFIXES = [
   "/api/trpc",
   "/assets/",
 ];
-const PORTAL_PAGE_PATHS = new Set(["/", "/privacy", "/terms", "/data-deletion"]);
+const PORTAL_PAGE_PATHS = new Set(["/", "/privacy", "/terms", "/data-deletion", "/handoff"]);
+const PORTAL_PAGE_PREFIXES = ["/handoff/"];
 const ADMIN_COOKIE_NAME = "openclaw_admin";
 const ADMIN_LOGIN_PATH = "/admin/login";
 const ADMIN_LOGOUT_PATH = "/admin/logout";
@@ -212,7 +213,10 @@ function isAllowedPublicRequest(method, pathname, allowedPaths) {
 }
 
 function isAllowedPortalRequest(method, pathname) {
-  if (PORTAL_PAGE_PATHS.has(pathname)) {
+  if (
+    PORTAL_PAGE_PATHS.has(pathname) ||
+    PORTAL_PAGE_PREFIXES.some((prefix) => pathname.startsWith(prefix))
+  ) {
     return method === "GET" || method === "HEAD";
   }
   if (!PORTAL_ROUTE_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix))) {
