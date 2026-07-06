@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import { resolveMessengerAccount } from "./accounts.js";
-import { hasMessengerCredentials } from "./channel-shared.js";
+import { hasMessengerCredentials } from "./utils.js";
 
 export function inspectMessengerAccount(params: {
   cfg: OpenClawConfig;

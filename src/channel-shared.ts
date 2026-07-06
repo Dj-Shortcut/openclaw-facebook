@@ -3,19 +3,7 @@ import { type ChannelPlugin, type ResolvedMessengerAccount } from "./channel-api
 import { messengerConfigAdapter } from "./config-adapter.js";
 import { MessengerChannelConfigSchema } from "./config-schema.js";
 import { FACEBOOK_CHANNEL_ID, hasFacebookConfiguredEnv } from "./naming.js";
-
-export function hasMessengerCredentials(account: ResolvedMessengerAccount): boolean {
-  return Boolean(
-    hasText(account.pageId) &&
-      hasText(account.pageAccessToken) &&
-      hasText(account.appSecret) &&
-      hasText(account.verifyToken),
-  );
-}
-
-function hasText(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
+import { hasMessengerCredentials, hasText } from "./utils.js";
 
 export const messengerChannelPluginCommon: Pick<
   ChannelPlugin<ResolvedMessengerAccount>,

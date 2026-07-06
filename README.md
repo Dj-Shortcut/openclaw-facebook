@@ -43,21 +43,19 @@ openclaw plugins install @dj-shortcut/facebook
 
 ## Repository Layout
 
-This repository is now the Leaderbot/OpenClaw monorepo. The Facebook/OpenClaw
-plugin still lives at the repository root so existing plugin packaging keeps
-working. The production image-generation service lives in
-`apps/image-gen`.
+This repository is a monorepo containing the Facebook/OpenClaw integration and the Leaderbot customer portal.
 
-`leaderbot.live` is planned as a tenant/customer portal where customers manage
-their own AI. It should not expose the private OpenClaw gateway UI/API, and it
-should not become a marketing-only brochure site.
+- **Facebook Plugin (Root):** The core OpenClaw channel plugin for Facebook Page Messenger. It handles webhooks and message transport.
+- **Leaderbot Portal (`apps/image-gen`):** A full-stack application (Vite/React + Node/Express) that serves as the customer portal (`leaderbot.live`) and the image-generation service.
+- **Fly Gateway (`deploy/fly-gateway`):** Deployment configuration for the OpenClaw gateway with a public route guard.
 
 ```text
 .
-├── apps/image-gen              # Leaderbot image-generation web/service app
-├── deploy/fly-gateway          # OpenClaw gateway Fly image
-├── src                         # Facebook channel plugin runtime
-└── docs                        # Shared operations and release docs
+├── apps/image-gen              # Leaderbot Portal & Image-gen service
+├── deploy/fly-gateway          # OpenClaw gateway deployment source
+├── src                         # Facebook channel plugin source code
+├── docs                        # Shared documentation and release guides
+└── scripts                     # Operational and maintenance scripts
 ```
 
 Deploy targets:

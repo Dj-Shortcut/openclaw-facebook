@@ -6,6 +6,7 @@ Because the API is type-safe and inferred from server routers, the source of tru
 
 - `server/routers.ts`
 - `server/_core/systemRouter.ts`
+- `server/_core/portalRouter.ts`
 
 Use this document as a human-readable reference for procedures and their behavior.
 
@@ -47,6 +48,85 @@ Use this document as a human-readable reference for procedures and their behavio
   - Clears the auth session cookie.
 - **Response:**
   - `{ success: true }`
+
+## Portal Procedures (`portal.*`)
+
+The portal router requires a valid session. Most procedures also require a `workspaceId` input.
+
+### `portal.auth.session`
+
+- **Type:** Query
+- **Auth:** Protected
+- **Response:** Current user, workspace, and membership details.
+
+### `portal.workspace.current`
+
+- **Type:** Query
+- **Auth:** Protected
+- **Response:** The user's current workspace.
+
+### `portal.workspace.members`
+
+- **Type:** Query
+- **Auth:** Protected
+- **Input:** `{ workspaceId: string }`
+- **Response:** List of workspace members.
+
+### `portal.aiIdentity.get`
+
+- **Type:** Query
+- **Auth:** Protected
+- **Input:** `{ workspaceId: string }`
+- **Response:** Current AI identity settings (name, instructions, tone, etc.).
+
+### `portal.channels.status`
+
+- **Type:** Query
+- **Auth:** Protected
+- **Input:** `{ workspaceId: string }`
+- **Response:** Connection status for Facebook Messenger.
+
+### `portal.facebook.startConnect`
+
+- **Type:** Mutation
+- **Auth:** Protected
+- **Input:** `{ workspaceId: string }`
+- **Response:** Facebook OAuth URL and state for starting a connection.
+
+### `portal.facebook.completeConnect`
+
+- **Type:** Mutation
+- **Auth:** Protected
+- **Input:** `{ workspaceId: string, state: string, code?: string }`
+- **Response:** List of authorized Facebook Pages.
+
+### `portal.facebook.selectPage`
+
+- **Type:** Mutation
+- **Auth:** Protected
+- **Input:** `{ workspaceId: string, state: string, pageId: string }`
+- **Response:** `{ success: true }` after connecting the selected Page.
+
+### `portal.usage.summary`
+
+- **Type:** Query
+- **Auth:** Protected
+- **Input:** `{ workspaceId: string }`
+- **Response:** Usage statistics (remaining images, messages today, etc.).
+
+### `portal.knowledge.list`
+
+- **Type:** Query
+- **Auth:** Protected
+- **Input:** `{ workspaceId: string }`
+- **Response:** List of registered knowledge sources.
+
+### `portal.privacy.controls`
+
+- **Type:** Query
+- **Auth:** Protected
+- **Input:** `{ workspaceId: string }`
+- **Response:** Privacy settings (knowledge indexing, analytics, retention).
 
 ## Notes
 

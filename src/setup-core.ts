@@ -7,7 +7,7 @@ import {
   resolveMessengerAccount,
   type MessengerConfig,
 } from "./channel-api.js";
-import { hasMessengerCredentials } from "./channel-shared.js";
+import { hasMessengerCredentials } from "./utils.js";
 import { FACEBOOK_CHANNEL_ID, resolveFacebookConfig, stripFacebookTargetPrefix } from "./naming.js";
 
 export function patchMessengerAccountConfig(params: {

@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { DEFAULT_ACCOUNT_ID } from "./accounts.js";
 import { type ChannelPlugin, type ResolvedMessengerAccount } from "./channel-api.js";
-import { hasMessengerCredentials } from "./channel-shared.js";
+import { hasMessengerCredentials } from "./utils.js";
 import { FACEBOOK_CHANNEL_ID } from "./naming.js";
 import { getMessengerRuntime } from "./runtime.js";
 import type { MessengerProbeResult } from "./types.js";
