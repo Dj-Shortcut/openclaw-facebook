@@ -140,6 +140,15 @@ function hasVisualCorrectionSubject(tokens: readonly string[]): boolean {
   return tokens.some(token => VISUAL_CORRECTION_SUBJECT_WORDS.has(token));
 }
 
+function stripTrailingPromptPunctuation(value: string): string {
+  let end = value.length;
+  while (end > 0 && "?.!,".includes(value[end - 1])) {
+    end -= 1;
+  }
+
+  return end === value.length ? value : value.slice(0, end);
+}
+
 export function isVisualCorrectionRequest(text: string): boolean {
   const normalized = normalizeImageIntentText(text);
   const tokens = tokenizeIntentText(normalized);
@@ -174,7 +183,8 @@ export function isVideoAnimationIntent(text: string): boolean {
 function hasArbitraryVisualSubject(text: string): boolean {
   for (const pattern of ARBITRARY_VISUAL_CREATE_PATTERNS) {
     const match = pattern.exec(text);
-    const subject = match?.[1]?.trim().replace(/[?.!,]+$/u, "");
+    const rawSubject = match?.[1]?.trim();
+    const subject = rawSubject ? stripTrailingPromptPunctuation(rawSubject) : "";
     if (subject && !VAGUE_OBJECT_PATTERNS.some(vague => vague.test(subject))) {
       return true;
     }
