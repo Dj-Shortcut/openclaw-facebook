@@ -4,6 +4,7 @@ import { initSentry } from "./observability/sentry";
 initSentry();
 
 import express from "express";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import path from "path";
 import { createServer } from "http";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
@@ -33,6 +34,10 @@ import { bodyParserErrorHandler } from "./bodyParserErrorHandler";
 import {
   createGlobalHttpRateLimiter,
   ensureHttpRateLimiterReady,
+  getHttpRateLimitGuardMaxRequests,
+  getHttpRateLimitWindowMs,
+  isRedisHttpRateLimitEnabled,
+  shouldSkipHttpRateLimit,
 } from "./httpRateLimit";
 import {
   attachRequestTracing,
@@ -67,6 +72,24 @@ const gitSha = process.env.GIT_SHA ?? process.env.SOURCE_VERSION ?? "dev";
 const bootTimestamp = new Date().toISOString();
 const REQUEST_BODY_LIMIT = "10mb";
 const SHUTDOWN_GRACE_PERIOD_MS = 5_000;
+
+function getHttpRateLimiterGuardKey(req: express.Request): string {
+  const clientIp = req.ip || req.socket.remoteAddress;
+  return `${req.method}:${clientIp ? ipKeyGenerator(clientIp) : "unknown"}`;
+}
+
+const redisBackedHttpRateLimiterGuard = rateLimit({
+  windowMs: getHttpRateLimitWindowMs(),
+  max: getHttpRateLimitGuardMaxRequests,
+  standardHeaders: false,
+  legacyHeaders: false,
+  keyGenerator: getHttpRateLimiterGuardKey,
+  skip: req => shouldSkipHttpRateLimit(req) || !isRedisHttpRateLimitEnabled(),
+  message: {
+    error: "Too Many Requests",
+    message: "Global HTTP rate limit exceeded. Please retry shortly.",
+  },
+});
 
 function toError(reason: unknown): Error {
   if (reason instanceof Error) {
@@ -172,8 +195,7 @@ async function startServer() {
 
   applySecurityHeaders(app);
   app.use(attachRequestTracing());
-  // lgtm[js/missing-rate-limiting] This middleware is the global HTTP rate limiter; Redis access stores limiter buckets.
-  app.use(createGlobalHttpRateLimiter());
+  app.use(redisBackedHttpRateLimiterGuard, createGlobalHttpRateLimiter());
 
   app.use(createRequestMetricsMiddleware());
 

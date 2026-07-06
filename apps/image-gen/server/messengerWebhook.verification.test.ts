@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import http from "node:http";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import {
   afterEach,
   describe,
@@ -42,8 +43,13 @@ async function getWebhook(
   let signatureMiddlewareCalls = 0;
 
   if (options.includeSignatureMiddleware) {
-    // lgtm[js/missing-rate-limiting] Test-only route wrapper used to count signature middleware calls.
-    app.use("/webhook", (req, res, next) => {
+    const testSignatureRouteLimiter = rateLimit({
+      windowMs: 60 * 1000,
+      max: 10_000,
+      standardHeaders: true,
+      legacyHeaders: false,
+    });
+    app.use("/webhook", testSignatureRouteLimiter, (req, res, next) => {
       signatureMiddlewareCalls += 1;
       verifyMetaWebhookSignature(req, res, next);
     });
@@ -241,7 +247,16 @@ describe("messenger webhook verification route", () => {
     app.use(attachRequestTracing());
     app.use(createRequestMetricsMiddleware());
     app.use(express.json({ verify: captureMetaWebhookRawBody }));
-    app.use("/webhook", verifyMetaWebhookSignature);
+    app.use(
+      "/webhook",
+      rateLimit({
+        windowMs: 60 * 1000,
+        max: 10_000,
+        standardHeaders: true,
+        legacyHeaders: false,
+      }),
+      verifyMetaWebhookSignature
+    );
     registerMetaWebhookRoutes(app);
     registerMetricsRoute(app);
     app.use(bodyParserErrorHandler);
@@ -290,7 +305,16 @@ describe("messenger webhook verification route", () => {
     app.use(attachRequestTracing());
     app.use(createRequestMetricsMiddleware());
     app.use(express.json({ verify: captureMetaWebhookRawBody }));
-    app.use("/webhook", verifyMetaWebhookSignature);
+    app.use(
+      "/webhook",
+      rateLimit({
+        windowMs: 60 * 1000,
+        max: 10_000,
+        standardHeaders: true,
+        legacyHeaders: false,
+      }),
+      verifyMetaWebhookSignature
+    );
     registerMetaWebhookRoutes(app);
     registerMetricsRoute(app);
     app.use(bodyParserErrorHandler);

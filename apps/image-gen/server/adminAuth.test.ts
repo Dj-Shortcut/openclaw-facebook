@@ -1,5 +1,6 @@
 import http from "node:http";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { bindTestHttpServer } from "./testHttpServer";
 
@@ -42,9 +43,16 @@ afterEach(() => {
 async function startServer() {
   const app = express();
   app.set("trust proxy", 1);
-  // lgtm[js/missing-rate-limiting] Test-only route used to verify admin auth rate limiting.
+  const testRouteLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 10_000,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
   app.get(
     "/admin/test",
+    testRouteLimiter,
     createAdminAuthRateLimiter({ eventName: "admin_test_rate_limited" }),
     (_req, res) => res.status(403).send("forbidden")
   );
