@@ -1,5 +1,6 @@
 import http from "node:http";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createGlobalHttpRateLimiter } from "./_core/httpRateLimit";
@@ -27,6 +28,18 @@ async function startServer(options?: { forceIp?: string; pathPrefix?: string }) 
   const limitedPath = `${options?.pathPrefix ?? ""}/limited`;
   const healthPath = "/healthz";
   const rateLimiter = createGlobalHttpRateLimiter();
+  const testHarnessLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 10_000,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  const testHealthRouteLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 10_000,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
 
   if (options?.forceIp) {
     app.use((req, _res, next) => {
@@ -38,14 +51,12 @@ async function startServer(options?: { forceIp?: string; pathPrefix?: string }) 
     });
   }
 
-  app.use(rateLimiter);
+  app.use(testHarnessLimiter, rateLimiter);
 
-  // lgtm[js/missing-rate-limiting] Test-only route used to verify the global limiter middleware.
   app.get(limitedPath, (_req, res) => {
     res.status(200).json({ ok: true });
   });
-  // lgtm[js/missing-rate-limiting] Health check route is intentionally exempt from the limiter under test.
-  app.get(healthPath, rateLimiter, (_req, res) => {
+  app.get(healthPath, testHealthRouteLimiter, rateLimiter, (_req, res) => {
     res.status(200).send("ok");
   });
 

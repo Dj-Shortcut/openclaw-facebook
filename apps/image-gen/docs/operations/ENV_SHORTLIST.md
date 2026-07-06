@@ -60,6 +60,7 @@ These show up in the repo and can be mistaken for the main OpenAI path.
 | `BUILT_IN_FORGE_API_KEY` | Storage proxy | Separate from `OPENAI_API_KEY`. |
 | `PUBLIC_BASE_URL` | Storage delete key derivation | Only needed in the main app when the storage public URL has a path prefix. |
 | `REDIS_URL` | Replay protection, rate limiting, state storage | Required in production for replay protection. |
+| `HTTP_RATE_LIMIT_REDIS_GUARD_MAX_REQUESTS` | Global HTTP rate limiting | Optional pre-Redis guard cap per window; defaults to `max(1000, HTTP_RATE_LIMIT_MAX_REQUESTS * 10)`. |
 | `ADMIN_TOKEN` | Debug/admin endpoints | Required for `/admin/disable-face-memory` and `/debug/build`; those endpoints also have a stricter admin-auth rate limit. |
 
 ## 5. Fast triage

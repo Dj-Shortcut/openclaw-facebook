@@ -3,6 +3,8 @@ import { ensureRedisReady, getRedisClient, isRedisEnabled } from "./redis";
 
 const DEFAULT_WINDOW_MS = 60_000;
 const DEFAULT_MAX_REQUESTS = 120;
+const DEFAULT_REDIS_GUARD_MIN_REQUESTS = 1_000;
+const DEFAULT_REDIS_GUARD_MULTIPLIER = 10;
 const DEFAULT_MAX_KEYS = 20_000;
 const RATE_LIMIT_KEY_PREFIX = "http-rate-limit:";
 
@@ -13,7 +15,7 @@ type RateLimitBucket = {
 
 const buckets = new Map<string, RateLimitBucket>();
 
-function getWindowMs(): number {
+export function getHttpRateLimitWindowMs(): number {
   const parsed = Number(process.env.HTTP_RATE_LIMIT_WINDOW_MS);
   if (Number.isFinite(parsed) && parsed > 0) {
     return Math.floor(parsed);
@@ -22,13 +24,25 @@ function getWindowMs(): number {
   return DEFAULT_WINDOW_MS;
 }
 
-function getMaxRequests(): number {
+export function getHttpRateLimitMaxRequests(): number {
   const parsed = Number(process.env.HTTP_RATE_LIMIT_MAX_REQUESTS);
   if (Number.isFinite(parsed) && parsed > 0) {
     return Math.floor(parsed);
   }
 
   return DEFAULT_MAX_REQUESTS;
+}
+
+export function getHttpRateLimitGuardMaxRequests(): number {
+  const parsed = Number(process.env.HTTP_RATE_LIMIT_REDIS_GUARD_MAX_REQUESTS);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.floor(parsed);
+  }
+
+  return Math.max(
+    DEFAULT_REDIS_GUARD_MIN_REQUESTS,
+    getHttpRateLimitMaxRequests() * DEFAULT_REDIS_GUARD_MULTIPLIER
+  );
 }
 
 function isRedisHttpRateLimitEnabled(): boolean {
@@ -39,7 +53,7 @@ function getClientIp(req: express.Request): string {
   return req.ip || req.socket.remoteAddress || "unknown";
 }
 
-function shouldSkipRateLimit(req: express.Request): boolean {
+export function shouldSkipHttpRateLimit(req: express.Request): boolean {
   return (
     req.path === "/health" ||
     req.path === "/healthz" ||
@@ -66,7 +80,7 @@ function pruneBuckets(now: number): void {
 
 export function createGlobalHttpRateLimiter(): express.RequestHandler {
   return (req, res, next) => {
-    if (shouldSkipRateLimit(req)) {
+    if (shouldSkipHttpRateLimit(req)) {
       next();
       return;
     }
@@ -82,8 +96,8 @@ async function applyRateLimit(
 ): Promise<void> {
   try {
     const now = Date.now();
-    const windowMs = getWindowMs();
-    const maxRequests = getMaxRequests();
+    const windowMs = getHttpRateLimitWindowMs();
+    const maxRequests = getHttpRateLimitMaxRequests();
     const key = `${req.method}:${getClientIp(req)}`;
 
     if (isRedisHttpRateLimitEnabled()) {
