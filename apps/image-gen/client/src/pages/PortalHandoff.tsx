@@ -22,6 +22,15 @@ function getClaimErrorMessage(message?: string) {
   return "This setup link is invalid. Ask for a fresh premium setup link in Messenger.";
 }
 
+function isTerminalClaimError(message?: string) {
+  return Boolean(
+    message &&
+      (message.includes("expired") ||
+        message.includes("already_used") ||
+        message.includes("invalid"))
+  );
+}
+
 function PortalHandoff() {
   const auth = useAuth();
   const [, params] = useRoute<{ token?: string }>("/handoff/:token");
@@ -36,6 +45,11 @@ function PortalHandoff() {
       writeActiveWorkspaceId(data.workspace.id);
       clearPendingHandoffToken();
       window.location.assign(`/?workspaceId=${data.workspace.id}&onboarding=handoff`);
+    },
+    onError: error => {
+      if (!isTerminalClaimError(error.message)) return;
+      clearPendingHandoffToken();
+      setStoredToken(null);
     },
   });
   const claimHandoff = claimMutation.mutate;

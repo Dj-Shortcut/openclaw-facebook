@@ -398,6 +398,31 @@ describe("debug/admin routes", () => {
     }
   });
 
+  it("requires an audit actor for manual portal handoff sends", async () => {
+    process.env.ADMIN_TOKEN = "secret-admin-token";
+    const server = await startServer();
+
+    try {
+      const response = await fetch(`${server.baseUrl}/admin/portal-handoff/send`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": "secret-admin-token",
+        },
+        body: JSON.stringify({
+          workspaceId: 42,
+          messengerSenderUserKey,
+        }),
+      });
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "invalid handoff request" });
+      expect(mocks.sendPortalHandoffLink).not.toHaveBeenCalled();
+    } finally {
+      await server.close();
+    }
+  });
+
   it("sends approved portal handoff links without returning the token or link", async () => {
     process.env.ADMIN_TOKEN = "secret-admin-token";
     const expiresAt = new Date("2026-07-06T11:30:00.000Z");
@@ -459,11 +484,96 @@ describe("debug/admin routes", () => {
         body: JSON.stringify({
           workspaceId: 42,
           messengerSenderUserKey,
+          createdByUserId: 7,
         }),
       });
 
       expect(response.status).toBe(409);
       expect(await response.json()).toEqual({ error: "response_window_closed" });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("reports missing Messenger users as not found", async () => {
+    process.env.ADMIN_TOKEN = "secret-admin-token";
+    mocks.sendPortalHandoffLink.mockResolvedValue({
+      ok: false,
+      reason: "messenger_user_not_found",
+    });
+    const server = await startServer();
+
+    try {
+      const response = await fetch(`${server.baseUrl}/admin/portal-handoff/send`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": "secret-admin-token",
+        },
+        body: JSON.stringify({
+          workspaceId: 42,
+          messengerSenderUserKey,
+          createdByUserId: 7,
+        }),
+      });
+
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "messenger_user_not_found" });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("falls back to 502 for unexpected handoff failure reasons", async () => {
+    process.env.ADMIN_TOKEN = "secret-admin-token";
+    mocks.sendPortalHandoffLink.mockResolvedValue({
+      ok: false,
+      reason: "rate_limited",
+    });
+    const server = await startServer();
+
+    try {
+      const response = await fetch(`${server.baseUrl}/admin/portal-handoff/send`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": "secret-admin-token",
+        },
+        body: JSON.stringify({
+          workspaceId: 42,
+          messengerSenderUserKey,
+          createdByUserId: 7,
+        }),
+      });
+
+      expect(response.status).toBe(502);
+      expect(await response.json()).toEqual({ error: "rate_limited" });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns 502 when portal handoff delivery throws", async () => {
+    process.env.ADMIN_TOKEN = "secret-admin-token";
+    mocks.sendPortalHandoffLink.mockRejectedValue(new Error("state store down"));
+    const server = await startServer();
+
+    try {
+      const response = await fetch(`${server.baseUrl}/admin/portal-handoff/send`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": "secret-admin-token",
+        },
+        body: JSON.stringify({
+          workspaceId: 42,
+          messengerSenderUserKey,
+          createdByUserId: 7,
+        }),
+      });
+
+      expect(response.status).toBe(502);
+      expect(await response.json()).toEqual({ error: "handoff send failed" });
     } finally {
       await server.close();
     }

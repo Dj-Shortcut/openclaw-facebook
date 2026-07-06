@@ -37,7 +37,7 @@ const costSummaryQuerySchema = z.object({
 const portalHandoffSendBodySchema = z.object({
   workspaceId: z.number().int().positive(),
   messengerSenderUserKey: z.string().regex(/^[a-f0-9]{64}$/),
-  createdByUserId: z.number().int().positive().optional(),
+  createdByUserId: z.number().int().positive(),
 });
 
 const adminCostSummaryRouteLimiter = rateLimit({
@@ -384,7 +384,19 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
         return res.status(400).json({ error: "invalid handoff request" });
       }
 
-      const result = await sendPortalHandoffLink(parsedBody.data);
+      let result: Awaited<ReturnType<typeof sendPortalHandoffLink>>;
+      try {
+        result = await sendPortalHandoffLink(parsedBody.data);
+      } catch (error) {
+        safeLog("admin_portal_handoff_send_failed", {
+          level: "error",
+          workspaceId: parsedBody.data.workspaceId,
+          user: parsedBody.data.messengerSenderUserKey.slice(0, 8),
+          errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
+        });
+        return res.status(502).json({ error: "handoff send failed" });
+      }
+
       if (result.ok) {
         return res.status(200).json({
           sent: true,

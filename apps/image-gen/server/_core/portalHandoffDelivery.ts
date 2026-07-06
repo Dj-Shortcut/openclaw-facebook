@@ -29,7 +29,11 @@ export type SendPortalHandoffResult =
     }
   | {
       ok: false;
-      reason: "messenger_user_not_found" | "response_window_closed" | "send_failed";
+      reason:
+        | "messenger_user_not_found"
+        | "response_window_closed"
+        | "send_failed"
+        | (string & {});
     };
 
 function getPortalBaseUrl(baseUrl?: string): string {
@@ -85,6 +89,23 @@ async function revokeCreatedToken(
   await db.revokePortalHandoffToken(tokenResult.tokenHash);
 }
 
+async function revokeCreatedTokenSafely(
+  tokenResult: PortalHandoffTokenResult | null,
+  workspaceId: number,
+  logUser: string
+): Promise<void> {
+  try {
+    await revokeCreatedToken(tokenResult);
+  } catch (error) {
+    safeLog("portal_handoff_revoke_failed", {
+      level: "error",
+      workspaceId,
+      user: logUser,
+      errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
+    });
+  }
+}
+
 export async function sendPortalHandoffLink(
   input: SendPortalHandoffInput
 ): Promise<SendPortalHandoffResult> {
@@ -128,13 +149,13 @@ export async function sendPortalHandoffLink(
     );
 
     if (!outcome.sent) {
-      await revokeCreatedToken(tokenResult);
+      await revokeCreatedTokenSafely(tokenResult, input.workspaceId, logUser);
       safeLog("portal_handoff_send_skipped", {
         reason: outcome.reason,
         workspaceId: input.workspaceId,
         user: logUser,
       });
-      return { ok: false, reason: "response_window_closed" };
+      return { ok: false, reason: outcome.reason };
     }
 
     safeLog("portal_handoff_sent", {
@@ -149,7 +170,7 @@ export async function sendPortalHandoffLink(
       expiresAt: tokenResult.expiresAt,
     };
   } catch (error) {
-    await revokeCreatedToken(tokenResult);
+    await revokeCreatedTokenSafely(tokenResult, input.workspaceId, logUser);
     safeLog("portal_handoff_send_failed", {
       level: "error",
       workspaceId: input.workspaceId,

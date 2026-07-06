@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   createWorkspacePrivacyRequest: vi.fn(),
   insertAuditLog: vi.fn(),
   consumePortalHandoffToken: vi.fn(),
+  claimPortalHandoffToken: vi.fn(),
 }));
 
 vi.mock("./db", () => ({
@@ -55,6 +56,7 @@ vi.mock("./db", () => ({
 
 vi.mock("./_core/portalHandoff", () => ({
   consumePortalHandoffToken: mocks.consumePortalHandoffToken,
+  claimPortalHandoffToken: mocks.claimPortalHandoffToken,
 }));
 
 const user: NonNullable<TrpcContext["user"]> = {
@@ -458,18 +460,17 @@ describe("portal router audit logging", () => {
   it("claims a Messenger handoff token into the authenticated customer workspace", async () => {
     const caller = createCaller();
     const token = "opaque-portal-handoff-token-value";
-    mocks.consumePortalHandoffToken.mockResolvedValue({
+    mocks.claimPortalHandoffToken.mockResolvedValue({
       ok: true,
-      workspaceId,
-      purpose: "workspace_onboarding",
+      workspace,
+      membership: {
+        workspaceId,
+        userId: user.id,
+        role: "owner",
+      },
       messengerSenderUserKey: "hashed-sender-key",
+      purpose: "workspace_onboarding",
     });
-    mocks.addWorkspaceMember.mockResolvedValue({
-      workspaceId,
-      userId: user.id,
-      role: "owner",
-    });
-    mocks.getWorkspaceById.mockResolvedValue(workspace);
 
     await expect(caller.handoff.claim({ token })).resolves.toEqual({
       workspace: {
@@ -482,23 +483,9 @@ describe("portal router audit logging", () => {
       },
     });
 
-    expect(mocks.consumePortalHandoffToken).toHaveBeenCalledWith(token);
-    expect(mocks.addWorkspaceMember).toHaveBeenCalledWith({
-      workspaceId,
-      userId: user.id,
-      role: "owner",
-    });
-    expect(mocks.insertAuditLog).toHaveBeenCalledWith({
-      workspaceId,
-      userId: user.id,
-      event: "portal_handoff.claimed",
-      metadata: {
-        purpose: "workspace_onboarding",
-        source: "messenger_handoff",
-        hasMessengerSenderUserKey: true,
-        membershipRole: "owner",
-      },
-    });
+    expect(mocks.claimPortalHandoffToken).toHaveBeenCalledWith(token, user.id);
+    expect(mocks.addWorkspaceMember).not.toHaveBeenCalled();
+    expect(mocks.insertAuditLog).not.toHaveBeenCalled();
     expect(JSON.stringify(mocks.insertAuditLog.mock.calls)).not.toContain(token);
     expect(JSON.stringify(mocks.insertAuditLog.mock.calls)).not.toContain(
       "hashed-sender-key"
@@ -517,14 +504,14 @@ describe("portal router audit logging", () => {
       caller.handoff.claim({ token: "opaque-portal-handoff-token-value" })
     );
 
-    expect(mocks.consumePortalHandoffToken).not.toHaveBeenCalled();
+    expect(mocks.claimPortalHandoffToken).not.toHaveBeenCalled();
     expect(mocks.addWorkspaceMember).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 
   it("rejects invalid handoff tokens before granting workspace membership", async () => {
     const caller = createCaller();
-    mocks.consumePortalHandoffToken.mockResolvedValue({
+    mocks.claimPortalHandoffToken.mockResolvedValue({
       ok: false,
       reason: "invalid",
     });

@@ -181,8 +181,9 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [ ] Add zero-friction Messenger-to-portal handoff for approved customers before relying on the portal for onboarding
   - Messenger presence alone is not portal authentication.
   - [x] Add a customer-facing `/handoff/:token` portal route that stores the handoff locally through Facebook Login, then claims the approved workspace.
-  - [x] Add a tenant-checked portal handoff claim mutation that consumes a pending, unexpired token, grants workspace membership, and audits only privacy-safe metadata.
-  - [x] Add an operator-only manual approval endpoint that sends the short-lived, single-use portal link in Messenger when the response window is open.
+  - [x] Add a tenant-checked portal handoff claim mutation that atomically consumes a pending, unexpired token, grants workspace membership, and audits only privacy-safe metadata.
+  - [x] Add an operator-only manual approval endpoint that sends the short-lived, single-use portal link in Messenger when the response window is open and requires an audit actor for every issued link.
+  - [x] Allow `/handoff` portal pages through the guarded public gateway and redact `/handoff/:token` from HTTP logs and metrics.
   - [ ] Wire future payment webhooks to the same handoff sender when Stripe/subscription billing is added.
   - Storage boundary: `portalHandoffTokens` rows are scoped to one `workspaceId`; the opaque token is never stored, only its hash is persisted, and Messenger identity may be stored only as the privacy-peppered `messengerSenderUserKey`.
   - Deletion boundary: `delete-my-data` must delete handoff rows for the erased Messenger `userKey`, including pending and consumed links.

@@ -6,6 +6,7 @@ import {
   attachRequestTracing,
   getRequestId,
   getTraceContext,
+  createRequestMetricsMiddleware,
   recordHttpRequestMetric,
   recordWebhookAckMetric,
   registerMetricsRoute,
@@ -20,17 +21,22 @@ import {
 } from "./_core/botRuntimeStats";
 import { bindTestHttpServer } from "./testHttpServer";
 
-async function startServer(configure?: (app: express.Express) => void) {
+async function startServer(
+  configure?: (app: express.Express) => void,
+  options?: { recordDefaultHttpMetrics?: boolean }
+) {
   const app = express();
   app.use(attachRequestTracing());
-  app.use((req, res, next) => {
-    const start = process.hrtime.bigint();
-    res.on("finish", () => {
-      const durationMs = Number(process.hrtime.bigint() - start) / 1_000_000;
-      recordHttpRequestMetric(req.method, req.path, res.statusCode, durationMs);
+  if (options?.recordDefaultHttpMetrics !== false) {
+    app.use((req, res, next) => {
+      const start = process.hrtime.bigint();
+      res.on("finish", () => {
+        const durationMs = Number(process.hrtime.bigint() - start) / 1_000_000;
+        recordHttpRequestMetric(req.method, req.path, res.statusCode, durationMs);
+      });
+      next();
     });
-    next();
-  });
+  }
   configure?.(app);
   registerMetricsRoute(app);
 
@@ -168,6 +174,31 @@ describe("observability", () => {
       expect(body).toContain("messenger_generation_active_users_today 2");
       expect(body).toContain("messenger_generation_kinds_used_today 1");
       expect(body).toContain("messenger_generation_average_latency_seconds 1.234000");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("redacts handoff tokens from HTTP telemetry paths", async () => {
+    const token = "handoff-token-for-telemetry-test";
+    const server = await startServer(
+      app => {
+        app.use(createRequestMetricsMiddleware());
+        app.get("/handoff/:token", (_req, res) => {
+          res.status(200).send("ok");
+        });
+      },
+      { recordDefaultHttpMetrics: false }
+    );
+
+    try {
+      await fetch(`${server.baseUrl}/handoff/${token}`);
+      const response = await fetch(`${server.baseUrl}/metrics`);
+      const body = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(body).toContain('path="/handoff/:token"');
+      expect(body).not.toContain(token);
     } finally {
       await server.close();
     }

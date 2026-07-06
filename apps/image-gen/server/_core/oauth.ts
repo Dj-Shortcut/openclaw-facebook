@@ -33,6 +33,11 @@ function getSafeReturnTo(returnTo: string | undefined): string {
   return returnTo;
 }
 
+function isHandoffReturn(returnTo: string | undefined): boolean {
+  const safeReturnTo = getSafeReturnTo(returnTo);
+  return safeReturnTo === "/handoff" || safeReturnTo.startsWith("/handoff/");
+}
+
 function getQueryParam(req: Request, key: string): string | undefined {
   const value = req.query[key];
   return typeof value === "string" ? value : undefined;
@@ -143,7 +148,9 @@ export function registerOAuthRoutes(app: Express) {
         if (!portalUser) {
           throw new Error("portal customer was not persisted");
         }
-        await db.getOrCreateUserWorkspace(portalUser);
+        if (!isHandoffReturn(validatedState.returnTo)) {
+          await db.getOrCreateUserWorkspace(portalUser);
+        }
 
         const sessionToken = await sdk.createSessionToken(userInfo.openId, {
           name: userInfo.name || "",

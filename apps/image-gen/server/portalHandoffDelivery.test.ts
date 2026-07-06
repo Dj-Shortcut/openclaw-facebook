@@ -145,7 +145,7 @@ describe("portal handoff delivery", () => {
   it("revokes a created token if Messenger declines the send", async () => {
     mocks.sendText.mockResolvedValue({
       sent: false,
-      reason: "response_window_closed",
+      reason: "rate_limited",
     });
 
     await expect(
@@ -155,7 +155,7 @@ describe("portal handoff delivery", () => {
       })
     ).resolves.toEqual({
       ok: false,
-      reason: "response_window_closed",
+      reason: "rate_limited",
     });
 
     expect(mocks.revokePortalHandoffToken).toHaveBeenCalledWith(
@@ -180,5 +180,31 @@ describe("portal handoff delivery", () => {
       "sha256:opaque-token-hash"
     );
     expect(JSON.stringify(mocks.safeLog.mock.calls)).not.toContain("graph send failed");
+  });
+
+  it("returns send_failed when token cleanup also fails after a delivery error", async () => {
+    mocks.sendText.mockRejectedValue(new Error("graph send failed"));
+    mocks.revokePortalHandoffToken.mockRejectedValue(new Error("db down"));
+
+    await expect(
+      sendPortalHandoffLink({
+        workspaceId: 42,
+        messengerSenderUserKey,
+      })
+    ).resolves.toEqual({
+      ok: false,
+      reason: "send_failed",
+    });
+
+    expect(mocks.revokePortalHandoffToken).toHaveBeenCalledWith(
+      "sha256:opaque-token-hash"
+    );
+    expect(mocks.safeLog).toHaveBeenCalledWith(
+      "portal_handoff_revoke_failed",
+      expect.objectContaining({
+        level: "error",
+        workspaceId: 42,
+      })
+    );
   });
 });

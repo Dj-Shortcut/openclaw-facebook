@@ -58,6 +58,10 @@ function normalizePath(path: string): string {
 }
 
 function sanitizeTelemetryPath(path: string): string {
+  if (/^\/handoff\/[^/]+$/.test(path)) {
+    return "/handoff/:token";
+  }
+
   const match = /^\/generated\/([^/.]+)\.([^/.]+)$/.exec(path);
   if (!match) {
     return path;

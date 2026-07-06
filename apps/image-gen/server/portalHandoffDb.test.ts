@@ -5,6 +5,7 @@ const { dbMock, drizzleMock } = vi.hoisted(() => {
     delete: vi.fn(),
     insert: vi.fn(),
     select: vi.fn(),
+    transaction: vi.fn(async (callback: (tx: unknown) => unknown) => callback(db)),
     update: vi.fn(),
   };
   return {
@@ -19,6 +20,7 @@ vi.mock("drizzle-orm/mysql2", () => ({
 
 import {
   addWorkspaceMember,
+  claimPortalHandoffTokenForUser,
   createPortalHandoffToken,
   deletePortalHandoffTokensForMessengerUserKey,
   getWorkspaceById,
@@ -27,6 +29,19 @@ import {
 } from "./db";
 
 const originalDatabaseUrl = process.env.DATABASE_URL;
+
+function selectRows(rows: unknown[]) {
+  const limit = vi.fn(async () => rows);
+  const where = vi.fn(() => ({ limit }));
+  const from = vi.fn(() => ({ where }));
+  return { from, where, limit };
+}
+
+function duplicateInsert() {
+  const onDuplicateKeyUpdate = vi.fn(async () => undefined);
+  const values = vi.fn(() => ({ onDuplicateKeyUpdate }));
+  return { values, onDuplicateKeyUpdate };
+}
 
 describe("portal handoff database helpers", () => {
   beforeEach(() => {
@@ -145,5 +160,125 @@ describe("portal handoff database helpers", () => {
     ).resolves.toEqual(membership);
 
     expect(onDuplicateKeyUpdate).toHaveBeenCalled();
+  });
+
+  it("claims a pending token with membership and audit writes in one transaction", async () => {
+    const expiresAt = new Date("2026-06-30T10:05:00.000Z");
+    const token = {
+      id: 3,
+      workspaceId: 42,
+      tokenHash: "sha256:token",
+      messengerSenderUserKey: "sender-user-key",
+      purpose: "workspace_onboarding" as const,
+      status: "pending" as const,
+      expiresAt,
+      consumedAt: null,
+      createdByUserId: 1,
+      createdAt: new Date("2026-06-30T09:55:00.000Z"),
+      updatedAt: new Date("2026-06-30T09:55:00.000Z"),
+    };
+    const workspace = {
+      id: 42,
+      name: "Premium Workspace",
+      slug: "premium-workspace",
+      createdAt: new Date("2026-06-30T09:00:00.000Z"),
+      updatedAt: new Date("2026-06-30T09:00:00.000Z"),
+    };
+    const membership = {
+      id: 9,
+      workspaceId: 42,
+      userId: 7,
+      role: "owner" as const,
+      createdAt: new Date("2026-06-30T10:00:00.000Z"),
+    };
+    const tokenSelect = selectRows([token]);
+    const workspaceSelect = selectRows([workspace]);
+    const membershipSelect = selectRows([membership]);
+    dbMock.select
+      .mockReturnValueOnce({ from: tokenSelect.from })
+      .mockReturnValueOnce({ from: workspaceSelect.from })
+      .mockReturnValueOnce({ from: membershipSelect.from });
+    const updateWhere = vi.fn(async () => [{ affectedRows: 1 }, []]);
+    const updateSet = vi.fn(() => ({ where: updateWhere }));
+    dbMock.update.mockReturnValue({ set: updateSet });
+    const memberInsert = duplicateInsert();
+    const privacyInsert = duplicateInsert();
+    const auditValues = vi.fn(async () => undefined);
+    dbMock.insert
+      .mockReturnValueOnce({ values: memberInsert.values })
+      .mockReturnValueOnce({ values: privacyInsert.values })
+      .mockReturnValueOnce({ values: auditValues });
+
+    await expect(
+      claimPortalHandoffTokenForUser({
+        tokenHash: "sha256:token",
+        userId: 7,
+        now: new Date("2026-06-30T10:00:00.000Z"),
+      })
+    ).resolves.toEqual({
+      ok: true,
+      workspace,
+      membership,
+      purpose: "workspace_onboarding",
+      messengerSenderUserKey: "sender-user-key",
+    });
+
+    expect(dbMock.transaction).toHaveBeenCalled();
+    expect(updateSet).toHaveBeenCalledWith({
+      status: "consumed",
+      consumedAt: new Date("2026-06-30T10:00:00.000Z"),
+    });
+    expect(memberInsert.values).toHaveBeenCalledWith({
+      workspaceId: 42,
+      userId: 7,
+      role: "owner",
+    });
+    expect(auditValues).toHaveBeenCalledWith({
+      workspaceId: 42,
+      userId: 7,
+      event: "portal_handoff.claimed",
+      metadata: {
+        purpose: "workspace_onboarding",
+        source: "messenger_handoff",
+        hasMessengerSenderUserKey: true,
+        membershipRole: "owner",
+      },
+    });
+  });
+
+  it("does not consume pending handoff tokens when the workspace is missing", async () => {
+    const tokenSelect = selectRows([
+      {
+        id: 3,
+        workspaceId: 404,
+        tokenHash: "sha256:token",
+        messengerSenderUserKey: null,
+        purpose: "workspace_onboarding" as const,
+        status: "pending" as const,
+        expiresAt: new Date("2026-06-30T10:05:00.000Z"),
+        consumedAt: null,
+        createdByUserId: 1,
+        createdAt: new Date("2026-06-30T09:55:00.000Z"),
+        updatedAt: new Date("2026-06-30T09:55:00.000Z"),
+      },
+    ]);
+    const workspaceSelect = selectRows([]);
+    dbMock.select
+      .mockReturnValueOnce({ from: tokenSelect.from })
+      .mockReturnValueOnce({ from: workspaceSelect.from });
+
+    await expect(
+      claimPortalHandoffTokenForUser({
+        tokenHash: "sha256:token",
+        userId: 7,
+        now: new Date("2026-06-30T10:00:00.000Z"),
+      })
+    ).resolves.toEqual({
+      ok: false,
+      reason: "workspace_not_found",
+    });
+
+    expect(dbMock.update).not.toHaveBeenCalled();
+    expect(dbMock.insert).not.toHaveBeenCalled();
   });
 });

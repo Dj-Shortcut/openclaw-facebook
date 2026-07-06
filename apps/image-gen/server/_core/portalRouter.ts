@@ -12,7 +12,7 @@ import {
   storeFacebookPages,
   validateStoredFacebookState,
 } from "./facebookConnectStore";
-import { consumePortalHandoffToken } from "./portalHandoff";
+import { claimPortalHandoffToken } from "./portalHandoff";
 import { isFacebookLoginMethod } from "./portalAuthPolicy";
 import { protectedProcedure, publicProcedure, router } from "./trpc";
 
@@ -440,47 +440,28 @@ export const portalRouter = router({
       .mutation(async ({ ctx, input }) => {
         requireFacebookPortalUser(ctx);
 
-        const consumed = await consumePortalHandoffToken(input.token);
-        if (!consumed.ok) {
+        const claimed = await claimPortalHandoffToken(input.token, ctx.user.id);
+        if (!claimed.ok) {
+          if (claimed.reason === "workspace_not_found") {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "workspace not found",
+            });
+          }
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: `portal handoff ${consumed.reason}`,
+            message: `portal handoff ${claimed.reason}`,
           });
         }
-
-        const membership = await db.addWorkspaceMember({
-          workspaceId: consumed.workspaceId,
-          userId: ctx.user.id,
-          role: "owner",
-        });
-        const workspace = await db.getWorkspaceById(consumed.workspaceId);
-        if (!workspace) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "workspace not found",
-          });
-        }
-
-        await db.insertAuditLog({
-          workspaceId: consumed.workspaceId,
-          userId: ctx.user.id,
-          event: "portal_handoff.claimed",
-          metadata: {
-            purpose: consumed.purpose,
-            source: "messenger_handoff",
-            hasMessengerSenderUserKey: Boolean(consumed.messengerSenderUserKey),
-            membershipRole: membership.role,
-          },
-        });
 
         return {
           workspace: {
-            id: workspace.id,
-            name: workspace.name,
-            slug: workspace.slug,
+            id: claimed.workspace.id,
+            name: claimed.workspace.name,
+            slug: claimed.workspace.slug,
           },
           membership: {
-            role: membership.role,
+            role: claimed.membership.role,
           },
         };
       }),

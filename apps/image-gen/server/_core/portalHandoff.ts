@@ -34,6 +34,10 @@ export type ConsumePortalHandoffResult =
       reason: "invalid" | "expired" | "already_used";
     };
 
+export type ClaimPortalHandoffResult = Awaited<
+  ReturnType<typeof db.claimPortalHandoffTokenForUser>
+>;
+
 export function hashPortalHandoffToken(token: string): string {
   return `sha256:${crypto.createHash("sha256").update(token).digest("hex")}`;
 }
@@ -118,4 +122,17 @@ export async function consumePortalHandoffToken(
     purpose: stored.purpose,
     messengerSenderUserKey: stored.messengerSenderUserKey,
   };
+}
+
+export async function claimPortalHandoffToken(
+  token: string,
+  userId: number,
+  now = new Date()
+): Promise<ClaimPortalHandoffResult> {
+  return db.claimPortalHandoffTokenForUser({
+    tokenHash: hashPortalHandoffToken(token),
+    userId,
+    role: "owner",
+    now,
+  });
 }

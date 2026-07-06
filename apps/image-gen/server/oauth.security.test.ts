@@ -217,6 +217,7 @@ describe("OAuth callback security", () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.location).toBe("/handoff");
+    expect(mocks.getOrCreateUserWorkspace).not.toHaveBeenCalled();
   });
 
   it("falls back to the portal root for unsafe return paths", async () => {

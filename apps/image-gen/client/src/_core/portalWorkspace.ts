@@ -14,30 +14,54 @@ export function getWorkspaceIdFromLocation(): number | null {
 
 export function readActiveWorkspaceId(): number | null {
   if (typeof window === "undefined") return null;
-  return parseWorkspaceId(window.localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY));
+  try {
+    return parseWorkspaceId(window.localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY));
+  } catch {
+    return null;
+  }
 }
 
 export function writeActiveWorkspaceId(workspaceId: number): void {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, String(workspaceId));
+  try {
+    window.localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, String(workspaceId));
+  } catch {
+    return;
+  }
 }
 
 export function clearActiveWorkspaceId(): void {
   if (typeof window === "undefined") return;
-  window.localStorage.removeItem(ACTIVE_WORKSPACE_STORAGE_KEY);
+  try {
+    window.localStorage.removeItem(ACTIVE_WORKSPACE_STORAGE_KEY);
+  } catch {
+    return;
+  }
 }
 
 export function readPendingHandoffToken(): string | null {
   if (typeof window === "undefined") return null;
-  return window.sessionStorage.getItem(PENDING_HANDOFF_TOKEN_STORAGE_KEY);
+  try {
+    return window.sessionStorage.getItem(PENDING_HANDOFF_TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
 }
 
 export function writePendingHandoffToken(token: string): void {
   if (typeof window === "undefined") return;
-  window.sessionStorage.setItem(PENDING_HANDOFF_TOKEN_STORAGE_KEY, token);
+  try {
+    window.sessionStorage.setItem(PENDING_HANDOFF_TOKEN_STORAGE_KEY, token);
+  } catch {
+    return;
+  }
 }
 
 export function clearPendingHandoffToken(): void {
   if (typeof window === "undefined") return;
-  window.sessionStorage.removeItem(PENDING_HANDOFF_TOKEN_STORAGE_KEY);
+  try {
+    window.sessionStorage.removeItem(PENDING_HANDOFF_TOKEN_STORAGE_KEY);
+  } catch {
+    return;
+  }
 }

@@ -158,6 +158,11 @@ function Home() {
     if (!activeWorkspaceId || !activeWorkspaceQuery.error) return;
     clearActiveWorkspaceId();
     setActiveWorkspaceId(null);
+    if (typeof window !== "undefined" && window.location.search) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("workspaceId");
+      window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    }
   }, [activeWorkspaceId, activeWorkspaceQuery.error]);
 
   const workspaceQuery = activeWorkspaceId ? activeWorkspaceQuery : currentWorkspaceQuery;
