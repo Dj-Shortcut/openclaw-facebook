@@ -8,13 +8,15 @@ import {
 } from "openclaw/plugin-sdk/channel-send-result";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { type ChannelPlugin, type ResolvedMessengerAccount } from "./channel-api.js";
-import { FACEBOOK_CHANNEL_ID } from "./naming.js";
+import { getMessengerQuickReplies } from "./messengerQuickReplies.js";
 import {
-  MESSENGER_QUICK_REPLY_MAX_COUNT,
-  getMessengerQuickReplies,
   renderMessengerPresentationPayload,
+} from "./messengerPresentationRenderer.js";
+import {
   renderMessengerReplyPayload,
-} from "./presentation.js";
+} from "./messengerReplyPayloadRenderer.js";
+import { MESSENGER_QUICK_REPLY_MAX_COUNT } from "./messengerPresentationTypes.js";
+import { FACEBOOK_CHANNEL_ID } from "./naming.js";
 import { getMessengerRuntime } from "./runtime.js";
 import { MESSENGER_TEXT_CHUNK_LIMIT } from "./send.js";
 

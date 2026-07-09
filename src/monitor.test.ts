@@ -33,7 +33,7 @@ import {
   shouldProcessMessengerMessageOnce,
   type MessengerWebhookTarget,
 } from "./monitor.js";
-import { MESSENGER_OPENCLAW_ACTION_PREFIX } from "./presentation.js";
+import { MESSENGER_OPENCLAW_ACTION_PREFIX } from "./messengerPresentationTypes.js";
 import { clearMessengerRuntime, setMessengerRuntime } from "./runtime.js";
 import type { MessengerWebhookMessaging, ResolvedMessengerAccount } from "./types.js";
 
