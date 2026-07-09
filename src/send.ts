@@ -3,7 +3,7 @@ import { resolveMessengerAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./channel-api.js";
 import { stripFacebookTargetPrefix } from "./naming.js";
 import { createMessengerSendReceipt } from "./send-receipt.js";
-import type { MessengerQuickReply } from "./presentation.js";
+import type { MessengerQuickReply } from "./messengerPresentationTypes.js";
 import type { MessengerSendResult } from "./types.js";
 
 const DEFAULT_GRAPH_API_VERSION = "v20.0";
@@ -187,4 +187,3 @@ export async function sendMessengerSenderAction(
     throw new Error(formatMessengerApiError(body));
   }
 }
-

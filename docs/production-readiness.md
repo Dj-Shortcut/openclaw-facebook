@@ -5,7 +5,7 @@ Status: Not ready for broad customer launch; live Messenger smoke and delete-dat
 Last updated: 2026-06-30
 
 Canonical release strategy and open work are tracked in
-[`apps/image-gen/docs/operations/todo.md`](../apps/image-gen/docs/operations/todo.md).
+[`docs/operations/todo.md`](operations/todo.md).
 This document is the deploy/smoke checklist for the current gateway surface.
 
 ## Production Flow

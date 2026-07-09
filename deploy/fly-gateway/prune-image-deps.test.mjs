@@ -4,8 +4,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { pruneImageDependencies } from './bin/prune-image-deps-core.mjs';
 
 const repoRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+const dockerfile = join(repoRoot, 'deploy/fly-gateway/Dockerfile');
 const pruneScript = join(repoRoot, 'deploy/fly-gateway/bin/prune-image-deps.mjs');
 const codexTargetsSource = join(repoRoot, 'deploy/fly-gateway/bin/codex-targets.cjs');
 const validateOpenClawRuntimeScript = join(repoRoot, 'scripts/validate-openclaw-runtime.mjs');
@@ -67,6 +69,87 @@ afterEach(() => {
 });
 
 describe('Fly gateway image dependency pruning', () => {
+  it('copies the prune core before invoking the prune CLI in the gateway image build', () => {
+    const source = readFileSync(dockerfile, 'utf8');
+    const coreCopyIndex = source.indexOf(
+      'COPY deploy/fly-gateway/bin/prune-image-deps-core.mjs ./deploy/fly-gateway/bin/prune-image-deps-core.mjs',
+    );
+    const pruneRunIndex = source.indexOf(
+      'node ./deploy/fly-gateway/bin/prune-image-deps.mjs /app',
+    );
+
+    expect(coreCopyIndex).toBeGreaterThanOrEqual(0);
+    expect(pruneRunIndex).toBeGreaterThan(coreCopyIndex);
+  });
+
+  it('prunes removable files through the importable API', () => {
+    const appRoot = makeTempApp();
+    writeFixtureFile(appRoot, 'node_modules/plain-package/index.js');
+    writeFixtureFile(appRoot, 'node_modules/plain-package/.DS_Store');
+    writeFixtureFile(appRoot, 'node_modules/plain-package/dist/bundle.js.map');
+    writeFixtureFile(appRoot, 'node_modules/plain-package/tsconfig.tsbuildinfo');
+
+    const result = pruneImageDependencies(appRoot);
+
+    expect(result.removedBytes).toBeGreaterThan(0);
+    expect(readFileSync(join(appRoot, 'node_modules/plain-package/index.js'), 'utf8')).toBe(
+      'fixture',
+    );
+    expect(() => readFileSync(join(appRoot, 'node_modules/plain-package/.DS_Store'))).toThrow();
+    expect(() =>
+      readFileSync(join(appRoot, 'node_modules/plain-package/dist/bundle.js.map')),
+    ).toThrow();
+    expect(() =>
+      readFileSync(join(appRoot, 'node_modules/plain-package/tsconfig.tsbuildinfo')),
+    ).toThrow();
+  });
+
+  it('prunes dependency artifacts through the importable API', () => {
+    const appRoot = makeTempApp();
+    const nodeModules = join(appRoot, 'node_modules');
+    writeFixtureFile(appRoot, 'node_modules/plain-package/docs/readme.md');
+    writeFixtureFile(appRoot, 'node_modules/tree-sitter-bash/prebuilds/darwin-arm64/parser.node');
+    writeFixtureFile(appRoot, 'node_modules/tree-sitter-bash/prebuilds/linux-x64/parser.node');
+
+    const result = pruneImageDependencies(appRoot);
+
+    expect(result.nodeModules).toBe(nodeModules);
+    expect(result.removedBytes).toBeGreaterThan(0);
+    expect(() => readFileSync(join(appRoot, 'node_modules/plain-package/docs/readme.md'))).toThrow();
+    expect(() =>
+      readFileSync(join(appRoot, 'node_modules/tree-sitter-bash/prebuilds/darwin-arm64/parser.node')),
+    ).toThrow();
+    expect(
+      readFileSync(
+        join(appRoot, 'node_modules/tree-sitter-bash/prebuilds/linux-x64/parser.node'),
+        'utf8',
+      ),
+    ).toBe('fixture');
+  });
+
+  it('keeps protected runtime paths through the importable API', () => {
+    const appRoot = makeTempApp();
+    writeFixtureFile(appRoot, 'node_modules/plain-package/docs/readme.md');
+    writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/node_modules/@openai/codex/docs/loader-notes.md');
+    writeFixtureFile(appRoot, 'node_modules/@openclaw/codex/node_modules/@openai/codex-linux-x64/docs/native-notes.md');
+    writeFixtureFile(appRoot, 'node_modules/openclaw/node_modules/yaml/dist/doc/directives.js');
+    writeOpenClawTemplateFixture(appRoot);
+
+    const result = pruneImageDependencies(appRoot);
+
+    expect(result.removedBytes).toBeGreaterThan(0);
+    expect(() => readFileSync(join(appRoot, 'node_modules/plain-package/docs/readme.md'))).toThrow();
+    expect(readFileSync(join(appRoot, 'node_modules/@openclaw/codex/node_modules/@openai/codex/docs/loader-notes.md'), 'utf8')).toBe('fixture');
+    expect(readFileSync(join(appRoot, 'node_modules/@openclaw/codex/node_modules/@openai/codex-linux-x64/docs/native-notes.md'), 'utf8')).toBe('fixture');
+    expect(readFileSync(join(appRoot, 'node_modules/openclaw/node_modules/yaml/dist/doc/directives.js'), 'utf8')).toBe('fixture');
+    expect(
+      readFileSync(
+        join(appRoot, 'node_modules/openclaw/src/agents/templates/HEARTBEAT.md'),
+        'utf8',
+      ),
+    ).toBe('# Heartbeat\n');
+  });
+
   it('keeps native Codex runtime packages while pruning ordinary docs', () => {
     const appRoot = makeTempApp();
     writeFixtureFile(appRoot, 'node_modules/plain-package/docs/readme.md');

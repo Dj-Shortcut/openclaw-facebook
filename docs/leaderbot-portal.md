@@ -115,4 +115,4 @@ passes against production URLs, and a manual portal smoke confirms:
 
 The public gateway guard should stay enabled. Customer portal code must use tenant-scoped backend APIs rather than direct gateway access.
 
-Launch readiness work is tracked in the canonical backlog: [apps/image-gen/docs/operations/todo.md](../apps/image-gen/docs/operations/todo.md).
+Launch readiness work is tracked in the canonical backlog: [docs/operations/todo.md](operations/todo.md).

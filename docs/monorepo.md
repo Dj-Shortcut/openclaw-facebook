@@ -14,17 +14,17 @@ Leaderbot image-generation service.
 
 ## Deploy
 
-Gateway:
-
 ```bash
-npm run gateway:deploy
+pnpm deploy
+pnpm run deploy:image-gen
+pnpm run deploy:gateway
 ```
 
-Image generation:
+Legacy aliases (still available):
 
 ```bash
-npm run image-gen:install
-npm run image-gen:deploy
+pnpm run gateway:deploy
+pnpm run image-gen:deploy
 ```
 
 ## Validate
@@ -53,5 +53,5 @@ npm run image-gen:build
 - Keep the OpenClaw gateway shielded. Customer-facing work belongs in the
   portal app/API, not by exposing the gateway UI publicly.
 - Shared product docs live under root `docs/`.
-- App-specific docs can stay under `apps/image-gen/docs/` until they are
+- App-specific docs live under the root `docs/` directory and can stay there until they are
   intentionally consolidated.
