@@ -106,7 +106,7 @@ access:
 8. [x] Continue verifying storage-proxy delivery under Messenger crawler constraints, including generated outputs and retained source images. Operator-verified on 2026-06-30 with tester photo forwards through Messenger.
 9. [ ] Deferred: evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory.
 10. [x] Keep public legal pages current (`/privacy`, `/terms`, `/data-deletion`) and aligned with Meta App Review, face-memory status, retention, and deletion behavior. Current image-gen runtime legal pages include tested privacy, terms, and data-deletion routes; future portal relocation remains a Gate 3 task.
-11. [x] Document Meta App Review impact for each new Messenger capability and avoid permission expansion unless product/policy approval is explicit. Current review notes live in `apps/image-gen/docs/operations/meta-app-review.md`; keep them updated for future Messenger capability changes.
+11. [x] Document Meta App Review impact for each new Messenger capability and avoid permission expansion unless product/policy approval is explicit. Current review notes live in `docs/operations/meta-app-review.md`; keep them updated for future Messenger capability changes.
 
 Exit criteria: all paid/provider calls are budget-gated and ledgered, public legal
 copy matches behavior, owner monitoring can detect cost/reliability regressions,
@@ -206,7 +206,7 @@ traffic cannot reach internal gateway admin/API surfaces.
   - Uploaded Messenger videos remain unsupported input.
   - Generated video is future output only, behind a feature flag.
   - Future video provider calls must reserve quota before any paid external request, commit on usable success, and release or expire on failure.
-  - See `apps/image-gen/docs/operations/messenger-video-support-spike.md`.
+  - See `docs/operations/messenger-video-support-spike.md`.
 
 ### Kosten & quota
 

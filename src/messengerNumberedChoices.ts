@@ -80,7 +80,7 @@ function normalizeInferredChoiceLabel(choice: string): string {
 function normalizeInferredChoiceInput(label: string): string {
   const normalizedLabel = label.trim().replace(/[,:;?!.]+$/u, "");
   if (/^(?:tekstprompt|prompt|image prompt)$/iu.test(normalizedLabel)) {
-    return /^image prompt$/iu.test(normalizedLabel)
+    return normalizedLabel === "image prompt"
       ? "Write an image prompt"
       : "Schrijf een tekstprompt";
   }

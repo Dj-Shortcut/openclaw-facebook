@@ -53,5 +53,5 @@ npm run image-gen:build
 - Keep the OpenClaw gateway shielded. Customer-facing work belongs in the
   portal app/API, not by exposing the gateway UI publicly.
 - Shared product docs live under root `docs/`.
-- App-specific docs can stay under `apps/image-gen/docs/` until they are
+- App-specific docs live under the root `docs/` directory and can stay there until they are
   intentionally consolidated.
