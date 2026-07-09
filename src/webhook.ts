@@ -11,6 +11,34 @@ export type MessengerAttachmentUrl = {
   url: string;
 };
 
+function isPageWebhookBody(body: MessengerWebhookBody): boolean {
+  return body.object === "page";
+}
+
+function hasMessengerEventParticipants(event: MessengerWebhookMessaging): boolean {
+  return Boolean(event.sender?.id && event.recipient?.id);
+}
+
+function getMessengerMessagingEvents(body: MessengerWebhookBody): MessengerWebhookMessaging[] {
+  return isPageWebhookBody(body) ? (body.entry ?? []).flatMap((entry) => entry.messaging ?? []) : [];
+}
+
+function hasMessengerTextMessage(event: MessengerWebhookMessaging): boolean {
+  return Boolean(
+    event.message?.text?.trim() && !event.message?.is_echo && hasMessengerEventParticipants(event),
+  );
+}
+
+function hasMessengerInboundContent(event: MessengerWebhookMessaging): boolean {
+  if (event.message?.is_echo || !hasMessengerEventParticipants(event)) {
+    return false;
+  }
+  const text = event.message?.text?.trim();
+  const payload = event.message?.quick_reply?.payload?.trim() ?? event.postback?.payload?.trim();
+  const hasAttachments = (event.message?.attachments?.length ?? 0) > 0;
+  return Boolean(text || payload || hasAttachments);
+}
+
 export function handleMessengerWebhookVerification(params: {
   url: URL;
   verifyToken: string;
@@ -86,23 +114,7 @@ export async function readVerifiedMessengerWebhookBody(params: {
 export function extractMessengerTextMessages(
   body: MessengerWebhookBody,
 ): MessengerWebhookMessaging[] {
-  if (body.object !== "page") {
-    return [];
-  }
-  const messages: MessengerWebhookMessaging[] = [];
-  for (const entry of body.entry ?? []) {
-    for (const event of entry.messaging ?? []) {
-      const text = event.message?.text?.trim();
-      if (!text || event.message?.is_echo) {
-        continue;
-      }
-      if (!event.sender?.id || !event.recipient?.id) {
-        continue;
-      }
-      messages.push(event);
-    }
-  }
-  return messages;
+  return getMessengerMessagingEvents(body).filter(hasMessengerTextMessage);
 }
 
 export function extractMessengerImageAttachmentUrls(event: MessengerWebhookMessaging): string[] {
@@ -142,26 +154,5 @@ export function extractMessengerAttachmentUrls(
 export function extractMessengerInboundMessages(
   body: MessengerWebhookBody,
 ): MessengerWebhookMessaging[] {
-  if (body.object !== "page") {
-    return [];
-  }
-  const messages: MessengerWebhookMessaging[] = [];
-  for (const entry of body.entry ?? []) {
-    for (const event of entry.messaging ?? []) {
-      if (event.message?.is_echo) {
-        continue;
-      }
-      if (!event.sender?.id || !event.recipient?.id) {
-        continue;
-      }
-      const text = event.message?.text?.trim();
-      const payload = event.message?.quick_reply?.payload?.trim() ?? event.postback?.payload?.trim();
-      const hasAttachments = (event.message?.attachments?.length ?? 0) > 0;
-      if (!text && !payload && !hasAttachments) {
-        continue;
-      }
-      messages.push(event);
-    }
-  }
-  return messages;
+  return getMessengerMessagingEvents(body).filter(hasMessengerInboundContent);
 }
