@@ -1,6 +1,13 @@
 import { toUserKey } from "../privacy";
 import type { NormalizedInboundMessage } from "../normalizedInboundMessage";
 import { safeLog } from "../logger";
+import { summarizeWhatsAppStatuses } from "./whatsappStatusSummary";
+import {
+  arrayProperty,
+  getNestedObject,
+  objectValue,
+  stringProperty,
+} from "./whatsappPayloadAccess";
 
 export function isWhatsAppWebhookPayload(
   payload: unknown
@@ -32,71 +39,6 @@ export function logWhatsAppWebhookPayload(payload: unknown): void {
   }
 
   safeLog("whatsapp_inbound_payload_summary", summary);
-}
-
-function summarizeWhatsAppStatuses(payload: unknown): {
-  statusCount?: number;
-  statuses?: Record<string, number>;
-  errors?: Array<{ code: number | string | null; title: string | null }>;
-} {
-  const statuses = arrayPropertyFromPayload(payload, "statuses");
-  if (statuses.length === 0) {
-    return {};
-  }
-
-  const counts: Record<string, number> = {};
-  const errors: Array<{ code: number | string | null; title: string | null }> = [];
-  for (const status of statuses) {
-    const statusName = stringProperty(status, "status") ?? "unknown";
-    counts[statusName] = (counts[statusName] ?? 0) + 1;
-    for (const error of arrayProperty(status, "errors")) {
-      const errorObject = objectValue(error);
-      const code = errorObject?.code;
-      errors.push({
-        code:
-          typeof code === "number" || typeof code === "string"
-            ? code
-            : null,
-        title: stringProperty(error, "title"),
-      });
-    }
-  }
-
-  return {
-    statusCount: statuses.length,
-    statuses: counts,
-    ...(errors.length > 0 ? { errors: errors.slice(0, 5) } : {}),
-  };
-}
-
-function arrayPropertyFromPayload(payload: unknown, key: string): unknown[] {
-  return arrayProperty(payload, "entry")
-    .flatMap(entry => arrayProperty(entry, "changes"))
-    .flatMap(change => arrayProperty(objectValue(change)?.value, key));
-}
-
-function objectValue(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function arrayProperty(value: unknown, key: string): unknown[] {
-  const object = objectValue(value);
-  return Array.isArray(object?.[key]) ? (object[key] as unknown[]) : [];
-}
-
-function stringProperty(value: unknown, key: string): string | null {
-  const object = objectValue(value);
-  const property = object?.[key];
-  return typeof property === "string" ? property : null;
-}
-
-function getNestedObject(
-  value: unknown,
-  key: string
-): Record<string, unknown> | null {
-  return objectValue(objectValue(value)?.[key]);
 }
 
 function firstString(...values: Array<string | null>): string | null {

@@ -61,7 +61,7 @@ This repository is a monorepo containing the Facebook/OpenClaw integration and t
 Deploy targets:
 
 ```bash
-pnpm deploy
+pnpm run deploy
 pnpm run deploy:image-gen
 pnpm run deploy:gateway
 ```
