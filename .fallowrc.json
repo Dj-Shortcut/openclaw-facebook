@@ -1,5 +1,8 @@
 {
-  "entry": ["apps/image-gen/client/src/main.tsx"],
+  "entry": [
+    "apps/image-gen/client/src/main.tsx",
+    "deploy/fly-gateway/bin/prune-image-deps.mjs"
+  ],
   "ignoreDependencies": ["@sentry/node", "@trpc/server"],
   "overrides": [
     {
