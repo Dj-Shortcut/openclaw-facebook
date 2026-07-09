@@ -131,7 +131,7 @@ function isLikelyGifAttachment(attachment: AttachmentLikeForCategory): boolean {
     .includes(".gif");
 }
 
-export function getAttachmentCategory(
+function getAttachmentCategory(
   attachment: AttachmentLikeForCategory | undefined
 ): MessengerAttachmentCategory {
   if (!attachment) {
@@ -175,18 +175,6 @@ export function isImageAttachment(
   return category === "image" || category === "gif";
 }
 
-export function isGifAttachment(attachment: FacebookWebhookAttachment): boolean {
-  return getAttachmentCategory(attachment) === "gif";
-}
-
-export function isUnsupportedMessengerAttachment(
-  attachment: FacebookWebhookAttachment
-): boolean {
-  return ["gif", "audio", "video", "file", "unknown"].includes(
-    getAttachmentCategory(attachment)
-  );
-}
-
 export function normalizeMessengerInboundMessage(
   message: FacebookWebhookEvent["message"] | undefined
 ): MessengerNormalizedInboundMessage {
@@ -196,7 +184,7 @@ export function normalizeMessengerInboundMessage(
   };
 }
 
-export function normalizeMessengerAttachments(
+function normalizeMessengerAttachments(
   attachments: FacebookWebhookAttachment[] | undefined
 ): MessengerNormalizedAttachment[] {
   if (!attachments?.length) {
@@ -294,71 +282,31 @@ export function hasImageAttachment(
   );
 }
 
-export function hasImage(
-  attachments: MessengerNormalizedAttachment[] | undefined
-): boolean {
-  return hasImageAttachment(attachments);
-}
-
-export function hasGifAttachment(
-  attachments: MessengerNormalizedAttachment[] | undefined
-): boolean {
-  return attachments?.some(att => att.type === "gif") ?? false;
-}
-
-export function hasGif(
-  attachments: MessengerNormalizedAttachment[] | undefined
-): boolean {
-  return hasGifAttachment(attachments);
-}
-
-export function hasAudioAttachment(
+function hasAudioAttachment(
   attachments: MessengerNormalizedAttachment[] | undefined
 ): boolean {
   return attachments?.some(att => att.type === "audio") ?? false;
 }
 
-export function hasAudio(
-  attachments: MessengerNormalizedAttachment[] | undefined
-): boolean {
-  return hasAudioAttachment(attachments);
-}
-
-export function hasVideoAttachment(
+function hasVideoAttachment(
   attachments: MessengerNormalizedAttachment[] | undefined
 ): boolean {
   return attachments?.some(att => att.type === "video") ?? false;
 }
 
-export function hasVideo(
-  attachments: MessengerNormalizedAttachment[] | undefined
-): boolean {
-  return hasVideoAttachment(attachments);
-}
-
-export function hasFileAttachment(
+function hasFileAttachment(
   attachments: MessengerNormalizedAttachment[] | undefined
 ): boolean {
   return attachments?.some(att => att.type === "file") ?? false;
 }
 
-export function hasUnsupportedAttachment(
-  attachments: MessengerNormalizedAttachment[] | undefined
-): boolean {
-  return (
-    attachments?.some(att =>
-      ["gif", "audio", "video", "file", "link", "unknown"].includes(att.type)
-    ) ?? false
-  );
-}
-
-export function hasUnknownAttachment(
+function hasUnknownAttachment(
   attachments: MessengerNormalizedAttachment[] | undefined
 ): boolean {
   return attachments?.some(att => att.type === "unknown") ?? false;
 }
 
-export function hasLinkAttachment(
+function hasLinkAttachment(
   attachments: MessengerNormalizedAttachment[] | undefined
 ): boolean {
   return attachments?.some(att => att.type === "link") ?? false;
@@ -396,22 +344,6 @@ export function getAttachmentCategorySummary(
 export type FacebookWebhookEntry = {
   id?: string;
   messaging?: FacebookWebhookEvent[];
-};
-
-export type WebhookSummaryEvent = {
-  type: "message" | "postback" | "read" | "delivery" | "unknown";
-  hasText: boolean;
-  attachmentTypes: string[];
-  isEcho: boolean;
-  hasRead: boolean;
-  hasDelivery: boolean;
-  hasPostback: boolean;
-};
-
-export type WebhookSummary = {
-  object?: string;
-  entryCount: number;
-  events: WebhookSummaryEvent[];
 };
 
 export type AckKind = "like" | "ok" | "thanks";
