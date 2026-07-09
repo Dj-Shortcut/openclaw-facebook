@@ -1,6 +1,5 @@
 # OpenClaw Facebook Plugin
 
-[![Repo Fallow Maintainability](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Dj-Shortcut/openclaw-facebook/main/public/badges/fallow-maintainability.json)](https://github.com/Dj-Shortcut/openclaw-facebook/actions/workflows/image-gen-fallow.yml)
 [![Repo Fallow Production](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Dj-Shortcut/openclaw-facebook/main/public/badges/fallow-production-maintainability.json)](https://github.com/Dj-Shortcut/openclaw-facebook/actions/workflows/image-gen-fallow.yml)
 [![Image Gen Fallow Maintainability](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Dj-Shortcut/openclaw-facebook/main/apps/image-gen/public/badges/fallow-maintainability.json)](https://github.com/Dj-Shortcut/openclaw-facebook/actions/workflows/image-gen-fallow.yml)
 
