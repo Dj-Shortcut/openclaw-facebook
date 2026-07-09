@@ -250,7 +250,6 @@ function PublicPortalPreview({
   onLocaleChange: (locale: AppLocale) => void;
 }) {
   const [view, setView] = useState<PublicPreviewView>("dashboard");
-  const loginUrl = getLoginUrl();
 
   return (
     <main className="min-h-full bg-[#f5f7fb] text-stone-950">
