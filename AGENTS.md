@@ -348,7 +348,7 @@ Quota and budget enforcement must remain intact and test-covered for fallback an
 
 Source of truth:
 
-apps/image-gen/docs/operations/todo.md
+docs/operations/todo.md
 
 Keep docs aligned with code.
 
@@ -377,7 +377,7 @@ Minimum expectation:
 TypeScript:
 
 ```bash
-cmd.exe /c node_modules\.bin\tsc.cmd --noEmit
+./node_modules/.bin/tsc --noEmit
 ```
 
 Targeted tests for modified areas.
