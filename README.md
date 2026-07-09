@@ -1,6 +1,7 @@
 # OpenClaw Facebook Plugin
 
 [![Repo Fallow Maintainability](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Dj-Shortcut/openclaw-facebook/main/public/badges/fallow-maintainability.json)](https://github.com/Dj-Shortcut/openclaw-facebook/actions/workflows/image-gen-fallow.yml)
+[![Repo Fallow Production](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Dj-Shortcut/openclaw-facebook/main/public/badges/fallow-production-maintainability.json)](https://github.com/Dj-Shortcut/openclaw-facebook/actions/workflows/image-gen-fallow.yml)
 [![Image Gen Fallow Maintainability](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Dj-Shortcut/openclaw-facebook/main/apps/image-gen/public/badges/fallow-maintainability.json)](https://github.com/Dj-Shortcut/openclaw-facebook/actions/workflows/image-gen-fallow.yml)
 
 This plugin gives OpenClaw a Facebook Page inbox. After setup, people can send a
@@ -225,10 +226,13 @@ npm run fallow:report:production
 
 The primary maintainability badge at the top of this README is generated from
 the full-repo `.fallow/report.json` and published to
-`public/badges/fallow-maintainability.json`. The image-generation app badge is a
-secondary app-level signal from `apps/image-gen/.fallow/report.json`; it can stay
-green while repo-wide health declines in other packages, root plugin code, or
-unsupported/static-analysis entrypoints.
+`public/badges/fallow-maintainability.json`. The production badge is generated
+from the full-repo `.fallow/report-production.json`, which excludes test/dev
+files and is published to `public/badges/fallow-production-maintainability.json`.
+The image-generation app badge is a secondary app-level signal from
+`apps/image-gen/.fallow/report.json`; it can stay green while repo-wide health
+declines in other packages, root plugin code, or unsupported/static-analysis
+entrypoints.
 
 Badge JSON is refreshed only by the Fallow workflow on scheduled or manual runs
 against `main`. Pull requests generate reports for review, but they do not write
