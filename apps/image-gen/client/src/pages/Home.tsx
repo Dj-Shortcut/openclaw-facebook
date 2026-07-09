@@ -288,8 +288,7 @@ function PublicPortalPreview({
             })}
           </nav>
           <p className="mt-auto text-sm leading-6 text-stone-300">
-            Klantdata blijft binnen de ingelogde werkruimte. Deze publieke preview
-            gebruikt alleen voorbeelddata.
+            {copy.publicPreview.customerDataNotice}
           </p>
         </aside>
 
@@ -300,7 +299,7 @@ function PublicPortalPreview({
                 {copy.common.workspace}
               </p>
               <h1 className="text-4xl font-semibold leading-tight text-stone-950">
-                Leaderbot workspace
+                {copy.publicPreview.workspaceTitle}
               </h1>
               <p className="mt-3 max-w-2xl text-sm leading-6 text-stone-600">
                 {copy.auth.body}
@@ -308,8 +307,9 @@ function PublicPortalPreview({
             </div>
             <Button
               className="gap-2 self-start"
-              disabled={!loginConfigured || !loginUrl}
+              disabled={!loginConfigured}
               onClick={() => {
+                const loginUrl = getLoginUrl();
                 if (!loginUrl) return;
                 window.location.href = loginUrl;
               }}
@@ -321,7 +321,7 @@ function PublicPortalPreview({
 
           {!loginConfigured ? (
             <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              Facebook Login is not configured for this local environment.
+              {copy.publicPreview.loginNotConfigured}
             </div>
           ) : null}
 
@@ -330,7 +330,7 @@ function PublicPortalPreview({
               {view === "dashboard" ? (
                 <>
                   <h2 className="text-2xl font-semibold">
-                    {copy.common.workspace}overzicht
+                    {copy.publicPreview.dashboardTitle}
                   </h2>
                   <div className="mt-5 grid gap-3 sm:grid-cols-3">
                     <MetricTile
@@ -339,7 +339,11 @@ function PublicPortalPreview({
                       detail={`6 ${copy.usage.imagesUsedDetail.replace("{limit}", "20")}`}
                     />
                     <MetricTile label={copy.usage.messagesToday} value={18} />
-                    <MetricTile label={copy.knowledge.active} value={1} detail="2 sources" />
+                    <MetricTile
+                      label={copy.knowledge.active}
+                      value={1}
+                      detail={copy.publicPreview.sourcesDetail.replace("{count}", "2")}
+                    />
                   </div>
                 </>
               ) : null}
@@ -347,7 +351,7 @@ function PublicPortalPreview({
                 <>
                   <h2 className="text-2xl font-semibold">{copy.identity.fallbackName}</h2>
                   <p className="mt-3 rounded-lg border border-stone-200 bg-stone-50 p-4 text-sm leading-6 text-stone-700">
-                    Help customers with clear, useful answers.
+                    {copy.publicPreview.identityHelp}
                   </p>
                 </>
               ) : null}
@@ -365,10 +369,12 @@ function PublicPortalPreview({
                   <h2 className="text-2xl font-semibold">{copy.knowledge.title}</h2>
                   <div className="mt-5 grid gap-3">
                     <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
-                      Customer FAQ · <StatusPill copy={copy} value="active" />
+                      {copy.publicPreview.customerFaq} ·{" "}
+                      <StatusPill copy={copy} value="active" />
                     </div>
                     <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
-                      Brand voice notes · <StatusPill copy={copy} value="queued" />
+                      {copy.publicPreview.brandVoiceNotes} ·{" "}
+                      <StatusPill copy={copy} value="queued" />
                     </div>
                   </div>
                 </>
@@ -404,8 +410,7 @@ function PublicPortalPreview({
               <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
                 <h2 className="text-lg font-semibold">{copy.messenger.connectPage}</h2>
                 <p className="mt-2 text-sm leading-6 text-stone-600">
-                  Messenger blijft inactief tot een ingelogde klant een goedgekeurde
-                  pagina verbindt.
+                  {copy.publicPreview.messengerInactive}
                 </p>
               </section>
               <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">

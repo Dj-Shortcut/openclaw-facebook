@@ -44,6 +44,19 @@ const enCopy = {
       "Continue with Facebook to manage your workspace, AI identity, Messenger channel, usage, knowledge, and privacy controls.",
     continueWithFacebook: "Continue with Facebook",
   },
+  publicPreview: {
+    customerDataNotice:
+      "Customer data stays inside the signed-in workspace. This public preview uses example data only.",
+    loginNotConfigured: "Facebook Login is not configured for this local environment.",
+    workspaceTitle: "Leaderbot workspace",
+    dashboardTitle: "Workspace overview",
+    sourcesDetail: "{count} sources",
+    identityHelp: "Help customers with clear, useful answers.",
+    customerFaq: "Customer FAQ",
+    brandVoiceNotes: "Brand voice notes",
+    messengerInactive:
+      "Messenger stays inactive until a signed-in customer connects an approved Page.",
+  },
   header: {
     signedInAs: "Signed in as",
     updateWorkspaceError: "Unable to update the workspace name. Please try again.",
@@ -227,6 +240,19 @@ const nlBeCopy: PortalCopy = {
       "Ga verder met Facebook om je werkruimte, AI-identiteit, Messenger-kanaal, gebruik, kennis en privacy-instellingen te beheren.",
     continueWithFacebook: "Verder met Facebook",
   },
+  publicPreview: {
+    customerDataNotice:
+      "Klantdata blijft binnen de ingelogde werkruimte. Deze publieke preview gebruikt alleen voorbeelddata.",
+    loginNotConfigured: "Facebook Login is niet ingesteld voor deze lokale omgeving.",
+    workspaceTitle: "Leaderbot werkruimte",
+    dashboardTitle: "Werkruimteoverzicht",
+    sourcesDetail: "{count} bronnen",
+    identityHelp: "Help klanten met duidelijke, nuttige antwoorden.",
+    customerFaq: "Klantenvragen",
+    brandVoiceNotes: "Merkstemnotities",
+    messengerInactive:
+      "Messenger blijft inactief tot een ingelogde klant een goedgekeurde pagina verbindt.",
+  },
   header: {
     signedInAs: "Aangemeld als",
     updateWorkspaceError: "Werkruimtenaam kon niet bijgewerkt worden. Probeer opnieuw.",
@@ -407,6 +433,19 @@ const frBeCopy: PortalCopy = {
     body:
       "Continuez avec Facebook pour gerer votre espace de travail, l'identite IA, Messenger, l'utilisation, les connaissances et la confidentialite.",
     continueWithFacebook: "Continuer avec Facebook",
+  },
+  publicPreview: {
+    customerDataNotice:
+      "Les donnees client restent dans l'espace connecte. Cette preview publique utilise uniquement des donnees d'exemple.",
+    loginNotConfigured: "Facebook Login n'est pas configure pour cet environnement local.",
+    workspaceTitle: "Espace Leaderbot",
+    dashboardTitle: "Vue d'ensemble de l'espace",
+    sourcesDetail: "{count} sources",
+    identityHelp: "Aidez les clients avec des reponses claires et utiles.",
+    customerFaq: "FAQ client",
+    brandVoiceNotes: "Notes de ton de marque",
+    messengerInactive:
+      "Messenger reste inactif jusqu'a ce qu'un client connecte lie une Page approuvee.",
   },
   header: {
     signedInAs: "Connecte en tant que",
