@@ -15,7 +15,7 @@ Leaderbot image-generation service.
 ## Deploy
 
 ```bash
-pnpm deploy
+pnpm run deploy
 pnpm run deploy:image-gen
 pnpm run deploy:gateway
 ```
