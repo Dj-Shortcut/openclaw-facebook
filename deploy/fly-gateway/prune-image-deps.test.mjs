@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { pruneImageDependencies } from './bin/prune-image-deps-core.mjs';
 
 const repoRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+const dockerfile = join(repoRoot, 'deploy/fly-gateway/Dockerfile');
 const pruneScript = join(repoRoot, 'deploy/fly-gateway/bin/prune-image-deps.mjs');
 const codexTargetsSource = join(repoRoot, 'deploy/fly-gateway/bin/codex-targets.cjs');
 const validateOpenClawRuntimeScript = join(repoRoot, 'scripts/validate-openclaw-runtime.mjs');
@@ -68,6 +69,19 @@ afterEach(() => {
 });
 
 describe('Fly gateway image dependency pruning', () => {
+  it('copies the prune core before invoking the prune CLI in the gateway image build', () => {
+    const source = readFileSync(dockerfile, 'utf8');
+    const coreCopyIndex = source.indexOf(
+      'COPY deploy/fly-gateway/bin/prune-image-deps-core.mjs ./deploy/fly-gateway/bin/prune-image-deps-core.mjs',
+    );
+    const pruneRunIndex = source.indexOf(
+      'node ./deploy/fly-gateway/bin/prune-image-deps.mjs /app',
+    );
+
+    expect(coreCopyIndex).toBeGreaterThanOrEqual(0);
+    expect(pruneRunIndex).toBeGreaterThan(coreCopyIndex);
+  });
+
   it('prunes removable files through the importable API', () => {
     const appRoot = makeTempApp();
     writeFixtureFile(appRoot, 'node_modules/plain-package/index.js');
