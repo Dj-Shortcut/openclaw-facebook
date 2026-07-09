@@ -1,6 +1,0 @@
-name: OpenClaw CodeQL
-
-paths-ignore:
-  - "**/*.test.ts"
-  - "**/*.test.tsx"
-  - "**/*.test.mjs"
