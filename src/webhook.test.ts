@@ -3,12 +3,11 @@ import {
   extractMessengerAttachmentUrls,
   extractMessengerImageAttachmentUrls,
   extractMessengerInboundMessages,
-  extractMessengerTextMessages,
 } from "./webhook.js";
 
-describe("extractMessengerTextMessages", () => {
+describe("extractMessengerInboundMessages", () => {
   it("keeps text Page messages and skips echoes or unsupported events", () => {
-    const messages = extractMessengerTextMessages({
+    const messages = extractMessengerInboundMessages({
       object: "page",
       entry: [
         {
@@ -37,9 +36,7 @@ describe("extractMessengerTextMessages", () => {
     expect(messages[0]?.sender?.id).toBe("psid-1");
     expect(messages[0]?.message?.text).toBe("hello");
   });
-});
 
-describe("extractMessengerInboundMessages", () => {
   it("keeps image-only Page messages", () => {
     const messages = extractMessengerInboundMessages({
       object: "page",
