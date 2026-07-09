@@ -106,7 +106,7 @@ access:
 8. [x] Continue verifying storage-proxy delivery under Messenger crawler constraints, including generated outputs and retained source images. Operator-verified on 2026-06-30 with tester photo forwards through Messenger.
 9. [ ] Deferred: evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory.
 10. [x] Keep public legal pages current (`/privacy`, `/terms`, `/data-deletion`) and aligned with Meta App Review, face-memory status, retention, and deletion behavior. Current image-gen runtime legal pages include tested privacy, terms, and data-deletion routes; future portal relocation remains a Gate 3 task.
-11. [x] Document Meta App Review impact for each new Messenger capability and avoid permission expansion unless product/policy approval is explicit. Current review notes live in `apps/image-gen/docs/operations/meta-app-review.md`; keep them updated for future Messenger capability changes.
+11. [x] Document Meta App Review impact for each new Messenger capability and avoid permission expansion unless product/policy approval is explicit. Current review notes live in `docs/operations/meta-app-review.md`; keep them updated for future Messenger capability changes.
 
 Exit criteria: all paid/provider calls are budget-gated and ledgered, public legal
 copy matches behavior, owner monitoring can detect cost/reliability regressions,
@@ -196,7 +196,16 @@ traffic cannot reach internal gateway admin/API surfaces.
   - Production portal smoke must cover workspace details, AI identity/instructions, Messenger status/connect controls, usage, privacy controls, and export/deletion request status.
   - Public production surface must expose only the customer portal, legal pages, health/readiness/metrics as intended, and required webhook routes; internal gateway/admin APIs must remain shielded.
 - [x] Verify GDPR deletion end-to-end before broad customer launch. Operator-verified on 2026-06-30.
-- [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health routes
+- [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health/legal/customer-app surfaces
+  - 2026-07-09 local route/config audit: the Fly public route guard still
+    exposes only `/facebook/webhook`, `/messenger/webhook`, and `/healthz` to
+    the OpenClaw gateway by default. When `LEADERBOT_PORTAL_ORIGIN` is
+    configured, customer portal proxying is constrained to portal/legal pages,
+    handoff pages, static assets, exact OAuth/Facebook/portal REST endpoints,
+    and exact `/api/trpc` or `/api/trpc/...` paths. Near-miss API paths and
+    gateway UI/debug routes are covered by
+    `deploy/fly-gateway/start-gateway.test.mjs`. Production route verification
+    remains open.
 - [x] Move public legal routes (`/privacy`, `/terms`, `/data-deletion`) into the portal surface before pointing customer traffic there. React portal pages and local footer links exist; production route verification remains part of the public route audit.
 - [x] Remove legacy campaign/style assets that do not support the portal direction
 - [ ] Deferred: observe generic text-to-image quality before removing remaining internal style-preset backend compatibility
@@ -206,7 +215,7 @@ traffic cannot reach internal gateway admin/API surfaces.
   - Uploaded Messenger videos remain unsupported input.
   - Generated video is future output only, behind a feature flag.
   - Future video provider calls must reserve quota before any paid external request, commit on usable success, and release or expire on failure.
-  - See `apps/image-gen/docs/operations/messenger-video-support-spike.md`.
+  - See `docs/operations/messenger-video-support-spike.md`.
 
 ### Kosten & quota
 
