@@ -11,7 +11,7 @@ import {
   Settings,
   ShieldCheck,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_LOCALE,
   SUPPORTED_LOCALES,
@@ -43,9 +43,26 @@ const navItems: Array<{ view: View; icon: typeof Gauge }> = [
   { view: "privacy", icon: ShieldCheck },
 ];
 
-function getInitialLocale(): AppLocale {
+function readStoredLocale(): string | null {
   if (typeof window === "undefined") return DEFAULT_LOCALE;
-  return resolveLocale(window.localStorage.getItem(LOCALE_STORAGE_KEY));
+  try {
+    return window.localStorage.getItem(LOCALE_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredLocale(locale: AppLocale) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(LOCALE_STORAGE_KEY, locale);
+  } catch {
+    return;
+  }
+}
+
+function getInitialLocale(): AppLocale {
+  return resolveLocale(readStoredLocale());
 }
 
 function statusLabel(status: ChannelStatus, copy: LocaleCopy) {
@@ -184,8 +201,10 @@ function App() {
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const copy = localeCopies[locale];
+  const localeRef = useRef(locale);
 
   useEffect(() => {
+    localeRef.current = locale;
     document.documentElement.lang = locale;
   }, [locale]);
 
@@ -199,7 +218,7 @@ function App() {
       .catch(error => {
         if (alive) {
           void error;
-          setNotice(copy.notices.previewData);
+          setNotice(localeCopies[localeRef.current].notices.previewData);
         }
       })
       .finally(() => {
@@ -209,7 +228,7 @@ function App() {
     return () => {
       alive = false;
     };
-  }, [copy.notices.previewData]);
+  }, []);
 
   const facebook = useMemo(
     () => snapshot.channels.find(channel => channel.channel === "facebook_messenger"),
@@ -218,7 +237,7 @@ function App() {
 
   function changeLocale(nextLocale: AppLocale) {
     setLocale(nextLocale);
-    window.localStorage.setItem(LOCALE_STORAGE_KEY, nextLocale);
+    writeStoredLocale(nextLocale);
     if (notice === localeCopies[locale].notices.previewData) {
       setNotice(localeCopies[nextLocale].notices.previewData);
     }

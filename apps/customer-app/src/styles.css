@@ -338,7 +338,7 @@ textarea {
 
 input:focus,
 textarea:focus {
-  outline: 3px solid rgba(47, 127, 114, 0.22);
+  outline: 3px solid rgba(47, 127, 114, 0.55);
   outline-offset: 1px;
 }
 
