@@ -28,8 +28,17 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import {
+  DEFAULT_LOCALE,
+  SUPPORTED_LOCALES,
+  portalCopies,
+  resolveLocale,
+  type AppLocale,
+  type PortalCopy,
+} from "./portalLocales";
 
 const FACEBOOK_CONNECT_STATE_KEY = "leaderbot.facebookConnectState";
+const LOCALE_STORAGE_KEY = "leaderbot.portal.locale";
 
 type FacebookConnectPage = {
   id: string;
@@ -37,7 +46,116 @@ type FacebookConnectPage = {
   grantedScopes: string[];
 };
 
-function StatusPill({ value }: { value: string }) {
+function readBrowserStorage(key: string): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeBrowserStorage(key: string, value: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    return;
+  }
+}
+
+function removeBrowserStorage(key: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    return;
+  }
+}
+
+function getInitialLocale(): AppLocale {
+  if (typeof window === "undefined") return DEFAULT_LOCALE;
+  return resolveLocale(readBrowserStorage(LOCALE_STORAGE_KEY));
+}
+
+function statusLabel(value: string, copy: PortalCopy) {
+  return copy.status[value as keyof PortalCopy["status"]] ?? value.replace(/_/g, " ");
+}
+
+function sourceTypeLabel(value: string, copy: PortalCopy) {
+  if (value === "manual_text") return copy.knowledge.manualText;
+  if (value === "integration") return copy.knowledge.integration;
+  if (value === "website") return copy.knowledge.website;
+  return value.replace(/_/g, " ");
+}
+
+function upgradeReasonLabel(value: string | null | undefined, copy: PortalCopy) {
+  if (!value) return copy.usage.customerRequested;
+  return (
+    copy.upgradeReasons[value as keyof PortalCopy["upgradeReasons"]] ??
+    value.replace(/_/g, " ")
+  );
+}
+
+function requestTypeLabel(value: string | null | undefined, copy: PortalCopy) {
+  if (!value) return copy.common.none;
+  return (
+    copy.requestTypes[value as keyof PortalCopy["requestTypes"]] ??
+    value.replace(/_/g, " ")
+  );
+}
+
+function formatPlanName(value: string | null | undefined, copy: PortalCopy) {
+  if (!value || value.toLowerCase() === "free") return copy.common.free;
+  return value;
+}
+
+function localeButtonLabel(locale: AppLocale, copy: PortalCopy) {
+  switch (locale) {
+    case "nl-BE":
+      return copy.locale.nl;
+    case "fr-BE":
+      return copy.locale.fr;
+    case "en":
+      return copy.locale.en;
+  }
+}
+
+function LocaleSwitcher({
+  copy,
+  locale,
+  onChange,
+}: {
+  copy: PortalCopy;
+  locale: AppLocale;
+  onChange: (locale: AppLocale) => void;
+}) {
+  return (
+    <div
+      aria-label={copy.locale.label}
+      className="inline-grid grid-cols-3 gap-1 rounded-lg border border-stone-300 bg-white p-1"
+      role="group"
+    >
+      {SUPPORTED_LOCALES.map(localeOption => (
+        <button
+          aria-pressed={localeOption === locale}
+          className={`min-h-8 rounded-md px-3 text-xs font-semibold transition-colors ${
+            localeOption === locale
+              ? "bg-teal-700 text-white"
+              : "text-stone-700 hover:bg-stone-100"
+          }`}
+          key={localeOption}
+          type="button"
+          onClick={() => onChange(localeOption)}
+        >
+          {localeButtonLabel(localeOption, copy)}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function StatusPill({ copy, value }: { copy: PortalCopy; value: string }) {
   const toneClass =
     value === "connected" || value === "completed"
       ? "bg-emerald-100 text-emerald-800"
@@ -50,7 +168,7 @@ function StatusPill({ value }: { value: string }) {
     <span
       className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${toneClass}`}
     >
-      {value.replace(/_/g, " ")}
+      {statusLabel(value, copy)}
     </span>
   );
 }
@@ -73,9 +191,15 @@ function MetricTile({
   );
 }
 
-function formatDate(value?: string | Date | null) {
-  if (!value) return "Not set";
-  return new Date(value).toLocaleDateString();
+function formatDate(
+  value: string | Date | null | undefined,
+  locale: AppLocale,
+  copy: PortalCopy
+) {
+  if (!value) return copy.common.none;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return copy.common.none;
+  return new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(date);
 }
 
 function addDays(value: string | Date, days: number) {
@@ -101,6 +225,7 @@ function Home() {
     () => getWorkspaceIdFromLocation() ?? readActiveWorkspaceId()
   );
   const [showHandoffBanner] = useState(hasHandoffOnboardingFlag);
+  const [locale, setLocale] = useState<AppLocale>(getInitialLocale);
   const [isEditingIdentity, setIsEditingIdentity] = useState(false);
   const [identityForm, setIdentityForm] = useState({
     name: "",
@@ -121,12 +246,21 @@ function Home() {
     sourceReference: "",
   });
   const [facebookConnectState, setFacebookConnectState] = useState<string | null>(() =>
-    typeof window === "undefined"
-      ? null
-      : window.localStorage.getItem(FACEBOOK_CONNECT_STATE_KEY)
+    readBrowserStorage(FACEBOOK_CONNECT_STATE_KEY)
   );
   const [facebookConnectPages, setFacebookConnectPages] = useState<FacebookConnectPage[]>([]);
   const [facebookConnectIssue, setFacebookConnectIssue] = useState<string | null>(null);
+  const copy = portalCopies[locale];
+
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
+
+  const changeLocale = (nextLocale: AppLocale) => {
+    setLocale(nextLocale);
+    writeBrowserStorage(LOCALE_STORAGE_KEY, nextLocale);
+  };
+
   const portalSessionQuery = trpc.portal.auth.session.useQuery(
     activeWorkspaceId ? { workspaceId: activeWorkspaceId } : undefined,
     {
@@ -222,11 +356,11 @@ function Home() {
       setFacebookConnectIssue(null);
       setFacebookConnectState(data.state);
       setFacebookConnectPages([]);
-      window.localStorage.setItem(FACEBOOK_CONNECT_STATE_KEY, data.state);
+      writeBrowserStorage(FACEBOOK_CONNECT_STATE_KEY, data.state);
       if (data.authorizationUrl) {
         window.location.assign(data.authorizationUrl);
       } else {
-        setFacebookConnectIssue("Facebook OAuth is not configured for this portal.");
+        setFacebookConnectIssue(copy.messenger.oauthMissing);
       }
     },
   });
@@ -242,7 +376,7 @@ function Home() {
       setFacebookConnectIssue(null);
       setFacebookConnectState(null);
       setFacebookConnectPages([]);
-      window.localStorage.removeItem(FACEBOOK_CONNECT_STATE_KEY);
+      removeBrowserStorage(FACEBOOK_CONNECT_STATE_KEY);
       await utils.portal.channels.status.invalidate({ workspaceId });
     },
   });
@@ -252,7 +386,7 @@ function Home() {
       setFacebookConnectIssue(null);
       setFacebookConnectState(null);
       setFacebookConnectPages([]);
-      window.localStorage.removeItem(FACEBOOK_CONNECT_STATE_KEY);
+      removeBrowserStorage(FACEBOOK_CONNECT_STATE_KEY);
       await utils.portal.channels.status.invalidate({ workspaceId });
     },
   });
@@ -415,18 +549,20 @@ function Home() {
 
   if (!auth.isAuthenticated) {
     return (
-      <main className="min-h-full bg-[#f6f2ea] px-6 py-10 text-stone-950">
+      <main className="min-h-full bg-[#f5f7fb] px-6 py-10 text-stone-950">
         <div className="mx-auto flex min-h-[70vh] max-w-5xl items-center">
           <section className="w-full rounded-lg border border-stone-200 bg-white p-8 shadow-sm">
+            <div className="mb-6 flex justify-end">
+              <LocaleSwitcher copy={copy} locale={locale} onChange={changeLocale} />
+            </div>
             <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-lg bg-teal-100 text-teal-700">
               <ShieldCheck className="h-6 w-6" />
             </div>
             <h1 className="max-w-2xl text-4xl font-semibold text-stone-950">
-              Leaderbot customer portal
+              {copy.auth.title}
             </h1>
             <p className="mt-4 max-w-2xl text-base leading-7 text-stone-600">
-              Continue with Facebook to manage your workspace, AI identity,
-              Messenger channel, usage, knowledge, and privacy controls.
+              {copy.auth.body}
             </p>
             <Button
               className="mt-8 gap-2"
@@ -438,7 +574,7 @@ function Home() {
               }}
             >
               <LogIn className="h-4 w-4" />
-              Continue with Facebook
+              {copy.auth.continueWithFacebook}
             </Button>
             {!loginConfigured ? (
               <p className="mt-4 text-sm text-amber-700">
@@ -465,11 +601,11 @@ function Home() {
     privacyRequestsQuery.isLoading;
 
   return (
-    <main className="min-h-full bg-[#f6f2ea] px-4 py-6 text-stone-950 sm:px-6 lg:px-8">
+    <main className="min-h-full bg-[#f5f7fb] px-4 py-6 text-stone-950 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl">
         <header className="flex flex-col gap-4 border-b border-stone-200 pb-6 md:flex-row md:items-end md:justify-between">
           <div>
-            <p className="text-sm font-medium text-teal-700">Workspace</p>
+            <p className="text-sm font-medium text-teal-700">{copy.common.workspace}</p>
             {isEditingWorkspace ? (
               <form
                 className="mt-2 flex max-w-xl flex-col gap-3 sm:flex-row"
@@ -492,7 +628,7 @@ function Home() {
                     type="submit"
                   >
                     <Save className="h-4 w-4" />
-                    Save
+                    {copy.common.save}
                   </Button>
                   <Button
                     disabled={workspaceMutation.isPending}
@@ -502,7 +638,7 @@ function Home() {
                     onClick={() => setIsEditingWorkspace(false)}
                   >
                     <X className="h-4 w-4" />
-                    Cancel
+                    {copy.common.cancel}
                   </Button>
                 </div>
               </form>
@@ -519,34 +655,37 @@ function Home() {
                   onClick={startEditingWorkspace}
                 >
                   <Pencil className="h-4 w-4" />
-                  Rename
+                  {copy.common.rename}
                 </Button>
               </div>
             )}
             <p className="mt-2 text-sm text-stone-600">
-              Signed in as{" "}
+              {copy.header.signedInAs}{" "}
               {portalSessionQuery.data?.user.email ??
                 auth.user?.email ??
                 auth.user?.name ??
-                "customer"}
+                copy.common.customer}
               {portalSessionQuery.data?.membership.role
-                ? ` · ${portalSessionQuery.data.membership.role}`
+                ? ` · ${statusLabel(portalSessionQuery.data.membership.role, copy)}`
                 : ""}
             </p>
             {workspaceMutation.error ? (
               <p className="mt-2 text-sm text-red-700">
-                Unable to update the workspace name. Please try again.
+                {copy.header.updateWorkspaceError}
               </p>
             ) : null}
           </div>
-          <Button
-            variant="outline"
-            onClick={() => {
-              void auth.logout();
-            }}
-          >
-            Sign out
-          </Button>
+          <div className="flex flex-wrap items-center gap-3">
+            <LocaleSwitcher copy={copy} locale={locale} onChange={changeLocale} />
+            <Button
+              variant="outline"
+              onClick={() => {
+                void auth.logout();
+              }}
+            >
+              {copy.common.signOut}
+            </Button>
+          </div>
         </header>
 
         {showHandoffBanner ? (
@@ -565,14 +704,16 @@ function Home() {
         ) : null}
 
         {isLoading ? (
-          <div className="py-12 text-sm text-stone-600">Loading workspace...</div>
+          <div className="py-12 text-sm text-stone-600">
+            {copy.common.loadingWorkspace}
+          </div>
         ) : (
           <div className="grid gap-4 py-6 lg:grid-cols-3">
             <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
               <div className="flex items-center gap-3">
                 <ShieldCheck className="h-5 w-5 text-teal-700" />
                 <h2 className="text-lg font-semibold text-stone-950">
-                  Workspace access
+                  {copy.workspaceAccess.title}
                 </h2>
               </div>
               <div className="mt-5 grid gap-3 md:grid-cols-2">
@@ -583,23 +724,25 @@ function Home() {
                   >
                     <div className="min-w-0">
                       <div className="truncate text-sm font-medium text-stone-900">
-                        {member.name ?? member.email ?? `User ${member.userId}`}
+                        {member.name ??
+                          member.email ??
+                          `${copy.common.user} ${member.userId}`}
                       </div>
                       <div className="mt-1 truncate text-xs text-stone-500">
-                        {member.email ?? "No email on file"}
+                        {member.email ?? copy.common.noEmail}
                       </div>
                     </div>
-                    <StatusPill value={member.role} />
+                    <StatusPill copy={copy} value={member.role} />
                   </div>
                 ))}
               </div>
               {workspaceMembersQuery.error ? (
                 <p className="mt-4 text-sm text-red-700">
-                  Unable to load workspace access.
+                  {copy.workspaceAccess.unableToLoad}
                 </p>
               ) : (workspaceMembersQuery.data ?? []).length === 0 ? (
                 <p className="mt-4 text-sm text-stone-600">
-                  No workspace members found.
+                  {copy.workspaceAccess.empty}
                 </p>
               ) : null}
             </section>
@@ -610,10 +753,10 @@ function Home() {
                   <Bot className="mt-1 h-5 w-5 text-teal-700" />
                   <div>
                     <h2 className="text-lg font-semibold text-stone-950">
-                      {aiIdentityQuery.data?.name ?? "Leaderbot"}
+                      {aiIdentityQuery.data?.name ?? copy.identity.fallbackName}
                     </h2>
                     <p className="mt-1 text-sm text-stone-600">
-                      {aiIdentityQuery.data?.tone ?? "Helpful"} ·{" "}
+                      {aiIdentityQuery.data?.tone ?? copy.identity.fallbackTone} ·{" "}
                       {aiIdentityQuery.data?.language ?? "nl"} ·{" "}
                       {aiIdentityQuery.data?.modelDefault ?? "default"}
                     </p>
@@ -627,7 +770,7 @@ function Home() {
                     onClick={startEditingIdentity}
                   >
                     <Pencil className="h-4 w-4" />
-                    Edit
+                    {copy.common.edit}
                   </Button>
                 ) : null}
               </div>
@@ -641,7 +784,7 @@ function Home() {
                 >
                   <div className="grid gap-4 md:grid-cols-2">
                     <label className="grid gap-2 text-sm text-stone-700">
-                      Name
+                      {copy.identity.assistantName}
                       <input
                         className="rounded border border-stone-300 bg-white px-3 py-2 text-stone-950"
                         maxLength={120}
@@ -656,7 +799,7 @@ function Home() {
                       />
                     </label>
                     <label className="grid gap-2 text-sm text-stone-700">
-                      Tone
+                      {copy.identity.tone}
                       <input
                         className="rounded border border-stone-300 bg-white px-3 py-2 text-stone-950"
                         maxLength={80}
@@ -671,7 +814,7 @@ function Home() {
                       />
                     </label>
                     <label className="grid gap-2 text-sm text-stone-700">
-                      Language
+                      {copy.identity.language}
                       <input
                         className="rounded border border-stone-300 bg-white px-3 py-2 text-stone-950"
                         maxLength={16}
@@ -687,7 +830,7 @@ function Home() {
                       />
                     </label>
                     <label className="grid gap-2 text-sm text-stone-700">
-                      Model default
+                      {copy.identity.modelDefault}
                       <input
                         className="rounded border border-stone-300 bg-white px-3 py-2 text-stone-950"
                         maxLength={80}
@@ -703,7 +846,7 @@ function Home() {
                     </label>
                   </div>
                   <label className="grid gap-2 text-sm text-stone-700">
-                    Instructions
+                    {copy.identity.instructions}
                     <textarea
                       className="min-h-36 rounded border border-stone-300 bg-white px-3 py-2 text-stone-950"
                       maxLength={8000}
@@ -728,7 +871,7 @@ function Home() {
                       type="submit"
                     >
                       <Save className="h-4 w-4" />
-                      Save
+                      {copy.common.save}
                     </Button>
                     <Button
                       className="gap-2"
@@ -738,14 +881,14 @@ function Home() {
                       onClick={() => setIsEditingIdentity(false)}
                     >
                       <X className="h-4 w-4" />
-                      Cancel
+                      {copy.common.cancel}
                     </Button>
                   </div>
                 </form>
               ) : (
                 <div className="mt-5 rounded-lg border border-stone-200 bg-stone-50 p-4 text-sm leading-6 text-stone-700">
                   {aiIdentityQuery.data?.instructions ??
-                    "No custom assistant instructions have been saved yet."}
+                    copy.identity.noInstructions}
                 </div>
               )}
             </section>
@@ -754,7 +897,9 @@ function Home() {
               <div className="flex items-start justify-between gap-4">
                 <div className="flex items-center gap-3">
                   <MessageCircle className="h-5 w-5 text-teal-700" />
-                  <h2 className="text-lg font-semibold text-stone-950">Messenger</h2>
+                  <h2 className="text-lg font-semibold text-stone-950">
+                    {copy.messenger.title}
+                  </h2>
                 </div>
                 {facebookStatus !== "connected" ? (
                   <Button
@@ -765,7 +910,9 @@ function Home() {
                     onClick={startFacebookConnectFlow}
                   >
                     <ExternalLink className="h-4 w-4" />
-                    {facebookStatus === "disconnected" ? "Connect Page" : "Reconnect"}
+                    {facebookStatus === "disconnected"
+                      ? copy.messenger.connectPage
+                      : copy.messenger.reconnect}
                   </Button>
                 ) : (
                   <Button
@@ -775,21 +922,22 @@ function Home() {
                     variant="outline"
                     onClick={disconnectFacebook}
                   >
-                    {facebookDisconnectMutation.isPending ? "Disconnecting" : "Disconnect"}
+                    {facebookDisconnectMutation.isPending
+                      ? copy.messenger.disconnecting
+                      : copy.messenger.disconnect}
                   </Button>
                 )}
               </div>
               <div className="mt-5 space-y-3 text-sm">
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-stone-600">Status</span>
-                  <StatusPill
-                    value={facebookStatus}
-                  />
+                  <span className="text-stone-600">{copy.common.status}</span>
+                  <StatusPill copy={copy} value={facebookStatus} />
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-stone-600">Page</span>
+                  <span className="text-stone-600">{copy.common.page}</span>
                   <span className="text-right text-stone-800">
-                    {channelStatusQuery.data?.facebook.pageName ?? "Not connected"}
+                    {channelStatusQuery.data?.facebook.pageName ??
+                      copy.common.notConnected}
                   </span>
                 </div>
               </div>
@@ -798,10 +946,10 @@ function Home() {
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                       <div className="text-sm font-medium text-teal-900">
-                        Facebook authorization pending
+                        {copy.messenger.authorizationPending}
                       </div>
                       <div className="mt-1 text-sm text-teal-700">
-                        Finish setup after returning from Meta.
+                        {copy.messenger.authorizationBody}
                       </div>
                     </div>
                     <Button
@@ -812,7 +960,9 @@ function Home() {
                       onClick={finishFacebookConnectFlow}
                     >
                       <CheckCircle2 className="h-4 w-4" />
-                      {facebookCompleteMutation.isPending ? "Checking" : "Finish setup"}
+                      {facebookCompleteMutation.isPending
+                        ? copy.messenger.checking
+                        : copy.messenger.finishSetup}
                     </Button>
                   </div>
                 </div>
@@ -836,11 +986,12 @@ function Home() {
                             {page.name}
                           </span>
                           <span className="mt-1 block text-xs text-stone-500">
-                            {page.grantedScopes.length} permissions granted
+                            {page.grantedScopes.length}{" "}
+                            {copy.messenger.permissionsGranted}
                           </span>
                         </span>
                         <span className="text-sm text-teal-700">
-                          {isSelecting ? "Connecting" : "Select"}
+                          {isSelecting ? copy.common.connecting : copy.common.select}
                         </span>
                       </button>
                     );
@@ -851,27 +1002,27 @@ function Home() {
                 <p className="mt-4 text-sm text-red-700">{facebookConnectIssue}</p>
               ) : facebookStartMutation.error ? (
                 <p className="mt-4 text-sm text-red-700">
-                  Unable to start Facebook connection. Please try again.
+                  {copy.messenger.unableStart}
                 </p>
               ) : facebookCompleteMutation.error ? (
                 <p className="mt-4 text-sm text-red-700">
-                  Unable to finish Facebook connection. Please start again.
+                  {copy.messenger.unableFinish}
                 </p>
               ) : facebookSelectPageMutation.error ? (
                 <p className="mt-4 text-sm text-red-700">
-                  Unable to connect that Page. Please try again.
+                  {copy.messenger.unablePage}
                 </p>
               ) : facebookSelectPageMutation.isSuccess ? (
                 <p className="mt-4 text-sm text-emerald-700">
-                  Messenger connected for this workspace.
+                  {copy.messenger.connected}
                 </p>
               ) : facebookDisconnectMutation.isSuccess ? (
                 <p className="mt-4 text-sm text-emerald-700">
-                  Messenger disconnected for this workspace.
+                  {copy.messenger.disconnected}
                 </p>
               ) : facebookDisconnectMutation.error ? (
                 <p className="mt-4 text-sm text-red-700">
-                  Unable to disconnect Messenger. Please try again.
+                  {copy.messenger.unableDisconnect}
                 </p>
               ) : null}
             </section>
@@ -880,35 +1031,32 @@ function Home() {
               <div className="flex items-center gap-3">
                 <Info className="h-5 w-5 text-teal-700" />
                 <h2 className="text-lg font-semibold text-stone-950">
-                  Bot instructions
+                  {copy.guidance.title}
                 </h2>
               </div>
               <div className="mt-5 grid gap-4 md:grid-cols-3">
                 <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
                   <h3 className="text-sm font-medium text-stone-900">
-                    Prompt-first images
+                    {copy.guidance.promptFirstTitle}
                   </h3>
                   <p className="mt-2 text-sm leading-6 text-stone-600">
-                    Ask naturally in Messenger. Describe the image or edit you want;
-                    no style menu is required.
+                    {copy.guidance.promptFirstBody}
                   </p>
                 </div>
                 <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
                   <h3 className="text-sm font-medium text-stone-900">
-                    Workspace context
+                    {copy.guidance.contextTitle}
                   </h3>
                   <p className="mt-2 text-sm leading-6 text-stone-600">
-                    The assistant uses this workspace's identity, instructions, and
-                    active knowledge sources.
+                    {copy.guidance.contextBody}
                   </p>
                 </div>
                 <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
                   <h3 className="text-sm font-medium text-stone-900">
-                    Data controls
+                    {copy.guidance.dataTitle}
                   </h3>
                   <p className="mt-2 text-sm leading-6 text-stone-600">
-                    Use the portal to request exports or deletion. Messenger users can
-                    also send "delete my data".
+                    {copy.guidance.dataBody}
                   </p>
                 </div>
               </div>
@@ -920,10 +1068,10 @@ function Home() {
                   <CreditCard className="h-5 w-5 text-teal-700" />
                   <div>
                     <h2 className="text-lg font-semibold text-stone-950">
-                      Usage and balance
+                      {copy.usage.title}
                     </h2>
                     <p className="mt-1 text-sm text-stone-600">
-                      {usage?.plan.name ?? "Free"} plan
+                      {formatPlanName(usage?.plan.name, copy)} {copy.usage.plan}
                     </p>
                   </div>
                 </div>
@@ -935,30 +1083,35 @@ function Home() {
                     type="button"
                     onClick={requestUpgrade}
                   >
-                    {upgradeRequestMutation.isPending ? "Requesting" : "Upgrade"}
+                    {upgradeRequestMutation.isPending
+                      ? copy.usage.requesting
+                      : copy.usage.upgrade}
                   </Button>
                 ) : null}
               </div>
               <div className="mt-5 grid gap-4 sm:grid-cols-3">
                 <MetricTile
-                  label="Images remaining"
+                  label={copy.usage.imagesRemaining}
                   value={imagesRemaining}
-                  detail={`${usage?.imageCount ?? 0} of ${imageLimit} used today`}
+                  detail={`${usage?.imageCount ?? 0} ${copy.usage.imagesUsedDetail.replace(
+                    "{limit}",
+                    String(imageLimit)
+                  )}`}
                 />
                 <MetricTile
-                  label="Messages today"
+                  label={copy.usage.messagesToday}
                   value={usage?.messageCount ?? 0}
                   detail={`${usage?.limits.messagesPerWindow ?? 0} per ${
                     usage?.limits.messageWindowSeconds ?? 0
-                  } seconds`}
+                  } ${copy.common.seconds}`}
                 />
                 <MetricTile
-                  label="Blocked today"
+                  label={copy.usage.blockedToday}
                   value={usage?.blockedCount ?? 0}
                   detail={
                     usage?.upgrade.reason === "blocked_usage"
-                      ? "Action may be needed"
-                      : "No blocks recorded"
+                      ? copy.usage.actionNeeded
+                      : copy.usage.noBlocks
                   }
                 />
               </div>
@@ -970,21 +1123,21 @@ function Home() {
               </div>
               {upgradeRequestMutation.isSuccess ? (
                 <p className="mt-4 text-sm text-emerald-700">
-                  Upgrade request recorded for this workspace.
+                  {copy.usage.requestRecorded}
                 </p>
               ) : upgradeRequestMutation.error ? (
                 <p className="mt-4 text-sm text-red-700">
-                  Unable to record the upgrade request. Please try again.
+                  {copy.usage.requestError}
                 </p>
               ) : null}
               <div className="mt-5 overflow-hidden rounded-lg border border-stone-200">
                 {upgradeRequestsQuery.error ? (
                   <div className="bg-red-50 px-4 py-3 text-sm text-red-700">
-                    Unable to load upgrade requests. Please try again.
+                    {copy.usage.loadError}
                   </div>
                 ) : upgradeRequests.length === 0 ? (
                   <div className="bg-stone-50 px-4 py-3 text-sm text-stone-600">
-                    No upgrade requests yet.
+                    {copy.usage.empty}
                   </div>
                 ) : (
                   <div className="divide-y divide-stone-200">
@@ -995,17 +1148,16 @@ function Home() {
                       >
                         <div>
                           <div className="font-medium text-stone-900">
-                            {request.requestedPlanName} upgrade
+                            {request.requestedPlanName} {copy.usage.upgradeLabel}
                           </div>
                           <div className="mt-1 text-xs text-stone-500">
-                            {request.upgradeReason?.replace(/_/g, " ") ??
-                              "Customer requested"}
+                            {upgradeReasonLabel(request.upgradeReason, copy)}
                           </div>
                         </div>
                         <span className="text-stone-600">
-                          {formatDate(request.createdAt)}
+                          {formatDate(request.createdAt, locale, copy)}
                         </span>
-                        <StatusPill value={request.status} />
+                        <StatusPill copy={copy} value={request.status} />
                       </div>
                     ))}
                   </div>
@@ -1013,9 +1165,10 @@ function Home() {
               </div>
               {latestUpgradeRequest ? (
                 <p className="mt-3 text-xs text-stone-500">
-                  Latest upgrade request: {latestUpgradeRequest.status.replace(/_/g, " ")}
+                  {copy.usage.latestRequest}:{" "}
+                  {statusLabel(latestUpgradeRequest.status, copy)}
                   {" · "}
-                  {formatDate(latestUpgradeRequest.createdAt)}
+                  {formatDate(latestUpgradeRequest.createdAt, locale, copy)}
                 </p>
               ) : null}
             </section>
@@ -1024,17 +1177,17 @@ function Home() {
               <div className="flex items-center gap-3">
                 <SlidersHorizontal className="h-5 w-5 text-teal-700" />
                 <h2 className="text-lg font-semibold text-stone-950">
-                  Privacy controls
+                  {copy.privacy.controlsTitle}
                 </h2>
               </div>
               <div className="mt-5 grid gap-4 md:grid-cols-3">
                 <label className="flex min-h-24 items-start justify-between gap-4 rounded-lg border border-stone-200 bg-stone-50 p-4">
                   <span>
                     <span className="block text-sm font-medium text-stone-900">
-                      Knowledge indexing
+                      {copy.privacy.knowledgeIndexing}
                     </span>
                     <span className="mt-1 block text-sm text-stone-600">
-                      Allow uploaded knowledge to be indexed.
+                      {copy.privacy.knowledgeIndexingBody}
                     </span>
                   </span>
                   <input
@@ -1050,10 +1203,10 @@ function Home() {
                 <label className="flex min-h-24 items-start justify-between gap-4 rounded-lg border border-stone-200 bg-stone-50 p-4">
                   <span>
                     <span className="block text-sm font-medium text-stone-900">
-                      Usage analytics
+                      {copy.privacy.usageAnalytics}
                     </span>
                     <span className="mt-1 block text-sm text-stone-600">
-                      Allow workspace usage analytics.
+                      {copy.privacy.usageAnalyticsBody}
                     </span>
                   </span>
                   <input
@@ -1069,10 +1222,11 @@ function Home() {
                 <label className="flex min-h-24 items-start justify-between gap-4 rounded-lg border border-stone-200 bg-stone-50 p-4">
                   <span>
                     <span className="block text-sm font-medium text-stone-900">
-                      Image memory retention
+                      {copy.privacy.imageMemoryRetention}
                     </span>
                     <span className="mt-1 block text-sm text-stone-600">
-                      Days retained: {privacy?.imageMemoryRetentionDays ?? 0}
+                      {copy.privacy.daysRetained}:{" "}
+                      {privacy?.imageMemoryRetentionDays ?? 0}
                     </span>
                   </span>
                   <input
@@ -1097,7 +1251,7 @@ function Home() {
                 <div className="flex items-center gap-3">
                   <ShieldCheck className="h-5 w-5 text-teal-700" />
                   <h2 className="text-lg font-semibold text-stone-950">
-                    Data requests
+                    {copy.dataRequests.title}
                   </h2>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -1109,7 +1263,7 @@ function Home() {
                     onClick={() => createPrivacyRequest("export")}
                   >
                     <FileDown className="h-4 w-4" />
-                    Export
+                    {copy.dataRequests.export}
                   </Button>
                   <Button
                     className="border-red-300 text-red-700 hover:bg-red-50"
@@ -1120,50 +1274,52 @@ function Home() {
                     onClick={() => createPrivacyRequest("deletion")}
                   >
                     <Trash2 className="h-4 w-4" />
-                    Delete data
+                    {copy.dataRequests.deleteData}
                   </Button>
                 </div>
               </div>
               <div className="mt-5 grid gap-4 sm:grid-cols-3">
                 <MetricTile
-                  label="Open requests"
+                  label={copy.dataRequests.openRequests}
                   value={openPrivacyRequests.length}
-                  detail="Export or deletion requests in progress"
+                  detail={copy.dataRequests.openRequestsDetail}
                 />
                 <MetricTile
-                  label="Latest request"
-                  value={latestPrivacyRequest?.requestType ?? "None"}
+                  label={copy.dataRequests.latestRequest}
+                  value={requestTypeLabel(latestPrivacyRequest?.requestType, copy)}
                   detail={
                     latestPrivacyRequest
-                      ? `${latestPrivacyRequest.status} · ${formatDate(
-                          latestPrivacyRequest.createdAt
+                      ? `${statusLabel(latestPrivacyRequest.status, copy)} · ${formatDate(
+                          latestPrivacyRequest.createdAt,
+                          locale,
+                          copy
                         )}`
-                      : "No data requests yet"
+                      : copy.dataRequests.noRequests
                   }
                 />
                 <MetricTile
-                  label="Target date"
+                  label={copy.dataRequests.targetDate}
                   value={
                     latestPrivacyRequest &&
                     isOpenPrivacyRequest(latestPrivacyRequest.status)
-                      ? formatDate(addDays(latestPrivacyRequest.createdAt, 30))
-                      : "None"
+                      ? formatDate(addDays(latestPrivacyRequest.createdAt, 30), locale, copy)
+                      : copy.common.none
                   }
-                  detail="Standard 30-day response target"
+                  detail={copy.dataRequests.targetDetail}
                 />
               </div>
               <div className="mt-5 overflow-hidden rounded-lg border border-stone-200">
                 {privacyRequestMutation.error ? (
                   <div className="bg-red-50 px-4 py-3 text-sm text-red-700">
-                    Unable to create data request. Please try again.
+                    {copy.dataRequests.createError}
                   </div>
                 ) : privacyRequestsError ? (
                   <div className="bg-red-50 px-4 py-3 text-sm text-red-700">
-                    Unable to load data requests. Please try again.
+                    {copy.dataRequests.loadError}
                   </div>
                 ) : privacyRequests.length === 0 ? (
                   <div className="bg-stone-50 px-4 py-3 text-sm text-stone-600">
-                    No data requests yet.
+                    {copy.dataRequests.noRequests}
                   </div>
                 ) : (
                   <div className="divide-y divide-stone-200">
@@ -1172,13 +1328,13 @@ function Home() {
                         className="grid gap-2 bg-stone-50 px-4 py-3 text-sm sm:grid-cols-[1fr_auto_auto]"
                         key={request.id}
                       >
-                        <span className="font-medium capitalize text-stone-900">
-                          {request.requestType}
+                        <span className="font-medium text-stone-900">
+                          {requestTypeLabel(request.requestType, copy)}
                         </span>
                         <span className="text-stone-600">
-                          {formatDate(request.createdAt)}
+                          {formatDate(request.createdAt, locale, copy)}
                         </span>
-                        <StatusPill value={request.status} />
+                        <StatusPill copy={copy} value={request.status} />
                       </div>
                     ))}
                   </div>
@@ -1189,16 +1345,24 @@ function Home() {
             <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
               <div className="flex items-center gap-3">
                 <Database className="h-5 w-5 text-teal-700" />
-                <h2 className="text-lg font-semibold text-stone-950">Knowledge base</h2>
+                <h2 className="text-lg font-semibold text-stone-950">
+                  {copy.knowledge.title}
+                </h2>
               </div>
               <div className="mt-5 grid gap-4 sm:grid-cols-3">
-                <MetricTile label="Sources" value={knowledgeQuery.data?.totalSources ?? 0} />
-                <MetricTile label="Active" value={knowledgeQuery.data?.activeSources ?? 0} />
                 <MetricTile
-                  label="Last update"
+                  label={copy.knowledge.sources}
+                  value={knowledgeQuery.data?.totalSources ?? 0}
+                />
+                <MetricTile
+                  label={copy.knowledge.active}
+                  value={knowledgeQuery.data?.activeSources ?? 0}
+                />
+                <MetricTile
+                  label={copy.knowledge.lastUpdate}
                   value={
                     knowledgeQuery.data?.lastUpdate
-                      ? new Date(knowledgeQuery.data.lastUpdate).toLocaleDateString()
+                      ? formatDate(knowledgeQuery.data.lastUpdate, locale, copy)
                       : "-"
                   }
                 />
@@ -1211,7 +1375,7 @@ function Home() {
                 }}
               >
                 <label className="grid gap-2 text-sm text-stone-700">
-                  Type
+                  {copy.common.type}
                   <select
                     className="h-10 rounded border border-stone-300 bg-white px-3 text-stone-950"
                     value={knowledgeForm.sourceType}
@@ -1223,13 +1387,13 @@ function Home() {
                       }))
                     }
                   >
-                    <option value="website">Website</option>
-                    <option value="manual_text">Manual text</option>
-                    <option value="integration">Integration</option>
+                    <option value="website">{copy.knowledge.website}</option>
+                    <option value="manual_text">{copy.knowledge.manualText}</option>
+                    <option value="integration">{copy.knowledge.integration}</option>
                   </select>
                 </label>
                 <label className="grid gap-2 text-sm text-stone-700">
-                  Name
+                  {copy.common.name}
                   <input
                     className="h-10 rounded border border-stone-300 bg-white px-3 text-stone-950"
                     maxLength={200}
@@ -1245,7 +1409,7 @@ function Home() {
                   />
                 </label>
                 <label className="grid gap-2 text-sm text-stone-700">
-                  Reference
+                  {copy.common.reference}
                   <input
                     className="h-10 rounded border border-stone-300 bg-white px-3 text-stone-950"
                     maxLength={1024}
@@ -1266,27 +1430,27 @@ function Home() {
                     type="submit"
                   >
                     <Plus className="h-4 w-4" />
-                    Add
+                    {copy.common.add}
                   </Button>
                 </div>
               </form>
               {knowledgeMutation.error ? (
                 <div className="mt-3 text-sm text-red-700">
-                  Unable to save knowledge source. Please try again.
+                  {copy.knowledge.saveError}
                 </div>
               ) : knowledgeDisableMutation.error ? (
                 <div className="mt-3 text-sm text-red-700">
-                  Unable to disable knowledge source. Please try again.
+                  {copy.knowledge.disableError}
                 </div>
               ) : null}
               <div className="mt-5 overflow-hidden rounded-lg border border-stone-200">
                 {knowledgeQuery.error ? (
                   <div className="bg-red-50 px-4 py-3 text-sm text-red-700">
-                    Unable to load knowledge sources. Please try again.
+                    {copy.knowledge.loadError}
                   </div>
                 ) : knowledgeSources.length === 0 ? (
                   <div className="bg-stone-50 px-4 py-3 text-sm text-stone-600">
-                    No knowledge sources yet.
+                    {copy.knowledge.empty}
                   </div>
                 ) : (
                   <div className="divide-y divide-stone-200">
@@ -1301,15 +1465,18 @@ function Home() {
                             <span className="truncate">{source.name}</span>
                           </div>
                           <div className="mt-1 truncate text-xs text-stone-500">
-                            {source.sourceReference || source.sourceType.replace(/_/g, " ")}
+                            {source.sourceReference ||
+                              sourceTypeLabel(source.sourceType, copy)}
                           </div>
                         </div>
                         <span className="text-stone-600">
-                          {source.sourceType.replace(/_/g, " ")}
+                          {sourceTypeLabel(source.sourceType, copy)}
                         </span>
-                        <StatusPill value={source.status} />
+                        <StatusPill copy={copy} value={source.status} />
                         {source.status === "disabled" ? (
-                          <span className="text-xs text-stone-500">Disabled</span>
+                          <span className="text-xs text-stone-500">
+                            {copy.common.disabled}
+                          </span>
                         ) : (
                           <Button
                             size="sm"
@@ -1318,7 +1485,7 @@ function Home() {
                             disabled={knowledgeDisableMutation.isPending}
                             onClick={() => disableKnowledgeSource(source.id)}
                           >
-                            Disable
+                            {copy.knowledge.disable}
                           </Button>
                         )}
                       </div>
@@ -1329,6 +1496,17 @@ function Home() {
             </section>
           </div>
         )}
+        <footer className="flex flex-wrap gap-4 border-t border-stone-200 py-5 text-sm text-stone-600">
+          <a className="hover:text-teal-700" href="/privacy">
+            {copy.footer.privacy}
+          </a>
+          <a className="hover:text-teal-700" href="/terms">
+            {copy.footer.terms}
+          </a>
+          <a className="hover:text-teal-700" href="/data-deletion">
+            {copy.footer.dataDeletion}
+          </a>
+        </footer>
       </div>
     </main>
   );

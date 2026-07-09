@@ -5,6 +5,22 @@ export type ChannelStatus =
   | "webhook_unhealthy"
   | "disconnected";
 
+export type UpgradeRequest = {
+  id: number;
+  workspaceId: number;
+  userId: number;
+  status: "requested" | "contacted" | "completed" | "rejected";
+  currentPlanName: string;
+  billingStatus: string;
+  upgradeReason: string | null;
+  imagesRemainingToday: number;
+  blockedToday: number;
+  requestedPlanName: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+};
+
 export type PortalSnapshot = {
   user: {
     id: number;
@@ -55,9 +71,26 @@ export type PortalSnapshot = {
   usage: {
     workspaceId: number;
     period: "today";
+    plan?: {
+      name: string;
+      billingStatus: string;
+    };
     messageCount: number;
     imageCount: number;
     blockedCount: number;
+    limits?: {
+      imagesPerDay: number;
+      messagesPerWindow: number;
+      messageWindowSeconds: number;
+    };
+    remaining?: {
+      imagesToday: number;
+    };
+    upgrade?: {
+      recommended: boolean;
+      reason: "image_limit_reached" | "blocked_usage" | string | null;
+    };
+    upgradeRequests?: UpgradeRequest[];
   };
   privacy: {
     privacy: string;
@@ -108,7 +141,17 @@ async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     throw new Error(`Portal API returned ${response.status}`);
   }
-  return response.json() as Promise<T>;
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    throw new Error("Portal API did not return JSON.");
+  }
+
+  try {
+    return await response.json() as T;
+  } catch {
+    throw new Error("Portal API returned invalid JSON.");
+  }
 }
 
 export async function getPortalSnapshot() {
