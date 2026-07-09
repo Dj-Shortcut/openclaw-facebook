@@ -60,8 +60,10 @@ import { validateMessengerSignature } from "./signature.js";
 import {
   decodeOpenClawActionPayload,
   getMessengerQuickReplies,
+} from "./messengerQuickReplies.js";
+import {
   renderMessengerReplyPayload,
-} from "./presentation.js";
+} from "./messengerReplyPayloadRenderer.js";
 import type {
   MessengerWebhookBody,
   MessengerWebhookMessaging,

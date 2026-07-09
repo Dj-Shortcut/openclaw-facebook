@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   MESSENGER_OPENCLAW_ACTION_PREFIX,
+} from "./messengerPresentationTypes.js";
+import {
   decodeOpenClawActionPayload,
+} from "./messengerQuickReplies.js";
+import {
   renderMessengerActionPayload,
   renderMessengerInferredChoicePayload,
+} from "./messengerActionPayloadRenderer.js";
+import {
   renderMessengerPresentationPayload,
-} from "./presentation.js";
+} from "./messengerPresentationRenderer.js";
 
 const conversationPresentation = {
   blocks: [
