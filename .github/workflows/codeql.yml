@@ -1,0 +1,76 @@
+name: CodeQL
+
+on:
+  pull_request:
+    paths:
+      - ".github/codeql/codeql-config.yml"
+      - ".github/workflows/codeql.yml"
+      - "apps/**/*.js"
+      - "apps/**/*.jsx"
+      - "apps/**/*.mjs"
+      - "apps/**/*.cjs"
+      - "apps/**/*.ts"
+      - "apps/**/*.tsx"
+      - "scripts/**/*.js"
+      - "scripts/**/*.mjs"
+      - "scripts/**/*.cjs"
+      - "scripts/**/*.ts"
+      - "src/**/*.ts"
+      - "*.js"
+      - "*.mjs"
+      - "*.cjs"
+      - "*.ts"
+      - "package.json"
+      - "package-lock.json"
+      - "pnpm-lock.yaml"
+      - "apps/**/package.json"
+      - "apps/**/pnpm-lock.yaml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/codeql/codeql-config.yml"
+      - ".github/workflows/codeql.yml"
+      - "apps/**/*.js"
+      - "apps/**/*.jsx"
+      - "apps/**/*.mjs"
+      - "apps/**/*.cjs"
+      - "apps/**/*.ts"
+      - "apps/**/*.tsx"
+      - "scripts/**/*.js"
+      - "scripts/**/*.mjs"
+      - "scripts/**/*.cjs"
+      - "scripts/**/*.ts"
+      - "src/**/*.ts"
+      - "*.js"
+      - "*.mjs"
+      - "*.cjs"
+      - "*.ts"
+      - "package.json"
+      - "package-lock.json"
+      - "pnpm-lock.yaml"
+      - "apps/**/package.json"
+      - "apps/**/pnpm-lock.yaml"
+  schedule:
+    - cron: "24 3 * * 2"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze JavaScript/TypeScript
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          config-file: ./.github/codeql/codeql-config.yml
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4

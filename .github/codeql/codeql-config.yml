@@ -1,0 +1,7 @@
+name: OpenClaw CodeQL
+
+paths-ignore:
+  - "apps/customer-app/src-tauri/**"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.test.mjs"
