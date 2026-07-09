@@ -336,8 +336,35 @@ describe("Fly gateway startup", () => {
       method: "POST",
     });
     const portalAsset = await fetch(`http://127.0.0.1:${publicPort}/assets/app.js`);
+    const portalAssetPost = await fetch(`http://127.0.0.1:${publicPort}/assets/app.js`, {
+      method: "POST",
+    });
+    const portalOauthCallback = await fetch(
+      `http://127.0.0.1:${publicPort}/api/oauth/callback?code=ok&state=state-value`,
+    );
+    const portalFacebookCallback = await fetch(
+      `http://127.0.0.1:${publicPort}/api/facebook/connect/callback?code=ok&state=state-value`,
+    );
+    const portalSnapshot = await fetch(`http://127.0.0.1:${publicPort}/api/portal/snapshot`);
+    const portalAiIdentity = await fetch(`http://127.0.0.1:${publicPort}/api/portal/ai-identity`, {
+      method: "POST",
+    });
+    const portalFacebookStart = await fetch(
+      `http://127.0.0.1:${publicPort}/api/portal/facebook/start`,
+      {
+        method: "POST",
+      },
+    );
+    const portalTrpcRoot = await fetch(`http://127.0.0.1:${publicPort}/api/trpc`);
     const portalApi = await fetch(`http://127.0.0.1:${publicPort}/api/trpc/portal.auth.session`);
     const webhookResponse = await fetch(`http://127.0.0.1:${publicPort}/facebook/webhook?hub.challenge=ok`);
+    const blockedPortalMutationGet = await fetch(
+      `http://127.0.0.1:${publicPort}/api/portal/ai-identity`,
+    );
+    const blockedPortalAdmin = await fetch(`http://127.0.0.1:${publicPort}/api/portal/admin`);
+    const blockedOauthToken = await fetch(`http://127.0.0.1:${publicPort}/api/oauth/token`);
+    const blockedFacebookAdmin = await fetch(`http://127.0.0.1:${publicPort}/api/facebook/connect/admin`);
+    const blockedTrpcNearMiss = await fetch(`http://127.0.0.1:${publicPort}/api/trpc-admin`);
     const blockedDashboard = await fetch(`http://127.0.0.1:${publicPort}/dashboard`);
     const blockedDebug = await fetch(`http://127.0.0.1:${publicPort}/debug/build`);
 
@@ -350,6 +377,21 @@ describe("Fly gateway startup", () => {
     expect(portalHandoffPost.status).toBe(404);
     expect(portalAsset.status).toBe(200);
     expect(await portalAsset.text()).toBe("portal:/assets/app.js");
+    expect(portalAssetPost.status).toBe(404);
+    expect(portalOauthCallback.status).toBe(200);
+    expect(await portalOauthCallback.text()).toBe("portal:/api/oauth/callback?code=ok&state=state-value");
+    expect(portalFacebookCallback.status).toBe(200);
+    expect(await portalFacebookCallback.text()).toBe(
+      "portal:/api/facebook/connect/callback?code=ok&state=state-value",
+    );
+    expect(portalSnapshot.status).toBe(200);
+    expect(await portalSnapshot.text()).toBe("portal:/api/portal/snapshot");
+    expect(portalAiIdentity.status).toBe(200);
+    expect(await portalAiIdentity.text()).toBe("portal:/api/portal/ai-identity");
+    expect(portalFacebookStart.status).toBe(200);
+    expect(await portalFacebookStart.text()).toBe("portal:/api/portal/facebook/start");
+    expect(portalTrpcRoot.status).toBe(200);
+    expect(await portalTrpcRoot.text()).toBe("portal:/api/trpc");
     expect(portalApi.status).toBe(200);
     expect(await portalApi.text()).toBe("portal:/api/trpc/portal.auth.session");
     expect(webhookResponse.status).toBe(200);
@@ -357,6 +399,11 @@ describe("Fly gateway startup", () => {
       target: "gateway",
       path: "/facebook/webhook?hub.challenge=ok",
     });
+    expect(blockedPortalMutationGet.status).toBe(404);
+    expect(blockedPortalAdmin.status).toBe(404);
+    expect(blockedOauthToken.status).toBe(404);
+    expect(blockedFacebookAdmin.status).toBe(404);
+    expect(blockedTrpcNearMiss.status).toBe(404);
     expect(blockedDashboard.status).toBe(404);
     expect(blockedDebug.status).toBe(404);
     expect(seenGatewayPaths).toEqual(["/facebook/webhook?hub.challenge=ok"]);
@@ -365,6 +412,12 @@ describe("Fly gateway startup", () => {
       "/handoff",
       "/handoff/setup-token",
       "/assets/app.js",
+      "/api/oauth/callback?code=ok&state=state-value",
+      "/api/facebook/connect/callback?code=ok&state=state-value",
+      "/api/portal/snapshot",
+      "/api/portal/ai-identity",
+      "/api/portal/facebook/start",
+      "/api/trpc",
       "/api/trpc/portal.auth.session",
     ]);
 

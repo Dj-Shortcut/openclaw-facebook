@@ -3,15 +3,18 @@ import http from "node:http";
 import https from "node:https";
 
 const DEFAULT_ALLOWED_PATHS = "/facebook/webhook,/messenger/webhook,/healthz";
-const PORTAL_ROUTE_PREFIXES = [
-  "/api/facebook/connect/",
-  "/api/oauth/",
-  "/api/portal/",
-  "/api/trpc",
-  "/assets/",
-];
 const PORTAL_PAGE_PATHS = new Set(["/", "/privacy", "/terms", "/data-deletion", "/handoff"]);
 const PORTAL_PAGE_PREFIXES = ["/handoff/"];
+const PORTAL_ASSET_PREFIXES = ["/assets/"];
+const PORTAL_GET_PATHS = new Set([
+  "/api/facebook/connect/callback",
+  "/api/oauth/callback",
+  "/api/portal/snapshot",
+]);
+const PORTAL_POST_PATHS = new Set([
+  "/api/portal/ai-identity",
+  "/api/portal/facebook/start",
+]);
 const ADMIN_COOKIE_NAME = "openclaw_admin";
 const ADMIN_LOGIN_PATH = "/admin/login";
 const ADMIN_LOGOUT_PATH = "/admin/logout";
@@ -212,17 +215,28 @@ function isAllowedPublicRequest(method, pathname, allowedPaths) {
   return method === "GET" || method === "POST";
 }
 
-function isAllowedPortalRequest(method, pathname) {
-  if (
+function isTrpcPath(pathname) {
+  return pathname === "/api/trpc" || pathname.startsWith("/api/trpc/");
+}
+
+function isAllowedPortalReadPath(pathname) {
+  return (
     PORTAL_PAGE_PATHS.has(pathname) ||
-    PORTAL_PAGE_PREFIXES.some((prefix) => pathname.startsWith(prefix))
-  ) {
-    return method === "GET" || method === "HEAD";
+    PORTAL_PAGE_PREFIXES.some((prefix) => pathname.startsWith(prefix)) ||
+    PORTAL_ASSET_PREFIXES.some((prefix) => pathname.startsWith(prefix)) ||
+    PORTAL_GET_PATHS.has(pathname) ||
+    isTrpcPath(pathname)
+  );
+}
+
+function isAllowedPortalRequest(method, pathname) {
+  if (method === "GET" || method === "HEAD") {
+    return isAllowedPortalReadPath(pathname);
   }
-  if (!PORTAL_ROUTE_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix))) {
-    return false;
+  if (method === "POST") {
+    return PORTAL_POST_PATHS.has(pathname) || isTrpcPath(pathname);
   }
-  return method === "GET" || method === "HEAD" || method === "POST";
+  return false;
 }
 
 function writeBlocked(res) {

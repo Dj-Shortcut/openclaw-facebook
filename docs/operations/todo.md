@@ -196,7 +196,16 @@ traffic cannot reach internal gateway admin/API surfaces.
   - Production portal smoke must cover workspace details, AI identity/instructions, Messenger status/connect controls, usage, privacy controls, and export/deletion request status.
   - Public production surface must expose only the customer portal, legal pages, health/readiness/metrics as intended, and required webhook routes; internal gateway/admin APIs must remain shielded.
 - [x] Verify GDPR deletion end-to-end before broad customer launch. Operator-verified on 2026-06-30.
-- [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health routes
+- [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health/legal/customer-app surfaces
+  - 2026-07-09 local route/config audit: the Fly public route guard still
+    exposes only `/facebook/webhook`, `/messenger/webhook`, and `/healthz` to
+    the OpenClaw gateway by default. When `LEADERBOT_PORTAL_ORIGIN` is
+    configured, customer portal proxying is constrained to portal/legal pages,
+    handoff pages, static assets, exact OAuth/Facebook/portal REST endpoints,
+    and exact `/api/trpc` or `/api/trpc/...` paths. Near-miss API paths and
+    gateway UI/debug routes are covered by
+    `deploy/fly-gateway/start-gateway.test.mjs`. Production route verification
+    remains open.
 - [x] Move public legal routes (`/privacy`, `/terms`, `/data-deletion`) into the portal surface before pointing customer traffic there. React portal pages and local footer links exist; production route verification remains part of the public route audit.
 - [x] Remove legacy campaign/style assets that do not support the portal direction
 - [ ] Deferred: observe generic text-to-image quality before removing remaining internal style-preset backend compatibility
