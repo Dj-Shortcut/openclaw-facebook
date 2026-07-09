@@ -217,6 +217,224 @@ function hasHandoffOnboardingFlag() {
   return new URLSearchParams(window.location.search).get("onboarding") === "handoff";
 }
 
+type PublicPreviewView =
+  | "dashboard"
+  | "identity"
+  | "channels"
+  | "knowledge"
+  | "usage"
+  | "privacy";
+
+const publicPreviewItems: Array<{
+  view: PublicPreviewView;
+  icon: typeof ShieldCheck;
+  label: (copy: PortalCopy) => string;
+}> = [
+  { view: "dashboard", icon: ShieldCheck, label: copy => copy.guidance.title },
+  { view: "identity", icon: Bot, label: copy => copy.identity.fallbackName },
+  { view: "channels", icon: MessageCircle, label: copy => copy.messenger.title },
+  { view: "knowledge", icon: Database, label: copy => copy.knowledge.title },
+  { view: "usage", icon: CreditCard, label: copy => copy.usage.title },
+  { view: "privacy", icon: SlidersHorizontal, label: copy => copy.privacy.controlsTitle },
+];
+
+function PublicPortalPreview({
+  copy,
+  locale,
+  loginConfigured,
+  onLocaleChange,
+}: {
+  copy: PortalCopy;
+  locale: AppLocale;
+  loginConfigured: boolean;
+  onLocaleChange: (locale: AppLocale) => void;
+}) {
+  const [view, setView] = useState<PublicPreviewView>("dashboard");
+
+  return (
+    <main className="min-h-full bg-[#f5f7fb] text-stone-950">
+      <div className="grid min-h-screen lg:grid-cols-[260px_minmax(0,1fr)]">
+        <aside className="flex flex-col gap-7 bg-[#13231f] px-5 py-6 text-white">
+          <div className="flex items-center gap-3">
+            <div className="grid h-10 w-10 place-items-center rounded-lg bg-lime-300 font-black text-[#10211d]">
+              L
+            </div>
+            <div>
+              <div className="font-semibold">Leaderbot</div>
+              <div className="text-sm text-stone-300">{copy.auth.title}</div>
+            </div>
+          </div>
+          <LocaleSwitcher copy={copy} locale={locale} onChange={onLocaleChange} />
+          <nav className="grid gap-2" aria-label={copy.auth.title}>
+            {publicPreviewItems.map(item => {
+              const Icon = item.icon;
+              const isActive = item.view === view;
+              return (
+                <button
+                  aria-pressed={isActive}
+                  className={`flex min-h-11 items-center gap-3 rounded-lg px-3 text-left text-sm font-medium transition-colors ${
+                    isActive
+                      ? "bg-lime-300 text-[#10211d]"
+                      : "text-stone-200 hover:bg-white/10"
+                  }`}
+                  key={item.view}
+                  type="button"
+                  onClick={() => setView(item.view)}
+                >
+                  <Icon className="h-4 w-4" />
+                  {item.label(copy)}
+                </button>
+              );
+            })}
+          </nav>
+          <p className="mt-auto text-sm leading-6 text-stone-300">
+            {copy.publicPreview.customerDataNotice}
+          </p>
+        </aside>
+
+        <section className="min-w-0 px-5 py-7 sm:px-8">
+          <header className="mb-6 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div>
+              <p className="mb-2 text-xs font-bold uppercase tracking-normal text-stone-500">
+                {copy.common.workspace}
+              </p>
+              <h1 className="text-4xl font-semibold leading-tight text-stone-950">
+                {copy.publicPreview.workspaceTitle}
+              </h1>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-stone-600">
+                {copy.auth.body}
+              </p>
+            </div>
+            <Button
+              className="gap-2 self-start"
+              disabled={!loginConfigured}
+              onClick={() => {
+                const loginUrl = getLoginUrl();
+                if (!loginUrl) return;
+                window.location.href = loginUrl;
+              }}
+            >
+              <LogIn className="h-4 w-4" />
+              {copy.auth.continueWithFacebook}
+            </Button>
+          </header>
+
+          {!loginConfigured ? (
+            <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              {copy.publicPreview.loginNotConfigured}
+            </div>
+          ) : null}
+
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(260px,0.8fr)]">
+            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
+              {view === "dashboard" ? (
+                <>
+                  <h2 className="text-2xl font-semibold">
+                    {copy.publicPreview.dashboardTitle}
+                  </h2>
+                  <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                    <MetricTile
+                      label={copy.usage.imagesRemaining}
+                      value={14}
+                      detail={`6 ${copy.usage.imagesUsedDetail.replace("{limit}", "20")}`}
+                    />
+                    <MetricTile label={copy.usage.messagesToday} value={18} />
+                    <MetricTile
+                      label={copy.knowledge.active}
+                      value={1}
+                      detail={copy.publicPreview.sourcesDetail.replace("{count}", "2")}
+                    />
+                  </div>
+                </>
+              ) : null}
+              {view === "identity" ? (
+                <>
+                  <h2 className="text-2xl font-semibold">{copy.identity.fallbackName}</h2>
+                  <p className="mt-3 rounded-lg border border-stone-200 bg-stone-50 p-4 text-sm leading-6 text-stone-700">
+                    {copy.publicPreview.identityHelp}
+                  </p>
+                </>
+              ) : null}
+              {view === "channels" ? (
+                <>
+                  <h2 className="text-2xl font-semibold">{copy.messenger.title}</h2>
+                  <div className="mt-5 flex items-center justify-between rounded-lg border border-stone-200 bg-stone-50 p-4">
+                    <span>Facebook Messenger</span>
+                    <StatusPill copy={copy} value="disconnected" />
+                  </div>
+                </>
+              ) : null}
+              {view === "knowledge" ? (
+                <>
+                  <h2 className="text-2xl font-semibold">{copy.knowledge.title}</h2>
+                  <div className="mt-5 grid gap-3">
+                    <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
+                      {copy.publicPreview.customerFaq} ·{" "}
+                      <StatusPill copy={copy} value="active" />
+                    </div>
+                    <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
+                      {copy.publicPreview.brandVoiceNotes} ·{" "}
+                      <StatusPill copy={copy} value="queued" />
+                    </div>
+                  </div>
+                </>
+              ) : null}
+              {view === "usage" ? (
+                <>
+                  <h2 className="text-2xl font-semibold">{copy.usage.title}</h2>
+                  <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                    <MetricTile label={copy.usage.imagesRemaining} value={14} />
+                    <MetricTile label={copy.usage.messagesToday} value={18} />
+                    <MetricTile label={copy.usage.blockedToday} value={0} />
+                  </div>
+                </>
+              ) : null}
+              {view === "privacy" ? (
+                <>
+                  <h2 className="text-2xl font-semibold">{copy.privacy.controlsTitle}</h2>
+                  <div className="mt-5 grid gap-3">
+                    <div className="flex justify-between rounded-lg border border-stone-200 bg-stone-50 p-4">
+                      <span>{copy.privacy.knowledgeIndexing}</span>
+                      <StatusPill copy={copy} value="active" />
+                    </div>
+                    <div className="flex justify-between rounded-lg border border-stone-200 bg-stone-50 p-4">
+                      <span>{copy.privacy.usageAnalytics}</span>
+                      <StatusPill copy={copy} value="disabled" />
+                    </div>
+                  </div>
+                </>
+              ) : null}
+            </section>
+
+            <aside className="space-y-4">
+              <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
+                <h2 className="text-lg font-semibold">{copy.messenger.connectPage}</h2>
+                <p className="mt-2 text-sm leading-6 text-stone-600">
+                  {copy.publicPreview.messengerInactive}
+                </p>
+              </section>
+              <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
+                <h2 className="text-lg font-semibold">{copy.footer.privacy}</h2>
+                <div className="mt-3 flex flex-wrap gap-3 text-sm">
+                  <a className="text-teal-700 underline" href="/privacy">
+                    {copy.footer.privacy}
+                  </a>
+                  <a className="text-teal-700 underline" href="/terms">
+                    {copy.footer.terms}
+                  </a>
+                  <a className="text-teal-700 underline" href="/data-deletion">
+                    {copy.footer.dataDeletion}
+                  </a>
+                </div>
+              </section>
+            </aside>
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}
+
 function Home() {
   const auth = useAuth();
   const utils = trpc.useUtils();
@@ -549,41 +767,12 @@ function Home() {
 
   if (!auth.isAuthenticated) {
     return (
-      <main className="min-h-full bg-[#f5f7fb] px-6 py-10 text-stone-950">
-        <div className="mx-auto flex min-h-[70vh] max-w-5xl items-center">
-          <section className="w-full rounded-lg border border-stone-200 bg-white p-8 shadow-sm">
-            <div className="mb-6 flex justify-end">
-              <LocaleSwitcher copy={copy} locale={locale} onChange={changeLocale} />
-            </div>
-            <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-lg bg-teal-100 text-teal-700">
-              <ShieldCheck className="h-6 w-6" />
-            </div>
-            <h1 className="max-w-2xl text-4xl font-semibold text-stone-950">
-              {copy.auth.title}
-            </h1>
-            <p className="mt-4 max-w-2xl text-base leading-7 text-stone-600">
-              {copy.auth.body}
-            </p>
-            <Button
-              className="mt-8 gap-2"
-              disabled={!loginConfigured}
-              onClick={() => {
-                const loginUrl = getLoginUrl();
-                if (!loginUrl) return;
-                window.location.href = loginUrl;
-              }}
-            >
-              <LogIn className="h-4 w-4" />
-              {copy.auth.continueWithFacebook}
-            </Button>
-            {!loginConfigured ? (
-              <p className="mt-4 text-sm text-amber-700">
-                Facebook Login is not configured for this local environment.
-              </p>
-            ) : null}
-          </section>
-        </div>
-      </main>
+      <PublicPortalPreview
+        copy={copy}
+        locale={locale}
+        loginConfigured={loginConfigured}
+        onLocaleChange={changeLocale}
+      />
     );
   }
 
