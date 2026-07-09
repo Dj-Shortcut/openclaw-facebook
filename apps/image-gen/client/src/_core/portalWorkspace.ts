@@ -1,5 +1,5 @@
-export const ACTIVE_WORKSPACE_STORAGE_KEY = "leaderbot.activeWorkspaceId";
-export const PENDING_HANDOFF_TOKEN_STORAGE_KEY = "leaderbot.pendingPortalHandoffToken";
+const ACTIVE_WORKSPACE_STORAGE_KEY = "leaderbot.activeWorkspaceId";
+const PENDING_HANDOFF_TOKEN_STORAGE_KEY = "leaderbot.pendingPortalHandoffToken";
 
 function parseWorkspaceId(value: string | null | undefined): number | null {
   if (!value) return null;

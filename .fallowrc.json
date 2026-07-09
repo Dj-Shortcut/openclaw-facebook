@@ -1,4 +1,5 @@
 {
+  "entry": ["apps/image-gen/client/src/main.tsx"],
   "ignoreDependencies": ["@sentry/node", "@trpc/server"],
   "overrides": [
     {
