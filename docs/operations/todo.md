@@ -308,6 +308,25 @@ Quota drift investigation note:
 - [x] Create setup guide for Meta configuration
 - [x] Document operator-facing prompt routing and OpenClaw-vs-image-generation fallback behavior separately from the completed customer-facing bot instructions. See `../../../../docs/operator-prompt-routing.md`.
 - [x] Provide cost monitoring dashboard. Admin-only aggregate view exists at `/admin/cost-dashboard` with duplicate-skip and delivery-failure counts; production dashboard polish and failure drilldowns are deferred.
+- [x] Record the 2026-07-09 CodeQL/customer-preview follow-up so the merged
+  branches are reviewable after the fact:
+  - CodeQL is intentionally configured through the checked-in advanced workflow
+    at `.github/workflows/codeql.yml`, with `languages:
+    javascript-typescript`; GitHub CodeQL default setup must stay disabled or
+    GitHub rejects advanced-workflow SARIF uploads.
+  - CodeQL pull request and `main` push triggers intentionally cover root
+    plugin JS/TS, `apps/**` JS/TS, `scripts/**` JS/TS, lockfiles, and
+    production Fly gateway scripts under `deploy/fly-gateway/**/*.js`,
+    `**/*.mjs`, `**/*.cjs`, and `**/*.ts`.
+  - PR #336's public preview keeps render pure for OAuth: `getLoginUrl()` must
+    be called only inside the Facebook login click handler because it creates
+    and stores the OAuth state nonce.
+  - PR #336's unauthenticated public preview copy is locale-owned through
+    `portalLocales.ts`; do not add hardcoded Dutch/English/French UI strings
+    directly in `Home.tsx`.
+  - The public preview is example data only. It must not read tenant content,
+    customer conversations, uploaded knowledge, raw PSIDs, OAuth tokens, or
+    generated prompts/outputs before the user authenticates into a workspace.
 
 ### Maintenance backlog
 
