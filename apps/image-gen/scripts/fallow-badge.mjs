@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const [inputPath, badgePath, metricsPath] = process.argv.slice(2);
+const [inputPath, badgePath, metricsPath, labelArg] = process.argv.slice(2);
 
 if (!inputPath || !badgePath || !metricsPath) {
   console.error(
-    "Usage: node scripts/fallow-badge.mjs <report.json> <badge.json> <metrics.json>"
+    "Usage: node scripts/fallow-badge.mjs <report.json> <badge.json> <metrics.json> [label]"
   );
   process.exit(1);
 }
@@ -46,10 +46,11 @@ const functionsAboveThreshold = Number(
 const functionsAnalyzed = Number(healthSummary?.functions_analyzed ?? 0);
 const filesScored = Number(healthSummary?.files_scored ?? 0);
 const coverageModel = healthSummary?.coverage_model ?? "unknown";
+const label = labelArg ?? process.env.FALLOW_BADGE_LABEL ?? "fallow maintainability";
 
 const badge = {
   schemaVersion: 1,
-  label: "fallow maintainability",
+  label,
   message: score.toFixed(1),
   color: getColor(score),
 };
@@ -62,6 +63,7 @@ const metrics = {
   functionsAnalyzed,
   filesScored,
   coverageModel,
+  label,
   maintainabilityScore: score,
   formula: "native Fallow average_maintainability",
   summary,
