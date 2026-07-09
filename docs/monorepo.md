@@ -14,17 +14,17 @@ Leaderbot image-generation service.
 
 ## Deploy
 
-Gateway:
-
 ```bash
-npm run gateway:deploy
+pnpm deploy
+pnpm run deploy:image-gen
+pnpm run deploy:gateway
 ```
 
-Image generation:
+Legacy aliases (still available):
 
 ```bash
-npm run image-gen:install
-npm run image-gen:deploy
+pnpm run gateway:deploy
+pnpm run image-gen:deploy
 ```
 
 ## Validate

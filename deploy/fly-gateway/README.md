@@ -31,7 +31,7 @@ dashboard handoff design. The current authoritative operator workflow is
 Run from the `openclaw-facebook` repository root:
 
 ```bash
-fly deploy -a leaderbot-openclaw-gateway
+pnpm run deploy:gateway
 ```
 
 ## Safety Defaults
