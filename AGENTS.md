@@ -377,7 +377,7 @@ Minimum expectation:
 TypeScript:
 
 ```bash
-cmd.exe /c node_modules\.bin\tsc.cmd --noEmit
+./node_modules/.bin/tsc --noEmit
 ```
 
 Targeted tests for modified areas.
