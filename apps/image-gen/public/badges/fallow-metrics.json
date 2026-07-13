@@ -1,18 +1,19 @@
 {
-  "generatedAt": "2026-07-06T10:54:02.201Z",
+  "generatedAt": "2026-07-13T09:41:20.722Z",
   "fallowVersion": "2.27.0",
-  "totalIssues": 94,
+  "totalIssues": 99,
   "functionsAboveThreshold": 15,
-  "functionsAnalyzed": 3751,
-  "filesScored": 247,
+  "functionsAnalyzed": 3887,
+  "filesScored": 254,
   "coverageModel": "static_estimated",
-  "maintainabilityScore": 89.3,
+  "label": "fallow maintainability",
+  "maintainabilityScore": 89.1,
   "formula": "native Fallow average_maintainability",
   "summary": {
-    "total_issues": 94,
-    "unused_files": 23,
-    "unused_exports": 32,
-    "unused_types": 33,
+    "total_issues": 99,
+    "unused_files": 26,
+    "unused_exports": 30,
+    "unused_types": 37,
     "unused_dependencies": 0,
     "unused_enum_members": 0,
     "unused_class_members": 2,
@@ -25,13 +26,13 @@
     "boundary_violations": 0
   },
   "healthSummary": {
-    "files_analyzed": 271,
-    "functions_analyzed": 3751,
+    "files_analyzed": 278,
+    "functions_analyzed": 3887,
     "functions_above_threshold": 15,
     "max_cyclomatic_threshold": 20,
     "max_cognitive_threshold": 15,
-    "files_scored": 247,
-    "average_maintainability": 89.3,
+    "files_scored": 254,
+    "average_maintainability": 89.1,
     "coverage_model": "static_estimated"
   }
 }
