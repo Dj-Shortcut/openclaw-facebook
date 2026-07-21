@@ -80,7 +80,7 @@
     "eslint": "^10.7.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-import": "^2.32.0",
-    "postcss": "^8.5.15",
+    "postcss": "^8.5.21",
     "prettier": "^3.9.6",
     "tailwindcss": "^4.2.1",
     "tsx": "^4.22.4",
