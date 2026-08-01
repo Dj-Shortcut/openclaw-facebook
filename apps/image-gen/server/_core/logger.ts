@@ -73,7 +73,11 @@ export function createLogger({ reqId, debugEnabled = false }: LoggerOptions) {
 
 function shouldDropLogKey(key: string): boolean {
   const lowered = key.toLowerCase();
-  if (lowered === "hash" || lowered.endsWith("hash") || lowered.endsWith("_hash")) {
+  if (
+    lowered === "hash" ||
+    lowered.endsWith("hash") ||
+    lowered.endsWith("_hash")
+  ) {
     return false;
   }
 
@@ -113,7 +117,10 @@ function sanitizeString(value: string): string {
   return value
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
     .replace(/\b(?:test|live)_[A-Za-z0-9]{10,}\b/g, "[MOLLIE_KEY_REDACTED]")
-    .replace(/\b(?:tr|cst|mdt|sub)_[A-Za-z0-9]+\b/g, "[MOLLIE_ID_REDACTED]")
+    .replace(
+      /\b(?:tr|cst|mdt|sub|re|chb|stl|ord)_[A-Za-z0-9]+\b/g,
+      "[MOLLIE_ID_REDACTED]"
+    )
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[EMAIL_REDACTED]")
     .replace(/([?&](?:access_)?token=)[^&\s]+/gi, "$1[REDACTED]")
     .replace(/https?:\/\/[^\s)]+/gi, "[URL_REDACTED]");
@@ -168,7 +175,10 @@ function normalizeLogValue(
         .filter(([key]) => !shouldDropLogKey(key))
         .map(([key, nested]) => [
           key,
-          normalizeLogValue(key === "user" ? truncateLogUser(nested) : nested, seen),
+          normalizeLogValue(
+            key === "user" ? truncateLogUser(nested) : nested,
+            seen
+          ),
         ])
     );
   }
@@ -176,9 +186,7 @@ function normalizeLogValue(
   return value;
 }
 
-function redactLogDetails(
-  details: LogFields
-): LogFields {
+function redactLogDetails(details: LogFields): LogFields {
   return Object.fromEntries(
     Object.entries(details)
       .filter(([key]) => !shouldDropLogKey(key))
@@ -202,10 +210,7 @@ function resolveLogLevel(details: LogFields): LogLevel {
 }
 
 /** @public */
-export function safeLog(
-  event: string,
-  details: LogFields = {}
-): void {
+export function safeLog(event: string, details: LogFields = {}): void {
   const level = resolveLogLevel(details);
   const { level: _level, event: _event, ...rest } = details;
   emit(level, { event, ...redactLogDetails(rest) });

@@ -23,14 +23,12 @@ async function startServer(checks: ReadinessCheck[]) {
 }
 
 describe("readiness", () => {
-  const originalEnv = { ...process.env };
-
   afterEach(() => {
-    process.env = { ...originalEnv };
+    vi.unstubAllEnvs();
   });
 
   it("does not require Mollie configuration while billing is disabled", () => {
-    delete process.env.MOLLIE_BILLING_ENABLED;
+    vi.stubEnv("MOLLIE_BILLING_ENABLED", undefined);
     const mollieCheck = buildRuntimeReadinessChecks().find(
       check => check.name === "mollie_billing_config"
     );
@@ -40,8 +38,8 @@ describe("readiness", () => {
   });
 
   it("fails the Mollie readiness check when billing is enabled but unconfigured", () => {
-    process.env.MOLLIE_BILLING_ENABLED = "true";
-    delete process.env.MOLLIE_API_KEY;
+    vi.stubEnv("MOLLIE_BILLING_ENABLED", "true");
+    vi.stubEnv("MOLLIE_API_KEY", undefined);
     const mollieCheck = buildRuntimeReadinessChecks().find(
       check => check.name === "mollie_billing_config"
     );
@@ -50,18 +48,17 @@ describe("readiness", () => {
   });
 
   it("fails readiness when billing is enabled without its tenant worker", () => {
-    process.env = {
-      ...originalEnv,
-      NODE_ENV: "test",
-      MOLLIE_BILLING_ENABLED: "true",
-      MOLLIE_API_KEY: "test_example123",
-      MOLLIE_MODE: "test",
-      MOLLIE_PAYMENT_WEBHOOK_URL:
-        "http://billing.test/api/webhooks/mollie/payments",
-      APP_BASE_URL: "http://leaderbot.test",
-      BILLING_SUPPORT_EMAIL: "billing@leaderbot.test",
-    };
-    delete process.env.MOLLIE_BILLING_WORKER_WORKSPACE_ID;
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("MOLLIE_BILLING_ENABLED", "true");
+    vi.stubEnv("MOLLIE_API_KEY", "test_example123");
+    vi.stubEnv("MOLLIE_MODE", "test");
+    vi.stubEnv(
+      "MOLLIE_PAYMENT_WEBHOOK_URL",
+      "http://billing.test/api/webhooks/mollie/payments"
+    );
+    vi.stubEnv("APP_BASE_URL", "http://leaderbot.test");
+    vi.stubEnv("BILLING_SUPPORT_EMAIL", "billing@leaderbot.test");
+    vi.stubEnv("MOLLIE_BILLING_WORKER_WORKSPACE_ID", undefined);
     const mollieCheck = buildRuntimeReadinessChecks().find(
       check => check.name === "mollie_billing_config"
     );

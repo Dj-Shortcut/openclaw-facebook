@@ -27,26 +27,55 @@ describe("Mollie checkout launch gate", () => {
     ).rejects.toThrow("Mollie billing is disabled");
   });
 
-  it("fails before database work unless both required methods are available", async () => {
-    process.env = {
-      ...originalEnv,
-      NODE_ENV: "test",
-      MOLLIE_BILLING_ENABLED: "true",
-      MOLLIE_API_KEY: "test_example123",
-      MOLLIE_MODE: "test",
-      MOLLIE_PAYMENT_WEBHOOK_URL:
-        "http://billing.test/api/webhooks/mollie/payments",
-      APP_BASE_URL: "http://leaderbot.test",
-      BILLING_SUPPORT_EMAIL: "billing@leaderbot.test",
-      MOLLIE_BILLING_WORKER_WORKSPACE_ID: "1",
-    };
-    const listMethods = vi.fn().mockImplementation((sequenceType: string) =>
-      Promise.resolve(
-        sequenceType === "first"
-          ? [{ resource: "method", id: "bancontact" }]
-          : []
+  it("rejects sales outside Belgium before provider work", async () => {
+    process.env = billingTestEnv();
+    const listMethods = vi.fn();
+
+    await expect(
+      startMollieCheckout(
+        {
+          workspaceId: 1,
+          planCode: "premium_monthly_v1",
+          countryCode: "NL" as "BE",
+          kind: "subscription_start",
+          businessCheckout: false,
+        },
+        { listMethods } as unknown as MollieClient
       )
-    );
+    ).rejects.toThrow("available in Belgium only");
+    expect(listMethods).not.toHaveBeenCalled();
+  });
+
+  it("rejects B2B checkout before provider work", async () => {
+    process.env = billingTestEnv();
+    const listMethods = vi.fn();
+
+    await expect(
+      startMollieCheckout(
+        {
+          workspaceId: 1,
+          planCode: "premium_monthly_v1",
+          countryCode: "BE",
+          kind: "subscription_start",
+          businessCheckout: true,
+        },
+        { listMethods } as unknown as MollieClient
+      )
+    ).rejects.toThrow("B2B checkout is unavailable");
+    expect(listMethods).not.toHaveBeenCalled();
+  });
+
+  it("fails before database work unless both required methods are available", async () => {
+    process.env = billingTestEnv();
+    const listMethods = vi
+      .fn()
+      .mockImplementation((sequenceType: string) =>
+        Promise.resolve(
+          sequenceType === "first"
+            ? [{ resource: "method", id: "bancontact" }]
+            : []
+        )
+      );
 
     await expect(
       startMollieCheckout(
@@ -64,16 +93,31 @@ describe("Mollie checkout launch gate", () => {
   });
 });
 
+function billingTestEnv(): NodeJS.ProcessEnv {
+  return {
+    ...originalEnv,
+    NODE_ENV: "test",
+    MOLLIE_BILLING_ENABLED: "true",
+    MOLLIE_API_KEY: "test_example123",
+    MOLLIE_MODE: "test",
+    MOLLIE_PAYMENT_WEBHOOK_URL:
+      "http://billing.test/api/webhooks/mollie/payments",
+    APP_BASE_URL: "http://leaderbot.test",
+    BILLING_SUPPORT_EMAIL: "billing@leaderbot.test",
+    MOLLIE_BILLING_WORKER_WORKSPACE_ID: "1",
+  };
+}
+
 describe("Mollie payment-method change collection guard", () => {
   const now = new Date("2026-08-01T00:00:00.000Z");
 
   it("requires a known next collection date more than seven days away", () => {
-    expect(isOutsidePaymentMethodChangeCollectionWindow("2026-08-10", now)).toBe(
-      true
-    );
-    expect(isOutsidePaymentMethodChangeCollectionWindow("2026-08-08", now)).toBe(
-      false
-    );
+    expect(
+      isOutsidePaymentMethodChangeCollectionWindow("2026-08-10", now)
+    ).toBe(true);
+    expect(
+      isOutsidePaymentMethodChangeCollectionWindow("2026-08-08", now)
+    ).toBe(false);
     expect(isOutsidePaymentMethodChangeCollectionWindow(null, now)).toBe(false);
   });
 

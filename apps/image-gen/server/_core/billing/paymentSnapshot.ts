@@ -23,13 +23,17 @@ function normalizeChargeback(chargeback: MollieChargeback) {
   };
 }
 
+function compareIds(left: { id: string }, right: { id: string }): number {
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+}
+
 export function createPaymentSnapshot(payment: MolliePayment) {
   const refunds = [...(payment._embedded?.refunds ?? [])]
     .map(normalizeRefund)
-    .sort((left, right) => left.id.localeCompare(right.id));
+    .sort(compareIds);
   const chargebacks = [...(payment._embedded?.chargebacks ?? [])]
     .map(normalizeChargeback)
-    .sort((left, right) => left.id.localeCompare(right.id));
+    .sort(compareIds);
   const snapshot = {
     paymentId: payment.id,
     mode: payment.mode,

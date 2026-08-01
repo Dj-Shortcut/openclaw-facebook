@@ -28,7 +28,17 @@ describe("accounting export totals", () => {
       sumCompletedRefunds([
         { status: "refunded", amount: { currency: "USD", value: "4.00" } },
         { status: "refunded", amount: { currency: "EUR", value: "4" } },
+        { status: "refunded", amount: { currency: "EUR", value: "007.50" } },
       ])
     ).toBe("0.00");
+  });
+
+  it("returns zero for missing or non-array input", () => {
+    expect(sumCompletedRefunds(null)).toBe("0.00");
+    expect(sumCompletedRefunds(undefined)).toBe("0.00");
+    expect(sumCompletedRefunds({ items: [] })).toBe("0.00");
+    expect(sumActiveChargebacks(null)).toBe("0.00");
+    expect(sumActiveChargebacks(undefined)).toBe("0.00");
+    expect(sumActiveChargebacks({ items: [] })).toBe("0.00");
   });
 });

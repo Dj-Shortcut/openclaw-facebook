@@ -33,7 +33,10 @@ afterEach(() => {
   }
 });
 
-async function startServer(options?: { forceIp?: string; pathPrefix?: string }) {
+async function startServer(options?: {
+  forceIp?: string;
+  pathPrefix?: string;
+}) {
   const app = express();
   const limitedPath = `${options?.pathPrefix ?? ""}/limited`;
   const healthPath = "/healthz";
@@ -162,9 +165,7 @@ describe("global http rate limiter", () => {
       ({ method, path }) as express.Request;
 
     expect(
-      shouldSkipHttpRateLimit(
-        request("POST", "/api/webhooks/mollie/payments")
-      )
+      shouldSkipHttpRateLimit(request("POST", "/api/webhooks/mollie/payments"))
     ).toBe(true);
     expect(
       shouldSkipHttpRateLimit(request("GET", "/api/webhooks/mollie/payments"))
@@ -173,6 +174,11 @@ describe("global http rate limiter", () => {
       shouldSkipHttpRateLimit(
         request("POST", "/api/webhooks/mollie/payments-extra")
       )
+    ).toBe(false);
+
+    delete process.env.MOLLIE_BILLING_ENABLED;
+    expect(
+      shouldSkipHttpRateLimit(request("POST", "/api/webhooks/mollie/payments"))
     ).toBe(false);
   });
 });

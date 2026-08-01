@@ -4,6 +4,7 @@ import {
   authenticatePortalRequest,
   requirePortalWorkspace,
 } from "../portalAuth";
+import { escapeHtml } from "../html";
 import { getMollieConfig } from "./config";
 import {
   getWorkspaceLedgerPayment,
@@ -38,6 +39,7 @@ export function registerBillingPortalRoutes(app: Express): void {
       res
         .status(200)
         .type("html")
+        .set("Cache-Control", "private, no-store, max-age=0")
         .send(renderPaymentReceipt(payment, supportEmail));
     })
   );
@@ -53,6 +55,7 @@ export function registerBillingPortalRoutes(app: Express): void {
         config.mode
       );
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Cache-Control", "private, no-store, max-age=0");
       res.setHeader(
         "Content-Disposition",
         `attachment; filename="leaderbot-billing-${access.workspaceId}.csv"`
@@ -159,17 +162,4 @@ function renderAccountingCsv(
 function csvCell(value: string): string {
   const safe = /^[=+\-@]/.test(value) ? `'${value}` : value;
   return `"${safe.replace(/"/g, '""')}"`;
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, character => {
-    const entities: Record<string, string> = {
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;",
-    };
-    return entities[character] ?? character;
-  });
 }

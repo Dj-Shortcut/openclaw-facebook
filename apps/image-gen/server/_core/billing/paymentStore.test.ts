@@ -35,13 +35,26 @@ describe("payment store terminal intent policy", () => {
     const paidAt = new Date("2026-08-01T12:00:00.000Z");
     const existingPaidThrough = new Date("2026-08-20T00:00:00.000Z");
 
+    expect(resolveFirstPaymentPeriodStart(paidAt, existingPaidThrough)).toEqual(
+      existingPaidThrough
+    );
+  });
+
+  it("starts a first paid period at payment time without unexpired access", () => {
+    const paidAt = new Date("2026-08-01T12:00:00.000Z");
+
+    expect(resolveFirstPaymentPeriodStart(paidAt, null)).toEqual(paidAt);
     expect(
-      resolveFirstPaymentPeriodStart(paidAt, existingPaidThrough)
-    ).toEqual(existingPaidThrough);
+      resolveFirstPaymentPeriodStart(
+        paidAt,
+        new Date("2026-07-01T00:00:00.000Z")
+      )
+    ).toEqual(paidAt);
   });
 
   it("never reopens canceled or review access as recurring grace", () => {
     expect(canTransitionToRecurringGrace("canceled", 1)).toBe(false);
+    expect(canTransitionToRecurringGrace("canceled", 0)).toBe(false);
     expect(canTransitionToRecurringGrace("suspended", 0)).toBe(false);
     expect(canTransitionToRecurringGrace("manual_review", 0)).toBe(false);
     expect(canTransitionToRecurringGrace("active", 0)).toBe(true);

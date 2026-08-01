@@ -1,0 +1,135 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MollieClient } from "./mollieClient";
+
+const storeMocks = vi.hoisted(() => ({
+  attachMollieCustomer: vi.fn(),
+  attachMolliePayment: vi.fn(),
+  claimIntentPaymentCreation: vi.fn(),
+  getBillingCustomer: vi.fn(),
+  getBillingIntent: vi.fn(),
+  markBillingCustomerManualReview: vi.fn(),
+  markIntentApiUnknown: vi.fn(),
+  markIntentPaymentMismatch: vi.fn(),
+  reserveBillingCustomer: vi.fn(),
+  reserveCheckoutIntent: vi.fn(),
+}));
+
+vi.mock("./checkoutStore", () => storeMocks);
+
+import { startMollieCheckout } from "./checkoutService";
+
+const originalEnv = { ...process.env };
+const intentId = "550e8400-e29b-41d4-a716-446655440000";
+
+describe("Mollie checkout provider failure boundary", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env = {
+      ...originalEnv,
+      NODE_ENV: "test",
+      MOLLIE_BILLING_ENABLED: "true",
+      MOLLIE_API_KEY: "test_example123",
+      MOLLIE_MODE: "test",
+      MOLLIE_PAYMENT_WEBHOOK_URL:
+        "http://billing.test/api/webhooks/mollie/payments",
+      APP_BASE_URL: "http://leaderbot.test",
+      BILLING_SUPPORT_EMAIL: "billing@leaderbot.test",
+      MOLLIE_BILLING_WORKER_WORKSPACE_ID: "1",
+    };
+    storeMocks.reserveCheckoutIntent.mockResolvedValue({
+      intentId,
+      workspaceId: 1,
+      mode: "test",
+      status: "created",
+      molliePaymentId: null,
+      idempotencyKey: "payment-idempotency-key",
+    });
+    storeMocks.reserveBillingCustomer.mockResolvedValue({
+      customer: {
+        mollieCustomerId: "cst_customer123",
+      },
+      creationClaimed: false,
+    });
+    storeMocks.claimIntentPaymentCreation.mockResolvedValue(true);
+    storeMocks.attachMolliePayment.mockResolvedValue(true);
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it("durably reviews a locally rejected provider response without marking api_unknown", async () => {
+    const client = checkoutClient({
+      mode: "live",
+      customerId: "cst_customer123",
+      metadata: { billingIntentId: intentId },
+    });
+
+    await expect(startMollieCheckout(checkoutInput(), client)).rejects.toThrow(
+      "did not match the billing intent"
+    );
+    expect(storeMocks.markIntentApiUnknown).not.toHaveBeenCalled();
+    expect(storeMocks.markIntentPaymentMismatch).toHaveBeenCalledWith({
+      intentId,
+      workspaceId: 1,
+      mode: "test",
+      molliePaymentId: "tr_payment123",
+    });
+    expect(storeMocks.attachMolliePayment).not.toHaveBeenCalled();
+  });
+
+  it("marks an unexpected createFirstPayment failure as api_unknown", async () => {
+    const client = checkoutClient();
+    vi.mocked(client.createFirstPayment).mockRejectedValueOnce(
+      new Error("provider unavailable")
+    );
+
+    await expect(startMollieCheckout(checkoutInput(), client)).rejects.toThrow(
+      "provider unavailable"
+    );
+    expect(storeMocks.markIntentApiUnknown).toHaveBeenCalledWith(intentId);
+    expect(storeMocks.markIntentPaymentMismatch).not.toHaveBeenCalled();
+  });
+});
+
+function checkoutInput() {
+  return {
+    workspaceId: 1,
+    planCode: "premium_monthly_v1",
+    countryCode: "BE" as const,
+    kind: "subscription_start" as const,
+    businessCheckout: false,
+  };
+}
+
+function checkoutClient(
+  overrides: Partial<{
+    mode: "test" | "live";
+    customerId: string;
+    metadata: unknown;
+  }> = {}
+): MollieClient {
+  return {
+    listMethods: vi
+      .fn()
+      .mockImplementation((sequenceType: string) =>
+        Promise.resolve(
+          sequenceType === "first"
+            ? [{ resource: "method", id: "bancontact" }]
+            : [{ resource: "method", id: "directdebit" }]
+        )
+      ),
+    createFirstPayment: vi.fn().mockResolvedValue({
+      resource: "payment",
+      id: "tr_payment123",
+      mode: overrides.mode ?? "test",
+      status: "open",
+      amount: { currency: "EUR", value: "29.00" },
+      description: "Leaderbot Premium monthly",
+      customerId: overrides.customerId ?? "cst_customer123",
+      metadata: overrides.metadata ?? { billingIntentId: intentId },
+      createdAt: "2026-08-01T00:00:00.000Z",
+    }),
+    getHostedCheckoutUrl: vi.fn(),
+  } as unknown as MollieClient;
+}

@@ -6,6 +6,7 @@ import {
   getMollieWebhookPath,
   getTenantBillingWorkerWorkspaceId,
 } from "./config";
+import { safeBillingErrorCode } from "./errorCode";
 import { MollieApiError, MollieClient } from "./mollieClient";
 import { applyMolliePaymentSnapshot } from "./paymentStore";
 
@@ -36,22 +37,27 @@ export function registerMollieWebhookRoute(
     },
   });
 
-  app.post(getMollieWebhookPath(), webhookRateLimiter, formParser, (req, res) => {
-    void handleMollieWebhook(req.body, dependencies)
-      .then(result => {
-        safeLog("mollie_payment_webhook_processed", { result });
-        res.status(200).type("text/plain").send("OK");
-      })
-      .catch(error => {
-        safeLog("mollie_payment_webhook_failed_retryable", {
-          level: "warn",
-          errorCode: safeErrorCode(error),
+  app.post(
+    getMollieWebhookPath(),
+    webhookRateLimiter,
+    formParser,
+    (req, res) => {
+      void handleMollieWebhook(req.body, dependencies)
+        .then(result => {
+          safeLog("mollie_payment_webhook_processed", { result });
+          res.status(200).type("text/plain").send("OK");
+        })
+        .catch(error => {
+          safeLog("mollie_payment_webhook_failed_retryable", {
+            level: "warn",
+            errorCode: safeBillingErrorCode(error),
+          });
+          // A transient provider/DB failure must remain retryable by Mollie.
+          // Never disclose whether a payment or tenant exists.
+          res.status(503).type("text/plain").send("Retry");
         });
-        // A transient provider/DB failure must remain retryable by Mollie.
-        // Never disclose whether a payment or tenant exists.
-        res.status(503).type("text/plain").send("Retry");
-      });
-  });
+    }
+  );
 }
 
 function getWebhookRateLimitPerMinute(): number {
@@ -95,9 +101,4 @@ function readPaymentId(body: unknown): string | null {
   const value = (body as Record<string, unknown>).id;
   if (typeof value !== "string" || !PAYMENT_ID_PATTERN.test(value)) return null;
   return value;
-}
-
-function safeErrorCode(error: unknown): string {
-  if (error instanceof MollieApiError) return error.code;
-  return error instanceof Error ? error.name : "UnknownError";
 }

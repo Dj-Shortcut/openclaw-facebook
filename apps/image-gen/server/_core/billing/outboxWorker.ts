@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, lte, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 import {
   billingOutbox,
   billingIntents,
   billingSubscriptions,
+  workspaces,
   workspaceEntitlements,
   type BillingOutboxItem,
   type BillingSubscription,
@@ -26,6 +27,7 @@ import {
   getWorkspaceBillingSubscription,
   markWorkspaceSubscriptionStoppedIfMatches,
 } from "./subscriptionStore";
+import { metadataIntentId } from "./providerMetadata";
 
 const OUTBOX_POLL_INTERVAL_MS = 5_000;
 const OUTBOX_LEASE_TIMEOUT_MS = 15 * 60 * 1_000;
@@ -244,18 +246,23 @@ async function ensureMollieSubscription(
       (left, right) =>
         new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
     );
-  const validMandate = eligibleMandates.find(mandate => mandate.status === "valid");
+  const validMandate = eligibleMandates.find(
+    mandate => mandate.status === "valid"
+  );
   if (!validMandate) {
-    const pending = eligibleMandates.some(mandate => mandate.status === "pending");
+    const pending = eligibleMandates.some(
+      mandate => mandate.status === "pending"
+    );
     if (pending) {
       throw new RetryableOutboxError("mandate_pending");
     }
     throw new PermanentOutboxError("valid_directdebit_mandate_missing");
   }
 
-  const existingRemote = (
-    await client.listCustomerSubscriptions(subscription.mollieCustomerId)
-  ).filter(remote => metadataIntentId(remote.metadata) === subscription.sourceIntentId);
+  const existingRemote = collectingSubscriptionsForIntent(
+    await client.listCustomerSubscriptions(subscription.mollieCustomerId),
+    subscription.sourceIntentId
+  );
   if (existingRemote.length > 1) {
     for (const duplicate of existingRemote) {
       await recordRemoteSubscriptionContainment(job, subscription, duplicate);
@@ -342,10 +349,7 @@ async function ensureMollieSubscription(
       // allowed to finish; the stale worker must neither link nor cancel it.
       return;
     }
-    if (
-      !leases[0] ||
-      !mayStillBeLinkedByCurrentLease
-    ) {
+    if (!leases[0] || !mayStillBeLinkedByCurrentLease) {
       await tx
         .insert(billingOutbox)
         .values({
@@ -372,17 +376,16 @@ async function ensureMollieSubscription(
         mollieSubscriptionId: remote.id,
         mollieMandateId: validMandate.id,
         status: "active",
-        nextPaymentDate: parseDateOnly(remote.nextPaymentDate ?? remote.startDate),
+        nextPaymentDate: parseDateOnly(
+          remote.nextPaymentDate ?? remote.startDate
+        ),
       })
       .where(
         and(
           eq(billingSubscriptions.workspaceId, job.workspaceId),
           eq(billingSubscriptions.mode, job.mode),
           eq(billingSubscriptions.status, "provisioning"),
-          eq(
-            billingSubscriptions.sourceIntentId,
-            subscription.sourceIntentId
-          )
+          eq(billingSubscriptions.sourceIntentId, subscription.sourceIntentId)
         )
       );
     await tx
@@ -420,20 +423,13 @@ async function cancelMollieSubscription(
   }
   const client = clientOverride ?? new MollieClient(config);
   if (isContainmentCancellation(job.payload)) {
-    const result = await cancelContainedMollieSubscription(
-      job,
-      target,
-      client
-    );
+    const result = await cancelContainedMollieSubscription(job, target, client);
     if (result === "skipped_current") return;
     await rearmFailedEnsureJobsWaitingForCancellation(job);
     return;
   }
   try {
-    await client.cancelSubscription(
-      target.customerId,
-      target.subscriptionId
-    );
+    await client.cancelSubscription(target.customerId, target.subscriptionId);
   } catch (error) {
     if (!(error instanceof MollieApiError) || error.status !== 404) {
       throw error;
@@ -447,13 +443,57 @@ async function cancelMollieSubscription(
   await rearmFailedEnsureJobsWaitingForCancellation(job);
 }
 
-async function cancelContainedMollieSubscription(
+export async function cancelContainedMollieSubscription(
   job: BillingOutboxItem,
   target: { customerId: string; subscriptionId: string },
   client: MollieClient
 ): Promise<"canceled" | "skipped_current"> {
   const database = await getDatabaseOrThrow();
-  return database.transaction(async tx => {
+  const initial = await database.transaction(async tx => {
+    const rows = await tx
+      .select()
+      .from(billingSubscriptions)
+      .where(
+        and(
+          eq(billingSubscriptions.workspaceId, job.workspaceId),
+          eq(billingSubscriptions.mode, job.mode)
+        )
+      )
+      .limit(1)
+      .for("update");
+    return rows[0] ?? null;
+  });
+
+  let remote: MollieSubscription | null = null;
+  try {
+    remote = await client.getSubscription(
+      target.customerId,
+      target.subscriptionId
+    );
+  } catch (error) {
+    if (!(error instanceof MollieApiError) || error.status !== 404) {
+      throw error;
+    }
+  }
+
+  let matchingProvisioningRemoteIds: string[] | null = null;
+  if (
+    remote &&
+    initial?.status === "provisioning" &&
+    isPotentiallyCurrentContainmentTarget(initial, job.payload, target) &&
+    remoteMatchesCurrentSubscription(remote, initial)
+  ) {
+    matchingProvisioningRemoteIds = collectingSubscriptionsForIntent(
+      await client.listCustomerSubscriptions(target.customerId),
+      initial.sourceIntentId
+    )
+      .map(candidate => candidate.id);
+    if (matchingProvisioningRemoteIds.length === 0) {
+      throw new RetryableOutboxError("containment_remote_list_inconsistent");
+    }
+  }
+
+  const decision = await database.transaction(async tx => {
     const rows = await tx
       .select()
       .from(billingSubscriptions)
@@ -466,42 +506,66 @@ async function cancelContainedMollieSubscription(
       .limit(1)
       .for("update");
     const current = rows[0] ?? null;
-    if (current && isPotentiallyCurrentContainmentTarget(current, job.payload, target)) {
-      let remote: MollieSubscription | null = null;
-      try {
-        remote = await client.getSubscription(
-          target.customerId,
-          target.subscriptionId
-        );
-      } catch (error) {
-        if (!(error instanceof MollieApiError) || error.status !== 404) {
-          throw error;
-        }
+    if (
+      current &&
+      isPotentiallyCurrentContainmentTarget(current, job.payload, target) &&
+      remote &&
+      remoteMatchesCurrentSubscription(remote, current)
+    ) {
+      if (current.status !== "provisioning") {
+        return "skipped_current" as const;
       }
-      if (remote && remoteMatchesCurrentSubscription(remote, current)) {
-        if (current.status === "provisioning") {
-          const matchingRemotes = (
-            await client.listCustomerSubscriptions(target.customerId)
-          ).filter(
-            candidate =>
-              metadataIntentId(candidate.metadata) === current.sourceIntentId
-          );
-          if (matchingRemotes.length === 0) {
-            throw new RetryableOutboxError(
-              "containment_remote_list_inconsistent"
-            );
-          }
-          if (
-            matchingRemotes.length === 1 &&
-            matchingRemotes[0]?.id === target.subscriptionId
-          ) {
-            return "skipped_current" as const;
-          }
-        } else {
-          return "skipped_current" as const;
-        }
+      if (
+        !matchingProvisioningRemoteIds ||
+        initial?.sourceIntentId !== current.sourceIntentId
+      ) {
+        throw new RetryableOutboxError("containment_state_changed");
+      }
+      if (
+        matchingProvisioningRemoteIds.length === 1 &&
+        matchingProvisioningRemoteIds[0] === target.subscriptionId
+      ) {
+        return "skipped_current" as const;
       }
     }
+
+    if (
+      current &&
+      (current.status === "active" || current.status === "past_due") &&
+      isPotentiallyCurrentContainmentTarget(current, job.payload, target)
+    ) {
+      await tx
+        .update(billingSubscriptions)
+        .set({ status: "manual_review" })
+        .where(
+          and(
+            eq(billingSubscriptions.workspaceId, job.workspaceId),
+            eq(billingSubscriptions.mode, job.mode),
+            eq(
+              billingSubscriptions.mollieSubscriptionId,
+              target.subscriptionId
+            ),
+            inArray(billingSubscriptions.status, ["active", "past_due"])
+          )
+        );
+      await tx
+        .update(workspaceEntitlements)
+        .set({ status: "manual_review" })
+        .where(
+          and(
+            eq(workspaceEntitlements.workspaceId, job.workspaceId),
+            eq(workspaceEntitlements.mode, job.mode)
+          )
+        );
+    }
+    return "cancel" as const;
+  });
+
+  if (decision === "skipped_current") {
+    return decision;
+  }
+
+  if (remote) {
     try {
       await client.cancelSubscription(target.customerId, target.subscriptionId);
     } catch (error) {
@@ -509,22 +573,37 @@ async function cancelContainedMollieSubscription(
         throw error;
       }
     }
+  }
+
+  await database.transaction(async tx => {
+    await tx
+      .select({ id: billingSubscriptions.id })
+      .from(billingSubscriptions)
+      .where(
+        and(
+          eq(billingSubscriptions.workspaceId, job.workspaceId),
+          eq(billingSubscriptions.mode, job.mode)
+        )
+      )
+      .limit(1)
+      .for("update");
     await tx
       .update(billingSubscriptions)
       .set({
         status: "canceled",
         cancelAtPeriodEnd: 1,
-        canceledAt: new Date(),
+        canceledAt: sql`COALESCE(${billingSubscriptions.canceledAt}, ${new Date()})`,
       })
       .where(
         and(
           eq(billingSubscriptions.workspaceId, job.workspaceId),
           eq(billingSubscriptions.mode, job.mode),
+          eq(billingSubscriptions.mollieCustomerId, target.customerId),
           eq(billingSubscriptions.mollieSubscriptionId, target.subscriptionId)
         )
       );
-    return "canceled" as const;
   });
+  return "canceled";
 }
 
 function isContainmentCancellation(payload: unknown): boolean {
@@ -546,7 +625,9 @@ function isPotentiallyCurrentContainmentTarget(
 ): boolean {
   if (current.mollieCustomerId !== target.customerId) return false;
   if (
-    (current.status === "active" || current.status === "past_due") &&
+    (current.status === "active" ||
+      current.status === "past_due" ||
+      current.status === "manual_review") &&
     current.mollieSubscriptionId === target.subscriptionId
   ) {
     return true;
@@ -568,19 +649,18 @@ function remoteMatchesCurrentSubscription(
   current: BillingSubscription
 ): boolean {
   const statusMatches =
-    current.status === "provisioning"
+    current.status === "provisioning" || current.status === "manual_review"
       ? remote.status === "pending" || remote.status === "active"
       : remote.status === "active";
   const startDateMatches =
     current.status !== "provisioning" ||
     Boolean(
       current.paidThrough &&
-        remote.startDate === formatDateOnly(current.paidThrough)
+      remote.startDate === formatDateOnly(current.paidThrough)
     );
   return (
-    remote.id === current.mollieSubscriptionId ||
-    current.status === "provisioning"
-  ) &&
+    (remote.id === current.mollieSubscriptionId ||
+      current.status === "provisioning") &&
     remote.mode === current.mode &&
     statusMatches &&
     startDateMatches &&
@@ -592,7 +672,8 @@ function remoteMatchesCurrentSubscription(
       current.mollieMandateId,
       current.status === "provisioning"
     ) &&
-    metadataIntentId(remote.metadata) === current.sourceIntentId;
+    metadataIntentId(remote.metadata) === current.sourceIntentId
+  );
 }
 
 export function mandateMatchesCurrentSubscription(
@@ -601,11 +682,20 @@ export function mandateMatchesCurrentSubscription(
   provisioning: boolean
 ): boolean {
   if (provisioning && !localMandateId) {
-    return Boolean(
-      remoteMandateId && isValidMollieId(remoteMandateId, "mdt_")
-    );
+    return Boolean(remoteMandateId && isValidMollieId(remoteMandateId, "mdt_"));
   }
-  return remoteMandateId === localMandateId;
+  return Boolean(localMandateId && remoteMandateId === localMandateId);
+}
+
+export function collectingSubscriptionsForIntent(
+  remotes: readonly MollieSubscription[],
+  sourceIntentId: string
+): MollieSubscription[] {
+  return remotes.filter(
+    remote =>
+      (remote.status === "active" || remote.status === "pending") &&
+      metadataIntentId(remote.metadata) === sourceIntentId
+  );
 }
 
 async function rearmFailedEnsureJobsWaitingForCancellation(
@@ -660,8 +750,8 @@ async function rearmFailedEnsureJobsWaitingForCancellation(
           : null;
         matchesCompletedCancellation = Boolean(
           prerequisiteTarget &&
-            prerequisiteTarget.customerId === completedTarget.customerId &&
-            prerequisiteTarget.subscriptionId === completedTarget.subscriptionId
+          prerequisiteTarget.customerId === completedTarget.customerId &&
+          prerequisiteTarget.subscriptionId === completedTarget.subscriptionId
         );
       } catch {
         matchesCompletedCancellation = false;
@@ -894,9 +984,10 @@ async function containRemoteSubscriptionsForIntent(
     throw new PermanentOutboxError("billing_mode_mismatch");
   }
   const client = clientOverride ?? new MollieClient(config);
-  const remotes = (
-    await client.listCustomerSubscriptions(subscription.mollieCustomerId)
-  ).filter(remote => metadataIntentId(remote.metadata) === sourceIntentId);
+  const remotes = collectingSubscriptionsForIntent(
+    await client.listCustomerSubscriptions(subscription.mollieCustomerId),
+    sourceIntentId
+  );
   if (remotes.length === 0) {
     // A create call may have timed out after Mollie accepted it. Keep checking
     // under the bounded outbox policy instead of treating an empty first list
@@ -994,12 +1085,31 @@ function isValidMollieId(
   }
 }
 
-async function claimBillingOutboxItem(
+export async function claimBillingOutboxItem(
   mode: MollieMode,
   workspaceId: number
 ): Promise<ClaimedBillingOutboxItem | null> {
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
+    const workspaceRows = await tx
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1)
+      .for("update");
+    if (!workspaceRows[0]) return null;
+    const activeJobs = await tx
+      .select({ id: billingOutbox.id })
+      .from(billingOutbox)
+      .where(
+        and(
+          eq(billingOutbox.workspaceId, workspaceId),
+          eq(billingOutbox.mode, mode),
+          eq(billingOutbox.status, "processing")
+        )
+      )
+      .limit(1);
+    if (activeJobs[0]) return null;
     const jobs = await tx
       .select()
       .from(billingOutbox)
@@ -1092,7 +1202,10 @@ async function rescheduleBillingOutboxItem(
   job: ClaimedBillingOutboxItem,
   errorCode: string
 ) {
-  const delayMinutes = Math.min(360, 5 * 2 ** Math.max(0, job.attemptCount - 1));
+  const delayMinutes = Math.min(
+    360,
+    5 * 2 ** Math.max(0, job.attemptCount - 1)
+  );
   const database = await getDatabaseOrThrow();
   await database
     .update(billingOutbox)
@@ -1235,17 +1348,12 @@ async function failBillingOutboxItem(
 }
 
 function readSourceIntentId(payload: unknown): string | null {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return null;
   const value = (payload as Record<string, unknown>).intentId;
   return typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value)
     ? value
     : null;
-}
-
-function metadataIntentId(metadata: unknown): string | null {
-  if (!metadata || typeof metadata !== "object") return null;
-  const value = (metadata as Record<string, unknown>).billingIntentId;
-  return typeof value === "string" ? value : null;
 }
 
 function validateRemoteSubscription(

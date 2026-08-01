@@ -385,7 +385,7 @@ function Home() {
   });
   const billingSummaryQuery = trpc.portal.billing.summary.useQuery(
     { workspaceId: workspaceId ?? 0 },
-    { enabled: Boolean(workspaceId) && Boolean(billingPlansQuery.data?.length) }
+    { enabled: Boolean(workspaceId) }
   );
   const billingReturnStatusQuery = trpc.portal.billing.returnStatus.useQuery(
     {

@@ -88,6 +88,9 @@ export type MollieMethod = {
 
 type MollieList<T> = {
   _embedded?: Record<string, T[] | undefined>;
+  _links?: {
+    next?: MollieLink | null;
+  };
 };
 
 export class MollieApiError extends Error {
@@ -165,11 +168,10 @@ export class MollieClient {
 
   async listCustomerPayments(customerId: string): Promise<MolliePayment[]> {
     assertMollieId(customerId, "cst_");
-    const response = await this.request<MollieList<MolliePayment>>(
+    return this.requestAllPages<MolliePayment>(
       `/customers/${encodeURIComponent(customerId)}/payments?limit=250`,
-      { method: "GET" }
+      "payments"
     );
-    return response._embedded?.payments ?? [];
   }
 
   async listMandates(customerId: string): Promise<MollieMandate[]> {
@@ -225,7 +227,9 @@ export class MollieClient {
     );
   }
 
-  async listCustomerSubscriptions(customerId: string): Promise<MollieSubscription[]> {
+  async listCustomerSubscriptions(
+    customerId: string
+  ): Promise<MollieSubscription[]> {
     assertMollieId(customerId, "cst_");
     const response = await this.request<MollieList<MollieSubscription>>(
       `/customers/${encodeURIComponent(customerId)}/subscriptions?limit=250`,
@@ -234,7 +238,10 @@ export class MollieClient {
     return response._embedded?.subscriptions ?? [];
   }
 
-  async cancelSubscription(customerId: string, subscriptionId: string): Promise<void> {
+  async cancelSubscription(
+    customerId: string,
+    subscriptionId: string
+  ): Promise<void> {
     assertMollieId(customerId, "cst_");
     assertMollieId(subscriptionId, "sub_");
     await this.request<null>(
@@ -243,7 +250,9 @@ export class MollieClient {
     );
   }
 
-  async listMethods(sequenceType: "first" | "recurring"): Promise<MollieMethod[]> {
+  async listMethods(
+    sequenceType: "first" | "recurring"
+  ): Promise<MollieMethod[]> {
     const response = await this.request<MollieList<MollieMethod>>(
       `/methods?sequenceType=${sequenceType}&locale=nl_BE`,
       { method: "GET" }
@@ -259,11 +268,53 @@ export class MollieClient {
     const parsed = new URL(checkoutUrl);
     if (
       parsed.protocol !== "https:" ||
-      !(parsed.hostname === "mollie.com" || parsed.hostname.endsWith(".mollie.com"))
+      !(
+        parsed.hostname === "mollie.com" ||
+        parsed.hostname.endsWith(".mollie.com")
+      )
     ) {
       throw new Error("Mollie returned an unexpected checkout host");
     }
     return parsed.toString();
+  }
+
+  private async requestAllPages<T>(
+    initialPath: string,
+    embeddedKey: string
+  ): Promise<T[]> {
+    const items: T[] = [];
+    const visited = new Set<string>();
+    let path: string | null = initialPath;
+
+    while (path) {
+      if (visited.has(path)) {
+        throw new Error("Mollie pagination cycle detected");
+      }
+      visited.add(path);
+      const response: MollieList<T> = await this.request<MollieList<T>>(path, {
+        method: "GET",
+      });
+      items.push(...(response._embedded?.[embeddedKey] ?? []));
+      const nextHref = response._links?.next?.href;
+      path = nextHref ? this.resolvePaginationPath(nextHref, path) : null;
+    }
+
+    return items;
+  }
+
+  private resolvePaginationPath(href: string, currentPath: string): string {
+    const apiBase = new URL(this.apiBaseUrl);
+    const current = new URL(`${this.apiBaseUrl}${currentPath}`);
+    const next = new URL(href, current);
+    const basePath = apiBase.pathname.replace(/\/$/, "");
+    if (
+      next.origin !== apiBase.origin ||
+      (next.pathname !== basePath && !next.pathname.startsWith(`${basePath}/`))
+    ) {
+      throw new Error("Mollie returned an unexpected pagination URL");
+    }
+    const relativePath = next.pathname.slice(basePath.length) || "/";
+    return `${relativePath}${next.search}`;
   }
 
   private async request<T>(
@@ -301,7 +352,10 @@ export class MollieClient {
     if (!response.ok) {
       let code = `http_${response.status}`;
       try {
-        const payload = (await response.json()) as { status?: number; title?: string };
+        const payload = (await response.json()) as {
+          status?: number;
+          title?: string;
+        };
         if (typeof payload.status === "number") {
           code = `mollie_${payload.status}`;
         }
@@ -318,7 +372,10 @@ export class MollieClient {
   }
 }
 
-export function assertMollieId(value: string, prefix: "tr_" | "cst_" | "mdt_" | "sub_"): void {
+export function assertMollieId(
+  value: string,
+  prefix: "tr_" | "cst_" | "mdt_" | "sub_"
+): void {
   if (
     value.length > 64 ||
     !value.startsWith(prefix) ||
@@ -337,7 +394,9 @@ export async function checkMolliePaymentMethods(
     client.listMethods("recurring"),
   ]);
   const isEnabled = (method: MollieMethod) =>
-    !method.status || method.status === "activated" || method.status === "active";
+    !method.status ||
+    method.status === "activated" ||
+    method.status === "active";
   const bancontact = firstMethods.some(
     method => method.id === "bancontact" && isEnabled(method)
   );
@@ -348,7 +407,9 @@ export async function checkMolliePaymentMethods(
     ok: mode === "live" && bancontact && sepaDirectDebit,
     bancontact,
     sepaDirectDebit,
-    profileActivationConfirmed: mode === "live" && bancontact && sepaDirectDebit,
-    evidence: mode === "live" ? "live_profile_enabled_methods" : "test_mode_not_proof",
+    profileActivationConfirmed:
+      mode === "live" && bancontact && sepaDirectDebit,
+    evidence:
+      mode === "live" ? "live_profile_enabled_methods" : "test_mode_not_proof",
   };
 }

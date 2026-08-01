@@ -13,8 +13,9 @@ import { getDatabaseOrThrow } from "../../db";
 import { addPlanInterval, formatAmountMinor } from "./catalog";
 import { deterministicIdempotencyKey } from "./ids";
 import { parseEurValueMinor, sumAmountsMinor } from "./amounts";
-import type { MolliePayment } from "./mollieClient";
+import { assertMollieId, type MolliePayment } from "./mollieClient";
 import { createPaymentSnapshot } from "./paymentSnapshot";
+import { metadataIntentId } from "./providerMetadata";
 
 const GRACE_PERIOD_DAYS = 7;
 
@@ -58,6 +59,41 @@ export async function applyMolliePaymentSnapshot(
         processingResult: "processing",
       });
 
+      const occurredAt = resolvePaymentOccurredAt(payment);
+      if (!occurredAt) {
+        await enqueueOutbox(tx, {
+          workspaceId: context.workspaceId,
+          mode: context.intent.mode,
+          eventType: "manual_review",
+          deduplicationKey: `invalid_provider_timestamp:${payment.id}:${observed.snapshotHash}`,
+          payload: {
+            reason: "invalid_provider_timestamp",
+            paymentId: payment.id,
+          },
+        });
+        await finishDelivery(
+          tx,
+          context.workspaceId,
+          payment.mode,
+          payment.id,
+          observed.snapshotHash,
+          "invalid_provider_timestamp"
+        );
+        return {
+          result: "mismatch" as const,
+          workspaceId: context.workspaceId,
+        };
+      }
+
+      const paidEffectAlreadyApplied = await upsertLedger(tx, {
+        payment,
+        workspaceId: context.workspaceId,
+        snapshotHash: observed.snapshotHash,
+        refunds: observed.refunds,
+        chargebacks: observed.chargebacks,
+        occurredAt,
+      });
+
       const supersededReplacement = isSupersededPaymentMethodChangeIntent(
         context.intent
       );
@@ -66,7 +102,10 @@ export async function applyMolliePaymentSnapshot(
         !plan ||
         payment.amount.currency !== context.intent.currency ||
         payment.amount.value !== context.intent.expectedAmount ||
-        payment.customerId !== context.customer.mollieCustomerId ||
+        !hasMatchingMollieCustomerId(
+          payment.customerId,
+          context.customer.mollieCustomerId
+        ) ||
         !metadataMatchesIntent(payment.metadata, context.intent.intentId) ||
         (Boolean(payment.subscriptionId) && !context.subscription);
 
@@ -114,7 +153,10 @@ export async function applyMolliePaymentSnapshot(
           observed.snapshotHash,
           "mismatch"
         );
-        return { result: "mismatch" as const, workspaceId: context.workspaceId };
+        return {
+          result: "mismatch" as const,
+          workspaceId: context.workspaceId,
+        };
       }
 
       if (!payment.subscriptionId && !context.intent.molliePaymentId) {
@@ -134,29 +176,15 @@ export async function applyMolliePaymentSnapshot(
           );
       }
 
-      const occurredAt = parseProviderDate(
-        payment.paidAt ??
-          payment.failedAt ??
-          payment.canceledAt ??
-          payment.expiredAt ??
-          payment.createdAt
-      );
-      const paidEffectAlreadyApplied = await upsertLedger(tx, {
-        payment,
-        workspaceId: context.workspaceId,
-        snapshotHash: observed.snapshotHash,
-        refunds: observed.refunds,
-        chargebacks: observed.chargebacks,
-        occurredAt,
-      });
       const targetsReplacedSubscription = Boolean(
         (payment.subscriptionId &&
           context.subscription &&
-          payment.subscriptionId !== context.subscription.mollieSubscriptionId) ||
-          (!payment.subscriptionId &&
-            paidEffectAlreadyApplied &&
-            context.subscription &&
-            context.subscription.sourceIntentId !== context.intent.intentId)
+          payment.subscriptionId !==
+            context.subscription.mollieSubscriptionId) ||
+        (!payment.subscriptionId &&
+          paidEffectAlreadyApplied &&
+          context.subscription &&
+          context.subscription.sourceIntentId !== context.intent.intentId)
       );
 
       if (supersededReplacement) {
@@ -180,7 +208,10 @@ export async function applyMolliePaymentSnapshot(
           observed.snapshotHash,
           "superseded_replacement"
         );
-        return { result: "processed" as const, workspaceId: context.workspaceId };
+        return {
+          result: "processed" as const,
+          workspaceId: context.workspaceId,
+        };
       }
 
       if (targetsReplacedSubscription) {
@@ -189,7 +220,10 @@ export async function applyMolliePaymentSnapshot(
           mode: context.intent.mode,
           eventType: "manual_review",
           deduplicationKey: `historical_payment_update:${payment.id}:${observed.snapshotHash}`,
-          payload: { reason: "historical_payment_update", paymentId: payment.id },
+          payload: {
+            reason: "historical_payment_update",
+            paymentId: payment.id,
+          },
         });
         await finishDelivery(
           tx,
@@ -199,7 +233,10 @@ export async function applyMolliePaymentSnapshot(
           observed.snapshotHash,
           "historical_manual_review"
         );
-        return { result: "processed" as const, workspaceId: context.workspaceId };
+        return {
+          result: "processed" as const,
+          workspaceId: context.workspaceId,
+        };
       }
 
       const completedRefundTotal = sumAmountsMinor(
@@ -261,12 +298,20 @@ export async function applyMolliePaymentSnapshot(
             mode: context.intent.mode,
             eventType: "manual_review",
             deduplicationKey: `historical_full_refund:${payment.id}:${observed.snapshotHash}`,
-            payload: { reason: "historical_full_refund", paymentId: payment.id },
+            payload: {
+              reason: "historical_full_refund",
+              paymentId: payment.id,
+            },
           });
         }
       } else if (completedRefundTotal > 0) {
         if (!hasLaterPaidPeriod) {
-          await applyAccessReview(tx, context, plan.entitlements, "manual_review");
+          await applyAccessReview(
+            tx,
+            context,
+            plan.entitlements,
+            "manual_review"
+          );
         }
         await enqueueOutbox(tx, {
           workspaceId: context.workspaceId,
@@ -277,7 +322,12 @@ export async function applyMolliePaymentSnapshot(
         });
       } else if (pendingRefundTotal > 0) {
         if (!hasLaterPaidPeriod) {
-          await applyAccessReview(tx, context, plan.entitlements, "manual_review");
+          await applyAccessReview(
+            tx,
+            context,
+            plan.entitlements,
+            "manual_review"
+          );
         }
         await enqueueOutbox(tx, {
           workspaceId: context.workspaceId,
@@ -287,7 +337,12 @@ export async function applyMolliePaymentSnapshot(
           payload: { reason: "pending_refund", paymentId: payment.id },
         });
       } else if (payment.status === "paid" && paidEffectAlreadyApplied) {
-        await reviewPaidSnapshotWithoutReapplying(tx, context, plan, payment.id);
+        await reviewPaidSnapshotWithoutReapplying(
+          tx,
+          context,
+          plan,
+          payment.id
+        );
       } else {
         const paidEffectApplied = payment.subscriptionId
           ? await applyRecurringPaymentStatus(tx, context, plan, payment)
@@ -333,7 +388,9 @@ export async function applyMolliePaymentSnapshot(
 export function isSupersededPaymentMethodChangeIntent(
   intent: Pick<typeof billingIntents.$inferSelect, "kind" | "status">
 ): boolean {
-  return intent.kind === "payment_method_change" && intent.status === "canceled";
+  return (
+    intent.kind === "payment_method_change" && intent.status === "canceled"
+  );
 }
 
 export function resolveFirstPaymentPeriodStart(
@@ -350,8 +407,7 @@ export function canTransitionToRecurringGrace(
   cancelAtPeriodEnd: number
 ): boolean {
   return (
-    cancelAtPeriodEnd !== 1 &&
-    (status === "active" || status === "past_due")
+    cancelAtPeriodEnd !== 1 && (status === "active" || status === "past_due")
   );
 }
 
@@ -359,13 +415,71 @@ export function isPendingRefundStatus(status: string): boolean {
   return status === "queued" || status === "pending" || status === "processing";
 }
 
+export function hasMatchingMollieCustomerId(
+  paymentCustomerId: string | null | undefined,
+  storedCustomerId: string | null | undefined
+): boolean {
+  if (
+    !storedCustomerId ||
+    storedCustomerId.length <= "cst_".length ||
+    paymentCustomerId !== storedCustomerId
+  ) {
+    return false;
+  }
+  try {
+    assertMollieId(storedCustomerId, "cst_");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function resolvePaymentOccurredAt(
+  payment: Pick<
+    MolliePayment,
+    "createdAt" | "paidAt" | "failedAt" | "canceledAt" | "expiredAt"
+  >
+): Date | null {
+  const timestamps = [
+    payment.createdAt,
+    payment.paidAt,
+    payment.failedAt,
+    payment.canceledAt,
+    payment.expiredAt,
+  ].filter((value): value is string => value !== undefined);
+  try {
+    for (const timestamp of timestamps) parseProviderDate(timestamp);
+    return parseProviderDate(
+      payment.paidAt ??
+        payment.failedAt ??
+        payment.canceledAt ??
+        payment.expiredAt ??
+        payment.createdAt
+    );
+  } catch {
+    return null;
+  }
+}
+
+export function isDuplicateRecurringCycle(
+  providerCreatedAt: Date,
+  currentPeriodStart: Date | null | undefined
+): boolean {
+  return Boolean(
+    currentPeriodStart &&
+    providerCreatedAt.getTime() <= currentPeriodStart.getTime()
+  );
+}
+
 async function resolvePaymentContext(
-  tx: Parameters<Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]>[0],
+  tx: Parameters<
+    Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
+  >[0],
   payment: MolliePayment,
   expectedWorkspaceId: number
 ): Promise<PaymentContext | null> {
-  const metadataIntentId = getMetadataIntentId(payment.metadata);
-  if (!metadataIntentId) {
+  const paymentIntentId = metadataIntentId(payment.metadata);
+  if (!paymentIntentId) {
     return null;
   }
   const intents = await tx
@@ -373,7 +487,7 @@ async function resolvePaymentContext(
     .from(billingIntents)
     .where(
       and(
-        eq(billingIntents.intentId, metadataIntentId),
+        eq(billingIntents.intentId, paymentIntentId),
         eq(billingIntents.workspaceId, expectedWorkspaceId),
         eq(billingIntents.mode, payment.mode)
       )
@@ -424,7 +538,7 @@ async function findPaymentContextOutsideTransaction(
   expectedWorkspaceId: number
 ) {
   const database = await getDatabaseOrThrow();
-  const intentId = getMetadataIntentId(payment.metadata);
+  const intentId = metadataIntentId(payment.metadata);
   if (!intentId) return null;
   const intents = await database
     .select({ workspaceId: billingIntents.workspaceId })
@@ -441,7 +555,9 @@ async function findPaymentContextOutsideTransaction(
 }
 
 async function applyFirstPaymentStatus(
-  tx: Parameters<Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]>[0],
+  tx: Parameters<
+    Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
+  >[0],
   context: PaymentContext,
   plan: NonNullable<ReturnType<typeof getIntentPlanSnapshot>>,
   payment: MolliePayment
@@ -536,8 +652,7 @@ async function applyFirstPaymentStatus(
     context.intent.kind === "payment_method_change" &&
     context.subscription?.mollieSubscriptionId
   ) {
-    cancellationPrerequisite =
-      `payment_method_change_cancel:${context.intent.intentId}`;
+    cancellationPrerequisite = `payment_method_change_cancel:${context.intent.intentId}`;
     await enqueueOutbox(tx, {
       workspaceId: context.workspaceId,
       mode: context.intent.mode,
@@ -580,7 +695,9 @@ async function applyFirstPaymentStatus(
 }
 
 async function applyRecurringPaymentStatus(
-  tx: Parameters<Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]>[0],
+  tx: Parameters<
+    Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
+  >[0],
   context: PaymentContext,
   plan: NonNullable<ReturnType<typeof getIntentPlanSnapshot>>,
   payment: MolliePayment
@@ -592,8 +709,10 @@ async function applyRecurringPaymentStatus(
     const paidAt = parseProviderDate(payment.paidAt ?? payment.createdAt);
     const providerCreatedAt = parseProviderDate(payment.createdAt);
     if (
-      subscription.currentPeriodStart &&
-      providerCreatedAt.getTime() <= subscription.currentPeriodStart.getTime()
+      isDuplicateRecurringCycle(
+        providerCreatedAt,
+        subscription.currentPeriodStart
+      )
     ) {
       await enqueueOutbox(tx, {
         workspaceId: context.workspaceId,
@@ -602,7 +721,7 @@ async function applyRecurringPaymentStatus(
         deduplicationKey: `duplicate_recurring_cycle:${payment.id}`,
         payload: { reason: "duplicate_recurring_cycle", paymentId: payment.id },
       });
-      return true;
+      return false;
     }
     const currentPaidThrough = subscription.paidThrough;
     const periodStart =
@@ -788,7 +907,9 @@ async function applyRecurringPaymentStatus(
 }
 
 async function hasLaterPaidLedger(
-  tx: Parameters<Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]>[0],
+  tx: Parameters<
+    Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
+  >[0],
   workspaceId: number,
   mode: MolliePayment["mode"],
   paymentId: string,
@@ -811,7 +932,9 @@ async function hasLaterPaidLedger(
 }
 
 async function reviewPaidSnapshotWithoutReapplying(
-  tx: Parameters<Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]>[0],
+  tx: Parameters<
+    Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
+  >[0],
   context: PaymentContext,
   plan: NonNullable<ReturnType<typeof getIntentPlanSnapshot>>,
   paymentId: string
@@ -855,7 +978,9 @@ async function reviewPaidSnapshotWithoutReapplying(
 }
 
 async function applyAccessReview(
-  tx: Parameters<Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]>[0],
+  tx: Parameters<
+    Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
+  >[0],
   context: PaymentContext,
   quota: unknown,
   entitlementStatus: "inactive" | "blocked" | "manual_review"
@@ -891,7 +1016,9 @@ async function applyAccessReview(
 }
 
 async function upsertLedger(
-  tx: Parameters<Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]>[0],
+  tx: Parameters<
+    Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
+  >[0],
   input: {
     payment: MolliePayment;
     workspaceId: number;
@@ -923,7 +1050,10 @@ async function upsertLedger(
     })
     .onDuplicateKeyUpdate({
       set: {
+        grossAmount: input.payment.amount.value,
+        currency: input.payment.amount.currency,
         status: input.payment.status,
+        paymentMethod: input.payment.method ?? null,
         refunds: input.refunds,
         chargebacks: input.chargebacks,
         observedSnapshotHash: input.snapshotHash,
@@ -961,7 +1091,9 @@ async function upsertLedger(
 }
 
 async function allocateInvoiceNumber(
-  tx: Parameters<Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]>[0],
+  tx: Parameters<
+    Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
+  >[0],
   ledgerId: number,
   workspaceId: number,
   mode: MolliePayment["mode"],
@@ -986,7 +1118,11 @@ async function allocateInvoiceNumber(
     .limit(1)
     .for("update");
   const sequence = sequences[0];
-  if (!sequence || !Number.isSafeInteger(sequence.nextNumber) || sequence.nextNumber <= 0) {
+  if (
+    !sequence ||
+    !Number.isSafeInteger(sequence.nextNumber) ||
+    sequence.nextNumber <= 0
+  ) {
     throw new Error("billing invoice sequence is invalid");
   }
   const prefix = mode === "test" ? "LB-TEST" : "LB";
@@ -1013,7 +1149,9 @@ async function allocateInvoiceNumber(
 }
 
 async function enqueueOutbox(
-  tx: Parameters<Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]>[0],
+  tx: Parameters<
+    Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
+  >[0],
   input: {
     workspaceId: number;
     mode: MolliePayment["mode"];
@@ -1042,7 +1180,9 @@ async function enqueueOutbox(
 }
 
 async function finishDelivery(
-  tx: Parameters<Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]>[0],
+  tx: Parameters<
+    Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
+  >[0],
   workspaceId: number,
   mode: MolliePayment["mode"],
   paymentId: string,
@@ -1060,14 +1200,6 @@ async function finishDelivery(
         eq(webhookDeliveries.snapshotHash, snapshotHash)
       )
     );
-}
-
-function getMetadataIntentId(metadata: unknown): string | null {
-  if (!metadata || typeof metadata !== "object") return null;
-  const intentId = (metadata as Record<string, unknown>).billingIntentId;
-  return typeof intentId === "string" && /^[0-9a-f-]{36}$/i.test(intentId)
-    ? intentId
-    : null;
 }
 
 function getIntentPlanSnapshot(intent: typeof billingIntents.$inferSelect) {
@@ -1106,7 +1238,7 @@ function getIntentPlanSnapshot(intent: typeof billingIntents.$inferSelect) {
 }
 
 function metadataMatchesIntent(metadata: unknown, intentId: string): boolean {
-  return getMetadataIntentId(metadata) === intentId;
+  return metadataIntentId(metadata) === intentId;
 }
 
 function cancellationTargetPayload(context: PaymentContext, reason: string) {
@@ -1128,7 +1260,11 @@ function parseProviderDate(value: string): Date {
 
 function isDuplicateDeliverySnapshot(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
-  const record = error as { code?: unknown; message?: unknown; cause?: unknown };
+  const record = error as {
+    code?: unknown;
+    message?: unknown;
+    cause?: unknown;
+  };
   if (
     record.code === "ER_DUP_ENTRY" &&
     typeof record.message === "string" &&

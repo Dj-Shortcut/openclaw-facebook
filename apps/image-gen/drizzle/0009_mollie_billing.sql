@@ -72,6 +72,7 @@ CREATE TABLE `billing_subscriptions` (
   `updated_at` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT `billing_subscriptions_id` PRIMARY KEY(`id`),
   CONSTRAINT `billing_subscriptions_workspace_id_workspaces_id_fk` FOREIGN KEY (`workspace_id`) REFERENCES `workspaces`(`id`) ON DELETE RESTRICT,
+  CONSTRAINT `billing_subscriptions_source_intent_fk` FOREIGN KEY (`source_intent_id`) REFERENCES `billing_intents`(`intent_id`) ON DELETE RESTRICT,
   CONSTRAINT `billing_subscriptions_workspace_mode_unique` UNIQUE(`workspace_id`,`mode`),
   CONSTRAINT `billing_subscriptions_mollie_subscription_mode_unique` UNIQUE(`mode`,`mollie_subscription_id`),
   CONSTRAINT `billing_subscriptions_idempotency_unique` UNIQUE(`idempotency_key`)
@@ -192,6 +193,7 @@ CREATE TABLE `billing_reconciliation_anomalies` (
   `metadata` json,
   `created_at` timestamp NOT NULL DEFAULT (now()),
   CONSTRAINT `billing_reconciliation_anomalies_id` PRIMARY KEY(`id`),
+  CONSTRAINT `billing_reconciliation_anomalies_run_fk` FOREIGN KEY (`run_id`) REFERENCES `billing_reconciliation_runs`(`id`) ON DELETE CASCADE,
   CONSTRAINT `billing_reconciliation_anomalies_workspace_id_workspaces_id_fk` FOREIGN KEY (`workspace_id`) REFERENCES `workspaces`(`id`) ON DELETE RESTRICT,
   CONSTRAINT `billing_reconciliation_anomalies_run_workspace_code_unique` UNIQUE(`run_id`,`workspace_id`,`code`)
 );

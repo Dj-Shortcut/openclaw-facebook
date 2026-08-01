@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { formatAmountMinor, getBillingPlan } from "./_core/billing/catalog";
+import { escapeHtml } from "./_core/html";
 import { registerLegalRoutes } from "./_core/runtime/legalRoutes";
 
 type RegisteredRoute = {
@@ -79,13 +81,29 @@ describe("legal routes", () => {
   it("publishes pre-launch pricing without implying an active checkout", () => {
     const terms = renderLegalRoute("/terms").body;
     const billingPolicy = renderLegalRoute("/billing-policy").body;
+    const plan = getBillingPlan("premium_monthly_v1");
+    expect(plan).not.toBeNull();
+    if (!plan) throw new Error("Missing premium billing plan");
+    const displayedPrice = `€${formatAmountMinor(plan.amountMinor).replace(
+      /\.00$/,
+      ""
+    )}`;
 
-    expect(terms).toContain("planned at €29 per month");
+    expect(terms).toContain(`planned at ${displayedPrice} per month`);
     expect(terms).toContain("not currently for sale");
+    expect(billingPolicy).toContain(
+      `${displayedPrice} per month in ${plan.currency}`
+    );
     expect(billingPolicy).toContain("There is currently no checkout");
     expect(billingPolicy).toContain("No payment or renewal today");
     expect(billingPolicy).toContain("future price indication");
     expect(billingPolicy).not.toContain("billing@leaderbot.live");
     expect(billingPolicy).not.toContain("Bijzondere vrijstellingsregeling");
+  });
+
+  it("uses the shared HTML escaper for text inserted into legal pages and receipts", () => {
+    expect(escapeHtml(`<script data-owner="O'Reilly">&</script>`)).toBe(
+      "&lt;script data-owner=&quot;O&#39;Reilly&quot;&gt;&amp;&lt;/script&gt;"
+    );
   });
 });

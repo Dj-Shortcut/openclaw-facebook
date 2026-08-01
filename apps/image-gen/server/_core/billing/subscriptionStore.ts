@@ -112,31 +112,27 @@ export async function requestWorkspaceSubscriptionCancellation(
         )
       );
 
-    if (subscription.paidThrough) {
-      await tx
-        .update(workspaceEntitlements)
-        .set({
-          status:
-            subscription.paidThrough.getTime() > canceledAt.getTime()
-              ? "active"
-              : "inactive",
-          validUntil: subscription.paidThrough,
-        })
-        .where(
-          and(
-            eq(workspaceEntitlements.workspaceId, workspaceId),
-            eq(workspaceEntitlements.mode, mode),
-            or(
-              eq(workspaceEntitlements.status, "active"),
-              eq(workspaceEntitlements.status, "grace")
+    const entitlementScope = and(
+      eq(workspaceEntitlements.workspaceId, workspaceId),
+      eq(workspaceEntitlements.mode, mode)
+    );
+    await tx
+      .update(workspaceEntitlements)
+      .set(canceledEntitlementState(subscription.paidThrough, canceledAt))
+      .where(
+        subscription.paidThrough
+          ? and(
+              entitlementScope,
+              or(
+                eq(workspaceEntitlements.status, "active"),
+                eq(workspaceEntitlements.status, "grace")
+              )
             )
-          )
-        );
-    }
+          : entitlementScope
+      );
 
     if (subscription.mollieSubscriptionId) {
-      const deduplicationKey =
-        `user_cancel:${subscription.sourceIntentId}:${subscription.mollieSubscriptionId}`;
+      const deduplicationKey = `user_cancel:${subscription.sourceIntentId}:${subscription.mollieSubscriptionId}`;
       await tx
         .insert(billingOutbox)
         .values({
@@ -179,6 +175,20 @@ export async function requestWorkspaceSubscriptionCancellation(
   });
 }
 
+export function canceledEntitlementState(
+  paidThrough: Date | null,
+  canceledAt: Date
+): { status: "active" | "inactive"; validUntil: Date } {
+  if (!paidThrough) {
+    return { status: "inactive", validUntil: canceledAt };
+  }
+  return {
+    status:
+      paidThrough.getTime() > canceledAt.getTime() ? "active" : "inactive",
+    validUntil: paidThrough,
+  };
+}
+
 export async function markWorkspaceSubscriptionStoppedIfMatches(
   workspaceId: number,
   mode: MollieMode,
@@ -190,7 +200,7 @@ export async function markWorkspaceSubscriptionStoppedIfMatches(
     .set({
       status: "canceled",
       cancelAtPeriodEnd: 1,
-      canceledAt: new Date(),
+      canceledAt: sql`COALESCE(${billingSubscriptions.canceledAt}, ${new Date()})`,
     })
     .where(
       and(
@@ -317,7 +327,9 @@ export async function getWorkspaceLedgerPayment(
     )
     .limit(1);
   const payment = result[0];
-  return payment?.invoiceNumber ? { ...payment, invoiceNumber: payment.invoiceNumber } : null;
+  return payment?.invoiceNumber
+    ? { ...payment, invoiceNumber: payment.invoiceNumber }
+    : null;
 }
 
 export async function listWorkspaceAccountingEntries(

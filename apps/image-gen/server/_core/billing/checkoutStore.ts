@@ -34,10 +34,7 @@ const REUSABLE_INTENT_STATUSES = [
 
 export function blocksSubscriptionStart(
   subscription:
-    | Pick<
-        typeof billingSubscriptions.$inferSelect,
-        "status" | "paidThrough"
-      >
+    | Pick<typeof billingSubscriptions.$inferSelect, "status" | "paidThrough">
     | null
     | undefined,
   now: Date
@@ -56,7 +53,7 @@ export function blocksSubscriptionStart(
   }
   return Boolean(
     subscription.paidThrough &&
-      subscription.paidThrough.getTime() > now.getTime()
+    subscription.paidThrough.getTime() > now.getTime()
   );
 }
 
@@ -244,21 +241,69 @@ export async function attachMollieCustomer(
   mollieCustomerId: string
 ): Promise<BillingCustomer> {
   const database = await getDatabaseOrThrow();
-  await database
-    .update(billingCustomers)
-    .set({ mollieCustomerId, status: "active" })
-    .where(
-      and(
-        eq(billingCustomers.workspaceId, workspaceId),
-        eq(billingCustomers.mode, mode),
-        eq(billingCustomers.status, "creating_customer")
+  const result = await database.transaction(async tx => {
+    await tx
+      .update(billingCustomers)
+      .set({ mollieCustomerId, status: "active" })
+      .where(
+        and(
+          eq(billingCustomers.workspaceId, workspaceId),
+          eq(billingCustomers.mode, mode),
+          eq(billingCustomers.status, "creating_customer")
+        )
+      );
+    const customers = await tx
+      .select()
+      .from(billingCustomers)
+      .where(
+        and(
+          eq(billingCustomers.workspaceId, workspaceId),
+          eq(billingCustomers.mode, mode)
+        )
       )
-    );
-  const customer = await getBillingCustomer(workspaceId, mode);
-  if (!customer?.mollieCustomerId) {
-    throw new Error("Mollie customer was not attached");
+      .limit(1)
+      .for("update");
+    const customer = customers[0];
+    if (!customer?.mollieCustomerId) {
+      throw new Error("Mollie customer was not attached");
+    }
+    if (customer.mollieCustomerId === mollieCustomerId) {
+      return { customer, conflict: false as const };
+    }
+
+    await tx
+      .update(billingCustomers)
+      .set({ status: "manual_review" })
+      .where(
+        and(
+          eq(billingCustomers.workspaceId, workspaceId),
+          eq(billingCustomers.mode, mode),
+          eq(billingCustomers.mollieCustomerId, customer.mollieCustomerId)
+        )
+      );
+    await tx
+      .insert(billingOutbox)
+      .values({
+        workspaceId,
+        mode,
+        eventType: "manual_review",
+        deduplicationKey: `customer_conflict:${mollieCustomerId}`,
+        payload: {
+          reason: "billing_customer_id_conflict",
+          providerCustomerId: mollieCustomerId,
+        },
+        status: "pending",
+      })
+      .onDuplicateKeyUpdate({
+        set: { deduplicationKey: sql`deduplication_key` },
+      });
+    return { customer, conflict: true as const };
+  });
+
+  if (result.conflict) {
+    throw new Error("Mollie customer conflict for workspace billing");
   }
-  return customer;
+  return result.customer;
 }
 
 export async function markBillingCustomerManualReview(
@@ -296,7 +341,9 @@ export async function getBillingCustomer(
   return result[0] ?? null;
 }
 
-export async function claimIntentPaymentCreation(intentId: string): Promise<boolean> {
+export async function claimIntentPaymentCreation(
+  intentId: string
+): Promise<boolean> {
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
     const intents = await tx
@@ -414,6 +461,47 @@ export async function markIntentApiUnknown(intentId: string): Promise<void> {
         eq(billingIntents.status, "creating_payment")
       )
     );
+}
+
+export async function markIntentPaymentMismatch(input: {
+  intentId: string;
+  workspaceId: number;
+  mode: MollieMode;
+  molliePaymentId: string | null;
+}): Promise<void> {
+  const database = await getDatabaseOrThrow();
+  await database.transaction(async tx => {
+    await tx
+      .update(billingIntents)
+      .set({ status: "mismatch" })
+      .where(
+        and(
+          eq(billingIntents.intentId, input.intentId),
+          eq(billingIntents.workspaceId, input.workspaceId),
+          eq(billingIntents.mode, input.mode),
+          eq(billingIntents.status, "creating_payment")
+        )
+      );
+    await tx
+      .insert(billingOutbox)
+      .values({
+        workspaceId: input.workspaceId,
+        mode: input.mode,
+        eventType: "manual_review",
+        deduplicationKey: `checkout_response_mismatch:${input.intentId}`,
+        payload: {
+          reason: "checkout_provider_response_mismatch",
+          intentId: input.intentId,
+          ...(input.molliePaymentId
+            ? { paymentId: input.molliePaymentId }
+            : {}),
+        },
+        status: "pending",
+      })
+      .onDuplicateKeyUpdate({
+        set: { deduplicationKey: sql`deduplication_key` },
+      });
+  });
 }
 
 export async function getBillingIntent(

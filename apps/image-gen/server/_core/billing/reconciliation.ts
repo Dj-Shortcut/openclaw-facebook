@@ -15,13 +15,16 @@ import {
   getTenantBillingWorkerWorkspaceId,
   type MollieMode,
 } from "./config";
+import { parseAmountMinor } from "./amounts";
 import { hashCanonicalSnapshot } from "./ids";
 import {
   assertMollieId,
   MollieClient,
+  type MolliePayment,
   type MollieSubscription,
 } from "./mollieClient";
 import { applyMolliePaymentSnapshot } from "./paymentStore";
+import { metadataIntentId } from "./providerMetadata";
 import {
   markWorkspaceSubscriptionStoppedIfMatches,
   syncWorkspaceSubscriptionScheduleIfMatches,
@@ -32,6 +35,9 @@ const RECONCILIATION_LEASE_MS = 2 * 60 * 60 * 1_000;
 const RECONCILIATION_RETRY_MS = 15 * 60 * 1_000;
 const NEXT_DAILY_RUN_MS = 24 * 60 * 60 * 1_000;
 const INITIAL_RECONCILIATION_DELAY_MS = 30_000;
+const RECENT_PAYMENT_WINDOW_MS = 45 * 24 * 60 * 60 * 1_000;
+const HISTORICAL_PAYMENT_AUDIT_LIMIT = 25;
+const DAY_MS = 24 * 60 * 60 * 1_000;
 
 let reconciliationTimer: NodeJS.Timeout | null = null;
 let initialTimer: NodeJS.Timeout | null = null;
@@ -61,7 +67,9 @@ export function startDailyBillingReconciliation(): void {
   reconciliationTimer.unref();
 }
 
-async function dispatchTenantReconciliation(workspaceId: number): Promise<void> {
+async function dispatchTenantReconciliation(
+  workspaceId: number
+): Promise<void> {
   if (reconciliationBusy) return;
   reconciliationBusy = true;
   try {
@@ -105,8 +113,24 @@ export async function runDailyBillingReconciliation(
     entitlementsExpired: 0,
   };
   try {
-    const client = clientOverride ?? new MollieClient(config);
     const database = await getDatabaseOrThrow();
+    const expiryResult = await database
+      .update(workspaceEntitlements)
+      .set({ status: "inactive" })
+      .where(
+        and(
+          eq(workspaceEntitlements.workspaceId, workspaceId),
+          eq(workspaceEntitlements.mode, config.mode),
+          or(
+            eq(workspaceEntitlements.status, "active"),
+            eq(workspaceEntitlements.status, "grace")
+          ),
+          lte(workspaceEntitlements.validUntil, now)
+        )
+      );
+    summary.entitlementsExpired = extractAffectedRows(expiryResult);
+
+    const client = clientOverride ?? new MollieClient(config);
     const customers = await database
       .select()
       .from(billingCustomers)
@@ -127,11 +151,19 @@ export async function runDailyBillingReconciliation(
       const payments = sortPaymentsOldestFirst(
         await client.listCustomerPayments(customer.mollieCustomerId)
       );
-      for (const listedPayment of payments) {
+      const reconcilablePayments = selectPaymentsForReconciliation(
+        payments,
+        now
+      );
+      for (const listedPayment of reconcilablePayments) {
         summary.paymentsChecked += 1;
         const payment = await client.getPayment(listedPayment.id);
         if (payment.mode !== config.mode) {
-          await recordAnomaly(lease.runId, workspaceId, "payment_mode_mismatch");
+          await recordAnomaly(
+            lease.runId,
+            workspaceId,
+            "payment_mode_mismatch"
+          );
           summary.anomalies += 1;
           continue;
         }
@@ -161,7 +193,11 @@ export async function runDailyBillingReconciliation(
           subscription.mollieSubscriptionId
         );
         if (!remoteSubscriptionMatches(remote, subscription, config.mode)) {
-          await recordAnomaly(lease.runId, workspaceId, "subscription_mismatch");
+          await recordAnomaly(
+            lease.runId,
+            workspaceId,
+            "subscription_mismatch"
+          );
           await recordSubscriptionContainment(
             workspaceId,
             config.mode,
@@ -197,7 +233,9 @@ export async function runDailyBillingReconciliation(
             await recordAnomaly(lease.runId, workspaceId, "remote_suspended");
             summary.anomalies += 1;
           }
-          if (hasRemoteCollectionStateMismatch(subscription.status, remote.status)) {
+          if (
+            hasRemoteCollectionStateMismatch(subscription.status, remote.status)
+          ) {
             await recordAnomaly(
               lease.runId,
               workspaceId,
@@ -229,7 +267,7 @@ export async function runDailyBillingReconciliation(
             remote,
             Boolean(
               subscription &&
-                remoteSubscriptionMatches(remote, subscription, config.mode)
+              remoteSubscriptionMatches(remote, subscription, config.mode)
             )
           )
         ) {
@@ -250,21 +288,6 @@ export async function runDailyBillingReconciliation(
       }
     }
 
-    const expiryResult = await database
-      .update(workspaceEntitlements)
-      .set({ status: "inactive" })
-      .where(
-        and(
-          eq(workspaceEntitlements.workspaceId, workspaceId),
-          eq(workspaceEntitlements.mode, config.mode),
-          or(
-            eq(workspaceEntitlements.status, "active"),
-            eq(workspaceEntitlements.status, "grace")
-          ),
-          lte(workspaceEntitlements.validUntil, now)
-        )
-      );
-    summary.entitlementsExpired = extractAffectedRows(expiryResult);
     await completeReconciliationRun(
       lease.runId,
       workspaceId,
@@ -306,6 +329,57 @@ export function sortPaymentsOldestFirst<T extends { createdAt: string }>(
   });
 }
 
+export function needsReconciliation(
+  payment: Pick<MolliePayment, "status" | "amountRefunded" | "createdAt">,
+  now: Date
+): boolean {
+  if (["open", "pending", "authorized"].includes(payment.status)) return true;
+
+  if (payment.amountRefunded) {
+    try {
+      if (parseAmountMinor(payment.amountRefunded) > 0) return true;
+    } catch {
+      return true;
+    }
+  }
+
+  const createdAt = Date.parse(payment.createdAt);
+  if (!Number.isFinite(createdAt)) return true;
+  return createdAt >= now.getTime() - RECENT_PAYMENT_WINDOW_MS;
+}
+
+export function selectPaymentsForReconciliation<
+  T extends Pick<
+    MolliePayment,
+    "id" | "status" | "amountRefunded" | "createdAt"
+  >,
+>(
+  payments: readonly T[],
+  now: Date,
+  historicalAuditLimit = HISTORICAL_PAYMENT_AUDIT_LIMIT
+): T[] {
+  const selectedIds = new Set(
+    payments
+      .filter(payment => needsReconciliation(payment, now))
+      .map(payment => payment.id)
+  );
+  const historical = payments.filter(payment => !selectedIds.has(payment.id));
+  const limit = Number.isSafeInteger(historicalAuditLimit)
+    ? Math.max(0, historicalAuditLimit)
+    : 0;
+  const auditCount = Math.min(limit, historical.length);
+  if (auditCount > 0) {
+    const day = Math.floor(now.getTime() / DAY_MS);
+    const start =
+      (((day * auditCount) % historical.length) + historical.length) %
+      historical.length;
+    for (let index = 0; index < auditCount; index += 1) {
+      selectedIds.add(historical[(start + index) % historical.length].id);
+    }
+  }
+  return payments.filter(payment => selectedIds.has(payment.id));
+}
+
 async function isWorkspaceReconciliationDue(
   workspaceId: number,
   mode: MollieMode,
@@ -335,7 +409,9 @@ async function scheduleReconciliationRetry(
   const database = await getDatabaseOrThrow();
   await database
     .update(billingCustomers)
-    .set({ nextReconciliationAt: new Date(now.getTime() + RECONCILIATION_RETRY_MS) })
+    .set({
+      nextReconciliationAt: new Date(now.getTime() + RECONCILIATION_RETRY_MS),
+    })
     .where(
       and(
         eq(billingCustomers.workspaceId, workspaceId),
@@ -521,6 +597,12 @@ export function shouldPreserveRemoteSubscription(
   if (local.status === "provisioning") {
     return metadataIntentId(remote.metadata) === local.sourceIntentId;
   }
+  if (local.status === "manual_review") {
+    return (
+      contractMatches &&
+      (remote.status === "active" || remote.status === "pending")
+    );
+  }
   return (
     (local.status === "active" || local.status === "past_due") &&
     remote.status === "active" &&
@@ -605,7 +687,12 @@ async function failReconciliationRun(
   const database = await getDatabaseOrThrow();
   await database
     .update(billingReconciliationRuns)
-    .set({ status: "failed", leaseToken: null, summary, completedAt: new Date() })
+    .set({
+      status: "failed",
+      leaseToken: null,
+      summary,
+      completedAt: new Date(),
+    })
     .where(
       and(
         eq(billingReconciliationRuns.id, runId),
@@ -638,25 +725,18 @@ export function hasRemoteCollectionStateMismatch(
 ): boolean {
   return (
     (remoteStatus === "active" || remoteStatus === "pending") &&
-    ["canceled", "completed", "suspended", "manual_review"].includes(
-      localStatus
-    )
+    ["canceled", "completed", "suspended"].includes(localStatus)
   );
-}
-
-function metadataIntentId(metadata: unknown): string | null {
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
-    return null;
-  }
-  const value = (metadata as Record<string, unknown>).billingIntentId;
-  return typeof value === "string" ? value : null;
 }
 
 function parseOptionalDateOnly(value: string | null | undefined): Date | null {
   if (!value) return null;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
   const parsed = new Date(`${value}T00:00:00.000Z`);
-  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== value
+  ) {
     return null;
   }
   return parsed;

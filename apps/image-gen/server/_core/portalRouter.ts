@@ -22,8 +22,13 @@ import {
   getMollieLaunchCheck,
   startMollieCheckout,
 } from "./billing/checkoutService";
-import { getBillingPlan, listPublicBillingPlans } from "./billing/catalog";
+import {
+  formatAmountMinor,
+  getBillingPlan,
+  listPublicBillingPlans,
+} from "./billing/catalog";
 import { getMollieConfig, isMollieBillingEnabled } from "./billing/config";
+import { safeBillingErrorCode } from "./billing/errorCode";
 import { getWorkspaceBillingSummary } from "./billing/subscriptionStore";
 
 const workspaceInput = z.object({
@@ -232,12 +237,26 @@ function badRequest(error: unknown, fallback: string) {
   safeLog("billing_portal_request_rejected", {
     level: "warn",
     operation: fallback,
-    errorCode: error instanceof Error ? error.name : "UnknownError",
+    errorCode: safeBillingErrorCode(error),
   });
   return new TRPCError({
     code: "BAD_REQUEST",
     message: fallback,
   });
+}
+
+async function insertBillingAuditLogSafely(
+  values: Parameters<typeof db.insertAuditLog>[0]
+): Promise<void> {
+  try {
+    await db.insertAuditLog(values);
+  } catch (error) {
+    safeLog("billing_audit_log_failed", {
+      level: "error",
+      operation: values.event,
+      errorCode: safeBillingErrorCode(error),
+    });
+  }
 }
 
 function redactChannelAccessToken<T extends { encryptedAccessToken?: unknown }>(
@@ -315,9 +334,7 @@ export const portalRouter = router({
             ? {
                 code: plan.code,
                 publicName: plan.publicName,
-                amount: `${Math.floor(plan.amountMinor / 100)}.${String(
-                  plan.amountMinor % 100
-                ).padStart(2, "0")}`,
+                amount: formatAmountMinor(plan.amountMinor),
                 currency: plan.currency,
                 interval: plan.interval,
               }
@@ -331,38 +348,40 @@ export const portalRouter = router({
       .input(billingCheckoutInput)
       .mutation(async ({ ctx, input }) => {
         await requireWorkspaceBillingAdmin(ctx, input.workspaceId);
+        let checkout: Awaited<ReturnType<typeof startMollieCheckout>>;
         try {
-          const checkout = await startMollieCheckout(input);
-          await db.insertAuditLog({
-            workspaceId: input.workspaceId,
-            userId: ctx.user.id,
-            event: "billing_checkout.started",
-            metadata: { planCode: input.planCode, kind: input.kind },
-          });
-          return checkout;
+          checkout = await startMollieCheckout(input);
         } catch (error) {
           throw badRequest(error, "billing checkout failed");
         }
+        await insertBillingAuditLogSafely({
+          workspaceId: input.workspaceId,
+          userId: ctx.user.id,
+          event: "billing_checkout.started",
+          metadata: { planCode: input.planCode, kind: input.kind },
+        });
+        return checkout;
       }),
 
     cancel: protectedProcedure
       .input(workspaceInput)
       .mutation(async ({ ctx, input }) => {
         await requireWorkspaceBillingAdmin(ctx, input.workspaceId);
+        let result: Awaited<
+          ReturnType<typeof cancelMollieSubscriptionAtPeriodEnd>
+        >;
         try {
-          const result = await cancelMollieSubscriptionAtPeriodEnd(
-            input.workspaceId
-          );
-          await db.insertAuditLog({
-            workspaceId: input.workspaceId,
-            userId: ctx.user.id,
-            event: "billing_subscription.canceled",
-            metadata: { accessPreservedThroughPaidPeriod: true },
-          });
-          return result;
+          result = await cancelMollieSubscriptionAtPeriodEnd(input.workspaceId);
         } catch (error) {
           throw badRequest(error, "billing cancellation failed");
         }
+        await insertBillingAuditLogSafely({
+          workspaceId: input.workspaceId,
+          userId: ctx.user.id,
+          event: "billing_subscription.canceled",
+          metadata: { accessPreservedThroughPaidPeriod: true },
+        });
+        return result;
       }),
 
     returnStatus: protectedProcedure

@@ -3,13 +3,24 @@ import {
   formatPublicBusinessAddress,
 } from "../../../shared/publicBusinessDetails";
 import type express from "express";
+import { formatAmountMinor, getBillingPlan } from "../billing/catalog";
 import { formatFaceMemoryRetentionDays } from "../faceMemoryRetention";
+import { escapeHtml } from "../html";
 
 type LegalPage = {
   title: string;
   intro: string;
   sections: Array<{ heading: string; html: string }>;
 };
+
+const premiumPlan = getBillingPlan("premium_monthly_v1");
+if (!premiumPlan) {
+  throw new Error("Leaderbot Premium billing plan is missing");
+}
+const premiumMonthlyPrice = `€${formatAmountMinor(
+  premiumPlan.amountMinor
+).replace(/\.00$/, "")}`;
+const premiumCurrency = premiumPlan.currency;
 
 export function registerLegalRoutes(app: express.Express) {
   app.get("/privacy", (_req, res) => {
@@ -58,7 +69,7 @@ export function registerLegalRoutes(app: express.Express) {
         sections: [
           {
             heading: "Pilot phase and price information",
-            html: "<p>Leaderbot Premium is planned at €29 per month, but it is not currently for sale. This website does not start a paid contract, checkout, automatic renewal or direct debit. Final inclusions and payment terms will be published before sales begin.</p>",
+            html: `<p>Leaderbot Premium is planned at ${premiumMonthlyPrice} per month, but it is not currently for sale. This website does not start a paid contract, checkout, automatic renewal or direct debit. Final inclusions and payment terms will be published before sales begin.</p>`,
           },
           {
             heading: "AI-generated content",
@@ -90,7 +101,7 @@ export function registerLegalRoutes(app: express.Express) {
         sections: [
           {
             heading: "Planned Premium price",
-            html: "<p>The current proposal is Leaderbot Premium at €29 per month in EUR. This is a future price indication, not a present charge. Final included usage limits are still being validated.</p>",
+            html: `<p>The current proposal is Leaderbot Premium at ${premiumMonthlyPrice} per month in ${premiumCurrency}. This is a future price indication, not a present charge. Final included usage limits are still being validated.</p>`,
           },
           {
             heading: "No payment or renewal today",
@@ -194,17 +205,4 @@ function renderBusinessDetails(): string {
     <a href="tel:${escapeHtml(business.phoneHref)}">${escapeHtml(business.phoneDisplay)}</a> ·
     <a href="mailto:${escapeHtml(business.email)}">${escapeHtml(business.email)}</a>
   </address>`;
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, character => {
-    const entities: Record<string, string> = {
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;",
-    };
-    return entities[character] ?? character;
-  });
 }

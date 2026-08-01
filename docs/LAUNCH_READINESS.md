@@ -40,7 +40,7 @@ document.
 ## Open blockers
 
 - [ ] Product owner approves the provisional `EUR 29.00 / 1 month` price and
-  quota in `server/_core/billing/catalog.ts`.
+  quota in `apps/image-gen/server/_core/billing/catalog.ts`.
 - [ ] A verified billing-country/customer-profile control replaces reliance on
   the fixed BE checkout contract so Belgium-only eligibility cannot be faked by
   a client.

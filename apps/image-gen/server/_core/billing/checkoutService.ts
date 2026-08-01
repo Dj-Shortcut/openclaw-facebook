@@ -13,6 +13,7 @@ import {
   getBillingIntent,
   markBillingCustomerManualReview,
   markIntentApiUnknown,
+  markIntentPaymentMismatch,
   reserveBillingCustomer,
   reserveCheckoutIntent,
   type CheckoutKind,
@@ -78,7 +79,10 @@ export async function startMollieCheckout(
   });
 
   if (intent.molliePaymentId) {
-    const storedCustomer = await getBillingCustomer(input.workspaceId, config.mode);
+    const storedCustomer = await getBillingCustomer(
+      input.workspaceId,
+      config.mode
+    );
     if (!storedCustomer?.mollieCustomerId) {
       throw new Error("billing customer is not ready");
     }
@@ -146,8 +150,9 @@ export async function startMollieCheckout(
       "checkout creation is being reconciled; no retry was issued"
     );
   }
+  let payment: Awaited<ReturnType<MollieClient["createFirstPayment"]>>;
   try {
-    const payment = await client.createFirstPayment({
+    payment = await client.createFirstPayment({
       customerId,
       amount: {
         currency: plan.currency,
@@ -159,6 +164,11 @@ export async function startMollieCheckout(
       webhookUrl: config.paymentWebhookUrl,
       idempotencyKey: intent.idempotencyKey,
     });
+  } catch (error) {
+    await markIntentApiUnknown(intent.intentId);
+    throw error;
+  }
+  try {
     validatePaymentResponse({
       payment,
       intentId: intent.intentId,
@@ -166,24 +176,29 @@ export async function startMollieCheckout(
       amount: formatAmountMinor(plan.amountMinor),
       mode: config.mode,
     });
-    const attached = await attachMolliePayment({
+  } catch (error) {
+    await markIntentPaymentMismatch({
       intentId: intent.intentId,
       workspaceId: intent.workspaceId,
       mode: intent.mode,
-      molliePaymentId: payment.id,
+      molliePaymentId: validMolliePaymentIdOrNull(payment.id),
     });
-    if (!attached) {
-      throw new Error("checkout was superseded before it could be opened");
-    }
-    return {
-      intentId: intent.intentId,
-      checkoutUrl: client.getHostedCheckoutUrl(payment),
-      status: "open" as const,
-    };
-  } catch (error) {
-    await markIntentApiUnknown(intent.intentId);
     throw error;
   }
+  const attached = await attachMolliePayment({
+    intentId: intent.intentId,
+    workspaceId: intent.workspaceId,
+    mode: intent.mode,
+    molliePaymentId: payment.id,
+  });
+  if (!attached) {
+    throw new Error("checkout was superseded before it could be opened");
+  }
+  return {
+    intentId: intent.intentId,
+    checkoutUrl: client.getHostedCheckoutUrl(payment),
+    status: "open" as const,
+  };
 }
 
 async function assertPaymentMethodChangeIsSafe(
@@ -208,10 +223,7 @@ async function assertPaymentMethodChangeIsSafe(
     remote.id !== subscription.mollieSubscriptionId ||
     remote.mode !== mode ||
     remote.status !== "active" ||
-    !isOutsidePaymentMethodChangeCollectionWindow(
-      remote.nextPaymentDate,
-      now
-    )
+    !isOutsidePaymentMethodChangeCollectionWindow(remote.nextPaymentDate, now)
   ) {
     throw new Error("payment method change is too close to collection");
   }
@@ -264,16 +276,11 @@ export function hasExistingSubscriptionCollectionRisk(
     if (unsettled.has(payment.status)) return true;
     if (!paidThrough) return true;
     const createdAt = Date.parse(payment.createdAt);
-    return (
-      !Number.isFinite(createdAt) ||
-      createdAt >= paidThrough.getTime()
-    );
+    return !Number.isFinite(createdAt) || createdAt >= paidThrough.getTime();
   });
 }
 
-export async function cancelMollieSubscriptionAtPeriodEnd(
-  workspaceId: number
-) {
+export async function cancelMollieSubscriptionAtPeriodEnd(workspaceId: number) {
   const config = getMollieConfig();
   assertTenantBillingWorkerWorkspace(workspaceId);
   return requestWorkspaceSubscriptionCancellation(workspaceId, config.mode);
@@ -319,6 +326,15 @@ function validatePaymentResponse(input: {
     (metadata as Record<string, unknown>).billingIntentId !== input.intentId
   ) {
     throw new Error("Mollie payment response did not match the billing intent");
+  }
+}
+
+function validMolliePaymentIdOrNull(value: string): string | null {
+  try {
+    assertMollieId(value, "tr_");
+    return value;
+  } catch {
+    return null;
   }
 }
 

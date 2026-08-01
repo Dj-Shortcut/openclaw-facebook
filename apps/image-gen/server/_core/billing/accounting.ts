@@ -1,3 +1,6 @@
+import { parseAmountMinor } from "./amounts";
+import { formatAmountMinor } from "./catalog";
+
 export function sumCompletedRefunds(value: unknown): string {
   return sumFilteredAmounts(value, item => item.status === "refunded");
 }
@@ -18,19 +21,23 @@ function sumFilteredAmounts(
     if (!isRecord(item) || !include(item) || !isRecord(item.amount)) {
       return total;
     }
-    const currency = item.amount.currency;
-    const amountValue = item.amount.value;
-    if (
-      currency !== "EUR" ||
-      typeof amountValue !== "string" ||
-      !/^\d+\.\d{2}$/.test(amountValue)
-    ) {
+    const { currency, value: amountValue } = item.amount;
+    if (typeof currency !== "string" || typeof amountValue !== "string") {
       return total;
     }
-    const [euros, cents] = amountValue.split(".");
-    return total + Number(euros) * 100 + Number(cents);
+    let amountMinor: number;
+    try {
+      amountMinor = parseAmountMinor({ currency, value: amountValue });
+    } catch {
+      return total;
+    }
+    const next = total + amountMinor;
+    if (!Number.isSafeInteger(next)) {
+      throw new Error("billing accounting total is out of range");
+    }
+    return next;
   }, 0);
-  return `${Math.floor(minor / 100)}.${String(minor % 100).padStart(2, "0")}`;
+  return formatAmountMinor(minor);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

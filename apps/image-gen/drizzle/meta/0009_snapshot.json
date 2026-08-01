@@ -772,6 +772,19 @@
         }
       },
       "foreignKeys": {
+        "billing_reconciliation_anomalies_run_fk": {
+          "name": "billing_reconciliation_anomalies_run_fk",
+          "tableFrom": "billing_reconciliation_anomalies",
+          "tableTo": "billing_reconciliation_runs",
+          "columnsFrom": [
+            "run_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
         "billing_reconciliation_anomalies_workspace_id_workspaces_id_fk": {
           "name": "billing_reconciliation_anomalies_workspace_id_workspaces_id_fk",
           "tableFrom": "billing_reconciliation_anomalies",
@@ -1106,6 +1119,19 @@
         }
       },
       "foreignKeys": {
+        "billing_subscriptions_source_intent_fk": {
+          "name": "billing_subscriptions_source_intent_fk",
+          "tableFrom": "billing_subscriptions",
+          "tableTo": "billing_intents",
+          "columnsFrom": [
+            "source_intent_id"
+          ],
+          "columnsTo": [
+            "intent_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
         "billing_subscriptions_workspace_id_workspaces_id_fk": {
           "name": "billing_subscriptions_workspace_id_workspaces_id_fk",
           "tableFrom": "billing_subscriptions",

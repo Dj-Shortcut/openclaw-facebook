@@ -144,6 +144,28 @@ describe("classic Mollie payment webhook", () => {
     );
   });
 
+  it("ignores a provider payment from the other billing mode", async () => {
+    const getPayment = vi
+      .fn()
+      .mockResolvedValue(providerPayment({ mode: "live" }));
+    const createClient = vi.fn(
+      () => ({ getPayment }) as unknown as MollieClient
+    );
+
+    const response = await postWebhook({
+      body: "id=tr_payment123",
+      contentType: "application/x-www-form-urlencoded",
+      createClient,
+    });
+
+    expect(response).toEqual({
+      status: 200,
+      contentType: "text/plain; charset=utf-8",
+      body: "OK",
+    });
+    expect(mocks.applyMolliePaymentSnapshot).not.toHaveBeenCalled();
+  });
+
   it.each(["id=", "id=payment123", "id=tr_bad%21", "id=tr_"])(
     "returns a generic 200 without a provider call for invalid form body %j",
     async body => {
@@ -194,7 +216,7 @@ describe("classic Mollie payment webhook", () => {
     expect(response.body).toBe("Retry");
     expect(mocks.safeLog).toHaveBeenCalledWith(
       "mollie_payment_webhook_failed_retryable",
-      { level: "warn", errorCode: "Error" }
+      { level: "warn", errorCode: "BillingOperationError" }
     );
     expect(JSON.stringify(mocks.safeLog.mock.calls)).not.toContain(
       "provider response contained a secret"

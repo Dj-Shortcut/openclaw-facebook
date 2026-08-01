@@ -1,4 +1,4 @@
-import { decimal, int, mysqlEnum, mysqlTable, text, timestamp, varchar, json, index, uniqueIndex } from "drizzle-orm/mysql-core";
+import { decimal, foreignKey, int, mysqlEnum, mysqlTable, text, timestamp, varchar, json, index, uniqueIndex } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -396,25 +396,25 @@ export const billingCustomers = mysqlTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
-  table => ({
-    workspaceModeUnique: uniqueIndex("billing_customers_workspace_mode_unique").on(
+  table => [
+    uniqueIndex("billing_customers_workspace_mode_unique").on(
       table.workspaceId,
       table.mode
     ),
-    mollieCustomerModeUnique: uniqueIndex(
+    uniqueIndex(
       "billing_customers_mollie_customer_mode_unique"
     ).on(table.mode, table.mollieCustomerId),
-    externalReferenceUnique: uniqueIndex(
+    uniqueIndex(
       "billing_customers_external_reference_unique"
     ).on(table.externalReference),
-    idempotencyUnique: uniqueIndex("billing_customers_idempotency_unique").on(
+    uniqueIndex("billing_customers_idempotency_unique").on(
       table.idempotencyKey
     ),
-    reconciliationIdx: index("billing_customers_mode_reconciliation_idx").on(
+    index("billing_customers_mode_reconciliation_idx").on(
       table.mode,
       table.nextReconciliationAt
     ),
-  })
+  ]
 );
 
 export type BillingCustomer = typeof billingCustomers.$inferSelect;
@@ -457,22 +457,22 @@ export const billingIntents = mysqlTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
-  table => ({
-    workspaceModeIdx: index("billing_intents_workspace_mode_created_idx").on(
+  table => [
+    index("billing_intents_workspace_mode_created_idx").on(
       table.workspaceId,
       table.mode,
       table.createdAt
     ),
-    molliePaymentModeUnique: uniqueIndex(
+    uniqueIndex(
       "billing_intents_mollie_payment_mode_unique"
     ).on(table.mode, table.molliePaymentId),
-    idempotencyUnique: uniqueIndex("billing_intents_idempotency_unique").on(
+    uniqueIndex("billing_intents_idempotency_unique").on(
       table.idempotencyKey
     ),
-    checkoutScopeUnique: uniqueIndex(
+    uniqueIndex(
       "billing_intents_checkout_scope_unique"
     ).on(table.checkoutScopeKey),
-  })
+  ]
 );
 
 export type BillingIntent = typeof billingIntents.$inferSelect;
@@ -517,18 +517,23 @@ export const billingSubscriptions = mysqlTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
-  table => ({
-    workspaceModeUnique: uniqueIndex("billing_subscriptions_workspace_mode_unique").on(
+  table => [
+    foreignKey({
+      name: "billing_subscriptions_source_intent_fk",
+      columns: [table.sourceIntentId],
+      foreignColumns: [billingIntents.intentId],
+    }).onDelete("restrict"),
+    uniqueIndex("billing_subscriptions_workspace_mode_unique").on(
       table.workspaceId,
       table.mode
     ),
-    mollieSubscriptionModeUnique: uniqueIndex(
+    uniqueIndex(
       "billing_subscriptions_mollie_subscription_mode_unique"
     ).on(table.mode, table.mollieSubscriptionId),
-    idempotencyUnique: uniqueIndex(
+    uniqueIndex(
       "billing_subscriptions_idempotency_unique"
     ).on(table.idempotencyKey),
-  })
+  ]
 );
 
 export type BillingSubscription = typeof billingSubscriptions.$inferSelect;
@@ -543,12 +548,12 @@ export const billingInvoiceSequences = mysqlTable(
     nextNumber: int("next_number").notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
-  table => ({
-    modeYearUnique: uniqueIndex("billing_invoice_sequences_mode_year_unique").on(
+  table => [
+    uniqueIndex("billing_invoice_sequences_mode_year_unique").on(
       table.mode,
       table.invoiceYear
     ),
-  })
+  ]
 );
 
 export type BillingInvoiceSequence = typeof billingInvoiceSequences.$inferSelect;
@@ -578,20 +583,20 @@ export const paymentLedger = mysqlTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
-  table => ({
-    paymentModeUnique: uniqueIndex("payment_ledger_payment_mode_unique").on(
+  table => [
+    uniqueIndex("payment_ledger_payment_mode_unique").on(
       table.mode,
       table.molliePaymentId
     ),
-    invoiceUnique: uniqueIndex("payment_ledger_invoice_unique").on(
+    uniqueIndex("payment_ledger_invoice_unique").on(
       table.invoiceNumber
     ),
-    workspaceModeOccurredIdx: index("payment_ledger_workspace_mode_occurred_idx").on(
+    index("payment_ledger_workspace_mode_occurred_idx").on(
       table.workspaceId,
       table.mode,
       table.occurredAt
     ),
-  })
+  ]
 );
 
 export type PaymentLedgerEntry = typeof paymentLedger.$inferSelect;
@@ -611,8 +616,8 @@ export const webhookDeliveries = mysqlTable(
     processedAt: timestamp("processed_at"),
     processingResult: varchar("processing_result", { length: 80 }).notNull(),
   },
-  table => ({
-    resourceSnapshotModeUnique: uniqueIndex(
+  table => [
+    uniqueIndex(
       "webhook_deliveries_resource_snapshot_mode_unique"
     ).on(
       table.workspaceId,
@@ -620,7 +625,7 @@ export const webhookDeliveries = mysqlTable(
       table.mollieResourceId,
       table.snapshotHash
     ),
-  })
+  ]
 );
 
 export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
@@ -650,12 +655,12 @@ export const workspaceEntitlements = mysqlTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
-  table => ({
-    workspaceModeUnique: uniqueIndex("workspace_entitlements_workspace_mode_unique").on(
+  table => [
+    uniqueIndex("workspace_entitlements_workspace_mode_unique").on(
       table.workspaceId,
       table.mode
     ),
-  })
+  ]
 );
 
 export type WorkspaceEntitlement = typeof workspaceEntitlements.$inferSelect;
@@ -690,16 +695,16 @@ export const billingOutbox = mysqlTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
-  table => ({
-    modeDeduplicationUnique: uniqueIndex(
+  table => [
+    uniqueIndex(
       "billing_outbox_mode_deduplication_unique"
     ).on(table.mode, table.deduplicationKey),
-    modeStatusAvailableIdx: index("billing_outbox_mode_status_available_idx").on(
+    index("billing_outbox_mode_status_available_idx").on(
       table.mode,
       table.status,
       table.availableAt
     ),
-  })
+  ]
 );
 
 export type BillingOutboxItem = typeof billingOutbox.$inferSelect;
@@ -723,15 +728,15 @@ export const billingReconciliationRuns = mysqlTable(
     startedAt: timestamp("started_at").defaultNow().notNull(),
     completedAt: timestamp("completed_at"),
   },
-  table => ({
-    workspaceModePeriodUnique: uniqueIndex(
+  table => [
+    uniqueIndex(
       "billing_reconciliation_runs_workspace_mode_period_unique"
     ).on(
       table.workspaceId,
       table.mode,
       table.periodKey
     ),
-  })
+  ]
 );
 
 export const billingReconciliationAnomalies = mysqlTable(
@@ -746,9 +751,14 @@ export const billingReconciliationAnomalies = mysqlTable(
     metadata: json("metadata"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
-  table => ({
-    runWorkspaceCodeUnique: uniqueIndex(
+  table => [
+    foreignKey({
+      name: "billing_reconciliation_anomalies_run_fk",
+      columns: [table.runId],
+      foreignColumns: [billingReconciliationRuns.id],
+    }).onDelete("cascade"),
+    uniqueIndex(
       "billing_reconciliation_anomalies_run_workspace_code_unique"
     ).on(table.runId, table.workspaceId, table.code),
-  })
+  ]
 );

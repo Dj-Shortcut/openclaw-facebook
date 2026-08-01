@@ -508,6 +508,83 @@ describe("Fly gateway startup", () => {
     }
   }, 15000);
 
+  it("allows only supported billing export and receipt gateway routes", async () => {
+    const seenGatewayRequests = [];
+    const gatewayTarget = http.createServer((req, res) => {
+      seenGatewayRequests.push({ method: req.method, path: req.url });
+      res.end("gateway");
+    });
+    gatewayTarget.listen(0, "127.0.0.1");
+    await waitForListening(gatewayTarget);
+
+    const seenPortalRequests = [];
+    const portalTarget = http.createServer((req, res) => {
+      seenPortalRequests.push({ method: req.method, path: req.url });
+      res.end("portal");
+    });
+    portalTarget.listen(0, "127.0.0.1");
+    await waitForListening(portalTarget);
+
+    const guard = startPublicRouteGuard({
+      publicPort: 0,
+      targetPort: gatewayTarget.address().port,
+      env: {
+        LEADERBOT_PORTAL_ORIGIN: `http://127.0.0.1:${portalTarget.address().port}`,
+      },
+    });
+    await waitForListening(guard);
+
+    try {
+      const publicUrl = `http://127.0.0.1:${guard.address().port}`;
+      const exportPath = "/api/portal/billing/export.csv?workspaceId=42";
+      const receiptPath =
+        "/api/portal/billing/receipts/tr_payment123?workspaceId=42";
+
+      const allowedExportGet = await fetch(`${publicUrl}${exportPath}`);
+      const allowedExportHead = await fetch(`${publicUrl}${exportPath}`, {
+        method: "HEAD",
+      });
+      const allowedReceiptGet = await fetch(`${publicUrl}${receiptPath}`);
+      const allowedReceiptHead = await fetch(`${publicUrl}${receiptPath}`, {
+        method: "HEAD",
+      });
+
+      expect([
+        allowedExportGet.status,
+        allowedExportHead.status,
+        allowedReceiptGet.status,
+        allowedReceiptHead.status,
+      ]).toEqual([200, 200, 200, 200]);
+
+      const blockedResponses = await Promise.all([
+        fetch(`${publicUrl}/api/portal/billing/export.csv`, { method: "POST" }),
+        fetch(`${publicUrl}/api/portal/billing/receipts/tr_payment123`, {
+          method: "PUT",
+        }),
+        fetch(`${publicUrl}/api/portal/billing/export.csv/`),
+        fetch(`${publicUrl}/api/portal/billing/export.csv-extra`),
+        fetch(`${publicUrl}/api/portal/billing/receipts`),
+        fetch(`${publicUrl}/api/portal/billing/receipt/tr_payment123`),
+        fetch(`${publicUrl}/api/portal/billing/receipts-extra/tr_payment123`),
+      ]);
+
+      expect(blockedResponses.map((response) => response.status)).toEqual([
+        404, 404, 404, 404, 404, 404, 404,
+      ]);
+      expect(seenPortalRequests).toEqual([
+        { method: "GET", path: exportPath },
+        { method: "HEAD", path: exportPath },
+        { method: "GET", path: receiptPath },
+        { method: "HEAD", path: receiptPath },
+      ]);
+      expect(seenGatewayRequests).toEqual([]);
+    } finally {
+      await closeServer(guard);
+      await closeServer(portalTarget);
+      await closeServer(gatewayTarget);
+    }
+  }, 15000);
+
   it("keeps admin login disabled until an admin token is configured", async () => {
     const target = http.createServer((_req, res) => {
       res.end("target");

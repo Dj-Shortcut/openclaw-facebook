@@ -19,6 +19,7 @@ import { SUPPORTED_LOCALES, type AppLocale } from "./portalLocales";
 
 type LandingCopy = {
   languageLabel: string;
+  interestSubject: string;
   nav: {
     product: string;
     howItWorks: string;
@@ -84,6 +85,7 @@ type LandingCopy = {
 const landingCopies: Record<AppLocale, LandingCopy> = {
   "nl-BE": {
     languageLabel: "Taal",
+    interestSubject: "Interesse in Leaderbot Premium",
     nav: {
       product: "Product",
       howItWorks: "Hoe het werkt",
@@ -224,6 +226,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
   },
   "fr-BE": {
     languageLabel: "Langue",
+    interestSubject: "Intérêt pour Leaderbot Premium",
     nav: {
       product: "Produit",
       howItWorks: "Fonctionnement",
@@ -365,6 +368,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
   },
   en: {
     languageLabel: "Language",
+    interestSubject: "Interest in Leaderbot Premium",
     nav: {
       product: "Product",
       howItWorks: "How it works",
@@ -583,7 +587,7 @@ export default function LandingPage({
 }) {
   const copy = landingCopies[locale];
   const interestHref = `mailto:${PUBLIC_BUSINESS_DETAILS.email}?subject=${encodeURIComponent(
-    "Interesse in Leaderbot Premium"
+    copy.interestSubject
   )}`;
 
   return (
