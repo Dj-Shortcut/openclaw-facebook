@@ -1,11 +1,12 @@
 import express from "express";
 import fs from "node:fs";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { registerMetaWebhookRoutes } from "./_core/meta/webhookRoutes";
-import { serveStatic } from "./_core/vite";
+import { serveStatic, setupVite } from "./_core/vite";
 
 const tempDirs: string[] = [];
 
@@ -55,7 +56,7 @@ describe("serveStatic production mode", () => {
     }
   });
 
-  it("serves index.html for root while keeping healthz and webhook routes working", async () => {
+  it("serves root and nested SPA routes and static assets while keeping API routes working", async () => {
     const app = express();
     const staticDir = createTempBuild();
 
@@ -74,8 +75,21 @@ describe("serveStatic production mode", () => {
     try {
       const rootResponse = await fetch(`${server.baseUrl}/`);
       expect(rootResponse.status).toBe(200);
+      expect(rootResponse.headers.get("content-type")).toContain("text/html");
       const rootHtml = await rootResponse.text();
       expect(rootHtml).toContain("Landing UI");
+
+      const nestedSpaResponse = await fetch(`${server.baseUrl}/gallery/recent`);
+      expect(nestedSpaResponse.status).toBe(200);
+      expect(nestedSpaResponse.headers.get("content-type")).toContain(
+        "text/html"
+      );
+      expect(await nestedSpaResponse.text()).toContain("Landing UI");
+
+      const assetResponse = await fetch(`${server.baseUrl}/assets/app.js`);
+      expect(assetResponse.status).toBe(200);
+      expect(assetResponse.headers.get("content-type")).toContain("javascript");
+      expect(await assetResponse.text()).toBe("console.log('ok');");
 
       const healthResponse = await fetch(`${server.baseUrl}/healthz`);
       expect(healthResponse.status).toBe(200);
@@ -117,5 +131,24 @@ describe("serveStatic production mode", () => {
       await server.close();
     }
   });
+});
 
+describe("setupVite development mode", () => {
+  it("registers Vite middleware and the SPA fallback with Express 5", async () => {
+    const app = express();
+    const server = createServer(app);
+    const createViteServer = vi.fn(async () => ({
+      middlewares: express.Router(),
+      transformIndexHtml: vi.fn(),
+      ssrFixStacktrace: vi.fn(),
+    }));
+
+    await expect(
+      setupVite(
+        app,
+        server,
+        createViteServer as unknown as Parameters<typeof setupVite>[2]
+      )
+    ).resolves.toBeUndefined();
+  });
 });
