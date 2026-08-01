@@ -34,6 +34,8 @@ vi.mock("./_core/messengerWebhook", () => ({
 vi.mock("./_core/internalAiAnswerQuota", () => ({
   reserveInternalAiAnswerQuota: reserveInternalAiAnswerQuotaMock,
   finalizeInternalAiAnswerQuota: finalizeInternalAiAnswerQuotaMock,
+  safeInternalAiAnswerQuotaErrorCode: (error: unknown) =>
+    error instanceof Error ? error.name : "UnknownError",
 }));
 
 import {
@@ -153,6 +155,54 @@ describe("internal AI-answer quota routes", () => {
       pageId: "page-1",
       idempotencyKey: `messenger_ai_answer:${"a".repeat(64)}`,
     });
+  });
+
+  it("rejects an invalid reserve bearer token before touching quota state", async () => {
+    await withListeningApp(createApp(), async baseUrl => {
+      const response = await fetch(
+        `${baseUrl}/internal/messenger/ai-answer-quota/reserve`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer wrong-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            pageId: "page-1",
+            idempotencyKey: `messenger_ai_answer:${"a".repeat(64)}`,
+          }),
+        }
+      );
+
+      expect(response.status).toBe(403);
+      await response.text();
+    });
+    expect(reserveInternalAiAnswerQuotaMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid reserve idempotency key before touching quota state", async () => {
+    await withListeningApp(createApp(), async baseUrl => {
+      const response = await fetch(
+        `${baseUrl}/internal/messenger/ai-answer-quota/reserve`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer route-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            pageId: "page-1",
+            idempotencyKey: "too short",
+          }),
+        }
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "Invalid AI answer quota request",
+      });
+    });
+    expect(reserveInternalAiAnswerQuotaMock).not.toHaveBeenCalled();
   });
 
   it("rejects unauthenticated finalization before touching quota state", async () => {

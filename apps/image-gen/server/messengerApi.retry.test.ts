@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sendImage, sendText, sendVideo } from "./_core/messengerApi";
+import {
+  sendButtonTemplate,
+  sendImage,
+  sendText,
+  sendVideo,
+} from "./_core/messengerApi";
 import { resetStateStore, setLastUserMessageAt } from "./_core/messengerState";
 
 describe("messengerApi retries", () => {
@@ -129,6 +134,27 @@ describe("messengerApi retries", () => {
         },
       },
     });
+  });
+
+  it("limits button-template text to 640 Unicode code points", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+    global.fetch = fetchMock;
+    const expectedText = `${"a".repeat(639)}😀`;
+
+    await sendButtonTemplate("psid-1", `${expectedText}trailing`, [
+      {
+        type: "web_url",
+        title: "Open",
+        url: "https://leaderbot.live",
+      },
+    ]);
+
+    const [, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(request.body));
+    expect(body.message.attachment.payload.text).toBe(expectedText);
+    expect(Array.from(body.message.attachment.payload.text)).toHaveLength(640);
   });
 
   it("retries transient network failures for image sends", async () => {

@@ -49,8 +49,11 @@ function deps(input?: {
         mode,
         planCode: input?.planCode ?? "startpilot_once_v1",
         quota: input?.quota ?? {
+          aiAnswersTotal: 300,
           imagesTotal: 20,
           imagesPerDay: 5,
+          workspaces: 1,
+          facebookPages: 1,
           imageQuality: "images_2",
         },
       };
@@ -113,8 +116,11 @@ describe("workspace entitlement runtime policy", () => {
           mode,
           planCode: "startpilot_once_v1",
           quota: {
+            aiAnswersTotal: 300,
             imagesTotal: 20,
             imagesPerDay: 5,
+            workspaces: 1,
+            facebookPages: 1,
             imageQuality: "images_2",
           },
         };
@@ -135,12 +141,30 @@ describe("workspace entitlement runtime policy", () => {
   });
 
   it("fails closed when entitlement lookup fails", async () => {
+    const driverError = new Error("driver details must stay private");
     await expect(
       resolveWorkspaceRuntimePolicyWithDeps(
         "page-1",
-        deps({ entitlementError: new Error("database offline") })
+        deps({ entitlementError: driverError })
       )
-    ).rejects.toBeInstanceOf(WorkspaceEntitlementLookupError);
+    ).rejects.toMatchObject({
+      name: "WorkspaceEntitlementLookupError",
+      message: "Workspace entitlement lookup failed",
+    });
+    await expect(
+      resolveWorkspaceRuntimePolicyWithDeps(
+        "page-1",
+        deps({ entitlementError: driverError })
+      )
+    ).rejects.not.toHaveProperty("cause");
+  });
+
+  it("preserves invalid billing mode as a configuration error", async () => {
+    process.env.MOLLIE_MODE = "invalid";
+
+    await expect(
+      resolveWorkspaceRuntimePolicyWithDeps("page-1", deps())
+    ).rejects.toBeInstanceOf(WorkspaceEntitlementConfigurationError);
   });
 
   it("rejects malformed paid quota instead of falling back to free", async () => {
@@ -152,23 +176,22 @@ describe("workspace entitlement runtime policy", () => {
     ).rejects.toBeInstanceOf(WorkspaceEntitlementConfigurationError);
   });
 
-  it("clamps unexpectedly enlarged paid limits to the launch cost guard", async () => {
-    const policy = await resolveWorkspaceRuntimePolicyWithDeps(
-      "page-1",
-      deps({
-        quota: {
-          imagesTotal: 999,
-          imagesPerDay: 999,
-          imageQuality: "images_2",
-        },
-      })
-    );
-
-    expect(policy).toMatchObject({
-      kind: "startpilot",
-      imageTotalLimit: 20,
-      imageDailyLimit: 5,
-    });
+  it("fails closed when paid quota exceeds the exact launch catalog", async () => {
+    await expect(
+      resolveWorkspaceRuntimePolicyWithDeps(
+        "page-1",
+        deps({
+          quota: {
+            aiAnswersTotal: 300,
+            imagesTotal: 999,
+            imagesPerDay: 999,
+            workspaces: 1,
+            facebookPages: 1,
+            imageQuality: "images_2",
+          },
+        })
+      )
+    ).rejects.toBeInstanceOf(WorkspaceEntitlementConfigurationError);
   });
 
   it("fails closed for an active paid plan the runtime does not support", async () => {

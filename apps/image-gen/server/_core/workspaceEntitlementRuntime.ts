@@ -4,9 +4,10 @@ import {
   workspaceEntitlements,
 } from "../../drizzle/schema";
 import { getDatabaseOrThrow } from "../db";
+import { STARTPILOT_PLAN_CODE } from "./billing/catalog";
 import { isMollieEntitlementEnforcementEnabled } from "./billing/config";
+import { parseStartpilotQuota } from "./billing/entitlementUsageStore";
 
-const STARTPILOT_PLAN_CODE = "startpilot_once_v1";
 const STARTPILOT_IMAGE_TOTAL_LIMIT = 20;
 const STARTPILOT_IMAGE_DAILY_LIMIT = 5;
 const STARTPILOT_IMAGE_MODEL = "gpt-image-2";
@@ -67,37 +68,12 @@ function runtimeBillingMode(): "test" | "live" {
   );
 }
 
-function readPositiveInteger(value: unknown, field: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) <= 0) {
-    throw new WorkspaceEntitlementConfigurationError(
-      `Startpilot ${field} must be a positive integer`
-    );
-  }
-  return value as number;
-}
-
 function toStartpilotPolicy(
   entitlement: ActiveEntitlement
 ): StartpilotRuntimePolicy {
-  if (
-    typeof entitlement.quota !== "object" ||
-    entitlement.quota === null ||
-    Array.isArray(entitlement.quota)
-  ) {
+  if (!parseStartpilotQuota(entitlement.quota)) {
     throw new WorkspaceEntitlementConfigurationError(
-      "Startpilot quota is missing"
-    );
-  }
-
-  const quota = entitlement.quota as Record<string, unknown>;
-  const configuredTotal = readPositiveInteger(quota.imagesTotal, "imagesTotal");
-  const configuredDaily = readPositiveInteger(
-    quota.imagesPerDay,
-    "imagesPerDay"
-  );
-  if (quota.imageQuality !== "images_2") {
-    throw new WorkspaceEntitlementConfigurationError(
-      "Startpilot imageQuality must be images_2"
+      "Startpilot quota does not match the launch catalog"
     );
   }
 
@@ -106,9 +82,8 @@ function toStartpilotPolicy(
     workspaceId: entitlement.workspaceId,
     entitlementId: entitlement.id,
     mode: entitlement.mode,
-    // Never let an incorrectly enlarged catalog silently increase cost.
-    imageTotalLimit: Math.min(configuredTotal, STARTPILOT_IMAGE_TOTAL_LIMIT),
-    imageDailyLimit: Math.min(configuredDaily, STARTPILOT_IMAGE_DAILY_LIMIT),
+    imageTotalLimit: STARTPILOT_IMAGE_TOTAL_LIMIT,
+    imageDailyLimit: STARTPILOT_IMAGE_DAILY_LIMIT,
     imageModel: STARTPILOT_IMAGE_MODEL,
     imageQuality: "high",
   });
@@ -127,10 +102,8 @@ export async function resolveWorkspaceRuntimePolicyWithDeps(
   let workspaceIds: number[];
   try {
     workspaceIds = await deps.findWorkspaceIdsByFacebookPage(normalizedPageId);
-  } catch (error) {
-    throw new WorkspaceEntitlementLookupError(
-      error instanceof Error ? error.message : undefined
-    );
+  } catch {
+    throw new WorkspaceEntitlementLookupError();
   }
 
   const uniqueWorkspaceIds = Array.from(new Set(workspaceIds));
@@ -143,17 +116,16 @@ export async function resolveWorkspaceRuntimePolicyWithDeps(
     );
   }
 
+  const mode = runtimeBillingMode();
   let entitlement: ActiveEntitlement | null;
   try {
     entitlement = await deps.findActiveEntitlement(
       uniqueWorkspaceIds[0],
-      runtimeBillingMode(),
+      mode,
       now
     );
-  } catch (error) {
-    throw new WorkspaceEntitlementLookupError(
-      error instanceof Error ? error.message : undefined
-    );
+  } catch {
+    throw new WorkspaceEntitlementLookupError();
   }
 
   if (!entitlement) {

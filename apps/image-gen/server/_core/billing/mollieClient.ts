@@ -396,14 +396,18 @@ export class MollieClient {
   }
 }
 
+function isEnabledMollieMethod(method: MollieMethod): boolean {
+  return (
+    !method.status ||
+    method.status === "activated" ||
+    method.status === "active"
+  );
+}
+
 export async function checkMollieOneTimePaymentMethod(client: MollieClient) {
   const methods = await client.listMethods("oneoff");
   const bancontact = methods.some(
-    method =>
-      method.id === "bancontact" &&
-      (!method.status ||
-        method.status === "activated" ||
-        method.status === "active")
+    method => method.id === "bancontact" && isEnabledMollieMethod(method)
   );
   return { bancontact };
 }
@@ -429,15 +433,11 @@ export async function checkMolliePaymentMethods(
     client.listMethods("first"),
     client.listMethods("recurring"),
   ]);
-  const isEnabled = (method: MollieMethod) =>
-    !method.status ||
-    method.status === "activated" ||
-    method.status === "active";
   const bancontact = firstMethods.some(
-    method => method.id === "bancontact" && isEnabled(method)
+    method => method.id === "bancontact" && isEnabledMollieMethod(method)
   );
   const sepaDirectDebit = recurringMethods.some(
-    method => method.id === "directdebit" && isEnabled(method)
+    method => method.id === "directdebit" && isEnabledMollieMethod(method)
   );
   return {
     ok: mode === "live" && bancontact && sepaDirectDebit,

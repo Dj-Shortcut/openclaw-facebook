@@ -1431,10 +1431,17 @@ function Home() {
                     <div className="mt-3 grid gap-4">
                       {billingPlans.map(plan => {
                         const isOneTime = plan.offerType === "one_time";
+                        const entitlementGrantsAccess =
+                          billingEntitlement?.planCode === plan.code &&
+                          (billingEntitlement.status === "active" ||
+                            billingEntitlement.status === "grace") &&
+                          (!billingEntitlement.validUntil ||
+                            new Date(billingEntitlement.validUntil).getTime() >
+                              Date.now());
                         const matchingAccess =
                           billingSubscription?.planCode === plan.code
                             ? billingSubscription
-                            : billingEntitlement?.planCode === plan.code
+                            : entitlementGrantsAccess
                               ? billingEntitlement
                               : null;
 

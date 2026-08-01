@@ -47,7 +47,7 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
     sections: [
       {
         heading: "Draft Startpilot offer",
-        body: "Leaderbot Startpilot is proposed at €19 as a single payment for 30 days. It includes one workspace, one connected Facebook Page, 300 AI answers and 20 Images 2.0 image generations, with a maximum of five image generations per day. The public website is interest-only while paid launch remains disabled.",
+        body: "Leaderbot Startpilot is proposed at €19 as a single payment for 30 days. It includes one workspace, one connected Facebook Page, 300 AI answers and 20 Images 2.0 image generations, with a maximum of five image generations per day. An image generation counts once when its first AI-provider attempt starts; retries within that same request do not consume extra pilot generations. The public website is interest-only while paid launch remains disabled.",
       },
       {
         heading: "No subscription or overage",
@@ -82,7 +82,7 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
       },
       {
         heading: "Included pilot usage",
-        body: "The proposed package covers one workspace, one Facebook Page, 300 AI answers and 20 Images 2.0 image generations. Image generation is additionally limited to five per day during the 30-day access period.",
+        body: "The proposed package covers one workspace, one Facebook Page, 300 AI answers and 20 Images 2.0 image generations. Image generation is additionally limited to five per day during the 30-day access period. A generation counts once when its first AI-provider attempt starts; retries within the same request do not consume another pilot generation.",
       },
       {
         heading: "No renewal, top-up or overage",

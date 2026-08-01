@@ -9,17 +9,22 @@ passed without a dated artifact that contains no secret or customer data.
 ## Local automated evidence (2026-08-01)
 
 - Image-gen `tsc --noEmit`: PASS.
-- Full image-gen Vitest suite: PASS, 96 files / 842 tests.
-- Root Vitest suite: PASS, 16 files / 185 tests.
+- Full image-gen Vitest suite: PASS, 120 files / 1,017 tests.
+- Root Vitest suite: PASS, 17 files / 197 tests.
 - Exact public gateway route suite: PASS, 1 file / 16 tests.
 - Image-gen ESLint: PASS.
 - Image-gen production build and root TypeScript build: PASS.
 - Offline `drizzle-kit check`: PASS with the cumulative `0009` snapshot (a
   local dummy connection string was supplied because the config requires URL
   syntax; no database connection or migration was performed).
+- Fresh MySQL 8.4 migration through cumulative migration `0010`: the pre-guard
+  revision passed GitHub CI run `30713688838`, job `91405510390` on
+  2026-08-01. The current revision adds a fail-fast duplicate-claim guard and
+  remains PENDING until the next CI run. Neither result is Mollie provider or
+  production migration evidence.
 - `git diff --check`: PASS.
-- Disposable MySQL fresh/upgrade migration: NOT RUN (no database/Docker
-  runtime available).
+- Existing-schema upgrade migration through `0010`: NOT RUN.
+- Production migration through `0010`: NOT RUN.
 
 These local results validate code contracts only; they do not convert any
 provider scenario below from NOT RUN to PASS.

@@ -33,7 +33,7 @@ export function renderMessengerQuickReplies(
   }
 
   return actions.flatMap(action => {
-    if (action.url) {
+    if (action.url && normalizeSafeActionUrl(action.url)) {
       return [];
     }
     const title = normalizeActionValue(action.label);

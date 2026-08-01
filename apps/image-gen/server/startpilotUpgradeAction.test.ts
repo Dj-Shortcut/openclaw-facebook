@@ -45,7 +45,7 @@ describe("Startpilot upgrade action", () => {
 
   it("renders allowlisted HTTPS URLs as Messenger web buttons, not quick replies", () => {
     process.env.NODE_ENV = "production";
-    process.env.APP_BASE_URL = "https://leaderbot.live";
+    process.env.PORTAL_BASE_URL = "https://leaderbot.live";
     const actions = buildStartpilotQuotaReachedResponse("en").actions;
 
     expect(renderMessengerQuickReplies(actions)).toEqual([]);
@@ -73,20 +73,45 @@ describe("Startpilot upgrade action", () => {
     ]);
   });
 
-  it("rejects credentials, insecure production URLs, and other origins", () => {
+  it("omits the upgrade action when only the backend host is configured", () => {
     process.env.NODE_ENV = "production";
-    process.env.APP_BASE_URL = "https://leaderbot.live";
+    process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
+    delete process.env.PORTAL_BASE_URL;
+    delete process.env.LEADERBOT_PUBLIC_URL;
 
-    expect(
-      renderMessengerUrlButtons([
-        { id: "evil", label: "Open", url: "https://evil.example/pay" },
-        {
-          id: "credentials",
-          label: "Open",
-          url: "https://user:pass@leaderbot.live/pay",
-        },
-        { id: "http", label: "Open", url: "http://leaderbot.live/pay" },
-      ])
-    ).toEqual([]);
+    expect(buildStartpilotQuotaReachedResponse("en").actions).toEqual([]);
+  });
+
+  it("falls back to quick replies for URL actions rejected as web buttons", () => {
+    process.env.NODE_ENV = "production";
+    process.env.PORTAL_BASE_URL = "https://leaderbot.live";
+    const actions = [
+      { id: "evil", label: "Open", url: "https://evil.example/pay" },
+      {
+        id: "credentials",
+        label: "Open",
+        url: "https://user:pass@leaderbot.live/pay",
+      },
+      { id: "http", label: "Open", url: "http://leaderbot.live/pay" },
+    ];
+
+    expect(renderMessengerUrlButtons(actions)).toEqual([]);
+    expect(renderMessengerQuickReplies(actions)).toEqual([
+      {
+        content_type: "text",
+        title: "Open",
+        payload: "OPENCLAW_ACTION:Open",
+      },
+      {
+        content_type: "text",
+        title: "Open",
+        payload: "OPENCLAW_ACTION:Open",
+      },
+      {
+        content_type: "text",
+        title: "Open",
+        payload: "OPENCLAW_ACTION:Open",
+      },
+    ]);
   });
 });

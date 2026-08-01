@@ -13,6 +13,7 @@ import type { MessengerSendOutcome } from "./messengerApi";
 import {
   finalizeInternalAiAnswerQuota,
   reserveInternalAiAnswerQuota,
+  safeInternalAiAnswerQuotaErrorCode,
 } from "./internalAiAnswerQuota";
 
 const internalImageRequestSchema = z.object({
@@ -44,7 +45,7 @@ const internalAiAnswerQuotaReserveSchema = z.object({
 
 const internalAiAnswerQuotaFinalizeSchema = z.object({
   pageId: z.string().trim().min(1).max(160),
-  reservationId: z.string().uuid(),
+  reservationId: z.uuid(),
   outcome: z.enum(["committed", "released"]),
 });
 
@@ -141,8 +142,11 @@ export function registerInternalImageRequestRoutes(app: Express): void {
       }
       try {
         res.status(200).json(await reserveInternalAiAnswerQuota(parsed.data));
-      } catch {
-        safeLog("internal_ai_answer_quota_reserve_failed", { level: "error" });
+      } catch (error) {
+        safeLog("internal_ai_answer_quota_reserve_failed", {
+          level: "error",
+          errorCode: safeInternalAiAnswerQuotaErrorCode(error),
+        });
         res.status(503).json({ error: "AI answer quota is unavailable" });
       }
     }
@@ -160,8 +164,11 @@ export function registerInternalImageRequestRoutes(app: Express): void {
       }
       try {
         res.status(200).json(await finalizeInternalAiAnswerQuota(parsed.data));
-      } catch {
-        safeLog("internal_ai_answer_quota_finalize_failed", { level: "error" });
+      } catch (error) {
+        safeLog("internal_ai_answer_quota_finalize_failed", {
+          level: "error",
+          errorCode: safeInternalAiAnswerQuotaErrorCode(error),
+        });
         res.status(503).json({ error: "AI answer quota is unavailable" });
       }
     }

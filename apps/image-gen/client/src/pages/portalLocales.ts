@@ -140,7 +140,8 @@ const enCopy = {
     pilotIncludes: "The Startpilot includes",
     pilotWorkspacePage: "1 workspace and 1 Facebook Page",
     pilotAnswers: "300 AI answers",
-    pilotImages: "20 Images 2.0 images, with a maximum of 5 per day",
+    pilotImages:
+      "20 Images 2.0 generations, with a maximum of 5 generations per day",
     noAutomaticRenewal: "No automatic renewal",
     noAutomaticRenewalBody:
       "This is a one-time purchase. It does not create a subscription or direct-debit mandate.",
@@ -426,7 +427,7 @@ const nlBeCopy: PortalCopy = {
     pilotIncludes: "De Startpilot bevat",
     pilotWorkspacePage: "1 werkruimte en 1 Facebookpagina",
     pilotAnswers: "300 AI-antwoorden",
-    pilotImages: "20 Images 2.0-beelden, met maximaal 5 per dag",
+    pilotImages: "20 Images 2.0-generaties, met maximaal 5 generaties per dag",
     noAutomaticRenewal: "Geen automatische verlenging",
     noAutomaticRenewalBody:
       "Dit is een eenmalige aankoop. Er wordt geen abonnement of domiciliëringsmandaat aangemaakt.",
@@ -447,7 +448,7 @@ const nlBeCopy: PortalCopy = {
     startSubscription: "Verder naar Mollie",
     buyStartpilot: "Startpilot kopen via Mollie",
     openingCheckout: "Mollie openen...",
-    planLoadError: "Het beschikbare abonnement kon niet geladen worden.",
+    planLoadError: "Het beschikbare aanbod kon niet geladen worden.",
     summaryLoadError:
       "Facturatiegegevens konden niet geladen worden. Probeer opnieuw.",
     checkoutError: "Mollie Checkout kon niet geopend worden. Probeer opnieuw.",
@@ -712,7 +713,8 @@ const frBeCopy: PortalCopy = {
     pilotIncludes: "Le pilote comprend",
     pilotWorkspacePage: "1 espace de travail et 1 Page Facebook",
     pilotAnswers: "300 réponses IA",
-    pilotImages: "20 images Images 2.0, avec un maximum de 5 par jour",
+    pilotImages:
+      "20 générations Images 2.0, avec un maximum de 5 générations par jour",
     noAutomaticRenewal: "Aucun renouvellement automatique",
     noAutomaticRenewalBody:
       "Il s'agit d'un achat unique. Aucun abonnement ni mandat de prélèvement n'est créé.",
@@ -733,7 +735,7 @@ const frBeCopy: PortalCopy = {
     startSubscription: "Continuer vers Mollie",
     buyStartpilot: "Acheter le pilote via Mollie",
     openingCheckout: "Ouverture de Mollie...",
-    planLoadError: "Impossible de charger l'abonnement disponible.",
+    planLoadError: "Impossible de charger l'offre disponible.",
     summaryLoadError:
       "Impossible de charger les données de facturation. Réessayez.",
     checkoutError: "Impossible d'ouvrir Mollie Checkout. Réessayez.",

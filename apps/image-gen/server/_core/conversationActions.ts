@@ -80,9 +80,7 @@ export function buildGenerationFailureResponse(
 function getSafePortalUpgradeUrl(): string | undefined {
   const configured =
     process.env.PORTAL_BASE_URL?.trim() ||
-    process.env.LEADERBOT_PUBLIC_URL?.trim() ||
-    process.env.APP_BASE_URL?.trim() ||
-    process.env.BASE_URL?.trim();
+    process.env.LEADERBOT_PUBLIC_URL?.trim();
   if (!configured) return undefined;
 
   try {

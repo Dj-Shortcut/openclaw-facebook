@@ -121,7 +121,7 @@ export function formatAmountMinor(amountMinor: number): string {
 
 export function addPlanInterval(
   from: Date,
-  interval: BillingPlan["interval"]
+  interval: Extract<BillingPlan["interval"], "1 month">
 ): Date {
   if (interval !== "1 month") {
     throw new Error("unsupported billing interval");

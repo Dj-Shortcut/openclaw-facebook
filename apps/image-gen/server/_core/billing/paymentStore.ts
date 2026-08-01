@@ -9,11 +9,13 @@ import {
   webhookDeliveries,
   workspaceEntitlements,
   workspaceEntitlementUsage,
+  workspaceEntitlementUsageReservations,
 } from "../../../drizzle/schema";
 import { getDatabaseOrThrow } from "../../db";
 import {
   addPlanInterval,
   formatAmountMinor,
+  getBillingPlan,
   STARTPILOT_PLAN_CODE,
 } from "./catalog";
 import { deterministicIdempotencyKey } from "./ids";
@@ -54,11 +56,11 @@ type StartpilotPlanSnapshot = {
   interval: "30 days";
   accessDurationDays: 30;
   entitlements: {
-    aiAnswersTotal: 300;
-    imagesTotal: 20;
-    imagesPerDay: 5;
-    workspaces: 1;
-    facebookPages: 1;
+    aiAnswersTotal: number;
+    imagesTotal: number;
+    imagesPerDay: number;
+    workspaces: number;
+    facebookPages: number;
     imageQuality: "images_2";
   };
   mollieDescription: string;
@@ -713,9 +715,73 @@ async function applyStartpilotPaymentStatus(
       imagesUsedToday: 0,
     })
     .onDuplicateKeyUpdate({
-      // A provider retry must never reset consumed or reserved usage.
+      // The scoped update below decides whether this is a retry or a new sale.
       set: { planCode: sql`plan_code` },
     });
+  const usageRows = await tx
+    .select()
+    .from(workspaceEntitlementUsage)
+    .where(
+      and(
+        eq(workspaceEntitlementUsage.workspaceId, context.workspaceId),
+        eq(workspaceEntitlementUsage.mode, context.intent.mode),
+        eq(workspaceEntitlementUsage.entitlementId, entitlement.id),
+        eq(workspaceEntitlementUsage.planCode, plan.code)
+      )
+    )
+    .limit(1)
+    .for("update");
+  const usage = usageRows[0];
+  if (!usage) {
+    throw new Error("Startpilot usage row is unavailable");
+  }
+
+  // A provider retry has the same source intent and must preserve usage. A
+  // separately paid intent reuses the entitlement row but gets a fresh quota.
+  // Expire the previous period's in-flight AI reservations first so a delayed
+  // finalize cannot consume the new period's counters.
+  if (usage.sourceIntentId !== context.intent.intentId) {
+    await tx
+      .update(workspaceEntitlementUsageReservations)
+      .set({ status: "expired", releasedAt: paidAt })
+      .where(
+        and(
+          eq(
+            workspaceEntitlementUsageReservations.workspaceId,
+            context.workspaceId
+          ),
+          eq(workspaceEntitlementUsageReservations.mode, context.intent.mode),
+          eq(
+            workspaceEntitlementUsageReservations.entitlementId,
+            entitlement.id
+          ),
+          eq(workspaceEntitlementUsageReservations.kind, "ai_answer"),
+          eq(workspaceEntitlementUsageReservations.status, "reserved")
+        )
+      );
+    await tx
+      .update(workspaceEntitlementUsage)
+      .set({
+        planCode: plan.code,
+        sourceIntentId: context.intent.intentId,
+        periodStartedAt: paidAt,
+        periodEndsAt: validUntil,
+        aiAnswersCommitted: 0,
+        aiAnswersReserved: 0,
+        imagesUsed: 0,
+        imageUsageDate: null,
+        imagesUsedToday: 0,
+      })
+      .where(
+        and(
+          eq(workspaceEntitlementUsage.workspaceId, context.workspaceId),
+          eq(workspaceEntitlementUsage.mode, context.intent.mode),
+          eq(workspaceEntitlementUsage.entitlementId, entitlement.id),
+          eq(workspaceEntitlementUsage.planCode, plan.code),
+          eq(workspaceEntitlementUsage.sourceIntentId, usage.sourceIntentId)
+        )
+      );
+  }
   return true;
 }
 
@@ -1379,34 +1445,24 @@ function getIntentPlanSnapshot(
   }
   const entitlements = intent.entitlements as Record<string, unknown>;
   if (intent.kind === "startpilot_purchase") {
+    const catalogPlan = getStartpilotCatalogPlan();
     if (
+      !catalogPlan ||
       intent.planCode !== STARTPILOT_PLAN_CODE ||
-      intent.interval !== "30 days" ||
-      entitlements.aiAnswersTotal !== 300 ||
-      entitlements.imagesTotal !== 20 ||
-      entitlements.imagesPerDay !== 5 ||
-      entitlements.workspaces !== 1 ||
-      entitlements.facebookPages !== 1 ||
-      entitlements.imageQuality !== "images_2"
+      intent.interval !== catalogPlan.interval ||
+      entitlements.aiAnswersTotal !== catalogPlan.entitlements.aiAnswersTotal ||
+      entitlements.imagesTotal !== catalogPlan.entitlements.imagesTotal ||
+      entitlements.imagesPerDay !== catalogPlan.entitlements.imagesPerDay ||
+      entitlements.workspaces !== catalogPlan.entitlements.workspaces ||
+      entitlements.facebookPages !== catalogPlan.entitlements.facebookPages ||
+      entitlements.imageQuality !== catalogPlan.entitlements.imageQuality
     ) {
       return null;
     }
     try {
       return {
-        code: STARTPILOT_PLAN_CODE,
+        ...catalogPlan,
         amountMinor: parseEurValueMinor(intent.expectedAmount),
-        currency: "EUR",
-        offerType: "one_time",
-        interval: "30 days",
-        accessDurationDays: 30,
-        entitlements: {
-          aiAnswersTotal: 300,
-          imagesTotal: 20,
-          imagesPerDay: 5,
-          workspaces: 1,
-          facebookPages: 1,
-          imageQuality: "images_2",
-        },
         mollieDescription: intent.mollieDescription,
       };
     } catch {
@@ -1441,6 +1497,49 @@ function getIntentPlanSnapshot(
   } catch {
     return null;
   }
+}
+
+function getStartpilotCatalogPlan(): StartpilotPlanSnapshot | null {
+  const plan = getBillingPlan(STARTPILOT_PLAN_CODE);
+  const entitlements = plan?.entitlements;
+  if (
+    !plan ||
+    plan.code !== STARTPILOT_PLAN_CODE ||
+    plan.currency !== "EUR" ||
+    plan.offerType !== "one_time" ||
+    plan.interval !== "30 days" ||
+    plan.accessDurationDays !== 30 ||
+    !entitlements ||
+    !isPositiveSafeInteger(entitlements.aiAnswersTotal) ||
+    !isPositiveSafeInteger(entitlements.imagesTotal) ||
+    !isPositiveSafeInteger(entitlements.imagesPerDay) ||
+    !isPositiveSafeInteger(entitlements.workspaces) ||
+    !isPositiveSafeInteger(entitlements.facebookPages) ||
+    entitlements.imageQuality !== "images_2"
+  ) {
+    return null;
+  }
+  return {
+    code: STARTPILOT_PLAN_CODE,
+    amountMinor: plan.amountMinor,
+    currency: "EUR",
+    offerType: "one_time",
+    interval: "30 days",
+    accessDurationDays: 30,
+    entitlements: {
+      aiAnswersTotal: entitlements.aiAnswersTotal,
+      imagesTotal: entitlements.imagesTotal,
+      imagesPerDay: entitlements.imagesPerDay,
+      workspaces: entitlements.workspaces,
+      facebookPages: entitlements.facebookPages,
+      imageQuality: "images_2",
+    },
+    mollieDescription: plan.mollieDescription,
+  };
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) > 0;
 }
 
 function metadataMatchesIntent(metadata: unknown, intentId: string): boolean {

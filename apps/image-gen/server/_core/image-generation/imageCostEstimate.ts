@@ -7,17 +7,18 @@ type ImageCostEstimate = {
   estimatedCostUsd?: number;
   estimatedOutputCostUsd?: number;
   costEstimateComplete: boolean;
-  unpricedCostComponents?: Array<"output_image" | "source_image_input">;
+  unpricedCostComponents?: Array<
+    "output_image" | "prompt_input" | "source_image_input"
+  >;
   estimateSource:
     | "env_override"
     | "gpt_image_2_table"
     | "gpt_image_1_table"
+    | "partial_prompt_input_unpriced"
     | "partial_source_image_input_unpriced"
     | "unpriced";
 };
 
-const DEFAULT_OPENAI_IMAGE_SIZE = "1024x1024";
-const DEFAULT_OPENAI_IMAGE_QUALITY = "auto";
 const DEFAULT_OPENAI_IMAGE_PRICING_MODEL = "gpt-image-1";
 
 const GPT_IMAGE_1_PER_IMAGE_USD: Record<string, Record<string, number>> = {
@@ -67,67 +68,6 @@ function readUsdEnv(name: string): number | undefined {
 
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function findImageGenerationTool(payload: unknown): Record<string, unknown> | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-
-  const tools = (payload as { tools?: unknown }).tools;
-  if (!Array.isArray(tools)) {
-    return null;
-  }
-
-  return (
-    tools.find(
-      tool =>
-        Boolean(tool && typeof tool === "object") &&
-        (tool as { type?: unknown }).type === "image_generation"
-    ) as Record<string, unknown> | undefined
-  ) ?? null;
-}
-
-export function readOpenAiImageCostOptionsFromRequestBody(body: unknown): {
-  size: string;
-  quality: string;
-  inputFidelity?: string;
-} {
-  if (typeof FormData !== "undefined" && body instanceof FormData) {
-    const inputFidelity = readString(body.get("input_fidelity"));
-    return {
-      size: readString(body.get("size")) ?? DEFAULT_OPENAI_IMAGE_SIZE,
-      quality:
-        readString(body.get("quality")) ?? DEFAULT_OPENAI_IMAGE_QUALITY,
-      ...(inputFidelity ? { inputFidelity } : {}),
-    };
-  }
-
-  const payload: unknown =
-    typeof body === "string" ? (JSON.parse(body) as unknown) : body;
-  const imageTool = findImageGenerationTool(payload);
-  const directImagePayload =
-    payload && typeof payload === "object"
-      ? (payload as Record<string, unknown>)
-      : undefined;
-
-  return {
-    size:
-      readString(imageTool?.size) ??
-      readString(directImagePayload?.size) ??
-      DEFAULT_OPENAI_IMAGE_SIZE,
-    quality:
-      readString(imageTool?.quality) ??
-      readString(directImagePayload?.quality) ??
-      DEFAULT_OPENAI_IMAGE_QUALITY,
-    inputFidelity:
-      readString(imageTool?.input_fidelity) ??
-      readString(directImagePayload?.input_fidelity),
-  };
 }
 
 function estimateOutputImageCost(input: {
@@ -202,8 +142,36 @@ export function estimateOpenAiImageRequestCost(input: {
         ? { estimatedOutputCostUsd: outputEstimate }
         : {}),
       costEstimateComplete: false,
-      unpricedCostComponents: ["source_image_input"],
+      unpricedCostComponents:
+        pricingModel.toLowerCase() === "gpt-image-2"
+          ? ["prompt_input", "source_image_input"]
+          : ["source_image_input"],
       estimateSource: "partial_source_image_input_unpriced",
+    };
+  }
+
+  // The GPT Image 2 table is output-only. Without an operator-supplied total,
+  // prompt input remains unpriced and spend-cap enforcement must fail closed.
+  if (pricingModel.toLowerCase() === "gpt-image-2") {
+    return {
+      model: input.model,
+      pricingModel,
+      size: input.size,
+      quality: input.quality,
+      ...(input.inputFidelity ? { inputFidelity: input.inputFidelity } : {}),
+      estimatedCostUsd: undefined,
+      ...(outputEstimate !== undefined
+        ? { estimatedOutputCostUsd: outputEstimate }
+        : {}),
+      costEstimateComplete: false,
+      unpricedCostComponents:
+        outputEstimate === undefined
+          ? ["prompt_input", "output_image"]
+          : ["prompt_input"],
+      estimateSource:
+        outputEstimate === undefined
+          ? "unpriced"
+          : "partial_prompt_input_unpriced",
     };
   }
 

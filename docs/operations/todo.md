@@ -308,6 +308,7 @@ Quota drift investigation note:
 - [ ] Partition the Redis image-generation queue by owning workspace before multi-tenant paid onboarding; queued PSID, prompt, and source-image jobs must never share an unscoped global customer queue.
 - [ ] Define a separate immutable subscription-history/event model if historical rows become a product or accounting requirement; `billing_subscriptions` currently stores one mutable current-state row per workspace and Mollie mode.
 - [x] Map inbound channel/Page identity uniquely to a workspace and enforce `workspace_entitlements` before the actual image-provider attempt; the database claim now fails closed instead of overwriting another workspace's Page credentials.
+- [x] Count one Startpilot image unit when the first provider attempt for a Messenger generation job starts; provider retries remain individually cost-ledgered and budget-gated but do not consume extra customer pilot generations.
 - [ ] Prove the Page-to-workspace mapping and both paid quota gates in a production-like end-to-end test after the duplicate-Page preflight and migration, without any free-tier fallback.
 - [ ] Replace the isolated single-workspace billing worker with a durable tenant-partitioned scheduler that never performs cross-tenant reads.
 - [ ] Extract billing outbox queue mechanics from provider handlers after the billing behavior is stable; keep this follow-up separate from launch-critical correctness changes.

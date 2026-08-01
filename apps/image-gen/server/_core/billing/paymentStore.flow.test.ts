@@ -8,6 +8,7 @@ import {
   webhookDeliveries,
   workspaceEntitlements,
   workspaceEntitlementUsage,
+  workspaceEntitlementUsageReservations,
   type BillingCustomer,
   type BillingIntent,
   type BillingSubscription,
@@ -68,6 +69,71 @@ describe("payment snapshot persistence flow", () => {
           entry.table === billingOutbox &&
           ["ensure_subscription", "cancel_subscription"].includes(
             String(entry.values.eventType)
+          )
+      )
+    ).toBe(false);
+  });
+
+  it("expires old AI reservations before resetting usage for a new Startpilot purchase", async () => {
+    const flow = paymentFlow({
+      intent: startpilotIntent(),
+      usageSourceIntentId: "c4695347-4768-4de7-b327-1aaf00da45c1",
+    });
+    databaseMock.mockResolvedValue(flow.database);
+
+    await expect(
+      applyMolliePaymentSnapshot(
+        molliePayment({ amount: { currency: "EUR", value: "19.00" } }),
+        1
+      )
+    ).resolves.toEqual({ result: "processed", workspaceId: 1 });
+
+    expect(flow.updates).toContainEqual({
+      table: workspaceEntitlementUsageReservations,
+      values: {
+        status: "expired",
+        releasedAt: new Date("2026-08-01T10:00:00.000Z"),
+      },
+    });
+    expect(flow.updates).toContainEqual({
+      table: workspaceEntitlementUsage,
+      values: expect.objectContaining({
+        sourceIntentId: INTENT_ID,
+        aiAnswersCommitted: 0,
+        aiAnswersReserved: 0,
+        imagesUsed: 0,
+        imagesUsedToday: 0,
+      }),
+    });
+    expect(
+      flow.operations.indexOf("update:workspaceEntitlementUsageReservations")
+    ).toBeLessThan(flow.operations.indexOf("update:workspaceEntitlementUsage"));
+  });
+
+  it("preserves Startpilot usage and reservations for a provider retry", async () => {
+    const flow = paymentFlow({
+      intent: startpilotIntent(),
+      usageSourceIntentId: INTENT_ID,
+    });
+    databaseMock.mockResolvedValue(flow.database);
+
+    await applyMolliePaymentSnapshot(
+      molliePayment({ amount: { currency: "EUR", value: "19.00" } }),
+      1
+    );
+
+    expect(
+      flow.updates.some(
+        entry => entry.table === workspaceEntitlementUsageReservations
+      )
+    ).toBe(false);
+    expect(
+      flow.updates.some(
+        entry =>
+          entry.table === workspaceEntitlementUsage &&
+          Object.prototype.hasOwnProperty.call(
+            entry.values,
+            "aiAnswersCommitted"
           )
       )
     ).toBe(false);
@@ -363,6 +429,7 @@ function paymentFlow(
     subscription?: BillingSubscription | null;
     intent?: BillingIntent;
     ledgerPaidEffectApplied?: number;
+    usageSourceIntentId?: string;
   } = {}
 ) {
   const inserts: Array<{
@@ -388,6 +455,22 @@ function paymentFlow(
     if (table === workspaceEntitlements) {
       return [{ id: 9, status: "active" }];
     }
+    if (table === workspaceEntitlementUsage) {
+      return [
+        {
+          id: 11,
+          workspaceId: 1,
+          mode: intent.mode,
+          entitlementId: 9,
+          planCode: "startpilot_once_v1",
+          sourceIntentId: options.usageSourceIntentId ?? intent.intentId,
+          aiAnswersCommitted: 4,
+          aiAnswersReserved: 1,
+          imagesUsed: 2,
+          imagesUsedToday: 1,
+        },
+      ];
+    }
     if (table === paymentLedger) {
       paymentLedgerSelectCount += 1;
       if (paymentLedgerSelectCount > 1) return [];
@@ -407,6 +490,9 @@ function paymentFlow(
     if (table === paymentLedger) return "paymentLedger";
     if (table === workspaceEntitlements) return "workspaceEntitlements";
     if (table === workspaceEntitlementUsage) return "workspaceEntitlementUsage";
+    if (table === workspaceEntitlementUsageReservations) {
+      return "workspaceEntitlementUsageReservations";
+    }
     if (table === billingOutbox) return "billingOutbox";
     if (table === webhookDeliveries) return "webhookDeliveries";
     if (table === billingIntents) return "billingIntents";
@@ -423,7 +509,8 @@ function paymentFlow(
             if (
               table === billingIntents ||
               table === billingSubscriptions ||
-              table === workspaceEntitlements
+              table === workspaceEntitlements ||
+              table === workspaceEntitlementUsage
             ) {
               return { for: vi.fn().mockResolvedValue(rows) };
             }

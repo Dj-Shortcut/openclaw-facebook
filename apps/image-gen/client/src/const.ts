@@ -4,6 +4,7 @@ const getOptionalEnvString = (value: unknown): string | undefined => {
 
 const OAUTH_STATE_COOKIE_NAME = "lb_oauth_state_nonce";
 const PUBLIC_CONFIG_PATH = "/api/public/config";
+const PUBLIC_CONFIG_TIMEOUT_MS = 5_000;
 
 type OAuthBrowserConfig = {
   portalUrl: string;
@@ -32,6 +33,9 @@ function normalizeOAuthPortalUrl(value: unknown): string | undefined {
 }
 
 function getBuildTimeOAuthConfig(): OAuthBrowserConfig | null {
+  // OAUTH_PORTAL_URL is served at runtime through PUBLIC_CONFIG_PATH. This
+  // Vite-prefixed value is an explicit local/build fallback when that request
+  // is unavailable; Vite does not expose unprefixed server environment values.
   const portalUrl = normalizeOAuthPortalUrl(
     import.meta.env.VITE_OAUTH_PORTAL_URL
   );
@@ -60,16 +64,25 @@ function getOAuthBrowserConfig(): OAuthBrowserConfig | null {
 export async function loadPublicRuntimeConfig(
   fetcher: typeof globalThis.fetch = globalThis.fetch
 ): Promise<void> {
+  const abortController = new AbortController();
+  const timeout = setTimeout(
+    () => abortController.abort(),
+    PUBLIC_CONFIG_TIMEOUT_MS
+  );
+
   try {
     const response = await fetcher(PUBLIC_CONFIG_PATH, {
       credentials: "same-origin",
       headers: { Accept: "application/json" },
+      signal: abortController.signal,
     });
     if (!response.ok) return;
     runtimeOAuthConfig = parsePublicRuntimeConfig(await response.json());
   } catch {
     // Keep the build-time fallback for local development and fail closed when
     // neither source supplies complete public OAuth configuration.
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

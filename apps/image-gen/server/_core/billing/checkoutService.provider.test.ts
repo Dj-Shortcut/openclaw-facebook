@@ -105,12 +105,13 @@ describe("Mollie checkout provider failure boundary", () => {
       createdAt: "2026-08-01T00:00:00.000Z",
     });
     const createFirstPayment = vi.fn();
+    const listMethods = vi
+      .fn<MollieClient["listMethods"]>()
+      .mockResolvedValue([
+        { resource: "method", id: "bancontact", status: "active" },
+      ]);
     const client = {
-      listMethods: vi
-        .fn()
-        .mockResolvedValue([
-          { resource: "method", id: "bancontact", status: "active" },
-        ]),
+      listMethods,
       createOneTimePayment,
       createFirstPayment,
       getHostedCheckoutUrl: vi
@@ -136,6 +137,7 @@ describe("Mollie checkout provider failure boundary", () => {
       })
     );
     expect(createFirstPayment).not.toHaveBeenCalled();
+    expect(listMethods).toHaveBeenCalledWith("oneoff");
   });
 });
 

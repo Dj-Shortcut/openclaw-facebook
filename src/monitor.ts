@@ -2082,8 +2082,10 @@ export async function processMessengerEvent(params: {
       outcome,
     });
     if (!finalized) {
-      logVerbose(
-        `messenger: paid AI answer quota finalization failed outcome=${outcome} account=${params.account.accountId}`,
+      params.runtime.error?.(
+        danger(
+          `messenger paid AI answer quota finalization failed outcome=${outcome} account=${params.account.accountId}`,
+        ),
       );
     }
   }

@@ -260,6 +260,14 @@ export async function sendQuickReplies(
   });
 }
 
+const MESSENGER_BUTTON_TEMPLATE_TEXT_MAX_LENGTH = 640;
+
+function normalizeButtonTemplateText(text: string): string {
+  return Array.from(text)
+    .slice(0, MESSENGER_BUTTON_TEMPLATE_TEXT_MAX_LENGTH)
+    .join("");
+}
+
 export async function sendButtonTemplate(
   psid: string,
   text: string,
@@ -270,7 +278,7 @@ export async function sendButtonTemplate(
       type: "template",
       payload: {
         template_type: "button",
-        text,
+        text: normalizeButtonTemplateText(text),
         buttons,
       },
     },

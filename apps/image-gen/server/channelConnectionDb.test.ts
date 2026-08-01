@@ -138,12 +138,79 @@ describe("channel connection database claims", () => {
     );
   });
 
-  it("converts a concurrent unique-key race into the same fail-closed conflict", async () => {
-    const pageClaim = lockedSelect([]);
-    const workspaceConnection = lockedSelect([]);
+  it.each([
+    "channelConnections_workspace_channel_unique",
+    "channelConnections_channel_externalId_unique",
+  ])(
+    "retries a same-workspace insert race reported by %s",
+    async constraint => {
+      const initialPageClaim = lockedSelect([]);
+      const initialWorkspaceConnection = lockedSelect([]);
+      const retriedPageClaim = lockedSelect([{ id: 7, workspaceId: 42 }]);
+      const retriedWorkspaceConnection = lockedSelect([{ id: 7 }]);
+      const listed = [{ id: 7, ...connection }];
+      const list = listSelect(listed);
+      dbMock.select
+        .mockReturnValueOnce({ from: initialPageClaim.from })
+        .mockReturnValueOnce({ from: initialWorkspaceConnection.from })
+        .mockReturnValueOnce({ from: retriedPageClaim.from })
+        .mockReturnValueOnce({ from: retriedWorkspaceConnection.from })
+        .mockReturnValueOnce({ from: list.from });
+      const values = vi.fn().mockRejectedValueOnce(
+        Object.assign(new Error(`Duplicate entry for ${constraint}`), {
+          code: "ER_DUP_ENTRY",
+          errno: 1062,
+          constraint,
+        })
+      );
+      dbMock.insert.mockReturnValue({ values });
+      const updateWhere = vi.fn(async () => undefined);
+      dbMock.update.mockReturnValue({
+        set: vi.fn(() => ({ where: updateWhere })),
+      });
+
+      await expect(upsertChannelConnection(connection)).resolves.toEqual(
+        listed
+      );
+
+      expect(dbMock.transaction).toHaveBeenCalledTimes(2);
+      expect(retriedPageClaim.lock).toHaveBeenCalledWith("update");
+      expect(dbMock.update).toHaveBeenCalledOnce();
+    }
+  );
+
+  it("fails closed when a duplicate race resolves to another workspace", async () => {
+    const initialPageClaim = lockedSelect([]);
+    const initialWorkspaceConnection = lockedSelect([]);
+    const conflictingPageClaim = lockedSelect([{ id: 8, workspaceId: 99 }]);
     dbMock.select
-      .mockReturnValueOnce({ from: pageClaim.from })
-      .mockReturnValueOnce({ from: workspaceConnection.from });
+      .mockReturnValueOnce({ from: initialPageClaim.from })
+      .mockReturnValueOnce({ from: initialWorkspaceConnection.from })
+      .mockReturnValueOnce({ from: conflictingPageClaim.from });
+    const values = vi.fn().mockRejectedValueOnce(
+      Object.assign(new Error("duplicate"), {
+        code: "ER_DUP_ENTRY",
+        errno: 1062,
+      })
+    );
+    dbMock.insert.mockReturnValue({ values });
+
+    await expect(upsertChannelConnection(connection)).rejects.toBeInstanceOf(
+      ChannelConnectionClaimConflictError
+    );
+    expect(dbMock.update).not.toHaveBeenCalled();
+    expect(dbMock.transaction).toHaveBeenCalledTimes(2);
+    expect(conflictingPageClaim.lock).toHaveBeenCalledWith("update");
+  });
+
+  it("bounds an unresolved duplicate-key race to three attempts", async () => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const pageClaim = lockedSelect([]);
+      const workspaceConnection = lockedSelect([]);
+      dbMock.select
+        .mockReturnValueOnce({ from: pageClaim.from })
+        .mockReturnValueOnce({ from: workspaceConnection.from });
+    }
     const values = vi.fn(async () => {
       throw Object.assign(new Error("duplicate"), {
         code: "ER_DUP_ENTRY",
@@ -152,10 +219,36 @@ describe("channel connection database claims", () => {
     });
     dbMock.insert.mockReturnValue({ values });
 
-    await expect(upsertChannelConnection(connection)).rejects.toBeInstanceOf(
-      ChannelConnectionClaimConflictError
+    await expect(upsertChannelConnection(connection)).rejects.toThrow(
+      "Channel connection update could not be completed after concurrent writes"
     );
+
+    expect(dbMock.transaction).toHaveBeenCalledTimes(3);
+    expect(values).toHaveBeenCalledTimes(3);
     expect(dbMock.update).not.toHaveBeenCalled();
-    expect(dbMock.select).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { code: "ER_LOCK_DEADLOCK", errno: 1213 },
+    { code: "ER_LOCK_WAIT_TIMEOUT", errno: 1205 },
+  ])("retries a wrapped $code database error", async driverError => {
+    dbMock.transaction.mockRejectedValueOnce(
+      new Error("transaction failed", { cause: driverError })
+    );
+    const pageClaim = lockedSelect([]);
+    const workspaceConnection = lockedSelect([]);
+    const listed = [{ id: 7, ...connection }];
+    const list = listSelect(listed);
+    dbMock.select
+      .mockReturnValueOnce({ from: pageClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from })
+      .mockReturnValueOnce({ from: list.from });
+    const values = vi.fn(async () => undefined);
+    dbMock.insert.mockReturnValue({ values });
+
+    await expect(upsertChannelConnection(connection)).resolves.toEqual(listed);
+
+    expect(dbMock.transaction).toHaveBeenCalledTimes(2);
+    expect(values).toHaveBeenCalledOnce();
   });
 });

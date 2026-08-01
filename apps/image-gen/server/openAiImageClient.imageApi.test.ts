@@ -112,8 +112,9 @@ describe("gpt-image-2 Image API requests", () => {
       size: "1536x1024",
       quality: "high",
     });
+    expect(request.requestInit.body).toBeUndefined();
 
-    const formData = request.requestInit.body as FormData;
+    const formData = request.createRequestInit?.().body as FormData;
     expect(formData).toBeInstanceOf(FormData);
     expect(formData.get("model")).toBe("gpt-image-2");
     expect(formData.get("prompt")).toBe("private edit prompt");

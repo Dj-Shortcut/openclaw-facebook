@@ -1164,9 +1164,36 @@ export class ChannelConnectionClaimConflictError extends Error {
 }
 
 function isDuplicateKeyError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const record = error as { code?: unknown; errno?: unknown };
-  return record.code === "ER_DUP_ENTRY" || record.errno === 1062;
+  return databaseErrorChainSome(
+    error,
+    record => record.code === "ER_DUP_ENTRY" || record.errno === 1062
+  );
+}
+
+function isRetryableDatabaseLockError(error: unknown): boolean {
+  return databaseErrorChainSome(
+    error,
+    record =>
+      record.code === "ER_LOCK_DEADLOCK" ||
+      record.code === "ER_LOCK_WAIT_TIMEOUT" ||
+      record.errno === 1213 ||
+      record.errno === 1205
+  );
+}
+
+function databaseErrorChainSome(
+  error: unknown,
+  predicate: (record: Record<string, unknown>) => boolean
+): boolean {
+  const seen = new Set<object>();
+  let current = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const record = current as Record<string, unknown>;
+    if (predicate(record)) return true;
+    current = record.cause;
+  }
+  return false;
 }
 
 /**
@@ -1194,8 +1221,8 @@ export async function upsertChannelConnection(values: InsertChannelConnection) {
     lastCheckedAt,
   };
 
-  try {
-    await db.transaction(async tx => {
+  const writeConnection = () =>
+    db.transaction(async tx => {
       if (externalId) {
         const claimed = await tx
           .select({
@@ -1248,14 +1275,28 @@ export async function upsertChannelConnection(values: InsertChannelConnection) {
         lastCheckedAt,
       });
     });
-  } catch (error) {
-    if (
-      error instanceof ChannelConnectionClaimConflictError ||
-      isDuplicateKeyError(error)
-    ) {
-      throw new ChannelConnectionClaimConflictError();
+
+  const maxWriteAttempts = 3;
+  for (let attempt = 1; attempt <= maxWriteAttempts; attempt += 1) {
+    try {
+      await writeConnection();
+      break;
+    } catch (error) {
+      if (error instanceof ChannelConnectionClaimConflictError) throw error;
+      const canRetry = attempt < maxWriteAttempts;
+      if (
+        canRetry &&
+        (isRetryableDatabaseLockError(error) || isDuplicateKeyError(error))
+      ) {
+        continue;
+      }
+      if (isDuplicateKeyError(error)) {
+        throw new Error(
+          "Channel connection update could not be completed after concurrent writes"
+        );
+      }
+      throw error;
     }
-    throw error;
   }
 
   return listChannelConnections(values.workspaceId);

@@ -521,7 +521,12 @@ function buildGptImage2Request(input: OpenAiRequestInput & {
     endpoint: new URL(OPENAI_IMAGE_EDITS_ENDPOINT),
     model: input.model,
     imageCostOptions,
-    requestInit: createRequestInit(),
+    requestInit: {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+    },
     // Each retry gets a fresh multipart body rather than reusing a consumed body.
     createRequestInit,
   };

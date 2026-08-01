@@ -1,3 +1,24 @@
+-- Fail before any implicit-commit DDL when one Page is already claimed by
+-- multiple workspaces. Resolving ownership requires an explicit operator
+-- decision; this migration must never partially apply, delete, or reassign
+-- tenant data before reporting the conflict.
+CREATE TEMPORARY TABLE `_0010_abort_duplicate_channel_claims` (
+	`guard_value` tinyint NOT NULL,
+	CONSTRAINT `_0010_abort_duplicate_channel_claims_pk` PRIMARY KEY (`guard_value`)
+);--> statement-breakpoint
+INSERT INTO `_0010_abort_duplicate_channel_claims` (`guard_value`) VALUES (1);--> statement-breakpoint
+INSERT INTO `_0010_abort_duplicate_channel_claims` (`guard_value`)
+SELECT 1
+FROM (
+	SELECT `channel`, `externalId`
+	FROM `channelConnections`
+	WHERE `externalId` IS NOT NULL
+	GROUP BY `channel`, `externalId`
+	HAVING COUNT(*) > 1
+	LIMIT 1
+) AS `duplicate_channel_claims`;--> statement-breakpoint
+DROP TEMPORARY TABLE `_0010_abort_duplicate_channel_claims`;--> statement-breakpoint
+ALTER TABLE `channelConnections` ADD CONSTRAINT `channelConnections_channel_externalId_unique` UNIQUE(`channel`,`externalId`);--> statement-breakpoint
 CREATE TABLE `workspace_entitlement_usage` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`workspace_id` int NOT NULL,
@@ -38,7 +59,6 @@ CREATE TABLE `workspace_entitlement_usage_reservations` (
 --> statement-breakpoint
 ALTER TABLE `billing_intents` MODIFY COLUMN `kind` enum('subscription_start','payment_method_change','startpilot_purchase') NOT NULL DEFAULT 'subscription_start';--> statement-breakpoint
 ALTER TABLE `workspace_entitlements` ADD `source_intent_id` varchar(36);--> statement-breakpoint
-ALTER TABLE `channelConnections` ADD CONSTRAINT `channelConnections_channel_externalId_unique` UNIQUE(`channel`,`externalId`);--> statement-breakpoint
 ALTER TABLE `workspace_entitlement_usage` ADD CONSTRAINT `weu_workspace_fk` FOREIGN KEY (`workspace_id`) REFERENCES `workspaces`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `workspace_entitlement_usage` ADD CONSTRAINT `weu_entitlement_fk` FOREIGN KEY (`entitlement_id`) REFERENCES `workspace_entitlements`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `workspace_entitlement_usage` ADD CONSTRAINT `weu_source_intent_fk` FOREIGN KEY (`source_intent_id`) REFERENCES `billing_intents`(`intent_id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint

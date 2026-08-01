@@ -34,8 +34,13 @@ document.
   implement a fictitious signature check.
 - MySQL billing intent, customer, subscription, ledger, delivery,
   entitlement, outbox, reconciliation-run and anomaly records with duplicate
-  constraints, workspace foreign keys, Test/Live isolation, and a cumulative
-  migration history through `0010`.
+  constraints, workspace foreign keys, Test/Live isolation, and migration
+  artifacts through `0010`. GitHub CI run `30713688838` applied the pre-guard
+  revision of the cumulative migration chain through `0010` to a fresh MySQL
+  8.4 database. The current fail-fast duplicate-claim guard still requires a
+  fresh CI rerun. The upgrade path from an existing production-like schema and
+  production execution of `0010` remain **NOT RUN / NO-GO**; see
+  `MOLLIE_TEST_RESULTS.md`.
 - One-time entitlement activation only after an authenticated Mollie API fetch
   confirms payment. The unused subscription foundation retains bounded mandate
   polling, cancellation, grace, refund/chargeback review, and reconciliation,
@@ -95,9 +100,12 @@ document.
   Mollie Business Operations endpoints are not available in Test Mode.
 - [ ] A database migration backup, rollback rehearsal, monitoring alerts, and
   operator incident drill are complete.
-- [ ] Fresh-database and upgrade-path migration tests run against the exact
-  supported MySQL production version. Local `drizzle-kit check` passes, but no
-  disposable MySQL server was available in this work session.
+- [ ] Fresh-database migration for the current guarded `0010` revision is
+  pending the next MySQL 8.4 GitHub CI run. Run `30713688838` / job
+  `91405510390` passed the earlier pre-guard revision only.
+- [ ] Upgrade-path migration through `0010` from the exact supported
+  production-like schema is **NOT RUN / NO-GO**. Production migration is also
+  **NOT RUN**.
 - [ ] All remote deployment secrets and configuration are checked for legacy
   payment-provider values and those are removed by an authorized operator.
 
@@ -107,9 +115,14 @@ document.
    `MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED=false`,
    `LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED=false`, `MOLLIE_MODE=test`, and
    `MOLLIE_LIVE_BILLING_ENABLED=false` in production.
-2. Run the duplicate-Page preflight and apply migrations through `0010` to a
-   disposable MySQL database before repeating the exact production-version
-   upgrade path with a backup and rollback plan.
+2. Before any production migration, run the duplicate-Page preflight and apply
+   migrations through `0010` to a disposable MySQL database. Then verify the
+   exact production-version upgrade path with a backup and rollback plan.
+   Production migration through `0010` is currently **NOT RUN** and remains a
+   **NO-GO** item. During the eventual production upgrade, pause and drain
+   channel-connection create/update writes from before the duplicate preflight
+   until the `(channel, externalId)` unique key is installed; otherwise a new
+   claim could race the preflight.
 
    ```sql
    SELECT channel, externalId, COUNT(*) AS duplicate_count

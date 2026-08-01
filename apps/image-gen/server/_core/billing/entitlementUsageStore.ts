@@ -158,6 +158,9 @@ export async function reserveStartpilotAiAnswerUsage(input: {
       )
       .limit(1)
       .for("update");
+    if (existing[0] && existing[0].entitlementId !== input.entitlementId) {
+      return { allowed: false as const, reason: "idempotency_reused" as const };
+    }
     if (existing[0]?.status === "reserved") {
       return {
         allowed: true as const,
@@ -256,7 +259,8 @@ async function finishAiReservation(
           eq(
             workspaceEntitlementUsageReservations.entitlementId,
             input.entitlementId
-          )
+          ),
+          eq(workspaceEntitlementUsageReservations.kind, "ai_answer")
         )
       )
       .limit(1)
@@ -264,10 +268,43 @@ async function finishAiReservation(
     const reservation = reservations[0];
     if (!reservation) throw new Error("usage reservation not found");
     if (reservation.status === outcome) return { committed: true };
-    if (
-      reservation.status !== "reserved" ||
-      reservation.expiresAt.getTime() <= now.getTime()
-    ) {
+    if (reservation.status !== "reserved") {
+      return { committed: false };
+    }
+    if (reservation.expiresAt.getTime() <= now.getTime()) {
+      await tx
+        .update(workspaceEntitlementUsageReservations)
+        .set({ status: "expired", releasedAt: now })
+        .where(
+          and(
+            eq(
+              workspaceEntitlementUsageReservations.reservationId,
+              input.reservationId
+            ),
+            eq(
+              workspaceEntitlementUsageReservations.workspaceId,
+              input.workspaceId
+            ),
+            eq(workspaceEntitlementUsageReservations.mode, input.mode),
+            eq(
+              workspaceEntitlementUsageReservations.entitlementId,
+              input.entitlementId
+            ),
+            eq(workspaceEntitlementUsageReservations.kind, "ai_answer"),
+            eq(workspaceEntitlementUsageReservations.status, "reserved")
+          )
+        );
+      await tx
+        .update(workspaceEntitlementUsage)
+        .set({ aiAnswersReserved: Math.max(0, usage.aiAnswersReserved - 1) })
+        .where(
+          and(
+            eq(workspaceEntitlementUsage.id, usage.id),
+            eq(workspaceEntitlementUsage.workspaceId, input.workspaceId),
+            eq(workspaceEntitlementUsage.mode, input.mode),
+            eq(workspaceEntitlementUsage.entitlementId, input.entitlementId)
+          )
+        );
       return { committed: false };
     }
     await tx
@@ -406,6 +443,7 @@ async function expireStaleAiReservations(
           input.entitlementId
         ),
         eq(workspaceEntitlementUsageReservations.mode, input.mode),
+        eq(workspaceEntitlementUsageReservations.kind, "ai_answer"),
         eq(workspaceEntitlementUsageReservations.status, "reserved"),
         lte(workspaceEntitlementUsageReservations.expiresAt, now)
       )

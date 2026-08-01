@@ -186,6 +186,7 @@ export function createMessengerGenerationJobRunner(
           );
           const commitProviderAttemptQuota = async () => {
             if (workspacePolicy.kind === "startpilot") {
+              if (providerAttemptsCommitted > 0) return;
               await commitStartpilotProviderAttempt(workspacePolicy);
               providerAttemptsCommitted += 1;
               return;

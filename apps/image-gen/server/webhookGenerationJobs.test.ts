@@ -2,13 +2,19 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   executeGenerationFlowMock,
+  reserveStartpilotImageUsageMock,
+  resolveWorkspaceRuntimePolicyMock,
   safeLogMock,
+  sendButtonTemplateMock,
   sendImageMock,
   sendQuickRepliesMock,
   sendTextMock,
 } = vi.hoisted(() => ({
   executeGenerationFlowMock: vi.fn(),
+  reserveStartpilotImageUsageMock: vi.fn(),
+  resolveWorkspaceRuntimePolicyMock: vi.fn(),
   safeLogMock: vi.fn(),
+  sendButtonTemplateMock: vi.fn(async () => ({ sent: true })),
   sendImageMock: vi.fn(async () => ({ sent: true })),
   sendQuickRepliesMock: vi.fn(async () => ({ sent: true })),
   sendTextMock: vi.fn(async () => ({ sent: true })),
@@ -18,8 +24,17 @@ vi.mock("./_core/generationFlow", () => ({
   executeGenerationFlow: executeGenerationFlowMock,
 }));
 
+vi.mock("./_core/workspaceEntitlementRuntime", () => ({
+  resolveWorkspaceRuntimePolicy: resolveWorkspaceRuntimePolicyMock,
+}));
+
+vi.mock("./_core/billing/entitlementUsageStore", () => ({
+  reserveStartpilotImageUsage: reserveStartpilotImageUsageMock,
+}));
+
 vi.mock("./_core/messengerApi", () => ({
   safeLog: safeLogMock,
+  sendButtonTemplate: sendButtonTemplateMock,
   sendImage: sendImageMock,
   sendQuickReplies: sendQuickRepliesMock,
   sendText: sendTextMock,
@@ -64,7 +79,13 @@ afterAll(() => {
 beforeEach(() => {
   process.env.PRIVACY_PEPPER = "webhook-generation-jobs-test-pepper";
   executeGenerationFlowMock.mockReset();
+  reserveStartpilotImageUsageMock.mockReset();
+  reserveStartpilotImageUsageMock.mockResolvedValue({ allowed: true });
+  resolveWorkspaceRuntimePolicyMock.mockReset();
+  resolveWorkspaceRuntimePolicyMock.mockResolvedValue({ kind: "free" });
   safeLogMock.mockReset();
+  sendButtonTemplateMock.mockReset();
+  sendButtonTemplateMock.mockResolvedValue({ sent: true });
   sendImageMock.mockReset();
   sendImageMock.mockResolvedValue({ sent: true });
   sendQuickRepliesMock.mockReset();
@@ -306,6 +327,40 @@ describe("messenger generation job safety", () => {
     expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
   });
 
+  it("charges one Startpilot image unit across provider retries", async () => {
+    resolveWorkspaceRuntimePolicyMock.mockResolvedValueOnce({
+      kind: "startpilot",
+      workspaceId: 42,
+      entitlementId: 9,
+      mode: "test",
+      imageTotalLimit: 20,
+      imageDailyLimit: 5,
+      imageModel: "gpt-image-2",
+      imageQuality: "high",
+    });
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      await input.onProviderAttempt();
+      await input.onProviderAttempt();
+      return failureGenerationResult();
+    });
+    const runner = createTestRunner();
+
+    await runner.processMessengerGenerationJob({
+      psid: "startpilot-provider-retry-user",
+      userId: "startpilot-provider-retry-user-key",
+      pageId: "startpilot-page",
+      reqId: "req-startpilot-provider-retry",
+      lang: "nl",
+    });
+
+    expect(reserveStartpilotImageUsageMock).toHaveBeenCalledOnce();
+    expect(reserveStartpilotImageUsageMock).toHaveBeenCalledWith({
+      workspaceId: 42,
+      entitlementId: 9,
+      mode: "test",
+    });
+  });
+
   it("does not let provider retries bypass exhausted image quota", async () => {
     const originalLimit = process.env.MESSENGER_FREE_DAILY_LIMIT;
     process.env.MESSENGER_FREE_DAILY_LIMIT = "1";
@@ -382,7 +437,7 @@ describe("messenger generation job safety", () => {
     const originalPortalBaseUrl = process.env.PORTAL_BASE_URL;
     process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
     process.env.PORTAL_BASE_URL = "https://leaderbot.live";
-    const runner = createTestRunner();
+    const { runner } = createContextBackedRunner();
 
     try {
       await runner.processMessengerGenerationJob({
@@ -404,16 +459,19 @@ describe("messenger generation job safety", () => {
       }
     }
 
-    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
+    expect(sendButtonTemplateMock).toHaveBeenCalledWith(
       "quota-exhausted-user",
       t("en", "outOfFreeCredits"),
       [
-        expect.objectContaining({
-          id: "open_startpilot_upgrade",
+        {
+          type: "web_url",
+          title: "Open Leaderbot",
           url: "https://leaderbot.live/?upgrade=startpilot#pricing",
-        }),
+          webview_height_ratio: "full",
+        },
       ]
     );
+    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
     expect(executeGenerationFlowMock).not.toHaveBeenCalled();
     expect(getState("quota-exhausted-user")?.stage).toBe(
       "AWAITING_EDIT_PROMPT"

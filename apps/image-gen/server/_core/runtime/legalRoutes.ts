@@ -3,7 +3,11 @@ import {
   formatPublicBusinessAddress,
 } from "../../../shared/publicBusinessDetails";
 import type express from "express";
-import { formatAmountMinor, getBillingPlan } from "../billing/catalog";
+import {
+  STARTPILOT_PLAN_CODE,
+  formatAmountMinor,
+  getBillingPlan,
+} from "../billing/catalog";
 import { formatFaceMemoryRetentionDays } from "../faceMemoryRetention";
 import { escapeHtml } from "../html";
 
@@ -22,7 +26,7 @@ export function getStartpilotPricingDisplay(
   lookupPlan: typeof getBillingPlan = getBillingPlan
 ) {
   try {
-    const startpilotPlan = lookupPlan("startpilot_once_v1");
+    const startpilotPlan = lookupPlan(STARTPILOT_PLAN_CODE);
     if (!startpilotPlan) return FALLBACK_STARTPILOT_PRICING;
     return {
       startpilotPrice: `€${formatAmountMinor(
@@ -38,6 +42,7 @@ export function getStartpilotPricingDisplay(
 export function registerLegalRoutes(app: express.Express) {
   app.get("/privacy", (_req, res) => {
     const faceMemoryRetention = formatFaceMemoryRetentionDays("en");
+    const { startpilotPrice } = getStartpilotPricingDisplay();
     res.type("html").send(
       renderLegalPage({
         title: "Privacy Policy",
@@ -66,7 +71,7 @@ export function registerLegalRoutes(app: express.Express) {
           },
           {
             heading: "Payments",
-            html: "<p>The public website currently collects interest only. If the signed-in pilot checkout is enabled after the launch gates pass, Mollie will process one €19 Startpilot payment. The proposed pilot does not create a subscription, automatic renewal, direct-debit mandate, top-up or overage charge.</p>",
+            html: `<p>The public website currently collects interest only. If the signed-in pilot checkout is enabled after the launch gates pass, Mollie will process one ${startpilotPrice} Startpilot payment. The proposed pilot does not create a subscription, automatic renewal, direct-debit mandate, top-up or overage charge.</p>`,
           },
         ],
       })
@@ -83,7 +88,7 @@ export function registerLegalRoutes(app: express.Express) {
         sections: [
           {
             heading: "Draft Startpilot offer",
-            html: `<p>Leaderbot Startpilot is proposed at ${startpilotPrice} as a single payment for 30 days. It includes one workspace, one connected Facebook Page, 300 AI answers and 20 Images 2.0 image generations, with a maximum of five image generations per day. The public website is interest-only while paid launch remains disabled.</p>`,
+            html: `<p>Leaderbot Startpilot is proposed at ${startpilotPrice} as a single payment for 30 days. It includes one workspace, one connected Facebook Page, 300 AI answers and 20 Images 2.0 image generations, with a maximum of five image generations per day. An image generation counts once when its first AI-provider attempt starts; retries within that same request do not consume extra pilot generations. The public website is interest-only while paid launch remains disabled.</p>`,
           },
           {
             heading: "No subscription or overage",
@@ -125,7 +130,7 @@ export function registerLegalRoutes(app: express.Express) {
           },
           {
             heading: "Included pilot usage",
-            html: "<p>The proposed package covers one workspace, one Facebook Page, 300 AI answers and 20 Images 2.0 image generations. Image generation is additionally limited to five per day during the 30-day access period.</p>",
+            html: "<p>The proposed package covers one workspace, one Facebook Page, 300 AI answers and 20 Images 2.0 image generations. Image generation is additionally limited to five per day during the 30-day access period. A generation counts once when its first AI-provider attempt starts; retries within the same request do not consume another pilot generation.</p>",
           },
           {
             heading: "No renewal, top-up or overage",
