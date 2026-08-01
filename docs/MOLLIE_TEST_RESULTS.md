@@ -17,11 +17,10 @@ passed without a dated artifact that contains no secret or customer data.
 - Offline `drizzle-kit check`: PASS with the cumulative `0009` snapshot (a
   local dummy connection string was supplied because the config requires URL
   syntax; no database connection or migration was performed).
-- Fresh MySQL 8.4 migration through cumulative migration `0010`: the pre-guard
-  revision passed GitHub CI run `30713688838`, job `91405510390` on
-  2026-08-01. The current revision adds a fail-fast duplicate-claim guard and
-  remains PENDING until the next CI run. Neither result is Mollie provider or
-  production migration evidence.
+- Fresh MySQL 8.4 migration through the current guarded cumulative migration
+  `0010`: PASS in GitHub CI run `30715666890`, job `91410691295` on
+  2026-08-01. This is fresh-database CI evidence only; it is not Mollie
+  provider, existing-schema upgrade, or production migration evidence.
 - `git diff --check`: PASS.
 - Existing-schema upgrade migration through `0010`: NOT RUN.
 - Production migration through `0010`: NOT RUN.

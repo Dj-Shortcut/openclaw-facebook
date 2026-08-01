@@ -100,9 +100,10 @@ document.
   Mollie Business Operations endpoints are not available in Test Mode.
 - [ ] A database migration backup, rollback rehearsal, monitoring alerts, and
   operator incident drill are complete.
-- [ ] Fresh-database migration for the current guarded `0010` revision is
-  pending the next MySQL 8.4 GitHub CI run. Run `30713688838` / job
-  `91405510390` passed the earlier pre-guard revision only.
+- [x] Fresh-database migration for the current guarded `0010` revision passed
+  MySQL 8.4 GitHub CI run `30715666890` / job `91410691295` on 2026-08-01.
+  This is fresh-database CI evidence only, not an upgrade-path or production
+  migration authorization.
 - [ ] Upgrade-path migration through `0010` from the exact supported
   production-like schema is **NOT RUN / NO-GO**. Production migration is also
   **NOT RUN**.
