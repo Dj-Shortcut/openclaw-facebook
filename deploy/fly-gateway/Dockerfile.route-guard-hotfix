@@ -1,0 +1,9 @@
+# syntax=docker/dockerfile:1.7
+
+# Temporary production containment image. It retains the last known-good
+# OpenClaw 2026.6.11 runtime while overlaying only the reviewed public route
+# guard. Remove this path after the mounted-state migration to 2026.7.1 has
+# been rehearsed and completed safely.
+FROM registry.fly.io/leaderbot-openclaw-gateway:deployment-01KX3N1G3DBTRD6KS84S6VAFQ1@sha256:23722176d5ba76642401db8b024f231d1d77cb4c12094a168e6184a8e880a7c5
+
+COPY --chown=node:node deploy/fly-gateway/bin/public-route-guard.mjs /app/deploy/fly-gateway/bin/public-route-guard.mjs

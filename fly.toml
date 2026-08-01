@@ -5,7 +5,7 @@ app = "leaderbot-openclaw-gateway"
 primary_region = "ams"
 
 [build]
-dockerfile = "deploy/fly-gateway/Dockerfile"
+dockerfile = "deploy/fly-gateway/Dockerfile.route-guard-hotfix"
 
 [env]
 NODE_ENV = "production"
@@ -18,6 +18,7 @@ OPENCLAW_FACEBOOK_DEFAULT_DM_POLICY = "pairing"
 OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE = "leaderbot_free_tier"
 OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED = "1"
 OPENCLAW_PUBLIC_GATEWAY_GUARD = "1"
+OPENCLAW_PUBLIC_GATEWAY_PATHS = "/facebook/webhook,/healthz"
 OPENCLAW_ADMIN_HOSTS = "leaderbot-openclaw-gateway.fly.dev"
 OPENCLAW_AGENT_MODEL = "openai/gpt-5.4-mini"
 OPENCLAW_AGENT_THINKING_DEFAULT = "low"
