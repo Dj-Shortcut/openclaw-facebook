@@ -67,7 +67,7 @@ not appear as a separate channel.
 ## Compatibility
 
 - OpenClaw host: `>=2026.6.11`
-- OpenClaw build tested with: `2026.6.11`
+- OpenClaw build tested with: `2026.7.1`
 - Node.js: `>=24.15.0`
 - Plugin version: `2026.6.11`
 
