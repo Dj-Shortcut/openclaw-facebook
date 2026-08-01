@@ -21,6 +21,7 @@ function useValidTestConfig(): void {
       "http://billing.test/api/webhooks/mollie/payments",
     APP_BASE_URL: "http://leaderbot.test/",
     BILLING_SUPPORT_EMAIL: "billing@leaderbot.test",
+    MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED: "true",
   };
   delete process.env.MOLLIE_LIVE_BILLING_ENABLED;
   delete process.env.MOLLIE_BILLING_ENABLED;
@@ -57,6 +58,15 @@ describe("Mollie configuration", () => {
     process.env.MOLLIE_BILLING_ENABLED = "true";
     expect(isMollieBillingEnabled()).toBe(true);
     expect(() => assertMollieBillingEnabled()).not.toThrow();
+  });
+
+  it("rejects checkout until paid entitlements are independently enforced", () => {
+    process.env.MOLLIE_BILLING_ENABLED = "true";
+    delete process.env.MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED;
+
+    expect(() => assertMollieBillingEnabled()).toThrow(
+      "Mollie entitlement enforcement is disabled"
+    );
   });
 
   it("rejects an unsupported mode", () => {

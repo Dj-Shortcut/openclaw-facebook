@@ -3,6 +3,14 @@ import type { QuickReply } from "./messengerApi";
 import { encodeMessengerActionInput } from "./messengerActionPayload";
 
 const MESSENGER_QUICK_REPLY_TITLE_MAX_LENGTH = 20;
+const MESSENGER_BUTTON_LIMIT = 3;
+
+export type MessengerWebUrlButton = {
+  type: "web_url";
+  title: string;
+  url: string;
+  webview_height_ratio: "full";
+};
 
 function normalizeActionValue(value: string): string | undefined {
   const trimmed = Array.from(value.trim())
@@ -25,6 +33,9 @@ export function renderMessengerQuickReplies(
   }
 
   return actions.flatMap(action => {
+    if (action.url && normalizeSafeActionUrl(action.url)) {
+      return [];
+    }
     const title = normalizeActionValue(action.label);
     const payload = normalizePayloadValue(renderMessengerActionPayload(action));
     if (!title || !payload) {
@@ -41,12 +52,87 @@ export function renderMessengerQuickReplies(
   });
 }
 
+function isLocalDevelopmentUrl(url: URL): boolean {
+  return (
+    process.env.NODE_ENV !== "production" &&
+    url.protocol === "http:" &&
+    (url.hostname === "localhost" || url.hostname === "127.0.0.1")
+  );
+}
+
+function configuredActionOrigins(): Set<string> {
+  const origins = new Set<string>();
+  for (const raw of [
+    process.env.PORTAL_BASE_URL,
+    process.env.LEADERBOT_PUBLIC_URL,
+    process.env.APP_BASE_URL,
+    process.env.BASE_URL,
+    ...(process.env.MESSENGER_ACTION_ALLOWED_ORIGINS?.split(",") ?? []),
+  ]) {
+    const value = raw?.trim();
+    if (!value) continue;
+    try {
+      const parsed = new URL(value);
+      if (
+        !parsed.username &&
+        !parsed.password &&
+        (parsed.protocol === "https:" || isLocalDevelopmentUrl(parsed))
+      ) {
+        origins.add(parsed.origin);
+      }
+    } catch {
+      // Invalid configuration never expands the Messenger URL allowlist.
+    }
+  }
+  return origins;
+}
+
+function normalizeSafeActionUrl(value: string): string | undefined {
+  try {
+    const url = new URL(value.trim());
+    if (url.username || url.password) return undefined;
+    if (url.protocol !== "https:" && !isLocalDevelopmentUrl(url)) {
+      return undefined;
+    }
+    if (!configuredActionOrigins().has(url.origin)) {
+      return undefined;
+    }
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+export function renderMessengerUrlButtons(
+  actions: readonly ConversationAction[] | undefined
+): MessengerWebUrlButton[] {
+  if (!actions?.length) return [];
+
+  return actions
+    .flatMap(action => {
+      const title = normalizeActionValue(action.label);
+      const url = action.url ? normalizeSafeActionUrl(action.url) : undefined;
+      if (!title || !url) return [];
+      return [
+        {
+          type: "web_url" as const,
+          title,
+          url,
+          webview_height_ratio: "full" as const,
+        },
+      ];
+    })
+    .slice(0, MESSENGER_BUTTON_LIMIT);
+}
+
 function renderMessengerActionPayload(action: ConversationAction): string {
   if (!action.inputText && isPlatformPayloadActionId(action.id)) {
     return action.id;
   }
 
-  return encodeMessengerActionInput(action.inputText ?? action.label ?? action.id);
+  return encodeMessengerActionInput(
+    action.inputText ?? action.label ?? action.id
+  );
 }
 
 function isPlatformPayloadActionId(id: string): boolean {

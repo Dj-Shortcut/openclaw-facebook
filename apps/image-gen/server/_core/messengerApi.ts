@@ -11,6 +11,13 @@ type QuickReply = {
   payload: string;
 };
 
+type WebUrlButton = {
+  type: "web_url";
+  title: string;
+  url: string;
+  webview_height_ratio?: "compact" | "tall" | "full";
+};
+
 type MessengerSendOutcome =
   | { sent: true; messageId?: string }
   | { sent: false; reason: "response_window_closed" };
@@ -81,7 +88,9 @@ async function delay(milliseconds: number): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
-function resolveRetryOptions(options?: SendMessageOptions): ResolvedRetryOptions {
+function resolveRetryOptions(
+  options?: SendMessageOptions
+): ResolvedRetryOptions {
   const maxRetries =
     options?.maxRetries ?? parsePositiveInt("GRAPH_API_MAX_RETRIES", 3);
   const retryBaseMs =
@@ -133,7 +142,8 @@ async function handleNetworkFailure(input: {
 }): Promise<boolean> {
   const retryError = toError(input.error);
   const canRetry =
-    input.attempt < input.retry.maxRetries && isTransientNetworkError(input.error);
+    input.attempt < input.retry.maxRetries &&
+    isTransientNetworkError(input.error);
 
   if (!canRetry) {
     input.options?.onFinalFailure?.(
@@ -160,9 +170,12 @@ async function handleErrorResponse(input: {
   options?: SendMessageOptions;
 }): Promise<void> {
   const body = await input.response.text();
-  const error = new Error(`Messenger API error ${input.response.status}: ${body}`);
+  const error = new Error(
+    `Messenger API error ${input.response.status}: ${body}`
+  );
   const canRetry =
-    input.attempt < input.retry.maxRetries && shouldRetry(input.response.status);
+    input.attempt < input.retry.maxRetries &&
+    shouldRetry(input.response.status);
 
   if (!canRetry) {
     input.options?.onFinalFailure?.(
@@ -173,11 +186,7 @@ async function handleErrorResponse(input: {
     throw error;
   }
 
-  input.options?.onRetry?.(
-    input.attempt + 1,
-    input.retry.maxAttempts,
-    error
-  );
+  input.options?.onRetry?.(input.attempt + 1, input.retry.maxAttempts, error);
   await waitBeforeRetry(input.attempt, input.retry.retryBaseMs, input.response);
 }
 
@@ -186,7 +195,9 @@ async function sendMessage(
   message: Record<string, unknown>,
   options?: SendMessageOptions
 ): Promise<MessengerSendOutcome> {
-  const withinResponseWindow = await Promise.resolve(hasOpenMessengerResponseWindow(psid));
+  const withinResponseWindow = await Promise.resolve(
+    hasOpenMessengerResponseWindow(psid)
+  );
   if (!withinResponseWindow) {
     safeLog("messenger_send_skipped", { reason: "response_window_closed" });
     return { sent: false, reason: "response_window_closed" };
@@ -213,7 +224,9 @@ async function sendMessage(
   throw new Error("Messenger API error: retry loop exited unexpectedly");
 }
 
-async function parseSendOutcome(response: Response): Promise<MessengerSendOutcome> {
+async function parseSendOutcome(
+  response: Response
+): Promise<MessengerSendOutcome> {
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("application/json")) {
     return { sent: true };
@@ -244,6 +257,31 @@ export async function sendQuickReplies(
   return await sendMessage(psid, {
     text,
     quick_replies: replies,
+  });
+}
+
+const MESSENGER_BUTTON_TEMPLATE_TEXT_MAX_LENGTH = 640;
+
+function normalizeButtonTemplateText(text: string): string {
+  return Array.from(text)
+    .slice(0, MESSENGER_BUTTON_TEMPLATE_TEXT_MAX_LENGTH)
+    .join("");
+}
+
+export async function sendButtonTemplate(
+  psid: string,
+  text: string,
+  buttons: WebUrlButton[]
+): Promise<MessengerSendOutcome> {
+  return await sendMessage(psid, {
+    attachment: {
+      type: "template",
+      payload: {
+        template_type: "button",
+        text: normalizeButtonTemplateText(text),
+        buttons,
+      },
+    },
   });
 }
 
@@ -347,7 +385,4 @@ export async function sendVideo(
   return outcome;
 }
 
-export type {
-  QuickReply,
-  MessengerSendOutcome,
-};
+export type { QuickReply, WebUrlButton, MessengerSendOutcome };

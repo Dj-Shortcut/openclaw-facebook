@@ -71,6 +71,13 @@
       "when": 1785542400000,
       "tag": "0009_mollie_billing",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1785605493363,
+      "tag": "0010_slimy_bloodstorm",
+      "breakpoints": true
     }
   ]
 }

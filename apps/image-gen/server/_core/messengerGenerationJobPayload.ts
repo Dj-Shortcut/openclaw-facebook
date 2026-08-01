@@ -52,6 +52,7 @@ function parseMessengerGenerationJob(
     !isOptionalGenerationKind(value.generationKind) ||
     !isOptionalString(value.sourceImageUrl) ||
     !isOptionalString(value.promptHint) ||
+    !isOptionalString(value.pageId) ||
     !isOptionalAttempts(value.attempts)
   ) {
     return null;
@@ -62,6 +63,7 @@ function parseMessengerGenerationJob(
     userId: value.userId,
     reqId: value.reqId,
     lang,
+    pageId: value.pageId?.trim() || undefined,
     sourceImageUrl: value.sourceImageUrl,
     promptHint: value.promptHint,
     attempts: value.attempts,

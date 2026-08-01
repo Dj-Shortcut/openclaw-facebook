@@ -142,8 +142,9 @@ curl -fsS https://leaderbot-openclaw-gateway.fly.dev/healthz
 
 Then verify:
 
-- Public routes still expose only `/facebook/webhook`, `/messenger/webhook`, and
-  `/healthz` unless a reviewed change intentionally expands the set.
+- Public routes still expose only `/facebook/webhook` and `/healthz` by default.
+  The legacy `/messenger/webhook` route is allowed only when the deployed
+  channel explicitly uses it and `OPENCLAW_PUBLIC_GATEWAY_PATHS` opts in.
 - Dashboard/admin/API access still requires `OPENCLAW_ADMIN_TOKEN` and an
   allowed admin host.
 - Messenger webhook verification still succeeds.

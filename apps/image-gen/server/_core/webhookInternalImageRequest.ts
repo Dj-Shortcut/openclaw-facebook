@@ -23,6 +23,7 @@ import type {
   HandlerContext,
   InternalMessengerImageRequestInput,
 } from "./webhookHandlerTypes";
+import { runWithMessengerRequestContext } from "./messengerRequestContext";
 
 type InternalImageRequestHandlerDeps = Pick<
   HandlerContext,
@@ -36,6 +37,14 @@ export function createInternalMessengerImageRequestHandler(
   deps: InternalImageRequestHandlerDeps
 ) {
   async function acceptInternalMessengerImageRequest(
+    input: InternalMessengerImageRequestInput
+  ): Promise<MessengerSendOutcome> {
+    return await runWithMessengerRequestContext(input.pageId, () =>
+      acceptInternalMessengerImageRequestInContext(input)
+    );
+  }
+
+  async function acceptInternalMessengerImageRequestInContext(
     input: InternalMessengerImageRequestInput
   ): Promise<MessengerSendOutcome> {
     const lang = input.lang ?? deps.defaultLang;

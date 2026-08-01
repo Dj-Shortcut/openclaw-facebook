@@ -23,6 +23,7 @@ export async function processFacebookWebhookPayload(
 
 export async function acceptInternalMessengerImageRequest(input: {
   psid: string;
+  pageId?: string;
   prompt: string;
   reqId: string;
   lang?: Lang;
@@ -34,6 +35,7 @@ export async function acceptInternalMessengerImageRequest(input: {
 
 export async function processInternalMessengerImageRequest(input: {
   psid: string;
+  pageId?: string;
   prompt: string;
   reqId: string;
   lang?: Lang;

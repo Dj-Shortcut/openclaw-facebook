@@ -18,7 +18,10 @@ export type LeaderbotBridgeStageLogger = (
 ) => void;
 
 function logLeaderbotBridgeStage(
-  params: { trace: LeaderbotBridgeTrace; logStage?: LeaderbotBridgeStageLogger },
+  params: {
+    trace: LeaderbotBridgeTrace;
+    logStage?: LeaderbotBridgeStageLogger;
+  },
   stage: string,
   fields?: Record<string, string | number | boolean | undefined>,
 ): void {
@@ -27,6 +30,7 @@ function logLeaderbotBridgeStage(
 
 export async function requestLeaderbotImageGeneration(params: {
   psid: string;
+  pageId?: string;
   prompt: string;
   reqId: string;
   timestamp: number;
@@ -46,7 +50,10 @@ export async function requestLeaderbotImageGeneration(params: {
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), IMAGE_GEN_REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(
+    () => controller.abort(),
+    IMAGE_GEN_REQUEST_TIMEOUT_MS,
+  );
   try {
     const response = await fetch(config.endpoint, {
       method: "POST",
@@ -57,6 +64,7 @@ export async function requestLeaderbotImageGeneration(params: {
       },
       body: JSON.stringify({
         psid: params.psid,
+        pageId: params.pageId,
         prompt: params.prompt,
         reqId: params.reqId,
         lang: "nl",
@@ -94,9 +102,15 @@ export async function forwardLeaderbotMessengerEvent(params: {
     return false;
   }
 
-  const endpoint = new URL("/internal/messenger/webhook-event", config.endpoint);
+  const endpoint = new URL(
+    "/internal/messenger/webhook-event",
+    config.endpoint,
+  );
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), IMAGE_GEN_REQUEST_TIMEOUT_MS);
+  const timeout = setTimeout(
+    () => controller.abort(),
+    IMAGE_GEN_REQUEST_TIMEOUT_MS,
+  );
   try {
     const response = await fetch(endpoint, {
       method: "POST",

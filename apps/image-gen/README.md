@@ -257,7 +257,9 @@ Operational env shortlist: [`docs/operations/ENV_SHORTLIST.md`](docs/operations/
 - `GRAPH_API_MAX_RETRIES`, `GRAPH_API_RETRY_BASE_MS` (retry policy for Meta Graph API `429`/`5xx` responses)
 - `ADMIN_TOKEN` (protects `/debug/build`)
 - `NODE_ENV` (set to `production` to enforce production-only checks such as required `REDIS_URL`)
-- `OAUTH_SERVER_URL` (enables OAuth route initialization)
+- `OAUTH_SERVER_URL` (enables OAuth token exchange and callback initialization)
+- `OAUTH_PORTAL_URL` (optional public browser authorization origin; falls back
+  to `OAUTH_SERVER_URL` when both services share an origin)
 - `LOG_LEVEL`, `DEBUG_STATE_DUMP`, `DEBUG_IMAGE_PROOF` (diagnostics)
 - `MESSENGER_QUOTA_BYPASS_IDS` (comma-separated PSIDs or hashed user keys that skip Messenger daily quota; intended for internal testing/admin)
 - `ENABLE_FACE_MEMORY` (`false` by default; enables explicit-consent Messenger source-photo reuse after legal approval)
@@ -265,6 +267,15 @@ Operational env shortlist: [`docs/operations/ENV_SHORTLIST.md`](docs/operations/
 - `PORT` (default `8080`)
 - `BUILT_IN_FORGE_API_URL`, `BUILT_IN_FORGE_API_KEY` (used by the storage proxy contract; in production image generation these should point to the R2-backed proxy so generated Messenger attachment URLs are durable across Fly machines)
 - `VITE_APP_ID`, `DATABASE_URL`, `OWNER_OPEN_ID`, `BUILT_IN_FORGE_API_URL`, `BUILT_IN_FORGE_API_KEY` (app/data integrations exposed via `server/_core/env.ts`)
+
+`VITE_APP_ID` is the Manus WebDev OAuth project id used by
+`WebDevAuthPublicService`; it is not the Meta/Facebook `FB_APP_ID`. It and the
+OAuth portal URL are public identifiers, not secrets. The running server exposes
+only those validated values through exact GET route
+`/api/public/config`, with `Cache-Control: no-store`. This keeps Facebook Login
+working on Fly even though runtime secrets are not available during the Docker
+`vite build`. JWT secrets, provider keys, tokens, and database URLs are never
+included in that response.
 
 Legacy/app-specific environment variables also exist for SDK and data API integrations in `server/_core/env.ts`.
 
@@ -418,6 +429,22 @@ Use this order for `leaderbot-fb-image-gen`:
    fly secrets set DATABASE_URL='mysql://<user>:<password>@<host>:<port>/<database>' \
      -a leaderbot-fb-image-gen
    ```
+
+   Configure the public OAuth identifiers at runtime as well. Supplying these
+   as Fly secrets is acceptable operationally, but they are intentionally
+   returned to the browser and must never contain credentials or URL userinfo:
+
+   ```bash
+   fly secrets set OAUTH_PORTAL_URL='https://<oauth-portal>' \
+     OAUTH_SERVER_URL='https://<oauth-api>' \
+     VITE_APP_ID='<public-app-id>' \
+     -a leaderbot-fb-image-gen
+   ```
+
+   Do not derive these values from `FB_APP_ID`, Facebook callback URLs, or the
+   Meta Graph API. `OAUTH_SERVER_URL` is the WebDev OAuth token-exchange service
+   and `OAUTH_PORTAL_URL` is its browser authorization UI. The portal URL may be
+   omitted only when both are deliberately hosted at the same origin.
 
 3. Run migrations from a trusted operator shell with the same `DATABASE_URL`:
 

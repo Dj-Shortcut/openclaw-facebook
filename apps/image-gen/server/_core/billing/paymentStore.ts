@@ -8,14 +8,22 @@ import {
   paymentLedger,
   webhookDeliveries,
   workspaceEntitlements,
+  workspaceEntitlementUsage,
+  workspaceEntitlementUsageReservations,
 } from "../../../drizzle/schema";
 import { getDatabaseOrThrow } from "../../db";
-import { addPlanInterval, formatAmountMinor } from "./catalog";
+import {
+  addPlanInterval,
+  formatAmountMinor,
+  getBillingPlan,
+  STARTPILOT_PLAN_CODE,
+} from "./catalog";
 import { deterministicIdempotencyKey } from "./ids";
 import { parseEurValueMinor, sumAmountsMinor } from "./amounts";
 import { assertMollieId, type MolliePayment } from "./mollieClient";
 import { createPaymentSnapshot } from "./paymentSnapshot";
 import { metadataIntentId } from "./providerMetadata";
+import { blocksSubscriptionStart } from "./checkoutStore";
 
 const GRACE_PERIOD_DAYS = 7;
 
@@ -25,6 +33,40 @@ type PaymentContext = {
   customer: typeof billingCustomers.$inferSelect;
   subscription: typeof billingSubscriptions.$inferSelect | null;
 };
+
+type RecurringPlanSnapshot = {
+  code: string;
+  amountMinor: number;
+  currency: "EUR";
+  offerType: "subscription";
+  interval: "1 month";
+  accessDurationDays: null;
+  entitlements: {
+    imagesPerDay: number;
+    messagesPerMinute: number;
+  };
+  mollieDescription: string;
+};
+
+type StartpilotPlanSnapshot = {
+  code: typeof STARTPILOT_PLAN_CODE;
+  amountMinor: number;
+  currency: "EUR";
+  offerType: "one_time";
+  interval: "30 days";
+  accessDurationDays: 30;
+  entitlements: {
+    aiAnswersTotal: number;
+    imagesTotal: number;
+    imagesPerDay: number;
+    workspaces: number;
+    facebookPages: number;
+    imageQuality: "images_2";
+  };
+  mollieDescription: string;
+};
+
+type IntentPlanSnapshot = RecurringPlanSnapshot | StartpilotPlanSnapshot;
 
 export type PaymentProcessingResult =
   | { result: "processed" | "mismatch" | "duplicate"; workspaceId: number }
@@ -267,13 +309,15 @@ export async function applyMolliePaymentSnapshot(
         if (!hasLaterPaidPeriod) {
           await applyAccessReview(tx, context, plan.entitlements, "blocked");
         }
-        await enqueueOutbox(tx, {
-          workspaceId: context.workspaceId,
-          mode: context.intent.mode,
-          eventType: "cancel_subscription",
-          deduplicationKey: `chargeback_cancel:${payment.id}`,
-          payload: cancellationTargetPayload(context, "chargeback"),
-        });
+        if (plan.offerType === "subscription") {
+          await enqueueOutbox(tx, {
+            workspaceId: context.workspaceId,
+            mode: context.intent.mode,
+            eventType: "cancel_subscription",
+            deduplicationKey: `chargeback_cancel:${payment.id}`,
+            payload: cancellationTargetPayload(context, "chargeback"),
+          });
+        }
         await enqueueOutbox(tx, {
           workspaceId: context.workspaceId,
           mode: context.intent.mode,
@@ -285,13 +329,15 @@ export async function applyMolliePaymentSnapshot(
         if (!hasLaterPaidPeriod) {
           await applyAccessReview(tx, context, plan.entitlements, "inactive");
         }
-        await enqueueOutbox(tx, {
-          workspaceId: context.workspaceId,
-          mode: context.intent.mode,
-          eventType: "cancel_subscription",
-          deduplicationKey: `full_refund_cancel:${payment.id}`,
-          payload: cancellationTargetPayload(context, "full_refund"),
-        });
+        if (plan.offerType === "subscription") {
+          await enqueueOutbox(tx, {
+            workspaceId: context.workspaceId,
+            mode: context.intent.mode,
+            eventType: "cancel_subscription",
+            deduplicationKey: `full_refund_cancel:${payment.id}`,
+            payload: cancellationTargetPayload(context, "full_refund"),
+          });
+        }
         if (hasLaterPaidPeriod) {
           await enqueueOutbox(tx, {
             workspaceId: context.workspaceId,
@@ -344,9 +390,12 @@ export async function applyMolliePaymentSnapshot(
           payment.id
         );
       } else {
-        const paidEffectApplied = payment.subscriptionId
-          ? await applyRecurringPaymentStatus(tx, context, plan, payment)
-          : await applyFirstPaymentStatus(tx, context, plan, payment);
+        const paidEffectApplied =
+          plan.offerType === "one_time"
+            ? await applyStartpilotPaymentStatus(tx, context, plan, payment)
+            : payment.subscriptionId
+              ? await applyRecurringPaymentStatus(tx, context, plan, payment)
+              : await applyFirstPaymentStatus(tx, context, plan, payment);
         if (paidEffectApplied) {
           await tx
             .update(paymentLedger)
@@ -554,12 +603,197 @@ async function findPaymentContextOutsideTransaction(
   return intents[0] ?? null;
 }
 
+async function applyStartpilotPaymentStatus(
+  tx: Parameters<
+    Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
+  >[0],
+  context: PaymentContext,
+  plan: StartpilotPlanSnapshot,
+  payment: MolliePayment
+) {
+  if (payment.status !== "paid") {
+    if (["failed", "canceled", "expired"].includes(payment.status)) {
+      await tx
+        .update(billingIntents)
+        .set({ status: payment.status as "failed" | "canceled" | "expired" })
+        .where(
+          and(
+            eq(billingIntents.intentId, context.intent.intentId),
+            eq(billingIntents.workspaceId, context.workspaceId),
+            eq(billingIntents.mode, context.intent.mode),
+            eq(billingIntents.kind, "startpilot_purchase")
+          )
+        );
+    }
+    return false;
+  }
+
+  const paidAt = parseProviderDate(payment.paidAt ?? payment.createdAt);
+  if (blocksSubscriptionStart(context.subscription, paidAt)) {
+    await enqueueOutbox(tx, {
+      workspaceId: context.workspaceId,
+      mode: context.intent.mode,
+      eventType: "manual_review",
+      deduplicationKey: `startpilot_subscription_conflict:${payment.id}`,
+      payload: {
+        reason: "startpilot_subscription_conflict",
+        paymentId: payment.id,
+      },
+    });
+    await applyAccessReview(tx, context, plan.entitlements, "manual_review");
+    return false;
+  }
+
+  const validUntil = new Date(
+    paidAt.getTime() + plan.accessDurationDays * 24 * 60 * 60 * 1_000
+  );
+
+  await tx
+    .update(billingIntents)
+    .set({ status: "paid", paidAt })
+    .where(
+      and(
+        eq(billingIntents.intentId, context.intent.intentId),
+        eq(billingIntents.workspaceId, context.workspaceId),
+        eq(billingIntents.mode, context.intent.mode),
+        eq(billingIntents.kind, "startpilot_purchase")
+      )
+    );
+  await tx
+    .insert(workspaceEntitlements)
+    .values({
+      workspaceId: context.workspaceId,
+      mode: context.intent.mode,
+      planCode: plan.code,
+      status: "active",
+      quota: plan.entitlements,
+      validUntil,
+      sourceSubscriptionId: null,
+      sourceIntentId: context.intent.intentId,
+    })
+    .onDuplicateKeyUpdate({
+      set: {
+        planCode: plan.code,
+        status: "active",
+        quota: plan.entitlements,
+        validUntil,
+        sourceSubscriptionId: null,
+        sourceIntentId: context.intent.intentId,
+      },
+    });
+  const entitlements = await tx
+    .select({ id: workspaceEntitlements.id })
+    .from(workspaceEntitlements)
+    .where(
+      and(
+        eq(workspaceEntitlements.workspaceId, context.workspaceId),
+        eq(workspaceEntitlements.mode, context.intent.mode),
+        eq(workspaceEntitlements.planCode, plan.code),
+        eq(workspaceEntitlements.sourceIntentId, context.intent.intentId)
+      )
+    )
+    .limit(1)
+    .for("update");
+  const entitlement = entitlements[0];
+  if (!entitlement) {
+    throw new Error("Startpilot entitlement was not persisted");
+  }
+  await tx
+    .insert(workspaceEntitlementUsage)
+    .values({
+      workspaceId: context.workspaceId,
+      mode: context.intent.mode,
+      entitlementId: entitlement.id,
+      planCode: plan.code,
+      sourceIntentId: context.intent.intentId,
+      periodStartedAt: paidAt,
+      periodEndsAt: validUntil,
+      aiAnswersCommitted: 0,
+      aiAnswersReserved: 0,
+      imagesUsed: 0,
+      imageUsageDate: null,
+      imagesUsedToday: 0,
+    })
+    .onDuplicateKeyUpdate({
+      // The scoped update below decides whether this is a retry or a new sale.
+      set: { planCode: sql`plan_code` },
+    });
+  // Keep planCode in the scope even though entitlementId is unique. A row for
+  // another product must fail closed instead of silently donating or resetting
+  // its quota history; future product migrations need an explicit audited path.
+  const usageRows = await tx
+    .select()
+    .from(workspaceEntitlementUsage)
+    .where(
+      and(
+        eq(workspaceEntitlementUsage.workspaceId, context.workspaceId),
+        eq(workspaceEntitlementUsage.mode, context.intent.mode),
+        eq(workspaceEntitlementUsage.entitlementId, entitlement.id),
+        eq(workspaceEntitlementUsage.planCode, plan.code)
+      )
+    )
+    .limit(1)
+    .for("update");
+  const usage = usageRows[0];
+  if (!usage) {
+    throw new Error("Startpilot usage row is unavailable");
+  }
+
+  // A provider retry has the same source intent and must preserve usage. A
+  // separately paid intent reuses the entitlement row but gets a fresh quota.
+  // Expire the previous period's in-flight AI reservations first so a delayed
+  // finalize cannot consume the new period's counters.
+  if (usage.sourceIntentId !== context.intent.intentId) {
+    await tx
+      .update(workspaceEntitlementUsageReservations)
+      .set({ status: "expired", releasedAt: paidAt })
+      .where(
+        and(
+          eq(
+            workspaceEntitlementUsageReservations.workspaceId,
+            context.workspaceId
+          ),
+          eq(workspaceEntitlementUsageReservations.mode, context.intent.mode),
+          eq(
+            workspaceEntitlementUsageReservations.entitlementId,
+            entitlement.id
+          ),
+          eq(workspaceEntitlementUsageReservations.kind, "ai_answer"),
+          eq(workspaceEntitlementUsageReservations.status, "reserved")
+        )
+      );
+    await tx
+      .update(workspaceEntitlementUsage)
+      .set({
+        planCode: plan.code,
+        sourceIntentId: context.intent.intentId,
+        periodStartedAt: paidAt,
+        periodEndsAt: validUntil,
+        aiAnswersCommitted: 0,
+        aiAnswersReserved: 0,
+        imagesUsed: 0,
+        imageUsageDate: null,
+        imagesUsedToday: 0,
+      })
+      .where(
+        and(
+          eq(workspaceEntitlementUsage.workspaceId, context.workspaceId),
+          eq(workspaceEntitlementUsage.mode, context.intent.mode),
+          eq(workspaceEntitlementUsage.entitlementId, entitlement.id),
+          eq(workspaceEntitlementUsage.planCode, plan.code),
+          eq(workspaceEntitlementUsage.sourceIntentId, usage.sourceIntentId)
+        )
+      );
+  }
+  return true;
+}
+
 async function applyFirstPaymentStatus(
   tx: Parameters<
     Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
   >[0],
   context: PaymentContext,
-  plan: NonNullable<ReturnType<typeof getIntentPlanSnapshot>>,
+  plan: RecurringPlanSnapshot,
   payment: MolliePayment
 ) {
   if (payment.status !== "paid") {
@@ -699,7 +933,7 @@ async function applyRecurringPaymentStatus(
     Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
   >[0],
   context: PaymentContext,
-  plan: NonNullable<ReturnType<typeof getIntentPlanSnapshot>>,
+  plan: RecurringPlanSnapshot,
   payment: MolliePayment
 ) {
   const subscription = context.subscription;
@@ -1202,16 +1436,45 @@ async function finishDelivery(
     );
 }
 
-function getIntentPlanSnapshot(intent: typeof billingIntents.$inferSelect) {
+function getIntentPlanSnapshot(
+  intent: typeof billingIntents.$inferSelect
+): IntentPlanSnapshot | null {
   if (
     intent.currency !== "EUR" ||
-    intent.interval !== "1 month" ||
     !intent.entitlements ||
     typeof intent.entitlements !== "object"
   ) {
     return null;
   }
   const entitlements = intent.entitlements as Record<string, unknown>;
+  if (intent.kind === "startpilot_purchase") {
+    const catalogPlan = getStartpilotCatalogPlan();
+    if (
+      !catalogPlan ||
+      intent.planCode !== STARTPILOT_PLAN_CODE ||
+      intent.interval !== catalogPlan.interval ||
+      entitlements.aiAnswersTotal !== catalogPlan.entitlements.aiAnswersTotal ||
+      entitlements.imagesTotal !== catalogPlan.entitlements.imagesTotal ||
+      entitlements.imagesPerDay !== catalogPlan.entitlements.imagesPerDay ||
+      entitlements.workspaces !== catalogPlan.entitlements.workspaces ||
+      entitlements.facebookPages !== catalogPlan.entitlements.facebookPages ||
+      entitlements.imageQuality !== catalogPlan.entitlements.imageQuality
+    ) {
+      return null;
+    }
+    try {
+      return {
+        ...catalogPlan,
+        amountMinor: parseEurValueMinor(intent.expectedAmount),
+        mollieDescription: intent.mollieDescription,
+      };
+    } catch {
+      return null;
+    }
+  }
+  if (intent.interval !== "1 month") {
+    return null;
+  }
   if (
     !Number.isSafeInteger(entitlements.imagesPerDay) ||
     Number(entitlements.imagesPerDay) <= 0 ||
@@ -1225,7 +1488,9 @@ function getIntentPlanSnapshot(intent: typeof billingIntents.$inferSelect) {
       code: intent.planCode,
       amountMinor: parseEurValueMinor(intent.expectedAmount),
       currency: "EUR" as const,
+      offerType: "subscription" as const,
       interval: "1 month" as const,
+      accessDurationDays: null,
       entitlements: {
         imagesPerDay: Number(entitlements.imagesPerDay),
         messagesPerMinute: Number(entitlements.messagesPerMinute),
@@ -1235,6 +1500,49 @@ function getIntentPlanSnapshot(intent: typeof billingIntents.$inferSelect) {
   } catch {
     return null;
   }
+}
+
+function getStartpilotCatalogPlan(): StartpilotPlanSnapshot | null {
+  const plan = getBillingPlan(STARTPILOT_PLAN_CODE);
+  const entitlements = plan?.entitlements;
+  if (
+    !plan ||
+    plan.code !== STARTPILOT_PLAN_CODE ||
+    plan.currency !== "EUR" ||
+    plan.offerType !== "one_time" ||
+    plan.interval !== "30 days" ||
+    plan.accessDurationDays !== 30 ||
+    !entitlements ||
+    !isPositiveSafeInteger(entitlements.aiAnswersTotal) ||
+    !isPositiveSafeInteger(entitlements.imagesTotal) ||
+    !isPositiveSafeInteger(entitlements.imagesPerDay) ||
+    !isPositiveSafeInteger(entitlements.workspaces) ||
+    !isPositiveSafeInteger(entitlements.facebookPages) ||
+    entitlements.imageQuality !== "images_2"
+  ) {
+    return null;
+  }
+  return {
+    code: STARTPILOT_PLAN_CODE,
+    amountMinor: plan.amountMinor,
+    currency: "EUR",
+    offerType: "one_time",
+    interval: "30 days",
+    accessDurationDays: 30,
+    entitlements: {
+      aiAnswersTotal: entitlements.aiAnswersTotal,
+      imagesTotal: entitlements.imagesTotal,
+      imagesPerDay: entitlements.imagesPerDay,
+      workspaces: entitlements.workspaces,
+      facebookPages: entitlements.facebookPages,
+      imageQuality: "images_2",
+    },
+    mollieDescription: plan.mollieDescription,
+  };
+}
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) > 0;
 }
 
 function metadataMatchesIntent(metadata: unknown, intentId: string): boolean {

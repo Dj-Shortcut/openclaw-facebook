@@ -76,6 +76,45 @@ describe("MollieClient", () => {
     });
   });
 
+  it("creates Startpilot as a one-off payment without recurring fields", async () => {
+    const providerPayment = payment({
+      amount: { currency: "EUR", value: "19.00" },
+      description: "Leaderbot Startpilot - eenmalig 30 dagen",
+    });
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request, _init?: RequestInit) =>
+        new Response(JSON.stringify(providerPayment), {
+          status: 201,
+          headers: { "content-type": "application/json" },
+        })
+    );
+    const client = new MollieClient(
+      config,
+      fetchMock as unknown as typeof fetch,
+      "https://api.mollie.test/v2"
+    );
+
+    await client.createOneTimePayment({
+      customerId: "cst_customer123",
+      amount: { currency: "EUR", value: "19.00" },
+      description: "Leaderbot Startpilot - eenmalig 30 dagen",
+      intentId: "intent_opaque123",
+      redirectUrl: "https://leaderbot.test/?billing=return",
+      webhookUrl: "https://billing.test/api/webhooks/mollie/payments",
+      idempotencyKey: "startpilot_intent_opaque123",
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body).toMatchObject({
+      sequenceType: "oneoff",
+      method: "bancontact",
+      amount: { currency: "EUR", value: "19.00" },
+      customerId: "cst_customer123",
+    });
+    expect(body).not.toHaveProperty("mandateId");
+    expect(body).not.toHaveProperty("subscriptionId");
+  });
+
   it.each([
     "https://mollie.com/checkout/select-method/tr_payment123",
     "https://www.mollie.com/checkout/select-method/tr_payment123",

@@ -45,6 +45,8 @@ const originalGatewayAudioTranscriptionCap =
   process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP;
 const originalGatewayLeaderbotEventForwardCap =
   process.env.MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP;
+const originalAiAnswerEnforcement =
+  process.env.LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED;
 let temporaryStateDir: string | null = null;
 
 beforeEach(async () => {
@@ -53,6 +55,7 @@ beforeEach(async () => {
   delete process.env.MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP;
   delete process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP;
   delete process.env.MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP;
+  delete process.env.LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED;
 });
 
 afterEach(async () => {
@@ -88,6 +91,12 @@ afterEach(async () => {
   } else {
     process.env.MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP =
       originalGatewayLeaderbotEventForwardCap;
+  }
+  if (originalAiAnswerEnforcement === undefined) {
+    delete process.env.LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED;
+  } else {
+    process.env.LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED =
+      originalAiAnswerEnforcement;
   }
   resetMessengerGatewayDailyImageForwardBudgetForTests();
   clearMessengerRuntime();
@@ -1567,6 +1576,196 @@ describe("resolveFacebookInboundToolPolicy", () => {
     expect(hardened.tools.deny).toEqual(
       expect.arrayContaining(["existing_tool", "image_generate", "exec", "group:fs"])
     );
+  });
+});
+
+describe("processMessengerEvent Startpilot AI-answer quota", () => {
+  const reservationId = "16be1d70-9ed5-4b32-80cc-98be433581dc";
+
+  beforeEach(() => {
+    process.env.LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED = "true";
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+  });
+
+  it("keeps legacy OpenClaw turns independent from quota while the flag is off", async () => {
+    delete process.env.LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED;
+    const inboundRun = vi.fn(async () => ({ dispatched: false }));
+    setGatewayRuntime(inboundRun);
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({}), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(
+      messengerTextEvent("mid-ai-quota-off", "Schrijf een planning voor morgen"),
+    );
+
+    expect(inboundRun).toHaveBeenCalledTimes(1);
+    expect(
+      fetchMock.mock.calls.some(call =>
+        String(call[0]).includes("/ai-answer-quota/"),
+      ),
+    ).toBe(false);
+  });
+
+  it("drops an in-flight duplicate without invoking OpenClaw or Messenger", async () => {
+    const inboundRun = vi.fn();
+    setGatewayRuntime(inboundRun);
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      expect(String(url)).toContain("/ai-answer-quota/reserve");
+      return new Response(JSON.stringify({ status: "duplicate" }), {
+        status: 200,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(
+      messengerTextEvent("mid-ai-quota-duplicate", "Schrijf een planning voor morgen"),
+    );
+
+    expect(inboundRun).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks OpenClaw and sends the safe portal CTA when exhausted", async () => {
+    const inboundRun = vi.fn();
+    setGatewayRuntime(inboundRun);
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      if (String(url).includes("/ai-answer-quota/reserve")) {
+        return new Response(JSON.stringify({ status: "exhausted" }), {
+          status: 200,
+        });
+      }
+      return new Response(JSON.stringify({
+        message_id: "quota-cta",
+        recipient_id: "sender-mid-ai-quota-exhausted",
+      }), {
+        status: 200,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(
+      messengerTextEvent("mid-ai-quota-exhausted", "Schrijf een planning voor morgen"),
+    );
+
+    expect(inboundRun).not.toHaveBeenCalled();
+    const graphCall = fetchMock.mock.calls.find(call => {
+      if (!String(call[0]).includes("graph.facebook.com")) return false;
+      const body = JSON.parse(String((call[1] as RequestInit).body));
+      return typeof body.message?.text === "string";
+    });
+    const body = JSON.parse(String((graphCall?.[1] as RequestInit).body));
+    expect(body.message.text).toContain(
+      "https://leaderbot.live/?upgrade=startpilot#pricing",
+    );
+  });
+
+  it("commits once only after a visible final reply", async () => {
+    const inboundRun = vi.fn(async (input: {
+      adapter: { resolveTurn: () => { delivery: { deliver: Function } } };
+    }) => {
+      const turn = input.adapter.resolveTurn();
+      await turn.delivery.deliver({ text: "Zichtbaar AI-antwoord" }, { kind: "final" });
+      return {
+        dispatched: true,
+        dispatchResult: { counts: { tool: 0, block: 0, final: 1 } },
+      };
+    });
+    setGatewayRuntime(inboundRun);
+    const finalizeBodies: Array<Record<string, unknown>> = [];
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string, init?: RequestInit) => {
+      const requestUrl = String(url);
+      if (requestUrl.includes("/ai-answer-quota/reserve")) {
+        return new Response(
+          JSON.stringify({ status: "reserved", reservationId }),
+          { status: 200 },
+        );
+      }
+      if (requestUrl.includes("/ai-answer-quota/finalize")) {
+        finalizeBodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ status: "finalized" }), {
+          status: 200,
+        });
+      }
+      return new Response(JSON.stringify({
+        message_id: "visible-final",
+        recipient_id: "sender-mid-ai-quota-commit",
+      }), {
+        status: 200,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(
+      messengerTextEvent("mid-ai-quota-commit", "Schrijf een planning voor morgen"),
+    );
+
+    expect(finalizeBodies).toEqual([
+      { pageId: "page-1", reservationId, outcome: "committed" },
+    ]);
+  });
+
+  it("releases when OpenClaw produces no visible final reply", async () => {
+    setGatewayRuntime(vi.fn(async () => ({ dispatched: false })));
+    const finalizeBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: URL | RequestInfo | string, init?: RequestInit) => {
+      const requestUrl = String(url);
+      if (requestUrl.includes("/ai-answer-quota/reserve")) {
+        return new Response(
+          JSON.stringify({ status: "reserved", reservationId }),
+          { status: 200 },
+        );
+      }
+      if (requestUrl.includes("/ai-answer-quota/finalize")) {
+        finalizeBodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ status: "finalized" }), {
+          status: 200,
+        });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+
+    await processGatewayTestEvent(
+      messengerTextEvent("mid-ai-quota-release", "Schrijf een planning voor morgen"),
+    );
+
+    expect(finalizeBodies).toEqual([
+      { pageId: "page-1", reservationId, outcome: "released" },
+    ]);
+  });
+
+  it("releases when OpenClaw fails before a final reply", async () => {
+    setGatewayRuntime(vi.fn(async () => {
+      throw new Error("model unavailable");
+    }));
+    const finalizeBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: URL | RequestInfo | string, init?: RequestInit) => {
+      const requestUrl = String(url);
+      if (requestUrl.includes("/ai-answer-quota/reserve")) {
+        return new Response(
+          JSON.stringify({ status: "reserved", reservationId }),
+          { status: 200 },
+        );
+      }
+      if (requestUrl.includes("/ai-answer-quota/finalize")) {
+        finalizeBodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({ status: "finalized" }), {
+          status: 200,
+        });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+
+    await expect(
+      processGatewayTestEvent(
+        messengerTextEvent("mid-ai-quota-error", "Schrijf een planning voor morgen"),
+      ),
+    ).rejects.toThrow("model unavailable");
+    expect(finalizeBodies).toEqual([
+      { pageId: "page-1", reservationId, outcome: "released" },
+    ]);
   });
 });
 

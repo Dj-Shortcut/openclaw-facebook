@@ -158,6 +158,32 @@ export class MollieClient {
     });
   }
 
+  async createOneTimePayment(input: {
+    customerId: string;
+    amount: MollieAmount;
+    description: string;
+    intentId: string;
+    redirectUrl: string;
+    webhookUrl: string;
+    idempotencyKey: string;
+  }): Promise<MolliePayment> {
+    return this.request<MolliePayment>("/payments", {
+      method: "POST",
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        amount: input.amount,
+        customerId: input.customerId,
+        sequenceType: "oneoff",
+        method: "bancontact",
+        locale: "nl_BE",
+        description: input.description,
+        redirectUrl: input.redirectUrl,
+        webhookUrl: input.webhookUrl,
+        metadata: { billingIntentId: input.intentId },
+      },
+    });
+  }
+
   async getPayment(paymentId: string): Promise<MolliePayment> {
     assertMollieId(paymentId, "tr_");
     return this.request<MolliePayment>(
@@ -249,7 +275,7 @@ export class MollieClient {
   }
 
   async listMethods(
-    sequenceType: "first" | "recurring"
+    sequenceType: "oneoff" | "first" | "recurring"
   ): Promise<MollieMethod[]> {
     const response = await this.request<MollieList<MollieMethod>>(
       `/methods?sequenceType=${sequenceType}&locale=nl_BE`,
@@ -370,6 +396,22 @@ export class MollieClient {
   }
 }
 
+function isEnabledMollieMethod(method: MollieMethod): boolean {
+  return (
+    !method.status ||
+    method.status === "activated" ||
+    method.status === "active"
+  );
+}
+
+export async function checkMollieOneTimePaymentMethod(client: MollieClient) {
+  const methods = await client.listMethods("oneoff");
+  const bancontact = methods.some(
+    method => method.id === "bancontact" && isEnabledMollieMethod(method)
+  );
+  return { bancontact };
+}
+
 export function assertMollieId(
   value: string,
   prefix: "tr_" | "cst_" | "mdt_" | "sub_"
@@ -391,15 +433,11 @@ export async function checkMolliePaymentMethods(
     client.listMethods("first"),
     client.listMethods("recurring"),
   ]);
-  const isEnabled = (method: MollieMethod) =>
-    !method.status ||
-    method.status === "activated" ||
-    method.status === "active";
   const bancontact = firstMethods.some(
-    method => method.id === "bancontact" && isEnabled(method)
+    method => method.id === "bancontact" && isEnabledMollieMethod(method)
   );
   const sepaDirectDebit = recurringMethods.some(
-    method => method.id === "directdebit" && isEnabled(method)
+    method => method.id === "directdebit" && isEnabledMollieMethod(method)
   );
   return {
     ok: mode === "live" && bancontact && sepaDirectDebit,

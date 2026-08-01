@@ -21,6 +21,7 @@ import {
 import {
   assertMollieId,
   checkMolliePaymentMethods,
+  checkMollieOneTimePaymentMethod,
   MollieClient,
 } from "./mollieClient";
 import {
@@ -54,13 +55,24 @@ export async function startMollieCheckout(
   }
 
   const plan = requireActiveBillingPlan(input.planCode);
+  if (!plan.publiclyAvailable && input.kind !== "payment_method_change") {
+    throw new Error("billing plan is unavailable");
+  }
+  assertCheckoutKindMatchesPlan(plan.offerType, input.kind);
   const config = getMollieConfig();
   const client = clientOverride ?? new MollieClient(config);
-  const methods = await checkMolliePaymentMethods(client, config.mode);
-  if (!methods.bancontact || !methods.sepaDirectDebit) {
-    throw new Error(
-      "Mollie Bancontact and SEPA Direct Debit must both be enabled before checkout"
-    );
+  if (plan.offerType === "one_time") {
+    const methods = await checkMollieOneTimePaymentMethod(client);
+    if (!methods.bancontact) {
+      throw new Error("Mollie Bancontact must be enabled before checkout");
+    }
+  } else {
+    const methods = await checkMolliePaymentMethods(client, config.mode);
+    if (!methods.bancontact || !methods.sepaDirectDebit) {
+      throw new Error(
+        "Mollie Bancontact and SEPA Direct Debit must both be enabled before checkout"
+      );
+    }
   }
   if (input.kind === "payment_method_change") {
     await assertPaymentMethodChangeIsSafe(
@@ -152,7 +164,7 @@ export async function startMollieCheckout(
   }
   let payment: Awaited<ReturnType<MollieClient["createFirstPayment"]>>;
   try {
-    payment = await client.createFirstPayment({
+    const paymentInput = {
       customerId,
       amount: {
         currency: plan.currency,
@@ -163,7 +175,11 @@ export async function startMollieCheckout(
       redirectUrl: `${config.appBaseUrl}/?billing=return&intent=${encodeURIComponent(intent.intentId)}`,
       webhookUrl: config.paymentWebhookUrl,
       idempotencyKey: intent.idempotencyKey,
-    });
+    };
+    payment =
+      plan.offerType === "one_time"
+        ? await client.createOneTimePayment(paymentInput)
+        : await client.createFirstPayment(paymentInput);
   } catch (error) {
     await markIntentApiUnknown(intent.intentId);
     throw error;
@@ -199,6 +215,18 @@ export async function startMollieCheckout(
     checkoutUrl: client.getHostedCheckoutUrl(payment),
     status: "open" as const,
   };
+}
+
+export function assertCheckoutKindMatchesPlan(
+  offerType: "subscription" | "one_time",
+  kind: CheckoutKind
+): void {
+  if (
+    (offerType === "one_time" && kind !== "startpilot_purchase") ||
+    (offerType === "subscription" && kind === "startpilot_purchase")
+  ) {
+    throw new Error("billing plan and checkout kind do not match");
+  }
 }
 
 async function assertPaymentMethodChangeIsSafe(
@@ -289,9 +317,20 @@ export async function cancelMollieSubscriptionAtPeriodEnd(workspaceId: number) {
 export async function getMollieLaunchCheck(clientOverride?: MollieClient) {
   const config = getMollieConfig();
   const client = clientOverride ?? new MollieClient(config);
-  const methods = await checkMolliePaymentMethods(client, config.mode);
+  const methods = await checkMollieOneTimePaymentMethod(client);
+  const sandboxReady = config.mode === "test" && methods.bancontact;
+  const liveReady =
+    config.mode === "live" &&
+    config.liveBillingEnabled &&
+    methods.bancontact;
   return {
     ...methods,
+    ok: liveReady,
+    sandboxReady,
+    liveReady,
+    offerType: "one_time" as const,
+    paymentSequenceType: "oneoff" as const,
+    sepaDirectDebitRequired: false,
     mode: config.mode,
     liveBillingEnabled: config.liveBillingEnabled,
     tenantWorkerConfigured: getTenantBillingWorkerWorkspaceId() !== null,

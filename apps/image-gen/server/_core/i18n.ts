@@ -63,6 +63,8 @@ type TranslationKey =
   | "generationTimeout"
   | "generationBudgetReached"
   | "outOfFreeCredits"
+  | "startpilotQuotaReached"
+  | "openLeaderbot"
   | "generationGenericFailure"
   | "errorFallback"
   | "unsupportedMedia"
@@ -75,18 +77,20 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
   nl: {
     flowExplanation:
       "Beschrijf wat je wilt maken, of stuur een foto als je die wilt bewerken.",
-  photoEditPrompt:
-    "Foto ontvangen. Beschrijf wat je aan de foto wilt aanpassen.",
-  editImagePrompt: "Beschrijf wat je aan de afbeelding wilt aanpassen.",
-  newImagePrompt: "Beschrijf de nieuwe afbeelding die je wilt maken.",
-  changeBackground: "Andere achtergrond",
-  changeBackgroundPrompt:
-    "Beschrijf de nieuwe achtergrond. Ik gebruik de huidige afbeelding.",
-  changeBackgroundRequiresPhoto:
-    "Stuur eerst een bruikbare bronfoto via de fotoknop of camera, niet als bestand of bijlage. Daarna vraag ik welke achtergrond je wilt.",
-  screenshotClarifyPrompt: "Ik zag een screenshot — wat wil je daar precies mee doen?",
-  screenshotIntentContinuation: "Top, dit is een screenshot. Ik werk dit meteen volgens je eerdere bedoeling af.",
-  whatIsThis: "Wat doe ik?",
+    photoEditPrompt:
+      "Foto ontvangen. Beschrijf wat je aan de foto wilt aanpassen.",
+    editImagePrompt: "Beschrijf wat je aan de afbeelding wilt aanpassen.",
+    newImagePrompt: "Beschrijf de nieuwe afbeelding die je wilt maken.",
+    changeBackground: "Andere achtergrond",
+    changeBackgroundPrompt:
+      "Beschrijf de nieuwe achtergrond. Ik gebruik de huidige afbeelding.",
+    changeBackgroundRequiresPhoto:
+      "Stuur eerst een bruikbare bronfoto via de fotoknop of camera, niet als bestand of bijlage. Daarna vraag ik welke achtergrond je wilt.",
+    screenshotClarifyPrompt:
+      "Ik zag een screenshot — wat wil je daar precies mee doen?",
+    screenshotIntentContinuation:
+      "Top, dit is een screenshot. Ik werk dit meteen volgens je eerdere bedoeling af.",
+    whatIsThis: "Wat doe ik?",
     newImage: "Nieuwe afbeelding",
     editImage: "Pas aan",
     editPhoto: "Pas foto aan",
@@ -134,6 +138,9 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Even pauze, ons maandbudget is bereikt. Probeer later opnieuw.",
     outOfFreeCredits:
       "Je hebt je gratis credits voor vandaag opgebruikt. Kom morgen terug.",
+    startpilotQuotaReached:
+      "Je Startpilot-tegoed is opgebruikt. Open Leaderbot om je gebruik te bekijken of een nieuw pakket te kiezen.",
+    openLeaderbot: "Open Leaderbot",
     generationGenericFailure: "Ik kon die afbeelding nu niet maken.",
     errorFallback: "Er liep iets mis aan mijn kant. Probeer gerust opnieuw.",
     unsupportedMedia:
@@ -172,14 +179,12 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Ik zet je video in de wachtrij en stuur hem zodra hij klaar is.",
     videoGenerationTimeout:
       "De videomaker deed er te lang over. Probeer straks opnieuw met dezelfde foto.",
-    videoGenerationUnavailable:
-      "Video maken staat nog niet aan.",
+    videoGenerationUnavailable: "Video maken staat nog niet aan.",
     videoGenerationGenericFailure:
       "Ik kon die video nu niet maken. Je foto blijft bewaard, dus je kunt een andere aanpassing vragen.",
     outOfVideoCredits:
       "Je hebt je gratis videocredits voor vandaag opgebruikt. Probeer morgen opnieuw.",
-    unsupportedGif:
-      "GIF ontvangen, stuur best een gewone foto voor bewerking.",
+    unsupportedGif: "GIF ontvangen, stuur best een gewone foto voor bewerking.",
     unsupportedAudio:
       "Ik heb je voice ontvangen, maar kan die nog niet verwerken. Stuur tekst of een foto.",
   },
@@ -195,8 +200,10 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Describe the new background. I will use the current image.",
     changeBackgroundRequiresPhoto:
       "Send a usable source photo with the photo button or camera first, not as a file attachment. Then I will ask what background you want.",
-    screenshotClarifyPrompt: "I see a screenshot — what do you want to do with it?",
-    screenshotIntentContinuation: "Got it, this is a screenshot. I’ll apply your previous request now.",
+    screenshotClarifyPrompt:
+      "I see a screenshot — what do you want to do with it?",
+    screenshotIntentContinuation:
+      "Got it, this is a screenshot. I’ll apply your previous request now.",
     whatIsThis: "What is this?",
     newImage: "New image",
     editImage: "Edit image",
@@ -242,6 +249,9 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Quick pause, our monthly budget has been reached. Please try again later.",
     outOfFreeCredits:
       "You used your free credits for today. Come back tomorrow.",
+    startpilotQuotaReached:
+      "Your Startpilot credit is used up. Open Leaderbot to review usage or choose a new package.",
+    openLeaderbot: "Open Leaderbot",
     generationGenericFailure: "I could not generate that image right now.",
     errorFallback: "Something went wrong on my side. Please try again.",
     unsupportedMedia:
@@ -260,8 +270,7 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "I still can't use shared links as input. Send a photo for editing.",
     unsupportedShareWithEditableImage:
       "I still can't use shared links as input. You can still continue with your previous photo.",
-    unsupportedSticker:
-      "I can't process stickers. Send a photo for editing.",
+    unsupportedSticker: "I can't process stickers. Send a photo for editing.",
     unsupportedStickerWithEditableImage:
       "I can't process stickers. You can still continue with your previous photo.",
     unsupportedUnknown:
@@ -280,14 +289,12 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "I queued your video and will send it as soon as it is ready.",
     videoGenerationTimeout:
       "The video provider took too long. Please try again later with the same photo.",
-    videoGenerationUnavailable:
-      "Video generation is not enabled yet.",
+    videoGenerationUnavailable: "Video generation is not enabled yet.",
     videoGenerationGenericFailure:
       "I could not create that video right now. Your photo is still available, so you can ask for a different edit.",
     outOfVideoCredits:
       "You used your free video credits for today. Try again tomorrow.",
-    unsupportedGif:
-      "I got your GIF, send a regular photo instead.",
+    unsupportedGif: "I got your GIF, send a regular photo instead.",
     unsupportedAudio:
       "I got your voice message, but I can't process it yet. Send text or a photo.",
   },

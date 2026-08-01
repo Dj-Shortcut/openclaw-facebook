@@ -28,6 +28,7 @@ describe("Mollie checkout provider failure boundary", () => {
       ...originalEnv,
       NODE_ENV: "test",
       MOLLIE_BILLING_ENABLED: "true",
+      MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED: "true",
       MOLLIE_API_KEY: "test_example123",
       MOLLIE_MODE: "test",
       MOLLIE_PAYMENT_WEBHOOK_URL:
@@ -78,9 +79,9 @@ describe("Mollie checkout provider failure boundary", () => {
     expect(storeMocks.attachMolliePayment).not.toHaveBeenCalled();
   });
 
-  it("marks an unexpected createFirstPayment failure as api_unknown", async () => {
+  it("marks an unexpected one-off payment failure as api_unknown", async () => {
     const client = checkoutClient();
-    vi.mocked(client.createFirstPayment).mockRejectedValueOnce(
+    vi.mocked(client.createOneTimePayment).mockRejectedValueOnce(
       new Error("provider unavailable")
     );
 
@@ -90,14 +91,62 @@ describe("Mollie checkout provider failure boundary", () => {
     expect(storeMocks.markIntentApiUnknown).toHaveBeenCalledWith(intentId);
     expect(storeMocks.markIntentPaymentMismatch).not.toHaveBeenCalled();
   });
+
+  it("uses a one-off payment and never the first-payment subscription path for Startpilot", async () => {
+    const createOneTimePayment = vi.fn().mockResolvedValue({
+      resource: "payment",
+      id: "tr_payment123",
+      mode: "test",
+      status: "open",
+      amount: { currency: "EUR", value: "19.00" },
+      description: "Leaderbot Startpilot - eenmalig 30 dagen",
+      customerId: "cst_customer123",
+      metadata: { billingIntentId: intentId },
+      createdAt: "2026-08-01T00:00:00.000Z",
+    });
+    const createFirstPayment = vi.fn();
+    const listMethods = vi
+      .fn<MollieClient["listMethods"]>()
+      .mockResolvedValue([
+        { resource: "method", id: "bancontact", status: "active" },
+      ]);
+    const client = {
+      listMethods,
+      createOneTimePayment,
+      createFirstPayment,
+      getHostedCheckoutUrl: vi
+        .fn()
+        .mockReturnValue("https://checkout.mollie.com/pay/tr_payment123"),
+    } as unknown as MollieClient;
+
+    await expect(
+      startMollieCheckout(
+        {
+          workspaceId: 1,
+          planCode: "startpilot_once_v1",
+          countryCode: "BE",
+          kind: "startpilot_purchase",
+          businessCheckout: false,
+        },
+        client
+      )
+    ).resolves.toMatchObject({ status: "open" });
+    expect(createOneTimePayment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: { currency: "EUR", value: "19.00" },
+      })
+    );
+    expect(createFirstPayment).not.toHaveBeenCalled();
+    expect(listMethods).toHaveBeenCalledWith("oneoff");
+  });
 });
 
 function checkoutInput() {
   return {
     workspaceId: 1,
-    planCode: "premium_monthly_v1",
+    planCode: "startpilot_once_v1",
     countryCode: "BE" as const,
-    kind: "subscription_start" as const,
+    kind: "startpilot_purchase" as const,
     businessCheckout: false,
   };
 }
@@ -112,20 +161,14 @@ function checkoutClient(
   return {
     listMethods: vi
       .fn()
-      .mockImplementation((sequenceType: string) =>
-        Promise.resolve(
-          sequenceType === "first"
-            ? [{ resource: "method", id: "bancontact" }]
-            : [{ resource: "method", id: "directdebit" }]
-        )
-      ),
-    createFirstPayment: vi.fn().mockResolvedValue({
+      .mockResolvedValue([{ resource: "method", id: "bancontact" }]),
+    createOneTimePayment: vi.fn().mockResolvedValue({
       resource: "payment",
       id: "tr_payment123",
       mode: overrides.mode ?? "test",
       status: "open",
-      amount: { currency: "EUR", value: "29.00" },
-      description: "Leaderbot Premium monthly",
+      amount: { currency: "EUR", value: "19.00" },
+      description: "Leaderbot Startpilot - eenmalig 30 dagen",
       customerId: overrides.customerId ?? "cst_customer123",
       metadata: overrides.metadata ?? { billingIntentId: intentId },
       createdAt: "2026-08-01T00:00:00.000Z",

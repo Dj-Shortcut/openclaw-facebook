@@ -285,6 +285,9 @@ describe("Fly gateway startup", () => {
 
     const publicPort = guard.address().port;
     const webhookResponse = await fetch(`http://127.0.0.1:${publicPort}/facebook/webhook?hub.challenge=ok`);
+    const legacyWebhookResponse = await fetch(
+      `http://127.0.0.1:${publicPort}/messenger/webhook?hub.challenge=ok`,
+    );
     const blockedResponse = await fetch(`http://127.0.0.1:${publicPort}/`);
 
     expect(webhookResponse.status).toBe(200);
@@ -292,9 +295,51 @@ describe("Fly gateway startup", () => {
       ok: true,
       path: "/facebook/webhook?hub.challenge=ok",
     });
+    expect(legacyWebhookResponse.status).toBe(404);
+    expect(await legacyWebhookResponse.text()).toBe("Not found");
     expect(blockedResponse.status).toBe(404);
     expect(await blockedResponse.text()).toBe("Not found");
     expect(seenPaths).toEqual(["/facebook/webhook?hub.challenge=ok"]);
+
+    await closeServer(guard);
+    await closeServer(target);
+  }, 15000);
+
+  it("requires an explicit route override for a configured legacy webhook path", async () => {
+    const seenPaths = [];
+    const target = http.createServer((req, res) => {
+      seenPaths.push(req.url);
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ ok: true, path: req.url }));
+    });
+    target.listen(0, "127.0.0.1");
+    await waitForListening(target);
+
+    const guard = startPublicRouteGuard({
+      publicPort: 0,
+      targetPort: target.address().port,
+      env: {
+        OPENCLAW_PUBLIC_GATEWAY_PATHS: "/messenger/webhook,/healthz",
+      },
+    });
+    await waitForListening(guard);
+
+    const publicPort = guard.address().port;
+    const legacyWebhookResponse = await fetch(
+      `http://127.0.0.1:${publicPort}/messenger/webhook?hub.challenge=ok`,
+    );
+    const defaultWebhookResponse = await fetch(
+      `http://127.0.0.1:${publicPort}/facebook/webhook?hub.challenge=ok`,
+    );
+
+    expect(legacyWebhookResponse.status).toBe(200);
+    expect(await legacyWebhookResponse.json()).toEqual({
+      ok: true,
+      path: "/messenger/webhook?hub.challenge=ok",
+    });
+    expect(defaultWebhookResponse.status).toBe(404);
+    expect(await defaultWebhookResponse.text()).toBe("Not found");
+    expect(seenPaths).toEqual(["/messenger/webhook?hub.challenge=ok"]);
 
     await closeServer(guard);
     await closeServer(target);
@@ -345,6 +390,10 @@ describe("Fly gateway startup", () => {
     const portalFacebookCallback = await fetch(
       `http://127.0.0.1:${publicPort}/api/facebook/connect/callback?code=ok&state=state-value`,
     );
+    const publicConfig = await fetch(`http://127.0.0.1:${publicPort}/api/public/config`);
+    const publicConfigPost = await fetch(`http://127.0.0.1:${publicPort}/api/public/config`, {
+      method: "POST",
+    });
     const portalSnapshot = await fetch(`http://127.0.0.1:${publicPort}/api/portal/snapshot`);
     const portalAiIdentity = await fetch(`http://127.0.0.1:${publicPort}/api/portal/ai-identity`, {
       method: "POST",
@@ -384,6 +433,9 @@ describe("Fly gateway startup", () => {
     expect(await portalFacebookCallback.text()).toBe(
       "portal:/api/facebook/connect/callback?code=ok&state=state-value",
     );
+    expect(publicConfig.status).toBe(200);
+    expect(await publicConfig.text()).toBe("portal:/api/public/config");
+    expect(publicConfigPost.status).toBe(404);
     expect(portalSnapshot.status).toBe(200);
     expect(await portalSnapshot.text()).toBe("portal:/api/portal/snapshot");
     expect(portalAiIdentity.status).toBe(200);
@@ -414,6 +466,7 @@ describe("Fly gateway startup", () => {
       "/assets/app.js",
       "/api/oauth/callback?code=ok&state=state-value",
       "/api/facebook/connect/callback?code=ok&state=state-value",
+      "/api/public/config",
       "/api/portal/snapshot",
       "/api/portal/ai-identity",
       "/api/portal/facebook/start",

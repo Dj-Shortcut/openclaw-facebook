@@ -3,8 +3,10 @@ import { safeLog } from "./messengerApi";
 import { getGenerationMetrics } from "./image-generation/openAiImageClient";
 import { executeGenerationFlow } from "./generationFlow";
 import {
+  buildFreeQuotaReachedResponse,
   buildGenerationFailureResponse,
   buildGenerationSuccessResponse,
+  buildStartpilotQuotaReachedResponse,
 } from "./conversationActions";
 import {
   anonymizePsid,
@@ -53,6 +55,12 @@ import {
 } from "./webhookFallback";
 import { clearInFlightNotice } from "./webhookHandlerContext";
 import type { HandlerContext } from "./webhookHandlerTypes";
+import { getMessengerRequestPageId } from "./messengerRequestContext";
+import {
+  resolveWorkspaceRuntimePolicy,
+  type StartpilotRuntimePolicy,
+} from "./workspaceEntitlementRuntime";
+import { reserveStartpilotImageUsage } from "./billing/entitlementUsageStore";
 
 type GenerationJobRunner = {
   runImageGeneration: HandlerContext["runImageGeneration"];
@@ -82,6 +90,16 @@ class MessengerGenerationDeliveryError extends Error {
   }
 }
 
+class StartpilotImageQuotaExceededError extends Error {
+  readonly reason: "total_exhausted" | "daily_exhausted";
+
+  constructor(reason: "total_exhausted" | "daily_exhausted") {
+    super("Startpilot image quota reached");
+    this.name = "StartpilotImageQuotaExceededError";
+    this.reason = reason;
+  }
+}
+
 /** Creates the Messenger image-generation job runner and queue/dead-letter entry points. */
 export function createMessengerGenerationJobRunner(
   deps: GenerationJobRunnerDeps
@@ -97,6 +115,7 @@ export function createMessengerGenerationJobRunner(
       lang,
       sourceImageUrl,
       promptHint,
+      pageId,
     } = job;
     const resolvedGenerationKind = resolveGenerationKind({
       generationKind,
@@ -126,20 +145,23 @@ export function createMessengerGenerationJobRunner(
           return;
         }
 
-        const quotaReservation = await reserveGenerationQuota({
-          deps,
-          psid,
-          reqId,
-          lang,
-          rememberSendOutcome,
-        });
-        if (!quotaReservation) {
+        const workspacePolicy = await resolveWorkspaceRuntimePolicy(pageId);
+        const quotaReservation =
+          workspacePolicy.kind === "free"
+            ? await reserveGenerationQuota({
+                deps,
+                psid,
+                reqId,
+                lang,
+                rememberSendOutcome,
+              })
+            : null;
+        if (workspacePolicy.kind === "free" && !quotaReservation) {
           return;
         }
 
-        let pendingQuotaReservation:
-          | ImageGenerationQuotaReservation
-          | null = quotaReservation;
+        let pendingQuotaReservation: ImageGenerationQuotaReservation | null =
+          quotaReservation;
         let providerAttemptsCommitted = 0;
         try {
           await setFlowState(psid, "PROCESSING");
@@ -163,6 +185,13 @@ export function createMessengerGenerationJobRunner(
               sourceImageUrl === state.lastImageUrl)
           );
           const commitProviderAttemptQuota = async () => {
+            if (workspacePolicy.kind === "startpilot") {
+              if (providerAttemptsCommitted > 0) return;
+              await commitStartpilotProviderAttempt(workspacePolicy);
+              providerAttemptsCommitted += 1;
+              return;
+            }
+
             const reservationForAttempt =
               pendingQuotaReservation ??
               (await reserveMessengerGenerationQuota({
@@ -181,7 +210,9 @@ export function createMessengerGenerationJobRunner(
               generationKind: resolvedGenerationKind,
             });
             providerAttemptsCommitted += 1;
-            if (pendingQuotaReservation?.token === reservationForAttempt.token) {
+            if (
+              pendingQuotaReservation?.token === reservationForAttempt.token
+            ) {
               pendingQuotaReservation = null;
             }
           };
@@ -203,6 +234,14 @@ export function createMessengerGenerationJobRunner(
                 : state.lastPhotoSource
               : undefined,
             onProviderAttempt: commitProviderAttemptQuota,
+            imageModel:
+              workspacePolicy.kind === "startpilot"
+                ? workspacePolicy.imageModel
+                : undefined,
+            imageQuality:
+              workspacePolicy.kind === "startpilot"
+                ? workspacePolicy.imageQuality
+                : undefined,
           });
 
           if (generationResult.kind === "success") {
@@ -300,6 +339,7 @@ export function createMessengerGenerationJobRunner(
       {
         psid,
         userId,
+        pageId: getMessengerRequestPageId(),
         generationKind: resolvedGenerationKind,
         reqId,
         lang,
@@ -350,6 +390,19 @@ export function createMessengerGenerationJobRunner(
     processMessengerGenerationJob: executeImageGenerationJob,
     processMessengerGenerationJobDeadLetter,
   };
+}
+
+async function commitStartpilotProviderAttempt(
+  policy: StartpilotRuntimePolicy
+): Promise<void> {
+  const decision = await reserveStartpilotImageUsage({
+    workspaceId: policy.workspaceId,
+    entitlementId: policy.entitlementId,
+    mode: policy.mode,
+  });
+  if (!decision.allowed) {
+    throw new StartpilotImageQuotaExceededError(decision.reason);
+  }
 }
 
 async function sendGenerationStartedAck(input: {
@@ -537,10 +590,12 @@ async function reserveGenerationQuota(input: {
     return reservation;
   }
 
+  const response = buildFreeQuotaReachedResponse(input.lang);
   input.rememberSendOutcome(
-    await input.deps.sendLoggedText(
+    await input.deps.sendLoggedActions(
       input.psid,
-      t(input.lang, "outOfFreeCredits"),
+      response.text ?? t(input.lang, "outOfFreeCredits"),
+      response.actions ?? [],
       input.reqId
     )
   );
@@ -734,6 +789,24 @@ async function handleGenerationFailure(input: {
     })
   );
   recordGenerationError();
+
+  if (error instanceof StartpilotImageQuotaExceededError) {
+    safeLog("startpilot_image_quota_blocked", {
+      reqId: input.reqId,
+      reason: error.reason,
+    });
+    const response = buildStartpilotQuotaReachedResponse(input.lang);
+    input.rememberSendOutcome(
+      await input.deps.sendLoggedActions(
+        input.psid,
+        response.text ?? "",
+        response.actions ?? [],
+        input.reqId
+      )
+    );
+    await setFlowState(input.psid, "AWAITING_EDIT_PROMPT");
+    return;
+  }
 
   const failure = getGenerationFailureMessage(
     input.generationResult.errorKind,

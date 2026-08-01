@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  assertCheckoutKindMatchesPlan,
+  getMollieLaunchCheck,
   hasExistingSubscriptionCollectionRisk,
   isOutsidePaymentMethodChangeCollectionWindow,
   startMollieCheckout,
@@ -65,6 +67,25 @@ describe("Mollie checkout launch gate", () => {
     expect(listMethods).not.toHaveBeenCalled();
   });
 
+  it("does not allow a caller to buy the hidden recurring offer", async () => {
+    process.env = billingTestEnv();
+    const listMethods = vi.fn();
+
+    await expect(
+      startMollieCheckout(
+        {
+          workspaceId: 1,
+          planCode: "premium_monthly_v1",
+          countryCode: "BE",
+          kind: "subscription_start",
+          businessCheckout: false,
+        },
+        { listMethods } as unknown as MollieClient
+      )
+    ).rejects.toThrow("billing plan is unavailable");
+    expect(listMethods).not.toHaveBeenCalled();
+  });
+
   it("fails before database work unless both required methods are available", async () => {
     process.env = billingTestEnv();
     const listMethods = vi
@@ -83,13 +104,65 @@ describe("Mollie checkout launch gate", () => {
           workspaceId: 1,
           planCode: "premium_monthly_v1",
           countryCode: "BE",
-          kind: "subscription_start",
+          kind: "payment_method_change",
           businessCheckout: false,
         },
         { listMethods } as unknown as MollieClient
       )
     ).rejects.toThrow("Bancontact and SEPA Direct Debit must both be enabled");
     expect(listMethods).toHaveBeenCalledTimes(2);
+  });
+
+  it("checks only one-off Bancontact for the Startpilot", async () => {
+    process.env = billingTestEnv();
+    const listMethods = vi.fn().mockResolvedValue([]);
+
+    await expect(
+      startMollieCheckout(
+        {
+          workspaceId: 1,
+          planCode: "startpilot_once_v1",
+          countryCode: "BE",
+          kind: "startpilot_purchase",
+          businessCheckout: false,
+        },
+        { listMethods } as unknown as MollieClient
+      )
+    ).rejects.toThrow("Bancontact must be enabled");
+    expect(listMethods).toHaveBeenCalledTimes(1);
+    expect(listMethods).toHaveBeenCalledWith("oneoff");
+  });
+
+  it("reports Startpilot sandbox readiness without requiring SEPA", async () => {
+    process.env = billingTestEnv();
+    const listMethods = vi
+      .fn()
+      .mockResolvedValue([{ resource: "method", id: "bancontact" }]);
+
+    await expect(
+      getMollieLaunchCheck({ listMethods } as unknown as MollieClient)
+    ).resolves.toMatchObject({
+      ok: false,
+      sandboxReady: true,
+      liveReady: false,
+      offerType: "one_time",
+      paymentSequenceType: "oneoff",
+      bancontact: true,
+      sepaDirectDebitRequired: false,
+    });
+    expect(listMethods).toHaveBeenCalledWith("oneoff");
+  });
+
+  it("fails closed when a checkout kind does not match its product", () => {
+    expect(() =>
+      assertCheckoutKindMatchesPlan("one_time", "subscription_start")
+    ).toThrow("do not match");
+    expect(() =>
+      assertCheckoutKindMatchesPlan("subscription", "startpilot_purchase")
+    ).toThrow("do not match");
+    expect(() =>
+      assertCheckoutKindMatchesPlan("one_time", "startpilot_purchase")
+    ).not.toThrow();
   });
 });
 
@@ -98,6 +171,7 @@ function billingTestEnv(): NodeJS.ProcessEnv {
     ...originalEnv,
     NODE_ENV: "test",
     MOLLIE_BILLING_ENABLED: "true",
+    MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED: "true",
     MOLLIE_API_KEY: "test_example123",
     MOLLIE_MODE: "test",
     MOLLIE_PAYMENT_WEBHOOK_URL:

@@ -18,7 +18,10 @@ import {
   deterministicIdempotencyKey,
 } from "./ids";
 
-export type CheckoutKind = "subscription_start" | "payment_method_change";
+export type CheckoutKind =
+  | "subscription_start"
+  | "payment_method_change"
+  | "startpilot_purchase";
 
 export type BillingCustomerReservation = {
   customer: BillingCustomer;
@@ -97,6 +100,30 @@ export async function reserveCheckoutIntent(input: {
       (!subscription || subscription.status !== "active")
     ) {
       throw new Error("workspace has no subscription to update");
+    }
+    if (
+      input.kind === "startpilot_purchase" &&
+      blocksSubscriptionStart(subscription, new Date())
+    ) {
+      throw new Error("workspace already has paid billing access");
+    }
+
+    if (input.kind === "startpilot_purchase") {
+      const completedPilot = await tx
+        .select({ intentId: billingIntents.intentId })
+        .from(billingIntents)
+        .where(
+          and(
+            eq(billingIntents.workspaceId, input.workspaceId),
+            eq(billingIntents.mode, input.mode),
+            eq(billingIntents.kind, "startpilot_purchase"),
+            eq(billingIntents.status, "paid")
+          )
+        )
+        .limit(1);
+      if (completedPilot[0]) {
+        throw new Error("workspace already used its Startpilot");
+      }
     }
 
     const reusable = await tx

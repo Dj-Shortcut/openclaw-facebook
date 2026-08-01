@@ -5,10 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const {
   acceptInternalMessengerImageRequestMock,
   processFacebookWebhookPayloadMock,
+  reserveInternalAiAnswerQuotaMock,
+  finalizeInternalAiAnswerQuotaMock,
   timingSafeEqualMock,
 } = vi.hoisted(() => ({
   acceptInternalMessengerImageRequestMock: vi.fn(async () => undefined),
   processFacebookWebhookPayloadMock: vi.fn(async () => undefined),
+  reserveInternalAiAnswerQuotaMock: vi.fn(),
+  finalizeInternalAiAnswerQuotaMock: vi.fn(),
   timingSafeEqualMock: vi.fn((left: Buffer, right: Buffer) =>
     left.equals(right)
   ),
@@ -25,6 +29,13 @@ vi.mock("node:crypto", async importOriginal => {
 vi.mock("./_core/messengerWebhook", () => ({
   acceptInternalMessengerImageRequest: acceptInternalMessengerImageRequestMock,
   processFacebookWebhookPayload: processFacebookWebhookPayloadMock,
+}));
+
+vi.mock("./_core/internalAiAnswerQuota", () => ({
+  reserveInternalAiAnswerQuota: reserveInternalAiAnswerQuotaMock,
+  finalizeInternalAiAnswerQuota: finalizeInternalAiAnswerQuotaMock,
+  safeInternalAiAnswerQuotaErrorCode: (error: unknown) =>
+    error instanceof Error ? error.name : "UnknownError",
 }));
 
 import {
@@ -98,6 +109,8 @@ beforeEach(() => {
   acceptInternalMessengerImageRequestMock.mockReset();
   acceptInternalMessengerImageRequestMock.mockResolvedValue(undefined);
   processFacebookWebhookPayloadMock.mockReset();
+  reserveInternalAiAnswerQuotaMock.mockReset();
+  finalizeInternalAiAnswerQuotaMock.mockReset();
   timingSafeEqualMock.mockClear();
 });
 
@@ -107,6 +120,137 @@ afterEach(() => {
     return;
   }
   process.env.INTERNAL_IMAGE_REQUEST_TOKEN = originalToken;
+});
+
+describe("internal AI-answer quota routes", () => {
+  it("authenticates and validates reservation requests", async () => {
+    reserveInternalAiAnswerQuotaMock.mockResolvedValue({
+      status: "reserved",
+      reservationId: "16be1d70-9ed5-4b32-80cc-98be433581dc",
+    });
+
+    await withListeningApp(createApp(), async baseUrl => {
+      const response = await fetch(
+        `${baseUrl}/internal/messenger/ai-answer-quota/reserve`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer route-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            pageId: "page-1",
+            idempotencyKey: `messenger_ai_answer:${"a".repeat(64)}`,
+          }),
+        }
+      );
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        status: "reserved",
+        reservationId: "16be1d70-9ed5-4b32-80cc-98be433581dc",
+      });
+    });
+    expect(reserveInternalAiAnswerQuotaMock).toHaveBeenCalledWith({
+      pageId: "page-1",
+      idempotencyKey: `messenger_ai_answer:${"a".repeat(64)}`,
+    });
+  });
+
+  it("rejects an invalid reserve bearer token before touching quota state", async () => {
+    await withListeningApp(createApp(), async baseUrl => {
+      const response = await fetch(
+        `${baseUrl}/internal/messenger/ai-answer-quota/reserve`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer wrong-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            pageId: "page-1",
+            idempotencyKey: `messenger_ai_answer:${"a".repeat(64)}`,
+          }),
+        }
+      );
+
+      expect(response.status).toBe(403);
+      await response.text();
+    });
+    expect(reserveInternalAiAnswerQuotaMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid reserve idempotency key before touching quota state", async () => {
+    await withListeningApp(createApp(), async baseUrl => {
+      const response = await fetch(
+        `${baseUrl}/internal/messenger/ai-answer-quota/reserve`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer route-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            pageId: "page-1",
+            idempotencyKey: "too short",
+          }),
+        }
+      );
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "Invalid AI answer quota request",
+      });
+    });
+    expect(reserveInternalAiAnswerQuotaMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unauthenticated finalization before touching quota state", async () => {
+    await withListeningApp(createApp(), async baseUrl => {
+      const response = await fetch(
+        `${baseUrl}/internal/messenger/ai-answer-quota/finalize`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer wrong-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            pageId: "page-1",
+            reservationId: "16be1d70-9ed5-4b32-80cc-98be433581dc",
+            outcome: "committed",
+          }),
+        }
+      );
+      expect(response.status).toBe(403);
+      await response.text();
+    });
+    expect(finalizeInternalAiAnswerQuotaMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when paid quota state is unavailable", async () => {
+    reserveInternalAiAnswerQuotaMock.mockRejectedValue(new Error("db down"));
+    await withListeningApp(createApp(), async baseUrl => {
+      const response = await fetch(
+        `${baseUrl}/internal/messenger/ai-answer-quota/reserve`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer route-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            pageId: "page-1",
+            idempotencyKey: `messenger_ai_answer:${"b".repeat(64)}`,
+          }),
+        }
+      );
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({
+        error: "AI answer quota is unavailable",
+      });
+    });
+  });
 });
 
 describe("internal Messenger image request route", () => {

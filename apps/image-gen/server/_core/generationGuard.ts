@@ -377,6 +377,8 @@ export async function assertMessengerDailySpendBudgetAvailable(input: {
   reqId: string;
   estimatedCostUsd: number | null;
   estimatedOutputCostUsd?: number | null;
+  /** Explicit false fails closed; omitted preserves complete-or-unpriced callers. */
+  costEstimateComplete?: boolean;
   now?: Date;
 }): Promise<void> {
   const { capUsd } = getMessengerDailySpendBudgetConfig();
@@ -387,7 +389,11 @@ export async function assertMessengerDailySpendBudgetAvailable(input: {
   const attemptEstimate =
     (input.estimatedCostUsd ?? 0) + (input.estimatedOutputCostUsd ?? 0);
   const period = getUtcDayKey(input.now ?? new Date());
-  if (!Number.isFinite(attemptEstimate) || attemptEstimate <= 0) {
+  if (
+    input.costEstimateComplete === false ||
+    !Number.isFinite(attemptEstimate) ||
+    attemptEstimate <= 0
+  ) {
     safeLog("messenger_daily_spend_budget_unpriced_attempt_blocked", {
       level: "warn",
       reqId: hashRequestId(input.reqId),
@@ -400,7 +406,7 @@ export async function assertMessengerDailySpendBudgetAvailable(input: {
       capUsd,
     });
     throw new MessengerSpendBudgetExceededError(
-      "Messenger daily spend budget requires priced provider attempts"
+      "Messenger daily spend budget requires completely priced provider attempts"
     );
   }
 
@@ -432,6 +438,8 @@ export async function assertMessengerMonthlySpendBudgetAvailable(input: {
   reqId: string;
   estimatedCostUsd: number | null;
   estimatedOutputCostUsd?: number | null;
+  /** Explicit false fails closed; omitted preserves complete-or-unpriced callers. */
+  costEstimateComplete?: boolean;
   now?: Date;
 }): Promise<void> {
   const { capUsd } = getMessengerMonthlySpendBudgetConfig();
@@ -443,7 +451,11 @@ export async function assertMessengerMonthlySpendBudgetAvailable(input: {
     (input.estimatedCostUsd ?? 0) + (input.estimatedOutputCostUsd ?? 0);
   const now = input.now ?? new Date();
   const monthPeriod = getUtcMonthKey(now);
-  if (!Number.isFinite(attemptEstimate) || attemptEstimate <= 0) {
+  if (
+    input.costEstimateComplete === false ||
+    !Number.isFinite(attemptEstimate) ||
+    attemptEstimate <= 0
+  ) {
     safeLog("messenger_monthly_spend_budget_unpriced_attempt_blocked", {
       level: "warn",
       reqId: hashRequestId(input.reqId),
@@ -456,7 +468,7 @@ export async function assertMessengerMonthlySpendBudgetAvailable(input: {
       capUsd,
     });
     throw new MessengerSpendBudgetExceededError(
-      "Messenger monthly spend budget requires priced provider attempts"
+      "Messenger monthly spend budget requires completely priced provider attempts"
     );
   }
 
@@ -492,6 +504,8 @@ export async function assertMessengerUserDailySpendBudgetAvailable(input: {
   userKey: string;
   estimatedCostUsd: number | null;
   estimatedOutputCostUsd?: number | null;
+  /** Explicit false fails closed; omitted preserves complete-or-unpriced callers. */
+  costEstimateComplete?: boolean;
   now?: Date;
 }): Promise<void> {
   const { capUsd } = getMessengerUserDailySpendBudgetConfig();
@@ -503,7 +517,11 @@ export async function assertMessengerUserDailySpendBudgetAvailable(input: {
     (input.estimatedCostUsd ?? 0) + (input.estimatedOutputCostUsd ?? 0);
   const period = getUtcDayKey(input.now ?? new Date());
   const logUser = toLogUser(input.userKey);
-  if (!Number.isFinite(attemptEstimate) || attemptEstimate <= 0) {
+  if (
+    input.costEstimateComplete === false ||
+    !Number.isFinite(attemptEstimate) ||
+    attemptEstimate <= 0
+  ) {
     safeLog("messenger_user_daily_spend_budget_unpriced_attempt_blocked", {
       level: "warn",
       reqId: hashRequestId(input.reqId),
@@ -518,7 +536,7 @@ export async function assertMessengerUserDailySpendBudgetAvailable(input: {
       user: logUser,
     });
     throw new MessengerSpendBudgetExceededError(
-      "Messenger user daily spend budget requires priced provider attempts"
+      "Messenger user daily spend budget requires completely priced provider attempts"
     );
   }
 

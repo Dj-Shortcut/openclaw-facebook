@@ -403,6 +403,20 @@ describe("generationGuard", () => {
     ).rejects.toBeInstanceOf(guard.MessengerSpendBudgetExceededError);
   });
 
+  it("fails closed for a positive but incomplete daily attempt estimate", async () => {
+    process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "1";
+
+    await expect(
+      guard.assertMessengerDailySpendBudgetAvailable({
+        reqId: "req-partial-daily",
+        estimatedCostUsd: null,
+        estimatedOutputCostUsd: 0.25,
+        costEstimateComplete: false,
+      })
+    ).rejects.toBeInstanceOf(guard.MessengerSpendBudgetExceededError);
+    expect(stateStoreMocks.readScopedState).not.toHaveBeenCalled();
+  });
+
   it("reports whether the monthly spend budget cap is enabled", () => {
     expect(guard.getMessengerMonthlySpendBudgetConfig()).toEqual({
       enabled: false,
@@ -464,6 +478,20 @@ describe("generationGuard", () => {
         estimatedCostUsd: null,
       })
     ).rejects.toBeInstanceOf(guard.MessengerSpendBudgetExceededError);
+  });
+
+  it("fails closed for a positive but incomplete monthly attempt estimate", async () => {
+    process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD = "1";
+
+    await expect(
+      guard.assertMessengerMonthlySpendBudgetAvailable({
+        reqId: "req-partial-monthly",
+        estimatedCostUsd: null,
+        estimatedOutputCostUsd: 0.25,
+        costEstimateComplete: false,
+      })
+    ).rejects.toBeInstanceOf(guard.MessengerSpendBudgetExceededError);
+    expect(stateStoreMocks.readScopedState).not.toHaveBeenCalled();
   });
 
   it("reports whether the per-user daily spend budget cap is enabled", () => {
@@ -585,5 +613,20 @@ describe("generationGuard", () => {
         estimatedCostUsd: null,
       })
     ).rejects.toBeInstanceOf(guard.MessengerSpendBudgetExceededError);
+  });
+
+  it("fails closed for a positive but incomplete per-user attempt estimate", async () => {
+    process.env.MESSENGER_USER_DAILY_SPEND_CAP_USD = "1";
+
+    await expect(
+      guard.assertMessengerUserDailySpendBudgetAvailable({
+        reqId: "req-user-partial",
+        userKey: "user-key",
+        estimatedCostUsd: null,
+        estimatedOutputCostUsd: 0.25,
+        costEstimateComplete: false,
+      })
+    ).rejects.toBeInstanceOf(guard.MessengerSpendBudgetExceededError);
+    expect(stateStoreMocks.readScopedState).not.toHaveBeenCalled();
   });
 });

@@ -14,6 +14,7 @@ import {
 } from "./webhookEventContext";
 import { handleMessageEvent } from "./webhookMessageRouter";
 import type { HandlerContext } from "./webhookHandlerTypes";
+import { runWithMessengerRequestContext } from "./messengerRequestContext";
 
 /** Routes every Messenger event in a Facebook webhook entry. */
 export async function handleEntry(
@@ -22,7 +23,9 @@ export async function handleEntry(
 ): Promise<void> {
   const events = Array.isArray(entry?.messaging) ? entry.messaging : [];
   for (const event of events) {
-    await handleEvent(ctx, event, entry?.id);
+    await runWithMessengerRequestContext(entry?.id, () =>
+      handleEvent(ctx, event, entry?.id)
+    );
   }
 }
 

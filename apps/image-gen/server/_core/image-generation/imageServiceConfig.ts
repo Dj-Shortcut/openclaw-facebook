@@ -10,8 +10,11 @@ type OpenAiImageModelConfig = {
 
 const DEFAULT_OPENAI_IMAGE_GENERATION_MODEL = "gpt-5";
 
-export function getOpenAiImageModelConfig(): OpenAiImageModelConfig {
-  const imageGenerationModel = process.env.OPENAI_IMAGE_MODEL?.trim();
+export function getOpenAiImageModelConfig(
+  requestModel?: string
+): OpenAiImageModelConfig {
+  const imageGenerationModel =
+    requestModel?.trim() || process.env.OPENAI_IMAGE_MODEL?.trim();
 
   return {
     imageGenerationModel:
@@ -58,7 +61,7 @@ export function getRequiredPublicBaseUrl(): string {
 export function hasObjectStorageConfig(): boolean {
   return Boolean(
     process.env.BUILT_IN_FORGE_API_URL?.trim() &&
-      process.env.BUILT_IN_FORGE_API_KEY?.trim()
+    process.env.BUILT_IN_FORGE_API_KEY?.trim()
   );
 }
 

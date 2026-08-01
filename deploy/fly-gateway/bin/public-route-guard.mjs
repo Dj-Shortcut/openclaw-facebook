@@ -2,13 +2,14 @@ import crypto from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 
-const DEFAULT_ALLOWED_PATHS = "/facebook/webhook,/messenger/webhook,/healthz";
+const DEFAULT_ALLOWED_PATHS = "/facebook/webhook,/healthz";
 const PORTAL_PAGE_PATHS = new Set(["/", "/privacy", "/terms", "/billing-policy", "/data-deletion", "/handoff"]);
 const PORTAL_PAGE_PREFIXES = ["/handoff/"];
 const PORTAL_ASSET_PREFIXES = ["/assets/"];
 const PORTAL_GET_PATHS = new Set([
   "/api/facebook/connect/callback",
   "/api/oauth/callback",
+  "/api/public/config",
   "/api/portal/billing/export.csv",
   "/api/portal/snapshot",
 ]);

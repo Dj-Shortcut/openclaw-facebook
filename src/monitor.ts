@@ -41,6 +41,12 @@ import {
   type LeaderbotBridgeTrace,
 } from "./leaderbot-bridge.js";
 import {
+  createLeaderbotAiAnswerIdempotencyKey,
+  finalizeLeaderbotAiAnswerQuota,
+  isLeaderbotAiAnswerEnforcementEnabled,
+  reserveLeaderbotAiAnswerQuota,
+} from "./leaderbot-answer-quota.js";
+import {
   classifyMessengerFastLaneIntent,
   hasMessengerImageGenerationIntent,
   normalizeFastLaneText,
@@ -187,6 +193,10 @@ const MESSENGER_GATEWAY_AUDIO_BUDGET_REPLY =
   "Even pauze, ons dagbudget voor voiceberichten is bereikt. Typ je bericht even uit, dan help ik meteen verder.";
 const MESSENGER_GATEWAY_EVENT_FORWARD_BUDGET_REPLY =
   "Even pauze, ons dagbudget is bereikt. Probeer later opnieuw.";
+const STARTPILOT_AI_ANSWER_QUOTA_REPLY =
+  "Je Startpilot-tegoed van 300 AI-antwoorden is opgebruikt. Bekijk je tegoed via https://leaderbot.live/?upgrade=startpilot#pricing";
+const STARTPILOT_AI_ANSWER_QUOTA_UNAVAILABLE_REPLY =
+  "Leaderbot kan je tegoed nu niet veilig controleren. Probeer zo meteen opnieuw.";
 
 export function redactMessengerIdentifier(value: string | undefined): string {
   const normalized = value?.trim();
@@ -1729,6 +1739,7 @@ export async function processMessengerEvent(params: {
       });
       const queued = await requestLeaderbotImageGeneration({
         psid: senderId,
+        pageId: params.account.pageId,
         prompt: referencedPrompt,
         reqId: params.trace.reqId,
         timestamp,
@@ -1873,13 +1884,6 @@ export async function processMessengerEvent(params: {
       });
       return;
     }
-    await sendMessengerSenderAction(senderId, "typing_on", {
-      cfg: params.cfg,
-      accountId: params.account.accountId,
-    }).catch((err: unknown) => {
-      params.runtime.error?.(danger(`messenger typing_on failed: ${String(err)}`));
-    });
-    logMessengerStage(params.trace, "messenger_response_sent", { senderAction: "typing_on" });
   const commandAuthorized = shouldComputeCommandAuthorized(text, params.cfg);
   const facebookToolPolicy = resolveFacebookInboundToolPolicy({ commandAuthorized });
   const inboundCfg = applyFacebookInboundToolPolicyToConfig(
@@ -1936,13 +1940,61 @@ export async function processMessengerEvent(params: {
     ...mediaPayload,
   });
   const core = getMessengerRuntime();
+  let aiAnswerQuotaReservationId: string | null = null;
+  if (isLeaderbotAiAnswerEnforcementEnabled()) {
+    const quotaDecision = await reserveLeaderbotAiAnswerQuota({
+      pageId: params.account.pageId,
+      idempotencyKey: createLeaderbotAiAnswerIdempotencyKey({
+        accountId: params.account.accountId,
+        pageId: params.account.pageId,
+        messageId: params.event.message?.mid,
+        traceRequestId: params.trace.reqId,
+        timestamp,
+      }),
+    });
+    if (quotaDecision.status === "exhausted") {
+      await sendMessengerText(senderId, STARTPILOT_AI_ANSWER_QUOTA_REPLY, {
+        cfg: params.cfg,
+        accountId: params.account.accountId,
+      });
+      return;
+    }
+    if (quotaDecision.status === "unavailable") {
+      await sendMessengerText(
+        senderId,
+        STARTPILOT_AI_ANSWER_QUOTA_UNAVAILABLE_REPLY,
+        {
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+        },
+      );
+      return;
+    }
+    if (quotaDecision.status === "duplicate") {
+      return;
+    }
+    if (quotaDecision.status === "reserved") {
+      aiAnswerQuotaReservationId = quotaDecision.reservationId;
+    }
+  }
+  await sendMessengerSenderAction(senderId, "typing_on", {
+    cfg: params.cfg,
+    accountId: params.account.accountId,
+  }).catch((err: unknown) => {
+    params.runtime.error?.(danger(`messenger typing_on failed: ${String(err)}`));
+  });
+  logMessengerStage(params.trace, "messenger_response_sent", { senderAction: "typing_on" });
   logMessengerStage(params.trace, "openclaw_call_started", {
     openclawSessionId: route.sessionKey,
   });
   logVerbose(
     `messenger: dispatching inbound turn session=${route.sessionKey} account=${route.accountId}`,
   );
-  const turnResult = await core.channel.inbound.run({
+  let visibleFinalAiReplySent = false;
+  let turnResult: Awaited<ReturnType<typeof core.channel.inbound.run>> | undefined;
+  let openClawError: unknown;
+  try {
+    turnResult = await core.channel.inbound.run({
     channel: FACEBOOK_CHANNEL_ID,
     accountId: route.accountId,
     raw: params.event,
@@ -1976,7 +2028,7 @@ export async function processMessengerEvent(params: {
         },
         replyPipeline: {},
         delivery: {
-          deliver: async (payload: ReplyPayload) => {
+          deliver: async (payload: ReplyPayload, info: { kind: string }) => {
             const deliveryPayload = normalizeMessengerReplyPayloadForDelivery(payload);
             if (!deliveryPayload) {
               return { visibleReplySent: false };
@@ -2003,6 +2055,9 @@ export async function processMessengerEvent(params: {
                 senderId,
               )} message=${redactMessengerIdentifier(result.messageId)}`,
             );
+            if (info.kind === "final") {
+              visibleFinalAiReplySent = true;
+            }
             return {
               messageIds: [result.messageId],
               receipt: result.receipt,
@@ -2015,8 +2070,36 @@ export async function processMessengerEvent(params: {
         },
       }),
     },
-  });
-  const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
+    });
+  } catch (error) {
+    openClawError = error;
+  }
+  if (aiAnswerQuotaReservationId) {
+    const outcome = visibleFinalAiReplySent ? "committed" : "released";
+    const finalized = await finalizeLeaderbotAiAnswerQuota({
+      pageId: params.account.pageId,
+      reservationId: aiAnswerQuotaReservationId,
+      outcome,
+    });
+    if (!finalized) {
+      params.runtime.error?.(
+        danger(
+          `messenger paid AI answer quota finalization failed outcome=${outcome} account=${params.account.accountId}`,
+        ),
+      );
+    }
+  }
+  if (openClawError) {
+    throw openClawError;
+  }
+  if (!turnResult) {
+    throw new Error("OpenClaw turn ended without a result");
+  }
+  const dispatchResult = turnResult.dispatched
+    ? (turnResult.dispatchResult as Parameters<
+        typeof hasFinalInboundReplyDispatch
+      >[0])
+    : undefined;
   if (!hasFinalInboundReplyDispatch(dispatchResult)) {
     logVerbose(
       `messenger: no response generated for message from ${redactMessengerIdentifier(senderId)}`,

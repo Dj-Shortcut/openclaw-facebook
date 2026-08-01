@@ -7,16 +7,18 @@ type ImageCostEstimate = {
   estimatedCostUsd?: number;
   estimatedOutputCostUsd?: number;
   costEstimateComplete: boolean;
-  unpricedCostComponents?: Array<"output_image" | "source_image_input">;
+  unpricedCostComponents?: Array<
+    "output_image" | "prompt_input" | "source_image_input"
+  >;
   estimateSource:
     | "env_override"
+    | "gpt_image_2_table"
     | "gpt_image_1_table"
+    | "partial_prompt_input_unpriced"
     | "partial_source_image_input_unpriced"
     | "unpriced";
 };
 
-const DEFAULT_OPENAI_IMAGE_SIZE = "1024x1024";
-const DEFAULT_OPENAI_IMAGE_QUALITY = "auto";
 const DEFAULT_OPENAI_IMAGE_PRICING_MODEL = "gpt-image-1";
 
 const GPT_IMAGE_1_PER_IMAGE_USD: Record<string, Record<string, number>> = {
@@ -37,6 +39,27 @@ const GPT_IMAGE_1_PER_IMAGE_USD: Record<string, Record<string, number>> = {
   },
 };
 
+// Output-only estimates from OpenAI's GPT Image 2 calculator for the three
+// resolutions supported by this service. Prompt and source-image input tokens
+// remain separate cost components.
+const GPT_IMAGE_2_PER_IMAGE_USD: Record<string, Record<string, number>> = {
+  low: {
+    "1024x1024": 0.006,
+    "1024x1536": 0.005,
+    "1536x1024": 0.005,
+  },
+  medium: {
+    "1024x1024": 0.053,
+    "1024x1536": 0.041,
+    "1536x1024": 0.041,
+  },
+  high: {
+    "1024x1024": 0.211,
+    "1024x1536": 0.165,
+    "1536x1024": 0.165,
+  },
+};
+
 function readUsdEnv(name: string): number | undefined {
   const raw = process.env[name]?.trim();
   if (!raw) {
@@ -47,57 +70,31 @@ function readUsdEnv(name: string): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function findImageGenerationTool(payload: unknown): Record<string, unknown> | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-
-  const tools = (payload as { tools?: unknown }).tools;
-  if (!Array.isArray(tools)) {
-    return null;
-  }
-
-  return (
-    tools.find(
-      tool =>
-        Boolean(tool && typeof tool === "object") &&
-        (tool as { type?: unknown }).type === "image_generation"
-    ) as Record<string, unknown> | undefined
-  ) ?? null;
-}
-
-export function readOpenAiImageCostOptionsFromRequestBody(body: unknown): {
-  size: string;
-  quality: string;
-  inputFidelity?: string;
-} {
-  const payload = typeof body === "string" ? JSON.parse(body) : body;
-  const imageTool = findImageGenerationTool(payload);
-
-  return {
-    size: readString(imageTool?.size) ?? DEFAULT_OPENAI_IMAGE_SIZE,
-    quality: readString(imageTool?.quality) ?? DEFAULT_OPENAI_IMAGE_QUALITY,
-    inputFidelity: readString(imageTool?.input_fidelity),
-  };
-}
-
 function estimateOutputImageCost(input: {
   pricingModel: string;
   size: string;
   quality: string;
-  override?: number;
 }): number | undefined {
-  if (input.override !== undefined) {
-    return input.override;
-  }
+  const pricingTable =
+    input.pricingModel.toLowerCase() === "gpt-image-2"
+      ? GPT_IMAGE_2_PER_IMAGE_USD
+      : input.pricingModel.toLowerCase() === "gpt-image-1"
+        ? GPT_IMAGE_1_PER_IMAGE_USD
+        : undefined;
+  return pricingTable?.[input.quality]?.[input.size];
+}
 
-  return input.pricingModel.toLowerCase() === "gpt-image-1"
-    ? GPT_IMAGE_1_PER_IMAGE_USD[input.quality]?.[input.size]
-    : undefined;
+function resolvePricingModel(input: {
+  model: string;
+  pricingModel?: string;
+}): string {
+  const explicitPricingModel = input.pricingModel?.trim();
+  if (explicitPricingModel) return explicitPricingModel;
+
+  const normalizedModel = input.model.trim().toLowerCase();
+  return normalizedModel === "gpt-image-2" || normalizedModel === "gpt-image-1"
+    ? normalizedModel
+    : DEFAULT_OPENAI_IMAGE_PRICING_MODEL;
 }
 
 export function estimateOpenAiImageRequestCost(input: {
@@ -108,14 +105,29 @@ export function estimateOpenAiImageRequestCost(input: {
   inputFidelity?: string;
   hasSourceImage?: boolean;
 }): ImageCostEstimate {
-  const pricingModel =
-    input.pricingModel?.trim() || DEFAULT_OPENAI_IMAGE_PRICING_MODEL;
+  const pricingModel = resolvePricingModel(input);
   const override = readUsdEnv("OPENAI_IMAGE_ESTIMATED_COST_USD");
+
+  // This operator-supplied value is the conservative total for one provider
+  // attempt. It must cover prompt, source-image input and image output costs,
+  // regardless of whether the request is a generation or an edit.
+  if (override !== undefined) {
+    return {
+      model: input.model,
+      pricingModel,
+      size: input.size,
+      quality: input.quality,
+      ...(input.inputFidelity ? { inputFidelity: input.inputFidelity } : {}),
+      estimatedCostUsd: override,
+      costEstimateComplete: true,
+      estimateSource: "env_override",
+    };
+  }
+
   const outputEstimate = estimateOutputImageCost({
     pricingModel,
     size: input.size,
     quality: input.quality,
-    override,
   });
 
   if (input.hasSourceImage) {
@@ -130,21 +142,36 @@ export function estimateOpenAiImageRequestCost(input: {
         ? { estimatedOutputCostUsd: outputEstimate }
         : {}),
       costEstimateComplete: false,
-      unpricedCostComponents: ["source_image_input"],
+      unpricedCostComponents:
+        pricingModel.toLowerCase() === "gpt-image-2"
+          ? ["prompt_input", "source_image_input"]
+          : ["source_image_input"],
       estimateSource: "partial_source_image_input_unpriced",
     };
   }
 
-  if (override !== undefined) {
+  // The GPT Image 2 table is output-only. Without an operator-supplied total,
+  // prompt input remains unpriced and spend-cap enforcement must fail closed.
+  if (pricingModel.toLowerCase() === "gpt-image-2") {
     return {
       model: input.model,
       pricingModel,
       size: input.size,
       quality: input.quality,
       ...(input.inputFidelity ? { inputFidelity: input.inputFidelity } : {}),
-      estimatedCostUsd: override,
-      costEstimateComplete: true,
-      estimateSource: "env_override",
+      estimatedCostUsd: undefined,
+      ...(outputEstimate !== undefined
+        ? { estimatedOutputCostUsd: outputEstimate }
+        : {}),
+      costEstimateComplete: false,
+      unpricedCostComponents:
+        outputEstimate === undefined
+          ? ["prompt_input", "output_image"]
+          : ["prompt_input"],
+      estimateSource:
+        outputEstimate === undefined
+          ? "unpriced"
+          : "partial_prompt_input_unpriced",
     };
   }
 
@@ -160,6 +187,10 @@ export function estimateOpenAiImageRequestCost(input: {
       ? { unpricedCostComponents: ["output_image" as const] }
       : {}),
     estimateSource:
-      outputEstimate === undefined ? "unpriced" : "gpt_image_1_table",
+      outputEstimate === undefined
+        ? "unpriced"
+        : pricingModel.toLowerCase() === "gpt-image-2"
+          ? "gpt_image_2_table"
+          : "gpt_image_1_table",
   };
 }

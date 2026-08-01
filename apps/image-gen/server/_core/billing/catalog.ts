@@ -3,14 +3,16 @@ export type BillingPlan = Readonly<{
   publicName: string;
   amountMinor: number;
   currency: "EUR";
-  interval: "1 month";
-  entitlements: Readonly<{
-    imagesPerDay: number;
-    messagesPerMinute: number;
-  }>;
+  offerType: "subscription" | "one_time";
+  interval: "1 month" | "30 days";
+  accessDurationDays: number | null;
+  entitlements: Readonly<Record<string, number | string>>;
   mollieDescription: string;
   active: boolean;
+  publiclyAvailable: boolean;
 }>;
+
+export const STARTPILOT_PLAN_CODE = "startpilot_once_v1" as const;
 
 /**
  * Business-owned, server-side product catalog. Browser input may select a code
@@ -25,13 +27,36 @@ const BILLING_PLANS = Object.freeze({
     publicName: "Leaderbot Premium",
     amountMinor: 2_900,
     currency: "EUR" as const,
+    offerType: "subscription" as const,
     interval: "1 month" as const,
+    accessDurationDays: null,
     entitlements: Object.freeze({
       imagesPerDay: 100,
       messagesPerMinute: 120,
     }),
     mollieDescription: "Leaderbot Premium - maandelijks abonnement",
     active: true,
+    publiclyAvailable: false,
+  }),
+  [STARTPILOT_PLAN_CODE]: Object.freeze({
+    code: STARTPILOT_PLAN_CODE,
+    publicName: "Leaderbot Startpilot",
+    amountMinor: 1_900,
+    currency: "EUR" as const,
+    offerType: "one_time" as const,
+    interval: "30 days" as const,
+    accessDurationDays: 30,
+    entitlements: Object.freeze({
+      aiAnswersTotal: 300,
+      imagesTotal: 20,
+      imagesPerDay: 5,
+      workspaces: 1,
+      facebookPages: 1,
+      imageQuality: "images_2",
+    }),
+    mollieDescription: "Leaderbot Startpilot - eenmalig 30 dagen",
+    active: true,
+    publiclyAvailable: true,
   }),
 }) satisfies Readonly<Record<string, BillingPlan>>;
 
@@ -56,21 +81,32 @@ export function requireActiveBillingPlan(planCode: string): BillingPlan {
 
 export function listPublicBillingPlans() {
   return Object.values(BILLING_PLANS)
-    .filter(plan => plan.active)
+    .filter(plan => plan.active && plan.publiclyAvailable)
     .map(plan => ({
       code: plan.code,
       publicName: plan.publicName,
       amount: formatAmountMinor(plan.amountMinor),
       currency: plan.currency,
+      offerType: plan.offerType,
       interval: plan.interval,
+      accessDurationDays: plan.accessDurationDays,
       entitlements: plan.entitlements,
       active: plan.active,
       disclosure: {
+        paymentAmount: formatAmountMinor(plan.amountMinor),
         firstPaymentAmount: formatAmountMinor(plan.amountMinor),
-        recurringAmount: formatAmountMinor(plan.amountMinor),
-        automaticRenewal: true,
-        recurringMethod: "SEPA Direct Debit",
-        cancellationTiming: "Cancel before the next billing date; access remains active through the paid period.",
+        recurringAmount:
+          plan.offerType === "subscription"
+            ? formatAmountMinor(plan.amountMinor)
+            : null,
+        automaticRenewal: plan.offerType === "subscription",
+        recurringMethod:
+          plan.offerType === "subscription" ? "SEPA Direct Debit" : null,
+        cancellationTiming:
+          plan.offerType === "subscription"
+            ? "Cancel before the next billing date; access remains active through the paid period."
+            : null,
+        noTopUps: plan.offerType === "one_time",
       },
     }));
 }
@@ -83,7 +119,10 @@ export function formatAmountMinor(amountMinor: number): string {
   return `${Math.floor(amountMinor / 100)}.${String(amountMinor % 100).padStart(2, "0")}`;
 }
 
-export function addPlanInterval(from: Date, interval: BillingPlan["interval"]): Date {
+export function addPlanInterval(
+  from: Date,
+  interval: Extract<BillingPlan["interval"], "1 month">
+): Date {
   if (interval !== "1 month") {
     throw new Error("unsupported billing interval");
   }

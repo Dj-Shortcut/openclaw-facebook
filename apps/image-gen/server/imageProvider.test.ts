@@ -58,10 +58,18 @@ function toUrlString(url: string | URL): string {
 async function promptFromRequest(init: RequestInit | undefined): Promise<string> {
   const body = init?.body;
 
+  if (body instanceof FormData) {
+    return String(body.get("prompt") ?? "");
+  }
+
   if (typeof body === "string") {
     const payload = JSON.parse(body) as {
+      prompt?: string;
       input?: string | Array<{ content?: Array<{ type?: string; text?: string }> }>;
     };
+    if (typeof payload.prompt === "string") {
+      return payload.prompt;
+    }
     if (typeof payload.input === "string") {
       return payload.input;
     }
@@ -101,6 +109,15 @@ function createGeneratedImageResponse(): Response {
           result: GENERATED_IMAGE_BASE64,
         },
       ],
+    }),
+  } as Response;
+}
+
+function createImageApiGeneratedResponse(): Response {
+  return {
+    ok: true,
+    json: async () => ({
+      data: [{ b64_json: GENERATED_IMAGE_BASE64 }],
     }),
   } as Response;
 }
@@ -378,11 +395,22 @@ describe("image provider boundary", () => {
   it("uses OPENAI_IMAGE_MODEL when configured", async () => {
     configureOpenAiImagesEnv("gpt-image-2");
 
-    const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
-      const body = requestJson(init) as { model?: string };
-      expect(body.model).toBe("gpt-image-2");
+    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const body = requestJson(init) as {
+        model?: string;
+        output_format?: string;
+      };
+      expect(toUrlString(url)).toBe(
+        "https://api.openai.com/v1/images/generations"
+      );
+      expect(body).toEqual(
+        expect.objectContaining({
+          model: "gpt-image-2",
+          output_format: "png",
+        })
+      );
 
-      return createGeneratedImageResponse();
+      return createImageApiGeneratedResponse();
     });
 
     vi.stubGlobal("fetch", fetchMock);
@@ -432,7 +460,7 @@ describe("image provider boundary", () => {
         user: "testuser",
         provider: "openai-images",
         model: "gpt-image-2",
-        pricingModel: "gpt-image-1",
+        pricingModel: "gpt-image-2",
         generationKind: "text_to_image",
         hasSourceImage: false,
         size: "1024x1536",
@@ -454,7 +482,7 @@ describe("image provider boundary", () => {
         provider: "openai-images",
         model: "gpt-image-2",
         providerUsage: {
-          pricingModel: "gpt-image-1",
+          pricingModel: "gpt-image-2",
           generationKind: "text_to_image",
           hasSourceImage: false,
           size: "1024x1536",
@@ -636,6 +664,68 @@ describe("image provider boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("records one complete total override for a source-image provider attempt", async () => {
+    configureOpenAiImagesEnv("gpt-5");
+    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.30";
+    process.env.OPENAI_IMAGE_SIZE = "1024x1024";
+    process.env.OPENAI_IMAGE_QUALITY = "high";
+    process.env.OPENAI_IMAGE_INPUT_FIDELITY = "high";
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", vi.fn(async () => createGeneratedImageResponse()));
+
+    const generator = new OpenAiImageGenerator();
+    await generateWithSourceImageData(generator, {
+      generationKind: "source_image_edit",
+      promptHint: "private source edit prompt",
+      userKey: "source-edit-override-user",
+      reqId: "req-source-edit-total-override",
+    });
+
+    const ledgerEntries = await readCostLedgerPeriod(
+      new Date().toISOString().slice(0, 10)
+    );
+    expect(ledgerEntries).toEqual([
+      expect.objectContaining({
+        id: "req-source-edit-total-override:openai-image:1",
+        status: "provider_attempt_succeeded",
+        estimatedCostUsd: 0.3,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: 0.3,
+        costEstimateComplete: true,
+        estimateSource: "env_override",
+        unpricedCostComponents: [],
+      }),
+    ]);
+  });
+
+  it("blocks a partially priced source edit when a spend cap is active", async () => {
+    configureOpenAiImagesEnv("gpt-5");
+    delete process.env.OPENAI_IMAGE_ESTIMATED_COST_USD;
+    process.env.OPENAI_IMAGE_SIZE = "1024x1024";
+    process.env.OPENAI_IMAGE_QUALITY = "medium";
+    process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "1";
+    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
+    const onProviderAttempt = vi.fn(async () => undefined);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generator = new OpenAiImageGenerator();
+    await expect(
+      generateWithSourceImageData(generator, {
+        generationKind: "source_image_edit",
+        promptHint: "private source edit prompt",
+        userKey: "source-edit-partial-user",
+        reqId: "req-source-edit-partial-cap",
+        onProviderAttempt,
+      })
+    ).rejects.toThrow("requires completely priced provider attempts");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(onProviderAttempt).not.toHaveBeenCalled();
+    expect(
+      await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))
+    ).toEqual([]);
+  });
+
   it("blocks the OpenAI request when the host daily image cap is reached", async () => {
     configureOpenAiImagesEnv("gpt-image-2");
     process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "1";
@@ -730,29 +820,21 @@ describe("image provider boundary", () => {
     expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
   });
 
-  it("uses OPENAI_IMAGE_MODEL and image_generation tool when source image data is provided", async () => {
+  it("uses the gpt-image-2 edits endpoint when source image data is provided", async () => {
     configureOpenAiImagesEnv("gpt-image-2");
 
-    const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
-      const body = requestJson(init) as {
-        model?: string;
-        input?: Array<{ content?: Array<{ type?: string; image_url?: string }> }>;
-        tools?: Array<{ type?: string; output_format?: string }>;
-        tool_choice?: { type?: string };
-      };
-      expect(body.model).toBe("gpt-image-2");
-      expect(body.tools).toEqual([
-        expect.objectContaining({
-          type: "image_generation",
-          output_format: "png",
-        }),
-      ]);
-      expect(body.tool_choice).toEqual({ type: "image_generation" });
-      expect(body.input?.[0]?.content?.find(part => part.type === "input_image")?.image_url).toMatch(
-        /^data:image\/jpeg;base64,/
+    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      expect(toUrlString(url)).toBe(
+        "https://api.openai.com/v1/images/edits"
       );
+      expect(new Headers(init?.headers).has("content-type")).toBe(false);
+      const body = init?.body as FormData;
+      expect(body).toBeInstanceOf(FormData);
+      expect(body.get("model")).toBe("gpt-image-2");
+      expect(body.get("output_format")).toBe("png");
+      expect((body.get("image[]") as File).type).toBe("image/jpeg");
 
-      return createGeneratedImageResponse();
+      return createImageApiGeneratedResponse();
     });
 
     vi.stubGlobal("fetch", fetchMock);

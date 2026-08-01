@@ -66,9 +66,10 @@ import {
 } from "./runtime/debugRoutes";
 import { registerHealthRoutes } from "./runtime/healthRoutes";
 import { registerLegalRoutes } from "./runtime/legalRoutes";
+import { registerPublicConfigRoute } from "./runtime/publicConfig";
 import { registerWebhookRuntime } from "./runtime/webhookRuntime";
 import {
-  assertMollieConfig,
+  assertMollieBillingEnabled,
   assertTenantBillingWorkerConfigured,
   isMollieBillingEnabled,
 } from "./billing/config";
@@ -180,7 +181,7 @@ async function startServer() {
   assertWhatsAppConfig();
   const mollieBillingEnabled = isMollieBillingEnabled();
   if (mollieBillingEnabled) {
-    assertMollieConfig();
+    assertMollieBillingEnabled();
     assertTenantBillingWorkerConfigured();
   } else {
     safeLog("mollie_billing_disabled");
@@ -245,6 +246,7 @@ async function startServer() {
 
   registerDebugRoutes(app, gitSha);
 
+  registerPublicConfigRoute(app);
   registerLegalRoutes(app);
 
   scheduleFaceMemoryExpiry();

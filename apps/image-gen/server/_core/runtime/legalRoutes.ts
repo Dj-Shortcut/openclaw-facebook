@@ -3,7 +3,11 @@ import {
   formatPublicBusinessAddress,
 } from "../../../shared/publicBusinessDetails";
 import type express from "express";
-import { formatAmountMinor, getBillingPlan } from "../billing/catalog";
+import {
+  STARTPILOT_PLAN_CODE,
+  formatAmountMinor,
+  getBillingPlan,
+} from "../billing/catalog";
 import { formatFaceMemoryRetentionDays } from "../faceMemoryRetention";
 import { escapeHtml } from "../html";
 
@@ -13,31 +17,32 @@ type LegalPage = {
   sections: Array<{ heading: string; html: string }>;
 };
 
-const FALLBACK_PREMIUM_PRICING = Object.freeze({
-  premiumMonthlyPrice: "€29",
-  premiumCurrency: "EUR",
+const FALLBACK_STARTPILOT_PRICING = Object.freeze({
+  startpilotPrice: "€19",
+  startpilotCurrency: "EUR",
 });
 
-export function getPremiumPricingDisplay(
+export function getStartpilotPricingDisplay(
   lookupPlan: typeof getBillingPlan = getBillingPlan
 ) {
   try {
-    const premiumPlan = lookupPlan("premium_monthly_v1");
-    if (!premiumPlan) return FALLBACK_PREMIUM_PRICING;
+    const startpilotPlan = lookupPlan(STARTPILOT_PLAN_CODE);
+    if (!startpilotPlan) return FALLBACK_STARTPILOT_PRICING;
     return {
-      premiumMonthlyPrice: `€${formatAmountMinor(
-        premiumPlan.amountMinor
+      startpilotPrice: `€${formatAmountMinor(
+        startpilotPlan.amountMinor
       ).replace(/\.00$/, "")}`,
-      premiumCurrency: premiumPlan.currency,
+      startpilotCurrency: startpilotPlan.currency,
     };
   } catch {
-    return FALLBACK_PREMIUM_PRICING;
+    return FALLBACK_STARTPILOT_PRICING;
   }
 }
 
 export function registerLegalRoutes(app: express.Express) {
   app.get("/privacy", (_req, res) => {
     const faceMemoryRetention = formatFaceMemoryRetentionDays("en");
+    const { startpilotPrice } = getStartpilotPricingDisplay();
     res.type("html").send(
       renderLegalPage({
         title: "Privacy Policy",
@@ -66,7 +71,7 @@ export function registerLegalRoutes(app: express.Express) {
           },
           {
             heading: "Payments",
-            html: "<p>Paid subscriptions and checkout are not active on this website. No Leaderbot subscription or recurring payment is created when you send an early-access request. This policy will be updated before payment processing is opened.</p>",
+            html: `<p>The public website currently collects interest only. If the signed-in pilot checkout is enabled after the launch gates pass, Mollie will process one ${startpilotPrice} Startpilot payment. The proposed pilot does not create a subscription, automatic renewal, direct-debit mandate, top-up or overage charge.</p>`,
           },
         ],
       })
@@ -74,7 +79,7 @@ export function registerLegalRoutes(app: express.Express) {
   });
 
   app.get("/terms", (_req, res) => {
-    const { premiumMonthlyPrice } = getPremiumPricingDisplay();
+    const { startpilotPrice } = getStartpilotPricingDisplay();
     res.type("html").send(
       renderLegalPage({
         title: "Terms of Service",
@@ -82,8 +87,12 @@ export function registerLegalRoutes(app: express.Express) {
           "These pilot terms apply to the Leaderbot customer portal and connected Messenger assistant. Leaderbot provides AI-generated text and images together with workspace, usage and privacy controls.",
         sections: [
           {
-            heading: "Pilot phase and price information",
-            html: `<p>Leaderbot Premium is planned at ${premiumMonthlyPrice} per month, but it is not currently for sale. This website does not start a paid contract, checkout, automatic renewal or direct debit. Final inclusions and payment terms will be published before sales begin.</p>`,
+            heading: "Draft Startpilot offer",
+            html: `<p>Leaderbot Startpilot is proposed at ${startpilotPrice} as a single payment for 30 days. It includes one workspace, one connected Facebook Page, 300 AI answers and 20 Images 2.0 image generations, with a maximum of five image generations per day. An image generation counts once when its first AI-provider attempt starts; retries within that same request do not consume extra pilot generations. The public website is interest-only while paid launch remains disabled.</p>`,
+          },
+          {
+            heading: "No subscription or overage",
+            html: "<p>The proposed Startpilot does not renew automatically and does not create a subscription or direct-debit mandate. Usage stops at the included limits; there are no automatic top-ups or additional usage charges. Any later offer requires a separate, explicit choice.</p>",
           },
           {
             heading: "AI-generated content",
@@ -107,24 +116,33 @@ export function registerLegalRoutes(app: express.Express) {
   });
 
   app.get("/billing-policy", (_req, res) => {
-    const { premiumMonthlyPrice, premiumCurrency } = getPremiumPricingDisplay();
+    const { startpilotPrice, startpilotCurrency } =
+      getStartpilotPricingDisplay();
     res.type("html").send(
       renderLegalPage({
-        title: "Pre-launch Pricing and Billing Information",
+        title: "Startpilot Pre-launch Pricing and Billing Information",
         intro:
-          "Leaderbot is validating demand before opening payments. There is currently no checkout and no active paid Leaderbot subscription available through this website.",
+          "Leaderbot is validating a bounded one-time pilot before opening payments. The public website currently collects interest only and does not create a purchase.",
         sections: [
           {
-            heading: "Planned Premium price",
-            html: `<p>The current proposal is Leaderbot Premium at ${premiumMonthlyPrice} per month in ${premiumCurrency}. This is a future price indication, not a present charge. Final included usage limits are still being validated.</p>`,
+            heading: "Proposed one-time price",
+            html: `<p>The current proposal is Leaderbot Startpilot at ${startpilotPrice} once in ${startpilotCurrency} for 30 days. This is pre-launch information, not a present charge. Checkout may appear only inside the signed-in portal after the technical, entitlement, legal and accounting launch gates pass.</p>`,
           },
           {
-            heading: "No payment or renewal today",
-            html: "<p>Sending an email or early-access request does not authorize a payment, create a subscription, start automatic renewal or establish a direct-debit mandate.</p>",
+            heading: "Included pilot usage",
+            html: "<p>The proposed package covers one workspace, one Facebook Page, 300 AI answers and 20 Images 2.0 image generations. Image generation is additionally limited to five per day during the 30-day access period. A generation counts once when its first AI-provider attempt starts; retries within the same request do not consume another pilot generation.</p>",
+          },
+          {
+            heading: "No renewal, top-up or overage",
+            html: "<p>The Startpilot is a single purchase without automatic renewal, subscription or direct-debit mandate. Usage stops at the included limits. No automatic top-up or additional usage fee is charged, and continuing later requires a separate explicit choice.</p>",
+          },
+          {
+            heading: "No payment from an interest request",
+            html: "<p>Sending an email or early-access request does not authorize a payment or create a contract. A payment can start only from an explicitly enabled checkout shown to an authenticated workspace owner or administrator.</p>",
           },
           {
             heading: "Before paid launch",
-            html: "<p>Before any payment, Leaderbot will clearly show the total price, billing period, included usage, payment method, renewal, cancellation, refund and applicable consumer or business terms. Payment and invoicing flows must first pass technical, legal and accounting review.</p>",
+            html: "<p>Before any payment, Leaderbot will show the total price, 30-day access period, included usage, payment method, absence of renewal and overage, and applicable cancellation, refund, consumer or business terms. Payment and invoicing flows must first pass technical, legal and accounting review.</p>",
           },
           {
             heading: "Questions",

@@ -7,6 +7,7 @@ primary_region = "ams"
 [env]
   NODE_ENV = "production"
   PORT = "8080"
+  PORTAL_BASE_URL = "https://leaderbot.live"
   # REDIS_URL must be provided via Fly secrets for production startup.
 
 [processes]
