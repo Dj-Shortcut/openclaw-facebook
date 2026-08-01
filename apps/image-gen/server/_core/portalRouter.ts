@@ -81,7 +81,11 @@ const knowledgeSourceActionInput = workspaceInput.extend({
 const billingCheckoutInput = workspaceInput.extend({
   planCode: z.string().trim().min(1).max(80),
   countryCode: z.literal("BE"),
-  kind: z.enum(["subscription_start", "payment_method_change"]),
+  kind: z.enum([
+    "subscription_start",
+    "payment_method_change",
+    "startpilot_purchase",
+  ]),
   businessCheckout: z.boolean().optional(),
 });
 
@@ -340,9 +344,9 @@ export const portalRouter = router({
           config.mode,
           { includePayments }
         );
-        const plan = summary.subscription
-          ? getBillingPlan(summary.subscription.planCode)
-          : null;
+        const planCode =
+          summary.subscription?.planCode ?? summary.entitlement?.planCode;
+        const plan = planCode ? getBillingPlan(planCode) : null;
         return {
           ...summary,
           plan: plan
@@ -351,7 +355,9 @@ export const portalRouter = router({
                 publicName: plan.publicName,
                 amount: formatAmountMinor(plan.amountMinor),
                 currency: plan.currency,
+                offerType: plan.offerType,
                 interval: plan.interval,
+                accessDurationDays: plan.accessDurationDays,
               }
             : null,
           salesCountry: "BE" as const,

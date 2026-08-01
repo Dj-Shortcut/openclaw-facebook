@@ -5,7 +5,7 @@ import { httpBatchLink, TRPCClientError } from "@trpc/client";
 import { createRoot } from "react-dom/client";
 import superjson from "superjson";
 import App from "./App";
-import { getLoginUrl } from "./const";
+import { getLoginUrl, loadPublicRuntimeConfig } from "./const";
 import "./index.css";
 
 const getOptionalEnvString = (value: unknown): string | undefined => {
@@ -15,8 +15,12 @@ const getOptionalEnvString = (value: unknown): string | undefined => {
 const injectAnalytics = () => {
   if (typeof document === "undefined") return;
 
-  const analyticsEndpoint = getOptionalEnvString(import.meta.env.VITE_ANALYTICS_ENDPOINT);
-  const analyticsWebsiteId = getOptionalEnvString(import.meta.env.VITE_ANALYTICS_WEBSITE_ID);
+  const analyticsEndpoint = getOptionalEnvString(
+    import.meta.env.VITE_ANALYTICS_ENDPOINT
+  );
+  const analyticsWebsiteId = getOptionalEnvString(
+    import.meta.env.VITE_ANALYTICS_WEBSITE_ID
+  );
 
   if (!analyticsEndpoint) return;
 
@@ -47,7 +51,7 @@ const redirectToLoginIfUnauthorized = (error: unknown) => {
   window.location.href = loginUrl;
 };
 
-queryClient.getQueryCache().subscribe((event) => {
+queryClient.getQueryCache().subscribe(event => {
   if (event.type === "updated" && event.action.type === "error") {
     const error: unknown = event.query.state.error;
     redirectToLoginIfUnauthorized(error);
@@ -55,7 +59,7 @@ queryClient.getQueryCache().subscribe((event) => {
   }
 });
 
-queryClient.getMutationCache().subscribe((event) => {
+queryClient.getMutationCache().subscribe(event => {
   if (event.type === "updated" && event.action.type === "error") {
     const error: unknown = event.mutation.state.error;
     redirectToLoginIfUnauthorized(error);
@@ -78,12 +82,17 @@ const trpcClient = trpc.createClient({
   ],
 });
 
-injectAnalytics();
+async function bootstrap() {
+  await loadPublicRuntimeConfig();
+  injectAnalytics();
 
-createRoot(document.getElementById("root")!).render(
-  <trpc.Provider client={trpcClient} queryClient={queryClient}>
-    <QueryClientProvider client={queryClient}>
-      <App />
-    </QueryClientProvider>
-  </trpc.Provider>,
-);
+  createRoot(document.getElementById("root")!).render(
+    <trpc.Provider client={trpcClient} queryClient={queryClient}>
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>
+    </trpc.Provider>
+  );
+}
+
+void bootstrap();

@@ -7,6 +7,7 @@ import {
   getGenerationMetrics,
   parseOpenAiImageResponse,
   type GenerationMetrics,
+  type OpenAiImageQuality,
 } from "./image-generation/openAiImageClient";
 import {
   buildSourceImageEditPrompt,
@@ -19,13 +20,9 @@ import {
 } from "./image-generation/sourceImageFetcher";
 import {
   getConfiguredBaseUrl,
-  getOpenAiImageModelConfig,
   hasObjectStorageConfig,
 } from "./image-generation/imageServiceConfig";
-import {
-  estimateOpenAiImageRequestCost,
-  readOpenAiImageCostOptionsFromRequestBody,
-} from "./image-generation/imageCostEstimate";
+import { estimateOpenAiImageRequestCost } from "./image-generation/imageCostEstimate";
 import {
   safelyAppendCostLedgerEntry,
   safelyUpdateCostLedgerEntry,
@@ -71,6 +68,8 @@ interface ImageGenerator {
     };
     promptHint?: string;
     previousResponseId?: string;
+    model?: string;
+    quality?: OpenAiImageQuality;
     onProviderAttempt?: () => Promise<void>;
     userKey: string;
     reqId: string;
@@ -97,6 +96,8 @@ type GeneratorInput = {
   };
   promptHint?: string;
   previousResponseId?: string;
+  model?: string;
+  quality?: OpenAiImageQuality;
   onProviderAttempt?: () => Promise<void>;
   userKey: string;
   reqId: string;
@@ -122,9 +123,7 @@ function buildPromptForGeneration(input: GeneratorInput): string {
     return buildSourceImageEditPrompt(input.promptHint ?? "");
   }
 
-  return buildSourceImageEditPrompt(
-    input.promptHint ?? ""
-  );
+  return buildSourceImageEditPrompt(input.promptHint ?? "");
 }
 
 export function getGeneratorStartupConfig(): {
@@ -256,7 +255,9 @@ export class OpenAiImageGenerator implements ImageGenerator {
       partialMetrics.fbImageFetchMs = sourceImage.fbImageFetchMs;
       partialMetrics.promptBuildMs = preparedInput.promptBuildMs;
 
-      const incomingLen = preparedInput.hasSourceImage ? sourceImage.incomingLen : 0;
+      const incomingLen = preparedInput.hasSourceImage
+        ? sourceImage.incomingLen
+        : 0;
       const incomingSha256 = preparedInput.hasSourceImage
         ? sourceImage.incomingSha256
         : sha256(Buffer.from([]));
@@ -273,15 +274,14 @@ export class OpenAiImageGenerator implements ImageGenerator {
         sourceImage,
         hasSourceImage: preparedInput.hasSourceImage,
         previousResponseId: input.previousResponseId,
+        model: input.model,
+        quality: input.quality,
       });
       const openAiPayloadBuildMs = Date.now() - requestBuildStartedAt;
       partialMetrics.openAiPayloadBuildMs = openAiPayloadBuildMs;
-      const imageCostOptions = readOpenAiImageCostOptionsFromRequestBody(
-        requestContext.requestInit.body
-      );
       const costEstimate = estimateOpenAiImageRequestCost({
-        model: getOpenAiImageModelConfig().imageGenerationModel,
-        ...imageCostOptions,
+        model: requestContext.model,
+        ...requestContext.imageCostOptions,
         hasSourceImage: preparedInput.hasSourceImage,
       });
       const payloadBytes =
@@ -311,25 +311,33 @@ export class OpenAiImageGenerator implements ImageGenerator {
             await assertMessengerDailySpendBudgetAvailable({
               reqId: input.reqId,
               estimatedCostUsd: costEstimate.estimatedCostUsd ?? null,
-              estimatedOutputCostUsd: costEstimate.estimatedOutputCostUsd ?? null,
+              estimatedOutputCostUsd:
+                costEstimate.estimatedOutputCostUsd ?? null,
+              costEstimateComplete: costEstimate.costEstimateComplete,
               now: budgetNow,
             });
             await assertMessengerMonthlySpendBudgetAvailable({
               reqId: input.reqId,
               estimatedCostUsd: costEstimate.estimatedCostUsd ?? null,
-              estimatedOutputCostUsd: costEstimate.estimatedOutputCostUsd ?? null,
+              estimatedOutputCostUsd:
+                costEstimate.estimatedOutputCostUsd ?? null,
+              costEstimateComplete: costEstimate.costEstimateComplete,
               now: budgetNow,
             });
             await assertMessengerUserDailySpendBudgetAvailable({
               reqId: input.reqId,
               userKey: input.userKey,
               estimatedCostUsd: costEstimate.estimatedCostUsd ?? null,
-              estimatedOutputCostUsd: costEstimate.estimatedOutputCostUsd ?? null,
+              estimatedOutputCostUsd:
+                costEstimate.estimatedOutputCostUsd ?? null,
+              costEstimateComplete: costEstimate.costEstimateComplete,
               now: budgetNow,
             });
             await input.onProviderAttempt?.();
           } catch (error) {
-            await releaseMessengerDailyImageBudgetReservation({ now: budgetNow });
+            await releaseMessengerDailyImageBudgetReservation({
+              now: budgetNow,
+            });
             throw error;
           }
           providerAttemptCount += 1;
@@ -363,7 +371,8 @@ export class OpenAiImageGenerator implements ImageGenerator {
               reqId: input.reqId,
               status: "provider_attempt_started",
               estimatedCostUsd: costEstimate.estimatedCostUsd ?? null,
-              estimatedOutputCostUsd: costEstimate.estimatedOutputCostUsd ?? null,
+              estimatedOutputCostUsd:
+                costEstimate.estimatedOutputCostUsd ?? null,
               finalCostUsd: null,
               costEstimateComplete: costEstimate.costEstimateComplete,
               estimateSource: costEstimate.estimateSource,
@@ -395,10 +404,14 @@ export class OpenAiImageGenerator implements ImageGenerator {
       });
 
       const parseStartedAt = Date.now();
-      const imageBufferResult = await parseOpenAiImageResponse(response, input.reqId);
+      const imageBufferResult = await parseOpenAiImageResponse(
+        response,
+        input.reqId
+      );
       partialMetrics.openAiParseMs = Date.now() - parseStartedAt;
 
-      const generatedImageBuffer = ensureGeneratedImageBuffer(imageBufferResult);
+      const generatedImageBuffer =
+        ensureGeneratedImageBuffer(imageBufferResult);
       const uploadStartedAt = Date.now();
       const imageUrl = await publishGeneratedImage(
         generatedImageBuffer,
@@ -456,7 +469,9 @@ export class OpenAiImageGenerator implements ImageGenerator {
   }
 }
 
-export function createImageGenerator(provider: ImageProvider = getImageProvider()): {
+export function createImageGenerator(
+  provider: ImageProvider = getImageProvider()
+): {
   mode: ImageProvider;
   generator: ImageGenerator;
 } {

@@ -9,6 +9,7 @@ const PORTAL_ASSET_PREFIXES = ["/assets/"];
 const PORTAL_GET_PATHS = new Set([
   "/api/facebook/connect/callback",
   "/api/oauth/callback",
+  "/api/public/config",
   "/api/portal/billing/export.csv",
   "/api/portal/snapshot",
 ]);

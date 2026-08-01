@@ -1,10 +1,20 @@
-import { sendImage, sendQuickReplies, sendText, sendVideo, safeLog } from "./messengerApi";
+import {
+  sendButtonTemplate,
+  sendImage,
+  sendQuickReplies,
+  sendText,
+  sendVideo,
+  safeLog,
+} from "./messengerApi";
 import type { MessengerSendOutcome } from "./messengerApi";
 import {
   buildFaceMemoryConsentResponse,
   buildPhotoReceivedResponse,
 } from "./conversationActions";
-import { renderMessengerQuickReplies } from "./messengerActionRenderer";
+import {
+  renderMessengerQuickReplies,
+  renderMessengerUrlButtons,
+} from "./messengerActionRenderer";
 import {
   anonymizePsid,
   clearPendingImageState,
@@ -112,7 +122,9 @@ export function createHandlerContext({
           hasUrl: Boolean(attachment.payload?.url),
         })) ?? [],
       postbackPayload: event.postback?.payload ?? null,
-      hasReferralRef: Boolean(event.postback?.referral?.ref ?? event.referral?.ref),
+      hasReferralRef: Boolean(
+        event.postback?.referral?.ref ?? event.referral?.ref
+      ),
     });
   }
 
@@ -180,6 +192,21 @@ export function createHandlerContext({
     actions: ConversationAction[],
     reqId: string
   ): Promise<MessengerSendOutcome> {
+    const urlButtons = renderMessengerUrlButtons(actions);
+    if (urlButtons.length > 0) {
+      debugWebhookLog({
+        level: "debug",
+        msg: "outgoing_message",
+        kind: "url_buttons",
+        reqId,
+        psidHash: anonymizePsid(psid).slice(0, 12),
+        actions: actions
+          .filter(action => action.url)
+          .map(action => ({ id: action.id, label: action.label })),
+      });
+      return await sendButtonTemplate(psid, text, urlButtons);
+    }
+
     return await sendLoggedQuickReplies(
       psid,
       text,

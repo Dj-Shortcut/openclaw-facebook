@@ -1,9 +1,6 @@
 import { type Lang, t } from "./i18n";
 import type { ConversationResponse } from "./botResponse";
-import {
-  FACE_MEMORY_CONSENT_NO,
-  FACE_MEMORY_CONSENT_YES,
-} from "./faceMemory";
+import { FACE_MEMORY_CONSENT_NO, FACE_MEMORY_CONSENT_YES } from "./faceMemory";
 import { formatFaceMemoryRetentionDays } from "./faceMemoryRetention";
 
 const CONVERSATION_ACTION_NEW_IMAGE = "new_image";
@@ -80,6 +77,68 @@ export function buildGenerationFailureResponse(
   };
 }
 
+function getSafePortalUpgradeUrl(): string | undefined {
+  const configured =
+    process.env.PORTAL_BASE_URL?.trim() ||
+    process.env.LEADERBOT_PUBLIC_URL?.trim() ||
+    process.env.APP_BASE_URL?.trim() ||
+    process.env.BASE_URL?.trim();
+  if (!configured) return undefined;
+
+  try {
+    const base = new URL(configured);
+    const isLocalDevelopment =
+      process.env.NODE_ENV !== "production" &&
+      base.protocol === "http:" &&
+      (base.hostname === "localhost" || base.hostname === "127.0.0.1");
+    if (
+      base.username ||
+      base.password ||
+      (base.protocol !== "https:" && !isLocalDevelopment)
+    ) {
+      return undefined;
+    }
+
+    const target = new URL("/", base);
+    target.searchParams.set("upgrade", "startpilot");
+    target.hash = "pricing";
+    return target.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Channel-neutral upgrade response; channels decide how to render its URL. */
+export function buildStartpilotQuotaReachedResponse(
+  lang: Lang
+): ConversationResponse {
+  return buildStartpilotPortalResponse(lang, t(lang, "startpilotQuotaReached"));
+}
+
+/** Free users get the same safe portal handoff when today's allowance ends. */
+export function buildFreeQuotaReachedResponse(lang: Lang): ConversationResponse {
+  return buildStartpilotPortalResponse(lang, t(lang, "outOfFreeCredits"));
+}
+
+function buildStartpilotPortalResponse(
+  lang: Lang,
+  text: string
+): ConversationResponse {
+  const url = getSafePortalUpgradeUrl();
+  return {
+    text,
+    actions: url
+      ? [
+          {
+            id: "open_startpilot_upgrade",
+            label: t(lang, "openLeaderbot"),
+            url,
+          },
+        ]
+      : [],
+  };
+}
+
 export function buildImageUploadFailureResponse(
   lang: Lang,
   hasEditableImage: boolean
@@ -110,7 +169,9 @@ export function buildImageUploadFailureResponse(
   };
 }
 
-export function buildAssistantPhotoHelpResponse(lang: Lang): ConversationResponse {
+export function buildAssistantPhotoHelpResponse(
+  lang: Lang
+): ConversationResponse {
   return {
     text: t(lang, "assistantQuickActions"),
     actions: [
@@ -161,7 +222,9 @@ export function buildPhotoReceivedResponse(lang: Lang): ConversationResponse {
   };
 }
 
-export function buildFaceMemoryConsentResponse(lang: Lang): ConversationResponse {
+export function buildFaceMemoryConsentResponse(
+  lang: Lang
+): ConversationResponse {
   const retention = formatFaceMemoryRetentionDays(lang);
   return {
     text:

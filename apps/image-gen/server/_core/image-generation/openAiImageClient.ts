@@ -26,6 +26,13 @@ type OpenAiSourceImage = {
 type OpenAiRequestContext = {
   endpoint: URL;
   requestInit: RequestInit;
+  createRequestInit?: () => RequestInit;
+  model: string;
+  imageCostOptions: {
+    size: string;
+    quality: string;
+    inputFidelity?: string;
+  };
 };
 
 type OpenAiRequestInput = {
@@ -33,6 +40,8 @@ type OpenAiRequestInput = {
   sourceImage: OpenAiSourceImage;
   hasSourceImage: boolean;
   previousResponseId?: string;
+  model?: string;
+  quality?: OpenAiImageQuality;
 };
 
 type OpenAiResponseContext = {
@@ -47,6 +56,9 @@ const OPENAI_RETRY_BASE_MS_DEFAULT = 500;
 const OPENAI_TIMEOUT_MS_DEFAULT = 180_000;
 const OPENAI_IMAGE_MAX_OUTPUT_BYTES_DEFAULT = 25 * 1024 * 1024;
 const OPENAI_RESPONSES_IMAGE_ENDPOINT = "https://api.openai.com/v1/responses";
+const OPENAI_IMAGE_GENERATIONS_ENDPOINT =
+  "https://api.openai.com/v1/images/generations";
+const OPENAI_IMAGE_EDITS_ENDPOINT = "https://api.openai.com/v1/images/edits";
 const OPENAI_IMAGE_ALLOWED_SIZES = new Set([
   "1024x1024",
   "1024x1536",
@@ -69,6 +81,17 @@ const OPENAI_IMAGE_ALLOWED_ACTIONS = new Set(["auto", "generate", "edit"]);
 const OPENAI_IMAGE_ALLOWED_INPUT_FIDELITIES = new Set(["low", "high"]);
 
 type OpenAiImageOutputFormat = "png" | "jpeg" | "webp";
+export type OpenAiImageQuality = "low" | "medium" | "high" | "auto";
+
+type ResolvedOpenAiImageOptions = {
+  size: string;
+  quality?: OpenAiImageQuality;
+  outputFormat: OpenAiImageOutputFormat;
+  background?: string;
+  action?: string;
+  inputFidelity?: string;
+  outputCompression?: number;
+};
 
 function getOpenAiImageOutputFormat(): OpenAiImageOutputFormat {
   return readEnumEnv(
@@ -116,7 +139,10 @@ function getOpenAiRetryBaseMs(): number {
 }
 
 function getOpenAiMaxOutputBytes(): number {
-  const raw = Number.parseInt(process.env.OPENAI_IMAGE_MAX_OUTPUT_BYTES ?? "", 10);
+  const raw = Number.parseInt(
+    process.env.OPENAI_IMAGE_MAX_OUTPUT_BYTES ?? "",
+    10
+  );
   if (Number.isFinite(raw) && raw > 0) {
     return raw;
   }
@@ -167,6 +193,85 @@ function readCompressionEnv(): number | undefined {
   }
 
   return undefined;
+}
+
+function readRequestedQuality(
+  requestedQuality?: OpenAiImageQuality
+): OpenAiImageQuality | undefined {
+  if (requestedQuality && OPENAI_IMAGE_ALLOWED_QUALITIES.has(requestedQuality)) {
+    return requestedQuality;
+  }
+
+  if (requestedQuality) {
+    safeLog("openai_image_config_ignored", {
+      level: "warn",
+      name: "quality",
+      value: requestedQuality,
+      reason: "unsupported_value",
+      allowedValues: Array.from(OPENAI_IMAGE_ALLOWED_QUALITIES),
+    });
+  }
+
+  return readEnumEnv(
+    "OPENAI_IMAGE_QUALITY",
+    OPENAI_IMAGE_ALLOWED_QUALITIES
+  ) as OpenAiImageQuality | undefined;
+}
+
+function isGptImage2(model: string): boolean {
+  return model.trim().toLowerCase() === "gpt-image-2";
+}
+
+function resolveOpenAiImageOptions(input: {
+  model: string;
+  quality?: OpenAiImageQuality;
+}): ResolvedOpenAiImageOptions {
+  const outputFormat = getOpenAiImageOutputFormat();
+  const configuredBackground = readEnumEnv(
+    "OPENAI_IMAGE_BACKGROUND",
+    OPENAI_IMAGE_ALLOWED_BACKGROUNDS
+  );
+  const gptImage2 = isGptImage2(input.model);
+
+  if (gptImage2 && configuredBackground === "transparent") {
+    safeLog("openai_image_config_ignored", {
+      level: "warn",
+      name: "OPENAI_IMAGE_BACKGROUND",
+      value: configuredBackground,
+      reason: "unsupported_for_gpt_image_2",
+    });
+  }
+
+  const outputCompression = readCompressionEnv();
+  return {
+    size: readEnumEnv(
+      "OPENAI_IMAGE_SIZE",
+      OPENAI_IMAGE_ALLOWED_SIZES,
+      "1024x1024"
+    ) as string,
+    quality: readRequestedQuality(input.quality),
+    outputFormat,
+    ...(configuredBackground &&
+    !(gptImage2 && configuredBackground === "transparent")
+      ? { background: configuredBackground }
+      : {}),
+    ...(!gptImage2
+      ? {
+          action: readEnumEnv(
+            "OPENAI_IMAGE_ACTION",
+            OPENAI_IMAGE_ALLOWED_ACTIONS
+          ),
+          inputFidelity: readEnumEnv(
+            "OPENAI_IMAGE_INPUT_FIDELITY",
+            OPENAI_IMAGE_ALLOWED_INPUT_FIDELITIES
+          ),
+        }
+      : {}),
+    ...(outputCompression !== undefined &&
+    (outputFormat === "jpeg" || outputFormat === "webp")
+      ? { outputCompression }
+      : {}),
+  };
 }
 
 function wait(ms: number): Promise<void> {
@@ -275,16 +380,39 @@ async function fetchWithTimeout(
 export function buildOpenAiRequest(
   input: OpenAiRequestInput
 ): OpenAiRequestContext {
-  const { imageGenerationModel } = getOpenAiImageModelConfig();
+  const { imageGenerationModel } = getOpenAiImageModelConfig(input.model);
+  const imageOptions = resolveOpenAiImageOptions({
+    model: imageGenerationModel,
+    quality: input.quality,
+  });
+
+  if (isGptImage2(imageGenerationModel)) {
+    return buildGptImage2Request({
+      ...input,
+      model: imageGenerationModel,
+      imageOptions,
+    });
+  }
+
   const payload = buildOpenAiImageGenerationPayload({
     model: imageGenerationModel,
     prompt: input.prompt,
     sourceImage: input.hasSourceImage ? input.sourceImage : undefined,
     previousResponseId: input.previousResponseId,
+    quality: input.quality,
+    resolvedOptions: imageOptions,
   });
 
   return {
     endpoint: new URL(OPENAI_RESPONSES_IMAGE_ENDPOINT),
+    model: imageGenerationModel,
+    imageCostOptions: {
+      size: imageOptions.size,
+      quality: imageOptions.quality ?? "auto",
+      ...(imageOptions.inputFidelity
+        ? { inputFidelity: imageOptions.inputFidelity }
+        : {}),
+    },
     requestInit: {
       method: "POST",
       headers: {
@@ -296,61 +424,144 @@ export function buildOpenAiRequest(
   };
 }
 
+function appendImageApiOptions(
+  target: FormData,
+  options: ResolvedOpenAiImageOptions
+): void {
+  target.append("size", options.size);
+  target.append("output_format", options.outputFormat);
+  if (options.quality) target.append("quality", options.quality);
+  if (options.background) target.append("background", options.background);
+  if (options.outputCompression !== undefined) {
+    target.append("output_compression", String(options.outputCompression));
+  }
+}
+
+function getSourceImageFilename(contentType: string): string {
+  if (contentType === "image/jpeg") return "source-image.jpg";
+  if (contentType === "image/webp") return "source-image.webp";
+  return "source-image.png";
+}
+
+function buildGptImage2EditFormData(input: {
+  model: string;
+  prompt: string;
+  sourceImage: OpenAiSourceImage;
+  imageOptions: ResolvedOpenAiImageOptions;
+}): FormData {
+  const formData = new FormData();
+  formData.append("model", input.model);
+  formData.append("prompt", input.prompt);
+  formData.append(
+    "image[]",
+    new Blob([new Uint8Array(input.sourceImage.buffer)], {
+      type: input.sourceImage.contentType,
+    }),
+    getSourceImageFilename(input.sourceImage.contentType)
+  );
+  appendImageApiOptions(formData, input.imageOptions);
+  return formData;
+}
+
+function buildGptImage2Request(input: OpenAiRequestInput & {
+  model: string;
+  imageOptions: ResolvedOpenAiImageOptions;
+}): OpenAiRequestContext {
+  const imageCostOptions = {
+    size: input.imageOptions.size,
+    quality: input.imageOptions.quality ?? "auto",
+  };
+
+  if (!input.hasSourceImage) {
+    const payload: Record<string, unknown> = {
+      model: input.model,
+      prompt: input.prompt,
+      size: input.imageOptions.size,
+      output_format: input.imageOptions.outputFormat,
+    };
+    if (input.imageOptions.quality) {
+      payload.quality = input.imageOptions.quality;
+    }
+    if (input.imageOptions.background) {
+      payload.background = input.imageOptions.background;
+    }
+    if (input.imageOptions.outputCompression !== undefined) {
+      payload.output_compression = input.imageOptions.outputCompression;
+    }
+
+    return {
+      endpoint: new URL(OPENAI_IMAGE_GENERATIONS_ENDPOINT),
+      model: input.model,
+      imageCostOptions,
+      requestInit: {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      },
+    };
+  }
+
+  const createRequestInit = (): RequestInit => ({
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+    },
+    body: buildGptImage2EditFormData({
+      model: input.model,
+      prompt: input.prompt,
+      sourceImage: input.sourceImage,
+      imageOptions: input.imageOptions,
+    }),
+  });
+
+  return {
+    endpoint: new URL(OPENAI_IMAGE_EDITS_ENDPOINT),
+    model: input.model,
+    imageCostOptions,
+    requestInit: createRequestInit(),
+    // Each retry gets a fresh multipart body rather than reusing a consumed body.
+    createRequestInit,
+  };
+}
+
 export function buildOpenAiImageGenerationPayload(input: {
   model: string;
   prompt: string;
   sourceImage?: OpenAiSourceImage;
   previousResponseId?: string;
+  quality?: OpenAiImageQuality;
+  resolvedOptions?: ResolvedOpenAiImageOptions;
 }): Record<string, unknown> {
-  const outputFormat = getOpenAiImageOutputFormat();
+  const imageOptions =
+    input.resolvedOptions ??
+    resolveOpenAiImageOptions({ model: input.model, quality: input.quality });
   const imageTool: Record<string, unknown> = {
     type: "image_generation",
-    size: readEnumEnv(
-      "OPENAI_IMAGE_SIZE",
-      OPENAI_IMAGE_ALLOWED_SIZES,
-      "1024x1024"
-    ),
-    output_format: outputFormat,
+    size: imageOptions.size,
+    output_format: imageOptions.outputFormat,
   };
 
-  const quality = readEnumEnv(
-    "OPENAI_IMAGE_QUALITY",
-    OPENAI_IMAGE_ALLOWED_QUALITIES
-  );
-  if (quality) {
-    imageTool.quality = quality;
+  if (imageOptions.quality) {
+    imageTool.quality = imageOptions.quality;
   }
 
-  const background = readEnumEnv(
-    "OPENAI_IMAGE_BACKGROUND",
-    OPENAI_IMAGE_ALLOWED_BACKGROUNDS
-  );
-  if (background) {
-    imageTool.background = background;
+  if (imageOptions.background) {
+    imageTool.background = imageOptions.background;
   }
 
-  const action = readEnumEnv(
-    "OPENAI_IMAGE_ACTION",
-    OPENAI_IMAGE_ALLOWED_ACTIONS
-  );
-  if (action) {
-    imageTool.action = action;
+  if (imageOptions.action) {
+    imageTool.action = imageOptions.action;
   }
 
-  const inputFidelity = readEnumEnv(
-    "OPENAI_IMAGE_INPUT_FIDELITY",
-    OPENAI_IMAGE_ALLOWED_INPUT_FIDELITIES
-  );
-  if (inputFidelity) {
-    imageTool.input_fidelity = inputFidelity;
+  if (imageOptions.inputFidelity) {
+    imageTool.input_fidelity = imageOptions.inputFidelity;
   }
 
-  const outputCompression = readCompressionEnv();
-  if (
-    outputCompression !== undefined &&
-    (outputFormat === "jpeg" || outputFormat === "webp")
-  ) {
-    imageTool.output_compression = outputCompression;
+  if (imageOptions.outputCompression !== undefined) {
+    imageTool.output_compression = imageOptions.outputCompression;
   }
 
   const payload: Record<string, unknown> = {
@@ -400,13 +611,12 @@ export async function fetchOpenAiImageResponse(
       await context.onProviderAttempt?.();
       const response = await fetchWithTimeout(
         requestContext.endpoint,
-        requestContext.requestInit,
+        requestContext.createRequestInit?.() ?? requestContext.requestInit,
         openAiTimeoutMs
       );
 
       context.partialMetrics.openAiMs =
-        (context.partialMetrics.openAiMs ?? 0) +
-        (Date.now() - openAiStartedAt);
+        (context.partialMetrics.openAiMs ?? 0) + (Date.now() - openAiStartedAt);
 
       if (response.ok) {
         safeLog("openai_image_response_received", {
@@ -424,7 +634,6 @@ export async function fetchOpenAiImageResponse(
           reqId: context.reqId,
           status: response.status,
           statusText: response.statusText,
-          body: errorBody.slice(0, 1000),
         });
         throw attachGenerationMetrics(
           new OpenAiBudgetExceededError(
@@ -455,7 +664,6 @@ export async function fetchOpenAiImageResponse(
         reqId: context.reqId,
         status: response.status,
         statusText: response.statusText,
-        body: errorBody.slice(0, 1000),
       });
       throw attachGenerationMetrics(
         new OpenAiGenerationError(
@@ -465,8 +673,7 @@ export async function fetchOpenAiImageResponse(
       );
     } catch (error) {
       context.partialMetrics.openAiMs =
-        (context.partialMetrics.openAiMs ?? 0) +
-        (Date.now() - openAiStartedAt);
+        (context.partialMetrics.openAiMs ?? 0) + (Date.now() - openAiStartedAt);
 
       if (attempt < openAiRetryLimit && isRetryableNetworkError(error)) {
         const waitMs = openAiRetryBaseMs * 2 ** attempt;
@@ -496,6 +703,9 @@ export async function parseOpenAiImageResponse(
 ): Promise<Buffer> {
   const startedAt = Date.now();
   const result = (await response.json()) as {
+    data?: Array<{
+      b64_json?: string;
+    }>;
     output?: Array<{
       type?: string;
       result?: string;
@@ -503,39 +713,57 @@ export async function parseOpenAiImageResponse(
     }>;
   };
 
-  if (!Array.isArray(result.output) || result.output.length === 0) {
-    throw new OpenAiGenerationError("OpenAI response output was empty");
-  }
+  let base64Image: string | undefined;
+  let responseKind: "image_api" | "responses_api";
+  if (Array.isArray(result.data)) {
+    if (result.data.length === 0) {
+      throw new OpenAiGenerationError("OpenAI Image API response data was empty");
+    }
+    base64Image = result.data.find(image => image?.b64_json)?.b64_json;
+    responseKind = "image_api";
+    if (!base64Image) {
+      throw new OpenAiGenerationError(
+        "OpenAI Image API response did not include base64 image data"
+      );
+    }
+  } else {
+    if (!Array.isArray(result.output) || result.output.length === 0) {
+      throw new OpenAiGenerationError("OpenAI response output was empty");
+    }
 
-  const imageGenerationCall = result.output.find(
-    output => output?.type === "image_generation_call"
-  );
-  if (!imageGenerationCall) {
-    safeLog("openai_image_response_missing_generation_call", {
-      level: "warn",
-      reqId,
-      outputTypes: result.output.map(output => output?.type ?? "unknown"),
-      contentTypes: result.output.flatMap(output =>
-        Array.isArray(output?.content)
-          ? output.content.map(content => content?.type ?? "unknown")
-          : []
-      ),
-    });
-    throw new OpenAiGenerationError(
-      "OpenAI response did not include an image_generation_call"
+    const imageGenerationCall = result.output.find(
+      output => output?.type === "image_generation_call"
     );
-  }
+    if (!imageGenerationCall) {
+      safeLog("openai_image_response_missing_generation_call", {
+        level: "warn",
+        reqId,
+        outputTypes: result.output.map(output => output?.type ?? "unknown"),
+        contentTypes: result.output.flatMap(output =>
+          Array.isArray(output?.content)
+            ? output.content.map(content => content?.type ?? "unknown")
+            : []
+        ),
+      });
+      throw new OpenAiGenerationError(
+        "OpenAI response did not include an image_generation_call"
+      );
+    }
 
-  const base64Image = imageGenerationCall.result;
-  if (!base64Image) {
-    throw new OpenAiGenerationError(
-      "OpenAI image_generation_call did not include base64 image data"
-    );
+    base64Image = imageGenerationCall.result;
+    responseKind = "responses_api";
+    if (!base64Image) {
+      throw new OpenAiGenerationError(
+        "OpenAI image_generation_call did not include base64 image data"
+      );
+    }
   }
 
   if (!isValidBase64ImageData(base64Image)) {
     throw new OpenAiGenerationError(
-      "OpenAI image_generation_call returned invalid base64 image data"
+      responseKind === "image_api"
+        ? "OpenAI Image API returned invalid base64 image data"
+        : "OpenAI image_generation_call returned invalid base64 image data"
     );
   }
 
@@ -549,7 +777,9 @@ export async function parseOpenAiImageResponse(
       maxOutputBytes,
     });
     throw new OpenAiGenerationError(
-      "OpenAI image_generation_call returned image data above the configured byte limit"
+      responseKind === "image_api"
+        ? "OpenAI Image API returned image data above the configured byte limit"
+        : "OpenAI image_generation_call returned image data above the configured byte limit"
     );
   }
 
@@ -579,7 +809,10 @@ function isValidBase64ImageData(value: string): boolean {
 
 function estimateBase64DecodedBytes(value: string): number {
   const normalized = value.trim();
-  const padding =
-    normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
+  const padding = normalized.endsWith("==")
+    ? 2
+    : normalized.endsWith("=")
+      ? 1
+      : 0;
   return Math.floor((normalized.length * 3) / 4) - padding;
 }

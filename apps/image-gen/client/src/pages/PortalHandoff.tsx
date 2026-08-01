@@ -14,20 +14,20 @@ import { useRoute } from "wouter";
 
 function getClaimErrorMessage(message?: string) {
   if (message?.includes("expired")) {
-    return "This setup link has expired. Ask for a fresh premium setup link in Messenger.";
+    return "This setup link has expired. Ask for a fresh Startpilot setup link in Messenger.";
   }
   if (message?.includes("already_used")) {
     return "This setup link has already been used. Open the portal or ask for a fresh link.";
   }
-  return "This setup link is invalid. Ask for a fresh premium setup link in Messenger.";
+  return "This setup link is invalid. Ask for a fresh Startpilot setup link in Messenger.";
 }
 
 function isTerminalClaimError(message?: string) {
   return Boolean(
     message &&
-      (message.includes("expired") ||
-        message.includes("already_used") ||
-        message.includes("invalid"))
+    (message.includes("expired") ||
+      message.includes("already_used") ||
+      message.includes("invalid"))
   );
 }
 
@@ -36,15 +36,21 @@ function PortalHandoff() {
   const [, params] = useRoute<{ token?: string }>("/handoff/:token");
   const loginConfigured = isLoginConfigured();
   const routeToken = typeof params?.token === "string" ? params.token : null;
-  const [storedToken, setStoredToken] = useState(() => routeToken ?? readPendingHandoffToken());
-  const [claimAttemptedToken, setClaimAttemptedToken] = useState<string | null>(null);
+  const [storedToken, setStoredToken] = useState(
+    () => routeToken ?? readPendingHandoffToken()
+  );
+  const [claimAttemptedToken, setClaimAttemptedToken] = useState<string | null>(
+    null
+  );
   const token = routeToken ?? storedToken;
 
   const claimMutation = trpc.portal.handoff.claim.useMutation({
     onSuccess: data => {
       writeActiveWorkspaceId(data.workspace.id);
       clearPendingHandoffToken();
-      window.location.assign(`/?workspaceId=${data.workspace.id}&onboarding=handoff`);
+      window.location.assign(
+        `/?workspaceId=${data.workspace.id}&onboarding=handoff`
+      );
     },
     onError: error => {
       if (!isTerminalClaimError(error.message)) return;
@@ -61,7 +67,8 @@ function PortalHandoff() {
   }, [routeToken]);
 
   useEffect(() => {
-    if (!auth.isAuthenticated || !token || claimAttemptedToken === token) return;
+    if (!auth.isAuthenticated || !token || claimAttemptedToken === token)
+      return;
     setClaimAttemptedToken(token);
     claimHandoff({ token });
   }, [auth.isAuthenticated, claimAttemptedToken, claimHandoff, token]);
@@ -87,7 +94,7 @@ function PortalHandoff() {
               Setup link missing
             </h1>
             <p className="mt-4 text-base leading-7 text-stone-600">
-              Open the premium setup link from Messenger again.
+              Open the Startpilot setup link from Messenger again.
             </p>
           </section>
         </div>
@@ -104,7 +111,7 @@ function PortalHandoff() {
               <ShieldCheck className="h-6 w-6" />
             </div>
             <h1 className="text-3xl font-semibold text-stone-950">
-              Premium setup ready
+              Startpilot setup ready
             </h1>
             <p className="mt-4 max-w-2xl text-base leading-7 text-stone-600">
               Continue with Facebook to claim your workspace and finish your
@@ -120,7 +127,7 @@ function PortalHandoff() {
             </Button>
             {!loginConfigured ? (
               <p className="mt-4 text-sm text-amber-700">
-                Facebook Login is not configured for this local environment.
+                Facebook Login is not configured for this environment.
               </p>
             ) : null}
           </section>
@@ -141,12 +148,14 @@ function PortalHandoff() {
             )}
           </div>
           <h1 className="text-3xl font-semibold text-stone-950">
-            {claimMutation.isError ? "Setup link could not be claimed" : "Claiming workspace"}
+            {claimMutation.isError
+              ? "Setup link could not be claimed"
+              : "Claiming workspace"}
           </h1>
           <p className="mt-4 max-w-2xl text-base leading-7 text-stone-600">
             {claimMutation.isError
               ? getClaimErrorMessage(claimMutation.error.message)
-              : "Securing your premium workspace and opening the portal."}
+              : "Securing your Startpilot workspace and opening the portal."}
           </p>
           {claimMutation.isError ? (
             <Button

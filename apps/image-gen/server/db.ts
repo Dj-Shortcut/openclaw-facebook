@@ -1156,23 +1156,107 @@ export async function deletePortalHandoffTokensForMessengerUserKey(
   return getAffectedRows(result);
 }
 
+export class ChannelConnectionClaimConflictError extends Error {
+  constructor() {
+    super("Channel connection is already claimed by another workspace");
+    this.name = "ChannelConnectionClaimConflictError";
+  }
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const record = error as { code?: unknown; errno?: unknown };
+  return record.code === "ER_DUP_ENTRY" || record.errno === 1062;
+}
+
+/**
+ * Claims a provider account for one workspace and then writes its credentials.
+ *
+ * The provider identity has a global unique key (`channel`, `externalId`). Never
+ * use an unscoped duplicate-key update here: a collision may belong to another
+ * workspace and must fail closed instead of replacing that tenant's token.
+ */
 export async function upsertChannelConnection(values: InsertChannelConnection) {
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("upsert_channel_connection");
-    return null;
+    throw new Error("Database unavailable: channel connection was not saved");
   }
 
-  await db.insert(channelConnections).values(values).onDuplicateKeyUpdate({
-    set: {
-      status: values.status,
-      externalId: values.externalId ?? null,
-      displayName: values.displayName ?? null,
-      encryptedAccessToken: values.encryptedAccessToken ?? null,
-      grantedScopes: values.grantedScopes ?? null,
-      lastCheckedAt: new Date(),
-    },
-  });
+  const externalId = values.externalId?.trim() || null;
+  const lastCheckedAt = new Date();
+  const updateSet = {
+    status: values.status,
+    externalId,
+    displayName: values.displayName ?? null,
+    encryptedAccessToken: values.encryptedAccessToken ?? null,
+    grantedScopes: values.grantedScopes ?? null,
+    lastCheckedAt,
+  };
+
+  try {
+    await db.transaction(async tx => {
+      if (externalId) {
+        const claimed = await tx
+          .select({
+            id: channelConnections.id,
+            workspaceId: channelConnections.workspaceId,
+          })
+          .from(channelConnections)
+          .where(
+            and(
+              eq(channelConnections.channel, values.channel),
+              eq(channelConnections.externalId, externalId)
+            )
+          )
+          .limit(1)
+          .for("update");
+        if (claimed[0] && claimed[0].workspaceId !== values.workspaceId) {
+          throw new ChannelConnectionClaimConflictError();
+        }
+      }
+
+      const existing = await tx
+        .select({ id: channelConnections.id })
+        .from(channelConnections)
+        .where(
+          and(
+            eq(channelConnections.workspaceId, values.workspaceId),
+            eq(channelConnections.channel, values.channel)
+          )
+        )
+        .limit(1)
+        .for("update");
+
+      if (existing[0]) {
+        await tx
+          .update(channelConnections)
+          .set(updateSet)
+          .where(
+            and(
+              eq(channelConnections.id, existing[0].id),
+              eq(channelConnections.workspaceId, values.workspaceId),
+              eq(channelConnections.channel, values.channel)
+            )
+          );
+        return;
+      }
+
+      await tx.insert(channelConnections).values({
+        ...values,
+        externalId,
+        lastCheckedAt,
+      });
+    });
+  } catch (error) {
+    if (
+      error instanceof ChannelConnectionClaimConflictError ||
+      isDuplicateKeyError(error)
+    ) {
+      throw new ChannelConnectionClaimConflictError();
+    }
+    throw error;
+  }
 
   return listChannelConnections(values.workspaceId);
 }

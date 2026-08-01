@@ -1,5 +1,6 @@
 const MOLLIE_WEBHOOK_PATH = "/api/webhooks/mollie/payments";
 const MOLLIE_BILLING_ENABLED_VALUE = "true";
+const MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED_VALUE = "true";
 
 export type MollieMode = "test" | "live";
 
@@ -111,10 +112,22 @@ export function isMollieBillingEnabled(): boolean {
   return process.env.MOLLIE_BILLING_ENABLED === MOLLIE_BILLING_ENABLED_VALUE;
 }
 
+export function isMollieEntitlementEnforcementEnabled(): boolean {
+  return (
+    process.env.MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED ===
+    MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED_VALUE
+  );
+}
+
 export function assertMollieBillingEnabled(): void {
   if (!isMollieBillingEnabled()) {
     throw new Error(
       "Mollie billing is disabled; enable it only after the billing launch gates are approved"
+    );
+  }
+  if (!isMollieEntitlementEnforcementEnabled()) {
+    throw new Error(
+      "Mollie entitlement enforcement is disabled; migrate and verify paid quota enforcement before enabling checkout"
     );
   }
   const config = getMollieConfig();

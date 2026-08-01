@@ -115,6 +115,7 @@ describe("Leaderbot bridge requests", () => {
     await expect(
       requestLeaderbotImageGeneration({
         psid: "psid-1",
+        pageId: "page-1",
         prompt: "Maak een robot",
         reqId: "req-1",
         timestamp: 1_700_000_000_000,
@@ -172,6 +173,7 @@ describe("Leaderbot bridge requests", () => {
         timestamp: 1_700_000_000_000,
         trace,
         leaderbotBridgeEnabled: true,
+        pageId: "page-1",
         sourceImageUrl: "https://cdn.example.test/image.jpg",
         logStage,
       }),
@@ -192,6 +194,7 @@ describe("Leaderbot bridge requests", () => {
       JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)),
     ).toMatchObject({
       psid: "psid-1",
+      pageId: "page-1",
       prompt: "Maak een robot",
       reqId: "req-1",
       lang: "nl",

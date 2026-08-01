@@ -10,9 +10,14 @@ import { safeLog } from "./logger";
 import { isInternalMessengerImageRequestNotQueuedError } from "./internalImageRequestErrors";
 import { MESSENGER_SEND_SKIPPED } from "./webhookFallback";
 import type { MessengerSendOutcome } from "./messengerApi";
+import {
+  finalizeInternalAiAnswerQuota,
+  reserveInternalAiAnswerQuota,
+} from "./internalAiAnswerQuota";
 
 const internalImageRequestSchema = z.object({
   psid: z.string().trim().min(1),
+  pageId: z.string().trim().min(1).max(160).optional(),
   prompt: z.string().trim().min(1).max(2_000),
   reqId: z.string().trim().min(1).max(128),
   lang: z.enum(["nl", "en"]).optional(),
@@ -28,6 +33,19 @@ const internalMessengerEventSchema = z.object({
       timestamp: z.number().int().positive().optional(),
     })
     .passthrough(),
+});
+
+const internalAiAnswerQuotaReserveSchema = z.object({
+  pageId: z.string().trim().min(1).max(160),
+  idempotencyKey: z
+    .string()
+    .regex(/^[A-Za-z0-9:_-]{16,160}$/),
+});
+
+const internalAiAnswerQuotaFinalizeSchema = z.object({
+  pageId: z.string().trim().min(1).max(160),
+  reservationId: z.string().uuid(),
+  outcome: z.enum(["committed", "released"]),
 });
 
 const internalMessengerRequestLimiter = rateLimit({
@@ -111,6 +129,44 @@ function sendNotQueuedResponse(res: Response): void {
 
 /** Registers authenticated internal Messenger image-request and event bridge routes. */
 export function registerInternalImageRequestRoutes(app: Express): void {
+  app.post(
+    "/internal/messenger/ai-answer-quota/reserve",
+    internalMessengerRequestLimiter,
+    async (req, res) => {
+      if (!authorizeInternalRequest(req, res)) return;
+      const parsed = internalAiAnswerQuotaReserveSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid AI answer quota request" });
+        return;
+      }
+      try {
+        res.status(200).json(await reserveInternalAiAnswerQuota(parsed.data));
+      } catch {
+        safeLog("internal_ai_answer_quota_reserve_failed", { level: "error" });
+        res.status(503).json({ error: "AI answer quota is unavailable" });
+      }
+    }
+  );
+
+  app.post(
+    "/internal/messenger/ai-answer-quota/finalize",
+    internalMessengerRequestLimiter,
+    async (req, res) => {
+      if (!authorizeInternalRequest(req, res)) return;
+      const parsed = internalAiAnswerQuotaFinalizeSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid AI answer quota finalization" });
+        return;
+      }
+      try {
+        res.status(200).json(await finalizeInternalAiAnswerQuota(parsed.data));
+      } catch {
+        safeLog("internal_ai_answer_quota_finalize_failed", { level: "error" });
+        res.status(503).json({ error: "AI answer quota is unavailable" });
+      }
+    }
+  );
+
   app.post(
     "/internal/messenger/image-request",
     internalMessengerRequestLimiter,

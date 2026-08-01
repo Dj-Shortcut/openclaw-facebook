@@ -39,6 +39,7 @@ These variables control whether the OpenAI-backed parts of the bot actually run.
 | `OPENAI_API_KEY` | Image generation and conversational edit interpretation | If missing, image generation fails closed and edit interpretation is skipped. |
 | `IMAGE_PROVIDER` | Image provider boundary | Optional; currently only `openai-images` is supported. |
 | `OPENAI_EDIT_INTERPRETER_MODEL` | Conversational edit classifier | Optional; free text still stays deterministic and does not use an OpenAI chat brain. |
+| `OPENAI_IMAGE_ESTIMATED_COST_USD` | Conservative per-attempt image budget estimate | Required before paid Images 2.0 activation until provider usage reconciliation prices prompt and high-fidelity edit-input tokens. Set from current official GPT Image 2 pricing plus measured input usage; do not rely only on the output table. |
 | `SOURCE_IMAGE_ALLOWED_HOSTS` | Downloading inbound images before generation | If the exact host is not allowlisted, generation fails before OpenAI is called. |
 | `MESSENGER_GLOBAL_DAILY_IMAGE_CAP` | Optional global Messenger image provider-attempt cap | Set for public smoke so one account cannot burn the whole OpenAI image budget. |
 | `MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP` | Optional root-gateway image forward cap | Host-level safety valve before the OpenClaw Facebook plugin forwards image intents to Leaderbot image-gen. |
@@ -63,11 +64,21 @@ These show up in the repo and can be mistaken for the main OpenAI path.
 | `HTTP_RATE_LIMIT_REDIS_GUARD_MAX_REQUESTS` | Global HTTP rate limiting | Optional pre-Redis guard cap per window; defaults to `max(1000, HTTP_RATE_LIMIT_MAX_REQUESTS * 10)`. |
 | `ADMIN_TOKEN` | Debug/admin endpoints | Required for `/admin/disable-face-memory` and `/debug/build`; those endpoints also have a stricter admin-auth rate limit. |
 
-## 5. Mollie billing (live remains disabled)
+## 5. Portal authentication
+
+| Variable | Required for | Notes |
+| --- | --- | --- |
+| `OAUTH_PORTAL_URL` | Public Manus WebDev OAuth authorization origin | Optional only when browser authorization and token exchange intentionally share the `OAUTH_SERVER_URL` origin. Returned through `/api/public/config`; HTTPS required except localhost. Never infer it from Meta URLs or include credentials, query secrets, or fragments. |
+| `OAUTH_SERVER_URL` | Manus WebDev OAuth token exchange origin | Separate from Meta/Facebook Graph and callback URLs; also used as the public portal fallback when `OAUTH_PORTAL_URL` is deliberately absent. |
+| `VITE_APP_ID` | Public Manus WebDev OAuth project id | Read at server runtime and returned through `/api/public/config`; it is not a client secret and is not `FB_APP_ID`. |
+
+## 6. Mollie billing (live remains disabled)
 
 | Variable | Required for | Notes |
 | --- | --- | --- |
 | `MOLLIE_BILLING_ENABLED` | Master billing feature switch | Defaults off. When false, checkout, public paid plans, Mollie webhooks, billing workers and reconciliation are not started. Enable only in an approved test or launch environment. |
+| `MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED` | Existing paid quota enforcement | Defaults off before migration. Must be enabled and verified before checkout can start, then kept on even if billing is paused so paid quotas cannot fall back to free behavior. |
+| `LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED` | Gateway preflight for the finite 300-answer Startpilot quota | Defaults off, so ordinary free OpenClaw chat has no image-gen dependency. Enable on the gateway only after migration and together with verified image-gen `MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED=true`; once enabled, transport or quota lookup failures intentionally fail closed. |
 | `MOLLIE_API_KEY` | Mollie API calls | Use only a `test_` key until launch approval; never log or commit it. |
 | `MOLLIE_MODE` | Mode guard | Must be exactly `test` or `live` and match the key prefix. |
 | `MOLLIE_PAYMENT_WEBHOOK_URL` | Classic payment updates | Exact HTTPS production path: `/api/webhooks/mollie/payments`. |
@@ -78,7 +89,7 @@ These show up in the repo and can be mistaken for the main OpenAI path.
 | `MOLLIE_BILLING_WORKER_WORKSPACE_ID` | Tenant-bound outbox/reconciliation worker | Required for checkout in the isolated Test Mode foundation. Must be one positive workspace ID; this is not the final multi-tenant scheduler. |
 | `MOLLIE_WEBHOOK_RATE_LIMIT_PER_MINUTE` | Dedicated classic-webhook protection | Defaults to 6000 per source IP/minute so the shared app limiter cannot suppress Mollie delivery. |
 
-## 6. Fast triage
+## 7. Fast triage
 
 When the bot seems broken, check in this order:
 

@@ -1,7 +1,4 @@
-import {
-  createImageGenerator,
-  type ImageProvider,
-} from "./imageService";
+import { createImageGenerator, type ImageProvider } from "./imageService";
 import {
   GenerationTimeoutError,
   MissingAppBaseUrlError,
@@ -26,6 +23,7 @@ import {
 } from "./generationGuard";
 import { MessengerQuotaReservationCommitError } from "./messengerQuota";
 import { safeLog } from "./logger";
+import type { OpenAiImageQuality } from "./image-generation/openAiImageClient";
 
 type GenerationProof = {
   incomingLen: number;
@@ -34,15 +32,17 @@ type GenerationProof = {
   openaiInputSha256: string;
 };
 
-type GenerationMetrics = NonNullable<ReturnType<typeof getGenerationMetrics>> | {
-  totalMs: number;
-  fbImageFetchMs?: number;
-  promptBuildMs?: number;
-  openAiPayloadBuildMs?: number;
-  openAiMs?: number;
-  openAiParseMs?: number;
-  uploadOrServeMs?: number;
-};
+type GenerationMetrics =
+  | NonNullable<ReturnType<typeof getGenerationMetrics>>
+  | {
+      totalMs: number;
+      fbImageFetchMs?: number;
+      promptBuildMs?: number;
+      openAiPayloadBuildMs?: number;
+      openAiMs?: number;
+      openAiParseMs?: number;
+      uploadOrServeMs?: number;
+    };
 
 type GenerationFlowSuccess = {
   kind: "success";
@@ -72,9 +72,7 @@ type GenerationFlowFailure = {
   trustedSourceImageUrl: boolean;
 };
 
-type GenerationFlowResult =
-  | GenerationFlowSuccess
-  | GenerationFlowFailure;
+type GenerationFlowResult = GenerationFlowSuccess | GenerationFlowFailure;
 
 type ExecuteGenerationFlowInput = {
   generationKind?: GenerationKind;
@@ -85,6 +83,8 @@ type ExecuteGenerationFlowInput = {
   lastPhotoUrl?: string | null;
   lastPhotoSource?: SourceImageOrigin | null;
   onProviderAttempt?: () => Promise<void>;
+  imageModel?: string;
+  imageQuality?: OpenAiImageQuality;
 };
 
 type RuntimeSourceInput = {
@@ -94,10 +94,14 @@ type RuntimeSourceInput = {
 };
 
 function hasStoredLastPhoto(input: RuntimeSourceInput): boolean {
-  return typeof input.lastPhotoUrl === "string" && input.lastPhotoSource === "stored";
+  return (
+    typeof input.lastPhotoUrl === "string" && input.lastPhotoSource === "stored"
+  );
 }
 
-function logIgnoredSourceImageOverride(input: RuntimeSourceInput & { reqId: string }): void {
+function logIgnoredSourceImageOverride(
+  input: RuntimeSourceInput & { reqId: string }
+): void {
   if (
     hasStoredLastPhoto(input) &&
     input.sourceImageUrl &&
@@ -110,10 +114,12 @@ function logIgnoredSourceImageOverride(input: RuntimeSourceInput & { reqId: stri
   }
 }
 
-function selectOriginalSourceImageUrl(input: RuntimeSourceInput): string | undefined {
+function selectOriginalSourceImageUrl(
+  input: RuntimeSourceInput
+): string | undefined {
   return hasStoredLastPhoto(input)
-    ? input.lastPhotoUrl ?? undefined
-    : input.sourceImageUrl ?? input.lastPhotoUrl ?? undefined;
+    ? (input.lastPhotoUrl ?? undefined)
+    : (input.sourceImageUrl ?? input.lastPhotoUrl ?? undefined);
 }
 
 function isOriginalStoredLastPhoto(
@@ -139,7 +145,10 @@ async function resolveStoredRuntimeSourceUrl(input: {
   logIgnoredSourceImageOverride(input);
 
   const originalSourceImageUrl = selectOriginalSourceImageUrl(input);
-  const isStoredLastPhoto = isOriginalStoredLastPhoto(originalSourceImageUrl, input);
+  const isStoredLastPhoto = isOriginalStoredLastPhoto(
+    originalSourceImageUrl,
+    input
+  );
 
   if (!originalSourceImageUrl || !isStoredLastPhoto) {
     return {
@@ -285,6 +294,8 @@ export async function executeGenerationFlow(
       sourceImageProvenance: trustedSourceImageUrl ? "storeInbound" : undefined,
       promptHint: input.promptHint,
       onProviderAttempt: input.onProviderAttempt,
+      model: input.imageModel,
+      quality: input.imageQuality,
       userKey: input.userId,
       reqId: input.reqId,
     });

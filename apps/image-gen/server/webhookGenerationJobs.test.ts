@@ -379,7 +379,9 @@ describe("messenger generation job safety", () => {
 
   it("uses the out-of-free-credits translation when quota is exhausted", async () => {
     const originalLimit = process.env.MESSENGER_FREE_DAILY_LIMIT;
+    const originalPortalBaseUrl = process.env.PORTAL_BASE_URL;
     process.env.MESSENGER_FREE_DAILY_LIMIT = "0";
+    process.env.PORTAL_BASE_URL = "https://leaderbot.live";
     const runner = createTestRunner();
 
     try {
@@ -395,11 +397,22 @@ describe("messenger generation job safety", () => {
       } else {
         process.env.MESSENGER_FREE_DAILY_LIMIT = originalLimit;
       }
+      if (originalPortalBaseUrl === undefined) {
+        delete process.env.PORTAL_BASE_URL;
+      } else {
+        process.env.PORTAL_BASE_URL = originalPortalBaseUrl;
+      }
     }
 
-    expect(sendTextMock).toHaveBeenCalledWith(
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       "quota-exhausted-user",
-      t("en", "outOfFreeCredits")
+      t("en", "outOfFreeCredits"),
+      [
+        expect.objectContaining({
+          id: "open_startpilot_upgrade",
+          url: "https://leaderbot.live/?upgrade=startpilot#pricing",
+        }),
+      ]
     );
     expect(executeGenerationFlowMock).not.toHaveBeenCalled();
     expect(getState("quota-exhausted-user")?.stage).toBe(

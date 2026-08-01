@@ -193,6 +193,9 @@ export const channelConnections = mysqlTable(
       table.workspaceId,
       table.channel
     ),
+    channelExternalIdUnique: uniqueIndex(
+      "channelConnections_channel_externalId_unique"
+    ).on(table.channel, table.externalId),
   })
 );
 
@@ -429,7 +432,11 @@ export const billingIntents = mysqlTable(
       .references(() => workspaces.id, { onDelete: "restrict" }),
     mode: mysqlEnum("mode", ["test", "live"]).notNull(),
     planCode: varchar("plan_code", { length: 80 }).notNull(),
-    kind: mysqlEnum("kind", ["subscription_start", "payment_method_change"])
+    kind: mysqlEnum("kind", [
+      "subscription_start",
+      "payment_method_change",
+      "startpilot_purchase",
+    ])
       .default("subscription_start")
       .notNull(),
     expectedAmount: decimal("expected_amount", { precision: 10, scale: 2 }).notNull(),
@@ -655,10 +662,16 @@ export const workspaceEntitlements = mysqlTable(
     quota: json("quota").notNull(),
     validUntil: timestamp("valid_until"),
     sourceSubscriptionId: varchar("source_subscription_id", { length: 64 }),
+    sourceIntentId: varchar("source_intent_id", { length: 36 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
   table => [
+    foreignKey({
+      name: "workspace_entitlements_source_intent_fk",
+      columns: [table.sourceIntentId],
+      foreignColumns: [billingIntents.intentId],
+    }).onDelete("restrict"),
     uniqueIndex("workspace_entitlements_workspace_mode_unique").on(
       table.workspaceId,
       table.mode
@@ -668,6 +681,99 @@ export const workspaceEntitlements = mysqlTable(
 
 export type WorkspaceEntitlement = typeof workspaceEntitlements.$inferSelect;
 export type InsertWorkspaceEntitlement = typeof workspaceEntitlements.$inferInsert;
+
+/**
+ * Workspace-local counters for finite products. Counters are updated while the
+ * row is locked so concurrent provider calls cannot exceed a paid allowance.
+ */
+export const workspaceEntitlementUsage = mysqlTable(
+  "workspace_entitlement_usage",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "restrict" }),
+    mode: mysqlEnum("mode", ["test", "live"]).notNull(),
+    entitlementId: int("entitlement_id")
+      .notNull()
+      .references(() => workspaceEntitlements.id, { onDelete: "restrict" }),
+    planCode: varchar("plan_code", { length: 80 }).notNull(),
+    sourceIntentId: varchar("source_intent_id", { length: 36 })
+      .notNull()
+      .references(() => billingIntents.intentId, { onDelete: "restrict" }),
+    periodStartedAt: timestamp("period_started_at").notNull(),
+    periodEndsAt: timestamp("period_ends_at").notNull(),
+    aiAnswersCommitted: int("ai_answers_committed").default(0).notNull(),
+    aiAnswersReserved: int("ai_answers_reserved").default(0).notNull(),
+    imagesUsed: int("images_used").default(0).notNull(),
+    imageUsageDate: varchar("image_usage_date", { length: 10 }),
+    imagesUsedToday: int("images_used_today").default(0).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [
+    uniqueIndex("workspace_entitlement_usage_workspace_mode_plan_unique").on(
+      table.workspaceId,
+      table.mode,
+      table.planCode
+    ),
+    uniqueIndex("workspace_entitlement_usage_entitlement_unique").on(
+      table.entitlementId
+    ),
+  ]
+);
+
+export type WorkspaceEntitlementUsage =
+  typeof workspaceEntitlementUsage.$inferSelect;
+export type InsertWorkspaceEntitlementUsage =
+  typeof workspaceEntitlementUsage.$inferInsert;
+
+/** Short-lived, idempotent reservations; no sender or conversation data. */
+export const workspaceEntitlementUsageReservations = mysqlTable(
+  "workspace_entitlement_usage_reservations",
+  {
+    reservationId: varchar("reservation_id", { length: 36 }).primaryKey(),
+    workspaceId: int("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "restrict" }),
+    mode: mysqlEnum("mode", ["test", "live"]).notNull(),
+    entitlementId: int("entitlement_id")
+      .notNull()
+      .references(() => workspaceEntitlements.id, { onDelete: "restrict" }),
+    kind: mysqlEnum("kind", ["ai_answer", "image"]).notNull(),
+    status: mysqlEnum("status", [
+      "reserved",
+      "committed",
+      "released",
+      "expired",
+    ])
+      .default("reserved")
+      .notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 160 }).notNull(),
+    expiresAt: timestamp("expires_at").notNull(),
+    committedAt: timestamp("committed_at"),
+    releasedAt: timestamp("released_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [
+    uniqueIndex("workspace_entitlement_reservations_idempotency_unique").on(
+      table.workspaceId,
+      table.mode,
+      table.idempotencyKey
+    ),
+    index("workspace_entitlement_reservations_expiry_idx").on(
+      table.mode,
+      table.status,
+      table.expiresAt
+    ),
+  ]
+);
+
+export type WorkspaceEntitlementUsageReservation =
+  typeof workspaceEntitlementUsageReservations.$inferSelect;
+export type InsertWorkspaceEntitlementUsageReservation =
+  typeof workspaceEntitlementUsageReservations.$inferInsert;
 
 /** Reliable post-commit work for mandate checks, subscription creation and alerts. */
 export const billingOutbox = mysqlTable(

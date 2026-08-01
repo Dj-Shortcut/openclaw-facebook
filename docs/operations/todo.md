@@ -10,7 +10,7 @@
 - Latest operator production verification: **2026-06-30** live Messenger smoke and `delete-my-data` flow verified by operator.
 - Current direction: generic prompt-first image generation; legacy style-picker UI, quick-reply flows, and director-mode preset plumbing are removed. Internal style-preset compatibility may remain only as backend fallback.
 - Product direction: `leaderbot.live` becomes a tenant/customer portal for managing each customer's own AI. The OpenClaw/Messenger gateway remains shielded and is not the customer-facing app.
-- 2026-08-01 local website-readiness update: the unauthenticated portal entry now presents the real tenant workspace product, free starting point, and a non-transactional interest CTA for the proposed €29/month Premium plan. Public business/contact details and pre-launch legal copy are present. Checkout, webhook workers, reconciliation, and paid plan exposure stay disabled unless `MOLLIE_BILLING_ENABLED=true`; production deployment and Mollie onboarding remain open work.
+- 2026-08-01 local website-readiness update: the unauthenticated portal entry now presents the real tenant workspace product, free starting point, and a non-transactional interest CTA for the proposed `Leaderbot Startpilot — €19 eenmalig`. The draft offer is 30 days, one workspace/Page, 300 AI answers, 20 Images 2.0 generations, and at most five images per day, without renewal, top-ups, or overage. Public business/contact details and pre-launch legal copy are present. Checkout, webhooks, reconciliation, and paid-plan exposure stay disabled unless `MOLLIE_BILLING_ENABLED=true`; checkout also refuses to start until the separately controlled paid-entitlement runtime is migrated and enabled. Production deployment and Mollie onboarding remain open work.
 - Historical audit and inventory files are not active plans. Keep valid open work here instead of reviving stale audit snapshots.
 
 ## Architecture boundary notes
@@ -177,6 +177,7 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Add production readiness guard for the customer portal database configuration
 - [x] Document the production customer portal database secret, migration, readiness, and smoke-test rollout order
 - [x] Add a production portal verifier for DATABASE_URL readiness and public endpoint checks
+- [x] Load non-secret OAuth browser configuration from the running portal so Fly runtime values, rather than unavailable Docker build secrets, control whether Facebook Login is shown.
 - [x] Add launch billing and usage controls before broad customer launch. Current launch mode is manual upgrade requests with customer-visible free-plan usage; paid subscriptions are deferred.
 - [ ] Add zero-friction Messenger-to-portal handoff for approved customers before relying on the portal for onboarding
   - Messenger presence alone is not portal authentication.
@@ -293,15 +294,21 @@ Quota drift investigation note:
 - [x] Run dedicated Messenger image-generation worker in production with Redis-backed queue enabled
 - [ ] Deferred: evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory
 
-### Premium tier (Mollie Test Mode foundation; live NO-GO)
+### Startpilot billing (Mollie Test Mode foundation; live NO-GO)
 
-- [x] Add workspace-scoped Mollie billing schema, classic payment webhook, outbox, subscription provisioning, entitlement records, portal controls, and daily reconciliation.
+- [x] Add workspace-scoped Mollie billing schema, classic payment webhook, one-time Startpilot checkout, dormant subscription provisioning, entitlement records, portal controls, and daily reconciliation.
 - [x] Keep live Mollie billing disabled by default and reject key/mode or insecure URL mismatches.
-- [ ] Approve the provisional plan price, interval, quota, grace period, legal copy, accounting treatment, and retention policy.
+- [x] Select the bounded product offer: `€19` once, 30 days, one workspace/Page, 300 AI answers, 20 Images 2.0 generations, and at most five images per day, without renewal, top-ups, or overage.
+- [ ] Approve the draft Startpilot legal copy, accounting treatment, refund/withdrawal terms, invoice treatment, and financial-retention policy before live payment.
 - [ ] Run and record all Mollie sandbox cases in `docs/MOLLIE_TEST_RESULTS.md`.
 - [ ] Add real-MySQL concurrency/integrity tests for intents, webhooks, ledger, outbox, and duplicate subscription prevention.
+- [ ] Before paid Images 2.0 activation, smoke-test direct GPT Image 2 generation and editing and set a conservative `OPENAI_IMAGE_ESTIMATED_COST_USD` that covers output plus prompt/high-fidelity source-image input until actual usage reconciliation is implemented.
+- [ ] Replace the non-atomic USD spend-cap summary-check/ledger-append sequence with a concurrency-tested atomic reservation/commit/release path; simultaneous workers can currently pass the same remaining budget, so paid activation stays NO-GO until this is closed.
+- [ ] Add a durable, tenant-scoped finalize retry/outbox for AI-answer reservations so an ambiguous gateway-to-image-gen outage after successful Messenger delivery cannot let a reservation expire and undercount one answer.
+- [ ] Partition the Redis image-generation queue by owning workspace before multi-tenant paid onboarding; queued PSID, prompt, and source-image jobs must never share an unscoped global customer queue.
 - [ ] Define a separate immutable subscription-history/event model if historical rows become a product or accounting requirement; `billing_subscriptions` currently stores one mutable current-state row per workspace and Mollie mode.
-- [ ] Map inbound channel/Page identity uniquely to a workspace and enforce `workspace_entitlements` in the actual provider quota gate.
+- [x] Map inbound channel/Page identity uniquely to a workspace and enforce `workspace_entitlements` before the actual image-provider attempt; the database claim now fails closed instead of overwriting another workspace's Page credentials.
+- [ ] Prove the Page-to-workspace mapping and both paid quota gates in a production-like end-to-end test after the duplicate-Page preflight and migration, without any free-tier fallback.
 - [ ] Replace the isolated single-workspace billing worker with a durable tenant-partitioned scheduler that never performs cross-tenant reads.
 - [ ] Extract billing outbox queue mechanics from provider handlers after the billing behavior is stable; keep this follow-up separate from launch-critical correctness changes.
 - [ ] Connect customer payment warnings and operator manual-review incidents to tested notification delivery.

@@ -158,6 +158,32 @@ export class MollieClient {
     });
   }
 
+  async createOneTimePayment(input: {
+    customerId: string;
+    amount: MollieAmount;
+    description: string;
+    intentId: string;
+    redirectUrl: string;
+    webhookUrl: string;
+    idempotencyKey: string;
+  }): Promise<MolliePayment> {
+    return this.request<MolliePayment>("/payments", {
+      method: "POST",
+      idempotencyKey: input.idempotencyKey,
+      body: {
+        amount: input.amount,
+        customerId: input.customerId,
+        sequenceType: "oneoff",
+        method: "bancontact",
+        locale: "nl_BE",
+        description: input.description,
+        redirectUrl: input.redirectUrl,
+        webhookUrl: input.webhookUrl,
+        metadata: { billingIntentId: input.intentId },
+      },
+    });
+  }
+
   async getPayment(paymentId: string): Promise<MolliePayment> {
     assertMollieId(paymentId, "tr_");
     return this.request<MolliePayment>(
@@ -249,7 +275,7 @@ export class MollieClient {
   }
 
   async listMethods(
-    sequenceType: "first" | "recurring"
+    sequenceType: "oneoff" | "first" | "recurring"
   ): Promise<MollieMethod[]> {
     const response = await this.request<MollieList<MollieMethod>>(
       `/methods?sequenceType=${sequenceType}&locale=nl_BE`,
@@ -368,6 +394,18 @@ export class MollieClient {
     }
     return (await response.json()) as T;
   }
+}
+
+export async function checkMollieOneTimePaymentMethod(client: MollieClient) {
+  const methods = await client.listMethods("oneoff");
+  const bancontact = methods.some(
+    method =>
+      method.id === "bancontact" &&
+      (!method.status ||
+        method.status === "activated" ||
+        method.status === "active")
+  );
+  return { bancontact };
 }
 
 export function assertMollieId(

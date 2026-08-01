@@ -85,7 +85,7 @@ type LandingCopy = {
 const landingCopies: Record<AppLocale, LandingCopy> = {
   "nl-BE": {
     languageLabel: "Taal",
-    interestSubject: "Interesse in Leaderbot Premium",
+    interestSubject: "Interesse in Leaderbot Startpilot",
     nav: {
       product: "Product",
       howItWorks: "Hoe het werkt",
@@ -99,7 +99,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     primaryCta: "Bekijk hoe het werkt",
     secondaryCta: "Interesse doorgeven",
     noPayment:
-      "Gratis verkennen. Premium is nog niet te koop en er wordt nu niets aangerekend.",
+      "Gratis verkennen. De Startpilot is nog niet publiek te koop en via deze pagina wordt niets aangerekend.",
     previewLabel: "Voorbeeldweergave",
     previewPrompt: "Maak een helder campagnebeeld voor onze zomeractie.",
     previewReply:
@@ -153,13 +153,13 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       },
       {
         title: "Test met echte vragen",
-        body: "Begin binnen de gratis limieten en beslis pas later of Premium waarde toevoegt.",
+        body: "Begin gratis en beslis daarna of de eenmalige Startpilot voldoende waarde biedt.",
       },
     ],
-    pricingEyebrow: "Transparante prijsrichting",
-    pricingTitle: "Eerst bewijzen dat Leaderbot voor je werkt.",
+    pricingEyebrow: "Eenmalige Startpilot",
+    pricingTitle: "Test de kwaliteitsstap zonder abonnement.",
     pricingBody:
-      "Er is vandaag geen betaalverplichting. De geplande Premium-prijs wordt pas geactiveerd nadat betalingen, facturatie en klantrechten volledig klaar zijn.",
+      "De geplande pilot geeft je 30 dagen afgebakend gebruik voor één vaste prijs. De publieke website verzamelt voorlopig alleen interesse.",
     free: {
       name: "Gratis toegang",
       price: "€0",
@@ -174,26 +174,32 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     },
     premium: {
       label: "Gepland — nog niet te koop",
-      name: "Leaderbot Premium",
-      price: "€29",
-      suffix: "per maand in EUR",
-      body: "Een mogelijke maandformule voor klanten die na de gratis test meer capaciteit nodig hebben.",
+      name: "Leaderbot Startpilot",
+      price: "€19",
+      suffix: "eenmalig in EUR",
+      body: "Een afgebakende pilot om Leaderbot met je eigen Facebookpagina en de voelbare Images 2.0-kwaliteit te testen.",
       features: [
-        "Hogere, nog te valideren gebruikslimieten",
-        "Maandelijkse formule zonder betaling vandaag",
-        "Opzeg- en betaalvoorwaarden vóór lancering zichtbaar",
+        "30 dagen · 1 werkruimte · 1 Facebookpagina",
+        "300 AI-antwoorden",
+        "20 Images 2.0-beelden · maximaal 5 per dag",
+        "Geen abonnement, verlenging of kosten buiten het pakket",
       ],
       cta: "Laat weten dat je interesse hebt",
     },
     pricingDisclosure:
-      "De Premium-prijs van €29 per maand is een productvoorstel voor toekomstige Leaderbot-klanten, geen huidige kost of actief abonnement. Er is nog geen checkout en geen automatische verlenging.",
+      "€19 is de geplande eenmalige prijs voor de Leaderbot Startpilot. Deze publieke pagina maakt nog geen aankoop aan. Checkout wordt pas in het ingelogde portaal zichtbaar nadat betaling, klantrechten en gebruikslimieten veilig zijn vrijgegeven.",
     faqEyebrow: "Veelgestelde vragen",
     faqTitle: "Duidelijk vóór je begint.",
     questions: [
       {
-        question: "Kan ik nu al een Premium-abonnement kopen?",
+        question: "Kan ik de Startpilot nu al kopen?",
         answer:
-          "Nee. Premium is nog niet te koop. Je kunt interesse doorgeven, maar er wordt geen betaling of abonnement aangemaakt.",
+          "Nog niet via deze publieke pagina. Je kunt interesse doorgeven zonder betaling. Na een gecontroleerde vrijgave kan een ingelogde klant de eenmalige checkout in het portaal zien.",
+      },
+      {
+        question: "Wat gebeurt er na 30 dagen of wanneer een limiet op is?",
+        answer:
+          "De pilot stopt zonder automatische verlenging of extra kosten. Je kunt niet ongemerkt boven het inbegrepen gebruik gaan en er is geen automatische top-up.",
       },
       {
         question: "Is Leaderbot onderdeel van Meta of Facebook?",
@@ -206,15 +212,15 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
           "Nee. Assistentinstellingen, kennis en klantcontext horen bij de eigen werkruimte en mogen niet tussen klanten worden vermengd.",
       },
       {
-        question: "Voor wie wordt Premium later beschikbaar?",
+        question: "Voor wie wordt de Startpilot beschikbaar?",
         answer:
-          "De eerste lancering is gericht op België. Verkoop start pas wanneer betalingen, facturatie, gebruiksrechten en juridische voorwaarden aantoonbaar klaar zijn.",
+          "De eerste gecontroleerde lancering is gericht op België. Verkoop start pas wanneer betaling, facturatie, gebruiksrechten en voorwaarden aantoonbaar klaar zijn.",
       },
     ],
     contactEyebrow: "Interesse valideren",
-    contactTitle: "Zou Leaderbot je €29 per maand waard zijn?",
+    contactTitle: "Wil je Leaderbot voor €19 eenmalig testen?",
     contactBody:
-      "Vertel kort waarvoor je de assistent wilt gebruiken. Je reactie helpt bepalen of en voor wie Premium wordt gelanceerd; ze maakt geen aankoop of abonnement aan.",
+      "Vertel kort waarvoor je de assistent wilt gebruiken. Je reactie helpt de gecontroleerde Startpilot plannen en maakt geen aankoop of abonnement aan.",
     contactCta: "Stuur je use-case",
     companyTitle: "Bedrijfsgegevens",
     enterpriseLabel: "Ondernemingsnummer",
@@ -226,7 +232,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
   },
   "fr-BE": {
     languageLabel: "Langue",
-    interestSubject: "Intérêt pour Leaderbot Premium",
+    interestSubject: "Intérêt pour le pilote Leaderbot",
     nav: {
       product: "Produit",
       howItWorks: "Fonctionnement",
@@ -240,7 +246,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     primaryCta: "Voir le fonctionnement",
     secondaryCta: "Signaler mon intérêt",
     noPayment:
-      "À découvrir gratuitement. Premium n'est pas encore en vente et rien n'est facturé aujourd'hui.",
+      "À découvrir gratuitement. Le pilote n'est pas encore en vente publique et cette page ne facture rien.",
     previewLabel: "Aperçu illustratif",
     previewPrompt: "Crée une image claire pour notre campagne d'été.",
     previewReply:
@@ -294,13 +300,13 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       },
       {
         title: "Testez de vraies demandes",
-        body: "Commencez gratuitement avant de décider pour Premium.",
+        body: "Commencez gratuitement avant de décider si le pilote ponctuel vous convient.",
       },
     ],
-    pricingEyebrow: "Orientation tarifaire transparente",
-    pricingTitle: "Prouvez d'abord que Leaderbot vous est utile.",
+    pricingEyebrow: "Pilote ponctuel",
+    pricingTitle: "Testez la qualité sans abonnement.",
     pricingBody:
-      "Aucun paiement n'est dû aujourd'hui. Le prix Premium prévu ne sera activé qu'après validation des paiements, de la facturation et des droits clients.",
+      "Le pilote prévu offre 30 jours d'usage délimité pour un prix fixe. Le site public recueille uniquement les marques d'intérêt pour l'instant.",
     free: {
       name: "Accès gratuit",
       price: "€0",
@@ -315,26 +321,33 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     },
     premium: {
       label: "Prévu — pas encore en vente",
-      name: "Leaderbot Premium",
-      price: "€29",
-      suffix: "par mois en EUR",
-      body: "Une formule mensuelle possible pour les clients qui ont besoin de plus de capacité.",
+      name: "Leaderbot Startpilot",
+      price: "€19",
+      suffix: "paiement unique en EUR",
+      body: "Un pilote délimité pour tester Leaderbot avec votre Page Facebook et la qualité Images 2.0.",
       features: [
-        "Limites supérieures encore à valider",
-        "Aucun paiement aujourd'hui",
-        "Conditions publiées avant le lancement",
+        "30 jours · 1 espace · 1 Page Facebook",
+        "300 réponses IA",
+        "20 images Images 2.0 · maximum 5 par jour",
+        "Sans abonnement, renouvellement ni dépassement facturé",
       ],
       cta: "Signaler mon intérêt",
     },
     pricingDisclosure:
-      "Les 29 € par mois sont une proposition de prix pour de futurs clients Leaderbot, pas un coût ni un abonnement actif. Il n'y a ni checkout ni renouvellement automatique.",
+      "19 € est le prix unique prévu pour le pilote Leaderbot. Cette page publique ne crée aucun achat. Le checkout n'apparaîtra dans le portail connecté qu'après validation des paiements, droits et limites d'usage.",
     faqEyebrow: "Questions fréquentes",
     faqTitle: "Tout savoir avant de commencer.",
     questions: [
       {
-        question: "Puis-je déjà acheter Premium ?",
+        question: "Puis-je déjà acheter le pilote ?",
         answer:
-          "Non. Vous pouvez signaler votre intérêt, sans paiement ni abonnement.",
+          "Pas encore depuis cette page publique. Vous pouvez signaler votre intérêt sans paiement. Après une mise en service contrôlée, le checkout unique pourra apparaître dans le portail connecté.",
+      },
+      {
+        question:
+          "Que se passe-t-il après 30 jours ou lorsqu'une limite est atteinte ?",
+        answer:
+          "Le pilote s'arrête sans renouvellement automatique ni frais supplémentaires. Il n'y a ni dépassement facturé ni recharge automatique.",
       },
       {
         question: "Leaderbot fait-il partie de Meta ?",
@@ -347,15 +360,15 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
           "Non. Les paramètres, connaissances et contextes restent liés à leur espace.",
       },
       {
-        question: "Où Premium sera-t-il lancé ?",
+        question: "Où le pilote sera-t-il lancé ?",
         answer:
-          "La première disponibilité vise la Belgique, après validation complète des paiements, de la facturation et des conditions.",
+          "La première disponibilité contrôlée vise la Belgique, après validation complète des paiements, droits d'usage et conditions.",
       },
     ],
     contactEyebrow: "Valider l'intérêt",
-    contactTitle: "Leaderbot vaudrait-il 29 € par mois pour vous ?",
+    contactTitle: "Souhaitez-vous tester Leaderbot pour 19 € une seule fois ?",
     contactBody:
-      "Expliquez brièvement votre usage. Votre réponse aide à décider du lancement et ne crée aucun achat ni abonnement.",
+      "Expliquez brièvement votre usage. Votre réponse aide à organiser le pilote contrôlé et ne crée aucun achat ni abonnement.",
     contactCta: "Envoyer mon cas d'usage",
     companyTitle: "Informations d'entreprise",
     enterpriseLabel: "Numéro d'entreprise",
@@ -368,7 +381,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
   },
   en: {
     languageLabel: "Language",
-    interestSubject: "Interest in Leaderbot Premium",
+    interestSubject: "Interest in the Leaderbot Startpilot",
     nav: {
       product: "Product",
       howItWorks: "How it works",
@@ -382,7 +395,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     primaryCta: "See how it works",
     secondaryCta: "Share your interest",
     noPayment:
-      "Explore for free. Premium is not for sale yet and nothing is charged today.",
+      "Explore for free. The Startpilot is not on public sale yet and this page does not charge you.",
     previewLabel: "Illustrative preview",
     previewPrompt: "Create a clear campaign image for our summer promotion.",
     previewReply:
@@ -436,13 +449,13 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       },
       {
         title: "Test real questions",
-        body: "Start within the free limits before deciding on Premium.",
+        body: "Start for free before deciding whether the one-time pilot is worthwhile.",
       },
     ],
-    pricingEyebrow: "Transparent price direction",
-    pricingTitle: "Prove Leaderbot works for you first.",
+    pricingEyebrow: "One-time Startpilot",
+    pricingTitle: "Test the quality step without a subscription.",
     pricingBody:
-      "There is no payment obligation today. The planned Premium price will only launch after payments, invoicing and customer rights are fully ready.",
+      "The planned pilot provides 30 days of bounded usage for one fixed price. The public website only collects interest for now.",
     free: {
       name: "Free access",
       price: "€0",
@@ -457,26 +470,32 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     },
     premium: {
       label: "Planned — not for sale yet",
-      name: "Leaderbot Premium",
-      price: "€29",
-      suffix: "per month in EUR",
-      body: "A possible monthly plan for customers who need more capacity after testing.",
+      name: "Leaderbot Startpilot",
+      price: "€19",
+      suffix: "one-time in EUR",
+      body: "A bounded pilot to test Leaderbot with your own Facebook Page and the visible Images 2.0 quality step.",
       features: [
-        "Higher limits still to be validated",
-        "No payment or subscription today",
-        "Renewal and cancellation terms before launch",
+        "30 days · 1 workspace · 1 Facebook Page",
+        "300 AI answers",
+        "20 Images 2.0 images · maximum 5 per day",
+        "No subscription, renewal or overage charges",
       ],
       cta: "Tell us you are interested",
     },
     pricingDisclosure:
-      "The €29 monthly price is a proposal for future Leaderbot customers, not a current charge or active subscription. There is no checkout or automatic renewal.",
+      "€19 is the planned one-time price for the Leaderbot Startpilot. This public page does not create a purchase. Checkout will appear in the signed-in portal only after payments, entitlements and usage limits are safely released.",
     faqEyebrow: "Frequently asked questions",
     faqTitle: "Clear before you begin.",
     questions: [
       {
-        question: "Can I buy Premium now?",
+        question: "Can I buy the Startpilot now?",
         answer:
-          "No. You can share interest, but no payment or subscription is created.",
+          "Not through this public page yet. You can share interest without payment. After a controlled release, signed-in customers may see the one-time checkout in the portal.",
+      },
+      {
+        question: "What happens after 30 days or when a limit is used?",
+        answer:
+          "The pilot stops without automatic renewal or extra charges. There are no overage charges or automatic top-ups.",
       },
       {
         question: "Is Leaderbot part of Meta?",
@@ -489,15 +508,15 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
           "No. Assistant settings, knowledge and customer context remain bound to their workspace.",
       },
       {
-        question: "Where will Premium launch first?",
+        question: "Where will the Startpilot launch first?",
         answer:
-          "The initial launch is aimed at Belgium, after payments, invoicing, entitlements and legal terms are validated.",
+          "The first controlled release is aimed at Belgium, after payments, invoicing, entitlements and terms are validated.",
       },
     ],
     contactEyebrow: "Validate demand",
-    contactTitle: "Would Leaderbot be worth €29 per month to you?",
+    contactTitle: "Would you test Leaderbot for a one-time €19?",
     contactBody:
-      "Tell us briefly how you would use it. Your response helps shape the launch and does not create a purchase or subscription.",
+      "Tell us briefly how you would use it. Your response helps plan the controlled Startpilot and does not create a purchase or subscription.",
     contactCta: "Send your use case",
     companyTitle: "Business information",
     enterpriseLabel: "Enterprise number",

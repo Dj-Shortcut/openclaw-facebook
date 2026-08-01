@@ -9,14 +9,25 @@ document.
 
 ## Implemented locally
 
-- Server-side `premium_monthly_v1` catalog; browser input selects only a plan code.
+- Server-side public `startpilot_once_v1` catalog; browser input selects only a
+  plan code. The dormant monthly catalog entry is not publicly available.
+- Startpilot contract: `EUR 19.00` once for 30 days, one workspace and Facebook
+  Page, 300 AI answers, 20 Images 2.0 generations, at most five images per day,
+  no subscription, renewal, direct debit, automatic top-up, or overage.
 - EUR-only, Belgium-only, B2C-only checkout contract.
 - A default-off `MOLLIE_BILLING_ENABLED` master switch prevents paid-plan
   exposure, checkout, Mollie routes, workers, and reconciliation during the
-  interest-only phase. Explicit key/mode validation, production HTTPS
+  interest-only phase. A separate default-off
+  `MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED` switch prevents the new database
+  runtime from activating before migration; checkout refuses to start until
+  enforcement is enabled. The gateway's independent default-off
+  `LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED` preflight must also be enabled and
+  verified before checkout; while off, ordinary free OpenClaw chat does not
+  depend on image-gen. Once customers have paid, both enforcement paths stay
+  on even if billing is paused. Explicit key/mode validation, production HTTPS
   enforcement, and the separate `MOLLIE_LIVE_BILLING_ENABLED=false` live kill
   switch remain in place.
-- Mollie Customer, full-period Bancontact first payment, Hosted Checkout,
+- Mollie Customer, one-time Bancontact payment, Hosted Checkout,
   opaque intent metadata, and deterministic idempotency keys.
 - Exact classic webhook route: `POST /api/webhooks/mollie/payments` with a 2 KB
   form parser. It reads `id`, fetches the Payment from Mollie, and does not
@@ -24,10 +35,11 @@ document.
 - MySQL billing intent, customer, subscription, ledger, delivery,
   entitlement, outbox, reconciliation-run and anomaly records with duplicate
   constraints, workspace foreign keys, Test/Live isolation, and a cumulative
-  `0009` Drizzle snapshot.
-- Bounded mandate polling, valid direct-debit mandate check, subscription start
-  on the already-paid period end, cancellation, payment-method replacement,
-  grace handling, refund/chargeback review states, and daily reconciliation.
+  migration history through `0010`.
+- One-time entitlement activation only after an authenticated Mollie API fetch
+  confirms payment. The unused subscription foundation retains bounded mandate
+  polling, cancellation, grace, refund/chargeback review, and reconciliation,
+  but is not exposed as a launch offer.
 - Exact-target cancellation recovery, ambiguous-create containment, stale-lease
   fencing, terminal-state guards, and a seven-day/in-flight collection guard
   for payment-method replacement.
@@ -39,20 +51,36 @@ document.
 
 ## Open blockers
 
-- [ ] Product owner approves the provisional `EUR 29.00 / 1 month` price and
-  quota in `apps/image-gen/server/_core/billing/catalog.ts`.
+- [x] Product owner selected the bounded `EUR 19.00` one-time Startpilot offer
+  encoded in `apps/image-gen/server/_core/billing/catalog.ts`.
 - [ ] A verified billing-country/customer-profile control replaces reliance on
   the fixed BE checkout contract so Belgium-only eligibility cannot be faked by
   a client.
-- [ ] A real Mollie Test profile proves Bancontact and SEPA Direct Debit are
-  enabled through the launch check.
+- [ ] A real Mollie Test profile proves Bancontact is enabled for the one-time
+  Startpilot checkout. SEPA Direct Debit remains deferred with the unpublished
+  subscription offer.
 - [ ] Every scenario in `MOLLIE_TEST_RESULTS.md` is run with a `test_` key and
   evidence is recorded without customer data or secrets.
 - [ ] MySQL integration tests prove transaction rollback, unique constraints,
   checkout races, duplicate webhooks, outbox leases, and subscription races.
-- [ ] Messenger/WhatsApp inbound Page or channel identity is mapped uniquely to
-  a workspace, and the workspace entitlement is enforced by the actual provider
-  quota gate. Current sender-scoped quota cannot safely enforce a paid plan.
+- [ ] AI-answer finalization is durable or conservatively resolved after a
+  successful Messenger delivery. The current single best-effort finalize call
+  can undercount repeatedly during an extended gateway-to-image-gen outage and
+  therefore must not be enabled for paid customers yet.
+- [ ] Paid Images 2.0 is smoke-tested through the explicit GPT Image 2 Image
+  API path, and `OPENAI_IMAGE_ESTIMATED_COST_USD` conservatively covers output,
+  prompt, and high-fidelity source-image input until actual provider usage is
+  reconciled into the cost ledger.
+- [ ] USD spend-cap admission is atomically reserved across concurrent workers.
+  The current summary-check followed by ledger append can admit simultaneous
+  attempts past a configured cap; paid activation remains **NO-GO** until an
+  atomic reservation/commit/release path is implemented and concurrency-tested.
+- [ ] End-to-end production-like tests prove that one inbound Messenger Page
+  maps uniquely to its workspace and that the resulting entitlement reaches the
+  real AI-answer and image-provider quota gates without a free-tier fallback.
+- [ ] The Redis image-generation queue is explicitly workspace-partitioned;
+  PSID, prompt, and source-image jobs must never share an unscoped global
+  tenant queue before more than one customer workspace is onboarded.
 - [ ] Accounting approves sequential proof/invoice numbering, Belgian retention,
   Mollie fee/settlement import, and the small-enterprise VAT wording.
 - [ ] A tenant-partitioned durable scheduler replaces the current
@@ -60,8 +88,9 @@ document.
   tenant without cross-tenant reads.
 - [ ] Real customer-warning and operator-incident delivery is configured and
   tested; durable failed outbox records alone are not notification.
-- [ ] Legal review approves automatic renewal, SEPA mandate, cancellation,
-  withdrawal/refund, privacy, and financial-retention copy.
+- [ ] Legal review approves the one-time pilot terms, withdrawal/refund,
+  privacy, invoice, and financial-retention copy. The current copy is an
+  explicitly pre-launch draft, not legal approval.
 - [ ] Settlement and balance reconciliation is proven in live-read-only mode;
   Mollie Business Operations endpoints are not available in Test Mode.
 - [ ] A database migration backup, rollback rehearsal, monitoring alerts, and
@@ -74,23 +103,47 @@ document.
 
 ## Manual launch checklist
 
-1. Keep `MOLLIE_BILLING_ENABLED=false`, `MOLLIE_MODE=test`, and
+1. Keep `MOLLIE_BILLING_ENABLED=false`,
+   `MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED=false`,
+   `LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED=false`, `MOLLIE_MODE=test`, and
    `MOLLIE_LIVE_BILLING_ENABLED=false` in production.
-2. Apply migration `0009_mollie_billing.sql` to a disposable MySQL database.
-3. Set `MOLLIE_BILLING_ENABLED=true` only in that isolated test environment,
+2. Run the duplicate-Page preflight and apply migrations through `0010` to a
+   disposable MySQL database before repeating the exact production-version
+   upgrade path with a backup and rollback plan.
+
+   ```sql
+   SELECT channel, externalId, COUNT(*) AS duplicate_count
+   FROM channelConnections
+   WHERE externalId IS NOT NULL
+   GROUP BY channel, externalId
+   HAVING COUNT(*) > 1;
+   ```
+
+   The result must be empty before `0010` adds the tenant-boundary unique key.
+3. Set `MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED=true` on image-gen and
+   `LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED=true` on the gateway, verify the
+   reserve/commit/release flow, and only then set `MOLLIE_BILLING_ENABLED=true`
+   in that isolated test environment,
    using a `test_` key, `MOLLIE_BILLING_WORKER_WORKSPACE_ID` for the isolated
    test workspace, and approved non-customer test data.
-4. Run TypeScript, unit, route-guard, MySQL integration, and Mollie sandbox tests.
-5. In the Mollie profile, enable and verify Bancontact plus SEPA Direct Debit.
+4. Configure a conservative `OPENAI_IMAGE_ESTIMATED_COST_USD`, run an explicit
+   GPT Image 2 generation and edit smoke with approved test data, then run
+   TypeScript, unit, route-guard, MySQL integration, and Mollie sandbox tests.
+5. In the Mollie profile, enable and verify Bancontact for the Startpilot.
 6. Verify the configured webhook is HTTPS and has the exact classic path.
 7. Verify redirects never activate access and webhooks/reconciliation do.
-8. Verify duplicate checkout, webhook, subscription, refund and chargeback paths.
+8. Verify duplicate checkout, webhook, one-time entitlement, refund and
+   chargeback paths. Keep recurring subscription scenarios deferred while that
+   offer remains unpublished.
 9. Reconcile gross sales, fees, refunds, chargebacks, and settlements with an
    accountant; never recognize a net payout as revenue.
-10. Complete tenant mapping and prove premium quota enforcement end to end.
+10. Complete tenant mapping and prove Startpilot quota and Images 2.0
+    enforcement end to end.
 11. Obtain written product, legal, privacy, accounting, security, and operator
     approval.
 12. Only then install a `live_` key and deliberately set
+    `MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED=true`,
+    `LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED=true`,
     `MOLLIE_BILLING_ENABLED=true`, `MOLLIE_MODE=live`, and
     `MOLLIE_LIVE_BILLING_ENABLED=true` in the approved production environment.
 

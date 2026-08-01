@@ -22,7 +22,7 @@ describe("image cost estimates", () => {
     }
   });
 
-  it("uses an explicit per-image estimate override for validation runs", () => {
+  it("uses an explicit total per-provider-attempt override", () => {
     process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.019";
     process.env.OPENAI_IMAGE_SIZE = "1024x1536";
     process.env.OPENAI_IMAGE_QUALITY = "medium";
@@ -106,6 +106,31 @@ describe("image cost estimates", () => {
     });
   });
 
+  it("reads direct Image API options from JSON and multipart bodies", () => {
+    expect(
+      readOpenAiImageCostOptionsFromRequestBody(
+        JSON.stringify({
+          model: "gpt-image-2",
+          size: "1536x1024",
+          quality: "high",
+        })
+      )
+    ).toEqual({
+      size: "1536x1024",
+      quality: "high",
+      inputFidelity: undefined,
+    });
+
+    const formData = new FormData();
+    formData.append("model", "gpt-image-2");
+    formData.append("size", "1024x1536");
+    formData.append("quality", "medium");
+    expect(readOpenAiImageCostOptionsFromRequestBody(formData)).toEqual({
+      size: "1024x1536",
+      quality: "medium",
+    });
+  });
+
   it("marks source-image edits as partial when input charges are not priced", () => {
     expect(
       estimateOpenAiImageRequestCost({
@@ -126,6 +151,29 @@ describe("image cost estimates", () => {
       costEstimateComplete: false,
       unpricedCostComponents: ["source_image_input"],
       estimateSource: "partial_source_image_input_unpriced",
+    });
+  });
+
+  it("treats the explicit override as the complete total for a source-image attempt", () => {
+    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.30";
+
+    expect(
+      estimateOpenAiImageRequestCost({
+        model: "gpt-image-2",
+        size: "1024x1024",
+        quality: "high",
+        inputFidelity: "high",
+        hasSourceImage: true,
+      })
+    ).toEqual({
+      model: "gpt-image-2",
+      pricingModel: "gpt-image-2",
+      size: "1024x1024",
+      quality: "high",
+      inputFidelity: "high",
+      estimatedCostUsd: 0.3,
+      costEstimateComplete: true,
+      estimateSource: "env_override",
     });
   });
 

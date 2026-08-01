@@ -345,6 +345,10 @@ describe("Fly gateway startup", () => {
     const portalFacebookCallback = await fetch(
       `http://127.0.0.1:${publicPort}/api/facebook/connect/callback?code=ok&state=state-value`,
     );
+    const publicConfig = await fetch(`http://127.0.0.1:${publicPort}/api/public/config`);
+    const publicConfigPost = await fetch(`http://127.0.0.1:${publicPort}/api/public/config`, {
+      method: "POST",
+    });
     const portalSnapshot = await fetch(`http://127.0.0.1:${publicPort}/api/portal/snapshot`);
     const portalAiIdentity = await fetch(`http://127.0.0.1:${publicPort}/api/portal/ai-identity`, {
       method: "POST",
@@ -384,6 +388,9 @@ describe("Fly gateway startup", () => {
     expect(await portalFacebookCallback.text()).toBe(
       "portal:/api/facebook/connect/callback?code=ok&state=state-value",
     );
+    expect(publicConfig.status).toBe(200);
+    expect(await publicConfig.text()).toBe("portal:/api/public/config");
+    expect(publicConfigPost.status).toBe(404);
     expect(portalSnapshot.status).toBe(200);
     expect(await portalSnapshot.text()).toBe("portal:/api/portal/snapshot");
     expect(portalAiIdentity.status).toBe(200);
@@ -414,6 +421,7 @@ describe("Fly gateway startup", () => {
       "/assets/app.js",
       "/api/oauth/callback?code=ok&state=state-value",
       "/api/facebook/connect/callback?code=ok&state=state-value",
+      "/api/public/config",
       "/api/portal/snapshot",
       "/api/portal/ai-identity",
       "/api/portal/facebook/start",

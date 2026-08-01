@@ -2,6 +2,8 @@ export type ConversationAction = {
   id: string;
   label: string;
   inputText?: string;
+  /** Optional channel-neutral navigation target rendered natively per channel. */
+  url?: string;
 };
 
 type ImageOutput = {

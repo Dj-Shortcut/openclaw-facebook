@@ -36,7 +36,7 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
       },
       {
         heading: "Payments",
-        body: "Paid subscriptions and checkout are not active on this website. No Leaderbot subscription or recurring payment is created when you send an early-access request. This policy will be updated before payment processing is opened.",
+        body: "The public website currently collects interest only. If the signed-in pilot checkout is enabled after the launch gates pass, Mollie will process one €19 Startpilot payment. The proposed pilot does not create a subscription, automatic renewal, direct-debit mandate, top-up or overage charge.",
       },
     ],
   },
@@ -46,8 +46,12 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
       "These pilot terms apply to the Leaderbot customer portal and connected Messenger assistant. Leaderbot provides AI-generated text and images together with workspace, usage and privacy controls.",
     sections: [
       {
-        heading: "Pilot phase and price information",
-        body: "Leaderbot Premium is planned at €29 per month, but it is not currently for sale. This website does not start a paid contract, checkout, automatic renewal or direct debit. Final inclusions and payment terms will be published before sales begin.",
+        heading: "Draft Startpilot offer",
+        body: "Leaderbot Startpilot is proposed at €19 as a single payment for 30 days. It includes one workspace, one connected Facebook Page, 300 AI answers and 20 Images 2.0 image generations, with a maximum of five image generations per day. The public website is interest-only while paid launch remains disabled.",
+      },
+      {
+        heading: "No subscription or overage",
+        body: "The proposed Startpilot does not renew automatically and does not create a subscription or direct-debit mandate. Usage stops at the included limits; there are no automatic top-ups or additional usage charges. Any later offer requires a separate, explicit choice.",
       },
       {
         heading: "AI outputs",
@@ -68,21 +72,29 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
     ],
   },
   "billing-policy": {
-    title: "Pre-launch Pricing and Billing Information",
+    title: "Startpilot Pre-launch Pricing and Billing Information",
     intro:
-      "Leaderbot is validating demand before opening payments. There is currently no checkout and no active paid Leaderbot subscription available through this website.",
+      "Leaderbot is validating a bounded one-time pilot before opening payments. The public website currently collects interest only and does not create a purchase.",
     sections: [
       {
-        heading: "Planned Premium price",
-        body: "The current proposal is Leaderbot Premium at €29 per month in EUR. This is a future price indication, not a present charge. Final included usage limits are still being validated.",
+        heading: "Proposed one-time price",
+        body: "The current proposal is Leaderbot Startpilot at €19 once in EUR for 30 days. This is pre-launch information, not a present charge. Checkout may appear only inside the signed-in portal after the technical, entitlement, legal and accounting launch gates pass.",
       },
       {
-        heading: "No payment or renewal today",
-        body: "Sending an email or early-access request does not authorize a payment, create a subscription, start automatic renewal or establish a direct-debit mandate.",
+        heading: "Included pilot usage",
+        body: "The proposed package covers one workspace, one Facebook Page, 300 AI answers and 20 Images 2.0 image generations. Image generation is additionally limited to five per day during the 30-day access period.",
+      },
+      {
+        heading: "No renewal, top-up or overage",
+        body: "The Startpilot is a single purchase without automatic renewal, subscription or direct-debit mandate. Usage stops at the included limits. No automatic top-up or additional usage fee is charged, and continuing later requires a separate explicit choice.",
+      },
+      {
+        heading: "No payment from an interest request",
+        body: "Sending an email or early-access request does not authorize a payment or create a contract. A payment can start only from an explicitly enabled checkout shown to an authenticated workspace owner or administrator.",
       },
       {
         heading: "Before paid launch",
-        body: "Before any payment, Leaderbot will clearly show the total price, billing period, included usage, payment method, renewal, cancellation, refund and applicable consumer or business terms. Payment and invoicing flows must first pass technical, legal and accounting review.",
+        body: "Before any payment, Leaderbot will show the total price, 30-day access period, included usage, payment method, absence of renewal and overage, and applicable cancellation, refund, consumer or business terms. Payment and invoicing flows must first pass technical, legal and accounting review.",
       },
       {
         heading: "Questions",

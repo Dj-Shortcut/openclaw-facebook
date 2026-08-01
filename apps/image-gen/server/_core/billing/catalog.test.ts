@@ -15,13 +15,16 @@ describe("billing catalog", () => {
       publicName: "Leaderbot Premium",
       amountMinor: 2_900,
       currency: "EUR",
+      offerType: "subscription",
       interval: "1 month",
+      accessDurationDays: null,
       entitlements: {
         imagesPerDay: 100,
         messagesPerMinute: 120,
       },
       mollieDescription: "Leaderbot Premium - maandelijks abonnement",
       active: true,
+      publiclyAvailable: false,
     });
     expect(Object.isFrozen(plan)).toBe(true);
     expect(Object.isFrozen(plan.entitlements)).toBe(true);
@@ -29,22 +32,41 @@ describe("billing catalog", () => {
     expect(plan.amountMinor).toBe(2_900);
   });
 
-  it("publishes only active plans using formatted server-side amounts", () => {
+  it("publishes the finite Startpilot and keeps the recurring plan private", () => {
     expect(listPublicBillingPlans()).toEqual([
       expect.objectContaining({
-        code: "premium_monthly_v1",
-        amount: "29.00",
+        code: "startpilot_once_v1",
+        amount: "19.00",
         currency: "EUR",
-        interval: "1 month",
+        offerType: "one_time",
+        interval: "30 days",
+        accessDurationDays: 30,
         active: true,
+        entitlements: {
+          aiAnswersTotal: 300,
+          imagesTotal: 20,
+          imagesPerDay: 5,
+          workspaces: 1,
+          facebookPages: 1,
+          imageQuality: "images_2",
+        },
         disclosure: expect.objectContaining({
-          firstPaymentAmount: "29.00",
-          recurringAmount: "29.00",
-          automaticRenewal: true,
-          recurringMethod: "SEPA Direct Debit",
+          paymentAmount: "19.00",
+          recurringAmount: null,
+          automaticRenewal: false,
+          recurringMethod: null,
+          noTopUps: true,
         }),
       }),
     ]);
+  });
+
+  it("keeps the Startpilot catalog snapshot immutable", () => {
+    const plan = requireActiveBillingPlan("startpilot_once_v1");
+    expect(Object.isFrozen(plan)).toBe(true);
+    expect(Object.isFrozen(plan.entitlements)).toBe(true);
+    expect(Reflect.set(plan.entitlements, "imagesTotal", 2_000)).toBe(false);
+    expect(plan.entitlements.imagesTotal).toBe(20);
   });
 
   it.each([

@@ -253,7 +253,9 @@ function formatBillingAmount(
 }
 
 function formatBillingInterval(value: string, copy: PortalCopy) {
-  return value === "1 month" ? copy.billing.monthly : value;
+  if (value === "1 month") return copy.billing.monthly;
+  if (value === "30 days") return copy.billing.for30Days;
+  return value;
 }
 
 function addDays(value: string | Date, days: number) {
@@ -578,6 +580,7 @@ function Home() {
   const billingPlans = billingPlansQuery.data ?? [];
   const billingSummary = billingSummaryQuery.data;
   const billingSubscription = billingSummary?.subscription;
+  const billingEntitlement = billingSummary?.entitlement;
   const billingPlan = billingSummary?.plan;
   const billingPayments = billingSummary?.payments ?? [];
   const upgradeRequests = upgradeRequestsQuery.data ?? [];
@@ -645,7 +648,7 @@ function Home() {
   };
   const startBillingCheckout = (
     planCode: string,
-    kind: "subscription_start" | "payment_method_change"
+    kind: "subscription_start" | "payment_method_change" | "startpilot_purchase"
   ) => {
     if (!workspaceId || !canManageBilling) return;
     if (
@@ -1368,6 +1371,7 @@ function Home() {
 
             {billingPlans.length > 0 ||
             billingSubscription ||
+            billingEntitlement ||
             billingPlansQuery.error ||
             billingSummaryQuery.error ||
             (billingReturnIntent && canManageBilling) ? (
@@ -1425,105 +1429,190 @@ function Home() {
                       {copy.billing.availablePlan}
                     </p>
                     <div className="mt-3 grid gap-4">
-                      {billingPlans.map(plan => (
-                        <div
-                          className="rounded-lg border border-stone-200 bg-white p-4"
-                          key={plan.code}
-                        >
-                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                            <div>
-                              <h3 className="font-semibold text-stone-950">
-                                {plan.publicName}
-                              </h3>
-                              <p className="mt-1 text-2xl font-semibold text-stone-950">
-                                {formatBillingAmount(
-                                  plan.amount,
-                                  plan.currency,
-                                  locale
-                                )}{" "}
-                                <span className="text-sm font-normal text-stone-600">
-                                  {formatBillingInterval(plan.interval, copy)}
-                                </span>
-                              </p>
-                            </div>
-                            {billingSubscription ? (
-                              billingSubscription.planCode === plan.code ? (
+                      {billingPlans.map(plan => {
+                        const isOneTime = plan.offerType === "one_time";
+                        const matchingAccess =
+                          billingSubscription?.planCode === plan.code
+                            ? billingSubscription
+                            : billingEntitlement?.planCode === plan.code
+                              ? billingEntitlement
+                              : null;
+
+                        return (
+                          <div
+                            className="rounded-lg border border-stone-200 bg-white p-4"
+                            key={plan.code}
+                          >
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div>
+                                <h3 className="font-semibold text-stone-950">
+                                  {plan.publicName}
+                                </h3>
+                                <p className="mt-1 text-2xl font-semibold text-stone-950">
+                                  {formatBillingAmount(
+                                    plan.amount,
+                                    plan.currency,
+                                    locale
+                                  )}{" "}
+                                  <span className="text-sm font-normal text-stone-600">
+                                    {formatBillingInterval(plan.interval, copy)}
+                                  </span>
+                                </p>
+                              </div>
+                              {matchingAccess ? (
                                 <StatusPill
                                   copy={copy}
-                                  value={billingSubscription.status}
+                                  value={matchingAccess.status}
                                 />
-                              ) : null
+                              ) : (
+                                <Button
+                                  disabled={
+                                    !workspaceId ||
+                                    !canManageBilling ||
+                                    billingCheckoutMutation.isPending
+                                  }
+                                  type="button"
+                                  onClick={() =>
+                                    startBillingCheckout(
+                                      plan.code,
+                                      isOneTime
+                                        ? "startpilot_purchase"
+                                        : "subscription_start"
+                                    )
+                                  }
+                                >
+                                  {billingCheckoutMutation.isPending
+                                    ? copy.billing.openingCheckout
+                                    : isOneTime
+                                      ? copy.billing.buyStartpilot
+                                      : copy.billing.startSubscription}
+                                </Button>
+                              )}
+                            </div>
+                            {isOneTime ? (
+                              <>
+                                <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                                  <div>
+                                    <dt className="text-stone-500">
+                                      {copy.billing.oneTimePayment}
+                                    </dt>
+                                    <dd className="mt-1 font-medium text-stone-900">
+                                      {formatBillingAmount(
+                                        plan.disclosure.paymentAmount,
+                                        plan.currency,
+                                        locale
+                                      )}
+                                    </dd>
+                                  </div>
+                                  <div>
+                                    <dt className="text-stone-500">
+                                      {copy.billing.accessPeriod}
+                                    </dt>
+                                    <dd className="mt-1 font-medium text-stone-900">
+                                      {formatBillingInterval(
+                                        plan.interval,
+                                        copy
+                                      )}
+                                    </dd>
+                                  </div>
+                                </dl>
+                                <div className="mt-4 grid gap-3 text-sm text-stone-600">
+                                  <p className="font-medium text-stone-900">
+                                    {copy.billing.pilotIncludes}
+                                  </p>
+                                  {[
+                                    copy.billing.pilotWorkspacePage,
+                                    copy.billing.pilotAnswers,
+                                    copy.billing.pilotImages,
+                                  ].map(item => (
+                                    <div
+                                      className="flex items-start gap-2"
+                                      key={item}
+                                    >
+                                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                                      <span>{item}</span>
+                                    </div>
+                                  ))}
+                                  <div className="flex items-start gap-2">
+                                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                                    <span>
+                                      <span className="font-medium text-stone-900">
+                                        {copy.billing.noAutomaticRenewal}.{" "}
+                                      </span>
+                                      {copy.billing.noAutomaticRenewalBody}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-start gap-2">
+                                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                                    <span>
+                                      <span className="font-medium text-stone-900">
+                                        {copy.billing.noOverages}.{" "}
+                                      </span>
+                                      {copy.billing.noOveragesBody}
+                                    </span>
+                                  </div>
+                                </div>
+                              </>
                             ) : (
-                              <Button
-                                disabled={
-                                  !workspaceId ||
-                                  !canManageBilling ||
-                                  billingCheckoutMutation.isPending
-                                }
-                                type="button"
-                                onClick={() =>
-                                  startBillingCheckout(
-                                    plan.code,
-                                    "subscription_start"
-                                  )
-                                }
-                              >
-                                {billingCheckoutMutation.isPending
-                                  ? copy.billing.openingCheckout
-                                  : copy.billing.startSubscription}
-                              </Button>
+                              <>
+                                <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                                  <div>
+                                    <dt className="text-stone-500">
+                                      {copy.billing.firstPayment}
+                                    </dt>
+                                    <dd className="mt-1 font-medium text-stone-900">
+                                      {formatBillingAmount(
+                                        plan.disclosure.firstPaymentAmount,
+                                        plan.currency,
+                                        locale
+                                      )}
+                                    </dd>
+                                  </div>
+                                  <div>
+                                    <dt className="text-stone-500">
+                                      {copy.billing.recurringPayment}
+                                    </dt>
+                                    <dd className="mt-1 font-medium text-stone-900">
+                                      {plan.disclosure.recurringAmount
+                                        ? formatBillingAmount(
+                                            plan.disclosure.recurringAmount,
+                                            plan.currency,
+                                            locale
+                                          )
+                                        : copy.common.none}{" "}
+                                      {formatBillingInterval(
+                                        plan.interval,
+                                        copy
+                                      )}
+                                    </dd>
+                                  </div>
+                                </dl>
+                                <div className="mt-4 grid gap-3 text-sm text-stone-600">
+                                  <div className="flex items-start gap-2">
+                                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                                    <span>
+                                      <span className="font-medium text-stone-900">
+                                        {copy.billing.automaticRenewal}.{" "}
+                                      </span>
+                                      {copy.billing.automaticRenewalBody}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-start gap-2">
+                                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                                    <span>
+                                      <span className="font-medium text-stone-900">
+                                        {copy.billing.sepaDebit}.{" "}
+                                      </span>
+                                      {copy.billing.sepaDebitBody}
+                                    </span>
+                                  </div>
+                                  <p>{copy.billing.cancellationTiming}</p>
+                                </div>
+                              </>
                             )}
                           </div>
-                          <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-                            <div>
-                              <dt className="text-stone-500">
-                                {copy.billing.firstPayment}
-                              </dt>
-                              <dd className="mt-1 font-medium text-stone-900">
-                                {formatBillingAmount(
-                                  plan.disclosure.firstPaymentAmount,
-                                  plan.currency,
-                                  locale
-                                )}
-                              </dd>
-                            </div>
-                            <div>
-                              <dt className="text-stone-500">
-                                {copy.billing.recurringPayment}
-                              </dt>
-                              <dd className="mt-1 font-medium text-stone-900">
-                                {formatBillingAmount(
-                                  plan.disclosure.recurringAmount,
-                                  plan.currency,
-                                  locale
-                                )}{" "}
-                                {formatBillingInterval(plan.interval, copy)}
-                              </dd>
-                            </div>
-                          </dl>
-                          <div className="mt-4 grid gap-3 text-sm text-stone-600">
-                            <div className="flex items-start gap-2">
-                              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
-                              <span>
-                                <span className="font-medium text-stone-900">
-                                  {copy.billing.automaticRenewal}.{" "}
-                                </span>
-                                {copy.billing.automaticRenewalBody}
-                              </span>
-                            </div>
-                            <div className="flex items-start gap-2">
-                              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
-                              <span>
-                                <span className="font-medium text-stone-900">
-                                  {copy.billing.sepaDebit}.{" "}
-                                </span>
-                                {copy.billing.sepaDebitBody}
-                              </span>
-                            </div>
-                            <p>{copy.billing.cancellationTiming}</p>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -1531,13 +1620,14 @@ function Home() {
                     <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">
                       {copy.billing.currentPlan}
                     </p>
-                    {billingSubscription ? (
+                    {billingSubscription || billingEntitlement ? (
                       <div className="mt-3">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div>
                             <h3 className="font-semibold text-stone-950">
                               {billingPlan?.publicName ??
-                                billingSubscription.planCode}
+                                billingSubscription?.planCode ??
+                                billingEntitlement?.planCode}
                             </h3>
                             {billingPlan ? (
                               <p className="mt-1 text-sm text-stone-600">
@@ -1555,36 +1645,57 @@ function Home() {
                           </div>
                           <StatusPill
                             copy={copy}
-                            value={billingSubscription.status}
+                            value={
+                              billingSubscription?.status ??
+                              billingEntitlement?.status ??
+                              "active"
+                            }
                           />
                         </div>
-                        <dl className="mt-4 grid gap-3 sm:grid-cols-2">
-                          <div className="rounded-lg border border-stone-200 bg-white p-3">
-                            <dt className="text-xs text-stone-500">
-                              {copy.billing.paidThrough}
-                            </dt>
-                            <dd className="mt-1 text-sm font-medium text-stone-900">
-                              {formatDate(
-                                billingSubscription.paidThrough,
-                                locale,
-                                copy
-                              )}
-                            </dd>
-                          </div>
-                          <div className="rounded-lg border border-stone-200 bg-white p-3">
-                            <dt className="text-xs text-stone-500">
-                              {copy.billing.nextBillingDate}
-                            </dt>
-                            <dd className="mt-1 text-sm font-medium text-stone-900">
-                              {formatDate(
-                                billingSubscription.nextBillingDate,
-                                locale,
-                                copy
-                              )}
-                            </dd>
-                          </div>
-                        </dl>
-                        {billingSubscription.cancelAtPeriodEnd ? (
+                        {billingSubscription ? (
+                          <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+                            <div className="rounded-lg border border-stone-200 bg-white p-3">
+                              <dt className="text-xs text-stone-500">
+                                {copy.billing.paidThrough}
+                              </dt>
+                              <dd className="mt-1 text-sm font-medium text-stone-900">
+                                {formatDate(
+                                  billingSubscription.paidThrough,
+                                  locale,
+                                  copy
+                                )}
+                              </dd>
+                            </div>
+                            <div className="rounded-lg border border-stone-200 bg-white p-3">
+                              <dt className="text-xs text-stone-500">
+                                {copy.billing.nextBillingDate}
+                              </dt>
+                              <dd className="mt-1 text-sm font-medium text-stone-900">
+                                {formatDate(
+                                  billingSubscription.nextBillingDate,
+                                  locale,
+                                  copy
+                                )}
+                              </dd>
+                            </div>
+                          </dl>
+                        ) : billingEntitlement ? (
+                          <dl className="mt-4 grid gap-3">
+                            <div className="rounded-lg border border-stone-200 bg-white p-3">
+                              <dt className="text-xs text-stone-500">
+                                {copy.billing.accessEnds}
+                              </dt>
+                              <dd className="mt-1 text-sm font-medium text-stone-900">
+                                {formatDate(
+                                  billingEntitlement.validUntil,
+                                  locale,
+                                  copy
+                                )}
+                              </dd>
+                            </div>
+                          </dl>
+                        ) : null}
+                        {billingSubscription?.cancelAtPeriodEnd ? (
                           <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
                             <div className="font-medium">
                               {copy.billing.cancellationScheduled}
@@ -1601,43 +1712,45 @@ function Home() {
                             </p>
                           </div>
                         ) : null}
-                        <div className="mt-4 flex flex-wrap gap-3">
-                          {billingPlan ? (
-                            <Button
-                              disabled={
-                                !canManageBilling ||
-                                billingCheckoutMutation.isPending
-                              }
-                              type="button"
-                              variant="outline"
-                              onClick={() =>
-                                startBillingCheckout(
-                                  billingPlan.code,
-                                  "payment_method_change"
-                                )
-                              }
-                            >
-                              {billingCheckoutMutation.isPending
-                                ? copy.billing.openingCheckout
-                                : copy.billing.changePaymentMethod}
-                            </Button>
-                          ) : null}
-                          {!billingSubscription.cancelAtPeriodEnd ? (
-                            <Button
-                              disabled={
-                                !canManageBilling ||
-                                billingCancelMutation.isPending
-                              }
-                              type="button"
-                              variant="outline"
-                              onClick={cancelBillingSubscription}
-                            >
-                              {billingCancelMutation.isPending
-                                ? copy.billing.canceling
-                                : copy.billing.cancelSubscription}
-                            </Button>
-                          ) : null}
-                        </div>
+                        {billingSubscription ? (
+                          <div className="mt-4 flex flex-wrap gap-3">
+                            {billingPlan?.offerType === "subscription" ? (
+                              <Button
+                                disabled={
+                                  !canManageBilling ||
+                                  billingCheckoutMutation.isPending
+                                }
+                                type="button"
+                                variant="outline"
+                                onClick={() =>
+                                  startBillingCheckout(
+                                    billingPlan.code,
+                                    "payment_method_change"
+                                  )
+                                }
+                              >
+                                {billingCheckoutMutation.isPending
+                                  ? copy.billing.openingCheckout
+                                  : copy.billing.changePaymentMethod}
+                              </Button>
+                            ) : null}
+                            {!billingSubscription.cancelAtPeriodEnd ? (
+                              <Button
+                                disabled={
+                                  !canManageBilling ||
+                                  billingCancelMutation.isPending
+                                }
+                                type="button"
+                                variant="outline"
+                                onClick={cancelBillingSubscription}
+                              >
+                                {billingCancelMutation.isPending
+                                  ? copy.billing.canceling
+                                  : copy.billing.cancelSubscription}
+                              </Button>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </div>
                     ) : (
                       <p className="mt-3 text-sm text-stone-600">

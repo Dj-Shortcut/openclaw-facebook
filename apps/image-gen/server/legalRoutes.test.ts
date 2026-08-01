@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { formatAmountMinor, getBillingPlan } from "./_core/billing/catalog";
 import { escapeHtml } from "./_core/html";
 import {
-  getPremiumPricingDisplay,
+  getStartpilotPricingDisplay,
   registerLegalRoutes,
 } from "./_core/runtime/legalRoutes";
 
@@ -81,25 +81,30 @@ describe("legal routes", () => {
     expect(terms).toContain("/data-deletion");
   });
 
-  it("publishes pre-launch pricing without implying an active checkout", () => {
+  it("publishes the one-time Startpilot without implying a public checkout", () => {
     const terms = renderLegalRoute("/terms").body;
     const billingPolicy = renderLegalRoute("/billing-policy").body;
-    const plan = getBillingPlan("premium_monthly_v1");
+    const plan = getBillingPlan("startpilot_once_v1");
     expect(plan).not.toBeNull();
-    if (!plan) throw new Error("Missing premium billing plan");
+    if (!plan) throw new Error("Missing Startpilot billing plan");
     const displayedPrice = `€${formatAmountMinor(plan.amountMinor).replace(
       /\.00$/,
       ""
     )}`;
 
-    expect(terms).toContain(`planned at ${displayedPrice} per month`);
-    expect(terms).toContain("not currently for sale");
-    expect(billingPolicy).toContain(
-      `${displayedPrice} per month in ${plan.currency}`
+    expect(terms).toContain(
+      `proposed at ${displayedPrice} as a single payment for 30 days`
     );
-    expect(billingPolicy).toContain("There is currently no checkout");
-    expect(billingPolicy).toContain("No payment or renewal today");
-    expect(billingPolicy).toContain("future price indication");
+    expect(terms).toContain("interest-only");
+    expect(terms).toContain("300 AI answers");
+    expect(terms).toContain("20 Images 2.0");
+    expect(terms).toContain("maximum of five");
+    expect(billingPolicy).toContain(
+      `${displayedPrice} once in ${plan.currency} for 30 days`
+    );
+    expect(billingPolicy).toContain("does not create a purchase");
+    expect(billingPolicy).toContain("No renewal, top-up or overage");
+    expect(billingPolicy).toContain("one workspace, one Facebook Page");
     expect(billingPolicy).not.toContain("billing@leaderbot.live");
     expect(billingPolicy).not.toContain("Bijzondere vrijstellingsregeling");
   });
@@ -110,18 +115,18 @@ describe("legal routes", () => {
     );
   });
 
-  it("keeps legal routes available when premium pricing cannot be loaded", () => {
-    expect(getPremiumPricingDisplay(() => null)).toEqual({
-      premiumMonthlyPrice: "€29",
-      premiumCurrency: "EUR",
+  it("keeps legal routes available when Startpilot pricing cannot be loaded", () => {
+    expect(getStartpilotPricingDisplay(() => null)).toEqual({
+      startpilotPrice: "€19",
+      startpilotCurrency: "EUR",
     });
     expect(
-      getPremiumPricingDisplay(() => {
+      getStartpilotPricingDisplay(() => {
         throw new Error("billing catalog unavailable");
       })
     ).toEqual({
-      premiumMonthlyPrice: "€29",
-      premiumCurrency: "EUR",
+      startpilotPrice: "€19",
+      startpilotCurrency: "EUR",
     });
   });
 });

@@ -40,14 +40,14 @@ const enCopy = {
   },
   auth: {
     title: "Leaderbot customer portal",
-    body:
-      "Continue with Facebook to manage your workspace, AI identity, Messenger channel, usage, knowledge, and privacy controls.",
+    body: "Continue with Facebook to manage your workspace, AI identity, Messenger channel, usage, knowledge, and privacy controls.",
     continueWithFacebook: "Continue with Facebook",
   },
   publicPreview: {
     customerDataNotice:
       "Customer data stays inside the signed-in workspace. This public preview uses example data only.",
-    loginNotConfigured: "Facebook Login is not configured for this local environment.",
+    loginNotConfigured:
+      "Facebook Login is not configured for this local environment.",
     workspaceTitle: "Leaderbot workspace",
     dashboardTitle: "Workspace overview",
     sourcesDetail: "{count} sources",
@@ -59,7 +59,8 @@ const enCopy = {
   },
   header: {
     signedInAs: "Signed in as",
-    updateWorkspaceError: "Unable to update the workspace name. Please try again.",
+    updateWorkspaceError:
+      "Unable to update the workspace name. Please try again.",
   },
   workspaceAccess: {
     title: "Workspace access",
@@ -129,10 +130,23 @@ const enCopy = {
   },
   billing: {
     title: "Billing",
-    subtitle: "Manage your Leaderbot subscription and Mollie payments.",
-    availablePlan: "Available plan",
-    currentPlan: "Current plan",
-    noSubscription: "No paid subscription is active for this workspace.",
+    subtitle: "Manage your Leaderbot access and Mollie payments.",
+    availablePlan: "Available offer",
+    currentPlan: "Current access",
+    noSubscription: "No paid access is active for this workspace.",
+    oneTimePayment: "One-time payment",
+    accessPeriod: "Access period",
+    for30Days: "for 30 days",
+    pilotIncludes: "The Startpilot includes",
+    pilotWorkspacePage: "1 workspace and 1 Facebook Page",
+    pilotAnswers: "300 AI answers",
+    pilotImages: "20 Images 2.0 images, with a maximum of 5 per day",
+    noAutomaticRenewal: "No automatic renewal",
+    noAutomaticRenewalBody:
+      "This is a one-time purchase. It does not create a subscription or direct-debit mandate.",
+    noOverages: "No overage charges",
+    noOveragesBody:
+      "Usage stops at the included limits. There are no automatic top-ups or extra usage charges.",
     firstPayment: "First payment",
     recurringPayment: "Recurring payment",
     monthly: "per month",
@@ -145,18 +159,24 @@ const enCopy = {
     cancellationTiming:
       "Cancel before the next billing date. Access remains available through the already paid period.",
     startSubscription: "Continue to Mollie",
+    buyStartpilot: "Buy Startpilot with Mollie",
     openingCheckout: "Opening Mollie...",
     planLoadError: "Unable to load the available billing plan.",
     summaryLoadError: "Unable to load billing information. Please try again.",
     checkoutError: "Unable to open Mollie Checkout. Please try again.",
-    returnProcessing: "Mollie is confirming your payment. This page updates automatically.",
-    returnPaid: "Payment confirmed. Your subscription details are being updated.",
-    returnFailed: "The payment was not completed. No subscription was activated.",
-    returnError: "Payment status could not be loaded. Please refresh this page.",
+    returnProcessing:
+      "Mollie is confirming your payment. This page updates automatically.",
+    returnPaid: "Payment confirmed. Your access is being updated.",
+    returnFailed:
+      "The payment was not completed. No paid access was activated.",
+    returnError:
+      "Payment status could not be loaded. Please refresh this page.",
+    accessEnds: "Access ends",
     paidThrough: "Paid through",
     nextBillingDate: "Next billing date",
     cancellationScheduled: "Cancellation scheduled",
-    cancellationScheduledBody: "No new renewal will be charged. Access remains active through {date}.",
+    cancellationScheduledBody:
+      "No new renewal will be charged. Access remains active through {date}.",
     cancelSubscription: "Cancel subscription",
     canceling: "Canceling",
     cancelConfirmation:
@@ -177,9 +197,11 @@ const enCopy = {
     accountingExportBody:
       "CSV with gross sales and observed refunds/chargebacks. Mollie fee and settlement fields remain empty until accounting sync is approved.",
     belgiumOnly: "Available in Belgium only",
-    belgiumOnlyBody: "Leaderbot billing v1 is available in Belgium and charges in EUR.",
+    belgiumOnlyBody:
+      "Leaderbot billing v1 is available in Belgium and charges in EUR.",
     b2bUnavailable: "B2B checkout and Peppol invoices are not available yet.",
-    vatExemption: "Belgian small-business VAT exemption applies; no VAT is charged.",
+    vatExemption:
+      "Belgian small-business VAT exemption applies; no VAT is charged.",
   },
   privacy: {
     controlsTitle: "Privacy controls",
@@ -301,14 +323,14 @@ const nlBeCopy: PortalCopy = {
   },
   auth: {
     title: "Leaderbot klantenportaal",
-    body:
-      "Ga verder met Facebook om je werkruimte, AI-identiteit, Messenger-kanaal, gebruik, kennis en privacy-instellingen te beheren.",
+    body: "Ga verder met Facebook om je werkruimte, AI-identiteit, Messenger-kanaal, gebruik, kennis en privacy-instellingen te beheren.",
     continueWithFacebook: "Verder met Facebook",
   },
   publicPreview: {
     customerDataNotice:
       "Klantdata blijft binnen de ingelogde werkruimte. Deze publieke preview gebruikt alleen voorbeelddata.",
-    loginNotConfigured: "Facebook Login is niet ingesteld voor deze lokale omgeving.",
+    loginNotConfigured:
+      "Facebook Login is niet ingesteld voor deze lokale omgeving.",
     workspaceTitle: "Leaderbot werkruimte",
     dashboardTitle: "Werkruimteoverzicht",
     sourcesDetail: "{count} bronnen",
@@ -320,7 +342,8 @@ const nlBeCopy: PortalCopy = {
   },
   header: {
     signedInAs: "Aangemeld als",
-    updateWorkspaceError: "Werkruimtenaam kon niet bijgewerkt worden. Probeer opnieuw.",
+    updateWorkspaceError:
+      "Werkruimtenaam kon niet bijgewerkt worden. Probeer opnieuw.",
   },
   workspaceAccess: {
     title: "Toegang tot werkruimte",
@@ -330,7 +353,8 @@ const nlBeCopy: PortalCopy = {
   identity: {
     fallbackName: "Leaderbot",
     fallbackTone: "Behulpzaam",
-    noInstructions: "Er zijn nog geen aangepaste assistentinstructies opgeslagen.",
+    noInstructions:
+      "Er zijn nog geen aangepaste assistentinstructies opgeslagen.",
     assistantName: "Naam",
     tone: "Toon",
     language: "Taal",
@@ -353,7 +377,8 @@ const nlBeCopy: PortalCopy = {
     unablePage: "Die pagina kon niet verbonden worden. Probeer opnieuw.",
     connected: "Messenger is verbonden voor deze werkruimte.",
     disconnected: "Messenger is losgekoppeld voor deze werkruimte.",
-    unableDisconnect: "Messenger kon niet losgekoppeld worden. Probeer opnieuw.",
+    unableDisconnect:
+      "Messenger kon niet losgekoppeld worden. Probeer opnieuw.",
     oauthMissing: "Facebook OAuth is niet ingesteld voor dit portaal.",
   },
   guidance: {
@@ -381,7 +406,8 @@ const nlBeCopy: PortalCopy = {
     actionNeeded: "Actie kan nodig zijn",
     noBlocks: "Geen blokkades geregistreerd",
     requestRecorded: "Upgrade-aanvraag opgeslagen voor deze werkruimte.",
-    requestError: "Upgrade-aanvraag kon niet opgeslagen worden. Probeer opnieuw.",
+    requestError:
+      "Upgrade-aanvraag kon niet opgeslagen worden. Probeer opnieuw.",
     loadError: "Upgrade-aanvragen konden niet geladen worden. Probeer opnieuw.",
     empty: "Nog geen upgrade-aanvragen.",
     upgradeLabel: "upgrade",
@@ -390,10 +416,23 @@ const nlBeCopy: PortalCopy = {
   },
   billing: {
     title: "Facturatie",
-    subtitle: "Beheer je Leaderbot-abonnement en Mollie-betalingen.",
-    availablePlan: "Beschikbaar abonnement",
-    currentPlan: "Huidig abonnement",
-    noSubscription: "Er is geen betaald abonnement actief voor deze werkruimte.",
+    subtitle: "Beheer je Leaderbot-toegang en Mollie-betalingen.",
+    availablePlan: "Beschikbaar aanbod",
+    currentPlan: "Huidige toegang",
+    noSubscription: "Er is geen betaalde toegang actief voor deze werkruimte.",
+    oneTimePayment: "Eenmalige betaling",
+    accessPeriod: "Toegangsperiode",
+    for30Days: "voor 30 dagen",
+    pilotIncludes: "De Startpilot bevat",
+    pilotWorkspacePage: "1 werkruimte en 1 Facebookpagina",
+    pilotAnswers: "300 AI-antwoorden",
+    pilotImages: "20 Images 2.0-beelden, met maximaal 5 per dag",
+    noAutomaticRenewal: "Geen automatische verlenging",
+    noAutomaticRenewalBody:
+      "Dit is een eenmalige aankoop. Er wordt geen abonnement of domiciliëringsmandaat aangemaakt.",
+    noOverages: "Geen kosten buiten het pakket",
+    noOveragesBody:
+      "Gebruik stopt aan de inbegrepen limieten. Er zijn geen automatische top-ups of extra gebruikskosten.",
     firstPayment: "Eerste betaling",
     recurringPayment: "Terugkerende betaling",
     monthly: "per maand",
@@ -406,14 +445,20 @@ const nlBeCopy: PortalCopy = {
     cancellationTiming:
       "Zeg vóór de volgende factuurdatum op. Je toegang blijft behouden tot het einde van de betaalde periode.",
     startSubscription: "Verder naar Mollie",
+    buyStartpilot: "Startpilot kopen via Mollie",
     openingCheckout: "Mollie openen...",
     planLoadError: "Het beschikbare abonnement kon niet geladen worden.",
-    summaryLoadError: "Facturatiegegevens konden niet geladen worden. Probeer opnieuw.",
+    summaryLoadError:
+      "Facturatiegegevens konden niet geladen worden. Probeer opnieuw.",
     checkoutError: "Mollie Checkout kon niet geopend worden. Probeer opnieuw.",
-    returnProcessing: "Mollie bevestigt je betaling. Deze pagina wordt automatisch bijgewerkt.",
-    returnPaid: "Betaling bevestigd. Je abonnementsgegevens worden bijgewerkt.",
-    returnFailed: "De betaling is niet voltooid. Er werd geen abonnement geactiveerd.",
-    returnError: "De betaalstatus kon niet geladen worden. Vernieuw deze pagina.",
+    returnProcessing:
+      "Mollie bevestigt je betaling. Deze pagina wordt automatisch bijgewerkt.",
+    returnPaid: "Betaling bevestigd. Je toegang wordt bijgewerkt.",
+    returnFailed:
+      "De betaling is niet voltooid. Er werd geen betaalde toegang geactiveerd.",
+    returnError:
+      "De betaalstatus kon niet geladen worden. Vernieuw deze pagina.",
+    accessEnds: "Toegang eindigt",
     paidThrough: "Betaald tot",
     nextBillingDate: "Volgende factuurdatum",
     cancellationScheduled: "Opzegging gepland",
@@ -440,8 +485,10 @@ const nlBeCopy: PortalCopy = {
     accountingExportBody:
       "CSV met bruto verkopen en waargenomen terugbetalingen/chargebacks. Mollie-kosten en settlements blijven leeg tot de boekhoudsync is goedgekeurd.",
     belgiumOnly: "Alleen beschikbaar in België",
-    belgiumOnlyBody: "Leaderbot-facturatie v1 is beschikbaar in België en rekent af in EUR.",
-    b2bUnavailable: "B2B-checkout en Peppol-facturen zijn nog niet beschikbaar.",
+    belgiumOnlyBody:
+      "Leaderbot-facturatie v1 is beschikbaar in België en rekent af in EUR.",
+    b2bUnavailable:
+      "B2B-checkout en Peppol-facturen zijn nog niet beschikbaar.",
     vatExemption:
       "De Belgische bijzondere vrijstellingsregeling voor kleine ondernemingen is van toepassing; er wordt geen btw aangerekend.",
   },
@@ -563,14 +610,14 @@ const frBeCopy: PortalCopy = {
   },
   auth: {
     title: "Portail client Leaderbot",
-    body:
-      "Continuez avec Facebook pour gerer votre espace de travail, l'identite IA, Messenger, l'utilisation, les connaissances et la confidentialite.",
+    body: "Continuez avec Facebook pour gerer votre espace de travail, l'identite IA, Messenger, l'utilisation, les connaissances et la confidentialite.",
     continueWithFacebook: "Continuer avec Facebook",
   },
   publicPreview: {
     customerDataNotice:
       "Les donnees client restent dans l'espace connecte. Cette preview publique utilise uniquement des donnees d'exemple.",
-    loginNotConfigured: "Facebook Login n'est pas configure pour cet environnement local.",
+    loginNotConfigured:
+      "Facebook Login n'est pas configure pour cet environnement local.",
     workspaceTitle: "Espace Leaderbot",
     dashboardTitle: "Vue d'ensemble de l'espace",
     sourcesDetail: "{count} sources",
@@ -582,7 +629,8 @@ const frBeCopy: PortalCopy = {
   },
   header: {
     signedInAs: "Connecte en tant que",
-    updateWorkspaceError: "Impossible de mettre a jour le nom de l'espace. Reessayez.",
+    updateWorkspaceError:
+      "Impossible de mettre a jour le nom de l'espace. Reessayez.",
   },
   workspaceAccess: {
     title: "Acces a l'espace",
@@ -592,7 +640,8 @@ const frBeCopy: PortalCopy = {
   identity: {
     fallbackName: "Leaderbot",
     fallbackTone: "Utile",
-    noInstructions: "Aucune instruction personnalisee n'a encore ete enregistree.",
+    noInstructions:
+      "Aucune instruction personnalisee n'a encore ete enregistree.",
     assistantName: "Nom",
     tone: "Ton",
     language: "Langue",
@@ -652,10 +701,24 @@ const frBeCopy: PortalCopy = {
   },
   billing: {
     title: "Facturation",
-    subtitle: "Gérez votre abonnement Leaderbot et vos paiements Mollie.",
-    availablePlan: "Abonnement disponible",
-    currentPlan: "Abonnement actuel",
-    noSubscription: "Aucun abonnement payant n'est actif pour cet espace de travail.",
+    subtitle: "Gérez votre accès Leaderbot et vos paiements Mollie.",
+    availablePlan: "Offre disponible",
+    currentPlan: "Accès actuel",
+    noSubscription:
+      "Aucun accès payant n'est actif pour cet espace de travail.",
+    oneTimePayment: "Paiement unique",
+    accessPeriod: "Période d'accès",
+    for30Days: "pour 30 jours",
+    pilotIncludes: "Le pilote comprend",
+    pilotWorkspacePage: "1 espace de travail et 1 Page Facebook",
+    pilotAnswers: "300 réponses IA",
+    pilotImages: "20 images Images 2.0, avec un maximum de 5 par jour",
+    noAutomaticRenewal: "Aucun renouvellement automatique",
+    noAutomaticRenewalBody:
+      "Il s'agit d'un achat unique. Aucun abonnement ni mandat de prélèvement n'est créé.",
+    noOverages: "Aucun dépassement facturé",
+    noOveragesBody:
+      "L'usage s'arrête aux limites incluses. Il n'y a ni recharge automatique ni frais d'usage supplémentaires.",
     firstPayment: "Premier paiement",
     recurringPayment: "Paiement récurrent",
     monthly: "par mois",
@@ -668,14 +731,20 @@ const frBeCopy: PortalCopy = {
     cancellationTiming:
       "Résiliez avant la prochaine date de facturation. L'accès reste disponible jusqu'à la fin de la période déjà payée.",
     startSubscription: "Continuer vers Mollie",
+    buyStartpilot: "Acheter le pilote via Mollie",
     openingCheckout: "Ouverture de Mollie...",
     planLoadError: "Impossible de charger l'abonnement disponible.",
-    summaryLoadError: "Impossible de charger les données de facturation. Réessayez.",
+    summaryLoadError:
+      "Impossible de charger les données de facturation. Réessayez.",
     checkoutError: "Impossible d'ouvrir Mollie Checkout. Réessayez.",
-    returnProcessing: "Mollie confirme votre paiement. Cette page se met à jour automatiquement.",
-    returnPaid: "Paiement confirmé. Les données de votre abonnement sont mises à jour.",
-    returnFailed: "Le paiement n'a pas abouti. Aucun abonnement n'a été activé.",
-    returnError: "Impossible de charger le statut du paiement. Actualisez cette page.",
+    returnProcessing:
+      "Mollie confirme votre paiement. Cette page se met à jour automatiquement.",
+    returnPaid: "Paiement confirmé. Votre accès est en cours de mise à jour.",
+    returnFailed:
+      "Le paiement n'a pas abouti. Aucun accès payant n'a été activé.",
+    returnError:
+      "Impossible de charger le statut du paiement. Actualisez cette page.",
+    accessEnds: "Fin de l'accès",
     paidThrough: "Payé jusqu'au",
     nextBillingDate: "Prochaine date de facturation",
     cancellationScheduled: "Résiliation planifiée",
@@ -704,14 +773,16 @@ const frBeCopy: PortalCopy = {
     belgiumOnly: "Disponible uniquement en Belgique",
     belgiumOnlyBody:
       "La facturation Leaderbot v1 est disponible en Belgique et utilise l'EUR.",
-    b2bUnavailable: "Le checkout B2B et les factures Peppol ne sont pas encore disponibles.",
+    b2bUnavailable:
+      "Le checkout B2B et les factures Peppol ne sont pas encore disponibles.",
     vatExemption:
       "Le régime belge de franchise de taxe pour les petites entreprises s'applique ; aucune TVA n'est facturée.",
   },
   privacy: {
     controlsTitle: "Confidentialite",
     knowledgeIndexing: "Indexation des connaissances",
-    knowledgeIndexingBody: "Autoriser l'indexation des connaissances importees.",
+    knowledgeIndexingBody:
+      "Autoriser l'indexation des connaissances importees.",
     usageAnalytics: "Analytics d'utilisation",
     usageAnalyticsBody: "Autoriser les analytics d'utilisation de l'espace.",
     imageMemoryRetention: "Conservation de la memoire d'image",
