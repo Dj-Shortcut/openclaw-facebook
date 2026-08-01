@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TrpcContext } from "./_core/context";
 
 const mocks = vi.hoisted(() => ({
@@ -65,16 +65,21 @@ const user: NonNullable<TrpcContext["user"]> = {
   lastSignedIn: new Date(0),
 };
 
-function createCaller() {
+function createCaller(
+  headers: Record<string, string | string[] | undefined> = {
+    origin: "https://leaderbot.test",
+  }
+) {
   return portalRouter.createCaller({
     user,
-    req: { protocol: "https", headers: {} } as TrpcContext["req"],
+    req: { protocol: "https", headers } as TrpcContext["req"],
     res: {} as TrpcContext["res"],
   });
 }
 
 describe("portal router billing", () => {
   beforeEach(() => {
+    vi.stubEnv("PORTAL_BASE_URL", "https://leaderbot.test");
     vi.clearAllMocks();
     mocks.getWorkspaceMembership.mockResolvedValue({
       workspaceId,
@@ -84,6 +89,10 @@ describe("portal router billing", () => {
     mocks.getWorkspaceById.mockResolvedValue({ id: workspaceId });
     mocks.getMollieConfig.mockReturnValue({ mode: "test" });
     mocks.isMollieBillingEnabled.mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("uses the shared minor-amount formatter in billing summaries", async () => {
@@ -107,6 +116,196 @@ describe("portal router billing", () => {
       plan: { amount: "29.00" },
     });
     expect(mocks.formatAmountMinor).toHaveBeenCalledWith(2_900);
+    expect(mocks.getBillingSummary).toHaveBeenCalledWith(workspaceId, "test", {
+      includePayments: true,
+    });
+  });
+
+  it("keeps plan status available but omits payment history for ordinary members", async () => {
+    mocks.getWorkspaceMembership.mockResolvedValue({
+      workspaceId,
+      userId: user.id,
+      role: "member",
+    });
+    mocks.getBillingSummary.mockImplementation(
+      async (_workspaceId, _mode, options) => ({
+        subscription: { planCode: "premium_monthly_v1" },
+        entitlement: null,
+        payments: options.includePayments
+          ? [{ receiptPath: "/should-not-be-returned" }]
+          : [],
+      })
+    );
+    mocks.getBillingPlan.mockReturnValue({
+      code: "premium_monthly_v1",
+      publicName: "Leaderbot Premium",
+      amountMinor: 2_900,
+      currency: "EUR",
+      interval: "1 month",
+    });
+    mocks.formatAmountMinor.mockReturnValue("29.00");
+
+    await expect(
+      createCaller().billing.summary({ workspaceId })
+    ).resolves.toMatchObject({
+      subscription: { planCode: "premium_monthly_v1" },
+      payments: [],
+    });
+    expect(mocks.getBillingSummary).toHaveBeenCalledWith(workspaceId, "test", {
+      includePayments: false,
+    });
+  });
+
+  it("rejects all billing procedures for a nonmember before reading or mutating billing", async () => {
+    mocks.getWorkspaceMembership.mockResolvedValue(undefined);
+
+    await expect(
+      createCaller().billing.summary({ workspaceId })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      createCaller().billing.checkout({
+        workspaceId,
+        planCode: "premium_monthly_v1",
+        countryCode: "BE",
+        kind: "subscription_start",
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      createCaller().billing.cancel({ workspaceId })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    expect(mocks.getBillingSummary).not.toHaveBeenCalled();
+    expect(mocks.startCheckout).not.toHaveBeenCalled();
+    expect(mocks.cancelSubscription).not.toHaveBeenCalled();
+  });
+
+  it("allows members to read status but rejects billing management and return details", async () => {
+    mocks.getWorkspaceMembership.mockResolvedValue({
+      workspaceId,
+      userId: user.id,
+      role: "member",
+    });
+    mocks.getBillingSummary.mockResolvedValue({
+      subscription: null,
+      entitlement: null,
+      payments: [],
+    });
+
+    await expect(
+      createCaller().billing.summary({ workspaceId })
+    ).resolves.toMatchObject({ payments: [] });
+    await expect(
+      createCaller().billing.checkout({
+        workspaceId,
+        planCode: "premium_monthly_v1",
+        countryCode: "BE",
+        kind: "subscription_start",
+      })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "billing admin required",
+    });
+    await expect(
+      createCaller().billing.cancel({ workspaceId })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "billing admin required",
+    });
+    await expect(
+      createCaller().billing.returnStatus({
+        workspaceId,
+        intentId: "11111111-1111-4111-8111-111111111111",
+      })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "billing admin required",
+    });
+    expect(mocks.startCheckout).not.toHaveBeenCalled();
+    expect(mocks.cancelSubscription).not.toHaveBeenCalled();
+    expect(mocks.getCheckoutReturnStatus).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["missing", {}],
+    ["mismatched", { origin: "https://attacker.test" }],
+  ])(
+    "fails checkout closed for a %s trusted origin",
+    async (_label, headers) => {
+      await expect(
+        createCaller(headers).billing.checkout({
+          workspaceId,
+          planCode: "premium_monthly_v1",
+          countryCode: "BE",
+          kind: "subscription_start",
+        })
+      ).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        message: "trusted origin required",
+      });
+      expect(mocks.startCheckout).not.toHaveBeenCalled();
+    }
+  );
+
+  it("fails checkout closed when the trusted application origin is not configured", async () => {
+    vi.stubEnv("PORTAL_BASE_URL", "");
+    vi.stubEnv("APP_BASE_URL", "");
+
+    await expect(
+      createCaller().billing.checkout({
+        workspaceId,
+        planCode: "premium_monthly_v1",
+        countryCode: "BE",
+        kind: "subscription_start",
+      })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "trusted origin required",
+    });
+    expect(mocks.startCheckout).not.toHaveBeenCalled();
+  });
+
+  it("returns NOT_FOUND only for a missing billing intent", async () => {
+    mocks.getCheckoutReturnStatus.mockRejectedValue(
+      new Error("billing intent not found")
+    );
+
+    await expect(
+      createCaller().billing.returnStatus({
+        workspaceId,
+        intentId: "11111111-1111-4111-8111-111111111111",
+      })
+    ).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      message: "billing intent not found",
+    });
+    expect(mocks.safeLog).not.toHaveBeenCalledWith(
+      "billing_return_status_failed",
+      expect.anything()
+    );
+  });
+
+  it("redacts internal billing return failures and reports them as retryable server errors", async () => {
+    mocks.getCheckoutReturnStatus.mockRejectedValue(
+      new Error("database failure exposed a tenant secret")
+    );
+
+    await expect(
+      createCaller().billing.returnStatus({
+        workspaceId,
+        intentId: "11111111-1111-4111-8111-111111111111",
+      })
+    ).rejects.toMatchObject({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "billing status unavailable",
+    });
+    expect(mocks.safeLog).toHaveBeenCalledWith("billing_return_status_failed", {
+      level: "error",
+      operation: "billing_return_status",
+      errorCode: "BillingOperationError",
+    });
+    expect(JSON.stringify(mocks.safeLog.mock.calls)).not.toContain(
+      "database failure exposed a tenant secret"
+    );
   });
 
   it.each([

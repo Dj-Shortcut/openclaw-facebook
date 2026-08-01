@@ -119,7 +119,10 @@ function LegalPage({ page }: { page: LegalPageKind }) {
   const copy = legalCopy[page];
 
   return (
-    <main className="min-h-full bg-[#10211d] px-4 py-10 text-stone-100 sm:px-6 lg:px-8">
+    <main
+      className="min-h-full bg-[#10211d] px-4 py-10 text-stone-100 sm:px-6 lg:px-8"
+      lang="en"
+    >
       <div className="mx-auto max-w-3xl">
         <Link
           className="text-sm font-medium text-lime-300 transition-colors hover:text-lime-200"

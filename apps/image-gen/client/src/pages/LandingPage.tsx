@@ -770,7 +770,7 @@ export default function LandingPage({
           </div>
           <div className="mt-12 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {copy.features.map((feature, index) => {
-              const Icon = featureIcons[index];
+              const Icon = featureIcons[index] ?? Sparkles;
               return (
                 <article
                   className="rounded-3xl border border-stone-200 bg-white p-6 shadow-sm"

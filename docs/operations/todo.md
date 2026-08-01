@@ -300,9 +300,12 @@ Quota drift investigation note:
 - [ ] Approve the provisional plan price, interval, quota, grace period, legal copy, accounting treatment, and retention policy.
 - [ ] Run and record all Mollie sandbox cases in `docs/MOLLIE_TEST_RESULTS.md`.
 - [ ] Add real-MySQL concurrency/integrity tests for intents, webhooks, ledger, outbox, and duplicate subscription prevention.
+- [ ] Define a separate immutable subscription-history/event model if historical rows become a product or accounting requirement; `billing_subscriptions` currently stores one mutable current-state row per workspace and Mollie mode.
 - [ ] Map inbound channel/Page identity uniquely to a workspace and enforce `workspace_entitlements` in the actual provider quota gate.
 - [ ] Replace the isolated single-workspace billing worker with a durable tenant-partitioned scheduler that never performs cross-tenant reads.
+- [ ] Extract billing outbox queue mechanics from provider handlers after the billing behavior is stable; keep this follow-up separate from launch-critical correctness changes.
 - [ ] Connect customer payment warnings and operator manual-review incidents to tested notification delivery.
+- [ ] Make accounting exports complete and bounded through an explicit date range, pagination, or streaming; never silently truncate financial rows.
 - [ ] Reconcile Mollie Balances/Settlements in an approved live read-only accounting workflow.
 - [ ] Close every blocker in `docs/LAUNCH_READINESS.md` before enabling a `live_` key.
 

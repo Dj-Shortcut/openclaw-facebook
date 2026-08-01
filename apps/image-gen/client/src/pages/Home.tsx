@@ -39,6 +39,24 @@ import {
 
 const FACEBOOK_CONNECT_STATE_KEY = "leaderbot.facebookConnectState";
 const LOCALE_STORAGE_KEY = "leaderbot.portal.locale";
+const BILLING_RETURN_FAILURE_STATUSES = new Set<string>([
+  "failed",
+  "canceled",
+  "expired",
+  "mismatch",
+]);
+const BILLING_RETURN_TERMINAL_STATUSES = new Set<string>([
+  "paid",
+  ...BILLING_RETURN_FAILURE_STATUSES,
+]);
+
+function isBillingReturnFailureStatus(value: string | undefined) {
+  return value ? BILLING_RETURN_FAILURE_STATUSES.has(value) : false;
+}
+
+function isTerminalBillingReturnStatus(value: string | undefined) {
+  return value ? BILLING_RETURN_TERMINAL_STATUSES.has(value) : false;
+}
 
 type FacebookConnectPage = {
   id: string;
@@ -336,6 +354,8 @@ function Home() {
   );
   const workspace = activeWorkspaceQuery.data ?? currentWorkspaceQuery.data;
   const workspaceId = workspace?.id ?? portalSessionQuery.data?.workspace.id;
+  const billingRole = portalSessionQuery.data?.membership.role;
+  const canManageBilling = billingRole === "owner" || billingRole === "admin";
   const workspaceDisplayName =
     portalSessionQuery.data?.workspace.name ??
     workspace?.name ??
@@ -393,13 +413,12 @@ function Home() {
       intentId: billingReturnIntent ?? "",
     },
     {
-      enabled: Boolean(workspaceId) && Boolean(billingReturnIntent),
+      enabled:
+        Boolean(workspaceId) &&
+        Boolean(billingReturnIntent) &&
+        canManageBilling,
       refetchInterval: query => {
-        const status = query.state.data?.status;
-        return status &&
-          ["paid", "failed", "canceled", "expired", "mismatch"].includes(
-            status
-          )
+        return isTerminalBillingReturnStatus(query.state.data?.status)
           ? false
           : 2_000;
       },
@@ -453,18 +472,11 @@ function Home() {
   });
 
   useEffect(() => {
-    if (
-      billingReturnHandled.current ||
-      !workspaceId ||
-      !billingReturnIntent
-    ) {
+    if (billingReturnHandled.current || !workspaceId || !billingReturnIntent) {
       return;
     }
     const status = billingReturnStatusQuery.data?.status;
-    if (
-      !status ||
-      !["paid", "failed", "canceled", "expired", "mismatch"].includes(status)
-    ) {
+    if (!isTerminalBillingReturnStatus(status)) {
       return;
     }
     billingReturnHandled.current = true;
@@ -568,8 +580,6 @@ function Home() {
   const billingSubscription = billingSummary?.subscription;
   const billingPlan = billingSummary?.plan;
   const billingPayments = billingSummary?.payments ?? [];
-  const billingRole = portalSessionQuery.data?.membership.role;
-  const canManageBilling = billingRole === "owner" || billingRole === "admin";
   const upgradeRequests = upgradeRequestsQuery.data ?? [];
   const latestUpgradeRequest = upgradeRequests[0];
   const facebookStatus =
@@ -1356,7 +1366,11 @@ function Home() {
               ) : null}
             </section>
 
-            {billingPlans.length > 0 || billingSubscription ? (
+            {billingPlans.length > 0 ||
+            billingSubscription ||
+            billingPlansQuery.error ||
+            billingSummaryQuery.error ||
+            (billingReturnIntent && canManageBilling) ? (
               <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
                 <div className="flex items-start gap-3">
                   <CreditCard className="mt-0.5 h-5 w-5 text-teal-700" />
@@ -1380,15 +1394,13 @@ function Home() {
                     {copy.billing.summaryLoadError}
                   </p>
                 ) : null}
-                {billingReturnIntent ? (
+                {billingReturnIntent && canManageBilling ? (
                   <p
                     className={`mt-5 rounded-lg px-4 py-3 text-sm ${
                       billingReturnStatusQuery.error ||
-                      (billingReturnStatusQuery.data?.status &&
-                        billingReturnStatusQuery.data.status !== "paid" &&
-                        ["failed", "canceled", "expired", "mismatch"].includes(
-                          billingReturnStatusQuery.data.status
-                        ))
+                      isBillingReturnFailureStatus(
+                        billingReturnStatusQuery.data?.status
+                      )
                         ? "bg-red-50 text-red-700"
                         : billingReturnStatusQuery.data?.status === "paid"
                           ? "bg-emerald-50 text-emerald-700"
@@ -1399,13 +1411,9 @@ function Home() {
                       ? copy.billing.returnError
                       : billingReturnStatusQuery.data?.status === "paid"
                         ? copy.billing.returnPaid
-                        : billingReturnStatusQuery.data?.status &&
-                            [
-                              "failed",
-                              "canceled",
-                              "expired",
-                              "mismatch",
-                            ].includes(billingReturnStatusQuery.data.status)
+                        : isBillingReturnFailureStatus(
+                              billingReturnStatusQuery.data?.status
+                            )
                           ? copy.billing.returnFailed
                           : copy.billing.returnProcessing}
                   </p>
@@ -1670,92 +1678,99 @@ function Home() {
                   </div>
                 </div>
 
-                <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <h3 className="font-semibold text-stone-950">
-                      {copy.billing.paymentHistory}
-                    </h3>
-                    <p className="mt-1 text-sm text-stone-600">
-                      {copy.billing.accountingExportBody}
-                    </p>
-                  </div>
-                  {workspaceId && canManageBilling ? (
-                    <Button asChild size="sm" variant="outline">
-                      <a
-                        href={`/api/portal/billing/export.csv?workspaceId=${encodeURIComponent(String(workspaceId))}`}
-                      >
-                        <FileDown className="h-4 w-4" />
-                        {copy.billing.accountingExport}
-                      </a>
-                    </Button>
-                  ) : null}
-                </div>
-                <div className="mt-4 overflow-x-auto rounded-lg border border-stone-200">
-                  {billingPayments.length === 0 ? (
-                    <div className="bg-stone-50 px-4 py-3 text-sm text-stone-600">
-                      {copy.billing.noPayments}
+                {canManageBilling ? (
+                  <>
+                    <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <h3 className="font-semibold text-stone-950">
+                          {copy.billing.paymentHistory}
+                        </h3>
+                        <p className="mt-1 text-sm text-stone-600">
+                          {copy.billing.accountingExportBody}
+                        </p>
+                      </div>
+                      {workspaceId ? (
+                        <Button asChild size="sm" variant="outline">
+                          <a
+                            href={`/api/portal/billing/export.csv?workspaceId=${encodeURIComponent(String(workspaceId))}`}
+                          >
+                            <FileDown className="h-4 w-4" />
+                            {copy.billing.accountingExport}
+                          </a>
+                        </Button>
+                      ) : null}
                     </div>
-                  ) : (
-                    <table className="min-w-full divide-y divide-stone-200 text-left text-sm">
-                      <thead className="bg-stone-50 text-xs uppercase tracking-wide text-stone-500">
-                        <tr>
-                          <th className="px-4 py-3 font-medium">
-                            {copy.billing.paymentDate}
-                          </th>
-                          <th className="px-4 py-3 font-medium">
-                            {copy.billing.invoiceNumber}
-                          </th>
-                          <th className="px-4 py-3 font-medium">
-                            {copy.common.status}
-                          </th>
-                          <th className="px-4 py-3 font-medium">
-                            {copy.billing.amount}
-                          </th>
-                          <th className="px-4 py-3 font-medium">
-                            <span className="sr-only">
-                              {copy.billing.receipt}
-                            </span>
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-stone-200 bg-white">
-                        {billingPayments.map(payment => (
-                          <tr key={payment.molliePaymentId}>
-                            <td className="whitespace-nowrap px-4 py-3 text-stone-600">
-                              {formatDate(payment.occurredAt, locale, copy)}
-                            </td>
-                            <td className="whitespace-nowrap px-4 py-3 font-medium text-stone-900">
-                              {payment.invoiceNumber}
-                            </td>
-                            <td className="whitespace-nowrap px-4 py-3">
-                              <StatusPill copy={copy} value={payment.status} />
-                            </td>
-                            <td className="whitespace-nowrap px-4 py-3 text-stone-900">
-                              {formatBillingAmount(
-                                payment.grossAmount,
-                                payment.currency,
-                                locale
-                              )}
-                            </td>
-                            <td className="whitespace-nowrap px-4 py-3 text-right">
-                              {workspaceId ? (
-                                <a
-                                  className="inline-flex items-center gap-1 font-medium text-teal-700 hover:text-teal-800 hover:underline"
-                                  href={payment.receiptPath}
-                                  rel="noreferrer"
-                                  target="_blank"
-                                >
+                    <div className="mt-4 overflow-x-auto rounded-lg border border-stone-200">
+                      {billingPayments.length === 0 ? (
+                        <div className="bg-stone-50 px-4 py-3 text-sm text-stone-600">
+                          {copy.billing.noPayments}
+                        </div>
+                      ) : (
+                        <table className="min-w-full divide-y divide-stone-200 text-left text-sm">
+                          <thead className="bg-stone-50 text-xs uppercase tracking-wide text-stone-500">
+                            <tr>
+                              <th className="px-4 py-3 font-medium">
+                                {copy.billing.paymentDate}
+                              </th>
+                              <th className="px-4 py-3 font-medium">
+                                {copy.billing.invoiceNumber}
+                              </th>
+                              <th className="px-4 py-3 font-medium">
+                                {copy.common.status}
+                              </th>
+                              <th className="px-4 py-3 font-medium">
+                                {copy.billing.amount}
+                              </th>
+                              <th className="px-4 py-3 font-medium">
+                                <span className="sr-only">
                                   {copy.billing.receipt}
-                                  <ExternalLink className="h-3.5 w-3.5" />
-                                </a>
-                              ) : null}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
+                                </span>
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-stone-200 bg-white">
+                            {billingPayments.map(payment => (
+                              <tr key={payment.molliePaymentId}>
+                                <td className="whitespace-nowrap px-4 py-3 text-stone-600">
+                                  {formatDate(payment.occurredAt, locale, copy)}
+                                </td>
+                                <td className="whitespace-nowrap px-4 py-3 font-medium text-stone-900">
+                                  {payment.invoiceNumber}
+                                </td>
+                                <td className="whitespace-nowrap px-4 py-3">
+                                  <StatusPill
+                                    copy={copy}
+                                    value={payment.status}
+                                  />
+                                </td>
+                                <td className="whitespace-nowrap px-4 py-3 text-stone-900">
+                                  {formatBillingAmount(
+                                    payment.grossAmount,
+                                    payment.currency,
+                                    locale
+                                  )}
+                                </td>
+                                <td className="whitespace-nowrap px-4 py-3 text-right">
+                                  {workspaceId ? (
+                                    <a
+                                      className="inline-flex items-center gap-1 font-medium text-teal-700 hover:text-teal-800 hover:underline"
+                                      href={payment.receiptPath}
+                                      rel="noreferrer"
+                                      target="_blank"
+                                    >
+                                      {copy.billing.receipt}
+                                      <ExternalLink className="h-3.5 w-3.5" />
+                                    </a>
+                                  ) : null}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  </>
+                ) : null}
               </section>
             ) : null}
 

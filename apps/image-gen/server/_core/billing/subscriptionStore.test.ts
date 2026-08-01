@@ -18,4 +18,12 @@ describe("subscription cancellation entitlement state", () => {
       validUntil: paidThrough,
     });
   });
+
+  it("ends access when the paid-through period already expired", () => {
+    const paidThrough = new Date("2026-07-01T00:00:00.000Z");
+    expect(canceledEntitlementState(paidThrough, canceledAt)).toEqual({
+      status: "inactive",
+      validUntil: paidThrough,
+    });
+  });
 });

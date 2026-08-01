@@ -18,7 +18,7 @@ export function registerBillingPortalRoutes(app: Express): void {
   app.get(
     "/api/portal/billing/receipts/:paymentId",
     asyncRoute(async (req, res) => {
-      const access = await requireBillingAccess(req, res);
+      const access = await requireBillingManagerAccess(req, res);
       if (!access) return;
       const paymentId = req.params.paymentId;
       if (!PAYMENT_ID_PATTERN.test(paymentId)) {
@@ -47,7 +47,7 @@ export function registerBillingPortalRoutes(app: Express): void {
   app.get(
     "/api/portal/billing/export.csv",
     asyncRoute(async (req, res) => {
-      const access = await requireBillingAccess(req, res, true);
+      const access = await requireBillingManagerAccess(req, res);
       if (!access) return;
       const config = getMollieConfig();
       const entries = await listWorkspaceAccountingEntries(
@@ -65,11 +65,7 @@ export function registerBillingPortalRoutes(app: Express): void {
   );
 }
 
-async function requireBillingAccess(
-  req: Request,
-  res: Response,
-  requireAdmin = false
-) {
+async function requireBillingManagerAccess(req: Request, res: Response) {
   const user = await authenticatePortalRequest(req, res);
   if (!user) return null;
   const workspaceId = Number(req.query.workspaceId);
@@ -81,9 +77,8 @@ async function requireBillingAccess(
   if (!workspace) return null;
   const membership = await db.getWorkspaceMembership(workspaceId, user.id);
   if (
-    requireAdmin &&
-    (!membership ||
-      (membership.role !== "owner" && membership.role !== "admin"))
+    !membership ||
+    (membership.role !== "owner" && membership.role !== "admin")
   ) {
     res.status(403).json({ error: "billing admin required" });
     return null;
@@ -160,6 +155,6 @@ function renderAccountingCsv(
 }
 
 function csvCell(value: string): string {
-  const safe = /^[=+\-@]/.test(value) ? `'${value}` : value;
+  const safe = /^[\t\r=+\-@]/.test(value) ? `'${value}` : value;
   return `"${safe.replace(/"/g, '""')}"`;
 }

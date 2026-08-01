@@ -523,6 +523,9 @@ export const billingSubscriptions = mysqlTable(
       columns: [table.sourceIntentId],
       foreignColumns: [billingIntents.intentId],
     }).onDelete("restrict"),
+    // Intentional current-state model: each workspace/mode owns one mutable
+    // subscription row. Replacements update this row; this table is not a
+    // subscription-history ledger.
     uniqueIndex("billing_subscriptions_workspace_mode_unique").on(
       table.workspaceId,
       table.mode
@@ -739,6 +742,11 @@ export const billingReconciliationRuns = mysqlTable(
   ]
 );
 
+export type BillingReconciliationRun =
+  typeof billingReconciliationRuns.$inferSelect;
+export type InsertBillingReconciliationRun =
+  typeof billingReconciliationRuns.$inferInsert;
+
 export const billingReconciliationAnomalies = mysqlTable(
   "billing_reconciliation_anomalies",
   {
@@ -762,3 +770,8 @@ export const billingReconciliationAnomalies = mysqlTable(
     ).on(table.runId, table.workspaceId, table.code),
   ]
 );
+
+export type BillingReconciliationAnomaly =
+  typeof billingReconciliationAnomalies.$inferSelect;
+export type InsertBillingReconciliationAnomaly =
+  typeof billingReconciliationAnomalies.$inferInsert;

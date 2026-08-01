@@ -11,6 +11,8 @@ import {
 
 const mocks = vi.hoisted(() => ({
   applyMolliePaymentSnapshot: vi.fn(),
+  getRedisClient: vi.fn(),
+  isRedisEnabled: vi.fn(),
   safeLog: vi.fn(),
 }));
 
@@ -22,7 +24,15 @@ vi.mock("../logger", () => ({
   safeLog: mocks.safeLog,
 }));
 
-import { registerMollieWebhookRoute } from "./webhookRoutes";
+vi.mock("../redis", () => ({
+  getRedisClient: mocks.getRedisClient,
+  isRedisEnabled: mocks.isRedisEnabled,
+}));
+
+import {
+  getMollieWebhookRateLimitKey,
+  registerMollieWebhookRoute,
+} from "./webhookRoutes";
 
 const originalEnv = { ...process.env };
 
@@ -66,6 +76,8 @@ async function postWebhook(input: {
     return {
       status: response.status,
       contentType: response.headers.get("content-type"),
+      rateLimitRemaining: response.headers.get("ratelimit-remaining"),
+      retryAfter: response.headers.get("retry-after"),
       body: await response.text(),
     };
   } finally {
@@ -88,6 +100,10 @@ describe("classic Mollie payment webhook", () => {
     };
     delete process.env.MOLLIE_LIVE_BILLING_ENABLED;
     vi.clearAllMocks();
+    mocks.isRedisEnabled.mockReturnValue(true);
+    mocks.getRedisClient.mockResolvedValue({
+      eval: vi.fn().mockResolvedValue(1),
+    });
     mocks.applyMolliePaymentSnapshot.mockResolvedValue({
       result: "processed",
       workspaceId: 42,
@@ -114,6 +130,8 @@ describe("classic Mollie payment webhook", () => {
     expect(response).toEqual({
       status: 200,
       contentType: "text/plain; charset=utf-8",
+      rateLimitRemaining: "5999",
+      retryAfter: null,
       body: "OK",
     });
     expect(getPayment).toHaveBeenCalledTimes(1);
@@ -161,6 +179,8 @@ describe("classic Mollie payment webhook", () => {
     expect(response).toEqual({
       status: 200,
       contentType: "text/plain; charset=utf-8",
+      rateLimitRemaining: "5999",
+      retryAfter: null,
       body: "OK",
     });
     expect(mocks.applyMolliePaymentSnapshot).not.toHaveBeenCalled();
@@ -220,6 +240,101 @@ describe("classic Mollie payment webhook", () => {
     );
     expect(JSON.stringify(mocks.safeLog.mock.calls)).not.toContain(
       "provider response contained a secret"
+    );
+  });
+
+  it("shares the configured request budget across separate app instances", async () => {
+    process.env.MOLLIE_WEBHOOK_RATE_LIMIT_PER_MINUTE = "1";
+    const counts = new Map<string, number>();
+    const redis = {
+      eval: vi.fn(async (_script: string, _numKeys: number, key: string) => {
+        const count = (counts.get(key) ?? 0) + 1;
+        counts.set(key, count);
+        return count;
+      }),
+    };
+    mocks.getRedisClient.mockResolvedValue(redis);
+
+    const first = await postWebhook({
+      body: "id=invalid",
+      contentType: "application/x-www-form-urlencoded",
+      createClient: vi.fn(),
+    });
+    const second = await postWebhook({
+      body: "id=invalid",
+      contentType: "application/x-www-form-urlencoded",
+      createClient: vi.fn(),
+    });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(503);
+    expect(second.body).toBe("Retry");
+    expect(second.contentType).toBe("text/plain; charset=utf-8");
+    expect(second.rateLimitRemaining).toBe("0");
+    expect(second.retryAfter).not.toBeNull();
+    expect(mocks.safeLog).toHaveBeenCalledWith(
+      "mollie_payment_webhook_rate_limited",
+      { level: "warn" }
+    );
+    const [script, numKeys, redisKey, ttlSeconds] =
+      redis.eval.mock.calls[0] ?? [];
+    expect(script).toContain('redis.call("INCR", KEYS[1])');
+    expect(script).toContain('redis.call("EXPIRE", KEYS[1], ARGV[1])');
+    expect(numKeys).toBe(1);
+    expect(ttlSeconds).toBeGreaterThan(0);
+    expect(redisKey).toMatch(/^mollie-webhook-rate-limit:[a-f0-9]{64}:\d+$/);
+    expect(redisKey).not.toContain("tr_");
+  });
+
+  it("fails closed with a redacted retryable response when Redis is unavailable", async () => {
+    mocks.getRedisClient.mockRejectedValue(
+      new Error("redis secret connection string leaked")
+    );
+    const createClient = vi.fn();
+
+    const response = await postWebhook({
+      body: "id=tr_payment123",
+      contentType: "application/x-www-form-urlencoded",
+      createClient,
+    });
+
+    expect(response.status).toBe(503);
+    expect(response.body).toBe("Retry");
+    expect(createClient).not.toHaveBeenCalled();
+    expect(mocks.safeLog).toHaveBeenCalledWith(
+      "mollie_payment_webhook_rate_limit_unavailable",
+      { level: "warn", errorCode: "BillingOperationError" }
+    );
+    expect(JSON.stringify(mocks.safeLog.mock.calls)).not.toContain(
+      "redis secret connection string leaked"
+    );
+  });
+
+  it("has no in-memory fallback when shared Redis limiting is unavailable", async () => {
+    mocks.isRedisEnabled.mockReturnValue(false);
+    const createClient = vi.fn();
+
+    const response = await postWebhook({
+      body: "id=tr_payment123",
+      contentType: "application/x-www-form-urlencoded",
+      createClient,
+    });
+
+    expect(response.status).toBe(503);
+    expect(response.body).toBe("Retry");
+    expect(mocks.getRedisClient).not.toHaveBeenCalled();
+    expect(createClient).not.toHaveBeenCalled();
+  });
+
+  it("normalizes IPv4 and IPv6 source keys before hashing", () => {
+    const request = (ip: string) =>
+      ({ method: "POST", ip, socket: {} }) as never;
+
+    expect(getMollieWebhookRateLimitKey(request("203.0.113.9"))).toBe(
+      "POST:203.0.113.9"
+    );
+    expect(getMollieWebhookRateLimitKey(request("2001:db8:85a3:1234::1"))).toBe(
+      getMollieWebhookRateLimitKey(request("2001:db8:85a3:1234::ffff"))
     );
   });
 });

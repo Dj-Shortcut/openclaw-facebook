@@ -13,14 +13,27 @@ type LegalPage = {
   sections: Array<{ heading: string; html: string }>;
 };
 
-const premiumPlan = getBillingPlan("premium_monthly_v1");
-if (!premiumPlan) {
-  throw new Error("Leaderbot Premium billing plan is missing");
+const FALLBACK_PREMIUM_PRICING = Object.freeze({
+  premiumMonthlyPrice: "€29",
+  premiumCurrency: "EUR",
+});
+
+export function getPremiumPricingDisplay(
+  lookupPlan: typeof getBillingPlan = getBillingPlan
+) {
+  try {
+    const premiumPlan = lookupPlan("premium_monthly_v1");
+    if (!premiumPlan) return FALLBACK_PREMIUM_PRICING;
+    return {
+      premiumMonthlyPrice: `€${formatAmountMinor(
+        premiumPlan.amountMinor
+      ).replace(/\.00$/, "")}`,
+      premiumCurrency: premiumPlan.currency,
+    };
+  } catch {
+    return FALLBACK_PREMIUM_PRICING;
+  }
 }
-const premiumMonthlyPrice = `€${formatAmountMinor(
-  premiumPlan.amountMinor
-).replace(/\.00$/, "")}`;
-const premiumCurrency = premiumPlan.currency;
 
 export function registerLegalRoutes(app: express.Express) {
   app.get("/privacy", (_req, res) => {
@@ -61,6 +74,7 @@ export function registerLegalRoutes(app: express.Express) {
   });
 
   app.get("/terms", (_req, res) => {
+    const { premiumMonthlyPrice } = getPremiumPricingDisplay();
     res.type("html").send(
       renderLegalPage({
         title: "Terms of Service",
@@ -93,6 +107,7 @@ export function registerLegalRoutes(app: express.Express) {
   });
 
   app.get("/billing-policy", (_req, res) => {
+    const { premiumMonthlyPrice, premiumCurrency } = getPremiumPricingDisplay();
     res.type("html").send(
       renderLegalPage({
         title: "Pre-launch Pricing and Billing Information",

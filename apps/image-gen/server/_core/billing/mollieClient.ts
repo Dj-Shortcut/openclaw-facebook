@@ -176,11 +176,10 @@ export class MollieClient {
 
   async listMandates(customerId: string): Promise<MollieMandate[]> {
     assertMollieId(customerId, "cst_");
-    const response = await this.request<MollieList<MollieMandate>>(
+    return this.requestAllPages<MollieMandate>(
       `/customers/${encodeURIComponent(customerId)}/mandates?limit=250&scopes%5B%5D=customer-not-present`,
-      { method: "GET" }
+      "mandates"
     );
-    return response._embedded?.mandates ?? [];
   }
 
   async createSubscription(input: {
@@ -231,11 +230,10 @@ export class MollieClient {
     customerId: string
   ): Promise<MollieSubscription[]> {
     assertMollieId(customerId, "cst_");
-    const response = await this.request<MollieList<MollieSubscription>>(
+    return this.requestAllPages<MollieSubscription>(
       `/customers/${encodeURIComponent(customerId)}/subscriptions?limit=250`,
-      { method: "GET" }
+      "subscriptions"
     );
-    return response._embedded?.subscriptions ?? [];
   }
 
   async cancelSubscription(

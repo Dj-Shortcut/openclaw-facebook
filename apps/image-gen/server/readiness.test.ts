@@ -9,6 +9,32 @@ import {
 } from "./_core/readiness";
 import { bindTestHttpServer } from "./testHttpServer";
 
+const READINESS_ENV_KEYS = [
+  "NODE_ENV",
+  "MOLLIE_BILLING_ENABLED",
+  "MOLLIE_API_KEY",
+  "MOLLIE_MODE",
+  "MOLLIE_PAYMENT_WEBHOOK_URL",
+  "APP_BASE_URL",
+  "BILLING_SUPPORT_EMAIL",
+  "MOLLIE_BILLING_WORKER_WORKSPACE_ID",
+  "REDIS_URL",
+] as const;
+const originalReadinessEnv = Object.fromEntries(
+  READINESS_ENV_KEYS.map(key => [key, process.env[key]])
+) as Record<(typeof READINESS_ENV_KEYS)[number], string | undefined>;
+
+function restoreReadinessEnv(): void {
+  for (const key of READINESS_ENV_KEYS) {
+    const originalValue = originalReadinessEnv[key];
+    if (originalValue === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = originalValue;
+    }
+  }
+}
+
 async function startServer(checks: ReadinessCheck[]) {
   const app = express();
   app.get("/readyz", createReadinessHandler(checks));
@@ -25,10 +51,11 @@ async function startServer(checks: ReadinessCheck[]) {
 describe("readiness", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    restoreReadinessEnv();
   });
 
   it("does not require Mollie configuration while billing is disabled", () => {
-    vi.stubEnv("MOLLIE_BILLING_ENABLED", undefined);
+    delete process.env.MOLLIE_BILLING_ENABLED;
     const mollieCheck = buildRuntimeReadinessChecks().find(
       check => check.name === "mollie_billing_config"
     );
@@ -39,7 +66,7 @@ describe("readiness", () => {
 
   it("fails the Mollie readiness check when billing is enabled but unconfigured", () => {
     vi.stubEnv("MOLLIE_BILLING_ENABLED", "true");
-    vi.stubEnv("MOLLIE_API_KEY", undefined);
+    delete process.env.MOLLIE_API_KEY;
     const mollieCheck = buildRuntimeReadinessChecks().find(
       check => check.name === "mollie_billing_config"
     );
@@ -58,13 +85,25 @@ describe("readiness", () => {
     );
     vi.stubEnv("APP_BASE_URL", "http://leaderbot.test");
     vi.stubEnv("BILLING_SUPPORT_EMAIL", "billing@leaderbot.test");
-    vi.stubEnv("MOLLIE_BILLING_WORKER_WORKSPACE_ID", undefined);
+    delete process.env.MOLLIE_BILLING_WORKER_WORKSPACE_ID;
     const mollieCheck = buildRuntimeReadinessChecks().find(
       check => check.name === "mollie_billing_config"
     );
 
     expect(() => mollieCheck?.check()).toThrow(
       "MOLLIE_BILLING_WORKER_WORKSPACE_ID is required"
+    );
+  });
+
+  it("fails rate-limiter readiness when Mollie billing has no shared Redis", async () => {
+    vi.stubEnv("MOLLIE_BILLING_ENABLED", "true");
+    delete process.env.REDIS_URL;
+    const rateLimiterCheck = buildRuntimeReadinessChecks().find(
+      check => check.name === "http_rate_limiter"
+    );
+
+    await expect(rateLimiterCheck?.check()).rejects.toThrow(
+      "Mollie webhook rate limiting requires Redis"
     );
   });
 

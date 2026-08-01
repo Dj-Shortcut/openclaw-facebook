@@ -187,9 +187,23 @@ export async function runDailyBillingReconciliation(
     const subscription = subscriptions[0];
     if (subscription) {
       summary.subscriptionsChecked = 1;
-      if (subscription.mollieSubscriptionId) {
+      const hasRemoteSubscription = Boolean(subscription.mollieSubscriptionId);
+      const customerBindingAnomaly = hasRemoteSubscription
+        ? reconciliationSubscriptionCustomerBindingAnomaly(
+            subscription.mollieCustomerId,
+            customer?.mollieCustomerId
+          )
+        : null;
+      if (customerBindingAnomaly) {
+        await recordAnomaly(lease.runId, workspaceId, customerBindingAnomaly);
+        summary.anomalies += 1;
+      }
+      const boundCustomerId = customerBindingAnomaly
+        ? null
+        : (customer?.mollieCustomerId ?? null);
+      if (subscription.mollieSubscriptionId && boundCustomerId) {
         const remote = await client.getSubscription(
-          subscription.mollieCustomerId,
+          boundCustomerId,
           subscription.mollieSubscriptionId
         );
         if (!remoteSubscriptionMatches(remote, subscription, config.mode)) {
@@ -201,7 +215,7 @@ export async function runDailyBillingReconciliation(
           await recordSubscriptionContainment(
             workspaceId,
             config.mode,
-            subscription.mollieCustomerId,
+            boundCustomerId,
             remote
           );
           summary.anomalies += 1;
@@ -244,7 +258,7 @@ export async function runDailyBillingReconciliation(
             await recordSubscriptionContainment(
               workspaceId,
               config.mode,
-              subscription.mollieCustomerId,
+              boundCustomerId,
               remote
             );
             summary.anomalies += 1;
@@ -727,6 +741,36 @@ export function hasRemoteCollectionStateMismatch(
     (remoteStatus === "active" || remoteStatus === "pending") &&
     ["canceled", "completed", "suspended"].includes(localStatus)
   );
+}
+
+export function isValidReconciliationSubscriptionCustomerId(
+  customerId: string
+): boolean {
+  if (customerId.length <= "cst_".length) return false;
+  try {
+    assertMollieId(customerId, "cst_");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function reconciliationSubscriptionCustomerBindingAnomaly(
+  subscriptionCustomerId: string,
+  workspaceCustomerId: string | null | undefined
+):
+  | "subscription_customer_binding_missing"
+  | "subscription_customer_id_invalid"
+  | "subscription_customer_id_mismatch"
+  | null {
+  if (!workspaceCustomerId) return "subscription_customer_binding_missing";
+  if (!isValidReconciliationSubscriptionCustomerId(subscriptionCustomerId)) {
+    return "subscription_customer_id_invalid";
+  }
+  if (subscriptionCustomerId !== workspaceCustomerId) {
+    return "subscription_customer_id_mismatch";
+  }
+  return null;
 }
 
 function parseOptionalDateOnly(value: string | null | undefined): Date | null {

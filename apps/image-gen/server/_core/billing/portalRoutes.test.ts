@@ -159,5 +159,63 @@ describe("billing portal response caching", () => {
     expect(accountingExport.headers.get("cache-control")).toBe(
       "private, no-store, max-age=0"
     );
+    expect(mocks.getWorkspaceLedgerPayment).toHaveBeenCalledWith(
+      42,
+      "test",
+      "tr_payment123"
+    );
+    expect(mocks.listWorkspaceAccountingEntries).toHaveBeenCalledWith(
+      42,
+      "test"
+    );
+  });
+
+  it.each([
+    "/api/portal/billing/receipts/:paymentId",
+    "/api/portal/billing/export.csv",
+  ])(
+    "rejects ordinary members before reading billing data from %s",
+    async path => {
+      mocks.getWorkspaceMembership.mockResolvedValue({ role: "member" });
+
+      const response = await invokeRoute(path, {
+        params: { paymentId: "tr_payment123" },
+        query: { workspaceId: "42" },
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.body).toEqual({ error: "billing admin required" });
+      expect(mocks.getWorkspaceLedgerPayment).not.toHaveBeenCalled();
+      expect(mocks.listWorkspaceAccountingEntries).not.toHaveBeenCalled();
+    }
+  );
+
+  it("neutralizes formula-like CSV values beginning with tab or carriage return", async () => {
+    mocks.listWorkspaceAccountingEntries.mockResolvedValue([
+      {
+        occurredAt: new Date("2026-08-01T00:00:00.000Z"),
+        invoiceNumber: '\t=HYPERLINK("https://example.test")',
+        molliePaymentId: "tr_payment123",
+        status: "\r=1+1",
+        currency: "EUR",
+        grossAmount: "29.00",
+        mollieFees: null,
+        refunds: [],
+        chargebacks: [],
+        settlementAmount: null,
+        settlementId: null,
+      },
+    ]);
+
+    const response = await invokeRoute("/api/portal/billing/export.csv", {
+      params: {},
+      query: { workspaceId: "42" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain(
+      `"'\t=HYPERLINK(""https://example.test"")"`
+    );
+    expect(response.body).toContain(`"'\r=1+1"`);
   });
 });

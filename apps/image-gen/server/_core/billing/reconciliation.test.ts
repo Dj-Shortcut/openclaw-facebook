@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   hasRemoteCollectionStateMismatch,
+  isValidReconciliationSubscriptionCustomerId,
   needsReconciliation,
   selectPaymentsForReconciliation,
   shouldPreserveRemoteSubscription,
@@ -31,6 +32,17 @@ describe("billing reconciliation collection-risk detection", () => {
     );
     expect(hasRemoteCollectionStateMismatch("manual_review", "suspended")).toBe(
       false
+    );
+  });
+
+  it("rejects empty or invalid subscription customer IDs before provider reads", () => {
+    expect(isValidReconciliationSubscriptionCustomerId("")).toBe(false);
+    expect(isValidReconciliationSubscriptionCustomerId("cst_")).toBe(false);
+    expect(isValidReconciliationSubscriptionCustomerId("not-a-customer")).toBe(
+      false
+    );
+    expect(isValidReconciliationSubscriptionCustomerId("cst_customer123")).toBe(
+      true
     );
   });
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   hasMatchingMollieCustomerId,
+  isDuplicateDeliverySnapshot,
   isDuplicateRecurringCycle,
   resolvePaymentOccurredAt,
 } from "./paymentStore";
@@ -55,5 +56,21 @@ describe("payment-store review safeguards", () => {
         currentPeriodStart
       )
     ).toBe(false);
+  });
+
+  it("bounds cyclic duplicate-delivery cause traversal", () => {
+    const cyclic: { cause?: unknown } = {};
+    cyclic.cause = cyclic;
+
+    expect(isDuplicateDeliverySnapshot(cyclic)).toBe(false);
+    expect(
+      isDuplicateDeliverySnapshot({
+        cause: {
+          code: "ER_DUP_ENTRY",
+          message:
+            "Duplicate entry for webhook_deliveries_resource_snapshot_mode_unique",
+        },
+      })
+    ).toBe(true);
   });
 });

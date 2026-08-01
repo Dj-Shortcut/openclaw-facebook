@@ -232,9 +232,11 @@ export async function syncWorkspaceSubscriptionScheduleIfMatches(
 
 export async function getWorkspaceBillingSummary(
   workspaceId: number,
-  mode: MollieMode
+  mode: MollieMode,
+  options: { includePayments?: boolean } = {}
 ) {
   const database = await getDatabaseOrThrow();
+  const includePayments = options.includePayments === true;
   const [subscriptions, entitlements, payments] = await Promise.all([
     database
       .select()
@@ -256,25 +258,27 @@ export async function getWorkspaceBillingSummary(
         )
       )
       .limit(1),
-    database
-      .select({
-        molliePaymentId: paymentLedger.molliePaymentId,
-        grossAmount: paymentLedger.grossAmount,
-        currency: paymentLedger.currency,
-        status: paymentLedger.status,
-        invoiceNumber: paymentLedger.invoiceNumber,
-        occurredAt: paymentLedger.occurredAt,
-      })
-      .from(paymentLedger)
-      .where(
-        and(
-          eq(paymentLedger.workspaceId, workspaceId),
-          eq(paymentLedger.mode, mode),
-          isNotNull(paymentLedger.invoiceNumber)
-        )
-      )
-      .orderBy(desc(paymentLedger.occurredAt))
-      .limit(100),
+    includePayments
+      ? database
+          .select({
+            molliePaymentId: paymentLedger.molliePaymentId,
+            grossAmount: paymentLedger.grossAmount,
+            currency: paymentLedger.currency,
+            status: paymentLedger.status,
+            invoiceNumber: paymentLedger.invoiceNumber,
+            occurredAt: paymentLedger.occurredAt,
+          })
+          .from(paymentLedger)
+          .where(
+            and(
+              eq(paymentLedger.workspaceId, workspaceId),
+              eq(paymentLedger.mode, mode),
+              isNotNull(paymentLedger.invoiceNumber)
+            )
+          )
+          .orderBy(desc(paymentLedger.occurredAt))
+          .limit(100)
+      : Promise.resolve([]),
   ]);
 
   const subscription = subscriptions[0] ?? null;

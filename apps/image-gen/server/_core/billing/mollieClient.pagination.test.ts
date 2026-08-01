@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MollieConfig } from "./config";
-import { MollieClient, type MolliePayment } from "./mollieClient";
+import {
+  MollieClient,
+  type MollieMandate,
+  type MolliePayment,
+  type MollieSubscription,
+} from "./mollieClient";
 
 const config: MollieConfig = Object.freeze({
   apiKey: "test_example123",
@@ -20,6 +25,29 @@ function payment(id: string): MolliePayment {
     amount: { currency: "EUR", value: "29.00" },
     description: "Leaderbot Premium",
     createdAt: "2026-08-01T10:00:00.000Z",
+  };
+}
+
+function mandate(id: string): MollieMandate {
+  return {
+    resource: "mandate",
+    id,
+    mode: "test",
+    status: "valid",
+    method: "directdebit",
+    createdAt: "2026-08-01T10:00:00.000Z",
+  };
+}
+
+function subscription(id: string): MollieSubscription {
+  return {
+    resource: "subscription",
+    id,
+    mode: "test",
+    status: "active",
+    amount: { currency: "EUR", value: "29.00" },
+    interval: "1 month",
+    startDate: "2026-08-01",
   };
 }
 
@@ -128,5 +156,101 @@ describe("Mollie payment pagination", () => {
       initialUrl,
       secondUrl,
     ]);
+  });
+});
+
+describe("Mollie mandate and subscription pagination", () => {
+  it("follows every mandate page", async () => {
+    const secondUrl =
+      "https://api.mollie.test/v2/customers/cst_customer123/mandates?from=mdt_first&limit=250&scopes%5B%5D=customer-not-present";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            _embedded: { mandates: [mandate("mdt_first")] },
+            _links: { next: { href: secondUrl } },
+          }),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            _embedded: { mandates: [mandate("mdt_second")] },
+            _links: { next: null },
+          }),
+          { status: 200 }
+        )
+      );
+    const client = new MollieClient(
+      config,
+      fetchMock as unknown as typeof fetch,
+      "https://api.mollie.test/v2"
+    );
+
+    await expect(client.listMandates("cst_customer123")).resolves.toEqual([
+      mandate("mdt_first"),
+      mandate("mdt_second"),
+    ]);
+    expect(fetchMock.mock.calls.map(call => call[0])).toEqual([
+      "https://api.mollie.test/v2/customers/cst_customer123/mandates?limit=250&scopes%5B%5D=customer-not-present",
+      secondUrl,
+    ]);
+  });
+
+  it("follows every customer-subscription page", async () => {
+    const secondUrl =
+      "https://api.mollie.test/v2/customers/cst_customer123/subscriptions?from=sub_first&limit=250";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            _embedded: { subscriptions: [subscription("sub_first")] },
+            _links: { next: { href: secondUrl } },
+          }),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            _embedded: { subscriptions: [subscription("sub_second")] },
+            _links: { next: null },
+          }),
+          { status: 200 }
+        )
+      );
+    const client = new MollieClient(
+      config,
+      fetchMock as unknown as typeof fetch,
+      "https://api.mollie.test/v2"
+    );
+
+    await expect(
+      client.listCustomerSubscriptions("cst_customer123")
+    ).resolves.toEqual([subscription("sub_first"), subscription("sub_second")]);
+    expect(fetchMock.mock.calls.map(call => call[0])).toEqual([
+      "https://api.mollie.test/v2/customers/cst_customer123/subscriptions?limit=250",
+      secondUrl,
+    ]);
+  });
+
+  it("preserves empty-array results for empty mandate and subscription pages", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ _embedded: {} }), { status: 200 })
+    );
+    const client = new MollieClient(
+      config,
+      fetchMock as unknown as typeof fetch,
+      "https://api.mollie.test/v2"
+    );
+
+    await expect(client.listMandates("cst_customer123")).resolves.toEqual([]);
+    await expect(
+      client.listCustomerSubscriptions("cst_customer123")
+    ).resolves.toEqual([]);
   });
 });

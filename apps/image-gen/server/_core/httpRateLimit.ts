@@ -172,11 +172,10 @@ async function applyRateLimit(
   }
 }
 
-function resetGlobalHttpRateLimiter(): void {
-  buckets.clear();
-}
-
 export async function ensureHttpRateLimiterReady(): Promise<void> {
+  if (isMollieBillingEnabled() && !isRedisEnabled()) {
+    throw new Error("Mollie webhook rate limiting requires Redis");
+  }
   await ensureRedisReady();
 }
 

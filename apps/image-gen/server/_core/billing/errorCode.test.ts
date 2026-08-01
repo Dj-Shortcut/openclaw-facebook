@@ -37,4 +37,14 @@ describe("safe billing error codes", () => {
     );
     expect(safeBillingErrorCode("database unavailable")).toBe("UnknownError");
   });
+
+  it.each([
+    "MOLLIE_API_KEY is missing",
+    "APP_BASE_URL must be an https URL",
+    "BILLING_SUPPORT_EMAIL must be a valid email address",
+  ])("maps configuration error %j to one opaque code", message => {
+    expect(safeBillingErrorCode(new Error(message))).toBe(
+      "BillingConfigurationError"
+    );
+  });
 });

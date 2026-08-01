@@ -1258,7 +1258,11 @@ function parseProviderDate(value: string): Date {
   return parsed;
 }
 
-function isDuplicateDeliverySnapshot(error: unknown): boolean {
+export function isDuplicateDeliverySnapshot(
+  error: unknown,
+  depth = 0
+): boolean {
+  if (depth > 8) return false;
   if (!error || typeof error !== "object") return false;
   const record = error as {
     code?: unknown;
@@ -1272,5 +1276,5 @@ function isDuplicateDeliverySnapshot(error: unknown): boolean {
   ) {
     return true;
   }
-  return isDuplicateDeliverySnapshot(record.cause);
+  return isDuplicateDeliverySnapshot(record.cause, depth + 1);
 }

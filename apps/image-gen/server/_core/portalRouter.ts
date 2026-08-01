@@ -193,6 +193,17 @@ async function requireWorkspaceBillingAdmin(
   },
   workspaceId: number
 ) {
+  const access = await requireWorkspaceBillingManager(ctx, workspaceId);
+  assertTrustedBillingOrigin(ctx.req);
+  return access;
+}
+
+async function requireWorkspaceBillingManager(
+  ctx: {
+    user: { id: number; name: string | null; loginMethod?: string | null };
+  },
+  workspaceId: number
+) {
   const { workspace, membership } = await requireWorkspaceDetails(
     ctx,
     workspaceId
@@ -203,7 +214,6 @@ async function requireWorkspaceBillingAdmin(
       message: "billing admin required",
     });
   }
-  assertTrustedBillingOrigin(ctx.req);
   return { workspace, membership };
 }
 
@@ -212,7 +222,6 @@ function assertTrustedBillingOrigin(req: {
 }) {
   const rawOrigin = req.headers.origin;
   const origin = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
-  if (!origin && process.env.NODE_ENV !== "production") return;
   const appBaseUrl =
     process.env.PORTAL_BASE_URL?.trim() || process.env.APP_BASE_URL?.trim();
   if (!origin || !appBaseUrl) {
@@ -309,7 +318,12 @@ export const portalRouter = router({
     summary: protectedProcedure
       .input(workspaceInput)
       .query(async ({ ctx, input }) => {
-        await requireWorkspace(ctx, input.workspaceId);
+        const { membership } = await requireWorkspaceMembership(
+          ctx,
+          input.workspaceId
+        );
+        const includePayments =
+          membership.role === "owner" || membership.role === "admin";
         if (!isMollieBillingEnabled()) {
           return {
             subscription: null,
@@ -323,7 +337,8 @@ export const portalRouter = router({
         const config = getMollieConfig();
         const summary = await getWorkspaceBillingSummary(
           input.workspaceId,
-          config.mode
+          config.mode,
+          { includePayments }
         );
         const plan = summary.subscription
           ? getBillingPlan(summary.subscription.planCode)
@@ -387,14 +402,31 @@ export const portalRouter = router({
     returnStatus: protectedProcedure
       .input(billingReturnInput)
       .query(async ({ ctx, input }) => {
-        await requireWorkspace(ctx, input.workspaceId);
+        await requireWorkspaceBillingManager(ctx, input.workspaceId);
         try {
           return await getCheckoutReturnStatus(
             input.workspaceId,
             input.intentId
           );
         } catch (error) {
-          throw badRequest(error, "billing intent not found");
+          if (
+            error instanceof Error &&
+            error.message === "billing intent not found"
+          ) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "billing intent not found",
+            });
+          }
+          safeLog("billing_return_status_failed", {
+            level: "error",
+            operation: "billing_return_status",
+            errorCode: safeBillingErrorCode(error),
+          });
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "billing status unavailable",
+          });
         }
       }),
 

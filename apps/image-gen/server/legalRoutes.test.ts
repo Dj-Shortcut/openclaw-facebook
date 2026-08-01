@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { formatAmountMinor, getBillingPlan } from "./_core/billing/catalog";
 import { escapeHtml } from "./_core/html";
-import { registerLegalRoutes } from "./_core/runtime/legalRoutes";
+import {
+  getPremiumPricingDisplay,
+  registerLegalRoutes,
+} from "./_core/runtime/legalRoutes";
 
 type RegisteredRoute = {
   path: string;
@@ -105,5 +108,20 @@ describe("legal routes", () => {
     expect(escapeHtml(`<script data-owner="O'Reilly">&</script>`)).toBe(
       "&lt;script data-owner=&quot;O&#39;Reilly&quot;&gt;&amp;&lt;/script&gt;"
     );
+  });
+
+  it("keeps legal routes available when premium pricing cannot be loaded", () => {
+    expect(getPremiumPricingDisplay(() => null)).toEqual({
+      premiumMonthlyPrice: "€29",
+      premiumCurrency: "EUR",
+    });
+    expect(
+      getPremiumPricingDisplay(() => {
+        throw new Error("billing catalog unavailable");
+      })
+    ).toEqual({
+      premiumMonthlyPrice: "€29",
+      premiumCurrency: "EUR",
+    });
   });
 });

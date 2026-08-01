@@ -1,6 +1,7 @@
 import express, { type Express } from "express";
-import rateLimit from "express-rate-limit";
+import { ipKeyGenerator } from "express-rate-limit";
 import { safeLog } from "../logger";
+import { createSharedRedisRateLimiter } from "../redisRateLimit";
 import {
   getMollieConfig,
   getMollieWebhookPath,
@@ -26,13 +27,21 @@ export function registerMollieWebhookRoute(
     parameterLimit: 2,
     type: "application/x-www-form-urlencoded",
   });
-  const webhookRateLimiter = rateLimit({
+  const webhookRateLimiter = createSharedRedisRateLimiter({
+    keyPrefix: "mollie-webhook-rate-limit:",
     windowMs: 60_000,
-    max: getWebhookRateLimitPerMinute(),
-    standardHeaders: true,
-    legacyHeaders: false,
-    handler: (_req, res) => {
+    limit: getWebhookRateLimitPerMinute,
+    keyGenerator: getMollieWebhookRateLimitKey,
+    onLimited: (_req, res, retryAfterSeconds) => {
+      res.setHeader("Retry-After", String(retryAfterSeconds));
       safeLog("mollie_payment_webhook_rate_limited", { level: "warn" });
+      res.status(503).type("text/plain").send("Retry");
+    },
+    onUnavailable: (error, _req, res) => {
+      safeLog("mollie_payment_webhook_rate_limit_unavailable", {
+        level: "warn",
+        errorCode: safeBillingErrorCode(error),
+      });
       res.status(503).type("text/plain").send("Retry");
     },
   });
@@ -58,6 +67,11 @@ export function registerMollieWebhookRoute(
         });
     }
   );
+}
+
+export function getMollieWebhookRateLimitKey(req: express.Request): string {
+  const clientIp = req.ip || req.socket.remoteAddress;
+  return `${req.method}:${clientIp ? ipKeyGenerator(clientIp) : "unknown"}`;
 }
 
 function getWebhookRateLimitPerMinute(): number {
