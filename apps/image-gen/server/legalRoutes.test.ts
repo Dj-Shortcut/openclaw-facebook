@@ -40,7 +40,7 @@ function renderLegalRoute(path: string): FakeResponse {
 }
 
 describe("legal routes", () => {
-  it.each(["/privacy", "/terms", "/data-deletion"])(
+  it.each(["/privacy", "/terms", "/billing-policy", "/data-deletion"])(
     "serves public legal page %s",
     path => {
       const response = renderLegalRoute(path);
@@ -48,6 +48,10 @@ describe("legal routes", () => {
       expect(response.contentType).toBe("html");
       expect(response.body).toContain("Leaderbot");
       expect(response.body).toContain("privacy@leaderbot.live");
+      expect(response.body).toContain("Andy Arijs");
+      expect(response.body).toContain("1040.495.145");
+      expect(response.body).toContain("Savooistraat 50");
+      expect(response.body).toContain("+32 469 79 26 56");
     }
   );
 
@@ -55,8 +59,8 @@ describe("legal routes", () => {
     const privacy = renderLegalRoute("/privacy").body;
     const deletion = renderLegalRoute("/data-deletion").body;
 
-    expect(privacy).toContain('sending "delete my data" in Messenger');
-    expect(privacy).toContain("Meta/Facebook");
+    expect(privacy).toContain("delete my data");
+    expect(privacy).toContain("Meta controls Facebook and Messenger");
     expect(deletion).toContain("delete my data");
     expect(deletion).toContain("verwijder mijn data");
     expect(deletion).toContain("Facebook-controlled data");
@@ -66,9 +70,22 @@ describe("legal routes", () => {
     const terms = renderLegalRoute("/terms").body;
 
     expect(terms).toContain("AI-generated content");
-    expect(terms).toContain("quotas");
-    expect(terms).toContain("not endorsed by or affiliated with Meta");
+    expect(terms).toMatch(/quotas/i);
+    expect(terms).toContain("not affiliated with or endorsed by Meta");
     expect(terms).toContain("/privacy");
     expect(terms).toContain("/data-deletion");
+  });
+
+  it("publishes pre-launch pricing without implying an active checkout", () => {
+    const terms = renderLegalRoute("/terms").body;
+    const billingPolicy = renderLegalRoute("/billing-policy").body;
+
+    expect(terms).toContain("planned at €29 per month");
+    expect(terms).toContain("not currently for sale");
+    expect(billingPolicy).toContain("There is currently no checkout");
+    expect(billingPolicy).toContain("No payment or renewal today");
+    expect(billingPolicy).toContain("future price indication");
+    expect(billingPolicy).not.toContain("billing@leaderbot.live");
+    expect(billingPolicy).not.toContain("Bijzondere vrijstellingsregeling");
   });
 });

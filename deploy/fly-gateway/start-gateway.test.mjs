@@ -426,6 +426,88 @@ describe("Fly gateway startup", () => {
     await closeServer(gatewayTarget);
   }, 15000);
 
+  it("allows only the exact Mollie payment webhook POST route", async () => {
+    const seenGatewayRequests = [];
+    const gatewayTarget = http.createServer((req, res) => {
+      seenGatewayRequests.push({ method: req.method, path: req.url });
+      res.end("gateway");
+    });
+    gatewayTarget.listen(0, "127.0.0.1");
+    await waitForListening(gatewayTarget);
+
+    const seenPortalRequests = [];
+    const portalTarget = http.createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        seenPortalRequests.push({ method: req.method, path: req.url, body });
+        res.end("portal");
+      });
+    });
+    portalTarget.listen(0, "127.0.0.1");
+    await waitForListening(portalTarget);
+
+    const guard = startPublicRouteGuard({
+      publicPort: 0,
+      targetPort: gatewayTarget.address().port,
+      env: {
+        LEADERBOT_PORTAL_ORIGIN: `http://127.0.0.1:${portalTarget.address().port}`,
+      },
+    });
+    await waitForListening(guard);
+
+    try {
+      const publicPort = guard.address().port;
+      const allowed = await fetch(
+        `http://127.0.0.1:${publicPort}/api/webhooks/mollie/payments`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: "id=tr_payment123",
+        },
+      );
+      const blockedGet = await fetch(
+        `http://127.0.0.1:${publicPort}/api/webhooks/mollie/payments`,
+      );
+      const blockedNearMisses = await Promise.all([
+        fetch(`http://127.0.0.1:${publicPort}/api/webhooks/mollie/payment`, {
+          method: "POST",
+        }),
+        fetch(`http://127.0.0.1:${publicPort}/api/webhooks/mollie/payments/`, {
+          method: "POST",
+        }),
+        fetch(
+          `http://127.0.0.1:${publicPort}/api/webhooks/mollie/payments-extra`,
+          {
+            method: "POST",
+          },
+        ),
+      ]);
+
+      expect(allowed.status).toBe(200);
+      expect(await allowed.text()).toBe("portal");
+      expect(blockedGet.status).toBe(404);
+      expect(blockedNearMisses.map((response) => response.status)).toEqual([
+        404, 404, 404,
+      ]);
+      expect(seenPortalRequests).toEqual([
+        {
+          method: "POST",
+          path: "/api/webhooks/mollie/payments",
+          body: "id=tr_payment123",
+        },
+      ]);
+      expect(seenGatewayRequests).toEqual([]);
+    } finally {
+      await closeServer(guard);
+      await closeServer(portalTarget);
+      await closeServer(gatewayTarget);
+    }
+  }, 15000);
+
   it("keeps admin login disabled until an admin token is configured", async () => {
     const target = http.createServer((_req, res) => {
       res.end("target");

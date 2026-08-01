@@ -71,6 +71,18 @@ async function getDb() {
   return _db;
 }
 
+/**
+ * Financial writes must fail closed. Billing modules use this accessor instead
+ * of the non-financial helpers that can return development fallbacks.
+ */
+export async function getDatabaseOrThrow() {
+  const db = await getDb();
+  if (!db) {
+    throw new Error("Database unavailable for billing operation");
+  }
+  return db;
+}
+
 export async function upsertUser(user: InsertUser): Promise<void> {
   if (!user.openId) {
     throw new Error("User openId is required for upsert");

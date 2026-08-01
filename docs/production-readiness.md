@@ -1,6 +1,6 @@
 # Production Readiness
 
-Status: Not ready for broad customer launch; live Messenger smoke and delete-data flow are operator-verified for controlled production operation.
+Status: Not ready for broad customer launch; live Messenger smoke and delete-data flow are operator-verified, while live Mollie billing is NO-GO.
 
 Last updated: 2026-06-30
 
@@ -37,6 +37,7 @@ This document is the deploy/smoke checklist for the current gateway surface.
 - Live image generation requires the separate `leaderbot-fb-image-gen` service key and OpenAI billing/key state to be healthy.
 - `npm audit --omit=dev --audit-level=high` could not complete from this Windows environment because the registry audit endpoint request failed with `EACCES`; rerun from CI or another network before broad launch.
 - Broad customer launch still requires the remaining portal, billing, usage-control, monitoring, and tenant-isolation work tracked in the canonical backlog.
+- Live Mollie billing is blocked by the explicit items in `LAUNCH_READINESS.md`, including sandbox evidence and workspace-entitlement enforcement in provider quota paths.
 
 ## Latest Operator Verification
 
@@ -69,6 +70,12 @@ Important env:
 Image-gen app must have matching internal token:
 
 - `INTERNAL_IMAGE_REQUEST_TOKEN` must match `LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN`.
+
+Mollie billing variables are documented in `apps/image-gen/.env.example`. Keep
+`MOLLIE_BILLING_ENABLED=false`, `MOLLIE_MODE=test`, and
+`MOLLIE_LIVE_BILLING_ENABLED=false` while the public site only collects
+early-access interest. Enable the master switch only in an approved test
+environment or after the billing launch decision is GO.
 
 The token alone must not enable forwarding. The Facebook channel config also
 needs `leaderbotBridgeEnabled: true` for any Messenger event, Page-scoped sender

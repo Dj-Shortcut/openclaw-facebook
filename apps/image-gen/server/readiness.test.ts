@@ -1,8 +1,12 @@
 import http from "node:http";
 import express from "express";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createReadinessHandler, type ReadinessCheck } from "./_core/readiness";
+import {
+  buildRuntimeReadinessChecks,
+  createReadinessHandler,
+  type ReadinessCheck,
+} from "./_core/readiness";
 import { bindTestHttpServer } from "./testHttpServer";
 
 async function startServer(checks: ReadinessCheck[]) {
@@ -19,6 +23,54 @@ async function startServer(checks: ReadinessCheck[]) {
 }
 
 describe("readiness", () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it("does not require Mollie configuration while billing is disabled", () => {
+    delete process.env.MOLLIE_BILLING_ENABLED;
+    const mollieCheck = buildRuntimeReadinessChecks().find(
+      check => check.name === "mollie_billing_config"
+    );
+
+    expect(mollieCheck).toBeDefined();
+    expect(() => mollieCheck?.check()).not.toThrow();
+  });
+
+  it("fails the Mollie readiness check when billing is enabled but unconfigured", () => {
+    process.env.MOLLIE_BILLING_ENABLED = "true";
+    delete process.env.MOLLIE_API_KEY;
+    const mollieCheck = buildRuntimeReadinessChecks().find(
+      check => check.name === "mollie_billing_config"
+    );
+
+    expect(() => mollieCheck?.check()).toThrow("MOLLIE_API_KEY is missing");
+  });
+
+  it("fails readiness when billing is enabled without its tenant worker", () => {
+    process.env = {
+      ...originalEnv,
+      NODE_ENV: "test",
+      MOLLIE_BILLING_ENABLED: "true",
+      MOLLIE_API_KEY: "test_example123",
+      MOLLIE_MODE: "test",
+      MOLLIE_PAYMENT_WEBHOOK_URL:
+        "http://billing.test/api/webhooks/mollie/payments",
+      APP_BASE_URL: "http://leaderbot.test",
+      BILLING_SUPPORT_EMAIL: "billing@leaderbot.test",
+    };
+    delete process.env.MOLLIE_BILLING_WORKER_WORKSPACE_ID;
+    const mollieCheck = buildRuntimeReadinessChecks().find(
+      check => check.name === "mollie_billing_config"
+    );
+
+    expect(() => mollieCheck?.check()).toThrow(
+      "MOLLIE_BILLING_WORKER_WORKSPACE_ID is required"
+    );
+  });
+
   it("returns ok when all dependency checks pass", async () => {
     const server = await startServer([
       { name: "redis", check: vi.fn() },

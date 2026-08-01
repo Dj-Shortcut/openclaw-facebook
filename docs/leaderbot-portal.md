@@ -10,8 +10,9 @@ Customers should be able to log in, configure their AI, connect channels, manage
 
 ## Portal v1 Definition
 
-Portal v1 is not a complete SaaS billing platform. It is the minimum customer
-control surface needed to launch without exposing the internal OpenClaw gateway.
+Portal v1 includes a Mollie Test Mode billing control surface, but live paid
+access remains fail-closed until the billing, tenant-runtime, legal, accounting,
+and sandbox-test gates in `LAUNCH_READINESS.md` pass.
 
 Portal v1 is complete when a real customer can:
 
@@ -106,8 +107,8 @@ passes against production URLs, and a manual portal smoke confirms:
 - Do not make `leaderbot.live` a marketing-only landing page.
 - Do not reuse old DJ/personality campaign assets for the portal.
 - Do not expand legacy style-picker flows as part of the portal work.
-- Do not block v1 on Stripe, subscription management, invoices, or premium plan
-  automation. Manual upgrade requests are the v1 billing mode.
+- Mollie is the only payment provider. Keep manual upgrade requests as the
+  production fallback until the Mollie launch decision becomes GO.
 - Do not block v1 on image gallery/history, generated-video support, full
   knowledge ingestion, embeddings UI, or conversation history.
 

@@ -92,19 +92,29 @@ function shouldDropLogKey(key: string): boolean {
 
   return [
     "token",
+    "apikey",
+    "secret",
     "psid",
+    "customer",
+    "paymentid",
+    "mandateid",
+    "subscriptionid",
+    "mollie",
     "text",
     "payload",
     "attachment",
     "message",
     "sender",
     "body",
-  ].some(fragment => lowered.includes(fragment));
+  ].some(fragment => normalized.includes(fragment));
 }
 
 function sanitizeString(value: string): string {
   return value
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
+    .replace(/\b(?:test|live)_[A-Za-z0-9]{10,}\b/g, "[MOLLIE_KEY_REDACTED]")
+    .replace(/\b(?:tr|cst|mdt|sub)_[A-Za-z0-9]+\b/g, "[MOLLIE_ID_REDACTED]")
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[EMAIL_REDACTED]")
     .replace(/([?&](?:access_)?token=)[^&\s]+/gi, "$1[REDACTED]")
     .replace(/https?:\/\/[^\s)]+/gi, "[URL_REDACTED]");
 }

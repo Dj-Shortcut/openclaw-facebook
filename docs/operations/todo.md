@@ -10,6 +10,7 @@
 - Latest operator production verification: **2026-06-30** live Messenger smoke and `delete-my-data` flow verified by operator.
 - Current direction: generic prompt-first image generation; legacy style-picker UI, quick-reply flows, and director-mode preset plumbing are removed. Internal style-preset compatibility may remain only as backend fallback.
 - Product direction: `leaderbot.live` becomes a tenant/customer portal for managing each customer's own AI. The OpenClaw/Messenger gateway remains shielded and is not the customer-facing app.
+- 2026-08-01 local website-readiness update: the unauthenticated portal entry now presents the real tenant workspace product, free starting point, and a non-transactional interest CTA for the proposed €29/month Premium plan. Public business/contact details and pre-launch legal copy are present. Checkout, webhook workers, reconciliation, and paid plan exposure stay disabled unless `MOLLIE_BILLING_ENABLED=true`; production deployment and Mollie onboarding remain open work.
 - Historical audit and inventory files are not active plans. Keep valid open work here instead of reviving stale audit snapshots.
 
 ## Architecture boundary notes
@@ -44,11 +45,10 @@ customer launch is allowed when these checks are true:
 2. Public route audit is recorded: portal root, legal pages, health/readiness,
    metrics, and required Meta webhook routes are reachable; internal gateway UI,
    admin APIs, and unreviewed OpenClaw routes are not publicly reachable.
-3. First billing mode is manual upgrade requests, using the already-built
-   tenant-scoped upgrade request flow. Stripe/subscription billing is deferred.
-   Customers who start in Messenger should receive a low-friction portal
-   handoff link after manual approval/payment; KBO-dependent paid automation is
-   deferred.
+3. Mollie is the only payment provider. Its local Test Mode implementation is
+   present, but live billing remains NO-GO until `docs/LAUNCH_READINESS.md` and
+   every scenario in `docs/MOLLIE_TEST_RESULTS.md` are complete. Manual upgrade
+   requests remain the production fallback until then.
 4. Owner monitoring is good enough for launch when `/admin/cost-dashboard` or
    `/admin/cost-summary` shows spend, quota blocks, provider failures, queue
    health, duplicate skips, and delivery failures without raw identifiers,
@@ -64,7 +64,7 @@ Explicitly defer these unless they become necessary for the launch decision:
 - channel-neutral usage-ledger consolidation
 - image gallery/history
 - generated-video support
-- full premium subscription management
+- live premium subscription activation before the Mollie launch gate passes
 - removing remaining internal style-preset backend compatibility
 
 ### Gate 1: immediate stabilization
@@ -122,7 +122,7 @@ Required before broad customer launch:
 1. [x] Design the `leaderbot.live` tenant/customer portal as a real app, not a brochure site.
 2. [x] Define the tenant model for customer workspace, owned AI identity, channel connections, knowledge, usage, billing, and privacy controls.
 3. [x] Add portal authentication.
-4. [x] Add launch billing and usage controls: free-plan balance, upgrade prompt, tenant-scoped manual upgrade requests, and owner audit metadata. Paid Stripe/subscription billing is deferred.
+4. [x] Add the local Mollie Test Mode billing foundation, while keeping live billing fail-closed behind an explicit launch switch.
 5. [x] Move public legal routes (`/privacy`, `/terms`, `/data-deletion`) into the portal surface before pointing customer traffic there. React portal pages and local footer links exist; production routing verification remains part of the public route audit.
 6. [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health/legal/customer-app surfaces.
 7. [ ] Move remaining feature-specific quota counters toward a single channel-neutral, tenant/workspace-scoped usage ledger before paid rollout. Deferred unless paid rollout starts.
@@ -184,7 +184,7 @@ traffic cannot reach internal gateway admin/API surfaces.
   - [x] Add a tenant-checked portal handoff claim mutation that atomically consumes a pending, unexpired token, grants workspace membership, and audits only privacy-safe metadata.
   - [x] Add an operator-only manual approval endpoint that sends the short-lived, single-use portal link in Messenger when the response window is open and requires an audit actor for every issued link.
   - [x] Allow `/handoff` portal pages through the guarded public gateway and redact `/handoff/:token` from HTTP logs and metrics.
-  - [ ] Wire future payment webhooks to the same handoff sender when Stripe/subscription billing is added.
+  - [ ] Wire paid Mollie webhook completion to the same handoff sender after the billing and tenant-runtime launch gates pass.
   - Storage boundary: `portalHandoffTokens` rows are scoped to one `workspaceId`; the opaque token is never stored, only its hash is persisted, and Messenger identity may be stored only as the privacy-peppered `messengerSenderUserKey`.
   - Deletion boundary: `delete-my-data` must delete handoff rows for the erased Messenger `userKey`, including pending and consumed links.
   - Consumption boundary: only the portal handoff route may consume a pending, unexpired token and convert it into that workspace's onboarding/session flow.
@@ -293,13 +293,18 @@ Quota drift investigation note:
 - [x] Run dedicated Messenger image-generation worker in production with Redis-backed queue enabled
 - [ ] Deferred: evaluate stronger queue/outbox semantics if exactly-once Messenger image sends become mandatory
 
-### Premium tier (ready but inactive)
+### Premium tier (Mollie Test Mode foundation; live NO-GO)
 
-- [ ] Deferred: design premium tier database schema
-- [ ] Deferred: implement payment integration
-- [ ] Deferred: create premium subscription management
-- [ ] Deferred: implement premium quota limits
-- [ ] Deferred: add premium feature flags
+- [x] Add workspace-scoped Mollie billing schema, classic payment webhook, outbox, subscription provisioning, entitlement records, portal controls, and daily reconciliation.
+- [x] Keep live Mollie billing disabled by default and reject key/mode or insecure URL mismatches.
+- [ ] Approve the provisional plan price, interval, quota, grace period, legal copy, accounting treatment, and retention policy.
+- [ ] Run and record all Mollie sandbox cases in `docs/MOLLIE_TEST_RESULTS.md`.
+- [ ] Add real-MySQL concurrency/integrity tests for intents, webhooks, ledger, outbox, and duplicate subscription prevention.
+- [ ] Map inbound channel/Page identity uniquely to a workspace and enforce `workspace_entitlements` in the actual provider quota gate.
+- [ ] Replace the isolated single-workspace billing worker with a durable tenant-partitioned scheduler that never performs cross-tenant reads.
+- [ ] Connect customer payment warnings and operator manual-review incidents to tested notification delivery.
+- [ ] Reconcile Mollie Balances/Settlements in an approved live read-only accounting workflow.
+- [ ] Close every blocker in `docs/LAUNCH_READINESS.md` before enabling a `live_` key.
 
 ### Testing & docs
 

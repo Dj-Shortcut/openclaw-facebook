@@ -340,7 +340,7 @@ Avoid data-retention or observability regressions; ensure redaction and tenant b
 
 - `messengerQuota.ts`
 - billing-related services
-- future Stripe integrations
+- Mollie billing integrations
 
 Quota and budget enforcement must remain intact and test-covered for fallback and failure paths.
 

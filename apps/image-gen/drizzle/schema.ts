@@ -1,4 +1,4 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, json, index, uniqueIndex } from "drizzle-orm/mysql-core";
+import { decimal, int, mysqlEnum, mysqlTable, text, timestamp, varchar, json, index, uniqueIndex } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -368,3 +368,387 @@ export const auditLog = mysqlTable("auditLog", {
 
 export type AuditLog = typeof auditLog.$inferSelect;
 export type InsertAuditLog = typeof auditLog.$inferInsert;
+
+/**
+ * Mollie billing records are deliberately workspace-scoped. Provider IDs and
+ * idempotency keys are backend-only and must never be exposed to model prompts.
+ */
+export const billingCustomers = mysqlTable(
+  "billing_customers",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "restrict" }),
+    mode: mysqlEnum("mode", ["test", "live"]).notNull(),
+    mollieCustomerId: varchar("mollie_customer_id", { length: 64 }),
+    externalReference: varchar("external_reference", { length: 64 }).notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 96 }).notNull(),
+    status: mysqlEnum("status", [
+      "provisioning",
+      "creating_customer",
+      "active",
+      "manual_review",
+    ])
+      .default("provisioning")
+      .notNull(),
+    nextReconciliationAt: timestamp("next_reconciliation_at").defaultNow().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    workspaceModeUnique: uniqueIndex("billing_customers_workspace_mode_unique").on(
+      table.workspaceId,
+      table.mode
+    ),
+    mollieCustomerModeUnique: uniqueIndex(
+      "billing_customers_mollie_customer_mode_unique"
+    ).on(table.mode, table.mollieCustomerId),
+    externalReferenceUnique: uniqueIndex(
+      "billing_customers_external_reference_unique"
+    ).on(table.externalReference),
+    idempotencyUnique: uniqueIndex("billing_customers_idempotency_unique").on(
+      table.idempotencyKey
+    ),
+    reconciliationIdx: index("billing_customers_mode_reconciliation_idx").on(
+      table.mode,
+      table.nextReconciliationAt
+    ),
+  })
+);
+
+export type BillingCustomer = typeof billingCustomers.$inferSelect;
+export type InsertBillingCustomer = typeof billingCustomers.$inferInsert;
+
+export const billingIntents = mysqlTable(
+  "billing_intents",
+  {
+    intentId: varchar("intent_id", { length: 36 }).primaryKey(),
+    workspaceId: int("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "restrict" }),
+    mode: mysqlEnum("mode", ["test", "live"]).notNull(),
+    planCode: varchar("plan_code", { length: 80 }).notNull(),
+    kind: mysqlEnum("kind", ["subscription_start", "payment_method_change"])
+      .default("subscription_start")
+      .notNull(),
+    expectedAmount: decimal("expected_amount", { precision: 10, scale: 2 }).notNull(),
+    currency: varchar("currency", { length: 3 }).notNull(),
+    interval: varchar("interval", { length: 32 }).notNull(),
+    entitlements: json("entitlements").notNull(),
+    mollieDescription: varchar("mollie_description", { length: 255 }).notNull(),
+    status: mysqlEnum("status", [
+      "created",
+      "creating_payment",
+      "open",
+      "paid",
+      "failed",
+      "canceled",
+      "expired",
+      "mismatch",
+      "api_unknown",
+    ])
+      .default("created")
+      .notNull(),
+    molliePaymentId: varchar("mollie_payment_id", { length: 64 }),
+    idempotencyKey: varchar("idempotency_key", { length: 96 }).notNull(),
+    checkoutScopeKey: varchar("checkout_scope_key", { length: 160 }).notNull(),
+    paidAt: timestamp("paid_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    workspaceModeIdx: index("billing_intents_workspace_mode_created_idx").on(
+      table.workspaceId,
+      table.mode,
+      table.createdAt
+    ),
+    molliePaymentModeUnique: uniqueIndex(
+      "billing_intents_mollie_payment_mode_unique"
+    ).on(table.mode, table.molliePaymentId),
+    idempotencyUnique: uniqueIndex("billing_intents_idempotency_unique").on(
+      table.idempotencyKey
+    ),
+    checkoutScopeUnique: uniqueIndex(
+      "billing_intents_checkout_scope_unique"
+    ).on(table.checkoutScopeKey),
+  })
+);
+
+export type BillingIntent = typeof billingIntents.$inferSelect;
+export type InsertBillingIntent = typeof billingIntents.$inferInsert;
+
+export const billingSubscriptions = mysqlTable(
+  "billing_subscriptions",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "restrict" }),
+    mode: mysqlEnum("mode", ["test", "live"]).notNull(),
+    planCode: varchar("plan_code", { length: 80 }).notNull(),
+    mollieCustomerId: varchar("mollie_customer_id", { length: 64 }).notNull(),
+    mollieSubscriptionId: varchar("mollie_subscription_id", { length: 64 }),
+    mollieMandateId: varchar("mollie_mandate_id", { length: 64 }),
+    sourceIntentId: varchar("source_intent_id", { length: 36 }).notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 96 }).notNull(),
+    status: mysqlEnum("status", [
+      "provisioning",
+      "active",
+      "past_due",
+      "canceled",
+      "completed",
+      "suspended",
+      "manual_review",
+    ])
+      .default("provisioning")
+      .notNull(),
+    interval: varchar("interval", { length: 32 }).notNull(),
+    recurringAmount: decimal("recurring_amount", { precision: 10, scale: 2 }).notNull(),
+    currency: varchar("currency", { length: 3 }).notNull(),
+    entitlements: json("entitlements").notNull(),
+    mollieDescription: varchar("mollie_description", { length: 255 }).notNull(),
+    currentPeriodStart: timestamp("current_period_start"),
+    paidThrough: timestamp("paid_through"),
+    nextPaymentDate: timestamp("next_payment_date"),
+    graceUntil: timestamp("grace_until"),
+    cancelAtPeriodEnd: int("cancel_at_period_end").default(0).notNull(),
+    canceledAt: timestamp("canceled_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    workspaceModeUnique: uniqueIndex("billing_subscriptions_workspace_mode_unique").on(
+      table.workspaceId,
+      table.mode
+    ),
+    mollieSubscriptionModeUnique: uniqueIndex(
+      "billing_subscriptions_mollie_subscription_mode_unique"
+    ).on(table.mode, table.mollieSubscriptionId),
+    idempotencyUnique: uniqueIndex(
+      "billing_subscriptions_idempotency_unique"
+    ).on(table.idempotencyKey),
+  })
+);
+
+export type BillingSubscription = typeof billingSubscriptions.$inferSelect;
+export type InsertBillingSubscription = typeof billingSubscriptions.$inferInsert;
+
+export const billingInvoiceSequences = mysqlTable(
+  "billing_invoice_sequences",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    mode: mysqlEnum("mode", ["test", "live"]).notNull(),
+    invoiceYear: int("invoice_year").notNull(),
+    nextNumber: int("next_number").notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    modeYearUnique: uniqueIndex("billing_invoice_sequences_mode_year_unique").on(
+      table.mode,
+      table.invoiceYear
+    ),
+  })
+);
+
+export type BillingInvoiceSequence = typeof billingInvoiceSequences.$inferSelect;
+
+export const paymentLedger = mysqlTable(
+  "payment_ledger",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    molliePaymentId: varchar("mollie_payment_id", { length: 64 }).notNull(),
+    workspaceId: int("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "restrict" }),
+    mode: mysqlEnum("mode", ["test", "live"]).notNull(),
+    grossAmount: decimal("gross_amount", { precision: 10, scale: 2 }).notNull(),
+    currency: varchar("currency", { length: 3 }).notNull(),
+    status: varchar("status", { length: 32 }).notNull(),
+    paymentMethod: varchar("payment_method", { length: 40 }),
+    refunds: json("refunds").notNull(),
+    chargebacks: json("chargebacks").notNull(),
+    observedSnapshotHash: varchar("observed_snapshot_hash", { length: 64 }).notNull(),
+    paidEffectApplied: int("paid_effect_applied").default(0).notNull(),
+    settlementId: varchar("settlement_id", { length: 64 }),
+    settlementAmount: decimal("settlement_amount", { precision: 10, scale: 2 }),
+    mollieFees: decimal("mollie_fees", { precision: 10, scale: 2 }),
+    invoiceNumber: varchar("invoice_number", { length: 40 }),
+    occurredAt: timestamp("occurred_at").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    paymentModeUnique: uniqueIndex("payment_ledger_payment_mode_unique").on(
+      table.mode,
+      table.molliePaymentId
+    ),
+    invoiceUnique: uniqueIndex("payment_ledger_invoice_unique").on(
+      table.invoiceNumber
+    ),
+    workspaceModeOccurredIdx: index("payment_ledger_workspace_mode_occurred_idx").on(
+      table.workspaceId,
+      table.mode,
+      table.occurredAt
+    ),
+  })
+);
+
+export type PaymentLedgerEntry = typeof paymentLedger.$inferSelect;
+export type InsertPaymentLedgerEntry = typeof paymentLedger.$inferInsert;
+
+export const webhookDeliveries = mysqlTable(
+  "webhook_deliveries",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "restrict" }),
+    mode: mysqlEnum("mode", ["test", "live"]).notNull(),
+    mollieResourceId: varchar("mollie_resource_id", { length: 64 }).notNull(),
+    snapshotHash: varchar("snapshot_hash", { length: 64 }).notNull(),
+    receivedAt: timestamp("received_at").defaultNow().notNull(),
+    processedAt: timestamp("processed_at"),
+    processingResult: varchar("processing_result", { length: 80 }).notNull(),
+  },
+  table => ({
+    resourceSnapshotModeUnique: uniqueIndex(
+      "webhook_deliveries_resource_snapshot_mode_unique"
+    ).on(
+      table.workspaceId,
+      table.mode,
+      table.mollieResourceId,
+      table.snapshotHash
+    ),
+  })
+);
+
+export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
+export type InsertWebhookDelivery = typeof webhookDeliveries.$inferInsert;
+
+export const workspaceEntitlements = mysqlTable(
+  "workspace_entitlements",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "restrict" }),
+    mode: mysqlEnum("mode", ["test", "live"]).notNull(),
+    planCode: varchar("plan_code", { length: 80 }).notNull(),
+    status: mysqlEnum("status", [
+      "inactive",
+      "active",
+      "grace",
+      "blocked",
+      "manual_review",
+    ])
+      .default("inactive")
+      .notNull(),
+    quota: json("quota").notNull(),
+    validUntil: timestamp("valid_until"),
+    sourceSubscriptionId: varchar("source_subscription_id", { length: 64 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    workspaceModeUnique: uniqueIndex("workspace_entitlements_workspace_mode_unique").on(
+      table.workspaceId,
+      table.mode
+    ),
+  })
+);
+
+export type WorkspaceEntitlement = typeof workspaceEntitlements.$inferSelect;
+export type InsertWorkspaceEntitlement = typeof workspaceEntitlements.$inferInsert;
+
+/** Reliable post-commit work for mandate checks, subscription creation and alerts. */
+export const billingOutbox = mysqlTable(
+  "billing_outbox",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "restrict" }),
+    mode: mysqlEnum("mode", ["test", "live"]).notNull(),
+    eventType: mysqlEnum("event_type", [
+      "ensure_subscription",
+      "cancel_subscription",
+      "payment_warning",
+      "manual_review",
+    ]).notNull(),
+    deduplicationKey: varchar("deduplication_key", { length: 160 }).notNull(),
+    payload: json("payload").notNull(),
+    status: mysqlEnum("status", ["pending", "processing", "completed", "failed"])
+      .default("pending")
+      .notNull(),
+    attemptCount: int("attempt_count").default(0).notNull(),
+    maxAttempts: int("max_attempts").default(12).notNull(),
+    availableAt: timestamp("available_at").defaultNow().notNull(),
+    lockedAt: timestamp("locked_at"),
+    leaseToken: varchar("lease_token", { length: 36 }),
+    lastErrorCode: varchar("last_error_code", { length: 80 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => ({
+    modeDeduplicationUnique: uniqueIndex(
+      "billing_outbox_mode_deduplication_unique"
+    ).on(table.mode, table.deduplicationKey),
+    modeStatusAvailableIdx: index("billing_outbox_mode_status_available_idx").on(
+      table.mode,
+      table.status,
+      table.availableAt
+    ),
+  })
+);
+
+export type BillingOutboxItem = typeof billingOutbox.$inferSelect;
+export type InsertBillingOutboxItem = typeof billingOutbox.$inferInsert;
+
+export const billingReconciliationRuns = mysqlTable(
+  "billing_reconciliation_runs",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    workspaceId: int("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "restrict" }),
+    mode: mysqlEnum("mode", ["test", "live"]).notNull(),
+    periodKey: varchar("period_key", { length: 10 }).notNull(),
+    status: mysqlEnum("status", ["running", "completed", "failed"])
+      .default("running")
+      .notNull(),
+    leaseToken: varchar("lease_token", { length: 36 }),
+    leaseUntil: timestamp("lease_until").notNull(),
+    summary: json("summary"),
+    startedAt: timestamp("started_at").defaultNow().notNull(),
+    completedAt: timestamp("completed_at"),
+  },
+  table => ({
+    workspaceModePeriodUnique: uniqueIndex(
+      "billing_reconciliation_runs_workspace_mode_period_unique"
+    ).on(
+      table.workspaceId,
+      table.mode,
+      table.periodKey
+    ),
+  })
+);
+
+export const billingReconciliationAnomalies = mysqlTable(
+  "billing_reconciliation_anomalies",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    runId: int("run_id").notNull(),
+    workspaceId: int("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "restrict" }),
+    code: varchar("code", { length: 80 }).notNull(),
+    metadata: json("metadata"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  table => ({
+    runWorkspaceCodeUnique: uniqueIndex(
+      "billing_reconciliation_anomalies_run_workspace_code_unique"
+    ).on(table.runId, table.workspaceId, table.code),
+  })
+);
