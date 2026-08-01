@@ -61,7 +61,7 @@ export async function setupVite(
   });
 
   app.use(vite.middlewares);
-  app.use("*", (req, res, next) => {
+  app.use((req, res, next) => {
     const url = req.originalUrl;
 
     void (async () => {
@@ -117,7 +117,7 @@ export function serveStatic(app: Express, staticRoot?: string) {
   app.use(express.static(distPath));
 
   // fall through to index.html if the file doesn't exist
-  app.use("*", (_req, res) => {
+  app.use((_req, res) => {
     res.sendFile(path.resolve(distPath, "index.html"));
   });
 }
