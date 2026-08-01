@@ -14,6 +14,7 @@ import { applyMolliePaymentSnapshot } from "./paymentStore";
 const WEBHOOK_BODY_LIMIT = "2kb";
 const PAYMENT_ID_PATTERN = /^tr_[A-Za-z0-9]{1,60}$/;
 const DEFAULT_WEBHOOK_RATE_LIMIT_PER_MINUTE = 6_000;
+const WEBHOOK_REDIS_OPERATION_TIMEOUT_MS = 2_000;
 
 export function registerMollieWebhookRoute(
   app: Express,
@@ -30,6 +31,7 @@ export function registerMollieWebhookRoute(
   const webhookRateLimiter = createSharedRedisRateLimiter({
     keyPrefix: "mollie-webhook-rate-limit:",
     windowMs: 60_000,
+    operationTimeoutMs: WEBHOOK_REDIS_OPERATION_TIMEOUT_MS,
     limit: getWebhookRateLimitPerMinute,
     keyGenerator: getMollieWebhookRateLimitKey,
     onLimited: (_req, res, retryAfterSeconds) => {

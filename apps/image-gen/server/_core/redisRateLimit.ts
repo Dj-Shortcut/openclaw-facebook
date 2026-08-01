@@ -13,6 +13,7 @@ return count
 type SharedRedisRateLimitOptions = Readonly<{
   keyPrefix: string;
   windowMs: number;
+  operationTimeoutMs: number;
   limit: () => number;
   keyGenerator: (req: express.Request) => string;
   onLimited: (
@@ -48,7 +49,13 @@ async function applySharedRedisRateLimit(
 
     const now = Date.now();
     const limit = options.limit();
-    if (!Number.isSafeInteger(limit) || limit <= 0 || options.windowMs <= 0) {
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit <= 0 ||
+      options.windowMs <= 0 ||
+      !Number.isSafeInteger(options.operationTimeoutMs) ||
+      options.operationTimeoutMs <= 0
+    ) {
       throw new Error("shared rate limiter configuration is invalid");
     }
 
@@ -60,10 +67,16 @@ async function applySharedRedisRateLimit(
       .update(options.keyGenerator(req))
       .digest("hex");
     const redisKey = `${options.keyPrefix}${sourceHash}:${windowBucket}`;
-    const redis = await getRedisClient();
+    const redis = await withOperationTimeout(
+      getRedisClient(),
+      options.operationTimeoutMs
+    );
     const ttlSeconds = Math.max(1, Math.ceil((resetAt - now) / 1_000));
     const count = Number(
-      await redis.eval(INCREMENT_WITH_EXPIRY_SCRIPT, 1, redisKey, ttlSeconds)
+      await withOperationTimeout(
+        redis.eval(INCREMENT_WITH_EXPIRY_SCRIPT, 1, redisKey, ttlSeconds),
+        options.operationTimeoutMs
+      )
     );
     if (!Number.isSafeInteger(count) || count <= 0) {
       throw new Error("shared rate limiter returned an invalid count");
@@ -85,5 +98,24 @@ async function applySharedRedisRateLimit(
     next();
   } catch (error) {
     options.onUnavailable(error, req, res);
+  }
+}
+
+async function withOperationTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error("shared rate limiter Redis operation timed out"));
+    }, timeoutMs);
+    timeout.unref();
+  });
+
+  try {
+    return await Promise.race([operation, timeoutPromise]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
