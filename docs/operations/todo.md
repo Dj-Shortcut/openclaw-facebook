@@ -198,9 +198,12 @@ traffic cannot reach internal gateway admin/API surfaces.
   - Public production surface must expose only the customer portal, legal pages, health/readiness/metrics as intended, and required webhook routes; internal gateway/admin APIs must remain shielded.
 - [x] Verify GDPR deletion end-to-end before broad customer launch. Operator-verified on 2026-06-30.
 - [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health/legal/customer-app surfaces
-  - 2026-07-09 local route/config audit: the Fly public route guard still
-    exposes only `/facebook/webhook`, `/messenger/webhook`, and `/healthz` to
-    the OpenClaw gateway by default. When `LEADERBOT_PORTAL_ORIGIN` is
+  - 2026-08-01 pre-deploy route audit: the Fly public route guard now exposes
+    only `/facebook/webhook` and `/healthz` to the OpenClaw gateway by default.
+    The unregistered legacy `/messenger/webhook` route was removed from the
+    default allowlist after production returned the internal UI fallback there;
+    an actual legacy deployment must explicitly opt in with
+    `OPENCLAW_PUBLIC_GATEWAY_PATHS`. When `LEADERBOT_PORTAL_ORIGIN` is
     configured, customer portal proxying is constrained to portal/legal pages,
     handoff pages, static assets, exact OAuth/Facebook/portal REST endpoints,
     and exact `/api/trpc` or `/api/trpc/...` paths. Near-miss API paths and

@@ -285,6 +285,9 @@ describe("Fly gateway startup", () => {
 
     const publicPort = guard.address().port;
     const webhookResponse = await fetch(`http://127.0.0.1:${publicPort}/facebook/webhook?hub.challenge=ok`);
+    const legacyWebhookResponse = await fetch(
+      `http://127.0.0.1:${publicPort}/messenger/webhook?hub.challenge=ok`,
+    );
     const blockedResponse = await fetch(`http://127.0.0.1:${publicPort}/`);
 
     expect(webhookResponse.status).toBe(200);
@@ -292,9 +295,51 @@ describe("Fly gateway startup", () => {
       ok: true,
       path: "/facebook/webhook?hub.challenge=ok",
     });
+    expect(legacyWebhookResponse.status).toBe(404);
+    expect(await legacyWebhookResponse.text()).toBe("Not found");
     expect(blockedResponse.status).toBe(404);
     expect(await blockedResponse.text()).toBe("Not found");
     expect(seenPaths).toEqual(["/facebook/webhook?hub.challenge=ok"]);
+
+    await closeServer(guard);
+    await closeServer(target);
+  }, 15000);
+
+  it("requires an explicit route override for a configured legacy webhook path", async () => {
+    const seenPaths = [];
+    const target = http.createServer((req, res) => {
+      seenPaths.push(req.url);
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ ok: true, path: req.url }));
+    });
+    target.listen(0, "127.0.0.1");
+    await waitForListening(target);
+
+    const guard = startPublicRouteGuard({
+      publicPort: 0,
+      targetPort: target.address().port,
+      env: {
+        OPENCLAW_PUBLIC_GATEWAY_PATHS: "/messenger/webhook,/healthz",
+      },
+    });
+    await waitForListening(guard);
+
+    const publicPort = guard.address().port;
+    const legacyWebhookResponse = await fetch(
+      `http://127.0.0.1:${publicPort}/messenger/webhook?hub.challenge=ok`,
+    );
+    const defaultWebhookResponse = await fetch(
+      `http://127.0.0.1:${publicPort}/facebook/webhook?hub.challenge=ok`,
+    );
+
+    expect(legacyWebhookResponse.status).toBe(200);
+    expect(await legacyWebhookResponse.json()).toEqual({
+      ok: true,
+      path: "/messenger/webhook?hub.challenge=ok",
+    });
+    expect(defaultWebhookResponse.status).toBe(404);
+    expect(await defaultWebhookResponse.text()).toBe("Not found");
+    expect(seenPaths).toEqual(["/messenger/webhook?hub.challenge=ok"]);
 
     await closeServer(guard);
     await closeServer(target);
