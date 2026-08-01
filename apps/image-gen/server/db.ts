@@ -1288,6 +1288,8 @@ export async function upsertChannelConnection(values: InsertChannelConnection) {
         canRetry &&
         (isRetryableDatabaseLockError(error) || isDuplicateKeyError(error))
       ) {
+        const retryDelayMs = 10 * attempt + Math.floor(Math.random() * 15);
+        await new Promise<void>(resolve => setTimeout(resolve, retryDelayMs));
         continue;
       }
       if (isDuplicateKeyError(error)) {

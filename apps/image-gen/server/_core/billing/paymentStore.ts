@@ -718,6 +718,9 @@ async function applyStartpilotPaymentStatus(
       // The scoped update below decides whether this is a retry or a new sale.
       set: { planCode: sql`plan_code` },
     });
+  // Keep planCode in the scope even though entitlementId is unique. A row for
+  // another product must fail closed instead of silently donating or resetting
+  // its quota history; future product migrations need an explicit audited path.
   const usageRows = await tx
     .select()
     .from(workspaceEntitlementUsage)

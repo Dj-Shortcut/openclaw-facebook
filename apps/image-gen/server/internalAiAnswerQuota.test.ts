@@ -58,6 +58,18 @@ afterEach(() => {
   else process.env.DATABASE_URL = originalDatabaseUrl;
 });
 
+function mockStoredReservationScope(
+  scope = { workspaceId: 41, entitlementId: 73, mode: "live" as const }
+) {
+  const limitMock = vi.fn().mockResolvedValue([scope]);
+  const whereMock = vi.fn(() => ({ limit: limitMock }));
+  const innerJoinMock = vi.fn(() => ({ where: whereMock }));
+  const fromMock = vi.fn(() => ({ innerJoin: innerJoinMock }));
+  const selectMock = vi.fn(() => ({ from: fromMock }));
+  getDatabaseOrThrowMock.mockResolvedValue({ select: selectMock });
+  return scope;
+}
+
 describe("internal Startpilot AI-answer quota service", () => {
   it("leaves a Page without an active paid entitlement unaffected", async () => {
     resolveWorkspaceRuntimePolicyMock.mockResolvedValue({ kind: "free" });
@@ -88,16 +100,7 @@ describe("internal Startpilot AI-answer quota service", () => {
 
   it("finalizes against the stored reservation scope after enforcement changes", async () => {
     isMollieEntitlementEnforcementEnabledMock.mockReturnValue(false);
-    const limitMock = vi
-      .fn()
-      .mockResolvedValue([
-        { workspaceId: 41, entitlementId: 73, mode: "live" },
-      ]);
-    const whereMock = vi.fn(() => ({ limit: limitMock }));
-    const innerJoinMock = vi.fn(() => ({ where: whereMock }));
-    const fromMock = vi.fn(() => ({ innerJoin: innerJoinMock }));
-    const selectMock = vi.fn(() => ({ from: fromMock }));
-    getDatabaseOrThrowMock.mockResolvedValue({ select: selectMock });
+    const scope = mockStoredReservationScope();
 
     await expect(
       finalizeInternalAiAnswerQuota({
@@ -109,11 +112,61 @@ describe("internal Startpilot AI-answer quota service", () => {
 
     expect(resolveWorkspaceRuntimePolicyMock).not.toHaveBeenCalled();
     expect(commitStartpilotAiAnswerUsageMock).toHaveBeenCalledWith({
-      workspaceId: 41,
-      entitlementId: 73,
-      mode: "live",
+      ...scope,
       reservationId: "16be1d70-9ed5-4b32-80cc-98be433581dc",
     });
+  });
+
+  it("releases against the stored reservation scope", async () => {
+    const scope = mockStoredReservationScope();
+
+    await expect(
+      finalizeInternalAiAnswerQuota({
+        pageId: "page-1",
+        reservationId: "16be1d70-9ed5-4b32-80cc-98be433581dc",
+        outcome: "released",
+      })
+    ).resolves.toEqual({ status: "finalized" });
+
+    expect(releaseStartpilotAiAnswerUsageMock).toHaveBeenCalledWith({
+      ...scope,
+      reservationId: "16be1d70-9ed5-4b32-80cc-98be433581dc",
+    });
+    expect(commitStartpilotAiAnswerUsageMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a commit that the store did not finalize", async () => {
+    mockStoredReservationScope();
+    commitStartpilotAiAnswerUsageMock.mockResolvedValue({ committed: false });
+
+    await expect(
+      finalizeInternalAiAnswerQuota({
+        pageId: "page-1",
+        reservationId: "16be1d70-9ed5-4b32-80cc-98be433581dc",
+        outcome: "committed",
+      })
+    ).rejects.toMatchObject({
+      code: "reservation_not_finalized",
+      message: "AI answer quota is unavailable",
+    });
+    expect(releaseStartpilotAiAnswerUsageMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a release that the store did not finalize", async () => {
+    mockStoredReservationScope();
+    releaseStartpilotAiAnswerUsageMock.mockResolvedValue({ released: false });
+
+    await expect(
+      finalizeInternalAiAnswerQuota({
+        pageId: "page-1",
+        reservationId: "16be1d70-9ed5-4b32-80cc-98be433581dc",
+        outcome: "released",
+      })
+    ).rejects.toMatchObject({
+      code: "reservation_not_finalized",
+      message: "AI answer quota is unavailable",
+    });
+    expect(commitStartpilotAiAnswerUsageMock).not.toHaveBeenCalled();
   });
 
   it("does not finalize a reservation outside the requested Page scope", async () => {

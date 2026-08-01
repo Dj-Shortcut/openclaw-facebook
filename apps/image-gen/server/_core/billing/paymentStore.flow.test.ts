@@ -99,6 +99,7 @@ describe("payment snapshot persistence flow", () => {
       table: workspaceEntitlementUsage,
       values: expect.objectContaining({
         sourceIntentId: INTENT_ID,
+        planCode: "startpilot_once_v1",
         aiAnswersCommitted: 0,
         aiAnswersReserved: 0,
         imagesUsed: 0,
@@ -108,6 +109,21 @@ describe("payment snapshot persistence flow", () => {
     expect(
       flow.operations.indexOf("update:workspaceEntitlementUsageReservations")
     ).toBeLessThan(flow.operations.indexOf("update:workspaceEntitlementUsage"));
+    const usageScopes = flow.whereClauses.filter(
+      entry => entry.table === workspaceEntitlementUsage
+    );
+    expect(usageScopes).toHaveLength(2);
+    for (const scope of usageScopes) {
+      const columns = referencedSqlColumns(scope.predicate);
+      expect(columns).toEqual(
+        expect.arrayContaining([
+          "workspace_id",
+          "mode",
+          "entitlement_id",
+          "plan_code",
+        ])
+      );
+    }
   });
 
   it("preserves Startpilot usage and reservations for a provider retry", async () => {
@@ -440,6 +456,7 @@ function paymentFlow(
     table: unknown;
     values: Record<string, unknown>;
   }> = [];
+  const whereClauses: Array<{ table: unknown; predicate: unknown }> = [];
   const operations: string[] = [];
   const intent = options.intent ?? billingIntent();
   const customer = billingCustomer();
@@ -503,8 +520,9 @@ function paymentFlow(
   const tx = {
     select: vi.fn(() => ({
       from: vi.fn((table: unknown) => ({
-        where: vi.fn(() => ({
+        where: vi.fn((predicate: unknown) => ({
           limit: vi.fn(() => {
+            whereClauses.push({ table, predicate });
             const rows = rowsFor(table);
             if (
               table === billingIntents ||
@@ -544,7 +562,11 @@ function paymentFlow(
         const values = rawValues as Record<string, unknown>;
         updates.push({ table, values });
         operations.push(`update:${tableName(table)}`);
-        return { where: vi.fn().mockResolvedValue(undefined) };
+        return {
+          where: vi.fn(async (predicate: unknown) => {
+            whereClauses.push({ table, predicate });
+          }),
+        };
       }),
     })),
   };
@@ -555,7 +577,21 @@ function paymentFlow(
     ),
   };
 
-  return { database, inserts, operations, updates };
+  return { database, inserts, operations, updates, whereClauses };
+}
+
+function referencedSqlColumns(value: unknown): string[] {
+  if (!value || typeof value !== "object") return [];
+  const record = value as {
+    name?: unknown;
+    table?: unknown;
+    queryChunks?: unknown;
+  };
+  if (typeof record.name === "string" && record.table) {
+    return [record.name];
+  }
+  if (!Array.isArray(record.queryChunks)) return [];
+  return record.queryChunks.flatMap(referencedSqlColumns);
 }
 
 function billingIntent(): BillingIntent {

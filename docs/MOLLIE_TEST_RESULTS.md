@@ -14,7 +14,7 @@ passed without a dated artifact that contains no secret or customer data.
 - Exact public gateway route suite: PASS, 1 file / 16 tests.
 - Image-gen ESLint: PASS.
 - Image-gen production build and root TypeScript build: PASS.
-- Offline `drizzle-kit check`: PASS with the cumulative `0009` snapshot (a
+- Offline `drizzle-kit check`: PASS with the cumulative `0010` snapshot (a
   local dummy connection string was supplied because the config requires URL
   syntax; no database connection or migration was performed).
 - Fresh MySQL 8.4 migration through the current guarded cumulative migration
