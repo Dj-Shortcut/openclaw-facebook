@@ -690,17 +690,11 @@ export const workspaceEntitlementUsage = mysqlTable(
   "workspace_entitlement_usage",
   {
     id: int("id").autoincrement().primaryKey(),
-    workspaceId: int("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "restrict" }),
+    workspaceId: int("workspace_id").notNull(),
     mode: mysqlEnum("mode", ["test", "live"]).notNull(),
-    entitlementId: int("entitlement_id")
-      .notNull()
-      .references(() => workspaceEntitlements.id, { onDelete: "restrict" }),
+    entitlementId: int("entitlement_id").notNull(),
     planCode: varchar("plan_code", { length: 80 }).notNull(),
-    sourceIntentId: varchar("source_intent_id", { length: 36 })
-      .notNull()
-      .references(() => billingIntents.intentId, { onDelete: "restrict" }),
+    sourceIntentId: varchar("source_intent_id", { length: 36 }).notNull(),
     periodStartedAt: timestamp("period_started_at").notNull(),
     periodEndsAt: timestamp("period_ends_at").notNull(),
     aiAnswersCommitted: int("ai_answers_committed").default(0).notNull(),
@@ -712,6 +706,21 @@ export const workspaceEntitlementUsage = mysqlTable(
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
   table => [
+    foreignKey({
+      name: "weu_workspace_fk",
+      columns: [table.workspaceId],
+      foreignColumns: [workspaces.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "weu_entitlement_fk",
+      columns: [table.entitlementId],
+      foreignColumns: [workspaceEntitlements.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "weu_source_intent_fk",
+      columns: [table.sourceIntentId],
+      foreignColumns: [billingIntents.intentId],
+    }).onDelete("restrict"),
     uniqueIndex("workspace_entitlement_usage_workspace_mode_plan_unique").on(
       table.workspaceId,
       table.mode,
@@ -733,13 +742,9 @@ export const workspaceEntitlementUsageReservations = mysqlTable(
   "workspace_entitlement_usage_reservations",
   {
     reservationId: varchar("reservation_id", { length: 36 }).primaryKey(),
-    workspaceId: int("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "restrict" }),
+    workspaceId: int("workspace_id").notNull(),
     mode: mysqlEnum("mode", ["test", "live"]).notNull(),
-    entitlementId: int("entitlement_id")
-      .notNull()
-      .references(() => workspaceEntitlements.id, { onDelete: "restrict" }),
+    entitlementId: int("entitlement_id").notNull(),
     kind: mysqlEnum("kind", ["ai_answer", "image"]).notNull(),
     status: mysqlEnum("status", [
       "reserved",
@@ -757,6 +762,16 @@ export const workspaceEntitlementUsageReservations = mysqlTable(
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
   table => [
+    foreignKey({
+      name: "weur_workspace_fk",
+      columns: [table.workspaceId],
+      foreignColumns: [workspaces.id],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "weur_entitlement_fk",
+      columns: [table.entitlementId],
+      foreignColumns: [workspaceEntitlements.id],
+    }).onDelete("restrict"),
     uniqueIndex("workspace_entitlement_reservations_idempotency_unique").on(
       table.workspaceId,
       table.mode,
