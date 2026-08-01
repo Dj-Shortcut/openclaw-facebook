@@ -3,17 +3,20 @@ import http from "node:http";
 import https from "node:https";
 
 const DEFAULT_ALLOWED_PATHS = "/facebook/webhook,/messenger/webhook,/healthz";
-const PORTAL_PAGE_PATHS = new Set(["/", "/privacy", "/terms", "/data-deletion", "/handoff"]);
+const PORTAL_PAGE_PATHS = new Set(["/", "/privacy", "/terms", "/billing-policy", "/data-deletion", "/handoff"]);
 const PORTAL_PAGE_PREFIXES = ["/handoff/"];
 const PORTAL_ASSET_PREFIXES = ["/assets/"];
 const PORTAL_GET_PATHS = new Set([
   "/api/facebook/connect/callback",
   "/api/oauth/callback",
+  "/api/portal/billing/export.csv",
   "/api/portal/snapshot",
 ]);
+const PORTAL_GET_PREFIXES = ["/api/portal/billing/receipts/"];
 const PORTAL_POST_PATHS = new Set([
   "/api/portal/ai-identity",
   "/api/portal/facebook/start",
+  "/api/webhooks/mollie/payments",
 ]);
 const ADMIN_COOKIE_NAME = "openclaw_admin";
 const ADMIN_LOGIN_PATH = "/admin/login";
@@ -224,6 +227,7 @@ function isAllowedPortalReadPath(pathname) {
     PORTAL_PAGE_PATHS.has(pathname) ||
     PORTAL_PAGE_PREFIXES.some((prefix) => pathname.startsWith(prefix)) ||
     PORTAL_ASSET_PREFIXES.some((prefix) => pathname.startsWith(prefix)) ||
+    PORTAL_GET_PREFIXES.some((prefix) => pathname.startsWith(prefix)) ||
     PORTAL_GET_PATHS.has(pathname) ||
     isTrpcPath(pathname)
   );

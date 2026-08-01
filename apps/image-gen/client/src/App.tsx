@@ -18,6 +18,9 @@ const PrivacyPage = lazy(() =>
 const TermsPage = lazy(() =>
   import("./pages/Legal").then(module => ({ default: module.TermsPage }))
 );
+const BillingPolicyPage = lazy(() =>
+  import("./pages/Legal").then(module => ({ default: module.BillingPolicyPage }))
+);
 
 function RouteFallback() {
   return <div className="min-h-full bg-[#f6f2ea]" />;
@@ -29,6 +32,7 @@ function Router() {
       <Switch>
         <Route path={"/privacy"} component={PrivacyPage} />
         <Route path={"/terms"} component={TermsPage} />
+        <Route path={"/billing-policy"} component={BillingPolicyPage} />
         <Route path={"/data-deletion"} component={DataDeletionPage} />
         <Route path={"/handoff/:token"} component={PortalHandoff} />
         <Route path={"/handoff"} component={PortalHandoff} />

@@ -322,7 +322,7 @@ pnpm lint:server
 Database migration helpers:
 
 ```bash
-pnpm db:push
+pnpm db:migrate
 ```
 
 The repository includes focused unit tests for webhook handling, state transitions, signature verification, and image generation behavior under OpenAI configuration.
@@ -422,7 +422,7 @@ Use this order for `leaderbot-fb-image-gen`:
 3. Run migrations from a trusted operator shell with the same `DATABASE_URL`:
 
    ```bash
-   DATABASE_URL='mysql://<user>:<password>@<host>:<port>/<database>' pnpm db:push
+   DATABASE_URL='mysql://<user>:<password>@<host>:<port>/<database>' pnpm db:migrate
    ```
 
 4. Deploy image-gen only after the migration succeeds:

@@ -67,6 +67,15 @@ import {
 import { registerHealthRoutes } from "./runtime/healthRoutes";
 import { registerLegalRoutes } from "./runtime/legalRoutes";
 import { registerWebhookRuntime } from "./runtime/webhookRuntime";
+import {
+  assertMollieConfig,
+  assertTenantBillingWorkerConfigured,
+  isMollieBillingEnabled,
+} from "./billing/config";
+import { registerMollieWebhookRoute } from "./billing/webhookRoutes";
+import { registerBillingPortalRoutes } from "./billing/portalRoutes";
+import { startBillingOutboxWorker } from "./billing/outboxWorker";
+import { startDailyBillingReconciliation } from "./billing/reconciliation";
 
 const gitSha = process.env.GIT_SHA ?? process.env.SOURCE_VERSION ?? "dev";
 const bootTimestamp = new Date().toISOString();
@@ -169,6 +178,13 @@ async function startServer() {
   assertProductionImageStorageConfig();
   assertAuthConfig();
   assertWhatsAppConfig();
+  const mollieBillingEnabled = isMollieBillingEnabled();
+  if (mollieBillingEnabled) {
+    assertMollieConfig();
+    assertTenantBillingWorkerConfigured();
+  } else {
+    safeLog("mollie_billing_disabled");
+  }
   assertPrivacyConfig();
   assertProductionStateStoreConfig();
   assertProductionWebhookReplayProtectionConfig();
@@ -201,6 +217,12 @@ async function startServer() {
 
   registerSentryDebugRoute(app);
 
+  // The classic Mollie route owns a strict 2 KB form parser and must be
+  // registered before the global 10 MB parsers used by Messenger/media APIs.
+  if (mollieBillingEnabled) {
+    registerMollieWebhookRoute(app);
+  }
+
   app.use(
     express.json({
       limit: REQUEST_BODY_LIMIT,
@@ -217,12 +239,19 @@ async function startServer() {
   registerMetricsRoute(app);
   registerFaceMemoryAdminRoutes(app);
   registerPortalRoutes(app);
+  if (mollieBillingEnabled) {
+    registerBillingPortalRoutes(app);
+  }
 
   registerDebugRoutes(app, gitSha);
 
   registerLegalRoutes(app);
 
   scheduleFaceMemoryExpiry();
+  if (mollieBillingEnabled) {
+    startBillingOutboxWorker();
+    startDailyBillingReconciliation();
+  }
 
   const oauthServerUrl = process.env.OAUTH_SERVER_URL;
   if (oauthServerUrl) {

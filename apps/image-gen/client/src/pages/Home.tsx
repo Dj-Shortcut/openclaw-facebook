@@ -6,7 +6,7 @@ import {
   writeActiveWorkspaceId,
 } from "@/_core/portalWorkspace";
 import { Button } from "@/components/ui/button";
-import { getLoginUrl, isLoginConfigured } from "@/const";
+import { isLoginConfigured } from "@/const";
 import { trpc } from "@/lib/trpc";
 import {
   Bot,
@@ -17,7 +17,6 @@ import {
   FileDown,
   FileText,
   Info,
-  LogIn,
   MessageCircle,
   Pencil,
   Plus,
@@ -27,7 +26,8 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import LandingPage from "./LandingPage";
 import {
   DEFAULT_LOCALE,
   SUPPORTED_LOCALES,
@@ -39,6 +39,24 @@ import {
 
 const FACEBOOK_CONNECT_STATE_KEY = "leaderbot.facebookConnectState";
 const LOCALE_STORAGE_KEY = "leaderbot.portal.locale";
+const BILLING_RETURN_FAILURE_STATUSES = new Set<string>([
+  "failed",
+  "canceled",
+  "expired",
+  "mismatch",
+]);
+const BILLING_RETURN_TERMINAL_STATUSES = new Set<string>([
+  "paid",
+  ...BILLING_RETURN_FAILURE_STATUSES,
+]);
+
+function isBillingReturnFailureStatus(value: string | undefined) {
+  return value ? BILLING_RETURN_FAILURE_STATUSES.has(value) : false;
+}
+
+function isTerminalBillingReturnStatus(value: string | undefined) {
+  return value ? BILLING_RETURN_TERMINAL_STATUSES.has(value) : false;
+}
 
 type FacebookConnectPage = {
   id: string;
@@ -79,7 +97,9 @@ function getInitialLocale(): AppLocale {
 }
 
 function statusLabel(value: string, copy: PortalCopy) {
-  return copy.status[value as keyof PortalCopy["status"]] ?? value.replace(/_/g, " ");
+  return (
+    copy.status[value as keyof PortalCopy["status"]] ?? value.replace(/_/g, " ")
+  );
 }
 
 function sourceTypeLabel(value: string, copy: PortalCopy) {
@@ -89,7 +109,10 @@ function sourceTypeLabel(value: string, copy: PortalCopy) {
   return value.replace(/_/g, " ");
 }
 
-function upgradeReasonLabel(value: string | null | undefined, copy: PortalCopy) {
+function upgradeReasonLabel(
+  value: string | null | undefined,
+  copy: PortalCopy
+) {
   if (!value) return copy.usage.customerRequested;
   return (
     copy.upgradeReasons[value as keyof PortalCopy["upgradeReasons"]] ??
@@ -157,13 +180,21 @@ function LocaleSwitcher({
 
 function StatusPill({ copy, value }: { copy: PortalCopy; value: string }) {
   const toneClass =
-    value === "connected" || value === "completed"
+    value === "connected" ||
+    value === "completed" ||
+    value === "active" ||
+    value === "paid"
       ? "bg-emerald-100 text-emerald-800"
-      : value === "rejected"
+      : value === "rejected" ||
+          value === "failed" ||
+          value === "expired" ||
+          value === "past_due"
         ? "bg-red-100 text-red-800"
-        : value === "processing"
+        : value === "processing" || value === "provisioning"
           ? "bg-sky-100 text-sky-800"
-          : "bg-amber-100 text-amber-800";
+          : value === "canceled" || value === "suspended"
+            ? "bg-stone-200 text-stone-700"
+            : "bg-amber-100 text-amber-800";
   return (
     <span
       className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${toneClass}`}
@@ -186,7 +217,9 @@ function MetricTile({
     <div className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
       <div className="text-sm text-stone-600">{label}</div>
       <div className="mt-2 text-2xl font-semibold text-stone-950">{value}</div>
-      {detail ? <div className="mt-2 text-xs text-stone-500">{detail}</div> : null}
+      {detail ? (
+        <div className="mt-2 text-xs text-stone-500">{detail}</div>
+      ) : null}
     </div>
   );
 }
@@ -202,6 +235,27 @@ function formatDate(
   return new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(date);
 }
 
+function formatBillingAmount(
+  amount: string,
+  currency: string,
+  locale: AppLocale
+) {
+  const numericAmount = Number(amount);
+  if (!Number.isFinite(numericAmount)) return `${currency} ${amount}`;
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: "currency",
+      currency,
+    }).format(numericAmount);
+  } catch {
+    return `${currency} ${amount}`;
+  }
+}
+
+function formatBillingInterval(value: string, copy: PortalCopy) {
+  return value === "1 month" ? copy.billing.monthly : value;
+}
+
 function addDays(value: string | Date, days: number) {
   const date = new Date(value);
   date.setDate(date.getDate() + days);
@@ -214,225 +268,20 @@ function isOpenPrivacyRequest(status: string) {
 
 function hasHandoffOnboardingFlag() {
   if (typeof window === "undefined") return false;
-  return new URLSearchParams(window.location.search).get("onboarding") === "handoff";
+  return (
+    new URLSearchParams(window.location.search).get("onboarding") === "handoff"
+  );
 }
 
-type PublicPreviewView =
-  | "dashboard"
-  | "identity"
-  | "channels"
-  | "knowledge"
-  | "usage"
-  | "privacy";
-
-const publicPreviewItems: Array<{
-  view: PublicPreviewView;
-  icon: typeof ShieldCheck;
-  label: (copy: PortalCopy) => string;
-}> = [
-  { view: "dashboard", icon: ShieldCheck, label: copy => copy.guidance.title },
-  { view: "identity", icon: Bot, label: copy => copy.identity.fallbackName },
-  { view: "channels", icon: MessageCircle, label: copy => copy.messenger.title },
-  { view: "knowledge", icon: Database, label: copy => copy.knowledge.title },
-  { view: "usage", icon: CreditCard, label: copy => copy.usage.title },
-  { view: "privacy", icon: SlidersHorizontal, label: copy => copy.privacy.controlsTitle },
-];
-
-function PublicPortalPreview({
-  copy,
-  locale,
-  loginConfigured,
-  onLocaleChange,
-}: {
-  copy: PortalCopy;
-  locale: AppLocale;
-  loginConfigured: boolean;
-  onLocaleChange: (locale: AppLocale) => void;
-}) {
-  const [view, setView] = useState<PublicPreviewView>("dashboard");
-
-  return (
-    <main className="min-h-full bg-[#f5f7fb] text-stone-950">
-      <div className="grid min-h-screen lg:grid-cols-[260px_minmax(0,1fr)]">
-        <aside className="flex flex-col gap-7 bg-[#13231f] px-5 py-6 text-white">
-          <div className="flex items-center gap-3">
-            <div className="grid h-10 w-10 place-items-center rounded-lg bg-lime-300 font-black text-[#10211d]">
-              L
-            </div>
-            <div>
-              <div className="font-semibold">Leaderbot</div>
-              <div className="text-sm text-stone-300">{copy.auth.title}</div>
-            </div>
-          </div>
-          <LocaleSwitcher copy={copy} locale={locale} onChange={onLocaleChange} />
-          <nav className="grid gap-2" aria-label={copy.auth.title}>
-            {publicPreviewItems.map(item => {
-              const Icon = item.icon;
-              const isActive = item.view === view;
-              return (
-                <button
-                  aria-pressed={isActive}
-                  className={`flex min-h-11 items-center gap-3 rounded-lg px-3 text-left text-sm font-medium transition-colors ${
-                    isActive
-                      ? "bg-lime-300 text-[#10211d]"
-                      : "text-stone-200 hover:bg-white/10"
-                  }`}
-                  key={item.view}
-                  type="button"
-                  onClick={() => setView(item.view)}
-                >
-                  <Icon className="h-4 w-4" />
-                  {item.label(copy)}
-                </button>
-              );
-            })}
-          </nav>
-          <p className="mt-auto text-sm leading-6 text-stone-300">
-            {copy.publicPreview.customerDataNotice}
-          </p>
-        </aside>
-
-        <section className="min-w-0 px-5 py-7 sm:px-8">
-          <header className="mb-6 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-            <div>
-              <p className="mb-2 text-xs font-bold uppercase tracking-normal text-stone-500">
-                {copy.common.workspace}
-              </p>
-              <h1 className="text-4xl font-semibold leading-tight text-stone-950">
-                {copy.publicPreview.workspaceTitle}
-              </h1>
-              <p className="mt-3 max-w-2xl text-sm leading-6 text-stone-600">
-                {copy.auth.body}
-              </p>
-            </div>
-            <Button
-              className="gap-2 self-start"
-              disabled={!loginConfigured}
-              onClick={() => {
-                const loginUrl = getLoginUrl();
-                if (!loginUrl) return;
-                window.location.href = loginUrl;
-              }}
-            >
-              <LogIn className="h-4 w-4" />
-              {copy.auth.continueWithFacebook}
-            </Button>
-          </header>
-
-          {!loginConfigured ? (
-            <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              {copy.publicPreview.loginNotConfigured}
-            </div>
-          ) : null}
-
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(260px,0.8fr)]">
-            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
-              {view === "dashboard" ? (
-                <>
-                  <h2 className="text-2xl font-semibold">
-                    {copy.publicPreview.dashboardTitle}
-                  </h2>
-                  <div className="mt-5 grid gap-3 sm:grid-cols-3">
-                    <MetricTile
-                      label={copy.usage.imagesRemaining}
-                      value={14}
-                      detail={`6 ${copy.usage.imagesUsedDetail.replace("{limit}", "20")}`}
-                    />
-                    <MetricTile label={copy.usage.messagesToday} value={18} />
-                    <MetricTile
-                      label={copy.knowledge.active}
-                      value={1}
-                      detail={copy.publicPreview.sourcesDetail.replace("{count}", "2")}
-                    />
-                  </div>
-                </>
-              ) : null}
-              {view === "identity" ? (
-                <>
-                  <h2 className="text-2xl font-semibold">{copy.identity.fallbackName}</h2>
-                  <p className="mt-3 rounded-lg border border-stone-200 bg-stone-50 p-4 text-sm leading-6 text-stone-700">
-                    {copy.publicPreview.identityHelp}
-                  </p>
-                </>
-              ) : null}
-              {view === "channels" ? (
-                <>
-                  <h2 className="text-2xl font-semibold">{copy.messenger.title}</h2>
-                  <div className="mt-5 flex items-center justify-between rounded-lg border border-stone-200 bg-stone-50 p-4">
-                    <span>Facebook Messenger</span>
-                    <StatusPill copy={copy} value="disconnected" />
-                  </div>
-                </>
-              ) : null}
-              {view === "knowledge" ? (
-                <>
-                  <h2 className="text-2xl font-semibold">{copy.knowledge.title}</h2>
-                  <div className="mt-5 grid gap-3">
-                    <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
-                      {copy.publicPreview.customerFaq} ·{" "}
-                      <StatusPill copy={copy} value="active" />
-                    </div>
-                    <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
-                      {copy.publicPreview.brandVoiceNotes} ·{" "}
-                      <StatusPill copy={copy} value="queued" />
-                    </div>
-                  </div>
-                </>
-              ) : null}
-              {view === "usage" ? (
-                <>
-                  <h2 className="text-2xl font-semibold">{copy.usage.title}</h2>
-                  <div className="mt-5 grid gap-3 sm:grid-cols-3">
-                    <MetricTile label={copy.usage.imagesRemaining} value={14} />
-                    <MetricTile label={copy.usage.messagesToday} value={18} />
-                    <MetricTile label={copy.usage.blockedToday} value={0} />
-                  </div>
-                </>
-              ) : null}
-              {view === "privacy" ? (
-                <>
-                  <h2 className="text-2xl font-semibold">{copy.privacy.controlsTitle}</h2>
-                  <div className="mt-5 grid gap-3">
-                    <div className="flex justify-between rounded-lg border border-stone-200 bg-stone-50 p-4">
-                      <span>{copy.privacy.knowledgeIndexing}</span>
-                      <StatusPill copy={copy} value="active" />
-                    </div>
-                    <div className="flex justify-between rounded-lg border border-stone-200 bg-stone-50 p-4">
-                      <span>{copy.privacy.usageAnalytics}</span>
-                      <StatusPill copy={copy} value="disabled" />
-                    </div>
-                  </div>
-                </>
-              ) : null}
-            </section>
-
-            <aside className="space-y-4">
-              <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
-                <h2 className="text-lg font-semibold">{copy.messenger.connectPage}</h2>
-                <p className="mt-2 text-sm leading-6 text-stone-600">
-                  {copy.publicPreview.messengerInactive}
-                </p>
-              </section>
-              <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
-                <h2 className="text-lg font-semibold">{copy.footer.privacy}</h2>
-                <div className="mt-3 flex flex-wrap gap-3 text-sm">
-                  <a className="text-teal-700 underline" href="/privacy">
-                    {copy.footer.privacy}
-                  </a>
-                  <a className="text-teal-700 underline" href="/terms">
-                    {copy.footer.terms}
-                  </a>
-                  <a className="text-teal-700 underline" href="/data-deletion">
-                    {copy.footer.dataDeletion}
-                  </a>
-                </div>
-              </section>
-            </aside>
-          </div>
-        </section>
-      </div>
-    </main>
-  );
+function getBillingReturnIntent() {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  const intentId = params.get("intent");
+  return params.get("billing") === "return" &&
+    intentId &&
+    /^[0-9a-f-]{36}$/i.test(intentId)
+    ? intentId
+    : null;
 }
 
 function Home() {
@@ -443,6 +292,8 @@ function Home() {
     () => getWorkspaceIdFromLocation() ?? readActiveWorkspaceId()
   );
   const [showHandoffBanner] = useState(hasHandoffOnboardingFlag);
+  const [billingReturnIntent] = useState(getBillingReturnIntent);
+  const billingReturnHandled = useRef(false);
   const [locale, setLocale] = useState<AppLocale>(getInitialLocale);
   const [isEditingIdentity, setIsEditingIdentity] = useState(false);
   const [identityForm, setIdentityForm] = useState({
@@ -463,11 +314,15 @@ function Home() {
     name: "",
     sourceReference: "",
   });
-  const [facebookConnectState, setFacebookConnectState] = useState<string | null>(() =>
-    readBrowserStorage(FACEBOOK_CONNECT_STATE_KEY)
-  );
-  const [facebookConnectPages, setFacebookConnectPages] = useState<FacebookConnectPage[]>([]);
-  const [facebookConnectIssue, setFacebookConnectIssue] = useState<string | null>(null);
+  const [facebookConnectState, setFacebookConnectState] = useState<
+    string | null
+  >(() => readBrowserStorage(FACEBOOK_CONNECT_STATE_KEY));
+  const [facebookConnectPages, setFacebookConnectPages] = useState<
+    FacebookConnectPage[]
+  >([]);
+  const [facebookConnectIssue, setFacebookConnectIssue] = useState<
+    string | null
+  >(null);
   const copy = portalCopies[locale];
 
   useEffect(() => {
@@ -485,9 +340,12 @@ function Home() {
       enabled: auth.isAuthenticated,
     }
   );
-  const currentWorkspaceQuery = trpc.portal.workspace.current.useQuery(undefined, {
-    enabled: auth.isAuthenticated && !activeWorkspaceId,
-  });
+  const currentWorkspaceQuery = trpc.portal.workspace.current.useQuery(
+    undefined,
+    {
+      enabled: auth.isAuthenticated && !activeWorkspaceId,
+    }
+  );
   const activeWorkspaceQuery = trpc.portal.workspace.get.useQuery(
     { workspaceId: activeWorkspaceId ?? 0 },
     {
@@ -496,6 +354,8 @@ function Home() {
   );
   const workspace = activeWorkspaceQuery.data ?? currentWorkspaceQuery.data;
   const workspaceId = workspace?.id ?? portalSessionQuery.data?.workspace.id;
+  const billingRole = portalSessionQuery.data?.membership.role;
+  const canManageBilling = billingRole === "owner" || billingRole === "admin";
   const workspaceDisplayName =
     portalSessionQuery.data?.workspace.name ??
     workspace?.name ??
@@ -513,11 +373,17 @@ function Home() {
     if (typeof window !== "undefined" && window.location.search) {
       const url = new URL(window.location.href);
       url.searchParams.delete("workspaceId");
-      window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+      window.history.replaceState(
+        null,
+        "",
+        `${url.pathname}${url.search}${url.hash}`
+      );
     }
   }, [activeWorkspaceId, activeWorkspaceQuery.error]);
 
-  const workspaceQuery = activeWorkspaceId ? activeWorkspaceQuery : currentWorkspaceQuery;
+  const workspaceQuery = activeWorkspaceId
+    ? activeWorkspaceQuery
+    : currentWorkspaceQuery;
   const workspaceMembersQuery = trpc.portal.workspace.members.useQuery(
     { workspaceId: workspaceId ?? 0 },
     { enabled: Boolean(workspaceId) }
@@ -533,6 +399,30 @@ function Home() {
   const usageQuery = trpc.portal.usage.summary.useQuery(
     { workspaceId: workspaceId ?? 0 },
     { enabled: Boolean(workspaceId) }
+  );
+  const billingPlansQuery = trpc.portal.billing.plans.useQuery(undefined, {
+    enabled: auth.isAuthenticated,
+  });
+  const billingSummaryQuery = trpc.portal.billing.summary.useQuery(
+    { workspaceId: workspaceId ?? 0 },
+    { enabled: Boolean(workspaceId) }
+  );
+  const billingReturnStatusQuery = trpc.portal.billing.returnStatus.useQuery(
+    {
+      workspaceId: workspaceId ?? 0,
+      intentId: billingReturnIntent ?? "",
+    },
+    {
+      enabled:
+        Boolean(workspaceId) &&
+        Boolean(billingReturnIntent) &&
+        canManageBilling,
+      refetchInterval: query => {
+        return isTerminalBillingReturnStatus(query.state.data?.status)
+          ? false
+          : 2_000;
+      },
+    }
   );
   const upgradeRequestsQuery = trpc.portal.usage.upgradeRequests.useQuery(
     { workspaceId: workspaceId ?? 0 },
@@ -569,6 +459,42 @@ function Home() {
       await utils.portal.usage.upgradeRequests.invalidate({ workspaceId });
     },
   });
+  const billingCheckoutMutation = trpc.portal.billing.checkout.useMutation({
+    onSuccess: checkout => {
+      window.location.assign(checkout.checkoutUrl);
+    },
+  });
+  const billingCancelMutation = trpc.portal.billing.cancel.useMutation({
+    onSuccess: async () => {
+      if (!workspaceId) return;
+      await utils.portal.billing.summary.invalidate({ workspaceId });
+    },
+  });
+
+  useEffect(() => {
+    if (billingReturnHandled.current || !workspaceId || !billingReturnIntent) {
+      return;
+    }
+    const status = billingReturnStatusQuery.data?.status;
+    if (!isTerminalBillingReturnStatus(status)) {
+      return;
+    }
+    billingReturnHandled.current = true;
+    void utils.portal.billing.summary.invalidate({ workspaceId });
+    const url = new URL(window.location.href);
+    url.searchParams.delete("billing");
+    url.searchParams.delete("intent");
+    window.history.replaceState(
+      null,
+      "",
+      `${url.pathname}${url.search}${url.hash}`
+    );
+  }, [
+    billingReturnIntent,
+    billingReturnStatusQuery.data?.status,
+    utils.portal.billing.summary,
+    workspaceId,
+  ]);
   const facebookStartMutation = trpc.portal.facebook.startConnect.useMutation({
     onSuccess: data => {
       setFacebookConnectIssue(null);
@@ -582,32 +508,35 @@ function Home() {
       }
     },
   });
-  const facebookCompleteMutation = trpc.portal.facebook.completeConnect.useMutation({
-    onSuccess: data => {
-      setFacebookConnectIssue(null);
-      setFacebookConnectPages(data.pages);
-    },
-  });
-  const facebookSelectPageMutation = trpc.portal.facebook.selectPage.useMutation({
-    onSuccess: async () => {
-      if (!workspaceId) return;
-      setFacebookConnectIssue(null);
-      setFacebookConnectState(null);
-      setFacebookConnectPages([]);
-      removeBrowserStorage(FACEBOOK_CONNECT_STATE_KEY);
-      await utils.portal.channels.status.invalidate({ workspaceId });
-    },
-  });
-  const facebookDisconnectMutation = trpc.portal.facebook.disconnect.useMutation({
-    onSuccess: async () => {
-      if (!workspaceId) return;
-      setFacebookConnectIssue(null);
-      setFacebookConnectState(null);
-      setFacebookConnectPages([]);
-      removeBrowserStorage(FACEBOOK_CONNECT_STATE_KEY);
-      await utils.portal.channels.status.invalidate({ workspaceId });
-    },
-  });
+  const facebookCompleteMutation =
+    trpc.portal.facebook.completeConnect.useMutation({
+      onSuccess: data => {
+        setFacebookConnectIssue(null);
+        setFacebookConnectPages(data.pages);
+      },
+    });
+  const facebookSelectPageMutation =
+    trpc.portal.facebook.selectPage.useMutation({
+      onSuccess: async () => {
+        if (!workspaceId) return;
+        setFacebookConnectIssue(null);
+        setFacebookConnectState(null);
+        setFacebookConnectPages([]);
+        removeBrowserStorage(FACEBOOK_CONNECT_STATE_KEY);
+        await utils.portal.channels.status.invalidate({ workspaceId });
+      },
+    });
+  const facebookDisconnectMutation =
+    trpc.portal.facebook.disconnect.useMutation({
+      onSuccess: async () => {
+        if (!workspaceId) return;
+        setFacebookConnectIssue(null);
+        setFacebookConnectState(null);
+        setFacebookConnectPages([]);
+        removeBrowserStorage(FACEBOOK_CONNECT_STATE_KEY);
+        await utils.portal.channels.status.invalidate({ workspaceId });
+      },
+    });
   const aiIdentityMutation = trpc.portal.aiIdentity.update.useMutation({
     onSuccess: async () => {
       if (!workspaceId) return;
@@ -636,18 +565,25 @@ function Home() {
       await utils.portal.knowledge.summary.invalidate({ workspaceId });
     },
   });
-  const knowledgeDisableMutation = trpc.portal.knowledge.disableSource.useMutation({
-    onSuccess: async () => {
-      if (!workspaceId) return;
-      await utils.portal.knowledge.summary.invalidate({ workspaceId });
-    },
-  });
+  const knowledgeDisableMutation =
+    trpc.portal.knowledge.disableSource.useMutation({
+      onSuccess: async () => {
+        if (!workspaceId) return;
+        await utils.portal.knowledge.summary.invalidate({ workspaceId });
+      },
+    });
 
   const privacy = privacyQuery.data;
   const usage = usageQuery.data;
+  const billingPlans = billingPlansQuery.data ?? [];
+  const billingSummary = billingSummaryQuery.data;
+  const billingSubscription = billingSummary?.subscription;
+  const billingPlan = billingSummary?.plan;
+  const billingPayments = billingSummary?.payments ?? [];
   const upgradeRequests = upgradeRequestsQuery.data ?? [];
   const latestUpgradeRequest = upgradeRequests[0];
-  const facebookStatus = channelStatusQuery.data?.facebook.status ?? "disconnected";
+  const facebookStatus =
+    channelStatusQuery.data?.facebook.status ?? "disconnected";
   const knowledgeSources = knowledgeQuery.data?.sources ?? [];
   const privacyRequests = privacyRequestsQuery.data ?? [];
   const privacyRequestsError = privacyRequestsQuery.error;
@@ -671,8 +607,10 @@ function Home() {
     if (!workspaceId || !privacy) return;
     privacyMutation.mutate({
       workspaceId,
-      allowKnowledgeIndexing: updates.allowKnowledgeIndexing ?? privacy.allowKnowledgeIndexing,
-      allowUsageAnalytics: updates.allowUsageAnalytics ?? privacy.allowUsageAnalytics,
+      allowKnowledgeIndexing:
+        updates.allowKnowledgeIndexing ?? privacy.allowKnowledgeIndexing,
+      allowUsageAnalytics:
+        updates.allowUsageAnalytics ?? privacy.allowUsageAnalytics,
       imageMemoryRetentionDays:
         updates.imageMemoryRetentionDays ?? privacy.imageMemoryRetentionDays,
     });
@@ -705,6 +643,34 @@ function Home() {
     if (!workspaceId) return;
     upgradeRequestMutation.mutate({ workspaceId });
   };
+  const startBillingCheckout = (
+    planCode: string,
+    kind: "subscription_start" | "payment_method_change"
+  ) => {
+    if (!workspaceId || !canManageBilling) return;
+    if (
+      kind === "payment_method_change" &&
+      !window.confirm(copy.billing.changePaymentMethodConfirmation)
+    ) {
+      return;
+    }
+    billingCheckoutMutation.reset();
+    billingCancelMutation.reset();
+    billingCheckoutMutation.mutate({
+      workspaceId,
+      planCode,
+      countryCode: "BE",
+      kind,
+      businessCheckout: false,
+    });
+  };
+  const cancelBillingSubscription = () => {
+    if (!workspaceId || !canManageBilling) return;
+    if (!window.confirm(copy.billing.cancelConfirmation)) return;
+    billingCancelMutation.reset();
+    billingCheckoutMutation.reset();
+    billingCancelMutation.mutate({ workspaceId });
+  };
   const startFacebookConnectFlow = () => {
     if (!workspaceId) return;
     setFacebookConnectIssue(null);
@@ -736,7 +702,9 @@ function Home() {
     await aiIdentityMutation.mutateAsync({
       workspaceId,
       name: identityForm.name,
-      instructions: identityForm.instructions.trim() ? identityForm.instructions : null,
+      instructions: identityForm.instructions.trim()
+        ? identityForm.instructions
+        : null,
       tone: identityForm.tone,
       language: identityForm.language,
       modelDefault: identityForm.modelDefault,
@@ -765,10 +733,24 @@ function Home() {
     knowledgeDisableMutation.mutate({ workspaceId, sourceId });
   };
 
+  if (auth.loading) {
+    return (
+      <main
+        aria-busy="true"
+        className="grid min-h-screen place-items-center bg-[#10211d] text-white"
+      >
+        <span className="sr-only">{copy.common.loadingWorkspace}</span>
+        <div
+          aria-hidden="true"
+          className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-lime-300"
+        />
+      </main>
+    );
+  }
+
   if (!auth.isAuthenticated) {
     return (
-      <PublicPortalPreview
-        copy={copy}
+      <LandingPage
         locale={locale}
         loginConfigured={loginConfigured}
         onLocaleChange={changeLocale}
@@ -784,6 +766,8 @@ function Home() {
     aiIdentityQuery.isLoading ||
     channelStatusQuery.isLoading ||
     usageQuery.isLoading ||
+    billingPlansQuery.isLoading ||
+    billingSummaryQuery.isLoading ||
     upgradeRequestsQuery.isLoading ||
     knowledgeQuery.isLoading ||
     privacyQuery.isLoading ||
@@ -794,7 +778,9 @@ function Home() {
       <div className="mx-auto max-w-7xl">
         <header className="flex flex-col gap-4 border-b border-stone-200 pb-6 md:flex-row md:items-end md:justify-between">
           <div>
-            <p className="text-sm font-medium text-teal-700">{copy.common.workspace}</p>
+            <p className="text-sm font-medium text-teal-700">
+              {copy.common.workspace}
+            </p>
             {isEditingWorkspace ? (
               <form
                 className="mt-2 flex max-w-xl flex-col gap-3 sm:flex-row"
@@ -812,7 +798,9 @@ function Home() {
                 <div className="flex gap-2">
                   <Button
                     className="gap-2"
-                    disabled={!workspaceName.trim() || workspaceMutation.isPending}
+                    disabled={
+                      !workspaceName.trim() || workspaceMutation.isPending
+                    }
                     size="sm"
                     type="submit"
                   >
@@ -865,7 +853,11 @@ function Home() {
             ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <LocaleSwitcher copy={copy} locale={locale} onChange={changeLocale} />
+            <LocaleSwitcher
+              copy={copy}
+              locale={locale}
+              onChange={changeLocale}
+            />
             <Button
               variant="outline"
               onClick={() => {
@@ -882,10 +874,13 @@ function Home() {
             <div className="flex items-start gap-3">
               <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-teal-700" />
               <div>
-                <h2 className="text-sm font-semibold">Premium workspace claimed</h2>
+                <h2 className="text-sm font-semibold">
+                  Workspace link secured
+                </h2>
                 <p className="mt-1 text-sm leading-6 text-teal-800">
-                  Your Messenger setup link is secured to this workspace. Finish the
-                  AI identity, knowledge, channel, and privacy settings here.
+                  Your Messenger setup link is secured to this workspace. Finish
+                  the AI identity, knowledge, channel, and privacy settings
+                  here.
                 </p>
               </div>
             </div>
@@ -945,8 +940,8 @@ function Home() {
                       {aiIdentityQuery.data?.name ?? copy.identity.fallbackName}
                     </h2>
                     <p className="mt-1 text-sm text-stone-600">
-                      {aiIdentityQuery.data?.tone ?? copy.identity.fallbackTone} ·{" "}
-                      {aiIdentityQuery.data?.language ?? "nl"} ·{" "}
+                      {aiIdentityQuery.data?.tone ?? copy.identity.fallbackTone}{" "}
+                      · {aiIdentityQuery.data?.language ?? "nl"} ·{" "}
                       {aiIdentityQuery.data?.modelDefault ?? "default"}
                     </p>
                   </div>
@@ -1105,7 +1100,9 @@ function Home() {
                   </Button>
                 ) : (
                   <Button
-                    disabled={!workspaceId || facebookDisconnectMutation.isPending}
+                    disabled={
+                      !workspaceId || facebookDisconnectMutation.isPending
+                    }
                     size="sm"
                     type="button"
                     variant="outline"
@@ -1143,7 +1140,9 @@ function Home() {
                     </div>
                     <Button
                       className="gap-2 bg-teal-700 text-white hover:bg-teal-800"
-                      disabled={!workspaceId || facebookCompleteMutation.isPending}
+                      disabled={
+                        !workspaceId || facebookCompleteMutation.isPending
+                      }
                       size="sm"
                       type="button"
                       onClick={finishFacebookConnectFlow}
@@ -1180,7 +1179,9 @@ function Home() {
                           </span>
                         </span>
                         <span className="text-sm text-teal-700">
-                          {isSelecting ? copy.common.connecting : copy.common.select}
+                          {isSelecting
+                            ? copy.common.connecting
+                            : copy.common.select}
                         </span>
                       </button>
                     );
@@ -1188,7 +1189,9 @@ function Home() {
                 </div>
               ) : null}
               {facebookConnectIssue ? (
-                <p className="mt-4 text-sm text-red-700">{facebookConnectIssue}</p>
+                <p className="mt-4 text-sm text-red-700">
+                  {facebookConnectIssue}
+                </p>
               ) : facebookStartMutation.error ? (
                 <p className="mt-4 text-sm text-red-700">
                   {copy.messenger.unableStart}
@@ -1337,7 +1340,8 @@ function Home() {
                       >
                         <div>
                           <div className="font-medium text-stone-900">
-                            {request.requestedPlanName} {copy.usage.upgradeLabel}
+                            {request.requestedPlanName}{" "}
+                            {copy.usage.upgradeLabel}
                           </div>
                           <div className="mt-1 text-xs text-stone-500">
                             {upgradeReasonLabel(request.upgradeReason, copy)}
@@ -1362,6 +1366,414 @@ function Home() {
               ) : null}
             </section>
 
+            {billingPlans.length > 0 ||
+            billingSubscription ||
+            billingPlansQuery.error ||
+            billingSummaryQuery.error ||
+            (billingReturnIntent && canManageBilling) ? (
+              <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
+                <div className="flex items-start gap-3">
+                  <CreditCard className="mt-0.5 h-5 w-5 text-teal-700" />
+                  <div>
+                    <h2 className="text-lg font-semibold text-stone-950">
+                      {copy.billing.title}
+                    </h2>
+                    <p className="mt-1 text-sm text-stone-600">
+                      {copy.billing.subtitle}
+                    </p>
+                  </div>
+                </div>
+
+                {billingPlansQuery.error ? (
+                  <p className="mt-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">
+                    {copy.billing.planLoadError}
+                  </p>
+                ) : null}
+                {billingSummaryQuery.error ? (
+                  <p className="mt-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">
+                    {copy.billing.summaryLoadError}
+                  </p>
+                ) : null}
+                {billingReturnIntent && canManageBilling ? (
+                  <p
+                    className={`mt-5 rounded-lg px-4 py-3 text-sm ${
+                      billingReturnStatusQuery.error ||
+                      isBillingReturnFailureStatus(
+                        billingReturnStatusQuery.data?.status
+                      )
+                        ? "bg-red-50 text-red-700"
+                        : billingReturnStatusQuery.data?.status === "paid"
+                          ? "bg-emerald-50 text-emerald-700"
+                          : "bg-sky-50 text-sky-800"
+                    }`}
+                  >
+                    {billingReturnStatusQuery.error
+                      ? copy.billing.returnError
+                      : billingReturnStatusQuery.data?.status === "paid"
+                        ? copy.billing.returnPaid
+                        : isBillingReturnFailureStatus(
+                              billingReturnStatusQuery.data?.status
+                            )
+                          ? copy.billing.returnFailed
+                          : copy.billing.returnProcessing}
+                  </p>
+                ) : null}
+
+                <div className="mt-5 grid gap-4 xl:grid-cols-2">
+                  <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">
+                      {copy.billing.availablePlan}
+                    </p>
+                    <div className="mt-3 grid gap-4">
+                      {billingPlans.map(plan => (
+                        <div
+                          className="rounded-lg border border-stone-200 bg-white p-4"
+                          key={plan.code}
+                        >
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                              <h3 className="font-semibold text-stone-950">
+                                {plan.publicName}
+                              </h3>
+                              <p className="mt-1 text-2xl font-semibold text-stone-950">
+                                {formatBillingAmount(
+                                  plan.amount,
+                                  plan.currency,
+                                  locale
+                                )}{" "}
+                                <span className="text-sm font-normal text-stone-600">
+                                  {formatBillingInterval(plan.interval, copy)}
+                                </span>
+                              </p>
+                            </div>
+                            {billingSubscription ? (
+                              billingSubscription.planCode === plan.code ? (
+                                <StatusPill
+                                  copy={copy}
+                                  value={billingSubscription.status}
+                                />
+                              ) : null
+                            ) : (
+                              <Button
+                                disabled={
+                                  !workspaceId ||
+                                  !canManageBilling ||
+                                  billingCheckoutMutation.isPending
+                                }
+                                type="button"
+                                onClick={() =>
+                                  startBillingCheckout(
+                                    plan.code,
+                                    "subscription_start"
+                                  )
+                                }
+                              >
+                                {billingCheckoutMutation.isPending
+                                  ? copy.billing.openingCheckout
+                                  : copy.billing.startSubscription}
+                              </Button>
+                            )}
+                          </div>
+                          <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                            <div>
+                              <dt className="text-stone-500">
+                                {copy.billing.firstPayment}
+                              </dt>
+                              <dd className="mt-1 font-medium text-stone-900">
+                                {formatBillingAmount(
+                                  plan.disclosure.firstPaymentAmount,
+                                  plan.currency,
+                                  locale
+                                )}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className="text-stone-500">
+                                {copy.billing.recurringPayment}
+                              </dt>
+                              <dd className="mt-1 font-medium text-stone-900">
+                                {formatBillingAmount(
+                                  plan.disclosure.recurringAmount,
+                                  plan.currency,
+                                  locale
+                                )}{" "}
+                                {formatBillingInterval(plan.interval, copy)}
+                              </dd>
+                            </div>
+                          </dl>
+                          <div className="mt-4 grid gap-3 text-sm text-stone-600">
+                            <div className="flex items-start gap-2">
+                              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                              <span>
+                                <span className="font-medium text-stone-900">
+                                  {copy.billing.automaticRenewal}.{" "}
+                                </span>
+                                {copy.billing.automaticRenewalBody}
+                              </span>
+                            </div>
+                            <div className="flex items-start gap-2">
+                              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />
+                              <span>
+                                <span className="font-medium text-stone-900">
+                                  {copy.billing.sepaDebit}.{" "}
+                                </span>
+                                {copy.billing.sepaDebitBody}
+                              </span>
+                            </div>
+                            <p>{copy.billing.cancellationTiming}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-stone-200 bg-stone-50 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">
+                      {copy.billing.currentPlan}
+                    </p>
+                    {billingSubscription ? (
+                      <div className="mt-3">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <h3 className="font-semibold text-stone-950">
+                              {billingPlan?.publicName ??
+                                billingSubscription.planCode}
+                            </h3>
+                            {billingPlan ? (
+                              <p className="mt-1 text-sm text-stone-600">
+                                {formatBillingAmount(
+                                  billingPlan.amount,
+                                  billingPlan.currency,
+                                  locale
+                                )}{" "}
+                                {formatBillingInterval(
+                                  billingPlan.interval,
+                                  copy
+                                )}
+                              </p>
+                            ) : null}
+                          </div>
+                          <StatusPill
+                            copy={copy}
+                            value={billingSubscription.status}
+                          />
+                        </div>
+                        <dl className="mt-4 grid gap-3 sm:grid-cols-2">
+                          <div className="rounded-lg border border-stone-200 bg-white p-3">
+                            <dt className="text-xs text-stone-500">
+                              {copy.billing.paidThrough}
+                            </dt>
+                            <dd className="mt-1 text-sm font-medium text-stone-900">
+                              {formatDate(
+                                billingSubscription.paidThrough,
+                                locale,
+                                copy
+                              )}
+                            </dd>
+                          </div>
+                          <div className="rounded-lg border border-stone-200 bg-white p-3">
+                            <dt className="text-xs text-stone-500">
+                              {copy.billing.nextBillingDate}
+                            </dt>
+                            <dd className="mt-1 text-sm font-medium text-stone-900">
+                              {formatDate(
+                                billingSubscription.nextBillingDate,
+                                locale,
+                                copy
+                              )}
+                            </dd>
+                          </div>
+                        </dl>
+                        {billingSubscription.cancelAtPeriodEnd ? (
+                          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                            <div className="font-medium">
+                              {copy.billing.cancellationScheduled}
+                            </div>
+                            <p className="mt-1">
+                              {copy.billing.cancellationScheduledBody.replace(
+                                "{date}",
+                                formatDate(
+                                  billingSubscription.paidThrough,
+                                  locale,
+                                  copy
+                                )
+                              )}
+                            </p>
+                          </div>
+                        ) : null}
+                        <div className="mt-4 flex flex-wrap gap-3">
+                          {billingPlan ? (
+                            <Button
+                              disabled={
+                                !canManageBilling ||
+                                billingCheckoutMutation.isPending
+                              }
+                              type="button"
+                              variant="outline"
+                              onClick={() =>
+                                startBillingCheckout(
+                                  billingPlan.code,
+                                  "payment_method_change"
+                                )
+                              }
+                            >
+                              {billingCheckoutMutation.isPending
+                                ? copy.billing.openingCheckout
+                                : copy.billing.changePaymentMethod}
+                            </Button>
+                          ) : null}
+                          {!billingSubscription.cancelAtPeriodEnd ? (
+                            <Button
+                              disabled={
+                                !canManageBilling ||
+                                billingCancelMutation.isPending
+                              }
+                              type="button"
+                              variant="outline"
+                              onClick={cancelBillingSubscription}
+                            >
+                              {billingCancelMutation.isPending
+                                ? copy.billing.canceling
+                                : copy.billing.cancelSubscription}
+                            </Button>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="mt-3 text-sm text-stone-600">
+                        {copy.billing.noSubscription}
+                      </p>
+                    )}
+                    {!canManageBilling ? (
+                      <p className="mt-4 text-xs text-stone-500">
+                        {copy.billing.managerOnly}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+
+                {billingCheckoutMutation.error ? (
+                  <p className="mt-4 text-sm text-red-700">
+                    {copy.billing.checkoutError}
+                  </p>
+                ) : billingCancelMutation.error ? (
+                  <p className="mt-4 text-sm text-red-700">
+                    {copy.billing.cancelError}
+                  </p>
+                ) : billingCancelMutation.isSuccess ? (
+                  <p className="mt-4 text-sm text-emerald-700">
+                    {copy.billing.cancelSuccess}
+                  </p>
+                ) : null}
+
+                <div className="mt-5 rounded-lg border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950">
+                  <div className="flex items-start gap-3">
+                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-sky-700" />
+                    <div className="grid gap-1">
+                      <p className="font-medium">{copy.billing.belgiumOnly}</p>
+                      <p>{copy.billing.belgiumOnlyBody}</p>
+                      <p>{copy.billing.b2bUnavailable}</p>
+                      <p>{copy.billing.vatExemption}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {canManageBilling ? (
+                  <>
+                    <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <h3 className="font-semibold text-stone-950">
+                          {copy.billing.paymentHistory}
+                        </h3>
+                        <p className="mt-1 text-sm text-stone-600">
+                          {copy.billing.accountingExportBody}
+                        </p>
+                      </div>
+                      {workspaceId ? (
+                        <Button asChild size="sm" variant="outline">
+                          <a
+                            href={`/api/portal/billing/export.csv?workspaceId=${encodeURIComponent(String(workspaceId))}`}
+                          >
+                            <FileDown className="h-4 w-4" />
+                            {copy.billing.accountingExport}
+                          </a>
+                        </Button>
+                      ) : null}
+                    </div>
+                    <div className="mt-4 overflow-x-auto rounded-lg border border-stone-200">
+                      {billingPayments.length === 0 ? (
+                        <div className="bg-stone-50 px-4 py-3 text-sm text-stone-600">
+                          {copy.billing.noPayments}
+                        </div>
+                      ) : (
+                        <table className="min-w-full divide-y divide-stone-200 text-left text-sm">
+                          <thead className="bg-stone-50 text-xs uppercase tracking-wide text-stone-500">
+                            <tr>
+                              <th className="px-4 py-3 font-medium">
+                                {copy.billing.paymentDate}
+                              </th>
+                              <th className="px-4 py-3 font-medium">
+                                {copy.billing.invoiceNumber}
+                              </th>
+                              <th className="px-4 py-3 font-medium">
+                                {copy.common.status}
+                              </th>
+                              <th className="px-4 py-3 font-medium">
+                                {copy.billing.amount}
+                              </th>
+                              <th className="px-4 py-3 font-medium">
+                                <span className="sr-only">
+                                  {copy.billing.receipt}
+                                </span>
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-stone-200 bg-white">
+                            {billingPayments.map(payment => (
+                              <tr key={payment.molliePaymentId}>
+                                <td className="whitespace-nowrap px-4 py-3 text-stone-600">
+                                  {formatDate(payment.occurredAt, locale, copy)}
+                                </td>
+                                <td className="whitespace-nowrap px-4 py-3 font-medium text-stone-900">
+                                  {payment.invoiceNumber}
+                                </td>
+                                <td className="whitespace-nowrap px-4 py-3">
+                                  <StatusPill
+                                    copy={copy}
+                                    value={payment.status}
+                                  />
+                                </td>
+                                <td className="whitespace-nowrap px-4 py-3 text-stone-900">
+                                  {formatBillingAmount(
+                                    payment.grossAmount,
+                                    payment.currency,
+                                    locale
+                                  )}
+                                </td>
+                                <td className="whitespace-nowrap px-4 py-3 text-right">
+                                  {workspaceId ? (
+                                    <a
+                                      className="inline-flex items-center gap-1 font-medium text-teal-700 hover:text-teal-800 hover:underline"
+                                      href={payment.receiptPath}
+                                      rel="noreferrer"
+                                      target="_blank"
+                                    >
+                                      {copy.billing.receipt}
+                                      <ExternalLink className="h-3.5 w-3.5" />
+                                    </a>
+                                  ) : null}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  </>
+                ) : null}
+              </section>
+            ) : null}
+
             <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
               <div className="flex items-center gap-3">
                 <SlidersHorizontal className="h-5 w-5 text-teal-700" />
@@ -1385,7 +1797,9 @@ function Home() {
                     checked={privacy?.allowKnowledgeIndexing ?? false}
                     disabled={!privacy || privacyMutation.isPending}
                     onChange={event =>
-                      updatePrivacy({ allowKnowledgeIndexing: event.target.checked })
+                      updatePrivacy({
+                        allowKnowledgeIndexing: event.target.checked,
+                      })
                     }
                   />
                 </label>
@@ -1404,7 +1818,9 @@ function Home() {
                     checked={privacy?.allowUsageAnalytics ?? false}
                     disabled={!privacy || privacyMutation.isPending}
                     onChange={event =>
-                      updatePrivacy({ allowUsageAnalytics: event.target.checked })
+                      updatePrivacy({
+                        allowUsageAnalytics: event.target.checked,
+                      })
                     }
                   />
                 </label>
@@ -1475,7 +1891,10 @@ function Home() {
                 />
                 <MetricTile
                   label={copy.dataRequests.latestRequest}
-                  value={requestTypeLabel(latestPrivacyRequest?.requestType, copy)}
+                  value={requestTypeLabel(
+                    latestPrivacyRequest?.requestType,
+                    copy
+                  )}
                   detail={
                     latestPrivacyRequest
                       ? `${statusLabel(latestPrivacyRequest.status, copy)} · ${formatDate(
@@ -1491,7 +1910,11 @@ function Home() {
                   value={
                     latestPrivacyRequest &&
                     isOpenPrivacyRequest(latestPrivacyRequest.status)
-                      ? formatDate(addDays(latestPrivacyRequest.createdAt, 30), locale, copy)
+                      ? formatDate(
+                          addDays(latestPrivacyRequest.createdAt, 30),
+                          locale,
+                          copy
+                        )
                       : copy.common.none
                   }
                   detail={copy.dataRequests.targetDetail}
@@ -1572,13 +1995,18 @@ function Home() {
                     onChange={event =>
                       setKnowledgeForm(current => ({
                         ...current,
-                        sourceType: event.target.value as typeof knowledgeForm.sourceType,
+                        sourceType: event.target
+                          .value as typeof knowledgeForm.sourceType,
                       }))
                     }
                   >
                     <option value="website">{copy.knowledge.website}</option>
-                    <option value="manual_text">{copy.knowledge.manualText}</option>
-                    <option value="integration">{copy.knowledge.integration}</option>
+                    <option value="manual_text">
+                      {copy.knowledge.manualText}
+                    </option>
+                    <option value="integration">
+                      {copy.knowledge.integration}
+                    </option>
                   </select>
                 </label>
                 <label className="grid gap-2 text-sm text-stone-700">

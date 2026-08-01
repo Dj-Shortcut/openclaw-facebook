@@ -14,7 +14,22 @@ import {
 } from "./facebookConnectStore";
 import { claimPortalHandoffToken } from "./portalHandoff";
 import { isFacebookLoginMethod } from "./portalAuthPolicy";
+import { safeLog } from "./logger";
 import { protectedProcedure, publicProcedure, router } from "./trpc";
+import {
+  cancelMollieSubscriptionAtPeriodEnd,
+  getCheckoutReturnStatus,
+  getMollieLaunchCheck,
+  startMollieCheckout,
+} from "./billing/checkoutService";
+import {
+  formatAmountMinor,
+  getBillingPlan,
+  listPublicBillingPlans,
+} from "./billing/catalog";
+import { getMollieConfig, isMollieBillingEnabled } from "./billing/config";
+import { safeBillingErrorCode } from "./billing/errorCode";
+import { getWorkspaceBillingSummary } from "./billing/subscriptionStore";
 
 const workspaceInput = z.object({
   workspaceId: z.number().int().positive(),
@@ -63,8 +78,21 @@ const knowledgeSourceActionInput = workspaceInput.extend({
   sourceId: z.number().int().positive(),
 });
 
+const billingCheckoutInput = workspaceInput.extend({
+  planCode: z.string().trim().min(1).max(80),
+  countryCode: z.literal("BE"),
+  kind: z.enum(["subscription_start", "payment_method_change"]),
+  businessCheckout: z.boolean().optional(),
+});
+
+const billingReturnInput = workspaceInput.extend({
+  intentId: z.uuid(),
+});
+
 async function requireWorkspace(
-  ctx: { user: { id: number; name: string | null; loginMethod?: string | null } },
+  ctx: {
+    user: { id: number; name: string | null; loginMethod?: string | null };
+  },
   workspaceId?: number
 ) {
   requireFacebookPortalUser(ctx);
@@ -73,7 +101,9 @@ async function requireWorkspace(
 }
 
 async function requireWorkspaceMembership(
-  ctx: { user: { id: number; name: string | null; loginMethod?: string | null } },
+  ctx: {
+    user: { id: number; name: string | null; loginMethod?: string | null };
+  },
   workspaceId?: number
 ) {
   requireFacebookPortalUser(ctx);
@@ -90,7 +120,9 @@ async function requireWorkspaceMembership(
   }
 
   return {
-    workspace: workspaceId ? workspace : await db.getOrCreateUserWorkspace(ctx.user),
+    workspace: workspaceId
+      ? workspace
+      : await db.getOrCreateUserWorkspace(ctx.user),
     membership,
   };
 }
@@ -113,7 +145,9 @@ async function requireCurrentWorkspaceMembership(ctx: {
 }
 
 async function requireWorkspaceDetails(
-  ctx: { user: { id: number; name: string | null; loginMethod?: string | null } },
+  ctx: {
+    user: { id: number; name: string | null; loginMethod?: string | null };
+  },
   workspaceId?: number
 ) {
   requireFacebookPortalUser(ctx);
@@ -152,11 +186,86 @@ function requireFacebookPortalUser(ctx: {
   }
 }
 
+async function requireWorkspaceBillingAdmin(
+  ctx: {
+    user: { id: number; name: string | null; loginMethod?: string | null };
+    req: { headers: Record<string, string | string[] | undefined> };
+  },
+  workspaceId: number
+) {
+  const access = await requireWorkspaceBillingManager(ctx, workspaceId);
+  assertTrustedBillingOrigin(ctx.req);
+  return access;
+}
+
+async function requireWorkspaceBillingManager(
+  ctx: {
+    user: { id: number; name: string | null; loginMethod?: string | null };
+  },
+  workspaceId: number
+) {
+  const { workspace, membership } = await requireWorkspaceDetails(
+    ctx,
+    workspaceId
+  );
+  if (membership.role !== "owner" && membership.role !== "admin") {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "billing admin required",
+    });
+  }
+  return { workspace, membership };
+}
+
+function assertTrustedBillingOrigin(req: {
+  headers: Record<string, string | string[] | undefined>;
+}) {
+  const rawOrigin = req.headers.origin;
+  const origin = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
+  const appBaseUrl =
+    process.env.PORTAL_BASE_URL?.trim() || process.env.APP_BASE_URL?.trim();
+  if (!origin || !appBaseUrl) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "trusted origin required",
+    });
+  }
+  try {
+    if (new URL(origin).origin !== new URL(appBaseUrl).origin) {
+      throw new Error("origin mismatch");
+    }
+  } catch {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "trusted origin required",
+    });
+  }
+}
+
 function badRequest(error: unknown, fallback: string) {
+  safeLog("billing_portal_request_rejected", {
+    level: "warn",
+    operation: fallback,
+    errorCode: safeBillingErrorCode(error),
+  });
   return new TRPCError({
     code: "BAD_REQUEST",
-    message: error instanceof Error ? error.message : fallback,
+    message: fallback,
   });
+}
+
+async function insertBillingAuditLogSafely(
+  values: Parameters<typeof db.insertAuditLog>[0]
+): Promise<void> {
+  try {
+    await db.insertAuditLog(values);
+  } catch (error) {
+    safeLog("billing_audit_log_failed", {
+      level: "error",
+      operation: values.event,
+      errorCode: safeBillingErrorCode(error),
+    });
+  }
 }
 
 function redactChannelAccessToken<T extends { encryptedAccessToken?: unknown }>(
@@ -201,20 +310,156 @@ export const portalRouter = router({
       }),
   }),
 
+  billing: router({
+    plans: publicProcedure.query(() =>
+      isMollieBillingEnabled() ? listPublicBillingPlans() : []
+    ),
+
+    summary: protectedProcedure
+      .input(workspaceInput)
+      .query(async ({ ctx, input }) => {
+        const { membership } = await requireWorkspaceMembership(
+          ctx,
+          input.workspaceId
+        );
+        const includePayments =
+          membership.role === "owner" || membership.role === "admin";
+        if (!isMollieBillingEnabled()) {
+          return {
+            subscription: null,
+            entitlement: null,
+            payments: [],
+            plan: null,
+            salesCountry: "BE" as const,
+            b2bCheckoutEnabled: false,
+          };
+        }
+        const config = getMollieConfig();
+        const summary = await getWorkspaceBillingSummary(
+          input.workspaceId,
+          config.mode,
+          { includePayments }
+        );
+        const plan = summary.subscription
+          ? getBillingPlan(summary.subscription.planCode)
+          : null;
+        return {
+          ...summary,
+          plan: plan
+            ? {
+                code: plan.code,
+                publicName: plan.publicName,
+                amount: formatAmountMinor(plan.amountMinor),
+                currency: plan.currency,
+                interval: plan.interval,
+              }
+            : null,
+          salesCountry: "BE" as const,
+          b2bCheckoutEnabled: false,
+        };
+      }),
+
+    checkout: protectedProcedure
+      .input(billingCheckoutInput)
+      .mutation(async ({ ctx, input }) => {
+        await requireWorkspaceBillingAdmin(ctx, input.workspaceId);
+        let checkout: Awaited<ReturnType<typeof startMollieCheckout>>;
+        try {
+          checkout = await startMollieCheckout(input);
+        } catch (error) {
+          throw badRequest(error, "billing checkout failed");
+        }
+        await insertBillingAuditLogSafely({
+          workspaceId: input.workspaceId,
+          userId: ctx.user.id,
+          event: "billing_checkout.started",
+          metadata: { planCode: input.planCode, kind: input.kind },
+        });
+        return checkout;
+      }),
+
+    cancel: protectedProcedure
+      .input(workspaceInput)
+      .mutation(async ({ ctx, input }) => {
+        await requireWorkspaceBillingAdmin(ctx, input.workspaceId);
+        let result: Awaited<
+          ReturnType<typeof cancelMollieSubscriptionAtPeriodEnd>
+        >;
+        try {
+          result = await cancelMollieSubscriptionAtPeriodEnd(input.workspaceId);
+        } catch (error) {
+          throw badRequest(error, "billing cancellation failed");
+        }
+        await insertBillingAuditLogSafely({
+          workspaceId: input.workspaceId,
+          userId: ctx.user.id,
+          event: "billing_subscription.canceled",
+          metadata: { accessPreservedThroughPaidPeriod: true },
+        });
+        return result;
+      }),
+
+    returnStatus: protectedProcedure
+      .input(billingReturnInput)
+      .query(async ({ ctx, input }) => {
+        await requireWorkspaceBillingManager(ctx, input.workspaceId);
+        try {
+          return await getCheckoutReturnStatus(
+            input.workspaceId,
+            input.intentId
+          );
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            error.message === "billing intent not found"
+          ) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "billing intent not found",
+            });
+          }
+          safeLog("billing_return_status_failed", {
+            level: "error",
+            operation: "billing_return_status",
+            errorCode: safeBillingErrorCode(error),
+          });
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "billing status unavailable",
+          });
+        }
+      }),
+
+    launchCheck: protectedProcedure.query(async ({ ctx }) => {
+      requireFacebookPortalUser(ctx);
+      if (ctx.user.role !== "admin") {
+        throw new TRPCError({ code: "FORBIDDEN", message: "admin required" });
+      }
+      return getMollieLaunchCheck();
+    }),
+  }),
+
   workspace: router({
     current: protectedProcedure.query(async ({ ctx }) => {
       return db.getOrCreateUserWorkspace(ctx.user);
     }),
 
-    get: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
-      const { workspace } = await requireWorkspaceDetails(ctx, input.workspaceId);
-      return workspace;
-    }),
+    get: protectedProcedure
+      .input(workspaceInput)
+      .query(async ({ ctx, input }) => {
+        const { workspace } = await requireWorkspaceDetails(
+          ctx,
+          input.workspaceId
+        );
+        return workspace;
+      }),
 
-    members: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
-      await requireWorkspace(ctx, input.workspaceId);
-      return db.listWorkspaceMembers(input.workspaceId);
-    }),
+    members: protectedProcedure
+      .input(workspaceInput)
+      .query(async ({ ctx, input }) => {
+        await requireWorkspace(ctx, input.workspaceId);
+        return db.listWorkspaceMembers(input.workspaceId);
+      }),
 
     update: protectedProcedure
       .input(workspaceUpdateInput)
@@ -236,10 +481,12 @@ export const portalRouter = router({
   }),
 
   aiIdentity: router({
-    get: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
-      await requireWorkspace(ctx, input.workspaceId);
-      return db.getOrCreateAiIdentity(input.workspaceId);
-    }),
+    get: protectedProcedure
+      .input(workspaceInput)
+      .query(async ({ ctx, input }) => {
+        await requireWorkspace(ctx, input.workspaceId);
+        return db.getOrCreateAiIdentity(input.workspaceId);
+      }),
 
     update: protectedProcedure
       .input(aiIdentityUpdateInput)
@@ -257,7 +504,13 @@ export const portalRouter = router({
           userId: ctx.user.id,
           event: "ai_identity.updated",
           metadata: {
-            fields: ["name", "instructions", "tone", "language", "modelDefault"],
+            fields: [
+              "name",
+              "instructions",
+              "tone",
+              "language",
+              "modelDefault",
+            ],
           },
         });
         return updated;
@@ -265,36 +518,40 @@ export const portalRouter = router({
   }),
 
   channels: router({
-    list: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
-      await requireWorkspace(ctx, input.workspaceId);
-      const connections = await db.listChannelConnections(input.workspaceId);
-      return connections.map(redactChannelAccessToken);
-    }),
+    list: protectedProcedure
+      .input(workspaceInput)
+      .query(async ({ ctx, input }) => {
+        await requireWorkspace(ctx, input.workspaceId);
+        const connections = await db.listChannelConnections(input.workspaceId);
+        return connections.map(redactChannelAccessToken);
+      }),
 
-    status: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
-      await requireWorkspace(ctx, input.workspaceId);
-      const connections = await db.listChannelConnections(input.workspaceId);
-      const facebook = connections.find(
-        connection => connection.channel === "facebook_messenger"
-      );
-      return {
-        facebook: facebook
-          ? {
-              channel: facebook.channel,
-              status: facebook.status,
-              pageId: facebook.externalId,
-              pageName: facebook.displayName,
-              lastCheckedAt: facebook.lastCheckedAt,
-            }
-          : {
-              channel: "facebook_messenger" as const,
-              status: "disconnected" as const,
-              pageId: null,
-              pageName: null,
-              lastCheckedAt: null,
-            },
-      };
-    }),
+    status: protectedProcedure
+      .input(workspaceInput)
+      .query(async ({ ctx, input }) => {
+        await requireWorkspace(ctx, input.workspaceId);
+        const connections = await db.listChannelConnections(input.workspaceId);
+        const facebook = connections.find(
+          connection => connection.channel === "facebook_messenger"
+        );
+        return {
+          facebook: facebook
+            ? {
+                channel: facebook.channel,
+                status: facebook.status,
+                pageId: facebook.externalId,
+                pageName: facebook.displayName,
+                lastCheckedAt: facebook.lastCheckedAt,
+              }
+            : {
+                channel: "facebook_messenger" as const,
+                status: "disconnected" as const,
+                pageId: null,
+                pageName: null,
+                lastCheckedAt: null,
+              },
+        };
+      }),
   }),
 
   facebook: router({
@@ -343,7 +600,10 @@ export const portalRouter = router({
         const stored = await getStoredFacebookState(input.state);
         const code = input.code ?? stored?.authorizationCode;
         if (!code || code !== stored?.authorizationCode) {
-          throw badRequest(null, "facebook authorization code missing or mismatched");
+          throw badRequest(
+            null,
+            "facebook authorization code missing or mismatched"
+          );
         }
 
         let pages;
@@ -421,7 +681,10 @@ export const portalRouter = router({
         const facebook = connections.find(
           connection => connection.channel === "facebook_messenger"
         );
-        await db.disconnectChannelConnection(input.workspaceId, "facebook_messenger");
+        await db.disconnectChannelConnection(
+          input.workspaceId,
+          "facebook_messenger"
+        );
         await db.insertAuditLog({
           workspaceId: input.workspaceId,
           userId: ctx.user.id,
@@ -468,10 +731,12 @@ export const portalRouter = router({
   }),
 
   usage: router({
-    summary: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
-      await requireWorkspace(ctx, input.workspaceId);
-      return db.getWorkspaceUsageSummary(input.workspaceId);
-    }),
+    summary: protectedProcedure
+      .input(workspaceInput)
+      .query(async ({ ctx, input }) => {
+        await requireWorkspace(ctx, input.workspaceId);
+        return db.getWorkspaceUsageSummary(input.workspaceId);
+      }),
 
     upgradeRequests: protectedProcedure
       .input(workspaceInput)
@@ -513,25 +778,32 @@ export const portalRouter = router({
   }),
 
   knowledge: router({
-    list: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
-      await requireWorkspace(ctx, input.workspaceId);
-      return db.listWorkspaceKnowledgeSources(input.workspaceId);
-    }),
+    list: protectedProcedure
+      .input(workspaceInput)
+      .query(async ({ ctx, input }) => {
+        await requireWorkspace(ctx, input.workspaceId);
+        return db.listWorkspaceKnowledgeSources(input.workspaceId);
+      }),
 
-    summary: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
-      await requireWorkspace(ctx, input.workspaceId);
-      return db.getWorkspaceKnowledgeSummary(input.workspaceId);
-    }),
+    summary: protectedProcedure
+      .input(workspaceInput)
+      .query(async ({ ctx, input }) => {
+        await requireWorkspace(ctx, input.workspaceId);
+        return db.getWorkspaceKnowledgeSummary(input.workspaceId);
+      }),
 
     registerSource: protectedProcedure
       .input(knowledgeSourceInput)
       .mutation(async ({ ctx, input }) => {
         await requireWorkspace(ctx, input.workspaceId);
-        const source = await db.registerWorkspaceKnowledgeSource(input.workspaceId, {
-          sourceType: input.sourceType,
-          name: input.name,
-          sourceReference: input.sourceReference || null,
-        });
+        const source = await db.registerWorkspaceKnowledgeSource(
+          input.workspaceId,
+          {
+            sourceType: input.sourceType,
+            name: input.name,
+            sourceReference: input.sourceReference || null,
+          }
+        );
         await db.insertAuditLog({
           workspaceId: input.workspaceId,
           userId: ctx.user.id,
@@ -570,19 +842,25 @@ export const portalRouter = router({
       privacy: "/privacy",
       terms: "/terms",
       dataDeletion: "/data-deletion",
-      exportRequest: "mailto:privacy@leaderbot.live?subject=Leaderbot data export",
-      deletionRequest: "mailto:privacy@leaderbot.live?subject=Leaderbot data deletion",
+      exportRequest:
+        "mailto:privacy@leaderbot.live?subject=Leaderbot data export",
+      deletionRequest:
+        "mailto:privacy@leaderbot.live?subject=Leaderbot data deletion",
     })),
 
-    controls: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
-      await requireWorkspace(ctx, input.workspaceId);
-      return db.getWorkspacePrivacySettings(input.workspaceId);
-    }),
+    controls: protectedProcedure
+      .input(workspaceInput)
+      .query(async ({ ctx, input }) => {
+        await requireWorkspace(ctx, input.workspaceId);
+        return db.getWorkspacePrivacySettings(input.workspaceId);
+      }),
 
-    requests: protectedProcedure.input(workspaceInput).query(async ({ ctx, input }) => {
-      await requireWorkspace(ctx, input.workspaceId);
-      return db.listWorkspacePrivacyRequests(input.workspaceId);
-    }),
+    requests: protectedProcedure
+      .input(workspaceInput)
+      .query(async ({ ctx, input }) => {
+        await requireWorkspace(ctx, input.workspaceId);
+        return db.listWorkspacePrivacyRequests(input.workspaceId);
+      }),
 
     createRequest: protectedProcedure
       .input(privacyRequestInput)
@@ -610,11 +888,14 @@ export const portalRouter = router({
       .input(privacyControlsUpdateInput)
       .mutation(async ({ ctx, input }) => {
         await requireWorkspace(ctx, input.workspaceId);
-        const updated = await db.updateWorkspacePrivacySettings(input.workspaceId, {
-          allowKnowledgeIndexing: input.allowKnowledgeIndexing,
-          allowUsageAnalytics: input.allowUsageAnalytics,
-          imageMemoryRetentionDays: input.imageMemoryRetentionDays,
-        });
+        const updated = await db.updateWorkspacePrivacySettings(
+          input.workspaceId,
+          {
+            allowKnowledgeIndexing: input.allowKnowledgeIndexing,
+            allowUsageAnalytics: input.allowUsageAnalytics,
+            imageMemoryRetentionDays: input.imageMemoryRetentionDays,
+          }
+        );
         await db.insertAuditLog({
           workspaceId: input.workspaceId,
           userId: ctx.user.id,

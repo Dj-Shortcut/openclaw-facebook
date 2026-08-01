@@ -6,6 +6,7 @@ export default defineConfig({
     exclude: [
       "apps/**",
       ".worktrees/**",
+      ".pnpm-store/**",
       ".tmp-npm-pack/**",
       "node_modules/**",
       "dist/**",

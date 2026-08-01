@@ -3,11 +3,15 @@ import express from "express";
 import rateLimit from "express-rate-limit";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createGlobalHttpRateLimiter } from "./_core/httpRateLimit";
+import {
+  createGlobalHttpRateLimiter,
+  shouldSkipHttpRateLimit,
+} from "./_core/httpRateLimit";
 import { bindTestHttpServer } from "./testHttpServer";
 
 const originalWindowMs = process.env.HTTP_RATE_LIMIT_WINDOW_MS;
 const originalMaxRequests = process.env.HTTP_RATE_LIMIT_MAX_REQUESTS;
+const originalMollieBillingEnabled = process.env.MOLLIE_BILLING_ENABLED;
 
 afterEach(() => {
   if (originalWindowMs === undefined) {
@@ -21,9 +25,18 @@ afterEach(() => {
   } else {
     process.env.HTTP_RATE_LIMIT_MAX_REQUESTS = originalMaxRequests;
   }
+
+  if (originalMollieBillingEnabled === undefined) {
+    delete process.env.MOLLIE_BILLING_ENABLED;
+  } else {
+    process.env.MOLLIE_BILLING_ENABLED = originalMollieBillingEnabled;
+  }
 });
 
-async function startServer(options?: { forceIp?: string; pathPrefix?: string }) {
+async function startServer(options?: {
+  forceIp?: string;
+  pathPrefix?: string;
+}) {
   const app = express();
   const limitedPath = `${options?.pathPrefix ?? ""}/limited`;
   const healthPath = "/healthz";
@@ -144,5 +157,28 @@ describe("global http rate limiter", () => {
     } finally {
       await server.close();
     }
+  });
+
+  it("delegates only the exact enabled Mollie POST route to its dedicated limiter", () => {
+    process.env.MOLLIE_BILLING_ENABLED = "true";
+    const request = (method: string, path: string) =>
+      ({ method, path }) as express.Request;
+
+    expect(
+      shouldSkipHttpRateLimit(request("POST", "/api/webhooks/mollie/payments"))
+    ).toBe(true);
+    expect(
+      shouldSkipHttpRateLimit(request("GET", "/api/webhooks/mollie/payments"))
+    ).toBe(false);
+    expect(
+      shouldSkipHttpRateLimit(
+        request("POST", "/api/webhooks/mollie/payments-extra")
+      )
+    ).toBe(false);
+
+    delete process.env.MOLLIE_BILLING_ENABLED;
+    expect(
+      shouldSkipHttpRateLimit(request("POST", "/api/webhooks/mollie/payments"))
+    ).toBe(false);
   });
 });

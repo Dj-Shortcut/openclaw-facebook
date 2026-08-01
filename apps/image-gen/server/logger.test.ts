@@ -102,6 +102,41 @@ describe("safeLog redaction", () => {
     expect(JSON.stringify(payload)).not.toContain("abc");
   });
 
+  it("redacts Mollie keys, resource identifiers, and customer fields", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fakeMollieKey = ["test", "aaaaaaaaaaaa"].join("_");
+    const mollieIds = [
+      "tr_payment123",
+      "cst_customer123",
+      "mdt_mandate123",
+      "sub_subscription123",
+      "re_refund123",
+      "chb_chargeback123",
+      "stl_settlement123",
+      "ord_order123",
+    ];
+
+    safeLog("billing_error", {
+      level: "error",
+      apiKey: fakeMollieKey,
+      mollieCustomerId: "cst_customer123",
+      paymentId: "tr_payment123",
+      error: new Error(
+        `${fakeMollieKey} ${mollieIds.join(" ")} customer@example.com`
+      ),
+    });
+
+    const serialized = String(errorSpy.mock.calls[0]?.[0]);
+    expect(serialized).not.toContain(fakeMollieKey);
+    for (const mollieId of mollieIds) {
+      expect(serialized).not.toContain(mollieId);
+    }
+    expect(serialized).not.toContain("customer@example.com");
+    expect(serialized).toContain("MOLLIE_KEY_REDACTED");
+    expect(serialized).toContain("MOLLIE_ID_REDACTED");
+    expect(serialized).toContain("EMAIL_REDACTED");
+  });
+
   it("redacts nested users, circular arrays, and event overrides", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const circular: unknown[] = [];

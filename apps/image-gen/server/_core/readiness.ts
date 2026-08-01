@@ -10,6 +10,11 @@ import { ensureStateStoreReady } from "./stateStore";
 import { ensureWebhookIngressQueueReady } from "./meta/webhookIngressQueue";
 import { ensureWebhookReplayProtectionReady } from "./webhookReplayProtection";
 import { assertPortalDatabaseConfig } from "./env";
+import {
+  assertMollieConfig,
+  assertTenantBillingWorkerConfigured,
+  isMollieBillingEnabled,
+} from "./billing/config";
 
 export type ReadinessCheck = {
   name: string;
@@ -85,6 +90,15 @@ export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
     {
       name: "portal_database_config",
       check: assertPortalDatabaseConfig,
+    },
+    {
+      name: "mollie_billing_config",
+      check: () => {
+        if (isMollieBillingEnabled()) {
+          assertMollieConfig();
+          assertTenantBillingWorkerConfigured();
+        }
+      },
     },
     {
       name: "webhook_replay_protection",

@@ -10,7 +10,8 @@
     "build": "vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/index.js",
     "build:docker": "vite build && esbuild server/_core/index.ts --platform=node --bundle --format=cjs --external:vite --outfile=dist/index.cjs",
     "check": "tsc --noEmit",
-    "db:push": "drizzle-kit generate && drizzle-kit migrate",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
     "dev": "cross-env NODE_ENV=development tsx watch server/_core/index.ts",
     "deploy:check-docker": "node scripts/check-docker-host.mjs",
     "deploy:verify-portal": "node scripts/verify-portal-production.mjs",
@@ -91,7 +92,7 @@
     "vite": "^8.1.5",
     "vitest": "^4.1.10"
   },
-  "packageManager": "pnpm@10.4.1+sha512.c753b6c3ad7afa13af388fa6d808035a008e30ea9993f58c6663e2bc5ff21679aa834db094987129aa4d488b86df57f7b634981b2f827cdcacc698cc0cfb88af",
+  "packageManager": "pnpm@10.28.1",
   "pnpm": {
     "overrides": {
       "tailwindcss>nanoid": "3.3.7",

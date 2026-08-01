@@ -1,5 +1,9 @@
 import type express from "express";
 import { ensureRedisReady, getRedisClient, isRedisEnabled } from "./redis";
+import {
+  getMollieWebhookPath,
+  isMollieBillingEnabled,
+} from "./billing/config";
 
 const DEFAULT_WINDOW_MS = 60_000;
 const DEFAULT_MAX_REQUESTS = 120;
@@ -57,7 +61,10 @@ export function shouldSkipHttpRateLimit(req: express.Request): boolean {
   return (
     req.path === "/health" ||
     req.path === "/healthz" ||
-    req.path === "/readyz"
+    req.path === "/readyz" ||
+    (isMollieBillingEnabled() &&
+      req.method === "POST" &&
+      req.path === getMollieWebhookPath())
   );
 }
 
@@ -165,11 +172,10 @@ async function applyRateLimit(
   }
 }
 
-function resetGlobalHttpRateLimiter(): void {
-  buckets.clear();
-}
-
 export async function ensureHttpRateLimiterReady(): Promise<void> {
+  if (isMollieBillingEnabled() && !isRedisEnabled()) {
+    throw new Error("Mollie webhook rate limiting requires Redis");
+  }
   await ensureRedisReady();
 }
 

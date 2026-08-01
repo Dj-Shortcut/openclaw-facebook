@@ -63,7 +63,22 @@ These show up in the repo and can be mistaken for the main OpenAI path.
 | `HTTP_RATE_LIMIT_REDIS_GUARD_MAX_REQUESTS` | Global HTTP rate limiting | Optional pre-Redis guard cap per window; defaults to `max(1000, HTTP_RATE_LIMIT_MAX_REQUESTS * 10)`. |
 | `ADMIN_TOKEN` | Debug/admin endpoints | Required for `/admin/disable-face-memory` and `/debug/build`; those endpoints also have a stricter admin-auth rate limit. |
 
-## 5. Fast triage
+## 5. Mollie billing (live remains disabled)
+
+| Variable | Required for | Notes |
+| --- | --- | --- |
+| `MOLLIE_BILLING_ENABLED` | Master billing feature switch | Defaults off. When false, checkout, public paid plans, Mollie webhooks, billing workers and reconciliation are not started. Enable only in an approved test or launch environment. |
+| `MOLLIE_API_KEY` | Mollie API calls | Use only a `test_` key until launch approval; never log or commit it. |
+| `MOLLIE_MODE` | Mode guard | Must be exactly `test` or `live` and match the key prefix. |
+| `MOLLIE_PAYMENT_WEBHOOK_URL` | Classic payment updates | Exact HTTPS production path: `/api/webhooks/mollie/payments`. |
+| `APP_BASE_URL` | Billing redirect and trusted Origin | HTTPS in production/live mode. |
+| `BILLING_SUPPORT_EMAIL` | Customer billing support | Public support address, not a secret. |
+| `MOLLIE_LIVE_BILLING_ENABLED` | Independent live kill switch | Defaults off; may be `true` only with `MOLLIE_MODE=live` after GO. |
+| `MOLLIE_RECONCILIATION_ENABLED` | Daily state reconciliation | Defaults enabled; disabling requires an incident/change record. |
+| `MOLLIE_BILLING_WORKER_WORKSPACE_ID` | Tenant-bound outbox/reconciliation worker | Required for checkout in the isolated Test Mode foundation. Must be one positive workspace ID; this is not the final multi-tenant scheduler. |
+| `MOLLIE_WEBHOOK_RATE_LIMIT_PER_MINUTE` | Dedicated classic-webhook protection | Defaults to 6000 per source IP/minute so the shared app limiter cannot suppress Mollie delivery. |
+
+## 6. Fast triage
 
 When the bot seems broken, check in this order:
 
@@ -90,7 +105,7 @@ If WhatsApp is involved, also check:
 3. `META_VERIFY_TOKEN` or `WHATSAPP_VERIFY_TOKEN`
 4. Meta callback URL: `https://leaderbot-fb-image-gen.fly.dev/webhook/whatsapp`
 
-## 6. Current local-dev gotchas
+## 7. Current local-dev gotchas
 
 Based on the current local `.env` in this repo:
 
