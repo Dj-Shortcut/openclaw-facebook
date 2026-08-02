@@ -17,6 +17,9 @@ import {
 
 const LEGACY_CHAT_HISTORY_SCOPE = "chat:history";
 
+export type UserDataDeletionOutcome =
+  { status: "completed" } | { status: "pending" } | { status: "failed" };
+
 function getStateImageUrls(state: MessengerUserState): string[] {
   return [
     state.lastPhotoUrl,
@@ -30,7 +33,10 @@ function getStateImageUrls(state: MessengerUserState): string[] {
   ].filter((url): url is string => Boolean(url));
 }
 
-async function deleteStoredUrl(logUser: string, imageUrl: string): Promise<boolean> {
+async function deleteStoredUrl(
+  logUser: string,
+  imageUrl: string
+): Promise<boolean> {
   const key = storageKeyFromPublicUrl(imageUrl);
   if (!key) {
     return true;
@@ -43,13 +49,16 @@ async function deleteStoredUrl(logUser: string, imageUrl: string): Promise<boole
     safeLog("user_data_storage_delete_failed", {
       user: logUser,
       key,
-      errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
+      errorCode:
+        error instanceof Error ? error.constructor.name : "UnknownError",
     });
     return false;
   }
 }
 
-export async function deleteUserData(psid: string): Promise<void> {
+async function deleteUserDataInternal(
+  psid: string
+): Promise<UserDataDeletionOutcome> {
   const state = await getState(psid);
   const userKey = state?.userKey ?? anonymizePsid(psid);
   const logUser = toLogUser(userKey);
@@ -64,12 +73,16 @@ export async function deleteUserData(psid: string): Promise<void> {
         pendingImageAt: state.pendingImageAt,
         stage: state.stage,
         state: state.state,
-        pendingScreenshotIntentContinuation: state.pendingScreenshotIntentContinuation,
+        pendingScreenshotIntentContinuation:
+          state.pendingScreenshotIntentContinuation,
         pendingEditIntent: state.pendingEditIntent,
       }
     : null;
 
-  const runStep = async (step: string, fn: () => Promise<void>): Promise<boolean> => {
+  const runStep = async (
+    step: string,
+    fn: () => Promise<void>
+  ): Promise<boolean> => {
     try {
       await fn();
       return true;
@@ -77,7 +90,8 @@ export async function deleteUserData(psid: string): Promise<void> {
       safeLog("user_data_delete_step_failed", {
         user: logUser,
         step,
-        errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
+        errorCode:
+          error instanceof Error ? error.constructor.name : "UnknownError",
       });
       return false;
     }
@@ -85,62 +99,76 @@ export async function deleteUserData(psid: string): Promise<void> {
 
   let deleteStepsSucceeded = true;
 
-  deleteStepsSucceeded = (await runStep("cost_ledger", async () => {
-    await deleteCostLedgerEntriesForUser(userKey);
-  })) && deleteStepsSucceeded;
+  deleteStepsSucceeded =
+    (await runStep("cost_ledger", async () => {
+      await deleteCostLedgerEntriesForUser(userKey);
+    })) && deleteStepsSucceeded;
 
-  deleteStepsSucceeded = (await runStep("portal_handoff_tokens", async () => {
-    await deletePortalHandoffTokensForMessengerUserKey(userKey);
-  })) && deleteStepsSucceeded;
+  deleteStepsSucceeded =
+    (await runStep("portal_handoff_tokens", async () => {
+      await deletePortalHandoffTokensForMessengerUserKey(userKey);
+    })) && deleteStepsSucceeded;
+
+  deleteStepsSucceeded =
+    (await runStep("legacy_shadow_state", async () => {
+      // Older Messenger handlers also wrote selected flow fields under the
+      // privacy-peppered user key. No runtime reader needs that shadow record,
+      // but erasure must remove it while legacy data can still exist.
+      await Promise.resolve(clearUserState(userKey));
+    })) && deleteStepsSucceeded;
 
   if (!state) {
-    if (deleteStepsSucceeded) {
-      await Promise.resolve(clearUserState(psid));
+    if (!deleteStepsSucceeded) {
+      return { status: "failed" };
     }
-    return;
+    await Promise.resolve(clearUserState(psid));
+    return { status: "completed" };
   }
 
   const urls = Array.from(new Set(getStateImageUrls(state)));
 
-  deleteStepsSucceeded = (await runStep("face_memory", () =>
-    deleteFaceMemoryForUser(psid)
-  )) && deleteStepsSucceeded;
+  deleteStepsSucceeded =
+    (await runStep("face_memory", () => deleteFaceMemoryForUser(psid))) &&
+    deleteStepsSucceeded;
   const deleteResults = await Promise.all(
     urls.map(async url => ({
       url,
       deleted: await deleteStoredUrl(logUser, url),
     }))
   );
-  deleteStepsSucceeded = (await runStep("legacy_chat_history", () =>
-    Promise.resolve(deleteScopedState(LEGACY_CHAT_HISTORY_SCOPE, state.userKey))
-  )) && deleteStepsSucceeded;
-  deleteStepsSucceeded = (await runStep("messenger_generation_completion", () =>
-    deleteMessengerGenerationCompletionsForUser(state.userKey)
-  )) && deleteStepsSucceeded;
-  if (state.lastGeneratedVideoProviderJobId) {
-    deleteStepsSucceeded = (await runStep("video_provider_artifact", () =>
-      deleteProviderVideoForUser({
-        provider: state.lastGeneratedVideoProvider ?? null,
-        providerJobId: state.lastGeneratedVideoProviderJobId!,
-        reqId: "delete-my-data",
-      })
+  deleteStepsSucceeded =
+    (await runStep("legacy_chat_history", () =>
+      Promise.resolve(
+        deleteScopedState(LEGACY_CHAT_HISTORY_SCOPE, state.userKey)
+      )
     )) && deleteStepsSucceeded;
+  deleteStepsSucceeded =
+    (await runStep("messenger_generation_completion", () =>
+      deleteMessengerGenerationCompletionsForUser(state.userKey)
+    )) && deleteStepsSucceeded;
+  if (state.lastGeneratedVideoProviderJobId) {
+    deleteStepsSucceeded =
+      (await runStep("video_provider_artifact", () =>
+        deleteProviderVideoForUser({
+          provider: state.lastGeneratedVideoProvider ?? null,
+          providerJobId: state.lastGeneratedVideoProviderJobId!,
+          reqId: "delete-my-data",
+        })
+      )) && deleteStepsSucceeded;
   }
 
   const failedDeletes = deleteResults
     .filter(result => !result.deleted)
     .map(result => result.url);
   if (failedDeletes.length) {
-    await Promise.resolve(
-      setPendingSourceImageDeleteUrls(psid, failedDeletes)
-    );
-    return;
+    await Promise.resolve(setPendingSourceImageDeleteUrls(psid, failedDeletes));
+    return { status: "pending" };
   }
 
   if (!deleteStepsSucceeded) {
     // Keep retry-related state when required deletion steps fail; allow
     // delete-my-data operations to be retried without losing in-flight context.
-    if (state && retryContext) {
+    if (retryContext) {
       const currentState = await getState(psid);
       if (currentState) {
         await Promise.resolve(
@@ -149,10 +177,33 @@ export async function deleteUserData(psid: string): Promise<void> {
             ...retryContext,
           })
         );
+        return { status: "pending" };
       }
     }
-    return;
+    return { status: "failed" };
   }
 
   await Promise.resolve(clearUserState(psid));
+  return { status: "completed" };
+}
+
+export async function deleteUserData(
+  psid: string
+): Promise<UserDataDeletionOutcome> {
+  try {
+    return await deleteUserDataInternal(psid);
+  } catch (error) {
+    let logUser = "unknown";
+    try {
+      logUser = toLogUser(anonymizePsid(psid));
+    } catch {
+      // Keep the fallback metadata-only identifier when privacy config is invalid.
+    }
+    safeLog("user_data_delete_failed", {
+      user: logUser,
+      errorCode:
+        error instanceof Error ? error.constructor.name : "UnknownError",
+    });
+    return { status: "failed" };
+  }
 }

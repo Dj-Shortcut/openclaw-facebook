@@ -16,6 +16,7 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic } from "./vite";
 import { assertPrivacyConfig } from "./privacy";
+import { assertConversationIdentityConfig } from "./conversationIdentityConfig";
 import { applySecurityHeaders } from "./securityHeaders";
 import {
   getGeneratedImage,
@@ -187,6 +188,7 @@ async function startServer() {
     safeLog("mollie_billing_disabled");
   }
   assertPrivacyConfig();
+  assertConversationIdentityConfig();
   assertProductionStateStoreConfig();
   assertProductionWebhookReplayProtectionConfig();
   await ensureStateStoreReady();

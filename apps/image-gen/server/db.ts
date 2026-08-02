@@ -38,6 +38,11 @@ import {
   type WorkspaceMember,
 } from "../drizzle/schema";
 import { ENV } from './_core/env';
+import {
+  ConversationIdentityError,
+  resolveMessengerEndpoint,
+  resolveWhatsAppEndpoint,
+} from "./_core/conversationEndpoint";
 import { safeLog } from "./_core/logger";
 import {
   getBotTextRateLimitMax,
@@ -452,6 +457,7 @@ export async function listChannelConnections(workspaceId: number) {
         channel: "facebook_messenger" as const,
         status: "disconnected" as const,
         externalId: null,
+        providerAccountExternalId: null,
         displayName: null,
         encryptedAccessToken: null,
         grantedScopes: null,
@@ -1163,6 +1169,50 @@ export class ChannelConnectionClaimConflictError extends Error {
   }
 }
 
+function normalizeChannelConnectionEndpoint(
+  values: InsertChannelConnection
+): Readonly<{
+  externalId: string | null;
+  providerAccountExternalId: string | null;
+}> {
+  if (values.status === "disconnected") {
+    return Object.freeze({
+      externalId: null,
+      providerAccountExternalId: null,
+    });
+  }
+
+  if (values.channel === "facebook_messenger") {
+    if (
+      values.providerAccountExternalId !== undefined &&
+      values.providerAccountExternalId !== null
+    ) {
+      throw new ConversationIdentityError("invalid_input");
+    }
+    const endpoint = resolveMessengerEndpoint({ entryId: values.externalId });
+    return Object.freeze({
+      externalId: endpoint.pageId,
+      providerAccountExternalId: null,
+    });
+  }
+
+  if (values.channel === "whatsapp") {
+    const endpoint = resolveWhatsAppEndpoint({
+      wabaId: values.providerAccountExternalId,
+      phoneNumberId: values.externalId,
+    });
+    return Object.freeze({
+      externalId: endpoint.phoneNumberId,
+      providerAccountExternalId: endpoint.wabaId,
+    });
+  }
+
+  return Object.freeze({
+    externalId: values.externalId?.trim() || null,
+    providerAccountExternalId: null,
+  });
+}
+
 function isDuplicateKeyError(error: unknown): boolean {
   return databaseErrorChainSome(
     error,
@@ -1204,17 +1254,19 @@ function databaseErrorChainSome(
  * workspace and must fail closed instead of replacing that tenant's token.
  */
 export async function upsertChannelConnection(values: InsertChannelConnection) {
+  const { externalId, providerAccountExternalId } =
+    normalizeChannelConnectionEndpoint(values);
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("upsert_channel_connection");
     throw new Error("Database unavailable: channel connection was not saved");
   }
 
-  const externalId = values.externalId?.trim() || null;
   const lastCheckedAt = new Date();
   const updateSet = {
     status: values.status,
     externalId,
+    providerAccountExternalId,
     displayName: values.displayName ?? null,
     encryptedAccessToken: values.encryptedAccessToken ?? null,
     grantedScopes: values.grantedScopes ?? null,
@@ -1223,6 +1275,32 @@ export async function upsertChannelConnection(values: InsertChannelConnection) {
 
   const writeConnection = () =>
     db.transaction(async tx => {
+      if (providerAccountExternalId) {
+        const claimedProviderAccount = await tx
+          .select({
+            id: channelConnections.id,
+            workspaceId: channelConnections.workspaceId,
+          })
+          .from(channelConnections)
+          .where(
+            and(
+              eq(channelConnections.channel, values.channel),
+              eq(
+                channelConnections.providerAccountExternalId,
+                providerAccountExternalId
+              )
+            )
+          )
+          .limit(1)
+          .for("update");
+        if (
+          claimedProviderAccount[0] &&
+          claimedProviderAccount[0].workspaceId !== values.workspaceId
+        ) {
+          throw new ChannelConnectionClaimConflictError();
+        }
+      }
+
       if (externalId) {
         const claimed = await tx
           .select({
@@ -1272,6 +1350,7 @@ export async function upsertChannelConnection(values: InsertChannelConnection) {
       await tx.insert(channelConnections).values({
         ...values,
         externalId,
+        providerAccountExternalId,
         lastCheckedAt,
       });
     });
@@ -1319,6 +1398,7 @@ export async function disconnectChannelConnection(
     channel,
     status: "disconnected",
     externalId: null,
+    providerAccountExternalId: null,
     displayName: null,
     encryptedAccessToken: null,
     grantedScopes: null,
@@ -1327,6 +1407,7 @@ export async function disconnectChannelConnection(
     set: {
       status: "disconnected",
       externalId: null,
+      providerAccountExternalId: null,
       displayName: null,
       encryptedAccessToken: null,
       grantedScopes: null,

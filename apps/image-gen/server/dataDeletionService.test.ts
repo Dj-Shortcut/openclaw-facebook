@@ -47,9 +47,15 @@ import {
   getOrCreateState,
   getState,
   resetStateStore,
+  setFlowState,
   setPendingImage,
 } from "./_core/messengerState";
-import { readScopedState, writeScopedState, writeState } from "./_core/stateStore";
+import {
+  readScopedState,
+  readState,
+  writeScopedState,
+  writeState,
+} from "./_core/stateStore";
 
 describe("data deletion service", () => {
   const originalRedisUrl = process.env.REDIS_URL;
@@ -98,7 +104,9 @@ describe("data deletion service", () => {
       expect.objectContaining({ text: "old chat" }),
     ]);
 
-    await deleteUserData(psid);
+    await expect(deleteUserData(psid)).resolves.toEqual({
+      status: "completed",
+    });
 
     expect(await Promise.resolve(readScopedState("chat:history", userKey))).toBeNull();
   });
@@ -121,7 +129,9 @@ describe("data deletion service", () => {
       )
     ).toEqual(expect.objectContaining({ userKey }));
 
-    await deleteUserData(psid);
+    await expect(deleteUserData(psid)).resolves.toEqual({
+      status: "completed",
+    });
 
     expect(
       await Promise.resolve(
@@ -177,7 +187,9 @@ describe("data deletion service", () => {
       recordedAt
     );
 
-    await deleteUserData(psid);
+    await expect(deleteUserData(psid)).resolves.toEqual({
+      status: "completed",
+    });
 
     const remainingEntries = await readCostLedgerPeriod(period);
     expect(remainingEntries).toEqual([
@@ -194,11 +206,32 @@ describe("data deletion service", () => {
 
     await Promise.resolve(getOrCreateState(psid));
 
-    await deleteUserData(psid);
+    await expect(deleteUserData(psid)).resolves.toEqual({
+      status: "completed",
+    });
 
     expect(deletePortalHandoffTokensForMessengerUserKeyMock).toHaveBeenCalledWith(
       userKey
     );
+  });
+
+  it("deletes legacy state shadowed under the privacy-peppered user key", async () => {
+    const psid = "delete-shadow-state-user";
+    const userKey = anonymizePsid(psid);
+
+    await Promise.resolve(getOrCreateState(psid));
+    await Promise.resolve(setFlowState(userKey, "PROCESSING"));
+    expect(await Promise.resolve(readState(userKey))).toMatchObject({
+      psid,
+      stage: "PROCESSING",
+    });
+
+    await expect(deleteUserData(psid)).resolves.toEqual({
+      status: "completed",
+    });
+
+    expect(await Promise.resolve(getState(psid))).toBeNull();
+    expect(await Promise.resolve(readState(userKey))).toBeNull();
   });
 
   it("keeps user state when a required deletion step fails", async () => {
@@ -227,7 +260,7 @@ describe("data deletion service", () => {
       new Error("temporary video artifact deletion failure")
     );
 
-    await deleteUserData(psid);
+    await expect(deleteUserData(psid)).resolves.toEqual({ status: "pending" });
 
     expect(await Promise.resolve(getState(psid))).toMatchObject({
       userKey: state.userKey,
@@ -254,7 +287,7 @@ describe("data deletion service", () => {
     deleteProviderVideoForUserMock.mockRejectedValueOnce(
       new Error("temporary video artifact deletion failure")
     );
-    await deleteUserData(psid);
+    await expect(deleteUserData(psid)).resolves.toEqual({ status: "pending" });
 
     const stateAfter = await Promise.resolve(getState(psid));
     expect(stateAfter).toEqual(
@@ -281,11 +314,21 @@ describe("data deletion service", () => {
       )
     );
 
-    await deleteUserData(psid);
+    await expect(deleteUserData(psid)).resolves.toEqual({ status: "pending" });
 
     expect((await Promise.resolve(getState(psid)))?.pendingSourceImageDeleteUrl).toBe(
       "https://assets.example/inbound-source/delete-me.jpg"
     );
+  });
+
+  it("reports failure when a required deletion step fails without retry state", async () => {
+    const psid = "delete-step-failure-without-state-user";
+    deletePortalHandoffTokensForMessengerUserKeyMock.mockRejectedValueOnce(
+      new Error("temporary handoff-token deletion failure")
+    );
+
+    await expect(deleteUserData(psid)).resolves.toEqual({ status: "failed" });
+    expect(await Promise.resolve(getState(psid))).toBeNull();
   });
 
   it("does not log raw PSIDs when object storage deletion fails", async () => {

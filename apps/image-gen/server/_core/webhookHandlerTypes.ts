@@ -32,7 +32,8 @@ export type HandlerContext = {
   claimEventReplayOrLog: (
     event: FacebookWebhookEvent,
     entryId: string | undefined,
-    userId: string
+    userId: string,
+    reqId: string
   ) => Promise<boolean>;
   createFeatureImageContext: (
     psid: string,

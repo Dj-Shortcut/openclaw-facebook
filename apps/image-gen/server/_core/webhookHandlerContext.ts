@@ -30,7 +30,6 @@ import { isDebugLogEnabled } from "./logLevel";
 import { getTodayRuntimeStats } from "./botRuntimeStats";
 import type { BotLogger, BotPayloadContext } from "./botContext";
 import type { ConversationAction } from "./botResponse";
-import type { GenerationKind } from "./image-generation/generationTypes";
 import type { MaybeInFlightMessageResult } from "./webhookFallback";
 import type { HandlerContext, MessengerState } from "./webhookHandlerTypes";
 
@@ -286,21 +285,12 @@ export function createHandlerContext({
       },
       setFlowState: async nextState => {
         await setFlowState(psid, nextState);
-        if (userId !== psid) {
-          await setFlowState(userId, nextState);
-        }
       },
       setPendingEditIntent: async intent => {
         await setPendingEditIntent(psid, intent);
-        if (userId !== psid) {
-          await setPendingEditIntent(userId, intent);
-        }
       },
       clearImageContext: async () => {
         await clearPendingImageState(psid);
-        if (userId !== psid) {
-          await clearPendingImageState(userId);
-        }
       },
       runImageGeneration: async (
         sourceImageUrl,
@@ -337,7 +327,8 @@ export function createHandlerContext({
   async function claimEventReplayOrLog(
     event: FacebookWebhookEvent,
     entryId: string | undefined,
-    userId: string
+    userId: string,
+    reqId: string
   ): Promise<boolean> {
     const dedupeKey = getEventDedupeKey(event, userId, entryId);
     if (!dedupeKey) {
@@ -350,8 +341,7 @@ export function createHandlerContext({
     }
 
     safeLog("webhook_replay_ignored", {
-      user: toLogUser(userId),
-      eventId: dedupeKey,
+      reqId,
     });
     return false;
   }

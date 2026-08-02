@@ -1,4 +1,7 @@
-import type { MessengerGenerationJob } from "./messengerGenerationJob";
+import {
+  isMessengerGenerationTenantPartition,
+  type MessengerGenerationJob,
+} from "./messengerGenerationJob";
 import { normalizeSupportedUiLang } from "./i18n";
 
 const MESSENGER_GENERATION_KINDS = new Set([
@@ -53,6 +56,8 @@ function parseMessengerGenerationJob(
     !isOptionalString(value.sourceImageUrl) ||
     !isOptionalString(value.promptHint) ||
     !isOptionalString(value.pageId) ||
+    (value.tenantPartition !== undefined &&
+      !isMessengerGenerationTenantPartition(value.tenantPartition)) ||
     !isOptionalAttempts(value.attempts)
   ) {
     return null;
@@ -64,6 +69,7 @@ function parseMessengerGenerationJob(
     reqId: value.reqId,
     lang,
     pageId: value.pageId?.trim() || undefined,
+    tenantPartition: value.tenantPartition,
     sourceImageUrl: value.sourceImageUrl,
     promptHint: value.promptHint,
     attempts: value.attempts,

@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   insertAuditLog: vi.fn(),
   consumePortalHandoffToken: vi.fn(),
   claimPortalHandoffToken: vi.fn(),
+  isPortalHandoffTenantBoundaryReady: vi.fn(() => true),
 }));
 
 vi.mock("./db", () => ({
@@ -57,6 +58,11 @@ vi.mock("./db", () => ({
 vi.mock("./_core/portalHandoff", () => ({
   consumePortalHandoffToken: mocks.consumePortalHandoffToken,
   claimPortalHandoffToken: mocks.claimPortalHandoffToken,
+}));
+
+vi.mock("./_core/portalHandoffSecurity", () => ({
+  isPortalHandoffTenantBoundaryReady:
+    mocks.isPortalHandoffTenantBoundaryReady,
 }));
 
 const user: NonNullable<TrpcContext["user"]> = {
@@ -140,6 +146,7 @@ async function expectFacebookLoginRequired(call: () => Promise<unknown>) {
 describe("portal router tenant isolation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.isPortalHandoffTenantBoundaryReady.mockReturnValue(true);
     mocks.getWorkspaceMembership.mockResolvedValue(null);
   });
 
@@ -315,6 +322,7 @@ describe("portal router tenant isolation", () => {
 describe("portal router audit logging", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.isPortalHandoffTenantBoundaryReady.mockReturnValue(true);
     mocks.getWorkspaceMembership.mockResolvedValue({
       workspaceId,
       userId: user.id,
@@ -490,6 +498,20 @@ describe("portal router audit logging", () => {
     expect(JSON.stringify(mocks.insertAuditLog.mock.calls)).not.toContain(
       "hashed-sender-key"
     );
+  });
+
+  it("does not consume handoff tokens while the tenant boundary is unavailable", async () => {
+    const caller = createCaller();
+    mocks.isPortalHandoffTenantBoundaryReady.mockReturnValue(false);
+
+    await expect(
+      caller.handoff.claim({ token: "opaque-portal-handoff-token-value" })
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: "portal handoff unavailable",
+    });
+
+    expect(mocks.claimPortalHandoffToken).not.toHaveBeenCalled();
   });
 
   it("rejects non-Facebook handoff claims before consuming the token", async () => {

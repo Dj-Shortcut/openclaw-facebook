@@ -12,6 +12,7 @@ import {
   type MessengerGenerationQueueStats,
 } from "../messengerGenerationQueue";
 import { sendPortalHandoffLink } from "../portalHandoffDelivery";
+import { isPortalHandoffTenantBoundaryReady } from "../portalHandoffSecurity";
 import { isRedisReplayProtectionEnabled } from "../webhookReplayProtection";
 
 type VersionPayload = {
@@ -377,6 +378,15 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
         })
       ) {
         return res.sendStatus(403);
+      }
+
+      if (!isPortalHandoffTenantBoundaryReady()) {
+        safeLog("admin_portal_handoff_tenant_boundary_unavailable", {
+          level: "warn",
+        });
+        return res
+          .status(503)
+          .json({ error: "portal handoff unavailable" });
       }
 
       const parsedBody = portalHandoffSendBodySchema.safeParse(req.body);

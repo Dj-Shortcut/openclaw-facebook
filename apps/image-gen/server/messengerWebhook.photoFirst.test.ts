@@ -221,7 +221,7 @@ describe("photo-first onboarding", () => {
     expect(userState?.lastSourceImageUpdatedAt).toEqual(expect.any(Number));
   });
 
-  it("deletes retained face-memory data after confirmation", async () => {
+  it("keeps deletion pending when retained face-memory storage cannot be removed", async () => {
     process.env.ENABLE_FACE_MEMORY = "true";
     const psid = "face-memory-delete-user";
 
@@ -296,7 +296,7 @@ describe("photo-first onboarding", () => {
     );
     expect(sendTextMock).toHaveBeenCalledWith(
       psid,
-      expect.stringContaining("Je data is verwijderd")
+      expect.stringContaining("nog niet al je data verwijderen")
     );
   });
 

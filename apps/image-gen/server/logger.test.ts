@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { safeLog } from "./_core/logger";
+import { createLogger, safeLog } from "./_core/logger";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -46,6 +46,33 @@ describe("safeLog routing", () => {
   });
 });
 
+describe("createLogger redaction", () => {
+  it("applies the same privacy boundary as safeLog", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logger = createLogger({
+      reqId: "3f8161cc-ec79-4c80-aa63-cad8d9c107ab",
+    });
+
+    logger.error({
+      event: "whatsapp_graph_failed",
+      body: "private message for +32470000000",
+      senderId: "raw-sender-id",
+      reason: "upstream rejected request",
+    });
+
+    const payload = JSON.parse(String(errorSpy.mock.calls[0]?.[0]));
+    expect(payload).toMatchObject({
+      level: "error",
+      event: "whatsapp_graph_failed",
+      reqId: "3f8161cc-ec79-4c80-aa63-cad8d9c107ab",
+      reason: "upstream rejected request",
+    });
+    expect(payload).not.toHaveProperty("body");
+    expect(payload).not.toHaveProperty("senderId");
+    expect(JSON.stringify(payload)).not.toContain("+32470000000");
+  });
+});
+
 describe("safeLog redaction", () => {
   it("preserves already-hashed operational identifiers", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -63,6 +90,27 @@ describe("safeLog redaction", () => {
       sender_id_hash: "def456",
     });
     expect(payload).not.toHaveProperty("senderId");
+  });
+
+  it("keeps opaque request correlation while dropping raw webhook ids", () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    safeLog("webhook_event", {
+      reqId: "3f8161cc-ec79-4c80-aa63-cad8d9c107ab",
+      entryId: "raw-page-id-123456789",
+      eventId: "raw-message-id-sensitive",
+      eventIdHash: "a1b2c3d4e5f6",
+    });
+
+    const payload = JSON.parse(String(logSpy.mock.calls[0]?.[0]));
+    const serialized = JSON.stringify(payload);
+
+    expect(payload).toMatchObject({
+      reqId: "3f8161cc-ec79-4c80-aa63-cad8d9c107ab",
+      eventIdHash: "a1b2c3d4e5f6",
+    });
+    expect(serialized).not.toContain("raw-page-id-123456789");
+    expect(serialized).not.toContain("raw-message-id-sensitive");
   });
 
   it("keeps summarized URL fields while dropping raw URL fields", () => {

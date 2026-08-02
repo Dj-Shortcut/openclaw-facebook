@@ -20,8 +20,11 @@ export function registerBillingPortalRoutes(app: Express): void {
     asyncRoute(async (req, res) => {
       const access = await requireBillingManagerAccess(req, res);
       if (!access) return;
-      const paymentId = req.params.paymentId;
-      if (!PAYMENT_ID_PATTERN.test(paymentId)) {
+      const paymentIdParam = req.params.paymentId;
+      const paymentId = Array.isArray(paymentIdParam)
+        ? paymentIdParam[0]
+        : paymentIdParam;
+      if (!paymentId || !PAYMENT_ID_PATTERN.test(paymentId)) {
         res.status(404).send("Not found");
         return;
       }

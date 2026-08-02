@@ -16,10 +16,16 @@ import {
 
 const mocks = vi.hoisted(() => ({
   sendPortalHandoffLink: vi.fn(),
+  isPortalHandoffTenantBoundaryReady: vi.fn(() => true),
 }));
 
 vi.mock("./_core/portalHandoffDelivery", () => ({
   sendPortalHandoffLink: mocks.sendPortalHandoffLink,
+}));
+
+vi.mock("./_core/portalHandoffSecurity", () => ({
+  isPortalHandoffTenantBoundaryReady:
+    mocks.isPortalHandoffTenantBoundaryReady,
 }));
 
 const originalAdminToken = process.env.ADMIN_TOKEN;
@@ -27,6 +33,8 @@ const messengerSenderUserKey = "a".repeat(64);
 
 afterEach(() => {
   mocks.sendPortalHandoffLink.mockReset();
+  mocks.isPortalHandoffTenantBoundaryReady.mockReset();
+  mocks.isPortalHandoffTenantBoundaryReady.mockReturnValue(true);
   resetAdminAuthRateLimiterForTests();
   resetRuntimeStatsForTests();
   clearStateStore();
@@ -50,6 +58,35 @@ async function startServer() {
 }
 
 describe("debug/admin routes", () => {
+  it("fails closed when the portal handoff tenant boundary is unavailable", async () => {
+    process.env.ADMIN_TOKEN = "secret-admin-token";
+    mocks.isPortalHandoffTenantBoundaryReady.mockReturnValue(false);
+    const server = await startServer();
+
+    try {
+      const response = await fetch(`${server.baseUrl}/admin/portal-handoff/send`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-admin-token": "secret-admin-token",
+        },
+        body: JSON.stringify({
+          workspaceId: 42,
+          messengerSenderUserKey,
+          createdByUserId: 7,
+        }),
+      });
+
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({
+        error: "portal handoff unavailable",
+      });
+      expect(mocks.sendPortalHandoffLink).not.toHaveBeenCalled();
+    } finally {
+      await server.close();
+    }
+  });
+
   it("protects the cost summary behind the admin token", async () => {
     process.env.ADMIN_TOKEN = "secret-admin-token";
     const server = await startServer();

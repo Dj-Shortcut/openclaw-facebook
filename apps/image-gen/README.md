@@ -216,6 +216,8 @@ Operational env shortlist: [`docs/operations/ENV_SHORTLIST.md`](docs/operations/
 
 - `JWT_SECRET` (required at startup; must be at least 32 chars)
 - `PRIVACY_PEPPER` (required at startup, used for user-key hashing)
+- `CONVERSATION_SCOPE_HMAC_KEY_ID` (required at startup; immutable v2 identity key id such as `k1`)
+- `CONVERSATION_SCOPE_HMAC_SECRET` (required at startup; exactly 64 lowercase hex characters from dedicated 256-bit random material)
 - `FB_VERIFY_TOKEN` (Webhook verification)
 - `META_VERIFY_TOKEN` (preferred generic Meta webhook verification token; falls back to `FB_VERIFY_TOKEN` when unset)
 - `FB_PAGE_ACCESS_TOKEN` (Messenger send API)
@@ -506,18 +508,23 @@ Operational notes:
 
 Recommended migration sequence:
 
-1. Deploy the code with the default gateway behavior. The gateway still runs generation inline unless `MESSENGER_GENERATION_QUEUE_ENABLED=1` is set for the app process.
-2. Start at least one worker machine/process group.
-3. Enable `MESSENGER_GENERATION_QUEUE_ENABLED=1` for the gateway while leaving `MESSENGER_GENERATION_INLINE_FALLBACK` unset. This keeps same-process draining available during rollout.
-4. After worker logs show jobs are draining, set `MESSENGER_GENERATION_INLINE_FALLBACK=0` for gateway instances so image generation no longer runs in the HTTP process.
-5. Watch the compact `messenger_generation_diagnostic`, `webhook_ack_sent`, and event-loop diagnostic logs before scaling gateway machines above one instance.
+1. Set one stable `MESSENGER_GENERATION_PARTITION_SECRET` on every gateway and worker process. A dedicated random secret is preferred; `FB_APP_SECRET` is the compatibility fallback.
+2. Start or roll at least one worker first. On standalone Redis, the partition-aware worker drains both the pre-migration global lists and the new opaque Page-partitioned lists; do not delete or rename the legacy lists during rollout. On Redis Cluster the old global queued/processing keys occupy different hash slots, so the worker skips that legacy reservation path with one redacted warning while continuing all partitioned queues. In that case, drain or migrate legacy jobs on the old compatible topology before the cluster cutover; never copy raw jobs through logs or ad-hoc support notes.
+3. Deploy the code with the default gateway behavior. The gateway still runs generation inline unless `MESSENGER_GENERATION_QUEUE_ENABLED=1` is set for the app process.
+4. Enable `MESSENGER_GENERATION_QUEUE_ENABLED=1` for the gateway while leaving `MESSENGER_GENERATION_INLINE_FALLBACK` unset. This keeps same-process draining available during rollout. New enqueues now write only partition-scoped content, lease, dead-letter, and dedupe keys; only retries of already-present legacy jobs may write back to the legacy lists while they drain.
+5. After worker logs show both legacy and partitioned jobs are draining, set `MESSENGER_GENERATION_INLINE_FALLBACK=0` for gateway instances so image generation no longer runs in the HTTP process.
+6. Watch the compact `messenger_generation_diagnostic`, `webhook_ack_sent`, and event-loop diagnostic logs before scaling gateway machines above one instance.
+
+Keep the effective partition secret stable across ordinary deploys. Rotating it creates a new opaque partition namespace and breaks dedupe continuity with jobs accepted under the previous secret. Rotate only as an explicit migration: stop producers, drain queued and processing counts to zero, review dead letters, and then wait at least the configured accepted-request TTL after the last enqueue before switching every gateway and worker together. The default accepted TTL is seven days and is never shorter than `lease_seconds * max_attempts`; indexed old partitions remain discoverable for dead-letter review and legacy draining.
 
 Worker-related env:
 
 - `MESSENGER_GENERATION_QUEUE_ENABLED=1`: enqueue Messenger image generation jobs in Redis.
+- `MESSENGER_GENERATION_PARTITION_SECRET=<random>`: HMAC key for opaque Page-derived queue partitions, shared unchanged by gateway and workers; falls back to `FB_APP_SECRET` for compatibility.
+- `MESSENGER_GENERATION_ACCEPTED_TTL_SECONDS=604800`: dedupe retention for accepted request ids; defaults to seven days and is clamped to at least the lease duration multiplied by the maximum attempt count.
 - `MESSENGER_GENERATION_INLINE_FALLBACK=0`: gateway does not drain queued jobs itself.
 - `MESSENGER_GENERATION_WORKER_ONLY=1`: run only the worker loop, no HTTP listener.
-- `MESSENGER_GENERATION_JOB_LEASE_SECONDS=900`: reserved-job lease before reclaim.
+- `MESSENGER_GENERATION_JOB_LEASE_SECONDS=900`: reserved-job lease before reclaim. The runtime derives a minimum from every configured OpenAI timeout/retry attempt, exponential retry waits, and a 60-second delivery buffer and clamps smaller explicit values to that minimum. Configure a larger value when the complete source-fetch, provider, storage, and Messenger-delivery path can exceed it.
 - `MESSENGER_GENERATION_MAX_ATTEMPTS=3`: failed generation jobs are retried up to this many processor attempts, then moved to the Redis dead-letter list.
 - `MESSENGER_GENERATION_DRAIN_BATCH_SIZE=10`: max jobs a worker or inline fallback drain processes per drain pass before yielding to the next poll/enqueue.
 - `MESSENGER_GENERATION_WORKER_POLL_MS=1000`: worker poll interval.
