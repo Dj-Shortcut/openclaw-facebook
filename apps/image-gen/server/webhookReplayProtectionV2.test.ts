@@ -61,8 +61,6 @@ function resolvedIdentity(
     workspaceId?: number;
     channelConnectionId?: number;
     key?: ConversationIdentityKey;
-    ownerToken?: typeof OWNER_TOKEN;
-    ownerTokenError?: Error;
   } = {}
 ): ResolvedConversationIdentityV2 {
   const endpoint = input.endpoint ?? MESSENGER_ENDPOINT;
@@ -153,6 +151,8 @@ function replayDeps(
     pingResult?: string;
     pingError?: Error;
     clientError?: Error;
+    ownerToken?: typeof OWNER_TOKEN;
+    ownerTokenError?: Error;
   } = {}
 ) {
   const get = vi.fn(async (): Promise<string | null> => {

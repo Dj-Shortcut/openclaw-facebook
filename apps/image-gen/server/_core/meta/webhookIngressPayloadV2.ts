@@ -1032,54 +1032,38 @@ function parseDecodedMessengerEvent(
     if (!messageId && timestamp === undefined) {
       ingressError("noncanonical_payload");
     }
+    const locale = optionalString(value, "locale", MAX_LOCALE_BYTES);
+    const text = optionalString(value, "text", MAX_TEXT_BYTES);
+    const quickReplyPayload = optionalString(
+      value,
+      "quickReplyPayload",
+      MAX_ACTION_PAYLOAD_BYTES
+    );
+    const replyToMessageId = optionalProviderMessageId(
+      value,
+      "replyToMessageId"
+    );
     return Object.freeze({
       kind: "message",
       ...(messageId === undefined ? {} : { messageId }),
       ...(timestamp === undefined ? {} : { timestamp }),
-      ...(optionalString(value, "locale", MAX_LOCALE_BYTES) === undefined
-        ? {}
-        : { locale: optionalString(value, "locale", MAX_LOCALE_BYTES) }),
-      ...(optionalString(value, "text", MAX_TEXT_BYTES) === undefined
-        ? {}
-        : { text: optionalString(value, "text", MAX_TEXT_BYTES) }),
-      ...(optionalString(
-        value,
-        "quickReplyPayload",
-        MAX_ACTION_PAYLOAD_BYTES
-      ) === undefined
-        ? {}
-        : {
-            quickReplyPayload: optionalString(
-              value,
-              "quickReplyPayload",
-              MAX_ACTION_PAYLOAD_BYTES
-            ),
-          }),
-      ...(optionalProviderMessageId(value, "replyToMessageId") === undefined
-        ? {}
-        : {
-            replyToMessageId: optionalProviderMessageId(
-              value,
-              "replyToMessageId"
-            ),
-          }),
+      ...(locale === undefined ? {} : { locale }),
+      ...(text === undefined ? {} : { text }),
+      ...(quickReplyPayload === undefined ? {} : { quickReplyPayload }),
+      ...(replyToMessageId === undefined ? {} : { replyToMessageId }),
       attachments: parsedAttachments,
     });
   }
   if (value.kind === "postback") {
     exactKeys(value, ["kind", "timestamp"], ["locale", "payload"]);
+    const timestamp = validateMessengerTimestamp(value.timestamp);
+    const locale = optionalString(value, "locale", MAX_LOCALE_BYTES);
+    const payload = optionalString(value, "payload", MAX_ACTION_PAYLOAD_BYTES);
     return Object.freeze({
       kind: "postback",
-      timestamp: validateMessengerTimestamp(value.timestamp),
-      ...(optionalString(value, "locale", MAX_LOCALE_BYTES) === undefined
-        ? {}
-        : { locale: optionalString(value, "locale", MAX_LOCALE_BYTES) }),
-      ...(optionalString(value, "payload", MAX_ACTION_PAYLOAD_BYTES) ===
-      undefined
-        ? {}
-        : {
-            payload: optionalString(value, "payload", MAX_ACTION_PAYLOAD_BYTES),
-          }),
+      timestamp,
+      ...(locale === undefined ? {} : { locale }),
+      ...(payload === undefined ? {} : { payload }),
     });
   }
   ingressError("noncanonical_payload");
@@ -1149,7 +1133,10 @@ function parseDecodedWhatsAppEvent(
   });
 }
 
-function parseDecodedPayload(value: unknown): MetaConversationIngressPayloadV2 {
+function parseDecodedPayload(value: unknown): Readonly<{
+  payload: MetaConversationIngressPayloadV2;
+  endpoint: ConversationEndpoint;
+}> {
   if (!isRecord(value)) {
     ingressError("noncanonical_payload");
   }
@@ -1168,11 +1155,14 @@ function parseDecodedPayload(value: unknown): MetaConversationIngressPayloadV2 {
       value.endpoint.pageId
     );
     const senderId = safeSenderId(value.senderId);
-    return messengerPayload(
+    return Object.freeze({
+      payload: messengerPayload(
+        endpoint,
+        senderId,
+        parseDecodedMessengerEvent(value.event)
+      ),
       endpoint,
-      senderId,
-      parseDecodedMessengerEvent(value.event)
-    );
+    });
   }
   if (value.channel === "whatsapp") {
     exactKeys(value.endpoint, ["wabaId", "phoneNumberId"]);
@@ -1181,11 +1171,14 @@ function parseDecodedPayload(value: unknown): MetaConversationIngressPayloadV2 {
       value.endpoint.phoneNumberId
     );
     const senderId = safeSenderId(value.senderId);
-    return whatsAppPayload(
+    return Object.freeze({
+      payload: whatsAppPayload(
+        endpoint,
+        senderId,
+        parseDecodedWhatsAppEvent(value.event)
+      ),
       endpoint,
-      senderId,
-      parseDecodedWhatsAppEvent(value.event)
-    );
+    });
   }
   ingressError("noncanonical_payload");
 }
@@ -1222,7 +1215,7 @@ export function decodeMetaConversationPayloadV2(
   } catch {
     ingressError("invalid_payload_encoding");
   }
-  const payload = parseDecodedPayload(parsed);
+  const { payload, endpoint } = parseDecodedPayload(parsed);
   if (
     (payloadKind === "meta_messenger_event" &&
       payload.channel !== "messenger") ||
@@ -1232,16 +1225,6 @@ export function decodeMetaConversationPayloadV2(
   ) {
     ingressError("noncanonical_payload");
   }
-  const endpoint =
-    payload.channel === "messenger"
-      ? resolveMessengerWebhookEndpoint({
-          entryId: payload.endpoint.pageId,
-          recipientId: payload.endpoint.pageId,
-        })
-      : resolveWhatsAppEndpoint({
-          wabaId: payload.endpoint.wabaId,
-          phoneNumberId: payload.endpoint.phoneNumberId,
-        });
   return Object.freeze({
     payload,
     endpoint,

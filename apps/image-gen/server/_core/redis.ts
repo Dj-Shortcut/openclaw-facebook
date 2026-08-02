@@ -41,6 +41,8 @@ type RedisModule = {
   default: new (url: string, ...args: unknown[]) => RedisLike;
 };
 
+const REDIS_COMMAND_TIMEOUT_MS = 5_000;
+
 let redisClientPromise: Promise<RedisLike> | null = null;
 
 function getRedisUrl(): string | null {
@@ -62,7 +64,9 @@ async function createRedisClient(): Promise<RedisLike> {
   }
 
   const { default: Redis } = await importRedisModule();
-  return new Redis(redisUrl);
+  return new Redis(redisUrl, {
+    commandTimeout: REDIS_COMMAND_TIMEOUT_MS,
+  });
 }
 
 export async function getRedisClient(): Promise<RedisLike> {
