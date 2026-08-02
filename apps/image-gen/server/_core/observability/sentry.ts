@@ -1,10 +1,23 @@
 import * as Sentry from "@sentry/node";
 import { safeLog } from "../logger";
+import { isDebugLogEnabled } from "../logLevel";
 
 const SAFE_CONTEXT_VALUES: Record<string, ReadonlySet<string>> = {
   area: new Set(["webhook"]),
   eventType: new Set(["message", "postback", "unknown"]),
 };
+const SAFE_CONTEXT_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+
+function logDroppedContextKey(key: string): void {
+  if (!isDebugLogEnabled()) {
+    return;
+  }
+
+  safeLog("sentry_context_value_dropped", {
+    level: "debug",
+    fieldKey: SAFE_CONTEXT_KEY_PATTERN.test(key) ? key : "invalid_context_key",
+  });
+}
 
 function getSafeErrorClass(error: unknown): string {
   const candidate =
@@ -18,12 +31,14 @@ function getSafeContextValue(key: string, value: unknown): unknown {
   if (typeof value === "boolean") {
     return value;
   }
-  if (key === "reqId" && typeof value === "string") {
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+  if (
+    key === "reqId" &&
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       value
     )
-      ? value
-      : undefined;
+  ) {
+    return value;
   }
   if (typeof value === "string" && SAFE_CONTEXT_VALUES[key]?.has(value)) {
     return value;
@@ -35,6 +50,7 @@ function getSafeContextValue(key: string, value: unknown): unknown {
   ) {
     return value;
   }
+  logDroppedContextKey(key);
   return undefined;
 }
 

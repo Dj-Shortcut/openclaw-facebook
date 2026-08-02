@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { and, eq, isNull, type SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 
 const databaseMocks = vi.hoisted(() => ({
   getDatabaseOrThrow: vi.fn(),
@@ -9,6 +11,7 @@ vi.mock("./db", () => ({
   getDatabaseOrThrow: databaseMocks.getDatabaseOrThrow,
 }));
 
+import { channelConnections } from "../drizzle/schema";
 import { resetConversationIdentityConfigForTests } from "./_core/conversationIdentityConfig";
 import {
   resolveMessengerEndpoint,
@@ -21,13 +24,26 @@ const originalSecret = process.env.CONVERSATION_SCOPE_HMAC_SECRET;
 
 function mockBindingQuery(rows: unknown[]) {
   const limit = vi.fn(async () => rows);
-  const where = vi.fn(() => ({ limit }));
+  const where = vi.fn((_predicate: SQL) => ({ limit }));
   const from = vi.fn(() => ({ where }));
   databaseMocks.select.mockReturnValue({ from });
   databaseMocks.getDatabaseOrThrow.mockResolvedValue({
     select: databaseMocks.select,
   });
   return { from, limit, where };
+}
+
+const mysqlDialect = new MySqlDialect();
+
+function serializePredicate(predicate: SQL | undefined): {
+  sql: string;
+  params: unknown[];
+} {
+  if (!predicate) {
+    throw new Error("Expected a database predicate");
+  }
+  const query = mysqlDialect.sqlToQuery(predicate);
+  return { sql: query.sql, params: query.params };
 }
 
 beforeEach(() => {
@@ -76,6 +92,15 @@ describe("conversation identity database adapter", () => {
     });
     expect(databaseMocks.getDatabaseOrThrow).toHaveBeenCalledOnce();
     expect(query.where).toHaveBeenCalledOnce();
+    const messengerPredicate = query.where.mock.calls[0]?.[0];
+    const expectedMessengerPredicate = and(
+      eq(channelConnections.channel, "facebook_messenger"),
+      eq(channelConnections.externalId, "123456789012345"),
+      isNull(channelConnections.providerAccountExternalId)
+    );
+    expect(serializePredicate(messengerPredicate)).toEqual(
+      serializePredicate(expectedMessengerPredicate)
+    );
     expect(query.limit).toHaveBeenCalledWith(2);
     expect(databaseMocks.select).toHaveBeenCalledWith({
       id: expect.anything(),
@@ -115,6 +140,16 @@ describe("conversation identity database adapter", () => {
       delivery: null,
       connectionStatus: "webhook_unhealthy",
     });
+    expect(query.where).toHaveBeenCalledOnce();
+    const whatsappPredicate = query.where.mock.calls[0]?.[0];
+    const expectedWhatsAppPredicate = and(
+      eq(channelConnections.channel, "whatsapp"),
+      eq(channelConnections.externalId, "444444444444444"),
+      eq(channelConnections.providerAccountExternalId, "333333333333333")
+    );
+    expect(serializePredicate(whatsappPredicate)).toEqual(
+      serializePredicate(expectedWhatsAppPredicate)
+    );
     expect(query.limit).toHaveBeenCalledWith(2);
   });
 });

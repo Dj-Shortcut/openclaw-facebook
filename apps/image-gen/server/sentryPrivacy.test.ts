@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const sentryMocks = vi.hoisted(() => ({
   captureException: vi.fn(),
+  debugEnabled: false,
   init: vi.fn(),
   setExtra: vi.fn(),
   withScope: vi.fn(),
@@ -16,6 +17,10 @@ vi.mock("@sentry/node", () => ({
   ),
 }));
 
+vi.mock("./_core/logLevel", () => ({
+  isDebugLogEnabled: () => sentryMocks.debugEnabled,
+}));
+
 import { captureException, initSentry } from "./_core/observability/sentry";
 
 describe("Sentry privacy boundary", () => {
@@ -23,6 +28,8 @@ describe("Sentry privacy boundary", () => {
   const originalTracesSampleRate = process.env.SENTRY_TRACES_SAMPLE_RATE;
 
   afterEach(() => {
+    sentryMocks.debugEnabled = false;
+    vi.restoreAllMocks();
     vi.clearAllMocks();
     if (originalDsn === undefined) {
       delete process.env.SENTRY_DSN;
@@ -75,6 +82,60 @@ describe("Sentry privacy boundary", () => {
       "rawPayload",
       expect.anything()
     );
+  });
+
+  it("logs only validated dropped context keys when debug logging is enabled", () => {
+    process.env.SENTRY_DSN = "https://public@example.invalid/1";
+    sentryMocks.debugEnabled = true;
+    const privateContent =
+      "raw-psid-123 private prompt https://private.example/image";
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    captureException(new Error(privateContent), {
+      reqId: privateContent,
+      rawPayload: privateContent,
+      [privateContent]: privateContent,
+    });
+
+    const logEntries = logSpy.mock.calls.map(([entry]) =>
+      JSON.parse(String(entry))
+    );
+    expect(logSpy).toHaveBeenCalledTimes(3);
+    expect(logEntries).toEqual([
+      {
+        level: "debug",
+        event: "sentry_context_value_dropped",
+        fieldKey: "reqId",
+      },
+      {
+        level: "debug",
+        event: "sentry_context_value_dropped",
+        fieldKey: "rawPayload",
+      },
+      {
+        level: "debug",
+        event: "sentry_context_value_dropped",
+        fieldKey: "invalid_context_key",
+      },
+    ]);
+    expect(JSON.stringify(logEntries)).not.toContain(privateContent);
+  });
+
+  it("does not log dropped context outside debug mode or accepted debug context", () => {
+    process.env.SENTRY_DSN = "https://public@example.invalid/1";
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    captureException(new Error("private"), { rawPayload: "private" });
+    expect(logSpy).not.toHaveBeenCalled();
+
+    sentryMocks.debugEnabled = true;
+    captureException(new Error("private"), {
+      area: "webhook",
+      eventType: "message",
+      hasImage: true,
+      reqId: "3f8161cc-ec79-4c80-aa63-cad8d9c107ab",
+    });
+    expect(logSpy).not.toHaveBeenCalled();
   });
 
   it("scrubs automatic Sentry events before they leave the process", () => {

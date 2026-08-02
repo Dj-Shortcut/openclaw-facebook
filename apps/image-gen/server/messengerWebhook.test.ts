@@ -74,6 +74,7 @@ import {
 } from "./_core/stateStore";
 
 const TEST_PEPPER = "ci-test-pepper";
+const INTERNAL_TEST_PAGE_ID = "internal-test-page";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
 const originalMessengerGenerationQueueEnabled =
   process.env.MESSENGER_GENERATION_QUEUE_ENABLED;
@@ -639,6 +640,7 @@ describe("messenger webhook dedupe", () => {
 
     await processInternalMessengerImageRequest({
       psid: "internal-source-user",
+      pageId: INTERNAL_TEST_PAGE_ID,
       prompt: "Restyle deze foto cinematic",
       reqId: "req-internal-source",
       lang: "nl",
@@ -674,6 +676,7 @@ describe("messenger webhook dedupe", () => {
 
     await processInternalMessengerImageRequest({
       psid: "internal-text-image-user",
+      pageId: INTERNAL_TEST_PAGE_ID,
       prompt: userPrompt,
       reqId: "req-internal-text-image",
       lang: "nl",
@@ -709,6 +712,7 @@ describe("messenger webhook dedupe", () => {
 
     await processInternalMessengerImageRequest({
       psid: "internal-pasted-prompt-user",
+      pageId: INTERNAL_TEST_PAGE_ID,
       prompt:
         "Gebruik deze prompt en maak een afbeelding: Maak een krachtige samurai poster, geen tekst, geen logo",
       reqId: "req-internal-pasted-prompt",
@@ -735,6 +739,7 @@ describe("messenger webhook dedupe", () => {
 
     await processInternalMessengerImageRequest({
       psid: "internal-make-me-source-user",
+      pageId: INTERNAL_TEST_PAGE_ID,
       prompt: "Kan je me een samurai maken",
       reqId: "req-internal-make-me-source",
       lang: "nl",
@@ -769,6 +774,7 @@ describe("messenger webhook dedupe", () => {
 
     await processInternalMessengerImageRequest({
       psid: "internal-transform-source-user",
+      pageId: INTERNAL_TEST_PAGE_ID,
       prompt: "Verander me in een samurai",
       reqId: "req-internal-transform-source",
       lang: "nl",
@@ -800,6 +806,7 @@ describe("messenger webhook dedupe", () => {
 
     await processInternalMessengerImageRequest({
       psid: "internal-make-me-text-user",
+      pageId: INTERNAL_TEST_PAGE_ID,
       prompt: "Kan je me een samurai maken",
       reqId: "req-internal-make-me-text",
       lang: "nl",
@@ -828,6 +835,7 @@ describe("messenger webhook dedupe", () => {
 
     await processInternalMessengerImageRequest({
       psid: "internal-visual-correction-user",
+      pageId: INTERNAL_TEST_PAGE_ID,
       prompt: "Das mooi, maar geen samurai bro",
       reqId: "req-internal-visual-correction",
       lang: "nl",
@@ -861,6 +869,7 @@ describe("messenger webhook dedupe", () => {
     await expect(
       processInternalMessengerImageRequest({
         psid: "internal-visual-correction-without-image-user",
+        pageId: INTERNAL_TEST_PAGE_ID,
         prompt: "Das mooi, maar geen samurai bro",
         reqId: "req-internal-visual-correction-without-image",
         lang: "nl",
@@ -886,6 +895,7 @@ describe("messenger webhook dedupe", () => {
 
     await processInternalMessengerImageRequest({
       psid: "internal-style-word-text-image-user",
+      pageId: INTERNAL_TEST_PAGE_ID,
       prompt: userPrompt,
       reqId: "req-internal-style-word-text-image",
       lang: "nl",
@@ -919,6 +929,7 @@ describe("messenger webhook dedupe", () => {
 
     await processInternalMessengerImageRequest({
       psid: "internal-style-word-source-user",
+      pageId: INTERNAL_TEST_PAGE_ID,
       prompt: userPrompt,
       reqId: "req-internal-style-word-source",
       lang: "nl",
@@ -956,6 +967,7 @@ describe("messenger webhook dedupe", () => {
     await expect(
       processInternalMessengerImageRequest({
         psid: "internal-restyle-without-photo-user",
+        pageId: INTERNAL_TEST_PAGE_ID,
         prompt: "Restyle deze foto cinematic",
         reqId: "req-internal-restyle-without-photo",
         lang: "nl",
@@ -1074,6 +1086,7 @@ describe("messenger webhook dedupe", () => {
     await expect(
       processInternalMessengerImageRequest({
         psid: "internal-source-fail-user",
+        pageId: INTERNAL_TEST_PAGE_ID,
         prompt: "Restyle deze foto cinematic",
         reqId: "req-internal-source-fail",
         lang: "nl",

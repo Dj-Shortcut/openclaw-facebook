@@ -20,6 +20,8 @@ const LEGACY_MESSENGER_GENERATION_DEAD_LETTER_KEY =
   "messenger-generation-jobs:dead";
 const MESSENGER_GENERATION_PARTITION_INDEX_KEY =
   "messenger-generation-job-partitions:v1";
+const MESSENGER_GENERATION_DRAIN_CURSOR_KEY =
+  "messenger-generation-job-drain-cursor:v1";
 const DEFAULT_JOB_LEASE_BUFFER_SECONDS = 60;
 const OPENAI_TIMEOUT_MS_DEFAULT = 180_000;
 const OPENAI_RETRY_LIMIT_DEFAULT = 1;
@@ -27,6 +29,7 @@ const OPENAI_RETRY_BASE_MS_DEFAULT = 500;
 const DEFAULT_MAX_JOB_ATTEMPTS = 3;
 const DEFAULT_DRAIN_BATCH_SIZE = 10;
 const DEFAULT_ACCEPTED_TTL_SECONDS = 7 * 24 * 60 * 60;
+const DEFAULT_DRAIN_RETRY_MS = 1_000;
 let drainPromise: Promise<void> | null = null;
 let drainRequested = false;
 let drainRetryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -275,6 +278,16 @@ const ATOMIC_PARTITION_INVALID_PROCESSING_SCRIPT = `
   return 1
 `;
 
+const ATOMIC_PARTITION_EMPTY_SCRIPT = `
+  local queued = redis.call("LLEN", KEYS[1])
+  local processing = redis.call("LLEN", KEYS[2])
+  local dead = redis.call("LLEN", KEYS[3])
+  if queued == 0 and processing == 0 and dead == 0 then
+    return 1
+  end
+  return 0
+`;
+
 type GenerationQueueScope =
   | {
       kind: "legacy";
@@ -375,9 +388,96 @@ async function getGenerationQueueScopes(
   return [
     ...tenantPartitions
       .filter(isMessengerGenerationTenantPartition)
+      .sort()
       .map(getPartitionedGenerationQueueScope),
     LEGACY_GENERATION_QUEUE_SCOPE,
   ];
+}
+
+async function getFairGenerationQueueScopes(
+  redis: RedisLike,
+  maxBatchSize: number
+): Promise<GenerationQueueScope[]> {
+  const scopes = await getGenerationQueueScopes(redis);
+  if (scopes.length <= 1) {
+    return scopes;
+  }
+
+  const cursor = await redis.incr(MESSENGER_GENERATION_DRAIN_CURSOR_KEY);
+  const cursorOffset = (Math.max(1, cursor) - 1) % scopes.length;
+  const batchOffset = maxBatchSize % scopes.length;
+  const start = (cursorOffset * batchOffset) % scopes.length;
+  return [...scopes.slice(start), ...scopes.slice(0, start)];
+}
+
+type GenerationQueueDepths = {
+  queued: number;
+  processing: number;
+  failed: number;
+};
+
+async function getGenerationQueueDepths(
+  redis: RedisLike,
+  scope: GenerationQueueScope
+): Promise<GenerationQueueDepths> {
+  const [queued, processing, failed] = await Promise.all([
+    redis.llen(scope.queuedKey),
+    redis.llen(scope.processingKey),
+    redis.llen(scope.deadLetterKey),
+  ]);
+  return { queued, processing, failed };
+}
+
+function isGenerationQueueScopeEmpty(depths: GenerationQueueDepths): boolean {
+  return depths.queued === 0 && depths.processing === 0 && depths.failed === 0;
+}
+
+async function pruneEmptyGenerationQueueScope(
+  redis: RedisLike,
+  scope: GenerationQueueScope,
+  observedDepths?: GenerationQueueDepths
+): Promise<void> {
+  if (scope.kind !== "partition") {
+    return;
+  }
+
+  if (observedDepths && !isGenerationQueueScopeEmpty(observedDepths)) {
+    return;
+  }
+
+  const isEmpty = async (): Promise<boolean> => {
+    const result = await evalPartitionScriptWithRetry(
+      redis,
+      ATOMIC_PARTITION_EMPTY_SCRIPT,
+      [scope.queuedKey, scope.processingKey, scope.deadLetterKey],
+      []
+    );
+    if (result !== 0 && result !== 1) {
+      throw new Error(
+        "Messenger generation partition cleanup returned an invalid result"
+      );
+    }
+    return result === 1;
+  };
+
+  if (!(await isEmpty())) {
+    return;
+  }
+
+  await redis.srem(
+    MESSENGER_GENERATION_PARTITION_INDEX_KEY,
+    scope.tenantPartition
+  );
+
+  // The global discovery index and partition lists intentionally occupy
+  // different Redis Cluster slots. Recheck after removal and restore the
+  // opaque member if an enqueue raced the empty observation.
+  if (!(await isEmpty())) {
+    await redis.sadd(
+      MESSENGER_GENERATION_PARTITION_INDEX_KEY,
+      scope.tenantPartition
+    );
+  }
 }
 
 function getPartitionedJob(job: MessengerGenerationJob): {
@@ -561,7 +661,12 @@ async function evalPartitionScriptWithRetry(
     Number(await redis.eval(script, keys.length, ...keys, ...args));
   try {
     return await evaluate();
-  } catch {
+  } catch (error) {
+    safeLog("messenger_generation_queue_script_retry", {
+      level: "warn",
+      errorCode:
+        error instanceof Error ? error.constructor.name : "UnknownError",
+    });
     return await evaluate();
   }
 }
@@ -596,15 +701,25 @@ export async function enqueueMessengerGenerationJob(
     MESSENGER_GENERATION_PARTITION_INDEX_KEY,
     partitioned.scope.tenantPartition
   );
-  const accepted = await evalPartitionScriptWithRetry(
-    redis,
-    ATOMIC_PARTITION_ENQUEUE_SCRIPT,
-    [
-      getGenerationJobAcceptedKey(partitioned.scope, partitioned.job),
-      partitioned.scope.queuedKey,
-    ],
-    [getGenerationJobAcceptedSeconds(), JSON.stringify(partitioned.job)]
-  );
+  let accepted: number;
+  try {
+    accepted = await evalPartitionScriptWithRetry(
+      redis,
+      ATOMIC_PARTITION_ENQUEUE_SCRIPT,
+      [
+        getGenerationJobAcceptedKey(partitioned.scope, partitioned.job),
+        partitioned.scope.queuedKey,
+      ],
+      [getGenerationJobAcceptedSeconds(), JSON.stringify(partitioned.job)]
+    );
+  } finally {
+    // Fence a concurrent empty-scope prune that may have removed the member
+    // after the pre-enqueue SADD but before the partition push committed.
+    await redis.sadd(
+      MESSENGER_GENERATION_PARTITION_INDEX_KEY,
+      partitioned.scope.tenantPartition
+    );
+  }
   if (accepted === 0) {
     recordMessengerDuplicateSkip();
     safeLog("messenger_generation_job_duplicate_enqueue_ignored", {
@@ -641,13 +756,19 @@ async function getMessengerGenerationQueueStatsFrom(
   const scopes = await getGenerationQueueScopes(redis);
   const scopeStats = await Promise.all(
     scopes.map(async scope => {
-      const [queued, processing, failed] = await Promise.all([
-        redis.llen(scope.queuedKey),
-        redis.llen(scope.processingKey),
-        redis.llen(scope.deadLetterKey),
-      ]);
-      return { queued, processing, failed };
+      const depths = await getGenerationQueueDepths(redis, scope);
+      return { scope, ...depths };
     })
+  );
+
+  await Promise.all(
+    scopeStats.map(({ scope, queued, processing, failed }) =>
+      pruneEmptyGenerationQueueScope(redis, scope, {
+        queued,
+        processing,
+        failed,
+      })
+    )
   );
 
   return {
@@ -1019,22 +1140,29 @@ export async function reclaimReservedMessengerGenerationJobs(
   return reclaimed;
 }
 
-export async function drainMessengerGenerationQueue(
+type MessengerGenerationDrainResult = {
+  needsPacedFollowUp: boolean;
+};
+
+async function drainMessengerGenerationQueueWithResult(
   processor: GenerationJobProcessor,
   options: GenerationQueueDrainOptions = {}
-): Promise<void> {
+): Promise<MessengerGenerationDrainResult> {
   if (!isMessengerGenerationQueueEnabled()) {
-    return;
+    return { needsPacedFollowUp: false };
   }
 
   const redis = await getRedisClient();
   let drained = 0;
   const maxBatchSize = getGenerationDrainBatchSize();
-  const scopes = await getGenerationQueueScopes(redis);
+  const scopes = await getFairGenerationQueueScopes(redis, maxBatchSize);
+  const deferredScopes = new Set<string>();
+  const pruneCheckedScopes = new Set<string>();
+  let needsPacedFollowUp = false;
   while (true) {
     if (drained >= maxBatchSize) {
       logMessengerGenerationQueueTransition("batch_limit");
-      return;
+      return { needsPacedFollowUp: true };
     }
 
     let reservedInRound = false;
@@ -1042,11 +1170,19 @@ export async function drainMessengerGenerationQueue(
       if (drained >= maxBatchSize) {
         break;
       }
+      if (deferredScopes.has(scope.queuedKey)) {
+        continue;
+      }
 
       const reserved = await reserveMessengerGenerationJobFrom(redis, scope);
       if (!reserved) {
+        if (!pruneCheckedScopes.has(scope.queuedKey)) {
+          await pruneEmptyGenerationQueueScope(redis, scope);
+          pruneCheckedScopes.add(scope.queuedKey);
+        }
         continue;
       }
+      pruneCheckedScopes.delete(scope.queuedKey);
       reservedInRound = true;
       drained += 1;
 
@@ -1123,14 +1259,41 @@ export async function drainMessengerGenerationQueue(
           });
         }
         logMessengerGenerationQueueTransition("release");
-        return;
+        deferredScopes.add(scope.queuedKey);
+        needsPacedFollowUp = true;
+        continue;
       }
     }
 
     if (!reservedInRound) {
-      return;
+      return { needsPacedFollowUp };
     }
   }
+}
+
+export async function drainMessengerGenerationQueue(
+  processor: GenerationJobProcessor,
+  options: GenerationQueueDrainOptions = {}
+): Promise<void> {
+  await drainMessengerGenerationQueueWithResult(processor, options);
+}
+
+function armMessengerGenerationQueueDrainRetry(
+  processor: GenerationJobProcessor,
+  options: GenerationQueueDrainOptions
+): void {
+  drainRequested = true;
+  if (drainRetryTimer) {
+    return;
+  }
+
+  drainRetryTimer = setTimeout(() => {
+    drainRetryTimer = null;
+    if (drainRequested) {
+      scheduleMessengerGenerationQueueDrain(processor, options);
+    }
+  }, DEFAULT_DRAIN_RETRY_MS);
+  drainRetryTimer.unref?.();
 }
 
 export function scheduleMessengerGenerationQueueDrain(
@@ -1150,7 +1313,14 @@ export function scheduleMessengerGenerationQueueDrain(
     while (drainRequested) {
       drainRequested = false;
       await reclaimReservedMessengerGenerationJobs(options);
-      await drainMessengerGenerationQueue(processor, options);
+      const result = await drainMessengerGenerationQueueWithResult(
+        processor,
+        options
+      );
+      if (result.needsPacedFollowUp) {
+        armMessengerGenerationQueueDrainRetry(processor, options);
+        break;
+      }
     }
   })()
     .catch(error => {
@@ -1159,16 +1329,7 @@ export function scheduleMessengerGenerationQueueDrain(
         errorCode:
           error instanceof Error ? error.constructor.name : "UnknownError",
       });
-      drainRequested = true;
-      if (!drainRetryTimer) {
-        drainRetryTimer = setTimeout(() => {
-          drainRetryTimer = null;
-          if (drainRequested) {
-            scheduleMessengerGenerationQueueDrain(processor, options);
-          }
-        }, 1_000);
-        drainRetryTimer.unref?.();
-      }
+      armMessengerGenerationQueueDrainRetry(processor, options);
     })
     .finally(() => {
       drainPromise = null;

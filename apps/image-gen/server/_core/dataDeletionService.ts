@@ -11,7 +11,6 @@ import {
   anonymizePsid,
   clearUserState,
   getState,
-  setPendingSourceImageDeleteUrls,
   type MessengerUserState,
 } from "./messengerState";
 
@@ -20,16 +19,21 @@ const LEGACY_CHAT_HISTORY_SCOPE = "chat:history";
 export type UserDataDeletionOutcome =
   { status: "completed" } | { status: "pending" } | { status: "failed" };
 
-function getStateImageUrls(state: MessengerUserState): string[] {
+function getGeneralStateImageUrls(state: MessengerUserState): string[] {
   return [
     state.lastPhotoUrl,
     state.pendingImageUrl,
-    state.lastSourceImageUrl,
-    state.pendingSourceImageDeleteUrl,
-    ...(state.pendingSourceImageDeleteUrls ?? []),
     state.lastGeneratedUrl,
     state.lastImageUrl,
     state.lastGeneratedVideoUrl,
+  ].filter((url): url is string => Boolean(url));
+}
+
+function getFaceMemoryStateImageUrls(state: MessengerUserState): string[] {
+  return [
+    state.lastSourceImageUrl,
+    state.pendingSourceImageDeleteUrl,
+    ...(state.pendingSourceImageDeleteUrls ?? []),
   ].filter((url): url is string => Boolean(url));
 }
 
@@ -64,13 +68,6 @@ async function deleteUserDataInternal(
   const logUser = toLogUser(userKey);
   const retryContext = state
     ? {
-        lastPhotoUrl: state.lastPhotoUrl,
-        lastPhoto: state.lastPhoto,
-        lastPhotoSource: state.lastPhotoSource,
-        lastImageUrl: state.lastImageUrl,
-        lastGeneratedUrl: state.lastGeneratedUrl,
-        pendingImageUrl: state.pendingImageUrl,
-        pendingImageAt: state.pendingImageAt,
         stage: state.stage,
         state: state.state,
         pendingScreenshotIntentContinuation:
@@ -95,6 +92,46 @@ async function deleteUserDataInternal(
       });
       return false;
     }
+  };
+
+  const persistDeletionRetryState = async (
+    pendingDeleteUrls: string[]
+  ): Promise<boolean> => {
+    const currentState = await getState(psid);
+    if (!currentState) {
+      return false;
+    }
+
+    const uniquePendingDeleteUrls = Array.from(
+      new Set(
+        [
+          ...pendingDeleteUrls,
+          currentState.pendingSourceImageDeleteUrl,
+          ...(currentState.pendingSourceImageDeleteUrls ?? []),
+        ].filter((url): url is string => Boolean(url))
+      )
+    );
+    await Promise.resolve(
+      writeState(psid, {
+        ...currentState,
+        ...retryContext,
+        lastPhotoUrl: null,
+        lastPhoto: null,
+        lastPhotoSource: null,
+        pendingImageUrl: undefined,
+        pendingImageAt: undefined,
+        lastImageUrl: undefined,
+        lastGeneratedUrl: null,
+        lastGeneratedAt: undefined,
+        lastGeneratedVideoUrl: null,
+        lastGeneratedVideoAt: null,
+        pendingSourceImageDeleteUrl: uniquePendingDeleteUrls[0] ?? null,
+        pendingSourceImageDeleteUrls: uniquePendingDeleteUrls.length
+          ? uniquePendingDeleteUrls
+          : null,
+      })
+    );
+    return true;
   };
 
   let deleteStepsSucceeded = true;
@@ -125,11 +162,18 @@ async function deleteUserDataInternal(
     return { status: "completed" };
   }
 
-  const urls = Array.from(new Set(getStateImageUrls(state)));
+  const faceMemoryUrls = new Set(getFaceMemoryStateImageUrls(state));
+  const urls = Array.from(
+    new Set(
+      getGeneralStateImageUrls(state).filter(url => !faceMemoryUrls.has(url))
+    )
+  );
 
+  let faceMemoryFailedDeletes: string[] = [];
   deleteStepsSucceeded =
-    (await runStep("face_memory", () => deleteFaceMemoryForUser(psid))) &&
-    deleteStepsSucceeded;
+    (await runStep("face_memory", async () => {
+      faceMemoryFailedDeletes = await deleteFaceMemoryForUser(psid);
+    })) && deleteStepsSucceeded;
   const deleteResults = await Promise.all(
     urls.map(async url => ({
       url,
@@ -157,28 +201,25 @@ async function deleteUserDataInternal(
       )) && deleteStepsSucceeded;
   }
 
-  const failedDeletes = deleteResults
-    .filter(result => !result.deleted)
-    .map(result => result.url);
+  const failedDeletes = Array.from(
+    new Set([
+      ...faceMemoryFailedDeletes,
+      ...deleteResults
+        .filter(result => !result.deleted)
+        .map(result => result.url),
+    ])
+  );
   if (failedDeletes.length) {
-    await Promise.resolve(setPendingSourceImageDeleteUrls(psid, failedDeletes));
-    return { status: "pending" };
+    return (await persistDeletionRetryState(failedDeletes))
+      ? { status: "pending" }
+      : { status: "failed" };
   }
 
   if (!deleteStepsSucceeded) {
     // Keep retry-related state when required deletion steps fail; allow
     // delete-my-data operations to be retried without losing in-flight context.
-    if (retryContext) {
-      const currentState = await getState(psid);
-      if (currentState) {
-        await Promise.resolve(
-          writeState(psid, {
-            ...currentState,
-            ...retryContext,
-          })
-        );
-        return { status: "pending" };
-      }
+    if (retryContext && (await persistDeletionRetryState([]))) {
+      return { status: "pending" };
     }
     return { status: "failed" };
   }

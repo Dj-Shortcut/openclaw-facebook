@@ -23,7 +23,6 @@ import {
   ChannelConnectionClaimConflictError,
   upsertChannelConnection,
 } from "./db";
-import { ConversationIdentityError } from "./_core/conversationEndpoint";
 
 const originalDatabaseUrl = process.env.DATABASE_URL;
 
@@ -112,7 +111,7 @@ describe("channel connection database claims", () => {
     async ({ value }) => {
       const result = upsertChannelConnection(value);
 
-      await expect(result).rejects.toMatchObject<ConversationIdentityError>({
+      await expect(result).rejects.toMatchObject({
         name: "ConversationIdentityError",
         code: "invalid_input",
         message: "Conversation identity is unavailable",

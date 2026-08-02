@@ -72,7 +72,8 @@ async function withListeningApp<T>(
 
 function postInternalImageRequest(
   baseUrl: string,
-  token = "route-token"
+  token = "route-token",
+  payloadOverrides: Record<string, unknown> = {}
 ): Promise<Response> {
   return fetch(`${baseUrl}/internal/messenger/image-request`, {
     method: "POST",
@@ -82,11 +83,13 @@ function postInternalImageRequest(
     },
     body: JSON.stringify({
       psid: "route-user",
+      pageId: "page-1",
       prompt: "Restyle deze foto cinematic",
       reqId: "req-route",
       lang: "nl",
       timestamp: 1_771_000_000_000,
       sourceImageUrl: "https://img.example/source.jpg",
+      ...payloadOverrides,
     }),
   });
 }
@@ -278,6 +281,29 @@ describe("internal Messenger image request route", () => {
     expect(acceptInternalMessengerImageRequestMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { label: "missing", pageId: undefined },
+    { label: "blank", pageId: "   " },
+  ])(
+    "rejects a $label Page ID before accepting internal image requests",
+    async ({ pageId }) => {
+      await withListeningApp(createApp(), async baseUrl => {
+        const response = await postInternalImageRequest(
+          baseUrl,
+          "route-token",
+          { pageId }
+        );
+
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({
+          error: "Invalid image request payload",
+        });
+      });
+
+      expect(acceptInternalMessengerImageRequestMock).not.toHaveBeenCalled();
+    }
+  );
+
   it("does not return 202 when durable accept/enqueue fails", async () => {
     acceptInternalMessengerImageRequestMock.mockRejectedValueOnce(
       new Error("Redis unavailable")
@@ -294,6 +320,7 @@ describe("internal Messenger image request route", () => {
 
     expect(acceptInternalMessengerImageRequestMock).toHaveBeenCalledWith({
       psid: "route-user",
+      pageId: "page-1",
       prompt: "Restyle deze foto cinematic",
       reqId: "req-route",
       lang: "nl",

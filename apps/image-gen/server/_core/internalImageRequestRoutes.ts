@@ -18,7 +18,7 @@ import {
 
 const internalImageRequestSchema = z.object({
   psid: z.string().trim().min(1),
-  pageId: z.string().trim().min(1).max(160).optional(),
+  pageId: z.string().trim().min(1).max(160),
   prompt: z.string().trim().min(1).max(2_000),
   reqId: z.string().trim().min(1).max(128),
   lang: z.enum(["nl", "en"]).optional(),

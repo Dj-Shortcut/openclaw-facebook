@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ConversationIdentityError,
+  revalidateConversationEndpoint,
   resolveConversationSenderId,
   resolveMessengerEndpoint,
   resolveMessengerWebhookEndpoint,
@@ -138,6 +139,39 @@ describe("conversation endpoints", () => {
           phoneNumberId: "987654321098765 ",
         }),
       "invalid_input"
+    );
+  });
+
+  it("revalidates stored Messenger and WhatsApp endpoints", () => {
+    const messenger = resolveMessengerEndpoint({
+      entryId: "123456789012345",
+    });
+    const whatsapp = resolveWhatsAppEndpoint({
+      wabaId: "123456789012345",
+      phoneNumberId: "987654321098765",
+    });
+
+    const revalidatedMessenger = revalidateConversationEndpoint(messenger);
+    const revalidatedWhatsApp = revalidateConversationEndpoint(whatsapp);
+
+    expect(revalidatedMessenger).toEqual(messenger);
+    expect(revalidatedMessenger).not.toBe(messenger);
+    expect(Object.isFrozen(revalidatedMessenger)).toBe(true);
+    expect(revalidatedWhatsApp).toEqual(whatsapp);
+    expect(revalidatedWhatsApp).not.toBe(whatsapp);
+    expect(Object.isFrozen(revalidatedWhatsApp)).toBe(true);
+  });
+
+  it.each([
+    { label: "unknown", endpoint: { channel: "sms" } },
+    { label: "absent", endpoint: {} },
+  ])("fails closed for an $label stored channel", ({ endpoint }) => {
+    expectIdentityError(
+      () =>
+        revalidateConversationEndpoint(
+          endpoint as Parameters<typeof revalidateConversationEndpoint>[0]
+        ),
+      "unsupported_channel"
     );
   });
 });

@@ -106,10 +106,10 @@ function getPendingSourceDeleteUrls(
   );
 }
 
-export async function deleteFaceMemoryForUser(psid: string): Promise<void> {
+export async function deleteFaceMemoryForUser(psid: string): Promise<string[]> {
   const state = await getState(psid);
   if (!state) {
-    return;
+    return [];
   }
 
   const urlsToDelete = [
@@ -131,6 +131,7 @@ export async function deleteFaceMemoryForUser(psid: string): Promise<void> {
     failedDeleteUrls[0] ?? null,
     failedDeleteUrls
   );
+  return failedDeleteUrls;
 }
 
 export async function expireFaceMemory(

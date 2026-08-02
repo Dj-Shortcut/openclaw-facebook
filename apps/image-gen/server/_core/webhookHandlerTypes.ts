@@ -17,7 +17,7 @@ export type HandlerDeps = {
 
 export type InternalMessengerImageRequestInput = {
   psid: string;
-  pageId?: string;
+  pageId: string;
   prompt: string;
   reqId: string;
   lang?: Lang;
