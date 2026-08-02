@@ -92,14 +92,5 @@
     "vite": "^8.1.5",
     "vitest": "^4.1.10"
   },
-  "packageManager": "pnpm@10.28.1",
-  "pnpm": {
-    "overrides": {
-      "tailwindcss>nanoid": "3.3.7",
-      "fast-xml-parser": "^5.3.5",
-      "lodash": "^4.17.23",
-      "lodash-es": "^4.17.23",
-      "qs": "^6.14.2"
-    }
-  }
+  "packageManager": "pnpm@10.28.1"
 }
