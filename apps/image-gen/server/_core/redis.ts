@@ -29,6 +29,9 @@ export type RedisLike = {
   ): Promise<string | null>;
   rpoplpush(source: string, destination: string): Promise<string | null>;
   rpush(key: string, value: string): Promise<number>;
+  sadd(key: string, member: string): Promise<number>;
+  srem(key: string, member: string): Promise<number>;
+  smembers(key: string): Promise<string[]>;
   incr(key: string): Promise<number>;
   expire(key: string, seconds: number): Promise<number>;
   ttl(key: string): Promise<number>;

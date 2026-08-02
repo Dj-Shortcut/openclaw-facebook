@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { MessengerSendOutcome } from "./messengerApi";
 import { recordActiveUserToday } from "./botRuntimeStats";
 import { classifyInboundEvent } from "./messengerInboundClassification";
@@ -42,14 +43,14 @@ export async function createTrackedEventContext(
   if (!psid) return null;
 
   const userId = toUserKey(psid);
-  const reqId = `${psid}-${Date.now()}`;
+  const reqId = randomUUID();
   const responseTracker = createResponseSentTracker();
   const trackedCtx = createTrackedHandlerContext(
     ctx,
     responseTracker.markResponseSentFromOutcome
   );
 
-  if (!(await ctx.claimEventReplayOrLog(event, entryId, userId))) {
+  if (!(await ctx.claimEventReplayOrLog(event, entryId, userId, reqId))) {
     return null;
   }
 

@@ -147,7 +147,16 @@ describe("webhookIngressQueue", () => {
     isRedisEnabledMock.mockReturnValue(true);
     process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS = "3";
     process.env.WEBHOOK_INGRESS_RETRY_DELAY_MS = "10";
-    const processingError = new TypeError("handler exploded");
+    const rawPsid = "raw-psid-queue-987654321";
+    const rawPhone = "+32470987654";
+    const rawPageId = "raw-page-id-queue-123456789";
+    const rawPrompt = "make my private portrait look cinematic";
+    const processingError = Object.assign(
+      new TypeError(
+        `handler exploded for ${rawPsid} ${rawPhone} ${rawPageId}: ${rawPrompt}`
+      ),
+      { code: "ERR_WEBHOOK_HANDLER" }
+    );
     processFacebookWebhookPayloadMock
       .mockRejectedValueOnce(processingError)
       .mockResolvedValueOnce(undefined);
@@ -189,12 +198,18 @@ describe("webhookIngressQueue", () => {
       expect.objectContaining({
         channel: "facebook",
         attempts: 1,
-        error: expect.objectContaining({
+        error: {
           class: "TypeError",
-          message: "handler exploded",
-        }),
+          code: "ERR_WEBHOOK_HANDLER",
+        },
       })
     );
+    const serializedLogs = JSON.stringify(safeLogMock.mock.calls);
+    expect(serializedLogs).not.toContain(rawPsid);
+    expect(serializedLogs).not.toContain(rawPhone);
+    expect(serializedLogs).not.toContain(rawPageId);
+    expect(serializedLogs).not.toContain(rawPrompt);
+    expect(serializedLogs).not.toContain("handler exploded");
 
     await vi.advanceTimersByTimeAsync(10);
 
@@ -232,7 +247,6 @@ describe("webhookIngressQueue", () => {
         expect.objectContaining({
           error: expect.objectContaining({
             class: "Error",
-            message: "redis write failed",
           }),
         })
       );
@@ -287,7 +301,6 @@ describe("webhookIngressQueue", () => {
         attempts: 2,
         error: expect.objectContaining({
           class: "Error",
-          message: "try again",
         }),
       })
     );
@@ -347,7 +360,6 @@ describe("webhookIngressQueue", () => {
         attempts: 2,
         error: expect.objectContaining({
           class: "RangeError",
-          message: "too many",
         }),
       })
     );
@@ -408,7 +420,6 @@ describe("webhookIngressQueue", () => {
         expect.objectContaining({
           error: expect.objectContaining({
             class: "Error",
-            message: "redis unavailable",
           }),
         })
       );
@@ -430,7 +441,9 @@ describe("webhookIngressQueue", () => {
 
   it("does not remove a failed delivery when atomic requeue preflight fails", async () => {
     isRedisEnabledMock.mockReturnValue(true);
-    processFacebookWebhookPayloadMock.mockRejectedValue(new Error("callback failed"));
+    processFacebookWebhookPayloadMock.mockRejectedValue(
+      new Error("callback failed")
+    );
 
     const delivery = JSON.stringify({
       channel: "facebook",
@@ -453,7 +466,6 @@ describe("webhookIngressQueue", () => {
         expect.objectContaining({
           error: expect.objectContaining({
             class: "Error",
-            message: "destination key is not a list",
           }),
         })
       );
@@ -470,7 +482,9 @@ describe("webhookIngressQueue", () => {
 
   it("does not remove a failed delivery when the atomic retry push fails", async () => {
     isRedisEnabledMock.mockReturnValue(true);
-    processFacebookWebhookPayloadMock.mockRejectedValue(new Error("callback failed"));
+    processFacebookWebhookPayloadMock.mockRejectedValue(
+      new Error("callback failed")
+    );
 
     const delivery = JSON.stringify({
       channel: "facebook",
@@ -481,7 +495,9 @@ describe("webhookIngressQueue", () => {
     const processing: string[] = [];
     const dead: string[] = [];
     const redis = createQueueRedis(queue, processing, dead, {
-      pushError: new Error("OOM command not allowed when used memory > maxmemory"),
+      pushError: new Error(
+        "OOM command not allowed when used memory > maxmemory"
+      ),
     });
     getRedisClientMock.mockResolvedValue(redis);
 
@@ -493,7 +509,6 @@ describe("webhookIngressQueue", () => {
         expect.objectContaining({
           error: expect.objectContaining({
             class: "Error",
-            message: "OOM command not allowed when used memory > maxmemory",
           }),
         })
       );

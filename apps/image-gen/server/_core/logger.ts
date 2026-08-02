@@ -57,16 +57,16 @@ export function createLogger({ reqId, debugEnabled = false }: LoggerOptions) {
         return;
       }
 
-      emit("debug", withReq(fields));
+      emit("debug", redactLogDetails(withReq(fields)));
     },
     info(fields: LogFields): void {
-      emit("info", withReq(fields));
+      emit("info", redactLogDetails(withReq(fields)));
     },
     warn(fields: LogFields): void {
-      emit("warn", withReq(fields));
+      emit("warn", redactLogDetails(withReq(fields)));
     },
     error(fields: LogFields): void {
-      emit("error", withReq(fields));
+      emit("error", redactLogDetails(withReq(fields)));
     },
   };
 }
@@ -99,6 +99,8 @@ function shouldDropLogKey(key: string): boolean {
     "apikey",
     "secret",
     "psid",
+    "entryid",
+    "eventid",
     "customer",
     "paymentid",
     "mandateid",
@@ -212,6 +214,10 @@ function resolveLogLevel(details: LogFields): LogLevel {
 /** @public */
 export function safeLog(event: string, details: LogFields = {}): void {
   const level = resolveLogLevel(details);
-  const { level: _level, event: _event, ...rest } = details;
+  const rest = Object.fromEntries(
+    Object.entries(details).filter(
+      ([key]) => key !== "level" && key !== "event"
+    )
+  );
   emit(level, { event, ...redactLogDetails(rest) });
 }

@@ -17,7 +17,7 @@ export type HandlerDeps = {
 
 export type InternalMessengerImageRequestInput = {
   psid: string;
-  pageId?: string;
+  pageId: string;
   prompt: string;
   reqId: string;
   lang?: Lang;
@@ -32,7 +32,8 @@ export type HandlerContext = {
   claimEventReplayOrLog: (
     event: FacebookWebhookEvent,
     entryId: string | undefined,
-    userId: string
+    userId: string,
+    reqId: string
   ) => Promise<boolean>;
   createFeatureImageContext: (
     psid: string,

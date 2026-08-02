@@ -10,6 +10,7 @@ import { ensureStateStoreReady } from "./stateStore";
 import { ensureWebhookIngressQueueReady } from "./meta/webhookIngressQueue";
 import { ensureWebhookReplayProtectionReady } from "./webhookReplayProtection";
 import { assertPortalDatabaseConfig } from "./env";
+import { assertConversationIdentityConfig } from "./conversationIdentityConfig";
 import {
   assertMollieConfig,
   assertTenantBillingWorkerConfigured,
@@ -77,6 +78,10 @@ export function createReadinessHandler(
 
 export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
   return [
+    {
+      name: "conversation_identity_config",
+      check: assertConversationIdentityConfig,
+    },
     {
       name: "image_storage_config",
       check: () => {

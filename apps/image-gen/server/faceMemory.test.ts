@@ -64,7 +64,7 @@ describe("face memory deletion", () => {
     const sourceUrl = "https://assets.example/generated/face-source.jpg";
     await rememberFaceSourceImage("user-1", sourceUrl, Date.now());
 
-    await deleteFaceMemoryForUser("user-1");
+    await expect(deleteFaceMemoryForUser("user-1")).resolves.toEqual([]);
 
     const state = await getState("user-1");
     expect(storageDeleteMock).toHaveBeenCalledWith("generated/face-source.jpg");
@@ -94,7 +94,9 @@ describe("face memory deletion", () => {
     storageDeleteMock.mockRejectedValueOnce(new Error("storage unavailable"));
     await rememberFaceSourceImage("user-3", sourceUrl, Date.now());
 
-    await deleteFaceMemoryForUser("user-3");
+    await expect(deleteFaceMemoryForUser("user-3")).resolves.toEqual([
+      sourceUrl,
+    ]);
 
     const state = await getState("user-3");
     expect(storageDeleteMock).toHaveBeenCalledWith("generated/face-source-fail.jpg");
@@ -112,7 +114,9 @@ describe("face memory deletion", () => {
       pendingSourceImageDeleteUrl: pendingUrl,
     });
 
-    await deleteFaceMemoryForUser("user-4");
+    await expect(deleteFaceMemoryForUser("user-4")).resolves.toEqual([
+      pendingUrl,
+    ]);
 
     const state = await getState("user-4");
     expect(storageDeleteMock).toHaveBeenCalledWith("generated/pending-source.jpg");

@@ -33,18 +33,29 @@ let drainPromise: Promise<void> | null = null;
 
 function serializeError(error: unknown): {
   class: string;
-  message: string;
-  stack?: string;
+  code?: string | number;
 } {
-  if (error instanceof Error) {
-    return {
-      class: error.constructor.name,
-      message: error.message,
-      stack: error.stack,
-    };
+  const errorClass =
+    error instanceof Error ? error.constructor.name : "UnknownError";
+  if (!error || typeof error !== "object" || !("code" in error)) {
+    return { class: errorClass };
   }
 
-  return { class: "UnknownError", message: String(error) };
+  const code = (error as { code?: unknown }).code;
+  if (
+    typeof code === "number" &&
+    Number.isInteger(code) &&
+    code >= 0 &&
+    code <= 99_999
+  ) {
+    return { class: errorClass, code };
+  }
+
+  if (typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)) {
+    return { class: errorClass, code };
+  }
+
+  return { class: errorClass };
 }
 
 function getWebhookIngressDeliveryLeaseSeconds(): number {
@@ -341,7 +352,11 @@ export function scheduleWebhookIngressDrain(): void {
           try {
             await processQueuedWebhookDelivery(reserved.delivery);
           } catch (error) {
-            const result = await releaseFailedWebhookIngressDelivery(redis, reserved, error);
+            const result = await releaseFailedWebhookIngressDelivery(
+              redis,
+              reserved,
+              error
+            );
             if (result === "dead_lettered") {
               continue;
             }

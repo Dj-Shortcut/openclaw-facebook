@@ -5,8 +5,8 @@
 
 ## Verified snapshot
 
-- Last reviewed against code: **2026-06-21**
-- Verified commit: **`6e2ceb0`**
+- Last reviewed against code: **2026-08-02** (HEAD plus the local launch-hardening worktree described below).
+- Reviewed HEAD baseline: **`808f207`**. The 2026-08-02 launch-hardening changes are local only until they are committed, deployed, and proven in production.
 - Latest operator production verification: **2026-06-30** live Messenger smoke and `delete-my-data` flow verified by operator.
 - Current direction: generic prompt-first image generation; legacy style-picker UI, quick-reply flows, and director-mode preset plumbing are removed. Internal style-preset compatibility may remain only as backend fallback.
 - Product direction: `leaderbot.live` becomes a tenant/customer portal for managing each customer's own AI. The OpenClaw/Messenger gateway remains shielded and is not the customer-facing app.
@@ -28,6 +28,137 @@ risk rather than feature ambition. Each gate should be completed as small PRs
 with targeted tests and metadata-only observability. Do not expand public access,
 Meta permissions, paid provider usage, or customer self-serve features until the
 prior gate is proven in production.
+
+### Local launch-hardening tranche - 2026-08-02 (no launch-go)
+
+Completed locally and covered by focused regression tests in the current
+worktree; none of these items counts as production rollout proof:
+
+- [x] Scope short-lived gateway prompt/reply memory by Messenger account, Page,
+  and sender so identical sender/message identifiers cannot share remembered
+  assistant prompts across account/Page boundaries.
+- [x] Make `delete-my-data` outcomes truthful: Messenger and WhatsApp now report
+  `completed`, `pending`, or `failed`, and send success copy only after all
+  required deletion work completed. Incomplete deletion retains safe retry
+  context and gives the user retry/support guidance.
+- [x] Upgrade the affected image-gen Axios, Sentry, and `express-rate-limit`
+  dependencies and make the production-dependency high-severity audit blocking
+  in CI. `pnpm audit --prod` reports no known production vulnerabilities in the
+  current worktree (zero critical, high, moderate, and low advisories).
+- [x] Add an interim opaque Page-partitioned image queue and make partitioned
+  enqueue, reserve/lease, completion, retry, and dead-letter transitions atomic
+  and idempotent under ambiguous Redis responses. Consumers recompute the Page
+  HMAC, stale workers are fenced by random lease tokens, legacy Redis Cluster
+  `CROSSSLOT` errors no longer block partitioned work, and the default lease now
+  covers every configured OpenAI retry attempt. This is an atomicity milestone,
+  not the final workspace tenant boundary.
+- [x] Replace raw-PSID request ids with random UUIDs, remove raw Page/message ids
+  and error bodies from operational logs, apply redaction to both logger APIs,
+  and scrub Sentry exception messages, request data, breadcrumbs, variables,
+  and unapproved context before export. Disable Sentry performance tracing until
+  transaction/span exports have a tested metadata-only allowlist; error events
+  remain enabled behind the scrubber.
+- [x] Stop creating the redundant `psid:<hashed-userKey>` Messenger shadow-state
+  and make `delete-my-data` remove existing shadow records during the transition.
+- [x] Fail closed for both legacy portal-handoff issuance and claim with no
+  environment bypass until an immutable Page/channel/workspace authorization
+  boundary exists.
+- [x] Add the first additive `ConversationSubjectV2` identity foundation:
+  strict byte-exact Messenger Page and WhatsApp WABA/`phone_number_id`
+  endpoints, a dedicated versioned 256-bit HMAC key, branded opaque tenant,
+  binding, and user keys, an exact fail-closed `channelConnections` resolver,
+  nullable WABA schema support in migration `0011`, and globally unique
+  workspace ownership for non-null WABA IDs in migration `0012`. The
+  channel-connection write path now rejects non-canonical Meta IDs, enforces
+  the Messenger/WhatsApp endpoint shape, and locks both WhatsApp WABA and phone
+  claims. Startup/readiness and CI production type-checking now enforce the
+  local foundation. Existing webhook/state/queue paths are deliberately not
+  switched to v2 in this tranche.
+
+Still open before broad customer launch or paid activation:
+
+- [ ] Wire the new `ConversationSubjectV2` foundation before multi-tenant
+  traffic: require and compare both Messenger outer `entry.id` and inner
+  `recipient.id`, preserve WhatsApp outer WABA plus
+  `metadata.phone_number_id`, then resolve exactly one
+  `channelConnection` and workspace before any state/quota/consent/replay read.
+  Missing, duplicate, changed, inactive, or unavailable mappings must fail
+  closed; free versus paid entitlement is policy after identity resolution,
+  never an identity fallback.
+- [ ] Define and verify a persisted V2 boundary envelope before queue/state
+  wiring. Every consumer must reject unknown version/key ID, re-derive the
+  workspace/connection/endpoint/user subject from the authoritative mapping,
+  compare fixed-length values safely, and quarantine stale or reassigned
+  bindings with metadata-only diagnostics before state, provider, or delivery.
+  Ownership resolution may accept degraded connection health for deletion and
+  isolation, but credentials and outbound delivery must separately require
+  `status=connected`.
+- [ ] Replace live Redis `psid:<raw sender>` state with workspace/channel-bound
+  v2 state, locks, quota, completions, cost history, chat history, consent, face
+  memory, and deletion keys. The legacy data has no Page/WABA owner and therefore
+  requires an offline, backed-up, resumable one-owner migration; do not add a
+  runtime v2-miss-to-v1 fallback. Remove the global in-memory alias scan and dead
+  SQL `messengerState` shadow only after migration evidence and retention review.
+- [ ] Replace the global webhook ingress queue before multi-tenant traffic. It
+  currently persists complete Facebook/WhatsApp payloads, including customer
+  content and identifiers, in shared queued/processing/dead-letter lists without
+  a tenant partition, retention TTL, or bounded cap. Split multi-entry payloads
+  by resolved workspace before enqueue and make deletion/cancellation explicit.
+- [ ] Finish the image queue's final workspace boundary. Page-HMAC partitioning
+  now protects mechanics, but Page identity alone does not prevent a queued job
+  from crossing policy after Page reassignment. The v2 envelope must bind and
+  revalidate workspace, channel connection, Page binding, and subject before
+  state/provider/delivery; delete-my-data must tombstone/cancel queued work and
+  suppress late processing/output. Add a durable, idempotent dead-letter
+  notification/outbox so a double-lost Redis reply cannot strand the user in
+  `PROCESSING`; add bounded dead-letter retention/caps and fail readiness while
+  unmigrated legacy Cluster jobs remain. Prove the Lua scripts against real
+  Redis/Redis Cluster, not only the deterministic test fake.
+- [ ] Scope or remove the remaining globally stable log hashes (`user` and
+  `psidHash`) once the workspace binding exists; per-request UUID correlation is
+  now available and replay logs no longer expose a stable event hash.
+- [ ] Replace the unsafe legacy Messenger-to-portal handoff boundary before
+  onboarding customers through it. The 2026-08-02 local containment disables
+  both token issuance and claim with a non-configurable fail-closed gate because
+  the current admin call can pair any workspace with a global sender hash. A
+  safe replacement must derive the workspace from an immutable receiving-Page
+  / `channelConnections` binding, revalidate that binding atomically on claim,
+  use authenticated non-forgeable operator attribution, and refuse ambiguous,
+  disconnected, legacy-unbound, or cross-workspace mappings. Existing tokens
+  must remain unclaimable and be allowed to expire or be explicitly revoked.
+- [ ] Before deploying the partitioned queue, configure one stable
+  `MESSENGER_GENERATION_PARTITION_SECRET` across gateway and workers, prove the
+  unique Page-to-workspace ownership invariant, and drain/review existing
+  global legacy and dead-letter jobs before multi-tenant onboarding.
+- [ ] Before deploying this identity foundation, provision the same immutable
+  `CONVERSATION_SCOPE_HMAC_KEY_ID` and 256-bit
+  `CONVERSATION_SCOPE_HMAC_SECRET` version on every app and worker process,
+  back up the database, apply and verify migrations `0011` and `0012`, and
+  inventory existing Page/WhatsApp identifiers for the strict decimal
+  canonical form and duplicate WABA ownership. Abort rather than normalizing
+  ambiguous data. Do not derive or backfill WABA ownership from environment
+  variables. Prove the unique Page, phone, and WABA claims under concurrent
+  writes against real MySQL before activation.
+- [ ] Add deployment-wide identity-key epoch consensus and schema readiness.
+  Local syntax readiness cannot detect two nodes using the same key ID with
+  different secret material or a database missing migrations. Rotation must
+  use an immutable secret-manager version, an offline resumable migration
+  manifest, deletion-completeness checks, and zero-old-record evidence; never
+  add runtime try-all-key or v2-to-v1 fallback behavior.
+- [ ] Clear the existing image-gen server ESLint baseline (37 errors outside
+  this tranche, including unsafe-value and unused-code findings) and add the
+  server lint command to CI once green. The production files changed in this
+  tranche pass targeted ESLint, but the repository-wide server gate is not yet
+  clean.
+- [ ] Configure and verify production OAuth, explicit spend caps, and the
+  intended entitlement/billing feature flags. Paid/live billing stays fail-closed.
+- [ ] Rehearse, back up, run, and verify required live database/state migrations,
+  including the Page-ownership preflight and the blocked OpenClaw Memory Core
+  state repair, with an approved rollback path.
+- [ ] After deployment, run and record production route/security, portal login,
+  workspace isolation, Messenger, `delete-my-data`, quota/budget, queue, and
+  rollback smokes. Until that evidence exists, broad customer launch remains
+  **NO-GO** and Mollie live billing remains **NO-GO**.
 
 ## Finish cut - 2026-06-30
 
@@ -182,8 +313,10 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [ ] Add zero-friction Messenger-to-portal handoff for approved customers before relying on the portal for onboarding
   - Messenger presence alone is not portal authentication.
   - [x] Add a customer-facing `/handoff/:token` portal route that stores the handoff locally through Facebook Login, then claims the approved workspace.
-  - [x] Add a tenant-checked portal handoff claim mutation that atomically consumes a pending, unexpired token, grants workspace membership, and audits only privacy-safe metadata.
-  - [x] Add an operator-only manual approval endpoint that sends the short-lived, single-use portal link in Messenger when the response window is open and requires an audit actor for every issued link.
+  - [x] Contain the unsafe legacy handoff locally by failing closed for both issuance and claim with no environment override. Keep it disabled in production until the Page/workspace boundary below is implemented and all pre-fix tokens have expired or been revoked.
+  - [ ] Bind issuance and claim to one immutable receiving Page, `channelConnection`, and workspace; revalidate that binding atomically before granting membership and fail closed for missing, duplicate, disconnected, changed, legacy-unbound, or cross-workspace mappings.
+  - [ ] Replace caller-supplied `createdByUserId` with an authenticated, non-forgeable operator/support principal and an explicit customer-approved, auditable workflow.
+  - [ ] Re-enable the operator-only sender only after the tenant boundary is proven; the existing short-lived-token and response-window mechanics may be reused behind that boundary.
   - [x] Allow `/handoff` portal pages through the guarded public gateway and redact `/handoff/:token` from HTTP logs and metrics.
   - [ ] Wire paid Mollie webhook completion to the same handoff sender after the billing and tenant-runtime launch gates pass.
   - Storage boundary: `portalHandoffTokens` rows are scoped to one `workspaceId`; the opaque token is never stored, only its hash is persisted, and Messenger identity may be stored only as the privacy-peppered `messengerSenderUserKey`.

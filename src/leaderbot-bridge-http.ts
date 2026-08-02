@@ -30,7 +30,7 @@ function logLeaderbotBridgeStage(
 
 export async function requestLeaderbotImageGeneration(params: {
   psid: string;
-  pageId?: string;
+  pageId: string;
   prompt: string;
   reqId: string;
   timestamp: number;

@@ -494,6 +494,11 @@ describe("resolveMessengerConversationIntent", () => {
 });
 
 describe("Messenger prompt memory", () => {
+  const memoryScope = {
+    accountId: "prompt-memory-account",
+    pageId: "prompt-memory-page",
+  };
+
   it("extracts a generated image prompt from an assistant reply", () => {
     expect(
       extractImagePromptFromAssistantReply(
@@ -515,6 +520,7 @@ describe("Messenger prompt memory", () => {
   it("returns null for reference-only image requests when no remembered prompt exists", () => {
     expect(
       resolveMessengerImagePromptFromUserText({
+        ...memoryScope,
         senderId: "prompt-memory-miss",
         text: "Gebruik deze prompt en maak een afbeelding",
         now: 1_000,
@@ -523,20 +529,22 @@ describe("Messenger prompt memory", () => {
   });
 
   it("reuses the latest assistant-written prompt for reference-only image requests", () => {
-    rememberMessengerAssistantPrompt(
-      "prompt-memory-hit",
-      [
+    rememberMessengerAssistantPrompt({
+      ...memoryScope,
+      senderId: "prompt-memory-hit",
+      text: [
         "Hier is een prompt:",
         "",
         "```text",
         "Maak een elegante futuristische samurai poster, geen tekst, geen logo",
         "```",
       ].join("\n"),
-      2_000
-    );
+      now: 2_000,
+    });
 
     expect(
       resolveMessengerImagePromptFromUserText({
+        ...memoryScope,
         senderId: "prompt-memory-hit",
         text: "Gebruik deze prompt en maak een afbeelding",
         now: 2_500,
@@ -545,21 +553,24 @@ describe("Messenger prompt memory", () => {
   });
 
   it("uses the prompt from the exact Messenger message being replied to", () => {
-    rememberMessengerAssistantPrompt(
-      "prompt-reply-user",
-      "Prompt: Maak een rustige Japanse tuin bij zonsopgang, filmische belichting",
-      3_000,
-      "assistant-mid-1"
-    );
-    rememberMessengerAssistantPrompt(
-      "prompt-reply-user",
-      "Prompt: Maak een cyberpunk motorhelm met neonreflecties",
-      3_100,
-      "assistant-mid-2"
-    );
+    rememberMessengerAssistantPrompt({
+      ...memoryScope,
+      senderId: "prompt-reply-user",
+      text: "Prompt: Maak een rustige Japanse tuin bij zonsopgang, filmische belichting",
+      now: 3_000,
+      messageId: "assistant-mid-1",
+    });
+    rememberMessengerAssistantPrompt({
+      ...memoryScope,
+      senderId: "prompt-reply-user",
+      text: "Prompt: Maak een cyberpunk motorhelm met neonreflecties",
+      now: 3_100,
+      messageId: "assistant-mid-2",
+    });
 
     expect(
       resolveMessengerImagePromptFromUserText({
+        ...memoryScope,
         senderId: "prompt-reply-user",
         text: "Maak deze afbeelding",
         replyToMessageId: "assistant-mid-1",
@@ -569,6 +580,7 @@ describe("Messenger prompt memory", () => {
 
     expect(
       resolveMessengerImagePromptFromUserText({
+        ...memoryScope,
         senderId: "prompt-reply-user",
         text: "go",
         replyToMessageId: "assistant-mid-2",
@@ -578,21 +590,23 @@ describe("Messenger prompt memory", () => {
   });
 
   it("turns a numbered Messenger reply into the selected visual option", () => {
-    rememberMessengerAssistantPrompt(
-      "prompt-option-user",
-      [
+    rememberMessengerAssistantPrompt({
+      ...memoryScope,
+      senderId: "prompt-option-user",
+      text: [
         "Ja. Wil je dat ik een:",
         "",
         "1. samurai-portret maak,",
         "2. samurai-avatar/sticker maak,",
         "3. samurai-illustratie voor een poster maak,",
       ].join("\n"),
-      4_000,
-      "assistant-options-mid"
-    );
+      now: 4_000,
+      messageId: "assistant-options-mid",
+    });
 
     expect(
       resolveMessengerImagePromptFromUserText({
+        ...memoryScope,
         senderId: "prompt-option-user",
         text: "Nr 1 go",
         replyToMessageId: "assistant-options-mid",
@@ -602,21 +616,23 @@ describe("Messenger prompt memory", () => {
   });
 
   it("does not treat a numbered prompt-writing option as an image prompt", () => {
-    rememberMessengerAssistantPrompt(
-      "prompt-writing-option-user",
-      [
+    rememberMessengerAssistantPrompt({
+      ...memoryScope,
+      senderId: "prompt-writing-option-user",
+      text: [
         "Ja. Wil je dat ik een:",
         "",
         "1. samurai-portret maak,",
         "2. of een tekstprompt schrijf",
         "waarmee je hem kunt genereren?",
       ].join("\n"),
-      4_200,
-      "assistant-prompt-option-mid"
-    );
+      now: 4_200,
+      messageId: "assistant-prompt-option-mid",
+    });
 
     expect(
       resolveMessengerImagePromptFromUserText({
+        ...memoryScope,
         senderId: "prompt-writing-option-user",
         text: "Nr 2 go",
         replyToMessageId: "assistant-prompt-option-mid",
@@ -626,20 +642,22 @@ describe("Messenger prompt memory", () => {
   });
 
   it("strips markdown when resolving a typed numbered visual option", () => {
-    rememberMessengerAssistantPrompt(
-      "markdown-option-user",
-      [
+    rememberMessengerAssistantPrompt({
+      ...memoryScope,
+      senderId: "markdown-option-user",
+      text: [
         "**Kies een richting:**",
         "",
         "1. **samurai-portret** maak,",
         "2. `samurai-avatar/sticker` maak,",
       ].join("\n"),
-      4_400,
-      "assistant-markdown-options-mid"
-    );
+      now: 4_400,
+      messageId: "assistant-markdown-options-mid",
+    });
 
     expect(
       resolveMessengerImagePromptFromUserText({
+        ...memoryScope,
         senderId: "markdown-option-user",
         text: "1",
         replyToMessageId: "assistant-markdown-options-mid",
@@ -649,21 +667,23 @@ describe("Messenger prompt memory", () => {
   });
 
   it("turns a numbered follow-up into the latest offered visual option without Messenger reply context", () => {
-    rememberMessengerAssistantPrompt(
-      "prompt-option-latest-user",
-      [
+    rememberMessengerAssistantPrompt({
+      ...memoryScope,
+      senderId: "prompt-option-latest-user",
+      text: [
         "Ja. Wil je dat ik een:",
         "",
         "1. samurai-portret maak,",
         "2. samurai-avatar/sticker maak,",
         "3. samurai-illustratie voor een poster maak,",
       ].join("\n"),
-      4_500,
-      "assistant-options-latest-mid"
-    );
+      now: 4_500,
+      messageId: "assistant-options-latest-mid",
+    });
 
     expect(
       resolveMessengerImagePromptFromUserText({
+        ...memoryScope,
         senderId: "prompt-option-latest-user",
         text: "Nr 2 go",
         now: 4_600,
@@ -672,11 +692,45 @@ describe("Messenger prompt memory", () => {
 
     expect(
       resolveMessengerImagePromptFromUserText({
+        ...memoryScope,
         senderId: "prompt-option-latest-user",
         text: "3",
         now: 4_700,
       })
     ).toBe("Maak deze afbeelding: samurai-illustratie voor een poster");
+  });
+
+  it("isolates remembered prompts by account and Page", () => {
+    const sharedSenderAndMessage = {
+      senderId: "shared-prompt-memory-sender",
+      messageId: "shared-prompt-memory-message",
+    };
+    const scopes = [
+      { accountId: "account-a", pageId: "page-a" },
+      { accountId: "account-a", pageId: "page-b" },
+      { accountId: "account-b", pageId: "page-a" },
+    ];
+
+    for (const [index, scope] of scopes.entries()) {
+      rememberMessengerAssistantPrompt({
+        ...scope,
+        ...sharedSenderAndMessage,
+        text: `Prompt: Maak tenant-afbeelding nummer ${index + 1} met unieke belichting`,
+        now: 5_000 + index,
+      });
+    }
+
+    for (const [index, scope] of scopes.entries()) {
+      expect(
+        resolveMessengerImagePromptFromUserText({
+          ...scope,
+          senderId: sharedSenderAndMessage.senderId,
+          text: "Maak deze afbeelding",
+          replyToMessageId: sharedSenderAndMessage.messageId,
+          now: 5_100,
+        }),
+      ).toBe(`Maak tenant-afbeelding nummer ${index + 1} met unieke belichting`);
+    }
   });
 });
 

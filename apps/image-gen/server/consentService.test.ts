@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { storageDeleteMock } = vi.hoisted(() => ({
+const {
+  storageDeleteMock,
+  deleteProviderVideoForUserMock,
+  deletePortalHandoffTokensForMessengerUserKeyMock,
+} = vi.hoisted(() => ({
   storageDeleteMock: vi.fn(async () => undefined),
+  deleteProviderVideoForUserMock: vi.fn(async () => undefined),
+  deletePortalHandoffTokensForMessengerUserKeyMock: vi.fn(async () => 0),
 }));
 
 vi.mock("./storage", async importOriginal => {
@@ -11,6 +17,27 @@ vi.mock("./storage", async importOriginal => {
     storageDelete: storageDeleteMock,
   };
 });
+vi.mock("./db", async importOriginal => {
+  const actual = await importOriginal<typeof import("./db")>();
+  return {
+    ...actual,
+    deletePortalHandoffTokensForMessengerUserKey:
+      deletePortalHandoffTokensForMessengerUserKeyMock,
+  };
+});
+vi.mock(
+  "./_core/video-generation/videoProviderRegistry",
+  async importOriginal => {
+    const actual =
+      await importOriginal<
+        typeof import("./_core/video-generation/videoProviderRegistry")
+      >();
+    return {
+      ...actual,
+      deleteProviderVideoForUser: deleteProviderVideoForUserMock,
+    };
+  }
+);
 
 import {
   handleMessengerConsentGate,
@@ -18,6 +45,7 @@ import {
 } from "./_core/consentService";
 import {
   anonymizePsid,
+  clearUserState,
   getOrCreateState,
   getState,
   rememberFaceSourceImage,
@@ -26,6 +54,7 @@ import {
   setLastGenerated,
   setPendingStoredImage,
 } from "./_core/messengerState";
+import { writeState } from "./_core/stateStore";
 import {
   getMessengerGenerationCompletion,
   markMessengerGenerationCompleted,
@@ -39,12 +68,19 @@ describe("Messenger consent deletion flow", () => {
     delete process.env.REDIS_URL;
     process.env.PRIVACY_PEPPER = "consent-service-test-pepper";
     resetStateStore();
-    storageDeleteMock.mockClear();
+    storageDeleteMock.mockReset();
+    storageDeleteMock.mockResolvedValue(undefined);
+    deleteProviderVideoForUserMock.mockReset();
+    deleteProviderVideoForUserMock.mockResolvedValue(undefined);
+    deletePortalHandoffTokensForMessengerUserKeyMock.mockReset();
+    deletePortalHandoffTokensForMessengerUserKeyMock.mockResolvedValue(0);
   });
 
   afterEach(() => {
     resetStateStore();
     storageDeleteMock.mockReset();
+    deleteProviderVideoForUserMock.mockReset();
+    deletePortalHandoffTokensForMessengerUserKeyMock.mockReset();
     if (originalRedisUrl === undefined) {
       delete process.env.REDIS_URL;
     } else {
@@ -163,6 +199,69 @@ describe("Messenger consent deletion flow", () => {
     expect((await Promise.resolve(getState(psid)))?.pendingDeleteConfirm).toBe(true);
   });
 
+  it("does not claim Messenger deletion succeeded when storage cleanup is pending", async () => {
+    const psid = "messenger-delete-storage-pending-user";
+    const sourceUrl = "https://assets.example/inbound-source/delete-storage-pending.jpg";
+    const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
+
+    await Promise.resolve(getOrCreateState(psid));
+    await Promise.resolve(setPendingStoredImage(psid, sourceUrl));
+    const state = await Promise.resolve(getState(psid));
+    storageDeleteMock.mockRejectedValueOnce(new Error("delete failed"));
+
+    await expect(
+      handleMessengerConsentGate({
+        psid,
+        lang: "en",
+        payload: "GDPR_DELETE_CONFIRM",
+        state: state!,
+        sendText,
+        sendActions,
+      })
+    ).resolves.toBe(true);
+
+    expect(
+      (await Promise.resolve(getState(psid)))?.pendingSourceImageDeleteUrl
+    ).toBe(sourceUrl);
+    expect(sendText).toHaveBeenCalledWith(
+      expect.stringContaining("couldn't finish deleting all your data yet")
+    );
+    expect(sendText).not.toHaveBeenCalledWith(
+      expect.stringContaining("Your data has been deleted")
+    );
+  });
+
+  it("sends failure copy when Messenger deletion has no safe retry state", async () => {
+    const psid = "messenger-delete-failed-without-retry-state-user";
+    const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
+    const staleState = await Promise.resolve(getOrCreateState(psid));
+
+    await Promise.resolve(clearUserState(psid));
+    deletePortalHandoffTokensForMessengerUserKeyMock.mockRejectedValueOnce(
+      new Error("temporary handoff-token deletion failure")
+    );
+
+    await expect(
+      handleMessengerConsentGate({
+        psid,
+        lang: "en",
+        payload: "GDPR_DELETE_CONFIRM",
+        state: staleState,
+        sendText,
+        sendActions,
+      })
+    ).resolves.toBe(true);
+
+    expect(sendText).toHaveBeenCalledWith(
+      expect.stringContaining("couldn't complete your data deletion request")
+    );
+    expect(sendText).not.toHaveBeenCalledWith(
+      expect.stringContaining("Your data has been deleted")
+    );
+  });
+
   it("accepts Dutch delete-data command variants already classified by the gateway", async () => {
     const psid = "messenger-delete-command-gegevens-user";
     const sendText = vi.fn(async () => undefined);
@@ -230,5 +329,50 @@ describe("Messenger consent deletion flow", () => {
       ])
     );
     expect((await Promise.resolve(getState(senderId)))?.pendingDeleteConfirm).toBe(true);
+  });
+
+  it("does not claim WhatsApp deletion succeeded when a required step is pending", async () => {
+    const senderId = "whatsapp-delete-required-step-pending-user";
+    const sendText = vi.fn(async () => undefined);
+    const sendButtons = vi.fn(async () => undefined);
+    const initialState = await Promise.resolve(getOrCreateState(senderId));
+
+    await Promise.resolve(
+      writeState(senderId, {
+        ...initialState,
+        lastGeneratedVideoProvider: "openai",
+        lastGeneratedVideoProviderJobId: "video_job_delete_pending",
+      })
+    );
+    const state = await Promise.resolve(getState(senderId));
+    deleteProviderVideoForUserMock.mockRejectedValueOnce(
+      new Error("temporary video artifact deletion failure")
+    );
+
+    await expect(
+      handleWhatsAppConsentGate({
+        event: {
+          channel: "whatsapp",
+          messageId: "wamid-delete-required-step-pending",
+          messageType: "text",
+          senderId,
+          userId: senderId,
+          timestamp: 1_771_000_000,
+          rawEventMeta: { interactiveReplyId: "GDPR_DELETE_CONFIRM" },
+        },
+        lang: "nl",
+        state: state!,
+        sendText,
+        sendButtons,
+      })
+    ).resolves.toBe(true);
+
+    expect(await Promise.resolve(getState(senderId))).not.toBeNull();
+    expect(sendText).toHaveBeenCalledWith(
+      expect.stringContaining("nog niet al je data verwijderen")
+    );
+    expect(sendText).not.toHaveBeenCalledWith(
+      expect.stringContaining("Je data is verwijderd")
+    );
   });
 });

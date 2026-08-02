@@ -181,6 +181,9 @@ export const channelConnections = mysqlTable(
     channel: mysqlEnum("channel", ["facebook_messenger", "whatsapp", "web"]).notNull(),
     status: mysqlEnum("status", ["connected", "missing_permissions", "token_expired", "webhook_unhealthy", "disconnected"]).default("disconnected").notNull(),
     externalId: varchar("externalId", { length: 160 }),
+    providerAccountExternalId: varchar("providerAccountExternalId", {
+      length: 160,
+    }),
     displayName: varchar("displayName", { length: 255 }),
     encryptedAccessToken: text("encryptedAccessToken"),
     grantedScopes: json("grantedScopes"),
@@ -196,6 +199,9 @@ export const channelConnections = mysqlTable(
     channelExternalIdUnique: uniqueIndex(
       "channelConnections_channel_externalId_unique"
     ).on(table.channel, table.externalId),
+    channelProviderAccountExternalIdUnique: uniqueIndex(
+      "channelConnections_channel_providerAccountExternalId_unique"
+    ).on(table.channel, table.providerAccountExternalId),
   })
 );
 

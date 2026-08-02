@@ -47,9 +47,15 @@ import {
   getOrCreateState,
   getState,
   resetStateStore,
+  setFlowState,
   setPendingImage,
 } from "./_core/messengerState";
-import { readScopedState, writeScopedState, writeState } from "./_core/stateStore";
+import {
+  readScopedState,
+  readState,
+  writeScopedState,
+  writeState,
+} from "./_core/stateStore";
 
 describe("data deletion service", () => {
   const originalRedisUrl = process.env.REDIS_URL;
@@ -98,7 +104,9 @@ describe("data deletion service", () => {
       expect.objectContaining({ text: "old chat" }),
     ]);
 
-    await deleteUserData(psid);
+    await expect(deleteUserData(psid)).resolves.toEqual({
+      status: "completed",
+    });
 
     expect(await Promise.resolve(readScopedState("chat:history", userKey))).toBeNull();
   });
@@ -121,7 +129,9 @@ describe("data deletion service", () => {
       )
     ).toEqual(expect.objectContaining({ userKey }));
 
-    await deleteUserData(psid);
+    await expect(deleteUserData(psid)).resolves.toEqual({
+      status: "completed",
+    });
 
     expect(
       await Promise.resolve(
@@ -177,7 +187,9 @@ describe("data deletion service", () => {
       recordedAt
     );
 
-    await deleteUserData(psid);
+    await expect(deleteUserData(psid)).resolves.toEqual({
+      status: "completed",
+    });
 
     const remainingEntries = await readCostLedgerPeriod(period);
     expect(remainingEntries).toEqual([
@@ -194,14 +206,35 @@ describe("data deletion service", () => {
 
     await Promise.resolve(getOrCreateState(psid));
 
-    await deleteUserData(psid);
+    await expect(deleteUserData(psid)).resolves.toEqual({
+      status: "completed",
+    });
 
     expect(deletePortalHandoffTokensForMessengerUserKeyMock).toHaveBeenCalledWith(
       userKey
     );
   });
 
-  it("keeps user state when a required deletion step fails", async () => {
+  it("deletes legacy state shadowed under the privacy-peppered user key", async () => {
+    const psid = "delete-shadow-state-user";
+    const userKey = anonymizePsid(psid);
+
+    await Promise.resolve(getOrCreateState(psid));
+    await Promise.resolve(setFlowState(userKey, "PROCESSING"));
+    expect(await Promise.resolve(readState(userKey))).toMatchObject({
+      psid,
+      stage: "PROCESSING",
+    });
+
+    await expect(deleteUserData(psid)).resolves.toEqual({
+      status: "completed",
+    });
+
+    expect(await Promise.resolve(getState(psid))).toBeNull();
+    expect(await Promise.resolve(readState(userKey))).toBeNull();
+  });
+
+  it("keeps provider retry metadata without restoring deleted image state", async () => {
     const psid = "delete-step-failure-user";
     const imageUrl = "https://assets.example/inbound-source/fail-step.jpg";
     let state = await Promise.resolve(getOrCreateState(psid));
@@ -227,17 +260,35 @@ describe("data deletion service", () => {
       new Error("temporary video artifact deletion failure")
     );
 
-    await deleteUserData(psid);
+    await expect(deleteUserData(psid)).resolves.toEqual({ status: "pending" });
 
-    expect(await Promise.resolve(getState(psid))).toMatchObject({
+    const stateAfter = await Promise.resolve(getState(psid));
+    expect(stateAfter).toMatchObject({
       userKey: state.userKey,
-      pendingImageUrl: imageUrl,
+      lastPhotoUrl: null,
+      lastPhoto: null,
+      lastPhotoSource: null,
+      lastGeneratedUrl: null,
+      lastGeneratedVideoUrl: null,
+      lastGeneratedVideoProvider: "openai",
+      lastGeneratedVideoProviderJobId: "video_job_fail",
     });
+    expect(stateAfter?.pendingImageUrl).toBeUndefined();
+    expect(stateAfter?.pendingImageAt).toBeUndefined();
+    expect(stateAfter?.lastImageUrl).toBeUndefined();
   });
 
-  it("keeps retry state when a required deletion step fails", async () => {
+  it("retains only non-image flow and provider retry context after successful storage deletion", async () => {
     const psid = "delete-step-failure-retry-state-user";
     const imageUrl = "https://assets.example/inbound-source/delete-my-data.jpg";
+    const generatedUrl =
+      "https://assets.example/generated/images/retry-result.jpg";
+    const legacyImageUrl =
+      "https://assets.example/generated/images/legacy-retry.jpg";
+    const retainedFaceUrl =
+      "https://assets.example/inbound-source/retry-retained-face.jpg";
+    const generatedVideoUrl =
+      "https://assets.example/generated/videos/retry-result.mp4";
     let state = await Promise.resolve(getOrCreateState(psid));
 
     await Promise.resolve(
@@ -245,26 +296,76 @@ describe("data deletion service", () => {
     );
     state = await Promise.resolve(getState(psid));
 
-    await Promise.resolve(writeState(psid, {
-      ...state,
-      lastGeneratedVideoProvider: "openai",
-      lastGeneratedVideoProviderJobId: "video_job_retry_state_fail",
-    }));
+    await Promise.resolve(
+      writeState(psid, {
+        ...state,
+        stage: "PROCESSING",
+        state: "PROCESSING",
+        pendingScreenshotIntentContinuation: true,
+        pendingEditIntent: "change_background",
+        faceMemoryConsent: {
+          given: true,
+          timestamp: Date.now(),
+          version: "v1",
+        },
+        lastSourceImageUrl: retainedFaceUrl,
+        lastSourceImageUpdatedAt: Date.now(),
+        lastGeneratedUrl: generatedUrl,
+        lastGeneratedAt: Date.now(),
+        lastImageUrl: legacyImageUrl,
+        lastGeneratedVideoUrl: generatedVideoUrl,
+        lastGeneratedVideoAt: Date.now(),
+        lastGeneratedVideoProvider: "openai",
+        lastGeneratedVideoProviderJobId: "video_job_retry_state_fail",
+      })
+    );
 
     deleteProviderVideoForUserMock.mockRejectedValueOnce(
       new Error("temporary video artifact deletion failure")
     );
-    await deleteUserData(psid);
+    await expect(deleteUserData(psid)).resolves.toEqual({ status: "pending" });
 
     const stateAfter = await Promise.resolve(getState(psid));
     expect(stateAfter).toEqual(
       expect.objectContaining({
         userKey: state.userKey,
-        lastPhotoUrl: imageUrl,
-        lastPhoto: imageUrl,
-        pendingImageUrl: imageUrl,
-        pendingImageAt: expect.any(Number),
+        stage: "PROCESSING",
+        state: "PROCESSING",
+        pendingScreenshotIntentContinuation: true,
+        pendingEditIntent: "change_background",
+        lastPhotoUrl: null,
+        lastPhoto: null,
+        lastPhotoSource: null,
+        faceMemoryConsent: null,
+        lastSourceImageUrl: null,
+        lastSourceImageUpdatedAt: null,
+        lastGeneratedUrl: null,
+        lastGeneratedVideoUrl: null,
+        lastGeneratedVideoAt: null,
+        lastGeneratedVideoProvider: "openai",
+        lastGeneratedVideoProviderJobId: "video_job_retry_state_fail",
       })
+    );
+    expect(stateAfter?.pendingImageUrl).toBeUndefined();
+    expect(stateAfter?.pendingImageAt).toBeUndefined();
+    expect(stateAfter?.lastImageUrl).toBeUndefined();
+    expect(stateAfter?.lastGeneratedAt).toBeUndefined();
+    expect(stateAfter?.pendingSourceImageDeleteUrl).toBeNull();
+    expect(stateAfter?.pendingSourceImageDeleteUrls).toBeNull();
+    expect(storageDeleteMock).toHaveBeenCalledWith(
+      "inbound-source/delete-my-data.jpg"
+    );
+    expect(storageDeleteMock).toHaveBeenCalledWith(
+      "generated/images/retry-result.jpg"
+    );
+    expect(storageDeleteMock).toHaveBeenCalledWith(
+      "generated/images/legacy-retry.jpg"
+    );
+    expect(storageDeleteMock).toHaveBeenCalledWith(
+      "inbound-source/retry-retained-face.jpg"
+    );
+    expect(storageDeleteMock).toHaveBeenCalledWith(
+      "generated/videos/retry-result.mp4"
     );
   });
 
@@ -281,11 +382,26 @@ describe("data deletion service", () => {
       )
     );
 
-    await deleteUserData(psid);
+    await expect(deleteUserData(psid)).resolves.toEqual({ status: "pending" });
 
     expect((await Promise.resolve(getState(psid)))?.pendingSourceImageDeleteUrl).toBe(
       "https://assets.example/inbound-source/delete-me.jpg"
     );
+    const stateAfter = await Promise.resolve(getState(psid));
+    expect(stateAfter?.lastPhotoUrl).toBeNull();
+    expect(stateAfter?.lastPhoto).toBeNull();
+    expect(stateAfter?.pendingImageUrl).toBeUndefined();
+    expect(stateAfter?.pendingImageAt).toBeUndefined();
+  });
+
+  it("reports failure when a required deletion step fails without retry state", async () => {
+    const psid = "delete-step-failure-without-state-user";
+    deletePortalHandoffTokensForMessengerUserKeyMock.mockRejectedValueOnce(
+      new Error("temporary handoff-token deletion failure")
+    );
+
+    await expect(deleteUserData(psid)).resolves.toEqual({ status: "failed" });
+    expect(await Promise.resolve(getState(psid))).toBeNull();
   });
 
   it("does not log raw PSIDs when object storage deletion fails", async () => {
@@ -314,7 +430,8 @@ describe("data deletion service", () => {
   it("keeps every failed object deletion marker during user erasure", async () => {
     const psid = "delete-multiple-storage-failure-user";
     const sourceUrl = "https://assets.example/inbound-source/source-fail.jpg";
-    const generatedUrl = "https://assets.example/generated/images/generated-fail.jpg";
+    const generatedUrl =
+      "https://assets.example/generated/images/generated-fail.jpg";
     storageDeleteMock.mockRejectedValue(new Error("delete failed"));
 
     writeState(psid, {
@@ -334,6 +451,53 @@ describe("data deletion service", () => {
       sourceUrl,
       generatedUrl,
     ]);
+    expect(state?.lastPhotoUrl).toBeNull();
+    expect(state?.lastPhoto).toBeNull();
+    expect(state?.lastGeneratedUrl).toBeNull();
+    expect(state?.pendingImageUrl).toBeUndefined();
+  });
+
+  it("merges face-memory and general deletion failures without deleting overlapping URLs twice", async () => {
+    const psid = "delete-face-and-general-failure-user";
+    const faceUrl = "https://assets.example/inbound-source/retained-face.jpg";
+    const generatedUrl =
+      "https://assets.example/generated/images/general-fail.jpg";
+    storageDeleteMock.mockRejectedValue(new Error("delete failed"));
+
+    writeState(psid, {
+      ...(await Promise.resolve(getOrCreateState(psid))),
+      faceMemoryConsent: { given: true, timestamp: Date.now(), version: "v1" },
+      lastSourceImageUrl: faceUrl,
+      lastSourceImageUpdatedAt: Date.now(),
+      pendingSourceImageDeleteUrl: faceUrl,
+      pendingSourceImageDeleteUrls: [faceUrl],
+      lastPhotoUrl: faceUrl,
+      lastPhoto: faceUrl,
+      lastPhotoSource: "stored",
+      pendingImageUrl: faceUrl,
+      lastGeneratedUrl: generatedUrl,
+    });
+
+    await expect(deleteUserData(psid)).resolves.toEqual({ status: "pending" });
+
+    const deletedKeys = storageDeleteMock.mock.calls.map(([key]) => key);
+    expect(
+      deletedKeys.filter(key => key === "inbound-source/retained-face.jpg")
+    ).toHaveLength(1);
+    expect(
+      deletedKeys.filter(key => key === "generated/images/general-fail.jpg")
+    ).toHaveLength(1);
+    const state = await Promise.resolve(getState(psid));
+    expect(state?.pendingSourceImageDeleteUrl).toBe(faceUrl);
+    expect(state?.pendingSourceImageDeleteUrls).toEqual([
+      faceUrl,
+      generatedUrl,
+    ]);
+    expect(state?.lastPhotoUrl).toBeNull();
+    expect(state?.lastPhoto).toBeNull();
+    expect(state?.lastSourceImageUrl).toBeNull();
+    expect(state?.lastGeneratedUrl).toBeNull();
+    expect(state?.pendingImageUrl).toBeUndefined();
   });
 
   it("deletes state-referenced source and generated objects during user erasure", async () => {
@@ -364,6 +528,11 @@ describe("data deletion service", () => {
     expect(storageDeleteMock).toHaveBeenCalledWith(
       "inbound-source/retained-source.jpg"
     );
+    expect(
+      storageDeleteMock.mock.calls.filter(
+        ([key]) => key === "inbound-source/retained-source.jpg"
+      )
+    ).toHaveLength(1);
     expect(storageDeleteMock).toHaveBeenCalledWith(
       "generated/images/result.jpg"
     );

@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { getRedisClientMock, isRedisEnabledMock } = vi.hoisted(() => ({
   getRedisClientMock: vi.fn(),
@@ -25,12 +27,38 @@ import {
   getTodayRuntimeStats,
   resetRuntimeStatsForTests,
 } from "./_core/botRuntimeStats";
-import type { MessengerGenerationJob } from "./_core/messengerGenerationJob";
+import {
+  createMessengerGenerationTenantPartition,
+  type MessengerGenerationJob,
+} from "./_core/messengerGenerationJob";
 
-function createJob(overrides: Partial<MessengerGenerationJob> = {}): MessengerGenerationJob {
+const TEST_PARTITION_SECRET = "queue-partition-test-secret";
+
+function getTenantPartition(pageId: string): string {
+  return createMessengerGenerationTenantPartition(
+    pageId,
+    TEST_PARTITION_SECRET
+  );
+}
+
+function getJobKeyToken(reqId: string): string {
+  return createHash("sha256").update(reqId).digest("hex");
+}
+
+function getPartitionKey(
+  tenantPartition: string,
+  state: "queued" | "processing" | "dead"
+): string {
+  return `messenger-generation-jobs:{${tenantPartition}}:${state}`;
+}
+
+function createJob(
+  overrides: Partial<MessengerGenerationJob> = {}
+): MessengerGenerationJob {
   return {
     psid: "psid-1",
     userId: "user-1",
+    pageId: "page-1",
     reqId: "req-1",
     lang: "nl",
     ...overrides,
@@ -89,20 +117,300 @@ function createDrainRedis(
       dead.push(value);
       return dead.length;
     }),
+    sadd: vi.fn(async () => 0),
+    smembers: vi.fn(async () => []),
   };
 
   return { dead, processing, redis };
 }
 
+function createKeyedRedis(
+  initialLists: Record<string, string[]> = {},
+  initialTenantPartitions: string[] = [],
+  options: { failingListKeys?: string[] } = {}
+) {
+  const lists = new Map(
+    Object.entries(initialLists).map(([key, values]) => [key, [...values]])
+  );
+  const strings = new Map<string, string>();
+  const expirations = new Map<string, number>();
+  const tenantPartitions = new Set(initialTenantPartitions);
+  const failingListKeys = new Set(options.failingListKeys ?? []);
+  const getList = (key: string) => {
+    let list = lists.get(key);
+    if (!list) {
+      list = [];
+      lists.set(key, list);
+    }
+    return list;
+  };
+
+  const setString = (
+    key: string,
+    value: string,
+    args: Array<string | number>
+  ) => {
+    if (args.includes("NX") && strings.has(key)) {
+      return null;
+    }
+    strings.set(key, value);
+    const expiryIndex = args.indexOf("EX");
+    if (expiryIndex >= 0) {
+      expirations.set(key, Number(args[expiryIndex + 1]));
+    }
+    return "OK";
+  };
+
+  const evaluate = async (
+    script: string,
+    numKeys: number,
+    ...redisArgs: Array<string | number>
+  ): Promise<number> => {
+    const keys = redisArgs.slice(0, numKeys).map(String);
+    const args = redisArgs.slice(numKeys).map(String);
+
+    if (script.includes('local queued = redis.call("LLEN", KEYS[1])')) {
+      const [queuedKey, processingKey, deadLetterKey] = keys;
+      return getList(queuedKey).length === 0 &&
+        getList(processingKey).length === 0 &&
+        getList(deadLetterKey).length === 0
+        ? 1
+        : 0;
+    }
+
+    if (script.includes('redis.pcall("LPUSH", KEYS[2], ARGV[2])')) {
+      const [acceptedKey, queueKey] = keys;
+      const [acceptedTtl, raw] = args;
+      if (strings.has(acceptedKey)) {
+        return 0;
+      }
+      strings.set(acceptedKey, "1");
+      expirations.set(acceptedKey, Number(acceptedTtl));
+      if (failingListKeys.has(queueKey)) {
+        strings.delete(acceptedKey);
+        expirations.delete(acceptedKey);
+        throw new Error("WRONGTYPE queue key is not a list");
+      }
+      getList(queueKey).unshift(raw);
+      return 1;
+    }
+
+    if (script.includes("return -3") && script.includes('redis.call("RPOP"')) {
+      const [queueKey, processingKey, leaseKey] = keys;
+      const [raw, leaseToken, leaseTtl] = args;
+      if (strings.get(leaseKey) === leaseToken) {
+        return getList(processingKey).includes(raw) ? 2 : -3;
+      }
+      if (strings.has(leaseKey)) {
+        return -2;
+      }
+      const queue = getList(queueKey);
+      if (queue.length === 0) {
+        return 0;
+      }
+      if (queue.at(-1) !== raw) {
+        return -1;
+      }
+      if (failingListKeys.has(processingKey)) {
+        throw new Error("WRONGTYPE processing key is not a list");
+      }
+      queue.pop();
+      getList(processingKey).unshift(raw);
+      strings.set(leaseKey, leaseToken);
+      expirations.set(leaseKey, Number(leaseTtl));
+      return 1;
+    }
+
+    if (
+      script.includes('redis.pcall("SET", KEYS[3], "completed", "EX", ARGV[3])')
+    ) {
+      const [processingKey, leaseKey, receiptKey] = keys;
+      const [raw, leaseToken, receiptTtl] = args;
+      if (strings.get(receiptKey) === "completed") {
+        return 2;
+      }
+      if (strings.get(leaseKey) !== leaseToken) {
+        return 0;
+      }
+      const processing = getList(processingKey);
+      const index = processing.indexOf(raw);
+      if (index === -1) {
+        return -1;
+      }
+      processing.splice(index, 1);
+      strings.delete(leaseKey);
+      expirations.delete(leaseKey);
+      strings.set(receiptKey, "completed");
+      expirations.set(receiptKey, Number(receiptTtl));
+      return 1;
+    }
+
+    if (script.includes('ARGV[6] == "owned"')) {
+      const [processingKey, leaseKey, destinationKey, receiptKey] = keys;
+      const [
+        raw,
+        nextRaw,
+        leaseToken,
+        transitionName,
+        destination,
+        ownership,
+        receiptTtl,
+      ] = args;
+      if (strings.get(receiptKey) === transitionName) {
+        return 2;
+      }
+      if (ownership === "owned") {
+        if (strings.get(leaseKey) !== leaseToken) {
+          return 0;
+        }
+      } else if (strings.has(leaseKey)) {
+        return -2;
+      }
+      const processing = getList(processingKey);
+      const index = processing.indexOf(raw);
+      if (index === -1) {
+        return -1;
+      }
+      if (failingListKeys.has(destinationKey)) {
+        throw new Error("WRONGTYPE destination key is not a list");
+      }
+      processing.splice(index, 1);
+      strings.delete(leaseKey);
+      expirations.delete(leaseKey);
+      if (destination === "dead") {
+        getList(destinationKey).push(nextRaw);
+      } else {
+        getList(destinationKey).unshift(nextRaw);
+      }
+      strings.set(receiptKey, transitionName);
+      expirations.set(receiptKey, Number(receiptTtl));
+      return 1;
+    }
+
+    if (script.includes('redis.call("RPOPLPUSH", KEYS[1], KEYS[2])')) {
+      const [queueKey, deadLetterKey] = keys;
+      const [raw] = args;
+      const queue = getList(queueKey);
+      if (queue.at(-1) !== raw) {
+        return 0;
+      }
+      if (failingListKeys.has(deadLetterKey)) {
+        throw new Error("WRONGTYPE dead-letter key is not a list");
+      }
+      queue.pop();
+      getList(deadLetterKey).push(raw);
+      return 1;
+    }
+
+    if (
+      script.includes('redis.pcall("RPUSH", KEYS[2], ARGV[1])') &&
+      script.includes('return redis.error_reply("lease key is not a string")')
+    ) {
+      const [processingKey, deadLetterKey, leaseKey] = keys;
+      const [raw] = args;
+      if (strings.has(leaseKey)) {
+        return -2;
+      }
+      const processing = getList(processingKey);
+      const index = processing.indexOf(raw);
+      if (index === -1) {
+        return 0;
+      }
+      if (failingListKeys.has(deadLetterKey)) {
+        throw new Error("WRONGTYPE dead-letter key is not a list");
+      }
+      processing.splice(index, 1);
+      getList(deadLetterKey).push(raw);
+      return 1;
+    }
+
+    throw new Error("Unsupported Messenger generation queue Lua script");
+  };
+
+  const redis = {
+    del: vi.fn(async (key: string) => (strings.delete(key) ? 1 : 0)),
+    get: vi.fn(async (key: string) => strings.get(key) ?? null),
+    set: vi.fn(
+      async (key: string, value: string, ...args: Array<string | number>) => {
+        return setString(key, value, args);
+      }
+    ),
+    eval: vi.fn(evaluate),
+    llen: vi.fn(async (key: string) => getList(key).length),
+    lrem: vi.fn(async (key: string, _count: number, value: string) => {
+      const list = getList(key);
+      const index = list.indexOf(value);
+      if (index === -1) return 0;
+      list.splice(index, 1);
+      return 1;
+    }),
+    lpush: vi.fn(async (key: string, value: string) => {
+      const list = getList(key);
+      list.unshift(value);
+      return list.length;
+    }),
+    lrange: vi.fn(async (key: string, start: number, stop: number) => {
+      const list = getList(key);
+      return list.slice(start, stop === -1 ? undefined : stop + 1);
+    }),
+    rpoplpush: vi.fn(async (source: string, destination: string) => {
+      const value = getList(source).pop() ?? null;
+      if (value !== null) {
+        getList(destination).unshift(value);
+      }
+      return value;
+    }),
+    rpush: vi.fn(async (key: string, value: string) => {
+      const list = getList(key);
+      list.push(value);
+      return list.length;
+    }),
+    sadd: vi.fn(async (_key: string, member: string) => {
+      const before = tenantPartitions.size;
+      tenantPartitions.add(member);
+      return tenantPartitions.size - before;
+    }),
+    srem: vi.fn(async (_key: string, member: string) => {
+      const existed = tenantPartitions.delete(member);
+      return existed ? 1 : 0;
+    }),
+    smembers: vi.fn(async () => [...tenantPartitions]),
+    incr: vi.fn(async (key: string) => {
+      const current = Number(strings.get(key) ?? "0") + 1;
+      strings.set(key, String(current));
+      return current;
+    }),
+  };
+
+  return {
+    evaluate,
+    expirations,
+    lists,
+    redis,
+    strings,
+    tenantPartitions,
+  };
+}
+
 describe("messengerGenerationQueue", () => {
   const originalQueueEnabled = process.env.MESSENGER_GENERATION_QUEUE_ENABLED;
-  const originalInlineFallback = process.env.MESSENGER_GENERATION_INLINE_FALLBACK;
+  const originalInlineFallback =
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK;
   const originalWorker = process.env.MESSENGER_GENERATION_WORKER;
   const originalWorkerOnly = process.env.MESSENGER_GENERATION_WORKER_ONLY;
   const originalMaxAttempts = process.env.MESSENGER_GENERATION_MAX_ATTEMPTS;
-  const originalDrainBatchSize = process.env.MESSENGER_GENERATION_DRAIN_BATCH_SIZE;
-  const originalJobLeaseSeconds = process.env.MESSENGER_GENERATION_JOB_LEASE_SECONDS;
+  const originalDrainBatchSize =
+    process.env.MESSENGER_GENERATION_DRAIN_BATCH_SIZE;
+  const originalJobLeaseSeconds =
+    process.env.MESSENGER_GENERATION_JOB_LEASE_SECONDS;
   const originalOpenAiTimeoutMs = process.env.OPENAI_IMAGE_TIMEOUT_MS;
+  const originalPartitionSecret =
+    process.env.MESSENGER_GENERATION_PARTITION_SECRET;
+  const originalFbAppSecret = process.env.FB_APP_SECRET;
+
+  beforeEach(() => {
+    process.env.MESSENGER_GENERATION_PARTITION_SECRET = TEST_PARTITION_SECRET;
+  });
 
   afterEach(() => {
     if (originalQueueEnabled === undefined) {
@@ -133,17 +441,30 @@ describe("messengerGenerationQueue", () => {
     if (originalDrainBatchSize === undefined) {
       delete process.env.MESSENGER_GENERATION_DRAIN_BATCH_SIZE;
     } else {
-      process.env.MESSENGER_GENERATION_DRAIN_BATCH_SIZE = originalDrainBatchSize;
+      process.env.MESSENGER_GENERATION_DRAIN_BATCH_SIZE =
+        originalDrainBatchSize;
     }
     if (originalJobLeaseSeconds === undefined) {
       delete process.env.MESSENGER_GENERATION_JOB_LEASE_SECONDS;
     } else {
-      process.env.MESSENGER_GENERATION_JOB_LEASE_SECONDS = originalJobLeaseSeconds;
+      process.env.MESSENGER_GENERATION_JOB_LEASE_SECONDS =
+        originalJobLeaseSeconds;
     }
     if (originalOpenAiTimeoutMs === undefined) {
       delete process.env.OPENAI_IMAGE_TIMEOUT_MS;
     } else {
       process.env.OPENAI_IMAGE_TIMEOUT_MS = originalOpenAiTimeoutMs;
+    }
+    if (originalPartitionSecret === undefined) {
+      delete process.env.MESSENGER_GENERATION_PARTITION_SECRET;
+    } else {
+      process.env.MESSENGER_GENERATION_PARTITION_SECRET =
+        originalPartitionSecret;
+    }
+    if (originalFbAppSecret === undefined) {
+      delete process.env.FB_APP_SECRET;
+    } else {
+      process.env.FB_APP_SECRET = originalFbAppSecret;
     }
     getRedisClientMock.mockReset();
     isRedisEnabledMock.mockReset();
@@ -180,12 +501,50 @@ describe("messengerGenerationQueue", () => {
     );
   });
 
+  it("fails fast when queueing has no stable partition secret", () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    delete process.env.MESSENGER_GENERATION_PARTITION_SECRET;
+    delete process.env.FB_APP_SECRET;
+    isRedisEnabledMock.mockReturnValue(true);
+
+    expect(() => assertMessengerGenerationQueueConfig()).toThrow(
+      "requires MESSENGER_GENERATION_PARTITION_SECRET or FB_APP_SECRET"
+    );
+  });
+
   it("runs inline when queueing is disabled", async () => {
     const processor = vi.fn(async () => "done");
-    const result = await enqueueOrRunMessengerGenerationJob(createJob(), processor);
+    const result = await enqueueOrRunMessengerGenerationJob(
+      createJob(),
+      processor
+    );
 
     expect(result).toEqual({ mode: "inline", outcome: "done" });
     expect(processor).toHaveBeenCalledWith(createJob());
+    expect(getRedisClientMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves inline compatibility without a Page boundary", async () => {
+    const processor = vi.fn(async () => "done");
+    const job = createJob({ pageId: undefined });
+
+    await expect(
+      enqueueOrRunMessengerGenerationJob(job, processor)
+    ).resolves.toEqual({ mode: "inline", outcome: "done" });
+    expect(processor).toHaveBeenCalledWith(job);
+    expect(getRedisClientMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before Redis when a queued job has no Page boundary", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    isRedisEnabledMock.mockReturnValue(true);
+
+    await expect(
+      enqueueOrRunMessengerGenerationJob(
+        createJob({ pageId: undefined }),
+        vi.fn(async () => undefined)
+      )
+    ).rejects.toThrow("requires a receiving Page boundary");
     expect(getRedisClientMock).not.toHaveBeenCalled();
   });
 
@@ -193,148 +552,745 @@ describe("messengerGenerationQueue", () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
     isRedisEnabledMock.mockReturnValue(true);
-    const redis = {
-      llen: vi.fn(async () => 0),
-      lpush: vi.fn(async () => 1),
-      set: vi.fn(async () => "OK"),
-    };
+    const { expirations, lists, redis, strings } = createKeyedRedis();
     getRedisClientMock.mockResolvedValue(redis);
     const processor = vi.fn(async () => "should-not-run");
     const job = createJob({ reqId: "req-handoff" });
 
     const result = await enqueueOrRunMessengerGenerationJob(job, processor);
+    const tenantPartition = getTenantPartition(job.pageId!);
+    const partitionedJob = { ...job, tenantPartition };
 
     expect(result).toEqual({ mode: "queued" });
     expect(processor).not.toHaveBeenCalled();
-    expect(redis.set).toHaveBeenCalledWith(
-      "messenger-generation-job-accepted:req-handoff",
-      "1",
-      "EX",
-      720,
-      "NX"
+    expect(redis.sadd).toHaveBeenCalledWith(
+      "messenger-generation-job-partitions:v1",
+      tenantPartition
     );
-    expect(redis.lpush).toHaveBeenCalledWith(
-      "messenger-generation-jobs",
-      JSON.stringify(job)
-    );
+    const acceptedKey =
+      `messenger-generation-jobs:{${tenantPartition}}:accepted:` +
+      getJobKeyToken(job.reqId);
+    expect(strings.get(acceptedKey)).toBe("1");
+    expect(expirations.get(acceptedKey)).toBe(7 * 24 * 60 * 60);
+    expect(lists.get(getPartitionKey(tenantPartition, "queued"))).toEqual([
+      JSON.stringify(partitionedJob),
+    ]);
+    expect(lists.has("messenger-generation-jobs")).toBe(false);
+    const firstEvalArgs = redis.eval.mock.calls[0]?.slice(2);
+    expect(firstEvalArgs?.[0]).not.toContain(job.pageId);
+    expect(firstEvalArgs?.[1]).not.toContain(job.pageId);
   });
 
   it("dedupes queued generation jobs by reqId before enqueueing", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
     isRedisEnabledMock.mockReturnValue(true);
-    const accepted = new Set<string>();
-    const redis = {
-      llen: vi.fn(async () => 0),
-      lpush: vi.fn(async () => 1),
-      set: vi.fn(async (key: string, value: string, ...args: Array<string | number>) => {
-        expect(value).toBe("1");
-        expect(args).toEqual(["EX", 720, "NX"]);
-        if (accepted.has(key)) {
-          return null;
-        }
-        accepted.add(key);
-        return "OK";
-      }),
-    };
+    const { lists, redis } = createKeyedRedis();
     getRedisClientMock.mockResolvedValue(redis);
     const job = createJob({ reqId: "req-duplicate" });
 
     await expect(enqueueMessengerGenerationJob(job)).resolves.toBe(true);
     await expect(enqueueMessengerGenerationJob(job)).resolves.toBe(false);
 
-    expect(redis.lpush).toHaveBeenCalledTimes(1);
-    expect(redis.lpush).toHaveBeenCalledWith(
-      "messenger-generation-jobs",
-      JSON.stringify(job)
-    );
+    const tenantPartition = getTenantPartition(job.pageId!);
+    expect(lists.get(getPartitionKey(tenantPartition, "queued"))).toEqual([
+      JSON.stringify({ ...job, tenantPartition }),
+    ]);
+    expect(redis.eval).toHaveBeenCalledTimes(2);
     expect(getTodayRuntimeStats().duplicateSkipCountToday).toBe(1);
+  });
+
+  it("rolls back the accepted marker when the atomic queue push fails", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const job = createJob({ reqId: "req-atomic-push-failure" });
+    const tenantPartition = getTenantPartition(job.pageId!);
+    const queueKey = getPartitionKey(tenantPartition, "queued");
+    const acceptedKey =
+      `messenger-generation-jobs:{${tenantPartition}}:accepted:` +
+      getJobKeyToken(job.reqId);
+    const { lists, redis, strings } = createKeyedRedis({}, [], {
+      failingListKeys: [queueKey],
+    });
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await expect(enqueueMessengerGenerationJob(job)).rejects.toThrow(
+      "queue key is not a list"
+    );
+
+    expect(redis.eval).toHaveBeenCalledTimes(2);
+    expect(strings.has(acceptedKey)).toBe(false);
+    expect(lists.get(queueKey) ?? []).toEqual([]);
+  });
+
+  it("retries an ambiguous enqueue response without duplicating the job", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const job = createJob({ reqId: "req-ambiguous-enqueue" });
+    const tenantPartition = getTenantPartition(job.pageId!);
+    const queueKey = getPartitionKey(tenantPartition, "queued");
+    const acceptedKey =
+      `messenger-generation-jobs:{${tenantPartition}}:accepted:` +
+      getJobKeyToken(job.reqId);
+    const { evaluate, lists, redis, strings } = createKeyedRedis();
+    redis.eval.mockImplementationOnce(
+      async (
+        script: string,
+        numKeys: number,
+        ...args: Array<string | number>
+      ) => {
+        await evaluate(script, numKeys, ...args);
+        throw new Error("Redis response lost after commit");
+      }
+    );
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await expect(enqueueMessengerGenerationJob(job)).resolves.toBe(false);
+
+    expect(redis.eval).toHaveBeenCalledTimes(2);
+    expect(strings.get(acceptedKey)).toBe("1");
+    expect(lists.get(queueKey)).toEqual([
+      JSON.stringify({ ...job, tenantPartition }),
+    ]);
+    expect(getTodayRuntimeStats().duplicateSkipCountToday).toBe(1);
+  });
+
+  it("logs only a safe error class before retrying a partition script", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const job = createJob({
+      pageId: "private-page-for-script-retry",
+      reqId: "req-script-retry-log",
+    });
+    const tenantPartition = getTenantPartition(job.pageId!);
+    const { redis } = createKeyedRedis();
+    class RedisRetryError extends Error {}
+    redis.eval.mockRejectedValueOnce(
+      new RedisRetryError(
+        `do not log ${job.pageId} or ${getPartitionKey(tenantPartition, "queued")}`
+      )
+    );
+    getRedisClientMock.mockResolvedValue(redis);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await expect(enqueueMessengerGenerationJob(job)).resolves.toBe(true);
+
+      const retryLog = warnSpy.mock.calls
+        .map(([serialized]) => JSON.parse(String(serialized)))
+        .find(
+          payload => payload.event === "messenger_generation_queue_script_retry"
+        );
+      expect(retryLog).toEqual({
+        level: "warn",
+        event: "messenger_generation_queue_script_retry",
+        errorCode: "RedisRetryError",
+      });
+      const serializedRetryLog = JSON.stringify(retryLog);
+      expect(serializedRetryLog).not.toContain(job.pageId);
+      expect(serializedRetryLog).not.toContain(tenantPartition);
+      expect(serializedRetryLog).not.toContain("do not log");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("returns duplicate mode without running or enqueueing the job twice", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const { lists, redis } = createKeyedRedis();
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async () => undefined);
+    const job = createJob({ reqId: "req-duplicate-mode" });
+
+    await expect(
+      enqueueOrRunMessengerGenerationJob(job, processor)
+    ).resolves.toEqual({ mode: "queued" });
+    await expect(
+      enqueueOrRunMessengerGenerationJob(job, processor)
+    ).resolves.toEqual({ mode: "duplicate" });
+
+    const tenantPartition = getTenantPartition(job.pageId!);
+    expect(lists.get(getPartitionKey(tenantPartition, "queued"))).toEqual([
+      JSON.stringify({ ...job, tenantPartition }),
+    ]);
+    expect(processor).not.toHaveBeenCalled();
+  });
+
+  it("scopes accepted dedupe records to the opaque Page partition", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const { lists, redis, strings } = createKeyedRedis();
+    getRedisClientMock.mockResolvedValue(redis);
+    const first = createJob({ pageId: "page-a", reqId: "shared-request" });
+    const second = createJob({ pageId: "page-b", reqId: "shared-request" });
+
+    await expect(enqueueMessengerGenerationJob(first)).resolves.toBe(true);
+    await expect(enqueueMessengerGenerationJob(second)).resolves.toBe(true);
+
+    const firstPartition = getTenantPartition(first.pageId!);
+    const secondPartition = getTenantPartition(second.pageId!);
+    expect(firstPartition).not.toBe(secondPartition);
+    expect(lists.get(getPartitionKey(firstPartition, "queued"))).toHaveLength(
+      1
+    );
+    expect(lists.get(getPartitionKey(secondPartition, "queued"))).toHaveLength(
+      1
+    );
+    expect([...strings.keys()]).toEqual(
+      expect.arrayContaining([
+        `messenger-generation-jobs:{${firstPartition}}:accepted:${getJobKeyToken(first.reqId)}`,
+        `messenger-generation-jobs:{${secondPartition}}:accepted:${getJobKeyToken(second.reqId)}`,
+      ])
+    );
+  });
+
+  it("restores discovery when an enqueue races empty partition pruning", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const job = createJob({
+      pageId: "page-prune-race",
+      reqId: "req-prune-race",
+    });
+    const tenantPartition = getTenantPartition(job.pageId!);
+    const { lists, redis, tenantPartitions } = createKeyedRedis({}, [
+      tenantPartition,
+    ]);
+    getRedisClientMock.mockResolvedValue(redis);
+    redis.srem.mockImplementationOnce(async (_key: string, member: string) => {
+      await enqueueMessengerGenerationJob(job);
+      const existed = tenantPartitions.delete(member);
+      return existed ? 1 : 0;
+    });
+
+    await drainMessengerGenerationQueue(vi.fn(async () => undefined));
+
+    expect(tenantPartitions.has(tenantPartition)).toBe(true);
+    expect(lists.get(getPartitionKey(tenantPartition, "queued"))).toEqual([
+      JSON.stringify({ ...job, tenantPartition }),
+    ]);
+
+    const processor = vi.fn(async () => undefined);
+    await drainMessengerGenerationQueue(processor);
+    expect(processor).toHaveBeenCalledWith({ ...job, tenantPartition });
+    expect(tenantPartitions.has(tenantPartition)).toBe(false);
   });
 
   it("enqueues and drains Redis jobs", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
     isRedisEnabledMock.mockReturnValue(true);
-    const queue: string[] = [];
-    const processing: string[] = [];
-    const leases = new Map<string, string>();
-    const redis = {
-      del: vi.fn(async (key: string) => {
-        const existed = leases.delete(key);
-        return existed ? 1 : 0;
-      }),
-      get: vi.fn(async (key: string) => leases.get(key) ?? null),
-      lpush: vi.fn(async (key: string, value: string) => {
-        if (key.endsWith(":processing")) {
-          processing.unshift(value);
-        } else {
-          queue.unshift(value);
-        }
-        return queue.length;
-      }),
-      llen: vi.fn(async (key: string) =>
-        key.endsWith(":processing") ? processing.length : queue.length
-      ),
-      lrange: vi.fn(async () => processing),
-      lrem: vi.fn(async (_key: string, _count: number, value: string) => {
-        const index = processing.indexOf(value);
-        if (index === -1) return 0;
-        processing.splice(index, 1);
-        return 1;
-      }),
-      set: vi.fn(async (key: string, value: string) => {
-        leases.set(key, value);
-        return "OK";
-      }),
-      rpoplpush: vi.fn(async () => {
-        const value = queue.pop() ?? null;
-        if (value) {
-          processing.unshift(value);
-        }
-        return value;
-      }),
-    };
+    const { expirations, lists, redis, strings } = createKeyedRedis();
     getRedisClientMock.mockResolvedValue(redis);
 
     const job = createJob({ reqId: "req-queued" });
     await expect(enqueueMessengerGenerationJob(job)).resolves.toBe(true);
     const processor = vi.fn(async () => undefined);
     await drainMessengerGenerationQueue(processor);
+    const tenantPartition = getTenantPartition(job.pageId!);
+    const partitionedJob = { ...job, tenantPartition };
+    const acceptedKey =
+      `messenger-generation-jobs:{${tenantPartition}}:accepted:` +
+      getJobKeyToken(job.reqId);
+    const leaseKey =
+      `messenger-generation-jobs:{${tenantPartition}}:lease:` +
+      getJobKeyToken(job.reqId);
 
-    expect(redis.lpush).toHaveBeenCalledWith(
-      "messenger-generation-jobs",
-      JSON.stringify(job)
+    expect(lists.get(getPartitionKey(tenantPartition, "queued"))).toEqual([]);
+    expect(lists.get(getPartitionKey(tenantPartition, "processing"))).toEqual(
+      []
     );
+    expect(strings.get(acceptedKey)).toBe("1");
+    expect(expirations.get(acceptedKey)).toBe(7 * 24 * 60 * 60);
+    expect(strings.has(leaseKey)).toBe(false);
+    expect(
+      [...strings.entries()].some(
+        ([key, value]) => key.includes(":transition:") && value === "completed"
+      )
+    ).toBe(true);
+    expect(processor).toHaveBeenCalledWith(partitionedJob);
+  });
+
+  it("keeps a reservation when a stale worker loses its fenced lease", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const tenantPartition = getTenantPartition("page-lease-fence");
+    const job = createJob({
+      pageId: "page-lease-fence",
+      reqId: "req-lease-fence",
+      tenantPartition,
+    });
+    const raw = JSON.stringify(job);
+    const queueKey = getPartitionKey(tenantPartition, "queued");
+    const processingKey = getPartitionKey(tenantPartition, "processing");
+    const leaseKey =
+      `messenger-generation-jobs:{${tenantPartition}}:lease:` +
+      getJobKeyToken(job.reqId);
+    const { lists, redis, strings } = createKeyedRedis({ [queueKey]: [raw] }, [
+      tenantPartition,
+    ]);
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await drainMessengerGenerationQueue(async () => {
+      expect(strings.get(leaseKey)).toBeTruthy();
+      strings.set(leaseKey, "new-worker-token");
+    });
+
+    expect(lists.get(queueKey)).toEqual([]);
+    expect(lists.get(processingKey)).toEqual([raw]);
+    expect(strings.get(leaseKey)).toBe("new-worker-token");
+    expect(
+      [...strings.values()].filter(value => value === "completed")
+    ).toEqual([]);
+  });
+
+  it("drains a matching partition without reading content from another partition", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const firstPartition = getTenantPartition("page-a");
+    const secondPartition = getTenantPartition("page-b");
+    const firstJob = createJob({
+      pageId: "page-a",
+      reqId: "partition-drain-a",
+      tenantPartition: firstPartition,
+    });
+    const secondJob = createJob({
+      pageId: "page-b",
+      reqId: "partition-drain-b",
+      tenantPartition: secondPartition,
+    });
+    const { lists, redis } = createKeyedRedis(
+      {
+        [getPartitionKey(firstPartition, "queued")]: [JSON.stringify(firstJob)],
+        [getPartitionKey(secondPartition, "queued")]: [
+          JSON.stringify(secondJob),
+        ],
+      },
+      [firstPartition, secondPartition]
+    );
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async () => undefined);
+
+    await drainMessengerGenerationQueue(processor);
+
+    expect(processor).toHaveBeenCalledWith(firstJob);
+    expect(processor).toHaveBeenCalledWith(secondJob);
+    expect(processor).toHaveBeenCalledTimes(2);
+    expect(lists.get(getPartitionKey(firstPartition, "processing"))).toEqual(
+      []
+    );
+    expect(lists.get(getPartitionKey(secondPartition, "processing"))).toEqual(
+      []
+    );
+    expect(redis.rpoplpush).not.toHaveBeenCalledWith(
+      getPartitionKey(firstPartition, "queued"),
+      getPartitionKey(firstPartition, "processing")
+    );
+    expect(redis.eval.mock.calls).toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining([
+          getPartitionKey(firstPartition, "queued"),
+          getPartitionKey(firstPartition, "processing"),
+        ]),
+        expect.arrayContaining([
+          getPartitionKey(secondPartition, "queued"),
+          getPartitionKey(secondPartition, "processing"),
+        ]),
+      ])
+    );
+  });
+
+  it("distinguishes invalid-queued and reserve scripts in the Redis fake", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const pageId = "page-script-branches";
+    const tenantPartition = getTenantPartition(pageId);
+    const validJob = {
+      ...createJob({ pageId, reqId: "req-valid-after-invalid" }),
+      tenantPartition,
+    };
+    const invalidRaw = "{invalid-queued-payload";
+    const { lists, redis } = createKeyedRedis(
+      {
+        [getPartitionKey(tenantPartition, "queued")]: [
+          JSON.stringify(validJob),
+          invalidRaw,
+        ],
+      },
+      [tenantPartition]
+    );
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async () => undefined);
+
+    await drainMessengerGenerationQueue(processor);
+
+    expect(processor).toHaveBeenCalledOnce();
+    expect(processor).toHaveBeenCalledWith(validJob);
+    expect(lists.get(getPartitionKey(tenantPartition, "queued"))).toEqual([]);
+    expect(lists.get(getPartitionKey(tenantPartition, "processing"))).toEqual(
+      []
+    );
+    expect(lists.get(getPartitionKey(tenantPartition, "dead"))).toEqual([
+      invalidRaw,
+    ]);
+    expect(
+      redis.eval.mock.calls.some(([script]) =>
+        String(script).includes('redis.call("RPOPLPUSH", KEYS[1], KEYS[2])')
+      )
+    ).toBe(true);
+  });
+
+  it("requeues a failed partition job only inside the same partition", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    isRedisEnabledMock.mockReturnValue(true);
+    const tenantPartition = getTenantPartition("page-retry");
+    const job = createJob({
+      pageId: "page-retry",
+      reqId: "partition-retry",
+      tenantPartition,
+    });
+    const { lists, redis } = createKeyedRedis(
+      {
+        [getPartitionKey(tenantPartition, "queued")]: [JSON.stringify(job)],
+      },
+      [tenantPartition]
+    );
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await drainMessengerGenerationQueue(async () => {
+      throw new Error("retry");
+    });
+
+    expect(
+      lists
+        .get(getPartitionKey(tenantPartition, "queued"))
+        ?.map(value => JSON.parse(value))
+    ).toEqual([{ ...job, attempts: 1 }]);
+    expect(lists.get("messenger-generation-jobs") ?? []).toEqual([]);
+    expect(lists.get(getPartitionKey(tenantPartition, "dead")) ?? []).toEqual(
+      []
+    );
+  });
+
+  it("continues later scopes without retrying a failed scope in the same pass", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const orderedScopes = ["page-failure-a", "page-failure-b"]
+      .map(pageId => ({ pageId, tenantPartition: getTenantPartition(pageId) }))
+      .sort((left, right) =>
+        left.tenantPartition.localeCompare(right.tenantPartition)
+      );
+    const failedScope = orderedScopes[0]!;
+    const healthyScope = orderedScopes[1]!;
+    const failedJob = {
+      ...createJob({
+        pageId: failedScope.pageId,
+        reqId: "req-failed-scope",
+      }),
+      tenantPartition: failedScope.tenantPartition,
+    };
+    const healthyJob = {
+      ...createJob({
+        pageId: healthyScope.pageId,
+        reqId: "req-healthy-scope",
+      }),
+      tenantPartition: healthyScope.tenantPartition,
+    };
+    const { lists, redis } = createKeyedRedis(
+      {
+        [getPartitionKey(failedScope.tenantPartition, "queued")]: [
+          JSON.stringify(failedJob),
+        ],
+        [getPartitionKey(healthyScope.tenantPartition, "queued")]: [
+          JSON.stringify(healthyJob),
+        ],
+      },
+      orderedScopes.map(scope => scope.tenantPartition).reverse()
+    );
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async (job: MessengerGenerationJob) => {
+      if (job.reqId === failedJob.reqId) {
+        throw new Error("provider unavailable");
+      }
+    });
+
+    await drainMessengerGenerationQueue(processor);
+
+    expect(processor).toHaveBeenCalledTimes(2);
+    expect(
+      processor.mock.calls.filter(([job]) => job.reqId === failedJob.reqId)
+    ).toHaveLength(1);
+    expect(processor).toHaveBeenCalledWith(healthyJob);
+    expect(
+      lists
+        .get(getPartitionKey(failedScope.tenantPartition, "queued"))
+        ?.map(raw => JSON.parse(raw))
+    ).toEqual([{ ...failedJob, attempts: 1 }]);
+    expect(
+      lists.get(getPartitionKey(healthyScope.tenantPartition, "processing"))
+    ).toEqual([]);
+  });
+
+  it("dead-letters a partition job only inside the same partition", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_MAX_ATTEMPTS = "1";
+    isRedisEnabledMock.mockReturnValue(true);
+    const tenantPartition = getTenantPartition("page-dead");
+    const job = createJob({
+      pageId: "page-dead",
+      reqId: "partition-dead",
+      tenantPartition,
+    });
+    const { lists, redis } = createKeyedRedis(
+      {
+        [getPartitionKey(tenantPartition, "queued")]: [JSON.stringify(job)],
+      },
+      [tenantPartition]
+    );
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await drainMessengerGenerationQueue(async () => {
+      throw new Error("dead");
+    });
+
+    expect(
+      lists
+        .get(getPartitionKey(tenantPartition, "dead"))
+        ?.map(value => JSON.parse(value))
+    ).toEqual([{ ...job, attempts: 1 }]);
+    expect(lists.get("messenger-generation-jobs:dead") ?? []).toEqual([]);
+  });
+
+  it("reclaims a stale partition reservation only into its own queue", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    isRedisEnabledMock.mockReturnValue(true);
+    const tenantPartition = getTenantPartition("page-reclaim");
+    const job = createJob({
+      pageId: "page-reclaim",
+      reqId: "partition-reclaim",
+      tenantPartition,
+    });
+    const { lists, redis } = createKeyedRedis(
+      {
+        [getPartitionKey(tenantPartition, "processing")]: [JSON.stringify(job)],
+      },
+      [tenantPartition]
+    );
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await expect(reclaimReservedMessengerGenerationJobs()).resolves.toBe(1);
+
+    expect(
+      lists
+        .get(getPartitionKey(tenantPartition, "queued"))
+        ?.map(value => JSON.parse(value))
+    ).toEqual([{ ...job, attempts: 1 }]);
+    expect(lists.get(getPartitionKey(tenantPartition, "processing"))).toEqual(
+      []
+    );
+    expect(lists.get("messenger-generation-jobs") ?? []).toEqual([]);
+  });
+
+  it.each(["missing", "different"] as const)(
+    "dead-letters a %s payload partition mismatch without executing it",
+    async mismatch => {
+      process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+      isRedisEnabledMock.mockReturnValue(true);
+      const activePartition = getTenantPartition("page-active");
+      const job = createJob({
+        pageId: "page-active",
+        reqId: `partition-mismatch-${mismatch}`,
+        tenantPartition:
+          mismatch === "different"
+            ? getTenantPartition("page-other")
+            : undefined,
+      });
+      const raw = JSON.stringify(job);
+      const { lists, redis } = createKeyedRedis(
+        {
+          [getPartitionKey(activePartition, "queued")]: [raw],
+        },
+        [activePartition]
+      );
+      getRedisClientMock.mockResolvedValue(redis);
+      const processor = vi.fn(async () => undefined);
+
+      await drainMessengerGenerationQueue(processor);
+
+      expect(processor).not.toHaveBeenCalled();
+      expect(lists.get(getPartitionKey(activePartition, "dead"))).toEqual([
+        raw,
+      ]);
+      expect(lists.get("messenger-generation-jobs:dead") ?? []).toEqual([]);
+    }
+  );
+
+  it("recomputes the Page HMAC before consuming a partitioned job", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    isRedisEnabledMock.mockReturnValue(true);
+    const activePartition = getTenantPartition("page-active");
+    const forgedJob = createJob({
+      pageId: "page-other",
+      reqId: "partition-forged-page",
+      tenantPartition: activePartition,
+    });
+    const raw = JSON.stringify(forgedJob);
+    const { lists, redis } = createKeyedRedis(
+      {
+        [getPartitionKey(activePartition, "queued")]: [raw],
+      },
+      [activePartition]
+    );
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async () => undefined);
+
+    await drainMessengerGenerationQueue(processor);
+
+    expect(processor).not.toHaveBeenCalled();
+    expect(lists.get(getPartitionKey(activePartition, "queued"))).toEqual([]);
+    expect(lists.get(getPartitionKey(activePartition, "dead"))).toEqual([raw]);
+  });
+
+  it("continues partitioned processing when legacy Redis keys return CROSSSLOT", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const tenantPartition = getTenantPartition("page-cluster");
+    const partitionedJob = createJob({
+      pageId: "page-cluster",
+      reqId: "partition-cluster-job",
+      tenantPartition,
+    });
+    const legacyRaw = JSON.stringify(
+      createJob({ reqId: "legacy-cross-slot", tenantPartition: undefined })
+    );
+    const queueKey = getPartitionKey(tenantPartition, "queued");
+    const processingKey = getPartitionKey(tenantPartition, "processing");
+    const { lists, redis } = createKeyedRedis(
+      {
+        [queueKey]: [JSON.stringify(partitionedJob)],
+        "messenger-generation-jobs": [legacyRaw],
+      },
+      [tenantPartition]
+    );
+    redis.rpoplpush.mockRejectedValue(
+      new Error("CROSSSLOT Keys in request don't hash to the same slot")
+    );
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async () => undefined);
+
+    await expect(
+      drainMessengerGenerationQueue(processor)
+    ).resolves.toBeUndefined();
+
+    expect(processor).toHaveBeenCalledOnce();
+    expect(processor).toHaveBeenCalledWith(partitionedJob);
+    expect(lists.get(queueKey)).toEqual([]);
+    expect(lists.get(processingKey)).toEqual([]);
+    expect(lists.get("messenger-generation-jobs")).toEqual([legacyRaw]);
     expect(redis.rpoplpush).toHaveBeenCalledWith(
       "messenger-generation-jobs",
       "messenger-generation-jobs:processing"
     );
-    expect(redis.lrem).toHaveBeenCalledWith(
-      "messenger-generation-jobs:processing",
-      1,
-      JSON.stringify(job)
-    );
-    expect(redis.set).toHaveBeenCalledWith(
-      "messenger-generation-job-accepted:req-queued",
-      "1",
-      "EX",
-      720,
-      "NX"
-    );
-    expect(redis.set).toHaveBeenCalledWith(
-      "messenger-generation-job-lease:req-queued",
-      "1",
-      "EX",
-      240
-    );
-    expect(redis.del).toHaveBeenCalledWith(
-      "messenger-generation-job-lease:req-queued"
-    );
-    expect(processor).toHaveBeenCalledWith(job);
-    expect(processing).toEqual([]);
   });
 
-  it("drains prompt-first jobs without legacy style values", async () => {
+  it("keeps a queued job when the atomic reserve destination write fails", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const pageId = "page-reserve-write-failure";
+    const tenantPartition = getTenantPartition(pageId);
+    const queuedKey = getPartitionKey(tenantPartition, "queued");
+    const processingKey = getPartitionKey(tenantPartition, "processing");
+    const raw = JSON.stringify({
+      ...createJob({ pageId, reqId: "req-reserve-write-failure" }),
+      tenantPartition,
+    });
+    const { lists, redis } = createKeyedRedis(
+      { [queuedKey]: [raw] },
+      [tenantPartition],
+      { failingListKeys: [processingKey] }
+    );
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await expect(
+      drainMessengerGenerationQueue(vi.fn(async () => undefined))
+    ).rejects.toThrow("processing key is not a list");
+
+    expect(lists.get(queuedKey)).toEqual([raw]);
+    expect(lists.get(processingKey) ?? []).toEqual([]);
+  });
+
+  it("keeps a failed job reserved when its retry destination write fails", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const pageId = "page-retry-write-failure";
+    const tenantPartition = getTenantPartition(pageId);
+    const queuedKey = getPartitionKey(tenantPartition, "queued");
+    const processingKey = getPartitionKey(tenantPartition, "processing");
+    const raw = JSON.stringify({
+      ...createJob({ pageId, reqId: "req-retry-write-failure" }),
+      tenantPartition,
+    });
+    const { lists, redis } = createKeyedRedis(
+      { [queuedKey]: [raw] },
+      [tenantPartition],
+      { failingListKeys: [queuedKey] }
+    );
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await expect(
+      drainMessengerGenerationQueue(async () => {
+        throw new Error("provider failed");
+      })
+    ).rejects.toThrow("destination key is not a list");
+
+    expect(lists.get(queuedKey)).toEqual([]);
+    expect(lists.get(processingKey)).toEqual([raw]);
+  });
+
+  it("does not dead-letter an invalid processing job with an active lease", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    isRedisEnabledMock.mockReturnValue(true);
+    const tenantPartition = getTenantPartition("page-before-secret-drift");
+    const processingKey = getPartitionKey(tenantPartition, "processing");
+    const deadKey = getPartitionKey(tenantPartition, "dead");
+    const job = {
+      ...createJob({
+        pageId: "page-after-secret-drift",
+        reqId: "req-active-invalid-processing",
+      }),
+      tenantPartition,
+    };
+    const raw = JSON.stringify(job);
+    const { lists, redis, strings } = createKeyedRedis(
+      { [processingKey]: [raw] },
+      [tenantPartition]
+    );
+    strings.set(
+      `messenger-generation-jobs:{${tenantPartition}}:lease:${getJobKeyToken(job.reqId)}`,
+      "active-lease-token"
+    );
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await expect(reclaimReservedMessengerGenerationJobs()).resolves.toBe(0);
+
+    expect(lists.get(processingKey)).toEqual([raw]);
+    expect(lists.get(deadKey) ?? []).toEqual([]);
+  });
+
+  it("drains pre-migration global jobs through the explicit legacy scope", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
     isRedisEnabledMock.mockReturnValue(true);
@@ -351,13 +1307,18 @@ describe("messengerGenerationQueue", () => {
     await drainMessengerGenerationQueue(processor);
 
     expect(processor).toHaveBeenCalledWith(job);
+    expect(redis.rpoplpush).toHaveBeenCalledWith(
+      "messenger-generation-jobs",
+      "messenger-generation-jobs:processing"
+    );
+    expect(redis.sadd).not.toHaveBeenCalled();
     expect(processing).toEqual([]);
   });
 
   it("uses an explicit job lease when configured", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
-    process.env.MESSENGER_GENERATION_JOB_LEASE_SECONDS = "420";
+    process.env.MESSENGER_GENERATION_JOB_LEASE_SECONDS = "900";
     isRedisEnabledMock.mockReturnValue(true);
     const job = createJob({ reqId: "req-custom-lease" });
     const queue: string[] = [JSON.stringify(job)];
@@ -370,11 +1331,32 @@ describe("messengerGenerationQueue", () => {
       "messenger-generation-job-lease:req-custom-lease",
       "1",
       "EX",
-      420
+      900
     );
   });
 
-  it("derives the default job lease from the OpenAI timeout", async () => {
+  it("clamps an explicit lease below the provider retry duration", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    process.env.MESSENGER_GENERATION_JOB_LEASE_SECONDS = "120";
+    process.env.OPENAI_IMAGE_TIMEOUT_MS = "300000";
+    isRedisEnabledMock.mockReturnValue(true);
+    const job = createJob({ reqId: "req-clamped-lease" });
+    const queue: string[] = [JSON.stringify(job)];
+    const { redis } = createDrainRedis(queue);
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await drainMessengerGenerationQueue(vi.fn(async () => undefined));
+
+    expect(redis.set).toHaveBeenCalledWith(
+      "messenger-generation-job-lease:req-clamped-lease",
+      "1",
+      "EX",
+      661
+    );
+  });
+
+  it("derives the default job lease from every OpenAI retry attempt", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
     process.env.OPENAI_IMAGE_TIMEOUT_MS = "300000";
@@ -390,7 +1372,7 @@ describe("messengerGenerationQueue", () => {
       "messenger-generation-job-lease:req-derived-lease",
       "1",
       "EX",
-      360
+      661
     );
   });
 
@@ -411,7 +1393,9 @@ describe("messengerGenerationQueue", () => {
     expect(processor).toHaveBeenCalledTimes(1);
     expect(processing).toEqual([]);
     expect(dead).toEqual([]);
-    expect(queue).toEqual([JSON.stringify({ ...job, attempts: 1 })]);
+    expect(queue.map(value => JSON.parse(value))).toEqual([
+      { ...job, attempts: 1 },
+    ]);
   });
 
   it("stops draining after the configured batch size", async () => {
@@ -438,6 +1422,78 @@ describe("messengerGenerationQueue", () => {
     expect(processing).toEqual([]);
   });
 
+  it("rotates batch starts fairly across opaque partitions and legacy work", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    process.env.MESSENGER_GENERATION_DRAIN_BATCH_SIZE = "2";
+    isRedisEnabledMock.mockReturnValue(true);
+    const orderedScopes = ["fair-page-a", "fair-page-b", "fair-page-c"]
+      .map(pageId => ({ pageId, tenantPartition: getTenantPartition(pageId) }))
+      .sort((left, right) =>
+        left.tenantPartition.localeCompare(right.tenantPartition)
+      );
+    const partitionedJobs = orderedScopes.map((scope, index) => ({
+      first: {
+        ...createJob({
+          pageId: scope.pageId,
+          reqId: `fair-partition-${index + 1}-first`,
+        }),
+        tenantPartition: scope.tenantPartition,
+      },
+      extra: {
+        ...createJob({
+          pageId: scope.pageId,
+          reqId: `fair-partition-${index + 1}-extra`,
+        }),
+        tenantPartition: scope.tenantPartition,
+      },
+    }));
+    const legacyJob = createJob({
+      pageId: "legacy-page",
+      reqId: "fair-legacy",
+      tenantPartition: undefined,
+    });
+    const { redis } = createKeyedRedis(
+      {
+        [getPartitionKey(orderedScopes[0]!.tenantPartition, "queued")]: [
+          JSON.stringify(partitionedJobs[0]!.extra),
+          JSON.stringify(partitionedJobs[0]!.first),
+        ],
+        [getPartitionKey(orderedScopes[1]!.tenantPartition, "queued")]: [
+          JSON.stringify(partitionedJobs[1]!.extra),
+          JSON.stringify(partitionedJobs[1]!.first),
+        ],
+        [getPartitionKey(orderedScopes[2]!.tenantPartition, "queued")]: [
+          JSON.stringify(partitionedJobs[2]!.first),
+        ],
+        "messenger-generation-jobs": [JSON.stringify(legacyJob)],
+      },
+      orderedScopes.map(scope => scope.tenantPartition).reverse()
+    );
+    getRedisClientMock.mockResolvedValue(redis);
+    const processor = vi.fn(async () => undefined);
+
+    await drainMessengerGenerationQueue(processor);
+    expect(processor.mock.calls.map(([job]) => job.reqId)).toEqual([
+      partitionedJobs[0]!.first.reqId,
+      partitionedJobs[1]!.first.reqId,
+    ]);
+
+    await drainMessengerGenerationQueue(processor);
+    expect(processor.mock.calls.slice(2).map(([job]) => job.reqId)).toEqual([
+      partitionedJobs[2]!.first.reqId,
+      legacyJob.reqId,
+    ]);
+    expect(redis.incr).toHaveBeenNthCalledWith(
+      1,
+      "messenger-generation-job-drain-cursor:v1"
+    );
+    expect(redis.incr).toHaveBeenNthCalledWith(
+      2,
+      "messenger-generation-job-drain-cursor:v1"
+    );
+  });
+
   it("dead-letters a job after the configured max attempts", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
@@ -457,15 +1513,14 @@ describe("messengerGenerationQueue", () => {
     expect(processor).toHaveBeenCalledTimes(1);
     expect(queue).toEqual([]);
     expect(processing).toEqual([]);
-    expect(dead).toEqual([JSON.stringify({ ...job, attempts: 2 })]);
+    expect(dead.map(value => JSON.parse(value))).toEqual([
+      { ...job, attempts: 2 },
+    ]);
     expect(redis.rpush).toHaveBeenCalledWith(
       "messenger-generation-jobs:dead",
-      JSON.stringify({ ...job, attempts: 2 })
+      expect.any(String)
     );
-    expect(onDeadLetter).toHaveBeenCalledWith(
-      job,
-      expect.any(Error)
-    );
+    expect(onDeadLetter).toHaveBeenCalledWith(job, expect.any(Error));
   });
 
   it("dead-letters invalid pending job payloads without running the processor", async () => {
@@ -478,7 +1533,9 @@ describe("messengerGenerationQueue", () => {
     getRedisClientMock.mockResolvedValue(redis);
     const processor = vi.fn(async () => undefined);
 
-    await expect(drainMessengerGenerationQueue(processor)).resolves.toBeUndefined();
+    await expect(
+      drainMessengerGenerationQueue(processor)
+    ).resolves.toBeUndefined();
 
     expect(processor).not.toHaveBeenCalled();
     expect(queue).toEqual([]);
@@ -497,7 +1554,9 @@ describe("messengerGenerationQueue", () => {
     getRedisClientMock.mockResolvedValue(redis);
     const processor = vi.fn(async () => undefined);
 
-    await expect(drainMessengerGenerationQueue(processor)).resolves.toBeUndefined();
+    await expect(
+      drainMessengerGenerationQueue(processor)
+    ).resolves.toBeUndefined();
 
     expect(processor).toHaveBeenCalledTimes(2);
     expect(processor).toHaveBeenNthCalledWith(1, enJob);
@@ -522,7 +1581,9 @@ describe("messengerGenerationQueue", () => {
     getRedisClientMock.mockResolvedValue(redis);
     const processor = vi.fn(async () => undefined);
 
-    await expect(drainMessengerGenerationQueue(processor)).resolves.toBeUndefined();
+    await expect(
+      drainMessengerGenerationQueue(processor)
+    ).resolves.toBeUndefined();
 
     expect(processor).not.toHaveBeenCalled();
     expect(queue).toEqual([]);
@@ -548,7 +1609,9 @@ describe("messengerGenerationQueue", () => {
     getRedisClientMock.mockResolvedValue(redis);
     const processor = vi.fn(async () => undefined);
 
-    await expect(drainMessengerGenerationQueue(processor)).resolves.toBeUndefined();
+    await expect(
+      drainMessengerGenerationQueue(processor)
+    ).resolves.toBeUndefined();
 
     expect(processor).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -576,7 +1639,9 @@ describe("messengerGenerationQueue", () => {
     getRedisClientMock.mockResolvedValue(redis);
     const processor = vi.fn(async () => undefined);
 
-    await expect(drainMessengerGenerationQueue(processor)).resolves.toBeUndefined();
+    await expect(
+      drainMessengerGenerationQueue(processor)
+    ).resolves.toBeUndefined();
 
     expect(processor).toHaveBeenCalledWith(
       expect.not.objectContaining({ style: expect.anything() })
@@ -613,7 +1678,9 @@ describe("messengerGenerationQueue", () => {
       )
     ).resolves.toBeUndefined();
 
-    expect(dead).toEqual([JSON.stringify({ ...job, attempts: 1 })]);
+    expect(dead.map(value => JSON.parse(value))).toEqual([
+      { ...job, attempts: 1 },
+    ]);
   });
 
   it("reclaims expired reserved jobs into the pending queue", async () => {
@@ -630,7 +1697,9 @@ describe("messengerGenerationQueue", () => {
     await expect(reclaimReservedMessengerGenerationJobs()).resolves.toBe(1);
 
     expect(processing).toEqual([]);
-    expect(queue).toEqual([JSON.stringify({ ...job, attempts: 1 })]);
+    expect(queue.map(value => JSON.parse(value))).toEqual([
+      { ...job, attempts: 1 },
+    ]);
     expect(dead).toEqual([]);
   });
 
@@ -653,11 +1722,10 @@ describe("messengerGenerationQueue", () => {
 
     expect(queue).toEqual([]);
     expect(processing).toEqual([]);
-    expect(dead).toEqual([JSON.stringify({ ...job, attempts: 2 })]);
-    expect(onDeadLetter).toHaveBeenCalledWith(
-      job,
-      expect.any(Error)
-    );
+    expect(dead.map(value => JSON.parse(value))).toEqual([
+      { ...job, attempts: 2 },
+    ]);
+    expect(onDeadLetter).toHaveBeenCalledWith(job, expect.any(Error));
   });
 
   it("keeps actively leased reserved jobs in processing", async () => {
@@ -707,6 +1775,164 @@ describe("messengerGenerationQueue", () => {
     expect(queue).toEqual([]);
   });
 
+  it("reschedules inline draining when a new partition arrives during an active drain", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "1";
+    delete process.env.MESSENGER_GENERATION_WORKER;
+    isRedisEnabledMock.mockReturnValue(true);
+    const { redis } = createKeyedRedis();
+    getRedisClientMock.mockResolvedValue(redis);
+    let releaseFirst!: () => void;
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>(resolve => {
+      markFirstStarted = resolve;
+    });
+    const holdFirst = new Promise<void>(resolve => {
+      releaseFirst = resolve;
+    });
+    const processor = vi.fn(async (job: MessengerGenerationJob) => {
+      if (job.reqId === "active-partition-a") {
+        markFirstStarted();
+        await holdFirst;
+      }
+    });
+
+    await enqueueOrRunMessengerGenerationJob(
+      createJob({ pageId: "page-active-a", reqId: "active-partition-a" }),
+      processor
+    );
+    await firstStarted;
+    await enqueueOrRunMessengerGenerationJob(
+      createJob({ pageId: "page-active-b", reqId: "active-partition-b" }),
+      processor
+    );
+    releaseFirst();
+
+    await vi.waitFor(() => {
+      expect(processor).toHaveBeenCalledWith(
+        expect.objectContaining({ reqId: "active-partition-b" })
+      );
+    });
+    expect(processor).toHaveBeenCalledTimes(2);
+  });
+
+  it("paces scheduled inline retries after a processor requeue", async () => {
+    vi.useFakeTimers();
+    try {
+      process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+      process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "1";
+      delete process.env.MESSENGER_GENERATION_WORKER;
+      isRedisEnabledMock.mockReturnValue(true);
+      const { lists, redis } = createKeyedRedis();
+      getRedisClientMock.mockResolvedValue(redis);
+      const job = createJob({
+        pageId: "page-paced-retry",
+        reqId: "req-paced-retry",
+      });
+      let processorAttempts = 0;
+      const processor = vi.fn(async () => {
+        processorAttempts += 1;
+        if (processorAttempts === 1) {
+          throw new Error("temporary provider failure");
+        }
+      });
+
+      await enqueueOrRunMessengerGenerationJob(job, processor);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(processor).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(processor).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(processor).toHaveBeenCalledTimes(2);
+      const tenantPartition = getTenantPartition(job.pageId!);
+      expect(lists.get(getPartitionKey(tenantPartition, "queued"))).toEqual([]);
+      expect(lists.get(getPartitionKey(tenantPartition, "processing"))).toEqual(
+        []
+      );
+    } finally {
+      resetMessengerGenerationQueueForTests();
+      vi.useRealTimers();
+    }
+  });
+
+  it("schedules a paced follow-up after an inline drain reaches its batch limit", async () => {
+    vi.useFakeTimers();
+    try {
+      process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+      process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "1";
+      process.env.MESSENGER_GENERATION_DRAIN_BATCH_SIZE = "1";
+      delete process.env.MESSENGER_GENERATION_WORKER;
+      isRedisEnabledMock.mockReturnValue(true);
+      const pageId = "page-paced-batch";
+      const tenantPartition = getTenantPartition(pageId);
+      const firstJob = {
+        ...createJob({ pageId, reqId: "req-paced-batch-first" }),
+        tenantPartition,
+      };
+      const secondJob = {
+        ...createJob({ pageId, reqId: "req-paced-batch-second" }),
+        tenantPartition,
+      };
+      const { redis } = createKeyedRedis(
+        {
+          [getPartitionKey(tenantPartition, "queued")]: [
+            JSON.stringify(secondJob),
+            JSON.stringify(firstJob),
+          ],
+        },
+        [tenantPartition]
+      );
+      getRedisClientMock.mockResolvedValue(redis);
+      const processor = vi.fn(async () => undefined);
+
+      scheduleMessengerGenerationQueueDrain(processor);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(processor).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
+      expect(processor).toHaveBeenCalledWith(firstJob);
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(processor).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(processor).toHaveBeenCalledTimes(2);
+      expect(processor).toHaveBeenCalledWith(secondJob);
+    } finally {
+      resetMessengerGenerationQueueForTests();
+      vi.useRealTimers();
+    }
+  });
+
+  it("catches a scheduled Redis failure and retries without an unhandled rejection", async () => {
+    vi.useFakeTimers();
+    try {
+      process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+      isRedisEnabledMock.mockReturnValue(true);
+      const { redis } = createKeyedRedis();
+      redis.smembers
+        .mockRejectedValueOnce(new Error("temporary Redis failure"))
+        .mockResolvedValue([]);
+      getRedisClientMock.mockResolvedValue(redis);
+      const processor = vi.fn(async () => undefined);
+
+      scheduleMessengerGenerationQueueDrain(processor);
+      await vi.waitFor(() => {
+        expect(redis.smembers).toHaveBeenCalledTimes(1);
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(() => {
+        expect(redis.smembers.mock.calls.length).toBeGreaterThanOrEqual(3);
+      });
+      expect(processor).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("runs the dead-letter callback from scheduled inline fallback drains", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_MAX_ATTEMPTS = "1";
@@ -726,7 +1952,9 @@ describe("messengerGenerationQueue", () => {
     await vi.waitFor(() => {
       expect(onDeadLetter).toHaveBeenCalledWith(job, processorError);
     });
-    expect(dead).toEqual([JSON.stringify({ ...job, attempts: 1 })]);
+    expect(dead.map(value => JSON.parse(value))).toEqual([
+      { ...job, attempts: 1 },
+    ]);
   });
 
   it("reports queue depth when queueing is enabled", async () => {
@@ -736,6 +1964,7 @@ describe("messengerGenerationQueue", () => {
       llen: vi.fn(async (key: string) =>
         key.endsWith(":processing") ? 2 : key.endsWith(":dead") ? 0 : 5
       ),
+      smembers: vi.fn(async () => []),
     };
     getRedisClientMock.mockResolvedValue(redis);
 
@@ -745,5 +1974,88 @@ describe("messengerGenerationQueue", () => {
       processing: 2,
       failed: 0,
     });
+  });
+
+  it("aggregates counts across opaque partitions and legacy keys without reading payloads", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    isRedisEnabledMock.mockReturnValue(true);
+    const firstPartition = getTenantPartition("stats-page-a");
+    const secondPartition = getTenantPartition("stats-page-b");
+    const { redis } = createKeyedRedis(
+      {
+        "messenger-generation-jobs": ["legacy-a", "legacy-b"],
+        "messenger-generation-jobs:processing": ["legacy-processing"],
+        "messenger-generation-jobs:dead": ["legacy-dead"],
+        [getPartitionKey(firstPartition, "queued")]: ["a", "b", "c"],
+        [getPartitionKey(firstPartition, "processing")]: ["a-processing"],
+        [getPartitionKey(firstPartition, "dead")]: ["a-dead", "b-dead"],
+        [getPartitionKey(secondPartition, "queued")]: ["d"],
+        [getPartitionKey(secondPartition, "processing")]: [
+          "b-processing",
+          "c-processing",
+        ],
+      },
+      [firstPartition, secondPartition]
+    );
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await expect(getMessengerGenerationQueueStats()).resolves.toEqual({
+      enabled: true,
+      queued: 6,
+      processing: 4,
+      failed: 3,
+    });
+    expect(redis.lrange).not.toHaveBeenCalled();
+    expect(redis.rpoplpush).not.toHaveBeenCalled();
+  });
+
+  it("prunes only fully empty historical partitions from queue discovery", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    isRedisEnabledMock.mockReturnValue(true);
+    const emptyPartition = getTenantPartition("historical-empty-page");
+    const queuedPartition = getTenantPartition("historical-queued-page");
+    const processingPartition = getTenantPartition(
+      "historical-processing-page"
+    );
+    const failedPartition = getTenantPartition("historical-failed-page");
+    const { redis, tenantPartitions } = createKeyedRedis(
+      {
+        [getPartitionKey(queuedPartition, "queued")]: ["redacted-queued-job"],
+        [getPartitionKey(processingPartition, "processing")]: [
+          "redacted-processing-job",
+        ],
+        [getPartitionKey(failedPartition, "dead")]: ["redacted-dead-job"],
+      },
+      [emptyPartition, queuedPartition, processingPartition, failedPartition]
+    );
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await expect(getMessengerGenerationQueueStats()).resolves.toEqual({
+      enabled: true,
+      queued: 1,
+      processing: 1,
+      failed: 1,
+    });
+
+    expect(tenantPartitions.has(emptyPartition)).toBe(false);
+    expect(tenantPartitions.has(queuedPartition)).toBe(true);
+    expect(tenantPartitions.has(processingPartition)).toBe(true);
+    expect(tenantPartitions.has(failedPartition)).toBe(true);
+    expect(redis.srem).toHaveBeenCalledWith(
+      "messenger-generation-job-partitions:v1",
+      emptyPartition
+    );
+    expect(redis.srem).not.toHaveBeenCalledWith(
+      "messenger-generation-job-partitions:v1",
+      queuedPartition
+    );
+    expect(redis.srem).not.toHaveBeenCalledWith(
+      "messenger-generation-job-partitions:v1",
+      processingPartition
+    );
+    expect(redis.srem).not.toHaveBeenCalledWith(
+      "messenger-generation-job-partitions:v1",
+      failedPartition
+    );
   });
 });

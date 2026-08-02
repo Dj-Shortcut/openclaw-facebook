@@ -7,6 +7,7 @@ import {
   createReadinessHandler,
   type ReadinessCheck,
 } from "./_core/readiness";
+import { resetConversationIdentityConfigForTests } from "./_core/conversationIdentityConfig";
 import { bindTestHttpServer } from "./testHttpServer";
 
 const READINESS_ENV_KEYS = [
@@ -19,6 +20,8 @@ const READINESS_ENV_KEYS = [
   "BILLING_SUPPORT_EMAIL",
   "MOLLIE_BILLING_WORKER_WORKSPACE_ID",
   "REDIS_URL",
+  "CONVERSATION_SCOPE_HMAC_KEY_ID",
+  "CONVERSATION_SCOPE_HMAC_SECRET",
 ] as const;
 const originalReadinessEnv = Object.fromEntries(
   READINESS_ENV_KEYS.map(key => [key, process.env[key]])
@@ -52,6 +55,33 @@ describe("readiness", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     restoreReadinessEnv();
+    resetConversationIdentityConfigForTests();
+  });
+
+  it("fails the conversation identity readiness check when its key is missing", () => {
+    delete process.env.CONVERSATION_SCOPE_HMAC_KEY_ID;
+    delete process.env.CONVERSATION_SCOPE_HMAC_SECRET;
+    resetConversationIdentityConfigForTests();
+    const identityCheck = buildRuntimeReadinessChecks().find(
+      check => check.name === "conversation_identity_config"
+    );
+
+    expect(identityCheck).toBeDefined();
+    expect(() => identityCheck?.check()).toThrow(
+      "Conversation identity configuration is invalid"
+    );
+  });
+
+  it("passes the conversation identity readiness check with a valid key", () => {
+    vi.stubEnv("CONVERSATION_SCOPE_HMAC_KEY_ID", "k1");
+    vi.stubEnv("CONVERSATION_SCOPE_HMAC_SECRET", "a".repeat(64));
+    resetConversationIdentityConfigForTests();
+    const identityCheck = buildRuntimeReadinessChecks().find(
+      check => check.name === "conversation_identity_config"
+    );
+
+    expect(identityCheck).toBeDefined();
+    expect(() => identityCheck?.check()).not.toThrow();
   });
 
   it("does not require Mollie configuration while billing is disabled", () => {

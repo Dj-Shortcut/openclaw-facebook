@@ -48,6 +48,7 @@ describe("internal Messenger image request handling", () => {
     await expect(
       handler.acceptInternalMessengerImageRequest({
         psid: "processing-internal-user",
+        pageId: "page-processing-internal",
         prompt: "Restyle deze foto cinematic",
         reqId: "req-processing-internal",
         lang: "nl",

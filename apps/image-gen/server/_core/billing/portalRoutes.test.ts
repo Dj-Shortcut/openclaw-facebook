@@ -31,7 +31,7 @@ import { registerBillingPortalRoutes } from "./portalRoutes";
 
 type RouteHandler = (
   req: {
-    params: Record<string, string>;
+    params: Record<string, string | string[] | undefined>;
     query: Record<string, string>;
   },
   res: FakeResponse,
@@ -167,6 +167,56 @@ describe("billing portal response caching", () => {
     expect(mocks.listWorkspaceAccountingEntries).toHaveBeenCalledWith(
       42,
       "test"
+    );
+  });
+
+  it.each([
+    { label: "missing", params: {} },
+    { label: "empty", params: { paymentId: "" } },
+    { label: "malformed", params: { paymentId: "tr_invalid-value" } },
+    { label: "an empty array", params: { paymentId: [] } },
+    {
+      label: "an array whose first value is empty",
+      params: { paymentId: ["", "tr_payment123"] },
+    },
+  ])(
+    "returns a neutral 404 without reading billing data for $label receipt parameters",
+    async ({ params }) => {
+      const response = await invokeRoute(
+        "/api/portal/billing/receipts/:paymentId",
+        {
+          params,
+          query: { workspaceId: "42" },
+        }
+      );
+
+      expect(response.statusCode).toBe(404);
+      expect(response.body).toBe("Not found");
+      expect(mocks.authenticatePortalRequest).toHaveBeenCalledOnce();
+      expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(42, 7);
+      expect(mocks.getMollieConfig).not.toHaveBeenCalled();
+      expect(mocks.getWorkspaceLedgerPayment).not.toHaveBeenCalled();
+    }
+  );
+
+  it("returns 404 for a valid-shaped missing receipt after a tenant-scoped lookup", async () => {
+    mocks.getWorkspaceLedgerPayment.mockResolvedValue(null);
+
+    const response = await invokeRoute(
+      "/api/portal/billing/receipts/:paymentId",
+      {
+        params: { paymentId: "tr_missing123" },
+        query: { workspaceId: "42" },
+      }
+    );
+
+    expect(response.statusCode).toBe(404);
+    expect(response.body).toBe("Not found");
+    expect(mocks.getWorkspaceLedgerPayment).toHaveBeenCalledOnce();
+    expect(mocks.getWorkspaceLedgerPayment).toHaveBeenCalledWith(
+      42,
+      "test",
+      "tr_missing123"
     );
   });
 

@@ -44,10 +44,21 @@ const connection = {
   workspaceId: 42,
   channel: "facebook_messenger" as const,
   status: "connected" as const,
-  externalId: "page-123",
+  externalId: "123456789012345",
   displayName: "Tenant Page",
   encryptedAccessToken: "sealed-tenant-token",
   grantedScopes: ["pages_messaging"],
+};
+
+const whatsAppConnection = {
+  workspaceId: 42,
+  channel: "whatsapp" as const,
+  status: "connected" as const,
+  externalId: "223456789012345",
+  providerAccountExternalId: "323456789012345",
+  displayName: "Tenant WhatsApp",
+  encryptedAccessToken: "sealed-whatsapp-token",
+  grantedScopes: ["whatsapp_business_messaging"],
 };
 
 describe("channel connection database claims", () => {
@@ -64,6 +75,53 @@ describe("channel connection database claims", () => {
     }
   });
 
+  it.each([
+    {
+      label: "Messenger without a Page ID",
+      value: { ...connection, externalId: null },
+    },
+    {
+      label: "Messenger with a non-canonical Page ID",
+      value: { ...connection, externalId: " 123456789012345 " },
+    },
+    {
+      label: "Messenger with a provider-account ID",
+      value: {
+        ...connection,
+        providerAccountExternalId: "323456789012345",
+      },
+    },
+    {
+      label: "WhatsApp without a phone-number ID",
+      value: { ...whatsAppConnection, externalId: null },
+    },
+    {
+      label: "WhatsApp without a WABA ID",
+      value: { ...whatsAppConnection, providerAccountExternalId: null },
+    },
+    {
+      label: "WhatsApp with a non-canonical WABA ID",
+      value: {
+        ...whatsAppConnection,
+        providerAccountExternalId: " 323456789012345 ",
+      },
+    },
+  ])(
+    "rejects $label before starting a database transaction",
+    async ({ value }) => {
+      const result = upsertChannelConnection(value);
+
+      await expect(result).rejects.toMatchObject({
+        name: "ConversationIdentityError",
+        code: "invalid_input",
+        message: "Conversation identity is unavailable",
+      });
+      expect(dbMock.transaction).not.toHaveBeenCalled();
+      expect(dbMock.update).not.toHaveBeenCalled();
+      expect(dbMock.insert).not.toHaveBeenCalled();
+    }
+  );
+
   it("rejects a Page already claimed by another workspace without touching credentials", async () => {
     const pageClaim = lockedSelect([{ id: 7, workspaceId: 99 }]);
     dbMock.select.mockReturnValueOnce({ from: pageClaim.from });
@@ -73,7 +131,7 @@ describe("channel connection database claims", () => {
     await expect(result).rejects.toBeInstanceOf(
       ChannelConnectionClaimConflictError
     );
-    await expect(result).rejects.not.toThrow("page-123");
+    await expect(result).rejects.not.toThrow("123456789012345");
     await expect(result).rejects.not.toThrow("sealed-tenant-token");
     expect(pageClaim.lock).toHaveBeenCalledWith("update");
     expect(dbMock.update).not.toHaveBeenCalled();
@@ -100,7 +158,8 @@ describe("channel connection database claims", () => {
     expect(set).toHaveBeenCalledWith(
       expect.objectContaining({
         status: "connected",
-        externalId: "page-123",
+        externalId: "123456789012345",
+        providerAccountExternalId: null,
         encryptedAccessToken: "sealed-tenant-token",
         lastCheckedAt: expect.any(Date),
       })
@@ -128,7 +187,8 @@ describe("channel connection database claims", () => {
       expect.objectContaining({
         workspaceId: 42,
         channel: "facebook_messenger",
-        externalId: "page-123",
+        externalId: "123456789012345",
+        providerAccountExternalId: null,
         encryptedAccessToken: "sealed-tenant-token",
         lastCheckedAt: expect.any(Date),
       })
@@ -136,6 +196,76 @@ describe("channel connection database claims", () => {
     expect(values.mock.results[0]?.value).not.toHaveProperty(
       "onDuplicateKeyUpdate"
     );
+  });
+
+  it("preserves the WhatsApp provider account when updating a connection", async () => {
+    const providerAccountClaim = lockedSelect([{ id: 8, workspaceId: 42 }]);
+    const endpointClaim = lockedSelect([{ id: 8, workspaceId: 42 }]);
+    const workspaceConnection = lockedSelect([{ id: 8 }]);
+    const listed = [{ id: 8, ...whatsAppConnection }];
+    const list = listSelect(listed);
+    dbMock.select
+      .mockReturnValueOnce({ from: providerAccountClaim.from })
+      .mockReturnValueOnce({ from: endpointClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from })
+      .mockReturnValueOnce({ from: list.from });
+    const updateWhere = vi.fn(async () => undefined);
+    const set = vi.fn(() => ({ where: updateWhere }));
+    dbMock.update.mockReturnValue({ set });
+
+    await expect(upsertChannelConnection(whatsAppConnection)).resolves.toEqual(
+      listed
+    );
+
+    expect(set).toHaveBeenCalledWith(
+      expect.objectContaining({
+        externalId: "223456789012345",
+        providerAccountExternalId: "323456789012345",
+      })
+    );
+    expect(providerAccountClaim.lock).toHaveBeenCalledWith("update");
+  });
+
+  it("preserves the WhatsApp provider account when inserting a connection", async () => {
+    const providerAccountClaim = lockedSelect([]);
+    const endpointClaim = lockedSelect([]);
+    const workspaceConnection = lockedSelect([]);
+    const list = listSelect([]);
+    dbMock.select
+      .mockReturnValueOnce({ from: providerAccountClaim.from })
+      .mockReturnValueOnce({ from: endpointClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from })
+      .mockReturnValueOnce({ from: list.from });
+    const values = vi.fn(async () => undefined);
+    dbMock.insert.mockReturnValue({ values });
+
+    await expect(upsertChannelConnection(whatsAppConnection)).resolves.toEqual(
+      []
+    );
+
+    expect(values).toHaveBeenCalledWith(
+      expect.objectContaining({
+        externalId: "223456789012345",
+        providerAccountExternalId: "323456789012345",
+      })
+    );
+    expect(providerAccountClaim.lock).toHaveBeenCalledWith("update");
+  });
+
+  it("rejects a WABA already claimed by another workspace before touching credentials", async () => {
+    const providerAccountClaim = lockedSelect([{ id: 8, workspaceId: 99 }]);
+    dbMock.select.mockReturnValueOnce({ from: providerAccountClaim.from });
+
+    const result = upsertChannelConnection(whatsAppConnection);
+
+    await expect(result).rejects.toBeInstanceOf(
+      ChannelConnectionClaimConflictError
+    );
+    await expect(result).rejects.not.toThrow("323456789012345");
+    await expect(result).rejects.not.toThrow("sealed-whatsapp-token");
+    expect(providerAccountClaim.lock).toHaveBeenCalledWith("update");
+    expect(dbMock.update).not.toHaveBeenCalled();
+    expect(dbMock.insert).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -178,6 +308,81 @@ describe("channel connection database claims", () => {
       expect(dbMock.update).toHaveBeenCalledOnce();
     }
   );
+
+  it("retries a WABA-constraint race into the same workspace", async () => {
+    const initialProviderAccountClaim = lockedSelect([]);
+    const initialEndpointClaim = lockedSelect([]);
+    const initialWorkspaceConnection = lockedSelect([]);
+    const retriedProviderAccountClaim = lockedSelect([
+      { id: 8, workspaceId: 42 },
+    ]);
+    const retriedEndpointClaim = lockedSelect([{ id: 8, workspaceId: 42 }]);
+    const retriedWorkspaceConnection = lockedSelect([{ id: 8 }]);
+    const listed = [{ id: 8, ...whatsAppConnection }];
+    const list = listSelect(listed);
+    dbMock.select
+      .mockReturnValueOnce({ from: initialProviderAccountClaim.from })
+      .mockReturnValueOnce({ from: initialEndpointClaim.from })
+      .mockReturnValueOnce({ from: initialWorkspaceConnection.from })
+      .mockReturnValueOnce({ from: retriedProviderAccountClaim.from })
+      .mockReturnValueOnce({ from: retriedEndpointClaim.from })
+      .mockReturnValueOnce({ from: retriedWorkspaceConnection.from })
+      .mockReturnValueOnce({ from: list.from });
+    const values = vi.fn().mockRejectedValueOnce(
+      Object.assign(new Error("duplicate WABA claim"), {
+        code: "ER_DUP_ENTRY",
+        errno: 1062,
+        constraint:
+          "channelConnections_channel_providerAccountExternalId_unique",
+      })
+    );
+    dbMock.insert.mockReturnValue({ values });
+    const updateWhere = vi.fn(async () => undefined);
+    dbMock.update.mockReturnValue({
+      set: vi.fn(() => ({ where: updateWhere })),
+    });
+
+    await expect(upsertChannelConnection(whatsAppConnection)).resolves.toEqual(
+      listed
+    );
+
+    expect(dbMock.transaction).toHaveBeenCalledTimes(2);
+    expect(retriedProviderAccountClaim.lock).toHaveBeenCalledWith("update");
+    expect(retriedEndpointClaim.lock).toHaveBeenCalledWith("update");
+    expect(dbMock.update).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when a WABA-constraint race resolves to another workspace", async () => {
+    const initialProviderAccountClaim = lockedSelect([]);
+    const initialEndpointClaim = lockedSelect([]);
+    const initialWorkspaceConnection = lockedSelect([]);
+    const conflictingProviderAccountClaim = lockedSelect([
+      { id: 9, workspaceId: 99 },
+    ]);
+    dbMock.select
+      .mockReturnValueOnce({ from: initialProviderAccountClaim.from })
+      .mockReturnValueOnce({ from: initialEndpointClaim.from })
+      .mockReturnValueOnce({ from: initialWorkspaceConnection.from })
+      .mockReturnValueOnce({ from: conflictingProviderAccountClaim.from });
+    const values = vi.fn().mockRejectedValueOnce(
+      Object.assign(new Error("duplicate WABA claim"), {
+        code: "ER_DUP_ENTRY",
+        errno: 1062,
+        constraint:
+          "channelConnections_channel_providerAccountExternalId_unique",
+      })
+    );
+    dbMock.insert.mockReturnValue({ values });
+
+    await expect(
+      upsertChannelConnection(whatsAppConnection)
+    ).rejects.toBeInstanceOf(ChannelConnectionClaimConflictError);
+
+    expect(dbMock.transaction).toHaveBeenCalledTimes(2);
+    expect(conflictingProviderAccountClaim.lock).toHaveBeenCalledWith("update");
+    expect(dbMock.update).not.toHaveBeenCalled();
+    expect(values).toHaveBeenCalledOnce();
+  });
 
   it("fails closed when a duplicate race resolves to another workspace", async () => {
     const initialPageClaim = lockedSelect([]);

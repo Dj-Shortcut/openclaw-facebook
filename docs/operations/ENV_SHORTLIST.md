@@ -11,6 +11,10 @@ These variables are the first things to verify when the bot does not reply or Me
 | `FB_VERIFY_TOKEN` | Webhook verification | Must match the token configured in Meta. |
 | `FB_PAGE_ACCESS_TOKEN` | Sending Messenger replies | If wrong or expired, outbound replies fail. |
 | `FB_APP_SECRET` | Webhook signature verification | Required for signed webhook validation. |
+| `CONVERSATION_SCOPE_HMAC_KEY_ID` | Versioned tenant/workspace identity derivation | Required by gateway and workers. Start with `k1`; changing it requires an explicit offline identity/state migration. |
+| `CONVERSATION_SCOPE_HMAC_SECRET` | Tenant/workspace identity derivation | Required by gateway and workers. Must be exactly 64 lowercase hex characters (`openssl rand -hex 32`), shared unchanged by every process, and must not reuse another application secret. |
+| `MESSENGER_GENERATION_PARTITION_SECRET` | Stable opaque Page boundaries for the Redis image queue | Prefer a dedicated random secret shared unchanged by gateway and worker processes. Runtime falls back to `FB_APP_SECRET`, but rotating the effective secret creates new partition keys and splits dedupe continuity; rotate only through a deliberate queue-empty migration. |
+| `MESSENGER_GENERATION_ACCEPTED_TTL_SECONDS` | Redis image-queue request dedupe retention | Defaults to `604800` seconds (7 days) and is clamped to at least lease duration multiplied by max attempts. Secret rotation must wait this long after the final accepted enqueue, after producers stop and queues drain, or duplicate protection can split across namespaces. |
 | `MESSENGER_PAGE_ID` | Canonical `m.me` share links | Needed for share/invite flows. |
 | `APP_BASE_URL` | Public links and generated image URLs | Must be `https://` in production. |
 | `ENABLE_FACE_MEMORY` | Optional Messenger source-photo reuse | Keep `false` until legal approves consent, privacy, and deletion copy. |

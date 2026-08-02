@@ -353,6 +353,9 @@ export function createMessengerGenerationJobRunner(
     if (result.mode === "inline") {
       return result.outcome as MessengerSendOutcome;
     }
+    if (result.mode === "duplicate") {
+      return MESSENGER_ASYNC_RESPONSE_QUEUED;
+    }
 
     await setFlowState(psid, "PROCESSING");
     try {

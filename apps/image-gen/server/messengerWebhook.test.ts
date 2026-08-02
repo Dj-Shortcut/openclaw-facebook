@@ -74,11 +74,14 @@ import {
 } from "./_core/stateStore";
 
 const TEST_PEPPER = "ci-test-pepper";
+const INTERNAL_TEST_PAGE_ID = "internal-test-page";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
 const originalMessengerGenerationQueueEnabled =
   process.env.MESSENGER_GENERATION_QUEUE_ENABLED;
 const originalMessengerGenerationInlineFallback =
   process.env.MESSENGER_GENERATION_INLINE_FALLBACK;
+const originalMessengerGenerationPartitionSecret =
+  process.env.MESSENGER_GENERATION_PARTITION_SECRET;
 const originalFaceMemoryRetentionDays = process.env.FACE_MEMORY_RETENTION_DAYS;
 
 const processFacebookWebhookPayload = processConsentedFacebookWebhookPayload(
@@ -305,6 +308,12 @@ afterEach(() => {
   } else {
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK =
       originalMessengerGenerationInlineFallback;
+  }
+  if (originalMessengerGenerationPartitionSecret === undefined) {
+    delete process.env.MESSENGER_GENERATION_PARTITION_SECRET;
+  } else {
+    process.env.MESSENGER_GENERATION_PARTITION_SECRET =
+      originalMessengerGenerationPartitionSecret;
   }
   getRedisClientMock.mockReset();
   isRedisEnabledMock.mockReset();
@@ -631,6 +640,7 @@ describe("messenger webhook dedupe", () => {
 
     await processInternalMessengerImageRequest({
       psid: "internal-source-user",
+      pageId: INTERNAL_TEST_PAGE_ID,
       prompt: "Restyle deze foto cinematic",
       reqId: "req-internal-source",
       lang: "nl",
@@ -666,6 +676,7 @@ describe("messenger webhook dedupe", () => {
 
     await processInternalMessengerImageRequest({
       psid: "internal-text-image-user",
+      pageId: INTERNAL_TEST_PAGE_ID,
       prompt: userPrompt,
       reqId: "req-internal-text-image",
       lang: "nl",
@@ -701,6 +712,7 @@ describe("messenger webhook dedupe", () => {
 
     await processInternalMessengerImageRequest({
       psid: "internal-pasted-prompt-user",
+      pageId: INTERNAL_TEST_PAGE_ID,
       prompt:
         "Gebruik deze prompt en maak een afbeelding: Maak een krachtige samurai poster, geen tekst, geen logo",
       reqId: "req-internal-pasted-prompt",
@@ -727,6 +739,7 @@ describe("messenger webhook dedupe", () => {
 
     await processInternalMessengerImageRequest({
       psid: "internal-make-me-source-user",
+      pageId: INTERNAL_TEST_PAGE_ID,
       prompt: "Kan je me een samurai maken",
       reqId: "req-internal-make-me-source",
       lang: "nl",
@@ -761,6 +774,7 @@ describe("messenger webhook dedupe", () => {
 
     await processInternalMessengerImageRequest({
       psid: "internal-transform-source-user",
+      pageId: INTERNAL_TEST_PAGE_ID,
       prompt: "Verander me in een samurai",
       reqId: "req-internal-transform-source",
       lang: "nl",
@@ -792,6 +806,7 @@ describe("messenger webhook dedupe", () => {
 
     await processInternalMessengerImageRequest({
       psid: "internal-make-me-text-user",
+      pageId: INTERNAL_TEST_PAGE_ID,
       prompt: "Kan je me een samurai maken",
       reqId: "req-internal-make-me-text",
       lang: "nl",
@@ -820,6 +835,7 @@ describe("messenger webhook dedupe", () => {
 
     await processInternalMessengerImageRequest({
       psid: "internal-visual-correction-user",
+      pageId: INTERNAL_TEST_PAGE_ID,
       prompt: "Das mooi, maar geen samurai bro",
       reqId: "req-internal-visual-correction",
       lang: "nl",
@@ -853,6 +869,7 @@ describe("messenger webhook dedupe", () => {
     await expect(
       processInternalMessengerImageRequest({
         psid: "internal-visual-correction-without-image-user",
+        pageId: INTERNAL_TEST_PAGE_ID,
         prompt: "Das mooi, maar geen samurai bro",
         reqId: "req-internal-visual-correction-without-image",
         lang: "nl",
@@ -878,6 +895,7 @@ describe("messenger webhook dedupe", () => {
 
     await processInternalMessengerImageRequest({
       psid: "internal-style-word-text-image-user",
+      pageId: INTERNAL_TEST_PAGE_ID,
       prompt: userPrompt,
       reqId: "req-internal-style-word-text-image",
       lang: "nl",
@@ -911,6 +929,7 @@ describe("messenger webhook dedupe", () => {
 
     await processInternalMessengerImageRequest({
       psid: "internal-style-word-source-user",
+      pageId: INTERNAL_TEST_PAGE_ID,
       prompt: userPrompt,
       reqId: "req-internal-style-word-source",
       lang: "nl",
@@ -948,6 +967,7 @@ describe("messenger webhook dedupe", () => {
     await expect(
       processInternalMessengerImageRequest({
         psid: "internal-restyle-without-photo-user",
+        pageId: INTERNAL_TEST_PAGE_ID,
         prompt: "Restyle deze foto cinematic",
         reqId: "req-internal-restyle-without-photo",
         lang: "nl",
@@ -965,25 +985,35 @@ describe("messenger webhook dedupe", () => {
   it("does not resolve an internal gateway image request until durable enqueue succeeds", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    process.env.MESSENGER_GENERATION_PARTITION_SECRET =
+      "durable-enqueue-test-secret";
     isRedisEnabledMock.mockReturnValue(true);
     let resolveEnqueue!: () => void;
     const redisState = new Map<string, string>();
+    const tenantPartitions = new Set<string>();
     const enqueueStarted = new Promise<void>(resolve => {
       const redis = {
         del: vi.fn(async (key: string) => (redisState.delete(key) ? 1 : 0)),
-        get: vi.fn(async (key: string) => redisState.get(key) ?? null),
-        llen: vi.fn(async () => 1),
-        lpush: vi.fn(
+        eval: vi.fn(
           () =>
             new Promise<number>(innerResolve => {
               resolve();
               resolveEnqueue = () => innerResolve(1);
             })
         ),
+        get: vi.fn(async (key: string) => redisState.get(key) ?? null),
+        llen: vi.fn(async () => 1),
+        lpush: vi.fn(async () => 1),
         set: vi.fn(async (key: string, value: string) => {
           redisState.set(key, value);
           return "OK";
         }),
+        sadd: vi.fn(async (_key: string, member: string) => {
+          const before = tenantPartitions.size;
+          tenantPartitions.add(member);
+          return tenantPartitions.size - before;
+        }),
+        smembers: vi.fn(async () => [...tenantPartitions]),
       };
       getRedisClientMock.mockResolvedValue(redis);
     });
@@ -991,6 +1021,7 @@ describe("messenger webhook dedupe", () => {
     let settled = false;
     const requestPromise = processInternalMessengerImageRequest({
       psid: "internal-durable-user",
+      pageId: "internal-durable-page",
       prompt: "Restyle deze foto cinematic",
       reqId: "req-internal-durable",
       lang: "nl",
@@ -1055,6 +1086,7 @@ describe("messenger webhook dedupe", () => {
     await expect(
       processInternalMessengerImageRequest({
         psid: "internal-source-fail-user",
+        pageId: INTERNAL_TEST_PAGE_ID,
         prompt: "Restyle deze foto cinematic",
         reqId: "req-internal-source-fail",
         lang: "nl",
@@ -1280,9 +1312,11 @@ describe("messenger webhook dedupe", () => {
 
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(safeLogMock).toHaveBeenCalledWith("webhook_replay_ignored", {
-      user: expect.any(String),
-      eventId: expect.stringContaining("entry:entry-123:"),
+      reqId: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      ),
     });
+    expect(JSON.stringify(safeLogMock.mock.calls)).not.toContain("entry-123");
   });
 
   it("does not emit photo debug logs when debug logging is disabled", async () => {
@@ -1331,7 +1365,6 @@ describe("messenger webhook dedupe", () => {
 
   it("updates lastUserMessageAt only for inbound user messages", async () => {
     const psid = "window-user";
-    const userId = anonymizePsid(psid);
 
     await processFacebookWebhookPayload({
       entry: [
@@ -1352,7 +1385,7 @@ describe("messenger webhook dedupe", () => {
       ],
     });
 
-    expect(getState(userId)?.lastUserMessageAt).toBeUndefined();
+    expect(getState(psid)?.lastUserMessageAt).toBeUndefined();
 
     await processFacebookWebhookPayload({
       entry: [
@@ -1368,7 +1401,7 @@ describe("messenger webhook dedupe", () => {
       ],
     });
 
-    expect(getState(userId)?.lastUserMessageAt).toBe(1730000000123);
+    expect(getState(psid)?.lastUserMessageAt).toBe(1730000000123);
 
     await processFacebookWebhookPayload({
       entry: [
@@ -1384,7 +1417,7 @@ describe("messenger webhook dedupe", () => {
       ],
     });
 
-    expect(getState(userId)?.lastUserMessageAt).toBe(1730000000123);
+    expect(getState(psid)?.lastUserMessageAt).toBe(1730000000123);
   });
 
   it("opens the Messenger response window before a fresh consent prompt", async () => {
@@ -1716,9 +1749,7 @@ describe("messenger deterministic free text", () => {
       "reply-action-user",
       t("nl", "newImagePrompt")
     );
-    expect(
-      getState(anonymizePsid("reply-action-user"))?.lastPhotoUrl
-    ).toBeNull();
+    expect(getState("reply-action-user")?.lastPhotoUrl).toBeNull();
   });
 
   it("generates direct Messenger text image requests prompt-first", async () => {
@@ -2186,7 +2217,7 @@ describe("messenger deterministic free text", () => {
       psid,
       t("nl", "screenshotClarifyPrompt")
     );
-    expect(getState(anonymizePsid(psid))?.stage).toBe("AWAITING_EDIT_PROMPT");
+    expect(getState(psid)?.stage).toBe("AWAITING_EDIT_PROMPT");
     expect(sendImageMock).not.toHaveBeenCalled();
     expect(sendQuickRepliesMock).not.toHaveBeenCalled();
   });
@@ -2316,9 +2347,7 @@ describe("messenger deterministic free text", () => {
         },
       ]
     );
-    expect(getState(anonymizePsid("deterministic-no-photo-user"))?.stage).toBe(
-      "IDLE"
-    );
+    expect(getState("deterministic-no-photo-user")?.stage).toBe("IDLE");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
@@ -2403,8 +2432,7 @@ describe("messenger greeting behavior", () => {
 
   it("routes stable background action clicks into background-edit state", async () => {
     const psid = "background-action-user";
-    const userId = anonymizePsid(psid);
-    setLastGenerated(userId, "https://img.example/generated.jpg");
+    setLastGenerated(psid, "https://img.example/generated.jpg");
     sendTextMock.mockClear();
 
     await processFacebookWebhookPayload({
@@ -2425,7 +2453,7 @@ describe("messenger greeting behavior", () => {
       ],
     });
 
-    expect(getState(userId)?.stage).toBe("AWAITING_EDIT_PROMPT");
+    expect(getState(psid)?.stage).toBe("AWAITING_EDIT_PROMPT");
     expect(sendTextMock).toHaveBeenCalledWith(
       psid,
       t("nl", "changeBackgroundPrompt")
@@ -2434,7 +2462,6 @@ describe("messenger greeting behavior", () => {
 
   it("routes legacy background label clicks as explicit UI intent", async () => {
     const psid = "background-label-action-user";
-    const userId = anonymizePsid(psid);
     sendTextMock.mockClear();
 
     await processFacebookWebhookPayload({
@@ -2455,7 +2482,7 @@ describe("messenger greeting behavior", () => {
       ],
     });
 
-    expect(getState(userId)?.stage).toBe("AWAITING_PHOTO");
+    expect(getState(psid)?.stage).toBe("AWAITING_PHOTO");
     expect(sendTextMock).toHaveBeenCalledWith(
       psid,
       t("nl", "changeBackgroundRequiresPhoto")
@@ -2490,8 +2517,7 @@ describe("messenger greeting behavior", () => {
 
   it("offers follow-up quick actions when state is RESULT_READY", async () => {
     const psid = "result-user";
-    const userId = anonymizePsid(psid);
-    setLastGenerated(userId, "https://img.example/result.jpg");
+    setLastGenerated(psid, "https://img.example/result.jpg");
 
     await processFacebookWebhookPayload({
       entry: [
@@ -2532,8 +2558,7 @@ describe("messenger greeting behavior", () => {
 
   it("starts a fresh prompt-first flow when the new-image action is clicked", async () => {
     const psid = "new-image-action-user";
-    const userId = anonymizePsid(psid);
-    setPendingImage(userId, "https://img.example/old.jpg");
+    setPendingImage(psid, "https://img.example/old.jpg");
     sendTextMock.mockClear();
 
     await processFacebookWebhookPayload({
@@ -2552,7 +2577,7 @@ describe("messenger greeting behavior", () => {
       ],
     });
 
-    const state = getState(userId);
+    const state = getState(psid);
     expect(state?.lastPhotoUrl).toBeNull();
     expect(state?.stage).toBe("IDLE");
     expect(sendTextMock).toHaveBeenCalledWith(psid, t("nl", "newImagePrompt"));
@@ -2560,8 +2585,7 @@ describe("messenger greeting behavior", () => {
 
   it("offers retry actions when state is FAILURE", async () => {
     const psid = "failure-user";
-    const userId = anonymizePsid(psid);
-    setFlowState(userId, "FAILURE");
+    setFlowState(psid, "FAILURE");
 
     await processFacebookWebhookPayload({
       entry: [

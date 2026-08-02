@@ -13,6 +13,7 @@ import {
   validateStoredFacebookState,
 } from "./facebookConnectStore";
 import { claimPortalHandoffToken } from "./portalHandoff";
+import { isPortalHandoffTenantBoundaryReady } from "./portalHandoffSecurity";
 import { isFacebookLoginMethod } from "./portalAuthPolicy";
 import { safeLog } from "./logger";
 import { protectedProcedure, publicProcedure, router } from "./trpc";
@@ -708,6 +709,13 @@ export const portalRouter = router({
       .input(portalHandoffClaimInput)
       .mutation(async ({ ctx, input }) => {
         requireFacebookPortalUser(ctx);
+
+        if (!isPortalHandoffTenantBoundaryReady()) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "portal handoff unavailable",
+          });
+        }
 
         const claimed = await claimPortalHandoffToken(input.token, ctx.user.id);
         if (!claimed.ok) {

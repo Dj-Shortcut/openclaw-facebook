@@ -2,7 +2,7 @@ import { handleMessengerConsentGate } from "./consentService";
 import { setPreferredLang } from "./messengerState";
 import { toLogUser } from "./privacy";
 import { captureException } from "./observability/sentry";
-import { handlePayload, handlePostbackEvent } from "./webhookPayloadBranch";
+import { handlePostbackEvent } from "./webhookPayloadBranch";
 import {
   type FacebookWebhookEntry,
   type FacebookWebhookEvent,
@@ -42,7 +42,7 @@ async function handleEvent(
   logMessengerWebhookTrace("webhook_received", {
     reqId,
     user: toLogUser(userId),
-    entryId,
+    hasReceivingPageContext: Boolean(entryId?.trim()),
     hasMessage: Boolean(event.message),
     hasPostback: Boolean(event.postback),
     isEcho: Boolean(event.message?.is_echo),
@@ -68,6 +68,7 @@ async function handleEvent(
         error instanceof Error ? error.constructor.name : "UnknownError",
     });
     captureException(error, {
+      reqId,
       area: "webhook",
       eventType: event.postback
         ? "postback"
@@ -93,7 +94,7 @@ export async function routeTrackedEvent(
   context: TrackedEventContext,
   event: FacebookWebhookEvent
 ): Promise<void> {
-  const { psid, userId, reqId, lang, localeLang, state, trackedCtx } = context;
+  const { psid, userId, reqId, lang, trackedCtx } = context;
   if (await routeConsentGate(context, event)) return;
 
   if (

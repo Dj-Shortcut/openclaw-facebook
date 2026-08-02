@@ -818,8 +818,24 @@ export function extractImagePromptFromAssistantReply(text: string): string | nul
   return null;
 }
 
-function messengerPromptMessageKey(senderId: string, messageId: string): string {
-  return `${senderId}:${messageId}`;
+// This process-local TTL cache contains assistant text. Account + Page are the
+// required Messenger ownership boundary; sender/message identifiers alone are
+// never valid cache keys because they can overlap across configured tenants.
+type MessengerPromptMemoryScope = {
+  accountId: string;
+  pageId: string;
+  senderId: string;
+};
+
+function messengerPromptSenderKey(scope: MessengerPromptMemoryScope): string {
+  return JSON.stringify([scope.accountId, scope.pageId, scope.senderId]);
+}
+
+function messengerPromptMessageKey(
+  scope: MessengerPromptMemoryScope,
+  messageId: string,
+): string {
+  return JSON.stringify([scope.accountId, scope.pageId, scope.senderId, messageId]);
 }
 
 function selectedOptionNumber(text: string): number | null {
@@ -871,58 +887,58 @@ function extractNumberedImageOptionFromAssistantReply(
     : `Maak deze afbeelding: ${option}`;
 }
 
-export function rememberMessengerAssistantPrompt(
-  senderId: string,
-  text: string,
-  now = Date.now(),
-  messageId?: string,
-): void {
-  const prompt = extractImagePromptFromAssistantReply(text);
+export function rememberMessengerAssistantPrompt(params: MessengerPromptMemoryScope & {
+  text: string;
+  now?: number;
+  messageId?: string;
+}): void {
+  const prompt = extractImagePromptFromAssistantReply(params.text);
+  const now = params.now ?? Date.now();
   const expiresAt = now + MESSENGER_PROMPT_MEMORY_TTL_MS;
-  const normalizedMessageId = messageId?.trim();
+  const normalizedMessageId = params.messageId?.trim();
+  const senderKey = messengerPromptSenderKey(params);
   pruneRecentMessengerAssistantPrompts(now);
-  recentMessengerAssistantReplies.set(senderId, { text, expiresAt });
+  recentMessengerAssistantReplies.set(senderKey, { text: params.text, expiresAt });
   if (normalizedMessageId) {
     recentMessengerAssistantRepliesByMessage.set(
-      messengerPromptMessageKey(senderId, normalizedMessageId),
-      { text, expiresAt },
+      messengerPromptMessageKey(params, normalizedMessageId),
+      { text: params.text, expiresAt },
     );
   }
   if (!prompt) {
     return;
   }
-  recentMessengerAssistantPrompts.set(senderId, {
+  recentMessengerAssistantPrompts.set(senderKey, {
     prompt,
     expiresAt,
   });
   if (normalizedMessageId) {
     recentMessengerAssistantPromptsByMessage.set(
-      messengerPromptMessageKey(senderId, normalizedMessageId),
+      messengerPromptMessageKey(params, normalizedMessageId),
       { prompt, expiresAt },
     );
   }
 }
 
-function resolveRememberedMessengerAssistantPrompt(
-  senderId: string,
-  now = Date.now(),
-  replyToMessageId?: string,
-): string | null {
+function resolveRememberedMessengerAssistantPrompt(params: MessengerPromptMemoryScope & {
+  now?: number;
+  replyToMessageId?: string;
+}): string | null {
+  const now = params.now ?? Date.now();
   pruneRecentMessengerAssistantPrompts(now);
-  const normalizedMessageId = replyToMessageId?.trim();
+  const normalizedMessageId = params.replyToMessageId?.trim();
   if (normalizedMessageId) {
     const exact = recentMessengerAssistantPromptsByMessage.get(
-      messengerPromptMessageKey(senderId, normalizedMessageId),
+      messengerPromptMessageKey(params, normalizedMessageId),
     )?.prompt;
     if (exact) {
       return exact;
     }
   }
-  return recentMessengerAssistantPrompts.get(senderId)?.prompt ?? null;
+  return recentMessengerAssistantPrompts.get(messengerPromptSenderKey(params))?.prompt ?? null;
 }
 
-function resolveMessengerAssistantReplyOptionPrompt(params: {
-  senderId: string;
+function resolveMessengerAssistantReplyOptionPrompt(params: MessengerPromptMemoryScope & {
   text: string;
   now?: number;
   replyToMessageId?: string;
@@ -931,14 +947,16 @@ function resolveMessengerAssistantReplyOptionPrompt(params: {
   const normalizedMessageId = params.replyToMessageId?.trim();
   if (normalizedMessageId) {
     const exactAssistantReply = recentMessengerAssistantRepliesByMessage.get(
-      messengerPromptMessageKey(params.senderId, normalizedMessageId),
+      messengerPromptMessageKey(params, normalizedMessageId),
     )?.text;
     if (exactAssistantReply) {
       return extractNumberedImageOptionFromAssistantReply(exactAssistantReply, params.text);
     }
   }
 
-  const assistantReply = recentMessengerAssistantReplies.get(params.senderId)?.text;
+  const assistantReply = recentMessengerAssistantReplies.get(
+    messengerPromptSenderKey(params),
+  )?.text;
   return assistantReply
     ? extractNumberedImageOptionFromAssistantReply(assistantReply, params.text)
     : null;
@@ -970,8 +988,7 @@ function isExplicitPromptReferenceImageRequest(text: string): boolean {
   );
 }
 
-export function resolveMessengerImagePromptFromUserText(params: {
-  senderId: string;
+export function resolveMessengerImagePromptFromUserText(params: MessengerPromptMemoryScope & {
   text: string;
   now?: number;
   replyToMessageId?: string;
@@ -980,19 +997,11 @@ export function resolveMessengerImagePromptFromUserText(params: {
   if (isPromptReferenceImageRequest(text)) {
     return (
       resolveMessengerAssistantReplyOptionPrompt(params) ??
-      resolveRememberedMessengerAssistantPrompt(
-        params.senderId,
-        params.now,
-        params.replyToMessageId,
-      )
+      resolveRememberedMessengerAssistantPrompt(params)
     );
   }
   const exactReplyPrompt = params.replyToMessageId
-    ? resolveRememberedMessengerAssistantPrompt(
-        params.senderId,
-        params.now,
-        params.replyToMessageId,
-      )
+    ? resolveRememberedMessengerAssistantPrompt(params)
     : null;
   if (
     exactReplyPrompt &&
@@ -1711,6 +1720,8 @@ export async function processMessengerEvent(params: {
       });
     }
     const referencedPrompt = resolveMessengerImagePromptFromUserText({
+      accountId: params.account.accountId,
+      pageId: params.account.pageId,
       senderId,
       text,
       replyToMessageId,
@@ -2041,12 +2052,14 @@ export async function processMessengerEvent(params: {
               accountId: params.account.accountId,
               quickReplies: getMessengerQuickReplies(deliveryPayload),
             });
-            rememberMessengerAssistantPrompt(
+            rememberMessengerAssistantPrompt({
+              accountId: params.account.accountId,
+              pageId: params.account.pageId,
               senderId,
-              deliveryPayload.text,
-              Date.now(),
-              result.messageId,
-            );
+              text: deliveryPayload.text,
+              now: Date.now(),
+              messageId: result.messageId,
+            });
             logMessengerStage(params.trace, "messenger_response_sent", {
               message: redactMessengerIdentifier(result.messageId),
             });

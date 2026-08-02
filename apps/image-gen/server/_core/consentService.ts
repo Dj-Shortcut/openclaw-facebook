@@ -1,4 +1,7 @@
-import { deleteUserData } from "./dataDeletionService";
+import {
+  deleteUserData,
+  type UserDataDeletionOutcome,
+} from "./dataDeletionService";
 import type { Lang } from "./i18n";
 import type { ConversationAction } from "./botResponse";
 import { buildQuickStartResponse } from "./conversationActions";
@@ -99,6 +102,40 @@ function deletionDoneText(lang: Lang): string {
   return lang === "en"
     ? "Your data has been deleted ✅\nIf you continue, we'll treat you as a new user."
     : "Je data is verwijderd ✅\nAls je verdergaat, behandelen we je als een nieuwe gebruiker.";
+}
+
+function deletionPendingText(lang: Lang): string {
+  return lang === "en"
+    ? "We couldn't finish deleting all your data yet. Please try 'delete my data' again later. If this keeps happening, contact privacy@leaderbot.live."
+    : "We konden nog niet al je data verwijderen. Probeer later opnieuw met 'verwijder mijn data'. Blijft dit gebeuren, mail dan privacy@leaderbot.live.";
+}
+
+function deletionFailedText(lang: Lang): string {
+  return lang === "en"
+    ? "We couldn't complete your data deletion request. Please try again later or contact privacy@leaderbot.live."
+    : "We konden je verzoek om je data te verwijderen niet afronden. Probeer het later opnieuw of mail privacy@leaderbot.live.";
+}
+
+function deletionOutcomeText(
+  lang: Lang,
+  outcome: UserDataDeletionOutcome
+): string {
+  if (outcome.status === "completed") {
+    return deletionDoneText(lang);
+  }
+
+  return outcome.status === "pending"
+    ? deletionPendingText(lang)
+    : deletionFailedText(lang);
+}
+
+async function deleteUserDataAndSendResult(
+  psid: string,
+  lang: Lang,
+  sendText: (text: string) => Promise<void>
+): Promise<void> {
+  const outcome = await deleteUserData(psid);
+  await sendText(deletionOutcomeText(lang, outcome));
 }
 
 function consentDeclinedText(lang: Lang): string {
@@ -211,14 +248,12 @@ export async function handleMessengerConsentGate(
   }
 
   if (input.payload === GDPR_DELETE_CONFIRM) {
-    await deleteUserData(input.psid);
-    await input.sendText(deletionDoneText(input.lang));
+    await deleteUserDataAndSendResult(input.psid, input.lang, input.sendText);
     return true;
   }
 
   if (input.state.pendingDeleteConfirm && isDeleteConfirmText(input.text)) {
-    await deleteUserData(input.psid);
-    await input.sendText(deletionDoneText(input.lang));
+    await deleteUserDataAndSendResult(input.psid, input.lang, input.sendText);
     return true;
   }
 
@@ -278,14 +313,12 @@ export async function handleWhatsAppConsentGate(
   }
 
   if (payload === GDPR_DELETE_CONFIRM) {
-    await deleteUserData(input.event.senderId);
-    await input.sendText(deletionDoneText(input.lang));
+    await deleteUserDataAndSendResult(input.event.senderId, input.lang, input.sendText);
     return true;
   }
 
   if (input.state.pendingDeleteConfirm && isDeleteConfirmText(text)) {
-    await deleteUserData(input.event.senderId);
-    await input.sendText(deletionDoneText(input.lang));
+    await deleteUserDataAndSendResult(input.event.senderId, input.lang, input.sendText);
     return true;
   }
 
