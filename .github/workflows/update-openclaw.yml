@@ -59,9 +59,18 @@ jobs:
           OPENCLAW_VERSION: ${{ steps.latest.outputs.latest }}
         run: npm run openclaw:update -- "$OPENCLAW_VERSION"
 
-      - name: Update lockfile
+      - name: Setup pnpm
         if: steps.latest.outputs.changed == 'true'
-        run: npm install --package-lock-only --ignore-scripts --prefer-online
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.1
+          run_install: false
+
+      - name: Update lockfiles
+        if: steps.latest.outputs.changed == 'true'
+        run: |
+          npm install --package-lock-only --ignore-scripts --prefer-online
+          pnpm install --lockfile-only --ignore-scripts
 
       - name: Install dependencies
         if: steps.latest.outputs.changed == 'true'
@@ -91,7 +100,7 @@ jobs:
           cat > /tmp/openclaw-update-pr-body.md <<EOF
           Automated OpenClaw update.
 
-          - Updates package metadata, lockfile, manifest expectations, and Fly gateway build arg to ${OPENCLAW_VERSION}
+          - Updates package metadata, lockfiles, manifest expectations, ClawHub listing, and Fly gateway build arg to ${OPENCLAW_VERSION}
           - Runs build, runtime-contract validation, tests, and pack dry-run
           - Follow docs/openclaw-update.md for review, deploy verification, ClawHub/npm release, and rollback
           EOF
@@ -106,7 +115,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$branch"
-          git add package.json package-lock.json manifest.test.ts deploy/fly-gateway/Dockerfile
+          git add package.json package-lock.json pnpm-lock.yaml manifest.test.ts deploy/fly-gateway/Dockerfile docs/clawhub-listing.md
           git commit -m "Update OpenClaw to ${OPENCLAW_VERSION}"
           git push --force-with-lease origin "$branch"
           is_pr_policy_denial() {

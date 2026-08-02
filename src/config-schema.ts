@@ -63,7 +63,7 @@ export const MessengerConfigSchema = MessengerCommonConfigSchemaBase.extend({
     });
   });
 
-// OpenClaw 2026.7.1 bundles Zod's type graph in its published SDK declarations.
+// OpenClaw 2026.7.x bundles Zod's type graph in its published SDK declarations.
 // The runtime schema still uses zod@4.4.3; bridge only the duplicate type identity.
 const MessengerConfigSchemaForOpenClaw =
   MessengerConfigSchema as unknown as Parameters<

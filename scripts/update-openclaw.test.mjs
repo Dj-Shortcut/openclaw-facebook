@@ -14,6 +14,7 @@ function makeRepoFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-"));
   tempDirs.push(root);
   fs.mkdirSync(path.join(root, "deploy", "fly-gateway"), { recursive: true });
+  fs.mkdirSync(path.join(root, "docs"), { recursive: true });
   fs.writeFileSync(
     path.join(root, "package.json"),
     `${JSON.stringify(
@@ -23,10 +24,16 @@ function makeRepoFixture() {
         devDependencies: {
           openclaw: "^2026.6.5",
         },
+        peerDependencies: {
+          openclaw: ">=2026.6.11",
+        },
         openclaw: {
           build: {
             openclawVersion: "2026.6.5",
             pluginSdkVersion: "2026.6.5",
+          },
+          install: {
+            minHostVersion: ">=2026.6.11",
           },
         },
       },
@@ -41,6 +48,18 @@ function makeRepoFixture() {
   fs.writeFileSync(
     path.join(root, "deploy", "fly-gateway", "Dockerfile"),
     "ARG OPENCLAW_VERSION=2026.6.5\nFROM node:24-bookworm-slim\n",
+  );
+  fs.writeFileSync(
+    path.join(root, "docs", "clawhub-listing.md"),
+    [
+      "- OpenClaw build tested with: `2026.6.5`",
+      "- Plugin version: `2026.6.5`",
+      "",
+      "## Release Notes For 2026.6.5",
+      "",
+      "- Verified local package install from `dj-shortcut-facebook-2026.6.5.tgz`.",
+      "",
+    ].join("\n"),
   );
   return root;
 }
@@ -66,6 +85,7 @@ describe("OpenClaw update workflow tooling", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
     expect(pkg.version).toBe("2026.7.1");
     expect(pkg.devDependencies.openclaw).toBe("^2026.7.1");
+    expect(pkg.peerDependencies.openclaw).toBe(">=2026.6.11");
     expect(pkg.openclaw.build).toEqual({
       openclawVersion: "2026.7.1",
       pluginSdkVersion: "2026.7.1",
@@ -76,6 +96,28 @@ describe("OpenClaw update workflow tooling", () => {
     expect(
       fs.readFileSync(path.join(root, "deploy", "fly-gateway", "Dockerfile"), "utf8"),
     ).toContain("ARG OPENCLAW_VERSION=2026.7.1");
+    const listing = fs.readFileSync(path.join(root, "docs", "clawhub-listing.md"), "utf8");
+    expect(listing).toContain("OpenClaw build tested with: `2026.7.1`");
+    expect(listing).toContain("Plugin version: `2026.7.1`");
+    expect(listing).toContain("## Release Notes For 2026.7.1");
+    expect(listing).toContain("dj-shortcut-facebook-2026.7.1.tgz");
+  });
+
+  it("allows the exact prerelease alongside supported stable hosts", () => {
+    const root = makeRepoFixture();
+
+    const result = spawnSync(process.execPath, [updateScript, "2026.7.2-beta.7"], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, NODE_OPTIONS: "" },
+    });
+
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+    expect(pkg.peerDependencies.openclaw).toBe(
+      ">=2026.6.11 || 2026.7.2-beta.7",
+    );
   });
 
   it("rejects Dockerfiles that patch installed OpenClaw packages", () => {

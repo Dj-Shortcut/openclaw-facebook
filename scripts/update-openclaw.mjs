@@ -41,9 +41,20 @@ const root = process.cwd();
 const packagePath = path.join(root, "package.json");
 const manifestTestPath = path.join(root, "manifest.test.ts");
 const dockerfilePath = path.join(root, "deploy", "fly-gateway", "Dockerfile");
+const clawhubListingPath = path.join(root, "docs", "clawhub-listing.md");
 
 const pkg = readJson(packagePath);
+const minHostVersion = pkg.openclaw?.install?.minHostVersion;
+if (typeof minHostVersion !== "string" || !minHostVersion.trim()) {
+  throw new Error("package.json openclaw.install.minHostVersion is required");
+}
 pkg.version = version;
+pkg.peerDependencies = {
+  ...(pkg.peerDependencies ?? {}),
+  openclaw: version.includes("-")
+    ? `${minHostVersion} || ${version}`
+    : minHostVersion,
+};
 pkg.devDependencies = {
   ...(pkg.devDependencies ?? {}),
   openclaw: `^${version}`,
@@ -75,6 +86,30 @@ replaceOrThrow(
   /^ARG OPENCLAW_VERSION=.*$/m,
   `ARG OPENCLAW_VERSION=${version}`,
   "Fly gateway OpenClaw version",
+);
+replaceOrThrow(
+  clawhubListingPath,
+  /(- OpenClaw build tested with: `)[^`]+(`)/,
+  `$1${version}$2`,
+  "ClawHub tested OpenClaw version",
+);
+replaceOrThrow(
+  clawhubListingPath,
+  /(- Plugin version: `)[^`]+(`)/,
+  `$1${version}$2`,
+  "ClawHub plugin version",
+);
+replaceOrThrow(
+  clawhubListingPath,
+  /(## Release Notes For )[^\n]+/,
+  `$1${version}`,
+  "ClawHub release notes version",
+);
+replaceOrThrow(
+  clawhubListingPath,
+  /(dj-shortcut-facebook-)[^`]+(\.tgz)/,
+  `$1${version}$2`,
+  "ClawHub verified tarball version",
 );
 
 console.log(`Updated OpenClaw references to ${version}`);

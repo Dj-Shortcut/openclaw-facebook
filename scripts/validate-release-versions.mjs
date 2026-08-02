@@ -42,6 +42,7 @@ function readCargoPackageVersion(relativePath) {
 
 const pkg = readJson("package.json");
 const lock = readJson("package-lock.json");
+const pnpmLock = readText("pnpm-lock.yaml");
 const pluginVersion = pkg.version;
 const openclawVersion = pkg.openclaw?.build?.openclawVersion;
 const pluginSdkVersion = pkg.openclaw?.build?.pluginSdkVersion;
@@ -58,6 +59,21 @@ if (!openclawVersion) {
 expectEqual("OpenClaw plugin SDK version", pluginSdkVersion, openclawVersion);
 expectEqual("package-lock root version", lock.version, pluginVersion);
 expectEqual("package-lock packages[''].version", lock.packages?.[""]?.version, pluginVersion);
+expectMatch(
+  "pnpm-lock root OpenClaw specifier",
+  pnpmLock,
+  /^ {6}openclaw:\n {8}specifier: ([^\n]+)$/m,
+  `^${openclawVersion}`,
+);
+expectMatch(
+  "pnpm-lock root OpenClaw version",
+  pnpmLock,
+  /^ {6}openclaw:\n {8}specifier: [^\n]+\n {8}version: ([^\n]+)$/m,
+  openclawVersion,
+);
+if (!pnpmLock.includes(`\n  openclaw@${openclawVersion}:\n`)) {
+  fail(`pnpm-lock OpenClaw package ${openclawVersion} missing`);
+}
 expectEqual(
   "package.json devDependency openclaw",
   pkg.devDependencies?.openclaw,
@@ -140,7 +156,7 @@ console.log(
       pluginVersion,
       openclawVersion,
       checked: [
-        "root package and lockfile",
+        "root package and lockfiles",
         "OpenClaw runtime metadata",
         "Fly gateway Dockerfile",
         "manifest test expectations",

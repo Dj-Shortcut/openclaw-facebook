@@ -12,7 +12,7 @@ The repository supports one OpenClaw runtime contract:
 | Requirement | Contract |
 | --- | --- |
 | Node.js | `>=24.15.0` |
-| Package manager | npm for the root plugin package; pnpm only for subapps that already use pnpm |
+| Package manager | npm is authoritative for the root plugin; the root `pnpm-lock.yaml` is kept as a compatibility mirror, and pnpm is otherwise used only for existing subapps |
 | OpenClaw package | `openclaw` version recorded in `package.json` at `openclaw.build.openclawVersion` |
 | Plugin SDK version | same version as `openclaw.build.openclawVersion` |
 | Fly gateway OpenClaw version | same version in `deploy/fly-gateway/Dockerfile` `ARG OPENCLAW_VERSION` |
@@ -46,13 +46,25 @@ Use this workflow for local machines, CI, servers, and hosted environments.
 
    The versions must match before updating the gateway image.
 
+   For an explicitly approved prerelease, verify the exact target instead of
+   relying on the default `latest` tags:
+
+   ```bash
+   npm view openclaw@<version> version
+   npm view @openclaw/codex@<version> version
+   ```
+
 2. Update every version reference through the repository script.
 
    ```bash
    npm run openclaw:update -- <version>
    npm install --package-lock-only --ignore-scripts --prefer-online
+   pnpm install --lockfile-only --ignore-scripts
    npm ci
    ```
+
+   Regenerate the pnpm compatibility lock with pnpm `10.28.1`, matching the
+   automated update workflow.
 
    This updates:
 
@@ -61,7 +73,8 @@ Use this workflow for local machines, CI, servers, and hosted environments.
    - OpenClaw build metadata
    - manifest test expectations
    - Fly gateway `OPENCLAW_VERSION`
-   - package lockfile
+   - ClawHub tested/plugin/release version references
+   - npm and pnpm lockfiles
 
 3. Validate the repository and runtime contract.
 
