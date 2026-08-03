@@ -223,6 +223,91 @@ describe("webhookIngressQueue", () => {
     });
   });
 
+  it("requeues safely when error metadata access throws", async () => {
+    vi.useFakeTimers();
+    isRedisEnabledMock.mockReturnValue(true);
+    const processingError = new Error("private handler failure");
+    Object.defineProperty(processingError, "code", {
+      get() {
+        throw new TypeError("code accessor failed");
+      },
+    });
+    processFacebookWebhookPayloadMock
+      .mockRejectedValueOnce(processingError)
+      .mockResolvedValueOnce(undefined);
+
+    const delivery = JSON.stringify({
+      channel: "facebook",
+      payload: { entry: [{ id: "throwing-error-metadata" }] },
+      receivedAt: "2026-05-28T00:00:00.000Z",
+    });
+    const queue = [delivery];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const redis = createQueueRedis(queue, processing, dead);
+    getRedisClientMock.mockResolvedValue(redis);
+
+    scheduleWebhookIngressDrain();
+
+    await vi.waitFor(() => {
+      expect(redis.rpush).toHaveBeenCalledWith(
+        "meta-webhook-ingress",
+        expect.any(String)
+      );
+    });
+    expect(processing).toEqual([]);
+    expect(queue).toHaveLength(1);
+    expect(dead).toEqual([]);
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "webhook_queued_delivery_requeued",
+      expect.objectContaining({
+        error: { class: "UnknownError" },
+      })
+    );
+  });
+
+  it("requeues safely when error classification throws", async () => {
+    vi.useFakeTimers();
+    isRedisEnabledMock.mockReturnValue(true);
+    const processingError = new Proxy(new Error("private handler failure"), {
+      getPrototypeOf() {
+        throw new TypeError("prototype lookup failed");
+      },
+    });
+    processFacebookWebhookPayloadMock
+      .mockRejectedValueOnce(processingError)
+      .mockResolvedValueOnce(undefined);
+
+    const delivery = JSON.stringify({
+      channel: "facebook",
+      payload: { entry: [{ id: "throwing-error-classification" }] },
+      receivedAt: "2026-05-28T00:00:00.000Z",
+    });
+    const queue = [delivery];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const redis = createQueueRedis(queue, processing, dead);
+    getRedisClientMock.mockResolvedValue(redis);
+
+    scheduleWebhookIngressDrain();
+
+    await vi.waitFor(() => {
+      expect(redis.rpush).toHaveBeenCalledWith(
+        "meta-webhook-ingress",
+        expect.any(String)
+      );
+    });
+    expect(processing).toEqual([]);
+    expect(queue).toHaveLength(1);
+    expect(dead).toEqual([]);
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "webhook_queued_delivery_requeued",
+      expect.objectContaining({
+        error: { class: "UnknownError" },
+      })
+    );
+  });
+
   it("keeps a failed delivery in processing when retry storage fails", async () => {
     isRedisEnabledMock.mockReturnValue(true);
     processFacebookWebhookPayloadMock.mockRejectedValue(new Error("retry me"));

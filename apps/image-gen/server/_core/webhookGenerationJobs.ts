@@ -55,7 +55,10 @@ import {
 } from "./webhookFallback";
 import { clearInFlightNotice } from "./webhookHandlerContext";
 import type { HandlerContext } from "./webhookHandlerTypes";
-import { getMessengerRequestPageId } from "./messengerRequestContext";
+import {
+  getMessengerRequestPageId,
+  runWithMessengerRequestContext,
+} from "./messengerRequestContext";
 import {
   resolveWorkspaceRuntimePolicy,
   type StartpilotRuntimePolicy,
@@ -105,6 +108,14 @@ export function createMessengerGenerationJobRunner(
   deps: GenerationJobRunnerDeps
 ): GenerationJobRunner {
   async function executeImageGenerationJob(
+    job: MessengerGenerationJob
+  ): Promise<MessengerSendOutcome> {
+    return await runWithMessengerRequestContext(job.pageId, () =>
+      executeImageGenerationJobInPageContext(job)
+    );
+  }
+
+  async function executeImageGenerationJobInPageContext(
     job: MessengerGenerationJob
   ): Promise<MessengerSendOutcome> {
     const {
@@ -380,12 +391,14 @@ export function createMessengerGenerationJobRunner(
   async function processMessengerGenerationJobDeadLetter(
     input: MessengerGenerationJob
   ): Promise<MessengerSendOutcome> {
-    await setFlowState(input.psid, "FAILURE");
-    return await deps.sendLoggedText(
-      input.psid,
-      t(input.lang, "generationGenericFailure"),
-      input.reqId
-    );
+    return await runWithMessengerRequestContext(input.pageId, async () => {
+      await setFlowState(input.psid, "FAILURE");
+      return await deps.sendLoggedText(
+        input.psid,
+        t(input.lang, "generationGenericFailure"),
+        input.reqId
+      );
+    });
   }
 
   return {

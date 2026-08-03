@@ -25,13 +25,19 @@ vi.mock("./db", async importOriginal => {
       deletePortalHandoffTokensForMessengerUserKeyMock,
   };
 });
-vi.mock("./_core/video-generation/videoProviderRegistry", async importOriginal => {
-  const actual = await importOriginal<typeof import("./_core/video-generation/videoProviderRegistry")>();
-  return {
-    ...actual,
-    deleteProviderVideoForUser: deleteProviderVideoForUserMock,
-  };
-});
+vi.mock(
+  "./_core/video-generation/videoProviderRegistry",
+  async importOriginal => {
+    const actual =
+      await importOriginal<
+        typeof import("./_core/video-generation/videoProviderRegistry")
+      >();
+    return {
+      ...actual,
+      deleteProviderVideoForUser: deleteProviderVideoForUserMock,
+    };
+  }
+);
 import { deleteUserData } from "./_core/dataDeletionService";
 import {
   appendCostLedgerEntry,
@@ -47,9 +53,10 @@ import {
   getOrCreateState,
   getState,
   resetStateStore,
-  setFlowState,
+  setLastGenerationContext,
   setPendingImage,
 } from "./_core/messengerState";
+import { runWithMessengerRequestContext } from "./_core/messengerRequestContext";
 import {
   readScopedState,
   readState,
@@ -100,15 +107,17 @@ describe("data deletion service", () => {
       )
     );
 
-    expect(await Promise.resolve(readScopedState("chat:history", userKey))).toEqual([
-      expect.objectContaining({ text: "old chat" }),
-    ]);
+    expect(
+      await Promise.resolve(readScopedState("chat:history", userKey))
+    ).toEqual([expect.objectContaining({ text: "old chat" })]);
 
     await expect(deleteUserData(psid)).resolves.toEqual({
       status: "completed",
     });
 
-    expect(await Promise.resolve(readScopedState("chat:history", userKey))).toBeNull();
+    expect(
+      await Promise.resolve(readScopedState("chat:history", userKey))
+    ).toBeNull();
   });
 
   it("deletes Messenger generation completion markers during user erasure", async () => {
@@ -210,17 +219,24 @@ describe("data deletion service", () => {
       status: "completed",
     });
 
-    expect(deletePortalHandoffTokensForMessengerUserKeyMock).toHaveBeenCalledWith(
-      userKey
-    );
+    expect(
+      deletePortalHandoffTokensForMessengerUserKeyMock
+    ).toHaveBeenCalledWith(userKey);
   });
 
   it("deletes legacy state shadowed under the privacy-peppered user key", async () => {
     const psid = "delete-shadow-state-user";
     const userKey = anonymizePsid(psid);
 
-    await Promise.resolve(getOrCreateState(psid));
-    await Promise.resolve(setFlowState(userKey, "PROCESSING"));
+    await Promise.resolve(
+      writeState(userKey, {
+        ...(await Promise.resolve(getOrCreateState(psid))),
+        psid,
+        userKey,
+        stage: "PROCESSING",
+        state: "PROCESSING",
+      })
+    );
     expect(await Promise.resolve(readState(userKey))).toMatchObject({
       psid,
       stage: "PROCESSING",
@@ -234,18 +250,80 @@ describe("data deletion service", () => {
     expect(await Promise.resolve(readState(userKey))).toBeNull();
   });
 
+  it("sanitizes the active Page state and deletes the true legacy shadow", async () => {
+    const psid = "delete-page-scoped-state-user";
+    const pageId = "delete-page-scoped-state-page";
+    const userKey = anonymizePsid(psid);
+    const sourceUrl =
+      "https://assets.example/inbound-source/page-scoped-delete.jpg";
+    storageDeleteMock.mockRejectedValueOnce(new Error("delete failed"));
+
+    await Promise.resolve(
+      writeState(userKey, {
+        ...(await Promise.resolve(getOrCreateState(userKey))),
+        psid,
+        userKey,
+        lastPrompt: "private legacy shadow prompt",
+      })
+    );
+
+    await runWithMessengerRequestContext(pageId, async () => {
+      await Promise.resolve(
+        setPendingImage(psid, sourceUrl, Date.now(), "stored")
+      );
+      await Promise.resolve(
+        setLastGenerationContext(psid, {
+          prompt: "private page-scoped prompt",
+        })
+      );
+
+      await expect(deleteUserData(psid)).resolves.toEqual({
+        status: "pending",
+      });
+
+      const stateAfter = await Promise.resolve(getState(psid));
+      expect(stateAfter?.lastPhotoUrl).toBeNull();
+      expect(stateAfter?.pendingImageUrl).toBeUndefined();
+      expect(stateAfter?.lastPrompt).toBeUndefined();
+      expect(stateAfter?.pendingSourceImageDeleteUrl).toBe(sourceUrl);
+    });
+
+    expect(await Promise.resolve(readState(psid))).toBeNull();
+    expect(await Promise.resolve(readState(userKey))).toBeNull();
+  });
+
+  it("preserves an unowned raw channel record during Page-scoped deletion", async () => {
+    const psid = "delete-page-state-with-ambiguous-raw-user";
+    const pageId = "delete-page-state-with-ambiguous-raw-page";
+    const rawState = await Promise.resolve(getOrCreateState(psid));
+
+    await Promise.resolve(
+      writeState(psid, {
+        ...rawState,
+        lastPrompt: "private non-Messenger state",
+      })
+    );
+
+    await runWithMessengerRequestContext(pageId, async () => {
+      await Promise.resolve(getOrCreateState(psid));
+      await expect(deleteUserData(psid)).resolves.toEqual({
+        status: "completed",
+      });
+      expect(await Promise.resolve(getState(psid))).toBeNull();
+    });
+
+    expect(await Promise.resolve(readState(psid))).toMatchObject({
+      lastPrompt: "private non-Messenger state",
+    });
+  });
+
   it("keeps provider retry metadata without restoring deleted image state", async () => {
     const psid = "delete-step-failure-user";
     const imageUrl = "https://assets.example/inbound-source/fail-step.jpg";
     let state = await Promise.resolve(getOrCreateState(psid));
 
     await Promise.resolve(
-      setPendingImage(
-        psid,
-        imageUrl,
-        Date.now(),
-        "stored"
-      )
+      setPendingImage(psid, imageUrl, Date.now(), "stored")
     );
     state = await Promise.resolve(getState(psid));
     await Promise.resolve(
@@ -303,6 +381,16 @@ describe("data deletion service", () => {
         state: "PROCESSING",
         pendingScreenshotIntentContinuation: true,
         pendingEditIntent: "change_background",
+        pendingDeleteConfirm: true,
+        lastPrompt: "private prompt that must be erased",
+        pendingConversationActions: [
+          { id: "private-action", label: "Private action" },
+        ],
+        pendingConversationActionsByMessageId: {
+          "private-message-id": [
+            { id: "private-action", label: "Private action" },
+          ],
+        },
         faceMemoryConsent: {
           given: true,
           timestamp: Date.now(),
@@ -352,6 +440,10 @@ describe("data deletion service", () => {
     expect(stateAfter?.lastGeneratedAt).toBeUndefined();
     expect(stateAfter?.pendingSourceImageDeleteUrl).toBeNull();
     expect(stateAfter?.pendingSourceImageDeleteUrls).toBeNull();
+    expect(stateAfter?.pendingDeleteConfirm).toBe(false);
+    expect(stateAfter?.lastPrompt).toBeUndefined();
+    expect(stateAfter?.pendingConversationActions).toBeUndefined();
+    expect(stateAfter?.pendingConversationActionsByMessageId).toBeUndefined();
     expect(storageDeleteMock).toHaveBeenCalledWith(
       "inbound-source/delete-my-data.jpg"
     );
@@ -384,9 +476,9 @@ describe("data deletion service", () => {
 
     await expect(deleteUserData(psid)).resolves.toEqual({ status: "pending" });
 
-    expect((await Promise.resolve(getState(psid)))?.pendingSourceImageDeleteUrl).toBe(
-      "https://assets.example/inbound-source/delete-me.jpg"
-    );
+    expect(
+      (await Promise.resolve(getState(psid)))?.pendingSourceImageDeleteUrl
+    ).toBe("https://assets.example/inbound-source/delete-me.jpg");
     const stateAfter = await Promise.resolve(getState(psid));
     expect(stateAfter?.lastPhotoUrl).toBeNull();
     expect(stateAfter?.lastPhoto).toBeNull();
@@ -434,14 +526,16 @@ describe("data deletion service", () => {
       "https://assets.example/generated/images/generated-fail.jpg";
     storageDeleteMock.mockRejectedValue(new Error("delete failed"));
 
-    writeState(psid, {
-      ...(await Promise.resolve(getOrCreateState(psid))),
-      lastPhotoUrl: sourceUrl,
-      lastPhoto: sourceUrl,
-      lastPhotoSource: "stored",
-      pendingImageUrl: sourceUrl,
-      lastGeneratedUrl: generatedUrl,
-    });
+    await Promise.resolve(
+      writeState(psid, {
+        ...(await Promise.resolve(getOrCreateState(psid))),
+        lastPhotoUrl: sourceUrl,
+        lastPhoto: sourceUrl,
+        lastPhotoSource: "stored",
+        pendingImageUrl: sourceUrl,
+        lastGeneratedUrl: generatedUrl,
+      })
+    );
 
     await deleteUserData(psid);
 
@@ -464,19 +558,25 @@ describe("data deletion service", () => {
       "https://assets.example/generated/images/general-fail.jpg";
     storageDeleteMock.mockRejectedValue(new Error("delete failed"));
 
-    writeState(psid, {
-      ...(await Promise.resolve(getOrCreateState(psid))),
-      faceMemoryConsent: { given: true, timestamp: Date.now(), version: "v1" },
-      lastSourceImageUrl: faceUrl,
-      lastSourceImageUpdatedAt: Date.now(),
-      pendingSourceImageDeleteUrl: faceUrl,
-      pendingSourceImageDeleteUrls: [faceUrl],
-      lastPhotoUrl: faceUrl,
-      lastPhoto: faceUrl,
-      lastPhotoSource: "stored",
-      pendingImageUrl: faceUrl,
-      lastGeneratedUrl: generatedUrl,
-    });
+    await Promise.resolve(
+      writeState(psid, {
+        ...(await Promise.resolve(getOrCreateState(psid))),
+        faceMemoryConsent: {
+          given: true,
+          timestamp: Date.now(),
+          version: "v1",
+        },
+        lastSourceImageUrl: faceUrl,
+        lastSourceImageUpdatedAt: Date.now(),
+        pendingSourceImageDeleteUrl: faceUrl,
+        pendingSourceImageDeleteUrls: [faceUrl],
+        lastPhotoUrl: faceUrl,
+        lastPhoto: faceUrl,
+        lastPhotoSource: "stored",
+        pendingImageUrl: faceUrl,
+        lastGeneratedUrl: generatedUrl,
+      })
+    );
 
     await expect(deleteUserData(psid)).resolves.toEqual({ status: "pending" });
 
@@ -506,19 +606,22 @@ describe("data deletion service", () => {
     const retainedSourceUrl =
       "https://assets.example/inbound-source/retained-source.jpg";
     const generatedUrl = "https://assets.example/generated/images/result.jpg";
-    const legacyGeneratedUrl = "https://assets.example/generated/legacy-result.jpg";
+    const legacyGeneratedUrl =
+      "https://assets.example/generated/legacy-result.jpg";
 
-    writeState(psid, {
-      ...(await Promise.resolve(getOrCreateState(psid))),
-      lastPhotoUrl: sourceUrl,
-      lastPhoto: sourceUrl,
-      lastPhotoSource: "stored",
-      pendingImageUrl: sourceUrl,
-      lastSourceImageUrl: retainedSourceUrl,
-      pendingSourceImageDeleteUrl: retainedSourceUrl,
-      lastGeneratedUrl: generatedUrl,
-      lastImageUrl: legacyGeneratedUrl,
-    });
+    await Promise.resolve(
+      writeState(psid, {
+        ...(await Promise.resolve(getOrCreateState(psid))),
+        lastPhotoUrl: sourceUrl,
+        lastPhoto: sourceUrl,
+        lastPhotoSource: "stored",
+        pendingImageUrl: sourceUrl,
+        lastSourceImageUrl: retainedSourceUrl,
+        pendingSourceImageDeleteUrl: retainedSourceUrl,
+        lastGeneratedUrl: generatedUrl,
+        lastImageUrl: legacyGeneratedUrl,
+      })
+    );
 
     await deleteUserData(psid);
 
@@ -536,13 +639,16 @@ describe("data deletion service", () => {
     expect(storageDeleteMock).toHaveBeenCalledWith(
       "generated/images/result.jpg"
     );
-    expect(storageDeleteMock).toHaveBeenCalledWith("generated/legacy-result.jpg");
+    expect(storageDeleteMock).toHaveBeenCalledWith(
+      "generated/legacy-result.jpg"
+    );
     expect(await Promise.resolve(getState(psid))).toBeNull();
   });
 
   it("deletes provider-side generated video artifacts during user erasure", async () => {
     const psid = "delete-provider-video-user";
-    const generatedVideoUrl = "https://assets.example/generated/videos/result.mp4";
+    const generatedVideoUrl =
+      "https://assets.example/generated/videos/result.mp4";
 
     writeState(psid, {
       ...(await Promise.resolve(getOrCreateState(psid))),

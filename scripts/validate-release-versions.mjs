@@ -31,6 +31,27 @@ function expectMatch(label, text, pattern, expected) {
   expectEqual(label, match[1].trim(), expected);
 }
 
+function readPnpmRootImporter(lockfile) {
+  const importers = /^importers:\s*$/m.exec(lockfile);
+  if (!importers) {
+    fail("pnpm-lock importers section missing");
+  }
+
+  const importersText = lockfile.slice(importers.index + importers[0].length);
+  const rootImporter = /^  \.:\s*$/m.exec(importersText);
+  if (!rootImporter) {
+    fail("pnpm-lock root importer missing");
+  }
+
+  const rootText = importersText.slice(
+    rootImporter.index + rootImporter[0].length,
+  );
+  const nextImporterOrSection = /^(?:  \S[^\n]*:|\S[^\n]*:)\s*$/m.exec(rootText);
+  return nextImporterOrSection
+    ? rootText.slice(0, nextImporterOrSection.index)
+    : rootText;
+}
+
 function readCargoPackageVersion(relativePath) {
   const cargoToml = readText(relativePath);
   const packageSection = /\[package\]([\s\S]*?)(?:\n\[|$)/.exec(cargoToml)?.[1];
@@ -42,11 +63,15 @@ function readCargoPackageVersion(relativePath) {
 
 const pkg = readJson("package.json");
 const lock = readJson("package-lock.json");
+const pnpmLock = readText("pnpm-lock.yaml");
 const pluginVersion = pkg.version;
 const openclawVersion = pkg.openclaw?.build?.openclawVersion;
 const pluginSdkVersion = pkg.openclaw?.build?.pluginSdkVersion;
 const minHostVersion = pkg.openclaw?.install?.minHostVersion;
 const minGatewayVersion = pkg.openclaw?.compat?.minGatewayVersion;
+const openclawSpecifier = openclawVersion?.includes("-")
+  ? openclawVersion
+  : `^${openclawVersion}`;
 
 if (!pluginVersion) {
   fail("package.json version missing");
@@ -59,9 +84,30 @@ expectEqual("OpenClaw plugin SDK version", pluginSdkVersion, openclawVersion);
 expectEqual("package-lock root version", lock.version, pluginVersion);
 expectEqual("package-lock packages[''].version", lock.packages?.[""]?.version, pluginVersion);
 expectEqual(
+  "package-lock root OpenClaw specifier",
+  lock.packages?.[""]?.devDependencies?.openclaw,
+  openclawSpecifier,
+);
+const pnpmRootImporter = readPnpmRootImporter(pnpmLock);
+expectMatch(
+  "pnpm-lock root OpenClaw specifier",
+  pnpmRootImporter,
+  /^ {6}openclaw:\n {8}specifier: ([^\n]+)$/m,
+  openclawSpecifier,
+);
+expectMatch(
+  "pnpm-lock root OpenClaw version",
+  pnpmRootImporter,
+  /^ {6}openclaw:\n {8}specifier: [^\n]+\n {8}version: ([^\n]+)$/m,
+  openclawVersion,
+);
+if (!pnpmLock.includes(`\n  openclaw@${openclawVersion}:\n`)) {
+  fail(`pnpm-lock OpenClaw package ${openclawVersion} missing`);
+}
+expectEqual(
   "package.json devDependency openclaw",
   pkg.devDependencies?.openclaw,
-  `^${openclawVersion}`,
+  openclawSpecifier,
 );
 
 const dockerfile = readText("deploy/fly-gateway/Dockerfile");
@@ -140,7 +186,7 @@ console.log(
       pluginVersion,
       openclawVersion,
       checked: [
-        "root package and lockfile",
+        "root package and lockfiles",
         "OpenClaw runtime metadata",
         "Fly gateway Dockerfile",
         "manifest test expectations",

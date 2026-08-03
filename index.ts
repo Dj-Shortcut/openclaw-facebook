@@ -1,8 +1,8 @@
-import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
-import type {
-  ChannelPlugin,
-  OpenClawPluginApi,
-  PluginRuntime,
+import {
+  defineChannelPluginEntry,
+  type ChannelPlugin,
+  type OpenClawPluginApi,
+  type PluginRuntime,
 } from "openclaw/plugin-sdk/core";
 import { messengerPlugin } from "./src/channel.js";
 import { setMessengerRuntime } from "./src/runtime.js";

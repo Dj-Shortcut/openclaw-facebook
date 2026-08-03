@@ -52,12 +52,19 @@ describe("createLogger redaction", () => {
     const logger = createLogger({
       reqId: "3f8161cc-ec79-4c80-aa63-cad8d9c107ab",
     });
+    const privateExceptionContent =
+      "raw-psid-123 private customer message that must never be logged";
+    const exception = Object.assign(new TypeError(privateExceptionContent), {
+      code: "UPSTREAM_REJECTED",
+      cause: new Error(`private cause: ${privateExceptionContent}`),
+    });
 
     logger.error({
       event: "whatsapp_graph_failed",
       body: "private message for +32470000000",
       senderId: "raw-sender-id",
       reason: "upstream rejected request",
+      error: exception,
     });
 
     const payload = JSON.parse(String(errorSpy.mock.calls[0]?.[0]));
@@ -66,10 +73,17 @@ describe("createLogger redaction", () => {
       event: "whatsapp_graph_failed",
       reqId: "3f8161cc-ec79-4c80-aa63-cad8d9c107ab",
       reason: "upstream rejected request",
+      error: {
+        class: "TypeError",
+        code: "UPSTREAM_REJECTED",
+      },
     });
     expect(payload).not.toHaveProperty("body");
     expect(payload).not.toHaveProperty("senderId");
-    expect(JSON.stringify(payload)).not.toContain("+32470000000");
+    const serialized = JSON.stringify(payload);
+    expect(serialized).not.toContain("+32470000000");
+    expect(serialized).not.toContain(privateExceptionContent);
+    expect(serialized).not.toContain("private cause");
   });
 });
 
@@ -133,21 +147,28 @@ describe("safeLog redaction", () => {
     expect(payload).not.toHaveProperty("rawUrl");
   });
 
-  it("sanitizes sensitive content inside error messages", () => {
+  it("serializes only a safe error class and omits unsafe error details", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const privateContent =
+      "raw-psid-123 arbitrary customer message without a known pattern";
+    const error = Object.assign(new Error(privateContent), {
+      code: `unsafe:${privateContent}`,
+      cause: new Error(`private cause: ${privateContent}`),
+    });
 
     safeLog("error_event", {
       level: "error",
-      error: new Error("failed for https://example.com/secret?token=abc"),
+      error,
     });
 
     const payload = JSON.parse(String(errorSpy.mock.calls[0]?.[0]));
 
-    expect(payload.error).toMatchObject({
-      name: "Error",
-      message: "failed for [URL_REDACTED]",
-    });
-    expect(JSON.stringify(payload)).not.toContain("abc");
+    expect(payload.error).toEqual({ class: "Error" });
+    expect(payload.error).not.toHaveProperty("message");
+    expect(payload.error).not.toHaveProperty("stack");
+    expect(payload.error).not.toHaveProperty("cause");
+    expect(payload.error).not.toHaveProperty("code");
+    expect(JSON.stringify(payload)).not.toContain(privateContent);
   });
 
   it("redacts Mollie keys, resource identifiers, and customer fields", () => {
@@ -169,6 +190,7 @@ describe("safeLog redaction", () => {
       apiKey: fakeMollieKey,
       mollieCustomerId: "cst_customer123",
       paymentId: "tr_payment123",
+      reason: `${fakeMollieKey} ${mollieIds.join(" ")} customer@example.com`,
       error: new Error(
         `${fakeMollieKey} ${mollieIds.join(" ")} customer@example.com`
       ),
@@ -180,6 +202,7 @@ describe("safeLog redaction", () => {
       expect(serialized).not.toContain(mollieId);
     }
     expect(serialized).not.toContain("customer@example.com");
+    expect(JSON.parse(serialized).error).toEqual({ class: "Error" });
     expect(serialized).toContain("MOLLIE_KEY_REDACTED");
     expect(serialized).toContain("MOLLIE_ID_REDACTED");
     expect(serialized).toContain("EMAIL_REDACTED");

@@ -97,9 +97,12 @@ describe("Messenger consent deletion flow", () => {
   it("deletes state, retained source assets, generated assets, and completion markers after confirmation", async () => {
     const psid = "messenger-delete-command-user";
     const userKey = anonymizePsid(psid);
-    const sourceUrl = "https://assets.example/inbound-source/delete-command-source.jpg";
-    const retainedUrl = "https://assets.example/inbound-source/delete-command-retained.jpg";
-    const generatedUrl = "https://assets.example/generated/images/delete-command-result.jpg";
+    const sourceUrl =
+      "https://assets.example/inbound-source/delete-command-source.jpg";
+    const retainedUrl =
+      "https://assets.example/inbound-source/delete-command-retained.jpg";
+    const generatedUrl =
+      "https://assets.example/generated/images/delete-command-result.jpg";
     const sendText = vi.fn(async () => undefined);
     const sendActions = vi.fn(async () => undefined);
 
@@ -160,7 +163,9 @@ describe("Messenger consent deletion flow", () => {
       "generated/images/delete-command-result.jpg"
     );
     expect(
-      await Promise.resolve(getMessengerGenerationCompletion("req-delete-command"))
+      await Promise.resolve(
+        getMessengerGenerationCompletion("req-delete-command")
+      )
     ).toBeNull();
     expect(await Promise.resolve(getState(psid))).toBeNull();
     expect(sendText).toHaveBeenCalledWith(
@@ -196,12 +201,15 @@ describe("Messenger consent deletion flow", () => {
         expect.objectContaining({ id: "GDPR_DELETE_CONFIRM" }),
       ])
     );
-    expect((await Promise.resolve(getState(psid)))?.pendingDeleteConfirm).toBe(true);
+    expect((await Promise.resolve(getState(psid)))?.pendingDeleteConfirm).toBe(
+      true
+    );
   });
 
   it("does not claim Messenger deletion succeeded when storage cleanup is pending", async () => {
     const psid = "messenger-delete-storage-pending-user";
-    const sourceUrl = "https://assets.example/inbound-source/delete-storage-pending.jpg";
+    const sourceUrl =
+      "https://assets.example/inbound-source/delete-storage-pending.jpg";
     const sendText = vi.fn(async () => undefined);
     const sendActions = vi.fn(async () => undefined);
 
@@ -224,6 +232,9 @@ describe("Messenger consent deletion flow", () => {
     expect(
       (await Promise.resolve(getState(psid)))?.pendingSourceImageDeleteUrl
     ).toBe(sourceUrl);
+    expect((await Promise.resolve(getState(psid)))?.pendingDeleteConfirm).toBe(
+      false
+    );
     expect(sendText).toHaveBeenCalledWith(
       expect.stringContaining("couldn't finish deleting all your data yet")
     );
@@ -290,7 +301,9 @@ describe("Messenger consent deletion flow", () => {
         expect.objectContaining({ id: "GDPR_DELETE_CONFIRM" }),
       ])
     );
-    expect((await Promise.resolve(getState(psid)))?.pendingDeleteConfirm).toBe(true);
+    expect((await Promise.resolve(getState(psid)))?.pendingDeleteConfirm).toBe(
+      true
+    );
   });
 
   it("accepts polite WhatsApp delete-data command variants", async () => {
@@ -328,7 +341,9 @@ describe("Messenger consent deletion flow", () => {
         expect.objectContaining({ id: "GDPR_DELETE_CONFIRM" }),
       ])
     );
-    expect((await Promise.resolve(getState(senderId)))?.pendingDeleteConfirm).toBe(true);
+    expect(
+      (await Promise.resolve(getState(senderId)))?.pendingDeleteConfirm
+    ).toBe(true);
   });
 
   it("does not claim WhatsApp deletion succeeded when a required step is pending", async () => {
@@ -368,6 +383,9 @@ describe("Messenger consent deletion flow", () => {
     ).resolves.toBe(true);
 
     expect(await Promise.resolve(getState(senderId))).not.toBeNull();
+    expect(
+      (await Promise.resolve(getState(senderId)))?.pendingDeleteConfirm
+    ).toBe(false);
     expect(sendText).toHaveBeenCalledWith(
       expect.stringContaining("nog niet al je data verwijderen")
     );

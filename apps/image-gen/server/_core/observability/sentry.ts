@@ -28,6 +28,11 @@ function getSafeErrorClass(error: unknown): string {
 }
 
 function getSafeContextValue(key: string, value: unknown): unknown {
+  if (!SAFE_CONTEXT_KEY_PATTERN.test(key)) {
+    logDroppedContextKey(key);
+    return undefined;
+  }
+
   if (typeof value === "boolean") {
     return value;
   }
@@ -156,8 +161,6 @@ export function captureException(
   if (!process.env.SENTRY_DSN) return;
 
   const errorClass = getSafeErrorClass(error);
-  const safeError = new Error("Application exception");
-  safeError.name = errorClass;
 
   Sentry.withScope(scope => {
     if (context) {
@@ -169,6 +172,6 @@ export function captureException(
       }
     }
     scope.setExtra("errorClass", errorClass);
-    Sentry.captureException(safeError);
+    Sentry.captureException(error);
   });
 }

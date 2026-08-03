@@ -11,6 +11,7 @@ vi.mock("./_core/messengerImageIngress", () => ({
 import { createInternalMessengerImageRequestHandler } from "./_core/webhookInternalImageRequest";
 import { resetStateStore, setFlowState } from "./_core/messengerState";
 import { MESSENGER_SEND_SKIPPED } from "./_core/webhookFallback";
+import { runWithMessengerRequestContext } from "./_core/messengerRequestContext";
 
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
 
@@ -41,8 +42,8 @@ describe("internal Messenger image request handling", () => {
       sendLoggedText: vi.fn(async () => ({ sent: true })),
     });
 
-    await Promise.resolve(
-      setFlowState("processing-internal-user", "PROCESSING")
+    await runWithMessengerRequestContext("page-processing-internal", () =>
+      Promise.resolve(setFlowState("processing-internal-user", "PROCESSING"))
     );
 
     await expect(

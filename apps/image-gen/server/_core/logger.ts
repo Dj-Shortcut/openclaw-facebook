@@ -23,6 +23,8 @@ const SUMMARIZED_URL_KEYS = new Set([
   "thumbnailurl",
   "outputurl",
 ]);
+const SAFE_ERROR_CLASS_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+const SAFE_ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/;
 
 function emit(level: LogLevel, fields: LogFields): void {
   const payload = { level, ...fields };
@@ -132,6 +134,38 @@ function truncateLogUser(value: unknown): unknown {
   return typeof value === "string" ? value.slice(0, 8) : value;
 }
 
+function getSafeErrorClass(error: Error): string {
+  try {
+    const candidate = error.constructor.name;
+    return SAFE_ERROR_CLASS_PATTERN.test(candidate)
+      ? candidate
+      : "UnknownError";
+  } catch {
+    return "UnknownError";
+  }
+}
+
+function getSafeErrorCode(error: Error): string | number | undefined {
+  try {
+    const code = (error as Error & { code?: unknown }).code;
+    if (
+      typeof code === "number" &&
+      Number.isInteger(code) &&
+      code >= 0 &&
+      code <= 99_999
+    ) {
+      return code;
+    }
+    if (typeof code === "string" && SAFE_ERROR_CODE_PATTERN.test(code)) {
+      return code;
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
 function normalizeLogValue(
   value: unknown,
   seen: WeakSet<object> = new WeakSet()
@@ -142,16 +176,11 @@ function normalizeLogValue(
 
   if (value instanceof Error) {
     const normalized: Record<string, unknown> = {
-      name: value.name,
-      message: sanitizeString(value.message),
+      class: getSafeErrorClass(value),
     };
-
-    if (value.stack) {
-      normalized.stack = sanitizeString(value.stack);
-    }
-
-    if (value.cause !== undefined) {
-      normalized.cause = normalizeLogValue(value.cause, seen);
+    const code = getSafeErrorCode(value);
+    if (code !== undefined) {
+      normalized.code = code;
     }
 
     return normalized;

@@ -42,7 +42,12 @@ vi.mock("./_core/messengerApi", () => ({
 
 import { createHandlerContext } from "./_core/webhookHandlerContext";
 import { createMessengerGenerationJobRunner } from "./_core/webhookGenerationJobs";
-import { getState, resetStateStore } from "./_core/messengerState";
+import {
+  getState,
+  resetStateStore,
+  setFlowState,
+} from "./_core/messengerState";
+import { runWithMessengerRequestContext } from "./_core/messengerRequestContext";
 import { deleteEphemeralKey, setEphemeralKey } from "./_core/stateStore";
 import { t } from "./_core/i18n";
 import { getMessengerGenerationCompletion } from "./_core/messengerGenerationCompletion";
@@ -99,6 +104,47 @@ beforeEach(() => {
 });
 
 describe("messenger generation job safety", () => {
+  it("dead-letters only the owning Page state and sends the localized failure", async () => {
+    const psid = "shared-dead-letter-user";
+    const owningPageId = "dead-letter-owning-page";
+    const otherPageId = "dead-letter-other-page";
+    const reqId = "req-dead-letter-page-scope";
+    const sendLoggedText = vi.fn(
+      async (_psid: string, _text: string, _reqId: string) =>
+        ({ sent: true }) satisfies MessengerSendOutcome
+    );
+    const runner = createTestRunner({ sendLoggedText });
+
+    await runWithMessengerRequestContext(otherPageId, async () => {
+      await setFlowState(psid, "PROCESSING");
+    });
+
+    await runner.processMessengerGenerationJobDeadLetter({
+      psid,
+      userId: "shared-dead-letter-user-key",
+      pageId: owningPageId,
+      reqId,
+      lang: "en",
+    });
+
+    const owningPageState = await runWithMessengerRequestContext(
+      owningPageId,
+      async () => await Promise.resolve(getState(psid))
+    );
+    const otherPageState = await runWithMessengerRequestContext(
+      otherPageId,
+      async () => await Promise.resolve(getState(psid))
+    );
+
+    expect(owningPageState?.stage).toBe("FAILURE");
+    expect(otherPageState?.stage).toBe("PROCESSING");
+    expect(sendLoggedText).toHaveBeenCalledWith(
+      psid,
+      t("en", "generationGenericFailure"),
+      reqId
+    );
+  });
+
   it("recovers when executeGenerationFlow throws without leaving PROCESSING", async () => {
     const runner = createTestRunner();
     executeGenerationFlowMock.mockRejectedValueOnce(

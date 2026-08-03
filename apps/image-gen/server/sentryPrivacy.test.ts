@@ -43,13 +43,19 @@ describe("Sentry privacy boundary", () => {
     }
   });
 
-  it("never forwards raw exception content or unapproved context", () => {
+  it("preserves the original exception for beforeSend scrubbing", () => {
     process.env.SENTRY_DSN = "https://public@example.invalid/1";
     const privateContent =
       "raw-psid-123 private prompt +32470000000 https://private.example/image";
     const reqId = "3f8161cc-ec79-4c80-aa63-cad8d9c107ab";
+    const original = new TypeError(privateContent);
+    const originalStack = original.stack;
+    initSentry();
+    const options = sentryMocks.init.mock.calls[0]?.[0] as {
+      beforeSend: (event: Record<string, any>) => Record<string, any>;
+    };
 
-    captureException(new TypeError(privateContent), {
+    captureException(original, {
       reqId,
       area: "webhook",
       eventType: "message",
@@ -57,12 +63,9 @@ describe("Sentry privacy boundary", () => {
       rawPayload: privateContent,
     });
 
-    const captured = sentryMocks.captureException.mock.calls[0]?.[0];
-    expect(captured).toBeInstanceOf(Error);
-    expect(captured).toMatchObject({
-      name: "TypeError",
-      message: "Application exception",
-    });
+    const captured = sentryMocks.captureException.mock.calls[0]?.[0] as Error;
+    expect(captured).toBe(original);
+    expect(captured.stack).toBe(originalStack);
     expect(sentryMocks.setExtra.mock.calls).toEqual(
       expect.arrayContaining([
         ["reqId", reqId],
@@ -72,9 +75,6 @@ describe("Sentry privacy boundary", () => {
         ["errorClass", "TypeError"],
       ])
     );
-    expect(
-      JSON.stringify(sentryMocks.captureException.mock.calls)
-    ).not.toContain(privateContent);
     expect(JSON.stringify(sentryMocks.setExtra.mock.calls)).not.toContain(
       privateContent
     );
@@ -82,6 +82,62 @@ describe("Sentry privacy boundary", () => {
       "rawPayload",
       expect.anything()
     );
+
+    const originalFrameLocation = captured.stack
+      ?.split("\n")
+      .slice(1)
+      .map(line => line.trim())
+      .find(Boolean);
+    expect(originalFrameLocation).toEqual(
+      expect.stringContaining("sentryPrivacy.test")
+    );
+    const capturedExtras = Object.fromEntries(
+      sentryMocks.setExtra.mock.calls.map(([key, value]) => [
+        String(key),
+        value,
+      ])
+    );
+    const sanitized = options.beforeSend({
+      message: captured.message,
+      contexts: { captured: { message: captured.message } },
+      extra: capturedExtras,
+      exception: {
+        values: [
+          {
+            type: captured.name,
+            value: captured.message,
+            mechanism: { data: { message: captured.message } },
+            stacktrace: {
+              frames: [
+                {
+                  filename: originalFrameLocation,
+                  context_line: captured.message,
+                  vars: { message: captured.message },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(JSON.stringify(sanitized)).not.toContain(privateContent);
+    expect(sanitized).not.toHaveProperty("message");
+    expect(sanitized).not.toHaveProperty("contexts");
+    expect(sanitized.extra).toEqual({
+      reqId,
+      area: "webhook",
+      eventType: "message",
+      hasImage: true,
+      errorClass: "TypeError",
+    });
+    expect(sanitized.exception.values[0]).toMatchObject({
+      type: "TypeError",
+      value: "Application exception",
+      stacktrace: {
+        frames: [{ filename: originalFrameLocation }],
+      },
+    });
   });
 
   it("logs only validated dropped context keys when debug logging is enabled", () => {
@@ -94,7 +150,7 @@ describe("Sentry privacy boundary", () => {
     captureException(new Error(privateContent), {
       reqId: privateContent,
       rawPayload: privateContent,
-      [privateContent]: privateContent,
+      [privateContent]: true,
     });
 
     const logEntries = logSpy.mock.calls.map(([entry]) =>
@@ -119,6 +175,7 @@ describe("Sentry privacy boundary", () => {
       },
     ]);
     expect(JSON.stringify(logEntries)).not.toContain(privateContent);
+    expect(sentryMocks.setExtra).not.toHaveBeenCalledWith(privateContent, true);
   });
 
   it("does not log dropped context outside debug mode or accepted debug context", () => {
@@ -156,6 +213,7 @@ describe("Sentry privacy boundary", () => {
         rawPayload: privateContent,
         area: "webhook",
         hasText: true,
+        [privateContent]: true,
       },
       exception: {
         values: [
@@ -167,6 +225,9 @@ describe("Sentry privacy boundary", () => {
               frames: [
                 {
                   filename: "webhookEventRouter.ts",
+                  function: "originalFailureSite",
+                  lineno: 321,
+                  colno: 9,
                   vars: { prompt: privateContent },
                   context_line: privateContent,
                 },
@@ -186,7 +247,14 @@ describe("Sentry privacy boundary", () => {
       type: "TypeError",
       value: "Application exception",
       stacktrace: {
-        frames: [{ filename: "webhookEventRouter.ts" }],
+        frames: [
+          {
+            filename: "webhookEventRouter.ts",
+            function: "originalFailureSite",
+            lineno: 321,
+            colno: 9,
+          },
+        ],
       },
     });
   });

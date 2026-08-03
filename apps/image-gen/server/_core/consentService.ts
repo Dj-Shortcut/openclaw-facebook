@@ -6,6 +6,7 @@ import type { Lang } from "./i18n";
 import type { ConversationAction } from "./botResponse";
 import { buildQuickStartResponse } from "./conversationActions";
 import {
+  getState,
   setConsentState,
   setPendingDeleteConfirm,
   type MessengerUserState,
@@ -22,12 +23,7 @@ const DELETE_COMMAND_BY_LANG: Record<Lang, string> = {
   nl: "verwijder mijn data",
 };
 const DELETE_COMMANDS = new Set(Object.values(DELETE_COMMAND_BY_LANG));
-const DELETE_CONFIRM_TEXTS = new Set([
-  "ja",
-  "ja verwijder",
-  "yes",
-  "confirm",
-]);
+const DELETE_CONFIRM_TEXTS = new Set(["ja", "ja verwijder", "yes", "confirm"]);
 const DELETE_CANCEL_TEXTS = new Set(["nee", "no", "cancel", "stop"]);
 
 type MessengerConsentGateInput = {
@@ -135,6 +131,16 @@ async function deleteUserDataAndSendResult(
   sendText: (text: string) => Promise<void>
 ): Promise<void> {
   const outcome = await deleteUserData(psid);
+  if (outcome.status !== "completed") {
+    try {
+      if (await Promise.resolve(getState(psid))) {
+        await Promise.resolve(setPendingDeleteConfirm(psid, false));
+      }
+    } catch {
+      // The deletion service already reports storage failures. Still send the
+      // user the pending/failed outcome when the state store is unavailable.
+    }
+  }
   await sendText(deletionOutcomeText(lang, outcome));
 }
 
@@ -188,7 +194,9 @@ function deleteActions(lang: Lang): ConversationAction[] {
   ];
 }
 
-function whatsAppConsentButtons(lang: Lang): Array<{ id: string; title: string }> {
+function whatsAppConsentButtons(
+  lang: Lang
+): Array<{ id: string; title: string }> {
   return [
     {
       id: GDPR_CONSENT_AGREE,
@@ -201,7 +209,9 @@ function whatsAppConsentButtons(lang: Lang): Array<{ id: string; title: string }
   ];
 }
 
-function whatsAppDeleteButtons(lang: Lang): Array<{ id: string; title: string }> {
+function whatsAppDeleteButtons(
+  lang: Lang
+): Array<{ id: string; title: string }> {
   return [
     {
       id: GDPR_DELETE_CONFIRM,
@@ -214,7 +224,9 @@ function whatsAppDeleteButtons(lang: Lang): Array<{ id: string; title: string }>
   ];
 }
 
-function whatsAppDeleteNoticeButtons(lang: Lang): Array<{ id: string; title: string }> {
+function whatsAppDeleteNoticeButtons(
+  lang: Lang
+): Array<{ id: string; title: string }> {
   const command = deleteCommand(lang);
   return [
     {
@@ -265,17 +277,26 @@ export async function handleMessengerConsentGate(
 
   if (isDeleteCommand(input.text) || isDeleteCommand(input.payload)) {
     await Promise.resolve(setPendingDeleteConfirm(input.psid, true));
-    await input.sendActions(deletionConfirmText(input.lang), deleteActions(input.lang));
+    await input.sendActions(
+      deletionConfirmText(input.lang),
+      deleteActions(input.lang)
+    );
     return true;
   }
 
   if (input.state.pendingDeleteConfirm) {
-    await input.sendActions(deletionConfirmText(input.lang), deleteActions(input.lang));
+    await input.sendActions(
+      deletionConfirmText(input.lang),
+      deleteActions(input.lang)
+    );
     return true;
   }
 
   if (input.state.consentGiven !== true) {
-    await input.sendActions(consentText(input.lang), consentActions(input.lang));
+    await input.sendActions(
+      consentText(input.lang),
+      consentActions(input.lang)
+    );
     return true;
   }
 
@@ -313,12 +334,20 @@ export async function handleWhatsAppConsentGate(
   }
 
   if (payload === GDPR_DELETE_CONFIRM) {
-    await deleteUserDataAndSendResult(input.event.senderId, input.lang, input.sendText);
+    await deleteUserDataAndSendResult(
+      input.event.senderId,
+      input.lang,
+      input.sendText
+    );
     return true;
   }
 
   if (input.state.pendingDeleteConfirm && isDeleteConfirmText(text)) {
-    await deleteUserDataAndSendResult(input.event.senderId, input.lang, input.sendText);
+    await deleteUserDataAndSendResult(
+      input.event.senderId,
+      input.lang,
+      input.sendText
+    );
     return true;
   }
 
@@ -346,7 +375,10 @@ export async function handleWhatsAppConsentGate(
   }
 
   if (input.state.consentGiven !== true) {
-    await input.sendButtons(consentText(input.lang), whatsAppConsentButtons(input.lang));
+    await input.sendButtons(
+      consentText(input.lang),
+      whatsAppConsentButtons(input.lang)
+    );
     return true;
   }
 

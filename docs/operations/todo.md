@@ -44,7 +44,9 @@ worktree; none of these items counts as production rollout proof:
 - [x] Upgrade the affected image-gen Axios, Sentry, and `express-rate-limit`
   dependencies and make the production-dependency high-severity audit blocking
   in CI. `pnpm audit --prod` reports no known production vulnerabilities in the
-  current worktree (zero critical, high, moderate, and low advisories).
+  current worktree (zero critical, high, moderate, and low advisories). Keep the
+  security overrides in the pnpm-10-supported app-local `pnpm-workspace.yaml` so
+  fresh installs enforce the same dependency graph as the lockfile.
 - [x] Add an interim opaque Page-partitioned image queue and make partitioned
   enqueue, reserve/lease, completion, retry, and dead-letter transitions atomic
   and idempotent under ambiguous Redis responses. Consumers recompute the Page
@@ -74,6 +76,36 @@ worktree; none of these items counts as production rollout proof:
   claims. Startup/readiness and CI production type-checking now enforce the
   local foundation. Existing webhook/state/queue paths are deliberately not
   switched to v2 in this tranche.
+- [x] Add the next additive, still-unwired V2 boundary primitives: an exact
+  allowlisted detached envelope with authenticated payload purpose and bytes,
+  current-key-only verification, mandatory physical queue-scope verification,
+  authoritative binding re-derivation, safe stale/reassigned/inactive/
+  ambiguous quarantine codes, and a branded connected-delivery gate. Add a
+  V2-only replay claim with a binding-scoped opaque Redis key, dedicated-key
+  HMAC framing, strict Meta-ID/fallback identities, a stable authenticated
+  per-unit claim id, a fresh random owner token for every short `processing`
+  lease attempt, and an atomic owner-specific `completed` transition. Ambiguous/
+  busy outcomes remain retryable, Redis readiness is strict, and there is no
+  process-memory or V1 fallback. Only an explicit `completed` state is treated
+  as a duplicate. These primitives do not change live webhook behavior yet.
+- [x] Add the additive, still-unwired persisted V2 Meta ingress-unit contract:
+  mint a private runtime brand only after exact raw-body HMAC verification, bind
+  its signature-provider claim to the payload root, strictly cap every provider
+  array, split a verified delivery into deterministic per-event order,
+  retain only allowlisted canonical payload fields, and reject the whole batch
+  before identity resolution on an invalid event. Conversation events with no
+  stable provider ID or timestamp deliberately fail closed so replay identity
+  remains stable. Messenger echo/delivery/read/referral and WhatsApp status-only
+  notifications remain metadata-only and do not mint a conversation subject.
+  The unit HMAC binds the exact payload digest, stable replay claim id, complete
+  detached boundary, and key epoch. Queue verification authenticates the unit
+  before decoding, derives endpoint/sender only from those authenticated bytes,
+  re-resolves the current binding, and requires the external physical tenant/
+  binding scope. It mints a separate non-forgeable queued capability; replay
+  rejects a generic verified boundary that never saw physical scope. Tamper,
+  transplant, reassignment, multi-entry, canonical-byte, provider-mismatch, and
+  stale-worker fencing tests are included. No route or queue uses this contract
+  yet.
 
 Still open before broad customer launch or paid activation:
 
@@ -85,14 +117,34 @@ Still open before broad customer launch or paid activation:
   Missing, duplicate, changed, inactive, or unavailable mappings must fail
   closed; free versus paid entitlement is policy after identity resolution,
   never an identity fallback.
-- [ ] Define and verify a persisted V2 boundary envelope before queue/state
-  wiring. Every consumer must reject unknown version/key ID, re-derive the
-  workspace/connection/endpoint/user subject from the authoritative mapping,
-  compare fixed-length values safely, and quarantine stale or reassigned
-  bindings with metadata-only diagnostics before state, provider, or delivery.
-  Ownership resolution may accept degraded connection health for deletion and
-  isolation, but credentials and outbound delivery must separately require
-  `status=connected`.
+- [ ] Connect the unforgeable V2 raw-body verifier at the live signature seam and
+  select its Messenger or WhatsApp secret from an authenticated route contract,
+  not by trusting payload fields. Both the generic and WhatsApp-specific webhook
+  paths must reject a signature-provider/payload-root mismatch. Seal the complete
+  delivery before any queue write, then persist each unit only in its external
+  tenant/binding partition. A consumer must receive that physical scope from an
+  independently authenticated queue/lease context and verify it before replay,
+  state, provider, or delivery access. Multi-unit persistence across tenant
+  partitions must be atomic and idempotent, or use a durable resumable manifest;
+  a partial enqueue must never be acknowledged as a completed delivery.
+- [ ] Add an authoritative binding lifecycle epoch or durable cancellation/
+  deletion tombstone before enabling queued V2 content. The current
+  `(workspaceId, channel)` row is reused, so disconnecting and reconnecting the
+  identical endpoint can recreate the same subject and otherwise resurrect old
+  authenticated work. Cover the chosen epoch/tombstone in queue verification
+  and test disconnect -> same-row reconnect explicitly.
+- [ ] Activate the implemented V2 replay claim only after every ingress producer
+  and worker consumes a verified V2 unit under one deployment-wide key epoch.
+  Do not dual-write, read V1 on a V2 miss, or run mixed V1/V2 processors; drain
+  old ingress first so a Meta redelivery cannot execute once in each namespace.
+  Claim replay immediately before one durable, tenant-scoped, idempotent event-
+  job enqueue; mark it `completed` only after that enqueue succeeds and before
+  webhook ACK. Propagate `claim_busy`, store-unavailable, and lost-lease outcomes
+  as retry/requeue rather than catch-and-ack. Never persist or reuse the fresh
+  per-attempt owner token, and do not put slow provider work inside the current
+  30-second lease. Validate the completed TTL against Meta's retry horizon and
+  prove the Lua CAS/ACL/expiry behavior against production-like Redis or Redis
+  Cluster before enabling traffic.
 - [ ] Replace live Redis `psid:<raw sender>` state with workspace/channel-bound
   v2 state, locks, quota, completions, cost history, chat history, consent, face
   memory, and deletion keys. The legacy data has no Page/WABA owner and therefore
@@ -130,6 +182,22 @@ Still open before broad customer launch or paid activation:
   `MESSENGER_GENERATION_PARTITION_SECRET` across gateway and workers, prove the
   unique Page-to-workspace ownership invariant, and drain/review existing
   global legacy and dead-letter jobs before multi-tenant onboarding.
+  Before switching to Page-scoped Messenger state, pause new Messenger ingress;
+  verify queued, processing, and reserved generation counts are zero; and review
+  the dead-letter queue. From an authoritative channel inventory, build a
+  resumable offline migration manifest that maps every proven legacy Messenger
+  PSID state to exactly one receiving Page, preserves consent, response-window,
+  quota/reservation, face-memory, and pending-deletion fields, and writes the
+  full record to its Page+PSID key. After verifying the copy, purge its proven
+  legacy Messenger raw-PSID record and retain auditable evidence that no
+  identified Messenger record remains unmigrated or undeleted. Preserve
+  non-Messenger records; move them only through a separately verified
+  channel-scoping migration. Runtime `delete-my-data` must not guess that an
+  unmarked raw-PSID record belongs to Messenger because the old keyspace is
+  shared by non-Messenger callers. Abort on missing or ambiguous Page ownership:
+  runtime code never falls back to an unowned PSID record.
+  Deploy gateway and workers as one rollout only after that evidence, then
+  resume ingress.
 - [ ] Before deploying this identity foundation, provision the same immutable
   `CONVERSATION_SCOPE_HMAC_KEY_ID` and 256-bit
   `CONVERSATION_SCOPE_HMAC_SECRET` version on every app and worker process,
@@ -312,7 +380,7 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Add launch billing and usage controls before broad customer launch. Current launch mode is manual upgrade requests with customer-visible free-plan usage; paid subscriptions are deferred.
 - [ ] Add zero-friction Messenger-to-portal handoff for approved customers before relying on the portal for onboarding
   - Messenger presence alone is not portal authentication.
-  - [x] Add a customer-facing `/handoff/:token` portal route that stores the handoff locally through Facebook Login, then claims the approved workspace.
+  - [x] Add a customer-facing `/handoff/:token` portal route that stores the handoff locally through Facebook Login. Workspace claiming exists but is intentionally disabled and must not be treated as usable onboarding while the fail-closed conditions below remain open.
   - [x] Contain the unsafe legacy handoff locally by failing closed for both issuance and claim with no environment override. Keep it disabled in production until the Page/workspace boundary below is implemented and all pre-fix tokens have expired or been revoked.
   - [ ] Bind issuance and claim to one immutable receiving Page, `channelConnection`, and workspace; revalidate that binding atomically before granting membership and fail closed for missing, duplicate, disconnected, changed, legacy-unbound, or cross-workspace mappings.
   - [ ] Replace caller-supplied `createdByUserId` with an authenticated, non-forgeable operator/support principal and an explicit customer-approved, auditable workflow.

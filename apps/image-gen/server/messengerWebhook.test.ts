@@ -61,12 +61,18 @@ import {
   setSourceImageDnsLookupForTests,
   setSourceImageRequestForTests,
 } from "./_core/image-generation/sourceImageFetcher";
-import { processConsentedFacebookWebhookPayload } from "./testConsentHelpers";
+import {
+  getTestMessengerState,
+  processConsentedFacebookWebhookPayload,
+  runWithTestMessengerPageContext,
+  withTestMessengerPageId,
+} from "./testConsentHelpers";
 import {
   markMessengerGenerationCompleted,
   markMessengerGenerationDelivered,
 } from "./_core/messengerGenerationCompletion";
 import { resetMessengerGenerationQueueForTests } from "./_core/messengerGenerationQueue";
+import { runWithMessengerRequestContext } from "./_core/messengerRequestContext";
 import {
   deleteEphemeralKey,
   setEphemeralKey,
@@ -87,6 +93,12 @@ const originalFaceMemoryRetentionDays = process.env.FACE_MEMORY_RETENTION_DAYS;
 const processFacebookWebhookPayload = processConsentedFacebookWebhookPayload(
   processFacebookWebhookPayloadBase
 );
+
+async function processFacebookWebhookPayloadWithoutConsent(
+  payload: unknown
+): Promise<void> {
+  await processFacebookWebhookPayloadBase(withTestMessengerPageId(payload));
+}
 
 function toUrlString(url: string | URL): string {
   return typeof url === "string" ? url : url.toString();
@@ -380,12 +392,41 @@ describe("messenger webhook dedupe", () => {
     expect(sendQuickRepliesMock).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ["missing", undefined],
+    ["blank", "   "],
+    ["non-string", 123],
+  ])(
+    "skips Messenger entries with a %s receiving Page id without creating legacy state",
+    async (_label, pageId) => {
+      const psid = `invalid-page-entry-${_label}`;
+      const entry = {
+        ...(pageId === undefined ? {} : { id: pageId }),
+        messaging: [
+          {
+            sender: { id: psid },
+            message: { mid: `mid-invalid-page-${_label}`, text: "Hi" },
+          },
+        ],
+      };
+
+      await processFacebookWebhookPayloadBase({ entry: [entry] });
+
+      expect(await Promise.resolve(getState(psid))).toBeNull();
+      expect(sendTextMock).not.toHaveBeenCalled();
+      expect(sendQuickRepliesMock).not.toHaveBeenCalled();
+      expect(sendImageMock).not.toHaveBeenCalled();
+    }
+  );
+
   it("throttles repeated in-flight notices while a PROCESSING generation is active", async () => {
     const psid = "active-processing-user";
     const inFlightKey = `messenger:inflight:${psid}`;
     const nowSpy = vi.spyOn(Date, "now");
 
-    await Promise.resolve(setFlowState(psid, "PROCESSING"));
+    await runWithTestMessengerPageContext(() =>
+      Promise.resolve(setFlowState(psid, "PROCESSING"))
+    );
     await setEphemeralKey(inFlightKey, "active", 60);
 
     try {
@@ -452,7 +493,9 @@ describe("messenger webhook dedupe", () => {
     const inFlightKey = `messenger:inflight:${psid}`;
     const nowSpy = vi.spyOn(Date, "now");
 
-    await Promise.resolve(setFlowState(psid, "PROCESSING"));
+    await runWithTestMessengerPageContext(() =>
+      Promise.resolve(setFlowState(psid, "PROCESSING"))
+    );
     await setEphemeralKey(inFlightKey, "active", 60);
 
     try {
@@ -659,7 +702,12 @@ describe("messenger webhook dedupe", () => {
         /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.(jpg|png)$/
       )
     );
-    expect(getState("internal-source-user")?.lastPhotoSource).toBe("stored");
+    await runWithMessengerRequestContext(INTERNAL_TEST_PAGE_ID, async () => {
+      expect(
+        (await Promise.resolve(getState("internal-source-user")))
+          ?.lastPhotoSource
+      ).toBe("stored");
+    });
     expect(safeLogMock).toHaveBeenCalledWith(
       "internal_image_request_received",
       expect.objectContaining({
@@ -732,9 +780,13 @@ describe("messenger webhook dedupe", () => {
 
   it("keeps natural make-me requests prompt-first even with a retained source photo", async () => {
     const fetchMock = installOpenAiSuccessFetchMock();
-    await setPendingStoredImage(
-      "internal-make-me-source-user",
-      "https://img.example/retained-source.jpg"
+    await runWithMessengerRequestContext(INTERNAL_TEST_PAGE_ID, () =>
+      Promise.resolve(
+        setPendingStoredImage(
+          "internal-make-me-source-user",
+          "https://img.example/retained-source.jpg"
+        )
+      )
     );
 
     await processInternalMessengerImageRequest({
@@ -767,9 +819,13 @@ describe("messenger webhook dedupe", () => {
 
   it("uses a retained source photo for explicit personal transform requests", async () => {
     const fetchMock = installOpenAiSuccessFetchMock();
-    await setPendingStoredImage(
-      "internal-transform-source-user",
-      "https://img.example/retained-source.jpg"
+    await runWithMessengerRequestContext(INTERNAL_TEST_PAGE_ID, () =>
+      Promise.resolve(
+        setPendingStoredImage(
+          "internal-transform-source-user",
+          "https://img.example/retained-source.jpg"
+        )
+      )
     );
 
     await processInternalMessengerImageRequest({
@@ -828,9 +884,13 @@ describe("messenger webhook dedupe", () => {
 
   it("applies visual correction prompts to the last generated image", async () => {
     const fetchMock = installOpenAiSuccessFetchMock();
-    await setLastGenerated(
-      "internal-visual-correction-user",
-      "https://leaderbot-fb-image-gen.fly.dev/generated/generated-landscape.jpg"
+    await runWithMessengerRequestContext(INTERNAL_TEST_PAGE_ID, () =>
+      Promise.resolve(
+        setLastGenerated(
+          "internal-visual-correction-user",
+          "https://leaderbot-fb-image-gen.fly.dev/generated/generated-landscape.jpg"
+        )
+      )
     );
 
     await processInternalMessengerImageRequest({
@@ -921,9 +981,13 @@ describe("messenger webhook dedupe", () => {
 
   it("keeps legacy style words inside explicit source-image edit prompts instead of routing through preset restyles", async () => {
     const fetchMock = installOpenAiSuccessFetchMock();
-    await setPendingStoredImage(
-      "internal-style-word-source-user",
-      "https://img.example/retained-source.jpg"
+    await runWithMessengerRequestContext(INTERNAL_TEST_PAGE_ID, () =>
+      Promise.resolve(
+        setPendingStoredImage(
+          "internal-style-word-source-user",
+          "https://img.example/retained-source.jpg"
+        )
+      )
     );
     const userPrompt = "Verander me in cyberpunk met neon regen";
 
@@ -1100,9 +1164,11 @@ describe("messenger webhook dedupe", () => {
       "messenger_generation_job_queued",
       expect.anything()
     );
-    expect(
-      (await Promise.resolve(getState("internal-source-fail-user")))?.stage
-    ).toBe("AWAITING_PHOTO");
+    await runWithMessengerRequestContext(INTERNAL_TEST_PAGE_ID, async () => {
+      expect(
+        (await Promise.resolve(getState("internal-source-fail-user")))?.stage
+      ).toBe("AWAITING_PHOTO");
+    });
   });
 
   it("dedupes on mid before the real message arrives when an echo already used it", async () => {
@@ -1385,7 +1451,7 @@ describe("messenger webhook dedupe", () => {
       ],
     });
 
-    expect(getState(psid)?.lastUserMessageAt).toBeUndefined();
+    expect((await getTestMessengerState(psid))?.lastUserMessageAt).toBeUndefined();
 
     await processFacebookWebhookPayload({
       entry: [
@@ -1401,7 +1467,9 @@ describe("messenger webhook dedupe", () => {
       ],
     });
 
-    expect(getState(psid)?.lastUserMessageAt).toBe(1730000000123);
+    expect((await getTestMessengerState(psid))?.lastUserMessageAt).toBe(
+      1730000000123
+    );
 
     await processFacebookWebhookPayload({
       entry: [
@@ -1417,7 +1485,9 @@ describe("messenger webhook dedupe", () => {
       ],
     });
 
-    expect(getState(psid)?.lastUserMessageAt).toBe(1730000000123);
+    expect((await getTestMessengerState(psid))?.lastUserMessageAt).toBe(
+      1730000000123
+    );
   });
 
   it("opens the Messenger response window before a fresh consent prompt", async () => {
@@ -1429,7 +1499,7 @@ describe("messenger webhook dedupe", () => {
       return { sent: true };
     });
 
-    await processFacebookWebhookPayloadBase({
+    await processFacebookWebhookPayloadWithoutConsent({
       entry: [
         {
           messaging: [
@@ -1454,7 +1524,7 @@ describe("messenger webhook dedupe", () => {
   it("continues with prompt-first quick start actions after consent is granted", async () => {
     const psid = "fresh-consent-accepted-user";
 
-    await processFacebookWebhookPayloadBase({
+    await processFacebookWebhookPayloadWithoutConsent({
       entry: [
         {
           messaging: [
@@ -1471,8 +1541,8 @@ describe("messenger webhook dedupe", () => {
       ],
     });
 
-    expect(getState(psid)?.consentGiven).toBe(true);
-    expect(getState(psid)?.stage).toBe("IDLE");
+    expect((await getTestMessengerState(psid))?.consentGiven).toBe(true);
+    expect((await getTestMessengerState(psid))?.stage).toBe("IDLE");
     expect(sendTextMock).toHaveBeenCalledWith(
       psid,
       expect.stringContaining("Je bent klaar")
@@ -1749,7 +1819,9 @@ describe("messenger deterministic free text", () => {
       "reply-action-user",
       t("nl", "newImagePrompt")
     );
-    expect(getState("reply-action-user")?.lastPhotoUrl).toBeNull();
+    expect(
+      (await getTestMessengerState("reply-action-user"))?.lastPhotoUrl
+    ).toBeNull();
   });
 
   it("generates direct Messenger text image requests prompt-first", async () => {
@@ -1873,10 +1945,12 @@ describe("messenger deterministic free text", () => {
     const fetchMock = installOpenAiSuccessFetchMock();
     const psid = "screenshot-context-user";
 
-    await Promise.resolve(
-      setLastGenerationContext(psid, { prompt: priorPrompt })
-    );
-    await Promise.resolve(setFlowState(psid, "AWAITING_EDIT_PROMPT"));
+    await runWithTestMessengerPageContext(async () => {
+      await Promise.resolve(
+        setLastGenerationContext(psid, { prompt: priorPrompt })
+      );
+      await Promise.resolve(setFlowState(psid, "AWAITING_EDIT_PROMPT"));
+    });
 
     await processFacebookWebhookPayload({
       entry: [
@@ -1933,10 +2007,12 @@ describe("messenger deterministic free text", () => {
     const psid = "screenshot-stale-intent-user";
     const fetchMock = installOpenAiSuccessFetchMock();
 
-    await Promise.resolve(
-      setLastGenerationContext(psid, { prompt: priorPrompt })
-    );
-    await Promise.resolve(setFlowState(psid, "IDLE"));
+    await runWithTestMessengerPageContext(async () => {
+      await Promise.resolve(
+        setLastGenerationContext(psid, { prompt: priorPrompt })
+      );
+      await Promise.resolve(setFlowState(psid, "IDLE"));
+    });
 
     await processFacebookWebhookPayload({
       entry: [
@@ -1984,10 +2060,12 @@ describe("messenger deterministic free text", () => {
     const psid = "screenshot-explicit-caption-user";
     const priorPrompt = "Maak iets grappigs voor mijn zus";
 
-    await Promise.resolve(
-      setLastGenerationContext(psid, { prompt: priorPrompt })
-    );
-    await Promise.resolve(setFlowState(psid, "AWAITING_EDIT_PROMPT"));
+    await runWithTestMessengerPageContext(async () => {
+      await Promise.resolve(
+        setLastGenerationContext(psid, { prompt: priorPrompt })
+      );
+      await Promise.resolve(setFlowState(psid, "AWAITING_EDIT_PROMPT"));
+    });
 
     await processFacebookWebhookPayload({
       entry: [
@@ -2038,10 +2116,12 @@ describe("messenger deterministic free text", () => {
     const psid = "screenshot-consent-continue-user";
     const fetchMock = installOpenAiSuccessFetchMock();
 
-    await Promise.resolve(
-      setLastGenerationContext(psid, { prompt: priorPrompt })
-    );
-    await Promise.resolve(setFlowState(psid, "AWAITING_EDIT_PROMPT"));
+    await runWithTestMessengerPageContext(async () => {
+      await Promise.resolve(
+        setLastGenerationContext(psid, { prompt: priorPrompt })
+      );
+      await Promise.resolve(setFlowState(psid, "AWAITING_EDIT_PROMPT"));
+    });
     process.env.ENABLE_FACE_MEMORY = "true";
 
     await processFacebookWebhookPayload({
@@ -2112,10 +2192,12 @@ describe("messenger deterministic free text", () => {
     const psid = "screenshot-consent-yes-continue-user";
     const fetchMock = installOpenAiSuccessFetchMock();
 
-    await Promise.resolve(
-      setLastGenerationContext(psid, { prompt: priorPrompt })
-    );
-    await Promise.resolve(setFlowState(psid, "AWAITING_EDIT_PROMPT"));
+    await runWithTestMessengerPageContext(async () => {
+      await Promise.resolve(
+        setLastGenerationContext(psid, { prompt: priorPrompt })
+      );
+      await Promise.resolve(setFlowState(psid, "AWAITING_EDIT_PROMPT"));
+    });
     process.env.ENABLE_FACE_MEMORY = "true";
 
     await processFacebookWebhookPayload({
@@ -2143,7 +2225,8 @@ describe("messenger deterministic free text", () => {
     });
 
     expectFaceMemoryConsentPrompt(psid);
-    const pendingImageUrl = getState(psid)?.pendingImageUrl;
+    const pendingImageUrl = (await getTestMessengerState(psid))
+      ?.pendingImageUrl;
     expect(pendingImageUrl).toBeDefined();
 
     await processFacebookWebhookPayload({
@@ -2162,7 +2245,7 @@ describe("messenger deterministic free text", () => {
       ],
     });
 
-    const state = getState(psid);
+    const state = await getTestMessengerState(psid);
     expect(state?.faceMemoryConsent?.given).toBe(true);
     expect(state?.lastSourceImageUrl).toBe(pendingImageUrl);
     expect(sendTextMock).toHaveBeenCalledWith(
@@ -2217,18 +2300,22 @@ describe("messenger deterministic free text", () => {
       psid,
       t("nl", "screenshotClarifyPrompt")
     );
-    expect(getState(psid)?.stage).toBe("AWAITING_EDIT_PROMPT");
+    expect((await getTestMessengerState(psid))?.stage).toBe(
+      "AWAITING_EDIT_PROMPT"
+    );
     expect(sendImageMock).not.toHaveBeenCalled();
     expect(sendQuickRepliesMock).not.toHaveBeenCalled();
   });
 
   it("prompts for face-memory consent before processing captioned image edits", async () => {
     const psid = "captioned-source-edit-consent-user";
-    await setConsentState(psid, true);
+    await runWithTestMessengerPageContext(() =>
+      Promise.resolve(setConsentState(psid, true))
+    );
     process.env.ENABLE_FACE_MEMORY = "true";
     const fetchMock = installOpenAiSuccessFetchMock();
 
-    await processFacebookWebhookPayloadBase({
+    await processFacebookWebhookPayloadWithoutConsent({
       entry: [
         {
           messaging: [
@@ -2347,7 +2434,9 @@ describe("messenger deterministic free text", () => {
         },
       ]
     );
-    expect(getState("deterministic-no-photo-user")?.stage).toBe("IDLE");
+    expect(
+      (await getTestMessengerState("deterministic-no-photo-user"))?.stage
+    ).toBe("IDLE");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
@@ -2432,7 +2521,11 @@ describe("messenger greeting behavior", () => {
 
   it("routes stable background action clicks into background-edit state", async () => {
     const psid = "background-action-user";
-    setLastGenerated(psid, "https://img.example/generated.jpg");
+    await runWithTestMessengerPageContext(() =>
+      Promise.resolve(
+        setLastGenerated(psid, "https://img.example/generated.jpg")
+      )
+    );
     sendTextMock.mockClear();
 
     await processFacebookWebhookPayload({
@@ -2453,7 +2546,9 @@ describe("messenger greeting behavior", () => {
       ],
     });
 
-    expect(getState(psid)?.stage).toBe("AWAITING_EDIT_PROMPT");
+    expect((await getTestMessengerState(psid))?.stage).toBe(
+      "AWAITING_EDIT_PROMPT"
+    );
     expect(sendTextMock).toHaveBeenCalledWith(
       psid,
       t("nl", "changeBackgroundPrompt")
@@ -2482,7 +2577,9 @@ describe("messenger greeting behavior", () => {
       ],
     });
 
-    expect(getState(psid)?.stage).toBe("AWAITING_PHOTO");
+    expect((await getTestMessengerState(psid))?.stage).toBe(
+      "AWAITING_PHOTO"
+    );
     expect(sendTextMock).toHaveBeenCalledWith(
       psid,
       t("nl", "changeBackgroundRequiresPhoto")
@@ -2517,7 +2614,9 @@ describe("messenger greeting behavior", () => {
 
   it("offers follow-up quick actions when state is RESULT_READY", async () => {
     const psid = "result-user";
-    setLastGenerated(psid, "https://img.example/result.jpg");
+    await runWithTestMessengerPageContext(() =>
+      Promise.resolve(setLastGenerated(psid, "https://img.example/result.jpg"))
+    );
 
     await processFacebookWebhookPayload({
       entry: [
@@ -2558,7 +2657,9 @@ describe("messenger greeting behavior", () => {
 
   it("starts a fresh prompt-first flow when the new-image action is clicked", async () => {
     const psid = "new-image-action-user";
-    setPendingImage(psid, "https://img.example/old.jpg");
+    await runWithTestMessengerPageContext(() =>
+      Promise.resolve(setPendingImage(psid, "https://img.example/old.jpg"))
+    );
     sendTextMock.mockClear();
 
     await processFacebookWebhookPayload({
@@ -2577,7 +2678,7 @@ describe("messenger greeting behavior", () => {
       ],
     });
 
-    const state = getState(psid);
+    const state = await getTestMessengerState(psid);
     expect(state?.lastPhotoUrl).toBeNull();
     expect(state?.stage).toBe("IDLE");
     expect(sendTextMock).toHaveBeenCalledWith(psid, t("nl", "newImagePrompt"));
@@ -2585,7 +2686,9 @@ describe("messenger greeting behavior", () => {
 
   it("offers retry actions when state is FAILURE", async () => {
     const psid = "failure-user";
-    setFlowState(psid, "FAILURE");
+    await runWithTestMessengerPageContext(() =>
+      Promise.resolve(setFlowState(psid, "FAILURE"))
+    );
 
     await processFacebookWebhookPayload({
       entry: [
