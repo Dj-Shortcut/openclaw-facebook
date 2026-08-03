@@ -182,6 +182,18 @@ Still open before broad customer launch or paid activation:
   `MESSENGER_GENERATION_PARTITION_SECRET` across gateway and workers, prove the
   unique Page-to-workspace ownership invariant, and drain/review existing
   global legacy and dead-letter jobs before multi-tenant onboarding.
+  Before switching to Page-scoped Messenger state, pause new Messenger ingress;
+  verify queued, processing, and reserved generation counts are zero; and review
+  the dead-letter queue. From an authoritative channel inventory, build a
+  resumable offline migration manifest that maps every proven legacy Messenger
+  PSID state to exactly one receiving Page, preserves consent, response-window,
+  quota/reservation, face-memory, and pending-deletion fields, and writes the
+  full record to its Page+PSID key. Prove that no identified Messenger record
+  remains unmigrated. Preserve non-Messenger records; move them only through a
+  separately verified channel-scoping migration. Abort on missing or ambiguous
+  Page ownership: runtime code never falls back to an unowned PSID record.
+  Deploy gateway and workers as one rollout only after that evidence, then
+  resume ingress.
 - [ ] Before deploying this identity foundation, provision the same immutable
   `CONVERSATION_SCOPE_HMAC_KEY_ID` and 256-bit
   `CONVERSATION_SCOPE_HMAC_SECRET` version on every app and worker process,
@@ -364,7 +376,7 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Add launch billing and usage controls before broad customer launch. Current launch mode is manual upgrade requests with customer-visible free-plan usage; paid subscriptions are deferred.
 - [ ] Add zero-friction Messenger-to-portal handoff for approved customers before relying on the portal for onboarding
   - Messenger presence alone is not portal authentication.
-  - [x] Add a customer-facing `/handoff/:token` portal route that stores the handoff locally through Facebook Login, then claims the approved workspace.
+  - [x] Add a customer-facing `/handoff/:token` portal route that stores the handoff locally through Facebook Login. Workspace claiming exists but is intentionally disabled and must not be treated as usable onboarding while the fail-closed conditions below remain open.
   - [x] Contain the unsafe legacy handoff locally by failing closed for both issuance and claim with no environment override. Keep it disabled in production until the Page/workspace boundary below is implemented and all pre-fix tokens have expired or been revoked.
   - [ ] Bind issuance and claim to one immutable receiving Page, `channelConnection`, and workspace; revalidate that binding atomically before granting membership and fail closed for missing, duplicate, disconnected, changed, legacy-unbound, or cross-workspace mappings.
   - [ ] Replace caller-supplied `createdByUserId` with an authenticated, non-forgeable operator/support principal and an explicit customer-approved, auditable workflow.

@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import {
-  findInMemoryState,
+  deleteState,
   getOrCreateStoredState,
   isPromiseLike,
   isRedisStateStoreEnabled,
@@ -10,18 +11,39 @@ import {
 } from "./stateStore";
 import {
   createDefaultState,
-  getUserKey,
   normalizeState,
 } from "./messengerStateNormalization";
 import type { MessengerUserState } from "./messengerState";
+import { getMessengerRequestPageId } from "./messengerRequestContext";
 
 type PartialState = Partial<MessengerUserState>;
+const MESSENGER_PAGE_STATE_KEY_PREFIX = "messenger-page-v2";
+
+/**
+ * Page-context state owns all customer content for that Page + sender pair.
+ * The digest keeps raw Page ids and PSIDs out of Redis keys. A missing Page
+ * context deliberately stays on the isolated legacy key for non-Messenger and
+ * migration-only callers; Page reads never fall back to that unowned record.
+ */
+function getPersistedStateKey(psid: string): string {
+  const pageId = getMessengerRequestPageId();
+  if (!pageId) {
+    return psid;
+  }
+
+  const digest = createHash("sha256")
+    .update(pageId, "utf8")
+    .update("\0", "utf8")
+    .update(psid, "utf8")
+    .digest("hex");
+  return `${MESSENGER_PAGE_STATE_KEY_PREFIX}:${digest}`;
+}
 
 function saveState(
   psid: string,
   nextState: MessengerUserState
 ): MaybePromise<MessengerUserState> {
-  const result = writeState(psid, nextState);
+  const result = writeState(getPersistedStateKey(psid), nextState);
   if (isPromiseLike(result)) {
     return result.then(() => nextState);
   }
@@ -30,26 +52,18 @@ function saveState(
 }
 
 function getStateFromMemory(psid: string): MessengerUserState | null {
-  const direct = readState<PartialState>(psid);
+  const direct = readState<PartialState>(getPersistedStateKey(psid));
   if (isPromiseLike(direct)) {
     throw new Error("Unexpected async state read in memory mode");
   }
 
-  if (direct) {
-    return normalizeState(psid, direct);
-  }
-
-  const userKey = getUserKey(psid);
-  const legacyState = findInMemoryState<PartialState>(
-    state => state.userKey === userKey
-  );
-  return legacyState
-    ? normalizeState(legacyState.psid ?? psid, legacyState)
-    : null;
+  return direct ? normalizeState(psid, direct) : null;
 }
 
 function getStateFromRedis(psid: string): Promise<MessengerUserState | null> {
-  return Promise.resolve(readState<PartialState>(psid)).then(state => {
+  return Promise.resolve(
+    readState<PartialState>(getPersistedStateKey(psid))
+  ).then(state => {
     return state ? normalizeState(psid, state) : null;
   });
 }
@@ -78,10 +92,10 @@ export function getOrCreatePersistedState(
   }
 
   return Promise.resolve(
-    getOrCreateStoredState(psid, () => createDefaultState(psid))
-  ).then(state => {
-    return normalizeState(psid, state);
-  });
+    getOrCreateStoredState(getPersistedStateKey(psid), () =>
+      createDefaultState(psid)
+    )
+  ).then(state => normalizeState(psid, state));
 }
 
 function patchStateInMemory(
@@ -111,14 +125,15 @@ function patchStateInRedis(
   now = Date.now()
 ): Promise<MessengerUserState> {
   return Promise.resolve(
-    updateStoredState<PartialState>(psid, current => {
-      const nextState = normalizeState(psid, {
-        ...normalizeState(psid, current),
-        ...patch,
-        updatedAt: now,
-      });
-      return nextState;
-    })
+    updateStoredState<PartialState>(
+      getPersistedStateKey(psid),
+      current =>
+        normalizeState(psid, {
+          ...normalizeState(psid, current),
+          ...patch,
+          updatedAt: now,
+        })
+    )
   ).then(state => normalizeState(psid, state));
 }
 
@@ -132,4 +147,21 @@ export function patchState(
   }
 
   return patchStateInRedis(psid, patch, now);
+}
+
+export function deletePersistedState(psid: string): MaybePromise<void> {
+  return deleteState(getPersistedStateKey(psid));
+}
+
+/** Replaces only the state owned by the active Page + sender context. */
+export function replacePersistedState(
+  psid: string,
+  state: PartialState
+): MaybePromise<void> {
+  return writeState(getPersistedStateKey(psid), state);
+}
+
+/** Deletes a pre-Page-scope legacy key regardless of the active Page context. */
+export function deleteLegacyPersistedState(psid: string): MaybePromise<void> {
+  return deleteState(psid);
 }

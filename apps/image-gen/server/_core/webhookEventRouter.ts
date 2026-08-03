@@ -21,10 +21,18 @@ export async function handleEntry(
   ctx: HandlerContext,
   entry: FacebookWebhookEntry
 ): Promise<void> {
+  const pageId = typeof entry?.id === "string" ? entry.id.trim() : "";
+  if (!pageId) {
+    logMessengerWebhookTrace("webhook_entry_skipped", {
+      reason: "missing_receiving_page",
+    });
+    return;
+  }
+
   const events = Array.isArray(entry?.messaging) ? entry.messaging : [];
   for (const event of events) {
-    await runWithMessengerRequestContext(entry?.id, () =>
-      handleEvent(ctx, event, entry?.id)
+    await runWithMessengerRequestContext(pageId, () =>
+      handleEvent(ctx, event, pageId)
     );
   }
 }

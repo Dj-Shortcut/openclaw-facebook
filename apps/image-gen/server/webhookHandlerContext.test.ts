@@ -23,7 +23,8 @@ describe("webhook handler context logging", () => {
     process.env.LOG_LEVEL = "debug";
     process.env.PRIVACY_PEPPER = "handler-context-test-pepper";
     vi.resetModules();
-    const { createHandlerContext } = await import("./_core/webhookHandlerContext");
+    const { createHandlerContext } =
+      await import("./_core/webhookHandlerContext");
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const ctx = createHandlerContext({
       defaultLang: "en",
@@ -73,5 +74,102 @@ describe("webhook handler context logging", () => {
     expect(serialized).not.toContain("SECRET_REFERRAL_VALUE");
     expect(serialized).not.toContain("secret.example");
     expect(serialized).not.toContain("token=abc");
+  });
+
+  it("keeps flow state isolated for the same sender across Facebook Pages", async () => {
+    process.env.PRIVACY_PEPPER = "handler-context-flow-scope-test-pepper";
+    delete process.env.REDIS_URL;
+    vi.resetModules();
+    const { createHandlerContext } =
+      await import("./_core/webhookHandlerContext");
+    const {
+      getOrCreateState,
+      getState,
+      resetStateStore,
+      setFlowState,
+      setLastGenerationContext,
+      setPendingImage,
+    } = await import("./_core/messengerState");
+    const { runWithMessengerRequestContext } =
+      await import("./_core/messengerRequestContext");
+    const ctx = createHandlerContext({
+      defaultLang: "en",
+      runImageGeneration: vi.fn(async () => ({ sent: true })),
+    });
+    const psid = "shared-page-scoped-flow-sender";
+
+    try {
+      await Promise.resolve(
+        setPendingImage(psid, "https://private.example/legacy.jpg")
+      );
+      await Promise.resolve(
+        setLastGenerationContext(psid, { prompt: "private legacy prompt" })
+      );
+      await Promise.resolve(setFlowState(psid, "PROCESSING"));
+
+      await runWithMessengerRequestContext("page-one", async () => {
+        const state = await Promise.resolve(getOrCreateState(psid));
+        expect(state.stage).toBe("IDLE");
+        expect(state.lastPhotoUrl).toBeNull();
+        expect(state.pendingImageUrl).toBeUndefined();
+        expect(state.lastPrompt).toBeUndefined();
+        const featureContext = ctx.createFeatureTextContext(
+          psid,
+          state.userKey,
+          "req-page-one",
+          "en",
+          state,
+          "start",
+          "start",
+          false
+        );
+        await Promise.resolve(
+          setPendingImage(psid, "https://private.example/page-one.jpg")
+        );
+        await Promise.resolve(
+          setLastGenerationContext(psid, { prompt: "private page one prompt" })
+        );
+        await featureContext.setFlowState("PROCESSING");
+        const pageOneState = await Promise.resolve(getState(psid));
+        expect(pageOneState?.stage).toBe("PROCESSING");
+        expect(pageOneState?.lastPhotoUrl).toBe(
+          "https://private.example/page-one.jpg"
+        );
+        expect(pageOneState?.lastPrompt).toBe("private page one prompt");
+      });
+
+      await runWithMessengerRequestContext("page-two", async () => {
+        const state = await Promise.resolve(getOrCreateState(psid));
+        expect(state.stage).toBe("IDLE");
+        expect(state.lastPhotoUrl).toBeNull();
+        expect(state.pendingImageUrl).toBeUndefined();
+        expect(state.lastPrompt).toBeUndefined();
+        const featureContext = ctx.createFeatureTextContext(
+          psid,
+          state.userKey,
+          "req-page-two",
+          "en",
+          state,
+          "start",
+          "start",
+          false
+        );
+        await featureContext.setFlowState("AWAITING_PHOTO");
+        expect((await Promise.resolve(getState(psid)))?.stage).toBe(
+          "AWAITING_PHOTO"
+        );
+      });
+
+      await runWithMessengerRequestContext("page-one", async () => {
+        const state = await Promise.resolve(getState(psid));
+        expect(state?.stage).toBe("PROCESSING");
+        expect(state?.lastPhotoUrl).toBe(
+          "https://private.example/page-one.jpg"
+        );
+        expect(state?.lastPrompt).toBe("private page one prompt");
+      });
+    } finally {
+      resetStateStore();
+    }
   });
 });

@@ -24,8 +24,11 @@ import {
   processFacebookWebhookPayload as processFacebookWebhookPayloadBase,
   resetMessengerEventDedupe,
 } from "./_core/messengerWebhook";
-import { anonymizePsid, getState, resetStateStore } from "./_core/messengerState";
-import { processConsentedFacebookWebhookPayload } from "./testConsentHelpers";
+import { resetStateStore } from "./_core/messengerState";
+import {
+  getTestMessengerState,
+  processConsentedFacebookWebhookPayload,
+} from "./testConsentHelpers";
 
 const processFacebookWebhookPayload = processConsentedFacebookWebhookPayload(
   processFacebookWebhookPayloadBase
@@ -150,6 +153,6 @@ describe("bot features", () => {
         expect.objectContaining({ payload: "OPENCLAW_ACTION:Privacy" }),
       ])
     );
-    expect(getState(anonymizePsid(psid))?.stage).toBe("IDLE");
+    expect((await getTestMessengerState(psid))?.stage).toBe("IDLE");
   });
 });

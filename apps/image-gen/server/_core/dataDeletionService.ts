@@ -5,7 +5,7 @@ import { deleteFaceMemoryForUser } from "./faceMemory";
 import { safeLog } from "./messengerApi";
 import { deleteMessengerGenerationCompletionsForUser } from "./messengerGenerationCompletion";
 import { toLogUser } from "./privacy";
-import { deleteScopedState, writeState } from "./stateStore";
+import { deleteScopedState } from "./stateStore";
 import { deleteProviderVideoForUser } from "./video-generation/videoProviderRegistry";
 import {
   anonymizePsid,
@@ -13,6 +13,10 @@ import {
   getState,
   type MessengerUserState,
 } from "./messengerState";
+import {
+  deleteLegacyPersistedState,
+  replacePersistedState,
+} from "./messengerStatePersistence";
 
 const LEGACY_CHAT_HISTORY_SCOPE = "chat:history";
 
@@ -112,19 +116,14 @@ async function deleteUserDataInternal(
       )
     );
     await Promise.resolve(
-      writeState(psid, {
-        ...currentState,
+      replacePersistedState(psid, {
+        psid: currentState.psid,
+        userKey: currentState.userKey,
         ...retryContext,
-        lastPhotoUrl: null,
-        lastPhoto: null,
-        lastPhotoSource: null,
-        pendingImageUrl: undefined,
-        pendingImageAt: undefined,
-        lastImageUrl: undefined,
-        lastGeneratedUrl: null,
-        lastGeneratedAt: undefined,
-        lastGeneratedVideoUrl: null,
-        lastGeneratedVideoAt: null,
+        pendingDeleteConfirm: false,
+        lastGeneratedVideoProvider: currentState.lastGeneratedVideoProvider,
+        lastGeneratedVideoProviderJobId:
+          currentState.lastGeneratedVideoProviderJobId,
         pendingSourceImageDeleteUrl: uniquePendingDeleteUrls[0] ?? null,
         pendingSourceImageDeleteUrls: uniquePendingDeleteUrls.length
           ? uniquePendingDeleteUrls
@@ -151,7 +150,7 @@ async function deleteUserDataInternal(
       // Older Messenger handlers also wrote selected flow fields under the
       // privacy-peppered user key. No runtime reader needs that shadow record,
       // but erasure must remove it while legacy data can still exist.
-      await Promise.resolve(clearUserState(userKey));
+      await Promise.resolve(deleteLegacyPersistedState(userKey));
     })) && deleteStepsSucceeded;
 
   if (!state) {

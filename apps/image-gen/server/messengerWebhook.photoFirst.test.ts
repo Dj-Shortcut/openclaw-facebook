@@ -24,12 +24,15 @@ import {
   resetMessengerEventDedupe,
 } from "./_core/messengerWebhook";
 import { t } from "./_core/i18n";
-import { anonymizePsid, getState, resetStateStore } from "./_core/messengerState";
+import { resetStateStore } from "./_core/messengerState";
 import {
   setSourceImageDnsLookupForTests,
   setSourceImageRequestForTests,
 } from "./_core/image-generation/sourceImageFetcher";
-import { processConsentedFacebookWebhookPayload } from "./testConsentHelpers";
+import {
+  getTestMessengerState,
+  processConsentedFacebookWebhookPayload,
+} from "./testConsentHelpers";
 
 const TEST_PEPPER = "ci-test-pepper";
 const TEST_SOURCE_IMAGE_FETCH_URL = "https://source-image.test/mock.jpg";
@@ -140,7 +143,7 @@ describe("photo-first onboarding", () => {
       ],
     });
 
-    const userState = getState(anonymizePsid(psid));
+    const userState = await getTestMessengerState(psid);
     expect(userState?.lastPhotoUrl).toMatch(
       /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
@@ -212,7 +215,7 @@ describe("photo-first onboarding", () => {
       ],
     });
 
-    const userState = getState(anonymizePsid(psid));
+    const userState = await getTestMessengerState(psid);
     expect(userState?.pendingImageUrl).toBe(userState?.lastPhotoUrl);
     expect(userState?.faceMemoryConsent).toEqual(
       expect.objectContaining({ given: true, version: "v1" })
@@ -263,7 +266,7 @@ describe("photo-first onboarding", () => {
         expect.objectContaining({ payload: "GDPR_DELETE_CANCEL" }),
       ])
     );
-    expect(getState(anonymizePsid(psid))?.lastSourceImageUrl).toMatch(
+    expect((await getTestMessengerState(psid))?.lastSourceImageUrl).toMatch(
       /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
 
@@ -283,7 +286,7 @@ describe("photo-first onboarding", () => {
       ],
     });
 
-    const userState = getState(anonymizePsid(psid));
+    const userState = await getTestMessengerState(psid);
     expect(userState).toEqual(
       expect.objectContaining({
         faceMemoryConsent: null,
@@ -320,7 +323,7 @@ describe("photo-first onboarding", () => {
       ],
     });
 
-    const userState = getState(anonymizePsid(psid));
+    const userState = await getTestMessengerState(psid);
     expect(userState?.faceMemoryConsent).toEqual(
       expect.objectContaining({ given: true, version: "v1" })
     );
@@ -347,7 +350,7 @@ describe("photo-first onboarding", () => {
       ],
     });
 
-    const userState = getState(anonymizePsid(psid));
+    const userState = await getTestMessengerState(psid);
     expect(userState?.faceMemoryConsent).toBeNull();
     expect(userState?.lastSourceImageUrl).toBeNull();
     expect(userState?.stage).toBe("IDLE");
@@ -379,7 +382,7 @@ describe("photo-first onboarding", () => {
       ],
     });
 
-    const userState = getState(anonymizePsid(psid));
+    const userState = await getTestMessengerState(psid);
     expect(userState?.stage).toBe("IDLE");
     expect(userState?.hasSeenIntro).toBe(true);
     expect(sendTextMock).not.toHaveBeenCalled();
@@ -451,7 +454,7 @@ describe("photo-first onboarding", () => {
       ],
     });
 
-    const userState = getState(anonymizePsid(psid));
+    const userState = await getTestMessengerState(psid);
     expect(userState?.stage).toBe("IDLE");
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
@@ -488,7 +491,7 @@ describe("photo-first onboarding", () => {
       ],
     });
 
-    const userState = getState(anonymizePsid(psid));
+    const userState = await getTestMessengerState(psid);
     expect(userState?.stage).toBe("IDLE");
     expect(userState?.hasSeenIntro).toBe(false);
     expect(sendTextMock).not.toHaveBeenCalled();

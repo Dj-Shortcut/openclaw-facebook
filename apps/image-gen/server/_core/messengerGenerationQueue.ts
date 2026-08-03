@@ -50,7 +50,7 @@ const ATOMIC_PARTITION_ENQUEUE_SCRIPT = `
     return 0
   end
 
-  local accepted = redis.call("SET", KEYS[1], "1", "EX", ARGV[1], "NX")
+  local accepted = redis.call("SET", KEYS[1], ARGV[3], "EX", ARGV[1], "NX")
   if not accepted then
     return 0
   end
@@ -395,8 +395,7 @@ async function getGenerationQueueScopes(
 }
 
 async function getFairGenerationQueueScopes(
-  redis: RedisLike,
-  maxBatchSize: number
+  redis: RedisLike
 ): Promise<GenerationQueueScope[]> {
   const scopes = await getGenerationQueueScopes(redis);
   if (scopes.length <= 1) {
@@ -405,8 +404,7 @@ async function getFairGenerationQueueScopes(
 
   const cursor = await redis.incr(MESSENGER_GENERATION_DRAIN_CURSOR_KEY);
   const cursorOffset = (Math.max(1, cursor) - 1) % scopes.length;
-  const batchOffset = maxBatchSize % scopes.length;
-  const start = (cursorOffset * batchOffset) % scopes.length;
+  const start = cursorOffset;
   return [...scopes.slice(start), ...scopes.slice(0, start)];
 }
 
@@ -697,21 +695,40 @@ export async function enqueueMessengerGenerationJob(
 ): Promise<boolean> {
   const partitioned = getPartitionedJob(job);
   const redis = await getRedisClient();
+  const acceptedKey = getGenerationJobAcceptedKey(
+    partitioned.scope,
+    partitioned.job
+  );
+  const enqueueAttemptToken = randomUUID();
   await redis.sadd(
     MESSENGER_GENERATION_PARTITION_INDEX_KEY,
     partitioned.scope.tenantPartition
   );
   let accepted: number;
   try {
-    accepted = await evalPartitionScriptWithRetry(
-      redis,
-      ATOMIC_PARTITION_ENQUEUE_SCRIPT,
-      [
-        getGenerationJobAcceptedKey(partitioned.scope, partitioned.job),
-        partitioned.scope.queuedKey,
-      ],
-      [getGenerationJobAcceptedSeconds(), JSON.stringify(partitioned.job)]
-    );
+    try {
+      accepted = await evalPartitionScriptWithRetry(
+        redis,
+        ATOMIC_PARTITION_ENQUEUE_SCRIPT,
+        [acceptedKey, partitioned.scope.queuedKey],
+        [
+          getGenerationJobAcceptedSeconds(),
+          JSON.stringify(partitioned.job),
+          enqueueAttemptToken,
+        ]
+      );
+    } catch (error) {
+      let storedAttemptToken: string | null;
+      try {
+        storedAttemptToken = await redis.get(acceptedKey);
+      } catch {
+        throw error;
+      }
+      if (storedAttemptToken !== enqueueAttemptToken) {
+        throw error;
+      }
+      accepted = 1;
+    }
   } finally {
     // Fence a concurrent empty-scope prune that may have removed the member
     // after the pre-enqueue SADD but before the partition push committed.
@@ -721,6 +738,10 @@ export async function enqueueMessengerGenerationJob(
     );
   }
   if (accepted === 0) {
+    if ((await redis.get(acceptedKey)) === enqueueAttemptToken) {
+      logMessengerGenerationQueueTransition("enqueue");
+      return true;
+    }
     recordMessengerDuplicateSkip();
     safeLog("messenger_generation_job_duplicate_enqueue_ignored", {
       reqId: job.reqId,
@@ -1155,7 +1176,7 @@ async function drainMessengerGenerationQueueWithResult(
   const redis = await getRedisClient();
   let drained = 0;
   const maxBatchSize = getGenerationDrainBatchSize();
-  const scopes = await getFairGenerationQueueScopes(redis, maxBatchSize);
+  const scopes = await getFairGenerationQueueScopes(redis);
   const deferredScopes = new Set<string>();
   const pruneCheckedScopes = new Set<string>();
   let needsPacedFollowUp = false;

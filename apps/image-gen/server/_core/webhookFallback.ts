@@ -43,7 +43,8 @@ export function logMessengerWebhookTrace(
     | "selected_branch"
     | "before_send"
     | "after_send"
-    | "top_level_catch",
+    | "top_level_catch"
+    | "webhook_entry_skipped",
   details: Record<string, unknown>
 ): void {
   safeLog("messenger_response_window_trace", { stage, ...details });

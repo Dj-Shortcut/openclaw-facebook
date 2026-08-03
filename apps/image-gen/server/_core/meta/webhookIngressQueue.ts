@@ -35,27 +35,31 @@ function serializeError(error: unknown): {
   class: string;
   code?: string | number;
 } {
-  const errorClass =
-    error instanceof Error ? error.constructor.name : "UnknownError";
-  if (!error || typeof error !== "object" || !("code" in error)) {
+  try {
+    const errorClass =
+      error instanceof Error ? error.constructor.name : "UnknownError";
+    if (!error || typeof error !== "object" || !("code" in error)) {
+      return { class: errorClass };
+    }
+
+    const code = (error as { code?: unknown }).code;
+    if (
+      typeof code === "number" &&
+      Number.isInteger(code) &&
+      code >= 0 &&
+      code <= 99_999
+    ) {
+      return { class: errorClass, code };
+    }
+
+    if (typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)) {
+      return { class: errorClass, code };
+    }
+
     return { class: errorClass };
+  } catch {
+    return { class: "UnknownError" };
   }
-
-  const code = (error as { code?: unknown }).code;
-  if (
-    typeof code === "number" &&
-    Number.isInteger(code) &&
-    code >= 0 &&
-    code <= 99_999
-  ) {
-    return { class: errorClass, code };
-  }
-
-  if (typeof code === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)) {
-    return { class: errorClass, code };
-  }
-
-  return { class: errorClass };
 }
 
 function getWebhookIngressDeliveryLeaseSeconds(): number {

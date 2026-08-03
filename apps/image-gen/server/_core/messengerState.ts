@@ -2,13 +2,13 @@ import type { Lang } from "./i18n";
 import type { ConversationAction } from "./botResponse";
 import {
   clearStateStore,
-  deleteState,
   forEachStoredState,
   isPromiseLike,
   type MaybePromise,
 } from "./stateStore";
 import { toUserKey } from "./privacy";
 import {
+  deletePersistedState,
   getOrCreatePersistedState,
   getPersistedState,
   patchState,
@@ -95,7 +95,9 @@ function getMessengerResponseWindowMs(): number {
   return 24 * 60 * 60 * 1000;
 }
 
-export function getState(psid: string): MaybePromise<MessengerUserState | null> {
+export function getState(
+  psid: string
+): MaybePromise<MessengerUserState | null> {
   return getPersistedState(psid);
 }
 
@@ -109,7 +111,8 @@ export async function findStateByUserKey(
       return;
     }
 
-    matchedPsid = typeof state.psid === "string" && state.psid ? state.psid : psid;
+    matchedPsid =
+      typeof state.psid === "string" && state.psid ? state.psid : psid;
   });
 
   if (!matchedPsid) {
@@ -120,10 +123,13 @@ export async function findStateByUserKey(
 }
 
 export function clearUserState(psid: string): MaybePromise<void> {
-  return deleteState(psid);
+  return deletePersistedState(psid);
 }
 
-export function hasOpenMessengerResponseWindow(psid: string, now = Date.now()): MaybePromise<boolean> {
+export function hasOpenMessengerResponseWindow(
+  psid: string,
+  now = Date.now()
+): MaybePromise<boolean> {
   const state = getState(psid);
 
   if (isPromiseLike(state)) {
@@ -143,11 +149,16 @@ export function hasOpenMessengerResponseWindow(psid: string, now = Date.now()): 
   return now - state.lastUserMessageAt <= getMessengerResponseWindowMs();
 }
 
-export function getOrCreateState(psid: string): MaybePromise<MessengerUserState> {
+export function getOrCreateState(
+  psid: string
+): MaybePromise<MessengerUserState> {
   return getOrCreatePersistedState(psid);
 }
 
-export function setFlowState(psid: string, nextState: MessengerFlowState): MaybePromise<void> {
+export function setFlowState(
+  psid: string,
+  nextState: MessengerFlowState
+): MaybePromise<void> {
   const result = patchState(psid, {
     stage: nextState,
     state: nextState,
@@ -282,7 +293,7 @@ export function setPendingImage(
       stage: "AWAITING_EDIT_PROMPT",
       state: "AWAITING_EDIT_PROMPT",
     },
-    now,
+    now
   );
 
   if (isPromiseLike(result)) {
@@ -339,7 +350,10 @@ export function setFaceMemoryConsentGiven(
   }
 }
 
-export function declineFaceMemory(psid: string, now = Date.now()): MaybePromise<void> {
+export function declineFaceMemory(
+  psid: string,
+  now = Date.now()
+): MaybePromise<void> {
   const result = patchState(
     psid,
     {
@@ -370,7 +384,8 @@ export function clearFaceMemoryState(
       faceMemoryConsent: null,
       lastSourceImageUrl: null,
       lastSourceImageUpdatedAt: null,
-      pendingSourceImageDeleteUrl: uniquePendingDeleteUrls[0] ?? pendingDeleteUrl,
+      pendingSourceImageDeleteUrl:
+        uniquePendingDeleteUrls[0] ?? pendingDeleteUrl,
       pendingSourceImageDeleteUrls: uniquePendingDeleteUrls.length
         ? uniquePendingDeleteUrls
         : null,
@@ -436,7 +451,10 @@ export function clearPendingSourceImageDeleteUrls(
   }
 }
 
-export function clearPendingImageState(psid: string, now = Date.now()): MaybePromise<MessengerUserState> {
+export function clearPendingImageState(
+  psid: string,
+  now = Date.now()
+): MaybePromise<MessengerUserState> {
   return patchState(
     psid,
     {
@@ -450,17 +468,21 @@ export function clearPendingImageState(psid: string, now = Date.now()): MaybePro
       pendingScreenshotIntentContinuation: undefined,
       pendingEditIntent: null,
     },
-    now,
+    now
   );
 }
 
-export function setPreferredLang(psid: string, lang: Lang, now = Date.now()): MaybePromise<void> {
+export function setPreferredLang(
+  psid: string,
+  lang: Lang,
+  now = Date.now()
+): MaybePromise<void> {
   const result = patchState(
     psid,
     {
       preferredLang: lang,
     },
-    now,
+    now
   );
 
   if (isPromiseLike(result)) {
@@ -468,13 +490,16 @@ export function setPreferredLang(psid: string, lang: Lang, now = Date.now()): Ma
   }
 }
 
-export function setLastUserMessageAt(psid: string, timestamp = Date.now()): MaybePromise<void> {
+export function setLastUserMessageAt(
+  psid: string,
+  timestamp = Date.now()
+): MaybePromise<void> {
   const result = patchState(
     psid,
     {
       lastUserMessageAt: timestamp,
     },
-    timestamp,
+    timestamp
   );
 
   if (isPromiseLike(result)) {
@@ -482,7 +507,10 @@ export function setLastUserMessageAt(psid: string, timestamp = Date.now()): Mayb
   }
 }
 
-export function markIntroSeen(psid: string, now = Date.now()): MaybePromise<void> {
+export function markIntroSeen(
+  psid: string,
+  now = Date.now()
+): MaybePromise<void> {
   const result = patchState(
     psid,
     {
@@ -490,7 +518,7 @@ export function markIntroSeen(psid: string, now = Date.now()): MaybePromise<void
       stage: "IDLE",
       state: "IDLE",
     },
-    now,
+    now
   );
 
   if (isPromiseLike(result)) {
@@ -548,7 +576,11 @@ function prunePendingConversationActionsByMessageId(
   return Object.fromEntries(entries);
 }
 
-export function setLastGenerated(psid: string, resultImageUrl: string, now = Date.now()): MaybePromise<void> {
+export function setLastGenerated(
+  psid: string,
+  resultImageUrl: string,
+  now = Date.now()
+): MaybePromise<void> {
   const result = patchState(
     psid,
     {
@@ -559,7 +591,7 @@ export function setLastGenerated(psid: string, resultImageUrl: string, now = Dat
       stage: "RESULT_READY",
       state: "RESULT_READY",
     },
-    now,
+    now
   );
 
   if (isPromiseLike(result)) {
@@ -577,7 +609,7 @@ export function setLastGenerationContext(
     {
       lastPrompt: context.prompt,
     },
-    now,
+    now
   );
 
   if (isPromiseLike(result)) {

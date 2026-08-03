@@ -1,4 +1,11 @@
-import { setConsentState } from "./_core/messengerState";
+import {
+  getState,
+  setConsentState,
+  type MessengerUserState,
+} from "./_core/messengerState";
+import { runWithMessengerRequestContext } from "./_core/messengerRequestContext";
+
+export const TEST_MESSENGER_PAGE_ID = "test-receiving-page";
 
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
@@ -24,16 +31,44 @@ function getPayloadEntries(payload: unknown): unknown[] {
   return asArray((payload as { entry?: unknown[] })?.entry);
 }
 
-function getMessengerEvents(payload: unknown): unknown[] {
-  return getPayloadEntries(payload).flatMap(entry =>
-    asArray((entry as { messaging?: unknown[] })?.messaging)
+export function withTestMessengerPageId(payload: unknown): unknown {
+  if (!payload || typeof payload !== "object") {
+    return payload;
+  }
+
+  const entries = getPayloadEntries(payload);
+  return {
+    ...payload,
+    entry: entries.map(entry => {
+      if (!entry || typeof entry !== "object") {
+        return entry;
+      }
+
+      const pageId = (entry as { id?: unknown }).id;
+      return {
+        ...entry,
+        id:
+          typeof pageId === "string" && pageId.trim()
+            ? pageId
+            : TEST_MESSENGER_PAGE_ID,
+      };
+    }),
+  };
+}
+
+export async function runWithTestMessengerPageContext<T>(
+  task: () => T | Promise<T>
+): Promise<T> {
+  return await runWithMessengerRequestContext(TEST_MESSENGER_PAGE_ID, async () =>
+    await task()
   );
 }
 
-function getMessengerSenderIds(payload: unknown): string[] {
-  return collectSenderIds(
-    getMessengerEvents(payload),
-    event => (event as { sender?: { id?: unknown } })?.sender?.id
+export async function getTestMessengerState(
+  psid: string
+): Promise<MessengerUserState | null> {
+  return await runWithTestMessengerPageContext(() =>
+    Promise.resolve(getState(psid))
   );
 }
 
@@ -41,12 +76,25 @@ async function grantConsent(senderIds: string[]): Promise<void> {
   await Promise.all(senderIds.map(senderId => setConsentState(senderId, true)));
 }
 
-type WebhookPayloadProcessor = (payload: unknown) => Promise<void>;
-type SenderIdExtractor = (payload: unknown) => string[];
+async function grantMessengerConsent(payload: unknown): Promise<void> {
+  await Promise.all(
+    getPayloadEntries(payload).map(async entry => {
+      const pageId = (entry as { id?: unknown })?.id;
+      const senderIds = collectSenderIds(
+        asArray((entry as { messaging?: unknown[] })?.messaging),
+        event => (event as { sender?: { id?: unknown } })?.sender?.id
+      );
+      await runWithMessengerRequestContext(
+        typeof pageId === "string" ? pageId : undefined,
+        () => grantConsent(senderIds)
+      );
+    })
+  );
+}
 
-function createConsentedWebhookPayloadProcessor(
-  getSenderIds: SenderIdExtractor
-) {
+type WebhookPayloadProcessor = (payload: unknown) => Promise<void>;
+
+function createConsentedWebhookPayloadProcessor() {
   function processConsentedPayload(
     processPayload: WebhookPayloadProcessor
   ): WebhookPayloadProcessor;
@@ -59,8 +107,9 @@ function createConsentedWebhookPayloadProcessor(
     payload?: unknown
   ): Promise<void> | WebhookPayloadProcessor {
     const processWithConsent: WebhookPayloadProcessor = async nextPayload => {
-      await grantConsent(getSenderIds(nextPayload));
-      await processPayload(nextPayload);
+      const scopedPayload = withTestMessengerPageId(nextPayload);
+      await grantMessengerConsent(scopedPayload);
+      await processPayload(scopedPayload);
     };
 
     if (payload === undefined) {
@@ -74,4 +123,4 @@ function createConsentedWebhookPayloadProcessor(
 }
 
 export const processConsentedFacebookWebhookPayload =
-  createConsentedWebhookPayloadProcessor(getMessengerSenderIds);
+  createConsentedWebhookPayloadProcessor();
