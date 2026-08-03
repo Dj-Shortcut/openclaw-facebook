@@ -5,6 +5,7 @@ import https from "node:https";
 import net from "node:net";
 import tls from "node:tls";
 import { spawn, spawnSync } from "node:child_process";
+import { buildRemoteNodeCommand } from "./openclaw-login-command.mjs";
 
 const app = process.env.OPENCLAW_FLY_APP || "leaderbot-openclaw-gateway";
 const target = new URL(process.env.OPENCLAW_GATEWAY_URL || "https://leaderbot-openclaw-gateway.fly.dev");
@@ -20,11 +21,13 @@ function fail(message, error) {
   process.exit(1);
 }
 
-function run(command, args, options = {}) {
+function run(command, args, { redactOutput = false, ...options } = {}) {
   const result = spawnSync(command, args, { encoding: "utf8", ...options });
   if (result.error) fail(`kon ${command} niet starten`, result.error);
   if (result.status !== 0) {
-    const detail = result.stderr?.trim() || result.stdout?.trim() || `exit ${result.status}`;
+    const detail = redactOutput
+      ? `exit ${result.status}`
+      : result.stderr?.trim() || result.stdout?.trim() || `exit ${result.status}`;
     fail(`${command} faalde: ${detail}`);
   }
   return result.stdout;
@@ -34,14 +37,20 @@ function readRemoteAuth() {
   const remoteScript = String.raw`
 const fs = require('node:fs');
 const adminToken = String(process.env.OPENCLAW_ADMIN_TOKEN || '').trim();
-let gatewayToken = '';
+let gatewayToken = String(process.env.OPENCLAW_GATEWAY_TOKEN || '').trim();
 try {
   const config = JSON.parse(fs.readFileSync('/data/openclaw.json', 'utf8'));
-  gatewayToken = String(config?.gateway?.auth?.token || '').trim();
+  if (!gatewayToken) {
+    gatewayToken = String(config?.gateway?.auth?.token || '').trim();
+  }
 } catch {}
 process.stdout.write(JSON.stringify({ hasAdminToken: Boolean(adminToken), adminToken, gatewayToken }));
 `;
-  const output = run("fly", ["ssh", "console", "-a", app, "-C", `node -e ${JSON.stringify(remoteScript)}`]);
+  const output = run(
+    "fly",
+    ["ssh", "console", "-a", app, "-C", buildRemoteNodeCommand(remoteScript)],
+    { redactOutput: true },
+  );
   let parsed;
   try {
     parsed = JSON.parse(output.trim());
@@ -49,7 +58,9 @@ process.stdout.write(JSON.stringify({ hasAdminToken: Boolean(adminToken), adminT
     fail("kon authdetails niet lezen uit Fly-output", error);
   }
   if (!parsed.hasAdminToken || !parsed.adminToken) fail("OPENCLAW_ADMIN_TOKEN ontbreekt op Fly");
-  if (!parsed.gatewayToken) fail("gateway.auth.token ontbreekt in /data/openclaw.json");
+  if (!parsed.gatewayToken) {
+    fail("OPENCLAW_GATEWAY_TOKEN en gateway.auth.token ontbreken op Fly");
+  }
   const adminCookie = crypto.createHmac("sha256", parsed.adminToken).update(adminSessionLabel).digest("base64url");
   return { adminCookie, gatewayToken: parsed.gatewayToken };
 }
@@ -87,7 +98,6 @@ const server = http.createServer((req, res) => {
   const headers = stripHopByHop(req.headers);
   headers.host = host;
   headers.cookie = `${adminCookieName}=${auth.adminCookie}`;
-  headers.authorization = `Bearer ${auth.gatewayToken}`;
   headers["x-forwarded-host"] = `${bind}:${port}`;
   headers["x-forwarded-proto"] = "http";
 
@@ -128,7 +138,6 @@ server.on("upgrade", (req, socket, head) => {
       `Sec-WebSocket-Key: ${key}`,
       `Sec-WebSocket-Version: ${req.headers["sec-websocket-version"] || "13"}`,
       `Cookie: ${adminCookieName}=${auth.adminCookie}`,
-      `Authorization: Bearer ${auth.gatewayToken}`,
       `Origin: http://${bind}:${port}`,
     ];
     if (protocol) lines.push(`Sec-WebSocket-Protocol: ${protocol}`);
