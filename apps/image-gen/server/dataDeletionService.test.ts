@@ -292,6 +292,31 @@ describe("data deletion service", () => {
     expect(await Promise.resolve(readState(userKey))).toBeNull();
   });
 
+  it("preserves an unowned raw channel record during Page-scoped deletion", async () => {
+    const psid = "delete-page-state-with-ambiguous-raw-user";
+    const pageId = "delete-page-state-with-ambiguous-raw-page";
+    const rawState = await Promise.resolve(getOrCreateState(psid));
+
+    await Promise.resolve(
+      writeState(psid, {
+        ...rawState,
+        lastPrompt: "private non-Messenger state",
+      })
+    );
+
+    await runWithMessengerRequestContext(pageId, async () => {
+      await Promise.resolve(getOrCreateState(psid));
+      await expect(deleteUserData(psid)).resolves.toEqual({
+        status: "completed",
+      });
+      expect(await Promise.resolve(getState(psid))).toBeNull();
+    });
+
+    expect(await Promise.resolve(readState(psid))).toMatchObject({
+      lastPrompt: "private non-Messenger state",
+    });
+  });
+
   it("keeps provider retry metadata without restoring deleted image state", async () => {
     const psid = "delete-step-failure-user";
     const imageUrl = "https://assets.example/inbound-source/fail-step.jpg";

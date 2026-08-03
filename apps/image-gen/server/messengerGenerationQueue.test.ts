@@ -605,6 +605,25 @@ describe("messengerGenerationQueue", () => {
     expect(getTodayRuntimeStats().duplicateSkipCountToday).toBe(1);
   });
 
+  it("treats an unreadable existing accepted marker as a duplicate", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const { lists, redis } = createKeyedRedis();
+    getRedisClientMock.mockResolvedValue(redis);
+    const job = createJob({ reqId: "req-duplicate-marker-read-failure" });
+
+    await expect(enqueueMessengerGenerationJob(job)).resolves.toBe(true);
+    redis.get.mockRejectedValueOnce(new Error("temporary Redis read failure"));
+    await expect(enqueueMessengerGenerationJob(job)).resolves.toBe(false);
+
+    const tenantPartition = getTenantPartition(job.pageId!);
+    expect(lists.get(getPartitionKey(tenantPartition, "queued"))).toEqual([
+      JSON.stringify({ ...job, tenantPartition }),
+    ]);
+    expect(getTodayRuntimeStats().duplicateSkipCountToday).toBe(1);
+  });
+
   it("rolls back the accepted marker when the atomic queue push fails", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";

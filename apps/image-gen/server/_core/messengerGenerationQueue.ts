@@ -738,7 +738,15 @@ export async function enqueueMessengerGenerationJob(
     );
   }
   if (accepted === 0) {
-    if ((await redis.get(acceptedKey)) === enqueueAttemptToken) {
+    let storedAttemptToken: string | null = null;
+    try {
+      storedAttemptToken = await redis.get(acceptedKey);
+    } catch {
+      // The script reported an existing accepted marker, so this attempt did
+      // not push another job. A transient reconciliation read must not trigger
+      // an inline fallback that could execute the already queued request twice.
+    }
+    if (storedAttemptToken === enqueueAttemptToken) {
       logMessengerGenerationQueueTransition("enqueue");
       return true;
     }

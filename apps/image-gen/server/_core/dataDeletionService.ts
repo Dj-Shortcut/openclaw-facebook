@@ -150,6 +150,9 @@ async function deleteUserDataInternal(
       // Older Messenger handlers also wrote selected flow fields under the
       // privacy-peppered user key. No runtime reader needs that shadow record,
       // but erasure must remove it while legacy data can still exist.
+      // Do not delete the raw PSID key here: the legacy keyspace has no channel
+      // ownership marker and is still used by non-Messenger callers. The
+      // pre-deploy migration must purge only records proven to be Messenger.
       await Promise.resolve(deleteLegacyPersistedState(userKey));
     })) && deleteStepsSucceeded;
 
