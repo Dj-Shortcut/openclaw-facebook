@@ -84,7 +84,7 @@
     "openclaw": ">=2026.6.11 || 2026.7.2-beta.7"
   },
   "devDependencies": {
-    "@types/node": "^26.1.2",
+    "@types/node": "^26.2.0",
     "openclaw": "2026.7.2-beta.7",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
