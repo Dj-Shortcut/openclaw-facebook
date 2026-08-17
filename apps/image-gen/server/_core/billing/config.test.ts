@@ -23,6 +23,7 @@ function useValidTestConfig(): void {
     BILLING_SUPPORT_EMAIL: "billing@leaderbot.test",
     MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED: "true",
   };
+  delete process.env.PORTAL_BASE_URL;
   delete process.env.MOLLIE_LIVE_BILLING_ENABLED;
   delete process.env.MOLLIE_BILLING_ENABLED;
   delete process.env.MOLLIE_BILLING_WORKER_WORKSPACE_ID;
@@ -124,6 +125,26 @@ describe("Mollie configuration", () => {
     process.env.APP_BASE_URL = "https://leaderbot.test";
     expect(() => getMollieConfig()).toThrow(
       "MOLLIE_PAYMENT_WEBHOOK_URL must use HTTPS for production or live billing"
+    );
+  });
+
+  it("rejects a malformed portal origin before billing can be enabled", () => {
+    process.env.PORTAL_BASE_URL = "https://leaderbot.test/handoff?unsafe=1";
+
+    expect(() => getMollieConfig()).toThrow(
+      "PORTAL_BASE_URL must be an origin without a path, query, or fragment"
+    );
+  });
+
+  it("rejects an HTTP portal origin in production", () => {
+    process.env.NODE_ENV = "production";
+    process.env.APP_BASE_URL = "https://leaderbot.test";
+    process.env.MOLLIE_PAYMENT_WEBHOOK_URL =
+      "https://billing.test/api/webhooks/mollie/payments";
+    process.env.PORTAL_BASE_URL = "http://leaderbot.test";
+
+    expect(() => getMollieConfig()).toThrow(
+      "PORTAL_BASE_URL must use HTTPS for production or live billing"
     );
   });
 
