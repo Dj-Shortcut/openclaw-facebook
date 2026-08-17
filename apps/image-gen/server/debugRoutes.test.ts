@@ -435,8 +435,13 @@ describe("debug/admin routes", () => {
     }
   });
 
-  it("requires an audit actor for manual portal handoff sends", async () => {
+  it("does not accept caller-supplied audit attribution for manual portal handoff sends", async () => {
     process.env.ADMIN_TOKEN = "secret-admin-token";
+    mocks.sendPortalHandoffLink.mockResolvedValue({
+      ok: true,
+      sent: true,
+      expiresAt: new Date("2026-07-06T11:30:00.000Z"),
+    });
     const server = await startServer();
 
     try {
@@ -449,12 +454,15 @@ describe("debug/admin routes", () => {
         body: JSON.stringify({
           workspaceId: 42,
           messengerSenderUserKey,
+          createdByUserId: 999,
         }),
       });
 
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: "invalid handoff request" });
-      expect(mocks.sendPortalHandoffLink).not.toHaveBeenCalled();
+      expect(response.status).toBe(200);
+      expect(mocks.sendPortalHandoffLink).toHaveBeenCalledWith({
+        workspaceId: 42,
+        messengerSenderUserKey,
+      });
     } finally {
       await server.close();
     }
@@ -480,7 +488,6 @@ describe("debug/admin routes", () => {
         body: JSON.stringify({
           workspaceId: 42,
           messengerSenderUserKey,
-          createdByUserId: 7,
         }),
       });
       const payload = await response.json();
@@ -493,7 +500,6 @@ describe("debug/admin routes", () => {
       expect(mocks.sendPortalHandoffLink).toHaveBeenCalledWith({
         workspaceId: 42,
         messengerSenderUserKey,
-        createdByUserId: 7,
       });
       expect(JSON.stringify(payload)).not.toContain("handoff");
       expect(JSON.stringify(payload)).not.toContain("token");

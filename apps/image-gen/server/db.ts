@@ -1094,7 +1094,11 @@ export async function claimPortalHandoffTokenForUser(input: {
     };
     await tx.insert(workspaceMembers).values(memberValues).onDuplicateKeyUpdate({
       set: {
-        role,
+        // A handoff proves control of this one onboarding link; it must not
+        // silently change privileges that were assigned through a separate
+        // workspace-membership workflow. New claims receive the onboarding
+        // role, while an existing member keeps their current role.
+        workspaceId: stored.workspaceId,
       },
     });
 

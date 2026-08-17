@@ -38,7 +38,6 @@ const costSummaryQuerySchema = z.object({
 const portalHandoffSendBodySchema = z.object({
   workspaceId: z.number().int().positive(),
   messengerSenderUserKey: z.string().regex(/^[a-f0-9]{64}$/),
-  createdByUserId: z.number().int().positive(),
 });
 
 const adminCostSummaryRouteLimiter = rateLimit({
