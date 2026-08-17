@@ -31,10 +31,13 @@ import {
 const originalDatabaseUrl = process.env.DATABASE_URL;
 
 function selectRows(rows: unknown[]) {
-  const limit = vi.fn(async () => rows);
+  const forUpdate = vi.fn(async () => rows);
+  const limit = vi.fn(() =>
+    Object.assign(Promise.resolve(rows), { for: forUpdate })
+  );
   const where = vi.fn(() => ({ limit }));
   const from = vi.fn(() => ({ where }));
-  return { from, where, limit };
+  return { from, where, limit, forUpdate };
 }
 
 function duplicateInsert() {

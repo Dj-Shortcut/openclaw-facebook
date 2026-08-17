@@ -397,6 +397,10 @@ traffic cannot reach internal gateway admin/API surfaces.
     response window is open, and leaves billing state untouched.
     The failed outbox item plus redacted delivery logs are the audit trail;
     never copy a raw token into support tooling.
+    - [ ] BLOCKED: manual recovery must be bound to an existing failed
+      `send_portal_handoff` outbox operation and an authenticated support
+      principal before it can be enabled in production. The current shared
+      admin-token route is not sufficient provenance for human recovery.
   - Storage boundary: `portalHandoffTokens` rows are scoped to one `workspaceId`; the opaque token is never stored, only its hash is persisted, and Messenger identity may be stored only as the privacy-peppered `messengerSenderUserKey`.
   - Deletion boundary: `delete-my-data` must delete handoff rows for the erased Messenger `userKey`, including pending and consumed links.
   - Consumption boundary: only the portal handoff route may consume a pending, unexpired token and convert it into that workspace's onboarding/session flow.

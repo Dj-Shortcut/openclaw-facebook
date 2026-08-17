@@ -1044,7 +1044,8 @@ export async function claimPortalHandoffTokenForUser(input: {
       .select()
       .from(portalHandoffTokens)
       .where(eq(portalHandoffTokens.tokenHash, input.tokenHash))
-      .limit(1);
+      .limit(1)
+      .for("update");
     const stored = tokens[0];
 
     if (!stored) {
@@ -1069,7 +1070,8 @@ export async function claimPortalHandoffTokenForUser(input: {
       })
       .from(workspaces)
       .where(eq(workspaces.id, stored.workspaceId))
-      .limit(1);
+      .limit(1)
+      .for("update");
     const workspace = workspaceRows[0];
 
     if (!workspace) {
@@ -1089,9 +1091,10 @@ export async function claimPortalHandoffTokenForUser(input: {
           eq(channelConnections.channel, "facebook_messenger"),
           eq(channelConnections.status, "connected"),
           eq(channelConnections.externalId, stored.facebookPageId)
-        )
       )
-      .limit(2);
+      )
+      .limit(2)
+      .for("update");
 
     if (connectedPages.length !== 1) {
       return { ok: false, reason: "tenant_boundary" };
