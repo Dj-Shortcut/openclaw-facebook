@@ -784,7 +784,7 @@ async function rearmFailedEnsureJobsWaitingForCancellation(
   }
 }
 
-async function sendPaymentHandoff(job: ClaimedBillingOutboxItem): Promise<void> {
+export async function sendPaymentHandoff(job: ClaimedBillingOutboxItem): Promise<void> {
   const target = readPortalHandoffTarget(job.payload);
   const result = await sendPortalHandoffLink({
     workspaceId: job.workspaceId,
