@@ -115,6 +115,24 @@ describe("portal handoff database helpers", () => {
     await expect(revokePortalHandoffToken("sha256:token")).resolves.toBe(true);
   });
 
+  it("reuses the stored pending delivery capability and its expiry", async () => {
+    const stored = {
+      id: 12, workspaceId: 42, tokenHash: "sha256:token",
+      deliveryIdempotencyKeyHash: "sha256:delivery", messengerSenderUserKey: "sender",
+      facebookPageId: "page", purpose: "workspace_onboarding" as const,
+      status: "pending" as const, expiresAt: new Date("2026-07-01T00:00:00.000Z"),
+    };
+    const rows = selectRows([stored]);
+    dbMock.select.mockReturnValue({ from: rows.from });
+    const insert = duplicateInsert();
+    dbMock.insert.mockReturnValue({ values: insert.values });
+    await expect(createOrGetPortalHandoffToken({
+      ...stored, createdByUserId: null,
+    }, new Date("2026-06-30T00:00:00.000Z"))).resolves.toEqual(stored);
+    expect(rows.forUpdate).toHaveBeenCalledWith("update");
+    expect(dbMock.update).not.toHaveBeenCalled();
+  });
+
   it("reads mysql2 tuple delete results when erasing handoff tokens", async () => {
     const where = vi.fn(async () => [{ affectedRows: 2 }, []]);
     dbMock.delete.mockReturnValue({ where });
