@@ -96,10 +96,14 @@ export async function createPortalHandoffToken(
     expiresAt,
     createdByUserId: input.createdByUserId ?? null,
   };
-  if (input.deliveryIdempotencyKey) {
-    await db.createOrGetPortalHandoffToken(tokenRecord);
-  } else {
-    await db.createPortalHandoffToken(tokenRecord);
+  const stored = input.deliveryIdempotencyKey
+    ? await db.createOrGetPortalHandoffToken(tokenRecord)
+    : await db.createPortalHandoffToken(tokenRecord);
+  if (stored.status !== "pending") {
+    throw new Error("portal handoff delivery is no longer active");
+  }
+  if (stored.expiresAt.getTime() <= now.getTime()) {
+    throw new Error("portal handoff delivery has expired");
   }
 
   if (input.createdByUserId) {
@@ -110,7 +114,7 @@ export async function createPortalHandoffToken(
       metadata: {
         purpose: input.purpose ?? "workspace_onboarding",
         hasMessengerSenderUserKey: Boolean(input.messengerSenderUserKey),
-        expiresAt: expiresAt.toISOString(),
+        expiresAt: stored.expiresAt.toISOString(),
       },
     });
   }
@@ -118,7 +122,7 @@ export async function createPortalHandoffToken(
   return {
     token,
     tokenHash,
-    expiresAt,
+    expiresAt: stored.expiresAt,
   };
 }
 

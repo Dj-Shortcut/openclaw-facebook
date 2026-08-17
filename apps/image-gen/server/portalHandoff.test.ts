@@ -29,6 +29,7 @@ describe("portal handoff tokens", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.PRIVACY_PEPPER = "portal-handoff-test-pepper";
+    mocks.createPortalHandoffToken.mockImplementation(async value => value);
   });
 
   afterEach(() => {
