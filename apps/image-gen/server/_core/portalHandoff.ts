@@ -53,6 +53,10 @@ export function hashPortalHandoffToken(token: string): string {
   return `sha256:${crypto.createHash("sha256").update(token).digest("hex")}`;
 }
 
+function hashDeliveryIdempotencyKey(key: string): string {
+  return `sha256:${crypto.createHash("sha256").update(key).digest("hex")}`;
+}
+
 export function hashMessengerSenderForHandoff(senderId: string): string {
   return toUserKey(senderId);
 }
@@ -89,6 +93,9 @@ export async function createPortalHandoffToken(
   const tokenRecord = {
     workspaceId: input.workspaceId,
     tokenHash,
+    deliveryIdempotencyKeyHash: input.deliveryIdempotencyKey
+      ? hashDeliveryIdempotencyKey(input.deliveryIdempotencyKey)
+      : null,
     messengerSenderUserKey: input.messengerSenderUserKey ?? null,
     facebookPageId: input.facebookPageId,
     purpose: input.purpose ?? "workspace_onboarding",
@@ -99,6 +106,9 @@ export async function createPortalHandoffToken(
   const stored = input.deliveryIdempotencyKey
     ? await db.createOrGetPortalHandoffToken(tokenRecord)
     : await db.createPortalHandoffToken(tokenRecord);
+  if (stored.tokenHash !== tokenHash) {
+    throw new Error("portal handoff delivery token secret mismatch");
+  }
   if (stored.status !== "pending") {
     throw new Error("portal handoff delivery is no longer active");
   }

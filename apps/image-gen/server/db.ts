@@ -952,13 +952,21 @@ export async function createOrGetPortalHandoffToken(
     throw new Error("Database unavailable: portal handoff token was not persisted");
   }
 
+  if (!values.deliveryIdempotencyKeyHash) {
+    throw new Error("portal handoff delivery key hash is required");
+  }
   await db.insert(portalHandoffTokens).values(values).onDuplicateKeyUpdate({
-    set: { tokenHash: values.tokenHash },
+    set: { deliveryIdempotencyKeyHash: values.deliveryIdempotencyKeyHash },
   });
   const stored = await db
     .select()
     .from(portalHandoffTokens)
-    .where(eq(portalHandoffTokens.tokenHash, values.tokenHash))
+    .where(
+      eq(
+        portalHandoffTokens.deliveryIdempotencyKeyHash,
+        values.deliveryIdempotencyKeyHash
+      )
+    )
     .limit(1);
   if (!stored[0]) {
     throw new Error("Portal handoff token upsert succeeded but read-back failed");
