@@ -15,6 +15,7 @@ export type CreatePortalHandoffInput = {
   createdByUserId?: number | null;
   now?: Date;
   ttlMs?: number;
+  deliveryIdempotencyKey?: string | null;
 };
 
 export type PortalHandoffTokenResult = {
@@ -60,6 +61,18 @@ function createOpaqueToken(): string {
   return crypto.randomBytes(TOKEN_BYTES).toString("base64url");
 }
 
+function createDeliveryToken(deliveryIdempotencyKey?: string | null): string {
+  if (!deliveryIdempotencyKey) return createOpaqueToken();
+  const secret = process.env.PORTAL_HANDOFF_TOKEN_SECRET?.trim();
+  if (!secret || secret.length < 32) {
+    throw new Error("PORTAL_HANDOFF_TOKEN_SECRET must be set for idempotent delivery");
+  }
+  return crypto
+    .createHmac("sha256", secret)
+    .update(`portal-handoff-v1:${deliveryIdempotencyKey}`)
+    .digest("base64url");
+}
+
 export async function createPortalHandoffToken(
   input: CreatePortalHandoffInput
 ): Promise<PortalHandoffTokenResult> {
@@ -69,20 +82,25 @@ export async function createPortalHandoffToken(
     throw new Error("portal handoff ttl must be positive");
   }
 
-  const token = createOpaqueToken();
+  const token = createDeliveryToken(input.deliveryIdempotencyKey);
   const tokenHash = hashPortalHandoffToken(token);
   const expiresAt = new Date(now.getTime() + ttlMs);
 
-  await db.createPortalHandoffToken({
+  const tokenRecord = {
     workspaceId: input.workspaceId,
     tokenHash,
     messengerSenderUserKey: input.messengerSenderUserKey ?? null,
     facebookPageId: input.facebookPageId,
     purpose: input.purpose ?? "workspace_onboarding",
-    status: "pending",
+    status: "pending" as const,
     expiresAt,
     createdByUserId: input.createdByUserId ?? null,
-  });
+  };
+  if (input.deliveryIdempotencyKey) {
+    await db.createOrGetPortalHandoffToken(tokenRecord);
+  } else {
+    await db.createPortalHandoffToken(tokenRecord);
+  }
 
   if (input.createdByUserId) {
     await db.insertAuditLog({

@@ -11,6 +11,7 @@ import {
   deletePersistedState,
   getOrCreatePersistedState,
   getPersistedState,
+  getPersistedStateForPage,
   patchState,
 } from "./messengerStatePersistence";
 
@@ -120,12 +121,14 @@ export function getState(
 }
 
 export async function findStateByUserKey(
-  userKey: string
+  userKey: string,
+  expectedPageId?: string | null
 ): Promise<MessengerUserState | null> {
   let matchedPsid: string | null = null;
 
   await forEachStoredState<Partial<MessengerUserState>>((psid, state) => {
-    if (matchedPsid || state.userKey !== userKey) {
+    if (matchedPsid || state.userKey !== userKey ||
+      (expectedPageId && state.pageId !== expectedPageId)) {
       return;
     }
 
@@ -137,7 +140,10 @@ export async function findStateByUserKey(
     return null;
   }
 
-  return await Promise.resolve(getPersistedState(matchedPsid));
+  const pageId = expectedPageId?.trim();
+  return pageId
+    ? await Promise.resolve(getPersistedStateForPage(matchedPsid, pageId))
+    : await Promise.resolve(getPersistedState(matchedPsid));
 }
 
 export function clearUserState(psid: string): MaybePromise<void> {
@@ -146,9 +152,12 @@ export function clearUserState(psid: string): MaybePromise<void> {
 
 export function hasOpenMessengerResponseWindow(
   psid: string,
-  now = Date.now()
+  now = Date.now(),
+  pageId?: string | null
 ): MaybePromise<boolean> {
-  const state = getState(psid);
+  const state = pageId?.trim()
+    ? getPersistedStateForPage(psid, pageId)
+    : getState(psid);
 
   if (isPromiseLike(state)) {
     return state.then(current => {

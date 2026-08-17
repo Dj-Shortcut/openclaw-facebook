@@ -98,9 +98,14 @@ describe("portal handoff delivery", () => {
       expiresAt: new Date("2026-07-06T11:30:00.000Z"),
     });
 
-    expect(mocks.findStateByUserKey).toHaveBeenCalledWith(messengerSenderUserKey);
+    expect(mocks.findStateByUserKey).toHaveBeenCalledWith(
+      messengerSenderUserKey,
+      undefined
+    );
     expect(mocks.hasOpenMessengerResponseWindow).toHaveBeenCalledWith(
-      "page-scoped-user-id"
+      "page-scoped-user-id",
+      undefined,
+      "facebook-page-42"
     );
     expect(mocks.createPortalHandoffToken).toHaveBeenCalledWith({
       workspaceId: 42,
@@ -109,6 +114,7 @@ describe("portal handoff delivery", () => {
       createdByUserId: 7,
       now: new Date("2026-07-06T10:30:00.000Z"),
       ttlMs: 3_600_000,
+      deliveryIdempotencyKey: null,
     });
     expect(mocks.sendText).toHaveBeenCalledWith(
       "page-scoped-user-id",

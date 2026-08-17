@@ -938,6 +938,34 @@ export async function createPortalHandoffToken(values: InsertPortalHandoffToken)
   return created[0];
 }
 
+/**
+ * Idempotently persists a delivery token.  Callers that deterministically
+ * derive the token from an outbox operation can retry an ambiguous Messenger
+ * send without minting another claimable link.
+ */
+export async function createOrGetPortalHandoffToken(
+  values: InsertPortalHandoffToken
+) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("create_or_get_portal_handoff_token");
+    throw new Error("Database unavailable: portal handoff token was not persisted");
+  }
+
+  await db.insert(portalHandoffTokens).values(values).onDuplicateKeyUpdate({
+    set: { tokenHash: values.tokenHash },
+  });
+  const stored = await db
+    .select()
+    .from(portalHandoffTokens)
+    .where(eq(portalHandoffTokens.tokenHash, values.tokenHash))
+    .limit(1);
+  if (!stored[0]) {
+    throw new Error("Portal handoff token upsert succeeded but read-back failed");
+  }
+  return stored[0];
+}
+
 export async function getPortalHandoffTokenByHash(tokenHash: string) {
   const db = await getDb();
   if (!db) {
@@ -1114,18 +1142,6 @@ export async function claimPortalHandoffTokenForUser(input: {
       },
     });
 
-    await tx.insert(auditLog).values({
-      workspaceId: stored.workspaceId,
-      userId: input.userId,
-      event: "portal_handoff.claimed",
-      metadata: {
-        purpose: stored.purpose,
-        source: "messenger_handoff",
-        hasMessengerSenderUserKey: Boolean(stored.messengerSenderUserKey),
-        membershipRole: role,
-      },
-    });
-
     const memberships = await tx
       .select()
       .from(workspaceMembers)
@@ -1141,6 +1157,18 @@ export async function claimPortalHandoffTokenForUser(input: {
     if (!membership) {
       throw new Error("Workspace membership insert succeeded but read-back failed");
     }
+
+    await tx.insert(auditLog).values({
+      workspaceId: stored.workspaceId,
+      userId: input.userId,
+      event: "portal_handoff.claimed",
+      metadata: {
+        purpose: stored.purpose,
+        source: "messenger_handoff",
+        hasMessengerSenderUserKey: Boolean(stored.messengerSenderUserKey),
+        membershipRole: membership.role,
+      },
+    });
 
     return {
       ok: true,

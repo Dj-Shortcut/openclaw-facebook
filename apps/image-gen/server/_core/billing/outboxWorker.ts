@@ -791,6 +791,7 @@ async function sendPaymentHandoff(job: ClaimedBillingOutboxItem): Promise<void> 
     messengerSenderUserKey: target.messengerSenderUserKey,
     expectedFacebookPageId: target.messengerPageId,
     createdByUserId: null,
+    deliveryIdempotencyKey: target.intentId,
   });
 
   if (result.ok) return;
@@ -801,6 +802,7 @@ async function sendPaymentHandoff(job: ClaimedBillingOutboxItem): Promise<void> 
 }
 
 function readPortalHandoffTarget(payload: unknown): {
+  intentId: string;
   messengerSenderUserKey: string;
   messengerPageId: string;
 } {
@@ -810,7 +812,9 @@ function readPortalHandoffTarget(payload: unknown): {
   const record = payload as Record<string, unknown>;
   const messengerSenderUserKey = record.messengerSenderUserKey;
   const messengerPageId = record.messengerPageId;
+  const intentId = record.intentId;
   if (
+    typeof intentId !== "string" || !/^[0-9a-f-]{36}$/i.test(intentId) ||
     typeof messengerSenderUserKey !== "string" ||
     !/^[a-f0-9]{64}$/.test(messengerSenderUserKey) ||
     typeof messengerPageId !== "string" ||
@@ -820,6 +824,7 @@ function readPortalHandoffTarget(payload: unknown): {
     throw new PermanentOutboxError("invalid_portal_handoff_target");
   }
   return {
+    intentId,
     messengerSenderUserKey,
     messengerPageId: messengerPageId.trim(),
   };
