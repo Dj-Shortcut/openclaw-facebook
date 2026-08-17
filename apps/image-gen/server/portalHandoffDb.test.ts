@@ -22,6 +22,7 @@ import {
   addWorkspaceMember,
   claimPortalHandoffTokenForUser,
   createPortalHandoffToken,
+  createOrGetPortalHandoffToken,
   deletePortalHandoffTokensForMessengerUserKey,
   getWorkspaceById,
   markPortalHandoffTokenConsumed,

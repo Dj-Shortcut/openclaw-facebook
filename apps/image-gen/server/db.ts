@@ -944,7 +944,8 @@ export async function createPortalHandoffToken(values: InsertPortalHandoffToken)
  * send without minting another claimable link.
  */
 export async function createOrGetPortalHandoffToken(
-  values: InsertPortalHandoffToken
+  values: InsertPortalHandoffToken,
+  now = new Date()
 ) {
   const db = await getDb();
   if (!db) {
@@ -955,23 +956,32 @@ export async function createOrGetPortalHandoffToken(
   if (!values.deliveryIdempotencyKeyHash) {
     throw new Error("portal handoff delivery key hash is required");
   }
-  await db.insert(portalHandoffTokens).values(values).onDuplicateKeyUpdate({
-    set: { deliveryIdempotencyKeyHash: values.deliveryIdempotencyKeyHash },
+  return db.transaction(async tx => {
+    await tx.insert(portalHandoffTokens).values(values).onDuplicateKeyUpdate({
+      set: { deliveryIdempotencyKeyHash: values.deliveryIdempotencyKeyHash },
+    });
+    const stored = await tx.select().from(portalHandoffTokens).where(
+      eq(portalHandoffTokens.deliveryIdempotencyKeyHash, values.deliveryIdempotencyKeyHash!)
+    ).limit(1).for("update");
+    const token = stored[0];
+    if (!token) throw new Error("Portal handoff token upsert succeeded but read-back failed");
+    if (token.tokenHash !== values.tokenHash || token.workspaceId !== values.workspaceId ||
+      token.facebookPageId !== values.facebookPageId ||
+      token.messengerSenderUserKey !== values.messengerSenderUserKey || token.purpose !== values.purpose) {
+      throw new Error("portal handoff delivery binding mismatch");
+    }
+    if (token.status === "consumed" || token.status === "expired" || token.expiresAt.getTime() <= now.getTime()) {
+      throw new Error("portal handoff delivery is no longer active");
+    }
+    if (token.status === "revoked") {
+      await tx.update(portalHandoffTokens).set({ status: "pending" }).where(and(
+        eq(portalHandoffTokens.id, token.id), eq(portalHandoffTokens.status, "revoked")
+      ));
+      return { ...token, status: "pending" as const };
+    }
+    if (token.status !== "pending") throw new Error("portal handoff delivery is no longer active");
+    return token;
   });
-  const stored = await db
-    .select()
-    .from(portalHandoffTokens)
-    .where(
-      eq(
-        portalHandoffTokens.deliveryIdempotencyKeyHash,
-        values.deliveryIdempotencyKeyHash
-      )
-    )
-    .limit(1);
-  if (!stored[0]) {
-    throw new Error("Portal handoff token upsert succeeded but read-back failed");
-  }
-  return stored[0];
 }
 
 export async function getPortalHandoffTokenByHash(tokenHash: string) {
