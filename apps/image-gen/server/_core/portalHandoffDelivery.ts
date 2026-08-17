@@ -15,6 +15,7 @@ import { safeLog } from "./logger";
 export type SendPortalHandoffInput = {
   workspaceId: number;
   messengerSenderUserKey: string;
+  expectedFacebookPageId?: string | null;
   createdByUserId?: number | null;
   baseUrl?: string;
   now?: Date;
@@ -32,6 +33,7 @@ export type SendPortalHandoffResult =
       reason:
         | "messenger_user_not_found"
         | "response_window_closed"
+        | "page_binding_unavailable"
         | "send_failed"
         | (string & {});
     };
@@ -133,10 +135,46 @@ export async function sendPortalHandoffLink(
     return { ok: false, reason: "response_window_closed" };
   }
 
+  const pageId = state.pageId?.trim();
+  const expectedPageId = input.expectedFacebookPageId?.trim();
+  if (expectedPageId && pageId && expectedPageId !== pageId) {
+    safeLog("portal_handoff_send_skipped", {
+      reason: "page_binding_unavailable",
+      workspaceId: input.workspaceId,
+      user: logUser,
+    });
+    return { ok: false, reason: "page_binding_unavailable" };
+  }
+  if (!pageId) {
+    safeLog("portal_handoff_send_skipped", {
+      reason: "page_binding_unavailable",
+      workspaceId: input.workspaceId,
+      user: logUser,
+    });
+    return { ok: false, reason: "page_binding_unavailable" };
+  }
+
+  const connections = await db.listChannelConnections(input.workspaceId);
+  const facebookConnection = connections.find(
+    connection =>
+      connection.channel === "facebook_messenger" &&
+      connection.status === "connected" &&
+      connection.externalId === pageId
+  );
+  if (!facebookConnection) {
+    safeLog("portal_handoff_send_skipped", {
+      reason: "page_binding_unavailable",
+      workspaceId: input.workspaceId,
+      user: logUser,
+    });
+    return { ok: false, reason: "page_binding_unavailable" };
+  }
+
   let tokenResult: PortalHandoffTokenResult | null = null;
   try {
     tokenResult = await createPortalHandoffToken({
       workspaceId: input.workspaceId,
+      facebookPageId: pageId,
       messengerSenderUserKey: input.messengerSenderUserKey,
       createdByUserId: input.createdByUserId ?? null,
       now: input.now,

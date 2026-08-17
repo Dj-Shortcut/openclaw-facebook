@@ -7,6 +7,7 @@ import {
 const mocks = vi.hoisted(() => ({
   createPortalHandoffToken: vi.fn(),
   revokePortalHandoffToken: vi.fn(),
+  listChannelConnections: vi.fn(),
   findStateByUserKey: vi.fn(),
   hasOpenMessengerResponseWindow: vi.fn(),
   sendText: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("./_core/portalHandoff", () => ({
 
 vi.mock("./db", () => ({
   revokePortalHandoffToken: mocks.revokePortalHandoffToken,
+  listChannelConnections: mocks.listChannelConnections,
 }));
 
 vi.mock("./_core/messengerState", () => ({
@@ -39,6 +41,7 @@ const messengerSenderUserKey = "a".repeat(64);
 const messengerState = {
   psid: "page-scoped-user-id",
   userKey: messengerSenderUserKey,
+  pageId: "facebook-page-42",
   stage: "IDLE",
   state: "IDLE",
   preferredLang: "nl",
@@ -56,6 +59,13 @@ describe("portal handoff delivery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.findStateByUserKey.mockResolvedValue(messengerState);
+    mocks.listChannelConnections.mockResolvedValue([
+      {
+        channel: "facebook_messenger",
+        status: "connected",
+        externalId: "facebook-page-42",
+      },
+    ]);
     mocks.hasOpenMessengerResponseWindow.mockResolvedValue(true);
     mocks.createPortalHandoffToken.mockResolvedValue({
       token: "opaque-token",
@@ -94,6 +104,7 @@ describe("portal handoff delivery", () => {
     );
     expect(mocks.createPortalHandoffToken).toHaveBeenCalledWith({
       workspaceId: 42,
+      facebookPageId: "facebook-page-42",
       messengerSenderUserKey,
       createdByUserId: 7,
       now: new Date("2026-07-06T10:30:00.000Z"),

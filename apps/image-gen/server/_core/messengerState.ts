@@ -39,6 +39,8 @@ export type PendingEditIntent = "change_background";
 export type MessengerUserState = {
   psid: string;
   userKey: string;
+  /** Receiving Facebook Page for this Page-scoped sender state. */
+  pageId?: string | null;
   stage: MessengerFlowState;
   state: MessengerFlowState;
   lastUserMessageAt?: number;
@@ -84,6 +86,22 @@ export type MessengerUserState = {
 
 export function anonymizePsid(psid: string): string {
   return toUserKey(psid);
+}
+
+export function setMessengerPageId(
+  psid: string,
+  pageId: string,
+  now = Date.now()
+): MaybePromise<void> {
+  const normalizedPageId = pageId.trim();
+  if (!normalizedPageId) {
+    throw new Error("Messenger Page ID is required");
+  }
+
+  const result = patchState(psid, { pageId: normalizedPageId }, now);
+  if (isPromiseLike(result)) {
+    return result.then(() => undefined);
+  }
 }
 
 function getMessengerResponseWindowMs(): number {

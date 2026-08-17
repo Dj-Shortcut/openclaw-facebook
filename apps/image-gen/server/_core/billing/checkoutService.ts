@@ -37,6 +37,8 @@ export type CheckoutRequest = {
   countryCode: "BE";
   kind: CheckoutKind;
   businessCheckout?: boolean;
+  messengerSenderUserKey?: string | null;
+  messengerPageId?: string | null;
 };
 
 export async function startMollieCheckout(
@@ -88,6 +90,8 @@ export async function startMollieCheckout(
     mode: config.mode,
     plan,
     kind: input.kind,
+    messengerSenderUserKey: input.messengerSenderUserKey,
+    messengerPageId: input.messengerPageId,
   });
 
   if (intent.molliePaymentId) {

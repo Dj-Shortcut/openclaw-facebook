@@ -1,5 +1,6 @@
 const ACTIVE_WORKSPACE_STORAGE_KEY = "leaderbot.activeWorkspaceId";
 const PENDING_HANDOFF_TOKEN_STORAGE_KEY = "leaderbot.pendingPortalHandoffToken";
+const ACTIVE_HANDOFF_TOKEN_STORAGE_KEY = "leaderbot.activePortalHandoffToken";
 
 function parseWorkspaceId(value: string | null | undefined): number | null {
   if (!value) return null;
@@ -61,6 +62,33 @@ export function clearPendingHandoffToken(): void {
   if (typeof window === "undefined") return;
   try {
     window.sessionStorage.removeItem(PENDING_HANDOFF_TOKEN_STORAGE_KEY);
+  } catch {
+    return;
+  }
+}
+
+export function readActiveHandoffToken(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.sessionStorage.getItem(ACTIVE_HANDOFF_TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function writeActiveHandoffToken(token: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(ACTIVE_HANDOFF_TOKEN_STORAGE_KEY, token);
+  } catch {
+    return;
+  }
+}
+
+export function clearActiveHandoffToken(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(ACTIVE_HANDOFF_TOKEN_STORAGE_KEY);
   } catch {
     return;
   }

@@ -988,7 +988,12 @@ export type ClaimPortalHandoffTokenForUserResult =
     }
   | {
       ok: false;
-      reason: "invalid" | "expired" | "already_used" | "workspace_not_found";
+      reason:
+        | "invalid"
+        | "expired"
+        | "already_used"
+        | "workspace_not_found"
+        | "tenant_boundary";
     };
 
 export async function claimPortalHandoffTokenForUser(input: {
@@ -1043,11 +1048,33 @@ export async function claimPortalHandoffTokenForUser(input: {
       return { ok: false, reason: "workspace_not_found" };
     }
 
+    if (!stored.facebookPageId) {
+      return { ok: false, reason: "tenant_boundary" };
+    }
+
+    const connectedPages = await tx
+      .select({ id: channelConnections.id })
+      .from(channelConnections)
+      .where(
+        and(
+          eq(channelConnections.workspaceId, stored.workspaceId),
+          eq(channelConnections.channel, "facebook_messenger"),
+          eq(channelConnections.status, "connected"),
+          eq(channelConnections.externalId, stored.facebookPageId)
+        )
+      )
+      .limit(2);
+
+    if (connectedPages.length !== 1) {
+      return { ok: false, reason: "tenant_boundary" };
+    }
+
     const consumeResult = await tx
       .update(portalHandoffTokens)
       .set({
         status: "consumed",
         consumedAt: now,
+        claimedByUserId: input.userId,
       })
       .where(
         and(

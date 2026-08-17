@@ -45,7 +45,7 @@ function duplicateInsert() {
 
 describe("portal handoff database helpers", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     process.env.DATABASE_URL = "mysql://portal-handoff-test";
   });
 
@@ -63,6 +63,8 @@ describe("portal handoff database helpers", () => {
       workspaceId: 42,
       tokenHash: "sha256:token",
       messengerSenderUserKey: "sender-user-key",
+      facebookPageId: "facebook-page-42",
+      claimedByUserId: null,
       purpose: "workspace_onboarding" as const,
       status: "pending" as const,
       expiresAt: new Date("2026-06-30T10:05:00.000Z"),
@@ -169,6 +171,8 @@ describe("portal handoff database helpers", () => {
       workspaceId: 42,
       tokenHash: "sha256:token",
       messengerSenderUserKey: "sender-user-key",
+      facebookPageId: "facebook-page-42",
+      claimedByUserId: null,
       purpose: "workspace_onboarding" as const,
       status: "pending" as const,
       expiresAt,
@@ -194,9 +198,11 @@ describe("portal handoff database helpers", () => {
     const tokenSelect = selectRows([token]);
     const workspaceSelect = selectRows([workspace]);
     const membershipSelect = selectRows([membership]);
+    const connectionSelect = selectRows([{ id: 11 }]);
     dbMock.select
       .mockReturnValueOnce({ from: tokenSelect.from })
       .mockReturnValueOnce({ from: workspaceSelect.from })
+      .mockReturnValueOnce({ from: connectionSelect.from })
       .mockReturnValueOnce({ from: membershipSelect.from });
     const updateWhere = vi.fn(async () => [{ affectedRows: 1 }, []]);
     const updateSet = vi.fn(() => ({ where: updateWhere }));
@@ -227,6 +233,7 @@ describe("portal handoff database helpers", () => {
     expect(updateSet).toHaveBeenCalledWith({
       status: "consumed",
       consumedAt: new Date("2026-06-30T10:00:00.000Z"),
+      claimedByUserId: 7,
     });
     expect(memberInsert.values).toHaveBeenCalledWith({
       workspaceId: 42,
@@ -252,7 +259,9 @@ describe("portal handoff database helpers", () => {
         id: 3,
         workspaceId: 404,
         tokenHash: "sha256:token",
-        messengerSenderUserKey: null,
+        messengerSenderUserKey: "sender-user-key",
+        facebookPageId: "facebook-page-42",
+        claimedByUserId: null,
         purpose: "workspace_onboarding" as const,
         status: "pending" as const,
         expiresAt: new Date("2026-06-30T10:05:00.000Z"),
