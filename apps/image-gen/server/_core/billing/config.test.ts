@@ -22,6 +22,7 @@ function useValidTestConfig(): void {
     APP_BASE_URL: "http://leaderbot.test/",
     BILLING_SUPPORT_EMAIL: "billing@leaderbot.test",
     MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED: "true",
+    PORTAL_HANDOFF_TOKEN_SECRET: "test-portal-handoff-secret-at-least-32",
   };
   delete process.env.MOLLIE_LIVE_BILLING_ENABLED;
   delete process.env.MOLLIE_BILLING_ENABLED;
