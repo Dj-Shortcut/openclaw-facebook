@@ -118,7 +118,8 @@ describe("portal handoff delivery", () => {
     });
     expect(mocks.sendText).toHaveBeenCalledWith(
       "page-scoped-user-id",
-      expect.stringContaining("https://leaderbot.live/handoff/opaque-token")
+      expect.stringContaining("https://leaderbot.live/handoff/opaque-token"),
+      { pageId: "facebook-page-42" }
     );
     expect(mocks.revokePortalHandoffToken).not.toHaveBeenCalled();
     expect(JSON.stringify(mocks.safeLog.mock.calls)).not.toContain("opaque-token");

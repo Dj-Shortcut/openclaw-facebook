@@ -132,8 +132,11 @@ export async function findStateByUserKey(
       return;
     }
 
-    matchedPsid =
-      typeof state.psid === "string" && state.psid ? state.psid : psid;
+    // Storage keys are Page-scoped digests, never sender identifiers.
+    // Refuse malformed records rather than re-hashing a storage key.
+    if (typeof state.psid === "string" && state.psid.trim()) {
+      matchedPsid = state.psid;
+    }
   });
 
   if (!matchedPsid) {

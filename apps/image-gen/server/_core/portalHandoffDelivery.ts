@@ -188,7 +188,8 @@ export async function sendPortalHandoffLink(
     const handoffUrl = buildPortalHandoffUrl(tokenResult.token, input.baseUrl);
     const outcome = await sendText(
       state.psid,
-      buildPortalHandoffMessage(handoffUrl, state)
+      buildPortalHandoffMessage(handoffUrl, state),
+      { pageId }
     );
 
     if (!outcome.sent) {
