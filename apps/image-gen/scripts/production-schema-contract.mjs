@@ -9,13 +9,16 @@ export async function configureProductionSchemaSession(connection) {
   await connection.query("SET SESSION time_zone='+00:00'");
   await connection.query("SET SESSION transaction_isolation='READ-COMMITTED'");
   await connection.query("SET SESSION default_storage_engine='InnoDB'");
+  await connection.query("SET SESSION auto_increment_increment=1");
+  await connection.query("SET SESSION auto_increment_offset=1");
+  await connection.query("SET SESSION information_schema_stats_expiry=0");
   await connection.query("SET NAMES utf8mb4 COLLATE utf8mb4_0900_ai_ci");
 }
 
 export async function assertProductionMigrationRuntime(connection) {
   await configureProductionSchemaSession(connection);
   const [[runtime]] = await connection.query(
-    "SELECT VERSION() AS version,DATABASE() AS databaseName,@@SESSION.sql_mode AS sqlMode,@@SESSION.time_zone AS timeZone,@@SESSION.transaction_isolation AS transactionIsolation,@@SESSION.foreign_key_checks AS foreignKeyChecks,@@SESSION.default_storage_engine AS defaultStorageEngine,@@lower_case_table_names AS lowerCaseTableNames,@@SESSION.explicit_defaults_for_timestamp AS explicitTimestampDefaults"
+    "SELECT VERSION() AS version,DATABASE() AS databaseName,@@SESSION.sql_mode AS sqlMode,@@SESSION.time_zone AS timeZone,@@SESSION.transaction_isolation AS transactionIsolation,@@SESSION.foreign_key_checks AS foreignKeyChecks,@@SESSION.default_storage_engine AS defaultStorageEngine,@@lower_case_table_names AS lowerCaseTableNames,@@SESSION.explicit_defaults_for_timestamp AS explicitTimestampDefaults,@@SESSION.auto_increment_increment AS autoIncrementIncrement,@@SESSION.auto_increment_offset AS autoIncrementOffset,@@SESSION.information_schema_stats_expiry AS informationSchemaStatsExpiry"
   );
   const [[schema]] = await connection.query(
     "SELECT DEFAULT_CHARACTER_SET_NAME AS characterSet,DEFAULT_COLLATION_NAME AS collationName FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=DATABASE()"
@@ -45,7 +48,10 @@ export function assertProductionRuntimeValues(runtime) {
     Number(runtime.foreignKeyChecks) !== 1 ||
     String(runtime.defaultStorageEngine).toLowerCase() !== "innodb" ||
     Number(runtime.lowerCaseTableNames) !== 0 ||
-    Number(runtime.explicitTimestampDefaults) !== 1
+    Number(runtime.explicitTimestampDefaults) !== 1 ||
+    Number(runtime.autoIncrementIncrement) !== 1 ||
+    Number(runtime.autoIncrementOffset) !== 1 ||
+    Number(runtime.informationSchemaStatsExpiry) !== 0
   ) {
     throw new Error("production migration session contract mismatch");
   }
@@ -222,6 +228,9 @@ export function normalizeSqlOutsideQuotedValues(value) {
 }
 
 export async function captureProductionSchemaState(connection) {
+  const [[identity]] = await connection.query(
+    "SELECT CURRENT_USER() AS currentUser"
+  );
   const [objects] = await connection.query(
     "SELECT `TABLE_NAME` AS name,`TABLE_TYPE` AS objectType FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() ORDER BY `TABLE_TYPE`,`TABLE_NAME`"
   );
@@ -250,26 +259,12 @@ export async function captureProductionSchemaState(connection) {
   }
 
   const [triggerRows] = await connection.query(
-    "SELECT `TRIGGER_NAME` AS name,`ACTION_TIMING` AS timing,`EVENT_MANIPULATION` AS eventName,`EVENT_OBJECT_TABLE` AS tableName,`ACTION_ORIENTATION` AS orientation,`ACTION_ORDER` AS actionOrder,`ACTION_CONDITION` AS actionCondition,`ACTION_STATEMENT` AS actionStatement,`SQL_MODE` AS sqlMode,`CHARACTER_SET_CLIENT` AS characterSetClient,`COLLATION_CONNECTION` AS collationConnection,`DATABASE_COLLATION` AS databaseCollation FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() ORDER BY `TRIGGER_NAME`"
+    "SELECT `TRIGGER_NAME` AS name,`DEFINER` AS definer,`ACTION_TIMING` AS timing,`EVENT_MANIPULATION` AS eventName,`EVENT_OBJECT_TABLE` AS tableName,`ACTION_ORIENTATION` AS orientation,`ACTION_ORDER` AS actionOrder,`ACTION_CONDITION` AS actionCondition,`ACTION_STATEMENT` AS actionStatement,`SQL_MODE` AS sqlMode,`CHARACTER_SET_CLIENT` AS characterSetClient,`COLLATION_CONNECTION` AS collationConnection,`DATABASE_COLLATION` AS databaseCollation FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() ORDER BY `TRIGGER_NAME`"
   );
   const triggers = {};
   for (const trigger of triggerRows) {
     triggers[trigger.name] = sha256(
-      JSON.stringify({
-        timing: trigger.timing,
-        eventName: trigger.eventName,
-        tableName: trigger.tableName,
-        orientation: trigger.orientation,
-        actionOrder: Number(trigger.actionOrder),
-        actionCondition: trigger.actionCondition,
-        actionStatement: normalizeSqlOutsideQuotedValues(
-          trigger.actionStatement
-        ),
-        sqlMode: trigger.sqlMode,
-        characterSetClient: trigger.characterSetClient,
-        collationConnection: trigger.collationConnection,
-        databaseCollation: trigger.databaseCollation,
-      })
+      JSON.stringify(canonicalTriggerTuple(trigger, identity.currentUser))
     );
   }
 
@@ -288,6 +283,26 @@ export async function captureProductionSchemaState(connection) {
   return { tables, views, triggers };
 }
 
+export function canonicalTriggerTuple(trigger, currentUser) {
+  if (!currentUser || trigger.definer !== currentUser) {
+    throw new Error("trigger definer does not match the migration principal");
+  }
+  return {
+    definer: "$MIGRATION_USER",
+    timing: trigger.timing,
+    eventName: trigger.eventName,
+    tableName: trigger.tableName,
+    orientation: trigger.orientation,
+    actionOrder: Number(trigger.actionOrder),
+    actionCondition: trigger.actionCondition,
+    actionStatement: normalizeSqlOutsideQuotedValues(trigger.actionStatement),
+    sqlMode: trigger.sqlMode,
+    characterSetClient: trigger.characterSetClient,
+    collationConnection: trigger.collationConnection,
+    databaseCollation: trigger.databaseCollation,
+  };
+}
+
 export async function captureMigrationHistory(connection) {
   const [[exists]] = await connection.query(
     "SELECT COUNT(*) AS count FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='__drizzle_migrations'"
@@ -296,11 +311,15 @@ export async function captureMigrationHistory(connection) {
   const [[created]] = await connection.query(
     "SHOW CREATE TABLE `__drizzle_migrations`"
   );
+  const [[table]] = await connection.query(
+    "SELECT `AUTO_INCREMENT` AS nextId FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='__drizzle_migrations'"
+  );
   const [rows] = await connection.query(
     "SELECT `id`,`hash`,`created_at` AS createdAt FROM `__drizzle_migrations` ORDER BY `id`"
   );
   return {
     showCreateSha256: sha256(normalizeShowCreate(created["Create Table"])),
+    nextId: Number(table.nextId),
     rows: rows.map(row => ({
       id: Number(row.id),
       hash: row.hash,

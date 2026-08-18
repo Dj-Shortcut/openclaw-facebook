@@ -342,8 +342,9 @@ pnpm db:migrate
 `db:migrate` is the only supported production migration entrypoint. It holds a
 database-scoped MySQL singleton lock on the migration connection, validates the
 committed journal/SQL/snapshot hashes and applied history, refuses a partial
-0015, and verifies the exact committed MySQL 8.4.11 `SHOW CREATE` contract before
-and after applying. The contract is generated from real 0000→0014 and
+0015, and verifies the exact committed MySQL 8.4.11 per-table `SHOW CREATE`
+plus full trigger metadata/action contract before and after applying. The
+contract is generated from real 0000→0014 and
 0000→0015 databases with `pnpm db:generate-production-contract`; CI regenerates
 it against the pinned MySQL image and rejects any diff. Do not run `drizzle-kit
 migrate` directly. A refusal requires investigation and, for a partially

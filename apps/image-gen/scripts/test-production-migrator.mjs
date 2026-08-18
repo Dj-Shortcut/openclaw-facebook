@@ -15,6 +15,7 @@ import {
   normalizeShowCreate,
   normalizeSqlOutsideQuotedValues,
   assertProductionRuntimeValues,
+  canonicalTriggerTuple,
   productionSchemaSqlMode,
   sha256,
 } from "./production-schema-contract.mjs";
@@ -44,6 +45,7 @@ const databases = [
   "leaderbot_production_migrator_wrong_runtime",
   "leaderbot_production_migrator_empty_history",
   "leaderbot_production_migrator_first_unsupported_partial",
+  "leaderbot_production_migrator_advanced_0014_history",
 ];
 const admin = await mysql.createConnection({
   host: adminUrl.hostname,
@@ -240,6 +242,21 @@ try {
     "0014 schema fingerprint mismatch"
   );
 
+  await withDatabase(databases[13], async connection => {
+    await applyMigrationPrefix(connection, manifest.slice(0, -1));
+    await connection.query(
+      "ALTER TABLE `__drizzle_migrations` AUTO_INCREMENT=100"
+    );
+  });
+  await expectFailure(
+    runProductionMigrations({ databaseUrl: databaseUrl(databases[13]) }),
+    "0014 advanced migration counter",
+    "0014 migration history table contract mismatch"
+  );
+  await withDatabase(databases[13], connection =>
+    assertNo0015Objects(connection, "advanced 0014 history refusal")
+  );
+
   await withDatabase(databases[6], async connection => {
     await applyMigrationPrefix(connection, manifest.slice(0, -1));
     await applyStatements(
@@ -391,6 +408,13 @@ async function assertNoApplicationTables(connection, label) {
   assert(Number(row.count) === 0, `${label} leaves no application tables`);
 }
 
+async function assertNo0015Objects(connection, label) {
+  const [[row]] = await connection.query(
+    "SELECT COUNT(*) AS count FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME IN ('messengerState','billing_accounting_event_links','billing_scheduler_tenants')"
+  );
+  assert(Number(row.count) === 0, `${label} happens before 0015 DDL`);
+}
+
 async function testCompletedSchemaRefusals(database, finalStatements) {
   await withDatabase(database, connection =>
     connection.query(
@@ -496,6 +520,18 @@ async function testCompletedSchemaRefusals(database, finalStatements) {
 }
 
 async function testHistoryRefusals(database, manifest) {
+  await withDatabase(database, connection =>
+    connection.query("ALTER TABLE `__drizzle_migrations` AUTO_INCREMENT=100")
+  );
+  await expectRunnerRefusal(
+    database,
+    "complete migration history counter drift",
+    "0015 migration history table contract mismatch"
+  );
+  await withDatabase(database, connection =>
+    connection.query("ALTER TABLE `__drizzle_migrations` AUTO_INCREMENT=17")
+  );
+
   const removed = await withDatabaseResult(database, async connection => {
     const [[row]] = await connection.query(
       "SELECT `id`,`hash`,`created_at` AS createdAt FROM `__drizzle_migrations` ORDER BY `id` LIMIT 1 OFFSET 7"
@@ -726,6 +762,30 @@ function testSchemaDigestContracts() {
       "SET @value = `Column Name`",
     "trigger normalization changes whitespace only outside quoted values"
   );
+  const trigger = {
+    definer: "migrator@localhost",
+    timing: "AFTER",
+    eventName: "INSERT",
+    tableName: "billing_outbox",
+    orientation: "ROW",
+    actionOrder: 1,
+    actionCondition: null,
+    actionStatement: "SET @value = 'A B'",
+    sqlMode: productionSchemaSqlMode,
+    characterSetClient: "utf8mb4",
+    collationConnection: "utf8mb4_0900_ai_ci",
+    databaseCollation: "utf8mb4_0900_ai_ci",
+  };
+  assert(
+    canonicalTriggerTuple(trigger, "migrator@localhost").definer ===
+      "$MIGRATION_USER",
+    "trigger definer is normalized only for the current migration principal"
+  );
+  expectSynchronousFailure(
+    () => canonicalTriggerTuple(trigger, "other@localhost"),
+    "mismatched trigger definer",
+    "trigger definer does not match the migration principal"
+  );
   const validRuntime = {
     version: "8.4.11",
     databaseName: "leaderbot",
@@ -738,6 +798,9 @@ function testSchemaDigestContracts() {
     defaultStorageEngine: "InnoDB",
     lowerCaseTableNames: 0,
     explicitTimestampDefaults: 1,
+    autoIncrementIncrement: 1,
+    autoIncrementOffset: 1,
+    informationSchemaStatsExpiry: 0,
   };
   assertProductionRuntimeValues(validRuntime);
   expectSynchronousFailure(
@@ -749,6 +812,9 @@ function testSchemaDigestContracts() {
     ["defaultStorageEngine", "MyISAM"],
     ["lowerCaseTableNames", 2],
     ["explicitTimestampDefaults", 0],
+    ["autoIncrementIncrement", 2],
+    ["autoIncrementOffset", 2],
+    ["informationSchemaStatsExpiry", 86400],
   ]) {
     expectSynchronousFailure(
       () => assertProductionRuntimeValues({ ...validRuntime, [field]: value }),

@@ -123,6 +123,8 @@ export function assertProductionSchemaContractManifest(contract, migrations) {
     createdAt: Number(migration.when),
   }));
   if (
+    contract.baseHistory.nextId !== migrations.length ||
+    contract.finalHistory.nextId !== migrations.length + 1 ||
     JSON.stringify(contract.baseHistory.rows) !==
       JSON.stringify(expectedRows.slice(0, -1)) ||
     JSON.stringify(contract.finalHistory.rows) !== JSON.stringify(expectedRows)
@@ -165,7 +167,11 @@ export function migrationLockName(databaseName) {
 }
 
 function assertExactHistory(actual, expected, label) {
-  if (!actual || actual.showCreateSha256 !== expected.showCreateSha256) {
+  if (
+    !actual ||
+    actual.showCreateSha256 !== expected.showCreateSha256 ||
+    actual.nextId !== expected.nextId
+  ) {
     throw new Error(`${label} migration history table contract mismatch`);
   }
   if (JSON.stringify(actual.rows) !== JSON.stringify(expected.rows)) {

@@ -41,6 +41,7 @@
   },
   "baseHistory": {
     "showCreateSha256": "3e1c89a7f5407482a360a3c5928754adbd1b6a896c8568a64b610b1cf10161bf",
+    "nextId": 16,
     "rows": [
       {
         "id": 1,
@@ -170,13 +171,14 @@
     },
     "views": {},
     "triggers": {
-      "billing_outbox_wake_scheduler_after_insert": "a1e9a0c413c9b39e975dcfda6c3bfbdd43230673022dcef3482e0e9453672e73",
-      "billing_outbox_wake_scheduler_after_update": "82580cb9a88ff6aab067f6804d011bdf488744a7daa70d88753e1209e933581e",
-      "billing_scheduler_execution_epoch_before_update": "c97be96f0e0c412b27e601a99e2ca0ce37d37a105e235d910bed0b7b8d058776"
+      "billing_outbox_wake_scheduler_after_insert": "c9579585392f5d826fe771d577c233069851fd5e9468fb7fc37d13e97adcc3f5",
+      "billing_outbox_wake_scheduler_after_update": "c7b109146e82e3591624cba62202248340b4264099f5b6894d324ecbe3a3b34b",
+      "billing_scheduler_execution_epoch_before_update": "2f7c138f7960b039d25c692dfc735aaf21dab1b9a6f5fd44ecc7183ae470dbbd"
     }
   },
   "finalHistory": {
     "showCreateSha256": "3e1c89a7f5407482a360a3c5928754adbd1b6a896c8568a64b610b1cf10161bf",
+    "nextId": 17,
     "rows": [
       {
         "id": 1,
