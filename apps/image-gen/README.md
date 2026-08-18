@@ -1,4 +1,5 @@
 # Leaderbot AI Image Generator
+
 [![Fallow Maintainability](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Dj-Shortcut/openclaw-facebook/main/apps/image-gen/public/badges/fallow-maintainability.json)](https://github.com/Dj-Shortcut/openclaw-facebook/actions/workflows/fallow.yml)
 
 A Meta messaging bot with a shared bot-core for Messenger and WhatsApp.
@@ -338,6 +339,19 @@ Database migration helpers:
 pnpm db:migrate
 ```
 
+`db:migrate` is the only supported production migration entrypoint. It holds a
+database-scoped MySQL singleton lock on the migration connection, validates the
+committed journal/SQL/schema hashes and applied history, refuses a partial 0015,
+and verifies the canonical schema contract after applying. Do not run
+`drizzle-kit migrate` directly. A refusal requires investigation and, for a
+partially applied MySQL DDL migration, restore from the verified pre-migration
+backup rather than a blind rerun.
+
+Supported starting states are deliberately narrow: a genuinely empty database,
+an exact committed 0014 database, or an exact already-complete 0015 database.
+Older prefixes, drifted 0014 schemas, modified migration history, and partial
+0015 footprints fail closed.
+
 The repository includes focused unit tests for webhook handling, state transitions, signature verification, and image generation behavior under OpenAI configuration.
 
 Multi-channel text routing now also has a small adapter-level test in `server/botResponseAdapters.test.ts` to verify `BotResponse` mapping independently from webhook payload parsing.
@@ -453,6 +467,11 @@ Use this order for `leaderbot-fb-image-gen`:
    ```bash
    DATABASE_URL='mysql://<user>:<password>@<host>:<port>/<database>' pnpm db:migrate
    ```
+
+   This command must report that all committed migrations and the schema
+   contract are verified. Never substitute a raw Drizzle command. If it reports
+   a hash, singleton-lock, or partial-schema refusal, keep application writers
+   stopped and follow the migration recovery runbook before retrying.
 
 4. Deploy image-gen only after the migration succeeds:
 

@@ -8,6 +8,8 @@ on:
     paths:
       - "apps/image-gen/drizzle/**"
       - "apps/image-gen/drizzle.config.ts"
+      - "apps/image-gen/scripts/migrate-production.mjs"
+      - "apps/image-gen/scripts/test-production-migrator.mjs"
       - "apps/image-gen/package.json"
       - "apps/image-gen/pnpm-lock.yaml"
       - "apps/image-gen/server/_core/billing/portalHandoffRecovery.ts"
@@ -65,12 +67,19 @@ jobs:
         run: |
           pnpm run db:check-identifiers
 
-      - name: Run drizzle migrations
+      - name: Run production migration entrypoint
         working-directory: apps/image-gen
         env:
           DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_image_gen
         run: |
-          ./node_modules/.bin/drizzle-kit migrate
+          pnpm run db:migrate
+
+      - name: Verify migration singleton, hashes and partial-state refusal
+        working-directory: apps/image-gen
+        env:
+          MYSQL_REHEARSAL_URL: mysql://root:root@127.0.0.1:3306/mysql
+        run: |
+          pnpm run db:test-production-migrator
 
       - name: Verify dailyQuota composite index exists
         run: |
