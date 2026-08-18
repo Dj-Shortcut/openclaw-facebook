@@ -904,14 +904,14 @@ function testSchemaDigestContracts() {
     () =>
       assertTriggerGrantScope(
         [
-          "GRANT TRIGGER ON *.* TO `migrator`@`%`",
+          "GRANT ALL PRIVILEGES ON *.* TO `migrator`@`%`",
           "REVOKE TRIGGER ON `leaderbot`.* FROM `migrator`@`%`",
         ],
         "leaderbot",
         false
       ),
     "current-schema partial revoke overrides global trigger grant",
-    "migration principal lacks scoped TRIGGER privilege"
+    "migration principal lacks scoped privileges"
   );
   const validRuntime = {
     version: "8.4.11",
@@ -950,7 +950,9 @@ function testSchemaDigestContracts() {
   };
   assertProductionRuntimeValues(validRuntime);
   assertTriggerGrantScope(
-    ["GRANT TRIGGER ON `leaderbot`.* TO `migrator`@`%`"],
+    [
+      "GRANT CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER ON `leaderbot`.* TO `migrator`@`%`",
+    ],
     "leaderbot",
     false
   );
@@ -967,12 +969,14 @@ function testSchemaDigestContracts() {
         false
       ),
     "wrong-schema trigger grant",
-    "migration principal lacks scoped TRIGGER privilege"
+    "migration principal lacks scoped privileges"
   );
   expectSynchronousFailure(
     () =>
       assertTriggerGrantScope(
-        ["GRANT TRIGGER ON `leaderbot`.* TO `migrator`@`%`"],
+        [
+          "GRANT CREATE, CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES, SELECT, INSERT, UPDATE, TRIGGER ON `leaderbot`.* TO `migrator`@`%`",
+        ],
         "leaderbot",
         true
       ),

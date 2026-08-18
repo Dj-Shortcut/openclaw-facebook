@@ -60,9 +60,20 @@ async function assertTriggerCapability(connection, runtime) {
 }
 
 export function assertTriggerGrantScope(grants, databaseName, requireSuper) {
-  let triggerAllowed = false;
+  const required = new Set([
+    "CREATE",
+    "CREATE TEMPORARY TABLES",
+    "ALTER",
+    "INDEX",
+    "REFERENCES",
+    "SELECT",
+    "INSERT",
+    "UPDATE",
+    "TRIGGER",
+  ]);
+  const allowed = new Set();
+  const revoked = new Set();
   let globalSuper = false;
-  let triggerRevoked = false;
   for (const grant of grants) {
     const revoke = /^REVOKE (.+) ON (.+) FROM /i.exec(grant);
     if (revoke) {
@@ -70,12 +81,15 @@ export function assertTriggerGrantScope(grants, databaseName, requireSuper) {
         .split(",")
         .map(value => value.trim().toUpperCase());
       const scope = revoke[2].replaceAll("`", "");
-      if (
-        (scope === "*.*" || scope === `${databaseName}.*`) &&
-        (privileges.includes("ALL PRIVILEGES") ||
-          privileges.includes("TRIGGER"))
-      ) {
-        triggerRevoked = true;
+      if (scope === "*.*" || scope === `${databaseName}.*`) {
+        for (const privilege of required) {
+          if (
+            privileges.includes("ALL PRIVILEGES") ||
+            privileges.includes(privilege)
+          ) {
+            revoked.add(privilege);
+          }
+        }
       }
       continue;
     }
@@ -88,12 +102,20 @@ export function assertTriggerGrantScope(grants, databaseName, requireSuper) {
     const global = scope === "*.*";
     const currentSchema = scope === `${databaseName}.*`;
     const all = privileges.includes("ALL PRIVILEGES");
-    triggerAllowed ||=
-      (global || currentSchema) && (all || privileges.includes("TRIGGER"));
+    if (global || currentSchema) {
+      for (const privilege of required) {
+        if (all || privileges.includes(privilege)) allowed.add(privilege);
+      }
+    }
     globalSuper ||= global && (all || privileges.includes("SUPER"));
   }
-  if (!triggerAllowed || triggerRevoked) {
-    throw new Error("migration principal lacks scoped TRIGGER privilege");
+  const missing = [...required].filter(
+    privilege => !allowed.has(privilege) || revoked.has(privilege)
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `migration principal lacks scoped privileges: ${missing.join(",")}`
+    );
   }
   if (requireSuper && !globalSuper) {
     throw new Error("migration principal lacks global SUPER for triggers");
