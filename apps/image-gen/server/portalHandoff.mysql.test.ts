@@ -8,6 +8,7 @@ import {
   channelConnections,
   portalHandoffTokens,
   users,
+  workspaceBillingProfiles,
   workspaceMembers,
   workspacePrivacySettings,
   workspaces,
@@ -16,6 +17,7 @@ import {
   claimPortalHandoffTokenForUser,
   createOrGetPortalHandoffToken,
   getDatabaseOrThrow,
+  getPortalHandoffTokenByHash,
 } from "./db";
 import { rearmFailedPortalHandoffAfterInbound } from "./_core/billing/portalHandoffRecovery";
 
@@ -75,6 +77,19 @@ suite("portal handoff MySQL concurrency", () => {
       userId,
       role: "admin",
     });
+    await database.insert(workspaceBillingProfiles).values({
+      workspaceId,
+      countryCode: "BE",
+      customerType: "consumer",
+      verificationStatus: "verified",
+      verificationMethod: "mysql_test_attestation",
+      evidenceReferenceHash: "mysql-test-evidence-v1",
+      verifiedAt: new Date(),
+      verificationExpiresAt: new Date(Date.now() + 24 * 60 * 60_000),
+      verifiedByUserId: userId,
+      peppolReady: false,
+      eligibilityVersion: 1,
+    });
   });
 
   afterAll(async () => {
@@ -95,6 +110,9 @@ suite("portal handoff MySQL concurrency", () => {
     await database
       .delete(workspaceMembers)
       .where(eq(workspaceMembers.workspaceId, workspaceId));
+    await database
+      .delete(workspaceBillingProfiles)
+      .where(eq(workspaceBillingProfiles.workspaceId, workspaceId));
     await database
       .delete(portalHandoffTokens)
       .where(eq(portalHandoffTokens.workspaceId, workspaceId));
@@ -222,6 +240,7 @@ suite("portal handoff MySQL concurrency", () => {
       checkoutScopeKey: `mysql-recovery-scope-${suffix}`,
       messengerSenderUserKey: senderKey,
       messengerPageId: pageId,
+      billingProfileVersion: 1,
       paidAt: new Date(),
     });
     await database.insert(billingOutbox).values({
@@ -333,7 +352,9 @@ suite("portal handoff MySQL concurrency", () => {
   it("extends the same revoked capability across recovery cycles after 48 hours", async () => {
     const database = await getDatabaseOrThrow();
     const cycleDeliveryHash = `sha256:${"7".repeat(64)}`;
-    const cycleTokenHash = `sha256:${"8".repeat(64)}`;
+    const tokenHashForGeneration = (generation: number) =>
+      `sha256:${generation.toString(16).padStart(64, "0")}`;
+    const cycleTokenHash = tokenHashForGeneration(1);
     const initial = new Date("2026-08-01T00:00:00.000Z");
     const values = {
       workspaceId,
@@ -346,7 +367,11 @@ suite("portal handoff MySQL concurrency", () => {
       expiresAt: new Date(initial.getTime() + 48 * 60 * 60_000),
       createdByUserId: null,
     };
-    const created = await createOrGetPortalHandoffToken(values, initial);
+    const created = await createOrGetPortalHandoffToken(
+      values,
+      initial,
+      tokenHashForGeneration
+    );
     await database
       .update(portalHandoffTokens)
       .set({ status: "revoked" })
@@ -356,14 +381,19 @@ suite("portal handoff MySQL concurrency", () => {
     const secondExpiry = new Date(secondNow.getTime() + 48 * 60 * 60_000);
     const second = await createOrGetPortalHandoffToken(
       { ...values, expiresAt: secondExpiry },
-      secondNow
+      secondNow,
+      tokenHashForGeneration
     );
     expect(second).toMatchObject({
       id: created.id,
-      tokenHash: cycleTokenHash,
+      tokenHash: tokenHashForGeneration(2),
       status: "pending",
       expiresAt: secondExpiry,
     });
+    await expect(getPortalHandoffTokenByHash(cycleTokenHash)).resolves.toBeNull();
+    await expect(
+      getPortalHandoffTokenByHash(tokenHashForGeneration(2))
+    ).resolves.toMatchObject({ id: created.id, capabilityGeneration: 2 });
     await database
       .update(portalHandoffTokens)
       .set({ status: "revoked" })
@@ -372,10 +402,17 @@ suite("portal handoff MySQL concurrency", () => {
     const thirdExpiry = new Date(thirdNow.getTime() + 48 * 60 * 60_000);
     const third = await createOrGetPortalHandoffToken(
       { ...values, expiresAt: thirdExpiry },
-      thirdNow
+      thirdNow,
+      tokenHashForGeneration
     );
     expect(third.id).toBe(created.id);
-    expect(third.tokenHash).toBe(cycleTokenHash);
+    expect(third.tokenHash).toBe(tokenHashForGeneration(3));
     expect(third.expiresAt).toEqual(thirdExpiry);
+    await expect(
+      getPortalHandoffTokenByHash(tokenHashForGeneration(2))
+    ).resolves.toBeNull();
+    await expect(
+      getPortalHandoffTokenByHash(tokenHashForGeneration(3))
+    ).resolves.toMatchObject({ id: created.id, capabilityGeneration: 3 });
   });
 });
