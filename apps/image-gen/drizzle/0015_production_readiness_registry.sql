@@ -2,7 +2,7 @@
 -- first migration statement so an ownership mismatch aborts before any
 -- permanent MySQL DDL can auto-commit.
 CREATE TEMPORARY TABLE `_0015_scope_preflight` (
-	`violation` tinyint NOT NULL,
+	`violation` tinyint NOT NULL PRIMARY KEY,
 	CONSTRAINT `_0015_scope_preflight_must_be_empty` CHECK (`violation` = 0)
 );--> statement-breakpoint
 INSERT INTO `_0015_scope_preflight` (`violation`)

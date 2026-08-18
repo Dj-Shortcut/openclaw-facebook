@@ -9,6 +9,7 @@ import mysql from "mysql2/promise";
 import {
   assertExactSchemaState,
   assertProductionMigrationRuntime,
+  assertPreparedStatementCapacity,
   captureMigrationHistory,
   captureProductionSchemaState,
   canonicalJson,
@@ -294,6 +295,9 @@ export async function runProductionMigrations(options = {}) {
         lockWaitMs: Date.now() - startedAt,
       };
     } else {
+      if (beforeState === "fresh") {
+        await assertPreparedStatementCapacity(connection);
+      }
       await migrate(drizzle(connection), {
         migrationsFolder: drizzleDirectory,
       });

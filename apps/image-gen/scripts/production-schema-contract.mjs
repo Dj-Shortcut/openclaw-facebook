@@ -14,20 +14,74 @@ export async function configureProductionSchemaSession(connection) {
   await connection.query("SET SESSION information_schema_stats_expiry=0");
   await connection.query("SET SESSION sql_quote_show_create=1");
   await connection.query("SET SESSION show_create_table_verbosity=1");
+  await connection.query("SET SESSION sql_safe_updates=0");
+  await connection.query("SET SESSION unique_checks=1");
+  await connection.query("SET SESSION transaction_read_only=0");
+  await connection.query("SET SESSION timestamp=DEFAULT");
+  await connection.query("SET SESSION sql_select_limit=DEFAULT");
+  await connection.query("SET SESSION sql_big_selects=1");
   await connection.query("SET NAMES utf8mb4 COLLATE utf8mb4_0900_ai_ci");
 }
 
 export async function assertProductionMigrationRuntime(connection) {
   await configureProductionSchemaSession(connection);
   const [[runtime]] = await connection.query(
-    "SELECT VERSION() AS version,DATABASE() AS databaseName,@@SESSION.sql_mode AS sqlMode,@@SESSION.time_zone AS timeZone,@@SESSION.transaction_isolation AS transactionIsolation,@@SESSION.foreign_key_checks AS foreignKeyChecks,@@SESSION.default_storage_engine AS defaultStorageEngine,@@GLOBAL.innodb_default_row_format AS innodbDefaultRowFormat,@@lower_case_table_names AS lowerCaseTableNames,@@SESSION.explicit_defaults_for_timestamp AS explicitTimestampDefaults,@@SESSION.auto_increment_increment AS autoIncrementIncrement,@@SESSION.auto_increment_offset AS autoIncrementOffset,@@SESSION.information_schema_stats_expiry AS informationSchemaStatsExpiry,@@SESSION.sql_quote_show_create AS sqlQuoteShowCreate,@@SESSION.show_create_table_verbosity AS showCreateTableVerbosity"
+    "SELECT VERSION() AS version,DATABASE() AS databaseName,@@SESSION.sql_mode AS sqlMode,@@SESSION.time_zone AS timeZone,@@SESSION.transaction_isolation AS transactionIsolation,@@SESSION.foreign_key_checks AS foreignKeyChecks,@@SESSION.default_storage_engine AS defaultStorageEngine,@@GLOBAL.innodb_default_row_format AS innodbDefaultRowFormat,@@GLOBAL.innodb_page_size AS innodbPageSize,@@GLOBAL.innodb_force_recovery AS innodbForceRecovery,@@GLOBAL.innodb_read_only AS innodbReadOnly,@@GLOBAL.read_only AS readOnly,@@GLOBAL.super_read_only AS superReadOnly,@@GLOBAL.disabled_storage_engines AS disabledStorageEngines,@@SESSION.innodb_strict_mode AS innodbStrictMode,@@lower_case_table_names AS lowerCaseTableNames,@@SESSION.explicit_defaults_for_timestamp AS explicitTimestampDefaults,@@SESSION.auto_increment_increment AS autoIncrementIncrement,@@SESSION.auto_increment_offset AS autoIncrementOffset,@@SESSION.information_schema_stats_expiry AS informationSchemaStatsExpiry,@@SESSION.sql_quote_show_create AS sqlQuoteShowCreate,@@SESSION.show_create_table_verbosity AS showCreateTableVerbosity,@@SESSION.sql_safe_updates AS sqlSafeUpdates,@@SESSION.unique_checks AS uniqueChecks,@@SESSION.transaction_read_only AS transactionReadOnly,(ABS(@@SESSION.timestamp-UNIX_TIMESTAMP()) <= 1) AS timestampIsDefault,@@SESSION.insert_id AS insertId,(@@SESSION.sql_select_limit = 18446744073709551615) AS sqlSelectLimitIsDefault,@@SESSION.sql_big_selects AS sqlBigSelects,@@GLOBAL.log_bin AS logBin,@@GLOBAL.log_bin_trust_function_creators AS logBinTrustFunctionCreators"
   );
   const [[schema]] = await connection.query(
-    "SELECT DEFAULT_CHARACTER_SET_NAME AS characterSet,DEFAULT_COLLATION_NAME AS collationName,DEFAULT_ENCRYPTION AS defaultEncryption FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=DATABASE()"
+    "SELECT DEFAULT_CHARACTER_SET_NAME AS characterSet,DEFAULT_COLLATION_NAME AS collationName,DEFAULT_ENCRYPTION AS defaultEncryption,(SELECT EXISTS(SELECT 1 FROM information_schema.SCHEMATA_EXTENSIONS se WHERE se.SCHEMA_NAME=DATABASE() AND UPPER(COALESCE(se.OPTIONS,'')) LIKE '%READ ONLY=1%')) AS schemaReadOnly FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=DATABASE()"
   );
   assertProductionRuntimeValues({ ...runtime, ...schema });
   await assertCheckConstraintsEnforced(connection);
+  await assertTriggerCapability(connection, runtime);
   return { databaseName: runtime.databaseName };
+}
+
+export async function assertPreparedStatementCapacity(connection) {
+  const [[limit]] = await connection.query(
+    "SELECT @@GLOBAL.max_prepared_stmt_count AS maximum"
+  );
+  const [[used]] = await connection.query(
+    "SHOW GLOBAL STATUS LIKE 'Prepared_stmt_count'"
+  );
+  if (Number(limit.maximum) <= Number(used.Value)) {
+    throw new Error("MySQL prepared statement capacity is exhausted");
+  }
+}
+
+async function assertTriggerCapability(connection, runtime) {
+  const [rows] = await connection.query("SHOW GRANTS FOR CURRENT_USER()");
+  assertTriggerGrantScope(
+    rows.flatMap(row => Object.values(row)).map(String),
+    runtime.databaseName,
+    Number(runtime.logBin) === 1 &&
+      Number(runtime.logBinTrustFunctionCreators) !== 1
+  );
+}
+
+export function assertTriggerGrantScope(grants, databaseName, requireSuper) {
+  let triggerAllowed = false;
+  let globalSuper = false;
+  for (const grant of grants) {
+    const match = /^GRANT (.+) ON (.+) TO /i.exec(grant);
+    if (!match) continue;
+    const privileges = match[1]
+      .split(",")
+      .map(value => value.trim().toUpperCase());
+    const scope = match[2].replaceAll("`", "");
+    const global = scope === "*.*";
+    const currentSchema = scope === `${databaseName}.*`;
+    const all = privileges.includes("ALL PRIVILEGES");
+    triggerAllowed ||=
+      (global || currentSchema) && (all || privileges.includes("TRIGGER"));
+    globalSuper ||= global && (all || privileges.includes("SUPER"));
+  }
+  if (!triggerAllowed) {
+    throw new Error("migration principal lacks scoped TRIGGER privilege");
+  }
+  if (requireSuper && !globalSuper) {
+    throw new Error("migration principal lacks global SUPER for triggers");
+  }
 }
 
 export function assertProductionRuntimeValues(runtime) {
@@ -50,6 +104,17 @@ export function assertProductionRuntimeValues(runtime) {
     Number(runtime.foreignKeyChecks) !== 1 ||
     String(runtime.defaultStorageEngine).toLowerCase() !== "innodb" ||
     String(runtime.innodbDefaultRowFormat).toLowerCase() !== "dynamic" ||
+    Number(runtime.innodbPageSize) < 8192 ||
+    Number(runtime.innodbForceRecovery) !== 0 ||
+    Number(runtime.innodbReadOnly) !== 0 ||
+    Number(runtime.readOnly) !== 0 ||
+    Number(runtime.superReadOnly) !== 0 ||
+    String(runtime.disabledStorageEngines)
+      .toLowerCase()
+      .split(",")
+      .map(value => value.trim())
+      .includes("innodb") ||
+    Number(runtime.innodbStrictMode) !== 1 ||
     Number(runtime.lowerCaseTableNames) !== 0 ||
     Number(runtime.explicitTimestampDefaults) !== 1 ||
     Number(runtime.autoIncrementIncrement) !== 1 ||
@@ -57,6 +122,14 @@ export function assertProductionRuntimeValues(runtime) {
     Number(runtime.informationSchemaStatsExpiry) !== 0 ||
     Number(runtime.sqlQuoteShowCreate) !== 1 ||
     Number(runtime.showCreateTableVerbosity) !== 1 ||
+    Number(runtime.sqlSafeUpdates) !== 0 ||
+    Number(runtime.uniqueChecks) !== 1 ||
+    Number(runtime.transactionReadOnly) !== 0 ||
+    Number(runtime.timestampIsDefault) !== 1 ||
+    Number(runtime.insertId) !== 0 ||
+    Number(runtime.sqlSelectLimitIsDefault) !== 1 ||
+    Number(runtime.sqlBigSelects) !== 1 ||
+    Number(runtime.schemaReadOnly) !== 0 ||
     runtime.defaultEncryption !== "NO"
   ) {
     throw new Error("production migration session contract mismatch");
@@ -65,7 +138,7 @@ export function assertProductionRuntimeValues(runtime) {
 
 async function assertCheckConstraintsEnforced(connection) {
   await connection.query(
-    "CREATE TEMPORARY TABLE `_leaderbot_check_enforcement_probe` (`value` int, CONSTRAINT `_leaderbot_check_probe_positive` CHECK (`value` > 0))"
+    "CREATE TEMPORARY TABLE `_leaderbot_check_enforcement_probe` (`value` int PRIMARY KEY, CONSTRAINT `_leaderbot_check_probe_positive` CHECK (`value` > 0))"
   );
   let enforced = false;
   try {

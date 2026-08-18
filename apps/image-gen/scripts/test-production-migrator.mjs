@@ -14,7 +14,9 @@ import {
 import {
   normalizeShowCreate,
   normalizeSqlOutsideQuotedValues,
+  assertProductionMigrationRuntime,
   assertProductionRuntimeValues,
+  assertTriggerGrantScope,
   canonicalTriggerTuple,
   productionSchemaSqlMode,
   sha256,
@@ -46,6 +48,10 @@ const databases = [
   "leaderbot_production_migrator_empty_history",
   "leaderbot_production_migrator_first_unsupported_partial",
   "leaderbot_production_migrator_advanced_0014_history",
+  "leaderbot_production_migrator_poisoned_session",
+  "leaderbot_production_migrator_primary_key_fresh",
+  "leaderbot_production_migrator_primary_key_upgrade",
+  "leaderbot_production_migrator_prepared_capacity",
 ];
 const admin = await mysql.createConnection({
   host: adminUrl.hostname,
@@ -106,6 +112,78 @@ try {
 
   const { migrations: manifest } = await loadAndVerifyMigrationManifest();
   const finalStatements = await readMigrationStatements(manifest.at(-1));
+  await withDatabase(databases[14], async connection => {
+    await connection.query("SET SESSION sql_safe_updates=1");
+    await connection.query("SET SESSION unique_checks=0");
+    await connection.query("SET SESSION transaction_read_only=1");
+    await connection.query("SET SESSION timestamp=1700000000");
+    await connection.query("SET SESSION sql_select_limit=10");
+    await connection.query("SET SESSION sql_big_selects=0");
+    await assertProductionMigrationRuntime(connection);
+    // insert_id is intentionally never SET by the runner: setting it to zero
+    // still forces the next AUTO_INCREMENT value to zero in MySQL. A reused
+    // connection with a pending explicit insert id must therefore be refused.
+    await connection.query("SET SESSION insert_id=77");
+    await expectFailure(
+      assertProductionMigrationRuntime(connection),
+      "poisoned insert id",
+      "production migration session contract mismatch"
+    );
+  });
+  const canonicalizedSession = await runProductionMigrations({
+    databaseUrl: databaseUrl(databases[14]),
+  });
+  assert(
+    canonicalizedSession.appliedCount === 16,
+    "poisoned session values are canonicalized before fresh migration"
+  );
+
+  const [[primaryKeyDefault]] = await admin.query(
+    "SELECT @@GLOBAL.sql_require_primary_key AS value"
+  );
+  try {
+    await admin.query("SET GLOBAL sql_require_primary_key=1");
+    const primaryKeyFresh = await runProductionMigrations({
+      databaseUrl: databaseUrl(databases[15]),
+    });
+    assert(
+      primaryKeyFresh.appliedCount === 16,
+      "fresh migration supports required primary keys"
+    );
+    await withDatabase(databases[16], connection =>
+      applyMigrationPrefix(connection, manifest.slice(0, -1))
+    );
+    const primaryKeyUpgrade = await runProductionMigrations({
+      databaseUrl: databaseUrl(databases[16]),
+    });
+    assert(
+      primaryKeyUpgrade.appliedCount === 16,
+      "0014 upgrade supports required primary keys"
+    );
+  } finally {
+    await admin.query(
+      `SET GLOBAL sql_require_primary_key=${Number(primaryKeyDefault.value)}`
+    );
+  }
+
+  const [[preparedDefault]] = await admin.query(
+    "SELECT @@GLOBAL.max_prepared_stmt_count AS value"
+  );
+  try {
+    await admin.query("SET GLOBAL max_prepared_stmt_count=0");
+    await expectFailure(
+      runProductionMigrations({ databaseUrl: databaseUrl(databases[17]) }),
+      "fresh migration without prepared statement capacity",
+      "MySQL prepared statement capacity is exhausted"
+    );
+  } finally {
+    await admin.query(
+      `SET GLOBAL max_prepared_stmt_count=${Number(preparedDefault.value)}`
+    );
+  }
+  await withDatabase(databases[17], connection =>
+    assertNoApplicationTables(connection, "prepared capacity refusal")
+  );
   await testCompletedSchemaRefusals(databases[0], finalStatements);
   await testHistoryRefusals(databases[0], manifest);
   await withDatabase(databases[1], async connection => {
@@ -812,6 +890,13 @@ function testSchemaDigestContracts() {
     foreignKeyChecks: 1,
     defaultStorageEngine: "InnoDB",
     innodbDefaultRowFormat: "dynamic",
+    innodbPageSize: 16384,
+    innodbForceRecovery: 0,
+    innodbReadOnly: 0,
+    readOnly: 0,
+    superReadOnly: 0,
+    disabledStorageEngines: "",
+    innodbStrictMode: 1,
     lowerCaseTableNames: 0,
     explicitTimestampDefaults: 1,
     autoIncrementIncrement: 1,
@@ -819,9 +904,47 @@ function testSchemaDigestContracts() {
     informationSchemaStatsExpiry: 0,
     sqlQuoteShowCreate: 1,
     showCreateTableVerbosity: 1,
+    sqlSafeUpdates: 0,
+    uniqueChecks: 1,
+    transactionReadOnly: 0,
+    timestampIsDefault: 1,
+    insertId: 0,
+    sqlSelectLimitIsDefault: 1,
+    sqlBigSelects: 1,
+    schemaReadOnly: 0,
     defaultEncryption: "NO",
   };
   assertProductionRuntimeValues(validRuntime);
+  assertTriggerGrantScope(
+    ["GRANT TRIGGER ON `leaderbot`.* TO `migrator`@`%`"],
+    "leaderbot",
+    false
+  );
+  assertTriggerGrantScope(
+    ["GRANT ALL PRIVILEGES ON *.* TO `migrator`@`%`"],
+    "leaderbot",
+    true
+  );
+  expectSynchronousFailure(
+    () =>
+      assertTriggerGrantScope(
+        ["GRANT ALL PRIVILEGES ON `otherdb`.* TO `migrator`@`%`"],
+        "leaderbot",
+        false
+      ),
+    "wrong-schema trigger grant",
+    "migration principal lacks scoped TRIGGER privilege"
+  );
+  expectSynchronousFailure(
+    () =>
+      assertTriggerGrantScope(
+        ["GRANT TRIGGER ON `leaderbot`.* TO `migrator`@`%`"],
+        "leaderbot",
+        true
+      ),
+    "schema trigger without global SUPER",
+    "migration principal lacks global SUPER for triggers"
+  );
   expectSynchronousFailure(
     () => assertProductionRuntimeValues({ ...validRuntime, version: "8.0.42" }),
     "unsupported MySQL runtime",
@@ -830,6 +953,13 @@ function testSchemaDigestContracts() {
   for (const [field, value] of [
     ["defaultStorageEngine", "MyISAM"],
     ["innodbDefaultRowFormat", "compact"],
+    ["innodbPageSize", 4096],
+    ["innodbForceRecovery", 1],
+    ["innodbReadOnly", 1],
+    ["readOnly", 1],
+    ["superReadOnly", 1],
+    ["disabledStorageEngines", "MyISAM,InnoDB"],
+    ["innodbStrictMode", 0],
     ["lowerCaseTableNames", 2],
     ["explicitTimestampDefaults", 0],
     ["autoIncrementIncrement", 2],
@@ -837,6 +967,14 @@ function testSchemaDigestContracts() {
     ["informationSchemaStatsExpiry", 86400],
     ["sqlQuoteShowCreate", 0],
     ["showCreateTableVerbosity", 0],
+    ["sqlSafeUpdates", 1],
+    ["uniqueChecks", 0],
+    ["transactionReadOnly", 1],
+    ["timestampIsDefault", 0],
+    ["insertId", 7],
+    ["sqlSelectLimitIsDefault", 0],
+    ["sqlBigSelects", 0],
+    ["schemaReadOnly", 1],
     ["defaultEncryption", "YES"],
   ]) {
     expectSynchronousFailure(

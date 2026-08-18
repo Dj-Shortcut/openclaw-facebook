@@ -4,7 +4,7 @@
     "mysqlVersion": "8.4.11"
   },
   "normalization": "show-create-and-trigger-v1",
-  "migrationSetSha256": "70325234dfb0297c67a4d0ecafe7a3f1d265a973881c7da7a8d02c90db2d306a",
+  "migrationSetSha256": "a31c176428b19ec008d89be13b88005a889cc57ab28bf1d2a6fb1a23c0d9c18f",
   "base0014": {
     "tables": {
       "aiIdentities": "7a68b0d6db4bd3f360d191823306ff01865661dcaa2ee4cd627a3c8a5a5b03ce",
@@ -257,7 +257,7 @@
       },
       {
         "id": 16,
-        "hash": "dd7cae16780a70fc0648ddef43066ae71e874dc7fc555f5c54cdc05e939f4052",
+        "hash": "d4ad4caa792bd427b5e031c0f4956e568bff3faffba94fda54161ce5838d2844",
         "createdAt": 1787056321209
       }
     ]

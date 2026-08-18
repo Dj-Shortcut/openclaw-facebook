@@ -6,7 +6,7 @@
   "schemaSnapshot": "meta/0015_snapshot.json",
   "schemaSnapshotSha256": "5f889f07ae52ba8a932ec10043ee2f2fe1f7e753515c9ce1f34261acc9ca08e5",
   "productionSchemaContract": "production-schema-contract.json",
-  "productionSchemaContractSha256": "bde015c758234c8e7869914a30887d0e7cbd1dde2e68b271c758b9dee9568037",
+  "productionSchemaContractSha256": "a8f6db537a50ff8611309c3f31324f2bc8a9a7148fa46870b1d01063d0482c72",
   "migrations": [
     {
       "idx": 0,
@@ -102,7 +102,7 @@
       "idx": 15,
       "when": 1787056321209,
       "tag": "0015_production_readiness_registry",
-      "sha256": "dd7cae16780a70fc0648ddef43066ae71e874dc7fc555f5c54cdc05e939f4052"
+      "sha256": "d4ad4caa792bd427b5e031c0f4956e568bff3faffba94fda54161ce5838d2844"
     }
   ]
 }
