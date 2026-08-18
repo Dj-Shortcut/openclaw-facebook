@@ -28,6 +28,7 @@ import {
   getNextBillingOutboxDue,
   processBillingOutboxItem,
   reconcileExecutionDisabledSubscription,
+  runBillingOutboxOnce,
 } from "./_core/billing/outboxWorker";
 import { finalizeSubscriptionProviderOperation } from "./_core/billing/outboxWorker";
 import type { MollieClient } from "./_core/billing/mollieClient";
@@ -804,6 +805,228 @@ suite("billing execution MySQL safety boundary", () => {
         authorizationEpoch: 2,
       })
     ).resolves.toBe(false);
+  });
+
+  it("serializes concurrent checkout exposure and disable on the control row", async () => {
+    const database = await getDatabaseOrThrow();
+    await provisionEnabledBoundary();
+    const intentId = `1c000000-0000-4000-8000-${String(workspaceId).padStart(12, "0")}`;
+    const paymentId = `tr_concurrent_exposure_${workspaceId}`;
+    await insertIntent(intentId, "creating_payment");
+    await database
+      .update(billingIntents)
+      .set({ status: "open", molliePaymentId: paymentId })
+      .where(eq(billingIntents.intentId, intentId));
+    await database.insert(workspaceBillingProfiles).values({
+      workspaceId,
+      countryCode: "BE",
+      customerType: "consumer",
+      verificationStatus: "verified",
+      verificationMethod: "mysql_concurrent_exposure_fixture",
+      evidenceReferenceHash: "concurrent-exposure-evidence",
+      verifiedAt: new Date(Date.now() - 60_000),
+      verificationExpiresAt: new Date(Date.now() + 60_000),
+      verifiedByUserId: userId,
+      peppolReady: false,
+      eligibilityVersion: 0,
+    });
+    await insertProviderOperation({
+      operationId: `1d000000-0000-4000-8000-${String(workspaceId).padStart(12, "0")}`,
+      operationType: "create_payment",
+      intentId,
+      state: "succeeded",
+      resourceId: paymentId,
+    });
+    const url = process.env.DATABASE_URL;
+    if (!url) throw new Error("DATABASE_URL is required");
+    const blocker = await mysql.createConnection(url);
+    const observer = await mysql.createConnection(url);
+    let exposure!: Promise<boolean>;
+    let disable!: ReturnType<typeof disableBillingSchedulerTenant>;
+    try {
+      await blocker.beginTransaction();
+      await blocker.query(
+        "SELECT `workspace_id` FROM `billing_execution_controls` WHERE `workspace_id`=? AND `mode`='test' FOR UPDATE",
+        [workspaceId]
+      );
+      const [[identity]] = await blocker.query<Array<{ connectionId: number }>>(
+        "SELECT CONNECTION_ID() AS connectionId"
+      );
+      exposure = isCheckoutUrlExposureAllowed({
+        intentId,
+        workspaceId,
+        mode: "test",
+        molliePaymentId: paymentId,
+        billingProfileVersion: 0,
+        authorizationEpoch: 2,
+      });
+      disable = disableBillingSchedulerTenant({
+        workspaceId,
+        mode: "test",
+        actorUserId: userId,
+        requestId: `1e000000-0000-4000-8000-${String(workspaceId).padStart(12, "0")}`,
+        expectedExecutionEpoch: 2,
+        reason: "concurrent URL exposure containment",
+      });
+      await waitForBlockedTransactions(observer, identity!.connectionId, 2);
+      await blocker.commit();
+      const outcomes = await Promise.allSettled([exposure, disable]);
+      expect(outcomes.map(outcome => outcome.status)).toEqual([
+        "fulfilled",
+        "fulfilled",
+      ]);
+    } finally {
+      await blocker.rollback().catch(() => undefined);
+      await blocker.end();
+      await observer.end();
+    }
+    const exposed = await exposure;
+    const [intent] = await database
+      .select({
+        status: billingIntents.status,
+        urlExposedAt: billingIntents.urlExposedAt,
+      })
+      .from(billingIntents)
+      .where(eq(billingIntents.intentId, intentId));
+    expect(intent?.status).toBe("contained");
+    expect(Boolean(intent?.urlExposedAt)).toBe(exposed);
+    await expect(
+      isCheckoutUrlExposureAllowed({
+        intentId,
+        workspaceId,
+        mode: "test",
+        molliePaymentId: paymentId,
+        billingProfileVersion: 0,
+        authorizationEpoch: 2,
+      })
+    ).resolves.toBe(false);
+    const cancels = await database
+      .select({ payload: billingOutbox.payload })
+      .from(billingOutbox)
+      .where(
+        and(
+          eq(billingOutbox.workspaceId, workspaceId),
+          eq(billingOutbox.eventType, "cancel_payment")
+        )
+      );
+    expect(
+      cancels.some(
+        row =>
+          (row.payload as Record<string, unknown>).targetPaymentId === paymentId
+      )
+    ).toBe(true);
+  });
+
+  it("fails a mismatched safety cancel and deduplicates operator review", async () => {
+    const database = await getDatabaseOrThrow();
+    await provisionEnabledBoundary();
+    const customerId = `cst_${workspaceId}`;
+    const intentId = `1f000000-0000-4000-8000-${String(workspaceId).padStart(12, "0")}`;
+    const operationId = `20000000-0000-4000-8000-${String(workspaceId).padStart(12, "0")}`;
+    const subscriptionId = `sub_scope_${workspaceId}`;
+    await database.insert(billingCustomers).values({
+      workspaceId,
+      mode: "test",
+      mollieCustomerId: customerId,
+      externalReference: `customer-${workspaceId}`,
+      idempotencyKey: `customer-key-${workspaceId}`,
+      status: "active",
+    });
+    await insertIntent(intentId, "paid");
+    await database.insert(billingSubscriptions).values({
+      workspaceId,
+      mode: "test",
+      planCode: "startpilot",
+      mollieCustomerId: customerId,
+      mollieSubscriptionId: subscriptionId,
+      sourceIntentId: intentId,
+      idempotencyKey: `scope-subscription-${workspaceId}`,
+      status: "provisioning",
+      interval: "1 month",
+      recurringAmount: "19.00",
+      currency: "EUR",
+      entitlements: { aiAnswers: 100 },
+      mollieDescription: "Scope mismatch fixture",
+    });
+    await insertProviderOperation({
+      operationId,
+      operationType: "create_subscription",
+      intentId,
+      state: "succeeded",
+      resourceId: subscriptionId,
+    });
+    await disableBillingSchedulerTenant({
+      workspaceId,
+      mode: "test",
+      actorUserId: userId,
+      requestId: `21000000-0000-4000-8000-${String(workspaceId).padStart(12, "0")}`,
+      expectedExecutionEpoch: 2,
+      reason: "scope mismatch containment",
+    });
+    await database
+      .update(billingOutbox)
+      .set({ availableAt: new Date("2000-01-01T00:00:00.000Z") })
+      .where(
+        and(
+          eq(billingOutbox.workspaceId, workspaceId),
+          eq(billingOutbox.eventType, "cancel_subscription")
+        )
+      );
+    const cancelSubscription = vi.fn();
+    const processed = await runBillingOutboxOnce(workspaceId, {
+      getSubscription: vi.fn().mockResolvedValue({
+        resource: "subscription",
+        id: subscriptionId,
+        mode: "test",
+        status: "active",
+        amount: { currency: "EUR", value: "19.00" },
+        interval: "1 month",
+        startDate: "2026-09-01",
+        metadata: { billingIntentId: "wrong-intent" },
+      }),
+      cancelSubscription,
+    } as unknown as MollieClient);
+    expect(processed).toBe(true);
+    expect(cancelSubscription).not.toHaveBeenCalled();
+    const cancellationJobs = await database
+      .select({
+        status: billingOutbox.status,
+        lastErrorCode: billingOutbox.lastErrorCode,
+        deliveryId: billingOutbox.deliveryId,
+        payload: billingOutbox.payload,
+      })
+      .from(billingOutbox)
+      .where(
+        and(
+          eq(billingOutbox.workspaceId, workspaceId),
+          eq(billingOutbox.eventType, "cancel_subscription")
+        )
+      );
+    expect(cancellationJobs).toHaveLength(1);
+    const [failed] = cancellationJobs;
+    expect(failed).toMatchObject({
+      status: "failed",
+      lastErrorCode: "subscription_cancellation_provider_scope_mismatch",
+    });
+    const reviews = await database
+      .select({
+        deduplicationKey: billingOutbox.deduplicationKey,
+        payload: billingOutbox.payload,
+      })
+      .from(billingOutbox)
+      .where(
+        and(
+          eq(billingOutbox.workspaceId, workspaceId),
+          eq(billingOutbox.eventType, "manual_review")
+        )
+      );
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]).toMatchObject({
+      deduplicationKey: `subscription_cancel_scope_review:${failed!.deliveryId}`,
+      payload: {
+        reason: "subscription_cancellation_provider_scope_mismatch",
+      },
+    });
   });
 
   it("persists a known provider result but blocks stale-lease domain effects", async () => {

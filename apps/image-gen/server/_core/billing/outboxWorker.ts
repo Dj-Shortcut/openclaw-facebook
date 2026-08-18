@@ -1842,6 +1842,35 @@ export async function cancelContainedMollieSubscription(
     }
   }
 
+  if (executionDisabledEpoch !== null) {
+    if (!executionIntentMatches) {
+      await recordSubscriptionCancellationReview(
+        job,
+        "subscription_cancellation_local_scope_mismatch"
+      );
+      throw new PermanentOutboxError(
+        "subscription_cancellation_local_scope_mismatch"
+      );
+    }
+    // An exact local/provider-operation binding was established above. A 404
+    // for that immutable target is therefore an idempotent already-absent
+    // result. Any returned resource must still match every provider boundary.
+    if (!remote) return "skipped_current";
+    if (
+      remote.id !== target.subscriptionId ||
+      remote.mode !== job.mode ||
+      metadataIntentId(remote.metadata) !== boundTarget.sourceIntentId
+    ) {
+      await recordSubscriptionCancellationReview(
+        job,
+        "subscription_cancellation_provider_scope_mismatch"
+      );
+      throw new PermanentOutboxError(
+        "subscription_cancellation_provider_scope_mismatch"
+      );
+    }
+  }
+
   let matchingProvisioningRemoteIds: string[] | null = null;
   if (
     executionDisabledEpoch === null &&
@@ -1873,15 +1902,9 @@ export async function cancelContainedMollieSubscription(
       .for("update");
     const current = rows[0] ?? null;
     if (executionDisabledEpoch !== null) {
-      if (
-        !executionIntentMatches ||
-        !remote ||
-        remote.id !== target.subscriptionId ||
-        remote.mode !== job.mode ||
-        metadataIntentId(remote.metadata) !== boundTarget.sourceIntentId
-      ) {
-        return "skipped_current" as const;
-      }
+      // The execution-disabled scope and provider resource were validated
+      // before entering this transaction. Only the established current remote
+      // may be preserved; every other exact revoked-epoch target is canceled.
       if (
         current &&
         (current.status === "active" || current.status === "past_due") &&
@@ -3010,7 +3033,11 @@ export async function failBillingOutboxItem(
           set: { deduplicationKey: sql`deduplication_key` },
         });
     }
-    if (job.eventType === "cancel_subscription") {
+    if (
+      job.eventType === "cancel_subscription" &&
+      errorCode !== "subscription_cancellation_local_scope_mismatch" &&
+      errorCode !== "subscription_cancellation_provider_scope_mismatch"
+    ) {
       await tx
         .insert(billingOutbox)
         .values({

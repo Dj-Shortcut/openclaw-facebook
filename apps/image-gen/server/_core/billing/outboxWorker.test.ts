@@ -3,7 +3,11 @@ import type {
   BillingOutboxItem,
   BillingSubscription,
 } from "../../../drizzle/schema";
-import type { MollieClient, MollieSubscription } from "./mollieClient";
+import {
+  MollieApiError,
+  type MollieClient,
+  type MollieSubscription,
+} from "./mollieClient";
 
 const databaseMock = vi.hoisted(() => vi.fn());
 const handoffMock = vi.hoisted(() => vi.fn());
@@ -571,7 +575,7 @@ describe("billing outbox containment safeguards", () => {
       };
       const localIntent =
         mismatch === "remote" ? [{ intentId: current.sourceIntentId }] : [];
-      const { database } = transactionalDatabase(
+      const { database, insertValues } = transactionalDatabase(
         [[current], [current]],
         localIntent
       );
@@ -589,6 +593,10 @@ describe("billing outbox containment safeguards", () => {
         revokedAuthorizationEpoch: 7,
       };
 
+      const expectedError =
+        mismatch === "remote"
+          ? "subscription_cancellation_provider_scope_mismatch"
+          : "subscription_cancellation_local_scope_mismatch";
       await expect(
         cancelContainedMollieSubscription(
           job,
@@ -598,10 +606,53 @@ describe("billing outbox containment safeguards", () => {
             cancelSubscription,
           } as unknown as MollieClient
         )
-      ).resolves.toBe("skipped_current");
+      ).rejects.toThrow(expectedError);
       expect(cancelSubscription).not.toHaveBeenCalled();
+      expect(insertValues).toHaveBeenCalledWith({
+        workspaceId: job.workspaceId,
+        mode: job.mode,
+        eventType: "manual_review",
+        deduplicationKey: `subscription_cancel_scope_review:${job.deliveryId}`,
+        payload: { reason: expectedError },
+        status: "pending",
+      });
     }
   );
+
+  it("treats an exact execution-disabled 404 as idempotently absent", async () => {
+    const current = {
+      ...provisioningSubscription(),
+      mollieSubscriptionId: "sub_subscription123",
+    };
+    const { database, insertValues } = transactionalDatabase(
+      [[current]],
+      [{ intentId: current.sourceIntentId }]
+    );
+    databaseMock.mockResolvedValue(database);
+    const job = containmentJob();
+    job.payload = {
+      ...job.payload,
+      reason: "billing_execution_disabled",
+      revokedAuthorizationEpoch: 7,
+    };
+
+    await expect(
+      cancelContainedMollieSubscription(
+        job,
+        {
+          customerId: "cst_customer123",
+          subscriptionId: "sub_subscription123",
+        },
+        {
+          getSubscription: vi
+            .fn()
+            .mockRejectedValue(new MollieApiError(404, "not_found")),
+          cancelSubscription: vi.fn(),
+        } as unknown as MollieClient
+      )
+    ).resolves.toBe("skipped_current");
+    expect(insertValues).not.toHaveBeenCalled();
+  });
 
   it("rejects a cross-intent cancellation binding without provider DELETE", async () => {
     const current = {
@@ -764,6 +815,9 @@ function transactionalDatabase(
       set: vi.fn(() => ({ where: updateWhere })),
     })),
   };
+  const insertValues = vi.fn(() => ({
+    onDuplicateKeyUpdate: vi.fn(async () => undefined),
+  }));
   const database = {
     select: vi.fn(() => ({
       from: vi.fn(() => ({
@@ -772,11 +826,7 @@ function transactionalDatabase(
         })),
       })),
     })),
-    insert: vi.fn(() => ({
-      values: vi.fn(() => ({
-        onDuplicateKeyUpdate: vi.fn(async () => undefined),
-      })),
-    })),
+    insert: vi.fn(() => ({ values: insertValues })),
     transaction: vi.fn(async callback => {
       expect(inTransaction).toBe(false);
       inTransaction = true;
@@ -787,7 +837,7 @@ function transactionalDatabase(
       }
     }),
   };
-  return { database, isInTransaction: () => inTransaction };
+  return { database, insertValues, isInTransaction: () => inTransaction };
 }
 
 function containmentJob(): BillingOutboxItem {

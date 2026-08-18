@@ -15,6 +15,8 @@ describe("metadata-only billing notification delivery", () => {
     "subscription_provider_ambiguous_after_disable",
     "payment_provider_ambiguous_after_disable",
     "payment_cancellation_failed",
+    "subscription_cancellation_local_scope_mismatch",
+    "subscription_cancellation_provider_scope_mismatch",
   ])("delivers key-free operator reason %s", async reason => {
     delete process.env.MOLLIE_API_KEY;
     process.env.BILLING_OPERATOR_NOTIFICATION_WEBHOOK_URL =
