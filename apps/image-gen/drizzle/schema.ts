@@ -731,9 +731,7 @@ export const billingSchedulerTenants = mysqlTable(
 export const billingNotificationSchedulerTenants = mysqlTable(
   "billing_notification_scheduler_tenants",
   {
-    workspaceId: int("workspace_id")
-      .notNull()
-      .references(() => workspaces.id, { onDelete: "restrict" }),
+    workspaceId: int("workspace_id").notNull(),
     mode: mysqlEnum("mode", ["test", "live"]).notNull(),
     nextDueAt: timestamp("next_due_at").defaultNow().notNull(),
     leaseToken: varchar("lease_token", { length: 36 }),
@@ -743,6 +741,11 @@ export const billingNotificationSchedulerTenants = mysqlTable(
     deadLetterCount: int("dead_letter_count").default(0).notNull(),
   },
   table => [
+    foreignKey({
+      name: "billing_notification_scheduler_workspace_fk",
+      columns: [table.workspaceId],
+      foreignColumns: [workspaces.id],
+    }).onDelete("restrict"),
     primaryKey({ columns: [table.workspaceId, table.mode] }),
     check(
       "billing_notification_scheduler_pending_nonnegative",

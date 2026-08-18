@@ -1,7 +1,7 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "3215387e-ee5f-425c-83c4-3ba31107db28",
+  "id": "e49ec696-f6e4-499e-a91f-a4cb0e6c466a",
   "prevId": "c8afab27-4349-4c5b-8db3-6fc741ef425d",
   "tables": {
     "aiIdentities": {
@@ -1713,8 +1713,8 @@
         }
       },
       "foreignKeys": {
-        "billing_notification_scheduler_tenants_workspace_id_workspaces_id_fk": {
-          "name": "billing_notification_scheduler_tenants_workspace_id_workspaces_id_fk",
+        "billing_notification_scheduler_workspace_fk": {
+          "name": "billing_notification_scheduler_workspace_fk",
           "tableFrom": "billing_notification_scheduler_tenants",
           "tableTo": "workspaces",
           "columnsFrom": [

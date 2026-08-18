@@ -60,6 +60,11 @@ jobs:
         run: |
           corepack pnpm --dir apps/image-gen install --frozen-lockfile
 
+      - name: Check MySQL identifier contract
+        working-directory: apps/image-gen
+        run: |
+          pnpm run db:check-identifiers
+
       - name: Run drizzle migrations
         working-directory: apps/image-gen
         env:

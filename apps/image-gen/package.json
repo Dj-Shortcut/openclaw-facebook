@@ -11,6 +11,7 @@
     "build:docker": "vite build && esbuild server/_core/index.ts --platform=node --bundle --format=cjs --external:vite --outfile=dist/index.cjs",
     "check": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
+    "db:check-identifiers": "node scripts/rehearse-0015-migration.mjs --check-identifiers-only",
     "db:migrate": "drizzle-kit migrate",
     "db:rehearse-0015": "node scripts/rehearse-0015-migration.mjs",
     "dev": "cross-env NODE_ENV=development tsx watch server/_core/index.ts",

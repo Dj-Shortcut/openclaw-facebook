@@ -2,9 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import mysql from "mysql2/promise";
 
+const identifiersOnly = process.argv.includes("--check-identifiers-only");
 const urlValue = process.env.MYSQL_REHEARSAL_URL?.trim();
-if (!urlValue) throw new Error("MYSQL_REHEARSAL_URL is required");
-const adminUrl = new URL(urlValue);
+if (!urlValue && !identifiersOnly) {
+  throw new Error("MYSQL_REHEARSAL_URL is required");
+}
+const adminUrl = urlValue ? new URL(urlValue) : null;
 const databaseNames = {
   preflight: "leaderbot_0015_preflight_rehearsal",
   quotaUnder: "leaderbot_0015_quota_under_rehearsal",
@@ -31,6 +34,11 @@ const through0014 = migrationFiles.filter(
 const migration0015 = await readStatements(
   "0015_production_readiness_registry.sql"
 );
+await assertMySqlIdentifierContract();
+if (identifiersOnly) {
+  process.stdout.write("MySQL identifier contract passed (maximum 64 bytes).\n");
+  process.exit(0);
+}
 
 const admin = await mysql.createConnection({
   host: adminUrl.hostname,
@@ -169,6 +177,38 @@ async function readStatements(filename) {
     .split("--> statement-breakpoint")
     .map(statement => statement.trim())
     .filter(Boolean);
+}
+
+async function assertMySqlIdentifierContract() {
+  const sql = await fs.readFile(
+    path.join(drizzleDirectory, "0015_production_readiness_registry.sql"),
+    "utf8"
+  );
+  const sqlNames = [
+    ...sql.matchAll(/(?:CONSTRAINT|(?:UNIQUE )?INDEX|TRIGGER)\s+`([^`]+)`/g),
+  ].map(match => match[1]);
+  const snapshot = JSON.parse(
+    await fs.readFile(
+      path.join(drizzleDirectory, "meta", "0015_snapshot.json"),
+      "utf8"
+    )
+  );
+  const snapshotNames = Object.values(snapshot.tables).flatMap(table =>
+    [
+      table.indexes,
+      table.foreignKeys,
+      table.compositePrimaryKeys,
+      table.uniqueConstraints,
+      table.checkConstraint,
+    ].flatMap(collection => Object.keys(collection ?? {}))
+  );
+  const tooLong = [...new Set([...sqlNames, ...snapshotNames])]
+    .filter(name => Buffer.byteLength(name, "utf8") > 64)
+    .sort();
+  assert(
+    tooLong.length === 0,
+    `MySQL identifiers exceed 64 bytes: ${tooLong.join(", ")}`
+  );
 }
 
 async function applyFiles(connection, files) {
@@ -462,6 +502,7 @@ async function assertSchemaContract(connection) {
     "billing_intents_scope_unique",
     "billing_notification_inbox_receipt_workspace_fk",
     "billing_notification_receiver_outbox_receipt_workspace_fk",
+    "billing_notification_scheduler_workspace_fk",
     "billing_provider_operations_intent_scope_fk",
     "billing_subscriptions_source_intent_scope_fk",
     "billing_webhook_routes_intent_scope_fk",

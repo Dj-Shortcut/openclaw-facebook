@@ -79,6 +79,9 @@ jobs:
           LINT_BASE_REF: origin/main
         run: pnpm run format:server:release
 
+      - name: Check MySQL identifier contract
+        run: pnpm run db:check-identifiers
+
       - name: Type-check production code
         run: pnpm run check
 
