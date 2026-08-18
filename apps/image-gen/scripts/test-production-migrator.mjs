@@ -19,6 +19,7 @@ const appDirectory = path.resolve(
 const databases = [
   "leaderbot_production_migrator_concurrency",
   "leaderbot_production_migrator_upgrade",
+  "leaderbot_production_migrator_upgrade_with_state",
   "leaderbot_production_migrator_short_history",
   "leaderbot_production_migrator_drifted_base",
   "leaderbot_production_migrator_partial",
@@ -62,22 +63,35 @@ try {
   assert(upgraded.appliedCount === 16, "clean 0014 to 0015 upgrade");
 
   await withDatabase(databases[2], async connection => {
+    await applyMigrationPrefix(connection, manifest.slice(0, -1));
+    await createLegacyMessengerState(connection);
+  });
+  const upgradedWithState = await runProductionMigrations({
+    databaseUrl: databaseUrl(databases[2]),
+  });
+  assert(
+    upgradedWithState.appliedCount === 16,
+    "0014 with exact legacy state to 0015 upgrade"
+  );
+
+  await withDatabase(databases[3], async connection => {
     await applyMigrationPrefix(connection, manifest.slice(0, 1));
   });
   await expectFailure(
-    runProductionMigrations({ databaseUrl: databaseUrl(databases[2]) }),
+    runProductionMigrations({ databaseUrl: databaseUrl(databases[3]) }),
     "unsupported short history",
     "unsupported migration history length"
   );
 
-  await withDatabase(databases[3], async connection => {
+  await withDatabase(databases[4], async connection => {
     await applyMigrationPrefix(connection, manifest.slice(0, -1));
+    await createLegacyMessengerState(connection);
     await connection.query(
       "ALTER TABLE `billing_outbox` MODIFY COLUMN `attempt_count` bigint NOT NULL DEFAULT 0"
     );
   });
   await expectFailure(
-    runProductionMigrations({ databaseUrl: databaseUrl(databases[3]) }),
+    runProductionMigrations({ databaseUrl: databaseUrl(databases[4]) }),
     "drifted 0014 schema",
     "0014 schema contract is incomplete"
   );
@@ -97,14 +111,14 @@ try {
     "applied migration hash/order mismatch"
   );
 
-  await withDatabase(databases[4], async connection => {
+  await withDatabase(databases[5], async connection => {
     await connection.query(
       "CREATE TABLE `billing_accounting_event_links` (`id` bigint PRIMARY KEY)"
     );
   });
   await expectFailure(
     runProductionMigrations({
-      databaseUrl: databaseUrl(databases[4]),
+      databaseUrl: databaseUrl(databases[5]),
       lockTimeoutSeconds: 0,
     }),
     "partial 0015 footprint",
@@ -176,6 +190,23 @@ async function applyMigrationPrefix(connection, migrations) {
       [migration.sha256, migration.when]
     );
   }
+}
+
+async function createLegacyMessengerState(connection) {
+  await connection.query(`CREATE TABLE \`messengerState\` (
+    \`id\` int AUTO_INCREMENT NOT NULL,
+    \`psid\` varchar(64) NOT NULL,
+    \`userKey\` varchar(64) NOT NULL,
+    \`stage\` enum('IDLE','AWAITING_PHOTO','AWAITING_STYLE','PROCESSING','RESULT_READY','FAILURE') DEFAULT 'IDLE' NOT NULL,
+    \`lastPhotoUrl\` varchar(2048),
+    \`selectedStyle\` varchar(64),
+    \`preferredLang\` varchar(10) DEFAULT 'nl' NOT NULL,
+    \`lastGeneratedUrl\` varchar(2048),
+    \`updatedAt\` timestamp DEFAULT (now()) NOT NULL ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT \`messengerState_id\` PRIMARY KEY(\`id\`),
+    CONSTRAINT \`messengerState_psid_unique\` UNIQUE(\`psid\`),
+    CONSTRAINT \`messengerState_userKey_unique\` UNIQUE(\`userKey\`)
+  )`);
 }
 
 async function expectFailure(promise, label, expectedMessage) {

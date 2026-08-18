@@ -69,6 +69,21 @@ WHERE
 		WHERE `attempt_count` < 0 OR `max_attempts` <= 0
 	);--> statement-breakpoint
 DROP TEMPORARY TABLE `_0015_scope_preflight`;--> statement-breakpoint
+CREATE TABLE IF NOT EXISTS `messengerState` (
+	`id` int AUTO_INCREMENT NOT NULL,
+	`psid` varchar(64) NOT NULL,
+	`userKey` varchar(64) NOT NULL,
+	`stage` enum('IDLE','AWAITING_PHOTO','AWAITING_STYLE','PROCESSING','RESULT_READY','FAILURE') DEFAULT 'IDLE' NOT NULL,
+	`lastPhotoUrl` varchar(2048),
+	`selectedStyle` varchar(64),
+	`preferredLang` varchar(10) DEFAULT 'nl' NOT NULL,
+	`lastGeneratedUrl` varchar(2048),
+	`updatedAt` timestamp DEFAULT (now()) NOT NULL ON UPDATE CURRENT_TIMESTAMP,
+	CONSTRAINT `messengerState_id` PRIMARY KEY(`id`),
+	CONSTRAINT `messengerState_psid_unique` UNIQUE(`psid`),
+	CONSTRAINT `messengerState_userKey_unique` UNIQUE(`userKey`)
+);
+--> statement-breakpoint
 CREATE TABLE `billing_accounting_event_links` (
 	`id` int AUTO_INCREMENT NOT NULL,
 	`provider_event_id` int NOT NULL,

@@ -156,11 +156,9 @@ async function readAppliedMigrations(connection) {
   return rows;
 }
 
-async function inspectSchemaContract(
-  connection,
-  snapshot,
-  expectedTriggers = {}
-) {
+async function inspectSchemaContract(connection, snapshot, options = {}) {
+  const expectedTriggers = options.expectedTriggers ?? {};
+  const optionalMissingTables = new Set(options.optionalMissingTables ?? []);
   const [tables] = await connection.query(
     "SELECT `TABLE_NAME` AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()"
   );
@@ -190,7 +188,10 @@ async function inspectSchemaContract(
   );
   const actualForeignKeys = groupRows(foreignKeys, row => row.name);
   const actualTriggers = new Map(triggers.map(row => [row.name, row]));
-  const snapshotTables = Object.values(snapshot.tables);
+  const snapshotTables = Object.values(snapshot.tables).filter(
+    table =>
+      tableNames.has(table.name) || !optionalMissingTables.has(table.name)
+  );
   const expectedTables = snapshotTables.map(table => table.name);
   const expectedColumns = snapshotTables.flatMap(table =>
     Object.values(table.columns).map(column => ({ table: table.name, column }))
@@ -385,6 +386,8 @@ export async function runProductionMigrations(options = {}) {
   const connection = await mysql.createConnection(databaseUrl);
   let lockName;
   let lockHeld = false;
+  let result;
+  let operationError;
   const startedAt = Date.now();
   try {
     const [[database]] = await connection.query("SELECT DATABASE() AS name");
@@ -407,7 +410,7 @@ export async function runProductionMigrations(options = {}) {
     const beforeContract = await inspectSchemaContract(
       connection,
       contract.snapshot,
-      finalTriggerContract
+      { expectedTriggers: finalTriggerContract }
     );
     if (before.length === 0 && beforeContract.footprintCount > 0) {
       throw new Error(
@@ -423,7 +426,8 @@ export async function runProductionMigrations(options = {}) {
     if (before.length === manifest.length - 1) {
       const baseContract = await inspectSchemaContract(
         connection,
-        contract.baseSnapshot
+        contract.baseSnapshot,
+        { optionalMissingTables: ["messengerState"] }
       );
       if (baseContract.missing.length > 0) {
         throw new Error(
@@ -448,30 +452,47 @@ export async function runProductionMigrations(options = {}) {
     const afterContract = await inspectSchemaContract(
       connection,
       contract.snapshot,
-      finalTriggerContract
+      { expectedTriggers: finalTriggerContract }
     );
     if (afterContract.missing.length > 0) {
       throw new Error(
         `0015 schema contract is incomplete (${afterContract.missing[0]})`
       );
     }
-    return { appliedCount: after.length, lockWaitMs: Date.now() - startedAt };
-  } finally {
-    if (lockHeld) {
-      await releaseMigrationLock(connection, lockName);
-    }
-    await connection.end();
+    result = { appliedCount: after.length, lockWaitMs: Date.now() - startedAt };
+  } catch (error) {
+    operationError = error;
   }
+  const cleanupError = await cleanupMigrationConnection(
+    connection,
+    lockHeld ? lockName : null
+  );
+  if (operationError) throw operationError;
+  if (cleanupError) throw cleanupError;
+  return result;
 }
 
-async function releaseMigrationLock(connection, lockName) {
-  const [[released]] = await connection.query(
-    "SELECT RELEASE_LOCK(?) AS released",
-    [lockName]
-  );
-  if (Number(released.released) !== 1) {
-    throw new Error("migration singleton lock release failed");
+async function cleanupMigrationConnection(connection, lockName) {
+  let cleanupError;
+  if (lockName) {
+    try {
+      const [[released]] = await connection.query(
+        "SELECT RELEASE_LOCK(?) AS released",
+        [lockName]
+      );
+      if (Number(released.released) !== 1) {
+        cleanupError = new Error("migration singleton lock release failed");
+      }
+    } catch (error) {
+      cleanupError = error;
+    }
   }
+  try {
+    await connection.end();
+  } catch (error) {
+    cleanupError ??= error;
+  }
+  return cleanupError;
 }
 
 const isMain =

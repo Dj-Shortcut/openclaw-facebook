@@ -342,15 +342,23 @@ pnpm db:migrate
 `db:migrate` is the only supported production migration entrypoint. It holds a
 database-scoped MySQL singleton lock on the migration connection, validates the
 committed journal/SQL/schema hashes and applied history, refuses a partial 0015,
-and verifies the canonical schema contract after applying. Do not run
+and verifies the required committed snapshot contract after applying. Do not run
 `drizzle-kit migrate` directly. A refusal requires investigation and, for a
 partially applied MySQL DDL migration, restore from the verified pre-migration
 backup rather than a blind rerun.
 
 Supported starting states are deliberately narrow: a genuinely empty database,
-an exact committed 0014 database, or an exact already-complete 0015 database.
-Older prefixes, drifted 0014 schemas, modified migration history, and partial
+a committed 0014 database that passes the required snapshot contract, or an
+already-complete 0015 database that passes the required snapshot contract.
+Older prefixes, detected 0014 drift, modified migration history, and partial
 0015 footprints fail closed.
+
+Known pre-0015 lineage repair: historical SQL 0000–0014 did not create
+`messengerState`, although the committed 0014 snapshot already described it.
+The production runner accepts that one explicitly manifested missing-table
+baseline (or the snapshot-shaped legacy table), and final 0015 creates the table
+for fresh and migration-derived databases. No other missing 0014 table is
+accepted.
 
 The repository includes focused unit tests for webhook handling, state transitions, signature verification, and image generation behavior under OpenAI configuration.
 
