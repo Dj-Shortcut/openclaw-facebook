@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -38,6 +40,27 @@ describe("Mollie configuration", () => {
 
   afterEach(() => {
     process.env = { ...originalEnv };
+  });
+
+  it("documents every credential-free paid preflight setting", () => {
+    const envExample = readFileSync(
+      new URL("../../../.env.example", import.meta.url),
+      "utf8"
+    );
+    for (const name of [
+      "MOLLIE_BILLING_PREFLIGHT_ENABLED",
+      "MOLLIE_BILLING_SCHEDULER_MODE",
+      "BILLING_PROFILE_EVIDENCE_HMAC_SECRET",
+      "MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD",
+      "MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD",
+      "MESSENGER_USER_DAILY_SPEND_CAP_USD",
+      "MESSENGER_GLOBAL_DAILY_IMAGE_CAP",
+      "OPENAI_IMAGE_ESTIMATED_COST_USD",
+      "BILLING_NOTIFICATION_PLANE_ENABLED",
+      "AI_ANSWER_FINALIZATION_DRAIN_ENABLED",
+    ]) {
+      expect(envExample).toContain(`${name}=`);
+    }
   });
 
   it.each([

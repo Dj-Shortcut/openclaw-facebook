@@ -1,181 +1,157 @@
 # Mollie + Messenger handoff launch checklist
 
-Status on 2026-08-18: **NO-GO** for live billing.
+Status on 2026-08-18: **repository gate PASS; sandbox/live launch NO-GO**.
 
-This is the single release checklist for the combined Luna payment-readiness
-work from PR #374 and Terra handoff-readiness work from PR #373. It does not
-authorize a production deployment, a live Mollie secret, or a real charge.
-Live secret injection and the first real payment remain explicit human actions
-after every blocker below is closed.
+This checklist covers Luna PR #374, Terra PR #373 at
+`9bf6234fa61e630f1825aa2ce3cec34cd8f88278`, and Sol head `ed1822b`. PR #376,
+the identity-v2 WIP branch and `e378bff` are not inputs.
 
-## Integrated contract
+The protected chain is:
 
-The release candidate must preserve this chain:
+`Messenger inbound -> Page-bound handoff -> portal claim -> membership ->`
+`checkout -> provider snapshot -> ledger/entitlement -> billing outbox ->`
+`Page-scoped delivery or same-paid-row recovery`
 
-`Messenger inbound -> Page-bound portal handoff -> Facebook portal login ->`
-`one-use claim -> workspace membership -> Mollie checkout -> authenticated`
-`payment fetch/webhook -> paid entitlement -> billing outbox -> Page-scoped`
-`Messenger delivery or auditable recovery`
+No failure may reopen payment truth, create a second charge, cross a workspace
+or resurrect erased content.
 
-The boundary between the two inputs is:
+## 1. Preparation
 
-- Luna owns payment truth and emits one `send_portal_handoff` outbox item with
-  the stable payment intent ID, privacy-peppered Messenger sender key, and Page
-  ID.
-- Terra consumes that operation without changing payment truth. It validates
-  Page/workspace state, reuses one delivery capability across bounded transient
-  retries, and atomically revalidates the Page before claim and membership.
-- A delivery failure must never reopen checkout, change paid state, or create a
-  second charge.
+- [ ] Keep `MOLLIE_BILLING_ENABLED=false`,
+      `MOLLIE_LIVE_BILLING_ENABLED=false` and `MOLLIE_MODE=test`.
+- [ ] Keep commercial execution disabled for every workspace/mode. Confirm the
+      provider-key-free safety/notification drain remains healthy.
+- [ ] Name owners for database, Fly, billing, Meta, notification receiver,
+      monitoring, accounting, privacy/legal and incident response.
+- [ ] Take and verify a database backup. Rehearse the gateway Memory Core repair
+      on a cloned volume before changing the gateway runtime/volume.
+- [ ] Confirm no legacy/raw Messenger ingress/generation queue payload remains;
+      readiness must fail instead of draining it into the paid path.
 
-## Release test matrix
+## 2. Migration order and recovery
 
-The local automated result below includes component tests with fakes plus a
-MySQL 8.4 CI integration job. It is not Mollie-provider or production evidence.
+- [ ] Use only `pnpm --dir apps/image-gen run db:migrate:production`; do not run
+      raw `drizzle-kit migrate` in production.
+- [ ] The supported upgrade is exact committed `0014` to final `0015`. The
+      runner verifies MySQL 8.4.11 creation inputs, migration singleton lock,
+      journal/SQL/snapshot/contract hashes, exact before-state, orphan/counter/scope
+      preflights and exact after-state.
+- [ ] Pause mutating app/worker processes before the runner and retain its
+      metadata-only manifest result.
+- [ ] If preflight or partial-state detection fails, make no further DDL change.
+      Restore the disposable rehearsal from backup, repair the reported invariant,
+      and rerun the full preflight.
+- [ ] Rollback is application/exposure first: disable commercial/live billing,
+      stop commercial workers, preserve financial/outbox/audit rows and use the
+      always-on safety drain. Prefer a forward fix. Restore a verified backup only
+      under the approved incident procedure; do not blindly reverse `0015` DDL.
 
-| Scenario                             | Local result                                                                                                         | Remaining release evidence                                                      |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Happy path                           | PASS: paid Startpilot state emits one outbox item; delivery, claim, membership, and billing continuation tests pass  | Run one production-like Test Mode E2E through the real webhook and Page         |
-| Duplicate or delayed webhook         | PASS: deduplication, replay, and reconciliation contracts pass                                                       | Repeat with Mollie Test Mode against the production-like environment            |
-| Failed, canceled, or expired payment | PASS: terminal states do not activate the paid path                                                                  | Record provider Test Mode outcomes                                              |
-| Repeated checkout                    | PASS: checkout intent/idempotency guards pass                                                                        | Exercise concurrent requests against Mollie Test Mode and production-like MySQL |
-| Token replay or second claim         | PASS: consumed, expired, revoked, and inactive capabilities fail closed; MySQL concurrency permits one claim         | Exercise the portal with two Facebook Test Users                                |
-| Wrong authenticated user             | PASS: another user cannot reuse a consumed handoff as billing context because `claimedByUserId` must match           | Exercise two Facebook Test Users end to end                                     |
-| Wrong/cross-tenant/disconnected Page | PASS: send and claim fail closed for missing, ambiguous, changed, disconnected, or cross-workspace Page bindings     | Exercise two test workspaces/Pages in a production-like environment             |
-| Closed Messenger response window     | PASS: no send/token while closed; the matching user's next verified inbound event rearms only the same paid delivery | Exercise the closed-window then inbound recovery with a test Page               |
-| Transient Messenger send failure     | PASS: the capability is revoked and a bounded retry reuses only the same delivery identity                           | Exercise a controlled transient Graph failure with a test Page                  |
-| Recovery without second charge       | PASS: bounded retry and verified-inbound recovery reuse the failed outbox item and never reopen payment truth        | Exercise recovery in Mollie Test Mode and retain redacted evidence              |
+## 3. Fly and credential-free configuration
 
-## Remaining blockers
+- [ ] App and worker use the exact same release image, MySQL, Redis, identity,
+      privacy, scheduler and notification configuration.
+- [ ] `/healthz` is liveness. Deployment traffic/launch decisions use
+      `/readyz`; do not turn a readiness failure into a restart loop.
+- [ ] Set HTTPS origin-only `APP_BASE_URL` and `PORTAL_BASE_URL`, plus exact
+      `MOLLIE_PAYMENT_WEBHOOK_URL` ending in
+      `/api/webhooks/mollie/payments` with no query or fragment.
+- [ ] Set explicit `MOLLIE_BILLING_SCHEDULER_MODE=pilot_pin|multi_tenant`.
+      Pilot mode requires `MOLLIE_BILLING_WORKER_WORKSPACE_ID`; multi-tenant mode
+      requires it unset.
+- [ ] Set positive daily/monthly/user spend caps, daily image cap and a
+      conservative `OPENAI_IMAGE_ESTIMATED_COST_USD`.
+- [ ] Run the credential-free chain with
+      `MOLLIE_BILLING_PREFLIGHT_ENABLED=true`, full schema installed,
+      entitlement/finalization drain and notification plane enabled, while
+      checkout and live billing remain off.
 
-| Severity | Owner      | Blocker                                                                                                                                                                                          | Smallest next action                                                                                                                                                |
-| -------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Critical | Sol        | Mollie Test Mode and production-like Page/token/outbox E2E evidence is absent                                                                                                                    | Use an isolated test workspace, test key, Facebook Test Users/Page, and redacted dated artifacts to run every row in `MOLLIE_TEST_RESULTS.md` plus the matrix above |
-| Critical | Luna + Sol | MySQL 8.4 now proves delivery-key uniqueness, one concurrent claim, membership preservation, and same-paid-row recovery; provider-backed checkout/webhook/outbox concurrency remains unproven    | Run concurrent duplicate checkout/webhook attempts in Mollie Test Mode against the disposable MySQL environment and assert one paid effect and one outbox item      |
-| Critical | Sol        | Fresh migration and an existing-row `0014` rehearsal now pass in MySQL 8.4; a production-like backup rehearsal of the full `0013` -> `0014` order, failure recovery, and rollback remains absent | Restore a redacted production-like backup into disposable MySQL, rehearse the ordered procedure, and retain the metadata-only artifact                              |
-| Medium   | Operations | Shared-admin manual recovery remains deliberately fail-closed; normal paid-user recovery now requires the same Page/user to send a new verified inbound message                                  | Document the support instruction, reconnect the Page when needed, have the customer message the Page, and verify the same outbox row was rearmed without checkout   |
-| Critical | Luna       | Existing paid-runtime gates remain open: atomic spend reservation, durable AI-answer finalization, tenant-partitioned queue/scheduler, and full Page/quota E2E                                   | Close and concurrency-test each gate already listed in `LAUNCH_READINESS.md`; do not enable paid enforcement before then                                            |
-| Critical | Sol        | Legal, privacy, accounting, refund/withdrawal, retention, monitoring, and operator approvals remain incomplete                                                                                   | Obtain written approvals and attach redacted operational evidence before changing any live flag                                                                     |
+Required secret names, never values:
 
-## Ordered launch procedure
+- Core: `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `PRIVACY_PEPPER`,
+  `CONVERSATION_SCOPE_HMAC_SECRET`, `MESSENGER_GENERATION_PARTITION_SECRET`,
+  `PORTAL_HANDOFF_TOKEN_SECRET`, `BILLING_PROFILE_EVIDENCE_HMAC_SECRET`.
+- Meta/OpenAI: Page credential encryption material and existing
+  `FB_APP_SECRET`, `FB_VERIFY_TOKEN`, `OPENAI_API_KEY`,
+  `INTERNAL_IMAGE_REQUEST_TOKEN`/gateway bridge secret.
+- Mollie: `MOLLIE_API_KEY`; accounting uses the distinct read-only
+  `MOLLIE_ACCOUNTING_ACCESS_TOKEN`, never the payment key.
+- Notifications: customer/operator destination URLs, key IDs, distinct signing
+  secrets, source IDs, receiver public origin, allowlist and receiver ACK names
+  exactly as listed in `apps/image-gen/.env.example`.
 
-Do not proceed past the preparation section while the verdict is NO-GO.
+Secrets are installed only through the deployment secret store. Never place a
+value in source, chat, logs, tickets, screenshots, PRs or support notes.
 
-### 1. Preparation and migration rehearsal
+## 4. Test Mode procedure
 
-- Keep `MOLLIE_BILLING_ENABLED=false`,
-  `MOLLIE_LIVE_BILLING_ENABLED=false`,
-  `MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED=false`, and
-  `LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED=false` in production.
-- Pause checkout and billing/outbox workers, drain in-flight work, take a
-  verified database backup, and record the current application and schema
-  versions.
-- Run the duplicate Page-binding preflight from `LAUNCH_READINESS.md`; the
-  result must be empty.
-- Apply the full Drizzle chain in numeric order. For this combined change,
-  `0013_purple_greymalkin.sql` must precede
-  `0014_portal_handoff_delivery_idempotency.sql`.
-- Verify after `0013` that `billing_outbox.event_type` accepts
-  `send_portal_handoff`. Verify after `0014` that
-  `portalHandoffTokens.deliveryIdempotencyKeyHash` exists and has the unique
-  index `portalHandoffTokens_delivery_key_hash_unique`.
-- Re-run schema checks and the real-MySQL concurrency suite before starting any
-  worker.
+- [ ] An authorized human injects only a `test_` Mollie key out of band and an
+      isolated Facebook Test Page/User credential set. The agent does not read it.
+- [ ] Verify `/readyz`, Bancontact, exact webhook routing, workers/heartbeats,
+      Redis, spend caps, finalization, notifications, accounting disabled/readiness
+      state and metadata-only monitoring before checkout exposure.
+- [ ] Attest the isolated workspace billing profile through the authenticated
+      admin flow with evidence hash, expiry and expected version. Do not use SQL or
+      customer self-attestation.
+- [ ] Enable the pilot execution control and commercial test lanes only for the
+      isolated workspace after every preflight passes.
+- [ ] Run every `NOT RUN` row in `docs/MOLLIE_TEST_RESULTS.md`: paid, terminal,
+      duplicate/delayed, repeated checkout, mismatch, refund/chargeback,
+      reconciliation and disable-after-transport.
+- [ ] Run Facebook Page/user matrix: happy handoff, two-user claim race, wrong
+      user/Page/workspace, disconnect/rebind, closed response window, transient
+      Graph failure, deletion race and same-paid-row recovery.
+- [ ] Run one controlled OpenAI image generation and edit with non-customer test
+      data. Prove admission occurs before the provider and configured caps/estimate
+      are visible in metadata-only ledger/monitoring.
+- [ ] Capture dated redacted evidence: intent/provider operation, one ledger
+      effect, entitlement, outbox/delivery identity, claim/membership, recovery and
+      zero duplicate charge. Never capture provider secrets or customer content.
 
-Rollback is application-first: disable billing and workers, roll the app back,
-and preserve financial/outbox/audit rows. Prefer a forward-fix over destructive
-DDL. Do not drop `0014` while any delivery row can be retried; doing so removes
-the idempotency invariant. Do not remove the `0013` enum member while any
-`send_portal_handoff` row exists. Restore the verified backup only under the
-approved incident procedure.
+## 5. Webhook, worker and monitoring checks
 
-### 2. Fly configuration and secrets
+- [ ] Public route admits only exact POST Mollie webhook; reject GET,
+      trailing-slash, singular and lookalike routes.
+- [ ] Scheduler process heartbeats are current for required lanes; disabled
+      commercial tenants expose only the safety outbox lane at the same execution
+      epoch. No overdue backlog or dead letter may be hidden by cached counters.
+- [ ] Signed notification receiver proves source/audience/key mapping,
+      idempotency/digest conflict, replay window, customer effect and non-recursive
+      operator escalation.
+- [ ] Alert on webhook retries/rate limits, provider ambiguous/reconciliation
+      states, outbox failures/age, scheduler lease loss, quota reservation/finalize
+      age, notification dead letters, accounting quarantine, privacy erasure and
+      paid-without-entitlement/delivery.
+- [ ] Logs and alerts contain only workspace-scoped metadata/hashes: never PSID,
+      Page token, handoff URL/token, prompt, source/output media or provider secret.
 
-- Keep the image-gen `app` and `worker` processes on the same release and give
-  both the same database, Redis, privacy, Page-delivery, and handoff-secret
-  configuration. Keep at least the HTTP app machine running for webhook health.
-- Verify HTTPS, `/healthz`, the guarded customer portal/handoff routes, and the
-  exact public `POST /api/webhooks/mollie/payments` route. Reject GET,
-  trailing-slash, singular, and lookalike webhook paths.
-- Set `APP_BASE_URL` and `PORTAL_BASE_URL` to HTTPS origins only. Set
-  `MOLLIE_PAYMENT_WEBHOOK_URL` to the exact HTTPS webhook URL. Bind
-  `MOLLIE_BILLING_WORKER_WORKSPACE_ID` to the one isolated pilot workspace.
-- Verify non-secret flags and settings:
-  `MOLLIE_MODE`, `MOLLIE_BILLING_ENABLED`,
-  `MOLLIE_LIVE_BILLING_ENABLED`,
-  `MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED`,
-  `MOLLIE_RECONCILIATION_ENABLED`,
-  `MOLLIE_WEBHOOK_RATE_LIMIT_PER_MINUTE`, `BILLING_SUPPORT_EMAIL`, and the
-  gateway's `LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED`.
-- Required secret **names** for the image-gen/portal/billing side of this path
-  are `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `PRIVACY_PEPPER`,
-  `FB_PAGE_ACCESS_TOKEN`, `MOLLIE_API_KEY`,
-  `PORTAL_HANDOFF_TOKEN_SECRET`, `CONVERSATION_SCOPE_HMAC_SECRET`,
-  `MESSENGER_GENERATION_PARTITION_SECRET`, `OPENAI_API_KEY`, and
-  `INTERNAL_IMAGE_REQUEST_TOKEN` when the gateway bridge is enabled. The
-  corresponding public-gateway secret names are `FB_VERIFY_TOKEN`,
-  `FB_APP_SECRET`, `FB_PAGE_ACCESS_TOKEN`, `OPENCLAW_ADMIN_TOKEN`, and
-  `LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN`; deployments using the documented
-  legacy aliases must map them deliberately rather than configuring two
-  different values. Do not place values in source, logs, issues, PRs, prompts,
-  or support notes. `PORTAL_HANDOFF_TOKEN_SECRET` must be a dedicated 32+
-  character secret shared by all relevant app/worker instances; rotate it only
-  after pending delivery rows drain or expire. Manual recovery must not rely on
-  the shared `ADMIN_TOKEN` as operator identity.
+## 6. Paid-user recovery
 
-### 3. Test Mode gate
+- [ ] Verify provider payment and local entitlement without changing either.
+- [ ] Correct Page connectivity/binding if required. Ask the same customer to
+      send a fresh verified normal message to the same Page.
+- [ ] Confirm one replay-protected inbound event rearms only the exact failed
+      delivery row, rotates the capability generation, keeps older URLs invalid and
+      creates no checkout/payment.
+- [ ] Privacy/consent/delete/system events never open the paid delivery window.
+      Shared-admin manual re-drive remains fail-closed; escalate instead of
+      bypassing tenant/user/Page ownership.
 
-- Use only `MOLLIE_MODE=test`, a test-key `MOLLIE_API_KEY`, and
-  `MOLLIE_LIVE_BILLING_ENABLED=false`.
-- Enable enforcement and billing only in the isolated test workspace after the
-  migration, worker, Redis, Page connection, and quota preflights pass.
-- Verify Bancontact on the Mollie Test profile, then execute every scenario in
-  `MOLLIE_TEST_RESULTS.md` and the combined matrix above. Capture only redacted,
-  metadata-level evidence.
-- Confirm one payment effect, one entitlement, one deduplicated
-  `send_portal_handoff` item, one delivery capability, one claim, and the stored
-  membership role. Confirm all failure paths create no second charge.
-- Rehearse automatic transient retry and paid-user recovery: after correcting
-  Page state if needed, the same user messages the same Page. Verify that only
-  the matching failed paid outbox row returns to pending and no checkout or
-  payment record is created. Shared-admin manual re-drive remains disabled.
+## 7. Human-only live switch
 
-### 4. Monitoring and paid-user recovery
+Only after sandbox evidence and written operational/legal/accounting approval:
 
-- Alert on `mollie_payment_webhook_failed_retryable`,
-  `mollie_payment_webhook_rate_limited`, `billing_outbox_dispatch_failed`,
-  `billing_outbox_failed`, `billing_outbox_operator_action_required`,
-  `portal_handoff_send_failed`, `portal_handoff_revoke_failed`, and terminal
-  `portal_handoff_send_skipped` reasons. Track queue age, retry count, terminal
-  job count, webhook latency, reconciliation anomalies, and paid-without-
-  entitlement or paid-without-delivery mismatches by workspace-scoped metadata.
-- Never log raw PSIDs, Page access tokens, handoff tokens/URLs, Mollie secrets,
-  messages, or customer content.
-- For a paid user, first verify provider payment and local entitlement without
-  changing either. Correct a disconnected Page, then ask that same customer to
-  message the same Page. The verified inbound event may rearm only the matching
-  failed operation/delivery identity. Confirm the metadata-only recovery log
-  and that no checkout or second payment was initiated.
-- Leave shared-admin manual recovery disabled. Escalate cases where the same
-  Page/user cannot send a verified inbound message; do not work around the
-  fail-closed boundary or charge again.
+1. Take a final backup and open an authorized launch/rollback window.
+2. A human injects the `live_` key out of band while exposure remains off.
+3. Set `MOLLIE_MODE=live`; rerun `/readyz`, methods, webhook, notification,
+   scheduler, safety drain, Page, quota, finalization and monitoring checks.
+4. Enable entitlement/AI enforcement, the approved workspace execution control,
+   billing exposure and finally `MOLLIE_LIVE_BILLING_ENABLED` in that order.
+5. A human performs one controlled real Startpilot payment.
+6. Verify one authenticated snapshot, ledger effect, entitlement, outbox,
+   Page delivery, claim and membership; verify redacted observability and no
+   duplicate provider operation/charge.
+7. On any mismatch, disable commercial/live exposure immediately, preserve
+   records and let exact safety containment run. Never recover by charging again.
 
-### 5. Human-only live switch and first smoke payment
-
-This section may be executed only after a documented human GO.
-
-1. An authorized operator installs the live `MOLLIE_API_KEY` out of band; no
-   agent reads or prints it.
-2. Set `MOLLIE_MODE=live` while all billing exposure remains off. Re-run
-   readiness, HTTPS/origin, method, webhook, worker, Page, quota, and monitoring
-   checks.
-3. Enable entitlement/AI-answer enforcement, then billing, and finally the
-   separate `MOLLIE_LIVE_BILLING_ENABLED` kill switch in the approved order.
-4. A human performs one controlled low-volume real Startpilot payment in the
-   designated pilot workspace.
-5. Verify in order: authenticated webhook fetch, one paid ledger effect, one
-   entitlement, one outbox item, Page-scoped Messenger delivery, one portal
-   claim, correct membership, redacted observability, and no duplicate charge.
-6. Disable the live billing kill switch immediately on any mismatch. Preserve
-   financial records and follow the incident/rollback procedure; never repair a
-   failed delivery by charging again.
+Current stop point: after repository/CI verification and before test credential
+injection.

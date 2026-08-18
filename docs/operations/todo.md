@@ -5,12 +5,18 @@
 
 ## Verified snapshot
 
-- Last reviewed against code: **2026-08-02** (HEAD plus the local launch-hardening worktree described below).
-- Reviewed HEAD baseline: **`808f207`**. The 2026-08-02 launch-hardening changes are local only until they are committed, deployed, and proven in production.
+- Last reviewed against code: **2026-08-18**, Sol release head **`ed1822b`**.
+- PR #375 is a green draft repository savepoint. It is not merged or deployed;
+  commercial/live billing remains disabled. PR #376, the identity-v2 WIP branch
+  and commit `e378bff` are explicitly excluded.
 - Latest operator production verification: **2026-06-30** live Messenger smoke and `delete-my-data` flow verified by operator.
 - Current direction: generic prompt-first image generation; legacy style-picker UI, quick-reply flows, and director-mode preset plumbing are removed. Internal style-preset compatibility may remain only as backend fallback.
 - Product direction: `leaderbot.live` becomes a tenant/customer portal for managing each customer's own AI. The OpenClaw/Messenger gateway remains shielded and is not the customer-facing app.
-- 2026-08-01 production update: image-gen v312 is deployed default-off with the new portal/legal surfaces and one primary queue worker; the standby worker remains stopped. No database migration ran and all Mollie, entitlement, live-billing, and AI-answer enforcement flags remain absent. The gateway upgrade to OpenClaw 2026.7.1 was rolled back because the mounted state has conflicting legacy/canonical Memory Core index rows. Production retains the known-good 2026.6.11 runtime; this hotfix pins that exact image and overlays only the reviewed route guard. Standard gateway upgrades and `openclaw doctor --fix` remain blocked until the state repair is rehearsed on a copy, backed up, and explicitly approved. The owner reports Mollie account onboarding complete; Bancontact/Test Mode evidence and every technical, legal, accounting, entitlement, and live-billing gate remain open.
+- Production remains on the last known-good default-off deployment. The final
+  `0015` migration and new gateway image have not run. The mounted Memory Core
+  repair still requires clone/backup/rehearsal and human approval. Mollie Test
+  Mode is enabled at the account level, but no key or provider smoke evidence
+  was used for PR #375.
 - Historical audit and inventory files are not active plans. Keep valid open work here instead of reviving stale audit snapshots.
 
 ## Architecture boundary notes
@@ -29,204 +35,211 @@ with targeted tests and metadata-only observability. Do not expand public access
 Meta permissions, paid provider usage, or customer self-serve features until the
 prior gate is proven in production.
 
-### Local launch-hardening tranche - 2026-08-02 (no launch-go)
+### Historical launch-hardening snapshot - 2026-08-02 (superseded)
+
+The detailed 2026-08-02 list below is retained only as history and is not the
+active launch gate. The excluded identity-v2 experiment was not imported; PR
+#375 instead implements the concrete workspace/connection/binding/privacy
+fences described by the current release documents. Current release truth is
+`docs/LAUNCH_READINESS.md`, `docs/MOLLIE_TEST_RESULTS.md` and
+`docs/MOLLIE_HANDOFF_LAUNCH_CHECKLIST.md`.
 
 Completed locally and covered by focused regression tests in the current
 worktree; none of these items counts as production rollout proof:
 
 - [x] Scope short-lived gateway prompt/reply memory by Messenger account, Page,
-  and sender so identical sender/message identifiers cannot share remembered
-  assistant prompts across account/Page boundaries.
+      and sender so identical sender/message identifiers cannot share remembered
+      assistant prompts across account/Page boundaries.
 - [x] Make `delete-my-data` outcomes truthful: Messenger and WhatsApp now report
-  `completed`, `pending`, or `failed`, and send success copy only after all
-  required deletion work completed. Incomplete deletion retains safe retry
-  context and gives the user retry/support guidance.
+      `completed`, `pending`, or `failed`, and send success copy only after all
+      required deletion work completed. Incomplete deletion retains safe retry
+      context and gives the user retry/support guidance.
 - [x] Upgrade the affected image-gen Axios, Sentry, and `express-rate-limit`
-  dependencies and make the production-dependency high-severity audit blocking
-  in CI. `pnpm audit --prod` reports no known production vulnerabilities in the
-  current worktree (zero critical, high, moderate, and low advisories). Keep the
-  security overrides in the pnpm-10-supported app-local `pnpm-workspace.yaml` so
-  fresh installs enforce the same dependency graph as the lockfile.
+      dependencies and make the production-dependency high-severity audit blocking
+      in CI. `pnpm audit --prod` reports no known production vulnerabilities in the
+      current worktree (zero critical, high, moderate, and low advisories). Keep the
+      security overrides in the pnpm-10-supported app-local `pnpm-workspace.yaml` so
+      fresh installs enforce the same dependency graph as the lockfile.
 - [x] Add an interim opaque Page-partitioned image queue and make partitioned
-  enqueue, reserve/lease, completion, retry, and dead-letter transitions atomic
-  and idempotent under ambiguous Redis responses. Consumers recompute the Page
-  HMAC, stale workers are fenced by random lease tokens, legacy Redis Cluster
-  `CROSSSLOT` errors no longer block partitioned work, and the default lease now
-  covers every configured OpenAI retry attempt. This is an atomicity milestone,
-  not the final workspace tenant boundary.
+      enqueue, reserve/lease, completion, retry, and dead-letter transitions atomic
+      and idempotent under ambiguous Redis responses. Consumers recompute the Page
+      HMAC, stale workers are fenced by random lease tokens, legacy Redis Cluster
+      `CROSSSLOT` errors no longer block partitioned work, and the default lease now
+      covers every configured OpenAI retry attempt. This is an atomicity milestone,
+      not the final workspace tenant boundary.
 - [x] Replace raw-PSID request ids with random UUIDs, remove raw Page/message ids
-  and error bodies from operational logs, apply redaction to both logger APIs,
-  and scrub Sentry exception messages, request data, breadcrumbs, variables,
-  and unapproved context before export. Disable Sentry performance tracing until
-  transaction/span exports have a tested metadata-only allowlist; error events
-  remain enabled behind the scrubber.
+      and error bodies from operational logs, apply redaction to both logger APIs,
+      and scrub Sentry exception messages, request data, breadcrumbs, variables,
+      and unapproved context before export. Disable Sentry performance tracing until
+      transaction/span exports have a tested metadata-only allowlist; error events
+      remain enabled behind the scrubber.
 - [x] Stop creating the redundant `psid:<hashed-userKey>` Messenger shadow-state
-  and make `delete-my-data` remove existing shadow records during the transition.
+      and make `delete-my-data` remove existing shadow records during the transition.
 - [x] Fail closed for both legacy portal-handoff issuance and claim with no
-  environment bypass until an immutable Page/channel/workspace authorization
-  boundary exists.
+      environment bypass until an immutable Page/channel/workspace authorization
+      boundary exists.
 - [x] Add the first additive `ConversationSubjectV2` identity foundation:
-  strict byte-exact Messenger Page and WhatsApp WABA/`phone_number_id`
-  endpoints, a dedicated versioned 256-bit HMAC key, branded opaque tenant,
-  binding, and user keys, an exact fail-closed `channelConnections` resolver,
-  nullable WABA schema support in migration `0011`, and globally unique
-  workspace ownership for non-null WABA IDs in migration `0012`. The
-  channel-connection write path now rejects non-canonical Meta IDs, enforces
-  the Messenger/WhatsApp endpoint shape, and locks both WhatsApp WABA and phone
-  claims. Startup/readiness and CI production type-checking now enforce the
-  local foundation. Existing webhook/state/queue paths are deliberately not
-  switched to v2 in this tranche.
+      strict byte-exact Messenger Page and WhatsApp WABA/`phone_number_id`
+      endpoints, a dedicated versioned 256-bit HMAC key, branded opaque tenant,
+      binding, and user keys, an exact fail-closed `channelConnections` resolver,
+      nullable WABA schema support in migration `0011`, and globally unique
+      workspace ownership for non-null WABA IDs in migration `0012`. The
+      channel-connection write path now rejects non-canonical Meta IDs, enforces
+      the Messenger/WhatsApp endpoint shape, and locks both WhatsApp WABA and phone
+      claims. Startup/readiness and CI production type-checking now enforce the
+      local foundation. Existing webhook/state/queue paths are deliberately not
+      switched to v2 in this tranche.
 - [x] Add the next additive, still-unwired V2 boundary primitives: an exact
-  allowlisted detached envelope with authenticated payload purpose and bytes,
-  current-key-only verification, mandatory physical queue-scope verification,
-  authoritative binding re-derivation, safe stale/reassigned/inactive/
-  ambiguous quarantine codes, and a branded connected-delivery gate. Add a
-  V2-only replay claim with a binding-scoped opaque Redis key, dedicated-key
-  HMAC framing, strict Meta-ID/fallback identities, a stable authenticated
-  per-unit claim id, a fresh random owner token for every short `processing`
-  lease attempt, and an atomic owner-specific `completed` transition. Ambiguous/
-  busy outcomes remain retryable, Redis readiness is strict, and there is no
-  process-memory or V1 fallback. Only an explicit `completed` state is treated
-  as a duplicate. These primitives do not change live webhook behavior yet.
+      allowlisted detached envelope with authenticated payload purpose and bytes,
+      current-key-only verification, mandatory physical queue-scope verification,
+      authoritative binding re-derivation, safe stale/reassigned/inactive/
+      ambiguous quarantine codes, and a branded connected-delivery gate. Add a
+      V2-only replay claim with a binding-scoped opaque Redis key, dedicated-key
+      HMAC framing, strict Meta-ID/fallback identities, a stable authenticated
+      per-unit claim id, a fresh random owner token for every short `processing`
+      lease attempt, and an atomic owner-specific `completed` transition. Ambiguous/
+      busy outcomes remain retryable, Redis readiness is strict, and there is no
+      process-memory or V1 fallback. Only an explicit `completed` state is treated
+      as a duplicate. These primitives do not change live webhook behavior yet.
 - [x] Add the additive, still-unwired persisted V2 Meta ingress-unit contract:
-  mint a private runtime brand only after exact raw-body HMAC verification, bind
-  its signature-provider claim to the payload root, strictly cap every provider
-  array, split a verified delivery into deterministic per-event order,
-  retain only allowlisted canonical payload fields, and reject the whole batch
-  before identity resolution on an invalid event. Conversation events with no
-  stable provider ID or timestamp deliberately fail closed so replay identity
-  remains stable. Messenger echo/delivery/read/referral and WhatsApp status-only
-  notifications remain metadata-only and do not mint a conversation subject.
-  The unit HMAC binds the exact payload digest, stable replay claim id, complete
-  detached boundary, and key epoch. Queue verification authenticates the unit
-  before decoding, derives endpoint/sender only from those authenticated bytes,
-  re-resolves the current binding, and requires the external physical tenant/
-  binding scope. It mints a separate non-forgeable queued capability; replay
-  rejects a generic verified boundary that never saw physical scope. Tamper,
-  transplant, reassignment, multi-entry, canonical-byte, provider-mismatch, and
-  stale-worker fencing tests are included. No route or queue uses this contract
-  yet.
+      mint a private runtime brand only after exact raw-body HMAC verification, bind
+      its signature-provider claim to the payload root, strictly cap every provider
+      array, split a verified delivery into deterministic per-event order,
+      retain only allowlisted canonical payload fields, and reject the whole batch
+      before identity resolution on an invalid event. Conversation events with no
+      stable provider ID or timestamp deliberately fail closed so replay identity
+      remains stable. Messenger echo/delivery/read/referral and WhatsApp status-only
+      notifications remain metadata-only and do not mint a conversation subject.
+      The unit HMAC binds the exact payload digest, stable replay claim id, complete
+      detached boundary, and key epoch. Queue verification authenticates the unit
+      before decoding, derives endpoint/sender only from those authenticated bytes,
+      re-resolves the current binding, and requires the external physical tenant/
+      binding scope. It mints a separate non-forgeable queued capability; replay
+      rejects a generic verified boundary that never saw physical scope. Tamper,
+      transplant, reassignment, multi-entry, canonical-byte, provider-mismatch, and
+      stale-worker fencing tests are included. No route or queue uses this contract
+      yet.
 
-Still open before broad customer launch or paid activation:
+Historical open list (superseded by the current release documents above):
 
 - [ ] Wire the new `ConversationSubjectV2` foundation before multi-tenant
-  traffic: require and compare both Messenger outer `entry.id` and inner
-  `recipient.id`, preserve WhatsApp outer WABA plus
-  `metadata.phone_number_id`, then resolve exactly one
-  `channelConnection` and workspace before any state/quota/consent/replay read.
-  Missing, duplicate, changed, inactive, or unavailable mappings must fail
-  closed; free versus paid entitlement is policy after identity resolution,
-  never an identity fallback.
+      traffic: require and compare both Messenger outer `entry.id` and inner
+      `recipient.id`, preserve WhatsApp outer WABA plus
+      `metadata.phone_number_id`, then resolve exactly one
+      `channelConnection` and workspace before any state/quota/consent/replay read.
+      Missing, duplicate, changed, inactive, or unavailable mappings must fail
+      closed; free versus paid entitlement is policy after identity resolution,
+      never an identity fallback.
 - [ ] Connect the unforgeable V2 raw-body verifier at the live signature seam and
-  select its Messenger or WhatsApp secret from an authenticated route contract,
-  not by trusting payload fields. Both the generic and WhatsApp-specific webhook
-  paths must reject a signature-provider/payload-root mismatch. Seal the complete
-  delivery before any queue write, then persist each unit only in its external
-  tenant/binding partition. A consumer must receive that physical scope from an
-  independently authenticated queue/lease context and verify it before replay,
-  state, provider, or delivery access. Multi-unit persistence across tenant
-  partitions must be atomic and idempotent, or use a durable resumable manifest;
-  a partial enqueue must never be acknowledged as a completed delivery.
+      select its Messenger or WhatsApp secret from an authenticated route contract,
+      not by trusting payload fields. Both the generic and WhatsApp-specific webhook
+      paths must reject a signature-provider/payload-root mismatch. Seal the complete
+      delivery before any queue write, then persist each unit only in its external
+      tenant/binding partition. A consumer must receive that physical scope from an
+      independently authenticated queue/lease context and verify it before replay,
+      state, provider, or delivery access. Multi-unit persistence across tenant
+      partitions must be atomic and idempotent, or use a durable resumable manifest;
+      a partial enqueue must never be acknowledged as a completed delivery.
 - [ ] Add an authoritative binding lifecycle epoch or durable cancellation/
-  deletion tombstone before enabling queued V2 content. The current
-  `(workspaceId, channel)` row is reused, so disconnecting and reconnecting the
-  identical endpoint can recreate the same subject and otherwise resurrect old
-  authenticated work. Cover the chosen epoch/tombstone in queue verification
-  and test disconnect -> same-row reconnect explicitly.
+      deletion tombstone before enabling queued V2 content. The current
+      `(workspaceId, channel)` row is reused, so disconnecting and reconnecting the
+      identical endpoint can recreate the same subject and otherwise resurrect old
+      authenticated work. Cover the chosen epoch/tombstone in queue verification
+      and test disconnect -> same-row reconnect explicitly.
 - [ ] Activate the implemented V2 replay claim only after every ingress producer
-  and worker consumes a verified V2 unit under one deployment-wide key epoch.
-  Do not dual-write, read V1 on a V2 miss, or run mixed V1/V2 processors; drain
-  old ingress first so a Meta redelivery cannot execute once in each namespace.
-  Claim replay immediately before one durable, tenant-scoped, idempotent event-
-  job enqueue; mark it `completed` only after that enqueue succeeds and before
-  webhook ACK. Propagate `claim_busy`, store-unavailable, and lost-lease outcomes
-  as retry/requeue rather than catch-and-ack. Never persist or reuse the fresh
-  per-attempt owner token, and do not put slow provider work inside the current
-  30-second lease. Validate the completed TTL against Meta's retry horizon and
-  prove the Lua CAS/ACL/expiry behavior against production-like Redis or Redis
-  Cluster before enabling traffic.
+      and worker consumes a verified V2 unit under one deployment-wide key epoch.
+      Do not dual-write, read V1 on a V2 miss, or run mixed V1/V2 processors; drain
+      old ingress first so a Meta redelivery cannot execute once in each namespace.
+      Claim replay immediately before one durable, tenant-scoped, idempotent event-
+      job enqueue; mark it `completed` only after that enqueue succeeds and before
+      webhook ACK. Propagate `claim_busy`, store-unavailable, and lost-lease outcomes
+      as retry/requeue rather than catch-and-ack. Never persist or reuse the fresh
+      per-attempt owner token, and do not put slow provider work inside the current
+      30-second lease. Validate the completed TTL against Meta's retry horizon and
+      prove the Lua CAS/ACL/expiry behavior against production-like Redis or Redis
+      Cluster before enabling traffic.
 - [ ] Replace live Redis `psid:<raw sender>` state with workspace/channel-bound
-  v2 state, locks, quota, completions, cost history, chat history, consent, face
-  memory, and deletion keys. The legacy data has no Page/WABA owner and therefore
-  requires an offline, backed-up, resumable one-owner migration; do not add a
-  runtime v2-miss-to-v1 fallback. Remove the global in-memory alias scan and dead
-  SQL `messengerState` shadow only after migration evidence and retention review.
+      v2 state, locks, quota, completions, cost history, chat history, consent, face
+      memory, and deletion keys. The legacy data has no Page/WABA owner and therefore
+      requires an offline, backed-up, resumable one-owner migration; do not add a
+      runtime v2-miss-to-v1 fallback. Remove the global in-memory alias scan and dead
+      SQL `messengerState` shadow only after migration evidence and retention review.
 - [ ] Replace the global webhook ingress queue before multi-tenant traffic. It
-  currently persists complete Facebook/WhatsApp payloads, including customer
-  content and identifiers, in shared queued/processing/dead-letter lists without
-  a tenant partition, retention TTL, or bounded cap. Split multi-entry payloads
-  by resolved workspace before enqueue and make deletion/cancellation explicit.
+      currently persists complete Facebook/WhatsApp payloads, including customer
+      content and identifiers, in shared queued/processing/dead-letter lists without
+      a tenant partition, retention TTL, or bounded cap. Split multi-entry payloads
+      by resolved workspace before enqueue and make deletion/cancellation explicit.
 - [ ] Finish the image queue's final workspace boundary. Page-HMAC partitioning
-  now protects mechanics, but Page identity alone does not prevent a queued job
-  from crossing policy after Page reassignment. The v2 envelope must bind and
-  revalidate workspace, channel connection, Page binding, and subject before
-  state/provider/delivery; delete-my-data must tombstone/cancel queued work and
-  suppress late processing/output. Add a durable, idempotent dead-letter
-  notification/outbox so a double-lost Redis reply cannot strand the user in
-  `PROCESSING`; add bounded dead-letter retention/caps and fail readiness while
-  unmigrated legacy Cluster jobs remain. Prove the Lua scripts against real
-  Redis/Redis Cluster, not only the deterministic test fake.
+      now protects mechanics, but Page identity alone does not prevent a queued job
+      from crossing policy after Page reassignment. The v2 envelope must bind and
+      revalidate workspace, channel connection, Page binding, and subject before
+      state/provider/delivery; delete-my-data must tombstone/cancel queued work and
+      suppress late processing/output. Add a durable, idempotent dead-letter
+      notification/outbox so a double-lost Redis reply cannot strand the user in
+      `PROCESSING`; add bounded dead-letter retention/caps and fail readiness while
+      unmigrated legacy Cluster jobs remain. Prove the Lua scripts against real
+      Redis/Redis Cluster, not only the deterministic test fake.
 - [ ] Scope or remove the remaining globally stable log hashes (`user` and
-  `psidHash`) once the workspace binding exists; per-request UUID correlation is
-  now available and replay logs no longer expose a stable event hash.
+      `psidHash`) once the workspace binding exists; per-request UUID correlation is
+      now available and replay logs no longer expose a stable event hash.
 - [ ] Replace the unsafe legacy Messenger-to-portal handoff boundary before
-  onboarding customers through it. The 2026-08-02 local containment disables
-  both token issuance and claim with a non-configurable fail-closed gate because
-  the current admin call can pair any workspace with a global sender hash. A
-  safe replacement must derive the workspace from an immutable receiving-Page
-  / `channelConnections` binding, revalidate that binding atomically on claim,
-  use authenticated non-forgeable operator attribution, and refuse ambiguous,
-  disconnected, legacy-unbound, or cross-workspace mappings. Existing tokens
-  must remain unclaimable and be allowed to expire or be explicitly revoked.
+      onboarding customers through it. The 2026-08-02 local containment disables
+      both token issuance and claim with a non-configurable fail-closed gate because
+      the current admin call can pair any workspace with a global sender hash. A
+      safe replacement must derive the workspace from an immutable receiving-Page
+      / `channelConnections` binding, revalidate that binding atomically on claim,
+      use authenticated non-forgeable operator attribution, and refuse ambiguous,
+      disconnected, legacy-unbound, or cross-workspace mappings. Existing tokens
+      must remain unclaimable and be allowed to expire or be explicitly revoked.
 - [ ] Before deploying the partitioned queue, configure one stable
-  `MESSENGER_GENERATION_PARTITION_SECRET` across gateway and workers, prove the
-  unique Page-to-workspace ownership invariant, and drain/review existing
-  global legacy and dead-letter jobs before multi-tenant onboarding.
-  Before switching to Page-scoped Messenger state, pause new Messenger ingress;
-  verify queued, processing, and reserved generation counts are zero; and review
-  the dead-letter queue. From an authoritative channel inventory, build a
-  resumable offline migration manifest that maps every proven legacy Messenger
-  PSID state to exactly one receiving Page, preserves consent, response-window,
-  quota/reservation, face-memory, and pending-deletion fields, and writes the
-  full record to its Page+PSID key. After verifying the copy, purge its proven
-  legacy Messenger raw-PSID record and retain auditable evidence that no
-  identified Messenger record remains unmigrated or undeleted. Preserve
-  non-Messenger records; move them only through a separately verified
-  channel-scoping migration. Runtime `delete-my-data` must not guess that an
-  unmarked raw-PSID record belongs to Messenger because the old keyspace is
-  shared by non-Messenger callers. Abort on missing or ambiguous Page ownership:
-  runtime code never falls back to an unowned PSID record.
-  Deploy gateway and workers as one rollout only after that evidence, then
-  resume ingress.
+      `MESSENGER_GENERATION_PARTITION_SECRET` across gateway and workers, prove the
+      unique Page-to-workspace ownership invariant, and drain/review existing
+      global legacy and dead-letter jobs before multi-tenant onboarding.
+      Before switching to Page-scoped Messenger state, pause new Messenger ingress;
+      verify queued, processing, and reserved generation counts are zero; and review
+      the dead-letter queue. From an authoritative channel inventory, build a
+      resumable offline migration manifest that maps every proven legacy Messenger
+      PSID state to exactly one receiving Page, preserves consent, response-window,
+      quota/reservation, face-memory, and pending-deletion fields, and writes the
+      full record to its Page+PSID key. After verifying the copy, purge its proven
+      legacy Messenger raw-PSID record and retain auditable evidence that no
+      identified Messenger record remains unmigrated or undeleted. Preserve
+      non-Messenger records; move them only through a separately verified
+      channel-scoping migration. Runtime `delete-my-data` must not guess that an
+      unmarked raw-PSID record belongs to Messenger because the old keyspace is
+      shared by non-Messenger callers. Abort on missing or ambiguous Page ownership:
+      runtime code never falls back to an unowned PSID record.
+      Deploy gateway and workers as one rollout only after that evidence, then
+      resume ingress.
 - [ ] Before deploying this identity foundation, provision the same immutable
-  `CONVERSATION_SCOPE_HMAC_KEY_ID` and 256-bit
-  `CONVERSATION_SCOPE_HMAC_SECRET` version on every app and worker process,
-  back up the database, apply and verify migrations `0011` and `0012`, and
-  inventory existing Page/WhatsApp identifiers for the strict decimal
-  canonical form and duplicate WABA ownership. Abort rather than normalizing
-  ambiguous data. Do not derive or backfill WABA ownership from environment
-  variables. Prove the unique Page, phone, and WABA claims under concurrent
-  writes against real MySQL before activation.
+      `CONVERSATION_SCOPE_HMAC_KEY_ID` and 256-bit
+      `CONVERSATION_SCOPE_HMAC_SECRET` version on every app and worker process,
+      back up the database, apply and verify migrations `0011` and `0012`, and
+      inventory existing Page/WhatsApp identifiers for the strict decimal
+      canonical form and duplicate WABA ownership. Abort rather than normalizing
+      ambiguous data. Do not derive or backfill WABA ownership from environment
+      variables. Prove the unique Page, phone, and WABA claims under concurrent
+      writes against real MySQL before activation.
 - [ ] Add deployment-wide identity-key epoch consensus and schema readiness.
-  Local syntax readiness cannot detect two nodes using the same key ID with
-  different secret material or a database missing migrations. Rotation must
-  use an immutable secret-manager version, an offline resumable migration
-  manifest, deletion-completeness checks, and zero-old-record evidence; never
-  add runtime try-all-key or v2-to-v1 fallback behavior.
+      Local syntax readiness cannot detect two nodes using the same key ID with
+      different secret material or a database missing migrations. Rotation must
+      use an immutable secret-manager version, an offline resumable migration
+      manifest, deletion-completeness checks, and zero-old-record evidence; never
+      add runtime try-all-key or v2-to-v1 fallback behavior.
 - [ ] Clear the existing image-gen server ESLint baseline (37 errors outside
-  this tranche, including unsafe-value and unused-code findings) and add the
-  server lint command to CI once green. The production files changed in this
-  tranche pass targeted ESLint, but the repository-wide server gate is not yet
-  clean.
+      this tranche, including unsafe-value and unused-code findings) and add the
+      server lint command to CI once green. The production files changed in this
+      tranche pass targeted ESLint, but the repository-wide server gate is not yet
+      clean.
 - [ ] Configure and verify production OAuth, explicit spend caps, and the
-  intended entitlement/billing feature flags. Paid/live billing stays fail-closed.
+      intended entitlement/billing feature flags. Paid/live billing stays fail-closed.
 - [ ] Rehearse, back up, run, and verify required live database/state migrations,
-  including the Page-ownership preflight and the blocked OpenClaw Memory Core
-  state repair, with an approved rollback path.
+      including the Page-ownership preflight and the blocked OpenClaw Memory Core
+      state repair, with an approved rollback path.
 - [ ] After deployment, run and record production route/security, portal login,
-  workspace isolation, Messenger, `delete-my-data`, quota/budget, queue, and
-  rollback smokes. Until that evidence exists, broad customer launch remains
-  **NO-GO** and Mollie live billing remains **NO-GO**.
+      workspace isolation, Messenger, `delete-my-data`, quota/budget, queue, and
+      rollback smokes. Until that evidence exists, broad customer launch remains
+      **NO-GO** and Mollie live billing remains **NO-GO**.
 
 ## Finish cut - 2026-06-30
 
@@ -387,17 +400,17 @@ traffic cannot reach internal gateway admin/API surfaces.
   - [ ] Re-enable the operator-only sender only after the tenant boundary is proven; the existing short-lived-token and response-window mechanics may be reused behind that boundary.
   - [x] Allow `/handoff` portal pages through the guarded public gateway and redact `/handoff/:token` from HTTP logs and metrics.
   - [x] Wire paid Mollie webhook completion to the same handoff sender after the billing and tenant-runtime launch gates pass.
-    Delivery is deliberately separate from payment truth: a closed response
-    window, stale sender state, changed Page binding, or exhausted bounded send
-    retry records a failed `send_portal_handoff` outbox item without creating a
-    second payment. Automated outbox retries reuse the same idempotent delivery
-    identity. After a terminal response-window, sender-state, Page-binding, or
-    exhausted-send failure, the same user's next verified inbound message to
-    the same uniquely connected Page rearms only that matching paid outbox row;
-    payment truth is never reopened. The protected shared-admin sender remains
-    fail-closed until manual recovery is bound to the failed operation and an
-    authenticated, non-forgeable support principal. Never copy a raw token into
-    support tooling.
+        Delivery is deliberately separate from payment truth: a closed response
+        window, stale sender state, changed Page binding, or exhausted bounded send
+        retry records a failed `send_portal_handoff` outbox item without creating a
+        second payment. Automated outbox retries reuse the same idempotent delivery
+        identity. After a terminal response-window, sender-state, Page-binding, or
+        exhausted-send failure, the same user's next verified inbound message to
+        the same uniquely connected Page rearms only that matching paid outbox row;
+        payment truth is never reopened. The protected shared-admin sender remains
+        fail-closed until manual recovery is bound to the failed operation and an
+        authenticated, non-forgeable support principal. Never copy a raw token into
+        support tooling.
   - Storage boundary: `portalHandoffTokens` rows are scoped to one `workspaceId`; the opaque token is never stored, only its hash is persisted, and Messenger identity may be stored only as the privacy-peppered `messengerSenderUserKey`.
   - Deletion boundary: `delete-my-data` must delete handoff rows for the erased Messenger `userKey`, including pending and consumed links.
   - Consumption boundary: only the portal handoff route may consume a pending, unexpired token and convert it into that workspace's onboarding/session flow.
@@ -515,26 +528,35 @@ Quota drift investigation note:
 - [x] Keep live Mollie billing disabled by default and reject key/mode or insecure URL mismatches.
 - [x] Validate the effective portal handoff origin (`PORTAL_BASE_URL`, falling back to `APP_BASE_URL`) before billing readiness/checkout; production/live requires HTTPS and an origin-only URL.
 - [x] Consolidate the Luna payment and Terra Page-scoped handoff release gates
-  in `docs/MOLLIE_HANDOFF_LAUNCH_CHECKLIST.md`; current combined verdict is
-  NO-GO until provider, remaining MySQL checkout/webhook concurrency,
-  production-like migration, and operational approval evidence is complete.
+      in `docs/MOLLIE_HANDOFF_LAUNCH_CHECKLIST.md`; current combined verdict is
+      repository PASS and sandbox/live NO-GO.
 - [x] Select the bounded product offer: `€19` once, 30 days, one workspace/Page, 300 AI answers, 20 Images 2.0 generations, and at most five images per day, without renewal, top-ups, or overage.
 - [ ] Approve the draft Startpilot legal copy, accounting treatment, refund/withdrawal terms, invoice treatment, and financial-retention policy before live payment.
 - [ ] Run and record all Mollie sandbox cases in `docs/MOLLIE_TEST_RESULTS.md`.
 - [x] Add MySQL 8.4 integration evidence for concurrent portal-handoff delivery identity, one claim with membership preservation, verified-inbound recovery of the same paid row, and an existing-row `0014` upgrade rehearsal.
-- [ ] Add remaining real-MySQL concurrency/integrity tests for intents, webhooks, ledger, outbox, and duplicate subscription prevention.
+- [x] Add real-MySQL concurrency/integrity tests for checkout exposure,
+      provider results, leases, scheduler disable, ledger/outbox, handoff claim and
+      exact safety cancellation.
 - [ ] Before paid Images 2.0 activation, smoke-test direct GPT Image 2 generation and editing and set a conservative `OPENAI_IMAGE_ESTIMATED_COST_USD` that covers output plus prompt/high-fidelity source-image input until actual usage reconciliation is implemented.
-- [ ] Replace the non-atomic USD spend-cap summary-check/ledger-append sequence with a concurrency-tested atomic reservation/commit/release path; simultaneous workers can currently pass the same remaining budget, so paid activation stays NO-GO until this is closed.
-- [ ] Add a durable, tenant-scoped finalize retry/outbox for AI-answer reservations so an ambiguous gateway-to-image-gen outage after successful Messenger delivery cannot let a reservation expire and undercount one answer.
-- [ ] Partition the Redis image-generation queue by owning workspace before multi-tenant paid onboarding; queued PSID, prompt, and source-image jobs must never share an unscoped global customer queue.
+- [x] Replace spend-cap check/append with Redis-atomic reservation and real Redis
+      contention/failure/reconciliation tests.
+- [x] Add durable tenant-scoped AI-answer reservation/finalization with owner
+      leases, transport boundary, restart worker and ambiguous-delivery handling.
+- [x] Partition ingress/generation state and work by immutable workspace,
+      connection, binding and privacy epoch; add TTL/tombstone/erasure races and
+      legacy-queue readiness refusal.
 - [ ] Define a separate immutable subscription-history/event model if historical rows become a product or accounting requirement; `billing_subscriptions` currently stores one mutable current-state row per workspace and Mollie mode.
 - [x] Map inbound channel/Page identity uniquely to a workspace and enforce `workspace_entitlements` before the actual image-provider attempt; the database claim now fails closed instead of overwriting another workspace's Page credentials.
 - [x] Count one Startpilot image unit when the first provider attempt for a Messenger generation job starts; provider retries remain individually cost-ledgered and budget-gated but do not consume extra customer pilot generations.
 - [ ] Prove the Page-to-workspace mapping and both paid quota gates in a production-like end-to-end test after the duplicate-Page preflight and migration, without any free-tier fallback.
-- [ ] Replace the isolated single-workspace billing worker with a durable tenant-partitioned scheduler that never performs cross-tenant reads.
+- [x] Replace the isolated worker with a DB-driven tenant/mode scheduler,
+      execution epochs, per-lane leases, fairness, heartbeats and always-on safety
+      drain.
 - [ ] Extract billing outbox queue mechanics from provider handlers after the billing behavior is stable; keep this follow-up separate from launch-critical correctness changes.
-- [ ] Connect customer payment warnings and operator manual-review incidents to tested notification delivery.
-- [ ] Make accounting exports complete and bounded through an explicit date range, pagination, or streaming; never silently truncate financial rows.
+- [x] Connect customer warnings and operator reviews to signed, idempotent,
+      provider-key-free notification receiver delivery and dead-letter readiness.
+- [x] Bound accounting export by tenant/mode/date and stable streaming keyset;
+      add GET-only account-level import staging/link/quarantine contracts.
 - [ ] Reconcile Mollie Balances/Settlements in an approved live read-only accounting workflow.
 - [ ] Close every blocker in `docs/LAUNCH_READINESS.md` before enabling a `live_` key.
 
@@ -546,10 +568,10 @@ Quota drift investigation note:
 - [x] Document operator-facing prompt routing and OpenClaw-vs-image-generation fallback behavior separately from the completed customer-facing bot instructions. See `../../../../docs/operator-prompt-routing.md`.
 - [x] Provide cost monitoring dashboard. Admin-only aggregate view exists at `/admin/cost-dashboard` with duplicate-skip and delivery-failure counts; production dashboard polish and failure drilldowns are deferred.
 - [x] Record the 2026-07-09 CodeQL/customer-preview follow-up so the merged
-  branches are reviewable after the fact:
+      branches are reviewable after the fact:
   - CodeQL is intentionally configured through the checked-in advanced workflow
     at `.github/workflows/codeql.yml`, with `languages:
-    javascript-typescript`; GitHub CodeQL default setup must stay disabled or
+javascript-typescript`; GitHub CodeQL default setup must stay disabled or
     GitHub rejects advanced-workflow SARIF uploads.
   - CodeQL pull request and `main` push triggers intentionally cover root
     plugin JS/TS, `apps/**` JS/TS, `scripts/**` JS/TS, lockfiles, and
