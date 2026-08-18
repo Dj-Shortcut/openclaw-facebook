@@ -28,6 +28,43 @@ beforeEach(() => {
 });
 
 describe("payment snapshot persistence flow", () => {
+  it("queues exactly one portal handoff for an eligible paid Startpilot checkout", async () => {
+    const flow = paymentFlow({
+      intent: {
+        ...startpilotIntent(),
+        messengerSenderUserKey: "a".repeat(64),
+        messengerPageId: "page_123",
+      } as BillingIntent,
+    });
+    databaseMock.mockResolvedValue(flow.database);
+
+    await expect(
+      applyMolliePaymentSnapshot(
+        molliePayment({ amount: { currency: "EUR", value: "19.00" } }),
+        1
+      )
+    ).resolves.toEqual({ result: "processed", workspaceId: 1 });
+
+    expect(
+      flow.inserts.filter(
+        entry =>
+          entry.table === billingOutbox &&
+          entry.values.eventType === "send_portal_handoff"
+      )
+    ).toEqual([
+      expect.objectContaining({
+        values: expect.objectContaining({
+          deduplicationKey: `send_portal_handoff:${INTENT_ID}`,
+          payload: {
+            intentId: INTENT_ID,
+            messengerSenderUserKey: "a".repeat(64),
+            messengerPageId: "page_123",
+          },
+        }),
+      }),
+    ]);
+  });
+
   it("activates a 30-day Startpilot without creating or canceling a subscription", async () => {
     const flow = paymentFlow({ intent: startpilotIntent() });
     databaseMock.mockResolvedValue(flow.database);
