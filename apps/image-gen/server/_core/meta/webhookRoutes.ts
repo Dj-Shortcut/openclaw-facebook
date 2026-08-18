@@ -2,16 +2,17 @@ import express from "express";
 import rateLimit from "express-rate-limit";
 import { z, ZodError } from "zod";
 import { facebookWebhookPayloadSchema } from "../webhookSchemas";
-import {
-  isWhatsAppWebhookPayload,
-} from "../inbound/whatsappInbound";
+import { isWhatsAppWebhookPayload } from "../inbound/whatsappInbound";
 import {
   enqueueWebhookIngressDelivery,
   isWebhookIngressQueueEnabled,
   processWebhookDeliveryInline,
   scheduleWebhookIngressDrain,
 } from "./webhookIngressQueue";
-import { metaWebhookRoutes, type MetaWebhookVerificationMode } from "./webhookPaths";
+import {
+  metaWebhookRoutes,
+  type MetaWebhookVerificationMode,
+} from "./webhookPaths";
 import { recordWebhookAckMetric } from "../observability";
 import { safeLog } from "../logger";
 
@@ -44,13 +45,13 @@ class WebhookIngressEnqueueTimeoutError extends Error {
   }
 }
 
-function getConfiguredVerifyTokens(mode: MetaWebhookVerificationMode): string[] {
+function getConfiguredVerifyTokens(
+  mode: MetaWebhookVerificationMode
+): string[] {
   const sharedToken =
     process.env.META_VERIFY_TOKEN?.trim() ||
     process.env.FB_VERIFY_TOKEN?.trim();
-  const tokens = [
-    sharedToken,
-  ];
+  const tokens = [sharedToken];
 
   if (mode === "whatsapp") {
     tokens.push(process.env.WHATSAPP_VERIFY_TOKEN?.trim());
@@ -85,33 +86,33 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
   const createVerificationHandler =
     (mode: MetaWebhookVerificationMode): express.RequestHandler =>
     (req, res) => {
-    const parsedQuery = webhookVerificationQuerySchema.safeParse(req.query);
-    const path = req.path;
-    const configuredTokens = getConfiguredVerifyTokens(mode);
+      const parsedQuery = webhookVerificationQuerySchema.safeParse(req.query);
+      const path = req.path;
+      const configuredTokens = getConfiguredVerifyTokens(mode);
 
-    safeLog("meta_webhook_verification_requested", { path });
+      safeLog("meta_webhook_verification_requested", { path });
 
-    if (
-      configuredTokens.length === 0 ||
-      !parsedQuery.success ||
-      !configuredTokens.includes(parsedQuery.data["hub.verify_token"])
-    ) {
-      safeLog("meta_webhook_verification_rejected", {
-        level: "warn",
-        path,
-        hasConfiguredToken: configuredTokens.length > 0,
-        hasMode: typeof req.query["hub.mode"] === "string",
-        hasChallenge: typeof req.query["hub.challenge"] === "string",
-      });
-      return res.sendStatus(403);
-    }
+      if (
+        configuredTokens.length === 0 ||
+        !parsedQuery.success ||
+        !configuredTokens.includes(parsedQuery.data["hub.verify_token"])
+      ) {
+        safeLog("meta_webhook_verification_rejected", {
+          level: "warn",
+          path,
+          hasConfiguredToken: configuredTokens.length > 0,
+          hasMode: typeof req.query["hub.mode"] === "string",
+          hasChallenge: typeof req.query["hub.challenge"] === "string",
+        });
+        return res.sendStatus(403);
+      }
 
-    safeLog("meta_webhook_verification_accepted", { path });
-    return res
-      .status(200)
-      .type("text/plain")
-      .send(parsedQuery.data["hub.challenge"]);
-  };
+      safeLog("meta_webhook_verification_accepted", { path });
+      return res
+        .status(200)
+        .type("text/plain")
+        .send(parsedQuery.data["hub.challenge"]);
+    };
 
   for (const route of metaWebhookRoutes) {
     app.get(route.path, webhookLimiter, createVerificationHandler(route.mode));
@@ -154,11 +155,15 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
           return;
         }
 
-        safeLog("webhook_durable_enqueue_failed_inline_fallback", {
+        safeLog("webhook_durable_enqueue_failed", {
           level: "error",
           channel,
           error,
         });
+        if (process.env.NODE_ENV === "production") {
+          res.sendStatus(503);
+          return;
+        }
         ack(channel, "inline_after_enqueue_failure");
         processWebhookDeliveryInline(channel, req.body);
       }
@@ -168,6 +173,10 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
       safeLog("whatsapp_webhook_post_delivery_received");
 
       if (!isWebhookIngressQueueEnabled()) {
+        if (process.env.NODE_ENV === "production") {
+          res.sendStatus(503);
+          return;
+        }
         ack("whatsapp", "inline");
         processWebhookDeliveryInline("whatsapp", req.body);
         return;
@@ -191,6 +200,10 @@ export function registerMetaWebhookRoutes(app: express.Express): void {
 
     safeLog("messenger_webhook_post_delivery_received");
     if (!isWebhookIngressQueueEnabled()) {
+      if (process.env.NODE_ENV === "production") {
+        res.sendStatus(503);
+        return;
+      }
       ack("facebook", "inline");
       processWebhookDeliveryInline("facebook", req.body);
       return;

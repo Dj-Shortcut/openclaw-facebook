@@ -60,7 +60,9 @@ function getSize(): string {
 }
 
 function getSeconds(): string {
-  return process.env.OPENAI_VIDEO_SECONDS?.trim() || DEFAULT_OPENAI_VIDEO_SECONDS;
+  return (
+    process.env.OPENAI_VIDEO_SECONDS?.trim() || DEFAULT_OPENAI_VIDEO_SECONDS
+  );
 }
 
 async function fetchWithTimeout(
@@ -150,7 +152,10 @@ async function fetchReferenceImage(
     };
   }
 
-  const contentType = response.headers.get("content-type")?.split(";")[0]?.trim();
+  const contentType = response.headers
+    .get("content-type")
+    ?.split(";")[0]
+    ?.trim();
   if (!contentType?.startsWith("image/")) {
     return {
       kind: "failure",
@@ -183,17 +188,42 @@ async function fetchReferenceImage(
 function classifyResponse(status: number, body: string): VideoProviderFailure {
   const normalized = body.toLowerCase();
   if (status === 408) {
-    return { kind: "failure", provider: "openai", errorClass: "timeout", retryable: true };
+    return {
+      kind: "failure",
+      provider: "openai",
+      errorClass: "timeout",
+      retryable: true,
+    };
   }
   if (status === 429) {
     return normalized.includes("quota") || normalized.includes("budget")
-      ? { kind: "failure", provider: "openai", errorClass: "budget", retryable: false }
-      : { kind: "failure", provider: "openai", errorClass: "rate_limited", retryable: true };
+      ? {
+          kind: "failure",
+          provider: "openai",
+          errorClass: "budget",
+          retryable: false,
+        }
+      : {
+          kind: "failure",
+          provider: "openai",
+          errorClass: "rate_limited",
+          retryable: true,
+        };
   }
   if (status === 400 || status === 403) {
     return normalized.includes("policy") || normalized.includes("safety")
-      ? { kind: "failure", provider: "openai", errorClass: "policy", retryable: false }
-      : { kind: "failure", provider: "openai", errorClass: "provider", retryable: false };
+      ? {
+          kind: "failure",
+          provider: "openai",
+          errorClass: "policy",
+          retryable: false,
+        }
+      : {
+          kind: "failure",
+          provider: "openai",
+          errorClass: "provider",
+          retryable: false,
+        };
   }
   return {
     kind: "failure",
@@ -205,9 +235,19 @@ function classifyResponse(status: number, body: string): VideoProviderFailure {
 
 function classifyError(error: unknown): VideoProviderFailure {
   if (error instanceof Error && error.name === "AbortError") {
-    return { kind: "failure", provider: "openai", errorClass: "timeout", retryable: true };
+    return {
+      kind: "failure",
+      provider: "openai",
+      errorClass: "timeout",
+      retryable: true,
+    };
   }
-  return { kind: "failure", provider: "openai", errorClass: "unknown", retryable: false };
+  return {
+    kind: "failure",
+    provider: "openai",
+    errorClass: "unknown",
+    retryable: false,
+  };
 }
 
 async function readErrorBody(response: Response): Promise<string> {
@@ -218,7 +258,10 @@ async function createVideoJob(
   input: VideoProviderRequest,
   timeoutMs: number
 ): Promise<OpenAiVideoJob | VideoProviderFailure> {
-  const referenceImage = await fetchReferenceImage(input.sourceImageUrl, timeoutMs);
+  const referenceImage = await fetchReferenceImage(
+    input.sourceImageUrl,
+    timeoutMs
+  );
   if ("kind" in referenceImage) {
     return referenceImage;
   }
@@ -239,33 +282,35 @@ async function createVideoJob(
   const apiKey = getApiKey();
   const attemptNow = new Date();
   const suppliedEntryId = await input.onProviderAttempt?.();
-  const ledgerEntryId = suppliedEntryId || `${input.reqId}:${attemptNow.toISOString()}`;
-  await safelyAppendCostLedgerEntry(
-    {
-      id: ledgerEntryId,
-      channel: "facebook_messenger",
-      operation: "video_generation",
-      provider: "openai-video",
-      model: getModel(),
-      userKey: input.userKey,
-      reqId: input.reqId,
-      status: "provider_attempt_started",
-      estimatedCostUsd: null,
-      estimatedOutputCostUsd: null,
-      finalCostUsd: null,
-      costEstimateComplete: false,
-      estimateSource: "unpriced",
-      unpricedCostComponents: ["video_generation"],
-      providerUsage: {
-        pricingModel: "unpriced",
-        size: getSize(),
-        seconds: Number(getSeconds()),
-        sourceContentType: referenceImage.contentType,
-        sourceBytes: referenceImage.bytes.byteLength,
+  const ledgerEntryId =
+    suppliedEntryId || `${input.reqId}:${attemptNow.toISOString()}`;
+  if (!suppliedEntryId)
+    await safelyAppendCostLedgerEntry(
+      {
+        id: ledgerEntryId,
+        channel: "facebook_messenger",
+        operation: "video_generation",
+        provider: "openai-video",
+        model: getModel(),
+        userKey: input.userKey,
+        reqId: input.reqId,
+        status: "provider_attempt_started",
+        estimatedCostUsd: null,
+        estimatedOutputCostUsd: null,
+        finalCostUsd: null,
+        costEstimateComplete: false,
+        estimateSource: "unpriced",
+        unpricedCostComponents: ["video_generation"],
+        providerUsage: {
+          pricingModel: "unpriced",
+          size: getSize(),
+          seconds: Number(getSeconds()),
+          sourceContentType: referenceImage.contentType,
+          sourceBytes: referenceImage.bytes.byteLength,
+        },
       },
-    },
-    attemptNow
-  );
+      attemptNow
+    );
   const response = await fetchWithTimeout(
     OPENAI_VIDEO_ENDPOINT,
     {
@@ -344,7 +389,9 @@ async function downloadVideo(
 }
 
 export class OpenAiVideoProvider implements VideoProvider {
-  async generateVideo(input: VideoProviderRequest): Promise<VideoProviderResult> {
+  async generateVideo(
+    input: VideoProviderRequest
+  ): Promise<VideoProviderResult> {
     const maxRetries = readNonNegativeInt(
       "OPENAI_VIDEO_MAX_RETRIES",
       DEFAULT_OPENAI_VIDEO_MAX_RETRIES
@@ -364,7 +411,11 @@ export class OpenAiVideoProvider implements VideoProvider {
         }
         return classifyError(error);
       });
-      if (result.kind === "success" || !result.retryable || attempt >= maxRetries) {
+      if (
+        result.kind === "success" ||
+        !result.retryable ||
+        attempt >= maxRetries
+      ) {
         return result;
       }
 

@@ -10,11 +10,7 @@ import {
 } from "../../../drizzle/schema";
 import { getDatabaseOrThrow } from "../../db";
 import { safeLog } from "../logger";
-import {
-  getMollieConfig,
-  getTenantBillingWorkerWorkspaceId,
-  type MollieMode,
-} from "./config";
+import { getMollieConfig, type MollieMode } from "./config";
 import { parseAmountMinor } from "./amounts";
 import { hashCanonicalSnapshot } from "./ids";
 import {
@@ -29,6 +25,15 @@ import {
   markWorkspaceSubscriptionStoppedIfMatches,
   syncWorkspaceSubscriptionScheduleIfMatches,
 } from "./subscriptionStore";
+import {
+  claimNextBillingTenant,
+  assertBillingTenantLeaseOwned,
+  releaseBillingTenantLease,
+  recordBillingSchedulerPoll,
+  renewBillingTenantLease,
+} from "./billingSchedulerStore";
+import { expireWorkspaceBillingProfileIfDue } from "./billingProfileStore";
+import { resolveDuePaymentProviderOperations } from "./checkoutStore";
 
 const RECONCILIATION_DISPATCH_INTERVAL_MS = 60_000;
 const RECONCILIATION_LEASE_MS = 2 * 60 * 60 * 1_000;
@@ -41,7 +46,7 @@ const DAY_MS = 24 * 60 * 60 * 1_000;
 
 let reconciliationTimer: NodeJS.Timeout | null = null;
 let initialTimer: NodeJS.Timeout | null = null;
-let reconciliationBusy = false;
+const busyReconciliationWorkspaces = new Set<number>();
 
 export function startDailyBillingReconciliation(): void {
   if (
@@ -50,52 +55,146 @@ export function startDailyBillingReconciliation(): void {
   ) {
     return;
   }
-  const workspaceId = getTenantBillingWorkerWorkspaceId();
-  if (!workspaceId) {
-    safeLog("billing_reconciliation_disabled", {
-      reason: "tenant_workspace_not_configured",
-    });
-    return;
-  }
   initialTimer = setTimeout(() => {
-    void dispatchTenantReconciliation(workspaceId);
+    void dispatchDueReconciliations();
   }, INITIAL_RECONCILIATION_DELAY_MS);
   initialTimer.unref();
   reconciliationTimer = setInterval(() => {
-    void dispatchTenantReconciliation(workspaceId);
+    void dispatchDueReconciliations();
   }, RECONCILIATION_DISPATCH_INTERVAL_MS);
   reconciliationTimer.unref();
 }
 
 async function dispatchTenantReconciliation(
-  workspaceId: number
-): Promise<void> {
-  if (reconciliationBusy) return;
-  reconciliationBusy = true;
+  workspaceId: number,
+  assertExecutionFence: () => Promise<void>
+): Promise<boolean> {
+  if (busyReconciliationWorkspaces.has(workspaceId)) {
+    throw new Error("billing reconciliation workspace is already busy");
+  }
+  busyReconciliationWorkspaces.add(workspaceId);
   try {
     const config = getMollieConfig();
     const now = new Date();
-    const due = await isWorkspaceReconciliationDue(
+    const result = await runDailyBillingReconciliation(
       workspaceId,
-      config.mode,
-      now
+      undefined,
+      now,
+      assertExecutionFence
     );
-    if (!due) return;
-    await runDailyBillingReconciliation(workspaceId, undefined, now);
+    if (!result.ran) {
+      throw new Error("billing reconciliation inner lease was unavailable");
+    }
+    return true;
   } catch (error) {
     safeLog("billing_reconciliation_dispatch_failed", {
       level: "error",
       errorCode: error instanceof Error ? error.name : "UnknownError",
     });
+    throw error;
   } finally {
-    reconciliationBusy = false;
+    busyReconciliationWorkspaces.delete(workspaceId);
+  }
+}
+
+export async function runBillingReconciliationSchedulerOnce(
+  limit = 25,
+  now = new Date()
+): Promise<number> {
+  const config = getMollieConfig();
+  await recordBillingSchedulerPoll(config.mode, "reconciliation", now);
+  let processed = 0;
+  const count = Math.max(1, Math.min(100, limit));
+  for (let index = 0; index < count; index += 1) {
+    const claimNow = index === 0 ? now : new Date();
+    const lease = await claimNextBillingTenant(
+      config.mode,
+      claimNow,
+      "reconciliation"
+    );
+    if (!lease) break;
+    let failed = false;
+    const heartbeat = setInterval(() => {
+      void renewBillingTenantLease(lease)
+        .then(renewed => {
+          if (!renewed) failed = true;
+        })
+        .catch(() => {
+          failed = true;
+        });
+    }, 30_000);
+    heartbeat.unref();
+    try {
+      await assertBillingTenantLeaseOwned(lease);
+      const ran = await dispatchTenantReconciliation(lease.workspaceId, () =>
+        assertBillingTenantLeaseOwned(lease)
+      );
+      await assertBillingTenantLeaseOwned(lease);
+      if (ran) processed += 1;
+    } catch {
+      failed = true;
+    } finally {
+      clearInterval(heartbeat);
+      const releaseNow = new Date();
+      const nextAt = failed
+        ? releaseNow
+        : await getNextWorkspaceReconciliationDue(
+            lease.workspaceId,
+            lease.mode,
+            releaseNow
+          );
+      const released = await releaseBillingTenantLease({
+        ...lease,
+        failed,
+        now: releaseNow,
+        nextAt,
+      });
+      if (!released) {
+        throw new Error("billing reconciliation lease ownership was lost");
+      }
+    }
+  }
+  return processed;
+}
+
+async function getNextWorkspaceReconciliationDue(
+  workspaceId: number,
+  mode: MollieMode,
+  now: Date
+): Promise<Date> {
+  const database = await getDatabaseOrThrow();
+  const rows = await database
+    .select({
+      nextAt: sql<Date | null>`MIN(${billingCustomers.nextReconciliationAt})`,
+    })
+    .from(billingCustomers)
+    .where(
+      and(
+        eq(billingCustomers.workspaceId, workspaceId),
+        eq(billingCustomers.mode, mode)
+      )
+    );
+  return rows[0]?.nextAt instanceof Date
+    ? rows[0].nextAt
+    : new Date(now.getTime() + NEXT_DAILY_RUN_MS);
+}
+
+async function dispatchDueReconciliations(): Promise<void> {
+  try {
+    await runBillingReconciliationSchedulerOnce();
+  } catch (error) {
+    safeLog("billing_reconciliation_scheduler_failed", {
+      level: "error",
+      errorCode: error instanceof Error ? error.name : "UnknownError",
+    });
   }
 }
 
 export async function runDailyBillingReconciliation(
   workspaceId: number,
   clientOverride?: MollieClient,
-  now = new Date()
+  now = new Date(),
+  assertExecutionFence: () => Promise<void> = async () => undefined
 ) {
   if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) {
     throw new Error("invalid reconciliation workspace");
@@ -114,6 +213,10 @@ export async function runDailyBillingReconciliation(
   };
   try {
     const database = await getDatabaseOrThrow();
+    await assertExecutionFence();
+    await resolveDuePaymentProviderOperations(workspaceId, config.mode, now);
+    await assertExecutionFence();
+    await expireWorkspaceBillingProfileIfDue(workspaceId, now);
     const expiryResult = await database
       .update(workspaceEntitlements)
       .set({ status: "inactive" })
@@ -148,6 +251,7 @@ export async function runDailyBillingReconciliation(
       summary.anomalies += 1;
     } else {
       summary.customersChecked = 1;
+      await assertExecutionFence();
       const payments = sortPaymentsOldestFirst(
         await client.listCustomerPayments(customer.mollieCustomerId)
       );
@@ -157,7 +261,9 @@ export async function runDailyBillingReconciliation(
       );
       for (const listedPayment of reconcilablePayments) {
         summary.paymentsChecked += 1;
+        await assertExecutionFence();
         const payment = await client.getPayment(listedPayment.id);
+        await assertExecutionFence();
         if (payment.mode !== config.mode) {
           await recordAnomaly(
             lease.runId,
@@ -202,6 +308,7 @@ export async function runDailyBillingReconciliation(
         ? null
         : (customer?.mollieCustomerId ?? null);
       if (subscription.mollieSubscriptionId && boundCustomerId) {
+        await assertExecutionFence();
         const remote = await client.getSubscription(
           boundCustomerId,
           subscription.mollieSubscriptionId
@@ -268,6 +375,7 @@ export async function runDailyBillingReconciliation(
     }
 
     if (customer?.mollieCustomerId) {
+      await assertExecutionFence();
       const remoteSubscriptions = await client.listCustomerSubscriptions(
         customer.mollieCustomerId
       );
@@ -392,27 +500,6 @@ export function selectPaymentsForReconciliation<
     }
   }
   return payments.filter(payment => selectedIds.has(payment.id));
-}
-
-async function isWorkspaceReconciliationDue(
-  workspaceId: number,
-  mode: MollieMode,
-  now: Date
-): Promise<boolean> {
-  const database = await getDatabaseOrThrow();
-  const due = await database
-    .select({ workspaceId: billingCustomers.workspaceId })
-    .from(billingCustomers)
-    .where(
-      and(
-        eq(billingCustomers.workspaceId, workspaceId),
-        eq(billingCustomers.mode, mode),
-        isNotNull(billingCustomers.mollieCustomerId),
-        lte(billingCustomers.nextReconciliationAt, now)
-      )
-    )
-    .limit(1);
-  return Boolean(due[0]);
 }
 
 async function scheduleReconciliationRetry(

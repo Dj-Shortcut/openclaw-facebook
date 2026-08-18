@@ -22,6 +22,7 @@ function useValidTestConfig(): void {
     APP_BASE_URL: "http://leaderbot.test/",
     BILLING_SUPPORT_EMAIL: "billing@leaderbot.test",
     MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED: "true",
+    MOLLIE_BILLING_SCHEDULER_MODE: "multi_tenant",
     PORTAL_HANDOFF_TOKEN_SECRET: "test-portal-handoff-secret-at-least-32",
   };
   delete process.env.PORTAL_BASE_URL;
@@ -167,21 +168,25 @@ describe("Mollie configuration", () => {
     });
   });
 
-  it("fails checkout scope closed unless the exact tenant worker is configured", () => {
+  it("requires an explicit scheduler mode and keeps an optional pilot allowlist", () => {
     expect(getTenantBillingWorkerWorkspaceId()).toBeNull();
-    expect(() => assertTenantBillingWorkerConfigured()).toThrow(
-      "MOLLIE_BILLING_WORKER_WORKSPACE_ID is required"
-    );
-    expect(() => assertTenantBillingWorkerWorkspace(42)).toThrow(
-      "Mollie billing is unavailable for this workspace"
-    );
+    expect(assertTenantBillingWorkerConfigured()).toBeUndefined();
+    expect(() => assertTenantBillingWorkerWorkspace(42)).not.toThrow();
 
+    process.env.MOLLIE_BILLING_SCHEDULER_MODE = "pilot_pin";
     process.env.MOLLIE_BILLING_WORKER_WORKSPACE_ID = "42";
     expect(getTenantBillingWorkerWorkspaceId()).toBe(42);
-    expect(assertTenantBillingWorkerConfigured()).toBe(42);
+    expect(assertTenantBillingWorkerConfigured()).toBeUndefined();
     expect(() => assertTenantBillingWorkerWorkspace(42)).not.toThrow();
     expect(() => assertTenantBillingWorkerWorkspace(43)).toThrow(
       "Mollie billing is unavailable for this workspace"
+    );
+  });
+
+  it("never infers multi-tenant execution from a missing pilot pin", () => {
+    delete process.env.MOLLIE_BILLING_SCHEDULER_MODE;
+    expect(() => assertTenantBillingWorkerConfigured()).toThrow(
+      "MOLLIE_BILLING_SCHEDULER_MODE must explicitly be pilot_pin or multi_tenant"
     );
   });
 

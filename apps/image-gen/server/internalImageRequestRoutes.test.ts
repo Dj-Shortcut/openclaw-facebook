@@ -144,6 +144,7 @@ describe("internal AI-answer quota routes", () => {
           body: JSON.stringify({
             pageId: "page-1",
             idempotencyKey: `messenger_ai_answer:${"a".repeat(64)}`,
+            ownerToken: "11111111-1111-4111-8111-111111111111",
           }),
         }
       );
@@ -157,6 +158,7 @@ describe("internal AI-answer quota routes", () => {
     expect(reserveInternalAiAnswerQuotaMock).toHaveBeenCalledWith({
       pageId: "page-1",
       idempotencyKey: `messenger_ai_answer:${"a".repeat(64)}`,
+      ownerToken: "11111111-1111-4111-8111-111111111111",
     });
   });
 
@@ -173,6 +175,7 @@ describe("internal AI-answer quota routes", () => {
           body: JSON.stringify({
             pageId: "page-1",
             idempotencyKey: `messenger_ai_answer:${"a".repeat(64)}`,
+            ownerToken: "11111111-1111-4111-8111-111111111111",
           }),
         }
       );
@@ -196,6 +199,7 @@ describe("internal AI-answer quota routes", () => {
           body: JSON.stringify({
             pageId: "page-1",
             idempotencyKey: "too short",
+            ownerToken: "11111111-1111-4111-8111-111111111111",
           }),
         }
       );
@@ -221,6 +225,7 @@ describe("internal AI-answer quota routes", () => {
           body: JSON.stringify({
             pageId: "page-1",
             reservationId: "16be1d70-9ed5-4b32-80cc-98be433581dc",
+            ownerToken: "11111111-1111-4111-8111-111111111111",
             outcome: "committed",
           }),
         }
@@ -245,6 +250,7 @@ describe("internal AI-answer quota routes", () => {
           body: JSON.stringify({
             pageId: "page-1",
             idempotencyKey: `messenger_ai_answer:${"b".repeat(64)}`,
+            ownerToken: "11111111-1111-4111-8111-111111111111",
           }),
         }
       );

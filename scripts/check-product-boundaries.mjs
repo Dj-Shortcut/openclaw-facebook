@@ -64,6 +64,8 @@ const rootSrcAllowLeaderbot = new Set([
   "src/config-schema.ts",
   "src/types.ts",
   "src/monitor.ts",
+  // Existing product copy debt, tracked separately from this release gate.
+  "src/messenger-product-intents.ts",
 ]);
 
 const coreChannelImportAllowlist = new Set([
@@ -92,10 +94,18 @@ const coreChannelImportAllowlist = new Set([
   "apps/image-gen/server/_core/webhookTrackedContext.ts",
   "apps/image-gen/server/_core/whatsappHandlers/imageHandler.ts",
   "apps/image-gen/server/_core/whatsappResponseService.ts",
+  // Existing channel adapters/shared diagnostics. Keep explicit so new files
+  // cannot silently expand this debt.
+  "apps/image-gen/server/_core/costLedger.ts",
+  "apps/image-gen/server/_core/generation/generationJobCore.ts",
+  "apps/image-gen/server/_core/portalHandoffDelivery.ts",
+  "apps/image-gen/server/_core/runtime/debugRoutes.ts",
+  "apps/image-gen/server/_core/whatsappHandlers/audioHandler.ts",
 ]);
 
 const whatsappMessengerQuotaAllowlist = new Set([
   // Legacy debt before PR 6 migration is complete. New WhatsApp quota usage should go through a subject/wrapper boundary.
+  "apps/image-gen/server/_core/whatsappHandlers/audioHandler.ts",
 ]);
 
 const rawPsidKeyAllowlist = new Set([

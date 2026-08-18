@@ -240,22 +240,36 @@ suite("portal handoff MySQL concurrency", () => {
       lastErrorCode: "portal_handoff_response_window_closed",
     });
 
+    const now = new Date();
+    const eventIdHash = "1".repeat(64);
     await expect(
       rearmFailedPortalHandoffAfterInbound({
         facebookPageId: pageId,
         messengerSenderUserKey: "f".repeat(64),
+        eventIdHash,
+        eventTimestamp: now,
+        source: "verified_messenger_inbound",
+        now,
       })
     ).resolves.toBe(false);
     await expect(
       rearmFailedPortalHandoffAfterInbound({
         facebookPageId: pageId,
         messengerSenderUserKey: senderKey,
+        eventIdHash,
+        eventTimestamp: now,
+        source: "verified_messenger_inbound",
+        now,
       })
     ).resolves.toBe(true);
     await expect(
       rearmFailedPortalHandoffAfterInbound({
         facebookPageId: pageId,
         messengerSenderUserKey: senderKey,
+        eventIdHash,
+        eventTimestamp: now,
+        source: "verified_messenger_inbound",
+        now,
       })
     ).resolves.toBe(false);
 
@@ -286,5 +300,82 @@ suite("portal handoff MySQL concurrency", () => {
       );
     expect(paidIntents).toHaveLength(1);
     expect(paidIntents[0]?.intentId).toBe(intentId);
+
+    await database
+      .update(billingOutbox)
+      .set({
+        status: "failed",
+        lastErrorCode: "portal_handoff_send_failed_exhausted",
+      })
+      .where(eq(billingOutbox.workspaceId, workspaceId));
+    await expect(
+      rearmFailedPortalHandoffAfterInbound({
+        facebookPageId: pageId,
+        messengerSenderUserKey: senderKey,
+        eventIdHash,
+        eventTimestamp: now,
+        source: "verified_messenger_inbound",
+        now,
+      })
+    ).resolves.toBe(false);
+    await expect(
+      rearmFailedPortalHandoffAfterInbound({
+        facebookPageId: pageId,
+        messengerSenderUserKey: senderKey,
+        eventIdHash: "2".repeat(64),
+        eventTimestamp: now,
+        source: "verified_messenger_inbound",
+        now,
+      })
+    ).resolves.toBe(true);
+  });
+
+  it("extends the same revoked capability across recovery cycles after 48 hours", async () => {
+    const database = await getDatabaseOrThrow();
+    const cycleDeliveryHash = `sha256:${"7".repeat(64)}`;
+    const cycleTokenHash = `sha256:${"8".repeat(64)}`;
+    const initial = new Date("2026-08-01T00:00:00.000Z");
+    const values = {
+      workspaceId,
+      tokenHash: cycleTokenHash,
+      deliveryIdempotencyKeyHash: cycleDeliveryHash,
+      messengerSenderUserKey: senderKey,
+      facebookPageId: pageId,
+      purpose: "workspace_onboarding" as const,
+      status: "pending" as const,
+      expiresAt: new Date(initial.getTime() + 48 * 60 * 60_000),
+      createdByUserId: null,
+    };
+    const created = await createOrGetPortalHandoffToken(values, initial);
+    await database
+      .update(portalHandoffTokens)
+      .set({ status: "revoked" })
+      .where(eq(portalHandoffTokens.id, created.id));
+
+    const secondNow = new Date(initial.getTime() + 72 * 60 * 60_000);
+    const secondExpiry = new Date(secondNow.getTime() + 48 * 60 * 60_000);
+    const second = await createOrGetPortalHandoffToken(
+      { ...values, expiresAt: secondExpiry },
+      secondNow
+    );
+    expect(second).toMatchObject({
+      id: created.id,
+      tokenHash: cycleTokenHash,
+      status: "pending",
+      expiresAt: secondExpiry,
+    });
+    await database
+      .update(portalHandoffTokens)
+      .set({ status: "revoked" })
+      .where(eq(portalHandoffTokens.id, created.id));
+    const thirdNow = new Date(secondNow.getTime() + 72 * 60 * 60_000);
+    const thirdExpiry = new Date(thirdNow.getTime() + 48 * 60 * 60_000);
+    const third = await createOrGetPortalHandoffToken(
+      { ...values, expiresAt: thirdExpiry },
+      thirdNow
+    );
+    expect(third.id).toBe(created.id);
+    expect(third.tokenHash).toBe(cycleTokenHash);
+    expect(third.expiresAt).toEqual(thirdExpiry);
   });
 });

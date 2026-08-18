@@ -27,4 +27,5 @@ primary_region = "ams"
     timeout = "5s"
     grace_period = "10s"
     method = "GET"
-    path = "/healthz"
+    # Liveness remains /healthz; traffic/deploy admission uses the full readiness chain.
+    path = "/readyz"

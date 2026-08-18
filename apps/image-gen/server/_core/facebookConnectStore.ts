@@ -154,7 +154,11 @@ function getFacebookApiVersion() {
 }
 
 function getPortalBaseUrl() {
-  return (process.env.PORTAL_BASE_URL ?? process.env.APP_BASE_URL ?? "http://localhost:8080").replace(/\/$/, "");
+  return (
+    process.env.PORTAL_BASE_URL ??
+    process.env.APP_BASE_URL ??
+    "http://localhost:8080"
+  ).replace(/\/$/, "");
 }
 
 function getFacebookRedirectUri() {
@@ -165,7 +169,9 @@ export function getFacebookOAuthUrl(state: string) {
   const appId = process.env.FB_APP_ID;
   if (!appId) return null;
 
-  const url = new URL(`https://www.facebook.com/${getFacebookApiVersion()}/dialog/oauth`);
+  const url = new URL(
+    `https://www.facebook.com/${getFacebookApiVersion()}/dialog/oauth`
+  );
   url.searchParams.set("client_id", appId);
   url.searchParams.set("redirect_uri", getFacebookRedirectUri());
   url.searchParams.set("state", state);
@@ -195,7 +201,9 @@ export async function exchangeFacebookCodeForPages(code: string) {
     throw new Error("facebook oauth is not configured");
   }
 
-  const tokenUrl = new URL(`https://graph.facebook.com/${getFacebookApiVersion()}/oauth/access_token`);
+  const tokenUrl = new URL(
+    `https://graph.facebook.com/${getFacebookApiVersion()}/oauth/access_token`
+  );
   tokenUrl.searchParams.set("client_id", appId);
   tokenUrl.searchParams.set("client_secret", appSecret);
   tokenUrl.searchParams.set("redirect_uri", getFacebookRedirectUri());
@@ -211,7 +219,9 @@ export async function exchangeFacebookCodeForPages(code: string) {
     throw new Error("facebook token exchange did not return an access token");
   }
 
-  const accountsUrl = new URL(`https://graph.facebook.com/${getFacebookApiVersion()}/me/accounts`);
+  const accountsUrl = new URL(
+    `https://graph.facebook.com/${getFacebookApiVersion()}/me/accounts`
+  );
   accountsUrl.searchParams.set("fields", "id,name,access_token,perms,tasks");
   accountsUrl.searchParams.set("access_token", token.access_token);
 
@@ -222,17 +232,24 @@ export async function exchangeFacebookCodeForPages(code: string) {
 
   const accounts = (await accountsResponse.json()) as FacebookAccountsResponse;
   return (accounts.data ?? [])
-    .filter((page): page is Required<Pick<typeof page, "id" | "name" | "access_token">> & typeof page =>
-      Boolean(page.id && page.name && page.access_token)
+    .filter(
+      (
+        page
+      ): page is Required<Pick<typeof page, "id" | "name" | "access_token">> &
+        typeof page => Boolean(page.id && page.name && page.access_token)
     )
     .map(page => ({
       id: page.id,
       name: page.name,
       accessToken: page.access_token,
       grantedScopes: REQUIRED_FACEBOOK_SCOPES.filter(scope => {
-        const permissions = new Set([...(page.perms ?? []), ...(page.tasks ?? [])]);
+        const permissions = new Set([
+          ...(page.perms ?? []),
+          ...(page.tasks ?? []),
+        ]);
         if (scope === "pages_show_list") return true;
-        if (scope === "pages_manage_metadata") return permissions.has("MANAGE") || permissions.has("MODERATE");
+        if (scope === "pages_manage_metadata")
+          return permissions.has("MANAGE") || permissions.has("MODERATE");
         if (scope === "pages_messaging") return permissions.has("MESSAGING");
         return false;
       }),
@@ -248,7 +265,45 @@ export function sealFacebookPageToken(token: string) {
   const key = crypto.createHash("sha256").update(secret).digest();
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
-  const encrypted = Buffer.concat([cipher.update(token, "utf8"), cipher.final()]);
+  const encrypted = Buffer.concat([
+    cipher.update(token, "utf8"),
+    cipher.final(),
+  ]);
   const tag = cipher.getAuthTag();
   return `v1:${iv.toString("base64url")}:${tag.toString("base64url")}:${encrypted.toString("base64url")}`;
+}
+
+export function unsealFacebookPageToken(sealedToken: string): string {
+  const secret = getConfiguredJwtSecret();
+  if (!secret) {
+    throw new Error("JWT_SECRET is required to read Facebook page tokens");
+  }
+
+  const [version, ivValue, tagValue, encryptedValue, extra] =
+    sealedToken.split(":");
+  if (
+    version !== "v1" ||
+    !ivValue ||
+    !tagValue ||
+    !encryptedValue ||
+    extra !== undefined
+  ) {
+    throw new Error("Facebook page token envelope is invalid");
+  }
+
+  try {
+    const key = crypto.createHash("sha256").update(secret).digest();
+    const decipher = crypto.createDecipheriv(
+      "aes-256-gcm",
+      key,
+      Buffer.from(ivValue, "base64url")
+    );
+    decipher.setAuthTag(Buffer.from(tagValue, "base64url"));
+    return Buffer.concat([
+      decipher.update(Buffer.from(encryptedValue, "base64url")),
+      decipher.final(),
+    ]).toString("utf8");
+  } catch {
+    throw new Error("Facebook page token envelope could not be opened");
+  }
 }

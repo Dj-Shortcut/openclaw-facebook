@@ -309,6 +309,15 @@ function Home() {
   });
   const [isEditingWorkspace, setIsEditingWorkspace] = useState(false);
   const [workspaceName, setWorkspaceName] = useState("");
+  const [accountingFrom, setAccountingFrom] = useState(() => {
+    const now = new Date();
+    return `${now.getUTCFullYear()}-01-01`;
+  });
+  const [accountingUntil, setAccountingUntil] = useState(() => {
+    const tomorrow = new Date();
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    return tomorrow.toISOString().slice(0, 10);
+  });
   const [knowledgeForm, setKnowledgeForm] = useState<{
     sourceType: "website" | "manual_text" | "integration";
     name: string;
@@ -586,6 +595,7 @@ function Home() {
   const billingEntitlement = billingSummary?.entitlement;
   const billingPlan = billingSummary?.plan;
   const billingPayments = billingSummary?.payments ?? [];
+  const billingNotifications = billingSummary?.notifications ?? [];
   const upgradeRequests = upgradeRequestsQuery.data ?? [];
   const latestUpgradeRequest = upgradeRequests[0];
   const facebookStatus =
@@ -665,7 +675,6 @@ function Home() {
     billingCheckoutMutation.mutate({
       workspaceId,
       planCode,
-      countryCode: "BE",
       kind,
       businessCheckout: false,
       handoffToken: readActiveHandoffToken() ?? undefined,
@@ -1392,6 +1401,17 @@ function Home() {
                   </div>
                 </div>
 
+                {billingNotifications.map(notification => (
+                  <p
+                    key={notification.id}
+                    className="mt-5 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900"
+                  >
+                    {locale.startsWith("nl")
+                      ? "We konden een betaling niet bevestigen. Controleer je facturatie of neem contact op met support."
+                      : "We could not confirm a payment. Check your billing details or contact support."}
+                  </p>
+                ))}
+
                 {billingPlansQuery.error ? (
                   <p className="mt-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">
                     {copy.billing.planLoadError}
@@ -1804,7 +1824,7 @@ function Home() {
 
                 {canManageBilling ? (
                   <>
-                    <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                       <div>
                         <h3 className="font-semibold text-stone-950">
                           {copy.billing.paymentHistory}
@@ -1813,15 +1833,43 @@ function Home() {
                           {copy.billing.accountingExportBody}
                         </p>
                       </div>
-                      {workspaceId ? (
-                        <Button asChild size="sm" variant="outline">
-                          <a
-                            href={`/api/portal/billing/export.csv?workspaceId=${encodeURIComponent(String(workspaceId))}`}
-                          >
-                            <FileDown className="h-4 w-4" />
-                            {copy.billing.accountingExport}
-                          </a>
-                        </Button>
+                      {workspaceId && billingSummary?.mode ? (
+                        <div className="flex flex-wrap items-end gap-2">
+                          <label className="grid gap-1 text-xs text-stone-600">
+                            {locale === "nl-BE"
+                              ? "Van (inclusief)"
+                              : locale === "fr-BE"
+                                ? "Du (inclus)"
+                                : "From (inclusive)"}
+                            <input
+                              className="rounded-md border border-stone-300 bg-white px-2 py-1.5 text-sm"
+                              type="date"
+                              value={accountingFrom}
+                              onChange={event => setAccountingFrom(event.target.value)}
+                            />
+                          </label>
+                          <label className="grid gap-1 text-xs text-stone-600">
+                            {locale === "nl-BE"
+                              ? "Tot (exclusief)"
+                              : locale === "fr-BE"
+                                ? "Au (exclus)"
+                                : "Until (exclusive)"}
+                            <input
+                              className="rounded-md border border-stone-300 bg-white px-2 py-1.5 text-sm"
+                              type="date"
+                              value={accountingUntil}
+                              onChange={event => setAccountingUntil(event.target.value)}
+                            />
+                          </label>
+                          <Button asChild size="sm" variant="outline">
+                            <a
+                              href={`/api/portal/billing/export.csv?workspaceId=${encodeURIComponent(String(workspaceId))}&from=${encodeURIComponent(accountingFrom)}&until=${encodeURIComponent(accountingUntil)}`}
+                            >
+                              <FileDown className="h-4 w-4" />
+                              {copy.billing.accountingExport}
+                            </a>
+                          </Button>
+                        </div>
                       ) : null}
                     </div>
                     <div className="mt-4 overflow-x-auto rounded-lg border border-stone-200">

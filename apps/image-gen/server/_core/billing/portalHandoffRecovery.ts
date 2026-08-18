@@ -2,6 +2,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 
 import {
   billingIntents,
+  billingHandoffRecoveryEvents,
   billingOutbox,
   channelConnections,
 } from "../../../drizzle/schema";
@@ -18,6 +19,10 @@ const RECOVERABLE_HANDOFF_FAILURES = new Set([
 type InboundPortalHandoffRecovery = Readonly<{
   facebookPageId: string;
   messengerSenderUserKey: string;
+  eventIdHash: string;
+  eventTimestamp: Date;
+  source: "verified_messenger_inbound";
+  now?: Date;
 }>;
 
 type RearmedPortalHandoff = Readonly<{
@@ -36,11 +41,17 @@ export async function rearmFailedPortalHandoffAfterInbound(
   input: InboundPortalHandoffRecovery
 ): Promise<boolean> {
   const facebookPageId = input.facebookPageId.trim();
+  const now = input.now ?? new Date();
   if (
     !process.env.DATABASE_URL?.trim() ||
     !facebookPageId ||
     facebookPageId.length > 160 ||
-    !/^[a-f0-9]{64}$/.test(input.messengerSenderUserKey)
+    !/^[a-f0-9]{64}$/.test(input.messengerSenderUserKey) ||
+    !/^[a-f0-9]{64}$/.test(input.eventIdHash) ||
+    input.source !== "verified_messenger_inbound" ||
+    !Number.isFinite(input.eventTimestamp.getTime()) ||
+    input.eventTimestamp.getTime() < now.getTime() - 5 * 60_000 ||
+    input.eventTimestamp.getTime() > now.getTime() + 60_000
   ) {
     return false;
   }
@@ -108,15 +119,53 @@ export async function rearmFailedPortalHandoffAfterInbound(
         .for("update");
       if (!intents[0]) return null;
 
+      const recoveryHistory = readRecoveryHistory(job.payload);
+      const receipts = await tx
+        .select({ id: billingHandoffRecoveryEvents.id })
+        .from(billingHandoffRecoveryEvents)
+        .where(
+          and(
+            eq(billingHandoffRecoveryEvents.outboxId, job.id),
+            eq(billingHandoffRecoveryEvents.eventIdHash, input.eventIdHash)
+          )
+        )
+        .limit(1)
+        .for("update");
+      if (receipts[0]) {
+        return null;
+      }
+      await tx.insert(billingHandoffRecoveryEvents).values({
+        outboxId: job.id,
+        workspaceId,
+        eventIdHash: input.eventIdHash,
+        source: input.source,
+        eventTimestamp: input.eventTimestamp,
+      });
       await tx
         .update(billingOutbox)
         .set({
           status: "pending",
           attemptCount: 0,
-          availableAt: new Date(),
+          availableAt: now,
           lockedAt: null,
           leaseToken: null,
           lastErrorCode: "customer_message_rearm",
+          payload: {
+            ...(job.payload as Record<string, unknown>),
+            recoveryHistory: [
+              ...recoveryHistory,
+              {
+                kind: "rearmed",
+                previousErrorCode: job.lastErrorCode,
+                previousAttemptCount: job.attemptCount,
+                actor: "customer",
+                source: input.source,
+                eventIdHash: input.eventIdHash,
+                eventTimestamp: input.eventTimestamp.toISOString(),
+                recordedAt: now.toISOString(),
+              },
+            ].slice(-20),
+          },
         })
         .where(
           and(
@@ -149,6 +198,14 @@ export async function rearmFailedPortalHandoffAfterInbound(
     });
     return false;
   }
+}
+
+function readRecoveryHistory(payload: unknown): unknown[] {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return [];
+  }
+  const history = (payload as Record<string, unknown>).recoveryHistory;
+  return Array.isArray(history) ? history.slice(-19) : [];
 }
 
 function readHandoffPayload(payload: unknown): {

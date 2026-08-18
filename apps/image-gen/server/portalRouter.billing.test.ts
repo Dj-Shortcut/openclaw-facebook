@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   insertAuditLog: vi.fn(),
   isMollieBillingEnabled: vi.fn(),
   listPublicBillingPlans: vi.fn(),
+  listWorkspaceBillingNotifications: vi.fn(),
   safeLog: vi.fn(),
   startCheckout: vi.fn(),
 }));
@@ -48,6 +49,10 @@ vi.mock("./_core/billing/config", () => ({
 
 vi.mock("./_core/billing/subscriptionStore", () => ({
   getWorkspaceBillingSummary: mocks.getBillingSummary,
+}));
+
+vi.mock("./_core/billing/billingNotificationReceiverWorker", () => ({
+  listWorkspaceBillingNotifications: mocks.listWorkspaceBillingNotifications,
 }));
 
 import { portalRouter } from "./_core/portalRouter";
@@ -88,6 +93,7 @@ describe("portal router billing", () => {
     });
     mocks.getWorkspaceById.mockResolvedValue({ id: workspaceId });
     mocks.getMollieConfig.mockReturnValue({ mode: "test" });
+    mocks.listWorkspaceBillingNotifications.mockResolvedValue([]);
     mocks.isMollieBillingEnabled.mockReturnValue(true);
   });
 

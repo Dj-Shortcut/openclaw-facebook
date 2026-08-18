@@ -1743,6 +1743,11 @@ describe("processMessengerEvent Startpilot AI-answer quota", () => {
           status: 200,
         });
       }
+      if (requestUrl.includes("/ai-answer-quota/delivery-started")) {
+        return new Response(JSON.stringify({ status: "delivery_started" }), {
+          status: 200,
+        });
+      }
       return new Response(JSON.stringify({
         message_id: "visible-final",
         recipient_id: "sender-mid-ai-quota-commit",
@@ -1757,7 +1762,12 @@ describe("processMessengerEvent Startpilot AI-answer quota", () => {
     );
 
     expect(finalizeBodies).toEqual([
-      { pageId: "page-1", reservationId, outcome: "committed" },
+      expect.objectContaining({
+        pageId: "page-1",
+        reservationId,
+        outcome: "committed",
+        ownerToken: expect.any(String),
+      }),
     ]);
   });
 
@@ -1786,7 +1796,12 @@ describe("processMessengerEvent Startpilot AI-answer quota", () => {
     );
 
     expect(finalizeBodies).toEqual([
-      { pageId: "page-1", reservationId, outcome: "released" },
+      expect.objectContaining({
+        pageId: "page-1",
+        reservationId,
+        outcome: "released",
+        ownerToken: expect.any(String),
+      }),
     ]);
   });
 
@@ -1818,7 +1833,12 @@ describe("processMessengerEvent Startpilot AI-answer quota", () => {
       ),
     ).rejects.toThrow("model unavailable");
     expect(finalizeBodies).toEqual([
-      { pageId: "page-1", reservationId, outcome: "released" },
+      expect.objectContaining({
+        pageId: "page-1",
+        reservationId,
+        outcome: "released",
+        ownerToken: expect.any(String),
+      }),
     ]);
   });
 });

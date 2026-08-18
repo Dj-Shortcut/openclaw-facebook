@@ -2,7 +2,7 @@ import * as db from "../db";
 import { sendText } from "./messengerApi";
 import {
   findStateByUserKey,
-  hasOpenMessengerResponseWindow,
+  hasOpenPaidHandoffWindow,
   type MessengerUserState,
 } from "./messengerState";
 import {
@@ -11,6 +11,7 @@ import {
 } from "./portalHandoff";
 import { toLogUser } from "./privacy";
 import { safeLog } from "./logger";
+import { getActiveMessengerPrivacySubjectEpoch } from "./messengerPrivacySubject";
 
 export type SendPortalHandoffInput = {
   workspaceId: number;
@@ -21,6 +22,8 @@ export type SendPortalHandoffInput = {
   now?: Date;
   ttlMs?: number;
   deliveryIdempotencyKey?: string | null;
+  beforeCapabilityCreate?: () => Promise<boolean>;
+  beforeTransport?: () => Promise<boolean>;
 };
 
 export type SendPortalHandoffResult =
@@ -104,7 +107,8 @@ async function revokeCreatedTokenSafely(
       level: "error",
       workspaceId,
       user: logUser,
-      errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
+      errorCode:
+        error instanceof Error ? error.constructor.name : "UnknownError",
     });
   }
 }
@@ -113,11 +117,39 @@ export async function sendPortalHandoffLink(
   input: SendPortalHandoffInput
 ): Promise<SendPortalHandoffResult> {
   const expectedPageId = input.expectedFacebookPageId?.trim();
+  const logUser = toLogUser(input.messengerSenderUserKey);
+  if (!expectedPageId) {
+    return { ok: false, reason: "page_binding_unavailable" };
+  }
+  const connections = await db.listChannelConnections(input.workspaceId);
+  const facebookConnection = connections.find(
+    connection =>
+      connection.channel === "facebook_messenger" &&
+      connection.status === "connected" &&
+      connection.externalId === expectedPageId
+  );
+  if (!facebookConnection) {
+    return { ok: false, reason: "page_binding_unavailable" };
+  }
+  const privacyEpoch = await getActiveMessengerPrivacySubjectEpoch({
+    workspaceId: input.workspaceId,
+    channelConnectionId: facebookConnection.id,
+    userKey: input.messengerSenderUserKey,
+  });
+  if (!privacyEpoch) {
+    return { ok: false, reason: "privacy_erased" };
+  }
+  const stateFence = {
+    workspaceId: input.workspaceId,
+    channelConnectionId: facebookConnection.id,
+    bindingEpoch: facebookConnection.bindingEpoch,
+    privacyEpoch,
+  };
   const state = await findStateByUserKey(
     input.messengerSenderUserKey,
-    expectedPageId
+    expectedPageId,
+    stateFence
   );
-  const logUser = toLogUser(input.messengerSenderUserKey);
 
   if (!state) {
     safeLog("portal_handoff_send_skipped", {
@@ -129,7 +161,7 @@ export async function sendPortalHandoffLink(
   }
 
   const responseWindowOpen = await Promise.resolve(
-    hasOpenMessengerResponseWindow(state.psid, undefined, state.pageId)
+    hasOpenPaidHandoffWindow(state.psid, undefined, state.pageId, stateFence)
   );
   if (!responseWindowOpen) {
     safeLog("portal_handoff_send_skipped", {
@@ -158,24 +190,14 @@ export async function sendPortalHandoffLink(
     return { ok: false, reason: "page_binding_unavailable" };
   }
 
-  const connections = await db.listChannelConnections(input.workspaceId);
-  const facebookConnection = connections.find(
-    connection =>
-      connection.channel === "facebook_messenger" &&
-      connection.status === "connected" &&
-      connection.externalId === pageId
-  );
-  if (!facebookConnection) {
-    safeLog("portal_handoff_send_skipped", {
-      reason: "page_binding_unavailable",
-      workspaceId: input.workspaceId,
-      user: logUser,
-    });
-    return { ok: false, reason: "page_binding_unavailable" };
-  }
-
   let tokenResult: PortalHandoffTokenResult | null = null;
   try {
+    if (
+      input.beforeCapabilityCreate &&
+      !(await input.beforeCapabilityCreate())
+    ) {
+      return { ok: false, reason: "privacy_erased" };
+    }
     tokenResult = await createPortalHandoffToken({
       workspaceId: input.workspaceId,
       facebookPageId: pageId,
@@ -186,10 +208,23 @@ export async function sendPortalHandoffLink(
       deliveryIdempotencyKey: input.deliveryIdempotencyKey ?? null,
     });
     const handoffUrl = buildPortalHandoffUrl(tokenResult.token, input.baseUrl);
+    if (input.beforeTransport && !(await input.beforeTransport())) {
+      await revokeCreatedTokenSafely(tokenResult, input.workspaceId, logUser);
+      return { ok: false, reason: "privacy_erased" };
+    }
     const outcome = await sendText(
       state.psid,
       buildPortalHandoffMessage(handoffUrl, state),
-      { pageId }
+      {
+        pageId,
+        workspaceId: input.workspaceId,
+        channelConnectionId: facebookConnection.id,
+        bindingEpoch: facebookConnection.bindingEpoch,
+        userKey: input.messengerSenderUserKey,
+        privacyEpoch,
+        operationId:
+          input.deliveryIdempotencyKey ?? `portal-handoff:${input.workspaceId}`,
+      }
     );
 
     if (!outcome.sent) {
@@ -219,7 +254,8 @@ export async function sendPortalHandoffLink(
       level: "error",
       workspaceId: input.workspaceId,
       user: logUser,
-      errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
+      errorCode:
+        error instanceof Error ? error.constructor.name : "UnknownError",
     });
     return { ok: false, reason: "send_failed" };
   }

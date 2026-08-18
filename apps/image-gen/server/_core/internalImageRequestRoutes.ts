@@ -12,6 +12,9 @@ import { MESSENGER_SEND_SKIPPED } from "./webhookFallback";
 import type { MessengerSendOutcome } from "./messengerApi";
 import {
   finalizeInternalAiAnswerQuota,
+  markInternalAiAnswerDeliveryStarted,
+  markInternalAiAnswerDeliveryKnownRejected,
+  heartbeatInternalAiAnswerReservation,
   reserveInternalAiAnswerQuota,
   safeInternalAiAnswerQuotaErrorCode,
 } from "./internalAiAnswerQuota";
@@ -38,15 +41,27 @@ const internalMessengerEventSchema = z.object({
 
 const internalAiAnswerQuotaReserveSchema = z.object({
   pageId: z.string().trim().min(1).max(160),
-  idempotencyKey: z
-    .string()
-    .regex(/^[A-Za-z0-9:_-]{16,160}$/),
+  idempotencyKey: z.string().regex(/^[A-Za-z0-9:_-]{16,160}$/),
+  ownerToken: z.uuid(),
 });
 
 const internalAiAnswerQuotaFinalizeSchema = z.object({
   pageId: z.string().trim().min(1).max(160),
   reservationId: z.uuid(),
+  ownerToken: z.uuid(),
   outcome: z.enum(["committed", "released"]),
+});
+const internalAiAnswerQuotaDeliveryStartedSchema = z.object({
+  pageId: z.string().trim().min(1).max(160),
+  reservationId: z.uuid(),
+  ownerToken: z.uuid(),
+  deliveryAttemptToken: z.uuid(),
+});
+const internalAiAnswerQuotaDeliveryKnownRejectedSchema =
+  internalAiAnswerQuotaDeliveryStartedSchema;
+const internalAiAnswerQuotaHeartbeatSchema = z.object({
+  reservationId: z.uuid(),
+  ownerToken: z.uuid(),
 });
 
 const internalMessengerRequestLimiter = rateLimit({
@@ -130,6 +145,79 @@ function sendNotQueuedResponse(res: Response): void {
 
 /** Registers authenticated internal Messenger image-request and event bridge routes. */
 export function registerInternalImageRequestRoutes(app: Express): void {
+  app.post(
+    "/internal/messenger/ai-answer-quota/heartbeat",
+    internalMessengerRequestLimiter,
+    async (req, res) => {
+      if (!authorizeInternalRequest(req, res)) return;
+      const parsed = internalAiAnswerQuotaHeartbeatSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid AI answer reservation lease" });
+        return;
+      }
+      try {
+        res
+          .status(200)
+          .json(await heartbeatInternalAiAnswerReservation(parsed.data));
+      } catch (error) {
+        safeLog("internal_ai_answer_heartbeat_failed", {
+          level: "error",
+          errorCode: safeInternalAiAnswerQuotaErrorCode(error),
+        });
+        res.status(503).json({ error: "AI answer reservation is unavailable" });
+      }
+    }
+  );
+  app.post(
+    "/internal/messenger/ai-answer-quota/delivery-known-rejected",
+    internalMessengerRequestLimiter,
+    async (req, res) => {
+      if (!authorizeInternalRequest(req, res)) return;
+      const parsed = internalAiAnswerQuotaDeliveryKnownRejectedSchema.safeParse(
+        req.body
+      );
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid AI answer delivery outcome" });
+        return;
+      }
+      try {
+        res
+          .status(200)
+          .json(await markInternalAiAnswerDeliveryKnownRejected(parsed.data));
+      } catch (error) {
+        safeLog("internal_ai_answer_delivery_reject_failed", {
+          level: "error",
+          errorCode: safeInternalAiAnswerQuotaErrorCode(error),
+        });
+        res.status(503).json({ error: "AI answer delivery is unavailable" });
+      }
+    }
+  );
+  app.post(
+    "/internal/messenger/ai-answer-quota/delivery-started",
+    internalMessengerRequestLimiter,
+    async (req, res) => {
+      if (!authorizeInternalRequest(req, res)) return;
+      const parsed = internalAiAnswerQuotaDeliveryStartedSchema.safeParse(
+        req.body
+      );
+      if (!parsed.success) {
+        res.status(400).json({ error: "Invalid AI answer delivery fence" });
+        return;
+      }
+      try {
+        res
+          .status(200)
+          .json(await markInternalAiAnswerDeliveryStarted(parsed.data));
+      } catch (error) {
+        safeLog("internal_ai_answer_delivery_fence_failed", {
+          level: "error",
+          errorCode: safeInternalAiAnswerQuotaErrorCode(error),
+        });
+        res.status(503).json({ error: "AI answer delivery is unavailable" });
+      }
+    }
+  );
   app.post(
     "/internal/messenger/ai-answer-quota/reserve",
     internalMessengerRequestLimiter,
@@ -224,7 +312,7 @@ export function registerInternalImageRequestRoutes(app: Express): void {
   app.post(
     "/internal/messenger/webhook-event",
     internalMessengerRequestLimiter,
-    async (req, res) => {
+    (req, res) => {
       if (!authorizeInternalRequest(req, res)) {
         return;
       }

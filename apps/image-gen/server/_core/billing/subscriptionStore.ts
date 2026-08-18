@@ -1,4 +1,17 @@
-import { and, desc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNotNull,
+  lt,
+  lte,
+  or,
+  sql,
+} from "drizzle-orm";
 import {
   billingIntents,
   billingOutbox,
@@ -283,6 +296,7 @@ export async function getWorkspaceBillingSummary(
 
   const subscription = subscriptions[0] ?? null;
   return {
+    mode,
     subscription: subscription
       ? {
           planCode: subscription.planCode,
@@ -336,20 +350,69 @@ export async function getWorkspaceLedgerPayment(
     : null;
 }
 
-export async function listWorkspaceAccountingEntries(
-  workspaceId: number,
-  mode: MollieMode
-) {
+export type AccountingCursor = Readonly<{ occurredAt: Date; id: number }>;
+
+export async function getWorkspaceAccountingHighWaterId(input: {
+  workspaceId: number;
+  mode: MollieMode;
+  from: Date;
+  until: Date;
+}): Promise<number> {
+  const database = await getDatabaseOrThrow();
+  const rows = await database
+    .select({ highWaterId: sql<number | null>`MAX(${paymentLedger.id})` })
+    .from(paymentLedger)
+    .where(
+      and(
+        eq(paymentLedger.workspaceId, input.workspaceId),
+        eq(paymentLedger.mode, input.mode),
+        isNotNull(paymentLedger.invoiceNumber),
+        gte(paymentLedger.occurredAt, input.from),
+        lt(paymentLedger.occurredAt, input.until)
+      )
+    );
+  const value = Number(rows[0]?.highWaterId ?? 0);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error("billing accounting high-water is invalid");
+  }
+  return value;
+}
+
+export async function listWorkspaceAccountingEntryBatch(input: {
+  workspaceId: number;
+  mode: MollieMode;
+  from: Date;
+  until: Date;
+  highWaterId: number;
+  cursor?: AccountingCursor;
+  limit?: number;
+}) {
+  const limit = Math.max(1, Math.min(500, input.limit ?? 500));
   const database = await getDatabaseOrThrow();
   return database
     .select()
     .from(paymentLedger)
     .where(
       and(
-        eq(paymentLedger.workspaceId, workspaceId),
-        eq(paymentLedger.mode, mode),
-        isNotNull(paymentLedger.invoiceNumber)
+        eq(paymentLedger.workspaceId, input.workspaceId),
+        eq(paymentLedger.mode, input.mode),
+        isNotNull(paymentLedger.invoiceNumber),
+        gte(paymentLedger.occurredAt, input.from),
+        lt(paymentLedger.occurredAt, input.until),
+        lte(paymentLedger.id, input.highWaterId),
+        ...(input.cursor
+          ? [
+              or(
+                gt(paymentLedger.occurredAt, input.cursor.occurredAt),
+                and(
+                  eq(paymentLedger.occurredAt, input.cursor.occurredAt),
+                  gt(paymentLedger.id, input.cursor.id)
+                )
+              ),
+            ]
+          : [])
       )
     )
-    .orderBy(desc(paymentLedger.occurredAt));
+    .orderBy(asc(paymentLedger.occurredAt), asc(paymentLedger.id))
+    .limit(limit);
 }

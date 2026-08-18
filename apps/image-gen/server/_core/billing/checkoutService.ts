@@ -3,17 +3,23 @@ import {
   assertMollieBillingEnabled,
   assertTenantBillingWorkerWorkspace,
   getMollieConfig,
-  getTenantBillingWorkerWorkspaceId,
+  getConfiguredBillingMode,
+  getBillingSchedulerRollout,
+  assertMollieNonSecretLaunchConfig,
+  isMollieBillingEnabled,
 } from "./config";
 import {
   attachMollieCustomer,
   attachMolliePayment,
   claimIntentPaymentCreation,
+  finalizePaymentProviderOperation,
   getBillingCustomer,
   getBillingIntent,
+  isCheckoutUrlExposureAllowed,
   markBillingCustomerManualReview,
   markIntentApiUnknown,
   markIntentPaymentMismatch,
+  markPaymentProviderTransportStarted,
   reserveBillingCustomer,
   reserveCheckoutIntent,
   type CheckoutKind,
@@ -28,13 +34,20 @@ import {
   getWorkspaceBillingSubscription,
   requestWorkspaceSubscriptionCancellation,
 } from "./subscriptionStore";
+import { assertWorkspaceBillingProfileEligible } from "./billingProfileStore";
+import {
+  assertBillingExecutionBoundary,
+  assertBillingSchedulerTenantEnabled,
+  wakeBillingSchedulerTenant,
+} from "./billingSchedulerStore";
+import { assertBillingNotificationConfig } from "./billingNotificationDelivery";
+import { assertBillingDatabaseReadiness } from "./billingReadiness";
 
 const PAYMENT_METHOD_CHANGE_GUARD_DAYS = 7;
 
 export type CheckoutRequest = {
   workspaceId: number;
   planCode: string;
-  countryCode: "BE";
   kind: CheckoutKind;
   businessCheckout?: boolean;
   messengerSenderUserKey?: string | null;
@@ -47,9 +60,14 @@ export async function startMollieCheckout(
 ) {
   assertMollieBillingEnabled();
   assertTenantBillingWorkerWorkspace(input.workspaceId);
-  if (input.countryCode !== "BE") {
-    throw new Error("Leaderbot billing is available in Belgium only");
-  }
+  const config = getMollieConfig();
+  const executionBoundary = await assertBillingSchedulerTenantEnabled(
+    input.workspaceId,
+    config.mode
+  );
+  const billingProfile = await assertWorkspaceBillingProfileEligible(
+    input.workspaceId
+  );
   if (input.businessCheckout) {
     throw new Error(
       "B2B checkout is unavailable until Peppol invoicing is configured"
@@ -61,8 +79,8 @@ export async function startMollieCheckout(
     throw new Error("billing plan is unavailable");
   }
   assertCheckoutKindMatchesPlan(plan.offerType, input.kind);
-  const config = getMollieConfig();
   const client = clientOverride ?? new MollieClient(config);
+  await assertBillingExecutionBoundary(executionBoundary);
   if (plan.offerType === "one_time") {
     const methods = await checkMollieOneTimePaymentMethod(client);
     if (!methods.bancontact) {
@@ -92,7 +110,11 @@ export async function startMollieCheckout(
     kind: input.kind,
     messengerSenderUserKey: input.messengerSenderUserKey,
     messengerPageId: input.messengerPageId,
+    billingProfileVersion: billingProfile.eligibilityVersion,
   });
+  if (!(await wakeBillingSchedulerTenant(input.workspaceId, config.mode))) {
+    throw new Error("billing scheduler tenant is not enabled");
+  }
 
   if (intent.molliePaymentId) {
     const storedCustomer = await getBillingCustomer(
@@ -102,7 +124,9 @@ export async function startMollieCheckout(
     if (!storedCustomer?.mollieCustomerId) {
       throw new Error("billing customer is not ready");
     }
+    await assertBillingExecutionBoundary(executionBoundary);
     const existingPayment = await client.getPayment(intent.molliePaymentId);
+    await assertBillingExecutionBoundary(executionBoundary);
     validatePaymentResponse({
       payment: existingPayment,
       intentId: intent.intentId,
@@ -110,6 +134,17 @@ export async function startMollieCheckout(
       amount: formatAmountMinor(plan.amountMinor),
       mode: config.mode,
     });
+    if (
+      !(await isCheckoutUrlExposureAllowed({
+        intentId: intent.intentId,
+        workspaceId: input.workspaceId,
+        mode: config.mode,
+        molliePaymentId: intent.molliePaymentId,
+        billingProfileVersion: billingProfile.eligibilityVersion,
+      }))
+    ) {
+      throw new Error("checkout was contained before URL exposure");
+    }
     return {
       intentId: intent.intentId,
       checkoutUrl: client.getHostedCheckoutUrl(existingPayment),
@@ -134,10 +169,20 @@ export async function startMollieCheckout(
       );
     }
     try {
+      const currentProfile = await assertWorkspaceBillingProfileEligible(
+        input.workspaceId
+      );
+      if (
+        currentProfile.eligibilityVersion !== billingProfile.eligibilityVersion
+      ) {
+        throw new Error("billing profile changed during checkout");
+      }
+      await assertBillingExecutionBoundary(executionBoundary);
       const mollieCustomer = await client.createCustomer({
         externalReference: customer.externalReference,
         idempotencyKey: customer.idempotencyKey,
       });
+      await assertBillingExecutionBoundary(executionBoundary);
       assertMollieId(mollieCustomer.id, "cst_");
       if (mollieCustomer.mode !== config.mode) {
         throw new Error("Mollie customer mode mismatch");
@@ -158,35 +203,79 @@ export async function startMollieCheckout(
     throw new Error("billing customer is not ready");
   }
 
-  const paymentCreationClaimed = await claimIntentPaymentCreation(
-    intent.intentId
-  );
-  if (!paymentCreationClaimed) {
+  const paymentInput = {
+    customerId,
+    amount: {
+      currency: plan.currency,
+      value: formatAmountMinor(plan.amountMinor),
+    },
+    description: plan.mollieDescription,
+    intentId: intent.intentId,
+    redirectUrl: `${config.appBaseUrl}/?billing=return&intent=${encodeURIComponent(intent.intentId)}`,
+    webhookUrl: config.paymentWebhookUrl,
+    idempotencyKey: intent.idempotencyKey,
+  };
+  const paymentCreationClaim = await claimIntentPaymentCreation({
+    intentId: intent.intentId,
+    workspaceId: input.workspaceId,
+    mode: config.mode,
+    billingProfileVersion: billingProfile.eligibilityVersion,
+    providerRequest: { ...paymentInput, offerType: plan.offerType },
+  });
+  if (!paymentCreationClaim.claimed) {
     throw new Error(
       "checkout creation is being reconciled; no retry was issued"
     );
   }
   let payment: Awaited<ReturnType<MollieClient["createFirstPayment"]>>;
+  let providerTransportStarted = false;
   try {
-    const paymentInput = {
-      customerId,
-      amount: {
-        currency: plan.currency,
-        value: formatAmountMinor(plan.amountMinor),
-      },
-      description: plan.mollieDescription,
-      intentId: intent.intentId,
-      redirectUrl: `${config.appBaseUrl}/?billing=return&intent=${encodeURIComponent(intent.intentId)}`,
-      webhookUrl: config.paymentWebhookUrl,
-      idempotencyKey: intent.idempotencyKey,
-    };
+    await assertBillingExecutionBoundary(executionBoundary);
+    if (
+      !(await markPaymentProviderTransportStarted({
+        operationId: paymentCreationClaim.operationId,
+        leaseToken: paymentCreationClaim.leaseToken,
+      }))
+    ) {
+      throw new Error("checkout provider operation fence was lost");
+    }
+    providerTransportStarted = true;
     payment =
       plan.offerType === "one_time"
         ? await client.createOneTimePayment(paymentInput)
         : await client.createFirstPayment(paymentInput);
+    await assertBillingExecutionBoundary(executionBoundary);
   } catch (error) {
+    if (providerTransportStarted) {
+      await finalizePaymentProviderOperation({
+        operationId: paymentCreationClaim.operationId,
+        leaseToken: paymentCreationClaim.leaseToken,
+        outcome: "ambiguous",
+      });
+    }
     await markIntentApiUnknown(intent.intentId);
     throw error;
+  }
+  if (
+    !(await finalizePaymentProviderOperation({
+      operationId: paymentCreationClaim.operationId,
+      leaseToken: paymentCreationClaim.leaseToken,
+      outcome: "succeeded",
+      providerResourceId: validMolliePaymentIdOrNull(payment.id) ?? undefined,
+    }))
+  ) {
+    const providerPaymentId = validMolliePaymentIdOrNull(payment.id);
+    if (providerPaymentId) {
+      await attachMolliePayment({
+        intentId: intent.intentId,
+        workspaceId: intent.workspaceId,
+        mode: intent.mode,
+        molliePaymentId: providerPaymentId,
+        billingProfileVersion: billingProfile.eligibilityVersion,
+      });
+    }
+    await markIntentApiUnknown(intent.intentId);
+    throw new Error("checkout provider result fence was lost");
   }
   try {
     validatePaymentResponse({
@@ -210,9 +299,21 @@ export async function startMollieCheckout(
     workspaceId: intent.workspaceId,
     mode: intent.mode,
     molliePaymentId: payment.id,
+    billingProfileVersion: billingProfile.eligibilityVersion,
   });
   if (!attached) {
     throw new Error("checkout was superseded before it could be opened");
+  }
+  if (
+    !(await isCheckoutUrlExposureAllowed({
+      intentId: intent.intentId,
+      workspaceId: input.workspaceId,
+      mode: config.mode,
+      molliePaymentId: payment.id,
+      billingProfileVersion: billingProfile.eligibilityVersion,
+    }))
+  ) {
+    throw new Error("checkout was contained before URL exposure");
   }
   return {
     intentId: intent.intentId,
@@ -318,26 +419,52 @@ export async function cancelMollieSubscriptionAtPeriodEnd(workspaceId: number) {
   return requestWorkspaceSubscriptionCancellation(workspaceId, config.mode);
 }
 
-export async function getMollieLaunchCheck(clientOverride?: MollieClient) {
-  const config = getMollieConfig();
-  const client = clientOverride ?? new MollieClient(config);
-  const methods = await checkMollieOneTimePaymentMethod(client);
-  const sandboxReady = config.mode === "test" && methods.bancontact;
+export async function getMollieLaunchCheck(
+  clientOverride?: MollieClient,
+  options: { phase?: "offline" | "provider" } = {}
+) {
+  const phase = options.phase ?? "provider";
+  const mode = getConfiguredBillingMode();
+  const config = phase === "provider" ? getMollieConfig() : null;
+  const methods = config
+    ? await checkMollieOneTimePaymentMethod(
+        clientOverride ?? new MollieClient(config)
+      )
+    : { bancontact: false, providerChecked: false };
+  let credentialFreeGatesReady = false;
+  try {
+    assertMollieNonSecretLaunchConfig();
+    assertBillingNotificationConfig();
+    await assertBillingDatabaseReadiness(mode);
+    credentialFreeGatesReady = true;
+  } catch {
+    credentialFreeGatesReady = false;
+  }
+  const sandboxReady =
+    phase === "provider" &&
+    mode === "test" &&
+    methods.bancontact &&
+    credentialFreeGatesReady;
   const liveReady =
-    config.mode === "live" &&
-    config.liveBillingEnabled &&
-    methods.bancontact;
+    phase === "provider" &&
+    mode === "live" &&
+    isMollieBillingEnabled() &&
+    Boolean(config?.liveBillingEnabled) &&
+    methods.bancontact &&
+    credentialFreeGatesReady;
   return {
     ...methods,
-    ok: liveReady,
+    ok: phase === "offline" ? credentialFreeGatesReady : liveReady,
+    phase,
     sandboxReady,
     liveReady,
     offerType: "one_time" as const,
     paymentSequenceType: "oneoff" as const,
     sepaDirectDebitRequired: false,
-    mode: config.mode,
-    liveBillingEnabled: config.liveBillingEnabled,
-    tenantWorkerConfigured: getTenantBillingWorkerWorkspaceId() !== null,
+    mode,
+    liveBillingEnabled: config?.liveBillingEnabled ?? false,
+    billingScheduler: getBillingSchedulerRollout(),
+    credentialFreeGatesReady,
     salesCountry: "BE" as const,
     currency: "EUR" as const,
     b2bCheckoutEnabled: false,

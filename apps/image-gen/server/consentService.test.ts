@@ -4,11 +4,20 @@ const {
   storageDeleteMock,
   deleteProviderVideoForUserMock,
   deletePortalHandoffTokensForMessengerUserKeyMock,
+  deleteCostLedgerEntriesForUserMock,
 } = vi.hoisted(() => ({
   storageDeleteMock: vi.fn(async () => undefined),
   deleteProviderVideoForUserMock: vi.fn(async () => undefined),
   deletePortalHandoffTokensForMessengerUserKeyMock: vi.fn(async () => 0),
+  deleteCostLedgerEntriesForUserMock: vi.fn(async () => undefined),
 }));
+vi.mock("./_core/costLedger", async importOriginal => {
+  const actual = await importOriginal<typeof import("./_core/costLedger")>();
+  return {
+    ...actual,
+    deleteCostLedgerEntriesForUser: deleteCostLedgerEntriesForUserMock,
+  };
+});
 
 vi.mock("./storage", async importOriginal => {
   const actual = await importOriginal<typeof import("./storage")>();
@@ -74,6 +83,8 @@ describe("Messenger consent deletion flow", () => {
     deleteProviderVideoForUserMock.mockResolvedValue(undefined);
     deletePortalHandoffTokensForMessengerUserKeyMock.mockReset();
     deletePortalHandoffTokensForMessengerUserKeyMock.mockResolvedValue(0);
+    deleteCostLedgerEntriesForUserMock.mockReset();
+    deleteCostLedgerEntriesForUserMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -81,6 +92,7 @@ describe("Messenger consent deletion flow", () => {
     storageDeleteMock.mockReset();
     deleteProviderVideoForUserMock.mockReset();
     deletePortalHandoffTokensForMessengerUserKeyMock.mockReset();
+    deleteCostLedgerEntriesForUserMock.mockReset();
     if (originalRedisUrl === undefined) {
       delete process.env.REDIS_URL;
     } else {
@@ -250,7 +262,7 @@ describe("Messenger consent deletion flow", () => {
     const staleState = await Promise.resolve(getOrCreateState(psid));
 
     await Promise.resolve(clearUserState(psid));
-    deletePortalHandoffTokensForMessengerUserKeyMock.mockRejectedValueOnce(
+    deleteCostLedgerEntriesForUserMock.mockRejectedValueOnce(
       new Error("temporary handoff-token deletion failure")
     );
 

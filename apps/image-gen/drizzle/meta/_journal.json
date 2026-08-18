@@ -106,6 +106,13 @@
       "when": 1787040000000,
       "tag": "0014_portal_handoff_delivery_idempotency",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "5",
+      "when": 1787055065549,
+      "tag": "0015_production_readiness_registry",
+      "breakpoints": true
     }
   ]
 }

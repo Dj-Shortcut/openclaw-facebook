@@ -71,6 +71,10 @@ export async function sendMessengerText(
     accountId?: string;
     fetch?: FetchLike;
     quickReplies?: readonly MessengerQuickReply[];
+    beforeTransport?: () => Promise<void>;
+    onTransportOutcome?: (
+      outcome: "succeeded" | "known_rejected" | "ambiguous"
+    ) => Promise<void>;
   },
 ): Promise<MessengerSendResult> {
   const account = resolveMessengerAccount({ cfg: opts.cfg, accountId: opts.accountId });
@@ -89,10 +93,14 @@ export async function sendMessengerText(
   const quickReplies = normalizeMessengerQuickReplies(opts.quickReplies);
   const version = resolveGraphApiVersion(account.config.graphApiVersion);
   const url = `https://graph.facebook.com/${version}/${encodeURIComponent(account.pageId)}/messages`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), MESSENGER_SEND_TIMEOUT_MS);
   let response: Response;
+  let timeout: NodeJS.Timeout | undefined;
+  let transportStarted = false;
   try {
+    await opts.beforeTransport?.();
+    transportStarted = true;
+    const controller = new AbortController();
+    timeout = setTimeout(() => controller.abort(), MESSENGER_SEND_TIMEOUT_MS);
     response = await fetchImpl(url, {
       method: "POST",
       signal: controller.signal,
@@ -110,25 +118,35 @@ export async function sendMessengerText(
       }),
     });
   } catch (error) {
+    if (transportStarted) {
+      await opts.onTransportOutcome?.("ambiguous").catch(() => undefined);
+    }
     throw new Error(`Messenger send failed: ${formatErrorMessage(error)}`, { cause: error });
   } finally {
-    clearTimeout(timeout);
+    if (timeout) clearTimeout(timeout);
   }
   const body = (await response.json().catch(() => null)) as {
     message_id?: string;
     recipient_id?: string;
   } | null;
   if (!response.ok) {
+    await opts
+      .onTransportOutcome?.(
+        response.status < 500 ? "known_rejected" : "ambiguous"
+      )
+      .catch(() => undefined);
     throw new Error(formatMessengerApiError(body));
   }
   const result = body as { message_id?: string; recipient_id?: string };
   const messageId = result.message_id?.trim();
   const recipientId = result.recipient_id?.trim();
   if (!messageId || !recipientId) {
+    await opts.onTransportOutcome?.("ambiguous").catch(() => undefined);
     throw new Error(
       "Messenger send succeeded but response did not include message_id and recipient_id.",
     );
   }
+  await opts.onTransportOutcome?.("succeeded");
   return {
     messageId,
     recipientId,

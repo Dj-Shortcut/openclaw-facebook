@@ -24,8 +24,14 @@ export type StartpilotRuntimePolicy = Readonly<{
 }>;
 
 export type WorkspaceRuntimePolicy =
-  | Readonly<{ kind: "free" }>
-  | StartpilotRuntimePolicy;
+  Readonly<{ kind: "free" }> | StartpilotRuntimePolicy;
+
+export type MessengerGenerationOwnership = Readonly<{
+  workspaceId: number;
+  channelConnectionId: number;
+  bindingEpoch: number;
+  pageId: string;
+}>;
 
 type ActiveEntitlement = {
   id: number;
@@ -196,9 +202,13 @@ export async function resolveWorkspaceRuntimePolicy(
   pageId: string | undefined,
   now = new Date()
 ): Promise<WorkspaceRuntimePolicy> {
+  if (!isMollieEntitlementEnforcementEnabled()) {
+    return { kind: "free" };
+  }
   if (
-    !isMollieEntitlementEnforcementEnabled() ||
-    !process.env.DATABASE_URL?.trim()
+    !process.env.DATABASE_URL?.trim() &&
+    process.env.NODE_ENV !== "production" &&
+    !process.env.REDIS_URL?.trim()
   ) {
     return { kind: "free" };
   }
@@ -207,6 +217,77 @@ export async function resolveWorkspaceRuntimePolicy(
     databaseRuntimeDeps,
     now
   );
+}
+
+export async function resolveMessengerGenerationOwnership(
+  pageId: string | undefined
+): Promise<MessengerGenerationOwnership | null> {
+  if (
+    !process.env.DATABASE_URL?.trim() &&
+    process.env.NODE_ENV !== "production" &&
+    !process.env.REDIS_URL?.trim()
+  ) {
+    return null;
+  }
+  const normalizedPageId = pageId?.trim();
+  if (!normalizedPageId) {
+    throw new WorkspaceEntitlementLookupError(
+      "Messenger generation requires a receiving Page"
+    );
+  }
+  const database = await getDatabaseOrThrow();
+  const rows = await database
+    .select({
+      workspaceId: channelConnections.workspaceId,
+      channelConnectionId: channelConnections.id,
+      bindingEpoch: channelConnections.bindingEpoch,
+    })
+    .from(channelConnections)
+    .where(
+      and(
+        eq(channelConnections.channel, "facebook_messenger"),
+        eq(channelConnections.externalId, normalizedPageId),
+        eq(channelConnections.status, "connected")
+      )
+    )
+    .limit(2);
+  if (rows.length !== 1) {
+    throw new WorkspaceEntitlementLookupError(
+      "Messenger Page ownership is unavailable"
+    );
+  }
+  return Object.freeze({
+    workspaceId: rows[0].workspaceId,
+    channelConnectionId: rows[0].channelConnectionId,
+    bindingEpoch: rows[0].bindingEpoch,
+    pageId: normalizedPageId,
+  });
+}
+
+export async function assertMessengerGenerationOwnership(input: {
+  pageId?: string;
+  workspaceId?: number;
+  channelConnectionId?: number;
+  bindingEpoch?: number;
+}): Promise<void> {
+  if (
+    !process.env.DATABASE_URL?.trim() &&
+    process.env.NODE_ENV !== "production" &&
+    !process.env.REDIS_URL?.trim()
+  ) {
+    return;
+  }
+  const ownership = await resolveMessengerGenerationOwnership(input.pageId);
+  if (
+    !ownership ||
+    ownership.workspaceId !== input.workspaceId ||
+    ownership.channelConnectionId !== input.channelConnectionId ||
+    ownership.bindingEpoch !== input.bindingEpoch
+  ) {
+    throw new WorkspaceEntitlementLookupError(
+      "Messenger generation ownership changed after enqueue"
+    );
+  }
 }
 
 export const STARTPILOT_RUNTIME_LIMITS = Object.freeze({

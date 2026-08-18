@@ -4,11 +4,13 @@ const mocks = vi.hoisted(() => ({
   getMessengerRequestPageId: vi.fn(),
   rearmFailedPortalHandoffAfterInbound: vi.fn(),
   setLastUserMessageAt: vi.fn(),
+  setLastPaidHandoffEligibleAt: vi.fn(),
   toUserKey: vi.fn(() => "a".repeat(64)),
 }));
 
 vi.mock("./_core/messengerState", () => ({
   setLastUserMessageAt: mocks.setLastUserMessageAt,
+  setLastPaidHandoffEligibleAt: mocks.setLastPaidHandoffEligibleAt,
 }));
 vi.mock("./_core/messengerRequestContext", () => ({
   getMessengerRequestPageId: mocks.getMessengerRequestPageId,
@@ -30,20 +32,35 @@ beforeEach(() => {
 
 describe("Messenger inbound activity", () => {
   it("rearms only the matching Page-scoped paid handoff after user activity", async () => {
+    const now = 1_700_000_000_000;
     await recordInboundUserActivity(
       "raw-psid",
-      { timestamp: 1_700_000_000_000 },
-      { isInboundUserEvent: true } as InboundEventClassification
+      {
+        recipient: { id: "page-42" },
+        message: { mid: "mid-rearm", text: "hello" },
+        timestamp: now,
+      },
+      { isInboundUserEvent: true } as InboundEventClassification,
+      { entryId: "page-42", now, allowPaidRecovery: true }
     );
 
     expect(mocks.setLastUserMessageAt).toHaveBeenCalledWith(
       "raw-psid",
       1_700_000_000_000
     );
-    expect(mocks.rearmFailedPortalHandoffAfterInbound).toHaveBeenCalledWith({
-      facebookPageId: "page-42",
-      messengerSenderUserKey: "a".repeat(64),
-    });
+    expect(mocks.rearmFailedPortalHandoffAfterInbound).toHaveBeenCalledWith(
+      expect.objectContaining({
+        facebookPageId: "page-42",
+        messengerSenderUserKey: "a".repeat(64),
+        source: "verified_messenger_inbound",
+        eventTimestamp: new Date(now),
+        eventIdHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      })
+    );
+    expect(mocks.setLastPaidHandoffEligibleAt).toHaveBeenCalledWith(
+      "raw-psid",
+      now
+    );
   });
 
   it("does not rearm for echoes, delivery receipts, or other non-user events", async () => {

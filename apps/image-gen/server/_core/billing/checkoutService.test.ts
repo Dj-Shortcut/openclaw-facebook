@@ -1,4 +1,17 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { profileEligibilityMock, schedulerEnabledMock } = vi.hoisted(() => ({
+  profileEligibilityMock: vi.fn(),
+  schedulerEnabledMock: vi.fn(),
+}));
+vi.mock("./billingProfileStore", () => ({
+  assertWorkspaceBillingProfileEligible: profileEligibilityMock,
+}));
+vi.mock("./billingSchedulerStore", () => ({
+  assertBillingSchedulerTenantEnabled: schedulerEnabledMock,
+  assertBillingExecutionBoundary: vi.fn(async () => undefined),
+  wakeBillingSchedulerTenant: vi.fn(async () => true),
+}));
 import {
   assertCheckoutKindMatchesPlan,
   getMollieLaunchCheck,
@@ -11,6 +24,16 @@ import type { MollieClient } from "./mollieClient";
 const originalEnv = { ...process.env };
 
 describe("Mollie checkout launch gate", () => {
+  beforeEach(() => {
+    profileEligibilityMock.mockReset();
+    schedulerEnabledMock.mockReset();
+    schedulerEnabledMock.mockResolvedValue({
+      workspaceId: 1,
+      mode: "test",
+      laneEpochs: {},
+    });
+    profileEligibilityMock.mockResolvedValue({ eligibilityVersion: 1 });
+  });
   afterEach(() => {
     process.env = { ...originalEnv };
   });
@@ -29,22 +52,47 @@ describe("Mollie checkout launch gate", () => {
     ).rejects.toThrow("Mollie billing is disabled");
   });
 
-  it("rejects sales outside Belgium before provider work", async () => {
+  it("ignores a forged body country and blocks on server profile state", async () => {
     process.env = billingTestEnv();
     const listMethods = vi.fn();
+    profileEligibilityMock.mockRejectedValueOnce(
+      new Error("billing_country_not_eligible")
+    );
 
     await expect(
       startMollieCheckout(
         {
           workspaceId: 1,
           planCode: "premium_monthly_v1",
-          countryCode: "NL" as "BE",
+          countryCode: "BE",
           kind: "subscription_start",
           businessCheckout: false,
         },
         { listMethods } as unknown as MollieClient
       )
-    ).rejects.toThrow("available in Belgium only");
+    ).rejects.toThrow("billing_country_not_eligible");
+    expect(listMethods).not.toHaveBeenCalled();
+    expect(profileEligibilityMock).toHaveBeenCalledWith(1);
+  });
+
+  it("blocks an operator-disabled scheduler tenant before profile or provider work", async () => {
+    process.env = billingTestEnv();
+    schedulerEnabledMock.mockRejectedValueOnce(
+      new Error("billing scheduler tenant is not enabled")
+    );
+    const listMethods = vi.fn();
+
+    await expect(
+      startMollieCheckout(
+        {
+          workspaceId: 1,
+          planCode: "startpilot_once_v1",
+          kind: "startpilot_purchase",
+        },
+        { listMethods } as unknown as MollieClient
+      )
+    ).rejects.toThrow("billing scheduler tenant is not enabled");
+    expect(profileEligibilityMock).not.toHaveBeenCalled();
     expect(listMethods).not.toHaveBeenCalled();
   });
 
@@ -133,7 +181,7 @@ describe("Mollie checkout launch gate", () => {
     expect(listMethods).toHaveBeenCalledWith("oneoff");
   });
 
-  it("reports Startpilot sandbox readiness without requiring SEPA", async () => {
+  it("does not report sandbox ready from provider methods alone", async () => {
     process.env = billingTestEnv();
     const listMethods = vi
       .fn()
@@ -143,14 +191,34 @@ describe("Mollie checkout launch gate", () => {
       getMollieLaunchCheck({ listMethods } as unknown as MollieClient)
     ).resolves.toMatchObject({
       ok: false,
-      sandboxReady: true,
+      sandboxReady: false,
       liveReady: false,
+      credentialFreeGatesReady: false,
       offerType: "one_time",
       paymentSequenceType: "oneoff",
       bancontact: true,
       sepaDirectDebitRequired: false,
     });
     expect(listMethods).toHaveBeenCalledWith("oneoff");
+  });
+
+  it("runs the offline phase without a Mollie credential or provider call", async () => {
+    process.env = billingTestEnv();
+    delete process.env.MOLLIE_API_KEY;
+    const listMethods = vi.fn();
+
+    await expect(
+      getMollieLaunchCheck({ listMethods } as unknown as MollieClient, {
+        phase: "offline",
+      })
+    ).resolves.toMatchObject({
+      phase: "offline",
+      mode: "test",
+      providerChecked: false,
+      sandboxReady: false,
+      liveReady: false,
+    });
+    expect(listMethods).not.toHaveBeenCalled();
   });
 
   it("fails closed when a checkout kind does not match its product", () => {
@@ -180,6 +248,7 @@ function billingTestEnv(): NodeJS.ProcessEnv {
     BILLING_SUPPORT_EMAIL: "billing@leaderbot.test",
     PORTAL_HANDOFF_TOKEN_SECRET: "test-portal-handoff-secret-at-least-32",
     MOLLIE_BILLING_WORKER_WORKSPACE_ID: "1",
+    MOLLIE_BILLING_SCHEDULER_MODE: "pilot_pin",
   };
 }
 

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  billingSchedulerTenants,
   workspaceEntitlements,
   workspaceEntitlementUsage,
   workspaceEntitlementUsageReservations,
@@ -17,6 +18,8 @@ import {
   reserveStartpilotImageUsage,
   utcDateKey,
 } from "./entitlementUsageStore";
+
+const OWNER_TOKEN = "11111111-1111-4111-8111-111111111111";
 
 const quota = {
   aiAnswersTotal: 300,
@@ -101,6 +104,7 @@ describe("Startpilot finite entitlement usage", () => {
         entitlementId: 9,
         mode: "test",
         idempotencyKey: "request-key-00000001",
+        ownerToken: OWNER_TOKEN,
         now,
       })
     ).resolves.toEqual({
@@ -116,6 +120,9 @@ describe("Startpilot finite entitlement usage", () => {
         kind: "ai_answer",
         status: "reserved",
         idempotencyKey: "request-key-00000001",
+        ownerTokenHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+        ownerLeaseUntil: new Date("2026-08-01T12:04:30.000Z"),
+        resolutionDueAt: new Date("2026-08-01T12:05:00.000Z"),
         expiresAt: new Date("2026-08-01T12:05:00.000Z"),
       })
     );
@@ -136,6 +143,7 @@ describe("Startpilot finite entitlement usage", () => {
         entitlementId: 9,
         mode: "test",
         idempotencyKey: reserved.idempotencyKey,
+        ownerToken: OWNER_TOKEN,
         now: new Date("2026-08-01T12:00:00.000Z"),
       })
     ).resolves.toEqual({
@@ -143,7 +151,9 @@ describe("Startpilot finite entitlement usage", () => {
       reservationId: reserved.reservationId,
       alreadyReserved: true,
     });
-    expect(flow.insertValues).not.toHaveBeenCalled();
+    expect(flow.insertValues).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "ai_answer" })
+    );
 
     const otherEntitlement = aiReservation({ entitlementId: 8 });
     const conflict = aiUsageFlow({ lookupReservations: [otherEntitlement] });
@@ -154,10 +164,13 @@ describe("Startpilot finite entitlement usage", () => {
         entitlementId: 9,
         mode: "test",
         idempotencyKey: otherEntitlement.idempotencyKey,
+        ownerToken: OWNER_TOKEN,
         now: new Date("2026-08-01T12:00:00.000Z"),
       })
     ).resolves.toEqual({ allowed: false, reason: "idempotency_reused" });
-    expect(conflict.insertValues).not.toHaveBeenCalled();
+    expect(conflict.insertValues).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "ai_answer" })
+    );
   });
 
   it.each(["committed", "released", "expired"] as const)(
@@ -173,10 +186,13 @@ describe("Startpilot finite entitlement usage", () => {
           entitlementId: 9,
           mode: "test",
           idempotencyKey: finished.idempotencyKey,
+          ownerToken: OWNER_TOKEN,
           now: new Date("2026-08-01T12:00:00.000Z"),
         })
       ).resolves.toEqual({ allowed: false, reason: "idempotency_reused" });
-      expect(flow.insertValues).not.toHaveBeenCalled();
+      expect(flow.insertValues).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "ai_answer" })
+      );
     }
   );
 
@@ -192,10 +208,13 @@ describe("Startpilot finite entitlement usage", () => {
         entitlementId: 9,
         mode: "test",
         idempotencyKey: "request-key-00000002",
+        ownerToken: OWNER_TOKEN,
         now: new Date("2026-08-01T12:00:00.000Z"),
       })
     ).resolves.toEqual({ allowed: false, reason: "total_exhausted" });
-    expect(flow.insertValues).not.toHaveBeenCalled();
+    expect(flow.insertValues).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "ai_answer" })
+    );
   });
 
   it("commits a live AI-answer reservation exactly once", async () => {
@@ -212,6 +231,7 @@ describe("Startpilot finite entitlement usage", () => {
         entitlementId: 9,
         mode: "test",
         reservationId: reserved.reservationId,
+        ownerTokenHash: reserved.ownerTokenHash,
         now: new Date("2026-08-01T12:00:00.000Z"),
       })
     ).resolves.toEqual({ committed: true });
@@ -235,6 +255,7 @@ describe("Startpilot finite entitlement usage", () => {
         entitlementId: 9,
         mode: "test",
         reservationId: reserved.reservationId,
+        ownerTokenHash: reserved.ownerTokenHash,
         now: new Date("2026-08-01T12:00:00.000Z"),
       })
     ).resolves.toEqual({ released: true });
@@ -244,7 +265,7 @@ describe("Startpilot finite entitlement usage", () => {
     );
   });
 
-  it("expires a stale reservation during finish and releases its counter", async () => {
+  it("conservatively commits a stale delivered reservation during finish", async () => {
     const now = new Date("2026-08-01T12:00:00.000Z");
     const reserved = aiReservation({
       expiresAt: new Date("2026-08-01T11:59:59.000Z"),
@@ -261,20 +282,22 @@ describe("Startpilot finite entitlement usage", () => {
         entitlementId: 9,
         mode: "test",
         reservationId: reserved.reservationId,
+        ownerTokenHash: reserved.ownerTokenHash,
         now,
       })
-    ).resolves.toEqual({ committed: false });
+    ).resolves.toEqual({ committed: true });
     expect(reserved).toEqual(
-      expect.objectContaining({ status: "expired", releasedAt: now })
+      expect.objectContaining({ status: "committed", committedAt: now })
     );
     expect(flow.usage.aiAnswersReserved).toBe(0);
-    expect(flow.usage.aiAnswersCommitted).toBe(0);
+    expect(flow.usage.aiAnswersCommitted).toBe(1);
   });
 
-  it("sweeps stale AI reservations before reserving the next answer", async () => {
+  it("conservatively commits ambiguous stale reservations before the next answer", async () => {
     const stale = aiReservation({
       idempotencyKey: "request-key-stale-0001",
       expiresAt: new Date("2026-08-01T11:59:59.000Z"),
+      deliveryStartedAt: new Date("2026-08-01T11:58:00.000Z"),
     });
     const flow = aiUsageFlow({
       usage: { aiAnswersReserved: 1 },
@@ -288,6 +311,7 @@ describe("Startpilot finite entitlement usage", () => {
         entitlementId: 9,
         mode: "test",
         idempotencyKey: "request-key-fresh-0001",
+        ownerToken: OWNER_TOKEN,
         now: new Date("2026-08-01T12:00:00.000Z"),
       })
     ).resolves.toEqual({
@@ -295,13 +319,16 @@ describe("Startpilot finite entitlement usage", () => {
       reservationId: expect.stringMatching(/^[0-9a-f-]{36}$/i),
       alreadyReserved: false,
     });
-    expect(stale.status).toBe("expired");
+    expect(stale.status).toBe("committed");
     expect(flow.usage.aiAnswersReserved).toBe(1);
+    expect(flow.usage.aiAnswersCommitted).toBe(1);
     expect(
       flow.updates.filter(update => update.table === workspaceEntitlementUsage)
     ).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ values: { aiAnswersReserved: 0 } }),
+        expect.objectContaining({
+          values: { aiAnswersReserved: 0, aiAnswersCommitted: 1 },
+        }),
         expect.objectContaining({ values: { aiAnswersReserved: 1 } }),
       ])
     );
@@ -380,6 +407,10 @@ type AiReservation = {
   status: "reserved" | "committed" | "released" | "expired";
   idempotencyKey: string;
   expiresAt: Date;
+  resolutionDueAt: Date;
+  ownerTokenHash: string;
+  ownerLeaseUntil: Date;
+  deliveryStartedAt: Date | null;
   committedAt: Date | null;
   releasedAt: Date | null;
 };
@@ -394,6 +425,11 @@ function aiReservation(overrides: Partial<AiReservation> = {}): AiReservation {
     status: "reserved",
     idempotencyKey: "request-key-00000001",
     expiresAt: new Date("2026-08-01T12:05:00.000Z"),
+    resolutionDueAt: new Date("2026-08-01T12:05:00.000Z"),
+    ownerTokenHash:
+      "bd7662a5eeb41614e720d477abfcb2272e19a8a70a93b7e3bc8560d44ad326e9",
+    ownerLeaseUntil: new Date("2026-08-01T12:05:00.000Z"),
+    deliveryStartedAt: null,
     committedAt: null,
     releasedAt: null,
     ...overrides,
@@ -408,6 +444,7 @@ function aiUsageFlow(
     }>;
     lookupReservations?: AiReservation[];
     staleReservations?: AiReservation[];
+    schedulerEnabled?: boolean;
   } = {}
 ) {
   const validUntil = new Date("2026-09-01T00:00:00.000Z");
@@ -431,7 +468,10 @@ function aiUsageFlow(
   const staleReservations = options.staleReservations ?? [];
   const updates: Array<{ table: unknown; values: Record<string, unknown> }> =
     [];
-  const insertValues = vi.fn(async (values: Record<string, unknown>) => values);
+  const insertValues = vi.fn((values: Record<string, unknown>) => ({
+    values,
+    onDuplicateKeyUpdate: vi.fn(async () => undefined),
+  }));
 
   const tx = {
     select: vi.fn((selection?: unknown) => ({
@@ -452,11 +492,13 @@ function aiUsageFlow(
                 ]
               : table === workspaceEntitlementUsage
                 ? [usage]
-                : table === workspaceEntitlementUsageReservations
-                  ? selection === undefined
-                    ? lookupReservations
-                    : staleReservations
-                  : [];
+                : table === billingSchedulerTenants
+                  ? [{ enabled: options.schedulerEnabled ?? true }]
+                  : table === workspaceEntitlementUsageReservations
+                    ? selection === undefined
+                      ? lookupReservations
+                      : staleReservations
+                    : [];
           const lock = vi.fn(async () => rows);
           return {
             limit: vi.fn(() => ({ for: lock })),
@@ -482,6 +524,7 @@ function aiUsageFlow(
                 Object.assign(reservation, values);
               }
             }
+            return [{ affectedRows: 1 }];
           }),
         };
       }),

@@ -10,6 +10,7 @@ import {
   workspaceEntitlements,
   workspaceEntitlementUsage,
   workspaceEntitlementUsageReservations,
+  workspaceBillingProfiles,
 } from "../../../drizzle/schema";
 import { getDatabaseOrThrow } from "../../db";
 import {
@@ -32,6 +33,7 @@ type PaymentContext = {
   intent: typeof billingIntents.$inferSelect;
   customer: typeof billingCustomers.$inferSelect;
   subscription: typeof billingSubscriptions.$inferSelect | null;
+  billingProfile: typeof workspaceBillingProfiles.$inferSelect | null;
 };
 
 type RecurringPlanSnapshot = {
@@ -136,6 +138,34 @@ export async function applyMolliePaymentSnapshot(
         occurredAt,
       });
 
+      // Revocation/expiry containment is monotone. Provider snapshots remain
+      // financially recorded, but can never reopen the intent or grant paid
+      // effects after the server-owned eligibility boundary was closed.
+      if (context.intent.status === "contained") {
+        await enqueueOutbox(tx, {
+          workspaceId: context.workspaceId,
+          mode: context.intent.mode,
+          eventType: "manual_review",
+          deduplicationKey: `contained_payment_snapshot:${payment.id}:${observed.snapshotHash}`,
+          payload: {
+            reason: "billing_profile_ineligible_at_payment",
+            paymentId: payment.id,
+          },
+        });
+        await finishDelivery(
+          tx,
+          context.workspaceId,
+          payment.mode,
+          payment.id,
+          observed.snapshotHash,
+          "billing_profile_manual_review"
+        );
+        return {
+          result: "mismatch" as const,
+          workspaceId: context.workspaceId,
+        };
+      }
+
       const supersededReplacement = isSupersededPaymentMethodChangeIntent(
         context.intent
       );
@@ -194,6 +224,44 @@ export async function applyMolliePaymentSnapshot(
           payment.id,
           observed.snapshotHash,
           "mismatch"
+        );
+        return {
+          result: "mismatch" as const,
+          workspaceId: context.workspaceId,
+        };
+      }
+
+      if (
+        payment.status === "paid" &&
+        !isBillingProfileSnapshotEligible(context, new Date())
+      ) {
+        await tx
+          .update(billingIntents)
+          .set({ status: "contained" })
+          .where(
+            and(
+              eq(billingIntents.intentId, context.intent.intentId),
+              eq(billingIntents.workspaceId, context.workspaceId),
+              eq(billingIntents.mode, context.intent.mode)
+            )
+          );
+        await enqueueOutbox(tx, {
+          workspaceId: context.workspaceId,
+          mode: context.intent.mode,
+          eventType: "manual_review",
+          deduplicationKey: `billing_profile_late_paid:${payment.id}`,
+          payload: {
+            reason: "billing_profile_ineligible_at_payment",
+            paymentId: payment.id,
+          },
+        });
+        await finishDelivery(
+          tx,
+          context.workspaceId,
+          payment.mode,
+          payment.id,
+          observed.snapshotHash,
+          "billing_profile_manual_review"
         );
         return {
           result: "mismatch" as const,
@@ -531,6 +599,12 @@ async function resolvePaymentContext(
   if (!paymentIntentId) {
     return null;
   }
+  const profiles = await tx
+    .select()
+    .from(workspaceBillingProfiles)
+    .where(eq(workspaceBillingProfiles.workspaceId, expectedWorkspaceId))
+    .limit(1)
+    .for("update");
   const intents = await tx
     .select()
     .from(billingIntents)
@@ -579,7 +653,13 @@ async function resolvePaymentContext(
       return null;
     }
   }
-  return { workspaceId: intent.workspaceId, intent, customer, subscription };
+  return {
+    workspaceId: intent.workspaceId,
+    intent,
+    customer,
+    subscription,
+    billingProfile: profiles[0] ?? null,
+  };
 }
 
 async function findPaymentContextOutsideTransaction(
@@ -601,6 +681,28 @@ async function findPaymentContextOutsideTransaction(
     )
     .limit(1);
   return intents[0] ?? null;
+}
+
+function isBillingProfileSnapshotEligible(
+  context: PaymentContext,
+  now: Date
+): boolean {
+  if (!context.intent.billingProfileVersion) return false;
+  const profile = context.billingProfile;
+  return Boolean(
+    profile &&
+    profile.workspaceId === context.workspaceId &&
+    profile.eligibilityVersion === context.intent.billingProfileVersion &&
+    profile.verificationStatus === "verified" &&
+    profile.countryCode === "BE" &&
+    profile.customerType === "consumer" &&
+    !profile.peppolReady &&
+    profile.verifiedAt &&
+    profile.verifiedAt <= now &&
+    profile.verificationExpiresAt &&
+    profile.verificationExpiresAt > now &&
+    !profile.revokedAt
+  );
 }
 
 async function applyStartpilotPaymentStatus(

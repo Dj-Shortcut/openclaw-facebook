@@ -16,6 +16,7 @@ describe("messenger inbound classification", () => {
       eventPayload: "OPENCLAW_ACTION:Nieuwe%20afbeelding",
       isIntentionalSilentAck: false,
       isIntentionalSilentUnknownPayload: false,
+      isPrivacyOrConsentControl: false,
     });
   });
 
@@ -37,6 +38,7 @@ describe("messenger inbound classification", () => {
       eventPayload: payload,
       isIntentionalSilentAck: false,
       isIntentionalSilentUnknownPayload: true,
+      isPrivacyOrConsentControl: false,
     });
   });
 });

@@ -5,11 +5,7 @@ import { createHandlerContext } from "./webhookHandlerContext";
 import { createMessengerGenerationJobRunner } from "./webhookGenerationJobs";
 import { createMessengerVideoGenerationRunner } from "./videoGenerationFlow";
 import { createInternalMessengerImageRequestHandler } from "./webhookInternalImageRequest";
-import type {
-  HandlerContext,
-  HandlerDeps,
-  InternalMessengerImageRequestInput,
-} from "./webhookHandlerTypes";
+import type { HandlerContext, HandlerDeps } from "./webhookHandlerTypes";
 
 export type {
   HandlerContext,
@@ -26,7 +22,12 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
   // createInternalMessengerImageRequestHandler must not invoke them during
   // construction. generationRunner.runImageGeneration is wired into
   // createHandlerContext below, then ctx is assigned before runtime calls.
-  let ctx: HandlerContext;
+  const ctx: HandlerContext = createHandlerContext({
+    defaultLang,
+    runImageGeneration: (...args) =>
+      generationRunner.runImageGeneration(...args),
+    runVideoGeneration: (...args) => videoGenerationRunner(...args),
+  });
   const generationRunner = createMessengerGenerationJobRunner({
     maybeSendInFlightMessage: (psid, reqId, lang) =>
       ctx.maybeSendInFlightMessage(psid, reqId, lang),
@@ -48,11 +49,6 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       }
       return ctx.sendLoggedVideo(psid, videoUrl, reqId);
     },
-  });
-  ctx = createHandlerContext({
-    defaultLang,
-    runImageGeneration: generationRunner.runImageGeneration,
-    runVideoGeneration: videoGenerationRunner,
   });
   const internalRequestHandler =
     createInternalMessengerImageRequestHandler(ctx);

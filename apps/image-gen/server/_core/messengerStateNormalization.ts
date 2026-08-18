@@ -1,8 +1,5 @@
 import { toUserKey } from "./privacy";
-import type {
-  MessengerFlowState,
-  MessengerUserState,
-} from "./messengerState";
+import type { MessengerFlowState, MessengerUserState } from "./messengerState";
 
 type PartialState = Partial<MessengerUserState>;
 type LegacyConversationState = MessengerFlowState | "AWAITING_STYLE";
@@ -43,9 +40,14 @@ export function createDefaultState(
     psid,
     userKey: getUserKey(psid),
     pageId: null,
+    workspaceId: null,
+    channelConnectionId: null,
+    bindingEpoch: null,
+    privacyEpoch: null,
     stage: "IDLE",
     state: "IDLE",
     lastUserMessageAt: undefined,
+    lastPaidHandoffEligibleAt: undefined,
     lastPhotoUrl: null,
     lastPhoto: null,
     lastPhotoSource: null,
@@ -117,7 +119,8 @@ function resolveLegacyStateFields(
   const rawStage = (value?.stage ??
     value?.state ??
     fallback.stage) as LegacyConversationState;
-  const stage = rawStage === "AWAITING_STYLE" ? "AWAITING_EDIT_PROMPT" : rawStage;
+  const stage =
+    rawStage === "AWAITING_STYLE" ? "AWAITING_EDIT_PROMPT" : rawStage;
   const lastPhoto =
     value?.lastPhotoUrl ?? value?.lastPhoto ?? fallback.lastPhoto;
   const lastGeneratedUrl =
@@ -145,23 +148,20 @@ function resolveConsentState(
 
 function resolveConversationContext(
   ctx: NormalizationCtx
-): Pick<MessengerUserState, "lastUserMessageAt"> {
+): Pick<MessengerUserState, "lastUserMessageAt" | "lastPaidHandoffEligibleAt"> {
   const { value, fallback } = ctx;
 
   return {
     lastUserMessageAt: value?.lastUserMessageAt ?? fallback.lastUserMessageAt,
+    lastPaidHandoffEligibleAt:
+      value?.lastPaidHandoffEligibleAt ?? fallback.lastPaidHandoffEligibleAt,
   };
 }
 
 function resolvePhotoAndStyleState(
   ctx: NormalizationCtx,
   legacyFields: Pick<LegacyStateFields, "lastPhoto">
-): Pick<
-  MessengerUserState,
-  | "lastPhotoUrl"
-  | "lastPhoto"
-  | "lastPhotoSource"
-> {
+): Pick<MessengerUserState, "lastPhotoUrl" | "lastPhoto" | "lastPhotoSource"> {
   const { value, fallback } = ctx;
   const { lastPhoto } = legacyFields;
 
@@ -179,7 +179,8 @@ function resolveGeneratedImageState(
   const { value, fallback } = ctx;
 
   return {
-    lastImageUrl: value?.lastImageUrl ?? lastGeneratedUrl ?? fallback.lastImageUrl,
+    lastImageUrl:
+      value?.lastImageUrl ?? lastGeneratedUrl ?? fallback.lastImageUrl,
     lastGeneratedUrl,
   };
 }
@@ -198,19 +199,20 @@ function resolveSourceImageState(
 
   return {
     faceMemoryConsent: value?.faceMemoryConsent ?? fallback.faceMemoryConsent,
-    lastSourceImageUrl: value?.lastSourceImageUrl ?? fallback.lastSourceImageUrl,
+    lastSourceImageUrl:
+      value?.lastSourceImageUrl ?? fallback.lastSourceImageUrl,
     lastSourceImageUpdatedAt:
       value?.lastSourceImageUpdatedAt ?? fallback.lastSourceImageUpdatedAt,
     pendingSourceImageDeleteUrl:
-      value?.pendingSourceImageDeleteUrl ?? fallback.pendingSourceImageDeleteUrl,
+      value?.pendingSourceImageDeleteUrl ??
+      fallback.pendingSourceImageDeleteUrl,
     pendingSourceImageDeleteUrls:
-      value?.pendingSourceImageDeleteUrls ?? fallback.pendingSourceImageDeleteUrls,
+      value?.pendingSourceImageDeleteUrls ??
+      fallback.pendingSourceImageDeleteUrls,
   };
 }
 
-function resolveQuotaState(
-  ctx: NormalizationCtx
-): MessengerUserState["quota"] {
+function resolveQuotaState(ctx: NormalizationCtx): MessengerUserState["quota"] {
   const { value, fallback } = ctx;
 
   return {
@@ -248,8 +250,7 @@ function resolveVideoGenerationQuotaState(
       value?.videoGenerationQuota?.dayKey ??
       fallback.videoGenerationQuota.dayKey,
     count:
-      value?.videoGenerationQuota?.count ??
-      fallback.videoGenerationQuota.count,
+      value?.videoGenerationQuota?.count ?? fallback.videoGenerationQuota.count,
   };
 }
 
@@ -280,7 +281,8 @@ function resolveTranscriptionQuotaState(
   return {
     dayKey:
       value?.transcriptionQuota?.dayKey ?? fallback.transcriptionQuota.dayKey,
-    count: value?.transcriptionQuota?.count ?? fallback.transcriptionQuota.count,
+    count:
+      value?.transcriptionQuota?.count ?? fallback.transcriptionQuota.count,
   };
 }
 

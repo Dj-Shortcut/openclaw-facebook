@@ -1,6 +1,6 @@
-import { storagePut } from "../storage";
+import { storageDelete, storagePut } from "../storage";
 import {
-  safelyAppendCostLedgerEntry,
+  appendCostLedgerEntry,
   safelyUpdateCostLedgerEntry,
 } from "./costLedger";
 import { safeLog } from "./messengerApi";
@@ -15,10 +15,8 @@ import {
   type VideoGenerationQuotaReservation,
 } from "./messengerQuota";
 import {
-  assertMessengerDailySpendBudgetAvailable,
+  admitMessengerProviderSpend,
   assertMessengerDailyVideoBudgetAvailable,
-  assertMessengerMonthlySpendBudgetAvailable,
-  assertMessengerUserDailySpendBudgetAvailable,
   MessengerSpendBudgetExceededError,
   MessengerDailyVideoBudgetExceededError,
   releaseMessengerDailyVideoBudgetReservation,
@@ -28,12 +26,33 @@ import {
   getMessengerVideoFlowTimeoutMs,
   getMessengerVideoTimeoutMs,
 } from "./video-generation/videoConfig";
-import { getVideoProvider } from "./video-generation/videoProviderRegistry";
+import {
+  deleteProviderVideoForUser,
+  getVideoProvider,
+} from "./video-generation/videoProviderRegistry";
 import type { VideoProvider } from "./video-generation/videoProvider";
 import type { MessengerSendOutcome } from "./messengerApi";
+import {
+  assertMessengerGenerationOwnership,
+  resolveMessengerGenerationOwnership,
+} from "./workspaceEntitlementRuntime";
+import {
+  assertMessengerPrivacySubject,
+  ensureActiveMessengerPrivacySubject,
+  MessengerPrivacyFenceError,
+} from "./messengerPrivacySubject";
+import { getMessengerRequestPageId } from "./messengerRequestContext";
+import type { MessengerGenerationJob } from "./messengerGenerationJob";
+import {
+  finalizeMessengerProviderAttemptFence,
+  markMessengerProviderAttemptStarted,
+  reserveMessengerProviderAttemptFence,
+  type MessengerProviderAttemptFence,
+} from "./messengerProviderAttemptFence";
 
 function getVideoProviderName(provider: VideoProvider): string {
-  const configuredProvider = process.env.MESSENGER_VIDEO_PROVIDER?.trim().toLowerCase();
+  const configuredProvider =
+    process.env.MESSENGER_VIDEO_PROVIDER?.trim().toLowerCase();
   if (configuredProvider) {
     return configuredProvider;
   }
@@ -44,7 +63,7 @@ function getVideoProviderName(provider: VideoProvider): string {
   }
 
   if (provider.constructor.name === "OpenAiVideoProvider") {
-    return "openai";
+    return "openai-video";
   }
 
   if (!provider.constructor.name || provider.constructor.name === "Object") {
@@ -107,15 +126,6 @@ type VideoGenerationDeps = {
     videoUrl: string,
     reqId: string
   ) => Promise<MessengerSendOutcome>;
-};
-
-type RunVideoGenerationInput = {
-  psid: string;
-  userId: string;
-  reqId: string;
-  lang: Lang;
-  sourceImageUrl: string;
-  promptHint: string;
 };
 
 type VideoNotificationPhase =
@@ -219,17 +229,70 @@ export function createMessengerVideoGenerationRunner(
     sourceImageUrl: string,
     promptHint: string
   ): Promise<MessengerSendOutcome> {
-    let sendOutcome: MessengerSendOutcome = { sent: false, reason: "response_window_closed" };
-    const existingInFlight = await deps.maybeSendInFlightMessage(psid, reqId, lang);
+    const pageId = getMessengerRequestPageId();
+    const ownership = await resolveMessengerGenerationOwnership(pageId);
+    if (!ownership && process.env.NODE_ENV === "production") {
+      return { sent: false, reason: "response_window_closed" };
+    }
+    const privacyEpoch = ownership
+      ? await ensureActiveMessengerPrivacySubject({
+          workspaceId: ownership.workspaceId,
+          channelConnectionId: ownership.channelConnectionId,
+          userKey: userId,
+        })
+      : undefined;
+    const fenceJob: MessengerGenerationJob = {
+      psid,
+      userId,
+      reqId,
+      lang,
+      pageId,
+      workspaceId: ownership?.workspaceId,
+      channelConnectionId: ownership?.channelConnectionId,
+      bindingEpoch: ownership?.bindingEpoch,
+      privacyEpoch,
+      sourceImageUrl,
+      promptHint,
+    };
+    const assertVideoFence = async () => {
+      await assertMessengerGenerationOwnership(fenceJob);
+      if (ownership && privacyEpoch) {
+        await assertMessengerPrivacySubject({
+          workspaceId: ownership.workspaceId,
+          channelConnectionId: ownership.channelConnectionId,
+          userKey: userId,
+          privacyEpoch,
+        });
+      } else if (process.env.NODE_ENV === "production") {
+        throw new MessengerPrivacyFenceError();
+      }
+    };
+    let sendOutcome: MessengerSendOutcome = {
+      sent: false,
+      reason: "response_window_closed",
+    };
+    const existingInFlight = await deps.maybeSendInFlightMessage(
+      psid,
+      reqId,
+      lang
+    );
     if (existingInFlight.handled) {
       return existingInFlight.outcome ?? sendOutcome;
     }
 
     const didRun = await runGuardedVideoGeneration(psid, async () => {
-      let pendingQuotaReservation: VideoGenerationQuotaReservation | null = null;
+      let pendingQuotaReservation: VideoGenerationQuotaReservation | null =
+        null;
       let lastVideoLedgerEntryId: string | null = null;
       let lastVideoLedgerEntryRecordedAt: Date | null = null;
       let lastVideoLedgerEntrySucceeded = false;
+      const providerFences: MessengerProviderAttemptFence[] = [];
+      let generatedStorageKey: string | null = null;
+      let generatedProviderArtifact: {
+        provider: string;
+        providerJobId: string;
+      } | null = null;
+      let deliveryCompleted = false;
       const flowDeadline = createVideoFlowDeadline();
       try {
         pendingQuotaReservation = await reserveVideoGenerationForAttempt(psid);
@@ -254,94 +317,104 @@ export function createMessengerVideoGenerationRunner(
         const provider = getVideoProvider();
         const costEstimate = estimateVideoGenerationAttemptCost();
         let providerAttemptCount = 0;
-        const providerHandlesLedgerEntries =
-          getVideoProviderName(provider) === "openai";
         const commitProviderAttemptQuota = async () => {
+          await assertVideoFence();
           const budgetNow = new Date();
-          await assertMessengerDailyVideoBudgetAvailable({ reqId, now: budgetNow });
+          providerAttemptCount += 1;
+          const providerFence = await reserveMessengerProviderAttemptFence(
+            fenceJob,
+            `video:${getVideoProviderName(provider)}`,
+            providerAttemptCount
+          );
+          const ledgerEntryId = `${reqId}:video:${providerAttemptCount}`;
           try {
-            await assertMessengerDailySpendBudgetAvailable({
+            await assertMessengerDailyVideoBudgetAvailable({
               reqId,
-              estimatedCostUsd: costEstimate.estimatedCostUsd,
-              estimatedOutputCostUsd: null,
               now: budgetNow,
             });
-            await assertMessengerMonthlySpendBudgetAvailable({
+            const admitted = await admitMessengerProviderSpend({
               reqId,
-              estimatedCostUsd: costEstimate.estimatedCostUsd,
-              estimatedOutputCostUsd: null,
-              now: budgetNow,
-            });
-            await assertMessengerUserDailySpendBudgetAvailable({
-              reqId,
+              attemptId: ledgerEntryId,
               userKey: userId,
               estimatedCostUsd: costEstimate.estimatedCostUsd,
               estimatedOutputCostUsd: null,
+              costEstimateComplete: costEstimate.costEstimateComplete,
+              now: budgetNow,
+              recordAttempt: async () => {
+                const reservationForAttempt =
+                  pendingQuotaReservation ??
+                  (await reserveVideoGenerationForAttempt(psid));
+                if (!reservationForAttempt) {
+                  throw new MessengerQuotaReservationCommitError(
+                    "Messenger video quota reservation could not be committed"
+                  );
+                }
+
+                const committed = await commitVideoGenerationSuccess(
+                  psid,
+                  reservationForAttempt
+                );
+                if (!committed) {
+                  throw new MessengerQuotaReservationCommitError(
+                    "Messenger video quota reservation could not be committed"
+                  );
+                }
+                if (
+                  pendingQuotaReservation?.token === reservationForAttempt.token
+                ) {
+                  pendingQuotaReservation = null;
+                }
+
+                safeLog("messenger_video_quota_decision", {
+                  action: "commit_provider_attempt",
+                  reqId,
+                  user: toLogUser(userId),
+                  allowed: true,
+                });
+                if (lastVideoLedgerEntryId && lastVideoLedgerEntryRecordedAt) {
+                  await safelyUpdateCostLedgerEntry(
+                    lastVideoLedgerEntryId,
+                    { status: "provider_attempt_failed" },
+                    lastVideoLedgerEntryRecordedAt
+                  );
+                }
+                await appendCostLedgerEntry(
+                  {
+                    id: ledgerEntryId,
+                    channel: "facebook_messenger",
+                    operation: "video_generation",
+                    provider: getVideoProviderName(provider),
+                    model: null,
+                    userKey: userId,
+                    reqId,
+                    status: "provider_attempt_started",
+                    estimatedCostUsd: costEstimate.estimatedCostUsd,
+                    estimatedOutputCostUsd: null,
+                    finalCostUsd: null,
+                    costEstimateComplete: costEstimate.costEstimateComplete,
+                    estimateSource: costEstimate.estimateSource,
+                    unpricedCostComponents: costEstimate.unpricedCostComponents,
+                  },
+                  budgetNow
+                );
+                lastVideoLedgerEntryId = ledgerEntryId;
+                lastVideoLedgerEntryRecordedAt = budgetNow;
+                lastVideoLedgerEntrySucceeded = false;
+                return ledgerEntryId;
+              },
+            });
+            await assertVideoFence();
+            await markMessengerProviderAttemptStarted(providerFence);
+            providerFences.push(providerFence);
+            return admitted;
+          } catch (error) {
+            await finalizeMessengerProviderAttemptFence(
+              providerFence,
+              "known_failed"
+            );
+            await releaseMessengerDailyVideoBudgetReservation({
               now: budgetNow,
             });
-            const reservationForAttempt =
-              pendingQuotaReservation ?? (await reserveVideoGenerationForAttempt(psid));
-            if (!reservationForAttempt) {
-              throw new MessengerQuotaReservationCommitError(
-                "Messenger video quota reservation could not be committed"
-              );
-            }
-
-            const committed = await commitVideoGenerationSuccess(
-              psid,
-              reservationForAttempt
-            );
-            if (!committed) {
-              throw new MessengerQuotaReservationCommitError(
-                "Messenger video quota reservation could not be committed"
-              );
-            }
-            if (pendingQuotaReservation?.token === reservationForAttempt.token) {
-              pendingQuotaReservation = null;
-            }
-
-            safeLog("messenger_video_quota_decision", {
-              action: "commit_provider_attempt",
-              reqId,
-              user: toLogUser(userId),
-              allowed: true,
-            });
-            if (lastVideoLedgerEntryId && lastVideoLedgerEntryRecordedAt) {
-              await safelyUpdateCostLedgerEntry(
-                lastVideoLedgerEntryId,
-                { status: "provider_attempt_failed" },
-                lastVideoLedgerEntryRecordedAt
-              );
-            }
-            providerAttemptCount += 1;
-            const ledgerEntryId = `${reqId}:video:${providerAttemptCount}`;
-            if (!providerHandlesLedgerEntries) {
-              await safelyAppendCostLedgerEntry(
-                {
-                  id: ledgerEntryId,
-                  channel: "facebook_messenger",
-                  operation: "video_generation",
-                  provider: getVideoProviderName(provider),
-                  model: null,
-                  userKey: userId,
-                  reqId,
-                  status: "provider_attempt_started",
-                  estimatedCostUsd: costEstimate.estimatedCostUsd,
-                  estimatedOutputCostUsd: null,
-                  finalCostUsd: null,
-                  costEstimateComplete: costEstimate.costEstimateComplete,
-                  estimateSource: costEstimate.estimateSource,
-                  unpricedCostComponents: costEstimate.unpricedCostComponents,
-                },
-                budgetNow
-              );
-            }
-            lastVideoLedgerEntryId = ledgerEntryId;
-            lastVideoLedgerEntryRecordedAt = budgetNow;
-            lastVideoLedgerEntrySucceeded = false;
-            return ledgerEntryId;
-          } catch (error) {
-            await releaseMessengerDailyVideoBudgetReservation({ now: budgetNow });
             throw error;
           }
         };
@@ -360,7 +433,15 @@ export function createMessengerVideoGenerationRunner(
           onProviderAttempt: commitProviderAttemptQuota,
         });
 
+        await assertVideoFence();
+
         if (providerResult.kind === "failure") {
+          await Promise.all(
+            providerFences.map(fence =>
+              finalizeMessengerProviderAttemptFence(fence, "ambiguous")
+            )
+          );
+          providerFences.length = 0;
           if (lastVideoLedgerEntryId && lastVideoLedgerEntryRecordedAt) {
             await safelyUpdateCostLedgerEntry(
               lastVideoLedgerEntryId,
@@ -386,6 +467,17 @@ export function createMessengerVideoGenerationRunner(
           );
           return;
         }
+
+        generatedProviderArtifact = {
+          provider: providerResult.provider,
+          providerJobId: providerResult.providerJobId,
+        };
+        await Promise.all(
+          providerFences.map(fence =>
+            finalizeMessengerProviderAttemptFence(fence, "succeeded")
+          )
+        );
+        providerFences.length = 0;
 
         if (lastVideoLedgerEntryId && lastVideoLedgerEntryRecordedAt) {
           await safelyUpdateCostLedgerEntry(
@@ -431,6 +523,14 @@ export function createMessengerVideoGenerationRunner(
           videoBytes: providerResult.videoBytes,
           contentType: providerResult.contentType,
         });
+        generatedStorageKey = storedVideo.key;
+
+        try {
+          await assertVideoFence();
+        } catch (error) {
+          await storageDelete(storedVideo.key).catch(() => undefined);
+          throw error;
+        }
 
         if (hasVideoFlowTimedOut(flowDeadline)) {
           if (
@@ -459,15 +559,25 @@ export function createMessengerVideoGenerationRunner(
           return;
         }
 
-        await Promise.resolve(
-          setLastGeneratedVideo(
-            psid,
-            storedVideo.url,
-            providerResult.provider,
-            providerResult.providerJobId
-          )
+        await assertVideoFence();
+        sendOutcome = await sendVideoAttachment(
+          deps,
+          psid,
+          storedVideo.url,
+          reqId
         );
-        sendOutcome = await sendVideoAttachment(deps, psid, storedVideo.url, reqId);
+        deliveryCompleted = sendOutcome.sent;
+        if (deliveryCompleted) {
+          await assertVideoFence();
+          await Promise.resolve(
+            setLastGeneratedVideo(
+              psid,
+              storedVideo.url,
+              providerResult.provider,
+              providerResult.providerJobId
+            )
+          );
+        }
         safeLog("messenger_video_generation_completed", {
           reqId,
           provider: providerResult.provider,
@@ -476,6 +586,12 @@ export function createMessengerVideoGenerationRunner(
           sent: sendOutcome.sent,
         });
       } catch (error) {
+        await Promise.all(
+          providerFences.map(fence =>
+            finalizeMessengerProviderAttemptFence(fence, "ambiguous")
+          )
+        );
+        providerFences.length = 0;
         if (
           lastVideoLedgerEntryId &&
           lastVideoLedgerEntryRecordedAt &&
@@ -492,6 +608,10 @@ export function createMessengerVideoGenerationRunner(
           reqId,
           errorCode: error instanceof Error ? error.name : "UnknownError",
         });
+        if (error instanceof MessengerPrivacyFenceError) {
+          sendOutcome = { sent: false, reason: "response_window_closed" };
+          return;
+        }
         sendOutcome = await sendVideoText(
           deps,
           psid,
@@ -504,6 +624,15 @@ export function createMessengerVideoGenerationRunner(
           "budget_or_internal_failed"
         );
       } finally {
+        if (!deliveryCompleted && generatedStorageKey) {
+          await storageDelete(generatedStorageKey).catch(() => undefined);
+        }
+        if (!deliveryCompleted && generatedProviderArtifact) {
+          await deleteProviderVideoForUser({
+            ...generatedProviderArtifact,
+            reqId,
+          }).catch(() => undefined);
+        }
         if (pendingQuotaReservation) {
           await releaseReservation(psid, pendingQuotaReservation);
         }

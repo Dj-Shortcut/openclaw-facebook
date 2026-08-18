@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
@@ -43,9 +43,12 @@ import {
 import {
   createLeaderbotAiAnswerIdempotencyKey,
   finalizeLeaderbotAiAnswerQuota,
+  heartbeatLeaderbotAiAnswerReservation,
+  markLeaderbotAiAnswerDeliveryStarted,
+  markLeaderbotAiAnswerDeliveryKnownRejected,
   isLeaderbotAiAnswerEnforcementEnabled,
   reserveLeaderbotAiAnswerQuota,
-} from "./leaderbot-answer-quota.js";
+} from "./leaderbot-bridge.js";
 import {
   classifyMessengerFastLaneIntent,
   hasMessengerImageGenerationIntent,
@@ -1952,6 +1955,9 @@ export async function processMessengerEvent(params: {
   });
   const core = getMessengerRuntime();
   let aiAnswerQuotaReservationId: string | null = null;
+  const aiAnswerQuotaOwnerToken = randomUUID();
+  const aiAnswerDeliveryAttemptToken = randomUUID();
+  let aiAnswerQuotaHeartbeat: NodeJS.Timeout | null = null;
   if (isLeaderbotAiAnswerEnforcementEnabled()) {
     const quotaDecision = await reserveLeaderbotAiAnswerQuota({
       pageId: params.account.pageId,
@@ -1962,6 +1968,7 @@ export async function processMessengerEvent(params: {
         traceRequestId: params.trace.reqId,
         timestamp,
       }),
+      ownerToken: aiAnswerQuotaOwnerToken,
     });
     if (quotaDecision.status === "exhausted") {
       await sendMessengerText(senderId, STARTPILOT_AI_ANSWER_QUOTA_REPLY, {
@@ -1986,6 +1993,13 @@ export async function processMessengerEvent(params: {
     }
     if (quotaDecision.status === "reserved") {
       aiAnswerQuotaReservationId = quotaDecision.reservationId;
+      aiAnswerQuotaHeartbeat = setInterval(() => {
+        void heartbeatLeaderbotAiAnswerReservation({
+          reservationId: quotaDecision.reservationId,
+          ownerToken: aiAnswerQuotaOwnerToken,
+        }).catch(() => undefined);
+      }, 60_000);
+      aiAnswerQuotaHeartbeat.unref();
     }
   }
   await sendMessengerSenderAction(senderId, "typing_on", {
@@ -2002,6 +2016,8 @@ export async function processMessengerEvent(params: {
     `messenger: dispatching inbound turn session=${route.sessionKey} account=${route.accountId}`,
   );
   let visibleFinalAiReplySent = false;
+  let aiAnswerDeliveryStarted = false;
+  let aiAnswerDeliveryKnownRejected = false;
   let turnResult: Awaited<ReturnType<typeof core.channel.inbound.run>> | undefined;
   let openClawError: unknown;
   try {
@@ -2051,7 +2067,40 @@ export async function processMessengerEvent(params: {
               cfg: params.cfg,
               accountId: params.account.accountId,
               quickReplies: getMessengerQuickReplies(deliveryPayload),
+              beforeTransport:
+                aiAnswerQuotaReservationId && !aiAnswerDeliveryStarted
+                  ? async () => {
+                      const fenced = await markLeaderbotAiAnswerDeliveryStarted({
+                        pageId: params.account.pageId,
+                        reservationId: aiAnswerQuotaReservationId!,
+                        ownerToken: aiAnswerQuotaOwnerToken,
+                        deliveryAttemptToken: aiAnswerDeliveryAttemptToken,
+                      });
+                      if (!fenced) {
+                        throw new Error(
+                          "paid AI answer delivery fence unavailable"
+                        );
+                      }
+                      aiAnswerDeliveryStarted = true;
+                    }
+                  : undefined,
+              onTransportOutcome:
+                aiAnswerQuotaReservationId && !aiAnswerDeliveryKnownRejected
+                  ? async outcome => {
+                      if (outcome !== "known_rejected") return;
+                      aiAnswerDeliveryKnownRejected =
+                        await markLeaderbotAiAnswerDeliveryKnownRejected({
+                          pageId: params.account.pageId,
+                          reservationId: aiAnswerQuotaReservationId!,
+                          ownerToken: aiAnswerQuotaOwnerToken,
+                          deliveryAttemptToken: aiAnswerDeliveryAttemptToken,
+                        });
+                    }
+                  : undefined,
             });
+            if (info.kind === "final") {
+              visibleFinalAiReplySent = true;
+            }
             rememberMessengerAssistantPrompt({
               accountId: params.account.accountId,
               pageId: params.account.pageId,
@@ -2068,9 +2117,6 @@ export async function processMessengerEvent(params: {
                 senderId,
               )} message=${redactMessengerIdentifier(result.messageId)}`,
             );
-            if (info.kind === "final") {
-              visibleFinalAiReplySent = true;
-            }
             return {
               messageIds: [result.messageId],
               receipt: result.receipt,
@@ -2087,11 +2133,20 @@ export async function processMessengerEvent(params: {
   } catch (error) {
     openClawError = error;
   }
+  if (aiAnswerQuotaHeartbeat) {
+    clearInterval(aiAnswerQuotaHeartbeat);
+    aiAnswerQuotaHeartbeat = null;
+  }
   if (aiAnswerQuotaReservationId) {
-    const outcome = visibleFinalAiReplySent ? "committed" : "released";
+    const outcome = aiAnswerDeliveryKnownRejected
+      ? "released"
+      : aiAnswerDeliveryStarted || visibleFinalAiReplySent
+      ? "committed"
+      : "released";
     const finalized = await finalizeLeaderbotAiAnswerQuota({
       pageId: params.account.pageId,
       reservationId: aiAnswerQuotaReservationId,
+      ownerToken: aiAnswerQuotaOwnerToken,
       outcome,
     });
     if (!finalized) {

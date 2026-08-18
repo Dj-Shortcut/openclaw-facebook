@@ -5,7 +5,7 @@ app = "leaderbot-openclaw-gateway"
 primary_region = "ams"
 
 [build]
-dockerfile = "deploy/fly-gateway/Dockerfile.route-guard-hotfix"
+dockerfile = "deploy/fly-gateway/Dockerfile"
 
 [env]
 NODE_ENV = "production"

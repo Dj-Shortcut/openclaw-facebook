@@ -9,6 +9,7 @@ import {
   workspaceEntitlements,
   workspaceEntitlementUsage,
   workspaceEntitlementUsageReservations,
+  workspaceBillingProfiles,
   type BillingCustomer,
   type BillingIntent,
   type BillingSubscription,
@@ -249,35 +250,38 @@ describe("payment snapshot persistence flow", () => {
         paidThrough: new Date("2026-08-20T00:00:00.000Z"),
       },
     },
-  ])("keeps Startpilot in manual review for $label", async ({ subscription }) => {
-    const flow = paymentFlow({ intent: startpilotIntent(), subscription });
-    databaseMock.mockResolvedValue(flow.database);
+  ])(
+    "keeps Startpilot in manual review for $label",
+    async ({ subscription }) => {
+      const flow = paymentFlow({ intent: startpilotIntent(), subscription });
+      databaseMock.mockResolvedValue(flow.database);
 
-    await expect(
-      applyMolliePaymentSnapshot(
-        molliePayment({ amount: { currency: "EUR", value: "19.00" } }),
-        1
-      )
-    ).resolves.toEqual({ result: "processed", workspaceId: 1 });
+      await expect(
+        applyMolliePaymentSnapshot(
+          molliePayment({ amount: { currency: "EUR", value: "19.00" } }),
+          1
+        )
+      ).resolves.toEqual({ result: "processed", workspaceId: 1 });
 
-    expect(flow.inserts).toContainEqual({
-      table: billingOutbox,
-      values: expect.objectContaining({
-        eventType: "manual_review",
-        payload: {
-          reason: "startpilot_subscription_conflict",
-          paymentId: "tr_payment123",
-        },
-      }),
-    });
-    expect(
-      flow.inserts.some(entry => entry.table === workspaceEntitlementUsage)
-    ).toBe(false);
-    expect(flow.updates).toContainEqual({
-      table: workspaceEntitlements,
-      values: expect.objectContaining({ status: "manual_review" }),
-    });
-  });
+      expect(flow.inserts).toContainEqual({
+        table: billingOutbox,
+        values: expect.objectContaining({
+          eventType: "manual_review",
+          payload: {
+            reason: "startpilot_subscription_conflict",
+            paymentId: "tr_payment123",
+          },
+        }),
+      });
+      expect(
+        flow.inserts.some(entry => entry.table === workspaceEntitlementUsage)
+      ).toBe(false);
+      expect(flow.updates).toContainEqual({
+        table: workspaceEntitlements,
+        values: expect.objectContaining({ status: "manual_review" }),
+      });
+    }
+  );
 
   it("does not create subscription work when a paid Startpilot snapshot is observed again", async () => {
     const flow = paymentFlow({
@@ -506,6 +510,21 @@ function paymentFlow(
     if (table === billingSubscriptions) {
       return subscription ? [subscription] : [];
     }
+    if (table === workspaceBillingProfiles) {
+      return [
+        {
+          workspaceId: 1,
+          eligibilityVersion: 1,
+          verificationStatus: "verified",
+          countryCode: "BE",
+          customerType: "consumer",
+          peppolReady: false,
+          verifiedAt: new Date("2026-07-01T00:00:00.000Z"),
+          verificationExpiresAt: new Date("2030-01-01T00:00:00.000Z"),
+          revokedAt: null,
+        },
+      ];
+    }
     if (table === workspaceEntitlements) {
       return [{ id: 9, status: "active" }];
     }
@@ -564,6 +583,7 @@ function paymentFlow(
             if (
               table === billingIntents ||
               table === billingSubscriptions ||
+              table === workspaceBillingProfiles ||
               table === workspaceEntitlements ||
               table === workspaceEntitlementUsage
             ) {
@@ -645,6 +665,7 @@ function billingIntent(): BillingIntent {
     entitlements: { imagesPerDay: 10, messagesPerMinute: 5 },
     mollieDescription: "Leaderbot Premium",
     molliePaymentId: "tr_payment123",
+    billingProfileVersion: 1,
   } as BillingIntent;
 }
 

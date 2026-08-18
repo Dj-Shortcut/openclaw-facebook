@@ -105,7 +105,9 @@ describe("billing reconciliation tenant boundary", () => {
     expect(flow.inserts.some(entry => entry.table === billingOutbox)).toBe(
       false
     );
-    expect(flow.transactionMock).toHaveBeenCalledTimes(1);
+    // Provider-operation resolution, profile-expiry containment and the
+    // reconciliation body use separate tenant-scoped transactions.
+    expect(flow.transactionMock).toHaveBeenCalledTimes(3);
   });
 
   it("fails closed when the workspace billing-customer row is missing", async () => {
@@ -169,7 +171,7 @@ describe("billing reconciliation tenant boundary", () => {
     expect(flow.inserts.some(entry => entry.table === billingOutbox)).toBe(
       false
     );
-    expect(flow.transactionMock).toHaveBeenCalledTimes(1);
+    expect(flow.transactionMock).toHaveBeenCalledTimes(3);
   });
 });
 

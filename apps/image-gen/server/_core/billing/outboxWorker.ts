@@ -1,22 +1,24 @@
-import { randomUUID } from "node:crypto";
-import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
+import { createHash, randomUUID } from "node:crypto";
+import { and, asc, eq, gt, inArray, isNull, lte, sql } from "drizzle-orm";
 import {
   billingOutbox,
   billingIntents,
+  billingProviderOperations,
   billingSubscriptions,
   workspaces,
   workspaceEntitlements,
+  workspaceBillingProfiles,
   type BillingOutboxItem,
   type BillingSubscription,
 } from "../../../drizzle/schema";
 import { getDatabaseOrThrow } from "../../db";
+import {
+  advanceBillingHandoffDeliveryFence,
+  beginBillingHandoffDelivery,
+} from "../../db";
 import { safeLog } from "../logger";
 import { sendPortalHandoffLink } from "../portalHandoffDelivery";
-import {
-  getMollieConfig,
-  getTenantBillingWorkerWorkspaceId,
-  type MollieMode,
-} from "./config";
+import { getMollieConfig, type MollieMode } from "./config";
 import { hashCanonicalSnapshot } from "./ids";
 import {
   assertMollieId,
@@ -29,6 +31,18 @@ import {
   markWorkspaceSubscriptionStoppedIfMatches,
 } from "./subscriptionStore";
 import { metadataIntentId } from "./providerMetadata";
+import {
+  BillingNotificationConfigurationError,
+  BillingNotificationTransientError,
+  deliverBillingNotification,
+} from "./billingNotificationDelivery";
+import {
+  claimNextBillingTenant,
+  assertBillingTenantLeaseOwned,
+  releaseBillingTenantLease,
+  recordBillingSchedulerPoll,
+  renewBillingTenantLease,
+} from "./billingSchedulerStore";
 
 const OUTBOX_POLL_INTERVAL_MS = 5_000;
 const OUTBOX_LEASE_TIMEOUT_MS = 15 * 60 * 1_000;
@@ -50,22 +64,95 @@ class PermanentOutboxError extends Error {
 type ClaimedBillingOutboxItem = BillingOutboxItem & { leaseToken: string };
 
 let workerTimer: NodeJS.Timeout | null = null;
-let workerBusy = false;
+const busyWorkspaces = new Set<number>();
 
 export function startBillingOutboxWorker(): void {
   if (workerTimer) return;
-  const workspaceId = getTenantBillingWorkerWorkspaceId();
-  if (!workspaceId) {
-    safeLog("billing_outbox_worker_disabled", {
-      reason: "tenant_workspace_not_configured",
-    });
-    return;
-  }
   workerTimer = setInterval(() => {
-    void runBillingOutboxSafely(workspaceId);
+    void runBillingOutboxSchedulerSafely();
   }, OUTBOX_POLL_INTERVAL_MS);
   workerTimer.unref();
-  void runBillingOutboxSafely(workspaceId);
+  void runBillingOutboxSchedulerSafely();
+}
+
+export async function runBillingOutboxSchedulerOnce(
+  clientOverride?: MollieClient,
+  limit = 25,
+  now = new Date()
+): Promise<number> {
+  const config = getMollieConfig();
+  await recordBillingSchedulerPoll(config.mode, "outbox", now);
+  let processed = 0;
+  const count = Math.max(1, Math.min(100, limit));
+  for (let index = 0; index < count; index += 1) {
+    const claimNow = index === 0 ? now : new Date();
+    const lease = await claimNextBillingTenant(config.mode, claimNow, "outbox");
+    if (!lease) break;
+    let failed = false;
+    const heartbeat = setInterval(() => {
+      void renewBillingTenantLease(lease)
+        .then(renewed => {
+          if (!renewed) failed = true;
+        })
+        .catch(() => {
+          failed = true;
+        });
+    }, 30_000);
+    heartbeat.unref();
+    try {
+      await assertBillingTenantLeaseOwned(lease);
+      if (await runBillingOutboxOnce(lease.workspaceId, clientOverride)) {
+        processed += 1;
+      }
+      await assertBillingTenantLeaseOwned(lease);
+    } catch {
+      failed = true;
+    } finally {
+      clearInterval(heartbeat);
+      const releaseNow = new Date();
+      const nextAt = failed
+        ? releaseNow
+        : await getNextBillingOutboxDue(
+            lease.workspaceId,
+            lease.mode,
+            releaseNow
+          );
+      const released = await releaseBillingTenantLease({
+        ...lease,
+        failed,
+        now: releaseNow,
+        nextAt,
+      });
+      if (!released) {
+        throw new Error("billing scheduler lease ownership was lost");
+      }
+    }
+  }
+  return processed;
+}
+
+async function getNextBillingOutboxDue(
+  workspaceId: number,
+  mode: MollieMode,
+  now: Date
+): Promise<Date> {
+  const database = await getDatabaseOrThrow();
+  const rows = await database
+    .select({ nextAt: sql<Date | null>`MIN(${billingOutbox.availableAt})` })
+    .from(billingOutbox)
+    .where(
+      and(
+        eq(billingOutbox.workspaceId, workspaceId),
+        eq(billingOutbox.mode, mode),
+        inArray(billingOutbox.status, ["pending", "processing"])
+      )
+    );
+  const candidates = [rows[0]?.nextAt].filter(
+    (value): value is Date => value instanceof Date
+  );
+  return candidates.length
+    ? new Date(Math.min(...candidates.map(value => value.getTime())))
+    : new Date(now.getTime() + 24 * 60 * 60_000);
 }
 
 export async function runBillingOutboxOnce(
@@ -75,8 +162,8 @@ export async function runBillingOutboxOnce(
   if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) {
     throw new Error("invalid billing outbox workspace");
   }
-  if (workerBusy) return false;
-  workerBusy = true;
+  if (busyWorkspaces.has(workspaceId)) return false;
+  busyWorkspaces.add(workspaceId);
   try {
     const config = getMollieConfig();
     await releaseStaleBillingLeases(config.mode, workspaceId);
@@ -89,8 +176,15 @@ export async function runBillingOutboxOnce(
       const retryCode = retryableErrorCode(error);
       if (retryCode) {
         if (job.attemptCount >= job.maxAttempts) {
-          await containExhaustedEnsureAttempt(job, clientOverride);
-          await failBillingOutboxItem(job, `${retryCode}_exhausted`);
+          if (isCriticalContainmentJob(job)) {
+            await rearmCriticalContainmentAfterExhaustion(
+              job,
+              `${retryCode}_exhausted`
+            );
+          } else {
+            await containExhaustedEnsureAttempt(job, clientOverride);
+            await failBillingOutboxItem(job, `${retryCode}_exhausted`);
+          }
         } else {
           await rescheduleBillingOutboxItem(job, retryCode);
         }
@@ -106,8 +200,89 @@ export async function runBillingOutboxOnce(
     }
     return true;
   } finally {
-    workerBusy = false;
+    busyWorkspaces.delete(workspaceId);
   }
+}
+
+export function isCriticalContainmentJob(job: BillingOutboxItem): boolean {
+  if (
+    job.eventType !== "cancel_subscription" &&
+    job.eventType !== "cancel_payment"
+  ) {
+    return false;
+  }
+  if (
+    !job.payload ||
+    typeof job.payload !== "object" ||
+    Array.isArray(job.payload)
+  ) {
+    return false;
+  }
+  const reason = (job.payload as Record<string, unknown>).reason;
+  return [
+    "billing_profile_revoked",
+    "billing_profile_expired",
+    "billing_profile_ineligible_after_provider_response",
+  ].includes(String(reason));
+}
+
+async function rearmCriticalContainmentAfterExhaustion(
+  job: ClaimedBillingOutboxItem,
+  errorCode: string
+): Promise<void> {
+  const database = await getDatabaseOrThrow();
+  await database.transaction(async tx => {
+    const rows = await tx
+      .select({ id: billingOutbox.id })
+      .from(billingOutbox)
+      .where(
+        and(
+          eq(billingOutbox.id, job.id),
+          eq(billingOutbox.workspaceId, job.workspaceId),
+          eq(billingOutbox.mode, job.mode),
+          eq(billingOutbox.status, "processing"),
+          eq(billingOutbox.leaseToken, job.leaseToken)
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (!rows[0]) throw new Error("critical containment lease was lost");
+    await tx
+      .update(billingOutbox)
+      .set({
+        status: "pending",
+        attemptCount: 0,
+        availableAt: new Date(Date.now() + 6 * 60 * 60_000),
+        lockedAt: null,
+        leaseToken: null,
+        lastErrorCode: errorCode,
+      })
+      .where(
+        and(
+          eq(billingOutbox.id, job.id),
+          eq(billingOutbox.workspaceId, job.workspaceId),
+          eq(billingOutbox.mode, job.mode),
+          eq(billingOutbox.status, "processing"),
+          eq(billingOutbox.leaseToken, job.leaseToken)
+        )
+      );
+    await tx
+      .insert(billingOutbox)
+      .values({
+        workspaceId: job.workspaceId,
+        mode: job.mode,
+        eventType: "manual_review",
+        deduplicationKey: `containment_retry_exhausted:${job.deliveryId}`,
+        payload: {
+          reason: "billing_profile_containment_retry_exhausted",
+          sourceDeliveryId: job.deliveryId,
+        },
+        status: "pending",
+      })
+      .onDuplicateKeyUpdate({
+        set: { deduplicationKey: sql`deduplication_key` },
+      });
+  });
 }
 
 function retryableErrorCode(error: unknown): string | null {
@@ -127,9 +302,9 @@ function retryableErrorCode(error: unknown): string | null {
   return "transient_worker_error";
 }
 
-async function runBillingOutboxSafely(workspaceId: number): Promise<void> {
+async function runBillingOutboxSchedulerSafely(): Promise<void> {
   try {
-    await runBillingOutboxOnce(workspaceId);
+    await runBillingOutboxSchedulerOnce();
   } catch (error) {
     safeLog("billing_outbox_dispatch_failed", {
       level: "error",
@@ -150,21 +325,34 @@ async function processBillingOutboxItem(
     await cancelMollieSubscription(job, clientOverride);
     return;
   }
+  if (job.eventType === "cancel_payment") {
+    await cancelContainedMolliePayment(job, clientOverride);
+    return;
+  }
   if (job.eventType === "send_portal_handoff") {
     await sendPaymentHandoff(job);
     return;
   }
 
-  safeLog("billing_outbox_operator_action_required", {
-    level: job.eventType === "manual_review" ? "error" : "warn",
-    eventType: job.eventType,
-    attempt: job.attemptCount,
-  });
-  throw new PermanentOutboxError(
-    job.eventType === "payment_warning"
-      ? "customer_notification_not_configured"
-      : "operator_notification_not_configured"
-  );
+  if (
+    job.eventType === "payment_warning" ||
+    job.eventType === "manual_review"
+  ) {
+    try {
+      await deliverBillingNotification(job);
+      return;
+    } catch (error) {
+      if (error instanceof BillingNotificationTransientError) {
+        throw new RetryableOutboxError(error.message);
+      }
+      if (error instanceof BillingNotificationConfigurationError) {
+        throw new PermanentOutboxError(error.message);
+      }
+      throw error;
+    }
+  }
+
+  throw new PermanentOutboxError("unsupported_billing_outbox_event");
 }
 
 async function ensureMollieSubscription(
@@ -221,7 +409,11 @@ async function ensureMollieSubscription(
   const client = clientOverride ?? new MollieClient(config);
   const database = await getDatabaseOrThrow();
   const sourceIntents = await database
-    .select({ paidAt: billingIntents.paidAt })
+    .select({
+      paidAt: billingIntents.paidAt,
+      status: billingIntents.status,
+      billingProfileVersion: billingIntents.billingProfileVersion,
+    })
     .from(billingIntents)
     .where(
       and(
@@ -232,8 +424,29 @@ async function ensureMollieSubscription(
     )
     .limit(1);
   const sourcePaidAt = sourceIntents[0]?.paidAt;
-  if (!sourcePaidAt) {
+  if (!sourcePaidAt || sourceIntents[0]?.status !== "paid") {
     throw new PermanentOutboxError("source_payment_time_missing");
+  }
+  const sourceProfileVersion = sourceIntents[0].billingProfileVersion;
+  const profiles = await database
+    .select()
+    .from(workspaceBillingProfiles)
+    .where(eq(workspaceBillingProfiles.workspaceId, job.workspaceId))
+    .limit(1);
+  if (
+    !isEligibleBillingProfileSnapshot(
+      profiles[0],
+      sourceProfileVersion,
+      new Date()
+    )
+  ) {
+    await containRemoteSubscriptionsForIntent(
+      job,
+      subscription,
+      sourceIntentId,
+      clientOverride
+    );
+    throw new PermanentOutboxError("billing_profile_ineligible");
   }
   const mandates = await client.listMandates(subscription.mollieCustomerId);
   const mandateWindowStart = sourcePaidAt.getTime() - 10 * 60 * 1_000;
@@ -281,20 +494,54 @@ async function ensureMollieSubscription(
     if (config.mode === "live" && !config.liveBillingEnabled) {
       throw new RetryableOutboxError("live_billing_disabled");
     }
-    remote = await client.createSubscription({
-      customerId: subscription.mollieCustomerId,
-      mandateId: validMandate.id,
-      amount: {
-        currency: subscription.currency,
-        value: subscription.recurringAmount,
-      },
-      interval: subscription.interval,
-      startDate,
-      description: `${subscription.mollieDescription} ${subscription.sourceIntentId.slice(0, 8)}`,
-      intentId: subscription.sourceIntentId,
-      webhookUrl: config.paymentWebhookUrl,
-      idempotencyKey: subscription.idempotencyKey,
+    const operation = await reserveSubscriptionProviderOperation({
+      job,
+      subscription,
+      billingProfileVersion: sourceProfileVersion,
     });
+    if (!operation) {
+      throw new RetryableOutboxError("subscription_create_reconciliation_only");
+    }
+    if (!(await markSubscriptionProviderOperationStarted(operation))) {
+      throw new RetryableOutboxError("subscription_create_fence_lost");
+    }
+    try {
+      remote = await client.createSubscription({
+        customerId: subscription.mollieCustomerId,
+        mandateId: validMandate.id,
+        amount: {
+          currency: subscription.currency,
+          value: subscription.recurringAmount,
+        },
+        interval: subscription.interval,
+        startDate,
+        description: `${subscription.mollieDescription} ${subscription.sourceIntentId.slice(0, 8)}`,
+        intentId: subscription.sourceIntentId,
+        webhookUrl: config.paymentWebhookUrl,
+        idempotencyKey: subscription.idempotencyKey,
+      });
+    } catch (error) {
+      await finalizeSubscriptionProviderOperation(
+        operation,
+        error instanceof MollieApiError &&
+          error.status >= 400 &&
+          error.status < 500 &&
+          ![408, 409, 425, 429].includes(error.status)
+          ? "known_failed"
+          : "ambiguous"
+      );
+      throw error;
+    }
+    if (
+      !(await finalizeSubscriptionProviderOperation(
+        operation,
+        "succeeded",
+        remote.id
+      ))
+    ) {
+      await recordRemoteSubscriptionContainment(job, subscription, remote);
+      throw new PermanentOutboxError("subscription_provider_result_fence_lost");
+    }
   }
   if (remote.status === "pending") {
     throw new RetryableOutboxError("subscription_pending");
@@ -314,6 +561,27 @@ async function ensureMollieSubscription(
   }
 
   await database.transaction(async tx => {
+    const currentProfiles = await tx
+      .select()
+      .from(workspaceBillingProfiles)
+      .where(eq(workspaceBillingProfiles.workspaceId, job.workspaceId))
+      .limit(1)
+      .for("update");
+    const currentIntents = await tx
+      .select({
+        status: billingIntents.status,
+        billingProfileVersion: billingIntents.billingProfileVersion,
+      })
+      .from(billingIntents)
+      .where(
+        and(
+          eq(billingIntents.intentId, subscription.sourceIntentId),
+          eq(billingIntents.workspaceId, job.workspaceId),
+          eq(billingIntents.mode, job.mode)
+        )
+      )
+      .limit(1)
+      .for("update");
     const current = await tx
       .select()
       .from(billingSubscriptions)
@@ -343,6 +611,34 @@ async function ensureMollieSubscription(
       current[0]?.status === "active" &&
       current[0].sourceIntentId === subscription.sourceIntentId &&
       current[0].mollieSubscriptionId === remote.id;
+    const profileStillEligible =
+      currentIntents[0]?.status === "paid" &&
+      isEligibleBillingProfileSnapshot(
+        currentProfiles[0],
+        currentIntents[0].billingProfileVersion,
+        new Date()
+      );
+    if (!profileStillEligible) {
+      await tx
+        .insert(billingOutbox)
+        .values({
+          workspaceId: job.workspaceId,
+          mode: job.mode,
+          eventType: "cancel_subscription",
+          deduplicationKey: `profile_containment_cancel:${remote.id}`,
+          payload: {
+            reason: "billing_profile_ineligible_after_provider_response",
+            expectedSourceIntentId: subscription.sourceIntentId,
+            targetCustomerId: subscription.mollieCustomerId,
+            targetSubscriptionId: remote.id,
+          },
+          status: "pending",
+        })
+        .onDuplicateKeyUpdate({
+          set: { deduplicationKey: sql`deduplication_key` },
+        });
+      return;
+    }
     if (alreadyLinked) {
       return;
     }
@@ -416,6 +712,204 @@ async function ensureMollieSubscription(
   });
 }
 
+type SubscriptionProviderOperation = {
+  operationId: string;
+  leaseToken: string;
+};
+
+export async function reserveSubscriptionProviderOperation(input: {
+  job: ClaimedBillingOutboxItem;
+  subscription: BillingSubscription;
+  billingProfileVersion: number;
+}): Promise<SubscriptionProviderOperation | null> {
+  const database = await getDatabaseOrThrow();
+  return database.transaction(async tx => {
+    const now = new Date();
+    const leaseToken = randomUUID();
+    const credentialGenerationId =
+      process.env.MOLLIE_CREDENTIAL_GENERATION_ID?.trim() ||
+      (process.env.NODE_ENV === "test" ? "test-generation" : "");
+    if (!credentialGenerationId) {
+      throw new PermanentOutboxError("mollie_credential_generation_missing");
+    }
+    const requestFingerprint = createHash("sha256")
+      .update(
+        JSON.stringify({
+          workspaceId: input.job.workspaceId,
+          mode: input.job.mode,
+          sourceIntentId: input.subscription.sourceIntentId,
+          amount: input.subscription.recurringAmount,
+          currency: input.subscription.currency,
+          interval: input.subscription.interval,
+          paidThrough: input.subscription.paidThrough?.toISOString(),
+        })
+      )
+      .digest("hex");
+    const idempotencyKeyHash = createHash("sha256")
+      .update(input.subscription.idempotencyKey)
+      .digest("hex");
+    const existing = await tx
+      .select({
+        operationId: billingProviderOperations.operationId,
+        state: billingProviderOperations.state,
+        firstStartedAt: billingProviderOperations.firstStartedAt,
+        leaseUntil: billingProviderOperations.leaseUntil,
+        requestFingerprint: billingProviderOperations.requestFingerprint,
+        billingProfileVersion: billingProviderOperations.billingProfileVersion,
+        credentialGenerationId:
+          billingProviderOperations.credentialGenerationId,
+        idempotencyKeyHash: billingProviderOperations.idempotencyKeyHash,
+      })
+      .from(billingProviderOperations)
+      .where(
+        and(
+          eq(billingProviderOperations.mode, input.job.mode),
+          eq(billingProviderOperations.operationType, "create_subscription"),
+          eq(
+            billingProviderOperations.operationKey,
+            input.subscription.sourceIntentId
+          )
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (existing[0]) {
+      const operation = existing[0];
+      const safelyResumable =
+        !operation.firstStartedAt &&
+        (operation.state === "known_failed" ||
+          (operation.state === "reserved" && operation.leaseUntil <= now)) &&
+        operation.requestFingerprint === requestFingerprint &&
+        operation.billingProfileVersion === input.billingProfileVersion &&
+        operation.credentialGenerationId === credentialGenerationId &&
+        operation.idempotencyKeyHash === idempotencyKeyHash;
+      if (!safelyResumable) return null;
+      const resumed = await tx
+        .update(billingProviderOperations)
+        .set({
+          state: "reserved",
+          leaseToken,
+          leaseUntil: new Date(now.getTime() + 60_000),
+          retryBefore: null,
+          resolutionDueAt: new Date(now.getTime() + 5 * 60_000),
+          completedAt: null,
+        })
+        .where(
+          and(
+            eq(billingProviderOperations.operationId, operation.operationId),
+            eq(billingProviderOperations.state, operation.state),
+            isNull(billingProviderOperations.firstStartedAt),
+            ...(operation.state === "reserved"
+              ? [lte(billingProviderOperations.leaseUntil, now)]
+              : [])
+          )
+        );
+      if (outboxAffectedRows(resumed) !== 1) return null;
+      return { operationId: operation.operationId, leaseToken };
+    }
+    const operationId = randomUUID();
+    await tx.insert(billingProviderOperations).values({
+      operationId,
+      workspaceId: input.job.workspaceId,
+      mode: input.job.mode,
+      operationType: "create_subscription",
+      operationKey: input.subscription.sourceIntentId,
+      intentId: input.subscription.sourceIntentId,
+      billingProfileVersion: input.billingProfileVersion,
+      state: "reserved",
+      requestFingerprint,
+      idempotencyKeyHash,
+      credentialGenerationId,
+      leaseToken,
+      leaseUntil: new Date(now.getTime() + 60_000),
+      resolutionDueAt: new Date(now.getTime() + 5 * 60_000),
+    });
+    return { operationId, leaseToken };
+  });
+}
+
+export async function markSubscriptionProviderOperationStarted(
+  operation: SubscriptionProviderOperation
+): Promise<boolean> {
+  const database = await getDatabaseOrThrow();
+  const now = new Date();
+  const result = await database
+    .update(billingProviderOperations)
+    .set({
+      state: "transport_started",
+      firstStartedAt: now,
+      retryBefore: new Date(now.getTime() + 55 * 60_000),
+      resolutionDueAt: new Date(now.getTime() + 5 * 60_000),
+      attemptCount: sql`${billingProviderOperations.attemptCount} + 1`,
+    })
+    .where(
+      and(
+        eq(billingProviderOperations.operationId, operation.operationId),
+        eq(billingProviderOperations.leaseToken, operation.leaseToken),
+        eq(billingProviderOperations.state, "reserved"),
+        gt(billingProviderOperations.leaseUntil, now)
+      )
+    );
+  return outboxAffectedRows(result) === 1;
+}
+
+async function finalizeSubscriptionProviderOperation(
+  operation: SubscriptionProviderOperation,
+  outcome: "succeeded" | "known_failed" | "ambiguous",
+  providerResourceId?: string
+): Promise<boolean> {
+  const database = await getDatabaseOrThrow();
+  const result = await database
+    .update(billingProviderOperations)
+    .set({
+      state: outcome,
+      providerResourceId: providerResourceId ?? null,
+      completedAt:
+        outcome === "succeeded" || outcome === "known_failed"
+          ? new Date()
+          : null,
+      resolutionDueAt: new Date(),
+    })
+    .where(
+      and(
+        eq(billingProviderOperations.operationId, operation.operationId),
+        eq(billingProviderOperations.leaseToken, operation.leaseToken),
+        eq(billingProviderOperations.state, "transport_started")
+      )
+    );
+  return outboxAffectedRows(result) === 1;
+}
+
+function outboxAffectedRows(result: unknown): number {
+  const metadata: unknown = Array.isArray(result)
+    ? (result as unknown[])[0]
+    : result;
+  return Number(
+    (metadata as { affectedRows?: number } | undefined)?.affectedRows ?? 0
+  );
+}
+
+function isEligibleBillingProfileSnapshot(
+  profile: typeof workspaceBillingProfiles.$inferSelect | undefined,
+  expectedVersion: number | null,
+  now: Date
+): boolean {
+  return Boolean(
+    profile &&
+    expectedVersion &&
+    profile.eligibilityVersion === expectedVersion &&
+    profile.verificationStatus === "verified" &&
+    profile.countryCode === "BE" &&
+    profile.customerType === "consumer" &&
+    !profile.peppolReady &&
+    profile.verifiedAt &&
+    profile.verifiedAt <= now &&
+    profile.verificationExpiresAt &&
+    profile.verificationExpiresAt > now &&
+    !profile.revokedAt
+  );
+}
+
 async function cancelMollieSubscription(
   job: ClaimedBillingOutboxItem,
   clientOverride?: MollieClient
@@ -446,6 +940,53 @@ async function cancelMollieSubscription(
     target.subscriptionId
   );
   await rearmFailedEnsureJobsWaitingForCancellation(job);
+}
+
+async function cancelContainedMolliePayment(
+  job: ClaimedBillingOutboxItem,
+  clientOverride?: MollieClient
+): Promise<void> {
+  const record =
+    job.payload &&
+    typeof job.payload === "object" &&
+    !Array.isArray(job.payload)
+      ? (job.payload as Record<string, unknown>)
+      : null;
+  const paymentId = record?.targetPaymentId;
+  const intentId = record?.intentId;
+  if (typeof paymentId !== "string" || typeof intentId !== "string") {
+    throw new PermanentOutboxError("invalid_payment_cancellation_target");
+  }
+  const config = getMollieConfig();
+  if (config.mode !== job.mode) {
+    throw new PermanentOutboxError("billing_mode_mismatch");
+  }
+  const client = clientOverride ?? new MollieClient(config);
+  let payment;
+  try {
+    payment = await client.getPayment(paymentId);
+  } catch (error) {
+    if (error instanceof MollieApiError && error.status === 404) return;
+    throw error;
+  }
+  if (
+    payment.id !== paymentId ||
+    payment.mode !== job.mode ||
+    metadataIntentId(payment.metadata) !== intentId
+  ) {
+    throw new PermanentOutboxError("payment_cancellation_target_mismatch");
+  }
+  if (["canceled", "expired", "failed"].includes(payment.status)) return;
+  if (payment.status !== "open") {
+    throw new PermanentOutboxError(
+      "payment_cancellation_requires_manual_review"
+    );
+  }
+  try {
+    await client.cancelPayment(paymentId);
+  } catch (error) {
+    if (!(error instanceof MollieApiError) || error.status !== 404) throw error;
+  }
 }
 
 export async function cancelContainedMollieSubscription(
@@ -491,8 +1032,7 @@ export async function cancelContainedMollieSubscription(
     matchingProvisioningRemoteIds = collectingSubscriptionsForIntent(
       await client.listCustomerSubscriptions(target.customerId),
       initial.sourceIntentId
-    )
-      .map(candidate => candidate.id);
+    ).map(candidate => candidate.id);
     if (matchingProvisioningRemoteIds.length === 0) {
       throw new RetryableOutboxError("containment_remote_list_inconsistent");
     }
@@ -517,20 +1057,22 @@ export async function cancelContainedMollieSubscription(
       remote &&
       remoteMatchesCurrentSubscription(remote, current)
     ) {
-      if (current.status !== "provisioning") {
-        return "skipped_current" as const;
-      }
-      if (
-        !matchingProvisioningRemoteIds ||
-        initial?.sourceIntentId !== current.sourceIntentId
-      ) {
-        throw new RetryableOutboxError("containment_state_changed");
-      }
-      if (
-        matchingProvisioningRemoteIds.length === 1 &&
-        matchingProvisioningRemoteIds[0] === target.subscriptionId
-      ) {
-        return "skipped_current" as const;
+      if (!isProfileRevocationContainment(job.payload)) {
+        if (current.status !== "provisioning") {
+          return "skipped_current" as const;
+        }
+        if (
+          !matchingProvisioningRemoteIds ||
+          initial?.sourceIntentId !== current.sourceIntentId
+        ) {
+          throw new RetryableOutboxError("containment_state_changed");
+        }
+        if (
+          matchingProvisioningRemoteIds.length === 1 &&
+          matchingProvisioningRemoteIds[0] === target.subscriptionId
+        ) {
+          return "skipped_current" as const;
+        }
       }
     }
 
@@ -619,7 +1161,23 @@ function isContainmentCancellation(payload: unknown): boolean {
   return (
     reason === "provisioning_state_changed" ||
     reason === "remote_subscription_mismatch" ||
-    reason === "reconciliation_subscription_mismatch"
+    reason === "reconciliation_subscription_mismatch" ||
+    reason === "billing_profile_revoked" ||
+    reason === "billing_profile_expired" ||
+    reason === "billing_profile_ineligible_after_provider_response"
+  );
+}
+
+function isProfileRevocationContainment(payload: unknown): boolean {
+  return Boolean(
+    payload &&
+    typeof payload === "object" &&
+    !Array.isArray(payload) &&
+    [
+      "billing_profile_revoked",
+      "billing_profile_expired",
+      "billing_profile_ineligible_after_provider_response",
+    ].includes(String((payload as Record<string, unknown>).reason))
   );
 }
 
@@ -784,17 +1342,55 @@ async function rearmFailedEnsureJobsWaitingForCancellation(
   }
 }
 
-export async function sendPaymentHandoff(job: ClaimedBillingOutboxItem): Promise<void> {
+export async function sendPaymentHandoff(
+  job: ClaimedBillingOutboxItem
+): Promise<void> {
   const target = readPortalHandoffTarget(job.payload);
-  const result = await sendPortalHandoffLink({
+  const fence = await beginBillingHandoffDelivery({
+    outboxId: job.id,
     workspaceId: job.workspaceId,
+    mode: job.mode,
+    leaseToken: job.leaseToken,
+    intentId: target.intentId,
     messengerSenderUserKey: target.messengerSenderUserKey,
-    expectedFacebookPageId: target.messengerPageId,
-    createdByUserId: null,
-    deliveryIdempotencyKey: target.intentId,
+    messengerPageId: target.messengerPageId,
   });
+  let result;
+  let transportStarted = false;
+  try {
+    result = await sendPortalHandoffLink({
+      workspaceId: job.workspaceId,
+      messengerSenderUserKey: target.messengerSenderUserKey,
+      expectedFacebookPageId: target.messengerPageId,
+      createdByUserId: null,
+      deliveryIdempotencyKey: target.intentId,
+      beforeCapabilityCreate: () =>
+        advanceBillingHandoffDeliveryFence(fence, "preparing"),
+      beforeTransport: async () => {
+        const started = await advanceBillingHandoffDeliveryFence(
+          fence,
+          "transport_started"
+        );
+        transportStarted = started;
+        return started;
+      },
+    });
+  } catch (error) {
+    await advanceBillingHandoffDeliveryFence(
+      fence,
+      transportStarted ? "ambiguous" : "idle"
+    );
+    if (transportStarted) {
+      throw new PermanentOutboxError("portal_handoff_transport_ambiguous");
+    }
+    throw error;
+  }
 
-  if (result.ok) return;
+  if (result.ok) {
+    await advanceBillingHandoffDeliveryFence(fence, "transport_succeeded");
+    return;
+  }
+  await advanceBillingHandoffDeliveryFence(fence, "idle");
   if (result.reason === "send_failed") {
     throw new RetryableOutboxError("portal_handoff_send_failed");
   }
@@ -814,7 +1410,8 @@ function readPortalHandoffTarget(payload: unknown): {
   const messengerPageId = record.messengerPageId;
   const intentId = record.intentId;
   if (
-    typeof intentId !== "string" || !/^[0-9a-f-]{36}$/i.test(intentId) ||
+    typeof intentId !== "string" ||
+    !/^[0-9a-f-]{36}$/i.test(intentId) ||
     typeof messengerSenderUserKey !== "string" ||
     !/^[a-f0-9]{64}$/.test(messengerSenderUserKey) ||
     typeof messengerPageId !== "string" ||
@@ -1230,13 +1827,21 @@ async function releaseStaleBillingLeases(
 
 async function completeBillingOutboxItem(job: ClaimedBillingOutboxItem) {
   const database = await getDatabaseOrThrow();
-  await database
+  const completedAt = new Date();
+  const completedPayload = appendHandoffRecoverySuccess(
+    job.eventType,
+    job.payload,
+    job.attemptCount,
+    completedAt
+  );
+  const result = await database
     .update(billingOutbox)
     .set({
       status: "completed",
       lockedAt: null,
       leaseToken: null,
       lastErrorCode: null,
+      ...(completedPayload ? { payload: completedPayload } : {}),
     })
     .where(
       and(
@@ -1247,6 +1852,41 @@ async function completeBillingOutboxItem(job: ClaimedBillingOutboxItem) {
         eq(billingOutbox.leaseToken, job.leaseToken)
       )
     );
+  const metadata = Array.isArray(result) ? result[0] : result;
+  if (
+    Number((metadata as { affectedRows?: number })?.affectedRows ?? 0) !== 1
+  ) {
+    throw new Error("billing outbox completion lease was lost");
+  }
+}
+
+function appendHandoffRecoverySuccess(
+  eventType: ClaimedBillingOutboxItem["eventType"],
+  payload: unknown,
+  attemptCount: number,
+  completedAt: Date
+): Record<string, unknown> | null {
+  if (
+    eventType !== "send_portal_handoff" ||
+    !payload ||
+    typeof payload !== "object" ||
+    Array.isArray(payload)
+  ) {
+    return null;
+  }
+  const record = payload as Record<string, unknown>;
+  if (!Array.isArray(record.recoveryHistory)) return null;
+  return {
+    ...record,
+    recoveryHistory: [
+      ...(record.recoveryHistory as unknown[]).slice(-19),
+      {
+        kind: "delivered",
+        attemptCount,
+        recordedAt: completedAt.toISOString(),
+      },
+    ],
+  };
 }
 
 async function rescheduleBillingOutboxItem(
@@ -1383,6 +2023,24 @@ async function failBillingOutboxItem(
           eventType: "manual_review",
           deduplicationKey: `cancel_exhausted_review:${job.id}`,
           payload: { reason: "subscription_cancellation_exhausted" },
+          status: "pending",
+        })
+        .onDuplicateKeyUpdate({
+          set: { deduplicationKey: sql`deduplication_key` },
+        });
+    }
+    if (job.eventType === "payment_warning") {
+      await tx
+        .insert(billingOutbox)
+        .values({
+          workspaceId: job.workspaceId,
+          mode: job.mode,
+          eventType: "manual_review",
+          deduplicationKey: `customer_notification_failed:${job.deliveryId}`,
+          payload: {
+            reason: "customer_notification_delivery_failed",
+            failedDeliveryId: job.deliveryId,
+          },
           status: "pending",
         })
         .onDuplicateKeyUpdate({

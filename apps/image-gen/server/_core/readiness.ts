@@ -2,6 +2,7 @@ import type express from "express";
 import { assertProductionImageStorageConfig } from "./image-generation/imageServiceConfig";
 import {
   assertMessengerGenerationQueueConfig,
+  ensureMessengerGenerationQueueReady,
   getMessengerGenerationQueueStats,
   isMessengerGenerationQueueEnabled,
 } from "./messengerGenerationQueue";
@@ -12,10 +13,27 @@ import { ensureWebhookReplayProtectionReady } from "./webhookReplayProtection";
 import { assertPortalDatabaseConfig } from "./env";
 import { assertConversationIdentityConfig } from "./conversationIdentityConfig";
 import {
-  assertMollieConfig,
+  assertMollieBillingEnabled,
+  assertMollieNonSecretLaunchConfig,
   assertTenantBillingWorkerConfigured,
+  getConfiguredBillingMode,
+  isMollieBillingPreflightEnabled,
   isMollieBillingEnabled,
+  isMollieEntitlementEnforcementEnabled,
 } from "./billing/config";
+import {
+  assertBillingNotificationConfig,
+  isBillingNotificationPlaneEnabled,
+} from "./billing/billingNotificationDelivery";
+import { assertBillingDatabaseReadiness } from "./billing/billingReadiness";
+import { assertBillingNotificationRuntimeReadiness } from "./billing/billingReadiness";
+import { assertAiAnswerFinalizationReadiness } from "./billing/billingReadiness";
+import { assertMollieAccountingWorkerReadiness } from "./billing/billingReadiness";
+import { ensureMessengerGenerationCompletionReady } from "./messengerGenerationCompletion";
+import {
+  getMollieAccountingImportConfig,
+  isMollieAccountingImportEnabled,
+} from "./billing/accountingWorker";
 
 export type ReadinessCheck = {
   name: string;
@@ -77,6 +95,8 @@ export function createReadinessHandler(
 }
 
 export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
+  const aiFinalizationDrainEnabled =
+    process.env.AI_ANSWER_FINALIZATION_DRAIN_ENABLED === "true";
   return [
     {
       name: "conversation_identity_config",
@@ -100,8 +120,55 @@ export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
       name: "mollie_billing_config",
       check: () => {
         if (isMollieBillingEnabled()) {
-          assertMollieConfig();
+          assertMollieBillingEnabled();
           assertTenantBillingWorkerConfigured();
+        }
+      },
+    },
+    {
+      name: "billing_notification_plane",
+      check: () => {
+        if (isBillingNotificationPlaneEnabled()) {
+          assertBillingNotificationConfig();
+        }
+      },
+    },
+    {
+      name: "billing_notification_runtime",
+      check: async () => {
+        if (isBillingNotificationPlaneEnabled()) {
+          await assertBillingNotificationRuntimeReadiness(
+            getConfiguredBillingMode()
+          );
+        }
+      },
+    },
+    {
+      name: "mollie_launch_nonsecret_preflight",
+      check: async () => {
+        if (isMollieBillingPreflightEnabled()) {
+          assertMollieNonSecretLaunchConfig();
+          await assertBillingDatabaseReadiness(getConfiguredBillingMode());
+        }
+      },
+    },
+    {
+      name: "ai_answer_finalization",
+      check: async () => {
+        if (
+          isMollieEntitlementEnforcementEnabled() ||
+          aiFinalizationDrainEnabled
+        ) {
+          await assertAiAnswerFinalizationReadiness(getConfiguredBillingMode());
+        }
+      },
+    },
+    {
+      name: "mollie_accounting_import",
+      check: async () => {
+        if (isMollieAccountingImportEnabled()) {
+          const config = getMollieAccountingImportConfig();
+          await assertMollieAccountingWorkerReadiness(config);
         }
       },
     },
@@ -130,6 +197,8 @@ export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
           return;
         }
 
+        await ensureMessengerGenerationQueueReady();
+        await ensureMessengerGenerationCompletionReady();
         await getMessengerGenerationQueueStats();
       },
     },

@@ -7,25 +7,63 @@ import type { MollieClient, MollieSubscription } from "./mollieClient";
 
 const databaseMock = vi.hoisted(() => vi.fn());
 const handoffMock = vi.hoisted(() => vi.fn());
+const beginHandoffFenceMock = vi.hoisted(() => vi.fn());
+const advanceHandoffFenceMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../db", () => ({ getDatabaseOrThrow: databaseMock }));
-vi.mock("../portalHandoffDelivery", () => ({ sendPortalHandoffLink: handoffMock }));
+vi.mock("../../db", () => ({
+  getDatabaseOrThrow: databaseMock,
+  beginBillingHandoffDelivery: beginHandoffFenceMock,
+  advanceBillingHandoffDeliveryFence: advanceHandoffFenceMock,
+}));
+vi.mock("../portalHandoffDelivery", () => ({
+  sendPortalHandoffLink: handoffMock,
+}));
 
 import {
   cancelContainedMollieSubscription,
   claimBillingOutboxItem,
   collectingSubscriptionsForIntent,
+  isCriticalContainmentJob,
   mandateMatchesCurrentSubscription,
   sendPaymentHandoff,
 } from "./outboxWorker";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  beginHandoffFenceMock.mockResolvedValue({
+    outboxId: 9,
+    workspaceId: 42,
+    mode: "test",
+    leaseToken: "lease-1",
+    deliveryEpoch: 1,
+  });
+  advanceHandoffFenceMock.mockResolvedValue(true);
 });
 
 describe("billing outbox containment safeguards", () => {
+  it.each([
+    ["cancel_subscription", "billing_profile_revoked", true],
+    ["cancel_subscription", "billing_profile_expired", true],
+    ["cancel_payment", "billing_profile_revoked", true],
+    ["cancel_subscription", "replacement_subscription", false],
+    ["manual_review", "billing_profile_revoked", false],
+  ] as const)(
+    "classifies %s/%s as continuously contained=%s",
+    (eventType, reason, expected) => {
+      expect(
+        isCriticalContainmentJob({
+          eventType,
+          payload: { reason },
+        } as BillingOutboxItem)
+      ).toBe(expected);
+    }
+  );
   it("retries the same handoff operation with its original delivery identity", async () => {
-    handoffMock.mockResolvedValue({ ok: true, sent: true, expiresAt: new Date() });
+    handoffMock.mockResolvedValue({
+      ok: true,
+      sent: true,
+      expiresAt: new Date(),
+    });
     const job = {
       workspaceId: 42,
       payload: {
@@ -37,18 +75,57 @@ describe("billing outbox containment safeguards", () => {
     await sendPaymentHandoff(job);
     await sendPaymentHandoff(job);
     expect(handoffMock).toHaveBeenCalledTimes(2);
-    expect(handoffMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      workspaceId: 42,
-      messengerSenderUserKey: "a".repeat(64),
-      expectedFacebookPageId: "page-42",
-      deliveryIdempotencyKey: "550e8400-e29b-41d4-a716-446655440000",
-    }));
-    expect(handoffMock.mock.calls[1]).toEqual(handoffMock.mock.calls[0]);
+    expect(handoffMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        workspaceId: 42,
+        messengerSenderUserKey: "a".repeat(64),
+        expectedFacebookPageId: "page-42",
+        deliveryIdempotencyKey: "550e8400-e29b-41d4-a716-446655440000",
+      })
+    );
+    expect(handoffMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        workspaceId: 42,
+        messengerSenderUserKey: "a".repeat(64),
+        expectedFacebookPageId: "page-42",
+        deliveryIdempotencyKey: "550e8400-e29b-41d4-a716-446655440000",
+      })
+    );
   });
 
   it("fails closed for a handoff without an intent id before sending", async () => {
-    const job = { workspaceId: 42, payload: { messengerSenderUserKey: "a".repeat(64), messengerPageId: "page-42" } } as BillingOutboxItem & { leaseToken: string };
-    await expect(sendPaymentHandoff(job)).rejects.toThrow("invalid_portal_handoff_target");
+    const job = {
+      workspaceId: 42,
+      payload: {
+        messengerSenderUserKey: "a".repeat(64),
+        messengerPageId: "page-42",
+      },
+    } as BillingOutboxItem & { leaseToken: string };
+    await expect(sendPaymentHandoff(job)).rejects.toThrow(
+      "invalid_portal_handoff_target"
+    );
+    expect(handoffMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before Messenger transport after handoff identity erasure", async () => {
+    beginHandoffFenceMock.mockRejectedValue(
+      new Error("portal_handoff_identity_unavailable")
+    );
+    const job = {
+      workspaceId: 42,
+      mode: "test",
+      payload: {
+        intentId: "550e8400-e29b-41d4-a716-446655440000",
+        messengerSenderUserKey: "a".repeat(64),
+        messengerPageId: "page-42",
+      },
+    } as BillingOutboxItem & { leaseToken: string };
+
+    await expect(sendPaymentHandoff(job)).rejects.toThrow(
+      "portal_handoff_identity_unavailable"
+    );
     expect(handoffMock).not.toHaveBeenCalled();
   });
   it("preserves a unique provisioning remote when the valid mandate was not stored yet", () => {
@@ -210,6 +287,33 @@ describe("billing outbox containment safeguards", () => {
     expect(cancelSubscription).toHaveBeenCalledOnce();
   });
 
+  it("cancels the exact current remote once when the billing profile was revoked", async () => {
+    const current = manualReviewSubscription();
+    const { database } = transactionalDatabase([
+      [current],
+      [current],
+      [current],
+    ]);
+    databaseMock.mockResolvedValue(database);
+    const remote = remoteSubscription();
+    const cancelSubscription = vi.fn().mockResolvedValue(undefined);
+    const job = containmentJob();
+    job.payload = { ...job.payload, reason: "billing_profile_revoked" };
+
+    await expect(
+      cancelContainedMollieSubscription(
+        job,
+        { customerId: "cst_customer123", subscriptionId: remote.id },
+        {
+          getSubscription: vi.fn().mockResolvedValue(remote),
+          cancelSubscription,
+        } as unknown as MollieClient
+      )
+    ).resolves.toBe("canceled");
+
+    expect(cancelSubscription).toHaveBeenCalledOnce();
+  });
+
   it("does not claim a second workspace job while another lease is processing", async () => {
     const pendingSelect = vi.fn();
     const tx = {
@@ -244,6 +348,26 @@ describe("billing outbox containment safeguards", () => {
     expect(pendingSelect).not.toHaveBeenCalled();
   });
 });
+
+function handoffFenceDatabase(resultSets: unknown[][]) {
+  let index = 0;
+  const tx = {
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi.fn(() => ({
+            for: vi.fn(async () => resultSets[index++] ?? []),
+          })),
+        })),
+      })),
+    })),
+  };
+  return {
+    transaction: vi.fn(async (callback: (value: typeof tx) => unknown) =>
+      callback(tx)
+    ),
+  };
+}
 
 function transactionalDatabase(rowsByTransaction: BillingSubscription[][]) {
   let inTransaction = false;

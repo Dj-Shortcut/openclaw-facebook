@@ -6,6 +6,65 @@ describe("sendMessengerText", () => {
     vi.useRealTimers();
   });
 
+  it.each([
+    [400, "known_rejected"],
+    [429, "known_rejected"],
+    [503, "ambiguous"],
+  ] as const)(
+    "classifies Graph HTTP %s as %s after the transport boundary",
+    async (status, expected) => {
+      const onTransportOutcome = vi.fn().mockResolvedValue(undefined);
+      const fetchMock = vi.fn(async () =>
+        new Response(JSON.stringify({ error: { message: "rejected" } }), {
+          status,
+          headers: { "content-type": "application/json" },
+        })
+      );
+
+      await expect(
+        sendMessengerText("psid-1", "hello", {
+          cfg: {
+            channels: {
+              facebook: {
+                pageId: "page-1",
+                pageAccessToken: "token-1",
+                appSecret: "secret-1",
+                verifyToken: "verify-1",
+              },
+            },
+          } as never,
+          fetch: fetchMock as never,
+          beforeTransport: vi.fn().mockResolvedValue(undefined),
+          onTransportOutcome,
+        })
+      ).rejects.toThrow();
+
+      expect(onTransportOutcome).toHaveBeenCalledWith(expected);
+    }
+  );
+
+  it("classifies a dropped Graph response as ambiguous", async () => {
+    const onTransportOutcome = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      sendMessengerText("psid-1", "hello", {
+        cfg: {
+          channels: {
+            facebook: {
+              pageId: "page-1",
+              pageAccessToken: "token-1",
+              appSecret: "secret-1",
+              verifyToken: "verify-1",
+            },
+          },
+        } as never,
+        fetch: vi.fn().mockRejectedValue(new Error("socket reset")) as never,
+        beforeTransport: vi.fn().mockResolvedValue(undefined),
+        onTransportOutcome,
+      })
+    ).rejects.toThrow("Messenger send failed");
+    expect(onTransportOutcome).toHaveBeenCalledWith("ambiguous");
+  });
+
   it("sends RESPONSE messages to the Page messages endpoint", async () => {
     const fetchMock = vi.fn(
       async (_url: string, _init?: RequestInit) =>

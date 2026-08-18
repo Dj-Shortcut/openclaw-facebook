@@ -176,7 +176,7 @@ describe("webhookIngressQueue", () => {
 
     await vi.waitFor(() => {
       expect(redis.rpush).toHaveBeenCalledWith(
-        "meta-webhook-ingress",
+        "{meta-webhook-ingress}:queued",
         expect.any(String)
       );
     });
@@ -251,7 +251,7 @@ describe("webhookIngressQueue", () => {
 
     await vi.waitFor(() => {
       expect(redis.rpush).toHaveBeenCalledWith(
-        "meta-webhook-ingress",
+        "{meta-webhook-ingress}:queued",
         expect.any(String)
       );
     });
@@ -293,7 +293,7 @@ describe("webhookIngressQueue", () => {
 
     await vi.waitFor(() => {
       expect(redis.rpush).toHaveBeenCalledWith(
-        "meta-webhook-ingress",
+        "{meta-webhook-ingress}:queued",
         expect.any(String)
       );
     });
@@ -371,7 +371,7 @@ describe("webhookIngressQueue", () => {
 
     await vi.waitFor(() => {
       expect(redis.rpush).toHaveBeenCalledWith(
-        "meta-webhook-ingress:dead",
+        "{meta-webhook-ingress}:dead",
         expect.any(String)
       );
     });
@@ -419,7 +419,7 @@ describe("webhookIngressQueue", () => {
 
     await vi.waitFor(() => {
       expect(redis.rpush).toHaveBeenCalledWith(
-        "meta-webhook-ingress:dead",
+        "{meta-webhook-ingress}:dead",
         expect.any(String)
       );
     });
@@ -560,7 +560,7 @@ describe("webhookIngressQueue", () => {
     expect(queue).toEqual([]);
     expect(dead).toEqual([]);
     expect(redis.lpush).not.toHaveBeenCalledWith(
-      "meta-webhook-ingress",
+      "{meta-webhook-ingress}:queued",
       expect.any(String)
     );
   });
@@ -603,7 +603,7 @@ describe("webhookIngressQueue", () => {
     expect(queue).toEqual([]);
     expect(dead).toEqual([]);
     expect(redis.lrem).not.toHaveBeenCalledWith(
-      "meta-webhook-ingress:processing",
+      "{meta-webhook-ingress}:processing",
       1,
       delivery
     );
@@ -641,7 +641,7 @@ describe("webhookIngressQueue", () => {
 
     await vi.waitFor(() => {
       expect(redis.lpush).toHaveBeenCalledWith(
-        "meta-webhook-ingress",
+        "{meta-webhook-ingress}:queued",
         expiredDelivery
       );
     });
@@ -675,7 +675,7 @@ describe("webhookIngressQueue", () => {
 
     await vi.waitFor(() => {
       expect(redis.lrem).toHaveBeenCalledWith(
-        "meta-webhook-ingress:processing",
+        "{meta-webhook-ingress}:processing",
         1,
         expiredDelivery
       );
@@ -705,7 +705,7 @@ function createQueueRedis(
     }),
     get: vi.fn(async (key: string) => leases.get(key) ?? null),
     lpush: vi.fn(async (key: string, value: string) => {
-      if (key === "meta-webhook-ingress") {
+      if (key === "{meta-webhook-ingress}:queued") {
         queue.unshift(value);
         return queue.length;
       }
@@ -726,7 +726,7 @@ function createQueueRedis(
       return value;
     }),
     rpush: vi.fn(async (key: string, value: string) => {
-      if (key === "meta-webhook-ingress:dead") {
+      if (key === "{meta-webhook-ingress}:dead") {
         dead.push(value);
         return dead.length;
       }
@@ -779,7 +779,7 @@ function createQueueRedis(
         }
 
         const removed = await redis.lrem(
-          "meta-webhook-ingress:processing",
+          "{meta-webhook-ingress}:processing",
           1,
           rawDelivery
         );

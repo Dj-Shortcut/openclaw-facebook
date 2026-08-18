@@ -3,7 +3,11 @@ import type { MessengerSendOutcome } from "./messengerApi";
 import { recordActiveUserToday } from "./botRuntimeStats";
 import { classifyInboundEvent } from "./messengerInboundClassification";
 import { recordInboundUserActivity } from "./messengerInboundActivity";
-import { getOrCreateState, setMessengerPageId } from "./messengerState";
+import {
+  getOrCreateState,
+  setMessengerOwnership,
+  setMessengerPageId,
+} from "./messengerState";
 import { normalizeLang, type Lang } from "./i18n";
 import { toUserKey } from "./privacy";
 import type { FacebookWebhookEvent } from "./webhookHelpers";
@@ -13,6 +17,12 @@ import {
   sendFallbackTextIfNeeded,
 } from "./webhookFallback";
 import type { HandlerContext } from "./webhookHandlerTypes";
+import {
+  getMessengerRequestOwnership,
+  setMessengerRequestOperationId,
+  setMessengerRequestPrivacySubject,
+} from "./messengerRequestContext";
+import { ensureActiveMessengerPrivacySubject } from "./messengerPrivacySubject";
 
 type MessengerState = Awaited<ReturnType<typeof getOrCreateState>>;
 
@@ -25,6 +35,7 @@ export type TrackedEventContext = {
   senderLocale?: string;
   state: MessengerState;
   classification: ReturnType<typeof classifyInboundEvent>;
+  entryId?: string;
   responseSent: () => boolean;
   markResponseSentFromOutcome: (
     outcome: MessengerSendOutcome | undefined
@@ -44,6 +55,24 @@ export async function createTrackedEventContext(
 
   const userId = toUserKey(psid);
   const reqId = randomUUID();
+  setMessengerRequestOperationId(reqId);
+  const ownership = getMessengerRequestOwnership();
+  if (!ownership && process.env.NODE_ENV === "production") {
+    return null;
+  }
+  let privacyEpoch: number | undefined;
+  if (ownership) {
+    try {
+      privacyEpoch = await ensureActiveMessengerPrivacySubject({
+        workspaceId: ownership.workspaceId,
+        channelConnectionId: ownership.channelConnectionId,
+        userKey: userId,
+      });
+    } catch {
+      return null;
+    }
+    setMessengerRequestPrivacySubject({ userKey: userId, privacyEpoch });
+  }
   const responseTracker = createResponseSentTracker();
   const trackedCtx = createTrackedHandlerContext(
     ctx,
@@ -64,9 +93,18 @@ export async function createTrackedEventContext(
     await Promise.resolve(setMessengerPageId(psid, entryId));
     state.pageId = entryId.trim();
   }
+  if (ownership && privacyEpoch) {
+    await Promise.resolve(
+      setMessengerOwnership(psid, { ...ownership, privacyEpoch })
+    );
+    Object.assign(state, ownership, { privacyEpoch });
+  }
   const lang = state.preferredLang || localeLang || ctx.defaultLang;
   const classification = classifyInboundEvent(event);
-  await recordInboundUserActivity(psid, event, classification);
+  await recordInboundUserActivity(psid, event, classification, {
+    entryId,
+    allowPaidRecovery: false,
+  });
   const sendFallbackIfNeeded = () =>
     sendFallbackTextIfNeeded({
       isInboundUserEvent: classification.isInboundUserEvent,
@@ -89,6 +127,7 @@ export async function createTrackedEventContext(
     senderLocale,
     state,
     classification,
+    entryId,
     responseSent: responseTracker.responseSent,
     markResponseSentFromOutcome: responseTracker.markResponseSentFromOutcome,
     sendFallbackIfNeeded,

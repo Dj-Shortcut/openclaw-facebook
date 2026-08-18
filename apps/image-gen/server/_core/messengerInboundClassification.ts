@@ -1,11 +1,5 @@
-import {
-  FACE_MEMORY_CONSENT_NO,
-  FACE_MEMORY_CONSENT_YES,
-} from "./faceMemory";
-import {
-  detectAck,
-  type FacebookWebhookEvent,
-} from "./webhookHelpers";
+import { FACE_MEMORY_CONSENT_NO, FACE_MEMORY_CONSENT_YES } from "./faceMemory";
+import { detectAck, type FacebookWebhookEvent } from "./webhookHelpers";
 import { decodeMessengerActionInput } from "./messengerActionPayload";
 
 export type InboundEventClassification = {
@@ -13,6 +7,7 @@ export type InboundEventClassification = {
   eventPayload: string | undefined;
   isIntentionalSilentAck: boolean;
   isIntentionalSilentUnknownPayload: boolean;
+  isPrivacyOrConsentControl: boolean;
 };
 
 function isKnownMessengerPayload(payload: string | undefined): boolean {
@@ -21,9 +16,9 @@ function isKnownMessengerPayload(payload: string | undefined): boolean {
   }
 
   return Boolean(
-      payload === FACE_MEMORY_CONSENT_YES ||
-      payload === FACE_MEMORY_CONSENT_NO ||
-      Boolean(decodeMessengerActionInput(payload))
+    payload === FACE_MEMORY_CONSENT_YES ||
+    payload === FACE_MEMORY_CONSENT_NO ||
+    Boolean(decodeMessengerActionInput(payload))
   );
 }
 
@@ -34,9 +29,13 @@ export function classifyInboundEvent(
     event.postback || (event.message && !event.message.is_echo)
   );
   const isIntentionalSilentAck = Boolean(detectAck(event.message?.text));
-  const eventPayload = event.message?.quick_reply?.payload ?? event.postback?.payload;
+  const eventPayload =
+    event.message?.quick_reply?.payload ?? event.postback?.payload;
   const isIntentionalSilentUnknownPayload = Boolean(
     eventPayload && !isKnownMessengerPayload(eventPayload)
+  );
+  const isPrivacyOrConsentControl = Boolean(
+    eventPayload && /^(?:GDPR_|CONSENT_)/.test(eventPayload)
   );
 
   return {
@@ -44,5 +43,6 @@ export function classifyInboundEvent(
     eventPayload,
     isIntentionalSilentAck,
     isIntentionalSilentUnknownPayload,
+    isPrivacyOrConsentControl,
   };
 }

@@ -5,16 +5,33 @@ const storeMocks = vi.hoisted(() => ({
   attachMollieCustomer: vi.fn(),
   attachMolliePayment: vi.fn(),
   claimIntentPaymentCreation: vi.fn(),
+  finalizePaymentProviderOperation: vi.fn(),
   getBillingCustomer: vi.fn(),
   getBillingIntent: vi.fn(),
+  isCheckoutUrlExposureAllowed: vi.fn(),
   markBillingCustomerManualReview: vi.fn(),
   markIntentApiUnknown: vi.fn(),
   markIntentPaymentMismatch: vi.fn(),
+  markPaymentProviderTransportStarted: vi.fn(),
   reserveBillingCustomer: vi.fn(),
   reserveCheckoutIntent: vi.fn(),
 }));
 
 vi.mock("./checkoutStore", () => storeMocks);
+vi.mock("./billingProfileStore", () => ({
+  assertWorkspaceBillingProfileEligible: vi.fn(async () => ({
+    eligibilityVersion: 1,
+  })),
+}));
+vi.mock("./billingSchedulerStore", () => ({
+  assertBillingSchedulerTenantEnabled: vi.fn(async () => ({
+    workspaceId: 1,
+    mode: "test",
+    laneEpochs: {},
+  })),
+  assertBillingExecutionBoundary: vi.fn(async () => undefined),
+  wakeBillingSchedulerTenant: vi.fn(async () => true),
+}));
 
 import { startMollieCheckout } from "./checkoutService";
 
@@ -52,8 +69,15 @@ describe("Mollie checkout provider failure boundary", () => {
       },
       creationClaimed: false,
     });
-    storeMocks.claimIntentPaymentCreation.mockResolvedValue(true);
+    storeMocks.claimIntentPaymentCreation.mockResolvedValue({
+      claimed: true,
+      operationId: "operation-1",
+      leaseToken: "lease-1",
+    });
+    storeMocks.markPaymentProviderTransportStarted.mockResolvedValue(true);
+    storeMocks.finalizePaymentProviderOperation.mockResolvedValue(true);
     storeMocks.attachMolliePayment.mockResolvedValue(true);
+    storeMocks.isCheckoutUrlExposureAllowed.mockResolvedValue(true);
   });
 
   afterEach(() => {
@@ -91,6 +115,46 @@ describe("Mollie checkout provider failure boundary", () => {
     );
     expect(storeMocks.markIntentApiUnknown).toHaveBeenCalledWith(intentId);
     expect(storeMocks.markIntentPaymentMismatch).not.toHaveBeenCalled();
+    expect(
+      storeMocks.markPaymentProviderTransportStarted
+    ).toHaveBeenCalledOnce();
+    expect(storeMocks.finalizePaymentProviderOperation).toHaveBeenCalledWith({
+      operationId: "operation-1",
+      leaseToken: "lease-1",
+      outcome: "ambiguous",
+    });
+  });
+
+  it("does not call Mollie when the durable transport fence is lost", async () => {
+    storeMocks.markPaymentProviderTransportStarted.mockResolvedValue(false);
+    const client = checkoutClient();
+
+    await expect(startMollieCheckout(checkoutInput(), client)).rejects.toThrow(
+      "provider operation fence was lost"
+    );
+
+    expect(client.createOneTimePayment).not.toHaveBeenCalled();
+    expect(storeMocks.finalizePaymentProviderOperation).not.toHaveBeenCalled();
+    expect(storeMocks.markIntentApiUnknown).toHaveBeenCalledWith(intentId);
+  });
+
+  it("contains the exact remote payment when the result fence is lost", async () => {
+    storeMocks.finalizePaymentProviderOperation.mockResolvedValue(false);
+    const client = checkoutClient();
+
+    await expect(startMollieCheckout(checkoutInput(), client)).rejects.toThrow(
+      "provider result fence was lost"
+    );
+
+    expect(client.createOneTimePayment).toHaveBeenCalledOnce();
+    expect(storeMocks.attachMolliePayment).toHaveBeenCalledWith({
+      intentId,
+      workspaceId: 1,
+      mode: "test",
+      molliePaymentId: "tr_payment123",
+      billingProfileVersion: 1,
+    });
+    expect(storeMocks.markIntentApiUnknown).toHaveBeenCalledWith(intentId);
   });
 
   it("uses a one-off payment and never the first-payment subscription path for Startpilot", async () => {

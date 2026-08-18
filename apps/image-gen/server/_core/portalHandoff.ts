@@ -2,7 +2,10 @@ import crypto from "node:crypto";
 import * as db from "../db";
 import { toUserKey } from "./privacy";
 
-const DEFAULT_HANDOFF_TTL_MS = 24 * 60 * 60 * 1000;
+// The billing outbox's bounded 12-attempt backoff can span about 34.5 hours.
+// Keep one delivery capability valid across that retry horizon without minting
+// another delivery identity or payment.
+const DEFAULT_HANDOFF_TTL_MS = 48 * 60 * 60 * 1000;
 const TOKEN_BYTES = 32;
 
 export type PortalHandoffPurpose = "workspace_onboarding";
@@ -65,15 +68,22 @@ function createOpaqueToken(): string {
   return crypto.randomBytes(TOKEN_BYTES).toString("base64url");
 }
 
-function createDeliveryToken(deliveryIdempotencyKey?: string | null): string {
+function createDeliveryToken(
+  deliveryIdempotencyKey?: string | null,
+  capabilityGeneration = 1
+): string {
   if (!deliveryIdempotencyKey) return createOpaqueToken();
   const secret = process.env.PORTAL_HANDOFF_TOKEN_SECRET?.trim();
   if (!secret || secret.length < 32) {
-    throw new Error("PORTAL_HANDOFF_TOKEN_SECRET must be set for idempotent delivery");
+    throw new Error(
+      "PORTAL_HANDOFF_TOKEN_SECRET must be set for idempotent delivery"
+    );
   }
   return crypto
     .createHmac("sha256", secret)
-    .update(`portal-handoff-v1:${deliveryIdempotencyKey}`)
+    .update(
+      `portal-handoff-v2:${deliveryIdempotencyKey}:${capabilityGeneration}`
+    )
     .digest("base64url");
 }
 
@@ -86,13 +96,14 @@ export async function createPortalHandoffToken(
     throw new Error("portal handoff ttl must be positive");
   }
 
-  const token = createDeliveryToken(input.deliveryIdempotencyKey);
+  const token = createDeliveryToken(input.deliveryIdempotencyKey, 1);
   const tokenHash = hashPortalHandoffToken(token);
   const expiresAt = new Date(now.getTime() + ttlMs);
 
   const tokenRecord = {
     workspaceId: input.workspaceId,
     tokenHash,
+    capabilityGeneration: 1,
     deliveryIdempotencyKeyHash: input.deliveryIdempotencyKey
       ? hashDeliveryIdempotencyKey(input.deliveryIdempotencyKey)
       : null,
@@ -104,9 +115,19 @@ export async function createPortalHandoffToken(
     createdByUserId: input.createdByUserId ?? null,
   };
   const stored = input.deliveryIdempotencyKey
-    ? await db.createOrGetPortalHandoffToken(tokenRecord)
+    ? await db.createOrGetPortalHandoffToken(tokenRecord, now, generation =>
+        hashPortalHandoffToken(
+          createDeliveryToken(input.deliveryIdempotencyKey, generation)
+        )
+      )
     : await db.createPortalHandoffToken(tokenRecord);
-  if (stored.tokenHash !== tokenHash) {
+  const activeToken = input.deliveryIdempotencyKey
+    ? createDeliveryToken(
+        input.deliveryIdempotencyKey,
+        stored.capabilityGeneration
+      )
+    : token;
+  if (stored.tokenHash !== hashPortalHandoffToken(activeToken)) {
     throw new Error("portal handoff delivery token secret mismatch");
   }
   if (stored.status !== "pending") {
@@ -122,6 +143,7 @@ export async function createPortalHandoffToken(
       userId: input.createdByUserId,
       event: "portal_handoff.created",
       metadata: {
+        actor: "workspace_user",
         purpose: input.purpose ?? "workspace_onboarding",
         hasMessengerSenderUserKey: Boolean(input.messengerSenderUserKey),
         expiresAt: stored.expiresAt.toISOString(),
@@ -130,8 +152,8 @@ export async function createPortalHandoffToken(
   }
 
   return {
-    token,
-    tokenHash,
+    token: activeToken,
+    tokenHash: stored.tokenHash,
     expiresAt: stored.expiresAt,
   };
 }
@@ -171,7 +193,9 @@ export async function getPortalHandoffContext(
   token: string,
   now = new Date()
 ): Promise<PortalHandoffContext | null> {
-  const stored = await db.getPortalHandoffTokenByHash(hashPortalHandoffToken(token));
+  const stored = await db.getPortalHandoffTokenByHash(
+    hashPortalHandoffToken(token)
+  );
   if (!stored) return null;
 
   const status =

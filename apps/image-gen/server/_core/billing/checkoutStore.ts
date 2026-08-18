@@ -1,9 +1,14 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { createHash, randomUUID } from "node:crypto";
+import { and, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import {
   billingCustomers,
   billingIntents,
   billingOutbox,
+  billingProviderOperations,
   billingSubscriptions,
+  billingSchedulerTenants,
+  billingWebhookRoutes,
+  workspaceBillingProfiles,
   workspaces,
   type BillingCustomer,
   type BillingIntent,
@@ -16,12 +21,11 @@ import {
   createExternalBillingReference,
   createOpaqueBillingId,
   deterministicIdempotencyKey,
+  hashCanonicalSnapshot,
 } from "./ids";
 
 export type CheckoutKind =
-  | "subscription_start"
-  | "payment_method_change"
-  | "startpilot_purchase";
+  "subscription_start" | "payment_method_change" | "startpilot_purchase";
 
 export type BillingCustomerReservation = {
   customer: BillingCustomer;
@@ -67,6 +71,7 @@ export async function reserveCheckoutIntent(input: {
   kind: CheckoutKind;
   messengerSenderUserKey?: string | null;
   messengerPageId?: string | null;
+  billingProfileVersion: number;
 }): Promise<BillingIntent> {
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
@@ -147,7 +152,8 @@ export async function reserveCheckoutIntent(input: {
         (input.messengerSenderUserKey ?? null) !==
           (reusable[0].messengerSenderUserKey ?? null) ||
         (input.messengerPageId ?? null) !==
-          (reusable[0].messengerPageId ?? null)
+          (reusable[0].messengerPageId ?? null) ||
+        reusable[0].billingProfileVersion !== input.billingProfileVersion
       ) {
         throw new Error("workspace already has a checkout in progress");
       }
@@ -172,6 +178,7 @@ export async function reserveCheckoutIntent(input: {
       checkoutScopeKey: `${input.mode}:${input.workspaceId}:${input.kind}:${intentId}`,
       messengerSenderUserKey: input.messengerSenderUserKey ?? null,
       messengerPageId: input.messengerPageId ?? null,
+      billingProfileVersion: input.billingProfileVersion,
     });
 
     const created = await tx
@@ -376,31 +383,287 @@ export async function getBillingCustomer(
   return result[0] ?? null;
 }
 
-export async function claimIntentPaymentCreation(
-  intentId: string
-): Promise<boolean> {
+export async function claimIntentPaymentCreation(input: {
+  intentId: string;
+  workspaceId: number;
+  mode: MollieMode;
+  billingProfileVersion: number;
+  providerRequest: {
+    customerId: string;
+    amount: { currency: string; value: string };
+    description: string;
+    intentId: string;
+    redirectUrl: string;
+    webhookUrl: string;
+    idempotencyKey: string;
+    offerType: "one_time" | "subscription";
+  };
+}): Promise<
+  | { claimed: false }
+  | { claimed: true; operationId: string; leaseToken: string }
+> {
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
-    const intents = await tx
-      .select({ status: billingIntents.status })
-      .from(billingIntents)
-      .where(eq(billingIntents.intentId, intentId))
+    const now = new Date();
+    const profiles = await tx
+      .select()
+      .from(workspaceBillingProfiles)
+      .where(eq(workspaceBillingProfiles.workspaceId, input.workspaceId))
       .limit(1)
       .for("update");
-    if (intents[0]?.status !== "created") {
-      return false;
+    if (
+      !isBillingProfileVersionEligible(
+        profiles[0],
+        input.billingProfileVersion,
+        now
+      )
+    ) {
+      return { claimed: false };
     }
+    const intents = await tx
+      .select({
+        status: billingIntents.status,
+        workspaceId: billingIntents.workspaceId,
+        mode: billingIntents.mode,
+        billingProfileVersion: billingIntents.billingProfileVersion,
+        expectedAmount: billingIntents.expectedAmount,
+        currency: billingIntents.currency,
+        mollieDescription: billingIntents.mollieDescription,
+        idempotencyKey: billingIntents.idempotencyKey,
+      })
+      .from(billingIntents)
+      .where(
+        and(
+          eq(billingIntents.intentId, input.intentId),
+          eq(billingIntents.workspaceId, input.workspaceId),
+          eq(billingIntents.mode, input.mode)
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (
+      intents[0]?.status !== "created" ||
+      intents[0].billingProfileVersion !== input.billingProfileVersion ||
+      input.providerRequest.intentId !== input.intentId ||
+      input.providerRequest.amount.value !== intents[0].expectedAmount ||
+      input.providerRequest.amount.currency !== intents[0].currency ||
+      input.providerRequest.description !== intents[0].mollieDescription ||
+      input.providerRequest.idempotencyKey !== intents[0].idempotencyKey
+    ) {
+      return { claimed: false };
+    }
+    const leaseToken = randomUUID();
+    const credentialGenerationId =
+      process.env.MOLLIE_CREDENTIAL_GENERATION_ID?.trim() ||
+      (process.env.NODE_ENV === "test" ? "test-generation" : "");
+    if (!credentialGenerationId) {
+      throw new Error("Mollie credential generation id is required");
+    }
+    const requestFingerprint = hashCanonicalSnapshot(input.providerRequest);
+    const idempotencyKeyHash = createHash("sha256")
+      .update(intents[0].idempotencyKey)
+      .digest("hex");
+    const existingOperations = await tx
+      .select()
+      .from(billingProviderOperations)
+      .where(
+        and(
+          eq(billingProviderOperations.mode, input.mode),
+          eq(billingProviderOperations.operationType, "create_payment"),
+          eq(billingProviderOperations.operationKey, input.intentId)
+        )
+      )
+      .limit(1)
+      .for("update");
+    const existing = existingOperations[0];
+    if (existing) {
+      if (
+        existing.state !== "known_failed" ||
+        existing.firstStartedAt ||
+        existing.requestFingerprint !== requestFingerprint ||
+        existing.billingProfileVersion !== input.billingProfileVersion ||
+        existing.credentialGenerationId !== credentialGenerationId ||
+        existing.idempotencyKeyHash !== idempotencyKeyHash
+      ) {
+        return { claimed: false };
+      }
+      const resumed = await tx
+        .update(billingProviderOperations)
+        .set({
+          state: "reserved",
+          leaseToken,
+          leaseUntil: new Date(now.getTime() + 60_000),
+          resolutionDueAt: new Date(now.getTime() + 5 * 60_000),
+        })
+        .where(
+          and(
+            eq(billingProviderOperations.operationId, existing.operationId),
+            eq(billingProviderOperations.state, "known_failed")
+          )
+        );
+      if (providerOperationAffectedRows(resumed) !== 1) {
+        return { claimed: false };
+      }
+      await tx
+        .update(billingIntents)
+        .set({ status: "creating_payment" })
+        .where(
+          and(
+            eq(billingIntents.intentId, input.intentId),
+            eq(billingIntents.status, "created")
+          )
+        );
+      return { claimed: true, operationId: existing.operationId, leaseToken };
+    }
+    const operationId = randomUUID();
+    await tx.insert(billingProviderOperations).values({
+      operationId,
+      workspaceId: input.workspaceId,
+      mode: input.mode,
+      operationType: "create_payment",
+      operationKey: input.intentId,
+      intentId: input.intentId,
+      billingProfileVersion: input.billingProfileVersion,
+      state: "reserved",
+      requestFingerprint,
+      idempotencyKeyHash,
+      credentialGenerationId,
+      leaseToken,
+      leaseUntil: new Date(now.getTime() + 60_000),
+      resolutionDueAt: new Date(now.getTime() + 5 * 60_000),
+    });
     await tx
       .update(billingIntents)
       .set({ status: "creating_payment" })
       .where(
         and(
-          eq(billingIntents.intentId, intentId),
+          eq(billingIntents.intentId, input.intentId),
+          eq(billingIntents.workspaceId, input.workspaceId),
+          eq(billingIntents.mode, input.mode),
+          eq(billingIntents.billingProfileVersion, input.billingProfileVersion),
           eq(billingIntents.status, "created")
         )
       );
-    return true;
+    return { claimed: true, operationId, leaseToken };
   });
+}
+
+export async function resolveDuePaymentProviderOperations(
+  workspaceId: number,
+  mode: MollieMode,
+  now = new Date(),
+  limit = 50
+): Promise<number> {
+  const database = await getDatabaseOrThrow();
+  return database.transaction(async tx => {
+    const rows = await tx
+      .select({
+        operationId: billingProviderOperations.operationId,
+        intentId: billingProviderOperations.intentId,
+        state: billingProviderOperations.state,
+        firstStartedAt: billingProviderOperations.firstStartedAt,
+      })
+      .from(billingProviderOperations)
+      .where(
+        and(
+          eq(billingProviderOperations.workspaceId, workspaceId),
+          eq(billingProviderOperations.mode, mode),
+          eq(billingProviderOperations.operationType, "create_payment"),
+          inArray(billingProviderOperations.state, [
+            "reserved",
+            "transport_started",
+            "ambiguous",
+          ]),
+          lte(billingProviderOperations.resolutionDueAt, now)
+        )
+      )
+      .limit(Math.max(1, Math.min(100, limit)))
+      .for("update");
+    for (const row of rows) {
+      const safePreTransport = row.state === "reserved" && !row.firstStartedAt;
+      await tx
+        .update(billingProviderOperations)
+        .set({
+          state: safePreTransport ? "known_failed" : "reconciliation_only",
+        })
+        .where(
+          and(
+            eq(billingProviderOperations.operationId, row.operationId),
+            eq(billingProviderOperations.state, row.state)
+          )
+        );
+      await tx
+        .update(billingIntents)
+        .set({ status: safePreTransport ? "created" : "api_unknown" })
+        .where(
+          and(
+            eq(billingIntents.intentId, row.intentId),
+            inArray(billingIntents.status, ["creating_payment", "api_unknown"])
+          )
+        );
+    }
+    return rows.length;
+  });
+}
+
+export async function markPaymentProviderTransportStarted(input: {
+  operationId: string;
+  leaseToken: string;
+}): Promise<boolean> {
+  const database = await getDatabaseOrThrow();
+  const now = new Date();
+  const result = await database
+    .update(billingProviderOperations)
+    .set({
+      state: "transport_started",
+      firstStartedAt: now,
+      retryBefore: new Date(now.getTime() + 55 * 60_000),
+      resolutionDueAt: new Date(now.getTime() + 5 * 60_000),
+      attemptCount: sql`${billingProviderOperations.attemptCount} + 1`,
+    })
+    .where(
+      and(
+        eq(billingProviderOperations.operationId, input.operationId),
+        eq(billingProviderOperations.leaseToken, input.leaseToken),
+        eq(billingProviderOperations.state, "reserved"),
+        gt(billingProviderOperations.leaseUntil, now)
+      )
+    );
+  return providerOperationAffectedRows(result) === 1;
+}
+
+export async function finalizePaymentProviderOperation(input: {
+  operationId: string;
+  leaseToken: string;
+  outcome: "succeeded" | "ambiguous";
+  providerResourceId?: string;
+}): Promise<boolean> {
+  const database = await getDatabaseOrThrow();
+  const result = await database
+    .update(billingProviderOperations)
+    .set({
+      state: input.outcome,
+      providerResourceId: input.providerResourceId ?? null,
+      completedAt: input.outcome === "succeeded" ? new Date() : null,
+      resolutionDueAt: new Date(),
+    })
+    .where(
+      and(
+        eq(billingProviderOperations.operationId, input.operationId),
+        eq(billingProviderOperations.leaseToken, input.leaseToken),
+        eq(billingProviderOperations.state, "transport_started")
+      )
+    );
+  return providerOperationAffectedRows(result) === 1;
+}
+
+function providerOperationAffectedRows(result: unknown): number {
+  const metadata: unknown = Array.isArray(result)
+    ? (result as unknown[])[0]
+    : result;
+  return Number(
+    (metadata as { affectedRows?: number } | undefined)?.affectedRows ?? 0
+  );
 }
 
 export async function attachMolliePayment(input: {
@@ -408,9 +671,16 @@ export async function attachMolliePayment(input: {
   workspaceId: number;
   mode: MollieMode;
   molliePaymentId: string;
+  billingProfileVersion: number;
 }): Promise<boolean> {
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
+    const profiles = await tx
+      .select()
+      .from(workspaceBillingProfiles)
+      .where(eq(workspaceBillingProfiles.workspaceId, input.workspaceId))
+      .limit(1)
+      .for("update");
     const rows = await tx
       .select()
       .from(billingIntents)
@@ -425,6 +695,90 @@ export async function attachMolliePayment(input: {
       .for("update");
     const intent = rows[0];
     if (!intent) return false;
+    await tx
+      .insert(billingWebhookRoutes)
+      .values({
+        mode: input.mode,
+        molliePaymentId: input.molliePaymentId,
+        workspaceId: input.workspaceId,
+        intentId: input.intentId,
+      })
+      .onDuplicateKeyUpdate({
+        set: { molliePaymentId: sql`mollie_payment_id` },
+      });
+    const routes = await tx
+      .select({
+        workspaceId: billingWebhookRoutes.workspaceId,
+        intentId: billingWebhookRoutes.intentId,
+      })
+      .from(billingWebhookRoutes)
+      .where(
+        and(
+          eq(billingWebhookRoutes.mode, input.mode),
+          eq(billingWebhookRoutes.molliePaymentId, input.molliePaymentId)
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (
+      routes[0]?.workspaceId !== input.workspaceId ||
+      routes[0]?.intentId !== input.intentId
+    ) {
+      throw new Error("Mollie webhook route ownership conflict");
+    }
+    if (
+      !isBillingProfileVersionEligible(
+        profiles[0],
+        input.billingProfileVersion,
+        new Date()
+      ) ||
+      intent.billingProfileVersion !== input.billingProfileVersion
+    ) {
+      await tx
+        .update(billingIntents)
+        .set({ status: "contained" })
+        .where(
+          and(
+            eq(billingIntents.intentId, input.intentId),
+            eq(billingIntents.workspaceId, input.workspaceId),
+            eq(billingIntents.mode, input.mode)
+          )
+        );
+      await tx
+        .insert(billingOutbox)
+        .values({
+          workspaceId: input.workspaceId,
+          mode: input.mode,
+          eventType: "manual_review",
+          deduplicationKey: `profile_contained_payment:${input.molliePaymentId}`,
+          payload: {
+            reason: "billing_profile_changed_during_payment_creation",
+            intentId: input.intentId,
+          },
+          status: "pending",
+        })
+        .onDuplicateKeyUpdate({
+          set: { deduplicationKey: sql`deduplication_key` },
+        });
+      await tx
+        .insert(billingOutbox)
+        .values({
+          workspaceId: input.workspaceId,
+          mode: input.mode,
+          eventType: "cancel_payment",
+          deduplicationKey: `profile_contained_payment_cancel:${input.molliePaymentId}`,
+          payload: {
+            reason: "billing_profile_ineligible_after_provider_response",
+            intentId: input.intentId,
+            targetPaymentId: input.molliePaymentId,
+          },
+          status: "pending",
+        })
+        .onDuplicateKeyUpdate({
+          set: { deduplicationKey: sql`deduplication_key` },
+        });
+      return false;
+    }
     if (
       intent.molliePaymentId === input.molliePaymentId &&
       intent.status === "open"
@@ -485,17 +839,211 @@ export async function attachMolliePayment(input: {
   });
 }
 
+export async function resolveMollieWebhookWorkspace(
+  mode: MollieMode,
+  molliePaymentId: string,
+  intentId: string
+): Promise<number | null> {
+  const database = await getDatabaseOrThrow();
+  return database.transaction(async tx => {
+    const existingRoutes = await tx
+      .select({
+        workspaceId: billingWebhookRoutes.workspaceId,
+        intentId: billingWebhookRoutes.intentId,
+      })
+      .from(billingWebhookRoutes)
+      .where(
+        and(
+          eq(billingWebhookRoutes.mode, mode),
+          eq(billingWebhookRoutes.molliePaymentId, molliePaymentId)
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (existingRoutes[0]) {
+      return existingRoutes[0].intentId === intentId
+        ? existingRoutes[0].workspaceId
+        : null;
+    }
+
+    // The provider metadata contains our globally unique opaque intent id. It
+    // is used only to establish the tenant boundary; no customer payload is
+    // read before the exact workspace is known.
+    const intents = await tx
+      .select({
+        workspaceId: billingIntents.workspaceId,
+        molliePaymentId: billingIntents.molliePaymentId,
+      })
+      .from(billingIntents)
+      .where(
+        and(
+          eq(billingIntents.intentId, intentId),
+          eq(billingIntents.mode, mode)
+        )
+      )
+      .limit(1)
+      .for("update");
+    const intent = intents[0];
+    if (
+      !intent ||
+      (intent.molliePaymentId && intent.molliePaymentId !== molliePaymentId)
+    ) {
+      return null;
+    }
+    await tx
+      .insert(billingWebhookRoutes)
+      .values({
+        mode,
+        molliePaymentId,
+        workspaceId: intent.workspaceId,
+        intentId,
+      })
+      .onDuplicateKeyUpdate({
+        set: { molliePaymentId: sql`mollie_payment_id` },
+      });
+    const routes = await tx
+      .select({
+        workspaceId: billingWebhookRoutes.workspaceId,
+        intentId: billingWebhookRoutes.intentId,
+      })
+      .from(billingWebhookRoutes)
+      .where(
+        and(
+          eq(billingWebhookRoutes.mode, mode),
+          eq(billingWebhookRoutes.molliePaymentId, molliePaymentId)
+        )
+      )
+      .limit(1)
+      .for("update");
+    return routes[0]?.intentId === intentId
+      ? (routes[0]?.workspaceId ?? null)
+      : null;
+  });
+}
+
+export async function isCheckoutUrlExposureAllowed(input: {
+  intentId: string;
+  workspaceId: number;
+  mode: MollieMode;
+  molliePaymentId: string;
+  billingProfileVersion: number;
+}): Promise<boolean> {
+  const database = await getDatabaseOrThrow();
+  return database.transaction(async tx => {
+    const profiles = await tx
+      .select()
+      .from(workspaceBillingProfiles)
+      .where(eq(workspaceBillingProfiles.workspaceId, input.workspaceId))
+      .limit(1)
+      .for("update");
+    if (
+      !isBillingProfileVersionEligible(
+        profiles[0],
+        input.billingProfileVersion,
+        new Date()
+      )
+    ) {
+      return false;
+    }
+    const intents = await tx
+      .select({
+        status: billingIntents.status,
+        molliePaymentId: billingIntents.molliePaymentId,
+        billingProfileVersion: billingIntents.billingProfileVersion,
+      })
+      .from(billingIntents)
+      .where(
+        and(
+          eq(billingIntents.intentId, input.intentId),
+          eq(billingIntents.workspaceId, input.workspaceId),
+          eq(billingIntents.mode, input.mode)
+        )
+      )
+      .limit(1)
+      .for("update");
+    const allowed = Boolean(
+      intents[0]?.status === "open" &&
+      intents[0].molliePaymentId === input.molliePaymentId &&
+      intents[0].billingProfileVersion === input.billingProfileVersion
+    );
+    if (allowed) {
+      await tx
+        .update(billingIntents)
+        .set({
+          urlExposedAt: sql`COALESCE(${billingIntents.urlExposedAt}, NOW())`,
+        })
+        .where(
+          and(
+            eq(billingIntents.intentId, input.intentId),
+            eq(billingIntents.workspaceId, input.workspaceId),
+            eq(billingIntents.mode, input.mode),
+            eq(billingIntents.status, "open"),
+            eq(billingIntents.molliePaymentId, input.molliePaymentId),
+            eq(
+              billingIntents.billingProfileVersion,
+              input.billingProfileVersion
+            )
+          )
+        );
+    }
+    return allowed;
+  });
+}
+
+function isBillingProfileVersionEligible(
+  profile: typeof workspaceBillingProfiles.$inferSelect | undefined,
+  expectedVersion: number,
+  now: Date
+): boolean {
+  return Boolean(
+    profile &&
+    profile.eligibilityVersion === expectedVersion &&
+    profile.verificationStatus === "verified" &&
+    profile.countryCode === "BE" &&
+    profile.customerType === "consumer" &&
+    !profile.peppolReady &&
+    profile.verifiedAt &&
+    profile.verifiedAt <= now &&
+    profile.verificationExpiresAt &&
+    profile.verificationExpiresAt > now &&
+    !profile.revokedAt
+  );
+}
+
 export async function markIntentApiUnknown(intentId: string): Promise<void> {
   const database = await getDatabaseOrThrow();
-  await database
-    .update(billingIntents)
-    .set({ status: "api_unknown" })
-    .where(
-      and(
-        eq(billingIntents.intentId, intentId),
-        eq(billingIntents.status, "creating_payment")
-      )
-    );
+  await database.transaction(async tx => {
+    const intents = await tx
+      .select({
+        workspaceId: billingIntents.workspaceId,
+        mode: billingIntents.mode,
+      })
+      .from(billingIntents)
+      .where(eq(billingIntents.intentId, intentId))
+      .limit(1)
+      .for("update");
+    if (!intents[0]) return;
+    await tx
+      .update(billingIntents)
+      .set({ status: "api_unknown" })
+      .where(
+        and(
+          eq(billingIntents.intentId, intentId),
+          eq(billingIntents.status, "creating_payment")
+        )
+      );
+    await tx
+      .update(billingSchedulerTenants)
+      .set({ nextDueAt: new Date() })
+      .where(
+        and(
+          eq(billingSchedulerTenants.workspaceId, intents[0].workspaceId),
+          eq(billingSchedulerTenants.mode, intents[0].mode),
+          eq(billingSchedulerTenants.kind, "reconciliation"),
+          eq(billingSchedulerTenants.enabled, true)
+        )
+      );
+  });
 }
 
 export async function markIntentPaymentMismatch(input: {

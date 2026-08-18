@@ -34,7 +34,7 @@ Run from the `openclaw-facebook` repository root:
 pnpm run deploy:gateway
 ```
 
-### Temporary production route-guard hotfix
+### Gateway runtime migration gate
 
 The 2026-08-01 production upgrade to OpenClaw 2026.7.1 was rolled back because
 the mounted state contains conflicting legacy and canonical Memory Core index
@@ -43,17 +43,23 @@ state migration has been rehearsed on a copy, backed up, and explicitly
 approved. Do not run `openclaw doctor --fix` against production state as an
 unreviewed deploy step.
 
-Until that migration is resolved, the reproducible containment deployment keeps
-the last known-good OpenClaw 2026.6.11 image and overlays only the reviewed
-public route guard:
+The release image is built by `deploy/fly-gateway/Dockerfile`: it compiles the
+Facebook plugin from this exact workspace and installs the single pinned
+OpenClaw version declared by that Dockerfile. The former route-guard-only image
+must not be used because it omitted quota/finalization changes from the plugin.
+
+Do not deploy this image against the production volume until the state
+migration has been rehearsed on a copy, backed up, and explicitly approved:
 
 ```bash
 fly deploy --config fly.toml
 ```
 
-This hotfix does not upgrade the bundled Facebook plugin or OpenClaw runtime.
-Verify `/healthz`, `/facebook/webhook`, `/messenger/webhook`, all portal/legal
-routes, and protected route near-misses after every deployment.
+The Docker build runs the runtime validator before and after dependency pruning
+and records runtime/plugin provenance as OCI labels. Verify `/healthz`,
+`/facebook/webhook`, `/messenger/webhook`, all portal/legal routes, quota
+reserve/heartbeat/delivery-start/finalize, and protected route near-misses after
+every controlled test deployment.
 
 ## Safety Defaults
 
