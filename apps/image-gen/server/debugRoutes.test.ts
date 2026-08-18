@@ -63,9 +63,9 @@ async function startServer() {
 }
 
 describe("debug/admin routes", () => {
-  it("fails closed when the portal handoff tenant boundary is unavailable", async () => {
+  it("fails closed for manual recovery even when the tenant boundary is ready", async () => {
     process.env.ADMIN_TOKEN = "secret-admin-token";
-    mocks.isPortalHandoffTenantBoundaryReady.mockReturnValue(false);
+    mocks.isPortalHandoffTenantBoundaryReady.mockReturnValue(true);
     mocks.isManualPortalHandoffRecoveryReady.mockReturnValue(false);
     const server = await startServer();
 

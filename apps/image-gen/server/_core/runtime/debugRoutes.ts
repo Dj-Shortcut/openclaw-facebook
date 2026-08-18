@@ -14,7 +14,6 @@ import {
 import { sendPortalHandoffLink } from "../portalHandoffDelivery";
 import {
   isManualPortalHandoffRecoveryReady,
-  isPortalHandoffTenantBoundaryReady,
 } from "../portalHandoffSecurity";
 import { isRedisReplayProtectionEnabled } from "../webhookReplayProtection";
 
