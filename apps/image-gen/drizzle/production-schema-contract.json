@@ -1,0 +1,263 @@
+{
+  "version": 1,
+  "generatedBy": {
+    "mysqlVersion": "8.4.11"
+  },
+  "normalization": "show-create-and-trigger-v1",
+  "migrationSetSha256": "70325234dfb0297c67a4d0ecafe7a3f1d265a973881c7da7a8d02c90db2d306a",
+  "base0014": {
+    "tables": {
+      "aiIdentities": "24b562653027932c58e048fe525228bc9d25767cb850cbdbdccd4d88ece8aadb",
+      "auditLog": "55d12075928714592ff3116ef8dcd981a9acfababb83faecde00230d4ade1d46",
+      "billing_customers": "94ec6cc5d62fe2190821f055e19f3bf2b22dfe5fe73a8780d44f023fdd709f3a",
+      "billing_intents": "6f5dd724e297ccc407eb01cdf11122137c53a1aef63eab6e2c0098f9ae9bfae8",
+      "billing_invoice_sequences": "19538cf6c53faa36635452f516a2c8d0f827cf7bc04dc08754d05711f918e649",
+      "billing_outbox": "e86acb472dc1e67c18c6fcdec80c50b938d8589468e2ff2c955ff13e6494be5b",
+      "billing_reconciliation_anomalies": "313c63571298052d79294544fa3ecbfcf25d56c2d89681f7f6d0f5480c48d742",
+      "billing_reconciliation_runs": "07076743ebbe80da0066a0543e4443c6aa5d98040f56ffaec93a65dab88af649",
+      "billing_subscriptions": "514e29c4958c7b631e705d07fada3ccc947b59d6232d9343a77a409db18a2bb6",
+      "channelConnections": "7a7b04704e01b302c3718d74ac36ebc2fdda52b3079c152404e607385e356a8e",
+      "dailyQuota": "beab079a4f7a1fa69e9930c6a67ad0a7966262871026bab766066bf3da69b6e2",
+      "imageRequests": "a7bd4085f20241d173a74904b5c707dc3dbb7282458dcdff9e644a4b98e8931d",
+      "notificationLog": "69b409bcbcc23fe79f84038d842d55f464c917e53541da20687cc7559fbcbee5",
+      "payment_ledger": "303e5815bae4900c71463974c057c7f33d30aa7c61a4eceb59638bbcd8d95b1f",
+      "portalHandoffTokens": "c559517c5af5560cc4346e2f9721e40e15b7cf846ade92eeae849166e85fe85f",
+      "usageStats": "dc186d1e8e3207fef47f2473d9c9497b6b3ab11c2c7e4d274bb79902e8bae93a",
+      "users": "960342a814565cf41eed4aa4ed5cba894211eacb2aadc5bed1da706d5ffb9215",
+      "webhook_deliveries": "c601b969bcc8b99216dadf5832ab405327a76e33d52428abc4ff3c72be3975f9",
+      "workspaceKnowledgeSources": "234510137e7721570cfc2df77209466f06ed60d465804ae94972f22dc4d7d52c",
+      "workspaceMembers": "6d8e40a93dfbd7792394892d8afa7de3e08db1d46f59efaab50aa3315dff1378",
+      "workspacePrivacyRequests": "631d1e79ca3d84a362527802c77ccfdd7b701af457a999aea20e990e9d74dab2",
+      "workspacePrivacySettings": "38e483eadc745d57d252588e5fcd4afd7e22070b19a69631823f7646d6530e22",
+      "workspaceUpgradeRequests": "1eb408454e1945d1f6d215b2d725dae2c4f035da53476a1c0ba151f4db62e13f",
+      "workspaceUsageDaily": "d8d42ec14bb43d1a6233a6256d03b7ffc50ad93e851c056980b79404978a2753",
+      "workspace_entitlement_usage": "370ef1acf7f2ddb9f1eebf3c8de180e2dfdf3ddc35baf56b22b7fa80ad4b1ada",
+      "workspace_entitlement_usage_reservations": "05ba05135d881124969d2c3fbe07be2788f907fb326e2ee8e15d591365436123",
+      "workspace_entitlements": "054a32b0347fa6cfc2a174a4861c9f3a77edfe7781a2a545a5f928053ce1c376",
+      "workspaces": "069da4d518ff79aebd9c0e894bd06c8e21effbcabf9455fc9dd92c1a217d4544"
+    },
+    "views": {},
+    "triggers": {}
+  },
+  "baseHistory": {
+    "showCreateSha256": "3e1c89a7f5407482a360a3c5928754adbd1b6a896c8568a64b610b1cf10161bf",
+    "rows": [
+      {
+        "id": 1,
+        "hash": "814a08e40d7fc2bcfd458759d18319198ca8ae394f2fa15617a78678e9c9c93b",
+        "createdAt": 1771791967247
+      },
+      {
+        "id": 2,
+        "hash": "8b885c25fe24b624578799cfe4918446efebab67a604c4335993d2d132ab6949",
+        "createdAt": 1771792056712
+      },
+      {
+        "id": 3,
+        "hash": "163cef88121a7240dfbe779f04edde4fe66ada9f4d7271e597f272e9a0d772f1",
+        "createdAt": 1771798491450
+      },
+      {
+        "id": 4,
+        "hash": "b4e0497804e46e0a0b0b8c31975b062152d551bac49c3c2e80932567b4085dcd",
+        "createdAt": 1771902695410
+      },
+      {
+        "id": 5,
+        "hash": "1970c969c014c9586d5b1896b8f8df68c9b524da18191cb967278c2ef257ea0d",
+        "createdAt": 1780300800000
+      },
+      {
+        "id": 6,
+        "hash": "c8feed6b868ca795fdeb676adfbc3c6de49e27c8d397d82326c3a6ebfa7f9291",
+        "createdAt": 1780636800000
+      },
+      {
+        "id": 7,
+        "hash": "6a6e01839212c2a93950c88863326e820d94296d09013051da7b17151c19fe87",
+        "createdAt": 1780982400000
+      },
+      {
+        "id": 8,
+        "hash": "417e039b947194a6b632d677f851f211ac2e1ff94e004f0cfa1a55d31e66d517",
+        "createdAt": 1782316800000
+      },
+      {
+        "id": 9,
+        "hash": "325c5b78bfcb84c62435d8a72c39822f94da78a46a55103c25a57b97abe5abdf",
+        "createdAt": 1782844800000
+      },
+      {
+        "id": 10,
+        "hash": "2f6a88a575dd517893e74ae6766ec7b1a9bfc77d37369ed46f561296091e5d4e",
+        "createdAt": 1785542400000
+      },
+      {
+        "id": 11,
+        "hash": "6d59264fe3a4f487d2878d85ce2f5dfc604fe77c9f2e011d2f41b8396bd67e20",
+        "createdAt": 1785605493363
+      },
+      {
+        "id": 12,
+        "hash": "8d516deb6eb4c6082a7b0fad57289e4c0448f3c0c766f02f833945095cf4f200",
+        "createdAt": 1785657889551
+      },
+      {
+        "id": 13,
+        "hash": "bff914684451fea9babcac341f6a041d400ec0d752d5d9e71e67c8040e19a98d",
+        "createdAt": 1785658583877
+      },
+      {
+        "id": 14,
+        "hash": "b6cd406d611d7c0083980054a51c6bfc26b84c1708d239d9e990cfe105fa2e66",
+        "createdAt": 1786979880049
+      },
+      {
+        "id": 15,
+        "hash": "9b3f738c1195688202580e80a755e264471a942cfa6740a69044ae01df1f501a",
+        "createdAt": 1787040000000
+      }
+    ]
+  },
+  "final0015": {
+    "tables": {
+      "aiIdentities": "24b562653027932c58e048fe525228bc9d25767cb850cbdbdccd4d88ece8aadb",
+      "auditLog": "55d12075928714592ff3116ef8dcd981a9acfababb83faecde00230d4ade1d46",
+      "billing_accounting_event_links": "8546066f499b7defa79cae491d03ab3fd791e4a61a49533dd3bf53b3f7198bcb",
+      "billing_accounting_import_cursors": "8c0f515129449e2f5da4fc2ec374b6f149ade4bddaffdb8fc7c119d57477816b",
+      "billing_accounting_import_runs": "4faa282834a7b1dd900b595a2f4352b38d26beaf529a30649b1df744f2346d9b",
+      "billing_accounting_provider_events": "3c4a91a06da6fc2dcd0bf8e5be02618ac69aa63321e50ded97dc08d34784f708",
+      "billing_customers": "94ec6cc5d62fe2190821f055e19f3bf2b22dfe5fe73a8780d44f023fdd709f3a",
+      "billing_handoff_recovery_events": "248aa5206762609efcbef8fdba8275d9375466de2ae30731276fac198cf7a3fd",
+      "billing_intents": "8af7b6058e9a6393e3769f8dd8243caecdd0701cc09b2fe1ea387c1235b616d8",
+      "billing_invoice_sequences": "19538cf6c53faa36635452f516a2c8d0f827cf7bc04dc08754d05711f918e649",
+      "billing_notification_inbox": "e769e317f4d9304e62add91e0e9c3466a7ff39b3a937ff9f15821c0f1c618ee6",
+      "billing_notification_receipts": "ddef9bcd9987328d3ba2b69bf4744d8f1617b75a663c4dfb37654b6787e97c35",
+      "billing_notification_receiver_outbox": "2eb37d0e040d0844530c5b940ed9cf6a056b08234aa3888101e8009106a11b9e",
+      "billing_notification_scheduler_tenants": "a89f54ccbc59d90fbdb23ca80abfa5c3120bea957b5d2f47d612da154290c26d",
+      "billing_outbox": "7b8df43f796deb6d0e65bee5e282da379959a72312352d63cafec2e7f3ae967c",
+      "billing_profile_operator_actions": "1ffa179208cf187eb7e9cf7856d1bd80bd3c8e5ea621c5574dbdb4b3edcaf556",
+      "billing_provider_operations": "47d06c875a7a897db3610922eafcfa24834cb80d2e06b65b9527333a657b96e7",
+      "billing_reconciliation_anomalies": "313c63571298052d79294544fa3ecbfcf25d56c2d89681f7f6d0f5480c48d742",
+      "billing_reconciliation_runs": "07076743ebbe80da0066a0543e4443c6aa5d98040f56ffaec93a65dab88af649",
+      "billing_scheduler_process_heartbeats": "c6571a503e9455dcc0dac2f848e8ed226c268aca77334baa55f40b0e79c6073b",
+      "billing_scheduler_tenants": "a61ebd55735e49af968c5d3f659faedc26b5153f7506614a5cd8a4e2c3d49bc6",
+      "billing_subscriptions": "539062bd6a9b2d0f0ce403993129e48bcdad0615857519cd30d9b08a100b6c01",
+      "billing_webhook_routes": "3a801c10618a5a965c7b1efb1617f4e517b06b2e329cca5d35403705d310ef9e",
+      "channelConnections": "103cac7799856cdf0a76a8493e6f2882c8476ce779c6817cfc6631460cc18b02",
+      "dailyQuota": "beab079a4f7a1fa69e9930c6a67ad0a7966262871026bab766066bf3da69b6e2",
+      "imageRequests": "a7bd4085f20241d173a74904b5c707dc3dbb7282458dcdff9e644a4b98e8931d",
+      "messengerState": "9e718ec0aeb41f4e5516c25ca1902c6e16c123ba7996ccfcc2ddd5973b08744f",
+      "messenger_privacy_subjects": "b7044f99335e6bde53b9d25220e5b4e2878dc0587a8554d0330374798d2df009",
+      "messenger_provider_attempt_fences": "35b39290be513630d2cdad178a8e99cb0a69a4374c4aa93a8f33226b784b64dd",
+      "notificationLog": "69b409bcbcc23fe79f84038d842d55f464c917e53541da20687cc7559fbcbee5",
+      "payment_ledger": "9287e09b8ea51e3b79fc96ebc2de772b13418fa6c1967a99df47105e37256b9b",
+      "portalHandoffTokens": "9c7542329ecb03059463bc790d6d4fee584da7fedaf9caebb6cbe4fcd8c7e494",
+      "usageStats": "dc186d1e8e3207fef47f2473d9c9497b6b3ab11c2c7e4d274bb79902e8bae93a",
+      "users": "960342a814565cf41eed4aa4ed5cba894211eacb2aadc5bed1da706d5ffb9215",
+      "webhook_deliveries": "c601b969bcc8b99216dadf5832ab405327a76e33d52428abc4ff3c72be3975f9",
+      "workspaceKnowledgeSources": "234510137e7721570cfc2df77209466f06ed60d465804ae94972f22dc4d7d52c",
+      "workspaceMembers": "6d8e40a93dfbd7792394892d8afa7de3e08db1d46f59efaab50aa3315dff1378",
+      "workspacePrivacyRequests": "631d1e79ca3d84a362527802c77ccfdd7b701af457a999aea20e990e9d74dab2",
+      "workspacePrivacySettings": "38e483eadc745d57d252588e5fcd4afd7e22070b19a69631823f7646d6530e22",
+      "workspaceUpgradeRequests": "1eb408454e1945d1f6d215b2d725dae2c4f035da53476a1c0ba151f4db62e13f",
+      "workspaceUsageDaily": "d8d42ec14bb43d1a6233a6256d03b7ffc50ad93e851c056980b79404978a2753",
+      "workspace_billing_profiles": "16e7ed13a47c650560330383f7808e3dc10dbdba87877239326e0592cceedce5",
+      "workspace_entitlement_usage": "a5f8ed4dfcc22f83005600692ffff3c9d8b92dfbfcb16d5fb876e64723b2b61c",
+      "workspace_entitlement_usage_reservations": "4fa449036c420a0c0ed0e7754fd261bac996d00a7eb71b8b96438fcc7e167395",
+      "workspace_entitlements": "0e6f2aef58acdf2a9d00211ecb555b98d9f7b4c78ba6211658d4e4441d3347cb",
+      "workspaces": "069da4d518ff79aebd9c0e894bd06c8e21effbcabf9455fc9dd92c1a217d4544"
+    },
+    "views": {},
+    "triggers": {
+      "billing_outbox_wake_scheduler_after_insert": "a1e9a0c413c9b39e975dcfda6c3bfbdd43230673022dcef3482e0e9453672e73",
+      "billing_outbox_wake_scheduler_after_update": "82580cb9a88ff6aab067f6804d011bdf488744a7daa70d88753e1209e933581e",
+      "billing_scheduler_execution_epoch_before_update": "c97be96f0e0c412b27e601a99e2ca0ce37d37a105e235d910bed0b7b8d058776"
+    }
+  },
+  "finalHistory": {
+    "showCreateSha256": "3e1c89a7f5407482a360a3c5928754adbd1b6a896c8568a64b610b1cf10161bf",
+    "rows": [
+      {
+        "id": 1,
+        "hash": "814a08e40d7fc2bcfd458759d18319198ca8ae394f2fa15617a78678e9c9c93b",
+        "createdAt": 1771791967247
+      },
+      {
+        "id": 2,
+        "hash": "8b885c25fe24b624578799cfe4918446efebab67a604c4335993d2d132ab6949",
+        "createdAt": 1771792056712
+      },
+      {
+        "id": 3,
+        "hash": "163cef88121a7240dfbe779f04edde4fe66ada9f4d7271e597f272e9a0d772f1",
+        "createdAt": 1771798491450
+      },
+      {
+        "id": 4,
+        "hash": "b4e0497804e46e0a0b0b8c31975b062152d551bac49c3c2e80932567b4085dcd",
+        "createdAt": 1771902695410
+      },
+      {
+        "id": 5,
+        "hash": "1970c969c014c9586d5b1896b8f8df68c9b524da18191cb967278c2ef257ea0d",
+        "createdAt": 1780300800000
+      },
+      {
+        "id": 6,
+        "hash": "c8feed6b868ca795fdeb676adfbc3c6de49e27c8d397d82326c3a6ebfa7f9291",
+        "createdAt": 1780636800000
+      },
+      {
+        "id": 7,
+        "hash": "6a6e01839212c2a93950c88863326e820d94296d09013051da7b17151c19fe87",
+        "createdAt": 1780982400000
+      },
+      {
+        "id": 8,
+        "hash": "417e039b947194a6b632d677f851f211ac2e1ff94e004f0cfa1a55d31e66d517",
+        "createdAt": 1782316800000
+      },
+      {
+        "id": 9,
+        "hash": "325c5b78bfcb84c62435d8a72c39822f94da78a46a55103c25a57b97abe5abdf",
+        "createdAt": 1782844800000
+      },
+      {
+        "id": 10,
+        "hash": "2f6a88a575dd517893e74ae6766ec7b1a9bfc77d37369ed46f561296091e5d4e",
+        "createdAt": 1785542400000
+      },
+      {
+        "id": 11,
+        "hash": "6d59264fe3a4f487d2878d85ce2f5dfc604fe77c9f2e011d2f41b8396bd67e20",
+        "createdAt": 1785605493363
+      },
+      {
+        "id": 12,
+        "hash": "8d516deb6eb4c6082a7b0fad57289e4c0448f3c0c766f02f833945095cf4f200",
+        "createdAt": 1785657889551
+      },
+      {
+        "id": 13,
+        "hash": "bff914684451fea9babcac341f6a041d400ec0d752d5d9e71e67c8040e19a98d",
+        "createdAt": 1785658583877
+      },
+      {
+        "id": 14,
+        "hash": "b6cd406d611d7c0083980054a51c6bfc26b84c1708d239d9e990cfe105fa2e66",
+        "createdAt": 1786979880049
+      },
+      {
+        "id": 15,
+        "hash": "9b3f738c1195688202580e80a755e264471a942cfa6740a69044ae01df1f501a",
+        "createdAt": 1787040000000
+      },
+      {
+        "id": 16,
+        "hash": "dd7cae16780a70fc0648ddef43066ae71e874dc7fc555f5c54cdc05e939f4052",
+        "createdAt": 1787056321209
+      }
+    ]
+  }
+}

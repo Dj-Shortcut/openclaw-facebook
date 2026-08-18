@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       mysql:
-        image: mysql:8.4.11
+        image: mysql:8.4.11@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
         env:
           MYSQL_ROOT_PASSWORD: testroot
         options: >-
@@ -78,6 +78,30 @@ jobs:
         env:
           LINT_BASE_REF: origin/main
         run: pnpm run format:server:release
+
+      - name: Verify pinned MySQL version
+        run: |
+          test "$(mysql -h127.0.0.1 -uroot -ptestroot -Nse 'SELECT VERSION()')" = "8.4.11"
+
+      - name: Verify schema contract is tracked
+        run: git ls-files --error-unmatch drizzle/production-schema-contract.json
+
+      - name: Regenerate exact MySQL schema contract
+        env:
+          MYSQL_REHEARSAL_URL: mysql://root:testroot@127.0.0.1:3306/mysql
+        run: pnpm run db:generate-production-contract
+
+      - name: Upload generated MySQL schema contract
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: production-schema-contract-image-gen-ci
+          path: apps/image-gen/drizzle/production-schema-contract.json
+          if-no-files-found: error
+
+      - name: Verify generated MySQL schema contract is committed
+        run: |
+          git diff --exit-code -- drizzle/production-schema-contract.json
 
       - name: Check MySQL identifier contract
         run: pnpm run db:check-identifiers

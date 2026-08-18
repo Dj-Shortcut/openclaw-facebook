@@ -4,10 +4,24 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import mysql from "mysql2/promise";
 import {
+  cleanupMigrationConnection,
+  combineMigrationErrors,
+  assertProductionSchemaContractManifest,
   loadAndVerifyMigrationManifest,
   migrationLockName,
   runProductionMigrations,
 } from "./migrate-production.mjs";
+import {
+  normalizeShowCreate,
+  normalizeSqlOutsideQuotedValues,
+  assertProductionRuntimeValues,
+  productionSchemaSqlMode,
+  sha256,
+} from "./production-schema-contract.mjs";
+
+await testCleanupContracts();
+testSchemaDigestContracts();
+await testContractManifestBinding();
 
 const adminUrlValue = process.env.MYSQL_REHEARSAL_URL?.trim();
 if (!adminUrlValue) throw new Error("MYSQL_REHEARSAL_URL is required");
@@ -23,6 +37,13 @@ const databases = [
   "leaderbot_production_migrator_short_history",
   "leaderbot_production_migrator_drifted_base",
   "leaderbot_production_migrator_partial",
+  "leaderbot_production_migrator_partial_middle",
+  "leaderbot_production_migrator_partial_late",
+  "leaderbot_production_migrator_malformed_state",
+  "leaderbot_production_migrator_historyless_state",
+  "leaderbot_production_migrator_wrong_runtime",
+  "leaderbot_production_migrator_empty_history",
+  "leaderbot_production_migrator_first_unsupported_partial",
 ];
 const admin = await mysql.createConnection({
   host: adminUrl.hostname,
@@ -38,6 +59,9 @@ try {
       `CREATE DATABASE \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`
     );
   }
+  await admin.query(
+    `ALTER DATABASE \`${databases[10]}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`
+  );
 
   const concurrentUrl = databaseUrl(databases[0]);
   const results = await Promise.all([
@@ -48,14 +72,28 @@ try {
     results.every(result => result.appliedCount === 16),
     "concurrent apply"
   );
+  const beforeNoop = await withDatabaseResult(databases[0], connection =>
+    captureSchemaFingerprint(connection)
+  );
   const idempotent = await runProductionMigrations({
     databaseUrl: concurrentUrl,
   });
   assert(idempotent.appliedCount === 16, "already-complete idempotent apply");
+  const afterNoop = await withDatabaseResult(databases[0], connection =>
+    captureSchemaFingerprint(connection)
+  );
+  assert(
+    beforeNoop === afterNoop,
+    "complete 0015 no-op leaves schema/history unchanged"
+  );
 
   const { migrations: manifest } = await loadAndVerifyMigrationManifest();
+  const finalStatements = await readMigrationStatements(manifest.at(-1));
+  await testCompletedSchemaRefusals(databases[0], finalStatements);
+  await testHistoryRefusals(databases[0], manifest);
   await withDatabase(databases[1], async connection => {
     await applyMigrationPrefix(connection, manifest.slice(0, -1));
+    await applyStatements(connection, finalStatements.slice(0, 3));
   });
   const upgraded = await runProductionMigrations({
     databaseUrl: databaseUrl(databases[1]),
@@ -64,7 +102,10 @@ try {
 
   await withDatabase(databases[2], async connection => {
     await applyMigrationPrefix(connection, manifest.slice(0, -1));
-    await createLegacyMessengerState(connection);
+    await applyStatements(connection, finalStatements.slice(0, 4));
+    await connection.query(
+      "INSERT INTO `messengerState` (`psid`,`userKey`) VALUES ('migration-preserved-psid','migration-preserved-key')"
+    );
   });
   const upgradedWithState = await runProductionMigrations({
     databaseUrl: databaseUrl(databases[2]),
@@ -73,6 +114,12 @@ try {
     upgradedWithState.appliedCount === 16,
     "0014 with exact legacy state to 0015 upgrade"
   );
+  await withDatabase(databases[2], async connection => {
+    const [[row]] = await connection.query(
+      "SELECT COUNT(*) AS count FROM `messengerState` WHERE `userKey`='migration-preserved-key'"
+    );
+    assert(Number(row.count) === 1, "messengerState partial row preserved");
+  });
 
   await withDatabase(databases[3], async connection => {
     await applyMigrationPrefix(connection, manifest.slice(0, 1));
@@ -93,7 +140,25 @@ try {
   await expectFailure(
     runProductionMigrations({ databaseUrl: databaseUrl(databases[4]) }),
     "drifted 0014 schema",
-    "0014 schema contract is incomplete"
+    "0014 schema fingerprint mismatch"
+  );
+  await withDatabase(databases[4], async connection => {
+    await connection.query(
+      "ALTER TABLE `billing_outbox` MODIFY COLUMN `attempt_count` int NOT NULL DEFAULT 0"
+    );
+    await connection.query(
+      "CREATE TRIGGER `billing_outbox_wake_scheduler_after_insert` AFTER INSERT ON `billing_outbox` FOR EACH ROW SET @unexpected_trigger = 1"
+    );
+  });
+  await expectFailure(
+    runProductionMigrations({ databaseUrl: databaseUrl(databases[4]) }),
+    "same-name wrong trigger before 0015",
+    "0014 schema fingerprint mismatch"
+  );
+  await withDatabase(databases[4], connection =>
+    connection.query(
+      "DROP TRIGGER `billing_outbox_wake_scheduler_after_insert`"
+    )
   );
 
   await withDatabase(databases[0], async connection => {
@@ -122,7 +187,127 @@ try {
       lockTimeoutSeconds: 0,
     }),
     "partial 0015 footprint",
-    "partial 0015 schema detected"
+    "empty database schema fingerprint mismatch"
+  );
+
+  await expectFailure(
+    runProductionMigrations({ databaseUrl: databaseUrl(databases[10]) }),
+    "wrong database collation refuses before migration",
+    "migration database default charset/collation mismatch"
+  );
+  await withDatabase(databases[10], async connection => {
+    const [[history]] = await connection.query(
+      "SELECT COUNT(*) AS count FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='__drizzle_migrations'"
+    );
+    assert(
+      Number(history.count) === 0,
+      "runtime refusal happens before the migration executor"
+    );
+  });
+
+  await withDatabase(databases[11], connection =>
+    connection.query(
+      "CREATE TABLE `__drizzle_migrations` (`id` serial PRIMARY KEY,`hash` text NOT NULL,`created_at` bigint)"
+    )
+  );
+  await expectFailure(
+    runProductionMigrations({ databaseUrl: databaseUrl(databases[11]) }),
+    "empty migration history is not a fresh database",
+    "database with empty migration history is not a supported fresh state"
+  );
+  await withDatabase(databases[11], async connection => {
+    await assertNoApplicationTables(connection, "empty history refusal");
+    await connection.query(
+      "ALTER TABLE `__drizzle_migrations` AUTO_INCREMENT=17"
+    );
+  });
+  await expectFailure(
+    runProductionMigrations({ databaseUrl: databaseUrl(databases[11]) }),
+    "advanced empty migration history is not resumable",
+    "database with empty migration history is not a supported fresh state"
+  );
+  await withDatabase(databases[11], connection =>
+    assertNoApplicationTables(connection, "advanced empty history refusal")
+  );
+
+  await withDatabase(databases[12], async connection => {
+    await applyMigrationPrefix(connection, manifest.slice(0, -1));
+    await applyStatements(connection, finalStatements.slice(0, 5));
+  });
+  await expectFailure(
+    runProductionMigrations({ databaseUrl: databaseUrl(databases[12]) }),
+    "first unsupported durable 0015 partial",
+    "0014 schema fingerprint mismatch"
+  );
+
+  await withDatabase(databases[6], async connection => {
+    await applyMigrationPrefix(connection, manifest.slice(0, -1));
+    await applyStatements(
+      connection,
+      finalStatements.slice(0, Math.floor(finalStatements.length / 2))
+    );
+  });
+  await expectFailure(
+    runProductionMigrations({ databaseUrl: databaseUrl(databases[6]) }),
+    "middle 0015 partial",
+    "0014 schema fingerprint mismatch"
+  );
+
+  await withDatabase(databases[7], async connection => {
+    await applyMigrationPrefix(connection, manifest.slice(0, -1));
+    await applyStatements(connection, finalStatements.slice(0, -1));
+  });
+  await expectFailure(
+    runProductionMigrations({ databaseUrl: databaseUrl(databases[7]) }),
+    "late 0015 partial",
+    "0014 schema fingerprint mismatch"
+  );
+
+  await withDatabase(databases[8], async connection => {
+    await applyMigrationPrefix(connection, manifest.slice(0, -1));
+    await createLegacyMessengerState(connection);
+    await connection.query(
+      "ALTER TABLE `messengerState` MODIFY COLUMN `updatedAt` timestamp DEFAULT (now()) NOT NULL"
+    );
+  });
+  await expectFailure(
+    runProductionMigrations({ databaseUrl: databaseUrl(databases[8]) }),
+    "messengerState missing on-update",
+    "0014 schema fingerprint mismatch"
+  );
+
+  await withDatabase(databases[9], async connection => {
+    await createLegacyMessengerState(connection);
+    await connection.query(
+      "INSERT INTO `messengerState` (`psid`,`userKey`) VALUES ('historyless-psid','historyless-key')"
+    );
+  });
+  await expectFailure(
+    runProductionMigrations({ databaseUrl: databaseUrl(databases[9]) }),
+    "historyless messengerState is not resumable",
+    "empty database schema fingerprint mismatch"
+  );
+  await resetLegacyMessengerState(databases[8]);
+  await withDatabase(databases[8], connection =>
+    connection.query(
+      "ALTER TABLE `messengerState` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_bin"
+    )
+  );
+  await expectFailure(
+    runProductionMigrations({ databaseUrl: databaseUrl(databases[8]) }),
+    "messengerState wrong collation",
+    "0014 schema fingerprint mismatch"
+  );
+  await resetLegacyMessengerState(databases[8]);
+  await withDatabase(databases[8], connection =>
+    connection.query(
+      "ALTER TABLE `messengerState` ADD UNIQUE INDEX `temporary_id_unique` (`id`), DROP PRIMARY KEY"
+    )
+  );
+  await expectFailure(
+    runProductionMigrations({ databaseUrl: databaseUrl(databases[8]) }),
+    "messengerState malformed primary key",
+    "0014 schema fingerprint mismatch"
   );
 
   await withDatabase(databases[0], async connection => {
@@ -171,6 +356,234 @@ async function withDatabase(database, action) {
   }
 }
 
+async function withDatabaseResult(database, action) {
+  let result;
+  await withDatabase(database, async connection => {
+    result = await action(connection);
+  });
+  return result;
+}
+
+async function captureSchemaFingerprint(connection) {
+  const [tables] = await connection.query(
+    "SELECT `TABLE_NAME` AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() ORDER BY `TABLE_NAME`"
+  );
+  const createStatements = [];
+  for (const table of tables) {
+    const [[created]] = await connection.query(
+      `SHOW CREATE TABLE \`${table.name.replaceAll("`", "``")}\``
+    );
+    createStatements.push(Object.values(created).at(-1));
+  }
+  const [triggers] = await connection.query(
+    "SELECT `TRIGGER_NAME` AS name,`ACTION_STATEMENT` AS actionStatement FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() ORDER BY `TRIGGER_NAME`"
+  );
+  const [history] = await connection.query(
+    "SELECT `id`,`hash`,`created_at` AS createdAt FROM `__drizzle_migrations` ORDER BY `id`"
+  );
+  return JSON.stringify({ createStatements, triggers, history });
+}
+
+async function assertNoApplicationTables(connection, label) {
+  const [[row]] = await connection.query(
+    "SELECT COUNT(*) AS count FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME<>'__drizzle_migrations'"
+  );
+  assert(Number(row.count) === 0, `${label} leaves no application tables`);
+}
+
+async function testCompletedSchemaRefusals(database, finalStatements) {
+  await withDatabase(database, connection =>
+    connection.query(
+      "ALTER TABLE `messengerState` ADD UNIQUE INDEX `temporary_id_unique` (`id`), DROP PRIMARY KEY"
+    )
+  );
+  await expectRunnerRefusal(
+    database,
+    "complete schema malformed primary key",
+    "0015 schema fingerprint mismatch"
+  );
+  await withDatabase(database, connection =>
+    connection.query(
+      "ALTER TABLE `messengerState` ADD PRIMARY KEY (`id`), DROP INDEX `temporary_id_unique`"
+    )
+  );
+
+  await withDatabase(database, async connection => {
+    await connection.query(
+      "ALTER TABLE `billing_outbox` DROP CHECK `billing_outbox_attempts_nonnegative`"
+    );
+    await connection.query(
+      "ALTER TABLE `billing_outbox` ADD CONSTRAINT `billing_outbox_attempts_nonnegative` CHECK (`attempt_count` >= -1 AND `max_attempts` > 0)"
+    );
+  });
+  await expectRunnerRefusal(
+    database,
+    "complete schema altered check body",
+    "0015 schema fingerprint mismatch"
+  );
+  await withDatabase(database, async connection => {
+    await connection.query(
+      "ALTER TABLE `billing_outbox` DROP CHECK `billing_outbox_attempts_nonnegative`"
+    );
+    await connection.query(
+      "ALTER TABLE `billing_outbox` ADD CONSTRAINT `billing_outbox_attempts_nonnegative` CHECK (`attempt_count` >= 0 AND `max_attempts` > 0)"
+    );
+  });
+
+  const insertTrigger = finalStatements.find(statement =>
+    statement.startsWith(
+      "CREATE TRIGGER `billing_outbox_wake_scheduler_after_insert`"
+    )
+  );
+  assert(insertTrigger, "canonical insert trigger statement available");
+  await withDatabase(database, async connection => {
+    await connection.query(
+      "DROP TRIGGER `billing_outbox_wake_scheduler_after_insert`"
+    );
+    await connection.query(
+      "CREATE TRIGGER `billing_outbox_wake_scheduler_after_insert` AFTER INSERT ON `billing_outbox` FOR EACH ROW SET @unexpected_trigger = 1"
+    );
+  });
+  await expectRunnerRefusal(
+    database,
+    "complete schema altered trigger body",
+    "0015 schema fingerprint mismatch"
+  );
+  await withDatabase(database, async connection => {
+    await connection.query(
+      "DROP TRIGGER `billing_outbox_wake_scheduler_after_insert`"
+    );
+    await connection.query(insertTrigger);
+  });
+
+  await withDatabase(database, async connection => {
+    await connection.query(
+      "CREATE TABLE `unexpected_schema_object` (`id` int)"
+    );
+    await connection.query(
+      "CREATE PROCEDURE `unexpected_schema_routine`() SELECT 1"
+    );
+    await connection.query(
+      "CREATE EVENT `unexpected_schema_event` ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 1 DAY DO SET @unexpected_event = 1"
+    );
+  });
+  await expectRunnerRefusal(
+    database,
+    "complete schema extra objects",
+    "production schema contract requires no routines or events"
+  );
+  await withDatabase(database, async connection => {
+    await connection.query("DROP EVENT `unexpected_schema_event`");
+    await connection.query("DROP PROCEDURE `unexpected_schema_routine`");
+    await connection.query("DROP TABLE `unexpected_schema_object`");
+  });
+
+  await withDatabase(database, connection =>
+    connection.query(
+      "ALTER TABLE `__drizzle_migrations` ADD COLUMN `unexpected_history_column` int"
+    )
+  );
+  await expectRunnerRefusal(
+    database,
+    "migration history table extra column",
+    "0015 migration history table contract mismatch"
+  );
+  await withDatabase(database, connection =>
+    connection.query(
+      "ALTER TABLE `__drizzle_migrations` DROP COLUMN `unexpected_history_column`"
+    )
+  );
+}
+
+async function testHistoryRefusals(database, manifest) {
+  const removed = await withDatabaseResult(database, async connection => {
+    const [[row]] = await connection.query(
+      "SELECT `id`,`hash`,`created_at` AS createdAt FROM `__drizzle_migrations` ORDER BY `id` LIMIT 1 OFFSET 7"
+    );
+    await connection.query("DELETE FROM `__drizzle_migrations` WHERE `id`=?", [
+      row.id,
+    ]);
+    return row;
+  });
+  await expectRunnerRefusal(
+    database,
+    "migration history middle gap",
+    "applied migration hash/order mismatch"
+  );
+  await withDatabase(database, connection =>
+    connection.query(
+      "INSERT INTO `__drizzle_migrations` (`id`,`hash`,`created_at`) VALUES (?,?,?)",
+      [removed.id, removed.hash, removed.createdAt]
+    )
+  );
+
+  const swapped = await withDatabaseResult(database, async connection => {
+    const [rows] = await connection.query(
+      "SELECT `id` FROM `__drizzle_migrations` ORDER BY `id` LIMIT 2 OFFSET 7"
+    );
+    await swapHistoryIds(connection, rows[0].id, rows[1].id, 1_000_000);
+    return rows;
+  });
+  await expectRunnerRefusal(
+    database,
+    "migration history reordered",
+    "applied migration hash/order mismatch"
+  );
+  await withDatabase(database, connection =>
+    swapHistoryIds(connection, swapped[0].id, swapped[1].id, 1_000_001)
+  );
+
+  await withDatabase(database, connection =>
+    connection.query(
+      "INSERT INTO `__drizzle_migrations` (`hash`,`created_at`) VALUES (?,?)",
+      ["f".repeat(64), manifest.at(-1).when + 1]
+    )
+  );
+  await expectRunnerRefusal(
+    database,
+    "migration history extra row",
+    "database contains unknown applied migrations"
+  );
+  await withDatabase(database, connection =>
+    connection.query(
+      "DELETE FROM `__drizzle_migrations` WHERE `created_at`=?",
+      [manifest.at(-1).when + 1]
+    )
+  );
+}
+
+async function swapHistoryIds(connection, firstId, secondId, temporaryId) {
+  await connection.query(
+    "UPDATE `__drizzle_migrations` SET `id`=? WHERE `id`=?",
+    [temporaryId, firstId]
+  );
+  await connection.query(
+    "UPDATE `__drizzle_migrations` SET `id`=? WHERE `id`=?",
+    [firstId, secondId]
+  );
+  await connection.query(
+    "UPDATE `__drizzle_migrations` SET `id`=? WHERE `id`=?",
+    [secondId, temporaryId]
+  );
+}
+
+async function expectRunnerRefusal(database, label, expectedMessage) {
+  await expectFailure(
+    runProductionMigrations({ databaseUrl: databaseUrl(database) }),
+    label,
+    expectedMessage
+  );
+  await withDatabase(database, async connection => {
+    const lockName = migrationLockName(database);
+    const [[lock]] = await connection.query(
+      "SELECT GET_LOCK(?,0) AS acquired",
+      [lockName]
+    );
+    assert(Number(lock.acquired) === 1, `${label} releases singleton lock`);
+    await connection.query("SELECT RELEASE_LOCK(?)", [lockName]);
+  });
+}
+
 async function applyMigrationPrefix(connection, migrations) {
   await connection.query(
     "CREATE TABLE `__drizzle_migrations` (`id` serial PRIMARY KEY,`hash` text NOT NULL,`created_at` bigint)"
@@ -192,6 +605,21 @@ async function applyMigrationPrefix(connection, migrations) {
   }
 }
 
+async function readMigrationStatements(migration) {
+  const sql = await fs.readFile(
+    path.join(appDirectory, "drizzle", `${migration.tag}.sql`),
+    "utf8"
+  );
+  return sql
+    .split("--> statement-breakpoint")
+    .map(value => value.trim())
+    .filter(Boolean);
+}
+
+async function applyStatements(connection, statements) {
+  for (const statement of statements) await connection.query(statement);
+}
+
 async function createLegacyMessengerState(connection) {
   await connection.query(`CREATE TABLE \`messengerState\` (
     \`id\` int AUTO_INCREMENT NOT NULL,
@@ -207,6 +635,13 @@ async function createLegacyMessengerState(connection) {
     CONSTRAINT \`messengerState_psid_unique\` UNIQUE(\`psid\`),
     CONSTRAINT \`messengerState_userKey_unique\` UNIQUE(\`userKey\`)
   )`);
+}
+
+async function resetLegacyMessengerState(database) {
+  await withDatabase(database, async connection => {
+    await connection.query("DROP TABLE `messengerState`");
+    await createLegacyMessengerState(connection);
+  });
 }
 
 async function expectFailure(promise, label, expectedMessage) {
@@ -225,4 +660,137 @@ async function expectFailure(promise, label, expectedMessage) {
 
 function assert(condition, label) {
   if (!condition) throw new Error(`production migrator test failed: ${label}`);
+}
+
+async function testCleanupContracts() {
+  let ended = false;
+  let destroyed = false;
+  const releaseError = new Error("release failed");
+  const endError = new Error("end failed");
+  const cleanupError = await cleanupMigrationConnection(
+    {
+      async query() {
+        throw releaseError;
+      },
+      async end() {
+        ended = true;
+        throw endError;
+      },
+      destroy() {
+        destroyed = true;
+      },
+    },
+    "test-lock"
+  );
+  assert(
+    ended && destroyed,
+    "cleanup always ends and destroys after end failure"
+  );
+  assert(
+    cleanupError instanceof AggregateError && cleanupError.errors.length === 2,
+    "cleanup preserves release and end failures"
+  );
+  const primaryError = new Error("primary migration failure");
+  const combined = combineMigrationErrors(primaryError, cleanupError);
+  assert(
+    combined instanceof AggregateError &&
+      combined.cause === primaryError &&
+      combined.errors[0] === primaryError &&
+      combined.errors[1] === cleanupError,
+    "primary and cleanup failures remain ordered"
+  );
+}
+
+function testSchemaDigestContracts() {
+  assert(
+    normalizeShowCreate(
+      "CREATE TABLE `t` (`id` int) ENGINE=InnoDB AUTO_INCREMENT=9\r\n"
+    ) === "CREATE TABLE `t` (`id` int) ENGINE=InnoDB",
+    "SHOW CREATE normalization strips only volatile counters and trailing whitespace"
+  );
+  assert(
+    normalizeShowCreate(
+      "CREATE TABLE `t` (`value` varchar(64) DEFAULT ' AUTO_INCREMENT=9 ') ENGINE=InnoDB AUTO_INCREMENT=12"
+    ) ===
+      "CREATE TABLE `t` (`value` varchar(64) DEFAULT ' AUTO_INCREMENT=9 ') ENGINE=InnoDB",
+    "SHOW CREATE normalization preserves AUTO_INCREMENT text in literals"
+  );
+  const spacedLiteral = normalizeSqlOutsideQuotedValues("SET @value = 'A B'");
+  const compactLiteral = normalizeSqlOutsideQuotedValues("SET @value='ab'");
+  assert(
+    sha256(spacedLiteral) !== sha256(compactLiteral),
+    "trigger normalization preserves literal bytes and case"
+  );
+  assert(
+    normalizeSqlOutsideQuotedValues("SET   @value =  `Column Name`") ===
+      "SET @value = `Column Name`",
+    "trigger normalization changes whitespace only outside quoted values"
+  );
+  const validRuntime = {
+    version: "8.4.11",
+    databaseName: "leaderbot",
+    characterSet: "utf8mb4",
+    collationName: "utf8mb4_0900_ai_ci",
+    sqlMode: productionSchemaSqlMode,
+    timeZone: "+00:00",
+    transactionIsolation: "READ-COMMITTED",
+    foreignKeyChecks: 1,
+    defaultStorageEngine: "InnoDB",
+    lowerCaseTableNames: 0,
+    explicitTimestampDefaults: 1,
+  };
+  assertProductionRuntimeValues(validRuntime);
+  expectSynchronousFailure(
+    () => assertProductionRuntimeValues({ ...validRuntime, version: "8.0.42" }),
+    "unsupported MySQL runtime",
+    "production migration requires MySQL 8.4.11"
+  );
+  for (const [field, value] of [
+    ["defaultStorageEngine", "MyISAM"],
+    ["lowerCaseTableNames", 2],
+    ["explicitTimestampDefaults", 0],
+  ]) {
+    expectSynchronousFailure(
+      () => assertProductionRuntimeValues({ ...validRuntime, [field]: value }),
+      `unsupported runtime ${field}`,
+      "production migration session contract mismatch"
+    );
+  }
+}
+
+async function testContractManifestBinding() {
+  const { migrations, productionContract } =
+    await loadAndVerifyMigrationManifest();
+  assertProductionSchemaContractManifest(productionContract, migrations);
+  const changedManifest = migrations.map(row => ({ ...row }));
+  changedManifest.at(-1).sha256 = "0".repeat(64);
+  expectSynchronousFailure(
+    () =>
+      assertProductionSchemaContractManifest(
+        productionContract,
+        changedManifest
+      ),
+    "stale schema contract refuses a changed migration set",
+    "production schema contract migration set mismatch"
+  );
+  const staleHistoryContract = JSON.parse(JSON.stringify(productionContract));
+  staleHistoryContract.baseHistory.rows[0].hash = "f".repeat(64);
+  expectSynchronousFailure(
+    () =>
+      assertProductionSchemaContractManifest(staleHistoryContract, migrations),
+    "stale contract history refuses before database access",
+    "production schema contract history does not match manifest"
+  );
+}
+
+function expectSynchronousFailure(action, label, expectedMessage) {
+  try {
+    action();
+  } catch (error) {
+    if (error instanceof Error && error.message.includes(expectedMessage)) {
+      return;
+    }
+    throw new Error(`wrong synchronous refusal for ${label}`, { cause: error });
+  }
+  throw new Error(`expected synchronous refusal: ${label}`);
 }

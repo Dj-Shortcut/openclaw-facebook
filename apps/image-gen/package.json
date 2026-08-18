@@ -11,6 +11,7 @@
     "build:docker": "vite build && esbuild server/_core/index.ts --platform=node --bundle --format=cjs --external:vite --outfile=dist/index.cjs",
     "check": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
+    "db:generate-production-contract": "node scripts/generate-production-schema-contract.mjs",
     "db:check-identifiers": "node scripts/rehearse-0015-migration.mjs --check-identifiers-only",
     "db:migrate": "node scripts/migrate-production.mjs",
     "db:test-production-migrator": "node scripts/test-production-migrator.mjs",

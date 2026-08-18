@@ -5,6 +5,8 @@
   "baseSchemaSnapshotSha256": "e0102aad23d607b4b359d1a11458d56c63533d73f056f332076ba952b7468b35",
   "schemaSnapshot": "meta/0015_snapshot.json",
   "schemaSnapshotSha256": "5f889f07ae52ba8a932ec10043ee2f2fe1f7e753515c9ce1f34261acc9ca08e5",
+  "productionSchemaContract": "production-schema-contract.json",
+  "productionSchemaContractSha256": "78d1e472c51a8a848b6818c2a5b750e6982a60e3c96d6e8566a0444f4dda15b0",
   "migrations": [
     {
       "idx": 0,
