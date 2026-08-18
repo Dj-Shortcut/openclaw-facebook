@@ -66,14 +66,25 @@ try {
   );
 
   const concurrentUrl = databaseUrl(databases[0]);
-  await admin.query("SET GLOBAL sql_quote_show_create=0");
-  await admin.query("SET GLOBAL show_create_table_verbosity=1");
-  const results = await Promise.all([
-    runProductionMigrations({ databaseUrl: concurrentUrl }),
-    runProductionMigrations({ databaseUrl: concurrentUrl }),
-  ]);
-  await admin.query("SET GLOBAL sql_quote_show_create=1");
-  await admin.query("SET GLOBAL show_create_table_verbosity=0");
+  const [[showCreateDefaults]] = await admin.query(
+    "SELECT @@GLOBAL.sql_quote_show_create AS quoteShowCreate,@@GLOBAL.show_create_table_verbosity AS tableVerbosity"
+  );
+  let results;
+  try {
+    await admin.query("SET GLOBAL sql_quote_show_create=0");
+    await admin.query("SET GLOBAL show_create_table_verbosity=0");
+    results = await Promise.all([
+      runProductionMigrations({ databaseUrl: concurrentUrl }),
+      runProductionMigrations({ databaseUrl: concurrentUrl }),
+    ]);
+  } finally {
+    await admin.query(
+      `SET GLOBAL sql_quote_show_create=${Number(showCreateDefaults.quoteShowCreate)}`
+    );
+    await admin.query(
+      `SET GLOBAL show_create_table_verbosity=${Number(showCreateDefaults.tableVerbosity)}`
+    );
+  }
   assert(
     results.every(result => result.appliedCount === 16),
     "concurrent apply"
@@ -800,13 +811,15 @@ function testSchemaDigestContracts() {
     transactionIsolation: "READ-COMMITTED",
     foreignKeyChecks: 1,
     defaultStorageEngine: "InnoDB",
+    innodbDefaultRowFormat: "dynamic",
     lowerCaseTableNames: 0,
     explicitTimestampDefaults: 1,
     autoIncrementIncrement: 1,
     autoIncrementOffset: 1,
     informationSchemaStatsExpiry: 0,
     sqlQuoteShowCreate: 1,
-    showCreateTableVerbosity: 0,
+    showCreateTableVerbosity: 1,
+    defaultEncryption: "NO",
   };
   assertProductionRuntimeValues(validRuntime);
   expectSynchronousFailure(
@@ -816,13 +829,15 @@ function testSchemaDigestContracts() {
   );
   for (const [field, value] of [
     ["defaultStorageEngine", "MyISAM"],
+    ["innodbDefaultRowFormat", "compact"],
     ["lowerCaseTableNames", 2],
     ["explicitTimestampDefaults", 0],
     ["autoIncrementIncrement", 2],
     ["autoIncrementOffset", 2],
     ["informationSchemaStatsExpiry", 86400],
     ["sqlQuoteShowCreate", 0],
-    ["showCreateTableVerbosity", 1],
+    ["showCreateTableVerbosity", 0],
+    ["defaultEncryption", "YES"],
   ]) {
     expectSynchronousFailure(
       () => assertProductionRuntimeValues({ ...validRuntime, [field]: value }),
