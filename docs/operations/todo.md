@@ -513,6 +513,10 @@ Quota drift investigation note:
 - [x] Add workspace-scoped Mollie billing schema, classic payment webhook, one-time Startpilot checkout, dormant subscription provisioning, entitlement records, portal controls, and daily reconciliation.
 - [x] Keep live Mollie billing disabled by default and reject key/mode or insecure URL mismatches.
 - [x] Validate the effective portal handoff origin (`PORTAL_BASE_URL`, falling back to `APP_BASE_URL`) before billing readiness/checkout; production/live requires HTTPS and an origin-only URL.
+- [x] Consolidate the Luna payment and Terra Page-scoped handoff release gates
+  in `docs/MOLLIE_HANDOFF_LAUNCH_CHECKLIST.md`; current combined verdict is
+  NO-GO until provider, real-MySQL, production-like migration, paid-user
+  recovery, and operational approval evidence is complete.
 - [x] Select the bounded product offer: `€19` once, 30 days, one workspace/Page, 300 AI answers, 20 Images 2.0 generations, and at most five images per day, without renewal, top-ups, or overage.
 - [ ] Approve the draft Startpilot legal copy, accounting treatment, refund/withdrawal terms, invoice treatment, and financial-retention policy before live payment.
 - [ ] Run and record all Mollie sandbox cases in `docs/MOLLIE_TEST_RESULTS.md`.

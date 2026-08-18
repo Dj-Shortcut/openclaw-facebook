@@ -6,6 +6,26 @@ No Mollie sandbox test was run as part of this local implementation because no
 test account/key or profile activation evidence was provided. Never mark a row
 passed without a dated artifact that contains no secret or customer data.
 
+## Combined Sol release evidence (2026-08-18)
+
+- Integrated Luna PR #374 from `main` with Terra PR #373 head
+  `9bf6234fa61e630f1825aa2ce3cec34cd8f88278`; no WIP snapshot was included.
+- Full image-gen Vitest suite: PASS, 132 files / 1,298 tests.
+- Root Facebook/gateway Vitest suite: PASS, 18 files / 203 tests.
+- Image-gen TypeScript check and production build: PASS.
+- Root TypeScript build: PASS.
+- Offline Drizzle schema/snapshot check through `0014`: PASS with a local dummy
+  URL; this did not connect to or migrate a database.
+- Local real-MySQL migration/concurrency run: NOT RUN because no Docker or
+  MySQL runtime was available.
+- Existing-schema production-like upgrade, partial-failure recovery, and
+  rollback through `0013` then `0014`: NOT RUN.
+- Mollie Test Mode and production-like Facebook Page/outbox E2E: NOT RUN.
+
+The combined code contracts are green, but the provider, real-database,
+recovery, and operational gaps keep the release verdict at **NO-GO**. See
+`MOLLIE_HANDOFF_LAUNCH_CHECKLIST.md` for owners and smallest next actions.
+
 ## Local automated evidence (2026-08-01)
 
 - Image-gen `tsc --noEmit`: PASS.
