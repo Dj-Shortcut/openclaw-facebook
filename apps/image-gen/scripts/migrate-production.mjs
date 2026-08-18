@@ -355,10 +355,12 @@ function normalizeDefault(value) {
   if (typeof value === "boolean") return value ? "1" : "0";
   if (typeof value === "number") return String(value);
   const normalized = String(value).trim();
-  if (
-    normalized === "(now())" ||
-    /^current_timestamp(?:\(\))?$/i.test(normalized)
-  )
+  const compact = normalized.toLowerCase().replaceAll(/\s/g, "");
+  const unwrapped =
+    compact.startsWith("(") && compact.endsWith(")")
+      ? compact.slice(1, -1)
+      : compact;
+  if (/^(?:now|current_timestamp)(?:\(\d*\))?$/.test(unwrapped))
     return "current_timestamp";
   if (normalized.startsWith("'") && normalized.endsWith("'"))
     return normalized.slice(1, -1);
