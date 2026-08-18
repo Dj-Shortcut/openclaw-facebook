@@ -31,7 +31,7 @@ or resurrect erased content.
 
 ## 2. Migration order and recovery
 
-- [ ] Use only `pnpm --dir apps/image-gen run db:migrate:production`; do not run
+- [ ] Use only `pnpm --dir apps/image-gen run db:migrate`; do not run
       raw `drizzle-kit migrate` in production.
 - [ ] The supported upgrade is exact committed `0014` to final `0015`. The
       runner verifies MySQL 8.4.11 creation inputs, migration singleton lock,
