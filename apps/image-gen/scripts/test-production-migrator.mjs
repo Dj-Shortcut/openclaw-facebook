@@ -52,6 +52,7 @@ const databases = [
   "leaderbot_production_migrator_primary_key_fresh",
   "leaderbot_production_migrator_primary_key_upgrade",
   "leaderbot_production_migrator_prepared_capacity",
+  "leaderbot_production_migrator_single_prepared_slot",
 ];
 const admin = await mysql.createConnection({
   host: adminUrl.hostname,
@@ -183,6 +184,26 @@ try {
   }
   await withDatabase(databases[17], connection =>
     assertNoApplicationTables(connection, "prepared capacity refusal")
+  );
+  try {
+    const [[preparedUsed]] = await admin.query(
+      "SHOW GLOBAL STATUS LIKE 'Prepared_stmt_count'"
+    );
+    await admin.query(
+      `SET GLOBAL max_prepared_stmt_count=${Number(preparedUsed.Value) + 1}`
+    );
+    await expectFailure(
+      runProductionMigrations({ databaseUrl: databaseUrl(databases[18]) }),
+      "fresh migration with one free prepared statement slot",
+      "MySQL prepared statement capacity is exhausted"
+    );
+  } finally {
+    await admin.query(
+      `SET GLOBAL max_prepared_stmt_count=${Number(preparedDefault.value)}`
+    );
+  }
+  await withDatabase(databases[18], connection =>
+    assertNoApplicationTables(connection, "single prepared slot refusal")
   );
   await testCompletedSchemaRefusals(databases[0], finalStatements);
   await testHistoryRefusals(databases[0], manifest);
@@ -878,6 +899,19 @@ function testSchemaDigestContracts() {
     () => canonicalTriggerTuple(trigger, "other@localhost"),
     "mismatched trigger definer",
     "trigger definer does not match the migration principal"
+  );
+  expectSynchronousFailure(
+    () =>
+      assertTriggerGrantScope(
+        [
+          "GRANT TRIGGER ON *.* TO `migrator`@`%`",
+          "REVOKE TRIGGER ON `leaderbot`.* FROM `migrator`@`%`",
+        ],
+        "leaderbot",
+        false
+      ),
+    "current-schema partial revoke overrides global trigger grant",
+    "migration principal lacks scoped TRIGGER privilege"
   );
   const validRuntime = {
     version: "8.4.11",

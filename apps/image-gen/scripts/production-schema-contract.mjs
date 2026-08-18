@@ -44,7 +44,7 @@ export async function assertPreparedStatementCapacity(connection) {
   const [[used]] = await connection.query(
     "SHOW GLOBAL STATUS LIKE 'Prepared_stmt_count'"
   );
-  if (Number(limit.maximum) <= Number(used.Value)) {
+  if (Number(limit.maximum) - Number(used.Value) < 2) {
     throw new Error("MySQL prepared statement capacity is exhausted");
   }
 }
@@ -62,7 +62,23 @@ async function assertTriggerCapability(connection, runtime) {
 export function assertTriggerGrantScope(grants, databaseName, requireSuper) {
   let triggerAllowed = false;
   let globalSuper = false;
+  let triggerRevoked = false;
   for (const grant of grants) {
+    const revoke = /^REVOKE (.+) ON (.+) FROM /i.exec(grant);
+    if (revoke) {
+      const privileges = revoke[1]
+        .split(",")
+        .map(value => value.trim().toUpperCase());
+      const scope = revoke[2].replaceAll("`", "");
+      if (
+        (scope === "*.*" || scope === `${databaseName}.*`) &&
+        (privileges.includes("ALL PRIVILEGES") ||
+          privileges.includes("TRIGGER"))
+      ) {
+        triggerRevoked = true;
+      }
+      continue;
+    }
     const match = /^GRANT (.+) ON (.+) TO /i.exec(grant);
     if (!match) continue;
     const privileges = match[1]
@@ -76,7 +92,7 @@ export function assertTriggerGrantScope(grants, databaseName, requireSuper) {
       (global || currentSchema) && (all || privileges.includes("TRIGGER"));
     globalSuper ||= global && (all || privileges.includes("SUPER"));
   }
-  if (!triggerAllowed) {
+  if (!triggerAllowed || triggerRevoked) {
     throw new Error("migration principal lacks scoped TRIGGER privilege");
   }
   if (requireSuper && !globalSuper) {
