@@ -391,10 +391,11 @@ traffic cannot reach internal gateway admin/API surfaces.
     window, stale sender state, changed Page binding, or exhausted bounded send
     retry records a failed `send_portal_handoff` outbox item without creating a
     second payment. Automated outbox retries reuse the same idempotent delivery
-    identity; terminal response-window or Page-binding failures remain auditable
-    through the outbox record and redacted delivery logs, without recharge.
-    Human recovery is unavailable: the protected admin sender is deliberately
-    fail-closed until recovery is bound to the failed outbox operation and an
+    identity. After a terminal response-window, sender-state, Page-binding, or
+    exhausted-send failure, the same user's next verified inbound message to
+    the same uniquely connected Page rearms only that matching paid outbox row;
+    payment truth is never reopened. The protected shared-admin sender remains
+    fail-closed until manual recovery is bound to the failed operation and an
     authenticated, non-forgeable support principal. Never copy a raw token into
     support tooling.
   - Storage boundary: `portalHandoffTokens` rows are scoped to one `workspaceId`; the opaque token is never stored, only its hash is persisted, and Messenger identity may be stored only as the privacy-peppered `messengerSenderUserKey`.
@@ -515,12 +516,13 @@ Quota drift investigation note:
 - [x] Validate the effective portal handoff origin (`PORTAL_BASE_URL`, falling back to `APP_BASE_URL`) before billing readiness/checkout; production/live requires HTTPS and an origin-only URL.
 - [x] Consolidate the Luna payment and Terra Page-scoped handoff release gates
   in `docs/MOLLIE_HANDOFF_LAUNCH_CHECKLIST.md`; current combined verdict is
-  NO-GO until provider, real-MySQL, production-like migration, paid-user
-  recovery, and operational approval evidence is complete.
+  NO-GO until provider, remaining MySQL checkout/webhook concurrency,
+  production-like migration, and operational approval evidence is complete.
 - [x] Select the bounded product offer: `€19` once, 30 days, one workspace/Page, 300 AI answers, 20 Images 2.0 generations, and at most five images per day, without renewal, top-ups, or overage.
 - [ ] Approve the draft Startpilot legal copy, accounting treatment, refund/withdrawal terms, invoice treatment, and financial-retention policy before live payment.
 - [ ] Run and record all Mollie sandbox cases in `docs/MOLLIE_TEST_RESULTS.md`.
-- [ ] Add real-MySQL concurrency/integrity tests for intents, webhooks, ledger, outbox, and duplicate subscription prevention.
+- [x] Add MySQL 8.4 integration evidence for concurrent portal-handoff delivery identity, one claim with membership preservation, verified-inbound recovery of the same paid row, and an existing-row `0014` upgrade rehearsal.
+- [ ] Add remaining real-MySQL concurrency/integrity tests for intents, webhooks, ledger, outbox, and duplicate subscription prevention.
 - [ ] Before paid Images 2.0 activation, smoke-test direct GPT Image 2 generation and editing and set a conservative `OPENAI_IMAGE_ESTIMATED_COST_USD` that covers output plus prompt/high-fidelity source-image input until actual usage reconciliation is implemented.
 - [ ] Replace the non-atomic USD spend-cap summary-check/ledger-append sequence with a concurrency-tested atomic reservation/commit/release path; simultaneous workers can currently pass the same remaining budget, so paid activation stays NO-GO until this is closed.
 - [ ] Add a durable, tenant-scoped finalize retry/outbox for AI-answer reservations so an ambiguous gateway-to-image-gen outage after successful Messenger delivery cannot let a reservation expire and undercount one answer.
