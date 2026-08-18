@@ -385,4 +385,16 @@ export async function sendVideo(
   return outcome;
 }
 
+export async function sendAudio(
+  psid: string,
+  audioUrl: string
+): Promise<MessengerSendOutcome> {
+  return await sendMessage(psid, {
+    attachment: {
+      type: "audio",
+      payload: { url: audioUrl, is_reusable: false },
+    },
+  });
+}
+
 export type { QuickReply, WebUrlButton, MessengerSendOutcome };

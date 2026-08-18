@@ -188,10 +188,11 @@ Still open before broad customer launch or paid activation:
   resumable offline migration manifest that maps every proven legacy Messenger
   PSID state to exactly one receiving Page, preserves consent, response-window,
   quota/reservation, face-memory, and pending-deletion fields, and writes the
-  full record to its Page+PSID key. After verifying the copy, purge its proven
-  legacy Messenger raw-PSID record and retain auditable evidence that no
-  identified Messenger record remains unmigrated or undeleted. Preserve
-  non-Messenger records; move them only through a separately verified
+  full record to its Page+PSID key. After verifying that this Page+PSID copy
+  remains intact, purge only its proven legacy Messenger raw-PSID record and
+  retain auditable evidence that every identified Messenger record has a
+  verified Page+PSID copy and its proven legacy raw-PSID record was purged.
+  Preserve non-Messenger records; move them only through a separately verified
   channel-scoping migration. Runtime `delete-my-data` must not guess that an
   unmarked raw-PSID record belongs to Messenger because the old keyspace is
   shared by non-Messenger callers. Abort on missing or ambiguous Page ownership:

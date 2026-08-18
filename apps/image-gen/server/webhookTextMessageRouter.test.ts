@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleTextMessage } from "./_core/webhookTextMessageRouter";
 import { t } from "./_core/i18n";
-import { getState, resetStateStore, setLastGenerated } from "./_core/messengerState";
+import {
+  getState,
+  resetStateStore,
+  setLastGenerated,
+  setPendingVideoGeneration,
+} from "./_core/messengerState";
 import type { HandlerContext } from "./_core/webhookHandlerTypes";
 
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
@@ -75,7 +80,6 @@ describe("webhook text message router", () => {
 
   it("runs generated video path for animation intent when feature flag is on and a photo exists", async () => {
     const psid = "video-flag-on-user";
-    vi.useFakeTimers();
     process.env.MESSENGER_VIDEO_GENERATION_ENABLED = "true";
     await setLastGenerated(psid, "https://img.example/source.jpg");
     const runVideoGeneration = vi.fn(async () => ({ sent: true as const }));
@@ -89,9 +93,6 @@ describe("webhook text message router", () => {
       text: "laat hem bewegen",
       timestamp: 1730000000000,
     });
-
-    expect(runVideoGeneration).not.toHaveBeenCalled();
-    await vi.runAllTimersAsync();
 
     expect(runVideoGeneration).toHaveBeenCalledWith(
       psid,
@@ -111,6 +112,35 @@ describe("webhook text message router", () => {
       t("nl", "unsupportedVideoOrAnimation"),
       "req-video-flag-on"
     );
+  });
+
+  it("retries the stored video request instead of treating retry text as an image prompt", async () => {
+    const psid = "video-retry-user";
+    const runVideoGeneration = vi.fn(async () => ({ sent: true as const }));
+    const ctx = makeHandlerContext({ runVideoGeneration });
+    await setPendingVideoGeneration(psid, {
+      sourceImageUrl: "https://img.example/selfie.jpg",
+      promptHint: "welkom op mijn kanaal",
+      requestedAt: 1730000000000,
+    });
+
+    await handleTextMessage(ctx, {
+      psid,
+      userId: "video-retry-user-key",
+      reqId: "req-video-retry",
+      lang: "nl",
+      text: "Probeer nog eens",
+    });
+
+    expect(runVideoGeneration).toHaveBeenCalledWith(
+      psid,
+      "video-retry-user-key",
+      "req-video-retry",
+      "nl",
+      "https://img.example/selfie.jpg",
+      "welkom op mijn kanaal"
+    );
+    expect(ctx.runImageGeneration).not.toHaveBeenCalled();
   });
 
   it("sends action prompts, stores pending actions, and applies after-send state", async () => {

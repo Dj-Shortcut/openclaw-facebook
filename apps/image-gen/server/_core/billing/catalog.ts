@@ -33,10 +33,11 @@ const BILLING_PLANS = Object.freeze({
     entitlements: Object.freeze({
       imagesPerDay: 100,
       messagesPerMinute: 120,
+      videoGenerationsPerDay: 10,
     }),
     mollieDescription: "Leaderbot Premium - maandelijks abonnement",
     active: true,
-    publiclyAvailable: false,
+    publiclyAvailable: true,
   }),
   [STARTPILOT_PLAN_CODE]: Object.freeze({
     code: STARTPILOT_PLAN_CODE,

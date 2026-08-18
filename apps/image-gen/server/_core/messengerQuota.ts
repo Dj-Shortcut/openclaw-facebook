@@ -123,9 +123,18 @@ async function reserveVideoGenerationSlot(psid: string): Promise<string | null> 
   return null;
 }
 
-/** Returns whether a Messenger PSID or tenant-safe user key has exact quota bypass access. */
+/**
+ * Returns whether a Messenger PSID or tenant-safe user key has explicit test
+ * access. Messenger admins are infrastructure owners and therefore share the
+ * explicit bypass; normal customer accounts remain quota-bound.
+ */
 export function hasQuotaBypass(psid: string, userKey: string): boolean {
-  const raw = process.env.MESSENGER_QUOTA_BYPASS_IDS ?? "";
+  const raw = [
+    process.env.MESSENGER_QUOTA_BYPASS_IDS ?? "",
+    process.env.MESSENGER_ADMIN_IDS ?? "",
+  ]
+    .filter(Boolean)
+    .join(",");
   if (!raw.trim()) {
     return false;
   }

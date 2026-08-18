@@ -4,7 +4,11 @@ import {
   safelyUpdateCostLedgerEntry,
 } from "./costLedger";
 import { safeLog } from "./messengerApi";
-import { anonymizePsid, setLastGeneratedVideo } from "./messengerState";
+import {
+  anonymizePsid,
+  setLastGeneratedVideo,
+  setPendingVideoGeneration,
+} from "./messengerState";
 import { t, type Lang } from "./i18n";
 import { toLogUser } from "./privacy";
 import {
@@ -31,6 +35,8 @@ import {
 import { getVideoProvider } from "./video-generation/videoProviderRegistry";
 import type { VideoProvider } from "./video-generation/videoProvider";
 import type { MessengerSendOutcome } from "./messengerApi";
+import { generateSpeechAudio } from "./ttsProvider";
+import { muxMp4WithMp3 } from "./mediaMux";
 
 function getVideoProviderName(provider: VideoProvider): string {
   const configuredProvider = process.env.MESSENGER_VIDEO_PROVIDER?.trim().toLowerCase();
@@ -374,6 +380,8 @@ export function createMessengerVideoGenerationRunner(
             provider: providerResult.provider,
             errorClass: providerResult.errorClass,
             retryable: providerResult.retryable,
+            providerStatus: providerResult.providerStatus,
+            providerErrorCode: providerResult.providerErrorCode,
           });
           sendOutcome = await sendVideoText(
             deps,
@@ -426,10 +434,18 @@ export function createMessengerVideoGenerationRunner(
           return;
         }
 
+        let outputVideoBytes = providerResult.videoBytes;
+        if (process.env.MESSENGER_TTS_ENABLED === "true") {
+          outputVideoBytes = await muxMp4WithMp3(
+            outputVideoBytes,
+            await generateSpeechAudio(promptHint)
+          );
+        }
+
         const storedVideo = await storeGeneratedVideo({
           reqId,
-          videoBytes: providerResult.videoBytes,
-          contentType: providerResult.contentType,
+          videoBytes: outputVideoBytes,
+          contentType: "video/mp4",
         });
 
         if (hasVideoFlowTimedOut(flowDeadline)) {
@@ -467,6 +483,7 @@ export function createMessengerVideoGenerationRunner(
             providerResult.providerJobId
           )
         );
+        await Promise.resolve(setPendingVideoGeneration(psid, null));
         sendOutcome = await sendVideoAttachment(deps, psid, storedVideo.url, reqId);
         safeLog("messenger_video_generation_completed", {
           reqId,

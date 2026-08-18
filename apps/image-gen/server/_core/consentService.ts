@@ -25,6 +25,19 @@ const DELETE_COMMAND_BY_LANG: Record<Lang, string> = {
 const DELETE_COMMANDS = new Set(Object.values(DELETE_COMMAND_BY_LANG));
 const DELETE_CONFIRM_TEXTS = new Set(["ja", "ja verwijder", "yes", "confirm"]);
 const DELETE_CANCEL_TEXTS = new Set(["nee", "no", "cancel", "stop"]);
+const CONSENT_ACCEPT_TEXTS = new Set([
+  "ja",
+  "ok",
+  "oke",
+  "okay",
+  "akkoord",
+  "ik ga akkoord",
+  "ik geef toestemming",
+  "toestemming",
+  "yes",
+  "i agree",
+  "ich stimme zu",
+]);
 
 type MessengerConsentGateInput = {
   psid: string;
@@ -76,6 +89,10 @@ function isDeleteConfirmText(text: string | null | undefined): boolean {
 
 function isDeleteCancelText(text: string | null | undefined): boolean {
   return DELETE_CANCEL_TEXTS.has(normalizeControlText(text));
+}
+
+function isConsentAcceptText(text: string | null | undefined): boolean {
+  return CONSENT_ACCEPT_TEXTS.has(normalizeControlText(text));
 }
 
 function deleteCommand(lang: Lang): string {
@@ -239,7 +256,10 @@ function whatsAppDeleteNoticeButtons(
 export async function handleMessengerConsentGate(
   input: MessengerConsentGateInput
 ): Promise<boolean> {
-  if (input.payload === GDPR_CONSENT_AGREE) {
+  if (
+    input.payload === GDPR_CONSENT_AGREE ||
+    (input.state.consentGiven !== true && isConsentAcceptText(input.text))
+  ) {
     await Promise.resolve(setConsentState(input.psid, true));
     await input.sendText(messengerConsentAcceptedText(input.lang));
     const response = buildQuickStartResponse(input.lang);

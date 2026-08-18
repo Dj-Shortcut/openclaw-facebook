@@ -11,6 +11,7 @@ import { parseStartpilotQuota } from "./billing/entitlementUsageStore";
 const STARTPILOT_IMAGE_TOTAL_LIMIT = 20;
 const STARTPILOT_IMAGE_DAILY_LIMIT = 5;
 const STARTPILOT_IMAGE_MODEL = "gpt-image-2";
+const PREMIUM_MONTHLY_PLAN_CODE = "premium_monthly_v1";
 
 export type StartpilotRuntimePolicy = Readonly<{
   kind: "startpilot";
@@ -207,6 +208,51 @@ export async function resolveWorkspaceRuntimePolicy(
     databaseRuntimeDeps,
     now
   );
+}
+
+/** Video/TTS is a paid-only capability scoped to the owning Facebook Page. */
+export async function hasPremiumMediaAccess(
+  pageId: string | undefined,
+  now = new Date()
+): Promise<boolean> {
+  if (
+    !isMollieEntitlementEnforcementEnabled() ||
+    !process.env.DATABASE_URL?.trim()
+  ) {
+    return false;
+  }
+
+  const normalizedPageId = pageId?.trim();
+  if (!normalizedPageId) return false;
+
+  let workspaceIds: number[];
+  try {
+    workspaceIds = await databaseRuntimeDeps.findWorkspaceIdsByFacebookPage(
+      normalizedPageId
+    );
+  } catch {
+    throw new WorkspaceEntitlementLookupError();
+  }
+
+  const uniqueWorkspaceIds = Array.from(new Set(workspaceIds));
+  if (uniqueWorkspaceIds.length === 0) return false;
+  if (uniqueWorkspaceIds.length !== 1) {
+    throw new WorkspaceEntitlementLookupError(
+      "Facebook Page is linked to multiple workspaces"
+    );
+  }
+
+  let entitlement: ActiveEntitlement | null;
+  try {
+    entitlement = await databaseRuntimeDeps.findActiveEntitlement(
+      uniqueWorkspaceIds[0],
+      runtimeBillingMode(),
+      now
+    );
+  } catch {
+    throw new WorkspaceEntitlementLookupError();
+  }
+  return entitlement?.planCode === PREMIUM_MONTHLY_PLAN_CODE;
 }
 
 export const STARTPILOT_RUNTIME_LIMITS = Object.freeze({

@@ -3,6 +3,7 @@ WORKDIR /app
 RUN corepack enable
 
 COPY package.json pnpm-lock.yaml ./
+COPY pnpm-workspace.yaml ./
 COPY patches ./patches
 RUN pnpm install --frozen-lockfile
 
@@ -12,6 +13,7 @@ RUN pnpm run build:docker
 FROM node:24-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+RUN apk add --no-cache ffmpeg
 # Keep the runtime stage slim: copy only the bundled server entrypoint and the
 # static assets the production server actually serves from /app/public.
 COPY --from=build /app/dist ./dist

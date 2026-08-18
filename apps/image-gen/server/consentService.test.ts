@@ -94,6 +94,34 @@ describe("Messenger consent deletion flow", () => {
     }
   });
 
+  it.each(["Ok", "Ik geef toestemming"]) (
+    "accepts typed Messenger consent: %s",
+    async text => {
+      const psid = `messenger-consent-${text.replace(/\\W+/g, "-")}`;
+      const sendText = vi.fn(async () => undefined);
+      const sendActions = vi.fn(async () => undefined);
+      await Promise.resolve(getOrCreateState(psid));
+      const state = await Promise.resolve(getState(psid));
+
+      await expect(
+        handleMessengerConsentGate({
+          psid,
+          lang: "nl",
+          text,
+          state: state!,
+          sendText,
+          sendActions,
+        })
+      ).resolves.toBe(true);
+
+      expect((await Promise.resolve(getState(psid)))?.consentGiven).toBe(true);
+      expect(sendActions).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(Array)
+      );
+    }
+  );
+
   it("deletes state, retained source assets, generated assets, and completion markers after confirmation", async () => {
     const psid = "messenger-delete-command-user";
     const userKey = anonymizePsid(psid);

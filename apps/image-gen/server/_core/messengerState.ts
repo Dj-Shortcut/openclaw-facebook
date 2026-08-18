@@ -36,6 +36,12 @@ export type QuotaReservationState = {
 export type SourceImageOrigin = "external" | "stored";
 export type PendingEditIntent = "change_background";
 
+export type PendingVideoGeneration = {
+  sourceImageUrl: string;
+  promptHint: string;
+  requestedAt: number;
+};
+
 export type MessengerUserState = {
   psid: string;
   userKey: string;
@@ -70,6 +76,8 @@ export type MessengerUserState = {
   lastGeneratedVideoAt?: number | null;
   lastGeneratedVideoProvider?: string | null;
   lastGeneratedVideoProviderJobId?: string | null;
+  /** Tenant-scoped retry input; never emitted to logs or shared indexes. */
+  pendingVideoGeneration?: PendingVideoGeneration | null;
   lastVariantCursor?: number;
   pendingConversationActions?: ConversationAction[];
   pendingConversationActionsByMessageId?: Record<string, ConversationAction[]>;
@@ -187,6 +195,17 @@ export function setLastGeneratedVideo(
     now
   );
 
+  if (isPromiseLike(result)) {
+    return result.then(() => undefined);
+  }
+}
+
+export function setPendingVideoGeneration(
+  psid: string,
+  pending: PendingVideoGeneration | null,
+  now = Date.now()
+): MaybePromise<void> {
+  const result = patchState(psid, { pendingVideoGeneration: pending }, now);
   if (isPromiseLike(result)) {
     return result.then(() => undefined);
   }

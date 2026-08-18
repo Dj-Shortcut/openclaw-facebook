@@ -27,6 +27,7 @@ import { deleteState, readState, updateStoredState } from "./_core/stateStore";
 
 const TEST_PEPPER = "ci-test-pepper";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
+const originalMessengerAdminIds = process.env.MESSENGER_ADMIN_IDS;
 
 describe("messenger quota dayKey", () => {
   beforeAll(() => {
@@ -37,12 +38,18 @@ describe("messenger quota dayKey", () => {
     resetStateStore();
     vi.useRealTimers();
     delete process.env.MESSENGER_QUOTA_BYPASS_IDS;
+    delete process.env.MESSENGER_ADMIN_IDS;
     delete process.env.MESSENGER_FREE_DAILY_LIMIT;
     delete process.env.MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT;
     delete process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT;
   });
 
   afterAll(() => {
+    if (originalMessengerAdminIds === undefined) {
+      delete process.env.MESSENGER_ADMIN_IDS;
+    } else {
+      process.env.MESSENGER_ADMIN_IDS = originalMessengerAdminIds;
+    }
     if (originalPrivacyPepper === undefined) {
       delete process.env.PRIVACY_PEPPER;
       return;
@@ -350,6 +357,24 @@ describe("messenger quota dayKey", () => {
 
     expect(await canGenerate(userId)).toBe(true);
     expect((await Promise.resolve(getOrCreateState(userId))).quota.count).toBe(0);
+  });
+
+  it("keeps video quota unchanged for configured Messenger admins", async () => {
+    const userId = "video-admin-bypass-user";
+    process.env.MESSENGER_ADMIN_IDS = userId;
+    process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT = "0";
+
+    const reservation = await reserveVideoGenerationForAttempt(userId);
+
+    expect(reservation).not.toBeNull();
+    await expect(
+      commitVideoGenerationSuccess(userId, reservation!)
+    ).resolves.toBe(true);
+    expect(await canGenerateVideo(userId)).toBe(true);
+    expect(
+      (await Promise.resolve(getOrCreateState(userId))).videoGenerationQuota
+        .count
+    ).toBe(0);
   });
 
   it("commits a normal reserved video quota success", async () => {
