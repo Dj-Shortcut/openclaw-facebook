@@ -124,7 +124,7 @@ suite("portal handoff MySQL concurrency", () => {
       )
     );
 
-    expect(new Set(results.map(result => result.id))).toHaveSize(1);
+    expect(new Set(results.map(result => result.id)).size).toBe(1);
     expect(results.every(result => result.status === "pending")).toBe(true);
 
     const database = await getDatabaseOrThrow();
