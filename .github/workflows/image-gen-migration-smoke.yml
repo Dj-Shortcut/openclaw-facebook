@@ -6,11 +6,11 @@ permissions:
 on:
   pull_request:
     paths:
-      - 'apps/image-gen/drizzle/**'
-      - 'apps/image-gen/drizzle.config.ts'
-      - 'apps/image-gen/package.json'
-      - 'apps/image-gen/pnpm-lock.yaml'
-      - '.github/workflows/image-gen-migration-smoke.yml'
+      - "apps/image-gen/drizzle/**"
+      - "apps/image-gen/drizzle.config.ts"
+      - "apps/image-gen/package.json"
+      - "apps/image-gen/pnpm-lock.yaml"
+      - ".github/workflows/image-gen-migration-smoke.yml"
   workflow_dispatch:
 
 concurrency:
@@ -49,8 +49,8 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '24'
-          cache: 'pnpm'
+          node-version: "24"
+          cache: "pnpm"
           cache-dependency-path: apps/image-gen/pnpm-lock.yaml
 
       - name: Install dependencies
@@ -102,5 +102,53 @@ jobs:
 
           if [ "$legacy_index_count" != "0" ]; then
             echo 'Legacy unique index dailyQuota_userId_unique must be absent';
+            exit 1;
+          fi
+
+      - name: Verify portal handoff MySQL concurrency
+        working-directory: apps/image-gen
+        env:
+          DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_image_gen
+          RUN_MYSQL_INTEGRATION: "1"
+        run: |
+          ./node_modules/.bin/vitest run server/portalHandoff.mysql.test.ts
+
+      - name: Rehearse portal handoff schema upgrade with existing rows
+        run: |
+          mysql -h127.0.0.1 -uroot -proot test_image_gen <<'SQL'
+          ALTER TABLE portalHandoffTokens
+            DROP INDEX portalHandoffTokens_delivery_key_hash_unique;
+          ALTER TABLE portalHandoffTokens
+            DROP COLUMN deliveryIdempotencyKeyHash;
+          INSERT INTO portalHandoffTokens (
+            workspaceId,
+            tokenHash,
+            messengerSenderUserKey,
+            facebookPageId,
+            purpose,
+            status,
+            expiresAt,
+            createdByUserId
+          ) VALUES (
+            900001,
+            CONCAT('sha256:', REPEAT('d', 64)),
+            REPEAT('e', 64),
+            'migration-rehearsal-page',
+            'workspace_onboarding',
+            'pending',
+            DATE_ADD(NOW(), INTERVAL 1 DAY),
+            NULL
+          );
+          SQL
+
+          sed 's/--> statement-breakpoint/\n/g' \
+            apps/image-gen/drizzle/0014_portal_handoff_delivery_idempotency.sql \
+            | mysql -h127.0.0.1 -uroot -proot test_image_gen
+
+          existing_rows=$(mysql -h127.0.0.1 -uroot -proot test_image_gen -Nse "SELECT COUNT(*) FROM portalHandoffTokens WHERE workspaceId = 900001 AND deliveryIdempotencyKeyHash IS NULL;")
+          index_columns=$(mysql -h127.0.0.1 -uroot -proot test_image_gen -Nse "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'portalHandoffTokens' AND INDEX_NAME = 'portalHandoffTokens_delivery_key_hash_unique' AND NON_UNIQUE = 0 AND COLUMN_NAME = 'deliveryIdempotencyKeyHash';")
+
+          if [ "$existing_rows" != "1" ] || [ "$index_columns" != "1" ]; then
+            echo 'Migration 0014 did not preserve existing rows or restore the unique delivery index';
             exit 1;
           fi
