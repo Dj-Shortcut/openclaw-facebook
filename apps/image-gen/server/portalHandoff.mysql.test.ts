@@ -390,7 +390,9 @@ suite("portal handoff MySQL concurrency", () => {
       status: "pending",
       expiresAt: secondExpiry,
     });
-    await expect(getPortalHandoffTokenByHash(cycleTokenHash)).resolves.toBeNull();
+    await expect(
+      getPortalHandoffTokenByHash(cycleTokenHash)
+    ).resolves.toBeNull();
     await expect(
       getPortalHandoffTokenByHash(tokenHashForGeneration(2))
     ).resolves.toMatchObject({ id: created.id, capabilityGeneration: 2 });

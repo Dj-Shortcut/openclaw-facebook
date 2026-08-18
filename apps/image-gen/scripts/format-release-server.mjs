@@ -1,20 +1,27 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const base = process.env.LINT_BASE_REF?.trim() || "origin/main";
-execFileSync("git", ["rev-parse", "--verify", base], { stdio: "ignore" });
+execFileSync("git", ["rev-parse", "--verify", base], {
+  cwd: appRoot,
+  stdio: "ignore",
+});
 const files = [
   ...lines(
     execFileSync(
       "git",
       ["diff", "--name-only", "--diff-filter=ACMR", base, "--", "server"],
-      { encoding: "utf8" }
+      { cwd: appRoot, encoding: "utf8" }
     )
   ),
   ...lines(
     execFileSync(
       "git",
       ["ls-files", "--others", "--exclude-standard", "--", "server"],
-      { encoding: "utf8" }
+      { cwd: appRoot, encoding: "utf8" }
     )
   ),
 ]
@@ -30,7 +37,7 @@ const result = spawnSync(
     process.argv.includes("--write") ? "--write" : "--check",
     ...unique,
   ],
-  { encoding: "utf8", stdio: "inherit" }
+  { cwd: appRoot, encoding: "utf8", stdio: "inherit" }
 );
 process.exit(result.status ?? 1);
 

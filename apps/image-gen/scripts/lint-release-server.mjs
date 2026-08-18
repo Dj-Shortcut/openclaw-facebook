@@ -1,20 +1,27 @@
 import { execFileSync, spawnSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const base = process.env.LINT_BASE_REF?.trim() || "origin/main";
-execFileSync("git", ["rev-parse", "--verify", base], { stdio: "ignore" });
+execFileSync("git", ["rev-parse", "--verify", base], {
+  cwd: appRoot,
+  stdio: "ignore",
+});
 
 const changed = lines(
   execFileSync(
     "git",
     ["diff", "--name-only", "--diff-filter=ACMR", base, "--", "server"],
-    { encoding: "utf8" }
+    { cwd: appRoot, encoding: "utf8" }
   )
 ).filter(isTypeScript);
 const untracked = lines(
   execFileSync(
     "git",
     ["ls-files", "--others", "--exclude-standard", "--", "server"],
-    { encoding: "utf8" }
+    { cwd: appRoot, encoding: "utf8" }
   )
 ).filter(isTypeScript);
 const files = [...new Set([...changed, ...untracked])];
@@ -23,7 +30,7 @@ if (files.length === 0) process.exit(0);
 const lint = spawnSync(
   process.platform === "win32" ? "pnpm.cmd" : "pnpm",
   ["exec", "eslint", "--format", "json", ...files],
-  { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }
+  { cwd: appRoot, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }
 );
 if (lint.error) throw lint.error;
 let reports;
@@ -61,7 +68,7 @@ function addedRanges(file) {
   const diff = execFileSync(
     "git",
     ["diff", "--unified=0", base, "--", file],
-    { encoding: "utf8" }
+    { cwd: appRoot, encoding: "utf8" }
   );
   const ranges = [];
   for (const match of diff.matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)) {
