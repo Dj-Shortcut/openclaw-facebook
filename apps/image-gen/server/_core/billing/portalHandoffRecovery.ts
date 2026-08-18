@@ -61,7 +61,7 @@ export async function rearmFailedPortalHandoffAfterInbound(
         .limit(2)
         .for("update");
       if (bindings.length !== 1) return null;
-      const workspaceId = bindings[0]!.workspaceId;
+      const workspaceId = bindings[0].workspaceId;
 
       const jobs = await tx
         .select()

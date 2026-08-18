@@ -10,20 +10,25 @@ passed without a dated artifact that contains no secret or customer data.
 
 - Integrated Luna PR #374 from `main` with Terra PR #373 head
   `9bf6234fa61e630f1825aa2ce3cec34cd8f88278`; no WIP snapshot was included.
-- Full image-gen Vitest suite: PASS, 132 files / 1,298 tests.
+- Full image-gen Vitest suite: PASS, 133 files / 1,301 tests, with the MySQL-only
+  file safely skipped locally (3 additional tests).
 - Root Facebook/gateway Vitest suite: PASS, 18 files / 203 tests.
 - Image-gen TypeScript check and production build: PASS.
 - Root TypeScript build: PASS.
 - Offline Drizzle schema/snapshot check through `0014`: PASS with a local dummy
   URL; this did not connect to or migrate a database.
-- Local real-MySQL migration/concurrency run: NOT RUN because no Docker or
-  MySQL runtime was available.
-- Existing-schema production-like upgrade, partial-failure recovery, and
-  rollback through `0013` then `0014`: NOT RUN.
+- MySQL 8.4 CI run `32112061384`: PASS for concurrent duplicate handoff creation,
+  exactly one concurrent claim with preserved membership role, and rearming
+  only the same paid failed delivery after a matching inbound event. The job
+  also applies the fresh migration chain.
+- Existing-row MySQL 8.4 upgrade rehearsal for `0014`: PASS; the row is
+  preserved and the unique delivery index is restored. A production-like
+  backup rehearsal, partial-failure recovery, rollback, and the full ordered
+  `0013` -> `0014` procedure remain NOT RUN.
 - Mollie Test Mode and production-like Facebook Page/outbox E2E: NOT RUN.
 
-The combined code contracts are green, but the provider, real-database,
-recovery, and operational gaps keep the release verdict at **NO-GO**. See
+The combined code and targeted real-database contracts are green, but provider,
+production-like migration, and operational gaps keep the release verdict at **NO-GO**. See
 `MOLLIE_HANDOFF_LAUNCH_CHECKLIST.md` for owners and smallest next actions.
 
 ## Local automated evidence (2026-08-01)

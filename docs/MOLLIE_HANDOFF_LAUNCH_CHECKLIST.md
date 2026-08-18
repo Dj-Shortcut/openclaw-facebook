@@ -30,32 +30,32 @@ The boundary between the two inputs is:
 
 ## Release test matrix
 
-The local automated result below is component/integration evidence with fakes;
-it is not Mollie-provider or real-MySQL evidence.
+The local automated result below includes component tests with fakes plus a
+MySQL 8.4 CI integration job. It is not Mollie-provider or production evidence.
 
-| Scenario                             | Local result                                                                                                        | Remaining release evidence                                                                  |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Happy path                           | PASS: paid Startpilot state emits one outbox item; delivery, claim, membership, and billing continuation tests pass | Run one production-like Test Mode E2E through the real webhook and Page                     |
-| Duplicate or delayed webhook         | PASS: deduplication, replay, and reconciliation contracts pass                                                      | Repeat with Mollie Test Mode and real MySQL                                                 |
-| Failed, canceled, or expired payment | PASS: terminal states do not activate the paid path                                                                 | Record provider Test Mode outcomes                                                          |
-| Repeated checkout                    | PASS: checkout intent/idempotency guards pass                                                                       | Exercise concurrent requests against real MySQL and Mollie Test Mode                        |
-| Token replay or second claim         | PASS: consumed, expired, revoked, and inactive capabilities fail closed                                             | Exercise the portal against the production-like database                                    |
-| Wrong authenticated user             | PASS: another user cannot reuse a consumed handoff as billing context because `claimedByUserId` must match          | Exercise two Facebook Test Users end to end                                                 |
-| Wrong/cross-tenant/disconnected Page | PASS: send and claim fail closed for missing, ambiguous, changed, disconnected, or cross-workspace Page bindings    | Exercise two test workspaces/Pages in a production-like environment                         |
-| Closed Messenger response window     | PASS for containment: no token is created and no send occurs                                                        | **BLOCKED:** there is no authenticated human re-drive; the outbox failure is terminal       |
-| Transient Messenger send failure     | PASS: the capability is revoked and a bounded retry reuses only the same delivery identity                          | Exercise a controlled transient Graph failure with a test Page                              |
-| Recovery without second charge       | PASS for automatic transient retry; payment truth is not reopened                                                   | **BLOCKED:** paid users with terminal delivery failure have no approved human recovery path |
+| Scenario                             | Local result                                                                                                         | Remaining release evidence                                                      |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Happy path                           | PASS: paid Startpilot state emits one outbox item; delivery, claim, membership, and billing continuation tests pass  | Run one production-like Test Mode E2E through the real webhook and Page         |
+| Duplicate or delayed webhook         | PASS: deduplication, replay, and reconciliation contracts pass                                                       | Repeat with Mollie Test Mode against the production-like environment            |
+| Failed, canceled, or expired payment | PASS: terminal states do not activate the paid path                                                                  | Record provider Test Mode outcomes                                              |
+| Repeated checkout                    | PASS: checkout intent/idempotency guards pass                                                                        | Exercise concurrent requests against Mollie Test Mode and production-like MySQL |
+| Token replay or second claim         | PASS: consumed, expired, revoked, and inactive capabilities fail closed; MySQL concurrency permits one claim         | Exercise the portal with two Facebook Test Users                                |
+| Wrong authenticated user             | PASS: another user cannot reuse a consumed handoff as billing context because `claimedByUserId` must match           | Exercise two Facebook Test Users end to end                                     |
+| Wrong/cross-tenant/disconnected Page | PASS: send and claim fail closed for missing, ambiguous, changed, disconnected, or cross-workspace Page bindings     | Exercise two test workspaces/Pages in a production-like environment             |
+| Closed Messenger response window     | PASS: no send/token while closed; the matching user's next verified inbound event rearms only the same paid delivery | Exercise the closed-window then inbound recovery with a test Page               |
+| Transient Messenger send failure     | PASS: the capability is revoked and a bounded retry reuses only the same delivery identity                           | Exercise a controlled transient Graph failure with a test Page                  |
+| Recovery without second charge       | PASS: bounded retry and verified-inbound recovery reuse the failed outbox item and never reopen payment truth        | Exercise recovery in Mollie Test Mode and retain redacted evidence              |
 
 ## Remaining blockers
 
-| Severity | Owner        | Blocker                                                                                                                                                        | Smallest next action                                                                                                                                                      |
-| -------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Critical | Sol          | Mollie Test Mode and production-like Page/token/outbox E2E evidence is absent                                                                                  | Use an isolated test workspace, test key, Facebook Test Users/Page, and redacted dated artifacts to run every row in `MOLLIE_TEST_RESULTS.md` plus the matrix above       |
-| Critical | Luna + Terra | Real-MySQL concurrency and integrity evidence is absent for checkout/webhook/outbox deduplication, delivery-key uniqueness, claim locking, and membership      | Add a MySQL 8.4 integration job that runs concurrent duplicate checkout/webhook/delivery/claim attempts and asserts one paid effect, one active capability, and one claim |
-| Critical | Sol          | The supported existing-schema upgrade, partial-failure recovery, and rollback rehearsal through migrations `0013` and `0014` is absent                         | Restore a redacted production-like backup into disposable MySQL, rehearse the ordered migration and recovery procedure, and retain the artifact                           |
-| High     | Terra        | Human recovery is deliberately fail-closed, so a paid user with a terminal closed-window or Page-state failure cannot be re-driven                             | Bind recovery to one failed `send_portal_handoff` outbox ID and an authenticated, non-forgeable support principal; audit it and prove no checkout/charge occurs           |
-| Critical | Luna         | Existing paid-runtime gates remain open: atomic spend reservation, durable AI-answer finalization, tenant-partitioned queue/scheduler, and full Page/quota E2E | Close and concurrency-test each gate already listed in `LAUNCH_READINESS.md`; do not enable paid enforcement before then                                                  |
-| Critical | Sol          | Legal, privacy, accounting, refund/withdrawal, retention, monitoring, and operator approvals remain incomplete                                                 | Obtain written approvals and attach redacted operational evidence before changing any live flag                                                                           |
+| Severity | Owner      | Blocker                                                                                                                                                                                          | Smallest next action                                                                                                                                                |
+| -------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Critical | Sol        | Mollie Test Mode and production-like Page/token/outbox E2E evidence is absent                                                                                                                    | Use an isolated test workspace, test key, Facebook Test Users/Page, and redacted dated artifacts to run every row in `MOLLIE_TEST_RESULTS.md` plus the matrix above |
+| Critical | Luna + Sol | MySQL 8.4 now proves delivery-key uniqueness, one concurrent claim, membership preservation, and same-paid-row recovery; provider-backed checkout/webhook/outbox concurrency remains unproven    | Run concurrent duplicate checkout/webhook attempts in Mollie Test Mode against the disposable MySQL environment and assert one paid effect and one outbox item      |
+| Critical | Sol        | Fresh migration and an existing-row `0014` rehearsal now pass in MySQL 8.4; a production-like backup rehearsal of the full `0013` -> `0014` order, failure recovery, and rollback remains absent | Restore a redacted production-like backup into disposable MySQL, rehearse the ordered procedure, and retain the metadata-only artifact                              |
+| Medium   | Operations | Shared-admin manual recovery remains deliberately fail-closed; normal paid-user recovery now requires the same Page/user to send a new verified inbound message                                  | Document the support instruction, reconnect the Page when needed, have the customer message the Page, and verify the same outbox row was rearmed without checkout   |
+| Critical | Luna       | Existing paid-runtime gates remain open: atomic spend reservation, durable AI-answer finalization, tenant-partitioned queue/scheduler, and full Page/quota E2E                                   | Close and concurrency-test each gate already listed in `LAUNCH_READINESS.md`; do not enable paid enforcement before then                                            |
+| Critical | Sol        | Legal, privacy, accounting, refund/withdrawal, retention, monitoring, and operator approvals remain incomplete                                                                                   | Obtain written approvals and attach redacted operational evidence before changing any live flag                                                                     |
 
 ## Ordered launch procedure
 
@@ -135,8 +135,10 @@ approved incident procedure.
 - Confirm one payment effect, one entitlement, one deduplicated
   `send_portal_handoff` item, one delivery capability, one claim, and the stored
   membership role. Confirm all failure paths create no second charge.
-- Rehearse automatic transient retry and the approved paid-user recovery flow.
-  The current fail-closed manual route does not satisfy this step.
+- Rehearse automatic transient retry and paid-user recovery: after correcting
+  Page state if needed, the same user messages the same Page. Verify that only
+  the matching failed paid outbox row returns to pending and no checkout or
+  payment record is created. Shared-admin manual re-drive remains disabled.
 
 ### 4. Monitoring and paid-user recovery
 
@@ -150,11 +152,13 @@ approved incident procedure.
 - Never log raw PSIDs, Page access tokens, handoff tokens/URLs, Mollie secrets,
   messages, or customer content.
 - For a paid user, first verify provider payment and local entitlement without
-  changing either. Retry only the same failed outbox operation/delivery
-  identity. Require an authenticated support principal, customer approval, and
-  an audit record. Never initiate checkout or a second payment as recovery.
-- Until that authenticated recovery mechanism exists, leave manual recovery
-  disabled and treat the launch as NO-GO.
+  changing either. Correct a disconnected Page, then ask that same customer to
+  message the same Page. The verified inbound event may rearm only the matching
+  failed operation/delivery identity. Confirm the metadata-only recovery log
+  and that no checkout or second payment was initiated.
+- Leave shared-admin manual recovery disabled. Escalate cases where the same
+  Page/user cannot send a verified inbound message; do not work around the
+  fail-closed boundary or charge again.
 
 ### 5. Human-only live switch and first smoke payment
 
