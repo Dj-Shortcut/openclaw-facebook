@@ -5,7 +5,8 @@
 
 ## Verified snapshot
 
-- Last reviewed against code: **2026-08-18**, Sol release head **`ed1822b`**.
+- Last reviewed against code: **2026-08-18**, current Sol draft branch; the
+  exact reviewed head is recorded in PR #375 and its checks.
 - PR #375 is a green draft repository savepoint. It is not merged or deployed;
   commercial/live billing remains disabled. PR #376, the identity-v2 WIP branch
   and commit `e378bff` are explicitly excluded.

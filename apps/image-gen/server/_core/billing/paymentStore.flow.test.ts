@@ -375,6 +375,41 @@ describe("payment snapshot persistence flow", () => {
     ).toBe(false);
   });
 
+  it("ignores an older terminal snapshot after the ledger is paid", async () => {
+    const flow = paymentFlow({
+      intent: { ...startpilotIntent(), status: "paid" } as BillingIntent,
+      existingLedger: {
+        status: "paid",
+        occurredAt: new Date("2026-08-02T10:00:00.000Z"),
+        paidEffectApplied: 1,
+      },
+    });
+    databaseMock.mockResolvedValue(flow.database);
+
+    await expect(
+      applyMolliePaymentSnapshot(
+        molliePayment({
+          status: "failed",
+          amount: { currency: "EUR", value: "19.00" },
+          createdAt: "2026-08-01T10:00:00.000Z",
+          paidAt: undefined,
+        }),
+        1
+      )
+    ).resolves.toEqual({ result: "processed", workspaceId: 1 });
+
+    expect(flow.operations).not.toContain("upsert:paymentLedger");
+    expect(
+      flow.updates.some(entry => entry.table === workspaceEntitlements)
+    ).toBe(false);
+    expect(flow.updates).toContainEqual({
+      table: webhookDeliveries,
+      values: expect.objectContaining({
+        processingResult: "stale_snapshot_ignored",
+      }),
+    });
+  });
+
   it("upserts a mismatched paid snapshot before returning without applying paid access", async () => {
     const flow = paymentFlow();
     databaseMock.mockResolvedValue(flow.database);
@@ -485,6 +520,11 @@ function paymentFlow(
   options: {
     subscription?: BillingSubscription | null;
     intent?: BillingIntent;
+    existingLedger?: {
+      status: string;
+      occurredAt: Date;
+      paidEffectApplied: number;
+    };
     ledgerPaidEffectApplied?: number;
     usageSourceIntentId?: string;
   } = {}
@@ -546,15 +586,22 @@ function paymentFlow(
     }
     if (table === paymentLedger) {
       paymentLedgerSelectCount += 1;
-      if (paymentLedgerSelectCount > 1) return [];
-      return [
-        {
-          id: 7,
-          invoiceNumber: "LB-TEST-2026-00000001",
-          occurredAt: new Date("2026-08-01T10:00:00.000Z"),
-          paidEffectApplied: options.ledgerPaidEffectApplied ?? 0,
-        },
-      ];
+      if (paymentLedgerSelectCount === 1) {
+        return options.existingLedger
+          ? [{ id: 7, ...options.existingLedger }]
+          : [];
+      }
+      if (paymentLedgerSelectCount === 2) {
+        return [
+          {
+            id: 7,
+            invoiceNumber: "LB-TEST-2026-00000001",
+            occurredAt: new Date("2026-08-01T10:00:00.000Z"),
+            paidEffectApplied: options.ledgerPaidEffectApplied ?? 0,
+          },
+        ];
+      }
+      return [];
     }
     throw new Error("unexpected payment flow select");
   }
@@ -580,16 +627,11 @@ function paymentFlow(
           limit: vi.fn(() => {
             whereClauses.push({ table, predicate });
             const rows = rowsFor(table);
-            if (
-              table === billingIntents ||
-              table === billingSubscriptions ||
-              table === workspaceBillingProfiles ||
-              table === workspaceEntitlements ||
-              table === workspaceEntitlementUsage
-            ) {
-              return { for: vi.fn().mockResolvedValue(rows) };
-            }
-            return Promise.resolve(rows);
+            const result = Promise.resolve(rows) as Promise<unknown[]> & {
+              for: ReturnType<typeof vi.fn>;
+            };
+            result.for = vi.fn().mockResolvedValue(rows);
+            return result;
           }),
         })),
       })),

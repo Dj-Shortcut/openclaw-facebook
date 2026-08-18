@@ -129,7 +129,7 @@ export async function applyMolliePaymentSnapshot(
         };
       }
 
-      const paidEffectAlreadyApplied = await upsertLedger(tx, {
+      const ledgerResult = await upsertLedger(tx, {
         payment,
         workspaceId: context.workspaceId,
         snapshotHash: observed.snapshotHash,
@@ -137,6 +137,21 @@ export async function applyMolliePaymentSnapshot(
         chargebacks: observed.chargebacks,
         occurredAt,
       });
+      if (!ledgerResult.shouldApplyDomainEffects) {
+        await finishDelivery(
+          tx,
+          context.workspaceId,
+          payment.mode,
+          payment.id,
+          observed.snapshotHash,
+          "stale_snapshot_ignored"
+        );
+        return {
+          result: "processed" as const,
+          workspaceId: context.workspaceId,
+        };
+      }
+      const paidEffectAlreadyApplied = ledgerResult.paidEffectAlreadyApplied;
 
       // Revocation/expiry containment is monotone. Provider snapshots remain
       // financially recorded, but can never reopen the intent or grant paid
@@ -1366,6 +1381,30 @@ async function upsertLedger(
     occurredAt: Date;
   }
 ) {
+  const existingRows = await tx
+    .select({
+      id: paymentLedger.id,
+      status: paymentLedger.status,
+      occurredAt: paymentLedger.occurredAt,
+      paidEffectApplied: paymentLedger.paidEffectApplied,
+    })
+    .from(paymentLedger)
+    .where(
+      and(
+        eq(paymentLedger.workspaceId, input.workspaceId),
+        eq(paymentLedger.mode, input.payment.mode),
+        eq(paymentLedger.molliePaymentId, input.payment.id)
+      )
+    )
+    .limit(1)
+    .for("update");
+  const existing = existingRows[0];
+  if (existing && !shouldApplyLedgerSnapshot(existing, input)) {
+    return {
+      paidEffectAlreadyApplied: existing.paidEffectApplied === 1,
+      shouldApplyDomainEffects: false,
+    };
+  }
   const settlementAmount = input.payment.settlementAmount?.value ?? null;
   await tx
     .insert(paymentLedger)
@@ -1425,7 +1464,26 @@ async function upsertLedger(
       ledger.occurredAt
     );
   }
-  return ledger?.paidEffectApplied === 1;
+  return {
+    paidEffectAlreadyApplied: ledger?.paidEffectApplied === 1,
+    shouldApplyDomainEffects: true,
+  };
+}
+
+function shouldApplyLedgerSnapshot(
+  existing: { status: string; occurredAt: Date },
+  input: { payment: MolliePayment; occurredAt: Date }
+): boolean {
+  if (input.occurredAt.getTime() < existing.occurredAt.getTime()) {
+    return false;
+  }
+  // A provider Payment cannot legitimately leave `paid`. Preserve financial
+  // and entitlement truth even if an older or contradictory terminal snapshot
+  // is delivered later with a malformed/newer timestamp.
+  if (existing.status === "paid" && input.payment.status !== "paid") {
+    return false;
+  }
+  return true;
 }
 
 async function allocateInvoiceNumber(

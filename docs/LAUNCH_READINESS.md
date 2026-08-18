@@ -1,7 +1,9 @@
 # Leaderbot Mollie launch readiness
 
-Status on 2026-08-18, Sol head `ed1822b`: **credential-free code gate PASS;
-live launch NO-GO**.
+Status on 2026-08-18, current Sol draft branch: **credential-free code gate
+PASS; live launch NO-GO**. The exact reviewed head is recorded in PR #375 and
+its checks rather than embedded here, so an evidence-only update cannot make
+this document self-stale.
 
 Commercial billing, live billing, deployment and real charges remain disabled.
 No API key is required to run the preflight described here.
@@ -38,8 +40,9 @@ Final-head evidence is recorded in `docs/MOLLIE_TEST_RESULTS.md`.
 
 ### A — repository work
 
-No known P0/P1 code or test blocker remains on `ed1822b`. The release config,
-checklist and evidence documents are synchronized with the final code. One P2
+No known P0/P1 code or test blocker remains on the current Sol draft branch.
+The release config, checklist and evidence documents are synchronized with the
+final code. One P2
 test-readability item remains: split the mocked epoch/tenant labels that share
 the same empty-select fixture. Real MySQL scope/race coverage is authoritative;
 this P2 does not weaken the release contract.

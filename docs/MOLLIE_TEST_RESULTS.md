@@ -1,6 +1,7 @@
 # Mollie test results
 
-Release head: `ed1822b81dfde0107c47dc898dbb45e1cb600cd9` on 2026-08-18.
+Release candidate: current PR #375 Sol draft branch on 2026-08-18. The exact
+reviewed head is recorded in the PR body and GitHub checks.
 
 No Mollie, Facebook or OpenAI provider test was run. No credential was
 requested or used. Automated rows prove local/CI contracts only; provider rows
@@ -8,12 +9,17 @@ remain `NOT RUN` until an operator injects test credentials out of band.
 
 ## Automated evidence
 
-- Image-gen Vitest: **1,428 passed, 26 skipped** across 153 files.
+- Image-gen Vitest: **1,429 passed, 31 skipped** across 154 files.
 - Focused subscription cancellation and notification delivery: **38/38**.
 - Billing execution on MySQL 8.4: **10/10**, including two-connection
   disable/exposure, lease-loss and safety-cancellation boundaries.
 - Portal handoff on MySQL 8.4: **4/4**, including concurrent claim and
   capability-generation rotation.
+- Payment/checkout chain on MySQL 8.4: **5/5**, including twelve concurrent
+  repeated checkouts with one fake-provider create, twelve concurrent paid
+  snapshots with one ledger/entitlement/handoff effect, monotone delayed
+  snapshots, terminal states without access, and one claim-to-paid-to-recovery
+  chain without a second checkout.
 - TypeScript, release ESLint/Prettier, production build, Drizzle schema check,
   final `0015` rehearsal, product-boundary checks and diff check: PASS.
 - Final GitHub head: main checks, MySQL/Drizzle migration smoke, validate,

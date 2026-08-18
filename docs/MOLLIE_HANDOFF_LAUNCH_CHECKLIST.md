@@ -3,8 +3,9 @@
 Status on 2026-08-18: **repository gate PASS; sandbox/live launch NO-GO**.
 
 This checklist covers Luna PR #374, Terra PR #373 at
-`9bf6234fa61e630f1825aa2ce3cec34cd8f88278`, and Sol head `ed1822b`. PR #376,
-the identity-v2 WIP branch and `e378bff` are not inputs.
+`9bf6234fa61e630f1825aa2ce3cec34cd8f88278`, and the current Sol draft branch.
+The exact reviewed Sol head is recorded in PR #375 and its checks. PR #376, the
+identity-v2 WIP branch and `e378bff` are not inputs.
 
 The protected chain is:
 

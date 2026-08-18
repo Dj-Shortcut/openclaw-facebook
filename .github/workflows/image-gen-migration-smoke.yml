@@ -16,9 +16,15 @@ on:
       - "apps/image-gen/package.json"
       - "apps/image-gen/pnpm-lock.yaml"
       - "apps/image-gen/server/_core/billing/portalHandoffRecovery.ts"
+      - "apps/image-gen/server/_core/billing/paymentStore.ts"
+      - "apps/image-gen/server/_core/billing/checkoutService.ts"
+      - "apps/image-gen/server/_core/billing/checkoutStore.ts"
+      - "apps/image-gen/server/_core/billing/billingProfileStore.ts"
+      - "apps/image-gen/server/_core/billing/billingSchedulerStore.ts"
       - "apps/image-gen/server/_core/messengerInboundActivity.ts"
       - "apps/image-gen/server/portalHandoff.mysql.test.ts"
       - "apps/image-gen/server/billingExecution.mysql.test.ts"
+      - "apps/image-gen/server/paymentSnapshot.mysql.test.ts"
       - ".github/workflows/image-gen-migration-smoke.yml"
   workflow_dispatch:
 
@@ -153,7 +159,7 @@ jobs:
             exit 1;
           fi
 
-      - name: Verify billing and portal handoff MySQL concurrency
+      - name: Verify billing, payment snapshot and portal handoff MySQL concurrency
         working-directory: apps/image-gen
         env:
           DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_image_gen
@@ -161,6 +167,7 @@ jobs:
         run: |
           ./node_modules/.bin/vitest run server/portalHandoff.mysql.test.ts
           ./node_modules/.bin/vitest run server/billingExecution.mysql.test.ts
+          ./node_modules/.bin/vitest run server/paymentSnapshot.mysql.test.ts
 
       - name: Rehearse portal handoff schema upgrade with existing rows
         run: |
