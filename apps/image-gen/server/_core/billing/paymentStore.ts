@@ -1682,7 +1682,7 @@ function metadataMatchesIntent(metadata: unknown, intentId: string): boolean {
 function cancellationTargetPayload(context: PaymentContext, reason: string) {
   return {
     reason,
-    sourceIntentId: context.intent.intentId,
+    expectedSourceIntentId: context.intent.intentId,
     targetCustomerId: context.customer.mollieCustomerId,
     targetSubscriptionId: context.subscription?.mollieSubscriptionId ?? null,
   };

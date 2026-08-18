@@ -322,8 +322,10 @@ async function startServer() {
   if (notificationPlaneEnabled) {
     startBillingNotificationReceiverWorker();
   }
-  if (mollieBillingEnabled) {
+  if (mollieBillingEnabled || notificationPlaneEnabled) {
     startBillingOutboxWorker();
+  }
+  if (mollieBillingEnabled) {
     startDailyBillingReconciliation();
   }
 

@@ -2,10 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { and, asc, eq, gt, inArray, isNull, lte, sql } from "drizzle-orm";
 import {
   billingOutbox,
+  billingCustomers,
+  billingExecutionControls,
   billingIntents,
   billingProviderOperations,
+  billingSchedulerTenants,
   billingSubscriptions,
-  workspaces,
   workspaceEntitlements,
   workspaceBillingProfiles,
   type BillingOutboxItem,
@@ -18,7 +20,11 @@ import {
 } from "../../db";
 import { safeLog } from "../logger";
 import { sendPortalHandoffLink } from "../portalHandoffDelivery";
-import { getMollieConfig, type MollieMode } from "./config";
+import {
+  getConfiguredBillingMode,
+  getMollieConfig,
+  type MollieMode,
+} from "./config";
 import { hashCanonicalSnapshot } from "./ids";
 import {
   assertMollieId,
@@ -42,6 +48,7 @@ import {
   releaseBillingTenantLease,
   recordBillingSchedulerPoll,
   renewBillingTenantLease,
+  type BillingTenantLease,
 } from "./billingSchedulerStore";
 
 const OUTBOX_POLL_INTERVAL_MS = 5_000;
@@ -64,7 +71,6 @@ class PermanentOutboxError extends Error {
 type ClaimedBillingOutboxItem = BillingOutboxItem & { leaseToken: string };
 
 let workerTimer: NodeJS.Timeout | null = null;
-const busyWorkspaces = new Set<number>();
 
 export function startBillingOutboxWorker(): void {
   if (workerTimer) return;
@@ -80,13 +86,13 @@ export async function runBillingOutboxSchedulerOnce(
   limit = 25,
   now = new Date()
 ): Promise<number> {
-  const config = getMollieConfig();
-  await recordBillingSchedulerPoll(config.mode, "outbox", now);
+  const mode = getConfiguredBillingMode();
+  await recordBillingSchedulerPoll(mode, "outbox", now);
   let processed = 0;
   const count = Math.max(1, Math.min(100, limit));
   for (let index = 0; index < count; index += 1) {
     const claimNow = index === 0 ? now : new Date();
-    const lease = await claimNextBillingTenant(config.mode, claimNow, "outbox");
+    const lease = await claimNextBillingTenant(mode, claimNow, "outbox");
     if (!lease) break;
     let failed = false;
     const heartbeat = setInterval(() => {
@@ -101,7 +107,9 @@ export async function runBillingOutboxSchedulerOnce(
     heartbeat.unref();
     try {
       await assertBillingTenantLeaseOwned(lease);
-      if (await runBillingOutboxOnce(lease.workspaceId, clientOverride)) {
+      if (
+        await runBillingOutboxOnce(lease.workspaceId, clientOverride, lease)
+      ) {
         processed += 1;
       }
       await assertBillingTenantLeaseOwned(lease);
@@ -131,12 +139,31 @@ export async function runBillingOutboxSchedulerOnce(
   return processed;
 }
 
-async function getNextBillingOutboxDue(
+export async function getNextBillingOutboxDue(
   workspaceId: number,
   mode: MollieMode,
   now: Date
 ): Promise<Date> {
   const database = await getDatabaseOrThrow();
+  const controls = await database
+    .select({ commercialEnabled: billingExecutionControls.commercialEnabled })
+    .from(billingExecutionControls)
+    .where(
+      and(
+        eq(billingExecutionControls.workspaceId, workspaceId),
+        eq(billingExecutionControls.mode, mode)
+      )
+    )
+    .limit(1);
+  if (!controls[0]) {
+    throw new Error("billing execution control is not provisioned");
+  }
+  const safetyEventTypes = [
+    "cancel_subscription",
+    "cancel_payment",
+    "payment_warning",
+    "manual_review",
+  ] as const;
   const rows = await database
     .select({ nextAt: sql<Date | null>`MIN(${billingOutbox.availableAt})` })
     .from(billingOutbox)
@@ -144,12 +171,30 @@ async function getNextBillingOutboxDue(
       and(
         eq(billingOutbox.workspaceId, workspaceId),
         eq(billingOutbox.mode, mode),
-        inArray(billingOutbox.status, ["pending", "processing"])
+        inArray(billingOutbox.status, ["pending", "processing"]),
+        ...(controls[0].commercialEnabled
+          ? []
+          : [inArray(billingOutbox.eventType, safetyEventTypes)])
       )
     );
-  const candidates = [rows[0]?.nextAt].filter(
-    (value): value is Date => value instanceof Date
-  );
+  const rawNextAt: unknown = rows[0]?.nextAt;
+  const parsedNextAt =
+    rawNextAt instanceof Date
+      ? rawNextAt
+      : typeof rawNextAt === "string"
+        ? new Date(
+            /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(rawNextAt)
+              ? `${rawNextAt.replace(" ", "T")}Z`
+              : rawNextAt
+          )
+        : null;
+  if (rawNextAt != null && !parsedNextAt) {
+    throw new Error("billing outbox due timestamp has an unexpected type");
+  }
+  if (parsedNextAt && !Number.isFinite(parsedNextAt.getTime())) {
+    throw new Error("billing outbox due timestamp is invalid");
+  }
+  const candidates = parsedNextAt ? [parsedNextAt] : [];
   return candidates.length
     ? new Date(Math.min(...candidates.map(value => value.getTime())))
     : new Date(now.getTime() + 24 * 60 * 60_000);
@@ -157,51 +202,48 @@ async function getNextBillingOutboxDue(
 
 export async function runBillingOutboxOnce(
   workspaceId: number,
-  clientOverride?: MollieClient
+  clientOverride?: MollieClient,
+  tenantLease?: BillingTenantLease
 ): Promise<boolean> {
   if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) {
     throw new Error("invalid billing outbox workspace");
   }
-  if (busyWorkspaces.has(workspaceId)) return false;
-  busyWorkspaces.add(workspaceId);
+  const mode = getConfiguredBillingMode();
+  await releaseStaleBillingLeases(mode, workspaceId);
+  const job = await claimBillingOutboxItem(mode, workspaceId);
+  if (!job) return false;
   try {
-    const config = getMollieConfig();
-    await releaseStaleBillingLeases(config.mode, workspaceId);
-    const job = await claimBillingOutboxItem(config.mode, workspaceId);
-    if (!job) return false;
-    try {
-      await processBillingOutboxItem(job, clientOverride);
-      await completeBillingOutboxItem(job);
-    } catch (error) {
-      const retryCode = retryableErrorCode(error);
-      if (retryCode) {
-        if (job.attemptCount >= job.maxAttempts) {
-          if (isCriticalContainmentJob(job)) {
-            await rearmCriticalContainmentAfterExhaustion(
-              job,
-              `${retryCode}_exhausted`
-            );
-          } else {
-            await containExhaustedEnsureAttempt(job, clientOverride);
-            await failBillingOutboxItem(job, `${retryCode}_exhausted`);
-          }
+    if (tenantLease) await assertBillingTenantLeaseOwned(tenantLease);
+    await processBillingOutboxItem(job, clientOverride, tenantLease);
+    if (tenantLease) await assertBillingTenantLeaseOwned(tenantLease);
+    await completeBillingOutboxItem(job);
+  } catch (error) {
+    const retryCode = retryableErrorCode(error);
+    if (retryCode) {
+      if (job.attemptCount >= job.maxAttempts) {
+        if (isCriticalContainmentJob(job)) {
+          await rearmCriticalContainmentAfterExhaustion(
+            job,
+            `${retryCode}_exhausted`
+          );
         } else {
-          await rescheduleBillingOutboxItem(job, retryCode);
+          await containExhaustedEnsureAttempt(job, clientOverride);
+          await failBillingOutboxItem(job, `${retryCode}_exhausted`);
         }
       } else {
-        const code =
-          error instanceof PermanentOutboxError
-            ? error.errorCode
-            : error instanceof Error
-              ? error.name
-              : "UnknownError";
-        await failBillingOutboxItem(job, code);
+        await rescheduleBillingOutboxItem(job, retryCode);
       }
+    } else {
+      const code =
+        error instanceof PermanentOutboxError
+          ? error.errorCode
+          : error instanceof Error
+            ? error.name
+            : "UnknownError";
+      await failBillingOutboxItem(job, code);
     }
-    return true;
-  } finally {
-    busyWorkspaces.delete(workspaceId);
   }
+  return true;
 }
 
 export function isCriticalContainmentJob(job: BillingOutboxItem): boolean {
@@ -223,6 +265,8 @@ export function isCriticalContainmentJob(job: BillingOutboxItem): boolean {
     "billing_profile_revoked",
     "billing_profile_expired",
     "billing_profile_ineligible_after_provider_response",
+    "checkout_provider_response_mismatch",
+    "billing_execution_disabled",
   ].includes(String(reason));
 }
 
@@ -313,12 +357,16 @@ async function runBillingOutboxSchedulerSafely(): Promise<void> {
   }
 }
 
-async function processBillingOutboxItem(
+export async function processBillingOutboxItem(
   job: ClaimedBillingOutboxItem,
-  clientOverride?: MollieClient
+  clientOverride?: MollieClient,
+  tenantLease?: BillingTenantLease
 ) {
   if (job.eventType === "ensure_subscription") {
-    await ensureMollieSubscription(job, clientOverride);
+    if (!tenantLease) {
+      throw new PermanentOutboxError("subscription_scheduler_lease_required");
+    }
+    await ensureMollieSubscription(job, clientOverride, tenantLease);
     return;
   }
   if (job.eventType === "cancel_subscription") {
@@ -357,7 +405,8 @@ async function processBillingOutboxItem(
 
 async function ensureMollieSubscription(
   job: ClaimedBillingOutboxItem,
-  clientOverride?: MollieClient
+  clientOverride: MollieClient | undefined,
+  tenantLease: BillingTenantLease
 ) {
   const config = getMollieConfig();
   if (config.mode !== job.mode) {
@@ -506,6 +555,7 @@ async function ensureMollieSubscription(
       throw new RetryableOutboxError("subscription_create_fence_lost");
     }
     try {
+      if (tenantLease) await assertBillingTenantLeaseOwned(tenantLease);
       remote = await client.createSubscription({
         customerId: subscription.mollieCustomerId,
         mandateId: validMandate.id,
@@ -528,19 +578,25 @@ async function ensureMollieSubscription(
           error.status < 500 &&
           ![408, 409, 425, 429].includes(error.status)
           ? "known_failed"
-          : "ambiguous"
+          : "ambiguous",
+        undefined,
+        { job, subscription }
       );
       throw error;
     }
-    if (
-      !(await finalizeSubscriptionProviderOperation(
-        operation,
-        "succeeded",
-        remote.id
-      ))
-    ) {
-      await recordRemoteSubscriptionContainment(job, subscription, remote);
+    const finalized = await finalizeSubscriptionProviderOperation(
+      operation,
+      "succeeded",
+      remote.id,
+      { job, subscription }
+    );
+    if (!finalized.recorded) {
       throw new PermanentOutboxError("subscription_provider_result_fence_lost");
+    }
+    if (!finalized.authorized) {
+      throw new PermanentOutboxError(
+        "subscription_provider_result_authorization_revoked"
+      );
     }
   }
   if (remote.status === "pending") {
@@ -561,6 +617,20 @@ async function ensureMollieSubscription(
   }
 
   await database.transaction(async tx => {
+    const controls = await tx
+      .select({
+        commercialEnabled: billingExecutionControls.commercialEnabled,
+        authorizationEpoch: billingExecutionControls.authorizationEpoch,
+      })
+      .from(billingExecutionControls)
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, job.workspaceId),
+          eq(billingExecutionControls.mode, job.mode)
+        )
+      )
+      .limit(1)
+      .for("update");
     const currentProfiles = await tx
       .select()
       .from(workspaceBillingProfiles)
@@ -571,6 +641,7 @@ async function ensureMollieSubscription(
       .select({
         status: billingIntents.status,
         billingProfileVersion: billingIntents.billingProfileVersion,
+        authorizationEpoch: billingIntents.authorizationEpoch,
       })
       .from(billingIntents)
       .where(
@@ -582,6 +653,27 @@ async function ensureMollieSubscription(
       )
       .limit(1)
       .for("update");
+    const schedulerLease = tenantLease
+      ? await tx
+          .select({ workspaceId: billingSchedulerTenants.workspaceId })
+          .from(billingSchedulerTenants)
+          .where(
+            and(
+              eq(billingSchedulerTenants.workspaceId, tenantLease.workspaceId),
+              eq(billingSchedulerTenants.mode, tenantLease.mode),
+              eq(billingSchedulerTenants.kind, tenantLease.kind),
+              eq(billingSchedulerTenants.enabled, true),
+              eq(
+                billingSchedulerTenants.executionEpoch,
+                tenantLease.executionEpoch
+              ),
+              eq(billingSchedulerTenants.leaseToken, tenantLease.leaseToken),
+              gt(billingSchedulerTenants.leaseUntil, new Date())
+            )
+          )
+          .limit(1)
+          .for("update")
+      : [{ workspaceId: job.workspaceId }];
     const current = await tx
       .select()
       .from(billingSubscriptions)
@@ -611,7 +703,17 @@ async function ensureMollieSubscription(
       current[0]?.status === "active" &&
       current[0].sourceIntentId === subscription.sourceIntentId &&
       current[0].mollieSubscriptionId === remote.id;
+    if (alreadyLinked) return;
+    if (!schedulerLease[0] || !leases[0]) {
+      // A stale worker may observe a result already being applied by the new
+      // owner. It must not mutate domain state or enqueue cancellation.
+      return;
+    }
     const profileStillEligible =
+      controls[0]?.commercialEnabled &&
+      controls[0].authorizationEpoch ===
+        currentIntents[0]?.authorizationEpoch &&
+      Boolean(schedulerLease[0]) &&
       currentIntents[0]?.status === "paid" &&
       isEligibleBillingProfileSnapshot(
         currentProfiles[0],
@@ -639,18 +741,10 @@ async function ensureMollieSubscription(
         });
       return;
     }
-    if (alreadyLinked) {
-      return;
-    }
     const mayStillBeLinkedByCurrentLease =
       current[0]?.status === "provisioning" &&
       current[0].sourceIntentId === subscription.sourceIntentId;
-    if (!leases[0] && mayStillBeLinkedByCurrentLease) {
-      // Another worker now owns the job. Its idempotent provider result is
-      // allowed to finish; the stale worker must neither link nor cancel it.
-      return;
-    }
-    if (!leases[0] || !mayStillBeLinkedByCurrentLease) {
+    if (!mayStillBeLinkedByCurrentLease) {
       await tx
         .insert(billingOutbox)
         .values({
@@ -715,6 +809,11 @@ async function ensureMollieSubscription(
 type SubscriptionProviderOperation = {
   operationId: string;
   leaseToken: string;
+  authorizationEpoch: number;
+  workspaceId: number;
+  mode: MollieMode;
+  intentId: string;
+  customerId: string;
 };
 
 export async function reserveSubscriptionProviderOperation(input: {
@@ -725,6 +824,22 @@ export async function reserveSubscriptionProviderOperation(input: {
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
     const now = new Date();
+    const controls = await tx
+      .select({
+        commercialEnabled: billingExecutionControls.commercialEnabled,
+        authorizationEpoch: billingExecutionControls.authorizationEpoch,
+      })
+      .from(billingExecutionControls)
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, input.job.workspaceId),
+          eq(billingExecutionControls.mode, input.job.mode)
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (!controls[0]?.commercialEnabled) return null;
+    const authorizationEpoch = controls[0].authorizationEpoch;
     const leaseToken = randomUUID();
     const credentialGenerationId =
       process.env.MOLLIE_CREDENTIAL_GENERATION_ID?.trim() ||
@@ -756,6 +871,7 @@ export async function reserveSubscriptionProviderOperation(input: {
         leaseUntil: billingProviderOperations.leaseUntil,
         requestFingerprint: billingProviderOperations.requestFingerprint,
         billingProfileVersion: billingProviderOperations.billingProfileVersion,
+        authorizationEpoch: billingProviderOperations.authorizationEpoch,
         credentialGenerationId:
           billingProviderOperations.credentialGenerationId,
         idempotencyKeyHash: billingProviderOperations.idempotencyKeyHash,
@@ -781,6 +897,7 @@ export async function reserveSubscriptionProviderOperation(input: {
           (operation.state === "reserved" && operation.leaseUntil <= now)) &&
         operation.requestFingerprint === requestFingerprint &&
         operation.billingProfileVersion === input.billingProfileVersion &&
+        operation.authorizationEpoch === authorizationEpoch &&
         operation.credentialGenerationId === credentialGenerationId &&
         operation.idempotencyKeyHash === idempotencyKeyHash;
       if (!safelyResumable) return null;
@@ -805,7 +922,15 @@ export async function reserveSubscriptionProviderOperation(input: {
           )
         );
       if (outboxAffectedRows(resumed) !== 1) return null;
-      return { operationId: operation.operationId, leaseToken };
+      return {
+        operationId: operation.operationId,
+        leaseToken,
+        authorizationEpoch,
+        workspaceId: input.job.workspaceId,
+        mode: input.job.mode,
+        intentId: input.subscription.sourceIntentId,
+        customerId: input.subscription.mollieCustomerId,
+      };
     }
     const operationId = randomUUID();
     await tx.insert(billingProviderOperations).values({
@@ -815,7 +940,9 @@ export async function reserveSubscriptionProviderOperation(input: {
       operationType: "create_subscription",
       operationKey: input.subscription.sourceIntentId,
       intentId: input.subscription.sourceIntentId,
+      providerCustomerId: input.subscription.mollieCustomerId,
       billingProfileVersion: input.billingProfileVersion,
+      authorizationEpoch,
       state: "reserved",
       requestFingerprint,
       idempotencyKeyHash,
@@ -824,7 +951,15 @@ export async function reserveSubscriptionProviderOperation(input: {
       leaseUntil: new Date(now.getTime() + 60_000),
       resolutionDueAt: new Date(now.getTime() + 5 * 60_000),
     });
-    return { operationId, leaseToken };
+    return {
+      operationId,
+      leaseToken,
+      authorizationEpoch,
+      workspaceId: input.job.workspaceId,
+      mode: input.job.mode,
+      intentId: input.subscription.sourceIntentId,
+      customerId: input.subscription.mollieCustomerId,
+    };
   });
 }
 
@@ -833,51 +968,203 @@ export async function markSubscriptionProviderOperationStarted(
 ): Promise<boolean> {
   const database = await getDatabaseOrThrow();
   const now = new Date();
-  const result = await database
-    .update(billingProviderOperations)
-    .set({
-      state: "transport_started",
-      firstStartedAt: now,
-      retryBefore: new Date(now.getTime() + 55 * 60_000),
-      resolutionDueAt: new Date(now.getTime() + 5 * 60_000),
-      attemptCount: sql`${billingProviderOperations.attemptCount} + 1`,
-    })
-    .where(
-      and(
-        eq(billingProviderOperations.operationId, operation.operationId),
-        eq(billingProviderOperations.leaseToken, operation.leaseToken),
-        eq(billingProviderOperations.state, "reserved"),
-        gt(billingProviderOperations.leaseUntil, now)
+  return database.transaction(async tx => {
+    const controls = await tx
+      .select({
+        commercialEnabled: billingExecutionControls.commercialEnabled,
+        authorizationEpoch: billingExecutionControls.authorizationEpoch,
+      })
+      .from(billingExecutionControls)
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, operation.workspaceId),
+          eq(billingExecutionControls.mode, operation.mode)
+        )
       )
-    );
-  return outboxAffectedRows(result) === 1;
+      .limit(1)
+      .for("update");
+    if (
+      !controls[0]?.commercialEnabled ||
+      controls[0].authorizationEpoch !== operation.authorizationEpoch
+    ) {
+      return false;
+    }
+    const result = await tx
+      .update(billingProviderOperations)
+      .set({
+        state: "transport_started",
+        firstStartedAt: now,
+        retryBefore: new Date(now.getTime() + 55 * 60_000),
+        resolutionDueAt: new Date(now.getTime() + 5 * 60_000),
+        attemptCount: sql`${billingProviderOperations.attemptCount} + 1`,
+      })
+      .where(
+        and(
+          eq(billingProviderOperations.operationId, operation.operationId),
+          eq(billingProviderOperations.workspaceId, operation.workspaceId),
+          eq(billingProviderOperations.mode, operation.mode),
+          eq(
+            billingProviderOperations.authorizationEpoch,
+            operation.authorizationEpoch
+          ),
+          eq(billingProviderOperations.leaseToken, operation.leaseToken),
+          eq(billingProviderOperations.state, "reserved"),
+          gt(billingProviderOperations.leaseUntil, now)
+        )
+      );
+    return outboxAffectedRows(result) === 1;
+  });
 }
 
-async function finalizeSubscriptionProviderOperation(
+export async function finalizeSubscriptionProviderOperation(
   operation: SubscriptionProviderOperation,
   outcome: "succeeded" | "known_failed" | "ambiguous",
-  providerResourceId?: string
-): Promise<boolean> {
-  const database = await getDatabaseOrThrow();
-  const result = await database
-    .update(billingProviderOperations)
-    .set({
-      state: outcome,
-      providerResourceId: providerResourceId ?? null,
-      completedAt:
-        outcome === "succeeded" || outcome === "known_failed"
-          ? new Date()
-          : null,
-      resolutionDueAt: new Date(),
-    })
-    .where(
-      and(
-        eq(billingProviderOperations.operationId, operation.operationId),
-        eq(billingProviderOperations.leaseToken, operation.leaseToken),
-        eq(billingProviderOperations.state, "transport_started")
-      )
+  providerResourceId: string | undefined,
+  containment: {
+    job: BillingOutboxItem;
+    subscription: BillingSubscription;
+  }
+): Promise<{
+  recorded: boolean;
+  authorized: boolean;
+  revokedAuthorizationEpoch: number | null;
+}> {
+  if (
+    containment.job.workspaceId !== operation.workspaceId ||
+    containment.job.mode !== operation.mode ||
+    containment.subscription.workspaceId !== operation.workspaceId ||
+    containment.subscription.mode !== operation.mode ||
+    containment.subscription.sourceIntentId !== operation.intentId ||
+    containment.subscription.mollieCustomerId !== operation.customerId
+  ) {
+    throw new PermanentOutboxError(
+      "subscription_provider_containment_scope_mismatch"
     );
-  return outboxAffectedRows(result) === 1;
+  }
+  const database = await getDatabaseOrThrow();
+  return database.transaction(async tx => {
+    const controls = await tx
+      .select({
+        commercialEnabled: billingExecutionControls.commercialEnabled,
+        authorizationEpoch: billingExecutionControls.authorizationEpoch,
+      })
+      .from(billingExecutionControls)
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, operation.workspaceId),
+          eq(billingExecutionControls.mode, operation.mode)
+        )
+      )
+      .limit(1)
+      .for("update");
+    const authorized = Boolean(
+      controls[0]?.commercialEnabled &&
+      controls[0].authorizationEpoch === operation.authorizationEpoch
+    );
+    const result = await tx
+      .update(billingProviderOperations)
+      .set({
+        state: authorized
+          ? outcome
+          : providerResourceId
+            ? "contained"
+            : "reconciliation_only",
+        providerResourceId: providerResourceId ?? null,
+        completedAt:
+          outcome === "succeeded" || outcome === "known_failed"
+            ? new Date()
+            : null,
+        resolutionDueAt: new Date(),
+      })
+      .where(
+        and(
+          eq(billingProviderOperations.operationId, operation.operationId),
+          eq(billingProviderOperations.workspaceId, operation.workspaceId),
+          eq(billingProviderOperations.mode, operation.mode),
+          eq(
+            billingProviderOperations.authorizationEpoch,
+            operation.authorizationEpoch
+          ),
+          eq(billingProviderOperations.leaseToken, operation.leaseToken),
+          eq(billingProviderOperations.state, "transport_started")
+        )
+      );
+    const recorded = outboxAffectedRows(result) === 1;
+    if (recorded && !authorized) {
+      if (providerResourceId) {
+        const containmentKey = hashCanonicalSnapshot({
+          workspaceId: operation.workspaceId,
+          mode: operation.mode,
+          intentId: containment.subscription.sourceIntentId,
+          customerId: containment.subscription.mollieCustomerId,
+          subscriptionId: providerResourceId,
+          authorizationEpoch: operation.authorizationEpoch,
+        });
+        await tx
+          .insert(billingOutbox)
+          .values({
+            workspaceId: operation.workspaceId,
+            mode: operation.mode,
+            eventType: "cancel_subscription",
+            deduplicationKey: `execution_disabled_subscription:${containmentKey}`,
+            payload: {
+              reason: "billing_execution_disabled",
+              revokedAuthorizationEpoch: operation.authorizationEpoch,
+              expectedSourceIntentId: containment.subscription.sourceIntentId,
+              targetCustomerId: containment.subscription.mollieCustomerId,
+              targetSubscriptionId: providerResourceId,
+            },
+            status: "pending",
+          })
+          .onDuplicateKeyUpdate({
+            set: { deduplicationKey: sql`deduplication_key` },
+          });
+      } else if (outcome === "ambiguous") {
+        await tx
+          .insert(billingOutbox)
+          .values({
+            workspaceId: operation.workspaceId,
+            mode: operation.mode,
+            eventType: "cancel_subscription",
+            deduplicationKey: `subscription_ambiguous_reconcile:${operation.operationId}`,
+            payload: {
+              reason: "billing_execution_disabled",
+              revokedAuthorizationEpoch: operation.authorizationEpoch,
+              expectedSourceIntentId: containment.subscription.sourceIntentId,
+              targetCustomerId: containment.subscription.mollieCustomerId,
+              targetSubscriptionId: null,
+              providerOperationId: operation.operationId,
+            },
+            status: "pending",
+          })
+          .onDuplicateKeyUpdate({
+            set: { deduplicationKey: sql`deduplication_key` },
+          });
+        await tx
+          .insert(billingOutbox)
+          .values({
+            workspaceId: operation.workspaceId,
+            mode: operation.mode,
+            eventType: "manual_review",
+            deduplicationKey: `subscription_ambiguous_after_disable:${operation.operationId}`,
+            payload: {
+              reason: "subscription_provider_ambiguous_after_disable",
+              intentId: containment.subscription.sourceIntentId,
+            },
+            status: "pending",
+          })
+          .onDuplicateKeyUpdate({
+            set: { deduplicationKey: sql`deduplication_key` },
+          });
+      }
+    }
+    return {
+      recorded,
+      authorized: recorded && authorized,
+      revokedAuthorizationEpoch:
+        recorded && !authorized ? operation.authorizationEpoch : null,
+    };
+  });
 }
 
 function outboxAffectedRows(result: unknown): number {
@@ -915,10 +1202,22 @@ async function cancelMollieSubscription(
   clientOverride?: MollieClient
 ) {
   const target = readCancellationTarget(job.payload);
-  if (!target) return;
+  if (!target) {
+    await reconcileExecutionDisabledSubscription(job, clientOverride);
+    return;
+  }
   const config = getMollieConfig();
   if (config.mode !== job.mode) {
     throw new PermanentOutboxError("billing_mode_mismatch");
+  }
+  if (!(await hasExactSubscriptionCancellationBinding(job, target))) {
+    await recordSubscriptionCancellationReview(
+      job,
+      "subscription_cancellation_local_scope_mismatch"
+    );
+    throw new PermanentOutboxError(
+      "subscription_cancellation_local_scope_mismatch"
+    );
   }
   const client = clientOverride ?? new MollieClient(config);
   if (isContainmentCancellation(job.payload)) {
@@ -927,12 +1226,33 @@ async function cancelMollieSubscription(
     await rearmFailedEnsureJobsWaitingForCancellation(job);
     return;
   }
+  let remote: MollieSubscription | null = null;
+  try {
+    remote = await client.getSubscription(
+      target.customerId,
+      target.subscriptionId
+    );
+  } catch (error) {
+    if (error instanceof MollieApiError && error.status === 404) return;
+    throw error;
+  }
+  if (
+    remote.id !== target.subscriptionId ||
+    remote.mode !== job.mode ||
+    metadataIntentId(remote.metadata) !== target.sourceIntentId
+  ) {
+    await recordSubscriptionCancellationReview(
+      job,
+      "subscription_cancellation_provider_scope_mismatch"
+    );
+    throw new PermanentOutboxError(
+      "subscription_cancellation_provider_scope_mismatch"
+    );
+  }
   try {
     await client.cancelSubscription(target.customerId, target.subscriptionId);
   } catch (error) {
-    if (!(error instanceof MollieApiError) || error.status !== 404) {
-      throw error;
-    }
+    if (!(error instanceof MollieApiError) || error.status !== 404) throw error;
   }
   await markWorkspaceSubscriptionStoppedIfMatches(
     job.workspaceId,
@@ -942,7 +1262,182 @@ async function cancelMollieSubscription(
   await rearmFailedEnsureJobsWaitingForCancellation(job);
 }
 
-async function cancelContainedMolliePayment(
+export async function reconcileExecutionDisabledSubscription(
+  job: ClaimedBillingOutboxItem,
+  clientOverride?: MollieClient
+): Promise<void> {
+  if (
+    !job.payload ||
+    typeof job.payload !== "object" ||
+    Array.isArray(job.payload)
+  ) {
+    throw new PermanentOutboxError(
+      "invalid_subscription_reconciliation_target"
+    );
+  }
+  const payload = job.payload as Record<string, unknown>;
+  const operationId = payload.providerOperationId;
+  const customerId = payload.targetCustomerId;
+  const sourceIntentId =
+    payload.expectedSourceIntentId ?? payload.sourceIntentId;
+  const revokedAuthorizationEpoch = readExecutionDisabledEpoch(job.payload);
+  if (
+    typeof operationId !== "string" ||
+    typeof customerId !== "string" ||
+    typeof sourceIntentId !== "string" ||
+    revokedAuthorizationEpoch === null
+  ) {
+    throw new PermanentOutboxError(
+      "invalid_subscription_reconciliation_target"
+    );
+  }
+  const config = getMollieConfig();
+  if (config.mode !== job.mode) {
+    throw new PermanentOutboxError("billing_mode_mismatch");
+  }
+  const database = await getDatabaseOrThrow();
+  const operations = await database
+    .select({
+      operationId: billingProviderOperations.operationId,
+      billingProfileVersion: billingProviderOperations.billingProfileVersion,
+      credentialGenerationId: billingProviderOperations.credentialGenerationId,
+    })
+    .from(billingProviderOperations)
+    .where(
+      and(
+        eq(billingProviderOperations.operationId, operationId),
+        eq(billingProviderOperations.workspaceId, job.workspaceId),
+        eq(billingProviderOperations.mode, job.mode),
+        eq(billingProviderOperations.operationType, "create_subscription"),
+        eq(billingProviderOperations.intentId, sourceIntentId),
+        eq(billingProviderOperations.providerCustomerId, customerId),
+        eq(
+          billingProviderOperations.authorizationEpoch,
+          revokedAuthorizationEpoch
+        ),
+        inArray(billingProviderOperations.state, [
+          "transport_started",
+          "ambiguous",
+          "reconciliation_only",
+        ])
+      )
+    )
+    .limit(1);
+  if (!operations[0]) {
+    throw new PermanentOutboxError(
+      "subscription_reconciliation_scope_mismatch"
+    );
+  }
+  const client = clientOverride ?? new MollieClient(config);
+  const matches = collectingSubscriptionsForIntent(
+    await client.listCustomerSubscriptions(customerId),
+    sourceIntentId
+  ).filter(remote => remote.mode === job.mode);
+  if (matches.length === 0) {
+    throw new RetryableOutboxError("subscription_reconciliation_not_visible");
+  }
+  const now = new Date();
+  await database.transaction(async tx => {
+    const updated = await tx
+      .update(billingProviderOperations)
+      .set({
+        state: "contained",
+        providerResourceId: matches.length === 1 ? matches[0]!.id : null,
+        completedAt: now,
+        resolutionDueAt: now,
+      })
+      .where(
+        and(
+          eq(billingProviderOperations.operationId, operationId),
+          eq(billingProviderOperations.workspaceId, job.workspaceId),
+          eq(billingProviderOperations.mode, job.mode),
+          inArray(billingProviderOperations.state, [
+            "transport_started",
+            "ambiguous",
+            "reconciliation_only",
+          ])
+        )
+      );
+    if (outboxAffectedRows(updated) !== 1) {
+      throw new Error("subscription reconciliation fence was lost");
+    }
+    for (const remote of matches) {
+      const containmentFingerprint = hashCanonicalSnapshot({
+        operationId,
+        workspaceId: job.workspaceId,
+        mode: job.mode,
+        sourceIntentId,
+        customerId,
+        subscriptionId: remote.id,
+        revokedAuthorizationEpoch,
+      });
+      await tx
+        .insert(billingProviderOperations)
+        .values({
+          operationId: randomUUID(),
+          workspaceId: job.workspaceId,
+          mode: job.mode,
+          operationType: "cancel_subscription",
+          operationKey: `execution-disabled:${operationId}:${remote.id}`,
+          intentId: sourceIntentId,
+          billingProfileVersion: operations[0].billingProfileVersion,
+          authorizationEpoch: revokedAuthorizationEpoch,
+          state: "contained",
+          requestFingerprint: containmentFingerprint,
+          idempotencyKeyHash: containmentFingerprint,
+          credentialGenerationId: operations[0].credentialGenerationId,
+          providerResourceId: remote.id,
+          providerCustomerId: customerId,
+          leaseToken: randomUUID(),
+          leaseUntil: now,
+          resolutionDueAt: now,
+          completedAt: now,
+        })
+        .onDuplicateKeyUpdate({
+          set: { operationKey: sql`operation_key` },
+        });
+      await tx
+        .insert(billingOutbox)
+        .values({
+          workspaceId: job.workspaceId,
+          mode: job.mode,
+          eventType: "cancel_subscription",
+          deduplicationKey: `execution_disabled_subscription:${remote.id}`,
+          payload: {
+            reason: "billing_execution_disabled",
+            revokedAuthorizationEpoch,
+            expectedSourceIntentId: sourceIntentId,
+            targetCustomerId: customerId,
+            targetSubscriptionId: remote.id,
+          },
+          status: "pending",
+        })
+        .onDuplicateKeyUpdate({
+          set: { deduplicationKey: sql`deduplication_key` },
+        });
+    }
+    if (matches.length > 1) {
+      await tx
+        .insert(billingOutbox)
+        .values({
+          workspaceId: job.workspaceId,
+          mode: job.mode,
+          eventType: "manual_review",
+          deduplicationKey: `subscription_reconciliation_multiple:${operationId}`,
+          payload: {
+            reason: "subscription_provider_ambiguous_after_disable",
+            intentId: sourceIntentId,
+          },
+          status: "pending",
+        })
+        .onDuplicateKeyUpdate({
+          set: { deduplicationKey: sql`deduplication_key` },
+        });
+    }
+  });
+}
+
+export async function cancelContainedMolliePayment(
   job: ClaimedBillingOutboxItem,
   clientOverride?: MollieClient
 ): Promise<void> {
@@ -954,12 +1449,90 @@ async function cancelContainedMolliePayment(
       : null;
   const paymentId = record?.targetPaymentId;
   const intentId = record?.intentId;
-  if (typeof paymentId !== "string" || typeof intentId !== "string") {
+  const payloadCustomerId = record?.targetCustomerId;
+  if (paymentId === null) {
+    await reconcileExecutionDisabledPayment(job, clientOverride);
+    return;
+  }
+  if (
+    typeof paymentId !== "string" ||
+    typeof intentId !== "string" ||
+    (payloadCustomerId !== undefined && typeof payloadCustomerId !== "string")
+  ) {
     throw new PermanentOutboxError("invalid_payment_cancellation_target");
   }
   const config = getMollieConfig();
   if (config.mode !== job.mode) {
     throw new PermanentOutboxError("billing_mode_mismatch");
+  }
+  const database = await getDatabaseOrThrow();
+  const customerRows = await database
+    .select({ mollieCustomerId: billingCustomers.mollieCustomerId })
+    .from(billingCustomers)
+    .where(
+      and(
+        eq(billingCustomers.workspaceId, job.workspaceId),
+        eq(billingCustomers.mode, job.mode)
+      )
+    )
+    .limit(1);
+  const customerId = customerRows[0]?.mollieCustomerId;
+  if (!customerId || (payloadCustomerId && payloadCustomerId !== customerId)) {
+    throw new PermanentOutboxError(
+      "payment_cancellation_customer_scope_mismatch"
+    );
+  }
+  const localTargets = await database
+    .select({ molliePaymentId: billingIntents.molliePaymentId })
+    .from(billingIntents)
+    .where(
+      and(
+        eq(billingIntents.intentId, intentId),
+        eq(billingIntents.workspaceId, job.workspaceId),
+        eq(billingIntents.mode, job.mode),
+        eq(billingIntents.molliePaymentId, paymentId),
+        inArray(billingIntents.status, [
+          "contained",
+          "canceled",
+          "expired",
+          "mismatch",
+        ])
+      )
+    )
+    .limit(1);
+  if (!localTargets[0]) {
+    const revokedAuthorizationEpoch = readExecutionDisabledEpoch(job.payload);
+    const operationTargets = await database
+      .select({ operationId: billingProviderOperations.operationId })
+      .from(billingProviderOperations)
+      .where(
+        and(
+          eq(billingProviderOperations.workspaceId, job.workspaceId),
+          eq(billingProviderOperations.mode, job.mode),
+          inArray(billingProviderOperations.operationType, [
+            "create_payment",
+            "cancel_payment",
+          ]),
+          eq(billingProviderOperations.intentId, intentId),
+          eq(billingProviderOperations.providerResourceId, paymentId),
+          eq(billingProviderOperations.providerCustomerId, customerId),
+          eq(billingProviderOperations.state, "contained"),
+          ...(revokedAuthorizationEpoch !== null
+            ? [
+                eq(
+                  billingProviderOperations.authorizationEpoch,
+                  revokedAuthorizationEpoch
+                ),
+              ]
+            : [])
+        )
+      )
+      .limit(1);
+    if (!operationTargets[0]) {
+      throw new PermanentOutboxError(
+        "payment_cancellation_local_scope_mismatch"
+      );
+    }
   }
   const client = clientOverride ?? new MollieClient(config);
   let payment;
@@ -972,6 +1545,7 @@ async function cancelContainedMolliePayment(
   if (
     payment.id !== paymentId ||
     payment.mode !== job.mode ||
+    payment.customerId !== customerId ||
     metadataIntentId(payment.metadata) !== intentId
   ) {
     throw new PermanentOutboxError("payment_cancellation_target_mismatch");
@@ -989,11 +1563,228 @@ async function cancelContainedMolliePayment(
   }
 }
 
+export async function reconcileExecutionDisabledPayment(
+  job: ClaimedBillingOutboxItem,
+  clientOverride?: MollieClient
+): Promise<void> {
+  if (
+    !job.payload ||
+    typeof job.payload !== "object" ||
+    Array.isArray(job.payload)
+  ) {
+    throw new PermanentOutboxError("invalid_payment_reconciliation_target");
+  }
+  const payload = job.payload as Record<string, unknown>;
+  const operationId = payload.providerOperationId;
+  const customerId = payload.targetCustomerId;
+  const intentId = payload.intentId;
+  const revokedAuthorizationEpoch = readPaymentReconciliationEpoch(job.payload);
+  if (
+    typeof operationId !== "string" ||
+    typeof customerId !== "string" ||
+    typeof intentId !== "string" ||
+    revokedAuthorizationEpoch === null
+  ) {
+    throw new PermanentOutboxError("invalid_payment_reconciliation_target");
+  }
+  const config = getMollieConfig();
+  if (config.mode !== job.mode) {
+    throw new PermanentOutboxError("billing_mode_mismatch");
+  }
+  const database = await getDatabaseOrThrow();
+  const operations = await database
+    .select({
+      operationId: billingProviderOperations.operationId,
+      billingProfileVersion: billingProviderOperations.billingProfileVersion,
+      credentialGenerationId: billingProviderOperations.credentialGenerationId,
+      firstStartedAt: billingProviderOperations.firstStartedAt,
+    })
+    .from(billingProviderOperations)
+    .where(
+      and(
+        eq(billingProviderOperations.operationId, operationId),
+        eq(billingProviderOperations.workspaceId, job.workspaceId),
+        eq(billingProviderOperations.mode, job.mode),
+        eq(billingProviderOperations.operationType, "create_payment"),
+        eq(billingProviderOperations.intentId, intentId),
+        eq(billingProviderOperations.providerCustomerId, customerId),
+        eq(
+          billingProviderOperations.authorizationEpoch,
+          revokedAuthorizationEpoch
+        ),
+        inArray(billingProviderOperations.state, [
+          "transport_started",
+          "ambiguous",
+          "reconciliation_only",
+        ])
+      )
+    )
+    .limit(1);
+  if (!operations[0]) {
+    throw new PermanentOutboxError("payment_reconciliation_scope_mismatch");
+  }
+  const intents = await database
+    .select({
+      expectedAmount: billingIntents.expectedAmount,
+      currency: billingIntents.currency,
+      mollieDescription: billingIntents.mollieDescription,
+    })
+    .from(billingIntents)
+    .where(
+      and(
+        eq(billingIntents.intentId, intentId),
+        eq(billingIntents.workspaceId, job.workspaceId),
+        eq(billingIntents.mode, job.mode),
+        eq(billingIntents.authorizationEpoch, revokedAuthorizationEpoch)
+      )
+    )
+    .limit(1);
+  const intent = intents[0];
+  if (!intent || !operations[0].firstStartedAt) {
+    throw new PermanentOutboxError("payment_reconciliation_scope_mismatch");
+  }
+  const earliestProviderCreatedAt =
+    operations[0].firstStartedAt.getTime() - 5 * 60_000;
+  const client = clientOverride ?? new MollieClient(config);
+  const matches = (await client.listCustomerPayments(customerId)).filter(
+    payment => {
+      const providerCreatedAt = Date.parse(payment.createdAt);
+      return (
+        payment.mode === job.mode &&
+        payment.customerId === customerId &&
+        !payment.subscriptionId &&
+        metadataIntentId(payment.metadata) === intentId &&
+        payment.amount.currency === intent.currency &&
+        payment.amount.value === String(intent.expectedAmount) &&
+        payment.description === intent.mollieDescription &&
+        Number.isFinite(providerCreatedAt) &&
+        providerCreatedAt >= earliestProviderCreatedAt
+      );
+    }
+  );
+  if (matches.length === 0) {
+    throw new RetryableOutboxError("payment_reconciliation_not_visible");
+  }
+  const now = new Date();
+  await database.transaction(async tx => {
+    const updated = await tx
+      .update(billingProviderOperations)
+      .set({
+        state: "contained",
+        providerResourceId: matches.length === 1 ? matches[0]!.id : null,
+        completedAt: now,
+        resolutionDueAt: now,
+      })
+      .where(
+        and(
+          eq(billingProviderOperations.operationId, operationId),
+          eq(billingProviderOperations.workspaceId, job.workspaceId),
+          eq(billingProviderOperations.mode, job.mode),
+          inArray(billingProviderOperations.state, [
+            "transport_started",
+            "ambiguous",
+            "reconciliation_only",
+          ])
+        )
+      );
+    if (outboxAffectedRows(updated) !== 1) {
+      throw new Error("payment reconciliation fence was lost");
+    }
+    for (const payment of matches) {
+      const containmentFingerprint = hashCanonicalSnapshot({
+        operationId,
+        workspaceId: job.workspaceId,
+        mode: job.mode,
+        intentId,
+        customerId,
+        paymentId: payment.id,
+        revokedAuthorizationEpoch,
+      });
+      await tx
+        .insert(billingProviderOperations)
+        .values({
+          operationId: randomUUID(),
+          workspaceId: job.workspaceId,
+          mode: job.mode,
+          operationType: "cancel_payment",
+          operationKey: `execution-disabled:${operationId}:${payment.id}`,
+          intentId,
+          billingProfileVersion: operations[0].billingProfileVersion,
+          authorizationEpoch: revokedAuthorizationEpoch,
+          state: "contained",
+          requestFingerprint: containmentFingerprint,
+          idempotencyKeyHash: containmentFingerprint,
+          credentialGenerationId: operations[0].credentialGenerationId,
+          providerResourceId: payment.id,
+          providerCustomerId: customerId,
+          leaseToken: randomUUID(),
+          leaseUntil: now,
+          resolutionDueAt: now,
+          completedAt: now,
+        })
+        .onDuplicateKeyUpdate({
+          set: { operationKey: sql`operation_key` },
+        });
+      await tx
+        .insert(billingOutbox)
+        .values({
+          workspaceId: job.workspaceId,
+          mode: job.mode,
+          eventType: "cancel_payment",
+          deduplicationKey: `execution_disabled_payment:${payment.id}`,
+          payload: {
+            reason: "billing_execution_disabled",
+            intentId,
+            targetCustomerId: customerId,
+            targetPaymentId: payment.id,
+            revokedAuthorizationEpoch,
+          },
+          status: "pending",
+        })
+        .onDuplicateKeyUpdate({
+          set: { deduplicationKey: sql`deduplication_key` },
+        });
+    }
+    if (matches.length > 1) {
+      await tx
+        .insert(billingOutbox)
+        .values({
+          workspaceId: job.workspaceId,
+          mode: job.mode,
+          eventType: "manual_review",
+          deduplicationKey: `payment_reconciliation_multiple:${operationId}`,
+          payload: {
+            reason: "payment_provider_ambiguous_after_disable",
+            intentId,
+          },
+          status: "pending",
+        })
+        .onDuplicateKeyUpdate({
+          set: { deduplicationKey: sql`deduplication_key` },
+        });
+    }
+  });
+}
+
 export async function cancelContainedMollieSubscription(
   job: BillingOutboxItem,
   target: { customerId: string; subscriptionId: string },
   client: MollieClient
 ): Promise<"canceled" | "skipped_current"> {
+  const boundTarget = readCancellationTarget(job.payload);
+  if (
+    !boundTarget ||
+    boundTarget.customerId !== target.customerId ||
+    boundTarget.subscriptionId !== target.subscriptionId
+  ) {
+    await recordSubscriptionCancellationReview(
+      job,
+      "subscription_cancellation_local_scope_mismatch"
+    );
+    throw new PermanentOutboxError(
+      "subscription_cancellation_local_scope_mismatch"
+    );
+  }
   const database = await getDatabaseOrThrow();
   const initial = await database.transaction(async tx => {
     const rows = await tx
@@ -1009,6 +1800,35 @@ export async function cancelContainedMollieSubscription(
       .for("update");
     return rows[0] ?? null;
   });
+  if (
+    !(await hasExactSubscriptionCancellationBinding(job, boundTarget, initial))
+  ) {
+    await recordSubscriptionCancellationReview(
+      job,
+      "subscription_cancellation_local_scope_mismatch"
+    );
+    throw new PermanentOutboxError(
+      "subscription_cancellation_local_scope_mismatch"
+    );
+  }
+  const executionDisabledEpoch = readExecutionDisabledEpoch(job.payload);
+  let executionIntentMatches = false;
+  if (executionDisabledEpoch !== null) {
+    const intents = await database
+      .select({ intentId: billingIntents.intentId })
+      .from(billingIntents)
+      .where(
+        and(
+          eq(billingIntents.intentId, boundTarget.sourceIntentId),
+          eq(billingIntents.workspaceId, job.workspaceId),
+          eq(billingIntents.mode, job.mode),
+          eq(billingIntents.authorizationEpoch, executionDisabledEpoch),
+          inArray(billingIntents.status, ["paid", "contained"])
+        )
+      )
+      .limit(1);
+    executionIntentMatches = Boolean(intents[0]);
+  }
 
   let remote: MollieSubscription | null = null;
   try {
@@ -1024,6 +1844,7 @@ export async function cancelContainedMollieSubscription(
 
   let matchingProvisioningRemoteIds: string[] | null = null;
   if (
+    executionDisabledEpoch === null &&
     remote &&
     initial?.status === "provisioning" &&
     isPotentiallyCurrentContainmentTarget(initial, job.payload, target) &&
@@ -1051,6 +1872,27 @@ export async function cancelContainedMollieSubscription(
       .limit(1)
       .for("update");
     const current = rows[0] ?? null;
+    if (executionDisabledEpoch !== null) {
+      if (
+        !executionIntentMatches ||
+        !remote ||
+        remote.id !== target.subscriptionId ||
+        remote.mode !== job.mode ||
+        metadataIntentId(remote.metadata) !== boundTarget.sourceIntentId
+      ) {
+        return "skipped_current" as const;
+      }
+      if (
+        current &&
+        (current.status === "active" || current.status === "past_due") &&
+        current.sourceIntentId === boundTarget.sourceIntentId &&
+        current.mollieCustomerId === target.customerId &&
+        current.mollieSubscriptionId === target.subscriptionId
+      ) {
+        return "skipped_current" as const;
+      }
+      return "cancel" as const;
+    }
     if (
       current &&
       isPotentiallyCurrentContainmentTarget(current, job.payload, target) &&
@@ -1164,8 +2006,39 @@ function isContainmentCancellation(payload: unknown): boolean {
     reason === "reconciliation_subscription_mismatch" ||
     reason === "billing_profile_revoked" ||
     reason === "billing_profile_expired" ||
-    reason === "billing_profile_ineligible_after_provider_response"
+    reason === "billing_profile_ineligible_after_provider_response" ||
+    reason === "checkout_provider_response_mismatch" ||
+    reason === "billing_execution_disabled"
   );
+}
+
+function readExecutionDisabledEpoch(payload: unknown): number | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const record = payload as Record<string, unknown>;
+  if (record.reason !== "billing_execution_disabled") return null;
+  const epoch = record.revokedAuthorizationEpoch;
+  return Number.isSafeInteger(epoch) && Number(epoch) > 0
+    ? Number(epoch)
+    : null;
+}
+
+function readPaymentReconciliationEpoch(payload: unknown): number | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const record = payload as Record<string, unknown>;
+  if (
+    record.reason !== "billing_execution_disabled" &&
+    record.reason !== "checkout_provider_response_mismatch"
+  ) {
+    return null;
+  }
+  const epoch = record.revokedAuthorizationEpoch;
+  return Number.isSafeInteger(epoch) && Number(epoch) > 0
+    ? Number(epoch)
+    : null;
 }
 
 function isProfileRevocationContainment(payload: unknown): boolean {
@@ -1427,18 +2300,111 @@ function readPortalHandoffTarget(payload: unknown): {
   };
 }
 
+async function hasExactSubscriptionCancellationBinding(
+  job: BillingOutboxItem,
+  target: {
+    customerId: string;
+    subscriptionId: string;
+    sourceIntentId: string;
+  },
+  knownLocal?: BillingSubscription | null
+): Promise<boolean> {
+  if (
+    knownLocal?.sourceIntentId === target.sourceIntentId &&
+    knownLocal.mollieCustomerId === target.customerId &&
+    knownLocal.mollieSubscriptionId === target.subscriptionId
+  ) {
+    return true;
+  }
+  const database = await getDatabaseOrThrow();
+  const localRows = knownLocal
+    ? []
+    : await database
+        .select({ id: billingSubscriptions.id })
+        .from(billingSubscriptions)
+        .where(
+          and(
+            eq(billingSubscriptions.workspaceId, job.workspaceId),
+            eq(billingSubscriptions.mode, job.mode),
+            eq(billingSubscriptions.sourceIntentId, target.sourceIntentId),
+            eq(billingSubscriptions.mollieCustomerId, target.customerId),
+            eq(billingSubscriptions.mollieSubscriptionId, target.subscriptionId)
+          )
+        )
+        .limit(1);
+  if (localRows[0]) return true;
+  const revokedAuthorizationEpoch = readExecutionDisabledEpoch(job.payload);
+  const operationRows = await database
+    .select({ operationId: billingProviderOperations.operationId })
+    .from(billingProviderOperations)
+    .where(
+      and(
+        eq(billingProviderOperations.workspaceId, job.workspaceId),
+        eq(billingProviderOperations.mode, job.mode),
+        inArray(billingProviderOperations.operationType, [
+          "create_subscription",
+          "cancel_subscription",
+        ]),
+        eq(billingProviderOperations.intentId, target.sourceIntentId),
+        eq(billingProviderOperations.providerResourceId, target.subscriptionId),
+        eq(billingProviderOperations.providerCustomerId, target.customerId),
+        inArray(billingProviderOperations.state, ["succeeded", "contained"]),
+        ...(revokedAuthorizationEpoch !== null
+          ? [
+              eq(
+                billingProviderOperations.authorizationEpoch,
+                revokedAuthorizationEpoch
+              ),
+            ]
+          : [])
+      )
+    )
+    .limit(1);
+  return Boolean(operationRows[0]);
+}
+
+async function recordSubscriptionCancellationReview(
+  job: BillingOutboxItem,
+  reason:
+    | "subscription_cancellation_local_scope_mismatch"
+    | "subscription_cancellation_provider_scope_mismatch"
+): Promise<void> {
+  const database = await getDatabaseOrThrow();
+  await database
+    .insert(billingOutbox)
+    .values({
+      workspaceId: job.workspaceId,
+      mode: job.mode,
+      eventType: "manual_review",
+      deduplicationKey: `subscription_cancel_scope_review:${job.deliveryId}`,
+      payload: { reason },
+      status: "pending",
+    })
+    .onDuplicateKeyUpdate({
+      set: { deduplicationKey: sql`deduplication_key` },
+    });
+}
+
 function readCancellationTarget(payload: unknown): {
   customerId: string;
   subscriptionId: string;
+  sourceIntentId: string;
 } | null {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new PermanentOutboxError("invalid_cancel_target");
   }
   const record = payload as Record<string, unknown>;
   if (record.targetSubscriptionId === null) return null;
+  const expectedSourceIntentId =
+    record.expectedSourceIntentId ?? record.sourceIntentId;
   if (
     typeof record.targetCustomerId !== "string" ||
-    typeof record.targetSubscriptionId !== "string"
+    typeof record.targetSubscriptionId !== "string" ||
+    typeof expectedSourceIntentId !== "string" ||
+    !/^[0-9a-f-]{36}$/i.test(expectedSourceIntentId) ||
+    (typeof record.expectedSourceIntentId === "string" &&
+      typeof record.sourceIntentId === "string" &&
+      record.expectedSourceIntentId !== record.sourceIntentId)
   ) {
     throw new PermanentOutboxError("invalid_cancel_target");
   }
@@ -1451,6 +2417,7 @@ function readCancellationTarget(payload: unknown): {
   return {
     customerId: record.targetCustomerId,
     subscriptionId: record.targetSubscriptionId,
+    sourceIntentId: expectedSourceIntentId,
   };
 }
 
@@ -1525,7 +2492,11 @@ async function recordRemoteSubscriptionContainment(
   job: BillingOutboxItem,
   local: BillingSubscription,
   remote: MollieSubscription,
-  sourceIntentId = local.sourceIntentId
+  sourceIntentId = local.sourceIntentId,
+  options: {
+    reason?: "remote_subscription_mismatch" | "billing_execution_disabled";
+    revokedAuthorizationEpoch?: number;
+  } = {}
 ): Promise<void> {
   const database = await getDatabaseOrThrow();
   const containmentKey = hashCanonicalSnapshot({
@@ -1563,7 +2534,8 @@ async function recordRemoteSubscriptionContainment(
       isValidMollieId(local.mollieCustomerId, "cst_") &&
       isValidMollieId(remote.id, "sub_")
     ) {
-      const cancelDeduplicationKey = `remote_mismatch_cancel:${containmentKey}`;
+      const reason = options.reason ?? "remote_subscription_mismatch";
+      const cancelDeduplicationKey = `${reason}_cancel:${containmentKey}`;
       await tx
         .insert(billingOutbox)
         .values({
@@ -1572,7 +2544,12 @@ async function recordRemoteSubscriptionContainment(
           eventType: "cancel_subscription",
           deduplicationKey: cancelDeduplicationKey,
           payload: {
-            reason: "remote_subscription_mismatch",
+            reason,
+            ...(options.revokedAuthorizationEpoch
+              ? {
+                  revokedAuthorizationEpoch: options.revokedAuthorizationEpoch,
+                }
+              : {}),
             expectedSourceIntentId: sourceIntentId,
             targetCustomerId: local.mollieCustomerId,
             targetSubscriptionId: remote.id,
@@ -1608,9 +2585,9 @@ async function recordRemoteSubscriptionContainment(
         workspaceId: job.workspaceId,
         mode: job.mode,
         eventType: "manual_review",
-        deduplicationKey: `remote_mismatch_review:${containmentKey}`,
+        deduplicationKey: `${options.reason ?? "remote_subscription_mismatch"}_review:${containmentKey}`,
         payload: {
-          reason: "remote_subscription_mismatch",
+          reason: options.reason ?? "remote_subscription_mismatch",
           intentId: sourceIntentId,
         },
         status: "pending",
@@ -1739,13 +2716,26 @@ export async function claimBillingOutboxItem(
 ): Promise<ClaimedBillingOutboxItem | null> {
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
-    const workspaceRows = await tx
-      .select({ id: workspaces.id })
-      .from(workspaces)
-      .where(eq(workspaces.id, workspaceId))
+    const controls = await tx
+      .select({ commercialEnabled: billingExecutionControls.commercialEnabled })
+      .from(billingExecutionControls)
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, workspaceId),
+          eq(billingExecutionControls.mode, mode)
+        )
+      )
       .limit(1)
       .for("update");
-    if (!workspaceRows[0]) return null;
+    if (!controls[0]) return null;
+    const allowedEventTypes = controls[0].commercialEnabled
+      ? undefined
+      : ([
+          "cancel_subscription",
+          "cancel_payment",
+          "payment_warning",
+          "manual_review",
+        ] as const);
     const activeJobs = await tx
       .select({ id: billingOutbox.id })
       .from(billingOutbox)
@@ -1753,7 +2743,10 @@ export async function claimBillingOutboxItem(
         and(
           eq(billingOutbox.workspaceId, workspaceId),
           eq(billingOutbox.mode, mode),
-          eq(billingOutbox.status, "processing")
+          eq(billingOutbox.status, "processing"),
+          ...(allowedEventTypes
+            ? [inArray(billingOutbox.eventType, allowedEventTypes)]
+            : [])
         )
       )
       .limit(1);
@@ -1766,7 +2759,10 @@ export async function claimBillingOutboxItem(
           eq(billingOutbox.workspaceId, workspaceId),
           eq(billingOutbox.mode, mode),
           eq(billingOutbox.status, "pending"),
-          lte(billingOutbox.availableAt, new Date())
+          lte(billingOutbox.availableAt, new Date()),
+          ...(allowedEventTypes
+            ? [inArray(billingOutbox.eventType, allowedEventTypes)]
+            : [])
         )
       )
       .orderBy(asc(billingOutbox.id))
@@ -1918,7 +2914,7 @@ async function rescheduleBillingOutboxItem(
     );
 }
 
-async function failBillingOutboxItem(
+export async function failBillingOutboxItem(
   job: ClaimedBillingOutboxItem,
   errorCode: string
 ) {
@@ -2023,6 +3019,24 @@ async function failBillingOutboxItem(
           eventType: "manual_review",
           deduplicationKey: `cancel_exhausted_review:${job.id}`,
           payload: { reason: "subscription_cancellation_exhausted" },
+          status: "pending",
+        })
+        .onDuplicateKeyUpdate({
+          set: { deduplicationKey: sql`deduplication_key` },
+        });
+    }
+    if (job.eventType === "cancel_payment") {
+      await tx
+        .insert(billingOutbox)
+        .values({
+          workspaceId: job.workspaceId,
+          mode: job.mode,
+          eventType: "manual_review",
+          deduplicationKey: `payment_cancel_failed_review:${job.deliveryId}`,
+          payload: {
+            reason: "payment_cancellation_failed",
+            failedDeliveryId: job.deliveryId,
+          },
           status: "pending",
         })
         .onDuplicateKeyUpdate({

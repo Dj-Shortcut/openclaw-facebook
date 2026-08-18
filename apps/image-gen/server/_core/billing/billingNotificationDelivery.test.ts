@@ -11,6 +11,39 @@ afterEach(() => {
 });
 
 describe("metadata-only billing notification delivery", () => {
+  it.each([
+    "subscription_provider_ambiguous_after_disable",
+    "payment_provider_ambiguous_after_disable",
+    "payment_cancellation_failed",
+  ])("delivers key-free operator reason %s", async reason => {
+    delete process.env.MOLLIE_API_KEY;
+    process.env.BILLING_OPERATOR_NOTIFICATION_WEBHOOK_URL =
+      "https://notify.example/operator";
+    process.env.BILLING_OPERATOR_NOTIFICATION_SIGNING_SECRET =
+      "test-operator-signing-secret-at-least-32";
+    process.env.BILLING_OPERATOR_NOTIFICATION_KEY_ID = "operator-v1";
+    process.env.BILLING_NOTIFICATION_SOURCE_ID = "leaderbot-test";
+    const transport = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response("", { status: 200 }));
+
+    await deliverBillingNotification(
+      {
+        deliveryId: "11111111-1111-4111-8111-111111111111",
+        workspaceId: 42,
+        mode: "test",
+        eventType: "manual_review",
+        attemptCount: 0,
+        createdAt: new Date("2026-08-18T10:00:00.000Z"),
+        payload: { reason },
+      },
+      transport
+    );
+
+    expect(transport).toHaveBeenCalledOnce();
+    expect(String(transport.mock.calls[0]?.[1]?.body)).toContain(reason);
+  });
+
   it("rejects shared audience credentials and a mismatched receiver source", () => {
     process.env.NODE_ENV = "test";
     process.env.MOLLIE_MODE = "test";

@@ -41,8 +41,17 @@ describe("billing scheduler lifecycle boundaries", () => {
 
     await registerBillingSchedulerTenant(10, "test", new Date("2030-01-01"));
 
-    expect(duplicateSet).toHaveBeenCalledTimes(4);
-    const update = duplicateSet.mock.calls[0]![0] as {
+    expect(duplicateSet).toHaveBeenCalledTimes(5);
+    const insertedRows = values.mock.calls.slice(1).map(call => call[0]);
+    expect(insertedRows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "outbox", enabled: true }),
+        expect.objectContaining({ kind: "reconciliation", enabled: false }),
+        expect.objectContaining({ kind: "profile_expiry", enabled: false }),
+        expect.objectContaining({ kind: "ai_finalization", enabled: false }),
+      ])
+    );
+    const update = duplicateSet.mock.calls[1]![0] as {
       set: Record<string, unknown>;
     };
     expect(update.set).not.toHaveProperty("enabled");
@@ -74,16 +83,33 @@ describe("billing scheduler lifecycle boundaries", () => {
       operatorRequestFingerprint: null,
     }));
     const auditValues = vi.fn(async () => undefined);
-    const where = vi.fn(async () => [{ affectedRows: 4 }]);
+    const controlWhere = vi.fn(async () => [{ affectedRows: 1 }]);
+    const laneWhere = vi.fn(async () => [{ affectedRows: 4 }]);
     const tx = {
-      select: vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(() => ({
-            orderBy: vi.fn(() => ({ for: vi.fn(async () => rows) })),
+      select: vi
+        .fn()
+        .mockReturnValueOnce({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn(() => ({
+                for: vi.fn(async () => [
+                  { commercialEnabled: false, authorizationEpoch: 1 },
+                ]),
+              })),
+            })),
           })),
-        })),
-      })),
-      update: vi.fn(() => ({ set: vi.fn(() => ({ where })) })),
+        })
+        .mockReturnValueOnce({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              orderBy: vi.fn(() => ({ for: vi.fn(async () => rows) })),
+            })),
+          })),
+        }),
+      update: vi
+        .fn()
+        .mockReturnValueOnce({ set: vi.fn(() => ({ where: controlWhere })) })
+        .mockReturnValueOnce({ set: vi.fn(() => ({ where: laneWhere })) }),
       insert: vi.fn(() => ({ values: auditValues })),
     };
     getDatabaseOrThrowMock.mockResolvedValue({
@@ -100,7 +126,8 @@ describe("billing scheduler lifecycle boundaries", () => {
         reason: "approved pilot rollout",
       })
     ).resolves.toEqual({ executionEpoch: 2 });
-    expect(where).toHaveBeenCalledTimes(1);
+    expect(controlWhere).toHaveBeenCalledOnce();
+    expect(laneWhere).toHaveBeenCalledOnce();
     expect(auditValues).toHaveBeenCalledWith(
       expect.objectContaining({
         workspaceId: 10,

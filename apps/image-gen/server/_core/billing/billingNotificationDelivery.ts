@@ -35,6 +35,12 @@ const OPERATOR_REASONS = new Set([
   "billing_profile_expired",
   "billing_profile_revoked",
   "billing_profile_containment_retry_exhausted",
+  "subscription_provider_ambiguous_after_disable",
+  "payment_provider_ambiguous_after_disable",
+  "billing_customer_created_after_disable",
+  "subscription_cancellation_local_scope_mismatch",
+  "subscription_cancellation_provider_scope_mismatch",
+  "payment_cancellation_failed",
 ]);
 const CUSTOMER_REASONS = new Set([
   "payment_failed",

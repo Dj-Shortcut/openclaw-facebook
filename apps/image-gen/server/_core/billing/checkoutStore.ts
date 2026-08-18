@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { and, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
 import {
   billingCustomers,
+  billingExecutionControls,
   billingIntents,
   billingOutbox,
   billingProviderOperations,
@@ -72,9 +73,30 @@ export async function reserveCheckoutIntent(input: {
   messengerSenderUserKey?: string | null;
   messengerPageId?: string | null;
   billingProfileVersion: number;
+  authorizationEpoch: number;
 }): Promise<BillingIntent> {
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
+    const controls = await tx
+      .select({
+        commercialEnabled: billingExecutionControls.commercialEnabled,
+        authorizationEpoch: billingExecutionControls.authorizationEpoch,
+      })
+      .from(billingExecutionControls)
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, input.workspaceId),
+          eq(billingExecutionControls.mode, input.mode)
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (
+      !controls[0]?.commercialEnabled ||
+      controls[0].authorizationEpoch !== input.authorizationEpoch
+    ) {
+      throw new Error("billing commercial execution changed");
+    }
     const workspaceRows = await tx
       .select({ id: workspaces.id })
       .from(workspaces)
@@ -153,7 +175,8 @@ export async function reserveCheckoutIntent(input: {
           (reusable[0].messengerSenderUserKey ?? null) ||
         (input.messengerPageId ?? null) !==
           (reusable[0].messengerPageId ?? null) ||
-        reusable[0].billingProfileVersion !== input.billingProfileVersion
+        reusable[0].billingProfileVersion !== input.billingProfileVersion ||
+        reusable[0].authorizationEpoch !== input.authorizationEpoch
       ) {
         throw new Error("workspace already has a checkout in progress");
       }
@@ -179,6 +202,7 @@ export async function reserveCheckoutIntent(input: {
       messengerSenderUserKey: input.messengerSenderUserKey ?? null,
       messengerPageId: input.messengerPageId ?? null,
       billingProfileVersion: input.billingProfileVersion,
+      authorizationEpoch: input.authorizationEpoch,
     });
 
     const created = await tx
@@ -383,11 +407,147 @@ export async function getBillingCustomer(
   return result[0] ?? null;
 }
 
+export async function claimCustomerProviderCreation(input: {
+  intentId: string;
+  workspaceId: number;
+  mode: MollieMode;
+  billingProfileVersion: number;
+  authorizationEpoch: number;
+  externalReference: string;
+  idempotencyKey: string;
+}): Promise<
+  | { claimed: false }
+  | { claimed: true; operationId: string; leaseToken: string }
+> {
+  const database = await getDatabaseOrThrow();
+  return database.transaction(async tx => {
+    const now = new Date();
+    const controls = await tx
+      .select({
+        commercialEnabled: billingExecutionControls.commercialEnabled,
+        authorizationEpoch: billingExecutionControls.authorizationEpoch,
+      })
+      .from(billingExecutionControls)
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, input.workspaceId),
+          eq(billingExecutionControls.mode, input.mode)
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (
+      !controls[0]?.commercialEnabled ||
+      controls[0].authorizationEpoch !== input.authorizationEpoch
+    ) {
+      return { claimed: false };
+    }
+    const intents = await tx
+      .select({
+        billingProfileVersion: billingIntents.billingProfileVersion,
+        authorizationEpoch: billingIntents.authorizationEpoch,
+      })
+      .from(billingIntents)
+      .where(
+        and(
+          eq(billingIntents.intentId, input.intentId),
+          eq(billingIntents.workspaceId, input.workspaceId),
+          eq(billingIntents.mode, input.mode)
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (
+      intents[0]?.billingProfileVersion !== input.billingProfileVersion ||
+      intents[0].authorizationEpoch !== input.authorizationEpoch
+    ) {
+      return { claimed: false };
+    }
+    const credentialGenerationId =
+      process.env.MOLLIE_CREDENTIAL_GENERATION_ID?.trim() ||
+      (process.env.NODE_ENV === "test" ? "test-generation" : "");
+    if (!credentialGenerationId) {
+      throw new Error("Mollie credential generation id is required");
+    }
+    const requestFingerprint = hashCanonicalSnapshot({
+      externalReference: input.externalReference,
+      idempotencyKey: input.idempotencyKey,
+    });
+    const idempotencyKeyHash = createHash("sha256")
+      .update(input.idempotencyKey)
+      .digest("hex");
+    const existing = await tx
+      .select()
+      .from(billingProviderOperations)
+      .where(
+        and(
+          eq(billingProviderOperations.mode, input.mode),
+          eq(billingProviderOperations.operationType, "create_customer"),
+          eq(billingProviderOperations.operationKey, String(input.workspaceId))
+        )
+      )
+      .limit(1)
+      .for("update");
+    const prior = existing[0];
+    const leaseToken = randomUUID();
+    if (prior) {
+      if (
+        prior.state !== "known_failed" ||
+        prior.firstStartedAt ||
+        prior.requestFingerprint !== requestFingerprint ||
+        prior.idempotencyKeyHash !== idempotencyKeyHash ||
+        prior.credentialGenerationId !== credentialGenerationId ||
+        prior.billingProfileVersion !== input.billingProfileVersion ||
+        prior.authorizationEpoch !== input.authorizationEpoch
+      ) {
+        return { claimed: false };
+      }
+      const resumed = await tx
+        .update(billingProviderOperations)
+        .set({
+          state: "reserved",
+          leaseToken,
+          leaseUntil: new Date(now.getTime() + 60_000),
+          resolutionDueAt: new Date(now.getTime() + 5 * 60_000),
+        })
+        .where(
+          and(
+            eq(billingProviderOperations.operationId, prior.operationId),
+            eq(billingProviderOperations.state, "known_failed")
+          )
+        );
+      return providerOperationAffectedRows(resumed) === 1
+        ? { claimed: true, operationId: prior.operationId, leaseToken }
+        : { claimed: false };
+    }
+    const operationId = randomUUID();
+    await tx.insert(billingProviderOperations).values({
+      operationId,
+      workspaceId: input.workspaceId,
+      mode: input.mode,
+      operationType: "create_customer",
+      operationKey: String(input.workspaceId),
+      intentId: input.intentId,
+      billingProfileVersion: input.billingProfileVersion,
+      authorizationEpoch: input.authorizationEpoch,
+      state: "reserved",
+      requestFingerprint,
+      idempotencyKeyHash,
+      credentialGenerationId,
+      leaseToken,
+      leaseUntil: new Date(now.getTime() + 60_000),
+      resolutionDueAt: new Date(now.getTime() + 5 * 60_000),
+    });
+    return { claimed: true, operationId, leaseToken };
+  });
+}
+
 export async function claimIntentPaymentCreation(input: {
   intentId: string;
   workspaceId: number;
   mode: MollieMode;
   billingProfileVersion: number;
+  authorizationEpoch: number;
   providerRequest: {
     customerId: string;
     amount: { currency: string; value: string };
@@ -405,6 +565,23 @@ export async function claimIntentPaymentCreation(input: {
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
     const now = new Date();
+    const controls = await tx
+      .select()
+      .from(billingExecutionControls)
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, input.workspaceId),
+          eq(billingExecutionControls.mode, input.mode)
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (
+      !controls[0]?.commercialEnabled ||
+      controls[0].authorizationEpoch !== input.authorizationEpoch
+    ) {
+      return { claimed: false };
+    }
     const profiles = await tx
       .select()
       .from(workspaceBillingProfiles)
@@ -482,6 +659,7 @@ export async function claimIntentPaymentCreation(input: {
         existing.firstStartedAt ||
         existing.requestFingerprint !== requestFingerprint ||
         existing.billingProfileVersion !== input.billingProfileVersion ||
+        existing.authorizationEpoch !== input.authorizationEpoch ||
         existing.credentialGenerationId !== credentialGenerationId ||
         existing.idempotencyKeyHash !== idempotencyKeyHash
       ) {
@@ -523,7 +701,9 @@ export async function claimIntentPaymentCreation(input: {
       operationType: "create_payment",
       operationKey: input.intentId,
       intentId: input.intentId,
+      providerCustomerId: input.providerRequest.customerId,
       billingProfileVersion: input.billingProfileVersion,
+      authorizationEpoch: input.authorizationEpoch,
       state: "reserved",
       requestFingerprint,
       idempotencyKeyHash,
@@ -609,27 +789,58 @@ export async function resolveDuePaymentProviderOperations(
 export async function markPaymentProviderTransportStarted(input: {
   operationId: string;
   leaseToken: string;
+  workspaceId: number;
+  mode: MollieMode;
+  authorizationEpoch: number;
 }): Promise<boolean> {
   const database = await getDatabaseOrThrow();
   const now = new Date();
-  const result = await database
-    .update(billingProviderOperations)
-    .set({
-      state: "transport_started",
-      firstStartedAt: now,
-      retryBefore: new Date(now.getTime() + 55 * 60_000),
-      resolutionDueAt: new Date(now.getTime() + 5 * 60_000),
-      attemptCount: sql`${billingProviderOperations.attemptCount} + 1`,
-    })
-    .where(
-      and(
-        eq(billingProviderOperations.operationId, input.operationId),
-        eq(billingProviderOperations.leaseToken, input.leaseToken),
-        eq(billingProviderOperations.state, "reserved"),
-        gt(billingProviderOperations.leaseUntil, now)
+  return database.transaction(async tx => {
+    const controls = await tx
+      .select({
+        commercialEnabled: billingExecutionControls.commercialEnabled,
+        authorizationEpoch: billingExecutionControls.authorizationEpoch,
+      })
+      .from(billingExecutionControls)
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, input.workspaceId),
+          eq(billingExecutionControls.mode, input.mode)
+        )
       )
-    );
-  return providerOperationAffectedRows(result) === 1;
+      .limit(1)
+      .for("update");
+    if (
+      !controls[0]?.commercialEnabled ||
+      controls[0].authorizationEpoch !== input.authorizationEpoch
+    ) {
+      return false;
+    }
+    const result = await tx
+      .update(billingProviderOperations)
+      .set({
+        state: "transport_started",
+        firstStartedAt: now,
+        retryBefore: new Date(now.getTime() + 55 * 60_000),
+        resolutionDueAt: new Date(now.getTime() + 5 * 60_000),
+        attemptCount: sql`${billingProviderOperations.attemptCount} + 1`,
+      })
+      .where(
+        and(
+          eq(billingProviderOperations.operationId, input.operationId),
+          eq(billingProviderOperations.workspaceId, input.workspaceId),
+          eq(billingProviderOperations.mode, input.mode),
+          eq(
+            billingProviderOperations.authorizationEpoch,
+            input.authorizationEpoch
+          ),
+          eq(billingProviderOperations.leaseToken, input.leaseToken),
+          eq(billingProviderOperations.state, "reserved"),
+          gt(billingProviderOperations.leaseUntil, now)
+        )
+      );
+    return providerOperationAffectedRows(result) === 1;
+  });
 }
 
 export async function finalizePaymentProviderOperation(input: {
@@ -637,24 +848,186 @@ export async function finalizePaymentProviderOperation(input: {
   leaseToken: string;
   outcome: "succeeded" | "ambiguous";
   providerResourceId?: string;
-}): Promise<boolean> {
+  workspaceId: number;
+  mode: MollieMode;
+  authorizationEpoch: number;
+  intentId: string;
+  targetCustomerId?: string;
+}): Promise<{
+  recorded: boolean;
+  authorized: boolean;
+  revokedAuthorizationEpoch: number | null;
+}> {
   const database = await getDatabaseOrThrow();
-  const result = await database
-    .update(billingProviderOperations)
-    .set({
-      state: input.outcome,
-      providerResourceId: input.providerResourceId ?? null,
-      completedAt: input.outcome === "succeeded" ? new Date() : null,
-      resolutionDueAt: new Date(),
-    })
-    .where(
-      and(
-        eq(billingProviderOperations.operationId, input.operationId),
-        eq(billingProviderOperations.leaseToken, input.leaseToken),
-        eq(billingProviderOperations.state, "transport_started")
+  return database.transaction(async tx => {
+    const controls = await tx
+      .select({
+        commercialEnabled: billingExecutionControls.commercialEnabled,
+        authorizationEpoch: billingExecutionControls.authorizationEpoch,
+      })
+      .from(billingExecutionControls)
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, input.workspaceId),
+          eq(billingExecutionControls.mode, input.mode)
+        )
       )
+      .limit(1)
+      .for("update");
+    const authorized = Boolean(
+      controls[0]?.commercialEnabled &&
+      controls[0].authorizationEpoch === input.authorizationEpoch
     );
-  return providerOperationAffectedRows(result) === 1;
+    const operations = await tx
+      .select({
+        operationType: billingProviderOperations.operationType,
+        intentId: billingProviderOperations.intentId,
+      })
+      .from(billingProviderOperations)
+      .where(
+        and(
+          eq(billingProviderOperations.operationId, input.operationId),
+          eq(billingProviderOperations.workspaceId, input.workspaceId),
+          eq(billingProviderOperations.mode, input.mode),
+          eq(
+            billingProviderOperations.authorizationEpoch,
+            input.authorizationEpoch
+          ),
+          eq(billingProviderOperations.leaseToken, input.leaseToken),
+          eq(billingProviderOperations.state, "transport_started")
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (!operations[0] || operations[0].intentId !== input.intentId) {
+      return {
+        recorded: false,
+        authorized: false,
+        revokedAuthorizationEpoch: null,
+      };
+    }
+    const result = await tx
+      .update(billingProviderOperations)
+      .set({
+        state: authorized
+          ? input.outcome
+          : input.providerResourceId
+            ? "contained"
+            : "reconciliation_only",
+        providerResourceId: input.providerResourceId ?? null,
+        completedAt: input.outcome === "succeeded" ? new Date() : null,
+        resolutionDueAt: new Date(),
+      })
+      .where(
+        and(
+          eq(billingProviderOperations.operationId, input.operationId),
+          eq(billingProviderOperations.workspaceId, input.workspaceId),
+          eq(billingProviderOperations.mode, input.mode),
+          eq(
+            billingProviderOperations.authorizationEpoch,
+            input.authorizationEpoch
+          ),
+          eq(billingProviderOperations.leaseToken, input.leaseToken),
+          eq(billingProviderOperations.state, "transport_started")
+        )
+      );
+    const recorded = providerOperationAffectedRows(result) === 1;
+    if (recorded && !authorized) {
+      await tx
+        .update(billingIntents)
+        .set({ status: "contained" })
+        .where(
+          and(
+            eq(billingIntents.intentId, input.intentId),
+            eq(billingIntents.workspaceId, input.workspaceId),
+            eq(billingIntents.mode, input.mode),
+            eq(billingIntents.authorizationEpoch, input.authorizationEpoch),
+            inArray(billingIntents.status, [
+              "created",
+              "creating_payment",
+              "open",
+              "api_unknown",
+            ])
+          )
+        );
+      if (
+        operations[0].operationType === "create_payment" &&
+        input.providerResourceId &&
+        input.targetCustomerId
+      ) {
+        await tx
+          .insert(billingOutbox)
+          .values({
+            workspaceId: input.workspaceId,
+            mode: input.mode,
+            eventType: "cancel_payment",
+            deduplicationKey: `execution_disabled_payment:${input.providerResourceId}`,
+            payload: {
+              reason: "billing_execution_disabled",
+              intentId: input.intentId,
+              targetCustomerId: input.targetCustomerId,
+              targetPaymentId: input.providerResourceId,
+              revokedAuthorizationEpoch: input.authorizationEpoch,
+            },
+            status: "pending",
+          })
+          .onDuplicateKeyUpdate({
+            set: { deduplicationKey: sql`deduplication_key` },
+          });
+      } else {
+        if (
+          operations[0].operationType === "create_payment" &&
+          input.targetCustomerId
+        ) {
+          await tx
+            .insert(billingOutbox)
+            .values({
+              workspaceId: input.workspaceId,
+              mode: input.mode,
+              eventType: "cancel_payment",
+              deduplicationKey: `payment_ambiguous_reconcile:${input.operationId}`,
+              payload: {
+                reason: "billing_execution_disabled",
+                intentId: input.intentId,
+                targetCustomerId: input.targetCustomerId,
+                targetPaymentId: null,
+                providerOperationId: input.operationId,
+                revokedAuthorizationEpoch: input.authorizationEpoch,
+              },
+              status: "pending",
+            })
+            .onDuplicateKeyUpdate({
+              set: { deduplicationKey: sql`deduplication_key` },
+            });
+        }
+        await tx
+          .insert(billingOutbox)
+          .values({
+            workspaceId: input.workspaceId,
+            mode: input.mode,
+            eventType: "manual_review",
+            deduplicationKey: `provider_ambiguous_after_disable:${input.operationId}`,
+            payload: {
+              reason:
+                operations[0].operationType === "create_payment"
+                  ? "payment_provider_ambiguous_after_disable"
+                  : "billing_customer_created_after_disable",
+              intentId: input.intentId,
+            },
+            status: "pending",
+          })
+          .onDuplicateKeyUpdate({
+            set: { deduplicationKey: sql`deduplication_key` },
+          });
+      }
+    }
+    return {
+      recorded,
+      authorized: recorded && authorized,
+      revokedAuthorizationEpoch:
+        recorded && !authorized ? input.authorizationEpoch : null,
+    };
+  });
 }
 
 function providerOperationAffectedRows(result: unknown): number {
@@ -672,9 +1045,26 @@ export async function attachMolliePayment(input: {
   mode: MollieMode;
   molliePaymentId: string;
   billingProfileVersion: number;
+  authorizationEpoch: number;
+  operationId: string;
+  targetCustomerId: string;
 }): Promise<boolean> {
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
+    const controls = await tx
+      .select({
+        commercialEnabled: billingExecutionControls.commercialEnabled,
+        authorizationEpoch: billingExecutionControls.authorizationEpoch,
+      })
+      .from(billingExecutionControls)
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, input.workspaceId),
+          eq(billingExecutionControls.mode, input.mode)
+        )
+      )
+      .limit(1)
+      .for("update");
     const profiles = await tx
       .select()
       .from(workspaceBillingProfiles)
@@ -726,7 +1116,25 @@ export async function attachMolliePayment(input: {
     ) {
       throw new Error("Mollie webhook route ownership conflict");
     }
+    // Keep the global billing mutation order control/profile/intent ->
+    // scheduler -> provider operation -> outbox. The outbox wake trigger also
+    // locks this scheduler row, so acquiring it explicitly prevents an
+    // execution-disable/provider-result deadlock.
+    await tx
+      .select({ kind: billingSchedulerTenants.kind })
+      .from(billingSchedulerTenants)
+      .where(
+        and(
+          eq(billingSchedulerTenants.workspaceId, input.workspaceId),
+          eq(billingSchedulerTenants.mode, input.mode),
+          eq(billingSchedulerTenants.kind, "outbox")
+        )
+      )
+      .limit(1)
+      .for("update");
     if (
+      !controls[0]?.commercialEnabled ||
+      controls[0].authorizationEpoch !== input.authorizationEpoch ||
       !isBillingProfileVersionEligible(
         profiles[0],
         input.billingProfileVersion,
@@ -734,9 +1142,37 @@ export async function attachMolliePayment(input: {
       ) ||
       intent.billingProfileVersion !== input.billingProfileVersion
     ) {
+      const operationUpdate = await tx
+        .update(billingProviderOperations)
+        .set({ state: "contained", resolutionDueAt: new Date() })
+        .where(
+          and(
+            eq(billingProviderOperations.operationId, input.operationId),
+            eq(billingProviderOperations.workspaceId, input.workspaceId),
+            eq(billingProviderOperations.mode, input.mode),
+            eq(billingProviderOperations.operationType, "create_payment"),
+            eq(billingProviderOperations.intentId, input.intentId),
+            eq(
+              billingProviderOperations.authorizationEpoch,
+              input.authorizationEpoch
+            ),
+            eq(
+              billingProviderOperations.providerResourceId,
+              input.molliePaymentId
+            ),
+            eq(
+              billingProviderOperations.providerCustomerId,
+              input.targetCustomerId
+            ),
+            eq(billingProviderOperations.state, "succeeded")
+          )
+        );
       await tx
         .update(billingIntents)
-        .set({ status: "contained" })
+        .set({
+          status: "contained",
+          molliePaymentId: input.molliePaymentId,
+        })
         .where(
           and(
             eq(billingIntents.intentId, input.intentId),
@@ -770,7 +1206,12 @@ export async function attachMolliePayment(input: {
           payload: {
             reason: "billing_profile_ineligible_after_provider_response",
             intentId: input.intentId,
+            targetCustomerId: input.targetCustomerId,
             targetPaymentId: input.molliePaymentId,
+            revokedAuthorizationEpoch: input.authorizationEpoch,
+            ...(providerOperationAffectedRows(operationUpdate) === 1
+              ? {}
+              : { providerOperationId: input.operationId }),
           },
           status: "pending",
         })
@@ -927,9 +1368,30 @@ export async function isCheckoutUrlExposureAllowed(input: {
   mode: MollieMode;
   molliePaymentId: string;
   billingProfileVersion: number;
+  authorizationEpoch: number;
 }): Promise<boolean> {
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
+    const controls = await tx
+      .select({
+        commercialEnabled: billingExecutionControls.commercialEnabled,
+        authorizationEpoch: billingExecutionControls.authorizationEpoch,
+      })
+      .from(billingExecutionControls)
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, input.workspaceId),
+          eq(billingExecutionControls.mode, input.mode)
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (
+      !controls[0]?.commercialEnabled ||
+      controls[0].authorizationEpoch !== input.authorizationEpoch
+    ) {
+      return false;
+    }
     const profiles = await tx
       .select()
       .from(workspaceBillingProfiles)
@@ -950,6 +1412,7 @@ export async function isCheckoutUrlExposureAllowed(input: {
         status: billingIntents.status,
         molliePaymentId: billingIntents.molliePaymentId,
         billingProfileVersion: billingIntents.billingProfileVersion,
+        authorizationEpoch: billingIntents.authorizationEpoch,
       })
       .from(billingIntents)
       .where(
@@ -961,10 +1424,31 @@ export async function isCheckoutUrlExposureAllowed(input: {
       )
       .limit(1)
       .for("update");
+    const operations = await tx
+      .select({
+        state: billingProviderOperations.state,
+        providerResourceId: billingProviderOperations.providerResourceId,
+        authorizationEpoch: billingProviderOperations.authorizationEpoch,
+      })
+      .from(billingProviderOperations)
+      .where(
+        and(
+          eq(billingProviderOperations.workspaceId, input.workspaceId),
+          eq(billingProviderOperations.mode, input.mode),
+          eq(billingProviderOperations.operationType, "create_payment"),
+          eq(billingProviderOperations.operationKey, input.intentId)
+        )
+      )
+      .limit(1)
+      .for("update");
     const allowed = Boolean(
       intents[0]?.status === "open" &&
       intents[0].molliePaymentId === input.molliePaymentId &&
-      intents[0].billingProfileVersion === input.billingProfileVersion
+      intents[0].billingProfileVersion === input.billingProfileVersion &&
+      intents[0].authorizationEpoch === input.authorizationEpoch &&
+      operations[0]?.state === "succeeded" &&
+      operations[0].providerResourceId === input.molliePaymentId &&
+      operations[0].authorizationEpoch === input.authorizationEpoch
     );
     if (allowed) {
       await tx
@@ -982,7 +1466,8 @@ export async function isCheckoutUrlExposureAllowed(input: {
             eq(
               billingIntents.billingProfileVersion,
               input.billingProfileVersion
-            )
+            ),
+            eq(billingIntents.authorizationEpoch, input.authorizationEpoch)
           )
         );
     }
@@ -1051,12 +1536,80 @@ export async function markIntentPaymentMismatch(input: {
   workspaceId: number;
   mode: MollieMode;
   molliePaymentId: string | null;
+  operationId: string;
+  authorizationEpoch: number;
+  targetCustomerId: string;
 }): Promise<void> {
   const database = await getDatabaseOrThrow();
   await database.transaction(async tx => {
     await tx
+      .select({
+        authorizationEpoch: billingExecutionControls.authorizationEpoch,
+      })
+      .from(billingExecutionControls)
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, input.workspaceId),
+          eq(billingExecutionControls.mode, input.mode)
+        )
+      )
+      .limit(1)
+      .for("update");
+    await tx
+      .select({ intentId: billingIntents.intentId })
+      .from(billingIntents)
+      .where(
+        and(
+          eq(billingIntents.intentId, input.intentId),
+          eq(billingIntents.workspaceId, input.workspaceId),
+          eq(billingIntents.mode, input.mode)
+        )
+      )
+      .limit(1)
+      .for("update");
+    await tx
+      .select({ kind: billingSchedulerTenants.kind })
+      .from(billingSchedulerTenants)
+      .where(
+        and(
+          eq(billingSchedulerTenants.workspaceId, input.workspaceId),
+          eq(billingSchedulerTenants.mode, input.mode),
+          eq(billingSchedulerTenants.kind, "outbox")
+        )
+      )
+      .limit(1)
+      .for("update");
+    const operationUpdate = await tx
+      .update(billingProviderOperations)
+      .set({
+        state: input.molliePaymentId ? "contained" : "reconciliation_only",
+        providerResourceId: input.molliePaymentId,
+        resolutionDueAt: new Date(),
+      })
+      .where(
+        and(
+          eq(billingProviderOperations.operationId, input.operationId),
+          eq(billingProviderOperations.workspaceId, input.workspaceId),
+          eq(billingProviderOperations.mode, input.mode),
+          eq(billingProviderOperations.operationType, "create_payment"),
+          eq(billingProviderOperations.intentId, input.intentId),
+          eq(
+            billingProviderOperations.authorizationEpoch,
+            input.authorizationEpoch
+          ),
+          eq(
+            billingProviderOperations.providerCustomerId,
+            input.targetCustomerId
+          ),
+          eq(billingProviderOperations.state, "succeeded")
+        )
+      );
+    await tx
       .update(billingIntents)
-      .set({ status: "mismatch" })
+      .set({
+        status: "mismatch",
+        molliePaymentId: input.molliePaymentId,
+      })
       .where(
         and(
           eq(billingIntents.intentId, input.intentId),
@@ -1078,6 +1631,30 @@ export async function markIntentPaymentMismatch(input: {
           ...(input.molliePaymentId
             ? { paymentId: input.molliePaymentId }
             : {}),
+        },
+        status: "pending",
+      })
+      .onDuplicateKeyUpdate({
+        set: { deduplicationKey: sql`deduplication_key` },
+      });
+    await tx
+      .insert(billingOutbox)
+      .values({
+        workspaceId: input.workspaceId,
+        mode: input.mode,
+        eventType: "cancel_payment",
+        deduplicationKey: input.molliePaymentId
+          ? `checkout_response_mismatch_cancel:${input.molliePaymentId}`
+          : `checkout_response_mismatch_reconcile:${input.operationId}`,
+        payload: {
+          reason: "checkout_provider_response_mismatch",
+          intentId: input.intentId,
+          targetCustomerId: input.targetCustomerId,
+          targetPaymentId: input.molliePaymentId,
+          providerOperationId: input.operationId,
+          revokedAuthorizationEpoch: input.authorizationEpoch,
+          operationRecorded:
+            providerOperationAffectedRows(operationUpdate) === 1,
         },
         status: "pending",
       })

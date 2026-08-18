@@ -1,10 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, asc, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNull, lte, or, sql } from "drizzle-orm";
 
 import {
   auditLog,
+  billingExecutionControls,
+  billingIntents,
+  billingOutbox,
+  billingProviderOperations,
   billingSchedulerProcessHeartbeats,
   billingSchedulerTenants,
+  billingSubscriptions,
 } from "../../../drizzle/schema";
 import { getDatabaseOrThrow } from "../../db";
 import type { MollieMode } from "./config";
@@ -26,6 +31,7 @@ export type BillingTenantLease = Readonly<{
 export type BillingExecutionBoundary = Readonly<{
   workspaceId: number;
   mode: MollieMode;
+  authorizationEpoch: number;
   laneEpochs: Readonly<Record<BillingScheduleKind, number>>;
 }>;
 
@@ -44,10 +50,25 @@ export async function registerBillingSchedulerTenant(
     ["ai_finalization", nextOutboxAt],
   ];
   await database.transaction(async tx => {
+    await tx
+      .insert(billingExecutionControls)
+      .values({ workspaceId, mode, commercialEnabled: false })
+      .onDuplicateKeyUpdate({
+        set: { workspaceId: sql`${billingExecutionControls.workspaceId}` },
+      });
     for (const [kind, nextDueAt] of schedules) {
       await tx
         .insert(billingSchedulerTenants)
-        .values({ workspaceId, mode, kind, enabled: false, nextDueAt })
+        .values({
+          workspaceId,
+          mode,
+          kind,
+          // The outbox remains available as the safety drain for exact
+          // cancellation and metadata-only review notifications. Commercial
+          // work is fenced independently by billingExecutionControls.
+          enabled: kind === "outbox",
+          nextDueAt,
+        })
         .onDuplicateKeyUpdate({
           // Never undo an explicit disable or move already-due work forward.
           set: {
@@ -92,6 +113,20 @@ export async function enableBillingSchedulerTenant(input: {
     .digest("hex");
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
+    const controls = await tx
+      .select()
+      .from(billingExecutionControls)
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, input.workspaceId),
+          eq(billingExecutionControls.mode, input.mode)
+        )
+      )
+      .limit(1)
+      .for("update");
+    const control = controls[0];
+    if (!control)
+      throw new Error("billing execution control is not provisioned");
     const rows = await tx
       .select()
       .from(billingSchedulerTenants)
@@ -112,20 +147,42 @@ export async function enableBillingSchedulerTenant(input: {
         row.operatorRequestFingerprint === fingerprint &&
         row.enabled
     );
-    if (replay) return { executionEpoch: rows[0]!.executionEpoch };
+    if (replay && control.commercialEnabled) {
+      return { executionEpoch: control.authorizationEpoch };
+    }
     if (rows.some(row => row.operatorRequestId === input.requestId)) {
       throw new Error("billing scheduler enable request conflicts");
     }
     if (
       rows.some(
         row =>
-          row.enabled || row.executionEpoch !== input.expectedExecutionEpoch
-      )
+          (row.kind !== "outbox" && row.enabled) ||
+          row.executionEpoch !== input.expectedExecutionEpoch
+      ) ||
+      control.commercialEnabled ||
+      control.authorizationEpoch !== input.expectedExecutionEpoch
     ) {
       throw new Error("billing scheduler enable epoch mismatch");
     }
     const now = new Date();
     const resultingEpoch = input.expectedExecutionEpoch + 1;
+    const controlResult = await tx
+      .update(billingExecutionControls)
+      .set({ commercialEnabled: true, authorizationEpoch: resultingEpoch })
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, input.workspaceId),
+          eq(billingExecutionControls.mode, input.mode),
+          eq(billingExecutionControls.commercialEnabled, false),
+          eq(
+            billingExecutionControls.authorizationEpoch,
+            input.expectedExecutionEpoch
+          )
+        )
+      );
+    if (extractAffectedRows(controlResult) !== 1) {
+      throw new Error("billing execution enable fence was lost");
+    }
     const result = await tx
       .update(billingSchedulerTenants)
       .set({
@@ -140,7 +197,6 @@ export async function enableBillingSchedulerTenant(input: {
         and(
           eq(billingSchedulerTenants.workspaceId, input.workspaceId),
           eq(billingSchedulerTenants.mode, input.mode),
-          eq(billingSchedulerTenants.enabled, false),
           eq(
             billingSchedulerTenants.executionEpoch,
             input.expectedExecutionEpoch
@@ -200,6 +256,33 @@ export async function disableBillingSchedulerTenant(input: {
     .digest("hex");
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
+    const controls = await tx
+      .select()
+      .from(billingExecutionControls)
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, input.workspaceId),
+          eq(billingExecutionControls.mode, input.mode)
+        )
+      )
+      .limit(1)
+      .for("update");
+    const control = controls[0];
+    if (!control)
+      throw new Error("billing execution control is not provisioned");
+    // Canonical order is execution control -> intent -> scheduler. Outbox
+    // triggers also touch the scheduler row, while profile revoke/expiry lock
+    // profile -> intent before inserting outbox work.
+    await tx
+      .select({ intentId: billingIntents.intentId })
+      .from(billingIntents)
+      .where(
+        and(
+          eq(billingIntents.workspaceId, input.workspaceId),
+          eq(billingIntents.mode, input.mode)
+        )
+      )
+      .for("update");
     const rows = await tx
       .select()
       .from(billingSchedulerTenants)
@@ -218,9 +301,11 @@ export async function disableBillingSchedulerTenant(input: {
       row =>
         row.operatorRequestId === input.requestId &&
         row.operatorRequestFingerprint === fingerprint &&
-        !row.enabled
+        (row.kind === "outbox" ? row.enabled : !row.enabled)
     );
-    if (replay) return { executionEpoch: rows[0]!.executionEpoch };
+    if (replay && !control.commercialEnabled) {
+      return { executionEpoch: control.authorizationEpoch };
+    }
     if (rows.some(row => row.operatorRequestId === input.requestId)) {
       throw new Error("billing scheduler disable request conflicts");
     }
@@ -228,29 +313,48 @@ export async function disableBillingSchedulerTenant(input: {
       rows.some(
         row =>
           !row.enabled || row.executionEpoch !== input.expectedExecutionEpoch
-      )
+      ) ||
+      !control.commercialEnabled ||
+      control.authorizationEpoch !== input.expectedExecutionEpoch
     ) {
       throw new Error("billing scheduler disable epoch mismatch");
     }
     const now = new Date();
     const resultingEpoch = input.expectedExecutionEpoch + 1;
+    const controlResult = await tx
+      .update(billingExecutionControls)
+      .set({ commercialEnabled: false, authorizationEpoch: resultingEpoch })
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, input.workspaceId),
+          eq(billingExecutionControls.mode, input.mode),
+          eq(billingExecutionControls.commercialEnabled, true),
+          eq(
+            billingExecutionControls.authorizationEpoch,
+            input.expectedExecutionEpoch
+          )
+        )
+      );
+    if (extractAffectedRows(controlResult) !== 1) {
+      throw new Error("billing execution disable fence was lost");
+    }
     const result = await tx
       .update(billingSchedulerTenants)
       .set({
-        enabled: false,
+        enabled: sql`${billingSchedulerTenants.kind} = 'outbox'`,
         executionEpoch: resultingEpoch,
         leaseToken: null,
         leaseUntil: null,
         operatorRequestId: input.requestId,
         operatorRequestFingerprint: fingerprint,
         enabledByUserId: input.actorUserId,
-        enabledAt: null,
+        enabledAt: sql`IF(${billingSchedulerTenants.kind} = 'outbox', ${billingSchedulerTenants.enabledAt}, NULL)`,
+        nextDueAt: sql`IF(${billingSchedulerTenants.kind} = 'outbox', LEAST(${billingSchedulerTenants.nextDueAt}, ${now}), ${billingSchedulerTenants.nextDueAt})`,
       })
       .where(
         and(
           eq(billingSchedulerTenants.workspaceId, input.workspaceId),
           eq(billingSchedulerTenants.mode, input.mode),
-          eq(billingSchedulerTenants.enabled, true),
           eq(
             billingSchedulerTenants.executionEpoch,
             input.expectedExecutionEpoch
@@ -259,6 +363,232 @@ export async function disableBillingSchedulerTenant(input: {
       );
     if (extractAffectedRows(result) !== 4) {
       throw new Error("billing scheduler disable fence was lost");
+    }
+    const intents = await tx
+      .select({
+        intentId: billingIntents.intentId,
+        molliePaymentId: billingIntents.molliePaymentId,
+      })
+      .from(billingIntents)
+      .where(
+        and(
+          eq(billingIntents.workspaceId, input.workspaceId),
+          eq(billingIntents.mode, input.mode),
+          inArray(billingIntents.status, [
+            "created",
+            "creating_payment",
+            "open",
+            "api_unknown",
+          ])
+        )
+      )
+      .for("update");
+    await tx
+      .update(billingIntents)
+      .set({ status: "contained" })
+      .where(
+        and(
+          eq(billingIntents.workspaceId, input.workspaceId),
+          eq(billingIntents.mode, input.mode),
+          inArray(billingIntents.status, [
+            "created",
+            "creating_payment",
+            "open",
+            "api_unknown",
+          ])
+        )
+      );
+    for (const intent of intents) {
+      if (!intent.molliePaymentId) continue;
+      await tx
+        .insert(billingOutbox)
+        .values({
+          workspaceId: input.workspaceId,
+          mode: input.mode,
+          eventType: "cancel_payment",
+          deduplicationKey: `execution_disabled_payment:${intent.molliePaymentId}`,
+          payload: {
+            reason: "billing_execution_disabled",
+            intentId: intent.intentId,
+            targetPaymentId: intent.molliePaymentId,
+          },
+          status: "pending",
+        })
+        .onDuplicateKeyUpdate({
+          set: { deduplicationKey: sql`deduplication_key` },
+        });
+    }
+    const revokedOperations = await tx
+      .select({
+        operationId: billingProviderOperations.operationId,
+        operationType: billingProviderOperations.operationType,
+        intentId: billingProviderOperations.intentId,
+        state: billingProviderOperations.state,
+        providerResourceId: billingProviderOperations.providerResourceId,
+        providerCustomerId: billingProviderOperations.providerCustomerId,
+      })
+      .from(billingProviderOperations)
+      .where(
+        and(
+          eq(billingProviderOperations.workspaceId, input.workspaceId),
+          eq(billingProviderOperations.mode, input.mode),
+          eq(
+            billingProviderOperations.authorizationEpoch,
+            input.expectedExecutionEpoch
+          ),
+          inArray(billingProviderOperations.operationType, [
+            "create_payment",
+            "create_subscription",
+          ]),
+          inArray(billingProviderOperations.state, [
+            "succeeded",
+            "transport_started",
+            "ambiguous",
+            "reconciliation_only",
+          ])
+        )
+      )
+      .for("update");
+    for (const operation of revokedOperations) {
+      const isPayment = operation.operationType === "create_payment";
+      if (
+        operation.state === "succeeded" &&
+        operation.providerResourceId &&
+        operation.providerCustomerId
+      ) {
+        const contained = await tx
+          .update(billingProviderOperations)
+          .set({ state: "contained", resolutionDueAt: now })
+          .where(
+            and(
+              eq(billingProviderOperations.operationId, operation.operationId),
+              eq(billingProviderOperations.workspaceId, input.workspaceId),
+              eq(billingProviderOperations.mode, input.mode),
+              eq(billingProviderOperations.state, "succeeded"),
+              eq(
+                billingProviderOperations.authorizationEpoch,
+                input.expectedExecutionEpoch
+              )
+            )
+          );
+        if (extractAffectedRows(contained) !== 1) {
+          throw new Error("billing provider containment fence was lost");
+        }
+        await tx
+          .insert(billingOutbox)
+          .values({
+            workspaceId: input.workspaceId,
+            mode: input.mode,
+            eventType: isPayment ? "cancel_payment" : "cancel_subscription",
+            deduplicationKey: `execution_disabled_${isPayment ? "payment" : "subscription"}:${operation.providerResourceId}`,
+            payload: isPayment
+              ? {
+                  reason: "billing_execution_disabled",
+                  intentId: operation.intentId,
+                  targetCustomerId: operation.providerCustomerId,
+                  targetPaymentId: operation.providerResourceId,
+                  revokedAuthorizationEpoch: input.expectedExecutionEpoch,
+                }
+              : {
+                  reason: "billing_execution_disabled",
+                  expectedSourceIntentId: operation.intentId,
+                  targetCustomerId: operation.providerCustomerId,
+                  targetSubscriptionId: operation.providerResourceId,
+                  revokedAuthorizationEpoch: input.expectedExecutionEpoch,
+                },
+            status: "pending",
+          })
+          .onDuplicateKeyUpdate({
+            set: { deduplicationKey: sql`deduplication_key` },
+          });
+        continue;
+      }
+      if (operation.providerCustomerId) {
+        await tx
+          .insert(billingOutbox)
+          .values({
+            workspaceId: input.workspaceId,
+            mode: input.mode,
+            eventType: isPayment ? "cancel_payment" : "cancel_subscription",
+            deduplicationKey: `${isPayment ? "payment" : "subscription"}_ambiguous_reconcile:${operation.operationId}`,
+            payload: isPayment
+              ? {
+                  reason: "billing_execution_disabled",
+                  intentId: operation.intentId,
+                  targetCustomerId: operation.providerCustomerId,
+                  targetPaymentId: null,
+                  providerOperationId: operation.operationId,
+                  revokedAuthorizationEpoch: input.expectedExecutionEpoch,
+                }
+              : {
+                  reason: "billing_execution_disabled",
+                  expectedSourceIntentId: operation.intentId,
+                  targetCustomerId: operation.providerCustomerId,
+                  targetSubscriptionId: null,
+                  providerOperationId: operation.operationId,
+                  revokedAuthorizationEpoch: input.expectedExecutionEpoch,
+                },
+            status: "pending",
+          })
+          .onDuplicateKeyUpdate({
+            set: { deduplicationKey: sql`deduplication_key` },
+          });
+      }
+      await tx
+        .insert(billingOutbox)
+        .values({
+          workspaceId: input.workspaceId,
+          mode: input.mode,
+          eventType: "manual_review",
+          deduplicationKey: `provider_ambiguous_after_disable:${operation.operationId}`,
+          payload: {
+            reason: isPayment
+              ? "payment_provider_ambiguous_after_disable"
+              : "subscription_provider_ambiguous_after_disable",
+            intentId: operation.intentId,
+          },
+          status: "pending",
+        })
+        .onDuplicateKeyUpdate({
+          set: { deduplicationKey: sql`deduplication_key` },
+        });
+    }
+    const subscriptions = await tx
+      .select({
+        sourceIntentId: billingSubscriptions.sourceIntentId,
+        mollieCustomerId: billingSubscriptions.mollieCustomerId,
+        mollieSubscriptionId: billingSubscriptions.mollieSubscriptionId,
+      })
+      .from(billingSubscriptions)
+      .where(
+        and(
+          eq(billingSubscriptions.workspaceId, input.workspaceId),
+          eq(billingSubscriptions.mode, input.mode),
+          eq(billingSubscriptions.status, "provisioning")
+        )
+      )
+      .for("update");
+    for (const subscription of subscriptions) {
+      if (!subscription.mollieSubscriptionId) continue;
+      await tx
+        .insert(billingOutbox)
+        .values({
+          workspaceId: input.workspaceId,
+          mode: input.mode,
+          eventType: "cancel_subscription",
+          deduplicationKey: `execution_disabled_subscription:${subscription.mollieSubscriptionId}`,
+          payload: {
+            reason: "billing_execution_disabled",
+            revokedAuthorizationEpoch: input.expectedExecutionEpoch,
+            expectedSourceIntentId: subscription.sourceIntentId,
+            targetCustomerId: subscription.mollieCustomerId,
+            targetSubscriptionId: subscription.mollieSubscriptionId,
+          },
+          status: "pending",
+        })
+        .onDuplicateKeyUpdate({
+          set: { deduplicationKey: sql`deduplication_key` },
+        });
     }
     await tx.insert(auditLog).values({
       workspaceId: input.workspaceId,
@@ -330,31 +660,56 @@ export async function assertBillingSchedulerTenantEnabled(
     throw new Error("billing scheduler tenant is outside the pilot boundary");
   }
   const database = await getDatabaseOrThrow();
-  const rows = await database
-    .select({
-      kind: billingSchedulerTenants.kind,
-      executionEpoch: billingSchedulerTenants.executionEpoch,
-    })
-    .from(billingSchedulerTenants)
-    .where(
-      and(
-        eq(billingSchedulerTenants.workspaceId, workspaceId),
-        eq(billingSchedulerTenants.mode, mode),
-        eq(billingSchedulerTenants.enabled, true)
+  return database.transaction(async tx => {
+    const controls = await tx
+      .select({
+        commercialEnabled: billingExecutionControls.commercialEnabled,
+        authorizationEpoch: billingExecutionControls.authorizationEpoch,
+      })
+      .from(billingExecutionControls)
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, workspaceId),
+          eq(billingExecutionControls.mode, mode)
+        )
       )
-    );
-  if (new Set(rows.map(row => row.kind)).size !== 4) {
-    throw new Error("billing scheduler tenant is not enabled");
-  }
-  return {
-    workspaceId,
-    mode,
-    laneEpochs: Object.freeze(
-      Object.fromEntries(
-        rows.map(row => [row.kind, row.executionEpoch])
-      ) as Record<BillingScheduleKind, number>
-    ),
-  };
+      .limit(1)
+      .for("update");
+    const control = controls[0];
+    if (!control?.commercialEnabled) {
+      throw new Error("billing commercial execution is disabled");
+    }
+    const rows = await tx
+      .select({
+        kind: billingSchedulerTenants.kind,
+        executionEpoch: billingSchedulerTenants.executionEpoch,
+      })
+      .from(billingSchedulerTenants)
+      .where(
+        and(
+          eq(billingSchedulerTenants.workspaceId, workspaceId),
+          eq(billingSchedulerTenants.mode, mode),
+          eq(billingSchedulerTenants.enabled, true)
+        )
+      )
+      .for("update");
+    if (
+      new Set(rows.map(row => row.kind)).size !== 4 ||
+      rows.some(row => row.executionEpoch !== control.authorizationEpoch)
+    ) {
+      throw new Error("billing scheduler tenant is not enabled");
+    }
+    return {
+      workspaceId,
+      mode,
+      authorizationEpoch: control.authorizationEpoch,
+      laneEpochs: Object.freeze(
+        Object.fromEntries(
+          rows.map(row => [row.kind, row.executionEpoch])
+        ) as Record<BillingScheduleKind, number>
+      ),
+    };
+  });
 }
 
 export async function assertBillingExecutionBoundary(
@@ -364,6 +719,9 @@ export async function assertBillingExecutionBoundary(
     boundary.workspaceId,
     boundary.mode
   );
+  if (current.authorizationEpoch !== boundary.authorizationEpoch) {
+    throw new Error("billing authorization epoch changed");
+  }
   for (const kind of Object.keys(
     boundary.laneEpochs
   ) as BillingScheduleKind[]) {

@@ -397,12 +397,7 @@ export async function revokeWorkspaceBillingProfile(input: {
       .where(
         and(
           eq(billingProviderOperations.workspaceId, input.workspaceId),
-          inArray(billingProviderOperations.state, [
-            "reserved",
-            "transport_started",
-            "ambiguous",
-            "reconciliation_only",
-          ])
+          eq(billingProviderOperations.state, "reserved")
         )
       );
     for (const intent of paymentIntents) {
@@ -628,12 +623,7 @@ export async function expireWorkspaceBillingProfileIfDue(
       .where(
         and(
           eq(billingProviderOperations.workspaceId, workspaceId),
-          inArray(billingProviderOperations.state, [
-            "reserved",
-            "transport_started",
-            "ambiguous",
-            "reconciliation_only",
-          ])
+          eq(billingProviderOperations.state, "reserved")
         )
       );
     for (const intent of intents) {

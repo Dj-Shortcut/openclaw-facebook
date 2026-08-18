@@ -629,6 +629,30 @@ export type WorkspaceBillingProfile =
 export type InsertWorkspaceBillingProfile =
   typeof workspaceBillingProfiles.$inferInsert;
 
+/** Linear commercial-billing authorization fence; safety drains remain independent. */
+export const billingExecutionControls = mysqlTable(
+  "billing_execution_controls",
+  {
+    workspaceId: int("workspace_id").notNull(),
+    mode: mysqlEnum("mode", ["test", "live"]).notNull(),
+    commercialEnabled: boolean("commercial_enabled").default(false).notNull(),
+    authorizationEpoch: int("authorization_epoch").default(1).notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  table => [
+    foreignKey({
+      name: "billing_execution_controls_workspace_fk",
+      columns: [table.workspaceId],
+      foreignColumns: [workspaces.id],
+    }).onDelete("restrict"),
+    primaryKey({ columns: [table.workspaceId, table.mode] }),
+    check(
+      "billing_execution_controls_epoch_positive",
+      sql`${table.authorizationEpoch} > 0`
+    ),
+  ]
+);
+
 /** Metadata-only idempotency and audit fence for privileged profile actions. */
 export const billingProfileOperatorActions = mysqlTable(
   "billing_profile_operator_actions",
@@ -719,7 +743,7 @@ export const billingSchedulerTenants = mysqlTable(
     ),
     check(
       "billing_scheduler_enabled_audit_required",
-      sql`${table.enabled} = false OR (${table.operatorRequestId} IS NOT NULL AND ${table.operatorRequestFingerprint} IS NOT NULL AND ${table.enabledByUserId} IS NOT NULL AND ${table.enabledAt} IS NOT NULL)`
+      sql`${table.enabled} = false OR ${table.kind} = 'outbox' OR (${table.operatorRequestId} IS NOT NULL AND ${table.operatorRequestFingerprint} IS NOT NULL AND ${table.enabledByUserId} IS NOT NULL AND ${table.enabledAt} IS NOT NULL)`
     ),
     check(
       "billing_scheduler_lease_pair",
@@ -913,6 +937,7 @@ export const billingIntents = mysqlTable(
     /** Receiving Facebook Page bound to the handoff checkout. */
     messengerPageId: varchar("messenger_page_id", { length: 160 }),
     billingProfileVersion: int("billing_profile_version").notNull(),
+    authorizationEpoch: int("authorization_epoch").notNull(),
     urlExposedAt: timestamp("url_exposed_at"),
     paidAt: timestamp("paid_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -923,7 +948,8 @@ export const billingIntents = mysqlTable(
       table.intentId,
       table.workspaceId,
       table.mode,
-      table.billingProfileVersion
+      table.billingProfileVersion,
+      table.authorizationEpoch
     ),
     uniqueIndex("billing_intents_scope_unique").on(
       table.intentId,
@@ -959,6 +985,7 @@ export const billingProviderOperations = mysqlTable(
       .references(() => workspaces.id, { onDelete: "restrict" }),
     mode: mysqlEnum("mode", ["test", "live"]).notNull(),
     operationType: mysqlEnum("operation_type", [
+      "create_customer",
       "create_payment",
       "create_subscription",
       "cancel_payment",
@@ -967,6 +994,7 @@ export const billingProviderOperations = mysqlTable(
     operationKey: varchar("operation_key", { length: 160 }).notNull(),
     intentId: varchar("intent_id", { length: 36 }).notNull(),
     billingProfileVersion: int("billing_profile_version").notNull(),
+    authorizationEpoch: int("authorization_epoch").notNull(),
     state: mysqlEnum("state", [
       "reserved",
       "transport_started",
@@ -986,6 +1014,7 @@ export const billingProviderOperations = mysqlTable(
       length: 64,
     }).notNull(),
     providerResourceId: varchar("provider_resource_id", { length: 64 }),
+    providerCustomerId: varchar("provider_customer_id", { length: 64 }),
     attemptCount: int("attempt_count").default(0).notNull(),
     leaseToken: varchar("lease_token", { length: 36 }).notNull(),
     leaseUntil: timestamp("lease_until").notNull(),
@@ -1004,12 +1033,22 @@ export const billingProviderOperations = mysqlTable(
         table.workspaceId,
         table.mode,
         table.billingProfileVersion,
+        table.authorizationEpoch,
       ],
       foreignColumns: [
         billingIntents.intentId,
         billingIntents.workspaceId,
         billingIntents.mode,
         billingIntents.billingProfileVersion,
+        billingIntents.authorizationEpoch,
+      ],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "billing_provider_ops_execution_control_fk",
+      columns: [table.workspaceId, table.mode],
+      foreignColumns: [
+        billingExecutionControls.workspaceId,
+        billingExecutionControls.mode,
       ],
     }).onDelete("restrict"),
     uniqueIndex("billing_provider_operations_mode_type_key_unique").on(
@@ -1762,12 +1801,7 @@ export const billingNotificationReceiverOutbox = mysqlTable(
   table => [
     foreignKey({
       name: "billing_notification_receiver_outbox_receipt_workspace_fk",
-      columns: [
-        table.receiptId,
-        table.workspaceId,
-        table.mode,
-        table.audience,
-      ],
+      columns: [table.receiptId, table.workspaceId, table.mode, table.audience],
       foreignColumns: [
         billingNotificationReceipts.id,
         billingNotificationReceipts.workspaceId,

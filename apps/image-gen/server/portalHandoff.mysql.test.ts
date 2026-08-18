@@ -241,6 +241,7 @@ suite("portal handoff MySQL concurrency", () => {
       messengerSenderUserKey: senderKey,
       messengerPageId: pageId,
       billingProfileVersion: 1,
+      authorizationEpoch: 1,
       paidAt: new Date(),
     });
     await database.insert(billingOutbox).values({

@@ -155,6 +155,7 @@ export async function requestWorkspaceSubscriptionCancellation(
           deduplicationKey,
           payload: {
             reason: "user_cancel",
+            expectedSourceIntentId: subscription.sourceIntentId,
             targetCustomerId: subscription.mollieCustomerId,
             targetSubscriptionId: subscription.mollieSubscriptionId,
           },

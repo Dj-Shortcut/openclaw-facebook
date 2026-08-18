@@ -310,8 +310,8 @@ async function assertUpgradeInvariants(connection) {
     "SELECT COUNT(*) AS count,SUM(`enabled`=true) AS enabledCount FROM `billing_scheduler_tenants` WHERE `workspace_id`=1 AND `mode`='test'"
   );
   assert(
-    scheduler.count === 4 && Number(scheduler.enabledCount) === 0,
-    "four scheduler lanes backfilled disabled pending operator rollout"
+    scheduler.count === 4 && Number(scheduler.enabledCount) === 1,
+    "four scheduler lanes backfilled with only the safety outbox enabled"
   );
   const [[attemptedHandoff]] = await connection.query(
     "SELECT `status`,`delivery_state` AS deliveryState,`last_error_code` AS lastErrorCode FROM `billing_outbox` WHERE `deduplication_key`='migration-attempted-handoff'"
@@ -347,11 +347,11 @@ async function assertUpgradeInvariants(connection) {
     "SELECT `enabled`,YEAR(`next_due_at`) AS dueYear FROM `billing_scheduler_tenants` WHERE `workspace_id`=1 AND `mode`='test' AND `kind`='outbox'"
   );
   assert(
-    !disabledContainment.enabled && disabledContainment.dueYear === 2000,
-    "containment persists and wakes a disabled lane without activating rollout"
+    Boolean(disabledContainment.enabled) && disabledContainment.dueYear === 2000,
+    "containment persists and wakes the safety lane without activating commercial rollout"
   );
   await connection.query(
-    "UPDATE `billing_scheduler_tenants` SET `enabled`=true,`operator_request_id`='66666666-6666-4666-8666-666666666666',`operator_request_fingerprint`=REPEAT('6',64),`enabled_by_user_id`=1,`enabled_at`=NOW() WHERE `workspace_id`=1 AND `mode`='test' AND `execution_epoch`=1"
+    "UPDATE `billing_scheduler_tenants` SET `enabled`=true,`execution_epoch`=2,`operator_request_id`='66666666-6666-4666-8666-666666666666',`operator_request_fingerprint`=REPEAT('6',64),`enabled_by_user_id`=1,`enabled_at`=NOW() WHERE `workspace_id`=1 AND `mode`='test' AND `execution_epoch`=1"
   );
   const [[enabledScheduler]] = await connection.query(
     "SELECT COUNT(*) AS count,MIN(`execution_epoch`) AS minEpoch,MAX(`execution_epoch`) AS maxEpoch FROM `billing_scheduler_tenants` WHERE `workspace_id`=1 AND `mode`='test' AND `enabled`=true"
@@ -412,7 +412,7 @@ async function assertUpgradeInvariants(connection) {
     "notification receiver cross-audience composite FK"
   );
   await connection.query(
-    "INSERT INTO `billing_intents` (`intent_id`,`workspace_id`,`mode`,`plan_code`,`kind`,`expected_amount`,`currency`,`interval`,`entitlements`,`mollie_description`,`status`,`idempotency_key`,`checkout_scope_key`,`billing_profile_version`) VALUES ('77777777-7777-4777-8777-777777777777',2,'test','startpilot','startpilot_purchase','19.00','EUR','one-time',JSON_OBJECT('aiAnswers',100),'Missing usage fixture','contained','missing-usage-intent-key','missing-usage-scope-key',0)"
+    "INSERT INTO `billing_intents` (`intent_id`,`workspace_id`,`mode`,`plan_code`,`kind`,`expected_amount`,`currency`,`interval`,`entitlements`,`mollie_description`,`status`,`idempotency_key`,`checkout_scope_key`,`billing_profile_version`,`authorization_epoch`) VALUES ('77777777-7777-4777-8777-777777777777',2,'test','startpilot','startpilot_purchase','19.00','EUR','one-time',JSON_OBJECT('aiAnswers',100),'Missing usage fixture','contained','missing-usage-intent-key','missing-usage-scope-key',0,1)"
   );
   await connection.query(
     "INSERT INTO `workspace_entitlements` (`id`,`workspace_id`,`mode`,`plan_code`,`status`,`quota`,`source_intent_id`) VALUES (23,2,'test','missing-usage','manual_review',JSON_OBJECT('aiAnswers',100),'77777777-7777-4777-8777-777777777777')"

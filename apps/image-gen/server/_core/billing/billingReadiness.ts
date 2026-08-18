@@ -6,6 +6,7 @@ import {
   billingAccountingImportRuns,
   billingAccountingProviderEvents,
   billingOutbox,
+  billingExecutionControls,
   billingSchedulerProcessHeartbeats,
   billingProviderOperations,
   billingIntents,
@@ -26,6 +27,74 @@ import {
   getBillingSchedulerRollout,
   getTenantBillingWorkerWorkspaceId,
 } from "./config";
+
+type SchedulerControlReadinessRow = Readonly<{
+  workspaceId: number;
+  commercialEnabled: boolean;
+  authorizationEpoch: number;
+}>;
+
+type SchedulerLaneReadinessRow = Readonly<{
+  workspaceId: number;
+  kind: "outbox" | "reconciliation" | "profile_expiry" | "ai_finalization";
+  enabled: boolean;
+  executionEpoch: number;
+  operatorRequestId: string | null;
+  enabledByUserId: number | null;
+  enabledAt: Date | null;
+  deadLetterCount: number;
+}>;
+
+export function assertBillingSchedulerRegistryCoherence(
+  controls: readonly SchedulerControlReadinessRow[],
+  lanes: readonly SchedulerLaneReadinessRow[]
+): void {
+  if (controls.length === 0) {
+    throw new Error(
+      "No billing execution control is provisioned for this mode"
+    );
+  }
+  for (const control of controls) {
+    const tenantLanes = lanes.filter(
+      lane => lane.workspaceId === control.workspaceId
+    );
+    const expectedKinds = new Set([
+      "outbox",
+      "reconciliation",
+      "profile_expiry",
+      "ai_finalization",
+    ]);
+    if (
+      tenantLanes.length !== 4 ||
+      new Set(tenantLanes.map(lane => lane.kind)).size !== 4 ||
+      tenantLanes.some(lane => !expectedKinds.has(lane.kind)) ||
+      tenantLanes.some(
+        lane => lane.executionEpoch !== control.authorizationEpoch
+      )
+    ) {
+      throw new Error("Billing scheduler execution epochs are incoherent");
+    }
+    for (const lane of tenantLanes) {
+      const shouldBeEnabled =
+        control.commercialEnabled || lane.kind === "outbox";
+      if (lane.enabled !== shouldBeEnabled) {
+        throw new Error("Billing scheduler lane enablement is incoherent");
+      }
+      if (lane.enabled && Number(lane.deadLetterCount) > 0) {
+        throw new Error("Billing scheduler has unresolved dead letters");
+      }
+      if (
+        control.commercialEnabled &&
+        (!lane.operatorRequestId ||
+          !lane.enabledByUserId ||
+          !lane.enabledAt ||
+          lane.executionEpoch <= 1)
+      ) {
+        throw new Error("Billing scheduler commercial audit gate is not ready");
+      }
+    }
+  }
+}
 
 /**
  * Verifies the credential-free schema and scheduler execution boundary.
@@ -99,6 +168,8 @@ export async function assertBillingDatabaseReadiness(
       .where(sql`1 = 0`),
     database
       .select({
+        authorizationEpoch: billingProviderOperations.authorizationEpoch,
+        providerCustomerId: billingProviderOperations.providerCustomerId,
         state: billingProviderOperations.state,
         credentialGenerationId:
           billingProviderOperations.credentialGenerationId,
@@ -109,6 +180,16 @@ export async function assertBillingDatabaseReadiness(
       .where(sql`1 = 0`),
     database
       .select({
+        workspaceId: billingExecutionControls.workspaceId,
+        mode: billingExecutionControls.mode,
+        commercialEnabled: billingExecutionControls.commercialEnabled,
+        authorizationEpoch: billingExecutionControls.authorizationEpoch,
+      })
+      .from(billingExecutionControls)
+      .where(sql`1 = 0`),
+    database
+      .select({
+        authorizationEpoch: billingIntents.authorizationEpoch,
         urlExposedAt: billingIntents.urlExposedAt,
         billingProfileVersion: billingIntents.billingProfileVersion,
       })
@@ -213,70 +294,42 @@ export async function assertBillingDatabaseReadiness(
 
   const rollout = getBillingSchedulerRollout();
   const pinnedWorkspaceId = getTenantBillingWorkerWorkspaceId();
-  const registry = await database
+  const controls = await database
+    .select({
+      workspaceId: billingExecutionControls.workspaceId,
+      commercialEnabled: billingExecutionControls.commercialEnabled,
+      authorizationEpoch: billingExecutionControls.authorizationEpoch,
+    })
+    .from(billingExecutionControls)
+    .where(
+      and(
+        eq(billingExecutionControls.mode, mode),
+        ...(pinnedWorkspaceId
+          ? [eq(billingExecutionControls.workspaceId, pinnedWorkspaceId)]
+          : [])
+      )
+    );
+  const lanes = await database
     .select({
       workspaceId: billingSchedulerTenants.workspaceId,
-      laneCount: sql<number>`COUNT(DISTINCT ${billingSchedulerTenants.kind})`,
+      kind: billingSchedulerTenants.kind,
+      enabled: billingSchedulerTenants.enabled,
+      executionEpoch: billingSchedulerTenants.executionEpoch,
+      operatorRequestId: billingSchedulerTenants.operatorRequestId,
+      enabledByUserId: billingSchedulerTenants.enabledByUserId,
+      enabledAt: billingSchedulerTenants.enabledAt,
+      deadLetterCount: billingSchedulerTenants.deadLetterCount,
     })
     .from(billingSchedulerTenants)
     .where(
       and(
         eq(billingSchedulerTenants.mode, mode),
-        eq(billingSchedulerTenants.enabled, true),
         ...(pinnedWorkspaceId
           ? [eq(billingSchedulerTenants.workspaceId, pinnedWorkspaceId)]
           : [])
       )
-    )
-    .groupBy(billingSchedulerTenants.workspaceId)
-    .having(sql`COUNT(DISTINCT ${billingSchedulerTenants.kind}) = 4`);
-  const incompleteRegistry = await database
-    .select({ workspaceId: billingSchedulerTenants.workspaceId })
-    .from(billingSchedulerTenants)
-    .where(
-      and(
-        eq(billingSchedulerTenants.mode, mode),
-        eq(billingSchedulerTenants.enabled, true),
-        ...(pinnedWorkspaceId
-          ? [eq(billingSchedulerTenants.workspaceId, pinnedWorkspaceId)]
-          : [])
-      )
-    )
-    .groupBy(billingSchedulerTenants.workspaceId)
-    .having(sql`COUNT(DISTINCT ${billingSchedulerTenants.kind}) <> 4`);
-  if (
-    registry.length === 0 ||
-    incompleteRegistry.length > 0 ||
-    registry.some(row => Number(row.laneCount) !== 4)
-  ) {
-    throw new Error(
-      "No enabled billing scheduler tenant is ready for this mode"
     );
-  }
-  const unhealthyLanes = await database
-    .select({ count: sql<number>`COUNT(*)` })
-    .from(billingSchedulerTenants)
-    .where(
-      and(
-        eq(billingSchedulerTenants.mode, mode),
-        eq(billingSchedulerTenants.enabled, true),
-        ...(pinnedWorkspaceId
-          ? [eq(billingSchedulerTenants.workspaceId, pinnedWorkspaceId)]
-          : []),
-        or(
-          isNull(billingSchedulerTenants.operatorRequestId),
-          isNull(billingSchedulerTenants.enabledByUserId),
-          isNull(billingSchedulerTenants.enabledAt),
-          lte(billingSchedulerTenants.executionEpoch, 1),
-          sql`${billingSchedulerTenants.deadLetterCount} > 0`
-        )
-      )
-    );
-  if (Number(unhealthyLanes[0]?.count ?? 0) > 0) {
-    throw new Error(
-      "Billing scheduler audit, heartbeat, or dead-letter gate is not ready"
-    );
-  }
+  assertBillingSchedulerRegistryCoherence(controls, lanes);
   if (options.requireRuntimeHeartbeat !== false) {
     const requiredHeartbeatKinds = [
       "outbox",

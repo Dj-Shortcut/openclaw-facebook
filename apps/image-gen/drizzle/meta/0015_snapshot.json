@@ -804,6 +804,82 @@
       "uniqueConstraints": {},
       "checkConstraint": {}
     },
+    "billing_execution_controls": {
+      "name": "billing_execution_controls",
+      "columns": {
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "mode": {
+          "name": "mode",
+          "type": "enum('test','live')",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "commercial_enabled": {
+          "name": "commercial_enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "authorization_epoch": {
+          "name": "authorization_epoch",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "onUpdate": true,
+          "default": "(now())"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "billing_execution_controls_workspace_fk": {
+          "name": "billing_execution_controls_workspace_fk",
+          "tableFrom": "billing_execution_controls",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "billing_execution_controls_workspace_id_mode_pk": {
+          "name": "billing_execution_controls_workspace_id_mode_pk",
+          "columns": [
+            "workspace_id",
+            "mode"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraint": {
+        "billing_execution_controls_epoch_positive": {
+          "name": "billing_execution_controls_epoch_positive",
+          "value": "`billing_execution_controls`.`authorization_epoch` > 0"
+        }
+      }
+    },
     "billing_handoff_recovery_events": {
       "name": "billing_handoff_recovery_events",
       "columns": {
@@ -1041,6 +1117,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "authorization_epoch": {
+          "name": "authorization_epoch",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
         "url_exposed_at": {
           "name": "url_exposed_at",
           "type": "timestamp",
@@ -1080,7 +1163,8 @@
             "intent_id",
             "workspace_id",
             "mode",
-            "billing_profile_version"
+            "billing_profile_version",
+            "authorization_epoch"
           ],
           "isUnique": true
         },
@@ -2110,7 +2194,7 @@
         },
         "operation_type": {
           "name": "operation_type",
-          "type": "enum('create_payment','create_subscription','cancel_payment','cancel_subscription')",
+          "type": "enum('create_customer','create_payment','create_subscription','cancel_payment','cancel_subscription')",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
@@ -2131,6 +2215,13 @@
         },
         "billing_profile_version": {
           "name": "billing_profile_version",
+          "type": "int",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "authorization_epoch": {
+          "name": "authorization_epoch",
           "type": "int",
           "primaryKey": false,
           "notNull": true,
@@ -2166,6 +2257,13 @@
         },
         "provider_resource_id": {
           "name": "provider_resource_id",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "provider_customer_id": {
+          "name": "provider_customer_id",
           "type": "varchar(64)",
           "primaryKey": false,
           "notNull": false,
@@ -2282,13 +2380,30 @@
             "intent_id",
             "workspace_id",
             "mode",
-            "billing_profile_version"
+            "billing_profile_version",
+            "authorization_epoch"
           ],
           "columnsTo": [
             "intent_id",
             "workspace_id",
             "mode",
-            "billing_profile_version"
+            "billing_profile_version",
+            "authorization_epoch"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "billing_provider_ops_execution_control_fk": {
+          "name": "billing_provider_ops_execution_control_fk",
+          "tableFrom": "billing_provider_operations",
+          "tableTo": "billing_execution_controls",
+          "columnsFrom": [
+            "workspace_id",
+            "mode"
+          ],
+          "columnsTo": [
+            "workspace_id",
+            "mode"
           ],
           "onDelete": "restrict",
           "onUpdate": "no action"
@@ -2815,7 +2930,7 @@
         },
         "billing_scheduler_enabled_audit_required": {
           "name": "billing_scheduler_enabled_audit_required",
-          "value": "`billing_scheduler_tenants`.`enabled` = false OR (`billing_scheduler_tenants`.`operator_request_id` IS NOT NULL AND `billing_scheduler_tenants`.`operator_request_fingerprint` IS NOT NULL AND `billing_scheduler_tenants`.`enabled_by_user_id` IS NOT NULL AND `billing_scheduler_tenants`.`enabled_at` IS NOT NULL)"
+          "value": "`billing_scheduler_tenants`.`enabled` = false OR `billing_scheduler_tenants`.`kind` = 'outbox' OR (`billing_scheduler_tenants`.`operator_request_id` IS NOT NULL AND `billing_scheduler_tenants`.`operator_request_fingerprint` IS NOT NULL AND `billing_scheduler_tenants`.`enabled_by_user_id` IS NOT NULL AND `billing_scheduler_tenants`.`enabled_at` IS NOT NULL)"
         },
         "billing_scheduler_lease_pair": {
           "name": "billing_scheduler_lease_pair",

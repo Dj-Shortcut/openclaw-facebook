@@ -11,6 +11,7 @@ import {
 import {
   attachMollieCustomer,
   attachMolliePayment,
+  claimCustomerProviderCreation,
   claimIntentPaymentCreation,
   finalizePaymentProviderOperation,
   getBillingCustomer,
@@ -111,6 +112,7 @@ export async function startMollieCheckout(
     messengerSenderUserKey: input.messengerSenderUserKey,
     messengerPageId: input.messengerPageId,
     billingProfileVersion: billingProfile.eligibilityVersion,
+    authorizationEpoch: executionBoundary.authorizationEpoch,
   });
   if (!(await wakeBillingSchedulerTenant(input.workspaceId, config.mode))) {
     throw new Error("billing scheduler tenant is not enabled");
@@ -141,6 +143,7 @@ export async function startMollieCheckout(
         mode: config.mode,
         molliePaymentId: intent.molliePaymentId,
         billingProfileVersion: billingProfile.eligibilityVersion,
+        authorizationEpoch: executionBoundary.authorizationEpoch,
       }))
     ) {
       throw new Error("checkout was contained before URL exposure");
@@ -168,6 +171,9 @@ export async function startMollieCheckout(
         "billing customer creation requires manual reconciliation"
       );
     }
+    let customerOperation: { operationId: string; leaseToken: string } | null =
+      null;
+    let customerTransportStarted = false;
     try {
       const currentProfile = await assertWorkspaceBillingProfileEligible(
         input.workspaceId
@@ -177,12 +183,48 @@ export async function startMollieCheckout(
       ) {
         throw new Error("billing profile changed during checkout");
       }
-      await assertBillingExecutionBoundary(executionBoundary);
+      const customerClaim = await claimCustomerProviderCreation({
+        intentId: intent.intentId,
+        workspaceId: input.workspaceId,
+        mode: config.mode,
+        billingProfileVersion: billingProfile.eligibilityVersion,
+        authorizationEpoch: executionBoundary.authorizationEpoch,
+        externalReference: customer.externalReference,
+        idempotencyKey: customer.idempotencyKey,
+      });
+      if (!customerClaim.claimed) {
+        throw new Error("customer creation is being reconciled");
+      }
+      customerOperation = customerClaim;
+      if (
+        !(await markPaymentProviderTransportStarted({
+          operationId: customerClaim.operationId,
+          leaseToken: customerClaim.leaseToken,
+          workspaceId: input.workspaceId,
+          mode: config.mode,
+          authorizationEpoch: executionBoundary.authorizationEpoch,
+        }))
+      ) {
+        throw new Error("customer provider operation fence was lost");
+      }
+      customerTransportStarted = true;
       const mollieCustomer = await client.createCustomer({
         externalReference: customer.externalReference,
         idempotencyKey: customer.idempotencyKey,
       });
-      await assertBillingExecutionBoundary(executionBoundary);
+      const customerFinalized = await finalizePaymentProviderOperation({
+        operationId: customerClaim.operationId,
+        leaseToken: customerClaim.leaseToken,
+        outcome: "succeeded",
+        providerResourceId: mollieCustomer.id,
+        workspaceId: input.workspaceId,
+        mode: config.mode,
+        authorizationEpoch: executionBoundary.authorizationEpoch,
+        intentId: intent.intentId,
+      });
+      if (!customerFinalized.recorded || !customerFinalized.authorized) {
+        throw new Error("customer provider result fence was lost");
+      }
       assertMollieId(mollieCustomer.id, "cst_");
       if (mollieCustomer.mode !== config.mode) {
         throw new Error("Mollie customer mode mismatch");
@@ -193,6 +235,17 @@ export async function startMollieCheckout(
         mollieCustomer.id
       );
     } catch (error) {
+      if (customerTransportStarted && customerOperation) {
+        await finalizePaymentProviderOperation({
+          operationId: customerOperation.operationId,
+          leaseToken: customerOperation.leaseToken,
+          outcome: "ambiguous",
+          workspaceId: input.workspaceId,
+          mode: config.mode,
+          authorizationEpoch: executionBoundary.authorizationEpoch,
+          intentId: intent.intentId,
+        });
+      }
       await markBillingCustomerManualReview(input.workspaceId, config.mode);
       throw error;
     }
@@ -220,6 +273,7 @@ export async function startMollieCheckout(
     workspaceId: input.workspaceId,
     mode: config.mode,
     billingProfileVersion: billingProfile.eligibilityVersion,
+    authorizationEpoch: executionBoundary.authorizationEpoch,
     providerRequest: { ...paymentInput, offerType: plan.offerType },
   });
   if (!paymentCreationClaim.claimed) {
@@ -235,6 +289,9 @@ export async function startMollieCheckout(
       !(await markPaymentProviderTransportStarted({
         operationId: paymentCreationClaim.operationId,
         leaseToken: paymentCreationClaim.leaseToken,
+        workspaceId: input.workspaceId,
+        mode: config.mode,
+        authorizationEpoch: executionBoundary.authorizationEpoch,
       }))
     ) {
       throw new Error("checkout provider operation fence was lost");
@@ -244,38 +301,40 @@ export async function startMollieCheckout(
       plan.offerType === "one_time"
         ? await client.createOneTimePayment(paymentInput)
         : await client.createFirstPayment(paymentInput);
-    await assertBillingExecutionBoundary(executionBoundary);
   } catch (error) {
     if (providerTransportStarted) {
-      await finalizePaymentProviderOperation({
+      const ambiguousFinalized = await finalizePaymentProviderOperation({
         operationId: paymentCreationClaim.operationId,
         leaseToken: paymentCreationClaim.leaseToken,
         outcome: "ambiguous",
+        workspaceId: input.workspaceId,
+        mode: config.mode,
+        authorizationEpoch: executionBoundary.authorizationEpoch,
+        intentId: intent.intentId,
+        targetCustomerId: customerId,
       });
+      if (ambiguousFinalized.recorded && ambiguousFinalized.authorized) {
+        await markIntentApiUnknown(intent.intentId);
+      }
     }
-    await markIntentApiUnknown(intent.intentId);
     throw error;
   }
-  if (
-    !(await finalizePaymentProviderOperation({
-      operationId: paymentCreationClaim.operationId,
-      leaseToken: paymentCreationClaim.leaseToken,
-      outcome: "succeeded",
-      providerResourceId: validMolliePaymentIdOrNull(payment.id) ?? undefined,
-    }))
-  ) {
-    const providerPaymentId = validMolliePaymentIdOrNull(payment.id);
-    if (providerPaymentId) {
-      await attachMolliePayment({
-        intentId: intent.intentId,
-        workspaceId: intent.workspaceId,
-        mode: intent.mode,
-        molliePaymentId: providerPaymentId,
-        billingProfileVersion: billingProfile.eligibilityVersion,
-      });
-    }
-    await markIntentApiUnknown(intent.intentId);
+  const paymentFinalized = await finalizePaymentProviderOperation({
+    operationId: paymentCreationClaim.operationId,
+    leaseToken: paymentCreationClaim.leaseToken,
+    outcome: "succeeded",
+    providerResourceId: validMolliePaymentIdOrNull(payment.id) ?? undefined,
+    workspaceId: input.workspaceId,
+    mode: config.mode,
+    authorizationEpoch: executionBoundary.authorizationEpoch,
+    intentId: intent.intentId,
+    targetCustomerId: customerId,
+  });
+  if (!paymentFinalized.recorded) {
     throw new Error("checkout provider result fence was lost");
+  }
+  if (!paymentFinalized.authorized) {
+    throw new Error("checkout provider result was contained");
   }
   try {
     validatePaymentResponse({
@@ -291,6 +350,9 @@ export async function startMollieCheckout(
       workspaceId: intent.workspaceId,
       mode: intent.mode,
       molliePaymentId: validMolliePaymentIdOrNull(payment.id),
+      operationId: paymentCreationClaim.operationId,
+      authorizationEpoch: executionBoundary.authorizationEpoch,
+      targetCustomerId: customerId,
     });
     throw error;
   }
@@ -300,6 +362,9 @@ export async function startMollieCheckout(
     mode: intent.mode,
     molliePaymentId: payment.id,
     billingProfileVersion: billingProfile.eligibilityVersion,
+    authorizationEpoch: executionBoundary.authorizationEpoch,
+    operationId: paymentCreationClaim.operationId,
+    targetCustomerId: customerId,
   });
   if (!attached) {
     throw new Error("checkout was superseded before it could be opened");
@@ -311,6 +376,7 @@ export async function startMollieCheckout(
       mode: config.mode,
       molliePaymentId: payment.id,
       billingProfileVersion: billingProfile.eligibilityVersion,
+      authorizationEpoch: executionBoundary.authorizationEpoch,
     }))
   ) {
     throw new Error("checkout was contained before URL exposure");

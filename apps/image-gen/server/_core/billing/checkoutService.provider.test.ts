@@ -4,6 +4,7 @@ import type { MollieClient } from "./mollieClient";
 const storeMocks = vi.hoisted(() => ({
   attachMollieCustomer: vi.fn(),
   attachMolliePayment: vi.fn(),
+  claimCustomerProviderCreation: vi.fn(),
   claimIntentPaymentCreation: vi.fn(),
   finalizePaymentProviderOperation: vi.fn(),
   getBillingCustomer: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock("./billingSchedulerStore", () => ({
   assertBillingSchedulerTenantEnabled: vi.fn(async () => ({
     workspaceId: 1,
     mode: "test",
+    authorizationEpoch: 2,
     laneEpochs: {},
   })),
   assertBillingExecutionBoundary: vi.fn(async () => undefined),
@@ -74,8 +76,17 @@ describe("Mollie checkout provider failure boundary", () => {
       operationId: "operation-1",
       leaseToken: "lease-1",
     });
+    storeMocks.claimCustomerProviderCreation.mockResolvedValue({
+      claimed: true,
+      operationId: "customer-operation-1",
+      leaseToken: "customer-lease-1",
+    });
     storeMocks.markPaymentProviderTransportStarted.mockResolvedValue(true);
-    storeMocks.finalizePaymentProviderOperation.mockResolvedValue(true);
+    storeMocks.finalizePaymentProviderOperation.mockResolvedValue({
+      recorded: true,
+      authorized: true,
+      revokedAuthorizationEpoch: null,
+    });
     storeMocks.attachMolliePayment.mockResolvedValue(true);
     storeMocks.isCheckoutUrlExposureAllowed.mockResolvedValue(true);
   });
@@ -100,6 +111,9 @@ describe("Mollie checkout provider failure boundary", () => {
       workspaceId: 1,
       mode: "test",
       molliePaymentId: "tr_payment123",
+      operationId: "operation-1",
+      authorizationEpoch: 2,
+      targetCustomerId: "cst_customer123",
     });
     expect(storeMocks.attachMolliePayment).not.toHaveBeenCalled();
   });
@@ -122,6 +136,11 @@ describe("Mollie checkout provider failure boundary", () => {
       operationId: "operation-1",
       leaseToken: "lease-1",
       outcome: "ambiguous",
+      workspaceId: 1,
+      mode: "test",
+      authorizationEpoch: 2,
+      intentId,
+      targetCustomerId: "cst_customer123",
     });
   });
 
@@ -135,11 +154,15 @@ describe("Mollie checkout provider failure boundary", () => {
 
     expect(client.createOneTimePayment).not.toHaveBeenCalled();
     expect(storeMocks.finalizePaymentProviderOperation).not.toHaveBeenCalled();
-    expect(storeMocks.markIntentApiUnknown).toHaveBeenCalledWith(intentId);
+    expect(storeMocks.markIntentApiUnknown).not.toHaveBeenCalled();
   });
 
   it("contains the exact remote payment when the result fence is lost", async () => {
-    storeMocks.finalizePaymentProviderOperation.mockResolvedValue(false);
+    storeMocks.finalizePaymentProviderOperation.mockResolvedValue({
+      recorded: false,
+      authorized: false,
+      revokedAuthorizationEpoch: null,
+    });
     const client = checkoutClient();
 
     await expect(startMollieCheckout(checkoutInput(), client)).rejects.toThrow(
@@ -147,14 +170,8 @@ describe("Mollie checkout provider failure boundary", () => {
     );
 
     expect(client.createOneTimePayment).toHaveBeenCalledOnce();
-    expect(storeMocks.attachMolliePayment).toHaveBeenCalledWith({
-      intentId,
-      workspaceId: 1,
-      mode: "test",
-      molliePaymentId: "tr_payment123",
-      billingProfileVersion: 1,
-    });
-    expect(storeMocks.markIntentApiUnknown).toHaveBeenCalledWith(intentId);
+    expect(storeMocks.attachMolliePayment).not.toHaveBeenCalled();
+    expect(storeMocks.markIntentApiUnknown).not.toHaveBeenCalled();
   });
 
   it("uses a one-off payment and never the first-payment subscription path for Startpilot", async () => {

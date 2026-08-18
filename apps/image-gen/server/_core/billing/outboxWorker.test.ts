@@ -20,16 +20,25 @@ vi.mock("../portalHandoffDelivery", () => ({
 }));
 
 import {
+  cancelContainedMolliePayment,
   cancelContainedMollieSubscription,
   claimBillingOutboxItem,
   collectingSubscriptionsForIntent,
+  failBillingOutboxItem,
   isCriticalContainmentJob,
   mandateMatchesCurrentSubscription,
+  reconcileExecutionDisabledPayment,
   sendPaymentHandoff,
 } from "./outboxWorker";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  process.env.MOLLIE_API_KEY = `test_${"a".repeat(32)}`;
+  process.env.MOLLIE_MODE = "test";
+  process.env.APP_BASE_URL = "http://leaderbot.test";
+  process.env.MOLLIE_PAYMENT_WEBHOOK_URL =
+    "http://billing.test/api/webhooks/mollie/payments";
+  process.env.BILLING_SUPPORT_EMAIL = "billing@leaderbot.test";
   beginHandoffFenceMock.mockResolvedValue({
     outboxId: 9,
     workspaceId: 42,
@@ -41,6 +50,159 @@ beforeEach(() => {
 });
 
 describe("billing outbox containment safeguards", () => {
+  it("reconciles a null-id checkout mismatch only to an exact one-off payment", async () => {
+    const sourceIntentId = "550e8400-e29b-41d4-a716-446655440000";
+    const selectResult = (rows: unknown[]) => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue(rows) })),
+      })),
+    });
+    const updateWhere = vi.fn().mockResolvedValue([{ affectedRows: 1 }]);
+    const insertValues = vi.fn(() => ({
+      onDuplicateKeyUpdate: vi.fn().mockResolvedValue(undefined),
+    }));
+    const tx = {
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({ where: updateWhere })),
+      })),
+      insert: vi.fn(() => ({ values: insertValues })),
+    };
+    const database = {
+      select: vi
+        .fn()
+        .mockReturnValueOnce(
+          selectResult([
+            {
+              operationId: "operation-1",
+              billingProfileVersion: 3,
+              credentialGenerationId: "credential-1",
+              firstStartedAt: new Date("2026-08-18T10:00:00.000Z"),
+            },
+          ])
+        )
+        .mockReturnValueOnce(
+          selectResult([
+            {
+              expectedAmount: "19.00",
+              currency: "EUR",
+              mollieDescription: "Leaderbot Startpilot",
+            },
+          ])
+        ),
+      transaction: vi.fn(async callback => callback(tx)),
+    };
+    databaseMock.mockResolvedValue(database);
+    const oneOffPayment = {
+      resource: "payment" as const,
+      id: "tr_payment123",
+      mode: "test" as const,
+      status: "open",
+      amount: { currency: "EUR", value: "19.00" },
+      description: "Leaderbot Startpilot",
+      customerId: "cst_customer123",
+      subscriptionId: null,
+      metadata: { billingIntentId: sourceIntentId },
+      createdAt: "2026-08-18T10:00:01.000Z",
+    };
+
+    await reconcileExecutionDisabledPayment(
+      {
+        workspaceId: 1,
+        mode: "test",
+        payload: {
+          reason: "checkout_provider_response_mismatch",
+          intentId: sourceIntentId,
+          targetCustomerId: "cst_customer123",
+          targetPaymentId: null,
+          providerOperationId: "operation-1",
+          revokedAuthorizationEpoch: 2,
+        },
+      } as BillingOutboxItem & { leaseToken: string },
+      {
+        listCustomerPayments: vi.fn().mockResolvedValue([oneOffPayment]),
+      } as unknown as MollieClient
+    );
+
+    expect(insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: "cancel_payment",
+        payload: expect.objectContaining({
+          targetPaymentId: "tr_payment123",
+          targetCustomerId: "cst_customer123",
+          intentId: sourceIntentId,
+        }),
+      })
+    );
+  });
+
+  it("does not reconcile a recurring payment that reuses intent metadata", async () => {
+    const sourceIntentId = "550e8400-e29b-41d4-a716-446655440000";
+    const selectResult = (rows: unknown[]) => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue(rows) })),
+      })),
+    });
+    const database = {
+      select: vi
+        .fn()
+        .mockReturnValueOnce(
+          selectResult([
+            {
+              operationId: "operation-1",
+              billingProfileVersion: 3,
+              credentialGenerationId: "credential-1",
+              firstStartedAt: new Date("2026-08-18T10:00:00.000Z"),
+            },
+          ])
+        )
+        .mockReturnValueOnce(
+          selectResult([
+            {
+              expectedAmount: "19.00",
+              currency: "EUR",
+              mollieDescription: "Leaderbot Startpilot",
+            },
+          ])
+        ),
+      transaction: vi.fn(),
+    };
+    databaseMock.mockResolvedValue(database);
+
+    await expect(
+      reconcileExecutionDisabledPayment(
+        {
+          workspaceId: 1,
+          mode: "test",
+          payload: {
+            reason: "checkout_provider_response_mismatch",
+            intentId: sourceIntentId,
+            targetCustomerId: "cst_customer123",
+            targetPaymentId: null,
+            providerOperationId: "operation-1",
+            revokedAuthorizationEpoch: 2,
+          },
+        } as BillingOutboxItem & { leaseToken: string },
+        {
+          listCustomerPayments: vi.fn().mockResolvedValue([
+            {
+              resource: "payment",
+              id: "tr_recurring123",
+              mode: "test",
+              status: "open",
+              amount: { currency: "EUR", value: "19.00" },
+              description: "Leaderbot Startpilot",
+              customerId: "cst_customer123",
+              subscriptionId: "sub_subscription123",
+              metadata: { billingIntentId: sourceIntentId },
+              createdAt: "2026-08-18T10:00:01.000Z",
+            },
+          ]),
+        } as unknown as MollieClient
+      )
+    ).rejects.toThrow("payment_reconciliation_not_visible");
+    expect(database.transaction).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["cancel_subscription", "billing_profile_revoked", true],
     ["cancel_subscription", "billing_profile_expired", true],
@@ -58,6 +220,54 @@ describe("billing outbox containment safeguards", () => {
       ).toBe(expected);
     }
   );
+
+  it("durably escalates a permanent payment cancellation failure", async () => {
+    const insertValues = vi.fn(() => ({
+      onDuplicateKeyUpdate: vi.fn(async () => undefined),
+    }));
+    const tx = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: vi.fn(() => ({
+              for: vi.fn(async () => [{ id: 91 }]),
+            })),
+          })),
+        })),
+      })),
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({ where: vi.fn(async () => undefined) })),
+      })),
+      insert: vi.fn(() => ({ values: insertValues })),
+    };
+    databaseMock.mockResolvedValue({
+      transaction: vi.fn(async callback => callback(tx)),
+    });
+
+    await failBillingOutboxItem(
+      {
+        id: 91,
+        deliveryId: "11111111-1111-4111-8111-111111111111",
+        workspaceId: 1,
+        mode: "test",
+        eventType: "cancel_payment",
+        status: "processing",
+        leaseToken: "lease-1",
+        attemptCount: 12,
+      } as BillingOutboxItem & { leaseToken: string },
+      "payment_cancellation_target_mismatch"
+    );
+
+    expect(insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: "manual_review",
+        payload: {
+          reason: "payment_cancellation_failed",
+          failedDeliveryId: "11111111-1111-4111-8111-111111111111",
+        },
+      })
+    );
+  });
   it("retries the same handoff operation with its original delivery identity", async () => {
     handoffMock.mockResolvedValue({
       ok: true,
@@ -167,7 +377,10 @@ describe("billing outbox containment safeguards", () => {
   });
 
   it("keeps containment provider calls outside every transaction", async () => {
-    const { database, isInTransaction } = transactionalDatabase([[], [], []]);
+    const { database, isInTransaction } = transactionalDatabase(
+      [[], [], []],
+      [{ operationId: "provider-operation-1" }]
+    );
     databaseMock.mockResolvedValue(database);
     const remote = remoteSubscription();
     const getSubscription = vi.fn(async () => {
@@ -193,10 +406,10 @@ describe("billing outbox containment safeguards", () => {
 
   it("lists provisioning remotes outside the transaction and preserves the unique current one", async () => {
     const current = provisioningSubscription();
-    const { database, isInTransaction } = transactionalDatabase([
-      [current],
-      [current],
-    ]);
+    const { database, isInTransaction } = transactionalDatabase(
+      [[current], [current]],
+      [{ operationId: "provider-operation-1" }]
+    );
     databaseMock.mockResolvedValue(database);
     const remote = remoteSubscription();
     const getSubscription = vi.fn(async () => {
@@ -314,6 +527,168 @@ describe("billing outbox containment safeguards", () => {
     expect(cancelSubscription).toHaveBeenCalledOnce();
   });
 
+  it("cancels only the exact provisioning remote from the disabled authorization epoch", async () => {
+    const current = {
+      ...provisioningSubscription(),
+      mollieSubscriptionId: "sub_subscription123",
+      mollieMandateId: "mdt_mandate123",
+    };
+    const { database } = transactionalDatabase(
+      [[current], [current], [current]],
+      [{ intentId: current.sourceIntentId }]
+    );
+    databaseMock.mockResolvedValue(database);
+    const remote = remoteSubscription();
+    const cancelSubscription = vi.fn().mockResolvedValue(undefined);
+    const job = containmentJob();
+    job.payload = {
+      ...job.payload,
+      reason: "billing_execution_disabled",
+      revokedAuthorizationEpoch: 7,
+    };
+
+    await expect(
+      cancelContainedMollieSubscription(
+        job,
+        { customerId: "cst_customer123", subscriptionId: remote.id },
+        {
+          getSubscription: vi.fn().mockResolvedValue(remote),
+          cancelSubscription,
+        } as unknown as MollieClient
+      )
+    ).resolves.toBe("canceled");
+
+    expect(cancelSubscription).toHaveBeenCalledOnce();
+  });
+
+  it.each(["epoch", "tenant", "remote"] as const)(
+    "never deletes an execution-disabled %s mismatch",
+    async mismatch => {
+      const current = {
+        ...provisioningSubscription(),
+        mollieSubscriptionId: "sub_subscription123",
+        mollieMandateId: "mdt_mandate123",
+      };
+      const localIntent =
+        mismatch === "remote" ? [{ intentId: current.sourceIntentId }] : [];
+      const { database } = transactionalDatabase(
+        [[current], [current]],
+        localIntent
+      );
+      databaseMock.mockResolvedValue(database);
+      const remote = remoteSubscription(
+        mismatch === "remote"
+          ? { metadata: { billingIntentId: "wrong-intent" } }
+          : {}
+      );
+      const cancelSubscription = vi.fn();
+      const job = containmentJob();
+      job.payload = {
+        ...job.payload,
+        reason: "billing_execution_disabled",
+        revokedAuthorizationEpoch: 7,
+      };
+
+      await expect(
+        cancelContainedMollieSubscription(
+          job,
+          { customerId: "cst_customer123", subscriptionId: remote.id },
+          {
+            getSubscription: vi.fn().mockResolvedValue(remote),
+            cancelSubscription,
+          } as unknown as MollieClient
+        )
+      ).resolves.toBe("skipped_current");
+      expect(cancelSubscription).not.toHaveBeenCalled();
+    }
+  );
+
+  it("rejects a cross-intent cancellation binding without provider DELETE", async () => {
+    const current = {
+      ...manualReviewSubscription(),
+      sourceIntentId: "550e8400-e29b-41d4-a716-446655440000",
+    };
+    const { database } = transactionalDatabase([[current]], []);
+    databaseMock.mockResolvedValue(database);
+    const cancelSubscription = vi.fn();
+    const job = containmentJob();
+    job.payload = {
+      ...job.payload,
+      expectedSourceIntentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    };
+
+    await expect(
+      cancelContainedMollieSubscription(
+        job,
+        {
+          customerId: "cst_customer123",
+          subscriptionId: "sub_subscription123",
+        },
+        {
+          getSubscription: vi.fn(),
+          cancelSubscription,
+        } as unknown as MollieClient
+      )
+    ).rejects.toThrow("subscription_cancellation_local_scope_mismatch");
+    expect(cancelSubscription).not.toHaveBeenCalled();
+    expect(database.insert).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["local", "payment_cancellation_local_scope_mismatch"],
+    ["metadata", "payment_cancellation_target_mismatch"],
+    ["paid", "payment_cancellation_requires_manual_review"],
+  ] as const)(
+    "never deletes a %s payment cancellation mismatch",
+    async (mismatch, expectedError) => {
+      const sourceIntentId = "550e8400-e29b-41d4-a716-446655440000";
+      const rows = [
+        [{ mollieCustomerId: "cst_customer123" }],
+        mismatch === "local" ? [] : [{ molliePaymentId: "tr_payment123" }],
+        [],
+      ];
+      let selected = 0;
+      const database = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn(async () => rows[selected++] ?? []),
+            })),
+          })),
+        })),
+      };
+      databaseMock.mockResolvedValue(database);
+      const cancelPayment = vi.fn();
+      const getPayment = vi.fn().mockResolvedValue({
+        resource: "payment",
+        id: "tr_payment123",
+        mode: "test",
+        status: mismatch === "paid" ? "paid" : "open",
+        customerId: "cst_customer123",
+        metadata: {
+          billingIntentId:
+            mismatch === "metadata" ? "wrong-intent" : sourceIntentId,
+        },
+      });
+
+      await expect(
+        cancelContainedMolliePayment(
+          {
+            workspaceId: 1,
+            mode: "test",
+            payload: {
+              reason: "billing_execution_disabled",
+              intentId: sourceIntentId,
+              targetPaymentId: "tr_payment123",
+            },
+          } as BillingOutboxItem & { leaseToken: string },
+          { getPayment, cancelPayment } as unknown as MollieClient
+        )
+      ).rejects.toThrow(expectedError);
+      expect(cancelPayment).not.toHaveBeenCalled();
+    }
+  );
+
   it("does not claim a second workspace job while another lease is processing", async () => {
     const pendingSelect = vi.fn();
     const tx = {
@@ -323,7 +698,7 @@ describe("billing outbox containment safeguards", () => {
           from: vi.fn(() => ({
             where: vi.fn(() => ({
               limit: vi.fn(() => ({
-                for: vi.fn().mockResolvedValue([{ id: 1 }]),
+                for: vi.fn().mockResolvedValue([{ commercialEnabled: true }]),
               })),
             })),
           })),
@@ -369,7 +744,10 @@ function handoffFenceDatabase(resultSets: unknown[][]) {
   };
 }
 
-function transactionalDatabase(rowsByTransaction: BillingSubscription[][]) {
+function transactionalDatabase(
+  rowsByTransaction: BillingSubscription[][],
+  outsideRows: unknown[] = []
+) {
   let inTransaction = false;
   const updateWhere = vi.fn().mockResolvedValue(undefined);
   const tx = {
@@ -387,6 +765,18 @@ function transactionalDatabase(rowsByTransaction: BillingSubscription[][]) {
     })),
   };
   const database = {
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi.fn(async () => outsideRows),
+        })),
+      })),
+    })),
+    insert: vi.fn(() => ({
+      values: vi.fn(() => ({
+        onDuplicateKeyUpdate: vi.fn(async () => undefined),
+      })),
+    })),
     transaction: vi.fn(async callback => {
       expect(inTransaction).toBe(false);
       inTransaction = true;

@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "journalSha256": "9e9348b3df648515d3a4c320c0855be73548bba8d6a9cbf19663875bf11c9778",
+  "journalSha256": "e1022c931fe83e84f6c784a76a84d23517f5b21f24dd26604bb6fd5ccadd214c",
   "baseSchemaSnapshot": "meta/0014_snapshot.json",
   "baseSchemaSnapshotSha256": "e0102aad23d607b4b359d1a11458d56c63533d73f056f332076ba952b7468b35",
   "schemaSnapshot": "meta/0015_snapshot.json",
-  "schemaSnapshotSha256": "5f889f07ae52ba8a932ec10043ee2f2fe1f7e753515c9ce1f34261acc9ca08e5",
+  "schemaSnapshotSha256": "ea37ae186efb289955014e2b62acdcf337e28fad5edfaed598e99ab69992f163",
   "productionSchemaContract": "production-schema-contract.json",
-  "productionSchemaContractSha256": "a8f6db537a50ff8611309c3f31324f2bc8a9a7148fa46870b1d01063d0482c72",
+  "productionSchemaContractSha256": "a691ca312895f234facd9394e1d4e9855b481d2a7dc1b9cc22479b46e999aeae",
   "migrations": [
     {
       "idx": 0,
@@ -102,7 +102,7 @@
       "idx": 15,
       "when": 1787056321209,
       "tag": "0015_production_readiness_registry",
-      "sha256": "d4ad4caa792bd427b5e031c0f4956e568bff3faffba94fda54161ce5838d2844"
+      "sha256": "75b3299156526d862fee25d37ca09647b4e8113f38757618b097b71d1b2fe508"
     }
   ]
 }

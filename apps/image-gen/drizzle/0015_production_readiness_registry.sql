@@ -224,19 +224,31 @@ CREATE TABLE `billing_profile_operator_actions` (
 	CONSTRAINT `billing_profile_operator_actions_request_id` PRIMARY KEY(`request_id`)
 );
 --> statement-breakpoint
+CREATE TABLE `billing_execution_controls` (
+	`workspace_id` int NOT NULL,
+	`mode` enum('test','live') NOT NULL,
+	`commercial_enabled` boolean NOT NULL DEFAULT false,
+	`authorization_epoch` int NOT NULL DEFAULT 1,
+	`updated_at` timestamp NOT NULL DEFAULT (now()) ON UPDATE CURRENT_TIMESTAMP,
+	CONSTRAINT `billing_execution_controls_workspace_id_mode_pk` PRIMARY KEY(`workspace_id`,`mode`),
+	CONSTRAINT `billing_execution_controls_epoch_positive` CHECK (`authorization_epoch` > 0)
+);
+--> statement-breakpoint
 CREATE TABLE `billing_provider_operations` (
 	`operation_id` varchar(36) NOT NULL,
 	`workspace_id` int NOT NULL,
 	`mode` enum('test','live') NOT NULL,
-	`operation_type` enum('create_payment','create_subscription','cancel_payment','cancel_subscription') NOT NULL,
+	`operation_type` enum('create_customer','create_payment','create_subscription','cancel_payment','cancel_subscription') NOT NULL,
 	`operation_key` varchar(160) NOT NULL,
 	`intent_id` varchar(36) NOT NULL,
 	`billing_profile_version` int NOT NULL,
+	`authorization_epoch` int NOT NULL,
 	`state` enum('reserved','transport_started','succeeded','known_failed','ambiguous','reconciliation_only','contained') NOT NULL,
 	`request_fingerprint` varchar(64) NOT NULL,
 	`idempotency_key_hash` varchar(64) NOT NULL,
 	`credential_generation_id` varchar(64) NOT NULL,
 	`provider_resource_id` varchar(64),
+	`provider_customer_id` varchar(64),
 	`attempt_count` int NOT NULL DEFAULT 0,
 	`lease_token` varchar(36) NOT NULL,
 	`lease_until` timestamp NOT NULL,
@@ -277,7 +289,7 @@ CREATE TABLE `billing_scheduler_tenants` (
 	CONSTRAINT `billing_scheduler_tenants_workspace_mode_kind_unique` UNIQUE(`workspace_id`,`mode`,`kind`),
 	CONSTRAINT `billing_scheduler_execution_epoch_positive` CHECK (`execution_epoch` > 0),
 	CONSTRAINT `billing_scheduler_counters_nonnegative` CHECK (`pending_work_count` >= 0 AND `dead_letter_count` >= 0),
-	CONSTRAINT `billing_scheduler_enabled_audit_required` CHECK (`enabled` = false OR (`operator_request_id` IS NOT NULL AND `operator_request_fingerprint` IS NOT NULL AND `enabled_by_user_id` IS NOT NULL AND `enabled_at` IS NOT NULL)),
+	CONSTRAINT `billing_scheduler_enabled_audit_required` CHECK (`enabled` = false OR `kind` = 'outbox' OR (`operator_request_id` IS NOT NULL AND `operator_request_fingerprint` IS NOT NULL AND `enabled_by_user_id` IS NOT NULL AND `enabled_at` IS NOT NULL)),
 	CONSTRAINT `billing_scheduler_lease_pair` CHECK ((`lease_token` IS NULL AND `lease_until` IS NULL) OR (`lease_token` IS NOT NULL AND `lease_until` IS NOT NULL))
 );
 --> statement-breakpoint
@@ -381,6 +393,7 @@ ALTER TABLE `billing_outbox` MODIFY COLUMN `event_type` enum('ensure_subscriptio
 ALTER TABLE `billing_intents` ADD `billing_profile_version` int;--> statement-breakpoint
 UPDATE `billing_intents` SET `billing_profile_version` = 0 WHERE `billing_profile_version` IS NULL;--> statement-breakpoint
 ALTER TABLE `billing_intents` MODIFY COLUMN `billing_profile_version` int NOT NULL;--> statement-breakpoint
+ALTER TABLE `billing_intents` ADD `authorization_epoch` int;--> statement-breakpoint
 ALTER TABLE `billing_intents` ADD `url_exposed_at` timestamp;--> statement-breakpoint
 ALTER TABLE `billing_outbox` ADD `delivery_id` varchar(36);--> statement-breakpoint
 UPDATE `billing_outbox`
@@ -495,7 +508,7 @@ SELECT
 	`source`.`workspace_id`,
 	`source`.`mode`,
 	`kinds`.`kind`,
-	false,
+	`kinds`.`kind` = 'outbox',
 	CASE `kinds`.`kind`
 		WHEN 'outbox' THEN COALESCE((
 			SELECT MIN(`available_at`) FROM `billing_outbox`
@@ -523,6 +536,51 @@ CROSS JOIN (
 	UNION ALL SELECT 'profile_expiry'
 	UNION ALL SELECT 'ai_finalization'
 ) AS `kinds`;--> statement-breakpoint
+INSERT INTO `billing_execution_controls` (`workspace_id`,`mode`,`commercial_enabled`,`authorization_epoch`)
+SELECT
+	`scheduler`.`workspace_id`,
+	`scheduler`.`mode`,
+	false,
+	MIN(`scheduler`.`execution_epoch`)
+FROM `billing_scheduler_tenants` AS `scheduler`
+GROUP BY `scheduler`.`workspace_id`,`scheduler`.`mode`
+HAVING COUNT(*)=4
+	AND COUNT(DISTINCT `scheduler`.`kind`)=4
+	AND COUNT(DISTINCT `scheduler`.`execution_epoch`)=1;--> statement-breakpoint
+CREATE TEMPORARY TABLE `_0015_control_preflight` (
+	`violation` tinyint NOT NULL PRIMARY KEY,
+	CONSTRAINT `_0015_control_preflight_must_be_empty` CHECK (`violation` = 0)
+);--> statement-breakpoint
+INSERT INTO `_0015_control_preflight` (`violation`)
+SELECT 1 FROM DUAL WHERE EXISTS (
+	SELECT 1
+	FROM (
+		SELECT `workspace_id`,`mode` FROM `billing_customers`
+		UNION SELECT `workspace_id`,`mode` FROM `billing_outbox`
+		UNION SELECT `workspace_id`,`mode` FROM `billing_intents`
+		UNION SELECT `workspace_id`,`mode` FROM `workspace_entitlement_usage_reservations`
+	) AS `source`
+	LEFT JOIN `billing_execution_controls` AS `control`
+		ON `control`.`workspace_id`=`source`.`workspace_id` AND `control`.`mode`=`source`.`mode`
+	LEFT JOIN (
+		SELECT `workspace_id`,`mode`,COUNT(*) AS `lane_count`,COUNT(DISTINCT `kind`) AS `kind_count`,COUNT(DISTINCT `execution_epoch`) AS `epoch_count`,MIN(`execution_epoch`) AS `lane_epoch`
+		FROM `billing_scheduler_tenants`
+		GROUP BY `workspace_id`,`mode`
+	) AS `lanes`
+		ON `lanes`.`workspace_id`=`source`.`workspace_id` AND `lanes`.`mode`=`source`.`mode`
+	WHERE `control`.`workspace_id` IS NULL
+		OR `lanes`.`lane_count`<>4
+		OR `lanes`.`kind_count`<>4
+		OR `lanes`.`epoch_count`<>1
+		OR `lanes`.`lane_epoch`<>`control`.`authorization_epoch`
+);--> statement-breakpoint
+DROP TEMPORARY TABLE `_0015_control_preflight`;--> statement-breakpoint
+UPDATE `billing_intents` AS `intent`
+JOIN `billing_execution_controls` AS `control`
+	ON `control`.`workspace_id`=`intent`.`workspace_id` AND `control`.`mode`=`intent`.`mode`
+SET `intent`.`authorization_epoch`=`control`.`authorization_epoch`
+WHERE `intent`.`authorization_epoch` IS NULL;--> statement-breakpoint
+ALTER TABLE `billing_intents` MODIFY COLUMN `authorization_epoch` int NOT NULL;--> statement-breakpoint
 UPDATE `billing_scheduler_tenants` AS `scheduler`
 SET
 	`scheduler`.`pending_work_count` = CASE WHEN `scheduler`.`kind`='outbox' THEN (
@@ -548,7 +606,7 @@ ALTER TABLE `channelConnections`
 	ADD CONSTRAINT `channelConnections_id_workspace_unique` UNIQUE(`id`,`workspaceId`),
 	ADD CONSTRAINT `channelConnections_id_workspace_binding_unique` UNIQUE(`id`,`workspaceId`,`bindingEpoch`);--> statement-breakpoint
 ALTER TABLE `billing_intents`
-	ADD CONSTRAINT `billing_intents_scope_profile_unique` UNIQUE(`intent_id`,`workspace_id`,`mode`,`billing_profile_version`),
+	ADD CONSTRAINT `billing_intents_scope_profile_unique` UNIQUE(`intent_id`,`workspace_id`,`mode`,`billing_profile_version`,`authorization_epoch`),
 	ADD CONSTRAINT `billing_intents_scope_unique` UNIQUE(`intent_id`,`workspace_id`,`mode`);--> statement-breakpoint
 ALTER TABLE `billing_subscriptions`
 	DROP FOREIGN KEY `billing_subscriptions_source_intent_fk`,
@@ -573,7 +631,9 @@ ALTER TABLE `billing_notification_receiver_outbox` ADD CONSTRAINT `billing_notif
 ALTER TABLE `billing_profile_operator_actions` ADD CONSTRAINT `billing_profile_operator_actions_workspace_id_workspaces_id_fk` FOREIGN KEY (`workspace_id`) REFERENCES `workspaces`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `billing_profile_operator_actions` ADD CONSTRAINT `billing_profile_operator_actions_actor_user_id_users_id_fk` FOREIGN KEY (`actor_user_id`) REFERENCES `users`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `billing_provider_operations` ADD CONSTRAINT `billing_provider_operations_workspace_id_workspaces_id_fk` FOREIGN KEY (`workspace_id`) REFERENCES `workspaces`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE `billing_provider_operations` ADD CONSTRAINT `billing_provider_operations_intent_scope_fk` FOREIGN KEY (`intent_id`,`workspace_id`,`mode`,`billing_profile_version`) REFERENCES `billing_intents`(`intent_id`,`workspace_id`,`mode`,`billing_profile_version`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `billing_execution_controls` ADD CONSTRAINT `billing_execution_controls_workspace_fk` FOREIGN KEY (`workspace_id`) REFERENCES `workspaces`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `billing_provider_operations` ADD CONSTRAINT `billing_provider_ops_execution_control_fk` FOREIGN KEY (`workspace_id`,`mode`) REFERENCES `billing_execution_controls`(`workspace_id`,`mode`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE `billing_provider_operations` ADD CONSTRAINT `billing_provider_operations_intent_scope_fk` FOREIGN KEY (`intent_id`,`workspace_id`,`mode`,`billing_profile_version`,`authorization_epoch`) REFERENCES `billing_intents`(`intent_id`,`workspace_id`,`mode`,`billing_profile_version`,`authorization_epoch`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `billing_scheduler_tenants` ADD CONSTRAINT `billing_scheduler_tenants_workspace_id_workspaces_id_fk` FOREIGN KEY (`workspace_id`) REFERENCES `workspaces`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `billing_scheduler_tenants` ADD CONSTRAINT `billing_scheduler_tenants_enabled_by_user_id_users_id_fk` FOREIGN KEY (`enabled_by_user_id`) REFERENCES `users`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `billing_notification_scheduler_tenants` ADD CONSTRAINT `billing_notification_scheduler_workspace_fk` FOREIGN KEY (`workspace_id`) REFERENCES `workspaces`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint

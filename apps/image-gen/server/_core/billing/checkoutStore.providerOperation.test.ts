@@ -10,7 +10,10 @@ import {
 const { databaseMock } = vi.hoisted(() => ({ databaseMock: vi.fn() }));
 vi.mock("../../db", () => ({ getDatabaseOrThrow: databaseMock }));
 
-import { claimIntentPaymentCreation } from "./checkoutStore";
+import {
+  claimIntentPaymentCreation,
+  finalizePaymentProviderOperation,
+} from "./checkoutStore";
 
 describe("payment provider operation recovery", () => {
   beforeEach(() => {
@@ -54,6 +57,63 @@ describe("payment provider operation recovery", () => {
     });
     expect(harness.operationUpdate).not.toHaveBeenCalled();
   });
+
+  it("atomically records an unauthorized payment and its exact cancel route", async () => {
+    const harness = finalizationHarness(false, 1);
+    databaseMock.mockResolvedValue(harness.database);
+
+    await expect(
+      finalizePaymentProviderOperation({
+        operationId: operation.operationId,
+        leaseToken: "lease-1",
+        outcome: "succeeded",
+        providerResourceId: "tr_payment123",
+        workspaceId: 42,
+        mode: "test",
+        authorizationEpoch: 2,
+        intentId: providerRequest.intentId,
+        targetCustomerId: providerRequest.customerId,
+      })
+    ).resolves.toEqual({
+      recorded: true,
+      authorized: false,
+      revokedAuthorizationEpoch: 2,
+    });
+    expect(harness.insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: "cancel_payment",
+        payload: expect.objectContaining({
+          reason: "billing_execution_disabled",
+          intentId: providerRequest.intentId,
+          targetPaymentId: "tr_payment123",
+        }),
+      })
+    );
+  });
+
+  it("does not enqueue cancellation when a stale payment worker loses its fence", async () => {
+    const harness = finalizationHarness(false, 0);
+    databaseMock.mockResolvedValue(harness.database);
+
+    await expect(
+      finalizePaymentProviderOperation({
+        operationId: operation.operationId,
+        leaseToken: "lease-1",
+        outcome: "succeeded",
+        providerResourceId: "tr_payment123",
+        workspaceId: 42,
+        mode: "test",
+        authorizationEpoch: 2,
+        intentId: providerRequest.intentId,
+        targetCustomerId: providerRequest.customerId,
+      })
+    ).resolves.toEqual({
+      recorded: false,
+      authorized: false,
+      revokedAuthorizationEpoch: null,
+    });
+    expect(harness.insertValues).not.toHaveBeenCalled();
+  });
 });
 
 const providerRequest = {
@@ -73,6 +133,7 @@ const operation = {
   firstStartedAt: null,
   requestFingerprint: hashCanonicalSnapshot(providerRequest),
   billingProfileVersion: 7,
+  authorizationEpoch: 2,
   credentialGenerationId: "credential-v1",
   idempotencyKeyHash: createHash("sha256")
     .update(providerRequest.idempotencyKey)
@@ -85,6 +146,7 @@ function claimInput(patch: Partial<typeof providerRequest> = {}) {
     workspaceId: 42,
     mode: "test" as const,
     billingProfileVersion: 7,
+    authorizationEpoch: 2,
     providerRequest: { ...providerRequest, ...patch },
   };
 }
@@ -92,6 +154,7 @@ function claimInput(patch: Partial<typeof providerRequest> = {}) {
 function claimHarness(options: { profileVersion?: number } = {}) {
   const profileVersion = options.profileVersion ?? 7;
   const rows = [
+    [{ commercialEnabled: true, authorizationEpoch: 2 }],
     [
       {
         eligibilityVersion: profileVersion,
@@ -145,5 +208,42 @@ function claimHarness(options: { profileVersion?: number } = {}) {
   return {
     database: { transaction: vi.fn(async callback => callback(tx)) },
     operationUpdate,
+  };
+}
+
+function finalizationHarness(commercialEnabled: boolean, affectedRows: number) {
+  const rows = [
+    [{ commercialEnabled, authorizationEpoch: commercialEnabled ? 2 : 3 }],
+    [{ operationType: "create_payment", intentId: providerRequest.intentId }],
+  ];
+  let selected = 0;
+  const insertValues = vi.fn(() => ({
+    onDuplicateKeyUpdate: vi.fn(async () => undefined),
+  }));
+  const tx = {
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi.fn(() => ({
+            for: vi.fn(async () => rows[selected++] ?? []),
+          })),
+        })),
+      })),
+    })),
+    update: vi.fn(table => ({
+      set: vi.fn(() => ({
+        where: vi.fn(async () => [
+          {
+            affectedRows:
+              table === billingProviderOperations ? affectedRows : 1,
+          },
+        ]),
+      })),
+    })),
+    insert: vi.fn(() => ({ values: insertValues })),
+  };
+  return {
+    database: { transaction: vi.fn(async callback => callback(tx)) },
+    insertValues,
   };
 }
