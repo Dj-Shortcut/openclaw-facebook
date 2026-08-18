@@ -1079,7 +1079,7 @@ export const billingSubscriptions = mysqlTable(
   },
   table => [
     foreignKey({
-      name: "billing_subscriptions_source_intent_fk",
+      name: "billing_subscriptions_source_intent_scope_fk",
       columns: [table.sourceIntentId, table.workspaceId, table.mode],
       foreignColumns: [
         billingIntents.intentId,
@@ -1232,7 +1232,7 @@ export const workspaceEntitlements = mysqlTable(
   },
   table => [
     foreignKey({
-      name: "workspace_entitlements_source_intent_fk",
+      name: "workspace_entitlements_source_intent_scope_fk",
       columns: [table.sourceIntentId, table.workspaceId, table.mode],
       foreignColumns: [
         billingIntents.intentId,
@@ -1286,7 +1286,7 @@ export const workspaceEntitlementUsage = mysqlTable(
       foreignColumns: [workspaces.id],
     }).onDelete("restrict"),
     foreignKey({
-      name: "weu_entitlement_fk",
+      name: "weu_entitlement_scope_fk",
       columns: [table.entitlementId, table.workspaceId, table.mode],
       foreignColumns: [
         workspaceEntitlements.id,
@@ -1295,7 +1295,7 @@ export const workspaceEntitlementUsage = mysqlTable(
       ],
     }).onDelete("restrict"),
     foreignKey({
-      name: "weu_source_intent_fk",
+      name: "weu_source_intent_scope_fk",
       columns: [table.sourceIntentId, table.workspaceId, table.mode],
       foreignColumns: [
         billingIntents.intentId,
@@ -1378,7 +1378,7 @@ export const workspaceEntitlementUsageReservations = mysqlTable(
       ],
     }).onDelete("restrict"),
     foreignKey({
-      name: "weur_entitlement_fk",
+      name: "weur_entitlement_scope_fk",
       columns: [table.entitlementId, table.workspaceId, table.mode],
       foreignColumns: [
         workspaceEntitlements.id,

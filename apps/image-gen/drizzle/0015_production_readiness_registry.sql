@@ -537,7 +537,7 @@ ALTER TABLE `billing_intents`
 	ADD CONSTRAINT `billing_intents_scope_unique` UNIQUE(`intent_id`,`workspace_id`,`mode`);--> statement-breakpoint
 ALTER TABLE `billing_subscriptions`
 	DROP FOREIGN KEY `billing_subscriptions_source_intent_fk`,
-	ADD CONSTRAINT `billing_subscriptions_source_intent_fk` FOREIGN KEY (`source_intent_id`,`workspace_id`,`mode`) REFERENCES `billing_intents`(`intent_id`,`workspace_id`,`mode`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+	ADD CONSTRAINT `billing_subscriptions_source_intent_scope_fk` FOREIGN KEY (`source_intent_id`,`workspace_id`,`mode`) REFERENCES `billing_intents`(`intent_id`,`workspace_id`,`mode`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `payment_ledger`
 	DROP INDEX `payment_ledger_workspace_mode_occurred_idx`,
 	ADD CONSTRAINT `payment_ledger_id_workspace_mode_unique` UNIQUE(`id`,`workspace_id`,`mode`),
@@ -545,7 +545,7 @@ ALTER TABLE `payment_ledger`
 ALTER TABLE `workspace_entitlements`
 	DROP FOREIGN KEY `workspace_entitlements_source_intent_fk`,
 	ADD CONSTRAINT `workspace_entitlements_id_scope_unique` UNIQUE(`id`,`workspace_id`,`mode`),
-	ADD CONSTRAINT `workspace_entitlements_source_intent_fk` FOREIGN KEY (`source_intent_id`,`workspace_id`,`mode`) REFERENCES `billing_intents`(`intent_id`,`workspace_id`,`mode`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+	ADD CONSTRAINT `workspace_entitlements_source_intent_scope_fk` FOREIGN KEY (`source_intent_id`,`workspace_id`,`mode`) REFERENCES `billing_intents`(`intent_id`,`workspace_id`,`mode`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `billing_accounting_event_links` ADD CONSTRAINT `billing_accounting_event_links_provider_event_mode_fk` FOREIGN KEY (`provider_event_id`,`mode`) REFERENCES `billing_accounting_provider_events`(`id`,`mode`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `billing_accounting_event_links` ADD CONSTRAINT `billing_accounting_event_links_workspace_id_workspaces_id_fk` FOREIGN KEY (`workspace_id`) REFERENCES `workspaces`(`id`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `billing_accounting_event_links` ADD CONSTRAINT `billing_accounting_event_links_ledger_workspace_fk` FOREIGN KEY (`payment_ledger_id`,`workspace_id`,`mode`) REFERENCES `payment_ledger`(`id`,`workspace_id`,`mode`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
@@ -592,14 +592,14 @@ ALTER TABLE `workspace_entitlement_usage`
 	DROP FOREIGN KEY `weu_entitlement_fk`,
 	DROP FOREIGN KEY `weu_source_intent_fk`,
 	ADD CONSTRAINT `workspace_entitlement_usage_scope_unique` UNIQUE(`entitlement_id`,`workspace_id`,`mode`),
-	ADD CONSTRAINT `weu_entitlement_fk` FOREIGN KEY (`entitlement_id`,`workspace_id`,`mode`) REFERENCES `workspace_entitlements`(`id`,`workspace_id`,`mode`) ON DELETE restrict ON UPDATE no action,
-	ADD CONSTRAINT `weu_source_intent_fk` FOREIGN KEY (`source_intent_id`,`workspace_id`,`mode`) REFERENCES `billing_intents`(`intent_id`,`workspace_id`,`mode`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+	ADD CONSTRAINT `weu_entitlement_scope_fk` FOREIGN KEY (`entitlement_id`,`workspace_id`,`mode`) REFERENCES `workspace_entitlements`(`id`,`workspace_id`,`mode`) ON DELETE restrict ON UPDATE no action,
+	ADD CONSTRAINT `weu_source_intent_scope_fk` FOREIGN KEY (`source_intent_id`,`workspace_id`,`mode`) REFERENCES `billing_intents`(`intent_id`,`workspace_id`,`mode`) ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE `workspace_entitlement_usage_reservations`
 	DROP INDEX `workspace_entitlement_reservations_expiry_idx`,
 	DROP FOREIGN KEY `weur_entitlement_fk`,
 	ADD INDEX `workspace_entitlement_reservations_expiry_idx` (`workspace_id`,`mode`,`status`,`resolution_due_at`),
 	ADD CONSTRAINT `weur_connection_workspace_fk` FOREIGN KEY (`channel_connection_id`,`workspace_id`,`binding_epoch`) REFERENCES `channelConnections`(`id`,`workspaceId`,`bindingEpoch`) ON DELETE restrict ON UPDATE no action,
-	ADD CONSTRAINT `weur_entitlement_fk` FOREIGN KEY (`entitlement_id`,`workspace_id`,`mode`) REFERENCES `workspace_entitlements`(`id`,`workspace_id`,`mode`) ON DELETE restrict ON UPDATE no action,
+	ADD CONSTRAINT `weur_entitlement_scope_fk` FOREIGN KEY (`entitlement_id`,`workspace_id`,`mode`) REFERENCES `workspace_entitlements`(`id`,`workspace_id`,`mode`) ON DELETE restrict ON UPDATE no action,
 	ADD CONSTRAINT `weur_usage_scope_fk` FOREIGN KEY (`entitlement_id`,`workspace_id`,`mode`) REFERENCES `workspace_entitlement_usage`(`entitlement_id`,`workspace_id`,`mode`) ON DELETE restrict ON UPDATE no action,
 	ADD CONSTRAINT `workspace_entitlement_reservation_binding_pair` CHECK ((`channel_connection_id` IS NULL AND `binding_epoch` IS NULL) OR (`channel_connection_id` IS NOT NULL AND `binding_epoch` > 0)),
 	ADD CONSTRAINT `workspace_entitlement_reservation_delivery_pair` CHECK ((`delivery_started_at` IS NULL AND `delivery_attempt_token_hash` IS NULL AND `delivery_known_rejected_at` IS NULL) OR (`delivery_started_at` IS NOT NULL AND `delivery_attempt_token_hash` IS NOT NULL));
