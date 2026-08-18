@@ -29,6 +29,7 @@ describe("portal handoff tokens", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.PRIVACY_PEPPER = "portal-handoff-test-pepper";
+    mocks.createPortalHandoffToken.mockImplementation(async value => value);
   });
 
   afterEach(() => {
@@ -63,7 +64,9 @@ describe("portal handoff tokens", () => {
     expect(mocks.createPortalHandoffToken).toHaveBeenCalledWith({
       workspaceId: 42,
       tokenHash: result.tokenHash,
+      deliveryIdempotencyKeyHash: null,
       messengerSenderUserKey: "hashed-sender-key",
+      facebookPageId: undefined,
       purpose: "workspace_onboarding",
       status: "pending",
       expiresAt: result.expiresAt,

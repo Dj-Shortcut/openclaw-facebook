@@ -6,14 +6,17 @@ import type {
 import type { MollieClient, MollieSubscription } from "./mollieClient";
 
 const databaseMock = vi.hoisted(() => vi.fn());
+const handoffMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../db", () => ({ getDatabaseOrThrow: databaseMock }));
+vi.mock("../portalHandoffDelivery", () => ({ sendPortalHandoffLink: handoffMock }));
 
 import {
   cancelContainedMollieSubscription,
   claimBillingOutboxItem,
   collectingSubscriptionsForIntent,
   mandateMatchesCurrentSubscription,
+  sendPaymentHandoff,
 } from "./outboxWorker";
 
 beforeEach(() => {
@@ -21,6 +24,33 @@ beforeEach(() => {
 });
 
 describe("billing outbox containment safeguards", () => {
+  it("retries the same handoff operation with its original delivery identity", async () => {
+    handoffMock.mockResolvedValue({ ok: true, sent: true, expiresAt: new Date() });
+    const job = {
+      workspaceId: 42,
+      payload: {
+        intentId: "550e8400-e29b-41d4-a716-446655440000",
+        messengerSenderUserKey: "a".repeat(64),
+        messengerPageId: "page-42",
+      },
+    } as BillingOutboxItem & { leaseToken: string };
+    await sendPaymentHandoff(job);
+    await sendPaymentHandoff(job);
+    expect(handoffMock).toHaveBeenCalledTimes(2);
+    expect(handoffMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      workspaceId: 42,
+      messengerSenderUserKey: "a".repeat(64),
+      expectedFacebookPageId: "page-42",
+      deliveryIdempotencyKey: "550e8400-e29b-41d4-a716-446655440000",
+    }));
+    expect(handoffMock.mock.calls[1]).toEqual(handoffMock.mock.calls[0]);
+  });
+
+  it("fails closed for a handoff without an intent id before sending", async () => {
+    const job = { workspaceId: 42, payload: { messengerSenderUserKey: "a".repeat(64), messengerPageId: "page-42" } } as BillingOutboxItem & { leaseToken: string };
+    await expect(sendPaymentHandoff(job)).rejects.toThrow("invalid_portal_handoff_target");
+    expect(handoffMock).not.toHaveBeenCalled();
+  });
   it("preserves a unique provisioning remote when the valid mandate was not stored yet", () => {
     expect(mandateMatchesCurrentSubscription("mdt_valid123", null, true)).toBe(
       true

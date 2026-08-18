@@ -154,6 +154,12 @@ export function assertMollieBillingEnabled(): void {
       "Mollie entitlement enforcement is disabled; migrate and verify paid quota enforcement before enabling checkout"
     );
   }
+  const handoffSecret = process.env.PORTAL_HANDOFF_TOKEN_SECRET?.trim() ?? "";
+  if (handoffSecret.length < 32) {
+    throw new Error(
+      "PORTAL_HANDOFF_TOKEN_SECRET must be set and at least 32 characters before billing handoff delivery"
+    );
+  }
   const config = getMollieConfig();
   if (config.mode === "live" && !config.liveBillingEnabled) {
     throw new Error(

@@ -178,6 +178,7 @@ function billingTestEnv(): NodeJS.ProcessEnv {
       "http://billing.test/api/webhooks/mollie/payments",
     APP_BASE_URL: "http://leaderbot.test",
     BILLING_SUPPORT_EMAIL: "billing@leaderbot.test",
+    PORTAL_HANDOFF_TOKEN_SECRET: "test-portal-handoff-secret-at-least-32",
     MOLLIE_BILLING_WORKER_WORKSPACE_ID: "1",
   };
 }

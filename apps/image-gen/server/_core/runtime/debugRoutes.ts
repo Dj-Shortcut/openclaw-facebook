@@ -12,7 +12,9 @@ import {
   type MessengerGenerationQueueStats,
 } from "../messengerGenerationQueue";
 import { sendPortalHandoffLink } from "../portalHandoffDelivery";
-import { isPortalHandoffTenantBoundaryReady } from "../portalHandoffSecurity";
+import {
+  isManualPortalHandoffRecoveryReady,
+} from "../portalHandoffSecurity";
 import { isRedisReplayProtectionEnabled } from "../webhookReplayProtection";
 
 type VersionPayload = {
@@ -38,7 +40,6 @@ const costSummaryQuerySchema = z.object({
 const portalHandoffSendBodySchema = z.object({
   workspaceId: z.number().int().positive(),
   messengerSenderUserKey: z.string().regex(/^[a-f0-9]{64}$/),
-  createdByUserId: z.number().int().positive(),
 });
 
 const adminCostSummaryRouteLimiter = rateLimit({
@@ -380,7 +381,7 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
         return res.sendStatus(403);
       }
 
-      if (!isPortalHandoffTenantBoundaryReady()) {
+      if (!isManualPortalHandoffRecoveryReady()) {
         safeLog("admin_portal_handoff_tenant_boundary_unavailable", {
           level: "warn",
         });

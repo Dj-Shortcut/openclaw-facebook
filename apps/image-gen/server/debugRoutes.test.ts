@@ -17,6 +17,7 @@ import {
 const mocks = vi.hoisted(() => ({
   sendPortalHandoffLink: vi.fn(),
   isPortalHandoffTenantBoundaryReady: vi.fn(() => true),
+  isManualPortalHandoffRecoveryReady: vi.fn(() => false),
 }));
 
 vi.mock("./_core/portalHandoffDelivery", () => ({
@@ -26,6 +27,8 @@ vi.mock("./_core/portalHandoffDelivery", () => ({
 vi.mock("./_core/portalHandoffSecurity", () => ({
   isPortalHandoffTenantBoundaryReady:
     mocks.isPortalHandoffTenantBoundaryReady,
+  isManualPortalHandoffRecoveryReady:
+    mocks.isManualPortalHandoffRecoveryReady,
 }));
 
 const originalAdminToken = process.env.ADMIN_TOKEN;
@@ -35,6 +38,8 @@ afterEach(() => {
   mocks.sendPortalHandoffLink.mockReset();
   mocks.isPortalHandoffTenantBoundaryReady.mockReset();
   mocks.isPortalHandoffTenantBoundaryReady.mockReturnValue(true);
+  mocks.isManualPortalHandoffRecoveryReady.mockReset();
+  mocks.isManualPortalHandoffRecoveryReady.mockReturnValue(true);
   resetAdminAuthRateLimiterForTests();
   resetRuntimeStatsForTests();
   clearStateStore();
@@ -58,9 +63,10 @@ async function startServer() {
 }
 
 describe("debug/admin routes", () => {
-  it("fails closed when the portal handoff tenant boundary is unavailable", async () => {
+  it("fails closed for manual recovery even when the tenant boundary is ready", async () => {
     process.env.ADMIN_TOKEN = "secret-admin-token";
-    mocks.isPortalHandoffTenantBoundaryReady.mockReturnValue(false);
+    mocks.isPortalHandoffTenantBoundaryReady.mockReturnValue(true);
+    mocks.isManualPortalHandoffRecoveryReady.mockReturnValue(false);
     const server = await startServer();
 
     try {
@@ -435,8 +441,13 @@ describe("debug/admin routes", () => {
     }
   });
 
-  it("requires an audit actor for manual portal handoff sends", async () => {
+  it("does not accept caller-supplied audit attribution for manual portal handoff sends", async () => {
     process.env.ADMIN_TOKEN = "secret-admin-token";
+    mocks.sendPortalHandoffLink.mockResolvedValue({
+      ok: true,
+      sent: true,
+      expiresAt: new Date("2026-07-06T11:30:00.000Z"),
+    });
     const server = await startServer();
 
     try {
@@ -449,12 +460,15 @@ describe("debug/admin routes", () => {
         body: JSON.stringify({
           workspaceId: 42,
           messengerSenderUserKey,
+          createdByUserId: 999,
         }),
       });
 
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: "invalid handoff request" });
-      expect(mocks.sendPortalHandoffLink).not.toHaveBeenCalled();
+      expect(response.status).toBe(200);
+      expect(mocks.sendPortalHandoffLink).toHaveBeenCalledWith({
+        workspaceId: 42,
+        messengerSenderUserKey,
+      });
     } finally {
       await server.close();
     }
@@ -480,7 +494,6 @@ describe("debug/admin routes", () => {
         body: JSON.stringify({
           workspaceId: 42,
           messengerSenderUserKey,
-          createdByUserId: 7,
         }),
       });
       const payload = await response.json();
@@ -493,7 +506,6 @@ describe("debug/admin routes", () => {
       expect(mocks.sendPortalHandoffLink).toHaveBeenCalledWith({
         workspaceId: 42,
         messengerSenderUserKey,
-        createdByUserId: 7,
       });
       expect(JSON.stringify(payload)).not.toContain("handoff");
       expect(JSON.stringify(payload)).not.toContain("token");

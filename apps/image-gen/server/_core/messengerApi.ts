@@ -23,6 +23,7 @@ type MessengerSendOutcome =
   | { sent: false; reason: "response_window_closed" };
 
 type SendMessageOptions = {
+  pageId?: string | null;
   maxRetries?: number;
   retryBaseMs?: number;
   onRetry?: (attempt: number, maxAttempts: number, error: Error) => void;
@@ -196,7 +197,7 @@ async function sendMessage(
   options?: SendMessageOptions
 ): Promise<MessengerSendOutcome> {
   const withinResponseWindow = await Promise.resolve(
-    hasOpenMessengerResponseWindow(psid)
+    hasOpenMessengerResponseWindow(psid, undefined, options?.pageId)
   );
   if (!withinResponseWindow) {
     safeLog("messenger_send_skipped", { reason: "response_window_closed" });
@@ -244,9 +245,10 @@ async function parseSendOutcome(
 
 export async function sendText(
   psid: string,
-  text: string
+  text: string,
+  options?: SendMessageOptions
 ): Promise<MessengerSendOutcome> {
-  return await sendMessage(psid, { text });
+  return await sendMessage(psid, { text }, options);
 }
 
 export async function sendQuickReplies(

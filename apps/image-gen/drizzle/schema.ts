@@ -318,6 +318,8 @@ export const portalHandoffTokens = mysqlTable(
     id: int("id").autoincrement().primaryKey(),
     workspaceId: int("workspaceId").notNull(),
     tokenHash: varchar("tokenHash", { length: 96 }).notNull(),
+    /** SHA-256 of the stable outbox delivery operation; never the raw key. */
+    deliveryIdempotencyKeyHash: varchar("deliveryIdempotencyKeyHash", { length: 96 }),
     messengerSenderUserKey: varchar("messengerSenderUserKey", { length: 96 }),
     facebookPageId: varchar("facebookPageId", { length: 160 }),
     claimedByUserId: int("claimedByUserId"),
@@ -335,6 +337,9 @@ export const portalHandoffTokens = mysqlTable(
     tokenHashUnique: uniqueIndex("portalHandoffTokens_tokenHash_unique").on(
       table.tokenHash
     ),
+    deliveryIdempotencyKeyHashUnique: uniqueIndex(
+      "portalHandoffTokens_delivery_key_hash_unique"
+    ).on(table.deliveryIdempotencyKeyHash),
     workspaceStatusIdx: index("portalHandoffTokens_workspace_status_idx").on(
       table.workspaceId,
       table.status
