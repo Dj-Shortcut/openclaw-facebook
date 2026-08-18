@@ -3,6 +3,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   auditLog,
+  billingIntents,
+  billingOutbox,
   channelConnections,
   portalHandoffTokens,
   users,
@@ -15,6 +17,7 @@ import {
   createOrGetPortalHandoffToken,
   getDatabaseOrThrow,
 } from "./db";
+import { rearmFailedPortalHandoffAfterInbound } from "./_core/billing/portalHandoffRecovery";
 
 const runMysqlIntegration = process.env.RUN_MYSQL_INTEGRATION === "1";
 const suite = describe.runIf(runMysqlIntegration);
@@ -28,6 +31,7 @@ suite("portal handoff MySQL concurrency", () => {
   const deliveryHash = `sha256:${"b".repeat(64)}`;
   const tokenHash = `sha256:${"c".repeat(64)}`;
   const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+  const intentId = "550e8400-e29b-41d4-a716-446655440099";
 
   let workspaceId = 0;
   let userId = 0;
@@ -76,6 +80,12 @@ suite("portal handoff MySQL concurrency", () => {
   afterAll(async () => {
     if (!workspaceId || !userId) return;
     const database = await getDatabaseOrThrow();
+    await database
+      .delete(billingOutbox)
+      .where(eq(billingOutbox.workspaceId, workspaceId));
+    await database
+      .delete(billingIntents)
+      .where(eq(billingIntents.workspaceId, workspaceId));
     await database
       .delete(auditLog)
       .where(eq(auditLog.workspaceId, workspaceId));
@@ -192,5 +202,89 @@ suite("portal handoff MySQL concurrency", () => {
         )
       );
     expect(claimAudit).toHaveLength(1);
+  });
+
+  it("rearms only the same paid delivery after a matching inbound message", async () => {
+    const database = await getDatabaseOrThrow();
+    await database.insert(billingIntents).values({
+      intentId,
+      workspaceId,
+      mode: "test",
+      planCode: "startpilot_once_v1",
+      kind: "startpilot_purchase",
+      expectedAmount: "19.00",
+      currency: "EUR",
+      interval: "once",
+      entitlements: { aiAnswers: 300, images: 20 },
+      mollieDescription: "Startpilot",
+      status: "paid",
+      idempotencyKey: `mysql-recovery-intent-${suffix}`,
+      checkoutScopeKey: `mysql-recovery-scope-${suffix}`,
+      messengerSenderUserKey: senderKey,
+      messengerPageId: pageId,
+      paidAt: new Date(),
+    });
+    await database.insert(billingOutbox).values({
+      workspaceId,
+      mode: "test",
+      eventType: "send_portal_handoff",
+      deduplicationKey: `send_portal_handoff:${intentId}`,
+      payload: {
+        intentId,
+        messengerSenderUserKey: senderKey,
+        messengerPageId: pageId,
+      },
+      status: "failed",
+      attemptCount: 1,
+      maxAttempts: 12,
+      lastErrorCode: "portal_handoff_response_window_closed",
+    });
+
+    await expect(
+      rearmFailedPortalHandoffAfterInbound({
+        facebookPageId: pageId,
+        messengerSenderUserKey: "f".repeat(64),
+      })
+    ).resolves.toBe(false);
+    await expect(
+      rearmFailedPortalHandoffAfterInbound({
+        facebookPageId: pageId,
+        messengerSenderUserKey: senderKey,
+      })
+    ).resolves.toBe(true);
+    await expect(
+      rearmFailedPortalHandoffAfterInbound({
+        facebookPageId: pageId,
+        messengerSenderUserKey: senderKey,
+      })
+    ).resolves.toBe(false);
+
+    const jobs = await database
+      .select()
+      .from(billingOutbox)
+      .where(
+        and(
+          eq(billingOutbox.workspaceId, workspaceId),
+          eq(billingOutbox.eventType, "send_portal_handoff")
+        )
+      );
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      status: "pending",
+      attemptCount: 0,
+      lastErrorCode: "customer_message_rearm",
+    });
+
+    const paidIntents = await database
+      .select()
+      .from(billingIntents)
+      .where(
+        and(
+          eq(billingIntents.workspaceId, workspaceId),
+          eq(billingIntents.status, "paid")
+        )
+      );
+    expect(paidIntents).toHaveLength(1);
+    expect(paidIntents[0]?.intentId).toBe(intentId);
   });
 });
