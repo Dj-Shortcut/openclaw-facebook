@@ -390,17 +390,13 @@ traffic cannot reach internal gateway admin/API surfaces.
     Delivery is deliberately separate from payment truth: a closed response
     window, stale sender state, changed Page binding, or exhausted bounded send
     retry records a failed `send_portal_handoff` outbox item without creating a
-    second payment. Recovery is operator-initiated only after the customer sends
-    a new Messenger message: invoke the protected handoff sender with the
-    original workspace and privacy-peppered sender key. It revalidates the
-    currently connected Page, issues a fresh one-use token only after the
-    response window is open, and leaves billing state untouched.
-    The failed outbox item plus redacted delivery logs are the audit trail;
-    never copy a raw token into support tooling.
-    - [ ] BLOCKED: manual recovery must be bound to an existing failed
-      `send_portal_handoff` outbox operation and an authenticated support
-      principal before it can be enabled in production. The current shared
-      admin-token route is not sufficient provenance for human recovery.
+    second payment. Automated outbox retries reuse the same idempotent delivery
+    identity; terminal response-window or Page-binding failures remain auditable
+    through the outbox record and redacted delivery logs, without recharge.
+    Human recovery is unavailable: the protected admin sender is deliberately
+    fail-closed until recovery is bound to the failed outbox operation and an
+    authenticated, non-forgeable support principal. Never copy a raw token into
+    support tooling.
   - Storage boundary: `portalHandoffTokens` rows are scoped to one `workspaceId`; the opaque token is never stored, only its hash is persisted, and Messenger identity may be stored only as the privacy-peppered `messengerSenderUserKey`.
   - Deletion boundary: `delete-my-data` must delete handoff rows for the erased Messenger `userKey`, including pending and consumed links.
   - Consumption boundary: only the portal handoff route may consume a pending, unexpired token and convert it into that workspace's onboarding/session flow.
