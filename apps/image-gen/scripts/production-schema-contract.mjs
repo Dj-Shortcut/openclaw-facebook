@@ -12,13 +12,15 @@ export async function configureProductionSchemaSession(connection) {
   await connection.query("SET SESSION auto_increment_increment=1");
   await connection.query("SET SESSION auto_increment_offset=1");
   await connection.query("SET SESSION information_schema_stats_expiry=0");
+  await connection.query("SET SESSION sql_quote_show_create=1");
+  await connection.query("SET SESSION show_create_table_verbosity=0");
   await connection.query("SET NAMES utf8mb4 COLLATE utf8mb4_0900_ai_ci");
 }
 
 export async function assertProductionMigrationRuntime(connection) {
   await configureProductionSchemaSession(connection);
   const [[runtime]] = await connection.query(
-    "SELECT VERSION() AS version,DATABASE() AS databaseName,@@SESSION.sql_mode AS sqlMode,@@SESSION.time_zone AS timeZone,@@SESSION.transaction_isolation AS transactionIsolation,@@SESSION.foreign_key_checks AS foreignKeyChecks,@@SESSION.default_storage_engine AS defaultStorageEngine,@@lower_case_table_names AS lowerCaseTableNames,@@SESSION.explicit_defaults_for_timestamp AS explicitTimestampDefaults,@@SESSION.auto_increment_increment AS autoIncrementIncrement,@@SESSION.auto_increment_offset AS autoIncrementOffset,@@SESSION.information_schema_stats_expiry AS informationSchemaStatsExpiry"
+    "SELECT VERSION() AS version,DATABASE() AS databaseName,@@SESSION.sql_mode AS sqlMode,@@SESSION.time_zone AS timeZone,@@SESSION.transaction_isolation AS transactionIsolation,@@SESSION.foreign_key_checks AS foreignKeyChecks,@@SESSION.default_storage_engine AS defaultStorageEngine,@@lower_case_table_names AS lowerCaseTableNames,@@SESSION.explicit_defaults_for_timestamp AS explicitTimestampDefaults,@@SESSION.auto_increment_increment AS autoIncrementIncrement,@@SESSION.auto_increment_offset AS autoIncrementOffset,@@SESSION.information_schema_stats_expiry AS informationSchemaStatsExpiry,@@SESSION.sql_quote_show_create AS sqlQuoteShowCreate,@@SESSION.show_create_table_verbosity AS showCreateTableVerbosity"
   );
   const [[schema]] = await connection.query(
     "SELECT DEFAULT_CHARACTER_SET_NAME AS characterSet,DEFAULT_COLLATION_NAME AS collationName FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=DATABASE()"
@@ -51,7 +53,9 @@ export function assertProductionRuntimeValues(runtime) {
     Number(runtime.explicitTimestampDefaults) !== 1 ||
     Number(runtime.autoIncrementIncrement) !== 1 ||
     Number(runtime.autoIncrementOffset) !== 1 ||
-    Number(runtime.informationSchemaStatsExpiry) !== 0
+    Number(runtime.informationSchemaStatsExpiry) !== 0 ||
+    Number(runtime.sqlQuoteShowCreate) !== 1 ||
+    Number(runtime.showCreateTableVerbosity) !== 0
   ) {
     throw new Error("production migration session contract mismatch");
   }

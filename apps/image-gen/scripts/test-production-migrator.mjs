@@ -66,10 +66,14 @@ try {
   );
 
   const concurrentUrl = databaseUrl(databases[0]);
+  await admin.query("SET GLOBAL sql_quote_show_create=0");
+  await admin.query("SET GLOBAL show_create_table_verbosity=1");
   const results = await Promise.all([
     runProductionMigrations({ databaseUrl: concurrentUrl }),
     runProductionMigrations({ databaseUrl: concurrentUrl }),
   ]);
+  await admin.query("SET GLOBAL sql_quote_show_create=1");
+  await admin.query("SET GLOBAL show_create_table_verbosity=0");
   assert(
     results.every(result => result.appliedCount === 16),
     "concurrent apply"
@@ -801,6 +805,8 @@ function testSchemaDigestContracts() {
     autoIncrementIncrement: 1,
     autoIncrementOffset: 1,
     informationSchemaStatsExpiry: 0,
+    sqlQuoteShowCreate: 1,
+    showCreateTableVerbosity: 0,
   };
   assertProductionRuntimeValues(validRuntime);
   expectSynchronousFailure(
@@ -815,6 +821,8 @@ function testSchemaDigestContracts() {
     ["autoIncrementIncrement", 2],
     ["autoIncrementOffset", 2],
     ["informationSchemaStatsExpiry", 86400],
+    ["sqlQuoteShowCreate", 0],
+    ["showCreateTableVerbosity", 1],
   ]) {
     expectSynchronousFailure(
       () => assertProductionRuntimeValues({ ...validRuntime, [field]: value }),
