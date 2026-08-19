@@ -67,8 +67,8 @@ importers:
         specifier: ^5.11.1
         version: 5.11.1
       jose:
-        specifier: 6.2.7
-        version: 6.2.7
+        specifier: 6.2.9
+        version: 6.2.9
       lucide-react:
         specifier: ^1.30.0
         version: 1.30.0(react@19.2.8)
@@ -2432,8 +2432,8 @@ packages:
     resolution: {integrity: sha512-ekilCSN1jwRvIbgeg/57YFh8qQDNbwDb9xT/qu2DAHbFFZUicIl4ygVaAvzveMhMVr3LnpSKTNnwt8PoOfmKhQ==}
     hasBin: true
 
-  jose@6.2.7:
-    resolution: {integrity: sha512-hq1OB1bALKfydZNoViyg6hPVGV4i93ny9Op+n4zP5RSf7SCZEXa/TsG2O3IEr7+WlHRTPnpqDmHfMH6qXAD60w==}
+  jose@6.2.9:
+    resolution: {integrity: sha512-XrchZOFZUl/T3vTwRe8XK+cJrGtMF4th1ARnDfwbBXFKThGhlsxEE4Zu03AD/bjJSt/9jT/mxrOCkJWOg77aPA==}
 
   json-buffer@3.0.1:
     resolution: {integrity: sha512-4bV5BfR2mqfQTJm+V5tPPdf+ZpuhiIvTuAB5g8kcrXOZpTT/QwwVRWBywX1ozr6lEuPdbHxwaJlm9G6mI2sfSQ==}
@@ -5332,7 +5332,7 @@ snapshots:
 
   jiti@2.6.1: {}
 
-  jose@6.2.7: {}
+  jose@6.2.9: {}
 
   json-buffer@3.0.1: {}
 

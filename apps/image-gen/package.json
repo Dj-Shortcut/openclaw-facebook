@@ -52,7 +52,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "8.6.2",
     "ioredis": "^5.11.1",
-    "jose": "6.2.7",
+    "jose": "6.2.9",
     "lucide-react": "^1.30.0",
     "mysql2": "^3.23.2",
     "nanoid": "^5.1.16",
