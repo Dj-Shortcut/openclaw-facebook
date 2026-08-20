@@ -182,25 +182,42 @@ async function fetchReferenceImage(
 
 function classifyResponse(status: number, body: string): VideoProviderFailure {
   const normalized = body.toLowerCase();
+  const providerErrorCode = readProviderErrorCode(body);
+  const metadata = {
+    providerStatus: status,
+    ...(providerErrorCode ? { providerErrorCode } : {}),
+  };
   if (status === 408) {
-    return { kind: "failure", provider: "openai", errorClass: "timeout", retryable: true };
+    return { kind: "failure", provider: "openai", errorClass: "timeout", retryable: true, ...metadata };
   }
   if (status === 429) {
     return normalized.includes("quota") || normalized.includes("budget")
-      ? { kind: "failure", provider: "openai", errorClass: "budget", retryable: false }
-      : { kind: "failure", provider: "openai", errorClass: "rate_limited", retryable: true };
+      ? { kind: "failure", provider: "openai", errorClass: "budget", retryable: false, ...metadata }
+      : { kind: "failure", provider: "openai", errorClass: "rate_limited", retryable: true, ...metadata };
   }
   if (status === 400 || status === 403) {
     return normalized.includes("policy") || normalized.includes("safety")
-      ? { kind: "failure", provider: "openai", errorClass: "policy", retryable: false }
-      : { kind: "failure", provider: "openai", errorClass: "provider", retryable: false };
+      ? { kind: "failure", provider: "openai", errorClass: "policy", retryable: false, ...metadata }
+      : { kind: "failure", provider: "openai", errorClass: "provider", retryable: false, ...metadata };
   }
   return {
     kind: "failure",
     provider: "openai",
     errorClass: status >= 500 ? "provider" : "unknown",
     retryable: status >= 500,
+    ...metadata,
   };
+}
+
+function readProviderErrorCode(body: string): string | undefined {
+  try {
+    const code = JSON.parse(body)?.error?.code;
+    return typeof code === "string" && /^[A-Za-z0-9_.-]{1,80}$/.test(code)
+      ? code
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function classifyError(error: unknown): VideoProviderFailure {

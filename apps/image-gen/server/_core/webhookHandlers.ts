@@ -4,12 +4,17 @@ import { handleEntry } from "./webhookEventRouter";
 import { createHandlerContext } from "./webhookHandlerContext";
 import { createMessengerGenerationJobRunner } from "./webhookGenerationJobs";
 import { createMessengerVideoGenerationRunner } from "./videoGenerationFlow";
+import { enqueueOrRunMessengerGenerationJob } from "./messengerGenerationQueue";
+import {
+  getMessengerRequestPageId,
+  runWithMessengerRequestContext,
+} from "./messengerRequestContext";
+import { MESSENGER_ASYNC_RESPONSE_QUEUED } from "./webhookFallback";
+import type { MessengerGenerationJob } from "./messengerGenerationJob";
+import type { MessengerSendOutcome } from "./messengerApi";
+import { t, type Lang } from "./i18n";
 import { createInternalMessengerImageRequestHandler } from "./webhookInternalImageRequest";
-import type {
-  HandlerContext,
-  HandlerDeps,
-  InternalMessengerImageRequestInput,
-} from "./webhookHandlerTypes";
+import type { HandlerContext, HandlerDeps } from "./webhookHandlerTypes";
 
 export type {
   HandlerContext,
@@ -26,6 +31,9 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
   // createInternalMessengerImageRequestHandler must not invoke them during
   // construction. generationRunner.runImageGeneration is wired into
   // createHandlerContext below, then ctx is assigned before runtime calls.
+  // Assigned after the deferred runners close over it; a const cannot model
+  // this construction order without invoking the runners too early.
+  // eslint-disable-next-line prefer-const
   let ctx: HandlerContext;
   const generationRunner = createMessengerGenerationJobRunner({
     maybeSendInFlightMessage: (psid, reqId, lang) =>
@@ -49,10 +57,60 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       return ctx.sendLoggedVideo(psid, videoUrl, reqId);
     },
   });
+  const processVideoGenerationJob = async (job: MessengerGenerationJob) =>
+    await runWithMessengerRequestContext(
+      job.pageId,
+      async () =>
+        await videoGenerationRunner(
+          job.psid,
+          job.userId,
+          job.reqId,
+          job.lang,
+          job.sourceImageUrl ?? "",
+          job.promptHint ?? ""
+        )
+    );
+  const runVideoGeneration = async (
+    psid: string,
+    userId: string,
+    reqId: string,
+    lang: Lang,
+    sourceImageUrl: string,
+    promptHint: string
+  ): Promise<MessengerSendOutcome> => {
+    const result = await enqueueOrRunMessengerGenerationJob(
+      {
+        operation: "video",
+        psid,
+        userId,
+        pageId: getMessengerRequestPageId(),
+        reqId,
+        lang,
+        sourceImageUrl,
+        promptHint,
+      },
+      processVideoGenerationJob,
+      { onDeadLetter: processVideoGenerationJobDeadLetter }
+    );
+    return result.mode === "inline"
+      ? (result.outcome as MessengerSendOutcome)
+      : MESSENGER_ASYNC_RESPONSE_QUEUED;
+  };
+  const processVideoGenerationJobDeadLetter = async (
+    job: MessengerGenerationJob
+  ) =>
+    await runWithMessengerRequestContext(job.pageId, async () => {
+      await ctx.sendLoggedText(
+        job.psid,
+        t(job.lang, "videoGenerationGenericFailure"),
+        job.reqId
+      );
+      return MESSENGER_ASYNC_RESPONSE_QUEUED;
+    });
   ctx = createHandlerContext({
     defaultLang,
     runImageGeneration: generationRunner.runImageGeneration,
-    runVideoGeneration: videoGenerationRunner,
+    runVideoGeneration,
   });
   const internalRequestHandler =
     createInternalMessengerImageRequestHandler(ctx);
@@ -72,10 +130,16 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       internalRequestHandler.acceptInternalMessengerImageRequest,
     processInternalMessengerImageRequest:
       internalRequestHandler.processInternalMessengerImageRequest,
-    processMessengerGenerationJob:
-      generationRunner.processMessengerGenerationJob,
-    processMessengerGenerationJobDeadLetter:
-      generationRunner.processMessengerGenerationJobDeadLetter,
+    processMessengerGenerationJob: async (job: MessengerGenerationJob) =>
+      job.operation === "video"
+        ? await processVideoGenerationJob(job)
+        : await generationRunner.processMessengerGenerationJob(job),
+    processMessengerGenerationJobDeadLetter: async (
+      job: MessengerGenerationJob
+    ) =>
+      job.operation === "video"
+        ? await processVideoGenerationJobDeadLetter(job)
+        : await generationRunner.processMessengerGenerationJobDeadLetter(job),
   };
 }
 

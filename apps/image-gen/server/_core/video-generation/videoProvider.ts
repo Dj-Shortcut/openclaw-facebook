@@ -29,6 +29,9 @@ export type VideoProviderFailure = {
   provider: string;
   errorClass: VideoProviderErrorClass;
   retryable: boolean;
+  /** Safe provider metadata for operational diagnosis; never include prompts or media URLs. */
+  providerStatus?: number;
+  providerErrorCode?: string;
 };
 
 export type VideoProviderResult = VideoProviderSuccess | VideoProviderFailure;

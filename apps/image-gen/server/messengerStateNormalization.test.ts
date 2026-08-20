@@ -9,6 +9,22 @@ import {
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
 
 describe("messenger state normalization", () => {
+  it("preserves the server-side daily limit on video quota reservations", () => {
+    const normalized = normalizeState("video-quota-limit-user", {
+      videoGenerationQuotaReservation: {
+        token: "video-reservation-token",
+        expiresAt: 1_900_000_000_000,
+        dailyLimit: 10,
+      },
+    });
+
+    expect(normalized.videoGenerationQuotaReservation).toEqual({
+      token: "video-reservation-token",
+      expiresAt: 1_900_000_000_000,
+      dailyLimit: 10,
+    });
+  });
+
   beforeEach(() => {
     process.env.PRIVACY_PEPPER = "test-privacy-pepper";
   });

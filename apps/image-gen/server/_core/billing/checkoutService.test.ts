@@ -67,9 +67,12 @@ describe("Mollie checkout launch gate", () => {
     expect(listMethods).not.toHaveBeenCalled();
   });
 
-  it("does not allow a caller to buy the hidden recurring offer", async () => {
+  it("does not hide the recurring Premium offer from checkout", async () => {
     process.env = billingTestEnv();
-    const listMethods = vi.fn();
+    const listMethods = vi.fn().mockResolvedValue([
+      { resource: "method", id: "bancontact" },
+      { resource: "method", id: "directdebit" },
+    ]);
 
     await expect(
       startMollieCheckout(
@@ -82,8 +85,8 @@ describe("Mollie checkout launch gate", () => {
         },
         { listMethods } as unknown as MollieClient
       )
-    ).rejects.toThrow("billing plan is unavailable");
-    expect(listMethods).not.toHaveBeenCalled();
+    ).rejects.not.toThrow("billing plan is unavailable");
+    expect(listMethods).toHaveBeenCalled();
   });
 
   it("fails before database work unless both required methods are available", async () => {

@@ -191,6 +191,96 @@ describe("Fly gateway startup", () => {
     expect(result.config.channels.facebook.leaderbotBridgeEnabled).toBe(true);
   }, prepareGatewayConfigTimeoutMs);
 
+  it("binds OpenAI-backed memory search to the deployed env secret", () => {
+    configureTempGatewayEnv();
+    const result = runPrepareGatewayConfig({ OPENAI_API_KEY: "present-but-redacted" });
+    const expectedRef = {
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
+    };
+
+    expect(result.config.memory.search.provider).toBe("openai");
+    expect(result.config.memory.search.remote.apiKey).toEqual(expectedRef);
+    expect(result.config.agents.defaults.memory).toBeUndefined();
+  }, prepareGatewayConfigTimeoutMs);
+
+  it("preserves per-agent memory settings while binding OpenAI secret refs", () => {
+    const { stateDir } = configureTempGatewayEnv();
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "openclaw.json"),
+      `${JSON.stringify({
+        agents: {
+          defaults: {
+            memory: {
+              rememberAcrossConversations: false,
+              search: { provider: "local", local: { model: "existing" } },
+            },
+          },
+          entries: {
+            support: {
+              memory: {
+                rememberAcrossConversations: true,
+                search: { provider: "openai", remote: { model: "existing" } },
+              },
+            },
+          },
+        },
+      }, null, 2)}\n`,
+      "utf8",
+    );
+
+    const result = runPrepareGatewayConfig({ OPENAI_API_KEY: "present-but-redacted" });
+    const expectedRef = {
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
+    };
+
+    expect(result.config.agents.defaults.memory).toEqual({
+      rememberAcrossConversations: false,
+      search: { provider: "local", local: { model: "existing" } },
+    });
+    expect(result.config.agents.entries.support.memory).toEqual({
+      rememberAcrossConversations: true,
+      search: {
+        provider: "openai",
+        remote: { model: "existing", apiKey: expectedRef },
+      },
+    });
+  }, prepareGatewayConfigTimeoutMs);
+
+  it("trusts Facebook explicitly without trusting the optional Codex plugin", () => {
+    configureTempGatewayEnv();
+    const result = runPrepareGatewayConfig({});
+
+    expect(result.config.plugins.allow).toContain("facebook");
+    expect(result.config.plugins.allow).not.toContain("codex");
+    expect(result.config.plugins.entries.codex.enabled).toBe(false);
+  }, prepareGatewayConfigTimeoutMs);
+
+  it("keeps the co-located Messenger gateway in local mode", () => {
+    const { stateDir } = configureTempGatewayEnv();
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "openclaw.json"),
+      `${JSON.stringify({
+        gateway: {
+          mode: "remote",
+          remote: { url: "wss://example.invalid" },
+          controlUi: { enabled: true },
+        },
+      })}\n`,
+    );
+
+    const result = runPrepareGatewayConfig({});
+
+    expect(result.config.gateway.mode).toBe("local");
+    expect(result.config.gateway.remote).toBeUndefined();
+    expect(result.config.gateway.controlUi).toEqual({ enabled: true });
+  }, prepareGatewayConfigTimeoutMs);
+
   it("keeps explicit pairing-only unknown sender mode and bridge setting", () => {
     const { stateDir } = configureTempGatewayEnv();
     fs.mkdirSync(stateDir, { recursive: true });

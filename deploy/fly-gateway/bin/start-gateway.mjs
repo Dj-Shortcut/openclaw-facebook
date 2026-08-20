@@ -25,6 +25,7 @@ const defaultLeaderbotBridgeEnabled =
   process.env.OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED || "";
 const defaultAgentModel = process.env.OPENCLAW_AGENT_MODEL || "";
 const defaultAgentThinking = process.env.OPENCLAW_AGENT_THINKING_DEFAULT || "";
+const openAiApiKeyAvailable = Boolean(process.env.OPENAI_API_KEY?.trim());
 const allowOpen = process.env.OPENCLAW_FACEBOOK_ALLOW_OPEN === "1";
 const allowedUnknownSenderModes = new Set(["pairing", "leaderbot_free_tier"]);
 
@@ -82,6 +83,57 @@ function ensureAgentDefaults(config) {
   }
   if (defaultAgentThinking && config.agents.defaults.thinkingDefault === undefined) {
     config.agents.defaults.thinkingDefault = defaultAgentThinking;
+  }
+}
+
+function ensureMemorySearchSecretRef(config) {
+  if (!openAiApiKeyAvailable) {
+    return;
+  }
+
+  const secretRef = {
+    source: "env",
+    provider: "default",
+    id: "OPENAI_API_KEY",
+  };
+
+  const configureMemory = (owner, { createIfMissing = false } = {}) => {
+    if (!isObject(owner)) {
+      return;
+    }
+    if (!isObject(owner.memory)) {
+      if (!createIfMissing) {
+        return;
+      }
+      owner.memory = {};
+    }
+    if (!isObject(owner.memory.search)) {
+      if (!createIfMissing) {
+        return;
+      }
+      owner.memory.search = {};
+    }
+    if (owner.memory.search.provider === undefined) {
+      owner.memory.search.provider = "openai";
+    }
+    if (owner.memory.search.provider === "openai") {
+      if (!isObject(owner.memory.search.remote)) {
+        owner.memory.search.remote = {};
+      }
+      owner.memory.search.remote.apiKey = secretRef;
+    }
+  };
+
+  configureMemory(config, { createIfMissing: true });
+  if (isObject(config.agents)) {
+    if (isObject(config.agents.defaults)) {
+      configureMemory(config.agents.defaults);
+    }
+    if (isObject(config.agents.entries)) {
+      for (const entry of Object.values(config.agents.entries)) {
+        configureMemory(entry);
+      }
+    }
   }
 }
 
@@ -171,6 +223,15 @@ function ensureWorkspaceMemoryFile() {
 }
 
 function ensurePublicMessengerBaseline(config) {
+  if (!isObject(config.gateway)) {
+    config.gateway = {};
+  }
+  // This deployment runs the gateway and Messenger worker in the same process.
+  // A persisted remote target makes OpenClaw call back through the public proxy,
+  // which can strand work in a reconnect/draining loop.
+  config.gateway.mode = "local";
+  delete config.gateway.remote;
+
   if (!isObject(config.plugins)) {
     config.plugins = {};
   }
@@ -181,11 +242,12 @@ function ensurePublicMessengerBaseline(config) {
     config.plugins.load.paths = [];
   }
   uniquePush(config.plugins.load.paths, pluginPath);
-  uniquePush(config.plugins.load.paths, codexPluginPath);
-  if (Array.isArray(config.plugins.allow)) {
-    uniquePush(config.plugins.allow, "facebook");
-    uniquePush(config.plugins.allow, "codex");
+  config.plugins.load.paths = config.plugins.load.paths.filter((entry) => entry !== codexPluginPath);
+  if (!Array.isArray(config.plugins.allow)) {
+    config.plugins.allow = [];
   }
+  config.plugins.allow = config.plugins.allow.filter((entry) => entry !== "codex");
+  uniquePush(config.plugins.allow, "facebook");
 
   if (!isObject(config.plugins.entries)) {
     config.plugins.entries = {};
@@ -199,9 +261,7 @@ function ensurePublicMessengerBaseline(config) {
   if (!isObject(config.plugins.entries.codex)) {
     config.plugins.entries.codex = {};
   }
-  if (config.plugins.entries.codex.enabled === undefined) {
-    config.plugins.entries.codex.enabled = true;
-  }
+  config.plugins.entries.codex.enabled = false;
   ensurePublicToolDeny(config, "image_generate");
 
   if (!isObject(config.channels)) {
@@ -226,6 +286,7 @@ function ensurePublicMessengerBaseline(config) {
   }
 
   ensureAgentDefaults(config);
+  ensureMemorySearchSecretRef(config);
 
   const facebookConfig = config.channels.facebook;
   const allowFrom = Array.isArray(facebookConfig.allowFrom) ? facebookConfig.allowFrom : [];

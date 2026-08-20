@@ -55,7 +55,8 @@ RUN npm init -y && \
 COPY deploy/fly-gateway/bin ./deploy/fly-gateway/bin
 
 RUN install -d -m 0700 -o node -g node /data /data/workspace && \
-    chown -R node:node /app
+    chown -R node:node /app && \
+    chown -R root:root /app/node_modules/@dj-shortcut /app/node_modules/@openclaw
 
 USER node
 

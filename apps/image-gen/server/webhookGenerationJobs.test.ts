@@ -369,7 +369,9 @@ describe("messenger generation job safety", () => {
       lang: "nl",
     });
 
-    expect(getState("quota-provider-attempt-failure-user")?.quota.count).toBe(1);
+    expect(getState("quota-provider-attempt-failure-user")?.quota.count).toBe(
+      1
+    );
     expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
   });
 
@@ -441,7 +443,9 @@ describe("messenger generation job safety", () => {
       }
     }
 
-    expect(getState("quota-provider-retry-exhausted-user")?.quota.count).toBe(1);
+    expect(getState("quota-provider-retry-exhausted-user")?.quota.count).toBe(
+      1
+    );
     expect(sendTextMock).toHaveBeenCalledWith(
       "quota-provider-retry-exhausted-user",
       t("en", "generationBudgetReached")
