@@ -62,6 +62,8 @@ const IN_FLIGHT_NOTICE = "Even geduld, ik ben nog bezig met je afbeelding.";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
 const originalFreeDailyLimit = process.env.MESSENGER_FREE_DAILY_LIMIT;
 const originalQuotaBypassIds = process.env.MESSENGER_QUOTA_BYPASS_IDS;
+const originalPageScopedStateEnabled =
+  process.env.MESSENGER_PAGE_SCOPED_STATE_ENABLED;
 
 afterAll(() => {
   if (originalPrivacyPepper === undefined) {
@@ -79,10 +81,17 @@ afterAll(() => {
   } else {
     process.env.MESSENGER_QUOTA_BYPASS_IDS = originalQuotaBypassIds;
   }
+  if (originalPageScopedStateEnabled === undefined) {
+    delete process.env.MESSENGER_PAGE_SCOPED_STATE_ENABLED;
+  } else {
+    process.env.MESSENGER_PAGE_SCOPED_STATE_ENABLED =
+      originalPageScopedStateEnabled;
+  }
 });
 
 beforeEach(() => {
   process.env.PRIVACY_PEPPER = "webhook-generation-jobs-test-pepper";
+  process.env.MESSENGER_PAGE_SCOPED_STATE_ENABLED = "true";
   executeGenerationFlowMock.mockReset();
   reserveStartpilotImageUsageMock.mockReset();
   reserveStartpilotImageUsageMock.mockResolvedValue({ allowed: true });
@@ -369,7 +378,9 @@ describe("messenger generation job safety", () => {
       lang: "nl",
     });
 
-    expect(getState("quota-provider-attempt-failure-user")?.quota.count).toBe(1);
+    expect(getState("quota-provider-attempt-failure-user")?.quota.count).toBe(
+      1
+    );
     expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
   });
 
@@ -441,7 +452,9 @@ describe("messenger generation job safety", () => {
       }
     }
 
-    expect(getState("quota-provider-retry-exhausted-user")?.quota.count).toBe(1);
+    expect(getState("quota-provider-retry-exhausted-user")?.quota.count).toBe(
+      1
+    );
     expect(sendTextMock).toHaveBeenCalledWith(
       "quota-provider-retry-exhausted-user",
       t("en", "generationBudgetReached")

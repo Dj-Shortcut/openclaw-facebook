@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   resolveWorkspaceRuntimePolicy,
   resolveWorkspaceRuntimePolicyWithDeps,
+  resolvePremiumMediaAccessWithDeps,
   WorkspaceEntitlementConfigurationError,
   WorkspaceEntitlementLookupError,
 } from "./_core/workspaceEntitlementRuntime";
@@ -62,6 +63,20 @@ function deps(input?: {
 }
 
 describe("workspace entitlement runtime policy", () => {
+  it("derives the Premium video quota from the server-owned catalog", async () => {
+    await expect(
+      resolvePremiumMediaAccessWithDeps(
+        "page-premium",
+        deps({ planCode: "premium_monthly_v1" })
+      )
+    ).resolves.toEqual({
+      workspaceId: 42,
+      entitlementId: 7,
+      mode: "test",
+      videoGenerationsPerDay: 10,
+    });
+  });
+
   it("does not add a database dependency before entitlement enforcement is enabled", async () => {
     process.env.MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED = "false";
     process.env.DATABASE_URL = "mysql://configured-but-not-contacted";

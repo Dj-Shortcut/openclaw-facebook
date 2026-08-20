@@ -13,6 +13,7 @@ import { t, type Lang } from "./i18n";
 import { toLogUser } from "./privacy";
 import {
   commitVideoGenerationSuccess,
+  hasQuotaBypass,
   MessengerQuotaReservationCommitError,
   releaseVideoGenerationReservation,
   reserveVideoGenerationForAttempt,
@@ -37,9 +38,15 @@ import type { VideoProvider } from "./video-generation/videoProvider";
 import type { MessengerSendOutcome } from "./messengerApi";
 import { generateSpeechAudio } from "./ttsProvider";
 import { muxMp4WithMp3 } from "./mediaMux";
+import { getMessengerRequestPageId } from "./messengerRequestContext";
+import {
+  resolvePremiumMediaAccess,
+  WorkspaceEntitlementLookupError,
+} from "./workspaceEntitlementRuntime";
 
 function getVideoProviderName(provider: VideoProvider): string {
-  const configuredProvider = process.env.MESSENGER_VIDEO_PROVIDER?.trim().toLowerCase();
+  const configuredProvider =
+    process.env.MESSENGER_VIDEO_PROVIDER?.trim().toLowerCase();
   if (configuredProvider) {
     return configuredProvider;
   }
@@ -115,15 +122,6 @@ type VideoGenerationDeps = {
   ) => Promise<MessengerSendOutcome>;
 };
 
-type RunVideoGenerationInput = {
-  psid: string;
-  userId: string;
-  reqId: string;
-  lang: Lang;
-  sourceImageUrl: string;
-  promptHint: string;
-};
-
 type VideoNotificationPhase =
   | "quota_exhausted"
   | "generation_started"
@@ -136,6 +134,13 @@ type VideoFlowDeadline = {
   startedAt: number;
   timeoutMs: number;
 };
+
+class VideoFlowTimeoutError extends Error {
+  constructor() {
+    super("Messenger video flow deadline exceeded");
+    this.name = "VideoFlowTimeoutError";
+  }
+}
 
 function buildGeneratedVideoKey(reqId: string): string {
   const safeReqId = reqId.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 80);
@@ -172,6 +177,28 @@ function createVideoFlowDeadline(): VideoFlowDeadline {
 
 function hasVideoFlowTimedOut(deadline: VideoFlowDeadline): boolean {
   return Date.now() - deadline.startedAt >= deadline.timeoutMs;
+}
+
+async function runWithinVideoFlowDeadline<T>(
+  deadline: VideoFlowDeadline,
+  task: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
+  const remainingMs = deadline.timeoutMs - (Date.now() - deadline.startedAt);
+  if (remainingMs <= 0) {
+    throw new VideoFlowTimeoutError();
+  }
+  try {
+    return await task(AbortSignal.timeout(remainingMs));
+  } catch (error) {
+    if (
+      error instanceof VideoFlowTimeoutError ||
+      (error instanceof Error &&
+        (error.name === "AbortError" || error.name === "TimeoutError"))
+    ) {
+      throw new VideoFlowTimeoutError();
+    }
+    throw error;
+  }
 }
 
 async function sendVideoText(
@@ -225,20 +252,67 @@ export function createMessengerVideoGenerationRunner(
     sourceImageUrl: string,
     promptHint: string
   ): Promise<MessengerSendOutcome> {
-    let sendOutcome: MessengerSendOutcome = { sent: false, reason: "response_window_closed" };
-    const existingInFlight = await deps.maybeSendInFlightMessage(psid, reqId, lang);
+    let sendOutcome: MessengerSendOutcome = {
+      sent: false,
+      reason: "response_window_closed",
+    };
+    const existingInFlight = await deps.maybeSendInFlightMessage(
+      psid,
+      reqId,
+      lang
+    );
     if (existingInFlight.handled) {
       return existingInFlight.outcome ?? sendOutcome;
     }
 
     const didRun = await runGuardedVideoGeneration(psid, async () => {
-      let pendingQuotaReservation: VideoGenerationQuotaReservation | null = null;
+      let pendingQuotaReservation: VideoGenerationQuotaReservation | null =
+        null;
       let lastVideoLedgerEntryId: string | null = null;
       let lastVideoLedgerEntryRecordedAt: Date | null = null;
       let lastVideoLedgerEntrySucceeded = false;
       const flowDeadline = createVideoFlowDeadline();
       try {
-        pendingQuotaReservation = await reserveVideoGenerationForAttempt(psid);
+        let videoDailyLimit: number | undefined;
+        if (
+          process.env.MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED === "true" &&
+          !hasQuotaBypass(psid, userId)
+        ) {
+          let premiumAccess;
+          try {
+            premiumAccess = await resolvePremiumMediaAccess(
+              getMessengerRequestPageId()
+            );
+          } catch (error) {
+            if (error instanceof WorkspaceEntitlementLookupError) {
+              await sendVideoText(
+                deps,
+                psid,
+                t(lang, "videoGenerationUnavailable"),
+                reqId,
+                "budget_or_internal_failed"
+              );
+              return;
+            }
+            throw error;
+          }
+          if (!premiumAccess) {
+            await sendVideoText(
+              deps,
+              psid,
+              t(lang, "videoGenerationPremiumRequired"),
+              reqId,
+              "quota_exhausted"
+            );
+            return;
+          }
+          videoDailyLimit = premiumAccess.videoGenerationsPerDay;
+        }
+
+        pendingQuotaReservation = await reserveVideoGenerationForAttempt(
+          psid,
+          videoDailyLimit
+        );
         if (!pendingQuotaReservation) {
           sendOutcome = await sendVideoText(
             deps,
@@ -264,7 +338,10 @@ export function createMessengerVideoGenerationRunner(
           getVideoProviderName(provider) === "openai";
         const commitProviderAttemptQuota = async () => {
           const budgetNow = new Date();
-          await assertMessengerDailyVideoBudgetAvailable({ reqId, now: budgetNow });
+          await assertMessengerDailyVideoBudgetAvailable({
+            reqId,
+            now: budgetNow,
+          });
           try {
             await assertMessengerDailySpendBudgetAvailable({
               reqId,
@@ -286,7 +363,8 @@ export function createMessengerVideoGenerationRunner(
               now: budgetNow,
             });
             const reservationForAttempt =
-              pendingQuotaReservation ?? (await reserveVideoGenerationForAttempt(psid));
+              pendingQuotaReservation ??
+              (await reserveVideoGenerationForAttempt(psid, videoDailyLimit));
             if (!reservationForAttempt) {
               throw new MessengerQuotaReservationCommitError(
                 "Messenger video quota reservation could not be committed"
@@ -302,7 +380,9 @@ export function createMessengerVideoGenerationRunner(
                 "Messenger video quota reservation could not be committed"
               );
             }
-            if (pendingQuotaReservation?.token === reservationForAttempt.token) {
+            if (
+              pendingQuotaReservation?.token === reservationForAttempt.token
+            ) {
               pendingQuotaReservation = null;
             }
 
@@ -347,7 +427,9 @@ export function createMessengerVideoGenerationRunner(
             lastVideoLedgerEntrySucceeded = false;
             return ledgerEntryId;
           } catch (error) {
-            await releaseMessengerDailyVideoBudgetReservation({ now: budgetNow });
+            await releaseMessengerDailyVideoBudgetReservation({
+              now: budgetNow,
+            });
             throw error;
           }
         };
@@ -436,9 +518,14 @@ export function createMessengerVideoGenerationRunner(
 
         let outputVideoBytes = providerResult.videoBytes;
         if (process.env.MESSENGER_TTS_ENABLED === "true") {
-          outputVideoBytes = await muxMp4WithMp3(
-            outputVideoBytes,
-            await generateSpeechAudio(promptHint)
+          const speechAudio = await runWithinVideoFlowDeadline(
+            flowDeadline,
+            async signal => await generateSpeechAudio(promptHint, { signal })
+          );
+          outputVideoBytes = await runWithinVideoFlowDeadline(
+            flowDeadline,
+            async signal =>
+              await muxMp4WithMp3(outputVideoBytes, speechAudio, { signal })
           );
         }
 
@@ -484,7 +571,12 @@ export function createMessengerVideoGenerationRunner(
           )
         );
         await Promise.resolve(setPendingVideoGeneration(psid, null));
-        sendOutcome = await sendVideoAttachment(deps, psid, storedVideo.url, reqId);
+        sendOutcome = await sendVideoAttachment(
+          deps,
+          psid,
+          storedVideo.url,
+          reqId
+        );
         safeLog("messenger_video_generation_completed", {
           reqId,
           provider: providerResult.provider,
@@ -512,13 +604,17 @@ export function createMessengerVideoGenerationRunner(
         sendOutcome = await sendVideoText(
           deps,
           psid,
-          error instanceof MessengerDailyVideoBudgetExceededError ||
-            error instanceof MessengerSpendBudgetExceededError ||
-            error instanceof MessengerQuotaReservationCommitError
-            ? t(lang, "outOfVideoCredits")
-            : t(lang, "videoGenerationGenericFailure"),
+          error instanceof VideoFlowTimeoutError
+            ? t(lang, "videoGenerationTimeout")
+            : error instanceof MessengerDailyVideoBudgetExceededError ||
+                error instanceof MessengerSpendBudgetExceededError ||
+                error instanceof MessengerQuotaReservationCommitError
+              ? t(lang, "outOfVideoCredits")
+              : t(lang, "videoGenerationGenericFailure"),
           reqId,
-          "budget_or_internal_failed"
+          error instanceof VideoFlowTimeoutError
+            ? "flow_timeout"
+            : "budget_or_internal_failed"
         );
       } finally {
         if (pendingQuotaReservation) {

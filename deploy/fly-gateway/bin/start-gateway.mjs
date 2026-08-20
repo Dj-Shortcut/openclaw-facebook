@@ -97,14 +97,20 @@ function ensureMemorySearchSecretRef(config) {
     id: "OPENAI_API_KEY",
   };
 
-  const configureMemory = (owner) => {
+  const configureMemory = (owner, { createIfMissing = false } = {}) => {
     if (!isObject(owner)) {
       return;
     }
     if (!isObject(owner.memory)) {
+      if (!createIfMissing) {
+        return;
+      }
       owner.memory = {};
     }
     if (!isObject(owner.memory.search)) {
+      if (!createIfMissing) {
+        return;
+      }
       owner.memory.search = {};
     }
     if (owner.memory.search.provider === undefined) {
@@ -118,16 +124,14 @@ function ensureMemorySearchSecretRef(config) {
     }
   };
 
-  configureMemory(config);
+  configureMemory(config, { createIfMissing: true });
   if (isObject(config.agents)) {
     if (isObject(config.agents.defaults)) {
-      delete config.agents.defaults.memory;
+      configureMemory(config.agents.defaults);
     }
     if (isObject(config.agents.entries)) {
       for (const entry of Object.values(config.agents.entries)) {
-        if (isObject(entry)) {
-          delete entry.memory;
-        }
+        configureMemory(entry);
       }
     }
   }

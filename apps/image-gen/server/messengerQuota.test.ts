@@ -413,6 +413,29 @@ describe("messenger quota dayKey", () => {
     await expect(reserveVideoGenerationForAttempt(userId)).resolves.toBeNull();
   });
 
+  it("persists and enforces an explicit server-side Premium video limit", async () => {
+    const userId = "premium-video-quota-user";
+    process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT = "1";
+
+    for (let count = 0; count < 10; count += 1) {
+      const reservation = await reserveVideoGenerationForAttempt(userId, 10);
+      expect(reservation).toEqual({
+        token: expect.any(String),
+        dailyLimit: 10,
+      });
+      await expect(
+        commitVideoGenerationSuccess(userId, reservation!)
+      ).resolves.toBe(true);
+    }
+
+    await expect(
+      reserveVideoGenerationForAttempt(userId, 10)
+    ).resolves.toBeNull();
+    expect(
+      (await Promise.resolve(getOrCreateState(userId))).videoGenerationQuota.count
+    ).toBe(10);
+  });
+
   it("rejects a double video quota commit and tolerates release after commit", async () => {
     const userId = "double-video-commit-user";
     process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT = "2";

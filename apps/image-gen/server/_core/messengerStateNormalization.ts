@@ -266,6 +266,10 @@ function resolveVideoGenerationQuotaReservation(
     return {
       token: reservation.token,
       expiresAt: reservation.expiresAt,
+      ...(Number.isSafeInteger(reservation.dailyLimit) &&
+      Number(reservation.dailyLimit) >= 0
+        ? { dailyLimit: Number(reservation.dailyLimit) }
+        : {}),
     };
   }
 

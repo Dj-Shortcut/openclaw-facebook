@@ -256,23 +256,6 @@ function whatsAppDeleteNoticeButtons(
 export async function handleMessengerConsentGate(
   input: MessengerConsentGateInput
 ): Promise<boolean> {
-  if (
-    input.payload === GDPR_CONSENT_AGREE ||
-    (input.state.consentGiven !== true && isConsentAcceptText(input.text))
-  ) {
-    await Promise.resolve(setConsentState(input.psid, true));
-    await input.sendText(messengerConsentAcceptedText(input.lang));
-    const response = buildQuickStartResponse(input.lang);
-    await input.sendActions(response.text ?? "", response.actions ?? []);
-    return true;
-  }
-
-  if (input.payload === GDPR_CONSENT_DECLINE) {
-    await Promise.resolve(setConsentState(input.psid, false));
-    await input.sendText(consentDeclinedText(input.lang));
-    return true;
-  }
-
   if (input.payload === GDPR_DELETE_CANCEL) {
     await Promise.resolve(setPendingDeleteConfirm(input.psid, false));
     await input.sendText(deleteCancelledText(input.lang));
@@ -292,6 +275,23 @@ export async function handleMessengerConsentGate(
   if (input.state.pendingDeleteConfirm && isDeleteCancelText(input.text)) {
     await Promise.resolve(setPendingDeleteConfirm(input.psid, false));
     await input.sendText(deleteCancelledText(input.lang));
+    return true;
+  }
+
+  if (
+    input.payload === GDPR_CONSENT_AGREE ||
+    (input.state.consentGiven !== true && isConsentAcceptText(input.text))
+  ) {
+    await Promise.resolve(setConsentState(input.psid, true));
+    await input.sendText(messengerConsentAcceptedText(input.lang));
+    const response = buildQuickStartResponse(input.lang);
+    await input.sendActions(response.text ?? "", response.actions ?? []);
+    return true;
+  }
+
+  if (input.payload === GDPR_CONSENT_DECLINE) {
+    await Promise.resolve(setConsentState(input.psid, false));
+    await input.sendText(consentDeclinedText(input.lang));
     return true;
   }
 

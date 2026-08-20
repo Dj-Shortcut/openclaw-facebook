@@ -27,7 +27,7 @@ const MESSENGER_PAGE_STATE_KEY_PREFIX = "messenger-page-v2";
  */
 function getPersistedStateKey(psid: string): string {
   const pageId = getMessengerRequestPageId();
-  if (!pageId) {
+  if (!pageId || process.env.MESSENGER_PAGE_SCOPED_STATE_ENABLED !== "true") {
     return psid;
   }
 
@@ -125,14 +125,12 @@ function patchStateInRedis(
   now = Date.now()
 ): Promise<MessengerUserState> {
   return Promise.resolve(
-    updateStoredState<PartialState>(
-      getPersistedStateKey(psid),
-      current =>
-        normalizeState(psid, {
-          ...normalizeState(psid, current),
-          ...patch,
-          updatedAt: now,
-        })
+    updateStoredState<PartialState>(getPersistedStateKey(psid), current =>
+      normalizeState(psid, {
+        ...normalizeState(psid, current),
+        ...patch,
+        updatedAt: now,
+      })
     )
   ).then(state => normalizeState(psid, state));
 }

@@ -8,9 +8,6 @@ primary_region = "ams"
   NODE_ENV = "production"
   PORT = "8080"
   PORTAL_BASE_URL = "https://leaderbot.live"
-  MESSENGER_VIDEO_GENERATION_ENABLED = "true"
-  MESSENGER_VIDEO_PROVIDER = "openai"
-  MESSENGER_TTS_ENABLED = "true"
   # REDIS_URL must be provided via Fly secrets for production startup.
 
 [processes]

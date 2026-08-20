@@ -1,12 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 
-const { safeLogMock, storagePutMock } = vi.hoisted(() => ({
+const {
+  safeLogMock,
+  storagePutMock,
+  generateSpeechAudioMock,
+  muxMp4WithMp3Mock,
+  resolvePremiumMediaAccessMock,
+} = vi.hoisted(() => ({
   safeLogMock: vi.fn(),
   storagePutMock: vi.fn(async () => ({
     key: "generated/videos/test.mp4",
     url: "https://cdn.example/generated/videos/test.mp4",
   })),
+  generateSpeechAudioMock: vi.fn(async () => new Uint8Array([4, 5, 6])),
+  muxMp4WithMp3Mock: vi.fn(async (video: Uint8Array) => video),
+  resolvePremiumMediaAccessMock: vi.fn(async () => null),
 }));
 
 vi.mock("./storage", async importOriginal => {
@@ -25,10 +34,35 @@ vi.mock("./_core/messengerApi", async importOriginal => {
   };
 });
 
+vi.mock("./_core/ttsProvider", () => ({
+  generateSpeechAudio: generateSpeechAudioMock,
+}));
+
+vi.mock("./_core/mediaMux", () => ({
+  muxMp4WithMp3: muxMp4WithMp3Mock,
+}));
+
+vi.mock("./_core/workspaceEntitlementRuntime", async importOriginal => {
+  const actual =
+    await importOriginal<
+      typeof import("./_core/workspaceEntitlementRuntime")
+    >();
+  return {
+    ...actual,
+    resolvePremiumMediaAccess: resolvePremiumMediaAccessMock,
+  };
+});
+
 import { t } from "./_core/i18n";
-import { appendCostLedgerEntry, readCostLedgerPeriod } from "./_core/costLedger";
+import {
+  appendCostLedgerEntry,
+  readCostLedgerPeriod,
+} from "./_core/costLedger";
 import { getOrCreateState, resetStateStore } from "./_core/messengerState";
-import { commitVideoGenerationSuccess, reserveVideoGenerationForAttempt } from "./_core/messengerQuota";
+import {
+  commitVideoGenerationSuccess,
+  reserveVideoGenerationForAttempt,
+} from "./_core/messengerQuota";
 import { createMessengerVideoGenerationRunner } from "./_core/videoGenerationFlow";
 import { setVideoProviderForTests } from "./_core/video-generation/videoProviderRegistry";
 import { OpenAiVideoProvider } from "./_core/video-generation/openAiVideoProvider";
@@ -41,7 +75,9 @@ function requestSummaryKey(reqId: string): string {
 const FIXED_LEDGER_NOW = new Date("2026-06-21T12:00:00.000Z");
 const FIXED_LEDGER_PERIOD = "2026-06-21";
 
-function makeProvider(result: Awaited<ReturnType<VideoProvider["generateVideo"]>>): VideoProvider {
+function makeProvider(
+  result: Awaited<ReturnType<VideoProvider["generateVideo"]>>
+): VideoProvider {
   return {
     generateVideo: vi.fn(async input => {
       await input.onProviderAttempt?.();
@@ -71,7 +107,10 @@ function makeDeps() {
   return {
     maybeSendInFlightMessage: vi.fn(async () => ({ handled: false })),
     sendLoggedText: vi.fn(async () => ({ sent: true as const })),
-    sendLoggedVideo: vi.fn(async () => ({ sent: true as const, messageId: "mid-video" })),
+    sendLoggedVideo: vi.fn(async () => ({
+      sent: true as const,
+      messageId: "mid-video",
+    })),
   };
 }
 
@@ -83,6 +122,12 @@ describe("messenger video generation flow", () => {
     resetStateStore();
     storagePutMock.mockClear();
     safeLogMock.mockClear();
+    generateSpeechAudioMock.mockReset();
+    generateSpeechAudioMock.mockResolvedValue(new Uint8Array([4, 5, 6]));
+    muxMp4WithMp3Mock.mockReset();
+    muxMp4WithMp3Mock.mockImplementation(async (video: Uint8Array) => video);
+    resolvePremiumMediaAccessMock.mockReset();
+    resolvePremiumMediaAccessMock.mockResolvedValue(null);
     setVideoProviderForTests(null);
   });
 
@@ -96,6 +141,8 @@ describe("messenger video generation flow", () => {
     delete process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD;
     delete process.env.OPENAI_VIDEO_GENERATION_ESTIMATED_COST_USD;
     delete process.env.MESSENGER_VIDEO_FLOW_TIMEOUT_MS;
+    delete process.env.MESSENGER_TTS_ENABLED;
+    delete process.env.MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED;
     vi.useRealTimers();
   });
 
@@ -144,6 +191,47 @@ describe("messenger video generation flow", () => {
     );
   });
 
+  it("uses the active Premium plan's server-side daily video limit", async () => {
+    const psid = "video-premium-quota-user";
+    process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT = "1";
+    const firstReservation = await reserveVideoGenerationForAttempt(psid);
+    expect(firstReservation).not.toBeNull();
+    await commitVideoGenerationSuccess(psid, firstReservation!);
+
+    process.env.MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED = "true";
+    resolvePremiumMediaAccessMock.mockResolvedValue({
+      workspaceId: 42,
+      entitlementId: 7,
+      mode: "test",
+      videoGenerationsPerDay: 10,
+    });
+    setVideoProviderForTests(
+      makeProvider({
+        kind: "success",
+        provider: "test",
+        providerJobId: "video-job-premium-quota",
+        videoBytes: new Uint8Array([1, 2, 3]),
+        contentType: "video/mp4",
+      })
+    );
+    const deps = makeDeps();
+
+    await createMessengerVideoGenerationRunner(deps)(
+      psid,
+      "video-premium-quota-user-key",
+      "req-video-premium-quota",
+      "nl",
+      "https://img.example/source.jpg",
+      "laat hem zwaaien"
+    );
+
+    expect(resolvePremiumMediaAccessMock).toHaveBeenCalledTimes(1);
+    expect(deps.sendLoggedVideo).toHaveBeenCalledTimes(1);
+    expect(
+      (await Promise.resolve(getOrCreateState(psid))).videoGenerationQuota.count
+    ).toBe(2);
+  });
+
   it("records priced video attempts with final cost when configured", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(FIXED_LEDGER_NOW);
@@ -187,8 +275,10 @@ describe("messenger video generation flow", () => {
       }),
     ]);
     expect(JSON.stringify(ledgerEntries)).not.toContain("laat hem zwaaien");
-    expect(JSON.stringify(ledgerEntries)).not.toContain("https://img.example/source.jpg");
-    expect(JSON.stringify(ledgerEntries)).not.toContain("video-priced-user\"");
+    expect(JSON.stringify(ledgerEntries)).not.toContain(
+      "https://img.example/source.jpg"
+    );
+    expect(JSON.stringify(ledgerEntries)).not.toContain('video-priced-user"');
   });
 
   it("keeps provider success ledger status when downstream video storage fails", async () => {
@@ -354,8 +444,12 @@ describe("messenger video generation flow", () => {
       "laat hem bewegen"
     );
 
-    const state = await Promise.resolve(getOrCreateState("video-provider-retry-user"));
-    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const state = await Promise.resolve(
+      getOrCreateState("video-provider-retry-user")
+    );
+    const ledgerEntries = await readCostLedgerPeriod(
+      new Date().toISOString().slice(0, 10)
+    );
     expect(state.videoGenerationQuota.count).toBe(2);
     expect(state.videoGenerationQuotaReservation).toBeNull();
     expect(ledgerEntries).toEqual([
@@ -379,7 +473,9 @@ describe("messenger video generation flow", () => {
       }),
     ]);
     expect(JSON.stringify(ledgerEntries)).not.toContain("laat hem bewegen");
-    expect(JSON.stringify(ledgerEntries)).not.toContain("https://img.example/source.jpg");
+    expect(JSON.stringify(ledgerEntries)).not.toContain(
+      "https://img.example/source.jpg"
+    );
   });
 
   it("records OpenAI video attempts once when provider writes its own ledger entry", async () => {
@@ -510,7 +606,9 @@ describe("messenger video generation flow", () => {
     const state = await Promise.resolve(
       getOrCreateState("video-provider-retry-exhausted-user")
     );
-    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const ledgerEntries = await readCostLedgerPeriod(
+      new Date().toISOString().slice(0, 10)
+    );
     expect(state.videoGenerationQuota.count).toBe(1);
     expect(state.videoGenerationQuotaReservation).toBeNull();
     expect(deps.sendLoggedText).toHaveBeenCalledWith(
@@ -549,7 +647,9 @@ describe("messenger video generation flow", () => {
       "laat hem bewegen"
     );
 
-    const state = await Promise.resolve(getOrCreateState("video-spend-cap-user"));
+    const state = await Promise.resolve(
+      getOrCreateState("video-spend-cap-user")
+    );
     expect(state.videoGenerationQuota.count).toBe(0);
     expect(state.videoGenerationQuotaReservation).toBeNull();
     expect(deps.sendLoggedText).toHaveBeenCalledWith(
@@ -557,7 +657,9 @@ describe("messenger video generation flow", () => {
       t("nl", "outOfVideoCredits"),
       "req-video-spend-cap"
     );
-    expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
+    expect(
+      await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))
+    ).toEqual([]);
   });
 
   it("uses configured video generation estimates for spend cap checks", async () => {
@@ -603,7 +705,9 @@ describe("messenger video generation flow", () => {
       "laat hem bewegen"
     );
 
-    const state = await Promise.resolve(getOrCreateState("video-priced-spend-cap-user"));
+    const state = await Promise.resolve(
+      getOrCreateState("video-priced-spend-cap-user")
+    );
     expect(state.videoGenerationQuota.count).toBe(0);
     expect(state.videoGenerationQuotaReservation).toBeNull();
     expect(deps.sendLoggedText).toHaveBeenCalledWith(
@@ -762,5 +866,98 @@ describe("messenger video generation flow", () => {
     );
     expect(state.videoGenerationQuota.count).toBe(1);
     expect(state.videoGenerationQuotaReservation).toBeNull();
+  });
+
+  it("aborts TTS at the remaining video-flow deadline", async () => {
+    process.env.MESSENGER_TTS_ENABLED = "true";
+    process.env.MESSENGER_VIDEO_FLOW_TIMEOUT_MS = "20";
+    generateSpeechAudioMock.mockImplementationOnce(
+      async (_text: string, options?: { signal?: AbortSignal }) =>
+        await new Promise<Uint8Array>((_resolve, reject) => {
+          options?.signal?.addEventListener(
+            "abort",
+            () => reject(options.signal?.reason),
+            { once: true }
+          );
+        })
+    );
+    setVideoProviderForTests(
+      makeProvider({
+        kind: "success",
+        provider: "test",
+        providerJobId: "video-job-tts-timeout",
+        videoBytes: new Uint8Array([1, 2, 3]),
+        contentType: "video/mp4",
+      })
+    );
+    const deps = makeDeps();
+
+    await createMessengerVideoGenerationRunner(deps)(
+      "video-tts-timeout-user",
+      "video-tts-timeout-user-key",
+      "req-video-tts-timeout",
+      "nl",
+      "https://img.example/source.jpg",
+      "laat hem spreken"
+    );
+
+    expect(generateSpeechAudioMock).toHaveBeenCalledWith("laat hem spreken", {
+      signal: expect.any(AbortSignal),
+    });
+    expect(muxMp4WithMp3Mock).not.toHaveBeenCalled();
+    expect(deps.sendLoggedText).toHaveBeenCalledWith(
+      "video-tts-timeout-user",
+      t("nl", "videoGenerationTimeout"),
+      "req-video-tts-timeout"
+    );
+  });
+
+  it("aborts ffmpeg muxing at the remaining video-flow deadline", async () => {
+    process.env.MESSENGER_TTS_ENABLED = "true";
+    process.env.MESSENGER_VIDEO_FLOW_TIMEOUT_MS = "20";
+    muxMp4WithMp3Mock.mockImplementationOnce(
+      async (
+        _video: Uint8Array,
+        _audio: Uint8Array,
+        options?: { signal?: AbortSignal }
+      ) =>
+        await new Promise<Uint8Array>((_resolve, reject) => {
+          options?.signal?.addEventListener(
+            "abort",
+            () => reject(options.signal?.reason),
+            { once: true }
+          );
+        })
+    );
+    setVideoProviderForTests(
+      makeProvider({
+        kind: "success",
+        provider: "test",
+        providerJobId: "video-job-mux-timeout",
+        videoBytes: new Uint8Array([1, 2, 3]),
+        contentType: "video/mp4",
+      })
+    );
+    const deps = makeDeps();
+
+    await createMessengerVideoGenerationRunner(deps)(
+      "video-mux-timeout-user",
+      "video-mux-timeout-user-key",
+      "req-video-mux-timeout",
+      "nl",
+      "https://img.example/source.jpg",
+      "laat hem spreken"
+    );
+
+    expect(muxMp4WithMp3Mock).toHaveBeenCalledWith(
+      new Uint8Array([1, 2, 3]),
+      new Uint8Array([4, 5, 6]),
+      { signal: expect.any(AbortSignal) }
+    );
+    expect(deps.sendLoggedText).toHaveBeenCalledWith(
+      "video-mux-timeout-user",
+      t("nl", "videoGenerationTimeout"),
+      "req-video-mux-timeout"
+    );
   });
 });

@@ -31,6 +31,7 @@ export type QuotaState = {
 export type QuotaReservationState = {
   token: string;
   expiresAt: number;
+  dailyLimit?: number;
 };
 
 export type SourceImageOrigin = "external" | "stored";
@@ -635,8 +636,6 @@ export function setLastGenerationContext(
     return result.then(() => undefined);
   }
 }
-
-function pruneOldState(): void {}
 
 export function resetStateStore(): void {
   clearStateStore();

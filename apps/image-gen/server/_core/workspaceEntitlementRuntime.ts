@@ -4,14 +4,17 @@ import {
   workspaceEntitlements,
 } from "../../drizzle/schema";
 import { getDatabaseOrThrow } from "../db";
-import { STARTPILOT_PLAN_CODE } from "./billing/catalog";
+import {
+  getBillingPlan,
+  PREMIUM_MONTHLY_PLAN_CODE,
+  STARTPILOT_PLAN_CODE,
+} from "./billing/catalog";
 import { isMollieEntitlementEnforcementEnabled } from "./billing/config";
 import { parseStartpilotQuota } from "./billing/entitlementUsageStore";
 
 const STARTPILOT_IMAGE_TOTAL_LIMIT = 20;
 const STARTPILOT_IMAGE_DAILY_LIMIT = 5;
 const STARTPILOT_IMAGE_MODEL = "gpt-image-2";
-const PREMIUM_MONTHLY_PLAN_CODE = "premium_monthly_v1";
 
 export type StartpilotRuntimePolicy = Readonly<{
   kind: "startpilot";
@@ -25,8 +28,7 @@ export type StartpilotRuntimePolicy = Readonly<{
 }>;
 
 export type WorkspaceRuntimePolicy =
-  | Readonly<{ kind: "free" }>
-  | StartpilotRuntimePolicy;
+  Readonly<{ kind: "free" }> | StartpilotRuntimePolicy;
 
 type ActiveEntitlement = {
   id: number;
@@ -36,7 +38,7 @@ type ActiveEntitlement = {
   quota: unknown;
 };
 
-type WorkspaceEntitlementRuntimeDeps = {
+export type WorkspaceEntitlementRuntimeDeps = {
   findWorkspaceIdsByFacebookPage(pageId: string): Promise<number[]>;
   findActiveEntitlement(
     workspaceId: number,
@@ -215,27 +217,53 @@ export async function hasPremiumMediaAccess(
   pageId: string | undefined,
   now = new Date()
 ): Promise<boolean> {
+  const access = await resolvePremiumMediaAccess(pageId, now);
+  return access !== null;
+}
+
+export type PremiumMediaAccess = Readonly<{
+  workspaceId: number;
+  entitlementId: number;
+  mode: "test" | "live";
+  videoGenerationsPerDay: number;
+}>;
+
+/** Returns the server-owned Premium media quota for the Page's active entitlement. */
+export async function resolvePremiumMediaAccess(
+  pageId: string | undefined,
+  now = new Date()
+): Promise<PremiumMediaAccess | null> {
   if (
     !isMollieEntitlementEnforcementEnabled() ||
     !process.env.DATABASE_URL?.trim()
   ) {
-    return false;
+    return null;
   }
 
+  return await resolvePremiumMediaAccessWithDeps(
+    pageId,
+    databaseRuntimeDeps,
+    now
+  );
+}
+
+export async function resolvePremiumMediaAccessWithDeps(
+  pageId: string | undefined,
+  deps: WorkspaceEntitlementRuntimeDeps,
+  now = new Date()
+): Promise<PremiumMediaAccess | null> {
   const normalizedPageId = pageId?.trim();
-  if (!normalizedPageId) return false;
+  if (!normalizedPageId) return null;
 
   let workspaceIds: number[];
   try {
-    workspaceIds = await databaseRuntimeDeps.findWorkspaceIdsByFacebookPage(
-      normalizedPageId
-    );
+    workspaceIds = await deps.findWorkspaceIdsByFacebookPage(normalizedPageId);
   } catch {
     throw new WorkspaceEntitlementLookupError();
   }
 
   const uniqueWorkspaceIds = Array.from(new Set(workspaceIds));
-  if (uniqueWorkspaceIds.length === 0) return false;
+  if (uniqueWorkspaceIds.length === 0) return null;
   if (uniqueWorkspaceIds.length !== 1) {
     throw new WorkspaceEntitlementLookupError(
       "Facebook Page is linked to multiple workspaces"
@@ -244,7 +272,7 @@ export async function hasPremiumMediaAccess(
 
   let entitlement: ActiveEntitlement | null;
   try {
-    entitlement = await databaseRuntimeDeps.findActiveEntitlement(
+    entitlement = await deps.findActiveEntitlement(
       uniqueWorkspaceIds[0],
       runtimeBillingMode(),
       now
@@ -252,7 +280,28 @@ export async function hasPremiumMediaAccess(
   } catch {
     throw new WorkspaceEntitlementLookupError();
   }
-  return entitlement?.planCode === PREMIUM_MONTHLY_PLAN_CODE;
+  if (entitlement?.planCode !== PREMIUM_MONTHLY_PLAN_CODE) {
+    return null;
+  }
+
+  const videoGenerationsPerDay = getBillingPlan(PREMIUM_MONTHLY_PLAN_CODE)
+    ?.entitlements.videoGenerationsPerDay;
+  if (
+    typeof videoGenerationsPerDay !== "number" ||
+    !Number.isSafeInteger(videoGenerationsPerDay) ||
+    videoGenerationsPerDay <= 0
+  ) {
+    throw new WorkspaceEntitlementConfigurationError(
+      "Premium video quota is not safely configured"
+    );
+  }
+
+  return Object.freeze({
+    workspaceId: entitlement.workspaceId,
+    entitlementId: entitlement.id,
+    mode: entitlement.mode,
+    videoGenerationsPerDay,
+  });
 }
 
 export const STARTPILOT_RUNTIME_LIMITS = Object.freeze({

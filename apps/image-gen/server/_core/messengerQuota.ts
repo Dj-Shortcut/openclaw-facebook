@@ -26,6 +26,7 @@ export type ImageGenerationQuotaReservation = {
 
 export type VideoGenerationQuotaReservation = {
   token: string;
+  dailyLimit: number;
 };
 
 export type TranscriptionQuotaReservation = {
@@ -49,6 +50,16 @@ function getTranscriptionLimit(): number {
 
 function getVideoGenerationLimit(): number {
   return getVideoGenerationDailyLimit();
+}
+
+function resolveVideoGenerationLimit(limit?: number): number {
+  if (limit === undefined) {
+    return getVideoGenerationLimit();
+  }
+  if (!Number.isSafeInteger(limit) || limit < 0) {
+    throw new Error("Messenger video generation daily limit is invalid");
+  }
+  return limit;
 }
 
 function toSeconds(milliseconds: number): number {
@@ -85,7 +96,11 @@ async function reserveTranscriptionSlot(psid: string): Promise<string | null> {
   const lockKey = transcriptionQuotaLockKey(psid);
   const ttlSeconds = toSeconds(TRANSCRIPTION_QUOTA_LOCK_MS);
 
-  for (let attempt = 0; attempt < TRANSCRIPTION_QUOTA_LOCK_MAX_RETRIES; attempt += 1) {
+  for (
+    let attempt = 0;
+    attempt < TRANSCRIPTION_QUOTA_LOCK_MAX_RETRIES;
+    attempt += 1
+  ) {
     const token = randomUUID();
     if (await setEphemeralKeyIfAbsent(lockKey, token, ttlSeconds)) {
       return token;
@@ -99,7 +114,9 @@ async function reserveTranscriptionSlot(psid: string): Promise<string | null> {
   return null;
 }
 
-async function reserveImageGenerationSlot(psid: string): Promise<string | null> {
+async function reserveImageGenerationSlot(
+  psid: string
+): Promise<string | null> {
   const lockKey = imageGenerationQuotaLockKey(psid);
   const ttlSeconds = toSeconds(IMAGE_GENERATION_QUOTA_LOCK_MS);
   const token = randomUUID();
@@ -111,7 +128,9 @@ async function reserveImageGenerationSlot(psid: string): Promise<string | null> 
   return null;
 }
 
-async function reserveVideoGenerationSlot(psid: string): Promise<string | null> {
+async function reserveVideoGenerationSlot(
+  psid: string
+): Promise<string | null> {
   const lockKey = videoGenerationQuotaLockKey(psid);
   const ttlSeconds = toSeconds(VIDEO_GENERATION_QUOTA_LOCK_MS);
   const token = randomUUID();
@@ -241,7 +260,10 @@ async function syncTranscriptionQuotaState(
         return withSyncedTranscriptionQuota(current, now);
       }
 
-      return withSyncedTranscriptionQuota(withSyncedQuota(storedState, now), now);
+      return withSyncedTranscriptionQuota(
+        withSyncedQuota(storedState, now),
+        now
+      );
     })
   );
 }
@@ -309,7 +331,10 @@ export async function reserveImageGenerationForAttempt(
 
     return { token: lockToken };
   } catch (error) {
-    await deleteEphemeralKeyIfValue(imageGenerationQuotaLockKey(psid), lockToken);
+    await deleteEphemeralKeyIfValue(
+      imageGenerationQuotaLockKey(psid),
+      lockToken
+    );
     throw error;
   }
 }
@@ -379,7 +404,9 @@ export async function releaseImageGenerationReservation(
   await Promise.resolve(
     updateExistingStoredState<MessengerUserState>(psid, storedState => {
       const baseState = withSyncedQuota(storedState, now);
-      if (baseState.imageGenerationQuotaReservation?.token !== reservation.token) {
+      if (
+        baseState.imageGenerationQuotaReservation?.token !== reservation.token
+      ) {
         return baseState;
       }
 
@@ -420,7 +447,8 @@ export async function canGenerateVideo(psid: string): Promise<boolean> {
 }
 
 export async function reserveVideoGenerationForAttempt(
-  psid: string
+  psid: string,
+  dailyLimit?: number
 ): Promise<VideoGenerationQuotaReservation | null> {
   const lockToken = await reserveVideoGenerationSlot(psid);
   if (!lockToken) {
@@ -430,11 +458,12 @@ export async function reserveVideoGenerationForAttempt(
   try {
     const now = Date.now();
     const fallbackState = await Promise.resolve(getOrCreateState(psid));
-    const limit = getVideoGenerationLimit();
+    const limit = resolveVideoGenerationLimit(dailyLimit);
     let allowed = false;
     const reservationState = {
       token: lockToken,
       expiresAt: videoGenerationReservationExpiresAt(now),
+      dailyLimit: limit,
     };
 
     await Promise.resolve(
@@ -467,13 +496,19 @@ export async function reserveVideoGenerationForAttempt(
     );
 
     if (!allowed) {
-      await deleteEphemeralKeyIfValue(videoGenerationQuotaLockKey(psid), lockToken);
+      await deleteEphemeralKeyIfValue(
+        videoGenerationQuotaLockKey(psid),
+        lockToken
+      );
       return null;
     }
 
-    return { token: lockToken };
+    return { token: lockToken, dailyLimit: limit };
   } catch (error) {
-    await deleteEphemeralKeyIfValue(videoGenerationQuotaLockKey(psid), lockToken);
+    await deleteEphemeralKeyIfValue(
+      videoGenerationQuotaLockKey(psid),
+      lockToken
+    );
     throw error;
   }
 }
@@ -485,7 +520,7 @@ export async function commitVideoGenerationSuccess(
   let committed = false;
   try {
     const now = Date.now();
-    const limit = getVideoGenerationLimit();
+    const limit = resolveVideoGenerationLimit(reservation.dailyLimit);
 
     await Promise.resolve(
       updateExistingStoredState<MessengerUserState>(psid, storedState => {
@@ -496,6 +531,7 @@ export async function commitVideoGenerationSuccess(
         const storedReservation = baseState.videoGenerationQuotaReservation;
         const hasValidStoredReservation =
           storedReservation?.token === reservation.token &&
+          storedReservation.dailyLimit === reservation.dailyLimit &&
           storedReservation.expiresAt > now;
 
         if (!hasValidStoredReservation) {
@@ -549,7 +585,9 @@ export async function releaseVideoGenerationReservation(
         withSyncedQuota(storedState, now),
         now
       );
-      if (baseState.videoGenerationQuotaReservation?.token !== reservation.token) {
+      if (
+        baseState.videoGenerationQuotaReservation?.token !== reservation.token
+      ) {
         return baseState;
       }
 
@@ -618,7 +656,10 @@ export async function reserveTranscriptionForAttempt(
     );
 
     if (!allowed) {
-      await deleteEphemeralKeyIfValue(transcriptionQuotaLockKey(psid), lockToken);
+      await deleteEphemeralKeyIfValue(
+        transcriptionQuotaLockKey(psid),
+        lockToken
+      );
       return null;
     }
 

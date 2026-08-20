@@ -4,20 +4,17 @@ import { handleEntry } from "./webhookEventRouter";
 import { createHandlerContext } from "./webhookHandlerContext";
 import { createMessengerGenerationJobRunner } from "./webhookGenerationJobs";
 import { createMessengerVideoGenerationRunner } from "./videoGenerationFlow";
+import { enqueueOrRunMessengerGenerationJob } from "./messengerGenerationQueue";
 import {
-  enqueueOrRunMessengerGenerationJob,
-} from "./messengerGenerationQueue";
-import { getMessengerRequestPageId } from "./messengerRequestContext";
+  getMessengerRequestPageId,
+  runWithMessengerRequestContext,
+} from "./messengerRequestContext";
 import { MESSENGER_ASYNC_RESPONSE_QUEUED } from "./webhookFallback";
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
 import type { MessengerSendOutcome } from "./messengerApi";
-import type { Lang } from "./i18n";
+import { t, type Lang } from "./i18n";
 import { createInternalMessengerImageRequestHandler } from "./webhookInternalImageRequest";
-import type {
-  HandlerContext,
-  HandlerDeps,
-  InternalMessengerImageRequestInput,
-} from "./webhookHandlerTypes";
+import type { HandlerContext, HandlerDeps } from "./webhookHandlerTypes";
 
 export type {
   HandlerContext,
@@ -34,6 +31,9 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
   // createInternalMessengerImageRequestHandler must not invoke them during
   // construction. generationRunner.runImageGeneration is wired into
   // createHandlerContext below, then ctx is assigned before runtime calls.
+  // Assigned after the deferred runners close over it; a const cannot model
+  // this construction order without invoking the runners too early.
+  // eslint-disable-next-line prefer-const
   let ctx: HandlerContext;
   const generationRunner = createMessengerGenerationJobRunner({
     maybeSendInFlightMessage: (psid, reqId, lang) =>
@@ -57,16 +57,18 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       return ctx.sendLoggedVideo(psid, videoUrl, reqId);
     },
   });
-  const processVideoGenerationJob = async (
-    job: MessengerGenerationJob
-  ) =>
-    await videoGenerationRunner(
-      job.psid,
-      job.userId,
-      job.reqId,
-      job.lang,
-      job.sourceImageUrl ?? "",
-      job.promptHint ?? ""
+  const processVideoGenerationJob = async (job: MessengerGenerationJob) =>
+    await runWithMessengerRequestContext(
+      job.pageId,
+      async () =>
+        await videoGenerationRunner(
+          job.psid,
+          job.userId,
+          job.reqId,
+          job.lang,
+          job.sourceImageUrl ?? "",
+          job.promptHint ?? ""
+        )
     );
   const runVideoGeneration = async (
     psid: string,
@@ -96,14 +98,15 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
   };
   const processVideoGenerationJobDeadLetter = async (
     job: MessengerGenerationJob
-  ) => {
-    await ctx.sendLoggedText(
-      job.psid,
-      "Ik kan die video nu niet maken. Probeer het later opnieuw.",
-      job.reqId
-    );
-    return MESSENGER_ASYNC_RESPONSE_QUEUED;
-  };
+  ) =>
+    await runWithMessengerRequestContext(job.pageId, async () => {
+      await ctx.sendLoggedText(
+        job.psid,
+        t(job.lang, "videoGenerationGenericFailure"),
+        job.reqId
+      );
+      return MESSENGER_ASYNC_RESPONSE_QUEUED;
+    });
   ctx = createHandlerContext({
     defaultLang,
     runImageGeneration: generationRunner.runImageGeneration,
@@ -131,7 +134,9 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       job.operation === "video"
         ? await processVideoGenerationJob(job)
         : await generationRunner.processMessengerGenerationJob(job),
-    processMessengerGenerationJobDeadLetter: async (job: MessengerGenerationJob) =>
+    processMessengerGenerationJobDeadLetter: async (
+      job: MessengerGenerationJob
+    ) =>
       job.operation === "video"
         ? await processVideoGenerationJobDeadLetter(job)
         : await generationRunner.processMessengerGenerationJobDeadLetter(job),

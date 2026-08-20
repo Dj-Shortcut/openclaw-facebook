@@ -52,6 +52,7 @@ import {
   resetStateStore,
   setConsentState,
   setLastGenerated,
+  setPendingDeleteConfirm,
   setPendingStoredImage,
 } from "./_core/messengerState";
 import { writeState } from "./_core/stateStore";
@@ -94,7 +95,7 @@ describe("Messenger consent deletion flow", () => {
     }
   });
 
-  it.each(["Ok", "Ik geef toestemming"]) (
+  it.each(["Ok", "Ik geef toestemming"])(
     "accepts typed Messenger consent: %s",
     async text => {
       const psid = `messenger-consent-${text.replace(/\\W+/g, "-")}`;
@@ -121,6 +122,29 @@ describe("Messenger consent deletion flow", () => {
       );
     }
   );
+
+  it("treats typed confirmation as deletion while deletion is pending", async () => {
+    const psid = "messenger-pending-delete-typed-confirmation";
+    const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
+    await Promise.resolve(getOrCreateState(psid));
+    await Promise.resolve(setPendingDeleteConfirm(psid, true));
+    const state = await Promise.resolve(getState(psid));
+
+    await expect(
+      handleMessengerConsentGate({
+        psid,
+        lang: "nl",
+        text: "Ja",
+        state: state!,
+        sendText,
+        sendActions,
+      })
+    ).resolves.toBe(true);
+
+    expect(await Promise.resolve(getState(psid))).toBeNull();
+    expect(sendActions).not.toHaveBeenCalled();
+  });
 
   it("deletes state, retained source assets, generated assets, and completion markers after confirmation", async () => {
     const psid = "messenger-delete-command-user";

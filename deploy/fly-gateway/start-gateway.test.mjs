@@ -205,6 +205,52 @@ describe("Fly gateway startup", () => {
     expect(result.config.agents.defaults.memory).toBeUndefined();
   }, prepareGatewayConfigTimeoutMs);
 
+  it("preserves per-agent memory settings while binding OpenAI secret refs", () => {
+    const { stateDir } = configureTempGatewayEnv();
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "openclaw.json"),
+      `${JSON.stringify({
+        agents: {
+          defaults: {
+            memory: {
+              rememberAcrossConversations: false,
+              search: { provider: "local", local: { model: "existing" } },
+            },
+          },
+          entries: {
+            support: {
+              memory: {
+                rememberAcrossConversations: true,
+                search: { provider: "openai", remote: { model: "existing" } },
+              },
+            },
+          },
+        },
+      }, null, 2)}\n`,
+      "utf8",
+    );
+
+    const result = runPrepareGatewayConfig({ OPENAI_API_KEY: "present-but-redacted" });
+    const expectedRef = {
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
+    };
+
+    expect(result.config.agents.defaults.memory).toEqual({
+      rememberAcrossConversations: false,
+      search: { provider: "local", local: { model: "existing" } },
+    });
+    expect(result.config.agents.entries.support.memory).toEqual({
+      rememberAcrossConversations: true,
+      search: {
+        provider: "openai",
+        remote: { model: "existing", apiKey: expectedRef },
+      },
+    });
+  }, prepareGatewayConfigTimeoutMs);
+
   it("trusts Facebook explicitly without trusting the optional Codex plugin", () => {
     configureTempGatewayEnv();
     const result = runPrepareGatewayConfig({});
