@@ -36,6 +36,7 @@ function Router() {
         <Route path={"/data-deletion"} component={DataDeletionPage} />
         <Route path={"/handoff/:token"} component={PortalHandoff} />
         <Route path={"/handoff"} component={PortalHandoff} />
+        <Route path={"/portal"} component={Home} />
         <Route path={"/:?"} component={Home} />
         <Route path={"/404"} component={NotFound} />
         {/* Final fallback route */}
