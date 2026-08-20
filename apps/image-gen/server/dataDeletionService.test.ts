@@ -67,8 +67,6 @@ import {
 describe("data deletion service", () => {
   const originalRedisUrl = process.env.REDIS_URL;
   const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
-  const originalPageScopedStateEnabled =
-    process.env.MESSENGER_PAGE_SCOPED_STATE_ENABLED;
 
   beforeEach(() => {
     delete process.env.REDIS_URL;
@@ -92,12 +90,6 @@ describe("data deletion service", () => {
       delete process.env.PRIVACY_PEPPER;
     } else {
       process.env.PRIVACY_PEPPER = originalPrivacyPepper;
-    }
-    if (originalPageScopedStateEnabled === undefined) {
-      delete process.env.MESSENGER_PAGE_SCOPED_STATE_ENABLED;
-    } else {
-      process.env.MESSENGER_PAGE_SCOPED_STATE_ENABLED =
-        originalPageScopedStateEnabled;
     }
   });
 
@@ -259,7 +251,6 @@ describe("data deletion service", () => {
   });
 
   it("sanitizes the active Page state and deletes the true legacy shadow", async () => {
-    process.env.MESSENGER_PAGE_SCOPED_STATE_ENABLED = "true";
     const psid = "delete-page-scoped-state-user";
     const pageId = "delete-page-scoped-state-page";
     const userKey = anonymizePsid(psid);
@@ -302,7 +293,6 @@ describe("data deletion service", () => {
   });
 
   it("preserves an unowned raw channel record during Page-scoped deletion", async () => {
-    process.env.MESSENGER_PAGE_SCOPED_STATE_ENABLED = "true";
     const psid = "delete-page-state-with-ambiguous-raw-user";
     const pageId = "delete-page-state-with-ambiguous-raw-page";
     const rawState = await Promise.resolve(getOrCreateState(psid));

@@ -785,6 +785,7 @@ async function applyStartpilotPaymentStatus(
         )
       );
   }
+  await enqueuePaymentHandoff(tx, context);
   return true;
 }
 
@@ -925,6 +926,7 @@ async function applyFirstPaymentStatus(
       cancellationPrerequisite,
     },
   });
+  await enqueuePaymentHandoff(tx, context);
   return true;
 }
 
@@ -1382,6 +1384,31 @@ async function allocateInvoiceNumber(
     );
 }
 
+async function enqueuePaymentHandoff(
+  tx: Parameters<
+    Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
+  >[0],
+  context: PaymentContext
+): Promise<void> {
+  const messengerSenderUserKey = context.intent.messengerSenderUserKey?.trim();
+  const messengerPageId = context.intent.messengerPageId?.trim();
+  if (!messengerSenderUserKey || !messengerPageId) {
+    return;
+  }
+
+  await enqueueOutbox(tx, {
+    workspaceId: context.workspaceId,
+    mode: context.intent.mode,
+    eventType: "send_portal_handoff",
+    deduplicationKey: `send_portal_handoff:${context.intent.intentId}`,
+    payload: {
+      intentId: context.intent.intentId,
+      messengerSenderUserKey,
+      messengerPageId,
+    },
+  });
+}
+
 async function enqueueOutbox(
   tx: Parameters<
     Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
@@ -1393,7 +1420,8 @@ async function enqueueOutbox(
       | "ensure_subscription"
       | "cancel_subscription"
       | "payment_warning"
-      | "manual_review";
+      | "manual_review"
+      | "send_portal_handoff";
     deduplicationKey: string;
     payload: Record<string, unknown>;
   }

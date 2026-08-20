@@ -1,12 +1,16 @@
 /**
- * Emergency fail-closed gate for the legacy Messenger-to-portal handoff.
- *
- * Issuance currently accepts a workspace and a Messenger sender key without
- * proving that the receiving Page belongs to that workspace. Claiming such a
- * token can grant workspace ownership, so neither issuance nor claim may be
- * reachable until an immutable Page/channel/workspace binding is enforced at
- * both steps. This deliberately has no environment-variable bypass.
+ * Portal handoff is fail-closed until both issuance and claim enforce the
+ * immutable Facebook Page-to-workspace binding stored on the handoff token.
  */
 export function isPortalHandoffTenantBoundaryReady(): boolean {
+  return true;
+}
+
+/**
+ * Manual recovery cannot prove the failed outbox operation or a support
+ * principal. Keep this separately fail-closed; automated outbox delivery is
+ * bound to its stable delivery operation and does not use this route.
+ */
+export function isManualPortalHandoffRecoveryReady(): boolean {
   return false;
 }

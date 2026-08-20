@@ -25,9 +25,9 @@ const MESSENGER_PAGE_STATE_KEY_PREFIX = "messenger-page-v2";
  * context deliberately stays on the isolated legacy key for non-Messenger and
  * migration-only callers; Page reads never fall back to that unowned record.
  */
-function getPersistedStateKey(psid: string): string {
-  const pageId = getMessengerRequestPageId();
-  if (!pageId || process.env.MESSENGER_PAGE_SCOPED_STATE_ENABLED !== "true") {
+function getPersistedStateKey(psid: string, explicitPageId?: string | null): string {
+  const pageId = explicitPageId?.trim() || getMessengerRequestPageId();
+  if (!pageId) {
     return psid;
   }
 
@@ -78,6 +78,22 @@ export function getPersistedState(
   return getStateFromRedis(psid);
 }
 
+/** Reads Page-scoped Messenger state without relying on request AsyncLocalStorage. */
+export function getPersistedStateForPage(
+  psid: string,
+  pageId: string
+): MaybePromise<MessengerUserState | null> {
+  const key = getPersistedStateKey(psid, pageId);
+  if (!isRedisStateStoreEnabled()) {
+    const direct = readState<PartialState>(key);
+    if (isPromiseLike(direct)) throw new Error("Unexpected async state read in memory mode");
+    return direct ? normalizeState(psid, direct) : null;
+  }
+  return Promise.resolve(readState<PartialState>(key)).then(state =>
+    state ? normalizeState(psid, state) : null
+  );
+}
+
 export function getOrCreatePersistedState(
   psid: string
 ): MaybePromise<MessengerUserState> {
@@ -125,12 +141,14 @@ function patchStateInRedis(
   now = Date.now()
 ): Promise<MessengerUserState> {
   return Promise.resolve(
-    updateStoredState<PartialState>(getPersistedStateKey(psid), current =>
-      normalizeState(psid, {
-        ...normalizeState(psid, current),
-        ...patch,
-        updatedAt: now,
-      })
+    updateStoredState<PartialState>(
+      getPersistedStateKey(psid),
+      current =>
+        normalizeState(psid, {
+          ...normalizeState(psid, current),
+          ...patch,
+          updatedAt: now,
+        })
     )
   ).then(state => normalizeState(psid, state));
 }

@@ -52,7 +52,6 @@ import {
   resetStateStore,
   setConsentState,
   setLastGenerated,
-  setPendingDeleteConfirm,
   setPendingStoredImage,
 } from "./_core/messengerState";
 import { writeState } from "./_core/stateStore";
@@ -93,57 +92,6 @@ describe("Messenger consent deletion flow", () => {
     } else {
       process.env.PRIVACY_PEPPER = originalPrivacyPepper;
     }
-  });
-
-  it.each(["Ok", "Ik geef toestemming"])(
-    "accepts typed Messenger consent: %s",
-    async text => {
-      const psid = `messenger-consent-${text.replace(/\\W+/g, "-")}`;
-      const sendText = vi.fn(async () => undefined);
-      const sendActions = vi.fn(async () => undefined);
-      await Promise.resolve(getOrCreateState(psid));
-      const state = await Promise.resolve(getState(psid));
-
-      await expect(
-        handleMessengerConsentGate({
-          psid,
-          lang: "nl",
-          text,
-          state: state!,
-          sendText,
-          sendActions,
-        })
-      ).resolves.toBe(true);
-
-      expect((await Promise.resolve(getState(psid)))?.consentGiven).toBe(true);
-      expect(sendActions).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(Array)
-      );
-    }
-  );
-
-  it("treats typed confirmation as deletion while deletion is pending", async () => {
-    const psid = "messenger-pending-delete-typed-confirmation";
-    const sendText = vi.fn(async () => undefined);
-    const sendActions = vi.fn(async () => undefined);
-    await Promise.resolve(getOrCreateState(psid));
-    await Promise.resolve(setPendingDeleteConfirm(psid, true));
-    const state = await Promise.resolve(getState(psid));
-
-    await expect(
-      handleMessengerConsentGate({
-        psid,
-        lang: "nl",
-        text: "Ja",
-        state: state!,
-        sendText,
-        sendActions,
-      })
-    ).resolves.toBe(true);
-
-    expect(await Promise.resolve(getState(psid))).toBeNull();
-    expect(sendActions).not.toHaveBeenCalled();
   });
 
   it("deletes state, retained source assets, generated assets, and completion markers after confirmation", async () => {

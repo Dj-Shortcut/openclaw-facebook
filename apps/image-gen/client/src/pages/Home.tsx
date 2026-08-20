@@ -1,7 +1,9 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import {
+  clearActiveHandoffToken,
   clearActiveWorkspaceId,
   getWorkspaceIdFromLocation,
+  readActiveHandoffToken,
   readActiveWorkspaceId,
   writeActiveWorkspaceId,
 } from "@/_core/portalWorkspace";
@@ -463,6 +465,7 @@ function Home() {
   });
   const billingCheckoutMutation = trpc.portal.billing.checkout.useMutation({
     onSuccess: checkout => {
+      clearActiveHandoffToken();
       window.location.assign(checkout.checkoutUrl);
     },
   });
@@ -665,6 +668,7 @@ function Home() {
       countryCode: "BE",
       kind,
       businessCheckout: false,
+      handoffToken: readActiveHandoffToken() ?? undefined,
     });
   };
   const cancelBillingSubscription = () => {

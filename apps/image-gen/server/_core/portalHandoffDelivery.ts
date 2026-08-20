@@ -15,10 +15,12 @@ import { safeLog } from "./logger";
 export type SendPortalHandoffInput = {
   workspaceId: number;
   messengerSenderUserKey: string;
+  expectedFacebookPageId?: string | null;
   createdByUserId?: number | null;
   baseUrl?: string;
   now?: Date;
   ttlMs?: number;
+  deliveryIdempotencyKey?: string | null;
 };
 
 export type SendPortalHandoffResult =
@@ -32,6 +34,7 @@ export type SendPortalHandoffResult =
       reason:
         | "messenger_user_not_found"
         | "response_window_closed"
+        | "page_binding_unavailable"
         | "send_failed"
         | (string & {});
     };
@@ -109,7 +112,11 @@ async function revokeCreatedTokenSafely(
 export async function sendPortalHandoffLink(
   input: SendPortalHandoffInput
 ): Promise<SendPortalHandoffResult> {
-  const state = await findStateByUserKey(input.messengerSenderUserKey);
+  const expectedPageId = input.expectedFacebookPageId?.trim();
+  const state = await findStateByUserKey(
+    input.messengerSenderUserKey,
+    expectedPageId
+  );
   const logUser = toLogUser(input.messengerSenderUserKey);
 
   if (!state) {
@@ -122,7 +129,7 @@ export async function sendPortalHandoffLink(
   }
 
   const responseWindowOpen = await Promise.resolve(
-    hasOpenMessengerResponseWindow(state.psid)
+    hasOpenMessengerResponseWindow(state.psid, undefined, state.pageId)
   );
   if (!responseWindowOpen) {
     safeLog("portal_handoff_send_skipped", {
@@ -133,19 +140,56 @@ export async function sendPortalHandoffLink(
     return { ok: false, reason: "response_window_closed" };
   }
 
+  const pageId = state.pageId?.trim();
+  if (expectedPageId && pageId && expectedPageId !== pageId) {
+    safeLog("portal_handoff_send_skipped", {
+      reason: "page_binding_unavailable",
+      workspaceId: input.workspaceId,
+      user: logUser,
+    });
+    return { ok: false, reason: "page_binding_unavailable" };
+  }
+  if (!pageId) {
+    safeLog("portal_handoff_send_skipped", {
+      reason: "page_binding_unavailable",
+      workspaceId: input.workspaceId,
+      user: logUser,
+    });
+    return { ok: false, reason: "page_binding_unavailable" };
+  }
+
+  const connections = await db.listChannelConnections(input.workspaceId);
+  const facebookConnection = connections.find(
+    connection =>
+      connection.channel === "facebook_messenger" &&
+      connection.status === "connected" &&
+      connection.externalId === pageId
+  );
+  if (!facebookConnection) {
+    safeLog("portal_handoff_send_skipped", {
+      reason: "page_binding_unavailable",
+      workspaceId: input.workspaceId,
+      user: logUser,
+    });
+    return { ok: false, reason: "page_binding_unavailable" };
+  }
+
   let tokenResult: PortalHandoffTokenResult | null = null;
   try {
     tokenResult = await createPortalHandoffToken({
       workspaceId: input.workspaceId,
+      facebookPageId: pageId,
       messengerSenderUserKey: input.messengerSenderUserKey,
       createdByUserId: input.createdByUserId ?? null,
       now: input.now,
       ttlMs: input.ttlMs,
+      deliveryIdempotencyKey: input.deliveryIdempotencyKey ?? null,
     });
     const handoffUrl = buildPortalHandoffUrl(tokenResult.token, input.baseUrl);
     const outcome = await sendText(
       state.psid,
-      buildPortalHandoffMessage(handoffUrl, state)
+      buildPortalHandoffMessage(handoffUrl, state),
+      { pageId }
     );
 
     if (!outcome.sent) {

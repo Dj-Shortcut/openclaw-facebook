@@ -3,7 +3,7 @@ import type { MessengerSendOutcome } from "./messengerApi";
 import { recordActiveUserToday } from "./botRuntimeStats";
 import { classifyInboundEvent } from "./messengerInboundClassification";
 import { recordInboundUserActivity } from "./messengerInboundActivity";
-import { getOrCreateState } from "./messengerState";
+import { getOrCreateState, setMessengerPageId } from "./messengerState";
 import { normalizeLang, type Lang } from "./i18n";
 import { toUserKey } from "./privacy";
 import type { FacebookWebhookEvent } from "./webhookHelpers";
@@ -60,6 +60,10 @@ export async function createTrackedEventContext(
     ? normalizeLang(senderLocale)
     : ctx.defaultLang;
   const state = await getOrCreateState(psid);
+  if (entryId?.trim()) {
+    await Promise.resolve(setMessengerPageId(psid, entryId));
+    state.pageId = entryId.trim();
+  }
   const lang = state.preferredLang || localeLang || ctx.defaultLang;
   const classification = classifyInboundEvent(event);
   await recordInboundUserActivity(psid, event, classification);

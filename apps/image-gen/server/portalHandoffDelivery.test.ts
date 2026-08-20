@@ -7,6 +7,7 @@ import {
 const mocks = vi.hoisted(() => ({
   createPortalHandoffToken: vi.fn(),
   revokePortalHandoffToken: vi.fn(),
+  listChannelConnections: vi.fn(),
   findStateByUserKey: vi.fn(),
   hasOpenMessengerResponseWindow: vi.fn(),
   sendText: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("./_core/portalHandoff", () => ({
 
 vi.mock("./db", () => ({
   revokePortalHandoffToken: mocks.revokePortalHandoffToken,
+  listChannelConnections: mocks.listChannelConnections,
 }));
 
 vi.mock("./_core/messengerState", () => ({
@@ -39,6 +41,7 @@ const messengerSenderUserKey = "a".repeat(64);
 const messengerState = {
   psid: "page-scoped-user-id",
   userKey: messengerSenderUserKey,
+  pageId: "facebook-page-42",
   stage: "IDLE",
   state: "IDLE",
   preferredLang: "nl",
@@ -56,6 +59,13 @@ describe("portal handoff delivery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.findStateByUserKey.mockResolvedValue(messengerState);
+    mocks.listChannelConnections.mockResolvedValue([
+      {
+        channel: "facebook_messenger",
+        status: "connected",
+        externalId: "facebook-page-42",
+      },
+    ]);
     mocks.hasOpenMessengerResponseWindow.mockResolvedValue(true);
     mocks.createPortalHandoffToken.mockResolvedValue({
       token: "opaque-token",
@@ -88,20 +98,28 @@ describe("portal handoff delivery", () => {
       expiresAt: new Date("2026-07-06T11:30:00.000Z"),
     });
 
-    expect(mocks.findStateByUserKey).toHaveBeenCalledWith(messengerSenderUserKey);
+    expect(mocks.findStateByUserKey).toHaveBeenCalledWith(
+      messengerSenderUserKey,
+      undefined
+    );
     expect(mocks.hasOpenMessengerResponseWindow).toHaveBeenCalledWith(
-      "page-scoped-user-id"
+      "page-scoped-user-id",
+      undefined,
+      "facebook-page-42"
     );
     expect(mocks.createPortalHandoffToken).toHaveBeenCalledWith({
       workspaceId: 42,
+      facebookPageId: "facebook-page-42",
       messengerSenderUserKey,
       createdByUserId: 7,
       now: new Date("2026-07-06T10:30:00.000Z"),
       ttlMs: 3_600_000,
+      deliveryIdempotencyKey: null,
     });
     expect(mocks.sendText).toHaveBeenCalledWith(
       "page-scoped-user-id",
-      expect.stringContaining("https://leaderbot.live/handoff/opaque-token")
+      expect.stringContaining("https://leaderbot.live/handoff/opaque-token"),
+      { pageId: "facebook-page-42" }
     );
     expect(mocks.revokePortalHandoffToken).not.toHaveBeenCalled();
     expect(JSON.stringify(mocks.safeLog.mock.calls)).not.toContain("opaque-token");
@@ -140,6 +158,62 @@ describe("portal handoff delivery", () => {
 
     expect(mocks.createPortalHandoffToken).not.toHaveBeenCalled();
     expect(mocks.sendText).not.toHaveBeenCalled();
+  });
+
+  it("refuses delivery when the paid handoff Page does not match inbound Messenger state", async () => {
+    await expect(
+      sendPortalHandoffLink({
+        workspaceId: 42,
+        messengerSenderUserKey,
+        expectedFacebookPageId: "facebook-page-other-tenant",
+      })
+    ).resolves.toEqual({ ok: false, reason: "page_binding_unavailable" });
+
+    expect(mocks.createPortalHandoffToken).not.toHaveBeenCalled();
+    expect(mocks.sendText).not.toHaveBeenCalled();
+  });
+
+  it("refuses delivery when the inbound Page is no longer connected to the workspace", async () => {
+    mocks.listChannelConnections.mockResolvedValue([]);
+
+    await expect(
+      sendPortalHandoffLink({
+        workspaceId: 42,
+        messengerSenderUserKey,
+      })
+    ).resolves.toEqual({ ok: false, reason: "page_binding_unavailable" });
+
+    expect(mocks.createPortalHandoffToken).not.toHaveBeenCalled();
+    expect(mocks.sendText).not.toHaveBeenCalled();
+  });
+
+  it("can safely recover after the customer reopens the Messenger response window", async () => {
+    mocks.hasOpenMessengerResponseWindow
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    await expect(
+      sendPortalHandoffLink({
+        workspaceId: 42,
+        messengerSenderUserKey,
+      })
+    ).resolves.toEqual({ ok: false, reason: "response_window_closed" });
+
+    await expect(
+      sendPortalHandoffLink({
+        workspaceId: 42,
+        messengerSenderUserKey,
+      })
+    ).resolves.toEqual({
+      ok: true,
+      sent: true,
+      expiresAt: new Date("2026-07-06T11:30:00.000Z"),
+    });
+
+    // The closed-window attempt creates neither a token nor a Messenger send.
+    // Retrying delivery does not interact with the payment flow.
+    expect(mocks.createPortalHandoffToken).toHaveBeenCalledTimes(1);
+    expect(mocks.sendText).toHaveBeenCalledTimes(1);
   });
 
   it("revokes a created token if Messenger declines the send", async () => {

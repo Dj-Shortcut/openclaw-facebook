@@ -188,11 +188,10 @@ Still open before broad customer launch or paid activation:
   resumable offline migration manifest that maps every proven legacy Messenger
   PSID state to exactly one receiving Page, preserves consent, response-window,
   quota/reservation, face-memory, and pending-deletion fields, and writes the
-  full record to its Page+PSID key. After verifying that this Page+PSID copy
-  remains intact, purge only its proven legacy Messenger raw-PSID record and
-  retain auditable evidence that every identified Messenger record has a
-  verified Page+PSID copy and its proven legacy raw-PSID record was purged.
-  Preserve non-Messenger records; move them only through a separately verified
+  full record to its Page+PSID key. After verifying the copy, purge its proven
+  legacy Messenger raw-PSID record and retain auditable evidence that no
+  identified Messenger record remains unmigrated or undeleted. Preserve
+  non-Messenger records; move them only through a separately verified
   channel-scoping migration. Runtime `delete-my-data` must not guess that an
   unmarked raw-PSID record belongs to Messenger because the old keyspace is
   shared by non-Messenger callers. Abort on missing or ambiguous Page ownership:
@@ -381,13 +380,23 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Add launch billing and usage controls before broad customer launch. Current launch mode is manual upgrade requests with customer-visible free-plan usage; paid subscriptions are deferred.
 - [ ] Add zero-friction Messenger-to-portal handoff for approved customers before relying on the portal for onboarding
   - Messenger presence alone is not portal authentication.
-  - [x] Add a customer-facing `/handoff/:token` portal route that stores the handoff locally through Facebook Login. Workspace claiming exists but is intentionally disabled and must not be treated as usable onboarding while the fail-closed conditions below remain open.
+  - [x] Add a customer-facing `/handoff/:token` portal route that stores the handoff locally through Facebook Login and claim it only after the receiving-Page boundary below is revalidated.
   - [x] Contain the unsafe legacy handoff locally by failing closed for both issuance and claim with no environment override. Keep it disabled in production until the Page/workspace boundary below is implemented and all pre-fix tokens have expired or been revoked.
-  - [ ] Bind issuance and claim to one immutable receiving Page, `channelConnection`, and workspace; revalidate that binding atomically before granting membership and fail closed for missing, duplicate, disconnected, changed, legacy-unbound, or cross-workspace mappings.
-  - [ ] Replace caller-supplied `createdByUserId` with an authenticated, non-forgeable operator/support principal and an explicit customer-approved, auditable workflow.
+  - [x] Bind issuance and claim to one immutable receiving Page, `channelConnection`, and workspace; revalidate that binding atomically before granting membership and fail closed for missing, duplicate, disconnected, changed, legacy-unbound, or cross-workspace mappings.
+  - [ ] Attribute recovery to an authenticated, non-forgeable operator/support principal and require an explicit customer-approved workflow. The protected recovery sender no longer accepts caller-supplied `createdByUserId`; until principal attribution exists, use its redacted delivery logs and the billing outbox record for audit evidence.
   - [ ] Re-enable the operator-only sender only after the tenant boundary is proven; the existing short-lived-token and response-window mechanics may be reused behind that boundary.
   - [x] Allow `/handoff` portal pages through the guarded public gateway and redact `/handoff/:token` from HTTP logs and metrics.
-  - [ ] Wire paid Mollie webhook completion to the same handoff sender after the billing and tenant-runtime launch gates pass.
+  - [x] Wire paid Mollie webhook completion to the same handoff sender after the billing and tenant-runtime launch gates pass.
+    Delivery is deliberately separate from payment truth: a closed response
+    window, stale sender state, changed Page binding, or exhausted bounded send
+    retry records a failed `send_portal_handoff` outbox item without creating a
+    second payment. Automated outbox retries reuse the same idempotent delivery
+    identity; terminal response-window or Page-binding failures remain auditable
+    through the outbox record and redacted delivery logs, without recharge.
+    Human recovery is unavailable: the protected admin sender is deliberately
+    fail-closed until recovery is bound to the failed outbox operation and an
+    authenticated, non-forgeable support principal. Never copy a raw token into
+    support tooling.
   - Storage boundary: `portalHandoffTokens` rows are scoped to one `workspaceId`; the opaque token is never stored, only its hash is persisted, and Messenger identity may be stored only as the privacy-peppered `messengerSenderUserKey`.
   - Deletion boundary: `delete-my-data` must delete handoff rows for the erased Messenger `userKey`, including pending and consumed links.
   - Consumption boundary: only the portal handoff route may consume a pending, unexpired token and convert it into that workspace's onboarding/session flow.
@@ -503,6 +512,7 @@ Quota drift investigation note:
 
 - [x] Add workspace-scoped Mollie billing schema, classic payment webhook, one-time Startpilot checkout, dormant subscription provisioning, entitlement records, portal controls, and daily reconciliation.
 - [x] Keep live Mollie billing disabled by default and reject key/mode or insecure URL mismatches.
+- [x] Validate the effective portal handoff origin (`PORTAL_BASE_URL`, falling back to `APP_BASE_URL`) before billing readiness/checkout; production/live requires HTTPS and an origin-only URL.
 - [x] Select the bounded product offer: `€19` once, 30 days, one workspace/Page, 300 AI answers, 20 Images 2.0 generations, and at most five images per day, without renewal, top-ups, or overage.
 - [ ] Approve the draft Startpilot legal copy, accounting treatment, refund/withdrawal terms, invoice treatment, and financial-retention policy before live payment.
 - [ ] Run and record all Mollie sandbox cases in `docs/MOLLIE_TEST_RESULTS.md`.

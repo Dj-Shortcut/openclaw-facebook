@@ -78,7 +78,6 @@ describe("webhook handler context logging", () => {
 
   it("keeps flow state isolated for the same sender across Facebook Pages", async () => {
     process.env.PRIVACY_PEPPER = "handler-context-flow-scope-test-pepper";
-    process.env.MESSENGER_PAGE_SCOPED_STATE_ENABLED = "true";
     delete process.env.REDIS_URL;
     vi.resetModules();
     const { createHandlerContext } =
@@ -170,7 +169,6 @@ describe("webhook handler context logging", () => {
         expect(state?.lastPrompt).toBe("private page one prompt");
       });
     } finally {
-      delete process.env.MESSENGER_PAGE_SCOPED_STATE_ENABLED;
       resetStateStore();
     }
   });

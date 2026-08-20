@@ -42,6 +42,7 @@ export function createDefaultState(
   return {
     psid,
     userKey: getUserKey(psid),
+    pageId: null,
     stage: "IDLE",
     state: "IDLE",
     lastUserMessageAt: undefined,
@@ -328,6 +329,7 @@ function applyNormalizedStateShape(
     ...value,
     psid: resolvedPsid,
     userKey: getUserKey(value?.userKey ?? fallback.userKey),
+    pageId: value?.pageId ?? fallback.pageId,
     ...resolveConsentState(ctx),
     stage,
     state: stage,

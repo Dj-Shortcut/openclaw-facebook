@@ -25,8 +25,11 @@ MOLLIE_LIVE_BILLING_ENABLED=false
 
 The service rejects a key whose prefix conflicts with the mode. Production and
 all live configurations require HTTPS for `APP_BASE_URL` and
-`MOLLIE_PAYMENT_WEBHOOK_URL`. The webhook URL must end exactly in
-`/api/webhooks/mollie/payments` without a query or fragment.
+`MOLLIE_PAYMENT_WEBHOOK_URL`. The effective portal origin from
+`PORTAL_BASE_URL` (falling back to `APP_BASE_URL`) must also be an HTTPS origin
+in production/live mode, without a path, query, or fragment. The webhook URL
+must end exactly in `/api/webhooks/mollie/payments` without a query or
+fragment. Billing readiness rejects these misconfigurations before checkout.
 
 The in-process worker is deliberately tenant-bound. Set
 `MOLLIE_BILLING_WORKER_WORKSPACE_ID` to exactly one workspace in an isolated

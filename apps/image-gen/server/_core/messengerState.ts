@@ -11,6 +11,7 @@ import {
   deletePersistedState,
   getOrCreatePersistedState,
   getPersistedState,
+  getPersistedStateForPage,
   patchState,
 } from "./messengerStatePersistence";
 
@@ -46,6 +47,8 @@ export type PendingVideoGeneration = {
 export type MessengerUserState = {
   psid: string;
   userKey: string;
+  /** Receiving Facebook Page for this Page-scoped sender state. */
+  pageId?: string | null;
   stage: MessengerFlowState;
   state: MessengerFlowState;
   lastUserMessageAt?: number;
@@ -95,6 +98,22 @@ export function anonymizePsid(psid: string): string {
   return toUserKey(psid);
 }
 
+export function setMessengerPageId(
+  psid: string,
+  pageId: string,
+  now = Date.now()
+): MaybePromise<void> {
+  const normalizedPageId = pageId.trim();
+  if (!normalizedPageId) {
+    throw new Error("Messenger Page ID is required");
+  }
+
+  const result = patchState(psid, { pageId: normalizedPageId }, now);
+  if (isPromiseLike(result)) {
+    return result.then(() => undefined);
+  }
+}
+
 function getMessengerResponseWindowMs(): number {
   const configured = Number(process.env.MESSENGER_RESPONSE_WINDOW_MS);
   if (Number.isFinite(configured) && configured >= 0) {
@@ -111,24 +130,32 @@ export function getState(
 }
 
 export async function findStateByUserKey(
-  userKey: string
+  userKey: string,
+  expectedPageId?: string | null
 ): Promise<MessengerUserState | null> {
   let matchedPsid: string | null = null;
 
   await forEachStoredState<Partial<MessengerUserState>>((psid, state) => {
-    if (matchedPsid || state.userKey !== userKey) {
+    if (matchedPsid || state.userKey !== userKey ||
+      (expectedPageId && state.pageId !== expectedPageId)) {
       return;
     }
 
-    matchedPsid =
-      typeof state.psid === "string" && state.psid ? state.psid : psid;
+    // Storage keys are Page-scoped digests, never sender identifiers.
+    // Refuse malformed records rather than re-hashing a storage key.
+    if (typeof state.psid === "string" && state.psid.trim()) {
+      matchedPsid = state.psid;
+    }
   });
 
   if (!matchedPsid) {
     return null;
   }
 
-  return await Promise.resolve(getPersistedState(matchedPsid));
+  const pageId = expectedPageId?.trim();
+  return pageId
+    ? await Promise.resolve(getPersistedStateForPage(matchedPsid, pageId))
+    : await Promise.resolve(getPersistedState(matchedPsid));
 }
 
 export function clearUserState(psid: string): MaybePromise<void> {
@@ -137,9 +164,12 @@ export function clearUserState(psid: string): MaybePromise<void> {
 
 export function hasOpenMessengerResponseWindow(
   psid: string,
-  now = Date.now()
+  now = Date.now(),
+  pageId?: string | null
 ): MaybePromise<boolean> {
-  const state = getState(psid);
+  const state = pageId?.trim()
+    ? getPersistedStateForPage(psid, pageId)
+    : getState(psid);
 
   if (isPromiseLike(state)) {
     return state.then(current => {

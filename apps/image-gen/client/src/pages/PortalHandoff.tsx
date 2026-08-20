@@ -2,6 +2,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import {
   clearPendingHandoffToken,
   readPendingHandoffToken,
+  writeActiveHandoffToken,
   writeActiveWorkspaceId,
   writePendingHandoffToken,
 } from "@/_core/portalWorkspace";
@@ -47,6 +48,9 @@ function PortalHandoff() {
   const claimMutation = trpc.portal.handoff.claim.useMutation({
     onSuccess: data => {
       writeActiveWorkspaceId(data.workspace.id);
+      if (token) {
+        writeActiveHandoffToken(token);
+      }
       clearPendingHandoffToken();
       window.location.assign(
         `/?workspaceId=${data.workspace.id}&onboarding=handoff`

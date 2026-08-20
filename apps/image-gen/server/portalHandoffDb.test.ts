@@ -22,6 +22,7 @@ import {
   addWorkspaceMember,
   claimPortalHandoffTokenForUser,
   createPortalHandoffToken,
+  createOrGetPortalHandoffToken,
   deletePortalHandoffTokensForMessengerUserKey,
   getWorkspaceById,
   markPortalHandoffTokenConsumed,
@@ -31,10 +32,13 @@ import {
 const originalDatabaseUrl = process.env.DATABASE_URL;
 
 function selectRows(rows: unknown[]) {
-  const limit = vi.fn(async () => rows);
+  const forUpdate = vi.fn(async () => rows);
+  const limit = vi.fn(() =>
+    Object.assign(Promise.resolve(rows), { for: forUpdate })
+  );
   const where = vi.fn(() => ({ limit }));
   const from = vi.fn(() => ({ where }));
-  return { from, where, limit };
+  return { from, where, limit, forUpdate };
 }
 
 function duplicateInsert() {
@@ -45,7 +49,7 @@ function duplicateInsert() {
 
 describe("portal handoff database helpers", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     process.env.DATABASE_URL = "mysql://portal-handoff-test";
   });
 
@@ -63,6 +67,8 @@ describe("portal handoff database helpers", () => {
       workspaceId: 42,
       tokenHash: "sha256:token",
       messengerSenderUserKey: "sender-user-key",
+      facebookPageId: "facebook-page-42",
+      claimedByUserId: null,
       purpose: "workspace_onboarding" as const,
       status: "pending" as const,
       expiresAt: new Date("2026-06-30T10:05:00.000Z"),
@@ -107,6 +113,83 @@ describe("portal handoff database helpers", () => {
     dbMock.update.mockReturnValue({ set });
 
     await expect(revokePortalHandoffToken("sha256:token")).resolves.toBe(true);
+  });
+
+  it("reuses the stored pending delivery capability and its expiry", async () => {
+    const stored = {
+      id: 12, workspaceId: 42, tokenHash: "sha256:token",
+      deliveryIdempotencyKeyHash: "sha256:delivery", messengerSenderUserKey: "sender",
+      facebookPageId: "page", purpose: "workspace_onboarding" as const,
+      status: "pending" as const, expiresAt: new Date("2026-07-01T00:00:00.000Z"),
+    };
+    const rows = selectRows([stored]);
+    dbMock.select.mockReturnValue({ from: rows.from });
+    const insert = duplicateInsert();
+    dbMock.insert.mockReturnValue({ values: insert.values });
+    await expect(createOrGetPortalHandoffToken({
+      ...stored, createdByUserId: null,
+    }, new Date("2026-06-30T00:00:00.000Z"))).resolves.toEqual(stored);
+    expect(rows.forUpdate).toHaveBeenCalledWith("update");
+    expect(dbMock.update).not.toHaveBeenCalled();
+  });
+
+  function deliveryToken(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 12, workspaceId: 42, tokenHash: "sha256:token",
+      deliveryIdempotencyKeyHash: "sha256:delivery", messengerSenderUserKey: "sender",
+      facebookPageId: "page", purpose: "workspace_onboarding" as const,
+      status: "pending" as const, expiresAt: new Date("2026-07-01T00:00:00.000Z"),
+      createdByUserId: null, ...overrides,
+    };
+  }
+
+  function mockDeliveryToken(stored: Record<string, unknown>) {
+    const rows = selectRows([stored]);
+    dbMock.select.mockReturnValue({ from: rows.from });
+    const insert = duplicateInsert();
+    dbMock.insert.mockReturnValue({ values: insert.values });
+    return rows;
+  }
+
+  it("reactivates a non-expired revoked delivery with an exact conditional update", async () => {
+    const stored = deliveryToken({ status: "revoked" });
+    mockDeliveryToken(stored);
+    const where = vi.fn(async () => undefined);
+    const set = vi.fn(() => ({ where }));
+    dbMock.update.mockReturnValue({ set });
+    await expect(createOrGetPortalHandoffToken(stored, new Date("2026-06-30")))
+      .resolves.toMatchObject({ status: "pending" });
+    expect(set).toHaveBeenCalledWith({ status: "pending" });
+    expect(where).toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: "consumed", expiresAt: new Date("2026-07-01") },
+    { status: "expired", expiresAt: new Date("2026-07-01") },
+    { status: "pending", expiresAt: new Date("2026-06-30") },
+  ])("fails closed for inactive delivery %#", async overrides => {
+    const stored = deliveryToken(overrides);
+    mockDeliveryToken(stored);
+    await expect(createOrGetPortalHandoffToken(stored, new Date("2026-06-30")))
+      .rejects.toThrow("no longer active");
+    expect(dbMock.update).not.toHaveBeenCalled();
+  });
+
+  it.each(["tokenHash", "workspaceId", "facebookPageId", "messengerSenderUserKey", "purpose"])(
+    "fails closed for %s binding mismatch", async field => {
+      const stored = deliveryToken();
+      const input = { ...stored, [field]: field === "workspaceId" ? 99 : "other" };
+      mockDeliveryToken(stored);
+      await expect(createOrGetPortalHandoffToken(input, new Date("2026-06-30")))
+        .rejects.toThrow("binding mismatch");
+      expect(dbMock.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it("rejects a missing delivery hash before transaction writes", async () => {
+    await expect(createOrGetPortalHandoffToken({ ...deliveryToken(), deliveryIdempotencyKeyHash: null }))
+      .rejects.toThrow("delivery key hash is required");
+    expect(dbMock.transaction).not.toHaveBeenCalled();
   });
 
   it("reads mysql2 tuple delete results when erasing handoff tokens", async () => {
@@ -169,6 +252,8 @@ describe("portal handoff database helpers", () => {
       workspaceId: 42,
       tokenHash: "sha256:token",
       messengerSenderUserKey: "sender-user-key",
+      facebookPageId: "facebook-page-42",
+      claimedByUserId: null,
       purpose: "workspace_onboarding" as const,
       status: "pending" as const,
       expiresAt,
@@ -194,9 +279,11 @@ describe("portal handoff database helpers", () => {
     const tokenSelect = selectRows([token]);
     const workspaceSelect = selectRows([workspace]);
     const membershipSelect = selectRows([membership]);
+    const connectionSelect = selectRows([{ id: 11 }]);
     dbMock.select
       .mockReturnValueOnce({ from: tokenSelect.from })
       .mockReturnValueOnce({ from: workspaceSelect.from })
+      .mockReturnValueOnce({ from: connectionSelect.from })
       .mockReturnValueOnce({ from: membershipSelect.from });
     const updateWhere = vi.fn(async () => [{ affectedRows: 1 }, []]);
     const updateSet = vi.fn(() => ({ where: updateWhere }));
@@ -227,11 +314,15 @@ describe("portal handoff database helpers", () => {
     expect(updateSet).toHaveBeenCalledWith({
       status: "consumed",
       consumedAt: new Date("2026-06-30T10:00:00.000Z"),
+      claimedByUserId: 7,
     });
     expect(memberInsert.values).toHaveBeenCalledWith({
       workspaceId: 42,
       userId: 7,
       role: "owner",
+    });
+    expect(memberInsert.onDuplicateKeyUpdate).toHaveBeenCalledWith({
+      set: { workspaceId: 42 },
     });
     expect(auditValues).toHaveBeenCalledWith({
       workspaceId: 42,
@@ -246,13 +337,79 @@ describe("portal handoff database helpers", () => {
     });
   });
 
+  it.each(["owner", "admin", "member"] as const)(
+    "keeps an existing %s membership unchanged when a handoff is claimed",
+    async role => {
+      const token = {
+        id: 3,
+        workspaceId: 42,
+        tokenHash: "sha256:token",
+        messengerSenderUserKey: "sender-user-key",
+        facebookPageId: "facebook-page-42",
+        claimedByUserId: null,
+        purpose: "workspace_onboarding" as const,
+        status: "pending" as const,
+        expiresAt: new Date("2026-06-30T10:05:00.000Z"),
+        consumedAt: null,
+        createdByUserId: 1,
+        createdAt: new Date("2026-06-30T09:55:00.000Z"),
+        updatedAt: new Date("2026-06-30T09:55:00.000Z"),
+      };
+      const workspace = {
+        id: 42,
+        name: "Premium Workspace",
+        slug: "premium-workspace",
+        createdAt: new Date("2026-06-30T09:00:00.000Z"),
+        updatedAt: new Date("2026-06-30T09:00:00.000Z"),
+      };
+      const membership = {
+        id: 9,
+        workspaceId: 42,
+        userId: 7,
+        role,
+        createdAt: new Date("2026-06-30T10:00:00.000Z"),
+      };
+      const tokenSelect = selectRows([token]);
+      const workspaceSelect = selectRows([workspace]);
+      const connectionSelect = selectRows([{ id: 11 }]);
+      const membershipSelect = selectRows([membership]);
+      dbMock.select
+        .mockReturnValueOnce({ from: tokenSelect.from })
+        .mockReturnValueOnce({ from: workspaceSelect.from })
+        .mockReturnValueOnce({ from: connectionSelect.from })
+        .mockReturnValueOnce({ from: membershipSelect.from });
+      const updateWhere = vi.fn(async () => [{ affectedRows: 1 }, []]);
+      dbMock.update.mockReturnValue({ set: vi.fn(() => ({ where: updateWhere })) });
+      const memberInsert = duplicateInsert();
+      const privacyInsert = duplicateInsert();
+      dbMock.insert
+        .mockReturnValueOnce({ values: memberInsert.values })
+        .mockReturnValueOnce({ values: privacyInsert.values })
+        .mockReturnValueOnce({ values: vi.fn(async () => undefined) });
+
+      await expect(
+        claimPortalHandoffTokenForUser({
+          tokenHash: "sha256:token",
+          userId: 7,
+          now: new Date("2026-06-30T10:00:00.000Z"),
+        })
+      ).resolves.toMatchObject({ ok: true, membership: { role } });
+
+      expect(memberInsert.onDuplicateKeyUpdate).toHaveBeenCalledWith({
+        set: { workspaceId: 42 },
+      });
+    }
+  );
+
   it("does not consume pending handoff tokens when the workspace is missing", async () => {
     const tokenSelect = selectRows([
       {
         id: 3,
         workspaceId: 404,
         tokenHash: "sha256:token",
-        messengerSenderUserKey: null,
+        messengerSenderUserKey: "sender-user-key",
+        facebookPageId: "facebook-page-42",
+        claimedByUserId: null,
         purpose: "workspace_onboarding" as const,
         status: "pending" as const,
         expiresAt: new Date("2026-06-30T10:05:00.000Z"),
@@ -281,4 +438,55 @@ describe("portal handoff database helpers", () => {
     expect(dbMock.update).not.toHaveBeenCalled();
     expect(dbMock.insert).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { connectedPages: [] },
+    { connectedPages: [{ id: 11 }, { id: 12 }] },
+  ])(
+    "does not consume a handoff when its Page binding is missing or ambiguous",
+    async ({ connectedPages }) => {
+      const tokenSelect = selectRows([
+        {
+          id: 3,
+          workspaceId: 42,
+          tokenHash: "sha256:token",
+          messengerSenderUserKey: "sender-user-key",
+          facebookPageId: "facebook-page-42",
+          claimedByUserId: null,
+          purpose: "workspace_onboarding" as const,
+          status: "pending" as const,
+          expiresAt: new Date("2026-06-30T10:05:00.000Z"),
+          consumedAt: null,
+          createdByUserId: 1,
+          createdAt: new Date("2026-06-30T09:55:00.000Z"),
+          updatedAt: new Date("2026-06-30T09:55:00.000Z"),
+        },
+      ]);
+      const workspaceSelect = selectRows([
+        {
+          id: 42,
+          name: "Premium Workspace",
+          slug: "premium-workspace",
+          createdAt: new Date("2026-06-30T09:00:00.000Z"),
+          updatedAt: new Date("2026-06-30T09:00:00.000Z"),
+        },
+      ]);
+      const connectionSelect = selectRows(connectedPages);
+      dbMock.select
+        .mockReturnValueOnce({ from: tokenSelect.from })
+        .mockReturnValueOnce({ from: workspaceSelect.from })
+        .mockReturnValueOnce({ from: connectionSelect.from });
+
+      await expect(
+        claimPortalHandoffTokenForUser({
+          tokenHash: "sha256:token",
+          userId: 7,
+          now: new Date("2026-06-30T10:00:00.000Z"),
+        })
+      ).resolves.toEqual({ ok: false, reason: "tenant_boundary" });
+
+      expect(dbMock.update).not.toHaveBeenCalled();
+      expect(dbMock.insert).not.toHaveBeenCalled();
+    }
+  );
 });

@@ -12,7 +12,10 @@ import {
   storeFacebookPages,
   validateStoredFacebookState,
 } from "./facebookConnectStore";
-import { claimPortalHandoffToken } from "./portalHandoff";
+import {
+  claimPortalHandoffToken,
+  getPortalHandoffContext,
+} from "./portalHandoff";
 import { isPortalHandoffTenantBoundaryReady } from "./portalHandoffSecurity";
 import { isFacebookLoginMethod } from "./portalAuthPolicy";
 import { safeLog } from "./logger";
@@ -88,6 +91,7 @@ const billingCheckoutInput = workspaceInput.extend({
     "startpilot_purchase",
   ]),
   businessCheckout: z.boolean().optional(),
+  handoffToken: z.string().trim().min(20).max(512).optional(),
 });
 
 const billingReturnInput = workspaceInput.extend({
@@ -370,9 +374,39 @@ export const portalRouter = router({
       .input(billingCheckoutInput)
       .mutation(async ({ ctx, input }) => {
         await requireWorkspaceBillingAdmin(ctx, input.workspaceId);
+
+        let handoffBinding: {
+          messengerSenderUserKey: string;
+          messengerPageId: string;
+        } | null = null;
+        if (input.handoffToken) {
+          const handoff = await getPortalHandoffContext(input.handoffToken);
+          if (
+            !handoff ||
+            handoff.status !== "consumed" ||
+            handoff.workspaceId !== input.workspaceId ||
+            handoff.claimedByUserId !== ctx.user.id ||
+            !handoff.messengerSenderUserKey ||
+            !handoff.facebookPageId
+          ) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "billing handoff context is invalid",
+            });
+          }
+          handoffBinding = {
+            messengerSenderUserKey: handoff.messengerSenderUserKey,
+            messengerPageId: handoff.facebookPageId,
+          };
+        }
+
         let checkout: Awaited<ReturnType<typeof startMollieCheckout>>;
         try {
-          checkout = await startMollieCheckout(input);
+          checkout = await startMollieCheckout({
+            ...input,
+            messengerSenderUserKey: handoffBinding?.messengerSenderUserKey,
+            messengerPageId: handoffBinding?.messengerPageId,
+          });
         } catch (error) {
           throw badRequest(error, "billing checkout failed");
         }
@@ -723,6 +757,12 @@ export const portalRouter = router({
             throw new TRPCError({
               code: "NOT_FOUND",
               message: "workspace not found",
+            });
+          }
+          if (claimed.reason === "tenant_boundary") {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: "portal handoff unavailable",
             });
           }
           throw new TRPCError({

@@ -318,7 +318,11 @@ export const portalHandoffTokens = mysqlTable(
     id: int("id").autoincrement().primaryKey(),
     workspaceId: int("workspaceId").notNull(),
     tokenHash: varchar("tokenHash", { length: 96 }).notNull(),
+    /** SHA-256 of the stable outbox delivery operation; never the raw key. */
+    deliveryIdempotencyKeyHash: varchar("deliveryIdempotencyKeyHash", { length: 96 }),
     messengerSenderUserKey: varchar("messengerSenderUserKey", { length: 96 }),
+    facebookPageId: varchar("facebookPageId", { length: 160 }),
+    claimedByUserId: int("claimedByUserId"),
     purpose: mysqlEnum("purpose", ["workspace_onboarding"]).notNull(),
     status: mysqlEnum("status", ["pending", "consumed", "expired", "revoked"])
       .default("pending")
@@ -333,6 +337,9 @@ export const portalHandoffTokens = mysqlTable(
     tokenHashUnique: uniqueIndex("portalHandoffTokens_tokenHash_unique").on(
       table.tokenHash
     ),
+    deliveryIdempotencyKeyHashUnique: uniqueIndex(
+      "portalHandoffTokens_delivery_key_hash_unique"
+    ).on(table.deliveryIdempotencyKeyHash),
     workspaceStatusIdx: index("portalHandoffTokens_workspace_status_idx").on(
       table.workspaceId,
       table.status
@@ -466,6 +473,10 @@ export const billingIntents = mysqlTable(
     molliePaymentId: varchar("mollie_payment_id", { length: 64 }),
     idempotencyKey: varchar("idempotency_key", { length: 96 }).notNull(),
     checkoutScopeKey: varchar("checkout_scope_key", { length: 160 }).notNull(),
+    /** HMAC-derived Messenger identity captured only for an opted-in handoff checkout. */
+    messengerSenderUserKey: varchar("messenger_sender_user_key", { length: 96 }),
+    /** Receiving Facebook Page bound to the handoff checkout. */
+    messengerPageId: varchar("messenger_page_id", { length: 160 }),
     paidAt: timestamp("paid_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
@@ -810,6 +821,7 @@ export const billingOutbox = mysqlTable(
       "cancel_subscription",
       "payment_warning",
       "manual_review",
+      "send_portal_handoff",
     ]).notNull(),
     deduplicationKey: varchar("deduplication_key", { length: 160 }).notNull(),
     payload: json("payload").notNull(),

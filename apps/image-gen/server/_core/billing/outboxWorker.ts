@@ -11,6 +11,7 @@ import {
 } from "../../../drizzle/schema";
 import { getDatabaseOrThrow } from "../../db";
 import { safeLog } from "../logger";
+import { sendPortalHandoffLink } from "../portalHandoffDelivery";
 import {
   getMollieConfig,
   getTenantBillingWorkerWorkspaceId,
@@ -147,6 +148,10 @@ async function processBillingOutboxItem(
   }
   if (job.eventType === "cancel_subscription") {
     await cancelMollieSubscription(job, clientOverride);
+    return;
+  }
+  if (job.eventType === "send_portal_handoff") {
+    await sendPaymentHandoff(job);
     return;
   }
 
@@ -777,6 +782,52 @@ async function rearmFailedEnsureJobsWaitingForCancellation(
         )
       );
   }
+}
+
+export async function sendPaymentHandoff(job: ClaimedBillingOutboxItem): Promise<void> {
+  const target = readPortalHandoffTarget(job.payload);
+  const result = await sendPortalHandoffLink({
+    workspaceId: job.workspaceId,
+    messengerSenderUserKey: target.messengerSenderUserKey,
+    expectedFacebookPageId: target.messengerPageId,
+    createdByUserId: null,
+    deliveryIdempotencyKey: target.intentId,
+  });
+
+  if (result.ok) return;
+  if (result.reason === "send_failed") {
+    throw new RetryableOutboxError("portal_handoff_send_failed");
+  }
+  throw new PermanentOutboxError(`portal_handoff_${result.reason}`);
+}
+
+function readPortalHandoffTarget(payload: unknown): {
+  intentId: string;
+  messengerSenderUserKey: string;
+  messengerPageId: string;
+} {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new PermanentOutboxError("invalid_portal_handoff_target");
+  }
+  const record = payload as Record<string, unknown>;
+  const messengerSenderUserKey = record.messengerSenderUserKey;
+  const messengerPageId = record.messengerPageId;
+  const intentId = record.intentId;
+  if (
+    typeof intentId !== "string" || !/^[0-9a-f-]{36}$/i.test(intentId) ||
+    typeof messengerSenderUserKey !== "string" ||
+    !/^[a-f0-9]{64}$/.test(messengerSenderUserKey) ||
+    typeof messengerPageId !== "string" ||
+    messengerPageId.trim().length === 0 ||
+    messengerPageId.length > 160
+  ) {
+    throw new PermanentOutboxError("invalid_portal_handoff_target");
+  }
+  return {
+    intentId,
+    messengerSenderUserKey,
+    messengerPageId: messengerPageId.trim(),
+  };
 }
 
 function readCancellationTarget(payload: unknown): {

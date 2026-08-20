@@ -13,6 +13,29 @@ export type MollieConfig = Readonly<{
   liveBillingEnabled: boolean;
 }>;
 
+function assertPortalBaseUrl(mode: MollieMode): void {
+  const rawPortalBaseUrl =
+    process.env.PORTAL_BASE_URL?.trim() ||
+    process.env.APP_BASE_URL?.trim() ||
+    "https://leaderbot.live";
+  const portalBaseUrl = parseAbsoluteHttpUrl(
+    rawPortalBaseUrl,
+    "PORTAL_BASE_URL"
+  );
+  if (
+    portalBaseUrl.pathname !== "/" ||
+    portalBaseUrl.search ||
+    portalBaseUrl.hash
+  ) {
+    throw new Error(
+      "PORTAL_BASE_URL must be an origin without a path, query, or fragment"
+    );
+  }
+  if (process.env.NODE_ENV === "production" || mode === "live") {
+    requireHttps(portalBaseUrl, "PORTAL_BASE_URL");
+  }
+}
+
 function required(name: string): string {
   const value = process.env[name]?.trim() ?? "";
   if (!value) {
@@ -90,6 +113,7 @@ export function getMollieConfig(): MollieConfig {
     requireHttps(appBase, "APP_BASE_URL");
     requireHttps(webhook, "MOLLIE_PAYMENT_WEBHOOK_URL");
   }
+  assertPortalBaseUrl(mode);
   if (mode === "test" && liveBillingEnabled) {
     throw new Error("MOLLIE_LIVE_BILLING_ENABLED cannot be true in test mode");
   }
@@ -128,6 +152,12 @@ export function assertMollieBillingEnabled(): void {
   if (!isMollieEntitlementEnforcementEnabled()) {
     throw new Error(
       "Mollie entitlement enforcement is disabled; migrate and verify paid quota enforcement before enabling checkout"
+    );
+  }
+  const handoffSecret = process.env.PORTAL_HANDOFF_TOKEN_SECRET?.trim() ?? "";
+  if (handoffSecret.length < 32) {
+    throw new Error(
+      "PORTAL_HANDOFF_TOKEN_SECRET must be set and at least 32 characters before billing handoff delivery"
     );
   }
   const config = getMollieConfig();

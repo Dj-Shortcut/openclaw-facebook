@@ -65,6 +65,8 @@ export async function reserveCheckoutIntent(input: {
   mode: MollieMode;
   plan: BillingPlan;
   kind: CheckoutKind;
+  messengerSenderUserKey?: string | null;
+  messengerPageId?: string | null;
 }): Promise<BillingIntent> {
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
@@ -141,7 +143,11 @@ export async function reserveCheckoutIntent(input: {
     if (reusable[0]) {
       if (
         reusable[0].planCode !== input.plan.code ||
-        reusable[0].kind !== input.kind
+        reusable[0].kind !== input.kind ||
+        (input.messengerSenderUserKey ?? null) !==
+          (reusable[0].messengerSenderUserKey ?? null) ||
+        (input.messengerPageId ?? null) !==
+          (reusable[0].messengerPageId ?? null)
       ) {
         throw new Error("workspace already has a checkout in progress");
       }
@@ -164,6 +170,8 @@ export async function reserveCheckoutIntent(input: {
       status: "created",
       idempotencyKey,
       checkoutScopeKey: `${input.mode}:${input.workspaceId}:${input.kind}:${intentId}`,
+      messengerSenderUserKey: input.messengerSenderUserKey ?? null,
+      messengerPageId: input.messengerPageId ?? null,
     });
 
     const created = await tx
