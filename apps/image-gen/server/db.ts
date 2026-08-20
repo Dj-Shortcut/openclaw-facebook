@@ -938,6 +938,52 @@ export async function createPortalHandoffToken(values: InsertPortalHandoffToken)
   return created[0];
 }
 
+/**
+ * Idempotently persists a delivery token.  Callers that deterministically
+ * derive the token from an outbox operation can retry an ambiguous Messenger
+ * send without minting another claimable link.
+ */
+export async function createOrGetPortalHandoffToken(
+  values: InsertPortalHandoffToken,
+  now = new Date()
+) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("create_or_get_portal_handoff_token");
+    throw new Error("Database unavailable: portal handoff token was not persisted");
+  }
+
+  if (!values.deliveryIdempotencyKeyHash) {
+    throw new Error("portal handoff delivery key hash is required");
+  }
+  return db.transaction(async tx => {
+    await tx.insert(portalHandoffTokens).values(values).onDuplicateKeyUpdate({
+      set: { deliveryIdempotencyKeyHash: values.deliveryIdempotencyKeyHash },
+    });
+    const stored = await tx.select().from(portalHandoffTokens).where(
+      eq(portalHandoffTokens.deliveryIdempotencyKeyHash, values.deliveryIdempotencyKeyHash!)
+    ).limit(1).for("update");
+    const token = stored[0];
+    if (!token) throw new Error("Portal handoff token upsert succeeded but read-back failed");
+    if (token.tokenHash !== values.tokenHash || token.workspaceId !== values.workspaceId ||
+      token.facebookPageId !== values.facebookPageId ||
+      token.messengerSenderUserKey !== values.messengerSenderUserKey || token.purpose !== values.purpose) {
+      throw new Error("portal handoff delivery binding mismatch");
+    }
+    if (token.status === "consumed" || token.status === "expired" || token.expiresAt.getTime() <= now.getTime()) {
+      throw new Error("portal handoff delivery is no longer active");
+    }
+    if (token.status === "revoked") {
+      await tx.update(portalHandoffTokens).set({ status: "pending" }).where(and(
+        eq(portalHandoffTokens.id, token.id), eq(portalHandoffTokens.status, "revoked")
+      ));
+      return { ...token, status: "pending" as const };
+    }
+    if (token.status !== "pending") throw new Error("portal handoff delivery is no longer active");
+    return token;
+  });
+}
+
 export async function getPortalHandoffTokenByHash(tokenHash: string) {
   const db = await getDb();
   if (!db) {
@@ -1016,7 +1062,8 @@ export async function claimPortalHandoffTokenForUser(input: {
       .select()
       .from(portalHandoffTokens)
       .where(eq(portalHandoffTokens.tokenHash, input.tokenHash))
-      .limit(1);
+      .limit(1)
+      .for("update");
     const stored = tokens[0];
 
     if (!stored) {
@@ -1041,7 +1088,8 @@ export async function claimPortalHandoffTokenForUser(input: {
       })
       .from(workspaces)
       .where(eq(workspaces.id, stored.workspaceId))
-      .limit(1);
+      .limit(1)
+      .for("update");
     const workspace = workspaceRows[0];
 
     if (!workspace) {
@@ -1061,9 +1109,10 @@ export async function claimPortalHandoffTokenForUser(input: {
           eq(channelConnections.channel, "facebook_messenger"),
           eq(channelConnections.status, "connected"),
           eq(channelConnections.externalId, stored.facebookPageId)
-        )
       )
-      .limit(2);
+      )
+      .limit(2)
+      .for("update");
 
     if (connectedPages.length !== 1) {
       return { ok: false, reason: "tenant_boundary" };
@@ -1094,7 +1143,11 @@ export async function claimPortalHandoffTokenForUser(input: {
     };
     await tx.insert(workspaceMembers).values(memberValues).onDuplicateKeyUpdate({
       set: {
-        role,
+        // A handoff proves control of this one onboarding link; it must not
+        // silently change privileges that were assigned through a separate
+        // workspace-membership workflow. New claims receive the onboarding
+        // role, while an existing member keeps their current role.
+        workspaceId: stored.workspaceId,
       },
     });
 
@@ -1107,18 +1160,6 @@ export async function claimPortalHandoffTokenForUser(input: {
     await tx.insert(workspacePrivacySettings).values(privacyDefaults).onDuplicateKeyUpdate({
       set: {
         workspaceId: stored.workspaceId,
-      },
-    });
-
-    await tx.insert(auditLog).values({
-      workspaceId: stored.workspaceId,
-      userId: input.userId,
-      event: "portal_handoff.claimed",
-      metadata: {
-        purpose: stored.purpose,
-        source: "messenger_handoff",
-        hasMessengerSenderUserKey: Boolean(stored.messengerSenderUserKey),
-        membershipRole: role,
       },
     });
 
@@ -1137,6 +1178,18 @@ export async function claimPortalHandoffTokenForUser(input: {
     if (!membership) {
       throw new Error("Workspace membership insert succeeded but read-back failed");
     }
+
+    await tx.insert(auditLog).values({
+      workspaceId: stored.workspaceId,
+      userId: input.userId,
+      event: "portal_handoff.claimed",
+      metadata: {
+        purpose: stored.purpose,
+        source: "messenger_handoff",
+        hasMessengerSenderUserKey: Boolean(stored.messengerSenderUserKey),
+        membershipRole: membership.role,
+      },
+    });
 
     return {
       ok: true,

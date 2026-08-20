@@ -380,13 +380,23 @@ traffic cannot reach internal gateway admin/API surfaces.
 - [x] Add launch billing and usage controls before broad customer launch. Current launch mode is manual upgrade requests with customer-visible free-plan usage; paid subscriptions are deferred.
 - [ ] Add zero-friction Messenger-to-portal handoff for approved customers before relying on the portal for onboarding
   - Messenger presence alone is not portal authentication.
-  - [x] Add a customer-facing `/handoff/:token` portal route that stores the handoff locally through Facebook Login. Workspace claiming exists but is intentionally disabled and must not be treated as usable onboarding while the fail-closed conditions below remain open.
+  - [x] Add a customer-facing `/handoff/:token` portal route that stores the handoff locally through Facebook Login and claim it only after the receiving-Page boundary below is revalidated.
   - [x] Contain the unsafe legacy handoff locally by failing closed for both issuance and claim with no environment override. Keep it disabled in production until the Page/workspace boundary below is implemented and all pre-fix tokens have expired or been revoked.
-  - [ ] Bind issuance and claim to one immutable receiving Page, `channelConnection`, and workspace; revalidate that binding atomically before granting membership and fail closed for missing, duplicate, disconnected, changed, legacy-unbound, or cross-workspace mappings.
-  - [ ] Replace caller-supplied `createdByUserId` with an authenticated, non-forgeable operator/support principal and an explicit customer-approved, auditable workflow.
+  - [x] Bind issuance and claim to one immutable receiving Page, `channelConnection`, and workspace; revalidate that binding atomically before granting membership and fail closed for missing, duplicate, disconnected, changed, legacy-unbound, or cross-workspace mappings.
+  - [ ] Attribute recovery to an authenticated, non-forgeable operator/support principal and require an explicit customer-approved workflow. The protected recovery sender no longer accepts caller-supplied `createdByUserId`; until principal attribution exists, use its redacted delivery logs and the billing outbox record for audit evidence.
   - [ ] Re-enable the operator-only sender only after the tenant boundary is proven; the existing short-lived-token and response-window mechanics may be reused behind that boundary.
   - [x] Allow `/handoff` portal pages through the guarded public gateway and redact `/handoff/:token` from HTTP logs and metrics.
-  - [ ] Wire paid Mollie webhook completion to the same handoff sender after the billing and tenant-runtime launch gates pass.
+  - [x] Wire paid Mollie webhook completion to the same handoff sender after the billing and tenant-runtime launch gates pass.
+    Delivery is deliberately separate from payment truth: a closed response
+    window, stale sender state, changed Page binding, or exhausted bounded send
+    retry records a failed `send_portal_handoff` outbox item without creating a
+    second payment. Automated outbox retries reuse the same idempotent delivery
+    identity; terminal response-window or Page-binding failures remain auditable
+    through the outbox record and redacted delivery logs, without recharge.
+    Human recovery is unavailable: the protected admin sender is deliberately
+    fail-closed until recovery is bound to the failed outbox operation and an
+    authenticated, non-forgeable support principal. Never copy a raw token into
+    support tooling.
   - Storage boundary: `portalHandoffTokens` rows are scoped to one `workspaceId`; the opaque token is never stored, only its hash is persisted, and Messenger identity may be stored only as the privacy-peppered `messengerSenderUserKey`.
   - Deletion boundary: `delete-my-data` must delete handoff rows for the erased Messenger `userKey`, including pending and consumed links.
   - Consumption boundary: only the portal handoff route may consume a pending, unexpired token and convert it into that workspace's onboarding/session flow.

@@ -15,6 +15,7 @@ export type CreatePortalHandoffInput = {
   createdByUserId?: number | null;
   now?: Date;
   ttlMs?: number;
+  deliveryIdempotencyKey?: string | null;
 };
 
 export type PortalHandoffTokenResult = {
@@ -52,12 +53,28 @@ export function hashPortalHandoffToken(token: string): string {
   return `sha256:${crypto.createHash("sha256").update(token).digest("hex")}`;
 }
 
+function hashDeliveryIdempotencyKey(key: string): string {
+  return `sha256:${crypto.createHash("sha256").update(key).digest("hex")}`;
+}
+
 export function hashMessengerSenderForHandoff(senderId: string): string {
   return toUserKey(senderId);
 }
 
 function createOpaqueToken(): string {
   return crypto.randomBytes(TOKEN_BYTES).toString("base64url");
+}
+
+function createDeliveryToken(deliveryIdempotencyKey?: string | null): string {
+  if (!deliveryIdempotencyKey) return createOpaqueToken();
+  const secret = process.env.PORTAL_HANDOFF_TOKEN_SECRET?.trim();
+  if (!secret || secret.length < 32) {
+    throw new Error("PORTAL_HANDOFF_TOKEN_SECRET must be set for idempotent delivery");
+  }
+  return crypto
+    .createHmac("sha256", secret)
+    .update(`portal-handoff-v1:${deliveryIdempotencyKey}`)
+    .digest("base64url");
 }
 
 export async function createPortalHandoffToken(
@@ -69,20 +86,35 @@ export async function createPortalHandoffToken(
     throw new Error("portal handoff ttl must be positive");
   }
 
-  const token = createOpaqueToken();
+  const token = createDeliveryToken(input.deliveryIdempotencyKey);
   const tokenHash = hashPortalHandoffToken(token);
   const expiresAt = new Date(now.getTime() + ttlMs);
 
-  await db.createPortalHandoffToken({
+  const tokenRecord = {
     workspaceId: input.workspaceId,
     tokenHash,
+    deliveryIdempotencyKeyHash: input.deliveryIdempotencyKey
+      ? hashDeliveryIdempotencyKey(input.deliveryIdempotencyKey)
+      : null,
     messengerSenderUserKey: input.messengerSenderUserKey ?? null,
     facebookPageId: input.facebookPageId,
     purpose: input.purpose ?? "workspace_onboarding",
-    status: "pending",
+    status: "pending" as const,
     expiresAt,
     createdByUserId: input.createdByUserId ?? null,
-  });
+  };
+  const stored = input.deliveryIdempotencyKey
+    ? await db.createOrGetPortalHandoffToken(tokenRecord)
+    : await db.createPortalHandoffToken(tokenRecord);
+  if (stored.tokenHash !== tokenHash) {
+    throw new Error("portal handoff delivery token secret mismatch");
+  }
+  if (stored.status !== "pending") {
+    throw new Error("portal handoff delivery is no longer active");
+  }
+  if (stored.expiresAt.getTime() <= now.getTime()) {
+    throw new Error("portal handoff delivery has expired");
+  }
 
   if (input.createdByUserId) {
     await db.insertAuditLog({
@@ -92,7 +124,7 @@ export async function createPortalHandoffToken(
       metadata: {
         purpose: input.purpose ?? "workspace_onboarding",
         hasMessengerSenderUserKey: Boolean(input.messengerSenderUserKey),
-        expiresAt: expiresAt.toISOString(),
+        expiresAt: stored.expiresAt.toISOString(),
       },
     });
   }
@@ -100,7 +132,7 @@ export async function createPortalHandoffToken(
   return {
     token,
     tokenHash,
-    expiresAt,
+    expiresAt: stored.expiresAt,
   };
 }
 

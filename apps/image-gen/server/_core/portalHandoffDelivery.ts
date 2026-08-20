@@ -20,6 +20,7 @@ export type SendPortalHandoffInput = {
   baseUrl?: string;
   now?: Date;
   ttlMs?: number;
+  deliveryIdempotencyKey?: string | null;
 };
 
 export type SendPortalHandoffResult =
@@ -111,7 +112,11 @@ async function revokeCreatedTokenSafely(
 export async function sendPortalHandoffLink(
   input: SendPortalHandoffInput
 ): Promise<SendPortalHandoffResult> {
-  const state = await findStateByUserKey(input.messengerSenderUserKey);
+  const expectedPageId = input.expectedFacebookPageId?.trim();
+  const state = await findStateByUserKey(
+    input.messengerSenderUserKey,
+    expectedPageId
+  );
   const logUser = toLogUser(input.messengerSenderUserKey);
 
   if (!state) {
@@ -124,7 +129,7 @@ export async function sendPortalHandoffLink(
   }
 
   const responseWindowOpen = await Promise.resolve(
-    hasOpenMessengerResponseWindow(state.psid)
+    hasOpenMessengerResponseWindow(state.psid, undefined, state.pageId)
   );
   if (!responseWindowOpen) {
     safeLog("portal_handoff_send_skipped", {
@@ -136,7 +141,6 @@ export async function sendPortalHandoffLink(
   }
 
   const pageId = state.pageId?.trim();
-  const expectedPageId = input.expectedFacebookPageId?.trim();
   if (expectedPageId && pageId && expectedPageId !== pageId) {
     safeLog("portal_handoff_send_skipped", {
       reason: "page_binding_unavailable",
@@ -179,11 +183,13 @@ export async function sendPortalHandoffLink(
       createdByUserId: input.createdByUserId ?? null,
       now: input.now,
       ttlMs: input.ttlMs,
+      deliveryIdempotencyKey: input.deliveryIdempotencyKey ?? null,
     });
     const handoffUrl = buildPortalHandoffUrl(tokenResult.token, input.baseUrl);
     const outcome = await sendText(
       state.psid,
-      buildPortalHandoffMessage(handoffUrl, state)
+      buildPortalHandoffMessage(handoffUrl, state),
+      { pageId }
     );
 
     if (!outcome.sent) {

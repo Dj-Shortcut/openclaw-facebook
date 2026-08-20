@@ -5,7 +5,13 @@ import {
   sendText,
   sendVideo,
 } from "./_core/messengerApi";
-import { resetStateStore, setLastUserMessageAt } from "./_core/messengerState";
+import {
+  getOrCreateState,
+  resetStateStore,
+  setLastUserMessageAt,
+  setMessengerPageId,
+} from "./_core/messengerState";
+import { runWithMessengerRequestContext } from "./_core/messengerRequestContext";
 
 describe("messengerApi retries", () => {
   const originalFetch = global.fetch;
@@ -80,6 +86,24 @@ describe("messengerApi retries", () => {
       recipient: { id: "psid-1" },
       message: { text: "hello" },
     });
+  });
+
+  it("uses explicit Page state for an out-of-context response-window check", async () => {
+    const psid = "page-scoped-psid";
+    const now = Date.now();
+    await runWithMessengerRequestContext("page-a", async () => {
+      await getOrCreateState(psid);
+      await setMessengerPageId(psid, "page-a", now);
+      await setLastUserMessageAt(psid, now);
+    });
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response("ok"));
+    global.fetch = fetchMock;
+
+    await expect(sendText(psid, "hello", { pageId: "page-a" })).resolves.toEqual({ sent: true });
+    await expect(sendText(psid, "hello", { pageId: "page-b" })).resolves.toEqual({
+      sent: false, reason: "response_window_closed",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("throws after max retries", async () => {
