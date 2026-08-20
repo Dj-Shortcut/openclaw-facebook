@@ -51,7 +51,7 @@
     "drizzle-orm": "^0.45.2",
     "express": "^5.2.1",
     "express-rate-limit": "8.6.2",
-    "ioredis": "^5.11.1",
+    "ioredis": "^6.0.0",
     "jose": "6.2.9",
     "lucide-react": "^1.30.0",
     "mysql2": "^3.23.2",
