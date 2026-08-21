@@ -87,6 +87,40 @@ describe("Facebook Business Login Page discovery", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("redacts a Graph error when the managed Page lookup fails", async () => {
+    const warnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: {
+              message: "private permission details",
+              code: 10,
+              error_subcode: 200,
+              fbtrace_id: "private-trace",
+            },
+          }),
+          { status: 403, headers: { "Content-Type": "application/json" } }
+        )
+      )
+    );
+
+    await expect(
+      getFacebookPagesForUserAccessToken("private-user-token")
+    ).rejects.toThrow("facebook page lookup failed: 403");
+
+    const logs = warnSpy.mock.calls.flat().join(" ");
+    expect(logs).toContain('"status":403');
+    expect(logs).toContain('"errorCode":10');
+    expect(logs).toContain('"errorSubcode":200');
+    expect(logs).not.toContain("private permission details");
+    expect(logs).not.toContain("private-trace");
+    expect(logs).not.toContain("private-user-token");
+  });
+
   it("resolves a selected Business Login Page whose token is not embedded", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const fetchMock = vi
