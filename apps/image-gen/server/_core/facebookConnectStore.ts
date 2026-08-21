@@ -279,7 +279,7 @@ async function fetchFacebookPageAccess(
   const pageUrl = new URL(
     `https://graph.facebook.com/${getFacebookApiVersion()}/${encodeURIComponent(page.id)}`
   );
-  pageUrl.searchParams.set("fields", "id,name,access_token,perms,tasks");
+  pageUrl.searchParams.set("fields", "id,name,access_token,tasks");
 
   const pageResponse = await fetch(pageUrl, {
     headers: {
@@ -345,10 +345,7 @@ async function fetchAssignedFacebookPages(
   const assignedPagesUrl = new URL(
     `https://graph.facebook.com/${getFacebookApiVersion()}/me/assigned_pages`
   );
-  assignedPagesUrl.searchParams.set(
-    "fields",
-    "id,name,access_token,perms,tasks"
-  );
+  assignedPagesUrl.searchParams.set("fields", "id,name,access_token,tasks");
   const response = await fetch(assignedPagesUrl, {
     headers: {
       Accept: "application/json",
@@ -378,7 +375,7 @@ export async function getFacebookPagesForUserAccessToken(
   const accountsUrl = new URL(
     `https://graph.facebook.com/${getFacebookApiVersion()}/me/accounts`
   );
-  accountsUrl.searchParams.set("fields", "id,name,access_token,perms,tasks");
+  accountsUrl.searchParams.set("fields", "id,name,access_token,tasks");
 
   const accountsResponse = await fetch(accountsUrl, {
     headers: {
@@ -387,20 +384,23 @@ export async function getFacebookPagesForUserAccessToken(
     },
     signal: AbortSignal.timeout(FACEBOOK_GRAPH_TIMEOUT_MS),
   });
+  let candidateSource: FacebookPageResponse[] = [];
   if (!accountsResponse.ok) {
     safeLog("facebook_page_lookup_failed", {
       level: "warn",
       status: accountsResponse.status,
       ...(await readFacebookGraphErrorMetadata(accountsResponse)),
     });
-    throw new Error(`facebook page lookup failed: ${accountsResponse.status}`);
-  }
-
-  const accounts = (await accountsResponse.json()) as FacebookAccountsResponse;
-  let candidateSource = accounts.data ?? [];
-  if (candidateSource.length === 0) {
     await logFacebookPagePermissionState(accessToken);
     candidateSource = await fetchAssignedFacebookPages(accessToken);
+  } else {
+    const accounts =
+      (await accountsResponse.json()) as FacebookAccountsResponse;
+    candidateSource = accounts.data ?? [];
+    if (candidateSource.length === 0) {
+      await logFacebookPagePermissionState(accessToken);
+      candidateSource = await fetchAssignedFacebookPages(accessToken);
+    }
   }
   const candidates = candidateSource.filter(page => page.id && page.name);
   const resolvedPages: FacebookConnectPage[] = [];

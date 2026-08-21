@@ -87,13 +87,13 @@ describe("Facebook Business Login Page discovery", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("redacts a Graph error when the managed Page lookup fails", async () => {
+  it("falls back safely when the classic managed Page lookup is unavailable", async () => {
     const warnSpy = vi
       .spyOn(console, "warn")
       .mockImplementation(() => undefined);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>().mockResolvedValueOnce(
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
             error: {
@@ -106,11 +106,32 @@ describe("Facebook Business Login Page discovery", () => {
           { status: 403, headers: { "Content-Type": "application/json" } }
         )
       )
-    );
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "page-42",
+                name: "Leaderbot",
+                access_token: "page-access-token",
+                tasks: ["MANAGE", "MESSAGING"],
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
 
     await expect(
       getFacebookPagesForUserAccessToken("private-user-token")
-    ).rejects.toThrow("facebook page lookup failed: 403");
+    ).resolves.toHaveLength(1);
 
     const logs = warnSpy.mock.calls.flat().join(" ");
     expect(logs).toContain('"status":403');
@@ -119,6 +140,11 @@ describe("Facebook Business Login Page discovery", () => {
     expect(logs).not.toContain("private permission details");
     expect(logs).not.toContain("private-trace");
     expect(logs).not.toContain("private-user-token");
+    const assignedPagesUrl = new URL(String(fetchMock.mock.calls[2]?.[0]));
+    expect(assignedPagesUrl.pathname).toBe("/v21.0/me/assigned_pages");
+    expect(assignedPagesUrl.searchParams.get("fields")).toBe(
+      "id,name,access_token,tasks"
+    );
   });
 
   it("resolves a selected Business Login Page whose token is not embedded", async () => {
