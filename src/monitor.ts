@@ -56,6 +56,7 @@ import {
   shouldForwardMessengerTextToImageGen,
 } from "./messenger-product-intents.js";
 import {
+  buildMessengerPairingReply,
   buildMessengerPlanQuotaReachedReply,
   normalizeMessengerCustomerPortalUrl,
   normalizeMessengerLanguage,
@@ -1285,6 +1286,7 @@ async function sendMessengerPairingReply(params: {
   cfg: OpenClawConfig;
 }) {
   const core = getMessengerRuntime();
+  const lang = normalizeMessengerLanguage(params.account.config.defaultLang);
   await createChannelPairingChallengeIssuer({
     channel: FACEBOOK_CHANNEL_ID,
     upsertPairingRequest: async ({ id, meta }) =>
@@ -1296,7 +1298,9 @@ async function sendMessengerPairingReply(params: {
       }),
   })({
     senderId: params.senderId,
-    senderIdLine: `Your Messenger PSID: ${params.senderId}`,
+    senderIdLine: `${tMessenger(lang, "pairingSenderIdLabel")}: ${params.senderId}`,
+    buildReplyText: ({ code }) =>
+      buildMessengerPairingReply(lang, { code, senderId: params.senderId }),
     onCreated: () =>
       logVerbose(`messenger pairing request sender=${redactMessengerIdentifier(params.senderId)}`),
     sendPairingReply: async (text) => {

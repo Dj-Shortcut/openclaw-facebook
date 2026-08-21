@@ -51,6 +51,7 @@ describe("messenger state normalization", () => {
       lastPhotoUrl: null,
       lastPhoto: null,
       preferredLang: undefined,
+      preferredLangSource: undefined,
       consentGiven: false,
       pendingDeleteConfirm: false,
       hasSeenIntro: false,
@@ -75,6 +76,7 @@ describe("messenger state normalization", () => {
       pendingDeleteConfirm: true,
       hasSeenIntro: true,
       preferredLang: "en",
+      preferredLangSource: "sender_locale",
       quota: {
         dayKey: "2026-04-26",
         count: 3,
@@ -101,6 +103,25 @@ describe("messenger state normalization", () => {
         count: 3,
       },
       updatedAt: 5678,
+    });
+  });
+
+  it("marks the legacy implicit Dutch default as account-derived", () => {
+    expect(normalizeState("legacy-dutch", { preferredLang: "nl" })).toMatchObject({
+      preferredLang: "nl",
+      preferredLangSource: "account_default",
+    });
+  });
+
+  it("preserves an explicit language source marker", () => {
+    expect(
+      normalizeState("stored-language-source", {
+        preferredLang: "nl",
+        preferredLangSource: "sender_locale",
+      }),
+    ).toMatchObject({
+      preferredLang: "nl",
+      preferredLangSource: "sender_locale",
     });
   });
 

@@ -808,7 +808,19 @@ describe("shouldForwardMessengerTextToImageGen", () => {
 });
 
 describe("processMessengerEvent unknown sender access policy", () => {
-  it("keeps private pairing mode unchanged for unknown senders", async () => {
+  it.each([
+    {
+      lang: "nl" as const,
+      expected: "toegang is nog niet goedgekeurd",
+      codeLabel: "Koppelcode",
+    },
+    {
+      lang: "en" as const,
+      expected: "access has not been approved yet",
+      codeLabel: "Pairing code",
+    },
+  ])("localizes private pairing for $lang accounts", async ({ lang, expected, codeLabel }) => {
+    const mid = `mid-private-pairing-${lang}`;
     const inboundRun = vi.fn(async () => ({ dispatched: false }));
     const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR-1", created: true }));
     setGatewayRuntime(inboundRun, { upsertPairingRequest });
@@ -817,7 +829,7 @@ describe("processMessengerEvent unknown sender access policy", () => {
       return new Response(
         JSON.stringify({
           message_id: "pairing-message",
-          recipient_id: "sender-mid-private-pairing",
+          recipient_id: `sender-${mid}`,
         }),
         {
           headers: { "content-type": "application/json" },
@@ -827,16 +839,21 @@ describe("processMessengerEvent unknown sender access policy", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await processGatewayTestEvent(messengerTextEvent("mid-private-pairing"), {
+    await processGatewayTestEvent(messengerTextEvent(mid), {
       dmPolicy: "pairing",
       allowFrom: undefined,
+      defaultLang: lang,
     });
 
     expect(upsertPairingRequest).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const sendBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
-    expect(sendBody.recipient).toEqual({ id: "sender-mid-private-pairing" });
-    expect(String(sendBody.message?.text ?? "")).toContain("pairing");
+    expect(sendBody.recipient).toEqual({ id: `sender-${mid}` });
+    expect(String(sendBody.message?.text ?? "")).toContain(expected);
+    expect(String(sendBody.message?.text ?? "")).toContain(`${codeLabel}: PAIR-1`);
+    expect(String(sendBody.message?.text ?? "")).toContain(
+      "openclaw pairing approve facebook PAIR-1",
+    );
     expect(inboundRun).not.toHaveBeenCalled();
   });
 

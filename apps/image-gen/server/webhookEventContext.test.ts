@@ -119,5 +119,21 @@ describe("Messenger webhook request correlation privacy", () => {
       "page-language"
     );
     expect(second?.lang).toBe("nl");
+
+    const accountDefaultPsid = "account-default-language-psid";
+    await Promise.resolve(
+      setPreferredLang(accountDefaultPsid, "nl", "account_default")
+    );
+    const refreshedDefault = await createTrackedEventContext(
+      ctx,
+      {
+        sender: { id: accountDefaultPsid },
+        recipient: { id: "page-language" },
+        timestamp: 1_750_000_000_003,
+        message: { mid: "mid-language-refreshed", text: "Hello again" },
+      },
+      "page-language"
+    );
+    expect(refreshedDefault?.lang).toBe("en");
   });
 });

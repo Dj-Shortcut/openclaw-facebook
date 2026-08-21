@@ -50,7 +50,7 @@
           "customerPortalUrl": {
             "type": "string",
             "format": "uri",
-            "pattern": "^https://",
+            "pattern": "^https://(?![^/]*@)",
             "default": "https://leaderbot.live/"
           },
           "responsePrefix": { "type": "string" },
@@ -96,7 +96,7 @@
                 "customerPortalUrl": {
                   "type": "string",
                   "format": "uri",
-                  "pattern": "^https://"
+                  "pattern": "^https://(?![^/]*@)"
                 },
                 "responsePrefix": { "type": "string" },
                 "webhookPath": { "type": "string" },

@@ -60,7 +60,7 @@ describe("openclaw plugin manifest", () => {
     });
     expect(facebookSchema.properties?.customerPortalUrl).toMatchObject({
       default: "https://leaderbot.live/",
-      pattern: "^https://",
+      pattern: "^https://(?![^/]*@)",
     });
     expect(
       facebookSchema.properties?.accounts?.additionalProperties?.properties
@@ -78,6 +78,15 @@ describe("openclaw plugin manifest", () => {
       facebookSchema.properties?.accounts?.additionalProperties?.properties
         ?.customerPortalUrl?.default,
     ).toBeUndefined();
+    expect(
+      facebookSchema.properties?.accounts?.additionalProperties?.properties
+        ?.customerPortalUrl?.pattern,
+    ).toBe("^https://(?![^/]*@)");
+    const portalPattern = new RegExp(
+      String(facebookSchema.properties?.customerPortalUrl?.pattern),
+    );
+    expect(portalPattern.test("https://portal.example.test/account")).toBe(true);
+    expect(portalPattern.test("https://user:secret@portal.example.test/")).toBe(false);
   });
 });
 

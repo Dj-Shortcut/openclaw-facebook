@@ -24,7 +24,11 @@ type MessengerTranslationKey =
   | "attachmentVideoInstruction"
   | "attachmentFileInstruction"
   | "attachmentUnknownInstruction"
-  | "attachmentTranscriptLabel";
+  | "attachmentTranscriptLabel"
+  | "pairingAccessRequired"
+  | "pairingSenderIdLabel"
+  | "pairingCodeLabel"
+  | "pairingApprovalInstruction";
 
 const translations: Record<
   MessengerLanguage,
@@ -71,6 +75,11 @@ const translations: Record<
     attachmentUnknownInstruction:
       "De gebruiker stuurde een bijlage. Gebruik de bijlage als context als dat beschikbaar is en reageer inhoudelijk.",
     attachmentTranscriptLabel: "Transcriptie voicebericht",
+    pairingAccessRequired: "OpenClaw: toegang is nog niet goedgekeurd.",
+    pairingSenderIdLabel: "Je Messenger-PSID",
+    pairingCodeLabel: "Koppelcode",
+    pairingApprovalInstruction:
+      "Vraag de beheerder om de toegang goed te keuren met:",
   },
   en: {
     missingReferencedPrompt:
@@ -113,6 +122,10 @@ const translations: Record<
     attachmentUnknownInstruction:
       "The user sent an attachment. Use it as context when available and respond to its content.",
     attachmentTranscriptLabel: "Voice-message transcript",
+    pairingAccessRequired: "OpenClaw: access has not been approved yet.",
+    pairingSenderIdLabel: "Your Messenger PSID",
+    pairingCodeLabel: "Pairing code",
+    pairingApprovalInstruction: "Ask the owner to approve access with:",
   },
 };
 
@@ -154,4 +167,16 @@ export function buildMessengerPlanQuotaReachedReply(
   customerPortalUrl: string | null | undefined,
 ): string {
   return `${tMessenger(lang, "planQuotaReached")} ${normalizeMessengerCustomerPortalUrl(customerPortalUrl)}`;
+}
+
+export function buildMessengerPairingReply(
+  lang: MessengerLanguage,
+  params: { code: string; senderId: string },
+): string {
+  return [
+    tMessenger(lang, "pairingAccessRequired"),
+    `${tMessenger(lang, "pairingSenderIdLabel")}: ${params.senderId}`,
+    `${tMessenger(lang, "pairingCodeLabel")}: ${params.code}`,
+    `${tMessenger(lang, "pairingApprovalInstruction")}\nopenclaw pairing approve facebook ${params.code}`,
+  ].join("\n\n");
 }
