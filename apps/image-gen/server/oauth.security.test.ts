@@ -197,6 +197,7 @@ describe("OAuth callback security", () => {
     expect(authorizationUrl.searchParams.get("client_id")).toBe(
       "facebook-app-123"
     );
+    expect(authorizationUrl.searchParams.get("scope")).toBe("public_profile");
     const state = authorizationUrl.searchParams.get("state");
     const stateCookie = start.headers["set-cookie"]?.[0]?.split(";", 1)[0];
     const stateCookieHeader = start.headers["set-cookie"]?.[0] ?? "";
@@ -213,6 +214,8 @@ describe("OAuth callback security", () => {
     expect(callback.status).toBe(302);
     expect(callback.headers.location).toBe("/handoff/token-123");
     expect(mocks.exchangeCodeForToken).not.toHaveBeenCalled();
+    const profileUrl = new URL(String(fetchMock.mock.calls[1]?.[0]));
+    expect(profileUrl.searchParams.get("fields")).toBe("id,name");
     expect(mocks.upsertUser).toHaveBeenCalledWith(
       expect.objectContaining({
         openId: "facebook:facebook-user-7",

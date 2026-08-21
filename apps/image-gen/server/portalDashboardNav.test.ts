@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  getPortalDashboardSectionIdFromHash,
   getVisiblePortalDashboardSections,
   PORTAL_DASHBOARD_SECTION_IDS,
 } from "../client/src/components/portalDashboardSections";
@@ -35,5 +36,18 @@ describe("PortalDashboardNav", () => {
       "privacy",
       "knowledge",
     ]);
+  });
+
+  it("resolves only visible dashboard hashes after the sections mount", () => {
+    expect(getPortalDashboardSectionIdFromHash("#portal-usage", false)).toBe(
+      "portal-usage"
+    );
+    expect(getPortalDashboardSectionIdFromHash("#portal-billing", false)).toBe(
+      null
+    );
+    expect(getPortalDashboardSectionIdFromHash("#portal-billing", true)).toBe(
+      "portal-billing"
+    );
+    expect(getPortalDashboardSectionIdFromHash("#gateway", true)).toBe(null);
   });
 });

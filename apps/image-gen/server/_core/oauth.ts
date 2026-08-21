@@ -182,7 +182,7 @@ async function getFacebookLoginIdentity(
   const profileUrl = new URL(
     `https://graph.facebook.com/${config.graphVersion}/me`
   );
-  profileUrl.searchParams.set("fields", "id,name,email");
+  profileUrl.searchParams.set("fields", "id,name");
   profileUrl.searchParams.set("access_token", token.access_token);
   const profileResponse = await fetch(profileUrl, {
     headers: { Accept: "application/json" },
@@ -285,7 +285,7 @@ export function registerOAuthRoutes(app: Express) {
     authorizationUrl.searchParams.set("state", state);
     if (facebookConfig) {
       authorizationUrl.searchParams.set("response_type", "code");
-      authorizationUrl.searchParams.set("scope", "public_profile,email");
+      authorizationUrl.searchParams.set("scope", "public_profile");
     }
     res.redirect(302, authorizationUrl.toString());
   };

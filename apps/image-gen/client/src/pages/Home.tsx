@@ -31,7 +31,10 @@ import {
 import { useEffect, useRef, useState } from "react";
 import LandingPage from "./LandingPage";
 import { PortalDashboardNav } from "@/components/PortalDashboardNav";
-import { PORTAL_DASHBOARD_SECTION_IDS } from "@/components/portalDashboardSections";
+import {
+  getPortalDashboardSectionIdFromHash,
+  PORTAL_DASHBOARD_SECTION_IDS,
+} from "@/components/portalDashboardSections";
 import {
   DEFAULT_LOCALE,
   SUPPORTED_LOCALES,
@@ -596,6 +599,36 @@ function Home() {
     billingSummaryQuery.error ||
     (billingReturnIntent && canManageBilling)
   );
+  const isLoading =
+    auth.loading ||
+    portalSessionQuery.isLoading ||
+    workspaceQuery.isLoading ||
+    workspaceMembersQuery.isLoading ||
+    aiIdentityQuery.isLoading ||
+    channelStatusQuery.isLoading ||
+    usageQuery.isLoading ||
+    billingPlansQuery.isLoading ||
+    billingSummaryQuery.isLoading ||
+    upgradeRequestsQuery.isLoading ||
+    knowledgeQuery.isLoading ||
+    privacyQuery.isLoading ||
+    privacyRequestsQuery.isLoading;
+
+  useEffect(() => {
+    if (!auth.isAuthenticated || isLoading || typeof window === "undefined") {
+      return;
+    }
+    const sectionId = getPortalDashboardSectionIdFromHash(
+      window.location.hash,
+      showBillingSection
+    );
+    if (!sectionId) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(sectionId)?.scrollIntoView({ block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [auth.isAuthenticated, isLoading, showBillingSection]);
   const upgradeRequests = upgradeRequestsQuery.data ?? [];
   const latestUpgradeRequest = upgradeRequests[0];
   const facebookStatus =
@@ -774,21 +807,6 @@ function Home() {
       />
     );
   }
-
-  const isLoading =
-    auth.loading ||
-    portalSessionQuery.isLoading ||
-    workspaceQuery.isLoading ||
-    workspaceMembersQuery.isLoading ||
-    aiIdentityQuery.isLoading ||
-    channelStatusQuery.isLoading ||
-    usageQuery.isLoading ||
-    billingPlansQuery.isLoading ||
-    billingSummaryQuery.isLoading ||
-    upgradeRequestsQuery.isLoading ||
-    knowledgeQuery.isLoading ||
-    privacyQuery.isLoading ||
-    privacyRequestsQuery.isLoading;
 
   return (
     <main className="min-h-full bg-[#f5f7fb] px-4 py-6 text-stone-950 sm:px-6 lg:px-8">
@@ -1259,10 +1277,7 @@ function Home() {
               ) : null}
             </section>
 
-            <section
-              className="scroll-mt-28 rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3"
-              id={PORTAL_DASHBOARD_SECTION_IDS.usage}
-            >
+            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
               <div className="flex items-center gap-3">
                 <Info className="h-5 w-5 text-teal-700" />
                 <h2 className="text-lg font-semibold text-stone-950">
@@ -1297,7 +1312,10 @@ function Home() {
               </div>
             </section>
 
-            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
+            <section
+              className="scroll-mt-28 rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3"
+              id={PORTAL_DASHBOARD_SECTION_IDS.usage}
+            >
               <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                 <div className="flex items-center gap-3">
                   <CreditCard className="h-5 w-5 text-teal-700" />

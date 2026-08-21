@@ -23,3 +23,16 @@ export function getVisiblePortalDashboardSections(
     "knowledge",
   ];
 }
+
+export function getPortalDashboardSectionIdFromHash(
+  hash: string,
+  showBilling: boolean
+): string | null {
+  const sectionId = hash.startsWith("#") ? hash.slice(1) : hash;
+  const visibleSectionIds = new Set<string>(
+    getVisiblePortalDashboardSections(showBilling).map(
+      section => PORTAL_DASHBOARD_SECTION_IDS[section]
+    )
+  );
+  return visibleSectionIds.has(sectionId) ? sectionId : null;
+}
