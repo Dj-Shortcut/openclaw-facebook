@@ -5,6 +5,7 @@ import {
   validateFacebookConnectState,
   type FacebookConnectState,
 } from "./portalSecurity";
+import { safeLog } from "./logger";
 import { getRedisClient, isRedisEnabled } from "./redis";
 
 export const REQUIRED_FACEBOOK_SCOPES = [
@@ -204,14 +205,70 @@ type FacebookTokenResponse = {
 };
 
 type FacebookAccountsResponse = {
-  data?: Array<{
-    id?: string;
-    name?: string;
-    access_token?: string;
-    perms?: string[];
-    tasks?: string[];
-  }>;
+  data?: FacebookPageResponse[];
 };
+
+type FacebookPageResponse = {
+  id?: string;
+  name?: string;
+  access_token?: string;
+  perms?: string[];
+  tasks?: string[];
+};
+
+function toFacebookConnectPage(
+  page: FacebookPageResponse
+): FacebookConnectPage | null {
+  if (!page.id || !page.name || !page.access_token) return null;
+
+  const permissions = new Set([...(page.perms ?? []), ...(page.tasks ?? [])]);
+  return {
+    id: page.id,
+    name: page.name,
+    accessToken: page.access_token,
+    grantedScopes: REQUIRED_FACEBOOK_SCOPES.filter(scope => {
+      if (scope === "pages_show_list") return true;
+      if (scope === "pages_manage_metadata")
+        return permissions.has("MANAGE") || permissions.has("MODERATE");
+      if (scope === "pages_messaging") return permissions.has("MESSAGING");
+      return false;
+    }),
+  };
+}
+
+async function fetchFacebookPageAccess(
+  page: FacebookPageResponse,
+  accessToken: string
+): Promise<FacebookConnectPage | null> {
+  if (!page.id || !page.name) return null;
+
+  const pageUrl = new URL(
+    `https://graph.facebook.com/${getFacebookApiVersion()}/${encodeURIComponent(page.id)}`
+  );
+  pageUrl.searchParams.set("fields", "id,name,access_token,perms,tasks");
+
+  const pageResponse = await fetch(pageUrl, {
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    signal: AbortSignal.timeout(FACEBOOK_GRAPH_TIMEOUT_MS),
+  });
+  if (!pageResponse.ok) {
+    safeLog("facebook_page_access_lookup_failed", {
+      level: "warn",
+      status: pageResponse.status,
+    });
+    return null;
+  }
+
+  const resolvedPage = (await pageResponse.json()) as FacebookPageResponse;
+  if (resolvedPage.id !== page.id) {
+    safeLog("facebook_page_access_lookup_mismatch", { level: "warn" });
+    return null;
+  }
+  return toFacebookConnectPage(resolvedPage);
+}
 
 export async function getFacebookPagesForUserAccessToken(
   accessToken: string
@@ -237,29 +294,28 @@ export async function getFacebookPagesForUserAccessToken(
   }
 
   const accounts = (await accountsResponse.json()) as FacebookAccountsResponse;
-  return (accounts.data ?? [])
-    .filter(
-      (
-        page
-      ): page is Required<Pick<typeof page, "id" | "name" | "access_token">> &
-        typeof page => Boolean(page.id && page.name && page.access_token)
-    )
-    .map(page => ({
-      id: page.id,
-      name: page.name,
-      accessToken: page.access_token,
-      grantedScopes: REQUIRED_FACEBOOK_SCOPES.filter(scope => {
-        const permissions = new Set([
-          ...(page.perms ?? []),
-          ...(page.tasks ?? []),
-        ]);
-        if (scope === "pages_show_list") return true;
-        if (scope === "pages_manage_metadata")
-          return permissions.has("MANAGE") || permissions.has("MODERATE");
-        if (scope === "pages_messaging") return permissions.has("MESSAGING");
-        return false;
-      }),
-    }));
+  const candidates = (accounts.data ?? []).filter(page => page.id && page.name);
+  const resolvedPages: FacebookConnectPage[] = [];
+  let fallbackLookupCount = 0;
+
+  for (const candidate of candidates) {
+    const embeddedPage = toFacebookConnectPage(candidate);
+    if (embeddedPage) {
+      resolvedPages.push(embeddedPage);
+      continue;
+    }
+
+    fallbackLookupCount += 1;
+    const resolvedPage = await fetchFacebookPageAccess(candidate, accessToken);
+    if (resolvedPage) resolvedPages.push(resolvedPage);
+  }
+
+  safeLog("facebook_page_lookup_completed", {
+    candidateCount: candidates.length,
+    fallbackLookupCount,
+    usablePageCount: resolvedPages.length,
+  });
+  return resolvedPages;
 }
 
 export async function exchangeFacebookCodeForPages(code: string) {
