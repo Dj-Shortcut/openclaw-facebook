@@ -22,6 +22,57 @@ export class BillingProfileEligibilityError extends Error {
   }
 }
 
+export async function getWorkspaceBillingProfileAttestationStatus(
+  workspaceId: number,
+  now = new Date()
+): Promise<{ eligibilityVersion: number; peppolAttestationActive: boolean }> {
+  if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) {
+    throw new BillingProfileEligibilityError(
+      "billing_profile_invalid_workspace"
+    );
+  }
+  const database = await getDatabaseOrThrow();
+  const rows = await database
+    .select({
+      workspaceId: workspaceBillingProfiles.workspaceId,
+      customerType: workspaceBillingProfiles.customerType,
+      verificationStatus: workspaceBillingProfiles.verificationStatus,
+      verificationMethod: workspaceBillingProfiles.verificationMethod,
+      evidenceReferenceHash: workspaceBillingProfiles.evidenceReferenceHash,
+      verifiedAt: workspaceBillingProfiles.verifiedAt,
+      verificationExpiresAt: workspaceBillingProfiles.verificationExpiresAt,
+      revokedAt: workspaceBillingProfiles.revokedAt,
+      verifiedByUserId: workspaceBillingProfiles.verifiedByUserId,
+      peppolReady: workspaceBillingProfiles.peppolReady,
+      eligibilityVersion: workspaceBillingProfiles.eligibilityVersion,
+    })
+    .from(workspaceBillingProfiles)
+    .where(eq(workspaceBillingProfiles.workspaceId, workspaceId))
+    .limit(2);
+  if (rows.length === 0) {
+    return { eligibilityVersion: 0, peppolAttestationActive: false };
+  }
+  if (rows.length !== 1 || rows[0].workspaceId !== workspaceId) {
+    throw new BillingProfileEligibilityError("billing_profile_tenant_boundary");
+  }
+  const profile = rows[0];
+  return {
+    eligibilityVersion: profile.eligibilityVersion,
+    peppolAttestationActive:
+      profile.verificationStatus === "verified" &&
+      profile.customerType === "business" &&
+      Boolean(profile.peppolReady) &&
+      Boolean(profile.verificationMethod) &&
+      Boolean(profile.evidenceReferenceHash) &&
+      Boolean(profile.verifiedByUserId) &&
+      profile.revokedAt === null &&
+      profile.verifiedAt !== null &&
+      profile.verifiedAt.getTime() <= now.getTime() &&
+      profile.verificationExpiresAt !== null &&
+      profile.verificationExpiresAt.getTime() > now.getTime(),
+  };
+}
+
 export async function assertWorkspaceBillingProfileEligible(
   workspaceId: number,
   now = new Date()

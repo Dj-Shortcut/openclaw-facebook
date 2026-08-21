@@ -3,7 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const getDatabaseMock = vi.hoisted(() => vi.fn());
 vi.mock("../../db", () => ({ getDatabaseOrThrow: getDatabaseMock }));
 
-import { assertWorkspaceBillingProfileEligible } from "./billingProfileStore";
+import {
+  assertWorkspaceBillingProfileEligible,
+  getWorkspaceBillingProfileAttestationStatus,
+} from "./billingProfileStore";
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -47,6 +50,50 @@ describe("server-owned workspace billing eligibility", () => {
     await expect(assertWorkspaceBillingProfileEligible(7)).resolves.toEqual({
       eligibilityVersion: 1,
     });
+  });
+});
+
+describe("Peppol attestation status", () => {
+  const now = new Date("2026-08-21T00:00:00.000Z");
+
+  it("reports that an active verified Peppol profile is complete", async () => {
+    getDatabaseMock.mockResolvedValue(
+      databaseReturning([
+        profile({
+          customerType: "business",
+          peppolReady: true,
+          verificationMethod: "provider_attestation",
+        }),
+      ])
+    );
+
+    await expect(
+      getWorkspaceBillingProfileAttestationStatus(7, now)
+    ).resolves.toEqual({
+      eligibilityVersion: 1,
+      peppolAttestationActive: true,
+    });
+  });
+
+  it.each([
+    ["missing", []],
+    ["consumer", [profile()]],
+    [
+      "expired",
+      [
+        profile({
+          customerType: "business",
+          peppolReady: true,
+          verificationExpiresAt: new Date("2026-08-20T00:00:00.000Z"),
+        }),
+      ],
+    ],
+  ])("keeps the form available for %s status", async (_label, rows) => {
+    getDatabaseMock.mockResolvedValue(databaseReturning(rows as unknown[]));
+
+    await expect(
+      getWorkspaceBillingProfileAttestationStatus(7, now)
+    ).resolves.toMatchObject({ peppolAttestationActive: false });
   });
 });
 

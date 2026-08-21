@@ -467,6 +467,13 @@ function Home() {
     { workspaceId: workspaceId ?? 0 },
     { enabled: Boolean(workspaceId) }
   );
+  const billingProfileStatusQuery = trpc.billingAdmin.profileStatus.useQuery(
+    { workspaceId: workspaceId ?? 0 },
+    {
+      enabled:
+        Boolean(workspaceId) && portalSessionQuery.data?.user.role === "admin",
+    }
+  );
   const billingReturnStatusQuery = trpc.portal.billing.returnStatus.useQuery(
     {
       workspaceId: workspaceId ?? 0,
@@ -532,7 +539,17 @@ function Home() {
     },
   });
   const billingProfileAttestationMutation =
-    trpc.billingAdmin.attestProfile.useMutation();
+    trpc.billingAdmin.attestProfile.useMutation({
+      onSuccess: async () => {
+        setPeppolEvidenceReference("");
+        setPeppolEvidenceConfirmed(false);
+        if (!workspaceId) return;
+        await utils.billingAdmin.profileStatus.invalidate({ workspaceId });
+      },
+    });
+  const peppolAttestationComplete =
+    billingProfileAttestationMutation.isSuccess ||
+    billingProfileStatusQuery.data?.peppolAttestationActive === true;
 
   useEffect(() => {
     if (billingReturnHandled.current || !workspaceId || !billingReturnIntent) {
@@ -841,7 +858,7 @@ function Home() {
     billingProfileAttestationMutation.mutate({
       requestId: billingProfileAttestationRequestId.current,
       workspaceId,
-      expectedVersion: 0,
+      expectedVersion: billingProfileStatusQuery.data?.eligibilityVersion ?? 0,
       countryCode: "BE",
       customerType: "business",
       evidenceReference,
@@ -1066,7 +1083,10 @@ function Home() {
           </section>
         ) : null}
 
-        {workspaceId && portalSessionQuery.data?.user.role === "admin" ? (
+        {workspaceId &&
+        portalSessionQuery.data?.user.role === "admin" &&
+        billingProfileStatusQuery.isSuccess &&
+        !peppolAttestationComplete ? (
           <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-950 lg:col-start-2">
             <div>
               <h2 className="text-sm font-semibold">
@@ -1130,12 +1150,6 @@ function Home() {
                 Ik heb gecontroleerd dat deze exacte onderneming actief is op
                 Peppol en als Belgische zakelijke klant mag worden verwerkt.
               </label>
-              {billingProfileAttestationMutation.isSuccess ? (
-                <p className="text-sm font-medium text-emerald-800 sm:col-span-2">
-                  Attestatie opgeslagen als versie{" "}
-                  {billingProfileAttestationMutation.data.eligibilityVersion}.
-                </p>
-              ) : null}
               {billingProfileAttestationMutation.error ? (
                 <p className="text-sm font-medium text-red-800 sm:col-span-2">
                   Attestatie geweigerd:{" "}

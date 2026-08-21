@@ -3,6 +3,7 @@ import { z } from "zod";
 import { adminProcedure, router } from "../trpc";
 import {
   attestWorkspaceBillingProfile,
+  getWorkspaceBillingProfileAttestationStatus,
   revokeWorkspaceBillingProfile,
 } from "./billingProfileStore";
 import { getConfiguredBillingMode } from "./config";
@@ -15,6 +16,12 @@ import {
 const workspaceId = z.number().int().positive();
 
 export const billingAdminRouter = router({
+  profileStatus: adminProcedure
+    .input(z.object({ workspaceId }))
+    .query(({ input }) =>
+      getWorkspaceBillingProfileAttestationStatus(input.workspaceId)
+    ),
+
   attestProfile: adminProcedure
     .input(
       z.object({
