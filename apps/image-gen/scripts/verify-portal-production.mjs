@@ -114,11 +114,12 @@ async function verifyPublicPortal(publicUrl) {
 
 async function verifyPublicHealth(publicUrl) {
   const { response, body } = await fetchText(endpoint(publicUrl, "/healthz"));
+  const health = body.trim();
   return {
     name: "public_healthz",
-    ok: response.ok && body.includes("live"),
+    ok: response.ok && health === "ok",
     status: response.status,
-    detail: body.trim().slice(0, 120),
+    detail: health.slice(0, 120),
   };
 }
 
