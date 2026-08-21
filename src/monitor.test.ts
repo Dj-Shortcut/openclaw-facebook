@@ -862,9 +862,12 @@ describe("processMessengerEvent unknown sender access policy", () => {
       leaderbotBridgeEnabled: true,
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const sendBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
-    expect(sendBody.sender_action).toBe("typing_on");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      fetchMock.mock.calls.map(call =>
+        JSON.parse(String((call[1] as RequestInit).body)).sender_action,
+      ),
+    ).toEqual(["typing_on", "typing_off"]);
     expect(upsertPairingRequest).not.toHaveBeenCalled();
     expect(inboundRun).toHaveBeenCalledTimes(1);
   });
@@ -896,7 +899,12 @@ describe("processMessengerEvent unknown sender access policy", () => {
       },
     );
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      fetchMock.mock.calls.map(call =>
+        JSON.parse(String((call[1] as RequestInit).body)).sender_action,
+      ),
+    ).toEqual(["typing_on", "typing_off"]);
     expect(inboundRun).toHaveBeenCalledTimes(1);
   });
 
@@ -1302,9 +1310,14 @@ describe("processMessengerEvent image intents", () => {
 
     await processGatewayTestEvent(messengerImagePromptEvent("mid-image-forward-disabled"));
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
-      "https://graph.facebook.com/v20.0/page-1/messages",
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      fetchMock.mock.calls.map(call =>
+        JSON.parse(String((call[1] as RequestInit).body)).sender_action,
+      ),
+    ).toEqual(["typing_on", "typing_off"]);
+    expect(fetchMock.mock.calls.map(call => String(call[0]))).toEqual(
+      Array(2).fill("https://graph.facebook.com/v20.0/page-1/messages"),
     );
     expect(inboundRun).toHaveBeenCalledTimes(1);
   });
@@ -1630,6 +1643,134 @@ describe("resolveFacebookInboundToolPolicy", () => {
     expect(hardened.tools.deny).toEqual(
       expect.arrayContaining(["existing_tool", "image_generate", "exec", "group:fs"])
     );
+  });
+});
+
+describe("processMessengerEvent typing lifecycle", () => {
+  it("turns typing off after delivering a visible final reply", async () => {
+    const events: string[] = [];
+    const inboundRun = vi.fn(async (input: {
+      adapter: { resolveTurn: () => { delivery: { deliver: Function } } };
+    }) => {
+      const turn = input.adapter.resolveTurn();
+      await turn.delivery.deliver({ text: "Zichtbaar AI-antwoord" }, { kind: "final" });
+      return {
+        dispatched: true,
+        dispatchResult: { counts: { tool: 0, block: 0, final: 1 } },
+      };
+    });
+    setGatewayRuntime(inboundRun);
+    vi.stubGlobal("fetch", vi.fn(async (_url: URL | RequestInfo | string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as {
+        message?: { text?: string };
+        sender_action?: string;
+      };
+      if (body.sender_action) {
+        events.push(body.sender_action);
+      } else if (body.message?.text) {
+        events.push("message");
+      }
+      return new Response(JSON.stringify({
+        message_id: "visible-final",
+        recipient_id: "sender-mid-typing-success",
+      }), { status: 200 });
+    }));
+
+    await processGatewayTestEvent(
+      messengerTextEvent("mid-typing-success", "Schrijf een planning voor morgen"),
+    );
+
+    expect(events).toEqual(["typing_on", "message", "typing_off"]);
+  });
+
+  it("turns typing off when OpenClaw produces no visible reply", async () => {
+    setGatewayRuntime(vi.fn(async () => ({ dispatched: false })));
+    const senderActions: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: URL | RequestInfo | string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { sender_action?: string };
+      if (body.sender_action) {
+        senderActions.push(body.sender_action);
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+
+    await processGatewayTestEvent(
+      messengerTextEvent("mid-typing-empty", "Schrijf een planning voor morgen"),
+    );
+
+    expect(senderActions).toEqual(["typing_on", "typing_off"]);
+  });
+
+  it("turns typing off and preserves the original OpenClaw error", async () => {
+    setGatewayRuntime(vi.fn(async () => {
+      throw new Error("model unavailable");
+    }));
+    const senderActions: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: URL | RequestInfo | string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { sender_action?: string };
+      if (body.sender_action) {
+        senderActions.push(body.sender_action);
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+
+    await expect(
+      processGatewayTestEvent(
+        messengerTextEvent("mid-typing-error", "Schrijf een planning voor morgen"),
+      ),
+    ).rejects.toThrow("model unavailable");
+    expect(senderActions).toEqual(["typing_on", "typing_off"]);
+  });
+
+  it("still attempts typing_off when typing_on fails ambiguously", async () => {
+    setGatewayRuntime(vi.fn(async () => ({ dispatched: false })));
+    const senderActions: string[] = [];
+    const runtimeError = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async (_url: URL | RequestInfo | string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { sender_action?: string };
+      if (body.sender_action) {
+        senderActions.push(body.sender_action);
+      }
+      if (body.sender_action === "typing_on") {
+        throw new Error("request outcome unknown");
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+
+    await processGatewayTestEvent(
+      messengerTextEvent("mid-typing-on-error", "Schrijf een planning voor morgen"),
+      {},
+      { error: runtimeError },
+    );
+
+    expect(senderActions).toEqual(["typing_on", "typing_off"]);
+    expect(runtimeError).toHaveBeenCalledTimes(1);
+    expect(String(runtimeError.mock.calls[0]?.[0])).toContain("typing_on failed");
+  });
+
+  it("does not fail the turn when typing_off fails", async () => {
+    setGatewayRuntime(vi.fn(async () => ({ dispatched: false })));
+    const runtimeError = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async (_url: URL | RequestInfo | string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { sender_action?: string };
+      if (body.sender_action === "typing_off") {
+        return new Response(JSON.stringify({ error: { message: "off failed" } }), {
+          status: 500,
+        });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+
+    await expect(
+      processGatewayTestEvent(
+        messengerTextEvent("mid-typing-off-error", "Schrijf een planning voor morgen"),
+        {},
+        { error: runtimeError },
+      ),
+    ).resolves.toBeUndefined();
+    expect(runtimeError).toHaveBeenCalledTimes(1);
+    expect(String(runtimeError.mock.calls[0]?.[0])).toContain("typing_off failed");
+    expect(String(runtimeError.mock.calls[0]?.[0])).not.toContain("sender-mid-typing-off-error");
   });
 });
 

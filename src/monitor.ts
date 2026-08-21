@@ -1988,13 +1988,17 @@ export async function processMessengerEvent(params: {
       aiAnswerQuotaReservationId = quotaDecision.reservationId;
     }
   }
-  await sendMessengerSenderAction(senderId, "typing_on", {
-    cfg: params.cfg,
-    accountId: params.account.accountId,
-  }).catch((err: unknown) => {
+  try {
+    await sendMessengerSenderAction(senderId, "typing_on", {
+      cfg: params.cfg,
+      accountId: params.account.accountId,
+    });
+    logMessengerStage(params.trace, "messenger_response_sent", {
+      senderAction: "typing_on",
+    });
+  } catch (err) {
     params.runtime.error?.(danger(`messenger typing_on failed: ${String(err)}`));
-  });
-  logMessengerStage(params.trace, "messenger_response_sent", { senderAction: "typing_on" });
+  }
   logMessengerStage(params.trace, "openclaw_call_started", {
     openclawSessionId: route.sessionKey,
   });
@@ -2086,6 +2090,18 @@ export async function processMessengerEvent(params: {
     });
   } catch (error) {
     openClawError = error;
+  } finally {
+    try {
+      await sendMessengerSenderAction(senderId, "typing_off", {
+        cfg: params.cfg,
+        accountId: params.account.accountId,
+      });
+      logMessengerStage(params.trace, "messenger_response_sent", {
+        senderAction: "typing_off",
+      });
+    } catch (err) {
+      params.runtime.error?.(danger(`messenger typing_off failed: ${String(err)}`));
+    }
   }
   if (aiAnswerQuotaReservationId) {
     const outcome = visibleFinalAiReplySent ? "committed" : "released";
