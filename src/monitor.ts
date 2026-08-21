@@ -121,6 +121,8 @@ export type MessengerWebhookTarget = {
 
 const messengerWebhookTargets = new Map<string, MessengerWebhookTarget[]>();
 const messengerWebhookInFlightLimiter = createWebhookInFlightLimiter();
+// Keep raw tenant/channel identifiers out of this process-local coordination key.
+const activeMessengerTypingTurns = new Map<string, number>();
 const MESSENGER_MESSAGE_DEDUPE_TTL_MS = 10 * 60 * 1000;
 const MESSENGER_MESSAGE_DEDUPE_MAX_ENTRIES = 5_000;
 const MESSENGER_SLOW_REQUEST_LOG_MS = 5_000;
@@ -175,6 +177,31 @@ let activeMessengerEventJobs = 0;
 messengerEventLoopDelay.enable();
 
 type MessengerTrace = LeaderbotBridgeTrace;
+
+function beginMessengerTypingTurn(params: {
+  accountId: string;
+  pageId: string;
+  senderId: string;
+}): string {
+  const scopeKey = createHash("sha256")
+    .update(JSON.stringify([params.accountId, params.pageId, params.senderId]))
+    .digest("hex");
+  activeMessengerTypingTurns.set(
+    scopeKey,
+    (activeMessengerTypingTurns.get(scopeKey) ?? 0) + 1,
+  );
+  return scopeKey;
+}
+
+function finishMessengerTypingTurn(scopeKey: string): boolean {
+  const remainingTurns = (activeMessengerTypingTurns.get(scopeKey) ?? 1) - 1;
+  if (remainingTurns > 0) {
+    activeMessengerTypingTurns.set(scopeKey, remainingTurns);
+    return false;
+  }
+  activeMessengerTypingTurns.delete(scopeKey);
+  return true;
+}
 
 export type FacebookInboundToolPolicy = {
   source: "facebook_untrusted_default";
@@ -2223,17 +2250,24 @@ export async function processMessengerEvent(params: {
         aiAnswerQuotaHeartbeat.unref();
       }
     }
-    await sendMessengerSenderAction(senderId, "typing_on", {
-      cfg: params.cfg,
+    const typingScopeKey = beginMessengerTypingTurn({
       accountId: params.account.accountId,
-    }).catch((err: unknown) => {
+      pageId: params.account.pageId,
+      senderId,
+    });
+    try {
+      await sendMessengerSenderAction(senderId, "typing_on", {
+        cfg: params.cfg,
+        accountId: params.account.accountId,
+      });
+      logMessengerStage(params.trace, "messenger_response_sent", {
+        senderAction: "typing_on",
+      });
+    } catch (err) {
       params.runtime.error?.(
         danger(`messenger typing_on failed: ${String(err)}`),
       );
-    });
-    logMessengerStage(params.trace, "messenger_response_sent", {
-      senderAction: "typing_on",
-    });
+    }
     logMessengerStage(params.trace, "openclaw_call_started", {
       openclawSessionId: route.sessionKey,
     });
@@ -2394,6 +2428,22 @@ export async function processMessengerEvent(params: {
       });
     } catch (error) {
       openClawError = error;
+    } finally {
+      if (finishMessengerTypingTurn(typingScopeKey)) {
+        try {
+          await sendMessengerSenderAction(senderId, "typing_off", {
+            cfg: params.cfg,
+            accountId: params.account.accountId,
+          });
+          logMessengerStage(params.trace, "messenger_response_sent", {
+            senderAction: "typing_off",
+          });
+        } catch (err) {
+          params.runtime.error?.(
+            danger(`messenger typing_off failed: ${String(err)}`),
+          );
+        }
+      }
     }
     if (aiAnswerQuotaHeartbeat) {
       clearInterval(aiAnswerQuotaHeartbeat);
