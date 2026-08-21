@@ -78,6 +78,7 @@
     "check:product-boundaries": "node --test scripts/check-product-boundaries.node-test.mjs && node scripts/check-product-boundaries.mjs"
   },
   "dependencies": {
+    "ioredis": "^6.0.0",
     "zod": "^4.4.3"
   },
   "peerDependencies": {

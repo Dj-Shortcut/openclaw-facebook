@@ -138,7 +138,8 @@ Use `channels.facebook` for new installs:
       verifyToken: "<FACEBOOK_VERIFY_TOKEN>",
       dmPolicy: "pairing",
       defaultLang: "nl",
-      customerPortalUrl: "https://leaderbot.live/"
+      customerPortalUrl: "https://leaderbot.live/",
+      sharedStateStore: "memory"
     }
   }
 }
@@ -151,6 +152,35 @@ Set `defaultLang` to `"nl"` or `"en"`; named accounts may override the global
 value. Omitting it preserves the existing Dutch response language.
 Set `customerPortalUrl` to the tenant's HTTPS portal. It is used for the visible,
 plan-neutral quota handoff and rejects embedded URL credentials.
+
+`sharedStateStore` is global for the Facebook channel and cannot be overridden
+per named account. Keep the default `"memory"` only with one gateway replica.
+For shared deduplication and atomic daily gateway caps across replicas, use:
+
+```json5
+sharedStateStore: "redis"
+```
+
+and set:
+
+```text
+MESSENGER_SHARED_STATE_REDIS_URL=redis://<host>:6379
+MESSENGER_SHARED_STATE_HMAC_SECRET=<64-lowercase-hex-characters>
+MESSENGER_SHARED_STATE_HMAC_KEY_ID=k1
+```
+
+Generate a dedicated secret with `openssl rand -hex 32`; do not reuse a Meta,
+Redis, or application secret. Redis keys contain only versioned HMAC digests,
+not raw account, Page, sender, or message identifiers. The gateway fails startup
+when Redis is selected but unavailable and fails closed during runtime; an
+explicit `delete-my-data` request remains routable. Do not rotate the HMAC key
+during live traffic: a new namespace resets dedupe and current-day cap
+continuity. Pause ingress, rotate at a UTC-day boundary, and retain the old
+namespace until its TTLs expire.
+
+This store does not persist webhook work after Meta receives the HTTP
+acknowledgement. Keep a single gateway replica until a durable tenant-scoped
+ingress queue/outbox closes that availability gap.
 
 The optional Leaderbot image-generation bridge is off by default. If you enable
 `leaderbotBridgeEnabled: true`, selected Messenger events, Page-scoped sender

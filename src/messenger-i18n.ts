@@ -28,7 +28,8 @@ type MessengerTranslationKey =
   | "pairingAccessRequired"
   | "pairingSenderIdLabel"
   | "pairingCodeLabel"
-  | "pairingApprovalInstruction";
+  | "pairingApprovalInstruction"
+  | "sharedStateUnavailable";
 
 const translations: Record<
   MessengerLanguage,
@@ -80,6 +81,8 @@ const translations: Record<
     pairingCodeLabel: "Koppelcode",
     pairingApprovalInstruction:
       "Vraag de beheerder om de toegang goed te keuren met:",
+    sharedStateUnavailable:
+      "Ik kan de veiligheidslimiet nu niet betrouwbaar controleren. Probeer zo meteen opnieuw.",
   },
   en: {
     missingReferencedPrompt:
@@ -126,6 +129,8 @@ const translations: Record<
     pairingSenderIdLabel: "Your Messenger PSID",
     pairingCodeLabel: "Pairing code",
     pairingApprovalInstruction: "Ask the owner to approve access with:",
+    sharedStateUnavailable:
+      "I cannot reliably check the safety limit right now. Please try again shortly.",
   },
 };
 
