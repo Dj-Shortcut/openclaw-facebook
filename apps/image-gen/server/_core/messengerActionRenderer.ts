@@ -32,7 +32,12 @@ export function renderMessengerQuickReplies(
     return [];
   }
 
-  return actions.flatMap(action => {
+  const orderedActions = [
+    ...actions.filter(action => action.id === "portal"),
+    ...actions.filter(action => action.id !== "portal"),
+  ];
+
+  return orderedActions.flatMap(action => {
     if (action.url && normalizeSafeActionUrl(action.url)) {
       return [];
     }

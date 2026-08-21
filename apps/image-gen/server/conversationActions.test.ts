@@ -104,6 +104,18 @@ describe("conversation actions", () => {
     ]);
   });
 
+  it("keeps the customer portal CTA first in Messenger's visible quick replies", () => {
+    const replies = renderMessengerQuickReplies(
+      buildQuickStartResponse("nl").actions
+    );
+
+    expect(replies[0]).toEqual({
+      content_type: "text",
+      title: "Klantenportaal",
+      payload: "OPENCLAW_ACTION:portal",
+    });
+  });
+
   it("builds photo-context help choices as concrete conversation actions", () => {
     expect(buildAssistantPhotoHelpResponse("nl")).toEqual({
       text: "Je afbeelding staat klaar. Wat wil je doen?",
