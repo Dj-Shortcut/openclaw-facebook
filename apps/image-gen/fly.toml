@@ -8,6 +8,23 @@ primary_region = "ams"
   NODE_ENV = "production"
   PORT = "8080"
   PORTAL_BASE_URL = "https://app.leaderbot.live"
+  APP_BASE_URL = "https://app.leaderbot.live"
+  BILLING_SUPPORT_EMAIL = "privacy@leaderbot.live"
+  # Safe Mollie Test Mode baseline. Commercial execution remains disabled
+  # until the exposure-off preflight and isolated pilot attestation are green.
+  MOLLIE_MODE = "test"
+  MOLLIE_BILLING_ENABLED = "false"
+  MOLLIE_BILLING_PREFLIGHT_ENABLED = "false"
+  MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED = "false"
+  MOLLIE_LIVE_BILLING_ENABLED = "false"
+  MOLLIE_CREDENTIAL_GENERATION_ID = "test-fly-v1"
+  MOLLIE_PAYMENT_WEBHOOK_URL = "https://app.leaderbot.live/api/webhooks/mollie/payments"
+  MOLLIE_BILLING_SCHEDULER_MODE = "pilot_pin"
+  MOLLIE_BILLING_WORKER_WORKSPACE_ID = "1"
+  MOLLIE_ACCOUNTING_IMPORT_ENABLED = "false"
+  AI_ANSWER_FINALIZATION_DRAIN_ENABLED = "false"
+  AI_ANSWER_QUOTA_PREFLIGHT_ENABLED = "false"
+  BILLING_NOTIFICATION_PLANE_ENABLED = "false"
   # REDIS_URL must be provided via Fly secrets for production startup.
 
 [processes]
