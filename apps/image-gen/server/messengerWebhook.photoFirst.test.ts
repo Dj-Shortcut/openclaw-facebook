@@ -471,6 +471,11 @@ describe("photo-first onboarding", () => {
           payload: "OPENCLAW_ACTION:Pas%20foto%20aan",
         },
         { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
+        {
+          content_type: "text",
+          title: "Klantenportaal",
+          payload: "OPENCLAW_ACTION:portal",
+        },
       ]
     );
   });
@@ -560,6 +565,11 @@ describe("photo-first onboarding", () => {
           payload: "OPENCLAW_ACTION:Pas%20foto%20aan",
         },
         { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
+        {
+          content_type: "text",
+          title: "Klantenportaal",
+          payload: "OPENCLAW_ACTION:portal",
+        },
       ]
     );
   });
