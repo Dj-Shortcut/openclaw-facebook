@@ -385,6 +385,7 @@ describe("photo-first onboarding", () => {
     const userState = await getTestMessengerState(psid);
     expect(userState?.stage).toBe("IDLE");
     expect(userState?.hasSeenIntro).toBe(true);
+    expect(userState?.preferredLang).toBe("nl");
     expect(sendTextMock).not.toHaveBeenCalled();
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
@@ -595,6 +596,7 @@ describe("photo-first onboarding", () => {
       t("en", "flowExplanation"),
       expect.any(Array),
     );
+    expect((await getTestMessengerState(psid))?.preferredLang).toBe("en");
 
     sendQuickRepliesMock.mockClear();
 

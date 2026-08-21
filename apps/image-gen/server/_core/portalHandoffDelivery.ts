@@ -67,8 +67,9 @@ function buildPortalHandoffMessage(
   state: MessengerUserState,
   variant: SendPortalHandoffInput["messageVariant"] = "onboarding"
 ): string {
+  const lang = state.preferredLang === "en" ? "en" : "nl";
   if (variant === "portal_reentry") {
-    if (state.preferredLang === "nl") {
+    if (lang === "nl") {
       return [
         "Open je Leaderbot-klantenportaal via deze beveiligde link:",
         handoffUrl,
@@ -84,7 +85,7 @@ function buildPortalHandoffMessage(
   }
 
   if (variant === "admin_onboarding") {
-    if (state.preferredLang === "nl") {
+    if (lang === "nl") {
       return [
         "Je Messenger-beheerdersidentiteit is geverifieerd.",
         "Open deze beveiligde link om je Leaderbot-klantenportaal te activeren:",
@@ -101,7 +102,7 @@ function buildPortalHandoffMessage(
     ].join("\n\n");
   }
 
-  if (state.preferredLang === "nl") {
+  if (lang === "nl") {
     return [
       "Je premium setup is klaar.",
       "Open deze beveiligde link om je Leaderbot workspace te beheren:",

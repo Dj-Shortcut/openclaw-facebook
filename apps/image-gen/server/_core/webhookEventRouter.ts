@@ -61,10 +61,10 @@ async function handleEvent(
     trackedCtx.logUserState(psid, userId, state, reqId, "handle_event");
 
     if (
-      eventContext.senderLocale &&
-      eventContext.localeLang !== state.preferredLang
+      eventContext.lang !== state.preferredLang &&
+      (eventContext.senderLocale || state.preferredLang === undefined)
     ) {
-      await setPreferredLang(psid, eventContext.localeLang);
+      await setPreferredLang(psid, eventContext.lang);
     }
 
     await routeTrackedEvent(eventContext, event);
