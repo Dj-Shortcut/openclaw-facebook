@@ -25,6 +25,7 @@ on:
       - "README.md"
       - "docs/**"
       - "deploy/fly-gateway/**"
+      - "fly.toml"
       - "examples/**"
       - "scripts/**"
       - "src/**"

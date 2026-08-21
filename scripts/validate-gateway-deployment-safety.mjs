@@ -26,6 +26,11 @@ export function validateFlyGatewayConfig(text) {
   );
   requireMatch(
     text,
+    /^OPENCLAW_PUBLIC_GATEWAY_GUARD\s*=\s*"1"$/m,
+    "fly.toml must keep the public route guard enabled"
+  );
+  requireMatch(
+    text,
     /^OPENCLAW_PUBLIC_GATEWAY_PATHS\s*=\s*"\/facebook\/webhook,\/healthz"$/m,
     "fly.toml must keep the public gateway path allowlist"
   );
@@ -53,6 +58,20 @@ export function validateManagedUpdateWorkflow(text) {
     /gh pr create[\s\S]*?--draft/,
     "Automated OpenClaw update PRs must be created as drafts"
   );
+  const redraftIndex = text.indexOf('gh pr ready "$branch" --undo');
+  const forcePushIndex = text.indexOf(
+    'git push --force-with-lease origin "$branch"'
+  );
+  if (redraftIndex < 0) {
+    throw new Error(
+      "Existing automated OpenClaw update PRs must be returned to draft"
+    );
+  }
+  if (forcePushIndex < 0 || redraftIndex > forcePushIndex) {
+    throw new Error(
+      "Existing update PRs must be returned to draft before force-pushing"
+    );
+  }
   if (/\bfly\s+deploy\b/.test(text)) {
     throw new Error("The dependency update workflow must never deploy to Fly");
   }
@@ -61,14 +80,27 @@ export function validateManagedUpdateWorkflow(text) {
   }
 }
 
+export function validatePluginWorkflow(text) {
+  requireMatch(
+    text,
+    /^\s*-\s*["']?fly\.toml["']?\s*$/m,
+    "The plugin validation workflow must run for fly.toml pull-request changes"
+  );
+}
+
 export function validateGatewayDeploymentSafety(rootDir = process.cwd()) {
   const flyConfig = fs.readFileSync(path.join(rootDir, "fly.toml"), "utf8");
   const updateWorkflow = fs.readFileSync(
     path.join(rootDir, ".github/workflows/update-openclaw.yml"),
     "utf8"
   );
+  const pluginWorkflow = fs.readFileSync(
+    path.join(rootDir, ".github/workflows/main.yml"),
+    "utf8"
+  );
   const result = validateFlyGatewayConfig(flyConfig);
   validateManagedUpdateWorkflow(updateWorkflow);
+  validatePluginWorkflow(pluginWorkflow);
   return result;
 }
 

@@ -3,6 +3,7 @@ import {
   validateFlyGatewayConfig,
   validateGatewayDeploymentSafety,
   validateManagedUpdateWorkflow,
+  validatePluginWorkflow,
 } from "./validate-gateway-deployment-safety.mjs";
 
 describe("gateway deployment safety validation", () => {
@@ -18,6 +19,7 @@ describe("gateway deployment safety validation", () => {
     const valid = [
       'OPENCLAW_AGENT_MODEL = "openai/gpt-5.4-mini"',
       'NODE_OPTIONS = "--max-old-space-size=1536"',
+      'OPENCLAW_PUBLIC_GATEWAY_GUARD = "1"',
       'OPENCLAW_PUBLIC_GATEWAY_PATHS = "/facebook/webhook,/healthz"',
       'memory = "4096"',
     ].join("\n");
@@ -28,12 +30,17 @@ describe("gateway deployment safety validation", () => {
     expect(() => validateFlyGatewayConfig(valid.replace("1536", "3072"))).toThrow(
       "heap limit"
     );
+    expect(() =>
+      validateFlyGatewayConfig(valid.replace('GUARD = "1"', 'GUARD = "0"'))
+    ).toThrow("route guard enabled");
   });
 
   it("rejects update automation that deploys or skips draft approval", () => {
     const valid = [
       "managed-redeploy-handoff.md",
       "approval_status: pending",
+      'gh pr ready "$branch" --undo',
+      'git push --force-with-lease origin "$branch"',
       "gh pr create --draft",
     ].join("\n");
 
@@ -43,5 +50,25 @@ describe("gateway deployment safety validation", () => {
     expect(() => validateManagedUpdateWorkflow(valid.replace("--draft", ""))).toThrow(
       "created as drafts"
     );
+    expect(() =>
+      validateManagedUpdateWorkflow(
+        valid.replace('gh pr ready "$branch" --undo\n', "")
+      )
+    ).toThrow("returned to draft");
+    expect(() =>
+      validateManagedUpdateWorkflow(
+        valid.replace(
+          'gh pr ready "$branch" --undo\ngit push --force-with-lease origin "$branch"',
+          'git push --force-with-lease origin "$branch"\ngh pr ready "$branch" --undo'
+        )
+      )
+    ).toThrow("before force-pushing");
+  });
+
+  it("requires pull-request validation for fly.toml-only changes", () => {
+    expect(() => validatePluginWorkflow('paths:\n  - "docs/**"')).toThrow(
+      "fly.toml pull-request changes"
+    );
+    expect(() => validatePluginWorkflow('paths:\n  - "fly.toml"')).not.toThrow();
   });
 });
