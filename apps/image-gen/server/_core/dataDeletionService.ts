@@ -13,11 +13,12 @@ import { deleteProviderVideoForUser } from "./video-generation/videoProviderRegi
 import {
   anonymizePsid,
   clearUserState,
-  getState,
   type MessengerUserState,
 } from "./messengerState";
 import {
+  beginMessengerStatePrivacyErasure,
   deleteLegacyPersistedState,
+  getPersistedStateForErasure,
   replacePersistedState,
 } from "./messengerStatePersistence";
 import { getMessengerRequestPageId } from "./messengerRequestContext";
@@ -78,7 +79,7 @@ async function deleteStoredUrl(
 async function deleteUserDataInternal(
   psid: string
 ): Promise<UserDataDeletionOutcome> {
-  const state = await getState(psid);
+  const state = await Promise.resolve(getPersistedStateForErasure(psid));
   const userKey = state?.userKey ?? anonymizePsid(psid);
   const logUser = toLogUser(userKey);
   const retryContext = state
@@ -112,7 +113,7 @@ async function deleteUserDataInternal(
   const persistDeletionRetryState = async (
     pendingDeleteUrls: string[]
   ): Promise<boolean> => {
-    const currentState = await getState(psid);
+    const currentState = state;
     if (!currentState) {
       return false;
     }
@@ -181,17 +182,40 @@ async function deleteUserDataInternal(
   }
 
   let deleteStepsSucceeded = true;
+  let providerDrainPending = false;
 
-  deleteStepsSucceeded =
-    (await runStep("webhook_ingress_queue", async () => {
-      await eraseWebhookIngressDeliveriesForSubject(userKey);
-    })) && deleteStepsSucceeded;
+  if (privacyErasure && state?.bindingEpoch) {
+    const stateTombstoned = await runStep(
+      "messenger_state_privacy_tombstone",
+      async () => {
+        await beginMessengerStatePrivacyErasure({
+          ...privacyErasure,
+          bindingEpoch: state.bindingEpoch!,
+        });
+      }
+    );
+    if (!stateTombstoned) return { status: "failed" };
+
+    deleteStepsSucceeded =
+      (await runStep("webhook_ingress_queue", async () => {
+        await eraseWebhookIngressDeliveriesForSubject(privacyErasure!);
+      })) && deleteStepsSucceeded;
+  }
 
   if (privacyErasure && state?.pageId && state.bindingEpoch) {
     deleteStepsSucceeded =
       (await runStep("messenger_provider_attempts", async () => {
-        await containMessengerProviderAttemptsForPrivacy(privacyErasure);
+        const drained =
+          await containMessengerProviderAttemptsForPrivacy(privacyErasure);
+        if (!drained) {
+          providerDrainPending = true;
+          throw new Error("Messenger provider transport is still in flight");
+        }
       })) && deleteStepsSucceeded;
+    // Do not scrub completion/object indexes while a provider or Graph
+    // transport still owns an active started fence. The finishing worker may
+    // need to publish its cleanup inventory before this saga resumes.
+    if (providerDrainPending) return { status: "pending" };
     deleteStepsSucceeded =
       (await runStep("messenger_generation_queue", async () => {
         await eraseMessengerGenerationJobsForSubject({
@@ -265,7 +289,10 @@ async function deleteUserDataInternal(
   let faceMemoryFailedDeletes: string[] = [];
   deleteStepsSucceeded =
     (await runStep("face_memory", async () => {
-      faceMemoryFailedDeletes = await deleteFaceMemoryForUser(psid);
+      faceMemoryFailedDeletes = await deleteFaceMemoryForUser(psid, {
+        state,
+        persistState: false,
+      });
     })) && deleteStepsSucceeded;
   const deleteResults = await Promise.all(
     urls.map(async url => ({
@@ -315,12 +342,19 @@ async function deleteUserDataInternal(
     ])
   );
   if (failedDeletes.length) {
+    // Once the monotone privacy tombstone is installed, do not attempt to
+    // recreate customer state merely to record retry metadata. The existing
+    // fenced state remains readable only by this erasure path until every
+    // external object has been scrubbed.
+    if (privacyErasure) return { status: "pending" };
     return (await persistDeletionRetryState(failedDeletes))
       ? { status: "pending" }
       : { status: "failed" };
   }
 
   if (!deleteStepsSucceeded) {
+    if (providerDrainPending) return { status: "pending" };
+    if (privacyErasure) return { status: "pending" };
     // Keep retry-related state when required deletion steps fail; allow
     // delete-my-data operations to be retried without losing in-flight context.
     if (retryContext && (await persistDeletionRetryState([]))) {

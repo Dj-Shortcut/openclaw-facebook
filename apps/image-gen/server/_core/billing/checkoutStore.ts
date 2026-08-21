@@ -736,6 +736,31 @@ export async function resolveDuePaymentProviderOperations(
 ): Promise<number> {
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
+    // Match the emergency-disable order: execution control -> intents ->
+    // provider operations. Locking provider operations first would deadlock
+    // with disable, which owns the intent locks before it contains operations.
+    await tx
+      .select({ workspaceId: billingExecutionControls.workspaceId })
+      .from(billingExecutionControls)
+      .where(
+        and(
+          eq(billingExecutionControls.workspaceId, workspaceId),
+          eq(billingExecutionControls.mode, mode)
+        )
+      )
+      .limit(1)
+      .for("update");
+    await tx
+      .select({ intentId: billingIntents.intentId })
+      .from(billingIntents)
+      .where(
+        and(
+          eq(billingIntents.workspaceId, workspaceId),
+          eq(billingIntents.mode, mode)
+        )
+      )
+      .orderBy(billingIntents.intentId)
+      .for("update");
     const rows = await tx
       .select({
         operationId: billingProviderOperations.operationId,
@@ -757,6 +782,7 @@ export async function resolveDuePaymentProviderOperations(
           lte(billingProviderOperations.resolutionDueAt, now)
         )
       )
+      .orderBy(billingProviderOperations.operationId)
       .limit(Math.max(1, Math.min(100, limit)))
       .for("update");
     for (const row of rows) {

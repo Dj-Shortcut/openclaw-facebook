@@ -52,6 +52,8 @@ export function isMessengerGenerationTenantPartition(
 }
 
 export type MessengerGenerationJob = {
+  /** Work type is explicit so a tenant queue cannot route video work through the image worker. */
+  operation?: "image" | "video";
   psid: string;
   userId: string;
   /** Facebook Page receiving the message; used only for workspace resolution. */

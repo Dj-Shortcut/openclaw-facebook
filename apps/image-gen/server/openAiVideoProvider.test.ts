@@ -169,4 +169,40 @@ describe("OpenAiVideoProvider", () => {
       errorClass: "unknown",
     });
   });
+
+  it("keeps only safe OpenAI error metadata on a rejected video request", async () => {
+    process.env.OPENAI_VIDEO_MAX_RETRIES = "0";
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array([9, 8, 7]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ error: { code: "invalid_image_reference", message: "private detail" } }),
+          { status: 400, headers: { "content-type": "application/json" } }
+        )
+      );
+    global.fetch = fetchMock;
+
+    const result = await new OpenAiVideoProvider().generateVideo({
+      prompt: "private prompt",
+      sourceImageUrl: "https://img.example/private.jpg",
+      reqId: "req-openai-video-invalid-reference",
+      userKey: "user-key",
+      timeoutMs: 10_000,
+    });
+
+    expect(result).toEqual({
+      kind: "failure",
+      provider: "openai",
+      errorClass: "provider",
+      retryable: false,
+      providerStatus: 400,
+      providerErrorCode: "invalid_image_reference",
+    });
+  });
 });

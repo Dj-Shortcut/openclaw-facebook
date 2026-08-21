@@ -97,6 +97,8 @@ export function createReadinessHandler(
 export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
   const aiFinalizationDrainEnabled =
     process.env.AI_ANSWER_FINALIZATION_DRAIN_ENABLED === "true";
+  const aiAnswerQuotaPreflightEnabled =
+    process.env.AI_ANSWER_QUOTA_PREFLIGHT_ENABLED === "true";
   return [
     {
       name: "conversation_identity_config",
@@ -155,9 +157,19 @@ export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
     {
       name: "ai_answer_finalization",
       check: async () => {
+        const admissionEnabled = isMollieEntitlementEnforcementEnabled();
         if (
-          isMollieEntitlementEnforcementEnabled() ||
-          aiFinalizationDrainEnabled
+          (admissionEnabled || aiAnswerQuotaPreflightEnabled) &&
+          !aiFinalizationDrainEnabled
+        ) {
+          throw new Error(
+            "AI answer quota admission/preflight requires the durable finalization drain"
+          );
+        }
+        if (
+          admissionEnabled ||
+          aiFinalizationDrainEnabled ||
+          aiAnswerQuotaPreflightEnabled
         ) {
           await assertAiAnswerFinalizationReadiness(getConfiguredBillingMode());
         }

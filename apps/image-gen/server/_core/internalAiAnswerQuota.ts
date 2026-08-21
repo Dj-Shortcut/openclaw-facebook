@@ -8,8 +8,10 @@ import {
 import { getDatabaseOrThrow } from "../db";
 import {
   assertTenantBillingWorkerWorkspace,
+  getConfiguredBillingMode,
   isMollieEntitlementEnforcementEnabled,
 } from "./billing/config";
+import { assertAiAnswerFinalizationReadiness } from "./billing/billingReadiness";
 import {
   commitStartpilotAiAnswerUsage,
   releaseStartpilotAiAnswerUsage,
@@ -44,6 +46,23 @@ export class InternalAiAnswerQuotaError extends Error {
     super("AI answer quota is unavailable", options);
     this.name = "InternalAiAnswerQuotaError";
   }
+}
+
+export const INTERNAL_AI_ANSWER_QUOTA_PROTOCOL = "leaderbot-ai-answer-quota-v1";
+
+export async function getInternalAiAnswerQuotaReadiness(): Promise<{
+  protocol: typeof INTERNAL_AI_ANSWER_QUOTA_PROTOCOL;
+  preflightReady: true;
+  admissionEnabled: boolean;
+  drainEnabled: boolean;
+}> {
+  await assertAiAnswerFinalizationReadiness(getConfiguredBillingMode());
+  return {
+    protocol: INTERNAL_AI_ANSWER_QUOTA_PROTOCOL,
+    preflightReady: true,
+    admissionEnabled: isMollieEntitlementEnforcementEnabled(),
+    drainEnabled: process.env.AI_ANSWER_FINALIZATION_DRAIN_ENABLED === "true",
+  };
 }
 
 export function safeInternalAiAnswerQuotaErrorCode(error: unknown): string {

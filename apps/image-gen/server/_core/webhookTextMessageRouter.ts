@@ -8,12 +8,19 @@ import {
   getOrCreateState,
   getPendingConversationActionsForMessage,
   markIntroSeen,
+  setPendingVideoGeneration,
   setFlowState,
   setPendingConversationActions,
 } from "./messengerState";
 import { toLogUser } from "./privacy";
 import { handleSharedTextMessage } from "./sharedTextHandler";
 import { isMessengerVideoGenerationEnabled } from "./video-generation/videoConfig";
+import { getMessengerRequestPageId } from "./messengerRequestContext";
+import { hasQuotaBypass } from "./messengerQuota";
+import {
+  hasPremiumMediaAccess,
+  WorkspaceEntitlementLookupError,
+} from "./workspaceEntitlementRuntime";
 import type { HandlerContext } from "./webhookHandlerTypes";
 
 type TextMessageInput = {
@@ -32,6 +39,9 @@ export async function handleTextMessage(
   input: TextMessageInput
 ): Promise<void> {
   const resolvedInput = await resolvePendingActionText(input);
+  if (await retryPendingVideoGeneration(ctx, resolvedInput)) {
+    return;
+  }
   const normalizedMessage = createNormalizedTextMessage(resolvedInput);
   logNormalizedTextHandoff(input, normalizedMessage);
 
@@ -42,6 +52,70 @@ export async function handleTextMessage(
   );
   await sendSharedMessengerTextResponse(ctx, resolvedInput, result);
   await applyTextAfterSend(result, resolvedInput);
+}
+
+function isVideoRetryText(text: string): boolean {
+  return /^(?:probeer(?:\s+nog\s+eens)?|opnieuw|retry|try\s+again)$/iu.test(
+    text.trim()
+  );
+}
+
+async function retryPendingVideoGeneration(
+  ctx: HandlerContext,
+  input: TextMessageInput
+): Promise<boolean> {
+  if (!ctx.runVideoGeneration || !isVideoRetryText(input.text)) {
+    return false;
+  }
+  const state = await getOrCreateState(input.psid);
+  const pending = state.pendingVideoGeneration;
+  if (!pending) {
+    return false;
+  }
+  if (
+    process.env.MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED === "true" &&
+    !hasQuotaBypass(input.psid, input.userId)
+  ) {
+    try {
+      if (!(await hasPremiumMediaAccess(getMessengerRequestPageId()))) {
+        await ctx.sendLoggedText(
+          input.psid,
+          t(input.lang, "videoGenerationPremiumRequired"),
+          input.reqId
+        );
+        return true;
+      }
+    } catch (error) {
+      safeLog("messenger_video_retry_entitlement_lookup_failed", {
+        level: "error",
+        reqId: input.reqId,
+        errorCode:
+          error instanceof WorkspaceEntitlementLookupError
+            ? error.name
+            : "WorkspaceEntitlementLookupError",
+      });
+      await ctx.sendLoggedText(
+        input.psid,
+        t(input.lang, "videoGenerationUnavailable"),
+        input.reqId
+      );
+      return true;
+    }
+  }
+  await ctx.sendLoggedText(
+    input.psid,
+    t(input.lang, "videoGenerationQueued"),
+    input.reqId
+  );
+  await ctx.runVideoGeneration(
+    input.psid,
+    input.userId,
+    input.reqId,
+    input.lang,
+    pending.sourceImageUrl,
+    pending.promptHint
+  );
+  return true;
 }
 
 async function resolvePendingActionText(
@@ -135,6 +209,37 @@ async function handleSharedMessengerText(
         return false;
       }
 
+      if (
+        process.env.MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED === "true" &&
+        !hasQuotaBypass(input.psid, input.userId)
+      ) {
+        try {
+          if (!(await hasPremiumMediaAccess(getMessengerRequestPageId()))) {
+            await ctx.sendLoggedText(
+              input.psid,
+              t(input.lang, "videoGenerationPremiumRequired"),
+              input.reqId
+            );
+            return true;
+          }
+        } catch (error) {
+          safeLog("messenger_video_entitlement_lookup_failed", {
+            level: "error",
+            reqId: input.reqId,
+            errorCode:
+              error instanceof WorkspaceEntitlementLookupError
+                ? error.name
+                : "WorkspaceEntitlementLookupError",
+          });
+          await ctx.sendLoggedText(
+            input.psid,
+            t(input.lang, "videoGenerationUnavailable"),
+            input.reqId
+          );
+          return true;
+        }
+      }
+
       if (!hasPhoto) {
         await ctx.sendLoggedText(
           input.psid,
@@ -163,26 +268,21 @@ async function handleSharedMessengerText(
         t(input.lang, "videoGenerationQueued"),
         input.reqId
       );
-      // Video rendering is intentionally detached from the webhook path so
-      // ingress delivery is not blocked by long provider jobs. Any later
-      // success/failure notification still depends on the Messenger response
-      // window being open; the feature flag remains disabled by default.
-      setTimeout(() => {
-        void ctx.runVideoGeneration?.(
-          input.psid,
-          input.userId,
-          input.reqId,
-          input.lang,
+      await Promise.resolve(
+        setPendingVideoGeneration(input.psid, {
           sourceImageUrl,
-          messageText
-        ).catch(error => {
-          safeLog("messenger_video_generation_background_failed", {
-            level: "error",
-            reqId: input.reqId,
-            errorCode: error instanceof Error ? error.name : "UnknownError",
-          });
-        });
-      }, 0);
+          promptHint: messageText,
+          requestedAt: Date.now(),
+        })
+      );
+      await ctx.runVideoGeneration(
+        input.psid,
+        input.userId,
+        input.reqId,
+        input.lang,
+        sourceImageUrl,
+        messageText
+      );
       return true;
     },
     logState: (state, context) => {

@@ -11,6 +11,8 @@ import {
   billingOutbox,
   billingProfileOperatorActions,
   billingProviderOperations,
+  billingReconciliationAnomalies,
+  billingReconciliationRuns,
   billingSchedulerTenants,
   billingSubscriptions,
   users,
@@ -37,7 +39,9 @@ import {
   finalizePaymentProviderOperation,
   isCheckoutUrlExposureAllowed,
   markIntentPaymentMismatch,
+  resolveDuePaymentProviderOperations,
 } from "./_core/billing/checkoutStore";
+import { runDailyBillingReconciliation } from "./_core/billing/reconciliation";
 
 const suite = describe.runIf(process.env.RUN_MYSQL_INTEGRATION === "1");
 
@@ -82,6 +86,12 @@ suite("billing execution MySQL safety boundary", () => {
   afterEach(async () => {
     if (!workspaceId) return;
     const database = await getDatabaseOrThrow();
+    await database
+      .delete(billingReconciliationAnomalies)
+      .where(eq(billingReconciliationAnomalies.workspaceId, workspaceId));
+    await database
+      .delete(billingReconciliationRuns)
+      .where(eq(billingReconciliationRuns.workspaceId, workspaceId));
     await database
       .delete(billingOutbox)
       .where(eq(billingOutbox.workspaceId, workspaceId));
@@ -1189,6 +1199,186 @@ suite("billing execution MySQL safety boundary", () => {
         )
       );
     expect(cancelJobs).toHaveLength(0);
+  });
+
+  it("serializes due payment resolution and emergency disable on the control row", async () => {
+    const database = await getDatabaseOrThrow();
+    await provisionEnabledBoundary();
+    const intentId = `21000000-0000-4000-8000-${String(workspaceId).padStart(12, "0")}`;
+    await insertIntent(intentId, "creating_payment");
+    await insertProviderOperation({
+      operationId: `22000000-0000-4000-8000-${String(workspaceId).padStart(12, "0")}`,
+      operationType: "create_payment",
+      intentId,
+      state: "ambiguous",
+    });
+    const url = process.env.DATABASE_URL;
+    if (!url) throw new Error("DATABASE_URL is required");
+    const blocker = await mysql.createConnection(url);
+    const observer = await mysql.createConnection(url);
+    let resolver!: ReturnType<typeof resolveDuePaymentProviderOperations>;
+    let disable!: ReturnType<typeof disableBillingSchedulerTenant>;
+    try {
+      await blocker.beginTransaction();
+      await blocker.query(
+        "SELECT `workspace_id` FROM `billing_execution_controls` WHERE `workspace_id`=? AND `mode`='test' FOR UPDATE",
+        [workspaceId]
+      );
+      const [[identity]] = await blocker.query<Array<{ connectionId: number }>>(
+        "SELECT CONNECTION_ID() AS connectionId"
+      );
+      resolver = resolveDuePaymentProviderOperations(
+        workspaceId,
+        "test",
+        new Date(Date.now() + 1_000)
+      );
+      disable = disableBillingSchedulerTenant({
+        workspaceId,
+        mode: "test",
+        actorUserId: userId,
+        requestId: `23000000-0000-4000-8000-${String(workspaceId).padStart(12, "0")}`,
+        expectedExecutionEpoch: 2,
+        reason: "serialize resolver and disable",
+      });
+      await waitForBlockedTransactions(observer, identity!.connectionId, 2);
+      await blocker.commit();
+      const outcomes = await Promise.allSettled([resolver, disable]);
+      expect(outcomes.map(outcome => outcome.status)).toEqual([
+        "fulfilled",
+        "fulfilled",
+      ]);
+    } finally {
+      await blocker.rollback().catch(() => undefined);
+      await blocker.end();
+      await observer.end();
+    }
+    const [control] = await database
+      .select({ enabled: billingExecutionControls.commercialEnabled })
+      .from(billingExecutionControls)
+      .where(eq(billingExecutionControls.workspaceId, workspaceId));
+    expect(control?.enabled).toBe(false);
+  });
+
+  it("rejects a deferred reconciliation response after the tenant lease is lost", async () => {
+    const database = await getDatabaseOrThrow();
+    await provisionEnabledBoundary();
+    const intentId = `24000000-0000-4000-8000-${String(workspaceId).padStart(12, "0")}`;
+    const customerId = `cst_reconciliation_${workspaceId}`;
+    const subscriptionId = `sub_reconciliation_${workspaceId}`;
+    const mandateId = `mdt_reconciliation_${workspaceId}`;
+    const originalNextPaymentDate = new Date("2026-09-01T00:00:00.000Z");
+    await database.insert(billingCustomers).values({
+      workspaceId,
+      mode: "test",
+      mollieCustomerId: customerId,
+      externalReference: `reconciliation-customer-${workspaceId}`,
+      idempotencyKey: `reconciliation-customer-key-${workspaceId}`,
+      status: "active",
+    });
+    await insertIntent(intentId, "paid");
+    await database.insert(billingSubscriptions).values({
+      workspaceId,
+      mode: "test",
+      planCode: "premium_monthly_v1",
+      mollieCustomerId: customerId,
+      mollieSubscriptionId: subscriptionId,
+      mollieMandateId: mandateId,
+      sourceIntentId: intentId,
+      idempotencyKey: `reconciliation-subscription-${workspaceId}`,
+      status: "active",
+      interval: "1 month",
+      recurringAmount: "19.00",
+      currency: "EUR",
+      entitlements: { imagesPerDay: 100 },
+      mollieDescription: "Reconciliation lease fixture",
+      nextPaymentDate: originalNextPaymentDate,
+    });
+    const tenantLease = {
+      workspaceId,
+      mode: "test" as const,
+      kind: "reconciliation" as const,
+      leaseToken: `25000000-0000-4000-8000-${String(workspaceId).padStart(12, "0")}`,
+      executionEpoch: 2,
+    };
+    await database
+      .update(billingSchedulerTenants)
+      .set({
+        leaseToken: tenantLease.leaseToken,
+        leaseUntil: new Date(Date.now() + 60_000),
+      })
+      .where(
+        and(
+          eq(billingSchedulerTenants.workspaceId, workspaceId),
+          eq(billingSchedulerTenants.mode, "test"),
+          eq(billingSchedulerTenants.kind, "reconciliation")
+        )
+      );
+    let providerStarted!: () => void;
+    let releaseProvider!: (value: unknown) => void;
+    const providerStartedPromise = new Promise<void>(resolve => {
+      providerStarted = resolve;
+    });
+    const providerResult = new Promise(resolve => {
+      releaseProvider = resolve;
+    });
+    const remote = {
+      resource: "subscription",
+      id: subscriptionId,
+      mode: "test",
+      status: "active",
+      amount: { currency: "EUR", value: "19.00" },
+      interval: "1 month",
+      startDate: "2026-08-01",
+      nextPaymentDate: "2026-10-01",
+      mandateId,
+      metadata: { billingIntentId: intentId },
+    };
+    const client = {
+      listCustomerPayments: async () => [],
+      getPayment: vi.fn(),
+      getSubscription: async () => {
+        providerStarted();
+        return providerResult;
+      },
+      listCustomerSubscriptions: async () => [remote],
+    } as unknown as MollieClient;
+    const reconciliation = runDailyBillingReconciliation(
+      workspaceId,
+      client,
+      new Date("2026-08-21T08:00:00.000Z"),
+      async () => undefined,
+      tenantLease
+    );
+    await providerStartedPromise;
+    await database
+      .update(billingSchedulerTenants)
+      .set({ leaseToken: randomUUID() })
+      .where(
+        and(
+          eq(billingSchedulerTenants.workspaceId, workspaceId),
+          eq(billingSchedulerTenants.mode, "test"),
+          eq(billingSchedulerTenants.kind, "reconciliation")
+        )
+      );
+    releaseProvider(remote);
+    await expect(reconciliation).rejects.toThrow(
+      "billing scheduler lease ownership was lost"
+    );
+    const [subscription] = await database
+      .select({ nextPaymentDate: billingSubscriptions.nextPaymentDate })
+      .from(billingSubscriptions)
+      .where(eq(billingSubscriptions.workspaceId, workspaceId));
+    expect(subscription?.nextPaymentDate).toEqual(originalNextPaymentDate);
+    const effects = await database
+      .select({ id: billingOutbox.id })
+      .from(billingOutbox)
+      .where(eq(billingOutbox.workspaceId, workspaceId));
+    expect(effects).toHaveLength(0);
+    const [run] = await database
+      .select({ status: billingReconciliationRuns.status })
+      .from(billingReconciliationRuns)
+      .where(eq(billingReconciliationRuns.workspaceId, workspaceId));
+    expect(run?.status).toBe("running");
   });
 
   async function provisionEnabledBoundary() {

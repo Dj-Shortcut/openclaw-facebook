@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   billingCustomers,
+  billingExecutionControls,
+  billingIntents,
   billingOutbox,
+  billingProviderOperations,
   billingReconciliationAnomalies,
   billingReconciliationRuns,
   billingSubscriptions,
@@ -105,9 +108,9 @@ describe("billing reconciliation tenant boundary", () => {
     expect(flow.inserts.some(entry => entry.table === billingOutbox)).toBe(
       false
     );
-    // Provider-operation resolution, profile-expiry containment and the
-    // reconciliation body use separate tenant-scoped transactions.
-    expect(flow.transactionMock).toHaveBeenCalledTimes(3);
+    // Provider-operation resolution, profile expiry, the anomaly receipt and
+    // final completion use separate tenant-scoped transactions.
+    expect(flow.transactionMock).toHaveBeenCalledTimes(4);
   });
 
   it("fails closed when the workspace billing-customer row is missing", async () => {
@@ -171,7 +174,8 @@ describe("billing reconciliation tenant boundary", () => {
     expect(flow.inserts.some(entry => entry.table === billingOutbox)).toBe(
       false
     );
-    expect(flow.transactionMock).toHaveBeenCalledTimes(3);
+    // Both metadata-only anomaly receipts are transactionally fenced.
+    expect(flow.transactionMock).toHaveBeenCalledTimes(5);
   });
 });
 
@@ -233,17 +237,24 @@ function reconciliationDatabase(
   }));
   const transactionSelect = vi.fn(() => ({
     from: vi.fn((table: unknown) => ({
-      where: vi.fn(() => ({
-        limit: vi.fn(() => ({
-          for: vi
-            .fn()
-            .mockResolvedValue(
-              table === billingReconciliationRuns
-                ? [{ id: 901 }]
-                : [subscription]
-            ),
-        })),
-      })),
+      where: vi.fn(() => {
+        const rows =
+          table === billingReconciliationRuns
+            ? [{ id: 901 }]
+            : table === billingExecutionControls
+              ? [{ workspaceId: 42 }]
+              : table === billingIntents || table === billingProviderOperations
+                ? []
+                : [subscription];
+        const query = {
+          limit: vi.fn(),
+          orderBy: vi.fn(),
+          for: vi.fn().mockResolvedValue(rows),
+        };
+        query.limit.mockReturnValue(query);
+        query.orderBy.mockReturnValue(query);
+        return query;
+      }),
     })),
   }));
   const transaction = {

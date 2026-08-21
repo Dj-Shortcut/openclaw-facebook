@@ -115,9 +115,12 @@ describe("Mollie checkout launch gate", () => {
     expect(listMethods).not.toHaveBeenCalled();
   });
 
-  it("does not allow a caller to buy the hidden recurring offer", async () => {
+  it("keeps recurring Premium out of the public launch checkout", async () => {
     process.env = billingTestEnv();
-    const listMethods = vi.fn();
+    const listMethods = vi.fn().mockResolvedValue([
+      { resource: "method", id: "bancontact" },
+      { resource: "method", id: "directdebit" },
+    ]);
 
     await expect(
       startMollieCheckout(

@@ -7,12 +7,14 @@ const {
   processFacebookWebhookPayloadMock,
   reserveInternalAiAnswerQuotaMock,
   finalizeInternalAiAnswerQuotaMock,
+  getInternalAiAnswerQuotaReadinessMock,
   timingSafeEqualMock,
 } = vi.hoisted(() => ({
   acceptInternalMessengerImageRequestMock: vi.fn(async () => undefined),
   processFacebookWebhookPayloadMock: vi.fn(async () => undefined),
   reserveInternalAiAnswerQuotaMock: vi.fn(),
   finalizeInternalAiAnswerQuotaMock: vi.fn(),
+  getInternalAiAnswerQuotaReadinessMock: vi.fn(),
   timingSafeEqualMock: vi.fn((left: Buffer, right: Buffer) =>
     left.equals(right)
   ),
@@ -34,6 +36,7 @@ vi.mock("./_core/messengerWebhook", () => ({
 vi.mock("./_core/internalAiAnswerQuota", () => ({
   reserveInternalAiAnswerQuota: reserveInternalAiAnswerQuotaMock,
   finalizeInternalAiAnswerQuota: finalizeInternalAiAnswerQuotaMock,
+  getInternalAiAnswerQuotaReadiness: getInternalAiAnswerQuotaReadinessMock,
   safeInternalAiAnswerQuotaErrorCode: (error: unknown) =>
     error instanceof Error ? error.name : "UnknownError",
 }));
@@ -114,6 +117,7 @@ beforeEach(() => {
   processFacebookWebhookPayloadMock.mockReset();
   reserveInternalAiAnswerQuotaMock.mockReset();
   finalizeInternalAiAnswerQuotaMock.mockReset();
+  getInternalAiAnswerQuotaReadinessMock.mockReset();
   timingSafeEqualMock.mockClear();
 });
 
@@ -126,6 +130,42 @@ afterEach(() => {
 });
 
 describe("internal AI-answer quota routes", () => {
+  it("exposes an authenticated metadata-only readiness handshake", async () => {
+    getInternalAiAnswerQuotaReadinessMock.mockResolvedValue({
+      protocol: "leaderbot-ai-answer-quota-v1",
+      preflightReady: true,
+      admissionEnabled: false,
+      drainEnabled: true,
+    });
+
+    await withListeningApp(createApp(), async baseUrl => {
+      const response = await fetch(
+        `${baseUrl}/internal/messenger/ai-answer-quota/readiness`,
+        { headers: { authorization: "Bearer route-token" } }
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        protocol: "leaderbot-ai-answer-quota-v1",
+        preflightReady: true,
+        admissionEnabled: false,
+        drainEnabled: true,
+      });
+    });
+    expect(getInternalAiAnswerQuotaReadinessMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects readiness without the internal bearer token", async () => {
+    await withListeningApp(createApp(), async baseUrl => {
+      const response = await fetch(
+        `${baseUrl}/internal/messenger/ai-answer-quota/readiness`,
+        { headers: { authorization: "Bearer wrong-token" } }
+      );
+      expect(response.status).toBe(403);
+      await response.text();
+    });
+    expect(getInternalAiAnswerQuotaReadinessMock).not.toHaveBeenCalled();
+  });
+
   it("authenticates and validates reservation requests", async () => {
     reserveInternalAiAnswerQuotaMock.mockResolvedValue({
       status: "reserved",

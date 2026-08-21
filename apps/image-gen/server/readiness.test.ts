@@ -14,6 +14,8 @@ const READINESS_ENV_KEYS = [
   "NODE_ENV",
   "MOLLIE_BILLING_ENABLED",
   "MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED",
+  "AI_ANSWER_FINALIZATION_DRAIN_ENABLED",
+  "AI_ANSWER_QUOTA_PREFLIGHT_ENABLED",
   "MOLLIE_API_KEY",
   "MOLLIE_MODE",
   "MOLLIE_PAYMENT_WEBHOOK_URL",
@@ -140,6 +142,31 @@ describe("readiness", () => {
 
     await expect(rateLimiterCheck?.check()).rejects.toThrow(
       "Mollie webhook rate limiting requires Redis"
+    );
+  });
+
+  it("does not report paid AI quota ready when admission lacks the durable drain", async () => {
+    vi.stubEnv("MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED", "true");
+    vi.stubEnv("AI_ANSWER_FINALIZATION_DRAIN_ENABLED", "false");
+    const check = buildRuntimeReadinessChecks().find(
+      item => item.name === "ai_answer_finalization"
+    );
+
+    await expect(check?.check()).rejects.toThrow(
+      "requires the durable finalization drain"
+    );
+  });
+
+  it("keeps exposure-off quota preflight fail-closed without the durable drain", async () => {
+    vi.stubEnv("MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED", "false");
+    vi.stubEnv("AI_ANSWER_QUOTA_PREFLIGHT_ENABLED", "true");
+    vi.stubEnv("AI_ANSWER_FINALIZATION_DRAIN_ENABLED", "false");
+    const check = buildRuntimeReadinessChecks().find(
+      item => item.name === "ai_answer_finalization"
+    );
+
+    await expect(check?.check()).rejects.toThrow(
+      "requires the durable finalization drain"
     );
   });
 

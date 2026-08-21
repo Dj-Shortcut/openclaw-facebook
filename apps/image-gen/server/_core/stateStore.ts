@@ -14,12 +14,20 @@ function isPromiseLike<T>(value: MaybePromise<T>): value is Promise<T> {
   return typeof (value as Promise<T> | undefined)?.then === "function";
 }
 
-function getStateKey(psid: string): string {
+export function getStateStorageKey(psid: string): string {
   return getScopedStateKey("psid", psid);
 }
 
-function getScopedStateKey(scope: string, key: string): string {
+export function getScopedStateStorageKey(scope: string, key: string): string {
   return `${scope}:${key}`;
+}
+
+function getStateKey(psid: string): string {
+  return getStateStorageKey(psid);
+}
+
+function getScopedStateKey(scope: string, key: string): string {
+  return getScopedStateStorageKey(scope, key);
 }
 
 export function isRedisStateStoreEnabled(): boolean {
@@ -32,7 +40,9 @@ export function assertProductionStateStoreConfig(): void {
   }
 
   if (!isRedisStateStoreEnabled()) {
-    throw new Error("REDIS_URL must be configured in production for state consistency");
+    throw new Error(
+      "REDIS_URL must be configured in production for state consistency"
+    );
   }
 }
 
@@ -51,6 +61,29 @@ function readRawState<T>(storageKey: string): MaybePromise<T | null> {
     const payload = await redis.get(storageKey);
     return payload ? (JSON.parse(payload) as T) : null;
   });
+}
+
+export function getStateTtlSeconds<T>(value: T): number {
+  const faceMemoryValue = value as {
+    faceMemoryConsent?: { given?: boolean } | null;
+    lastSourceImageUrl?: string | null;
+    lastSourceImageUpdatedAt?: number | null;
+    pendingSourceImageDeleteUrl?: string | null;
+    pendingSourceImageDeleteUrls?: string[] | null;
+  } | null;
+  const hasActiveFaceMemory =
+    faceMemoryValue?.faceMemoryConsent?.given === true &&
+    Boolean(
+      faceMemoryValue.lastSourceImageUrl ||
+      faceMemoryValue.lastSourceImageUpdatedAt
+    );
+  const hasPendingSourceDelete = Boolean(
+    faceMemoryValue?.pendingSourceImageDeleteUrl ||
+    faceMemoryValue?.pendingSourceImageDeleteUrls?.length
+  );
+  return hasActiveFaceMemory || hasPendingSourceDelete
+    ? getFaceMemoryStateTtlSeconds()
+    : STATE_TTL_SECONDS;
 }
 
 function writeRawState<T>(
@@ -86,10 +119,15 @@ function deleteRawState(storageKey: string): MaybePromise<void> {
     return;
   }
 
-  return getRedisClient().then(redis => redis.del(storageKey).then(() => undefined));
+  return getRedisClient().then(redis =>
+    redis.del(storageKey).then(() => undefined)
+  );
 }
 
-export function readScopedState<T>(scope: string, key: string): MaybePromise<T | null> {
+export function readScopedState<T>(
+  scope: string,
+  key: string
+): MaybePromise<T | null> {
   return readRawState<T>(getScopedStateKey(scope, key));
 }
 
@@ -102,7 +140,10 @@ export function writeScopedState<T>(
   return writeRawState(getScopedStateKey(scope, key), value, ttlSeconds);
 }
 
-export function deleteScopedState(scope: string, key: string): MaybePromise<void> {
+export function deleteScopedState(
+  scope: string,
+  key: string
+): MaybePromise<void> {
   return deleteRawState(getScopedStateKey(scope, key));
 }
 
@@ -115,28 +156,7 @@ export function deleteState(psid: string): MaybePromise<void> {
 }
 
 export function writeState<T>(psid: string, value: T): MaybePromise<void> {
-  const faceMemoryValue = value as {
-    faceMemoryConsent?: { given?: boolean } | null;
-    lastSourceImageUrl?: string | null;
-    lastSourceImageUpdatedAt?: number | null;
-    pendingSourceImageDeleteUrl?: string | null;
-    pendingSourceImageDeleteUrls?: string[] | null;
-  } | null;
-  const hasActiveFaceMemory =
-    faceMemoryValue?.faceMemoryConsent?.given === true &&
-    Boolean(
-      faceMemoryValue.lastSourceImageUrl ||
-        faceMemoryValue.lastSourceImageUpdatedAt
-    );
-  const hasPendingSourceDelete = Boolean(
-    faceMemoryValue?.pendingSourceImageDeleteUrl ||
-      faceMemoryValue?.pendingSourceImageDeleteUrls?.length
-  );
-  const ttlSeconds =
-    hasActiveFaceMemory || hasPendingSourceDelete
-      ? getFaceMemoryStateTtlSeconds()
-      : STATE_TTL_SECONDS;
-  return writeRawState(getStateKey(psid), value, ttlSeconds);
+  return writeRawState(getStateKey(psid), value, getStateTtlSeconds(value));
 }
 
 export function getOrCreateStoredState<T>(

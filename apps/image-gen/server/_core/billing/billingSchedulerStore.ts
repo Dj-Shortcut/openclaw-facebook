@@ -35,6 +35,10 @@ export type BillingExecutionBoundary = Readonly<{
   laneEpochs: Readonly<Record<BillingScheduleKind, number>>;
 }>;
 
+type BillingTransaction = Parameters<
+  Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
+>[0];
+
 export async function registerBillingSchedulerTenant(
   workspaceId: number,
   mode: MollieMode,
@@ -282,6 +286,7 @@ export async function disableBillingSchedulerTenant(input: {
           eq(billingIntents.mode, input.mode)
         )
       )
+      .orderBy(asc(billingIntents.intentId))
       .for("update");
     const rows = await tx
       .select()
@@ -884,6 +889,35 @@ export async function assertBillingTenantLeaseOwned(
       )
     )
     .limit(1);
+  if (!rows[0]) throw new Error("billing scheduler lease ownership was lost");
+}
+
+/**
+ * Locks and validates the scheduler lease in the same transaction as a local
+ * post-provider effect. A separate preflight read is not sufficient: another
+ * replica can steal or disable the lane between that read and the mutation.
+ */
+export async function assertBillingTenantLeaseOwnedInTransaction(
+  tx: BillingTransaction,
+  lease: BillingTenantLease,
+  now = new Date()
+): Promise<void> {
+  const rows = await tx
+    .select({ workspaceId: billingSchedulerTenants.workspaceId })
+    .from(billingSchedulerTenants)
+    .where(
+      and(
+        eq(billingSchedulerTenants.workspaceId, lease.workspaceId),
+        eq(billingSchedulerTenants.mode, lease.mode),
+        eq(billingSchedulerTenants.kind, lease.kind),
+        eq(billingSchedulerTenants.enabled, true),
+        eq(billingSchedulerTenants.leaseToken, lease.leaseToken),
+        eq(billingSchedulerTenants.executionEpoch, lease.executionEpoch),
+        gt(billingSchedulerTenants.leaseUntil, now)
+      )
+    )
+    .limit(1)
+    .for("update");
   if (!rows[0]) throw new Error("billing scheduler lease ownership was lost");
 }
 

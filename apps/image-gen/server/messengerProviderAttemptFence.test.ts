@@ -10,7 +10,10 @@ const { getDatabaseOrThrowMock } = vi.hoisted(() => ({
 }));
 vi.mock("./db", () => ({ getDatabaseOrThrow: getDatabaseOrThrowMock }));
 
-import { reserveMessengerProviderAttemptFence } from "./_core/messengerProviderAttemptFence";
+import {
+  containMessengerProviderAttemptsForPrivacy,
+  reserveMessengerProviderAttemptFence,
+} from "./_core/messengerProviderAttemptFence";
 
 describe("messenger provider attempt privacy identity", () => {
   const originalDatabaseUrl = process.env.DATABASE_URL;
@@ -53,7 +56,49 @@ describe("messenger provider attempt privacy identity", () => {
       privacyEpoch: 5,
     });
   });
+
+  it("keeps privacy erasure pending while a transport attempt is active", async () => {
+    getDatabaseOrThrowMock.mockResolvedValue(
+      privacyContainmentFlow([{ id: 91 }])
+    );
+
+    await expect(
+      containMessengerProviderAttemptsForPrivacy({
+        workspaceId: 42,
+        channelConnectionId: 7,
+        userKey: "privacy-user-key-123",
+      })
+    ).resolves.toBe(false);
+  });
+
+  it("allows erasure to finish after active transports have drained", async () => {
+    getDatabaseOrThrowMock.mockResolvedValue(privacyContainmentFlow([]));
+
+    await expect(
+      containMessengerProviderAttemptsForPrivacy({
+        workspaceId: 42,
+        channelConnectionId: 7,
+        userKey: "privacy-user-key-123",
+      })
+    ).resolves.toBe(true);
+  });
 });
+
+function privacyContainmentFlow(active: Array<{ id: number }>) {
+  const tx = {
+    update: vi.fn(() => ({
+      set: vi.fn(() => ({ where: vi.fn(async () => undefined) })),
+    })),
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(() => ({
+          limit: vi.fn(() => ({ for: vi.fn(async () => active) })),
+        })),
+      })),
+    })),
+  };
+  return { transaction: vi.fn(async callback => callback(tx)) };
+}
 
 function databaseFlow(inserted: Array<Record<string, unknown>>) {
   const tx = {

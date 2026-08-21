@@ -106,5 +106,19 @@ describe.skipIf(!enabled)("messenger completion Redis CAS", () => {
       imageUrl: "https://assets.example/b.jpg",
     });
     expect(storageDeleteMock).toHaveBeenCalledWith("generated/a.jpg");
+
+    storageDeleteMock.mockClear();
+    await expect(
+      markMessengerGenerationCompleted(
+        `req-after-erase-${run}`,
+        "https://assets.example/late-after-erase.jpg",
+        first.userKey,
+        Date.now(),
+        first
+      )
+    ).rejects.toThrow("subject is erased");
+    expect(storageDeleteMock).toHaveBeenCalledWith(
+      "generated/late-after-erase.jpg"
+    );
   });
 });

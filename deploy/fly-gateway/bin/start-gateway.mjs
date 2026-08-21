@@ -8,23 +8,32 @@ import {
   buildGatewayLaunchPlan,
   startPublicRouteGuard,
 } from "./public-route-guard.mjs";
+import { assertLeaderbotAiAnswerQuotaReadiness } from "./ai-answer-quota-readiness.mjs";
 
 const stateDir = process.env.OPENCLAW_STATE_DIR || "/data";
-const configPath = process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir, "openclaw.json");
-const workspaceDir = process.env.OPENCLAW_WORKSPACE_DIR || path.join(stateDir, "workspace");
+const configPath =
+  process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir, "openclaw.json");
+const workspaceDir =
+  process.env.OPENCLAW_WORKSPACE_DIR || path.join(stateDir, "workspace");
 const legacyWorkspaceDir = path.join(
   process.env.HOME || "/home/node",
   ".openclaw",
   "workspace",
 );
-const pluginPath = process.env.OPENCLAW_FACEBOOK_PLUGIN_PATH || "/app/node_modules/@dj-shortcut/facebook";
-const codexPluginPath = process.env.OPENCLAW_CODEX_PLUGIN_PATH || "/app/node_modules/@openclaw/codex";
-const defaultDmPolicy = process.env.OPENCLAW_FACEBOOK_DEFAULT_DM_POLICY || "pairing";
-const defaultUnknownSenderMode = process.env.OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE || "";
+const pluginPath =
+  process.env.OPENCLAW_FACEBOOK_PLUGIN_PATH ||
+  "/app/node_modules/@dj-shortcut/facebook";
+const codexPluginPath =
+  process.env.OPENCLAW_CODEX_PLUGIN_PATH || "/app/node_modules/@openclaw/codex";
+const defaultDmPolicy =
+  process.env.OPENCLAW_FACEBOOK_DEFAULT_DM_POLICY || "pairing";
+const defaultUnknownSenderMode =
+  process.env.OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE || "";
 const defaultLeaderbotBridgeEnabled =
   process.env.OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED || "";
 const defaultAgentModel = process.env.OPENCLAW_AGENT_MODEL || "";
 const defaultAgentThinking = process.env.OPENCLAW_AGENT_THINKING_DEFAULT || "";
+const openAiApiKeyAvailable = Boolean(process.env.OPENAI_API_KEY?.trim());
 const allowOpen = process.env.OPENCLAW_FACEBOOK_ALLOW_OPEN === "1";
 const allowedUnknownSenderModes = new Set(["pairing", "leaderbot_free_tier"]);
 
@@ -39,13 +48,17 @@ function readJsonFile(filePath) {
     if (error && error.code === "ENOENT") {
       return {};
     }
-    throw new Error(`Cannot read OpenClaw config JSON at ${filePath}: ${error.message}`);
+    throw new Error(
+      `Cannot read OpenClaw config JSON at ${filePath}: ${error.message}`,
+    );
   }
 }
 
 function writeJsonFile(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, {
+    mode: 0o600,
+  });
 }
 
 function uniquePush(list, value) {
@@ -73,15 +86,70 @@ function ensureAgentDefaults(config) {
   }
   if (
     config.agents.defaults.workspace === undefined ||
-    path.resolve(String(config.agents.defaults.workspace)) === path.resolve(legacyWorkspaceDir)
+    path.resolve(String(config.agents.defaults.workspace)) ===
+      path.resolve(legacyWorkspaceDir)
   ) {
     config.agents.defaults.workspace = workspaceDir;
   }
   if (defaultAgentModel && config.agents.defaults.model === undefined) {
     config.agents.defaults.model = { primary: defaultAgentModel };
   }
-  if (defaultAgentThinking && config.agents.defaults.thinkingDefault === undefined) {
+  if (
+    defaultAgentThinking &&
+    config.agents.defaults.thinkingDefault === undefined
+  ) {
     config.agents.defaults.thinkingDefault = defaultAgentThinking;
+  }
+}
+
+function ensureMemorySearchSecretRef(config) {
+  if (!openAiApiKeyAvailable) {
+    return;
+  }
+
+  const secretRef = {
+    source: "env",
+    provider: "default",
+    id: "OPENAI_API_KEY",
+  };
+
+  const configureMemory = (owner, { createIfMissing = false } = {}) => {
+    if (!isObject(owner)) {
+      return;
+    }
+    if (!isObject(owner.memory)) {
+      if (!createIfMissing) {
+        return;
+      }
+      owner.memory = {};
+    }
+    if (!isObject(owner.memory.search)) {
+      if (!createIfMissing) {
+        return;
+      }
+      owner.memory.search = {};
+    }
+    if (owner.memory.search.provider === undefined) {
+      owner.memory.search.provider = "openai";
+    }
+    if (owner.memory.search.provider === "openai") {
+      if (!isObject(owner.memory.search.remote)) {
+        owner.memory.search.remote = {};
+      }
+      owner.memory.search.remote.apiKey = secretRef;
+    }
+  };
+
+  configureMemory(config, { createIfMissing: true });
+  if (isObject(config.agents)) {
+    if (isObject(config.agents.defaults)) {
+      configureMemory(config.agents.defaults);
+    }
+    if (isObject(config.agents.entries)) {
+      for (const entry of Object.values(config.agents.entries)) {
+        configureMemory(entry);
+      }
+    }
   }
 }
 
@@ -146,7 +214,12 @@ function migrateLegacyWorkspaceFiles() {
   ];
   let copied = 0;
   for (const entry of entries) {
-    if (copyIfMissing(path.join(legacyWorkspaceDir, entry), path.join(workspaceDir, entry))) {
+    if (
+      copyIfMissing(
+        path.join(legacyWorkspaceDir, entry),
+        path.join(workspaceDir, entry),
+      )
+    ) {
       copied += 1;
     }
   }
@@ -171,6 +244,15 @@ function ensureWorkspaceMemoryFile() {
 }
 
 function ensurePublicMessengerBaseline(config) {
+  if (!isObject(config.gateway)) {
+    config.gateway = {};
+  }
+  // This deployment runs the gateway and Messenger worker in the same process.
+  // A persisted remote target makes OpenClaw call back through the public proxy,
+  // which can strand work in a reconnect/draining loop.
+  config.gateway.mode = "local";
+  delete config.gateway.remote;
+
   if (!isObject(config.plugins)) {
     config.plugins = {};
   }
@@ -181,11 +263,16 @@ function ensurePublicMessengerBaseline(config) {
     config.plugins.load.paths = [];
   }
   uniquePush(config.plugins.load.paths, pluginPath);
-  uniquePush(config.plugins.load.paths, codexPluginPath);
-  if (Array.isArray(config.plugins.allow)) {
-    uniquePush(config.plugins.allow, "facebook");
-    uniquePush(config.plugins.allow, "codex");
+  config.plugins.load.paths = config.plugins.load.paths.filter(
+    (entry) => entry !== codexPluginPath,
+  );
+  if (!Array.isArray(config.plugins.allow)) {
+    config.plugins.allow = [];
   }
+  config.plugins.allow = config.plugins.allow.filter(
+    (entry) => entry !== "codex",
+  );
+  uniquePush(config.plugins.allow, "facebook");
 
   if (!isObject(config.plugins.entries)) {
     config.plugins.entries = {};
@@ -199,9 +286,7 @@ function ensurePublicMessengerBaseline(config) {
   if (!isObject(config.plugins.entries.codex)) {
     config.plugins.entries.codex = {};
   }
-  if (config.plugins.entries.codex.enabled === undefined) {
-    config.plugins.entries.codex.enabled = true;
-  }
+  config.plugins.entries.codex.enabled = false;
   ensurePublicToolDeny(config, "image_generate");
 
   if (!isObject(config.channels)) {
@@ -214,7 +299,10 @@ function ensurePublicMessengerBaseline(config) {
     config.channels.facebook.dmPolicy = defaultDmPolicy;
   }
   const unknownSenderMode = resolveDefaultUnknownSenderMode();
-  if (unknownSenderMode && config.channels.facebook.unknownSenderMode === undefined) {
+  if (
+    unknownSenderMode &&
+    config.channels.facebook.unknownSenderMode === undefined
+  ) {
     config.channels.facebook.unknownSenderMode = unknownSenderMode;
   }
   const leaderbotBridgeEnabled = resolveDefaultLeaderbotBridgeEnabled();
@@ -226,9 +314,12 @@ function ensurePublicMessengerBaseline(config) {
   }
 
   ensureAgentDefaults(config);
+  ensureMemorySearchSecretRef(config);
 
   const facebookConfig = config.channels.facebook;
-  const allowFrom = Array.isArray(facebookConfig.allowFrom) ? facebookConfig.allowFrom : [];
+  const allowFrom = Array.isArray(facebookConfig.allowFrom)
+    ? facebookConfig.allowFrom
+    : [];
   if (facebookConfig.dmPolicy === "open" && !allowOpen) {
     console.warn(
       'channels.facebook.dmPolicy="open" is not allowed for this public gateway; switching to "pairing".',
@@ -236,7 +327,9 @@ function ensurePublicMessengerBaseline(config) {
     facebookConfig.dmPolicy = "pairing";
   }
   if (facebookConfig.dmPolicy === "open" && !allowFrom.includes("*")) {
-    throw new Error('channels.facebook.dmPolicy="open" requires channels.facebook.allowFrom to include "*".');
+    throw new Error(
+      'channels.facebook.dmPolicy="open" requires channels.facebook.allowFrom to include "*".',
+    );
   }
 
   return config;
@@ -252,14 +345,21 @@ export function prepareGatewayConfig() {
   return config;
 }
 
-export function startGateway() {
+export async function startGateway() {
+  await assertLeaderbotAiAnswerQuotaReadiness();
   prepareGatewayConfig();
-  const openclawBin = path.join(process.cwd(), "node_modules", "openclaw", "openclaw.mjs");
+  const openclawBin = path.join(
+    process.cwd(),
+    "node_modules",
+    "openclaw",
+    "openclaw.mjs",
+  );
   const launchPlan = buildGatewayLaunchPlan();
   if (launchPlan.guardEnabled) {
     startPublicRouteGuard({
       publicPort: launchPlan.publicPort,
       targetPort: launchPlan.internalPort,
+      readinessCheck: () => assertLeaderbotAiAnswerQuotaReadiness(),
     });
   }
   const args = [openclawBin, "gateway", ...launchPlan.openclawArgs];
@@ -283,5 +383,8 @@ export function startGateway() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  startGateway();
+  startGateway().catch(() => {
+    console.error("gateway startup failed: readiness preflight did not pass");
+    process.exit(1);
+  });
 }

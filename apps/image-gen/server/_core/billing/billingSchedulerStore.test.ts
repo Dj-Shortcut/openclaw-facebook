@@ -9,6 +9,7 @@ vi.mock("../../db", () => ({
 }));
 
 import {
+  assertBillingTenantLeaseOwnedInTransaction,
   enableBillingSchedulerTenant,
   registerBillingSchedulerTenant,
   releaseBillingTenantLease,
@@ -150,6 +151,39 @@ describe("billing scheduler lifecycle boundaries", () => {
       })
     ).resolves.toBe(false);
   });
+
+  it.each([
+    ["owned", [{ workspaceId: 10 }]],
+    ["lost", []],
+  ] as const)(
+    "atomically treats a transaction lease as %s",
+    async (state, rows) => {
+      const forUpdate = vi.fn(async () => rows);
+      const query = {
+        limit: vi.fn(() => ({ for: forUpdate })),
+      };
+      const tx = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({ where: vi.fn(() => query) })),
+        })),
+      } as never;
+      const assertion = assertBillingTenantLeaseOwnedInTransaction(tx, {
+        workspaceId: 10,
+        mode: "test",
+        kind: "reconciliation",
+        leaseToken: "lease-token",
+        executionEpoch: 2,
+      });
+      if (state === "owned") {
+        await expect(assertion).resolves.toBeUndefined();
+      } else {
+        await expect(assertion).rejects.toThrow(
+          "billing scheduler lease ownership was lost"
+        );
+      }
+      expect(forUpdate).toHaveBeenCalledOnce();
+    }
+  );
 });
 
 function updateDatabaseResult(affectedRows: number) {

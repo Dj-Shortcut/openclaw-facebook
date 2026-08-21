@@ -13,6 +13,7 @@ export type BillingPlan = Readonly<{
 }>;
 
 export const STARTPILOT_PLAN_CODE = "startpilot_once_v1" as const;
+export const PREMIUM_MONTHLY_PLAN_CODE = "premium_monthly_v1" as const;
 
 /**
  * Business-owned, server-side product catalog. Browser input may select a code
@@ -22,8 +23,8 @@ export const STARTPILOT_PLAN_CODE = "startpilot_once_v1" as const;
  * separate live-billing switch may be enabled.
  */
 const BILLING_PLANS = Object.freeze({
-  premium_monthly_v1: Object.freeze({
-    code: "premium_monthly_v1",
+  [PREMIUM_MONTHLY_PLAN_CODE]: Object.freeze({
+    code: PREMIUM_MONTHLY_PLAN_CODE,
     publicName: "Leaderbot Premium",
     amountMinor: 2_900,
     currency: "EUR" as const,
@@ -33,9 +34,12 @@ const BILLING_PLANS = Object.freeze({
     entitlements: Object.freeze({
       imagesPerDay: 100,
       messagesPerMinute: 120,
+      videoGenerationsPerDay: 10,
     }),
     mollieDescription: "Leaderbot Premium - maandelijks abonnement",
     active: true,
+    // Keep the recurring contract available for existing entitlements and
+    // provider reconciliation, but do not expose it as a launch checkout.
     publiclyAvailable: false,
   }),
   [STARTPILOT_PLAN_CODE]: Object.freeze({

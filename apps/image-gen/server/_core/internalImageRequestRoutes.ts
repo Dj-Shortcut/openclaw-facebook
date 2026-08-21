@@ -12,6 +12,7 @@ import { MESSENGER_SEND_SKIPPED } from "./webhookFallback";
 import type { MessengerSendOutcome } from "./messengerApi";
 import {
   finalizeInternalAiAnswerQuota,
+  getInternalAiAnswerQuotaReadiness,
   markInternalAiAnswerDeliveryStarted,
   markInternalAiAnswerDeliveryKnownRejected,
   heartbeatInternalAiAnswerReservation,
@@ -145,6 +146,22 @@ function sendNotQueuedResponse(res: Response): void {
 
 /** Registers authenticated internal Messenger image-request and event bridge routes. */
 export function registerInternalImageRequestRoutes(app: Express): void {
+  app.get(
+    "/internal/messenger/ai-answer-quota/readiness",
+    internalMessengerRequestLimiter,
+    async (req, res) => {
+      if (!authorizeInternalRequest(req, res)) return;
+      try {
+        res.status(200).json(await getInternalAiAnswerQuotaReadiness());
+      } catch (error) {
+        safeLog("internal_ai_answer_readiness_failed", {
+          level: "error",
+          errorCode: safeInternalAiAnswerQuotaErrorCode(error),
+        });
+        res.status(503).json({ error: "AI answer quota is unavailable" });
+      }
+    }
+  );
   app.post(
     "/internal/messenger/ai-answer-quota/heartbeat",
     internalMessengerRequestLimiter,

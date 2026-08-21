@@ -25,6 +25,10 @@ import { assertMollieId, type MolliePayment } from "./mollieClient";
 import { createPaymentSnapshot } from "./paymentSnapshot";
 import { metadataIntentId } from "./providerMetadata";
 import { blocksSubscriptionStart } from "./checkoutStore";
+import {
+  assertBillingTenantLeaseOwnedInTransaction,
+  type BillingTenantLease,
+} from "./billingSchedulerStore";
 
 const GRACE_PERIOD_DAYS = 7;
 
@@ -76,10 +80,19 @@ export type PaymentProcessingResult =
 
 export async function applyMolliePaymentSnapshot(
   payment: MolliePayment,
-  expectedWorkspaceId: number
+  expectedWorkspaceId: number,
+  options: Readonly<{ schedulerLease?: BillingTenantLease }> = {}
 ): Promise<PaymentProcessingResult> {
   if (!Number.isSafeInteger(expectedWorkspaceId) || expectedWorkspaceId <= 0) {
     throw new Error("invalid billing payment workspace");
+  }
+  if (
+    options.schedulerLease &&
+    (options.schedulerLease.workspaceId !== expectedWorkspaceId ||
+      options.schedulerLease.mode !== payment.mode ||
+      options.schedulerLease.kind !== "reconciliation")
+  ) {
+    throw new Error("billing reconciliation lease scope mismatch");
   }
   const database = await getDatabaseOrThrow();
   const observed = createPaymentSnapshot(payment);
@@ -89,7 +102,8 @@ export async function applyMolliePaymentSnapshot(
       const context = await resolvePaymentContext(
         tx,
         payment,
-        expectedWorkspaceId
+        expectedWorkspaceId,
+        options.schedulerLease
       );
       if (!context) {
         return { result: "unknown" as const };
@@ -608,7 +622,8 @@ async function resolvePaymentContext(
     Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
   >[0],
   payment: MolliePayment,
-  expectedWorkspaceId: number
+  expectedWorkspaceId: number,
+  schedulerLease?: BillingTenantLease
 ): Promise<PaymentContext | null> {
   const paymentIntentId = metadataIntentId(payment.metadata);
   if (!paymentIntentId) {
@@ -635,6 +650,9 @@ async function resolvePaymentContext(
   const intent = intents[0];
   if (!intent) {
     return null;
+  }
+  if (schedulerLease) {
+    await assertBillingTenantLeaseOwnedInTransaction(tx, schedulerLease);
   }
   const customers = await tx
     .select()

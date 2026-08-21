@@ -18,3 +18,4 @@ __pycache__/
 *.pyc
 .codex-security-scans/
 .codex-remote-attachments/
+.npm-cache/

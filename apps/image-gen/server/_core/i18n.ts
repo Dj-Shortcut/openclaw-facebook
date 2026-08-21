@@ -52,6 +52,7 @@ type TranslationKey =
   | "videoGenerationQueued"
   | "videoGenerationTimeout"
   | "videoGenerationUnavailable"
+  | "videoGenerationPremiumRequired"
   | "videoGenerationGenericFailure"
   | "outOfVideoCredits"
   | "generatingImagePrompt"
@@ -180,6 +181,8 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     videoGenerationTimeout:
       "De videomaker deed er te lang over. Probeer straks opnieuw met dezelfde foto.",
     videoGenerationUnavailable: "Video maken staat nog niet aan.",
+    videoGenerationPremiumRequired:
+      "Deze video met stem is beschikbaar in Leaderbot Premium. Activeer Premium in je klantenportaal.",
     videoGenerationGenericFailure:
       "Ik kon die video nu niet maken. Je foto blijft bewaard, dus je kunt een andere aanpassing vragen.",
     outOfVideoCredits:
@@ -290,6 +293,8 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     videoGenerationTimeout:
       "The video provider took too long. Please try again later with the same photo.",
     videoGenerationUnavailable: "Video generation is not enabled yet.",
+    videoGenerationPremiumRequired:
+      "This video-with-voice feature is available with Leaderbot Premium. Activate Premium in your customer portal.",
     videoGenerationGenericFailure:
       "I could not create that video right now. Your photo is still available, so you can ask for a different edit.",
     outOfVideoCredits:

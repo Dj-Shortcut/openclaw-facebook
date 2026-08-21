@@ -211,6 +211,8 @@ async function startServer() {
   const aiAnswerEnforcementEnabled = isMollieEntitlementEnforcementEnabled();
   const aiFinalizationDrainEnabled =
     process.env.AI_ANSWER_FINALIZATION_DRAIN_ENABLED === "true";
+  const aiAnswerQuotaPreflightEnabled =
+    process.env.AI_ANSWER_QUOTA_PREFLIGHT_ENABLED === "true";
   const accountingImportEnabled = isMollieAccountingImportEnabled();
   const notificationPlaneEnabled = isBillingNotificationPlaneEnabled();
   if (notificationPlaneEnabled && !generationWorkerOnly) {
@@ -235,11 +237,24 @@ async function startServer() {
     safeLog("mollie_billing_disabled");
   }
   if (
-    (aiAnswerEnforcementEnabled || aiFinalizationDrainEnabled) &&
+    (aiAnswerEnforcementEnabled || aiAnswerQuotaPreflightEnabled) &&
+    !aiFinalizationDrainEnabled &&
+    !generationWorkerOnly
+  ) {
+    throw new Error(
+      "AI answer quota admission/preflight requires AI_ANSWER_FINALIZATION_DRAIN_ENABLED=true"
+    );
+  }
+  if (
+    (aiAnswerEnforcementEnabled ||
+      aiFinalizationDrainEnabled ||
+      aiAnswerQuotaPreflightEnabled) &&
     !generationWorkerOnly
   ) {
     const mode = getConfiguredBillingMode();
-    await assertAiAnswerFinalizationReadiness(mode);
+    await assertAiAnswerFinalizationReadiness(mode, {
+      requireRuntimeHeartbeat: false,
+    });
   }
   assertPrivacyConfig();
   assertConversationIdentityConfig();
@@ -313,7 +328,11 @@ async function startServer() {
   registerLegalRoutes(app);
 
   scheduleFaceMemoryExpiry();
-  if (aiAnswerEnforcementEnabled || aiFinalizationDrainEnabled) {
+  if (
+    aiAnswerEnforcementEnabled ||
+    aiFinalizationDrainEnabled ||
+    aiAnswerQuotaPreflightEnabled
+  ) {
     startAiAnswerFinalizationWorker();
   }
   if (aiAnswerEnforcementEnabled) {

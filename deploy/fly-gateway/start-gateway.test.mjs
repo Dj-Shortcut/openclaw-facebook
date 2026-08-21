@@ -6,13 +6,17 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildGatewayLaunchPlan,
   isAdminHostAllowed,
   isLocalAdminHost,
   startPublicRouteGuard,
 } from "./bin/public-route-guard.mjs";
+import {
+  assertLeaderbotAiAnswerQuotaReadiness,
+  resolveAiAnswerQuotaReadinessPolicy,
+} from "./bin/ai-answer-quota-readiness.mjs";
 
 const scriptPath = path.resolve("deploy/fly-gateway/bin/start-gateway.mjs");
 const originalEnv = { ...process.env };
@@ -56,16 +60,22 @@ function runPrepareGatewayConfig(env) {
         : null
     }));
   `;
-  const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      ...env,
-      START_GATEWAY_SCRIPT: scriptPath,
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", script],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ...env,
+        START_GATEWAY_SCRIPT: scriptPath,
+      },
     },
-  });
+  );
   if (result.status !== 0) {
-    throw new Error(result.stderr || result.stdout || `node exited ${result.status}`);
+    throw new Error(
+      result.stderr || result.stdout || `node exited ${result.status}`,
+    );
   }
   return JSON.parse(result.stdout);
 }
@@ -122,7 +132,14 @@ function requestRawUpgrade({ port, path = "/socket", cookie }) {
   });
 }
 
-function requestWithHost({ port, path = "/", method = "GET", host, body, cookie }) {
+function requestWithHost({
+  port,
+  path = "/",
+  method = "GET",
+  host,
+  body,
+  cookie,
+}) {
   const bodyText = body ? String(body) : "";
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -166,110 +183,350 @@ function requestWithHost({ port, path = "/", method = "GET", host, body, cookie 
 }
 
 describe("Fly gateway startup", () => {
-  it("persists the default OpenClaw workspace on the Fly volume", () => {
-    const { workspaceDir } = configureTempGatewayEnv();
-    const result = runPrepareGatewayConfig({});
-
-    const config = result.config;
-    expect(result.workspaceExists).toBe(true);
-    expect(config.agents.defaults.workspace).toBe(workspaceDir);
-    expect(config.agents.defaults.model).toEqual({ primary: "openai/gpt-5.4-mini" });
-    expect(config.agents.defaults.thinkingDefault).toBe("low");
-    expect(config.tools.deny).toContain("image_generate");
-    expect(result.memory).toBe("# Memory\n\nPersistent assistant memory for this OpenClaw workspace.\n");
-  }, prepareGatewayConfigTimeoutMs);
-
-  it("seeds Leaderbot free-tier unknown sender mode when configured", () => {
-    configureTempGatewayEnv();
-    const result = runPrepareGatewayConfig({
-      OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE: "leaderbot_free_tier",
-      OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED: "1",
+  it("keeps the paid AI quota handshake independent and default-off", async () => {
+    const fetchMock = vi.fn();
+    expect(resolveAiAnswerQuotaReadinessPolicy({})).toEqual({
+      required: false,
+      admissionRequired: false,
     });
 
-    expect(result.config.channels.facebook.dmPolicy).toBe("pairing");
-    expect(result.config.channels.facebook.unknownSenderMode).toBe("leaderbot_free_tier");
-    expect(result.config.channels.facebook.leaderbotBridgeEnabled).toBe(true);
-  }, prepareGatewayConfigTimeoutMs);
+    await expect(
+      assertLeaderbotAiAnswerQuotaReadiness({ env: {}, fetchImpl: fetchMock }),
+    ).resolves.toEqual({ checked: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
-  it("keeps explicit pairing-only unknown sender mode and bridge setting", () => {
-    const { stateDir } = configureTempGatewayEnv();
-    fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(stateDir, "openclaw.json"),
-      `${JSON.stringify({
-        channels: {
-          facebook: {
-            dmPolicy: "pairing",
-            unknownSenderMode: "pairing",
-            leaderbotBridgeEnabled: false,
-          },
+  it("verifies the durable quota handshake with commercial exposure off", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            protocol: "leaderbot-ai-answer-quota-v1",
+            preflightReady: true,
+            admissionEnabled: false,
+            drainEnabled: true,
+          }),
+          { status: 200 },
+        ),
+    );
+    const token = "non-production-readiness-token-32chars";
+
+    await expect(
+      assertLeaderbotAiAnswerQuotaReadiness({
+        env: {
+          LEADERBOT_AI_ANSWER_PREFLIGHT_ENABLED: "true",
+          LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED: "false",
+          LEADERBOT_IMAGE_GEN_URL: "https://image-gen.example.test",
+          LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN: token,
         },
-      })}\n`,
+        fetchImpl: fetchMock,
+      }),
+    ).resolves.toEqual({ checked: true, admissionEnabled: false });
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "https://image-gen.example.test/internal/messenger/ai-answer-quota/readiness",
     );
-
-    const result = runPrepareGatewayConfig({
-      OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE: "leaderbot_free_tier",
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: "GET",
+      redirect: "error",
+      headers: { Authorization: `Bearer ${token}` },
     });
+  });
 
-    expect(result.config.channels.facebook.dmPolicy).toBe("pairing");
-    expect(result.config.channels.facebook.unknownSenderMode).toBe("pairing");
-    expect(result.config.channels.facebook.leaderbotBridgeEnabled).toBe(false);
-  }, prepareGatewayConfigTimeoutMs);
-
-  it("keeps an existing persistent memory file", () => {
-    const { workspaceDir } = configureTempGatewayEnv();
-    fs.mkdirSync(workspaceDir, { recursive: true });
-    fs.writeFileSync(path.join(workspaceDir, "MEMORY.md"), "existing memory\n");
-
-    const result = runPrepareGatewayConfig({});
-
-    expect(result.memory).toBe("existing memory\n");
-  }, prepareGatewayConfigTimeoutMs);
-
-  it("migrates missing legacy workspace markdowns without overwriting persistent files", () => {
-    const { workspaceDir, homeDir } = configureTempGatewayEnv();
-    const legacyWorkspace = path.join(homeDir, ".openclaw", "workspace");
-    fs.mkdirSync(legacyWorkspace, { recursive: true });
-    fs.mkdirSync(workspaceDir, { recursive: true });
-    fs.writeFileSync(path.join(legacyWorkspace, "AGENTS.md"), "legacy agents\n");
-    fs.writeFileSync(path.join(legacyWorkspace, "USER.md"), "legacy user\n");
-    fs.writeFileSync(path.join(workspaceDir, "USER.md"), "persistent user\n");
-
-    const result = runPrepareGatewayConfig({});
-
-    expect(result.agents).toBe("legacy agents\n");
-    expect(result.user).toBe("persistent user\n");
-  }, prepareGatewayConfigTimeoutMs);
-
-  it("repairs the known legacy default workspace path in persisted config", () => {
-    const { stateDir, workspaceDir, homeDir } = configureTempGatewayEnv();
-    const legacyWorkspace = path.join(homeDir, ".openclaw", "workspace");
-    fs.mkdirSync(stateDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(stateDir, "openclaw.json"),
-      `${JSON.stringify({ agents: { defaults: { workspace: legacyWorkspace } } })}\n`,
+  it("fails closed when admission is enabled on the gateway but not image-gen", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            protocol: "leaderbot-ai-answer-quota-v1",
+            preflightReady: true,
+            admissionEnabled: false,
+            drainEnabled: true,
+          }),
+          { status: 200 },
+        ),
     );
 
-    const result = runPrepareGatewayConfig({});
+    await expect(
+      assertLeaderbotAiAnswerQuotaReadiness({
+        env: {
+          LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED: "true",
+          LEADERBOT_IMAGE_GEN_URL: "https://image-gen.example.test",
+          LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN:
+            "non-production-readiness-token-32chars",
+        },
+        fetchImpl: fetchMock,
+      }),
+    ).rejects.toThrow("readiness contract mismatch");
+  });
 
-    expect(result.config.agents.defaults.workspace).toBe(workspaceDir);
-  }, prepareGatewayConfigTimeoutMs);
+  it(
+    "persists the default OpenClaw workspace on the Fly volume",
+    () => {
+      const { workspaceDir } = configureTempGatewayEnv();
+      const result = runPrepareGatewayConfig({});
+
+      const config = result.config;
+      expect(result.workspaceExists).toBe(true);
+      expect(config.agents.defaults.workspace).toBe(workspaceDir);
+      expect(config.agents.defaults.model).toEqual({
+        primary: "openai/gpt-5.4-mini",
+      });
+      expect(config.agents.defaults.thinkingDefault).toBe("low");
+      expect(config.tools.deny).toContain("image_generate");
+      expect(result.memory).toBe(
+        "# Memory\n\nPersistent assistant memory for this OpenClaw workspace.\n",
+      );
+    },
+    prepareGatewayConfigTimeoutMs,
+  );
+
+  it(
+    "seeds Leaderbot free-tier unknown sender mode when configured",
+    () => {
+      configureTempGatewayEnv();
+      const result = runPrepareGatewayConfig({
+        OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE: "leaderbot_free_tier",
+        OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED: "1",
+      });
+
+      expect(result.config.channels.facebook.dmPolicy).toBe("pairing");
+      expect(result.config.channels.facebook.unknownSenderMode).toBe(
+        "leaderbot_free_tier",
+      );
+      expect(result.config.channels.facebook.leaderbotBridgeEnabled).toBe(true);
+    },
+    prepareGatewayConfigTimeoutMs,
+  );
+
+  it(
+    "binds OpenAI-backed memory search to the deployed env secret",
+    () => {
+      configureTempGatewayEnv();
+      const result = runPrepareGatewayConfig({
+        OPENAI_API_KEY: "present-but-redacted",
+      });
+      const expectedRef = {
+        source: "env",
+        provider: "default",
+        id: "OPENAI_API_KEY",
+      };
+
+      expect(result.config.memory.search.provider).toBe("openai");
+      expect(result.config.memory.search.remote.apiKey).toEqual(expectedRef);
+      expect(result.config.agents.defaults.memory).toBeUndefined();
+    },
+    prepareGatewayConfigTimeoutMs,
+  );
+
+  it(
+    "preserves per-agent memory settings while binding OpenAI secret refs",
+    () => {
+      const { stateDir } = configureTempGatewayEnv();
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "openclaw.json"),
+        `${JSON.stringify(
+          {
+            agents: {
+              defaults: {
+                memory: {
+                  rememberAcrossConversations: false,
+                  search: { provider: "local", local: { model: "existing" } },
+                },
+              },
+              entries: {
+                support: {
+                  memory: {
+                    rememberAcrossConversations: true,
+                    search: {
+                      provider: "openai",
+                      remote: { model: "existing" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const result = runPrepareGatewayConfig({
+        OPENAI_API_KEY: "present-but-redacted",
+      });
+      const expectedRef = {
+        source: "env",
+        provider: "default",
+        id: "OPENAI_API_KEY",
+      };
+
+      expect(result.config.agents.defaults.memory).toEqual({
+        rememberAcrossConversations: false,
+        search: { provider: "local", local: { model: "existing" } },
+      });
+      expect(result.config.agents.entries.support.memory).toEqual({
+        rememberAcrossConversations: true,
+        search: {
+          provider: "openai",
+          remote: { model: "existing", apiKey: expectedRef },
+        },
+      });
+    },
+    prepareGatewayConfigTimeoutMs,
+  );
+
+  it(
+    "trusts Facebook explicitly without trusting the optional Codex plugin",
+    () => {
+      configureTempGatewayEnv();
+      const result = runPrepareGatewayConfig({});
+
+      expect(result.config.plugins.allow).toContain("facebook");
+      expect(result.config.plugins.allow).not.toContain("codex");
+      expect(result.config.plugins.entries.codex.enabled).toBe(false);
+    },
+    prepareGatewayConfigTimeoutMs,
+  );
+
+  it(
+    "keeps the co-located Messenger gateway in local mode",
+    () => {
+      const { stateDir } = configureTempGatewayEnv();
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "openclaw.json"),
+        `${JSON.stringify({
+          gateway: {
+            mode: "remote",
+            remote: { url: "wss://example.invalid" },
+            controlUi: { enabled: true },
+          },
+        })}\n`,
+      );
+
+      const result = runPrepareGatewayConfig({});
+
+      expect(result.config.gateway.mode).toBe("local");
+      expect(result.config.gateway.remote).toBeUndefined();
+      expect(result.config.gateway.controlUi).toEqual({ enabled: true });
+    },
+    prepareGatewayConfigTimeoutMs,
+  );
+
+  it(
+    "keeps explicit pairing-only unknown sender mode and bridge setting",
+    () => {
+      const { stateDir } = configureTempGatewayEnv();
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "openclaw.json"),
+        `${JSON.stringify({
+          channels: {
+            facebook: {
+              dmPolicy: "pairing",
+              unknownSenderMode: "pairing",
+              leaderbotBridgeEnabled: false,
+            },
+          },
+        })}\n`,
+      );
+
+      const result = runPrepareGatewayConfig({
+        OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE: "leaderbot_free_tier",
+      });
+
+      expect(result.config.channels.facebook.dmPolicy).toBe("pairing");
+      expect(result.config.channels.facebook.unknownSenderMode).toBe("pairing");
+      expect(result.config.channels.facebook.leaderbotBridgeEnabled).toBe(
+        false,
+      );
+    },
+    prepareGatewayConfigTimeoutMs,
+  );
+
+  it(
+    "keeps an existing persistent memory file",
+    () => {
+      const { workspaceDir } = configureTempGatewayEnv();
+      fs.mkdirSync(workspaceDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(workspaceDir, "MEMORY.md"),
+        "existing memory\n",
+      );
+
+      const result = runPrepareGatewayConfig({});
+
+      expect(result.memory).toBe("existing memory\n");
+    },
+    prepareGatewayConfigTimeoutMs,
+  );
+
+  it(
+    "migrates missing legacy workspace markdowns without overwriting persistent files",
+    () => {
+      const { workspaceDir, homeDir } = configureTempGatewayEnv();
+      const legacyWorkspace = path.join(homeDir, ".openclaw", "workspace");
+      fs.mkdirSync(legacyWorkspace, { recursive: true });
+      fs.mkdirSync(workspaceDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(legacyWorkspace, "AGENTS.md"),
+        "legacy agents\n",
+      );
+      fs.writeFileSync(path.join(legacyWorkspace, "USER.md"), "legacy user\n");
+      fs.writeFileSync(path.join(workspaceDir, "USER.md"), "persistent user\n");
+
+      const result = runPrepareGatewayConfig({});
+
+      expect(result.agents).toBe("legacy agents\n");
+      expect(result.user).toBe("persistent user\n");
+    },
+    prepareGatewayConfigTimeoutMs,
+  );
+
+  it(
+    "repairs the known legacy default workspace path in persisted config",
+    () => {
+      const { stateDir, workspaceDir, homeDir } = configureTempGatewayEnv();
+      const legacyWorkspace = path.join(homeDir, ".openclaw", "workspace");
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "openclaw.json"),
+        `${JSON.stringify({ agents: { defaults: { workspace: legacyWorkspace } } })}\n`,
+      );
+
+      const result = runPrepareGatewayConfig({});
+
+      expect(result.config.agents.defaults.workspace).toBe(workspaceDir);
+    },
+    prepareGatewayConfigTimeoutMs,
+  );
 
   it("runs OpenClaw on loopback behind the public route guard", async () => {
-    const plan = buildGatewayLaunchPlan(["--allow-unconfigured", "--port", "3000", "--bind", "lan"], {
-      OPENCLAW_PUBLIC_GATEWAY_GUARD: "1",
-      OPENCLAW_INTERNAL_GATEWAY_PORT: "3100",
-    });
+    const plan = buildGatewayLaunchPlan(
+      ["--allow-unconfigured", "--port", "3000", "--bind", "lan"],
+      {
+        OPENCLAW_PUBLIC_GATEWAY_GUARD: "1",
+        OPENCLAW_INTERNAL_GATEWAY_PORT: "3100",
+      },
+    );
 
     expect(plan).toEqual({
       guardEnabled: true,
       publicPort: 3000,
       internalPort: 3100,
-      openclawArgs: ["--allow-unconfigured", "--port", "3100", "--bind", "loopback"],
+      openclawArgs: [
+        "--allow-unconfigured",
+        "--port",
+        "3100",
+        "--bind",
+        "loopback",
+      ],
     });
   }, 15000);
 
-  it("only proxies the public webhook and health routes by default", async () => {
+  it("only exposes the public webhook, liveness, and readiness routes by default", async () => {
     const seenPaths = [];
     const target = http.createServer((req, res) => {
       seenPaths.push(req.url);
@@ -284,7 +541,9 @@ describe("Fly gateway startup", () => {
     await waitForListening(guard);
 
     const publicPort = guard.address().port;
-    const webhookResponse = await fetch(`http://127.0.0.1:${publicPort}/facebook/webhook?hub.challenge=ok`);
+    const webhookResponse = await fetch(
+      `http://127.0.0.1:${publicPort}/facebook/webhook?hub.challenge=ok`,
+    );
     const legacyWebhookResponse = await fetch(
       `http://127.0.0.1:${publicPort}/messenger/webhook?hub.challenge=ok`,
     );
@@ -300,6 +559,47 @@ describe("Fly gateway startup", () => {
     expect(blockedResponse.status).toBe(404);
     expect(await blockedResponse.text()).toBe("Not found");
     expect(seenPaths).toEqual(["/facebook/webhook?hub.challenge=ok"]);
+
+    await closeServer(guard);
+    await closeServer(target);
+  }, 15000);
+
+  it("keeps liveness separate while readiness includes the quota handshake", async () => {
+    const target = http.createServer((req, res) => {
+      if (req.url === "/healthz") {
+        res.statusCode = 200;
+        res.end("ok");
+        return;
+      }
+      res.statusCode = 404;
+      res.end();
+    });
+    target.listen(0, "127.0.0.1");
+    await waitForListening(target);
+    const readinessCheck = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("quota worker stale"));
+    const guard = startPublicRouteGuard({
+      publicPort: 0,
+      targetPort: target.address().port,
+      readinessCheck,
+    });
+    await waitForListening(guard);
+
+    const publicPort = guard.address().port;
+    const ready = await fetch(`http://127.0.0.1:${publicPort}/readyz`);
+    expect(ready.status).toBe(200);
+    expect(await ready.json()).toEqual({ ok: true });
+
+    const notReady = await fetch(`http://127.0.0.1:${publicPort}/readyz`);
+    expect(notReady.status).toBe(503);
+    expect(await notReady.json()).toEqual({ ok: false });
+    expect(readinessCheck).toHaveBeenCalledTimes(2);
+
+    const live = await fetch(`http://127.0.0.1:${publicPort}/healthz`);
+    expect(live.status).toBe(200);
+    expect(await live.text()).toBe("ok");
 
     await closeServer(guard);
     await closeServer(target);
@@ -376,46 +676,84 @@ describe("Fly gateway startup", () => {
     const publicPort = guard.address().port;
     const portalRoot = await fetch(`http://127.0.0.1:${publicPort}/`);
     const portalHandoff = await fetch(`http://127.0.0.1:${publicPort}/handoff`);
-    const portalHandoffToken = await fetch(`http://127.0.0.1:${publicPort}/handoff/setup-token`);
-    const portalHandoffPost = await fetch(`http://127.0.0.1:${publicPort}/handoff/setup-token`, {
-      method: "POST",
-    });
-    const portalAsset = await fetch(`http://127.0.0.1:${publicPort}/assets/app.js`);
-    const portalAssetPost = await fetch(`http://127.0.0.1:${publicPort}/assets/app.js`, {
-      method: "POST",
-    });
+    const portalHandoffToken = await fetch(
+      `http://127.0.0.1:${publicPort}/handoff/setup-token`,
+    );
+    const portalHandoffPost = await fetch(
+      `http://127.0.0.1:${publicPort}/handoff/setup-token`,
+      {
+        method: "POST",
+      },
+    );
+    const portalAsset = await fetch(
+      `http://127.0.0.1:${publicPort}/assets/app.js`,
+    );
+    const portalAssetPost = await fetch(
+      `http://127.0.0.1:${publicPort}/assets/app.js`,
+      {
+        method: "POST",
+      },
+    );
     const portalOauthCallback = await fetch(
       `http://127.0.0.1:${publicPort}/api/oauth/callback?code=ok&state=state-value`,
     );
     const portalFacebookCallback = await fetch(
       `http://127.0.0.1:${publicPort}/api/facebook/connect/callback?code=ok&state=state-value`,
     );
-    const publicConfig = await fetch(`http://127.0.0.1:${publicPort}/api/public/config`);
-    const publicConfigPost = await fetch(`http://127.0.0.1:${publicPort}/api/public/config`, {
-      method: "POST",
-    });
-    const portalSnapshot = await fetch(`http://127.0.0.1:${publicPort}/api/portal/snapshot`);
-    const portalAiIdentity = await fetch(`http://127.0.0.1:${publicPort}/api/portal/ai-identity`, {
-      method: "POST",
-    });
+    const publicConfig = await fetch(
+      `http://127.0.0.1:${publicPort}/api/public/config`,
+    );
+    const publicConfigPost = await fetch(
+      `http://127.0.0.1:${publicPort}/api/public/config`,
+      {
+        method: "POST",
+      },
+    );
+    const portalSnapshot = await fetch(
+      `http://127.0.0.1:${publicPort}/api/portal/snapshot`,
+    );
+    const portalAiIdentity = await fetch(
+      `http://127.0.0.1:${publicPort}/api/portal/ai-identity`,
+      {
+        method: "POST",
+      },
+    );
     const portalFacebookStart = await fetch(
       `http://127.0.0.1:${publicPort}/api/portal/facebook/start`,
       {
         method: "POST",
       },
     );
-    const portalTrpcRoot = await fetch(`http://127.0.0.1:${publicPort}/api/trpc`);
-    const portalApi = await fetch(`http://127.0.0.1:${publicPort}/api/trpc/portal.auth.session`);
-    const webhookResponse = await fetch(`http://127.0.0.1:${publicPort}/facebook/webhook?hub.challenge=ok`);
+    const portalTrpcRoot = await fetch(
+      `http://127.0.0.1:${publicPort}/api/trpc`,
+    );
+    const portalApi = await fetch(
+      `http://127.0.0.1:${publicPort}/api/trpc/portal.auth.session`,
+    );
+    const webhookResponse = await fetch(
+      `http://127.0.0.1:${publicPort}/facebook/webhook?hub.challenge=ok`,
+    );
     const blockedPortalMutationGet = await fetch(
       `http://127.0.0.1:${publicPort}/api/portal/ai-identity`,
     );
-    const blockedPortalAdmin = await fetch(`http://127.0.0.1:${publicPort}/api/portal/admin`);
-    const blockedOauthToken = await fetch(`http://127.0.0.1:${publicPort}/api/oauth/token`);
-    const blockedFacebookAdmin = await fetch(`http://127.0.0.1:${publicPort}/api/facebook/connect/admin`);
-    const blockedTrpcNearMiss = await fetch(`http://127.0.0.1:${publicPort}/api/trpc-admin`);
-    const blockedDashboard = await fetch(`http://127.0.0.1:${publicPort}/dashboard`);
-    const blockedDebug = await fetch(`http://127.0.0.1:${publicPort}/debug/build`);
+    const blockedPortalAdmin = await fetch(
+      `http://127.0.0.1:${publicPort}/api/portal/admin`,
+    );
+    const blockedOauthToken = await fetch(
+      `http://127.0.0.1:${publicPort}/api/oauth/token`,
+    );
+    const blockedFacebookAdmin = await fetch(
+      `http://127.0.0.1:${publicPort}/api/facebook/connect/admin`,
+    );
+    const blockedTrpcNearMiss = await fetch(
+      `http://127.0.0.1:${publicPort}/api/trpc-admin`,
+    );
+    const blockedDashboard = await fetch(
+      `http://127.0.0.1:${publicPort}/dashboard`,
+    );
+    const blockedDebug = await fetch(
+      `http://127.0.0.1:${publicPort}/debug/build`,
+    );
 
     expect(portalRoot.status).toBe(200);
     expect(await portalRoot.text()).toBe("portal:/");
@@ -428,7 +766,9 @@ describe("Fly gateway startup", () => {
     expect(await portalAsset.text()).toBe("portal:/assets/app.js");
     expect(portalAssetPost.status).toBe(404);
     expect(portalOauthCallback.status).toBe(200);
-    expect(await portalOauthCallback.text()).toBe("portal:/api/oauth/callback?code=ok&state=state-value");
+    expect(await portalOauthCallback.text()).toBe(
+      "portal:/api/oauth/callback?code=ok&state=state-value",
+    );
     expect(portalFacebookCallback.status).toBe(200);
     expect(await portalFacebookCallback.text()).toBe(
       "portal:/api/facebook/connect/callback?code=ok&state=state-value",
@@ -439,9 +779,13 @@ describe("Fly gateway startup", () => {
     expect(portalSnapshot.status).toBe(200);
     expect(await portalSnapshot.text()).toBe("portal:/api/portal/snapshot");
     expect(portalAiIdentity.status).toBe(200);
-    expect(await portalAiIdentity.text()).toBe("portal:/api/portal/ai-identity");
+    expect(await portalAiIdentity.text()).toBe(
+      "portal:/api/portal/ai-identity",
+    );
     expect(portalFacebookStart.status).toBe(200);
-    expect(await portalFacebookStart.text()).toBe("portal:/api/portal/facebook/start");
+    expect(await portalFacebookStart.text()).toBe(
+      "portal:/api/portal/facebook/start",
+    );
     expect(portalTrpcRoot.status).toBe(200);
     expect(await portalTrpcRoot.text()).toBe("portal:/api/trpc");
     expect(portalApi.status).toBe(200);
@@ -653,7 +997,9 @@ describe("Fly gateway startup", () => {
     await waitForListening(guard);
 
     const publicPort = guard.address().port;
-    const loginResponse = await fetch(`http://127.0.0.1:${publicPort}/admin/login`);
+    const loginResponse = await fetch(
+      `http://127.0.0.1:${publicPort}/admin/login`,
+    );
     const dashboardResponse = await fetch(`http://127.0.0.1:${publicPort}/`);
 
     expect(loginResponse.status).toBe(404);
@@ -684,21 +1030,30 @@ describe("Fly gateway startup", () => {
 
     const publicPort = guard.address().port;
     const loginPage = await fetch(`http://127.0.0.1:${publicPort}/admin/login`);
-    const failedLogin = await fetch(`http://127.0.0.1:${publicPort}/admin/login`, {
-      method: "POST",
-      body: new URLSearchParams({ token: "wrong-token" }),
-    });
-    const successfulLogin = await fetch(`http://127.0.0.1:${publicPort}/admin/login`, {
-      method: "POST",
-      body: new URLSearchParams({ token: "secret-token" }),
-      redirect: "manual",
-    });
-    const cookie = successfulLogin.headers.get("set-cookie") || "";
-    const dashboardResponse = await fetch(`http://127.0.0.1:${publicPort}/dashboard?tab=plugins`, {
-      headers: {
-        cookie,
+    const failedLogin = await fetch(
+      `http://127.0.0.1:${publicPort}/admin/login`,
+      {
+        method: "POST",
+        body: new URLSearchParams({ token: "wrong-token" }),
       },
-    });
+    );
+    const successfulLogin = await fetch(
+      `http://127.0.0.1:${publicPort}/admin/login`,
+      {
+        method: "POST",
+        body: new URLSearchParams({ token: "secret-token" }),
+        redirect: "manual",
+      },
+    );
+    const cookie = successfulLogin.headers.get("set-cookie") || "";
+    const dashboardResponse = await fetch(
+      `http://127.0.0.1:${publicPort}/dashboard?tab=plugins`,
+      {
+        headers: {
+          cookie,
+        },
+      },
+    );
 
     expect(loginPage.status).toBe(200);
     expect(await loginPage.text()).toContain("OpenClaw Admin");
@@ -759,12 +1114,14 @@ describe("Fly gateway startup", () => {
     expect(blockedLogin.status).toBe(404);
     expect(successfulLogin.status).toBe(303);
     expect(dashboardResponse.status).toBe(200);
-    expect(JSON.parse(dashboardResponse.body)).toEqual({ ok: true, path: "/dashboard" });
+    expect(JSON.parse(dashboardResponse.body)).toEqual({
+      ok: true,
+      path: "/dashboard",
+    });
 
     await closeServer(guard);
     await closeServer(target);
   }, 15000);
-
 
   it("proxies authenticated admin WebSocket upgrades through the tunnel", async () => {
     const seenUpgrades = [];
@@ -802,14 +1159,24 @@ describe("Fly gateway startup", () => {
     await waitForListening(guard);
 
     const publicPort = guard.address().port;
-    const blockedUpgrade = await requestRawUpgrade({ port: publicPort, path: "/ws" });
-    const successfulLogin = await fetch(`http://127.0.0.1:${publicPort}/admin/login`, {
-      method: "POST",
-      body: new URLSearchParams({ token: "secret-token" }),
-      redirect: "manual",
+    const blockedUpgrade = await requestRawUpgrade({
+      port: publicPort,
+      path: "/ws",
     });
+    const successfulLogin = await fetch(
+      `http://127.0.0.1:${publicPort}/admin/login`,
+      {
+        method: "POST",
+        body: new URLSearchParams({ token: "secret-token" }),
+        redirect: "manual",
+      },
+    );
     const cookie = successfulLogin.headers.get("set-cookie") || "";
-    const proxiedUpgrade = await requestRawUpgrade({ port: publicPort, path: "/ws", cookie });
+    const proxiedUpgrade = await requestRawUpgrade({
+      port: publicPort,
+      path: "/ws",
+      cookie,
+    });
 
     expect(blockedUpgrade).toBe("");
     expect(proxiedUpgrade).toContain("HTTP/1.1 101 Switching Protocols");
@@ -832,7 +1199,9 @@ describe("Fly gateway startup", () => {
     expect(isLocalAdminHost("localhost:7300")).toBe(true);
     expect(isLocalAdminHost("[::1]:7300")).toBe(true);
     expect(isLocalAdminHost("leaderbot-openclaw-gateway.fly.dev")).toBe(false);
-    expect(isAdminHostAllowed("leaderbot-openclaw-gateway.fly.dev")).toBe(false);
+    expect(isAdminHostAllowed("leaderbot-openclaw-gateway.fly.dev")).toBe(
+      false,
+    );
     expect(
       isAdminHostAllowed("leaderbot-openclaw-gateway.fly.dev", {
         OPENCLAW_ADMIN_HOSTS: "leaderbot-openclaw-gateway.fly.dev",

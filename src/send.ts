@@ -19,11 +19,18 @@ function resolveGraphApiVersion(value: string | undefined): string {
 }
 
 function formatMessengerApiError(body: unknown): string {
-  const error = body && typeof body === "object" ? (body as { error?: unknown }).error : undefined;
+  const error =
+    body && typeof body === "object"
+      ? (body as { error?: unknown }).error
+      : undefined;
   if (!error || typeof error !== "object") {
     return "Messenger API request failed";
   }
-  const details = error as { message?: string; code?: number; error_subcode?: number };
+  const details = error as {
+    message?: string;
+    code?: number;
+    error_subcode?: number;
+  };
   const message = details.message?.trim() || "Messenger API request failed";
   if (details.code === 190) {
     return `Messenger Page access token is invalid or expired: ${message}`;
@@ -73,20 +80,29 @@ export async function sendMessengerText(
     quickReplies?: readonly MessengerQuickReply[];
     beforeTransport?: () => Promise<void>;
     onTransportOutcome?: (
-      outcome: "succeeded" | "known_rejected" | "ambiguous"
+      outcome: "succeeded" | "known_rejected" | "ambiguous",
     ) => Promise<void>;
   },
 ): Promise<MessengerSendResult> {
-  const account = resolveMessengerAccount({ cfg: opts.cfg, accountId: opts.accountId });
+  const account = resolveMessengerAccount({
+    cfg: opts.cfg,
+    accountId: opts.accountId,
+  });
   if (!account.pageId.trim()) {
-    throw new Error(`Messenger pageId missing for account "${account.accountId}".`);
+    throw new Error(
+      `Messenger pageId missing for account "${account.accountId}".`,
+    );
   }
   if (!account.pageAccessToken.trim()) {
-    throw new Error(`Messenger Page access token missing for account "${account.accountId}".`);
+    throw new Error(
+      `Messenger Page access token missing for account "${account.accountId}".`,
+    );
   }
   const normalizedTo = stripFacebookTargetPrefix(to) || to.trim();
   if (!normalizedTo) {
-    throw new Error(`Messenger recipient id missing for account "${account.accountId}".`);
+    throw new Error(
+      `Messenger recipient id missing for account "${account.accountId}".`,
+    );
   }
   const fetchImpl = opts.fetch ?? fetch;
   const normalizedText = normalizeMessengerText(text);
@@ -121,7 +137,9 @@ export async function sendMessengerText(
     if (transportStarted) {
       await opts.onTransportOutcome?.("ambiguous").catch(() => undefined);
     }
-    throw new Error(`Messenger send failed: ${formatErrorMessage(error)}`, { cause: error });
+    throw new Error(`Messenger send failed: ${formatErrorMessage(error)}`, {
+      cause: error,
+    });
   } finally {
     if (timeout) clearTimeout(timeout);
   }
@@ -130,11 +148,11 @@ export async function sendMessengerText(
     recipient_id?: string;
   } | null;
   if (!response.ok) {
-    await opts
-      .onTransportOutcome?.(
-        response.status < 500 ? "known_rejected" : "ambiguous"
-      )
-      .catch(() => undefined);
+    const outcome =
+      response.status === 408 || response.status >= 500
+        ? "ambiguous"
+        : "known_rejected";
+    await opts.onTransportOutcome?.(outcome).catch(() => undefined);
     throw new Error(formatMessengerApiError(body));
   }
   const result = body as { message_id?: string; recipient_id?: string };
@@ -163,22 +181,34 @@ export async function sendMessengerSenderAction(
     fetch?: FetchLike;
   },
 ): Promise<void> {
-  const account = resolveMessengerAccount({ cfg: opts.cfg, accountId: opts.accountId });
+  const account = resolveMessengerAccount({
+    cfg: opts.cfg,
+    accountId: opts.accountId,
+  });
   if (!account.pageId.trim()) {
-    throw new Error(`Messenger pageId missing for account "${account.accountId}".`);
+    throw new Error(
+      `Messenger pageId missing for account "${account.accountId}".`,
+    );
   }
   if (!account.pageAccessToken.trim()) {
-    throw new Error(`Messenger Page access token missing for account "${account.accountId}".`);
+    throw new Error(
+      `Messenger Page access token missing for account "${account.accountId}".`,
+    );
   }
   const normalizedTo = stripFacebookTargetPrefix(to) || to.trim();
   if (!normalizedTo) {
-    throw new Error(`Messenger recipient id missing for account "${account.accountId}".`);
+    throw new Error(
+      `Messenger recipient id missing for account "${account.accountId}".`,
+    );
   }
   const fetchImpl = opts.fetch ?? fetch;
   const version = resolveGraphApiVersion(account.config.graphApiVersion);
   const url = `https://graph.facebook.com/${version}/${encodeURIComponent(account.pageId)}/messages`;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), MESSENGER_SEND_TIMEOUT_MS);
+  const timeout = setTimeout(
+    () => controller.abort(),
+    MESSENGER_SEND_TIMEOUT_MS,
+  );
   let response: Response;
   try {
     response = await fetchImpl(url, {
@@ -194,9 +224,12 @@ export async function sendMessengerSenderAction(
       }),
     });
   } catch (error) {
-    throw new Error(`Messenger sender action failed: ${formatErrorMessage(error)}`, {
-      cause: error,
-    });
+    throw new Error(
+      `Messenger sender action failed: ${formatErrorMessage(error)}`,
+      {
+        cause: error,
+      },
+    );
   } finally {
     clearTimeout(timeout);
   }

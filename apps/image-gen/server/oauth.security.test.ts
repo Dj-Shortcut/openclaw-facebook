@@ -48,7 +48,11 @@ async function sendCallbackRequest(params: {
   code: string;
   state: string;
   cookie?: string;
-}): Promise<{ status: number; headers: http.IncomingHttpHeaders; payload: string }> {
+}): Promise<{
+  status: number;
+  headers: http.IncomingHttpHeaders;
+  payload: string;
+}> {
   const app = express();
   registerOAuthRoutes(app);
 
@@ -57,35 +61,37 @@ async function sendCallbackRequest(params: {
 
   const path = `/api/oauth/callback?code=${encodeURIComponent(params.code)}&state=${encodeURIComponent(params.state)}`;
   try {
-    return await new Promise<{ status: number; headers: http.IncomingHttpHeaders; payload: string }>(
-      (resolve, reject) => {
-        const request = http.request(
-          {
-            hostname: "127.0.0.1",
-            port: boundServer.port,
-            path,
-            method: "GET",
-            headers: params.cookie ? { cookie: params.cookie } : undefined,
-          },
-          res => {
-            let payload = "";
-            res.on("data", chunk => {
-              payload += chunk;
+    return await new Promise<{
+      status: number;
+      headers: http.IncomingHttpHeaders;
+      payload: string;
+    }>((resolve, reject) => {
+      const request = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: boundServer.port,
+          path,
+          method: "GET",
+          headers: params.cookie ? { cookie: params.cookie } : undefined,
+        },
+        res => {
+          let payload = "";
+          res.on("data", chunk => {
+            payload += chunk;
+          });
+          res.on("end", () => {
+            resolve({
+              status: res.statusCode ?? 0,
+              headers: res.headers,
+              payload,
             });
-            res.on("end", () => {
-              resolve({
-                status: res.statusCode ?? 0,
-                headers: res.headers,
-                payload,
-              });
-            });
-          }
-        );
+          });
+        }
+      );
 
-        request.on("error", reject);
-        request.end();
-      }
-    );
+      request.on("error", reject);
+      request.end();
+    });
   } finally {
     await boundServer.close();
   }
@@ -108,7 +114,10 @@ describe("OAuth callback security", () => {
   });
 
   it("rejects callback requests with a missing matching state nonce cookie", async () => {
-    const state = buildState("https://leaderbot.example/api/oauth/callback", "nonce-1234567890abcdef");
+    const state = buildState(
+      "https://leaderbot.example/api/oauth/callback",
+      "nonce-1234567890abcdef"
+    );
 
     const response = await sendCallbackRequest({
       code: "code-1",
@@ -121,7 +130,9 @@ describe("OAuth callback security", () => {
   });
 
   it("accepts callback requests when the nonce cookie matches", async () => {
-    mocks.exchangeCodeForToken.mockResolvedValue({ accessToken: "access-token" });
+    mocks.exchangeCodeForToken.mockResolvedValue({
+      accessToken: "access-token",
+    });
     mocks.getUserInfo.mockResolvedValue({
       openId: "open-id-1",
       name: "Test User",
@@ -159,7 +170,10 @@ describe("OAuth callback security", () => {
     });
 
     expect(response.status).toBe(302);
-    expect(mocks.exchangeCodeForToken).toHaveBeenCalledWith("code-2", redirectUri);
+    expect(mocks.exchangeCodeForToken).toHaveBeenCalledWith(
+      "code-2",
+      redirectUri
+    );
     expect(mocks.upsertUser).toHaveBeenCalledWith(
       expect.objectContaining({
         openId: "open-id-1",
@@ -178,7 +192,9 @@ describe("OAuth callback security", () => {
   });
 
   it("redirects to a safe relative return path after login", async () => {
-    mocks.exchangeCodeForToken.mockResolvedValue({ accessToken: "access-token" });
+    mocks.exchangeCodeForToken.mockResolvedValue({
+      accessToken: "access-token",
+    });
     mocks.getUserInfo.mockResolvedValue({
       openId: "open-id-1",
       name: "Test User",
@@ -221,7 +237,9 @@ describe("OAuth callback security", () => {
   });
 
   it("falls back to the portal root for unsafe return paths", async () => {
-    mocks.exchangeCodeForToken.mockResolvedValue({ accessToken: "access-token" });
+    mocks.exchangeCodeForToken.mockResolvedValue({
+      accessToken: "access-token",
+    });
     mocks.getUserInfo.mockResolvedValue({
       openId: "open-id-1",
       name: "Test User",
@@ -263,7 +281,9 @@ describe("OAuth callback security", () => {
   });
 
   it("fails the callback before session creation when the workspace is not persisted", async () => {
-    mocks.exchangeCodeForToken.mockResolvedValue({ accessToken: "access-token" });
+    mocks.exchangeCodeForToken.mockResolvedValue({
+      accessToken: "access-token",
+    });
     mocks.getUserInfo.mockResolvedValue({
       openId: "open-id-1",
       name: "Test User",
@@ -300,7 +320,9 @@ describe("OAuth callback security", () => {
   });
 
   it("fails the callback before session creation when the portal customer is not persisted", async () => {
-    mocks.exchangeCodeForToken.mockResolvedValue({ accessToken: "access-token" });
+    mocks.exchangeCodeForToken.mockResolvedValue({
+      accessToken: "access-token",
+    });
     mocks.getUserInfo.mockResolvedValue({
       openId: "open-id-missing",
       name: "Missing User",
@@ -325,7 +347,9 @@ describe("OAuth callback security", () => {
   });
 
   it("rejects non-Facebook OAuth identities before creating a portal session", async () => {
-    mocks.exchangeCodeForToken.mockResolvedValue({ accessToken: "access-token" });
+    mocks.exchangeCodeForToken.mockResolvedValue({
+      accessToken: "access-token",
+    });
     mocks.getUserInfo.mockResolvedValue({
       openId: "open-id-email",
       name: "Email User",

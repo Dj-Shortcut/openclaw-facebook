@@ -16,9 +16,15 @@ import {
 } from "../../../drizzle/schema";
 import type { MolliePayment } from "./mollieClient";
 
-const databaseMock = vi.hoisted(() => vi.fn());
+const { databaseMock, schedulerFenceMock } = vi.hoisted(() => ({
+  databaseMock: vi.fn(),
+  schedulerFenceMock: vi.fn(),
+}));
 
 vi.mock("../../db", () => ({ getDatabaseOrThrow: databaseMock }));
+vi.mock("./billingSchedulerStore", () => ({
+  assertBillingTenantLeaseOwnedInTransaction: schedulerFenceMock,
+}));
 
 import { applyMolliePaymentSnapshot } from "./paymentStore";
 
@@ -26,9 +32,33 @@ const INTENT_ID = "550e8400-e29b-41d4-a716-446655440000";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  schedulerFenceMock.mockResolvedValue(undefined);
 });
 
 describe("payment snapshot persistence flow", () => {
+  it("fails before payment effects when the reconciliation lease is lost", async () => {
+    const flow = paymentFlow({ intent: startpilotIntent() });
+    databaseMock.mockResolvedValue(flow.database);
+    schedulerFenceMock.mockRejectedValue(
+      new Error("billing scheduler lease ownership was lost")
+    );
+
+    await expect(
+      applyMolliePaymentSnapshot(molliePayment(), 1, {
+        schedulerLease: {
+          workspaceId: 1,
+          mode: "test",
+          kind: "reconciliation",
+          leaseToken: "reconciliation-lease",
+          executionEpoch: 2,
+        },
+      })
+    ).rejects.toThrow("billing scheduler lease ownership was lost");
+
+    expect(schedulerFenceMock).toHaveBeenCalledOnce();
+    expect(flow.inserts).toEqual([]);
+  });
+
   it("queues exactly one portal handoff for an eligible paid Startpilot checkout", async () => {
     const flow = paymentFlow({
       intent: {

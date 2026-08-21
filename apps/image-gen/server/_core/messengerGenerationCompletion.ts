@@ -331,9 +331,29 @@ function writeMessengerGenerationCompletion(
   mode: "create" | "deliver"
 ): Promise<void> {
   return Promise.resolve().then(async () => {
+    if (mode === "create" && fence && isRedisEnabled()) {
+      const inventoried = await indexCompletionObjectForPrivacyCleanup(
+        completion,
+        fence
+      );
+      if (!inventoried) {
+        await cleanupCompletionObject(JSON.stringify(completion));
+        throw new Error("Messenger completion subject is erased");
+      }
+    }
     if (fence) {
-      await assertMessengerPrivacySubject(fence);
-      await assertMessengerGenerationOwnership(fence);
+      try {
+        await assertMessengerPrivacySubject(fence);
+        await assertMessengerGenerationOwnership(fence);
+      } catch (error) {
+        // The generated object already exists before the completion commit.
+        // If deletion/rebind wins at this first fence, no durable inventory
+        // exists yet to scrub it later.
+        if (mode === "create") {
+          await cleanupCompletionObject(JSON.stringify(completion));
+        }
+        throw error;
+      }
     } else if (process.env.NODE_ENV === "production") {
       throw new Error("Messenger completion privacy fence is required");
     }
@@ -458,6 +478,36 @@ function writeMessengerGenerationCompletion(
       );
     });
   });
+}
+
+async function indexCompletionObjectForPrivacyCleanup(
+  completion: MessengerGenerationCompletion,
+  fence: MessengerGenerationCompletionFence
+): Promise<boolean> {
+  const objectKey = storageKeyFromPublicUrl(completion.imageUrl);
+  if (!objectKey) return true;
+  const redis = await getRedisClient();
+  const result = Number(
+    await redis.eval(
+      `
+        if redis.call('exists', KEYS[2]) == 1 then return 0 end
+        redis.call('sadd', KEYS[1], ARGV[1])
+        local ttl = redis.call('pttl', KEYS[1])
+        if ttl < 0 then
+          redis.call('pexpireat', KEYS[1], ARGV[2])
+        else
+          redis.call('pexpireat', KEYS[1], ARGV[2], 'GT')
+        end
+        return 1
+      `,
+      2,
+      `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${objectIndexStorageId(fence)}`,
+      `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${tombstoneStorageId(fence)}`,
+      objectKey,
+      Date.now() + GENERATION_OBJECT_INVENTORY_TTL_SECONDS * 1_000
+    )
+  );
+  return result === 1;
 }
 
 async function deleteCompletionIfExact(

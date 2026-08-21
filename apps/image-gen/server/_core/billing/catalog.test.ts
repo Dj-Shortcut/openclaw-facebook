@@ -21,6 +21,7 @@ describe("billing catalog", () => {
       entitlements: {
         imagesPerDay: 100,
         messagesPerMinute: 120,
+        videoGenerationsPerDay: 10,
       },
       mollieDescription: "Leaderbot Premium - maandelijks abonnement",
       active: true,
@@ -32,7 +33,7 @@ describe("billing catalog", () => {
     expect(plan.amountMinor).toBe(2_900);
   });
 
-  it("publishes the finite Startpilot and keeps the recurring plan private", () => {
+  it("publishes only the finite Startpilot launch plan", () => {
     expect(listPublicBillingPlans()).toEqual([
       expect.objectContaining({
         code: "startpilot_once_v1",

@@ -32,26 +32,43 @@ export async function containMessengerProviderAttemptsForPrivacy(
     userKey: string;
   },
   now = new Date()
-): Promise<void> {
+): Promise<boolean> {
   const database = await getDatabaseOrThrow();
-  await database
-    .update(messengerProviderAttemptFences)
-    .set({ status: "contained", completedAt: now, leaseUntil: now })
-    .where(
-      and(
-        eq(messengerProviderAttemptFences.workspaceId, input.workspaceId),
-        eq(
-          messengerProviderAttemptFences.channelConnectionId,
-          input.channelConnectionId
-        ),
-        eq(messengerProviderAttemptFences.userKey, input.userKey),
-        or(
-          eq(messengerProviderAttemptFences.status, "reserved"),
-          eq(messengerProviderAttemptFences.status, "started"),
-          eq(messengerProviderAttemptFences.status, "ambiguous")
-        )
-      )
+  return database.transaction(async tx => {
+    const scope = and(
+      eq(messengerProviderAttemptFences.workspaceId, input.workspaceId),
+      eq(
+        messengerProviderAttemptFences.channelConnectionId,
+        input.channelConnectionId
+      ),
+      eq(messengerProviderAttemptFences.userKey, input.userKey)
     );
+    await tx
+      .update(messengerProviderAttemptFences)
+      .set({ status: "contained", completedAt: now, leaseUntil: now })
+      .where(
+        and(
+          scope,
+          or(
+            eq(messengerProviderAttemptFences.status, "reserved"),
+            eq(messengerProviderAttemptFences.status, "known_failed"),
+            eq(messengerProviderAttemptFences.status, "succeeded"),
+            eq(messengerProviderAttemptFences.status, "ambiguous"),
+            and(
+              eq(messengerProviderAttemptFences.status, "started"),
+              lte(messengerProviderAttemptFences.leaseUntil, now)
+            )
+          )
+        )
+      );
+    const active = await tx
+      .select({ id: messengerProviderAttemptFences.id })
+      .from(messengerProviderAttemptFences)
+      .where(and(scope, eq(messengerProviderAttemptFences.status, "started")))
+      .limit(1)
+      .for("update");
+    return active.length === 0;
+  });
 }
 
 const LOCAL_FENCE: MessengerProviderAttemptFence = {

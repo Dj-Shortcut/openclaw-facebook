@@ -71,6 +71,7 @@ export function createDefaultState(
     lastGeneratedVideoAt: null,
     lastGeneratedVideoProvider: null,
     lastGeneratedVideoProviderJobId: null,
+    pendingVideoGeneration: null,
     lastVariantCursor: undefined,
     pendingConversationActions: undefined,
     pendingConversationActionsByMessageId: undefined,
@@ -267,6 +268,10 @@ function resolveVideoGenerationQuotaReservation(
     return {
       token: reservation.token,
       expiresAt: reservation.expiresAt,
+      ...(Number.isSafeInteger(reservation.dailyLimit) &&
+      Number(reservation.dailyLimit) >= 0
+        ? { dailyLimit: Number(reservation.dailyLimit) }
+        : {}),
     };
   }
 
@@ -296,6 +301,22 @@ function resolvePendingEditIntent(
   };
 }
 
+function resolvePendingVideoGeneration(
+  ctx: NormalizationCtx
+): Pick<MessengerUserState, "pendingVideoGeneration"> {
+  const pending = ctx.value?.pendingVideoGeneration;
+  if (
+    pending &&
+    typeof pending.sourceImageUrl === "string" &&
+    typeof pending.promptHint === "string" &&
+    typeof pending.requestedAt === "number" &&
+    Number.isFinite(pending.requestedAt)
+  ) {
+    return { pendingVideoGeneration: pending };
+  }
+  return { pendingVideoGeneration: null };
+}
+
 function applyNormalizedStateShape(
   value: PartialState | null | undefined,
   base: StateNormalizationBase,
@@ -319,6 +340,7 @@ function applyNormalizedStateShape(
     ...resolveGeneratedImageState(ctx, lastGeneratedUrl),
     ...resolveSourceImageState(ctx),
     ...resolvePendingEditIntent(ctx),
+    ...resolvePendingVideoGeneration(ctx),
     quota: resolveQuotaState(ctx),
     imageGenerationQuotaReservation:
       resolveImageGenerationQuotaReservation(ctx),

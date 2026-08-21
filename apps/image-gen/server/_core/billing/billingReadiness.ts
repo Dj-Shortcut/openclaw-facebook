@@ -478,7 +478,8 @@ export async function assertBillingNotificationRuntimeReadiness(
 }
 
 export async function assertAiAnswerFinalizationReadiness(
-  mode: MollieMode
+  mode: MollieMode,
+  options: { requireRuntimeHeartbeat?: boolean } = {}
 ): Promise<void> {
   const rollout = getBillingSchedulerRollout();
   const database = await getDatabaseOrThrow();
@@ -519,6 +520,31 @@ export async function assertAiAnswerFinalizationReadiness(
         ? "The pinned AI answer finalization lane is not ready"
         : "No enabled AI answer finalization lane is ready"
     );
+  }
+  if (options.requireRuntimeHeartbeat !== false) {
+    const processId =
+      process.env.FLY_MACHINE_ID?.trim() ||
+      process.env.BILLING_SCHEDULER_PROCESS_ID?.trim() ||
+      "";
+    if (!/^[A-Za-z0-9._:-]{3,96}$/.test(processId)) {
+      throw new Error("AI answer finalization process identity is missing");
+    }
+    const heartbeat = await database
+      .select({ processId: billingSchedulerProcessHeartbeats.processId })
+      .from(billingSchedulerProcessHeartbeats)
+      .where(
+        and(
+          eq(billingSchedulerProcessHeartbeats.processId, processId),
+          eq(billingSchedulerProcessHeartbeats.mode, mode),
+          eq(billingSchedulerProcessHeartbeats.kind, "ai_finalization"),
+          eq(billingSchedulerProcessHeartbeats.status, "polling"),
+          sql`${billingSchedulerProcessHeartbeats.lastPollAt} > ${new Date(Date.now() - 60_000)}`
+        )
+      )
+      .limit(1);
+    if (!heartbeat[0]) {
+      throw new Error("AI answer finalization worker heartbeat is stale");
+    }
   }
   const token =
     process.env.INTERNAL_IMAGE_REQUEST_TOKEN?.trim() ||

@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 
 const {
   commitStartpilotAiAnswerUsageMock,
+  assertAiAnswerFinalizationReadinessMock,
   getDatabaseOrThrowMock,
   isMollieEntitlementEnforcementEnabledMock,
   releaseStartpilotAiAnswerUsageMock,
@@ -11,6 +12,7 @@ const {
   reserveStartpilotAiAnswerUsageMock,
 } = vi.hoisted(() => ({
   commitStartpilotAiAnswerUsageMock: vi.fn(),
+  assertAiAnswerFinalizationReadinessMock: vi.fn(),
   getDatabaseOrThrowMock: vi.fn(),
   isMollieEntitlementEnforcementEnabledMock: vi.fn(() => true),
   releaseStartpilotAiAnswerUsageMock: vi.fn(),
@@ -21,8 +23,12 @@ const {
 
 vi.mock("./_core/billing/config", () => ({
   assertTenantBillingWorkerWorkspace: vi.fn(),
+  getConfiguredBillingMode: vi.fn(() => "test"),
   isMollieEntitlementEnforcementEnabled:
     isMollieEntitlementEnforcementEnabledMock,
+}));
+vi.mock("./_core/billing/billingReadiness", () => ({
+  assertAiAnswerFinalizationReadiness: assertAiAnswerFinalizationReadinessMock,
 }));
 vi.mock("./_core/workspaceEntitlementRuntime", () => ({
   resolveWorkspaceRuntimePolicy: resolveWorkspaceRuntimePolicyMock,
@@ -40,16 +46,20 @@ vi.mock("./db", () => ({
 
 import {
   finalizeInternalAiAnswerQuota,
+  getInternalAiAnswerQuotaReadiness,
   markInternalAiAnswerDeliveryStarted,
   reserveInternalAiAnswerQuota,
 } from "./_core/internalAiAnswerQuota";
 
 const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalAiAnswerFinalizationDrain =
+  process.env.AI_ANSWER_FINALIZATION_DRAIN_ENABLED;
 const OWNER_TOKEN = "11111111-1111-4111-8111-111111111111";
 
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.DATABASE_URL = "mysql://quota.test/database";
+  process.env.AI_ANSWER_FINALIZATION_DRAIN_ENABLED = "true";
   isMollieEntitlementEnforcementEnabledMock.mockReturnValue(true);
   resolveWorkspaceRuntimePolicyMock.mockResolvedValue({
     kind: "startpilot",
@@ -68,6 +78,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (originalAiAnswerFinalizationDrain === undefined) {
+    delete process.env.AI_ANSWER_FINALIZATION_DRAIN_ENABLED;
+  } else {
+    process.env.AI_ANSWER_FINALIZATION_DRAIN_ENABLED =
+      originalAiAnswerFinalizationDrain;
+  }
   if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
   else process.env.DATABASE_URL = originalDatabaseUrl;
 });
@@ -84,6 +100,21 @@ function mockStoredReservationScope(
 }
 
 describe("internal Startpilot AI-answer quota service", () => {
+  it("reports admission and drain readiness without reserving quota", async () => {
+    isMollieEntitlementEnforcementEnabledMock.mockReturnValue(false);
+
+    await expect(getInternalAiAnswerQuotaReadiness()).resolves.toEqual({
+      protocol: "leaderbot-ai-answer-quota-v1",
+      preflightReady: true,
+      admissionEnabled: false,
+      drainEnabled: true,
+    });
+    expect(assertAiAnswerFinalizationReadinessMock).toHaveBeenCalledWith(
+      "test"
+    );
+    expect(reserveStartpilotAiAnswerUsageMock).not.toHaveBeenCalled();
+  });
+
   it("leaves a Page without an active paid entitlement unaffected", async () => {
     resolveWorkspaceRuntimePolicyMock.mockResolvedValue({ kind: "free" });
 

@@ -105,14 +105,36 @@ export async function tryHandleAudioMessage(
   try {
     const providerJob = getAudioProviderJob(input);
     await assertAudioProviderFence(providerJob);
-    const prepared = await prepareAudioForTranscription(
-      input.reqId,
-      input.psid,
-      audioUrl
-    );
+    let downloadFence: MessengerProviderAttemptFence | null = null;
+    let prepared: PreparedAudioForTranscription | null = null;
+    try {
+      downloadFence = await reserveMessengerProviderAttemptFence(
+        providerJob,
+        "meta-audio-download",
+        1
+      );
+      await markMessengerProviderAttemptStarted(downloadFence);
+      prepared = await prepareAudioForTranscription(
+        input.reqId,
+        input.psid,
+        audioUrl
+      );
+      await finalizeMessengerProviderAttemptFence(
+        downloadFence,
+        prepared ? "succeeded" : "known_failed"
+      );
+    } catch (error) {
+      if (downloadFence) {
+        await finalizeMessengerProviderAttemptFence(downloadFence, "ambiguous");
+      }
+      throw error;
+    }
     if (!prepared) {
       return false;
     }
+    // Deletion/rebind may win while Meta media is downloading. Recheck before
+    // disclosing the bytes to OpenAI or reserving billable quota.
+    await assertAudioProviderFence(providerJob);
 
     reservation = await reserveTranscriptionForAttempt(input.psid);
     if (!reservation) {
