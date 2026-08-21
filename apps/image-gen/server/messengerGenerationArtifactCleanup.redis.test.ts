@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   afterAll,
+  afterEach,
   beforeAll,
   beforeEach,
   describe,
@@ -81,6 +82,10 @@ describe.skipIf(!enabled)("messenger artifact cleanup Redis queue", () => {
     assertPrivacyMock.mockResolvedValue(undefined);
     storageDeleteMock.mockReset();
     storageDeleteMock.mockResolvedValue(undefined);
+  });
+
+  afterEach(async () => {
+    await clearCleanupKeys();
   });
 
   afterAll(async () => {

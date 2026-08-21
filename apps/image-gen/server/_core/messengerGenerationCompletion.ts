@@ -434,6 +434,12 @@ async function findLegacyCompletionKeys(
         200
       );
       for (const key of keys) {
+        if (
+          prefix === GENERATION_COMPLETION_SCOPE &&
+          key.startsWith(`${GENERATION_COMPLETION_USER_INDEX_SCOPE}:`)
+        ) {
+          continue;
+        }
         if (!key.startsWith(`${prefix}:{mgc:`)) unsafe.push(key);
         if (unsafe.length >= limit) return unsafe;
       }

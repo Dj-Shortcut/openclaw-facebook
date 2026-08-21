@@ -878,9 +878,7 @@ async function releaseFailedWebhookIngressDelivery(
     redis,
     reserved,
     WEBHOOK_INGRESS_QUEUE_KEY,
-    reserved.legacyInline
-      ? serializedRetryDelivery
-      : reserved.delivery.deliveryId,
+    serializedRetryDelivery,
     "RPUSH"
   );
   if (transition === "erased") return "erased";

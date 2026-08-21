@@ -23,6 +23,7 @@ import {
   getMessengerGenerationCompletion,
   markMessengerGenerationCompleted,
   markMessengerGenerationDelivered,
+  runDueMessengerGenerationArtifactCleanup,
   type MessengerGenerationCompletionFence,
 } from "./_core/messengerGenerationCompletion";
 import { getRedisClient, resetRedisClientForTests } from "./_core/redis";
@@ -84,6 +85,10 @@ describe.skipIf(!enabled)("messenger completion Redis CAS", () => {
       Date.now(),
       first
     );
+    await expect(
+      runDueMessengerGenerationArtifactCleanup(Date.now())
+    ).resolves.toBe(1);
+    expect(storageDeleteMock).toHaveBeenCalledWith("generated/replayed.jpg");
     await expect(
       getMessengerGenerationCompletion(reqId, first)
     ).resolves.toMatchObject({

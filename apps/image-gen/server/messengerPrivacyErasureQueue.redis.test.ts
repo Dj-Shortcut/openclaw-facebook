@@ -427,6 +427,7 @@ function sealLegacyV1(
     bindingEpoch: number;
     userKey: string;
     oldPrivacyEpoch: number;
+    channel?: "facebook_messenger" | "whatsapp";
   },
   psid: string
 ): string {
@@ -443,6 +444,7 @@ function sealLegacyV1(
       JSON.stringify({
         domain: "leaderbot.messenger-privacy-erasure.v1",
         jobId: job.jobId,
+        channel: job.channel ?? "facebook_messenger",
         workspaceId: job.workspaceId,
         channelConnectionId: job.channelConnectionId,
         pageId: job.pageId,

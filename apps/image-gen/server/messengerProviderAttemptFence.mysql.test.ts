@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
   auditLog,
@@ -30,10 +30,8 @@ suite("messenger provider attempt MySQL identity", () => {
   const suffix = `${Date.now()}-${randomUUID().slice(0, 8)}`;
   const userKey = "provider-fence-mysql-user";
   const reqId = `provider-fence-request-${suffix}`;
-  const pageIds = [
-    `provider-fence-page-a-${suffix}`,
-    `provider-fence-page-b-${suffix}`,
-  ];
+  const pageIdSeed = `${Date.now()}${randomUUID().replace(/\D/g, "").slice(0, 6)}`;
+  const pageIds = [`${pageIdSeed}1`, `${pageIdSeed}2`];
   const workspaceIds: number[] = [];
   const connectionIds: number[] = [];
 
@@ -70,6 +68,14 @@ suite("messenger provider attempt MySQL identity", () => {
         status: "active",
       });
     }
+  });
+
+  afterEach(async () => {
+    if (workspaceIds.length === 0) return;
+    const database = await getDatabaseOrThrow();
+    await database
+      .delete(messengerProviderAttemptFences)
+      .where(inArray(messengerProviderAttemptFences.workspaceId, workspaceIds));
   });
 
   afterAll(async () => {

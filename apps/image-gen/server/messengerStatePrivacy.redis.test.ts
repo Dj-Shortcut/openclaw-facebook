@@ -96,8 +96,17 @@ suite("Messenger state Redis privacy fence", () => {
     resetRedisClientForTests();
     const redis = await getRedisClient();
     await redis.flushdb();
-    for (const mock of Object.values(mocks)) mock.mockClear();
+    for (const mock of Object.values(mocks)) mock.mockReset();
+    mocks.storageDelete.mockResolvedValue(undefined);
     mocks.beginSubject.mockResolvedValue(7);
+    mocks.completeSubject.mockResolvedValue(undefined);
+    mocks.completeJob.mockResolvedValue(undefined);
+    mocks.reschedule.mockResolvedValue(undefined);
+    mocks.eraseBilling.mockResolvedValue(0);
+    mocks.eraseIngress.mockResolvedValue(undefined);
+    mocks.eraseGeneration.mockResolvedValue(0);
+    mocks.containProvider.mockResolvedValue(true);
+    mocks.eraseCost.mockResolvedValue(0);
   });
 
   afterAll(() => {
