@@ -1,6 +1,7 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
 import type { MessengerLanguage } from "./messenger-i18n.js";
+import type { MessengerSharedStateStoreMode } from "./messenger-state-store.js";
 
 export type MessengerTokenSource = "config" | "env" | "file" | "none";
 export type MessengerUnknownSenderMode = "pairing" | "leaderbot_free_tier";
@@ -30,6 +31,7 @@ interface MessengerAccountBaseConfig {
 export interface MessengerConfig extends MessengerAccountBaseConfig {
   accounts?: Record<string, MessengerAccountConfig>;
   defaultAccount?: string;
+  sharedStateStore?: MessengerSharedStateStoreMode;
 }
 
 export interface MessengerAccountConfig extends MessengerAccountBaseConfig {}

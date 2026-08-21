@@ -58,6 +58,11 @@
           "defaultTo": { "type": "string" },
           "graphApiVersion": { "type": "string" },
           "defaultAccount": { "type": "string" },
+          "sharedStateStore": {
+            "type": "string",
+            "enum": ["memory", "redis"],
+            "default": "memory"
+          },
           "accounts": {
             "type": "object",
             "additionalProperties": {
@@ -121,6 +126,7 @@
         "leaderbotBridgeEnabled": { "label": "Enable Leaderbot image-generation bridge" },
         "defaultLang": { "label": "Default response language" },
         "customerPortalUrl": { "label": "Customer portal URL (HTTPS)" },
+        "sharedStateStore": { "label": "Shared dedupe and budget store" },
         "allowFrom": { "label": "Allowed Page-scoped sender IDs" }
       }
     }

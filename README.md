@@ -159,7 +159,8 @@ and the Page's privacy/data-retention terms disclose that processing:
       leaderbotBridgeEnabled: true,
       unknownSenderMode: "leaderbot_free_tier",
       defaultLang: "nl",
-      customerPortalUrl: "https://leaderbot.live/"
+      customerPortalUrl: "https://leaderbot.live/",
+      sharedStateStore: "memory"
     }
   }
 }
@@ -171,6 +172,15 @@ Set `defaultLang` to `"nl"` or `"en"` globally or per named Messenger account.
 Dutch remains the default for existing installations.
 `customerPortalUrl` controls the plan-neutral quota handoff and must be an HTTPS
 URL without embedded credentials; named accounts may override it.
+
+`sharedStateStore` is a root-only gateway setting. The default, `"memory"`, is
+safe for a single gateway replica. Before running more than one replica, set it
+to `"redis"` and configure `MESSENGER_SHARED_STATE_REDIS_URL`,
+`MESSENGER_SHARED_STATE_HMAC_SECRET`, and optionally
+`MESSENGER_SHARED_STATE_HMAC_KEY_ID`. Redis coordinates message deduplication
+and the optional gateway daily caps across replicas; it does not make webhook
+processing durable after the HTTP acknowledgement, so keep one replica until a
+durable ingress queue/outbox is implemented.
 
 ## Conversation Actions
 

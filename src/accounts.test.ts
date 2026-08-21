@@ -113,6 +113,7 @@ describe("resolveMessengerAccount", () => {
         facebook: {
           defaultLang: "en",
           customerPortalUrl: "https://portal.example.test/account",
+          sharedStateStore: "redis",
           accounts: {
             inherited: {
               pageAccessToken: "inherited-token",
@@ -133,6 +134,10 @@ describe("resolveMessengerAccount", () => {
       resolveMessengerAccount({ cfg, accountId: "inherited" }).config
         .customerPortalUrl,
     ).toBe("https://portal.example.test/account");
+    expect(
+      resolveMessengerAccount({ cfg, accountId: "inherited" }).config
+        .sharedStateStore,
+    ).toBe("redis");
     expect(
       resolveMessengerAccount({ cfg, accountId: "dutch" }).config.defaultLang,
     ).toBe("nl");

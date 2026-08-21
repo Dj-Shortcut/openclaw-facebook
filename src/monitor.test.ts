@@ -34,6 +34,11 @@ import {
   type MessengerWebhookTarget,
 } from "./monitor.js";
 import { MESSENGER_OPENCLAW_ACTION_PREFIX } from "./messengerPresentationTypes.js";
+import {
+  getMemoryMessengerEphemeralStateStore,
+  MessengerSharedStateUnavailableError,
+  type MessengerEphemeralStateStore,
+} from "./messenger-state-store.js";
 import { clearMessengerRuntime, setMessengerRuntime } from "./runtime.js";
 import type { MessengerWebhookMessaging, ResolvedMessengerAccount } from "./types.js";
 
@@ -128,6 +133,7 @@ function messengerTarget(
       error: () => {},
       exit: () => {},
     },
+    stateStore: getMemoryMessengerEphemeralStateStore(),
   };
 }
 
@@ -253,6 +259,7 @@ async function processGatewayTestEvent(
     error: (message: unknown) => void;
     exit: () => void;
   }> = {},
+  stateStore?: MessengerEphemeralStateStore,
 ) {
   await processMessengerEvent({
     event,
@@ -271,7 +278,31 @@ async function processGatewayTestEvent(
       messageId: event.message?.mid ?? "",
       createdAt: Date.now(),
     },
+    stateStore,
   } as never);
+}
+
+function unavailableMessengerStateStore(params: {
+  claimUnavailable?: boolean;
+  budgetUnavailable?: boolean;
+}): MessengerEphemeralStateStore {
+  return {
+    mode: "redis",
+    ensureReady: async () => {},
+    claimMessage: async () => {
+      if (params.claimUnavailable) {
+        throw new MessengerSharedStateUnavailableError("command", "state unavailable");
+      }
+      return true;
+    },
+    reserveDaily: async () => {
+      if (params.budgetUnavailable) {
+        throw new MessengerSharedStateUnavailableError("command", "state unavailable");
+      }
+      return { ok: true, count: 1, cap: 1 };
+    },
+    close: async () => {},
+  };
 }
 
 describe("resolveMessengerEventTarget", () => {
@@ -345,18 +376,20 @@ describe("formatUnmatchedMessengerPageLog", () => {
 });
 
 describe("shouldProcessMessengerMessageOnce", () => {
-  it("allows a Messenger message id only once inside the dedupe window", () => {
+  it("allows a Messenger message id only once inside the dedupe window", async () => {
     expect(
-      shouldProcessMessengerMessageOnce({
+      await shouldProcessMessengerMessageOnce({
         accountId: "default",
+        pageId: "page-1",
         senderId: "sender-1",
         messageId: "mid-1",
         now: 1_000,
       }),
     ).toBe(true);
     expect(
-      shouldProcessMessengerMessageOnce({
+      await shouldProcessMessengerMessageOnce({
         accountId: "default",
+        pageId: "page-1",
         senderId: "sender-1",
         messageId: "mid-1",
         now: 2_000,
@@ -364,18 +397,20 @@ describe("shouldProcessMessengerMessageOnce", () => {
     ).toBe(false);
   });
 
-  it("dedupes the same message id independently per account", () => {
+  it("dedupes the same message id independently per account", async () => {
     expect(
-      shouldProcessMessengerMessageOnce({
+      await shouldProcessMessengerMessageOnce({
         accountId: "account-a",
+        pageId: "page-a",
         senderId: "sender-1",
         messageId: "mid-account",
         now: 1_000,
       }),
     ).toBe(true);
     expect(
-      shouldProcessMessengerMessageOnce({
+      await shouldProcessMessengerMessageOnce({
         accountId: "account-b",
+        pageId: "page-b",
         senderId: "sender-1",
         messageId: "mid-account",
         now: 1_000,
@@ -383,18 +418,20 @@ describe("shouldProcessMessengerMessageOnce", () => {
     ).toBe(true);
   });
 
-  it("falls back to sender and timestamp when Meta omits the message id", () => {
+  it("falls back to sender and timestamp when Meta omits the message id", async () => {
     expect(
-      shouldProcessMessengerMessageOnce({
+      await shouldProcessMessengerMessageOnce({
         accountId: "default",
+        pageId: "page-1",
         senderId: "sender-2",
         timestamp: 123_456,
         now: 1_000,
       }),
     ).toBe(true);
     expect(
-      shouldProcessMessengerMessageOnce({
+      await shouldProcessMessengerMessageOnce({
         accountId: "default",
+        pageId: "page-1",
         senderId: "sender-2",
         timestamp: 123_456,
         now: 2_000,
@@ -402,18 +439,20 @@ describe("shouldProcessMessengerMessageOnce", () => {
     ).toBe(false);
   });
 
-  it("allows the same message again after the dedupe window expires", () => {
+  it("allows the same message again after the dedupe window expires", async () => {
     expect(
-      shouldProcessMessengerMessageOnce({
+      await shouldProcessMessengerMessageOnce({
         accountId: "default",
+        pageId: "page-1",
         senderId: "sender-3",
         messageId: "mid-expiring",
         now: 1_000,
       }),
     ).toBe(true);
     expect(
-      shouldProcessMessengerMessageOnce({
+      await shouldProcessMessengerMessageOnce({
         accountId: "default",
+        pageId: "page-1",
         senderId: "sender-3",
         messageId: "mid-expiring",
         now: 1_000 + 10 * 60 * 1000 + 1,
@@ -962,7 +1001,10 @@ describe("processMessengerEvent unknown sender access policy", () => {
     process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
     process.env.MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP = "1";
     expect(
-      reserveMessengerGatewayDailyLeaderbotEventForwardBudget({ accountId: "default" }),
+      await reserveMessengerGatewayDailyLeaderbotEventForwardBudget({
+        accountId: "default",
+        pageId: "page-1",
+      }),
     ).toMatchObject({ ok: true, count: 1, cap: 1 });
     const inboundRun = vi.fn();
     const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR-1", created: true }));
@@ -1083,6 +1125,94 @@ describe("processMessengerEvent unknown sender access policy", () => {
 });
 
 describe("processMessengerEvent image intents", () => {
+  it("fails closed with localized retry copy when shared dedupe is unavailable", async () => {
+    const inboundRun = setGatewayRuntime();
+    const runtimeLog = vi.fn();
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
+      return new Response(JSON.stringify({
+        message_id: "state-unavailable-reply",
+        recipient_id: "sender-mid-state-unavailable",
+      }), {
+        headers: { "content-type": "application/json" },
+        status: 200,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(
+      messengerTextEvent("mid-state-unavailable", "Hello"),
+      { defaultLang: "en" },
+      { log: runtimeLog },
+      unavailableMessengerStateStore({ claimUnavailable: true }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const sendBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    expect(sendBody.message.text).toBe(
+      "I cannot reliably check the safety limit right now. Please try again shortly.",
+    );
+    expect(inboundRun).not.toHaveBeenCalled();
+    expect(JSON.stringify(runtimeLog.mock.calls)).not.toContain("sender-mid-state-unavailable");
+    expect(JSON.stringify(runtimeLog.mock.calls)).not.toContain("Hello");
+  });
+
+  it("keeps delete-my-data available when shared dedupe is unavailable", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    const inboundRun = setGatewayRuntime();
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      expect(String(url)).toBe("https://image-gen.example.test/internal/messenger/webhook-event");
+      return new Response(JSON.stringify({ status: "queued" }), {
+        headers: { "content-type": "application/json" },
+        status: 202,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(
+      messengerTextEvent("mid-delete-state-unavailable", "Delete my data aub"),
+      { leaderbotBridgeEnabled: true },
+      {},
+      unavailableMessengerStateStore({ claimUnavailable: true }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(inboundRun).not.toHaveBeenCalled();
+  });
+
+  it("does not bypass a gateway cap when shared budget state is unavailable", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    process.env.MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP = "1";
+    const inboundRun = setGatewayRuntime();
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
+      return new Response(JSON.stringify({
+        message_id: "budget-state-unavailable-reply",
+        recipient_id: "sender-mid-budget-state-unavailable",
+      }), {
+        headers: { "content-type": "application/json" },
+        status: 200,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(
+      messengerImagePromptEvent("mid-budget-state-unavailable"),
+      { leaderbotBridgeEnabled: true, defaultLang: "en" },
+      {},
+      unavailableMessengerStateStore({ budgetUnavailable: true }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const sendBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    expect(sendBody.message.text).toBe(
+      "I cannot reliably check the safety limit right now. Please try again shortly.",
+    );
+    expect(inboundRun).not.toHaveBeenCalled();
+  });
+
   it("forwards delete-data smoke requests to the Leaderbot Messenger handler when enabled", async () => {
     process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
     process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
@@ -1141,7 +1271,10 @@ describe("processMessengerEvent image intents", () => {
     process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
     process.env.MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP = "1";
     expect(
-      reserveMessengerGatewayDailyLeaderbotEventForwardBudget({ accountId: "default" }),
+      await reserveMessengerGatewayDailyLeaderbotEventForwardBudget({
+        accountId: "default",
+        pageId: "page-1",
+      }),
     ).toMatchObject({ ok: true, count: 1, cap: 1 });
     const inboundRun = setGatewayRuntime();
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
@@ -1275,7 +1408,10 @@ describe("processMessengerEvent image intents", () => {
   it("blocks audio transcription at the gateway daily cap before downloading media", async () => {
     process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP = "1";
     expect(
-      reserveMessengerGatewayDailyAudioTranscriptionBudget({ accountId: "default" }),
+      await reserveMessengerGatewayDailyAudioTranscriptionBudget({
+        accountId: "default",
+        pageId: "page-1",
+      }),
     ).toMatchObject({ ok: true, count: 1, cap: 1 });
     const inboundRun = setGatewayRuntime();
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {

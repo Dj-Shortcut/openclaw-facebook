@@ -11,6 +11,7 @@ import type { ResolvedMessengerAccount } from "./types.js";
 const DmPolicySchema = z.enum(["open", "allowlist", "pairing", "disabled"]);
 const UnknownSenderModeSchema = z.enum(["pairing", "leaderbot_free_tier"]);
 const MessengerLanguageSchema = z.enum(["nl", "en"]);
+const MessengerSharedStateStoreSchema = z.enum(["memory", "redis"]);
 const MessengerCustomerPortalUrlSchema = z
   .string()
   .url()
@@ -68,6 +69,7 @@ const MessengerAccountConfigSchema = z
 export const MessengerConfigSchema = MessengerCommonConfigSchemaBase.extend({
   accounts: z.record(z.string(), MessengerAccountConfigSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
+  sharedStateStore: MessengerSharedStateStoreSchema.optional().default("memory"),
 })
   .strict()
   .superRefine((value, ctx) => {

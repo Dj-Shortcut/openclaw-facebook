@@ -64,6 +64,15 @@ import {
   type MessengerLanguage,
 } from "./messenger-i18n.js";
 import {
+  createMessengerStateOwnerToken,
+  getMemoryMessengerEphemeralStateStore,
+  getMessengerEphemeralStateStore,
+  MessengerSharedStateUnavailableError,
+  resetMemoryMessengerEphemeralStateStoreForTests,
+  type MessengerBudgetKind,
+  type MessengerEphemeralStateStore,
+} from "./messenger-state-store.js";
+import {
   DEFAULT_FACEBOOK_WEBHOOK_PATH,
   FACEBOOK_CHANNEL_ID,
   stripFacebookTargetPrefix,
@@ -124,6 +133,7 @@ export type MessengerWebhookTarget = {
   account: ResolvedMessengerAccount;
   path: string;
   runtime: RuntimeEnv;
+  stateStore: MessengerEphemeralStateStore;
 };
 
 const messengerWebhookTargets = new Map<string, MessengerWebhookTarget[]>();
@@ -131,9 +141,7 @@ const messengerWebhookInFlightLimiter = createWebhookInFlightLimiter();
 // Keep raw tenant/channel identifiers out of this process-local coordination key.
 const activeMessengerTypingTurns = new Map<string, number>();
 const MESSENGER_MESSAGE_DEDUPE_TTL_MS = 10 * 60 * 1000;
-const MESSENGER_MESSAGE_DEDUPE_MAX_ENTRIES = 5_000;
 const MESSENGER_SLOW_REQUEST_LOG_MS = 5_000;
-const processedMessengerMessageIds = new Map<string, number>();
 const MESSENGER_PROMPT_MEMORY_TTL_MS = 30 * 60 * 1000;
 const MESSENGER_PROMPT_MEMORY_MAX_ENTRIES = 2_000;
 const recentMessengerAssistantPrompts = new Map<string, { prompt: string; expiresAt: number }>();
@@ -146,18 +154,6 @@ const recentMessengerAssistantRepliesByMessage = new Map<
   { text: string; expiresAt: number }
 >();
 const recentMessengerAssistantReplies = new Map<string, { text: string; expiresAt: number }>();
-const messengerGatewayDailyImageForwardCounts = new Map<
-  string,
-  { count: number; expiresAt: number }
->();
-const messengerGatewayDailyAudioTranscriptionCounts = new Map<
-  string,
-  { count: number; expiresAt: number }
->();
-const messengerGatewayDailyLeaderbotEventForwardCounts = new Map<
-  string,
-  { count: number; expiresAt: number }
->();
 const FACEBOOK_UNTRUSTED_TOOL_DENY = [
   "image_generate",
   "video_generate",
@@ -234,25 +230,6 @@ export function formatUnmatchedMessengerPageLog(event: MessengerWebhookMessaging
   )} sender=${redactMessengerIdentifier(event.sender?.id)}`;
 }
 
-function pruneProcessedMessengerMessageIds(now: number): void {
-  if (processedMessengerMessageIds.size <= MESSENGER_MESSAGE_DEDUPE_MAX_ENTRIES) {
-    for (const [key, expiresAt] of processedMessengerMessageIds) {
-      if (expiresAt <= now) {
-        processedMessengerMessageIds.delete(key);
-      }
-    }
-    return;
-  }
-  for (const [key, expiresAt] of processedMessengerMessageIds) {
-    if (
-      expiresAt <= now ||
-      processedMessengerMessageIds.size > MESSENGER_MESSAGE_DEDUPE_MAX_ENTRIES
-    ) {
-      processedMessengerMessageIds.delete(key);
-    }
-  }
-}
-
 function logMessengerWebhookRejected(reason: string, path: string): void {
   logVerbose(`messenger webhook rejected: ${reason} path=${path}`);
 }
@@ -283,85 +260,98 @@ function nextUtcDayTimestamp(now = Date.now()): number {
   return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + 1);
 }
 
-function pruneMessengerGatewayDailyBudgetCounts(now = Date.now()): void {
-  for (const counters of [
-    messengerGatewayDailyImageForwardCounts,
-    messengerGatewayDailyAudioTranscriptionCounts,
-    messengerGatewayDailyLeaderbotEventForwardCounts,
-  ]) {
-    for (const [key, value] of counters) {
-      if (value.expiresAt <= now) {
-        counters.delete(key);
-      }
-    }
-  }
-}
-
 export function resetMessengerGatewayDailyImageForwardBudgetForTests(): void {
-  messengerGatewayDailyImageForwardCounts.clear();
-  messengerGatewayDailyAudioTranscriptionCounts.clear();
-  messengerGatewayDailyLeaderbotEventForwardCounts.clear();
+  resetMemoryMessengerEphemeralStateStoreForTests();
 }
 
-function reserveMessengerGatewayDailyBudget(params: {
+async function reserveMessengerGatewayDailyBudget(params: {
   accountId: string;
+  pageId: string;
   cap: number | null;
-  counters: Map<string, { count: number; expiresAt: number }>;
+  kind: MessengerBudgetKind;
+  stateStore?: MessengerEphemeralStateStore;
+  eventIdentity?: string;
   now?: number;
-}): { ok: true; count: number; cap: number | null } | { ok: false; count: number; cap: number } {
+}): Promise<
+  | { ok: true; count: number; cap: number | null }
+  | { ok: false; count: number; cap: number }
+> {
   const cap = params.cap;
   if (!cap) {
     return { ok: true, count: 0, cap: null };
   }
 
   const now = params.now ?? Date.now();
-  pruneMessengerGatewayDailyBudgetCounts(now);
-  const key = `${params.accountId}:${utcDayKey(now)}`;
-  const current = params.counters.get(key);
-  const next = {
-    count: (current?.count ?? 0) + 1,
-    expiresAt: current?.expiresAt ?? nextUtcDayTimestamp(now),
-  };
-  params.counters.set(key, next);
-
-  if (next.count > cap) {
-    return { ok: false, count: next.count, cap };
-  }
-  return { ok: true, count: next.count, cap };
+  return await (params.stateStore ?? getMemoryMessengerEphemeralStateStore()).reserveDaily({
+    scope: { accountId: params.accountId, pageId: params.pageId },
+    kind: params.kind,
+    dayKey: utcDayKey(now),
+    eventIdentity: params.eventIdentity ?? createMessengerStateOwnerToken(),
+    cap,
+    expiresAtMs: nextUtcDayTimestamp(now),
+    now,
+  });
 }
 
-export function reserveMessengerGatewayDailyImageForwardBudget(params: {
+export async function reserveMessengerGatewayDailyImageForwardBudget(params: {
   accountId: string;
+  pageId: string;
+  stateStore?: MessengerEphemeralStateStore;
+  eventIdentity?: string;
   now?: number;
-}): { ok: true; count: number; cap: number | null } | { ok: false; count: number; cap: number } {
-  return reserveMessengerGatewayDailyBudget({
+}): Promise<
+  | { ok: true; count: number; cap: number | null }
+  | { ok: false; count: number; cap: number }
+> {
+  return await reserveMessengerGatewayDailyBudget({
     accountId: params.accountId,
+    pageId: params.pageId,
     cap: readMessengerGatewayDailyImageForwardCap(),
-    counters: messengerGatewayDailyImageForwardCounts,
+    kind: "image_forward",
+    stateStore: params.stateStore,
+    eventIdentity: params.eventIdentity,
     now: params.now,
   });
 }
 
-export function reserveMessengerGatewayDailyAudioTranscriptionBudget(params: {
+export async function reserveMessengerGatewayDailyAudioTranscriptionBudget(params: {
   accountId: string;
+  pageId: string;
+  stateStore?: MessengerEphemeralStateStore;
+  eventIdentity?: string;
   now?: number;
-}): { ok: true; count: number; cap: number | null } | { ok: false; count: number; cap: number } {
-  return reserveMessengerGatewayDailyBudget({
+}): Promise<
+  | { ok: true; count: number; cap: number | null }
+  | { ok: false; count: number; cap: number }
+> {
+  return await reserveMessengerGatewayDailyBudget({
     accountId: params.accountId,
+    pageId: params.pageId,
     cap: readMessengerGatewayDailyAudioTranscriptionCap(),
-    counters: messengerGatewayDailyAudioTranscriptionCounts,
+    kind: "audio_transcription",
+    stateStore: params.stateStore,
+    eventIdentity: params.eventIdentity,
     now: params.now,
   });
 }
 
-export function reserveMessengerGatewayDailyLeaderbotEventForwardBudget(params: {
+export async function reserveMessengerGatewayDailyLeaderbotEventForwardBudget(params: {
   accountId: string;
+  pageId: string;
+  stateStore?: MessengerEphemeralStateStore;
+  eventIdentity?: string;
   now?: number;
-}): { ok: true; count: number; cap: number | null } | { ok: false; count: number; cap: number } {
-  return reserveMessengerGatewayDailyBudget({
+}): Promise<
+  | { ok: true; count: number; cap: number | null }
+  | { ok: false; count: number; cap: number }
+> {
+  return await reserveMessengerGatewayDailyBudget({
     accountId: params.accountId,
+    pageId: params.pageId,
     cap: readMessengerGatewayDailyLeaderbotEventForwardCap(),
-    counters: messengerGatewayDailyLeaderbotEventForwardCounts,
+    kind: "leaderbot_event_forward",
+    stateStore: params.stateStore,
+    eventIdentity: params.eventIdentity,
     now: params.now,
   });
 }
@@ -1134,13 +1124,27 @@ async function reserveMessengerGatewayImageForwardOrReply(params: {
   senderId: string;
   cfg: OpenClawConfig;
   accountId: string;
+  pageId: string;
+  stateStore: MessengerEphemeralStateStore;
   lang: MessengerLanguage;
   trace: MessengerTrace;
   route: string;
 }): Promise<boolean> {
-  const reservation = reserveMessengerGatewayDailyImageForwardBudget({
-    accountId: params.accountId,
-  });
+  let reservation;
+  try {
+    reservation = await reserveMessengerGatewayDailyImageForwardBudget({
+      accountId: params.accountId,
+      pageId: params.pageId,
+      stateStore: params.stateStore,
+    });
+  } catch (error) {
+    await sendMessengerSharedStateUnavailableReply({
+      ...params,
+      stage: "image_gen_request_skipped",
+      error,
+    });
+    return false;
+  }
   if (reservation.ok) {
     return true;
   }
@@ -1166,12 +1170,26 @@ async function reserveMessengerGatewayAudioTranscriptionOrReply(params: {
   senderId: string;
   cfg: OpenClawConfig;
   accountId: string;
+  pageId: string;
+  stateStore: MessengerEphemeralStateStore;
   lang: MessengerLanguage;
   trace: MessengerTrace;
 }): Promise<boolean> {
-  const reservation = reserveMessengerGatewayDailyAudioTranscriptionBudget({
-    accountId: params.accountId,
-  });
+  let reservation;
+  try {
+    reservation = await reserveMessengerGatewayDailyAudioTranscriptionBudget({
+      accountId: params.accountId,
+      pageId: params.pageId,
+      stateStore: params.stateStore,
+    });
+  } catch (error) {
+    await sendMessengerSharedStateUnavailableReply({
+      ...params,
+      stage: "audio_transcription_skipped",
+      error,
+    });
+    return false;
+  }
   if (reservation.ok) {
     return true;
   }
@@ -1196,13 +1214,27 @@ async function reserveMessengerGatewayLeaderbotEventForwardOrReply(params: {
   senderId: string;
   cfg: OpenClawConfig;
   accountId: string;
+  pageId: string;
+  stateStore: MessengerEphemeralStateStore;
   lang: MessengerLanguage;
   trace: MessengerTrace;
   route: string;
 }): Promise<boolean> {
-  const reservation = reserveMessengerGatewayDailyLeaderbotEventForwardBudget({
-    accountId: params.accountId,
-  });
+  let reservation;
+  try {
+    reservation = await reserveMessengerGatewayDailyLeaderbotEventForwardBudget({
+      accountId: params.accountId,
+      pageId: params.pageId,
+      stateStore: params.stateStore,
+    });
+  } catch (error) {
+    await sendMessengerSharedStateUnavailableReply({
+      ...params,
+      stage: "messenger_event_forward_skipped",
+      error,
+    });
+    return false;
+  }
   if (reservation.ok) {
     return true;
   }
@@ -1224,6 +1256,35 @@ async function reserveMessengerGatewayLeaderbotEventForwardOrReply(params: {
   return false;
 }
 
+function messengerSharedStateErrorCode(error: unknown): string {
+  return error instanceof MessengerSharedStateUnavailableError
+    ? error.code
+    : "unknown";
+}
+
+async function sendMessengerSharedStateUnavailableReply(params: {
+  senderId: string;
+  cfg: OpenClawConfig;
+  accountId: string;
+  lang: MessengerLanguage;
+  trace: MessengerTrace;
+  stage:
+    | "image_gen_request_skipped"
+    | "audio_transcription_skipped"
+    | "messenger_event_forward_skipped";
+  error: unknown;
+}): Promise<void> {
+  logMessengerStage(params.trace, params.stage, {
+    reason: "shared_state_unavailable",
+    errorCode: messengerSharedStateErrorCode(params.error),
+  });
+  await sendMessengerText(
+    params.senderId,
+    tMessenger(params.lang, "sharedStateUnavailable"),
+    { cfg: params.cfg, accountId: params.accountId },
+  );
+}
+
 function hasMessengerInteractivePayload(event: MessengerWebhookMessaging): boolean {
   return Boolean(event.message?.quick_reply?.payload?.trim() || event.postback?.payload?.trim());
 }
@@ -1234,13 +1295,16 @@ export function getOpenClawActionText(event: MessengerWebhookMessaging): string 
   );
 }
 
-export function shouldProcessMessengerMessageOnce(params: {
+export async function shouldProcessMessengerMessageOnce(params: {
   accountId: string;
+  pageId: string;
   senderId: string;
   messageId?: string;
   timestamp?: number;
+  stateStore?: MessengerEphemeralStateStore;
+  ownerToken?: string;
   now?: number;
-}): boolean {
+}): Promise<boolean> {
   const stableMessageId =
     normalizeOptionalString(params.messageId) ??
     (params.senderId && params.timestamp ? `${params.senderId}:${params.timestamp}` : undefined);
@@ -1248,14 +1312,13 @@ export function shouldProcessMessengerMessageOnce(params: {
     return true;
   }
   const now = params.now ?? Date.now();
-  pruneProcessedMessengerMessageIds(now);
-  const key = `${params.accountId}:${stableMessageId}`;
-  const existingExpiresAt = processedMessengerMessageIds.get(key);
-  if (existingExpiresAt && existingExpiresAt > now) {
-    return false;
-  }
-  processedMessengerMessageIds.set(key, now + MESSENGER_MESSAGE_DEDUPE_TTL_MS);
-  return true;
+  return await (params.stateStore ?? getMemoryMessengerEphemeralStateStore()).claimMessage({
+    scope: { accountId: params.accountId, pageId: params.pageId },
+    eventIdentity: stableMessageId,
+    ownerToken: params.ownerToken ?? createMessengerStateOwnerToken(),
+    ttlMs: MESSENGER_MESSAGE_DEDUPE_TTL_MS,
+    now,
+  });
 }
 
 export function resolveMessengerEventTarget(
@@ -1463,6 +1526,7 @@ export async function processMessengerEvent(params: {
   account: ResolvedMessengerAccount;
   runtime: RuntimeEnv;
   trace: MessengerTrace;
+  stateStore?: MessengerEphemeralStateStore;
 }) {
   activeMessengerEventJobs += 1;
   try {
@@ -1471,6 +1535,7 @@ export async function processMessengerEvent(params: {
       return;
     }
     const senderId = params.event.sender?.id ?? "";
+    const stateStore = params.stateStore ?? getMemoryMessengerEphemeralStateStore();
     const lang = normalizeMessengerLanguage(params.account.config.defaultLang);
     const customerPortalUrl = normalizeMessengerCustomerPortalUrl(
       params.account.config.customerPortalUrl,
@@ -1478,14 +1543,36 @@ export async function processMessengerEvent(params: {
     const openClawActionText = getOpenClawActionText(params.event);
     const text = openClawActionText ?? params.event.message?.text ?? "";
     const timestamp = params.event.timestamp ?? Date.now();
-    if (
-      !shouldProcessMessengerMessageOnce({
+    let shouldProcessMessage = true;
+    try {
+      shouldProcessMessage = await shouldProcessMessengerMessageOnce({
         accountId: params.account.accountId,
+        pageId: params.account.pageId,
         senderId,
         messageId: params.event.message?.mid,
         timestamp,
-      })
-    ) {
+        stateStore,
+      });
+    } catch (error) {
+      if (classifyMessengerFastLaneIntent(text) === "delete_data") {
+        logMessengerStage(params.trace, "intent_classified", {
+          decision: "privacy_request_shared_state_bypass",
+          errorCode: messengerSharedStateErrorCode(error),
+        });
+      } else {
+        logMessengerStage(params.trace, "intent_classified", {
+          decision: "shared_state_unavailable",
+          errorCode: messengerSharedStateErrorCode(error),
+        });
+        await sendMessengerText(
+          senderId,
+          tMessenger(lang, "sharedStateUnavailable"),
+          { cfg: params.cfg, accountId: params.account.accountId },
+        );
+        return;
+      }
+    }
+    if (!shouldProcessMessage) {
       logMessengerStage(params.trace, "duplicate_skipped");
       logVerbose(
         `messenger: skipped duplicate message ${redactMessengerIdentifier(
@@ -1545,6 +1632,8 @@ export async function processMessengerEvent(params: {
           senderId,
           cfg: params.cfg,
           accountId: params.account.accountId,
+          pageId: params.account.pageId,
+          stateStore,
           lang,
           trace: params.trace,
           route: "unknown_sender_leaderbot_free_tier",
@@ -1600,6 +1689,8 @@ export async function processMessengerEvent(params: {
             senderId,
             cfg: params.cfg,
             accountId: params.account.accountId,
+            pageId: params.account.pageId,
+            stateStore,
             lang,
             trace: params.trace,
             route: "interactive_payload",
@@ -1652,6 +1743,8 @@ export async function processMessengerEvent(params: {
           senderId,
           cfg: params.cfg,
           accountId: params.account.accountId,
+          pageId: params.account.pageId,
+          stateStore,
           lang,
           trace: params.trace,
           route: "source_image_without_prompt",
@@ -1692,6 +1785,8 @@ export async function processMessengerEvent(params: {
           senderId,
           cfg: params.cfg,
           accountId: params.account.accountId,
+          pageId: params.account.pageId,
+          stateStore,
           lang,
           trace: params.trace,
           route: "source_image_with_prompt",
@@ -1745,6 +1840,8 @@ export async function processMessengerEvent(params: {
           senderId,
           cfg: params.cfg,
           accountId: params.account.accountId,
+          pageId: params.account.pageId,
+          stateStore,
           lang,
           trace: params.trace,
           route: "media_with_image_prompt",
@@ -1810,6 +1907,8 @@ export async function processMessengerEvent(params: {
           senderId,
           cfg: params.cfg,
           accountId: params.account.accountId,
+          pageId: params.account.pageId,
+          stateStore,
           lang,
           trace: params.trace,
           route: "assistant_reference_prompt",
@@ -1878,6 +1977,8 @@ export async function processMessengerEvent(params: {
         senderId,
         cfg: params.cfg,
         accountId: params.account.accountId,
+        pageId: params.account.pageId,
+        stateStore,
         lang,
         trace: params.trace,
       }))
@@ -1929,6 +2030,8 @@ export async function processMessengerEvent(params: {
           senderId,
           cfg: params.cfg,
           accountId: params.account.accountId,
+          pageId: params.account.pageId,
+          stateStore,
           lang,
           trace: params.trace,
           route: "text_image_intent",
@@ -2267,6 +2370,7 @@ async function processScheduledMessengerEvents(params: {
         account: item.target.account,
         runtime: item.target.runtime,
         trace: item.trace,
+        stateStore: item.target.stateStore,
       });
     } catch (error) {
       params.runtime.error?.(danger(`messenger webhook background error: ${String(error)}`));
@@ -2283,6 +2387,10 @@ export async function monitorMessengerProvider(
       opts.webhookPath ?? opts.account.config.webhookPath,
       DEFAULT_FACEBOOK_WEBHOOK_PATH,
     ) ?? DEFAULT_FACEBOOK_WEBHOOK_PATH;
+  const stateStore = await getMessengerEphemeralStateStore(
+    opts.account.config.sharedStateStore ?? "memory",
+  );
+  await stateStore.ensureReady();
 
   const { unregister } = registerWebhookTargetWithPluginRoute({
     targetsByPath: messengerWebhookTargets,
@@ -2290,6 +2398,7 @@ export async function monitorMessengerProvider(
       account: opts.account,
       path: normalizedPath,
       runtime: opts.runtime,
+      stateStore,
     },
     route: {
       auth: "plugin",

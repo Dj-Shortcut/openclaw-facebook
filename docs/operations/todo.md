@@ -20,6 +20,13 @@
 - Leaderbot-specific bridge code that currently lives in `src/monitor.ts` is temporary. It must stay behind an adapter boundary and remain explicitly opt-in (`leaderbotBridgeEnabled`) so ClawHub/private installs do not forward Messenger content to the external image-generation service just because host-level bridge tokens exist.
 - Conversation modules must not import Messenger or WhatsApp transport APIs. They should expose channel-neutral conversation responses/actions for renderers to translate into platform-specific controls.
 - State, quota, and storage boundaries must later become explicitly tenant-, workspace-, and channel-scoped before broader customer rollout, with no shared customer-content paths across tenants.
+- The root Facebook gateway now has a root-only `sharedStateStore` boundary.
+  `memory` remains the default for one replica; `redis` uses versioned HMAC-only
+  account/Page keys and atomically shares webhook deduplication plus optional
+  daily gateway caps without storing message content. Store failures block
+  ordinary work and billable forwards, while explicit `delete-my-data` requests
+  remain routable. This is not a durable ingress queue: keep one gateway replica
+  until acknowledged webhook work is persisted in a tenant-scoped queue/outbox.
 
 ## Production release strategy
 
@@ -498,7 +505,7 @@ Quota drift investigation note:
 - Affected paths reviewed: Messenger primary image generation, queued/background generation, internal Messenger image requests, duplicate delivery recovery, WhatsApp text-to-image and source-image edits, audio transcription, generated video, bot text rate limiting, global daily image/video caps, and provider-attempt callbacks.
 - Bypasses closed: image and audio provider retries now require quota before each external provider call; preflight failures still release reservations without burning credits; duplicate completed deliveries still return before quota reserve/commit.
 - Duplicated logic found: state quota in `messengerQuota.ts`, channel-neutral wrappers in `limits/generationQuota.ts`, global caps/concurrency in `generationGuard.ts`, feature rate limits in `featureRateLimit.ts`, and legacy DB daily quota helpers in `server/db.ts`.
-- Concurrency risks remaining: state-store reservation locks reduce same-sender overlap, but global budget counters can overcount after failed attempts, reservation TTL expiry can still strand in-flight work during long provider calls, and multi-instance behavior depends on Redis-backed state being enabled in production.
+- Concurrency risks remaining: state-store reservation locks reduce same-sender overlap, but global budget counters can overcount after failed attempts and reservation TTL expiry can still strand in-flight work during long provider calls. The root Facebook plugin can now share its webhook dedupe and gateway caps through Redis, but acknowledged webhook work is not durably queued; keep one gateway replica until that queue/outbox exists.
 - Follow-up: replace scattered quota constants/counters with one channel-neutral usage ledger/reservation service keyed by channel, sender/user identity, workspace/tenant, operation type, provider/model, reservation token, attempt status, estimated/final cost, and UTC period.
 
 ### Opslag & platform
