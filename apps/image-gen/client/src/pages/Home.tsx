@@ -307,6 +307,9 @@ function Home() {
   const [showHandoffBanner] = useState(hasHandoffOnboardingFlag);
   const [billingReturnIntent] = useState(getBillingReturnIntent);
   const billingReturnHandled = useRef(false);
+  const billingProfileAttestationRequestId = useRef<string | null>(null);
+  const [peppolEvidenceReference, setPeppolEvidenceReference] = useState("");
+  const [peppolEvidenceConfirmed, setPeppolEvidenceConfirmed] = useState(false);
   const [locale, setLocale] = useState<AppLocale>(getInitialLocale);
   const [isEditingIdentity, setIsEditingIdentity] = useState(false);
   const [identityForm, setIdentityForm] = useState({
@@ -493,6 +496,8 @@ function Home() {
       await utils.portal.billing.summary.invalidate({ workspaceId });
     },
   });
+  const billingProfileAttestationMutation =
+    trpc.billingAdmin.attestProfile.useMutation();
 
   useEffect(() => {
     if (billingReturnHandled.current || !workspaceId || !billingReturnIntent) {
@@ -734,6 +739,29 @@ function Home() {
     billingCheckoutMutation.reset();
     billingCancelMutation.mutate({ workspaceId });
   };
+  const attestPeppolBusinessProfile = () => {
+    const evidenceReference = peppolEvidenceReference.trim();
+    if (
+      !workspaceId ||
+      portalSessionQuery.data?.user.role !== "admin" ||
+      !peppolEvidenceConfirmed ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:/-]{7,255}$/.test(evidenceReference)
+    ) {
+      return;
+    }
+    billingProfileAttestationRequestId.current ??= crypto.randomUUID();
+    billingProfileAttestationMutation.mutate({
+      requestId: billingProfileAttestationRequestId.current,
+      workspaceId,
+      expectedVersion: 0,
+      countryCode: "BE",
+      customerType: "business",
+      evidenceReference,
+      verificationMethod: "provider_attestation",
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000),
+      peppolReady: true,
+    });
+  };
   const startFacebookConnectFlow = () => {
     if (!workspaceId) return;
     setFacebookConnectIssue(null);
@@ -947,6 +975,86 @@ function Home() {
                 </p>
               </div>
             </div>
+          </section>
+        ) : null}
+
+        {workspaceId && portalSessionQuery.data?.user.role === "admin" ? (
+          <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-950 lg:col-start-2">
+            <div>
+              <h2 className="text-sm font-semibold">
+                Zakelijk billingprofiel via Peppol attesteren
+              </h2>
+              <p className="mt-1 text-sm leading-6 text-amber-900">
+                Alleen gebruiken nadat de Belgische onderneming publiek als
+                actieve Peppol-ontvanger is geverifieerd. De attestatie geldt 30
+                dagen en bewaart uitsluitend een HMAC van de bewijsreferentie.
+              </p>
+            </div>
+            <form
+              className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]"
+              onSubmit={event => {
+                event.preventDefault();
+                attestPeppolBusinessProfile();
+              }}
+            >
+              <label className="grid gap-1 text-sm font-medium">
+                Externe Peppol-bewijsreferentie
+                <input
+                  className="min-h-10 rounded-md border border-amber-300 bg-white px-3 text-slate-950 outline-none focus:border-amber-600"
+                  disabled={billingProfileAttestationMutation.isSuccess}
+                  maxLength={255}
+                  pattern="[A-Za-z0-9][A-Za-z0-9._:/-]{7,255}"
+                  placeholder="peppol:0208:ondernemingsnummer"
+                  required
+                  value={peppolEvidenceReference}
+                  onChange={event =>
+                    setPeppolEvidenceReference(event.target.value)
+                  }
+                />
+              </label>
+              <Button
+                className="self-end"
+                disabled={
+                  !peppolEvidenceConfirmed ||
+                  !peppolEvidenceReference.trim() ||
+                  billingProfileAttestationMutation.isPending ||
+                  billingProfileAttestationMutation.isSuccess
+                }
+                type="submit"
+                variant="outline"
+              >
+                {billingProfileAttestationMutation.isPending
+                  ? "Attestatie opslaan…"
+                  : billingProfileAttestationMutation.isSuccess
+                    ? "Attestatie opgeslagen"
+                    : "Zakelijk profiel attesteren"}
+              </Button>
+              <label className="flex items-start gap-2 text-sm leading-6 sm:col-span-2">
+                <input
+                  checked={peppolEvidenceConfirmed}
+                  className="mt-1"
+                  disabled={billingProfileAttestationMutation.isSuccess}
+                  type="checkbox"
+                  onChange={event =>
+                    setPeppolEvidenceConfirmed(event.target.checked)
+                  }
+                />
+                Ik heb gecontroleerd dat deze exacte onderneming actief is op
+                Peppol en als Belgische zakelijke klant mag worden verwerkt.
+              </label>
+              {billingProfileAttestationMutation.isSuccess ? (
+                <p className="text-sm font-medium text-emerald-800 sm:col-span-2">
+                  Attestatie opgeslagen als versie{" "}
+                  {billingProfileAttestationMutation.data.eligibilityVersion}.
+                </p>
+              ) : null}
+              {billingProfileAttestationMutation.error ? (
+                <p className="text-sm font-medium text-red-800 sm:col-span-2">
+                  Attestatie geweigerd:{" "}
+                  {billingProfileAttestationMutation.error.message}
+                </p>
+              ) : null}
+            </form>
           </section>
         ) : null}
 
