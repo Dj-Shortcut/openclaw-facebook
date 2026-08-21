@@ -1114,28 +1114,62 @@ describe("assistantCommandsFeature", () => {
     expect(sendText).toHaveBeenCalledWith(t("nl", "portalLinkSent"));
   });
 
-  it.each([
-    ["not_linked", "portalLinkNotLinked"],
-    ["unavailable", "portalLinkUnavailable"],
-  ] as const)(
-    "keeps portal command failure %s fail-closed",
-    async (handoffResult, translationKey) => {
-      const requestPortalHandoff = vi.fn(async () => handoffResult);
-      const sendText = vi.fn(async () => undefined);
+  it("offers tenant-safe self-enrollment when Messenger is not linked", async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalPortalBaseUrl = process.env.PORTAL_BASE_URL;
+    process.env.NODE_ENV = "production";
+    process.env.PORTAL_BASE_URL = "https://app.leaderbot.live";
+    const requestPortalHandoff = vi.fn(async () => "not_linked" as const);
+    const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
 
+    try {
       const result = await assistantCommandsFeature.onText?.(
         makeContext({
+          lang: "nl",
           normalizedText: "portal",
           messageText: "Portal",
           requestPortalHandoff,
+          sendActions,
           sendText,
         })
       );
 
       expect(result).toEqual({ handled: true });
-      expect(sendText).toHaveBeenCalledWith(t("en", translationKey));
+      expect(sendText).not.toHaveBeenCalled();
+      expect(sendActions).toHaveBeenCalledWith(t("nl", "portalJoinPrompt"), [
+        {
+          id: "open_customer_portal",
+          label: "Open klantenportaal",
+          url: "https://app.leaderbot.live/api/oauth/start?returnTo=%2Fportal",
+        },
+      ]);
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+      if (originalPortalBaseUrl === undefined) {
+        delete process.env.PORTAL_BASE_URL;
+      } else {
+        process.env.PORTAL_BASE_URL = originalPortalBaseUrl;
+      }
     }
-  );
+  });
+
+  it("keeps unavailable portal handoff fail-closed", async () => {
+    const requestPortalHandoff = vi.fn(async () => "unavailable" as const);
+    const sendText = vi.fn(async () => undefined);
+
+    const result = await assistantCommandsFeature.onText?.(
+      makeContext({
+        normalizedText: "portal",
+        messageText: "Portal",
+        requestPortalHandoff,
+        sendText,
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(sendText).toHaveBeenCalledWith(t("en", "portalLinkUnavailable"));
+  });
 
   it("shows contextual help when user has not uploaded a photo yet", async () => {
     const sendText = vi.fn(async () => undefined);
@@ -1157,6 +1191,7 @@ describe("assistantCommandsFeature", () => {
       { id: "new_image", label: "New image", inputText: "new_image" },
       { id: "edit_photo", label: "Edit photo", inputText: "Edit photo" },
       { id: "privacy", label: "Privacy", inputText: "Privacy" },
+      { id: "portal", label: "Customer portal", inputText: "portal" },
     ]);
   });
 
@@ -1206,6 +1241,7 @@ describe("assistantCommandsFeature", () => {
       { id: "new_image", label: "New image", inputText: "new_image" },
       { id: "edit_photo", label: "Edit photo", inputText: "Edit photo" },
       { id: "privacy", label: "Privacy", inputText: "Privacy" },
+      { id: "portal", label: "Customer portal", inputText: "portal" },
     ]);
   });
 
@@ -1360,6 +1396,7 @@ describe("assistantCommandsFeature", () => {
       { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
       { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
       { id: "privacy", label: "Privacy", inputText: "Privacy" },
+      { id: "portal", label: "Klantenportaal", inputText: "portal" },
     ]);
   });
 
@@ -1454,6 +1491,7 @@ describe("assistantCommandsFeature", () => {
       { id: "new_image", label: "New image", inputText: "new_image" },
       { id: "edit_photo", label: "Edit photo", inputText: "Edit photo" },
       { id: "privacy", label: "Privacy", inputText: "Privacy" },
+      { id: "portal", label: "Customer portal", inputText: "portal" },
     ]);
   });
 });

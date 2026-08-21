@@ -293,7 +293,10 @@ export function registerOAuthRoutes(app: Express) {
     authorizationUrl.searchParams.set("state", state);
     if (facebookConfig) {
       authorizationUrl.searchParams.set("response_type", "code");
-      authorizationUrl.searchParams.set("scope", "public_profile");
+      authorizationUrl.searchParams.set(
+        "scope",
+        "public_profile,pages_show_list"
+      );
     }
     res.redirect(302, authorizationUrl.toString());
   };

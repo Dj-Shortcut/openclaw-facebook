@@ -163,7 +163,7 @@ function LocaleSwitcher({
   return (
     <div
       aria-label={copy.locale.label}
-      className="inline-grid grid-cols-3 gap-1 rounded-lg border border-stone-300 bg-white p-1"
+      className="inline-grid grid-cols-3 gap-1 rounded-xl border border-slate-200 bg-slate-100 p-1"
       role="group"
     >
       {SUPPORTED_LOCALES.map(localeOption => (
@@ -171,8 +171,8 @@ function LocaleSwitcher({
           aria-pressed={localeOption === locale}
           className={`min-h-8 rounded-md px-3 text-xs font-semibold transition-colors ${
             localeOption === locale
-              ? "bg-teal-700 text-white"
-              : "text-stone-700 hover:bg-stone-100"
+              ? "bg-white text-[#163b31] shadow-sm"
+              : "text-slate-500 hover:bg-white/70 hover:text-slate-800"
           }`}
           key={localeOption}
           type="button"
@@ -204,7 +204,7 @@ function StatusPill({ copy, value }: { copy: PortalCopy; value: string }) {
             : "bg-amber-100 text-amber-800";
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${toneClass}`}
+      className={`inline-flex items-center rounded-full px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-wide ${toneClass}`}
     >
       {statusLabel(value, copy)}
     </span>
@@ -221,11 +221,15 @@ function MetricTile({
   detail?: string;
 }) {
   return (
-    <div className="rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
-      <div className="text-sm text-stone-600">{label}</div>
-      <div className="mt-2 text-2xl font-semibold text-stone-950">{value}</div>
+    <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80 p-4">
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        {label}
+      </div>
+      <div className="mt-2 text-2xl font-semibold tracking-tight text-slate-950">
+        {value}
+      </div>
       {detail ? (
-        <div className="mt-2 text-xs text-stone-500">{detail}</div>
+        <div className="mt-1.5 text-xs leading-5 text-slate-500">{detail}</div>
       ) : null}
     </div>
   );
@@ -818,11 +822,11 @@ function Home() {
   }
 
   return (
-    <main className="min-h-full bg-[#f5f7fb] px-4 py-6 text-stone-950 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-7xl">
-        <header className="flex flex-col gap-4 border-b border-stone-200 pb-6 md:flex-row md:items-end md:justify-between">
+    <main className="min-h-full bg-[#f2f5f3] px-3 py-4 text-slate-950 sm:px-5 lg:px-6 lg:py-6">
+      <div className="mx-auto grid max-w-[1500px] items-start gap-x-6 gap-y-4 lg:grid-cols-[17rem_minmax(0,1fr)]">
+        <header className="flex flex-col gap-4 rounded-[1.6rem] border border-slate-200/80 bg-white px-5 py-5 shadow-[0_18px_50px_-35px_rgba(15,42,34,0.45)] md:flex-row md:items-center md:justify-between sm:px-6 lg:col-start-2">
           <div>
-            <p className="text-sm font-medium text-teal-700">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-teal-700">
               {copy.common.workspace}
             </p>
             {isEditingWorkspace ? (
@@ -865,7 +869,7 @@ function Home() {
               </form>
             ) : (
               <div className="mt-1 flex flex-wrap items-center gap-3">
-                <h1 className="text-3xl font-semibold text-stone-950">
+                <h1 className="text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">
                   {workspaceDisplayName}
                 </h1>
                 <Button
@@ -880,7 +884,7 @@ function Home() {
                 </Button>
               </div>
             )}
-            <p className="mt-2 text-sm text-stone-600">
+            <p className="mt-2 text-sm text-slate-500">
               {copy.header.signedInAs}{" "}
               {portalSessionQuery.data?.user.email ??
                 auth.user?.email ??
@@ -924,11 +928,12 @@ function Home() {
           privacyLabel={copy.navigation.privacy}
           showBilling={showBillingSection}
           usageLabel={copy.navigation.usage}
+          workspaceLabel={copy.common.workspace}
           workspaceName={workspaceDisplayName}
         />
 
         {showHandoffBanner ? (
-          <section className="mt-5 rounded-lg border border-teal-200 bg-teal-50 p-4 text-teal-950">
+          <section className="rounded-2xl border border-teal-200 bg-teal-50 p-4 text-teal-950 lg:col-start-2">
             <div className="flex items-start gap-3">
               <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-teal-700" />
               <div>
@@ -946,13 +951,13 @@ function Home() {
         ) : null}
 
         {isLoading ? (
-          <div className="py-12 text-sm text-stone-600">
+          <div className="py-12 text-sm text-slate-600 lg:col-start-2">
             {copy.common.loadingWorkspace}
           </div>
         ) : (
-          <div className="grid gap-4 py-6 lg:grid-cols-3">
+          <div className="grid gap-5 pb-6 lg:col-start-2 lg:grid-cols-3">
             <section
-              className="scroll-mt-28 rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3"
+              className="scroll-mt-8 rounded-[1.4rem] border border-slate-200/80 bg-white p-5 shadow-[0_16px_45px_-35px_rgba(15,42,34,0.4)] sm:p-6 lg:col-span-3"
               id={PORTAL_DASHBOARD_SECTION_IDS.overview}
             >
               <div className="flex items-center gap-3">
@@ -993,7 +998,7 @@ function Home() {
             </section>
 
             <section
-              className="scroll-mt-28 rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-2"
+              className="scroll-mt-8 rounded-[1.4rem] border border-slate-200/80 bg-white p-5 shadow-[0_16px_45px_-35px_rgba(15,42,34,0.4)] sm:p-6 lg:col-span-2"
               id={PORTAL_DASHBOARD_SECTION_IDS.assistant}
             >
               <div className="flex items-start justify-between gap-3">
@@ -1142,7 +1147,7 @@ function Home() {
             </section>
 
             <section
-              className="scroll-mt-28 rounded-lg border border-stone-200 bg-white p-5 shadow-sm"
+              className="scroll-mt-8 rounded-[1.4rem] border border-slate-200/80 bg-white p-5 shadow-[0_16px_45px_-35px_rgba(15,42,34,0.4)] sm:p-6"
               id={PORTAL_DASHBOARD_SECTION_IDS.messenger}
             >
               <div className="flex items-start justify-between gap-4">
@@ -1286,7 +1291,7 @@ function Home() {
               ) : null}
             </section>
 
-            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
+            <section className="rounded-[1.4rem] border border-slate-200/80 bg-white p-5 shadow-[0_16px_45px_-35px_rgba(15,42,34,0.4)] sm:p-6 lg:col-span-3">
               <div className="flex items-center gap-3">
                 <Info className="h-5 w-5 text-teal-700" />
                 <h2 className="text-lg font-semibold text-stone-950">
@@ -1322,7 +1327,7 @@ function Home() {
             </section>
 
             <section
-              className="scroll-mt-28 rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3"
+              className="scroll-mt-8 rounded-[1.4rem] border border-slate-200/80 bg-white p-5 shadow-[0_16px_45px_-35px_rgba(15,42,34,0.4)] sm:p-6 lg:col-span-3"
               id={PORTAL_DASHBOARD_SECTION_IDS.usage}
             >
               <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
@@ -1438,7 +1443,7 @@ function Home() {
 
             {showBillingSection ? (
               <section
-                className="scroll-mt-28 rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3"
+                className="scroll-mt-8 rounded-[1.4rem] border border-slate-200/80 bg-white p-5 shadow-[0_16px_45px_-35px_rgba(15,42,34,0.4)] sm:p-6 lg:col-span-3"
                 id={PORTAL_DASHBOARD_SECTION_IDS.billing}
               >
                 <div className="flex items-start gap-3">
@@ -2003,7 +2008,7 @@ function Home() {
             ) : null}
 
             <section
-              className="scroll-mt-28 rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3"
+              className="scroll-mt-8 rounded-[1.4rem] border border-slate-200/80 bg-white p-5 shadow-[0_16px_45px_-35px_rgba(15,42,34,0.4)] sm:p-6 lg:col-span-3"
               id={PORTAL_DASHBOARD_SECTION_IDS.privacy}
             >
               <div className="flex items-center gap-3">
@@ -2082,7 +2087,7 @@ function Home() {
               </div>
             </section>
 
-            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
+            <section className="rounded-[1.4rem] border border-slate-200/80 bg-white p-5 shadow-[0_16px_45px_-35px_rgba(15,42,34,0.4)] sm:p-6 lg:col-span-3">
               <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                 <div className="flex items-center gap-3">
                   <ShieldCheck className="h-5 w-5 text-teal-700" />
@@ -2186,7 +2191,7 @@ function Home() {
             </section>
 
             <section
-              className="scroll-mt-28 rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3"
+              className="scroll-mt-8 rounded-[1.4rem] border border-slate-200/80 bg-white p-5 shadow-[0_16px_45px_-35px_rgba(15,42,34,0.4)] sm:p-6 lg:col-span-3"
               id={PORTAL_DASHBOARD_SECTION_IDS.knowledge}
             >
               <div className="flex items-center gap-3">
@@ -2347,7 +2352,7 @@ function Home() {
             </section>
           </div>
         )}
-        <footer className="flex flex-wrap gap-4 border-t border-stone-200 py-5 text-sm text-stone-600">
+        <footer className="flex flex-wrap gap-4 px-2 py-3 text-sm text-slate-500 lg:col-start-2">
           <a className="hover:text-teal-700" href="/privacy">
             {copy.footer.privacy}
           </a>

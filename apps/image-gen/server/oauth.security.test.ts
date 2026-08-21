@@ -209,7 +209,9 @@ describe("OAuth callback security", () => {
     expect(authorizationUrl.searchParams.get("client_id")).toBe(
       "facebook-app-123"
     );
-    expect(authorizationUrl.searchParams.get("scope")).toBe("public_profile");
+    expect(authorizationUrl.searchParams.get("scope")).toBe(
+      "public_profile,pages_show_list"
+    );
     const state = authorizationUrl.searchParams.get("state");
     const stateCookie = start.headers["set-cookie"]?.[0]?.split(";", 1)[0];
     const stateCookieHeader = start.headers["set-cookie"]?.[0] ?? "";

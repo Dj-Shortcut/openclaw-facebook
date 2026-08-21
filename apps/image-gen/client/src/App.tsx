@@ -2,7 +2,7 @@ import Footer from "./components/Footer";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { lazy, Suspense } from "react";
-import { Route, Switch } from "wouter";
+import { Route, Switch, useLocation } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 
@@ -47,6 +47,9 @@ function Router() {
 }
 
 function App() {
+  const [location] = useLocation();
+  const showPublicFooter = location !== "/portal";
+
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="light">
@@ -56,7 +59,7 @@ function App() {
             <div className="grow bg-[#f6f2ea]">
               <Router />
             </div>
-            <Footer />
+            {showPublicFooter ? <Footer /> : null}
           </div>
         </TooltipProvider>
       </ThemeProvider>
