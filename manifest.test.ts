@@ -120,6 +120,7 @@ describe("package openclaw metadata", () => {
     expect(pkg.private).toBe(true);
     expect(pkg.engines).toEqual({
       node: ">=24.15.0",
+      npm: ">=11.12.1",
     });
     expect(pkg.openclaw?.compat).toEqual({
       pluginApi: ">=2026.6.11",

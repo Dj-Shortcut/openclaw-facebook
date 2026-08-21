@@ -466,13 +466,13 @@ Use this order for `leaderbot-fb-image-gen`:
 5. Verify readiness and the public portal:
 
    ```bash
-   npm run deploy:verify-portal
+   pnpm run deploy:verify-portal
    curl -fsS https://leaderbot-fb-image-gen.fly.dev/readyz
    curl -fsSI https://app.leaderbot.live/
    curl -fsS https://app.leaderbot.live/healthz
    ```
 
-   `npm run deploy:verify-portal` checks for the `DATABASE_URL` Fly secret by
+   `pnpm run deploy:verify-portal` checks for the `DATABASE_URL` Fly secret by
    name only, verifies that `/readyz` reports `portal_database_config` as ready,
    and checks the public portal root plus `/healthz` without printing secret
    values.

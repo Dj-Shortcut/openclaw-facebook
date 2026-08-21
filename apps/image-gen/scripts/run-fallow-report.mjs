@@ -9,8 +9,8 @@ const normalizeScriptPath = fileURLToPath(
   new URL("../../../scripts/normalize-fallow-report.mjs", import.meta.url)
 );
 
-export function getNpxCommand(platform = process.platform) {
-  return platform === "win32" ? "npx.cmd" : "npx";
+export function getPnpmCommand(platform = process.platform) {
+  return platform === "win32" ? "pnpm.cmd" : "pnpm";
 }
 
 export function quoteWindowsShellArg(value) {
@@ -53,7 +53,8 @@ export function createFallowSpawnConfig(
   platform = process.platform
 ) {
   const args = [
-    "--yes",
+    "dlx",
+    "--reporter=silent",
     "fallow@2.27.0",
     "--root",
     rootPath,
@@ -69,7 +70,7 @@ export function createFallowSpawnConfig(
 
   if (platform === "win32") {
     return {
-      command: `${getNpxCommand(platform)} ${args.map(quoteWindowsShellArg).join(" ")}`,
+      command: `${getPnpmCommand(platform)} ${args.map(quoteWindowsShellArg).join(" ")}`,
       args: [],
       options: {
         ...options,
@@ -79,7 +80,7 @@ export function createFallowSpawnConfig(
   }
 
   return {
-    command: getNpxCommand(platform),
+    command: getPnpmCommand(platform),
     args,
     options,
   };

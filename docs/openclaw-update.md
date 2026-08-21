@@ -12,7 +12,7 @@ The repository supports one OpenClaw runtime contract:
 | Requirement | Contract |
 | --- | --- |
 | Node.js | `>=24.15.0` |
-| Package manager | npm is authoritative for the root plugin; the root `pnpm-lock.yaml` is kept as a compatibility mirror, and pnpm is otherwise used only for existing subapps |
+| Package manager | npm `>=11.12.1` is authoritative for the root plugin; pnpm `10.28.1` is pinned for the three isolated subapps. The root `pnpm-lock.yaml` remains a compatibility mirror. |
 | OpenClaw package | `openclaw` version recorded in `package.json` at `openclaw.build.openclawVersion` |
 | Plugin SDK version | same version as `openclaw.build.openclawVersion` |
 | Fly gateway OpenClaw version | same version in `deploy/fly-gateway/Dockerfile` `ARG OPENCLAW_VERSION` |
@@ -59,7 +59,7 @@ Use this workflow for local machines, CI, servers, and hosted environments.
    ```bash
    npm run openclaw:update -- <version>
    npm install --package-lock-only --ignore-scripts --prefer-online
-   pnpm install --lockfile-only --ignore-scripts
+   npx --yes pnpm@10.28.1 install --lockfile-only --ignore-scripts
    npm ci
    ```
 

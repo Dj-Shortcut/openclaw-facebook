@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createFallowSpawnConfig,
-  getNpxCommand,
+  getPnpmCommand,
   parseRunFallowReportArgs,
   quoteWindowsShellArg,
   runFallowReport,
@@ -30,16 +30,21 @@ afterEach(() => {
 });
 
 describe("run-fallow-report", () => {
-  it("uses the npm cmd shim for npx on Windows", () => {
-    expect(getNpxCommand("win32")).toBe("npx.cmd");
+  it("uses the pnpm cmd shim on Windows", () => {
+    expect(getPnpmCommand("win32")).toBe("pnpm.cmd");
   });
 
-  it("uses the npx executable directly on non-Windows platforms", () => {
-    expect(getNpxCommand("linux")).toBe("npx");
-    expect(getNpxCommand("darwin")).toBe("npx");
+  it("uses the pnpm executable directly on non-Windows platforms", () => {
+    expect(getPnpmCommand("linux")).toBe("pnpm");
+    expect(getPnpmCommand("darwin")).toBe("pnpm");
+    expect(createFallowSpawnConfig(".", [], "linux").args.slice(0, 3)).toEqual([
+      "dlx",
+      "--reporter=silent",
+      "fallow@2.27.0",
+    ]);
   });
 
-  it("enables the shell and quotes fallow arguments for Windows npx.cmd", () => {
+  it("enables the shell and quotes fallow arguments for Windows pnpm.cmd", () => {
     const config = createFallowSpawnConfig(
       "C:\\R&D\\image gen",
       ["--flag=hello & goodbye", 'quote"value'],
@@ -51,7 +56,7 @@ describe("run-fallow-report", () => {
       cwd: "C:\\R&D\\image gen",
       shell: true,
     });
-    expect(config.command).toContain("npx.cmd");
+    expect(config.command).toContain("pnpm.cmd");
     expect(config.command).toContain(
       quoteWindowsShellArg("C:\\R&D\\image gen")
     );
@@ -89,7 +94,7 @@ describe("run-fallow-report", () => {
     const outputPath = path.join(root, ".fallow", "report.json");
     const spawn = vi.fn((command, args, options) => {
       if (spawn.mock.calls.length === 1) {
-        expect(command).toContain("npx.cmd");
+        expect(command).toContain("pnpm.cmd");
         expect(args).toEqual([]);
         expect(options).toMatchObject({ cwd: root, shell: true });
         expect(command).toContain(quoteWindowsShellArg(root));
