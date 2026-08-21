@@ -1630,6 +1630,8 @@ export async function markIntentPaymentMismatch(input: {
           eq(billingProviderOperations.state, "succeeded")
         )
       );
+    const operationRecorded =
+      providerOperationAffectedRows(operationUpdate) === 1;
     await tx
       .update(billingIntents)
       .set({
@@ -1663,30 +1665,31 @@ export async function markIntentPaymentMismatch(input: {
       .onDuplicateKeyUpdate({
         set: { deduplicationKey: sql`deduplication_key` },
       });
-    await tx
-      .insert(billingOutbox)
-      .values({
-        workspaceId: input.workspaceId,
-        mode: input.mode,
-        eventType: "cancel_payment",
-        deduplicationKey: input.molliePaymentId
-          ? `checkout_response_mismatch_cancel:${input.molliePaymentId}`
-          : `checkout_response_mismatch_reconcile:${input.operationId}`,
-        payload: {
-          reason: "checkout_provider_response_mismatch",
-          intentId: input.intentId,
-          targetCustomerId: input.targetCustomerId,
-          targetPaymentId: input.molliePaymentId,
-          providerOperationId: input.operationId,
-          revokedAuthorizationEpoch: input.authorizationEpoch,
-          operationRecorded:
-            providerOperationAffectedRows(operationUpdate) === 1,
-        },
-        status: "pending",
-      })
-      .onDuplicateKeyUpdate({
-        set: { deduplicationKey: sql`deduplication_key` },
-      });
+    if (operationRecorded) {
+      await tx
+        .insert(billingOutbox)
+        .values({
+          workspaceId: input.workspaceId,
+          mode: input.mode,
+          eventType: "cancel_payment",
+          deduplicationKey: input.molliePaymentId
+            ? `checkout_response_mismatch_cancel:${input.molliePaymentId}`
+            : `checkout_response_mismatch_reconcile:${input.operationId}`,
+          payload: {
+            reason: "checkout_provider_response_mismatch",
+            intentId: input.intentId,
+            targetCustomerId: input.targetCustomerId,
+            targetPaymentId: input.molliePaymentId,
+            providerOperationId: input.operationId,
+            revokedAuthorizationEpoch: input.authorizationEpoch,
+            operationRecorded: true,
+          },
+          status: "pending",
+        })
+        .onDuplicateKeyUpdate({
+          set: { deduplicationKey: sql`deduplication_key` },
+        });
+    }
   });
 }
 

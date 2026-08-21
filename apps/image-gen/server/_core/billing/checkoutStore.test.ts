@@ -97,7 +97,7 @@ describe("Mollie customer attachment", () => {
 
 describe("checkout provider mismatch persistence", () => {
   it("moves the tenant intent out of creating_payment and queues manual review", async () => {
-    const updateWhere = vi.fn().mockResolvedValue(undefined);
+    const updateWhere = vi.fn().mockResolvedValue({ affectedRows: 1 });
     const updateSet = vi.fn(() => ({ where: updateWhere }));
     const onDuplicateKeyUpdate = vi.fn().mockResolvedValue(undefined);
     const insertValues = vi.fn(() => ({ onDuplicateKeyUpdate }));
@@ -163,6 +163,47 @@ describe("checkout provider mismatch persistence", () => {
           revokedAuthorizationEpoch: 2,
         }),
       })
+    );
+  });
+
+  it("leaves cancellation routing to the concurrent containment winner", async () => {
+    const updateWhere = vi.fn().mockResolvedValue({ affectedRows: 0 });
+    const updateSet = vi.fn(() => ({ where: updateWhere }));
+    const onDuplicateKeyUpdate = vi.fn().mockResolvedValue(undefined);
+    const insertValues = vi.fn(() => ({ onDuplicateKeyUpdate }));
+    const forUpdate = vi.fn().mockResolvedValue([{}]);
+    const tx = {
+      update: vi.fn(() => ({ set: updateSet })),
+      insert: vi.fn(() => ({ values: insertValues })),
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: vi.fn(() => ({ for: forUpdate })),
+          })),
+        })),
+      })),
+    };
+    databaseMock.mockResolvedValue({
+      transaction: vi.fn((callback: (transaction: typeof tx) => unknown) =>
+        callback(tx)
+      ),
+    });
+
+    await markIntentPaymentMismatch({
+      intentId: "550e8400-e29b-41d4-a716-446655440000",
+      workspaceId: 1,
+      mode: "test",
+      molliePaymentId: "tr_payment123",
+      operationId: "operation-1",
+      authorizationEpoch: 2,
+      targetCustomerId: "cst_customer123",
+    });
+
+    expect(insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: "manual_review" })
+    );
+    expect(insertValues.mock.calls.map(([value]) => value)).not.toContainEqual(
+      expect.objectContaining({ eventType: "cancel_payment" })
     );
   });
 });
