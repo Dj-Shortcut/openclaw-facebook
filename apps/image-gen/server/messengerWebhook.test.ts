@@ -1553,6 +1553,11 @@ describe("messenger webhook dedupe", () => {
       [
         {
           content_type: "text",
+          title: "Klantenportaal",
+          payload: "OPENCLAW_ACTION:portal",
+        },
+        {
+          content_type: "text",
           title: "Nieuwe afbeelding",
           payload: "OPENCLAW_ACTION:new_image",
         },
@@ -1565,11 +1570,6 @@ describe("messenger webhook dedupe", () => {
           content_type: "text",
           title: "Privacy",
           payload: "OPENCLAW_ACTION:Privacy",
-        },
-        {
-          content_type: "text",
-          title: "Klantenportaal",
-          payload: "OPENCLAW_ACTION:portal",
         },
       ]
     );
@@ -2424,6 +2424,11 @@ describe("messenger deterministic free text", () => {
       [
         {
           content_type: "text",
+          title: "Klantenportaal",
+          payload: "OPENCLAW_ACTION:portal",
+        },
+        {
+          content_type: "text",
           title: "Nieuwe afbeelding",
           payload: "OPENCLAW_ACTION:new_image",
         },
@@ -2436,11 +2441,6 @@ describe("messenger deterministic free text", () => {
           content_type: "text",
           title: "Privacy",
           payload: "OPENCLAW_ACTION:Privacy",
-        },
-        {
-          content_type: "text",
-          title: "Klantenportaal",
-          payload: "OPENCLAW_ACTION:portal",
         },
       ]
     );
@@ -2644,6 +2644,11 @@ describe("messenger greeting behavior", () => {
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(psid, "Klaar.", [
       {
         content_type: "text",
+        title: "Klantenportaal",
+        payload: "OPENCLAW_ACTION:portal",
+      },
+      {
+        content_type: "text",
         title: "Nieuwe afbeelding",
         payload: "OPENCLAW_ACTION:new_image",
       },
@@ -2661,11 +2666,6 @@ describe("messenger greeting behavior", () => {
         content_type: "text",
         title: "Privacy",
         payload: "OPENCLAW_ACTION:Privacy",
-      },
-      {
-        content_type: "text",
-        title: "Klantenportaal",
-        payload: "OPENCLAW_ACTION:portal",
       },
     ]);
   });
