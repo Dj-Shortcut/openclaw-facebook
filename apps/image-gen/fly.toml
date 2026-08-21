@@ -9,6 +9,7 @@ primary_region = "ams"
   PORT = "8080"
   PORTAL_BASE_URL = "https://app.leaderbot.live"
   APP_BASE_URL = "https://app.leaderbot.live"
+  FB_LOGIN_CONFIG_ID = "2097873054148678"
   BILLING_SUPPORT_EMAIL = "privacy@leaderbot.live"
   # Safe Mollie Test Mode baseline. Commercial execution remains disabled
   # while the full credential-free chain runs exposure-off.

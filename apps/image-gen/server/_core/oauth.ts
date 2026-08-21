@@ -6,6 +6,7 @@ import { z } from "zod";
 import * as db from "../db";
 import { getSessionCookieOptions } from "./cookies";
 import {
+  getFacebookLoginConfigurationId,
   getFacebookPagesForUserAccessToken,
   REQUIRED_FACEBOOK_SCOPES,
   startFacebookConnect,
@@ -317,10 +318,15 @@ export function registerOAuthRoutes(app: Express) {
     authorizationUrl.searchParams.set("state", state);
     if (facebookConfig) {
       authorizationUrl.searchParams.set("response_type", "code");
-      authorizationUrl.searchParams.set(
-        "scope",
-        ["public_profile", ...REQUIRED_FACEBOOK_SCOPES].join(",")
-      );
+      const configurationId = getFacebookLoginConfigurationId();
+      if (configurationId) {
+        authorizationUrl.searchParams.set("config_id", configurationId);
+      } else {
+        authorizationUrl.searchParams.set(
+          "scope",
+          ["public_profile", ...REQUIRED_FACEBOOK_SCOPES].join(",")
+        );
+      }
     }
     res.redirect(302, authorizationUrl.toString());
   };

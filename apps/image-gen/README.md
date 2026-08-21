@@ -474,8 +474,10 @@ Use this order for `leaderbot-fb-image-gen`:
    `https://app.leaderbot.live/api/oauth/callback` in Meta:
 
    Set `FB_APP_ID` and `FB_APP_SECRET` through the encrypted Fly secret store;
-   never place their values in source files or shell history. Then configure
-   the public callback origin:
+   never place their values in source files or shell history. Set the public
+   `FB_LOGIN_CONFIG_ID` to the Meta Facebook Login for Business configuration
+   that grants only `pages_show_list`, `pages_manage_metadata`, and
+   `pages_messaging`. Then configure the public callback origin:
 
    ```bash
    fly secrets set APP_BASE_URL='https://app.leaderbot.live' \

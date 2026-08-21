@@ -1,7 +1,10 @@
 import http from "node:http";
 import express from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getStoredFacebookState } from "./_core/facebookConnectStore";
+import {
+  getFacebookOAuthUrl,
+  getStoredFacebookState,
+} from "./_core/facebookConnectStore";
 import { registerOAuthRoutes } from "./_core/oauth";
 import { bindTestHttpServer } from "./testHttpServer";
 
@@ -174,6 +177,7 @@ describe("OAuth callback security", () => {
   it("starts and completes a direct Facebook Login without exposing the app secret", async () => {
     vi.stubEnv("FB_APP_ID", "facebook-app-123");
     vi.stubEnv("FB_APP_SECRET", "server-only-secret");
+    vi.stubEnv("FB_LOGIN_CONFIG_ID", "2097873054148678");
     vi.stubEnv("APP_BASE_URL", "https://leaderbot.live");
     vi.stubEnv("NODE_ENV", "production");
     mocks.getUserByOpenId.mockResolvedValue({
@@ -241,9 +245,17 @@ describe("OAuth callback security", () => {
     expect(authorizationUrl.searchParams.get("client_id")).toBe(
       "facebook-app-123"
     );
-    expect(authorizationUrl.searchParams.get("scope")).toBe(
-      "public_profile,pages_show_list,pages_manage_metadata,pages_messaging"
+    expect(authorizationUrl.searchParams.get("config_id")).toBe(
+      "2097873054148678"
     );
+    expect(authorizationUrl.searchParams.has("scope")).toBe(false);
+    const pageConnectUrl = new URL(
+      getFacebookOAuthUrl("page-connect-state") ?? "https://invalid"
+    );
+    expect(pageConnectUrl.searchParams.get("config_id")).toBe(
+      "2097873054148678"
+    );
+    expect(pageConnectUrl.searchParams.has("scope")).toBe(false);
     const state = authorizationUrl.searchParams.get("state");
     const stateCookie = start.headers["set-cookie"]?.[0]?.split(";", 1)[0];
     const stateCookieHeader = start.headers["set-cookie"]?.[0] ?? "";
