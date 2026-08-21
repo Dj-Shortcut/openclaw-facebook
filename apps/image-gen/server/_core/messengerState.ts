@@ -62,6 +62,7 @@ export type MessengerUserState = {
   lastPhoto: string | null;
   lastPhotoSource?: SourceImageOrigin | null;
   preferredLang?: Lang;
+  preferredLangSource?: "account_default" | "sender_locale";
   consentGiven: boolean;
   consentTimestamp?: number;
   pendingDeleteConfirm?: boolean;
@@ -554,12 +555,14 @@ export function clearPendingImageState(
 export function setPreferredLang(
   psid: string,
   lang: Lang,
+  source: "account_default" | "sender_locale" = "sender_locale",
   now = Date.now()
 ): MaybePromise<void> {
   const result = patchState(
     psid,
     {
       preferredLang: lang,
+      preferredLangSource: source,
     },
     now
   );

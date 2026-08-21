@@ -99,7 +99,13 @@ export async function createTrackedEventContext(
     );
     Object.assign(state, ownership, { privacyEpoch });
   }
-  const lang = state.preferredLang || localeLang || ctx.defaultLang;
+  const storedSenderLanguage =
+    state.preferredLangSource === "sender_locale"
+      ? state.preferredLang
+      : undefined;
+  const lang = senderLocale
+    ? localeLang
+    : storedSenderLanguage || ctx.defaultLang;
   const classification = classifyInboundEvent(event);
   await recordInboundUserActivity(psid, event, classification, {
     entryId,

@@ -107,6 +107,37 @@ describe("resolveMessengerAccount", () => {
     expect(account.enabled).toBe(false);
   });
 
+  it("inherits the global response language unless a named account overrides it", () => {
+    const cfg = {
+      channels: {
+        facebook: {
+          defaultLang: "en",
+          customerPortalUrl: "https://portal.example.test/account",
+          accounts: {
+            inherited: {
+              pageAccessToken: "inherited-token",
+            },
+            dutch: {
+              pageAccessToken: "dutch-token",
+              defaultLang: "nl",
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(
+      resolveMessengerAccount({ cfg, accountId: "inherited" }).config.defaultLang,
+    ).toBe("en");
+    expect(
+      resolveMessengerAccount({ cfg, accountId: "inherited" }).config
+        .customerPortalUrl,
+    ).toBe("https://portal.example.test/account");
+    expect(
+      resolveMessengerAccount({ cfg, accountId: "dutch" }).config.defaultLang,
+    ).toBe("nl");
+  });
+
   it("keeps legacy channels.messenger config as a fallback", () => {
     const account = resolveMessengerAccount({
       cfg: {

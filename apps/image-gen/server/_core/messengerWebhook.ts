@@ -16,9 +16,10 @@ export function resetMessengerEventDedupe(): void {
 }
 
 export async function processFacebookWebhookPayload(
-  payload: unknown
+  payload: unknown,
+  options: { defaultLang?: Lang } = {}
 ): Promise<void> {
-  await handlers.processFacebookWebhookPayload(payload);
+  await handlers.processFacebookWebhookPayload(payload, options);
 }
 
 export async function acceptInternalMessengerImageRequest(input: {

@@ -71,11 +71,19 @@ async function handleEvent(
     trackedCtx.logIncomingMessage(psid, userId, event, reqId);
     trackedCtx.logUserState(psid, userId, state, reqId, "handle_event");
 
-    if (
-      eventContext.senderLocale &&
-      eventContext.localeLang !== state.preferredLang
+    if (eventContext.senderLocale) {
+      if (
+        eventContext.lang !== state.preferredLang ||
+        state.preferredLangSource !== "sender_locale"
+      ) {
+        await setPreferredLang(psid, eventContext.lang, "sender_locale");
+      }
+    } else if (
+      state.preferredLangSource !== "sender_locale" &&
+      (eventContext.lang !== state.preferredLang ||
+        state.preferredLangSource !== "account_default")
     ) {
-      await setPreferredLang(psid, eventContext.localeLang);
+      await setPreferredLang(psid, eventContext.lang, "account_default");
     }
 
     await routeTrackedEvent(eventContext, event);

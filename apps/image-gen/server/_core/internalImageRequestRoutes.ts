@@ -31,6 +31,7 @@ const internalImageRequestSchema = z.object({
 });
 
 const internalMessengerEventSchema = z.object({
+  defaultLang: z.enum(["nl", "en"]).optional(),
   event: z
     .object({
       sender: z.object({ id: z.string().trim().min(1) }).optional(),
@@ -346,16 +347,19 @@ export function registerInternalImageRequestRoutes(app: Express): void {
 
       res.status(202).json({ status: "queued" });
 
-      void processFacebookWebhookPayload({
-        object: "page",
-        entry: [
-          {
-            id: pageId,
-            time: event.timestamp,
-            messaging: [event],
-          },
-        ],
-      }).catch((error: unknown) => {
+      void processFacebookWebhookPayload(
+        {
+          object: "page",
+          entry: [
+            {
+              id: pageId,
+              time: event.timestamp,
+              messaging: [event],
+            },
+          ],
+        },
+        { defaultLang: parsed.data.defaultLang }
+      ).catch((error: unknown) => {
         safeLog("internal_messenger_event_failed", {
           level: "error",
           error: error instanceof Error ? error.message : String(error),

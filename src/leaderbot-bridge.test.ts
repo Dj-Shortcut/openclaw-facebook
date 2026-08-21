@@ -204,6 +204,30 @@ describe("Leaderbot bridge requests", () => {
     expect(logStage).toHaveBeenCalledWith(trace, "image_gen_request_sent", { status: 202 });
   });
 
+  it("forwards an explicitly configured English image-request language", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ status: "queued" }), { status: 202 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestLeaderbotImageGeneration({
+      psid: "psid-1",
+      pageId: "page-1",
+      prompt: "Create a robot",
+      reqId: "req-1",
+      timestamp: 1_700_000_000_000,
+      trace,
+      leaderbotBridgeEnabled: true,
+      lang: "en",
+    });
+
+    expect(
+      JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)),
+    ).toMatchObject({ lang: "en" });
+  });
+
   it("sends Messenger events to the webhook-event endpoint and reports fallback failure", async () => {
     process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
     process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
@@ -223,6 +247,7 @@ describe("Leaderbot bridge requests", () => {
         },
         trace,
         leaderbotBridgeEnabled: true,
+        defaultLang: "en",
         logStage,
       }),
     ).resolves.toBe(false);
@@ -234,6 +259,7 @@ describe("Leaderbot bridge requests", () => {
     expect(
       JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)),
     ).toMatchObject({
+      defaultLang: "en",
       event: {
         sender: { id: "sender-1" },
         recipient: { id: "page-1" },

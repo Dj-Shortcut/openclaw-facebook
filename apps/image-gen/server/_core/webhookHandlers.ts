@@ -200,11 +200,15 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
     createInternalMessengerImageRequestHandler(ctx);
 
   async function processFacebookWebhookPayload(
-    payload: unknown
+    payload: unknown,
+    options: { defaultLang?: Lang } = {}
   ): Promise<void> {
+    const requestContext = options.defaultLang
+      ? { ...ctx, defaultLang: options.defaultLang }
+      : ctx;
     const entries = getWebhookEntries(payload);
     for (const entry of entries) {
-      await handleEntry(ctx, entry);
+      await handleEntry(requestContext, entry);
     }
   }
 
