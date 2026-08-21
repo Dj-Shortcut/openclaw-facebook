@@ -1,10 +1,53 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getFacebookPagesForUserAccessToken } from "./facebookConnectStore";
+import {
+  exchangeFacebookCodeForPages,
+  getFacebookPagesForUserAccessToken,
+} from "./facebookConnectStore";
 
 describe("Facebook Business Login Page discovery", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
+  });
+
+  it("logs only numeric metadata when a token exchange fails", async () => {
+    vi.stubEnv("FB_APP_ID", "facebook-app-id");
+    vi.stubEnv("FB_APP_SECRET", "facebook-app-secret");
+    vi.stubEnv("PORTAL_BASE_URL", "https://portal.example.com");
+    const warnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: {
+              message: "sensitive provider response",
+              type: "OAuthException",
+              code: 100,
+              error_subcode: 1349152,
+              fbtrace_id: "private-trace",
+            },
+          }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
+        )
+      )
+    );
+
+    await expect(exchangeFacebookCodeForPages("private-code")).rejects.toThrow(
+      "facebook token exchange failed: 400"
+    );
+
+    const logs = warnSpy.mock.calls.flat().join(" ");
+    expect(logs).toContain('"status":400');
+    expect(logs).toContain('"errorCode":100');
+    expect(logs).toContain('"errorSubcode":1349152');
+    expect(logs).not.toContain("sensitive provider response");
+    expect(logs).not.toContain("private-trace");
+    expect(logs).not.toContain("private-code");
+    expect(logs).not.toContain("facebook-app-secret");
   });
 
   it("uses an embedded Page access token without an extra Graph request", async () => {

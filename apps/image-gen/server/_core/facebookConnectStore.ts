@@ -210,6 +210,13 @@ type FacebookTokenResponse = {
   access_token?: string;
 };
 
+type FacebookGraphErrorResponse = {
+  error?: {
+    code?: unknown;
+    error_subcode?: unknown;
+  };
+};
+
 type FacebookAccountsResponse = {
   data?: FacebookPageResponse[];
 };
@@ -417,9 +424,25 @@ export async function exchangeFacebookCodeForPages(code: string) {
     signal: AbortSignal.timeout(FACEBOOK_GRAPH_TIMEOUT_MS),
   });
   if (!tokenResponse.ok) {
+    let errorCode: number | null = null;
+    let errorSubcode: number | null = null;
+    try {
+      const errorResponse =
+        (await tokenResponse.json()) as FacebookGraphErrorResponse;
+      errorCode = Number.isInteger(errorResponse.error?.code)
+        ? (errorResponse.error?.code as number)
+        : null;
+      errorSubcode = Number.isInteger(errorResponse.error?.error_subcode)
+        ? (errorResponse.error?.error_subcode as number)
+        : null;
+    } catch {
+      // Only structured numeric error metadata is safe to record.
+    }
     safeLog("facebook_token_exchange_failed", {
       level: "warn",
       status: tokenResponse.status,
+      errorCode,
+      errorSubcode,
     });
     throw new Error(`facebook token exchange failed: ${tokenResponse.status}`);
   }
