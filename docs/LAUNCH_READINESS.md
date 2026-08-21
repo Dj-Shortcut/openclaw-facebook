@@ -1,14 +1,18 @@
 # Leaderbot Mollie launch readiness
 
-Status on 2026-08-18, current Sol draft branch: **credential-free code gate
-PASS; live launch NO-GO**. The exact reviewed head is recorded in PR #375 and
-its checks rather than embedded here, so an evidence-only update cannot make
-this document self-stale.
+Status on 2026-08-22, current Sol draft branch: **the last published savepoint
+passed the credential-free code gate; the current privacy/cost hardening batch
+is pending its final full matrix and GitHub CI; live launch remains NO-GO**.
+The exact last-green head is recorded in PR #375 and its checks.
 
 Commercial billing, live billing, deployment and real charges remain disabled.
 No API key is required to run the preflight described here.
 
-## Implemented and locally/CI verified
+## Implemented contract and evidence state
+
+The published contracts below were locally/CI verified at the last green
+savepoint. Additions in the current privacy/cost hardening batch do not become
+final-head evidence until its full local matrix and GitHub CI pass.
 
 - Server-authoritative `EUR 19.00` one-time Startpilot catalog: 30 days, one
   workspace/Page, 300 AI answers, 20 image generations and five images/day.
@@ -20,8 +24,10 @@ No API key is required to run the preflight described here.
   restart recovery and conservative handling only after transport starts.
 - Workspace/connection/binding/privacy-scoped ingress, generation queues,
   state, completions, Page credentials and image/audio/video/Graph effects.
-- Durable privacy erasure, replay receipts, bounded PII TTLs and legacy-queue
-  readiness refusal.
+- Durable erasure for application-owned Messenger/WhatsApp state, assets,
+  queues and provider fences, replay receipts, bounded PII TTLs and
+  legacy-queue readiness refusal. Exact host-owned OpenClaw transcript erasure
+  remains the external blocker listed below.
 - DB-driven tenant scheduler with execution epochs, leases, fairness,
   heartbeats, commercial-disable fencing and an always-available safety drain.
 - Signed, idempotent, provider-key-free customer/operator notification receiver
@@ -34,21 +40,17 @@ No API key is required to run the preflight described here.
 - `/healthz` remains liveness; `/readyz` validates Redis, schema, scheduler,
   notification, accounting, quota/finalization and configured exposure state.
 
-Final-head evidence is recorded in `docs/MOLLIE_TEST_RESULTS.md`.
+Published evidence and the current validation status are recorded in
+`docs/MOLLIE_TEST_RESULTS.md`.
 
 ## Credential-free gate classification
 
 ### A — repository work
 
-No known P0/P1 code or test blocker remains on the current Sol draft branch.
-The release config, checklist and evidence documents are synchronized with the
-final code. One P2
-test-readability item remains: split the mocked epoch/tenant labels that share
-the same empty-select fixture. Real MySQL scope/race coverage is authoritative;
-this P2 does not weaken the release contract.
-
-Any new repository finding reopens A and blocks credential injection until it
-is fixed and CI is green again.
+The current privacy/cost hardening batch remains an open repository gate until
+its final full local matrix and GitHub CI pass on one exact head. Repository GO
+has not yet been reissued for those uncommitted changes. Any new repository
+finding also keeps A open until it is fixed and the same gates are green again.
 
 ### B — external or human evidence
 
@@ -58,6 +60,10 @@ is fixed and CI is green again.
   disconnect/rebind, response-window recovery and cross-tenant refusal.
 - OpenAI: controlled image generation/edit smoke proving configured estimates
   and caps block before the provider boundary.
+- OpenClaw host: provide and verify an exact non-archiving erasure API for an
+  ordinary session transcript. OpenClaw 2026.7.2-beta.7 only exposes deletion
+  behavior that retains an archive, so Leaderbot deliberately keeps deletion
+  pending/fails closed when such a transcript exists.
 - Deployment: restore a redacted production-like backup, run the canonical
   migration/recovery procedure, verify Fly process/image/config parity and
   retain metadata-only evidence. The separate gateway Memory Core volume repair
@@ -105,4 +111,6 @@ missing finalization/notification contract.
 - **Live GO:** sandbox GO plus migration/backup/operations/legal/accounting
   approvals and an explicitly authorized human launch window.
 
-Current decision: **repository GO; sandbox and live NO-GO**.
+Current decision: **repository revalidation pending for the current batch; full
+privacy, sandbox and live NO-GO until that validation, the external OpenClaw
+transcript capability and the remaining provider/human evidence are complete**.

@@ -9,7 +9,10 @@ import {
   vi,
 } from "vitest";
 
-import { appendCostLedgerEntry } from "./_core/costLedger";
+import {
+  appendCostLedgerEntry,
+  type CostLedgerScope,
+} from "./_core/costLedger";
 import {
   admitMessengerProviderSpend,
   MessengerSpendBudgetExceededError,
@@ -20,6 +23,12 @@ const suite = describe.runIf(process.env.RUN_REDIS_INTEGRATION === "1");
 const originalRedisUrl = process.env.REDIS_URL;
 const USER = "redis-spend-user";
 const NOW = new Date("2031-02-14T12:00:00.000Z");
+const SCOPE: CostLedgerScope = {
+  workspaceId: 41,
+  channelConnectionId: 7,
+  bindingEpoch: 3,
+  privacyEpoch: 1,
+};
 
 suite("distributed Redis spend admission", () => {
   beforeAll(() => {
@@ -95,6 +104,29 @@ suite("distributed Redis spend admission", () => {
     expect(providerStart).toHaveBeenCalledTimes(4);
   });
 
+  it("partitions the per-user counter by immutable tenant connection scope", async () => {
+    delete process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD;
+    process.env.MESSENGER_USER_DAILY_SPEND_CAP_USD = "0.01";
+    const providerStart = vi.fn();
+    const otherTenantScope: CostLedgerScope = {
+      ...SCOPE,
+      workspaceId: 42,
+      channelConnectionId: 8,
+    };
+
+    await admit("same-attempt", USER, 0.01, NOW, providerStart, SCOPE);
+    await admit(
+      "same-attempt",
+      USER,
+      0.01,
+      NOW,
+      providerStart,
+      otherTenantScope
+    );
+
+    expect(providerStart).toHaveBeenCalledTimes(2);
+  });
+
   it("releases a failed ledger reservation and conservatively keeps it on release failure", async () => {
     await expect(
       admit("ledger-fail", USER, 0.05, NOW, async () => {
@@ -140,6 +172,7 @@ suite("distributed Redis spend admission", () => {
   it("reconciles upward from the durable ledger baseline", async () => {
     await appendCostLedgerEntry(
       {
+        scope: SCOPE,
         id: "baseline-ledger",
         channel: "facebook_messenger",
         operation: "image_generation",
@@ -164,6 +197,75 @@ suite("distributed Redis spend admission", () => {
     expect(providerStart).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["malformed JSON", "{not-json"],
+    [
+      "negative total",
+      JSON.stringify({ ...budgetAggregate(), estimatedCostUsd: -0.01 }),
+    ],
+    [
+      "JSON-serialized NaN total",
+      JSON.stringify({ ...budgetAggregate(), estimatedCostUsd: Number.NaN }),
+    ],
+    [
+      "untyped object bucket",
+      JSON.stringify({
+        ...budgetAggregate(),
+        byProvider: {
+          "openai-images": { attempts: {}, estimatedCostUsd: 0 },
+        },
+      }),
+    ],
+  ])(
+    "fails closed before provider start for a corrupt Redis budget: %s",
+    async (_label, rawAggregate) => {
+      const redis = await getRedisClient();
+      await redis.set("cost:ledger:v2:budget-period:2031-02-14", rawAggregate);
+      const providerStart = vi.fn();
+
+      await expect(
+        admit("corrupt-budget", USER, 0.01, NOW, providerStart)
+      ).rejects.toThrow();
+      expect(providerStart).not.toHaveBeenCalled();
+    }
+  );
+
+  it("fails closed before provider start for a corrupt Redis user entry", async () => {
+    delete process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD;
+    process.env.MESSENGER_USER_DAILY_SPEND_CAP_USD = "1";
+    const redis = await getRedisClient();
+    await redis.set(
+      "cost:ledger:v2:workspace-period:{cost-ledger-v2:41}:period:2031-02-14",
+      JSON.stringify([
+        JSON.stringify({
+          scope: SCOPE,
+          id: "corrupt-user-entry",
+          channel: "facebook_messenger",
+          operation: "image_generation",
+          provider: "openai-images",
+          model: "gpt-image-2",
+          userKey: USER,
+          reqId: "sha256:corrupt-user-entry",
+          status: "provider_attempt_started",
+          estimatedCostUsd: -0.5,
+          estimatedOutputCostUsd: null,
+          finalCostUsd: null,
+          costEstimateComplete: true,
+          estimateSource: "test",
+          unpricedCostComponents: [],
+          period: "2031-02-14",
+          recordedAt: "2031-02-14T10:00:00.000Z",
+        }),
+      ])
+    );
+    const providerStart = vi.fn();
+
+    await expect(
+      admit("corrupt-user-budget", USER, 0.01, NOW, providerStart)
+    ).rejects.toThrow("Cost ledger entry scope is invalid");
+    expect(providerStart).not.toHaveBeenCalled();
+  });
+
   it("fails closed before provider start when Redis reservation is unavailable", async () => {
     const redis = await getRedisClient();
     const originalEval = redis.eval.bind(redis);
@@ -184,11 +286,13 @@ async function admit(
   userKey: string,
   cost: number,
   now: Date,
-  providerStart: () => void | Promise<void>
+  providerStart: () => void | Promise<void>,
+  scope: CostLedgerScope = SCOPE
 ): Promise<void> {
   await admitMessengerProviderSpend({
     reqId: `req-${createHash("sha256").update(attemptId).digest("hex").slice(0, 8)}`,
     attemptId,
+    scope,
     userKey,
     estimatedCostUsd: cost,
     costEstimateComplete: true,
@@ -197,4 +301,18 @@ async function admit(
       await providerStart();
     },
   });
+}
+
+function budgetAggregate() {
+  return {
+    version: 2,
+    period: "2031-02-14",
+    attempts: 0,
+    estimatedCostUsd: 0,
+    completeEstimateEntries: 0,
+    incompleteEstimateEntries: 0,
+    unpricedCostComponents: [],
+    byOperation: {},
+    byProvider: {},
+  };
 }

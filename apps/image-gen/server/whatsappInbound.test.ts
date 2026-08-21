@@ -26,9 +26,11 @@ describe("whatsappInbound audio normalization", () => {
       object: "whatsapp_business_account",
       entry: [
         {
+          id: "303030303030303",
           changes: [
             {
               value: {
+                metadata: { phone_number_id: "404040404040404" },
                 messages: [
                   {
                     from: "1111111111",
@@ -63,9 +65,11 @@ describe("whatsappInbound audio normalization", () => {
       object: "whatsapp_business_account",
       entry: [
         {
+          id: "303030303030303",
           changes: [
             {
               value: {
+                metadata: { phone_number_id: "404040404040404" },
                 messages: [
                   {
                     from: "1111111111",
@@ -94,19 +98,21 @@ describe("whatsappInbound audio normalization", () => {
       object: "whatsapp_business_account",
       entry: [
         {
+          id: "303030303030303",
           changes: [
             {
-      value: {
-        messages: [
-          {
-            from: "1111111111",
-            id: "wa-audio-3",
-            type: "ptt",
-            ptt: { id: "ptt-id-1" },
-            timestamp: "1719300002",
-          },
-        ],
-      },
+              value: {
+                metadata: { phone_number_id: "404040404040404" },
+                messages: [
+                  {
+                    from: "1111111111",
+                    id: "wa-audio-3",
+                    type: "ptt",
+                    ptt: { id: "ptt-id-1" },
+                    timestamp: "1719300002",
+                  },
+                ],
+              },
             },
           ],
         },
@@ -117,6 +123,66 @@ describe("whatsappInbound audio normalization", () => {
 
     expect(events[0]?.messageType).toBe("audio");
     expect(events[0]?.audioId).toBe("ptt-id-1");
+  });
+
+  it("preserves the exact WABA and phone-number endpoint", () => {
+    const events = extractWhatsAppEvents({
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          id: "303030303030303",
+          changes: [
+            {
+              value: {
+                metadata: { phone_number_id: "404040404040404" },
+                messages: [
+                  {
+                    from: "1111111111",
+                    id: "wa-text-1",
+                    type: "text",
+                    text: { body: "maak een beeld" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.endpoint).toEqual({
+      channel: "whatsapp",
+      wabaId: "303030303030303",
+      phoneNumberId: "404040404040404",
+    });
+  });
+
+  it("drops messages without an exact endpoint before channel handling", () => {
+    const events = extractWhatsAppEvents({
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          id: "303030303030303",
+          changes: [
+            {
+              value: {
+                messages: [
+                  {
+                    from: "1111111111",
+                    id: "wa-text-without-phone",
+                    type: "text",
+                    text: { body: "maak een beeld" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(events).toEqual([]);
   });
 });
 

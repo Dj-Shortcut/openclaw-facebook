@@ -12,6 +12,8 @@ import {
   getOrCreatePersistedState,
   getPersistedState,
   getPersistedStateForPage,
+  mutateExistingPersistedState,
+  mutatePersistedState,
   patchState,
   type MessengerStateFence,
 } from "./messengerStatePersistence";
@@ -222,6 +224,20 @@ export function getOrCreateState(
   psid: string
 ): MaybePromise<MessengerUserState> {
   return getOrCreatePersistedState(psid);
+}
+
+export function mutateState(
+  psid: string,
+  updater: (current: MessengerUserState) => MessengerUserState
+): MaybePromise<MessengerUserState> {
+  return mutatePersistedState(psid, updater);
+}
+
+export function mutateExistingState(
+  psid: string,
+  updater: (current: MessengerUserState) => MessengerUserState
+): MaybePromise<MessengerUserState | null> {
+  return mutateExistingPersistedState(psid, updater);
 }
 
 export function setFlowState(

@@ -1,6 +1,6 @@
 import { handleMessengerConsentGate } from "./consentService";
 import { setPreferredLang } from "./messengerState";
-import { toLogUser } from "./privacy";
+import { toLogUser, toUserKey } from "./privacy";
 import { captureException } from "./observability/sentry";
 import { handlePostbackEvent } from "./webhookPayloadBranch";
 import {
@@ -14,9 +14,17 @@ import {
 } from "./webhookEventContext";
 import { handleMessageEvent } from "./webhookMessageRouter";
 import type { HandlerContext } from "./webhookHandlerTypes";
-import { runWithMessengerRequestContext } from "./messengerRequestContext";
+import {
+  getMessengerRequestOwnership,
+  getMessengerRequestPageId,
+  getMessengerRequestPrivacySubject,
+  runWithMessengerRequestContext,
+} from "./messengerRequestContext";
 import { recordInboundUserActivity } from "./messengerInboundActivity";
-import { resolveMessengerGenerationOwnership } from "./workspaceEntitlementRuntime";
+import {
+  assertMessengerGenerationOwnership,
+  resolveMessengerGenerationOwnership,
+} from "./workspaceEntitlementRuntime";
 
 /** Routes every Messenger event in a Facebook webhook entry. */
 export async function handleEntry(
@@ -32,7 +40,30 @@ export async function handleEntry(
   }
 
   const events = Array.isArray(entry?.messaging) ? entry.messaging : [];
-  const ownership = await resolveMessengerGenerationOwnership(pageId);
+  const expectedPageId = getMessengerRequestPageId();
+  const expectedOwnership = getMessengerRequestOwnership();
+  const expectedPrivacy = getMessengerRequestPrivacySubject();
+  if (expectedPageId && expectedPageId !== pageId) {
+    logMessengerWebhookTrace("webhook_entry_skipped", {
+      reason: "queued_page_scope_mismatch",
+    });
+    return;
+  }
+  if (expectedOwnership) {
+    try {
+      await assertMessengerGenerationOwnership({
+        pageId,
+        ...expectedOwnership,
+      });
+    } catch {
+      logMessengerWebhookTrace("webhook_entry_skipped", {
+        reason: "queued_page_ownership_changed",
+      });
+      return;
+    }
+  }
+  const ownership =
+    expectedOwnership ?? (await resolveMessengerGenerationOwnership(pageId));
   if (!ownership && process.env.NODE_ENV === "production") {
     logMessengerWebhookTrace("webhook_entry_skipped", {
       reason: "page_ownership_unavailable",
@@ -40,10 +71,20 @@ export async function handleEntry(
     return;
   }
   for (const event of events) {
+    if (
+      expectedPrivacy &&
+      (!event.sender?.id ||
+        toUserKey(event.sender.id) !== expectedPrivacy.userKey)
+    ) {
+      logMessengerWebhookTrace("webhook_entry_skipped", {
+        reason: "queued_privacy_subject_mismatch",
+      });
+      continue;
+    }
     await runWithMessengerRequestContext(
       pageId,
       () => handleEvent(ctx, event, pageId),
-      ownership ?? undefined
+      ownership ? { ...ownership, ...(expectedPrivacy ?? {}) } : undefined
     );
   }
 }

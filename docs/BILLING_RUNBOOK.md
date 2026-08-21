@@ -2,14 +2,15 @@
 
 ## Safety boundary
 
-Leaderbot sells its own subscriptions. It is not a marketplace and does not use
-Mollie Connect. The language model, OpenClaw, and customer-facing clients have no
-access to Mollie keys, payouts, settlement movement, or refund mutations.
+Leaderbot sells its own one-time access offer. It is not a marketplace and does
+not use Mollie Connect. The language model, OpenClaw, and customer-facing
+clients have no access to Mollie keys, payouts, settlement movement, or refund
+mutations.
 
-Only the backend may change entitlements. Amount, EUR currency, interval,
+Only the backend may change entitlements. Amount, EUR currency, access period,
 description and quota come from the server catalog. Billing operators may use
-provider IDs for reconciliation, but must not copy customer data or secrets into
-logs, prompts, tickets, or shared diagnostics.
+provider IDs for reconciliation, but must not copy customer data or secrets
+into logs, prompts, tickets, or shared diagnostics.
 
 ## Configuration and test-to-live switch
 
@@ -31,13 +32,14 @@ in production/live mode, without a path, query, or fragment. The webhook URL
 must end exactly in `/api/webhooks/mollie/payments` without a query or
 fragment. Billing readiness rejects these misconfigurations before checkout.
 
-The in-process worker is deliberately tenant-bound. Set
-`MOLLIE_BILLING_WORKER_WORKSPACE_ID` to exactly one workspace in an isolated
-test worker. When billing is enabled, startup and readiness fail if this value
-is absent; checkout for any other workspace fails closed. When billing is
-disabled, readiness does not require Mollie secrets. A durable
-tenant-partitioned multi-workspace dispatcher is still required before live
-SaaS rollout; do not replace this with a cross-tenant database scan.
+The durable DB scheduler is tenant- and mode-partitioned. Set
+`MOLLIE_BILLING_SCHEDULER_MODE=pilot_pin` for an isolated pilot and pair it with
+`MOLLIE_BILLING_WORKER_WORKSPACE_ID`; use `multi_tenant` only after the launch
+decision explicitly authorizes it. Registry rows, execution epochs, leases,
+heartbeats and fairness prevent cross-tenant claims. Disabling commercial
+billing fences checkout/exposure while the safety outbox remains able to drain
+exact cancellation and metadata-only review/notification work. When billing is
+disabled, credential-free readiness does not require a Mollie key.
 
 Switch to live only after `LAUNCH_READINESS.md` is signed off. Install the live
 secret out of band, set `MOLLIE_MODE=live`, verify URLs and methods, and only
@@ -46,18 +48,20 @@ flag; do not delete financial records.
 
 ## Payment-method launch check
 
-The protected `portal.billing.launchCheck` procedure calls Mollie's Methods API
-for first and recurring sequences. It must report:
+The protected `portal.billing.launchCheck` procedure checks the one-time
+payment method for the public Startpilot offer. It must report:
 
 - `bancontact: true`
-- `sepaDirectDebit: true`
+- `offerType: one_time`
+- `paymentSequenceType: oneoff`
+- `sepaDirectDebitRequired: false`
 - `salesCountry: BE`
 - `currency: EUR`
 - `b2bCheckoutEnabled: false`
 
-Bancontact creates a `directdebit` mandate for later collection only when SEPA
-Direct Debit is enabled on the Mollie profile. A pending mandate is rechecked by
-the bounded DB outbox; an invalid/missing mandate becomes manual review.
+The launch offer does not create a recurring mandate or Mollie Subscription.
+Subscription code remains dormant for containment/reconciliation of legacy or
+unexpected remote state and is not a customer launch path.
 
 ## Checkout and webhook verification
 
@@ -65,8 +69,8 @@ the bounded DB outbox; an invalid/missing mandate becomes manual review.
    `APP_BASE_URL`.
 2. Confirm the requested plan code is active in the server catalog.
 3. Confirm a local intent and idempotency key exist before any Payment call.
-4. Confirm the first Payment has `sequenceType=first`, `method=bancontact`, the
-   full first-period EUR amount, customer ID, exact webhook URL, redirect URL,
+4. Confirm the Payment has `sequenceType=oneoff`, `method=bancontact`, the
+   full one-time EUR amount, customer ID, exact webhook URL, redirect URL,
    and only the opaque billing intent in metadata.
 5. Send the browser to `_links.checkout.href` with GET. A redirect is never
    evidence of payment.
@@ -96,51 +100,35 @@ the bounded DB outbox; an invalid/missing mandate becomes manual review.
 
 ## Reconciliation
 
-`runDailyBillingReconciliation(workspaceId)` claims one MySQL lease per
-workspace, mode and UTC date. It reads only that workspace, fetches that
-customer's recent Mollie Payments, re-fetches full snapshots including
-refunds/chargebacks, checks the exact remote Subscription, expires stale
-entitlements, and records metadata-only anomalies. The next daily timestamp is
+The DB scheduler claims one fenced reconciliation lease per workspace and mode.
+It reads only that workspace, fetches that customer's recent Mollie Payments,
+re-fetches full snapshots including refunds/chargebacks, expires stale
+entitlements, and records metadata-only anomalies. The next due timestamp is
 advanced atomically with successful run completion; failed runs are retried.
 
 The task is idempotent through daily lease, payment ledger uniqueness and
 `(workspace_id, mode, mollie_resource_id, snapshot_hash)` delivery uniqueness.
-It does not create refunds, payment retries, payouts, or balance transfers.
-Mollie owns recurring-payment retries. A local stopped/review state paired with
-a remote active Subscription is recorded as an incident anomaly.
+It does not create refunds, payment retries, payouts, balance transfers or a
+new Subscription. Any remote active/pending Subscription discovered for this
+one-time offer is an incident: exact tenant/resource binding is required before
+the safety lane may contain it.
 
 Mollie Balances and Settlements must be reconciled by the authorized accounting
 workflow in live read-only mode. Those APIs are not a Test Mode substitute.
 
-## Cancellation and new payment method
+## One-time access and unexpected recurring state
 
-“Cancel at period end” transactionally marks the local subscription canceled
-and commits an exact-target cancellation job. This closes the provisioning race:
-if a remote Subscription appears after the request, the ensure worker records
-and cancels that orphan. Local access remains only through `paid_through`.
+Startpilot is a one-time purchase. There is no automatic renewal, cancel-at-
+period-end action, mandate replacement or customer payment-method migration.
+Access ends at the recorded entitlement expiry unless a later separately
+authorized one-time offer is purchased.
 
-Changing payment method first creates a new full-period `first` Payment. An
-abandoned or failed checkout leaves the old Subscription untouched. Only after
-the new Payment is confirmed paid does the transaction queue exact cancellation
-of the old Subscription. Creation of the replacement Subscription is blocked on
-successful completion of that cancellation job. If an already-paid period
-remains, the newly purchased period starts after it. The change is allowed only
-for an active Subscription, more than seven days before Mollie's freshly fetched
-next payment date, and when no old-Subscription collection is open, pending,
-authorized, or newly initiated. Past-due recovery remains a billing-support
-flow so a Mollie retry cannot overlap a new full Bancontact payment.
-
-An immediate new subscription after cancellation is blocked until the existing
-`paid_through` period ends. As a second line of defense, every valid new first
-Payment starts after any still-paid local period.
-
-Failed exact cancellation jobs can be re-armed by an explicit cancellation,
-the waiting replacement job, or daily reconciliation. Reconciliation lists the
-tenant Customer's remote Subscriptions and queues exact cancellation for every
-active/pending Subscription that is neither the current contractually matching
-Subscription nor the unique current provisioning intent. Before a containment
-DELETE, the worker locks and revalidates current local state so stale work cannot
-cancel a Subscription that has since become the legitimate current one.
+The subscription/cancellation worker is a safety boundary only. If response
+loss, legacy data or a provider anomaly exposes a remote Subscription, the
+worker first proves exact workspace, mode, customer, source intent and remote
+resource binding. It then records containment and an operator notification;
+scope or metadata mismatch performs no provider mutation and goes to manual
+review. This dormant safety path must never be presented as the launch product.
 
 ## Refunds and chargebacks
 
@@ -157,17 +145,19 @@ cancel a Subscription that has since become the legitimate current one.
 ## Accounting export
 
 Workspace owners/admins can download
-`/api/portal/billing/export.csv?workspaceId=...`. It separates gross sales,
-Mollie fees, refunds, chargebacks and net settlement and includes Payment ID,
-booking date, workspace and proof/invoice number. Spreadsheet formula prefixes
-are escaped. The export states “Bijzondere vrijstellingsregeling kleine
-ondernemingen”.
+`/api/portal/billing/export.csv?workspaceId=...&from=YYYY-MM-DD&until=YYYY-MM-DD`.
+`from` is inclusive, `until` is exclusive, and the requested range may not
+exceed 366 days. The server selects Test or Live mode; the caller does not.
+The export includes gross sales, refunds, chargebacks, Payment ID, booking date,
+workspace and proof/invoice number. Spreadsheet formula prefixes are escaped.
+It states “Bijzondere vrijstellingsregeling kleine ondernemingen”.
 
 Book gross revenue, Mollie fees, refunds and chargebacks separately. Never book
 the net Mollie payout as revenue and do not deduct input VAT under the stated
-small-enterprise exemption without accounting advice. The current ledger does
-not yet import Mollie Balance/Settlement fee lines or settlement IDs, so those
-CSV columns remain empty and the export is not live-accounting complete.
+small-enterprise exemption without accounting advice. The CSV reserves columns
+for Mollie fees, net settlement and settlement ID, but the current ledger does
+not yet import the required Balance/Settlement lines, so those columns remain
+empty and the export is not live-accounting complete.
 
 B2B checkout remains disabled until a real Peppol invoicing provider and
 approved invoice flow exist. A Mollie payment proof is not a Peppol invoice.
@@ -175,7 +165,5 @@ approved invoice flow exist. A Mollie payment proof is not a Peppol invoice.
 ## References
 
 - [Mollie classic webhooks](https://docs.mollie.com/reference/webhooks)
-- [Mollie recurring payments](https://docs.mollie.com/docs/recurring-payments)
 - [Mollie API idempotency](https://docs.mollie.com/reference/api-idempotency)
-- [Mollie Subscriptions API](https://docs.mollie.com/reference/subscriptions-api)
 - [Mollie testing](https://docs.mollie.com/reference/testing)

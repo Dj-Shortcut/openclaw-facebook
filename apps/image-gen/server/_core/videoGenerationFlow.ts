@@ -2,6 +2,7 @@ import { storageDelete, storagePut } from "../storage";
 import {
   appendCostLedgerEntry,
   safelyUpdateCostLedgerEntry,
+  type CostLedgerSubjectScope,
 } from "./costLedger";
 import { safeLog } from "./messengerApi";
 import {
@@ -310,6 +311,16 @@ export function createMessengerVideoGenerationRunner(
       sourceImageUrl,
       promptHint,
     };
+    const costLedgerSubject: CostLedgerSubjectScope | null =
+      ownership && privacyEpoch
+        ? {
+            workspaceId: ownership.workspaceId,
+            channelConnectionId: ownership.channelConnectionId,
+            bindingEpoch: ownership.bindingEpoch,
+            privacyEpoch,
+            userKey: userId,
+          }
+        : null;
     const assertVideoFence = async () => {
       await assertMessengerGenerationOwnership(fenceJob);
       if (ownership && privacyEpoch) {
@@ -414,6 +425,11 @@ export function createMessengerVideoGenerationRunner(
         let providerAttemptCount = 0;
         const commitProviderAttemptQuota = async () => {
           await assertVideoFence();
+          if (!costLedgerSubject) {
+            throw new WorkspaceEntitlementLookupError(
+              "Messenger video generation requires tenant-scoped cost admission"
+            );
+          }
           const budgetNow = new Date();
           providerAttemptCount += 1;
           const providerFence = await reserveMessengerProviderAttemptFence(
@@ -430,6 +446,7 @@ export function createMessengerVideoGenerationRunner(
             const admitted = await admitMessengerProviderSpend({
               reqId,
               attemptId: ledgerEntryId,
+              scope: costLedgerSubject,
               userKey: userId,
               estimatedCostUsd: costEstimate.estimatedCostUsd,
               estimatedOutputCostUsd: null,
@@ -471,6 +488,7 @@ export function createMessengerVideoGenerationRunner(
                 });
                 if (lastVideoLedgerEntryId && lastVideoLedgerEntryRecordedAt) {
                   await safelyUpdateCostLedgerEntry(
+                    costLedgerSubject,
                     lastVideoLedgerEntryId,
                     { status: "provider_attempt_failed" },
                     lastVideoLedgerEntryRecordedAt
@@ -478,6 +496,7 @@ export function createMessengerVideoGenerationRunner(
                 }
                 await appendCostLedgerEntry(
                   {
+                    scope: costLedgerSubject,
                     id: ledgerEntryId,
                     channel: "facebook_messenger",
                     operation: "video_generation",
@@ -542,6 +561,7 @@ export function createMessengerVideoGenerationRunner(
           providerFences.length = 0;
           if (lastVideoLedgerEntryId && lastVideoLedgerEntryRecordedAt) {
             await safelyUpdateCostLedgerEntry(
+              costLedgerSubject!,
               lastVideoLedgerEntryId,
               { status: "provider_attempt_failed" },
               lastVideoLedgerEntryRecordedAt
@@ -581,6 +601,7 @@ export function createMessengerVideoGenerationRunner(
 
         if (lastVideoLedgerEntryId && lastVideoLedgerEntryRecordedAt) {
           await safelyUpdateCostLedgerEntry(
+            costLedgerSubject!,
             lastVideoLedgerEntryId,
             {
               status: "provider_attempt_succeeded",
@@ -598,6 +619,7 @@ export function createMessengerVideoGenerationRunner(
             !lastVideoLedgerEntrySucceeded
           ) {
             await safelyUpdateCostLedgerEntry(
+              costLedgerSubject!,
               lastVideoLedgerEntryId,
               { status: "provider_attempt_failed" },
               lastVideoLedgerEntryRecordedAt
@@ -652,6 +674,7 @@ export function createMessengerVideoGenerationRunner(
             !lastVideoLedgerEntrySucceeded
           ) {
             await safelyUpdateCostLedgerEntry(
+              costLedgerSubject!,
               lastVideoLedgerEntryId,
               { status: "provider_attempt_failed" },
               lastVideoLedgerEntryRecordedAt
@@ -712,6 +735,7 @@ export function createMessengerVideoGenerationRunner(
           !lastVideoLedgerEntrySucceeded
         ) {
           await safelyUpdateCostLedgerEntry(
+            costLedgerSubject!,
             lastVideoLedgerEntryId,
             { status: "provider_attempt_failed" },
             lastVideoLedgerEntryRecordedAt

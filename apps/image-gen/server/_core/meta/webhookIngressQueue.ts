@@ -8,8 +8,16 @@ import {
 } from "../redis";
 import { safeLog } from "../messengerApi";
 import { toUserKey } from "../privacy";
-import { ensureActiveMessengerPrivacySubject } from "../messengerPrivacySubject";
-import { resolveMessengerGenerationOwnership } from "../workspaceEntitlementRuntime";
+import {
+  assertMessengerPrivacySubject,
+  ensureActiveMessengerPrivacySubject,
+} from "../messengerPrivacySubject";
+import { runWithMessengerRequestContext } from "../messengerRequestContext";
+import { registerMessengerPrivacyOwnership } from "../messengerPrivacyOwnershipHistory";
+import {
+  assertMessengerGenerationOwnership,
+  resolveMessengerGenerationOwnership,
+} from "../workspaceEntitlementRuntime";
 
 const WEBHOOK_INGRESS_QUEUE_KEY = "{meta-webhook-ingress}:queued";
 const WEBHOOK_INGRESS_PROCESSING_KEY = "{meta-webhook-ingress}:processing";
@@ -52,6 +60,7 @@ type ReservedWebhookDelivery = {
 
 let drainPromise: Promise<void> | null = null;
 let drainRequested = false;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
 function serializeError(error: unknown): {
   class: string;
@@ -296,6 +305,18 @@ async function createFacebookIngressDeliveries(
         channelConnectionId: ownership.channelConnectionId,
         userKey,
       });
+      // Register the immutable owner before any raw event content can be
+      // committed. A Page transfer after enqueue can then fan GDPR erasure
+      // out to this historical scope even when no conversation state exists.
+      await registerMessengerPrivacyOwnership({
+        pageId,
+        userKey,
+        workspaceId: ownership.workspaceId,
+        channelConnectionId: ownership.channelConnectionId,
+        bindingEpoch: ownership.bindingEpoch,
+        privacyEpoch,
+        channel: "facebook_messenger",
+      });
       deliveries.push({
         payload: { object, entry: [{ ...entry, messaging: [event] }] },
         subjects: [{ ...ownership, userKey, privacyEpoch }],
@@ -319,15 +340,91 @@ async function processFacebookWebhookPayloadSafely(
   await module.processFacebookWebhookPayload(payload);
 }
 
-async function processQueuedWebhookDelivery(
+function getFacebookIngressSubject(
   delivery: QueuedWebhookDelivery
+): WebhookIngressSubject {
+  if (delivery.subjects.length !== 1) {
+    throw new Error("Queued Messenger ingress requires one immutable subject");
+  }
+  const subject = delivery.subjects[0];
+  const payload = delivery.payload;
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Queued Messenger ingress payload is invalid");
+  }
+  const entries = (payload as { entry?: unknown }).entry;
+  if (!Array.isArray(entries) || entries.length !== 1) {
+    throw new Error("Queued Messenger ingress requires one Page entry");
+  }
+  const entry = entries[0];
+  if (
+    !entry ||
+    typeof entry !== "object" ||
+    (entry as { id?: unknown }).id !== subject.pageId
+  ) {
+    throw new Error("Queued Messenger ingress Page scope is invalid");
+  }
+  const messaging = (entry as { messaging?: unknown }).messaging;
+  if (!Array.isArray(messaging) || messaging.length !== 1) {
+    throw new Error("Queued Messenger ingress requires one event");
+  }
+  const event = messaging[0];
+  const sender =
+    event && typeof event === "object"
+      ? (event as { sender?: unknown }).sender
+      : undefined;
+  const recipient =
+    event && typeof event === "object"
+      ? (event as { recipient?: unknown }).recipient
+      : undefined;
+  const senderId =
+    sender && typeof sender === "object"
+      ? (sender as { id?: unknown }).id
+      : undefined;
+  const recipientId =
+    recipient && typeof recipient === "object"
+      ? (recipient as { id?: unknown }).id
+      : undefined;
+  if (
+    typeof senderId !== "string" ||
+    toUserKey(senderId) !== subject.userKey ||
+    recipientId !== subject.pageId
+  ) {
+    throw new Error("Queued Messenger ingress subject does not match payload");
+  }
+  return subject;
+}
+
+async function processQueuedWebhookDelivery(
+  delivery: QueuedWebhookDelivery,
+  options: { allowUnscopedTestDelivery?: boolean } = {}
 ): Promise<void> {
   if (delivery.channel === "whatsapp") {
     await processWhatsAppWebhookPayloadSafely(delivery.payload);
     return;
   }
 
-  await processFacebookWebhookPayloadSafely(delivery.payload);
+  if (
+    options.allowUnscopedTestDelivery &&
+    process.env.NODE_ENV === "test" &&
+    delivery.subjects.length === 0
+  ) {
+    await processFacebookWebhookPayloadSafely(delivery.payload);
+    return;
+  }
+
+  const subject = getFacebookIngressSubject(delivery);
+  await assertMessengerGenerationOwnership(subject);
+  await assertMessengerPrivacySubject({
+    workspaceId: subject.workspaceId,
+    channelConnectionId: subject.channelConnectionId,
+    userKey: subject.userKey,
+    privacyEpoch: subject.privacyEpoch,
+  });
+  await runWithMessengerRequestContext(
+    subject.pageId,
+    () => processFacebookWebhookPayloadSafely(delivery.payload),
+    subject
+  );
 }
 
 export function isWebhookIngressQueueEnabled(): boolean {
@@ -548,9 +645,72 @@ async function moveFailedWebhookIngressDelivery(
   destinationKey: string,
   serializedDelivery: string,
   pushDirection: "LPUSH" | "RPUSH"
-): Promise<void> {
-  const removed = await redis.eval(
-    `
+): Promise<"moved" | "erased"> {
+  if (reserved.legacyInline) {
+    const removed = await redis.eval(
+      `
+        local processingType = redis.call("TYPE", KEYS[1]).ok
+        if processingType ~= "none" and processingType ~= "list" then
+          return redis.error_reply("processing key is not a list")
+        end
+
+        local leaseType = redis.call("TYPE", KEYS[2]).ok
+        if leaseType ~= "none" and leaseType ~= "string" then
+          return redis.error_reply("lease key is not a string")
+        end
+
+        local destinationType = redis.call("TYPE", KEYS[3]).ok
+        if destinationType ~= "none" and destinationType ~= "list" then
+          return redis.error_reply("destination key is not a list")
+        end
+
+        local found = 0
+        local processingDeliveries = redis.call("LRANGE", KEYS[1], 0, -1)
+        for i = 1, #processingDeliveries do
+          if processingDeliveries[i] == ARGV[1] then
+            found = 1
+            break
+          end
+        end
+
+        if found == 0 then return 0 end
+
+        redis.call(ARGV[2], KEYS[3], ARGV[3])
+        if ARGV[4] == "dead" then
+          redis.call("LTRIM", KEYS[3], -tonumber(ARGV[5]), -1)
+          redis.call("EXPIRE", KEYS[3], ARGV[6])
+        end
+        local removed = redis.call("LREM", KEYS[1], 1, ARGV[1])
+        if removed > 0 then redis.call("DEL", KEYS[2]) end
+        return removed
+      `,
+      3,
+      WEBHOOK_INGRESS_PROCESSING_KEY,
+      getWebhookIngressDeliveryLeaseKey(reserved.raw),
+      destinationKey,
+      reserved.raw,
+      pushDirection,
+      serializedDelivery,
+      destinationKey === WEBHOOK_INGRESS_DEAD_LETTER_KEY ? "dead" : "retry",
+      DEFAULT_WEBHOOK_INGRESS_DEAD_MAX_ITEMS,
+      getWebhookIngressContentTtlSeconds()
+    );
+
+    if (removed !== 1) {
+      throw new Error("Reserved webhook delivery was not found in processing");
+    }
+    return "moved";
+  }
+
+  const delivery = reserved.delivery;
+  const subjectIndexKeys = delivery.subjects.map(getWebhookIngressSubjectKey);
+  const subjectTombstoneKeys = delivery.subjects.map(
+    getWebhookIngressSubjectTombstoneKey
+  );
+  const transition = Number(
+    await redis.eval(
+      `
+      local subjectCount = tonumber(ARGV[7])
       local processingType = redis.call("TYPE", KEYS[1]).ok
       if processingType ~= "none" and processingType ~= "list" then
         return redis.error_reply("processing key is not a list")
@@ -566,6 +726,42 @@ async function moveFailedWebhookIngressDelivery(
         return redis.error_reply("destination key is not a list")
       end
 
+      local contentType = redis.call("TYPE", KEYS[4]).ok
+      if contentType ~= "none" and contentType ~= "string" then
+        return redis.error_reply("delivery content key is not a string")
+      end
+
+      local erased = tonumber(ARGV[5]) <= tonumber(ARGV[6])
+      for i = 1, subjectCount do
+        local indexType = redis.call("TYPE", KEYS[4 + i]).ok
+        if indexType ~= "none" and indexType ~= "set" then
+          return redis.error_reply("subject index key is not a set")
+        end
+        local tombstoneType = redis.call("TYPE", KEYS[4 + subjectCount + i]).ok
+        if tombstoneType ~= "none" and tombstoneType ~= "string" then
+          return redis.error_reply("subject tombstone key is not a string")
+        end
+        local erasedEpoch = tonumber(
+          redis.call("GET", KEYS[4 + subjectCount + i]) or "0"
+        )
+        if erasedEpoch >= tonumber(ARGV[7 + i]) then erased = true end
+      end
+
+      local function scrubDelivery()
+        redis.call("LREM", KEYS[1], 0, ARGV[1])
+        redis.call("LREM", KEYS[3], 0, ARGV[1])
+        redis.call("DEL", KEYS[2])
+        redis.call("DEL", KEYS[4])
+        for i = 1, subjectCount do
+          redis.call("SREM", KEYS[4 + i], ARGV[1])
+        end
+      end
+
+      if erased then
+        scrubDelivery()
+        return -1
+      end
+
       local found = 0
       local processingDeliveries = redis.call("LRANGE", KEYS[1], 0, -1)
       for i = 1, #processingDeliveries do
@@ -579,32 +775,62 @@ async function moveFailedWebhookIngressDelivery(
         return 0
       end
 
-      redis.call(ARGV[2], KEYS[3], ARGV[3])
-      if ARGV[4] == "dead" then
-        redis.call("LTRIM", KEYS[3], -tonumber(ARGV[5]), -1)
-        redis.call("EXPIRE", KEYS[3], ARGV[6])
+      local function extendDeadline(key, deadline)
+        local ttl = redis.call("PTTL", key)
+        if ttl < 0 then
+          redis.call("PEXPIREAT", key, deadline)
+        else
+          redis.call("PEXPIREAT", key, deadline, "GT")
+        end
+      end
+
+      if ARGV[2] == "dead" then
+        redis.call("RPUSH", KEYS[3], ARGV[1])
+        redis.call("LTRIM", KEYS[3], -tonumber(ARGV[4]), -1)
+        extendDeadline(KEYS[3], ARGV[5])
+        redis.call("DEL", KEYS[4])
+        for i = 1, subjectCount do
+          redis.call("SREM", KEYS[4 + i], ARGV[1])
+        end
+      else
+        redis.call("SET", KEYS[4], ARGV[3], "PXAT", ARGV[5])
+        redis.call("RPUSH", KEYS[3], ARGV[1])
+        extendDeadline(KEYS[3], ARGV[5])
+        for i = 1, subjectCount do
+          redis.call("SADD", KEYS[4 + i], ARGV[1])
+          extendDeadline(KEYS[4 + i], ARGV[5])
+        end
       end
       local removed = redis.call("LREM", KEYS[1], 1, ARGV[1])
-      if removed > 0 then
-        redis.call("DEL", KEYS[2])
-      end
-      return removed
+      if removed > 0 then redis.call("DEL", KEYS[2]) end
+      if ARGV[2] == "dead" then return 2 end
+      return 1
     `,
-    3,
-    WEBHOOK_INGRESS_PROCESSING_KEY,
-    getWebhookIngressDeliveryLeaseKey(reserved.raw),
-    destinationKey,
-    reserved.raw,
-    pushDirection,
-    serializedDelivery,
-    destinationKey === WEBHOOK_INGRESS_DEAD_LETTER_KEY ? "dead" : "retry",
-    DEFAULT_WEBHOOK_INGRESS_DEAD_MAX_ITEMS,
-    getWebhookIngressContentTtlSeconds()
+      4 + subjectIndexKeys.length + subjectTombstoneKeys.length,
+      WEBHOOK_INGRESS_PROCESSING_KEY,
+      getWebhookIngressDeliveryLeaseKey(reserved.raw),
+      destinationKey,
+      getWebhookIngressDeliveryKey(delivery.deliveryId),
+      ...subjectIndexKeys,
+      ...subjectTombstoneKeys,
+      reserved.raw,
+      destinationKey === WEBHOOK_INGRESS_DEAD_LETTER_KEY ? "dead" : "retry",
+      serializedDelivery,
+      DEFAULT_WEBHOOK_INGRESS_DEAD_MAX_ITEMS,
+      delivery.expiresAt,
+      Date.now(),
+      delivery.subjects.length,
+      ...delivery.subjects.map(subject => subject.privacyEpoch)
+    )
   );
 
-  if (removed !== 1) {
+  if (transition === -1) return "erased";
+  const expectedTransition =
+    destinationKey === WEBHOOK_INGRESS_DEAD_LETTER_KEY ? 2 : 1;
+  if (transition !== expectedTransition) {
     throw new Error("Reserved webhook delivery was not found in processing");
   }
+  return "moved";
 }
 
 async function releaseFailedWebhookIngressDelivery(
@@ -612,18 +838,6 @@ async function releaseFailedWebhookIngressDelivery(
   reserved: ReservedWebhookDelivery,
   error: unknown
 ): Promise<"requeued" | "dead_lettered" | "erased"> {
-  if (
-    !reserved.legacyInline &&
-    (await isWebhookIngressDeliveryErased(redis, reserved.delivery))
-  ) {
-    await completeWebhookIngressDelivery(
-      redis,
-      reserved.raw,
-      reserved.delivery,
-      false
-    );
-    return "erased";
-  }
   const attempts = (reserved.delivery.attempts ?? 0) + 1;
   const retryDelivery: QueuedWebhookDelivery = {
     ...reserved.delivery,
@@ -631,7 +845,7 @@ async function releaseFailedWebhookIngressDelivery(
   };
   const serializedRetryDelivery = JSON.stringify(retryDelivery);
   const serializedError = serializeError(error);
-  if (reserved.delivery.expiresAt <= Date.now()) {
+  if (reserved.legacyInline && reserved.delivery.expiresAt <= Date.now()) {
     await completeWebhookIngressDelivery(
       redis,
       reserved.raw,
@@ -642,12 +856,7 @@ async function releaseFailedWebhookIngressDelivery(
   }
 
   if (attempts >= getWebhookIngressMaxAttempts()) {
-    if (!reserved.legacyInline) {
-      await redis.del(
-        getWebhookIngressDeliveryKey(reserved.delivery.deliveryId)
-      );
-    }
-    await moveFailedWebhookIngressDelivery(
+    const transition = await moveFailedWebhookIngressDelivery(
       redis,
       reserved,
       WEBHOOK_INGRESS_DEAD_LETTER_KEY,
@@ -656,6 +865,7 @@ async function releaseFailedWebhookIngressDelivery(
         : reserved.delivery.deliveryId,
       "RPUSH"
     );
+    if (transition === "erased") return "erased";
     safeLog("webhook_queued_delivery_dead_lettered", {
       channel: reserved.delivery.channel,
       attempts,
@@ -664,15 +874,7 @@ async function releaseFailedWebhookIngressDelivery(
     return "dead_lettered";
   }
 
-  if (!reserved.legacyInline) {
-    await redis.set(
-      getWebhookIngressDeliveryKey(reserved.delivery.deliveryId),
-      serializedRetryDelivery,
-      "PXAT",
-      reserved.delivery.expiresAt
-    );
-  }
-  await moveFailedWebhookIngressDelivery(
+  const transition = await moveFailedWebhookIngressDelivery(
     redis,
     reserved,
     WEBHOOK_INGRESS_QUEUE_KEY,
@@ -681,6 +883,7 @@ async function releaseFailedWebhookIngressDelivery(
       : reserved.delivery.deliveryId,
     "RPUSH"
   );
+  if (transition === "erased") return "erased";
   safeLog("webhook_queued_delivery_requeued", {
     channel: reserved.delivery.channel,
     attempts,
@@ -869,7 +1072,9 @@ export function scheduleWebhookIngressDrain(): void {
           }
 
           try {
-            await processQueuedWebhookDelivery(reserved.delivery);
+            await processQueuedWebhookDelivery(reserved.delivery, {
+              allowUnscopedTestDelivery: reserved.legacyInline,
+            });
           } catch (error) {
             const result = await releaseFailedWebhookIngressDelivery(
               redis,
@@ -879,7 +1084,8 @@ export function scheduleWebhookIngressDrain(): void {
             if (result === "dead_lettered" || result === "erased") {
               continue;
             }
-            setTimeout(() => {
+            retryTimer = setTimeout(() => {
+              retryTimer = null;
               drainRequested = true;
               if (!drainPromise) scheduleWebhookIngressDrain();
             }, getWebhookIngressRetryDelayMs());
@@ -917,14 +1123,17 @@ export function processWebhookDeliveryInline(
   }
   const now = Date.now();
   setImmediate(() => {
-    void processQueuedWebhookDelivery({
-      deliveryId: "inline",
-      channel,
-      payload,
-      receivedAt: new Date(now).toISOString(),
-      expiresAt: now + getWebhookIngressContentTtlSeconds() * 1_000,
-      subjects: [],
-    }).catch(error => {
+    void processQueuedWebhookDelivery(
+      {
+        deliveryId: "inline",
+        channel,
+        payload,
+        receivedAt: new Date(now).toISOString(),
+        expiresAt: now + getWebhookIngressContentTtlSeconds() * 1_000,
+        subjects: [],
+      },
+      { allowUnscopedTestDelivery: true }
+    ).catch(error => {
       safeLog("webhook_async_processing_failed", {
         channel,
         error: serializeError(error),
@@ -935,6 +1144,8 @@ export function processWebhookDeliveryInline(
 
 export function resetWebhookIngressQueueForTests(): void {
   resetRedisClientForTests();
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = null;
   drainPromise = null;
   drainRequested = false;
 }

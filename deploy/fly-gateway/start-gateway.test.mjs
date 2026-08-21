@@ -7,6 +7,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
   buildGatewayLaunchPlan,
   isAdminHostAllowed,
@@ -57,6 +58,12 @@ function runPrepareGatewayConfig(env) {
         : null,
       memory: fs.existsSync(process.env.OPENCLAW_WORKSPACE_DIR + "/MEMORY.md")
         ? fs.readFileSync(process.env.OPENCLAW_WORKSPACE_DIR + "/MEMORY.md", "utf8")
+        : null,
+      quarantinedUser: fs.existsSync(process.env.OPENCLAW_STATE_DIR + "/private-memory-quarantine-v1/USER.md")
+        ? fs.readFileSync(process.env.OPENCLAW_STATE_DIR + "/private-memory-quarantine-v1/USER.md", "utf8")
+        : null,
+      quarantinedMemory: fs.existsSync(process.env.OPENCLAW_STATE_DIR + "/private-memory-quarantine-v1/MEMORY.md")
+        ? fs.readFileSync(process.env.OPENCLAW_STATE_DIR + "/private-memory-quarantine-v1/MEMORY.md", "utf8")
         : null
     }));
   `;
@@ -272,9 +279,107 @@ describe("Fly gateway startup", () => {
         primary: "openai/gpt-5.4-mini",
       });
       expect(config.agents.defaults.thinkingDefault).toBe("low");
+      expect(config.session.dmScope).toBe("per-account-channel-peer");
+      expect(config.attachments.ttlHours).toBe(24);
       expect(config.tools.deny).toContain("image_generate");
-      expect(result.memory).toBe(
-        "# Memory\n\nPersistent assistant memory for this OpenClaw workspace.\n",
+      expect(result.memory).toBeNull();
+    },
+    prepareGatewayConfigTimeoutMs,
+  );
+
+  it(
+    "bounds persisted attachment cleanup without discarding safe attachment settings",
+    () => {
+      const { stateDir } = configureTempGatewayEnv();
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "openclaw.json"),
+        `${JSON.stringify({
+          attachments: { ttlHours: 168, preserveFilenames: false },
+        })}\n`,
+        "utf8",
+      );
+
+      const { config } = runPrepareGatewayConfig({});
+      expect(config.attachments).toEqual({
+        ttlHours: 24,
+        preserveFilenames: false,
+      });
+    },
+    prepareGatewayConfigTimeoutMs,
+  );
+
+  it(
+    "forces public Messenger DMs into account, channel, and sender scoped sessions",
+    () => {
+      const { stateDir } = configureTempGatewayEnv();
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "openclaw.json"),
+        `${JSON.stringify({
+          session: {
+            dmScope: "main",
+            reset: { mode: "daily", atHour: 4 },
+          },
+          bindings: [
+            {
+              agentId: "main",
+              match: { channel: "facebook", accountId: "*" },
+              session: { dmScope: "main" },
+            },
+          ],
+        })}\n`,
+        "utf8",
+      );
+
+      const { config } = runPrepareGatewayConfig({});
+      expect(config.session).toEqual({
+        dmScope: "per-account-channel-peer",
+        reset: { mode: "daily", atHour: 4 },
+      });
+      expect(config.bindings[0].session.dmScope).toBe(
+        "per-account-channel-peer",
+      );
+
+      const sessionKeys = [
+        ["page-account-a", "sender-1"],
+        ["page-account-a", "sender-2"],
+        ["page-account-b", "sender-1"],
+      ].map(
+        ([accountId, senderId]) =>
+          resolveAgentRoute({
+            cfg: config,
+            channel: "facebook",
+            accountId,
+            peer: { kind: "direct", id: senderId },
+          }).sessionKey,
+      );
+
+      expect(new Set(sessionKeys)).toHaveLength(3);
+    },
+    prepareGatewayConfigTimeoutMs,
+  );
+
+  it(
+    "fails startup when a persisted Facebook binding routes to a shared secondary agent",
+    () => {
+      const { stateDir } = configureTempGatewayEnv();
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(stateDir, "openclaw.json"),
+        `${JSON.stringify({
+          bindings: [
+            {
+              agentId: "support",
+              match: { channel: "facebook", accountId: "*" },
+            },
+          ],
+        })}\n`,
+        "utf8",
+      );
+
+      expect(() => runPrepareGatewayConfig({})).toThrow(
+        "Public Facebook routes must use the isolated main agent",
       );
     },
     prepareGatewayConfigTimeoutMs,
@@ -299,27 +404,36 @@ describe("Fly gateway startup", () => {
   );
 
   it(
-    "binds OpenAI-backed memory search to the deployed env secret",
+    "disables public memory even when an OpenAI key is available",
     () => {
       configureTempGatewayEnv();
       const result = runPrepareGatewayConfig({
         OPENAI_API_KEY: "present-but-redacted",
       });
-      const expectedRef = {
-        source: "env",
-        provider: "default",
-        id: "OPENAI_API_KEY",
-      };
-
-      expect(result.config.memory.search.provider).toBe("openai");
-      expect(result.config.memory.search.remote.apiKey).toEqual(expectedRef);
+      expect(result.config.memory).toBeUndefined();
+      expect(result.config.plugins.slots.memory).toBe("none");
+      expect(result.config.plugins.entries["memory-core"].enabled).toBe(false);
+      expect(result.config.hooks.internal.entries["session-memory"]).toEqual({
+        enabled: false,
+      });
+      expect(result.config.agents.defaults.compaction.memoryFlush).toEqual({
+        enabled: false,
+      });
       expect(result.config.agents.defaults.memory).toBeUndefined();
+      expect(result.config.tools.deny).toEqual(
+        expect.arrayContaining([
+          "memory_search",
+          "memory_get",
+          "memory_recall",
+          "group:memory",
+        ]),
+      );
     },
     prepareGatewayConfigTimeoutMs,
   );
 
   it(
-    "preserves per-agent memory settings while binding OpenAI secret refs",
+    "removes persisted per-agent memory settings from the public gateway",
     () => {
       const { stateDir } = configureTempGatewayEnv();
       fs.mkdirSync(stateDir, { recursive: true });
@@ -356,23 +470,8 @@ describe("Fly gateway startup", () => {
       const result = runPrepareGatewayConfig({
         OPENAI_API_KEY: "present-but-redacted",
       });
-      const expectedRef = {
-        source: "env",
-        provider: "default",
-        id: "OPENAI_API_KEY",
-      };
-
-      expect(result.config.agents.defaults.memory).toEqual({
-        rememberAcrossConversations: false,
-        search: { provider: "local", local: { model: "existing" } },
-      });
-      expect(result.config.agents.entries.support.memory).toEqual({
-        rememberAcrossConversations: true,
-        search: {
-          provider: "openai",
-          remote: { model: "existing", apiKey: expectedRef },
-        },
-      });
+      expect(result.config.agents.defaults.memory).toBeUndefined();
+      expect(result.config.agents.entries.support.memory).toBeUndefined();
     },
     prepareGatewayConfigTimeoutMs,
   );
@@ -447,7 +546,7 @@ describe("Fly gateway startup", () => {
   );
 
   it(
-    "keeps an existing persistent memory file",
+    "quarantines existing shared public memory before startup",
     () => {
       const { workspaceDir } = configureTempGatewayEnv();
       fs.mkdirSync(workspaceDir, { recursive: true });
@@ -458,13 +557,14 @@ describe("Fly gateway startup", () => {
 
       const result = runPrepareGatewayConfig({});
 
-      expect(result.memory).toBe("existing memory\n");
+      expect(result.memory).toBeNull();
+      expect(result.quarantinedMemory).toBe("existing memory\n");
     },
     prepareGatewayConfigTimeoutMs,
   );
 
   it(
-    "migrates missing legacy workspace markdowns without overwriting persistent files",
+    "migrates only static legacy instructions and quarantines user memory",
     () => {
       const { workspaceDir, homeDir } = configureTempGatewayEnv();
       const legacyWorkspace = path.join(homeDir, ".openclaw", "workspace");
@@ -480,7 +580,8 @@ describe("Fly gateway startup", () => {
       const result = runPrepareGatewayConfig({});
 
       expect(result.agents).toBe("legacy agents\n");
-      expect(result.user).toBe("persistent user\n");
+      expect(result.user).toBeNull();
+      expect(result.quarantinedUser).toBe("persistent user\n");
     },
     prepareGatewayConfigTimeoutMs,
   );
@@ -675,7 +776,9 @@ describe("Fly gateway startup", () => {
 
     const publicPort = guard.address().port;
     const portalRoot = await fetch(`http://127.0.0.1:${publicPort}/`);
-    const portalDashboard = await fetch(`http://127.0.0.1:${publicPort}/portal`);
+    const portalDashboard = await fetch(
+      `http://127.0.0.1:${publicPort}/portal`,
+    );
     const portalHandoff = await fetch(`http://127.0.0.1:${publicPort}/handoff`);
     const portalHandoffToken = await fetch(
       `http://127.0.0.1:${publicPort}/handoff/setup-token`,

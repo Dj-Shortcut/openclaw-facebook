@@ -4,6 +4,9 @@ const {
   executeGenerationFlowMock,
   assertMessengerGenerationOwnershipMock,
   reserveStartpilotImageUsageMock,
+  reserveProviderFenceMock,
+  markProviderFenceStartedMock,
+  finalizeProviderFenceMock,
   resolveWorkspaceRuntimePolicyMock,
   safeLogMock,
   sendButtonTemplateMock,
@@ -14,6 +17,9 @@ const {
   executeGenerationFlowMock: vi.fn(),
   assertMessengerGenerationOwnershipMock: vi.fn(),
   reserveStartpilotImageUsageMock: vi.fn(),
+  reserveProviderFenceMock: vi.fn(),
+  markProviderFenceStartedMock: vi.fn(),
+  finalizeProviderFenceMock: vi.fn(),
   resolveWorkspaceRuntimePolicyMock: vi.fn(),
   safeLogMock: vi.fn(),
   sendButtonTemplateMock: vi.fn(async () => ({ sent: true })),
@@ -33,6 +39,12 @@ vi.mock("./_core/workspaceEntitlementRuntime", () => ({
 
 vi.mock("./_core/billing/entitlementUsageStore", () => ({
   reserveStartpilotImageUsage: reserveStartpilotImageUsageMock,
+}));
+
+vi.mock("./_core/messengerProviderAttemptFence", () => ({
+  reserveMessengerProviderAttemptFence: reserveProviderFenceMock,
+  markMessengerProviderAttemptStarted: markProviderFenceStartedMock,
+  finalizeMessengerProviderAttemptFence: finalizeProviderFenceMock,
 }));
 
 vi.mock("./_core/messengerApi", () => ({
@@ -91,6 +103,15 @@ beforeEach(() => {
   assertMessengerGenerationOwnershipMock.mockResolvedValue(undefined);
   reserveStartpilotImageUsageMock.mockReset();
   reserveStartpilotImageUsageMock.mockResolvedValue({ allowed: true });
+  reserveProviderFenceMock.mockReset();
+  reserveProviderFenceMock.mockResolvedValue({
+    leaseToken: "provider-fence-lease",
+    attemptKeyHash: "a".repeat(64),
+  });
+  markProviderFenceStartedMock.mockReset();
+  markProviderFenceStartedMock.mockResolvedValue(undefined);
+  finalizeProviderFenceMock.mockReset();
+  finalizeProviderFenceMock.mockResolvedValue(undefined);
   resolveWorkspaceRuntimePolicyMock.mockReset();
   resolveWorkspaceRuntimePolicyMock.mockResolvedValue({ kind: "free" });
   safeLogMock.mockReset();
@@ -391,7 +412,8 @@ describe("messenger generation job safety", () => {
   it("commits image quota when generation fails after provider attempt starts", async () => {
     const runner = createTestRunner();
     executeGenerationFlowMock.mockImplementationOnce(async input => {
-      await input.onProviderAttempt();
+      const admission = await input.onProviderAttempt();
+      await admission?.markTransportStarted();
       return failureGenerationResult();
     });
 
@@ -408,6 +430,70 @@ describe("messenger generation job safety", () => {
     expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not consume free quota when the durable provider fence loses", async () => {
+    markProviderFenceStartedMock.mockRejectedValueOnce(
+      new Error("provider fence lost")
+    );
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      const admission = await input.onProviderAttempt();
+      try {
+        await admission?.markTransportStarted();
+      } catch {
+        await admission?.abortBeforeTransport();
+      }
+      return failureGenerationResult();
+    });
+    const runner = createTestRunner();
+
+    await runner.processMessengerGenerationJob({
+      psid: "free-fence-loss-user",
+      userId: "free-fence-loss-user-key",
+      pageId: "free-fence-loss-page",
+      reqId: "req-free-fence-loss",
+      lang: "nl",
+    });
+
+    expect(getState("free-fence-loss-user")?.quota.count ?? 0).toBe(0);
+    expect(markProviderFenceStartedMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not consume Startpilot quota when the durable provider fence loses", async () => {
+    resolveWorkspaceRuntimePolicyMock.mockResolvedValueOnce({
+      kind: "startpilot",
+      workspaceId: 42,
+      entitlementId: 9,
+      mode: "test",
+      imageTotalLimit: 20,
+      imageDailyLimit: 5,
+      imageModel: "gpt-image-2",
+      imageQuality: "high",
+    });
+    markProviderFenceStartedMock.mockRejectedValueOnce(
+      new Error("provider fence lost")
+    );
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      const admission = await input.onProviderAttempt();
+      try {
+        await admission?.markTransportStarted();
+      } catch {
+        await admission?.abortBeforeTransport();
+      }
+      return failureGenerationResult();
+    });
+    const runner = createTestRunner();
+
+    await runner.processMessengerGenerationJob({
+      psid: "startpilot-fence-loss-user",
+      userId: "startpilot-fence-loss-user-key",
+      pageId: "startpilot-fence-loss-page",
+      reqId: "req-startpilot-fence-loss",
+      lang: "nl",
+    });
+
+    expect(markProviderFenceStartedMock).toHaveBeenCalledOnce();
+    expect(reserveStartpilotImageUsageMock).not.toHaveBeenCalled();
+  });
+
   it("charges one Startpilot image unit across provider retries", async () => {
     resolveWorkspaceRuntimePolicyMock.mockResolvedValueOnce({
       kind: "startpilot",
@@ -420,8 +506,10 @@ describe("messenger generation job safety", () => {
       imageQuality: "high",
     });
     executeGenerationFlowMock.mockImplementationOnce(async input => {
-      await input.onProviderAttempt();
-      await input.onProviderAttempt();
+      const firstAdmission = await input.onProviderAttempt();
+      await firstAdmission?.markTransportStarted();
+      const secondAdmission = await input.onProviderAttempt();
+      await secondAdmission?.markTransportStarted();
       return failureGenerationResult();
     });
     const runner = createTestRunner();
@@ -447,9 +535,11 @@ describe("messenger generation job safety", () => {
     process.env.MESSENGER_FREE_DAILY_LIMIT = "1";
     const runner = createTestRunner();
     executeGenerationFlowMock.mockImplementationOnce(async input => {
-      await input.onProviderAttempt();
+      const firstAdmission = await input.onProviderAttempt();
+      await firstAdmission?.markTransportStarted();
       try {
-        await input.onProviderAttempt();
+        const secondAdmission = await input.onProviderAttempt();
+        await secondAdmission?.markTransportStarted();
       } catch (error) {
         return {
           kind: "error",

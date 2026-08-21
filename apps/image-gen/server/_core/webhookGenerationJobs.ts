@@ -44,6 +44,7 @@ import {
   isMessengerGenerationQueueEnabled,
 } from "./messengerGenerationQueue";
 import {
+  createMessengerGenerationPublishHooks,
   getMessengerGenerationCompletion,
   markMessengerGenerationCompleted,
   markMessengerGenerationDelivered,
@@ -73,7 +74,6 @@ import {
   MessengerPrivacyFenceError,
 } from "./messengerPrivacySubject";
 import { reserveStartpilotImageUsage } from "./billing/entitlementUsageStore";
-import { storageDelete, storageKeyFromPublicUrl } from "../storage";
 import {
   finalizeMessengerProviderAttemptFence,
   markMessengerProviderAttemptStarted,
@@ -208,6 +208,14 @@ export function createMessengerGenerationJobRunner(
         let providerAttemptsCommitted = 0;
         let providerFenceSequence = 0;
         const providerFences: MessengerProviderAttemptFence[] = [];
+        const finalizeKnownProviderSuccess = async (): Promise<void> => {
+          const fences = providerFences.splice(0, providerFences.length);
+          await Promise.all(
+            fences.map(fence =>
+              finalizeMessengerProviderAttemptFence(fence, "succeeded")
+            )
+          );
+        };
         try {
           await setFlowState(psid, "PROCESSING");
           await sendGenerationStartedAck({
@@ -239,13 +247,13 @@ export function createMessengerGenerationJobRunner(
               providerFenceSequence
             );
             try {
+              let reservationForAttempt: ImageGenerationQuotaReservation | null =
+                null;
               if (workspacePolicy.kind === "startpilot") {
-                if (providerAttemptsCommitted === 0) {
-                  await commitStartpilotProviderAttempt(workspacePolicy);
-                  providerAttemptsCommitted += 1;
-                }
+                // Startpilot usage is committed only after the durable cost
+                // ledger record exists, immediately before transport starts.
               } else {
-                const reservationForAttempt =
+                reservationForAttempt =
                   pendingQuotaReservation ??
                   (await reserveMessengerGenerationQuota({
                     psid,
@@ -256,19 +264,56 @@ export function createMessengerGenerationJobRunner(
                 if (!reservationForAttempt) {
                   throw new MessengerQuotaReservationCommitError();
                 }
-
-                await commitMessengerGenerationQuota({
-                  psid,
-                  reservation: reservationForAttempt,
-                  generationKind: resolvedGenerationKind,
-                });
-                providerAttemptsCommitted += 1;
-                if (
-                  pendingQuotaReservation?.token === reservationForAttempt.token
-                ) {
-                  pendingQuotaReservation = null;
-                }
+                pendingQuotaReservation = reservationForAttempt;
               }
+
+              let terminal = false;
+              return {
+                markTransportStarted: async () => {
+                  if (terminal) {
+                    throw new Error(
+                      "Messenger provider attempt admission is terminal"
+                    );
+                  }
+                  // The durable ownership/privacy fence must win before any
+                  // customer quota is consumed. This callback completes
+                  // before fetch, so a later quota failure can still close
+                  // the started fence as known_failed without a provider call.
+                  await markMessengerProviderAttemptStarted(providerFence);
+                  if (workspacePolicy.kind === "startpilot") {
+                    if (providerAttemptsCommitted === 0) {
+                      await commitStartpilotProviderAttempt(workspacePolicy);
+                      providerAttemptsCommitted += 1;
+                    }
+                  } else {
+                    if (!reservationForAttempt) {
+                      throw new MessengerQuotaReservationCommitError();
+                    }
+                    await commitMessengerGenerationQuota({
+                      psid,
+                      reservation: reservationForAttempt,
+                      generationKind: resolvedGenerationKind,
+                    });
+                    providerAttemptsCommitted += 1;
+                    if (
+                      pendingQuotaReservation?.token ===
+                      reservationForAttempt.token
+                    ) {
+                      pendingQuotaReservation = null;
+                    }
+                  }
+                  providerFences.push(providerFence);
+                  terminal = true;
+                },
+                abortBeforeTransport: async () => {
+                  if (terminal) return;
+                  await finalizeMessengerProviderAttemptFence(
+                    providerFence,
+                    "known_failed"
+                  );
+                  terminal = true;
+                },
+              };
             } catch (error) {
               await finalizeMessengerProviderAttemptFence(
                 providerFence,
@@ -276,10 +321,9 @@ export function createMessengerGenerationJobRunner(
               );
               throw error;
             }
-            await markMessengerProviderAttemptStarted(providerFence);
-            providerFences.push(providerFence);
           };
 
+          const generationCompletionFence = completionFenceForJob(job);
           const generationResult = await executeGenerationFlow({
             generationKind: resolvedGenerationKind,
             userId,
@@ -297,6 +341,22 @@ export function createMessengerGenerationJobRunner(
                 : state.lastPhotoSource
               : undefined,
             onProviderAttempt: commitProviderAttemptQuota,
+            onProviderSuccess: finalizeKnownProviderSuccess,
+            costLedgerScope:
+              job.workspaceId &&
+              job.channelConnectionId &&
+              job.bindingEpoch &&
+              job.privacyEpoch
+                ? {
+                    workspaceId: job.workspaceId,
+                    channelConnectionId: job.channelConnectionId,
+                    bindingEpoch: job.bindingEpoch,
+                    privacyEpoch: job.privacyEpoch,
+                  }
+                : undefined,
+            generatedImagePublishHooks: generationCompletionFence
+              ? createMessengerGenerationPublishHooks(generationCompletionFence)
+              : undefined,
             imageModel:
               workspacePolicy.kind === "startpilot"
                 ? workspacePolicy.imageModel
@@ -310,8 +370,12 @@ export function createMessengerGenerationJobRunner(
           if (generationResult.kind === "success") {
             try {
               if (providerAttemptsCommitted === 0) {
-                await commitProviderAttemptQuota();
+                const admission = await commitProviderAttemptQuota();
+                await admission.markTransportStarted();
               }
+              // Kept as an idempotent fallback for injected test generators;
+              // the real image service closes this immediately on provider 2xx.
+              await finalizeKnownProviderSuccess();
               await assertMessengerGenerationOwnership(job);
               await assertGenerationJobPrivacy(job);
               await handleGenerationSuccess({
@@ -324,21 +388,11 @@ export function createMessengerGenerationJobRunner(
                 userId,
                 lang,
                 rememberSendOutcome,
-                completionFence: completionFenceForJob(job),
+                completionFence: generationCompletionFence,
               });
             } catch (error) {
-              if (error instanceof MessengerPrivacyFenceError) {
-                const key = storageKeyFromPublicUrl(generationResult.imageUrl);
-                if (key) await storageDelete(key);
-              }
               throw error;
             }
-            await Promise.all(
-              providerFences.map(fence =>
-                finalizeMessengerProviderAttemptFence(fence, "succeeded")
-              )
-            );
-            providerFences.length = 0;
             return;
           }
 

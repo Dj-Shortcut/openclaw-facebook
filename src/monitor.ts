@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import {
@@ -161,6 +161,7 @@ const recentMessengerAssistantReplies = new Map<
   string,
   { text: string; expiresAt: number }
 >();
+const FACEBOOK_UNTRUSTED_TOOL_ALLOW = ["session_status"] as const;
 const FACEBOOK_UNTRUSTED_TOOL_DENY = [
   "image_generate",
   "video_generate",
@@ -172,8 +173,34 @@ const FACEBOOK_UNTRUSTED_TOOL_DENY = [
   "write",
   "edit",
   "apply_patch",
+  "memory_search",
+  "memory_get",
+  "memory_recall",
+  "group:memory",
   "group:runtime",
   "group:fs",
+  "group:web",
+  "group:ui",
+  "group:automation",
+  "group:messaging",
+  "group:nodes",
+  "group:agents",
+  "group:media",
+  "group:plugins",
+  "bundle-mcp",
+  "sessions",
+  "sessions_list",
+  "sessions_history",
+  "sessions_search",
+  "conversations_list",
+  "conversations_send",
+  "conversations_turn",
+  "sessions_send",
+  "sessions_spawn",
+  "sessions_yield",
+  "subagents",
+  "spawn_task",
+  "dismiss_task",
 ] as const;
 const messengerEventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
 let activeMessengerEventJobs = 0;
@@ -210,6 +237,7 @@ function finishMessengerTypingTurn(scopeKey: string): boolean {
 export type FacebookInboundToolPolicy = {
   source: "facebook_untrusted_default";
   tools: {
+    allow: string[];
     deny: string[];
   };
 };
@@ -737,6 +765,14 @@ async function resolveMessengerMedia(params: {
   return resolved;
 }
 
+async function cleanupMessengerMedia(
+  media: ChannelInboundMediaInput[],
+): Promise<void> {
+  await Promise.allSettled(
+    media.map((entry) => (entry.path ? unlink(entry.path) : Promise.resolve())),
+  );
+}
+
 function describeMessengerAttachments(
   attachments: MessengerAttachmentUrl[],
   lang: MessengerLanguage,
@@ -967,6 +1003,77 @@ function messengerPromptMessageKey(
   ]);
 }
 
+export function clearMessengerAssistantMemoryForErasure(
+  scope: MessengerPromptMemoryScope,
+): void {
+  const senderKey = messengerPromptSenderKey(scope);
+  recentMessengerAssistantPrompts.delete(senderKey);
+  recentMessengerAssistantReplies.delete(senderKey);
+
+  // Message-scoped entries add exactly one array element to senderKey. This
+  // prefix cannot overlap another tenant/Page/sender JSON tuple.
+  const messageKeyPrefix = `${senderKey.slice(0, -1)},`;
+  for (const entries of [
+    recentMessengerAssistantPromptsByMessage,
+    recentMessengerAssistantRepliesByMessage,
+  ]) {
+    for (const key of entries.keys()) {
+      if (key.startsWith(messageKeyPrefix)) {
+        entries.delete(key);
+      }
+    }
+  }
+}
+
+export async function eraseMessengerGatewayConversationForPrivacy(params: {
+  cfg: OpenClawConfig;
+  account: ResolvedMessengerAccount;
+  senderId: string;
+}): Promise<void> {
+  clearMessengerAssistantMemoryForErasure({
+    accountId: params.account.accountId,
+    pageId: params.account.pageId,
+    senderId: params.senderId,
+  });
+
+  const route = resolveAgentRoute({
+    cfg: params.cfg,
+    channel: FACEBOOK_CHANNEL_ID,
+    accountId: params.account.accountId,
+    peer: { kind: "direct", id: params.senderId },
+  });
+  if (
+    process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD === "1" &&
+    (route.dmScope !== "per-account-channel-peer" || route.agentId !== "main")
+  ) {
+    throw new Error("Public Messenger erasure isolation is unavailable");
+  }
+
+  const core = getMessengerRuntime();
+  const existing = core.agent.session.getSessionEntry({
+    agentId: route.agentId,
+    sessionKey: route.sessionKey,
+    readConsistency: "latest",
+  });
+  if (!existing) {
+    return;
+  }
+  if (!(await core.gateway.isAvailable())) {
+    throw new Error("OpenClaw session erasure runtime is unavailable");
+  }
+
+  // OpenClaw 2026.7.2 exposes no external-channel capability that atomically
+  // purges an ordinary host-owned session and its transcript. The write-scoped
+  // sessions.delete method retains a *.deleted.* transcript archive, and the
+  // injected gateway client is limited to bundled/trusted-official plugins.
+  // Never acknowledge authoritative GDPR deletion through that archive-
+  // retaining path. Keep this fail closed until the host exposes a scoped,
+  // non-archiving session-erasure capability for channel owners.
+  throw new Error(
+    "OpenClaw exact session transcript erasure capability is unavailable",
+  );
+}
+
 function selectedOptionNumber(text: string): number | null {
   const normalized = normalizeFastLaneText(text);
   const match =
@@ -1185,7 +1292,10 @@ export function resolveFacebookInboundToolPolicy(params: {
   }
   return {
     source: "facebook_untrusted_default",
-    tools: { deny: [...FACEBOOK_UNTRUSTED_TOOL_DENY] },
+    tools: {
+      allow: [...FACEBOOK_UNTRUSTED_TOOL_ALLOW],
+      deny: [...FACEBOOK_UNTRUSTED_TOOL_DENY],
+    },
   };
 }
 
@@ -1197,18 +1307,17 @@ export function applyFacebookInboundToolPolicyToConfig(
     return cfg;
   }
 
-  const currentTools = (cfg as { tools?: Record<string, unknown> }).tools ?? {};
-  const currentDeny = Array.isArray(currentTools.deny)
-    ? currentTools.deny.filter(
-        (tool): tool is string => typeof tool === "string",
-      )
-    : [];
-
   return {
     ...cfg,
     tools: {
-      ...currentTools,
-      deny: [...new Set([...currentDeny, ...policy.tools.deny])],
+      // This public-channel policy is intentionally a positive allowlist. Do
+      // not preserve a persisted profile, provider override, sender override,
+      // plugin allowlist, or code-mode bridge that could widen the turn after
+      // this boundary has classified it as untrusted.
+      profile: "minimal",
+      allow: [...policy.tools.allow],
+      deny: [...policy.tools.deny],
+      codeMode: false,
     },
   } as OpenClawConfig;
 }
@@ -1516,7 +1625,10 @@ async function sendMessengerPairingReply(params: {
   });
 }
 
-type MessengerIngressDecision = "process" | "leaderbot_free_tier" | "stop";
+type MessengerIngressDecision =
+  | { action: "process"; commandAuthorized: boolean }
+  | { action: "leaderbot_free_tier"; commandAuthorized: false }
+  | { action: "stop"; commandAuthorized: false };
 
 function isLeaderbotBridgeEnabled(account: ResolvedMessengerAccount): boolean {
   return account.config.leaderbotBridgeEnabled === true;
@@ -1568,6 +1680,7 @@ async function shouldProcessMessengerEvent(params: {
   const senderId = params.event.sender?.id ?? "";
   const rawText = params.event.message?.text ?? "";
   const dmPolicy = params.account.config.dmPolicy ?? "pairing";
+  const commandRequested = shouldComputeCommandAuthorized(rawText, params.cfg);
   const access = await resolveStableChannelMessageIngress({
     channelId: FACEBOOK_CHANNEL_ID,
     accountId: params.account.accountId,
@@ -1602,7 +1715,7 @@ async function shouldProcessMessengerEvent(params: {
     ),
     groupAllowFrom: [],
     command: {
-      hasControlCommand: shouldComputeCommandAuthorized(rawText, params.cfg),
+      hasControlCommand: commandRequested,
       groupOwnerAllowFrom: "none",
     },
   });
@@ -1617,7 +1730,11 @@ async function shouldProcessMessengerEvent(params: {
         params.account.accountId
       }`,
     );
-    return "process";
+    return {
+      action: "process",
+      commandAuthorized:
+        commandRequested && access.commandAccess.authorized === true,
+    };
   }
   if (access.senderAccess.decision === "pairing") {
     if (
@@ -1638,7 +1755,7 @@ async function shouldProcessMessengerEvent(params: {
           senderId,
         )} to Leaderbot free tier account=${params.account.accountId}`,
       );
-      return "leaderbot_free_tier";
+      return { action: "leaderbot_free_tier", commandAuthorized: false };
     }
     if (
       dmPolicy === "pairing" &&
@@ -1655,7 +1772,7 @@ async function shouldProcessMessengerEvent(params: {
           senderId,
         )} to OpenClaw turn account=${params.account.accountId}`,
       );
-      return "process";
+      return { action: "process", commandAuthorized: false };
     }
     params.trace &&
       logMessengerStage(params.trace, "intent_classified", {
@@ -1668,7 +1785,7 @@ async function shouldProcessMessengerEvent(params: {
         cfg: params.cfg,
       });
     }
-    return "stop";
+    return { action: "stop", commandAuthorized: false };
   }
   params.trace &&
     logMessengerStage(params.trace, "intent_classified", {
@@ -1679,7 +1796,7 @@ async function shouldProcessMessengerEvent(params: {
       dmPolicy
     })`,
   );
-  return "stop";
+  return { action: "stop", commandAuthorized: false };
 }
 
 export async function processMessengerEvent(params: {
@@ -1691,9 +1808,10 @@ export async function processMessengerEvent(params: {
   stateStore?: MessengerEphemeralStateStore;
 }) {
   activeMessengerEventJobs += 1;
+  let transientMedia: ChannelInboundMediaInput[] = [];
   try {
     const ingressDecision = await shouldProcessMessengerEvent(params);
-    if (ingressDecision === "stop") {
+    if (ingressDecision.action === "stop") {
       return;
     }
     const senderId = params.event.sender?.id ?? "";
@@ -1768,6 +1886,14 @@ export async function processMessengerEvent(params: {
       logMessengerStage(params.trace, "messenger_event_forward_started", {
         reason: "delete_data_request",
       });
+      // Erase the exact gateway session before the authoritative tenant delete.
+      // If this fails, do not let the downstream deletion make a retry
+      // impossible while the OpenClaw transcript still exists.
+      await eraseMessengerGatewayConversationForPrivacy({
+        cfg: params.cfg,
+        account: params.account,
+        senderId,
+      });
       if (
         await forwardLeaderbotMessengerEvent({
           event: params.event,
@@ -1789,7 +1915,7 @@ export async function processMessengerEvent(params: {
       );
       return;
     }
-    if (ingressDecision === "leaderbot_free_tier") {
+    if (ingressDecision.action === "leaderbot_free_tier") {
       if (
         !(await reserveMessengerGatewayLeaderbotEventForwardOrReply({
           senderId,
@@ -2175,6 +2301,7 @@ export async function processMessengerEvent(params: {
       attachments,
       trace: params.trace,
     });
+    transientMedia = media;
     const audioTranscripts = await resolveMessengerAudioTranscripts({
       media,
       cfg: params.cfg,
@@ -2284,7 +2411,13 @@ export async function processMessengerEvent(params: {
       });
       return;
     }
-    const commandAuthorized = shouldComputeCommandAuthorized(text, params.cfg);
+    // Public Messenger never trusts command-shaped text as authorization. The
+    // ingress resolver owns sender authorization; command detection alone is
+    // only a request signal and must not remove the untrusted tool policy.
+    const commandAuthorized =
+      process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD === "1"
+        ? false
+        : ingressDecision.commandAuthorized;
     const facebookToolPolicy = resolveFacebookInboundToolPolicy({
       commandAuthorized,
     });
@@ -2298,6 +2431,19 @@ export async function processMessengerEvent(params: {
       accountId: params.account.accountId,
       peer: { kind: "direct", id: senderId },
     });
+    if (
+      process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD === "1" &&
+      route.dmScope !== "per-account-channel-peer"
+    ) {
+      throw new Error("Public Messenger session isolation is unavailable");
+    }
+    if (
+      process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD === "1" &&
+      route.agentId !== "main"
+    ) {
+      throw new Error("Public Messenger agent isolation is unavailable");
+    }
+    const redactedSessionKey = redactMessengerIdentifier(route.sessionKey);
     const { storePath, envelopeOptions, previousTimestamp } =
       resolveInboundSessionEnvelopeContext({
         cfg: inboundCfg,
@@ -2416,10 +2562,10 @@ export async function processMessengerEvent(params: {
       );
     }
     logMessengerStage(params.trace, "openclaw_call_started", {
-      openclawSessionId: route.sessionKey,
+      openclawSessionId: redactedSessionKey,
     });
     logVerbose(
-      `messenger: dispatching inbound turn session=${route.sessionKey} account=${route.accountId}`,
+      `messenger: dispatching inbound turn session=${redactedSessionKey} account=${route.accountId}`,
     );
     let visibleFinalAiReplySent = false;
     let aiAnswerDeliveryStarted = false;
@@ -2482,7 +2628,7 @@ export async function processMessengerEvent(params: {
                   );
                 }
                 logMessengerStage(params.trace, "first_response_ready", {
-                  openclawSessionId: route.sessionKey,
+                  openclawSessionId: redactedSessionKey,
                 });
                 const result = await sendMessengerText(
                   senderId,
@@ -2633,7 +2779,7 @@ export async function processMessengerEvent(params: {
       );
     } else {
       logMessengerStage(params.trace, "openclaw_call_completed", {
-        openclawSessionId: route.sessionKey,
+        openclawSessionId: redactedSessionKey,
       });
       logVerbose(
         `messenger: completed inbound turn sender=${redactMessengerIdentifier(
@@ -2642,6 +2788,7 @@ export async function processMessengerEvent(params: {
       );
     }
   } finally {
+    await cleanupMessengerMedia(transientMedia);
     logMessengerStage(params.trace, "request_completed", {
       activeMessengerEventJobs,
     });

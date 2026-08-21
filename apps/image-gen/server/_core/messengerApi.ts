@@ -22,6 +22,8 @@ import type { MessengerGenerationJob } from "./messengerGenerationJob";
 export { safeLog } from "./logger";
 
 const GRAPH_API_VERSION = "v21.0";
+const DEFAULT_GRAPH_API_TIMEOUT_MS = 10_000;
+const MAX_GRAPH_API_TIMEOUT_MS = 30_000;
 
 type QuickReply = {
   content_type: "text";
@@ -112,6 +114,14 @@ function getPageToken(): string {
 
 function getSendApiUrl(): string {
   return `https://graph.facebook.com/${GRAPH_API_VERSION}/me/messages`;
+}
+
+function getGraphApiTimeoutMs(): number {
+  const configured = Number(process.env.GRAPH_API_TIMEOUT_MS);
+  if (!Number.isFinite(configured) || configured <= 0) {
+    return DEFAULT_GRAPH_API_TIMEOUT_MS;
+  }
+  return Math.min(Math.floor(configured), MAX_GRAPH_API_TIMEOUT_MS);
 }
 
 async function resolvePageToken(options?: SendMessageOptions): Promise<string> {
@@ -269,19 +279,30 @@ async function postMessengerMessage(
       await markMessengerProviderAttemptStarted(fence);
       started = true;
     }
-    const response = await fetch(getSendApiUrl(), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${pageToken}`,
-      },
-      body: JSON.stringify({
-        messaging_type: "RESPONSE",
-        recipient: { id: psid },
-        message,
-      }),
-    });
-    return { response, fence };
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      getGraphApiTimeoutMs()
+    );
+    timeout.unref?.();
+    try {
+      const response = await fetch(getSendApiUrl(), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${pageToken}`,
+        },
+        body: JSON.stringify({
+          messaging_type: "RESPONSE",
+          recipient: { id: psid },
+          message,
+        }),
+        signal: controller.signal,
+      });
+      return { response, fence };
+    } finally {
+      clearTimeout(timeout);
+    }
   } catch (error) {
     if (fence) {
       await finalizeMessengerProviderAttemptFence(

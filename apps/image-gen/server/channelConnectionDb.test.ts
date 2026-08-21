@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const { dbMock, drizzleMock } = vi.hoisted(() => {
   const db = {
     insert: vi.fn(),
+    delete: vi.fn(() => ({ where: vi.fn(async () => undefined) })),
     select: vi.fn(),
     transaction: vi.fn(async (callback: (tx: unknown) => unknown) =>
       callback(db)

@@ -13,6 +13,10 @@ import { ensureWebhookReplayProtectionReady } from "./webhookReplayProtection";
 import { assertPortalDatabaseConfig } from "./env";
 import { assertConversationIdentityConfig } from "./conversationIdentityConfig";
 import {
+  ensureMessengerPrivacyErasureQueueReadable,
+  ensureMessengerPrivacyErasureWorkerReady,
+} from "./messengerPrivacyErasureQueue";
+import {
   assertMollieBillingEnabled,
   assertMollieNonSecretLaunchConfig,
   assertTenantBillingWorkerConfigured,
@@ -34,6 +38,7 @@ import {
   getMollieAccountingImportConfig,
   isMollieAccountingImportEnabled,
 } from "./billing/accountingWorker";
+import { assertCostLedgerV2Ready } from "./costLedger";
 
 export type ReadinessCheck = {
   name: string;
@@ -113,6 +118,22 @@ export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
     {
       name: "state_store",
       check: ensureStateStoreReady,
+    },
+    {
+      name: "tenant_scoped_cost_ledger",
+      check: assertCostLedgerV2Ready,
+    },
+    {
+      name: "generation_artifact_cleanup",
+      check: ensureMessengerGenerationCompletionReady,
+    },
+    {
+      name: "messenger_privacy_erasure_encryption",
+      check: ensureMessengerPrivacyErasureQueueReadable,
+    },
+    {
+      name: "messenger_privacy_erasure_worker",
+      check: ensureMessengerPrivacyErasureWorkerReady,
     },
     {
       name: "portal_database_config",
@@ -210,7 +231,6 @@ export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
         }
 
         await ensureMessengerGenerationQueueReady();
-        await ensureMessengerGenerationCompletionReady();
         await getMessengerGenerationQueueStats();
       },
     },

@@ -1984,6 +1984,7 @@ export async function upsertChannelConnection(values: InsertChannelConnection) {
                 inArray(messengerProviderAttemptFences.status, [
                   "started",
                   "ambiguous",
+                  "abandoned",
                 ]),
                 and(
                   eq(messengerProviderAttemptFences.status, "reserved"),
@@ -1999,6 +2000,14 @@ export async function upsertChannelConnection(values: InsertChannelConnection) {
             "Channel connection has an active provider attempt; retry later"
           );
         }
+        await tx
+          .delete(messengerProviderAttemptFences)
+          .where(
+            eq(
+              messengerProviderAttemptFences.channelConnectionId,
+              existing[0].id
+            )
+          );
         await tx
           .update(channelConnections)
           .set(updateSet)
@@ -2061,21 +2070,71 @@ export async function disconnectChannelConnection(
     );
   }
 
-  await db
-    .insert(channelConnections)
-    .values({
-      workspaceId,
-      channel,
-      status: "disconnected",
-      externalId: null,
-      providerAccountExternalId: null,
-      displayName: null,
-      encryptedAccessToken: null,
-      grantedScopes: null,
-      lastCheckedAt: new Date(),
-    })
-    .onDuplicateKeyUpdate({
-      set: {
+  await db.transaction(async tx => {
+    const existing = await tx
+      .select({ id: channelConnections.id })
+      .from(channelConnections)
+      .where(
+        and(
+          eq(channelConnections.workspaceId, workspaceId),
+          eq(channelConnections.channel, channel)
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (!existing[0]) {
+      await tx.insert(channelConnections).values({
+        workspaceId,
+        channel,
+        status: "disconnected",
+        externalId: null,
+        providerAccountExternalId: null,
+        displayName: null,
+        encryptedAccessToken: null,
+        grantedScopes: null,
+        lastCheckedAt: new Date(),
+      });
+      return;
+    }
+
+    const now = new Date();
+    const activeAttempts = await tx
+      .select({ id: messengerProviderAttemptFences.id })
+      .from(messengerProviderAttemptFences)
+      .where(
+        and(
+          eq(
+            messengerProviderAttemptFences.channelConnectionId,
+            existing[0].id
+          ),
+          or(
+            inArray(messengerProviderAttemptFences.status, [
+              "started",
+              "ambiguous",
+              "abandoned",
+            ]),
+            and(
+              eq(messengerProviderAttemptFences.status, "reserved"),
+              gt(messengerProviderAttemptFences.leaseUntil, now)
+            )
+          )
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (activeAttempts[0]) {
+      throw new Error(
+        "Channel connection has an active provider attempt; retry later"
+      );
+    }
+    await tx
+      .delete(messengerProviderAttemptFences)
+      .where(
+        eq(messengerProviderAttemptFences.channelConnectionId, existing[0].id)
+      );
+    await tx
+      .update(channelConnections)
+      .set({
         status: "disconnected",
         externalId: null,
         providerAccountExternalId: null,
@@ -2083,9 +2142,16 @@ export async function disconnectChannelConnection(
         encryptedAccessToken: null,
         bindingEpoch: sql`${channelConnections.bindingEpoch} + 1`,
         grantedScopes: null,
-        lastCheckedAt: new Date(),
-      },
-    });
+        lastCheckedAt: now,
+      })
+      .where(
+        and(
+          eq(channelConnections.id, existing[0].id),
+          eq(channelConnections.workspaceId, workspaceId),
+          eq(channelConnections.channel, channel)
+        )
+      );
+  });
 
   return listChannelConnections(workspaceId);
 }

@@ -80,6 +80,7 @@ import {
   assertMollieAccountingSchemaReadiness,
 } from "./billing/billingReadiness";
 import { startMessengerGenerationWorker } from "./messengerGenerationWorker";
+import { startMessengerPrivacyErasureWorker } from "./messengerPrivacyErasureWorker";
 import { reconcileMessengerProfileOnStartup } from "./messengerProfile";
 import { safeLog } from "./logger";
 import {
@@ -268,6 +269,9 @@ async function startServer() {
   assertMessengerGenerationQueueConfig();
   await ensureMessengerGenerationQueueReady();
   await ensureMessengerGenerationCompletionReady();
+  // Privacy erasure recovery is independent of billing and HTTP exposure. It
+  // must also drain in generation-worker-only deployments.
+  await startMessengerPrivacyErasureWorker();
   if (isMessengerGenerationWorkerMode() || generationWorkerOnly) {
     startMessengerGenerationWorker({ keepAlive: generationWorkerOnly });
   }

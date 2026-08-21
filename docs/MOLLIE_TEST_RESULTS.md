@@ -1,15 +1,18 @@
 # Mollie test results
 
-Release candidate: current PR #375 Sol draft branch on 2026-08-18. The exact
-reviewed head is recorded in the PR body and GitHub checks.
+Release candidate: current PR #375 Sol draft branch. The exact last-green head
+is recorded in the PR body and GitHub checks. The current privacy/cost
+hardening batch is pending its final full local matrix and GitHub CI, so its
+eventual totals are deliberately not claimed here yet.
 
 No Mollie, Facebook or OpenAI provider test was run. No credential was
 requested or used. Automated rows prove local/CI contracts only; provider rows
 remain `NOT RUN` until an operator injects test credentials out of band.
 
-## Automated evidence
+## Last fully green savepoint evidence
 
-- Image-gen Vitest: **1,429 passed, 31 skipped** across 154 files.
+- Image-gen Vitest at that savepoint: **1,429 passed, 31 skipped** across 154
+  files. These are not the pending current-batch totals.
 - Focused subscription cancellation and notification delivery: **38/38**.
 - Billing execution on MySQL 8.4: **10/10**, including two-connection
   disable/exposure, lease-loss and safety-cancellation boundaries.
@@ -22,7 +25,7 @@ remain `NOT RUN` until an operator injects test credentials out of band.
   chain without a second checkout.
 - TypeScript, release ESLint/Prettier, production build, Drizzle schema check,
   final `0015` rehearsal, product-boundary checks and diff check: PASS.
-- Final GitHub head: main checks, MySQL/Drizzle migration smoke, validate,
+- Last-green GitHub head: main checks, MySQL/Drizzle migration smoke, validate,
   CodeQL, secret scan, codebase-health and ClawHub dry-run: PASS.
 - Migration evidence covers fresh install and exact `0014` to final `0015` on
   pinned MySQL 8.4.11, exact schema/history fingerprints, partial-state refusal,
@@ -31,7 +34,7 @@ remain `NOT RUN` until an operator injects test credentials out of band.
 - Real Redis integration lanes exercise spend Lua reservation and generation
   queue/completion tombstone, TTL and race contracts in CI.
 
-## Combined release matrix
+## Combined release matrix (last-green application evidence)
 
 | Scenario                                    | Automated contract                                                          | Provider evidence             |
 | ------------------------------------------- | --------------------------------------------------------------------------- | ----------------------------- |
@@ -45,7 +48,8 @@ remain `NOT RUN` until an operator injects test credentials out of band.
 | Disconnect/rebind                           | PASS: binding epoch blocks stale job/send/provider effects                  | NOT RUN                       |
 | Closed Messenger window                     | PASS: no paid send; fresh verified inbound may rearm the same row           | NOT RUN                       |
 | Transient/ambiguous send                    | PASS: bounded identity, no second charge/capability                         | NOT RUN                       |
-| Privacy deletion race                       | PASS: tombstone/CAS prevents queue/state/completion/send resurrection       | NOT RUN                       |
+| Application-owned privacy deletion race     | PASS: tombstone/CAS prevents queue/state/completion/send resurrection       | NOT RUN                       |
+| OpenClaw session transcript erasure         | BLOCKED: host API retains an archive; deletion deliberately remains pending | NOT RUN — external host fix   |
 | Spend and AI-answer quota                   | PASS: distributed reservation and durable commit/release recovery           | NOT RUN OpenAI smoke          |
 | Notification failure                        | PASS: signed idempotent receipt, retry, dead letter and key-free escalation | NOT RUN receiver operations   |
 | Accounting export/import                    | PASS: bounded stream and GET-only fake reader/quarantine contracts          | NOT RUN live read-only Mollie |
@@ -78,6 +82,10 @@ never record a key, PSID, Page token, customer message or full provider payload.
 | Transient Graph failure             | NOT RUN | Bounded attempts; no second charge/capability                             |
 | GPT Image generation/edit           | NOT RUN | Admission before provider; estimate/caps remain positive and conservative |
 | Delete during slow provider/send    | NOT RUN | No persisted output/state/send after tombstone                            |
+| Exact OpenClaw transcript deletion  | BLOCKED | Host-owned non-archiving erasure capability is not available              |
 
-Overall result: **repository code/CI PASS; provider sandbox and live launch
-NO-GO**.
+Overall result: **the last published application-owned repository savepoint
+passed; the current privacy/cost hardening batch is pending final local/CI
+revalidation; full privacy, provider sandbox and live launch remain NO-GO**.
+The existing OpenClaw host transcript blocker is external to the channel plugin
+and must be closed before an end-to-end deletion PASS can be recorded.

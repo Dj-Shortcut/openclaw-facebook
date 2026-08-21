@@ -1,33 +1,61 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { resolveOwnershipMock, ensurePrivacyMock } = vi.hoisted(() => ({
+const {
+  resolveOwnershipMock,
+  ensurePrivacyMock,
+  assertPrivacyMock,
+  assertOwnershipMock,
+  processFacebookWebhookPayloadMock,
+} = vi.hoisted(() => ({
   resolveOwnershipMock: vi.fn(),
   ensurePrivacyMock: vi.fn(async () => 1),
+  assertPrivacyMock: vi.fn(),
+  assertOwnershipMock: vi.fn(),
+  processFacebookWebhookPayloadMock: vi.fn(),
 }));
 
 vi.mock("./_core/workspaceEntitlementRuntime", () => ({
   resolveMessengerGenerationOwnership: resolveOwnershipMock,
+  assertMessengerGenerationOwnership: assertOwnershipMock,
 }));
 vi.mock("./_core/messengerPrivacySubject", () => ({
   ensureActiveMessengerPrivacySubject: ensurePrivacyMock,
+  assertMessengerPrivacySubject: assertPrivacyMock,
+}));
+vi.mock("./_core/messengerWebhook", () => ({
+  processFacebookWebhookPayload: processFacebookWebhookPayloadMock,
 }));
 
 import {
   enqueueWebhookIngressDelivery,
   eraseWebhookIngressDeliveriesForSubject,
   resetWebhookIngressQueueForTests,
+  scheduleWebhookIngressDrain,
 } from "./_core/meta/webhookIngressQueue";
 import { getRedisClient } from "./_core/redis";
 import { toUserKey } from "./_core/privacy";
+import { beginMessengerPrivacyOwnershipErasure } from "./_core/messengerPrivacyOwnershipHistory";
 
 const runRedis = process.env.RUN_REDIS_INTEGRATION === "1";
 const suite = runRedis ? describe : describe.skip;
 
 suite("webhook ingress Redis privacy fence", () => {
   const originalPepper = process.env.PRIVACY_PEPPER;
+  const originalMaxAttempts = process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS;
+  const originalRetryDelayMs = process.env.WEBHOOK_INGRESS_RETRY_DELAY_MS;
 
   beforeEach(async () => {
     process.env.PRIVACY_PEPPER = "webhook-ingress-redis-test-pepper";
+    if (originalMaxAttempts === undefined) {
+      delete process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS;
+    } else {
+      process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS = originalMaxAttempts;
+    }
+    if (originalRetryDelayMs === undefined) {
+      delete process.env.WEBHOOK_INGRESS_RETRY_DELAY_MS;
+    } else {
+      process.env.WEBHOOK_INGRESS_RETRY_DELAY_MS = originalRetryDelayMs;
+    }
     resetWebhookIngressQueueForTests();
     const redis = await getRedisClient();
     await redis.flushdb();
@@ -49,12 +77,28 @@ suite("webhook ingress Redis privacy fence", () => {
     );
     ensurePrivacyMock.mockReset();
     ensurePrivacyMock.mockResolvedValue(1);
+    assertPrivacyMock.mockReset();
+    assertPrivacyMock.mockResolvedValue(undefined);
+    assertOwnershipMock.mockReset();
+    assertOwnershipMock.mockResolvedValue(undefined);
+    processFacebookWebhookPayloadMock.mockReset();
+    processFacebookWebhookPayloadMock.mockResolvedValue(undefined);
   });
 
   afterAll(() => {
     resetWebhookIngressQueueForTests();
     if (originalPepper === undefined) delete process.env.PRIVACY_PEPPER;
     else process.env.PRIVACY_PEPPER = originalPepper;
+    if (originalMaxAttempts === undefined) {
+      delete process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS;
+    } else {
+      process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS = originalMaxAttempts;
+    }
+    if (originalRetryDelayMs === undefined) {
+      delete process.env.WEBHOOK_INGRESS_RETRY_DELAY_MS;
+    } else {
+      process.env.WEBHOOK_INGRESS_RETRY_DELAY_MS = originalRetryDelayMs;
+    }
   });
 
   it("scrubs only the exact tenant subject and rejects its stale epoch", async () => {
@@ -92,6 +136,74 @@ suite("webhook ingress Redis privacy fence", () => {
         messengerPayload("page-a", psid, "mid-a-replayed")
       )
     ).rejects.toThrow("subject epoch is erased");
+  });
+
+  it("registers immutable ownership before queued content exists", async () => {
+    const psid = "queued-before-state-user";
+    await enqueueWebhookIngressDelivery(
+      "facebook",
+      messengerPayload("page-a", psid, "mid-before-state")
+    );
+
+    await expect(
+      beginMessengerPrivacyOwnershipErasure({
+        pageId: "page-a",
+        userKey: toUserKey(psid),
+      })
+    ).resolves.toEqual([
+      {
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        privacyEpoch: 1,
+        channel: "facebook_messenger",
+      },
+    ]);
+  });
+
+  it("dead-letters a queued event when the Page binding changes before drain", async () => {
+    process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS = "1";
+    await enqueueWebhookIngressDelivery(
+      "facebook",
+      messengerPayload("page-a", "rebind-user", "mid-before-rebind")
+    );
+
+    resolveOwnershipMock.mockResolvedValue({
+      workspaceId: 84,
+      channelConnectionId: 99,
+      bindingEpoch: 2,
+      pageId: "page-a",
+    });
+    assertOwnershipMock.mockImplementation(async expected => {
+      const current = await resolveOwnershipMock(expected.pageId);
+      if (
+        !current ||
+        current.workspaceId !== expected.workspaceId ||
+        current.channelConnectionId !== expected.channelConnectionId ||
+        current.bindingEpoch !== expected.bindingEpoch
+      ) {
+        throw new Error("Messenger provider ownership changed");
+      }
+    });
+
+    scheduleWebhookIngressDrain();
+    const redis = await getRedisClient();
+    await vi.waitFor(
+      async () => {
+        await expect(
+          redis.lrange("{meta-webhook-ingress}:queued", 0, -1)
+        ).resolves.toEqual([]);
+        await expect(
+          redis.lrange("{meta-webhook-ingress}:processing", 0, -1)
+        ).resolves.toEqual([]);
+        await expect(
+          redis.lrange("{meta-webhook-ingress}:dead", 0, -1)
+        ).resolves.toHaveLength(1);
+      },
+      { timeout: 5_000 }
+    );
+    expect(processFacebookWebhookPayloadMock).not.toHaveBeenCalled();
+    expect(await redis.keys("{meta-webhook-ingress}:delivery:*")).toEqual([]);
   });
 
   it("does not extend the immutable content deadline on enqueue", async () => {
@@ -198,6 +310,93 @@ suite("webhook ingress Redis privacy fence", () => {
     }
     expect(await redis.keys("{meta-webhook-ingress}:delivery:*")).toEqual([]);
     expect(await redis.keys("{meta-webhook-ingress}:lease:*")).toEqual([]);
+  });
+
+  it("does not resurrect a failed delivery when erasure wins before retry", async () => {
+    process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS = "3";
+    const psid = "retry-erasure-race-user";
+    let rejectProcessing: ((error: Error) => void) | undefined;
+    processFacebookWebhookPayloadMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectProcessing = reject;
+        })
+    );
+    await enqueueWebhookIngressDelivery(
+      "facebook",
+      messengerPayload("page-a", psid, "mid-retry-erasure-race")
+    );
+
+    scheduleWebhookIngressDrain();
+    const redis = await getRedisClient();
+    await vi.waitFor(async () => {
+      expect(processFacebookWebhookPayloadMock).toHaveBeenCalledTimes(1);
+      await expect(
+        redis.lrange("{meta-webhook-ingress}:processing", 0, -1)
+      ).resolves.toHaveLength(1);
+    });
+
+    await expect(
+      eraseWebhookIngressDeliveriesForSubject({
+        workspaceId: 42,
+        channelConnectionId: 7,
+        userKey: toUserKey(psid),
+        privacyEpoch: 2,
+      })
+    ).resolves.toBe(1);
+    rejectProcessing?.(new Error("handler failed after privacy erasure"));
+
+    await vi.waitFor(async () => {
+      for (const list of ["queued", "processing", "dead"]) {
+        await expect(
+          redis.lrange(`{meta-webhook-ingress}:${list}`, 0, -1)
+        ).resolves.toEqual([]);
+      }
+      await expect(
+        redis.keys("{meta-webhook-ingress}:delivery:*")
+      ).resolves.toEqual([]);
+      await expect(
+        redis.keys("{meta-webhook-ingress}:subject:*")
+      ).resolves.toEqual([]);
+    });
+  });
+
+  it("preserves the original content deadline across an atomic retry", async () => {
+    process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS = "3";
+    process.env.WEBHOOK_INGRESS_RETRY_DELAY_MS = "60000";
+    processFacebookWebhookPayloadMock.mockRejectedValueOnce(
+      new Error("retry before immutable deadline")
+    );
+    await enqueueWebhookIngressDelivery(
+      "facebook",
+      messengerPayload("page-a", "retry-ttl-user", "mid-retry-ttl")
+    );
+    const redis = await getRedisClient();
+    const [deliveryId] = await redis.lrange(
+      "{meta-webhook-ingress}:queued",
+      0,
+      -1
+    );
+    const contentKey = `{meta-webhook-ingress}:delivery:${deliveryId}`;
+    const original = JSON.parse((await redis.get(contentKey)) ?? "{}") as {
+      expiresAt: number;
+    };
+
+    scheduleWebhookIngressDrain();
+    await vi.waitFor(async () => {
+      await expect(
+        redis.lrange("{meta-webhook-ingress}:queued", 0, -1)
+      ).resolves.toEqual([deliveryId]);
+      const retried = JSON.parse((await redis.get(contentKey)) ?? "{}") as {
+        attempts?: number;
+        expiresAt?: number;
+      };
+      expect(retried).toMatchObject({
+        attempts: 1,
+        expiresAt: original.expiresAt,
+      });
+    });
+    expect(await redis.pexpiretime(contentKey)).toBe(original.expiresAt);
   });
 });
 

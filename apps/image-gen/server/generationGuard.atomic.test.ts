@@ -3,15 +3,22 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   appendCostLedgerEntry,
   readCostLedgerPeriod,
+  type CostLedgerScope,
 } from "./_core/costLedger";
 import {
   admitMessengerProviderSpend,
   MessengerSpendBudgetExceededError,
 } from "./_core/generationGuard";
-import { writeScopedState } from "./_core/stateStore";
+import { clearStateStore } from "./_core/stateStore";
 
 const PERIOD = "2026-08-18";
 const NOW = new Date(`${PERIOD}T12:00:00.000Z`);
+const SCOPE: CostLedgerScope = {
+  workspaceId: 41,
+  channelConnectionId: 7,
+  bindingEpoch: 3,
+  privacyEpoch: 1,
+};
 
 describe("atomic Messenger spend admission", () => {
   beforeEach(async () => {
@@ -19,9 +26,7 @@ describe("atomic Messenger spend admission", () => {
     delete process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD;
     delete process.env.MESSENGER_USER_DAILY_SPEND_CAP_USD;
     process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "0.05";
-    await Promise.resolve(
-      writeScopedState("cost:ledger:period", PERIOD, [], 60)
-    );
+    clearStateStore();
   });
 
   afterEach(() => {
@@ -48,7 +53,7 @@ describe("atomic Messenger spend admission", () => {
       )
     ).toBe(true);
 
-    const stored = await readCostLedgerPeriod(PERIOD);
+    const stored = await readCostLedgerPeriod(SCOPE, PERIOD);
     expect(stored).toHaveLength(5);
     expect(
       stored.reduce((total, entry) => total + (entry.estimatedCostUsd ?? 0), 0)
@@ -71,7 +76,7 @@ describe("atomic Messenger spend admission", () => {
     expect(
       attempts.filter(result => result.status === "fulfilled")
     ).toHaveLength(4);
-    const stored = await readCostLedgerPeriod(PERIOD);
+    const stored = await readCostLedgerPeriod(SCOPE, PERIOD);
     expect(stored.filter(entry => entry.userKey === "user-a")).toHaveLength(2);
     expect(stored.filter(entry => entry.userKey === "user-b")).toHaveLength(2);
   });
@@ -83,6 +88,7 @@ describe("atomic Messenger spend admission", () => {
       admitMessengerProviderSpend({
         reqId: "ledger-failure",
         attemptId: "ledger-failure:attempt-1",
+        scope: SCOPE,
         userKey: "user-a",
         estimatedCostUsd: 0.01,
         costEstimateComplete: true,
@@ -110,6 +116,7 @@ async function recordAttempt(
   await admitMessengerProviderSpend({
     reqId,
     attemptId: reqId,
+    scope: SCOPE,
     userKey,
     estimatedCostUsd,
     costEstimateComplete: true,
@@ -117,6 +124,7 @@ async function recordAttempt(
     recordAttempt: async () => {
       await appendCostLedgerEntry(
         {
+          scope: SCOPE,
           id: reqId,
           channel: "facebook_messenger",
           operation: "image_generation",

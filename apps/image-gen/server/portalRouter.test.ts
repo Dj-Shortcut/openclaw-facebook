@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TrpcContext } from "./_core/context";
 import {
   startFacebookConnect,
@@ -363,6 +363,7 @@ describe("portal router tenant isolation", () => {
 
 describe("portal router audit logging", () => {
   beforeEach(() => {
+    vi.stubEnv("JWT_SECRET", "x".repeat(32));
     vi.clearAllMocks();
     mocks.isPortalHandoffTenantBoundaryReady.mockReturnValue(true);
     mocks.getWorkspaceMembership.mockResolvedValue({
@@ -370,6 +371,10 @@ describe("portal router audit logging", () => {
       userId: user.id,
       role: "owner",
     });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("records an audit log when a workspace AI identity is updated", async () => {

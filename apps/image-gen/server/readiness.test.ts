@@ -170,6 +170,14 @@ describe("readiness", () => {
     );
   });
 
+  it("includes the privacy-erasure worker liveness gate", () => {
+    expect(
+      buildRuntimeReadinessChecks().some(
+        check => check.name === "messenger_privacy_erasure_worker"
+      )
+    ).toBe(true);
+  });
+
   it("returns ok when all dependency checks pass", async () => {
     const server = await startServer([
       { name: "redis", check: vi.fn() },

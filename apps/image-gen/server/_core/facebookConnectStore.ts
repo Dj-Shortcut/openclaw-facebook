@@ -29,6 +29,11 @@ export type FacebookConnectPage = {
 };
 
 type StoredFacebookConnectState = FacebookConnectState & {
+  authorizationCodeEnvelope?: string;
+  pages?: FacebookConnectPage[];
+};
+
+type ValidatedFacebookConnectState = FacebookConnectState & {
   authorizationCode?: string;
   pages?: FacebookConnectPage[];
 };
@@ -36,22 +41,320 @@ type StoredFacebookConnectState = FacebookConnectState & {
 const facebookConnectStates = new Map<string, StoredFacebookConnectState>();
 const FACEBOOK_CONNECT_STATE_TTL_SECONDS = 10 * 60;
 const FACEBOOK_GRAPH_TIMEOUT_MS = 10_000;
+const FACEBOOK_CONNECT_PAGE_TOKEN_DOMAIN =
+  "leaderbot.facebook-connect.page-token.v1";
+const FACEBOOK_CONNECT_AUTHORIZATION_CODE_DOMAIN =
+  "leaderbot.facebook-connect.authorization-code.v1";
+const MIN_FACEBOOK_CONNECT_KEY_BYTES = 32;
+
+function getFacebookConnectSecretKey(domain: string): Buffer {
+  const secret = getConfiguredJwtSecret();
+  if (Buffer.byteLength(secret, "utf8") < MIN_FACEBOOK_CONNECT_KEY_BYTES) {
+    throw new Error(
+      "JWT_SECRET must be at least 32 bytes to store Facebook connect tokens"
+    );
+  }
+
+  return crypto.createHmac("sha256", secret).update(domain).digest();
+}
+
+function getFacebookConnectPageTokenAad(input: {
+  state: string;
+  workspaceId: number;
+  userId: number;
+  pageId: string;
+}): Buffer {
+  return Buffer.from(
+    JSON.stringify({
+      domain: FACEBOOK_CONNECT_PAGE_TOKEN_DOMAIN,
+      state: input.state,
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+      pageId: input.pageId,
+    }),
+    "utf8"
+  );
+}
+
+function getFacebookConnectAuthorizationCodeAad(input: {
+  state: string;
+  workspaceId: number;
+  userId: number;
+}): Buffer {
+  return Buffer.from(
+    JSON.stringify({
+      domain: FACEBOOK_CONNECT_AUTHORIZATION_CODE_DOMAIN,
+      state: input.state,
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+    }),
+    "utf8"
+  );
+}
+
+function sealFacebookConnectSecret(input: {
+  value: string;
+  domain: string;
+  version: string;
+  aad: Buffer;
+  requiredMessage: string;
+}): string {
+  if (!input.value) {
+    throw new Error(input.requiredMessage);
+  }
+
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv(
+    "aes-256-gcm",
+    getFacebookConnectSecretKey(input.domain),
+    iv
+  );
+  cipher.setAAD(input.aad);
+  const encrypted = Buffer.concat([
+    cipher.update(input.value, "utf8"),
+    cipher.final(),
+  ]);
+  const tag = cipher.getAuthTag();
+  return `${input.version}:${iv.toString("base64url")}:${tag.toString("base64url")}:${encrypted.toString("base64url")}`;
+}
+
+function unsealFacebookConnectSecret(input: {
+  envelope: string;
+  domain: string;
+  version: string;
+  aad: Buffer;
+  invalidMessage: string;
+  openMessage: string;
+}): string {
+  const [version, ivValue, tagValue, encryptedValue, extra] =
+    input.envelope.split(":");
+  if (
+    version !== input.version ||
+    !ivValue ||
+    !tagValue ||
+    !encryptedValue ||
+    extra !== undefined
+  ) {
+    throw new Error(input.invalidMessage);
+  }
+
+  try {
+    const decipher = crypto.createDecipheriv(
+      "aes-256-gcm",
+      getFacebookConnectSecretKey(input.domain),
+      Buffer.from(ivValue, "base64url")
+    );
+    decipher.setAAD(input.aad);
+    decipher.setAuthTag(Buffer.from(tagValue, "base64url"));
+    return Buffer.concat([
+      decipher.update(Buffer.from(encryptedValue, "base64url")),
+      decipher.final(),
+    ]).toString("utf8");
+  } catch {
+    throw new Error(input.openMessage);
+  }
+}
+
+function sealFacebookConnectPageToken(
+  token: string,
+  context: {
+    state: string;
+    workspaceId: number;
+    userId: number;
+    pageId: string;
+  }
+): string {
+  return sealFacebookConnectSecret({
+    value: token,
+    domain: FACEBOOK_CONNECT_PAGE_TOKEN_DOMAIN,
+    version: "fc1",
+    aad: getFacebookConnectPageTokenAad(context),
+    requiredMessage: "Facebook connect page token is required",
+  });
+}
+
+function unsealFacebookConnectPageToken(
+  envelope: string,
+  context: {
+    state: string;
+    workspaceId: number;
+    userId: number;
+    pageId: string;
+  }
+): string {
+  return unsealFacebookConnectSecret({
+    envelope,
+    domain: FACEBOOK_CONNECT_PAGE_TOKEN_DOMAIN,
+    version: "fc1",
+    aad: getFacebookConnectPageTokenAad(context),
+    invalidMessage: "Facebook connect page token envelope is invalid",
+    openMessage: "Facebook connect page token envelope could not be opened",
+  });
+}
+
+function sealFacebookAuthorizationCode(
+  code: string,
+  context: {
+    state: string;
+    workspaceId: number;
+    userId: number;
+  }
+): string {
+  return sealFacebookConnectSecret({
+    value: code,
+    domain: FACEBOOK_CONNECT_AUTHORIZATION_CODE_DOMAIN,
+    version: "fca1",
+    aad: getFacebookConnectAuthorizationCodeAad(context),
+    requiredMessage: "Facebook authorization code is required",
+  });
+}
+
+function unsealFacebookAuthorizationCode(
+  envelope: string,
+  context: {
+    state: string;
+    workspaceId: number;
+    userId: number;
+  }
+): string {
+  return unsealFacebookConnectSecret({
+    envelope,
+    domain: FACEBOOK_CONNECT_AUTHORIZATION_CODE_DOMAIN,
+    version: "fca1",
+    aad: getFacebookConnectAuthorizationCodeAad(context),
+    invalidMessage: "Facebook authorization code envelope is invalid",
+    openMessage: "Facebook authorization code envelope could not be opened",
+  });
+}
 
 function getFacebookConnectKey(state: string) {
   return `portal:facebook_connect:${state}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasOnlyKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[]
+): boolean {
+  const allowedKeys = new Set(allowed);
+  return Object.keys(value).every(key => allowedKeys.has(key));
+}
+
+function parseStoredFacebookConnectState(
+  value: unknown,
+  expectedState: string
+): StoredFacebookConnectState {
+  if (!isRecord(value)) {
+    throw new Error("invalid facebook connect state storage");
+  }
+
+  // Old deployments wrote the short-lived OAuth code and Page tokens as
+  // plaintext. Rejecting the property itself (even when empty) prevents a
+  // typed object spread from carrying it into a freshly extended Redis TTL.
+  if (Object.prototype.hasOwnProperty.call(value, "authorizationCode")) {
+    throw new Error("legacy plaintext facebook authorization code rejected");
+  }
+  if (
+    !hasOnlyKeys(value, [
+      "state",
+      "workspaceId",
+      "userId",
+      "createdAt",
+      "authorizationCodeEnvelope",
+      "pages",
+    ]) ||
+    value.state !== expectedState ||
+    !Number.isSafeInteger(value.workspaceId) ||
+    Number(value.workspaceId) <= 0 ||
+    !Number.isSafeInteger(value.userId) ||
+    Number(value.userId) <= 0 ||
+    !Number.isSafeInteger(value.createdAt) ||
+    Number(value.createdAt) < 0 ||
+    (value.authorizationCodeEnvelope !== undefined &&
+      (typeof value.authorizationCodeEnvelope !== "string" ||
+        !value.authorizationCodeEnvelope.startsWith("fca1:")))
+  ) {
+    throw new Error("invalid facebook connect state storage");
+  }
+
+  let pages: FacebookConnectPage[] | undefined;
+  if (value.pages !== undefined) {
+    if (!Array.isArray(value.pages)) {
+      throw new Error("invalid facebook connect page storage");
+    }
+    pages = value.pages.map(page => {
+      const grantedScopes = isRecord(page) ? page.grantedScopes : undefined;
+      if (
+        !isRecord(page) ||
+        !hasOnlyKeys(page, ["id", "name", "grantedScopes", "accessToken"]) ||
+        typeof page.id !== "string" ||
+        page.id.trim().length === 0 ||
+        typeof page.name !== "string" ||
+        !Array.isArray(grantedScopes) ||
+        new Set(grantedScopes).size !== grantedScopes.length ||
+        !grantedScopes.every(
+          scope =>
+            typeof scope === "string" &&
+            (REQUIRED_FACEBOOK_SCOPES as readonly string[]).includes(scope)
+        ) ||
+        typeof page.accessToken !== "string"
+      ) {
+        throw new Error("invalid facebook connect page storage");
+      }
+      if (!page.accessToken.startsWith("fc1:")) {
+        throw new Error("legacy plaintext facebook page token rejected");
+      }
+      return {
+        id: page.id,
+        name: page.name,
+        grantedScopes: [...grantedScopes] as RequiredFacebookScope[],
+        accessToken: page.accessToken,
+      };
+    });
+  }
+
+  if (pages && value.authorizationCodeEnvelope !== undefined) {
+    throw new Error("invalid facebook connect state storage");
+  }
+
+  return {
+    state: value.state,
+    workspaceId: Number(value.workspaceId),
+    userId: Number(value.userId),
+    createdAt: Number(value.createdAt),
+    ...(typeof value.authorizationCodeEnvelope === "string"
+      ? { authorizationCodeEnvelope: value.authorizationCodeEnvelope }
+      : {}),
+    ...(pages ? { pages } : {}),
+  };
 }
 
 async function readFacebookConnectState(
   state: string
 ): Promise<StoredFacebookConnectState | null> {
   if (!isRedisEnabled()) {
-    return facebookConnectStates.get(state) ?? null;
+    const value = facebookConnectStates.get(state);
+    if (!value) return null;
+    try {
+      return parseStoredFacebookConnectState(value, state);
+    } catch (error) {
+      facebookConnectStates.delete(state);
+      throw error;
+    }
   }
 
   const redis = await getRedisClient();
   const value = await redis.get(getFacebookConnectKey(state));
   if (!value) return null;
-  return JSON.parse(value) as StoredFacebookConnectState;
+  try {
+    return parseStoredFacebookConnectState(JSON.parse(value), state);
+  } catch (error) {
+    await redis.del(getFacebookConnectKey(state));
+    throw error;
+  }
 }
 
 async function writeFacebookConnectState(
@@ -102,7 +405,11 @@ export async function storeFacebookAuthorizationCode(input: {
 
   await writeFacebookConnectState({
     ...stored,
-    authorizationCode: input.code,
+    authorizationCodeEnvelope: sealFacebookAuthorizationCode(input.code, {
+      state: stored.state,
+      workspaceId: stored.workspaceId,
+      userId: stored.userId,
+    }),
   });
   return true;
 }
@@ -118,7 +425,22 @@ export async function validateStoredFacebookState(input: {
   if (!stored) {
     throw new Error("invalid facebook connect state");
   }
-  return stored;
+  const { authorizationCodeEnvelope, ...validatedState } = stored;
+  return {
+    ...validatedState,
+    ...(authorizationCodeEnvelope
+      ? {
+          authorizationCode: unsealFacebookAuthorizationCode(
+            authorizationCodeEnvelope,
+            {
+              state: stored.state,
+              workspaceId: stored.workspaceId,
+              userId: stored.userId,
+            }
+          ),
+        }
+      : {}),
+  } satisfies ValidatedFacebookConnectState;
 }
 
 export async function getStoredFacebookState(state: string) {
@@ -134,9 +456,20 @@ export async function storeFacebookPages(input: {
     throw new Error("invalid facebook connect state");
   }
 
+  const { authorizationCodeEnvelope, ...stateWithoutCode } = stored;
+  void authorizationCodeEnvelope;
+
   await writeFacebookConnectState({
-    ...stored,
-    pages: input.pages,
+    ...stateWithoutCode,
+    pages: input.pages.map(page => ({
+      ...page,
+      accessToken: sealFacebookConnectPageToken(page.accessToken, {
+        state: stored.state,
+        workspaceId: stored.workspaceId,
+        userId: stored.userId,
+        pageId: page.id,
+      }),
+    })),
   });
 }
 
@@ -152,8 +485,14 @@ export async function consumeFacebookPage(input: {
     throw new Error("facebook page was not authorized in this connect flow");
   }
 
+  const accessToken = unsealFacebookConnectPageToken(page.accessToken, {
+    state: stored.state,
+    workspaceId: stored.workspaceId,
+    userId: stored.userId,
+    pageId: page.id,
+  });
   await deleteFacebookConnectState(input.state);
-  return page;
+  return { ...page, accessToken };
 }
 
 function getFacebookApiVersion() {

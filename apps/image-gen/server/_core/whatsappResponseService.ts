@@ -4,7 +4,9 @@ import type { ConversationState } from "./messengerState";
 import {
   sendWhatsAppButtons,
   sendWhatsAppImage,
+  sendWhatsAppImageWithReceipt,
   sendWhatsAppText,
+  type WhatsAppDeliveryReceipt,
 } from "./whatsappApi";
 import { setPendingConversationActions } from "./messengerState";
 
@@ -20,6 +22,14 @@ export async function sendWhatsAppImageReply(
   imageUrl: string
 ): Promise<void> {
   await sendWhatsAppImage(senderId, imageUrl);
+}
+
+export async function sendWhatsAppImageReplyWithReceipt(
+  senderId: string,
+  imageUrl: string,
+  reqId: string
+): Promise<WhatsAppDeliveryReceipt> {
+  return sendWhatsAppImageWithReceipt(senderId, imageUrl, reqId);
 }
 
 export async function sendWhatsAppButtonsReply(
@@ -62,7 +72,10 @@ export async function sendWhatsAppBotStateResponse(
     sendText: text => sendWhatsAppText(senderId, text),
     sendActionPrompt: async (text, actions) => {
       await Promise.resolve(setPendingConversationActions(senderId, actions));
-      await sendWhatsAppText(senderId, buildWhatsAppActionListText(text, actions));
+      await sendWhatsAppText(
+        senderId,
+        buildWhatsAppActionListText(text, actions)
+      );
     },
     replyState: replyState ?? undefined,
     sendStateText: (stateName, text) =>
@@ -76,7 +89,10 @@ export function createWhatsAppResponseSender(senderId: string) {
     sendImage: (imageUrl: string) => sendWhatsAppImage(senderId, imageUrl),
     sendActions: async (text: string, actions: ConversationAction[]) => {
       await Promise.resolve(setPendingConversationActions(senderId, actions));
-      await sendWhatsAppText(senderId, buildWhatsAppActionListText(text, actions));
+      await sendWhatsAppText(
+        senderId,
+        buildWhatsAppActionListText(text, actions)
+      );
     },
   };
 }

@@ -7,6 +7,7 @@ describe("storageKeyFromPublicUrl", () => {
   const originalForgeApiKey = process.env.BUILT_IN_FORGE_API_KEY;
   const originalStorageErrorBodyMaxChars =
     process.env.STORAGE_ERROR_BODY_MAX_CHARS;
+  const originalStorageUploadTimeoutMs = process.env.STORAGE_UPLOAD_TIMEOUT_MS;
 
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -34,6 +35,12 @@ describe("storageKeyFromPublicUrl", () => {
       process.env.STORAGE_ERROR_BODY_MAX_CHARS =
         originalStorageErrorBodyMaxChars;
     }
+    if (originalStorageUploadTimeoutMs === undefined) {
+      delete process.env.STORAGE_UPLOAD_TIMEOUT_MS;
+    } else {
+      process.env.STORAGE_UPLOAD_TIMEOUT_MS = originalStorageUploadTimeoutMs;
+    }
+    vi.useRealTimers();
   });
 
   it("extracts object keys from bare public URLs", () => {
@@ -105,5 +112,30 @@ describe("storageKeyFromPublicUrl", () => {
     await expect(
       storagePut("generated/test.png", Buffer.from("png"))
     ).rejects.toThrow("12345678...<truncated>");
+  });
+
+  it("aborts an upload at the configured bounded timeout", async () => {
+    process.env.BUILT_IN_FORGE_API_URL = "https://forge.example";
+    process.env.BUILT_IN_FORGE_API_KEY = "forge-secret";
+    process.env.STORAGE_UPLOAD_TIMEOUT_MS = "5";
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url: URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              reject(new DOMException("aborted", "AbortError"));
+            });
+          })
+      )
+    );
+
+    const upload = storagePut("generated/timeout.png", Buffer.from("png"));
+    const rejection = expect(upload).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    await vi.advanceTimersByTimeAsync(6);
+    await rejection;
   });
 });

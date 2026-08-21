@@ -1,5 +1,4 @@
 import { safeLog } from "../logger";
-import { safelyAppendCostLedgerEntry } from "../costLedger";
 import type {
   VideoProvider,
   VideoProviderFailure,
@@ -302,37 +301,10 @@ async function createVideoJob(
   );
 
   const apiKey = getApiKey();
-  const attemptNow = new Date();
-  const suppliedEntryId = await input.onProviderAttempt?.();
-  const ledgerEntryId =
-    suppliedEntryId || `${input.reqId}:${attemptNow.toISOString()}`;
-  if (!suppliedEntryId)
-    await safelyAppendCostLedgerEntry(
-      {
-        id: ledgerEntryId,
-        channel: "facebook_messenger",
-        operation: "video_generation",
-        provider: "openai-video",
-        model: getModel(),
-        userKey: input.userKey,
-        reqId: input.reqId,
-        status: "provider_attempt_started",
-        estimatedCostUsd: null,
-        estimatedOutputCostUsd: null,
-        finalCostUsd: null,
-        costEstimateComplete: false,
-        estimateSource: "unpriced",
-        unpricedCostComponents: ["video_generation"],
-        providerUsage: {
-          pricingModel: "unpriced",
-          size: getSize(),
-          seconds: Number(getSeconds()),
-          sourceContentType: referenceImage.contentType,
-          sourceBytes: referenceImage.bytes.byteLength,
-        },
-      },
-      attemptNow
-    );
+  if (!input.onProviderAttempt) {
+    throw new Error("Video provider attempt admission is required");
+  }
+  await input.onProviderAttempt();
   const response = await fetchWithTimeout(
     OPENAI_VIDEO_ENDPOINT,
     {

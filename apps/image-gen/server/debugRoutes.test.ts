@@ -31,6 +31,12 @@ vi.mock("./_core/portalHandoffSecurity", () => ({
 
 const originalAdminToken = process.env.ADMIN_TOKEN;
 const messengerSenderUserKey = "a".repeat(64);
+const DEBUG_COST_SCOPE = {
+  workspaceId: 41,
+  channelConnectionId: 7,
+  bindingEpoch: 3,
+  privacyEpoch: 1,
+} as const;
 
 afterEach(() => {
   mocks.sendPortalHandoffLink.mockReset();
@@ -145,6 +151,7 @@ describe("debug/admin routes", () => {
     process.env.ADMIN_TOKEN = "secret-admin-token";
     await appendCostLedgerEntry(
       {
+        scope: DEBUG_COST_SCOPE,
         id: "req-cost-route:attempt-1",
         channel: "facebook_messenger",
         operation: "image_generation",
@@ -173,19 +180,12 @@ describe("debug/admin routes", () => {
 
       expect(response.status).toBe(200);
       expect(payload).toMatchObject({
+        version: 2,
         period: "2026-06-21",
-        totalEntries: 1,
-        uniqueUserCount: 1,
+        attempts: 1,
         estimatedCostUsd: 0.025,
-        openAttemptEntries: 1,
-        failedAttemptEntries: 0,
-        blockedEntries: 0,
-        byStatus: {
-          provider_attempt_started: 1,
-          provider_attempt_succeeded: 0,
-          provider_attempt_failed: 0,
-          blocked: 0,
-        },
+        completeEstimateEntries: 1,
+        incompleteEstimateEntries: 0,
         byOperation: {
           image_generation: {
             attempts: 1,
@@ -202,6 +202,9 @@ describe("debug/admin routes", () => {
       expect(JSON.stringify(payload)).not.toContain("prompt");
       expect(JSON.stringify(payload)).not.toContain("facebook:");
       expect(JSON.stringify(payload)).not.toContain("secret-admin-token");
+      expect(JSON.stringify(payload)).not.toContain("user-key-1");
+      expect(JSON.stringify(payload)).not.toContain("req-cost-route");
+      expect(payload).not.toHaveProperty("workspaceId");
     } finally {
       await server.close();
     }
@@ -211,6 +214,7 @@ describe("debug/admin routes", () => {
     process.env.ADMIN_TOKEN = "secret-admin-token";
     await appendCostLedgerEntry(
       {
+        scope: DEBUG_COST_SCOPE,
         id: "req-dashboard-safe:attempt-1",
         channel: "facebook_messenger",
         operation: "image_generation",
@@ -230,6 +234,7 @@ describe("debug/admin routes", () => {
     );
     await appendCostLedgerEntry(
       {
+        scope: DEBUG_COST_SCOPE,
         id: "req-dashboard-blocked:attempt-1",
         channel: "facebook_messenger",
         operation: "audio_<script>alert(1)</script>",
@@ -264,8 +269,7 @@ describe("debug/admin routes", () => {
       expect(body).toContain("Leaderbot Cost Dashboard");
       expect(body).toContain("Period: 2026-06-21");
       expect(body).toContain("$0.0250");
-      expect(body).toContain("1 failed provider attempts");
-      expect(body).toContain("1 budget or quota blocks");
+      expect(body).toContain("Provider attempts: 2");
       expect(body).toContain("1 incomplete cost estimates");
       expect(body).toContain(
         "1 process-local Messenger delivery failures today"
@@ -324,6 +328,7 @@ describe("debug/admin routes", () => {
     process.env.ADMIN_TOKEN = "secret-admin-token";
     await appendCostLedgerEntry(
       {
+        scope: DEBUG_COST_SCOPE,
         id: "req-cost-route-queue-fail:attempt-1",
         channel: "facebook_messenger",
         operation: "image_generation",
@@ -356,7 +361,7 @@ describe("debug/admin routes", () => {
       expect(response.status).toBe(200);
       expect(payload).toMatchObject({
         period: "2026-06-21",
-        totalEntries: 1,
+        attempts: 1,
         estimatedCostUsd: 0.025,
         queueHealth: {
           available: false,
@@ -377,7 +382,7 @@ describe("debug/admin routes", () => {
   it("returns 500 when cost summary generation fails", async () => {
     process.env.ADMIN_TOKEN = "secret-admin-token";
     const summaryMock = vi
-      .spyOn(costLedger, "summarizeCostLedgerPeriod")
+      .spyOn(costLedger, "readCostLedgerBudgetPeriod")
       .mockRejectedValue(new Error("summary failed"));
     const server = await startServer();
 

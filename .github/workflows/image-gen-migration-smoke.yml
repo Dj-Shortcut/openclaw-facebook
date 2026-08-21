@@ -23,8 +23,19 @@ on:
       - "apps/image-gen/server/_core/billing/billingProfileStore.ts"
       - "apps/image-gen/server/_core/billing/billingSchedulerStore.ts"
       - "apps/image-gen/server/_core/messengerInboundActivity.ts"
+      - "apps/image-gen/server/_core/messengerProviderAttemptFence.ts"
+      - "apps/image-gen/server/_core/messengerApi.ts"
+      - "apps/image-gen/server/_core/videoGenerationFlow.ts"
+      - "apps/image-gen/server/_core/webhookAudioMessageRouter.ts"
+      - "apps/image-gen/server/_core/webhookEventRouter.ts"
+      - "apps/image-gen/server/_core/webhookGenerationJobs.ts"
+      - "apps/image-gen/server/_core/workspaceEntitlementRuntime.ts"
+      - "apps/image-gen/server/db.ts"
       - "apps/image-gen/server/portalHandoff.mysql.test.ts"
       - "apps/image-gen/server/billingExecution.mysql.test.ts"
+      - "apps/image-gen/server/messengerIngressOwnership.mysql.test.ts"
+      - "apps/image-gen/server/messengerProviderAttemptFence.test.ts"
+      - "apps/image-gen/server/messengerProviderAttemptFence.mysql.test.ts"
       - "apps/image-gen/server/paymentSnapshot.mysql.test.ts"
       - ".github/workflows/image-gen-migration-smoke.yml"
   workflow_dispatch:
@@ -160,7 +171,7 @@ jobs:
             exit 1;
           fi
 
-      - name: Verify billing, payment snapshot and portal handoff MySQL concurrency
+      - name: Verify billing, provider fence, payment snapshot and portal handoff MySQL concurrency
         working-directory: apps/image-gen
         env:
           DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_image_gen
@@ -168,6 +179,8 @@ jobs:
         run: |
           ./node_modules/.bin/vitest run server/portalHandoff.mysql.test.ts
           ./node_modules/.bin/vitest run server/billingExecution.mysql.test.ts
+          ./node_modules/.bin/vitest run server/messengerIngressOwnership.mysql.test.ts
+          ./node_modules/.bin/vitest run server/messengerProviderAttemptFence.mysql.test.ts
           ./node_modules/.bin/vitest run server/paymentSnapshot.mysql.test.ts
 
       - name: Rehearse portal handoff schema upgrade with existing rows

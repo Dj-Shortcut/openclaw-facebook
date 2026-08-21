@@ -95,10 +95,12 @@ export async function beginMessengerPrivacyErasure(
     const subject = rows[0];
     if (!subject) throw new MessengerPrivacyFenceError();
     if (subject.status === "active") {
-      const nextEpoch = subject.privacyEpoch + 1;
+      // Status is the immediate deletion fence. Keep the epoch stable while
+      // immutable provider-attempt rows still reference it through the
+      // composite FK; bumping it here would fail before containment can run.
       await tx
         .update(messengerPrivacySubjects)
-        .set({ privacyEpoch: nextEpoch, status: "erasing" })
+        .set({ status: "erasing" })
         .where(
           and(
             eq(messengerPrivacySubjects.id, subject.id),
@@ -106,7 +108,7 @@ export async function beginMessengerPrivacyErasure(
             eq(messengerPrivacySubjects.status, "active")
           )
         );
-      return nextEpoch;
+      return subject.privacyEpoch;
     }
     return subject.privacyEpoch;
   });
@@ -117,24 +119,64 @@ export async function completeMessengerPrivacyErasure(
   now = new Date()
 ): Promise<void> {
   const database = await getDatabaseOrThrow();
-  const result = await database
-    .update(messengerPrivacySubjects)
-    .set({ status: "erased", erasedAt: now })
+  await database.transaction(async tx => {
+    const rows = await tx
+      .select({
+        id: messengerPrivacySubjects.id,
+        privacyEpoch: messengerPrivacySubjects.privacyEpoch,
+        status: messengerPrivacySubjects.status,
+      })
+      .from(messengerPrivacySubjects)
+      .where(scopePredicate(input))
+      .limit(1)
+      .for("update");
+    const subject = rows[0];
+    if (
+      !subject ||
+      subject.privacyEpoch !== input.privacyEpoch ||
+      (subject.status !== "erasing" && subject.status !== "erased")
+    ) {
+      throw new MessengerPrivacyFenceError();
+    }
+    if (subject.status === "erased") return;
+    const result = await tx
+      .update(messengerPrivacySubjects)
+      .set({ status: "erased", erasedAt: now })
+      .where(
+        and(
+          eq(messengerPrivacySubjects.id, subject.id),
+          eq(messengerPrivacySubjects.privacyEpoch, input.privacyEpoch),
+          eq(messengerPrivacySubjects.status, "erasing")
+        )
+      );
+    const metadata = Array.isArray(result) ? result[0] : result;
+    if (
+      Number(
+        (metadata as { affectedRows?: number } | undefined)?.affectedRows ?? 0
+      ) !== 1
+    ) {
+      throw new MessengerPrivacyFenceError();
+    }
+  });
+}
+
+export async function isMessengerPrivacyErasureComplete(
+  input: SubjectScope & { privacyEpoch: number }
+): Promise<boolean> {
+  validateScope(input);
+  const database = await getDatabaseOrThrow();
+  const rows = await database
+    .select({ id: messengerPrivacySubjects.id })
+    .from(messengerPrivacySubjects)
     .where(
       and(
         scopePredicate(input),
         eq(messengerPrivacySubjects.privacyEpoch, input.privacyEpoch),
-        eq(messengerPrivacySubjects.status, "erasing")
+        eq(messengerPrivacySubjects.status, "erased")
       )
-    );
-  const metadata = Array.isArray(result) ? result[0] : result;
-  if (
-    Number(
-      (metadata as { affectedRows?: number } | undefined)?.affectedRows ?? 0
-    ) !== 1
-  ) {
-    throw new MessengerPrivacyFenceError();
-  }
+    )
+    .limit(1);
+  return Boolean(rows[0]);
 }
 
 function scopePredicate(input: SubjectScope) {

@@ -124,6 +124,33 @@ function deleteRawState(storageKey: string): MaybePromise<void> {
   );
 }
 
+function deleteRawStateIfValue<T>(
+  storageKey: string,
+  expectedValue: T
+): MaybePromise<boolean> {
+  const expectedPayload = JSON.stringify(expectedValue);
+
+  if (!isRedisStateStoreEnabled()) {
+    clearExpiredMemoryState();
+    if (memoryState.get(storageKey) !== expectedPayload) {
+      return false;
+    }
+    memoryState.delete(storageKey);
+    memoryStateExpiresAt.delete(storageKey);
+    return true;
+  }
+
+  return getRedisClient().then(async redis => {
+    const result = await redis.eval(
+      "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+      1,
+      storageKey,
+      expectedPayload
+    );
+    return result === 1;
+  });
+}
+
 export function readScopedState<T>(
   scope: string,
   key: string
@@ -153,6 +180,13 @@ export function readState<T>(psid: string): MaybePromise<T | null> {
 
 export function deleteState(psid: string): MaybePromise<void> {
   return deleteRawState(getStateKey(psid));
+}
+
+export function deleteStateIfValue<T>(
+  psid: string,
+  expectedValue: T
+): MaybePromise<boolean> {
+  return deleteRawStateIfValue(getStateKey(psid), expectedValue);
 }
 
 export function writeState<T>(psid: string, value: T): MaybePromise<void> {

@@ -19,10 +19,14 @@ import {
 import type { HandlerContext } from "./webhookHandlerTypes";
 import {
   getMessengerRequestOwnership,
+  getMessengerRequestPrivacySubject,
   setMessengerRequestOperationId,
   setMessengerRequestPrivacySubject,
 } from "./messengerRequestContext";
-import { ensureActiveMessengerPrivacySubject } from "./messengerPrivacySubject";
+import {
+  assertMessengerPrivacySubject,
+  ensureActiveMessengerPrivacySubject,
+} from "./messengerPrivacySubject";
 
 type MessengerState = Awaited<ReturnType<typeof getOrCreateState>>;
 
@@ -57,17 +61,29 @@ export async function createTrackedEventContext(
   const reqId = randomUUID();
   setMessengerRequestOperationId(reqId);
   const ownership = getMessengerRequestOwnership();
+  const expectedPrivacy = getMessengerRequestPrivacySubject();
   if (!ownership && process.env.NODE_ENV === "production") {
     return null;
   }
   let privacyEpoch: number | undefined;
   if (ownership) {
     try {
-      privacyEpoch = await ensureActiveMessengerPrivacySubject({
-        workspaceId: ownership.workspaceId,
-        channelConnectionId: ownership.channelConnectionId,
-        userKey: userId,
-      });
+      if (expectedPrivacy) {
+        if (expectedPrivacy.userKey !== userId) return null;
+        await assertMessengerPrivacySubject({
+          workspaceId: ownership.workspaceId,
+          channelConnectionId: ownership.channelConnectionId,
+          userKey: userId,
+          privacyEpoch: expectedPrivacy.privacyEpoch,
+        });
+        privacyEpoch = expectedPrivacy.privacyEpoch;
+      } else {
+        privacyEpoch = await ensureActiveMessengerPrivacySubject({
+          workspaceId: ownership.workspaceId,
+          channelConnectionId: ownership.channelConnectionId,
+          userKey: userId,
+        });
+      }
     } catch {
       return null;
     }

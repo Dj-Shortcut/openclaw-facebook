@@ -28,14 +28,17 @@ These variables are the first things to verify when the bot does not reply or Me
 These variables are required for the public Leaderbot WhatsApp number. See
 `whatsapp-setup.md` for the full verification checklist.
 
-| Variable                       | Required for                                          | Notes                                                                                                              |
-| ------------------------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `WHATSAPP_ACCESS_TOKEN`        | WhatsApp Cloud API sends and media downloads          | If wrong or expired, outbound replies and media downloads fail.                                                    |
-| `WHATSAPP_PHONE_NUMBER_ID`     | WhatsApp Cloud API `/messages` endpoint               | Must be the public number's phone-number ID, not the display number.                                               |
-| `META_VERIFY_TOKEN`            | Shared Meta webhook verification                      | Accepted on Messenger and WhatsApp routes.                                                                         |
-| `WHATSAPP_VERIFY_TOKEN`        | Dedicated WhatsApp webhook verification               | Accepted only on `/webhook/whatsapp`; useful when Meta's WhatsApp setup uses a channel-specific token.             |
-| `WHATSAPP_APP_SECRET`          | Optional dedicated WhatsApp POST signature validation | Set this when WhatsApp is configured under a different Meta app than Messenger; otherwise `FB_APP_SECRET` is used. |
-| `WHATSAPP_BUSINESS_ACCOUNT_ID` | Meta Business diagnostics                             | Not required by runtime sends, but useful for setup checks.                                                        |
+| Variable                             | Required for                                          | Notes                                                                                                              |
+| ------------------------------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `WHATSAPP_ACCESS_TOKEN`              | WhatsApp Cloud API sends and media downloads          | If wrong or expired, outbound replies and media downloads fail.                                                    |
+| `WHATSAPP_PHONE_NUMBER_ID`           | WhatsApp Cloud API `/messages` endpoint               | Must be the public number's phone-number ID, not the display number.                                               |
+| `META_VERIFY_TOKEN`                  | Shared Meta webhook verification                      | Accepted on Messenger and WhatsApp routes.                                                                         |
+| `WHATSAPP_VERIFY_TOKEN`              | Dedicated WhatsApp webhook verification               | Accepted only on `/webhook/whatsapp`; useful when Meta's WhatsApp setup uses a channel-specific token.             |
+| `WHATSAPP_APP_SECRET`                | Optional dedicated WhatsApp POST signature validation | Set this when WhatsApp is configured under a different Meta app than Messenger; otherwise `FB_APP_SECRET` is used. |
+| `WHATSAPP_BUSINESS_ACCOUNT_ID`       | Meta Business diagnostics                             | Not required by runtime sends, but useful for setup checks.                                                        |
+| `WHATSAPP_GRAPH_SEND_TIMEOUT_MS`     | Bounded outbound Graph transport                      | Optional; defaults to `10000` and is capped at `30000`.                                                            |
+| `WHATSAPP_MEDIA_DOWNLOAD_TIMEOUT_MS` | Bounded inbound media download                        | Optional; defaults to `10000` and is capped at `30000`.                                                            |
+| `STORAGE_UPLOAD_TIMEOUT_MS`          | Bounded generated-image object upload                 | Optional; defaults to `30000` and is capped at `60000`. Privacy erasure uses a longer durable settle fence.        |
 
 ## 3. OpenAI paths
 

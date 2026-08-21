@@ -130,6 +130,45 @@ describe("messengerGenerationCompletion", () => {
     });
   });
 
+  it("isolates an identical request and subject across Meta channels", async () => {
+    const base = {
+      workspaceId: 42,
+      channelConnectionId: 7,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      userKey: "user-key-cross-channel",
+      pageId: "external-id-shared",
+    };
+    const messenger = { ...base, channel: "facebook_messenger" as const };
+    const whatsapp = { ...base, channel: "whatsapp" as const };
+
+    await markMessengerGenerationCompleted(
+      "req-cross-channel",
+      "https://assets.example/generated/messenger.jpg",
+      base.userKey,
+      1_771_000_000_000,
+      messenger
+    );
+    await markMessengerGenerationCompleted(
+      "req-cross-channel",
+      "https://assets.example/generated/whatsapp.jpg",
+      base.userKey,
+      1_771_000_000_100,
+      whatsapp
+    );
+
+    await expect(
+      getMessengerGenerationCompletion("req-cross-channel", messenger)
+    ).resolves.toMatchObject({
+      imageUrl: "https://assets.example/generated/messenger.jpg",
+    });
+    await expect(
+      getMessengerGenerationCompletion("req-cross-channel", whatsapp)
+    ).resolves.toMatchObject({
+      imageUrl: "https://assets.example/generated/whatsapp.jpg",
+    });
+  });
+
   it("never regresses delivered to pending or extends absolute retention", async () => {
     const fence = {
       workspaceId: 42,
@@ -170,7 +209,7 @@ describe("messengerGenerationCompletion", () => {
     expect(storageDeleteMock).toHaveBeenCalledWith("generated/replayed.jpg");
   });
 
-  it("fails closed when delivery has no create-once completion", async () => {
+  it("fails closed without deleting an object after accepted delivery has no marker", async () => {
     const fence = {
       workspaceId: 42,
       channelConnectionId: 7,
@@ -188,7 +227,7 @@ describe("messengerGenerationCompletion", () => {
         fence
       )
     ).rejects.toThrow("Messenger completion missing");
-    expect(storageDeleteMock).toHaveBeenCalledWith("generated/missing.jpg");
+    expect(storageDeleteMock).not.toHaveBeenCalled();
   });
 
   it("stores completion markers by generation request id", async () => {

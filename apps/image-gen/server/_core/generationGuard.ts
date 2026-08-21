@@ -10,9 +10,10 @@ import {
   setEphemeralKeyIfAbsent,
 } from "./stateStore";
 import {
-  summarizeCostLedgerPeriod,
-  summarizeCostLedgerPeriods,
+  readCostLedgerBudgetPeriod,
+  summarizeCostLedgerBudgetPeriods,
   summarizeCostLedgerPeriodForUser,
+  type CostLedgerScope,
 } from "./costLedger";
 import { safeLog } from "./logger";
 import { notifyOwner } from "./notification";
@@ -425,6 +426,7 @@ export function getMessengerUserDailySpendBudgetConfig(): MessengerUserDailySpen
 export async function admitMessengerProviderSpend<T>(input: {
   reqId: string;
   attemptId: string;
+  scope: CostLedgerScope;
   userKey: string;
   estimatedCostUsd: number | null;
   estimatedOutputCostUsd?: number | null;
@@ -474,16 +476,28 @@ export async function admitMessengerProviderSpend<T>(input: {
   const day = getUtcDayKey(now);
   const month = getUtcMonthKey(now);
   const [dailySummary, monthlySummary, userSummary] = await Promise.all([
-    summarizeCostLedgerPeriod(day),
-    summarizeCostLedgerPeriods(getUtcMonthDayPeriods(now), month),
-    summarizeCostLedgerPeriodForUser(day, input.userKey),
+    readCostLedgerBudgetPeriod(day),
+    summarizeCostLedgerBudgetPeriods(getUtcMonthDayPeriods(now), month),
+    summarizeCostLedgerPeriodForUser(input.scope, day, input.userKey),
   ]);
   const tag = `{messenger-spend:${month}}`;
   const attemptKey = createHash("sha256")
+    .update(String(input.scope.workspaceId))
+    .update("\0")
+    .update(String(input.scope.channelConnectionId))
+    .update("\0")
+    .update(String(input.scope.bindingEpoch))
+    .update("\0")
+    .update(String(input.scope.privacyEpoch))
+    .update("\0")
     .update(input.attemptId)
     .digest("hex")
     .slice(0, 32);
   const userKey = createHash("sha256")
+    .update(String(input.scope.workspaceId))
+    .update("\0")
+    .update(String(input.scope.channelConnectionId))
+    .update("\0")
     .update(input.userKey)
     .digest("hex")
     .slice(0, 32);
@@ -598,7 +612,7 @@ export async function assertMessengerDailySpendBudgetAvailable(input: {
     );
   }
 
-  const summary = await summarizeCostLedgerPeriod(period);
+  const summary = await readCostLedgerBudgetPeriod(period);
   const projectedSpendUsd = summary.estimatedCostUsd + attemptEstimate;
   if (projectedSpendUsd > capUsd) {
     safeLog("messenger_daily_spend_budget_reached", {
@@ -660,7 +674,7 @@ export async function assertMessengerMonthlySpendBudgetAvailable(input: {
     );
   }
 
-  const summary = await summarizeCostLedgerPeriods(
+  const summary = await summarizeCostLedgerBudgetPeriods(
     getUtcMonthDayPeriods(now),
     monthPeriod
   );
@@ -689,6 +703,7 @@ export async function assertMessengerMonthlySpendBudgetAvailable(input: {
 
 export async function assertMessengerUserDailySpendBudgetAvailable(input: {
   reqId: string;
+  scope: CostLedgerScope;
   userKey: string;
   estimatedCostUsd: number | null;
   estimatedOutputCostUsd?: number | null;
@@ -728,7 +743,11 @@ export async function assertMessengerUserDailySpendBudgetAvailable(input: {
     );
   }
 
-  const summary = await summarizeCostLedgerPeriodForUser(period, input.userKey);
+  const summary = await summarizeCostLedgerPeriodForUser(
+    input.scope,
+    period,
+    input.userKey
+  );
   const projectedSpendUsd = summary.estimatedCostUsd + attemptEstimate;
   if (projectedSpendUsd > capUsd) {
     safeLog("messenger_user_daily_spend_budget_reached", {

@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createHash, createHmac } from "node:crypto";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   getRedisClientMock,
@@ -6,12 +7,20 @@ const {
   safeLogMock,
   processFacebookWebhookPayloadMock,
   processWhatsAppWebhookPayloadMock,
+  assertMessengerGenerationOwnershipMock,
+  assertMessengerPrivacySubjectMock,
+  runWithMessengerRequestContextMock,
 } = vi.hoisted(() => ({
   getRedisClientMock: vi.fn(),
   isRedisEnabledMock: vi.fn(() => false),
   safeLogMock: vi.fn(),
   processFacebookWebhookPayloadMock: vi.fn(),
   processWhatsAppWebhookPayloadMock: vi.fn(),
+  assertMessengerGenerationOwnershipMock: vi.fn(),
+  assertMessengerPrivacySubjectMock: vi.fn(),
+  runWithMessengerRequestContextMock: vi.fn(
+    async (_pageId: string, task: () => Promise<void>) => await task()
+  ),
 }));
 
 vi.mock("./_core/messengerApi", () => ({
@@ -33,6 +42,20 @@ vi.mock("./_core/whatsappWebhook", () => ({
   processWhatsAppWebhookPayload: processWhatsAppWebhookPayloadMock,
 }));
 
+vi.mock("./_core/workspaceEntitlementRuntime", () => ({
+  assertMessengerGenerationOwnership: assertMessengerGenerationOwnershipMock,
+  resolveMessengerGenerationOwnership: vi.fn(),
+}));
+
+vi.mock("./_core/messengerPrivacySubject", () => ({
+  assertMessengerPrivacySubject: assertMessengerPrivacySubjectMock,
+  ensureActiveMessengerPrivacySubject: vi.fn(),
+}));
+
+vi.mock("./_core/messengerRequestContext", () => ({
+  runWithMessengerRequestContext: runWithMessengerRequestContextMock,
+}));
+
 import {
   resetWebhookIngressQueueForTests,
   scheduleWebhookIngressDrain,
@@ -41,6 +64,11 @@ import {
 describe("webhookIngressQueue", () => {
   const originalMaxAttempts = process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS;
   const originalRetryDelayMs = process.env.WEBHOOK_INGRESS_RETRY_DELAY_MS;
+  const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
+
+  beforeEach(() => {
+    process.env.PRIVACY_PEPPER = "webhook-ingress-queue-test-pepper";
+  });
 
   afterEach(() => {
     vi.useRealTimers();
@@ -49,6 +77,14 @@ describe("webhookIngressQueue", () => {
     isRedisEnabledMock.mockReturnValue(false);
     processFacebookWebhookPayloadMock.mockReset();
     processWhatsAppWebhookPayloadMock.mockReset();
+    assertMessengerGenerationOwnershipMock.mockReset();
+    assertMessengerGenerationOwnershipMock.mockResolvedValue(undefined);
+    assertMessengerPrivacySubjectMock.mockReset();
+    assertMessengerPrivacySubjectMock.mockResolvedValue(undefined);
+    runWithMessengerRequestContextMock.mockReset();
+    runWithMessengerRequestContextMock.mockImplementation(
+      async (_pageId: string, task: () => Promise<void>) => await task()
+    );
     safeLogMock.mockReset();
     if (originalMaxAttempts === undefined) {
       delete process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS;
@@ -59,6 +95,11 @@ describe("webhookIngressQueue", () => {
       delete process.env.WEBHOOK_INGRESS_RETRY_DELAY_MS;
     } else {
       process.env.WEBHOOK_INGRESS_RETRY_DELAY_MS = originalRetryDelayMs;
+    }
+    if (originalPrivacyPepper === undefined) {
+      delete process.env.PRIVACY_PEPPER;
+    } else {
+      process.env.PRIVACY_PEPPER = originalPrivacyPepper;
     }
     resetWebhookIngressQueueForTests();
   });
@@ -141,6 +182,248 @@ describe("webhookIngressQueue", () => {
       entry: [{ id: "second" }],
     });
   });
+
+  it("rejects a persisted Messenger delivery after its Page ownership changed", async () => {
+    isRedisEnabledMock.mockReturnValue(true);
+    process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS = "1";
+    const deliveryId = "53f625ce-8f2b-40b7-ae76-c9228bd6a14a";
+    const senderId = "sender-from-workspace-a";
+    const userKey = createHmac("sha256", process.env.PRIVACY_PEPPER!)
+      .update(senderId)
+      .digest("hex");
+    const now = Date.now();
+    const delivery = {
+      deliveryId,
+      channel: "facebook",
+      payload: {
+        object: "page",
+        entry: [
+          {
+            id: "page-a",
+            messaging: [
+              {
+                sender: { id: senderId },
+                recipient: { id: "page-a" },
+                message: { mid: "message-a", text: "private prompt" },
+              },
+            ],
+          },
+        ],
+      },
+      receivedAt: new Date(now).toISOString(),
+      expiresAt: now + 60_000,
+      subjects: [
+        {
+          workspaceId: 41,
+          channelConnectionId: 17,
+          bindingEpoch: 3,
+          privacyEpoch: 2,
+          pageId: "page-a",
+          userKey,
+        },
+      ],
+    };
+    assertMessengerGenerationOwnershipMock.mockRejectedValue(
+      new Error("Messenger generation ownership changed after enqueue")
+    );
+    const queue = [deliveryId];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const redis = createQueueRedis(queue, processing, dead, {}, [
+      [
+        `{meta-webhook-ingress}:delivery:${deliveryId}`,
+        JSON.stringify(delivery),
+      ],
+    ]);
+    getRedisClientMock.mockResolvedValue(redis);
+
+    scheduleWebhookIngressDrain();
+
+    await vi.waitFor(() => expect(dead).toEqual([deliveryId]));
+    await vi.waitFor(() => expect(redis.lmove).toHaveBeenCalledTimes(2));
+    expect(assertMessengerGenerationOwnershipMock).toHaveBeenCalledWith(
+      delivery.subjects[0]
+    );
+    expect(assertMessengerPrivacySubjectMock).not.toHaveBeenCalled();
+    expect(runWithMessengerRequestContextMock).not.toHaveBeenCalled();
+    expect(processFacebookWebhookPayloadMock).not.toHaveBeenCalled();
+    expect(processing).toEqual([]);
+  });
+
+  it("processes a persisted Messenger delivery under its captured immutable scope", async () => {
+    isRedisEnabledMock.mockReturnValue(true);
+    const deliveryId = "4fc91875-6114-45d5-b784-44e28e00615f";
+    const senderId = "sender-with-scoped-delivery";
+    const userKey = createHmac("sha256", process.env.PRIVACY_PEPPER!)
+      .update(senderId)
+      .digest("hex");
+    const now = Date.now();
+    const subject = {
+      workspaceId: 42,
+      channelConnectionId: 18,
+      bindingEpoch: 4,
+      privacyEpoch: 3,
+      pageId: "page-b",
+      userKey,
+    };
+    const payload = {
+      object: "page",
+      entry: [
+        {
+          id: subject.pageId,
+          messaging: [
+            {
+              sender: { id: senderId },
+              recipient: { id: subject.pageId },
+              message: { mid: "message-b", text: "scoped prompt" },
+            },
+          ],
+        },
+      ],
+    };
+    const delivery = {
+      deliveryId,
+      channel: "facebook",
+      payload,
+      receivedAt: new Date(now).toISOString(),
+      expiresAt: now + 60_000,
+      subjects: [subject],
+    };
+    const queue = [deliveryId];
+    const processing: string[] = [];
+    const dead: string[] = [];
+    const redis = createQueueRedis(queue, processing, dead, {}, [
+      [
+        `{meta-webhook-ingress}:delivery:${deliveryId}`,
+        JSON.stringify(delivery),
+      ],
+    ]);
+    getRedisClientMock.mockResolvedValue(redis);
+
+    scheduleWebhookIngressDrain();
+
+    await vi.waitFor(() =>
+      expect(processFacebookWebhookPayloadMock).toHaveBeenCalledWith(payload)
+    );
+    await vi.waitFor(() => expect(redis.lmove).toHaveBeenCalledTimes(2));
+    expect(assertMessengerGenerationOwnershipMock).toHaveBeenCalledWith(
+      subject
+    );
+    expect(assertMessengerPrivacySubjectMock).toHaveBeenCalledWith({
+      workspaceId: subject.workspaceId,
+      channelConnectionId: subject.channelConnectionId,
+      userKey,
+      privacyEpoch: subject.privacyEpoch,
+    });
+    expect(runWithMessengerRequestContextMock).toHaveBeenCalledWith(
+      subject.pageId,
+      expect.any(Function),
+      subject
+    );
+    expect(queue).toEqual([]);
+    expect(processing).toEqual([]);
+    expect(dead).toEqual([]);
+  });
+
+  it.each([
+    { transition: "retry", maxAttempts: "3" },
+    { transition: "dead-letter", maxAttempts: "1" },
+  ])(
+    "atomically scrubs instead of $transition when erasure wins after processing",
+    async ({ maxAttempts }) => {
+      isRedisEnabledMock.mockReturnValue(true);
+      process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS = maxAttempts;
+      processFacebookWebhookPayloadMock.mockRejectedValue(
+        new Error("handler failed after tombstone")
+      );
+      const deliveryId = "921cd3e0-e722-4539-8abe-f19439a18f67";
+      const senderId = "sender-erased-before-retry";
+      const userKey = createHmac("sha256", process.env.PRIVACY_PEPPER!)
+        .update(senderId)
+        .digest("hex");
+      const subject = {
+        workspaceId: 42,
+        channelConnectionId: 18,
+        bindingEpoch: 4,
+        privacyEpoch: 3,
+        pageId: "page-b",
+        userKey,
+      };
+      const now = Date.now();
+      const delivery = {
+        deliveryId,
+        channel: "facebook",
+        payload: {
+          object: "page",
+          entry: [
+            {
+              id: subject.pageId,
+              messaging: [
+                {
+                  sender: { id: senderId },
+                  recipient: { id: subject.pageId },
+                  message: { mid: "message-erased", text: "private prompt" },
+                },
+              ],
+            },
+          ],
+        },
+        receivedAt: new Date(now).toISOString(),
+        expiresAt: now + 60_000,
+        subjects: [subject],
+      };
+      const queue = [deliveryId];
+      const processing: string[] = [];
+      const dead: string[] = [];
+      const redis = createQueueRedis(
+        queue,
+        processing,
+        dead,
+        {
+          beforePersistedTransition: (tombstoneKeys, stored) => {
+            stored.set(tombstoneKeys[0], String(subject.privacyEpoch));
+          },
+        },
+        [
+          [
+            `{meta-webhook-ingress}:delivery:${deliveryId}`,
+            JSON.stringify(delivery),
+          ],
+        ]
+      );
+      getRedisClientMock.mockResolvedValue(redis);
+
+      scheduleWebhookIngressDrain();
+
+      await vi.waitFor(() =>
+        expect(processFacebookWebhookPayloadMock).toHaveBeenCalledTimes(1)
+      );
+      await vi.waitFor(() => expect(processing).toEqual([]));
+      expect(queue).toEqual([]);
+      expect(dead).toEqual([]);
+      expect(
+        await redis.get(`{meta-webhook-ingress}:delivery:${deliveryId}`)
+      ).toBeNull();
+      expect(safeLogMock).not.toHaveBeenCalledWith(
+        "webhook_queued_delivery_requeued",
+        expect.any(Object)
+      );
+      expect(safeLogMock).not.toHaveBeenCalledWith(
+        "webhook_queued_delivery_dead_lettered",
+        expect.any(Object)
+      );
+      const subjectId = createHash("sha256")
+        .update(String(subject.workspaceId))
+        .update("\0")
+        .update(String(subject.channelConnectionId))
+        .update("\0")
+        .update(subject.userKey)
+        .digest("hex");
+      expect(
+        await redis.get(`{meta-webhook-ingress}:erased:${subjectId}`)
+      ).toBe(String(subject.privacyEpoch));
+    }
+  );
 
   it("does not silently complete a delivery when processing fails", async () => {
     vi.useFakeTimers();
@@ -694,16 +977,25 @@ function createQueueRedis(
     leaseType?: "none" | "string" | "list";
     destinationType?: "none" | "list" | "string";
     pushError?: Error;
-  } = {}
+    beforePersistedTransition?: (
+      tombstoneKeys: string[],
+      stored: Map<string, string>
+    ) => void;
+  } = {},
+  storedEntries: Array<[string, string]> = []
 ) {
   const leases = new Map<string, string>();
+  const stored = new Map(storedEntries);
 
   const redis = {
     del: vi.fn(async (key: string) => {
       leases.delete(key);
+      stored.delete(key);
       return 1;
     }),
-    get: vi.fn(async (key: string) => leases.get(key) ?? null),
+    get: vi.fn(
+      async (key: string) => stored.get(key) ?? leases.get(key) ?? null
+    ),
     lpush: vi.fn(async (key: string, value: string) => {
       if (key === "{meta-webhook-ingress}:queued") {
         queue.unshift(value);
@@ -733,8 +1025,13 @@ function createQueueRedis(
       queue.push(value);
       return queue.length;
     }),
+    srem: vi.fn(async () => 1),
     set: vi.fn(async (key: string, value: string) => {
-      leases.set(key, value);
+      if (key.startsWith("{meta-webhook-ingress}:delivery:")) {
+        stored.set(key, value);
+      } else {
+        leases.set(key, value);
+      }
       return "OK";
     }),
   };
@@ -744,14 +1041,71 @@ function createQueueRedis(
     eval: vi.fn(
       async (
         _script: string,
-        _numKeys: number,
+        numKeys: number,
         _processingKey: string,
         leaseKey: string,
         destinationKey: string,
-        rawDelivery: string,
-        pushDirection: string,
-        serializedDelivery: string
+        ...remaining: string[]
       ) => {
+        if (numKeys > 3) {
+          const subjectCount = (numKeys - 4) / 2;
+          const contentKey = remaining[0];
+          const subjectIndexKeys = remaining.slice(1, 1 + subjectCount);
+          const tombstoneKeys = remaining.slice(
+            1 + subjectCount,
+            1 + subjectCount * 2
+          );
+          const args = remaining.slice(numKeys - 3);
+          const [
+            rawDelivery,
+            action,
+            serializedDelivery,
+            _deadMaxItems,
+            expiresAt,
+            now,
+            _serializedSubjectCount,
+            ...privacyEpochs
+          ] = args;
+          types.beforePersistedTransition?.(tombstoneKeys, stored);
+          const erased =
+            Number(expiresAt) <= Number(now) ||
+            tombstoneKeys.some(
+              (key, index) =>
+                Number(stored.get(key) ?? "0") >=
+                Number(privacyEpochs[index] ?? "0")
+            );
+          if (erased) {
+            for (let index = processing.length - 1; index >= 0; index -= 1) {
+              if (processing[index] === rawDelivery)
+                processing.splice(index, 1);
+            }
+            for (const list of [queue, dead]) {
+              for (let index = list.length - 1; index >= 0; index -= 1) {
+                if (list[index] === rawDelivery) list.splice(index, 1);
+              }
+            }
+            leases.delete(leaseKey);
+            stored.delete(contentKey);
+            return -1;
+          }
+
+          if (!processing.includes(rawDelivery)) return 0;
+          if (types.pushError) throw types.pushError;
+          if (action === "dead") {
+            dead.push(rawDelivery);
+            stored.delete(contentKey);
+          } else {
+            queue.push(rawDelivery);
+            stored.set(contentKey, serializedDelivery);
+          }
+          const index = processing.indexOf(rawDelivery);
+          processing.splice(index, 1);
+          leases.delete(leaseKey);
+          void subjectIndexKeys;
+          return action === "dead" ? 2 : 1;
+        }
+
+        const [rawDelivery, pushDirection, serializedDelivery] = remaining;
         const processingType = types.processingType ?? "list";
         if (processingType !== "none" && processingType !== "list") {
           throw new Error("processing key is not a list");

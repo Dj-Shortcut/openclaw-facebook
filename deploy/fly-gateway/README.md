@@ -65,8 +65,11 @@ every controlled test deployment.
 
 The container preserves `/data/openclaw.json` and only seeds non-secret defaults when missing:
 
-- `OPENCLAW_WORKSPACE_DIR` defaults to `/data/workspace`, keeping `AGENTS.md`, `USER.md`, `MEMORY.md`, and daily memory on the mounted Fly volume.
-- On startup, missing workspace bootstrap files are copied once from the legacy `/home/node/.openclaw/workspace` fallback into `/data/workspace`.
+- `OPENCLAW_WORKSPACE_DIR` defaults to `/data/workspace` for static instruction files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, and `IDENTITY.md`). Public Messenger memory plugins, session-memory hooks, compaction memory flushes, and memory tools are disabled because this gateway serves multiple tenant Pages.
+- Startup moves any legacy shared `USER.md`, `MEMORY.md`, or `memory/` content to the recoverable, operator-only `/data/private-memory-quarantine-v1` directory before accepting traffic. If shared memory reappears after a prior quarantine, startup fails closed instead of overwriting either copy.
+- `session.dmScope` is forced to `per-account-channel-peer`, keeping direct-message history isolated by Page account, channel, and sender even when an older persisted config used OpenClaw's shared `main` default.
+- `attachments.ttlHours` is capped at 24 hours as crash-recovery cleanup; normal Messenger turns delete their downloaded temporary media immediately after completion or failure.
+- On startup, missing static workspace bootstrap files are copied once from the legacy `/home/node/.openclaw/workspace` fallback into `/data/workspace`; legacy user or memory content is never copied into the public workspace.
 - `plugins.load.paths` includes `/app/node_modules/@dj-shortcut/facebook`.
 - `plugins.load.paths` includes `/app/node_modules/@openclaw/codex`.
 - `plugins.entries.facebook.enabled` defaults to `true`.

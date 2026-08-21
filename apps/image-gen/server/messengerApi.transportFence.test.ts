@@ -32,6 +32,7 @@ import { toUserKey } from "./_core/privacy";
 describe("Messenger Graph durable transport fence", () => {
   const originalFetch = global.fetch;
   const originalNodeEnv = process.env.NODE_ENV;
+  const originalGraphTimeout = process.env.GRAPH_API_TIMEOUT_MS;
   const options = () => ({
     pageId: "page-1",
     workspaceId: 41,
@@ -65,8 +66,14 @@ describe("Messenger Graph durable transport fence", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     global.fetch = originalFetch;
     process.env.NODE_ENV = originalNodeEnv;
+    if (originalGraphTimeout === undefined) {
+      delete process.env.GRAPH_API_TIMEOUT_MS;
+    } else {
+      process.env.GRAPH_API_TIMEOUT_MS = originalGraphTimeout;
+    }
   });
 
   it("marks started at the fetch boundary and completes exactly once", async () => {
@@ -93,6 +100,31 @@ describe("Messenger Graph durable transport fence", () => {
     await expect(sendText("psid-fenced", "hello", options())).rejects.toThrow(
       "connection reset"
     );
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(mocks.finalize).toHaveBeenCalledWith(
+      expect.objectContaining({ leaseToken: "lease-1" }),
+      "ambiguous"
+    );
+  });
+
+  it("aborts a stalled Graph transport and keeps the outcome ambiguous", async () => {
+    vi.useFakeTimers();
+    process.env.GRAPH_API_TIMEOUT_MS = "25";
+    global.fetch = vi.fn(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        })
+    );
+
+    const sending = expect(
+      sendText("psid-fenced", "hello", options())
+    ).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(25);
+
+    await sending;
     expect(global.fetch).toHaveBeenCalledTimes(1);
     expect(mocks.finalize).toHaveBeenCalledWith(
       expect.objectContaining({ leaseToken: "lease-1" }),

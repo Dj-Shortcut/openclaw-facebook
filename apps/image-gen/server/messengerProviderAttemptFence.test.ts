@@ -57,6 +57,44 @@ describe("messenger provider attempt privacy identity", () => {
     });
   });
 
+  it("blocks automatic retries after transport start without colliding across tenants", async () => {
+    const inserted: Array<Record<string, unknown>> = [];
+    getDatabaseOrThrowMock.mockResolvedValue(databaseFlow(inserted));
+    const base = {
+      pageId: "page-1",
+      workspaceId: 42,
+      channelConnectionId: 7,
+      bindingEpoch: 3,
+      userId: "privacy-user-key-123",
+      privacyEpoch: 5,
+      reqId: "same-request",
+      psid: "synthetic-psid",
+      lang: "nl" as const,
+    };
+
+    const first = await reserveMessengerProviderAttemptFence(
+      base,
+      "image_generation",
+      1
+    );
+    await expect(
+      reserveMessengerProviderAttemptFence(base, "image_generation", 2)
+    ).rejects.toThrow("Messenger provider attempt already fenced");
+
+    const otherTenant = await reserveMessengerProviderAttemptFence(
+      {
+        ...base,
+        pageId: "page-2",
+        workspaceId: 43,
+        channelConnectionId: 8,
+      },
+      "image_generation",
+      1
+    );
+    expect(otherTenant.attemptKeyHash).not.toBe(first.attemptKeyHash);
+    expect(inserted).toHaveLength(2);
+  });
+
   it("keeps privacy erasure pending while a transport attempt is active", async () => {
     getDatabaseOrThrowMock.mockResolvedValue(
       privacyContainmentFlow([{ id: 91 }])
@@ -86,6 +124,7 @@ describe("messenger provider attempt privacy identity", () => {
 
 function privacyContainmentFlow(active: Array<{ id: number }>) {
   const tx = {
+    delete: vi.fn(() => ({ where: vi.fn(async () => undefined) })),
     update: vi.fn(() => ({
       set: vi.fn(() => ({ where: vi.fn(async () => undefined) })),
     })),
@@ -101,6 +140,7 @@ function privacyContainmentFlow(active: Array<{ id: number }>) {
 }
 
 function databaseFlow(inserted: Array<Record<string, unknown>>) {
+  let selectedAttemptKeyHash: string | undefined;
   const tx = {
     select: vi.fn(() => ({
       from: vi.fn((table: unknown) => ({
@@ -114,14 +154,10 @@ function databaseFlow(inserted: Array<Record<string, unknown>>) {
                 return [{ id: 1 }];
               }
               if (table === messengerProviderAttemptFences) {
-                return [
-                  {
-                    status: "reserved",
-                    leaseToken: inserted.at(-1)?.leaseToken,
-                    leaseUntil: new Date(Date.now() + 60_000),
-                    attemptNumber: 1,
-                  },
-                ];
+                const row = inserted.find(
+                  value => value.attemptKeyHash === selectedAttemptKeyHash
+                );
+                return row ? [row] : [];
               }
               return [];
             }),
@@ -131,7 +167,12 @@ function databaseFlow(inserted: Array<Record<string, unknown>>) {
     })),
     insert: vi.fn(() => ({
       values: vi.fn((value: Record<string, unknown>) => {
-        inserted.push(value);
+        selectedAttemptKeyHash = String(value.attemptKeyHash);
+        if (
+          !inserted.some(row => row.attemptKeyHash === value.attemptKeyHash)
+        ) {
+          inserted.push(value);
+        }
         return { onDuplicateKeyUpdate: vi.fn(async () => undefined) };
       }),
     })),

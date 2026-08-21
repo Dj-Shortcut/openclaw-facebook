@@ -76,10 +76,16 @@ vi.mock("./_core/messengerProviderAttemptFence", () => ({
 }));
 
 import type { HandlerContext } from "./_core/webhookHandlerTypes";
-import { tryHandleAudioMessage } from "./_core/webhookAudioMessageRouter";
+import { tryHandleAudioMessage as tryHandleAudioMessageUnscoped } from "./_core/webhookAudioMessageRouter";
 
 const FIXED_LEDGER_NOW = new Date("2026-06-21T12:00:00.000Z");
 const FIXED_LEDGER_PERIOD = "2026-06-21";
+const COST_SCOPE = {
+  workspaceId: 42,
+  channelConnectionId: 7,
+  bindingEpoch: 3,
+  privacyEpoch: 4,
+} as const;
 import { type FacebookWebhookEvent } from "./_core/webhookHelpers";
 import { t } from "./_core/i18n";
 import {
@@ -91,6 +97,22 @@ import {
   runWithMessengerRequestContext,
   setMessengerRequestPrivacySubject,
 } from "./_core/messengerRequestContext";
+
+const tryHandleAudioMessage = (
+  ctx: Parameters<typeof tryHandleAudioMessageUnscoped>[0],
+  input: Parameters<typeof tryHandleAudioMessageUnscoped>[1]
+) =>
+  runWithMessengerRequestContext(
+    "page-audio-test",
+    async () => {
+      setMessengerRequestPrivacySubject({
+        userKey: input.userId,
+        privacyEpoch: COST_SCOPE.privacyEpoch,
+      });
+      return await tryHandleAudioMessageUnscoped(ctx, input);
+    },
+    COST_SCOPE
+  );
 
 function requestSummaryKey(reqId: string): string {
   return `sha256:${createHash("sha256").update(reqId).digest("hex").slice(0, 12)}`;
@@ -338,7 +360,7 @@ describe("webhook audio message router", () => {
             userKey: "privacy-user-key-1234",
             privacyEpoch: 4,
           });
-          return tryHandleAudioMessage(ctx, {
+          return tryHandleAudioMessageUnscoped(ctx, {
             psid: "psid-audio-delete-race",
             userId: "privacy-user-key-1234",
             reqId: "req-audio-delete-race",
@@ -398,7 +420,10 @@ describe("webhook audio message router", () => {
     });
 
     expect(result).toBe(true);
-    const ledgerEntries = await readCostLedgerPeriod(FIXED_LEDGER_PERIOD);
+    const ledgerEntries = await readCostLedgerPeriod(
+      COST_SCOPE,
+      FIXED_LEDGER_PERIOD
+    );
     expect(ledgerEntries).toEqual([
       expect.objectContaining({
         id: "req-audio-priced:openai-audio:1",
@@ -507,6 +532,7 @@ describe("webhook audio message router", () => {
 
     expect(result).toBe(true);
     const ledgerEntries = await readCostLedgerPeriod(
+      COST_SCOPE,
       new Date().toISOString().slice(0, 10)
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -566,6 +592,7 @@ describe("webhook audio message router", () => {
 
     expect(result).toBe(false);
     const ledgerEntries = await readCostLedgerPeriod(
+      COST_SCOPE,
       new Date().toISOString().slice(0, 10)
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -628,7 +655,10 @@ describe("webhook audio message router", () => {
       "req-audio-spend-cap"
     );
     expect(
-      await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))
+      await readCostLedgerPeriod(
+        COST_SCOPE,
+        new Date().toISOString().slice(0, 10)
+      )
     ).toEqual([]);
   });
 
@@ -640,6 +670,7 @@ describe("webhook audio message router", () => {
     process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "0.03";
     await appendCostLedgerEntry(
       {
+        scope: COST_SCOPE,
         id: "req-existing-audio-spend:attempt-1",
         channel: "facebook_messenger",
         operation: "audio_transcription",
@@ -684,7 +715,10 @@ describe("webhook audio message router", () => {
       t("nl", "outOfFreeCredits"),
       "req-audio-priced-spend-cap"
     );
-    const ledgerEntries = await readCostLedgerPeriod(FIXED_LEDGER_PERIOD);
+    const ledgerEntries = await readCostLedgerPeriod(
+      COST_SCOPE,
+      FIXED_LEDGER_PERIOD
+    );
     expect(ledgerEntries).toHaveLength(1);
     expect(ledgerEntries[0]?.id).toBe("req-existing-audio-spend:attempt-1");
   });

@@ -7,9 +7,10 @@
 
 - Last reviewed against code: **2026-08-18**, current Sol draft branch; the
   exact reviewed head is recorded in PR #375 and its checks.
-- PR #375 is a green draft repository savepoint. It is not merged or deployed;
-  commercial/live billing remains disabled. PR #376, the identity-v2 WIP branch
-  and commit `e378bff` are explicitly excluded.
+- PR #375 has a last-green draft repository savepoint and a current hardening
+  batch under validation. It is not merged or deployed; commercial/live billing
+  remains disabled. PR #376 is merged and present in this branch. The abandoned
+  identity-v2 WIP snapshot and commit `e378bff` remain explicitly excluded.
 - Latest operator production verification: **2026-06-30** live Messenger smoke and `delete-my-data` flow verified by operator.
 - Current direction: generic prompt-first image generation; legacy style-picker UI, quick-reply flows, and director-mode preset plumbing are removed. Internal style-preset compatibility may remain only as backend fallback.
 - Product direction: `leaderbot.live` becomes a tenant/customer portal for managing each customer's own AI. The OpenClaw/Messenger gateway remains shielded and is not the customer-facing app.
@@ -26,7 +27,11 @@
 - `apps/image-gen/server/_core` is the Leaderbot image-generation runtime. Keep image-generation behavior, prompt-first orchestration, and runtime primitives owned there rather than in Messenger transport code.
 - Leaderbot-specific bridge code that currently lives in `src/monitor.ts` is temporary. It must stay behind an adapter boundary and remain explicitly opt-in (`leaderbotBridgeEnabled`) so ClawHub/private installs do not forward Messenger content to the external image-generation service just because host-level bridge tokens exist.
 - Conversation modules must not import Messenger or WhatsApp transport APIs. They should expose channel-neutral conversation responses/actions for renderers to translate into platform-specific controls.
-- State, quota, and storage boundaries must later become explicitly tenant-, workspace-, and channel-scoped before broader customer rollout, with no shared customer-content paths across tenants.
+- The current Sol batch implements explicit tenant/workspace/channel scoping for
+  application-owned Messenger/WhatsApp state, queues, quota and cost paths; keep
+  broader rollout blocked until its final validation and the external OpenClaw
+  transcript-erasure gate pass. Every future storage path must preserve the same
+  boundary, with no shared customer-content path across tenants.
 - The root Facebook gateway now has a root-only `sharedStateStore` boundary.
   `memory` remains the default for one replica; `redis` uses versioned HMAC-only
   account/Page keys and atomically shares webhook deduplication plus optional
@@ -307,10 +312,14 @@ Required before any broader traffic, marketing, or customer onboarding:
 6. [x] Keep face memory disabled by default and retain the protected emergency disable route for rollback.
 7. [x] Maintain the documented Fly rollback workflow and non-destructive workspace migration behavior.
 8. [x] Run and record a live Messenger smoke after each production deploy: webhook verification, signed POST delivery, text reply, prompt-first text-to-image, source-photo edit, quota-exhausted path, and Graph API send failure handling. Operator-verified on 2026-06-30.
-9. [x] Verify GDPR consent and `delete-my-data` behavior end-to-end with live or production-equivalent state, including generated assets, retained source images, face-memory state, and tenant/customer portal records. Operator-verified on 2026-06-30.
+9. [ ] Verify the current strict GDPR `delete-my-data` contract end-to-end. The
+       2026-06-30 operator smoke covered the legacy application-owned path only;
+       generated assets, queues, state and portal records now have durable erasure,
+       but exact non-archiving deletion of an existing host-owned OpenClaw session
+       transcript remains blocked on an OpenClaw capability.
 10. [x] Add a release checklist entry that confirms `/healthz`, `/readyz`, `/metrics`, queue depth, failed/dead-lettered jobs, and event-loop p95/p99 before and after deploy.
 
-Exit criteria: live smoke passes, deletion proof is recorded, no public route
+Exit criteria: live smoke passes, strict deletion proof is recorded, no public route
 regression is found, cost/quota metrics are visible, and rollback target is known
 before deployment.
 
@@ -325,7 +334,7 @@ access:
 2. [x] Add full host-level budget gates before all expensive model/image/tool calls. Current Facebook-host expensive paths are covered by default-deny OpenClaw tool policy plus optional root-gateway caps for image-intent forwards, voice transcription, and generic Leaderbot event forwards; image-gen runtime provider calls keep their quota/spend gates.
 3. [x] Add default-deny tool policy for all high-cost tools exposed to untrusted Facebook-originated users.
 4. [x] Add per-user daily spend caps, a global Facebook daily spend cap, and monthly cost cap enforcement.
-5. [x] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, estimated cost, final cost, status, and UTC period.
+5. [x] Write expensive provider calls to a workspace/connection/privacy-scoped cost ledger with pseudonymous `userKey`, provider/model, estimated cost, final cost, status, and UTC period; keep the global budget baseline identifier-free.
 6. [x] Add richer provider usage dimensions to cost-ledger entries where providers expose safe metadata.
 7. [x] Add owner cost alerts and an owner dashboard for spend, quota blocks, duplicate skips, provider failures, queue health, and delivery failures. Admin-only aggregate cost monitoring exists at `/admin/cost-summary` and `/admin/cost-dashboard`; richer failure drilldown UX is deferred.
 8. [x] Continue verifying storage-proxy delivery under Messenger crawler constraints, including generated outputs and retained source images. Operator-verified on 2026-06-30 with tester photo forwards through Messenger.
@@ -438,7 +447,10 @@ traffic cannot reach internal gateway admin/API surfaces.
   - Production auth/session/env config must allow a customer to sign in and load their own workspace.
   - Production portal smoke must cover workspace details, AI identity/instructions, Messenger status/connect controls, usage, privacy controls, and export/deletion request status.
   - Public production surface must expose only the customer portal, legal pages, health/readiness/metrics as intended, and required webhook routes; internal gateway/admin APIs must remain shielded.
-- [x] Verify GDPR deletion end-to-end before broad customer launch. Operator-verified on 2026-06-30.
+- [ ] Verify the strict current GDPR deletion contract end-to-end before broad
+      customer launch. The legacy 2026-06-30 smoke is not proof for host-owned
+      OpenClaw transcripts; keep this open until exact non-archiving host erasure is
+      implemented and re-tested.
 - [ ] Keep the internal OpenClaw gateway unavailable as a public UI/API; expose only required webhook/health/legal/customer-app surfaces
   - 2026-08-01 pre-deploy route audit: the Fly public route guard now exposes
     only `/facebook/webhook` and `/healthz` to the OpenClaw gateway by default.
@@ -478,16 +490,16 @@ Validated controls:
 9. [x] Shared bot text rate limiting is configurable via `BOT_TEXT_RATE_LIMIT_MAX` and `BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS` instead of hardcoded limits.
 10. [x] New bot features have a reusable feature-scoped limiter helper and generic `FEATURE_RATE_LIMIT_<FEATURE>_*` env convention.
 11. [x] Free-tier product targets are documented before runtime changes: `20` image provider attempts per UTC day, `30` bot text messages per `60` seconds, `5` audio transcription attempts per UTC day, and `1` video generation attempt per UTC day.
-12. [x] Admin-only `/admin/cost-summary` exposes owner-safe aggregate cost ledger summaries without raw PSIDs, prompts, tokens, or customer content.
+12. [x] Admin-only `/admin/cost-summary` exposes an identifier-free global budget aggregate without workspace, user, request, raw PSID, prompt, token, or customer-content details.
 13. [x] OpenAI image, audio transcription, and generated-video provider attempts append metadata-only cost ledger entries after quota/budget checks and before external provider calls.
 14. [x] Optional global daily Messenger provider spend cap (`MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD`) blocks priced attempts that would exceed the cap and fails closed for unpriced attempts.
 15. [x] Optional per-user daily Messenger provider spend cap (`MESSENGER_USER_DAILY_SPEND_CAP_USD`) blocks priced attempts per `userKey` and fails closed for unpriced attempts.
 16. [x] Root Facebook gateway stamps untrusted inbound turns with a default-deny `tools.deny` policy for high-cost, runtime, and filesystem tools.
-17. [x] Cost ledger summaries roll up provider-attempt cost metadata per request using hashed request keys instead of raw Messenger message IDs.
+17. [x] Tenant-scoped cost-ledger detail uses hashed request keys instead of raw Messenger message IDs; global summaries do not contain request keys at all.
 18. [x] Optional global monthly Messenger provider spend cap (`MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD`) blocks image/audio/video provider attempts before external calls and is exposed in metrics.
-19. [x] `delete-my-data` erasure removes the erased user's cost-ledger entries and deletion failure logs use pseudonymous `user` metadata instead of raw PSIDs.
+19. [x] `delete-my-data` writes a monotonic ledger tombstone and removes only the exact workspace/connection/privacy epochs being erased; deletion logs use pseudonymous `user` metadata instead of raw PSIDs.
 20. [x] Image, audio transcription, and generated-video cost-ledger entries are reconciled from `provider_attempt_started` to success/failure status, with image final cost populated when the estimate is complete.
-21. [x] Admin cost summaries expose owner-safe open, failed, blocked, and per-status provider-attempt counts for monitoring regressions without raw PSIDs or prompts.
+21. [x] Global admin cost summaries expose only identifier-free attempt/pricing totals; status and request-level detail remains inside the owning workspace partition instead of a cross-tenant dashboard.
 22. [x] Optional owner cost alerts (`MESSENGER_OWNER_COST_ALERTS=1`) notify on daily/monthly/user spend-cap blocks with metadata-only budget details.
 23. [x] Optional root-gateway daily image forward cap (`MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP`) blocks Facebook image-intent bridge calls before they reach Leaderbot image-gen.
 24. [x] Optional root-gateway daily audio transcription cap (`MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP`) blocks Facebook voice attachment transcription before media download or model transcription.
@@ -517,7 +529,7 @@ Open cost-control work:
 - [x] P1 | owner: image-gen-runtime | Handle cost-ledger per-period overflow explicitly. Emit structured warnings + metric and report dropped-entry count when cap truncation occurs.
 - [x] P1 | owner: image-gen-runtime | Make cost-ledger append/update writes resilient under same-period concurrent updates using single-writer or safe retry semantics.
 - [x] P2 | owner: image-gen-runtime | Make provider-attempt updates period-safe across midnight retries by reconciling by entry identity rather than current-period-only assumptions.
-- [x] P2 | owner: image-gen-runtime, storage-platform | Reduce worst-case delete-my-data ledger cleanup latency by making `deleteCostLedgerEntriesForUser` bounded/performance-safe for high-history users. Cleanup now scans the fixed 90-day retention window, skips locks for periods without matching user entries, and emits metadata-only completion counts.
+- [x] P2 | owner: image-gen-runtime, storage-platform | Keep delete-my-data ledger cleanup bounded for high-history users. Cleanup scans 91 inclusive UTC partitions for the 90-day TTL, atomically tombstones and scrubs exact tenant subjects, and emits metadata-only completion counts.
 
 Historical branch review note:
 
@@ -545,8 +557,9 @@ Quota drift investigation note:
 - [x] Keep live Mollie billing disabled by default and reject key/mode or insecure URL mismatches.
 - [x] Validate the effective portal handoff origin (`PORTAL_BASE_URL`, falling back to `APP_BASE_URL`) before billing readiness/checkout; production/live requires HTTPS and an origin-only URL.
 - [x] Consolidate the Luna payment and Terra Page-scoped handoff release gates
-      in `docs/MOLLIE_HANDOFF_LAUNCH_CHECKLIST.md`; current combined verdict is
-      repository PASS and sandbox/live NO-GO.
+      in `docs/MOLLIE_HANDOFF_LAUNCH_CHECKLIST.md`; the last published combined
+      verdict was repository PASS, while the current hardening batch is pending
+      revalidation and sandbox/live remain NO-GO.
 - [x] Select the bounded product offer: `€19` once, 30 days, one workspace/Page, 300 AI answers, 20 Images 2.0 generations, and at most five images per day, without renewal, top-ups, or overage.
 - [ ] Approve the draft Startpilot legal copy, accounting treatment, refund/withdrawal terms, invoice treatment, and financial-retention policy before live payment.
 - [ ] Run and record all Mollie sandbox cases in `docs/MOLLIE_TEST_RESULTS.md`.

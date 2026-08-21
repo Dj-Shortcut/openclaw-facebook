@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +6,9 @@ import {
   buildMessengerAgentTextForAttachments,
   applyFacebookInboundToolPolicyToConfig,
   classifyMessengerFastLaneIntent,
+  clearMessengerAssistantMemoryForErasure,
   downloadMessengerMediaAttachment,
+  eraseMessengerGatewayConversationForPrivacy,
   extractImagePromptFromAssistantReply,
   formatUnmatchedMessengerPageLog,
   getOpenClawActionText,
@@ -56,6 +58,7 @@ const originalGatewayLeaderbotEventForwardCap =
   process.env.MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP;
 const originalAiAnswerEnforcement =
   process.env.LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED;
+const originalPublicGatewayGuard = process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD;
 let temporaryStateDir: string | null = null;
 
 beforeEach(async () => {
@@ -65,6 +68,7 @@ beforeEach(async () => {
   delete process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP;
   delete process.env.MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP;
   delete process.env.LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED;
+  delete process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD;
 });
 
 afterEach(async () => {
@@ -107,6 +111,11 @@ afterEach(async () => {
   } else {
     process.env.LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED =
       originalAiAnswerEnforcement;
+  }
+  if (originalPublicGatewayGuard === undefined) {
+    delete process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD;
+  } else {
+    process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD = originalPublicGatewayGuard;
   }
   resetMessengerGatewayDailyImageForwardBudgetForTests();
   clearMessengerRuntime();
@@ -236,9 +245,21 @@ function setGatewayRuntime(
   options: {
     readAllowFromStore?: ReturnType<typeof vi.fn>;
     upsertPairingRequest?: ReturnType<typeof vi.fn>;
+    getSessionEntry?: ReturnType<typeof vi.fn>;
+    gatewayIsAvailable?: ReturnType<typeof vi.fn>;
+    gatewayRequest?: ReturnType<typeof vi.fn>;
   } = {},
 ) {
   setMessengerRuntime({
+    agent: {
+      session: {
+        getSessionEntry: options.getSessionEntry ?? vi.fn(() => undefined),
+      },
+    },
+    gateway: {
+      isAvailable: options.gatewayIsAvailable ?? vi.fn(async () => true),
+      request: options.gatewayRequest ?? vi.fn(async () => ({ ok: true })),
+    },
     channel: {
       pairing: {
         readAllowFromStore: options.readAllowFromStore ?? vi.fn(async () => []),
@@ -2019,7 +2040,7 @@ describe("normalizeMessengerReplyPayloadForDelivery", () => {
 });
 
 describe("resolveFacebookInboundToolPolicy", () => {
-  it("denies high-cost and runtime tools for untrusted Facebook turns", () => {
+  it("allows only current-session status and denies cross-context tools", () => {
     const policy = resolveFacebookInboundToolPolicy({
       commandAuthorized: false,
     });
@@ -2027,15 +2048,29 @@ describe("resolveFacebookInboundToolPolicy", () => {
     expect(policy).toMatchObject({
       source: "facebook_untrusted_default",
       tools: {
+        allow: ["session_status"],
         deny: expect.arrayContaining([
           "image_generate",
           "video_generate",
           "music_generate",
           "exec",
+          "memory_search",
+          "memory_get",
+          "group:memory",
           "write",
           "apply_patch",
           "group:fs",
           "group:runtime",
+          "group:messaging",
+          "group:automation",
+          "group:nodes",
+          "group:plugins",
+          "bundle-mcp",
+          "sessions_history",
+          "sessions_search",
+          "conversations_send",
+          "sessions_send",
+          "sessions_spawn",
         ]),
       },
     });
@@ -2047,24 +2082,50 @@ describe("resolveFacebookInboundToolPolicy", () => {
     ).toBeNull();
   });
 
-  it("merges the default deny policy into OpenClaw runtime config", () => {
+  it("replaces every persisted widening with a positive minimal policy", () => {
     const policy = resolveFacebookInboundToolPolicy({
       commandAuthorized: false,
     });
     const hardened = applyFacebookInboundToolPolicyToConfig(
       {
-        tools: { deny: ["existing_tool"], allow: ["safe_tool"] },
+        tools: {
+          profile: "full",
+          allow: ["safe_tool"],
+          alsoAllow: ["sessions_history", "bundle-mcp"],
+          byProvider: { openai: { allow: ["group:sessions"] } },
+          codeMode: true,
+        },
       } as never,
       policy,
-    ) as { tools: { deny: string[]; allow: string[] } };
+    ) as {
+      tools: {
+        profile: string;
+        allow: string[];
+        deny: string[];
+        codeMode: boolean;
+        alsoAllow?: string[];
+        byProvider?: unknown;
+      };
+    };
 
-    expect(hardened.tools.allow).toEqual(["safe_tool"]);
+    expect(hardened.tools).toMatchObject({
+      profile: "minimal",
+      allow: ["session_status"],
+      codeMode: false,
+    });
+    expect(hardened.tools.alsoAllow).toBeUndefined();
+    expect(hardened.tools.byProvider).toBeUndefined();
     expect(hardened.tools.deny).toEqual(
       expect.arrayContaining([
-        "existing_tool",
         "image_generate",
         "exec",
         "group:fs",
+        "sessions_history",
+        "conversations_send",
+        "group:messaging",
+        "group:automation",
+        "group:nodes",
+        "group:plugins",
       ]),
     );
   });
@@ -2720,7 +2781,14 @@ describe("processMessengerEvent tool policy", () => {
     const runArg = inboundRun.mock.calls[0]?.[0] as {
       adapter: {
         resolveTurn: () => {
-          cfg: { tools?: { deny?: string[] } };
+          cfg: {
+            tools?: {
+              profile?: string;
+              allow?: string[];
+              deny?: string[];
+              codeMode?: boolean;
+            };
+          };
           ctxPayload: Record<string, unknown>;
         };
       };
@@ -2729,23 +2797,41 @@ describe("processMessengerEvent tool policy", () => {
     const ctxPayload = resolvedTurn.ctxPayload;
 
     expect(ctxPayload.CommandAuthorized).toBe(false);
+    expect(resolvedTurn.cfg.tools).toMatchObject({
+      profile: "minimal",
+      allow: ["session_status"],
+      codeMode: false,
+    });
     expect(resolvedTurn.cfg.tools?.deny).toEqual(
       expect.arrayContaining([
         "image_generate",
         "video_generate",
         "exec",
         "group:fs",
+        "group:messaging",
+        "group:automation",
+        "group:nodes",
+        "group:plugins",
+        "bundle-mcp",
+        "sessions_history",
+        "sessions_search",
+        "conversations_send",
+        "sessions_send",
+        "sessions_spawn",
       ]),
     );
     expect(ctxPayload.ToolPolicy).toMatchObject({
       source: "facebook_untrusted_default",
       tools: {
+        allow: ["session_status"],
         deny: expect.arrayContaining([
           "image_generate",
           "video_generate",
           "exec",
           "write",
           "group:fs",
+          "sessions_history",
+          "conversations_send",
         ]),
       },
     });
@@ -2755,6 +2841,77 @@ describe("processMessengerEvent tool policy", () => {
     expect(ctxPayload.ToolPolicySource).toBe("facebook_untrusted_default");
     expect(JSON.stringify(ctxPayload.ToolPolicy)).not.toContain(
       "sender-mid-tool-policy",
+    );
+  });
+
+  it("keeps command-shaped public messages untrusted", async () => {
+    process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD = "1";
+    const inboundRun = vi.fn(async () => ({ dispatched: false }));
+    setGatewayRuntime(inboundRun);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({}), {
+            headers: { "content-type": "application/json" },
+            status: 200,
+          }),
+      ),
+    );
+
+    const event = messengerTextEvent("mid-public-command-policy", "/models");
+    await processMessengerEvent({
+      event,
+      cfg: {
+        ...messengerTestConfig(),
+        session: { dmScope: "per-account-channel-peer" },
+      } as never,
+      account: messengerTestAccount(),
+      runtime: { log: () => {}, error: () => {}, exit: () => {} },
+      trace: {
+        accountId: "default",
+        reqId: "req-mid-public-command-policy",
+        senderId: event.sender?.id ?? "",
+        messageId: event.message?.mid ?? "",
+        createdAt: Date.now(),
+      },
+    } as never);
+
+    expect(inboundRun).toHaveBeenCalledTimes(1);
+    const turn = (
+      inboundRun.mock.calls[0]?.[0] as {
+        adapter: {
+          resolveTurn: () => {
+            cfg: { tools?: { deny?: string[] } };
+            ctxPayload: Record<string, unknown>;
+          };
+        };
+      }
+    ).adapter.resolveTurn();
+    expect(turn.ctxPayload.CommandAuthorized).toBe(false);
+    expect(
+      (
+        turn.cfg.tools as {
+          allow?: string[];
+          profile?: string;
+          codeMode?: boolean;
+        }
+      )?.allow,
+    ).toEqual(["session_status"]);
+    expect(turn.cfg.tools?.deny).toEqual(
+      expect.arrayContaining([
+        "exec",
+        "group:fs",
+        "memory_search",
+        "memory_get",
+        "group:memory",
+        "sessions_history",
+        "conversations_send",
+        "group:messaging",
+        "group:automation",
+        "group:nodes",
+        "group:plugins",
+      ]),
     );
   });
 });
@@ -2865,6 +3022,251 @@ describe("buildMessengerAgentTextForAttachments", () => {
         lang: "en",
       }),
     ).toBe("Voice-message transcript:\nplease retry");
+  });
+});
+
+describe("processMessengerEvent attachment cleanup", () => {
+  function imageContextEvent(mid: string): MessengerWebhookMessaging {
+    const event = messengerTextEvent(mid, "Wat staat er op deze foto?");
+    event.message!.attachments = [
+      {
+        type: "image",
+        payload: { url: "https://lookaside.facebook.com/private-photo.png" },
+      },
+    ];
+    return event;
+  }
+
+  function installMediaAndGraphFetch() {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL | RequestInfo | string) => {
+        if (String(url).startsWith("https://lookaside.facebook.com/")) {
+          return new Response(Buffer.from("private-image-bytes"), {
+            headers: { "content-type": "image/png" },
+            status: 200,
+          });
+        }
+        return new Response(
+          JSON.stringify({
+            message_id: "attachment-cleanup-action",
+            recipient_id: "attachment-sender",
+          }),
+          { headers: { "content-type": "application/json" }, status: 200 },
+        );
+      }),
+    );
+  }
+
+  it("removes downloaded media after a successful OpenClaw turn", async () => {
+    let mediaPath = "";
+    setGatewayRuntime(
+      vi.fn(
+        async (input: {
+          adapter: {
+            resolveTurn: () => { ctxPayload: { MediaPaths?: string[] } };
+          };
+        }) => {
+          const turn = input.adapter.resolveTurn();
+          mediaPath = String(turn.ctxPayload.MediaPaths?.[0] ?? "");
+          expect(mediaPath).not.toBe("");
+          await expect(access(mediaPath)).resolves.toBeUndefined();
+          return { dispatched: false };
+        },
+      ),
+    );
+    installMediaAndGraphFetch();
+
+    await processGatewayTestEvent(imageContextEvent("media-cleanup-success"));
+
+    await expect(access(mediaPath)).rejects.toThrow();
+  });
+
+  it("removes downloaded media when the OpenClaw turn fails", async () => {
+    let mediaPath = "";
+    setGatewayRuntime(
+      vi.fn(
+        async (input: {
+          adapter: {
+            resolveTurn: () => { ctxPayload: { MediaPaths?: string[] } };
+          };
+        }) => {
+          const turn = input.adapter.resolveTurn();
+          mediaPath = String(turn.ctxPayload.MediaPaths?.[0] ?? "");
+          expect(mediaPath).not.toBe("");
+          await expect(access(mediaPath)).resolves.toBeUndefined();
+          throw new Error("simulated OpenClaw failure");
+        },
+      ),
+    );
+    installMediaAndGraphFetch();
+
+    await expect(
+      processGatewayTestEvent(imageContextEvent("media-cleanup-failure")),
+    ).rejects.toThrow("simulated OpenClaw failure");
+
+    await expect(access(mediaPath)).rejects.toThrow();
+  });
+});
+
+describe("processMessengerEvent public session isolation", () => {
+  it("fails before transcript dispatch when the effective public DM scope is unsafe", async () => {
+    process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD = "1";
+    const inboundRun = setGatewayRuntime(
+      vi.fn(async () => ({ dispatched: false })),
+    );
+
+    await expect(
+      processGatewayTestEvent(
+        messengerTextEvent("unsafe-public-session", "Vertel me iets"),
+      ),
+    ).rejects.toThrow("Public Messenger session isolation is unavailable");
+
+    expect(inboundRun).not.toHaveBeenCalled();
+  });
+
+  it("fails before transcript dispatch when a public Page routes to another shared agent", async () => {
+    process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD = "1";
+    const inboundRun = setGatewayRuntime(
+      vi.fn(async () => ({ dispatched: false })),
+    );
+    const event = messengerTextEvent("unsafe-public-agent", "Vertel me iets");
+
+    await expect(
+      processMessengerEvent({
+        event,
+        cfg: {
+          ...messengerTestConfig(),
+          session: { dmScope: "per-account-channel-peer" },
+          bindings: [
+            {
+              agentId: "support",
+              match: { channel: "facebook", accountId: "default" },
+            },
+          ],
+        } as never,
+        account: messengerTestAccount(),
+        runtime: { log: () => {}, error: () => {}, exit: () => {} },
+        trace: {
+          accountId: "default",
+          reqId: "req-unsafe-public-agent",
+          senderId: event.sender?.id ?? "",
+          messageId: event.message?.mid ?? "",
+          createdAt: Date.now(),
+        },
+      } as never),
+    ).rejects.toThrow("Public Messenger agent isolation is unavailable");
+
+    expect(inboundRun).not.toHaveBeenCalled();
+  });
+});
+
+describe("Messenger gateway privacy erasure", () => {
+  it("evicts only the exact account Page and sender prompt memory", () => {
+    const erased = {
+      accountId: "tenant-a",
+      pageId: "page-a",
+      senderId: "sender-shared",
+    };
+    const retained = {
+      accountId: "tenant-b",
+      pageId: "page-b",
+      senderId: "sender-shared",
+    };
+    const reply =
+      "Prompt: Maak een fotorealistische rode robot in een Belgisch stadspark";
+    rememberMessengerAssistantPrompt({
+      ...erased,
+      text: reply,
+      messageId: "message-a",
+    });
+    rememberMessengerAssistantPrompt({
+      ...retained,
+      text: reply,
+      messageId: "message-b",
+    });
+
+    clearMessengerAssistantMemoryForErasure(erased);
+
+    expect(
+      resolveMessengerImagePromptFromUserText({
+        ...erased,
+        text: "Maak deze afbeelding",
+        replyToMessageId: "message-a",
+      }),
+    ).toBeNull();
+    expect(
+      resolveMessengerImagePromptFromUserText({
+        ...retained,
+        text: "Maak deze afbeelding",
+        replyToMessageId: "message-b",
+      }),
+    ).toContain("rode robot");
+  });
+
+  it("refuses the archive-retaining gateway delete path for an existing session", async () => {
+    const getSessionEntry = vi.fn(() => ({ sessionId: "session-1" }));
+    const gatewayRequest = vi.fn();
+    setGatewayRuntime(vi.fn(), { getSessionEntry, gatewayRequest });
+
+    await expect(
+      eraseMessengerGatewayConversationForPrivacy({
+        cfg: messengerTestConfig(),
+        account: messengerTestAccount(),
+        senderId: "sender-private",
+      }),
+    ).rejects.toThrow(
+      "exact session transcript erasure capability is unavailable",
+    );
+
+    const sessionKey = getSessionEntry.mock.calls[0]?.[0]?.sessionKey;
+    expect(sessionKey).toEqual(expect.any(String));
+    expect(getSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey,
+        readConsistency: "latest",
+      }),
+    );
+    expect(gatewayRequest).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before authoritative deletion when session erasure is unavailable", async () => {
+    const gatewayRequest = vi.fn();
+    setGatewayRuntime(vi.fn(), {
+      getSessionEntry: vi.fn(() => ({ sessionId: "session-1" })),
+      gatewayIsAvailable: vi.fn(async () => false),
+      gatewayRequest,
+    });
+
+    await expect(
+      eraseMessengerGatewayConversationForPrivacy({
+        cfg: messengerTestConfig(),
+        account: messengerTestAccount(),
+        senderId: "sender-private",
+      }),
+    ).rejects.toThrow("session erasure runtime is unavailable");
+    expect(gatewayRequest).not.toHaveBeenCalled();
+  });
+
+  it("does not forward authoritative deletion while an exact transcript purge is blocked", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    setGatewayRuntime(vi.fn(), {
+      getSessionEntry: vi.fn(() => ({ sessionId: "session-1" })),
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      processGatewayTestEvent(
+        messengerTextEvent("mid-delete-transcript-blocked", "Delete my data"),
+        { leaderbotBridgeEnabled: true },
+      ),
+    ).rejects.toThrow(
+      "exact session transcript erasure capability is unavailable",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

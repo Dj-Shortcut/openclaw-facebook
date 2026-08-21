@@ -5,7 +5,12 @@ import {
   getGeneratorStartupConfig,
   OpenAiImageGenerator,
 } from "./_core/imageService";
-import { readCostLedgerPeriod } from "./_core/costLedger";
+import {
+  readCostLedgerPeriod,
+  resetCostLedgerReliabilityStatsForTests,
+  setCostLedgerBeforeDetailCommitHookForTests,
+  type CostLedgerScope,
+} from "./_core/costLedger";
 import { clearStateStore } from "./_core/stateStore";
 
 const GENERATED_IMAGE_BASE64 =
@@ -13,6 +18,8 @@ const GENERATED_IMAGE_BASE64 =
 const originalImageProvider = process.env.IMAGE_PROVIDER;
 const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
 const originalAppBaseUrl = process.env.APP_BASE_URL;
+const originalBuiltInForgeApiUrl = process.env.BUILT_IN_FORGE_API_URL;
+const originalBuiltInForgeApiKey = process.env.BUILT_IN_FORGE_API_KEY;
 const originalOpenAiImageMaxRetries = process.env.OPENAI_IMAGE_MAX_RETRIES;
 const originalOpenAiImageRetryBaseMs = process.env.OPENAI_IMAGE_RETRY_BASE_MS;
 const originalOpenAiImageModel = process.env.OPENAI_IMAGE_MODEL;
@@ -41,6 +48,14 @@ const originalMessengerGlobalMonthlySpendCapUsd =
   process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD;
 const originalMessengerUserDailySpendCapUsd =
   process.env.MESSENGER_USER_DAILY_SPEND_CAP_USD;
+const originalNodeEnv = process.env.NODE_ENV;
+const originalVitest = process.env.VITEST;
+const TEST_COST_LEDGER_SCOPE: CostLedgerScope = {
+  workspaceId: 1,
+  channelConnectionId: 1,
+  bindingEpoch: 1,
+  privacyEpoch: 1,
+};
 
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) {
@@ -55,7 +70,9 @@ function toUrlString(url: string | URL): string {
   return typeof url === "string" ? url : url.toString();
 }
 
-async function promptFromRequest(init: RequestInit | undefined): Promise<string> {
+async function promptFromRequest(
+  init: RequestInit | undefined
+): Promise<string> {
   const body = init?.body;
 
   if (body instanceof FormData) {
@@ -65,7 +82,8 @@ async function promptFromRequest(init: RequestInit | undefined): Promise<string>
   if (typeof body === "string") {
     const payload = JSON.parse(body) as {
       prompt?: string;
-      input?: string | Array<{ content?: Array<{ type?: string; text?: string }> }>;
+      input?:
+        string | Array<{ content?: Array<{ type?: string; text?: string }> }>;
     };
     if (typeof payload.prompt === "string") {
       return payload.prompt;
@@ -130,6 +148,7 @@ function generateWithSourceImageData(
   >
 ) {
   return generator.generate({
+    costLedgerScope: TEST_COST_LEDGER_SCOPE,
     ...input,
     sourceImageData: {
       buffer: Buffer.alloc(7000, 8),
@@ -145,6 +164,8 @@ describe("image provider boundary", () => {
     restoreEnv("IMAGE_PROVIDER", originalImageProvider);
     restoreEnv("OPENAI_API_KEY", originalOpenAiApiKey);
     restoreEnv("APP_BASE_URL", originalAppBaseUrl);
+    restoreEnv("BUILT_IN_FORGE_API_URL", originalBuiltInForgeApiUrl);
+    restoreEnv("BUILT_IN_FORGE_API_KEY", originalBuiltInForgeApiKey);
     restoreEnv("OPENAI_IMAGE_MAX_RETRIES", originalOpenAiImageMaxRetries);
     restoreEnv("OPENAI_IMAGE_RETRY_BASE_MS", originalOpenAiImageRetryBaseMs);
     restoreEnv("OPENAI_IMAGE_MODEL", originalOpenAiImageModel);
@@ -164,7 +185,10 @@ describe("image provider boundary", () => {
       "MESSENGER_GENERATION_QUEUE_ENABLED",
       originalMessengerGenerationQueueEnabled
     );
-    restoreEnv("MESSENGER_GENERATION_WORKER", originalMessengerGenerationWorker);
+    restoreEnv(
+      "MESSENGER_GENERATION_WORKER",
+      originalMessengerGenerationWorker
+    );
     restoreEnv(
       "MESSENGER_GENERATION_WORKER_ONLY",
       originalMessengerGenerationWorkerOnly
@@ -189,6 +213,9 @@ describe("image provider boundary", () => {
       "MESSENGER_USER_DAILY_SPEND_CAP_USD",
       originalMessengerUserDailySpendCapUsd
     );
+    restoreEnv("NODE_ENV", originalNodeEnv);
+    restoreEnv("VITEST", originalVitest);
+    resetCostLedgerReliabilityStatsForTests();
     clearStateStore();
   });
 
@@ -257,9 +284,7 @@ describe("image provider boundary", () => {
     process.env.OPENAI_IMAGE_MAX_RETRIES = "1";
     process.env.OPENAI_IMAGE_RETRY_BASE_MS = "1";
 
-    const logSpy = vi
-      .spyOn(console, "log")
-      .mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     const fetchMock = vi.fn(async (url: string | URL) => {
@@ -326,7 +351,12 @@ describe("image provider boundary", () => {
     ).rejects.toThrow("user quota exhausted");
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
+    expect(
+      await readCostLedgerPeriod(
+        TEST_COST_LEDGER_SCOPE,
+        new Date().toISOString().slice(0, 10)
+      )
+    ).toEqual([]);
 
     await expect(
       generator.generate({
@@ -350,7 +380,9 @@ describe("image provider boundary", () => {
 
     const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
       const prompt = await promptFromRequest(init);
-      expect(prompt).toContain("Edit the uploaded/source image according to the user's request.");
+      expect(prompt).toContain(
+        "Edit the uploaded/source image according to the user's request."
+      );
       expect(prompt).toContain("not as a preset style catalog");
       expect(prompt).toContain("User request: more glitter in the background");
       expect(prompt).not.toContain("glamorous disco-era hero shot");
@@ -437,12 +469,16 @@ describe("image provider boundary", () => {
 
     const generator = new OpenAiImageGenerator();
     await generator.generate({
+      costLedgerScope: TEST_COST_LEDGER_SCOPE,
       generationKind: "text_to_image",
       promptHint: privatePrompt,
       userKey: "testuser",
       reqId: "req-cost-estimate",
     });
-    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const ledgerEntries = await readCostLedgerPeriod(
+      TEST_COST_LEDGER_SCOPE,
+      new Date().toISOString().slice(0, 10)
+    );
 
     const parsedLogs = logSpy.mock.calls.map(([payload]) =>
       typeof payload === "string" ? JSON.parse(payload) : payload
@@ -506,17 +542,38 @@ describe("image provider boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("fails closed before provider transport without tenant cost ownership", async () => {
+    configureOpenAiImagesEnv();
+    process.env.NODE_ENV = "production";
+    process.env.VITEST = "false";
+    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      new OpenAiImageGenerator().generate({
+        generationKind: "text_to_image",
+        promptHint: "must never reach the provider",
+        userKey: "unscoped-user",
+        reqId: "req-unscoped-provider-block",
+      })
+    ).rejects.toThrow("Tenant-scoped cost ledger ownership is required");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("marks image cost ledger attempts failed when the provider request fails", async () => {
     configureOpenAiImagesEnv("gpt-image-2");
     process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
     process.env.OPENAI_IMAGE_MAX_RETRIES = "0";
     const fetchMock = vi.fn(
       async () =>
-        new Response(JSON.stringify({ error: { message: "provider unavailable" } }), {
-          headers: { "content-type": "application/json" },
-          status: 500,
-          statusText: "Internal Server Error",
-        })
+        new Response(
+          JSON.stringify({ error: { message: "provider unavailable" } }),
+          {
+            headers: { "content-type": "application/json" },
+            status: 500,
+            statusText: "Internal Server Error",
+          }
+        )
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -530,7 +587,10 @@ describe("image provider boundary", () => {
       })
     ).rejects.toThrow("OpenAI request failed");
 
-    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const ledgerEntries = await readCostLedgerPeriod(
+      TEST_COST_LEDGER_SCOPE,
+      new Date().toISOString().slice(0, 10)
+    );
     expect(ledgerEntries).toEqual([
       expect.objectContaining({
         id: "req-cost-failed:openai-image:1",
@@ -570,7 +630,10 @@ describe("image provider boundary", () => {
       reqId: "req-cost-retry",
     });
 
-    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const ledgerEntries = await readCostLedgerPeriod(
+      TEST_COST_LEDGER_SCOPE,
+      new Date().toISOString().slice(0, 10)
+    );
     expect(ledgerEntries).toEqual([
       expect.objectContaining({
         id: "req-cost-retry:openai-image:1",
@@ -591,6 +654,70 @@ describe("image provider boundary", () => {
     ]);
     expect(JSON.stringify(ledgerEntries)).not.toContain("private prompt");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a known provider success billable when object upload fails", async () => {
+    configureOpenAiImagesEnv("gpt-image-2");
+    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
+    process.env.BUILT_IN_FORGE_API_URL = "https://forge.example";
+    process.env.BUILT_IN_FORGE_API_KEY = "forge-secret";
+    const events: string[] = [];
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (toUrlString(url).startsWith("https://api.openai.com/v1/")) {
+        events.push("provider_accepted");
+        return createGeneratedImageResponse();
+      }
+      if (toUrlString(url).startsWith("https://forge.example/")) {
+        events.push("storage_upload");
+        throw new Error("storage unavailable");
+      }
+      throw new Error(`Unexpected fetch target: ${toUrlString(url)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onProviderSuccess = vi.fn(async () => {
+      events.push("provider_success_persisted");
+    });
+    const afterStoreFailure = vi.fn(async () => {
+      events.push("inventory_released");
+    });
+
+    const generator = new OpenAiImageGenerator();
+    await expect(
+      generateWithSourceImageData(generator, {
+        generationKind: "text_to_image",
+        promptHint: "private prompt should not be stored",
+        userKey: "upload-failure-user",
+        reqId: "req-provider-success-upload-failure",
+        onProviderSuccess,
+        generatedImagePublishHooks: {
+          beforeStore: async () => {
+            events.push("artifact_inventoried");
+          },
+          afterStoreFailure,
+        },
+      })
+    ).rejects.toThrow("storage unavailable");
+
+    expect(events).toEqual([
+      "provider_accepted",
+      "provider_success_persisted",
+      "artifact_inventoried",
+      "storage_upload",
+      "inventory_released",
+    ]);
+    expect(onProviderSuccess).toHaveBeenCalledTimes(1);
+    expect(afterStoreFailure).toHaveBeenCalledTimes(1);
+    const ledgerEntries = await readCostLedgerPeriod(
+      TEST_COST_LEDGER_SCOPE,
+      new Date().toISOString().slice(0, 10)
+    );
+    expect(ledgerEntries).toEqual([
+      expect.objectContaining({
+        id: "req-provider-success-upload-failure:openai-image:1",
+        status: "provider_attempt_succeeded",
+        finalCostUsd: 0.025,
+      }),
+    ]);
   });
 
   it("marks source-image edit cost estimates as partial input-unpriced metadata", async () => {
@@ -616,7 +743,10 @@ describe("image provider boundary", () => {
         typeof payload === "string" ? JSON.parse(payload) : payload
       )
       .filter(payload => payload?.event === "image_generation_cost_estimate");
-    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const ledgerEntries = await readCostLedgerPeriod(
+      TEST_COST_LEDGER_SCOPE,
+      new Date().toISOString().slice(0, 10)
+    );
 
     expect(costLogs).toEqual([
       {
@@ -659,7 +789,9 @@ describe("image provider boundary", () => {
         unpricedCostComponents: ["source_image_input"],
       }),
     ]);
-    expect(JSON.stringify(ledgerEntries)).not.toContain("make the product shot brighter");
+    expect(JSON.stringify(ledgerEntries)).not.toContain(
+      "make the product shot brighter"
+    );
     expect(JSON.stringify(ledgerEntries)).not.toContain("https://");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -671,7 +803,10 @@ describe("image provider boundary", () => {
     process.env.OPENAI_IMAGE_QUALITY = "high";
     process.env.OPENAI_IMAGE_INPUT_FIDELITY = "high";
     vi.spyOn(console, "log").mockImplementation(() => undefined);
-    vi.stubGlobal("fetch", vi.fn(async () => createGeneratedImageResponse()));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => createGeneratedImageResponse())
+    );
 
     const generator = new OpenAiImageGenerator();
     await generateWithSourceImageData(generator, {
@@ -682,6 +817,7 @@ describe("image provider boundary", () => {
     });
 
     const ledgerEntries = await readCostLedgerPeriod(
+      TEST_COST_LEDGER_SCOPE,
       new Date().toISOString().slice(0, 10)
     );
     expect(ledgerEntries).toEqual([
@@ -722,8 +858,44 @@ describe("image provider boundary", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(onProviderAttempt).not.toHaveBeenCalled();
     expect(
-      await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))
+      await readCostLedgerPeriod(
+        TEST_COST_LEDGER_SCOPE,
+        new Date().toISOString().slice(0, 10)
+      )
     ).toEqual([]);
+  });
+
+  it("does not start the tenant/provider fence or fetch when durable ledger admission fails", async () => {
+    configureOpenAiImagesEnv("gpt-image-2");
+    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
+    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
+    const markTransportStarted = vi.fn(async () => undefined);
+    const abortBeforeTransport = vi.fn(async () => undefined);
+    const onProviderAttempt = vi.fn(async () => ({
+      markTransportStarted,
+      abortBeforeTransport,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    setCostLedgerBeforeDetailCommitHookForTests(async () => {
+      throw Object.assign(new Error("durable ledger unavailable"), {
+        name: "AbortError",
+      });
+    });
+
+    const generator = new OpenAiImageGenerator();
+    await expect(
+      generator.generate({
+        costLedgerScope: TEST_COST_LEDGER_SCOPE,
+        userKey: "ledger-failure-user",
+        reqId: "req-ledger-failure-before-provider",
+        onProviderAttempt,
+      })
+    ).rejects.toThrow("durable ledger unavailable");
+
+    expect(onProviderAttempt).toHaveBeenCalledOnce();
+    expect(markTransportStarted).not.toHaveBeenCalled();
+    expect(abortBeforeTransport).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("blocks the OpenAI request when the host daily image cap is reached", async () => {
@@ -773,7 +945,12 @@ describe("image provider boundary", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(onProviderAttempt).not.toHaveBeenCalled();
-    expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
+    expect(
+      await readCostLedgerPeriod(
+        TEST_COST_LEDGER_SCOPE,
+        new Date().toISOString().slice(0, 10)
+      )
+    ).toEqual([]);
   });
 
   it("blocks the OpenAI request when the per-user daily spend cap would be exceeded", async () => {
@@ -795,7 +972,12 @@ describe("image provider boundary", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(onProviderAttempt).not.toHaveBeenCalled();
-    expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
+    expect(
+      await readCostLedgerPeriod(
+        TEST_COST_LEDGER_SCOPE,
+        new Date().toISOString().slice(0, 10)
+      )
+    ).toEqual([]);
   });
 
   it("blocks the OpenAI request when the global monthly spend cap would be exceeded", async () => {
@@ -817,16 +999,19 @@ describe("image provider boundary", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(onProviderAttempt).not.toHaveBeenCalled();
-    expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
+    expect(
+      await readCostLedgerPeriod(
+        TEST_COST_LEDGER_SCOPE,
+        new Date().toISOString().slice(0, 10)
+      )
+    ).toEqual([]);
   });
 
   it("uses the gpt-image-2 edits endpoint when source image data is provided", async () => {
     configureOpenAiImagesEnv("gpt-image-2");
 
     const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
-      expect(toUrlString(url)).toBe(
-        "https://api.openai.com/v1/images/edits"
-      );
+      expect(toUrlString(url)).toBe("https://api.openai.com/v1/images/edits");
       expect(new Headers(init?.headers).has("content-type")).toBe(false);
       const body = init?.body as FormData;
       expect(body).toBeInstanceOf(FormData);
@@ -854,7 +1039,9 @@ describe("image provider boundary", () => {
     const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
       const prompt = await promptFromRequest(init);
       expect(prompt).toContain("Edit the uploaded/source image");
-      expect(prompt).toContain("User request: make it feel like a late-night event poster");
+      expect(prompt).toContain(
+        "User request: make it feel like a late-night event poster"
+      );
       expect(prompt).not.toContain("Berlin Underground");
       expect(prompt).not.toContain("raw techno-club energy");
       expect(prompt).not.toContain("Photo analysis:");

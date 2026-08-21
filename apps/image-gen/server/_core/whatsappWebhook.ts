@@ -3,14 +3,29 @@ import { normalizeLang, t } from "./i18n";
 import { getOrCreateState, setLastUserMessageAt } from "./messengerState";
 import { toLogUser } from "./privacy";
 import { handleWhatsAppConsentGate } from "./consentService";
-import { extractWhatsAppEvents, logWhatsAppWebhookPayload } from "./inbound/whatsappInbound";
+import {
+  extractWhatsAppEvents,
+  logWhatsAppWebhookPayload,
+} from "./inbound/whatsappInbound";
 import { handleWhatsAppImageEvent } from "./whatsappHandlers/imageHandler";
 import { handleWhatsAppAudioEvent } from "./whatsappHandlers/audioHandler";
 import { handleWhatsAppInteractiveEvent } from "./whatsappHandlers/interactiveHandler";
 import { handleWhatsAppTextEvent } from "./whatsappHandlers/textHandler";
-import { sendWhatsAppButtonsReply, sendWhatsAppTextReply } from "./whatsappResponseService";
+import {
+  sendWhatsAppButtonsReply,
+  sendWhatsAppTextReply,
+} from "./whatsappResponseService";
 import { claimWebhookReplayKey } from "./webhookReplayProtection";
 import type { NormalizedWhatsAppEvent } from "./whatsappTypes";
+import type { WhatsAppHandlerContext } from "./whatsappTypes";
+import {
+  resolveWhatsAppGenerationScope,
+  WhatsAppGenerationScopeError,
+} from "./whatsappGenerationScope";
+import {
+  runWithMessengerRequestContext,
+  setMessengerRequestPrivacySubject,
+} from "./messengerRequestContext";
 import { safeLog } from "./logger";
 
 const DEFAULT_LANG = normalizeLang(process.env.DEFAULT_MESSENGER_LANG);
@@ -29,11 +44,19 @@ function createNonReversibleReqId(event: NormalizedWhatsAppEvent): string {
   return `${senderHash}-${Date.now()}-${randomUUID()}`;
 }
 
-function createWhatsAppEventContext(event: NormalizedWhatsAppEvent) {
-  return {
+async function createWhatsAppEventContext(
+  event: NormalizedWhatsAppEvent
+): Promise<WhatsAppHandlerContext> {
+  const costLedgerScope = await resolveWhatsAppGenerationScope({
+    endpoint: event.endpoint,
+    senderId: event.senderId,
+    userKey: event.userId,
+  });
+  return Object.freeze({
     reqId: createNonReversibleReqId(event),
     lang: DEFAULT_LANG,
-  };
+    costLedgerScope,
+  });
 }
 
 async function sendUnsupportedMessageReply(
@@ -50,7 +73,7 @@ async function sendUnsupportedMessageReply(
 
 async function dispatchWhatsAppEvent(
   event: NormalizedWhatsAppEvent,
-  context: ReturnType<typeof createWhatsAppEventContext>
+  context: WhatsAppHandlerContext
 ): Promise<void> {
   if (event.messageType === "image") {
     await handleWhatsAppImageEvent(event, context);
@@ -93,41 +116,59 @@ async function dispatchWhatsAppEvent(
 async function processSingleWhatsAppEvent(
   event: NormalizedWhatsAppEvent
 ): Promise<void> {
-  if (!(await claimWhatsAppEventReplayOrLog(event))) {
-    return;
-  }
+  const context = await createWhatsAppEventContext(event);
+  await runWithMessengerRequestContext(
+    event.endpoint.phoneNumberId,
+    async () => {
+      setMessengerRequestPrivacySubject({
+        userKey: event.userId,
+        privacyEpoch: context.costLedgerScope.privacyEpoch,
+      });
+      if (!(await claimWhatsAppEventReplayOrLog(event, context))) {
+        return;
+      }
 
-  const context = createWhatsAppEventContext(event);
-  const state = await Promise.resolve(getOrCreateState(event.senderId));
+      const state = await Promise.resolve(getOrCreateState(event.senderId));
 
-  safeLog("whatsapp_normalized_inbound_event", {
-    channel: event.channel,
-    user: toLogUser(event.userId),
-    messageType: event.messageType,
-    rawMessageType: event.rawMessageType,
-  });
+      safeLog("whatsapp_normalized_inbound_event", {
+        channel: event.channel,
+        user: toLogUser(event.userId),
+        messageType: event.messageType,
+        rawMessageType: event.rawMessageType,
+      });
 
-  await Promise.resolve(
-    setLastUserMessageAt(event.senderId, event.timestamp ?? Date.now())
+      await Promise.resolve(
+        setLastUserMessageAt(event.senderId, event.timestamp ?? Date.now())
+      );
+
+      if (
+        await handleWhatsAppConsentGate({
+          event,
+          lang: context.lang,
+          state,
+          sendText: text => sendWhatsAppTextReply(event.senderId, text),
+          sendButtons: (text, options) =>
+            sendWhatsAppButtonsReply(event.senderId, text, options),
+        })
+      ) {
+        return;
+      }
+
+      await dispatchWhatsAppEvent(event, context);
+    },
+    {
+      channel: "whatsapp",
+      workspaceId: context.costLedgerScope.workspaceId,
+      channelConnectionId: context.costLedgerScope.channelConnectionId,
+      bindingEpoch: context.costLedgerScope.bindingEpoch,
+    }
   );
-
-  if (
-    await handleWhatsAppConsentGate({
-      event,
-      lang: context.lang,
-      state,
-      sendText: text => sendWhatsAppTextReply(event.senderId, text),
-      sendButtons: (text, options) =>
-        sendWhatsAppButtonsReply(event.senderId, text, options),
-    })
-  ) {
-    return;
-  }
-
-  await dispatchWhatsAppEvent(event, context);
 }
 
-function getWhatsAppEventReplayKey(event: NormalizedWhatsAppEvent): string {
+function getWhatsAppEventReplayKey(
+  event: NormalizedWhatsAppEvent,
+  context: WhatsAppHandlerContext
+): string {
   const stableEventId =
     event.messageId?.trim() ||
     createHash("sha256")
@@ -142,13 +183,26 @@ function getWhatsAppEventReplayKey(event: NormalizedWhatsAppEvent): string {
       .digest("hex")
       .slice(0, 32);
 
-  return `whatsapp:${event.userId}:${stableEventId}`;
+  const scopeDigest = createHash("sha256")
+    .update(String(context.costLedgerScope.workspaceId))
+    .update("\0")
+    .update(String(context.costLedgerScope.channelConnectionId))
+    .update("\0")
+    .update(String(context.costLedgerScope.bindingEpoch))
+    .update("\0")
+    .update(String(context.costLedgerScope.privacyEpoch))
+    .update("\0")
+    .update(event.userId)
+    .digest("hex");
+  const eventDigest = createHash("sha256").update(stableEventId).digest("hex");
+  return `whatsapp:v2:${scopeDigest}:${eventDigest}`;
 }
 
 async function claimWhatsAppEventReplayOrLog(
-  event: NormalizedWhatsAppEvent
+  event: NormalizedWhatsAppEvent,
+  context: WhatsAppHandlerContext
 ): Promise<boolean> {
-  const replayKey = getWhatsAppEventReplayKey(event);
+  const replayKey = getWhatsAppEventReplayKey(event, context);
   const claimed = await claimWebhookReplayKey(replayKey);
   if (claimed) {
     return true;
@@ -172,10 +226,12 @@ async function safelyProcessSingleWhatsAppEvent(
       user: toLogUser(event.userId),
       error: error instanceof Error ? error.message : String(error),
     });
-    await sendWhatsAppTextReply(
-      event.senderId,
-      t(lang, "errorFallback")
-    ).catch(() => undefined);
+    if (error instanceof WhatsAppGenerationScopeError) {
+      return;
+    }
+    await sendWhatsAppTextReply(event.senderId, t(lang, "errorFallback")).catch(
+      () => undefined
+    );
   }
 }
 

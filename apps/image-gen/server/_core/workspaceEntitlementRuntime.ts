@@ -273,6 +273,7 @@ export async function assertMessengerGenerationOwnership(input: {
   workspaceId?: number;
   channelConnectionId?: number;
   bindingEpoch?: number;
+  channel?: "facebook_messenger" | "whatsapp";
 }): Promise<void> {
   if (
     !process.env.DATABASE_URL?.trim() &&
@@ -281,13 +282,40 @@ export async function assertMessengerGenerationOwnership(input: {
   ) {
     return;
   }
-  const ownership = await resolveMessengerGenerationOwnership(input.pageId);
+  const pageId = input.pageId?.trim();
   if (
-    !ownership ||
-    ownership.workspaceId !== input.workspaceId ||
-    ownership.channelConnectionId !== input.channelConnectionId ||
-    ownership.bindingEpoch !== input.bindingEpoch
+    !pageId ||
+    !Number.isSafeInteger(input.workspaceId) ||
+    Number(input.workspaceId) <= 0 ||
+    !Number.isSafeInteger(input.channelConnectionId) ||
+    Number(input.channelConnectionId) <= 0 ||
+    !Number.isSafeInteger(input.bindingEpoch) ||
+    Number(input.bindingEpoch) <= 0
   ) {
+    throw new WorkspaceEntitlementLookupError(
+      "Messenger generation ownership changed after enqueue"
+    );
+  }
+
+  // Queued work must never discover the Page's current owner first: after a
+  // rebind that would read the new tenant merely to reject the old job. Prove
+  // the immutable enqueue tuple conjunctively instead.
+  const database = await getDatabaseOrThrow();
+  const rows = await database
+    .select({ id: channelConnections.id })
+    .from(channelConnections)
+    .where(
+      and(
+        eq(channelConnections.id, input.channelConnectionId!),
+        eq(channelConnections.workspaceId, input.workspaceId!),
+        eq(channelConnections.channel, input.channel ?? "facebook_messenger"),
+        eq(channelConnections.status, "connected"),
+        eq(channelConnections.externalId, pageId),
+        eq(channelConnections.bindingEpoch, input.bindingEpoch!)
+      )
+    )
+    .limit(1);
+  if (rows.length !== 1) {
     throw new WorkspaceEntitlementLookupError(
       "Messenger generation ownership changed after enqueue"
     );

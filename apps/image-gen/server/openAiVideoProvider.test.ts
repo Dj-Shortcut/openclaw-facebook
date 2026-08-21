@@ -1,12 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createHash } from "node:crypto";
 import { OpenAiVideoProvider } from "./_core/video-generation/openAiVideoProvider";
-import { readCostLedgerPeriod } from "./_core/costLedger";
-import { clearStateStore } from "./_core/stateStore";
-
-function requestSummaryKey(reqId: string): string {
-  return `sha256:${createHash("sha256").update(reqId).digest("hex").slice(0, 12)}`;
-}
 
 describe("OpenAiVideoProvider", () => {
   const originalFetch = global.fetch;
@@ -21,7 +14,6 @@ describe("OpenAiVideoProvider", () => {
   });
 
   afterEach(() => {
-    clearStateStore();
     global.fetch = originalFetch;
     if (originalApiKey === undefined) {
       delete process.env.OPENAI_API_KEY;
@@ -41,7 +33,6 @@ describe("OpenAiVideoProvider", () => {
   });
 
   it("retries a retryable create failure and downloads completed video bytes", async () => {
-    const period = new Date().toISOString().slice(0, 10);
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -85,62 +76,21 @@ describe("OpenAiVideoProvider", () => {
     expect(onProviderAttempt).toHaveBeenCalledTimes(2);
     const [, createRequest] = fetchMock.mock.calls[1] as [string, RequestInit];
     expect(createRequest.body).toBeInstanceOf(FormData);
-    expect((createRequest.body as FormData).get("input_reference")).toBeInstanceOf(
-      File
-    );
+    expect(
+      (createRequest.body as FormData).get("input_reference")
+    ).toBeInstanceOf(File);
     expect(result).toMatchObject({
       kind: "success",
       provider: "openai",
       providerJobId: "video_1",
       contentType: "video/mp4",
     });
-    expect(result.kind === "success" ? Array.from(result.videoBytes) : []).toEqual([
-      1,
-      2,
-      3,
-    ]);
-    const ledger = await readCostLedgerPeriod(period);
-    expect(ledger).toEqual([
-      expect.objectContaining({
-        channel: "facebook_messenger",
-        operation: "video_generation",
-        provider: "openai-video",
-        model: "sora-2",
-        userKey: "user-key",
-        reqId: requestSummaryKey("req-openai-video-retry"),
-        status: "provider_attempt_started",
-        estimatedCostUsd: null,
-        estimatedOutputCostUsd: null,
-        finalCostUsd: null,
-        costEstimateComplete: false,
-        estimateSource: "unpriced",
-        unpricedCostComponents: ["video_generation"],
-        providerUsage: {
-          pricingModel: "unpriced",
-          size: "1280x720",
-          seconds: 8,
-          sourceContentType: "image/jpeg",
-          sourceBytes: 3,
-        },
-      }),
-      expect.objectContaining({
-        operation: "video_generation",
-        reqId: requestSummaryKey("req-openai-video-retry"),
-        status: "provider_attempt_started",
-        userKey: "user-key",
-        providerUsage: expect.objectContaining({
-          pricingModel: "unpriced",
-          size: "1280x720",
-          seconds: 8,
-        }),
-      }),
-    ]);
-    expect(JSON.stringify(ledger)).not.toContain("make it dance");
-    expect(JSON.stringify(ledger)).not.toContain("https://img.example");
+    expect(
+      result.kind === "success" ? Array.from(result.videoBytes) : []
+    ).toEqual([1, 2, 3]);
   });
 
   it("does not report a provider attempt when OpenAI preflight fails", async () => {
-    const period = new Date().toISOString().slice(0, 10);
     delete process.env.OPENAI_API_KEY;
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
       new Response(new Uint8Array([9, 8, 7]), {
@@ -162,7 +112,31 @@ describe("OpenAiVideoProvider", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(onProviderAttempt).not.toHaveBeenCalled();
-    expect(await readCostLedgerPeriod(period)).toEqual([]);
+    expect(result).toMatchObject({
+      kind: "failure",
+      provider: "openai",
+      errorClass: "unknown",
+    });
+  });
+
+  it("fails closed before the provider POST without an admission callback", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(new Uint8Array([9, 8, 7]), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      })
+    );
+    global.fetch = fetchMock;
+
+    const result = await new OpenAiVideoProvider().generateVideo({
+      prompt: "make it dance",
+      sourceImageUrl: "https://img.example/source.jpg",
+      reqId: "req-openai-video-no-admission",
+      userKey: "user-key",
+      timeoutMs: 10_000,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({
       kind: "failure",
       provider: "openai",
@@ -182,7 +156,12 @@ describe("OpenAiVideoProvider", () => {
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify({ error: { code: "invalid_image_reference", message: "private detail" } }),
+          JSON.stringify({
+            error: {
+              code: "invalid_image_reference",
+              message: "private detail",
+            },
+          }),
           { status: 400, headers: { "content-type": "application/json" } }
         )
       );
@@ -194,6 +173,7 @@ describe("OpenAiVideoProvider", () => {
       reqId: "req-openai-video-invalid-reference",
       userKey: "user-key",
       timeoutMs: 10_000,
+      onProviderAttempt: async () => undefined,
     });
 
     expect(result).toEqual({

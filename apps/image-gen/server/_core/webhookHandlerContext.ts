@@ -114,14 +114,14 @@ export function createHandlerContext({
       user: toLogUser(userId),
       psidHash: anonymizePsid(psid).slice(0, 12),
       isEcho: Boolean(event.message?.is_echo),
-      text: event.message?.text ?? null,
-      quickReplyPayload: event.message?.quick_reply?.payload ?? null,
+      hasText: Boolean(event.message?.text),
+      hasQuickReply: Boolean(event.message?.quick_reply?.payload),
       attachments:
         event.message?.attachments?.map(attachment => ({
           type: attachment.type,
           hasUrl: Boolean(attachment.payload?.url),
         })) ?? [],
-      postbackPayload: event.postback?.payload ?? null,
+      hasPostback: Boolean(event.postback?.payload),
       hasReferralRef: Boolean(
         event.postback?.referral?.ref ?? event.referral?.ref
       ),
@@ -160,7 +160,7 @@ export function createHandlerContext({
       kind: "text",
       reqId,
       psidHash: anonymizePsid(psid).slice(0, 12),
-      text,
+      hasText: Boolean(text),
     });
     return await sendText(psid, text);
   }
@@ -177,11 +177,8 @@ export function createHandlerContext({
       kind: "quick_replies",
       reqId,
       psidHash: anonymizePsid(psid).slice(0, 12),
-      text,
-      quickReplies: replies.map(reply => ({
-        title: reply.title,
-        payload: reply.payload,
-      })),
+      hasText: Boolean(text),
+      quickReplyCount: replies.length,
     });
     return await sendQuickReplies(psid, text, replies);
   }
@@ -200,9 +197,7 @@ export function createHandlerContext({
         kind: "url_buttons",
         reqId,
         psidHash: anonymizePsid(psid).slice(0, 12),
-        actions: actions
-          .filter(action => action.url)
-          .map(action => ({ id: action.id, label: action.label })),
+        actionCount: actions.filter(action => action.url).length,
       });
       return await sendButtonTemplate(psid, text, urlButtons);
     }
@@ -226,7 +221,7 @@ export function createHandlerContext({
       kind: "image",
       reqId,
       psidHash: anonymizePsid(psid).slice(0, 12),
-      imageUrl,
+      imageHost: getAttachmentHostname(imageUrl),
     });
     return await sendImage(psid, imageUrl);
   }

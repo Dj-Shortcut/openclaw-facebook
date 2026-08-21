@@ -92,6 +92,10 @@
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   },
+  "overrides": {
+    "hono": "4.13.3",
+    "nanoid": "3.3.18"
+  },
   "openclaw": {
     "compat": {
       "pluginApi": ">=2026.6.11",

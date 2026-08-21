@@ -1,16 +1,36 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendCostLedgerEntry,
-  deleteCostLedgerEntriesForUser,
-  getCostLedgerReliabilityStats,
+  assertCostLedgerV2Ready,
+  CostLedgerPrivacyTombstoneError,
+  CostLedgerScopeError,
+  deleteCostLedgerEntriesForSubject,
+  readCostLedgerBudgetPeriod,
   readCostLedgerPeriod,
   resetCostLedgerReliabilityStatsForTests,
   summarizeCostLedgerPeriod,
-  summarizeCostLedgerPeriods,
   updateCostLedgerEntry,
   type CostLedgerEntry,
+  type CostLedgerScope,
 } from "./_core/costLedger";
-import { clearStateStore, writeScopedState } from "./_core/stateStore";
+import { clearStateStore } from "./_core/stateStore";
+
+const PERIOD_DATE = new Date("2026-06-21T12:00:00.000Z");
+const PERIOD = "2026-06-21";
+
+const scopeA: CostLedgerScope = {
+  workspaceId: 41,
+  channelConnectionId: 7,
+  bindingEpoch: 3,
+  privacyEpoch: 1,
+};
+
+const scopeB: CostLedgerScope = {
+  workspaceId: 42,
+  channelConnectionId: 8,
+  bindingEpoch: 2,
+  privacyEpoch: 1,
+};
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -18,15 +38,19 @@ afterEach(() => {
   resetCostLedgerReliabilityStatsForTests();
 });
 
-function entry(overrides: Partial<CostLedgerEntry>): CostLedgerEntry {
+function entry(
+  overrides: Partial<CostLedgerEntry> & { scope?: CostLedgerScope } = {}
+): CostLedgerEntry {
   return {
+    scope: overrides.scope ?? scopeA,
     id: "req-cost:attempt-1",
     channel: "facebook_messenger",
     operation: "image_generation",
     provider: "openai-images",
     model: "gpt-image-2",
-    userKey: "user-key-1",
-    reqId: "req-cost",
+    providerUsage: { pricingModel: "fixed" },
+    userKey: "same-page-scoped-user-key",
+    reqId: "raw-provider-request-id",
     status: "provider_attempt_started",
     estimatedCostUsd: 0.025,
     estimatedOutputCostUsd: null,
@@ -38,560 +62,280 @@ function entry(overrides: Partial<CostLedgerEntry>): CostLedgerEntry {
   };
 }
 
-describe("cost ledger", () => {
-  it("stores a stable request-id hash for repeated raw request IDs", async () => {
-    await appendCostLedgerEntry(
-      {
-        ...entry({ reqId: "req-stable-id" }),
-        id: "req-stable:attempt-1",
-      },
-      new Date("2026-06-21T10:00:00.000Z")
-    );
-    await appendCostLedgerEntry(
-      {
-        ...entry({ reqId: "req-stable-id" }),
-        id: "req-stable:attempt-2",
-      },
-      new Date("2026-06-21T10:01:00.000Z")
-    );
-
-    const entries = await readCostLedgerPeriod("2026-06-21");
-    const hashValues = entries.map(ledgerEntry => ledgerEntry.reqId);
-
-    expect(new Set(hashValues)).toHaveLength(1);
-    expect(hashValues[0]).toMatch(/^sha256:[a-f0-9]{12}$/);
-    expect(hashValues.join(",")).not.toContain("req-stable-id");
-  });
-
-  it("stores provider attempt metadata by UTC period", async () => {
-    await appendCostLedgerEntry(
-      entry({ id: "req-cost:attempt-1" }),
-      new Date("2026-06-21T23:59:59.000Z")
-    );
-    await appendCostLedgerEntry(
-      entry({ id: "req-cost:attempt-2" }),
-      new Date("2026-06-22T00:00:00.000Z")
-    );
-
-    expect(await readCostLedgerPeriod("2026-06-21")).toHaveLength(1);
-    expect(await readCostLedgerPeriod("2026-06-22")).toMatchObject([
-      {
-        id: "req-cost:attempt-2",
-        period: "2026-06-22",
-        recordedAt: "2026-06-22T00:00:00.000Z",
-      },
-    ]);
-  });
-
-  it("summarizes owner-safe spend metadata without user content", async () => {
-    await appendCostLedgerEntry(
-      {
-        id: "req-image:attempt-1",
-        channel: "facebook_messenger",
-        operation: "image_generation",
-        provider: "openai-images",
-        model: "gpt-image-2",
-        pricingModel: "gpt-image-1",
-        userKey: "user-key-1",
-        reqId: "req-image",
-        generationKind: "text_to_image",
-        status: "provider_attempt_started",
-        estimatedCostUsd: 0.025,
-        estimatedOutputCostUsd: null,
-        finalCostUsd: null,
-        costEstimateComplete: true,
-        estimateSource: "env_override",
-        unpricedCostComponents: [],
-      },
-      new Date("2026-06-21T01:00:00.000Z")
-    );
-    await appendCostLedgerEntry(
-      {
-        id: "req-audio:attempt-1",
-        channel: "facebook_messenger",
-        operation: "audio_transcription",
-        provider: "openai-audio",
-        model: "whisper-1",
-        userKey: "user-key-2",
-        reqId: "req-audio",
-        status: "provider_attempt_started",
-        estimatedCostUsd: null,
-        estimatedOutputCostUsd: null,
-        finalCostUsd: null,
-        costEstimateComplete: false,
-        estimateSource: "unpriced",
-        unpricedCostComponents: ["audio_duration"],
-      },
-      new Date("2026-06-21T02:00:00.000Z")
-    );
-    await appendCostLedgerEntry(
-      {
-        id: "req-image-edit:attempt-1",
-        channel: "facebook_messenger",
-        operation: "image_generation",
-        provider: "openai-images",
-        model: "gpt-5",
-        pricingModel: "gpt-image-1",
-        userKey: "user-key-1",
-        reqId: "req-image-edit",
-        generationKind: "source_image_edit",
-        status: "provider_attempt_started",
-        estimatedCostUsd: null,
-        estimatedOutputCostUsd: 0.042,
-        finalCostUsd: null,
-        costEstimateComplete: false,
-        estimateSource: "partial_source_image_input_unpriced",
-        unpricedCostComponents: ["source_image_input"],
-      },
-      new Date("2026-06-21T03:00:00.000Z")
-    );
-
-    const summary = await summarizeCostLedgerPeriod("2026-06-21");
-
-    expect(summary).toMatchObject({
-      period: "2026-06-21",
-      totalEntries: 3,
-      uniqueUserCount: 2,
-      estimatedCostUsd: 0.067,
-      finalCostUsd: 0,
-      completeEstimateEntries: 1,
-      incompleteEstimateEntries: 2,
-      unpricedCostComponents: ["audio_duration", "source_image_input"],
-      byOperation: {
-        image_generation: {
-          attempts: 2,
-          estimatedCostUsd: 0.067,
-          finalCostUsd: 0,
-        },
-        audio_transcription: {
-          attempts: 1,
-          estimatedCostUsd: 0,
-          finalCostUsd: 0,
-        },
-      },
-      byProvider: {
-        "openai-images": {
-          attempts: 2,
-          estimatedCostUsd: 0.067,
-          finalCostUsd: 0,
-        },
-        "openai-audio": {
-          attempts: 1,
-          estimatedCostUsd: 0,
-          finalCostUsd: 0,
-        },
-      },
-    });
-    expect(JSON.stringify(summary)).not.toContain("prompt");
-    expect(JSON.stringify(summary)).not.toContain("private");
-    expect(JSON.stringify(summary)).not.toContain("https://");
-    expect(JSON.stringify(summary)).not.toContain("facebook:");
-  });
-
-  it("serializes concurrent in-memory appends for the same period", async () => {
-    await Promise.all(
-      Array.from({ length: 25 }, (_, index) =>
-        appendCostLedgerEntry(
-          entry({
-            id: `req-concurrent:attempt-${index}`,
-            reqId: `req-concurrent-${index}`,
-          }),
-          new Date("2026-06-21T12:00:00.000Z")
-        )
-      )
-    );
-
-    const entries = await readCostLedgerPeriod("2026-06-21");
-
-    expect(entries).toHaveLength(25);
-    expect(new Set(entries.map(ledgerEntry => ledgerEntry.id)).size).toBe(25);
-  });
-
-  it("summarizes owner-safe spend metadata", async () => {
-    await appendCostLedgerEntry(
-      entry({
-        id: "req-image:attempt-1",
-        userKey: "user-key-1",
-        estimatedCostUsd: 0.025,
-        costEstimateComplete: true,
-      }),
-      new Date("2026-06-21T12:00:00.000Z")
-    );
-    await appendCostLedgerEntry(
-      entry({
-        id: "req-audio:attempt-1",
-        operation: "audio_transcription",
-        provider: "openai-audio",
-        model: "gpt-4o-transcribe",
-        userKey: "user-key-2",
-        status: "provider_attempt_failed",
-        estimatedCostUsd: null,
-        costEstimateComplete: false,
-        estimateSource: null,
-        unpricedCostComponents: ["audio_seconds"],
-      }),
-      new Date("2026-06-21T12:01:00.000Z")
-    );
-    await appendCostLedgerEntry(
-      entry({
-        id: "req-image:attempt-2",
-        userKey: "user-key-1",
-        status: "provider_attempt_succeeded",
-        estimatedCostUsd: null,
-        estimatedOutputCostUsd: 0.042,
-        finalCostUsd: 0.042,
-        costEstimateComplete: false,
-        unpricedCostComponents: ["input_tokens"],
-      }),
-      new Date("2026-06-21T12:02:00.000Z")
-    );
-    await appendCostLedgerEntry(
-      entry({
-        id: "req-blocked:attempt-1",
-        reqId: "req-blocked",
-        userKey: "user-key-3",
-        status: "blocked",
-        estimatedCostUsd: null,
-        costEstimateComplete: false,
-      }),
-      new Date("2026-06-21T12:03:00.000Z")
-    );
-
-    const summary = await summarizeCostLedgerPeriod("2026-06-21");
-
-    expect(summary).toMatchObject({
-      period: "2026-06-21",
-      totalEntries: 4,
-      uniqueUserCount: 3,
-      estimatedCostUsd: 0.067,
-      finalCostUsd: 0.042,
-      openAttemptEntries: 1,
-      failedAttemptEntries: 1,
-      blockedEntries: 1,
-      completeEstimateEntries: 1,
-      incompleteEstimateEntries: 3,
-      unpricedCostComponents: ["audio_seconds", "input_tokens"],
-      byStatus: {
-        provider_attempt_started: 1,
-        provider_attempt_succeeded: 1,
-        provider_attempt_failed: 1,
-        blocked: 1,
-      },
-      byOperation: {
-        image_generation: {
-          attempts: 3,
-          estimatedCostUsd: 0.067,
-          finalCostUsd: 0.042,
-        },
-        audio_transcription: {
-          attempts: 1,
-          estimatedCostUsd: 0,
-          finalCostUsd: 0,
-        },
-      },
-      byProvider: {
-        "openai-images": {
-          attempts: 3,
-          estimatedCostUsd: 0.067,
-          finalCostUsd: 0.042,
-        },
-        "openai-audio": {
-          attempts: 1,
-          estimatedCostUsd: 0,
-          finalCostUsd: 0,
-        },
-      },
-    });
-    expect(Object.keys(summary.byRequest)).toHaveLength(2);
-    expect(JSON.stringify(summary)).not.toContain("prompt");
-    expect(JSON.stringify(summary)).not.toContain("facebook:");
-    expect(JSON.stringify(summary)).not.toContain("secret");
-  });
-
-  it("rolls up costs per request without exposing the raw request id", async () => {
-    await appendCostLedgerEntry(
-      entry({
-        id: "mid:private-message-id:attempt-1",
-        reqId: "mid:private-message-id",
-        estimatedCostUsd: 0.025,
-      }),
-      new Date("2026-06-21T12:00:00.000Z")
-    );
-    await appendCostLedgerEntry(
-      entry({
-        id: "mid:private-message-id:attempt-2",
-        reqId: "mid:private-message-id",
-        status: "provider_attempt_failed",
-        estimatedCostUsd: null,
-        estimatedOutputCostUsd: 0.042,
-        costEstimateComplete: false,
-        unpricedCostComponents: ["input_tokens"],
-      }),
-      new Date("2026-06-21T12:01:00.000Z")
-    );
-
-    const summary = await summarizeCostLedgerPeriod("2026-06-21");
-    const requestKeys = Object.keys(summary.byRequest);
-
-    expect(requestKeys).toHaveLength(1);
-    expect(requestKeys[0]).toMatch(/^sha256:[a-f0-9]{12}$/);
-    expect(summary.byRequest[requestKeys[0] ?? ""]).toEqual({
-      attempts: 2,
-      estimatedCostUsd: 0.067,
-      finalCostUsd: 0,
-      operation: "image_generation",
-      provider: "openai-images",
-      statuses: {
-        provider_attempt_started: 1,
-        provider_attempt_failed: 1,
-      },
-      completeEstimateEntries: 1,
-      incompleteEstimateEntries: 1,
-      unpricedCostComponents: ["input_tokens"],
-    });
-    expect(JSON.stringify(summary)).not.toContain("mid:private-message-id");
-  });
-
-  it("summarizes multiple UTC periods for monthly spend checks", async () => {
-    await appendCostLedgerEntry(
-      entry({ id: "req-month-a:attempt-1", reqId: "req-month-a", estimatedCostUsd: 0.02 }),
-      new Date("2026-06-01T12:00:00.000Z")
-    );
-    await appendCostLedgerEntry(
-      entry({ id: "req-month-b:attempt-1", reqId: "req-month-b", estimatedCostUsd: 0.03 }),
-      new Date("2026-06-15T12:00:00.000Z")
-    );
-    await appendCostLedgerEntry(
-      entry({ id: "req-other-month:attempt-1", reqId: "req-other-month", estimatedCostUsd: 99 }),
-      new Date("2026-07-01T12:00:00.000Z")
-    );
-
-    const summary = await summarizeCostLedgerPeriods(
-      ["2026-06-01", "2026-06-15"],
-      "2026-06"
-    );
-
-    expect(summary).toMatchObject({
-      period: "2026-06",
-      totalEntries: 2,
-      estimatedCostUsd: 0.05,
-      byOperation: {
-        image_generation: {
-          attempts: 2,
-          estimatedCostUsd: 0.05,
-        },
-      },
-    });
-  });
-
-  it("updates an existing provider attempt status and final cost", async () => {
-    await appendCostLedgerEntry(
-      entry({
-        id: "req-finalize:attempt-1",
-        reqId: "req-finalize",
-        status: "provider_attempt_started",
-        finalCostUsd: null,
-      }),
-      new Date("2026-06-21T12:00:00.000Z")
-    );
-
+describe("tenant-scoped cost ledger", () => {
+  it("requires an immutable positive workspace/connection/binding/privacy scope", async () => {
     await expect(
-      updateCostLedgerEntry(
-        "req-finalize:attempt-1",
-        {
-          status: "provider_attempt_succeeded",
-          finalCostUsd: 0.025,
-        },
-        new Date("2026-06-21T12:00:01.000Z")
-      )
-    ).resolves.toMatchObject({
-      id: "req-finalize:attempt-1",
-      status: "provider_attempt_succeeded",
-      finalCostUsd: 0.025,
-    });
-
-    expect(await readCostLedgerPeriod("2026-06-21")).toEqual([
-      expect.objectContaining({
-        id: "req-finalize:attempt-1",
-        status: "provider_attempt_succeeded",
-        finalCostUsd: 0.025,
-      }),
-    ]);
-  });
-
-  it("serializes concurrent provider-attempt updates for the same period", async () => {
-    await Promise.all(
-      Array.from({ length: 20 }, (_, index) =>
-        appendCostLedgerEntry(
-          entry({
-            id: `req-update-concurrent:attempt-${index}`,
-            reqId: `req-update-concurrent-${index}`,
-            status: "provider_attempt_started",
-            finalCostUsd: null,
-          }),
-          new Date("2026-06-21T12:00:00.000Z")
-        )
-      )
-    );
-
-    await Promise.all(
-      Array.from({ length: 20 }, (_, index) =>
-        updateCostLedgerEntry(
-          `req-update-concurrent:attempt-${index}`,
-          {
-            status: "provider_attempt_succeeded",
-            finalCostUsd: index / 100,
-          },
-          new Date("2026-06-21T12:01:00.000Z")
-        )
-      )
-    );
-
-    const entries = await readCostLedgerPeriod("2026-06-21");
-
-    expect(entries).toHaveLength(20);
-    expect(entries).toEqual(
-      expect.arrayContaining(
-        Array.from({ length: 20 }, (_, index) =>
-          expect.objectContaining({
-            id: `req-update-concurrent:attempt-${index}`,
-            status: "provider_attempt_succeeded",
-            finalCostUsd: index / 100,
-          })
-        )
-      )
-    );
-  });
-
-  it("updates provider attempts across UTC midnight by entry id", async () => {
-    await appendCostLedgerEntry(
-      entry({
-        id: "req-midnight:attempt-1",
-        reqId: "req-midnight",
-        status: "provider_attempt_started",
-      }),
-      new Date("2026-06-21T23:59:59.000Z")
-    );
-
-    await expect(
-      updateCostLedgerEntry(
-        "req-midnight:attempt-1",
-        { status: "provider_attempt_succeeded" },
-        new Date("2026-06-22T00:00:01.000Z")
-      )
-    ).resolves.toMatchObject({
-      id: "req-midnight:attempt-1",
-      period: "2026-06-21",
-      status: "provider_attempt_succeeded",
-    });
-
-    expect(await readCostLedgerPeriod("2026-06-21")).toEqual([
-      expect.objectContaining({
-        id: "req-midnight:attempt-1",
-        status: "provider_attempt_succeeded",
-      }),
-    ]);
-    expect(await readCostLedgerPeriod("2026-06-22")).toEqual([]);
-  });
-
-  it("warns and reports dropped entries when a period exceeds the retention cap", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const recordedAt = new Date("2026-06-21T12:00:00.000Z");
-    await writeScopedState(
-      "cost:ledger:period",
-      "2026-06-21",
-      Array.from({ length: 5_000 }, (_, index) => ({
-        ...entry({
-          id: `req-overflow:attempt-${index}`,
-          reqId: `req-overflow-${index}`,
+      appendCostLedgerEntry(
+        entry({
+          scope: { ...scopeA, workspaceId: 0 },
         }),
-        period: "2026-06-21",
-        recordedAt: recordedAt.toISOString(),
-      })),
-      60
-    );
+        PERIOD_DATE
+      )
+    ).rejects.toBeInstanceOf(CostLedgerScopeError);
 
-    await appendCostLedgerEntry(
-      entry({
-        id: "req-overflow:attempt-5000",
-        reqId: "req-overflow-5000",
-      }),
-      recordedAt
-    );
+    await expect(
+      readCostLedgerPeriod({ ...scopeA, privacyEpoch: 0 }, PERIOD)
+    ).rejects.toBeInstanceOf(CostLedgerScopeError);
 
-    const periodEntries = await readCostLedgerPeriod("2026-06-21");
-    const loggedPayload = JSON.parse(String(warnSpy.mock.calls[0]?.[0]));
-
-    expect(periodEntries).toHaveLength(5_000);
-    expect(periodEntries[0]?.id).toBe("req-overflow:attempt-1");
-    expect(periodEntries.at(-1)?.id).toBe("req-overflow:attempt-5000");
-    expect(getCostLedgerReliabilityStats()).toEqual({
-      droppedEntryCount: 1,
-      maxEntriesPerPeriod: 5_000,
+    expect(await readCostLedgerBudgetPeriod(PERIOD)).toMatchObject({
+      attempts: 0,
+      estimatedCostUsd: 0,
     });
-    expect(loggedPayload).toMatchObject({
-      event: "cost_ledger_period_overflow",
-      period: "2026-06-21",
-      droppedEntries: 1,
-      maxEntriesPerPeriod: 5_000,
-      totalDroppedEntries: 1,
-    });
-    expect(JSON.stringify(loggedPayload)).not.toContain("facebook:");
-    expect(JSON.stringify(loggedPayload)).not.toContain("prompt");
   });
 
-  it("bounds delete-my-data cleanup to periods containing the user", async () => {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const targetUserKey = "target-user-key-private";
+  it("stores same-user entries in separate workspace partitions", async () => {
+    await appendCostLedgerEntry(
+      entry({ id: "workspace-a-attempt", scope: scopeA }),
+      PERIOD_DATE
+    );
+    await appendCostLedgerEntry(
+      entry({ id: "workspace-b-attempt", scope: scopeB }),
+      PERIOD_DATE
+    );
+
+    expect(await readCostLedgerPeriod(scopeA, PERIOD)).toMatchObject([
+      { id: "workspace-a-attempt", scope: scopeA },
+    ]);
+    expect(await readCostLedgerPeriod(scopeB, PERIOD)).toMatchObject([
+      { id: "workspace-b-attempt", scope: scopeB },
+    ]);
+    expect(await summarizeCostLedgerPeriod(scopeA, PERIOD)).toMatchObject({
+      totalEntries: 1,
+      uniqueUserCount: 1,
+      estimatedCostUsd: 0.025,
+    });
+  });
+
+  it("deletes only the exact workspace/connection subject and old epochs", async () => {
+    const sameWorkspaceOtherConnection = {
+      ...scopeA,
+      channelConnectionId: 9,
+    };
+    const futurePrivacyEpoch = { ...scopeA, privacyEpoch: 3 };
 
     await appendCostLedgerEntry(
-      entry({
-        id: "req-delete-a:attempt-1",
-        reqId: "req-delete-a",
-        userKey: targetUserKey,
-      }),
-      new Date("2026-06-21T12:00:00.000Z")
+      entry({ id: "old-binding", scope: scopeA }),
+      PERIOD_DATE
     );
     await appendCostLedgerEntry(
       entry({
-        id: "req-delete-b:attempt-1",
-        reqId: "req-delete-b",
-        userKey: targetUserKey,
+        id: "other-binding-same-subject",
+        scope: { ...scopeA, bindingEpoch: 4, privacyEpoch: 2 },
       }),
-      new Date("2026-06-19T12:00:00.000Z")
+      PERIOD_DATE
     );
     await appendCostLedgerEntry(
-      entry({
-        id: "req-other-user:attempt-1",
-        reqId: "req-other-user",
-        userKey: "other-user-key",
-      }),
-      new Date("2026-06-20T12:00:00.000Z")
+      entry({ id: "other-connection", scope: sameWorkspaceOtherConnection }),
+      PERIOD_DATE
+    );
+    await appendCostLedgerEntry(
+      entry({ id: "future-reactivated-epoch", scope: futurePrivacyEpoch }),
+      PERIOD_DATE
+    );
+    await appendCostLedgerEntry(
+      entry({ id: "other-workspace", scope: scopeB }),
+      PERIOD_DATE
     );
 
     await expect(
-      deleteCostLedgerEntriesForUser(
-        targetUserKey,
-        new Date("2026-06-21T23:59:59.000Z")
+      deleteCostLedgerEntriesForSubject(
+        {
+          workspaceId: scopeA.workspaceId,
+          channelConnectionId: scopeA.channelConnectionId,
+          userKey: "same-page-scoped-user-key",
+          erasureEpoch: 2,
+        },
+        PERIOD_DATE
       )
     ).resolves.toBe(2);
 
-    expect(await readCostLedgerPeriod("2026-06-21")).toEqual([]);
-    expect(await readCostLedgerPeriod("2026-06-19")).toEqual([]);
-    expect(await readCostLedgerPeriod("2026-06-20")).toEqual([
-      expect.objectContaining({
-        id: "req-other-user:attempt-1",
-        userKey: "other-user-key",
-      }),
+    expect(await readCostLedgerPeriod(scopeA, PERIOD)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "other-connection" }),
+        expect.objectContaining({ id: "future-reactivated-epoch" }),
+      ])
+    );
+    expect(await readCostLedgerPeriod(scopeA, PERIOD)).toHaveLength(2);
+    expect(await readCostLedgerPeriod(scopeB, PERIOD)).toMatchObject([
+      { id: "other-workspace" },
     ]);
+  });
 
-    const loggedPayload = JSON.parse(String(logSpy.mock.calls.at(-1)?.[0]));
-    expect(loggedPayload).toMatchObject({
-      event: "cost_ledger_user_delete_completed",
-      scannedPeriods: 90,
-      touchedPeriods: 2,
-      deletedEntries: 2,
+  it("erases a still-live entry on the inclusive day-90 retention boundary", async () => {
+    const boundaryEntryDate = new Date("2026-03-23T23:59:59.000Z");
+    await appendCostLedgerEntry(
+      entry({ id: "inclusive-day-90", scope: scopeA }),
+      boundaryEntryDate
+    );
+
+    await expect(
+      deleteCostLedgerEntriesForSubject(
+        {
+          workspaceId: scopeA.workspaceId,
+          channelConnectionId: scopeA.channelConnectionId,
+          userKey: "same-page-scoped-user-key",
+          erasureEpoch: 1,
+        },
+        PERIOD_DATE
+      )
+    ).resolves.toBe(1);
+    await expect(readCostLedgerPeriod(scopeA, "2026-03-23")).resolves.toEqual(
+      []
+    );
+  });
+
+  it("uses a monotonic tombstone to block stale append and update resurrection", async () => {
+    await appendCostLedgerEntry(
+      entry({ id: "stale-update-target", scope: scopeA }),
+      PERIOD_DATE
+    );
+    await deleteCostLedgerEntriesForSubject(
+      {
+        workspaceId: scopeA.workspaceId,
+        channelConnectionId: scopeA.channelConnectionId,
+        userKey: "same-page-scoped-user-key",
+        erasureEpoch: 2,
+      },
+      PERIOD_DATE
+    );
+
+    await expect(
+      appendCostLedgerEntry(
+        entry({
+          id: "stale-late-append",
+          scope: { ...scopeA, privacyEpoch: 2 },
+        }),
+        PERIOD_DATE
+      )
+    ).rejects.toBeInstanceOf(CostLedgerPrivacyTombstoneError);
+    await expect(
+      updateCostLedgerEntry(
+        { ...scopeA, userKey: "same-page-scoped-user-key" },
+        "stale-update-target",
+        { status: "provider_attempt_succeeded" },
+        PERIOD_DATE
+      )
+    ).rejects.toBeInstanceOf(CostLedgerPrivacyTombstoneError);
+
+    await expect(
+      appendCostLedgerEntry(
+        entry({
+          id: "strictly-new-epoch",
+          scope: { ...scopeA, privacyEpoch: 3 },
+        }),
+        PERIOD_DATE
+      )
+    ).resolves.toMatchObject({ id: "strictly-new-epoch" });
+  });
+
+  it("rejects a wrong-scope update even when entry IDs collide", async () => {
+    await appendCostLedgerEntry(
+      entry({ id: "shared-attempt", scope: scopeA }),
+      PERIOD_DATE
+    );
+    await appendCostLedgerEntry(
+      entry({ id: "shared-attempt", scope: scopeB }),
+      PERIOD_DATE
+    );
+
+    await expect(
+      updateCostLedgerEntry(
+        {
+          ...scopeA,
+          channelConnectionId: 99,
+          userKey: "same-page-scoped-user-key",
+        },
+        "shared-attempt",
+        { status: "provider_attempt_succeeded" },
+        PERIOD_DATE
+      )
+    ).resolves.toBeNull();
+
+    await expect(
+      updateCostLedgerEntry(
+        { ...scopeA, userKey: "same-page-scoped-user-key" },
+        "shared-attempt",
+        { status: "provider_attempt_succeeded", finalCostUsd: 0.025 },
+        PERIOD_DATE
+      )
+    ).resolves.toMatchObject({
+      scope: scopeA,
+      status: "provider_attempt_succeeded",
     });
-    expect(JSON.stringify(loggedPayload)).not.toContain(targetUserKey);
+    expect((await readCostLedgerPeriod(scopeB, PERIOD))[0]?.status).toBe(
+      "provider_attempt_started"
+    );
+  });
+
+  it("keeps the shared budget baseline metadata-only and deletion-independent", async () => {
+    const privateUser = "private-user-key-never-in-global-aggregate";
+    const privateRequest = "private-request-id-never-in-global-aggregate";
+    await appendCostLedgerEntry(
+      entry({
+        scope: scopeA,
+        userKey: privateUser,
+        reqId: privateRequest,
+        estimatedCostUsd: 0.02,
+        estimatedOutputCostUsd: 0.005,
+        providerUsage: { sourceBytes: 123_456, privateMarker: privateUser },
+      }),
+      PERIOD_DATE
+    );
+
+    const beforeDelete = await readCostLedgerBudgetPeriod(PERIOD);
+    expect(beforeDelete).toMatchObject({
+      version: 2,
+      attempts: 1,
+      estimatedCostUsd: 0.025,
+      byOperation: {
+        image_generation: { attempts: 1, estimatedCostUsd: 0.025 },
+      },
+      byProvider: {
+        "openai-images": { attempts: 1, estimatedCostUsd: 0.025 },
+      },
+    });
+    const serialized = JSON.stringify(beforeDelete);
+    for (const forbidden of [
+      "workspaceId",
+      "channelConnectionId",
+      "bindingEpoch",
+      "privacyEpoch",
+      "userKey",
+      "reqId",
+      "providerUsage",
+      privateUser,
+      privateRequest,
+      "123456",
+    ]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+
+    await deleteCostLedgerEntriesForSubject(
+      {
+        workspaceId: scopeA.workspaceId,
+        channelConnectionId: scopeA.channelConnectionId,
+        userKey: privateUser,
+        erasureEpoch: 2,
+      },
+      PERIOD_DATE
+    );
+    expect(await readCostLedgerPeriod(scopeA, PERIOD)).toEqual([]);
+    expect(await readCostLedgerBudgetPeriod(PERIOD)).toEqual(beforeDelete);
+  });
+
+  it("deduplicates an exact scoped retry without inflating the global baseline", async () => {
+    const attempt = entry({ id: "idempotent-attempt", scope: scopeA });
+    await appendCostLedgerEntry(attempt, PERIOD_DATE);
+    await appendCostLedgerEntry(attempt, PERIOD_DATE);
+
+    expect(await readCostLedgerPeriod(scopeA, PERIOD)).toHaveLength(1);
+    expect(await readCostLedgerBudgetPeriod(PERIOD)).toMatchObject({
+      attempts: 1,
+      estimatedCostUsd: 0.025,
+    });
+  });
+
+  it("passes the v2 readiness check when Redis has no legacy global keys", async () => {
+    await expect(assertCostLedgerV2Ready()).resolves.toBeUndefined();
   });
 });
