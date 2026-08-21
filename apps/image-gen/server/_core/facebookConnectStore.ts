@@ -199,6 +199,7 @@ export function getFacebookOAuthUrl(state: string) {
     // Facebook Login for Business configurations own the permission set.
     // Meta recommends config_id instead of a caller-controlled scope list.
     url.searchParams.set("config_id", configurationId);
+    url.searchParams.set("override_default_response_type", "true");
   } else {
     url.searchParams.set("scope", FACEBOOK_LOGIN_PERMISSIONS.join(","));
   }
@@ -416,6 +417,10 @@ export async function exchangeFacebookCodeForPages(code: string) {
     signal: AbortSignal.timeout(FACEBOOK_GRAPH_TIMEOUT_MS),
   });
   if (!tokenResponse.ok) {
+    safeLog("facebook_token_exchange_failed", {
+      level: "warn",
+      status: tokenResponse.status,
+    });
     throw new Error(`facebook token exchange failed: ${tokenResponse.status}`);
   }
 

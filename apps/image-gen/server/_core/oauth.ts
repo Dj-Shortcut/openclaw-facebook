@@ -321,6 +321,10 @@ export function registerOAuthRoutes(app: Express) {
       const configurationId = getFacebookLoginConfigurationId();
       if (configurationId) {
         authorizationUrl.searchParams.set("config_id", configurationId);
+        authorizationUrl.searchParams.set(
+          "override_default_response_type",
+          "true"
+        );
       } else {
         authorizationUrl.searchParams.set(
           "scope",

@@ -248,6 +248,9 @@ describe("OAuth callback security", () => {
     expect(authorizationUrl.searchParams.get("config_id")).toBe(
       "2097873054148678"
     );
+    expect(
+      authorizationUrl.searchParams.get("override_default_response_type")
+    ).toBe("true");
     expect(authorizationUrl.searchParams.has("scope")).toBe(false);
     const pageConnectUrl = new URL(
       getFacebookOAuthUrl("page-connect-state") ?? "https://invalid"
@@ -255,6 +258,9 @@ describe("OAuth callback security", () => {
     expect(pageConnectUrl.searchParams.get("config_id")).toBe(
       "2097873054148678"
     );
+    expect(
+      pageConnectUrl.searchParams.get("override_default_response_type")
+    ).toBe("true");
     expect(pageConnectUrl.searchParams.has("scope")).toBe(false);
     const state = authorizationUrl.searchParams.get("state");
     const stateCookie = start.headers["set-cookie"]?.[0]?.split(";", 1)[0];
