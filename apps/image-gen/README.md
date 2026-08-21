@@ -432,21 +432,24 @@ Use this order for `leaderbot-fb-image-gen`:
      -a leaderbot-fb-image-gen
    ```
 
-   Configure the public OAuth identifiers at runtime as well. Supplying these
-   as Fly secrets is acceptable operationally, but they are intentionally
-   returned to the browser and must never contain credentials or URL userinfo:
+   The customer portal uses the existing server-side Facebook app credentials
+   for same-origin Facebook Login. Keep the app secret server-only and register
+   the exact callback
+   `https://app.leaderbot.live/api/oauth/callback` in Meta:
+
+   Set `FB_APP_ID` and `FB_APP_SECRET` through the encrypted Fly secret store;
+   never place their values in source files or shell history. Then configure
+   the public callback origin:
 
    ```bash
-   fly secrets set OAUTH_PORTAL_URL='https://<oauth-portal>' \
-     OAUTH_SERVER_URL='https://<oauth-api>' \
-     VITE_APP_ID='<public-app-id>' \
+   fly secrets set APP_BASE_URL='https://app.leaderbot.live' \
      -a leaderbot-fb-image-gen
    ```
 
-   Do not derive these values from `FB_APP_ID`, Facebook callback URLs, or the
-   Meta Graph API. `OAUTH_SERVER_URL` is the WebDev OAuth token-exchange service
-   and `OAUTH_PORTAL_URL` is its browser authorization UI. The portal URL may be
-   omitted only when both are deliberately hosted at the same origin.
+   The browser receives only the same-origin login path; it never receives
+   `FB_APP_SECRET` or a Facebook access token. The legacy WebDev OAuth settings
+   (`OAUTH_PORTAL_URL`, `OAUTH_SERVER_URL`, `VITE_APP_ID`) remain an optional
+   fallback when direct Facebook Login is not configured.
 
 3. Run migrations from a trusted operator shell with the same `DATABASE_URL`:
 
@@ -465,8 +468,8 @@ Use this order for `leaderbot-fb-image-gen`:
    ```bash
    npm run deploy:verify-portal
    curl -fsS https://leaderbot-fb-image-gen.fly.dev/readyz
-   curl -fsSI https://leaderbot.live/
-   curl -fsS https://leaderbot.live/healthz
+   curl -fsSI https://app.leaderbot.live/
+   curl -fsS https://app.leaderbot.live/healthz
    ```
 
    `npm run deploy:verify-portal` checks for the `DATABASE_URL` Fly secret by

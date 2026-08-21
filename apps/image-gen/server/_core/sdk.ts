@@ -190,7 +190,7 @@ class SDKServer {
     return this.signSession(
       {
         openId,
-        appId: ENV.appId,
+        appId: ENV.appId || process.env.FB_APP_ID?.trim() || "leaderbot-portal",
         name: options.name || "",
       },
       options

@@ -3,7 +3,7 @@ import http from "node:http";
 import https from "node:https";
 
 const DEFAULT_ALLOWED_PATHS = "/facebook/webhook,/healthz";
-const PORTAL_PAGE_PATHS = new Set(["/", "/privacy", "/terms", "/billing-policy", "/data-deletion", "/handoff"]);
+const PORTAL_PAGE_PATHS = new Set(["/", "/portal", "/privacy", "/terms", "/billing-policy", "/data-deletion", "/handoff"]);
 const PORTAL_PAGE_PREFIXES = ["/handoff/"];
 const PORTAL_ASSET_PREFIXES = ["/assets/"];
 const PORTAL_GET_PATHS = new Set([

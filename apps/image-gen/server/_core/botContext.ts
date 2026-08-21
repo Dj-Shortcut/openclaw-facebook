@@ -34,6 +34,7 @@ type BotContextBase = {
   setFlowState(state: ConversationState): Promise<void>;
   setPendingEditIntent?(intent: PendingEditIntent | null): Promise<void>;
   clearImageContext?(): Promise<void>;
+  requestPortalHandoff?(): Promise<"sent" | "not_linked" | "unavailable">;
   runImageGeneration(
     sourceImageUrl?: string,
     promptHint?: string,

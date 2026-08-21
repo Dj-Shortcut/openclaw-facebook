@@ -62,6 +62,17 @@ const enCopy = {
     updateWorkspaceError:
       "Unable to update the workspace name. Please try again.",
   },
+  navigation: {
+    ariaLabel: "Workspace dashboard",
+    dashboard: "Leaderbot dashboard",
+    overview: "Overview",
+    assistant: "Assistant",
+    messenger: "Messenger",
+    usage: "Usage",
+    billing: "Billing",
+    privacy: "Privacy",
+    knowledge: "Knowledge",
+  },
   workspaceAccess: {
     title: "Workspace access",
     unableToLoad: "Unable to load workspace access.",
@@ -345,6 +356,17 @@ const nlBeCopy: PortalCopy = {
     signedInAs: "Aangemeld als",
     updateWorkspaceError:
       "Werkruimtenaam kon niet bijgewerkt worden. Probeer opnieuw.",
+  },
+  navigation: {
+    ariaLabel: "Werkruimtedashboard",
+    dashboard: "Leaderbot dashboard",
+    overview: "Overzicht",
+    assistant: "Assistent",
+    messenger: "Messenger",
+    usage: "Gebruik",
+    billing: "Betaling",
+    privacy: "Privacy",
+    knowledge: "Kennis",
   },
   workspaceAccess: {
     title: "Toegang tot werkruimte",
@@ -632,6 +654,17 @@ const frBeCopy: PortalCopy = {
     signedInAs: "Connecte en tant que",
     updateWorkspaceError:
       "Impossible de mettre a jour le nom de l'espace. Reessayez.",
+  },
+  navigation: {
+    ariaLabel: "Tableau de bord de l’espace de travail",
+    dashboard: "Tableau de bord Leaderbot",
+    overview: "Aperçu",
+    assistant: "Assistant",
+    messenger: "Messenger",
+    usage: "Utilisation",
+    billing: "Paiement",
+    privacy: "Vie privée",
+    knowledge: "Connaissances",
   },
   workspaceAccess: {
     title: "Acces a l'espace",

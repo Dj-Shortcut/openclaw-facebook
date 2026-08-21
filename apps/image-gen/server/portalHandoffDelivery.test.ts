@@ -126,6 +126,23 @@ describe("portal handoff delivery", () => {
     expect(JSON.stringify(mocks.safeLog.mock.calls)).not.toContain("page-scoped-user-id");
   });
 
+  it("sends account-bound re-entry instructions for the customer portal", async () => {
+    await expect(
+      sendPortalHandoffLink({
+        workspaceId: 42,
+        messengerSenderUserKey,
+        createdByUserId: 7,
+        messageVariant: "portal_reentry",
+      })
+    ).resolves.toMatchObject({ ok: true, sent: true });
+
+    expect(mocks.sendText).toHaveBeenCalledWith(
+      "page-scoped-user-id",
+      expect.stringMatching(/klantenportaal[\s\S]*hetzelfde Facebook-account/),
+      { pageId: "facebook-page-42" }
+    );
+  });
+
   it("does not create a token when the Messenger user cannot be found", async () => {
     mocks.findStateByUserKey.mockResolvedValue(null);
 

@@ -91,6 +91,47 @@ async function sendCallbackRequest(params: {
   }
 }
 
+async function sendGetRequest(
+  path: string,
+  cookie?: string
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; payload: string }> {
+  const app = express();
+  registerOAuthRoutes(app);
+  const server = http.createServer(app);
+  const boundServer = await bindTestHttpServer(server);
+
+  try {
+    return await new Promise((resolve, reject) => {
+      const request = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: boundServer.port,
+          path,
+          method: "GET",
+          headers: cookie ? { cookie } : undefined,
+        },
+        response => {
+          let payload = "";
+          response.on("data", chunk => {
+            payload += chunk;
+          });
+          response.on("end", () => {
+            resolve({
+              status: response.statusCode ?? 0,
+              headers: response.headers,
+              payload,
+            });
+          });
+        }
+      );
+      request.on("error", reject);
+      request.end();
+    });
+  } finally {
+    await boundServer.close();
+  }
+}
+
 describe("OAuth callback security", () => {
   beforeEach(() => {
     process.env.JWT_SECRET = "x".repeat(32);
@@ -104,7 +145,87 @@ describe("OAuth callback security", () => {
 
   afterEach(() => {
     delete process.env.JWT_SECRET;
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("starts and completes a direct Facebook Login without exposing the app secret", async () => {
+    vi.stubEnv("FB_APP_ID", "facebook-app-123");
+    vi.stubEnv("FB_APP_SECRET", "server-only-secret");
+    vi.stubEnv("APP_BASE_URL", "https://leaderbot.live");
+    vi.stubEnv("NODE_ENV", "production");
+    mocks.getUserByOpenId.mockResolvedValue({
+      id: 7,
+      openId: "facebook:facebook-user-7",
+      name: "Test User",
+      email: "test@example.com",
+      loginMethod: "facebook",
+      role: "user",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+      lastSignedIn: new Date(0),
+    });
+    mocks.createSessionToken.mockResolvedValue("session-token");
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: "facebook-user-token" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: "facebook-user-7",
+            name: "Test User",
+            email: "test@example.com",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const start = await sendGetRequest(
+      "/api/oauth/start?returnTo=%2Fhandoff%2Ftoken-123"
+    );
+    expect(start.status).toBe(302);
+    expect(start.headers.location).not.toContain("server-only-secret");
+    const authorizationUrl = new URL(start.headers.location ?? "https://invalid");
+    expect(authorizationUrl.hostname).toBe("www.facebook.com");
+    expect(authorizationUrl.searchParams.get("client_id")).toBe(
+      "facebook-app-123"
+    );
+    expect(authorizationUrl.searchParams.get("scope")).toBe("public_profile");
+    const state = authorizationUrl.searchParams.get("state");
+    const stateCookie = start.headers["set-cookie"]?.[0]?.split(";", 1)[0];
+    const stateCookieHeader = start.headers["set-cookie"]?.[0] ?? "";
+    expect(state).toBeTruthy();
+    expect(stateCookie).toContain(`${OAUTH_STATE_COOKIE_NAME}=`);
+    expect(stateCookieHeader).toContain("HttpOnly");
+    expect(stateCookieHeader).toContain("Secure");
+    expect(stateCookieHeader).toContain("SameSite=Lax");
+
+    const callback = await sendGetRequest(
+      `/api/oauth/callback?code=facebook-code&state=${encodeURIComponent(state ?? "")}`,
+      stateCookie
+    );
+    expect(callback.status).toBe(302);
+    expect(callback.headers.location).toBe("/handoff/token-123");
+    expect(mocks.exchangeCodeForToken).not.toHaveBeenCalled();
+    const profileUrl = new URL(String(fetchMock.mock.calls[1]?.[0]));
+    expect(profileUrl.searchParams.get("fields")).toBe("id,name");
+    expect(mocks.upsertUser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        openId: "facebook:facebook-user-7",
+        loginMethod: "facebook",
+      })
+    );
+    expect(mocks.createSessionToken).toHaveBeenCalledWith(
+      "facebook:facebook-user-7",
+      expect.any(Object)
+    );
   });
 
   it("rejects callback requests with a missing matching state nonce cookie", async () => {

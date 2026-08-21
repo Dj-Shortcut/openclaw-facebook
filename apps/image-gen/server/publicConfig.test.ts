@@ -27,6 +27,7 @@ function renderPublicConfig() {
         configured: true,
         portalUrl: "https://oauth.example.com",
         appId: "leaderbot-public-app",
+        loginUrl: null,
       },
     })
   );
@@ -60,6 +61,7 @@ describe("public runtime config", () => {
         configured: true,
         portalUrl: "https://oauth.example.com/portal",
         appId: "leaderbot-public-app",
+        loginUrl: "/api/oauth/start",
       },
     });
   });
@@ -77,7 +79,7 @@ describe("public runtime config", () => {
         VITE_APP_ID: "leaderbot-public-app",
       })
     ).toEqual({
-      oauth: { configured: false, portalUrl: null, appId: null },
+      oauth: { configured: false, portalUrl: null, appId: null, loginUrl: null },
     });
   });
 
@@ -91,6 +93,24 @@ describe("public runtime config", () => {
         configured: true,
         portalUrl: "https://oauth.example.com",
         appId: "leaderbot-public-app",
+        loginUrl: null,
+      },
+    });
+  });
+
+  it("publishes a same-origin login path without exposing Facebook credentials", () => {
+    expect(
+      getPublicRuntimeConfig({
+        APP_BASE_URL: "https://leaderbot.live",
+        FB_APP_ID: "public-facebook-app-id",
+        FB_APP_SECRET: "server-only-secret",
+      })
+    ).toEqual({
+      oauth: {
+        configured: true,
+        portalUrl: null,
+        appId: null,
+        loginUrl: "/api/oauth/start",
       },
     });
   });
