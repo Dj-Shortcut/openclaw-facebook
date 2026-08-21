@@ -64,7 +64,13 @@ export async function createTrackedEventContext(
     await Promise.resolve(setMessengerPageId(psid, entryId));
     state.pageId = entryId.trim();
   }
-  const lang = state.preferredLang || localeLang || ctx.defaultLang;
+  const storedSenderLanguage =
+    state.preferredLangSource === "sender_locale"
+      ? state.preferredLang
+      : undefined;
+  const lang = senderLocale
+    ? localeLang
+    : storedSenderLanguage || ctx.defaultLang;
   const classification = classifyInboundEvent(event);
   await recordInboundUserActivity(psid, event, classification);
   const sendFallbackIfNeeded = () =>

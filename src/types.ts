@@ -1,5 +1,6 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
+import type { MessengerLanguage } from "./messenger-i18n.js";
 
 export type MessengerTokenSource = "config" | "env" | "file" | "none";
 export type MessengerUnknownSenderMode = "pairing" | "leaderbot_free_tier";
@@ -18,6 +19,8 @@ interface MessengerAccountBaseConfig {
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
   unknownSenderMode?: MessengerUnknownSenderMode;
   leaderbotBridgeEnabled?: boolean;
+  defaultLang?: MessengerLanguage;
+  customerPortalUrl?: string;
   responsePrefix?: string;
   webhookPath?: string;
   defaultTo?: string;

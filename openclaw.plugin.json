@@ -42,6 +42,17 @@
             "type": "boolean",
             "default": false
           },
+          "defaultLang": {
+            "type": "string",
+            "enum": ["nl", "en"],
+            "default": "nl"
+          },
+          "customerPortalUrl": {
+            "type": "string",
+            "format": "uri",
+            "pattern": "^https://(?![^/]*@)",
+            "default": "https://leaderbot.live/"
+          },
           "responsePrefix": { "type": "string" },
           "webhookPath": { "type": "string" },
           "defaultTo": { "type": "string" },
@@ -78,6 +89,15 @@
                 "leaderbotBridgeEnabled": {
                   "type": "boolean"
                 },
+                "defaultLang": {
+                  "type": "string",
+                  "enum": ["nl", "en"]
+                },
+                "customerPortalUrl": {
+                  "type": "string",
+                  "format": "uri",
+                  "pattern": "^https://(?![^/]*@)"
+                },
                 "responsePrefix": { "type": "string" },
                 "webhookPath": { "type": "string" },
                 "defaultTo": { "type": "string" },
@@ -99,6 +119,8 @@
         "dmPolicy": { "label": "Direct message policy" },
         "unknownSenderMode": { "label": "Unknown sender mode" },
         "leaderbotBridgeEnabled": { "label": "Enable Leaderbot image-generation bridge" },
+        "defaultLang": { "label": "Default response language" },
+        "customerPortalUrl": { "label": "Customer portal URL (HTTPS)" },
         "allowFrom": { "label": "Allowed Page-scoped sender IDs" }
       }
     }

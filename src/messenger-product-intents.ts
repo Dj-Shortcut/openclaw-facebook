@@ -1,3 +1,8 @@
+import {
+  tMessenger,
+  type MessengerLanguage,
+} from "./messenger-i18n.js";
+
 export type MessengerFastLaneIntent =
   | "greeting"
   | "help"
@@ -229,30 +234,29 @@ export function shouldForwardMessengerImageOnlyEventToImageGen(params: {
 
 export function resolveMessengerFastLaneReply(
   text: string,
+  lang: MessengerLanguage = "nl",
 ): { intent: MessengerFastLaneIntent; reply: string } | null {
   const intent = classifyMessengerFastLaneIntent(text);
   switch (intent) {
     case "greeting":
       return {
         intent,
-        reply: "Hey! Ik ben er. Stuur je vraag gerust door.",
+        reply: tMessenger(lang, "fastLaneGreeting"),
       };
     case "help":
       return {
         intent,
-        reply:
-          "Ik kan korte vragen beantwoorden, meedenken met taken en herkennen wanneer je een afbeelding wilt maken. Stuur gewoon wat je nodig hebt.",
+        reply: tMessenger(lang, "fastLaneHelp"),
       };
     case "status":
       return {
         intent,
-        reply: "Online. Messenger is verbonden en ik kan je berichten ontvangen.",
+        reply: tMessenger(lang, "fastLaneStatus"),
       };
     case "delete_data":
       return {
         intent,
-        reply:
-          "Ik kan je data niet vanuit deze Messenger-gateway verwijderen. Gebruik de privacy- of data-verwijdering link van Leaderbot, of mail privacy@leaderbot.live met je verzoek. Berichten die al in Messenger staan, blijven door Meta beheerd.",
+        reply: tMessenger(lang, "fastLaneDeleteData"),
       };
     default:
       return null;

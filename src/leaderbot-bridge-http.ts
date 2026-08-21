@@ -1,4 +1,5 @@
 import type { MessengerWebhookMessaging } from "./types.js";
+import type { MessengerLanguage } from "./messenger-i18n.js";
 import {
   IMAGE_GEN_REQUEST_TIMEOUT_MS,
   resolveImageGenRequestConfig,
@@ -36,6 +37,7 @@ export async function requestLeaderbotImageGeneration(params: {
   timestamp: number;
   trace: LeaderbotBridgeTrace;
   leaderbotBridgeEnabled?: boolean;
+  lang?: MessengerLanguage;
   sourceImageUrl?: string;
   logStage?: LeaderbotBridgeStageLogger;
 }): Promise<boolean> {
@@ -67,7 +69,7 @@ export async function requestLeaderbotImageGeneration(params: {
         pageId: params.pageId,
         prompt: params.prompt,
         reqId: params.reqId,
-        lang: "nl",
+        lang: params.lang ?? "nl",
         timestamp: params.timestamp,
         sourceImageUrl: params.sourceImageUrl,
       }),
@@ -90,6 +92,7 @@ export async function forwardLeaderbotMessengerEvent(params: {
   event: MessengerWebhookMessaging;
   trace: LeaderbotBridgeTrace;
   leaderbotBridgeEnabled?: boolean;
+  defaultLang?: MessengerLanguage;
   logStage?: LeaderbotBridgeStageLogger;
 }): Promise<boolean> {
   const config = resolveImageGenRequestConfig({
@@ -119,7 +122,10 @@ export async function forwardLeaderbotMessengerEvent(params: {
         Authorization: `Bearer ${config.token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ event: params.event }),
+      body: JSON.stringify({
+        event: params.event,
+        defaultLang: params.defaultLang,
+      }),
     });
     logLeaderbotBridgeStage(params, "messenger_event_forward_sent", {
       status: response.status,

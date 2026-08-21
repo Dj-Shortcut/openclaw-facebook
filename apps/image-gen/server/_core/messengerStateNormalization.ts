@@ -49,7 +49,8 @@ export function createDefaultState(
     lastPhotoUrl: null,
     lastPhoto: null,
     lastPhotoSource: null,
-    preferredLang: "nl",
+    preferredLang: undefined,
+    preferredLangSource: undefined,
     consentGiven: false,
     consentTimestamp: undefined,
     pendingDeleteConfirm: false,
@@ -152,6 +153,26 @@ function resolveConversationContext(
   return {
     lastUserMessageAt: value?.lastUserMessageAt ?? fallback.lastUserMessageAt,
   };
+}
+
+function resolveLanguageState(
+  ctx: NormalizationCtx
+): Pick<MessengerUserState, "preferredLang" | "preferredLangSource"> {
+  const preferredLang =
+    ctx.value?.preferredLang === "nl" || ctx.value?.preferredLang === "en"
+      ? ctx.value.preferredLang
+      : undefined;
+  const storedSource = ctx.value?.preferredLangSource;
+  if (storedSource === "account_default" || storedSource === "sender_locale") {
+    return { preferredLang, preferredLangSource: storedSource };
+  }
+  if (preferredLang === "en") {
+    return { preferredLang, preferredLangSource: "sender_locale" };
+  }
+  if (preferredLang === "nl") {
+    return { preferredLang, preferredLangSource: "account_default" };
+  }
+  return { preferredLang: undefined, preferredLangSource: undefined };
 }
 
 function resolvePhotoAndStyleState(
@@ -334,6 +355,7 @@ function applyNormalizedStateShape(
     stage,
     state: stage,
     ...resolveConversationContext(ctx),
+    ...resolveLanguageState(ctx),
     ...resolvePhotoAndStyleState(ctx, { lastPhoto }),
     ...resolveGeneratedImageState(ctx, lastGeneratedUrl),
     ...resolveSourceImageState(ctx),

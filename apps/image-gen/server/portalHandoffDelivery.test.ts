@@ -143,6 +143,48 @@ describe("portal handoff delivery", () => {
     );
   });
 
+  it("keeps legacy states without a stored language on Dutch copy", async () => {
+    mocks.findStateByUserKey.mockResolvedValue({
+      ...messengerState,
+      preferredLang: undefined,
+    });
+
+    await expect(
+      sendPortalHandoffLink({
+        workspaceId: 42,
+        messengerSenderUserKey,
+        messageVariant: "portal_reentry",
+      })
+    ).resolves.toMatchObject({ ok: true, sent: true });
+
+    expect(mocks.sendText).toHaveBeenCalledWith(
+      "page-scoped-user-id",
+      expect.stringContaining("Open je Leaderbot-klantenportaal"),
+      { pageId: "facebook-page-42" }
+    );
+  });
+
+  it("uses a stored English effective language for background handoffs", async () => {
+    mocks.findStateByUserKey.mockResolvedValue({
+      ...messengerState,
+      preferredLang: "en",
+    });
+
+    await expect(
+      sendPortalHandoffLink({
+        workspaceId: 42,
+        messengerSenderUserKey,
+        messageVariant: "portal_reentry",
+      })
+    ).resolves.toMatchObject({ ok: true, sent: true });
+
+    expect(mocks.sendText).toHaveBeenCalledWith(
+      "page-scoped-user-id",
+      expect.stringContaining("Open your Leaderbot customer portal"),
+      { pageId: "facebook-page-42" }
+    );
+  });
+
   it("does not create a token when the Messenger user cannot be found", async () => {
     mocks.findStateByUserKey.mockResolvedValue(null);
 
