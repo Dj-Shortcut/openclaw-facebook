@@ -9,6 +9,11 @@ import fs from "fs/promises";
 import path from "path";
 import { safeLen, sha256 } from "../imageProof";
 import { safeLog } from "../logger";
+import { canRetryAttempt } from "./retryPolicy";
+import {
+  resolveSourceImageFetchConfig,
+  type SourceImageFetchConfig,
+} from "./sourceImageFetchConfig";
 
 export class MissingInputImageError extends Error {}
 export class InvalidSourceImageUrlError extends Error {}
@@ -61,9 +66,9 @@ type SourceImageResolveInput = {
 
 const MIN_INPUT_IMAGE_BYTES = 5 * 1024;
 const MAX_INBOUND_IMAGE_BYTES = 20 * 1024 * 1024;
-const FB_IMAGE_FETCH_RETRY_LIMIT = 1;
 let dnsLookup: SourceImageDnsLookup = lookup as SourceImageDnsLookup;
-let fetchSourceImageAttemptForTests: SourceImageRequestAttempt = fetchSourceImageAttempt;
+let fetchSourceImageAttemptForTests: SourceImageRequestAttempt =
+  fetchSourceImageAttempt;
 
 function getSourceUrlDiagnostics(sourceImageUrl: string): {
   hostname?: string;
@@ -78,16 +83,6 @@ function getSourceUrlDiagnostics(sourceImageUrl: string): {
   } catch {
     return {};
   }
-}
-
-function getInboundImageTimeoutMs(): number {
-  // TODO: inject source-image fetch config instead of reading process.env directly.
-  const raw = Number.parseInt(process.env.FB_IMAGE_FETCH_TIMEOUT_MS ?? "", 10);
-  if (Number.isFinite(raw) && raw > 0) {
-    return raw;
-  }
-
-  return 10_000;
 }
 
 function isRetryableResponseStatus(status: number): boolean {
@@ -111,14 +106,6 @@ function isTransientNetworkError(error: unknown): boolean {
     code === "EHOSTUNREACH" ||
     code === "ECONNREFUSED"
   );
-}
-
-function parseAllowedHostsFromEnv(): string[] {
-  // TODO: move host allowlist config behind a typed config dependency.
-  return (process.env.SOURCE_IMAGE_ALLOWED_HOSTS ?? "")
-    .split(",")
-    .map(s => s.trim().toLowerCase())
-    .filter(Boolean);
 }
 
 function isPrivateIPv4(ip: string): boolean {
@@ -254,7 +241,8 @@ function blockSourceImageUrl(
 
 function validateSourceImageUrlOrThrow(
   sourceImageUrl: string,
-  reqId?: string
+  reqId: string | undefined,
+  config: SourceImageFetchConfig
 ): ValidatedSourceImageRequest {
   let parsedUrl: URL;
 
@@ -294,7 +282,7 @@ function validateSourceImageUrlOrThrow(
     });
   }
 
-  const allowedHosts = parseAllowedHostsFromEnv();
+  const allowedHosts = config.allowedHosts;
   if (allowedHosts.length === 0) {
     return blockSourceImageUrl(reqId, "allowlist_not_configured");
   }
@@ -399,7 +387,8 @@ async function fetchSourceImageAttemptForAddress(
         statusText: response.statusMessage ?? "",
         headers: responseHeaders,
       }),
-      contentType: responseHeaders.get("content-type") ?? "application/octet-stream",
+      contentType:
+        responseHeaders.get("content-type") ?? "application/octet-stream",
     };
   } finally {
     clearTimeout(timeout);
@@ -473,11 +462,15 @@ function assertNoRedirectResponse(response: Response, reqId: string): void {
 function shouldRetrySourceImageStatus(
   attempt: number,
   response: Response,
-  reqId: string
+  reqId: string,
+  retryLimit: number
 ): boolean {
   if (
-    attempt < FB_IMAGE_FETCH_RETRY_LIMIT &&
-    isRetryableResponseStatus(response.status)
+    canRetryAttempt({
+      attempt,
+      maxRetries: retryLimit,
+      retryable: isRetryableResponseStatus(response.status),
+    })
   ) {
     safeLog("fb_image_fetch_retry", {
       level: "debug",
@@ -562,8 +555,7 @@ function assertSourceImageSizeOrThrow(
 export function setSourceImageRequestForTests(
   override: SourceImageRequestAttempt | null
 ): void {
-  fetchSourceImageAttemptForTests =
-    override ?? fetchSourceImageAttempt;
+  fetchSourceImageAttemptForTests = override ?? fetchSourceImageAttempt;
 }
 
 function assertInboundImageWithinLimit(
@@ -673,9 +665,16 @@ async function buildDownloadedSourceImage(
 function shouldRetrySourceImageError(
   attempt: number,
   error: unknown,
-  reqId: string
+  reqId: string,
+  retryLimit: number
 ): boolean {
-  if (attempt < FB_IMAGE_FETCH_RETRY_LIMIT && isTransientNetworkError(error)) {
+  if (
+    canRetryAttempt({
+      attempt,
+      maxRetries: retryLimit,
+      retryable: isTransientNetworkError(error),
+    })
+  ) {
     safeLog("fb_image_fetch_retry", {
       level: "debug",
       reqId,
@@ -714,17 +713,17 @@ function rethrowSourceImageError(error: unknown, reqId: string): never {
 async function downloadSourceImageOrThrow(
   sourceImageUrl: string,
   reqId: string,
-  options?: SourceImageDownloadOptions
+  options: SourceImageDownloadOptions | undefined,
+  config: SourceImageFetchConfig
 ): Promise<DownloadedSourceImage> {
   const validatedSourceImageUrl = validateSourceImageUrlOrThrow(
     sourceImageUrl,
-    reqId
+    reqId,
+    config
   );
-  const timeoutMs = getInboundImageTimeoutMs();
   let totalFetchMs = 0;
 
-  // TODO: unify this retry loop with openAiImageClient retries once both paths can depend on the same typed retry helper.
-  for (let attempt = 0; attempt <= FB_IMAGE_FETCH_RETRY_LIMIT; attempt += 1) {
+  for (let attempt = 0; attempt <= config.retryLimit; attempt += 1) {
     const attemptStartedAt = Date.now();
 
     try {
@@ -735,7 +734,7 @@ async function downloadSourceImageOrThrow(
       const { response, contentType } = await fetchSourceImageAttemptForTests(
         validatedSourceImageUrl.url,
         resolvedIpAddresses,
-        timeoutMs,
+        config.timeoutMs,
         reqId
       );
       try {
@@ -748,7 +747,14 @@ async function downloadSourceImageOrThrow(
       if (!response.ok) {
         await response.body?.cancel();
         totalFetchMs += Date.now() - attemptStartedAt;
-        if (shouldRetrySourceImageStatus(attempt, response, reqId)) {
+        if (
+          shouldRetrySourceImageStatus(
+            attempt,
+            response,
+            reqId,
+            config.retryLimit
+          )
+        ) {
           continue;
         }
         throwMissingInputDownloadFailed(reqId, response.status);
@@ -764,7 +770,9 @@ async function downloadSourceImageOrThrow(
       );
     } catch (error) {
       totalFetchMs += Date.now() - attemptStartedAt;
-      if (shouldRetrySourceImageError(attempt, error, reqId)) {
+      if (
+        shouldRetrySourceImageError(attempt, error, reqId, config.retryLimit)
+      ) {
         continue;
       }
       rethrowSourceImageError(error, reqId);
@@ -786,7 +794,7 @@ function normalizeProvidedSourceImage(
   };
 }
 
-export function logSourceImageFetchStart(input: SourceImageResolveInput): void {
+function logSourceImageFetchStart(input: SourceImageResolveInput): void {
   if (!input.sourceImageUrl) {
     return;
   }
@@ -801,6 +809,7 @@ export function logSourceImageFetchStart(input: SourceImageResolveInput): void {
 
 export async function fetchExternalSourceImageForIngress(
   input: Pick<SourceImageResolveInput, "sourceImageUrl" | "reqId"> & {
+    fetchConfig?: SourceImageFetchConfig;
     skipDebugImageProof?: boolean;
   }
 ): Promise<DownloadedSourceImage> {
@@ -808,15 +817,18 @@ export async function fetchExternalSourceImageForIngress(
     throw new MissingInputImageError("Missing source image");
   }
 
-  return downloadSourceImageOrThrow(input.sourceImageUrl, input.reqId, {
-    skipDebugImageProof: input.skipDebugImageProof,
-  });
+  return downloadSourceImageOrThrow(
+    input.sourceImageUrl,
+    input.reqId,
+    { skipDebugImageProof: input.skipDebugImageProof },
+    input.fetchConfig ?? resolveSourceImageFetchConfig()
+  );
 }
 
 export async function resolveStoredSourceImage(
-  input: SourceImageResolveInput
+  input: SourceImageResolveInput,
+  config: SourceImageFetchConfig = resolveSourceImageFetchConfig()
 ): Promise<DownloadedSourceImage> {
-  // TODO: combine this with logSourceImageFetchStart into a single fetcher entrypoint once ImageService is thinned further.
   if (input.sourceImageData) {
     return normalizeProvidedSourceImage(input.sourceImageData);
   }
@@ -828,14 +840,30 @@ export async function resolveStoredSourceImage(
     });
   }
 
-  if (!input.trustedSourceImageUrl || input.sourceImageProvenance !== "storeInbound") {
+  if (
+    !input.trustedSourceImageUrl ||
+    input.sourceImageProvenance !== "storeInbound"
+  ) {
     throw new InvalidSourceImageUrlError(
       "Only stored source images are allowed in generation"
     );
   }
 
-  return downloadSourceImageOrThrow(input.sourceImageUrl, input.reqId, {
-    trustedSourceImageUrl: input.trustedSourceImageUrl,
-    sourceImageProvenance: input.sourceImageProvenance,
-  });
+  return downloadSourceImageOrThrow(
+    input.sourceImageUrl,
+    input.reqId,
+    {
+      trustedSourceImageUrl: input.trustedSourceImageUrl,
+      sourceImageProvenance: input.sourceImageProvenance,
+    },
+    config
+  );
+}
+
+export async function prepareSourceImage(
+  input: SourceImageResolveInput,
+  config: SourceImageFetchConfig = resolveSourceImageFetchConfig()
+): Promise<DownloadedSourceImage> {
+  logSourceImageFetchStart(input);
+  return resolveStoredSourceImage(input, config);
 }

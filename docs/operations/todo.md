@@ -5,6 +5,15 @@
 
 ## Verified snapshot
 
+- 2026-08-21 issue #393 deep-audit remediation is complete in the local
+  `codex/issue-393-deep-audit-roadmap` branch, pending CI/review/deployment:
+  root `npm audit` moved from 11 advisories to zero and image-gen `pnpm audit`
+  from five to zero through scoped transitive overrides; bridge transport and
+  Messenger intent classification gained focused tests while the existing
+  89-test monitor suite was retained; source-image config, retry policy, and
+  generation-input preparation were extracted behind typed/tested boundaries;
+  and the Fly model/memory plus managed-redeploy invariants are now CI-checked.
+  This is repository evidence only, not production rollout proof.
 - Last reviewed against code: **2026-08-02** (HEAD plus the local launch-hardening worktree described below).
 - Reviewed HEAD baseline: **`808f207`**. The 2026-08-02 launch-hardening changes are local only until they are committed, deployed, and proven in production.
 - Latest operator production verification: **2026-06-30** live Messenger smoke and `delete-my-data` flow verified by operator.

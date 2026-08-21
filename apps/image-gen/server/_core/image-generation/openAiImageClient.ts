@@ -1,5 +1,6 @@
 import { getOpenAiImageModelConfig } from "./imageServiceConfig";
 import { safeLog } from "../logger";
+import { canRetryAttempt, getExponentialRetryDelayMs } from "./retryPolicy";
 
 class OpenAiGenerationError extends Error {}
 export class OpenAiBudgetExceededError extends Error {}
@@ -198,7 +199,10 @@ function readCompressionEnv(): number | undefined {
 function readRequestedQuality(
   requestedQuality?: OpenAiImageQuality
 ): OpenAiImageQuality | undefined {
-  if (requestedQuality && OPENAI_IMAGE_ALLOWED_QUALITIES.has(requestedQuality)) {
+  if (
+    requestedQuality &&
+    OPENAI_IMAGE_ALLOWED_QUALITIES.has(requestedQuality)
+  ) {
     return requestedQuality;
   }
 
@@ -212,10 +216,8 @@ function readRequestedQuality(
     });
   }
 
-  return readEnumEnv(
-    "OPENAI_IMAGE_QUALITY",
-    OPENAI_IMAGE_ALLOWED_QUALITIES
-  ) as OpenAiImageQuality | undefined;
+  return readEnumEnv("OPENAI_IMAGE_QUALITY", OPENAI_IMAGE_ALLOWED_QUALITIES) as
+    OpenAiImageQuality | undefined;
 }
 
 function isGptImage2(model: string): boolean {
@@ -463,10 +465,12 @@ function buildGptImage2EditFormData(input: {
   return formData;
 }
 
-function buildGptImage2Request(input: OpenAiRequestInput & {
-  model: string;
-  imageOptions: ResolvedOpenAiImageOptions;
-}): OpenAiRequestContext {
+function buildGptImage2Request(
+  input: OpenAiRequestInput & {
+    model: string;
+    imageOptions: ResolvedOpenAiImageOptions;
+  }
+): OpenAiRequestContext {
   const imageCostOptions = {
     size: input.imageOptions.size,
     quality: input.imageOptions.quality ?? "auto",
@@ -604,7 +608,6 @@ export async function fetchOpenAiImageResponse(
   const openAiRetryBaseMs = getOpenAiRetryBaseMs();
   const openAiTimeoutMs = getOpenAiTimeoutMs();
 
-  // TODO: unify this retry loop with sourceImageFetcher download retries once both flows can share a typed retry helper.
   for (let attempt = 0; attempt <= openAiRetryLimit; attempt += 1) {
     const openAiStartedAt = Date.now();
 
@@ -649,10 +652,13 @@ export async function fetchOpenAiImageResponse(
       }
 
       if (
-        attempt < openAiRetryLimit &&
-        isRetryableResponseStatus(response.status)
+        canRetryAttempt({
+          attempt,
+          maxRetries: openAiRetryLimit,
+          retryable: isRetryableResponseStatus(response.status),
+        })
       ) {
-        const waitMs = openAiRetryBaseMs * 2 ** attempt;
+        const waitMs = getExponentialRetryDelayMs(openAiRetryBaseMs, attempt);
         safeLog("openai_generation_retry", {
           level: "warn",
           reqId: context.reqId,
@@ -680,8 +686,14 @@ export async function fetchOpenAiImageResponse(
       context.partialMetrics.openAiMs =
         (context.partialMetrics.openAiMs ?? 0) + (Date.now() - openAiStartedAt);
 
-      if (attempt < openAiRetryLimit && isRetryableNetworkError(error)) {
-        const waitMs = openAiRetryBaseMs * 2 ** attempt;
+      if (
+        canRetryAttempt({
+          attempt,
+          maxRetries: openAiRetryLimit,
+          retryable: isRetryableNetworkError(error),
+        })
+      ) {
+        const waitMs = getExponentialRetryDelayMs(openAiRetryBaseMs, attempt);
         safeLog("openai_generation_retry", {
           level: "warn",
           reqId: context.reqId,
@@ -722,7 +734,9 @@ export async function parseOpenAiImageResponse(
   let responseKind: "image_api" | "responses_api";
   if (Array.isArray(result.data)) {
     if (result.data.length === 0) {
-      throw new OpenAiGenerationError("OpenAI Image API response data was empty");
+      throw new OpenAiGenerationError(
+        "OpenAI Image API response data was empty"
+      );
     }
     base64Image = result.data.find(image => image?.b64_json)?.b64_json;
     responseKind = "image_api";

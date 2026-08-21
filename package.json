@@ -65,6 +65,7 @@
     "deploy:gateway": "fly deploy --config fly.toml",
     "deploy:image-gen": "cd apps/image-gen && fly deploy --config fly.toml",
     "gateway:deploy": "fly deploy -a leaderbot-openclaw-gateway",
+    "gateway:deployment-safety": "node scripts/validate-gateway-deployment-safety.mjs",
     "image-gen:install": "pnpm install --dir apps/image-gen --lockfile-dir apps/image-gen --frozen-lockfile",
     "image-gen:check": "pnpm --dir apps/image-gen check",
     "image-gen:test": "pnpm --dir apps/image-gen test",
@@ -91,6 +92,10 @@
     "openclaw": "2026.7.2-beta.7",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "hono": "4.12.34",
+    "nanoid@3": "3.3.18"
   },
   "openclaw": {
     "compat": {

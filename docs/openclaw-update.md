@@ -79,6 +79,7 @@ Use this workflow for local machines, CI, servers, and hosted environments.
 3. Validate the repository and runtime contract.
 
    ```bash
+   npm run gateway:deployment-safety
    npm run openclaw:release-check
    ```
 
@@ -133,8 +134,11 @@ uses the same supported update script:
 npm run openclaw:update -- <version>
 ```
 
-It must not carry separate inline version-editing logic. If the update workflow
-needs new behavior, add it to `scripts/update-openclaw.mjs` and document it here.
+It creates new update PRs as drafts with production approval still pending. It
+does not deploy, request deploy identity, or read Fly secrets. The static
+`npm run gateway:deployment-safety` gate enforces this boundary and the reviewed
+Fly model/memory/public-route settings. If the update workflow needs new version
+editing behavior, add it to `scripts/update-openclaw.mjs` and document it here.
 
 ## Rollback Workflow
 

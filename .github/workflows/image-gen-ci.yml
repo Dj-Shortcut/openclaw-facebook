@@ -55,5 +55,5 @@ jobs:
       - name: Build
         run: pnpm run build
 
-      - name: Audit production dependencies
-        run: pnpm audit --prod --audit-level=high
+      - name: Audit all dependencies
+        run: pnpm audit --audit-level=moderate

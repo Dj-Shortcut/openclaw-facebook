@@ -59,6 +59,26 @@ routes, and protected route near-misses after every deployment.
 
 The container preserves `/data/openclaw.json` and only seeds non-secret defaults when missing:
 
+### Reviewed model and memory settings
+
+`OPENCLAW_AGENT_MODEL=openai/gpt-5.4-mini` is intentional, not a placeholder.
+OpenAI documents `gpt-5.4-mini` as a supported current alias; OpenClaw uses the
+provider-qualified `openai/` prefix. Do not silently replace it with a `latest`
+alias during dependency updates. Re-evaluate model quality, cost, latency, tool
+support, and rollback behavior in a dedicated review before changing it.
+
+The 4 GiB Fly VM deliberately caps the V8 old-space heap at 1536 MiB. The
+remaining memory is reserved for Node/native allocations, OpenClaw runtime
+overhead, buffers, and the operating system. Increase the heap only after
+production memory/GC evidence, a canary, and rollback approval; increasing it
+speculatively can turn recoverable pressure into a machine-level OOM.
+
+The checked-in values and the non-deploying update boundary are enforced by:
+
+```bash
+npm run gateway:deployment-safety
+```
+
 - `OPENCLAW_WORKSPACE_DIR` defaults to `/data/workspace`, keeping `AGENTS.md`, `USER.md`, `MEMORY.md`, and daily memory on the mounted Fly volume.
 - On startup, missing workspace bootstrap files are copied once from the legacy `/home/node/.openclaw/workspace` fallback into `/data/workspace`.
 - `plugins.load.paths` includes `/app/node_modules/@dj-shortcut/facebook`.

@@ -25,6 +25,7 @@ on:
       - "README.md"
       - "docs/**"
       - "deploy/fly-gateway/**"
+      - "fly.toml"
       - "examples/**"
       - "scripts/**"
       - "src/**"
@@ -86,6 +87,9 @@ jobs:
       - name: Validate package-manager boundaries
         run: node scripts/check-package-manager-contract.mjs
 
+      - name: Validate gateway deployment safety
+        run: npm run gateway:deployment-safety
+
       - name: Install dependencies
         run: npm ci
 
@@ -100,8 +104,8 @@ jobs:
         env:
           TEST_MESSENGER_REDIS_URL: redis://127.0.0.1:6379
 
-      - name: Run npm audit
-        run: npm audit --omit=dev --audit-level=high
+      - name: Run full npm audit
+        run: npm audit --audit-level=moderate
 
       - name: Dry-run npm pack
         run: npm run pack:dry
