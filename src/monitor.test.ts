@@ -1701,6 +1701,53 @@ describe("processMessengerEvent typing lifecycle", () => {
     expect(senderActions).toEqual(["typing_on", "typing_off"]);
   });
 
+  it("keeps typing active until overlapping turns for the same sender finish", async () => {
+    let finishFirstTurn!: () => void;
+    let finishSecondTurn!: () => void;
+    const firstTurn = new Promise<{ dispatched: false }>(resolve => {
+      finishFirstTurn = () => resolve({ dispatched: false });
+    });
+    const secondTurn = new Promise<{ dispatched: false }>(resolve => {
+      finishSecondTurn = () => resolve({ dispatched: false });
+    });
+    const inboundRun = vi.fn((input: { raw: MessengerWebhookMessaging }) =>
+      input.raw.message?.mid === "mid-typing-overlap-first" ? firstTurn : secondTurn,
+    );
+    setGatewayRuntime(inboundRun);
+    const senderActions: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: URL | RequestInfo | string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { sender_action?: string };
+      if (body.sender_action) {
+        senderActions.push(body.sender_action);
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+    const firstEvent = messengerTextEvent(
+      "mid-typing-overlap-first",
+      "Schrijf een planning voor morgen",
+    );
+    const secondEvent = messengerTextEvent(
+      "mid-typing-overlap-second",
+      "Schrijf een andere planning voor morgen",
+    );
+    firstEvent.sender = { id: "shared-overlap-sender" };
+    secondEvent.sender = { id: "shared-overlap-sender" };
+
+    const firstRequest = processGatewayTestEvent(firstEvent);
+    await vi.waitFor(() => expect(inboundRun).toHaveBeenCalledTimes(1));
+    const secondRequest = processGatewayTestEvent(secondEvent);
+    await vi.waitFor(() => expect(inboundRun).toHaveBeenCalledTimes(2));
+
+    finishFirstTurn();
+    await firstRequest;
+    const actionsAfterFirstTurn = [...senderActions];
+    finishSecondTurn();
+    await secondRequest;
+
+    expect(actionsAfterFirstTurn).toEqual(["typing_on", "typing_on"]);
+    expect(senderActions).toEqual(["typing_on", "typing_on", "typing_off"]);
+  });
+
   it("turns typing off and preserves the original OpenClaw error", async () => {
     setGatewayRuntime(vi.fn(async () => {
       throw new Error("model unavailable");
