@@ -432,21 +432,21 @@ Use this order for `leaderbot-fb-image-gen`:
      -a leaderbot-fb-image-gen
    ```
 
-   Configure the public OAuth identifiers at runtime as well. Supplying these
-   as Fly secrets is acceptable operationally, but they are intentionally
-   returned to the browser and must never contain credentials or URL userinfo:
+   The customer portal uses the existing server-side Facebook app credentials
+   for same-origin Facebook Login. Keep the app secret server-only and register
+   the exact callback `https://leaderbot.live/api/oauth/callback` in Meta:
 
    ```bash
-   fly secrets set OAUTH_PORTAL_URL='https://<oauth-portal>' \
-     OAUTH_SERVER_URL='https://<oauth-api>' \
-     VITE_APP_ID='<public-app-id>' \
+   fly secrets set FB_APP_ID='<facebook-app-id>' \
+     FB_APP_SECRET='<facebook-app-secret>' \
+     APP_BASE_URL='https://leaderbot.live' \
      -a leaderbot-fb-image-gen
    ```
 
-   Do not derive these values from `FB_APP_ID`, Facebook callback URLs, or the
-   Meta Graph API. `OAUTH_SERVER_URL` is the WebDev OAuth token-exchange service
-   and `OAUTH_PORTAL_URL` is its browser authorization UI. The portal URL may be
-   omitted only when both are deliberately hosted at the same origin.
+   The browser receives only the same-origin login path; it never receives
+   `FB_APP_SECRET` or a Facebook access token. The legacy WebDev OAuth settings
+   (`OAUTH_PORTAL_URL`, `OAUTH_SERVER_URL`, `VITE_APP_ID`) remain an optional
+   fallback when direct Facebook Login is not configured.
 
 3. Run migrations from a trusted operator shell with the same `DATABASE_URL`:
 
