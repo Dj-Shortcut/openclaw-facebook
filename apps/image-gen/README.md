@@ -434,12 +434,13 @@ Use this order for `leaderbot-fb-image-gen`:
 
    The customer portal uses the existing server-side Facebook app credentials
    for same-origin Facebook Login. Keep the app secret server-only and register
-   the exact callback `https://leaderbot.live/api/oauth/callback` in Meta:
+   the exact callback
+   `https://app.leaderbot.live/api/oauth/callback` in Meta:
 
    ```bash
    fly secrets set FB_APP_ID='<facebook-app-id>' \
      FB_APP_SECRET='<facebook-app-secret>' \
-     APP_BASE_URL='https://leaderbot.live' \
+     APP_BASE_URL='https://app.leaderbot.live' \
      -a leaderbot-fb-image-gen
    ```
 
@@ -465,8 +466,8 @@ Use this order for `leaderbot-fb-image-gen`:
    ```bash
    npm run deploy:verify-portal
    curl -fsS https://leaderbot-fb-image-gen.fly.dev/readyz
-   curl -fsSI https://leaderbot.live/
-   curl -fsS https://leaderbot.live/healthz
+   curl -fsSI https://app.leaderbot.live/
+   curl -fsS https://app.leaderbot.live/healthz
    ```
 
    `npm run deploy:verify-portal` checks for the `DATABASE_URL` Fly secret by
