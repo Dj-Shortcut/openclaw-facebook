@@ -61,16 +61,16 @@ This repository is a monorepo containing the Facebook/OpenClaw integration and t
 Deploy targets:
 
 ```bash
-pnpm run deploy
-pnpm run deploy:image-gen
-pnpm run deploy:gateway
+npm run deploy
+npm run deploy:image-gen
+npm run deploy:gateway
 ```
 
 Legacy aliases (still available):
 
 ```bash
-pnpm run gateway:deploy
-pnpm run image-gen:deploy
+npm run gateway:deploy
+npm run image-gen:deploy
 ```
 
 ## Configure
@@ -221,7 +221,11 @@ channel.
 ## Development
 
 Use Node.js `>=24.15.0`, matching the package runtime contract, before installing
-dependencies.
+dependencies. Use npm `>=11.12.1` at the repository root. Use pnpm `10.28.1`
+only inside `apps/image-gen`, `apps/customer-app`, and
+`apps/image-gen/storage-proxy`; each subapp owns its lockfile. The root
+`pnpm-lock.yaml` is a compatibility mirror, not the authoritative root install
+contract.
 
 ```bash
 npm install

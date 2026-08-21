@@ -31,7 +31,7 @@ dashboard handoff design. The current authoritative operator workflow is
 Run from the `openclaw-facebook` repository root:
 
 ```bash
-pnpm run deploy:gateway
+npm run deploy:gateway
 ```
 
 ### Temporary production route-guard hotfix
