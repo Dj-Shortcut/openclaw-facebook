@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_IMAGE_GEN_URL,
+  IMAGE_GEN_REQUEST_TIMEOUT_MS,
+  resolveImageGenRequestConfig,
+} from "./leaderbot-bridge-config.js";
+import {
   forwardLeaderbotMessengerEvent,
   requestLeaderbotImageGeneration,
-  resolveImageGenRequestConfig,
   type LeaderbotBridgeTrace,
-} from "./leaderbot-bridge.js";
+} from "./leaderbot-bridge-http.js";
 
 const originalInternalToken = process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN;
 const originalFallbackToken = process.env.INTERNAL_IMAGE_REQUEST_TOKEN;
@@ -19,6 +22,7 @@ const trace: LeaderbotBridgeTrace = {
 };
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   if (originalInternalToken === undefined) {
     delete process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN;
@@ -267,5 +271,94 @@ describe("Leaderbot bridge requests", () => {
       },
     });
     expect(logStage).toHaveBeenCalledWith(trace, "messenger_event_forward_sent", { status: 503 });
+  });
+
+  it("redacts image-request transport failures to the error class", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    const logStage = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw new TypeError("secret upstream details");
+    }));
+
+    await expect(
+      requestLeaderbotImageGeneration({
+        psid: "psid-1",
+        pageId: "page-1",
+        prompt: "Maak een robot",
+        reqId: "req-1",
+        timestamp: 1_700_000_000_000,
+        trace,
+        leaderbotBridgeEnabled: true,
+        logStage,
+      }),
+    ).resolves.toBe(false);
+
+    expect(logStage).toHaveBeenCalledWith(trace, "image_gen_request_failed", {
+      error: "TypeError",
+    });
+    expect(JSON.stringify(logStage.mock.calls)).not.toContain("secret upstream details");
+  });
+
+  it("aborts image requests at the configured timeout", async () => {
+    vi.useFakeTimers();
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    const logStage = vi.fn();
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("Aborted", "AbortError"));
+          });
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = requestLeaderbotImageGeneration({
+      psid: "psid-1",
+      pageId: "page-1",
+      prompt: "Maak een robot",
+      reqId: "req-1",
+      timestamp: 1_700_000_000_000,
+      trace,
+      leaderbotBridgeEnabled: true,
+      logStage,
+    });
+    await vi.advanceTimersByTimeAsync(IMAGE_GEN_REQUEST_TIMEOUT_MS);
+
+    await expect(result).resolves.toBe(false);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toMatchObject({ aborted: true });
+    expect(logStage).toHaveBeenCalledWith(trace, "image_gen_request_failed", {
+      error: "AbortError",
+    });
+  });
+
+  it("reports non-Error Messenger forwarding failures without exposing payloads", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    const logStage = vi.fn();
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      throw "raw failure";
+    }));
+
+    await expect(
+      forwardLeaderbotMessengerEvent({
+        event: {
+          sender: { id: "sender-1" },
+          recipient: { id: "page-1" },
+          timestamp: 1_700_000_000_000,
+          message: { mid: "mid-1", text: "Hallo" },
+        },
+        trace,
+        leaderbotBridgeEnabled: true,
+        logStage,
+      }),
+    ).resolves.toBe(false);
+
+    expect(logStage).toHaveBeenCalledWith(trace, "messenger_event_forward_failed", {
+      error: "unknown",
+    });
+    expect(JSON.stringify(logStage.mock.calls)).not.toContain("raw failure");
   });
 });
