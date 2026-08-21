@@ -5,6 +5,73 @@
   },
   "normalization": "show-create-and-trigger-v1",
   "migrationSetSha256": "7a50dc8ddb9aa67a313f1e12f53fbe97441e9577ce312a4d13786a8f1e0245aa",
+  "legacy0007": {
+    "tables": {
+      "aiIdentities": "7a68b0d6db4bd3f360d191823306ff01865661dcaa2ee4cd627a3c8a5a5b03ce",
+      "auditLog": "0093660cce62748d849d82ccb10a2ec9ac79ca55e98ef82a8b4c99e3b3d62036",
+      "channelConnections": "f0228f1d5c3d3d0a51047053a0b0d843da5286f3116b870ce511fdc717a51aab",
+      "dailyQuota": "25fc048215bfd90124616134be05ba0b64670032bb69314deb1b497f2cbf036e",
+      "imageRequests": "38daf0ceff4a1a2258211598264c0b3205812b6621c210722c01420740767c85",
+      "notificationLog": "7bceee0490baa93e07f06043a043bca0b4b495281f6db70bf9544a74ff8eb304",
+      "usageStats": "fb744e7420b3b9f10397be3d8ee8f86e3ffeff53dba9b3c4c2f721e20ed80957",
+      "users": "fa38a806b839d20a29d8ce215b248564118f1e4e3bec87b88613eb90b96b55b2",
+      "workspaceKnowledgeSources": "4c40e2df8cff3dedee793b9fb37302f985ce0bb94392d9f3786d6072865f59b7",
+      "workspaceMembers": "2291b58e563bf9ef381a1d83ceefd3a04eb872fe690dc119bf71e6a225223a3e",
+      "workspacePrivacyRequests": "b6d447612bc39dab542c3a4d779d0e3fa18af6180ad12af702a8b37811045452",
+      "workspacePrivacySettings": "a83e6ecbdaa87185ecd4b4ec46f30534758b2586c63fe4d791fd9350e00e5d28",
+      "workspaceUpgradeRequests": "b6bdf79f43b34e29c5d94c448c2603f284bae8bc11d0481491aa93e91fbbecdf",
+      "workspaceUsageDaily": "e8bb60498cfde800f49e4ddec75826c1bafca37994cfd0ea79e156ce3cf24018",
+      "workspaces": "b0d9b4f4745f2ea82c84ad123a9811017f8e9c1db39bb7862f72ce1f72808b48"
+    },
+    "views": {},
+    "triggers": {}
+  },
+  "legacyHistory": {
+    "showCreateSha256": "23743b0e2ff071ebc88ce62c6c901a90804efe215b7eab541c573be379f00d50",
+    "nextId": 9,
+    "rows": [
+      {
+        "id": 1,
+        "hash": "814a08e40d7fc2bcfd458759d18319198ca8ae394f2fa15617a78678e9c9c93b",
+        "createdAt": 1771791967247
+      },
+      {
+        "id": 2,
+        "hash": "8b885c25fe24b624578799cfe4918446efebab67a604c4335993d2d132ab6949",
+        "createdAt": 1771792056712
+      },
+      {
+        "id": 3,
+        "hash": "66006eca333555566ca23afd43379b024bf9efd86c7e62468e4763ec169e2845",
+        "createdAt": 1771798491450
+      },
+      {
+        "id": 4,
+        "hash": "ad9f1a8e045112995be23b617068174d67ceaba6bfeabfc07054d16f3d05d9c8",
+        "createdAt": 1771902695410
+      },
+      {
+        "id": 5,
+        "hash": "1970c969c014c9586d5b1896b8f8df68c9b524da18191cb967278c2ef257ea0d",
+        "createdAt": 1780300800000
+      },
+      {
+        "id": 6,
+        "hash": "c8feed6b868ca795fdeb676adfbc3c6de49e27c8d397d82326c3a6ebfa7f9291",
+        "createdAt": 1780636800000
+      },
+      {
+        "id": 7,
+        "hash": "6a6e01839212c2a93950c88863326e820d94296d09013051da7b17151c19fe87",
+        "createdAt": 1780982400000
+      },
+      {
+        "id": 8,
+        "hash": "417e039b947194a6b632d677f851f211ac2e1ff94e004f0cfa1a55d31e66d517",
+        "createdAt": 1782316800000
+      }
+    ]
+  },
   "base0014": {
     "tables": {
       "aiIdentities": "7a68b0d6db4bd3f360d191823306ff01865661dcaa2ee4cd627a3c8a5a5b03ce",
