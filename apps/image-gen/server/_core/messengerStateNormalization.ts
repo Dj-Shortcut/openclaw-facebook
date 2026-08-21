@@ -49,7 +49,7 @@ export function createDefaultState(
     lastPhotoUrl: null,
     lastPhoto: null,
     lastPhotoSource: null,
-    preferredLang: "nl",
+    preferredLang: undefined,
     consentGiven: false,
     consentTimestamp: undefined,
     pendingDeleteConfirm: false,

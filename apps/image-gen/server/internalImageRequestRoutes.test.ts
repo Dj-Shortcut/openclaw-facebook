@@ -256,6 +256,103 @@ describe("internal AI-answer quota routes", () => {
   });
 });
 
+describe("internal Messenger event route", () => {
+  it("passes the configured default language to webhook processing", async () => {
+    const event = {
+      sender: { id: "sender-1" },
+      recipient: { id: "page-1" },
+      timestamp: 1_771_000_000_000,
+      message: { mid: "mid-1", text: "Create an image" },
+    };
+
+    await withListeningApp(createApp(), async baseUrl => {
+      const response = await fetch(
+        `${baseUrl}/internal/messenger/webhook-event`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer route-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ event, defaultLang: "en" }),
+        }
+      );
+
+      expect(response.status).toBe(202);
+      expect(await response.json()).toEqual({ status: "queued" });
+      await waitForMockCall(processFacebookWebhookPayloadMock, 1);
+    });
+
+    expect(processFacebookWebhookPayloadMock).toHaveBeenCalledWith(
+      {
+        object: "page",
+        entry: [
+          {
+            id: "page-1",
+            time: event.timestamp,
+            messaging: [event],
+          },
+        ],
+      },
+      { defaultLang: "en" }
+    );
+  });
+
+  it("keeps legacy payloads without a language valid", async () => {
+    const event = {
+      sender: { id: "sender-legacy" },
+      recipient: { id: "page-legacy" },
+      timestamp: 1_771_000_000_001,
+      message: { mid: "mid-legacy", text: "Maak een afbeelding" },
+    };
+
+    await withListeningApp(createApp(), async baseUrl => {
+      const response = await fetch(
+        `${baseUrl}/internal/messenger/webhook-event`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer route-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ event }),
+        }
+      );
+
+      expect(response.status).toBe(202);
+      await waitForMockCall(processFacebookWebhookPayloadMock, 1);
+    });
+
+    expect(processFacebookWebhookPayloadMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      { defaultLang: undefined }
+    );
+  });
+
+  it("rejects unsupported languages", async () => {
+    const response = await withListeningApp(createApp(), async baseUrl =>
+      fetch(`${baseUrl}/internal/messenger/webhook-event`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer route-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          defaultLang: "fr",
+          event: {
+            sender: { id: "sender-fr" },
+            recipient: { id: "page-fr" },
+            message: { mid: "mid-fr", text: "Bonjour" },
+          },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(processFacebookWebhookPayloadMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("internal Messenger image request route", () => {
   it("compares internal bearer tokens with the timing-safe helper", () => {
     expect(timingSafeTokenEqual("route-token", "route-token")).toBe(true);

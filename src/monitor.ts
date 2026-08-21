@@ -56,6 +56,13 @@ import {
   shouldForwardMessengerTextToImageGen,
 } from "./messenger-product-intents.js";
 import {
+  buildMessengerPlanQuotaReachedReply,
+  normalizeMessengerCustomerPortalUrl,
+  normalizeMessengerLanguage,
+  tMessenger,
+  type MessengerLanguage,
+} from "./messenger-i18n.js";
+import {
   DEFAULT_FACEBOOK_WEBHOOK_PATH,
   FACEBOOK_CHANNEL_ID,
   stripFacebookTargetPrefix,
@@ -212,19 +219,6 @@ const MESSENGER_IMAGE_FETCH_TIMEOUT_MS = 10_000;
 const MESSENGER_IMAGE_FETCH_MAX_BYTES = 10 * 1024 * 1024;
 const MESSENGER_MEDIA_FETCH_MAX_BYTES = 25 * 1024 * 1024;
 const MESSENGER_MEDIA_FETCH_MAX_REDIRECTS = 2;
-const MISSING_REFERENCED_PROMPT_REPLY =
-  "Ik vind die prompt niet meer terug. Plak hem even opnieuw, dan maak ik de afbeelding.";
-const MESSENGER_GATEWAY_IMAGE_BUDGET_REPLY =
-  "Even pauze, ons dagbudget voor afbeeldingen is bereikt. Probeer later opnieuw.";
-const MESSENGER_GATEWAY_AUDIO_BUDGET_REPLY =
-  "Even pauze, ons dagbudget voor voiceberichten is bereikt. Typ je bericht even uit, dan help ik meteen verder.";
-const MESSENGER_GATEWAY_EVENT_FORWARD_BUDGET_REPLY =
-  "Even pauze, ons dagbudget is bereikt. Probeer later opnieuw.";
-const STARTPILOT_AI_ANSWER_QUOTA_REPLY =
-  "Je Startpilot-tegoed van 300 AI-antwoorden is opgebruikt. Bekijk je tegoed via https://leaderbot.live/?upgrade=startpilot#pricing";
-const STARTPILOT_AI_ANSWER_QUOTA_UNAVAILABLE_REPLY =
-  "Leaderbot kan je tegoed nu niet veilig controleren. Probeer zo meteen opnieuw.";
-
 export function redactMessengerIdentifier(value: string | undefined): string {
   const normalized = value?.trim();
   if (!normalized) {
@@ -677,19 +671,31 @@ async function resolveMessengerMedia(params: {
   return resolved;
 }
 
-function describeMessengerAttachments(attachments: MessengerAttachmentUrl[]): string {
+function describeMessengerAttachments(
+  attachments: MessengerAttachmentUrl[],
+  lang: MessengerLanguage,
+): string {
   const counts = new Map<MessengerAttachmentKind, number>();
   for (const attachment of attachments) {
     counts.set(attachment.kind, (counts.get(attachment.kind) ?? 0) + 1);
   }
   const parts: string[] = [];
-  for (const [kind, singular, plural] of [
-    ["image", "foto", "foto's"],
-    ["audio", "voice/audio", "voice/audio"],
-    ["video", "video", "video's"],
-    ["file", "bestand", "bestanden"],
-    ["unknown", "bijlage", "bijlagen"],
-  ] as const) {
+  const labels = lang === "en"
+    ? ([
+        ["image", "photo", "photos"],
+        ["audio", "voice/audio message", "voice/audio messages"],
+        ["video", "video", "videos"],
+        ["file", "file", "files"],
+        ["unknown", "attachment", "attachments"],
+      ] as const)
+    : ([
+        ["image", "foto", "foto's"],
+        ["audio", "voice/audio", "voice/audio"],
+        ["video", "video", "video's"],
+        ["file", "bestand", "bestanden"],
+        ["unknown", "bijlage", "bijlagen"],
+      ] as const);
+  for (const [kind, singular, plural] of labels) {
     const count = counts.get(kind);
     if (count) {
       parts.push(`${count} ${count === 1 ? singular : plural}`);
@@ -698,27 +704,32 @@ function describeMessengerAttachments(attachments: MessengerAttachmentUrl[]): st
   return parts.join(", ");
 }
 
-function fallbackTextForMessengerAttachments(attachments: MessengerAttachmentUrl[]): string {
+function fallbackTextForMessengerAttachments(
+  attachments: MessengerAttachmentUrl[],
+  lang: MessengerLanguage,
+): string {
   if (attachments.some((attachment) => attachment.kind === "audio")) {
-    return "De gebruiker stuurde een voice/audio-bericht. Luister of transcribeer de bijlage als dat beschikbaar is en reageer inhoudelijk.";
+    return tMessenger(lang, "attachmentAudioInstruction");
   }
   if (attachments.some((attachment) => attachment.kind === "image")) {
-    return "De gebruiker stuurde een afbeelding zonder duidelijke image-generation opdracht. Bekijk de bijgevoegde afbeelding en antwoord op basis daarvan. Als de gebruiker lijkt te willen bewerken, vraag eerst wat er aangepast moet worden.";
+    return tMessenger(lang, "attachmentImageInstruction");
   }
   if (attachments.some((attachment) => attachment.kind === "video")) {
-    return "De gebruiker stuurde een video. Bekijk of analyseer de bijgevoegde video als dat beschikbaar is en reageer inhoudelijk.";
+    return tMessenger(lang, "attachmentVideoInstruction");
   }
   if (attachments.some((attachment) => attachment.kind === "file")) {
-    return "De gebruiker stuurde een bestand. Gebruik de bijlage als context als dat beschikbaar is en reageer inhoudelijk.";
+    return tMessenger(lang, "attachmentFileInstruction");
   }
-  return "De gebruiker stuurde een bijlage. Gebruik de bijlage als context als dat beschikbaar is en reageer inhoudelijk.";
+  return tMessenger(lang, "attachmentUnknownInstruction");
 }
 
 export function buildMessengerAgentTextForAttachments(params: {
   text: string;
   attachments: MessengerAttachmentUrl[];
   audioTranscripts?: MessengerAudioTranscript[];
+  lang?: MessengerLanguage;
 }): string {
+  const lang = params.lang ?? "nl";
   const userText = params.text.trim();
   const transcripts = (params.audioTranscripts ?? [])
     .map((transcript) => transcript.text.trim())
@@ -728,8 +739,8 @@ export function buildMessengerAgentTextForAttachments(params: {
     const transcriptText = transcripts
       .map((transcript, index) =>
         transcripts.length === 1
-          ? `Transcriptie voicebericht:\n${transcript}`
-          : `Transcriptie voicebericht ${index + 1}:\n${transcript}`,
+          ? `${tMessenger(lang, "attachmentTranscriptLabel")}:\n${transcript}`
+          : `${tMessenger(lang, "attachmentTranscriptLabel")} ${index + 1}:\n${transcript}`,
       )
       .join("\n\n");
     return userText ? `${userText}\n\n${transcriptText}` : transcriptText;
@@ -737,7 +748,7 @@ export function buildMessengerAgentTextForAttachments(params: {
 
   return userText ||
     (params.attachments.length > 0
-      ? fallbackTextForMessengerAttachments(params.attachments)
+      ? fallbackTextForMessengerAttachments(params.attachments, lang)
       : "");
 }
 
@@ -1102,6 +1113,7 @@ function isMessengerToolFeedbackPayload(payload: ReplyPayload & { text: string }
 
 export function normalizeMessengerReplyPayloadForDelivery(
   payload: ReplyPayload,
+  lang: MessengerLanguage = "nl",
 ): (ReplyPayload & { text: string }) | null {
   const renderedPayload = renderMessengerReplyPayload(payload);
   if (!shouldDeliverMessengerReplyPayload(renderedPayload)) {
@@ -1113,7 +1125,7 @@ export function normalizeMessengerReplyPayloadForDelivery(
 
   return {
     ...renderedPayload,
-    text: "Ik kon een interne actie niet uitvoeren. Probeer het zo meteen opnieuw.",
+    text: tMessenger(lang, "internalActionFailed"),
   };
 }
 
@@ -1121,6 +1133,7 @@ async function reserveMessengerGatewayImageForwardOrReply(params: {
   senderId: string;
   cfg: OpenClawConfig;
   accountId: string;
+  lang: MessengerLanguage;
   trace: MessengerTrace;
   route: string;
 }): Promise<boolean> {
@@ -1137,10 +1150,14 @@ async function reserveMessengerGatewayImageForwardOrReply(params: {
     cap: reservation.cap,
     count: reservation.count,
   });
-  await sendMessengerText(params.senderId, MESSENGER_GATEWAY_IMAGE_BUDGET_REPLY, {
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
+  await sendMessengerText(
+    params.senderId,
+    tMessenger(params.lang, "gatewayImageBudgetReached"),
+    {
+      cfg: params.cfg,
+      accountId: params.accountId,
+    },
+  );
   return false;
 }
 
@@ -1148,6 +1165,7 @@ async function reserveMessengerGatewayAudioTranscriptionOrReply(params: {
   senderId: string;
   cfg: OpenClawConfig;
   accountId: string;
+  lang: MessengerLanguage;
   trace: MessengerTrace;
 }): Promise<boolean> {
   const reservation = reserveMessengerGatewayDailyAudioTranscriptionBudget({
@@ -1162,10 +1180,14 @@ async function reserveMessengerGatewayAudioTranscriptionOrReply(params: {
     cap: reservation.cap,
     count: reservation.count,
   });
-  await sendMessengerText(params.senderId, MESSENGER_GATEWAY_AUDIO_BUDGET_REPLY, {
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
+  await sendMessengerText(
+    params.senderId,
+    tMessenger(params.lang, "gatewayAudioBudgetReached"),
+    {
+      cfg: params.cfg,
+      accountId: params.accountId,
+    },
+  );
   return false;
 }
 
@@ -1173,6 +1195,7 @@ async function reserveMessengerGatewayLeaderbotEventForwardOrReply(params: {
   senderId: string;
   cfg: OpenClawConfig;
   accountId: string;
+  lang: MessengerLanguage;
   trace: MessengerTrace;
   route: string;
 }): Promise<boolean> {
@@ -1189,10 +1212,14 @@ async function reserveMessengerGatewayLeaderbotEventForwardOrReply(params: {
     cap: reservation.cap,
     count: reservation.count,
   });
-  await sendMessengerText(params.senderId, MESSENGER_GATEWAY_EVENT_FORWARD_BUDGET_REPLY, {
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
+  await sendMessengerText(
+    params.senderId,
+    tMessenger(params.lang, "gatewayEventBudgetReached"),
+    {
+      cfg: params.cfg,
+      accountId: params.accountId,
+    },
+  );
   return false;
 }
 
@@ -1440,6 +1467,10 @@ export async function processMessengerEvent(params: {
       return;
     }
     const senderId = params.event.sender?.id ?? "";
+    const lang = normalizeMessengerLanguage(params.account.config.defaultLang);
+    const customerPortalUrl = normalizeMessengerCustomerPortalUrl(
+      params.account.config.customerPortalUrl,
+    );
     const openClawActionText = getOpenClawActionText(params.event);
     const text = openClawActionText ?? params.event.message?.text ?? "";
     const timestamp = params.event.timestamp ?? Date.now();
@@ -1488,6 +1519,7 @@ export async function processMessengerEvent(params: {
           event: params.event,
           trace: params.trace,
           leaderbotBridgeEnabled,
+          defaultLang: lang,
           logStage: logMessengerStage,
         })
       ) {
@@ -1495,7 +1527,7 @@ export async function processMessengerEvent(params: {
       }
       await sendMessengerText(
         senderId,
-        "Ik kon je verwijderverzoek nu niet automatisch verwerken. Mail privacy@leaderbot.live met je verzoek, dan behandelen we het via de privacyflow.",
+        tMessenger(lang, "deleteRequestFallback"),
         {
           cfg: params.cfg,
           accountId: params.account.accountId,
@@ -1509,6 +1541,7 @@ export async function processMessengerEvent(params: {
           senderId,
           cfg: params.cfg,
           accountId: params.account.accountId,
+          lang,
           trace: params.trace,
           route: "unknown_sender_leaderbot_free_tier",
         }))
@@ -1523,6 +1556,7 @@ export async function processMessengerEvent(params: {
           event: params.event,
           trace: params.trace,
           leaderbotBridgeEnabled,
+          defaultLang: lang,
           logStage: logMessengerStage,
         })
       ) {
@@ -1530,7 +1564,7 @@ export async function processMessengerEvent(params: {
       }
       await sendMessengerText(
         senderId,
-        "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
+        tMessenger(lang, "imageGeneratorUnavailable"),
         {
           cfg: params.cfg,
           accountId: params.account.accountId,
@@ -1562,6 +1596,7 @@ export async function processMessengerEvent(params: {
             senderId,
             cfg: params.cfg,
             accountId: params.account.accountId,
+            lang,
             trace: params.trace,
             route: "interactive_payload",
           }))
@@ -1573,6 +1608,7 @@ export async function processMessengerEvent(params: {
             event: params.event,
             trace: params.trace,
             leaderbotBridgeEnabled,
+            defaultLang: lang,
             logStage: logMessengerStage,
           })
         ) {
@@ -1580,7 +1616,7 @@ export async function processMessengerEvent(params: {
         }
         await sendMessengerText(
           senderId,
-          "Ik kon deze knopactie nu niet verwerken. Probeer zo meteen opnieuw.",
+          tMessenger(lang, "interactiveActionUnavailable"),
           {
             cfg: params.cfg,
             accountId: params.account.accountId,
@@ -1612,6 +1648,7 @@ export async function processMessengerEvent(params: {
           senderId,
           cfg: params.cfg,
           accountId: params.account.accountId,
+          lang,
           trace: params.trace,
           route: "source_image_without_prompt",
         }))
@@ -1627,6 +1664,7 @@ export async function processMessengerEvent(params: {
           event: params.event,
           trace: params.trace,
           leaderbotBridgeEnabled,
+          defaultLang: lang,
           logStage: logMessengerStage,
         })
       ) {
@@ -1650,6 +1688,7 @@ export async function processMessengerEvent(params: {
           senderId,
           cfg: params.cfg,
           accountId: params.account.accountId,
+          lang,
           trace: params.trace,
           route: "source_image_with_prompt",
         }))
@@ -1666,6 +1705,7 @@ export async function processMessengerEvent(params: {
           event: params.event,
           trace: params.trace,
           leaderbotBridgeEnabled,
+          defaultLang: lang,
           logStage: logMessengerStage,
         })
       ) {
@@ -1673,7 +1713,7 @@ export async function processMessengerEvent(params: {
       }
       await sendMessengerText(
         senderId,
-        "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
+        tMessenger(lang, "imageGeneratorUnavailable"),
         {
           cfg: params.cfg,
           accountId: params.account.accountId,
@@ -1701,6 +1741,7 @@ export async function processMessengerEvent(params: {
           senderId,
           cfg: params.cfg,
           accountId: params.account.accountId,
+          lang,
           trace: params.trace,
           route: "media_with_image_prompt",
         }))
@@ -1717,6 +1758,7 @@ export async function processMessengerEvent(params: {
           event: params.event,
           trace: params.trace,
           leaderbotBridgeEnabled,
+          defaultLang: lang,
           logStage: logMessengerStage,
         })
       ) {
@@ -1724,7 +1766,7 @@ export async function processMessengerEvent(params: {
       }
       await sendMessengerText(
         senderId,
-        "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
+        tMessenger(lang, "imageGeneratorUnavailable"),
         {
           cfg: params.cfg,
           accountId: params.account.accountId,
@@ -1764,6 +1806,7 @@ export async function processMessengerEvent(params: {
           senderId,
           cfg: params.cfg,
           accountId: params.account.accountId,
+          lang,
           trace: params.trace,
           route: "assistant_reference_prompt",
         }))
@@ -1783,6 +1826,7 @@ export async function processMessengerEvent(params: {
         timestamp,
         trace: params.trace,
         leaderbotBridgeEnabled,
+        lang,
         logStage: logMessengerStage,
       });
       if (queued) {
@@ -1790,7 +1834,7 @@ export async function processMessengerEvent(params: {
       }
       await sendMessengerText(
         senderId,
-        "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
+        tMessenger(lang, "imageGeneratorUnavailable"),
         {
           cfg: params.cfg,
           accountId: params.account.accountId,
@@ -1813,10 +1857,14 @@ export async function processMessengerEvent(params: {
       !referencedPrompt &&
       isExplicitPromptReferenceImageRequest(text)
     ) {
-      await sendMessengerText(senderId, MISSING_REFERENCED_PROMPT_REPLY, {
-        cfg: params.cfg,
-        accountId: params.account.accountId,
-      });
+      await sendMessengerText(
+        senderId,
+        tMessenger(lang, "missingReferencedPrompt"),
+        {
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+        },
+      );
       return;
     }
     const hasAudioAttachment = attachments.some((attachment) => attachment.kind === "audio");
@@ -1826,6 +1874,7 @@ export async function processMessengerEvent(params: {
         senderId,
         cfg: params.cfg,
         accountId: params.account.accountId,
+        lang,
         trace: params.trace,
       }))
     ) {
@@ -1844,7 +1893,7 @@ export async function processMessengerEvent(params: {
     if (hasAudioAttachment && !text.trim() && audioTranscripts.length === 0) {
       await sendMessengerText(
         senderId,
-        "Ik heb je voicebericht ontvangen, maar ik kan audio nu niet betrouwbaar omzetten naar tekst. Typ je bericht even uit, dan help ik meteen verder.",
+        tMessenger(lang, "audioTranscriptionUnavailable"),
         {
           cfg: params.cfg,
           accountId: params.account.accountId,
@@ -1855,15 +1904,18 @@ export async function processMessengerEvent(params: {
       });
       return;
     }
-    const attachmentSummary = describeMessengerAttachments(attachments);
+    const attachmentSummary = describeMessengerAttachments(attachments, lang);
     const textForAgent = buildMessengerAgentTextForAttachments({
       text,
       attachments,
       audioTranscripts,
+      lang,
     });
     const displayBody = [
       text.trim(),
-      hasMedia ? `[Messenger attachment: ${attachmentSummary || "bijlage"}]` : "",
+      hasMedia
+        ? `[Messenger attachment: ${attachmentSummary || (lang === "en" ? "attachment" : "bijlage")}]`
+        : "",
     ]
       .filter(Boolean)
       .join("\n");
@@ -1873,6 +1925,7 @@ export async function processMessengerEvent(params: {
           senderId,
           cfg: params.cfg,
           accountId: params.account.accountId,
+          lang,
           trace: params.trace,
           route: "text_image_intent",
         }))
@@ -1889,6 +1942,7 @@ export async function processMessengerEvent(params: {
           event: params.event,
           trace: params.trace,
           leaderbotBridgeEnabled,
+          defaultLang: lang,
           logStage: logMessengerStage,
         })
       ) {
@@ -1896,7 +1950,7 @@ export async function processMessengerEvent(params: {
       }
       await sendMessengerText(
         senderId,
-        "Ik kon de image generator nu niet bereiken. Probeer zo meteen opnieuw.",
+        tMessenger(lang, "imageGeneratorUnavailable"),
         {
           cfg: params.cfg,
           accountId: params.account.accountId,
@@ -1909,7 +1963,7 @@ export async function processMessengerEvent(params: {
         route: "text_image_intent",
       });
     }
-    const fastLane = hasMedia ? null : resolveMessengerFastLaneReply(text);
+    const fastLane = hasMedia ? null : resolveMessengerFastLaneReply(text, lang);
     if (fastLane) {
       logMessengerStage(params.trace, "first_response_ready", { intent: fastLane.intent });
       const result = await sendMessengerText(senderId, fastLane.reply, {
@@ -1991,16 +2045,20 @@ export async function processMessengerEvent(params: {
       }),
     });
     if (quotaDecision.status === "exhausted") {
-      await sendMessengerText(senderId, STARTPILOT_AI_ANSWER_QUOTA_REPLY, {
-        cfg: params.cfg,
-        accountId: params.account.accountId,
-      });
+      await sendMessengerText(
+        senderId,
+        buildMessengerPlanQuotaReachedReply(lang, customerPortalUrl),
+        {
+          cfg: params.cfg,
+          accountId: params.account.accountId,
+        },
+      );
       return;
     }
     if (quotaDecision.status === "unavailable") {
       await sendMessengerText(
         senderId,
-        STARTPILOT_AI_ANSWER_QUOTA_UNAVAILABLE_REPLY,
+        tMessenger(lang, "planQuotaUnavailable"),
         {
           cfg: params.cfg,
           accountId: params.account.accountId,
@@ -2076,7 +2134,7 @@ export async function processMessengerEvent(params: {
         replyPipeline: {},
         delivery: {
           deliver: async (payload: ReplyPayload, info: { kind: string }) => {
-            const deliveryPayload = normalizeMessengerReplyPayloadForDelivery(payload);
+            const deliveryPayload = normalizeMessengerReplyPayloadForDelivery(payload, lang);
             if (!deliveryPayload) {
               return { visibleReplySent: false };
             }

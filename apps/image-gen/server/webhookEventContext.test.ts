@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createHandlerContext } from "./_core/webhookHandlerContext";
 import { handleEntry } from "./_core/webhookEventRouter";
-import { resetStateStore } from "./_core/messengerState";
+import {
+  resetStateStore,
+  setPreferredLang,
+} from "./_core/messengerState";
+import { createTrackedEventContext } from "./_core/webhookEventContext";
 
 describe("Messenger webhook request correlation privacy", () => {
   const originalLogLevel = process.env.LOG_LEVEL;
@@ -81,5 +85,39 @@ describe("Messenger webhook request correlation privacy", () => {
     expect(serializedLogs).not.toContain(rawPhone);
     expect(serializedLogs).not.toContain(rawPrompt);
     expect(serializedLogs).not.toContain("raw-message-id-sensitive");
+  });
+
+  it("uses an English account default without overriding a stored preference", async () => {
+    const psid = "language-precedence-psid";
+    const ctx = createHandlerContext({
+      defaultLang: "en",
+      runImageGeneration: vi.fn(async () => ({ sent: true })),
+    });
+    ctx.claimEventReplayOrLog = vi.fn(async () => true);
+
+    const first = await createTrackedEventContext(
+      ctx,
+      {
+        sender: { id: psid },
+        recipient: { id: "page-language" },
+        timestamp: 1_750_000_000_001,
+        message: { mid: "mid-language-en", text: "Hello" },
+      },
+      "page-language"
+    );
+    expect(first?.lang).toBe("en");
+
+    await Promise.resolve(setPreferredLang(psid, "nl"));
+    const second = await createTrackedEventContext(
+      ctx,
+      {
+        sender: { id: psid },
+        recipient: { id: "page-language" },
+        timestamp: 1_750_000_000_002,
+        message: { mid: "mid-language-nl", text: "Hallo" },
+      },
+      "page-language"
+    );
+    expect(second?.lang).toBe("nl");
   });
 });

@@ -136,7 +136,9 @@ Use `channels.facebook` for new installs:
       pageAccessToken: "<FACEBOOK_PAGE_ACCESS_TOKEN>",
       appSecret: "<FACEBOOK_APP_SECRET>",
       verifyToken: "<FACEBOOK_VERIFY_TOKEN>",
-      dmPolicy: "pairing"
+      dmPolicy: "pairing",
+      defaultLang: "nl",
+      customerPortalUrl: "https://leaderbot.live/"
     }
   }
 }
@@ -145,6 +147,10 @@ Use `channels.facebook` for new installs:
 Keep `dmPolicy: "pairing"` for private testing. Use `allowlist` when you know
 which Page-scoped sender IDs may use the assistant. Use `open` for a public Page
 only after publishing privacy and data-retention terms.
+Set `defaultLang` to `"nl"` or `"en"`; named accounts may override the global
+value. Omitting it preserves the existing Dutch response language.
+Set `customerPortalUrl` to the tenant's HTTPS portal. It is used for the visible,
+plan-neutral quota handoff and rejects embedded URL credentials.
 
 The optional Leaderbot image-generation bridge is off by default. If you enable
 `leaderbotBridgeEnabled: true`, selected Messenger events, Page-scoped sender

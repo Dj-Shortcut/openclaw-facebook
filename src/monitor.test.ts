@@ -970,13 +970,16 @@ describe("processMessengerEvent unknown sender access policy", () => {
       allowFrom: undefined,
       unknownSenderMode: "leaderbot_free_tier",
       leaderbotBridgeEnabled: true,
+      defaultLang: "en",
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const sendBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
     expect(sendBody).toMatchObject({
       messaging_type: "RESPONSE",
-      message: { text: "Even pauze, ons dagbudget is bereikt. Probeer later opnieuw." },
+      message: {
+        text: "Quick pause: our daily budget has been reached. Please try again later.",
+      },
       recipient: { id: "sender-mid-free-tier-cap" },
     });
     expect(sendBody.message.text).not.toContain("Hi");
@@ -1492,6 +1495,14 @@ describe("resolveMessengerFastLaneReply", () => {
     expect(result?.reply).toContain("korte vragen");
   });
 
+  it("returns localized English replies when configured", () => {
+    const result = resolveMessengerFastLaneReply("help", "en");
+
+    expect(result?.intent).toBe("help");
+    expect(result?.reply).toContain("answer short questions");
+    expect(result?.reply).not.toContain("korte vragen");
+  });
+
   it("does not create a separate text reply for image intents", () => {
     expect(resolveMessengerFastLaneReply("maak afbeelding van een robot")).toBeNull();
   });
@@ -1821,7 +1832,7 @@ describe("processMessengerEvent typing lifecycle", () => {
   });
 });
 
-describe("processMessengerEvent Startpilot AI-answer quota", () => {
+describe("processMessengerEvent plan AI-answer quota", () => {
   const reservationId = "16be1d70-9ed5-4b32-80cc-98be433581dc";
 
   beforeEach(() => {
@@ -1870,7 +1881,10 @@ describe("processMessengerEvent Startpilot AI-answer quota", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("blocks OpenClaw and sends the safe portal CTA when exhausted", async () => {
+  it.each([
+    { lang: "nl" as const, expected: "huidige plan" },
+    { lang: "en" as const, expected: "current plan" },
+  ])("blocks OpenClaw with generic $lang copy when exhausted", async ({ lang, expected }) => {
     const inboundRun = vi.fn();
     setGatewayRuntime(inboundRun);
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
@@ -1889,7 +1903,11 @@ describe("processMessengerEvent Startpilot AI-answer quota", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await processGatewayTestEvent(
-      messengerTextEvent("mid-ai-quota-exhausted", "Schrijf een planning voor morgen"),
+      messengerTextEvent(
+        `mid-ai-quota-exhausted-${lang}`,
+        "Schrijf een planning voor morgen",
+      ),
+      { defaultLang: lang },
     );
 
     expect(inboundRun).not.toHaveBeenCalled();
@@ -1899,9 +1917,46 @@ describe("processMessengerEvent Startpilot AI-answer quota", () => {
       return typeof body.message?.text === "string";
     });
     const body = JSON.parse(String((graphCall?.[1] as RequestInit).body));
-    expect(body.message.text).toContain(
-      "https://leaderbot.live/?upgrade=startpilot#pricing",
+    expect(body.message.text).toContain(expected);
+    expect(body.message.text).not.toContain("Startpilot");
+    expect(body.message.text).not.toContain("300");
+    expect(body.message.text).not.toContain("upgrade=startpilot");
+    expect(body.message.text).toContain("https://leaderbot.live/");
+  });
+
+  it("fails closed with localized English copy when quota status is unavailable", async () => {
+    const inboundRun = vi.fn();
+    setGatewayRuntime(inboundRun);
+    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+      if (String(url).includes("/ai-answer-quota/reserve")) {
+        return new Response(JSON.stringify({ status: "unavailable" }), {
+          status: 200,
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          message_id: "quota-unavailable",
+          recipient_id: "sender-mid-ai-quota-unavailable-en",
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await processGatewayTestEvent(
+      messengerTextEvent(
+        "mid-ai-quota-unavailable-en",
+        "Write a plan for tomorrow",
+      ),
+      { defaultLang: "en" },
     );
+
+    expect(inboundRun).not.toHaveBeenCalled();
+    const graphCall = fetchMock.mock.calls.find(call =>
+      String(call[0]).includes("graph.facebook.com"),
+    );
+    const body = JSON.parse(String((graphCall?.[1] as RequestInit).body));
+    expect(body.message.text).toContain("cannot safely check your credit");
   });
 
   it("commits once only after a visible final reply", async () => {
@@ -2122,6 +2177,28 @@ describe("buildMessengerAgentTextForAttachments", () => {
         ],
       }),
     ).toContain("voice/audio-bericht");
+  });
+
+  it("uses English model context for attachment-only turns", () => {
+    expect(
+      buildMessengerAgentTextForAttachments({
+        text: "",
+        attachments: [
+          { type: "image", kind: "image", url: "https://lookaside.facebook.com/photo.jpg" },
+        ],
+        lang: "en",
+      }),
+    ).toContain("The user sent an image");
+    expect(
+      buildMessengerAgentTextForAttachments({
+        text: "",
+        attachments: [
+          { type: "audio", kind: "audio", url: "https://lookaside.facebook.com/voice.mp4" },
+        ],
+        audioTranscripts: [{ mediaIndex: 0, text: "please retry" }],
+        lang: "en",
+      }),
+    ).toBe("Voice-message transcript:\nplease retry");
   });
 });
 

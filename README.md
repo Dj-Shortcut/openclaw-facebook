@@ -157,7 +157,9 @@ and the Page's privacy/data-retention terms disclose that processing:
     facebook: {
       dmPolicy: "pairing",
       leaderbotBridgeEnabled: true,
-      unknownSenderMode: "leaderbot_free_tier"
+      unknownSenderMode: "leaderbot_free_tier",
+      defaultLang: "nl",
+      customerPortalUrl: "https://leaderbot.live/"
     }
   }
 }
@@ -165,6 +167,10 @@ and the Page's privacy/data-retention terms disclose that processing:
 
 The bridge still requires a valid internal token and an HTTPS
 `LEADERBOT_IMAGE_GEN_URL` unless you are using localhost for development.
+Set `defaultLang` to `"nl"` or `"en"` globally or per named Messenger account.
+Dutch remains the default for existing installations.
+`customerPortalUrl` controls the plan-neutral quota handoff and must be an HTTPS
+URL without embedded credentials; named accounts may override it.
 
 ## Conversation Actions
 

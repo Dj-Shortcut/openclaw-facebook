@@ -1,6 +1,6 @@
 # Meta App Review notes
 
-Last reviewed: 2026-06-21.
+Last reviewed: 2026-08-21.
 
 This note records the current Meta App Review impact for the public
 Leaderbot/OpenClaw Messenger surface. Keep this file aligned with Messenger
@@ -19,7 +19,7 @@ runtime behavior before enabling broader public traffic or adding capabilities.
 
 | Capability | User-visible behavior | Review/demo notes | Permission impact |
 | --- | --- | --- | --- |
-| Text replies | User sends a Page DM and receives a normal assistant reply. | Demo with a user-initiated DM and response within the Messenger response window. | No extra permission beyond Page messaging. |
+| Text replies | User sends a Page DM and receives a normal assistant reply. Gateway-owned operational/fallback copy, attachment context, and bridged image responses use the account-configured Dutch or English default language. | Demo with a user-initiated DM and response within the Messenger response window; verify one `defaultLang: "nl"` and one `defaultLang: "en"` account. | No extra permission beyond Page messaging; the language is static account configuration and does not require profile lookup. |
 | Prompt-first image generation | User sends a natural-language image prompt and receives a generated image. | Demo one text-to-image prompt, quota exhaustion copy, and Graph API send failure handling. | No extra Meta permission beyond Page messaging; provider cost is controlled by runtime quotas/budgets. |
 | Source-photo edit | User sends an image and asks for an edit/restyle. | Demo a user-uploaded image, retained source-image handling, and generated output delivery. | Uses Messenger media payload URLs delivered by the webhook; no profile/photo-library permission requested. |
 | Optional photo memory | Disabled by default. If enabled later, user must explicitly consent before retaining a source photo for reuse. | Keep disabled until consent copy, privacy copy, and deletion proof are approved. Demo opt-in, withdrawal, and retention expiry before enabling. | No additional Meta permission expected; do not infer consent from upload alone. |
@@ -35,7 +35,8 @@ Before requesting review or changing public access, record:
 2. A user-initiated text reply.
 3. Prompt-first text-to-image generation.
 4. Source-photo edit with durable image delivery.
-5. Quota or spend-cap exhaustion copy before an expensive provider call.
+5. Localized, plan-neutral quota or spend-cap exhaustion copy before an
+   expensive provider call.
 6. Delete-my-data behavior with production-equivalent state.
 7. Public `/privacy`, `/terms`, and `/data-deletion` routes.
 8. Confirmation that no raw PSIDs, prompts, tokens, customer messages, or

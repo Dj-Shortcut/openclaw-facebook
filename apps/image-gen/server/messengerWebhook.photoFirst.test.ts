@@ -592,7 +592,7 @@ describe("photo-first onboarding", () => {
 
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
-      t("nl", "flowExplanation"),
+      t("en", "flowExplanation"),
       expect.any(Array),
     );
 

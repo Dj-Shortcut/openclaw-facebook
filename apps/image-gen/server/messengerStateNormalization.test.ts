@@ -50,7 +50,7 @@ describe("messenger state normalization", () => {
       state: "IDLE",
       lastPhotoUrl: null,
       lastPhoto: null,
-      preferredLang: "nl",
+      preferredLang: undefined,
       consentGiven: false,
       pendingDeleteConfirm: false,
       hasSeenIntro: false,
