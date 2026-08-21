@@ -437,10 +437,12 @@ Use this order for `leaderbot-fb-image-gen`:
    the exact callback
    `https://app.leaderbot.live/api/oauth/callback` in Meta:
 
+   Set `FB_APP_ID` and `FB_APP_SECRET` through the encrypted Fly secret store;
+   never place their values in source files or shell history. Then configure
+   the public callback origin:
+
    ```bash
-   fly secrets set FB_APP_ID='<facebook-app-id>' \
-     FB_APP_SECRET='<facebook-app-secret>' \
-     APP_BASE_URL='https://app.leaderbot.live' \
+   fly secrets set APP_BASE_URL='https://app.leaderbot.live' \
      -a leaderbot-fb-image-gen
    ```
 
