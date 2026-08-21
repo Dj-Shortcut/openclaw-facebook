@@ -38,6 +38,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.1
+
       - name: Fallow - Codebase Health
         uses: fallow-rs/fallow@v2.27.0
         with:
@@ -54,10 +64,10 @@ jobs:
         run: npm run fallow:report:production
 
       - name: Generate Fallow report
-        run: npm run fallow:report
+        run: pnpm run fallow:report
 
       - name: Generate image-gen production Fallow report
-        run: npm run fallow:report:production
+        run: pnpm run fallow:report:production
 
       - name: Build repo-wide maintainability badge
         if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'

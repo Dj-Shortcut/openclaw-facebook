@@ -15,17 +15,29 @@ Leaderbot image-generation service.
 ## Deploy
 
 ```bash
-pnpm run deploy
-pnpm run deploy:image-gen
-pnpm run deploy:gateway
+npm run deploy
+npm run deploy:image-gen
+npm run deploy:gateway
 ```
 
 Legacy aliases (still available):
 
 ```bash
-pnpm run gateway:deploy
-pnpm run image-gen:deploy
+npm run gateway:deploy
+npm run image-gen:deploy
 ```
+
+## Package managers
+
+- Use npm `>=11.12.1` for the root plugin, root scripts, installs, releases, and
+  deploy orchestration. `package-lock.json` is authoritative there.
+- Use pnpm `10.28.1` only within `apps/image-gen`, `apps/customer-app`, and
+  `apps/image-gen/storage-proxy`. Each app owns its `packageManager` pin and
+  `pnpm-lock.yaml`.
+- The root `pnpm-lock.yaml` is retained only as an OpenClaw compatibility mirror;
+  it does not turn the repository into a pnpm workspace.
+- Run `npm run check:package-managers` after changing package metadata,
+  lockfiles, or package-manager CI setup.
 
 ## Validate
 

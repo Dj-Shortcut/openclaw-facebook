@@ -34,6 +34,11 @@
   ordinary work and billable forwards, while explicit `delete-my-data` requests
   remain routable. This is not a durable ingress queue: keep one gateway replica
   until acknowledged webhook work is persisted in a tenant-scoped queue/outbox.
+- Package tooling has an explicit enforced boundary: npm `>=11.12.1` owns the
+  root plugin and deploy orchestration, while all three isolated subapps pin
+  pnpm `10.28.1` and own their local lockfiles. A dependency-free CI guard
+  rejects mixed subapp lockfiles, stale pnpm pins, root pnpm-workspace drift, and
+  root deploy scripts that bypass npm.
 
 ## Production release strategy
 
