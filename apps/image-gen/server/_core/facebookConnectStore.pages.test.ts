@@ -121,4 +121,65 @@ describe("Facebook Business Login Page discovery", () => {
       getFacebookPagesForUserAccessToken("user-token")
     ).resolves.toEqual([]);
   });
+
+  it("discovers a Page assigned through a Business Portfolio", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              { permission: "pages_show_list", status: "granted" },
+              { permission: "pages_manage_metadata", status: "granted" },
+              { permission: "pages_messaging", status: "granted" },
+              { permission: "business_management", status: "granted" },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "page-42",
+                name: "Leaderbot",
+                access_token: "page-access-token",
+                perms: ["MANAGE"],
+                tasks: ["MESSAGING"],
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pages = await getFacebookPagesForUserAccessToken("user-token");
+
+    expect(pages).toHaveLength(1);
+    const assignedPagesUrl = new URL(String(fetchMock.mock.calls[2]?.[0]));
+    expect(assignedPagesUrl.pathname).toBe("/v21.0/me/assigned_pages");
+    expect(assignedPagesUrl.searchParams.has("access_token")).toBe(false);
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({
+      headers: {
+        Accept: "application/json",
+        Authorization: "Bearer user-token",
+      },
+    });
+    const logs = logSpy.mock.calls.flat().join(" ");
+    expect(logs).toContain('"pagesShowListGranted":true');
+    expect(logs).toContain('"businessManagementGranted":true');
+    expect(logs).not.toContain("page-access-token");
+    expect(logs).not.toContain("user-token");
+    expect(logs).not.toContain("page-42");
+  });
 });

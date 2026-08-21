@@ -208,6 +208,10 @@ type FacebookAccountsResponse = {
   data?: FacebookPageResponse[];
 };
 
+type FacebookPermissionsResponse = {
+  data?: Array<{ permission?: string; status?: string }>;
+};
+
 type FacebookPageResponse = {
   id?: string;
   name?: string;
@@ -270,6 +274,70 @@ async function fetchFacebookPageAccess(
   return toFacebookConnectPage(resolvedPage);
 }
 
+async function logFacebookPagePermissionState(accessToken: string) {
+  const permissionsUrl = new URL(
+    `https://graph.facebook.com/${getFacebookApiVersion()}/me/permissions`
+  );
+  permissionsUrl.searchParams.set("fields", "permission,status");
+  const response = await fetch(permissionsUrl, {
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    signal: AbortSignal.timeout(FACEBOOK_GRAPH_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    safeLog("facebook_page_permission_lookup_failed", {
+      level: "warn",
+      status: response.status,
+    });
+    return;
+  }
+
+  const permissions = (await response.json()) as FacebookPermissionsResponse;
+  const granted = new Set(
+    (permissions.data ?? [])
+      .filter(item => item.status === "granted" && item.permission)
+      .map(item => item.permission)
+  );
+  safeLog("facebook_page_permission_state", {
+    pagesShowListGranted: granted.has("pages_show_list"),
+    pagesManageMetadataGranted: granted.has("pages_manage_metadata"),
+    pagesMessagingGranted: granted.has("pages_messaging"),
+    pagesReadEngagementGranted: granted.has("pages_read_engagement"),
+    businessManagementGranted: granted.has("business_management"),
+  });
+}
+
+async function fetchAssignedFacebookPages(
+  accessToken: string
+): Promise<FacebookPageResponse[]> {
+  const assignedPagesUrl = new URL(
+    `https://graph.facebook.com/${getFacebookApiVersion()}/me/assigned_pages`
+  );
+  assignedPagesUrl.searchParams.set(
+    "fields",
+    "id,name,access_token,perms,tasks"
+  );
+  const response = await fetch(assignedPagesUrl, {
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    signal: AbortSignal.timeout(FACEBOOK_GRAPH_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    safeLog("facebook_assigned_page_lookup_failed", {
+      level: "warn",
+      status: response.status,
+    });
+    return [];
+  }
+
+  const assignedPages = (await response.json()) as FacebookAccountsResponse;
+  return assignedPages.data ?? [];
+}
+
 export async function getFacebookPagesForUserAccessToken(
   accessToken: string
 ): Promise<FacebookConnectPage[]> {
@@ -294,7 +362,12 @@ export async function getFacebookPagesForUserAccessToken(
   }
 
   const accounts = (await accountsResponse.json()) as FacebookAccountsResponse;
-  const candidates = (accounts.data ?? []).filter(page => page.id && page.name);
+  let candidateSource = accounts.data ?? [];
+  if (candidateSource.length === 0) {
+    await logFacebookPagePermissionState(accessToken);
+    candidateSource = await fetchAssignedFacebookPages(accessToken);
+  }
+  const candidates = candidateSource.filter(page => page.id && page.name);
   const resolvedPages: FacebookConnectPage[] = [];
   let fallbackLookupCount = 0;
 
