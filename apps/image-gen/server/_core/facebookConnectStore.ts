@@ -14,6 +14,11 @@ export const REQUIRED_FACEBOOK_SCOPES = [
   "pages_messaging",
 ] as const;
 
+export const FACEBOOK_LOGIN_PERMISSIONS = [
+  ...REQUIRED_FACEBOOK_SCOPES,
+  "business_management",
+] as const;
+
 type RequiredFacebookScope = (typeof REQUIRED_FACEBOOK_SCOPES)[number];
 
 export type FacebookConnectPage = {
@@ -195,7 +200,7 @@ export function getFacebookOAuthUrl(state: string) {
     // Meta recommends config_id instead of a caller-controlled scope list.
     url.searchParams.set("config_id", configurationId);
   } else {
-    url.searchParams.set("scope", REQUIRED_FACEBOOK_SCOPES.join(","));
+    url.searchParams.set("scope", FACEBOOK_LOGIN_PERMISSIONS.join(","));
   }
   return url.toString();
 }

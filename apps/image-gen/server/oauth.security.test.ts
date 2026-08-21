@@ -386,6 +386,17 @@ describe("OAuth callback security", () => {
     const authorizationUrl = new URL(
       start.headers.location ?? "https://invalid"
     );
+    expect(
+      new Set(authorizationUrl.searchParams.get("scope")?.split(","))
+    ).toEqual(
+      new Set([
+        "public_profile",
+        "pages_show_list",
+        "pages_manage_metadata",
+        "pages_messaging",
+        "business_management",
+      ])
+    );
     const state = authorizationUrl.searchParams.get("state") ?? "";
     const stateCookie = start.headers["set-cookie"]?.[0]?.split(";", 1)[0];
     const callback = await sendGetRequest(

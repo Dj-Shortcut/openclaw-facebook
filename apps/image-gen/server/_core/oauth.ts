@@ -6,9 +6,9 @@ import { z } from "zod";
 import * as db from "../db";
 import { getSessionCookieOptions } from "./cookies";
 import {
+  FACEBOOK_LOGIN_PERMISSIONS,
   getFacebookLoginConfigurationId,
   getFacebookPagesForUserAccessToken,
-  REQUIRED_FACEBOOK_SCOPES,
   startFacebookConnect,
   storeFacebookPages,
 } from "./facebookConnectStore";
@@ -324,7 +324,7 @@ export function registerOAuthRoutes(app: Express) {
       } else {
         authorizationUrl.searchParams.set(
           "scope",
-          ["public_profile", ...REQUIRED_FACEBOOK_SCOPES].join(",")
+          ["public_profile", ...FACEBOOK_LOGIN_PERMISSIONS].join(",")
         );
       }
     }
