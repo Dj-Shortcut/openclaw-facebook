@@ -159,6 +159,32 @@ describe("portal handoff delivery", () => {
     );
   });
 
+  it("sends account-bound re-entry instructions for the customer portal", async () => {
+    await expect(
+      sendPortalHandoffLink({
+        workspaceId: 42,
+        messengerSenderUserKey,
+        expectedFacebookPageId: "facebook-page-42",
+        createdByUserId: 7,
+        messageVariant: "portal_reentry",
+      })
+    ).resolves.toMatchObject({ ok: true, sent: true });
+
+    expect(mocks.sendText).toHaveBeenCalledWith(
+      "page-scoped-user-id",
+      expect.stringMatching(/klantenportaal[\s\S]*hetzelfde Facebook-account/),
+      {
+        pageId: "facebook-page-42",
+        workspaceId: 42,
+        channelConnectionId: 12,
+        bindingEpoch: 3,
+        userKey: messengerSenderUserKey,
+        privacyEpoch: 4,
+        operationId: "portal-handoff:42",
+      }
+    );
+  });
+
   it("does not create a token when the Messenger user cannot be found", async () => {
     mocks.findStateByUserKey.mockResolvedValue(null);
 

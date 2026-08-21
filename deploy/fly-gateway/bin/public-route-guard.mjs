@@ -5,6 +5,7 @@ import https from "node:https";
 const DEFAULT_ALLOWED_PATHS = "/facebook/webhook,/healthz,/readyz";
 const PORTAL_PAGE_PATHS = new Set([
   "/",
+  "/portal",
   "/privacy",
   "/terms",
   "/billing-policy",

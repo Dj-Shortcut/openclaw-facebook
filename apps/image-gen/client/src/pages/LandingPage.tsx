@@ -585,7 +585,7 @@ function PortalButton({
       title={!loginConfigured ? copy.loginUnavailable : undefined}
       type="button"
       onClick={() => {
-        const loginUrl = getLoginUrl();
+        const loginUrl = getLoginUrl("/portal");
         if (loginUrl) window.location.href = loginUrl;
       }}
     >

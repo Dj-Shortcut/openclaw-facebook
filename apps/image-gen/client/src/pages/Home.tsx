@@ -30,6 +30,11 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import LandingPage from "./LandingPage";
+import { PortalDashboardNav } from "@/components/PortalDashboardNav";
+import {
+  getPortalDashboardSectionIdFromHash,
+  PORTAL_DASHBOARD_SECTION_IDS,
+} from "@/components/portalDashboardSections";
 import {
   DEFAULT_LOCALE,
   SUPPORTED_LOCALES,
@@ -596,6 +601,44 @@ function Home() {
   const billingPlan = billingSummary?.plan;
   const billingPayments = billingSummary?.payments ?? [];
   const billingNotifications = billingSummary?.notifications ?? [];
+  const showBillingSection = Boolean(
+    billingPlans.length > 0 ||
+    billingSubscription ||
+    billingEntitlement ||
+    billingPlansQuery.error ||
+    billingSummaryQuery.error ||
+    (billingReturnIntent && canManageBilling)
+  );
+  const isLoading =
+    auth.loading ||
+    portalSessionQuery.isLoading ||
+    workspaceQuery.isLoading ||
+    workspaceMembersQuery.isLoading ||
+    aiIdentityQuery.isLoading ||
+    channelStatusQuery.isLoading ||
+    usageQuery.isLoading ||
+    billingPlansQuery.isLoading ||
+    billingSummaryQuery.isLoading ||
+    upgradeRequestsQuery.isLoading ||
+    knowledgeQuery.isLoading ||
+    privacyQuery.isLoading ||
+    privacyRequestsQuery.isLoading;
+
+  useEffect(() => {
+    if (!auth.isAuthenticated || isLoading || typeof window === "undefined") {
+      return;
+    }
+    const sectionId = getPortalDashboardSectionIdFromHash(
+      window.location.hash,
+      showBillingSection
+    );
+    if (!sectionId) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(sectionId)?.scrollIntoView({ block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [auth.isAuthenticated, isLoading, showBillingSection]);
   const upgradeRequests = upgradeRequestsQuery.data ?? [];
   const latestUpgradeRequest = upgradeRequests[0];
   const facebookStatus =
@@ -774,21 +817,6 @@ function Home() {
     );
   }
 
-  const isLoading =
-    auth.loading ||
-    portalSessionQuery.isLoading ||
-    workspaceQuery.isLoading ||
-    workspaceMembersQuery.isLoading ||
-    aiIdentityQuery.isLoading ||
-    channelStatusQuery.isLoading ||
-    usageQuery.isLoading ||
-    billingPlansQuery.isLoading ||
-    billingSummaryQuery.isLoading ||
-    upgradeRequestsQuery.isLoading ||
-    knowledgeQuery.isLoading ||
-    privacyQuery.isLoading ||
-    privacyRequestsQuery.isLoading;
-
   return (
     <main className="min-h-full bg-[#f5f7fb] px-4 py-6 text-stone-950 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl">
@@ -885,6 +913,20 @@ function Home() {
           </div>
         </header>
 
+        <PortalDashboardNav
+          ariaLabel={copy.navigation.ariaLabel}
+          assistantLabel={copy.navigation.assistant}
+          billingLabel={copy.navigation.billing}
+          dashboardLabel={copy.navigation.dashboard}
+          knowledgeLabel={copy.navigation.knowledge}
+          messengerLabel={copy.navigation.messenger}
+          overviewLabel={copy.navigation.overview}
+          privacyLabel={copy.navigation.privacy}
+          showBilling={showBillingSection}
+          usageLabel={copy.navigation.usage}
+          workspaceName={workspaceDisplayName}
+        />
+
         {showHandoffBanner ? (
           <section className="mt-5 rounded-lg border border-teal-200 bg-teal-50 p-4 text-teal-950">
             <div className="flex items-start gap-3">
@@ -909,7 +951,10 @@ function Home() {
           </div>
         ) : (
           <div className="grid gap-4 py-6 lg:grid-cols-3">
-            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
+            <section
+              className="scroll-mt-28 rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3"
+              id={PORTAL_DASHBOARD_SECTION_IDS.overview}
+            >
               <div className="flex items-center gap-3">
                 <ShieldCheck className="h-5 w-5 text-teal-700" />
                 <h2 className="text-lg font-semibold text-stone-950">
@@ -947,7 +992,10 @@ function Home() {
               ) : null}
             </section>
 
-            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-2">
+            <section
+              className="scroll-mt-28 rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-2"
+              id={PORTAL_DASHBOARD_SECTION_IDS.assistant}
+            >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-start gap-3">
                   <Bot className="mt-1 h-5 w-5 text-teal-700" />
@@ -1093,7 +1141,10 @@ function Home() {
               )}
             </section>
 
-            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
+            <section
+              className="scroll-mt-28 rounded-lg border border-stone-200 bg-white p-5 shadow-sm"
+              id={PORTAL_DASHBOARD_SECTION_IDS.messenger}
+            >
               <div className="flex items-start justify-between gap-4">
                 <div className="flex items-center gap-3">
                   <MessageCircle className="h-5 w-5 text-teal-700" />
@@ -1270,7 +1321,10 @@ function Home() {
               </div>
             </section>
 
-            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
+            <section
+              className="scroll-mt-28 rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3"
+              id={PORTAL_DASHBOARD_SECTION_IDS.usage}
+            >
               <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                 <div className="flex items-center gap-3">
                   <CreditCard className="h-5 w-5 text-teal-700" />
@@ -1382,13 +1436,11 @@ function Home() {
               ) : null}
             </section>
 
-            {billingPlans.length > 0 ||
-            billingSubscription ||
-            billingEntitlement ||
-            billingPlansQuery.error ||
-            billingSummaryQuery.error ||
-            (billingReturnIntent && canManageBilling) ? (
-              <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
+            {showBillingSection ? (
+              <section
+                className="scroll-mt-28 rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3"
+                id={PORTAL_DASHBOARD_SECTION_IDS.billing}
+              >
                 <div className="flex items-start gap-3">
                   <CreditCard className="mt-0.5 h-5 w-5 text-teal-700" />
                   <div>
@@ -1845,7 +1897,9 @@ function Home() {
                               className="rounded-md border border-stone-300 bg-white px-2 py-1.5 text-sm"
                               type="date"
                               value={accountingFrom}
-                              onChange={event => setAccountingFrom(event.target.value)}
+                              onChange={event =>
+                                setAccountingFrom(event.target.value)
+                              }
                             />
                           </label>
                           <label className="grid gap-1 text-xs text-stone-600">
@@ -1858,7 +1912,9 @@ function Home() {
                               className="rounded-md border border-stone-300 bg-white px-2 py-1.5 text-sm"
                               type="date"
                               value={accountingUntil}
-                              onChange={event => setAccountingUntil(event.target.value)}
+                              onChange={event =>
+                                setAccountingUntil(event.target.value)
+                              }
                             />
                           </label>
                           <Button asChild size="sm" variant="outline">
@@ -1946,7 +2002,10 @@ function Home() {
               </section>
             ) : null}
 
-            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
+            <section
+              className="scroll-mt-28 rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3"
+              id={PORTAL_DASHBOARD_SECTION_IDS.privacy}
+            >
               <div className="flex items-center gap-3">
                 <SlidersHorizontal className="h-5 w-5 text-teal-700" />
                 <h2 className="text-lg font-semibold text-stone-950">
@@ -2126,7 +2185,10 @@ function Home() {
               </div>
             </section>
 
-            <section className="rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3">
+            <section
+              className="scroll-mt-28 rounded-lg border border-stone-200 bg-white p-5 shadow-sm lg:col-span-3"
+              id={PORTAL_DASHBOARD_SECTION_IDS.knowledge}
+            >
               <div className="flex items-center gap-3">
                 <Database className="h-5 w-5 text-teal-700" />
                 <h2 className="text-lg font-semibold text-stone-950">

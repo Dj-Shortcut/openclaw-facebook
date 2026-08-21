@@ -7,7 +7,8 @@ const execFileAsync = promisify(execFile);
 const appName = process.env.LEADERBOT_IMAGE_GEN_FLY_APP || "leaderbot-fb-image-gen";
 const appBaseUrl =
   process.env.LEADERBOT_IMAGE_GEN_URL || "https://leaderbot-fb-image-gen.fly.dev";
-const publicBaseUrl = process.env.LEADERBOT_PUBLIC_URL || "https://leaderbot.live";
+const publicBaseUrl =
+  process.env.LEADERBOT_PUBLIC_URL || "https://app.leaderbot.live";
 
 function normalizeBaseUrl(value, name) {
   try {
@@ -113,11 +114,12 @@ async function verifyPublicPortal(publicUrl) {
 
 async function verifyPublicHealth(publicUrl) {
   const { response, body } = await fetchText(endpoint(publicUrl, "/healthz"));
+  const health = body.trim();
   return {
     name: "public_healthz",
-    ok: response.ok && body.includes("live"),
+    ok: response.ok && health === "ok",
     status: response.status,
-    detail: body.trim().slice(0, 120),
+    detail: health.slice(0, 120),
   };
 }
 

@@ -1,4 +1,4 @@
-import { desc, eq, and, gt, inArray, or, sql } from "drizzle-orm";
+import { desc, eq, and, gt, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   aiIdentities,
@@ -1304,6 +1304,65 @@ export async function claimPortalHandoffTokenForUser(input: {
       return { ok: false, reason: "tenant_boundary" };
     }
 
+    let priorClaim:
+      { minUserId: number | null; maxUserId: number | null } | undefined;
+    if (stored.messengerSenderUserKey) {
+      const priorClaims = await tx
+        .select({
+          minUserId: sql<
+            number | null
+          >`MIN(${portalHandoffTokens.claimedByUserId})`,
+          maxUserId: sql<
+            number | null
+          >`MAX(${portalHandoffTokens.claimedByUserId})`,
+        })
+        .from(portalHandoffTokens)
+        .where(
+          and(
+            eq(portalHandoffTokens.workspaceId, stored.workspaceId),
+            eq(portalHandoffTokens.facebookPageId, stored.facebookPageId),
+            eq(
+              portalHandoffTokens.messengerSenderUserKey,
+              stored.messengerSenderUserKey
+            ),
+            eq(portalHandoffTokens.status, "consumed"),
+            isNotNull(portalHandoffTokens.claimedByUserId)
+          )
+        );
+      priorClaim = priorClaims[0];
+    }
+    if (
+      priorClaim?.minUserId != null &&
+      priorClaim.maxUserId != null &&
+      priorClaim.minUserId !== priorClaim.maxUserId
+    ) {
+      return { ok: false, reason: "invalid" };
+    }
+    const restrictedUserId = priorClaim?.minUserId ?? null;
+    const isRestrictedReentry = restrictedUserId != null;
+    if (isRestrictedReentry && restrictedUserId !== input.userId) {
+      return { ok: false, reason: "invalid" };
+    }
+
+    let membership: WorkspaceMember | undefined;
+    if (isRestrictedReentry) {
+      const memberships = await tx
+        .select()
+        .from(workspaceMembers)
+        .where(
+          and(
+            eq(workspaceMembers.workspaceId, stored.workspaceId),
+            eq(workspaceMembers.userId, input.userId)
+          )
+        )
+        .limit(1)
+        .for("update");
+      membership = memberships[0];
+      if (!membership) {
+        return { ok: false, reason: "invalid" };
+      }
+    }
+
     const consumeResult = await tx
       .update(portalHandoffTokens)
       .set({
@@ -1322,23 +1381,25 @@ export async function claimPortalHandoffTokenForUser(input: {
       return { ok: false, reason: "already_used" };
     }
 
-    const memberValues: InsertWorkspaceMember = {
-      workspaceId: stored.workspaceId,
-      userId: input.userId,
-      role,
-    };
-    await tx
-      .insert(workspaceMembers)
-      .values(memberValues)
-      .onDuplicateKeyUpdate({
-        set: {
-          // A handoff proves control of this one onboarding link; it must not
-          // silently change privileges that were assigned through a separate
-          // workspace-membership workflow. New claims receive the onboarding
-          // role, while an existing member keeps their current role.
-          workspaceId: stored.workspaceId,
-        },
-      });
+    if (!isRestrictedReentry) {
+      const memberValues: InsertWorkspaceMember = {
+        workspaceId: stored.workspaceId,
+        userId: input.userId,
+        role,
+      };
+      await tx
+        .insert(workspaceMembers)
+        .values(memberValues)
+        .onDuplicateKeyUpdate({
+          set: {
+            // A handoff proves control of this one onboarding link; it must not
+            // silently change privileges that were assigned through a separate
+            // workspace-membership workflow. New claims receive the onboarding
+            // role, while an existing member keeps their current role.
+            workspaceId: stored.workspaceId,
+          },
+        });
+    }
 
     const privacyDefaults: InsertWorkspacePrivacySetting = {
       workspaceId: stored.workspaceId,
@@ -1358,17 +1419,19 @@ export async function claimPortalHandoffTokenForUser(input: {
         },
       });
 
-    const memberships = await tx
-      .select()
-      .from(workspaceMembers)
-      .where(
-        and(
-          eq(workspaceMembers.workspaceId, stored.workspaceId),
-          eq(workspaceMembers.userId, input.userId)
+    if (!membership) {
+      const memberships = await tx
+        .select()
+        .from(workspaceMembers)
+        .where(
+          and(
+            eq(workspaceMembers.workspaceId, stored.workspaceId),
+            eq(workspaceMembers.userId, input.userId)
+          )
         )
-      )
-      .limit(1);
-    const membership = memberships[0];
+        .limit(1);
+      membership = memberships[0];
+    }
 
     if (!membership) {
       throw new Error(
@@ -1396,6 +1459,88 @@ export async function claimPortalHandoffTokenForUser(input: {
       messengerSenderUserKey: stored.messengerSenderUserKey,
     };
   });
+}
+
+export type PortalHandoffReentryBinding = {
+  workspaceId: number;
+  userId: number;
+};
+
+export async function findUniqueConnectedFacebookWorkspaceId(
+  facebookPageId: string
+): Promise<number | null> {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("find_unique_connected_facebook_workspace");
+    throw new Error(
+      "Database unavailable: Facebook workspace was not resolved"
+    );
+  }
+
+  const connections = await db
+    .select({ workspaceId: channelConnections.workspaceId })
+    .from(channelConnections)
+    .where(
+      and(
+        eq(channelConnections.channel, "facebook_messenger"),
+        eq(channelConnections.status, "connected"),
+        eq(channelConnections.externalId, facebookPageId)
+      )
+    )
+    .limit(2);
+
+  return connections.length === 1 ? connections[0].workspaceId : null;
+}
+
+export async function findPortalHandoffReentryBinding(input: {
+  facebookPageId: string;
+  messengerSenderUserKey: string;
+}): Promise<PortalHandoffReentryBinding | null> {
+  const workspaceId = await findUniqueConnectedFacebookWorkspaceId(
+    input.facebookPageId
+  );
+  if (!workspaceId) return null;
+
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("find_portal_handoff_reentry_binding");
+    throw new Error(
+      "Database unavailable: portal handoff binding was not resolved"
+    );
+  }
+
+  const claims = await db
+    .select({ userId: portalHandoffTokens.claimedByUserId })
+    .from(portalHandoffTokens)
+    .where(
+      and(
+        eq(portalHandoffTokens.workspaceId, workspaceId),
+        eq(portalHandoffTokens.facebookPageId, input.facebookPageId),
+        eq(
+          portalHandoffTokens.messengerSenderUserKey,
+          input.messengerSenderUserKey
+        ),
+        eq(portalHandoffTokens.status, "consumed"),
+        isNotNull(portalHandoffTokens.claimedByUserId)
+      )
+    )
+    .orderBy(desc(portalHandoffTokens.consumedAt), desc(portalHandoffTokens.id))
+    .limit(1);
+  const userId = claims[0]?.userId;
+  if (!userId) return null;
+
+  const memberships = await db
+    .select({ id: workspaceMembers.id })
+    .from(workspaceMembers)
+    .where(
+      and(
+        eq(workspaceMembers.workspaceId, workspaceId),
+        eq(workspaceMembers.userId, userId)
+      )
+    )
+    .limit(1);
+
+  return memberships.length === 1 ? { workspaceId, userId } : null;
 }
 
 export async function revokePortalHandoffToken(tokenHash: string) {

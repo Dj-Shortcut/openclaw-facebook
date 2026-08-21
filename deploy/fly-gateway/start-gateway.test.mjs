@@ -675,6 +675,7 @@ describe("Fly gateway startup", () => {
 
     const publicPort = guard.address().port;
     const portalRoot = await fetch(`http://127.0.0.1:${publicPort}/`);
+    const portalDashboard = await fetch(`http://127.0.0.1:${publicPort}/portal`);
     const portalHandoff = await fetch(`http://127.0.0.1:${publicPort}/handoff`);
     const portalHandoffToken = await fetch(
       `http://127.0.0.1:${publicPort}/handoff/setup-token`,
@@ -757,6 +758,8 @@ describe("Fly gateway startup", () => {
 
     expect(portalRoot.status).toBe(200);
     expect(await portalRoot.text()).toBe("portal:/");
+    expect(portalDashboard.status).toBe(200);
+    expect(await portalDashboard.text()).toBe("portal:/portal");
     expect(portalHandoff.status).toBe(200);
     expect(await portalHandoff.text()).toBe("portal:/handoff");
     expect(portalHandoffToken.status).toBe(200);
@@ -805,6 +808,7 @@ describe("Fly gateway startup", () => {
     expect(seenGatewayPaths).toEqual(["/facebook/webhook?hub.challenge=ok"]);
     expect(seenPortalPaths).toEqual([
       "/",
+      "/portal",
       "/handoff",
       "/handoff/setup-token",
       "/assets/app.js",

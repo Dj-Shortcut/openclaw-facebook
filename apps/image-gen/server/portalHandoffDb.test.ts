@@ -26,6 +26,7 @@ import {
   createPortalHandoffToken,
   createOrGetPortalHandoffToken,
   deletePortalHandoffTokensForMessengerUserKey,
+  findPortalHandoffReentryBinding,
   getWorkspaceById,
   markPortalHandoffTokenConsumed,
   revokePortalHandoffToken,
@@ -41,6 +42,12 @@ function selectRows(rows: unknown[]) {
   const where = vi.fn(() => ({ limit }));
   const from = vi.fn(() => ({ where }));
   return { from, where, limit, forUpdate };
+}
+
+function selectWhereRows(rows: unknown[]) {
+  const where = vi.fn(async () => rows);
+  const from = vi.fn(() => ({ where }));
+  return { from, where };
 }
 
 function duplicateInsert() {
@@ -343,12 +350,16 @@ describe("portal handoff database helpers", () => {
     };
     const tokenSelect = selectRows([token]);
     const workspaceSelect = selectRows([workspace]);
+    const priorClaimSelect = selectWhereRows([
+      { minUserId: null, maxUserId: null },
+    ]);
     const membershipSelect = selectRows([membership]);
     const connectionSelect = selectRows([{ id: 11 }]);
     dbMock.select
       .mockReturnValueOnce({ from: tokenSelect.from })
       .mockReturnValueOnce({ from: workspaceSelect.from })
       .mockReturnValueOnce({ from: connectionSelect.from })
+      .mockReturnValueOnce({ from: priorClaimSelect.from })
       .mockReturnValueOnce({ from: membershipSelect.from });
     const updateWhere = vi.fn(async () => [{ affectedRows: 1 }, []]);
     const updateSet = vi.fn(() => ({ where: updateWhere }));
@@ -437,11 +448,15 @@ describe("portal handoff database helpers", () => {
       const tokenSelect = selectRows([token]);
       const workspaceSelect = selectRows([workspace]);
       const connectionSelect = selectRows([{ id: 11 }]);
+      const priorClaimSelect = selectWhereRows([
+        { minUserId: null, maxUserId: null },
+      ]);
       const membershipSelect = selectRows([membership]);
       dbMock.select
         .mockReturnValueOnce({ from: tokenSelect.from })
         .mockReturnValueOnce({ from: workspaceSelect.from })
         .mockReturnValueOnce({ from: connectionSelect.from })
+        .mockReturnValueOnce({ from: priorClaimSelect.from })
         .mockReturnValueOnce({ from: membershipSelect.from });
       const updateWhere = vi.fn(async () => [{ affectedRows: 1 }, []]);
       dbMock.update.mockReturnValue({
@@ -556,4 +571,149 @@ describe("portal handoff database helpers", () => {
       expect(dbMock.insert).not.toHaveBeenCalled();
     }
   );
+
+  it("resolves re-entry only through one connected Page, a consumed claim, and membership", async () => {
+    const connectionLimit = vi.fn(async () => [{ workspaceId: 42 }]);
+    const claimLimit = vi.fn(async () => [{ userId: 7 }]);
+    const membershipLimit = vi.fn(async () => [{ id: 9 }]);
+    dbMock.select
+      .mockReturnValueOnce({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({ limit: connectionLimit })),
+        })),
+      })
+      .mockReturnValueOnce({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            orderBy: vi.fn(() => ({ limit: claimLimit })),
+          })),
+        })),
+      })
+      .mockReturnValueOnce({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({ limit: membershipLimit })),
+        })),
+      });
+
+    await expect(
+      findPortalHandoffReentryBinding({
+        facebookPageId: "facebook-page-42",
+        messengerSenderUserKey: "sender-user-key",
+      })
+    ).resolves.toEqual({ workspaceId: 42, userId: 7 });
+  });
+
+  it("refuses re-entry when the Page binding is ambiguous", async () => {
+    const limit = vi.fn(async () => [{ workspaceId: 42 }, { workspaceId: 99 }]);
+    dbMock.select.mockReturnValueOnce({
+      from: vi.fn(() => ({ where: vi.fn(() => ({ limit })) })),
+    });
+
+    await expect(
+      findPortalHandoffReentryBinding({
+        facebookPageId: "facebook-page-42",
+        messengerSenderUserKey: "sender-user-key",
+      })
+    ).resolves.toBeNull();
+  });
+
+  it("binds a restricted re-entry token to the existing portal member", async () => {
+    const token = {
+      id: 3,
+      workspaceId: 42,
+      tokenHash: "sha256:token",
+      deliveryIdempotencyKeyHash: "sha256:reentry-delivery",
+      messengerSenderUserKey: "sender-user-key",
+      facebookPageId: "facebook-page-42",
+      claimedByUserId: null,
+      purpose: "workspace_onboarding" as const,
+      status: "pending" as const,
+      expiresAt: new Date("2026-06-30T10:05:00.000Z"),
+      consumedAt: null,
+      createdByUserId: 7,
+      createdAt: new Date("2026-06-30T09:55:00.000Z"),
+      updatedAt: new Date("2026-06-30T09:55:00.000Z"),
+    };
+    const workspace = {
+      id: 42,
+      name: "Premium Workspace",
+      slug: "premium-workspace",
+      createdAt: new Date("2026-06-30T09:00:00.000Z"),
+      updatedAt: new Date("2026-06-30T09:00:00.000Z"),
+    };
+    const membership = {
+      id: 9,
+      workspaceId: 42,
+      userId: 7,
+      role: "admin" as const,
+      createdAt: new Date("2026-06-30T09:00:00.000Z"),
+    };
+    dbMock.select
+      .mockReturnValueOnce({ from: selectRows([token]).from })
+      .mockReturnValueOnce({ from: selectRows([workspace]).from })
+      .mockReturnValueOnce({ from: selectRows([{ id: 11 }]).from })
+      .mockReturnValueOnce({
+        from: selectWhereRows([{ minUserId: 7, maxUserId: 7 }]).from,
+      })
+      .mockReturnValueOnce({ from: selectRows([membership]).from });
+    dbMock.update.mockReturnValue({
+      set: vi.fn(() => ({
+        where: vi.fn(async () => [{ affectedRows: 1 }, []]),
+      })),
+    });
+    const privacyInsert = duplicateInsert();
+    dbMock.insert
+      .mockReturnValueOnce({ values: privacyInsert.values })
+      .mockReturnValueOnce({ values: vi.fn(async () => undefined) });
+
+    await expect(
+      claimPortalHandoffTokenForUser({
+        tokenHash: "sha256:token",
+        userId: 7,
+        now: new Date("2026-06-30T10:00:00.000Z"),
+      })
+    ).resolves.toMatchObject({
+      ok: true,
+      membership: { role: "admin" },
+    });
+    expect(dbMock.insert).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a restricted re-entry token for another portal user", async () => {
+    const token = {
+      id: 3,
+      workspaceId: 42,
+      tokenHash: "sha256:token",
+      deliveryIdempotencyKeyHash: "sha256:reentry-delivery",
+      messengerSenderUserKey: "sender-user-key",
+      facebookPageId: "facebook-page-42",
+      status: "pending" as const,
+      expiresAt: new Date("2026-06-30T10:05:00.000Z"),
+      createdByUserId: 7,
+    };
+    const workspace = {
+      id: 42,
+      name: "Premium Workspace",
+      slug: "premium-workspace",
+      createdAt: new Date("2026-06-30T09:00:00.000Z"),
+      updatedAt: new Date("2026-06-30T09:00:00.000Z"),
+    };
+    dbMock.select
+      .mockReturnValueOnce({ from: selectRows([token]).from })
+      .mockReturnValueOnce({ from: selectRows([workspace]).from })
+      .mockReturnValueOnce({ from: selectRows([{ id: 11 }]).from })
+      .mockReturnValueOnce({
+        from: selectWhereRows([{ minUserId: 7, maxUserId: 7 }]).from,
+      });
+
+    await expect(
+      claimPortalHandoffTokenForUser({
+        tokenHash: "sha256:token",
+        userId: 8,
+        now: new Date("2026-06-30T10:00:00.000Z"),
+      })
+    ).resolves.toEqual({ ok: false, reason: "invalid" });
+    expect(dbMock.update).not.toHaveBeenCalled();
+    expect(dbMock.insert).not.toHaveBeenCalled();
+  });
 });

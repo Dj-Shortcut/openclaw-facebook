@@ -1095,6 +1095,48 @@ describe("conversationalEditingFeature", () => {
 });
 
 describe("assistantCommandsFeature", () => {
+  it("requests a secure portal re-entry link for a linked Messenger user", async () => {
+    const requestPortalHandoff = vi.fn(async () => "sent" as const);
+    const sendText = vi.fn(async () => undefined);
+
+    const result = await assistantCommandsFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        normalizedText: "klantenportaal",
+        messageText: "Klantenportaal",
+        requestPortalHandoff,
+        sendText,
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(requestPortalHandoff).toHaveBeenCalledOnce();
+    expect(sendText).toHaveBeenCalledWith(t("nl", "portalLinkSent"));
+  });
+
+  it.each([
+    ["not_linked", "portalLinkNotLinked"],
+    ["unavailable", "portalLinkUnavailable"],
+  ] as const)(
+    "keeps portal command failure %s fail-closed",
+    async (handoffResult, translationKey) => {
+      const requestPortalHandoff = vi.fn(async () => handoffResult);
+      const sendText = vi.fn(async () => undefined);
+
+      const result = await assistantCommandsFeature.onText?.(
+        makeContext({
+          normalizedText: "portal",
+          messageText: "Portal",
+          requestPortalHandoff,
+          sendText,
+        })
+      );
+
+      expect(result).toEqual({ handled: true });
+      expect(sendText).toHaveBeenCalledWith(t("en", translationKey));
+    }
+  );
+
   it("shows contextual help when user has not uploaded a photo yet", async () => {
     const sendText = vi.fn(async () => undefined);
     const sendActions = vi.fn(async () => undefined);
