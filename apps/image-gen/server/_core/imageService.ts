@@ -9,15 +9,7 @@ import {
   type GenerationMetrics,
   type OpenAiImageQuality,
 } from "./image-generation/openAiImageClient";
-import {
-  buildSourceImageEditPrompt,
-  buildTextToImagePrompt,
-} from "./image-generation/promptBuilder";
-import {
-  type DownloadedSourceImage,
-  logSourceImageFetchStart,
-  resolveStoredSourceImage,
-} from "./image-generation/sourceImageFetcher";
+import { prepareGenerationInput } from "./image-generation/generationInputPreparer";
 import {
   getConfiguredBaseUrl,
   hasObjectStorageConfig,
@@ -117,27 +109,8 @@ type GeneratorInput = {
   generatedImagePublishHooks?: GeneratedImagePublishHooks;
 };
 
-type PreparedGenerationInput = {
-  hasSourceImage: boolean;
-  prompt: string;
-  sourceImage: DownloadedSourceImage;
-  promptBuildMs: number;
-};
-
 function ensureGeneratedImageBuffer(buffer: Buffer): Buffer {
   return buffer;
-}
-
-function buildPromptForGeneration(input: GeneratorInput): string {
-  if (input.generationKind === "text_to_image") {
-    return buildTextToImagePrompt(input.promptHint ?? "");
-  }
-
-  if (input.generationKind === "source_image_edit") {
-    return buildSourceImageEditPrompt(input.promptHint ?? "");
-  }
-
-  return buildSourceImageEditPrompt(input.promptHint ?? "");
 }
 
 export function getGeneratorStartupConfig(): {
@@ -187,34 +160,6 @@ function getImageProvider(): ImageProvider {
   throw new Error(
     `Unsupported IMAGE_PROVIDER "${configured}". Expected "${OPENAI_IMAGES_PROVIDER}".`
   );
-}
-
-async function prepareGenerationInput(
-  input: GeneratorInput
-): Promise<PreparedGenerationInput> {
-  // TODO: collapse this orchestration into a dedicated ImageService once prompt and source-image paths are fully extracted.
-  logSourceImageFetchStart(input);
-  const sourceImage = await resolveStoredSourceImage(input);
-  const promptStartedAt = Date.now();
-  const prompt = buildPromptForGeneration(input);
-  const promptBuildMs = Date.now() - promptStartedAt;
-  safeLog("image_prompt_built", {
-    reqId: input.reqId,
-    generationKind: input.generationKind ?? null,
-    durationMs: promptBuildMs,
-    promptChars: prompt.length,
-  });
-
-  return {
-    hasSourceImage: computeHasSourceImage(input),
-    prompt,
-    sourceImage,
-    promptBuildMs,
-  };
-}
-
-function computeHasSourceImage(input: GeneratorInput): boolean {
-  return Boolean(input.sourceImageUrl || input.sourceImageData);
 }
 
 function logImageProviderUsed(

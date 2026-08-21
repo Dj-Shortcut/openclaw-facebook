@@ -24,6 +24,9 @@ jobs:
           node-version: 24
           cache: npm
 
+      - name: Validate managed redeploy boundary
+        run: npm run gateway:deployment-safety
+
       - name: Check latest OpenClaw version
         id: latest
         run: |
@@ -103,6 +106,13 @@ jobs:
           - Updates package metadata, lockfiles, manifest expectations, ClawHub listing, and Fly gateway build arg to ${OPENCLAW_VERSION}
           - Runs build, runtime-contract validation, tests, and pack dry-run
           - Follow docs/openclaw-update.md for review, deploy verification, ClawHub/npm release, and rollback
+
+          Production handoff status:
+
+          - target_app: leaderbot-openclaw-gateway
+          - approval_status: pending
+          - This draft does not deploy, read Fly secrets, or mutate a running machine.
+          - Before production approval, record current_image and rollback_image and follow deploy/fly-gateway/managed-redeploy-handoff.md.
           EOF
 
       - name: Create pull request
@@ -112,19 +122,26 @@ jobs:
           OPENCLAW_VERSION: ${{ steps.latest.outputs.latest }}
         run: |
           branch="chore/update-openclaw-${OPENCLAW_VERSION}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout -B "$branch"
-          git add package.json package-lock.json pnpm-lock.yaml manifest.test.ts deploy/fly-gateway/Dockerfile docs/clawhub-listing.md
-          git commit -m "Update OpenClaw to ${OPENCLAW_VERSION}"
-          git push --force-with-lease origin "$branch"
           is_pr_policy_denial() {
             local operation="$1"
             local error_output="$2"
             grep -qiE "Resource not accessible by integration|GraphQL.*${operation}|${operation}.*(forbidden|not authorized|permission)" <<<"$error_output"
           }
 
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add package.json package-lock.json pnpm-lock.yaml manifest.test.ts deploy/fly-gateway/Dockerfile docs/clawhub-listing.md
+          git commit -m "Update OpenClaw to ${OPENCLAW_VERSION}"
+
           if gh pr view "$branch" >/dev/null 2>&1; then
+            if [ "$(gh pr view "$branch" --json isDraft --jq '.isDraft')" != "true" ]; then
+              if ! draft_err="$(gh pr ready "$branch" --undo 2>&1)"; then
+                echo "$draft_err" >&2
+                exit 1
+              fi
+            fi
+            git push --force-with-lease origin "$branch"
             if ! edit_err="$(gh pr edit "$branch" \
               --title "Update OpenClaw to ${OPENCLAW_VERSION}" \
               --body-file /tmp/openclaw-update-pr-body.md 2>&1)"; then
@@ -135,16 +152,20 @@ jobs:
                 exit 1
               fi
             fi
-          elif ! create_err="$(gh pr create \
-            --base main \
-            --head "$branch" \
-            --title "Update OpenClaw to ${OPENCLAW_VERSION}" \
-            --body-file /tmp/openclaw-update-pr-body.md 2>&1)"; then
-            if is_pr_policy_denial "createPullRequest" "$create_err"; then
-              echo "::notice::Pushed $branch, but GitHub token policy blocked PR creation. Open the PR manually from the pushed branch."
-            else
-              echo "$create_err" >&2
-              exit 1
+          else
+            git push --force-with-lease origin "$branch"
+            if ! create_err="$(gh pr create \
+              --base main \
+              --head "$branch" \
+              --draft \
+              --title "Update OpenClaw to ${OPENCLAW_VERSION}" \
+              --body-file /tmp/openclaw-update-pr-body.md 2>&1)"; then
+              if is_pr_policy_denial "createPullRequest" "$create_err"; then
+                echo "::notice::Pushed $branch, but GitHub token policy blocked PR creation. Open the PR manually from the pushed branch."
+              else
+                echo "$create_err" >&2
+                exit 1
+              fi
             fi
           fi
         shell: bash

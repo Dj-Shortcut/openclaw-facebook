@@ -10,6 +10,21 @@ The current authoritative maintainer/operator workflow is
 only describes a future dashboard handoff that must preserve that workflow's
 approval, validation, and rollback guarantees.
 
+## Enforced Repository Boundary
+
+The scheduled/manual dependency workflow may prepare a draft PR, but it may not
+deploy, request a deploy identity token, read Fly secrets, or approve its own
+production handoff. Draft PR copy must keep `approval_status: pending` and link
+this document. CI enforces those invariants together with the reviewed Fly model,
+heap, VM memory, and public-route settings:
+
+```bash
+npm run gateway:deployment-safety
+```
+
+The validator is deliberately static and dependency-free. It does not replace
+operator review, image capture, deployment verification, or rollback approval.
+
 ## Goals
 
 - Require explicit operator approval before any production redeploy.
@@ -82,7 +97,8 @@ comments, or dashboard-visible status details.
    `pending`.
 3. Automation opens or updates a PR by running
    `npm run openclaw:update -- <version>` and keeps the Facebook plugin peer
-   range compatible with that OpenClaw release.
+   range compatible with that OpenClaw release. A newly created automated PR
+   remains a draft and cannot be treated as production approval.
 4. CI verifies the PR with the gateway checks and any targeted compatibility
    tests.
 5. Operator reviews the diff, Meta/webhook impact, rollback image, and

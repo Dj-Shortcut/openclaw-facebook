@@ -1,5 +1,6 @@
 import { getOpenAiImageModelConfig } from "./imageServiceConfig";
 import { safeLog } from "../logger";
+import { canRetryAttempt, getExponentialRetryDelayMs } from "./retryPolicy";
 
 class OpenAiGenerationError extends Error {}
 export class OpenAiBudgetExceededError extends Error {}
@@ -607,7 +608,6 @@ export async function fetchOpenAiImageResponse(
   const openAiRetryBaseMs = getOpenAiRetryBaseMs();
   const openAiTimeoutMs = getOpenAiTimeoutMs();
 
-  // TODO: unify this retry loop with sourceImageFetcher download retries once both flows can share a typed retry helper.
   for (let attempt = 0; attempt <= openAiRetryLimit; attempt += 1) {
     const openAiStartedAt = Date.now();
     let providerTransportStarted = false;
@@ -656,10 +656,13 @@ export async function fetchOpenAiImageResponse(
       }
 
       if (
-        attempt < openAiRetryLimit &&
-        isRetryableResponseStatus(response.status)
+        canRetryAttempt({
+          attempt,
+          maxRetries: openAiRetryLimit,
+          retryable: isRetryableResponseStatus(response.status),
+        })
       ) {
-        const waitMs = openAiRetryBaseMs * 2 ** attempt;
+        const waitMs = getExponentialRetryDelayMs(openAiRetryBaseMs, attempt);
         safeLog("openai_generation_retry", {
           level: "warn",
           reqId: context.reqId,
@@ -694,8 +697,14 @@ export async function fetchOpenAiImageResponse(
         throw error;
       }
 
-      if (attempt < openAiRetryLimit && isRetryableNetworkError(error)) {
-        const waitMs = openAiRetryBaseMs * 2 ** attempt;
+      if (
+        canRetryAttempt({
+          attempt,
+          maxRetries: openAiRetryLimit,
+          retryable: isRetryableNetworkError(error),
+        })
+      ) {
+        const waitMs = getExponentialRetryDelayMs(openAiRetryBaseMs, attempt);
         safeLog("openai_generation_retry", {
           level: "warn",
           reqId: context.reqId,

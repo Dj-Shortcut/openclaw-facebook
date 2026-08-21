@@ -51,29 +51,35 @@ describe("source image fetcher", () => {
 
   it("pins the outbound request to a validated public DNS address", async () => {
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS = "scontent.xx.fbcdn.net";
-    setSourceImageDnsLookupForTests(async () => [{ address: "31.13.84.36", family: 4 }]);
+    setSourceImageDnsLookupForTests(async () => [
+      { address: "31.13.84.36", family: 4 },
+    ]);
 
     const fixture = Buffer.alloc(7000, 9);
     const sourceImageUrl =
       "https://scontent-atl3-3.xx.fbcdn.net/v/t39.30808-6/photo.jpg?stp=dst-jpg";
 
-    mockHttpsRequest.mockImplementation((input: unknown, callback?: (res: IncomingMessage) => void) => {
-      const requestOptions = input as {
-        hostname?: string;
-        servername?: string;
-        headers?: Record<string, string>;
-      };
-      callback?.(
-        createHttpResponse({
-          statusCode: 200,
-          statusMessage: "OK",
-          headers: { "content-type": "image/jpeg" },
-          body: fixture,
-        })
-      );
-      expect(requestOptions.headers?.host).toBe("scontent-atl3-3.xx.fbcdn.net");
-      return new PassThrough() as ClientRequest;
-    });
+    mockHttpsRequest.mockImplementation(
+      (input: unknown, callback?: (res: IncomingMessage) => void) => {
+        const requestOptions = input as {
+          hostname?: string;
+          servername?: string;
+          headers?: Record<string, string>;
+        };
+        callback?.(
+          createHttpResponse({
+            statusCode: 200,
+            statusMessage: "OK",
+            headers: { "content-type": "image/jpeg" },
+            body: fixture,
+          })
+        );
+        expect(requestOptions.headers?.host).toBe(
+          "scontent-atl3-3.xx.fbcdn.net"
+        );
+        return new PassThrough() as ClientRequest;
+      }
+    );
 
     const downloaded = await fetchExternalSourceImageForIngress({
       sourceImageUrl,
@@ -89,6 +95,112 @@ describe("source image fetcher", () => {
     });
   });
 
+  it("accepts typed fetch config without reading the process allowlist", async () => {
+    delete process.env.SOURCE_IMAGE_ALLOWED_HOSTS;
+    setSourceImageDnsLookupForTests(async () => [
+      { address: "31.13.84.36", family: 4 },
+    ]);
+    const fixture = Buffer.alloc(7000, 4);
+    mockHttpsRequest.mockImplementation(
+      (_: unknown, callback?: (res: IncomingMessage) => void) => {
+        callback?.(
+          createHttpResponse({
+            statusCode: 200,
+            statusMessage: "OK",
+            headers: { "content-type": "image/jpeg" },
+            body: fixture,
+          })
+        );
+        return new PassThrough() as ClientRequest;
+      }
+    );
+
+    const downloaded = await fetchExternalSourceImageForIngress({
+      sourceImageUrl:
+        "https://scontent-atl3-3.xx.fbcdn.net/v/t39.30808-6/photo.jpg",
+      reqId: "req-typed-source-config",
+      fetchConfig: {
+        allowedHosts: ["scontent.xx.fbcdn.net"],
+        retryLimit: 0,
+        timeoutMs: 2_500,
+      },
+    });
+
+    expect(downloaded.buffer).toEqual(fixture);
+    expect(mockHttpsRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a retryable response when retryLimit is zero", async () => {
+    setSourceImageDnsLookupForTests(async () => [
+      { address: "31.13.84.36", family: 4 },
+    ]);
+    const fixture = Buffer.alloc(7000, 4);
+    const requestAttempt = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: new Response("temporary", { status: 503 }),
+        contentType: "text/plain",
+      })
+      .mockResolvedValueOnce({
+        response: new Response(new Uint8Array(fixture), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+        contentType: "image/jpeg",
+      });
+    setSourceImageRequestForTests(requestAttempt);
+
+    await expect(
+      fetchExternalSourceImageForIngress({
+        sourceImageUrl:
+          "https://scontent-atl3-3.xx.fbcdn.net/v/t39.30808-6/photo.jpg",
+        reqId: "req-no-source-retry",
+        fetchConfig: {
+          allowedHosts: ["scontent.xx.fbcdn.net"],
+          retryLimit: 0,
+          timeoutMs: 2_500,
+        },
+      })
+    ).rejects.toThrow("Failed to download source image (503)");
+
+    expect(requestAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries once when retryLimit is one", async () => {
+    setSourceImageDnsLookupForTests(async () => [
+      { address: "31.13.84.36", family: 4 },
+    ]);
+    const fixture = Buffer.alloc(7000, 4);
+    const requestAttempt = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: new Response("temporary", { status: 503 }),
+        contentType: "text/plain",
+      })
+      .mockResolvedValueOnce({
+        response: new Response(new Uint8Array(fixture), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+        contentType: "image/jpeg",
+      });
+    setSourceImageRequestForTests(requestAttempt);
+
+    const downloaded = await fetchExternalSourceImageForIngress({
+      sourceImageUrl:
+        "https://scontent-atl3-3.xx.fbcdn.net/v/t39.30808-6/photo.jpg",
+      reqId: "req-single-source-retry",
+      fetchConfig: {
+        allowedHosts: ["scontent.xx.fbcdn.net"],
+        retryLimit: 1,
+        timeoutMs: 2_500,
+      },
+    });
+
+    expect(downloaded.buffer).toEqual(fixture);
+    expect(requestAttempt).toHaveBeenCalledTimes(2);
+  });
+
   it("tries another validated public DNS address when the first connection fails", async () => {
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS = "scontent.xx.fbcdn.net";
     setSourceImageDnsLookupForTests(async () => [
@@ -97,26 +209,31 @@ describe("source image fetcher", () => {
     ]);
 
     const fixture = Buffer.alloc(7000, 9);
-    mockHttpsRequest.mockImplementation((input: unknown, callback?: (res: IncomingMessage) => void) => {
-      const requestOptions = input as { hostname?: string };
-      const request = new PassThrough() as ClientRequest;
-      if (requestOptions.hostname === "2001:db8::1") {
-        process.nextTick(() => {
-          request.emit("error", Object.assign(new Error("unreachable"), { code: "ENETUNREACH" }));
-        });
+    mockHttpsRequest.mockImplementation(
+      (input: unknown, callback?: (res: IncomingMessage) => void) => {
+        const requestOptions = input as { hostname?: string };
+        const request = new PassThrough() as ClientRequest;
+        if (requestOptions.hostname === "2001:db8::1") {
+          process.nextTick(() => {
+            request.emit(
+              "error",
+              Object.assign(new Error("unreachable"), { code: "ENETUNREACH" })
+            );
+          });
+          return request;
+        }
+
+        callback?.(
+          createHttpResponse({
+            statusCode: 200,
+            statusMessage: "OK",
+            headers: { "content-type": "image/jpeg" },
+            body: fixture,
+          })
+        );
         return request;
       }
-
-      callback?.(
-        createHttpResponse({
-          statusCode: 200,
-          statusMessage: "OK",
-          headers: { "content-type": "image/jpeg" },
-          body: fixture,
-        })
-      );
-      return request;
-    });
+    );
 
     const downloaded = await fetchExternalSourceImageForIngress({
       sourceImageUrl:
@@ -126,20 +243,26 @@ describe("source image fetcher", () => {
 
     expect(downloaded.buffer).toEqual(fixture);
     expect(mockHttpsRequest).toHaveBeenCalledTimes(2);
-    expect(mockHttpsRequest.mock.calls.map(call => (call[0] as { hostname?: string }).hostname)).toEqual([
-      "2001:db8::1",
-      "31.13.84.36",
-    ]);
+    expect(
+      mockHttpsRequest.mock.calls.map(
+        call => (call[0] as { hostname?: string }).hostname
+      )
+    ).toEqual(["2001:db8::1", "31.13.84.36"]);
   });
 
   it("normalizes pinned request network failures to missing input image errors", async () => {
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS = "scontent.xx.fbcdn.net";
-    setSourceImageDnsLookupForTests(async () => [{ address: "31.13.84.36", family: 4 }]);
+    setSourceImageDnsLookupForTests(async () => [
+      { address: "31.13.84.36", family: 4 },
+    ]);
 
     mockHttpsRequest.mockImplementation(() => {
       const request = new PassThrough() as ClientRequest;
       process.nextTick(() => {
-        request.emit("error", Object.assign(new Error("reset"), { code: "ECONNRESET" }));
+        request.emit(
+          "error",
+          Object.assign(new Error("reset"), { code: "ECONNRESET" })
+        );
       });
       return request;
     });
@@ -155,7 +278,9 @@ describe("source image fetcher", () => {
 
   it("blocks source-image fetches when DNS resolves to private addresses", async () => {
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS = "scontent.xx.fbcdn.net";
-    setSourceImageDnsLookupForTests(async () => [{ address: "10.0.0.1", family: 4 }]);
+    setSourceImageDnsLookupForTests(async () => [
+      { address: "10.0.0.1", family: 4 },
+    ]);
 
     await expect(
       fetchExternalSourceImageForIngress({
@@ -183,18 +308,22 @@ describe("source image fetcher", () => {
 
   it("keeps redirects blocked for source-image fetches", async () => {
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS = "scontent.xx.fbcdn.net";
-    setSourceImageDnsLookupForTests(async () => [{ address: "31.13.84.36", family: 4 }]);
+    setSourceImageDnsLookupForTests(async () => [
+      { address: "31.13.84.36", family: 4 },
+    ]);
 
-    mockHttpsRequest.mockImplementation((_: unknown, callback?: (res: IncomingMessage) => void) => {
-      callback?.(
-        createHttpResponse({
-          statusCode: 301,
-          statusMessage: "Moved Permanently",
-          headers: { location: "https://malicious.example/redirected" },
-        })
-      );
-      return new PassThrough() as ClientRequest;
-    });
+    mockHttpsRequest.mockImplementation(
+      (_: unknown, callback?: (res: IncomingMessage) => void) => {
+        callback?.(
+          createHttpResponse({
+            statusCode: 301,
+            statusMessage: "Moved Permanently",
+            headers: { location: "https://malicious.example/redirected" },
+          })
+        );
+        return new PassThrough() as ClientRequest;
+      }
+    );
 
     await expect(
       fetchExternalSourceImageForIngress({
@@ -207,20 +336,24 @@ describe("source image fetcher", () => {
 
   it("allows regional Meta scontent hosts when the Meta CDN pattern is configured", async () => {
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS = "scontent.xx.fbcdn.net";
-    setSourceImageDnsLookupForTests(async () => [{ address: "31.13.84.36", family: 4 }]);
+    setSourceImageDnsLookupForTests(async () => [
+      { address: "31.13.84.36", family: 4 },
+    ]);
     const fixture = Buffer.alloc(7000, 9);
 
-    mockHttpsRequest.mockImplementation((_: unknown, callback?: (res: IncomingMessage) => void) => {
-      callback?.(
-        createHttpResponse({
-          statusCode: 200,
-          statusMessage: "OK",
-          headers: { "content-type": "image/jpeg" },
-          body: fixture,
-        })
-      );
-      return new PassThrough() as ClientRequest;
-    });
+    mockHttpsRequest.mockImplementation(
+      (_: unknown, callback?: (res: IncomingMessage) => void) => {
+        callback?.(
+          createHttpResponse({
+            statusCode: 200,
+            statusMessage: "OK",
+            headers: { "content-type": "image/jpeg" },
+            body: fixture,
+          })
+        );
+        return new PassThrough() as ClientRequest;
+      }
+    );
 
     const downloaded = await fetchExternalSourceImageForIngress({
       sourceImageUrl:

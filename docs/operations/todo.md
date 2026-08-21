@@ -5,12 +5,21 @@
 
 ## Verified snapshot
 
-- Last reviewed against code: **2026-08-18**, current Sol draft branch; the
+- Last reviewed against code: **2026-08-22**, current Sol draft branch; the
   exact reviewed head is recorded in PR #375 and its checks.
 - PR #375 has a last-green draft repository savepoint and a current hardening
   batch under validation. It is not merged or deployed; commercial/live billing
   remains disabled. PR #376 is merged and present in this branch. The abandoned
   identity-v2 WIP snapshot and commit `e378bff` remain explicitly excluded.
+- 2026-08-21 issue #393 deep-audit remediation is merged into `main` through
+  PR #394 and integrated into this branch:
+  root `npm audit` moved from 11 advisories to zero and image-gen `pnpm audit`
+  from five to zero through scoped transitive overrides; bridge transport and
+  Messenger intent classification gained focused tests while the existing
+  89-test monitor suite was retained; source-image config, retry policy, and
+  generation-input preparation were extracted behind typed/tested boundaries;
+  and the Fly model/memory plus managed-redeploy invariants are now CI-checked.
+  This is repository evidence only, not production rollout proof.
 - Latest operator production verification: **2026-06-30** live Messenger smoke and `delete-my-data` flow verified by operator.
 - Current direction: generic prompt-first image generation; legacy style-picker UI, quick-reply flows, and director-mode preset plumbing are removed. Internal style-preset compatibility may remain only as backend fallback.
 - Product direction: `leaderbot.live` becomes a tenant/customer portal for managing each customer's own AI. The OpenClaw/Messenger gateway remains shielded and is not the customer-facing app.

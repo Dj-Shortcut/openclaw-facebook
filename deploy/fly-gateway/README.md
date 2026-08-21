@@ -65,6 +65,26 @@ every controlled test deployment.
 
 The container preserves `/data/openclaw.json` and only seeds non-secret defaults when missing:
 
+### Reviewed model and memory settings
+
+`OPENCLAW_AGENT_MODEL=openai/gpt-5.4-mini` is intentional, not a placeholder.
+OpenAI documents `gpt-5.4-mini` as a supported current alias; OpenClaw uses the
+provider-qualified `openai/` prefix. Do not silently replace it with a `latest`
+alias during dependency updates. Re-evaluate model quality, cost, latency, tool
+support, and rollback behavior in a dedicated review before changing it.
+
+The 4 GiB Fly VM deliberately caps the V8 old-space heap at 1536 MiB. The
+remaining memory is reserved for Node/native allocations, OpenClaw runtime
+overhead, buffers, and the operating system. Increase the heap only after
+production memory/GC evidence, a canary, and rollback approval; increasing it
+speculatively can turn recoverable pressure into a machine-level OOM.
+
+The checked-in values and the non-deploying update boundary are enforced by:
+
+```bash
+npm run gateway:deployment-safety
+```
+
 - `OPENCLAW_WORKSPACE_DIR` defaults to `/data/workspace` for static instruction files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, and `IDENTITY.md`). Public Messenger memory plugins, session-memory hooks, compaction memory flushes, and memory tools are disabled because this gateway serves multiple tenant Pages.
 - Startup moves any legacy shared `USER.md`, `MEMORY.md`, or `memory/` content to the recoverable, operator-only `/data/private-memory-quarantine-v1` directory before accepting traffic. If shared memory reappears after a prior quarantine, startup fails closed instead of overwriting either copy.
 - `session.dmScope` is forced to `per-account-channel-peer`, keeping direct-message history isolated by Page account, channel, and sender even when an older persisted config used OpenClaw's shared `main` default.
