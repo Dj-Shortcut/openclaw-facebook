@@ -9,6 +9,7 @@ import path from "path";
 import { createServer } from "http";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { assertAuthConfig, registerOAuthRoutes } from "./auth";
+import { isDirectFacebookLoginConfigured } from "./oauth";
 import { assertWhatsAppConfig } from "./env";
 import { captureBotWebhookRawBody, getBotStartupConfig } from "./bot";
 import { assertProductionImageStorageConfig } from "./image-generation/imageServiceConfig";
@@ -258,7 +259,7 @@ async function startServer() {
   }
 
   const oauthServerUrl = process.env.OAUTH_SERVER_URL;
-  if (oauthServerUrl) {
+  if (oauthServerUrl || isDirectFacebookLoginConfigured()) {
     registerOAuthRoutes(app);
   } else {
     safeLog("oauth_routes_skipped", { reason: "missing_oauth_server_url" });

@@ -21,6 +21,7 @@ export type SendPortalHandoffInput = {
   now?: Date;
   ttlMs?: number;
   deliveryIdempotencyKey?: string | null;
+  messageVariant?: "onboarding" | "portal_reentry" | "admin_onboarding";
 };
 
 export type SendPortalHandoffResult =
@@ -63,8 +64,43 @@ export function buildPortalHandoffUrl(token: string, baseUrl?: string): string {
 
 function buildPortalHandoffMessage(
   handoffUrl: string,
-  state: MessengerUserState
+  state: MessengerUserState,
+  variant: SendPortalHandoffInput["messageVariant"] = "onboarding"
 ): string {
+  if (variant === "portal_reentry") {
+    if (state.preferredLang === "nl") {
+      return [
+        "Open je Leaderbot-klantenportaal via deze beveiligde link:",
+        handoffUrl,
+        "Meld je aan met hetzelfde Facebook-account. De link is tijdelijk en werkt maar een keer.",
+      ].join("\n\n");
+    }
+
+    return [
+      "Open your Leaderbot customer portal with this secure link:",
+      handoffUrl,
+      "Sign in with the same Facebook account. The link is temporary and can only be used once.",
+    ].join("\n\n");
+  }
+
+  if (variant === "admin_onboarding") {
+    if (state.preferredLang === "nl") {
+      return [
+        "Je Messenger-beheerdersidentiteit is geverifieerd.",
+        "Open deze beveiligde link om je Leaderbot-klantenportaal te activeren:",
+        handoffUrl,
+        "De link verloopt snel en werkt maar een keer. Deel hem met niemand.",
+      ].join("\n\n");
+    }
+
+    return [
+      "Your Messenger administrator identity is verified.",
+      "Open this secure link to activate your Leaderbot customer portal:",
+      handoffUrl,
+      "The link expires soon and only works once. Do not share it.",
+    ].join("\n\n");
+  }
+
   if (state.preferredLang === "nl") {
     return [
       "Je premium setup is klaar.",
@@ -188,7 +224,7 @@ export async function sendPortalHandoffLink(
     const handoffUrl = buildPortalHandoffUrl(tokenResult.token, input.baseUrl);
     const outcome = await sendText(
       state.psid,
-      buildPortalHandoffMessage(handoffUrl, state),
+      buildPortalHandoffMessage(handoffUrl, state, input.messageVariant),
       { pageId }
     );
 

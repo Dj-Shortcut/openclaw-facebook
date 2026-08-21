@@ -8,6 +8,7 @@ import { safeLog } from "./logger";
 import { isFacebookLoginMethod } from "./portalAuthPolicy";
 
 const OAUTH_STATE_COOKIE_NAME = "lb_oauth_state_nonce";
+const FACEBOOK_OAUTH_TIMEOUT_MS = 10_000;
 
 type OAuthStatePayload = {
   nonce: string;
@@ -62,6 +63,102 @@ function clearOAuthStateCookie(req: Request, res: Response) {
     sameSite: "lax",
   });
 }
+
+function getFacebookLoginConfig(): {
+  appId: string;
+  appSecret: string;
+  graphVersion: string;
+  redirectUri: string;
+} | null {
+  const appId = process.env.FB_APP_ID?.trim();
+  const appSecret = process.env.FB_APP_SECRET?.trim();
+  const baseUrl = process.env.APP_BASE_URL?.trim();
+  const graphVersion = process.env.FB_GRAPH_API_VERSION?.trim() || "v21.0";
+  if (!appId || !appSecret || !baseUrl || !/^v\d+\.\d+$/.test(graphVersion)) {
+    return null;
+  }
+
+  try {
+    const url = new URL(baseUrl);
+    const localHttp =
+      url.protocol === "http:" &&
+      (url.hostname === "localhost" || url.hostname === "127.0.0.1");
+    if (url.protocol !== "https:" && !localHttp) return null;
+    if (url.username || url.password) return null;
+    return {
+      appId,
+      appSecret,
+      graphVersion,
+      redirectUri: `${url.origin}/api/oauth/callback`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function isDirectFacebookLoginConfigured(): boolean {
+  return Boolean(getFacebookLoginConfig());
+}
+
+function encodeOAuthState(payload: OAuthStatePayload): string {
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
+}
+
+async function getFacebookLoginIdentity(
+  code: string,
+  redirectUri: string,
+  config: NonNullable<ReturnType<typeof getFacebookLoginConfig>>
+): Promise<{ openId: string; name: string | null; email: string | null }> {
+  if (redirectUri !== config.redirectUri) {
+    throw new Error("facebook oauth redirect URI mismatch");
+  }
+
+  const tokenUrl = new URL(
+    `https://graph.facebook.com/${config.graphVersion}/oauth/access_token`
+  );
+  tokenUrl.searchParams.set("client_id", config.appId);
+  tokenUrl.searchParams.set("client_secret", config.appSecret);
+  tokenUrl.searchParams.set("redirect_uri", redirectUri);
+  tokenUrl.searchParams.set("code", code);
+  const tokenResponse = await fetch(tokenUrl, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(FACEBOOK_OAUTH_TIMEOUT_MS),
+  });
+  if (!tokenResponse.ok) {
+    throw new Error(`facebook login token exchange failed: ${tokenResponse.status}`);
+  }
+  const token = (await tokenResponse.json()) as { access_token?: unknown };
+  if (typeof token.access_token !== "string" || !token.access_token) {
+    throw new Error("facebook login token exchange returned no access token");
+  }
+
+  const profileUrl = new URL(
+    `https://graph.facebook.com/${config.graphVersion}/me`
+  );
+  profileUrl.searchParams.set("fields", "id,name,email");
+  profileUrl.searchParams.set("access_token", token.access_token);
+  const profileResponse = await fetch(profileUrl, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(FACEBOOK_OAUTH_TIMEOUT_MS),
+  });
+  if (!profileResponse.ok) {
+    throw new Error(`facebook login profile lookup failed: ${profileResponse.status}`);
+  }
+  const profile = (await profileResponse.json()) as {
+    id?: unknown;
+    name?: unknown;
+    email?: unknown;
+  };
+  if (typeof profile.id !== "string" || !profile.id) {
+    throw new Error("facebook login profile returned no id");
+  }
+
+  return {
+    openId: `facebook:${profile.id}`,
+    name: typeof profile.name === "string" ? profile.name : null,
+    email: typeof profile.email === "string" ? profile.email : null,
+  };
+}
 function parseOAuthState(state: string): OAuthStatePayload | null {
   try {
     const decoded = Buffer.from(state, "base64").toString("utf8");
@@ -94,6 +191,39 @@ function validateOAuthState(
 }
 
 export function registerOAuthRoutes(app: Express) {
+  app.get("/api/oauth/facebook/start", (req: Request, res: Response) => {
+    const config = getFacebookLoginConfig();
+    if (!config) {
+      res.status(503).json({ error: "Facebook Login is not configured" });
+      return;
+    }
+
+    const nonce = crypto.randomBytes(24).toString("base64url");
+    const returnTo = getSafeReturnTo(getQueryParam(req, "returnTo"));
+    const state = encodeOAuthState({
+      nonce,
+      redirectUri: config.redirectUri,
+      ...(returnTo ? { returnTo } : {}),
+    });
+    const cookieOptions = getSessionCookieOptions(req);
+    res.cookie(OAUTH_STATE_COOKIE_NAME, nonce, {
+      ...cookieOptions,
+      path: "/api/oauth/callback",
+      sameSite: "lax",
+      maxAge: 10 * 60 * 1000,
+    });
+
+    const authorizationUrl = new URL(
+      `https://www.facebook.com/${config.graphVersion}/dialog/oauth`
+    );
+    authorizationUrl.searchParams.set("client_id", config.appId);
+    authorizationUrl.searchParams.set("redirect_uri", config.redirectUri);
+    authorizationUrl.searchParams.set("state", state);
+    authorizationUrl.searchParams.set("response_type", "code");
+    authorizationUrl.searchParams.set("scope", "public_profile,email");
+    res.redirect(302, authorizationUrl.toString());
+  });
+
   app.get("/api/oauth/callback", (req: Request, res: Response) => {
     void (async () => {
       const parsedQuery = oauthCallbackQuerySchema.safeParse({
@@ -118,12 +248,24 @@ export function registerOAuthRoutes(app: Express) {
 
       try {
         const { sdk } = await import("./sdk");
-        const tokenResponse = await sdk.exchangeCodeForToken(
-          code,
-          validatedState.redirectUri
-        );
-        const userInfo = await sdk.getUserInfo(tokenResponse.accessToken);
-        const loginMethod = userInfo.loginMethod ?? userInfo.platform ?? null;
+        const facebookConfig = getFacebookLoginConfig();
+        const userInfo = facebookConfig
+          ? {
+              ...(await getFacebookLoginIdentity(
+                code,
+                validatedState.redirectUri,
+                facebookConfig
+              )),
+              loginMethod: "facebook",
+            }
+          : await (async () => {
+              const tokenResponse = await sdk.exchangeCodeForToken(
+                code,
+                validatedState.redirectUri
+              );
+              return sdk.getUserInfo(tokenResponse.accessToken);
+            })();
+        const loginMethod = userInfo.loginMethod ?? null;
 
         if (!userInfo.openId) {
           clearOAuthStateCookie(req, res);
@@ -176,3 +318,4 @@ export function registerOAuthRoutes(app: Express) {
     })();
   });
 }
+import crypto from "node:crypto";

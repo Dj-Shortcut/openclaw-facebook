@@ -1,18 +1,5 @@
 import type { BotFeature } from "../features";
-
-function isAdmin(psid: string, userId: string): boolean {
-  const configured = (process.env.MESSENGER_ADMIN_IDS ?? "")
-    .split(",")
-    .map(value => value.trim())
-    .filter(Boolean);
-
-  if (configured.length === 0) {
-    return false;
-  }
-
-  const allowed = new Set(configured);
-  return allowed.has(psid) || allowed.has(userId);
-}
+import { isMessengerAdmin } from "../../messengerAdmin";
 
 function formatUptime(totalSeconds: number): string {
   const safeSeconds = Math.max(0, Math.floor(totalSeconds));
@@ -33,7 +20,7 @@ export const statsFeature: BotFeature = {
       return { handled: false };
     }
 
-    if (!isAdmin(context.senderId, context.userId)) {
+    if (!isMessengerAdmin(context.senderId, context.userId)) {
       return { handled: false };
     }
 

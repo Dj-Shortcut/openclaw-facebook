@@ -60,6 +60,7 @@ describe("client public runtime config", () => {
             configured: true,
             portalUrl: "https://oauth.example.com",
             appId: "leaderbot-public-app",
+            loginUrl: null,
           },
         }),
         { status: 200, headers: { "Content-Type": "application/json" } }
@@ -88,13 +89,44 @@ describe("client public runtime config", () => {
         async () =>
           new Response(
             JSON.stringify({
-              oauth: { configured: false, portalUrl: null, appId: null },
+              oauth: {
+                configured: false,
+                portalUrl: null,
+                appId: null,
+                loginUrl: null,
+              },
             }),
             { status: 200, headers: { "Content-Type": "application/json" } }
           )
       )
     );
     expect(isLoginConfigured()).toBe(false);
+  });
+
+  it("uses the same-origin Facebook login start route when configured", async () => {
+    const { getLoginUrl, isLoginConfigured, loadPublicRuntimeConfig } =
+      await importClientPublicConfig();
+    await loadPublicRuntimeConfig(
+      vi.fn<typeof fetch>(async () =>
+        new Response(
+          JSON.stringify({
+            oauth: {
+              configured: true,
+              portalUrl: null,
+              appId: null,
+              loginUrl: "/api/oauth/facebook/start",
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      )
+    );
+
+    expect(isLoginConfigured()).toBe(true);
+    stubBrowser();
+    expect(getLoginUrl("/handoff/token-123")).toBe(
+      "https://leaderbot.live/api/oauth/facebook/start?returnTo=%2Fhandoff%2Ftoken-123"
+    );
   });
 
   it.each([

@@ -6,6 +6,7 @@ type PublicOAuthConfig = {
   configured: boolean;
   portalUrl: string | null;
   appId: string | null;
+  loginUrl: string | null;
 };
 
 export type PublicRuntimeConfig = {
@@ -36,18 +37,38 @@ function readPublicOAuthPortalUrl(env: NodeJS.ProcessEnv): string | null {
   return null;
 }
 
+function isDirectFacebookOAuthConfigured(env: NodeJS.ProcessEnv): boolean {
+  if (!env.FB_APP_ID?.trim() || !env.FB_APP_SECRET?.trim()) return false;
+  try {
+    const url = new URL(env.APP_BASE_URL?.trim() ?? "");
+    const localHttp =
+      url.protocol === "http:" &&
+      (url.hostname === "localhost" || url.hostname === "127.0.0.1");
+    return (
+      (url.protocol === "https:" || localHttp) &&
+      !url.username &&
+      !url.password
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function getPublicRuntimeConfig(
   env: NodeJS.ProcessEnv = process.env
 ): PublicRuntimeConfig {
+  const directFacebookConfigured = isDirectFacebookOAuthConfigured(env);
   const portalUrl = readPublicOAuthPortalUrl(env);
   const appId = (env.VITE_APP_ID ?? "").trim() || null;
-  const configured = Boolean(portalUrl && appId);
+  const externalOAuthConfigured = Boolean(portalUrl && appId);
+  const configured = directFacebookConfigured || externalOAuthConfigured;
 
   return {
     oauth: {
       configured,
-      portalUrl: configured ? portalUrl : null,
-      appId: configured ? appId : null,
+      portalUrl: externalOAuthConfigured ? portalUrl : null,
+      appId: externalOAuthConfigured ? appId : null,
+      loginUrl: directFacebookConfigured ? "/api/oauth/facebook/start" : null,
     },
   };
 }

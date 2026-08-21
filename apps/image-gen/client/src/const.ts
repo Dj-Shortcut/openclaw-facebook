@@ -7,8 +7,9 @@ const PUBLIC_CONFIG_PATH = "/api/public/config";
 const PUBLIC_CONFIG_TIMEOUT_MS = 5_000;
 
 type OAuthBrowserConfig = {
-  portalUrl: string;
-  appId: string;
+  portalUrl: string | null;
+  appId: string | null;
+  loginUrl: string | null;
 };
 
 let runtimeOAuthConfig: OAuthBrowserConfig | null | undefined;
@@ -40,7 +41,9 @@ function getBuildTimeOAuthConfig(): OAuthBrowserConfig | null {
     import.meta.env.VITE_OAUTH_PORTAL_URL
   );
   const appId = getOptionalEnvString(import.meta.env.VITE_APP_ID)?.trim();
-  return portalUrl && appId ? { portalUrl, appId } : null;
+  return portalUrl && appId
+    ? { portalUrl, appId, loginUrl: null }
+    : null;
 }
 
 function parsePublicRuntimeConfig(value: unknown): OAuthBrowserConfig | null {
@@ -50,9 +53,16 @@ function parsePublicRuntimeConfig(value: unknown): OAuthBrowserConfig | null {
   const candidate = oauth as Record<string, unknown>;
   if (candidate.configured !== true) return null;
 
+  const loginUrl = getOptionalEnvString(candidate.loginUrl)?.trim();
+  if (loginUrl === "/api/oauth/facebook/start") {
+    return { portalUrl: null, appId: null, loginUrl };
+  }
+
   const portalUrl = normalizeOAuthPortalUrl(candidate.portalUrl);
   const appId = getOptionalEnvString(candidate.appId)?.trim();
-  return portalUrl && appId ? { portalUrl, appId } : null;
+  return portalUrl && appId
+    ? { portalUrl, appId, loginUrl: null }
+    : null;
 }
 
 function getOAuthBrowserConfig(): OAuthBrowserConfig | null {
@@ -145,6 +155,15 @@ export const getLoginUrl = (returnTo?: string) => {
   if (!oauthConfig) {
     return null;
   }
+
+  if (oauthConfig.loginUrl) {
+    const url = new URL(oauthConfig.loginUrl, window.location.origin);
+    const safeReturnTo = getSafeReturnTo(returnTo);
+    if (safeReturnTo) url.searchParams.set("returnTo", safeReturnTo);
+    return url.toString();
+  }
+
+  if (!oauthConfig.portalUrl || !oauthConfig.appId) return null;
 
   const nonce = createOAuthNonce();
   const state = encodeOAuthState(redirectUri, nonce, returnTo);
