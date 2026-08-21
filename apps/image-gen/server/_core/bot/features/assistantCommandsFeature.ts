@@ -3,6 +3,7 @@ import type { BotTextContext } from "../../botContext";
 import { t } from "../../i18n";
 import {
   buildAssistantPhotoHelpResponse,
+  buildPortalEnrollmentResponse,
   buildQuickStartResponse,
 } from "../../conversationActions";
 
@@ -122,14 +123,21 @@ export const assistantCommandsFeature: BotFeature = {
   async onText(ctx) {
     if (PORTAL_COMMANDS.has(ctx.normalizedText) && ctx.requestPortalHandoff) {
       const result = await ctx.requestPortalHandoff();
+      if (result === "not_linked") {
+        const response = buildPortalEnrollmentResponse(ctx.lang);
+        if (response.actions?.length) {
+          await ctx.sendActions(response.text ?? "", response.actions);
+        } else {
+          await ctx.sendText(t(ctx.lang, "portalLinkNotLinked"));
+        }
+        return { handled: true };
+      }
       await ctx.sendText(
         t(
           ctx.lang,
           result === "sent"
             ? "portalLinkSent"
-            : result === "not_linked"
-              ? "portalLinkNotLinked"
-              : "portalLinkUnavailable"
+            : "portalLinkUnavailable"
         )
       );
       return { handled: true };

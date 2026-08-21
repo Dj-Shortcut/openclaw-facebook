@@ -1566,6 +1566,11 @@ describe("messenger webhook dedupe", () => {
           title: "Privacy",
           payload: "OPENCLAW_ACTION:Privacy",
         },
+        {
+          content_type: "text",
+          title: "Klantenportaal",
+          payload: "OPENCLAW_ACTION:portal",
+        },
       ]
     );
     expect(
@@ -2432,6 +2437,11 @@ describe("messenger deterministic free text", () => {
           title: "Privacy",
           payload: "OPENCLAW_ACTION:Privacy",
         },
+        {
+          content_type: "text",
+          title: "Klantenportaal",
+          payload: "OPENCLAW_ACTION:portal",
+        },
       ]
     );
     expect(
@@ -2651,6 +2661,11 @@ describe("messenger greeting behavior", () => {
         content_type: "text",
         title: "Privacy",
         payload: "OPENCLAW_ACTION:Privacy",
+      },
+      {
+        content_type: "text",
+        title: "Klantenportaal",
+        payload: "OPENCLAW_ACTION:portal",
       },
     ]);
   });

@@ -7,18 +7,30 @@ import {
   buildGenerationFailureResponse,
   buildGenerationSuccessResponse,
   buildImageUploadFailureResponse,
+  buildPortalEnrollmentResponse,
 } from "./_core/conversationActions";
-import { renderMessengerQuickReplies } from "./_core/messengerActionRenderer";
+import {
+  renderMessengerQuickReplies,
+  renderMessengerUrlButtons,
+} from "./_core/messengerActionRenderer";
 import { decodeMessengerActionInput } from "./_core/messengerActionPayload";
 
 describe("conversation actions", () => {
   const originalFaceMemoryRetentionDays = process.env.FACE_MEMORY_RETENTION_DAYS;
+  const originalNodeEnv = process.env.NODE_ENV;
+  const originalPortalBaseUrl = process.env.PORTAL_BASE_URL;
 
   afterEach(() => {
     if (originalFaceMemoryRetentionDays === undefined) {
       delete process.env.FACE_MEMORY_RETENTION_DAYS;
     } else {
       process.env.FACE_MEMORY_RETENTION_DAYS = originalFaceMemoryRetentionDays;
+    }
+    process.env.NODE_ENV = originalNodeEnv;
+    if (originalPortalBaseUrl === undefined) {
+      delete process.env.PORTAL_BASE_URL;
+    } else {
+      process.env.PORTAL_BASE_URL = originalPortalBaseUrl;
     }
   });
 
@@ -29,6 +41,7 @@ describe("conversation actions", () => {
         { id: "new_image", label: "Nieuwe afbeelding", inputText: "new_image" },
         { id: "edit_photo", label: "Pas foto aan", inputText: "Pas foto aan" },
         { id: "privacy", label: "Privacy", inputText: "Privacy" },
+        { id: "portal", label: "Klantenportaal", inputText: "portal" },
       ],
     });
   });
@@ -45,8 +58,36 @@ describe("conversation actions", () => {
           inputText: "change_background",
         },
         { id: "privacy", label: "Privacy", inputText: "Privacy" },
+        { id: "portal", label: "Customer portal", inputText: "portal" },
       ],
     });
+  });
+
+  it("builds a tenant-safe Messenger enrollment button for new portal users", () => {
+    process.env.NODE_ENV = "production";
+    process.env.PORTAL_BASE_URL = "https://app.leaderbot.live";
+
+    const response = buildPortalEnrollmentResponse("nl");
+    expect(response).toEqual({
+      text:
+        "Word lid van Leaderbot of meld je aan om je afgeschermde klantenportaal te openen.",
+      actions: [
+        {
+          id: "open_customer_portal",
+          label: "Open klantenportaal",
+          url: "https://app.leaderbot.live/api/oauth/start?returnTo=%2Fportal",
+        },
+      ],
+    });
+    expect(renderMessengerQuickReplies(response.actions)).toEqual([]);
+    expect(renderMessengerUrlButtons(response.actions)).toEqual([
+      {
+        type: "web_url",
+        title: "Open klantenportaal",
+        url: "https://app.leaderbot.live/api/oauth/start?returnTo=%2Fportal",
+        webview_height_ratio: "full",
+      },
+    ]);
   });
 
   it("renders neutral actions as Messenger quick replies at the channel edge", () => {

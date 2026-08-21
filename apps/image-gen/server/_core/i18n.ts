@@ -66,6 +66,9 @@ type TranslationKey =
   | "outOfFreeCredits"
   | "startpilotQuotaReached"
   | "openLeaderbot"
+  | "openPortal"
+  | "portalAction"
+  | "portalJoinPrompt"
   | "portalLinkSent"
   | "portalLinkNotLinked"
   | "portalLinkUnavailable"
@@ -145,6 +148,10 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     startpilotQuotaReached:
       "Je Startpilot-tegoed is opgebruikt. Open Leaderbot om je gebruik te bekijken of een nieuw pakket te kiezen.",
     openLeaderbot: "Open Leaderbot",
+    openPortal: "Open klantenportaal",
+    portalAction: "Klantenportaal",
+    portalJoinPrompt:
+      "Word lid van Leaderbot of meld je aan om je afgeschermde klantenportaal te openen.",
     generationGenericFailure: "Ik kon die afbeelding nu niet maken.",
     errorFallback: "Er liep iets mis aan mijn kant. Probeer gerust opnieuw.",
     unsupportedMedia:
@@ -264,6 +271,10 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     startpilotQuotaReached:
       "Your Startpilot credit is used up. Open Leaderbot to review usage or choose a new package.",
     openLeaderbot: "Open Leaderbot",
+    openPortal: "Open customer portal",
+    portalAction: "Customer portal",
+    portalJoinPrompt:
+      "Join Leaderbot or sign in to open your private customer portal.",
     generationGenericFailure: "I could not generate that image right now.",
     errorFallback: "Something went wrong on my side. Please try again.",
     unsupportedMedia:
