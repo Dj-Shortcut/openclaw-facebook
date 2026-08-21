@@ -7,11 +7,11 @@ import {
   getFacebookOAuthUrl,
   getStoredFacebookState,
   REQUIRED_FACEBOOK_SCOPES,
-  sealFacebookPageToken,
   startFacebookConnect,
   storeFacebookPages,
   validateStoredFacebookState,
 } from "./facebookConnectStore";
+import { connectAuthorizedFacebookPage } from "./facebookPageConnection";
 import {
   claimPortalHandoffToken,
   getPortalHandoffContext,
@@ -646,6 +646,11 @@ export const portalRouter = router({
         }
 
         const stored = await getStoredFacebookState(input.state);
+        if (stored?.pages) {
+          return {
+            pages: stored.pages.map(redactFacebookPageToken),
+          };
+        }
         const code = input.code ?? stored?.authorizationCode;
         if (!code || code !== stored?.authorizationCode) {
           throw badRequest(
@@ -695,28 +700,11 @@ export const portalRouter = router({
           throw badRequest(error, "facebook page was not authorized");
         }
 
-        const hasAllScopes = REQUIRED_FACEBOOK_SCOPES.every(scope =>
-          page.grantedScopes.includes(scope)
-        );
-        await db.upsertChannelConnection({
-          workspaceId: input.workspaceId,
-          channel: "facebook_messenger",
-          status: hasAllScopes ? "connected" : "missing_permissions",
-          externalId: page.id,
-          displayName: page.name,
-          grantedScopes: page.grantedScopes,
-          encryptedAccessToken: sealFacebookPageToken(page.accessToken),
-          lastCheckedAt: new Date(),
-        });
-        await db.insertAuditLog({
+        await connectAuthorizedFacebookPage({
           workspaceId: input.workspaceId,
           userId: ctx.user.id,
-          event: "facebook_page.selected",
-          metadata: {
-            pageId: page.id,
-            pageName: page.name,
-            status: hasAllScopes ? "connected" : "missing_permissions",
-          },
+          page,
+          source: "customer_app",
         });
         return { success: true } as const;
       }),

@@ -45,6 +45,7 @@ import {
 } from "./portalLocales";
 
 const FACEBOOK_CONNECT_STATE_KEY = "leaderbot.facebookConnectState";
+const FACEBOOK_CONNECT_QUERY_KEY = "facebookConnectState";
 const LOCALE_STORAGE_KEY = "leaderbot.portal.locale";
 const BILLING_RETURN_FAILURE_STATUSES = new Set<string>([
   "failed",
@@ -297,6 +298,14 @@ function getBillingReturnIntent() {
     : null;
 }
 
+function getFacebookConnectStateFromLocation() {
+  if (typeof window === "undefined") return null;
+  const state = new URLSearchParams(window.location.search).get(
+    FACEBOOK_CONNECT_QUERY_KEY
+  );
+  return state && /^[A-Za-z0-9_-]{32}$/.test(state) ? state : null;
+}
+
 function Home() {
   const auth = useAuth();
   const utils = trpc.useUtils();
@@ -307,6 +316,8 @@ function Home() {
   const [showHandoffBanner] = useState(hasHandoffOnboardingFlag);
   const [billingReturnIntent] = useState(getBillingReturnIntent);
   const billingReturnHandled = useRef(false);
+  const facebookAutoCompleteState = useRef<string | null>(null);
+  const facebookAutoSelectState = useRef<string | null>(null);
   const billingProfileAttestationRequestId = useRef<string | null>(null);
   const [peppolEvidenceReference, setPeppolEvidenceReference] = useState("");
   const [peppolEvidenceConfirmed, setPeppolEvidenceConfirmed] = useState(false);
@@ -339,9 +350,16 @@ function Home() {
     name: "",
     sourceReference: "",
   });
+  const [facebookConnectStateFromLogin] = useState(
+    getFacebookConnectStateFromLocation
+  );
   const [facebookConnectState, setFacebookConnectState] = useState<
     string | null
-  >(() => readBrowserStorage(FACEBOOK_CONNECT_STATE_KEY));
+  >(
+    () =>
+      facebookConnectStateFromLogin ??
+      readBrowserStorage(FACEBOOK_CONNECT_STATE_KEY)
+  );
   const [facebookConnectPages, setFacebookConnectPages] = useState<
     FacebookConnectPage[]
   >([]);
@@ -353,6 +371,21 @@ function Home() {
   useEffect(() => {
     document.documentElement.lang = locale;
   }, [locale]);
+
+  useEffect(() => {
+    if (!facebookConnectStateFromLogin || typeof window === "undefined") return;
+    writeBrowserStorage(
+      FACEBOOK_CONNECT_STATE_KEY,
+      facebookConnectStateFromLogin
+    );
+    const url = new URL(window.location.href);
+    url.searchParams.delete(FACEBOOK_CONNECT_QUERY_KEY);
+    window.history.replaceState(
+      null,
+      "",
+      `${url.pathname}${url.search}${url.hash}`
+    );
+  }, [facebookConnectStateFromLogin]);
 
   const changeLocale = (nextLocale: AppLocale) => {
     setLocale(nextLocale);
@@ -421,6 +454,8 @@ function Home() {
     { workspaceId: workspaceId ?? 0 },
     { enabled: Boolean(workspaceId) }
   );
+  const facebookStatus =
+    channelStatusQuery.data?.facebook.status ?? "disconnected";
   const usageQuery = trpc.portal.usage.summary.useQuery(
     { workspaceId: workspaceId ?? 0 },
     { enabled: Boolean(workspaceId) }
@@ -539,7 +574,9 @@ function Home() {
   const facebookCompleteMutation =
     trpc.portal.facebook.completeConnect.useMutation({
       onSuccess: data => {
-        setFacebookConnectIssue(null);
+        setFacebookConnectIssue(
+          data.pages.length === 0 ? copy.messenger.noManagedPages : null
+        );
         setFacebookConnectPages(data.pages);
       },
     });
@@ -565,6 +602,59 @@ function Home() {
         await utils.portal.channels.status.invalidate({ workspaceId });
       },
     });
+  const completeFacebookConnect = facebookCompleteMutation.mutate;
+  const selectFacebookPageFromAuthorization = facebookSelectPageMutation.mutate;
+  const facebookPageSelectionPending = facebookSelectPageMutation.isPending;
+  const singleAuthorizedFacebookPageId =
+    facebookConnectPages.length === 1 ? facebookConnectPages[0]?.id : null;
+
+  useEffect(() => {
+    if (
+      !workspaceId ||
+      !facebookConnectState ||
+      facebookStatus === "connected" ||
+      facebookConnectPages.length > 0 ||
+      facebookAutoCompleteState.current === facebookConnectState
+    ) {
+      return;
+    }
+    facebookAutoCompleteState.current = facebookConnectState;
+    completeFacebookConnect({
+      workspaceId,
+      state: facebookConnectState,
+    });
+  }, [
+    completeFacebookConnect,
+    facebookConnectPages.length,
+    facebookConnectState,
+    facebookStatus,
+    workspaceId,
+  ]);
+
+  useEffect(() => {
+    if (
+      !workspaceId ||
+      !facebookConnectState ||
+      !singleAuthorizedFacebookPageId ||
+      facebookPageSelectionPending
+    ) {
+      return;
+    }
+    const selectionKey = `${facebookConnectState}:${singleAuthorizedFacebookPageId}`;
+    if (facebookAutoSelectState.current === selectionKey) return;
+    facebookAutoSelectState.current = selectionKey;
+    selectFacebookPageFromAuthorization({
+      workspaceId,
+      state: facebookConnectState,
+      pageId: singleAuthorizedFacebookPageId,
+    });
+  }, [
+    facebookConnectState,
+    facebookPageSelectionPending,
+    selectFacebookPageFromAuthorization,
+    singleAuthorizedFacebookPageId,
+    workspaceId,
+  ]);
   const aiIdentityMutation = trpc.portal.aiIdentity.update.useMutation({
     onSuccess: async () => {
       if (!workspaceId) return;
@@ -650,8 +740,6 @@ function Home() {
   }, [auth.isAuthenticated, isLoading, showBillingSection]);
   const upgradeRequests = upgradeRequestsQuery.data ?? [];
   const latestUpgradeRequest = upgradeRequests[0];
-  const facebookStatus =
-    channelStatusQuery.data?.facebook.status ?? "disconnected";
   const knowledgeSources = knowledgeQuery.data?.sources ?? [];
   const privacyRequests = privacyRequestsQuery.data ?? [];
   const privacyRequestsError = privacyRequestsQuery.error;

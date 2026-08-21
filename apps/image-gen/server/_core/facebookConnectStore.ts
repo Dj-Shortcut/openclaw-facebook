@@ -15,7 +15,7 @@ export const REQUIRED_FACEBOOK_SCOPES = [
 
 type RequiredFacebookScope = (typeof REQUIRED_FACEBOOK_SCOPES)[number];
 
-type FacebookConnectPage = {
+export type FacebookConnectPage = {
   id: string;
   name: string;
   grantedScopes: RequiredFacebookScope[];
@@ -29,6 +29,7 @@ type StoredFacebookConnectState = FacebookConnectState & {
 
 const facebookConnectStates = new Map<string, StoredFacebookConnectState>();
 const FACEBOOK_CONNECT_STATE_TTL_SECONDS = 10 * 60;
+const FACEBOOK_GRAPH_TIMEOUT_MS = 10_000;
 
 function getFacebookConnectKey(state: string) {
   return `portal:facebook_connect:${state}`;
@@ -194,38 +195,25 @@ type FacebookAccountsResponse = {
   }>;
 };
 
-export async function exchangeFacebookCodeForPages(code: string) {
-  const appId = process.env.FB_APP_ID;
-  const appSecret = process.env.FB_APP_SECRET;
-  if (!appId || !appSecret) {
-    throw new Error("facebook oauth is not configured");
-  }
-
-  const tokenUrl = new URL(
-    `https://graph.facebook.com/${getFacebookApiVersion()}/oauth/access_token`
-  );
-  tokenUrl.searchParams.set("client_id", appId);
-  tokenUrl.searchParams.set("client_secret", appSecret);
-  tokenUrl.searchParams.set("redirect_uri", getFacebookRedirectUri());
-  tokenUrl.searchParams.set("code", code);
-
-  const tokenResponse = await fetch(tokenUrl);
-  if (!tokenResponse.ok) {
-    throw new Error(`facebook token exchange failed: ${tokenResponse.status}`);
-  }
-
-  const token = (await tokenResponse.json()) as FacebookTokenResponse;
-  if (!token.access_token) {
-    throw new Error("facebook token exchange did not return an access token");
+export async function getFacebookPagesForUserAccessToken(
+  accessToken: string
+): Promise<FacebookConnectPage[]> {
+  if (!accessToken) {
+    throw new Error("facebook user access token is required");
   }
 
   const accountsUrl = new URL(
     `https://graph.facebook.com/${getFacebookApiVersion()}/me/accounts`
   );
   accountsUrl.searchParams.set("fields", "id,name,access_token,perms,tasks");
-  accountsUrl.searchParams.set("access_token", token.access_token);
 
-  const accountsResponse = await fetch(accountsUrl);
+  const accountsResponse = await fetch(accountsUrl, {
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    signal: AbortSignal.timeout(FACEBOOK_GRAPH_TIMEOUT_MS),
+  });
   if (!accountsResponse.ok) {
     throw new Error(`facebook page lookup failed: ${accountsResponse.status}`);
   }
@@ -254,6 +242,37 @@ export async function exchangeFacebookCodeForPages(code: string) {
         return false;
       }),
     }));
+}
+
+export async function exchangeFacebookCodeForPages(code: string) {
+  const appId = process.env.FB_APP_ID;
+  const appSecret = process.env.FB_APP_SECRET;
+  if (!appId || !appSecret) {
+    throw new Error("facebook oauth is not configured");
+  }
+
+  const tokenUrl = new URL(
+    `https://graph.facebook.com/${getFacebookApiVersion()}/oauth/access_token`
+  );
+  tokenUrl.searchParams.set("client_id", appId);
+  tokenUrl.searchParams.set("client_secret", appSecret);
+  tokenUrl.searchParams.set("redirect_uri", getFacebookRedirectUri());
+  tokenUrl.searchParams.set("code", code);
+
+  const tokenResponse = await fetch(tokenUrl, {
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(FACEBOOK_GRAPH_TIMEOUT_MS),
+  });
+  if (!tokenResponse.ok) {
+    throw new Error(`facebook token exchange failed: ${tokenResponse.status}`);
+  }
+
+  const token = (await tokenResponse.json()) as FacebookTokenResponse;
+  if (!token.access_token) {
+    throw new Error("facebook token exchange did not return an access token");
+  }
+
+  return getFacebookPagesForUserAccessToken(token.access_token);
 }
 
 export function sealFacebookPageToken(token: string) {

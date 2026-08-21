@@ -98,7 +98,9 @@ The portal router requires a valid session. Most procedures also require a `work
 - **Type:** Mutation
 - **Auth:** Protected
 - **Input:** `{ workspaceId: string, state: string, code?: string }`
-- **Response:** List of authorized Facebook Pages.
+- **Response:** List of authorized Facebook Pages. Pages already obtained by the
+  direct Facebook Login callback are returned from the tenant-bound short-lived
+  server state without a second OAuth code exchange.
 
 ### `portal.facebook.selectPage`
 

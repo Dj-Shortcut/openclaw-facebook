@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TrpcContext } from "./_core/context";
+import {
+  startFacebookConnect,
+  storeFacebookPages,
+} from "./_core/facebookConnectStore";
 import { portalRouter } from "./_core/portalRouter";
 
 const mocks = vi.hoisted(() => ({
@@ -61,8 +65,7 @@ vi.mock("./_core/portalHandoff", () => ({
 }));
 
 vi.mock("./_core/portalHandoffSecurity", () => ({
-  isPortalHandoffTenantBoundaryReady:
-    mocks.isPortalHandoffTenantBoundaryReady,
+  isPortalHandoffTenantBoundaryReady: mocks.isPortalHandoffTenantBoundaryReady,
 }));
 
 const user: NonNullable<TrpcContext["user"]> = {
@@ -161,7 +164,10 @@ describe("portal router tenant isolation", () => {
       })
     );
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
     expect(mocks.updateAiIdentity).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
@@ -173,7 +179,10 @@ describe("portal router tenant isolation", () => {
     await expectForbidden(() => caller.auth.session());
 
     expect(mocks.getOrCreateUserWorkspace).toHaveBeenCalledWith(user);
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
   });
 
   it("rejects non-Facebook customer sessions before creating a workspace", async () => {
@@ -195,7 +204,10 @@ describe("portal router tenant isolation", () => {
 
     await expectForbidden(() => caller.workspace.update(workspaceUpdateInput));
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
     expect(mocks.updateWorkspace).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
@@ -205,7 +217,10 @@ describe("portal router tenant isolation", () => {
 
     await expectForbidden(() => caller.workspace.members({ workspaceId }));
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
     expect(mocks.listWorkspaceMembers).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
@@ -239,7 +254,10 @@ describe("portal router tenant isolation", () => {
 
     await expectForbidden(() => caller.facebook.startConnect({ workspaceId }));
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 
@@ -248,7 +266,10 @@ describe("portal router tenant isolation", () => {
 
     await expectForbidden(() => caller.facebook.disconnect({ workspaceId }));
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
     expect(mocks.listChannelConnections).not.toHaveBeenCalled();
     expect(mocks.disconnectChannelConnection).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
@@ -261,7 +282,10 @@ describe("portal router tenant isolation", () => {
       caller.privacy.updateControls(privacyControlsUpdateInput)
     );
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
     expect(mocks.updateWorkspacePrivacySettings).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
@@ -269,9 +293,14 @@ describe("portal router tenant isolation", () => {
   it("rejects cross-workspace knowledge source registration before mutating data", async () => {
     const caller = createCaller();
 
-    await expectForbidden(() => caller.knowledge.registerSource(knowledgeSourceInput));
+    await expectForbidden(() =>
+      caller.knowledge.registerSource(knowledgeSourceInput)
+    );
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
     expect(mocks.registerWorkspaceKnowledgeSource).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
@@ -283,7 +312,10 @@ describe("portal router tenant isolation", () => {
       caller.knowledge.disableSource({ workspaceId, sourceId: 11 })
     );
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
     expect(mocks.disableWorkspaceKnowledgeSource).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
@@ -291,9 +323,14 @@ describe("portal router tenant isolation", () => {
   it("rejects cross-workspace privacy requests before mutating data", async () => {
     const caller = createCaller();
 
-    await expectForbidden(() => caller.privacy.createRequest(privacyRequestInput));
+    await expectForbidden(() =>
+      caller.privacy.createRequest(privacyRequestInput)
+    );
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
     expect(mocks.createWorkspacePrivacyRequest).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
@@ -313,8 +350,13 @@ describe("portal router tenant isolation", () => {
       "Database unavailable: privacy requests were not loaded"
     );
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
-    expect(mocks.listWorkspacePrivacyRequests).toHaveBeenCalledWith(workspaceId);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
+    expect(mocks.listWorkspacePrivacyRequests).toHaveBeenCalledWith(
+      workspaceId
+    );
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 });
@@ -340,7 +382,9 @@ describe("portal router audit logging", () => {
     };
     mocks.updateAiIdentity.mockResolvedValue(updatedIdentity);
 
-    await expect(caller.aiIdentity.update(aiIdentityUpdateInput)).resolves.toEqual(updatedIdentity);
+    await expect(
+      caller.aiIdentity.update(aiIdentityUpdateInput)
+    ).resolves.toEqual(updatedIdentity);
 
     expect(mocks.insertAuditLog).toHaveBeenCalledWith({
       workspaceId,
@@ -361,11 +405,14 @@ describe("portal router audit logging", () => {
     };
     mocks.updateWorkspace.mockResolvedValue(updatedWorkspace);
 
-    await expect(caller.workspace.update(workspaceUpdateInput)).resolves.toEqual(
-      updatedWorkspace
-    );
+    await expect(
+      caller.workspace.update(workspaceUpdateInput)
+    ).resolves.toEqual(updatedWorkspace);
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
     expect(mocks.updateWorkspace).toHaveBeenCalledWith(workspaceId, {
       name: workspaceUpdateInput.name,
     });
@@ -392,9 +439,14 @@ describe("portal router audit logging", () => {
     ];
     mocks.listWorkspaceMembers.mockResolvedValue(members);
 
-    await expect(caller.workspace.members({ workspaceId })).resolves.toEqual(members);
+    await expect(caller.workspace.members({ workspaceId })).resolves.toEqual(
+      members
+    );
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
     expect(mocks.listWorkspaceMembers).toHaveBeenCalledWith(workspaceId);
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
@@ -409,7 +461,10 @@ describe("portal router audit logging", () => {
       "Database unavailable: workspace members were not loaded"
     );
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
     expect(mocks.listWorkspaceMembers).toHaveBeenCalledWith(workspaceId);
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
@@ -436,7 +491,10 @@ describe("portal router audit logging", () => {
     });
 
     expect(mocks.getOrCreateUserWorkspace).toHaveBeenCalledWith(user);
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
     expect(mocks.getOrCreateAiIdentity).not.toHaveBeenCalled();
     expect(mocks.listChannelConnections).not.toHaveBeenCalled();
     expect(mocks.listWorkspaceKnowledgeSources).not.toHaveBeenCalled();
@@ -460,7 +518,10 @@ describe("portal router audit logging", () => {
     });
 
     expect(mocks.getOrCreateUserWorkspace).not.toHaveBeenCalled();
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
     expect(mocks.getWorkspaceById).toHaveBeenCalledWith(workspaceId);
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
@@ -494,7 +555,9 @@ describe("portal router audit logging", () => {
     expect(mocks.claimPortalHandoffToken).toHaveBeenCalledWith(token, user.id);
     expect(mocks.addWorkspaceMember).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
-    expect(JSON.stringify(mocks.insertAuditLog.mock.calls)).not.toContain(token);
+    expect(JSON.stringify(mocks.insertAuditLog.mock.calls)).not.toContain(
+      token
+    );
     expect(JSON.stringify(mocks.insertAuditLog.mock.calls)).not.toContain(
       "hashed-sender-key"
     );
@@ -556,7 +619,9 @@ describe("portal router audit logging", () => {
     try {
       delete process.env.FB_APP_ID;
 
-      await expect(caller.facebook.startConnect({ workspaceId })).resolves.toMatchObject({
+      await expect(
+        caller.facebook.startConnect({ workspaceId })
+      ).resolves.toMatchObject({
         authorizationUrl: null,
         callbackMode: "hosted",
       });
@@ -575,6 +640,64 @@ describe("portal router audit logging", () => {
       metadata: {
         scopes: ["pages_show_list", "pages_manage_metadata", "pages_messaging"],
       },
+    });
+  });
+
+  it("returns login-authorized Pages without exchanging a second OAuth code", async () => {
+    const caller = createCaller();
+    mocks.getWorkspaceMembership.mockResolvedValue({
+      workspaceId,
+      userId: user.id,
+      role: "owner",
+    });
+    const state = await startFacebookConnect({
+      workspaceId,
+      userId: user.id,
+    });
+    await storeFacebookPages({
+      state: state.state,
+      pages: [
+        {
+          id: "page-1",
+          name: "Page One",
+          accessToken: "server-only-page-token",
+          grantedScopes: [
+            "pages_show_list",
+            "pages_manage_metadata",
+            "pages_messaging",
+          ],
+        },
+        {
+          id: "page-2",
+          name: "Page Two",
+          accessToken: "server-only-page-token-2",
+          grantedScopes: ["pages_show_list"],
+        },
+      ],
+    });
+
+    await expect(
+      caller.facebook.completeConnect({
+        workspaceId,
+        state: state.state,
+      })
+    ).resolves.toEqual({
+      pages: [
+        {
+          id: "page-1",
+          name: "Page One",
+          grantedScopes: [
+            "pages_show_list",
+            "pages_manage_metadata",
+            "pages_messaging",
+          ],
+        },
+        {
+          id: "page-2",
+          name: "Page Two",
+          grantedScopes: ["pages_show_list"],
+        },
+      ],
     });
   });
 
@@ -602,7 +725,10 @@ describe("portal router audit logging", () => {
       status: "disconnected",
     });
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
     expect(mocks.disconnectChannelConnection).toHaveBeenCalledWith(
       workspaceId,
       "facebook_messenger"
@@ -651,9 +777,14 @@ describe("portal router audit logging", () => {
     };
     mocks.getWorkspaceUsageSummary.mockResolvedValue(usageSummary);
 
-    await expect(caller.usage.summary({ workspaceId })).resolves.toEqual(usageSummary);
+    await expect(caller.usage.summary({ workspaceId })).resolves.toEqual(
+      usageSummary
+    );
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
     expect(mocks.getWorkspaceUsageSummary).toHaveBeenCalledWith(workspaceId);
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
@@ -705,7 +836,10 @@ describe("portal router audit logging", () => {
       createdRequest
     );
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
     expect(mocks.getWorkspaceUsageSummary).toHaveBeenCalledWith(workspaceId);
     expect(mocks.createWorkspaceUpgradeRequest).toHaveBeenCalledWith(
       workspaceId,
@@ -754,12 +888,17 @@ describe("portal router audit logging", () => {
     ];
     mocks.listWorkspaceUpgradeRequests.mockResolvedValue(requests);
 
-    await expect(caller.usage.upgradeRequests({ workspaceId })).resolves.toEqual(
-      requests
-    );
+    await expect(
+      caller.usage.upgradeRequests({ workspaceId })
+    ).resolves.toEqual(requests);
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
-    expect(mocks.listWorkspaceUpgradeRequests).toHaveBeenCalledWith(workspaceId);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
+    expect(mocks.listWorkspaceUpgradeRequests).toHaveBeenCalledWith(
+      workspaceId
+    );
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 
@@ -782,10 +921,17 @@ describe("portal router audit logging", () => {
     ];
     mocks.listWorkspaceKnowledgeSources.mockResolvedValue(sources);
 
-    await expect(caller.knowledge.list({ workspaceId })).resolves.toEqual(sources);
+    await expect(caller.knowledge.list({ workspaceId })).resolves.toEqual(
+      sources
+    );
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
-    expect(mocks.listWorkspaceKnowledgeSources).toHaveBeenCalledWith(workspaceId);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
+    expect(mocks.listWorkspaceKnowledgeSources).toHaveBeenCalledWith(
+      workspaceId
+    );
     expect(mocks.registerWorkspaceKnowledgeSource).not.toHaveBeenCalled();
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
@@ -800,8 +946,13 @@ describe("portal router audit logging", () => {
       "Database unavailable: knowledge sources were not loaded"
     );
 
-    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(workspaceId, user.id);
-    expect(mocks.listWorkspaceKnowledgeSources).toHaveBeenCalledWith(workspaceId);
+    expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(
+      workspaceId,
+      user.id
+    );
+    expect(mocks.listWorkspaceKnowledgeSources).toHaveBeenCalledWith(
+      workspaceId
+    );
     expect(mocks.insertAuditLog).not.toHaveBeenCalled();
   });
 
@@ -818,11 +969,14 @@ describe("portal router audit logging", () => {
       caller.privacy.updateControls(privacyControlsUpdateInput)
     ).resolves.toEqual(updatedControls);
 
-    expect(mocks.updateWorkspacePrivacySettings).toHaveBeenCalledWith(workspaceId, {
-      allowKnowledgeIndexing: false,
-      allowUsageAnalytics: true,
-      imageMemoryRetentionDays: 14,
-    });
+    expect(mocks.updateWorkspacePrivacySettings).toHaveBeenCalledWith(
+      workspaceId,
+      {
+        allowKnowledgeIndexing: false,
+        allowUsageAnalytics: true,
+        imageMemoryRetentionDays: 14,
+      }
+    );
     expect(mocks.insertAuditLog).toHaveBeenCalledWith({
       workspaceId,
       userId: user.id,
@@ -851,15 +1005,18 @@ describe("portal router audit logging", () => {
     };
     mocks.registerWorkspaceKnowledgeSource.mockResolvedValue(registeredSource);
 
-    await expect(caller.knowledge.registerSource(knowledgeSourceInput)).resolves.toEqual(
-      registeredSource
-    );
+    await expect(
+      caller.knowledge.registerSource(knowledgeSourceInput)
+    ).resolves.toEqual(registeredSource);
 
-    expect(mocks.registerWorkspaceKnowledgeSource).toHaveBeenCalledWith(workspaceId, {
-      sourceType: "website",
-      name: "Support docs",
-      sourceReference: "https://example.com/help",
-    });
+    expect(mocks.registerWorkspaceKnowledgeSource).toHaveBeenCalledWith(
+      workspaceId,
+      {
+        sourceType: "website",
+        name: "Support docs",
+        sourceReference: "https://example.com/help",
+      }
+    );
     expect(mocks.insertAuditLog).toHaveBeenCalledWith({
       workspaceId,
       userId: user.id,
@@ -894,7 +1051,10 @@ describe("portal router audit logging", () => {
     mocks.disableWorkspaceKnowledgeSource.mockResolvedValue(disabledSource);
 
     await expect(
-      caller.knowledge.disableSource({ workspaceId, sourceId: disabledSource.id })
+      caller.knowledge.disableSource({
+        workspaceId,
+        sourceId: disabledSource.id,
+      })
     ).resolves.toEqual(disabledSource);
 
     expect(mocks.disableWorkspaceKnowledgeSource).toHaveBeenCalledWith(
@@ -933,9 +1093,9 @@ describe("portal router audit logging", () => {
     };
     mocks.createWorkspacePrivacyRequest.mockResolvedValue(createdRequest);
 
-    await expect(caller.privacy.createRequest(privacyRequestInput)).resolves.toEqual(
-      createdRequest
-    );
+    await expect(
+      caller.privacy.createRequest(privacyRequestInput)
+    ).resolves.toEqual(createdRequest);
 
     expect(mocks.createWorkspacePrivacyRequest).toHaveBeenCalledWith(
       workspaceId,

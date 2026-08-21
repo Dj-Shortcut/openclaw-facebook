@@ -149,7 +149,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       },
       {
         title: "Verbind Messenger",
-        body: "Koppel een Facebookpagina die je mag beheren via de beschikbare Meta-flow.",
+        body: "Facebook Login koppelt één beheerbare Pagina automatisch; bij meerdere Pagina's kies je alleen de juiste.",
       },
       {
         title: "Test met echte vragen",
@@ -296,7 +296,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       },
       {
         title: "Connectez Messenger",
-        body: "Utilisez le parcours Meta disponible pour une Page que vous pouvez gérer.",
+        body: "Facebook Login connecte automatiquement une Page administrable; s'il y en a plusieurs, choisissez simplement la bonne.",
       },
       {
         title: "Testez de vraies demandes",
@@ -445,7 +445,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       },
       {
         title: "Connect Messenger",
-        body: "Use the available Meta flow for a Page you are authorized to manage.",
+        body: "Facebook Login connects one manageable Page automatically; if there are several, just choose the right one.",
       },
       {
         title: "Test real questions",
