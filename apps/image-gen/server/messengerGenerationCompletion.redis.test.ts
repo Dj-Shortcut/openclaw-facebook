@@ -122,6 +122,9 @@ describe.skipIf(!enabled)("messenger completion Redis CAS", () => {
         first
       )
     ).rejects.toThrow("subject is erased");
+    await expect(
+      runDueMessengerGenerationArtifactCleanup(Date.now())
+    ).resolves.toBe(1);
     expect(storageDeleteMock).toHaveBeenCalledWith(
       "generated/late-after-erase.jpg"
     );

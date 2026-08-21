@@ -649,7 +649,12 @@ suite("Messenger state Redis privacy fence", () => {
         "whatsapp-transfer-completion",
         whatsappFence
       )
-    ).resolves.toBeNull();
+    ).resolves.toEqual(
+      expect.objectContaining({
+        imageUrl:
+          "https://assets.example/generated/images/whatsapp-transfer-completion.jpg",
+      })
+    );
     await expect(
       getMessengerGenerationCompletion(
         "unrelated-page-completion",
@@ -667,7 +672,7 @@ suite("Messenger state Redis privacy fence", () => {
     expect(mocks.storageDelete).toHaveBeenCalledWith(
       "generated/images/current-transfer-completion.jpg"
     );
-    expect(mocks.storageDelete).toHaveBeenCalledWith(
+    expect(mocks.storageDelete).not.toHaveBeenCalledWith(
       "generated/images/whatsapp-transfer-completion.jpg"
     );
     expect(mocks.storageDelete).not.toHaveBeenCalledWith(
