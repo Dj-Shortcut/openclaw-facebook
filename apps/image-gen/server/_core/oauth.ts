@@ -113,7 +113,9 @@ function getExternalOAuthLoginConfig(): {
 } | null {
   const appId = process.env.VITE_APP_ID?.trim();
   const rawPortalUrl = (
-    process.env.OAUTH_PORTAL_URL ?? process.env.OAUTH_SERVER_URL ?? ""
+    process.env.OAUTH_PORTAL_URL ??
+    process.env.OAUTH_SERVER_URL ??
+    ""
   ).trim();
   const rawBaseUrl = process.env.APP_BASE_URL?.trim();
   if (!appId || !rawPortalUrl || !rawBaseUrl) return null;
@@ -123,7 +125,8 @@ function getExternalOAuthLoginConfig(): {
     const baseUrl = new URL(rawBaseUrl);
     const portalLocal =
       portalUrl.protocol === "http:" &&
-      (portalUrl.hostname === "localhost" || portalUrl.hostname === "127.0.0.1");
+      (portalUrl.hostname === "localhost" ||
+        portalUrl.hostname === "127.0.0.1");
     const baseLocal =
       baseUrl.protocol === "http:" &&
       (baseUrl.hostname === "localhost" || baseUrl.hostname === "127.0.0.1");
@@ -172,7 +175,9 @@ async function getFacebookLoginIdentity(
     signal: AbortSignal.timeout(FACEBOOK_OAUTH_TIMEOUT_MS),
   });
   if (!tokenResponse.ok) {
-    throw new Error(`facebook login token exchange failed: ${tokenResponse.status}`);
+    throw new Error(
+      `facebook login token exchange failed: ${tokenResponse.status}`
+    );
   }
   const token = (await tokenResponse.json()) as { access_token?: unknown };
   if (typeof token.access_token !== "string" || !token.access_token) {
@@ -189,7 +194,9 @@ async function getFacebookLoginIdentity(
     signal: AbortSignal.timeout(FACEBOOK_OAUTH_TIMEOUT_MS),
   });
   if (!profileResponse.ok) {
-    throw new Error(`facebook login profile lookup failed: ${profileResponse.status}`);
+    throw new Error(
+      `facebook login profile lookup failed: ${profileResponse.status}`
+    );
   }
   const profile = (await profileResponse.json()) as {
     id?: unknown;
@@ -241,7 +248,8 @@ export function registerOAuthRoutes(app: Express) {
   const startOAuth = (req: Request, res: Response) => {
     const facebookConfig = getFacebookLoginConfig();
     const externalConfig = getExternalOAuthLoginConfig();
-    const redirectUri = facebookConfig?.redirectUri ?? externalConfig?.redirectUri;
+    const redirectUri =
+      facebookConfig?.redirectUri ?? externalConfig?.redirectUri;
     if (!redirectUri) {
       res.status(503).json({ error: "OAuth is not configured" });
       return;

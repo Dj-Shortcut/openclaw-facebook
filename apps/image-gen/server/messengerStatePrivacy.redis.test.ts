@@ -54,7 +54,11 @@ suite("Messenger state Redis privacy fence", () => {
     await expect(
       withFence(psid, 42, 7, 3, 5, async () => {
         await Promise.resolve(
-          setLastGenerationContext(psid, "must-not-survive", Date.now())
+          setLastGenerationContext(
+            psid,
+            { prompt: "must-not-survive" },
+            Date.now()
+          )
         );
       })
     ).rejects.toThrow("subject is erased");
@@ -99,7 +103,11 @@ suite("Messenger state Redis privacy fence", () => {
     await expect(
       withFence(psid, 84, 9, 1, 1, async () => {
         await Promise.resolve(
-          setLastGenerationContext(psid, "tenant-b-survives", Date.now())
+          setLastGenerationContext(
+            psid,
+            { prompt: "tenant-b-survives" },
+            Date.now()
+          )
         );
         return await Promise.resolve(getState(psid));
       })
