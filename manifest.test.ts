@@ -37,6 +37,7 @@ describe("openclaw plugin manifest", () => {
         leaderbotBridgeEnabled?: { default?: unknown };
         defaultLang?: { default?: unknown; enum?: unknown };
         customerPortalUrl?: { default?: unknown; pattern?: unknown };
+        sharedStateStore?: { default?: unknown; enum?: unknown };
         accounts?: {
           additionalProperties?: {
             properties?: {
@@ -61,6 +62,10 @@ describe("openclaw plugin manifest", () => {
     expect(facebookSchema.properties?.customerPortalUrl).toMatchObject({
       default: "https://leaderbot.live/",
       pattern: "^https://(?![^/]*@)",
+    });
+    expect(facebookSchema.properties?.sharedStateStore).toMatchObject({
+      default: "memory",
+      enum: ["memory", "redis"],
     });
     expect(
       facebookSchema.properties?.accounts?.additionalProperties?.properties
@@ -150,6 +155,7 @@ describe("facebook config safety defaults", () => {
     expect(parsed.leaderbotBridgeEnabled).toBe(false);
     expect(parsed.defaultLang).toBe("nl");
     expect(parsed.customerPortalUrl).toBe("https://leaderbot.live/");
+    expect(parsed.sharedStateStore).toBe("memory");
     expect(parsed.allowFrom).toBeUndefined();
   });
 
@@ -198,6 +204,16 @@ describe("facebook config safety defaults", () => {
     expect(() =>
       MessengerConfigSchema.parse({
         customerPortalUrl: "https://user:secret@portal.example.test/account",
+      }),
+    ).toThrow();
+  });
+
+  it("supports Redis only as a root shared-state setting", () => {
+    expect(MessengerConfigSchema.parse({ sharedStateStore: "redis" }).sharedStateStore)
+      .toBe("redis");
+    expect(() =>
+      MessengerConfigSchema.parse({
+        accounts: { invalid: { sharedStateStore: "redis" } },
       }),
     ).toThrow();
   });
