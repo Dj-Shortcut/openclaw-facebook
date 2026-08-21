@@ -130,6 +130,77 @@ describe("source image fetcher", () => {
     expect(mockHttpsRequest).toHaveBeenCalledTimes(1);
   });
 
+  it("does not retry a retryable response when retryLimit is zero", async () => {
+    setSourceImageDnsLookupForTests(async () => [
+      { address: "31.13.84.36", family: 4 },
+    ]);
+    const fixture = Buffer.alloc(7000, 4);
+    const requestAttempt = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: new Response("temporary", { status: 503 }),
+        contentType: "text/plain",
+      })
+      .mockResolvedValueOnce({
+        response: new Response(new Uint8Array(fixture), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+        contentType: "image/jpeg",
+      });
+    setSourceImageRequestForTests(requestAttempt);
+
+    await expect(
+      fetchExternalSourceImageForIngress({
+        sourceImageUrl:
+          "https://scontent-atl3-3.xx.fbcdn.net/v/t39.30808-6/photo.jpg",
+        reqId: "req-no-source-retry",
+        fetchConfig: {
+          allowedHosts: ["scontent.xx.fbcdn.net"],
+          retryLimit: 0,
+          timeoutMs: 2_500,
+        },
+      })
+    ).rejects.toThrow("Failed to download source image (503)");
+
+    expect(requestAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries once when retryLimit is one", async () => {
+    setSourceImageDnsLookupForTests(async () => [
+      { address: "31.13.84.36", family: 4 },
+    ]);
+    const fixture = Buffer.alloc(7000, 4);
+    const requestAttempt = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: new Response("temporary", { status: 503 }),
+        contentType: "text/plain",
+      })
+      .mockResolvedValueOnce({
+        response: new Response(new Uint8Array(fixture), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+        contentType: "image/jpeg",
+      });
+    setSourceImageRequestForTests(requestAttempt);
+
+    const downloaded = await fetchExternalSourceImageForIngress({
+      sourceImageUrl:
+        "https://scontent-atl3-3.xx.fbcdn.net/v/t39.30808-6/photo.jpg",
+      reqId: "req-single-source-retry",
+      fetchConfig: {
+        allowedHosts: ["scontent.xx.fbcdn.net"],
+        retryLimit: 1,
+        timeoutMs: 2_500,
+      },
+    });
+
+    expect(downloaded.buffer).toEqual(fixture);
+    expect(requestAttempt).toHaveBeenCalledTimes(2);
+  });
+
   it("tries another validated public DNS address when the first connection fails", async () => {
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS = "scontent.xx.fbcdn.net";
     setSourceImageDnsLookupForTests(async () => [

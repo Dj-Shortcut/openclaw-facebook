@@ -138,6 +138,20 @@ describe("resolveMessengerFastLaneReply", () => {
     expect(dutch?.reply).not.toBe(english?.reply);
   });
 
+  it("returns localized replies for delete-data requests", () => {
+    const dutch = resolveMessengerFastLaneReply(
+      "Verwijder mijn gegevens",
+      "nl"
+    );
+    const english = resolveMessengerFastLaneReply("delete my data", "en");
+
+    expect(dutch).toMatchObject({ intent: "delete_data" });
+    expect(english).toMatchObject({ intent: "delete_data" });
+    expect(dutch?.reply).toBeTruthy();
+    expect(english?.reply).toBeTruthy();
+    expect(dutch?.reply).not.toBe(english?.reply);
+  });
+
   it("does not synthesize a fast-lane reply for image generation", () => {
     expect(resolveMessengerFastLaneReply("Maak een foto van een kat")).toBeNull();
   });
