@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { COOKIE_NAME, ONE_YEAR_MS } from "@shared/const";
 import { parse as parseCookieHeader } from "cookie";
 import type { Express, Request, Response } from "express";
@@ -58,9 +59,14 @@ function getCookieValue(req: Request, key: string): string | undefined {
 function clearOAuthStateCookie(req: Request, res: Response) {
   const cookieOptions = getSessionCookieOptions(req);
   res.clearCookie(OAUTH_STATE_COOKIE_NAME, {
-    ...cookieOptions,
+    domain: cookieOptions.domain,
+    httpOnly: true,
     path: "/api/oauth/callback",
     sameSite: "lax",
+    secure:
+      process.env.NODE_ENV === "production"
+        ? true
+        : Boolean(cookieOptions.secure),
   });
 }
 
@@ -98,6 +104,47 @@ function getFacebookLoginConfig(): {
 
 export function isDirectFacebookLoginConfigured(): boolean {
   return Boolean(getFacebookLoginConfig());
+}
+
+function getExternalOAuthLoginConfig(): {
+  appId: string;
+  portalUrl: string;
+  redirectUri: string;
+} | null {
+  const appId = process.env.VITE_APP_ID?.trim();
+  const rawPortalUrl = (
+    process.env.OAUTH_PORTAL_URL ?? process.env.OAUTH_SERVER_URL ?? ""
+  ).trim();
+  const rawBaseUrl = process.env.APP_BASE_URL?.trim();
+  if (!appId || !rawPortalUrl || !rawBaseUrl) return null;
+
+  try {
+    const portalUrl = new URL(rawPortalUrl);
+    const baseUrl = new URL(rawBaseUrl);
+    const portalLocal =
+      portalUrl.protocol === "http:" &&
+      (portalUrl.hostname === "localhost" || portalUrl.hostname === "127.0.0.1");
+    const baseLocal =
+      baseUrl.protocol === "http:" &&
+      (baseUrl.hostname === "localhost" || baseUrl.hostname === "127.0.0.1");
+    if (
+      (portalUrl.protocol !== "https:" && !portalLocal) ||
+      (baseUrl.protocol !== "https:" && !baseLocal) ||
+      portalUrl.username ||
+      portalUrl.password ||
+      baseUrl.username ||
+      baseUrl.password
+    ) {
+      return null;
+    }
+    return {
+      appId,
+      portalUrl: portalUrl.toString().replace(/\/$/, ""),
+      redirectUri: `${baseUrl.origin}/api/oauth/callback`,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function encodeOAuthState(payload: OAuthStatePayload): string {
@@ -191,10 +238,12 @@ function validateOAuthState(
 }
 
 export function registerOAuthRoutes(app: Express) {
-  app.get("/api/oauth/facebook/start", (req: Request, res: Response) => {
-    const config = getFacebookLoginConfig();
-    if (!config) {
-      res.status(503).json({ error: "Facebook Login is not configured" });
+  const startOAuth = (req: Request, res: Response) => {
+    const facebookConfig = getFacebookLoginConfig();
+    const externalConfig = getExternalOAuthLoginConfig();
+    const redirectUri = facebookConfig?.redirectUri ?? externalConfig?.redirectUri;
+    if (!redirectUri) {
+      res.status(503).json({ error: "OAuth is not configured" });
       return;
     }
 
@@ -202,27 +251,46 @@ export function registerOAuthRoutes(app: Express) {
     const returnTo = getSafeReturnTo(getQueryParam(req, "returnTo"));
     const state = encodeOAuthState({
       nonce,
-      redirectUri: config.redirectUri,
+      redirectUri,
       ...(returnTo ? { returnTo } : {}),
     });
     const cookieOptions = getSessionCookieOptions(req);
     res.cookie(OAUTH_STATE_COOKIE_NAME, nonce, {
-      ...cookieOptions,
+      domain: cookieOptions.domain,
+      httpOnly: true,
       path: "/api/oauth/callback",
       sameSite: "lax",
+      secure:
+        process.env.NODE_ENV === "production"
+          ? true
+          : Boolean(cookieOptions.secure),
       maxAge: 10 * 60 * 1000,
     });
 
-    const authorizationUrl = new URL(
-      `https://www.facebook.com/${config.graphVersion}/dialog/oauth`
+    const authorizationUrl = facebookConfig
+      ? new URL(
+          `https://www.facebook.com/${facebookConfig.graphVersion}/dialog/oauth`
+        )
+      : new URL(`${externalConfig!.portalUrl}/app-auth`);
+    authorizationUrl.searchParams.set(
+      facebookConfig ? "client_id" : "appId",
+      facebookConfig?.appId ?? externalConfig!.appId
     );
-    authorizationUrl.searchParams.set("client_id", config.appId);
-    authorizationUrl.searchParams.set("redirect_uri", config.redirectUri);
+    authorizationUrl.searchParams.set("redirect_uri", redirectUri);
+    if (!facebookConfig) {
+      authorizationUrl.searchParams.delete("redirect_uri");
+      authorizationUrl.searchParams.set("redirectUri", redirectUri);
+      authorizationUrl.searchParams.set("type", "signIn");
+    }
     authorizationUrl.searchParams.set("state", state);
-    authorizationUrl.searchParams.set("response_type", "code");
-    authorizationUrl.searchParams.set("scope", "public_profile,email");
+    if (facebookConfig) {
+      authorizationUrl.searchParams.set("response_type", "code");
+      authorizationUrl.searchParams.set("scope", "public_profile,email");
+    }
     res.redirect(302, authorizationUrl.toString());
-  });
+  };
+  app.get("/api/oauth/start", startOAuth);
+  app.get("/api/oauth/facebook/start", startOAuth);
 
   app.get("/api/oauth/callback", (req: Request, res: Response) => {
     void (async () => {
@@ -301,7 +369,14 @@ export function registerOAuthRoutes(app: Express) {
 
         const cookieOptions = getSessionCookieOptions(req);
         res.cookie(COOKIE_NAME, sessionToken, {
-          ...cookieOptions,
+          domain: cookieOptions.domain,
+          httpOnly: true,
+          path: cookieOptions.path,
+          sameSite: cookieOptions.sameSite,
+          secure:
+            process.env.NODE_ENV === "production"
+              ? true
+              : Boolean(cookieOptions.secure),
           maxAge: ONE_YEAR_MS,
         });
         clearOAuthStateCookie(req, res);
@@ -318,4 +393,3 @@ export function registerOAuthRoutes(app: Express) {
     })();
   });
 }
-import crypto from "node:crypto";

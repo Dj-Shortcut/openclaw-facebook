@@ -2,14 +2,11 @@ const getOptionalEnvString = (value: unknown): string | undefined => {
   return typeof value === "string" ? value : undefined;
 };
 
-const OAUTH_STATE_COOKIE_NAME = "lb_oauth_state_nonce";
 const PUBLIC_CONFIG_PATH = "/api/public/config";
 const PUBLIC_CONFIG_TIMEOUT_MS = 5_000;
 
 type OAuthBrowserConfig = {
-  portalUrl: string | null;
-  appId: string | null;
-  loginUrl: string | null;
+  loginUrl: "/api/oauth/start";
 };
 
 let runtimeOAuthConfig: OAuthBrowserConfig | null | undefined;
@@ -41,9 +38,7 @@ function getBuildTimeOAuthConfig(): OAuthBrowserConfig | null {
     import.meta.env.VITE_OAUTH_PORTAL_URL
   );
   const appId = getOptionalEnvString(import.meta.env.VITE_APP_ID)?.trim();
-  return portalUrl && appId
-    ? { portalUrl, appId, loginUrl: null }
-    : null;
+  return portalUrl && appId ? { loginUrl: "/api/oauth/start" } : null;
 }
 
 function parsePublicRuntimeConfig(value: unknown): OAuthBrowserConfig | null {
@@ -54,15 +49,13 @@ function parsePublicRuntimeConfig(value: unknown): OAuthBrowserConfig | null {
   if (candidate.configured !== true) return null;
 
   const loginUrl = getOptionalEnvString(candidate.loginUrl)?.trim();
-  if (loginUrl === "/api/oauth/facebook/start") {
-    return { portalUrl: null, appId: null, loginUrl };
+  if (
+    loginUrl === "/api/oauth/start" ||
+    loginUrl === "/api/oauth/facebook/start"
+  ) {
+    return { loginUrl: "/api/oauth/start" };
   }
-
-  const portalUrl = normalizeOAuthPortalUrl(candidate.portalUrl);
-  const appId = getOptionalEnvString(candidate.appId)?.trim();
-  return portalUrl && appId
-    ? { portalUrl, appId, loginUrl: null }
-    : null;
+  return null;
 }
 
 function getOAuthBrowserConfig(): OAuthBrowserConfig | null {
@@ -123,26 +116,6 @@ function getSafeReturnTo(returnTo?: string): string | undefined {
   return returnTo.slice(0, 200);
 }
 
-function encodeOAuthState(
-  redirectUri: string,
-  nonce: string,
-  returnTo?: string
-): string {
-  const safeReturnTo = getSafeReturnTo(returnTo);
-  return btoa(
-    JSON.stringify({
-      redirectUri,
-      nonce,
-      ...(safeReturnTo ? { returnTo: safeReturnTo } : {}),
-    })
-  );
-}
-
-function persistOAuthStateNonce(nonce: string): void {
-  const secure = window.location.protocol === "https:" ? "; Secure" : "";
-  document.cookie = `${OAUTH_STATE_COOKIE_NAME}=${encodeURIComponent(nonce)}; Path=/api/oauth/callback; Max-Age=600; SameSite=Lax${secure}`;
-}
-
 export function isLoginConfigured(): boolean {
   return Boolean(getOAuthBrowserConfig());
 }
@@ -150,30 +123,12 @@ export function isLoginConfigured(): boolean {
 // Generate login URL at runtime so redirect URI reflects the current origin.
 export const getLoginUrl = (returnTo?: string) => {
   const oauthConfig = getOAuthBrowserConfig();
-  const redirectUri = `${window.location.origin}/api/oauth/callback`;
-
   if (!oauthConfig) {
     return null;
   }
 
-  if (oauthConfig.loginUrl) {
-    const url = new URL(oauthConfig.loginUrl, window.location.origin);
-    const safeReturnTo = getSafeReturnTo(returnTo);
-    if (safeReturnTo) url.searchParams.set("returnTo", safeReturnTo);
-    return url.toString();
-  }
-
-  if (!oauthConfig.portalUrl || !oauthConfig.appId) return null;
-
-  const nonce = createOAuthNonce();
-  const state = encodeOAuthState(redirectUri, nonce, returnTo);
-  persistOAuthStateNonce(nonce);
-
-  const url = new URL(`${oauthConfig.portalUrl}/app-auth`);
-  url.searchParams.set("appId", oauthConfig.appId);
-  url.searchParams.set("redirectUri", redirectUri);
-  url.searchParams.set("state", state);
-  url.searchParams.set("type", "signIn");
-
+  const url = new URL(oauthConfig.loginUrl, window.location.origin);
+  const safeReturnTo = getSafeReturnTo(returnTo);
+  if (safeReturnTo) url.searchParams.set("returnTo", safeReturnTo);
   return url.toString();
 };

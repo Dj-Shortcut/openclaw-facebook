@@ -68,7 +68,7 @@ export function getPublicRuntimeConfig(
       configured,
       portalUrl: externalOAuthConfigured ? portalUrl : null,
       appId: externalOAuthConfigured ? appId : null,
-      loginUrl: directFacebookConfigured ? "/api/oauth/facebook/start" : null,
+      loginUrl: configured ? "/api/oauth/start" : null,
     },
   };
 }

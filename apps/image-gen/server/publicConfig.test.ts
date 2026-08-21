@@ -61,7 +61,7 @@ describe("public runtime config", () => {
         configured: true,
         portalUrl: "https://oauth.example.com/portal",
         appId: "leaderbot-public-app",
-        loginUrl: null,
+        loginUrl: "/api/oauth/start",
       },
     });
   });
@@ -110,7 +110,7 @@ describe("public runtime config", () => {
         configured: true,
         portalUrl: null,
         appId: null,
-        loginUrl: "/api/oauth/facebook/start",
+        loginUrl: "/api/oauth/start",
       },
     });
   });

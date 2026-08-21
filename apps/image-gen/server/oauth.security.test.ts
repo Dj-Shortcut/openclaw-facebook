@@ -154,6 +154,7 @@ describe("OAuth callback security", () => {
     vi.stubEnv("FB_APP_ID", "facebook-app-123");
     vi.stubEnv("FB_APP_SECRET", "server-only-secret");
     vi.stubEnv("APP_BASE_URL", "https://leaderbot.live");
+    vi.stubEnv("NODE_ENV", "production");
     mocks.getUserByOpenId.mockResolvedValue({
       id: 7,
       openId: "facebook:facebook-user-7",
@@ -187,7 +188,7 @@ describe("OAuth callback security", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const start = await sendGetRequest(
-      "/api/oauth/facebook/start?returnTo=%2Fhandoff%2Ftoken-123"
+      "/api/oauth/start?returnTo=%2Fhandoff%2Ftoken-123"
     );
     expect(start.status).toBe(302);
     expect(start.headers.location).not.toContain("server-only-secret");
@@ -198,8 +199,12 @@ describe("OAuth callback security", () => {
     );
     const state = authorizationUrl.searchParams.get("state");
     const stateCookie = start.headers["set-cookie"]?.[0]?.split(";", 1)[0];
+    const stateCookieHeader = start.headers["set-cookie"]?.[0] ?? "";
     expect(state).toBeTruthy();
     expect(stateCookie).toContain(`${OAUTH_STATE_COOKIE_NAME}=`);
+    expect(stateCookieHeader).toContain("HttpOnly");
+    expect(stateCookieHeader).toContain("Secure");
+    expect(stateCookieHeader).toContain("SameSite=Lax");
 
     const callback = await sendGetRequest(
       `/api/oauth/callback?code=facebook-code&state=${encodeURIComponent(state ?? "")}`,

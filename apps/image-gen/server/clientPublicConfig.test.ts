@@ -28,12 +28,9 @@ function expectBuildTimeLogin(config: ClientPublicConfigModule): void {
   expect(config.isLoginConfigured()).toBe(true);
   stubBrowser();
   const loginUrl = config.getLoginUrl("/handoff");
-  expect(loginUrl).not.toBeNull();
-  const parsed = new URL(loginUrl ?? "https://invalid.example");
-  expect(parsed.origin + parsed.pathname).toBe(
-    "https://build-oauth.example.com/app-auth"
+  expect(loginUrl).toBe(
+    "https://leaderbot.live/api/oauth/start?returnTo=%2Fhandoff"
   );
-  expect(parsed.searchParams.get("appId")).toBe("leaderbot-build-app");
 }
 
 afterEach(() => {
@@ -60,7 +57,7 @@ describe("client public runtime config", () => {
             configured: true,
             portalUrl: "https://oauth.example.com",
             appId: "leaderbot-public-app",
-            loginUrl: null,
+            loginUrl: "/api/oauth/start",
           },
         }),
         { status: 200, headers: { "Content-Type": "application/json" } }
@@ -70,19 +67,12 @@ describe("client public runtime config", () => {
     await loadPublicRuntimeConfig(fetcher);
     expect(isLoginConfigured()).toBe(true);
 
-    const cookieTarget = stubBrowser();
+    stubBrowser();
 
     const loginUrl = getLoginUrl("/handoff");
-    expect(loginUrl).not.toBeNull();
-    const parsed = new URL(loginUrl ?? "https://invalid.example");
-    expect(parsed.origin + parsed.pathname).toBe(
-      "https://oauth.example.com/app-auth"
+    expect(loginUrl).toBe(
+      "https://leaderbot.live/api/oauth/start?returnTo=%2Fhandoff"
     );
-    expect(parsed.searchParams.get("appId")).toBe("leaderbot-public-app");
-    expect(parsed.searchParams.get("redirectUri")).toBe(
-      "https://leaderbot.live/api/oauth/callback"
-    );
-    expect(cookieTarget.cookie).toContain("lb_oauth_state_nonce=");
 
     await loadPublicRuntimeConfig(
       vi.fn<typeof fetch>(
@@ -114,7 +104,7 @@ describe("client public runtime config", () => {
               configured: true,
               portalUrl: null,
               appId: null,
-              loginUrl: "/api/oauth/facebook/start",
+              loginUrl: "/api/oauth/start",
             },
           }),
           { status: 200, headers: { "Content-Type": "application/json" } }
@@ -125,7 +115,7 @@ describe("client public runtime config", () => {
     expect(isLoginConfigured()).toBe(true);
     stubBrowser();
     expect(getLoginUrl("/handoff/token-123")).toBe(
-      "https://leaderbot.live/api/oauth/facebook/start?returnTo=%2Fhandoff%2Ftoken-123"
+      "https://leaderbot.live/api/oauth/start?returnTo=%2Fhandoff%2Ftoken-123"
     );
   });
 
