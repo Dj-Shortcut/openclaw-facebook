@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import mysql from "mysql2/promise";
+import { runProductionLegacyBridge } from "./bridge-production-0007-to-0014.mjs";
 import {
   cleanupMigrationConnection,
   combineMigrationErrors,
@@ -53,6 +54,9 @@ const databases = [
   "leaderbot_production_migrator_primary_key_upgrade",
   "leaderbot_production_migrator_prepared_capacity",
   "leaderbot_production_migrator_single_prepared_slot",
+  "leaderbot_production_migrator_legacy_bridge",
+  "leaderbot_production_migrator_legacy_drift",
+  "leaderbot_production_migrator_legacy_partial",
 ];
 const admin = await mysql.createConnection({
   host: adminUrl.hostname,
@@ -112,6 +116,58 @@ try {
   );
 
   const { migrations: manifest } = await loadAndVerifyMigrationManifest();
+  await withDatabase(databases[19], connection =>
+    applyLegacy0007(connection, manifest)
+  );
+  const bridgeResults = await Promise.all([
+    runProductionLegacyBridge({
+      databaseUrl: databaseUrl(databases[19]),
+    }),
+    runProductionLegacyBridge({
+      databaseUrl: databaseUrl(databases[19]),
+    }),
+  ]);
+  assert(
+    bridgeResults.every(result => result.appliedCount === 15),
+    "exact legacy 0007 bridges concurrently to canonical 0014"
+  );
+  const bridgeNoop = await runProductionLegacyBridge({
+    databaseUrl: databaseUrl(databases[19]),
+  });
+  assert(
+    bridgeNoop.appliedCount === 15,
+    "canonical 0014 bridge rerun is an exact no-op"
+  );
+  const migratedLegacy = await runProductionMigrations({
+    databaseUrl: databaseUrl(databases[19]),
+  });
+  assert(
+    migratedLegacy.appliedCount === 16,
+    "bridged 0014 continues through canonical 0015"
+  );
+
+  await withDatabase(databases[20], async connection => {
+    await applyLegacy0007(connection, manifest);
+    await connection.query(
+      "ALTER TABLE `dailyQuota` ADD COLUMN `unexpectedLegacyDrift` int NULL"
+    );
+  });
+  await expectFailure(
+    runProductionLegacyBridge({ databaseUrl: databaseUrl(databases[20]) }),
+    "drifted legacy 0007 bridge",
+    "database is not an exact supported legacy 0007/0014 state"
+  );
+
+  await withDatabase(databases[21], async connection => {
+    await applyLegacy0007(connection, manifest);
+    const partialStatements = await readMigrationStatements(manifest[8]);
+    await connection.query(partialStatements[0]);
+  });
+  await expectFailure(
+    runProductionLegacyBridge({ databaseUrl: databaseUrl(databases[21]) }),
+    "partially applied legacy bridge",
+    "database is not an exact supported legacy 0007/0014 state"
+  );
   const finalStatements = await readMigrationStatements(manifest.at(-1));
   await withDatabase(databases[14], async connection => {
     await connection.query("SET SESSION sql_safe_updates=1");
@@ -755,6 +811,21 @@ async function applyMigrationPrefix(connection, migrations) {
   }
 }
 
+async function applyLegacy0007(connection, migrations) {
+  await applyMigrationPrefix(connection, migrations.slice(0, 8));
+  const legacyHashes = new Map([
+    [3, "66006eca333555566ca23afd43379b024bf9efd86c7e62468e4763ec169e2845"],
+    [4, "ad9f1a8e045112995be23b617068174d67ceaba6bfeabfc07054d16f3d05d9c8"],
+  ]);
+  for (const [id, hash] of legacyHashes) {
+    const [result] = await connection.query(
+      "UPDATE `__drizzle_migrations` SET `hash`=? WHERE `id`=?",
+      [hash, id]
+    );
+    assert(Number(result.affectedRows) === 1, `legacy history row ${id}`);
+  }
+}
+
 async function readMigrationStatements(migration) {
   const sql = await fs.readFile(
     path.join(appDirectory, "drizzle", `${migration.tag}.sql`),
@@ -1044,6 +1115,14 @@ async function testContractManifestBinding() {
     () =>
       assertProductionSchemaContractManifest(staleHistoryContract, migrations),
     "stale contract history refuses before database access",
+    "production schema contract history does not match manifest"
+  );
+  const staleLegacyContract = JSON.parse(JSON.stringify(productionContract));
+  staleLegacyContract.legacyHistory.rows[2].hash = "e".repeat(64);
+  expectSynchronousFailure(
+    () =>
+      assertProductionSchemaContractManifest(staleLegacyContract, migrations),
+    "stale legacy contract history refuses before database access",
     "production schema contract history does not match manifest"
   );
 }

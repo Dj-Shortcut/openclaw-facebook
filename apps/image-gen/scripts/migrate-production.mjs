@@ -92,6 +92,8 @@ export async function loadAndVerifyMigrationManifest() {
   const productionContract = JSON.parse(productionContractRaw);
   if (
     productionContract.version !== 1 ||
+    !productionContract.legacy0007 ||
+    !productionContract.legacyHistory ||
     !productionContract.base0014 ||
     !productionContract.baseHistory ||
     !productionContract.final0015 ||
@@ -123,7 +125,11 @@ export function assertProductionSchemaContractManifest(contract, migrations) {
     hash: migration.sha256,
     createdAt: Number(migration.when),
   }));
+  const legacyRows = productionLegacy0007Rows(migrations);
   if (
+    contract.legacyHistory.nextId !== 9 ||
+    JSON.stringify(contract.legacyHistory.rows) !==
+      JSON.stringify(legacyRows) ||
     contract.baseHistory.nextId !== migrations.length ||
     contract.finalHistory.nextId !== migrations.length + 1 ||
     JSON.stringify(contract.baseHistory.rows) !==
@@ -134,6 +140,22 @@ export function assertProductionSchemaContractManifest(contract, migrations) {
       "production schema contract history does not match manifest"
     );
   }
+}
+
+export function productionLegacy0007Rows(migrations) {
+  if (migrations.length < 8) {
+    throw new Error("legacy 0007 contract requires eight migrations");
+  }
+  const rows = migrations.slice(0, 8).map((migration, index) => ({
+    id: index + 1,
+    hash: migration.sha256,
+    createdAt: Number(migration.when),
+  }));
+  rows[2].hash =
+    "66006eca333555566ca23afd43379b024bf9efd86c7e62468e4763ec169e2845";
+  rows[3].hash =
+    "ad9f1a8e045112995be23b617068174d67ceaba6bfeabfc07054d16f3d05d9c8";
+  return rows;
 }
 
 function assertContentHash(content, expectedHash, label) {

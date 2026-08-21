@@ -25,10 +25,12 @@ const outputPath = path.join(
   "production-schema-contract.json"
 );
 const database = "leaderbot_schema_contract_generation";
+const legacyDatabase = "leaderbot_schema_contract_legacy_0007";
 const admin = await mysql.createConnection(connectionOptions());
 
 try {
-  await recreateDatabase();
+  await recreateDatabase(database);
+  await recreateDatabase(legacyDatabase);
   const migrationFiles = (await fs.readdir(path.join(appDirectory, "drizzle")))
     .filter(name => /^\d{4}_.+\.sql$/.test(name))
     .sort();
@@ -79,6 +81,22 @@ try {
     await connection.end();
   }
 
+  const legacyConnection = await mysql.createConnection(
+    databaseUrl(legacyDatabase)
+  );
+  let legacy0007;
+  let legacyHistory;
+  try {
+    await assertProductionMigrationRuntime(legacyConnection);
+    await createHistoryTable(legacyConnection);
+    await applyFiles(legacyConnection, migrationFiles.slice(0, 8));
+    await normalizeLegacy0007History(legacyConnection);
+    legacy0007 = await captureProductionSchemaState(legacyConnection);
+    legacyHistory = await captureMigrationHistory(legacyConnection);
+  } finally {
+    await legacyConnection.end();
+  }
+
   const versionConnection = await mysql.createConnection(databaseUrl());
   let mysqlVersion;
   try {
@@ -98,6 +116,8 @@ try {
     generatedBy: { mysqlVersion },
     normalization: "show-create-and-trigger-v1",
     migrationSetSha256: productionMigrationSetSha256(migrationSet),
+    legacy0007,
+    legacyHistory,
     base0014,
     baseHistory,
     final0015,
@@ -113,6 +133,7 @@ try {
   );
 } finally {
   await admin.query(`DROP DATABASE IF EXISTS \`${database}\``);
+  await admin.query(`DROP DATABASE IF EXISTS \`${legacyDatabase}\``);
   await admin.end();
 }
 
@@ -126,17 +147,33 @@ function connectionOptions() {
   };
 }
 
-function databaseUrl() {
+function databaseUrl(databaseName = database) {
   const url = new URL(adminUrl);
-  url.pathname = `/${database}`;
+  url.pathname = `/${databaseName}`;
   return url.toString();
 }
 
-async function recreateDatabase() {
-  await admin.query(`DROP DATABASE IF EXISTS \`${database}\``);
+async function recreateDatabase(databaseName) {
+  await admin.query(`DROP DATABASE IF EXISTS \`${databaseName}\``);
   await admin.query(
-    `CREATE DATABASE \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`
+    `CREATE DATABASE \`${databaseName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`
   );
+}
+
+async function normalizeLegacy0007History(connection) {
+  const legacyHashes = new Map([
+    [3, "66006eca333555566ca23afd43379b024bf9efd86c7e62468e4763ec169e2845"],
+    [4, "ad9f1a8e045112995be23b617068174d67ceaba6bfeabfc07054d16f3d05d9c8"],
+  ]);
+  for (const [id, hash] of legacyHashes) {
+    const [result] = await connection.query(
+      "UPDATE `__drizzle_migrations` SET `hash`=? WHERE `id`=?",
+      [hash, id]
+    );
+    if (Number(result.affectedRows) !== 1) {
+      throw new Error(`legacy 0007 history row ${id} is unavailable`);
+    }
+  }
 }
 
 async function createHistoryTable(connection) {

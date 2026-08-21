@@ -13,6 +13,7 @@
     "db:generate": "drizzle-kit generate",
     "db:generate-production-contract": "node scripts/generate-production-schema-contract.mjs",
     "db:check-identifiers": "node scripts/rehearse-0015-migration.mjs --check-identifiers-only",
+    "db:bridge-production-0007-to-0014": "node scripts/bridge-production-0007-to-0014.mjs",
     "db:migrate": "node scripts/migrate-production.mjs",
     "db:test-production-migrator": "node scripts/test-production-migrator.mjs",
     "db:rehearse-0015": "node scripts/rehearse-0015-migration.mjs",

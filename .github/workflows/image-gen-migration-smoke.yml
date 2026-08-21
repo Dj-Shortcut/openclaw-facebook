@@ -9,6 +9,7 @@ on:
       - "apps/image-gen/drizzle/**"
       - "apps/image-gen/drizzle.config.ts"
       - "apps/image-gen/scripts/migrate-production.mjs"
+      - "apps/image-gen/scripts/bridge-production-0007-to-0014.mjs"
       - "apps/image-gen/scripts/test-production-migrator.mjs"
       - "apps/image-gen/scripts/generate-production-schema-contract.mjs"
       - "apps/image-gen/scripts/production-schema-contract.mjs"

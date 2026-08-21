@@ -336,10 +336,11 @@ pnpm lint:server
 Database migration helpers:
 
 ```bash
+pnpm db:bridge-production-0007-to-0014
 pnpm db:migrate
 ```
 
-`db:migrate` is the only supported production migration entrypoint. It holds a
+`db:migrate` is the standard production migration entrypoint. It holds a
 database-scoped MySQL singleton lock on the migration connection, validates the
 committed journal/SQL/snapshot hashes and applied history, refuses a partial
 0015, and verifies the exact committed MySQL 8.4.11 per-table `SHOW CREATE`
@@ -355,7 +356,15 @@ Supported starting states are deliberately narrow: a genuinely empty database,
 a committed 0014 database that passes the exact generated contract, or an
 already-complete 0015 database that passes that contract.
 Older prefixes, detected 0014 drift, modified migration history, and partial
-0015 footprints fail closed.
+0015 footprints fail closed. The sole exception is the explicitly fingerprinted
+legacy production 0007 lineage: with application writers stopped and a verified
+restorable backup, `db:bridge-production-0007-to-0014` accepts only that exact
+8-row history and exact generated MySQL 8.4.11 schema, applies 0008 through
+0014 under the same singleton lock, verifies canonical 0014, and normalizes the
+two historically equivalent 0002/0003 journal hashes. Any partial or drifted
+state is refused and requires backup restore; never use this bridge for another
+database or substitute a raw Drizzle command. After it succeeds, run
+`db:migrate` for the canonical 0014→0015 transition.
 
 Known pre-0015 lineage repair: historical SQL 0000–0014 did not create
 `messengerState`, although the committed 0014 snapshot already described it.
@@ -478,7 +487,15 @@ Use this order for `leaderbot-fb-image-gen`:
    (`OAUTH_PORTAL_URL`, `OAUTH_SERVER_URL`, `VITE_APP_ID`) remain an optional
    fallback when direct Facebook Login is not configured.
 
-3. Run migrations from a trusted operator shell with the same `DATABASE_URL`:
+3. If the read-only preflight reports the explicitly supported legacy 0007
+   lineage, keep writers stopped and run the one-time bridge first:
+
+   ```bash
+   DATABASE_URL='mysql://<user>:<password>@<host>:<port>/<database>' pnpm db:bridge-production-0007-to-0014
+   ```
+
+   Then run the canonical migration from a trusted operator shell with the same
+   `DATABASE_URL`:
 
    ```bash
    DATABASE_URL='mysql://<user>:<password>@<host>:<port>/<database>' pnpm db:migrate
