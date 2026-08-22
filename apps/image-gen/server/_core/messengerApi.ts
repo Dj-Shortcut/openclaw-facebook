@@ -18,6 +18,14 @@ type WebUrlButton = {
   webview_height_ratio?: "compact" | "tall" | "full";
 };
 
+type PostbackButton = {
+  type: "postback";
+  title: string;
+  payload: string;
+};
+
+type MessengerButton = WebUrlButton | PostbackButton;
+
 type MessengerSendOutcome =
   | { sent: true; messageId?: string }
   | { sent: false; reason: "response_window_closed" };
@@ -273,7 +281,7 @@ function normalizeButtonTemplateText(text: string): string {
 export async function sendButtonTemplate(
   psid: string,
   text: string,
-  buttons: WebUrlButton[]
+  buttons: MessengerButton[]
 ): Promise<MessengerSendOutcome> {
   return await sendMessage(psid, {
     attachment: {

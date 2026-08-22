@@ -12,6 +12,7 @@ import {
 const {
   getRedisClientMock,
   isRedisEnabledMock,
+  sendButtonTemplateMock,
   sendImageMock,
   sendQuickRepliesMock,
   sendTextMock,
@@ -19,6 +20,7 @@ const {
 } = vi.hoisted(() => ({
   getRedisClientMock: vi.fn(),
   isRedisEnabledMock: vi.fn(() => false),
+  sendButtonTemplateMock: vi.fn(async () => ({ sent: true })),
   sendImageMock: vi.fn(async () => ({ sent: true })),
   sendQuickRepliesMock: vi.fn(async () => ({ sent: true })),
   sendTextMock: vi.fn(async () => ({ sent: true })),
@@ -26,6 +28,7 @@ const {
 }));
 
 vi.mock("./_core/messengerApi", () => ({
+  sendButtonTemplate: sendButtonTemplateMock,
   sendImage: sendImageMock,
   sendQuickReplies: sendQuickRepliesMock,
   sendText: sendTextMock,
@@ -110,15 +113,13 @@ function promptFromOpenAiRequest(init: RequestInit | undefined): string {
   }
   const payload = JSON.parse(init.body) as {
     input?:
-      | string
-      | Array<{ content?: Array<{ type?: string; text?: string }> }>;
+      string | Array<{ content?: Array<{ type?: string; text?: string }> }>;
   };
   if (typeof payload.input === "string") {
     return payload.input;
   }
   const firstInput = payload.input?.[0] as
-    | { content?: string | Array<{ type?: string; text?: string }> }
-    | undefined;
+    { content?: string | Array<{ type?: string; text?: string }> } | undefined;
   if (typeof firstInput?.content === "string") {
     return firstInput.content;
   }
@@ -142,7 +143,8 @@ function installSourceImageRequestHook(): void {
     });
     return {
       response,
-      contentType: response.headers.get("content-type") ?? "application/octet-stream",
+      contentType:
+        response.headers.get("content-type") ?? "application/octet-stream",
     };
   });
   setSourceImageRequestForTests(sourceImageRequestMock);
@@ -259,6 +261,7 @@ async function waitForCondition(
 }
 
 function clearMessengerSendMocks(): void {
+  sendButtonTemplateMock.mockClear();
   sendImageMock.mockClear();
   sendQuickRepliesMock.mockClear();
   sendTextMock.mockClear();
@@ -1451,7 +1454,9 @@ describe("messenger webhook dedupe", () => {
       ],
     });
 
-    expect((await getTestMessengerState(psid))?.lastUserMessageAt).toBeUndefined();
+    expect(
+      (await getTestMessengerState(psid))?.lastUserMessageAt
+    ).toBeUndefined();
 
     await processFacebookWebhookPayload({
       entry: [
@@ -1494,7 +1499,7 @@ describe("messenger webhook dedupe", () => {
     const psid = "fresh-consent-window-user";
     const timestamp = 1730000000456;
 
-    sendQuickRepliesMock.mockImplementationOnce(async () => {
+    sendButtonTemplateMock.mockImplementationOnce(async () => {
       expect(getState(psid)?.lastUserMessageAt).toBe(timestamp);
       return { sent: true };
     });
@@ -1513,11 +1518,60 @@ describe("messenger webhook dedupe", () => {
       ],
     });
 
-    expect(sendQuickRepliesMock).toHaveBeenCalledTimes(1);
+    expect(sendButtonTemplateMock).toHaveBeenCalledWith(
+      psid,
+      expect.stringContaining("toestemming"),
+      [
+        {
+          type: "postback",
+          title: "Ik ga akkoord",
+          payload: "GDPR_CONSENT_AGREE",
+        },
+        {
+          type: "postback",
+          title: "Nee bedankt",
+          payload: "GDPR_CONSENT_DECLINE",
+        },
+      ]
+    );
+    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
     expect(sendTextMock).not.toHaveBeenCalled();
     expect(safeLogMock).not.toHaveBeenCalledWith(
       "messenger_send_skipped",
       expect.objectContaining({ reason: "response_window_closed" })
+    );
+  });
+
+  it("sends the typed-consent fallback when Messenger rejects the button template", async () => {
+    const psid = "fresh-consent-template-fallback-user";
+    sendButtonTemplateMock.mockRejectedValueOnce(
+      new Error("template rejected")
+    );
+
+    await processFacebookWebhookPayloadWithoutConsent({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: psid },
+              timestamp: 1730000000500,
+              message: { mid: "mid-consent-template-fallback", text: "Hi" },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(sendTextMock).toHaveBeenCalledWith(
+      psid,
+      expect.stringContaining("IK GA AKKOORD")
+    );
+    expect((await getTestMessengerState(psid))?.consentPromptedAt).toEqual(
+      expect.any(Number)
+    );
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_consent_controls_failed",
+      expect.objectContaining({ errorCode: "Error" })
     );
   });
 
@@ -1531,9 +1585,9 @@ describe("messenger webhook dedupe", () => {
             {
               sender: { id: psid },
               timestamp: 1730000000555,
-              message: {
-                mid: "mid-fresh-consent-accepted",
-                quick_reply: { payload: "GDPR_CONSENT_AGREE" },
+              postback: {
+                title: "Ik ga akkoord",
+                payload: "GDPR_CONSENT_AGREE",
               },
             },
           ],
@@ -1545,7 +1599,7 @@ describe("messenger webhook dedupe", () => {
     expect((await getTestMessengerState(psid))?.stage).toBe("IDLE");
     expect(sendTextMock).toHaveBeenCalledWith(
       psid,
-      expect.stringContaining("Je bent klaar")
+      expect.stringContaining("Je toestemming is geregistreerd")
     );
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
@@ -2587,9 +2641,7 @@ describe("messenger greeting behavior", () => {
       ],
     });
 
-    expect((await getTestMessengerState(psid))?.stage).toBe(
-      "AWAITING_PHOTO"
-    );
+    expect((await getTestMessengerState(psid))?.stage).toBe("AWAITING_PHOTO");
     expect(sendTextMock).toHaveBeenCalledWith(
       psid,
       t("nl", "changeBackgroundRequiresPhoto")
@@ -3010,10 +3062,7 @@ describe("bot rate limit feature", () => {
       });
     }
 
-    expect(sendTextMock).toHaveBeenLastCalledWith(
-      senderId,
-      "Slow down a bit."
-    );
+    expect(sendTextMock).toHaveBeenLastCalledWith(senderId, "Slow down a bit.");
   });
 });
 

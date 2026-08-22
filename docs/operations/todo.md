@@ -83,6 +83,55 @@ prior gate is proven in production.
   Machine/volume state is converged and the complete Messenger image flow passes
   a staged smoke test.
 
+### Messenger processing-consent incident follow-up - 2026-08-22
+
+Multiple real Messenger users reached a repeated processing-consent prompt in
+the public image flow. The failure combined temporary quick replies, overly
+narrow typed-consent matching, GDPR postbacks being classified as unknown on
+the error path, and a pre-redaction debug logger that still received raw text.
+Keep this incident metadata-only; do not add names, PSIDs, screenshots, photos,
+or raw conversation content to repository notes or logs.
+
+- [x] Replace GDPR consent quick replies with persistent Messenger postback
+  button templates while retaining explicit typed consent as a UI fallback.
+  Keep destructive deletion confirmations as temporary quick replies.
+- [x] Normalize typed consent with bounded typo tolerance, structural
+  permission-grant matching, contextual short acknowledgements only for 15
+  minutes after a delivered notice, and fail-safe question, refusal, and
+  uncertainty handling.
+- [x] Register every GDPR consent/deletion postback as a known Messenger payload
+  so a handler/send failure remains eligible for the safe fallback instead of
+  appearing to hang silently.
+- [x] Restrict pre-redaction inbound diagnostics to metadata-only booleans,
+  lengths, counts, and normalized media categories; tests prove that raw text,
+  captions, payloads, attachment URLs, message ids, referrals, and identifiers
+  never reach that logger.
+- [x] Cover real Messenger postback event shape, typed-language variation,
+  negative and uncertain counterexamples, stale short acknowledgements,
+  rejected control delivery, GDPR fallback eligibility, and privacy-safe
+  inbound diagnostics in focused tests.
+- [x] Preserve explicit consent refusals as distinct from unanswered consent so
+  later ordinary messages remain blocked without presenting the controls again.
+  Expire destructive deletion confirmation state after 15 minutes, arm it only
+  after the warning controls are delivered, consume it before deletion, and
+  reject stale Messenger/WhatsApp confirmation payloads without deleting data.
+- [ ] Implement no-second-upload photo-first continuation only on the verified
+  workspace privacy boundary. It must bind the temporary reference to
+  `workspaceId`, `channelConnectionId`, `bindingEpoch`, `userKey`, and
+  `privacyEpoch`, serialize consent decisions, retain the reference across
+  transient fetch/storage failure, preserve a bounded encrypted caption, and
+  revalidate consent plus ownership before image fetch. The Page/sender-only
+  prototype was rejected and removed; never deploy it or tell a customer the
+  automated flow retained a photo when it did not.
+- [ ] Review and merge the hotfix, promote it through the canonical immutable
+  image-gen deployment path, and retain the current reviewed digest as the
+  explicit rollback image. Repository tests are not production evidence.
+- [ ] Complete a privacy-safe production smoke on Android, iOS, and Web for
+  fresh text-first and photo-first users, including typed fallback and refusal.
+- [ ] Add metadata-only funnel signals for consent prompt, consent acceptance,
+  refusal, and repeated-prompt loops; alert on abnormal repetition without
+  logging message text, attachment URLs, raw identifiers, or customer content.
+
 ### Local launch-hardening tranche - 2026-08-02 (no launch-go)
 
 Completed locally and covered by focused regression tests in the current

@@ -1,11 +1,22 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const {
+  sendButtonTemplateMock,
   sendImageMock,
   sendQuickRepliesMock,
   sendTextMock,
   safeLogMock,
 } = vi.hoisted(() => ({
+  sendButtonTemplateMock: vi.fn(async () => ({ sent: true })),
   sendImageMock: vi.fn(async () => ({ sent: true })),
   sendQuickRepliesMock: vi.fn(async () => ({ sent: true })),
   sendTextMock: vi.fn(async () => ({ sent: true })),
@@ -13,6 +24,7 @@ const {
 }));
 
 vi.mock("./_core/messengerApi", () => ({
+  sendButtonTemplate: sendButtonTemplateMock,
   sendImage: sendImageMock,
   sendQuickReplies: sendQuickRepliesMock,
   sendText: sendTextMock,
@@ -32,14 +44,14 @@ import {
 import {
   getTestMessengerState,
   processConsentedFacebookWebhookPayload,
+  withTestMessengerPageId,
 } from "./testConsentHelpers";
 
 const TEST_PEPPER = "ci-test-pepper";
 const TEST_SOURCE_IMAGE_FETCH_URL = "https://source-image.test/mock.jpg";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
 const originalEnableFaceMemory = process.env.ENABLE_FACE_MEMORY;
-const originalFaceMemoryRetentionDays =
-  process.env.FACE_MEMORY_RETENTION_DAYS;
+const originalFaceMemoryRetentionDays = process.env.FACE_MEMORY_RETENTION_DAYS;
 
 const processFacebookWebhookPayload = processConsentedFacebookWebhookPayload(
   processFacebookWebhookPayloadBase
@@ -52,7 +64,8 @@ function installSourceImageRequestHook(): void {
     });
     return {
       response,
-      contentType: response.headers.get("content-type") ?? "application/octet-stream",
+      contentType:
+        response.headers.get("content-type") ?? "application/octet-stream",
     };
   });
 }
@@ -71,6 +84,7 @@ describe("photo-first onboarding", () => {
       "img.example,lookaside.fbsbx.com,leaderbot-fb-image-gen.fly.dev";
     process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
     delete process.env.FACE_MEMORY_RETENTION_DAYS;
+    sendButtonTemplateMock.mockClear();
     sendImageMock.mockClear();
     sendQuickRepliesMock.mockClear();
     sendTextMock.mockClear();
@@ -83,7 +97,9 @@ describe("photo-first onboarding", () => {
         if (
           urlString === TEST_SOURCE_IMAGE_FETCH_URL ||
           urlString.startsWith("https://img.example/") ||
-          urlString.startsWith("https://leaderbot-fb-image-gen.fly.dev/generated/")
+          urlString.startsWith(
+            "https://leaderbot-fb-image-gen.fly.dev/generated/"
+          )
         ) {
           return {
             ok: true,
@@ -92,7 +108,9 @@ describe("photo-first onboarding", () => {
           } as Response;
         }
 
-        throw new Error(`Unexpected fetch in messengerWebhook.photoFirst.test: ${urlString}`);
+        throw new Error(
+          `Unexpected fetch in messengerWebhook.photoFirst.test: ${urlString}`
+        );
       })
     );
     resetStateStore();
@@ -135,7 +153,12 @@ describe("photo-first onboarding", () => {
               sender: { id: psid },
               message: {
                 mid: "mid-photo-first",
-                attachments: [{ type: "image", payload: { url: "https://img.example/source.jpg" } }],
+                attachments: [
+                  {
+                    type: "image",
+                    payload: { url: "https://img.example/source.jpg" },
+                  },
+                ],
               },
             },
           ],
@@ -165,7 +188,11 @@ describe("photo-first onboarding", () => {
           title: "Andere achtergrond",
           payload: "OPENCLAW_ACTION:change_background",
         },
-        { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
+        {
+          content_type: "text",
+          title: "Privacy",
+          payload: "OPENCLAW_ACTION:Privacy",
+        },
       ]
     );
   });
@@ -182,7 +209,12 @@ describe("photo-first onboarding", () => {
               sender: { id: psid },
               message: {
                 mid: "mid-face-memory-photo",
-                attachments: [{ type: "image", payload: { url: "https://img.example/source.jpg" } }],
+                attachments: [
+                  {
+                    type: "image",
+                    payload: { url: "https://img.example/source.jpg" },
+                  },
+                ],
               },
             },
           ],
@@ -236,7 +268,12 @@ describe("photo-first onboarding", () => {
               sender: { id: psid },
               message: {
                 mid: "mid-face-memory-delete-photo",
-                attachments: [{ type: "image", payload: { url: "https://img.example/source.jpg" } }],
+                attachments: [
+                  {
+                    type: "image",
+                    payload: { url: "https://img.example/source.jpg" },
+                  },
+                ],
               },
             },
             {
@@ -262,29 +299,39 @@ describe("photo-first onboarding", () => {
       psid,
       expect.stringContaining("data"),
       expect.arrayContaining([
-        expect.objectContaining({ payload: "GDPR_DELETE_CONFIRM" }),
-        expect.objectContaining({ payload: "GDPR_DELETE_CANCEL" }),
+        expect.objectContaining({
+          content_type: "text",
+          payload: "GDPR_DELETE_CONFIRM",
+        }),
+        expect.objectContaining({
+          content_type: "text",
+          payload: "GDPR_DELETE_CANCEL",
+        }),
       ])
     );
     expect((await getTestMessengerState(psid))?.lastSourceImageUrl).toMatch(
       /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
 
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: psid },
-              message: {
-                mid: "mid-face-memory-delete-confirm",
-                quick_reply: { payload: "GDPR_DELETE_CONFIRM" },
+    await processFacebookWebhookPayloadBase(
+      withTestMessengerPageId({
+        entry: [
+          {
+            messaging: [
+              {
+                sender: { id: psid },
+                timestamp: 1_730_000_000_000,
+                message: {
+                  mid: "mid-face-memory-delete-confirm",
+                  text: "Ja, verwijder",
+                  quick_reply: { payload: "GDPR_DELETE_CONFIRM" },
+                },
               },
-            },
-          ],
-        },
-      ],
-    });
+            ],
+          },
+        ],
+      })
+    );
 
     const userState = await getTestMessengerState(psid);
     expect(userState).toEqual(
@@ -360,7 +407,9 @@ describe("photo-first onboarding", () => {
       t("nl", "flowExplanation"),
       expect.arrayContaining([
         expect.objectContaining({ payload: "OPENCLAW_ACTION:new_image" }),
-        expect.objectContaining({ payload: "OPENCLAW_ACTION:Pas%20foto%20aan" }),
+        expect.objectContaining({
+          payload: "OPENCLAW_ACTION:Pas%20foto%20aan",
+        }),
         expect.objectContaining({ payload: "OPENCLAW_ACTION:Privacy" }),
       ])
     );
@@ -391,10 +440,9 @@ describe("photo-first onboarding", () => {
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
       t("nl", "flowExplanation"),
-      expect.any(Array),
+      expect.any(Array)
     );
   });
-
 
   it("keeps later greetings prompt-first with quick actions", async () => {
     const psid = "repeat-hi-user";
@@ -434,7 +482,9 @@ describe("photo-first onboarding", () => {
       t("nl", "flowExplanation"),
       expect.arrayContaining([
         expect.objectContaining({ payload: "OPENCLAW_ACTION:new_image" }),
-        expect.objectContaining({ payload: "OPENCLAW_ACTION:Pas%20foto%20aan" }),
+        expect.objectContaining({
+          payload: "OPENCLAW_ACTION:Pas%20foto%20aan",
+        }),
         expect.objectContaining({ payload: "OPENCLAW_ACTION:Privacy" }),
       ])
     );
@@ -477,7 +527,11 @@ describe("photo-first onboarding", () => {
           title: "Pas foto aan",
           payload: "OPENCLAW_ACTION:Pas%20foto%20aan",
         },
-        { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
+        {
+          content_type: "text",
+          title: "Privacy",
+          payload: "OPENCLAW_ACTION:Privacy",
+        },
       ]
     );
   });
@@ -503,7 +557,10 @@ describe("photo-first onboarding", () => {
     expect(userState?.hasSeenIntro).toBe(false);
     expect(sendTextMock).not.toHaveBeenCalled();
     expect(sendQuickRepliesMock).not.toHaveBeenCalled();
-    expect(safeLogMock).toHaveBeenCalledWith("unknown_payload", expect.any(Object));
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "unknown_payload",
+      expect.any(Object)
+    );
   });
 
   it("returns privacy explanation on privacy action input", async () => {
@@ -571,7 +628,11 @@ describe("photo-first onboarding", () => {
           title: "Pas foto aan",
           payload: "OPENCLAW_ACTION:Pas%20foto%20aan",
         },
-        { content_type: "text", title: "Privacy", payload: "OPENCLAW_ACTION:Privacy" },
+        {
+          content_type: "text",
+          title: "Privacy",
+          payload: "OPENCLAW_ACTION:Privacy",
+        },
       ]
     );
   });
@@ -595,7 +656,7 @@ describe("photo-first onboarding", () => {
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
       t("en", "flowExplanation"),
-      expect.any(Array),
+      expect.any(Array)
     );
     expect(await getTestMessengerState(psid)).toMatchObject({
       preferredLang: "en",
@@ -629,5 +690,4 @@ describe("photo-first onboarding", () => {
       ].join("\n")
     );
   });
-
 });

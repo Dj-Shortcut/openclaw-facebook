@@ -1,4 +1,5 @@
 import type { ConversationAction } from "./botResponse";
+import { isGdprConsentActionId } from "./consentActionIds";
 import type { QuickReply } from "./messengerApi";
 import { encodeMessengerActionInput } from "./messengerActionPayload";
 
@@ -10,6 +11,12 @@ export type MessengerWebUrlButton = {
   title: string;
   url: string;
   webview_height_ratio: "full";
+};
+
+export type MessengerPostbackButton = {
+  type: "postback";
+  title: string;
+  payload: string;
 };
 
 function normalizeActionValue(value: string): string | undefined {
@@ -130,6 +137,22 @@ export function renderMessengerUrlButtons(
     .slice(0, MESSENGER_BUTTON_LIMIT);
 }
 
+export function renderMessengerPostbackButtons(
+  actions: readonly ConversationAction[] | undefined
+): MessengerPostbackButton[] {
+  if (!actions?.length) return [];
+
+  return actions
+    .flatMap(action => {
+      if (action.url || !isPersistentPostbackActionId(action.id)) return [];
+      const title = normalizeActionValue(action.label);
+      const payload = normalizePayloadValue(action.id);
+      if (!title || !payload) return [];
+      return [{ type: "postback" as const, title, payload }];
+    })
+    .slice(0, MESSENGER_BUTTON_LIMIT);
+}
+
 function renderMessengerActionPayload(action: ConversationAction): string {
   if (!action.inputText && isPlatformPayloadActionId(action.id)) {
     return action.id;
@@ -142,4 +165,8 @@ function renderMessengerActionPayload(action: ConversationAction): string {
 
 function isPlatformPayloadActionId(id: string): boolean {
   return /^(?:CONSENT_|GDPR_)/.test(id);
+}
+
+function isPersistentPostbackActionId(id: string): boolean {
+  return isGdprConsentActionId(id);
 }

@@ -59,7 +59,13 @@ export type MessengerUserState = {
   preferredLangSource?: "account_default" | "sender_locale";
   consentGiven: boolean;
   consentTimestamp?: number;
+  /** Distinguishes an explicit refusal from legacy/unanswered false state. */
+  consentDeclinedAt?: number;
+  /** Metadata marker that Messenger accepted delivery of the processing notice. */
+  consentPromptedAt?: number;
   pendingDeleteConfirm?: boolean;
+  /** Timestamp used to expire destructive confirmation controls. */
+  pendingDeleteConfirmAt?: number;
   hasSeenIntro: boolean;
   pendingImageUrl?: string;
   pendingImageAt?: number;
@@ -296,11 +302,24 @@ export function setConsentState(
     {
       consentGiven,
       consentTimestamp: consentGiven ? now : undefined,
+      consentDeclinedAt: consentGiven ? undefined : now,
+      consentPromptedAt: undefined,
       pendingDeleteConfirm: false,
+      pendingDeleteConfirmAt: undefined,
     },
     now
   );
 
+  if (isPromiseLike(result)) {
+    return result.then(() => undefined);
+  }
+}
+
+export function setConsentPromptedAt(
+  psid: string,
+  now = Date.now()
+): MaybePromise<void> {
+  const result = patchState(psid, { consentPromptedAt: now }, now);
   if (isPromiseLike(result)) {
     return result.then(() => undefined);
   }
@@ -315,6 +334,7 @@ export function setPendingDeleteConfirm(
     psid,
     {
       pendingDeleteConfirm,
+      pendingDeleteConfirmAt: pendingDeleteConfirm ? now : undefined,
     },
     now
   );

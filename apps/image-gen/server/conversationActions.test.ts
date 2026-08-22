@@ -10,13 +10,15 @@ import {
   buildPortalEnrollmentResponse,
 } from "./_core/conversationActions";
 import {
+  renderMessengerPostbackButtons,
   renderMessengerQuickReplies,
   renderMessengerUrlButtons,
 } from "./_core/messengerActionRenderer";
 import { decodeMessengerActionInput } from "./_core/messengerActionPayload";
 
 describe("conversation actions", () => {
-  const originalFaceMemoryRetentionDays = process.env.FACE_MEMORY_RETENTION_DAYS;
+  const originalFaceMemoryRetentionDays =
+    process.env.FACE_MEMORY_RETENTION_DAYS;
   const originalNodeEnv = process.env.NODE_ENV;
   const originalPortalBaseUrl = process.env.PORTAL_BASE_URL;
 
@@ -69,8 +71,7 @@ describe("conversation actions", () => {
 
     const response = buildPortalEnrollmentResponse("nl");
     expect(response).toEqual({
-      text:
-        "Word lid van Leaderbot of meld je aan om je afgeschermde klantenportaal te openen.",
+      text: "Word lid van Leaderbot of meld je aan om je afgeschermde klantenportaal te openen.",
       actions: [
         {
           id: "open_customer_portal",
@@ -174,7 +175,9 @@ describe("conversation actions", () => {
       title: "Andere achtergrond",
       payload: "OPENCLAW_ACTION:change_background",
     });
-    expect(decodeMessengerActionInput(reply?.payload)).toBe("change_background");
+    expect(decodeMessengerActionInput(reply?.payload)).toBe(
+      "change_background"
+    );
   });
 
   it("renders id-only actions as normal text input using the action label", () => {
@@ -208,6 +211,34 @@ describe("conversation actions", () => {
         payload: "GDPR_DELETE_CONFIRM",
       },
     ]);
+  });
+
+  it("renders only GDPR consent choices as persistent Messenger postback buttons", () => {
+    expect(
+      renderMessengerPostbackButtons([
+        { id: "GDPR_CONSENT_AGREE", label: "Ik ga akkoord" },
+        { id: "GDPR_CONSENT_DECLINE", label: "Nee bedankt" },
+      ])
+    ).toEqual([
+      {
+        type: "postback",
+        title: "Ik ga akkoord",
+        payload: "GDPR_CONSENT_AGREE",
+      },
+      {
+        type: "postback",
+        title: "Nee bedankt",
+        payload: "GDPR_CONSENT_DECLINE",
+      },
+    ]);
+
+    expect(
+      renderMessengerPostbackButtons([
+        { id: "GDPR_DELETE_CONFIRM", label: "Ja, verwijder" },
+        { id: "GDPR_DELETE_CANCEL", label: "Annuleer" },
+        { id: "GDPR_UNKNOWN", label: "Unknown" },
+      ])
+    ).toEqual([]);
   });
 
   it("builds generation failure actions before Messenger rendering", () => {

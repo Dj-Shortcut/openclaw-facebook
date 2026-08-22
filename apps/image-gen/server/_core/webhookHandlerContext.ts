@@ -12,6 +12,7 @@ import {
   buildPhotoReceivedResponse,
 } from "./conversationActions";
 import {
+  renderMessengerPostbackButtons,
   renderMessengerQuickReplies,
   renderMessengerUrlButtons,
 } from "./messengerActionRenderer";
@@ -24,7 +25,11 @@ import {
 import { t, type Lang } from "./i18n";
 import { toLogUser } from "./privacy";
 import { claimWebhookReplayKey } from "./webhookReplayProtection";
-import { type FacebookWebhookEvent, getEventDedupeKey } from "./webhookHelpers";
+import {
+  getAttachmentCategorySummary,
+  type FacebookWebhookEvent,
+  getEventDedupeKey,
+} from "./webhookHelpers";
 import { hasInFlightGeneration } from "./generationGuard";
 import { isDebugLogEnabled } from "./logLevel";
 import { getTodayRuntimeStats } from "./botRuntimeStats";
@@ -107,6 +112,11 @@ export function createHandlerContext({
     event: FacebookWebhookEvent,
     reqId: string
   ): void {
+    const content = event.message?.text;
+    const quickReplyAction = event.message?.quick_reply?.payload;
+    const postbackAction = event.postback?.payload;
+    const media = event.message?.attachments ?? [];
+
     debugWebhookLog({
       level: "debug",
       msg: "incoming_message",
@@ -114,14 +124,17 @@ export function createHandlerContext({
       user: toLogUser(userId),
       psidHash: anonymizePsid(psid).slice(0, 12),
       isEcho: Boolean(event.message?.is_echo),
-      text: event.message?.text ?? null,
-      quickReplyPayload: event.message?.quick_reply?.payload ?? null,
-      attachments:
-        event.message?.attachments?.map(attachment => ({
-          type: attachment.type,
-          hasUrl: Boolean(attachment.payload?.url),
-        })) ?? [],
-      postbackPayload: event.postback?.payload ?? null,
+      hasContent: typeof content === "string" && content.length > 0,
+      contentLength: content?.length ?? 0,
+      hasQuickReplyAction: Boolean(quickReplyAction),
+      quickReplyActionLength: quickReplyAction?.length ?? 0,
+      hasPostbackAction: Boolean(postbackAction),
+      postbackActionLength: postbackAction?.length ?? 0,
+      mediaCount: media.length,
+      mediaCategories: getAttachmentCategorySummary(media),
+      mediaUrlCount: media.filter(attachment =>
+        Boolean(attachment.payload?.url)
+      ).length,
       hasReferralRef: Boolean(
         event.postback?.referral?.ref ?? event.referral?.ref
       ),
@@ -192,6 +205,25 @@ export function createHandlerContext({
     actions: ConversationAction[],
     reqId: string
   ): Promise<MessengerSendOutcome> {
+    const postbackButtons = renderMessengerPostbackButtons(actions);
+    if (
+      postbackButtons.length > 0 &&
+      postbackButtons.length === actions.length
+    ) {
+      debugWebhookLog({
+        level: "debug",
+        msg: "outgoing_message",
+        kind: "postback_buttons",
+        reqId,
+        psidHash: anonymizePsid(psid).slice(0, 12),
+        actions: actions.map(action => ({
+          id: action.id,
+          label: action.label,
+        })),
+      });
+      return await sendButtonTemplate(psid, text, postbackButtons);
+    }
+
     const urlButtons = renderMessengerUrlButtons(actions);
     if (urlButtons.length > 0) {
       debugWebhookLog({

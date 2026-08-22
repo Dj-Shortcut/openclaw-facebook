@@ -53,7 +53,9 @@ describe("messenger state normalization", () => {
       preferredLang: undefined,
       preferredLangSource: undefined,
       consentGiven: false,
+      consentDeclinedAt: undefined,
       pendingDeleteConfirm: false,
+      pendingDeleteConfirmAt: undefined,
       hasSeenIntro: false,
       lastGeneratedUrl: null,
       quota: {
@@ -74,6 +76,7 @@ describe("messenger state normalization", () => {
       consentGiven: true,
       consentTimestamp: 1234,
       pendingDeleteConfirm: true,
+      pendingDeleteConfirmAt: 1200,
       hasSeenIntro: true,
       preferredLang: "en",
       preferredLangSource: "sender_locale",
@@ -96,6 +99,7 @@ describe("messenger state normalization", () => {
       consentGiven: true,
       consentTimestamp: 1234,
       pendingDeleteConfirm: true,
+      pendingDeleteConfirmAt: 1200,
       hasSeenIntro: true,
       preferredLang: "en",
       quota: {
@@ -106,8 +110,80 @@ describe("messenger state normalization", () => {
     });
   });
 
+  it("keeps unanswered and declined consent distinct while failing legacy deletion prompts closed", () => {
+    expect(
+      normalizeState("legacy-unanswered", { consentGiven: false })
+    ).toMatchObject({
+      consentGiven: false,
+      consentDeclinedAt: undefined,
+      pendingDeleteConfirm: false,
+    });
+
+    expect(
+      normalizeState("stored-decline", {
+        consentGiven: false,
+        consentDeclinedAt: 1234,
+      })
+    ).toMatchObject({
+      consentGiven: false,
+      consentDeclinedAt: 1234,
+    });
+
+    expect(
+      normalizeState("legacy-delete-confirm", {
+        pendingDeleteConfirm: true,
+      })
+    ).toMatchObject({
+      pendingDeleteConfirm: false,
+      pendingDeleteConfirmAt: undefined,
+    });
+  });
+
+  it("clears an obsolete decline marker after consent was accepted", () => {
+    expect(
+      normalizeState("accepted-consent", {
+        consentGiven: true,
+        consentTimestamp: 5678,
+        consentDeclinedAt: 1234,
+      })
+    ).toMatchObject({
+      consentGiven: true,
+      consentTimestamp: 5678,
+      consentDeclinedAt: undefined,
+    });
+  });
+
+  it.each([
+    ["string", "1234"],
+    ["boolean", true],
+    ["object", { value: 1234 }],
+    ["array", [1234]],
+    ["NaN", Number.NaN],
+    ["positive infinity", Number.POSITIVE_INFINITY],
+    ["negative infinity", Number.NEGATIVE_INFINITY],
+  ])("drops a malformed consentPromptedAt %s value", (_label, value) => {
+    const normalized = normalizeState(
+      "malformed-consent-prompt-timestamp",
+      { consentPromptedAt: value } as unknown as Parameters<
+        typeof normalizeState
+      >[1]
+    );
+
+    expect(normalized.consentPromptedAt).toBeUndefined();
+  });
+
+  it("preserves a finite consentPromptedAt value", () => {
+    expect(
+      normalizeState("valid-consent-prompt-timestamp", {
+        consentPromptedAt: 1234,
+      }).consentPromptedAt
+    ).toBe(1234);
+  });
+
   it("marks the legacy implicit Dutch default as account-derived", () => {
-    expect(normalizeState("legacy-dutch", { preferredLang: "nl" })).toMatchObject({
+    expect(
+      normalizeState("legacy-dutch", { preferredLang: "nl" })
+    ).toMatchObject({
       preferredLang: "nl",
       preferredLangSource: "account_default",
     });
@@ -118,7 +194,7 @@ describe("messenger state normalization", () => {
       normalizeState("stored-language-source", {
         preferredLang: "nl",
         preferredLangSource: "sender_locale",
-      }),
+      })
     ).toMatchObject({
       preferredLang: "nl",
       preferredLangSource: "sender_locale",
