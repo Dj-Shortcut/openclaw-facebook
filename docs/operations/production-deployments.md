@@ -41,6 +41,14 @@ restrict it to `main`. Add these environment secrets:
 Keep the two Fly tokens separate. A compromised image-gen deployment must not
 be able to mutate the stateful gateway, and vice versa.
 
+The gateway currently has `deploymentEnabled: false`. This is an explicit
+bootstrap gate, not an operator override: rehearse the volume migration and
+prove the current managed release first, then add its immutable digest to
+`reviewedRollbackImages` and set `deploymentEnabled: true` in the same reviewed
+PR. Repository validation rejects enablement without that digest, and the
+workflow rejects a blocked target before production approval or any Fly
+mutation.
+
 ## Normal release
 
 1. Merge a reviewed PR into `main` after CI passes.

@@ -9,6 +9,7 @@ import { checkMetaCallbacks } from "./check-meta-callbacks.mjs";
 import {
   checkLiveFlyDrift,
   resolveImmutableReleaseImage,
+  validateDeploymentEnabled,
   validateProductionRepository,
   validateReviewedRollbackImage,
 } from "./validate-production-deployment.mjs";
@@ -207,6 +208,41 @@ describe("production deployment contract", () => {
     expect(() => validateProductionRepository(root)).toThrow(
       "gateway must define reviewedRollbackImages",
     );
+  });
+
+  it("blocks the gateway until its reviewed rollback bootstrap is complete", () => {
+    expect(() => validateDeploymentEnabled("gateway", repoRoot)).toThrow(
+      "gateway production deployment is blocked",
+    );
+    expect(validateDeploymentEnabled("image-gen", repoRoot).app).toBe(
+      "leaderbot-fb-image-gen",
+    );
+  });
+
+  it("refuses to enable a gateway without a reviewed rollback digest", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.apps.gateway.deploymentEnabled = true;
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "gateway must seed a reviewed rollback digest before deployment is enabled",
+    );
+  });
+
+  it("enables the gateway only when the bootstrap digest is reviewed", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.apps.gateway.deploymentEnabled = true;
+    manifest.apps.gateway.reviewedRollbackImages = [
+      "registry.fly.io/leaderbot-openclaw-gateway@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ];
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(validateProductionRepository(root)).toEqual({ apps: 2, callbacks: 2 });
+    expect(validateDeploymentEnabled("gateway", root).deploymentEnabled).toBe(true);
   });
 
   it("requires an explicit allowed Meta field set", () => {

@@ -116,6 +116,15 @@ export function validateReviewedRollbackImage(target, image, rootDir = process.c
   return image;
 }
 
+export function validateDeploymentEnabled(target, rootDir = process.cwd()) {
+  const app = loadProductionManifest(rootDir).apps[target];
+  if (!app) fail(`Unknown production target: ${target}`);
+  if (app.deploymentEnabled !== true) {
+    fail(`${target} production deployment is blocked: ${app.deploymentBlockReason}`);
+  }
+  return app;
+}
+
 export function resolveImmutableReleaseImage(
   target,
   releaseImage,
@@ -168,6 +177,10 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     [/--live image-gen[ \t]*\r?$/m, "must run strict image-gen post-deploy drift checks"],
     ["scripts/check-meta-callbacks.mjs", "must verify Meta callbacks"],
     ["rollback-image.txt", "must preserve rollback image metadata"],
+    [
+      '--validate-target-enabled "$TARGET"',
+      "must reject production targets blocked by the manifest",
+    ],
     [
       "--validate-rollback-image gateway",
       "must validate requested gateway rollback images",
@@ -285,6 +298,12 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     if (!Array.isArray(app.reviewedRollbackImages)) {
       fail(`${target} must define reviewedRollbackImages`);
     }
+    if (typeof app.deploymentEnabled !== "boolean") {
+      fail(`${target} must define deploymentEnabled`);
+    }
+    if (app.deploymentEnabled === false && !app.deploymentBlockReason) {
+      fail(`${target} must explain why deployment is blocked`);
+    }
     if (new Set(app.reviewedRollbackImages).size !== app.reviewedRollbackImages.length) {
       fail(`${target} reviewedRollbackImages must not contain duplicates`);
     }
@@ -292,6 +311,14 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       if (!isImmutableAppImage(app, image)) {
         fail(`${target} has an invalid reviewed rollback image`);
       }
+    }
+    if (
+      app.deploymentEnabled === true &&
+      app.sourceDeployEnabled !== false &&
+      !app.reviewedImage &&
+      app.reviewedRollbackImages.length === 0
+    ) {
+      fail(`${target} must seed a reviewed rollback digest before deployment is enabled`);
     }
     if (app.sourceDeployEnabled === false && !app.sourceDeployBlockReason) {
       fail(`${target} must document why source deploys are blocked`);
@@ -534,10 +561,15 @@ const isMain =
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 
 if (isMain) {
+  const enabledIndex = process.argv.indexOf("--validate-target-enabled");
   const resolveIndex = process.argv.indexOf("--resolve-release-image");
   const rollbackIndex = process.argv.indexOf("--validate-rollback-image");
   const liveIndex = process.argv.indexOf("--live");
-  if (resolveIndex >= 0) {
+  if (enabledIndex >= 0) {
+    const target = process.argv[enabledIndex + 1];
+    validateDeploymentEnabled(target);
+    process.stdout.write(`${target} production deployment is enabled.\n`);
+  } else if (resolveIndex >= 0) {
     const target = process.argv[resolveIndex + 1];
     const releaseImage = process.argv[resolveIndex + 2];
     const imageRecordsPath = process.argv[resolveIndex + 3];

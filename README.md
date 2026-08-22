@@ -73,6 +73,8 @@ npm run deploy:gateway
 
 Do not create production Machines with `fly machine run`. See
 [`docs/operations/production-deployments.md`](docs/operations/production-deployments.md).
+The stateful gateway remains manifest-blocked until its volume migration is
+rehearsed and its proven managed rollback digest is approved in the same PR.
 
 ## Configure
 
