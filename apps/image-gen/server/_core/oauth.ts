@@ -6,8 +6,6 @@ import { z } from "zod";
 import * as db from "../db";
 import { getSessionCookieOptions } from "./cookies";
 import {
-  FACEBOOK_LOGIN_PERMISSIONS,
-  getFacebookLoginConfigurationId,
   getFacebookPagesForUserAccessToken,
   startFacebookConnect,
   storeFacebookPages,
@@ -18,6 +16,10 @@ import { isFacebookLoginMethod } from "./portalAuthPolicy";
 
 const OAUTH_STATE_COOKIE_NAME = "lb_oauth_state_nonce";
 const FACEBOOK_OAUTH_TIMEOUT_MS = 10_000;
+const FACEBOOK_LOGIN_PERMISSIONS = [
+  "public_profile",
+  "pages_show_list",
+] as const;
 
 type OAuthStatePayload = {
   nonce: string;
@@ -318,19 +320,10 @@ export function registerOAuthRoutes(app: Express) {
     authorizationUrl.searchParams.set("state", state);
     if (facebookConfig) {
       authorizationUrl.searchParams.set("response_type", "code");
-      const configurationId = getFacebookLoginConfigurationId();
-      if (configurationId) {
-        authorizationUrl.searchParams.set("config_id", configurationId);
-        authorizationUrl.searchParams.set(
-          "override_default_response_type",
-          "true"
-        );
-      } else {
-        authorizationUrl.searchParams.set(
-          "scope",
-          ["public_profile", ...FACEBOOK_LOGIN_PERMISSIONS].join(",")
-        );
-      }
+      authorizationUrl.searchParams.set(
+        "scope",
+        FACEBOOK_LOGIN_PERMISSIONS.join(",")
+      );
     }
     res.redirect(302, authorizationUrl.toString());
   };

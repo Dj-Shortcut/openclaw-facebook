@@ -14,7 +14,7 @@ export const REQUIRED_FACEBOOK_SCOPES = [
   "pages_messaging",
 ] as const;
 
-export const FACEBOOK_LOGIN_PERMISSIONS = [
+export const FACEBOOK_PAGE_CONNECT_PERMISSIONS = [
   ...REQUIRED_FACEBOOK_SCOPES,
   "business_management",
 ] as const;
@@ -172,12 +172,12 @@ function getFacebookRedirectUri() {
   return `${getPortalBaseUrl()}/api/facebook/connect/callback`;
 }
 
-export function getFacebookLoginConfigurationId(): string | null {
-  const configurationId = process.env.FB_LOGIN_CONFIG_ID?.trim();
+export function getFacebookPageConnectConfigurationId(): string | null {
+  const configurationId = process.env.FB_PAGE_CONNECT_CONFIG_ID?.trim();
   if (!configurationId) return null;
   if (!/^[1-9]\d+$/.test(configurationId)) {
     throw new Error(
-      "FB_LOGIN_CONFIG_ID must be a positive numeric Meta configuration ID"
+      "FB_PAGE_CONNECT_CONFIG_ID must be a positive numeric Meta configuration ID"
     );
   }
   return configurationId;
@@ -194,14 +194,14 @@ export function getFacebookOAuthUrl(state: string) {
   url.searchParams.set("redirect_uri", getFacebookRedirectUri());
   url.searchParams.set("state", state);
   url.searchParams.set("response_type", "code");
-  const configurationId = getFacebookLoginConfigurationId();
+  const configurationId = getFacebookPageConnectConfigurationId();
   if (configurationId) {
     // Facebook Login for Business configurations own the permission set.
     // Meta recommends config_id instead of a caller-controlled scope list.
     url.searchParams.set("config_id", configurationId);
     url.searchParams.set("override_default_response_type", "true");
   } else {
-    url.searchParams.set("scope", FACEBOOK_LOGIN_PERMISSIONS.join(","));
+    url.searchParams.set("scope", FACEBOOK_PAGE_CONNECT_PERMISSIONS.join(","));
   }
   return url.toString();
 }

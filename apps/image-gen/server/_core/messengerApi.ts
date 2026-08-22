@@ -9,8 +9,12 @@ import {
   getMessengerRequestOperationId,
   getMessengerRequestPageId,
   getMessengerRequestPrivacySubject,
+  isMessengerErasureControlDelivery,
 } from "./messengerRequestContext";
-import { assertMessengerPrivacySubject } from "./messengerPrivacySubject";
+import {
+  assertMessengerErasureControlDelivery,
+  assertMessengerPrivacySubject,
+} from "./messengerPrivacySubject";
 import { toUserKey } from "./privacy";
 import {
   finalizeMessengerProviderAttemptFence,
@@ -94,7 +98,10 @@ async function assertDeliveryPrivacy(
     }
     return;
   }
-  await assertMessengerPrivacySubject({
+  const assertPrivacy = isMessengerErasureControlDelivery()
+    ? assertMessengerErasureControlDelivery
+    : assertMessengerPrivacySubject;
+  await assertPrivacy({
     workspaceId: fence.workspaceId,
     channelConnectionId: fence.channelConnectionId,
     userKey: fence.userKey,

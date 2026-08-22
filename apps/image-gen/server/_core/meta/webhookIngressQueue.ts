@@ -16,6 +16,8 @@ const WEBHOOK_INGRESS_PROCESSING_KEY = "{meta-webhook-ingress}:processing";
 const WEBHOOK_INGRESS_DEAD_LETTER_KEY = "{meta-webhook-ingress}:dead";
 const WEBHOOK_INGRESS_DELIVERY_PREFIX = "{meta-webhook-ingress}:delivery:";
 const WEBHOOK_INGRESS_SUBJECT_PREFIX = "{meta-webhook-ingress}:subject:";
+const WEBHOOK_INGRESS_SUBJECT_LEASE_PREFIX =
+  "{meta-webhook-ingress}:subject-lease:";
 const WEBHOOK_INGRESS_LEASE_PREFIX = "{meta-webhook-ingress}:lease:";
 const DEFAULT_WEBHOOK_INGRESS_CONTENT_TTL_SECONDS = 24 * 60 * 60;
 const DEFAULT_WEBHOOK_INGRESS_DELIVERY_LEASE_SECONDS = 15 * 60;
@@ -48,6 +50,12 @@ type ReservedWebhookDelivery = {
   raw: string;
   delivery: QueuedWebhookDelivery;
   legacyInline: boolean;
+  subjectLease?: WebhookIngressSubjectLease;
+};
+
+type WebhookIngressSubjectLease = {
+  keys: string[];
+  token: string;
 };
 
 let drainPromise: Promise<void> | null = null;
@@ -130,6 +138,12 @@ function getWebhookIngressDeliveryKey(deliveryId: string): string {
   return `${WEBHOOK_INGRESS_DELIVERY_PREFIX}${deliveryId}`;
 }
 
+function isCanonicalWebhookIngressDeliveryId(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value
+  );
+}
+
 function getWebhookIngressSubjectId(
   subject: Pick<
     WebhookIngressSubject,
@@ -149,6 +163,12 @@ function getWebhookIngressSubjectKey(subject: WebhookIngressSubject): string {
   return `${WEBHOOK_INGRESS_SUBJECT_PREFIX}${getWebhookIngressSubjectId(subject)}`;
 }
 
+function getWebhookIngressSubjectLeaseKey(
+  subject: WebhookIngressSubject
+): string {
+  return `${WEBHOOK_INGRESS_SUBJECT_LEASE_PREFIX}${getWebhookIngressSubjectId(subject)}`;
+}
+
 function getWebhookIngressSubjectTombstoneKey(
   subject: Pick<
     WebhookIngressSubject,
@@ -159,11 +179,7 @@ function getWebhookIngressSubjectTombstoneKey(
 }
 
 function getWebhookIngressDeliveryLeaseKey(rawDelivery: string): string {
-  if (
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      rawDelivery
-    )
-  ) {
+  if (isCanonicalWebhookIngressDeliveryId(rawDelivery)) {
     return `${WEBHOOK_INGRESS_LEASE_PREFIX}${rawDelivery}`;
   }
   const digest = createHash("sha256").update(rawDelivery).digest("hex");
@@ -340,7 +356,6 @@ export async function ensureWebhookIngressQueueReady(): Promise<void> {
   for (const listKey of [
     WEBHOOK_INGRESS_QUEUE_KEY,
     WEBHOOK_INGRESS_PROCESSING_KEY,
-    WEBHOOK_INGRESS_DEAD_LETTER_KEY,
   ]) {
     const refs = await redis.lrange(listKey, 0, 1_000);
     if (refs.length > 1_000) {
@@ -360,6 +375,18 @@ export async function ensureWebhookIngressQueueReady(): Promise<void> {
         );
       }
     }
+  }
+
+  const deadLetterRefs = await redis.lrange(
+    WEBHOOK_INGRESS_DEAD_LETTER_KEY,
+    0,
+    1_000
+  );
+  if (deadLetterRefs.length > 1_000) {
+    throw new Error("Webhook ingress readiness scan is not bounded");
+  }
+  if (deadLetterRefs.some(ref => !isCanonicalWebhookIngressDeliveryId(ref))) {
+    throw new Error("Legacy webhook ingress dead-letter requires purge");
   }
 }
 
@@ -457,7 +484,12 @@ async function enqueueWebhookIngressUnit(
 
 async function reserveWebhookIngressDelivery(
   redis: RedisLike
-): Promise<ReservedWebhookDelivery | { raw: string; invalid: true } | null> {
+): Promise<
+  | ReservedWebhookDelivery
+  | { raw: string; invalid: true }
+  | { subjectBlocked: true }
+  | null
+> {
   const reservedResult =
     process.env.NODE_ENV === "test"
       ? await (async () => {
@@ -507,14 +539,96 @@ async function reserveWebhookIngressDelivery(
     return { raw, invalid: true };
   }
 
-  return { raw, delivery, legacyInline };
+  const subjectLease = await acquireWebhookIngressSubjectLease(redis, delivery);
+  if (delivery.subjects.length > 0 && !subjectLease) {
+    await returnWebhookIngressDeliveryToFront(redis, raw);
+    return { subjectBlocked: true };
+  }
+
+  return { raw, delivery, legacyInline, subjectLease };
+}
+
+async function acquireWebhookIngressSubjectLease(
+  redis: RedisLike,
+  delivery: QueuedWebhookDelivery
+): Promise<WebhookIngressSubjectLease | undefined> {
+  const keys = Array.from(
+    new Set(delivery.subjects.map(getWebhookIngressSubjectLeaseKey))
+  );
+  if (keys.length === 0) return undefined;
+  const token = randomUUID();
+  const acquired = Number(
+    await redis.eval(
+      `
+        for i = 1, #KEYS do
+          if redis.call("EXISTS", KEYS[i]) == 1 then return 0 end
+        end
+        for i = 1, #KEYS do
+          redis.call("SET", KEYS[i], ARGV[1], "EX", ARGV[2])
+        end
+        return 1
+      `,
+      keys.length,
+      ...keys,
+      token,
+      getWebhookIngressDeliveryLeaseSeconds()
+    )
+  );
+  return acquired === 1 ? { keys, token } : undefined;
+}
+
+async function returnWebhookIngressDeliveryToFront(
+  redis: RedisLike,
+  raw: string
+): Promise<void> {
+  const returned = Number(
+    await redis.eval(
+      `
+        local removed = redis.call("LREM", KEYS[1], 1, ARGV[1])
+        if removed == 1 then
+          redis.call("DEL", KEYS[2])
+          redis.call("LPUSH", KEYS[3], ARGV[1])
+        end
+        return removed
+      `,
+      3,
+      WEBHOOK_INGRESS_PROCESSING_KEY,
+      getWebhookIngressDeliveryLeaseKey(raw),
+      WEBHOOK_INGRESS_QUEUE_KEY,
+      raw
+    )
+  );
+  if (returned !== 1) {
+    throw new Error("Blocked webhook delivery was not returned to queue");
+  }
+}
+
+async function releaseWebhookIngressSubjectLease(
+  redis: RedisLike,
+  lease: WebhookIngressSubjectLease | undefined
+): Promise<void> {
+  if (!lease) return;
+  await redis.eval(
+    `
+      for i = 1, #KEYS do
+        if redis.call("GET", KEYS[i]) == ARGV[1] then
+          redis.call("DEL", KEYS[i])
+        end
+      end
+      return 1
+    `,
+    lease.keys.length,
+    ...lease.keys,
+    lease.token
+  );
 }
 
 async function completeWebhookIngressDelivery(
   redis: RedisLike,
   raw: string,
   delivery?: QueuedWebhookDelivery,
-  legacyInline = false
+  legacyInline = false,
+  subjectLease?: WebhookIngressSubjectLease
 ): Promise<void> {
   await redis.lrem(WEBHOOK_INGRESS_PROCESSING_KEY, 1, raw);
   await redis.del(getWebhookIngressDeliveryLeaseKey(raw));
@@ -527,6 +641,7 @@ async function completeWebhookIngressDelivery(
       );
     }
   }
+  await releaseWebhookIngressSubjectLease(redis, subjectLease);
 }
 
 async function isWebhookIngressDeliveryErased(
@@ -620,7 +735,8 @@ async function releaseFailedWebhookIngressDelivery(
       redis,
       reserved.raw,
       reserved.delivery,
-      false
+      false,
+      reserved.subjectLease
     );
     return "erased";
   }
@@ -636,17 +752,13 @@ async function releaseFailedWebhookIngressDelivery(
       redis,
       reserved.raw,
       reserved.delivery,
-      reserved.legacyInline
+      reserved.legacyInline,
+      reserved.subjectLease
     );
     return "erased";
   }
 
   if (attempts >= getWebhookIngressMaxAttempts()) {
-    if (!reserved.legacyInline) {
-      await redis.del(
-        getWebhookIngressDeliveryKey(reserved.delivery.deliveryId)
-      );
-    }
     await moveFailedWebhookIngressDelivery(
       redis,
       reserved,
@@ -656,6 +768,18 @@ async function releaseFailedWebhookIngressDelivery(
         : reserved.delivery.deliveryId,
       "RPUSH"
     );
+    if (!reserved.legacyInline) {
+      await redis.del(
+        getWebhookIngressDeliveryKey(reserved.delivery.deliveryId)
+      );
+      for (const subject of reserved.delivery.subjects) {
+        await redis.srem(
+          getWebhookIngressSubjectKey(subject),
+          reserved.delivery.deliveryId
+        );
+      }
+    }
+    await releaseWebhookIngressSubjectLease(redis, reserved.subjectLease);
     safeLog("webhook_queued_delivery_dead_lettered", {
       channel: reserved.delivery.channel,
       attempts,
@@ -681,6 +805,7 @@ async function releaseFailedWebhookIngressDelivery(
       : reserved.delivery.deliveryId,
     "RPUSH"
   );
+  await releaseWebhookIngressSubjectLease(redis, reserved.subjectLease);
   safeLog("webhook_queued_delivery_requeued", {
     channel: reserved.delivery.channel,
     attempts,
@@ -761,14 +886,18 @@ export async function eraseWebhookIngressDeliveriesForSubject(input: {
           redis.call("DEL", ARGV[2] .. id)
           redis.call("SREM", KEYS[4], id)
         end
-        if redis.call("SCARD", KEYS[4]) == 0 then redis.call("DEL", KEYS[4]) end
+        if redis.call("SCARD", KEYS[4]) == 0 then
+          redis.call("DEL", KEYS[4])
+          redis.call("DEL", KEYS[5])
+        end
         return #ids
       `,
-      4,
+      5,
       WEBHOOK_INGRESS_QUEUE_KEY,
       WEBHOOK_INGRESS_PROCESSING_KEY,
       WEBHOOK_INGRESS_DEAD_LETTER_KEY,
       subjectKey,
+      getWebhookIngressSubjectLeaseKey(subject),
       WEBHOOK_INGRESS_DELIVERY_PREFIX,
       WEBHOOK_INGRESS_LEASE_PREFIX
     );
@@ -849,6 +978,14 @@ export function scheduleWebhookIngressDrain(): void {
             return;
           }
 
+          if ("subjectBlocked" in reserved) {
+            setTimeout(() => {
+              drainRequested = true;
+              if (!drainPromise) scheduleWebhookIngressDrain();
+            }, getWebhookIngressRetryDelayMs());
+            return;
+          }
+
           if ("invalid" in reserved) {
             safeLog("webhook_queued_delivery_invalid", {});
             await completeWebhookIngressDelivery(redis, reserved.raw);
@@ -863,7 +1000,8 @@ export function scheduleWebhookIngressDrain(): void {
               redis,
               reserved.raw,
               reserved.delivery,
-              false
+              false,
+              reserved.subjectLease
             );
             continue;
           }
@@ -890,7 +1028,8 @@ export function scheduleWebhookIngressDrain(): void {
             redis,
             reserved.raw,
             reserved.delivery,
-            reserved.legacyInline
+            reserved.legacyInline,
+            reserved.subjectLease
           );
         }
       } catch (error) {
@@ -938,3 +1077,8 @@ export function resetWebhookIngressQueueForTests(): void {
   drainPromise = null;
   drainRequested = false;
 }
+
+export const webhookIngressQueueTestHooks = {
+  reserveWebhookIngressDelivery,
+  completeWebhookIngressDelivery,
+};

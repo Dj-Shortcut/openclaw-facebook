@@ -8,6 +8,7 @@ type MessengerRequestContext = {
   userKey?: string;
   privacyEpoch?: number;
   operationId?: string;
+  erasureControlDelivery?: boolean;
 };
 
 const messengerRequestContext =
@@ -62,6 +63,23 @@ export function setMessengerRequestOperationId(operationId: string): void {
 
 export function getMessengerRequestOperationId(): string | undefined {
   return messengerRequestContext.getStore()?.operationId;
+}
+
+export async function runWithMessengerErasureControlDelivery<T>(
+  task: () => Promise<T>
+): Promise<T> {
+  const context = messengerRequestContext.getStore();
+  if (!context) {
+    throw new Error("Messenger request context is unavailable");
+  }
+  return await messengerRequestContext.run(
+    { ...context, erasureControlDelivery: true },
+    task
+  );
+}
+
+export function isMessengerErasureControlDelivery(): boolean {
+  return messengerRequestContext.getStore()?.erasureControlDelivery === true;
 }
 
 export function getMessengerRequestPrivacySubject():

@@ -34,8 +34,10 @@ vi.mock("./_core/whatsappWebhook", () => ({
 }));
 
 import {
+  ensureWebhookIngressQueueReady,
   resetWebhookIngressQueueForTests,
   scheduleWebhookIngressDrain,
+  webhookIngressQueueTestHooks,
 } from "./_core/meta/webhookIngressQueue";
 
 describe("webhookIngressQueue", () => {
@@ -61,6 +63,162 @@ describe("webhookIngressQueue", () => {
       process.env.WEBHOOK_INGRESS_RETRY_DELAY_MS = originalRetryDelayMs;
     }
     resetWebhookIngressQueueForTests();
+  });
+
+  it("accepts metadata-only dead letters without loading deleted content", async () => {
+    const deadLetterId = "11111111-1111-4111-8111-111111111111";
+    const redis = {
+      lrange: vi.fn(async (key: string) =>
+        key === "{meta-webhook-ingress}:dead" ? [deadLetterId] : []
+      ),
+      get: vi.fn(async () => {
+        throw new Error("dead-letter content must not be loaded");
+      }),
+    };
+    getRedisClientMock.mockResolvedValue(redis);
+
+    await expect(ensureWebhookIngressQueueReady()).resolves.toBeUndefined();
+    expect(redis.get).not.toHaveBeenCalled();
+  });
+
+  it("rejects legacy content in the metadata-only dead-letter list", async () => {
+    getRedisClientMock.mockResolvedValue({
+      lrange: vi.fn(async (key: string) =>
+        key === "{meta-webhook-ingress}:dead"
+          ? [JSON.stringify({ payload: "legacy" })]
+          : []
+      ),
+      get: vi.fn(),
+    });
+
+    await expect(ensureWebhookIngressQueueReady()).rejects.toThrow(
+      "Legacy webhook ingress dead-letter requires purge"
+    );
+  });
+
+  it("leases one Messenger subject at a time and preserves its queue order", async () => {
+    const firstId = "11111111-1111-4111-8111-111111111111";
+    const secondId = "22222222-2222-4222-8222-222222222222";
+    const now = Date.now();
+    const subject = {
+      workspaceId: 42,
+      channelConnectionId: 7,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      pageId: "page-serial",
+      userKey: "a".repeat(64),
+    };
+    const queue = [firstId, secondId];
+    const processing: string[] = [];
+    const values = new Map<string, string>([
+      [
+        `{meta-webhook-ingress}:delivery:${firstId}`,
+        JSON.stringify({
+          deliveryId: firstId,
+          channel: "facebook",
+          payload: { order: 1 },
+          receivedAt: new Date(now).toISOString(),
+          expiresAt: now + 60_000,
+          subjects: [subject],
+        }),
+      ],
+      [
+        `{meta-webhook-ingress}:delivery:${secondId}`,
+        JSON.stringify({
+          deliveryId: secondId,
+          channel: "facebook",
+          payload: { order: 2 },
+          receivedAt: new Date(now + 1).toISOString(),
+          expiresAt: now + 60_000,
+          subjects: [subject],
+        }),
+      ],
+    ]);
+    const subjectLeases = new Map<string, string>();
+    const redis = {
+      lmove: vi.fn(async () => {
+        const ref = queue.shift() ?? null;
+        if (ref) processing.push(ref);
+        return ref;
+      }),
+      set: vi.fn(async (key: string, value: string) => {
+        values.set(key, value);
+        return "OK";
+      }),
+      get: vi.fn(async (key: string) => values.get(key) ?? null),
+      lrem: vi.fn(async (_key: string, _count: number, ref: string) => {
+        const index = processing.indexOf(ref);
+        if (index < 0) return 0;
+        processing.splice(index, 1);
+        return 1;
+      }),
+      lpush: vi.fn(async (_key: string, ref: string) => {
+        queue.unshift(ref);
+        return queue.length;
+      }),
+      del: vi.fn(async (key: string) => {
+        values.delete(key);
+        return 1;
+      }),
+      srem: vi.fn(async () => 1),
+      eval: vi.fn(
+        async (script: string, keyCount: number, ...args: unknown[]) => {
+          const keys = args.slice(0, keyCount).map(String);
+          const argv = args.slice(keyCount).map(String);
+          if (script.includes('redis.call("EXISTS", KEYS[i])')) {
+            if (keys.some(key => subjectLeases.has(key))) return 0;
+            for (const key of keys) subjectLeases.set(key, argv[0]!);
+            return 1;
+          }
+          if (script.includes('redis.call("LPUSH", KEYS[3]')) {
+            const ref = argv[0]!;
+            const index = processing.indexOf(ref);
+            if (index < 0) return 0;
+            processing.splice(index, 1);
+            queue.unshift(ref);
+            values.delete(keys[1]!);
+            return 1;
+          }
+          if (script.includes('redis.call("GET", KEYS[i]) == ARGV[1]')) {
+            for (const key of keys) {
+              if (subjectLeases.get(key) === argv[0]) subjectLeases.delete(key);
+            }
+            return 1;
+          }
+          throw new Error("unexpected Redis script");
+        }
+      ),
+    };
+
+    const first =
+      await webhookIngressQueueTestHooks.reserveWebhookIngressDelivery(
+        redis as never
+      );
+    expect(first).toMatchObject({ delivery: { deliveryId: firstId } });
+
+    const blocked =
+      await webhookIngressQueueTestHooks.reserveWebhookIngressDelivery(
+        redis as never
+      );
+    expect(blocked).toEqual({ subjectBlocked: true });
+    expect(queue).toEqual([secondId]);
+
+    if (!first || "invalid" in first || "subjectBlocked" in first) {
+      throw new Error("expected a reserved delivery");
+    }
+    await webhookIngressQueueTestHooks.completeWebhookIngressDelivery(
+      redis as never,
+      first.raw,
+      first.delivery,
+      first.legacyInline,
+      first.subjectLease
+    );
+
+    const second =
+      await webhookIngressQueueTestHooks.reserveWebhookIngressDelivery(
+        redis as never
+      );
+    expect(second).toMatchObject({ delivery: { deliveryId: secondId } });
   });
 
   it("awaits each queued delivery before popping the next one", async () => {

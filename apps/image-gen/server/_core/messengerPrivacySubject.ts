@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { messengerPrivacySubjects } from "../../drizzle/schema";
 import { getDatabaseOrThrow } from "../db";
 
@@ -74,6 +74,44 @@ export async function getActiveMessengerPrivacySubjectEpoch(
     )
     .limit(1);
   return rows[0]?.privacyEpoch ?? null;
+}
+
+export async function getErasingMessengerPrivacySubjectEpoch(
+  input: SubjectScope
+): Promise<number | null> {
+  validateScope(input);
+  const database = await getDatabaseOrThrow();
+  const rows = await database
+    .select({ privacyEpoch: messengerPrivacySubjects.privacyEpoch })
+    .from(messengerPrivacySubjects)
+    .where(
+      and(scopePredicate(input), eq(messengerPrivacySubjects.status, "erasing"))
+    )
+    .limit(1);
+  return rows[0]?.privacyEpoch ?? null;
+}
+
+export async function assertMessengerErasureControlDelivery(
+  input: SubjectScope & { privacyEpoch: number }
+): Promise<void> {
+  validateScope(input);
+  const database = await getDatabaseOrThrow();
+  const rows = await database
+    .select({ id: messengerPrivacySubjects.id })
+    .from(messengerPrivacySubjects)
+    .where(
+      and(
+        scopePredicate(input),
+        eq(messengerPrivacySubjects.privacyEpoch, input.privacyEpoch),
+        inArray(messengerPrivacySubjects.status, [
+          "active",
+          "erasing",
+          "erased",
+        ])
+      )
+    )
+    .limit(1);
+  if (!rows[0]) throw new MessengerPrivacyFenceError();
 }
 
 export async function beginMessengerPrivacyErasure(

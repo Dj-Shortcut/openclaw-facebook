@@ -100,11 +100,13 @@ function dateFromPeriod(period: string): Date {
 }
 
 function addUtcDays(date: Date, days: number): Date {
-  return new Date(Date.UTC(
-    date.getUTCFullYear(),
-    date.getUTCMonth(),
-    date.getUTCDate() + days
-  ));
+  return new Date(
+    Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate() + days
+    )
+  );
 }
 
 function candidateUpdatePeriods(periodDate: Date): string[] {
@@ -144,10 +146,7 @@ function costLedgerPeriodStorageKey(period: string): string {
 }
 
 function isRedisWrongTypeError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    /\bWRONGTYPE\b/i.test(error.message)
-  );
+  return error instanceof Error && /\bWRONGTYPE\b/i.test(error.message);
 }
 
 async function readLegacyRedisListLedgerPeriod(
@@ -158,7 +157,11 @@ async function readLegacyRedisListLedgerPeriod(
   }
 
   const redis = await getRedisClient();
-  const payloads = await redis.lrange(costLedgerPeriodStorageKey(period), 0, -1);
+  const payloads = await redis.lrange(
+    costLedgerPeriodStorageKey(period),
+    0,
+    -1
+  );
   const entries: StoredCostLedgerEntry[] = [];
   let malformedEntries = 0;
 
@@ -202,8 +205,18 @@ async function withCostLedgerPeriodLock<T>(
   const lockKey = costLedgerPeriodLockKey(period);
   const token = randomUUID();
 
-  for (let attempt = 0; attempt < COST_LEDGER_PERIOD_LOCK_MAX_ATTEMPTS; attempt += 1) {
-    if (await setEphemeralKeyIfAbsent(lockKey, token, COST_LEDGER_PERIOD_LOCK_TTL_SECONDS)) {
+  for (
+    let attempt = 0;
+    attempt < COST_LEDGER_PERIOD_LOCK_MAX_ATTEMPTS;
+    attempt += 1
+  ) {
+    if (
+      await setEphemeralKeyIfAbsent(
+        lockKey,
+        token,
+        COST_LEDGER_PERIOD_LOCK_TTL_SECONDS
+      )
+    ) {
       try {
         return await action();
       } finally {
@@ -313,7 +326,9 @@ export async function readCostLedgerPeriod(
 
 function getRetainedLedgerPeriods(now = new Date()): string[] {
   const periods = new Set<string>();
-  const cursor = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const cursor = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+  );
   for (let offset = 0; offset < 90; offset += 1) {
     periods.add(cursor.toISOString().slice(0, 10));
     cursor.setUTCDate(cursor.getUTCDate() - 1);
@@ -335,7 +350,10 @@ export async function appendCostLedgerEntry(
     };
     const current = await readCostLedgerPeriod(period);
     const appended = [...current, storedEntry];
-    const droppedEntries = Math.max(0, appended.length - COST_LEDGER_MAX_ENTRIES_PER_PERIOD);
+    const droppedEntries = Math.max(
+      0,
+      appended.length - COST_LEDGER_MAX_ENTRIES_PER_PERIOD
+    );
     const next = appended.slice(-COST_LEDGER_MAX_ENTRIES_PER_PERIOD);
     if (droppedEntries > 0) {
       costLedgerDroppedEntryCount += droppedEntries;
@@ -348,12 +366,7 @@ export async function appendCostLedgerEntry(
       });
     }
     await Promise.resolve(
-      writeScopedState(
-        COST_LEDGER_SCOPE,
-        period,
-        next,
-        COST_LEDGER_TTL_SECONDS
-      )
+      writeScopedState(COST_LEDGER_SCOPE, period, next, COST_LEDGER_TTL_SECONDS)
     );
     return storedEntry;
   });
@@ -421,7 +434,10 @@ export async function deleteCostLedgerEntriesForUser(
 export async function updateCostLedgerEntry(
   id: string,
   updates: Partial<
-    Pick<CostLedgerEntry, "status" | "finalCostUsd" | "costEstimateComplete" | "estimateSource">
+    Pick<
+      CostLedgerEntry,
+      "status" | "finalCostUsd" | "costEstimateComplete" | "estimateSource"
+    >
   >,
   periodDate = new Date()
 ): Promise<StoredCostLedgerEntry | null> {
@@ -460,7 +476,10 @@ export async function updateCostLedgerEntry(
 export async function safelyUpdateCostLedgerEntry(
   id: string,
   updates: Partial<
-    Pick<CostLedgerEntry, "status" | "finalCostUsd" | "costEstimateComplete" | "estimateSource">
+    Pick<
+      CostLedgerEntry,
+      "status" | "finalCostUsd" | "costEstimateComplete" | "estimateSource"
+    >
   >,
   periodDate = new Date()
 ): Promise<StoredCostLedgerEntry | null> {
@@ -470,7 +489,8 @@ export async function safelyUpdateCostLedgerEntry(
     safeLog("cost_ledger_update_failed", {
       id: toRequestSummaryKey(id),
       status: updates.status,
-      errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
+      errorCode:
+        error instanceof Error ? error.constructor.name : "UnknownError",
     });
     return null;
   }
@@ -491,7 +511,8 @@ export async function safelyAppendCostLedgerEntry(
       model: entry.model,
       status: entry.status,
       user: toLogUser(entry.userKey),
-      errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
+      errorCode:
+        error instanceof Error ? error.constructor.name : "UnknownError",
     });
     return null;
   }
@@ -522,7 +543,8 @@ function summarizeCostLedgerEntries(
     byStatus[entry.status] += 1;
     users.add(entry.userKey);
     estimatedCostUsd +=
-      costValue(entry.estimatedCostUsd) + costValue(entry.estimatedOutputCostUsd);
+      costValue(entry.estimatedCostUsd) +
+      costValue(entry.estimatedOutputCostUsd);
     finalCostUsd += costValue(entry.finalCostUsd);
     if (entry.costEstimateComplete) {
       completeEstimateEntries += 1;
@@ -566,6 +588,10 @@ function isBudgetedEntry(entry: StoredCostLedgerEntry): boolean {
   return entry.providerUsage?.budgetBypassApplied !== true;
 }
 
+function isOwnerBypassEntry(entry: StoredCostLedgerEntry): boolean {
+  return entry.providerUsage?.budgetBypassApplied === true;
+}
+
 /**
  * Returns only usage governed by customer spend caps. Owner bypass usage stays
  * visible in the full cost dashboard but cannot consume customer budget.
@@ -596,6 +622,28 @@ export async function summarizeBudgetedCostLedgerPeriods(
   )
     .flat()
     .filter(isBudgetedEntry);
+  return summarizeCostLedgerEntries(summaryPeriod, entries);
+}
+
+/** Returns owner-only usage for the independent emergency cost stop. */
+export async function summarizeOwnerBypassCostLedgerPeriod(
+  period: string
+): Promise<CostLedgerSummary> {
+  const entries = (await readCostLedgerPeriod(period)).filter(
+    isOwnerBypassEntry
+  );
+  return summarizeCostLedgerEntries(period, entries);
+}
+
+export async function summarizeOwnerBypassCostLedgerPeriods(
+  periods: string[],
+  summaryPeriod = periods.join(",")
+): Promise<CostLedgerSummary> {
+  const entries = (
+    await Promise.all(periods.map(period => readCostLedgerPeriod(period)))
+  )
+    .flat()
+    .filter(isOwnerBypassEntry);
   return summarizeCostLedgerEntries(summaryPeriod, entries);
 }
 

@@ -799,6 +799,7 @@ describe("Messenger consent deletion flow", () => {
     const sourceUrl =
       "https://assets.example/inbound-source/delete-storage-pending.jpg";
     const sendText = vi.fn(async () => undefined);
+    const sendDeletionOutcome = vi.fn(async () => undefined);
     const sendActions = vi.fn(async () => undefined);
 
     await Promise.resolve(getOrCreateState(psid));
@@ -814,6 +815,7 @@ describe("Messenger consent deletion flow", () => {
         payload: "GDPR_DELETE_CONFIRM",
         state: state!,
         sendText,
+        sendDeletionOutcome,
         sendActions,
       })
     ).resolves.toBe(true);
@@ -824,10 +826,10 @@ describe("Messenger consent deletion flow", () => {
     expect((await Promise.resolve(getState(psid)))?.pendingDeleteConfirm).toBe(
       false
     );
-    expect(sendText).toHaveBeenCalledWith(
+    expect(sendDeletionOutcome).toHaveBeenCalledWith(
       expect.stringContaining("couldn't finish deleting all your data yet")
     );
-    expect(sendText).not.toHaveBeenCalledWith(
+    expect(sendDeletionOutcome).not.toHaveBeenCalledWith(
       expect.stringContaining("Your data has been deleted")
     );
   });

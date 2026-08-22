@@ -180,13 +180,28 @@ async function findLegacyCompletionKeys(
         200
       );
       for (const key of keys) {
-        if (!key.startsWith(`${prefix}:{mgc:`)) unsafe.push(key);
+        if (isLegacyMessengerGenerationCompletionKey(prefix, key)) {
+          unsafe.push(key);
+        }
         if (unsafe.length >= limit) return unsafe;
       }
       cursor = next;
     } while (cursor !== "0");
   }
   return unsafe;
+}
+
+export function isLegacyMessengerGenerationCompletionKey(
+  prefix: string,
+  key: string
+): boolean {
+  if (
+    prefix === GENERATION_COMPLETION_SCOPE &&
+    key.startsWith(`${GENERATION_COMPLETION_USER_INDEX_SCOPE}:`)
+  ) {
+    return false;
+  }
+  return !key.startsWith(`${prefix}:{mgc:`);
 }
 
 function completionSubjectKey(

@@ -19,6 +19,7 @@ vi.mock("./storage", () => ({
 import {
   deleteMessengerGenerationCompletionsForUser,
   getMessengerGenerationCompletion,
+  isLegacyMessengerGenerationCompletionKey,
   markMessengerGenerationCompleted,
   markMessengerGenerationDelivered,
 } from "./_core/messengerGenerationCompletion";
@@ -31,6 +32,37 @@ describe("messengerGenerationCompletion", () => {
     assertPrivacyMock.mockResolvedValue(undefined);
     storageDeleteMock.mockReset();
     storageDeleteMock.mockResolvedValue(undefined);
+  });
+
+  it("accepts canonical nested user indexes during the broad readiness scan", () => {
+    const completionScope = "messenger-generation-completion";
+    const userIndexScope = "messenger-generation-completion:user";
+    const canonicalTag = "{mgc:0123456789abcdef}";
+
+    expect(
+      isLegacyMessengerGenerationCompletionKey(
+        completionScope,
+        `${userIndexScope}:${canonicalTag}:index`
+      )
+    ).toBe(false);
+    expect(
+      isLegacyMessengerGenerationCompletionKey(
+        userIndexScope,
+        `${userIndexScope}:${canonicalTag}:index`
+      )
+    ).toBe(false);
+    expect(
+      isLegacyMessengerGenerationCompletionKey(
+        completionScope,
+        `${completionScope}:legacy-request`
+      )
+    ).toBe(true);
+    expect(
+      isLegacyMessengerGenerationCompletionKey(
+        userIndexScope,
+        `${userIndexScope}:legacy-user`
+      )
+    ).toBe(true);
   });
 
   it("binds completion reads and writes to the immutable privacy fence", async () => {

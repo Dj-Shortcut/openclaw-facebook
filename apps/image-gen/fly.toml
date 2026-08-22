@@ -2,11 +2,7 @@ app = "leaderbot-fb-image-gen"
 primary_region = "ams"
 
 [build]
-  # The approved production workflow supplies a prebuilt reviewed image digest,
-  # so fly deploy does not build this Dockerfile. This temporary overlay is only
-  # for an explicit local build that is pushed, reviewed, and re-pinned in the
-  # production manifest before deployment.
-  dockerfile = "Dockerfile.completion-readiness-hotfix"
+  dockerfile = "Dockerfile"
 
 [env]
   AI_ANSWER_FINALIZATION_DRAIN_ENABLED = "false"
@@ -25,10 +21,12 @@ primary_region = "ams"
   BILLING_OPERATOR_NOTIFICATION_KEY_ID = "test-operator-v1"
   BILLING_OPERATOR_NOTIFICATION_WEBHOOK_URL = "https://app.leaderbot.live/api/internal/billing/notifications/operator"
   BILLING_SUPPORT_EMAIL = "privacy@leaderbot.live"
-  FB_LOGIN_CONFIG_ID = "2097873054148678"
+  FB_PAGE_CONNECT_CONFIG_ID = "2097873054148678"
   MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "5"
   MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "5.00"
   MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD = "25.00"
+  MESSENGER_OWNER_EMERGENCY_DAILY_SPEND_CAP_USD = "100.00"
+  MESSENGER_OWNER_EMERGENCY_MONTHLY_SPEND_CAP_USD = "1000.00"
   MESSENGER_USER_DAILY_SPEND_CAP_USD = "2.00"
   MOLLIE_ACCOUNTING_IMPORT_ENABLED = "false"
   MOLLIE_BILLING_ENABLED = "false"

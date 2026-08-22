@@ -105,6 +105,7 @@ type MessengerConsentGateInput = {
   payload?: string | null;
   state: MessengerUserState;
   sendText: (text: string) => Promise<boolean | void>;
+  sendDeletionOutcome?: (text: string) => Promise<boolean | void>;
   sendActions: (
     text: string,
     actions: ConversationAction[]
@@ -133,7 +134,7 @@ function normalizeControlText(text: string | null | undefined): string {
   );
 }
 
-function isDeleteCommand(text: string | null | undefined): boolean {
+export function isDeleteCommand(text: string | null | undefined): boolean {
   const normalized = normalizeControlText(text);
   return (
     DELETE_COMMANDS.has(normalized) ||
@@ -381,7 +382,7 @@ function deletionOutcomeText(
     : deletionFailedText(lang);
 }
 
-async function deleteUserDataAndSendResult(
+export async function deleteUserDataAndSendResult(
   psid: string,
   lang: Lang,
   sendText: (text: string) => Promise<boolean | void>
@@ -545,13 +546,21 @@ export async function handleMessengerConsentGate(
       return true;
     }
     await clearPendingDeleteConfirmation(input.psid);
-    await deleteUserDataAndSendResult(input.psid, input.lang, input.sendText);
+    await deleteUserDataAndSendResult(
+      input.psid,
+      input.lang,
+      input.sendDeletionOutcome ?? input.sendText
+    );
     return true;
   }
 
   if (hasActiveDeleteRequest && isDeleteConfirmText(input.text)) {
     await clearPendingDeleteConfirmation(input.psid);
-    await deleteUserDataAndSendResult(input.psid, input.lang, input.sendText);
+    await deleteUserDataAndSendResult(
+      input.psid,
+      input.lang,
+      input.sendDeletionOutcome ?? input.sendText
+    );
     return true;
   }
 

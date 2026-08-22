@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   finalize: vi.fn(),
   getConnection: vi.fn(),
   assertPrivacy: vi.fn(),
+  assertErasureControl: vi.fn(),
 }));
 
 vi.mock("./db", () => ({
@@ -16,6 +17,7 @@ vi.mock("./_core/facebookConnectStore", () => ({
 }));
 vi.mock("./_core/messengerPrivacySubject", () => ({
   assertMessengerPrivacySubject: mocks.assertPrivacy,
+  assertMessengerErasureControlDelivery: mocks.assertErasureControl,
 }));
 vi.mock("./_core/messengerProviderAttemptFence", () => ({
   reserveMessengerProviderAttemptFence: mocks.reserve,
@@ -27,6 +29,10 @@ vi.mock("./_core/messengerState", () => ({
 }));
 
 import { sendText } from "./_core/messengerApi";
+import {
+  runWithMessengerErasureControlDelivery,
+  runWithMessengerRequestContext,
+} from "./_core/messengerRequestContext";
 import { toUserKey } from "./_core/privacy";
 
 describe("Messenger Graph durable transport fence", () => {
@@ -56,6 +62,7 @@ describe("Messenger Graph durable transport fence", () => {
     mocks.markStarted.mockReset().mockResolvedValue(undefined);
     mocks.finalize.mockReset().mockResolvedValue(undefined);
     mocks.assertPrivacy.mockReset().mockResolvedValue(undefined);
+    mocks.assertErasureControl.mockReset().mockResolvedValue(undefined);
     mocks.getConnection.mockReset().mockResolvedValue({
       id: 17,
       workspaceId: 41,
@@ -83,6 +90,28 @@ describe("Messenger Graph durable transport fence", () => {
       expect.objectContaining({ leaseToken: "lease-1" }),
       "succeeded"
     );
+  });
+
+  it("uses the narrowly scoped erasure-control privacy assertion", async () => {
+    global.fetch = vi.fn(async () => new Response("ok", { status: 200 }));
+
+    await runWithMessengerRequestContext(
+      "page-1",
+      () =>
+        runWithMessengerErasureControlDelivery(() =>
+          sendText("psid-fenced", "deletion outcome", options())
+        ),
+      {
+        workspaceId: 41,
+        channelConnectionId: 17,
+        bindingEpoch: 3,
+        userKey: toUserKey("psid-fenced"),
+        privacyEpoch: 6,
+      }
+    );
+
+    expect(mocks.assertErasureControl).toHaveBeenCalled();
+    expect(mocks.assertPrivacy).not.toHaveBeenCalled();
   });
 
   it("does not retry a response-loss after transport started", async () => {
