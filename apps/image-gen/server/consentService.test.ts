@@ -298,6 +298,45 @@ describe("Messenger consent deletion flow", () => {
     }
   );
 
+  it.each([
+    "Ja ik ga akkoord, maar ik heb geen foto",
+    "Ik wil dit maar het lukt niet",
+    "Ja ik ga akkoord maar het lukt niet",
+    "Ja ik ga akkoord maar ik wil geen foto",
+    "Ja ik ga akkoord maar geen foto",
+    "I agree, but I have no photo",
+    "I want this but it does not work",
+  ])(
+    "does not persist unrelated contrast as a consent decline: %s",
+    async text => {
+      const psid = `messenger-consent-unrelated-contrast-${text}`;
+      const sendText = vi.fn(async () => undefined);
+      const sendActions = vi.fn(async () => undefined);
+      const state = await Promise.resolve(getOrCreateState(psid));
+
+      await expect(
+        handleMessengerConsentGate({
+          psid,
+          lang: "nl",
+          text,
+          state,
+          sendText,
+          sendActions,
+        })
+      ).resolves.toBe(true);
+
+      expect(await Promise.resolve(getState(psid))).toMatchObject({
+        consentGiven: false,
+        consentDeclinedAt: undefined,
+      });
+      expect(sendText).not.toHaveBeenCalled();
+      expect(sendActions).toHaveBeenCalledWith(
+        expect.stringContaining("toestemming"),
+        expect.any(Array)
+      );
+    }
+  );
+
   it.each(["free", "tree", "green", "degree", "you have my content"])(
     "never turns an ordinary near-match into consent: %s",
     async text => {
@@ -338,6 +377,10 @@ describe("Messenger consent deletion flow", () => {
     "I cannot agree",
     "I never agree",
     "ok maar niet met mijn foto",
+    "akkoord maar toch niet",
+    "akkoord maar ik wil niet",
+    "I agree but I do not",
+    "akkoord, maar ik geef geen toestemming",
   ])("never treats a negated typo as consent: %s", async consentText => {
     const psid = `messenger-consent-negated-${consentText}`;
     const sendText = vi.fn(async () => undefined);
@@ -880,6 +923,41 @@ describe("Messenger consent deletion flow", () => {
     expect(
       (await Promise.resolve(getState(senderId)))?.pendingDeleteConfirm
     ).toBe(true);
+  });
+
+  it("does not persist unrelated WhatsApp contrast text as a consent decline", async () => {
+    const senderId = "whatsapp-unrelated-consent-contrast-user";
+    const sendText = vi.fn(async () => undefined);
+    const sendButtons = vi.fn(async () => undefined);
+    const state = await Promise.resolve(getOrCreateState(senderId));
+
+    await expect(
+      handleWhatsAppConsentGate({
+        event: {
+          channel: "whatsapp",
+          messageId: "wamid-unrelated-consent-contrast",
+          messageType: "text",
+          senderId,
+          userId: senderId,
+          textBody: "Ik wil dit maar het lukt niet",
+          timestamp: 1_771_000_000,
+        },
+        lang: "nl",
+        state,
+        sendText,
+        sendButtons,
+      })
+    ).resolves.toBe(true);
+
+    expect(await Promise.resolve(getState(senderId))).toMatchObject({
+      consentGiven: false,
+      consentDeclinedAt: undefined,
+    });
+    expect(sendText).not.toHaveBeenCalled();
+    expect(sendButtons).toHaveBeenCalledWith(
+      expect.stringContaining("toestemming"),
+      expect.any(Array)
+    );
   });
 
   it("rejects a stale WhatsApp delete reply without deleting data", async () => {

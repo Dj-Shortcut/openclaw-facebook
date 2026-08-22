@@ -153,6 +153,33 @@ describe("messenger state normalization", () => {
     });
   });
 
+  it.each([
+    ["string", "1234"],
+    ["boolean", true],
+    ["object", { value: 1234 }],
+    ["array", [1234]],
+    ["NaN", Number.NaN],
+    ["positive infinity", Number.POSITIVE_INFINITY],
+    ["negative infinity", Number.NEGATIVE_INFINITY],
+  ])("drops a malformed consentPromptedAt %s value", (_label, value) => {
+    const normalized = normalizeState(
+      "malformed-consent-prompt-timestamp",
+      { consentPromptedAt: value } as unknown as Parameters<
+        typeof normalizeState
+      >[1]
+    );
+
+    expect(normalized.consentPromptedAt).toBeUndefined();
+  });
+
+  it("preserves a finite consentPromptedAt value", () => {
+    expect(
+      normalizeState("valid-consent-prompt-timestamp", {
+        consentPromptedAt: 1234,
+      }).consentPromptedAt
+    ).toBe(1234);
+  });
+
   it("marks the legacy implicit Dutch default as account-derived", () => {
     expect(
       normalizeState("legacy-dutch", { preferredLang: "nl" })

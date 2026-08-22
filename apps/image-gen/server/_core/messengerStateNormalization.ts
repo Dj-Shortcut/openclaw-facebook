@@ -151,6 +151,11 @@ function resolveConsentState(
     Number.isFinite(value.consentDeclinedAt)
       ? value.consentDeclinedAt
       : undefined;
+  const consentPromptedAt =
+    typeof value?.consentPromptedAt === "number" &&
+    Number.isFinite(value.consentPromptedAt)
+      ? value.consentPromptedAt
+      : undefined;
   const pendingDeleteConfirmAt =
     typeof value?.pendingDeleteConfirmAt === "number" &&
     Number.isFinite(value.pendingDeleteConfirmAt)
@@ -163,7 +168,7 @@ function resolveConsentState(
     consentGiven,
     consentTimestamp: value?.consentTimestamp ?? fallback.consentTimestamp,
     consentDeclinedAt,
-    consentPromptedAt: value?.consentPromptedAt ?? fallback.consentPromptedAt,
+    consentPromptedAt,
     pendingDeleteConfirm,
     pendingDeleteConfirmAt: pendingDeleteConfirm
       ? pendingDeleteConfirmAt

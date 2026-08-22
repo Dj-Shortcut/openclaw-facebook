@@ -88,6 +88,15 @@ const PERMISSION_TERM_VARIANTS = new Set([
   "permision",
   "permisson",
 ]);
+const CONSENT_REFUSAL_BEFORE_TARGET_PATTERN =
+  /\b(?:niet|geen|nee|nooit|weiger|weigeren|not|no|never|wont|dont|cannot|cant|decline|refuse)(?: [\p{L}\p{N}]+){0,4} (?:agreement|permission|ok|oke|oké|okay|goed)\b/u;
+const CONSENT_REFUSAL_AFTER_TARGET_PATTERN =
+  /\b(?:agreement|permission|ok|oke|oké|okay|goed)(?: [\p{L}\p{N}]+){0,4} (?:niet|geen|nee|nooit|weiger|weigeren|not|no|never|wont|dont|cannot|cant|decline|refuse)\b/u;
+const CONSENT_TARGET_PATTERN =
+  /\b(?:agreement|permission|ok|oke|oké|okay|goed)\b/u;
+const CONSENT_CONTRAST_SEPARATOR_PATTERN = /\b(?:maar|but)\b/u;
+const CONSENT_CONTRAST_REFUSAL_PATTERN =
+  /^(?:(?:toch|still|liever|rather|eigenlijk|actually) )?(?:(?:ik|i) (?:ga|do|will|wil|want) )?(?:niet|not)\b/u;
 
 type MessengerConsentGateInput = {
   psid: string;
@@ -212,24 +221,25 @@ function hasDeferredOrUncertainConsent(semantic: string): boolean {
 }
 
 function hasExplicitConsentRefusal(semantic: string): boolean {
-  const consentTarget = "(?:agreement|permission|ok|oke|oké|okay|goed)";
-  const refusal =
-    "(?:niet|geen|nee|nooit|weiger|weigeren|not|no|never|wont|dont|cannot|cant|decline|refuse)";
-  const refusalBeforeTarget = new RegExp(
-    `\\b${refusal}(?: [\\p{L}\\p{N}]+){0,4} ${consentTarget}\\b`,
-    "u"
-  );
-  const refusalAfterTarget = new RegExp(
-    `\\b${consentTarget}(?: [\\p{L}\\p{N}]+){0,4} ${refusal}\\b`,
-    "u"
-  );
+  const clauses = semantic
+    .split(CONSENT_CONTRAST_SEPARATOR_PATTERN)
+    .map(clause => clause.trim());
 
-  return (
-    refusalBeforeTarget.test(semantic) ||
-    refusalAfterTarget.test(semantic) ||
-    /\b(?:maar|but) (?:[\p{L}\p{N}]+ ){0,2}(?:niet|geen|not|no)\b/u.test(
-      semantic
+  if (
+    clauses.some(
+      clause =>
+        CONSENT_REFUSAL_BEFORE_TARGET_PATTERN.test(clause) ||
+        CONSENT_REFUSAL_AFTER_TARGET_PATTERN.test(clause)
     )
+  ) {
+    return true;
+  }
+
+  return clauses.some(
+    (clause, index) =>
+      index > 0 &&
+      CONSENT_TARGET_PATTERN.test(clauses[index - 1] ?? "") &&
+      CONSENT_CONTRAST_REFUSAL_PATTERN.test(clause)
   );
 }
 
