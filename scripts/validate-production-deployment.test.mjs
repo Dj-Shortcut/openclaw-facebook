@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { checkMetaCallbacks } from "./check-meta-callbacks.mjs";
 import {
   checkLiveFlyDrift,
+  resolveImmutableReleaseImage,
   validateProductionRepository,
   validateReviewedRollbackImage,
 } from "./validate-production-deployment.mjs";
@@ -27,6 +28,7 @@ function createRepositoryFixture() {
     "fly.toml",
     "apps/image-gen/fly.toml",
     ".github/workflows/deploy-production.yml",
+    ".github/workflows/main.yml",
     ".github/workflows/production-uptime.yml",
   ]) {
     fs.copyFileSync(path.join(repoRoot, relativePath), path.join(root, relativePath));
@@ -40,13 +42,13 @@ afterEach(() => {
   }
 });
 
-function metaResponse(pageCallback) {
+function metaResponse(pageCallback, transform = (data) => data) {
   return {
     ok: true,
     status: 200,
     async json() {
       return {
-        data: [
+        data: transform([
           {
             object: "page",
             active: true,
@@ -65,7 +67,7 @@ function metaResponse(pageCallback) {
               "https://leaderbot-fb-image-gen.fly.dev/webhook/whatsapp",
             fields: ["messages", "message_template_status_update"],
           },
-        ],
+        ]),
       };
     },
   };
@@ -207,6 +209,18 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires an explicit allowed Meta field set", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    delete manifest.meta.page.allowedFields;
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "page must define explicit allowed Meta fields",
+    );
+  });
+
   it("rejects mutable deployment tags even when they are allowlisted", () => {
     const root = createRepositoryFixture();
     const rollbackImage =
@@ -219,6 +233,38 @@ describe("production deployment contract", () => {
     expect(() => validateProductionRepository(root)).toThrow(
       "gateway has an invalid reviewed rollback image",
     );
+  });
+
+  it("resolves a Fly deployment tag to one immutable app digest", () => {
+    expect(
+      resolveImmutableReleaseImage(
+        "gateway",
+        "registry.fly.io/leaderbot-openclaw-gateway:deployment-reviewed",
+        [
+          {
+            Registry: "registry.fly.io",
+            Repository: "leaderbot-openclaw-gateway",
+            Tag: "deployment-reviewed",
+            Digest:
+              "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          },
+        ],
+        repoRoot,
+      ),
+    ).toBe(
+      "registry.fly.io/leaderbot-openclaw-gateway@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+  });
+
+  it("fails closed when a release tag cannot be resolved uniquely", () => {
+    expect(() =>
+      resolveImmutableReleaseImage(
+        "gateway",
+        "registry.fly.io/leaderbot-openclaw-gateway:deployment-missing",
+        [],
+        repoRoot,
+      ),
+    ).toThrow("did not resolve to one immutable image");
   });
 
   it("requires the workflow to enforce the manifest image-gen digest", () => {
@@ -251,21 +297,52 @@ describe("production deployment contract", () => {
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must validate requested gateway rollback images",
+      "must validate gateway input, capture, and restore",
     );
   });
 
-  it("requires automatic rollback steps for both production apps", () => {
+  it("requires the captured gateway rollback digest to be allowlisted", () => {
     const root = createRepositoryFixture();
     const workflowPath = path.join(root, ".github/workflows/deploy-production.yml");
     const workflow = fs.readFileSync(workflowPath, "utf8");
     fs.writeFileSync(
       workflowPath,
-      workflow.replace("Roll back failed gateway deployment", "Record failed gateway deployment"),
+      workflow.replace(
+        '--validate-rollback-image gateway "$rollback_image"',
+        '--accept-rollback-image gateway "$rollback_image"',
+      ),
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must automatically roll back failed gateway releases",
+      "must validate gateway input, capture, and restore",
+    );
+  });
+
+  it("requires bounded automatic rollback steps", () => {
+    const root = createRepositoryFixture();
+    const workflowPath = path.join(root, ".github/workflows/deploy-production.yml");
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    fs.writeFileSync(
+      workflowPath,
+      workflow.replace("Restore captured gateway release", "Record failed gateway deployment"),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must include gateway rollback",
+    );
+  });
+
+  it("reserves job time for both rollback steps", () => {
+    const root = createRepositoryFixture();
+    const workflowPath = path.join(root, ".github/workflows/deploy-production.yml");
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    fs.writeFileSync(
+      workflowPath,
+      workflow.replace("timeout-minutes: 15", "timeout-minutes: 30"),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must reserve bounded rollback steps",
     );
   });
 
@@ -273,27 +350,41 @@ describe("production deployment contract", () => {
     const root = createRepositoryFixture();
     const workflowPath = path.join(root, ".github/workflows/deploy-production.yml");
     const workflow = fs.readFileSync(workflowPath, "utf8");
-    fs.writeFileSync(workflowPath, workflow.replace('rollback_image="$(jq -er', 'rollback_image="$(jq -r'));
+    fs.writeFileSync(workflowPath, workflow.replace('release_image="$(jq -er', 'release_image="$(jq -r'));
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must fail closed when either rollback image is missing",
+      "must fail closed when either rollback release is missing",
     );
   });
 
-  it("requires rollback to redeploy the captured image", () => {
+  it("requires rollback to restore both captured Fly configurations", () => {
     const root = createRepositoryFixture();
     const workflowPath = path.join(root, ".github/workflows/deploy-production.yml");
     const workflow = fs.readFileSync(workflowPath, "utf8");
     fs.writeFileSync(
       workflowPath,
       workflow.replace(
-        'FLY_IMAGE_GEN_REVIEWED_IMAGE="$rollback_image" npm run deploy:image-gen',
-        'echo "manual image-gen rollback required"',
+        '--config "$rollback_config"',
+        '--config fly.toml',
       ),
     );
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "must restore the captured image-gen image on failure",
+      "must validate and restore both captured configurations",
+    );
+  });
+
+  it("runs root contract CI when the image-gen Fly config changes", () => {
+    const root = createRepositoryFixture();
+    const workflowPath = path.join(root, ".github/workflows/main.yml");
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    fs.writeFileSync(
+      workflowPath,
+      workflow.replace('      - "apps/image-gen/fly.toml"\n', ""),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must run for apps/image-gen/fly.toml",
     );
   });
 
@@ -459,6 +550,49 @@ describe("Meta callback contract", () => {
     });
 
     expect(result.errors).toContain("page uses an unreviewed callback");
+  });
+
+  it("rejects an unreviewed subscription object", async () => {
+    const result = await checkMetaCallbacks({
+      rootDir: repoRoot,
+      appId: "test-app",
+      appSecret: "test-secret",
+      fetchImpl: async () =>
+        metaResponse(
+          "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
+          (data) => [
+            ...data,
+            {
+              object: "instagram",
+              active: true,
+              callback_url: "https://unexpected.example/instagram",
+              fields: ["messages"],
+            },
+          ],
+        ),
+    });
+
+    expect(result.errors).toContain("Unreviewed Meta subscription object instagram");
+  });
+
+  it("rejects an unreviewed subscription field", async () => {
+    const result = await checkMetaCallbacks({
+      rootDir: repoRoot,
+      appId: "test-app",
+      appSecret: "test-secret",
+      fetchImpl: async () =>
+        metaResponse(
+          "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook",
+          (data) =>
+            data.map((subscription) =>
+              subscription.object === "page"
+                ? { ...subscription, fields: [...subscription.fields, "feed"] }
+                : subscription,
+            ),
+        ),
+    });
+
+    expect(result.errors).toContain("page uses unreviewed field feed");
   });
 
   it("adds a timeout signal to the Meta request", async () => {

@@ -60,6 +60,11 @@ export async function checkMetaCallbacks(options = {}) {
   const errors = [];
   const warnings = [];
   const callbacks = [];
+  for (const object of subscriptions.keys()) {
+    if (!(object in manifest.meta)) {
+      errors.push(`Unreviewed Meta subscription object ${object}`);
+    }
+  }
   for (const [object, expected] of Object.entries(manifest.meta)) {
     const actual = subscriptions.get(object);
     if (!actual?.callback_url) {
@@ -87,9 +92,15 @@ export async function checkMetaCallbacks(options = {}) {
         typeof field === "string" ? field : field?.name,
       ),
     );
-    for (const field of expected.requiredFields) {
+    const allowedFields = new Set(expected.allowedFields);
+    for (const field of allowedFields) {
       if (!actualFields.has(field)) {
         errors.push(`${object} is missing required field ${field}`);
+      }
+    }
+    for (const field of actualFields) {
+      if (!allowedFields.has(field)) {
+        errors.push(`${object} uses unreviewed field ${field}`);
       }
     }
   }

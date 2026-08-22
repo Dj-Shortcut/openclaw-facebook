@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 
 const MANIFEST_PATH = "deploy/production/apps.json";
 const PRODUCTION_WORKFLOW_PATH = ".github/workflows/deploy-production.yml";
+const ROOT_VALIDATION_WORKFLOW_PATH = ".github/workflows/main.yml";
 const CANONICAL_DEPLOY_SCRIPTS = new Set(["deploy:gateway", "deploy:image-gen"]);
 
 function fail(message) {
@@ -115,6 +116,38 @@ export function validateReviewedRollbackImage(target, image, rootDir = process.c
   return image;
 }
 
+export function resolveImmutableReleaseImage(
+  target,
+  releaseImage,
+  imageRecords,
+  rootDir = process.cwd(),
+) {
+  const app = loadProductionManifest(rootDir).apps[target];
+  if (!app) fail(`Unknown production target: ${target}`);
+  if (isImmutableAppImage(app, releaseImage)) return releaseImage;
+
+  const tagPrefix = `registry.fly.io/${app.app}:`;
+  if (typeof releaseImage !== "string" || !releaseImage.startsWith(tagPrefix)) {
+    fail(`${target} release image is not from the reviewed Fly app`);
+  }
+  const tag = releaseImage.slice(tagPrefix.length);
+  const immutableImages = new Set(
+    (Array.isArray(imageRecords) ? imageRecords : [])
+      .filter(
+        (record) =>
+          record?.Registry === "registry.fly.io" &&
+          record?.Repository === app.app &&
+          record?.Tag === tag &&
+          /^sha256:[a-f0-9]{64}$/.test(record?.Digest ?? ""),
+      )
+      .map((record) => `${record.Registry}/${record.Repository}@${record.Digest}`),
+  );
+  if (immutableImages.size !== 1) {
+    fail(`${target} release tag did not resolve to one immutable image`);
+  }
+  return [...immutableImages][0];
+}
+
 export function validateProductionWorkflow(rootDir = process.cwd()) {
   const workflowPath = path.join(rootDir, PRODUCTION_WORKFLOW_PATH);
   if (!fs.existsSync(workflowPath)) {
@@ -159,16 +192,10 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       "FLY_IMAGE_GEN_REVIEWED_IMAGE: ${{ inputs.rollback_image }}",
       "must pass the reviewed manifest input to the canonical image-gen deploy command",
     ],
-    ["Roll back failed gateway deployment", "must automatically roll back failed gateway releases"],
-    ["Roll back failed image-gen deployment", "must automatically roll back failed image-gen releases"],
-    [
-      'npm run deploy:gateway -- --remote-only --yes --image "$rollback_image"',
-      "must restore the captured gateway image on failure",
-    ],
-    [
-      'FLY_IMAGE_GEN_REVIEWED_IMAGE="$rollback_image" npm run deploy:image-gen',
-      "must restore the captured image-gen image on failure",
-    ],
+    ["Restore captured gateway release", "must include gateway rollback"],
+    ["Restore captured image-gen release", "must include image-gen rollback"],
+    ["--config \"$rollback_config\"", "must restore the captured Fly configuration"],
+    ["fly config save --app", "must capture the pre-deploy Fly configuration"],
     ["FLYCTL_VERSION: 0.4.85", "must pin the reviewed flyctl version"],
     ["META_GRAPH_VERSION: v21.0", "must pin the reviewed Meta Graph API version"],
   ];
@@ -183,14 +210,43 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
   }
   for (const [needle, expectedCount, message] of [
     ["actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1", 3, "must pin all checkout steps"],
-    ["timeout-minutes: 30", 2, "must bound both deploy jobs"],
-    ['rollback_image="$(jq -er', 2, "must fail closed when either rollback image is missing"],
+    [/^\s*timeout-minutes: 75\s*$/gm, 2, "must reserve time in both deploy jobs"],
+    [/^\s*timeout-minutes: 3\s*$/gm, 8, "must bound setup and rollback-plan uploads"],
+    [/^\s*timeout-minutes: 2\s*$/gm, 4, "must bound config and Meta checks"],
+    [/^\s*timeout-minutes: 5\s*$/gm, 6, "must bound drift and rollback capture"],
+    [/^\s*timeout-minutes: 4\s*$/gm, 2, "must bound smoke tests"],
+    [/^\s*timeout-minutes: 20\s*$/gm, 2, "must bound both deployment steps"],
+    [/^\s*timeout-minutes: 15\s*$/gm, 2, "must reserve bounded rollback steps"],
+    ['release_image="$(jq -er', 2, "must fail closed when either rollback release is missing"],
     ["--retry-all-errors", 3, "must retry transient failures in every post-deploy smoke request"],
-    ["--validate-rollback-image gateway", 1, "must validate gateway rollback input"],
-    ["--validate-rollback-image image-gen", 1, "must validate the captured image-gen rollback image"],
+    ["--resolve-release-image gateway", 1, "must resolve the gateway rollback digest"],
+    ["--resolve-release-image image-gen", 1, "must resolve the image-gen rollback digest"],
+    ["--validate-rollback-image gateway", 3, "must validate gateway input, capture, and restore"],
+    ["--validate-rollback-image image-gen", 2, "must validate image-gen capture and restore"],
+    ["fly config save --app", 2, "must capture both pre-deploy configurations"],
+    ["--config \"$rollback_config\"", 4, "must validate and restore both captured configurations"],
   ]) {
-    if (occurrenceCount(workflow, needle) !== expectedCount) {
+    const actualCount =
+      needle instanceof RegExp
+        ? (workflow.match(needle) ?? []).length
+        : occurrenceCount(workflow, needle);
+    if (actualCount !== expectedCount) {
       fail(`${PRODUCTION_WORKFLOW_PATH} ${message}`);
+    }
+  }
+}
+
+function validateRootValidationTriggers(rootDir) {
+  const workflow = fs.readFileSync(
+    path.join(rootDir, ROOT_VALIDATION_WORKFLOW_PATH),
+    "utf8",
+  );
+  for (const requiredPath of [
+    '"apps/image-gen/fly.toml"',
+    '".github/workflows/production-uptime.yml"',
+  ]) {
+    if (!workflow.includes(requiredPath)) {
+      fail(`${ROOT_VALIDATION_WORKFLOW_PATH} must run for ${requiredPath.slice(1, -1)}`);
     }
   }
 }
@@ -313,9 +369,20 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     if (config.migrationState === "canonical" && config.temporarilyAllowedCallbacks.length) {
       fail(`${object} cannot allow callback drift after migration is canonical`);
     }
+    if (
+      !Array.isArray(config.allowedFields) ||
+      config.allowedFields.length === 0 ||
+      config.allowedFields.some((field) => typeof field !== "string" || !field)
+    ) {
+      fail(`${object} must define explicit allowed Meta fields`);
+    }
+    if (new Set(config.allowedFields).size !== config.allowedFields.length) {
+      fail(`${object} allowed Meta fields must not contain duplicates`);
+    }
   }
 
   validateProductionWorkflow(rootDir);
+  validateRootValidationTriggers(rootDir);
 
   return {
     apps: Object.keys(manifest.apps).length,
@@ -467,9 +534,18 @@ const isMain =
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 
 if (isMain) {
+  const resolveIndex = process.argv.indexOf("--resolve-release-image");
   const rollbackIndex = process.argv.indexOf("--validate-rollback-image");
   const liveIndex = process.argv.indexOf("--live");
-  if (rollbackIndex >= 0) {
+  if (resolveIndex >= 0) {
+    const target = process.argv[resolveIndex + 1];
+    const releaseImage = process.argv[resolveIndex + 2];
+    const imageRecordsPath = process.argv[resolveIndex + 3];
+    const imageRecords = readJson(path.resolve(imageRecordsPath));
+    process.stdout.write(
+      `${resolveImmutableReleaseImage(target, releaseImage, imageRecords)}\n`,
+    );
+  } else if (rollbackIndex >= 0) {
     const target = process.argv[rollbackIndex + 1];
     const image = process.argv[rollbackIndex + 2];
     validateReviewedRollbackImage(target, image);

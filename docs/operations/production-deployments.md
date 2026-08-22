@@ -48,9 +48,10 @@ be able to mutate the stateful gateway, and vice versa.
 3. Leave `rollback_image` empty for a normal source build, except while a target
    is explicitly marked `sourceDeployEnabled: false` in the manifest.
 4. Approve the protected `production` environment.
-5. Retain the uploaded release artifact. It contains metadata for the release
-   before and after deployment plus `rollback-image.txt`; it contains no tenant
-   content or secrets.
+5. Retain the uploaded release artifacts. They contain metadata for the release
+   before and after deployment, an immutable `rollback-image.txt`, and the
+   captured pre-release `before.fly.toml`; they contain no tenant content or
+   secrets.
 6. Complete the relevant live Messenger smoke test. For image generation, check
    both prompt-first generation and a source-photo edit while confirming quota
    enforcement remains active.
@@ -61,9 +62,11 @@ gateway volume drift stop the deployment. A previous image-gen digest is
 permitted only during pre-deploy validation when it is explicitly listed in
 `reviewedRollbackImages`; this lets a newly reviewed digest roll out without
 making an arbitrary or known-bad current release rollback-safe. Post-deploy
-digest drift is blocking. Any failed post-deploy check automatically redeploys
-the captured, allowlisted pre-release image plus the explicit desired scale
-before the job exits failed.
+digest drift is blocking. Before deployment, mutable Fly release tags are
+resolved to one immutable digest and both the digest and active Fly
+configuration are saved durably. Any failed deployment or post-deploy check
+uses the job's explicitly reserved rollback budget to restore the captured,
+allowlisted image, captured configuration, and explicit desired scale.
 
 Image-gen is temporarily stricter: its production privacy-boundary release is
 ahead of `main`, so the workflow requires an explicitly reviewed immutable
@@ -86,13 +89,20 @@ delete the overlay by 2026-09-30; `docs/operations/todo.md` tracks this removal.
 
 The Meta callback check uses `META_GRAPH_VERSION` with an explicit `v21.0`
 default. The production owner must review and bump that pin before Meta retires
-v21.0 on 2027-01-21; do not rely on Meta's automatic version fallback.
+v21.0 on 2027-01-21; do not rely on Meta's automatic version fallback. The
+manifest also owns the complete allowed subscription-object and field set;
+additional Meta objects or webhook fields are blocking scope drift and require
+a reviewed manifest change.
 
 ## Rollback
 
-Post-deploy verification failures automatically restore the exact image from
-`rollback-image.txt` and the manifest's desired scale. The workflow remains
-failed so the incident is visible and its artifact records both releases.
+Deployment or post-deploy verification failures start a bounded rollback step
+in the already approved production job. It restores the exact immutable image
+from `rollback-image.txt`, the captured `before.fly.toml`, and the manifest's
+desired scale. Every preceding deployment step has a shorter explicit timeout;
+their maximum combined budget leaves time inside the job limit for restoration
+without a second production approval. The deploy job remains failed so the
+incident is visible and its artifacts record both releases.
 
 For a later manual gateway rollback, first add the captured immutable digest to
 the gateway's `reviewedRollbackImages` in `deploy/production/apps.json` through

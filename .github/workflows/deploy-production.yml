@@ -102,7 +102,8 @@ jobs:
     if: inputs.target == 'gateway'
     needs: validate
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Bounded steps total at most 70 minutes, reserving five for runner overhead.
+    timeout-minutes: 75
     environment: production
     env:
       FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
@@ -110,41 +111,72 @@ jobs:
       META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
     steps:
       - name: Checkout
+        timeout-minutes: 3
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
 
       - name: Setup Node
+        timeout-minutes: 3
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "24"
 
       - name: Setup pinned flyctl
+        timeout-minutes: 3
         uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master
         with:
           version: ${{ env.FLYCTL_VERSION }}
 
       - name: Validate Fly configuration
+        timeout-minutes: 2
         run: fly config validate --strict --config fly.toml
 
       - name: Reject unsafe Machine drift
+        timeout-minutes: 5
         run: node scripts/validate-production-deployment.mjs --live gateway --predeploy
 
       - name: Validate Meta callbacks
+        timeout-minutes: 2
         run: node scripts/check-meta-callbacks.mjs
 
       - name: Record rollback release
+        timeout-minutes: 5
         run: |
           mkdir -p "$RUNNER_TEMP/leaderbot-release"
           fly releases --app leaderbot-openclaw-gateway --image --json \
             > "$RUNNER_TEMP/leaderbot-release/before.json"
-          rollback_image="$(jq -er '[.[] | select((.Status == "complete" or .Status == "running") and (.ImageRef | type == "string"))][0].ImageRef // empty' \
+          fly image show --app leaderbot-openclaw-gateway --json \
+            > "$RUNNER_TEMP/leaderbot-release/images.json"
+          release_image="$(jq -er '[.[] | select((.Status == "complete" or .Status == "running") and (.ImageRef | type == "string"))] | max_by(.Version).ImageRef // empty' \
             "$RUNNER_TEMP/leaderbot-release/before.json")"
+          rollback_image="$(node scripts/validate-production-deployment.mjs \
+            --resolve-release-image gateway "$release_image" \
+            "$RUNNER_TEMP/leaderbot-release/images.json")"
           test -n "$rollback_image"
+          node scripts/validate-production-deployment.mjs \
+            --validate-rollback-image gateway "$rollback_image"
           printf '%s\n' "$rollback_image" > "$RUNNER_TEMP/leaderbot-release/rollback-image.txt"
+          (
+            cd "$RUNNER_TEMP/leaderbot-release"
+            fly config save --app leaderbot-openclaw-gateway --yes
+            mv fly.toml before.fly.toml
+          )
+          fly config validate --strict \
+            --config "$RUNNER_TEMP/leaderbot-release/before.fly.toml"
+
+      - name: Upload gateway rollback plan
+        timeout-minutes: 3
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gateway-rollback-${{ github.run_id }}
+          path: ${{ runner.temp }}/leaderbot-release
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Deploy reviewed gateway config
         id: deploy
+        timeout-minutes: 20
         env:
           ROLLBACK_IMAGE: ${{ inputs.rollback_image }}
         run: |
@@ -155,26 +187,31 @@ jobs:
           npm run deploy:gateway -- "${args[@]}"
 
       - name: Verify deployed gateway drift
+        timeout-minutes: 5
         run: node scripts/validate-production-deployment.mjs --live gateway
 
       - name: Smoke-test gateway
+        timeout-minutes: 4
         run: |
           body="$(mktemp)"
           status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$body" --write-out '%{http_code}' https://leaderbot-openclaw-gateway.fly.dev/healthz)"
           test "$status" = "200"
           grep -F '"ok":true' "$body"
 
-      - name: Roll back failed gateway deployment
+      - name: Restore captured gateway release
         if: failure() && steps.deploy.outcome != 'skipped'
+        timeout-minutes: 15
         run: |
           rollback_image="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-image.txt")"
-          case "$rollback_image" in
-            registry.fly.io/leaderbot-openclaw-gateway:*) ;;
-            registry.fly.io/leaderbot-openclaw-gateway@sha256:*) ;;
-            *) echo "captured gateway rollback image is invalid" >&2; exit 1 ;;
-          esac
-          npm run deploy:gateway -- --remote-only --yes --image "$rollback_image" --image-label "rollback-${GITHUB_RUN_ID}"
-          fly scale count 1 --process-group app --app leaderbot-openclaw-gateway --yes
+          rollback_config="$RUNNER_TEMP/leaderbot-release/before.fly.toml"
+          node scripts/validate-production-deployment.mjs \
+            --validate-rollback-image gateway "$rollback_image"
+          fly config validate --strict --config "$rollback_config"
+          npm run deploy:gateway -- --remote-only --yes \
+            --config "$rollback_config" --image "$rollback_image" \
+            --image-label "rollback-${GITHUB_RUN_ID}"
+          fly scale count 1 --process-group app \
+            --app leaderbot-openclaw-gateway --yes
 
       - name: Record deployed release
         if: always() && steps.deploy.outcome != 'skipped'
@@ -196,7 +233,8 @@ jobs:
     if: inputs.target == 'image-gen'
     needs: validate
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Bounded steps total at most 70 minutes, reserving five for runner overhead.
+    timeout-minutes: 75
     environment: production
     env:
       FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
@@ -204,44 +242,73 @@ jobs:
       META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
     steps:
       - name: Checkout
+        timeout-minutes: 3
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
 
       - name: Setup Node
+        timeout-minutes: 3
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "24"
 
       - name: Setup pinned flyctl
+        timeout-minutes: 3
         uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master
         with:
           version: ${{ env.FLYCTL_VERSION }}
 
       - name: Validate Fly configuration
+        timeout-minutes: 2
         working-directory: apps/image-gen
         run: fly config validate --strict --config fly.toml
 
       - name: Reject unsafe Machine drift
+        timeout-minutes: 5
         run: node scripts/validate-production-deployment.mjs --live image-gen --predeploy
 
       - name: Validate Meta callbacks
+        timeout-minutes: 2
         run: node scripts/check-meta-callbacks.mjs
 
       - name: Record rollback release
+        timeout-minutes: 5
         run: |
           mkdir -p "$RUNNER_TEMP/leaderbot-release"
           fly releases --app leaderbot-fb-image-gen --image --json \
             > "$RUNNER_TEMP/leaderbot-release/before.json"
-          rollback_image="$(jq -er '[.[] | select((.Status == "complete" or .Status == "running") and (.ImageRef | type == "string"))][0].ImageRef // empty' \
+          fly image show --app leaderbot-fb-image-gen --json \
+            > "$RUNNER_TEMP/leaderbot-release/images.json"
+          release_image="$(jq -er '[.[] | select((.Status == "complete" or .Status == "running") and (.ImageRef | type == "string"))] | max_by(.Version).ImageRef // empty' \
             "$RUNNER_TEMP/leaderbot-release/before.json")"
+          rollback_image="$(node scripts/validate-production-deployment.mjs \
+            --resolve-release-image image-gen "$release_image" \
+            "$RUNNER_TEMP/leaderbot-release/images.json")"
           test -n "$rollback_image"
           node scripts/validate-production-deployment.mjs \
             --validate-rollback-image image-gen "$rollback_image"
           printf '%s\n' "$rollback_image" > "$RUNNER_TEMP/leaderbot-release/rollback-image.txt"
+          (
+            cd "$RUNNER_TEMP/leaderbot-release"
+            fly config save --app leaderbot-fb-image-gen --yes
+            mv fly.toml before.fly.toml
+          )
+          fly config validate --strict \
+            --config "$RUNNER_TEMP/leaderbot-release/before.fly.toml"
+
+      - name: Upload image-gen rollback plan
+        timeout-minutes: 3
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-gen-rollback-${{ github.run_id }}
+          path: ${{ runner.temp }}/leaderbot-release
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Deploy reviewed image-gen config
         id: deploy
+        timeout-minutes: 20
         env:
           FLY_IMAGE_GEN_REVIEWED_IMAGE: ${{ inputs.rollback_image }}
         run: |
@@ -249,9 +316,11 @@ jobs:
           npm run deploy:image-gen -- "${args[@]}"
 
       - name: Verify deployed image-gen drift
+        timeout-minutes: 5
         run: node scripts/validate-production-deployment.mjs --live image-gen
 
       - name: Smoke-test image-gen
+        timeout-minutes: 4
         run: |
           health_body="$(mktemp)"
           health_status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$health_body" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/healthz)"
@@ -263,17 +332,23 @@ jobs:
           test "$ready_status" = "200"
           jq -e '.ok == true' "$ready_body"
 
-      - name: Roll back failed image-gen deployment
+      - name: Restore captured image-gen release
         if: failure() && steps.deploy.outcome != 'skipped'
+        timeout-minutes: 15
         run: |
           rollback_image="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-image.txt")"
-          case "$rollback_image" in
-            registry.fly.io/leaderbot-fb-image-gen@sha256:*) ;;
-            *) echo "captured image-gen rollback image is invalid" >&2; exit 1 ;;
-          esac
-          FLY_IMAGE_GEN_REVIEWED_IMAGE="$rollback_image" npm run deploy:image-gen -- --remote-only --yes --image-label "rollback-${GITHUB_RUN_ID}"
-          fly scale count 2 --process-group app --app leaderbot-fb-image-gen --yes
-          fly scale count 2 --process-group worker --app leaderbot-fb-image-gen --yes
+          rollback_config="$RUNNER_TEMP/leaderbot-release/before.fly.toml"
+          node scripts/validate-production-deployment.mjs \
+            --validate-rollback-image image-gen "$rollback_image"
+          fly config validate --strict --config "$rollback_config"
+          FLY_IMAGE_GEN_REVIEWED_IMAGE="$rollback_image" \
+            npm run deploy:image-gen -- --remote-only --yes \
+            --config "$rollback_config" \
+            --image-label "rollback-${GITHUB_RUN_ID}"
+          fly scale count 2 --process-group app \
+            --app leaderbot-fb-image-gen --yes
+          fly scale count 2 --process-group worker \
+            --app leaderbot-fb-image-gen --yes
 
       - name: Record deployed release
         if: always() && steps.deploy.outcome != 'skipped'

@@ -58,7 +58,7 @@
         "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook"
       ],
       "migrationState": "pending_gateway_cutover",
-      "requiredFields": [
+      "allowedFields": [
         "messages",
         "messaging_postbacks",
         "message_deliveries",
@@ -69,7 +69,7 @@
       "expectedCallback": "https://leaderbot-fb-image-gen.fly.dev/webhook/whatsapp",
       "temporarilyAllowedCallbacks": [],
       "migrationState": "canonical",
-      "requiredFields": ["messages", "message_template_status_update"]
+      "allowedFields": ["messages", "message_template_status_update"]
     }
   }
 }
