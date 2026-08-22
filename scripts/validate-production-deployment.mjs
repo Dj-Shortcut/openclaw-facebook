@@ -78,6 +78,10 @@ function normalizeUrl(value) {
   return url.toString().replace(/\/$/, "");
 }
 
+function occurrenceCount(source, needle) {
+  return source.split(needle).length - 1;
+}
+
 export function loadProductionManifest(rootDir = process.cwd()) {
   const manifest = readJson(path.join(rootDir, MANIFEST_PATH));
   if (manifest.schemaVersion !== 1) {
@@ -102,8 +106,8 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     ["npm run deploy:image-gen", "must use the canonical image-gen deploy script"],
     ["--live gateway --predeploy", "must run gateway pre-deploy drift checks"],
     ["--live image-gen --predeploy", "must run image-gen pre-deploy drift checks"],
-    ["--live gateway\n", "must run strict gateway post-deploy drift checks"],
-    ["--live image-gen\n", "must run strict image-gen post-deploy drift checks"],
+    [/--live gateway[ \t]*\r?$/m, "must run strict gateway post-deploy drift checks"],
+    [/--live image-gen[ \t]*\r?$/m, "must run strict image-gen post-deploy drift checks"],
     ["scripts/check-meta-callbacks.mjs", "must verify Meta callbacks"],
     ["rollback-image.txt", "must preserve rollback image metadata"],
     [
@@ -118,6 +122,10 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       "apps['image-gen'].reviewedImage",
       "must read the reviewed image-gen digest from the manifest",
     ],
+    [
+      "FLY_IMAGE_GEN_REVIEWED_IMAGE: ${{ inputs.rollback_image }}",
+      "must pass the reviewed manifest input to the canonical image-gen deploy command",
+    ],
     ["Roll back failed gateway deployment", "must automatically roll back failed gateway releases"],
     ["Roll back failed image-gen deployment", "must automatically roll back failed image-gen releases"],
     [
@@ -125,18 +133,30 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       "must restore the captured gateway image on failure",
     ],
     [
-      'npm run deploy:image-gen -- --remote-only --yes --image "$rollback_image"',
+      'FLY_IMAGE_GEN_REVIEWED_IMAGE="$rollback_image" npm run deploy:image-gen',
       "must restore the captured image-gen image on failure",
     ],
     ["FLYCTL_VERSION: 0.4.85", "must pin the reviewed flyctl version"],
+    ["META_GRAPH_VERSION: v21.0", "must pin the reviewed Meta Graph API version"],
   ];
   for (const [needle, message] of requirements) {
-    if (!workflow.includes(needle)) {
+    const matched = needle instanceof RegExp ? needle.test(workflow) : workflow.includes(needle);
+    if (!matched) {
       fail(`${PRODUCTION_WORKFLOW_PATH} ${message}`);
     }
   }
   if (/\bfly\s+(?:m|machine|machines)\s+run\b/.test(workflow)) {
     fail(`${PRODUCTION_WORKFLOW_PATH} must not create detached Machines`);
+  }
+  for (const [needle, expectedCount, message] of [
+    ["actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1", 3, "must pin all checkout steps"],
+    ["timeout-minutes: 30", 2, "must bound both deploy jobs"],
+    ['rollback_image="$(jq -er', 2, "must fail closed when either rollback image is missing"],
+    ["--retry-all-errors", 3, "must retry transient failures in every post-deploy smoke request"],
+  ]) {
+    if (occurrenceCount(workflow, needle) !== expectedCount) {
+      fail(`${PRODUCTION_WORKFLOW_PATH} ${message}`);
+    }
   }
 }
 
@@ -154,6 +174,14 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     if (!packageJson.scripts?.[app.deployScript]) {
       fail(`Missing package script ${app.deployScript}`);
     }
+    if (
+      app.sourceDeployEnabled === false &&
+      !packageJson.scripts[app.deployScript].includes(
+        '--image "$FLY_IMAGE_GEN_REVIEWED_IMAGE"',
+      )
+    ) {
+      fail(`${target} deploy script must require the reviewed manifest image`);
+    }
     if (app.strategy !== "rolling") {
       fail(`${target} must use the reviewed rolling deployment strategy`);
     }
@@ -166,11 +194,14 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     if (app.sourceDeployEnabled === false && !app.sourceDeployBlockReason) {
       fail(`${target} must document why source deploys are blocked`);
     }
+    const reviewedImagePrefix = `registry.fly.io/${app.app}@sha256:`;
+    const reviewedImageDigest = (app.reviewedImage ?? "").slice(reviewedImagePrefix.length);
     if (
       app.sourceDeployEnabled === false &&
-      !new RegExp(
-        `^registry\\.fly\\.io/${app.app.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}@sha256:[a-f0-9]{64}$`,
-      ).test(app.reviewedImage ?? "")
+      !(
+        app.reviewedImage?.startsWith(reviewedImagePrefix) &&
+        /^[a-f0-9]{64}$/.test(reviewedImageDigest)
+      )
     ) {
       fail(`${target} must pin its reviewed immutable production image`);
     }
@@ -251,6 +282,8 @@ function runFly(args, cwd) {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: 60_000,
+    maxBuffer: 16 * 1024 * 1024,
   });
 }
 

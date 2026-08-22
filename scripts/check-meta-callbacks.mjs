@@ -20,12 +20,15 @@ export async function checkMetaCallbacks(options = {}) {
   const rootDir = options.rootDir ?? process.cwd();
   const appId = options.appId ?? process.env.META_APP_ID;
   const appSecret = options.appSecret ?? process.env.META_APP_SECRET;
-  const graphVersion = options.graphVersion ?? "v21.0";
+  const graphVersion = options.graphVersion ?? process.env.META_GRAPH_VERSION ?? "v21.0";
   const fetchImpl = options.fetchImpl ?? fetch;
   if (!appId || !appSecret) {
     throw new Error(
       "META_APP_ID and META_APP_SECRET are required for Meta callback drift checks",
     );
+  }
+  if (!/^v\d+\.\d+$/.test(graphVersion)) {
+    throw new Error("META_GRAPH_VERSION must use the vNN.N format");
   }
 
   const manifest = JSON.parse(
@@ -33,10 +36,20 @@ export async function checkMetaCallbacks(options = {}) {
   );
   const response = await fetchImpl(
     `https://graph.facebook.com/${graphVersion}/${encodeURIComponent(appId)}/subscriptions`,
-    { headers: { Authorization: `Bearer ${appId}|${appSecret}` } },
+    {
+      headers: { Authorization: `Bearer ${appId}|${appSecret}` },
+      signal: options.signal ?? AbortSignal.timeout(options.timeoutMs ?? 15_000),
+    },
   );
-  const payload = await response.json();
-  if (!response.ok || !Array.isArray(payload.data)) {
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => undefined);
+    const code = errorPayload?.error?.code;
+    throw new Error(
+      `Meta callback query failed (${response.status}${code ? `, code ${code}` : ""})`,
+    );
+  }
+  const payload = await response.json().catch(() => undefined);
+  if (!Array.isArray(payload?.data)) {
     const code = payload?.error?.code;
     throw new Error(
       `Meta callback query failed (${response.status}${code ? `, code ${code}` : ""})`,

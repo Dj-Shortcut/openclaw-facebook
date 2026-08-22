@@ -71,7 +71,9 @@ prior gate is proven in production.
 - [ ] Reconcile the production image-gen privacy-boundary source with `main`,
   port the canonical completion user-index readiness regression test, and only
   then set `sourceDeployEnabled` back to true. Until then CI must require an
-  explicit immutable image digest.
+  explicit immutable image digest. Owner: Leaderbot production owner. Target:
+  2026-09-30; delete `Dockerfile.completion-readiness-hotfix` and its patch
+  script as part of this reconciliation.
 - [ ] Rehearse and approve the stateful gateway volume migration before removing
   or replacing any detached gateway Machine. Until then the gateway drift gate
   must remain fail-closed.

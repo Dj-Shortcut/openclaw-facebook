@@ -29,4 +29,13 @@ describe("production completion readiness hotfix", () => {
       "found 0",
     );
   });
+
+  it("fails closed when vulnerable and already-patched scans appear more than once", () => {
+    const alreadyPatched = patchCompletionReadinessBundle(vulnerable);
+    const ambiguousBundle = `${vulnerable}\n${alreadyPatched}\n${vulnerable}`;
+
+    expect(() => patchCompletionReadinessBundle(ambiguousBundle)).toThrow(
+      "found 2",
+    );
+  });
 });

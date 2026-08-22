@@ -2,8 +2,10 @@ app = "leaderbot-fb-image-gen"
 primary_region = "ams"
 
 [build]
-  # Temporary pinned overlay until the production privacy-boundary source is
-  # reconciled into main. CI rejects ordinary image-gen source deploys.
+  # The approved production workflow supplies a prebuilt reviewed image digest,
+  # so fly deploy does not build this Dockerfile. This temporary overlay is only
+  # for an explicit local build that is pushed, reviewed, and re-pinned in the
+  # production manifest before deployment.
   dockerfile = "Dockerfile.completion-readiness-hotfix"
 
 [env]

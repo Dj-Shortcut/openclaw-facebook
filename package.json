@@ -62,7 +62,7 @@
     "messenger:smoke-template": "node scripts/messenger-smoke-checklist.mjs --template",
     "messenger:smoke-validate": "node scripts/messenger-smoke-checklist.mjs --validate",
     "deploy:gateway": "fly deploy --config fly.toml --strategy rolling",
-    "deploy:image-gen": "cd apps/image-gen && fly deploy --config fly.toml --strategy rolling",
+    "deploy:image-gen": "test -n \"$FLY_IMAGE_GEN_REVIEWED_IMAGE\" && cd apps/image-gen && fly deploy --config fly.toml --strategy rolling --image \"$FLY_IMAGE_GEN_REVIEWED_IMAGE\"",
     "gateway:deployment-safety": "node scripts/validate-gateway-deployment-safety.mjs",
     "production:validate": "node scripts/validate-production-deployment.mjs",
     "production:drift:gateway": "node scripts/validate-production-deployment.mjs --live gateway",

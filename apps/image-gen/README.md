@@ -458,8 +458,12 @@ Use this order for `leaderbot-fb-image-gen`:
    ```
 
 4. After the migration succeeds, manually dispatch the repository's
-   `Deploy production` GitHub Actions workflow with target `image-gen` and
-   approve the protected `production` environment. Do not create a Machine with
+   `Deploy production` GitHub Actions workflow with target `image-gen`. Set
+   `rollback_image` to the exact immutable
+   `registry.fly.io/leaderbot-fb-image-gen@sha256:...` digest recorded as
+   `reviewedImage` in `deploy/production/apps.json`; it must be the reviewed
+   completion-readiness overlay or a later reviewed image. Then approve the
+   protected `production` environment. Do not create a Machine with
    `fly machine run` or bypass the app's canonical `fly.toml`.
 
 5. Verify readiness and the public portal:

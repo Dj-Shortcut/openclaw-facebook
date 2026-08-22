@@ -81,7 +81,8 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
     }
     for (const [scriptName, expectedCommand] of Object.entries({
       "deploy:gateway": "fly deploy --config fly.toml --strategy rolling",
-      "deploy:image-gen": "cd apps/image-gen && fly deploy --config fly.toml --strategy rolling",
+      "deploy:image-gen":
+        'test -n "$FLY_IMAGE_GEN_REVIEWED_IMAGE" && cd apps/image-gen && fly deploy --config fly.toml --strategy rolling --image "$FLY_IMAGE_GEN_REVIEWED_IMAGE"',
     })) {
       if (rootPackage.scripts?.[scriptName] !== expectedCommand) {
         failures.push(`package.json: ${scriptName} must use the canonical app-specific command`);

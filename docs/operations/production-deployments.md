@@ -71,6 +71,14 @@ correct the release-344 nested-prefix scan without rebuilding older source.
 The currently reviewed overlay digest is recorded in
 `deploy/production/apps.json`; rollback artifacts captured after this repair
 must point to that overlay or a later reviewed image, not unpatched release 344.
+The overlay depends on its pinned Fly registry base remaining available and
+must be re-pinned for every legitimate image-gen release. The Leaderbot
+production owner must reconcile the privacy-boundary source into `main` and
+delete the overlay by 2026-09-30; `docs/operations/todo.md` tracks this removal.
+
+The Meta callback check uses `META_GRAPH_VERSION` with an explicit `v21.0`
+default. The production owner must review and bump that pin before Meta retires
+v21.0 on 2027-01-21; do not rely on Meta's automatic version fallback.
 
 ## Rollback
 

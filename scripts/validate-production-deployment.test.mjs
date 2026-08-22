@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { checkMetaCallbacks } from "./check-meta-callbacks.mjs";
 import {
@@ -10,25 +11,33 @@ import {
   validateProductionRepository,
 } from "./validate-production-deployment.mjs";
 
+const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const tempDirs = [];
+
 function createRepositoryFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "leaderbot-production-contract-"));
+  tempDirs.push(root);
   fs.mkdirSync(path.join(root, "deploy/production"), { recursive: true });
   fs.mkdirSync(path.join(root, "apps/image-gen"), { recursive: true });
   fs.mkdirSync(path.join(root, ".github/workflows"), { recursive: true });
-  fs.copyFileSync("deploy/production/apps.json", path.join(root, "deploy/production/apps.json"));
-  fs.copyFileSync("package.json", path.join(root, "package.json"));
-  fs.copyFileSync("fly.toml", path.join(root, "fly.toml"));
-  fs.copyFileSync("apps/image-gen/fly.toml", path.join(root, "apps/image-gen/fly.toml"));
-  fs.copyFileSync(
+  for (const relativePath of [
+    "deploy/production/apps.json",
+    "package.json",
+    "fly.toml",
+    "apps/image-gen/fly.toml",
     ".github/workflows/deploy-production.yml",
-    path.join(root, ".github/workflows/deploy-production.yml"),
-  );
-  fs.copyFileSync(
     ".github/workflows/production-uptime.yml",
-    path.join(root, ".github/workflows/production-uptime.yml"),
-  );
+  ]) {
+    fs.copyFileSync(path.join(repoRoot, relativePath), path.join(root, relativePath));
+  }
   return root;
 }
+
+afterEach(() => {
+  for (const tempDir of tempDirs.splice(0)) {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
 
 function metaResponse(pageCallback) {
   return {
@@ -63,7 +72,7 @@ function metaResponse(pageCallback) {
 
 describe("production deployment contract", () => {
   it("accepts the checked-in production configs", () => {
-    expect(validateProductionRepository()).toEqual({ apps: 2, callbacks: 2 });
+    expect(validateProductionRepository(repoRoot)).toEqual({ apps: 2, callbacks: 2 });
   });
 
   it("rejects duplicate deploy entry points", () => {
@@ -153,6 +162,17 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires both rollback captures to fail closed on a missing release image", () => {
+    const root = createRepositoryFixture();
+    const workflowPath = path.join(root, ".github/workflows/deploy-production.yml");
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    fs.writeFileSync(workflowPath, workflow.replace('rollback_image="$(jq -er', 'rollback_image="$(jq -r'));
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must fail closed when either rollback image is missing",
+    );
+  });
+
   it("requires rollback to redeploy the captured image", () => {
     const root = createRepositoryFixture();
     const workflowPath = path.join(root, ".github/workflows/deploy-production.yml");
@@ -160,7 +180,7 @@ describe("production deployment contract", () => {
     fs.writeFileSync(
       workflowPath,
       workflow.replace(
-        'npm run deploy:image-gen -- --remote-only --yes --image "$rollback_image"',
+        'FLY_IMAGE_GEN_REVIEWED_IMAGE="$rollback_image" npm run deploy:image-gen',
         'echo "manual image-gen rollback required"',
       ),
     );
@@ -170,8 +190,22 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires the canonical image-gen script to carry the reviewed digest", () => {
+    const root = createRepositoryFixture();
+    const packagePath = path.join(root, "package.json");
+    const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    packageJson.scripts["deploy:image-gen"] =
+      "cd apps/image-gen && fly deploy --config fly.toml --strategy rolling";
+    fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "image-gen deploy script must require the reviewed manifest image",
+    );
+  });
+
   it("blocks detached Machines before deployment", () => {
     const result = checkLiveFlyDrift("gateway", {
+      rootDir: repoRoot,
       runFly(args) {
         const command = args.slice(0, 2).join(" ");
         if (command === "config show") {
@@ -206,6 +240,7 @@ describe("production deployment contract", () => {
 
   it("fails closed when the live gateway volume mount drifts", () => {
     const result = checkLiveFlyDrift("gateway", {
+      rootDir: repoRoot,
       runFly(args) {
         const command = args.slice(0, 2).join(" ");
         if (command === "config show") {
@@ -243,6 +278,7 @@ describe("production deployment contract", () => {
 
   it("blocks an image-gen Machine that is not on the reviewed digest", () => {
     const result = checkLiveFlyDrift("image-gen", {
+      rootDir: repoRoot,
       runFly(args) {
         const command = args.slice(0, 2).join(" ");
         if (command === "config show") {
@@ -283,6 +319,7 @@ describe("production deployment contract", () => {
 describe("Meta callback contract", () => {
   it("reports the reviewed temporary Page callback without failing", async () => {
     const result = await checkMetaCallbacks({
+      rootDir: repoRoot,
       appId: "test-app",
       appSecret: "test-secret",
       fetchImpl: async () =>
@@ -295,11 +332,44 @@ describe("Meta callback contract", () => {
 
   it("rejects an unreviewed callback host", async () => {
     const result = await checkMetaCallbacks({
+      rootDir: repoRoot,
       appId: "test-app",
       appSecret: "test-secret",
       fetchImpl: async () => metaResponse("https://unexpected.example/webhook"),
     });
 
     expect(result.errors).toContain("page uses an unreviewed callback");
+  });
+
+  it("adds a timeout signal to the Meta request", async () => {
+    let requestInit;
+    await checkMetaCallbacks({
+      rootDir: repoRoot,
+      appId: "test-app",
+      appSecret: "test-secret",
+      fetchImpl: async (_url, init) => {
+        requestInit = init;
+        return metaResponse("https://leaderbot-fb-image-gen.fly.dev/facebook/webhook");
+      },
+    });
+
+    expect(requestInit.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("reports an HTTP error before attempting to parse a non-JSON body", async () => {
+    await expect(
+      checkMetaCallbacks({
+        rootDir: repoRoot,
+        appId: "test-app",
+        appSecret: "test-secret",
+        fetchImpl: async () => ({
+          ok: false,
+          status: 503,
+          async json() {
+            throw new SyntaxError("not JSON");
+          },
+        }),
+      }),
+    ).rejects.toThrow("Meta callback query failed (503)");
   });
 });
