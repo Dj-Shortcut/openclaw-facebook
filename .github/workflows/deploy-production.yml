@@ -58,6 +58,11 @@ jobs:
           REVIEWED_IMAGE: ${{ inputs.rollback_image }}
         run: |
           test -n "$REVIEWED_IMAGE"
+          MANIFEST_IMAGE="$(node -p "require('./deploy/production/apps.json').apps['image-gen'].reviewedImage")"
+          if [[ "$REVIEWED_IMAGE" != "$MANIFEST_IMAGE" ]]; then
+            echo "image-gen image must exactly match the reviewed manifest digest" >&2
+            exit 1
+          fi
           case "$REVIEWED_IMAGE" in
             registry.fly.io/leaderbot-fb-image-gen@sha256:*) ;;
             *) echo "image-gen requires an exact reviewed registry digest" >&2; exit 1 ;;
@@ -150,6 +155,18 @@ jobs:
           test "$status" = "200"
           grep -F '"ok":true' "$body"
 
+      - name: Roll back failed gateway deployment
+        if: failure() && steps.deploy.outcome != 'skipped'
+        run: |
+          rollback_image="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-image.txt")"
+          case "$rollback_image" in
+            registry.fly.io/leaderbot-openclaw-gateway:*) ;;
+            registry.fly.io/leaderbot-openclaw-gateway@sha256:*) ;;
+            *) echo "captured gateway rollback image is invalid" >&2; exit 1 ;;
+          esac
+          npm run deploy:gateway -- --remote-only --yes --image "$rollback_image" --image-label "rollback-${GITHUB_RUN_ID}"
+          fly scale count 1 --process-group app --app leaderbot-openclaw-gateway --yes
+
       - name: Record deployed release
         if: always() && steps.deploy.outcome != 'skipped'
         run: |
@@ -235,6 +252,18 @@ jobs:
           ready_status="$(curl --silent --show-error --location --max-time 20 --output "$ready_body" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/readyz)"
           test "$ready_status" = "200"
           jq -e '.ok == true' "$ready_body"
+
+      - name: Roll back failed image-gen deployment
+        if: failure() && steps.deploy.outcome != 'skipped'
+        run: |
+          rollback_image="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-image.txt")"
+          case "$rollback_image" in
+            registry.fly.io/leaderbot-fb-image-gen@sha256:*) ;;
+            *) echo "captured image-gen rollback image is invalid" >&2; exit 1 ;;
+          esac
+          npm run deploy:image-gen -- --remote-only --yes --image "$rollback_image" --image-label "rollback-${GITHUB_RUN_ID}"
+          fly scale count 2 --process-group app --app leaderbot-fb-image-gen --yes
+          fly scale count 2 --process-group worker --app leaderbot-fb-image-gen --yes
 
       - name: Record deployed release
         if: always() && steps.deploy.outcome != 'skipped'

@@ -57,7 +57,10 @@ be able to mutate the stateful gateway, and vice versa.
 
 Pre-deploy drift that the selected `fly.toml` can safely reconcile is reported
 as a warning. Detached Machines, unknown process groups, or scale/VM drift stop
-the deployment. Post-deploy drift is always blocking.
+the deployment. Gateway volume drift and image-gen digest drift are always
+blocking. Post-deploy drift is always blocking and automatically redeploys the
+captured pre-release image plus the explicit desired scale before the job exits
+failed.
 
 Image-gen is temporarily stricter: its production privacy-boundary release is
 ahead of `main`, so the workflow requires an explicitly reviewed immutable
@@ -71,8 +74,14 @@ must point to that overlay or a later reviewed image, not unpatched release 344.
 
 ## Rollback
 
-Dispatch the same workflow for the affected target and paste the exact image
-reference from `rollback-image.txt` into `rollback_image`. Approval, canonical
+Post-deploy verification failures automatically restore the exact image from
+`rollback-image.txt` and the manifest's desired scale. The workflow remains
+failed so the incident is visible and its artifact records both releases.
+
+For a later manual gateway rollback, dispatch the same workflow and paste the
+captured image reference into `rollback_image`. For image-gen, first promote the
+rollback digest to `reviewedImage` in `deploy/production/apps.json` through a
+reviewed PR; the workflow rejects every other digest. Approval, canonical
 configuration, drift checks, Meta verification, and smoke checks still apply.
 Do not restore a release by starting an ad-hoc Machine.
 

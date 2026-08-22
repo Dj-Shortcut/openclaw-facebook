@@ -122,6 +122,54 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires the workflow to enforce the manifest image-gen digest", () => {
+    const root = createRepositoryFixture();
+    const workflowPath = path.join(root, ".github/workflows/deploy-production.yml");
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    fs.writeFileSync(
+      workflowPath,
+      workflow.replace(
+        "image-gen image must exactly match the reviewed manifest digest",
+        "image-gen image prefix accepted",
+      ),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must enforce the reviewed image-gen digest",
+    );
+  });
+
+  it("requires automatic rollback steps for both production apps", () => {
+    const root = createRepositoryFixture();
+    const workflowPath = path.join(root, ".github/workflows/deploy-production.yml");
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    fs.writeFileSync(
+      workflowPath,
+      workflow.replace("Roll back failed gateway deployment", "Record failed gateway deployment"),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must automatically roll back failed gateway releases",
+    );
+  });
+
+  it("requires rollback to redeploy the captured image", () => {
+    const root = createRepositoryFixture();
+    const workflowPath = path.join(root, ".github/workflows/deploy-production.yml");
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    fs.writeFileSync(
+      workflowPath,
+      workflow.replace(
+        'npm run deploy:image-gen -- --remote-only --yes --image "$rollback_image"',
+        'echo "manual image-gen rollback required"',
+      ),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must restore the captured image-gen image on failure",
+    );
+  });
+
   it("blocks detached Machines before deployment", () => {
     const result = checkLiveFlyDrift("gateway", {
       runFly(args) {
@@ -153,6 +201,81 @@ describe("production deployment contract", () => {
 
     expect(result.blockingErrors).toContain(
       "detached Machine detected: detached-test-machine",
+    );
+  });
+
+  it("fails closed when the live gateway volume mount drifts", () => {
+    const result = checkLiveFlyDrift("gateway", {
+      runFly(args) {
+        const command = args.slice(0, 2).join(" ");
+        if (command === "config show") {
+          return JSON.stringify({
+            app: "leaderbot-openclaw-gateway",
+            env: {},
+            processes: {},
+            mounts: [{ source: "wrong_volume", destination: "/data" }],
+            http_service: { processes: ["app"], checks: [{ path: "/healthz" }] },
+          });
+        }
+        if (command === "machine list") {
+          return JSON.stringify([
+            {
+              id: "managed-gateway-machine",
+              config: {
+                metadata: { fly_platform_version: "v2", fly_process_group: "app" },
+              },
+            },
+          ]);
+        }
+        if (command === "scale show") {
+          return JSON.stringify([
+            { Process: "app", Count: 1, CPUKind: "shared", CPUs: 4, Memory: 4096 },
+          ]);
+        }
+        throw new Error(`Unexpected fly command: ${args.join(" ")}`);
+      },
+    });
+
+    expect(result.blockingErrors).toContain(
+      "live volume mounts differ from the production fly.toml",
+    );
+  });
+
+  it("blocks an image-gen Machine that is not on the reviewed digest", () => {
+    const result = checkLiveFlyDrift("image-gen", {
+      runFly(args) {
+        const command = args.slice(0, 2).join(" ");
+        if (command === "config show") {
+          return JSON.stringify({
+            app: "leaderbot-fb-image-gen",
+            env: {},
+            processes: {},
+            http_service: { processes: ["app"], checks: [{ path: "/healthz" }] },
+          });
+        }
+        if (command === "machine list") {
+          return JSON.stringify([
+            {
+              id: "unreviewed-image-machine",
+              config: {
+                image: "registry.fly.io/leaderbot-fb-image-gen@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                metadata: { fly_platform_version: "v2", fly_process_group: "app" },
+              },
+            },
+          ]);
+        }
+        if (command === "scale show") {
+          return JSON.stringify([
+            { Process: "app", Count: 2, CPUKind: "shared", CPUs: 1, Memory: 256 },
+            { Process: "worker", Count: 2, CPUKind: "shared", CPUs: 1, Memory: 256 },
+          ]);
+        }
+        throw new Error(`Unexpected fly command: ${args.join(" ")}`);
+      },
+    });
+
+    expect(result.blockingErrors).toContain(
+      "Machine unreviewed-image-machine image differs from the reviewed production digest",
     );
   });
 });

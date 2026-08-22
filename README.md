@@ -61,8 +61,9 @@ This repository is a monorepo containing the Facebook/OpenClaw integration and t
 Production deploys run only through the manually dispatched, approval-protected
 `Deploy production` GitHub Actions workflow. It selects exactly one app, checks
 Machine/config drift, captures the rollback image, deploys from `main`, and
-verifies Fly plus Meta afterward. The canonical app-specific commands used by
-that workflow are:
+verifies Fly plus Meta afterward. Failed post-deploy verification automatically
+restores the captured image and desired scale. The canonical app-specific
+commands used by that workflow are:
 
 ```bash
 npm run deploy:image-gen

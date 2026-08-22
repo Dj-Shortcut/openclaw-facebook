@@ -110,6 +110,24 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       "image-gen requires an exact reviewed registry digest",
       "must block unreconciled image-gen source deploys",
     ],
+    [
+      "image-gen image must exactly match the reviewed manifest digest",
+      "must enforce the reviewed image-gen digest",
+    ],
+    [
+      "apps['image-gen'].reviewedImage",
+      "must read the reviewed image-gen digest from the manifest",
+    ],
+    ["Roll back failed gateway deployment", "must automatically roll back failed gateway releases"],
+    ["Roll back failed image-gen deployment", "must automatically roll back failed image-gen releases"],
+    [
+      'npm run deploy:gateway -- --remote-only --yes --image "$rollback_image"',
+      "must restore the captured gateway image on failure",
+    ],
+    [
+      'npm run deploy:image-gen -- --remote-only --yes --image "$rollback_image"',
+      "must restore the captured image-gen image on failure",
+    ],
     ["FLYCTL_VERSION: 0.4.85", "must pin the reviewed flyctl version"],
   ];
   for (const [needle, message] of requirements) {
@@ -244,6 +262,19 @@ function compareObject(actual, expected, label, errors) {
   }
 }
 
+function normalizeMounts(mounts) {
+  return (mounts ?? [])
+    .map((mount) => ({
+      source: mount?.source,
+      destination: mount?.destination,
+    }))
+    .sort((left, right) =>
+      `${left.source ?? ""}\0${left.destination ?? ""}`.localeCompare(
+        `${right.source ?? ""}\0${right.destination ?? ""}`,
+      ),
+    );
+}
+
 export function checkLiveFlyDrift(target, options = {}) {
   const rootDir = options.rootDir ?? process.cwd();
   const run = options.runFly ?? ((args) => runFly(args, rootDir));
@@ -258,6 +289,8 @@ export function checkLiveFlyDrift(target, options = {}) {
   const tables = readTomlTables(configText);
   const expectedEnv = tableAssignments(tables, "env");
   const expectedProcesses = tableAssignments(tables, "processes");
+  const configuredMount = tableAssignments(tables, "mounts");
+  const expectedMounts = Object.keys(configuredMount).length ? [configuredMount] : [];
   const reconcilableDrift = [];
   const blockingErrors = [];
 
@@ -288,6 +321,10 @@ export function checkLiveFlyDrift(target, options = {}) {
       `live service check must use ${app.serviceCheckPath}`,
     );
   }
+  const liveMounts = normalizeMounts(live.mounts);
+  if (JSON.stringify(liveMounts) !== JSON.stringify(normalizeMounts(expectedMounts))) {
+    blockingErrors.push("live volume mounts differ from the production fly.toml");
+  }
 
   for (const machine of machines) {
     const metadata = machine.config?.metadata ?? {};
@@ -302,6 +339,11 @@ export function checkLiveFlyDrift(target, options = {}) {
       !(metadata.fly_process_group in app.desiredScale)
     ) {
       blockingErrors.push(`unexpected process group on Machine ${machine.id}`);
+    }
+    if (app.reviewedImage && machine.config?.image !== app.reviewedImage) {
+      blockingErrors.push(
+        `Machine ${machine.id} image differs from the reviewed production digest`,
+      );
     }
   }
 
