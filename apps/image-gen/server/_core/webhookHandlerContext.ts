@@ -12,6 +12,7 @@ import {
   buildPhotoReceivedResponse,
 } from "./conversationActions";
 import {
+  renderMessengerPostbackButtons,
   renderMessengerQuickReplies,
   renderMessengerUrlButtons,
 } from "./messengerActionRenderer";
@@ -192,6 +193,25 @@ export function createHandlerContext({
     actions: ConversationAction[],
     reqId: string
   ): Promise<MessengerSendOutcome> {
+    const postbackButtons = renderMessengerPostbackButtons(actions);
+    if (
+      postbackButtons.length > 0 &&
+      postbackButtons.length === actions.length
+    ) {
+      debugWebhookLog({
+        level: "debug",
+        msg: "outgoing_message",
+        kind: "postback_buttons",
+        reqId,
+        psidHash: anonymizePsid(psid).slice(0, 12),
+        actions: actions.map(action => ({
+          id: action.id,
+          label: action.label,
+        })),
+      });
+      return await sendButtonTemplate(psid, text, postbackButtons);
+    }
+
     const urlButtons = renderMessengerUrlButtons(actions);
     if (urlButtons.length > 0) {
       debugWebhookLog({

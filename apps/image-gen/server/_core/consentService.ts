@@ -25,6 +25,24 @@ const DELETE_COMMAND_BY_LANG: Record<Lang, string> = {
 const DELETE_COMMANDS = new Set(Object.values(DELETE_COMMAND_BY_LANG));
 const DELETE_CONFIRM_TEXTS = new Set(["ja", "ja verwijder", "yes", "confirm"]);
 const DELETE_CANCEL_TEXTS = new Set(["nee", "no", "cancel", "stop"]);
+const CONSENT_AGREE_TEXTS = new Set([
+  "akkoord",
+  "die toestemming heb je",
+  "ik ga akkoord",
+  "je hebt mijn toestemming",
+  "ja ik ga akkoord",
+  "agree",
+  "i agree",
+  "yes i agree",
+]);
+const CONSENT_DECLINE_TEXTS = new Set([
+  "nee bedankt",
+  "ik ga niet akkoord",
+  "no thanks",
+  "i do not agree",
+  "decline",
+]);
+const COMMON_CONSENT_KEYWORD_TYPOS = new Set(["accoort"]);
 
 type MessengerConsentGateInput = {
   psid: string;
@@ -78,14 +96,68 @@ function isDeleteCancelText(text: string | null | undefined): boolean {
   return DELETE_CANCEL_TEXTS.has(normalizeControlText(text));
 }
 
+function editDistance(left: string, right: string): number {
+  const previous = Array.from(
+    { length: right.length + 1 },
+    (_, index) => index
+  );
+
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      current[rightIndex] = Math.min(
+        current[rightIndex - 1]! + 1,
+        previous[rightIndex]! + 1,
+        previous[rightIndex - 1]! +
+          (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1)
+      );
+    }
+    previous.splice(0, previous.length, ...current);
+  }
+
+  return previous[right.length]!;
+}
+
+function hasConsentKeywordTypo(normalized: string): boolean {
+  return normalized.split(" ").some(token => {
+    if (COMMON_CONSENT_KEYWORD_TYPOS.has(token)) {
+      return true;
+    }
+    if (token.length >= 5 && editDistance(token, "akkoord") <= 2) {
+      return true;
+    }
+    return token.length >= 4 && editDistance(token, "agree") <= 2;
+  });
+}
+
+function hasConsentNegation(normalized: string): boolean {
+  return /\b(?:niet|geen|nee|not|no|dont|decline)\b/.test(normalized);
+}
+
+function isConsentAgreeText(text: string | null | undefined): boolean {
+  const normalized = normalizeControlText(text);
+  return (
+    CONSENT_AGREE_TEXTS.has(normalized) ||
+    (!hasConsentNegation(normalized) && hasConsentKeywordTypo(normalized))
+  );
+}
+
+function isConsentDeclineText(text: string | null | undefined): boolean {
+  const normalized = normalizeControlText(text);
+  return (
+    CONSENT_DECLINE_TEXTS.has(normalized) ||
+    (hasConsentNegation(normalized) && hasConsentKeywordTypo(normalized))
+  );
+}
+
 function deleteCommand(lang: Lang): string {
   return DELETE_COMMAND_BY_LANG[lang] ?? DELETE_COMMAND_BY_LANG.nl;
 }
 
 function consentText(lang: Lang): string {
   return lang === "en"
-    ? "Hey! Before we continue, I need your permission to process your images and data."
-    : "Hey! Voor we verdergaan heb ik je toestemming nodig om je beelden en data te verwerken.";
+    ? "Hey! Before we continue, I need your permission to process your images and data. Use a button below, or reply 'I AGREE' if the buttons are not visible."
+    : "Hey! Voor we verdergaan heb ik je toestemming nodig om je beelden en data te verwerken. Gebruik een knop hieronder, of antwoord 'IK GA AKKOORD' als de knoppen niet zichtbaar zijn.";
 }
 
 function deletionConfirmText(lang: Lang): string {
@@ -293,6 +365,20 @@ export async function handleMessengerConsentGate(
   }
 
   if (input.state.consentGiven !== true) {
+    if (isConsentAgreeText(input.text)) {
+      await Promise.resolve(setConsentState(input.psid, true));
+      await input.sendText(messengerConsentAcceptedText(input.lang));
+      const response = buildQuickStartResponse(input.lang);
+      await input.sendActions(response.text ?? "", response.actions ?? []);
+      return true;
+    }
+
+    if (isConsentDeclineText(input.text)) {
+      await Promise.resolve(setConsentState(input.psid, false));
+      await input.sendText(consentDeclinedText(input.lang));
+      return true;
+    }
+
     await input.sendActions(
       consentText(input.lang),
       consentActions(input.lang)

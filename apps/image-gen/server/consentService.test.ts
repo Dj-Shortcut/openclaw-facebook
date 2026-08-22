@@ -94,6 +94,115 @@ describe("Messenger consent deletion flow", () => {
     }
   });
 
+  it("accepts the visible Messenger consent label as a text fallback", async () => {
+    const psid = "messenger-consent-text-fallback-user";
+    const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
+    const state = await Promise.resolve(getOrCreateState(psid));
+
+    await expect(
+      handleMessengerConsentGate({
+        psid,
+        lang: "nl",
+        text: "Ik ga akkoord",
+        state,
+        sendText,
+        sendActions,
+      })
+    ).resolves.toBe(true);
+
+    expect((await Promise.resolve(getState(psid)))?.consentGiven).toBe(true);
+    expect(sendText).toHaveBeenCalledWith(
+      expect.stringContaining("Je bent klaar")
+    );
+    expect(sendActions).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.arrayContaining([expect.objectContaining({ id: "new_image" })])
+    );
+  });
+
+  it.each([
+    "Die toestemming heb je",
+    "akoord",
+    "akord",
+    "akkoort",
+    "accoort",
+    "I aggre",
+  ])(
+    "accepts an explicit consent keyword with a small typo: %s",
+    async consentText => {
+      const psid = `messenger-consent-typo-${consentText}`;
+      const sendText = vi.fn(async () => undefined);
+      const sendActions = vi.fn(async () => undefined);
+      const state = await Promise.resolve(getOrCreateState(psid));
+
+      await expect(
+        handleMessengerConsentGate({
+          psid,
+          lang: "nl",
+          text: consentText,
+          state,
+          sendText,
+          sendActions,
+        })
+      ).resolves.toBe(true);
+
+      expect((await Promise.resolve(getState(psid)))?.consentGiven).toBe(true);
+    }
+  );
+
+  it.each(["niet akoord", "ik ga niet akkoort", "I do not aggre"])(
+    "never treats a negated typo as consent: %s",
+    async consentText => {
+      const psid = `messenger-consent-negated-${consentText}`;
+      const sendText = vi.fn(async () => undefined);
+      const sendActions = vi.fn(async () => undefined);
+      const state = await Promise.resolve(getOrCreateState(psid));
+
+      await expect(
+        handleMessengerConsentGate({
+          psid,
+          lang: "nl",
+          text: consentText,
+          state,
+          sendText,
+          sendActions,
+        })
+      ).resolves.toBe(true);
+
+      expect((await Promise.resolve(getState(psid)))?.consentGiven).toBe(false);
+      expect(sendText).toHaveBeenCalledWith(
+        expect.stringContaining("Zonder je toestemming")
+      );
+    }
+  );
+
+  it("explains the text fallback when Messenger does not show consent pills", async () => {
+    const psid = "messenger-consent-missing-pills-user";
+    const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
+    const state = await Promise.resolve(getOrCreateState(psid));
+
+    await expect(
+      handleMessengerConsentGate({
+        psid,
+        lang: "nl",
+        text: "Hallo",
+        state,
+        sendText,
+        sendActions,
+      })
+    ).resolves.toBe(true);
+
+    expect(sendActions).toHaveBeenCalledWith(
+      expect.stringContaining("IK GA AKKOORD"),
+      expect.arrayContaining([
+        expect.objectContaining({ id: "GDPR_CONSENT_AGREE" }),
+        expect.objectContaining({ id: "GDPR_CONSENT_DECLINE" }),
+      ])
+    );
+  });
+
   it("deletes state, retained source assets, generated assets, and completion markers after confirmation", async () => {
     const psid = "messenger-delete-command-user";
     const userKey = anonymizePsid(psid);
