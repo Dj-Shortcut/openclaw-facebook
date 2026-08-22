@@ -90,6 +90,31 @@ export function loadProductionManifest(rootDir = process.cwd()) {
   return manifest;
 }
 
+function isImmutableAppImage(app, image) {
+  const prefix = `registry.fly.io/${app.app}@sha256:`;
+  return image?.startsWith(prefix) && /^[a-f0-9]{64}$/.test(image.slice(prefix.length));
+}
+
+export function validateReviewedRollbackImage(
+  target,
+  image,
+  rootDir = process.cwd(),
+) {
+  const app = loadProductionManifest(rootDir).apps[target];
+  if (!app) fail(`Unknown production target: ${target}`);
+  if (!isImmutableAppImage(app, image)) {
+    fail(`${target} rollback image must be an immutable image for ${app.app}`);
+  }
+  const reviewedImages = new Set([
+    app.reviewedImage,
+    ...(app.reviewedRollbackImages ?? []),
+  ]);
+  if (!reviewedImages.has(image)) {
+    fail(`${target} rollback image is not in the reviewed production allowlist`);
+  }
+  return image;
+}
+
 export function validateProductionWorkflow(rootDir = process.cwd()) {
   const workflowPath = path.join(rootDir, PRODUCTION_WORKFLOW_PATH);
   if (!fs.existsSync(workflowPath)) {
@@ -110,6 +135,14 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     [/--live image-gen[ \t]*\r?$/m, "must run strict image-gen post-deploy drift checks"],
     ["scripts/check-meta-callbacks.mjs", "must verify Meta callbacks"],
     ["rollback-image.txt", "must preserve rollback image metadata"],
+    [
+      "--validate-rollback-image gateway",
+      "must validate requested gateway rollback images",
+    ],
+    [
+      "--validate-rollback-image image-gen",
+      "must validate captured image-gen rollback images",
+    ],
     [
       "image-gen requires an exact reviewed registry digest",
       "must block unreconciled image-gen source deploys",
@@ -190,6 +223,17 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     }
     if (app.allowDetachedMachines !== false) {
       fail(`${target} must reject detached production Machines`);
+    }
+    if (!Array.isArray(app.reviewedRollbackImages)) {
+      fail(`${target} must define reviewedRollbackImages`);
+    }
+    if (new Set(app.reviewedRollbackImages).size !== app.reviewedRollbackImages.length) {
+      fail(`${target} reviewedRollbackImages must not contain duplicates`);
+    }
+    for (const image of app.reviewedRollbackImages) {
+      if (!isImmutableAppImage(app, image)) {
+        fail(`${target} has an invalid reviewed rollback image`);
+      }
     }
     if (app.sourceDeployEnabled === false && !app.sourceDeployBlockReason) {
       fail(`${target} must document why source deploys are blocked`);
@@ -412,8 +456,14 @@ const isMain =
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 
 if (isMain) {
+  const rollbackIndex = process.argv.indexOf("--validate-rollback-image");
   const liveIndex = process.argv.indexOf("--live");
-  if (liveIndex >= 0) {
+  if (rollbackIndex >= 0) {
+    const target = process.argv[rollbackIndex + 1];
+    const image = process.argv[rollbackIndex + 2];
+    validateReviewedRollbackImage(target, image);
+    process.stdout.write(`${target} rollback image is reviewed.\n`);
+  } else if (liveIndex >= 0) {
     const target = process.argv[liveIndex + 1];
     const predeploy = process.argv.includes("--predeploy");
     const result = checkLiveFlyDrift(target, {

@@ -17,9 +17,9 @@ reviewed main commit
 
 The contract lives in `deploy/production/apps.json`. It records the Fly app,
 config file, process groups, desired scale, Machine ownership rule, service
-check, and Meta callback expectations. `npm run production:validate` checks the
-repository contract in PR CI. The production workflow checks live drift before
-and after every deploy.
+check, reviewed rollback-image allowlist, and Meta callback expectations.
+`npm run production:validate` checks the repository contract in PR CI. The
+production workflow checks live drift before and after every deploy.
 
 The image-gen HTTP service routes on `/healthz`, which proves that the process
 can accept traffic. The scheduled GitHub monitor checks `/readyz` separately for
@@ -72,6 +72,11 @@ correct the release-344 nested-prefix scan without rebuilding older source.
 The currently reviewed overlay digest is recorded in
 `deploy/production/apps.json`; rollback artifacts captured after this repair
 must point to that overlay or a later reviewed image, not unpatched release 344.
+Before changing `reviewedImage`, add the previous digest to
+`reviewedRollbackImages` only if it is independently known safe. Captured
+image-gen rollback images are checked against the current reviewed image and
+that allowlist before deployment starts, so release 344 can never become an
+automatic rollback target.
 The overlay depends on its pinned Fly registry base remaining available and
 must be re-pinned for every legitimate image-gen release. The Leaderbot
 production owner must reconcile the privacy-boundary source into `main` and
@@ -87,10 +92,12 @@ Post-deploy verification failures automatically restore the exact image from
 `rollback-image.txt` and the manifest's desired scale. The workflow remains
 failed so the incident is visible and its artifact records both releases.
 
-For a later manual gateway rollback, dispatch the same workflow and paste the
-captured image reference into `rollback_image`. For image-gen, first promote the
-rollback digest to `reviewedImage` in `deploy/production/apps.json` through a
-reviewed PR; the workflow rejects every other digest. Approval, canonical
+For a later manual gateway rollback, first add the captured immutable digest to
+the gateway's `reviewedRollbackImages` in `deploy/production/apps.json` through
+a reviewed PR. Then dispatch the same workflow and paste that exact reference
+into `rollback_image`; arbitrary registry images are rejected. For image-gen,
+first promote the rollback digest to `reviewedImage` through a reviewed PR; the
+workflow rejects every other deployment digest. Approval, canonical
 configuration, drift checks, Meta verification, and smoke checks still apply.
 Do not restore a release by starting an ad-hoc Machine.
 

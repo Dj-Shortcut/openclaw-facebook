@@ -10,6 +10,7 @@
       "serviceProcessGroups": ["app"],
       "serviceCheckPath": "/healthz",
       "allowDetachedMachines": false,
+      "reviewedRollbackImages": [],
       "desiredScale": {
         "app": {
           "count": 1,
@@ -27,6 +28,7 @@
       "sourceDeployEnabled": false,
       "sourceDeployBlockReason": "Production release 344 contains privacy-boundary code not yet reconciled into main; deploy only an explicitly reviewed immutable image digest.",
       "reviewedImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:4c037101bd7849af818760cab037e1ab046717c9e6dda5815e5219f72c80d952",
+      "reviewedRollbackImages": [],
       "strategy": "rolling",
       "serviceProcessGroups": ["app"],
       "serviceCheckPath": "/healthz",

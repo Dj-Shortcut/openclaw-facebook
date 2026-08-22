@@ -9,6 +9,7 @@ import { checkMetaCallbacks } from "./check-meta-callbacks.mjs";
 import {
   checkLiveFlyDrift,
   validateProductionRepository,
+  validateReviewedRollbackImage,
 } from "./validate-production-deployment.mjs";
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -128,6 +129,49 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must pin its reviewed immutable production image",
+    );
+  });
+
+  it("accepts only explicitly reviewed image-gen rollback digests", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(repoRoot, "deploy/production/apps.json"), "utf8"),
+    );
+
+    expect(
+      validateReviewedRollbackImage(
+        "image-gen",
+        manifest.apps["image-gen"].reviewedImage,
+        repoRoot,
+      ),
+    ).toBe(manifest.apps["image-gen"].reviewedImage);
+    expect(() =>
+      validateReviewedRollbackImage(
+        "image-gen",
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:0bdf169a494b57085ac51537aca7db03e9890cbadd46d7604933fde7df946b91",
+        repoRoot,
+      ),
+    ).toThrow("not in the reviewed production allowlist");
+  });
+
+  it("rejects an arbitrary gateway rollback digest", () => {
+    expect(() =>
+      validateReviewedRollbackImage(
+        "gateway",
+        "registry.fly.io/leaderbot-openclaw-gateway@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        repoRoot,
+      ),
+    ).toThrow("not in the reviewed production allowlist");
+  });
+
+  it("requires every app to declare its reviewed rollback allowlist", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    delete manifest.apps.gateway.reviewedRollbackImages;
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "gateway must define reviewedRollbackImages",
     );
   });
 

@@ -53,6 +53,12 @@ jobs:
       - name: Validate production deployment contract
         run: npm run production:validate
 
+      - name: Validate requested gateway rollback image
+        if: inputs.target == 'gateway' && inputs.rollback_image != ''
+        env:
+          ROLLBACK_IMAGE: ${{ inputs.rollback_image }}
+        run: node scripts/validate-production-deployment.mjs --validate-rollback-image gateway "$ROLLBACK_IMAGE"
+
       - name: Require an immutable image for image-gen
         if: inputs.target == 'image-gen'
         env:
@@ -230,6 +236,8 @@ jobs:
           rollback_image="$(jq -er '[.[] | select((.Status == "complete" or .Status == "running") and (.ImageRef | type == "string"))][0].ImageRef // empty' \
             "$RUNNER_TEMP/leaderbot-release/before.json")"
           test -n "$rollback_image"
+          node scripts/validate-production-deployment.mjs \
+            --validate-rollback-image image-gen "$rollback_image"
           printf '%s\n' "$rollback_image" > "$RUNNER_TEMP/leaderbot-release/rollback-image.txt"
 
       - name: Deploy reviewed image-gen config
