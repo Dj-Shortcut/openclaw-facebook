@@ -12,7 +12,7 @@ on:
           - gateway
           - image-gen
       rollback_image:
-        description: Optional exact registry image/digest to restore
+        description: Exact reviewed immutable digest; required for image-gen and gateway rollback
         required: false
         type: string
 

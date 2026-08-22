@@ -57,11 +57,13 @@ be able to mutate the stateful gateway, and vice versa.
 
 Pre-deploy drift that the selected `fly.toml` can safely reconcile is reported
 as a warning. Detached Machines, unknown process groups, scale/VM drift, and
-gateway volume drift stop the deployment. An old image-gen digest is permitted
-only during pre-deploy validation so a newly reviewed digest can roll out;
-post-deploy digest drift is blocking. Any failed post-deploy check automatically
-redeploys the captured pre-release image plus the explicit desired scale before
-the job exits failed.
+gateway volume drift stop the deployment. A previous image-gen digest is
+permitted only during pre-deploy validation when it is explicitly listed in
+`reviewedRollbackImages`; this lets a newly reviewed digest roll out without
+making an arbitrary or known-bad current release rollback-safe. Post-deploy
+digest drift is blocking. Any failed post-deploy check automatically redeploys
+the captured, allowlisted pre-release image plus the explicit desired scale
+before the job exits failed.
 
 Image-gen is temporarily stricter: its production privacy-boundary release is
 ahead of `main`, so the workflow requires an explicitly reviewed immutable
@@ -96,10 +98,11 @@ For a later manual gateway rollback, first add the captured immutable digest to
 the gateway's `reviewedRollbackImages` in `deploy/production/apps.json` through
 a reviewed PR. Then dispatch the same workflow and paste that exact reference
 into `rollback_image`; arbitrary registry images are rejected. For image-gen,
-first promote the rollback digest to `reviewedImage` through a reviewed PR; the
-workflow rejects every other deployment digest. Approval, canonical
-configuration, drift checks, Meta verification, and smoke checks still apply.
-Do not restore a release by starting an ad-hoc Machine.
+promote the new release to `reviewedImage` and retain only independently
+reviewed previous digests in `reviewedRollbackImages`. The workflow validates
+both operator input and each image-gen pre-release capture before any deploy.
+Approval, canonical configuration, drift checks, Meta verification, and smoke
+checks still apply. Do not restore a release by starting an ad-hoc Machine.
 
 ## Stateful gateway exception
 

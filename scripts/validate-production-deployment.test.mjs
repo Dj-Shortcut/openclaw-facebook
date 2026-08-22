@@ -71,6 +71,38 @@ function metaResponse(pageCallback) {
   };
 }
 
+function imageGenFlyState(image) {
+  return (args) => {
+    const command = args.slice(0, 2).join(" ");
+    if (command === "config show") {
+      return JSON.stringify({
+        app: "leaderbot-fb-image-gen",
+        env: {},
+        processes: {},
+        http_service: { processes: ["app"], checks: [{ path: "/healthz" }] },
+      });
+    }
+    if (command === "machine list") {
+      return JSON.stringify([
+        {
+          id: "image-gen-machine",
+          config: {
+            image,
+            metadata: { fly_platform_version: "v2", fly_process_group: "app" },
+          },
+        },
+      ]);
+    }
+    if (command === "scale show") {
+      return JSON.stringify([
+        { Process: "app", Count: 2, CPUKind: "shared", CPUs: 1, Memory: 256 },
+        { Process: "worker", Count: 2, CPUKind: "shared", CPUs: 1, Memory: 256 },
+      ]);
+    }
+    throw new Error(`Unexpected fly command: ${args.join(" ")}`);
+  };
+}
+
 describe("production deployment contract", () => {
   it("accepts the checked-in production configs", () => {
     expect(validateProductionRepository(repoRoot)).toEqual({ apps: 2, callbacks: 2 });
@@ -163,7 +195,7 @@ describe("production deployment contract", () => {
     ).toThrow("not in the reviewed production allowlist");
   });
 
-  it("requires every app to declare its reviewed rollback allowlist", () => {
+  it("requires explicit rollback allowlists for every production app", () => {
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
@@ -172,6 +204,20 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "gateway must define reviewedRollbackImages",
+    );
+  });
+
+  it("rejects mutable deployment tags even when they are allowlisted", () => {
+    const root = createRepositoryFixture();
+    const rollbackImage =
+      "registry.fly.io/leaderbot-openclaw-gateway:deployment-01KZ4R0MFP41Y7AZNWK3V63991";
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.apps.gateway.reviewedRollbackImages = [rollbackImage];
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "gateway has an invalid reviewed rollback image",
     );
   });
 
@@ -189,6 +235,23 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must enforce the reviewed image-gen digest",
+    );
+  });
+
+  it("requires manual gateway rollback input to be allowlisted", () => {
+    const root = createRepositoryFixture();
+    const workflowPath = path.join(root, ".github/workflows/deploy-production.yml");
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    fs.writeFileSync(
+      workflowPath,
+      workflow.replace(
+        "--validate-rollback-image gateway",
+        "--accept-rollback-image gateway",
+      ),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must validate requested gateway rollback images",
     );
   });
 
@@ -321,35 +384,9 @@ describe("production deployment contract", () => {
   });
 
   it("blocks an image-gen Machine that is not on the reviewed digest", () => {
-    function runFly(args) {
-      const command = args.slice(0, 2).join(" ");
-      if (command === "config show") {
-        return JSON.stringify({
-          app: "leaderbot-fb-image-gen",
-          env: {},
-          processes: {},
-          http_service: { processes: ["app"], checks: [{ path: "/healthz" }] },
-        });
-      }
-      if (command === "machine list") {
-        return JSON.stringify([
-          {
-            id: "unreviewed-image-machine",
-            config: {
-              image: "registry.fly.io/leaderbot-fb-image-gen@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              metadata: { fly_platform_version: "v2", fly_process_group: "app" },
-            },
-          },
-        ]);
-      }
-      if (command === "scale show") {
-        return JSON.stringify([
-          { Process: "app", Count: 2, CPUKind: "shared", CPUs: 1, Memory: 256 },
-          { Process: "worker", Count: 2, CPUKind: "shared", CPUs: 1, Memory: 256 },
-        ]);
-      }
-      throw new Error(`Unexpected fly command: ${args.join(" ")}`);
-    }
+    const unreviewedImage =
+      "registry.fly.io/leaderbot-fb-image-gen@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const runFly = imageGenFlyState(unreviewedImage);
 
     const result = checkLiveFlyDrift("image-gen", {
       rootDir: repoRoot,
@@ -357,16 +394,44 @@ describe("production deployment contract", () => {
     });
 
     expect(result.blockingErrors).toContain(
-      "Machine unreviewed-image-machine image differs from the reviewed production digest",
+      "Machine image-gen-machine image differs from the reviewed production digest",
     );
 
     const predeploy = checkLiveFlyDrift("image-gen", {
       rootDir: repoRoot,
       runFly,
-      enforceReviewedImage: false,
+      allowReviewedRollbackImage: true,
     });
-    expect(predeploy.blockingErrors).not.toContain(
-      "Machine unreviewed-image-machine image differs from the reviewed production digest",
+    expect(predeploy.blockingErrors).toContain(
+      "Machine image-gen-machine image is not an approved rollback image",
+    );
+  });
+
+  it("allows only an approved previous image during predeploy drift", () => {
+    const root = createRepositoryFixture();
+    const previousImage =
+      "registry.fly.io/leaderbot-fb-image-gen@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.apps["image-gen"].reviewedRollbackImages = [previousImage];
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const predeploy = checkLiveFlyDrift("image-gen", {
+      rootDir: root,
+      runFly: imageGenFlyState(previousImage),
+      allowReviewedRollbackImage: true,
+    });
+    expect(predeploy.blockingErrors).toEqual([]);
+    expect(predeploy.reconcilableDrift).toContain(
+      "Machine image-gen-machine uses an approved rollback image before deployment",
+    );
+
+    const postdeploy = checkLiveFlyDrift("image-gen", {
+      rootDir: root,
+      runFly: imageGenFlyState(previousImage),
+    });
+    expect(postdeploy.blockingErrors).toContain(
+      "Machine image-gen-machine image differs from the reviewed production digest",
     );
   });
 });

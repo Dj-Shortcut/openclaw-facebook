@@ -76,7 +76,9 @@ prior gate is proven in production.
   script as part of this reconciliation.
 - [ ] Rehearse and approve the stateful gateway volume migration before removing
   or replacing any detached gateway Machine. Until then the gateway drift gate
-  must remain fail-closed.
+  must remain fail-closed. Add the proven pre-migration managed release to the
+  gateway `reviewedRollbackImages` allowlist through the same reviewed PR before
+  enabling its first workflow deployment.
 - [ ] Move the Page callback to the canonical gateway only after its managed
   Machine/volume state is converged and the complete Messenger image flow passes
   a staged smoke test.

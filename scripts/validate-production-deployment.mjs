@@ -92,24 +92,24 @@ export function loadProductionManifest(rootDir = process.cwd()) {
 
 function isImmutableAppImage(app, image) {
   const prefix = `registry.fly.io/${app.app}@sha256:`;
-  return image?.startsWith(prefix) && /^[a-f0-9]{64}$/.test(image.slice(prefix.length));
+  return (
+    typeof image === "string" &&
+    image.startsWith(prefix) &&
+    /^[a-f0-9]{64}$/.test(image.slice(prefix.length))
+  );
 }
 
-export function validateReviewedRollbackImage(
-  target,
-  image,
-  rootDir = process.cwd(),
-) {
+function reviewedProductionImages(app) {
+  return new Set([app.reviewedImage, ...(app.reviewedRollbackImages ?? [])].filter(Boolean));
+}
+
+export function validateReviewedRollbackImage(target, image, rootDir = process.cwd()) {
   const app = loadProductionManifest(rootDir).apps[target];
   if (!app) fail(`Unknown production target: ${target}`);
   if (!isImmutableAppImage(app, image)) {
     fail(`${target} rollback image must be an immutable image for ${app.app}`);
   }
-  const reviewedImages = new Set([
-    app.reviewedImage,
-    ...(app.reviewedRollbackImages ?? []),
-  ]);
-  if (!reviewedImages.has(image)) {
+  if (!reviewedProductionImages(app).has(image)) {
     fail(`${target} rollback image is not in the reviewed production allowlist`);
   }
   return image;
@@ -186,6 +186,8 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     ["timeout-minutes: 30", 2, "must bound both deploy jobs"],
     ['rollback_image="$(jq -er', 2, "must fail closed when either rollback image is missing"],
     ["--retry-all-errors", 3, "must retry transient failures in every post-deploy smoke request"],
+    ["--validate-rollback-image gateway", 1, "must validate gateway rollback input"],
+    ["--validate-rollback-image image-gen", 1, "must validate the captured image-gen rollback image"],
   ]) {
     if (occurrenceCount(workflow, needle) !== expectedCount) {
       fail(`${PRODUCTION_WORKFLOW_PATH} ${message}`);
@@ -417,14 +419,23 @@ export function checkLiveFlyDrift(target, options = {}) {
     ) {
       blockingErrors.push(`unexpected process group on Machine ${machine.id}`);
     }
-    if (
-      options.enforceReviewedImage !== false &&
-      app.reviewedImage &&
-      machine.config?.image !== app.reviewedImage
-    ) {
-      blockingErrors.push(
-        `Machine ${machine.id} image differs from the reviewed production digest`,
-      );
+    if (app.reviewedImage && machine.config?.image !== app.reviewedImage) {
+      if (
+        options.allowReviewedRollbackImage === true &&
+        reviewedProductionImages(app).has(machine.config?.image)
+      ) {
+        reconcilableDrift.push(
+          `Machine ${machine.id} uses an approved rollback image before deployment`,
+        );
+      } else if (options.allowReviewedRollbackImage === true) {
+        blockingErrors.push(
+          `Machine ${machine.id} image is not an approved rollback image`,
+        );
+      } else {
+        blockingErrors.push(
+          `Machine ${machine.id} image differs from the reviewed production digest`,
+        );
+      }
     }
   }
 
@@ -468,8 +479,9 @@ if (isMain) {
     const predeploy = process.argv.includes("--predeploy");
     const result = checkLiveFlyDrift(target, {
       // A new reviewed digest necessarily differs from the currently running
-      // digest before rollout. Enforce it strictly after deployment instead.
-      enforceReviewedImage: !predeploy,
+      // digest before rollout. Only an explicitly reviewed rollback image may
+      // differ during predeploy; postdeploy remains strictly pinned.
+      allowReviewedRollbackImage: predeploy,
     });
     if (result.reconcilableDrift.length) {
       const stream = predeploy ? process.stdout : process.stderr;
