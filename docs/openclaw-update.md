@@ -102,13 +102,12 @@ Use this workflow for local machines, CI, servers, and hosted environments.
 6. Merge only after CI passes and review confirms there is no installed-package
    patching or undocumented runtime workaround.
 
-7. Deploy hosted environments from the merged commit.
+7. From the merged `main` commit, manually dispatch the `Deploy production`
+   GitHub Actions workflow with target `gateway` and approve the protected
+   `production` environment. Do not bypass it with a local deployment.
 
-   ```bash
-   git switch main
-   git pull --ff-only origin main
-   npm run gateway:deploy
-   ```
+   The workflow captures the currently running image before invoking the
+   canonical `npm run deploy:gateway` command.
 
 8. Verify production.
 
@@ -150,11 +149,12 @@ This is the single supported rollback workflow.
    fly releases --image -a leaderbot-openclaw-gateway
    ```
 
-2. If the new release fails verification, redeploy the previous good image.
+2. If the new release fails verification, re-run `Deploy production` for target
+   `gateway`, enter the captured exact image reference in `rollback_image`, and
+   approve the protected environment.
 
-   ```bash
-   fly deploy --image <previous-good-image> -a leaderbot-openclaw-gateway
-   ```
+   The workflow applies the canonical `fly.toml`, then repeats drift, Meta, and
+   public health verification.
 
 3. Verify rollback.
 

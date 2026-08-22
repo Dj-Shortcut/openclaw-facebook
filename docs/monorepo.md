@@ -14,18 +14,19 @@ Leaderbot image-generation service.
 
 ## Deploy
 
+Use the manually dispatched `Deploy production` GitHub Actions workflow from a
+reviewed `main` commit. The protected `production` environment supplies approval
+and app-scoped credentials. The workflow invokes exactly one of:
+
 ```bash
-npm run deploy
 npm run deploy:image-gen
 npm run deploy:gateway
 ```
 
-Legacy aliases (still available):
-
-```bash
-npm run gateway:deploy
-npm run image-gen:deploy
-```
+These are CI implementation details and emergency operator entry points, not a
+reason to bypass production approval. Never use `fly machine run` for either
+production app. The full contract is in
+[`operations/production-deployments.md`](operations/production-deployments.md).
 
 ## Package managers
 

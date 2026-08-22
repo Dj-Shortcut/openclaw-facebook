@@ -8,7 +8,9 @@ on:
   pull_request:
     paths:
       - ".github/workflows/production-uptime.yml"
-      - "apps/image-gen/docs/operations/todo.md"
+      - ".github/workflows/deploy-production.yml"
+      - "deploy/production/**"
+      - "docs/operations/production-deployments.md"
 
 permissions:
   contents: read
@@ -31,6 +33,7 @@ jobs:
               --max-time 20 \
               --retry 2 \
               --retry-delay 5 \
+              --retry-all-errors \
               --output "$body" \
               --write-out "%{http_code}" \
               https://leaderbot-fb-image-gen.fly.dev/healthz
@@ -48,6 +51,7 @@ jobs:
               --max-time 20 \
               --retry 2 \
               --retry-delay 5 \
+              --retry-all-errors \
               --output "$body" \
               --write-out "%{http_code}" \
               https://leaderbot-openclaw-gateway.fly.dev/healthz
@@ -55,3 +59,25 @@ jobs:
           cat "$body"
           test "$status" = "200"
           grep -F '"ok":true' "$body"
+
+  readiness:
+    name: Image generation dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check image generation readiness
+        run: |
+          set -euo pipefail
+          body="$(mktemp)"
+          status="$(
+            curl --ipv4 --silent --show-error --location \
+              --max-time 20 \
+              --retry 2 \
+              --retry-delay 5 \
+              --retry-all-errors \
+              --output "$body" \
+              --write-out "%{http_code}" \
+              https://leaderbot-fb-image-gen.fly.dev/readyz
+          )"
+          cat "$body"
+          test "$status" = "200"
+          jq -e '.ok == true' "$body"

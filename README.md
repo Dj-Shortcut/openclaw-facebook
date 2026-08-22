@@ -58,20 +58,23 @@ This repository is a monorepo containing the Facebook/OpenClaw integration and t
 └── scripts                     # Operational and maintenance scripts
 ```
 
-Deploy targets:
+Production deploys run only through the manually dispatched, approval-protected
+`Deploy production` GitHub Actions workflow. It selects exactly one app, checks
+Machine/config drift, captures the immutable rollback image and active Fly
+configuration, deploys from `main`, and verifies Fly plus Meta afterward.
+Bounded deployment and verification steps reserve time for restoring the
+captured image, configuration, and desired scale after a failure. The canonical
+app-specific commands used by that workflow are:
 
 ```bash
-npm run deploy
 npm run deploy:image-gen
 npm run deploy:gateway
 ```
 
-Legacy aliases (still available):
-
-```bash
-npm run gateway:deploy
-npm run image-gen:deploy
-```
+Do not create production Machines with `fly machine run`. See
+[`docs/operations/production-deployments.md`](docs/operations/production-deployments.md).
+The stateful gateway remains manifest-blocked until its volume migration is
+rehearsed and its proven managed rollback digest is approved in the same PR.
 
 ## Configure
 
