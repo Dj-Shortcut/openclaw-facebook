@@ -28,9 +28,10 @@ Portal v1 is complete when a real customer can:
    - language
    - model default
 6. See Messenger connection status for their workspace.
-7. Start Facebook Page connection, complete authorization, select a Page, and
-   disconnect the Page later. Stored Page token data must not be returned to the
-   browser.
+7. Authorize Facebook Login and Page access in one OAuth flow. If the account
+   exposes one manageable Page, connect it automatically; if it exposes several,
+   ask only which Page to use without repeating OAuth. The Page can be
+   disconnected later. Stored Page token data must not be returned to the browser.
 8. View free-plan usage:
    - images remaining today
    - messages today

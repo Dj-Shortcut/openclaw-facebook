@@ -14,12 +14,20 @@ function isPromiseLike<T>(value: MaybePromise<T>): value is Promise<T> {
   return typeof (value as Promise<T> | undefined)?.then === "function";
 }
 
-function getStateKey(psid: string): string {
+export function getStateStorageKey(psid: string): string {
   return getScopedStateKey("psid", psid);
 }
 
-function getScopedStateKey(scope: string, key: string): string {
+export function getScopedStateStorageKey(scope: string, key: string): string {
   return `${scope}:${key}`;
+}
+
+function getStateKey(psid: string): string {
+  return getStateStorageKey(psid);
+}
+
+function getScopedStateKey(scope: string, key: string): string {
+  return getScopedStateStorageKey(scope, key);
 }
 
 export function isRedisStateStoreEnabled(): boolean {
@@ -32,7 +40,9 @@ export function assertProductionStateStoreConfig(): void {
   }
 
   if (!isRedisStateStoreEnabled()) {
-    throw new Error("REDIS_URL must be configured in production for state consistency");
+    throw new Error(
+      "REDIS_URL must be configured in production for state consistency"
+    );
   }
 }
 
@@ -51,6 +61,29 @@ function readRawState<T>(storageKey: string): MaybePromise<T | null> {
     const payload = await redis.get(storageKey);
     return payload ? (JSON.parse(payload) as T) : null;
   });
+}
+
+export function getStateTtlSeconds<T>(value: T): number {
+  const faceMemoryValue = value as {
+    faceMemoryConsent?: { given?: boolean } | null;
+    lastSourceImageUrl?: string | null;
+    lastSourceImageUpdatedAt?: number | null;
+    pendingSourceImageDeleteUrl?: string | null;
+    pendingSourceImageDeleteUrls?: string[] | null;
+  } | null;
+  const hasActiveFaceMemory =
+    faceMemoryValue?.faceMemoryConsent?.given === true &&
+    Boolean(
+      faceMemoryValue.lastSourceImageUrl ||
+      faceMemoryValue.lastSourceImageUpdatedAt
+    );
+  const hasPendingSourceDelete = Boolean(
+    faceMemoryValue?.pendingSourceImageDeleteUrl ||
+    faceMemoryValue?.pendingSourceImageDeleteUrls?.length
+  );
+  return hasActiveFaceMemory || hasPendingSourceDelete
+    ? getFaceMemoryStateTtlSeconds()
+    : STATE_TTL_SECONDS;
 }
 
 function writeRawState<T>(
@@ -86,10 +119,42 @@ function deleteRawState(storageKey: string): MaybePromise<void> {
     return;
   }
 
-  return getRedisClient().then(redis => redis.del(storageKey).then(() => undefined));
+  return getRedisClient().then(redis =>
+    redis.del(storageKey).then(() => undefined)
+  );
 }
 
-export function readScopedState<T>(scope: string, key: string): MaybePromise<T | null> {
+function deleteRawStateIfValue<T>(
+  storageKey: string,
+  expectedValue: T
+): MaybePromise<boolean> {
+  const expectedPayload = JSON.stringify(expectedValue);
+
+  if (!isRedisStateStoreEnabled()) {
+    clearExpiredMemoryState();
+    if (memoryState.get(storageKey) !== expectedPayload) {
+      return false;
+    }
+    memoryState.delete(storageKey);
+    memoryStateExpiresAt.delete(storageKey);
+    return true;
+  }
+
+  return getRedisClient().then(async redis => {
+    const result = await redis.eval(
+      "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+      1,
+      storageKey,
+      expectedPayload
+    );
+    return result === 1;
+  });
+}
+
+export function readScopedState<T>(
+  scope: string,
+  key: string
+): MaybePromise<T | null> {
   return readRawState<T>(getScopedStateKey(scope, key));
 }
 
@@ -102,7 +167,10 @@ export function writeScopedState<T>(
   return writeRawState(getScopedStateKey(scope, key), value, ttlSeconds);
 }
 
-export function deleteScopedState(scope: string, key: string): MaybePromise<void> {
+export function deleteScopedState(
+  scope: string,
+  key: string
+): MaybePromise<void> {
   return deleteRawState(getScopedStateKey(scope, key));
 }
 
@@ -114,29 +182,15 @@ export function deleteState(psid: string): MaybePromise<void> {
   return deleteRawState(getStateKey(psid));
 }
 
+export function deleteStateIfValue<T>(
+  psid: string,
+  expectedValue: T
+): MaybePromise<boolean> {
+  return deleteRawStateIfValue(getStateKey(psid), expectedValue);
+}
+
 export function writeState<T>(psid: string, value: T): MaybePromise<void> {
-  const faceMemoryValue = value as {
-    faceMemoryConsent?: { given?: boolean } | null;
-    lastSourceImageUrl?: string | null;
-    lastSourceImageUpdatedAt?: number | null;
-    pendingSourceImageDeleteUrl?: string | null;
-    pendingSourceImageDeleteUrls?: string[] | null;
-  } | null;
-  const hasActiveFaceMemory =
-    faceMemoryValue?.faceMemoryConsent?.given === true &&
-    Boolean(
-      faceMemoryValue.lastSourceImageUrl ||
-        faceMemoryValue.lastSourceImageUpdatedAt
-    );
-  const hasPendingSourceDelete = Boolean(
-    faceMemoryValue?.pendingSourceImageDeleteUrl ||
-      faceMemoryValue?.pendingSourceImageDeleteUrls?.length
-  );
-  const ttlSeconds =
-    hasActiveFaceMemory || hasPendingSourceDelete
-      ? getFaceMemoryStateTtlSeconds()
-      : STATE_TTL_SECONDS;
-  return writeRawState(getStateKey(psid), value, ttlSeconds);
+  return writeRawState(getStateKey(psid), value, getStateTtlSeconds(value));
 }
 
 export function getOrCreateStoredState<T>(

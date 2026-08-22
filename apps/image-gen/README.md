@@ -1,4 +1,5 @@
 # Leaderbot AI Image Generator
+
 [![Fallow Maintainability](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Dj-Shortcut/openclaw-facebook/main/apps/image-gen/public/badges/fallow-maintainability.json)](https://github.com/Dj-Shortcut/openclaw-facebook/actions/workflows/fallow.yml)
 
 A Meta messaging bot with a shared bot-core for Messenger and WhatsApp.
@@ -224,6 +225,9 @@ Operational env shortlist: [`docs/operations/ENV_SHORTLIST.md`](docs/operations/
 - `FB_APP_SECRET` (Webhook signature validation)
 - `WHATSAPP_ACCESS_TOKEN` (WhatsApp Cloud API send API)
 - `WHATSAPP_PHONE_NUMBER_ID` (WhatsApp Cloud API sender identity)
+- `WHATSAPP_GRAPH_SEND_TIMEOUT_MS` (optional, defaults to 10 seconds; maximum 30 seconds)
+- `WHATSAPP_MEDIA_DOWNLOAD_TIMEOUT_MS` (optional, defaults to 10 seconds; maximum 30 seconds)
+- `STORAGE_UPLOAD_TIMEOUT_MS` (optional, defaults to 30 seconds; maximum 60 seconds; generated-image privacy cleanup waits on a longer durable settle fence)
 - `SOURCE_IMAGE_ALLOWED_HOSTS` (required for inbound source-image fetching; if unset, source-image fetches are blocked; review regularly and keep only trusted domains)
 - `REDIS_URL` (required in production for webhook replay protection)
 - `APP_BASE_URL` (required for public generated image URLs; must be `https://` in production)
@@ -257,6 +261,7 @@ Operational env shortlist: [`docs/operations/ENV_SHORTLIST.md`](docs/operations/
 - `BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS` (shared bot text rate-limit window, default `60`)
 - `FEATURE_RATE_LIMIT_<FEATURE>_MAX`, `FEATURE_RATE_LIMIT_<FEATURE>_WINDOW_SECONDS` (generic convention for new feature-scoped rate limits; feature names are uppercased with non-alphanumeric separators converted to `_`)
 - `GRAPH_API_MAX_RETRIES`, `GRAPH_API_RETRY_BASE_MS` (retry policy for Meta Graph API `429`/`5xx` responses)
+- `GRAPH_API_TIMEOUT_MS` (bounded Messenger transport timeout; defaults to 10 seconds and is capped at 30 seconds)
 - `ADMIN_TOKEN` (protects `/debug/build`)
 - `NODE_ENV` (set to `production` to enforce production-only checks such as required `REDIS_URL`)
 - `OAUTH_SERVER_URL` (enables OAuth token exchange and callback initialization)
@@ -335,8 +340,43 @@ pnpm lint:server
 Database migration helpers:
 
 ```bash
+pnpm db:bridge-production-0007-to-0014
 pnpm db:migrate
 ```
+
+`db:migrate` is the standard production migration entrypoint. It holds a
+database-scoped MySQL singleton lock on the migration connection, validates the
+committed journal/SQL/snapshot hashes and applied history, refuses a partial
+0015, and verifies the exact committed MySQL 8.4.11 per-table `SHOW CREATE`
+plus full trigger metadata/action contract before and after applying. The
+contract is generated from real 0000→0014 and
+0000→0015 databases with `pnpm db:generate-production-contract`; CI regenerates
+it against the pinned MySQL image and rejects any diff. Do not run `drizzle-kit
+migrate` directly. A refusal requires investigation and, for a partially
+applied MySQL DDL migration, restore from the verified pre-migration backup
+rather than a blind rerun.
+
+Supported starting states are deliberately narrow: a genuinely empty database,
+a committed 0014 database that passes the exact generated contract, or an
+already-complete 0015 database that passes that contract.
+Older prefixes, detected 0014 drift, modified migration history, and partial
+0015 footprints fail closed. The sole exception is the explicitly fingerprinted
+legacy production 0007 lineage: with application writers stopped and a verified
+restorable backup, `db:bridge-production-0007-to-0014` accepts only that exact
+8-row history and exact generated MySQL 8.4.11 schema, applies 0008 through
+0014 under the same singleton lock, verifies canonical 0014, and normalizes the
+two historically equivalent 0002/0003 journal hashes. Any partial or drifted
+state is refused and requires backup restore; never use this bridge for another
+database or substitute a raw Drizzle command. After it succeeds, run
+`db:migrate` for the canonical 0014→0015 transition.
+
+Known pre-0015 lineage repair: historical SQL 0000–0014 did not create
+`messengerState`, although the committed 0014 snapshot already described it.
+The production runner accepts that one explicitly manifested missing-table
+baseline only with the exact 15-row 0014 history (or the exact legacy table),
+and final 0015 creates the table for fresh and migration-derived databases. A
+historyless database must be truly empty; no other missing or extra 0014 object
+is accepted.
 
 The repository includes focused unit tests for webhook handling, state transitions, signature verification, and image generation behavior under OpenAI configuration.
 
@@ -438,8 +478,12 @@ Use this order for `leaderbot-fb-image-gen`:
    `https://app.leaderbot.live/api/oauth/callback` in Meta:
 
    Set `FB_APP_ID` and `FB_APP_SECRET` through the encrypted Fly secret store;
-   never place their values in source files or shell history. Then configure
-   the public callback origin:
+   never place their values in source files or shell history. Set the public
+   `FB_LOGIN_CONFIG_ID` to the Meta Facebook Login for Business configuration
+   that grants only `pages_show_list`, `pages_manage_metadata`,
+   `pages_messaging`, and `business_management`. The last permission is used
+   only for read-only discovery of Pages assigned through the customer's
+   Business Portfolio. Then configure the public callback origin:
 
    ```bash
    fly secrets set APP_BASE_URL='https://app.leaderbot.live' \
@@ -451,11 +495,24 @@ Use this order for `leaderbot-fb-image-gen`:
    (`OAUTH_PORTAL_URL`, `OAUTH_SERVER_URL`, `VITE_APP_ID`) remain an optional
    fallback when direct Facebook Login is not configured.
 
-3. Run migrations from a trusted operator shell with the same `DATABASE_URL`:
+3. If the read-only preflight reports the explicitly supported legacy 0007
+   lineage, keep writers stopped and run the one-time bridge first:
+
+   ```bash
+   DATABASE_URL='mysql://<user>:<password>@<host>:<port>/<database>' pnpm db:bridge-production-0007-to-0014
+   ```
+
+   Then run the canonical migration from a trusted operator shell with the same
+   `DATABASE_URL`:
 
    ```bash
    DATABASE_URL='mysql://<user>:<password>@<host>:<port>/<database>' pnpm db:migrate
    ```
+
+   This command must report that all committed migrations and the schema
+   contract are verified. Never substitute a raw Drizzle command. If it reports
+   a hash, singleton-lock, or partial-schema refusal, keep application writers
+   stopped and follow the migration recovery runbook before retrying.
 
 4. Deploy image-gen only after the migration succeeds:
 

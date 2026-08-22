@@ -6,13 +6,77 @@ describe("sendMessengerText", () => {
     vi.useRealTimers();
   });
 
+  it.each([
+    [400, "known_rejected"],
+    [408, "ambiguous"],
+    [429, "known_rejected"],
+    [503, "ambiguous"],
+  ] as const)(
+    "classifies Graph HTTP %s as %s after the transport boundary",
+    async (status, expected) => {
+      const onTransportOutcome = vi.fn().mockResolvedValue(undefined);
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: { message: "rejected" } }), {
+            status,
+            headers: { "content-type": "application/json" },
+          }),
+      );
+
+      await expect(
+        sendMessengerText("psid-1", "hello", {
+          cfg: {
+            channels: {
+              facebook: {
+                pageId: "page-1",
+                pageAccessToken: "token-1",
+                appSecret: "secret-1",
+                verifyToken: "verify-1",
+              },
+            },
+          } as never,
+          fetch: fetchMock as never,
+          beforeTransport: vi.fn().mockResolvedValue(undefined),
+          onTransportOutcome,
+        }),
+      ).rejects.toThrow();
+
+      expect(onTransportOutcome).toHaveBeenCalledWith(expected);
+    },
+  );
+
+  it("classifies a dropped Graph response as ambiguous", async () => {
+    const onTransportOutcome = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      sendMessengerText("psid-1", "hello", {
+        cfg: {
+          channels: {
+            facebook: {
+              pageId: "page-1",
+              pageAccessToken: "token-1",
+              appSecret: "secret-1",
+              verifyToken: "verify-1",
+            },
+          },
+        } as never,
+        fetch: vi.fn().mockRejectedValue(new Error("socket reset")) as never,
+        beforeTransport: vi.fn().mockResolvedValue(undefined),
+        onTransportOutcome,
+      }),
+    ).rejects.toThrow("Messenger send failed");
+    expect(onTransportOutcome).toHaveBeenCalledWith("ambiguous");
+  });
+
   it("sends RESPONSE messages to the Page messages endpoint", async () => {
     const fetchMock = vi.fn(
       async (_url: string, _init?: RequestInit) =>
-        new Response(JSON.stringify({ message_id: "mid-1", recipient_id: "psid-1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
+        new Response(
+          JSON.stringify({ message_id: "mid-1", recipient_id: "psid-1" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
     );
 
     const result = await sendMessengerText("psid-1", "hello", {
@@ -54,10 +118,13 @@ describe("sendMessengerText", () => {
   it("sends conversational pills as Messenger quick replies", async () => {
     const fetchMock = vi.fn(
       async (_url: string, _init?: RequestInit) =>
-        new Response(JSON.stringify({ message_id: "mid-1", recipient_id: "psid-1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
+        new Response(
+          JSON.stringify({ message_id: "mid-1", recipient_id: "psid-1" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
     );
 
     await sendMessengerText("psid-1", "Hoe wil je verder?", {
@@ -92,10 +159,13 @@ describe("sendMessengerText", () => {
   it("normalizes public Facebook target prefixes before sending to Messenger", async () => {
     const fetchMock = vi.fn(
       async (_url: string, _init?: RequestInit) =>
-        new Response(JSON.stringify({ message_id: "mid-1", recipient_id: "psid-1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
+        new Response(
+          JSON.stringify({ message_id: "mid-1", recipient_id: "psid-1" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
     );
 
     await sendMessengerText("facebook:psid-1", "hello", {
@@ -122,10 +192,13 @@ describe("sendMessengerText", () => {
     async (target) => {
       const fetchMock = vi.fn(
         async (_url: string, _init?: RequestInit) =>
-          new Response(JSON.stringify({ message_id: "mid-1", recipient_id: "psid-1" }), {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
+          new Response(
+            JSON.stringify({ message_id: "mid-1", recipient_id: "psid-1" }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          ),
       );
 
       await sendMessengerText(target, "hello", {
@@ -206,14 +279,16 @@ describe("sendMessengerText", () => {
     ).rejects.toThrow("response did not include message_id and recipient_id");
   });
 
-
   it("truncates outgoing text to Messenger's 2000 character limit", async () => {
     const fetchMock = vi.fn(
       async (_url: string, _init?: RequestInit) =>
-        new Response(JSON.stringify({ message_id: "mid-1", recipient_id: "psid-1" }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
+        new Response(
+          JSON.stringify({ message_id: "mid-1", recipient_id: "psid-1" }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
     );
 
     await sendMessengerText("psid-1", "x".repeat(2500), {
@@ -241,7 +316,9 @@ describe("sendMessengerText", () => {
       async (_url: string, init?: RequestInit) =>
         new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener("abort", () => {
-            reject(new DOMException("The operation was aborted.", "AbortError"));
+            reject(
+              new DOMException("The operation was aborted.", "AbortError"),
+            );
           });
         }),
     );
@@ -260,7 +337,9 @@ describe("sendMessengerText", () => {
       fetch: fetchMock as never,
     });
 
-    const expectedFailure = expect(result).rejects.toThrow("Messenger send failed");
+    const expectedFailure = expect(result).rejects.toThrow(
+      "Messenger send failed",
+    );
     await vi.advanceTimersByTimeAsync(10_000);
     await expectedFailure;
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];

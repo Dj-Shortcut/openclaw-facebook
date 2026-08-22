@@ -142,7 +142,7 @@ export function validateFlyGatewayConfig(text) {
   requireTomlTableMatch(
     text,
     "env",
-    /^OPENCLAW_PUBLIC_GATEWAY_PATHS\s*=\s*"\/facebook\/webhook,\/healthz"$/m,
+    /^OPENCLAW_PUBLIC_GATEWAY_PATHS\s*=\s*"\/facebook\/webhook,\/healthz,\/readyz"$/m,
     "fly.toml must keep the public gateway path allowlist",
   );
   requireTomlTableMatch(

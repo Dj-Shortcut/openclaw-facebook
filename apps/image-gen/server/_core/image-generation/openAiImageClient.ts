@@ -610,16 +610,20 @@ export async function fetchOpenAiImageResponse(
 
   for (let attempt = 0; attempt <= openAiRetryLimit; attempt += 1) {
     const openAiStartedAt = Date.now();
+    let providerTransportStarted = false;
 
     try {
       safeLog("openai_image_request_started", {
         reqId: context.reqId,
         attempt: attempt + 1,
       });
+      const requestInit =
+        requestContext.createRequestInit?.() ?? requestContext.requestInit;
       await context.onProviderAttempt?.();
+      providerTransportStarted = true;
       const response = await fetchWithTimeout(
         requestContext.endpoint,
-        requestContext.createRequestInit?.() ?? requestContext.requestInit,
+        requestInit,
         openAiTimeoutMs
       );
 
@@ -685,6 +689,13 @@ export async function fetchOpenAiImageResponse(
     } catch (error) {
       context.partialMetrics.openAiMs =
         (context.partialMetrics.openAiMs ?? 0) + (Date.now() - openAiStartedAt);
+
+      // Admission/fencing failures happen before fetch and must never enter
+      // the provider network retry path. Retrying them could reserve another
+      // logical provider attempt even though no request left this process.
+      if (!providerTransportStarted) {
+        throw error;
+      }
 
       if (
         canRetryAttempt({

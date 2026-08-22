@@ -4,6 +4,7 @@ import type { ConversationState } from "./messengerState";
 
 export type FacebookWebhookEvent = {
   sender?: { id?: string; locale?: string };
+  recipient?: { id?: string };
   referral?: { ref?: string };
   message?: {
     mid?: string;
@@ -46,13 +47,7 @@ export type MessengerNormalizedInboundMessage = {
 };
 
 export type MessengerAttachmentCategory =
-  | "image"
-  | "gif"
-  | "audio"
-  | "video"
-  | "file"
-  | "link"
-  | "unknown";
+  "image" | "gif" | "audio" | "video" | "file" | "link" | "unknown";
 
 export type MessengerAttachmentRoute =
   | "image"
@@ -69,12 +64,16 @@ export type MessengerAttachmentRouteDecision = {
 };
 
 const GIF_MIME_HINT = /gif/i;
-const LINK_ATTACHMENT_TYPES = new Set(["file_share", "link", "share", "fallback"]);
+const LINK_ATTACHMENT_TYPES = new Set([
+  "file_share",
+  "link",
+  "share",
+  "fallback",
+]);
 const EMPTY_ATTACHMENT_TYPE = "unknown";
 
 type AttachmentLikeForCategory =
-  | FacebookWebhookAttachment
-  | MessengerNormalizedAttachment;
+  FacebookWebhookAttachment | MessengerNormalizedAttachment;
 
 function normalizeAttachmentType(type: string | undefined): string {
   return type?.trim().toLowerCase() ?? "";
@@ -107,8 +106,12 @@ function resolveAttachmentMimeType(
     return payload.mime_type.trim().toLowerCase();
   }
 
-  if (typeof (attachment as MessengerNormalizedAttachment)?.mimeType === "string") {
-    return (attachment as MessengerNormalizedAttachment).mimeType!.trim().toLowerCase();
+  if (
+    typeof (attachment as MessengerNormalizedAttachment)?.mimeType === "string"
+  ) {
+    return (attachment as MessengerNormalizedAttachment)
+      .mimeType!.trim()
+      .toLowerCase();
   }
 
   return "";
@@ -125,10 +128,7 @@ function isLikelyGifAttachment(attachment: AttachmentLikeForCategory): boolean {
     return false;
   }
 
-  return attachmentUrl
-    .split(/[?#]/)[0]
-    .toLowerCase()
-    .includes(".gif");
+  return attachmentUrl.split(/[?#]/)[0].toLowerCase().includes(".gif");
 }
 
 function getAttachmentCategory(
@@ -243,7 +243,10 @@ export function resolveMessengerAttachmentRoute(
   }
 
   if (hasStickerAttachment(attachments)) {
-    return { route: "unsupported_sticker", rejectedReason: "unsupported_sticker" };
+    return {
+      route: "unsupported_sticker",
+      rejectedReason: "unsupported_sticker",
+    };
   }
 
   if (hasUnknownAttachment(attachments)) {
@@ -259,8 +262,11 @@ export function resolveMessengerAttachmentRoute(
 export function hasAttachmentUrl(
   attachments: MessengerNormalizedAttachment[] | undefined
 ): boolean {
-  return attachments?.some(att => typeof att.url === "string" && att.url.trim() !== "")
-    ?? false;
+  return (
+    attachments?.some(
+      att => typeof att.url === "string" && att.url.trim() !== ""
+    ) ?? false
+  );
 }
 
 function hasStickerAttachment(
@@ -348,8 +354,7 @@ export type FacebookWebhookEntry = {
 
 export type AckKind = "like" | "ok" | "thanks";
 
-type GreetingResponse =
-  | { mode: "text"; text: string };
+type GreetingResponse = { mode: "text"; text: string };
 
 export function getEventDedupeKey(
   event: FacebookWebhookEvent,
@@ -415,8 +420,6 @@ export function getEventDedupeKey(
 
   return undefined;
 }
-
-
 
 export function getGreetingResponse(
   state: ConversationState,

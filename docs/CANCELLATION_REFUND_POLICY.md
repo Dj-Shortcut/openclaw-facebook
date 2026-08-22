@@ -2,40 +2,36 @@
 
 Status: draft pending Belgian legal and accounting review.
 
-## Subscription and renewal
+## One-time purchase
 
-Leaderbot subscriptions renew automatically at the displayed interval and
-price. The first period is paid through Mollie Hosted Checkout, initially with
-Bancontact. Later payments may be collected by SEPA Direct Debit under the
-mandate established by that first payment.
+The public Startpilot offer is one one-time Bancontact payment for the displayed
+price and access period. It does not renew automatically, create a SEPA Direct
+Debit mandate or create a Mollie Subscription.
 
-The checkout must show the first amount, recurring amount, interval, automatic
-renewal, later direct debit, and cancellation timing before payment.
+Checkout must show the full amount, access period, included quota and that no
+automatic renewal occurs before payment.
 
 ## Cancellation
 
-Customers can cancel from the Leaderbot billing page. Leaderbot immediately
-records the cancellation request and durably cancels the exact Mollie
-Subscription so no next collection is scheduled. Service continues only until
-the displayed `paid_through` date. Cancellation does not by itself refund an
-already-paid period.
+There is no future recurring collection to cancel. A customer may request
+support or a refund review through the portal. Ending use does not by itself
+refund an already-paid one-time period; mandatory consumer rights and the final
+approved checkout terms override this draft.
 
 ## Payment-method change
 
-Changing payment method requires a new Mollie first Payment and mandate. The old
-Subscription remains intact if checkout is abandoned or fails. After the new
-first Payment is confirmed, the old Subscription must be canceled before the
-replacement Subscription may be created. A new paid period is placed after any
-already-paid access.
+No payment method is stored for a renewal. A later separately authorized
+one-time purchase uses a new Hosted Checkout. An abandoned or failed checkout
+does not alter existing paid access.
 
 ## Refunds and disputes
 
 Refunds are reviewed and issued manually by an authorized administrator; the
 assistant and OpenClaw cannot initiate them. A full refund normally withdraws
-the related entitlement and stops future collection. A later independently
-paid period remains available. A partial refund requires manual entitlement
-review. A chargeback can block access while the case is
-reviewed. Mandatory consumer rights override this draft policy.
+the related entitlement. A later independently paid period remains available.
+A partial refund requires manual entitlement review. A chargeback can block
+access while the case is reviewed. Mandatory consumer rights override this
+draft policy.
 
 For billing help, use the support address shown in the portal. Do not send API
 keys, bank details, full provider payloads, conversations, prompts or uploaded

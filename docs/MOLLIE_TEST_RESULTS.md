@@ -1,75 +1,91 @@
-# Mollie Test Results
+# Mollie test results
 
-Environment: Mollie Test Mode only. Live credentials are prohibited.
+Release candidate: current PR #375 Sol draft branch. The exact last-green head
+is recorded in the PR body and GitHub checks. The current privacy/cost
+hardening batch is pending its final full local matrix and GitHub CI, so its
+eventual totals are deliberately not claimed here yet.
 
-No Mollie sandbox test was run as part of this local implementation because no
-test account/key or profile activation evidence was provided. Never mark a row
-passed without a dated artifact that contains no secret or customer data.
+No Mollie, Facebook or OpenAI provider test was run. No credential was
+requested or used. Automated rows prove local/CI contracts only; provider rows
+remain `NOT RUN` until an operator injects test credentials out of band.
 
-## Local automated evidence (2026-08-01)
+## Last fully green savepoint evidence
 
-- Image-gen `tsc --noEmit`: PASS.
-- Full image-gen Vitest suite: PASS, 120 files / 1,017 tests.
-- Root Vitest suite: PASS, 17 files / 197 tests.
-- Exact public gateway route suite: PASS, 1 file / 16 tests.
-- Image-gen ESLint: PASS.
-- Image-gen production build and root TypeScript build: PASS.
-- Offline `drizzle-kit check`: PASS with the cumulative `0010` snapshot (a
-  local dummy connection string was supplied because the config requires URL
-  syntax; no database connection or migration was performed).
-- Fresh MySQL 8.4 migration through the current guarded cumulative migration
-  `0010`: PASS in GitHub CI run `30715666890`, job `91410691295` on
-  2026-08-01. This is fresh-database CI evidence only; it is not Mollie
-  provider, existing-schema upgrade, or production migration evidence.
-- `git diff --check`: PASS.
-- Existing-schema upgrade migration through `0010`: NOT RUN.
-- Production migration through `0010`: NOT RUN.
+- Image-gen Vitest at that savepoint: **1,429 passed, 31 skipped** across 154
+  files. These are not the pending current-batch totals.
+- Focused subscription cancellation and notification delivery: **38/38**.
+- Billing execution on MySQL 8.4: **10/10**, including two-connection
+  disable/exposure, lease-loss and safety-cancellation boundaries.
+- Portal handoff on MySQL 8.4: **4/4**, including concurrent claim and
+  capability-generation rotation.
+- Payment/checkout chain on MySQL 8.4: **5/5**, including twelve concurrent
+  repeated checkouts with one fake-provider create, twelve concurrent paid
+  snapshots with one ledger/entitlement/handoff effect, monotone delayed
+  snapshots, terminal states without access, and one claim-to-paid-to-recovery
+  chain without a second checkout.
+- TypeScript, release ESLint/Prettier, production build, Drizzle schema check,
+  final `0015` rehearsal, product-boundary checks and diff check: PASS.
+- Last-green GitHub head: main checks, MySQL/Drizzle migration smoke, validate,
+  CodeQL, secret scan, codebase-health and ClawHub dry-run: PASS.
+- Migration evidence covers fresh install and exact `0014` to final `0015` on
+  pinned MySQL 8.4.11, exact schema/history fingerprints, partial-state refusal,
+  backfills, negative constraints and recovery. It is not a production backup
+  rehearsal or deployment authorization.
+- Real Redis integration lanes exercise spend Lua reservation and generation
+  queue/completion tombstone, TTL and race contracts in CI.
 
-These local results validate code contracts only; they do not convert any
-provider scenario below from NOT RUN to PASS.
+## Combined release matrix (last-green application evidence)
 
-### Startpilot launch scenarios
+| Scenario                                    | Automated contract                                                          | Provider evidence             |
+| ------------------------------------------- | --------------------------------------------------------------------------- | ----------------------------- |
+| One-time payment succeeds                   | PASS: one paid ledger effect, entitlement and handoff outbox                | NOT RUN                       |
+| Failed/canceled/expired payment             | PASS: no entitlement or handoff                                             | NOT RUN                       |
+| Duplicate/delayed webhook                   | PASS: monotone snapshot and exactly-once effects                            | NOT RUN                       |
+| Repeated/concurrent checkout                | PASS: one intent/provider-create boundary                                   | NOT RUN                       |
+| Profile revoke/expiry or commercial disable | PASS: URL/exposure fenced; exact safety reconciliation/cancellation         | NOT RUN                       |
+| Token replay/second claim                   | PASS: one membership/audit winner; old capability stays invalid             | NOT RUN                       |
+| Wrong user/workspace/Page                   | PASS: fail closed at immutable ownership/privacy boundary                   | NOT RUN                       |
+| Disconnect/rebind                           | PASS: binding epoch blocks stale job/send/provider effects                  | NOT RUN                       |
+| Closed Messenger window                     | PASS: no paid send; fresh verified inbound may rearm the same row           | NOT RUN                       |
+| Transient/ambiguous send                    | PASS: bounded identity, no second charge/capability                         | NOT RUN                       |
+| Application-owned privacy deletion race     | PASS: tombstone/CAS prevents queue/state/completion/send resurrection       | NOT RUN                       |
+| OpenClaw session transcript erasure         | BLOCKED: host API retains an archive; deletion deliberately remains pending | NOT RUN — external host fix   |
+| Spend and AI-answer quota                   | PASS: distributed reservation and durable commit/release recovery           | NOT RUN OpenAI smoke          |
+| Notification failure                        | PASS: signed idempotent receipt, retry, dead letter and key-free escalation | NOT RUN receiver operations   |
+| Accounting export/import                    | PASS: bounded stream and GET-only fake reader/quarantine contracts          | NOT RUN live read-only Mollie |
 
-| Scenario                         | Status  | Required evidence                                                                                                     |
-| -------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------- |
-| One-time payment succeeds        | NOT RUN | Test Payment, authenticated webhook fetch, one 30-day Startpilot entitlement and no subscription                      |
-| First payment fails              | NOT RUN | Failed state; no entitlement                                                                                          |
-| First payment canceled           | NOT RUN | Canceled state; no entitlement                                                                                        |
-| First payment expires            | NOT RUN | Expired state; no entitlement                                                                                         |
-| Webhook before redirect          | NOT RUN | Paid state independent of redirect                                                                                    |
-| Redirect before webhook          | NOT RUN | Return remains non-authoritative/open                                                                                 |
-| Duplicate webhook                | NOT RUN | One snapshot side effect                                                                                              |
-| Unknown Payment ID               | NOT RUN | Generic 200 and no disclosure; transient failures return redacted 503                                                 |
-| Amount mismatch                  | NOT RUN | Manual review; no activation                                                                                          |
-| Currency mismatch                | NOT RUN | Manual review; no activation                                                                                          |
-| Duplicate Startpilot purchase    | NOT RUN | At most one paid pilot entitlement for the workspace; no automatic top-up                                             |
-| Startpilot limits                | NOT RUN | 300 AI answers, 20 Images 2.0 generations, max five images/day, one workspace/Page are enforced before provider calls |
-| 30-day expiry                    | NOT RUN | Entitlement expires without renewal, collection, subscription, or direct-debit mandate                                |
-| Full refund                      | NOT RUN | Entitlement withdrawn; no future collection exists                                                                    |
-| Partial refund                   | NOT RUN | Manual review                                                                                                         |
-| Chargeback                       | NOT RUN | Access blocked and escalated                                                                                          |
-| Missed webhook recovery          | NOT RUN | Daily reconciliation applies snapshot once                                                                            |
-| No secrets/customer data in logs | NOT RUN | Captured logs/redaction assertions                                                                                    |
-| Belgium-only checkout            | NOT RUN | Non-BE request rejected                                                                                               |
-| B2B without Peppol               | NOT RUN | B2B request rejected                                                                                                  |
+## Mollie Test Mode matrix
 
-### Unpublished subscription regression scenarios
+Each row needs a dated, redacted artifact. Use one isolated test workspace and
+never record a key, PSID, Page token, customer message or full provider payload.
 
-These do not authorize or advertise a monthly offer. They remain deferred while
-`premium_monthly_v1` is not publicly available.
+| Provider scenario                | Status  | Required observation                                         |
+| -------------------------------- | ------- | ------------------------------------------------------------ |
+| Bancontact method available      | NOT RUN | One-time Startpilot method is enabled in Test Mode           |
+| Paid checkout                    | NOT RUN | Authenticated fetch, one entitlement/outbox, no subscription |
+| Failed/canceled/expired checkout | NOT RUN | Terminal state, no entitlement/outbox                        |
+| Webhook before/after redirect    | NOT RUN | Redirect is non-authoritative; provider fetch wins           |
+| Duplicate/delayed webhook        | NOT RUN | One ledger/entitlement/outbox identity                       |
+| Unknown/mismatched payment       | NOT RUN | Redacted retry/review, no entitlement                        |
+| Concurrent repeated checkout     | NOT RUN | One remote create and one intent                             |
+| Refund/chargeback                | NOT RUN | Containment/manual review and exact notification             |
+| Missed webhook                   | NOT RUN | Reconciliation applies the snapshot once                     |
+| Disable after provider start     | NOT RUN | Known resource recorded then exactly contained               |
 
-| Scenario                        | Status   | Required evidence                              |
-| ------------------------------- | -------- | ---------------------------------------------- |
-| Mandate pending then valid      | DEFERRED | Bounded outbox retries, one Subscription       |
-| Bancontact then SEPA collection | DEFERRED | Direct-debit mandate and recurring Payment     |
-| Duplicate subscription request  | DEFERRED | Exactly one remote/local Subscription          |
-| Recurring payment succeeds      | DEFERRED | `paid_through` advances once                   |
-| Recurring payment fails/retries | DEFERRED | Grace state; no custom money retry             |
-| Cancel with paid access         | DEFERRED | Remote canceled; access ends at `paid_through` |
-| New payment method              | DEFERRED | New first Payment; no overlapping Subscription |
+## Facebook/OpenAI Test Mode matrix
 
-Use Mollie's hosted `changePaymentState` link in Test Mode for realistic final
-states, refunds and chargebacks. Recurring test Payments do not have a checkout
-link; their `changePaymentState` link is the intended test control.
+| Scenario                            | Status  | Required observation                                                      |
+| ----------------------------------- | ------- | ------------------------------------------------------------------------- |
+| Page-scoped paid handoff and claim  | NOT RUN | One delivery/capability/claim/membership                                  |
+| Two Pages/workspaces and wrong user | NOT RUN | Exact isolation; zero cross-tenant effects                                |
+| Disconnect/rebind and closed window | NOT RUN | Fail closed, then same-row verified recovery                              |
+| Transient Graph failure             | NOT RUN | Bounded attempts; no second charge/capability                             |
+| GPT Image generation/edit           | NOT RUN | Admission before provider; estimate/caps remain positive and conservative |
+| Delete during slow provider/send    | NOT RUN | No persisted output/state/send after tombstone                            |
+| Exact OpenClaw transcript deletion  | BLOCKED | Host-owned non-archiving erasure capability is not available              |
 
-Overall result: **NO-GO**.
+Overall result: **the last published application-owned repository savepoint
+passed; the current privacy/cost hardening batch is pending final local/CI
+revalidation; full privacy, provider sandbox and live launch remain NO-GO**.
+The existing OpenClaw host transcript blocker is external to the channel plugin
+and must be closed before an end-to-end deletion PASS can be recorded.

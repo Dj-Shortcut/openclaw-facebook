@@ -1,17 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { getDayKey } from "./messengerStateNormalization";
-import { getOrCreateState, type MessengerUserState } from "./messengerState";
+import {
+  mutateExistingState,
+  mutateState,
+  type MessengerUserState,
+} from "./messengerState";
+import { getMessengerStateOperationKey } from "./messengerStatePersistence";
 import {
   getAudioTranscriptionDailyLimit,
   getImageGenerationDailyLimit,
   getVideoGenerationDailyLimit,
 } from "./quotaPolicy";
 import {
+  deleteEphemeralKey,
   deleteEphemeralKeyIfValue,
   hasEphemeralKeyValue,
   setEphemeralKeyIfAbsent,
-  updateExistingStoredState,
-  updateStoredState,
 } from "./stateStore";
 
 const IMAGE_GENERATION_QUOTA_LOCK_MS = 240_000;
@@ -67,15 +71,34 @@ function toSeconds(milliseconds: number): number {
 }
 
 function transcriptionQuotaLockKey(psid: string): string {
-  return `messenger:transcription-quota:${psid}`;
+  return getMessengerStateOperationKey(psid, "quota:transcription");
 }
 
 function imageGenerationQuotaLockKey(psid: string): string {
-  return `messenger:image-generation-quota:${psid}`;
+  return getMessengerStateOperationKey(psid, "quota:image-generation");
 }
 
 function videoGenerationQuotaLockKey(psid: string): string {
-  return `messenger:video-generation-quota:${psid}`;
+  return getMessengerStateOperationKey(psid, "quota:video-generation");
+}
+
+function legacyQuotaLockKeys(psid: string): string[] {
+  return [
+    `messenger:transcription-quota:${psid}`,
+    `messenger:image-generation-quota:${psid}`,
+    `messenger:video-generation-quota:${psid}`,
+  ];
+}
+
+export async function deleteMessengerQuotaReservationsForErasure(
+  psid: string
+): Promise<void> {
+  await Promise.all([
+    deleteEphemeralKey(transcriptionQuotaLockKey(psid)),
+    deleteEphemeralKey(imageGenerationQuotaLockKey(psid)),
+    deleteEphemeralKey(videoGenerationQuotaLockKey(psid)),
+    ...legacyQuotaLockKeys(psid).map(key => deleteEphemeralKey(key)),
+  ]);
 }
 
 function imageGenerationReservationExpiresAt(now = Date.now()): number {
@@ -229,19 +252,8 @@ async function syncQuotaState(
   psid: string,
   now = Date.now()
 ): Promise<MessengerUserState> {
-  const current = withSyncedQuota(
-    await Promise.resolve(getOrCreateState(psid)),
-    now
-  );
-
   return Promise.resolve(
-    updateStoredState<MessengerUserState>(psid, storedState => {
-      if (!storedState) {
-        return current;
-      }
-
-      return withSyncedQuota(storedState, now);
-    })
+    mutateState(psid, storedState => withSyncedQuota(storedState, now))
   );
 }
 
@@ -249,22 +261,10 @@ async function syncTranscriptionQuotaState(
   psid: string,
   now = Date.now()
 ): Promise<MessengerUserState> {
-  const current = withSyncedTranscriptionQuota(
-    await Promise.resolve(getOrCreateState(psid)),
-    now
-  );
-
   return Promise.resolve(
-    updateStoredState<MessengerUserState>(psid, storedState => {
-      if (!storedState) {
-        return withSyncedTranscriptionQuota(current, now);
-      }
-
-      return withSyncedTranscriptionQuota(
-        withSyncedQuota(storedState, now),
-        now
-      );
-    })
+    mutateState(psid, storedState =>
+      withSyncedTranscriptionQuota(withSyncedQuota(storedState, now), now)
+    )
   );
 }
 
@@ -287,7 +287,6 @@ export async function reserveImageGenerationForAttempt(
 
   try {
     const now = Date.now();
-    const fallbackState = await Promise.resolve(getOrCreateState(psid));
     const limit = getFreeDailyLimit();
     let allowed = false;
     const reservationState = {
@@ -296,8 +295,9 @@ export async function reserveImageGenerationForAttempt(
     };
 
     await Promise.resolve(
-      updateStoredState<MessengerUserState>(psid, storedState => {
-        const baseState = withSyncedQuota(storedState ?? fallbackState, now);
+      mutateState(psid, storedState => {
+        allowed = false;
+        const baseState = withSyncedQuota(storedState, now);
 
         if (hasQuotaBypass(psid, baseState.userKey)) {
           allowed = true;
@@ -349,7 +349,8 @@ export async function commitImageGenerationSuccess(
     const limit = getFreeDailyLimit();
 
     await Promise.resolve(
-      updateExistingStoredState<MessengerUserState>(psid, storedState => {
+      mutateExistingState(psid, storedState => {
+        committed = false;
         const baseState = withSyncedQuota(storedState, now);
         const storedReservation = baseState.imageGenerationQuotaReservation;
         const hasValidStoredReservation =
@@ -402,7 +403,7 @@ export async function releaseImageGenerationReservation(
 
   const now = Date.now();
   await Promise.resolve(
-    updateExistingStoredState<MessengerUserState>(psid, storedState => {
+    mutateExistingState(psid, storedState => {
       const baseState = withSyncedQuota(storedState, now);
       if (
         baseState.imageGenerationQuotaReservation?.token !== reservation.token
@@ -421,22 +422,10 @@ export async function releaseImageGenerationReservation(
 
 export async function canGenerateVideo(psid: string): Promise<boolean> {
   const now = Date.now();
-  const current = withSyncedVideoGenerationQuota(
-    withSyncedQuota(await Promise.resolve(getOrCreateState(psid)), now),
-    now
-  );
-
   const state = await Promise.resolve(
-    updateStoredState<MessengerUserState>(psid, storedState => {
-      if (!storedState) {
-        return current;
-      }
-
-      return withSyncedVideoGenerationQuota(
-        withSyncedQuota(storedState, now),
-        now
-      );
-    })
+    mutateState(psid, storedState =>
+      withSyncedVideoGenerationQuota(withSyncedQuota(storedState, now), now)
+    )
   );
 
   if (hasQuotaBypass(psid, state.userKey)) {
@@ -457,7 +446,6 @@ export async function reserveVideoGenerationForAttempt(
 
   try {
     const now = Date.now();
-    const fallbackState = await Promise.resolve(getOrCreateState(psid));
     const limit = resolveVideoGenerationLimit(dailyLimit);
     let allowed = false;
     const reservationState = {
@@ -467,9 +455,10 @@ export async function reserveVideoGenerationForAttempt(
     };
 
     await Promise.resolve(
-      updateStoredState<MessengerUserState>(psid, storedState => {
+      mutateState(psid, storedState => {
+        allowed = false;
         const baseState = withSyncedVideoGenerationQuota(
-          withSyncedQuota(storedState ?? fallbackState, now),
+          withSyncedQuota(storedState, now),
           now
         );
 
@@ -523,7 +512,8 @@ export async function commitVideoGenerationSuccess(
     const limit = resolveVideoGenerationLimit(reservation.dailyLimit);
 
     await Promise.resolve(
-      updateExistingStoredState<MessengerUserState>(psid, storedState => {
+      mutateExistingState(psid, storedState => {
+        committed = false;
         const baseState = withSyncedVideoGenerationQuota(
           withSyncedQuota(storedState, now),
           now
@@ -580,7 +570,7 @@ export async function releaseVideoGenerationReservation(
 
   const now = Date.now();
   await Promise.resolve(
-    updateExistingStoredState<MessengerUserState>(psid, storedState => {
+    mutateExistingState(psid, storedState => {
       const baseState = withSyncedVideoGenerationQuota(
         withSyncedQuota(storedState, now),
         now
@@ -630,14 +620,14 @@ export async function reserveTranscriptionForAttempt(
 
   try {
     const now = Date.now();
-    const fallbackState = await Promise.resolve(getOrCreateState(psid));
     const limit = getTranscriptionLimit();
     let allowed = false;
 
     await Promise.resolve(
-      updateStoredState<MessengerUserState>(psid, storedState => {
+      mutateState(psid, storedState => {
+        allowed = false;
         const baseState = withSyncedTranscriptionQuota(
-          withSyncedQuota(storedState ?? fallbackState, now),
+          withSyncedQuota(storedState, now),
           now
         );
 
@@ -684,13 +674,13 @@ export async function commitTranscriptionSuccess(
   let committed = false;
   try {
     const now = Date.now();
-    const fallbackState = await Promise.resolve(getOrCreateState(psid));
     const limit = getTranscriptionLimit();
 
     await Promise.resolve(
-      updateStoredState<MessengerUserState>(psid, storedState => {
+      mutateExistingState(psid, storedState => {
+        committed = false;
         const baseState = withSyncedTranscriptionQuota(
-          withSyncedQuota(storedState ?? fallbackState, now),
+          withSyncedQuota(storedState, now),
           now
         );
 
@@ -734,14 +724,12 @@ export async function releaseTranscriptionReservation(
 
 export async function increment(psid: string): Promise<void> {
   const now = Date.now();
-  const current = await syncQuotaState(psid, now);
-  if (hasQuotaBypass(psid, current.userKey)) {
-    return;
-  }
-
   await Promise.resolve(
-    updateStoredState<MessengerUserState>(psid, storedState => {
-      const baseState = withSyncedQuota(storedState ?? current, now);
+    mutateState(psid, storedState => {
+      const baseState = withSyncedQuota(storedState, now);
+      if (hasQuotaBypass(psid, baseState.userKey)) {
+        return baseState;
+      }
 
       return {
         ...baseState,
@@ -757,17 +745,15 @@ export async function increment(psid: string): Promise<void> {
 
 export async function incrementTranscription(psid: string): Promise<void> {
   const now = Date.now();
-  const current = await syncTranscriptionQuotaState(psid, now);
-  if (hasQuotaBypass(psid, current.userKey)) {
-    return;
-  }
-
   await Promise.resolve(
-    updateStoredState<MessengerUserState>(psid, storedState => {
+    mutateState(psid, storedState => {
       const baseState = withSyncedTranscriptionQuota(
-        withSyncedQuota(storedState ?? current, now),
+        withSyncedQuota(storedState, now),
         now
       );
+      if (hasQuotaBypass(psid, baseState.userKey)) {
+        return baseState;
+      }
 
       return {
         ...baseState,

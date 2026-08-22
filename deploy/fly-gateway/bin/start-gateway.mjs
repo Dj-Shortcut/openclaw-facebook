@@ -8,24 +8,31 @@ import {
   buildGatewayLaunchPlan,
   startPublicRouteGuard,
 } from "./public-route-guard.mjs";
+import { assertLeaderbotAiAnswerQuotaReadiness } from "./ai-answer-quota-readiness.mjs";
 
 const stateDir = process.env.OPENCLAW_STATE_DIR || "/data";
-const configPath = process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir, "openclaw.json");
-const workspaceDir = process.env.OPENCLAW_WORKSPACE_DIR || path.join(stateDir, "workspace");
+const configPath =
+  process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir, "openclaw.json");
+const workspaceDir =
+  process.env.OPENCLAW_WORKSPACE_DIR || path.join(stateDir, "workspace");
 const legacyWorkspaceDir = path.join(
   process.env.HOME || "/home/node",
   ".openclaw",
   "workspace",
 );
-const pluginPath = process.env.OPENCLAW_FACEBOOK_PLUGIN_PATH || "/app/node_modules/@dj-shortcut/facebook";
-const codexPluginPath = process.env.OPENCLAW_CODEX_PLUGIN_PATH || "/app/node_modules/@openclaw/codex";
-const defaultDmPolicy = process.env.OPENCLAW_FACEBOOK_DEFAULT_DM_POLICY || "pairing";
-const defaultUnknownSenderMode = process.env.OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE || "";
+const pluginPath =
+  process.env.OPENCLAW_FACEBOOK_PLUGIN_PATH ||
+  "/app/node_modules/@dj-shortcut/facebook";
+const codexPluginPath =
+  process.env.OPENCLAW_CODEX_PLUGIN_PATH || "/app/node_modules/@openclaw/codex";
+const defaultDmPolicy =
+  process.env.OPENCLAW_FACEBOOK_DEFAULT_DM_POLICY || "pairing";
+const defaultUnknownSenderMode =
+  process.env.OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE || "";
 const defaultLeaderbotBridgeEnabled =
   process.env.OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED || "";
 const defaultAgentModel = process.env.OPENCLAW_AGENT_MODEL || "";
 const defaultAgentThinking = process.env.OPENCLAW_AGENT_THINKING_DEFAULT || "";
-const openAiApiKeyAvailable = Boolean(process.env.OPENAI_API_KEY?.trim());
 const allowOpen = process.env.OPENCLAW_FACEBOOK_ALLOW_OPEN === "1";
 const allowedUnknownSenderModes = new Set(["pairing", "leaderbot_free_tier"]);
 
@@ -40,13 +47,17 @@ function readJsonFile(filePath) {
     if (error && error.code === "ENOENT") {
       return {};
     }
-    throw new Error(`Cannot read OpenClaw config JSON at ${filePath}: ${error.message}`);
+    throw new Error(
+      `Cannot read OpenClaw config JSON at ${filePath}: ${error.message}`,
+    );
   }
 }
 
 function writeJsonFile(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, {
+    mode: 0o600,
+  });
 }
 
 function uniquePush(list, value) {
@@ -74,66 +85,60 @@ function ensureAgentDefaults(config) {
   }
   if (
     config.agents.defaults.workspace === undefined ||
-    path.resolve(String(config.agents.defaults.workspace)) === path.resolve(legacyWorkspaceDir)
+    path.resolve(String(config.agents.defaults.workspace)) ===
+      path.resolve(legacyWorkspaceDir)
   ) {
     config.agents.defaults.workspace = workspaceDir;
   }
   if (defaultAgentModel && config.agents.defaults.model === undefined) {
     config.agents.defaults.model = { primary: defaultAgentModel };
   }
-  if (defaultAgentThinking && config.agents.defaults.thinkingDefault === undefined) {
+  if (
+    defaultAgentThinking &&
+    config.agents.defaults.thinkingDefault === undefined
+  ) {
     config.agents.defaults.thinkingDefault = defaultAgentThinking;
   }
 }
 
-function ensureMemorySearchSecretRef(config) {
-  if (!openAiApiKeyAvailable) {
-    return;
+function ensurePublicMemoryDisabled(config) {
+  if (!isObject(config.plugins)) config.plugins = {};
+  if (!isObject(config.plugins.slots)) config.plugins.slots = {};
+  config.plugins.slots.memory = "none";
+  if (!isObject(config.plugins.entries)) config.plugins.entries = {};
+  if (!isObject(config.plugins.entries["memory-core"])) {
+    config.plugins.entries["memory-core"] = {};
   }
+  config.plugins.entries["memory-core"].enabled = false;
 
-  const secretRef = {
-    source: "env",
-    provider: "default",
-    id: "OPENAI_API_KEY",
-  };
+  if (!isObject(config.agents)) config.agents = {};
+  if (!isObject(config.agents.defaults)) config.agents.defaults = {};
+  if (!isObject(config.agents.defaults.compaction)) {
+    config.agents.defaults.compaction = {};
+  }
+  config.agents.defaults.compaction.memoryFlush = { enabled: false };
+  delete config.agents.defaults.memory;
+  if (isObject(config.agents.entries) || Array.isArray(config.agents.entries)) {
+    for (const entry of Object.values(config.agents.entries)) {
+      if (isObject(entry)) delete entry.memory;
+    }
+  }
+  delete config.memory;
 
-  const configureMemory = (owner, { createIfMissing = false } = {}) => {
-    if (!isObject(owner)) {
-      return;
-    }
-    if (!isObject(owner.memory)) {
-      if (!createIfMissing) {
-        return;
-      }
-      owner.memory = {};
-    }
-    if (!isObject(owner.memory.search)) {
-      if (!createIfMissing) {
-        return;
-      }
-      owner.memory.search = {};
-    }
-    if (owner.memory.search.provider === undefined) {
-      owner.memory.search.provider = "openai";
-    }
-    if (owner.memory.search.provider === "openai") {
-      if (!isObject(owner.memory.search.remote)) {
-        owner.memory.search.remote = {};
-      }
-      owner.memory.search.remote.apiKey = secretRef;
-    }
-  };
+  if (!isObject(config.hooks)) config.hooks = {};
+  if (!isObject(config.hooks.internal)) config.hooks.internal = {};
+  if (!isObject(config.hooks.internal.entries)) {
+    config.hooks.internal.entries = {};
+  }
+  config.hooks.internal.entries["session-memory"] = { enabled: false };
 
-  configureMemory(config, { createIfMissing: true });
-  if (isObject(config.agents)) {
-    if (isObject(config.agents.defaults)) {
-      configureMemory(config.agents.defaults);
-    }
-    if (isObject(config.agents.entries)) {
-      for (const entry of Object.values(config.agents.entries)) {
-        configureMemory(entry);
-      }
-    }
+  for (const tool of [
+    "memory_search",
+    "memory_get",
+    "memory_recall",
+    "group:memory",
+  ]) {
+    ensurePublicToolDeny(config, tool);
   }
 }
 
@@ -186,19 +191,15 @@ function migrateLegacyWorkspaceFiles() {
     return;
   }
   fs.mkdirSync(workspaceDir, { recursive: true });
-  const entries = [
-    "AGENTS.md",
-    "SOUL.md",
-    "TOOLS.md",
-    "IDENTITY.md",
-    "USER.md",
-    "HEARTBEAT.md",
-    "MEMORY.md",
-    "memory",
-  ];
+  const entries = ["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md"];
   let copied = 0;
   for (const entry of entries) {
-    if (copyIfMissing(path.join(legacyWorkspaceDir, entry), path.join(workspaceDir, entry))) {
+    if (
+      copyIfMissing(
+        path.join(legacyWorkspaceDir, entry),
+        path.join(workspaceDir, entry),
+      )
+    ) {
       copied += 1;
     }
   }
@@ -209,20 +210,74 @@ function migrateLegacyWorkspaceFiles() {
   }
 }
 
-function ensureWorkspaceMemoryFile() {
-  const memoryPath = path.join(workspaceDir, "MEMORY.md");
-  if (fs.existsSync(memoryPath)) {
-    return false;
+function quarantineSharedPublicMemory() {
+  const quarantineDir = path.join(stateDir, "private-memory-quarantine-v1");
+  const entries = ["USER.md", "MEMORY.md", "memory"];
+  for (const entry of entries) {
+    const source = path.join(workspaceDir, entry);
+    if (!fs.existsSync(source)) continue;
+    fs.mkdirSync(quarantineDir, { recursive: true, mode: 0o700 });
+    const destination = path.join(quarantineDir, entry);
+    if (fs.existsSync(destination)) {
+      throw new Error(
+        `Public workspace memory reappeared after quarantine: ${entry}`,
+      );
+    }
+    fs.renameSync(source, destination);
   }
-  fs.writeFileSync(
-    memoryPath,
-    "# Memory\n\nPersistent assistant memory for this OpenClaw workspace.\n",
-    { mode: 0o600 },
-  );
-  return true;
 }
 
 function ensurePublicMessengerBaseline(config) {
+  if (!isObject(config.session)) {
+    config.session = {};
+  }
+  if (config.session.dmScope !== "per-account-channel-peer") {
+    if (config.session.dmScope !== undefined) {
+      console.warn(
+        `session.dmScope=${JSON.stringify(config.session.dmScope)} is not safe for a public multi-tenant Messenger gateway; switching to "per-account-channel-peer".`,
+      );
+    }
+    config.session.dmScope = "per-account-channel-peer";
+  }
+  if (Array.isArray(config.bindings)) {
+    for (const binding of config.bindings) {
+      if (
+        !isObject(binding) ||
+        !isObject(binding.match) ||
+        binding.match.channel !== "facebook"
+      ) {
+        continue;
+      }
+      if (binding.agentId !== undefined && binding.agentId !== "main") {
+        throw new Error(
+          "Public Facebook routes must use the isolated main agent",
+        );
+      }
+      if (
+        !isObject(binding.session) ||
+        binding.session.dmScope === undefined ||
+        binding.session.dmScope === "per-account-channel-peer"
+      ) {
+        continue;
+      }
+      console.warn(
+        "A Facebook route binding used an unsafe DM scope; switching it to per-account-channel-peer.",
+      );
+      binding.session.dmScope = "per-account-channel-peer";
+    }
+  }
+
+  if (!isObject(config.attachments)) {
+    config.attachments = {};
+  }
+  if (
+    !Number.isFinite(config.attachments.ttlHours) ||
+    config.attachments.ttlHours <= 0 ||
+    config.attachments.ttlHours > 24
+  ) {
+    config.attachments.ttlHours = 24;
+  }
+
   if (!isObject(config.gateway)) {
     config.gateway = {};
   }
@@ -242,11 +297,15 @@ function ensurePublicMessengerBaseline(config) {
     config.plugins.load.paths = [];
   }
   uniquePush(config.plugins.load.paths, pluginPath);
-  config.plugins.load.paths = config.plugins.load.paths.filter((entry) => entry !== codexPluginPath);
+  config.plugins.load.paths = config.plugins.load.paths.filter(
+    (entry) => entry !== codexPluginPath,
+  );
   if (!Array.isArray(config.plugins.allow)) {
     config.plugins.allow = [];
   }
-  config.plugins.allow = config.plugins.allow.filter((entry) => entry !== "codex");
+  config.plugins.allow = config.plugins.allow.filter(
+    (entry) => entry !== "codex",
+  );
   uniquePush(config.plugins.allow, "facebook");
 
   if (!isObject(config.plugins.entries)) {
@@ -274,7 +333,10 @@ function ensurePublicMessengerBaseline(config) {
     config.channels.facebook.dmPolicy = defaultDmPolicy;
   }
   const unknownSenderMode = resolveDefaultUnknownSenderMode();
-  if (unknownSenderMode && config.channels.facebook.unknownSenderMode === undefined) {
+  if (
+    unknownSenderMode &&
+    config.channels.facebook.unknownSenderMode === undefined
+  ) {
     config.channels.facebook.unknownSenderMode = unknownSenderMode;
   }
   const leaderbotBridgeEnabled = resolveDefaultLeaderbotBridgeEnabled();
@@ -286,10 +348,12 @@ function ensurePublicMessengerBaseline(config) {
   }
 
   ensureAgentDefaults(config);
-  ensureMemorySearchSecretRef(config);
+  ensurePublicMemoryDisabled(config);
 
   const facebookConfig = config.channels.facebook;
-  const allowFrom = Array.isArray(facebookConfig.allowFrom) ? facebookConfig.allowFrom : [];
+  const allowFrom = Array.isArray(facebookConfig.allowFrom)
+    ? facebookConfig.allowFrom
+    : [];
   if (facebookConfig.dmPolicy === "open" && !allowOpen) {
     console.warn(
       'channels.facebook.dmPolicy="open" is not allowed for this public gateway; switching to "pairing".',
@@ -297,7 +361,9 @@ function ensurePublicMessengerBaseline(config) {
     facebookConfig.dmPolicy = "pairing";
   }
   if (facebookConfig.dmPolicy === "open" && !allowFrom.includes("*")) {
-    throw new Error('channels.facebook.dmPolicy="open" requires channels.facebook.allowFrom to include "*".');
+    throw new Error(
+      'channels.facebook.dmPolicy="open" requires channels.facebook.allowFrom to include "*".',
+    );
   }
 
   return config;
@@ -307,20 +373,27 @@ export function prepareGatewayConfig() {
   fs.mkdirSync(stateDir, { recursive: true });
   fs.mkdirSync(workspaceDir, { recursive: true });
   migrateLegacyWorkspaceFiles();
-  ensureWorkspaceMemoryFile();
+  quarantineSharedPublicMemory();
   const config = ensurePublicMessengerBaseline(readJsonFile(configPath));
   writeJsonFile(configPath, config);
   return config;
 }
 
-export function startGateway() {
+export async function startGateway() {
+  await assertLeaderbotAiAnswerQuotaReadiness();
   prepareGatewayConfig();
-  const openclawBin = path.join(process.cwd(), "node_modules", "openclaw", "openclaw.mjs");
+  const openclawBin = path.join(
+    process.cwd(),
+    "node_modules",
+    "openclaw",
+    "openclaw.mjs",
+  );
   const launchPlan = buildGatewayLaunchPlan();
   if (launchPlan.guardEnabled) {
     startPublicRouteGuard({
       publicPort: launchPlan.publicPort,
       targetPort: launchPlan.internalPort,
+      readinessCheck: () => assertLeaderbotAiAnswerQuotaReadiness(),
     });
   }
   const args = [openclawBin, "gateway", ...launchPlan.openclawArgs];
@@ -344,5 +417,8 @@ export function startGateway() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  startGateway();
+  startGateway().catch(() => {
+    console.error("gateway startup failed: readiness preflight did not pass");
+    process.exit(1);
+  });
 }

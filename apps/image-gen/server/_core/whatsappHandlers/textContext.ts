@@ -9,7 +9,10 @@ import {
 import { toLogUser } from "../privacy";
 import { createWhatsAppResponseSender } from "../whatsappResponseService";
 import { runWhatsAppImageGeneration } from "../whatsappFlows/imageGenerationFlow";
-import type { NormalizedWhatsAppEvent, WhatsAppHandlerContext } from "../whatsappTypes";
+import type {
+  NormalizedWhatsAppEvent,
+  WhatsAppHandlerContext,
+} from "../whatsappTypes";
 import { safeLog } from "../logger";
 
 function createWhatsAppFeatureLogger(userId: string): BotLogger {
@@ -54,7 +57,9 @@ function createWhatsAppTextContext(
     setPendingEditIntent: intent =>
       Promise.resolve(setPendingEditIntent(event.senderId, intent)),
     clearImageContext: () =>
-      Promise.resolve(clearPendingImageState(event.senderId)).then(() => undefined),
+      Promise.resolve(clearPendingImageState(event.senderId)).then(
+        () => undefined
+      ),
     runImageGeneration: (sourceImageUrl, promptHint, generationKind) =>
       runWhatsAppImageGeneration({
         senderId: event.senderId,
@@ -64,6 +69,7 @@ function createWhatsAppTextContext(
         sourceImageUrl,
         promptHint,
         generationKind,
+        costLedgerScope: context.costLedgerScope,
       }),
     getRuntimeStats: () => getTodayRuntimeStats(),
     logger: createWhatsAppFeatureLogger(event.userId),

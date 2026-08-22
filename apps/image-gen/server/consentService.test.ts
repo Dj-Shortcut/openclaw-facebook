@@ -63,6 +63,7 @@ import {
 describe("Messenger consent deletion flow", () => {
   const originalRedisUrl = process.env.REDIS_URL;
   const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
+  const originalNodeEnv = process.env.NODE_ENV;
 
   beforeEach(() => {
     delete process.env.REDIS_URL;
@@ -91,6 +92,11 @@ describe("Messenger consent deletion flow", () => {
       delete process.env.PRIVACY_PEPPER;
     } else {
       process.env.PRIVACY_PEPPER = originalPrivacyPepper;
+    }
+    if (originalNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = originalNodeEnv;
     }
   });
 
@@ -250,9 +256,7 @@ describe("Messenger consent deletion flow", () => {
     const staleState = await Promise.resolve(getOrCreateState(psid));
 
     await Promise.resolve(clearUserState(psid));
-    deletePortalHandoffTokensForMessengerUserKeyMock.mockRejectedValueOnce(
-      new Error("temporary handoff-token deletion failure")
-    );
+    process.env.NODE_ENV = "production";
 
     await expect(
       handleMessengerConsentGate({

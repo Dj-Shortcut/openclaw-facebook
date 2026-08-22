@@ -2,11 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createHandlerContext } from "./_core/webhookHandlerContext";
 import { handleEntry } from "./_core/webhookEventRouter";
-import {
-  resetStateStore,
-  setPreferredLang,
-} from "./_core/messengerState";
+import { resetStateStore, setPreferredLang } from "./_core/messengerState";
 import { createTrackedEventContext } from "./_core/webhookEventContext";
+import { runWithMessengerRequestContext } from "./_core/messengerRequestContext";
 
 describe("Messenger webhook request correlation privacy", () => {
   const originalLogLevel = process.env.LOG_LEVEL;
@@ -95,44 +93,56 @@ describe("Messenger webhook request correlation privacy", () => {
     });
     ctx.claimEventReplayOrLog = vi.fn(async () => true);
 
-    const first = await createTrackedEventContext(
-      ctx,
-      {
-        sender: { id: psid },
-        recipient: { id: "page-language" },
-        timestamp: 1_750_000_000_001,
-        message: { mid: "mid-language-en", text: "Hello" },
-      },
-      "page-language"
+    const first = await runWithMessengerRequestContext("page-language", () =>
+      createTrackedEventContext(
+        ctx,
+        {
+          sender: { id: psid },
+          recipient: { id: "page-language" },
+          timestamp: 1_750_000_000_001,
+          message: { mid: "mid-language-en", text: "Hello" },
+        },
+        "page-language"
+      )
     );
     expect(first?.lang).toBe("en");
 
-    await Promise.resolve(setPreferredLang(psid, "nl"));
-    const second = await createTrackedEventContext(
-      ctx,
-      {
-        sender: { id: psid },
-        recipient: { id: "page-language" },
-        timestamp: 1_750_000_000_002,
-        message: { mid: "mid-language-nl", text: "Hallo" },
-      },
-      "page-language"
+    await runWithMessengerRequestContext("page-language", () =>
+      Promise.resolve(setPreferredLang(psid, "nl"))
+    );
+    const second = await runWithMessengerRequestContext("page-language", () =>
+      createTrackedEventContext(
+        ctx,
+        {
+          sender: { id: psid },
+          recipient: { id: "page-language" },
+          timestamp: 1_750_000_000_002,
+          message: { mid: "mid-language-nl", text: "Hallo" },
+        },
+        "page-language"
+      )
     );
     expect(second?.lang).toBe("nl");
 
     const accountDefaultPsid = "account-default-language-psid";
-    await Promise.resolve(
-      setPreferredLang(accountDefaultPsid, "nl", "account_default")
+    await runWithMessengerRequestContext("page-language", () =>
+      Promise.resolve(
+        setPreferredLang(accountDefaultPsid, "nl", "account_default")
+      )
     );
-    const refreshedDefault = await createTrackedEventContext(
-      ctx,
-      {
-        sender: { id: accountDefaultPsid },
-        recipient: { id: "page-language" },
-        timestamp: 1_750_000_000_003,
-        message: { mid: "mid-language-refreshed", text: "Hello again" },
-      },
-      "page-language"
+    const refreshedDefault = await runWithMessengerRequestContext(
+      "page-language",
+      () =>
+        createTrackedEventContext(
+          ctx,
+          {
+            sender: { id: accountDefaultPsid },
+            recipient: { id: "page-language" },
+            timestamp: 1_750_000_000_003,
+            message: { mid: "mid-language-refreshed", text: "Hello again" },
+          },
+          "page-language"
+        )
     );
     expect(refreshedDefault?.lang).toBe("en");
   });

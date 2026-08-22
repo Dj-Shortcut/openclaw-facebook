@@ -17,25 +17,36 @@ import {
 import { summarizeSensitiveUrl } from "../utils/urlSummarizer";
 import { safeLog } from "../logger";
 
+export type GeneratedImagePublishHooks = Readonly<{
+  beforeStore: (objectKey: string) => Promise<void>;
+  afterStoreSuccess?: (objectKey: string, imageUrl: string) => Promise<void>;
+  afterStoreFailure: (objectKey: string) => Promise<void>;
+}>;
+
 export async function publishGeneratedImage(
   imageBuffer: Buffer,
-  reqId?: string
+  reqId?: string,
+  hooks?: GeneratedImagePublishHooks
 ): Promise<string> {
   const contentType = getOpenAiImageOutputContentType();
   const extension = getOpenAiImageOutputExtension();
 
   if (hasObjectStorageConfig()) {
     const key = `generated/images/${Date.now()}-${randomUUID()}.${extension}`;
+    await hooks?.beforeStore(key);
+    let stored: { url: string };
     try {
-      const { url } = await storagePut(key, imageBuffer, contentType);
-      safeLog("generated_image_upload_success", {
-        reqId,
-        contentType,
-        storageKey: key,
-        publicUrl: summarizeSensitiveUrl(url),
-      });
-      return url;
+      stored = await storagePut(key, imageBuffer, contentType);
     } catch (error) {
+      try {
+        await hooks?.afterStoreFailure(key);
+      } catch (inventoryError) {
+        throw new AggregateError(
+          [error, inventoryError],
+          "Generated image upload and inventory release failed",
+          { cause: error }
+        );
+      }
       safeLog("generated_image_upload_failed", {
         level: "error",
         reqId,
@@ -44,6 +55,14 @@ export async function publishGeneratedImage(
       });
       throw error;
     }
+    await hooks?.afterStoreSuccess?.(key, stored.url);
+    safeLog("generated_image_upload_success", {
+      reqId,
+      contentType,
+      storageKey: key,
+      publicUrl: summarizeSensitiveUrl(stored.url),
+    });
+    return stored.url;
   }
 
   assertProductionImageStorageConfig();

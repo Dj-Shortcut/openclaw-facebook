@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const { dbMock, drizzleMock } = vi.hoisted(() => {
   const db = {
     insert: vi.fn(),
+    delete: vi.fn(() => ({ where: vi.fn(async () => undefined) })),
     select: vi.fn(),
     transaction: vi.fn(async (callback: (tx: unknown) => unknown) =>
       callback(db)
@@ -141,11 +142,13 @@ describe("channel connection database claims", () => {
   it("updates credentials only after the Page claim and workspace row are locked", async () => {
     const pageClaim = lockedSelect([{ id: 7, workspaceId: 42 }]);
     const workspaceConnection = lockedSelect([{ id: 7 }]);
+    const activeAttempts = lockedSelect([]);
     const listed = [{ id: 7, ...connection }];
     const list = listSelect(listed);
     dbMock.select
       .mockReturnValueOnce({ from: pageClaim.from })
       .mockReturnValueOnce({ from: workspaceConnection.from })
+      .mockReturnValueOnce({ from: activeAttempts.from })
       .mockReturnValueOnce({ from: list.from });
     const updateWhere = vi.fn(async () => undefined);
     const set = vi.fn(() => ({ where: updateWhere }));
@@ -202,12 +205,14 @@ describe("channel connection database claims", () => {
     const providerAccountClaim = lockedSelect([{ id: 8, workspaceId: 42 }]);
     const endpointClaim = lockedSelect([{ id: 8, workspaceId: 42 }]);
     const workspaceConnection = lockedSelect([{ id: 8 }]);
+    const activeAttempts = lockedSelect([]);
     const listed = [{ id: 8, ...whatsAppConnection }];
     const list = listSelect(listed);
     dbMock.select
       .mockReturnValueOnce({ from: providerAccountClaim.from })
       .mockReturnValueOnce({ from: endpointClaim.from })
       .mockReturnValueOnce({ from: workspaceConnection.from })
+      .mockReturnValueOnce({ from: activeAttempts.from })
       .mockReturnValueOnce({ from: list.from });
     const updateWhere = vi.fn(async () => undefined);
     const set = vi.fn(() => ({ where: updateWhere }));
@@ -278,6 +283,7 @@ describe("channel connection database claims", () => {
       const initialWorkspaceConnection = lockedSelect([]);
       const retriedPageClaim = lockedSelect([{ id: 7, workspaceId: 42 }]);
       const retriedWorkspaceConnection = lockedSelect([{ id: 7 }]);
+      const activeAttempts = lockedSelect([]);
       const listed = [{ id: 7, ...connection }];
       const list = listSelect(listed);
       dbMock.select
@@ -285,6 +291,7 @@ describe("channel connection database claims", () => {
         .mockReturnValueOnce({ from: initialWorkspaceConnection.from })
         .mockReturnValueOnce({ from: retriedPageClaim.from })
         .mockReturnValueOnce({ from: retriedWorkspaceConnection.from })
+        .mockReturnValueOnce({ from: activeAttempts.from })
         .mockReturnValueOnce({ from: list.from });
       const values = vi.fn().mockRejectedValueOnce(
         Object.assign(new Error(`Duplicate entry for ${constraint}`), {
@@ -318,6 +325,7 @@ describe("channel connection database claims", () => {
     ]);
     const retriedEndpointClaim = lockedSelect([{ id: 8, workspaceId: 42 }]);
     const retriedWorkspaceConnection = lockedSelect([{ id: 8 }]);
+    const activeAttempts = lockedSelect([]);
     const listed = [{ id: 8, ...whatsAppConnection }];
     const list = listSelect(listed);
     dbMock.select
@@ -327,6 +335,7 @@ describe("channel connection database claims", () => {
       .mockReturnValueOnce({ from: retriedProviderAccountClaim.from })
       .mockReturnValueOnce({ from: retriedEndpointClaim.from })
       .mockReturnValueOnce({ from: retriedWorkspaceConnection.from })
+      .mockReturnValueOnce({ from: activeAttempts.from })
       .mockReturnValueOnce({ from: list.from });
     const values = vi.fn().mockRejectedValueOnce(
       Object.assign(new Error("duplicate WABA claim"), {

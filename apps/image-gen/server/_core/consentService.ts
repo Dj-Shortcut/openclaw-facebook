@@ -100,6 +100,12 @@ function deletionDoneText(lang: Lang): string {
     : "Je data is verwijderd ✅\nAls je verdergaat, behandelen we je als een nieuwe gebruiker.";
 }
 
+function deletionAcceptedText(lang: Lang): string {
+  return lang === "en"
+    ? "Your deletion request has been accepted. We're deleting your data now."
+    : "Je verwijderingsverzoek is aanvaard. We verwijderen je data nu.";
+}
+
 function deletionPendingText(lang: Lang): string {
   return lang === "en"
     ? "We couldn't finish deleting all your data yet. Please try 'delete my data' again later. If this keeps happening, contact privacy@leaderbot.live."
@@ -130,7 +136,17 @@ async function deleteUserDataAndSendResult(
   lang: Lang,
   sendText: (text: string) => Promise<void>
 ): Promise<void> {
-  const outcome = await deleteUserData(psid);
+  let durableAcceptanceAttempted = false;
+  const outcome = await deleteUserData(psid, {
+    onDurablyAccepted: async () => {
+      durableAcceptanceAttempted = true;
+      await sendText(deletionAcceptedText(lang));
+    },
+  });
+  // A fenced Messenger subject becomes non-deliverable as soon as erasure
+  // starts. The durable-acceptance reply above is therefore the only safe
+  // response for that path; never create a post-erasure transport bypass.
+  if (durableAcceptanceAttempted) return;
   if (outcome.status !== "completed") {
     try {
       if (await Promise.resolve(getState(psid))) {

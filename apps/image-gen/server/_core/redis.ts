@@ -35,6 +35,7 @@ export type RedisLike = {
   incr(key: string): Promise<number>;
   expire(key: string, seconds: number): Promise<number>;
   ttl(key: string): Promise<number>;
+  disconnect?(): void;
 };
 
 type RedisModule = {
@@ -87,5 +88,8 @@ export async function ensureRedisReady(): Promise<void> {
 }
 
 export function resetRedisClientForTests(): void {
+  void redisClientPromise
+    ?.then(client => client.disconnect?.())
+    .catch(() => undefined);
   redisClientPromise = null;
 }

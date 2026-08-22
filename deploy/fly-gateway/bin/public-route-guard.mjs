@@ -2,8 +2,16 @@ import crypto from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 
-const DEFAULT_ALLOWED_PATHS = "/facebook/webhook,/healthz";
-const PORTAL_PAGE_PATHS = new Set(["/", "/portal", "/privacy", "/terms", "/billing-policy", "/data-deletion", "/handoff"]);
+const DEFAULT_ALLOWED_PATHS = "/facebook/webhook,/healthz,/readyz";
+const PORTAL_PAGE_PATHS = new Set([
+  "/",
+  "/portal",
+  "/privacy",
+  "/terms",
+  "/billing-policy",
+  "/data-deletion",
+  "/handoff",
+]);
 const PORTAL_PAGE_PREFIXES = ["/handoff/"];
 const PORTAL_ASSET_PREFIXES = ["/assets/"];
 const PORTAL_GET_PATHS = new Set([
@@ -57,10 +65,16 @@ function setCliOption(args, name, value) {
   return next;
 }
 
-export function buildGatewayLaunchPlan(argv = process.argv.slice(2), env = process.env) {
+export function buildGatewayLaunchPlan(
+  argv = process.argv.slice(2),
+  env = process.env,
+) {
   const requestedPort = Number(readCliOption(argv, "port", env.PORT || "3000"));
-  const publicPort = Number.isFinite(requestedPort) && requestedPort > 0 ? requestedPort : 3000;
-  const internalPort = Number(env.OPENCLAW_INTERNAL_GATEWAY_PORT || publicPort + 1);
+  const publicPort =
+    Number.isFinite(requestedPort) && requestedPort > 0 ? requestedPort : 3000;
+  const internalPort = Number(
+    env.OPENCLAW_INTERNAL_GATEWAY_PORT || publicPort + 1,
+  );
   const guardEnabled = env.OPENCLAW_PUBLIC_GATEWAY_GUARD === "1";
 
   if (!guardEnabled) {
@@ -76,7 +90,11 @@ export function buildGatewayLaunchPlan(argv = process.argv.slice(2), env = proce
     guardEnabled,
     publicPort,
     internalPort,
-    openclawArgs: setCliOption(setCliOption(argv, "port", internalPort), "bind", "loopback"),
+    openclawArgs: setCliOption(
+      setCliOption(argv, "port", internalPort),
+      "bind",
+      "loopback",
+    ),
   };
 }
 
@@ -104,7 +122,9 @@ function readProxyTimeoutMs(env = process.env) {
 }
 
 function readPortalOrigin(env = process.env) {
-  const raw = String(env.LEADERBOT_PORTAL_ORIGIN || env.OPENCLAW_PUBLIC_PORTAL_ORIGIN || "").trim();
+  const raw = String(
+    env.LEADERBOT_PORTAL_ORIGIN || env.OPENCLAW_PUBLIC_PORTAL_ORIGIN || "",
+  ).trim();
   if (!raw) {
     return null;
   }
@@ -133,13 +153,19 @@ function readAdminToken(env = process.env) {
 }
 
 function adminSessionValue(token) {
-  return crypto.createHmac("sha256", token).update(ADMIN_SESSION_LABEL).digest("base64url");
+  return crypto
+    .createHmac("sha256", token)
+    .update(ADMIN_SESSION_LABEL)
+    .digest("base64url");
 }
 
 function safeEqual(left, right) {
   const leftBuffer = Buffer.from(left);
   const rightBuffer = Buffer.from(right);
-  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+  return (
+    leftBuffer.length === rightBuffer.length &&
+    crypto.timingSafeEqual(leftBuffer, rightBuffer)
+  );
 }
 
 function parseCookies(cookieHeader = "") {
@@ -177,7 +203,12 @@ function adminHostnamesFromEnv(env = process.env) {
 
 export function isLocalAdminHost(hostHeader) {
   const hostname = parseHostName(hostHeader);
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "[::1]" ||
+    hostname === "::1"
+  );
 }
 
 export function isAdminHostAllowed(hostHeader, env = process.env) {
@@ -196,7 +227,8 @@ function hasAdminSession(req, env = process.env) {
   if (!token || !isAdminHostAllowed(req.headers.host, env)) {
     return false;
   }
-  const cookieValue = parseCookies(req.headers.cookie || "").get(ADMIN_COOKIE_NAME) || "";
+  const cookieValue =
+    parseCookies(req.headers.cookie || "").get(ADMIN_COOKIE_NAME) || "";
   return cookieValue !== "" && safeEqual(cookieValue, adminSessionValue(token));
 }
 
@@ -213,7 +245,7 @@ function isAllowedPublicRequest(method, pathname, allowedPaths) {
   if (!allowedPaths.has(pathname)) {
     return false;
   }
-  if (pathname === "/healthz") {
+  if (pathname === "/healthz" || pathname === "/readyz") {
     return method === "GET" || method === "HEAD";
   }
   return method === "GET" || method === "POST";
@@ -354,7 +386,10 @@ async function handleAdminRequest(req, res, pathname, env = process.env) {
   return true;
 }
 
-function createProxyHeaders(req, { targetHost, targetPort, includeUpgrade = false }) {
+function createProxyHeaders(
+  req,
+  { targetHost, targetPort, includeUpgrade = false },
+) {
   const headers = { ...req.headers };
   delete headers.connection;
   delete headers["keep-alive"];
@@ -433,6 +468,60 @@ function proxyRequest(req, res, { targetHost, targetPort, proxyTimeoutMs }) {
   req.pipe(proxyReq);
 }
 
+function assertGatewayTargetReady({ targetHost, targetPort, proxyTimeoutMs }) {
+  return new Promise((resolve, reject) => {
+    const request = http.request(
+      {
+        host: targetHost,
+        port: targetPort,
+        method: "GET",
+        path: "/healthz",
+      },
+      (response) => {
+        response.resume();
+        if (
+          response.statusCode &&
+          response.statusCode >= 200 &&
+          response.statusCode < 300
+        ) {
+          resolve();
+          return;
+        }
+        reject(new Error("gateway target is not ready"));
+      },
+    );
+    request.setTimeout(proxyTimeoutMs, () => {
+      request.destroy(new Error("gateway target readiness timed out"));
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+async function handleReadinessRequest(
+  req,
+  res,
+  { targetHost, targetPort, proxyTimeoutMs, readinessCheck },
+) {
+  try {
+    await assertGatewayTargetReady({
+      targetHost,
+      targetPort,
+      proxyTimeoutMs,
+    });
+    await readinessCheck();
+    setSecurityHeaders(res);
+    res.statusCode = 200;
+    res.setHeader("content-type", "application/json; charset=utf-8");
+    res.end(req.method === "HEAD" ? undefined : JSON.stringify({ ok: true }));
+  } catch {
+    setSecurityHeaders(res);
+    res.statusCode = 503;
+    res.setHeader("content-type", "application/json; charset=utf-8");
+    res.end(req.method === "HEAD" ? undefined : JSON.stringify({ ok: false }));
+  }
+}
+
 function proxyOriginRequest(req, res, { origin, proxyTimeoutMs }) {
   const headers = createOriginProxyHeaders(req, origin);
   const requestModule = origin.protocol === "https:" ? https : http;
@@ -481,20 +570,33 @@ function writeUpgradeResponse(socket, proxyRes) {
   if (socket.destroyed) {
     return;
   }
-  socket.write(`HTTP/${proxyRes.httpVersion} ${proxyRes.statusCode} ${proxyRes.statusMessage || ""}\r\n`);
+  socket.write(
+    `HTTP/${proxyRes.httpVersion} ${proxyRes.statusCode} ${proxyRes.statusMessage || ""}\r\n`,
+  );
   for (let index = 0; index < proxyRes.rawHeaders.length; index += 2) {
-    socket.write(`${proxyRes.rawHeaders[index]}: ${proxyRes.rawHeaders[index + 1]}\r\n`);
+    socket.write(
+      `${proxyRes.rawHeaders[index]}: ${proxyRes.rawHeaders[index + 1]}\r\n`,
+    );
   }
   socket.write("\r\n");
 }
 
-function proxyUpgrade(req, socket, head, { targetHost, targetPort, proxyTimeoutMs }) {
+function proxyUpgrade(
+  req,
+  socket,
+  head,
+  { targetHost, targetPort, proxyTimeoutMs },
+) {
   const proxyReq = http.request({
     host: targetHost,
     port: targetPort,
     method: req.method,
     path: req.url,
-    headers: createProxyHeaders(req, { targetHost, targetPort, includeUpgrade: true }),
+    headers: createProxyHeaders(req, {
+      targetHost,
+      targetPort,
+      includeUpgrade: true,
+    }),
   });
 
   let settled = false;
@@ -541,12 +643,16 @@ export function startPublicRouteGuard({
   targetPort,
   targetHost = "127.0.0.1",
   env = process.env,
+  readinessCheck = async () => undefined,
 }) {
   const allowedPaths = allowedPathsFromEnv(env);
   const proxyTimeoutMs = readProxyTimeoutMs(env);
   const portalOrigin = readPortalOrigin(env);
   const server = http.createServer((req, res) => {
-    const pathname = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`).pathname;
+    const pathname = new URL(
+      req.url || "/",
+      `http://${req.headers.host || "localhost"}`,
+    ).pathname;
     if (pathname === ADMIN_LOGIN_PATH || pathname === ADMIN_LOGOUT_PATH) {
       handleAdminRequest(req, res, pathname, env).catch(() => {
         if (!res.writableEnded) {
@@ -563,11 +669,24 @@ export function startPublicRouteGuard({
     }
 
     if (!isAllowedPublicRequest(req.method || "GET", pathname, allowedPaths)) {
-      if (portalOrigin && isAllowedPortalRequest(req.method || "GET", pathname)) {
+      if (
+        portalOrigin &&
+        isAllowedPortalRequest(req.method || "GET", pathname)
+      ) {
         proxyOriginRequest(req, res, { origin: portalOrigin, proxyTimeoutMs });
         return;
       }
       writeBlocked(res);
+      return;
+    }
+
+    if (pathname === "/readyz") {
+      void handleReadinessRequest(req, res, {
+        targetHost,
+        targetPort,
+        proxyTimeoutMs,
+        readinessCheck,
+      });
       return;
     }
 

@@ -5,8 +5,11 @@ import {
   findStateByUserKey,
   getOrCreateState,
   resetStateStore,
+  setMessengerPageId,
+  setMessengerOwnership,
   setPendingImage,
 } from "./_core/messengerState";
+import { runWithMessengerRequestContext } from "./_core/messengerRequestContext";
 
 const TEST_PEPPER = "ci-test-pepper";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
@@ -82,12 +85,54 @@ describe("messenger state flow", () => {
 
   it("finds an existing Messenger state by privacy-peppered user key", async () => {
     const psid = "lookup-user-by-key";
-    const state = getOrCreateState(psid);
+    const pageId = "lookup-page";
+    const state = await runWithMessengerRequestContext(pageId, async () => {
+      const created = await getOrCreateState(psid);
+      await setMessengerPageId(psid, pageId);
+      return created;
+    });
 
-    await expect(findStateByUserKey(state.userKey)).resolves.toMatchObject({
+    await expect(
+      findStateByUserKey(state.userKey, pageId)
+    ).resolves.toMatchObject({
       psid,
       userKey: state.userKey,
     });
-    await expect(findStateByUserKey(anonymizePsid("missing-user"))).resolves.toBeNull();
+    await expect(
+      findStateByUserKey(anonymizePsid("missing-user"), pageId)
+    ).resolves.toBeNull();
+    await expect(findStateByUserKey(state.userKey)).resolves.toBeNull();
+  });
+
+  it("finds webhook-created fenced state from an outbox without ALS and rejects a rebind", async () => {
+    const psid = "background-fenced-user";
+    const pageId = "background-fenced-page";
+    const fence = {
+      workspaceId: 71,
+      channelConnectionId: 19,
+      bindingEpoch: 4,
+      privacyEpoch: 2,
+    };
+    const state = await runWithMessengerRequestContext(
+      pageId,
+      async () => {
+        const created = await getOrCreateState(psid);
+        await setMessengerPageId(psid, pageId);
+        await setMessengerOwnership(psid, fence);
+        return getOrCreateState(psid);
+      },
+      { ...fence, userKey: anonymizePsid(psid) }
+    );
+
+    await expect(
+      findStateByUserKey(state.userKey, pageId, fence)
+    ).resolves.toMatchObject({ psid, ...fence });
+    await expect(
+      findStateByUserKey(state.userKey, pageId, {
+        ...fence,
+        workspaceId: 72,
+        bindingEpoch: 5,
+      })
+    ).resolves.toBeNull();
   });
 });

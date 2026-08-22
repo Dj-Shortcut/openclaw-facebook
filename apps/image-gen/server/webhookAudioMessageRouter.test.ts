@@ -1,11 +1,4 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 
 const {
@@ -15,10 +8,17 @@ const {
   commitTranscriptionSuccessMock,
   releaseTranscriptionReservationMock,
   fetchExternalSourceImageForIngressMock,
+  assertOwnershipMock,
+  assertPrivacyMock,
+  reserveProviderFenceMock,
+  markProviderFenceStartedMock,
+  finalizeProviderFenceMock,
 } = vi.hoisted(() => ({
   safeLogMock: vi.fn(),
   handleTextMessageMock: vi.fn(async () => undefined),
-  reserveTranscriptionForAttemptMock: vi.fn(async () => ({ token: "quota-lock" })),
+  reserveTranscriptionForAttemptMock: vi.fn(async () => ({
+    token: "quota-lock",
+  })),
   commitTranscriptionSuccessMock: vi.fn(async () => true),
   releaseTranscriptionReservationMock: vi.fn(async () => undefined),
   fetchExternalSourceImageForIngressMock: vi.fn().mockResolvedValue({
@@ -28,6 +28,18 @@ const {
     incomingSha256: "stubhash",
     fbImageFetchMs: 12,
   }),
+  assertOwnershipMock: vi.fn(async () => undefined),
+  assertPrivacyMock: vi.fn(async () => undefined),
+  reserveProviderFenceMock: vi.fn(async (_job: unknown, operation: string) =>
+    operation === "meta-audio-download"
+      ? {
+          leaseToken: "provider-fence-token",
+          attemptKeyHash: "provider-fence-hash",
+        }
+      : { leaseToken: null, attemptKeyHash: null }
+  ),
+  markProviderFenceStartedMock: vi.fn(async () => undefined),
+  finalizeProviderFenceMock: vi.fn(async () => undefined),
 }));
 
 vi.mock("./_core/messengerApi", () => ({
@@ -49,15 +61,58 @@ vi.mock("./_core/messengerQuota", () => ({
   MessengerQuotaReservationCommitError: class MessengerQuotaReservationCommitError extends Error {},
 }));
 
+vi.mock("./_core/workspaceEntitlementRuntime", () => ({
+  assertMessengerGenerationOwnership: assertOwnershipMock,
+}));
+
+vi.mock("./_core/messengerPrivacySubject", () => ({
+  assertMessengerPrivacySubject: assertPrivacyMock,
+}));
+
+vi.mock("./_core/messengerProviderAttemptFence", () => ({
+  reserveMessengerProviderAttemptFence: reserveProviderFenceMock,
+  markMessengerProviderAttemptStarted: markProviderFenceStartedMock,
+  finalizeMessengerProviderAttemptFence: finalizeProviderFenceMock,
+}));
+
 import type { HandlerContext } from "./_core/webhookHandlerTypes";
-import { tryHandleAudioMessage } from "./_core/webhookAudioMessageRouter";
+import { tryHandleAudioMessage as tryHandleAudioMessageUnscoped } from "./_core/webhookAudioMessageRouter";
 
 const FIXED_LEDGER_NOW = new Date("2026-06-21T12:00:00.000Z");
 const FIXED_LEDGER_PERIOD = "2026-06-21";
+const COST_SCOPE = {
+  workspaceId: 42,
+  channelConnectionId: 7,
+  bindingEpoch: 3,
+  privacyEpoch: 4,
+} as const;
 import { type FacebookWebhookEvent } from "./_core/webhookHelpers";
 import { t } from "./_core/i18n";
-import { appendCostLedgerEntry, readCostLedgerPeriod } from "./_core/costLedger";
+import {
+  appendCostLedgerEntry,
+  readCostLedgerPeriod,
+} from "./_core/costLedger";
 import { clearStateStore, incrementExpiringCounter } from "./_core/stateStore";
+import {
+  runWithMessengerRequestContext,
+  setMessengerRequestPrivacySubject,
+} from "./_core/messengerRequestContext";
+
+const tryHandleAudioMessage = (
+  ctx: Parameters<typeof tryHandleAudioMessageUnscoped>[0],
+  input: Parameters<typeof tryHandleAudioMessageUnscoped>[1]
+) =>
+  runWithMessengerRequestContext(
+    "page-audio-test",
+    async () => {
+      setMessengerRequestPrivacySubject({
+        userKey: input.userId,
+        privacyEpoch: COST_SCOPE.privacyEpoch,
+      });
+      return await tryHandleAudioMessageUnscoped(ctx, input);
+    },
+    COST_SCOPE
+  );
 
 function requestSummaryKey(reqId: string): string {
   return `sha256:${createHash("sha256").update(reqId).digest("hex").slice(0, 12)}`;
@@ -81,23 +136,44 @@ function makeContext(): HandlerContext {
     logIncomingMessage: vi.fn(),
     logUserState: vi.fn(),
     maybeSendInFlightMessage: vi.fn(async () => ({ handled: false })),
-    runImageGeneration: vi.fn(async () => ({ sent: true, messageId: "msg-image" })),
-    sendFaceMemoryConsentPrompt: vi.fn(async () => ({ sent: true, messageId: "msg-face" })),
-    sendFlowExplanation: vi.fn(async () => ({ sent: true, messageId: "msg-flow" })),
-    sendLoggedImage: vi.fn(async () => ({ sent: true, messageId: "msg-image-output" })),
-    sendLoggedActions: vi.fn(async () => ({ sent: true, messageId: "msg-actions" })),
+    runImageGeneration: vi.fn(async () => ({
+      sent: true,
+      messageId: "msg-image",
+    })),
+    sendFaceMemoryConsentPrompt: vi.fn(async () => ({
+      sent: true,
+      messageId: "msg-face",
+    })),
+    sendFlowExplanation: vi.fn(async () => ({
+      sent: true,
+      messageId: "msg-flow",
+    })),
+    sendLoggedImage: vi.fn(async () => ({
+      sent: true,
+      messageId: "msg-image-output",
+    })),
+    sendLoggedActions: vi.fn(async () => ({
+      sent: true,
+      messageId: "msg-actions",
+    })),
     sendLoggedText: vi.fn(async () => ({ sent: true, messageId: "msg-text" })),
-    sendPhotoReceivedPrompt: vi.fn(async () => ({ sent: true, messageId: "msg-photo-prompt" })),
+    sendPhotoReceivedPrompt: vi.fn(async () => ({
+      sent: true,
+      messageId: "msg-photo-prompt",
+    })),
   };
 }
 
 describe("webhook audio message router", () => {
   const originalOpenAiKey = process.env.OPENAI_API_KEY;
   const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
-  const originalAudioMaxBytes = process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES;
-  const originalAudioEstimateUsd = process.env.OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD;
+  const originalAudioMaxBytes =
+    process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES;
+  const originalAudioEstimateUsd =
+    process.env.OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD;
   const originalSpendCapUsd = process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD;
-  const originalMonthlySpendCapUsd = process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD;
+  const originalMonthlySpendCapUsd =
+    process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD;
   const originalGatewayAudioCap =
     process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP;
 
@@ -105,7 +181,9 @@ describe("webhook audio message router", () => {
     safeLogMock.mockClear();
     handleTextMessageMock.mockClear();
     reserveTranscriptionForAttemptMock.mockClear();
-    reserveTranscriptionForAttemptMock.mockResolvedValue({ token: "quota-lock" });
+    reserveTranscriptionForAttemptMock.mockResolvedValue({
+      token: "quota-lock",
+    });
     commitTranscriptionSuccessMock.mockClear();
     commitTranscriptionSuccessMock.mockResolvedValue(true);
     releaseTranscriptionReservationMock.mockClear();
@@ -117,6 +195,22 @@ describe("webhook audio message router", () => {
       incomingSha256: "stubhash",
       fbImageFetchMs: 12,
     });
+    assertOwnershipMock.mockReset();
+    assertOwnershipMock.mockResolvedValue(undefined);
+    assertPrivacyMock.mockReset();
+    assertPrivacyMock.mockResolvedValue(undefined);
+    reserveProviderFenceMock.mockClear();
+    reserveProviderFenceMock.mockImplementation(
+      async (_job: unknown, operation: string) =>
+        operation === "meta-audio-download"
+          ? {
+              leaseToken: "provider-fence-token",
+              attemptKeyHash: "provider-fence-hash",
+            }
+          : { leaseToken: null, attemptKeyHash: null }
+    );
+    markProviderFenceStartedMock.mockClear();
+    finalizeProviderFenceMock.mockClear();
     process.env.PRIVACY_PEPPER = "test-pepper";
     process.env.OPENAI_API_KEY = "dummy-key";
     delete process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES;
@@ -138,12 +232,14 @@ describe("webhook audio message router", () => {
     if (originalAudioMaxBytes === undefined) {
       delete process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES;
     } else {
-      process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES = originalAudioMaxBytes;
+      process.env.MESSENGER_AUDIO_TRANSCRIPTION_MAX_BYTES =
+        originalAudioMaxBytes;
     }
     if (originalAudioEstimateUsd === undefined) {
       delete process.env.OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD;
     } else {
-      process.env.OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD = originalAudioEstimateUsd;
+      process.env.OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD =
+        originalAudioEstimateUsd;
     }
     if (originalSpendCapUsd === undefined) {
       delete process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD;
@@ -153,12 +249,14 @@ describe("webhook audio message router", () => {
     if (originalMonthlySpendCapUsd === undefined) {
       delete process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD;
     } else {
-      process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD = originalMonthlySpendCapUsd;
+      process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD =
+        originalMonthlySpendCapUsd;
     }
     if (originalGatewayAudioCap === undefined) {
       delete process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP;
     } else {
-      process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP = originalGatewayAudioCap;
+      process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP =
+        originalGatewayAudioCap;
     }
     vi.unstubAllGlobals();
     clearStateStore();
@@ -174,7 +272,10 @@ describe("webhook audio message router", () => {
       reqId: "req-captioned-audio",
       lang: "nl",
       attachments: [
-        { type: "audio", payload: { url: "https://audio.example/message.mp3" } },
+        {
+          type: "audio",
+          payload: { url: "https://audio.example/message.mp3" },
+        },
       ],
       text: "maak deze cyberpunk",
     });
@@ -188,14 +289,13 @@ describe("webhook audio message router", () => {
     const ctx = makeContext();
     const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const target = typeof url === "string" ? url : url.toString();
-      if (
-        target ===
-        "https://api.openai.com/v1/audio/transcriptions"
-      ) {
+      if (target === "https://api.openai.com/v1/audio/transcriptions") {
         return {
           ok: true,
           headers: new Headers({ "content-type": "application/json" }),
-          json: async () => ({ text: "maak een foto van een cyberpunk stadslandschap" }),
+          json: async () => ({
+            text: "maak een foto van een cyberpunk stadslandschap",
+          }),
         } as Response;
       }
       return {
@@ -212,7 +312,10 @@ describe("webhook audio message router", () => {
       reqId: "req-audio-ok",
       lang: "nl",
       attachments: [
-        { type: "audio", payload: { url: "https://audio.example/message.mp3" } },
+        {
+          type: "audio",
+          payload: { url: "https://audio.example/message.mp3" },
+        },
       ],
       text: "",
     });
@@ -225,10 +328,9 @@ describe("webhook audio message router", () => {
       { releaseReservation: false }
     );
     expect(releaseTranscriptionReservationMock).toHaveBeenCalledTimes(1);
-    expect(releaseTranscriptionReservationMock).toHaveBeenCalledWith(
-      "psid-2",
-      { token: "quota-lock" }
-    );
+    expect(releaseTranscriptionReservationMock).toHaveBeenCalledWith("psid-2", {
+      token: "quota-lock",
+    });
     expect(
       releaseTranscriptionReservationMock.mock.invocationCallOrder[0]
     ).toBeGreaterThan(fetchMock.mock.invocationCallOrder[0]);
@@ -240,6 +342,49 @@ describe("webhook audio message router", () => {
         text: "maak een foto van een cyberpunk stadslandschap",
       })
     );
+  });
+
+  it("does not disclose downloaded audio after the privacy epoch is erased", async () => {
+    const ctx = makeContext();
+    assertPrivacyMock
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("privacy epoch erased"));
+    const providerFetch = vi.fn();
+    vi.stubGlobal("fetch", providerFetch);
+
+    await expect(
+      runWithMessengerRequestContext(
+        "page-a",
+        async () => {
+          setMessengerRequestPrivacySubject({
+            userKey: "privacy-user-key-1234",
+            privacyEpoch: 4,
+          });
+          return tryHandleAudioMessageUnscoped(ctx, {
+            psid: "psid-audio-delete-race",
+            userId: "privacy-user-key-1234",
+            reqId: "req-audio-delete-race",
+            lang: "nl",
+            attachments: [
+              {
+                type: "audio",
+                payload: { url: "https://audio.example/delete-race.mp3" },
+              },
+            ],
+            text: "",
+          });
+        },
+        { workspaceId: 42, channelConnectionId: 7, bindingEpoch: 3 }
+      )
+    ).rejects.toThrow("privacy epoch erased");
+
+    expect(fetchExternalSourceImageForIngressMock).toHaveBeenCalledTimes(1);
+    expect(finalizeProviderFenceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ attemptKeyHash: "provider-fence-hash" }),
+      "succeeded"
+    );
+    expect(reserveTranscriptionForAttemptMock).not.toHaveBeenCalled();
+    expect(providerFetch).not.toHaveBeenCalled();
   });
 
   it("records priced audio transcription attempts with final cost when configured", async () => {
@@ -266,13 +411,19 @@ describe("webhook audio message router", () => {
       reqId: "req-audio-priced",
       lang: "nl",
       attachments: [
-        { type: "audio", payload: { url: "https://audio.example/message-priced.mp3" } },
+        {
+          type: "audio",
+          payload: { url: "https://audio.example/message-priced.mp3" },
+        },
       ],
       text: "",
     });
 
     expect(result).toBe(true);
-    const ledgerEntries = await readCostLedgerPeriod(FIXED_LEDGER_PERIOD);
+    const ledgerEntries = await readCostLedgerPeriod(
+      COST_SCOPE,
+      FIXED_LEDGER_PERIOD
+    );
     expect(ledgerEntries).toEqual([
       expect.objectContaining({
         id: "req-audio-priced:openai-audio:1",
@@ -297,7 +448,9 @@ describe("webhook audio message router", () => {
     ]);
     expect(JSON.stringify(ledgerEntries)).not.toContain("maak een foto");
     expect(JSON.stringify(ledgerEntries)).not.toContain("message-priced.mp3");
-    expect(JSON.stringify(ledgerEntries)).not.toContain("https://audio.example");
+    expect(JSON.stringify(ledgerEntries)).not.toContain(
+      "https://audio.example"
+    );
     expect(JSON.stringify(ledgerEntries)).not.toContain("psid-audio-priced");
   });
 
@@ -305,10 +458,7 @@ describe("webhook audio message router", () => {
     const ctx = makeContext();
     const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
       const target = typeof url === "string" ? url : url.toString();
-      if (
-        target ===
-        "https://api.openai.com/v1/audio/transcriptions"
-      ) {
+      if (target === "https://api.openai.com/v1/audio/transcriptions") {
         return {
           ok: true,
           headers: new Headers({ "content-type": "application/json" }),
@@ -329,7 +479,10 @@ describe("webhook audio message router", () => {
       reqId: "req-audio-empty",
       lang: "nl",
       attachments: [
-        { type: "audio", payload: { url: "https://audio.example/message-empty.mp3" } },
+        {
+          type: "audio",
+          payload: { url: "https://audio.example/message-empty.mp3" },
+        },
       ],
       text: "",
     });
@@ -344,10 +497,7 @@ describe("webhook audio message router", () => {
     const ctx = makeContext();
     const fetchMock = vi.fn(async (url: string | URL) => {
       const target = typeof url === "string" ? url : url.toString();
-      if (
-        target ===
-        "https://api.openai.com/v1/audio/transcriptions"
-      ) {
+      if (target === "https://api.openai.com/v1/audio/transcriptions") {
         if (fetchMock.mock.calls.length === 1) {
           return {
             ok: false,
@@ -372,13 +522,19 @@ describe("webhook audio message router", () => {
       reqId: "req-audio-retry",
       lang: "nl",
       attachments: [
-        { type: "audio", payload: { url: "https://audio.example/message-retry.mp3" } },
+        {
+          type: "audio",
+          payload: { url: "https://audio.example/message-retry.mp3" },
+        },
       ],
       text: "",
     });
 
     expect(result).toBe(true);
-    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const ledgerEntries = await readCostLedgerPeriod(
+      COST_SCOPE,
+      new Date().toISOString().slice(0, 10)
+    );
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(commitTranscriptionSuccessMock).toHaveBeenCalledTimes(1);
     expect(handleTextMessageMock).toHaveBeenCalledTimes(1);
@@ -409,12 +565,15 @@ describe("webhook audio message router", () => {
 
   it("does not recommit audio transcription quota across provider retries", async () => {
     const ctx = makeContext();
-    const fetchMock = vi.fn(async () => ({
-      ok: false,
-      status: 500,
-      headers: new Headers({ "content-type": "application/json" }),
-      text: async () => "temporary provider failure",
-    }) as Response);
+    const fetchMock = vi.fn(
+      async () =>
+        ({
+          ok: false,
+          status: 500,
+          headers: new Headers({ "content-type": "application/json" }),
+          text: async () => "temporary provider failure",
+        }) as Response
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await tryHandleAudioMessage(ctx, {
@@ -423,13 +582,19 @@ describe("webhook audio message router", () => {
       reqId: "req-audio-retry-exhausted",
       lang: "nl",
       attachments: [
-        { type: "audio", payload: { url: "https://audio.example/message-retry-exhausted.mp3" } },
+        {
+          type: "audio",
+          payload: { url: "https://audio.example/message-retry-exhausted.mp3" },
+        },
       ],
       text: "",
     });
 
     expect(result).toBe(false);
-    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const ledgerEntries = await readCostLedgerPeriod(
+      COST_SCOPE,
+      new Date().toISOString().slice(0, 10)
+    );
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(commitTranscriptionSuccessMock).toHaveBeenCalledTimes(1);
     expect(ctx.sendLoggedText).not.toHaveBeenCalledWith(
@@ -469,7 +634,10 @@ describe("webhook audio message router", () => {
       reqId: "req-audio-spend-cap",
       lang: "nl",
       attachments: [
-        { type: "audio", payload: { url: "https://audio.example/message-spend-cap.mp3" } },
+        {
+          type: "audio",
+          payload: { url: "https://audio.example/message-spend-cap.mp3" },
+        },
       ],
       text: "",
     });
@@ -486,7 +654,12 @@ describe("webhook audio message router", () => {
       t("nl", "outOfFreeCredits"),
       "req-audio-spend-cap"
     );
-    expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
+    expect(
+      await readCostLedgerPeriod(
+        COST_SCOPE,
+        new Date().toISOString().slice(0, 10)
+      )
+    ).toEqual([]);
   });
 
   it("uses configured audio transcription estimates for spend cap checks", async () => {
@@ -497,6 +670,7 @@ describe("webhook audio message router", () => {
     process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "0.03";
     await appendCostLedgerEntry(
       {
+        scope: COST_SCOPE,
         id: "req-existing-audio-spend:attempt-1",
         channel: "facebook_messenger",
         operation: "audio_transcription",
@@ -525,7 +699,10 @@ describe("webhook audio message router", () => {
       reqId: "req-audio-priced-spend-cap",
       lang: "nl",
       attachments: [
-        { type: "audio", payload: { url: "https://audio.example/message-priced-cap.mp3" } },
+        {
+          type: "audio",
+          payload: { url: "https://audio.example/message-priced-cap.mp3" },
+        },
       ],
       text: "",
     });
@@ -538,7 +715,10 @@ describe("webhook audio message router", () => {
       t("nl", "outOfFreeCredits"),
       "req-audio-priced-spend-cap"
     );
-    const ledgerEntries = await readCostLedgerPeriod(FIXED_LEDGER_PERIOD);
+    const ledgerEntries = await readCostLedgerPeriod(
+      COST_SCOPE,
+      FIXED_LEDGER_PERIOD
+    );
     expect(ledgerEntries).toHaveLength(1);
     expect(ledgerEntries[0]?.id).toBe("req-existing-audio-spend:attempt-1");
   });
@@ -562,7 +742,10 @@ describe("webhook audio message router", () => {
       reqId: "req-audio-large",
       lang: "nl",
       attachments: [
-        { type: "audio", payload: { url: "https://audio.example/message-large.mp3" } },
+        {
+          type: "audio",
+          payload: { url: "https://audio.example/message-large.mp3" },
+        },
       ],
       text: "",
     });
@@ -586,10 +769,7 @@ describe("webhook audio message router", () => {
     const ctx = makeContext();
     const fetchMock = vi.fn(async (url: string | URL) => {
       const target = typeof url === "string" ? url : url.toString();
-      if (
-        target ===
-        "https://api.openai.com/v1/audio/transcriptions"
-      ) {
+      if (target === "https://api.openai.com/v1/audio/transcriptions") {
         return {
           ok: true,
           headers: new Headers({ "content-type": "application/json" }),
@@ -610,7 +790,10 @@ describe("webhook audio message router", () => {
       reqId: "req-audio-short",
       lang: "nl",
       attachments: [
-        { type: "audio", payload: { url: "https://audio.example/message-short.mp3" } },
+        {
+          type: "audio",
+          payload: { url: "https://audio.example/message-short.mp3" },
+        },
       ],
       text: "",
     });
@@ -644,7 +827,10 @@ describe("webhook audio message router", () => {
       reqId: "req-audio-quota",
       lang: "nl",
       attachments: [
-        { type: "audio", payload: { url: "https://audio.example/message.mp3" } },
+        {
+          type: "audio",
+          payload: { url: "https://audio.example/message.mp3" },
+        },
       ],
       text: "",
     });
@@ -681,7 +867,10 @@ describe("webhook audio message router", () => {
       reqId: "req-audio-gateway-cap",
       lang: "nl",
       attachments: [
-        { type: "audio", payload: { url: "https://audio.example/message-gateway-cap.mp3" } },
+        {
+          type: "audio",
+          payload: { url: "https://audio.example/message-gateway-cap.mp3" },
+        },
       ],
       text: "",
     });
@@ -705,11 +894,14 @@ describe("webhook audio message router", () => {
     fetchExternalSourceImageForIngressMock.mockRejectedValueOnce(
       new Error("audio download failed")
     );
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      headers: new Headers({ "content-type": "application/json" }),
-      json: async () => ({ text: "maak een foto van een robot" }),
-    }) as Response);
+    const fetchMock = vi.fn(
+      async () =>
+        ({
+          ok: true,
+          headers: new Headers({ "content-type": "application/json" }),
+          json: async () => ({ text: "maak een foto van een robot" }),
+        }) as Response
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
@@ -719,7 +911,10 @@ describe("webhook audio message router", () => {
         reqId: "req-audio-prepare-throws",
         lang: "nl",
         attachments: [
-          { type: "audio", payload: { url: "https://audio.example/throws.mp3" } },
+          {
+            type: "audio",
+            payload: { url: "https://audio.example/throws.mp3" },
+          },
         ],
         text: "",
       })
@@ -731,7 +926,10 @@ describe("webhook audio message router", () => {
       reqId: "req-audio-after-throw",
       lang: "nl",
       attachments: [
-        { type: "audio", payload: { url: "https://audio.example/after-throw.mp3" } },
+        {
+          type: "audio",
+          payload: { url: "https://audio.example/after-throw.mp3" },
+        },
       ],
       text: "",
     });
@@ -765,7 +963,10 @@ describe("webhook audio message router", () => {
       reqId: "req-audio-cap-without-spend-caps",
       lang: "nl",
       attachments: [
-        { type: "audio", payload: { url: "https://audio.example/message.mp3" } },
+        {
+          type: "audio",
+          payload: { url: "https://audio.example/message.mp3" },
+        },
       ],
       text: "",
     });
@@ -810,7 +1011,10 @@ describe("webhook audio message router", () => {
       reqId: "req-audio-without-spend-caps",
       lang: "nl",
       attachments: [
-        { type: "audio", payload: { url: "https://audio.example/message.mp3" } },
+        {
+          type: "audio",
+          payload: { url: "https://audio.example/message.mp3" },
+        },
       ],
       text: "",
     });
@@ -839,7 +1043,10 @@ describe("webhook audio message router", () => {
       reqId: "req-audio-missing-key",
       lang: "nl",
       attachments: [
-        { type: "audio", payload: { url: "https://audio.example/message.mp3" } },
+        {
+          type: "audio",
+          payload: { url: "https://audio.example/message.mp3" },
+        },
       ],
       text: "",
     });

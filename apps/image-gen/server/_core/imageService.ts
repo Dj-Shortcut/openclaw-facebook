@@ -16,10 +16,15 @@ import {
 } from "./image-generation/imageServiceConfig";
 import { estimateOpenAiImageRequestCost } from "./image-generation/imageCostEstimate";
 import {
-  safelyAppendCostLedgerEntry,
+  appendCostLedgerEntry,
   safelyUpdateCostLedgerEntry,
+  type CostLedgerScope,
+  type CostLedgerSubjectScope,
 } from "./costLedger";
-import { publishGeneratedImage } from "./image-generation/generatedImagePublisher";
+import {
+  publishGeneratedImage,
+  type GeneratedImagePublishHooks,
+} from "./image-generation/generatedImagePublisher";
 import type { GenerationKind } from "./image-generation/generationTypes";
 import {
   GenerationTimeoutError,
@@ -27,9 +32,7 @@ import {
 } from "./image-generation/imageServiceErrors";
 import {
   assertMessengerDailyImageBudgetAvailable,
-  assertMessengerDailySpendBudgetAvailable,
-  assertMessengerMonthlySpendBudgetAvailable,
-  assertMessengerUserDailySpendBudgetAvailable,
+  admitMessengerProviderSpend,
   getMessengerDailyImageBudgetConfig,
   getMessengerGenerationGlobalLimitConfig,
   releaseMessengerDailyImageBudgetReservation,
@@ -48,6 +51,11 @@ const OPENAI_IMAGES_PROVIDER = "openai-images" as const;
 
 export type ImageProvider = typeof OPENAI_IMAGES_PROVIDER;
 
+export type ProviderAttemptAdmission = Readonly<{
+  markTransportStarted: () => Promise<void>;
+  abortBeforeTransport: () => Promise<void>;
+}>;
+
 interface ImageGenerator {
   generate(input: {
     generationKind?: GenerationKind;
@@ -62,9 +70,12 @@ interface ImageGenerator {
     previousResponseId?: string;
     model?: string;
     quality?: OpenAiImageQuality;
-    onProviderAttempt?: () => Promise<void>;
+    onProviderAttempt?: () => Promise<ProviderAttemptAdmission | void>;
+    onProviderSuccess?: () => Promise<void>;
+    costLedgerScope?: CostLedgerScope;
     userKey: string;
     reqId: string;
+    generatedImagePublishHooks?: GeneratedImagePublishHooks;
   }): Promise<{
     imageUrl: string;
     proof: {
@@ -90,9 +101,12 @@ type GeneratorInput = {
   previousResponseId?: string;
   model?: string;
   quality?: OpenAiImageQuality;
-  onProviderAttempt?: () => Promise<void>;
+  onProviderAttempt?: () => Promise<ProviderAttemptAdmission | void>;
+  onProviderSuccess?: () => Promise<void>;
+  costLedgerScope?: CostLedgerScope;
   userKey: string;
   reqId: string;
+  generatedImagePublishHooks?: GeneratedImagePublishHooks;
 };
 
 function ensureGeneratedImageBuffer(buffer: Buffer): Buffer {
@@ -173,6 +187,27 @@ function estimateFinalCostUsd(input: {
   return Number.isFinite(finalCostUsd) ? finalCostUsd : null;
 }
 
+function resolveCostLedgerSubject(
+  input: GeneratorInput
+): CostLedgerSubjectScope {
+  if (input.costLedgerScope) {
+    return { ...input.costLedgerScope, userKey: input.userKey };
+  }
+  // Existing provider-unit tests intentionally exercise this service without
+  // a channel runtime. Production never receives a synthetic tenant scope:
+  // an unbound channel path fails closed before the provider boundary.
+  if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+    return {
+      workspaceId: 1,
+      channelConnectionId: 1,
+      bindingEpoch: 1,
+      privacyEpoch: 1,
+      userKey: input.userKey,
+    };
+  }
+  throw new Error("Tenant-scoped cost ledger ownership is required");
+}
+
 export class OpenAiImageGenerator implements ImageGenerator {
   async generate(input: GeneratorInput): Promise<{
     imageUrl: string;
@@ -188,9 +223,18 @@ export class OpenAiImageGenerator implements ImageGenerator {
     const partialMetrics: Omit<GenerationMetrics, "totalMs"> = {};
     let lastCostLedgerEntryId: string | null = null;
     let lastCostLedgerEntryRecordedAt: Date | null = null;
+    let providerResponseAccepted = false;
+    const preTransportAdmissionFailures = new Set<unknown>();
     if (!process.env.OPENAI_API_KEY) {
       throw new MissingOpenAiApiKeyError("OPENAI_API_KEY is missing");
     }
+    const costLedgerSubject = resolveCostLedgerSubject(input);
+    const costLedgerScope: CostLedgerScope = {
+      workspaceId: costLedgerSubject.workspaceId,
+      channelConnectionId: costLedgerSubject.channelConnectionId,
+      bindingEpoch: costLedgerSubject.bindingEpoch,
+      privacyEpoch: costLedgerSubject.privacyEpoch,
+    };
 
     try {
       const provider = getImageProvider();
@@ -248,87 +292,135 @@ export class OpenAiImageGenerator implements ImageGenerator {
         partialMetrics,
         onProviderAttempt: async () => {
           const budgetNow = new Date();
+          providerAttemptCount += 1;
+          const costLedgerEntryId = `${input.reqId}:openai-image:${providerAttemptCount}`;
           await assertMessengerDailyImageBudgetAvailable({
             reqId: input.reqId,
             now: budgetNow,
           });
           try {
-            await assertMessengerDailySpendBudgetAvailable({
+            await admitMessengerProviderSpend({
               reqId: input.reqId,
-              estimatedCostUsd: costEstimate.estimatedCostUsd ?? null,
-              estimatedOutputCostUsd:
-                costEstimate.estimatedOutputCostUsd ?? null,
-              costEstimateComplete: costEstimate.costEstimateComplete,
-              now: budgetNow,
-            });
-            await assertMessengerMonthlySpendBudgetAvailable({
-              reqId: input.reqId,
-              estimatedCostUsd: costEstimate.estimatedCostUsd ?? null,
-              estimatedOutputCostUsd:
-                costEstimate.estimatedOutputCostUsd ?? null,
-              costEstimateComplete: costEstimate.costEstimateComplete,
-              now: budgetNow,
-            });
-            await assertMessengerUserDailySpendBudgetAvailable({
-              reqId: input.reqId,
+              attemptId: costLedgerEntryId,
+              scope: costLedgerScope,
               userKey: input.userKey,
               estimatedCostUsd: costEstimate.estimatedCostUsd ?? null,
               estimatedOutputCostUsd:
                 costEstimate.estimatedOutputCostUsd ?? null,
               costEstimateComplete: costEstimate.costEstimateComplete,
               now: budgetNow,
+              recordAttempt: async () => {
+                const admission = await input.onProviderAttempt?.();
+                let ledgerEntryRecorded = false;
+                try {
+                  if (lastCostLedgerEntryId && lastCostLedgerEntryRecordedAt) {
+                    await safelyUpdateCostLedgerEntry(
+                      costLedgerSubject,
+                      lastCostLedgerEntryId,
+                      {
+                        status: "provider_attempt_failed",
+                        finalCostUsd: null,
+                      },
+                      lastCostLedgerEntryRecordedAt
+                    );
+                  }
+                  await appendCostLedgerEntry(
+                    {
+                      scope: costLedgerScope,
+                      id: costLedgerEntryId,
+                      channel: "image_gen",
+                      operation: "image_generation",
+                      provider,
+                      model: costEstimate.model,
+                      providerUsage: {
+                        pricingModel: costEstimate.pricingModel,
+                        generationKind: input.generationKind ?? null,
+                        hasSourceImage: preparedInput.hasSourceImage,
+                        size: costEstimate.size,
+                        quality: costEstimate.quality,
+                        inputFidelity: costEstimate.inputFidelity ?? null,
+                      },
+                      userKey: input.userKey,
+                      reqId: input.reqId,
+                      status: "provider_attempt_started",
+                      estimatedCostUsd: costEstimate.estimatedCostUsd ?? null,
+                      estimatedOutputCostUsd:
+                        costEstimate.estimatedOutputCostUsd ?? null,
+                      finalCostUsd: null,
+                      costEstimateComplete: costEstimate.costEstimateComplete,
+                      estimateSource: costEstimate.estimateSource,
+                      unpricedCostComponents:
+                        costEstimate.unpricedCostComponents ?? [],
+                    },
+                    budgetNow
+                  );
+                  ledgerEntryRecorded = true;
+                  lastCostLedgerEntryId = costLedgerEntryId;
+                  lastCostLedgerEntryRecordedAt = budgetNow;
+
+                  // This is the final local boundary before fetch. The tenant
+                  // fence is not started until durable cost admission exists.
+                  await admission?.markTransportStarted();
+                } catch (error) {
+                  const cleanupErrors: unknown[] = [];
+                  if (ledgerEntryRecorded) {
+                    try {
+                      await safelyUpdateCostLedgerEntry(
+                        costLedgerSubject,
+                        costLedgerEntryId,
+                        {
+                          status: "provider_attempt_failed",
+                          finalCostUsd: null,
+                        },
+                        budgetNow
+                      );
+                    } catch (cleanupError) {
+                      cleanupErrors.push(cleanupError);
+                    }
+                  }
+                  try {
+                    await admission?.abortBeforeTransport();
+                  } catch (cleanupError) {
+                    cleanupErrors.push(cleanupError);
+                  }
+                  if (cleanupErrors.length > 0) {
+                    const cleanupFailure = new AggregateError(
+                      [error, ...cleanupErrors],
+                      "Provider admission cleanup failed",
+                      { cause: error }
+                    );
+                    preTransportAdmissionFailures.add(cleanupFailure);
+                    throw cleanupFailure;
+                  }
+                  preTransportAdmissionFailures.add(error);
+                  throw error;
+                }
+              },
             });
-            await input.onProviderAttempt?.();
           } catch (error) {
             await releaseMessengerDailyImageBudgetReservation({
               now: budgetNow,
             });
             throw error;
           }
-          providerAttemptCount += 1;
-          if (lastCostLedgerEntryId && lastCostLedgerEntryRecordedAt) {
-            await safelyUpdateCostLedgerEntry(
-              lastCostLedgerEntryId,
-              {
-                status: "provider_attempt_failed",
-                finalCostUsd: null,
-              },
-              lastCostLedgerEntryRecordedAt
-            );
-          }
-          const costLedgerEntryId = `${input.reqId}:openai-image:${providerAttemptCount}`;
-          await safelyAppendCostLedgerEntry(
-            {
-              id: costLedgerEntryId,
-              channel: "image_gen",
-              operation: "image_generation",
-              provider,
-              model: costEstimate.model,
-              providerUsage: {
-                pricingModel: costEstimate.pricingModel,
-                generationKind: input.generationKind ?? null,
-                hasSourceImage: preparedInput.hasSourceImage,
-                size: costEstimate.size,
-                quality: costEstimate.quality,
-                inputFidelity: costEstimate.inputFidelity ?? null,
-              },
-              userKey: input.userKey,
-              reqId: input.reqId,
-              status: "provider_attempt_started",
-              estimatedCostUsd: costEstimate.estimatedCostUsd ?? null,
-              estimatedOutputCostUsd:
-                costEstimate.estimatedOutputCostUsd ?? null,
-              finalCostUsd: null,
-              costEstimateComplete: costEstimate.costEstimateComplete,
-              estimateSource: costEstimate.estimateSource,
-              unpricedCostComponents: costEstimate.unpricedCostComponents ?? [],
-            },
-            budgetNow
-          );
-          lastCostLedgerEntryId = costLedgerEntryId;
-          lastCostLedgerEntryRecordedAt = budgetNow;
         },
       });
+      // A 2xx response proves the billable provider operation completed.
+      // Persist that outcome before parsing or object storage: either of those
+      // local steps may fail after the provider has already incurred cost.
+      providerResponseAccepted = true;
+      if (lastCostLedgerEntryId && lastCostLedgerEntryRecordedAt) {
+        await safelyUpdateCostLedgerEntry(
+          costLedgerSubject,
+          lastCostLedgerEntryId,
+          {
+            status: "provider_attempt_succeeded",
+            finalCostUsd: estimateFinalCostUsd(costEstimate),
+          },
+          lastCostLedgerEntryRecordedAt
+        );
+      }
+      await input.onProviderSuccess?.();
       safeLog("image_generation_cost_estimate", {
         reqId: input.reqId,
         user: toLogUser(input.userKey),
@@ -360,20 +452,11 @@ export class OpenAiImageGenerator implements ImageGenerator {
       const uploadStartedAt = Date.now();
       const imageUrl = await publishGeneratedImage(
         generatedImageBuffer,
-        input.reqId
+        input.reqId,
+        input.generatedImagePublishHooks
       );
       const uploadOrServeMs = Date.now() - uploadStartedAt;
       partialMetrics.uploadOrServeMs = uploadOrServeMs;
-      if (lastCostLedgerEntryId && lastCostLedgerEntryRecordedAt) {
-        await safelyUpdateCostLedgerEntry(
-          lastCostLedgerEntryId,
-          {
-            status: "provider_attempt_succeeded",
-            finalCostUsd: estimateFinalCostUsd(costEstimate),
-          },
-          lastCostLedgerEntryRecordedAt
-        );
-      }
 
       return {
         imageUrl,
@@ -386,8 +469,13 @@ export class OpenAiImageGenerator implements ImageGenerator {
         metrics: finalizeGenerationMetrics(startedAt, partialMetrics),
       };
     } catch (error) {
-      if (lastCostLedgerEntryId && lastCostLedgerEntryRecordedAt) {
+      if (
+        !providerResponseAccepted &&
+        lastCostLedgerEntryId &&
+        lastCostLedgerEntryRecordedAt
+      ) {
         await safelyUpdateCostLedgerEntry(
+          costLedgerSubject,
           lastCostLedgerEntryId,
           {
             status: "provider_attempt_failed",
@@ -396,7 +484,10 @@ export class OpenAiImageGenerator implements ImageGenerator {
           lastCostLedgerEntryRecordedAt
         );
       }
-      if ((error as { name?: string })?.name === "AbortError") {
+      if (
+        (error as { name?: string })?.name === "AbortError" &&
+        !preTransportAdmissionFailures.has(error)
+      ) {
         throw attachGenerationMetrics(
           new GenerationTimeoutError("OpenAI generation timed out"),
           finalizeGenerationMetrics(startedAt, partialMetrics)

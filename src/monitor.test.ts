@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +6,9 @@ import {
   buildMessengerAgentTextForAttachments,
   applyFacebookInboundToolPolicyToConfig,
   classifyMessengerFastLaneIntent,
+  clearMessengerAssistantMemoryForErasure,
   downloadMessengerMediaAttachment,
+  eraseMessengerGatewayConversationForPrivacy,
   extractImagePromptFromAssistantReply,
   formatUnmatchedMessengerPageLog,
   getOpenClawActionText,
@@ -40,18 +42,23 @@ import {
   type MessengerEphemeralStateStore,
 } from "./messenger-state-store.js";
 import { clearMessengerRuntime, setMessengerRuntime } from "./runtime.js";
-import type { MessengerWebhookMessaging, ResolvedMessengerAccount } from "./types.js";
+import type {
+  MessengerWebhookMessaging,
+  ResolvedMessengerAccount,
+} from "./types.js";
 
 const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
 const originalImageGenToken = process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN;
 const originalImageGenUrl = process.env.LEADERBOT_IMAGE_GEN_URL;
-const originalGatewayImageForwardCap = process.env.MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP;
+const originalGatewayImageForwardCap =
+  process.env.MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP;
 const originalGatewayAudioTranscriptionCap =
   process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP;
 const originalGatewayLeaderbotEventForwardCap =
   process.env.MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP;
 const originalAiAnswerEnforcement =
   process.env.LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED;
+const originalPublicGatewayGuard = process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD;
 let temporaryStateDir: string | null = null;
 
 beforeEach(async () => {
@@ -61,6 +68,7 @@ beforeEach(async () => {
   delete process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP;
   delete process.env.MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP;
   delete process.env.LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED;
+  delete process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD;
 });
 
 afterEach(async () => {
@@ -83,7 +91,8 @@ afterEach(async () => {
   if (originalGatewayImageForwardCap === undefined) {
     delete process.env.MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP;
   } else {
-    process.env.MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP = originalGatewayImageForwardCap;
+    process.env.MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP =
+      originalGatewayImageForwardCap;
   }
   if (originalGatewayAudioTranscriptionCap === undefined) {
     delete process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP;
@@ -102,6 +111,11 @@ afterEach(async () => {
   } else {
     process.env.LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED =
       originalAiAnswerEnforcement;
+  }
+  if (originalPublicGatewayGuard === undefined) {
+    delete process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD;
+  } else {
+    process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD = originalPublicGatewayGuard;
   }
   resetMessengerGatewayDailyImageForwardBudgetForTests();
   clearMessengerRuntime();
@@ -182,7 +196,10 @@ function messengerImagePromptEvent(mid: string): MessengerWebhookMessaging {
   };
 }
 
-function messengerTextEvent(mid: string, text = "Hallo"): MessengerWebhookMessaging {
+function messengerTextEvent(
+  mid: string,
+  text = "Hallo",
+): MessengerWebhookMessaging {
   return {
     sender: { id: `sender-${mid}` },
     recipient: { id: "page-1" },
@@ -228,14 +245,27 @@ function setGatewayRuntime(
   options: {
     readAllowFromStore?: ReturnType<typeof vi.fn>;
     upsertPairingRequest?: ReturnType<typeof vi.fn>;
+    getSessionEntry?: ReturnType<typeof vi.fn>;
+    gatewayIsAvailable?: ReturnType<typeof vi.fn>;
+    gatewayRequest?: ReturnType<typeof vi.fn>;
   } = {},
 ) {
   setMessengerRuntime({
+    agent: {
+      session: {
+        getSessionEntry: options.getSessionEntry ?? vi.fn(() => undefined),
+      },
+    },
+    gateway: {
+      isAvailable: options.gatewayIsAvailable ?? vi.fn(async () => true),
+      request: options.gatewayRequest ?? vi.fn(async () => ({ ok: true })),
+    },
     channel: {
       pairing: {
         readAllowFromStore: options.readAllowFromStore ?? vi.fn(async () => []),
         upsertPairingRequest:
-          options.upsertPairingRequest ?? vi.fn(async () => ({ code: "PAIR-1", created: true })),
+          options.upsertPairingRequest ??
+          vi.fn(async () => ({ code: "PAIR-1", created: true })),
       },
       inbound: {
         run: inboundRun,
@@ -291,13 +321,19 @@ function unavailableMessengerStateStore(params: {
     ensureReady: async () => {},
     claimMessage: async () => {
       if (params.claimUnavailable) {
-        throw new MessengerSharedStateUnavailableError("command", "state unavailable");
+        throw new MessengerSharedStateUnavailableError(
+          "command",
+          "state unavailable",
+        );
       }
       return true;
     },
     reserveDaily: async () => {
       if (params.budgetUnavailable) {
-        throw new MessengerSharedStateUnavailableError("command", "state unavailable");
+        throw new MessengerSharedStateUnavailableError(
+          "command",
+          "state unavailable",
+        );
       }
       return { ok: true, count: 1, cap: 1 };
     },
@@ -341,7 +377,9 @@ describe("resolveMessengerVerificationTarget", () => {
       "https://example.test/facebook/webhook?hub.mode=subscribe&hub.verify_token=second-token&hub.challenge=ok",
     );
 
-    expect(resolveMessengerVerificationTarget([first, second], url)).toBe(second);
+    expect(resolveMessengerVerificationTarget([first, second], url)).toBe(
+      second,
+    );
   });
 });
 
@@ -475,10 +513,18 @@ describe("classifyMessengerFastLaneIntent", () => {
   });
 
   it("leaves real assistant prompts for the OpenClaw turn", () => {
-    expect(classifyMessengerFastLaneIntent("Schrijf een korte planning voor morgen")).toBeNull();
-    expect(classifyMessengerFastLaneIntent("Wat zie je op deze foto?")).toBeNull();
-    expect(classifyMessengerFastLaneIntent("Verbeter de stijl van deze tekst")).toBeNull();
-    expect(classifyMessengerFastLaneIntent("Maak een prompt voor een afbeelding")).toBeNull();
+    expect(
+      classifyMessengerFastLaneIntent("Schrijf een korte planning voor morgen"),
+    ).toBeNull();
+    expect(
+      classifyMessengerFastLaneIntent("Wat zie je op deze foto?"),
+    ).toBeNull();
+    expect(
+      classifyMessengerFastLaneIntent("Verbeter de stijl van deze tekst"),
+    ).toBeNull();
+    expect(
+      classifyMessengerFastLaneIntent("Maak een prompt voor een afbeelding"),
+    ).toBeNull();
   });
 });
 
@@ -504,7 +550,7 @@ describe("resolveMessengerConversationIntent", () => {
       resolveMessengerConversationIntent({
         text: "  Bewerk deze foto met neon licht  ",
         hasSourceImage: true,
-      })
+      }),
     ).toEqual({
       kind: "edit_source_image",
       confidence: 0.92,
@@ -517,7 +563,7 @@ describe("resolveMessengerConversationIntent", () => {
       resolveMessengerConversationIntent({
         text: "Kan je me een samurai maken",
         hasSourceImage: true,
-      })
+      }),
     ).toEqual({
       kind: "edit_source_image",
       confidence: 0.9,
@@ -527,7 +573,7 @@ describe("resolveMessengerConversationIntent", () => {
       resolveMessengerSourceImageGenerationPrompt({
         hasSourceImage: true,
         text: "Maak me cyberpunk met neon regen",
-      })
+      }),
     ).toBe("Maak me cyberpunk met neon regen");
   });
 });
@@ -547,13 +593,19 @@ describe("Messenger prompt memory", () => {
           "```text",
           "Maak een stoer samurai-portret, intense blik, donkere achtergrond, geen tekst",
           "```",
-        ].join("\n")
-      )
-    ).toBe("Maak een stoer samurai-portret, intense blik, donkere achtergrond, geen tekst");
+        ].join("\n"),
+      ),
+    ).toBe(
+      "Maak een stoer samurai-portret, intense blik, donkere achtergrond, geen tekst",
+    );
   });
 
   it("does not treat ordinary assistant text as a reusable image prompt", () => {
-    expect(extractImagePromptFromAssistantReply("Ik kan je helpen met afbeeldingen.")).toBeNull();
+    expect(
+      extractImagePromptFromAssistantReply(
+        "Ik kan je helpen met afbeeldingen.",
+      ),
+    ).toBeNull();
   });
 
   it("returns null for reference-only image requests when no remembered prompt exists", () => {
@@ -563,7 +615,7 @@ describe("Messenger prompt memory", () => {
         senderId: "prompt-memory-miss",
         text: "Gebruik deze prompt en maak een afbeelding",
         now: 1_000,
-      })
+      }),
     ).toBeNull();
   });
 
@@ -587,8 +639,10 @@ describe("Messenger prompt memory", () => {
         senderId: "prompt-memory-hit",
         text: "Gebruik deze prompt en maak een afbeelding",
         now: 2_500,
-      })
-    ).toBe("Maak een elegante futuristische samurai poster, geen tekst, geen logo");
+      }),
+    ).toBe(
+      "Maak een elegante futuristische samurai poster, geen tekst, geen logo",
+    );
   });
 
   it("uses the prompt from the exact Messenger message being replied to", () => {
@@ -614,8 +668,10 @@ describe("Messenger prompt memory", () => {
         text: "Maak deze afbeelding",
         replyToMessageId: "assistant-mid-1",
         now: 3_200,
-      })
-    ).toBe("Maak een rustige Japanse tuin bij zonsopgang, filmische belichting");
+      }),
+    ).toBe(
+      "Maak een rustige Japanse tuin bij zonsopgang, filmische belichting",
+    );
 
     expect(
       resolveMessengerImagePromptFromUserText({
@@ -624,7 +680,7 @@ describe("Messenger prompt memory", () => {
         text: "go",
         replyToMessageId: "assistant-mid-2",
         now: 3_200,
-      })
+      }),
     ).toBe("Maak een cyberpunk motorhelm met neonreflecties");
   });
 
@@ -650,7 +706,7 @@ describe("Messenger prompt memory", () => {
         text: "Nr 1 go",
         replyToMessageId: "assistant-options-mid",
         now: 4_100,
-      })
+      }),
     ).toBe("Maak deze afbeelding: samurai-portret");
   });
 
@@ -676,7 +732,7 @@ describe("Messenger prompt memory", () => {
         text: "Nr 2 go",
         replyToMessageId: "assistant-prompt-option-mid",
         now: 4_300,
-      })
+      }),
     ).toBeNull();
   });
 
@@ -701,7 +757,7 @@ describe("Messenger prompt memory", () => {
         text: "1",
         replyToMessageId: "assistant-markdown-options-mid",
         now: 4_500,
-      })
+      }),
     ).toBe("Maak deze afbeelding: samurai-portret");
   });
 
@@ -726,7 +782,7 @@ describe("Messenger prompt memory", () => {
         senderId: "prompt-option-latest-user",
         text: "Nr 2 go",
         now: 4_600,
-      })
+      }),
     ).toBe("Maak deze afbeelding: samurai-avatar/sticker");
 
     expect(
@@ -735,7 +791,7 @@ describe("Messenger prompt memory", () => {
         senderId: "prompt-option-latest-user",
         text: "3",
         now: 4_700,
-      })
+      }),
     ).toBe("Maak deze afbeelding: samurai-illustratie voor een poster");
   });
 
@@ -768,7 +824,9 @@ describe("Messenger prompt memory", () => {
           replyToMessageId: sharedSenderAndMessage.messageId,
           now: 5_100,
         }),
-      ).toBe(`Maak tenant-afbeelding nummer ${index + 1} met unieke belichting`);
+      ).toBe(
+        `Maak tenant-afbeelding nummer ${index + 1} met unieke belichting`,
+      );
     }
   });
 });
@@ -776,68 +834,136 @@ describe("Messenger prompt memory", () => {
 describe("hasMessengerImageGenerationIntent", () => {
   it("matches explicit generation and restyle prompts", () => {
     expect(hasMessengerImageGenerationIntent("Restyle deze foto")).toBe(true);
-    expect(hasMessengerImageGenerationIntent("Maak een afbeelding van een robot")).toBe(true);
-    expect(hasMessengerImageGenerationIntent("Kan je een afbeelding maken van een robot?")).toBe(
+    expect(
+      hasMessengerImageGenerationIntent("Maak een afbeelding van een robot"),
+    ).toBe(true);
+    expect(
+      hasMessengerImageGenerationIntent(
+        "Kan je een afbeelding maken van een robot?",
+      ),
+    ).toBe(true);
+    expect(
+      hasMessengerImageGenerationIntent("Ik wil een afbeelding genereren"),
+    ).toBe(true);
+    expect(
+      hasMessengerImageGenerationIntent(
+        "Maak een futuristische stad bij zonsondergang",
+      ),
+    ).toBe(true);
+    expect(
+      hasMessengerImageGenerationIntent("Maak een draak boven Antwerpen"),
+    ).toBe(true);
+    expect(
+      hasMessengerImageGenerationIntent(
+        "Kan je een draak met neonvleugels maken?",
+      ),
+    ).toBe(true);
+    expect(
+      hasMessengerImageGenerationIntent("Maak me een romeinse soldaat"),
+    ).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Maak mij een stripheld")).toBe(
       true,
     );
-    expect(hasMessengerImageGenerationIntent("Ik wil een afbeelding genereren")).toBe(true);
-    expect(hasMessengerImageGenerationIntent("Maak een futuristische stad bij zonsondergang")).toBe(
+    expect(
+      hasMessengerImageGenerationIntent("Kan je me een samurai maken"),
+    ).toBe(true);
+    expect(
+      hasMessengerImageGenerationIntent("Kun je voor mij een samoerai maken?"),
+    ).toBe(true);
+    expect(
+      hasMessengerImageGenerationIntent("samurai-avatar/sticker maak"),
+    ).toBe(true);
+    expect(hasMessengerImageGenerationIntent("Ik zie geen samurai bro")).toBe(
       true,
     );
-    expect(hasMessengerImageGenerationIntent("Maak een draak boven Antwerpen")).toBe(true);
-    expect(hasMessengerImageGenerationIntent("Kan je een draak met neonvleugels maken?")).toBe(
-      true,
-    );
-    expect(hasMessengerImageGenerationIntent("Maak me een romeinse soldaat")).toBe(true);
-    expect(hasMessengerImageGenerationIntent("Maak mij een stripheld")).toBe(true);
-    expect(hasMessengerImageGenerationIntent("Kan je me een samurai maken")).toBe(true);
-    expect(hasMessengerImageGenerationIntent("Kun je voor mij een samoerai maken?")).toBe(true);
-    expect(hasMessengerImageGenerationIntent("samurai-avatar/sticker maak")).toBe(true);
-    expect(hasMessengerImageGenerationIntent("Ik zie geen samurai bro")).toBe(true);
-    expect(hasMessengerImageGenerationIntent("Das mooi, maar geen samurai bro")).toBe(true);
+    expect(
+      hasMessengerImageGenerationIntent("Das mooi, maar geen samurai bro"),
+    ).toBe(true);
   });
 
   it("does not match image analysis or writing-style prompts", () => {
-    expect(hasMessengerImageGenerationIntent("Wat zie je op deze foto?")).toBe(false);
-    expect(hasMessengerImageGenerationIntent("Verbeter de stijl van deze tekst")).toBe(false);
-    expect(hasMessengerImageGenerationIntent("Maak een prompt voor een afbeelding")).toBe(false);
-    expect(hasMessengerImageGenerationIntent("Write an image prompt for a robot")).toBe(false);
-    expect(hasMessengerImageGenerationIntent("Maak een planning voor morgen")).toBe(false);
-    expect(hasMessengerImageGenerationIntent("Maak me een planning voor morgen")).toBe(false);
-    expect(hasMessengerImageGenerationIntent("Kan je een plan voor morgen maken?")).toBe(false);
-    expect(hasMessengerImageGenerationIntent("Can you create a booking for tomorrow?")).toBe(false);
+    expect(hasMessengerImageGenerationIntent("Wat zie je op deze foto?")).toBe(
+      false,
+    );
+    expect(
+      hasMessengerImageGenerationIntent("Verbeter de stijl van deze tekst"),
+    ).toBe(false);
+    expect(
+      hasMessengerImageGenerationIntent("Maak een prompt voor een afbeelding"),
+    ).toBe(false);
+    expect(
+      hasMessengerImageGenerationIntent("Write an image prompt for a robot"),
+    ).toBe(false);
+    expect(
+      hasMessengerImageGenerationIntent("Maak een planning voor morgen"),
+    ).toBe(false);
+    expect(
+      hasMessengerImageGenerationIntent("Maak me een planning voor morgen"),
+    ).toBe(false);
+    expect(
+      hasMessengerImageGenerationIntent("Kan je een plan voor morgen maken?"),
+    ).toBe(false);
+    expect(
+      hasMessengerImageGenerationIntent(
+        "Can you create a booking for tomorrow?",
+      ),
+    ).toBe(false);
     expect(hasMessengerImageGenerationIntent("Doe maar")).toBe(false);
     expect(hasMessengerImageGenerationIntent("Ok")).toBe(false);
   });
 
   it("separates source-photo edits from free image generation prompts", () => {
-    expect(hasMessengerSourceImageEditIntent("Restyle deze foto als cinematic poster")).toBe(true);
-    expect(hasMessengerSourceImageEditIntent("Bewerk deze foto met neon licht")).toBe(true);
-    expect(hasMessengerSourceImageEditIntent("Maak een futuristische stad")).toBe(false);
-    expect(hasMessengerSourceImageEditIntent("Kan je een landschap afbeelding genereren?")).toBe(
-      false,
-    );
+    expect(
+      hasMessengerSourceImageEditIntent(
+        "Restyle deze foto als cinematic poster",
+      ),
+    ).toBe(true);
+    expect(
+      hasMessengerSourceImageEditIntent("Bewerk deze foto met neon licht"),
+    ).toBe(true);
+    expect(
+      hasMessengerSourceImageEditIntent("Maak een futuristische stad"),
+    ).toBe(false);
+    expect(
+      hasMessengerSourceImageEditIntent(
+        "Kan je een landschap afbeelding genereren?",
+      ),
+    ).toBe(false);
   });
 });
 
 describe("shouldForwardMessengerTextToImageGen", () => {
   it("forwards explicit text image requests to the Leaderbot conversation layer", () => {
-    expect(shouldForwardMessengerTextToImageGen("Maak een afbeelding van een robot")).toBe(true);
-    expect(shouldForwardMessengerTextToImageGen("Kan je een landschap afbeelding genereren?")).toBe(
-      true,
-    );
+    expect(
+      shouldForwardMessengerTextToImageGen("Maak een afbeelding van een robot"),
+    ).toBe(true);
+    expect(
+      shouldForwardMessengerTextToImageGen(
+        "Kan je een landschap afbeelding genereren?",
+      ),
+    ).toBe(true);
     expect(
       shouldForwardMessengerTextToImageGen(
         "Een afbeelding maken een Belgisch landschap in de natuur",
       ),
     ).toBe(true);
-    expect(shouldForwardMessengerTextToImageGen("Maak me een romeinse soldaat")).toBe(true);
+    expect(
+      shouldForwardMessengerTextToImageGen("Maak me een romeinse soldaat"),
+    ).toBe(true);
   });
 
   it("keeps non-image and prompt-writing requests in the normal OpenClaw turn", () => {
-    expect(shouldForwardMessengerTextToImageGen("Maak een prompt voor een afbeelding")).toBe(false);
-    expect(shouldForwardMessengerTextToImageGen("Schrijf een planning voor morgen")).toBe(false);
-    expect(shouldForwardMessengerTextToImageGen("Wat zie je op deze foto?")).toBe(false);
+    expect(
+      shouldForwardMessengerTextToImageGen(
+        "Maak een prompt voor een afbeelding",
+      ),
+    ).toBe(false);
+    expect(
+      shouldForwardMessengerTextToImageGen("Schrijf een planning voor morgen"),
+    ).toBe(false);
+    expect(
+      shouldForwardMessengerTextToImageGen("Wat zie je op deze foto?"),
+    ).toBe(false);
     expect(
       shouldForwardMessengerTextToImageGen(
         "Hey leaderbot kan jij mij een trucje tonen hoe ik op mijn oude xbox 360 gratis kan gamen",
@@ -858,18 +984,71 @@ describe("processMessengerEvent unknown sender access policy", () => {
       expected: "access has not been approved yet",
       codeLabel: "Pairing code",
     },
-  ])("localizes private pairing for $lang accounts", async ({ lang, expected, codeLabel }) => {
-    const mid = `mid-private-pairing-${lang}`;
+  ])(
+    "localizes private pairing for $lang accounts",
+    async ({ lang, expected, codeLabel }) => {
+      const mid = `mid-private-pairing-${lang}`;
+      const inboundRun = vi.fn(async () => ({ dispatched: false }));
+      const upsertPairingRequest = vi.fn(async () => ({
+        code: "PAIR-1",
+        created: true,
+      }));
+      setGatewayRuntime(inboundRun, { upsertPairingRequest });
+      const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+        expect(String(url)).toBe(
+          "https://graph.facebook.com/v20.0/page-1/messages",
+        );
+        return new Response(
+          JSON.stringify({
+            message_id: "pairing-message",
+            recipient_id: `sender-${mid}`,
+          }),
+          {
+            headers: { "content-type": "application/json" },
+            status: 200,
+          },
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await processGatewayTestEvent(messengerTextEvent(mid), {
+        dmPolicy: "pairing",
+        allowFrom: undefined,
+        defaultLang: lang,
+      });
+
+      expect(upsertPairingRequest).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const sendBody = JSON.parse(
+        String((fetchMock.mock.calls[0]?.[1] as RequestInit).body),
+      );
+      expect(sendBody.recipient).toEqual({ id: `sender-${mid}` });
+      expect(String(sendBody.message?.text ?? "")).toContain(expected);
+      expect(String(sendBody.message?.text ?? "")).toContain(
+        `${codeLabel}: PAIR-1`,
+      );
+      expect(String(sendBody.message?.text ?? "")).toContain(
+        "openclaw pairing approve facebook PAIR-1",
+      );
+      expect(inboundRun).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps ordinary unknown-sender free-tier text in the OpenClaw turn", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
     const inboundRun = vi.fn(async () => ({ dispatched: false }));
-    const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR-1", created: true }));
+    const upsertPairingRequest = vi.fn(async () => ({
+      code: "PAIR-1",
+      created: true,
+    }));
     setGatewayRuntime(inboundRun, { upsertPairingRequest });
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
-      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
+      expect(String(url)).toBe(
+        "https://graph.facebook.com/v20.0/page-1/messages",
+      );
       return new Response(
-        JSON.stringify({
-          message_id: "pairing-message",
-          recipient_id: `sender-${mid}`,
-        }),
+        JSON.stringify({ recipient_id: "sender-mid-free-tier" }),
         {
           headers: { "content-type": "application/json" },
           status: 200,
@@ -878,50 +1057,21 @@ describe("processMessengerEvent unknown sender access policy", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await processGatewayTestEvent(messengerTextEvent(mid), {
-      dmPolicy: "pairing",
-      allowFrom: undefined,
-      defaultLang: lang,
-    });
-
-    expect(upsertPairingRequest).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const sendBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
-    expect(sendBody.recipient).toEqual({ id: `sender-${mid}` });
-    expect(String(sendBody.message?.text ?? "")).toContain(expected);
-    expect(String(sendBody.message?.text ?? "")).toContain(`${codeLabel}: PAIR-1`);
-    expect(String(sendBody.message?.text ?? "")).toContain(
-      "openclaw pairing approve facebook PAIR-1",
+    await processGatewayTestEvent(
+      messengerTextEvent("mid-free-tier", "Wie ben jij?"),
+      {
+        dmPolicy: "pairing",
+        allowFrom: undefined,
+        unknownSenderMode: "leaderbot_free_tier",
+        leaderbotBridgeEnabled: true,
+      },
     );
-    expect(inboundRun).not.toHaveBeenCalled();
-  });
-
-  it("keeps ordinary unknown-sender free-tier text in the OpenClaw turn", async () => {
-    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
-    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
-    const inboundRun = vi.fn(async () => ({ dispatched: false }));
-    const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR-1", created: true }));
-    setGatewayRuntime(inboundRun, { upsertPairingRequest });
-    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
-      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
-      return new Response(JSON.stringify({ recipient_id: "sender-mid-free-tier" }), {
-        headers: { "content-type": "application/json" },
-        status: 200,
-      });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await processGatewayTestEvent(messengerTextEvent("mid-free-tier", "Wie ben jij?"), {
-      dmPolicy: "pairing",
-      allowFrom: undefined,
-      unknownSenderMode: "leaderbot_free_tier",
-      leaderbotBridgeEnabled: true,
-    });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(
-      fetchMock.mock.calls.map(call =>
-        JSON.parse(String((call[1] as RequestInit).body)).sender_action,
+      fetchMock.mock.calls.map(
+        (call) =>
+          JSON.parse(String((call[1] as RequestInit).body)).sender_action,
       ),
     ).toEqual(["typing_on", "typing_off"]);
     expect(upsertPairingRequest).not.toHaveBeenCalled();
@@ -934,11 +1084,16 @@ describe("processMessengerEvent unknown sender access policy", () => {
     const inboundRun = vi.fn(async () => ({ dispatched: false }));
     setGatewayRuntime(inboundRun);
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
-      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
-      return new Response(JSON.stringify({ recipient_id: "sender-mid-free-tier-xbox" }), {
-        headers: { "content-type": "application/json" },
-        status: 200,
-      });
+      expect(String(url)).toBe(
+        "https://graph.facebook.com/v20.0/page-1/messages",
+      );
+      return new Response(
+        JSON.stringify({ recipient_id: "sender-mid-free-tier-xbox" }),
+        {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        },
+      );
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -957,8 +1112,9 @@ describe("processMessengerEvent unknown sender access policy", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(
-      fetchMock.mock.calls.map(call =>
-        JSON.parse(String((call[1] as RequestInit).body)).sender_action,
+      fetchMock.mock.calls.map(
+        (call) =>
+          JSON.parse(String((call[1] as RequestInit).body)).sender_action,
       ),
     ).toEqual(["typing_on", "typing_off"]);
     expect(inboundRun).toHaveBeenCalledTimes(1);
@@ -968,10 +1124,15 @@ describe("processMessengerEvent unknown sender access policy", () => {
     process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
     process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
     const inboundRun = vi.fn();
-    const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR-1", created: true }));
+    const upsertPairingRequest = vi.fn(async () => ({
+      code: "PAIR-1",
+      created: true,
+    }));
     setGatewayRuntime(inboundRun, { upsertPairingRequest });
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
-      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
+      expect(String(url)).toBe(
+        "https://graph.facebook.com/v20.0/page-1/messages",
+      );
       return new Response(
         JSON.stringify({
           message_id: "pairing-message",
@@ -985,11 +1146,14 @@ describe("processMessengerEvent unknown sender access policy", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await processGatewayTestEvent(messengerTextEvent("mid-free-tier-disabled", "Hi"), {
-      dmPolicy: "pairing",
-      allowFrom: undefined,
-      unknownSenderMode: "leaderbot_free_tier",
-    });
+    await processGatewayTestEvent(
+      messengerTextEvent("mid-free-tier-disabled", "Hi"),
+      {
+        dmPolicy: "pairing",
+        allowFrom: undefined,
+        unknownSenderMode: "leaderbot_free_tier",
+      },
+    );
 
     expect(upsertPairingRequest).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -1007,10 +1171,15 @@ describe("processMessengerEvent unknown sender access policy", () => {
       }),
     ).toMatchObject({ ok: true, count: 1, cap: 1 });
     const inboundRun = vi.fn();
-    const upsertPairingRequest = vi.fn(async () => ({ code: "PAIR-1", created: true }));
+    const upsertPairingRequest = vi.fn(async () => ({
+      code: "PAIR-1",
+      created: true,
+    }));
     setGatewayRuntime(inboundRun, { upsertPairingRequest });
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
-      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
+      expect(String(url)).toBe(
+        "https://graph.facebook.com/v20.0/page-1/messages",
+      );
       return new Response(
         JSON.stringify({
           message_id: "event-budget-reply",
@@ -1024,16 +1193,21 @@ describe("processMessengerEvent unknown sender access policy", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await processGatewayTestEvent(messengerImagePromptEvent("mid-free-tier-cap"), {
-      dmPolicy: "pairing",
-      allowFrom: undefined,
-      unknownSenderMode: "leaderbot_free_tier",
-      leaderbotBridgeEnabled: true,
-      defaultLang: "en",
-    });
+    await processGatewayTestEvent(
+      messengerImagePromptEvent("mid-free-tier-cap"),
+      {
+        dmPolicy: "pairing",
+        allowFrom: undefined,
+        unknownSenderMode: "leaderbot_free_tier",
+        leaderbotBridgeEnabled: true,
+        defaultLang: "en",
+      },
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const sendBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    const sendBody = JSON.parse(
+      String((fetchMock.mock.calls[0]?.[1] as RequestInit).body),
+    );
     expect(sendBody).toMatchObject({
       messaging_type: "RESPONSE",
       message: {
@@ -1055,17 +1229,23 @@ describe("processMessengerEvent unknown sender access policy", () => {
     setGatewayRuntime(inboundRun);
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
       const href = String(url);
-      if (href === "https://image-gen.example.test/internal/messenger/webhook-event") {
+      if (
+        href ===
+        "https://image-gen.example.test/internal/messenger/webhook-event"
+      ) {
         return new Response(JSON.stringify({ error: "unavailable" }), {
           headers: { "content-type": "application/json" },
           status: 503,
         });
       }
       if (href === "https://graph.facebook.com/v20.0/page-1/messages") {
-        return new Response(JSON.stringify({ error: { message: "send failed", code: 10 } }), {
-          headers: { "content-type": "application/json" },
-          status: 500,
-        });
+        return new Response(
+          JSON.stringify({ error: { message: "send failed", code: 10 } }),
+          {
+            headers: { "content-type": "application/json" },
+            status: 500,
+          },
+        );
       }
       throw new Error(`unexpected fetch ${href}`);
     });
@@ -1129,14 +1309,19 @@ describe("processMessengerEvent image intents", () => {
     const inboundRun = setGatewayRuntime();
     const runtimeLog = vi.fn();
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
-      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
-      return new Response(JSON.stringify({
-        message_id: "state-unavailable-reply",
-        recipient_id: "sender-mid-state-unavailable",
-      }), {
-        headers: { "content-type": "application/json" },
-        status: 200,
-      });
+      expect(String(url)).toBe(
+        "https://graph.facebook.com/v20.0/page-1/messages",
+      );
+      return new Response(
+        JSON.stringify({
+          message_id: "state-unavailable-reply",
+          recipient_id: "sender-mid-state-unavailable",
+        }),
+        {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        },
+      );
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -1148,12 +1333,16 @@ describe("processMessengerEvent image intents", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const sendBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    const sendBody = JSON.parse(
+      String((fetchMock.mock.calls[0]?.[1] as RequestInit).body),
+    );
     expect(sendBody.message.text).toBe(
       "I cannot reliably check the safety limit right now. Please try again shortly.",
     );
     expect(inboundRun).not.toHaveBeenCalled();
-    expect(JSON.stringify(runtimeLog.mock.calls)).not.toContain("sender-mid-state-unavailable");
+    expect(JSON.stringify(runtimeLog.mock.calls)).not.toContain(
+      "sender-mid-state-unavailable",
+    );
     expect(JSON.stringify(runtimeLog.mock.calls)).not.toContain("Hello");
   });
 
@@ -1162,7 +1351,9 @@ describe("processMessengerEvent image intents", () => {
     process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
     const inboundRun = setGatewayRuntime();
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
-      expect(String(url)).toBe("https://image-gen.example.test/internal/messenger/webhook-event");
+      expect(String(url)).toBe(
+        "https://image-gen.example.test/internal/messenger/webhook-event",
+      );
       return new Response(JSON.stringify({ status: "queued" }), {
         headers: { "content-type": "application/json" },
         status: 202,
@@ -1187,14 +1378,19 @@ describe("processMessengerEvent image intents", () => {
     process.env.MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP = "1";
     const inboundRun = setGatewayRuntime();
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
-      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
-      return new Response(JSON.stringify({
-        message_id: "budget-state-unavailable-reply",
-        recipient_id: "sender-mid-budget-state-unavailable",
-      }), {
-        headers: { "content-type": "application/json" },
-        status: 200,
-      });
+      expect(String(url)).toBe(
+        "https://graph.facebook.com/v20.0/page-1/messages",
+      );
+      return new Response(
+        JSON.stringify({
+          message_id: "budget-state-unavailable-reply",
+          recipient_id: "sender-mid-budget-state-unavailable",
+        }),
+        {
+          headers: { "content-type": "application/json" },
+          status: 200,
+        },
+      );
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -1206,7 +1402,9 @@ describe("processMessengerEvent image intents", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const sendBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    const sendBody = JSON.parse(
+      String((fetchMock.mock.calls[0]?.[1] as RequestInit).body),
+    );
     expect(sendBody.message.text).toBe(
       "I cannot reliably check the safety limit right now. Please try again shortly.",
     );
@@ -1218,7 +1416,9 @@ describe("processMessengerEvent image intents", () => {
     process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
     const inboundRun = setGatewayRuntime();
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
-      expect(String(url)).toBe("https://image-gen.example.test/internal/messenger/webhook-event");
+      expect(String(url)).toBe(
+        "https://image-gen.example.test/internal/messenger/webhook-event",
+      );
       return new Response(JSON.stringify({ status: "queued" }), {
         headers: { "content-type": "application/json" },
         status: 202,
@@ -1226,9 +1426,12 @@ describe("processMessengerEvent image intents", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await processGatewayTestEvent(messengerTextEvent("mid-delete-data-bridge", "Delete my data aub"), {
-      leaderbotBridgeEnabled: true,
-    });
+    await processGatewayTestEvent(
+      messengerTextEvent("mid-delete-data-bridge", "Delete my data aub"),
+      {
+        leaderbotBridgeEnabled: true,
+      },
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
@@ -1240,20 +1443,27 @@ describe("processMessengerEvent image intents", () => {
     process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
     const inboundRun = setGatewayRuntime();
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
-      expect(String(url)).toBe("https://image-gen.example.test/internal/messenger/webhook-event");
+      expect(String(url)).toBe(
+        "https://image-gen.example.test/internal/messenger/webhook-event",
+      );
       return new Response(JSON.stringify({ status: "queued" }), {
         headers: { "content-type": "application/json" },
         status: 202,
       });
     });
     vi.stubGlobal("fetch", fetchMock);
-    const event = messengerTextEvent("mid-delete-data-attachment", "Delete my data aub");
+    const event = messengerTextEvent(
+      "mid-delete-data-attachment",
+      "Delete my data aub",
+    );
     event.message = {
       ...event.message,
       attachments: [
         {
           type: "image",
-          payload: { url: "https://lookaside.facebook.com/delete-data-proof.jpg" },
+          payload: {
+            url: "https://lookaside.facebook.com/delete-data-proof.jpg",
+          },
         },
       ],
     };
@@ -1278,7 +1488,9 @@ describe("processMessengerEvent image intents", () => {
     ).toMatchObject({ ok: true, count: 1, cap: 1 });
     const inboundRun = setGatewayRuntime();
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
-      expect(String(url)).toBe("https://image-gen.example.test/internal/messenger/webhook-event");
+      expect(String(url)).toBe(
+        "https://image-gen.example.test/internal/messenger/webhook-event",
+      );
       return new Response(JSON.stringify({ status: "queued" }), {
         headers: { "content-type": "application/json" },
         status: 202,
@@ -1286,12 +1498,17 @@ describe("processMessengerEvent image intents", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await processGatewayTestEvent(messengerTextEvent("mid-delete-data-budget", "Delete my data aub"), {
-      leaderbotBridgeEnabled: true,
-    });
+    await processGatewayTestEvent(
+      messengerTextEvent("mid-delete-data-budget", "Delete my data aub"),
+      {
+        leaderbotBridgeEnabled: true,
+      },
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const bridgeBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    const bridgeBody = JSON.parse(
+      String((fetchMock.mock.calls[0]?.[1] as RequestInit).body),
+    );
     expect(bridgeBody).toMatchObject({
       event: {
         sender: { id: "sender-mid-delete-data-budget" },
@@ -1304,7 +1521,9 @@ describe("processMessengerEvent image intents", () => {
   it("handles delete-data smoke requests before the OpenClaw inbound turn", async () => {
     const inboundRun = setGatewayRuntime();
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
-      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
+      expect(String(url)).toBe(
+        "https://graph.facebook.com/v20.0/page-1/messages",
+      );
       return new Response(
         JSON.stringify({
           message_id: "delete-data-reply",
@@ -1318,10 +1537,14 @@ describe("processMessengerEvent image intents", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await processGatewayTestEvent(messengerTextEvent("mid-delete-data", "Delete my data aub"));
+    await processGatewayTestEvent(
+      messengerTextEvent("mid-delete-data", "Delete my data aub"),
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const sendBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    const sendBody = JSON.parse(
+      String((fetchMock.mock.calls[0]?.[1] as RequestInit).body),
+    );
     expect(sendBody.message.text).toContain("privacy@leaderbot.live");
     expect(sendBody.message.text).not.toContain("sender-mid-delete-data");
     expect(sendBody.message.text).not.toContain("facebook:");
@@ -1333,7 +1556,9 @@ describe("processMessengerEvent image intents", () => {
     process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
     const inboundRun = setGatewayRuntime();
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
-      expect(String(url)).toBe("https://image-gen.example.test/internal/messenger/webhook-event");
+      expect(String(url)).toBe(
+        "https://image-gen.example.test/internal/messenger/webhook-event",
+      );
       return new Response(JSON.stringify({ status: "queued" }), {
         headers: { "content-type": "application/json" },
         status: 202,
@@ -1341,9 +1566,12 @@ describe("processMessengerEvent image intents", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await processGatewayTestEvent(messengerImagePromptEvent("mid-image-forward"), {
-      leaderbotBridgeEnabled: true,
-    });
+    await processGatewayTestEvent(
+      messengerImagePromptEvent("mid-image-forward"),
+      {
+        leaderbotBridgeEnabled: true,
+      },
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: "POST" });
@@ -1357,7 +1585,10 @@ describe("processMessengerEvent image intents", () => {
     const inboundRun = setGatewayRuntime();
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
       const href = String(url);
-      if (href === "https://image-gen.example.test/internal/messenger/webhook-event") {
+      if (
+        href ===
+        "https://image-gen.example.test/internal/messenger/webhook-event"
+      ) {
         return new Response(JSON.stringify({ status: "queued" }), {
           headers: { "content-type": "application/json" },
           status: 202,
@@ -1379,12 +1610,18 @@ describe("processMessengerEvent image intents", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await processGatewayTestEvent(messengerImagePromptEvent("mid-image-forward-cap-a"), {
-      leaderbotBridgeEnabled: true,
-    });
-    await processGatewayTestEvent(messengerImagePromptEvent("mid-image-forward-cap-b"), {
-      leaderbotBridgeEnabled: true,
-    });
+    await processGatewayTestEvent(
+      messengerImagePromptEvent("mid-image-forward-cap-a"),
+      {
+        leaderbotBridgeEnabled: true,
+      },
+    );
+    await processGatewayTestEvent(
+      messengerImagePromptEvent("mid-image-forward-cap-b"),
+      {
+        leaderbotBridgeEnabled: true,
+      },
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
@@ -1393,7 +1630,9 @@ describe("processMessengerEvent image intents", () => {
     expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
       "https://graph.facebook.com/v20.0/page-1/messages",
     );
-    const sendBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body));
+    const sendBody = JSON.parse(
+      String((fetchMock.mock.calls[1]?.[1] as RequestInit).body),
+    );
     expect(sendBody).toMatchObject({
       messaging_type: "RESPONSE",
       message: {
@@ -1415,7 +1654,9 @@ describe("processMessengerEvent image intents", () => {
     ).toMatchObject({ ok: true, count: 1, cap: 1 });
     const inboundRun = setGatewayRuntime();
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
-      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
+      expect(String(url)).toBe(
+        "https://graph.facebook.com/v20.0/page-1/messages",
+      );
       return new Response(
         JSON.stringify({
           message_id: "audio-budget-reply",
@@ -1432,7 +1673,9 @@ describe("processMessengerEvent image intents", () => {
     await processGatewayTestEvent(messengerAudioEvent("mid-audio-cap"));
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const sendBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+    const sendBody = JSON.parse(
+      String((fetchMock.mock.calls[0]?.[1] as RequestInit).body),
+    );
     expect(sendBody).toMatchObject({
       messaging_type: "RESPONSE",
       message: {
@@ -1440,7 +1683,9 @@ describe("processMessengerEvent image intents", () => {
       },
       recipient: { id: "sender-mid-audio-cap" },
     });
-    expect(JSON.stringify(sendBody)).not.toContain("https://cdn.fbsbx.com/voice-message.mp4");
+    expect(JSON.stringify(sendBody)).not.toContain(
+      "https://cdn.fbsbx.com/voice-message.mp4",
+    );
     expect(inboundRun).not.toHaveBeenCalled();
   });
 
@@ -1450,7 +1695,9 @@ describe("processMessengerEvent image intents", () => {
     const inboundRun = vi.fn(async () => ({ dispatched: false }));
     setGatewayRuntime(inboundRun);
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
-      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
+      expect(String(url)).toBe(
+        "https://graph.facebook.com/v20.0/page-1/messages",
+      );
       return new Response(
         JSON.stringify({
           message_id: "typing-message",
@@ -1464,15 +1711,18 @@ describe("processMessengerEvent image intents", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await processGatewayTestEvent(messengerImagePromptEvent("mid-image-forward-disabled"));
+    await processGatewayTestEvent(
+      messengerImagePromptEvent("mid-image-forward-disabled"),
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(
-      fetchMock.mock.calls.map(call =>
-        JSON.parse(String((call[1] as RequestInit).body)).sender_action,
+      fetchMock.mock.calls.map(
+        (call) =>
+          JSON.parse(String((call[1] as RequestInit).body)).sender_action,
       ),
     ).toEqual(["typing_on", "typing_off"]);
-    expect(fetchMock.mock.calls.map(call => String(call[0]))).toEqual(
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual(
       Array(2).fill("https://graph.facebook.com/v20.0/page-1/messages"),
     );
     expect(inboundRun).toHaveBeenCalledTimes(1);
@@ -1484,7 +1734,10 @@ describe("processMessengerEvent image intents", () => {
     const inboundRun = setGatewayRuntime();
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
       const href = String(url);
-      if (href === "https://image-gen.example.test/internal/messenger/webhook-event") {
+      if (
+        href ===
+        "https://image-gen.example.test/internal/messenger/webhook-event"
+      ) {
         return new Response(JSON.stringify({ error: "unavailable" }), {
           headers: { "content-type": "application/json" },
           status: 503,
@@ -1506,13 +1759,18 @@ describe("processMessengerEvent image intents", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await processGatewayTestEvent(messengerImagePromptEvent("mid-image-forward-failure"), {
-      leaderbotBridgeEnabled: true,
-    });
+    await processGatewayTestEvent(
+      messengerImagePromptEvent("mid-image-forward-failure"),
+      {
+        leaderbotBridgeEnabled: true,
+      },
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: "POST" });
-    const sendBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body));
+    const sendBody = JSON.parse(
+      String((fetchMock.mock.calls[1]?.[1] as RequestInit).body),
+    );
     expect(sendBody).toMatchObject({
       messaging_type: "RESPONSE",
       message: {
@@ -1534,7 +1792,9 @@ describe("processMessengerEvent interactive payloads", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await processGatewayTestEvent(messengerPostbackEvent("mid-postback-disabled"));
+    await processGatewayTestEvent(
+      messengerPostbackEvent("mid-postback-disabled"),
+    );
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(inboundRun).not.toHaveBeenCalled();
@@ -1625,17 +1885,21 @@ describe("shouldForwardMessengerImageOnlyEventToImageGen", () => {
 
 describe("sanitizeMessengerSourceImageUrl", () => {
   it("allows https Messenger media hosts", () => {
-    expect(sanitizeMessengerSourceImageUrl("https://cdn.fbcdn.net/photo.jpg")).toBe(
-      "https://cdn.fbcdn.net/photo.jpg",
-    );
-    expect(sanitizeMessengerSourceImageUrl("https://lookaside.fbsbx.com/photo.jpg")).toBe(
-      "https://lookaside.fbsbx.com/photo.jpg",
-    );
+    expect(
+      sanitizeMessengerSourceImageUrl("https://cdn.fbcdn.net/photo.jpg"),
+    ).toBe("https://cdn.fbcdn.net/photo.jpg");
+    expect(
+      sanitizeMessengerSourceImageUrl("https://lookaside.fbsbx.com/photo.jpg"),
+    ).toBe("https://lookaside.fbsbx.com/photo.jpg");
   });
 
   it("rejects non-https or non-Messenger media hosts", () => {
-    expect(sanitizeMessengerSourceImageUrl("http://cdn.fbcdn.net/photo.jpg")).toBeNull();
-    expect(sanitizeMessengerSourceImageUrl("https://example.test/photo.jpg")).toBeNull();
+    expect(
+      sanitizeMessengerSourceImageUrl("http://cdn.fbcdn.net/photo.jpg"),
+    ).toBeNull();
+    expect(
+      sanitizeMessengerSourceImageUrl("https://example.test/photo.jpg"),
+    ).toBeNull();
     expect(sanitizeMessengerSourceImageUrl("not a url")).toBeNull();
   });
 });
@@ -1657,7 +1921,9 @@ describe("resolveMessengerFastLaneReply", () => {
   });
 
   it("does not create a separate text reply for image intents", () => {
-    expect(resolveMessengerFastLaneReply("maak afbeelding van een robot")).toBeNull();
+    expect(
+      resolveMessengerFastLaneReply("maak afbeelding van een robot"),
+    ).toBeNull();
   });
 
   it("returns a direct privacy-safe reply for delete-data requests", () => {
@@ -1670,7 +1936,9 @@ describe("resolveMessengerFastLaneReply", () => {
 
 describe("shouldDeliverMessengerReplyPayload", () => {
   it("delivers normal assistant text", () => {
-    expect(shouldDeliverMessengerReplyPayload({ text: "Normaal antwoord" })).toBe(true);
+    expect(
+      shouldDeliverMessengerReplyPayload({ text: "Normaal antwoord" }),
+    ).toBe(true);
   });
 
   it("delivers status feedback but suppresses hidden internal notices", () => {
@@ -1702,7 +1970,9 @@ describe("normalizeMessengerReplyPayloadForDelivery", () => {
         text: 'search "26100858686271223|sender_id|facebook:26100858686271223" failed',
         isStatusNotice: true,
       })?.text,
-    ).toBe("Ik kon een interne actie niet uitvoeren. Probeer het zo meteen opnieuw.");
+    ).toBe(
+      "Ik kon een interne actie niet uitvoeren. Probeer het zo meteen opnieuw.",
+    );
 
     expect(
       normalizeMessengerReplyPayloadForDelivery({
@@ -1770,42 +2040,93 @@ describe("normalizeMessengerReplyPayloadForDelivery", () => {
 });
 
 describe("resolveFacebookInboundToolPolicy", () => {
-  it("denies high-cost and runtime tools for untrusted Facebook turns", () => {
-    const policy = resolveFacebookInboundToolPolicy({ commandAuthorized: false });
+  it("allows only current-session status and denies cross-context tools", () => {
+    const policy = resolveFacebookInboundToolPolicy({
+      commandAuthorized: false,
+    });
 
     expect(policy).toMatchObject({
       source: "facebook_untrusted_default",
       tools: {
+        allow: ["session_status"],
         deny: expect.arrayContaining([
           "image_generate",
           "video_generate",
           "music_generate",
           "exec",
+          "memory_search",
+          "memory_get",
+          "group:memory",
           "write",
           "apply_patch",
           "group:fs",
           "group:runtime",
+          "group:messaging",
+          "group:automation",
+          "group:nodes",
+          "group:plugins",
+          "bundle-mcp",
+          "sessions_history",
+          "sessions_search",
+          "conversations_send",
+          "sessions_send",
+          "sessions_spawn",
         ]),
       },
     });
   });
 
   it("does not add a deny policy for command-authorized turns", () => {
-    expect(resolveFacebookInboundToolPolicy({ commandAuthorized: true })).toBeNull();
+    expect(
+      resolveFacebookInboundToolPolicy({ commandAuthorized: true }),
+    ).toBeNull();
   });
 
-  it("merges the default deny policy into OpenClaw runtime config", () => {
-    const policy = resolveFacebookInboundToolPolicy({ commandAuthorized: false });
+  it("replaces every persisted widening with a positive minimal policy", () => {
+    const policy = resolveFacebookInboundToolPolicy({
+      commandAuthorized: false,
+    });
     const hardened = applyFacebookInboundToolPolicyToConfig(
       {
-        tools: { deny: ["existing_tool"], allow: ["safe_tool"] },
+        tools: {
+          profile: "full",
+          allow: ["safe_tool"],
+          alsoAllow: ["sessions_history", "bundle-mcp"],
+          byProvider: { openai: { allow: ["group:sessions"] } },
+          codeMode: true,
+        },
       } as never,
-      policy
-    ) as { tools: { deny: string[]; allow: string[] } };
+      policy,
+    ) as {
+      tools: {
+        profile: string;
+        allow: string[];
+        deny: string[];
+        codeMode: boolean;
+        alsoAllow?: string[];
+        byProvider?: unknown;
+      };
+    };
 
-    expect(hardened.tools.allow).toEqual(["safe_tool"]);
+    expect(hardened.tools).toMatchObject({
+      profile: "minimal",
+      allow: ["session_status"],
+      codeMode: false,
+    });
+    expect(hardened.tools.alsoAllow).toBeUndefined();
+    expect(hardened.tools.byProvider).toBeUndefined();
     expect(hardened.tools.deny).toEqual(
-      expect.arrayContaining(["existing_tool", "image_generate", "exec", "group:fs"])
+      expect.arrayContaining([
+        "image_generate",
+        "exec",
+        "group:fs",
+        "sessions_history",
+        "conversations_send",
+        "group:messaging",
+        "group:automation",
+        "group:nodes",
+        "group:plugins",
+      ]),
     );
   });
 });
@@ -1813,35 +2134,49 @@ describe("resolveFacebookInboundToolPolicy", () => {
 describe("processMessengerEvent typing lifecycle", () => {
   it("turns typing off after delivering a visible final reply", async () => {
     const events: string[] = [];
-    const inboundRun = vi.fn(async (input: {
-      adapter: { resolveTurn: () => { delivery: { deliver: Function } } };
-    }) => {
-      const turn = input.adapter.resolveTurn();
-      await turn.delivery.deliver({ text: "Zichtbaar AI-antwoord" }, { kind: "final" });
-      return {
-        dispatched: true,
-        dispatchResult: { counts: { tool: 0, block: 0, final: 1 } },
-      };
-    });
+    const inboundRun = vi.fn(
+      async (input: {
+        adapter: { resolveTurn: () => { delivery: { deliver: Function } } };
+      }) => {
+        const turn = input.adapter.resolveTurn();
+        await turn.delivery.deliver(
+          { text: "Zichtbaar AI-antwoord" },
+          { kind: "final" },
+        );
+        return {
+          dispatched: true,
+          dispatchResult: { counts: { tool: 0, block: 0, final: 1 } },
+        };
+      },
+    );
     setGatewayRuntime(inboundRun);
-    vi.stubGlobal("fetch", vi.fn(async (_url: URL | RequestInfo | string, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as {
-        message?: { text?: string };
-        sender_action?: string;
-      };
-      if (body.sender_action) {
-        events.push(body.sender_action);
-      } else if (body.message?.text) {
-        events.push("message");
-      }
-      return new Response(JSON.stringify({
-        message_id: "visible-final",
-        recipient_id: "sender-mid-typing-success",
-      }), { status: 200 });
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: URL | RequestInfo | string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as {
+          message?: { text?: string };
+          sender_action?: string;
+        };
+        if (body.sender_action) {
+          events.push(body.sender_action);
+        } else if (body.message?.text) {
+          events.push("message");
+        }
+        return new Response(
+          JSON.stringify({
+            message_id: "visible-final",
+            recipient_id: "sender-mid-typing-success",
+          }),
+          { status: 200 },
+        );
+      }),
+    );
 
     await processGatewayTestEvent(
-      messengerTextEvent("mid-typing-success", "Schrijf een planning voor morgen"),
+      messengerTextEvent(
+        "mid-typing-success",
+        "Schrijf een planning voor morgen",
+      ),
     );
 
     expect(events).toEqual(["typing_on", "message", "typing_off"]);
@@ -1850,16 +2185,24 @@ describe("processMessengerEvent typing lifecycle", () => {
   it("turns typing off when OpenClaw produces no visible reply", async () => {
     setGatewayRuntime(vi.fn(async () => ({ dispatched: false })));
     const senderActions: string[] = [];
-    vi.stubGlobal("fetch", vi.fn(async (_url: URL | RequestInfo | string, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { sender_action?: string };
-      if (body.sender_action) {
-        senderActions.push(body.sender_action);
-      }
-      return new Response(JSON.stringify({}), { status: 200 });
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: URL | RequestInfo | string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as {
+          sender_action?: string;
+        };
+        if (body.sender_action) {
+          senderActions.push(body.sender_action);
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
 
     await processGatewayTestEvent(
-      messengerTextEvent("mid-typing-empty", "Schrijf een planning voor morgen"),
+      messengerTextEvent(
+        "mid-typing-empty",
+        "Schrijf een planning voor morgen",
+      ),
     );
 
     expect(senderActions).toEqual(["typing_on", "typing_off"]);
@@ -1868,24 +2211,31 @@ describe("processMessengerEvent typing lifecycle", () => {
   it("keeps typing active until overlapping turns for the same sender finish", async () => {
     let finishFirstTurn!: () => void;
     let finishSecondTurn!: () => void;
-    const firstTurn = new Promise<{ dispatched: false }>(resolve => {
+    const firstTurn = new Promise<{ dispatched: false }>((resolve) => {
       finishFirstTurn = () => resolve({ dispatched: false });
     });
-    const secondTurn = new Promise<{ dispatched: false }>(resolve => {
+    const secondTurn = new Promise<{ dispatched: false }>((resolve) => {
       finishSecondTurn = () => resolve({ dispatched: false });
     });
     const inboundRun = vi.fn((input: { raw: MessengerWebhookMessaging }) =>
-      input.raw.message?.mid === "mid-typing-overlap-first" ? firstTurn : secondTurn,
+      input.raw.message?.mid === "mid-typing-overlap-first"
+        ? firstTurn
+        : secondTurn,
     );
     setGatewayRuntime(inboundRun);
     const senderActions: string[] = [];
-    vi.stubGlobal("fetch", vi.fn(async (_url: URL | RequestInfo | string, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { sender_action?: string };
-      if (body.sender_action) {
-        senderActions.push(body.sender_action);
-      }
-      return new Response(JSON.stringify({}), { status: 200 });
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: URL | RequestInfo | string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as {
+          sender_action?: string;
+        };
+        if (body.sender_action) {
+          senderActions.push(body.sender_action);
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
     const firstEvent = messengerTextEvent(
       "mid-typing-overlap-first",
       "Schrijf een planning voor morgen",
@@ -1913,21 +2263,31 @@ describe("processMessengerEvent typing lifecycle", () => {
   });
 
   it("turns typing off and preserves the original OpenClaw error", async () => {
-    setGatewayRuntime(vi.fn(async () => {
-      throw new Error("model unavailable");
-    }));
+    setGatewayRuntime(
+      vi.fn(async () => {
+        throw new Error("model unavailable");
+      }),
+    );
     const senderActions: string[] = [];
-    vi.stubGlobal("fetch", vi.fn(async (_url: URL | RequestInfo | string, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { sender_action?: string };
-      if (body.sender_action) {
-        senderActions.push(body.sender_action);
-      }
-      return new Response(JSON.stringify({}), { status: 200 });
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: URL | RequestInfo | string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as {
+          sender_action?: string;
+        };
+        if (body.sender_action) {
+          senderActions.push(body.sender_action);
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
 
     await expect(
       processGatewayTestEvent(
-        messengerTextEvent("mid-typing-error", "Schrijf een planning voor morgen"),
+        messengerTextEvent(
+          "mid-typing-error",
+          "Schrijf een planning voor morgen",
+        ),
       ),
     ).rejects.toThrow("model unavailable");
     expect(senderActions).toEqual(["typing_on", "typing_off"]);
@@ -1937,51 +2297,76 @@ describe("processMessengerEvent typing lifecycle", () => {
     setGatewayRuntime(vi.fn(async () => ({ dispatched: false })));
     const senderActions: string[] = [];
     const runtimeError = vi.fn();
-    vi.stubGlobal("fetch", vi.fn(async (_url: URL | RequestInfo | string, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { sender_action?: string };
-      if (body.sender_action) {
-        senderActions.push(body.sender_action);
-      }
-      if (body.sender_action === "typing_on") {
-        throw new Error("request outcome unknown");
-      }
-      return new Response(JSON.stringify({}), { status: 200 });
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: URL | RequestInfo | string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as {
+          sender_action?: string;
+        };
+        if (body.sender_action) {
+          senderActions.push(body.sender_action);
+        }
+        if (body.sender_action === "typing_on") {
+          throw new Error("request outcome unknown");
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
 
     await processGatewayTestEvent(
-      messengerTextEvent("mid-typing-on-error", "Schrijf een planning voor morgen"),
+      messengerTextEvent(
+        "mid-typing-on-error",
+        "Schrijf een planning voor morgen",
+      ),
       {},
       { error: runtimeError },
     );
 
     expect(senderActions).toEqual(["typing_on", "typing_off"]);
     expect(runtimeError).toHaveBeenCalledTimes(1);
-    expect(String(runtimeError.mock.calls[0]?.[0])).toContain("typing_on failed");
+    expect(String(runtimeError.mock.calls[0]?.[0])).toContain(
+      "typing_on failed",
+    );
   });
 
   it("does not fail the turn when typing_off fails", async () => {
     setGatewayRuntime(vi.fn(async () => ({ dispatched: false })));
     const runtimeError = vi.fn();
-    vi.stubGlobal("fetch", vi.fn(async (_url: URL | RequestInfo | string, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { sender_action?: string };
-      if (body.sender_action === "typing_off") {
-        return new Response(JSON.stringify({ error: { message: "off failed" } }), {
-          status: 500,
-        });
-      }
-      return new Response(JSON.stringify({}), { status: 200 });
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: URL | RequestInfo | string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as {
+          sender_action?: string;
+        };
+        if (body.sender_action === "typing_off") {
+          return new Response(
+            JSON.stringify({ error: { message: "off failed" } }),
+            {
+              status: 500,
+            },
+          );
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
 
     await expect(
       processGatewayTestEvent(
-        messengerTextEvent("mid-typing-off-error", "Schrijf een planning voor morgen"),
+        messengerTextEvent(
+          "mid-typing-off-error",
+          "Schrijf een planning voor morgen",
+        ),
         {},
         { error: runtimeError },
       ),
     ).resolves.toBeUndefined();
     expect(runtimeError).toHaveBeenCalledTimes(1);
-    expect(String(runtimeError.mock.calls[0]?.[0])).toContain("typing_off failed");
-    expect(String(runtimeError.mock.calls[0]?.[0])).not.toContain("sender-mid-typing-off-error");
+    expect(String(runtimeError.mock.calls[0]?.[0])).toContain(
+      "typing_off failed",
+    );
+    expect(String(runtimeError.mock.calls[0]?.[0])).not.toContain(
+      "sender-mid-typing-off-error",
+    );
   });
 });
 
@@ -1998,18 +2383,21 @@ describe("processMessengerEvent plan AI-answer quota", () => {
     delete process.env.LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED;
     const inboundRun = vi.fn(async () => ({ dispatched: false }));
     setGatewayRuntime(inboundRun);
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({}), { status: 200 }),
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({}), { status: 200 }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
     await processGatewayTestEvent(
-      messengerTextEvent("mid-ai-quota-off", "Schrijf een planning voor morgen"),
+      messengerTextEvent(
+        "mid-ai-quota-off",
+        "Schrijf een planning voor morgen",
+      ),
     );
 
     expect(inboundRun).toHaveBeenCalledTimes(1);
     expect(
-      fetchMock.mock.calls.some(call =>
+      fetchMock.mock.calls.some((call) =>
         String(call[0]).includes("/ai-answer-quota/"),
       ),
     ).toBe(false);
@@ -2027,7 +2415,10 @@ describe("processMessengerEvent plan AI-answer quota", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await processGatewayTestEvent(
-      messengerTextEvent("mid-ai-quota-duplicate", "Schrijf een planning voor morgen"),
+      messengerTextEvent(
+        "mid-ai-quota-duplicate",
+        "Schrijf een planning voor morgen",
+      ),
     );
 
     expect(inboundRun).not.toHaveBeenCalled();
@@ -2037,45 +2428,51 @@ describe("processMessengerEvent plan AI-answer quota", () => {
   it.each([
     { lang: "nl" as const, expected: "huidige plan" },
     { lang: "en" as const, expected: "current plan" },
-  ])("blocks OpenClaw with generic $lang copy when exhausted", async ({ lang, expected }) => {
-    const inboundRun = vi.fn();
-    setGatewayRuntime(inboundRun);
-    const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
-      if (String(url).includes("/ai-answer-quota/reserve")) {
-        return new Response(JSON.stringify({ status: "exhausted" }), {
-          status: 200,
-        });
-      }
-      return new Response(JSON.stringify({
-        message_id: "quota-cta",
-        recipient_id: "sender-mid-ai-quota-exhausted",
-      }), {
-        status: 200,
+  ])(
+    "blocks OpenClaw with generic $lang copy when exhausted",
+    async ({ lang, expected }) => {
+      const inboundRun = vi.fn();
+      setGatewayRuntime(inboundRun);
+      const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
+        if (String(url).includes("/ai-answer-quota/reserve")) {
+          return new Response(JSON.stringify({ status: "exhausted" }), {
+            status: 200,
+          });
+        }
+        return new Response(
+          JSON.stringify({
+            message_id: "quota-cta",
+            recipient_id: "sender-mid-ai-quota-exhausted",
+          }),
+          {
+            status: 200,
+          },
+        );
       });
-    });
-    vi.stubGlobal("fetch", fetchMock);
+      vi.stubGlobal("fetch", fetchMock);
 
-    await processGatewayTestEvent(
-      messengerTextEvent(
-        `mid-ai-quota-exhausted-${lang}`,
-        "Schrijf een planning voor morgen",
-      ),
-      { defaultLang: lang },
-    );
+      await processGatewayTestEvent(
+        messengerTextEvent(
+          `mid-ai-quota-exhausted-${lang}`,
+          "Schrijf een planning voor morgen",
+        ),
+        { defaultLang: lang },
+      );
 
-    expect(inboundRun).not.toHaveBeenCalled();
-    const graphCall = fetchMock.mock.calls.find(call => {
-      if (!String(call[0]).includes("graph.facebook.com")) return false;
-      const body = JSON.parse(String((call[1] as RequestInit).body));
-      return typeof body.message?.text === "string";
-    });
-    const body = JSON.parse(String((graphCall?.[1] as RequestInit).body));
-    expect(body.message.text).toContain(expected);
-    expect(body.message.text).not.toContain("Startpilot");
-    expect(body.message.text).not.toContain("300");
-    expect(body.message.text).not.toContain("upgrade=startpilot");
-    expect(body.message.text).toContain("https://leaderbot.live/");
-  });
+      expect(inboundRun).not.toHaveBeenCalled();
+      const graphCall = fetchMock.mock.calls.find((call) => {
+        if (!String(call[0]).includes("graph.facebook.com")) return false;
+        const body = JSON.parse(String((call[1] as RequestInit).body));
+        return typeof body.message?.text === "string";
+      });
+      const body = JSON.parse(String((graphCall?.[1] as RequestInit).body));
+      expect(body.message.text).toContain(expected);
+      expect(body.message.text).not.toContain("Startpilot");
+      expect(body.message.text).not.toContain("300");
+      expect(body.message.text).not.toContain("upgrade=startpilot");
+      expect(body.message.text).toContain("https://leaderbot.live/");
+    },
+  );
 
   it("fails closed with localized English copy when quota status is unavailable", async () => {
     const inboundRun = vi.fn();
@@ -2105,7 +2502,7 @@ describe("processMessengerEvent plan AI-answer quota", () => {
     );
 
     expect(inboundRun).not.toHaveBeenCalled();
-    const graphCall = fetchMock.mock.calls.find(call =>
+    const graphCall = fetchMock.mock.calls.find((call) =>
       String(call[0]).includes("graph.facebook.com"),
     );
     const body = JSON.parse(String((graphCall?.[1] as RequestInit).body));
@@ -2113,108 +2510,247 @@ describe("processMessengerEvent plan AI-answer quota", () => {
   });
 
   it("commits once only after a visible final reply", async () => {
-    const inboundRun = vi.fn(async (input: {
-      adapter: { resolveTurn: () => { delivery: { deliver: Function } } };
-    }) => {
-      const turn = input.adapter.resolveTurn();
-      await turn.delivery.deliver({ text: "Zichtbaar AI-antwoord" }, { kind: "final" });
-      return {
-        dispatched: true,
-        dispatchResult: { counts: { tool: 0, block: 0, final: 1 } },
-      };
-    });
+    const inboundRun = vi.fn(
+      async (input: {
+        adapter: { resolveTurn: () => { delivery: { deliver: Function } } };
+      }) => {
+        const turn = input.adapter.resolveTurn();
+        await turn.delivery.deliver(
+          { text: "Zichtbaar AI-antwoord" },
+          { kind: "final" },
+        );
+        return {
+          dispatched: true,
+          dispatchResult: { counts: { tool: 0, block: 0, final: 1 } },
+        };
+      },
+    );
     setGatewayRuntime(inboundRun);
     const finalizeBodies: Array<Record<string, unknown>> = [];
-    const fetchMock = vi.fn(async (url: URL | RequestInfo | string, init?: RequestInit) => {
-      const requestUrl = String(url);
-      if (requestUrl.includes("/ai-answer-quota/reserve")) {
+    const fetchMock = vi.fn(
+      async (url: URL | RequestInfo | string, init?: RequestInit) => {
+        const requestUrl = String(url);
+        if (requestUrl.includes("/ai-answer-quota/reserve")) {
+          return new Response(
+            JSON.stringify({ status: "reserved", reservationId }),
+            { status: 200 },
+          );
+        }
+        if (requestUrl.includes("/ai-answer-quota/finalize")) {
+          finalizeBodies.push(JSON.parse(String(init?.body)));
+          return new Response(JSON.stringify({ status: "finalized" }), {
+            status: 200,
+          });
+        }
+        if (requestUrl.includes("/ai-answer-quota/delivery-started")) {
+          return new Response(JSON.stringify({ status: "delivery_started" }), {
+            status: 200,
+          });
+        }
         return new Response(
-          JSON.stringify({ status: "reserved", reservationId }),
-          { status: 200 },
+          JSON.stringify({
+            message_id: "visible-final",
+            recipient_id: "sender-mid-ai-quota-commit",
+          }),
+          {
+            status: 200,
+          },
         );
-      }
-      if (requestUrl.includes("/ai-answer-quota/finalize")) {
-        finalizeBodies.push(JSON.parse(String(init?.body)));
-        return new Response(JSON.stringify({ status: "finalized" }), {
-          status: 200,
-        });
-      }
-      return new Response(JSON.stringify({
-        message_id: "visible-final",
-        recipient_id: "sender-mid-ai-quota-commit",
-      }), {
-        status: 200,
-      });
-    });
+      },
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await processGatewayTestEvent(
-      messengerTextEvent("mid-ai-quota-commit", "Schrijf een planning voor morgen"),
+      messengerTextEvent(
+        "mid-ai-quota-commit",
+        "Schrijf een planning voor morgen",
+      ),
     );
 
     expect(finalizeBodies).toEqual([
-      { pageId: "page-1", reservationId, outcome: "committed" },
+      expect.objectContaining({
+        pageId: "page-1",
+        reservationId,
+        outcome: "committed",
+        ownerToken: expect.any(String),
+      }),
+    ]);
+  });
+
+  it("closes a known-rejected delivery attempt before OpenClaw can send a second reply", async () => {
+    const deliveryErrors: string[] = [];
+    const inboundRun = vi.fn(
+      async (input: {
+        adapter: { resolveTurn: () => { delivery: { deliver: Function } } };
+      }) => {
+        const deliver = input.adapter.resolveTurn().delivery.deliver;
+        for (const text of ["Eerste antwoord", "Tweede antwoord"]) {
+          try {
+            await deliver({ text }, { kind: "final" });
+          } catch (error) {
+            deliveryErrors.push(
+              error instanceof Error ? error.message : String(error),
+            );
+          }
+        }
+        return { dispatched: false };
+      },
+    );
+    setGatewayRuntime(inboundRun);
+    const finalizeBodies: Array<Record<string, unknown>> = [];
+    let graphMessageCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL | RequestInfo | string, init?: RequestInit) => {
+        const requestUrl = String(url);
+        if (requestUrl.includes("/ai-answer-quota/reserve")) {
+          return new Response(
+            JSON.stringify({ status: "reserved", reservationId }),
+            { status: 200 },
+          );
+        }
+        if (requestUrl.includes("/ai-answer-quota/delivery-started")) {
+          return new Response(JSON.stringify({ status: "delivery_started" }), {
+            status: 200,
+          });
+        }
+        if (requestUrl.includes("/ai-answer-quota/delivery-known-rejected")) {
+          return new Response(
+            JSON.stringify({ status: "delivery_known_rejected" }),
+            { status: 200 },
+          );
+        }
+        if (requestUrl.includes("/ai-answer-quota/finalize")) {
+          finalizeBodies.push(JSON.parse(String(init?.body)));
+          return new Response(JSON.stringify({ status: "finalized" }), {
+            status: 200,
+          });
+        }
+        const body = JSON.parse(String(init?.body));
+        if (body.message?.text) {
+          graphMessageCalls += 1;
+          if (graphMessageCalls === 1) {
+            return new Response(
+              JSON.stringify({ error: { message: "definite reject" } }),
+              { status: 400 },
+            );
+          }
+          return new Response(
+            JSON.stringify({
+              message_id: "must-not-send",
+              recipient_id: "sender-mid-ai-quota-rejected",
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
+
+    await processGatewayTestEvent(
+      messengerTextEvent(
+        "mid-ai-quota-rejected",
+        "Schrijf een planning voor morgen",
+      ),
+    );
+
+    expect(graphMessageCalls).toBe(1);
+    expect(deliveryErrors).toEqual([
+      expect.stringContaining("Messenger API"),
+      "paid AI answer delivery attempt was already rejected",
+    ]);
+    expect(finalizeBodies).toEqual([
+      expect.objectContaining({
+        pageId: "page-1",
+        reservationId,
+        outcome: "released",
+        ownerToken: expect.any(String),
+      }),
     ]);
   });
 
   it("releases when OpenClaw produces no visible final reply", async () => {
     setGatewayRuntime(vi.fn(async () => ({ dispatched: false })));
     const finalizeBodies: Array<Record<string, unknown>> = [];
-    vi.stubGlobal("fetch", vi.fn(async (url: URL | RequestInfo | string, init?: RequestInit) => {
-      const requestUrl = String(url);
-      if (requestUrl.includes("/ai-answer-quota/reserve")) {
-        return new Response(
-          JSON.stringify({ status: "reserved", reservationId }),
-          { status: 200 },
-        );
-      }
-      if (requestUrl.includes("/ai-answer-quota/finalize")) {
-        finalizeBodies.push(JSON.parse(String(init?.body)));
-        return new Response(JSON.stringify({ status: "finalized" }), {
-          status: 200,
-        });
-      }
-      return new Response(JSON.stringify({}), { status: 200 });
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL | RequestInfo | string, init?: RequestInit) => {
+        const requestUrl = String(url);
+        if (requestUrl.includes("/ai-answer-quota/reserve")) {
+          return new Response(
+            JSON.stringify({ status: "reserved", reservationId }),
+            { status: 200 },
+          );
+        }
+        if (requestUrl.includes("/ai-answer-quota/finalize")) {
+          finalizeBodies.push(JSON.parse(String(init?.body)));
+          return new Response(JSON.stringify({ status: "finalized" }), {
+            status: 200,
+          });
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
 
     await processGatewayTestEvent(
-      messengerTextEvent("mid-ai-quota-release", "Schrijf een planning voor morgen"),
+      messengerTextEvent(
+        "mid-ai-quota-release",
+        "Schrijf een planning voor morgen",
+      ),
     );
 
     expect(finalizeBodies).toEqual([
-      { pageId: "page-1", reservationId, outcome: "released" },
+      expect.objectContaining({
+        pageId: "page-1",
+        reservationId,
+        outcome: "released",
+        ownerToken: expect.any(String),
+      }),
     ]);
   });
 
   it("releases when OpenClaw fails before a final reply", async () => {
-    setGatewayRuntime(vi.fn(async () => {
-      throw new Error("model unavailable");
-    }));
+    setGatewayRuntime(
+      vi.fn(async () => {
+        throw new Error("model unavailable");
+      }),
+    );
     const finalizeBodies: Array<Record<string, unknown>> = [];
-    vi.stubGlobal("fetch", vi.fn(async (url: URL | RequestInfo | string, init?: RequestInit) => {
-      const requestUrl = String(url);
-      if (requestUrl.includes("/ai-answer-quota/reserve")) {
-        return new Response(
-          JSON.stringify({ status: "reserved", reservationId }),
-          { status: 200 },
-        );
-      }
-      if (requestUrl.includes("/ai-answer-quota/finalize")) {
-        finalizeBodies.push(JSON.parse(String(init?.body)));
-        return new Response(JSON.stringify({ status: "finalized" }), {
-          status: 200,
-        });
-      }
-      return new Response(JSON.stringify({}), { status: 200 });
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL | RequestInfo | string, init?: RequestInit) => {
+        const requestUrl = String(url);
+        if (requestUrl.includes("/ai-answer-quota/reserve")) {
+          return new Response(
+            JSON.stringify({ status: "reserved", reservationId }),
+            { status: 200 },
+          );
+        }
+        if (requestUrl.includes("/ai-answer-quota/finalize")) {
+          finalizeBodies.push(JSON.parse(String(init?.body)));
+          return new Response(JSON.stringify({ status: "finalized" }), {
+            status: 200,
+          });
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
 
     await expect(
       processGatewayTestEvent(
-        messengerTextEvent("mid-ai-quota-error", "Schrijf een planning voor morgen"),
+        messengerTextEvent(
+          "mid-ai-quota-error",
+          "Schrijf een planning voor morgen",
+        ),
       ),
     ).rejects.toThrow("model unavailable");
     expect(finalizeBodies).toEqual([
-      { pageId: "page-1", reservationId, outcome: "released" },
+      expect.objectContaining({
+        pageId: "page-1",
+        reservationId,
+        outcome: "released",
+        ownerToken: expect.any(String),
+      }),
     ]);
   });
 });
@@ -2224,7 +2760,9 @@ describe("processMessengerEvent tool policy", () => {
     const inboundRun = vi.fn(async () => ({ dispatched: false }));
     setGatewayRuntime(inboundRun);
     const fetchMock = vi.fn(async (url: URL | RequestInfo | string) => {
-      expect(String(url)).toBe("https://graph.facebook.com/v20.0/page-1/messages");
+      expect(String(url)).toBe(
+        "https://graph.facebook.com/v20.0/page-1/messages",
+      );
       return new Response(JSON.stringify({}), {
         headers: { "content-type": "application/json" },
         status: 200,
@@ -2233,14 +2771,24 @@ describe("processMessengerEvent tool policy", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await processGatewayTestEvent(
-      messengerTextEvent("mid-tool-policy", "Schrijf een korte planning voor morgen"),
+      messengerTextEvent(
+        "mid-tool-policy",
+        "Schrijf een korte planning voor morgen",
+      ),
     );
 
     expect(inboundRun).toHaveBeenCalledTimes(1);
     const runArg = inboundRun.mock.calls[0]?.[0] as {
       adapter: {
         resolveTurn: () => {
-          cfg: { tools?: { deny?: string[] } };
+          cfg: {
+            tools?: {
+              profile?: string;
+              allow?: string[];
+              deny?: string[];
+              codeMode?: boolean;
+            };
+          };
           ctxPayload: Record<string, unknown>;
         };
       };
@@ -2249,24 +2797,122 @@ describe("processMessengerEvent tool policy", () => {
     const ctxPayload = resolvedTurn.ctxPayload;
 
     expect(ctxPayload.CommandAuthorized).toBe(false);
+    expect(resolvedTurn.cfg.tools).toMatchObject({
+      profile: "minimal",
+      allow: ["session_status"],
+      codeMode: false,
+    });
     expect(resolvedTurn.cfg.tools?.deny).toEqual(
-      expect.arrayContaining(["image_generate", "video_generate", "exec", "group:fs"])
+      expect.arrayContaining([
+        "image_generate",
+        "video_generate",
+        "exec",
+        "group:fs",
+        "group:messaging",
+        "group:automation",
+        "group:nodes",
+        "group:plugins",
+        "bundle-mcp",
+        "sessions_history",
+        "sessions_search",
+        "conversations_send",
+        "sessions_send",
+        "sessions_spawn",
+      ]),
     );
     expect(ctxPayload.ToolPolicy).toMatchObject({
       source: "facebook_untrusted_default",
       tools: {
+        allow: ["session_status"],
         deny: expect.arrayContaining([
           "image_generate",
           "video_generate",
           "exec",
           "write",
           "group:fs",
+          "sessions_history",
+          "conversations_send",
         ]),
       },
     });
-    expect(ctxPayload.Tools).toEqual((ctxPayload.ToolPolicy as { tools: unknown }).tools);
+    expect(ctxPayload.Tools).toEqual(
+      (ctxPayload.ToolPolicy as { tools: unknown }).tools,
+    );
     expect(ctxPayload.ToolPolicySource).toBe("facebook_untrusted_default");
-    expect(JSON.stringify(ctxPayload.ToolPolicy)).not.toContain("sender-mid-tool-policy");
+    expect(JSON.stringify(ctxPayload.ToolPolicy)).not.toContain(
+      "sender-mid-tool-policy",
+    );
+  });
+
+  it("keeps command-shaped public messages untrusted", async () => {
+    process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD = "1";
+    const inboundRun = vi.fn(async () => ({ dispatched: false }));
+    setGatewayRuntime(inboundRun);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({}), {
+            headers: { "content-type": "application/json" },
+            status: 200,
+          }),
+      ),
+    );
+
+    const event = messengerTextEvent("mid-public-command-policy", "/models");
+    await processMessengerEvent({
+      event,
+      cfg: {
+        ...messengerTestConfig(),
+        session: { dmScope: "per-account-channel-peer" },
+      } as never,
+      account: messengerTestAccount(),
+      runtime: { log: () => {}, error: () => {}, exit: () => {} },
+      trace: {
+        accountId: "default",
+        reqId: "req-mid-public-command-policy",
+        senderId: event.sender?.id ?? "",
+        messageId: event.message?.mid ?? "",
+        createdAt: Date.now(),
+      },
+    } as never);
+
+    expect(inboundRun).toHaveBeenCalledTimes(1);
+    const turn = (
+      inboundRun.mock.calls[0]?.[0] as {
+        adapter: {
+          resolveTurn: () => {
+            cfg: { tools?: { deny?: string[] } };
+            ctxPayload: Record<string, unknown>;
+          };
+        };
+      }
+    ).adapter.resolveTurn();
+    expect(turn.ctxPayload.CommandAuthorized).toBe(false);
+    expect(
+      (
+        turn.cfg.tools as {
+          allow?: string[];
+          profile?: string;
+          codeMode?: boolean;
+        }
+      )?.allow,
+    ).toEqual(["session_status"]);
+    expect(turn.cfg.tools?.deny).toEqual(
+      expect.arrayContaining([
+        "exec",
+        "group:fs",
+        "memory_search",
+        "memory_get",
+        "group:memory",
+        "sessions_history",
+        "conversations_send",
+        "group:messaging",
+        "group:automation",
+        "group:nodes",
+        "group:plugins",
+      ]),
+    );
   });
 });
 
@@ -2302,7 +2948,11 @@ describe("buildMessengerAgentTextForAttachments", () => {
       buildMessengerAgentTextForAttachments({
         text: "",
         attachments: [
-          { type: "audio", kind: "audio", url: "https://lookaside.facebook.com/voice.mp4" },
+          {
+            type: "audio",
+            kind: "audio",
+            url: "https://lookaside.facebook.com/voice.mp4",
+          },
         ],
         audioTranscripts: [{ mediaIndex: 0, text: "ja, gebruik de fallback" }],
       }),
@@ -2314,11 +2964,19 @@ describe("buildMessengerAgentTextForAttachments", () => {
       buildMessengerAgentTextForAttachments({
         text: "extra context",
         attachments: [
-          { type: "audio", kind: "audio", url: "https://lookaside.facebook.com/voice.mp4" },
+          {
+            type: "audio",
+            kind: "audio",
+            url: "https://lookaside.facebook.com/voice.mp4",
+          },
         ],
-        audioTranscripts: [{ mediaIndex: 0, text: "maak de afbeelding opnieuw" }],
+        audioTranscripts: [
+          { mediaIndex: 0, text: "maak de afbeelding opnieuw" },
+        ],
       }),
-    ).toBe("extra context\n\nTranscriptie voicebericht:\nmaak de afbeelding opnieuw");
+    ).toBe(
+      "extra context\n\nTranscriptie voicebericht:\nmaak de afbeelding opnieuw",
+    );
   });
 
   it("falls back to an audio attachment instruction when no transcript exists", () => {
@@ -2326,7 +2984,11 @@ describe("buildMessengerAgentTextForAttachments", () => {
       buildMessengerAgentTextForAttachments({
         text: "",
         attachments: [
-          { type: "audio", kind: "audio", url: "https://lookaside.facebook.com/voice.mp4" },
+          {
+            type: "audio",
+            kind: "audio",
+            url: "https://lookaside.facebook.com/voice.mp4",
+          },
         ],
       }),
     ).toContain("voice/audio-bericht");
@@ -2337,7 +2999,11 @@ describe("buildMessengerAgentTextForAttachments", () => {
       buildMessengerAgentTextForAttachments({
         text: "",
         attachments: [
-          { type: "image", kind: "image", url: "https://lookaside.facebook.com/photo.jpg" },
+          {
+            type: "image",
+            kind: "image",
+            url: "https://lookaside.facebook.com/photo.jpg",
+          },
         ],
         lang: "en",
       }),
@@ -2346,7 +3012,11 @@ describe("buildMessengerAgentTextForAttachments", () => {
       buildMessengerAgentTextForAttachments({
         text: "",
         attachments: [
-          { type: "audio", kind: "audio", url: "https://lookaside.facebook.com/voice.mp4" },
+          {
+            type: "audio",
+            kind: "audio",
+            url: "https://lookaside.facebook.com/voice.mp4",
+          },
         ],
         audioTranscripts: [{ mediaIndex: 0, text: "please retry" }],
         lang: "en",
@@ -2355,10 +3025,255 @@ describe("buildMessengerAgentTextForAttachments", () => {
   });
 });
 
+describe("processMessengerEvent attachment cleanup", () => {
+  function imageContextEvent(mid: string): MessengerWebhookMessaging {
+    const event = messengerTextEvent(mid, "Wat staat er op deze foto?");
+    event.message!.attachments = [
+      {
+        type: "image",
+        payload: { url: "https://lookaside.facebook.com/private-photo.png" },
+      },
+    ];
+    return event;
+  }
+
+  function installMediaAndGraphFetch() {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL | RequestInfo | string) => {
+        if (String(url).startsWith("https://lookaside.facebook.com/")) {
+          return new Response(Buffer.from("private-image-bytes"), {
+            headers: { "content-type": "image/png" },
+            status: 200,
+          });
+        }
+        return new Response(
+          JSON.stringify({
+            message_id: "attachment-cleanup-action",
+            recipient_id: "attachment-sender",
+          }),
+          { headers: { "content-type": "application/json" }, status: 200 },
+        );
+      }),
+    );
+  }
+
+  it("removes downloaded media after a successful OpenClaw turn", async () => {
+    let mediaPath = "";
+    setGatewayRuntime(
+      vi.fn(
+        async (input: {
+          adapter: {
+            resolveTurn: () => { ctxPayload: { MediaPaths?: string[] } };
+          };
+        }) => {
+          const turn = input.adapter.resolveTurn();
+          mediaPath = String(turn.ctxPayload.MediaPaths?.[0] ?? "");
+          expect(mediaPath).not.toBe("");
+          await expect(access(mediaPath)).resolves.toBeUndefined();
+          return { dispatched: false };
+        },
+      ),
+    );
+    installMediaAndGraphFetch();
+
+    await processGatewayTestEvent(imageContextEvent("media-cleanup-success"));
+
+    await expect(access(mediaPath)).rejects.toThrow();
+  });
+
+  it("removes downloaded media when the OpenClaw turn fails", async () => {
+    let mediaPath = "";
+    setGatewayRuntime(
+      vi.fn(
+        async (input: {
+          adapter: {
+            resolveTurn: () => { ctxPayload: { MediaPaths?: string[] } };
+          };
+        }) => {
+          const turn = input.adapter.resolveTurn();
+          mediaPath = String(turn.ctxPayload.MediaPaths?.[0] ?? "");
+          expect(mediaPath).not.toBe("");
+          await expect(access(mediaPath)).resolves.toBeUndefined();
+          throw new Error("simulated OpenClaw failure");
+        },
+      ),
+    );
+    installMediaAndGraphFetch();
+
+    await expect(
+      processGatewayTestEvent(imageContextEvent("media-cleanup-failure")),
+    ).rejects.toThrow("simulated OpenClaw failure");
+
+    await expect(access(mediaPath)).rejects.toThrow();
+  });
+});
+
+describe("processMessengerEvent public session isolation", () => {
+  it("fails before transcript dispatch when the effective public DM scope is unsafe", async () => {
+    process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD = "1";
+    const inboundRun = setGatewayRuntime(
+      vi.fn(async () => ({ dispatched: false })),
+    );
+
+    await expect(
+      processGatewayTestEvent(
+        messengerTextEvent("unsafe-public-session", "Vertel me iets"),
+      ),
+    ).rejects.toThrow("Public Messenger session isolation is unavailable");
+
+    expect(inboundRun).not.toHaveBeenCalled();
+  });
+
+  it("fails before transcript dispatch when a public Page routes to another shared agent", async () => {
+    process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD = "1";
+    const inboundRun = setGatewayRuntime(
+      vi.fn(async () => ({ dispatched: false })),
+    );
+    const event = messengerTextEvent("unsafe-public-agent", "Vertel me iets");
+
+    await expect(
+      processMessengerEvent({
+        event,
+        cfg: {
+          ...messengerTestConfig(),
+          session: { dmScope: "per-account-channel-peer" },
+          bindings: [
+            {
+              agentId: "support",
+              match: { channel: "facebook", accountId: "default" },
+            },
+          ],
+        } as never,
+        account: messengerTestAccount(),
+        runtime: { log: () => {}, error: () => {}, exit: () => {} },
+        trace: {
+          accountId: "default",
+          reqId: "req-unsafe-public-agent",
+          senderId: event.sender?.id ?? "",
+          messageId: event.message?.mid ?? "",
+          createdAt: Date.now(),
+        },
+      } as never),
+    ).rejects.toThrow("Public Messenger agent isolation is unavailable");
+
+    expect(inboundRun).not.toHaveBeenCalled();
+  });
+});
+
+describe("Messenger gateway privacy erasure", () => {
+  it("evicts only the exact account Page and sender prompt memory", () => {
+    const erased = {
+      accountId: "tenant-a",
+      pageId: "page-a",
+      senderId: "sender-shared",
+    };
+    const retained = {
+      accountId: "tenant-b",
+      pageId: "page-b",
+      senderId: "sender-shared",
+    };
+    const reply =
+      "Prompt: Maak een fotorealistische rode robot in een Belgisch stadspark";
+    rememberMessengerAssistantPrompt({
+      ...erased,
+      text: reply,
+      messageId: "message-a",
+    });
+    rememberMessengerAssistantPrompt({
+      ...retained,
+      text: reply,
+      messageId: "message-b",
+    });
+
+    clearMessengerAssistantMemoryForErasure(erased);
+
+    expect(
+      resolveMessengerImagePromptFromUserText({
+        ...erased,
+        text: "Maak deze afbeelding",
+        replyToMessageId: "message-a",
+      }),
+    ).toBeNull();
+    expect(
+      resolveMessengerImagePromptFromUserText({
+        ...retained,
+        text: "Maak deze afbeelding",
+        replyToMessageId: "message-b",
+      }),
+    ).toContain("rode robot");
+  });
+
+  it("refuses the archive-retaining gateway delete path for an existing session", async () => {
+    const getSessionEntry = vi.fn(() => ({ sessionId: "session-1" }));
+    const gatewayRequest = vi.fn();
+    setGatewayRuntime(vi.fn(), { getSessionEntry, gatewayRequest });
+
+    await expect(
+      eraseMessengerGatewayConversationForPrivacy({
+        cfg: messengerTestConfig(),
+        account: messengerTestAccount(),
+        senderId: "sender-private",
+      }),
+    ).rejects.toThrow(
+      "exact session transcript erasure capability is unavailable",
+    );
+
+    const sessionKey = getSessionEntry.mock.calls[0]?.[0]?.sessionKey;
+    expect(sessionKey).toEqual(expect.any(String));
+    expect(getSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey,
+        readConsistency: "latest",
+      }),
+    );
+    expect(gatewayRequest).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before authoritative deletion when session erasure is unavailable", async () => {
+    const gatewayRequest = vi.fn();
+    setGatewayRuntime(vi.fn(), {
+      getSessionEntry: vi.fn(() => ({ sessionId: "session-1" })),
+      gatewayIsAvailable: vi.fn(async () => false),
+      gatewayRequest,
+    });
+
+    await expect(
+      eraseMessengerGatewayConversationForPrivacy({
+        cfg: messengerTestConfig(),
+        account: messengerTestAccount(),
+        senderId: "sender-private",
+      }),
+    ).rejects.toThrow("session erasure runtime is unavailable");
+    expect(gatewayRequest).not.toHaveBeenCalled();
+  });
+
+  it("does not forward authoritative deletion while an exact transcript purge is blocked", async () => {
+    process.env.LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN = "internal-token";
+    process.env.LEADERBOT_IMAGE_GEN_URL = "https://image-gen.example.test";
+    setGatewayRuntime(vi.fn(), {
+      getSessionEntry: vi.fn(() => ({ sessionId: "session-1" })),
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      processGatewayTestEvent(
+        messengerTextEvent("mid-delete-transcript-blocked", "Delete my data"),
+        { leaderbotBridgeEnabled: true },
+      ),
+    ).rejects.toThrow(
+      "exact session transcript erasure capability is unavailable",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("downloadMessengerMediaAttachment redirects", () => {
-  function attachment(url = "https://lookaside.facebook.com/start"): Parameters<
-    typeof downloadMessengerMediaAttachment
-  >[0]["attachment"] {
+  function attachment(
+    url = "https://lookaside.facebook.com/start",
+  ): Parameters<typeof downloadMessengerMediaAttachment>[0]["attachment"] {
     return { kind: "image", url };
   }
 
@@ -2402,15 +3317,18 @@ describe("downloadMessengerMediaAttachment redirects", () => {
     expect(media?.path).toMatch(/messenger-[a-f0-9]{32}\.png$/);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
-    expect(fetchMock.mock.calls[1]?.[0]).toEqual(new URL("https://cdn.fbcdn.net/photo.png"));
+    expect(fetchMock.mock.calls[1]?.[0]).toEqual(
+      new URL("https://cdn.fbcdn.net/photo.png"),
+    );
   });
 
   it("rejects a redirect to http media", async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(null, {
-        headers: { location: "http://cdn.fbcdn.net/photo.png" },
-        status: 302,
-      }),
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(null, {
+          headers: { location: "http://cdn.fbcdn.net/photo.png" },
+          status: 302,
+        }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -2425,11 +3343,12 @@ describe("downloadMessengerMediaAttachment redirects", () => {
   });
 
   it("rejects a redirect to a non-Facebook media host", async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(null, {
-        headers: { location: "https://example.test/photo.png" },
-        status: 302,
-      }),
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(null, {
+          headers: { location: "https://example.test/photo.png" },
+          status: 302,
+        }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -2444,11 +3363,12 @@ describe("downloadMessengerMediaAttachment redirects", () => {
   });
 
   it("rejects redirect loops once the redirect limit is reached", async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(null, {
-        headers: { location: "https://lookaside.facebook.com/start" },
-        status: 302,
-      }),
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(null, {
+          headers: { location: "https://lookaside.facebook.com/start" },
+          status: 302,
+        }),
     );
     vi.stubGlobal("fetch", fetchMock);
 

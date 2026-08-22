@@ -4,8 +4,9 @@ import {
   createLeaderbotAiAnswerIdempotencyKey,
   finalizeLeaderbotAiAnswerQuota,
   isLeaderbotAiAnswerEnforcementEnabled,
+  markLeaderbotAiAnswerDeliveryStarted,
   reserveLeaderbotAiAnswerQuota,
-} from "./leaderbot-answer-quota.js";
+} from "./leaderbot-bridge.js";
 
 const originalEnv = { ...process.env };
 
@@ -84,6 +85,7 @@ describe("Leaderbot AI-answer quota bridge", () => {
       reserveLeaderbotAiAnswerQuota({
         pageId: "page-1",
         idempotencyKey: `messenger_ai_answer:${"a".repeat(64)}`,
+        ownerToken: "11111111-1111-4111-8111-111111111111",
       }),
     ).resolves.toEqual({
       status: "reserved",
@@ -97,6 +99,7 @@ describe("Leaderbot AI-answer quota bridge", () => {
     expect(JSON.parse(String(init.body))).toEqual({
       pageId: "page-1",
       idempotencyKey: `messenger_ai_answer:${"a".repeat(64)}`,
+      ownerToken: "11111111-1111-4111-8111-111111111111",
     });
   });
 
@@ -108,6 +111,7 @@ describe("Leaderbot AI-answer quota bridge", () => {
       reserveLeaderbotAiAnswerQuota({
         pageId: "page-1",
         idempotencyKey: `messenger_ai_answer:${"b".repeat(64)}`,
+        ownerToken: "11111111-1111-4111-8111-111111111111",
       }),
     ).resolves.toEqual({ status: "unavailable" });
 
@@ -119,8 +123,35 @@ describe("Leaderbot AI-answer quota bridge", () => {
       finalizeLeaderbotAiAnswerQuota({
         pageId: "page-1",
         reservationId: "16be1d70-9ed5-4b32-80cc-98be433581dc",
+        ownerToken: "11111111-1111-4111-8111-111111111111",
         outcome: "committed",
       }),
     ).resolves.toBe(true);
+  });
+
+  it("retries a lost delivery-fence response once with the same attempt token", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("response lost"))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ status: "delivery_started" }), {
+          status: 200,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const input = {
+      pageId: "page-1",
+      reservationId: "16be1d70-9ed5-4b32-80cc-98be433581dc",
+      ownerToken: "11111111-1111-4111-8111-111111111111",
+      deliveryAttemptToken: "22222222-2222-4222-8222-222222222222",
+    };
+
+    await expect(markLeaderbotAiAnswerDeliveryStarted(input)).resolves.toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      fetchMock.mock.calls.map(call =>
+        JSON.parse(String((call[1] as RequestInit).body)),
+      ),
+    ).toEqual([input, input]);
   });
 });

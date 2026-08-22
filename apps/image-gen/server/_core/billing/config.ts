@@ -184,21 +184,103 @@ export function getTenantBillingWorkerWorkspaceId(): number | null {
   return workspaceId;
 }
 
+export function getConfiguredBillingMode(): MollieMode {
+  const mode = required("MOLLIE_MODE");
+  if (mode !== "test" && mode !== "live") {
+    throw new Error("MOLLIE_MODE must be test or live");
+  }
+  return mode;
+}
+
 export function assertTenantBillingWorkerWorkspace(workspaceId: number): void {
   const configuredWorkspaceId = getTenantBillingWorkerWorkspaceId();
-  if (!configuredWorkspaceId || configuredWorkspaceId !== workspaceId) {
+  if (configuredWorkspaceId && configuredWorkspaceId !== workspaceId) {
     throw new Error(
       "Mollie billing is unavailable for this workspace until a tenant-scoped worker is configured"
     );
   }
 }
 
-export function assertTenantBillingWorkerConfigured(): number {
+export function getBillingSchedulerRollout(): Readonly<{
+  mode: "multi_tenant" | "pilot_pin";
+  pinnedWorkspaceId: number | null;
+}> {
+  const requestedMode = process.env.MOLLIE_BILLING_SCHEDULER_MODE?.trim();
   const configuredWorkspaceId = getTenantBillingWorkerWorkspaceId();
-  if (!configuredWorkspaceId) {
+  if (requestedMode !== "pilot_pin" && requestedMode !== "multi_tenant") {
     throw new Error(
-      "MOLLIE_BILLING_WORKER_WORKSPACE_ID is required while Mollie billing is enabled"
+      "MOLLIE_BILLING_SCHEDULER_MODE must explicitly be pilot_pin or multi_tenant"
     );
   }
-  return configuredWorkspaceId;
+  if (requestedMode === "pilot_pin" && !configuredWorkspaceId) {
+    throw new Error(
+      "MOLLIE_BILLING_WORKER_WORKSPACE_ID is required in pilot_pin mode"
+    );
+  }
+  if (requestedMode === "multi_tenant" && configuredWorkspaceId) {
+    throw new Error(
+      "MOLLIE_BILLING_WORKER_WORKSPACE_ID must be unset in multi_tenant mode"
+    );
+  }
+  return Object.freeze({
+    mode: requestedMode,
+    pinnedWorkspaceId: configuredWorkspaceId,
+  });
+}
+
+export function assertTenantBillingWorkerConfigured(): void {
+  void getBillingSchedulerRollout();
+}
+
+export function isMollieBillingPreflightEnabled(): boolean {
+  return (
+    isMollieBillingEnabled() ||
+    process.env.MOLLIE_BILLING_PREFLIGHT_ENABLED === "true"
+  );
+}
+
+export function assertMollieNonSecretLaunchConfig(): void {
+  required("DATABASE_URL");
+  required("REDIS_URL");
+  if (process.env.BILLING_NOTIFICATION_PLANE_ENABLED !== "true") {
+    throw new Error("BILLING_NOTIFICATION_PLANE_ENABLED must be true");
+  }
+  if (!isMollieEntitlementEnforcementEnabled()) {
+    throw new Error("MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED must be true");
+  }
+  if ((process.env.PORTAL_HANDOFF_TOKEN_SECRET?.trim().length ?? 0) < 32) {
+    throw new Error("PORTAL_HANDOFF_TOKEN_SECRET is missing or too short");
+  }
+  if (
+    (process.env.BILLING_PROFILE_EVIDENCE_HMAC_SECRET?.trim().length ?? 0) < 32
+  ) {
+    throw new Error(
+      "BILLING_PROFILE_EVIDENCE_HMAC_SECRET is missing or too short"
+    );
+  }
+  if (
+    !/^[A-Za-z0-9._-]{3,64}$/.test(
+      process.env.MOLLIE_CREDENTIAL_GENERATION_ID?.trim() ?? ""
+    )
+  ) {
+    throw new Error("MOLLIE_CREDENTIAL_GENERATION_ID is missing or invalid");
+  }
+  assertTenantBillingWorkerConfigured();
+  for (const name of [
+    "MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD",
+    "MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD",
+    "MESSENGER_USER_DAILY_SPEND_CAP_USD",
+    "OPENAI_IMAGE_ESTIMATED_COST_USD",
+  ] as const) {
+    const value = Number(required(name));
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new Error(`${name} must be a positive finite amount`);
+    }
+  }
+  const dailyImageCap = Number(required("MESSENGER_GLOBAL_DAILY_IMAGE_CAP"));
+  if (!Number.isSafeInteger(dailyImageCap) || dailyImageCap <= 0) {
+    throw new Error(
+      "MESSENGER_GLOBAL_DAILY_IMAGE_CAP must be a positive integer"
+    );
+  }
 }

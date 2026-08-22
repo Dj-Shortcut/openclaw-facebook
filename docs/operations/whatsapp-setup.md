@@ -40,6 +40,8 @@ These must be deployed as Fly secrets:
 | `WHATSAPP_PHONE_NUMBER_ID` | WhatsApp Cloud API `/messages` endpoint |
 | `WHATSAPP_APP_SECRET` or `FB_APP_SECRET` | Meta webhook POST signature verification |
 | `META_VERIFY_TOKEN` or `WHATSAPP_VERIFY_TOKEN` | Meta webhook GET verification |
+| `WHATSAPP_GRAPH_SEND_TIMEOUT_MS` | Optional bounded Graph send timeout; defaults to 10000 and is capped at 30000 |
+| `WHATSAPP_MEDIA_DOWNLOAD_TIMEOUT_MS` | Optional bounded Meta media-download timeout; defaults to 10000 and is capped at 30000 |
 | `APP_BASE_URL` | Public generated/source image URLs |
 | `SOURCE_IMAGE_ALLOWED_HOSTS` | Source-image fetch allowlist |
 | `OPENAI_API_KEY` | Image generation |

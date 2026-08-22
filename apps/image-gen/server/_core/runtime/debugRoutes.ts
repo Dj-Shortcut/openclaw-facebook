@@ -4,7 +4,10 @@ import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { createAdminAuthRateLimiter, verifyAdminToken } from "../adminAuth";
 import { getTodayRuntimeStats } from "../botRuntimeStats";
-import { summarizeCostLedgerPeriod, type CostLedgerSummary } from "../costLedger";
+import {
+  readCostLedgerBudgetPeriod,
+  type CostLedgerBudgetAggregate,
+} from "../costLedger";
 import { isRedisHttpRateLimitEnabled } from "../httpRateLimit";
 import { safeLog } from "../messengerApi";
 import {
@@ -12,9 +15,7 @@ import {
   type MessengerGenerationQueueStats,
 } from "../messengerGenerationQueue";
 import { sendPortalHandoffLink } from "../portalHandoffDelivery";
-import {
-  isManualPortalHandoffRecoveryReady,
-} from "../portalHandoffSecurity";
+import { isManualPortalHandoffRecoveryReady } from "../portalHandoffSecurity";
 import { isRedisReplayProtectionEnabled } from "../webhookReplayProtection";
 
 type VersionPayload = {
@@ -30,7 +31,10 @@ function isValidUtcPeriod(period: string): boolean {
     return false;
   }
   const date = new Date(`${period}T00:00:00.000Z`);
-  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === period;
+  return (
+    Number.isFinite(date.getTime()) &&
+    date.toISOString().slice(0, 10) === period
+  );
 }
 
 const costSummaryQuerySchema = z.object({
@@ -90,7 +94,8 @@ async function readAdminCostSummaryQueueHealth(
     safeLog("admin_cost_summary_queue_health_unavailable", {
       level: "warn",
       period,
-      errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
+      errorCode:
+        error instanceof Error ? error.constructor.name : "UnknownError",
     });
     return {
       available: false,
@@ -123,7 +128,7 @@ function textValue(value: unknown): string {
 
 function renderSummaryBucketsText(
   title: string,
-  buckets: Record<string, { attempts: number; estimatedCostUsd: number; finalCostUsd: number }>
+  buckets: Record<string, { attempts: number; estimatedCostUsd: number }>
 ): string {
   const entries = Object.entries(buckets).sort((left, right) => {
     const byCost = right[1].estimatedCostUsd - left[1].estimatedCostUsd;
@@ -134,29 +139,20 @@ function renderSummaryBucketsText(
         ([label, bucket]) =>
           `- ${textValue(label)}: ${bucket.attempts} attempts, estimated ${formatUsd(
             bucket.estimatedCostUsd
-          )}, final ${formatUsd(bucket.finalCostUsd)}`
+          )}`
       )
     : ["- No entries"];
 
   return [title, ...rows].join("\n");
 }
 
-function renderStatusListText(summary: CostLedgerSummary): string {
-  return Object.entries(summary.byStatus)
-    .map(([status, count]) => `- ${textValue(status)}: ${count}`)
-    .join("\n");
-}
-
 function renderAdminCostDashboardText(params: {
-  summary: CostLedgerSummary;
+  summary: CostLedgerBudgetAggregate;
   queueHealth: AdminCostSummaryQueueHealth;
 }): string {
   const { summary, queueHealth } = params;
   const runtimeStats = getTodayRuntimeStats();
   const attentionItems = [
-    summary.openAttemptEntries > 0 ? `${summary.openAttemptEntries} open provider attempts` : null,
-    summary.failedAttemptEntries > 0 ? `${summary.failedAttemptEntries} failed provider attempts` : null,
-    summary.blockedEntries > 0 ? `${summary.blockedEntries} budget or quota blocks` : null,
     summary.incompleteEstimateEntries > 0
       ? `${summary.incompleteEstimateEntries} incomplete cost estimates`
       : null,
@@ -179,16 +175,13 @@ function renderAdminCostDashboardText(params: {
   return [
     "Leaderbot Cost Dashboard",
     `Period: ${textValue(summary.period)}`,
-    "Aggregate owner view only; no prompts, raw PSIDs, tokens, or generated content are included.",
+    "Identifier-free global budget aggregate only; no tenant, user, request, prompt, token, or generated-content details are included.",
     "",
     "Metrics",
     `- Estimated spend: ${formatUsd(summary.estimatedCostUsd)}`,
-    `- Final spend: ${formatUsd(summary.finalCostUsd)}`,
-    `- Ledger entries: ${summary.totalEntries}`,
-    `- Unique users: ${summary.uniqueUserCount}`,
-    `- Open attempts: ${summary.openAttemptEntries}`,
-    `- Failed attempts: ${summary.failedAttemptEntries}`,
-    `- Blocked attempts: ${summary.blockedEntries}`,
+    `- Provider attempts: ${summary.attempts}`,
+    `- Completely priced attempts: ${summary.completeEstimateEntries}`,
+    `- Incompletely priced attempts: ${summary.incompleteEstimateEntries}`,
     `- Process-local delivery failures today: ${runtimeStats.deliveryFailureCountToday}`,
     `- Process-local duplicate skips today: ${runtimeStats.duplicateSkipCountToday}`,
     `- Queue failed: ${queueHealth.failed}`,
@@ -201,9 +194,6 @@ function renderAdminCostDashboardText(params: {
     `- Queued: ${queueHealth.queued}`,
     `- Processing: ${queueHealth.processing}`,
     `- Failed/dead-lettered: ${queueHealth.failed}`,
-    "",
-    "Status Counts",
-    renderStatusListText(summary),
     "",
     renderSummaryBucketsText("Operations", summary.byOperation),
     "",
@@ -286,7 +276,9 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
   app.get(
     "/admin/cost-summary",
     adminCostSummaryRouteLimiter,
-    createAdminAuthRateLimiter({ eventName: "admin_cost_summary_auth_rate_limited" }),
+    createAdminAuthRateLimiter({
+      eventName: "admin_cost_summary_auth_rate_limited",
+    }),
     async (req, res) => {
       if (
         !verifyAdminToken({
@@ -304,7 +296,7 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
 
       const period = parsedQuery.data.period ?? currentUtcPeriod();
       try {
-        const summary = await summarizeCostLedgerPeriod(period);
+        const summary = await readCostLedgerBudgetPeriod(period);
         const queueHealth = await readAdminCostSummaryQueueHealth(period);
         return res.status(200).json({
           ...summary,
@@ -316,7 +308,8 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
           level: "error",
           requestId,
           period,
-          errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
+          errorCode:
+            error instanceof Error ? error.constructor.name : "UnknownError",
         });
         return res.status(500).json({
           error: "Failed to summarize cost period",
@@ -329,7 +322,9 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
   app.get(
     "/admin/cost-dashboard",
     adminCostDashboardRouteLimiter,
-    createAdminAuthRateLimiter({ eventName: "admin_cost_dashboard_auth_rate_limited" }),
+    createAdminAuthRateLimiter({
+      eventName: "admin_cost_dashboard_auth_rate_limited",
+    }),
     async (req, res) => {
       if (
         !verifyAdminToken({
@@ -347,20 +342,25 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
 
       const period = parsedQuery.data.period ?? currentUtcPeriod();
       try {
-        const summary = await summarizeCostLedgerPeriod(period);
+        const summary = await readCostLedgerBudgetPeriod(period);
         const queueHealth = await readAdminCostSummaryQueueHealth(period);
         res.setHeader("cache-control", "no-store");
         res.setHeader("content-type", "text/plain; charset=utf-8");
-        return res.status(200).send(renderAdminCostDashboardText({ summary, queueHealth }));
+        return res
+          .status(200)
+          .send(renderAdminCostDashboardText({ summary, queueHealth }));
       } catch (error) {
         const requestId = `cost_dashboard_${randomUUID()}`;
         safeLog("admin_cost_dashboard_failed", {
           level: "error",
           requestId,
           period,
-          errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
+          errorCode:
+            error instanceof Error ? error.constructor.name : "UnknownError",
         });
-        return res.status(500).send(`Failed to render cost dashboard. Request id: ${requestId}`);
+        return res
+          .status(500)
+          .send(`Failed to render cost dashboard. Request id: ${requestId}`);
       }
     }
   );
@@ -385,9 +385,7 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
         safeLog("admin_portal_handoff_tenant_boundary_unavailable", {
           level: "warn",
         });
-        return res
-          .status(503)
-          .json({ error: "portal handoff unavailable" });
+        return res.status(503).json({ error: "portal handoff unavailable" });
       }
 
       const parsedBody = portalHandoffSendBodySchema.safeParse(req.body);
@@ -403,7 +401,8 @@ export function registerDebugRoutes(app: express.Express, gitSha: string) {
           level: "error",
           workspaceId: parsedBody.data.workspaceId,
           user: parsedBody.data.messengerSenderUserKey.slice(0, 8),
-          errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
+          errorCode:
+            error instanceof Error ? error.constructor.name : "UnknownError",
         });
         return res.status(502).json({ error: "handoff send failed" });
       }

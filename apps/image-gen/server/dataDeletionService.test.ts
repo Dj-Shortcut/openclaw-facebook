@@ -3,11 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const {
   storageDeleteMock,
   deleteProviderVideoForUserMock,
-  deletePortalHandoffTokensForMessengerUserKeyMock,
+  eraseBillingHandoffIdentityMock,
+  getConnectedFacebookPageConnectionMock,
 } = vi.hoisted(() => ({
   storageDeleteMock: vi.fn(async () => undefined),
   deleteProviderVideoForUserMock: vi.fn(async () => undefined),
-  deletePortalHandoffTokensForMessengerUserKeyMock: vi.fn(async () => 0),
+  eraseBillingHandoffIdentityMock: vi.fn(async () => 0),
+  getConnectedFacebookPageConnectionMock: vi.fn(async () => ({
+    id: 12,
+    workspaceId: 42,
+  })),
 }));
 
 vi.mock("./storage", async importOriginal => {
@@ -21,8 +26,8 @@ vi.mock("./db", async importOriginal => {
   const actual = await importOriginal<typeof import("./db")>();
   return {
     ...actual,
-    deletePortalHandoffTokensForMessengerUserKey:
-      deletePortalHandoffTokensForMessengerUserKeyMock,
+    eraseBillingHandoffIdentity: eraseBillingHandoffIdentityMock,
+    getConnectedFacebookPageConnection: getConnectedFacebookPageConnectionMock,
   };
 });
 vi.mock(
@@ -39,11 +44,13 @@ vi.mock(
   }
 );
 import { deleteUserData } from "./_core/dataDeletionService";
+import { reserveImageGenerationForAttempt } from "./_core/messengerQuota";
 import {
   appendCostLedgerEntry,
+  deleteCostLedgerEntriesForSubject,
   readCostLedgerPeriod,
+  type CostLedgerScope,
 } from "./_core/costLedger";
-import * as costLedger from "./_core/costLedger";
 import {
   getMessengerGenerationCompletion,
   markMessengerGenerationCompleted,
@@ -54,12 +61,15 @@ import {
   getState,
   resetStateStore,
   setLastGenerationContext,
+  setMessengerPageId,
   setPendingImage,
 } from "./_core/messengerState";
 import { runWithMessengerRequestContext } from "./_core/messengerRequestContext";
 import {
+  hasEphemeralKeyValue,
   readScopedState,
   readState,
+  setEphemeralKeyIfAbsent,
   writeScopedState,
   writeState,
 } from "./_core/stateStore";
@@ -78,8 +88,13 @@ describe("data deletion service", () => {
     resetStateStore();
     storageDeleteMock.mockReset();
     deleteProviderVideoForUserMock.mockReset();
-    deletePortalHandoffTokensForMessengerUserKeyMock.mockReset();
-    deletePortalHandoffTokensForMessengerUserKeyMock.mockResolvedValue(0);
+    eraseBillingHandoffIdentityMock.mockReset();
+    eraseBillingHandoffIdentityMock.mockResolvedValue(0);
+    getConnectedFacebookPageConnectionMock.mockReset();
+    getConnectedFacebookPageConnectionMock.mockResolvedValue({
+      id: 12,
+      workspaceId: 42,
+    });
     if (originalRedisUrl === undefined) {
       delete process.env.REDIS_URL;
     } else {
@@ -149,16 +164,26 @@ describe("data deletion service", () => {
     ).toBeNull();
   });
 
-  it("deletes cost ledger entries for the erased user", async () => {
+  it("deletes only exact tenant-scoped cost entries for the erased subject", async () => {
     const psid = "delete-cost-ledger-user";
     const userKey = anonymizePsid(psid);
     const otherUserKey = anonymizePsid("other-cost-ledger-user");
     const recordedAt = new Date();
     const period = recordedAt.toISOString().slice(0, 10);
+    const erasedScope: CostLedgerScope = {
+      workspaceId: 42,
+      channelConnectionId: 12,
+      bindingEpoch: 1,
+      privacyEpoch: 1,
+    };
+    const otherConnectionScope: CostLedgerScope = {
+      ...erasedScope,
+      channelConnectionId: 13,
+    };
 
-    await Promise.resolve(getOrCreateState(psid));
     await appendCostLedgerEntry(
       {
+        scope: erasedScope,
         id: "req-delete-cost:attempt-1",
         channel: "facebook_messenger",
         operation: "image_generation",
@@ -178,6 +203,7 @@ describe("data deletion service", () => {
     );
     await appendCostLedgerEntry(
       {
+        scope: otherConnectionScope,
         id: "req-keep-cost:attempt-1",
         channel: "facebook_messenger",
         operation: "image_generation",
@@ -196,11 +222,14 @@ describe("data deletion service", () => {
       recordedAt
     );
 
-    await expect(deleteUserData(psid)).resolves.toEqual({
-      status: "completed",
+    await deleteCostLedgerEntriesForSubject({
+      workspaceId: erasedScope.workspaceId,
+      channelConnectionId: erasedScope.channelConnectionId,
+      userKey,
+      erasureEpoch: erasedScope.privacyEpoch,
     });
 
-    const remainingEntries = await readCostLedgerPeriod(period);
+    const remainingEntries = await readCostLedgerPeriod(erasedScope, period);
     expect(remainingEntries).toEqual([
       expect.objectContaining({
         id: "req-keep-cost:attempt-1",
@@ -213,15 +242,18 @@ describe("data deletion service", () => {
     const psid = "delete-handoff-token-user";
     const userKey = anonymizePsid(psid);
 
-    await Promise.resolve(getOrCreateState(psid));
-
-    await expect(deleteUserData(psid)).resolves.toEqual({
-      status: "completed",
+    await runWithMessengerRequestContext("page-delete-handoff", async () => {
+      await Promise.resolve(getOrCreateState(psid));
+      await expect(deleteUserData(psid)).resolves.toEqual({
+        status: "completed",
+      });
     });
 
-    expect(
-      deletePortalHandoffTokensForMessengerUserKeyMock
-    ).toHaveBeenCalledWith(userKey);
+    expect(eraseBillingHandoffIdentityMock).toHaveBeenCalledWith(
+      42,
+      userKey,
+      "page-delete-handoff"
+    );
   });
 
   it("deletes legacy state shadowed under the privacy-peppered user key", async () => {
@@ -248,6 +280,57 @@ describe("data deletion service", () => {
 
     expect(await Promise.resolve(getState(psid))).toBeNull();
     expect(await Promise.resolve(readState(userKey))).toBeNull();
+  });
+
+  it("completes erasure without raw or Page-owned quota sentinel state", async () => {
+    const psid = "delete-quota-shadow-user";
+    const pageId = "delete-quota-shadow-page";
+
+    await runWithMessengerRequestContext(pageId, async () => {
+      await Promise.resolve(setMessengerPageId(psid, pageId));
+      const reservation = await reserveImageGenerationForAttempt(psid);
+      const state = await Promise.resolve(getState(psid));
+      expect(reservation).not.toBeNull();
+      expect(state?.imageGenerationQuotaReservation).not.toBeNull();
+
+      await Promise.resolve(
+        writeState(psid, {
+          ...state!,
+          quota: { ...state!.quota, count: 1 },
+          imageGenerationQuotaReservation: {
+            token: "legacy-raw-quota-sentinel",
+            expiresAt: Date.now() + 60_000,
+          },
+        })
+      );
+
+      await expect(deleteUserData(psid)).resolves.toEqual({
+        status: "completed",
+      });
+      expect(await Promise.resolve(getState(psid))).toBeNull();
+      expect(await Promise.resolve(readState(psid))).toBeNull();
+    });
+  });
+
+  it("deletes exact legacy quota locks even when persisted state is already absent", async () => {
+    const psid = "delete-quota-lock-without-state-user";
+    const legacyLock = `messenger:image-generation-quota:${psid}`;
+    await Promise.resolve(
+      setEphemeralKeyIfAbsent(legacyLock, "legacy-lock-token", 60)
+    );
+
+    await runWithMessengerRequestContext(
+      "delete-quota-lock-without-state-page",
+      async () => {
+        await expect(deleteUserData(psid)).resolves.toEqual({
+          status: "completed",
+        });
+      }
+    );
+
+    await expect(
+      Promise.resolve(hasEphemeralKeyValue(legacyLock, "legacy-lock-token"))
+    ).resolves.toBe(false);
   });
 
   it("sanitizes the active Page state and deletes the true legacy shadow", async () => {
@@ -488,11 +571,13 @@ describe("data deletion service", () => {
 
   it("reports failure when a required deletion step fails without retry state", async () => {
     const psid = "delete-step-failure-without-state-user";
-    deletePortalHandoffTokensForMessengerUserKeyMock.mockRejectedValueOnce(
+    eraseBillingHandoffIdentityMock.mockRejectedValueOnce(
       new Error("temporary handoff-token deletion failure")
     );
 
-    await expect(deleteUserData(psid)).resolves.toEqual({ status: "failed" });
+    await runWithMessengerRequestContext("page-delete-failure", async () => {
+      await expect(deleteUserData(psid)).resolves.toEqual({ status: "failed" });
+    });
     expect(await Promise.resolve(getState(psid))).toBeNull();
   });
 

@@ -1,4 +1,9 @@
 {
+  // Required for a public, multi-tenant Messenger gateway: never share direct
+  // message history across Pages or senders.
+  session: {
+    dmScope: "per-account-channel-peer",
+  },
   channels: {
     facebook: {
       enabled: true,
@@ -11,7 +16,7 @@
       // Keep privileged tools, private memory, deploys, git, and filesystem
       // access restricted outside this channel config.
       dmPolicy: "open",
-      allowFrom: ["*"]
-    }
-  }
+      allowFrom: ["*"],
+    },
+  },
 }

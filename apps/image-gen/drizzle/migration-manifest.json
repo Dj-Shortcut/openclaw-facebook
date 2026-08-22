@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "journalSha256": "e1022c931fe83e84f6c784a76a84d23517f5b21f24dd26604bb6fd5ccadd214c",
+  "baseSchemaSnapshot": "meta/0014_snapshot.json",
+  "baseSchemaSnapshotSha256": "e0102aad23d607b4b359d1a11458d56c63533d73f056f332076ba952b7468b35",
+  "schemaSnapshot": "meta/0015_snapshot.json",
+  "schemaSnapshotSha256": "ea37ae186efb289955014e2b62acdcf337e28fad5edfaed598e99ab69992f163",
+  "productionSchemaContract": "production-schema-contract.json",
+  "productionSchemaContractSha256": "f936e2a9ddfb3a97c1ba9576eb128cfa19676613aa14bb505df7ec7cb605e727",
+  "migrations": [
+    {
+      "idx": 0,
+      "when": 1771791967247,
+      "tag": "0000_romantic_the_call",
+      "sha256": "814a08e40d7fc2bcfd458759d18319198ca8ae394f2fa15617a78678e9c9c93b"
+    },
+    {
+      "idx": 1,
+      "when": 1771792056712,
+      "tag": "0001_big_the_phantom",
+      "sha256": "8b885c25fe24b624578799cfe4918446efebab67a604c4335993d2d132ab6949"
+    },
+    {
+      "idx": 2,
+      "when": 1771798491450,
+      "tag": "0002_fix_daily_quota_unique",
+      "sha256": "163cef88121a7240dfbe779f04edde4fe66ada9f4d7271e597f272e9a0d772f1"
+    },
+    {
+      "idx": 3,
+      "when": 1771902695410,
+      "tag": "0003_fresh_the_anarchist",
+      "sha256": "b4e0497804e46e0a0b0b8c31975b062152d551bac49c3c2e80932567b4085dcd"
+    },
+    {
+      "idx": 4,
+      "when": 1780300800000,
+      "tag": "0004_customer_portal",
+      "sha256": "1970c969c014c9586d5b1896b8f8df68c9b524da18191cb967278c2ef257ea0d"
+    },
+    {
+      "idx": 5,
+      "when": 1780636800000,
+      "tag": "0005_workspace_tenant_model",
+      "sha256": "c8feed6b868ca795fdeb676adfbc3c6de49e27c8d397d82326c3a6ebfa7f9291"
+    },
+    {
+      "idx": 6,
+      "when": 1780982400000,
+      "tag": "0006_workspace_privacy_requests",
+      "sha256": "6a6e01839212c2a93950c88863326e820d94296d09013051da7b17151c19fe87"
+    },
+    {
+      "idx": 7,
+      "when": 1782316800000,
+      "tag": "0007_workspace_upgrade_requests",
+      "sha256": "417e039b947194a6b632d677f851f211ac2e1ff94e004f0cfa1a55d31e66d517"
+    },
+    {
+      "idx": 8,
+      "when": 1782844800000,
+      "tag": "0008_portal_handoff_tokens",
+      "sha256": "325c5b78bfcb84c62435d8a72c39822f94da78a46a55103c25a57b97abe5abdf"
+    },
+    {
+      "idx": 9,
+      "when": 1785542400000,
+      "tag": "0009_mollie_billing",
+      "sha256": "2f6a88a575dd517893e74ae6766ec7b1a9bfc77d37369ed46f561296091e5d4e"
+    },
+    {
+      "idx": 10,
+      "when": 1785605493363,
+      "tag": "0010_slimy_bloodstorm",
+      "sha256": "6d59264fe3a4f487d2878d85ce2f5dfc604fe77c9f2e011d2f41b8396bd67e20"
+    },
+    {
+      "idx": 11,
+      "when": 1785657889551,
+      "tag": "0011_conversation_identity_foundation",
+      "sha256": "8d516deb6eb4c6082a7b0fad57289e4c0448f3c0c766f02f833945095cf4f200"
+    },
+    {
+      "idx": 12,
+      "when": 1785658583877,
+      "tag": "0012_channel_provider_ownership",
+      "sha256": "bff914684451fea9babcac341f6a041d400ec0d752d5d9e71e67c8040e19a98d"
+    },
+    {
+      "idx": 13,
+      "when": 1786979880049,
+      "tag": "0013_purple_greymalkin",
+      "sha256": "b6cd406d611d7c0083980054a51c6bfc26b84c1708d239d9e990cfe105fa2e66"
+    },
+    {
+      "idx": 14,
+      "when": 1787040000000,
+      "tag": "0014_portal_handoff_delivery_idempotency",
+      "sha256": "9b3f738c1195688202580e80a755e264471a942cfa6740a69044ae01df1f501a"
+    },
+    {
+      "idx": 15,
+      "when": 1787056321209,
+      "tag": "0015_production_readiness_registry",
+      "sha256": "75b3299156526d862fee25d37ca09647b4e8113f38757618b097b71d1b2fe508"
+    }
+  ]
+}

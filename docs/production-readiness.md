@@ -1,8 +1,8 @@
 # Production Readiness
 
-Status: Not ready for broad customer launch; live Messenger smoke and delete-data flow are operator-verified, while live Mollie billing is NO-GO.
+Status: Not ready for broad customer launch. Live Messenger messaging was operator-verified, but complete delete-data handling and live Mollie billing remain NO-GO.
 
-Last updated: 2026-06-30
+Last updated: 2026-08-21
 
 Canonical release strategy and open work are tracked in
 [`docs/operations/todo.md`](operations/todo.md).
@@ -24,25 +24,30 @@ This document is the deploy/smoke checklist for the current gateway surface.
 
 ## Blocking Issues Fixed
 
-- Fixed Fly gateway workspace persistence: OpenClaw now uses `/data/workspace` through `OPENCLAW_WORKSPACE_DIR`.
-- Added startup migration for missing legacy markdown files from `/home/node/.openclaw/workspace` to `/data/workspace`.
-- Kept existing persistent workspace files safe: migration only copies missing files.
+- Fixed Fly gateway workspace persistence: OpenClaw now uses `/data/workspace` through `OPENCLAW_WORKSPACE_DIR` for static instruction files only.
+- Added startup migration for missing static instruction files from `/home/node/.openclaw/workspace` to `/data/workspace`.
+- Disabled shared public memory plugins, hooks, flushes, and tools. Existing `USER.md`, `MEMORY.md`, and `memory/` content is moved to `/data/private-memory-quarantine-v1` before startup so Page tenants cannot share durable assistant memory.
 - Repaired persisted config when it contains the known legacy default workspace path.
 - Kept OpenClaw built-in `image_generate` denied on the public gateway; Messenger image generation stays routed through Leaderbot image-gen.
-- Added a public-open Facebook DM tool denylist for high-cost/risky OpenClaw tools (`image_generate`, browser/canvas/web fetch/firecrawl, exec, and filesystem mutation tools).
+- Replaced the public-open Facebook DM tool surface with a positive minimal allowlist (`session_status` only); persisted profiles, provider overrides, code mode, and broader session/messaging/automation/runtime tools cannot widen an untrusted turn.
 - Added the Fly public route guard: webhook and health routes stay public, customer portal/legal routes can be proxied to Leaderbot, and the broader OpenClaw gateway UI/API is not reachable from the internet.
 
 ## Remaining Blockers
 
+- OpenClaw 2026.7.2-beta.7 does not expose a supported non-archiving purge for an ordinary host-owned session transcript to this external path-installed channel plugin. The Messenger delete-data route therefore fails closed before claiming authoritative completion whenever an exact OpenClaw session exists. Launch requires a host-owned exact transcript-erasure capability and trusted plugin provenance; `sessions.delete` is not sufficient because it retains a deleted transcript archive.
 - Live image generation requires the separate `leaderbot-fb-image-gen` service key and OpenAI billing/key state to be healthy.
-- `npm audit --omit=dev --audit-level=high` could not complete from this Windows environment because the registry audit endpoint request failed with `EACCES`; rerun from CI or another network before broad launch.
-- Broad customer launch still requires the remaining portal, billing, usage-control, monitoring, and tenant-isolation work tracked in the canonical backlog.
-- Live Mollie billing is blocked by the explicit items in `LAUNCH_READINESS.md`, including sandbox evidence and workspace-entitlement enforcement in provider quota paths.
+- Broad customer launch remains blocked by the exact OpenClaw transcript gate
+  above and the provider-sandbox, deployment, monitoring and human approvals in
+  `LAUNCH_READINESS.md`.
+- Live Mollie billing is blocked by the explicit sandbox/live items in
+  `LAUNCH_READINESS.md`; workspace-entitlement enforcement in provider quota
+  paths is implemented and is no longer listed as open repository work.
 
 ## Latest Operator Verification
 
+- Root `npm audit` and image-gen `pnpm audit --prod` were rerun on 2026-08-21: both production dependency graphs report zero known vulnerabilities. The remaining Drizzle CLI-only esbuild development-server advisory does not ship in either runtime image and remains a toolchain-upgrade item, not a launch exposure.
 - Live Messenger smoke was verified by operator on 2026-06-30 with the real Page.
-- `delete-my-data` / GDPR deletion behavior was verified by operator on 2026-06-30.
+- The legacy `delete-my-data` behavior was exercised by an operator on 2026-06-30. That smoke is not evidence for the stricter current full-erasure contract: the remaining OpenClaw transcript blocker above must be closed and re-tested.
 - Messenger photo forwarding and storage-proxy delivery for generated/source images were verified by operator on 2026-06-30 with tester photo forwards.
 
 ## Required Fly Secrets / Env Vars
@@ -70,6 +75,19 @@ Important env:
 Image-gen app must have matching internal token:
 
 - `INTERNAL_IMAGE_REQUEST_TOKEN` must match `LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN`.
+- `MESSENGER_PRIVACY_ERASURE_ENCRYPTION_ACTIVE_KEY_ID` identifies the current
+  durable deletion-job encryption key.
+- `MESSENGER_PRIVACY_ERASURE_ENCRYPTION_KEYS_JSON` is the secret versioned
+  AES-256-GCM keyring. Never place its values in logs, documentation, or a PR.
+  Add a new key before switching the active id; retain old keys until the
+  privacy-erasure pending count is zero or every pending job has been claimed
+  and automatically rewrapped. `/readyz` opens an atomic bounded snapshot of
+  every pending envelope, so removing an in-use key or exceeding the safe
+  backlog bound fails closed. It also requires this process's recent successful
+  metadata-only worker heartbeat and rejects an overdue due-job score. Startup
+  awaits the first complete claim/store poll before opening HTTP or starting the
+  generation worker; generation-worker-only mode uses that same gate because it
+  has no HTTP readiness endpoint.
 
 Mollie billing variables are documented in `apps/image-gen/.env.example`. Keep
 `MOLLIE_BILLING_ENABLED=false`, `MOLLIE_MODE=test`, and
@@ -81,6 +99,47 @@ The token alone must not enable forwarding. The Facebook channel config also
 needs `leaderbotBridgeEnabled: true` for any Messenger event, Page-scoped sender
 ID, prompt, or media URL to be sent to the separate Leaderbot image-generation
 service.
+
+### Privacy transport containment
+
+- A provider or Graph transport marked `started`/`ambiguous` is never retried
+  or expired automatically. The deletion saga remains `pending`.
+- A platform admin can list metadata-only blocked attempts for one explicit
+  workspace through `privacyAdmin.blockedProviderAttempts`.
+- Only after the started lease has expired (or the outcome is already
+  ambiguous), the admin may call `privacyAdmin.reconcileProviderAttempt` with
+  the exact attempt hash, connection, binding/privacy epochs, attempt number,
+  expected status, a closed reconciliation outcome, and a metadata-only
+  evidence-reference hash. The resolver accepts only provider-not-accepted or
+  artifact-contained evidence, permanently disables retry, and writes one
+  metadata-only `auditLog` event. A legacy blind `abandoned` row remains a hard
+  fence and cannot make erasure authoritative.
+- Retry the deletion worker after containment. It removes the terminal fence
+  and its privacy-scoped user key before marking the subject erased.
+- Page disconnect/rebind follows the same fence: active or unreconciled
+  attempts block the binding change. After the authenticated evidence-backed
+  resolution moves the attempt to `contained`, disconnect/rebind retires that
+  terminal metadata atomically before the epoch is bumped; no provider retry
+  is issued.
+
+### Tenant-scoped cost ledger rollout
+
+- Provider-attempt detail is stored per workspace and immutable connection,
+  binding, and privacy epoch. The global budget baseline contains totals only;
+  it contains no workspace, user, request, or provider-usage identifiers.
+- `/readyz` check `tenant_scoped_cost_ledger` fails closed when Redis is absent
+  in production or when any legacy `cost:ledger:period:*` key remains.
+- Never infer a tenant from a legacy ledger payload. Before rollout, an
+  authorized operator must count those legacy keys without reading their
+  values, apply the approved retention/backup decision, and remove them in
+  bounded batches. Re-run `/readyz` after the purge; do not enable provider
+  spend while this check is red.
+- GDPR erasure writes a monotonic subject tombstone and deletes only the exact
+  workspace, connection, and privacy epochs being erased. Redis detail writes
+  use a workspace hash slot and atomically check the subject tombstone in the
+  same Lua commit, so an expired process lock cannot recreate an older entry.
+  Cleanup scans 91 inclusive UTC day partitions for the 90-day TTL: day N
+  through day N-90.
 
 ## Deploy Command
 
@@ -125,6 +184,8 @@ Before deploy:
 - Confirm rollback target with `fly releases -a leaderbot-openclaw-gateway`.
 - Confirm the gateway `/healthz` route is reachable and no additional gateway UI/API routes are publicly exposed.
 - Confirm image-gen `/healthz`, `/readyz`, and `/metrics` are reachable.
+- Confirm `tenant_scoped_cost_ledger` is green; any legacy-ledger finding is a
+  stop condition, not a migration prompt.
 - Confirm image-gen queue metrics show bounded `messenger_generation_queue_jobs{state="queued"}`, `messenger_generation_queue_jobs{state="processing"}`, and `messenger_generation_global_slots{state="active"}`.
 - Confirm failed/dead-lettered generation jobs are zero or have an owner-reviewed incident note.
 - Confirm recent logs contain no raw PSIDs, access tokens, customer messages, uploaded knowledge, generated prompts, or generated outputs.

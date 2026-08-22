@@ -11,7 +11,7 @@ const validFlyConfig = [
   'OPENCLAW_AGENT_MODEL = "openai/gpt-5.4-mini"',
   'NODE_OPTIONS = "--max-old-space-size=1536"',
   'OPENCLAW_PUBLIC_GATEWAY_GUARD = "1"',
-  'OPENCLAW_PUBLIC_GATEWAY_PATHS = "/facebook/webhook,/healthz"',
+  'OPENCLAW_PUBLIC_GATEWAY_PATHS = "/facebook/webhook,/healthz,/readyz"',
   "",
   "[[vm]]",
   'memory = "4096"',

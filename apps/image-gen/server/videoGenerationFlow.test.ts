@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 const {
   safeLogMock,
   storagePutMock,
+  storageDeleteMock,
+  assertPrivacySubjectMock,
   generateSpeechAudioMock,
   muxMp4WithMp3Mock,
   resolvePremiumMediaAccessMock,
@@ -13,6 +15,8 @@ const {
     key: "generated/videos/test.mp4",
     url: "https://cdn.example/generated/videos/test.mp4",
   })),
+  storageDeleteMock: vi.fn(async () => undefined),
+  assertPrivacySubjectMock: vi.fn(async () => undefined),
   generateSpeechAudioMock: vi.fn(async () => new Uint8Array([4, 5, 6])),
   muxMp4WithMp3Mock: vi.fn(async (video: Uint8Array) => video),
   resolvePremiumMediaAccessMock: vi.fn(async () => null),
@@ -23,6 +27,17 @@ vi.mock("./storage", async importOriginal => {
   return {
     ...actual,
     storagePut: storagePutMock,
+    storageDelete: storageDeleteMock,
+  };
+});
+
+vi.mock("./_core/messengerPrivacySubject", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("./_core/messengerPrivacySubject")>();
+  return {
+    ...actual,
+    assertMessengerPrivacySubject: assertPrivacySubjectMock,
+    ensureActiveMessengerPrivacySubject: vi.fn(async () => 5),
   };
 });
 
@@ -49,6 +64,13 @@ vi.mock("./_core/workspaceEntitlementRuntime", async importOriginal => {
     >();
   return {
     ...actual,
+    assertMessengerGenerationOwnership: vi.fn(async () => undefined),
+    resolveMessengerGenerationOwnership: vi.fn(async () => ({
+      workspaceId: 42,
+      channelConnectionId: 7,
+      bindingEpoch: 3,
+      pageId: "page-video-test",
+    })),
     resolvePremiumMediaAccess: resolvePremiumMediaAccessMock,
   };
 });
@@ -64,6 +86,12 @@ import {
   reserveVideoGenerationForAttempt,
 } from "./_core/messengerQuota";
 import { createMessengerVideoGenerationRunner } from "./_core/videoGenerationFlow";
+import {
+  runWithMessengerRequestContext,
+  setMessengerRequestPrivacySubject,
+} from "./_core/messengerRequestContext";
+import { toUserKey } from "./_core/privacy";
+import { MessengerPrivacyFenceError } from "./_core/messengerPrivacySubject";
 import { setVideoProviderForTests } from "./_core/video-generation/videoProviderRegistry";
 import { OpenAiVideoProvider } from "./_core/video-generation/openAiVideoProvider";
 import type { VideoProvider } from "./_core/video-generation/videoProvider";
@@ -74,6 +102,12 @@ function requestSummaryKey(reqId: string): string {
 
 const FIXED_LEDGER_NOW = new Date("2026-06-21T12:00:00.000Z");
 const FIXED_LEDGER_PERIOD = "2026-06-21";
+const COST_SCOPE = {
+  workspaceId: 42,
+  channelConnectionId: 7,
+  bindingEpoch: 3,
+  privacyEpoch: 5,
+} as const;
 
 function makeProvider(
   result: Awaited<ReturnType<VideoProvider["generateVideo"]>>
@@ -121,6 +155,9 @@ describe("messenger video generation flow", () => {
     process.env.MESSENGER_PSID_LOCK_TTL_MS = "1000";
     resetStateStore();
     storagePutMock.mockClear();
+    storageDeleteMock.mockClear();
+    assertPrivacySubjectMock.mockReset();
+    assertPrivacySubjectMock.mockResolvedValue(undefined);
     safeLogMock.mockClear();
     generateSpeechAudioMock.mockReset();
     generateSpeechAudioMock.mockResolvedValue(new Uint8Array([4, 5, 6]));
@@ -191,6 +228,51 @@ describe("messenger video generation flow", () => {
     );
   });
 
+  it("cleans the stored video when privacy changes during Graph delivery", async () => {
+    const psid = "video-delete-during-send";
+    const userKey = toUserKey(psid);
+    let graphReturned = false;
+    setVideoProviderForTests(
+      makeProvider({
+        kind: "success",
+        provider: "test",
+        providerJobId: "video-job-delete-race",
+        videoBytes: new Uint8Array([1, 2, 3]),
+        contentType: "video/mp4",
+      })
+    );
+    const deps = makeDeps();
+    deps.sendLoggedVideo.mockImplementationOnce(async () => {
+      graphReturned = true;
+      return { sent: true as const, messageId: "mid-delete-race" };
+    });
+    assertPrivacySubjectMock.mockImplementation(async () => {
+      if (graphReturned) throw new MessengerPrivacyFenceError();
+    });
+
+    const outcome = await runWithMessengerRequestContext(
+      "page-delete-race",
+      async () => {
+        setMessengerRequestPrivacySubject({ userKey, privacyEpoch: 5 });
+        const result = await createMessengerVideoGenerationRunner(deps)(
+          psid,
+          userKey,
+          "req-video-delete-race",
+          "nl",
+          "https://img.example/source.jpg",
+          "laat hem zwaaien"
+        );
+        const state = await Promise.resolve(getOrCreateState(psid));
+        expect(state.lastGeneratedVideoUrl).toBeNull();
+        return result;
+      },
+      { workspaceId: 42, channelConnectionId: 7, bindingEpoch: 3 }
+    );
+
+    expect(outcome).toEqual({ sent: false, reason: "response_window_closed" });
+    expect(storageDeleteMock).toHaveBeenCalledWith("generated/videos/test.mp4");
+  });
+
   it("uses the active Premium plan's server-side daily video limit", async () => {
     const psid = "video-premium-quota-user";
     process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT = "1";
@@ -256,7 +338,10 @@ describe("messenger video generation flow", () => {
       "laat hem zwaaien"
     );
 
-    const ledgerEntries = await readCostLedgerPeriod(FIXED_LEDGER_PERIOD);
+    const ledgerEntries = await readCostLedgerPeriod(
+      COST_SCOPE,
+      FIXED_LEDGER_PERIOD
+    );
     expect(ledgerEntries).toEqual([
       expect.objectContaining({
         id: "req-video-priced:video:1",
@@ -311,13 +396,15 @@ describe("messenger video generation flow", () => {
       t("nl", "videoGenerationGenericFailure"),
       "req-video-storage-failure"
     );
-    expect(await readCostLedgerPeriod(FIXED_LEDGER_PERIOD)).toEqual([
-      expect.objectContaining({
-        id: "req-video-storage-failure:video:1",
-        status: "provider_attempt_succeeded",
-        finalCostUsd: 0.12,
-      }),
-    ]);
+    expect(await readCostLedgerPeriod(COST_SCOPE, FIXED_LEDGER_PERIOD)).toEqual(
+      [
+        expect.objectContaining({
+          id: "req-video-storage-failure:video:1",
+          status: "provider_attempt_succeeded",
+          finalCostUsd: 0.12,
+        }),
+      ]
+    );
   });
 
   it("does not call the provider when video quota is exhausted", async () => {
@@ -448,6 +535,7 @@ describe("messenger video generation flow", () => {
       getOrCreateState("video-provider-retry-user")
     );
     const ledgerEntries = await readCostLedgerPeriod(
+      COST_SCOPE,
       new Date().toISOString().slice(0, 10)
     );
     expect(state.videoGenerationQuota.count).toBe(2);
@@ -516,7 +604,10 @@ describe("messenger video generation flow", () => {
       "laat hem dansen"
     );
 
-    const ledgerEntries = await readCostLedgerPeriod(FIXED_LEDGER_PERIOD);
+    const ledgerEntries = await readCostLedgerPeriod(
+      COST_SCOPE,
+      FIXED_LEDGER_PERIOD
+    );
     expect(ledgerEntries).toHaveLength(1);
     expect(ledgerEntries[0]).toMatchObject({
       id: "req-video-openai-single:video:1",
@@ -557,7 +648,7 @@ describe("messenger video generation flow", () => {
     const ledgerEntries = (
       await Promise.all(
         [...new Set([periodBeforeRun, periodAfterRun])].map(period =>
-          readCostLedgerPeriod(period)
+          readCostLedgerPeriod(COST_SCOPE, period)
         )
       )
     )
@@ -607,6 +698,7 @@ describe("messenger video generation flow", () => {
       getOrCreateState("video-provider-retry-exhausted-user")
     );
     const ledgerEntries = await readCostLedgerPeriod(
+      COST_SCOPE,
       new Date().toISOString().slice(0, 10)
     );
     expect(state.videoGenerationQuota.count).toBe(1);
@@ -658,7 +750,10 @@ describe("messenger video generation flow", () => {
       "req-video-spend-cap"
     );
     expect(
-      await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))
+      await readCostLedgerPeriod(
+        COST_SCOPE,
+        new Date().toISOString().slice(0, 10)
+      )
     ).toEqual([]);
   });
 
@@ -669,6 +764,7 @@ describe("messenger video generation flow", () => {
     process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "0.03";
     await appendCostLedgerEntry(
       {
+        scope: COST_SCOPE,
         id: "req-existing-video-spend:attempt-1",
         channel: "facebook_messenger",
         operation: "video_generation",
@@ -715,7 +811,10 @@ describe("messenger video generation flow", () => {
       t("nl", "outOfVideoCredits"),
       "req-video-priced-spend-cap"
     );
-    const ledgerEntries = await readCostLedgerPeriod(FIXED_LEDGER_PERIOD);
+    const ledgerEntries = await readCostLedgerPeriod(
+      COST_SCOPE,
+      FIXED_LEDGER_PERIOD
+    );
     expect(ledgerEntries).toHaveLength(1);
     expect(ledgerEntries[0]?.id).toBe("req-existing-video-spend:attempt-1");
   });

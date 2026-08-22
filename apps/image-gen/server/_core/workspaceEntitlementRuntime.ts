@@ -30,6 +30,13 @@ export type StartpilotRuntimePolicy = Readonly<{
 export type WorkspaceRuntimePolicy =
   Readonly<{ kind: "free" }> | StartpilotRuntimePolicy;
 
+export type MessengerGenerationOwnership = Readonly<{
+  workspaceId: number;
+  channelConnectionId: number;
+  bindingEpoch: number;
+  pageId: string;
+}>;
+
 type ActiveEntitlement = {
   id: number;
   workspaceId: number;
@@ -199,9 +206,13 @@ export async function resolveWorkspaceRuntimePolicy(
   pageId: string | undefined,
   now = new Date()
 ): Promise<WorkspaceRuntimePolicy> {
+  if (!isMollieEntitlementEnforcementEnabled()) {
+    return { kind: "free" };
+  }
   if (
-    !isMollieEntitlementEnforcementEnabled() ||
-    !process.env.DATABASE_URL?.trim()
+    !process.env.DATABASE_URL?.trim() &&
+    process.env.NODE_ENV !== "production" &&
+    !process.env.REDIS_URL?.trim()
   ) {
     return { kind: "free" };
   }
@@ -210,6 +221,105 @@ export async function resolveWorkspaceRuntimePolicy(
     databaseRuntimeDeps,
     now
   );
+}
+
+export async function resolveMessengerGenerationOwnership(
+  pageId: string | undefined
+): Promise<MessengerGenerationOwnership | null> {
+  if (
+    !process.env.DATABASE_URL?.trim() &&
+    process.env.NODE_ENV !== "production" &&
+    !process.env.REDIS_URL?.trim()
+  ) {
+    return null;
+  }
+  const normalizedPageId = pageId?.trim();
+  if (!normalizedPageId) {
+    throw new WorkspaceEntitlementLookupError(
+      "Messenger generation requires a receiving Page"
+    );
+  }
+  const database = await getDatabaseOrThrow();
+  const rows = await database
+    .select({
+      workspaceId: channelConnections.workspaceId,
+      channelConnectionId: channelConnections.id,
+      bindingEpoch: channelConnections.bindingEpoch,
+    })
+    .from(channelConnections)
+    .where(
+      and(
+        eq(channelConnections.channel, "facebook_messenger"),
+        eq(channelConnections.externalId, normalizedPageId),
+        eq(channelConnections.status, "connected")
+      )
+    )
+    .limit(2);
+  if (rows.length !== 1) {
+    throw new WorkspaceEntitlementLookupError(
+      "Messenger Page ownership is unavailable"
+    );
+  }
+  return Object.freeze({
+    workspaceId: rows[0].workspaceId,
+    channelConnectionId: rows[0].channelConnectionId,
+    bindingEpoch: rows[0].bindingEpoch,
+    pageId: normalizedPageId,
+  });
+}
+
+export async function assertMessengerGenerationOwnership(input: {
+  pageId?: string;
+  workspaceId?: number;
+  channelConnectionId?: number;
+  bindingEpoch?: number;
+  channel?: "facebook_messenger" | "whatsapp";
+}): Promise<void> {
+  if (
+    !process.env.DATABASE_URL?.trim() &&
+    process.env.NODE_ENV !== "production" &&
+    !process.env.REDIS_URL?.trim()
+  ) {
+    return;
+  }
+  const pageId = input.pageId?.trim();
+  if (
+    !pageId ||
+    !Number.isSafeInteger(input.workspaceId) ||
+    Number(input.workspaceId) <= 0 ||
+    !Number.isSafeInteger(input.channelConnectionId) ||
+    Number(input.channelConnectionId) <= 0 ||
+    !Number.isSafeInteger(input.bindingEpoch) ||
+    Number(input.bindingEpoch) <= 0
+  ) {
+    throw new WorkspaceEntitlementLookupError(
+      "Messenger generation ownership changed after enqueue"
+    );
+  }
+
+  // Queued work must never discover the Page's current owner first: after a
+  // rebind that would read the new tenant merely to reject the old job. Prove
+  // the immutable enqueue tuple conjunctively instead.
+  const database = await getDatabaseOrThrow();
+  const rows = await database
+    .select({ id: channelConnections.id })
+    .from(channelConnections)
+    .where(
+      and(
+        eq(channelConnections.id, input.channelConnectionId!),
+        eq(channelConnections.workspaceId, input.workspaceId!),
+        eq(channelConnections.channel, input.channel ?? "facebook_messenger"),
+        eq(channelConnections.status, "connected"),
+        eq(channelConnections.externalId, pageId),
+        eq(channelConnections.bindingEpoch, input.bindingEpoch!)
+      )
+    )
+    .limit(1);
+  if (rows.length !== 1) {
+    throw new WorkspaceEntitlementLookupError(
+      "Messenger generation ownership changed after enqueue"
+    );
+  }
 }
 
 /** Video/TTS is a paid-only capability scoped to the owning Facebook Page. */

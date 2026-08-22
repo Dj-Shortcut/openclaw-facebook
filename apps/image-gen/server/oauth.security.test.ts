@@ -1,6 +1,10 @@
 import http from "node:http";
 import express from "express";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getFacebookOAuthUrl,
+  getStoredFacebookState,
+} from "./_core/facebookConnectStore";
 import { registerOAuthRoutes } from "./_core/oauth";
 import { bindTestHttpServer } from "./testHttpServer";
 
@@ -13,6 +17,9 @@ const mocks = vi.hoisted(() => ({
   upsertUser: vi.fn(),
   getUserByOpenId: vi.fn(),
   getOrCreateUserWorkspace: vi.fn(),
+  listChannelConnections: vi.fn(),
+  upsertChannelConnection: vi.fn(),
+  insertAuditLog: vi.fn(),
 }));
 
 vi.mock("./_core/sdk", () => ({
@@ -27,6 +34,9 @@ vi.mock("./db", () => ({
   upsertUser: mocks.upsertUser,
   getUserByOpenId: mocks.getUserByOpenId,
   getOrCreateUserWorkspace: mocks.getOrCreateUserWorkspace,
+  listChannelConnections: mocks.listChannelConnections,
+  upsertChannelConnection: mocks.upsertChannelConnection,
+  insertAuditLog: mocks.insertAuditLog,
 }));
 
 function buildState(
@@ -48,7 +58,11 @@ async function sendCallbackRequest(params: {
   code: string;
   state: string;
   cookie?: string;
-}): Promise<{ status: number; headers: http.IncomingHttpHeaders; payload: string }> {
+}): Promise<{
+  status: number;
+  headers: http.IncomingHttpHeaders;
+  payload: string;
+}> {
   const app = express();
   registerOAuthRoutes(app);
 
@@ -57,35 +71,37 @@ async function sendCallbackRequest(params: {
 
   const path = `/api/oauth/callback?code=${encodeURIComponent(params.code)}&state=${encodeURIComponent(params.state)}`;
   try {
-    return await new Promise<{ status: number; headers: http.IncomingHttpHeaders; payload: string }>(
-      (resolve, reject) => {
-        const request = http.request(
-          {
-            hostname: "127.0.0.1",
-            port: boundServer.port,
-            path,
-            method: "GET",
-            headers: params.cookie ? { cookie: params.cookie } : undefined,
-          },
-          res => {
-            let payload = "";
-            res.on("data", chunk => {
-              payload += chunk;
+    return await new Promise<{
+      status: number;
+      headers: http.IncomingHttpHeaders;
+      payload: string;
+    }>((resolve, reject) => {
+      const request = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: boundServer.port,
+          path,
+          method: "GET",
+          headers: params.cookie ? { cookie: params.cookie } : undefined,
+        },
+        res => {
+          let payload = "";
+          res.on("data", chunk => {
+            payload += chunk;
+          });
+          res.on("end", () => {
+            resolve({
+              status: res.statusCode ?? 0,
+              headers: res.headers,
+              payload,
             });
-            res.on("end", () => {
-              resolve({
-                status: res.statusCode ?? 0,
-                headers: res.headers,
-                payload,
-              });
-            });
-          }
-        );
+          });
+        }
+      );
 
-        request.on("error", reject);
-        request.end();
-      }
-    );
+      request.on("error", reject);
+      request.end();
+    });
   } finally {
     await boundServer.close();
   }
@@ -94,7 +110,11 @@ async function sendCallbackRequest(params: {
 async function sendGetRequest(
   path: string,
   cookie?: string
-): Promise<{ status: number; headers: http.IncomingHttpHeaders; payload: string }> {
+): Promise<{
+  status: number;
+  headers: http.IncomingHttpHeaders;
+  payload: string;
+}> {
   const app = express();
   registerOAuthRoutes(app);
   const server = http.createServer(app);
@@ -141,6 +161,10 @@ describe("OAuth callback security", () => {
     mocks.upsertUser.mockReset();
     mocks.getUserByOpenId.mockReset();
     mocks.getOrCreateUserWorkspace.mockReset();
+    mocks.listChannelConnections.mockReset();
+    mocks.listChannelConnections.mockResolvedValue([]);
+    mocks.upsertChannelConnection.mockReset();
+    mocks.insertAuditLog.mockReset();
   });
 
   afterEach(() => {
@@ -153,6 +177,7 @@ describe("OAuth callback security", () => {
   it("starts and completes a direct Facebook Login without exposing the app secret", async () => {
     vi.stubEnv("FB_APP_ID", "facebook-app-123");
     vi.stubEnv("FB_APP_SECRET", "server-only-secret");
+    vi.stubEnv("FB_LOGIN_CONFIG_ID", "2097873054148678");
     vi.stubEnv("APP_BASE_URL", "https://leaderbot.live");
     vi.stubEnv("NODE_ENV", "production");
     mocks.getUserByOpenId.mockResolvedValue({
@@ -167,6 +192,13 @@ describe("OAuth callback security", () => {
       lastSignedIn: new Date(0),
     });
     mocks.createSessionToken.mockResolvedValue("session-token");
+    mocks.getOrCreateUserWorkspace.mockResolvedValue({
+      id: 42,
+      name: "Test workspace",
+      slug: "workspace-7",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    });
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -184,22 +216,52 @@ describe("OAuth callback security", () => {
           }),
           { status: 200, headers: { "Content-Type": "application/json" } }
         )
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "page-42",
+                name: "Test Page",
+                access_token: "facebook-page-token",
+                perms: ["MANAGE"],
+                tasks: ["MESSAGING"],
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    const start = await sendGetRequest(
-      "/api/oauth/start?returnTo=%2Fhandoff%2Ftoken-123"
-    );
+    const start = await sendGetRequest("/api/oauth/start?returnTo=%2Fportal");
     expect(start.status).toBe(302);
     expect(start.headers.location).not.toContain("server-only-secret");
-    const authorizationUrl = new URL(start.headers.location ?? "https://invalid");
+    const authorizationUrl = new URL(
+      start.headers.location ?? "https://invalid"
+    );
     expect(authorizationUrl.hostname).toBe("www.facebook.com");
     expect(authorizationUrl.searchParams.get("client_id")).toBe(
       "facebook-app-123"
     );
-    expect(authorizationUrl.searchParams.get("scope")).toBe(
-      "public_profile,pages_show_list"
+    expect(authorizationUrl.searchParams.get("config_id")).toBe(
+      "2097873054148678"
     );
+    expect(
+      authorizationUrl.searchParams.get("override_default_response_type")
+    ).toBe("true");
+    expect(authorizationUrl.searchParams.has("scope")).toBe(false);
+    const pageConnectUrl = new URL(
+      getFacebookOAuthUrl("page-connect-state") ?? "https://invalid"
+    );
+    expect(pageConnectUrl.searchParams.get("config_id")).toBe(
+      "2097873054148678"
+    );
+    expect(
+      pageConnectUrl.searchParams.get("override_default_response_type")
+    ).toBe("true");
+    expect(pageConnectUrl.searchParams.has("scope")).toBe(false);
     const state = authorizationUrl.searchParams.get("state");
     const stateCookie = start.headers["set-cookie"]?.[0]?.split(";", 1)[0];
     const stateCookieHeader = start.headers["set-cookie"]?.[0] ?? "";
@@ -214,10 +276,26 @@ describe("OAuth callback security", () => {
       stateCookie
     );
     expect(callback.status).toBe(302);
-    expect(callback.headers.location).toBe("/handoff/token-123");
+    expect(callback.headers.location).toBe("/portal");
     expect(mocks.exchangeCodeForToken).not.toHaveBeenCalled();
     const profileUrl = new URL(String(fetchMock.mock.calls[1]?.[0]));
     expect(profileUrl.searchParams.get("fields")).toBe("id,name");
+    expect(profileUrl.searchParams.has("access_token")).toBe(false);
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+      headers: {
+        Accept: "application/json",
+        Authorization: "Bearer facebook-user-token",
+      },
+    });
+    const pagesUrl = new URL(String(fetchMock.mock.calls[2]?.[0]));
+    expect(pagesUrl.pathname).toContain("/me/accounts");
+    expect(pagesUrl.searchParams.has("access_token")).toBe(false);
+    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({
+      headers: {
+        Accept: "application/json",
+        Authorization: "Bearer facebook-user-token",
+      },
+    });
     expect(mocks.upsertUser).toHaveBeenCalledWith(
       expect.objectContaining({
         openId: "facebook:facebook-user-7",
@@ -228,10 +306,253 @@ describe("OAuth callback security", () => {
       "facebook:facebook-user-7",
       expect.any(Object)
     );
+    expect(mocks.upsertChannelConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: 42,
+        channel: "facebook_messenger",
+        status: "connected",
+        externalId: "page-42",
+        encryptedAccessToken: expect.stringMatching(/^v1:/),
+      })
+    );
+    expect(
+      mocks.upsertChannelConnection.mock.calls[0]?.[0]?.encryptedAccessToken
+    ).not.toContain("facebook-page-token");
+  });
+
+  it("uses the login authorization for Page selection without a second OAuth redirect", async () => {
+    vi.stubEnv("FB_APP_ID", "facebook-app-123");
+    vi.stubEnv("FB_APP_SECRET", "server-only-secret");
+    vi.stubEnv("APP_BASE_URL", "https://leaderbot.live");
+    vi.stubEnv("NODE_ENV", "production");
+    mocks.getUserByOpenId.mockResolvedValue({
+      id: 7,
+      openId: "facebook:facebook-user-7",
+      name: "Test User",
+      email: null,
+      loginMethod: "facebook",
+      role: "user",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+      lastSignedIn: new Date(0),
+    });
+    mocks.getOrCreateUserWorkspace.mockResolvedValue({
+      id: 42,
+      name: "Test workspace",
+      slug: "workspace-7",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    });
+    mocks.createSessionToken.mockResolvedValue("session-token");
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ access_token: "facebook-user-token" }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }
+          )
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ id: "facebook-user-7", name: "Test User" }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: "page-a",
+                  name: "Page A",
+                  access_token: "page-token-a",
+                  perms: ["MANAGE"],
+                  tasks: ["MESSAGING"],
+                },
+                {
+                  id: "page-b",
+                  name: "Page B",
+                  access_token: "page-token-b",
+                  perms: ["MODERATE"],
+                  tasks: ["MESSAGING"],
+                },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
+        )
+    );
+
+    const start = await sendGetRequest("/api/oauth/start?returnTo=%2Fportal");
+    const authorizationUrl = new URL(
+      start.headers.location ?? "https://invalid"
+    );
+    expect(
+      new Set(authorizationUrl.searchParams.get("scope")?.split(","))
+    ).toEqual(
+      new Set([
+        "public_profile",
+        "pages_show_list",
+        "pages_manage_metadata",
+        "pages_messaging",
+        "business_management",
+      ])
+    );
+    const state = authorizationUrl.searchParams.get("state") ?? "";
+    const stateCookie = start.headers["set-cookie"]?.[0]?.split(";", 1)[0];
+    const callback = await sendGetRequest(
+      `/api/oauth/callback?code=facebook-code&state=${encodeURIComponent(state)}`,
+      stateCookie
+    );
+
+    expect(callback.status).toBe(302);
+    const redirect = new URL(
+      callback.headers.location ?? "/",
+      "https://leaderbot.live"
+    );
+    expect(redirect.pathname).toBe("/portal");
+    const connectState = redirect.searchParams.get("facebookConnectState");
+    expect(connectState).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(callback.headers.location).not.toContain("page-token-a");
+    expect(callback.headers.location).not.toContain("page-token-b");
+    expect(
+      (await getStoredFacebookState(connectState ?? ""))?.pages
+    ).toHaveLength(2);
+    expect(mocks.upsertChannelConnection).not.toHaveBeenCalled();
+    expect(mocks.insertAuditLog).toHaveBeenCalledWith({
+      workspaceId: 42,
+      userId: 7,
+      event: "facebook_login.page_selection_required",
+      metadata: { pageCount: 2 },
+    });
+  });
+
+  it("does not rotate or replace an existing connected Page during login", async () => {
+    vi.stubEnv("FB_APP_ID", "facebook-app-123");
+    vi.stubEnv("FB_APP_SECRET", "server-only-secret");
+    vi.stubEnv("APP_BASE_URL", "https://leaderbot.live");
+    mocks.getUserByOpenId.mockResolvedValue({
+      id: 7,
+      openId: "facebook:facebook-user-7",
+      name: "Test User",
+      email: null,
+      loginMethod: "facebook",
+      role: "user",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+      lastSignedIn: new Date(0),
+    });
+    mocks.getOrCreateUserWorkspace.mockResolvedValue({
+      id: 42,
+      name: "Test workspace",
+      slug: "workspace-7",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    });
+    mocks.listChannelConnections.mockResolvedValue([
+      {
+        channel: "facebook_messenger",
+        status: "connected",
+        externalId: "existing-page",
+      },
+    ]);
+    mocks.createSessionToken.mockResolvedValue("session-token");
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: "facebook-user-token" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ id: "facebook-user-7", name: "Test User" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const start = await sendGetRequest("/api/oauth/start?returnTo=%2Fportal");
+    const authorizationUrl = new URL(
+      start.headers.location ?? "https://invalid"
+    );
+    const state = authorizationUrl.searchParams.get("state") ?? "";
+    const stateCookie = start.headers["set-cookie"]?.[0]?.split(";", 1)[0];
+    const callback = await sendGetRequest(
+      `/api/oauth/callback?code=facebook-code&state=${encodeURIComponent(state)}`,
+      stateCookie
+    );
+
+    expect(callback.status).toBe(302);
+    expect(callback.headers.location).toBe("/portal");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(mocks.upsertChannelConnection).not.toHaveBeenCalled();
+  });
+
+  it("does not bind a Page before a Messenger handoff has resolved its workspace", async () => {
+    vi.stubEnv("FB_APP_ID", "facebook-app-123");
+    vi.stubEnv("FB_APP_SECRET", "server-only-secret");
+    vi.stubEnv("APP_BASE_URL", "https://leaderbot.live");
+    mocks.getUserByOpenId.mockResolvedValue({
+      id: 7,
+      openId: "facebook:facebook-user-7",
+      name: "Test User",
+      email: null,
+      loginMethod: "facebook",
+      role: "user",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+      lastSignedIn: new Date(0),
+    });
+    mocks.createSessionToken.mockResolvedValue("session-token");
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ access_token: "facebook-user-token" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ id: "facebook-user-7", name: "Test User" }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const start = await sendGetRequest(
+      "/api/oauth/start?returnTo=%2Fhandoff%2Ftoken-123"
+    );
+    const authorizationUrl = new URL(
+      start.headers.location ?? "https://invalid"
+    );
+    const state = authorizationUrl.searchParams.get("state") ?? "";
+    const stateCookie = start.headers["set-cookie"]?.[0]?.split(";", 1)[0];
+    const callback = await sendGetRequest(
+      `/api/oauth/callback?code=facebook-code&state=${encodeURIComponent(state)}`,
+      stateCookie
+    );
+
+    expect(callback.status).toBe(302);
+    expect(callback.headers.location).toBe("/handoff/token-123");
+    expect(mocks.getOrCreateUserWorkspace).not.toHaveBeenCalled();
+    expect(mocks.listChannelConnections).not.toHaveBeenCalled();
+    expect(mocks.upsertChannelConnection).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("rejects callback requests with a missing matching state nonce cookie", async () => {
-    const state = buildState("https://leaderbot.example/api/oauth/callback", "nonce-1234567890abcdef");
+    const state = buildState(
+      "https://leaderbot.example/api/oauth/callback",
+      "nonce-1234567890abcdef"
+    );
 
     const response = await sendCallbackRequest({
       code: "code-1",
@@ -244,7 +565,9 @@ describe("OAuth callback security", () => {
   });
 
   it("accepts callback requests when the nonce cookie matches", async () => {
-    mocks.exchangeCodeForToken.mockResolvedValue({ accessToken: "access-token" });
+    mocks.exchangeCodeForToken.mockResolvedValue({
+      accessToken: "access-token",
+    });
     mocks.getUserInfo.mockResolvedValue({
       openId: "open-id-1",
       name: "Test User",
@@ -282,7 +605,10 @@ describe("OAuth callback security", () => {
     });
 
     expect(response.status).toBe(302);
-    expect(mocks.exchangeCodeForToken).toHaveBeenCalledWith("code-2", redirectUri);
+    expect(mocks.exchangeCodeForToken).toHaveBeenCalledWith(
+      "code-2",
+      redirectUri
+    );
     expect(mocks.upsertUser).toHaveBeenCalledWith(
       expect.objectContaining({
         openId: "open-id-1",
@@ -301,7 +627,9 @@ describe("OAuth callback security", () => {
   });
 
   it("redirects to a safe relative return path after login", async () => {
-    mocks.exchangeCodeForToken.mockResolvedValue({ accessToken: "access-token" });
+    mocks.exchangeCodeForToken.mockResolvedValue({
+      accessToken: "access-token",
+    });
     mocks.getUserInfo.mockResolvedValue({
       openId: "open-id-1",
       name: "Test User",
@@ -344,7 +672,9 @@ describe("OAuth callback security", () => {
   });
 
   it("falls back to the portal root for unsafe return paths", async () => {
-    mocks.exchangeCodeForToken.mockResolvedValue({ accessToken: "access-token" });
+    mocks.exchangeCodeForToken.mockResolvedValue({
+      accessToken: "access-token",
+    });
     mocks.getUserInfo.mockResolvedValue({
       openId: "open-id-1",
       name: "Test User",
@@ -386,7 +716,9 @@ describe("OAuth callback security", () => {
   });
 
   it("fails the callback before session creation when the workspace is not persisted", async () => {
-    mocks.exchangeCodeForToken.mockResolvedValue({ accessToken: "access-token" });
+    mocks.exchangeCodeForToken.mockResolvedValue({
+      accessToken: "access-token",
+    });
     mocks.getUserInfo.mockResolvedValue({
       openId: "open-id-1",
       name: "Test User",
@@ -423,7 +755,9 @@ describe("OAuth callback security", () => {
   });
 
   it("fails the callback before session creation when the portal customer is not persisted", async () => {
-    mocks.exchangeCodeForToken.mockResolvedValue({ accessToken: "access-token" });
+    mocks.exchangeCodeForToken.mockResolvedValue({
+      accessToken: "access-token",
+    });
     mocks.getUserInfo.mockResolvedValue({
       openId: "open-id-missing",
       name: "Missing User",
@@ -448,7 +782,9 @@ describe("OAuth callback security", () => {
   });
 
   it("rejects non-Facebook OAuth identities before creating a portal session", async () => {
-    mocks.exchangeCodeForToken.mockResolvedValue({ accessToken: "access-token" });
+    mocks.exchangeCodeForToken.mockResolvedValue({
+      accessToken: "access-token",
+    });
     mocks.getUserInfo.mockResolvedValue({
       openId: "open-id-email",
       name: "Email User",

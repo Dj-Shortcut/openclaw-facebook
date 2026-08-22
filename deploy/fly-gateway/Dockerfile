@@ -18,6 +18,11 @@ RUN npm install --ignore-scripts && npm run build && mkdir -p /tmp/openclaw-plug
 FROM node:24-bookworm-slim
 ARG OPENCLAW_VERSION
 
+LABEL org.opencontainers.image.title="leaderbot-openclaw-facebook-gateway" \
+      org.opencontainers.image.version="${OPENCLAW_VERSION}" \
+      io.leaderbot.openclaw.version="${OPENCLAW_VERSION}" \
+      io.leaderbot.facebook.plugin.source="workspace-build"
+
 ENV NODE_ENV=production
 ENV OPENCLAW_STATE_DIR=/data
 ENV OPENCLAW_CONFIG_PATH=/data/openclaw.json

@@ -20,6 +20,27 @@ env:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4.11@sha256:b3b90af2a6552ae30c266fdb7d5dd55f3afb72404bb78d37fe8a23eb857fd3fb
+        env:
+          MYSQL_ROOT_PASSWORD: testroot
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -ptestroot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+        ports:
+          - 3306:3306
+      redis:
+        image: redis:7.4-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+        ports:
+          - 6379:6379
     defaults:
       run:
         working-directory: apps/image-gen
@@ -27,6 +48,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -46,11 +69,65 @@ jobs:
       - name: Lint
         run: pnpm run lint
 
+      - name: Lint changed server code
+        env:
+          LINT_BASE_REF: origin/main
+        run: pnpm run lint:server:release
+
+      - name: Check changed server formatting
+        env:
+          LINT_BASE_REF: origin/main
+        run: pnpm run format:server:release
+
+      - name: Verify pinned MySQL version
+        run: |
+          test "$(mysql -h127.0.0.1 -uroot -ptestroot -Nse 'SELECT VERSION()')" = "8.4.11"
+
+      - name: Verify schema contract is tracked
+        run: git ls-files --error-unmatch drizzle/production-schema-contract.json
+
+      - name: Regenerate exact MySQL schema contract
+        env:
+          MYSQL_REHEARSAL_URL: mysql://root:testroot@127.0.0.1:3306/mysql
+        run: pnpm run db:generate-production-contract
+
+      - name: Upload generated MySQL schema contract
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: production-schema-contract-image-gen-ci
+          path: apps/image-gen/drizzle/production-schema-contract.json
+          if-no-files-found: error
+
+      - name: Verify generated MySQL schema contract is committed
+        run: |
+          git diff --exit-code -- drizzle/production-schema-contract.json
+
+      - name: Check MySQL identifier contract
+        run: pnpm run db:check-identifiers
+
       - name: Type-check production code
         run: pnpm run check
 
       - name: Test
         run: pnpm run test
+
+      - name: Test distributed Redis spend admission
+        env:
+          REDIS_URL: redis://127.0.0.1:6379/15
+          RUN_REDIS_INTEGRATION: "1"
+        run: ./node_modules/.bin/vitest run server/generationGuard.redis.test.ts --no-file-parallelism
+
+      - name: Test Redis generation privacy fences
+        env:
+          REDIS_URL: redis://127.0.0.1:6379/14
+          RUN_REDIS_INTEGRATION: "1"
+        run: ./node_modules/.bin/vitest run server/costLedger.tenant.redis.test.ts server/facebookConnectStore.redis.integration.test.ts server/messengerGenerationQueue.redis.test.ts server/messengerGenerationCompletion.redis.test.ts server/messengerGenerationArtifactCleanup.redis.test.ts server/messengerPrivacyErasureQueue.redis.test.ts server/messengerQuotaPrivacy.redis.test.ts server/messengerStatePrivacy.redis.test.ts server/webhookIngressPrivacy.redis.test.ts --no-file-parallelism
+
+      - name: Rehearse MySQL 0014 to 0015 upgrade and recovery
+        env:
+          MYSQL_REHEARSAL_URL: mysql://root:testroot@127.0.0.1:3306/mysql
+        run: pnpm run db:rehearse-0015
 
       - name: Build
         run: pnpm run build

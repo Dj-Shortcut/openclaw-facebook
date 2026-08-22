@@ -13,12 +13,17 @@ import { bindTestHttpServer } from "./testHttpServer";
 const READINESS_ENV_KEYS = [
   "NODE_ENV",
   "MOLLIE_BILLING_ENABLED",
+  "MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED",
+  "AI_ANSWER_FINALIZATION_DRAIN_ENABLED",
+  "AI_ANSWER_QUOTA_PREFLIGHT_ENABLED",
   "MOLLIE_API_KEY",
   "MOLLIE_MODE",
   "MOLLIE_PAYMENT_WEBHOOK_URL",
   "APP_BASE_URL",
   "BILLING_SUPPORT_EMAIL",
   "MOLLIE_BILLING_WORKER_WORKSPACE_ID",
+  "MOLLIE_BILLING_SCHEDULER_MODE",
+  "PORTAL_HANDOFF_TOKEN_SECRET",
   "REDIS_URL",
   "CONVERSATION_SCOPE_HMAC_KEY_ID",
   "CONVERSATION_SCOPE_HMAC_SECRET",
@@ -96,6 +101,8 @@ describe("readiness", () => {
 
   it("fails the Mollie readiness check when billing is enabled but unconfigured", () => {
     vi.stubEnv("MOLLIE_BILLING_ENABLED", "true");
+    vi.stubEnv("MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED", "true");
+    vi.stubEnv("PORTAL_HANDOFF_TOKEN_SECRET", "x".repeat(32));
     delete process.env.MOLLIE_API_KEY;
     const mollieCheck = buildRuntimeReadinessChecks().find(
       check => check.name === "mollie_billing_config"
@@ -104,9 +111,11 @@ describe("readiness", () => {
     expect(() => mollieCheck?.check()).toThrow("MOLLIE_API_KEY is missing");
   });
 
-  it("fails readiness when billing is enabled without its tenant worker", () => {
+  it("allows database-driven multi-tenant workers without a pilot workspace", () => {
     vi.stubEnv("NODE_ENV", "test");
     vi.stubEnv("MOLLIE_BILLING_ENABLED", "true");
+    vi.stubEnv("MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED", "true");
+    vi.stubEnv("PORTAL_HANDOFF_TOKEN_SECRET", "x".repeat(32));
     vi.stubEnv("MOLLIE_API_KEY", "test_example123");
     vi.stubEnv("MOLLIE_MODE", "test");
     vi.stubEnv(
@@ -115,14 +124,13 @@ describe("readiness", () => {
     );
     vi.stubEnv("APP_BASE_URL", "http://leaderbot.test");
     vi.stubEnv("BILLING_SUPPORT_EMAIL", "billing@leaderbot.test");
+    vi.stubEnv("MOLLIE_BILLING_SCHEDULER_MODE", "multi_tenant");
     delete process.env.MOLLIE_BILLING_WORKER_WORKSPACE_ID;
     const mollieCheck = buildRuntimeReadinessChecks().find(
       check => check.name === "mollie_billing_config"
     );
 
-    expect(() => mollieCheck?.check()).toThrow(
-      "MOLLIE_BILLING_WORKER_WORKSPACE_ID is required"
-    );
+    expect(() => mollieCheck?.check()).not.toThrow();
   });
 
   it("fails rate-limiter readiness when Mollie billing has no shared Redis", async () => {
@@ -135,6 +143,39 @@ describe("readiness", () => {
     await expect(rateLimiterCheck?.check()).rejects.toThrow(
       "Mollie webhook rate limiting requires Redis"
     );
+  });
+
+  it("does not report paid AI quota ready when admission lacks the durable drain", async () => {
+    vi.stubEnv("MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED", "true");
+    vi.stubEnv("AI_ANSWER_FINALIZATION_DRAIN_ENABLED", "false");
+    const check = buildRuntimeReadinessChecks().find(
+      item => item.name === "ai_answer_finalization"
+    );
+
+    await expect(check?.check()).rejects.toThrow(
+      "requires the durable finalization drain"
+    );
+  });
+
+  it("keeps exposure-off quota preflight fail-closed without the durable drain", async () => {
+    vi.stubEnv("MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED", "false");
+    vi.stubEnv("AI_ANSWER_QUOTA_PREFLIGHT_ENABLED", "true");
+    vi.stubEnv("AI_ANSWER_FINALIZATION_DRAIN_ENABLED", "false");
+    const check = buildRuntimeReadinessChecks().find(
+      item => item.name === "ai_answer_finalization"
+    );
+
+    await expect(check?.check()).rejects.toThrow(
+      "requires the durable finalization drain"
+    );
+  });
+
+  it("includes the privacy-erasure worker liveness gate", () => {
+    expect(
+      buildRuntimeReadinessChecks().some(
+        check => check.name === "messenger_privacy_erasure_worker"
+      )
+    ).toBe(true);
   });
 
   it("returns ok when all dependency checks pass", async () => {

@@ -10,11 +10,7 @@ import {
 } from "../../../drizzle/schema";
 import { getDatabaseOrThrow } from "../../db";
 import { safeLog } from "../logger";
-import {
-  getMollieConfig,
-  getTenantBillingWorkerWorkspaceId,
-  type MollieMode,
-} from "./config";
+import { getMollieConfig, type MollieMode } from "./config";
 import { parseAmountMinor } from "./amounts";
 import { hashCanonicalSnapshot } from "./ids";
 import {
@@ -26,9 +22,16 @@ import {
 import { applyMolliePaymentSnapshot } from "./paymentStore";
 import { metadataIntentId } from "./providerMetadata";
 import {
-  markWorkspaceSubscriptionStoppedIfMatches,
-  syncWorkspaceSubscriptionScheduleIfMatches,
-} from "./subscriptionStore";
+  claimNextBillingTenant,
+  assertBillingTenantLeaseOwned,
+  assertBillingTenantLeaseOwnedInTransaction,
+  releaseBillingTenantLease,
+  recordBillingSchedulerPoll,
+  renewBillingTenantLease,
+  type BillingTenantLease,
+} from "./billingSchedulerStore";
+import { expireWorkspaceBillingProfileIfDue } from "./billingProfileStore";
+import { resolveDuePaymentProviderOperations } from "./checkoutStore";
 
 const RECONCILIATION_DISPATCH_INTERVAL_MS = 60_000;
 const RECONCILIATION_LEASE_MS = 2 * 60 * 60 * 1_000;
@@ -39,9 +42,13 @@ const RECENT_PAYMENT_WINDOW_MS = 45 * 24 * 60 * 60 * 1_000;
 const HISTORICAL_PAYMENT_AUDIT_LIMIT = 25;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
+type BillingTransaction = Parameters<
+  Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
+>[0];
+
 let reconciliationTimer: NodeJS.Timeout | null = null;
 let initialTimer: NodeJS.Timeout | null = null;
-let reconciliationBusy = false;
+const busyReconciliationWorkspaces = new Set<number>();
 
 export function startDailyBillingReconciliation(): void {
   if (
@@ -50,52 +57,145 @@ export function startDailyBillingReconciliation(): void {
   ) {
     return;
   }
-  const workspaceId = getTenantBillingWorkerWorkspaceId();
-  if (!workspaceId) {
-    safeLog("billing_reconciliation_disabled", {
-      reason: "tenant_workspace_not_configured",
-    });
-    return;
-  }
   initialTimer = setTimeout(() => {
-    void dispatchTenantReconciliation(workspaceId);
+    void dispatchDueReconciliations();
   }, INITIAL_RECONCILIATION_DELAY_MS);
   initialTimer.unref();
   reconciliationTimer = setInterval(() => {
-    void dispatchTenantReconciliation(workspaceId);
+    void dispatchDueReconciliations();
   }, RECONCILIATION_DISPATCH_INTERVAL_MS);
   reconciliationTimer.unref();
 }
 
 async function dispatchTenantReconciliation(
-  workspaceId: number
-): Promise<void> {
-  if (reconciliationBusy) return;
-  reconciliationBusy = true;
+  tenantLease: BillingTenantLease
+): Promise<boolean> {
+  const workspaceId = tenantLease.workspaceId;
+  if (busyReconciliationWorkspaces.has(workspaceId)) {
+    throw new Error("billing reconciliation workspace is already busy");
+  }
+  busyReconciliationWorkspaces.add(workspaceId);
   try {
-    const config = getMollieConfig();
     const now = new Date();
-    const due = await isWorkspaceReconciliationDue(
+    const result = await runDailyBillingReconciliation(
       workspaceId,
-      config.mode,
-      now
+      undefined,
+      now,
+      () => assertBillingTenantLeaseOwned(tenantLease),
+      tenantLease
     );
-    if (!due) return;
-    await runDailyBillingReconciliation(workspaceId, undefined, now);
+    if (!result.ran) {
+      throw new Error("billing reconciliation inner lease was unavailable");
+    }
+    return true;
   } catch (error) {
     safeLog("billing_reconciliation_dispatch_failed", {
       level: "error",
       errorCode: error instanceof Error ? error.name : "UnknownError",
     });
+    throw error;
   } finally {
-    reconciliationBusy = false;
+    busyReconciliationWorkspaces.delete(workspaceId);
+  }
+}
+
+export async function runBillingReconciliationSchedulerOnce(
+  limit = 25,
+  now = new Date()
+): Promise<number> {
+  const config = getMollieConfig();
+  await recordBillingSchedulerPoll(config.mode, "reconciliation", now);
+  let processed = 0;
+  const count = Math.max(1, Math.min(100, limit));
+  for (let index = 0; index < count; index += 1) {
+    const claimNow = index === 0 ? now : new Date();
+    const lease = await claimNextBillingTenant(
+      config.mode,
+      claimNow,
+      "reconciliation"
+    );
+    if (!lease) break;
+    let failed = false;
+    const heartbeat = setInterval(() => {
+      void renewBillingTenantLease(lease)
+        .then(renewed => {
+          if (!renewed) failed = true;
+        })
+        .catch(() => {
+          failed = true;
+        });
+    }, 30_000);
+    heartbeat.unref();
+    try {
+      await assertBillingTenantLeaseOwned(lease);
+      const ran = await dispatchTenantReconciliation(lease);
+      await assertBillingTenantLeaseOwned(lease);
+      if (ran) processed += 1;
+    } catch {
+      failed = true;
+    } finally {
+      clearInterval(heartbeat);
+      const releaseNow = new Date();
+      const nextAt = failed
+        ? releaseNow
+        : await getNextWorkspaceReconciliationDue(
+            lease.workspaceId,
+            lease.mode,
+            releaseNow
+          );
+      const released = await releaseBillingTenantLease({
+        ...lease,
+        failed,
+        now: releaseNow,
+        nextAt,
+      });
+      if (!released) {
+        throw new Error("billing reconciliation lease ownership was lost");
+      }
+    }
+  }
+  return processed;
+}
+
+async function getNextWorkspaceReconciliationDue(
+  workspaceId: number,
+  mode: MollieMode,
+  now: Date
+): Promise<Date> {
+  const database = await getDatabaseOrThrow();
+  const rows = await database
+    .select({
+      nextAt: sql<Date | null>`MIN(${billingCustomers.nextReconciliationAt})`,
+    })
+    .from(billingCustomers)
+    .where(
+      and(
+        eq(billingCustomers.workspaceId, workspaceId),
+        eq(billingCustomers.mode, mode)
+      )
+    );
+  return rows[0]?.nextAt instanceof Date
+    ? rows[0].nextAt
+    : new Date(now.getTime() + NEXT_DAILY_RUN_MS);
+}
+
+async function dispatchDueReconciliations(): Promise<void> {
+  try {
+    await runBillingReconciliationSchedulerOnce();
+  } catch (error) {
+    safeLog("billing_reconciliation_scheduler_failed", {
+      level: "error",
+      errorCode: error instanceof Error ? error.name : "UnknownError",
+    });
   }
 }
 
 export async function runDailyBillingReconciliation(
   workspaceId: number,
   clientOverride?: MollieClient,
-  now = new Date()
+  now = new Date(),
+  assertExecutionFence: () => Promise<void> = () => Promise.resolve(),
+  tenantLease?: BillingTenantLease
 ) {
   if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) {
     throw new Error("invalid reconciliation workspace");
@@ -114,6 +214,10 @@ export async function runDailyBillingReconciliation(
   };
   try {
     const database = await getDatabaseOrThrow();
+    await assertExecutionFence();
+    await resolveDuePaymentProviderOperations(workspaceId, config.mode, now);
+    await assertExecutionFence();
+    await expireWorkspaceBillingProfileIfDue(workspaceId, now);
     const expiryResult = await database
       .update(workspaceEntitlements)
       .set({ status: "inactive" })
@@ -144,10 +248,16 @@ export async function runDailyBillingReconciliation(
       .limit(1);
     const customer = customers[0];
     if (!customer?.mollieCustomerId) {
-      await recordAnomaly(lease.runId, workspaceId, "billing_customer_missing");
+      await recordAnomaly(
+        lease.runId,
+        workspaceId,
+        "billing_customer_missing",
+        tenantLease
+      );
       summary.anomalies += 1;
     } else {
       summary.customersChecked = 1;
+      await assertExecutionFence();
       const payments = sortPaymentsOldestFirst(
         await client.listCustomerPayments(customer.mollieCustomerId)
       );
@@ -157,17 +267,22 @@ export async function runDailyBillingReconciliation(
       );
       for (const listedPayment of reconcilablePayments) {
         summary.paymentsChecked += 1;
+        await assertExecutionFence();
         const payment = await client.getPayment(listedPayment.id);
+        await assertExecutionFence();
         if (payment.mode !== config.mode) {
           await recordAnomaly(
             lease.runId,
             workspaceId,
-            "payment_mode_mismatch"
+            "payment_mode_mismatch",
+            tenantLease
           );
           summary.anomalies += 1;
           continue;
         }
-        const result = await applyMolliePaymentSnapshot(payment, workspaceId);
+        const result = await applyMolliePaymentSnapshot(payment, workspaceId, {
+          schedulerLease: tenantLease,
+        });
         if (result.result === "processed" || result.result === "mismatch") {
           summary.paymentSnapshotsApplied += 1;
         }
@@ -195,13 +310,19 @@ export async function runDailyBillingReconciliation(
           )
         : null;
       if (customerBindingAnomaly) {
-        await recordAnomaly(lease.runId, workspaceId, customerBindingAnomaly);
+        await recordAnomaly(
+          lease.runId,
+          workspaceId,
+          customerBindingAnomaly,
+          tenantLease
+        );
         summary.anomalies += 1;
       }
       const boundCustomerId = customerBindingAnomaly
         ? null
         : (customer?.mollieCustomerId ?? null);
       if (subscription.mollieSubscriptionId && boundCustomerId) {
+        await assertExecutionFence();
         const remote = await client.getSubscription(
           boundCustomerId,
           subscription.mollieSubscriptionId
@@ -210,13 +331,15 @@ export async function runDailyBillingReconciliation(
           await recordAnomaly(
             lease.runId,
             workspaceId,
-            "subscription_mismatch"
+            "subscription_mismatch",
+            tenantLease
           );
           await recordSubscriptionContainment(
             workspaceId,
             config.mode,
             boundCustomerId,
-            remote
+            remote,
+            tenantLease
           );
           summary.anomalies += 1;
         } else {
@@ -225,26 +348,34 @@ export async function runDailyBillingReconciliation(
             await recordAnomaly(
               lease.runId,
               workspaceId,
-              "subscription_schedule_invalid"
+              "subscription_schedule_invalid",
+              tenantLease
             );
             summary.anomalies += 1;
           } else {
-            await syncWorkspaceSubscriptionScheduleIfMatches(
+            await syncWorkspaceSubscriptionScheduleWithLease(
               workspaceId,
               config.mode,
               subscription.mollieSubscriptionId,
-              nextPaymentDate
+              nextPaymentDate,
+              tenantLease
             );
           }
 
           if (remote.status === "canceled" || remote.status === "completed") {
-            await markWorkspaceSubscriptionStoppedIfMatches(
+            await markWorkspaceSubscriptionStoppedWithLease(
               workspaceId,
               config.mode,
-              subscription.mollieSubscriptionId
+              subscription.mollieSubscriptionId,
+              tenantLease
             );
           } else if (remote.status === "suspended") {
-            await recordAnomaly(lease.runId, workspaceId, "remote_suspended");
+            await recordAnomaly(
+              lease.runId,
+              workspaceId,
+              "remote_suspended",
+              tenantLease
+            );
             summary.anomalies += 1;
           }
           if (
@@ -253,13 +384,15 @@ export async function runDailyBillingReconciliation(
             await recordAnomaly(
               lease.runId,
               workspaceId,
-              "local_stopped_remote_active"
+              "local_stopped_remote_active",
+              tenantLease
             );
             await recordSubscriptionContainment(
               workspaceId,
               config.mode,
               boundCustomerId,
-              remote
+              remote,
+              tenantLease
             );
             summary.anomalies += 1;
           }
@@ -268,6 +401,7 @@ export async function runDailyBillingReconciliation(
     }
 
     if (customer?.mollieCustomerId) {
+      await assertExecutionFence();
       const remoteSubscriptions = await client.listCustomerSubscriptions(
         customer.mollieCustomerId
       );
@@ -290,13 +424,15 @@ export async function runDailyBillingReconciliation(
         await recordAnomaly(
           lease.runId,
           workspaceId,
-          "unbound_remote_subscription"
+          "unbound_remote_subscription",
+          tenantLease
         );
         await recordSubscriptionContainment(
           workspaceId,
           config.mode,
           customer.mollieCustomerId,
-          remote
+          remote,
+          tenantLease
         );
         summary.anomalies += 1;
       }
@@ -308,7 +444,8 @@ export async function runDailyBillingReconciliation(
       config.mode,
       lease.leaseToken,
       summary,
-      new Date(Date.now() + NEXT_DAILY_RUN_MS)
+      new Date(Date.now() + NEXT_DAILY_RUN_MS),
+      tenantLease
     );
     safeLog("billing_reconciliation_completed", summary);
     return { ran: true as const, summary };
@@ -321,9 +458,15 @@ export async function runDailyBillingReconciliation(
       {
         ...summary,
         errorCode: error instanceof Error ? error.name : "UnknownError",
-      }
+      },
+      tenantLease
     );
-    await scheduleReconciliationRetry(workspaceId, config.mode, now);
+    await scheduleReconciliationRetry(
+      workspaceId,
+      config.mode,
+      now,
+      tenantLease
+    );
     safeLog("billing_reconciliation_failed", {
       level: "error",
       errorCode: error instanceof Error ? error.name : "UnknownError",
@@ -394,44 +537,27 @@ export function selectPaymentsForReconciliation<
   return payments.filter(payment => selectedIds.has(payment.id));
 }
 
-async function isWorkspaceReconciliationDue(
-  workspaceId: number,
-  mode: MollieMode,
-  now: Date
-): Promise<boolean> {
-  const database = await getDatabaseOrThrow();
-  const due = await database
-    .select({ workspaceId: billingCustomers.workspaceId })
-    .from(billingCustomers)
-    .where(
-      and(
-        eq(billingCustomers.workspaceId, workspaceId),
-        eq(billingCustomers.mode, mode),
-        isNotNull(billingCustomers.mollieCustomerId),
-        lte(billingCustomers.nextReconciliationAt, now)
-      )
-    )
-    .limit(1);
-  return Boolean(due[0]);
-}
-
 async function scheduleReconciliationRetry(
   workspaceId: number,
   mode: MollieMode,
-  now: Date
+  now: Date,
+  tenantLease?: BillingTenantLease
 ): Promise<void> {
   const database = await getDatabaseOrThrow();
-  await database
-    .update(billingCustomers)
-    .set({
-      nextReconciliationAt: new Date(now.getTime() + RECONCILIATION_RETRY_MS),
-    })
-    .where(
-      and(
-        eq(billingCustomers.workspaceId, workspaceId),
-        eq(billingCustomers.mode, mode)
-      )
-    );
+  await database.transaction(async tx => {
+    await assertReconciliationMutationLease(tx, tenantLease);
+    await tx
+      .update(billingCustomers)
+      .set({
+        nextReconciliationAt: new Date(now.getTime() + RECONCILIATION_RETRY_MS),
+      })
+      .where(
+        and(
+          eq(billingCustomers.workspaceId, workspaceId),
+          eq(billingCustomers.mode, mode)
+        )
+      );
+  });
 }
 
 async function claimReconciliationRun(
@@ -494,20 +620,29 @@ async function claimReconciliationRun(
   return claimed[0] ? { runId: claimed[0].id, leaseToken } : null;
 }
 
-async function recordAnomaly(runId: number, workspaceId: number, code: string) {
+async function recordAnomaly(
+  runId: number,
+  workspaceId: number,
+  code: string,
+  tenantLease?: BillingTenantLease
+) {
   const database = await getDatabaseOrThrow();
   const safeCode = code.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 80);
-  await database
-    .insert(billingReconciliationAnomalies)
-    .values({ runId, workspaceId, code: safeCode, metadata: null })
-    .onDuplicateKeyUpdate({ set: { code: sql`code` } });
+  await database.transaction(async tx => {
+    await assertReconciliationMutationLease(tx, tenantLease);
+    await tx
+      .insert(billingReconciliationAnomalies)
+      .values({ runId, workspaceId, code: safeCode, metadata: null })
+      .onDuplicateKeyUpdate({ set: { code: sql`code` } });
+  });
 }
 
 async function recordSubscriptionContainment(
   workspaceId: number,
   mode: MollieMode,
   mollieCustomerId: string,
-  remote: MollieSubscription
+  remote: MollieSubscription,
+  tenantLease?: BillingTenantLease
 ): Promise<void> {
   const containmentKey = hashCanonicalSnapshot({
     mode,
@@ -516,6 +651,7 @@ async function recordSubscriptionContainment(
   });
   const database = await getDatabaseOrThrow();
   await database.transaction(async tx => {
+    await assertReconciliationMutationLease(tx, tenantLease);
     const currentRows = await tx
       .select()
       .from(billingSubscriptions)
@@ -596,6 +732,64 @@ async function recordSubscriptionContainment(
   });
 }
 
+async function syncWorkspaceSubscriptionScheduleWithLease(
+  workspaceId: number,
+  mode: MollieMode,
+  mollieSubscriptionId: string,
+  nextPaymentDate: Date | null,
+  tenantLease?: BillingTenantLease
+): Promise<void> {
+  const database = await getDatabaseOrThrow();
+  await database.transaction(async tx => {
+    await assertReconciliationMutationLease(tx, tenantLease);
+    await tx
+      .update(billingSubscriptions)
+      .set({ nextPaymentDate })
+      .where(
+        and(
+          eq(billingSubscriptions.workspaceId, workspaceId),
+          eq(billingSubscriptions.mode, mode),
+          eq(billingSubscriptions.mollieSubscriptionId, mollieSubscriptionId)
+        )
+      );
+  });
+}
+
+async function markWorkspaceSubscriptionStoppedWithLease(
+  workspaceId: number,
+  mode: MollieMode,
+  mollieSubscriptionId: string,
+  tenantLease?: BillingTenantLease
+): Promise<void> {
+  const database = await getDatabaseOrThrow();
+  await database.transaction(async tx => {
+    await assertReconciliationMutationLease(tx, tenantLease);
+    await tx
+      .update(billingSubscriptions)
+      .set({
+        status: "canceled",
+        cancelAtPeriodEnd: 1,
+        canceledAt: sql`COALESCE(${billingSubscriptions.canceledAt}, ${new Date()})`,
+      })
+      .where(
+        and(
+          eq(billingSubscriptions.workspaceId, workspaceId),
+          eq(billingSubscriptions.mode, mode),
+          eq(billingSubscriptions.mollieSubscriptionId, mollieSubscriptionId)
+        )
+      );
+  });
+}
+
+async function assertReconciliationMutationLease(
+  tx: BillingTransaction,
+  tenantLease?: BillingTenantLease
+): Promise<void> {
+  if (tenantLease) {
+    await assertBillingTenantLeaseOwnedInTransaction(tx, tenantLease);
+  }
+}
+
 export function shouldPreserveRemoteSubscription(
   local:
     | Pick<
@@ -643,10 +837,12 @@ async function completeReconciliationRun(
   mode: MollieMode,
   leaseToken: string,
   summary: Record<string, number>,
-  nextReconciliationAt: Date
+  nextReconciliationAt: Date,
+  tenantLease?: BillingTenantLease
 ) {
   const database = await getDatabaseOrThrow();
   await database.transaction(async tx => {
+    await assertReconciliationMutationLease(tx, tenantLease);
     const leases = await tx
       .select({ id: billingReconciliationRuns.id })
       .from(billingReconciliationRuns)
@@ -696,25 +892,29 @@ async function failReconciliationRun(
   workspaceId: number,
   mode: MollieMode,
   leaseToken: string,
-  summary: Record<string, unknown>
+  summary: Record<string, unknown>,
+  tenantLease?: BillingTenantLease
 ) {
   const database = await getDatabaseOrThrow();
-  await database
-    .update(billingReconciliationRuns)
-    .set({
-      status: "failed",
-      leaseToken: null,
-      summary,
-      completedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(billingReconciliationRuns.id, runId),
-        eq(billingReconciliationRuns.workspaceId, workspaceId),
-        eq(billingReconciliationRuns.mode, mode),
-        eq(billingReconciliationRuns.leaseToken, leaseToken)
-      )
-    );
+  await database.transaction(async tx => {
+    await assertReconciliationMutationLease(tx, tenantLease);
+    await tx
+      .update(billingReconciliationRuns)
+      .set({
+        status: "failed",
+        leaseToken: null,
+        summary,
+        completedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(billingReconciliationRuns.id, runId),
+          eq(billingReconciliationRuns.workspaceId, workspaceId),
+          eq(billingReconciliationRuns.mode, mode),
+          eq(billingReconciliationRuns.leaseToken, leaseToken)
+        )
+      );
+  });
 }
 
 function remoteSubscriptionMatches(

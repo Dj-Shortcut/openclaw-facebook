@@ -1,4 +1,20 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const { assertPrivacyMock } = vi.hoisted(() => ({
+  assertPrivacyMock: vi.fn(async () => undefined),
+}));
+const { storageDeleteMock } = vi.hoisted(() => ({
+  storageDeleteMock: vi.fn(async () => undefined),
+}));
+
+vi.mock("./_core/messengerPrivacySubject", () => ({
+  assertMessengerPrivacySubject: assertPrivacyMock,
+}));
+vi.mock("./storage", () => ({
+  storageKeyFromPublicUrl: (url: string) =>
+    `generated/${url.split("/").at(-1)}`,
+  storageDelete: storageDeleteMock,
+}));
 
 import {
   deleteMessengerGenerationCompletionsForUser,
@@ -11,6 +27,207 @@ import { clearStateStore } from "./_core/stateStore";
 describe("messengerGenerationCompletion", () => {
   afterEach(() => {
     clearStateStore();
+    assertPrivacyMock.mockReset();
+    assertPrivacyMock.mockResolvedValue(undefined);
+    storageDeleteMock.mockReset();
+    storageDeleteMock.mockResolvedValue(undefined);
+  });
+
+  it("binds completion reads and writes to the immutable privacy fence", async () => {
+    const fence = {
+      workspaceId: 42,
+      channelConnectionId: 7,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      userKey: "user-key-fenced-123",
+      pageId: "page-fenced",
+    };
+    await markMessengerGenerationCompleted(
+      "req-fenced",
+      "https://assets.example/generated/fenced.jpg",
+      fence.userKey,
+      1_771_000_000_000,
+      fence
+    );
+
+    await expect(
+      getMessengerGenerationCompletion("req-fenced", fence)
+    ).resolves.toEqual(expect.objectContaining(fence));
+    await expect(
+      getMessengerGenerationCompletion("req-fenced", {
+        ...fence,
+        workspaceId: 43,
+      })
+    ).resolves.toBeNull();
+  });
+
+  it("scrubs a completion when erasure wins after the state write", async () => {
+    const fence = {
+      workspaceId: 42,
+      channelConnectionId: 7,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      userKey: "user-key-erasure-race",
+      pageId: "page-erasure-race",
+    };
+    assertPrivacyMock
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("privacy erased"));
+
+    await expect(
+      markMessengerGenerationCompleted(
+        "req-erasure-race",
+        "https://assets.example/generated/erasure-race.jpg",
+        fence.userKey,
+        1_771_000_000_000,
+        fence
+      )
+    ).rejects.toThrow("privacy erased");
+    await expect(
+      getMessengerGenerationCompletion("req-erasure-race")
+    ).resolves.toBeNull();
+  });
+
+  it("isolates the same request id across ownership and privacy scopes", async () => {
+    const first = {
+      workspaceId: 42,
+      channelConnectionId: 7,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      userKey: "user-key-shared-req-a",
+      pageId: "page-a",
+    };
+    const second = {
+      ...first,
+      channelConnectionId: 8,
+      bindingEpoch: 4,
+      privacyEpoch: 6,
+      pageId: "page-b",
+    };
+    await markMessengerGenerationCompleted(
+      "req-shared",
+      "https://assets.example/generated/a.jpg",
+      first.userKey,
+      1_771_000_000_000,
+      first
+    );
+    await markMessengerGenerationCompleted(
+      "req-shared",
+      "https://assets.example/generated/b.jpg",
+      second.userKey,
+      1_771_000_000_100,
+      second
+    );
+    await expect(
+      getMessengerGenerationCompletion("req-shared", first)
+    ).resolves.toMatchObject({
+      imageUrl: "https://assets.example/generated/a.jpg",
+    });
+    await expect(
+      getMessengerGenerationCompletion("req-shared", second)
+    ).resolves.toMatchObject({
+      imageUrl: "https://assets.example/generated/b.jpg",
+    });
+  });
+
+  it("isolates an identical request and subject across Meta channels", async () => {
+    const base = {
+      workspaceId: 42,
+      channelConnectionId: 7,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      userKey: "user-key-cross-channel",
+      pageId: "external-id-shared",
+    };
+    const messenger = { ...base, channel: "facebook_messenger" as const };
+    const whatsapp = { ...base, channel: "whatsapp" as const };
+
+    await markMessengerGenerationCompleted(
+      "req-cross-channel",
+      "https://assets.example/generated/messenger.jpg",
+      base.userKey,
+      1_771_000_000_000,
+      messenger
+    );
+    await markMessengerGenerationCompleted(
+      "req-cross-channel",
+      "https://assets.example/generated/whatsapp.jpg",
+      base.userKey,
+      1_771_000_000_100,
+      whatsapp
+    );
+
+    await expect(
+      getMessengerGenerationCompletion("req-cross-channel", messenger)
+    ).resolves.toMatchObject({
+      imageUrl: "https://assets.example/generated/messenger.jpg",
+    });
+    await expect(
+      getMessengerGenerationCompletion("req-cross-channel", whatsapp)
+    ).resolves.toMatchObject({
+      imageUrl: "https://assets.example/generated/whatsapp.jpg",
+    });
+  });
+
+  it("never regresses delivered to pending or extends absolute retention", async () => {
+    const fence = {
+      workspaceId: 42,
+      channelConnectionId: 7,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      userKey: "user-key-monotone",
+      pageId: "page-monotone",
+    };
+    await markMessengerGenerationCompleted(
+      "req-monotone",
+      "https://assets.example/generated/monotone.jpg",
+      fence.userKey,
+      1_771_000_000_000,
+      fence
+    );
+    await markMessengerGenerationDelivered(
+      "req-monotone",
+      "https://assets.example/generated/monotone.jpg",
+      fence.userKey,
+      1_771_000_000_100,
+      fence
+    );
+    await markMessengerGenerationCompleted(
+      "req-monotone",
+      "https://assets.example/generated/replayed.jpg",
+      fence.userKey,
+      1_771_000_000_200,
+      fence
+    );
+    await expect(
+      getMessengerGenerationCompletion("req-monotone", fence)
+    ).resolves.toMatchObject({
+      deliveryStatus: "delivered",
+      imageUrl: "https://assets.example/generated/monotone.jpg",
+      expiresAt: 1_771_604_800_000,
+    });
+    expect(storageDeleteMock).toHaveBeenCalledWith("generated/replayed.jpg");
+  });
+
+  it("fails closed without deleting an object after accepted delivery has no marker", async () => {
+    const fence = {
+      workspaceId: 42,
+      channelConnectionId: 7,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      userKey: "user-key-missing-delivery",
+      pageId: "page-missing-delivery",
+    };
+    await expect(
+      markMessengerGenerationDelivered(
+        "req-missing-delivery",
+        "https://assets.example/generated/missing.jpg",
+        fence.userKey,
+        1_771_000_000_000,
+        fence
+      )
+    ).rejects.toThrow("Messenger completion missing");
+    expect(storageDeleteMock).not.toHaveBeenCalled();
   });
 
   it("stores completion markers by generation request id", async () => {
@@ -31,6 +248,7 @@ describe("messengerGenerationCompletion", () => {
       completedAt: 1_771_000_000_000,
       deliveryStatus: "pending",
       userKey: "user-key-1",
+      expiresAt: 1_771_604_800_000,
     });
   });
 
@@ -58,6 +276,7 @@ describe("messengerGenerationCompletion", () => {
       deliveryStatus: "delivered",
       deliveredAt: 1_771_000_000_100,
       userKey: "user-key-delivered",
+      expiresAt: 1_771_604_800_000,
     });
   });
 

@@ -10,6 +10,7 @@ import {
 import { safeBillingErrorCode } from "./errorCode";
 import { MollieApiError, MollieClient } from "./mollieClient";
 import { applyMolliePaymentSnapshot } from "./paymentStore";
+import { resolveMollieWebhookWorkspace } from "./checkoutStore";
 
 const WEBHOOK_BODY_LIMIT = "2kb";
 const PAYMENT_ID_PATTERN = /^tr_[A-Za-z0-9]{1,60}$/;
@@ -91,10 +92,6 @@ export async function handleMollieWebhook(
   if (!paymentId) return "invalid";
 
   const config = getMollieConfig();
-  const workspaceId = getTenantBillingWorkerWorkspaceId();
-  if (!workspaceId) {
-    throw new Error("tenant billing webhook workspace is not configured");
-  }
   const client = dependencies?.createClient?.() ?? new MollieClient(config);
   let payment;
   try {
@@ -108,8 +105,33 @@ export async function handleMollieWebhook(
   if (payment.id !== paymentId || payment.mode !== config.mode) {
     return "unknown";
   }
+  const intentId = readProviderIntentId(payment.metadata);
+  if (!intentId) return "unknown";
+  const workspaceId = await resolveMollieWebhookWorkspace(
+    config.mode,
+    paymentId,
+    intentId
+  );
+  if (!workspaceId) {
+    throw new Error("tenant billing webhook route is not available yet");
+  }
+  const pinnedWorkspaceId = getTenantBillingWorkerWorkspaceId();
+  if (pinnedWorkspaceId && pinnedWorkspaceId !== workspaceId) {
+    throw new Error("tenant billing webhook is outside the pilot boundary");
+  }
   const result = await applyMolliePaymentSnapshot(payment, workspaceId);
   return result.result;
+}
+
+function readProviderIntentId(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return null;
+  }
+  const intentId = (metadata as Record<string, unknown>).billingIntentId;
+  return typeof intentId === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9_-]{7,95}$/.test(intentId)
+    ? intentId
+    : null;
 }
 
 function readPaymentId(body: unknown): string | null {

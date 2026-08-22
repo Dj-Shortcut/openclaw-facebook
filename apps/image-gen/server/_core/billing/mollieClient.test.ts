@@ -26,6 +26,24 @@ function payment(overrides: Partial<MolliePayment> = {}): MolliePayment {
 }
 
 describe("MollieClient", () => {
+  it("cancels an exact open payment without putting credentials in the URL", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+    const client = new MollieClient(
+      config,
+      fetchMock as unknown as typeof fetch,
+      "https://api.mollie.test/v2"
+    );
+
+    await client.cancelPayment("tr_payment123");
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("https://api.mollie.test/v2/payments/tr_payment123");
+    expect(String(url)).not.toContain(config.apiKey);
+    expect(init?.method).toBe("DELETE");
+    expect(init?.headers).toMatchObject({
+      Authorization: `Bearer ${config.apiKey}`,
+    });
+  });
   it("creates the first Bancontact payment with server fields and an idempotency key", async () => {
     const providerPayment = payment();
     const fetchMock = vi.fn(

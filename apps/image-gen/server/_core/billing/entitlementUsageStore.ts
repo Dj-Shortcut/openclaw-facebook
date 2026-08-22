@@ -1,20 +1,29 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
-import { and, eq, lte } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 import {
+  billingSchedulerTenants,
   workspaceEntitlements,
   workspaceEntitlementUsage,
   workspaceEntitlementUsageReservations,
 } from "../../../drizzle/schema";
 import { getDatabaseOrThrow } from "../../db";
 import { STARTPILOT_PLAN_CODE } from "./catalog";
-import type { MollieMode } from "./config";
+import { assertTenantBillingWorkerWorkspace, type MollieMode } from "./config";
 
 const AI_RESERVATION_TTL_MS = 5 * 60 * 1_000;
+const AI_RESERVATION_OWNER_LEASE_MS = AI_RESERVATION_TTL_MS - 30_000;
 
 type BillingTransaction = Parameters<
   Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
 >[0];
+
+function extractAffectedRows(result: unknown): number {
+  const metadata: unknown = Array.isArray(result)
+    ? (result as unknown[])[0]
+    : result;
+  return Number((metadata as { affectedRows?: number })?.affectedRows ?? 0);
+}
 
 export type ActiveWorkspaceEntitlement = {
   entitlementId: number;
@@ -124,8 +133,11 @@ export async function reserveStartpilotImageUsage(input: {
 export async function reserveStartpilotAiAnswerUsage(input: {
   workspaceId: number;
   entitlementId: number;
+  channelConnectionId?: number | null;
+  bindingEpoch?: number | null;
   mode: MollieMode;
   idempotencyKey: string;
+  ownerToken: string;
   now?: Date;
 }): Promise<
   | { allowed: true; reservationId: string; alreadyReserved: boolean }
@@ -134,12 +146,49 @@ export async function reserveStartpilotAiAnswerUsage(input: {
   assertPositiveId(input.workspaceId, "workspace");
   assertPositiveId(input.entitlementId, "entitlement");
   assertOpaqueIdempotencyKey(input.idempotencyKey);
+  if (!/^[0-9a-f-]{36}$/i.test(input.ownerToken)) {
+    throw new Error("invalid AI answer reservation owner");
+  }
   const now = input.now ?? new Date();
+  assertTenantBillingWorkerWorkspace(input.workspaceId);
+  const ownerTokenHash = createHash("sha256")
+    .update(input.ownerToken)
+    .digest("hex");
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
     const { usage, quota } = await lockStartpilotUsage(tx, input, now);
-    await expireStaleAiReservations(tx, input, usage.id, now);
-    const refreshedUsage = await selectUsageForUpdate(tx, input);
+    const nextResolutionDue = new Date(now.getTime() + AI_RESERVATION_TTL_MS);
+    const scheduler = await tx
+      .select({ enabled: billingSchedulerTenants.enabled })
+      .from(billingSchedulerTenants)
+      .where(
+        and(
+          eq(billingSchedulerTenants.workspaceId, input.workspaceId),
+          eq(billingSchedulerTenants.mode, input.mode),
+          eq(billingSchedulerTenants.kind, "ai_finalization")
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (!scheduler[0]?.enabled) {
+      throw new Error("billing scheduler tenant is disabled");
+    }
+    const schedulerWake = await tx
+      .update(billingSchedulerTenants)
+      .set({
+        nextDueAt: sql`LEAST(${billingSchedulerTenants.nextDueAt}, ${nextResolutionDue})`,
+      })
+      .where(
+        and(
+          eq(billingSchedulerTenants.workspaceId, input.workspaceId),
+          eq(billingSchedulerTenants.mode, input.mode),
+          eq(billingSchedulerTenants.kind, "ai_finalization"),
+          eq(billingSchedulerTenants.enabled, true)
+        )
+      );
+    if (extractAffectedRows(schedulerWake) !== 1) {
+      throw new Error("billing scheduler tenant lease is unavailable");
+    }
     const existing = await tx
       .select()
       .from(workspaceEntitlementUsageReservations)
@@ -161,7 +210,75 @@ export async function reserveStartpilotAiAnswerUsage(input: {
     if (existing[0] && existing[0].entitlementId !== input.entitlementId) {
       return { allowed: false as const, reason: "idempotency_reused" as const };
     }
+    if (
+      existing[0] &&
+      ((existing[0].channelConnectionId ?? null) !==
+        (input.channelConnectionId ?? null) ||
+        (existing[0].bindingEpoch ?? null) !== (input.bindingEpoch ?? null))
+    ) {
+      return { allowed: false as const, reason: "idempotency_reused" as const };
+    }
     if (existing[0]?.status === "reserved") {
+      if (
+        existing[0].ownerTokenHash !== ownerTokenHash &&
+        (existing[0].ownerLeaseUntil > now || existing[0].deliveryStartedAt)
+      ) {
+        return {
+          allowed: false as const,
+          reason: "idempotency_reused" as const,
+        };
+      }
+      if (existing[0].ownerLeaseUntil <= now) {
+        if (existing[0].deliveryStartedAt) {
+          return {
+            allowed: false as const,
+            reason: "idempotency_reused" as const,
+          };
+        }
+        await tx
+          .update(workspaceEntitlementUsageReservations)
+          .set({
+            ownerTokenHash,
+            ownerLeaseUntil: new Date(
+              now.getTime() + AI_RESERVATION_OWNER_LEASE_MS
+            ),
+            resolutionDueAt: nextResolutionDue,
+          })
+          .where(
+            and(
+              eq(
+                workspaceEntitlementUsageReservations.reservationId,
+                existing[0].reservationId
+              ),
+              eq(workspaceEntitlementUsageReservations.status, "reserved"),
+              lte(workspaceEntitlementUsageReservations.ownerLeaseUntil, now),
+              isNull(workspaceEntitlementUsageReservations.deliveryStartedAt)
+            )
+          );
+        const resumed = await tx
+          .select({
+            ownerTokenHash:
+              workspaceEntitlementUsageReservations.ownerTokenHash,
+            ownerLeaseUntil:
+              workspaceEntitlementUsageReservations.ownerLeaseUntil,
+          })
+          .from(workspaceEntitlementUsageReservations)
+          .where(
+            eq(
+              workspaceEntitlementUsageReservations.reservationId,
+              existing[0].reservationId
+            )
+          )
+          .limit(1)
+          .for("update");
+        if (
+          resumed[0]?.ownerTokenHash !== ownerTokenHash ||
+          !resumed[0].ownerLeaseUntil ||
+          resumed[0].ownerLeaseUntil <= now
+        ) {
+          throw new Error("AI answer reservation ownership takeover failed");
+        }
+      }
       return {
         allowed: true as const,
         reservationId: existing[0].reservationId,
@@ -171,6 +288,8 @@ export async function reserveStartpilotAiAnswerUsage(input: {
     if (existing[0]) {
       return { allowed: false as const, reason: "idempotency_reused" as const };
     }
+    await resolveStaleAiReservationsConservatively(tx, input, usage.id, now);
+    const refreshedUsage = await selectUsageForUpdate(tx, input);
     if (
       refreshedUsage.aiAnswersCommitted + refreshedUsage.aiAnswersReserved >=
       quota.aiAnswersTotal
@@ -183,10 +302,15 @@ export async function reserveStartpilotAiAnswerUsage(input: {
       workspaceId: input.workspaceId,
       mode: input.mode,
       entitlementId: input.entitlementId,
+      channelConnectionId: input.channelConnectionId ?? null,
+      bindingEpoch: input.bindingEpoch ?? null,
       kind: "ai_answer",
       status: "reserved",
       idempotencyKey: input.idempotencyKey,
+      ownerTokenHash,
+      ownerLeaseUntil: new Date(now.getTime() + AI_RESERVATION_OWNER_LEASE_MS),
       expiresAt: new Date(now.getTime() + AI_RESERVATION_TTL_MS),
+      resolutionDueAt: nextResolutionDue,
     });
     await tx
       .update(workspaceEntitlementUsage)
@@ -207,6 +331,7 @@ export async function commitStartpilotAiAnswerUsage(input: {
   entitlementId: number;
   mode: MollieMode;
   reservationId: string;
+  ownerTokenHash: string;
   now?: Date;
 }): Promise<{ committed: boolean }> {
   return finishAiReservation(input, "committed");
@@ -217,6 +342,7 @@ export async function releaseStartpilotAiAnswerUsage(input: {
   entitlementId: number;
   mode: MollieMode;
   reservationId: string;
+  ownerTokenHash: string;
   now?: Date;
 }): Promise<{ released: boolean }> {
   const result = await finishAiReservation(input, "released");
@@ -229,6 +355,7 @@ async function finishAiReservation(
     entitlementId: number;
     mode: MollieMode;
     reservationId: string;
+    ownerTokenHash: string;
     now?: Date;
   },
   outcome: "committed" | "released"
@@ -267,14 +394,32 @@ async function finishAiReservation(
       .for("update");
     const reservation = reservations[0];
     if (!reservation) throw new Error("usage reservation not found");
-    if (reservation.status === outcome) return { committed: true };
+    if (reservation.ownerTokenHash !== input.ownerTokenHash) {
+      return { committed: false };
+    }
+    if (
+      reservation.status === "reserved" &&
+      !reservation.deliveryStartedAt &&
+      reservation.ownerLeaseUntil <= now
+    ) {
+      return { committed: false };
+    }
+    const effectiveOutcome =
+      reservation.deliveryStartedAt && !reservation.deliveryKnownRejectedAt
+        ? "committed"
+        : outcome;
+    if (reservation.status === effectiveOutcome) return { committed: true };
     if (reservation.status !== "reserved") {
       return { committed: false };
     }
     if (reservation.expiresAt.getTime() <= now.getTime()) {
       await tx
         .update(workspaceEntitlementUsageReservations)
-        .set({ status: "expired", releasedAt: now })
+        .set(
+          effectiveOutcome === "committed"
+            ? { status: "committed", committedAt: now }
+            : { status: "released", releasedAt: now }
+        )
         .where(
           and(
             eq(
@@ -296,7 +441,15 @@ async function finishAiReservation(
         );
       await tx
         .update(workspaceEntitlementUsage)
-        .set({ aiAnswersReserved: Math.max(0, usage.aiAnswersReserved - 1) })
+        .set({
+          aiAnswersReserved: requireReservedCapacity(
+            usage.aiAnswersReserved,
+            1
+          ),
+          aiAnswersCommitted:
+            usage.aiAnswersCommitted +
+            (effectiveOutcome === "committed" ? 1 : 0),
+        })
         .where(
           and(
             eq(workspaceEntitlementUsage.id, usage.id),
@@ -305,12 +458,12 @@ async function finishAiReservation(
             eq(workspaceEntitlementUsage.entitlementId, input.entitlementId)
           )
         );
-      return { committed: false };
+      return { committed: true };
     }
     await tx
       .update(workspaceEntitlementUsageReservations)
       .set(
-        outcome === "committed"
+        effectiveOutcome === "committed"
           ? { status: "committed", committedAt: now }
           : { status: "released", releasedAt: now }
       )
@@ -326,9 +479,9 @@ async function finishAiReservation(
     await tx
       .update(workspaceEntitlementUsage)
       .set({
-        aiAnswersReserved: Math.max(0, usage.aiAnswersReserved - 1),
+        aiAnswersReserved: requireReservedCapacity(usage.aiAnswersReserved, 1),
         aiAnswersCommitted:
-          usage.aiAnswersCommitted + (outcome === "committed" ? 1 : 0),
+          usage.aiAnswersCommitted + (effectiveOutcome === "committed" ? 1 : 0),
       })
       .where(
         and(
@@ -400,7 +553,7 @@ async function selectUsageForUpdate(
   return rows[0];
 }
 
-async function expireStaleAiReservations(
+async function resolveStaleAiReservationsConservatively(
   tx: BillingTransaction,
   input: { workspaceId: number; entitlementId: number; mode: MollieMode },
   usageId: number,
@@ -409,6 +562,8 @@ async function expireStaleAiReservations(
   const stale = await tx
     .select({
       reservationId: workspaceEntitlementUsageReservations.reservationId,
+      deliveryStartedAt:
+        workspaceEntitlementUsageReservations.deliveryStartedAt,
     })
     .from(workspaceEntitlementUsageReservations)
     .where(
@@ -424,37 +579,157 @@ async function expireStaleAiReservations(
         eq(workspaceEntitlementUsageReservations.mode, input.mode),
         eq(workspaceEntitlementUsageReservations.kind, "ai_answer"),
         eq(workspaceEntitlementUsageReservations.status, "reserved"),
-        lte(workspaceEntitlementUsageReservations.expiresAt, now)
+        lte(workspaceEntitlementUsageReservations.resolutionDueAt, now)
       )
     )
     .for("update");
   if (stale.length === 0) return;
+  requireReservedCapacity(
+    (await selectUsageForUpdate(tx, input)).aiAnswersReserved,
+    stale.length
+  );
+  const committedIds = stale
+    .filter(row => row.deliveryStartedAt)
+    .map(row => row.reservationId);
+  const releasedIds = stale
+    .filter(row => !row.deliveryStartedAt)
+    .map(row => row.reservationId);
+  if (committedIds.length) {
+    await tx
+      .update(workspaceEntitlementUsageReservations)
+      .set({ status: "committed", committedAt: now })
+      .where(
+        and(
+          inArray(
+            workspaceEntitlementUsageReservations.reservationId,
+            committedIds
+          ),
+          eq(workspaceEntitlementUsageReservations.status, "reserved")
+        )
+      );
+  }
+  if (releasedIds.length) {
+    await tx
+      .update(workspaceEntitlementUsageReservations)
+      .set({ status: "released", releasedAt: now })
+      .where(
+        and(
+          inArray(
+            workspaceEntitlementUsageReservations.reservationId,
+            releasedIds
+          ),
+          eq(workspaceEntitlementUsageReservations.status, "reserved")
+        )
+      );
+  }
+  const usage = await selectUsageForUpdate(tx, input);
   await tx
-    .update(workspaceEntitlementUsageReservations)
-    .set({ status: "expired", releasedAt: now })
+    .update(workspaceEntitlementUsage)
+    .set({
+      aiAnswersReserved: requireReservedCapacity(
+        usage.aiAnswersReserved,
+        stale.length
+      ),
+      aiAnswersCommitted: usage.aiAnswersCommitted + committedIds.length,
+    })
+    .where(eq(workspaceEntitlementUsage.id, usageId));
+}
+
+export async function finalizeStaleAiAnswerReservationsForWorkspace(input: {
+  workspaceId: number;
+  mode: MollieMode;
+  now?: Date;
+}): Promise<number> {
+  assertPositiveId(input.workspaceId, "workspace");
+  const now = input.now ?? new Date();
+  const database = await getDatabaseOrThrow();
+  return database.transaction(async tx => {
+    const staleScopes = await tx
+      .selectDistinct({
+        entitlementId: workspaceEntitlementUsageReservations.entitlementId,
+      })
+      .from(workspaceEntitlementUsageReservations)
+      .where(
+        and(
+          eq(
+            workspaceEntitlementUsageReservations.workspaceId,
+            input.workspaceId
+          ),
+          eq(workspaceEntitlementUsageReservations.mode, input.mode),
+          eq(workspaceEntitlementUsageReservations.kind, "ai_answer"),
+          eq(workspaceEntitlementUsageReservations.status, "reserved"),
+          lte(workspaceEntitlementUsageReservations.resolutionDueAt, now)
+        )
+      )
+      .limit(100);
+    let finalized = 0;
+    for (const scope of staleScopes) {
+      const usage = await selectUsageForUpdate(tx, {
+        workspaceId: input.workspaceId,
+        entitlementId: scope.entitlementId,
+        mode: input.mode,
+      });
+      const before = usage.aiAnswersReserved;
+      await resolveStaleAiReservationsConservatively(
+        tx,
+        {
+          workspaceId: input.workspaceId,
+          entitlementId: scope.entitlementId,
+          mode: input.mode,
+        },
+        usage.id,
+        now
+      );
+      const after = await selectUsageForUpdate(tx, {
+        workspaceId: input.workspaceId,
+        entitlementId: scope.entitlementId,
+        mode: input.mode,
+      });
+      if (after.aiAnswersReserved > before) {
+        throw new Error(
+          "AI answer reserved counter increased during finalization"
+        );
+      }
+      finalized += before - after.aiAnswersReserved;
+    }
+    return finalized;
+  });
+}
+
+export async function getNextAiAnswerFinalizationDue(input: {
+  workspaceId: number;
+  mode: MollieMode;
+  now?: Date;
+}): Promise<Date> {
+  assertPositiveId(input.workspaceId, "workspace");
+  const now = input.now ?? new Date();
+  const database = await getDatabaseOrThrow();
+  const rows = await database
+    .select({
+      nextAt: sql<Date | null>`MIN(${workspaceEntitlementUsageReservations.resolutionDueAt})`,
+    })
+    .from(workspaceEntitlementUsageReservations)
     .where(
       and(
         eq(
           workspaceEntitlementUsageReservations.workspaceId,
           input.workspaceId
         ),
-        eq(
-          workspaceEntitlementUsageReservations.entitlementId,
-          input.entitlementId
-        ),
         eq(workspaceEntitlementUsageReservations.mode, input.mode),
         eq(workspaceEntitlementUsageReservations.kind, "ai_answer"),
-        eq(workspaceEntitlementUsageReservations.status, "reserved"),
-        lte(workspaceEntitlementUsageReservations.expiresAt, now)
+        eq(workspaceEntitlementUsageReservations.status, "reserved")
       )
     );
-  const usage = await selectUsageForUpdate(tx, input);
-  await tx
-    .update(workspaceEntitlementUsage)
-    .set({
-      aiAnswersReserved: Math.max(0, usage.aiAnswersReserved - stale.length),
-    })
-    .where(eq(workspaceEntitlementUsage.id, usageId));
+  return rows[0]?.nextAt instanceof Date
+    ? rows[0].nextAt
+    : new Date(now.getTime() + 24 * 60 * 60_000);
+}
+
+function requireReservedCapacity(current: number, decrement: number): number {
+  if (current < decrement) {
+    throw new Error("AI answer reserved counter invariant violated");
+  }
+  return current - decrement;
 }
 
 export function parseStartpilotQuota(value: unknown): StartpilotQuota | null {

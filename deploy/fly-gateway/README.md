@@ -34,7 +34,7 @@ Run from the `openclaw-facebook` repository root:
 npm run deploy:gateway
 ```
 
-### Temporary production route-guard hotfix
+### Gateway runtime migration gate
 
 The 2026-08-01 production upgrade to OpenClaw 2026.7.1 was rolled back because
 the mounted state contains conflicting legacy and canonical Memory Core index
@@ -43,17 +43,23 @@ state migration has been rehearsed on a copy, backed up, and explicitly
 approved. Do not run `openclaw doctor --fix` against production state as an
 unreviewed deploy step.
 
-Until that migration is resolved, the reproducible containment deployment keeps
-the last known-good OpenClaw 2026.6.11 image and overlays only the reviewed
-public route guard:
+The release image is built by `deploy/fly-gateway/Dockerfile`: it compiles the
+Facebook plugin from this exact workspace and installs the single pinned
+OpenClaw version declared by that Dockerfile. The former route-guard-only image
+must not be used because it omitted quota/finalization changes from the plugin.
+
+Do not deploy this image against the production volume until the state
+migration has been rehearsed on a copy, backed up, and explicitly approved:
 
 ```bash
 fly deploy --config fly.toml
 ```
 
-This hotfix does not upgrade the bundled Facebook plugin or OpenClaw runtime.
-Verify `/healthz`, `/facebook/webhook`, `/messenger/webhook`, all portal/legal
-routes, and protected route near-misses after every deployment.
+The Docker build runs the runtime validator before and after dependency pruning
+and records runtime/plugin provenance as OCI labels. Verify `/healthz`, `/readyz`,
+`/facebook/webhook`, `/messenger/webhook`, all portal/legal routes, quota
+reserve/heartbeat/delivery-start/finalize, and protected route near-misses after
+every controlled test deployment.
 
 ## Safety Defaults
 
@@ -79,8 +85,11 @@ The checked-in values and the non-deploying update boundary are enforced by:
 npm run gateway:deployment-safety
 ```
 
-- `OPENCLAW_WORKSPACE_DIR` defaults to `/data/workspace`, keeping `AGENTS.md`, `USER.md`, `MEMORY.md`, and daily memory on the mounted Fly volume.
-- On startup, missing workspace bootstrap files are copied once from the legacy `/home/node/.openclaw/workspace` fallback into `/data/workspace`.
+- `OPENCLAW_WORKSPACE_DIR` defaults to `/data/workspace` for static instruction files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, and `IDENTITY.md`). Public Messenger memory plugins, session-memory hooks, compaction memory flushes, and memory tools are disabled because this gateway serves multiple tenant Pages.
+- Startup moves any legacy shared `USER.md`, `MEMORY.md`, or `memory/` content to the recoverable, operator-only `/data/private-memory-quarantine-v1` directory before accepting traffic. If shared memory reappears after a prior quarantine, startup fails closed instead of overwriting either copy.
+- `session.dmScope` is forced to `per-account-channel-peer`, keeping direct-message history isolated by Page account, channel, and sender even when an older persisted config used OpenClaw's shared `main` default.
+- `attachments.ttlHours` is capped at 24 hours as crash-recovery cleanup; normal Messenger turns delete their downloaded temporary media immediately after completion or failure.
+- On startup, missing static workspace bootstrap files are copied once from the legacy `/home/node/.openclaw/workspace` fallback into `/data/workspace`; legacy user or memory content is never copied into the public workspace.
 - `plugins.load.paths` includes `/app/node_modules/@dj-shortcut/facebook`.
 - `plugins.load.paths` includes `/app/node_modules/@openclaw/codex`.
 - `plugins.entries.facebook.enabled` defaults to `true`.
@@ -90,7 +99,8 @@ npm run gateway:deployment-safety
 - `agents.defaults.model.primary` defaults to `OPENCLAW_AGENT_MODEL` when set.
 - `agents.defaults.thinkingDefault` defaults to `OPENCLAW_AGENT_THINKING_DEFAULT` when set.
 - `tools.deny` includes `image_generate` so this public Messenger gateway cannot invoke OpenClaw's built-in image-generation tool; Messenger image generation is routed through the separate Leaderbot image-gen service.
-- `OPENCLAW_PUBLIC_GATEWAY_GUARD=1` puts OpenClaw behind a small public route guard. Fly exposes `/facebook/webhook` and `/healthz` publicly by default, and can proxy customer portal/legal routes to `LEADERBOT_PORTAL_ORIGIN`. A deployment whose persisted channel config still uses the legacy `/messenger/webhook` path must opt in with `OPENCLAW_PUBLIC_GATEWAY_PATHS`; do not expose an unregistered webhook path because OpenClaw may otherwise serve its UI fallback there. Dashboard/UI/API access requires `OPENCLAW_ADMIN_TOKEN` and a request host listed in `OPENCLAW_ADMIN_HOSTS`; after that, OpenClaw's own device pairing/auth still applies.
+- `OPENCLAW_PUBLIC_GATEWAY_GUARD=1` puts OpenClaw behind a small public route guard. Fly exposes `/facebook/webhook`, `/healthz`, and `/readyz` publicly by default, and can proxy customer portal/legal routes to `LEADERBOT_PORTAL_ORIGIN`. A deployment whose persisted channel config still uses the legacy `/messenger/webhook` path must opt in with `OPENCLAW_PUBLIC_GATEWAY_PATHS`; do not expose an unregistered webhook path because OpenClaw may otherwise serve its UI fallback there. Dashboard/UI/API access requires `OPENCLAW_ADMIN_TOKEN` and a request host listed in `OPENCLAW_ADMIN_HOSTS`; after that, OpenClaw's own device pairing/auth still applies.
+- `/healthz` remains the gateway liveness signal. `/readyz` additionally performs the authenticated, metadata-only image-gen AI-answer quota handshake whenever `LEADERBOT_AI_ANSWER_PREFLIGHT_ENABLED=true` or paid AI-answer enforcement is enabled. The exposure-off rehearsal requires the image-gen finalization drain and `AI_ANSWER_QUOTA_PREFLIGHT_ENABLED=true`, but does not reserve quota, call a provider, or expose checkout.
 
 The container changes `channels.facebook.dmPolicy: "open"` back to `"pairing"` unless `OPENCLAW_FACEBOOK_ALLOW_OPEN=1` is intentionally set.
 Secrets must remain in Fly secrets or the mounted state, never in this repo.

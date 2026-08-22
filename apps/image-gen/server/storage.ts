@@ -6,6 +6,16 @@ import { getForgeApiBaseUrlOrThrow } from "./_core/env";
 type StorageConfig = { baseUrl: string; apiKey: string };
 
 const DEFAULT_MAX_STORAGE_ERROR_BODY_CHARS = 2048;
+const DEFAULT_STORAGE_UPLOAD_TIMEOUT_MS = 30_000;
+const MAX_STORAGE_UPLOAD_TIMEOUT_MS = 60_000;
+
+function getStorageUploadTimeoutMs(): number {
+  const parsed = Number(process.env.STORAGE_UPLOAD_TIMEOUT_MS);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_STORAGE_UPLOAD_TIMEOUT_MS;
+  }
+  return Math.min(Math.floor(parsed), MAX_STORAGE_UPLOAD_TIMEOUT_MS);
+}
 
 function getMaxStorageErrorBodyChars(): number {
   const parsed = Number(process.env.STORAGE_ERROR_BODY_MAX_CHARS);
@@ -19,9 +29,13 @@ function getMaxStorageErrorBodyChars(): number {
 async function readBoundedResponseText(response: Response): Promise<string> {
   const maxChars = getMaxStorageErrorBodyChars();
   if (!response.body) {
-    return response.text().then(text =>
-      text.length > maxChars ? `${text.slice(0, maxChars)}...<truncated>` : text
-    );
+    return response
+      .text()
+      .then(text =>
+        text.length > maxChars
+          ? `${text.slice(0, maxChars)}...<truncated>`
+          : text
+      );
   }
 
   const reader = response.body.getReader();
@@ -163,11 +177,22 @@ export async function storagePut(
   const key = normalizeKey(relKey);
   const uploadUrl = buildUploadUrl(baseUrl, key);
   const formData = toFormData(data, contentType, key.split("/").pop() ?? key);
-  const response = await fetch(uploadUrl, {
-    method: "POST",
-    headers: buildAuthHeaders(apiKey),
-    body: formData,
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(
+    () => controller.abort(),
+    getStorageUploadTimeoutMs()
+  );
+  let response: Response;
+  try {
+    response = await fetch(uploadUrl, {
+      method: "POST",
+      headers: buildAuthHeaders(apiKey),
+      body: formData,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     throw new Error(await buildStorageErrorMessage("upload", response));
@@ -201,7 +226,11 @@ export function storageKeyFromPublicUrl(publicUrl: string): string | null {
           /\/+$/,
           ""
         );
-        if (basePath && basePath !== "/" && pathname.startsWith(`${basePath}/`)) {
+        if (
+          basePath &&
+          basePath !== "/" &&
+          pathname.startsWith(`${basePath}/`)
+        ) {
           pathname = pathname.slice(basePath.length);
         }
       } catch {
@@ -215,7 +244,9 @@ export function storageKeyFromPublicUrl(publicUrl: string): string | null {
   }
 }
 
-export async function storageGet(relKey: string): Promise<{ key: string; url: string; }> {
+export async function storageGet(
+  relKey: string
+): Promise<{ key: string; url: string }> {
   const { baseUrl, apiKey } = getStorageConfig();
   const key = normalizeKey(relKey);
   return {

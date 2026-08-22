@@ -2,17 +2,20 @@ import type { Lang } from "./i18n";
 import type { ConversationAction } from "./botResponse";
 import {
   clearStateStore,
-  forEachStoredState,
   isPromiseLike,
   type MaybePromise,
 } from "./stateStore";
 import { toUserKey } from "./privacy";
 import {
   deletePersistedState,
+  findPersistedStateByUserKeyForPage,
   getOrCreatePersistedState,
   getPersistedState,
   getPersistedStateForPage,
+  mutateExistingPersistedState,
+  mutatePersistedState,
   patchState,
+  type MessengerStateFence,
 } from "./messengerStatePersistence";
 
 export type ConversationState =
@@ -49,9 +52,14 @@ export type MessengerUserState = {
   userKey: string;
   /** Receiving Facebook Page for this Page-scoped sender state. */
   pageId?: string | null;
+  workspaceId?: number | null;
+  channelConnectionId?: number | null;
+  bindingEpoch?: number | null;
+  privacyEpoch?: number | null;
   stage: MessengerFlowState;
   state: MessengerFlowState;
   lastUserMessageAt?: number;
+  lastPaidHandoffEligibleAt?: number;
   lastPhotoUrl: string | null;
   lastPhoto: string | null;
   lastPhotoSource?: SourceImageOrigin | null;
@@ -115,6 +123,20 @@ export function setMessengerPageId(
   }
 }
 
+export function setMessengerOwnership(
+  psid: string,
+  ownership: {
+    workspaceId: number;
+    channelConnectionId: number;
+    bindingEpoch: number;
+    privacyEpoch: number;
+  },
+  now = Date.now()
+): MaybePromise<void> {
+  const result = patchState(psid, ownership, now);
+  return isPromiseLike(result) ? result.then(() => undefined) : undefined;
+}
+
 function getMessengerResponseWindowMs(): number {
   const configured = Number(process.env.MESSENGER_RESPONSE_WINDOW_MS);
   if (Number.isFinite(configured) && configured >= 0) {
@@ -132,31 +154,12 @@ export function getState(
 
 export async function findStateByUserKey(
   userKey: string,
-  expectedPageId?: string | null
+  expectedPageId?: string | null,
+  fence?: MessengerStateFence
 ): Promise<MessengerUserState | null> {
-  let matchedPsid: string | null = null;
-
-  await forEachStoredState<Partial<MessengerUserState>>((psid, state) => {
-    if (matchedPsid || state.userKey !== userKey ||
-      (expectedPageId && state.pageId !== expectedPageId)) {
-      return;
-    }
-
-    // Storage keys are Page-scoped digests, never sender identifiers.
-    // Refuse malformed records rather than re-hashing a storage key.
-    if (typeof state.psid === "string" && state.psid.trim()) {
-      matchedPsid = state.psid;
-    }
-  });
-
-  if (!matchedPsid) {
-    return null;
-  }
-
   const pageId = expectedPageId?.trim();
-  return pageId
-    ? await Promise.resolve(getPersistedStateForPage(matchedPsid, pageId))
-    : await Promise.resolve(getPersistedState(matchedPsid));
+  if (!pageId) return null;
+  return await findPersistedStateByUserKeyForPage(userKey, pageId, fence);
 }
 
 export function clearUserState(psid: string): MaybePromise<void> {
@@ -166,10 +169,11 @@ export function clearUserState(psid: string): MaybePromise<void> {
 export function hasOpenMessengerResponseWindow(
   psid: string,
   now = Date.now(),
-  pageId?: string | null
+  pageId?: string | null,
+  fence?: MessengerStateFence
 ): MaybePromise<boolean> {
   const state = pageId?.trim()
-    ? getPersistedStateForPage(psid, pageId)
+    ? getPersistedStateForPage(psid, pageId, fence)
     : getState(psid);
 
   if (isPromiseLike(state)) {
@@ -189,10 +193,51 @@ export function hasOpenMessengerResponseWindow(
   return now - state.lastUserMessageAt <= getMessengerResponseWindowMs();
 }
 
+export function hasOpenPaidHandoffWindow(
+  psid: string,
+  now = Date.now(),
+  pageId?: string | null,
+  fence?: MessengerStateFence
+): MaybePromise<boolean> {
+  const state = pageId?.trim()
+    ? getPersistedStateForPage(psid, pageId, fence)
+    : getState(psid);
+  const isOpen = (current: MessengerUserState | null) =>
+    Boolean(
+      current?.consentGiven === true &&
+      current.pendingDeleteConfirm !== true &&
+      current?.lastPaidHandoffEligibleAt &&
+      now - current.lastPaidHandoffEligibleAt <= getMessengerResponseWindowMs()
+    );
+  return isPromiseLike(state) ? state.then(isOpen) : isOpen(state);
+}
+
+export function setLastPaidHandoffEligibleAt(
+  psid: string,
+  timestamp = Date.now()
+): MaybePromise<void> {
+  const result = patchState(psid, { lastPaidHandoffEligibleAt: timestamp });
+  if (isPromiseLike(result)) return result.then(() => undefined);
+}
+
 export function getOrCreateState(
   psid: string
 ): MaybePromise<MessengerUserState> {
   return getOrCreatePersistedState(psid);
+}
+
+export function mutateState(
+  psid: string,
+  updater: (current: MessengerUserState) => MessengerUserState
+): MaybePromise<MessengerUserState> {
+  return mutatePersistedState(psid, updater);
+}
+
+export function mutateExistingState(
+  psid: string,
+  updater: (current: MessengerUserState) => MessengerUserState
+): MaybePromise<MessengerUserState | null> {
+  return mutateExistingPersistedState(psid, updater);
 }
 
 export function setFlowState(

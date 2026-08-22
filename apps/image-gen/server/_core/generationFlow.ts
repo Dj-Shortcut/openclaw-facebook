@@ -1,4 +1,8 @@
-import { createImageGenerator, type ImageProvider } from "./imageService";
+import {
+  createImageGenerator,
+  type ImageProvider,
+  type ProviderAttemptAdmission,
+} from "./imageService";
 import {
   GenerationTimeoutError,
   MissingAppBaseUrlError,
@@ -24,6 +28,8 @@ import {
 import { MessengerQuotaReservationCommitError } from "./messengerQuota";
 import { safeLog } from "./logger";
 import type { OpenAiImageQuality } from "./image-generation/openAiImageClient";
+import type { CostLedgerScope } from "./costLedger";
+import type { GeneratedImagePublishHooks } from "./image-generation/generatedImagePublisher";
 
 type GenerationProof = {
   incomingLen: number;
@@ -82,9 +88,12 @@ type ExecuteGenerationFlowInput = {
   sourceImageUrl?: string;
   lastPhotoUrl?: string | null;
   lastPhotoSource?: SourceImageOrigin | null;
-  onProviderAttempt?: () => Promise<void>;
+  onProviderAttempt?: () => Promise<ProviderAttemptAdmission | void>;
+  onProviderSuccess?: () => Promise<void>;
+  costLedgerScope?: CostLedgerScope;
   imageModel?: string;
   imageQuality?: OpenAiImageQuality;
+  generatedImagePublishHooks?: GeneratedImagePublishHooks;
 };
 
 type RuntimeSourceInput = {
@@ -294,10 +303,13 @@ export async function executeGenerationFlow(
       sourceImageProvenance: trustedSourceImageUrl ? "storeInbound" : undefined,
       promptHint: input.promptHint,
       onProviderAttempt: input.onProviderAttempt,
+      onProviderSuccess: input.onProviderSuccess,
+      costLedgerScope: input.costLedgerScope,
       model: input.imageModel,
       quality: input.imageQuality,
       userKey: input.userId,
       reqId: input.reqId,
+      generatedImagePublishHooks: input.generatedImagePublishHooks,
     });
 
     return {

@@ -54,10 +54,33 @@ import {
 import { registerPortalRoutes } from "./portalRoutes";
 import {
   assertMessengerGenerationQueueConfig,
+  ensureMessengerGenerationQueueReady,
   isMessengerGenerationWorkerMode,
   isMessengerGenerationWorkerOnlyMode,
 } from "./messengerGenerationQueue";
+import { ensureMessengerGenerationCompletionReady } from "./messengerGenerationCompletion";
+import {
+  assertMollieBillingEnabled,
+  assertMollieNonSecretLaunchConfig,
+  assertTenantBillingWorkerConfigured,
+  getMollieConfig,
+  getConfiguredBillingMode,
+  isMollieBillingEnabled,
+  isMollieBillingPreflightEnabled,
+  isMollieEntitlementEnforcementEnabled,
+} from "./billing/config";
+import {
+  assertBillingNotificationConfig,
+  isBillingNotificationPlaneEnabled,
+} from "./billing/billingNotificationDelivery";
+import { registerBillingNotificationReceiverRoute } from "./billing/billingNotificationReceiver";
+import {
+  assertAiAnswerFinalizationReadiness,
+  assertBillingDatabaseReadiness,
+  assertMollieAccountingSchemaReadiness,
+} from "./billing/billingReadiness";
 import { startMessengerGenerationWorker } from "./messengerGenerationWorker";
+import { startMessengerPrivacyErasureWorker } from "./messengerPrivacyErasureWorker";
 import { reconcileMessengerProfileOnStartup } from "./messengerProfile";
 import { safeLog } from "./logger";
 import {
@@ -70,15 +93,18 @@ import { registerHealthRoutes } from "./runtime/healthRoutes";
 import { registerLegalRoutes } from "./runtime/legalRoutes";
 import { registerPublicConfigRoute } from "./runtime/publicConfig";
 import { registerWebhookRuntime } from "./runtime/webhookRuntime";
-import {
-  assertMollieBillingEnabled,
-  assertTenantBillingWorkerConfigured,
-  isMollieBillingEnabled,
-} from "./billing/config";
 import { registerMollieWebhookRoute } from "./billing/webhookRoutes";
 import { registerBillingPortalRoutes } from "./billing/portalRoutes";
 import { startBillingOutboxWorker } from "./billing/outboxWorker";
 import { startDailyBillingReconciliation } from "./billing/reconciliation";
+import { startAiAnswerFinalizationWorker } from "./billing/aiAnswerFinalizationWorker";
+import { startBillingProfileExpiryWorker } from "./billing/billingProfileExpiryWorker";
+import { startBillingNotificationReceiverWorker } from "./billing/billingNotificationReceiverWorker";
+import {
+  getMollieAccountingImportConfig,
+  isMollieAccountingImportEnabled,
+  startMollieAccountingImportWorker,
+} from "./billing/accountingWorker";
 
 const gitSha = process.env.GIT_SHA ?? process.env.SOURCE_VERSION ?? "dev";
 const bootTimestamp = new Date().toISOString();
@@ -177,16 +203,60 @@ async function startServer() {
   safeLog("boot", { pid: process.pid });
   safeLog("version", buildVersionPayload(gitSha, bootTimestamp));
   const generatorStartupConfig = getBotStartupConfig();
+  const generationWorkerOnly = isMessengerGenerationWorkerOnlyMode();
   safeLog("generator_startup_config", generatorStartupConfig);
   assertProductionImageStorageConfig();
   assertAuthConfig();
   assertWhatsAppConfig();
   const mollieBillingEnabled = isMollieBillingEnabled();
-  if (mollieBillingEnabled) {
-    assertMollieBillingEnabled();
+  const mollieBillingPreflightEnabled = isMollieBillingPreflightEnabled();
+  const aiAnswerEnforcementEnabled = isMollieEntitlementEnforcementEnabled();
+  const aiFinalizationDrainEnabled =
+    process.env.AI_ANSWER_FINALIZATION_DRAIN_ENABLED === "true";
+  const aiAnswerQuotaPreflightEnabled =
+    process.env.AI_ANSWER_QUOTA_PREFLIGHT_ENABLED === "true";
+  const accountingImportEnabled = isMollieAccountingImportEnabled();
+  const notificationPlaneEnabled = isBillingNotificationPlaneEnabled();
+  if (notificationPlaneEnabled && !generationWorkerOnly) {
+    assertBillingNotificationConfig();
+  }
+  if (accountingImportEnabled && !generationWorkerOnly) {
+    void getMollieAccountingImportConfig();
+    await assertMollieAccountingSchemaReadiness();
+  }
+  if (mollieBillingPreflightEnabled && !generationWorkerOnly) {
     assertTenantBillingWorkerConfigured();
+    assertMollieNonSecretLaunchConfig();
+    assertBillingNotificationConfig();
+    await assertBillingDatabaseReadiness(getConfiguredBillingMode(), {
+      requireRuntimeHeartbeat: false,
+    });
+  }
+  if (mollieBillingEnabled && !generationWorkerOnly) {
+    assertMollieBillingEnabled();
+    void getMollieConfig();
   } else {
     safeLog("mollie_billing_disabled");
+  }
+  if (
+    (aiAnswerEnforcementEnabled || aiAnswerQuotaPreflightEnabled) &&
+    !aiFinalizationDrainEnabled &&
+    !generationWorkerOnly
+  ) {
+    throw new Error(
+      "AI answer quota admission/preflight requires AI_ANSWER_FINALIZATION_DRAIN_ENABLED=true"
+    );
+  }
+  if (
+    (aiAnswerEnforcementEnabled ||
+      aiFinalizationDrainEnabled ||
+      aiAnswerQuotaPreflightEnabled) &&
+    !generationWorkerOnly
+  ) {
+    const mode = getConfiguredBillingMode();
+    await assertAiAnswerFinalizationReadiness(mode, {
+      requireRuntimeHeartbeat: false,
+    });
   }
   assertPrivacyConfig();
   assertConversationIdentityConfig();
@@ -197,7 +267,11 @@ async function startServer() {
   await ensureWebhookIngressQueueReady();
   await ensureHttpRateLimiterReady();
   assertMessengerGenerationQueueConfig();
-  const generationWorkerOnly = isMessengerGenerationWorkerOnlyMode();
+  await ensureMessengerGenerationQueueReady();
+  await ensureMessengerGenerationCompletionReady();
+  // Privacy erasure recovery is independent of billing and HTTP exposure. It
+  // must also drain in generation-worker-only deployments.
+  await startMessengerPrivacyErasureWorker();
   if (isMessengerGenerationWorkerMode() || generationWorkerOnly) {
     startMessengerGenerationWorker({ keepAlive: generationWorkerOnly });
   }
@@ -226,6 +300,12 @@ async function startServer() {
   if (mollieBillingEnabled) {
     registerMollieWebhookRoute(app);
   }
+  if (notificationPlaneEnabled) {
+    registerBillingNotificationReceiverRoute(app);
+  }
+  if (accountingImportEnabled) {
+    startMollieAccountingImportWorker();
+  }
 
   app.use(
     express.json({
@@ -253,8 +333,23 @@ async function startServer() {
   registerLegalRoutes(app);
 
   scheduleFaceMemoryExpiry();
-  if (mollieBillingEnabled) {
+  if (
+    aiAnswerEnforcementEnabled ||
+    aiFinalizationDrainEnabled ||
+    aiAnswerQuotaPreflightEnabled
+  ) {
+    startAiAnswerFinalizationWorker();
+  }
+  if (aiAnswerEnforcementEnabled) {
+    startBillingProfileExpiryWorker();
+  }
+  if (notificationPlaneEnabled) {
+    startBillingNotificationReceiverWorker();
+  }
+  if (mollieBillingEnabled || notificationPlaneEnabled) {
     startBillingOutboxWorker();
+  }
+  if (mollieBillingEnabled) {
     startDailyBillingReconciliation();
   }
 

@@ -8,13 +8,27 @@ import { enqueueOrRunMessengerGenerationJob } from "./messengerGenerationQueue";
 import {
   getMessengerRequestPageId,
   runWithMessengerRequestContext,
+  setMessengerRequestOperationId,
 } from "./messengerRequestContext";
 import { MESSENGER_ASYNC_RESPONSE_QUEUED } from "./webhookFallback";
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
-import type { MessengerSendOutcome } from "./messengerApi";
 import { t, type Lang } from "./i18n";
+import {
+  assertMessengerGenerationOwnership,
+  resolveMessengerGenerationOwnership,
+  WorkspaceEntitlementLookupError,
+} from "./workspaceEntitlementRuntime";
+import {
+  assertMessengerPrivacySubject,
+  ensureActiveMessengerPrivacySubject,
+  MessengerPrivacyFenceError,
+} from "./messengerPrivacySubject";
 import { createInternalMessengerImageRequestHandler } from "./webhookInternalImageRequest";
-import type { HandlerContext, HandlerDeps } from "./webhookHandlerTypes";
+import type {
+  HandlerContext,
+  HandlerDeps,
+  MessengerSendOutcome,
+} from "./webhookHandlerTypes";
 
 export type {
   HandlerContext,
@@ -57,19 +71,42 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       return ctx.sendLoggedVideo(psid, videoUrl, reqId);
     },
   });
-  const processVideoGenerationJob = async (job: MessengerGenerationJob) =>
-    await runWithMessengerRequestContext(
+  const processVideoGenerationJob = async (job: MessengerGenerationJob) => {
+    const ownership =
+      job.workspaceId && job.channelConnectionId && job.bindingEpoch
+        ? {
+            workspaceId: job.workspaceId,
+            channelConnectionId: job.channelConnectionId,
+            bindingEpoch: job.bindingEpoch,
+            userKey: job.userId,
+            privacyEpoch: job.privacyEpoch,
+          }
+        : undefined;
+    return await runWithMessengerRequestContext(
       job.pageId,
-      async () =>
-        await videoGenerationRunner(
+      async () => {
+        setMessengerRequestOperationId(job.reqId);
+        await assertMessengerGenerationOwnership(job);
+        if (job.workspaceId && job.channelConnectionId && job.privacyEpoch) {
+          await assertMessengerPrivacySubject({
+            workspaceId: job.workspaceId,
+            channelConnectionId: job.channelConnectionId,
+            userKey: job.userId,
+            privacyEpoch: job.privacyEpoch,
+          });
+        }
+        return await videoGenerationRunner(
           job.psid,
           job.userId,
           job.reqId,
           job.lang,
           job.sourceImageUrl ?? "",
           job.promptHint ?? ""
-        )
+        );
+      },
+      ownership
     );
+  };
   const runVideoGeneration = async (
     psid: string,
     userId: string,
@@ -78,12 +115,25 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
     sourceImageUrl: string,
     promptHint: string
   ): Promise<MessengerSendOutcome> => {
+    const pageId = getMessengerRequestPageId();
+    const ownership = await resolveMessengerGenerationOwnership(pageId);
+    const privacyEpoch = ownership
+      ? await ensureActiveMessengerPrivacySubject({
+          workspaceId: ownership.workspaceId,
+          channelConnectionId: ownership.channelConnectionId,
+          userKey: userId,
+        })
+      : undefined;
     const result = await enqueueOrRunMessengerGenerationJob(
       {
         operation: "video",
         psid,
         userId,
-        pageId: getMessengerRequestPageId(),
+        pageId,
+        workspaceId: ownership?.workspaceId,
+        channelConnectionId: ownership?.channelConnectionId,
+        bindingEpoch: ownership?.bindingEpoch,
+        privacyEpoch,
         reqId,
         lang,
         sourceImageUrl,
@@ -99,14 +149,48 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
   const processVideoGenerationJobDeadLetter = async (
     job: MessengerGenerationJob
   ) =>
-    await runWithMessengerRequestContext(job.pageId, async () => {
-      await ctx.sendLoggedText(
-        job.psid,
-        t(job.lang, "videoGenerationGenericFailure"),
-        job.reqId
-      );
-      return MESSENGER_ASYNC_RESPONSE_QUEUED;
-    });
+    await runWithMessengerRequestContext(
+      job.pageId,
+      async () => {
+        setMessengerRequestOperationId(job.reqId);
+        try {
+          await assertMessengerGenerationOwnership(job);
+          if (job.workspaceId && job.channelConnectionId && job.privacyEpoch) {
+            await assertMessengerPrivacySubject({
+              workspaceId: job.workspaceId,
+              channelConnectionId: job.channelConnectionId,
+              userKey: job.userId,
+              privacyEpoch: job.privacyEpoch,
+            });
+          }
+        } catch (error) {
+          if (
+            error instanceof MessengerPrivacyFenceError ||
+            error instanceof WorkspaceEntitlementLookupError
+          ) {
+            return {
+              sent: false,
+              reason: "response_window_closed",
+            } as const;
+          }
+          throw error;
+        }
+        return await ctx.sendLoggedText(
+          job.psid,
+          t(job.lang, "videoGenerationGenericFailure"),
+          job.reqId
+        );
+      },
+      job.workspaceId && job.channelConnectionId && job.bindingEpoch
+        ? {
+            workspaceId: job.workspaceId,
+            channelConnectionId: job.channelConnectionId,
+            bindingEpoch: job.bindingEpoch,
+            userKey: job.userId,
+            privacyEpoch: job.privacyEpoch,
+          }
+        : undefined
+    );
   ctx = createHandlerContext({
     defaultLang,
     runImageGeneration: generationRunner.runImageGeneration,
