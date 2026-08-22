@@ -312,13 +312,15 @@ export class OpenAiImageGenerator implements ImageGenerator {
           };
           let dailyImageBudgetReserved = false;
           try {
-            if (!input.bypassBudgetLimits) {
-              await assertMessengerDailyImageBudgetAvailable({
-                reqId: input.reqId,
-                now: budgetNow,
-              });
-              dailyImageBudgetReserved = true;
+            if (input.bypassBudgetLimits) {
+              await recordAttempt();
+              return;
             }
+            await assertMessengerDailyImageBudgetAvailable({
+              reqId: input.reqId,
+              now: budgetNow,
+            });
+            dailyImageBudgetReserved = true;
             await admitMessengerProviderSpend({
               reqId: input.reqId,
               attemptId: costLedgerEntryId,
@@ -328,9 +330,6 @@ export class OpenAiImageGenerator implements ImageGenerator {
                 costEstimate.estimatedOutputCostUsd ?? null,
               costEstimateComplete: costEstimate.costEstimateComplete,
               now: budgetNow,
-              budgetClass: input.bypassBudgetLimits
-                ? "owner_emergency"
-                : "customer",
               recordAttempt,
             });
           } catch (error) {

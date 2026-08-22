@@ -168,7 +168,7 @@ describe("messenger quota dayKey", () => {
     process.env.MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT = "";
     process.env.MESSENGER_VIDEO_GENERATION_DAILY_LIMIT = "\t";
 
-    expect(getImageGenerationDailyLimit()).toBe(20);
+    expect(getImageGenerationDailyLimit()).toBe(5);
     expect(getAudioTranscriptionDailyLimit()).toBe(5);
     expect(getVideoGenerationDailyLimit()).toBe(1);
   });

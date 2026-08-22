@@ -13,8 +13,6 @@ import {
   summarizeBudgetedCostLedgerPeriod,
   summarizeBudgetedCostLedgerPeriods,
   summarizeCostLedgerPeriodForUser,
-  summarizeOwnerBypassCostLedgerPeriod,
-  summarizeOwnerBypassCostLedgerPeriods,
 } from "./costLedger";
 import { safeLog } from "./logger";
 import { notifyOwner } from "./notification";
@@ -32,8 +30,6 @@ const DAILY_VIDEO_BUDGET_KEY_PREFIX = "messenger:daily-video-budget";
 const DAILY_AUDIO_TRANSCRIPTION_BUDGET_KEY_PREFIX =
   "messenger:daily-audio-transcription-budget";
 const SPEND_COUNTER_SCALE = 1_000_000;
-const DEFAULT_OWNER_EMERGENCY_DAILY_SPEND_CAP_USD = 10;
-const DEFAULT_OWNER_EMERGENCY_MONTHLY_SPEND_CAP_USD = 100;
 
 const RESERVE_SPEND_SCRIPT = `
   if redis.call("EXISTS", KEYS[1]) == 1 then
@@ -420,62 +416,6 @@ export function getMessengerUserDailySpendBudgetConfig(): MessengerUserDailySpen
   };
 }
 
-export function getMessengerOwnerEmergencySpendBudgetConfig(): {
-  dailyCapUsd: number;
-  monthlyCapUsd: number;
-} {
-  return {
-    dailyCapUsd:
-      readPositiveUsd("MESSENGER_OWNER_EMERGENCY_DAILY_SPEND_CAP_USD") ??
-      DEFAULT_OWNER_EMERGENCY_DAILY_SPEND_CAP_USD,
-    monthlyCapUsd:
-      readPositiveUsd("MESSENGER_OWNER_EMERGENCY_MONTHLY_SPEND_CAP_USD") ??
-      DEFAULT_OWNER_EMERGENCY_MONTHLY_SPEND_CAP_USD,
-  };
-}
-
-async function assertMessengerOwnerEmergencySpendBudgetAvailable(input: {
-  reqId: string;
-  estimatedCostUsd: number | null;
-  estimatedOutputCostUsd?: number | null;
-  costEstimateComplete?: boolean;
-  now: Date;
-}): Promise<void> {
-  const estimate =
-    (input.estimatedCostUsd ?? 0) + (input.estimatedOutputCostUsd ?? 0);
-  if (
-    input.costEstimateComplete === false ||
-    !Number.isFinite(estimate) ||
-    estimate <= 0
-  ) {
-    throw new MessengerSpendBudgetExceededError(
-      "Owner emergency spend stop requires completely priced provider attempts"
-    );
-  }
-  const day = getUtcDayKey(input.now);
-  const month = getUtcMonthKey(input.now);
-  const config = getMessengerOwnerEmergencySpendBudgetConfig();
-  const [dailySummary, monthlySummary] = await Promise.all([
-    summarizeOwnerBypassCostLedgerPeriod(day),
-    summarizeOwnerBypassCostLedgerPeriods(
-      getUtcMonthDayPeriods(input.now),
-      month
-    ),
-  ]);
-  if (
-    dailySummary.estimatedCostUsd + estimate > config.dailyCapUsd ||
-    monthlySummary.estimatedCostUsd + estimate > config.monthlyCapUsd
-  ) {
-    safeLog("messenger_owner_emergency_spend_stop_reached", {
-      level: "warn",
-      reqId: hashRequestId(input.reqId),
-    });
-    throw new MessengerSpendBudgetExceededError(
-      "Messenger owner emergency spend stop reached"
-    );
-  }
-}
-
 /**
  * Serializes the spend-cap decision with the durable attempt-ledger write.
  * Provider code must not start the external request until `recordAttempt`
@@ -490,19 +430,12 @@ export async function admitMessengerProviderSpend<T>(input: {
   estimatedOutputCostUsd?: number | null;
   costEstimateComplete?: boolean;
   now?: Date;
-  budgetClass?: "customer" | "owner_emergency";
   recordAttempt: () => Promise<T>;
 }): Promise<T> {
-  const ownerEmergency = input.budgetClass === "owner_emergency";
   const dailyEnabled = getMessengerDailySpendBudgetConfig().enabled;
   const monthlyEnabled = getMessengerMonthlySpendBudgetConfig().enabled;
   const userDailyEnabled = getMessengerUserDailySpendBudgetConfig().enabled;
-  if (
-    !ownerEmergency &&
-    !dailyEnabled &&
-    !monthlyEnabled &&
-    !userDailyEnabled
-  ) {
+  if (!dailyEnabled && !monthlyEnabled && !userDailyEnabled) {
     return await input.recordAttempt();
   }
 
@@ -518,13 +451,6 @@ export async function admitMessengerProviderSpend<T>(input: {
       );
     }
     return await inMemorySpendAdmissionLimiter.run(async () => {
-      if (ownerEmergency) {
-        await assertMessengerOwnerEmergencySpendBudgetAvailable({
-          ...input,
-          now,
-        });
-        return await input.recordAttempt();
-      }
       await assertMessengerDailySpendBudgetAvailable({ ...input, now });
       await assertMessengerMonthlySpendBudgetAvailable({ ...input, now });
       await assertMessengerUserDailySpendBudgetAvailable({ ...input, now });
@@ -547,33 +473,12 @@ export async function admitMessengerProviderSpend<T>(input: {
 
   const day = getUtcDayKey(now);
   const month = getUtcMonthKey(now);
-  const [dailySummary, monthlySummary, userSummary] = ownerEmergency
-    ? await Promise.all([
-        summarizeOwnerBypassCostLedgerPeriod(day),
-        summarizeOwnerBypassCostLedgerPeriods(
-          getUtcMonthDayPeriods(now),
-          month
-        ),
-        Promise.resolve({ estimatedCostUsd: 0 }),
-      ])
-    : await Promise.all([
-        summarizeBudgetedCostLedgerPeriod(day),
-        summarizeBudgetedCostLedgerPeriods(getUtcMonthDayPeriods(now), month),
-        summarizeCostLedgerPeriodForUser(day, input.userKey),
-      ]);
-  const ownerConfig = getMessengerOwnerEmergencySpendBudgetConfig();
-  const dailyCapUsd = ownerEmergency
-    ? ownerConfig.dailyCapUsd
-    : (getMessengerDailySpendBudgetConfig().capUsd ?? 0);
-  const monthlyCapUsd = ownerEmergency
-    ? ownerConfig.monthlyCapUsd
-    : (getMessengerMonthlySpendBudgetConfig().capUsd ?? 0);
-  const userDailyCapUsd = ownerEmergency
-    ? 0
-    : (getMessengerUserDailySpendBudgetConfig().capUsd ?? 0);
-  const tag = ownerEmergency
-    ? `{messenger-owner-emergency-spend:${month}}`
-    : `{messenger-spend:${month}}`;
+  const [dailySummary, monthlySummary, userSummary] = await Promise.all([
+    summarizeBudgetedCostLedgerPeriod(day),
+    summarizeBudgetedCostLedgerPeriods(getUtcMonthDayPeriods(now), month),
+    summarizeCostLedgerPeriodForUser(day, input.userKey),
+  ]);
+  const tag = `{messenger-spend:${month}}`;
   const attemptKey = createHash("sha256")
     .update(input.attemptId)
     .digest("hex")
@@ -596,9 +501,9 @@ export async function admitMessengerProviderSpend<T>(input: {
       keys.length,
       ...keys,
       usdToSpendUnits(estimate),
-      usdToSpendUnits(dailyCapUsd),
-      usdToSpendUnits(monthlyCapUsd),
-      usdToSpendUnits(userDailyCapUsd),
+      usdToSpendUnits(getMessengerDailySpendBudgetConfig().capUsd ?? 0),
+      usdToSpendUnits(getMessengerMonthlySpendBudgetConfig().capUsd ?? 0),
+      usdToSpendUnits(getMessengerUserDailySpendBudgetConfig().capUsd ?? 0),
       usdToSpendUnits(dailySummary.estimatedCostUsd),
       usdToSpendUnits(monthlySummary.estimatedCostUsd),
       usdToSpendUnits(userSummary.estimatedCostUsd),
@@ -609,7 +514,6 @@ export async function admitMessengerProviderSpend<T>(input: {
     safeLog("messenger_spend_admission_rejected", {
       level: "warn",
       reqId: hashRequestId(input.reqId),
-      budgetClass: input.budgetClass ?? "customer",
       reason:
         result === 2
           ? "duplicate_attempt"

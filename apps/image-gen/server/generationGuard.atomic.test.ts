@@ -28,27 +28,6 @@ describe("atomic Messenger spend admission", () => {
     delete process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD;
     delete process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD;
     delete process.env.MESSENGER_USER_DAILY_SPEND_CAP_USD;
-    delete process.env.MESSENGER_OWNER_EMERGENCY_DAILY_SPEND_CAP_USD;
-    delete process.env.MESSENGER_OWNER_EMERGENCY_MONTHLY_SPEND_CAP_USD;
-  });
-
-  it("keeps owner usage outside customer caps but inside its emergency stop", async () => {
-    process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "0.01";
-    process.env.MESSENGER_OWNER_EMERGENCY_DAILY_SPEND_CAP_USD = "0.02";
-    process.env.MESSENGER_OWNER_EMERGENCY_MONTHLY_SPEND_CAP_USD = "1.00";
-
-    const attempts = await Promise.allSettled(
-      Array.from({ length: 3 }, (_, index) =>
-        recordOwnerAttempt(`owner-${index}`, 0.01)
-      )
-    );
-
-    expect(
-      attempts.filter(result => result.status === "fulfilled")
-    ).toHaveLength(2);
-    expect(
-      attempts.filter(result => result.status === "rejected")
-    ).toHaveLength(1);
   });
 
   it("admits only attempts that fit when concurrent workers race the last budget", async () => {
@@ -144,43 +123,6 @@ async function recordAttempt(
           provider: "test-provider",
           model: "test-model",
           userKey,
-          reqId,
-          status: "provider_attempt_started",
-          estimatedCostUsd,
-          estimatedOutputCostUsd: null,
-          finalCostUsd: null,
-          costEstimateComplete: true,
-          estimateSource: "test",
-          unpricedCostComponents: [],
-        },
-        NOW
-      );
-    },
-  });
-}
-
-async function recordOwnerAttempt(
-  reqId: string,
-  estimatedCostUsd: number
-): Promise<void> {
-  await admitMessengerProviderSpend({
-    reqId,
-    attemptId: reqId,
-    userKey: "owner-user",
-    estimatedCostUsd,
-    costEstimateComplete: true,
-    now: NOW,
-    budgetClass: "owner_emergency",
-    recordAttempt: async () => {
-      await appendCostLedgerEntry(
-        {
-          id: reqId,
-          channel: "facebook_messenger",
-          operation: "image_generation",
-          provider: "test-provider",
-          model: "test-model",
-          providerUsage: { budgetBypassApplied: true },
-          userKey: "owner-user",
           reqId,
           status: "provider_attempt_started",
           estimatedCostUsd,
