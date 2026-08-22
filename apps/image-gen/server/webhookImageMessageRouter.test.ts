@@ -149,6 +149,49 @@ describe("webhook image message router", () => {
     expect(ctx.sendPhotoReceivedPrompt).not.toHaveBeenCalled();
   });
 
+  it("detects multiple uploaded photos and offers a channel-neutral combine action", async () => {
+    const ctx = makeHandlerContext();
+    normalizeMessengerInboundImageMock
+      .mockResolvedValueOnce("https://assets.example/generated/source-1.jpg")
+      .mockResolvedValueOnce("https://assets.example/generated/source-2.jpg");
+
+    await expect(
+      tryHandleImageMessage(ctx, {
+        psid: "multi-image-router-user",
+        userId: "multi-image-router-user-key",
+        reqId: "req-multi-image-router",
+        lang: "nl",
+        attachments: [
+          { type: "image", payload: { url: "https://example.com/one.jpg" } },
+          { type: "image", payload: { url: "https://example.com/two.jpg" } },
+        ],
+      })
+    ).resolves.toBe(true);
+
+    expect(ctx.sendLoggedActions).toHaveBeenCalledWith(
+      "multi-image-router-user",
+      t("nl", "multiPhotoPrompt"),
+      expect.arrayContaining([
+        {
+          id: "combine_photos",
+          label: "Samenvoegen",
+          inputText: "combine_photos",
+        },
+      ]),
+      "req-multi-image-router"
+    );
+    expect(ctx.sendPhotoReceivedPrompt).not.toHaveBeenCalled();
+    expect(await Promise.resolve(getState("multi-image-router-user"))).toMatchObject({
+      stage: "AWAITING_EDIT_PROMPT",
+      pendingImageUrls: [
+        "https://assets.example/generated/source-1.jpg",
+        "https://assets.example/generated/source-2.jpg",
+      ],
+      lastPhotoUrl: "https://assets.example/generated/source-2.jpg",
+      lastPhotoSource: "stored",
+    });
+  });
+
   it("preserves the editable image context when an inbound image cannot be read", async () => {
     const ctx = makeHandlerContext();
     const psid = "image-router-failed-upload-user";

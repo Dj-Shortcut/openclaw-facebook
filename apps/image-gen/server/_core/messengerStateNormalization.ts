@@ -1,5 +1,9 @@
 import { toUserKey } from "./privacy";
-import type { MessengerFlowState, MessengerUserState } from "./messengerState";
+import { MAX_SOURCE_IMAGES } from "./image-generation/generationTypes";
+import type {
+  MessengerFlowState,
+  MessengerUserState,
+} from "./messengerState";
 
 type PartialState = Partial<MessengerUserState>;
 type LegacyConversationState = MessengerFlowState | "AWAITING_STYLE";
@@ -61,6 +65,7 @@ export function createDefaultState(
     pendingDeleteConfirmAt: undefined,
     hasSeenIntro: false,
     pendingImageUrl: undefined,
+    pendingImageUrls: undefined,
     pendingImageAt: undefined,
     faceMemoryConsent: null,
     lastSourceImageUrl: null,
@@ -354,6 +359,26 @@ function resolvePendingEditIntent(
   };
 }
 
+function resolvePendingImageUrls(
+  ctx: NormalizationCtx
+): Pick<MessengerUserState, "pendingImageUrls"> {
+  const configured = Array.isArray(ctx.value?.pendingImageUrls)
+    ? ctx.value.pendingImageUrls
+    : [];
+  const pendingImageUrls = Array.from(
+    new Set(
+      configured
+        .filter((url): url is string => typeof url === "string")
+        .map(url => url.trim())
+        .filter(Boolean)
+    )
+  ).slice(0, MAX_SOURCE_IMAGES);
+
+  return {
+    pendingImageUrls: pendingImageUrls.length ? pendingImageUrls : undefined,
+  };
+}
+
 function resolvePendingVideoGeneration(
   ctx: NormalizationCtx
 ): Pick<MessengerUserState, "pendingVideoGeneration"> {
@@ -393,6 +418,7 @@ function applyNormalizedStateShape(
     ...resolvePhotoAndStyleState(ctx, { lastPhoto }),
     ...resolveGeneratedImageState(ctx, lastGeneratedUrl),
     ...resolveSourceImageState(ctx),
+    ...resolvePendingImageUrls(ctx),
     ...resolvePendingEditIntent(ctx),
     ...resolvePendingVideoGeneration(ctx),
     quota: resolveQuotaState(ctx),

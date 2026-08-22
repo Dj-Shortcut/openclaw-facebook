@@ -6,6 +6,7 @@ import {
   type MaybePromise,
 } from "./stateStore";
 import { toUserKey } from "./privacy";
+import { MAX_SOURCE_IMAGES } from "./image-generation/generationTypes";
 import {
   deletePersistedState,
   findPersistedStateByUserKeyForPage,
@@ -37,7 +38,7 @@ export type QuotaReservationState = {
 };
 
 export type SourceImageOrigin = "external" | "stored";
-export type PendingEditIntent = "change_background";
+export type PendingEditIntent = "change_background" | "combine_photos";
 
 export type PendingVideoGeneration = {
   sourceImageUrl: string;
@@ -74,6 +75,8 @@ export type MessengerUserState = {
   pendingDeleteConfirmAt?: number;
   hasSeenIntro: boolean;
   pendingImageUrl?: string;
+  /** Tenant-scoped source set for one multi-photo composition request. */
+  pendingImageUrls?: string[];
   pendingImageAt?: number;
   faceMemoryConsent?: {
     given: boolean;
@@ -406,7 +409,44 @@ export function setPendingStoredImage(
   imageUrl: string,
   now = Date.now()
 ): MaybePromise<void> {
-  return setPendingImage(psid, imageUrl, now, "stored");
+  return setPendingStoredImages(psid, [imageUrl], now);
+}
+
+export async function setPendingStoredImages(
+  psid: string,
+  imageUrls: string[],
+  now = Date.now()
+): Promise<void> {
+  const state = await Promise.resolve(getOrCreateState(psid));
+  const incoming = imageUrls.map(url => url.trim()).filter(Boolean);
+  if (!incoming.length) return;
+
+  const shouldAppend =
+    state.stage === "AWAITING_EDIT_PROMPT" &&
+    Boolean(state.pendingImageUrls?.length);
+  const pendingImageUrls = Array.from(
+    new Set([...(shouldAppend ? state.pendingImageUrls ?? [] : []), ...incoming])
+  ).slice(0, MAX_SOURCE_IMAGES);
+  const lastImageUrl = pendingImageUrls.at(-1)!;
+  await Promise.resolve(
+    patchState(
+      psid,
+      {
+        lastPhotoUrl: lastImageUrl,
+        lastPhoto: lastImageUrl,
+        lastPhotoSource: "stored",
+        lastImageUrl: undefined,
+        lastGeneratedUrl: null,
+        pendingImageUrl: lastImageUrl,
+        pendingImageUrls,
+        pendingImageAt: now,
+        pendingEditIntent: null,
+        stage: "AWAITING_EDIT_PROMPT",
+        state: "AWAITING_EDIT_PROMPT",
+      },
+      now
+    )
+  );
 }
 
 export function rememberFaceSourceImage(
@@ -493,6 +533,7 @@ export function clearFaceMemoryState(
       lastPhoto: null,
       lastPhotoSource: null,
       pendingImageUrl: undefined,
+      pendingImageUrls: undefined,
       pendingImageAt: undefined,
     },
     now
@@ -564,6 +605,7 @@ export function clearPendingImageState(
       lastImageUrl: undefined,
       lastGeneratedUrl: null,
       pendingImageUrl: undefined,
+      pendingImageUrls: undefined,
       pendingImageAt: undefined,
       pendingScreenshotIntentContinuation: undefined,
       pendingEditIntent: null,

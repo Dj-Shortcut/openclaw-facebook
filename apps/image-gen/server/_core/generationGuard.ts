@@ -10,8 +10,8 @@ import {
   setEphemeralKeyIfAbsent,
 } from "./stateStore";
 import {
-  summarizeCostLedgerPeriod,
-  summarizeCostLedgerPeriods,
+  summarizeBudgetedCostLedgerPeriod,
+  summarizeBudgetedCostLedgerPeriods,
   summarizeCostLedgerPeriodForUser,
 } from "./costLedger";
 import { safeLog } from "./logger";
@@ -474,8 +474,8 @@ export async function admitMessengerProviderSpend<T>(input: {
   const day = getUtcDayKey(now);
   const month = getUtcMonthKey(now);
   const [dailySummary, monthlySummary, userSummary] = await Promise.all([
-    summarizeCostLedgerPeriod(day),
-    summarizeCostLedgerPeriods(getUtcMonthDayPeriods(now), month),
+    summarizeBudgetedCostLedgerPeriod(day),
+    summarizeBudgetedCostLedgerPeriods(getUtcMonthDayPeriods(now), month),
     summarizeCostLedgerPeriodForUser(day, input.userKey),
   ]);
   const tag = `{messenger-spend:${month}}`;
@@ -598,7 +598,7 @@ export async function assertMessengerDailySpendBudgetAvailable(input: {
     );
   }
 
-  const summary = await summarizeCostLedgerPeriod(period);
+  const summary = await summarizeBudgetedCostLedgerPeriod(period);
   const projectedSpendUsd = summary.estimatedCostUsd + attemptEstimate;
   if (projectedSpendUsd > capUsd) {
     safeLog("messenger_daily_spend_budget_reached", {
@@ -660,7 +660,7 @@ export async function assertMessengerMonthlySpendBudgetAvailable(input: {
     );
   }
 
-  const summary = await summarizeCostLedgerPeriods(
+  const summary = await summarizeBudgetedCostLedgerPeriods(
     getUtcMonthDayPeriods(now),
     monthPeriod
   );

@@ -39,6 +39,7 @@ type OpenAiRequestContext = {
 type OpenAiRequestInput = {
   prompt: string;
   sourceImage: OpenAiSourceImage;
+  sourceImages?: OpenAiSourceImage[];
   hasSourceImage: boolean;
   previousResponseId?: string;
   model?: string;
@@ -400,6 +401,7 @@ export function buildOpenAiRequest(
     model: imageGenerationModel,
     prompt: input.prompt,
     sourceImage: input.hasSourceImage ? input.sourceImage : undefined,
+    sourceImages: input.hasSourceImage ? input.sourceImages : undefined,
     previousResponseId: input.previousResponseId,
     quality: input.quality,
     resolvedOptions: imageOptions,
@@ -448,19 +450,21 @@ function getSourceImageFilename(contentType: string): string {
 function buildGptImage2EditFormData(input: {
   model: string;
   prompt: string;
-  sourceImage: OpenAiSourceImage;
+  sourceImages: OpenAiSourceImage[];
   imageOptions: ResolvedOpenAiImageOptions;
 }): FormData {
   const formData = new FormData();
   formData.append("model", input.model);
   formData.append("prompt", input.prompt);
-  formData.append(
-    "image[]",
-    new Blob([new Uint8Array(input.sourceImage.buffer)], {
-      type: input.sourceImage.contentType,
-    }),
-    getSourceImageFilename(input.sourceImage.contentType)
-  );
+  input.sourceImages.forEach((sourceImage, index) => {
+    formData.append(
+      "image[]",
+      new Blob([new Uint8Array(sourceImage.buffer)], {
+        type: sourceImage.contentType,
+      }),
+      `${index + 1}-${getSourceImageFilename(sourceImage.contentType)}`
+    );
+  });
   appendImageApiOptions(formData, input.imageOptions);
   return formData;
 }
@@ -516,7 +520,9 @@ function buildGptImage2Request(
     body: buildGptImage2EditFormData({
       model: input.model,
       prompt: input.prompt,
-      sourceImage: input.sourceImage,
+      sourceImages: input.sourceImages?.length
+        ? input.sourceImages
+        : [input.sourceImage],
       imageOptions: input.imageOptions,
     }),
   });
@@ -540,6 +546,7 @@ export function buildOpenAiImageGenerationPayload(input: {
   model: string;
   prompt: string;
   sourceImage?: OpenAiSourceImage;
+  sourceImages?: OpenAiSourceImage[];
   previousResponseId?: string;
   quality?: OpenAiImageQuality;
   resolvedOptions?: ResolvedOpenAiImageOptions;
@@ -573,18 +580,23 @@ export function buildOpenAiImageGenerationPayload(input: {
     imageTool.output_compression = imageOptions.outputCompression;
   }
 
+  const sourceImages = input.sourceImages?.length
+    ? input.sourceImages
+    : input.sourceImage
+      ? [input.sourceImage]
+      : [];
   const payload: Record<string, unknown> = {
     model: input.model,
-    input: input.sourceImage
+    input: sourceImages.length
       ? [
           {
             role: "user",
             content: [
               { type: "input_text", text: input.prompt },
-              {
+              ...sourceImages.map(sourceImage => ({
                 type: "input_image",
-                image_url: `data:${input.sourceImage.contentType};base64,${input.sourceImage.buffer.toString("base64")}`,
-              },
+                image_url: `data:${sourceImage.contentType};base64,${sourceImage.buffer.toString("base64")}`,
+              })),
             ],
           },
         ]

@@ -562,6 +562,21 @@ export async function summarizeCostLedgerPeriod(
   return summarizeCostLedgerEntries(period, await readCostLedgerPeriod(period));
 }
 
+function isBudgetedEntry(entry: StoredCostLedgerEntry): boolean {
+  return entry.providerUsage?.budgetBypassApplied !== true;
+}
+
+/**
+ * Returns only usage governed by customer spend caps. Owner bypass usage stays
+ * visible in the full cost dashboard but cannot consume customer budget.
+ */
+export async function summarizeBudgetedCostLedgerPeriod(
+  period: string
+): Promise<CostLedgerSummary> {
+  const entries = (await readCostLedgerPeriod(period)).filter(isBudgetedEntry);
+  return summarizeCostLedgerEntries(period, entries);
+}
+
 export async function summarizeCostLedgerPeriods(
   periods: string[],
   summaryPeriod = periods.join(",")
@@ -569,6 +584,18 @@ export async function summarizeCostLedgerPeriods(
   const entries = (
     await Promise.all(periods.map(period => readCostLedgerPeriod(period)))
   ).flat();
+  return summarizeCostLedgerEntries(summaryPeriod, entries);
+}
+
+export async function summarizeBudgetedCostLedgerPeriods(
+  periods: string[],
+  summaryPeriod = periods.join(",")
+): Promise<CostLedgerSummary> {
+  const entries = (
+    await Promise.all(periods.map(period => readCostLedgerPeriod(period)))
+  )
+    .flat()
+    .filter(isBudgetedEntry);
   return summarizeCostLedgerEntries(summaryPeriod, entries);
 }
 

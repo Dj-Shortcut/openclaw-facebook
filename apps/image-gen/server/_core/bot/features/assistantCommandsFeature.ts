@@ -67,6 +67,15 @@ const CHANGE_BACKGROUND_COMMANDS = new Set([
   "different background",
 ]);
 
+const COMBINE_PHOTOS_COMMANDS = new Set([
+  "combine_photos",
+  "samenvoegen",
+  "foto's samenvoegen",
+  "fotos samenvoegen",
+  "combine",
+  "combine photos",
+]);
+
 const PRIVACY_COMMANDS = new Set([
   "privacy",
   "privacybeleid",
@@ -89,6 +98,7 @@ export function isAssistantCommandText(normalizedText: string): boolean {
     NEW_IMAGE_COMMANDS.has(normalizedText) ||
     EDIT_PHOTO_COMMANDS.has(normalizedText) ||
     CHANGE_BACKGROUND_COMMANDS.has(normalizedText) ||
+    COMBINE_PHOTOS_COMMANDS.has(normalizedText) ||
     PRIVACY_COMMANDS.has(normalizedText) ||
     PORTAL_COMMANDS.has(normalizedText)
   );
@@ -174,6 +184,20 @@ export const assistantCommandsFeature: BotFeature = {
       await ctx.setFlowState("AWAITING_EDIT_PROMPT");
       await ctx.setPendingEditIntent?.("change_background");
       await ctx.sendText(t(ctx.lang, "changeBackgroundPrompt"));
+      return { handled: true };
+    }
+
+    if (COMBINE_PHOTOS_COMMANDS.has(ctx.normalizedText)) {
+      if ((ctx.state.pendingImageUrls?.length ?? 0) < 2) {
+        await ctx.setPendingEditIntent?.(null);
+        await ctx.setFlowState("AWAITING_PHOTO");
+        await ctx.sendText(t(ctx.lang, "combinePhotosRequiresTwo"));
+        return { handled: true };
+      }
+
+      await ctx.setFlowState("AWAITING_EDIT_PROMPT");
+      await ctx.setPendingEditIntent?.("combine_photos");
+      await ctx.sendText(t(ctx.lang, "combinePhotosInstruction"));
       return { handled: true };
     }
 

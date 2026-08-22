@@ -29,7 +29,10 @@ import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
 import type { GenerationKind } from "./image-generation/generationTypes";
 import type { ImageGenerationQuotaReservation } from "./limits/generationQuota";
-import { MessengerQuotaReservationCommitError } from "./messengerQuota";
+import {
+  MessengerQuotaReservationCommitError,
+} from "./messengerQuota";
+import { isMessengerAdmin } from "./messengerAdmin";
 import {
   buildGenerationFailureDiagnosticPayload,
   buildGenerationSuccessDiagnosticPayload,
@@ -156,6 +159,7 @@ export function createMessengerGenerationJobRunner(
       reqId,
       lang,
       sourceImageUrl,
+      sourceImageUrls,
       promptHint,
       pageId,
     } = job;
@@ -189,8 +193,11 @@ export function createMessengerGenerationJobRunner(
         }
 
         const workspacePolicy = await resolveWorkspaceRuntimePolicy(pageId);
+        const ownerQuotaBypass = isMessengerAdmin(psid, userId);
+        const useStartpilotQuota =
+          workspacePolicy.kind === "startpilot" && !ownerQuotaBypass;
         const quotaReservation =
-          workspacePolicy.kind === "free"
+          !useStartpilotQuota
             ? await reserveGenerationQuota({
                 deps,
                 psid,
@@ -199,7 +206,7 @@ export function createMessengerGenerationJobRunner(
                 rememberSendOutcome,
               })
             : null;
-        if (workspacePolicy.kind === "free" && !quotaReservation) {
+        if (!useStartpilotQuota && !quotaReservation) {
           return;
         }
 
@@ -239,7 +246,10 @@ export function createMessengerGenerationJobRunner(
               providerFenceSequence
             );
             try {
-              if (workspacePolicy.kind === "startpilot") {
+              if (
+                useStartpilotQuota &&
+                workspacePolicy.kind === "startpilot"
+              ) {
                 if (providerAttemptsCommitted === 0) {
                   await commitStartpilotProviderAttempt(workspacePolicy);
                   providerAttemptsCommitted += 1;
@@ -286,6 +296,9 @@ export function createMessengerGenerationJobRunner(
             reqId,
             promptHint,
             sourceImageUrl: shouldSendSourceImage ? sourceImageUrl : undefined,
+            sourceImageUrls: shouldSendSourceImage
+              ? sourceImageUrls
+              : undefined,
             lastPhotoUrl: shouldSendSourceImage
               ? sourceIsGeneratedResult
                 ? sourceImageUrl
@@ -297,6 +310,7 @@ export function createMessengerGenerationJobRunner(
                 : state.lastPhotoSource
               : undefined,
             onProviderAttempt: commitProviderAttemptQuota,
+            bypassBudgetLimits: ownerQuotaBypass,
             imageModel:
               workspacePolicy.kind === "startpilot"
                 ? workspacePolicy.imageModel
@@ -439,6 +453,15 @@ export function createMessengerGenerationJobRunner(
           userKey: userId,
         })
       : undefined;
+    const currentState = await getOrCreateState(psid);
+    const sourceImageUrls =
+      resolvedGenerationKind === "source_image_edit" &&
+      sourceImageUrl &&
+      currentState.pendingImageUrls?.includes(sourceImageUrl)
+        ? currentState.pendingImageUrls
+        : sourceImageUrl
+          ? [sourceImageUrl]
+          : undefined;
     const result = await enqueueOrRunMessengerGenerationJob(
       {
         psid,
@@ -452,6 +475,7 @@ export function createMessengerGenerationJobRunner(
         reqId,
         lang,
         sourceImageUrl,
+        sourceImageUrls,
         promptHint,
       },
       executeImageGenerationJob,

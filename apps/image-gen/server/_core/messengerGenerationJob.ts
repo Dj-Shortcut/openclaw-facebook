@@ -75,6 +75,7 @@ export type MessengerGenerationJob = {
   reqId: string;
   lang: SupportedUiLang;
   sourceImageUrl?: string;
+  sourceImageUrls?: string[];
   promptHint?: string;
   attempts?: number;
 };

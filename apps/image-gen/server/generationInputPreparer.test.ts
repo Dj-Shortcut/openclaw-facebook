@@ -89,4 +89,44 @@ describe("generation input preparer", () => {
     });
     expect(result.promptBuildMs).toBeGreaterThanOrEqual(0);
   });
+
+  it("prepares each source photo for a multi-image composition", async () => {
+    const input = {
+      generationKind: "source_image_edit" as const,
+      sourceImageUrls: [
+        "https://assets.example.test/one.jpg",
+        "https://assets.example.test/two.jpg",
+      ],
+      trustedSourceImageUrl: true,
+      sourceImageProvenance: "storeInbound" as const,
+      promptHint: "Zet beide personen samen aan een tafel",
+      reqId: "req-combine-input",
+    };
+    const sourceImages = [
+      {
+        buffer: Buffer.alloc(6_000, 1),
+        contentType: "image/jpeg",
+        incomingLen: 6_000,
+        incomingSha256: "one",
+        fbImageFetchMs: 4,
+      },
+      {
+        buffer: Buffer.alloc(7_000, 2),
+        contentType: "image/jpeg",
+        incomingLen: 7_000,
+        incomingSha256: "two",
+        fbImageFetchMs: 5,
+      },
+    ];
+    prepareSourceImageMock
+      .mockResolvedValueOnce(sourceImages[0])
+      .mockResolvedValueOnce(sourceImages[1]);
+
+    const result = await prepareGenerationInput(input);
+
+    expect(result.hasSourceImage).toBe(true);
+    expect(result.sourceImages).toEqual(sourceImages);
+    expect(result.prompt).toContain("Use all uploaded source images");
+    expect(prepareSourceImageMock).toHaveBeenCalledTimes(2);
+  });
 });

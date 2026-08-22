@@ -34,10 +34,22 @@ export function buildTextToImagePrompt(prompt: string): string {
   ].join(" ");
 }
 
-export function buildSourceImageEditPrompt(prompt: string): string {
+export function buildSourceImageEditPrompt(
+  prompt: string,
+  sourceImageCount = 1
+): string {
   const trimmedPrompt = normalizeTextToImageUserPrompt(prompt);
+  const multiImageGuidance =
+    sourceImageCount > 1
+      ? [
+          "Use all uploaded source images as separate visual references for one final composition.",
+          "Do not silently omit a source image; integrate the relevant subject or visual element from each one according to the user's instruction.",
+          "Keep recognizable people, products, and brand details faithful to their respective source images unless explicitly asked to change them.",
+        ]
+      : [];
   return [
     "Edit the uploaded/source image according to the user's request.",
+    ...multiImageGuidance,
     "Use the source image as the visual reference, not as a preset style catalog.",
     "Preserve important identity, pose, and composition details unless the user explicitly asks to change them.",
     "When transforming a person, preserve recognizable facial structure, expression, body pose, clothing silhouette, and camera framing unless the user asks otherwise.",

@@ -50,6 +50,20 @@ with targeted tests and metadata-only observability. Do not expand public access
 Meta permissions, paid provider usage, or customer self-serve features until the
 prior gate is proven in production.
 
+### Multi-photo composition - 2026-08-22
+
+- [x] Detect two to four tenant-scoped Messenger photo uploads, retain them as
+  one bounded source set, and expose a channel-neutral `combine_photos`
+  conversation action that Messenger renders as the `Samenvoegen` pill.
+- [x] Ask for a natural-language composition instruction after action
+  selection and send each stored source as a distinct GPT Image edit input.
+  The existing provider-attempt quota, daily/monthly spend guards, queue tenant
+  partition, redacted logging, retention, and delete-my-data paths remain in
+  force.
+- [ ] Complete a staged Messenger smoke with two photos in one message and two
+  sequential photo messages, then record Android, iOS, and Web evidence before
+  production rollout. No additional Meta permission is expected.
+
 ### Canonical Fly deployment ownership - 2026-08-22
 
 - [x] Define one production manifest and one `fly deploy` entry point per app;
@@ -575,6 +589,7 @@ Validated controls:
 25. [x] Optional root-gateway daily Leaderbot event forward cap (`MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP`) blocks generic free-tier/interactive Messenger event forwards before they reach Leaderbot image-gen, while preserving delete-data forwards.
 26. [x] Optional audio transcription cost estimate (`OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD`) feeds spend-cap checks and reconciles successful audio ledger attempts with final cost.
 27. [x] Optional video generation cost estimate (`OPENAI_VIDEO_GENERATION_ESTIMATED_COST_USD`) feeds spend-cap checks and reconciles successful video ledger attempts with final cost.
+28. [x] Exact `MESSENGER_ADMIN_IDS` owner accounts bypass customer image quota, Startpilot entitlement, and daily/monthly image spend caps; their attempts remain auditable in aggregate cost reporting but do not consume customer budget.
 
 Open cost-control work:
 

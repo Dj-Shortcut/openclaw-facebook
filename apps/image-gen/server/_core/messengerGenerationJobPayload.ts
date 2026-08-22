@@ -3,6 +3,7 @@ import {
   type MessengerGenerationJob,
 } from "./messengerGenerationJob";
 import { normalizeSupportedUiLang } from "./i18n";
+import { MAX_SOURCE_IMAGES } from "./image-generation/generationTypes";
 
 const MESSENGER_GENERATION_KINDS = new Set([
   "text_to_image",
@@ -22,6 +23,16 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 
 function isOptionalString(value: unknown): value is string | undefined {
   return value === undefined || typeof value === "string";
+}
+
+function isOptionalSourceImageUrls(value: unknown): value is string[] | undefined {
+  return (
+    value === undefined ||
+    (Array.isArray(value) &&
+      value.length >= 1 &&
+      value.length <= MAX_SOURCE_IMAGES &&
+      value.every(item => typeof item === "string" && item.trim().length > 0))
+  );
 }
 
 function isOptionalGenerationKind(value: unknown): boolean {
@@ -79,6 +90,7 @@ function parseMessengerGenerationJob(
     !isOptionalGenerationKind(value.generationKind) ||
     !isOptionalOperation(value.operation) ||
     !isOptionalString(value.sourceImageUrl) ||
+    !isOptionalSourceImageUrls(value.sourceImageUrls) ||
     !isOptionalString(value.promptHint) ||
     !isOptionalString(value.pageId) ||
     !isOptionalPositiveId(value.workspaceId) ||
@@ -130,6 +142,7 @@ function parseMessengerGenerationJob(
     expiresAt: value.expiresAt,
     tenantPartition: value.tenantPartition,
     sourceImageUrl: value.sourceImageUrl,
+    sourceImageUrls: value.sourceImageUrls,
     promptHint: value.promptHint,
     attempts: value.attempts,
     operation: value.operation,

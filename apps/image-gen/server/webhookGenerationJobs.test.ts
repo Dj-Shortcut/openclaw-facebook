@@ -65,6 +65,7 @@ const IN_FLIGHT_NOTICE = "Even geduld, ik ben nog bezig met je afbeelding.";
 const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
 const originalFreeDailyLimit = process.env.MESSENGER_FREE_DAILY_LIMIT;
 const originalQuotaBypassIds = process.env.MESSENGER_QUOTA_BYPASS_IDS;
+const originalMessengerAdminIds = process.env.MESSENGER_ADMIN_IDS;
 
 afterAll(() => {
   if (originalPrivacyPepper === undefined) {
@@ -81,6 +82,11 @@ afterAll(() => {
     delete process.env.MESSENGER_QUOTA_BYPASS_IDS;
   } else {
     process.env.MESSENGER_QUOTA_BYPASS_IDS = originalQuotaBypassIds;
+  }
+  if (originalMessengerAdminIds === undefined) {
+    delete process.env.MESSENGER_ADMIN_IDS;
+  } else {
+    process.env.MESSENGER_ADMIN_IDS = originalMessengerAdminIds;
   }
 });
 
@@ -106,6 +112,7 @@ beforeEach(() => {
   resetRuntimeStatsForTests();
   delete process.env.MESSENGER_FREE_DAILY_LIMIT;
   delete process.env.MESSENGER_QUOTA_BYPASS_IDS;
+  delete process.env.MESSENGER_ADMIN_IDS;
 });
 
 describe("messenger generation job safety", () => {
@@ -442,6 +449,42 @@ describe("messenger generation job safety", () => {
     });
   });
 
+  it("does not apply customer or Startpilot limits to an explicit owner", async () => {
+    process.env.MESSENGER_ADMIN_IDS = "owner-psid";
+    resolveWorkspaceRuntimePolicyMock.mockResolvedValueOnce({
+      kind: "startpilot",
+      workspaceId: 42,
+      entitlementId: 9,
+      mode: "live",
+      imageTotalLimit: 20,
+      imageDailyLimit: 5,
+      imageModel: "gpt-image-2",
+      imageQuality: "high",
+    });
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      expect(input.bypassBudgetLimits).toBe(true);
+      await input.onProviderAttempt();
+      return successGenerationResult();
+    });
+    const runner = createTestRunner();
+
+    await runner.processMessengerGenerationJob({
+      psid: "owner-psid",
+      userId: "owner-user-key",
+      pageId: "owner-page",
+      reqId: "req-owner-unlimited",
+      lang: "nl",
+    });
+
+    expect(reserveStartpilotImageUsageMock).not.toHaveBeenCalled();
+    expect(
+      await runWithMessengerRequestContext(
+        "owner-page",
+        async () => getState("owner-psid")?.quota.count
+      )
+    ).toBe(0);
+  });
+
   it("does not let provider retries bypass exhausted image quota", async () => {
     const originalLimit = process.env.MESSENGER_FREE_DAILY_LIMIT;
     process.env.MESSENGER_FREE_DAILY_LIMIT = "1";
@@ -513,6 +556,24 @@ describe("messenger generation job safety", () => {
         allowed: true,
       })
     );
+  });
+
+  it("does not grant customer budget bypass to test quota IDs", async () => {
+    process.env.MESSENGER_QUOTA_BYPASS_IDS = "test-bypass-user";
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      expect(input.bypassBudgetLimits).toBe(false);
+      return successGenerationResult();
+    });
+    const runner = createTestRunner();
+
+    await runner.processMessengerGenerationJob({
+      psid: "test-bypass-user",
+      userId: "test-bypass-user-key",
+      reqId: "req-test-bypass-budget-bound",
+      lang: "nl",
+    });
+
+    expect(executeGenerationFlowMock).toHaveBeenCalledOnce();
   });
 
   it("uses the out-of-free-credits translation when quota is exhausted", async () => {

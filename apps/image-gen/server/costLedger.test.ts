@@ -5,6 +5,7 @@ import {
   getCostLedgerReliabilityStats,
   readCostLedgerPeriod,
   resetCostLedgerReliabilityStatsForTests,
+  summarizeBudgetedCostLedgerPeriod,
   summarizeCostLedgerPeriod,
   summarizeCostLedgerPeriods,
   updateCostLedgerEntry,
@@ -37,6 +38,38 @@ function entry(overrides: Partial<CostLedgerEntry>): CostLedgerEntry {
     ...overrides,
   };
 }
+
+it("keeps owner bypass costs visible without consuming customer budget", async () => {
+  await appendCostLedgerEntry(
+    entry({
+      id: "req-owner:attempt-1",
+      reqId: "req-owner",
+      userKey: "owner-user",
+      providerUsage: { budgetBypassApplied: true },
+      estimatedCostUsd: 0.5,
+    }),
+    new Date("2026-06-21T10:00:00.000Z")
+  );
+  await appendCostLedgerEntry(
+    entry({
+      id: "req-customer:attempt-1",
+      reqId: "req-customer",
+      userKey: "customer-user",
+      providerUsage: { budgetBypassApplied: false },
+      estimatedCostUsd: 0.025,
+    }),
+    new Date("2026-06-21T10:01:00.000Z")
+  );
+
+  expect(await summarizeCostLedgerPeriod("2026-06-21")).toMatchObject({
+    totalEntries: 2,
+    estimatedCostUsd: 0.525,
+  });
+  expect(await summarizeBudgetedCostLedgerPeriod("2026-06-21")).toMatchObject({
+    totalEntries: 1,
+    estimatedCostUsd: 0.025,
+  });
+});
 
 describe("cost ledger", () => {
   it("stores a stable request-id hash for repeated raw request IDs", async () => {

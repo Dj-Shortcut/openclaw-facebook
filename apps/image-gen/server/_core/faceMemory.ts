@@ -77,7 +77,11 @@ function getExpiredInboundSourceUrls(
   const hasRetainedSource = Boolean(
     state.faceMemoryConsent?.given && state.lastSourceImageUrl
   );
-  const candidates = [state.lastPhotoUrl, state.pendingImageUrl].map(url => {
+  const candidates = [
+    state.lastPhotoUrl,
+    state.pendingImageUrl,
+    ...(state.pendingImageUrls ?? []),
+  ].map(url => {
     const inboundSourceUrl = getInboundSourceUrl(url);
     const isRetainedSource =
       hasRetainedSource && inboundSourceUrl === state.lastSourceImageUrl;

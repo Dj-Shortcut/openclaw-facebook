@@ -9,6 +9,8 @@ import {
   normalizeMessengerInboundImage,
 } from "./messengerImageIngress";
 import { buildImageUploadFailureResponse } from "./conversationActions";
+import { buildMultiPhotoReceivedResponse } from "./conversationActions";
+import { MAX_SOURCE_IMAGES } from "./image-generation/generationTypes";
 import { getBotFeatures } from "./bot/features";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import { handleTextMessage } from "./webhookTextMessageRouter";
@@ -25,7 +27,7 @@ import {
   getOrCreateState,
   setPendingScreenshotIntentContinuation,
   setFlowState,
-  setPendingStoredImage,
+  setPendingStoredImages,
 } from "./messengerState";
 import {
   getAttachmentCategorySummary,
@@ -51,20 +53,24 @@ export async function tryHandleImageMessage(
   ctx: HandlerContext,
   input: ImageMessageInput
 ): Promise<boolean> {
-  const inboundImageUrl = getInboundImageUrl(input.attachments);
-  if (!inboundImageUrl) {
+  const inboundImageUrls = getInboundImageUrls(input.attachments).slice(
+    0,
+    MAX_SOURCE_IMAGES
+  );
+  if (!inboundImageUrls.length) {
     return false;
   }
 
-  logParsedImageMessage(ctx, input, inboundImageUrl);
-  const storedSourceImageUrl = await persistInboundImage(
+  logParsedImageMessage(ctx, input, inboundImageUrls);
+  const storedSourceImageUrls = await persistInboundImages(
     input,
-    inboundImageUrl
+    inboundImageUrls
   );
-  if (!storedSourceImageUrl) {
+  if (!storedSourceImageUrls.length) {
     await handleMissingStoredImage(ctx, input);
     return true;
   }
+  const storedSourceImageUrl = storedSourceImageUrls.at(-1)!;
 
   const state = await getOrCreateState(input.psid);
   if (await runImageFeatures(ctx, input, state, storedSourceImageUrl)) {
@@ -75,8 +81,10 @@ export async function tryHandleImageMessage(
     ctx,
     input,
     state,
-    storedSourceImageUrl
+    storedSourceImageUrls
   );
+  const updatedState = await getOrCreateState(input.psid);
+  const pendingImageCount = updatedState.pendingImageUrls?.length ?? 1;
   await setPendingScreenshotIntentContinuation(input.psid, false);
 
   const shouldContinueScreenshotIntent = shouldContinueImageIntentAfterScreenshot({
@@ -100,6 +108,7 @@ export async function tryHandleImageMessage(
   }
 
   if (
+    pendingImageCount < 2 &&
     await promptForFaceMemoryConsent(
       ctx,
       input,
@@ -131,6 +140,18 @@ export async function tryHandleImageMessage(
       text: input.text.trim(),
       timestamp: input.timestamp,
     });
+    return true;
+  }
+
+  if (pendingImageCount >= 2) {
+    await setFlowState(input.psid, "AWAITING_EDIT_PROMPT");
+    const response = buildMultiPhotoReceivedResponse(input.lang);
+    await ctx.sendLoggedActions(
+      input.psid,
+      response.text ?? "",
+      response.actions ?? [],
+      input.reqId
+    );
     return true;
   }
 
@@ -182,21 +203,23 @@ function shouldContinueImageIntentAfterScreenshot(
   return input.state.stage === "AWAITING_EDIT_PROMPT";
 }
 
-function getInboundImageUrl(
+function getInboundImageUrls(
   attachments: ImageMessageInput["attachments"]
-): string | null {
-  const imageAttachment = attachments?.find(
-    att => isImageAttachment(att) && att.payload?.url
+): string[] {
+  return (attachments ?? []).flatMap(att =>
+    isImageAttachment(att) && typeof att.payload?.url === "string"
+      ? [att.payload.url]
+      : []
   );
-  return imageAttachment?.payload?.url ?? null;
 }
 
 function logParsedImageMessage(
   ctx: HandlerContext,
   input: ImageMessageInput,
-  inboundImageUrl: string
+  inboundImageUrls: string[]
 ): void {
   const psidHash = anonymizePsid(input.psid).slice(0, 12);
+  const inboundImageUrl = inboundImageUrls[0]!;
   const attachmentHostname = ctx.getAttachmentHostname(inboundImageUrl);
   const attachmentType = input.attachments?.find(
     att => isImageAttachment(att) && att.payload?.url === inboundImageUrl
@@ -211,6 +234,7 @@ function logParsedImageMessage(
     attachmentCategories: getAttachmentCategorySummary(input.attachments),
     textLength: input.text?.trim().length ?? 0,
     hasCaptionText: Boolean(input.text?.trim()),
+    sourceImageCount: inboundImageUrls.length,
   });
   ctx.debugWebhookLog({
     level: "debug",
@@ -224,15 +248,23 @@ function logParsedImageMessage(
   });
 }
 
-async function persistInboundImage(
+async function persistInboundImages(
   input: ImageMessageInput,
-  inboundImageUrl: string
-): Promise<string | null> {
-  return await normalizeMessengerInboundImage({
-    inboundImageUrl,
-    psidHash: anonymizePsid(input.psid).slice(0, 12),
-    reqId: input.reqId,
-  });
+  inboundImageUrls: string[]
+): Promise<string[]> {
+  const stored = await Promise.all(
+    inboundImageUrls.map((inboundImageUrl, index) =>
+      normalizeMessengerInboundImage({
+        inboundImageUrl,
+        psidHash: anonymizePsid(input.psid).slice(0, 12),
+        reqId:
+          inboundImageUrls.length === 1
+            ? input.reqId
+            : `${input.reqId}-source-${index + 1}`,
+      })
+    )
+  );
+  return stored.filter((url): url is string => Boolean(url));
 }
 
 async function handleMissingStoredImage(
@@ -288,7 +320,7 @@ async function prepareStoredImageDecision(
   ctx: HandlerContext,
   input: ImageMessageInput,
   state: Awaited<ReturnType<typeof getOrCreateState>>,
-  storedSourceImageUrl: string
+  storedSourceImageUrls: string[]
 ) {
   ctx.logUserState(
     input.psid,
@@ -299,9 +331,9 @@ async function prepareStoredImageDecision(
   );
   const imageDecision = getStoredMessengerImageDecision({
     lastPhotoUrl: state.lastPhotoUrl,
-    storedSourceImageUrl,
+    storedSourceImageUrl: storedSourceImageUrls.at(-1)!,
   });
-  await setPendingStoredImage(input.psid, storedSourceImageUrl);
+  await setPendingStoredImages(input.psid, storedSourceImageUrls);
   return imageDecision;
 }
 

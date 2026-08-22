@@ -620,6 +620,8 @@ describe("data deletion service", () => {
     const sourceUrl = "https://assets.example/inbound-source/user-source.jpg";
     const retainedSourceUrl =
       "https://assets.example/inbound-source/retained-source.jpg";
+    const secondCompositionSourceUrl =
+      "https://assets.example/inbound-source/composition-source-2.jpg";
     const generatedUrl = "https://assets.example/generated/images/result.jpg";
     const legacyGeneratedUrl =
       "https://assets.example/generated/legacy-result.jpg";
@@ -631,6 +633,7 @@ describe("data deletion service", () => {
         lastPhoto: sourceUrl,
         lastPhotoSource: "stored",
         pendingImageUrl: sourceUrl,
+        pendingImageUrls: [sourceUrl, secondCompositionSourceUrl],
         lastSourceImageUrl: retainedSourceUrl,
         pendingSourceImageDeleteUrl: retainedSourceUrl,
         lastGeneratedUrl: generatedUrl,
@@ -642,6 +645,9 @@ describe("data deletion service", () => {
 
     expect(storageDeleteMock).toHaveBeenCalledWith(
       "inbound-source/user-source.jpg"
+    );
+    expect(storageDeleteMock).toHaveBeenCalledWith(
+      "inbound-source/composition-source-2.jpg"
     );
     expect(storageDeleteMock).toHaveBeenCalledWith(
       "inbound-source/retained-source.jpg"

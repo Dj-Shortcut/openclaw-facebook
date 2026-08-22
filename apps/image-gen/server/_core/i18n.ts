@@ -8,6 +8,10 @@ type TranslationParams = {
 type TranslationKey =
   | "flowExplanation"
   | "photoEditPrompt"
+  | "multiPhotoPrompt"
+  | "combinePhotos"
+  | "combinePhotosInstruction"
+  | "combinePhotosRequiresTwo"
   | "editImagePrompt"
   | "newImagePrompt"
   | "changeBackground"
@@ -86,6 +90,13 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Beschrijf wat je wilt maken, of stuur een foto als je die wilt bewerken.",
     photoEditPrompt:
       "Foto ontvangen. Beschrijf wat je aan de foto wilt aanpassen.",
+    multiPhotoPrompt:
+      "Ik heb meerdere foto's ontvangen. Kies Samenvoegen of beschrijf meteen hoe ik ze in één beeld moet combineren.",
+    combinePhotos: "Samenvoegen",
+    combinePhotosInstruction:
+      "Hoe wil je de foto's samenvoegen? Beschrijf bijvoorbeeld wie of wat uit elke foto in het eindbeeld moet komen.",
+    combinePhotosRequiresTwo:
+      "Stuur minstens twee foto's voordat je Samenvoegen kiest.",
     editImagePrompt: "Beschrijf wat je aan de afbeelding wilt aanpassen.",
     newImagePrompt: "Beschrijf de nieuwe afbeelding die je wilt maken.",
     changeBackground: "Andere achtergrond",
@@ -212,6 +223,13 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Describe the image you want to make, or send a photo if you want me to edit it.",
     photoEditPrompt:
       "Photo received. Describe what you want me to change in the photo.",
+    multiPhotoPrompt:
+      "I received multiple photos. Choose Combine or describe how I should merge them into one image.",
+    combinePhotos: "Combine",
+    combinePhotosInstruction:
+      "How should I combine the photos? For example, describe who or what from each photo should appear in the final image.",
+    combinePhotosRequiresTwo:
+      "Send at least two photos before choosing Combine.",
     editImagePrompt: "Describe what you want me to change in the image.",
     newImagePrompt: "Describe the new image you want me to create.",
     changeBackground: "Different background",

@@ -129,6 +129,31 @@ describe("gpt-image-2 Image API requests", () => {
     expect(Buffer.from(await image.arrayBuffer())).toEqual(sourceImage);
   });
 
+  it("sends every source photo as a separate image part for composition", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    const sourceImages = [
+      { buffer: Buffer.from("first-source-image"), contentType: "image/jpeg" },
+      { buffer: Buffer.from("second-source-image"), contentType: "image/png" },
+    ];
+    const request = buildOpenAiRequest({
+      model: "gpt-image-2",
+      prompt: "combine both people into one portrait",
+      sourceImage: sourceImages[0],
+      sourceImages,
+      hasSourceImage: true,
+    });
+
+    const formData = request.createRequestInit?.().body as FormData;
+    const images = formData.getAll("image[]") as File[];
+    expect(images).toHaveLength(2);
+    expect(Buffer.from(await images[0]!.arrayBuffer())).toEqual(
+      sourceImages[0]!.buffer
+    );
+    expect(Buffer.from(await images[1]!.arrayBuffer())).toEqual(
+      sourceImages[1]!.buffer
+    );
+  });
+
   it("keeps non-gpt-image-2 requests on the Responses API", () => {
     process.env.OPENAI_API_KEY = "test-key";
     process.env.OPENAI_IMAGE_INPUT_FIDELITY = "high";
