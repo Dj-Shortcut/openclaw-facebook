@@ -53,8 +53,10 @@ export function createDefaultState(
     preferredLangSource: undefined,
     consentGiven: false,
     consentTimestamp: undefined,
+    consentDeclinedAt: undefined,
     consentPromptedAt: undefined,
     pendingDeleteConfirm: false,
+    pendingDeleteConfirmAt: undefined,
     hasSeenIntro: false,
     pendingImageUrl: undefined,
     pendingImageAt: undefined,
@@ -135,18 +137,37 @@ function resolveConsentState(
   MessengerUserState,
   | "consentGiven"
   | "consentTimestamp"
+  | "consentDeclinedAt"
   | "consentPromptedAt"
   | "pendingDeleteConfirm"
+  | "pendingDeleteConfirmAt"
   | "hasSeenIntro"
 > {
   const { value, fallback } = ctx;
+  const consentGiven = value?.consentGiven ?? fallback.consentGiven;
+  const consentDeclinedAt =
+    !consentGiven &&
+    typeof value?.consentDeclinedAt === "number" &&
+    Number.isFinite(value.consentDeclinedAt)
+      ? value.consentDeclinedAt
+      : undefined;
+  const pendingDeleteConfirmAt =
+    typeof value?.pendingDeleteConfirmAt === "number" &&
+    Number.isFinite(value.pendingDeleteConfirmAt)
+      ? value.pendingDeleteConfirmAt
+      : undefined;
+  const pendingDeleteConfirm =
+    value?.pendingDeleteConfirm === true && pendingDeleteConfirmAt !== undefined;
 
   return {
-    consentGiven: value?.consentGiven ?? fallback.consentGiven,
+    consentGiven,
     consentTimestamp: value?.consentTimestamp ?? fallback.consentTimestamp,
+    consentDeclinedAt,
     consentPromptedAt: value?.consentPromptedAt ?? fallback.consentPromptedAt,
-    pendingDeleteConfirm:
-      value?.pendingDeleteConfirm ?? fallback.pendingDeleteConfirm,
+    pendingDeleteConfirm,
+    pendingDeleteConfirmAt: pendingDeleteConfirm
+      ? pendingDeleteConfirmAt
+      : undefined,
     hasSeenIntro: value?.hasSeenIntro ?? fallback.hasSeenIntro,
   };
 }

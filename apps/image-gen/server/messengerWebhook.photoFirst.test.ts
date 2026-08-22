@@ -44,6 +44,7 @@ import {
 import {
   getTestMessengerState,
   processConsentedFacebookWebhookPayload,
+  withTestMessengerPageId,
 } from "./testConsentHelpers";
 
 const TEST_PEPPER = "ci-test-pepper";
@@ -294,16 +295,16 @@ describe("photo-first onboarding", () => {
       ],
     });
 
-    expect(sendButtonTemplateMock).toHaveBeenCalledWith(
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,
       expect.stringContaining("data"),
       expect.arrayContaining([
         expect.objectContaining({
-          type: "postback",
+          content_type: "text",
           payload: "GDPR_DELETE_CONFIRM",
         }),
         expect.objectContaining({
-          type: "postback",
+          content_type: "text",
           payload: "GDPR_DELETE_CANCEL",
         }),
       ])
@@ -312,19 +313,25 @@ describe("photo-first onboarding", () => {
       /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
 
-    await processFacebookWebhookPayload({
-      entry: [
-        {
-          messaging: [
-            {
-              sender: { id: psid },
-              timestamp: 1_730_000_000_000,
-              postback: { payload: "GDPR_DELETE_CONFIRM" },
-            },
-          ],
-        },
-      ],
-    });
+    await processFacebookWebhookPayloadBase(
+      withTestMessengerPageId({
+        entry: [
+          {
+            messaging: [
+              {
+                sender: { id: psid },
+                timestamp: 1_730_000_000_000,
+                message: {
+                  mid: "mid-face-memory-delete-confirm",
+                  text: "Ja, verwijder",
+                  quick_reply: { payload: "GDPR_DELETE_CONFIRM" },
+                },
+              },
+            ],
+          },
+        ],
+      })
+    );
 
     const userState = await getTestMessengerState(psid);
     expect(userState).toEqual(

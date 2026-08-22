@@ -121,6 +121,7 @@ async function deleteUserDataInternal(
         userKey: currentState.userKey,
         ...retryContext,
         pendingDeleteConfirm: false,
+        pendingDeleteConfirmAt: undefined,
         lastGeneratedVideoProvider: currentState.lastGeneratedVideoProvider,
         lastGeneratedVideoProviderJobId:
           currentState.lastGeneratedVideoProviderJobId,

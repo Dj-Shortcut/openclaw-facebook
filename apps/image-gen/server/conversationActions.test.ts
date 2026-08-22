@@ -213,7 +213,7 @@ describe("conversation actions", () => {
     ]);
   });
 
-  it("renders GDPR choices as persistent Messenger postback buttons", () => {
+  it("renders only GDPR consent choices as persistent Messenger postback buttons", () => {
     expect(
       renderMessengerPostbackButtons([
         { id: "GDPR_CONSENT_AGREE", label: "Ik ga akkoord" },
@@ -231,6 +231,14 @@ describe("conversation actions", () => {
         payload: "GDPR_CONSENT_DECLINE",
       },
     ]);
+
+    expect(
+      renderMessengerPostbackButtons([
+        { id: "GDPR_DELETE_CONFIRM", label: "Ja, verwijder" },
+        { id: "GDPR_DELETE_CANCEL", label: "Annuleer" },
+        { id: "GDPR_UNKNOWN", label: "Unknown" },
+      ])
+    ).toEqual([]);
   });
 
   it("builds generation failure actions before Messenger rendering", () => {

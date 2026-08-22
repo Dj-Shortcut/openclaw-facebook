@@ -92,9 +92,9 @@ the error path, and a pre-redaction debug logger that still received raw text.
 Keep this incident metadata-only; do not add names, PSIDs, screenshots, photos,
 or raw conversation content to repository notes or logs.
 
-- [x] Replace GDPR consent/deletion quick replies with persistent Messenger
-  postback button templates while retaining explicit typed consent as a UI
-  fallback.
+- [x] Replace GDPR consent quick replies with persistent Messenger postback
+  button templates while retaining explicit typed consent as a UI fallback.
+  Keep destructive deletion confirmations as temporary quick replies.
 - [x] Normalize typed consent with bounded typo tolerance, structural
   permission-grant matching, contextual short acknowledgements only for 15
   minutes after a delivered notice, and fail-safe question, refusal, and
@@ -110,6 +110,11 @@ or raw conversation content to repository notes or logs.
   negative and uncertain counterexamples, stale short acknowledgements,
   rejected control delivery, GDPR fallback eligibility, and privacy-safe
   inbound diagnostics in focused tests.
+- [x] Preserve explicit consent refusals as distinct from unanswered consent so
+  later ordinary messages remain blocked without presenting the controls again.
+  Expire destructive deletion confirmation state after 15 minutes, arm it only
+  after the warning controls are delivered, consume it before deletion, and
+  reject stale Messenger/WhatsApp confirmation payloads without deleting data.
 - [ ] Implement no-second-upload photo-first continuation only on the verified
   workspace privacy boundary. It must bind the temporary reference to
   `workspaceId`, `channelConnectionId`, `bindingEpoch`, `userKey`, and

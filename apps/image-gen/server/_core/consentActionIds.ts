@@ -10,6 +10,17 @@ const GDPR_ACTION_IDS = new Set<string>([
   GDPR_DELETE_CANCEL,
 ]);
 
+const GDPR_CONSENT_ACTION_IDS = new Set<string>([
+  GDPR_CONSENT_AGREE,
+  GDPR_CONSENT_DECLINE,
+]);
+
 export function isGdprActionId(payload: string | null | undefined): boolean {
   return Boolean(payload && GDPR_ACTION_IDS.has(payload));
+}
+
+export function isGdprConsentActionId(
+  payload: string | null | undefined
+): boolean {
+  return Boolean(payload && GDPR_CONSENT_ACTION_IDS.has(payload));
 }

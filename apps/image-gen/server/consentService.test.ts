@@ -53,6 +53,7 @@ import {
   setConsentPromptedAt,
   setConsentState,
   setLastGenerated,
+  setPendingDeleteConfirm,
   setPendingStoredImage,
 } from "./_core/messengerState";
 import { writeState } from "./_core/stateStore";
@@ -297,7 +298,7 @@ describe("Messenger consent deletion flow", () => {
     }
   );
 
-  it.each(["green", "you have my content"])(
+  it.each(["free", "tree", "green", "degree", "you have my content"])(
     "never turns an ordinary near-match into consent: %s",
     async text => {
       const psid = `messenger-consent-near-match-${text}`;
@@ -358,6 +359,77 @@ describe("Messenger consent deletion flow", () => {
     expect(sendText).toHaveBeenCalledWith(
       expect.stringContaining("Zonder je toestemming")
     );
+  });
+
+  it("preserves a typed decline and never presents the consent actions again", async () => {
+    const psid = "messenger-consent-persistent-decline-user";
+    const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
+    const initialState = await Promise.resolve(getOrCreateState(psid));
+
+    await expect(
+      handleMessengerConsentGate({
+        psid,
+        lang: "nl",
+        text: "Nee bedankt",
+        state: initialState,
+        sendText,
+        sendActions,
+      })
+    ).resolves.toBe(true);
+
+    const declinedState = await Promise.resolve(getState(psid));
+    const declinedAt = declinedState?.consentDeclinedAt;
+    expect(declinedState?.consentGiven).toBe(false);
+    expect(declinedAt).toEqual(expect.any(Number));
+
+    sendText.mockClear();
+    sendActions.mockClear();
+
+    await expect(
+      handleMessengerConsentGate({
+        psid,
+        lang: "nl",
+        text: "Maak mijn foto wat lichter",
+        state: declinedState!,
+        sendText,
+        sendActions,
+      })
+    ).resolves.toBe(true);
+
+    expect((await Promise.resolve(getState(psid)))?.consentDeclinedAt).toBe(
+      declinedAt
+    );
+    expect(sendActions).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith(
+      expect.stringContaining("Zonder je toestemming")
+    );
+  });
+
+  it("accepts a new explicit consent grant after an earlier decline", async () => {
+    const psid = "messenger-consent-reconsidered-user";
+    const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
+
+    await Promise.resolve(getOrCreateState(psid));
+    await Promise.resolve(setConsentState(psid, false));
+    const declinedState = await Promise.resolve(getState(psid));
+
+    await expect(
+      handleMessengerConsentGate({
+        psid,
+        lang: "nl",
+        text: "Ik ga akkoord",
+        state: declinedState!,
+        sendText,
+        sendActions,
+      })
+    ).resolves.toBe(true);
+
+    expect(await Promise.resolve(getState(psid))).toMatchObject({
+      consentGiven: true,
+      consentDeclinedAt: undefined,
+    });
   });
 
   it.each([
@@ -553,6 +625,120 @@ describe("Messenger consent deletion flow", () => {
     );
   });
 
+  it("does not arm deletion when Messenger fails to deliver the warning controls", async () => {
+    const psid = "messenger-delete-controls-undelivered-user";
+    const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => false);
+
+    await Promise.resolve(getOrCreateState(psid));
+    const state = await Promise.resolve(getState(psid));
+
+    await expect(
+      handleMessengerConsentGate({
+        psid,
+        lang: "en",
+        text: "delete my data",
+        state: state!,
+        sendText,
+        sendActions,
+      })
+    ).resolves.toBe(true);
+
+    expect(await Promise.resolve(getState(psid))).toMatchObject({
+      pendingDeleteConfirm: false,
+      pendingDeleteConfirmAt: undefined,
+    });
+  });
+
+  it("rejects a stale delete postback after cancellation without deleting data", async () => {
+    const psid = "messenger-delete-cancelled-stale-postback-user";
+    const sourceUrl =
+      "https://assets.example/inbound-source/cancelled-delete-source.jpg";
+    const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
+
+    await Promise.resolve(getOrCreateState(psid));
+    await Promise.resolve(setPendingStoredImage(psid, sourceUrl));
+    const initialState = await Promise.resolve(getState(psid));
+
+    await handleMessengerConsentGate({
+      psid,
+      lang: "en",
+      text: "delete my data",
+      state: initialState!,
+      sendText,
+      sendActions,
+    });
+    const pendingState = await Promise.resolve(getState(psid));
+
+    await handleMessengerConsentGate({
+      psid,
+      lang: "en",
+      payload: "GDPR_DELETE_CANCEL",
+      state: pendingState!,
+      sendText,
+      sendActions,
+    });
+    const cancelledState = await Promise.resolve(getState(psid));
+    sendText.mockClear();
+    storageDeleteMock.mockClear();
+
+    await expect(
+      handleMessengerConsentGate({
+        psid,
+        lang: "en",
+        payload: "GDPR_DELETE_CONFIRM",
+        state: cancelledState!,
+        sendText,
+        sendActions,
+      })
+    ).resolves.toBe(true);
+
+    expect(await Promise.resolve(getState(psid))).toMatchObject({
+      lastPhotoUrl: sourceUrl,
+      pendingDeleteConfirm: false,
+    });
+    expect(storageDeleteMock).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith(
+      expect.stringContaining("confirmation has expired")
+    );
+  });
+
+  it("rejects an expired active delete confirmation without deleting data", async () => {
+    const psid = "messenger-delete-expired-confirmation-user";
+    const sourceUrl =
+      "https://assets.example/inbound-source/expired-delete-source.jpg";
+    const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
+
+    await Promise.resolve(getOrCreateState(psid));
+    await Promise.resolve(setPendingStoredImage(psid, sourceUrl));
+    await Promise.resolve(
+      setPendingDeleteConfirm(psid, true, Date.now() - 15 * 60 * 1000 - 1)
+    );
+    const expiredState = await Promise.resolve(getState(psid));
+
+    await expect(
+      handleMessengerConsentGate({
+        psid,
+        lang: "en",
+        payload: "GDPR_DELETE_CONFIRM",
+        state: expiredState!,
+        sendText,
+        sendActions,
+      })
+    ).resolves.toBe(true);
+
+    expect(await Promise.resolve(getState(psid))).toMatchObject({
+      lastPhotoUrl: sourceUrl,
+      pendingDeleteConfirm: false,
+    });
+    expect(storageDeleteMock).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith(
+      expect.stringContaining("confirmation has expired")
+    );
+  });
+
   it("does not claim Messenger deletion succeeded when storage cleanup is pending", async () => {
     const psid = "messenger-delete-storage-pending-user";
     const sourceUrl =
@@ -562,6 +748,7 @@ describe("Messenger consent deletion flow", () => {
 
     await Promise.resolve(getOrCreateState(psid));
     await Promise.resolve(setPendingStoredImage(psid, sourceUrl));
+    await Promise.resolve(setPendingDeleteConfirm(psid, true));
     const state = await Promise.resolve(getState(psid));
     storageDeleteMock.mockRejectedValueOnce(new Error("delete failed"));
 
@@ -594,7 +781,9 @@ describe("Messenger consent deletion flow", () => {
     const psid = "messenger-delete-failed-without-retry-state-user";
     const sendText = vi.fn(async () => undefined);
     const sendActions = vi.fn(async () => undefined);
-    const staleState = await Promise.resolve(getOrCreateState(psid));
+    await Promise.resolve(getOrCreateState(psid));
+    await Promise.resolve(setPendingDeleteConfirm(psid, true));
+    const staleState = await Promise.resolve(getState(psid));
 
     await Promise.resolve(clearUserState(psid));
     deletePortalHandoffTokensForMessengerUserKeyMock.mockRejectedValueOnce(
@@ -606,7 +795,7 @@ describe("Messenger consent deletion flow", () => {
         psid,
         lang: "en",
         payload: "GDPR_DELETE_CONFIRM",
-        state: staleState,
+        state: staleState!,
         sendText,
         sendActions,
       })
@@ -693,6 +882,45 @@ describe("Messenger consent deletion flow", () => {
     ).toBe(true);
   });
 
+  it("rejects a stale WhatsApp delete reply without deleting data", async () => {
+    const senderId = "whatsapp-stale-delete-confirm-user";
+    const sourceUrl =
+      "https://assets.example/inbound-source/whatsapp-stale-delete.jpg";
+    const sendText = vi.fn(async () => undefined);
+    const sendButtons = vi.fn(async () => undefined);
+
+    await Promise.resolve(getOrCreateState(senderId));
+    await Promise.resolve(setPendingStoredImage(senderId, sourceUrl));
+    const state = await Promise.resolve(getState(senderId));
+
+    await expect(
+      handleWhatsAppConsentGate({
+        event: {
+          channel: "whatsapp",
+          messageId: "wamid-stale-delete-confirm",
+          messageType: "text",
+          senderId,
+          userId: senderId,
+          timestamp: 1_771_000_000,
+          rawEventMeta: { interactiveReplyId: "GDPR_DELETE_CONFIRM" },
+        },
+        lang: "en",
+        state: state!,
+        sendText,
+        sendButtons,
+      })
+    ).resolves.toBe(true);
+
+    expect(await Promise.resolve(getState(senderId))).toMatchObject({
+      lastPhotoUrl: sourceUrl,
+      pendingDeleteConfirm: false,
+    });
+    expect(storageDeleteMock).not.toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalledWith(
+      expect.stringContaining("confirmation has expired")
+    );
+  });
+
   it("does not claim WhatsApp deletion succeeded when a required step is pending", async () => {
     const senderId = "whatsapp-delete-required-step-pending-user";
     const sendText = vi.fn(async () => undefined);
@@ -706,6 +934,7 @@ describe("Messenger consent deletion flow", () => {
         lastGeneratedVideoProviderJobId: "video_job_delete_pending",
       })
     );
+    await Promise.resolve(setPendingDeleteConfirm(senderId, true));
     const state = await Promise.resolve(getState(senderId));
     deleteProviderVideoForUserMock.mockRejectedValueOnce(
       new Error("temporary video artifact deletion failure")

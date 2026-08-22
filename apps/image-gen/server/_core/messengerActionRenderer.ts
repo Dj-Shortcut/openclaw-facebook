@@ -1,4 +1,5 @@
 import type { ConversationAction } from "./botResponse";
+import { isGdprConsentActionId } from "./consentActionIds";
 import type { QuickReply } from "./messengerApi";
 import { encodeMessengerActionInput } from "./messengerActionPayload";
 
@@ -167,5 +168,5 @@ function isPlatformPayloadActionId(id: string): boolean {
 }
 
 function isPersistentPostbackActionId(id: string): boolean {
-  return /^GDPR_/.test(id);
+  return isGdprConsentActionId(id);
 }
