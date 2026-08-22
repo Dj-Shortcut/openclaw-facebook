@@ -589,7 +589,7 @@ Validated controls:
 25. [x] Optional root-gateway daily Leaderbot event forward cap (`MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP`) blocks generic free-tier/interactive Messenger event forwards before they reach Leaderbot image-gen, while preserving delete-data forwards.
 26. [x] Optional audio transcription cost estimate (`OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD`) feeds spend-cap checks and reconciles successful audio ledger attempts with final cost.
 27. [x] Optional video generation cost estimate (`OPENAI_VIDEO_GENERATION_ESTIMATED_COST_USD`) feeds spend-cap checks and reconciles successful video ledger attempts with final cost.
-28. [x] Exact `MESSENGER_ADMIN_IDS` owner accounts bypass customer image quota, Startpilot entitlement, and customer daily/monthly image spend caps; their attempts remain auditable in aggregate cost reporting but do not consume customer budget. Independent hard owner emergency stops (`$100` daily / `$1000` monthly by default) still bound compromised credentials.
+28. [x] Exact `MESSENGER_ADMIN_IDS` owner accounts bypass customer image quota, Startpilot entitlement, and customer daily/monthly image spend caps; their attempts remain auditable in aggregate cost reporting but do not consume customer budget. Independent global hard owner emergency stops (`$10` daily / `$100` monthly by default) still bound the combined owner usage if credentials are compromised.
 
 Open cost-control work:
 
