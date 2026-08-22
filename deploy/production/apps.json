@@ -29,9 +29,11 @@
       "deployScript": "deploy:image-gen",
       "deploymentEnabled": true,
       "sourceDeployEnabled": false,
-      "sourceDeployBlockReason": "Production release 344 contains privacy-boundary code not yet reconciled into main; deploy only an explicitly reviewed immutable image digest.",
-      "reviewedImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:4c037101bd7849af818760cab037e1ab046717c9e6dda5815e5219f72c80d952",
-      "reviewedRollbackImages": [],
+      "sourceDeployBlockReason": "Production deploys require an immutable image built from reviewed source and recorded in this manifest before rollout.",
+      "reviewedImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:28d862568aa3cb049ac4aba164bb1e01792691feec646ff87c657f72bd306804",
+      "reviewedRollbackImages": [
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:4c037101bd7849af818760cab037e1ab046717c9e6dda5815e5219f72c80d952"
+      ],
       "strategy": "rolling",
       "serviceProcessGroups": ["app"],
       "serviceCheckPath": "/healthz",
