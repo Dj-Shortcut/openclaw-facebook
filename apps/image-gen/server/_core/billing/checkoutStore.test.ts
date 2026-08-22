@@ -72,8 +72,8 @@ describe("Mollie customer attachment", () => {
       insert: vi.fn(() => ({ values: insertValues })),
     };
     databaseMock.mockResolvedValue({
-      transaction: vi.fn(
-        (callback: (transaction: typeof tx) => unknown) => callback(tx)
+      transaction: vi.fn((callback: (transaction: typeof tx) => unknown) =>
+        callback(tx)
       ),
     });
 
@@ -97,17 +97,25 @@ describe("Mollie customer attachment", () => {
 
 describe("checkout provider mismatch persistence", () => {
   it("moves the tenant intent out of creating_payment and queues manual review", async () => {
-    const updateWhere = vi.fn().mockResolvedValue(undefined);
+    const updateWhere = vi.fn().mockResolvedValue({ affectedRows: 1 });
     const updateSet = vi.fn(() => ({ where: updateWhere }));
     const onDuplicateKeyUpdate = vi.fn().mockResolvedValue(undefined);
     const insertValues = vi.fn(() => ({ onDuplicateKeyUpdate }));
+    const forUpdate = vi.fn().mockResolvedValue([{}]);
     const tx = {
       update: vi.fn(() => ({ set: updateSet })),
       insert: vi.fn(() => ({ values: insertValues })),
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: vi.fn(() => ({ for: forUpdate })),
+          })),
+        })),
+      })),
     };
     databaseMock.mockResolvedValue({
-      transaction: vi.fn(
-        (callback: (transaction: typeof tx) => unknown) => callback(tx)
+      transaction: vi.fn((callback: (transaction: typeof tx) => unknown) =>
+        callback(tx)
       ),
     });
 
@@ -116,9 +124,20 @@ describe("checkout provider mismatch persistence", () => {
       workspaceId: 1,
       mode: "test",
       molliePaymentId: "tr_payment123",
+      operationId: "operation-1",
+      authorizationEpoch: 2,
+      targetCustomerId: "cst_customer123",
     });
 
-    expect(updateSet).toHaveBeenCalledWith({ status: "mismatch" });
+    expect(updateSet).toHaveBeenCalledWith({
+      state: "contained",
+      providerResourceId: "tr_payment123",
+      resolutionDueAt: expect.any(Date),
+    });
+    expect(updateSet).toHaveBeenCalledWith({
+      status: "mismatch",
+      molliePaymentId: "tr_payment123",
+    });
     expect(insertValues).toHaveBeenCalledWith({
       workspaceId: 1,
       mode: "test",
@@ -132,5 +151,59 @@ describe("checkout provider mismatch persistence", () => {
       },
       status: "pending",
     });
+    expect(insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: "cancel_payment",
+        payload: expect.objectContaining({
+          reason: "checkout_provider_response_mismatch",
+          intentId: "550e8400-e29b-41d4-a716-446655440000",
+          targetCustomerId: "cst_customer123",
+          targetPaymentId: "tr_payment123",
+          providerOperationId: "operation-1",
+          revokedAuthorizationEpoch: 2,
+        }),
+      })
+    );
+  });
+
+  it("leaves cancellation routing to the concurrent containment winner", async () => {
+    const updateWhere = vi.fn().mockResolvedValue({ affectedRows: 0 });
+    const updateSet = vi.fn(() => ({ where: updateWhere }));
+    const onDuplicateKeyUpdate = vi.fn().mockResolvedValue(undefined);
+    const insertValues = vi.fn(() => ({ onDuplicateKeyUpdate }));
+    const forUpdate = vi.fn().mockResolvedValue([{}]);
+    const tx = {
+      update: vi.fn(() => ({ set: updateSet })),
+      insert: vi.fn(() => ({ values: insertValues })),
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: vi.fn(() => ({ for: forUpdate })),
+          })),
+        })),
+      })),
+    };
+    databaseMock.mockResolvedValue({
+      transaction: vi.fn((callback: (transaction: typeof tx) => unknown) =>
+        callback(tx)
+      ),
+    });
+
+    await markIntentPaymentMismatch({
+      intentId: "550e8400-e29b-41d4-a716-446655440000",
+      workspaceId: 1,
+      mode: "test",
+      molliePaymentId: "tr_payment123",
+      operationId: "operation-1",
+      authorizationEpoch: 2,
+      targetCustomerId: "cst_customer123",
+    });
+
+    expect(insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: "manual_review" })
+    );
+    expect(insertValues.mock.calls.map(([value]) => value)).not.toContainEqual(
+      expect.objectContaining({ eventType: "cancel_payment" })
+    );
   });
 });

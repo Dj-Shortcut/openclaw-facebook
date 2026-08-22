@@ -25,7 +25,7 @@ describe("billing catalog", () => {
       },
       mollieDescription: "Leaderbot Premium - maandelijks abonnement",
       active: true,
-      publiclyAvailable: true,
+      publiclyAvailable: false,
     });
     expect(Object.isFrozen(plan)).toBe(true);
     expect(Object.isFrozen(plan.entitlements)).toBe(true);
@@ -33,22 +33,8 @@ describe("billing catalog", () => {
     expect(plan.amountMinor).toBe(2_900);
   });
 
-  it("publishes both the finite and recurring customer plans", () => {
+  it("publishes only the finite Startpilot launch plan", () => {
     expect(listPublicBillingPlans()).toEqual([
-      expect.objectContaining({
-        code: "premium_monthly_v1",
-        amount: "29.00",
-        currency: "EUR",
-        offerType: "subscription",
-        interval: "1 month",
-        accessDurationDays: null,
-        active: true,
-        entitlements: {
-          imagesPerDay: 100,
-          messagesPerMinute: 120,
-          videoGenerationsPerDay: 10,
-        },
-      }),
       expect.objectContaining({
         code: "startpilot_once_v1",
         amount: "19.00",

@@ -1,0 +1,9 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Generated SHA-256 schema fingerprint for portalHandoffTokens"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^apps/image-gen/drizzle/production-schema-contract\.json$''']
+regexes = ['''^\s*"portalHandoffTokens": "[0-9a-f]{64}",?$''']

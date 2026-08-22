@@ -29,7 +29,10 @@ import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
 import type { GenerationKind } from "./image-generation/generationTypes";
 import type { ImageGenerationQuotaReservation } from "./limits/generationQuota";
-import { MessengerQuotaReservationCommitError } from "./messengerQuota";
+import {
+  MessengerQuotaReservationCommitError,
+} from "./messengerQuota";
+import { isMessengerAdmin } from "./messengerAdmin";
 import {
   buildGenerationFailureDiagnosticPayload,
   buildGenerationSuccessDiagnosticPayload,
@@ -47,6 +50,7 @@ import {
   getMessengerGenerationCompletion,
   markMessengerGenerationCompleted,
   markMessengerGenerationDelivered,
+  type MessengerGenerationCompletionFence,
 } from "./messengerGenerationCompletion";
 import {
   MESSENGER_ASYNC_RESPONSE_QUEUED,
@@ -58,12 +62,27 @@ import type { HandlerContext } from "./webhookHandlerTypes";
 import {
   getMessengerRequestPageId,
   runWithMessengerRequestContext,
+  setMessengerRequestOperationId,
 } from "./messengerRequestContext";
 import {
+  assertMessengerGenerationOwnership,
+  resolveMessengerGenerationOwnership,
   resolveWorkspaceRuntimePolicy,
   type StartpilotRuntimePolicy,
 } from "./workspaceEntitlementRuntime";
+import {
+  assertMessengerPrivacySubject,
+  ensureActiveMessengerPrivacySubject,
+  MessengerPrivacyFenceError,
+} from "./messengerPrivacySubject";
 import { reserveStartpilotImageUsage } from "./billing/entitlementUsageStore";
+import { storageDelete, storageKeyFromPublicUrl } from "../storage";
+import {
+  finalizeMessengerProviderAttemptFence,
+  markMessengerProviderAttemptStarted,
+  reserveMessengerProviderAttemptFence,
+  type MessengerProviderAttemptFence,
+} from "./messengerProviderAttemptFence";
 
 type GenerationJobRunner = {
   runImageGeneration: HandlerContext["runImageGeneration"];
@@ -110,14 +129,29 @@ export function createMessengerGenerationJobRunner(
   async function executeImageGenerationJob(
     job: MessengerGenerationJob
   ): Promise<MessengerSendOutcome> {
-    return await runWithMessengerRequestContext(job.pageId, () =>
-      executeImageGenerationJobInPageContext(job)
+    return await runWithMessengerRequestContext(
+      job.pageId,
+      () => {
+        setMessengerRequestOperationId(job.reqId);
+        return executeImageGenerationJobInPageContext(job);
+      },
+      job.workspaceId && job.channelConnectionId && job.bindingEpoch
+        ? {
+            workspaceId: job.workspaceId,
+            channelConnectionId: job.channelConnectionId,
+            bindingEpoch: job.bindingEpoch,
+            userKey: job.userId,
+            privacyEpoch: job.privacyEpoch,
+          }
+        : undefined
     );
   }
 
   async function executeImageGenerationJobInPageContext(
     job: MessengerGenerationJob
   ): Promise<MessengerSendOutcome> {
+    await assertMessengerGenerationOwnership(job);
+    await assertGenerationJobPrivacy(job);
     const {
       psid,
       userId,
@@ -125,6 +159,7 @@ export function createMessengerGenerationJobRunner(
       reqId,
       lang,
       sourceImageUrl,
+      sourceImageUrls,
       promptHint,
       pageId,
     } = job;
@@ -151,14 +186,18 @@ export function createMessengerGenerationJobRunner(
             promptHint,
             resolvedGenerationKind,
             rememberSendOutcome,
+            completionFence: completionFenceForJob(job),
           })
         ) {
           return;
         }
 
         const workspacePolicy = await resolveWorkspaceRuntimePolicy(pageId);
+        const ownerQuotaBypass = isMessengerAdmin(psid, userId);
+        const useStartpilotQuota =
+          workspacePolicy.kind === "startpilot" && !ownerQuotaBypass;
         const quotaReservation =
-          workspacePolicy.kind === "free"
+          !useStartpilotQuota
             ? await reserveGenerationQuota({
                 deps,
                 psid,
@@ -167,13 +206,15 @@ export function createMessengerGenerationJobRunner(
                 rememberSendOutcome,
               })
             : null;
-        if (workspacePolicy.kind === "free" && !quotaReservation) {
+        if (!useStartpilotQuota && !quotaReservation) {
           return;
         }
 
         let pendingQuotaReservation: ImageGenerationQuotaReservation | null =
           quotaReservation;
         let providerAttemptsCommitted = 0;
+        let providerFenceSequence = 0;
+        const providerFences: MessengerProviderAttemptFence[] = [];
         try {
           await setFlowState(psid, "PROCESSING");
           await sendGenerationStartedAck({
@@ -196,36 +237,57 @@ export function createMessengerGenerationJobRunner(
               sourceImageUrl === state.lastImageUrl)
           );
           const commitProviderAttemptQuota = async () => {
-            if (workspacePolicy.kind === "startpilot") {
-              if (providerAttemptsCommitted > 0) return;
-              await commitStartpilotProviderAttempt(workspacePolicy);
-              providerAttemptsCommitted += 1;
-              return;
-            }
+            await assertMessengerGenerationOwnership(job);
+            await assertGenerationJobPrivacy(job);
+            providerFenceSequence += 1;
+            const providerFence = await reserveMessengerProviderAttemptFence(
+              job,
+              resolvedGenerationKind,
+              providerFenceSequence
+            );
+            try {
+              if (
+                useStartpilotQuota &&
+                workspacePolicy.kind === "startpilot"
+              ) {
+                if (providerAttemptsCommitted === 0) {
+                  await commitStartpilotProviderAttempt(workspacePolicy);
+                  providerAttemptsCommitted += 1;
+                }
+              } else {
+                const reservationForAttempt =
+                  pendingQuotaReservation ??
+                  (await reserveMessengerGenerationQuota({
+                    psid,
+                    userKey: userId,
+                    quotaCount: (await getOrCreateState(psid)).quota.count,
+                  }));
 
-            const reservationForAttempt =
-              pendingQuotaReservation ??
-              (await reserveMessengerGenerationQuota({
-                psid,
-                userKey: userId,
-                quotaCount: (await getOrCreateState(psid)).quota.count,
-              }));
+                if (!reservationForAttempt) {
+                  throw new MessengerQuotaReservationCommitError();
+                }
 
-            if (!reservationForAttempt) {
-              throw new MessengerQuotaReservationCommitError();
+                await commitMessengerGenerationQuota({
+                  psid,
+                  reservation: reservationForAttempt,
+                  generationKind: resolvedGenerationKind,
+                });
+                providerAttemptsCommitted += 1;
+                if (
+                  pendingQuotaReservation?.token === reservationForAttempt.token
+                ) {
+                  pendingQuotaReservation = null;
+                }
+              }
+            } catch (error) {
+              await finalizeMessengerProviderAttemptFence(
+                providerFence,
+                "known_failed"
+              );
+              throw error;
             }
-
-            await commitMessengerGenerationQuota({
-              psid,
-              reservation: reservationForAttempt,
-              generationKind: resolvedGenerationKind,
-            });
-            providerAttemptsCommitted += 1;
-            if (
-              pendingQuotaReservation?.token === reservationForAttempt.token
-            ) {
-              pendingQuotaReservation = null;
-            }
+            await markMessengerProviderAttemptStarted(providerFence);
+            providerFences.push(providerFence);
           };
 
           const generationResult = await executeGenerationFlow({
@@ -234,6 +296,9 @@ export function createMessengerGenerationJobRunner(
             reqId,
             promptHint,
             sourceImageUrl: shouldSendSourceImage ? sourceImageUrl : undefined,
+            sourceImageUrls: shouldSendSourceImage
+              ? sourceImageUrls
+              : undefined,
             lastPhotoUrl: shouldSendSourceImage
               ? sourceIsGeneratedResult
                 ? sourceImageUrl
@@ -245,6 +310,7 @@ export function createMessengerGenerationJobRunner(
                 : state.lastPhotoSource
               : undefined,
             onProviderAttempt: commitProviderAttemptQuota,
+            bypassBudgetLimits: ownerQuotaBypass,
             imageModel:
               workspacePolicy.kind === "startpilot"
                 ? workspacePolicy.imageModel
@@ -256,22 +322,46 @@ export function createMessengerGenerationJobRunner(
           });
 
           if (generationResult.kind === "success") {
-            if (providerAttemptsCommitted === 0) {
-              await commitProviderAttemptQuota();
+            try {
+              if (providerAttemptsCommitted === 0) {
+                await commitProviderAttemptQuota();
+              }
+              await assertMessengerGenerationOwnership(job);
+              await assertGenerationJobPrivacy(job);
+              await handleGenerationSuccess({
+                deps,
+                generationResult,
+                promptHint,
+                psid,
+                reqId,
+                resolvedGenerationKind,
+                userId,
+                lang,
+                rememberSendOutcome,
+                completionFence: completionFenceForJob(job),
+              });
+            } catch (error) {
+              if (error instanceof MessengerPrivacyFenceError) {
+                const key = storageKeyFromPublicUrl(generationResult.imageUrl);
+                if (key) await storageDelete(key);
+              }
+              throw error;
             }
-            await handleGenerationSuccess({
-              deps,
-              generationResult,
-              promptHint,
-              psid,
-              reqId,
-              resolvedGenerationKind,
-              userId,
-              lang,
-              rememberSendOutcome,
-            });
+            await Promise.all(
+              providerFences.map(fence =>
+                finalizeMessengerProviderAttemptFence(fence, "succeeded")
+              )
+            );
+            providerFences.length = 0;
             return;
           }
+
+          await Promise.all(
+            providerFences.map(fence =>
+              finalizeMessengerProviderAttemptFence(fence, "ambiguous")
+            )
+          );
+          providerFences.length = 0;
 
           await handleGenerationFailure({
             deps,
@@ -283,6 +373,11 @@ export function createMessengerGenerationJobRunner(
             rememberSendOutcome,
           });
         } finally {
+          await Promise.all(
+            providerFences.map(fence =>
+              finalizeMessengerProviderAttemptFence(fence, "ambiguous")
+            )
+          );
           if (pendingQuotaReservation) {
             await releaseMessengerGenerationQuota({
               psid,
@@ -292,6 +387,9 @@ export function createMessengerGenerationJobRunner(
         }
       });
     } catch (error) {
+      if (error instanceof MessengerPrivacyFenceError) {
+        return MESSENGER_SEND_SKIPPED;
+      }
       if (error instanceof MessengerGenerationDeliveryError) {
         recordMessengerDeliveryFailure();
         safeLog("messenger_generation_image_delivery_failed", {
@@ -346,15 +444,38 @@ export function createMessengerGenerationJobRunner(
       generationKind,
       sourceImageUrl,
     });
+    const pageId = getMessengerRequestPageId();
+    const ownership = await resolveMessengerGenerationOwnership(pageId);
+    const privacyEpoch = ownership
+      ? await ensureActiveMessengerPrivacySubject({
+          workspaceId: ownership.workspaceId,
+          channelConnectionId: ownership.channelConnectionId,
+          userKey: userId,
+        })
+      : undefined;
+    const currentState = await getOrCreateState(psid);
+    const sourceImageUrls =
+      resolvedGenerationKind === "source_image_edit" &&
+      sourceImageUrl &&
+      currentState.pendingImageUrls?.includes(sourceImageUrl)
+        ? currentState.pendingImageUrls
+        : sourceImageUrl
+          ? [sourceImageUrl]
+          : undefined;
     const result = await enqueueOrRunMessengerGenerationJob(
       {
         psid,
         userId,
-        pageId: getMessengerRequestPageId(),
+        pageId,
+        workspaceId: ownership?.workspaceId,
+        channelConnectionId: ownership?.channelConnectionId,
+        bindingEpoch: ownership?.bindingEpoch,
+        privacyEpoch,
         generationKind: resolvedGenerationKind,
         reqId,
         lang,
         sourceImageUrl,
+        sourceImageUrls,
         promptHint,
       },
       executeImageGenerationJob,
@@ -391,14 +512,35 @@ export function createMessengerGenerationJobRunner(
   async function processMessengerGenerationJobDeadLetter(
     input: MessengerGenerationJob
   ): Promise<MessengerSendOutcome> {
-    return await runWithMessengerRequestContext(input.pageId, async () => {
-      await setFlowState(input.psid, "FAILURE");
-      return await deps.sendLoggedText(
-        input.psid,
-        t(input.lang, "generationGenericFailure"),
-        input.reqId
-      );
-    });
+    return await runWithMessengerRequestContext(
+      input.pageId,
+      async () => {
+        setMessengerRequestOperationId(input.reqId);
+        try {
+          await assertGenerationJobPrivacy(input);
+        } catch (error) {
+          if (error instanceof MessengerPrivacyFenceError) {
+            return MESSENGER_SEND_SKIPPED;
+          }
+          throw error;
+        }
+        await setFlowState(input.psid, "FAILURE");
+        return await deps.sendLoggedText(
+          input.psid,
+          t(input.lang, "generationGenericFailure"),
+          input.reqId
+        );
+      },
+      input.workspaceId && input.channelConnectionId && input.bindingEpoch
+        ? {
+            workspaceId: input.workspaceId,
+            channelConnectionId: input.channelConnectionId,
+            bindingEpoch: input.bindingEpoch,
+            userKey: input.userId,
+            privacyEpoch: input.privacyEpoch,
+          }
+        : undefined
+    );
   }
 
   return {
@@ -406,6 +548,28 @@ export function createMessengerGenerationJobRunner(
     processMessengerGenerationJob: executeImageGenerationJob,
     processMessengerGenerationJobDeadLetter,
   };
+}
+
+async function assertGenerationJobPrivacy(
+  job: MessengerGenerationJob
+): Promise<void> {
+  if (
+    job.workspaceId &&
+    job.channelConnectionId &&
+    job.privacyEpoch &&
+    job.userId
+  ) {
+    await assertMessengerPrivacySubject({
+      workspaceId: job.workspaceId,
+      channelConnectionId: job.channelConnectionId,
+      userKey: job.userId,
+      privacyEpoch: job.privacyEpoch,
+    });
+    return;
+  }
+  if (process.env.NODE_ENV === "production") {
+    throw new MessengerPrivacyFenceError();
+  }
 }
 
 async function commitStartpilotProviderAttempt(
@@ -533,9 +697,10 @@ async function finishDuplicateGenerationIfCompleted(input: {
   promptHint?: string;
   resolvedGenerationKind: GenerationKind;
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
+  completionFence?: MessengerGenerationCompletionFence;
 }): Promise<boolean> {
   const completedGeneration = await Promise.resolve(
-    getMessengerGenerationCompletion(input.reqId)
+    getMessengerGenerationCompletion(input.reqId, input.completionFence)
   );
   if (!completedGeneration) {
     return false;
@@ -576,6 +741,7 @@ async function finishDuplicateGenerationIfCompleted(input: {
       reqId: input.reqId,
       userId: input.userId,
       rememberSendOutcome: input.rememberSendOutcome,
+      completionFence: input.completionFence,
     });
     await sendGenerationSuccessActions({
       deps: input.deps,
@@ -632,6 +798,7 @@ async function handleGenerationSuccess(input: {
   userId: string;
   lang: MessengerGenerationJob["lang"];
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
+  completionFence?: MessengerGenerationCompletionFence;
 }): Promise<void> {
   const { imageUrl, metrics, mode, proof } = input.generationResult;
   safeLog("messenger_send_image_url", {
@@ -668,7 +835,13 @@ async function handleGenerationSuccess(input: {
   });
 
   await Promise.resolve(
-    markMessengerGenerationCompleted(input.reqId, imageUrl, input.userId)
+    markMessengerGenerationCompleted(
+      input.reqId,
+      imageUrl,
+      input.userId,
+      Date.now(),
+      input.completionFence
+    )
   );
   await setLastGenerated(input.psid, imageUrl);
   await setLastGenerationContext(input.psid, { prompt: input.promptHint });
@@ -680,6 +853,7 @@ async function handleGenerationSuccess(input: {
     reqId: input.reqId,
     userId: input.userId,
     rememberSendOutcome: input.rememberSendOutcome,
+    completionFence: input.completionFence,
   });
   recordGenerationSuccess(input.resolvedGenerationKind, metrics.totalMs);
   await sendGenerationSuccessActions({
@@ -708,6 +882,7 @@ async function deliverGenerationImage(input: {
   reqId: string;
   userId: string;
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
+  completionFence?: MessengerGenerationCompletionFence;
 }): Promise<number> {
   const messengerSendStartedAt = Date.now();
   let outcome: MessengerSendOutcome;
@@ -732,7 +907,9 @@ async function deliverGenerationImage(input: {
     await markMessengerGenerationDelivered(
       input.reqId,
       input.imageUrl,
-      input.userId
+      input.userId,
+      Date.now(),
+      input.completionFence
     );
   } catch (error) {
     safeLog("messenger_generation_delivery_marker_failed", {
@@ -743,6 +920,28 @@ async function deliverGenerationImage(input: {
     });
   }
   return Date.now() - messengerSendStartedAt;
+}
+
+function completionFenceForJob(
+  job: MessengerGenerationJob
+): MessengerGenerationCompletionFence | undefined {
+  if (
+    !job.workspaceId ||
+    !job.channelConnectionId ||
+    !job.bindingEpoch ||
+    !job.privacyEpoch
+  ) {
+    if (process.env.NODE_ENV !== "production") return undefined;
+    throw new MessengerPrivacyFenceError();
+  }
+  return {
+    workspaceId: job.workspaceId,
+    channelConnectionId: job.channelConnectionId,
+    bindingEpoch: job.bindingEpoch,
+    privacyEpoch: job.privacyEpoch,
+    userKey: job.userId,
+    pageId: job.pageId ?? "",
+  };
 }
 
 async function sendGenerationSuccessActions(input: {

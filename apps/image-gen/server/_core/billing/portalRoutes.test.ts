@@ -3,9 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   authenticatePortalRequest: vi.fn(),
   getMollieConfig: vi.fn(),
+  getWorkspaceAccountingHighWaterId: vi.fn(),
   getWorkspaceLedgerPayment: vi.fn(),
   getWorkspaceMembership: vi.fn(),
-  listWorkspaceAccountingEntries: vi.fn(),
+  listWorkspaceAccountingEntryBatch: vi.fn(),
   requirePortalWorkspace: vi.fn(),
 }));
 
@@ -23,8 +24,9 @@ vi.mock("./config", () => ({
 }));
 
 vi.mock("./subscriptionStore", () => ({
+  getWorkspaceAccountingHighWaterId: mocks.getWorkspaceAccountingHighWaterId,
   getWorkspaceLedgerPayment: mocks.getWorkspaceLedgerPayment,
-  listWorkspaceAccountingEntries: mocks.listWorkspaceAccountingEntries,
+  listWorkspaceAccountingEntryBatch: mocks.listWorkspaceAccountingEntryBatch,
 }));
 
 import { registerBillingPortalRoutes } from "./portalRoutes";
@@ -43,6 +45,8 @@ class FakeResponse {
   contentType = "";
   headers = new Map<string, string>();
   statusCode = 0;
+  destroyed = false;
+  writableEnded = false;
   private resolveSend?: () => void;
 
   constructor(resolveSend: () => void) {
@@ -57,6 +61,26 @@ class FakeResponse {
     this.body = body;
     this.resolveSend?.();
     this.resolveSend = undefined;
+    return this;
+  }
+
+  write(chunk: string): boolean {
+    this.body = `${typeof this.body === "string" ? this.body : ""}${chunk}`;
+    return true;
+  }
+
+  end(): this {
+    this.writableEnded = true;
+    this.resolveSend?.();
+    this.resolveSend = undefined;
+    return this;
+  }
+
+  once(): this {
+    return this;
+  }
+
+  off(): this {
     return this;
   }
 
@@ -112,6 +136,8 @@ async function invokeRoute(
 describe("billing portal response caching", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.listWorkspaceAccountingEntryBatch.mockReset();
+    mocks.getWorkspaceAccountingHighWaterId.mockResolvedValue(10_000);
     mocks.authenticatePortalRequest.mockResolvedValue({ id: 7 });
     mocks.requirePortalWorkspace.mockResolvedValue({ id: 42 });
     mocks.getWorkspaceMembership.mockResolvedValue({ role: "owner" });
@@ -130,7 +156,7 @@ describe("billing portal response caching", () => {
       status: "paid",
       molliePaymentId: "tr_payment123",
     });
-    mocks.listWorkspaceAccountingEntries.mockResolvedValue([]);
+    mocks.listWorkspaceAccountingEntryBatch.mockResolvedValue([]);
 
     const receipt = await invokeRoute(
       "/api/portal/billing/receipts/:paymentId",
@@ -143,7 +169,12 @@ describe("billing portal response caching", () => {
       "/api/portal/billing/export.csv",
       {
         params: {},
-        query: { workspaceId: "42" },
+        query: {
+          workspaceId: "42",
+          mode: "test",
+          from: "2026-01-01",
+          until: "2026-12-31",
+        },
       }
     );
 
@@ -164,9 +195,15 @@ describe("billing portal response caching", () => {
       "test",
       "tr_payment123"
     );
-    expect(mocks.listWorkspaceAccountingEntries).toHaveBeenCalledWith(
-      42,
-      "test"
+    expect(mocks.listWorkspaceAccountingEntryBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: 42,
+        mode: "test",
+        from: new Date("2026-01-01T00:00:00.000Z"),
+        until: new Date("2026-12-31T00:00:00.000Z"),
+        highWaterId: 10_000,
+        limit: 500,
+      })
     );
   });
 
@@ -236,36 +273,97 @@ describe("billing portal response caching", () => {
       expect(response.statusCode).toBe(403);
       expect(response.body).toEqual({ error: "billing admin required" });
       expect(mocks.getWorkspaceLedgerPayment).not.toHaveBeenCalled();
-      expect(mocks.listWorkspaceAccountingEntries).not.toHaveBeenCalled();
+      expect(mocks.listWorkspaceAccountingEntryBatch).not.toHaveBeenCalled();
     }
   );
 
-  it("neutralizes formula-like CSV values beginning with tab or carriage return", async () => {
-    mocks.listWorkspaceAccountingEntries.mockResolvedValue([
-      {
-        occurredAt: new Date("2026-08-01T00:00:00.000Z"),
-        invoiceNumber: '\t=HYPERLINK("https://example.test")',
-        molliePaymentId: "tr_payment123",
-        status: "\r=1+1",
-        currency: "EUR",
-        grossAmount: "29.00",
-        mollieFees: null,
-        refunds: [],
-        chargebacks: [],
-        settlementAmount: null,
-        settlementId: null,
-      },
-    ]);
+  it("neutralizes formula-like CSV values after Unicode or control whitespace", async () => {
+    mocks.listWorkspaceAccountingEntryBatch
+      .mockResolvedValueOnce([
+        {
+          id: 1,
+          occurredAt: new Date("2026-08-01T00:00:00.000Z"),
+          invoiceNumber: '\t=HYPERLINK("https://example.test")',
+          molliePaymentId: "\u00ad=tr_payment123",
+          status: "\u2061@formula",
+          currency: "EUR",
+          grossAmount: "29.00",
+          mollieFees: null,
+          refunds: [],
+          chargebacks: [],
+          settlementAmount: null,
+          settlementId: null,
+        },
+      ])
+      .mockResolvedValueOnce([]);
 
     const response = await invokeRoute("/api/portal/billing/export.csv", {
       params: {},
-      query: { workspaceId: "42" },
+      query: {
+        workspaceId: "42",
+        mode: "test",
+        from: "2026-01-01",
+        until: "2026-12-31",
+      },
     });
 
     expect(response.statusCode).toBe(200);
     expect(response.body).toContain(
       `"'\t=HYPERLINK(""https://example.test"")"`
     );
-    expect(response.body).toContain(`"'\r=1+1"`);
+    expect(response.body).toContain(`"'\u00ad=tr_payment123"`);
+    expect(response.body).toContain(`"'\u2061@formula"`);
+  });
+
+  it.each([
+    { from: "2026-01-01", until: "2027-01-03" },
+    { from: "2026-02-01", until: "2026-01-01" },
+    { from: "2026-02-30", until: "2026-03-02" },
+  ])("rejects an invalid or over-wide accounting range", async query => {
+    const response = await invokeRoute("/api/portal/billing/export.csv", {
+      params: {},
+      query: { workspaceId: "42", ...query },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(mocks.listWorkspaceAccountingEntryBatch).not.toHaveBeenCalled();
+    expect(mocks.getWorkspaceAccountingHighWaterId).not.toHaveBeenCalled();
+  });
+
+  it("streams beyond one batch with a stable occurredAt/id cursor", async () => {
+    const occurredAt = new Date("2026-08-01T00:00:00.000Z");
+    const entry = (id: number) => ({
+      id,
+      occurredAt,
+      invoiceNumber: `LB-${id}`,
+      molliePaymentId: `tr_payment${id}`,
+      status: "paid",
+      currency: "EUR",
+      grossAmount: "19.00",
+      refunds: [],
+      chargebacks: [],
+    });
+    mocks.listWorkspaceAccountingEntryBatch
+      .mockResolvedValueOnce(
+        Array.from({ length: 500 }, (_, index) => entry(index + 1))
+      )
+      .mockResolvedValueOnce([entry(501)]);
+
+    const response = await invokeRoute("/api/portal/billing/export.csv", {
+      params: {},
+      query: {
+        workspaceId: "42",
+        mode: "test",
+        from: "2026-01-01",
+        until: "2026-12-31",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mocks.listWorkspaceAccountingEntryBatch).toHaveBeenCalledTimes(2);
+    expect(mocks.listWorkspaceAccountingEntryBatch.mock.calls[1]![0]).toEqual(
+      expect.objectContaining({ cursor: { occurredAt, id: 500 } })
+    );
+    expect(response.body).toContain('"tr_payment501"');
   });
 });

@@ -6,6 +6,7 @@ import { formatFaceMemoryRetentionDays } from "./faceMemoryRetention";
 const CONVERSATION_ACTION_NEW_IMAGE = "new_image";
 const CONVERSATION_ACTION_EDIT_PHOTO = "edit_photo";
 const CONVERSATION_ACTION_CHANGE_BACKGROUND = "change_background";
+const CONVERSATION_ACTION_COMBINE_PHOTOS = "combine_photos";
 const CONVERSATION_ACTION_PRIVACY_INFO = "privacy";
 const CONVERSATION_ACTION_PORTAL = "portal";
 
@@ -259,6 +260,31 @@ export function buildPhotoReceivedResponse(lang: Lang): ConversationResponse {
         id: CONVERSATION_ACTION_PRIVACY_INFO,
         label: "Privacy",
         inputText: "Privacy",
+      },
+    ],
+  };
+}
+
+export function buildMultiPhotoReceivedResponse(
+  lang: Lang
+): ConversationResponse {
+  return {
+    text: t(lang, "multiPhotoPrompt"),
+    actions: [
+      {
+        id: CONVERSATION_ACTION_COMBINE_PHOTOS,
+        label: t(lang, "combinePhotos"),
+        inputText: CONVERSATION_ACTION_COMBINE_PHOTOS,
+      },
+      {
+        id: CONVERSATION_ACTION_EDIT_PHOTO,
+        label: t(lang, "editImage"),
+        inputText: t(lang, "editImage"),
+      },
+      {
+        id: CONVERSATION_ACTION_NEW_IMAGE,
+        label: t(lang, "newImage"),
+        inputText: CONVERSATION_ACTION_NEW_IMAGE,
       },
     ],
   };

@@ -5,7 +5,9 @@ const { dbMock, drizzleMock } = vi.hoisted(() => {
     delete: vi.fn(),
     insert: vi.fn(),
     select: vi.fn(),
-    transaction: vi.fn(async (callback: (tx: unknown) => unknown) => callback(db)),
+    transaction: vi.fn(async (callback: (tx: unknown) => unknown) =>
+      callback(db)
+    ),
     update: vi.fn(),
   };
   return {
@@ -124,29 +126,48 @@ describe("portal handoff database helpers", () => {
 
   it("reuses the stored pending delivery capability and its expiry", async () => {
     const stored = {
-      id: 12, workspaceId: 42, tokenHash: "sha256:token",
-      deliveryIdempotencyKeyHash: "sha256:delivery", messengerSenderUserKey: "sender",
-      facebookPageId: "page", purpose: "workspace_onboarding" as const,
-      status: "pending" as const, expiresAt: new Date("2026-07-01T00:00:00.000Z"),
+      id: 12,
+      workspaceId: 42,
+      tokenHash: "sha256:token",
+      capabilityGeneration: 1,
+      deliveryIdempotencyKeyHash: "sha256:delivery",
+      messengerSenderUserKey: "sender",
+      facebookPageId: "page",
+      purpose: "workspace_onboarding" as const,
+      status: "pending" as const,
+      expiresAt: new Date("2026-07-01T00:00:00.000Z"),
     };
     const rows = selectRows([stored]);
     dbMock.select.mockReturnValue({ from: rows.from });
     const insert = duplicateInsert();
     dbMock.insert.mockReturnValue({ values: insert.values });
-    await expect(createOrGetPortalHandoffToken({
-      ...stored, createdByUserId: null,
-    }, new Date("2026-06-30T00:00:00.000Z"))).resolves.toEqual(stored);
+    await expect(
+      createOrGetPortalHandoffToken(
+        {
+          ...stored,
+          createdByUserId: null,
+        },
+        new Date("2026-06-30T00:00:00.000Z")
+      )
+    ).resolves.toEqual(stored);
     expect(rows.forUpdate).toHaveBeenCalledWith("update");
     expect(dbMock.update).not.toHaveBeenCalled();
   });
 
   function deliveryToken(overrides: Record<string, unknown> = {}) {
     return {
-      id: 12, workspaceId: 42, tokenHash: "sha256:token",
-      deliveryIdempotencyKeyHash: "sha256:delivery", messengerSenderUserKey: "sender",
-      facebookPageId: "page", purpose: "workspace_onboarding" as const,
-      status: "pending" as const, expiresAt: new Date("2026-07-01T00:00:00.000Z"),
-      createdByUserId: null, ...overrides,
+      id: 12,
+      workspaceId: 42,
+      tokenHash: "sha256:token",
+      capabilityGeneration: 1,
+      deliveryIdempotencyKeyHash: "sha256:delivery",
+      messengerSenderUserKey: "sender",
+      facebookPageId: "page",
+      purpose: "workspace_onboarding" as const,
+      status: "pending" as const,
+      expiresAt: new Date("2026-07-01T00:00:00.000Z"),
+      createdByUserId: null,
+      ...overrides,
     };
   }
 
@@ -164,38 +185,82 @@ describe("portal handoff database helpers", () => {
     const where = vi.fn(async () => undefined);
     const set = vi.fn(() => ({ where }));
     dbMock.update.mockReturnValue({ set });
-    await expect(createOrGetPortalHandoffToken(stored, new Date("2026-06-30")))
-      .resolves.toMatchObject({ status: "pending" });
-    expect(set).toHaveBeenCalledWith({ status: "pending" });
+    await expect(
+      createOrGetPortalHandoffToken(
+        stored,
+        new Date("2026-06-30"),
+        generation =>
+          generation === 1 ? "sha256:token" : `sha256:token-${generation}`
+      )
+    ).resolves.toMatchObject({ status: "pending" });
+    expect(set).toHaveBeenCalledWith({
+      status: "pending",
+      expiresAt: stored.expiresAt,
+      capabilityGeneration: 2,
+      tokenHash: "sha256:token-2",
+    });
     expect(where).toHaveBeenCalled();
   });
 
-  it.each([
-    { status: "consumed", expiresAt: new Date("2026-07-01") },
-    { status: "expired", expiresAt: new Date("2026-07-01") },
-    { status: "pending", expiresAt: new Date("2026-06-30") },
-  ])("fails closed for inactive delivery %#", async overrides => {
+  it("fails closed for a consumed delivery", async () => {
+    const overrides = { status: "consumed", expiresAt: new Date("2026-07-01") };
     const stored = deliveryToken(overrides);
     mockDeliveryToken(stored);
-    await expect(createOrGetPortalHandoffToken(stored, new Date("2026-06-30")))
-      .rejects.toThrow("no longer active");
+    await expect(
+      createOrGetPortalHandoffToken(stored, new Date("2026-06-30"))
+    ).rejects.toThrow("no longer active");
     expect(dbMock.update).not.toHaveBeenCalled();
   });
 
-  it.each(["tokenHash", "workspaceId", "facebookPageId", "messengerSenderUserKey", "purpose"])(
-    "fails closed for %s binding mismatch", async field => {
-      const stored = deliveryToken();
-      const input = { ...stored, [field]: field === "workspaceId" ? 99 : "other" };
-      mockDeliveryToken(stored);
-      await expect(createOrGetPortalHandoffToken(input, new Date("2026-06-30")))
-        .rejects.toThrow("binding mismatch");
-      expect(dbMock.update).not.toHaveBeenCalled();
-    }
-  );
+  it.each([
+    { status: "expired", expiresAt: new Date("2026-07-01") },
+    { status: "pending", expiresAt: new Date("2026-06-30") },
+  ])("rotates an inactive unconsumed capability %#", async overrides => {
+    const stored = deliveryToken(overrides);
+    mockDeliveryToken(stored);
+    const where = vi.fn(async () => undefined);
+    const set = vi.fn(() => ({ where }));
+    dbMock.update.mockReturnValue({ set });
+    await expect(
+      createOrGetPortalHandoffToken(
+        stored,
+        new Date("2026-07-02"),
+        generation =>
+          generation === 1 ? "sha256:token" : `sha256:rotated-${generation}`
+      )
+    ).resolves.toMatchObject({
+      status: "pending",
+      capabilityGeneration: 2,
+      tokenHash: "sha256:rotated-2",
+    });
+  });
+
+  it.each([
+    "tokenHash",
+    "workspaceId",
+    "facebookPageId",
+    "messengerSenderUserKey",
+    "purpose",
+  ])("fails closed for %s binding mismatch", async field => {
+    const stored = deliveryToken();
+    const input = {
+      ...stored,
+      [field]: field === "workspaceId" ? 99 : "other",
+    };
+    mockDeliveryToken(stored);
+    await expect(
+      createOrGetPortalHandoffToken(input, new Date("2026-06-30"))
+    ).rejects.toThrow("binding mismatch");
+    expect(dbMock.update).not.toHaveBeenCalled();
+  });
 
   it("rejects a missing delivery hash before transaction writes", async () => {
-    await expect(createOrGetPortalHandoffToken({ ...deliveryToken(), deliveryIdempotencyKeyHash: null }))
-      .rejects.toThrow("delivery key hash is required");
+    await expect(
+      createOrGetPortalHandoffToken({
+        ...deliveryToken(),
+        deliveryIdempotencyKeyHash: null,
+      })
+    ).rejects.toThrow("delivery key hash is required");
     expect(dbMock.transaction).not.toHaveBeenCalled();
   });
 
@@ -394,7 +459,9 @@ describe("portal handoff database helpers", () => {
         .mockReturnValueOnce({ from: priorClaimSelect.from })
         .mockReturnValueOnce({ from: membershipSelect.from });
       const updateWhere = vi.fn(async () => [{ affectedRows: 1 }, []]);
-      dbMock.update.mockReturnValue({ set: vi.fn(() => ({ where: updateWhere })) });
+      dbMock.update.mockReturnValue({
+        set: vi.fn(() => ({ where: updateWhere })),
+      });
       const memberInsert = duplicateInsert();
       const privacyInsert = duplicateInsert();
       dbMock.insert
@@ -537,10 +604,7 @@ describe("portal handoff database helpers", () => {
   });
 
   it("refuses re-entry when the Page binding is ambiguous", async () => {
-    const limit = vi.fn(async () => [
-      { workspaceId: 42 },
-      { workspaceId: 99 },
-    ]);
+    const limit = vi.fn(async () => [{ workspaceId: 42 }, { workspaceId: 99 }]);
     dbMock.select.mockReturnValueOnce({
       from: vi.fn(() => ({ where: vi.fn(() => ({ limit })) })),
     });

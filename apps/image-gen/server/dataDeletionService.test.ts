@@ -3,11 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const {
   storageDeleteMock,
   deleteProviderVideoForUserMock,
-  deletePortalHandoffTokensForMessengerUserKeyMock,
+  eraseBillingHandoffIdentityMock,
+  getConnectedFacebookPageConnectionMock,
 } = vi.hoisted(() => ({
   storageDeleteMock: vi.fn(async () => undefined),
   deleteProviderVideoForUserMock: vi.fn(async () => undefined),
-  deletePortalHandoffTokensForMessengerUserKeyMock: vi.fn(async () => 0),
+  eraseBillingHandoffIdentityMock: vi.fn(async () => 0),
+  getConnectedFacebookPageConnectionMock: vi.fn(async () => ({
+    id: 12,
+    workspaceId: 42,
+  })),
 }));
 
 vi.mock("./storage", async importOriginal => {
@@ -21,8 +26,8 @@ vi.mock("./db", async importOriginal => {
   const actual = await importOriginal<typeof import("./db")>();
   return {
     ...actual,
-    deletePortalHandoffTokensForMessengerUserKey:
-      deletePortalHandoffTokensForMessengerUserKeyMock,
+    eraseBillingHandoffIdentity: eraseBillingHandoffIdentityMock,
+    getConnectedFacebookPageConnection: getConnectedFacebookPageConnectionMock,
   };
 });
 vi.mock(
@@ -78,8 +83,13 @@ describe("data deletion service", () => {
     resetStateStore();
     storageDeleteMock.mockReset();
     deleteProviderVideoForUserMock.mockReset();
-    deletePortalHandoffTokensForMessengerUserKeyMock.mockReset();
-    deletePortalHandoffTokensForMessengerUserKeyMock.mockResolvedValue(0);
+    eraseBillingHandoffIdentityMock.mockReset();
+    eraseBillingHandoffIdentityMock.mockResolvedValue(0);
+    getConnectedFacebookPageConnectionMock.mockReset();
+    getConnectedFacebookPageConnectionMock.mockResolvedValue({
+      id: 12,
+      workspaceId: 42,
+    });
     if (originalRedisUrl === undefined) {
       delete process.env.REDIS_URL;
     } else {
@@ -213,15 +223,18 @@ describe("data deletion service", () => {
     const psid = "delete-handoff-token-user";
     const userKey = anonymizePsid(psid);
 
-    await Promise.resolve(getOrCreateState(psid));
-
-    await expect(deleteUserData(psid)).resolves.toEqual({
-      status: "completed",
+    await runWithMessengerRequestContext("page-delete-handoff", async () => {
+      await Promise.resolve(getOrCreateState(psid));
+      await expect(deleteUserData(psid)).resolves.toEqual({
+        status: "completed",
+      });
     });
 
-    expect(
-      deletePortalHandoffTokensForMessengerUserKeyMock
-    ).toHaveBeenCalledWith(userKey);
+    expect(eraseBillingHandoffIdentityMock).toHaveBeenCalledWith(
+      42,
+      userKey,
+      "page-delete-handoff"
+    );
   });
 
   it("deletes legacy state shadowed under the privacy-peppered user key", async () => {
@@ -488,11 +501,13 @@ describe("data deletion service", () => {
 
   it("reports failure when a required deletion step fails without retry state", async () => {
     const psid = "delete-step-failure-without-state-user";
-    deletePortalHandoffTokensForMessengerUserKeyMock.mockRejectedValueOnce(
+    eraseBillingHandoffIdentityMock.mockRejectedValueOnce(
       new Error("temporary handoff-token deletion failure")
     );
 
-    await expect(deleteUserData(psid)).resolves.toEqual({ status: "failed" });
+    await runWithMessengerRequestContext("page-delete-failure", async () => {
+      await expect(deleteUserData(psid)).resolves.toEqual({ status: "failed" });
+    });
     expect(await Promise.resolve(getState(psid))).toBeNull();
   });
 
@@ -605,6 +620,8 @@ describe("data deletion service", () => {
     const sourceUrl = "https://assets.example/inbound-source/user-source.jpg";
     const retainedSourceUrl =
       "https://assets.example/inbound-source/retained-source.jpg";
+    const secondCompositionSourceUrl =
+      "https://assets.example/inbound-source/composition-source-2.jpg";
     const generatedUrl = "https://assets.example/generated/images/result.jpg";
     const legacyGeneratedUrl =
       "https://assets.example/generated/legacy-result.jpg";
@@ -616,6 +633,7 @@ describe("data deletion service", () => {
         lastPhoto: sourceUrl,
         lastPhotoSource: "stored",
         pendingImageUrl: sourceUrl,
+        pendingImageUrls: [sourceUrl, secondCompositionSourceUrl],
         lastSourceImageUrl: retainedSourceUrl,
         pendingSourceImageDeleteUrl: retainedSourceUrl,
         lastGeneratedUrl: generatedUrl,
@@ -627,6 +645,9 @@ describe("data deletion service", () => {
 
     expect(storageDeleteMock).toHaveBeenCalledWith(
       "inbound-source/user-source.jpg"
+    );
+    expect(storageDeleteMock).toHaveBeenCalledWith(
+      "inbound-source/composition-source-2.jpg"
     );
     expect(storageDeleteMock).toHaveBeenCalledWith(
       "inbound-source/retained-source.jpg"

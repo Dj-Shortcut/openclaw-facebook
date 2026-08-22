@@ -4,7 +4,11 @@ const { safeLogMock } = vi.hoisted(() => ({ safeLogMock: vi.fn() }));
 
 vi.mock("../logger", () => ({ safeLog: safeLogMock }));
 
-import { sumActiveChargebacks, sumCompletedRefunds } from "./accounting";
+import {
+  assertCanonicalSignedEurAmount,
+  sumActiveChargebacks,
+  sumCompletedRefunds,
+} from "./accounting";
 
 const amount = (value: string) => ({ currency: "EUR", value });
 
@@ -32,18 +36,18 @@ describe("accounting export totals", () => {
     ).toBe("9.50");
   });
 
-  it("ignores malformed and non-EUR values", () => {
-    expect(
+  it("fails closed on malformed and non-EUR values", () => {
+    expect(() =>
       sumCompletedRefunds([
         { status: "refunded", amount: { currency: "USD", value: "4.00" } },
         { status: "refunded", amount: { currency: "EUR", value: "4" } },
         { status: "refunded", amount: { currency: "EUR", value: "007.50" } },
       ])
-    ).toBe("0.00");
+    ).toThrow("billing_accounting_data_quality");
   });
 
   it("logs metadata only when malformed refund and chargeback amounts are skipped", () => {
-    expect(
+    expect(() =>
       sumCompletedRefunds([
         {
           id: "re_private123",
@@ -51,8 +55,8 @@ describe("accounting export totals", () => {
           amount: { currency: "EUR", value: "private-invalid-value" },
         },
       ])
-    ).toBe("0.00");
-    expect(
+    ).toThrow("billing_accounting_data_quality");
+    expect(() =>
       sumActiveChargebacks([
         {
           id: "chb_private123",
@@ -60,7 +64,7 @@ describe("accounting export totals", () => {
           amount: { currency: "USD", value: "11.00" },
         },
       ])
-    ).toBe("0.00");
+    ).toThrow("billing_accounting_data_quality");
 
     expect(safeLogMock.mock.calls).toEqual([
       [
@@ -87,7 +91,7 @@ describe("accounting export totals", () => {
   });
 
   it("logs every included missing or wrong-type amount without identifiers or values", () => {
-    expect(
+    expect(() =>
       sumCompletedRefunds([
         { id: "re_missing_private", status: "refunded" },
         {
@@ -97,8 +101,8 @@ describe("accounting export totals", () => {
         },
         { id: "re_excluded_private", status: "processing" },
       ])
-    ).toBe("0.00");
-    expect(
+    ).toThrow("billing_accounting_data_quality");
+    expect(() =>
       sumActiveChargebacks([
         { id: "chb_missing_private", reversedAt: null, amount: null },
         {
@@ -111,7 +115,7 @@ describe("accounting export totals", () => {
           reversedAt: "2026-08-01T12:00:00.000Z",
         },
       ])
-    ).toBe("0.00");
+    ).toThrow("billing_accounting_data_quality");
 
     expect(safeLogMock.mock.calls).toEqual([
       [
@@ -157,12 +161,33 @@ describe("accounting export totals", () => {
     expect(serializedLogs).not.toContain("700");
   });
 
-  it("returns zero for missing or non-array input", () => {
-    expect(sumCompletedRefunds(null)).toBe("0.00");
-    expect(sumCompletedRefunds(undefined)).toBe("0.00");
-    expect(sumCompletedRefunds({ items: [] })).toBe("0.00");
-    expect(sumActiveChargebacks(null)).toBe("0.00");
-    expect(sumActiveChargebacks(undefined)).toBe("0.00");
-    expect(sumActiveChargebacks({ items: [] })).toBe("0.00");
+  it("fails closed for missing or non-array provider data", () => {
+    for (const value of [null, undefined, { items: [] }]) {
+      expect(() => sumCompletedRefunds(value)).toThrow(
+        "billing_accounting_data_quality"
+      );
+      expect(() => sumActiveChargebacks(value)).toThrow(
+        "billing_accounting_data_quality"
+      );
+    }
+  });
+});
+
+describe("signed accounting money", () => {
+  it("accepts canonical signed EUR adjustments", () => {
+    for (const value of ["10.00", "0.00", "-10.00", "-0.01"]) {
+      expect(() => assertCanonicalSignedEurAmount(value, "EUR")).not.toThrow();
+    }
+  });
+
+  it("rejects noncanonical, wrong-currency, and out-of-range values", () => {
+    for (const value of ["-0.00", "+1.00", "01.00", "1", "10000000000.00"]) {
+      expect(() => assertCanonicalSignedEurAmount(value, "EUR")).toThrow(
+        "billing_accounting_data_quality"
+      );
+    }
+    expect(() => assertCanonicalSignedEurAmount("-1.00", "USD")).toThrow(
+      "billing_accounting_data_quality"
+    );
   });
 });

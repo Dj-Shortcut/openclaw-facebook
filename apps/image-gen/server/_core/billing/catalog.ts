@@ -38,7 +38,9 @@ const BILLING_PLANS = Object.freeze({
     }),
     mollieDescription: "Leaderbot Premium - maandelijks abonnement",
     active: true,
-    publiclyAvailable: true,
+    // Keep the recurring contract available for existing entitlements and
+    // provider reconciliation, but do not expose it as a launch checkout.
+    publiclyAvailable: false,
   }),
   [STARTPILOT_PLAN_CODE]: Object.freeze({
     code: STARTPILOT_PLAN_CODE,

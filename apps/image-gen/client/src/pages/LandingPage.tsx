@@ -91,7 +91,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       howItWorks: "Hoe het werkt",
       pricing: "Prijs",
       faq: "Vragen",
-      portal: "Klantenportaal",
+      portal: "Inloggen met Facebook",
     },
     eyebrow: "AI-assistent voor Facebook Messenger",
     title: "Maak van je Facebookpagina een slimme klantenassistent.",
@@ -149,7 +149,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       },
       {
         title: "Verbind Messenger",
-        body: "Koppel een Facebookpagina die je mag beheren via de beschikbare Meta-flow.",
+        body: "Facebook Login koppelt één beheerbare Pagina automatisch; bij meerdere Pagina's kies je alleen de juiste.",
       },
       {
         title: "Test met echte vragen",
@@ -238,7 +238,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       howItWorks: "Fonctionnement",
       pricing: "Prix",
       faq: "Questions",
-      portal: "Portail client",
+      portal: "Se connecter avec Facebook",
     },
     eyebrow: "Assistant IA pour Facebook Messenger",
     title: "Transformez votre Page Facebook en assistant client intelligent.",
@@ -296,7 +296,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       },
       {
         title: "Connectez Messenger",
-        body: "Utilisez le parcours Meta disponible pour une Page que vous pouvez gérer.",
+        body: "Facebook Login connecte automatiquement une Page administrable; s'il y en a plusieurs, choisissez simplement la bonne.",
       },
       {
         title: "Testez de vraies demandes",
@@ -387,7 +387,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       howItWorks: "How it works",
       pricing: "Pricing",
       faq: "FAQ",
-      portal: "Customer portal",
+      portal: "Sign in with Facebook",
     },
     eyebrow: "AI assistant for Facebook Messenger",
     title: "Turn your Facebook Page into a focused customer assistant.",
@@ -445,7 +445,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       },
       {
         title: "Connect Messenger",
-        body: "Use the available Meta flow for a Page you are authorized to manage.",
+        body: "Facebook Login connects one manageable Page automatically; if there are several, just choose the right one.",
       },
       {
         title: "Test real questions",
@@ -574,13 +574,19 @@ function LanguagePicker({
 function PortalButton({
   copy,
   loginConfigured,
+  variant = "light",
 }: {
   copy: LandingCopy;
   loginConfigured: boolean;
+  variant?: "accent" | "light";
 }) {
   return (
     <button
-      className="inline-flex min-h-11 items-center justify-center gap-2 rounded-full border border-stone-300 bg-white px-5 text-sm font-semibold text-stone-900 shadow-sm transition hover:border-stone-400 hover:bg-stone-50 disabled:cursor-not-allowed disabled:opacity-60"
+      className={`inline-flex items-center justify-center gap-2 rounded-full text-sm shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
+        variant === "accent"
+          ? "min-h-12 bg-lime-300 px-6 font-bold text-[#10211d] hover:bg-lime-200"
+          : "min-h-11 border border-stone-300 bg-white px-5 font-semibold text-stone-900 hover:border-stone-400 hover:bg-stone-50"
+      }`}
       disabled={!loginConfigured}
       title={!loginConfigured ? copy.loginUnavailable : undefined}
       type="button"
@@ -674,9 +680,14 @@ export default function LandingPage({
               <p className="mt-6 max-w-2xl text-lg leading-8 text-stone-300">
                 {copy.body}
               </p>
-              <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+              <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+                <PortalButton
+                  copy={copy}
+                  loginConfigured={loginConfigured}
+                  variant="accent"
+                />
                 <a
-                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-lime-300 px-6 text-sm font-bold text-[#10211d] transition hover:bg-lime-200"
+                  className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full border border-white/20 px-6 text-sm font-bold text-white transition hover:bg-white/10"
                   href="#how-it-works"
                 >
                   {copy.primaryCta}

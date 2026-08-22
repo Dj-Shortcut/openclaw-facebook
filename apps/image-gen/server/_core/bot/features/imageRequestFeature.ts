@@ -63,6 +63,17 @@ function getPromptHint(ctx: BotTextContext, text: string): string {
     return `Change the background to: ${text}`;
   }
 
+  if (
+    ctx.state.stage === "AWAITING_EDIT_PROMPT" &&
+    ctx.state.pendingEditIntent === "combine_photos"
+  ) {
+    return [
+      "Combine all uploaded source photos into one coherent image.",
+      "Use every source image as a separate visual reference and follow the user's composition instruction.",
+      `User composition instruction: ${text}`,
+    ].join(" ");
+  }
+
   return text;
 }
 

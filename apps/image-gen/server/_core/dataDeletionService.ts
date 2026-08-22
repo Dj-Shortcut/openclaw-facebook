@@ -1,5 +1,8 @@
 import { storageDelete, storageKeyFromPublicUrl } from "../storage";
-import { deletePortalHandoffTokensForMessengerUserKey } from "../db";
+import {
+  eraseBillingHandoffIdentity,
+  getConnectedFacebookPageConnection,
+} from "../db";
 import { deleteCostLedgerEntriesForUser } from "./costLedger";
 import { deleteFaceMemoryForUser } from "./faceMemory";
 import { safeLog } from "./messengerApi";
@@ -10,13 +13,22 @@ import { deleteProviderVideoForUser } from "./video-generation/videoProviderRegi
 import {
   anonymizePsid,
   clearUserState,
-  getState,
   type MessengerUserState,
 } from "./messengerState";
 import {
+  beginMessengerStatePrivacyErasure,
   deleteLegacyPersistedState,
+  getPersistedStateForErasure,
   replacePersistedState,
 } from "./messengerStatePersistence";
+import { getMessengerRequestPageId } from "./messengerRequestContext";
+import {
+  beginMessengerPrivacyErasure,
+  completeMessengerPrivacyErasure,
+} from "./messengerPrivacySubject";
+import { containMessengerProviderAttemptsForPrivacy } from "./messengerProviderAttemptFence";
+import { eraseWebhookIngressDeliveriesForSubject } from "./meta/webhookIngressQueue";
+import { eraseMessengerGenerationJobsForSubject } from "./messengerGenerationQueue";
 
 const LEGACY_CHAT_HISTORY_SCOPE = "chat:history";
 
@@ -27,6 +39,7 @@ function getGeneralStateImageUrls(state: MessengerUserState): string[] {
   return [
     state.lastPhotoUrl,
     state.pendingImageUrl,
+    ...(state.pendingImageUrls ?? []),
     state.lastGeneratedUrl,
     state.lastImageUrl,
     state.lastGeneratedVideoUrl,
@@ -67,7 +80,7 @@ async function deleteStoredUrl(
 async function deleteUserDataInternal(
   psid: string
 ): Promise<UserDataDeletionOutcome> {
-  const state = await getState(psid);
+  const state = await Promise.resolve(getPersistedStateForErasure(psid));
   const userKey = state?.userKey ?? anonymizePsid(psid);
   const logUser = toLogUser(userKey);
   const retryContext = state
@@ -101,7 +114,7 @@ async function deleteUserDataInternal(
   const persistDeletionRetryState = async (
     pendingDeleteUrls: string[]
   ): Promise<boolean> => {
-    const currentState = await getState(psid);
+    const currentState = state;
     if (!currentState) {
       return false;
     }
@@ -134,7 +147,87 @@ async function deleteUserDataInternal(
     return true;
   };
 
+  let privacyErasure:
+    | {
+        workspaceId: number;
+        channelConnectionId: number;
+        userKey: string;
+        privacyEpoch: number;
+      }
+    | undefined;
+  if (
+    state?.pageId &&
+    state.workspaceId &&
+    state.channelConnectionId &&
+    state.bindingEpoch &&
+    state.privacyEpoch
+  ) {
+    const connection = await getConnectedFacebookPageConnection(state.pageId, {
+      workspaceId: state.workspaceId,
+      channelConnectionId: state.channelConnectionId,
+      bindingEpoch: state.bindingEpoch,
+    });
+    if (!connection) return { status: "failed" };
+    const privacyEpoch = await beginMessengerPrivacyErasure({
+      workspaceId: state.workspaceId,
+      channelConnectionId: state.channelConnectionId,
+      userKey,
+    });
+    privacyErasure = {
+      workspaceId: state.workspaceId,
+      channelConnectionId: state.channelConnectionId,
+      userKey,
+      privacyEpoch,
+    };
+  } else if (process.env.NODE_ENV === "production") {
+    return { status: "failed" };
+  }
+
   let deleteStepsSucceeded = true;
+  let providerDrainPending = false;
+
+  if (privacyErasure && state?.bindingEpoch) {
+    const stateTombstoned = await runStep(
+      "messenger_state_privacy_tombstone",
+      async () => {
+        await beginMessengerStatePrivacyErasure({
+          ...privacyErasure,
+          bindingEpoch: state.bindingEpoch!,
+        });
+      }
+    );
+    if (!stateTombstoned) return { status: "failed" };
+
+    deleteStepsSucceeded =
+      (await runStep("webhook_ingress_queue", async () => {
+        await eraseWebhookIngressDeliveriesForSubject(privacyErasure!);
+      })) && deleteStepsSucceeded;
+  }
+
+  if (privacyErasure && state?.pageId && state.bindingEpoch) {
+    deleteStepsSucceeded =
+      (await runStep("messenger_provider_attempts", async () => {
+        const drained =
+          await containMessengerProviderAttemptsForPrivacy(privacyErasure);
+        if (!drained) {
+          providerDrainPending = true;
+          throw new Error("Messenger provider transport is still in flight");
+        }
+      })) && deleteStepsSucceeded;
+    // Do not scrub completion/object indexes while a provider or Graph
+    // transport still owns an active started fence. The finishing worker may
+    // need to publish its cleanup inventory before this saga resumes.
+    if (providerDrainPending) return { status: "pending" };
+    deleteStepsSucceeded =
+      (await runStep("messenger_generation_queue", async () => {
+        await eraseMessengerGenerationJobsForSubject({
+          ...privacyErasure,
+          bindingEpoch: state.bindingEpoch!,
+          pageId: state.pageId!,
+          privacyEpoch: state.privacyEpoch!,
+        });
+      })) && deleteStepsSucceeded;
+  }
 
   deleteStepsSucceeded =
     (await runStep("cost_ledger", async () => {
@@ -142,8 +235,31 @@ async function deleteUserDataInternal(
     })) && deleteStepsSucceeded;
 
   deleteStepsSucceeded =
-    (await runStep("portal_handoff_tokens", async () => {
-      await deletePortalHandoffTokensForMessengerUserKey(userKey);
+    (await runStep("billing_handoff_identity", async () => {
+      const pageId = state?.pageId ?? getMessengerRequestPageId();
+      if (!pageId) {
+        if (process.env.NODE_ENV === "production") {
+          throw new Error("Verified Page scope is required for erasure");
+        }
+        return;
+      }
+      const connection = await getConnectedFacebookPageConnection(
+        pageId,
+        state?.workspaceId && state.channelConnectionId && state.bindingEpoch
+          ? {
+              workspaceId: state.workspaceId,
+              channelConnectionId: state.channelConnectionId,
+              bindingEpoch: state.bindingEpoch,
+            }
+          : undefined
+      );
+      if (!connection)
+        throw new Error("Verified Page ownership is unavailable");
+      await eraseBillingHandoffIdentity(
+        connection.workspaceId,
+        userKey,
+        pageId
+      );
     })) && deleteStepsSucceeded;
 
   deleteStepsSucceeded =
@@ -175,7 +291,10 @@ async function deleteUserDataInternal(
   let faceMemoryFailedDeletes: string[] = [];
   deleteStepsSucceeded =
     (await runStep("face_memory", async () => {
-      faceMemoryFailedDeletes = await deleteFaceMemoryForUser(psid);
+      faceMemoryFailedDeletes = await deleteFaceMemoryForUser(psid, {
+        state,
+        persistState: false,
+      });
     })) && deleteStepsSucceeded;
   const deleteResults = await Promise.all(
     urls.map(async url => ({
@@ -191,7 +310,19 @@ async function deleteUserDataInternal(
     )) && deleteStepsSucceeded;
   deleteStepsSucceeded =
     (await runStep("messenger_generation_completion", () =>
-      deleteMessengerGenerationCompletionsForUser(state.userKey)
+      deleteMessengerGenerationCompletionsForUser(
+        state.userKey,
+        privacyErasure && state.bindingEpoch && state.privacyEpoch
+          ? {
+              workspaceId: privacyErasure.workspaceId,
+              channelConnectionId: privacyErasure.channelConnectionId,
+              bindingEpoch: state.bindingEpoch,
+              privacyEpoch: state.privacyEpoch,
+              userKey: state.userKey,
+              pageId: state.pageId!,
+            }
+          : undefined
+      )
     )) && deleteStepsSucceeded;
   if (state.lastGeneratedVideoProviderJobId) {
     deleteStepsSucceeded =
@@ -213,12 +344,19 @@ async function deleteUserDataInternal(
     ])
   );
   if (failedDeletes.length) {
+    // Once the monotone privacy tombstone is installed, do not attempt to
+    // recreate customer state merely to record retry metadata. The existing
+    // fenced state remains readable only by this erasure path until every
+    // external object has been scrubbed.
+    if (privacyErasure) return { status: "pending" };
     return (await persistDeletionRetryState(failedDeletes))
       ? { status: "pending" }
       : { status: "failed" };
   }
 
   if (!deleteStepsSucceeded) {
+    if (providerDrainPending) return { status: "pending" };
+    if (privacyErasure) return { status: "pending" };
     // Keep retry-related state when required deletion steps fail; allow
     // delete-my-data operations to be retried without losing in-flight context.
     if (retryContext && (await persistDeletionRetryState([]))) {
@@ -228,6 +366,9 @@ async function deleteUserDataInternal(
   }
 
   await Promise.resolve(clearUserState(psid));
+  if (privacyErasure) {
+    await completeMessengerPrivacyErasure(privacyErasure);
+  }
   return { status: "completed" };
 }
 

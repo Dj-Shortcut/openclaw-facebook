@@ -1,4 +1,6 @@
-import type { MessengerSendOutcome } from "./messengerApi";
+export type MessengerSendOutcome =
+  | { sent: true; messageId?: string }
+  | { sent: false; reason: "response_window_closed" };
 import type {
   BotImageContext,
   BotPayloadContext,

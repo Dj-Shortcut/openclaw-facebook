@@ -9,15 +9,22 @@ import {
   workspaceEntitlements,
   workspaceEntitlementUsage,
   workspaceEntitlementUsageReservations,
+  workspaceBillingProfiles,
   type BillingCustomer,
   type BillingIntent,
   type BillingSubscription,
 } from "../../../drizzle/schema";
 import type { MolliePayment } from "./mollieClient";
 
-const databaseMock = vi.hoisted(() => vi.fn());
+const { databaseMock, schedulerFenceMock } = vi.hoisted(() => ({
+  databaseMock: vi.fn(),
+  schedulerFenceMock: vi.fn(),
+}));
 
 vi.mock("../../db", () => ({ getDatabaseOrThrow: databaseMock }));
+vi.mock("./billingSchedulerStore", () => ({
+  assertBillingTenantLeaseOwnedInTransaction: schedulerFenceMock,
+}));
 
 import { applyMolliePaymentSnapshot } from "./paymentStore";
 
@@ -25,9 +32,33 @@ const INTENT_ID = "550e8400-e29b-41d4-a716-446655440000";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  schedulerFenceMock.mockResolvedValue(undefined);
 });
 
 describe("payment snapshot persistence flow", () => {
+  it("fails before payment effects when the reconciliation lease is lost", async () => {
+    const flow = paymentFlow({ intent: startpilotIntent() });
+    databaseMock.mockResolvedValue(flow.database);
+    schedulerFenceMock.mockRejectedValue(
+      new Error("billing scheduler lease ownership was lost")
+    );
+
+    await expect(
+      applyMolliePaymentSnapshot(molliePayment(), 1, {
+        schedulerLease: {
+          workspaceId: 1,
+          mode: "test",
+          kind: "reconciliation",
+          leaseToken: "reconciliation-lease",
+          executionEpoch: 2,
+        },
+      })
+    ).rejects.toThrow("billing scheduler lease ownership was lost");
+
+    expect(schedulerFenceMock).toHaveBeenCalledOnce();
+    expect(flow.inserts).toEqual([]);
+  });
+
   it("queues exactly one portal handoff for an eligible paid Startpilot checkout", async () => {
     const flow = paymentFlow({
       intent: {
@@ -249,35 +280,38 @@ describe("payment snapshot persistence flow", () => {
         paidThrough: new Date("2026-08-20T00:00:00.000Z"),
       },
     },
-  ])("keeps Startpilot in manual review for $label", async ({ subscription }) => {
-    const flow = paymentFlow({ intent: startpilotIntent(), subscription });
-    databaseMock.mockResolvedValue(flow.database);
+  ])(
+    "keeps Startpilot in manual review for $label",
+    async ({ subscription }) => {
+      const flow = paymentFlow({ intent: startpilotIntent(), subscription });
+      databaseMock.mockResolvedValue(flow.database);
 
-    await expect(
-      applyMolliePaymentSnapshot(
-        molliePayment({ amount: { currency: "EUR", value: "19.00" } }),
-        1
-      )
-    ).resolves.toEqual({ result: "processed", workspaceId: 1 });
+      await expect(
+        applyMolliePaymentSnapshot(
+          molliePayment({ amount: { currency: "EUR", value: "19.00" } }),
+          1
+        )
+      ).resolves.toEqual({ result: "processed", workspaceId: 1 });
 
-    expect(flow.inserts).toContainEqual({
-      table: billingOutbox,
-      values: expect.objectContaining({
-        eventType: "manual_review",
-        payload: {
-          reason: "startpilot_subscription_conflict",
-          paymentId: "tr_payment123",
-        },
-      }),
-    });
-    expect(
-      flow.inserts.some(entry => entry.table === workspaceEntitlementUsage)
-    ).toBe(false);
-    expect(flow.updates).toContainEqual({
-      table: workspaceEntitlements,
-      values: expect.objectContaining({ status: "manual_review" }),
-    });
-  });
+      expect(flow.inserts).toContainEqual({
+        table: billingOutbox,
+        values: expect.objectContaining({
+          eventType: "manual_review",
+          payload: {
+            reason: "startpilot_subscription_conflict",
+            paymentId: "tr_payment123",
+          },
+        }),
+      });
+      expect(
+        flow.inserts.some(entry => entry.table === workspaceEntitlementUsage)
+      ).toBe(false);
+      expect(flow.updates).toContainEqual({
+        table: workspaceEntitlements,
+        values: expect.objectContaining({ status: "manual_review" }),
+      });
+    }
+  );
 
   it("does not create subscription work when a paid Startpilot snapshot is observed again", async () => {
     const flow = paymentFlow({
@@ -369,6 +403,41 @@ describe("payment snapshot persistence flow", () => {
           entry.values.eventType === "cancel_subscription"
       )
     ).toBe(false);
+  });
+
+  it("ignores an older terminal snapshot after the ledger is paid", async () => {
+    const flow = paymentFlow({
+      intent: { ...startpilotIntent(), status: "paid" } as BillingIntent,
+      existingLedger: {
+        status: "paid",
+        occurredAt: new Date("2026-08-02T10:00:00.000Z"),
+        paidEffectApplied: 1,
+      },
+    });
+    databaseMock.mockResolvedValue(flow.database);
+
+    await expect(
+      applyMolliePaymentSnapshot(
+        molliePayment({
+          status: "failed",
+          amount: { currency: "EUR", value: "19.00" },
+          createdAt: "2026-08-01T10:00:00.000Z",
+          paidAt: undefined,
+        }),
+        1
+      )
+    ).resolves.toEqual({ result: "processed", workspaceId: 1 });
+
+    expect(flow.operations).not.toContain("upsert:paymentLedger");
+    expect(
+      flow.updates.some(entry => entry.table === workspaceEntitlements)
+    ).toBe(false);
+    expect(flow.updates).toContainEqual({
+      table: webhookDeliveries,
+      values: expect.objectContaining({
+        processingResult: "stale_snapshot_ignored",
+      }),
+    });
   });
 
   it("upserts a mismatched paid snapshot before returning without applying paid access", async () => {
@@ -481,6 +550,11 @@ function paymentFlow(
   options: {
     subscription?: BillingSubscription | null;
     intent?: BillingIntent;
+    existingLedger?: {
+      status: string;
+      occurredAt: Date;
+      paidEffectApplied: number;
+    };
     ledgerPaidEffectApplied?: number;
     usageSourceIntentId?: string;
   } = {}
@@ -506,6 +580,21 @@ function paymentFlow(
     if (table === billingSubscriptions) {
       return subscription ? [subscription] : [];
     }
+    if (table === workspaceBillingProfiles) {
+      return [
+        {
+          workspaceId: 1,
+          eligibilityVersion: 1,
+          verificationStatus: "verified",
+          countryCode: "BE",
+          customerType: "consumer",
+          peppolReady: false,
+          verifiedAt: new Date("2026-07-01T00:00:00.000Z"),
+          verificationExpiresAt: new Date("2030-01-01T00:00:00.000Z"),
+          revokedAt: null,
+        },
+      ];
+    }
     if (table === workspaceEntitlements) {
       return [{ id: 9, status: "active" }];
     }
@@ -527,15 +616,22 @@ function paymentFlow(
     }
     if (table === paymentLedger) {
       paymentLedgerSelectCount += 1;
-      if (paymentLedgerSelectCount > 1) return [];
-      return [
-        {
-          id: 7,
-          invoiceNumber: "LB-TEST-2026-00000001",
-          occurredAt: new Date("2026-08-01T10:00:00.000Z"),
-          paidEffectApplied: options.ledgerPaidEffectApplied ?? 0,
-        },
-      ];
+      if (paymentLedgerSelectCount === 1) {
+        return options.existingLedger
+          ? [{ id: 7, ...options.existingLedger }]
+          : [];
+      }
+      if (paymentLedgerSelectCount === 2) {
+        return [
+          {
+            id: 7,
+            invoiceNumber: "LB-TEST-2026-00000001",
+            occurredAt: new Date("2026-08-01T10:00:00.000Z"),
+            paidEffectApplied: options.ledgerPaidEffectApplied ?? 0,
+          },
+        ];
+      }
+      return [];
     }
     throw new Error("unexpected payment flow select");
   }
@@ -561,15 +657,11 @@ function paymentFlow(
           limit: vi.fn(() => {
             whereClauses.push({ table, predicate });
             const rows = rowsFor(table);
-            if (
-              table === billingIntents ||
-              table === billingSubscriptions ||
-              table === workspaceEntitlements ||
-              table === workspaceEntitlementUsage
-            ) {
-              return { for: vi.fn().mockResolvedValue(rows) };
-            }
-            return Promise.resolve(rows);
+            const result = Promise.resolve(rows) as Promise<unknown[]> & {
+              for: ReturnType<typeof vi.fn>;
+            };
+            result.for = vi.fn().mockResolvedValue(rows);
+            return result;
           }),
         })),
       })),
@@ -645,6 +737,7 @@ function billingIntent(): BillingIntent {
     entitlements: { imagesPerDay: 10, messagesPerMinute: 5 },
     mollieDescription: "Leaderbot Premium",
     molliePaymentId: "tr_payment123",
+    billingProfileVersion: 1,
   } as BillingIntent;
 }
 

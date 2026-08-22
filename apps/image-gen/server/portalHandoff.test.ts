@@ -65,6 +65,7 @@ describe("portal handoff tokens", () => {
       workspaceId: 42,
       tokenHash: result.tokenHash,
       deliveryIdempotencyKeyHash: null,
+      capabilityGeneration: 1,
       messengerSenderUserKey: "hashed-sender-key",
       facebookPageId: undefined,
       purpose: "workspace_onboarding",
@@ -72,20 +73,23 @@ describe("portal handoff tokens", () => {
       expiresAt: result.expiresAt,
       createdByUserId: 7,
     });
-    expect(JSON.stringify(mocks.createPortalHandoffToken.mock.calls)).not.toContain(
-      result.token
-    );
+    expect(
+      JSON.stringify(mocks.createPortalHandoffToken.mock.calls)
+    ).not.toContain(result.token);
     expect(mocks.insertAuditLog).toHaveBeenCalledWith({
       workspaceId: 42,
       userId: 7,
       event: "portal_handoff.created",
       metadata: {
+        actor: "workspace_user",
         purpose: "workspace_onboarding",
         hasMessengerSenderUserKey: true,
         expiresAt: result.expiresAt.toISOString(),
       },
     });
-    expect(JSON.stringify(mocks.insertAuditLog.mock.calls)).not.toContain(result.token);
+    expect(JSON.stringify(mocks.insertAuditLog.mock.calls)).not.toContain(
+      result.token
+    );
   });
 
   it("consumes a pending unexpired token exactly once", async () => {
@@ -110,7 +114,9 @@ describe("portal handoff tokens", () => {
       messengerSenderUserKey: "hashed-sender-key",
     });
     expect(mocks.getPortalHandoffTokenByHash).toHaveBeenCalledWith(tokenHash);
-    expect(mocks.markPortalHandoffTokenConsumed).toHaveBeenCalledWith(tokenHash);
+    expect(mocks.markPortalHandoffTokenConsumed).toHaveBeenCalledWith(
+      tokenHash
+    );
   });
 
   it("rejects missing, expired, and already-consumed tokens", async () => {
@@ -174,7 +180,9 @@ describe("portal handoff tokens", () => {
     };
     mocks.claimPortalHandoffTokenForUser.mockResolvedValue(claimed);
 
-    await expect(claimPortalHandoffToken(token, 7, now)).resolves.toEqual(claimed);
+    await expect(claimPortalHandoffToken(token, 7, now)).resolves.toEqual(
+      claimed
+    );
 
     expect(mocks.claimPortalHandoffTokenForUser).toHaveBeenCalledWith({
       tokenHash,
@@ -182,8 +190,8 @@ describe("portal handoff tokens", () => {
       role: "owner",
       now,
     });
-    expect(JSON.stringify(mocks.claimPortalHandoffTokenForUser.mock.calls)).not.toContain(
-      token
-    );
+    expect(
+      JSON.stringify(mocks.claimPortalHandoffTokenForUser.mock.calls)
+    ).not.toContain(token);
   });
 });

@@ -1,9 +1,0 @@
-# Temporary compiled-bundle overlay owned by the Leaderbot production owner.
-# Re-pin this immutable base digest for every legitimate image-gen release;
-# never rebuild production from this stale base implicitly. Reconcile the
-# privacy-boundary source into main and remove this file by 2026-09-30.
-FROM registry.fly.io/leaderbot-fb-image-gen@sha256:0bdf169a494b57085ac51537aca7db03e9890cbadd46d7604933fde7df946b91
-
-COPY scripts/patch-production-completion-readiness.mjs /tmp/patch-production-completion-readiness.mjs
-RUN node /tmp/patch-production-completion-readiness.mjs /app/dist/index.cjs \
-  && rm /tmp/patch-production-completion-readiness.mjs

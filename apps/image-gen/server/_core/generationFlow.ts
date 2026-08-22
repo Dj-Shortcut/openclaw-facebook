@@ -51,6 +51,7 @@ type GenerationFlowSuccess = {
   proof: GenerationProof;
   mode: ImageProvider;
   resolvedSourceImageUrl: string;
+  resolvedSourceImageUrls: string[];
   trustedSourceImageUrl: boolean;
 };
 
@@ -80,15 +81,18 @@ type ExecuteGenerationFlowInput = {
   reqId: string;
   promptHint?: string;
   sourceImageUrl?: string;
+  sourceImageUrls?: string[];
   lastPhotoUrl?: string | null;
   lastPhotoSource?: SourceImageOrigin | null;
   onProviderAttempt?: () => Promise<void>;
+  bypassBudgetLimits?: boolean;
   imageModel?: string;
   imageQuality?: OpenAiImageQuality;
 };
 
 type RuntimeSourceInput = {
   sourceImageUrl?: string;
+  sourceImageUrls?: string[];
   lastPhotoUrl?: string | null;
   lastPhotoSource?: SourceImageOrigin | null;
 };
@@ -135,13 +139,58 @@ function isOriginalStoredLastPhoto(
 
 async function resolveStoredRuntimeSourceUrl(input: {
   sourceImageUrl?: string;
+  sourceImageUrls?: string[];
   lastPhotoUrl?: string | null;
   lastPhotoSource?: SourceImageOrigin | null;
   reqId: string;
 }): Promise<{
   resolvedSourceImageUrl?: string;
+  resolvedSourceImageUrls: string[];
   trustedSourceImageUrl: boolean;
 }> {
+  if (input.sourceImageUrls?.length) {
+    const sourceImageUrls = Array.from(new Set(input.sourceImageUrls));
+    const storageKeys = sourceImageUrls.map(storageKeyFromPublicUrl);
+    if (storageKeys.some(key => !key)) {
+      return {
+        resolvedSourceImageUrl: sourceImageUrls.at(-1),
+        resolvedSourceImageUrls: sourceImageUrls,
+        trustedSourceImageUrl: false,
+      };
+    }
+
+    if (!process.env.BUILT_IN_FORGE_API_URL?.trim()) {
+      return {
+        resolvedSourceImageUrl: sourceImageUrls.at(-1),
+        resolvedSourceImageUrls: sourceImageUrls,
+        trustedSourceImageUrl: true,
+      };
+    }
+
+    try {
+      const refreshedUrls = await Promise.all(
+        storageKeys.map(async key => (await storageGet(key!)).url)
+      );
+      return {
+        resolvedSourceImageUrl: refreshedUrls.at(-1),
+        resolvedSourceImageUrls: refreshedUrls,
+        trustedSourceImageUrl: true,
+      };
+    } catch (error) {
+      safeLog("stored_source_image_urls_refresh_failed", {
+        level: "warn",
+        reqId: input.reqId,
+        sourceImageCount: sourceImageUrls.length,
+        error,
+      });
+      return {
+        resolvedSourceImageUrl: sourceImageUrls.at(-1),
+        resolvedSourceImageUrls: sourceImageUrls,
+        trustedSourceImageUrl: true,
+      };
+    }
+  }
+
   logIgnoredSourceImageOverride(input);
 
   const originalSourceImageUrl = selectOriginalSourceImageUrl(input);
@@ -153,6 +202,9 @@ async function resolveStoredRuntimeSourceUrl(input: {
   if (!originalSourceImageUrl || !isStoredLastPhoto) {
     return {
       resolvedSourceImageUrl: originalSourceImageUrl,
+      resolvedSourceImageUrls: originalSourceImageUrl
+        ? [originalSourceImageUrl]
+        : [],
       trustedSourceImageUrl: false,
     };
   }
@@ -161,6 +213,7 @@ async function resolveStoredRuntimeSourceUrl(input: {
   if (!storageKey) {
     return {
       resolvedSourceImageUrl: originalSourceImageUrl,
+      resolvedSourceImageUrls: [originalSourceImageUrl],
       trustedSourceImageUrl: false,
     };
   }
@@ -168,6 +221,7 @@ async function resolveStoredRuntimeSourceUrl(input: {
   if (!process.env.BUILT_IN_FORGE_API_URL?.trim()) {
     return {
       resolvedSourceImageUrl: originalSourceImageUrl,
+      resolvedSourceImageUrls: [originalSourceImageUrl],
       trustedSourceImageUrl: true,
     };
   }
@@ -176,6 +230,7 @@ async function resolveStoredRuntimeSourceUrl(input: {
     const refreshed = await storageGet(storageKey);
     return {
       resolvedSourceImageUrl: refreshed.url,
+      resolvedSourceImageUrls: [refreshed.url],
       trustedSourceImageUrl: true,
     };
   } catch (error) {
@@ -187,6 +242,7 @@ async function resolveStoredRuntimeSourceUrl(input: {
     });
     return {
       resolvedSourceImageUrl: originalSourceImageUrl,
+      resolvedSourceImageUrls: [originalSourceImageUrl],
       trustedSourceImageUrl: true,
     };
   }
@@ -245,7 +301,11 @@ function classifyGenerationError(error: unknown): GenerationFlowFailureKind {
 export async function executeGenerationFlow(
   input: ExecuteGenerationFlowInput
 ): Promise<GenerationFlowResult> {
-  const { resolvedSourceImageUrl, trustedSourceImageUrl } =
+  const {
+    resolvedSourceImageUrl,
+    resolvedSourceImageUrls,
+    trustedSourceImageUrl,
+  } =
     await resolveStoredRuntimeSourceUrl(input);
   const generationKind = resolveEffectiveGenerationKind({
     generationKind: input.generationKind,
@@ -261,6 +321,7 @@ export async function executeGenerationFlow(
       ? summarizeSensitiveUrl(resolvedSourceImageUrl)
       : null,
     trustedSourceImageUrl,
+    sourceImageCount: resolvedSourceImageUrls.length,
   });
 
   if (!resolvedSourceImageUrl && generationKind !== "text_to_image") {
@@ -290,10 +351,14 @@ export async function executeGenerationFlow(
     const { imageUrl, proof, metrics } = await generator.generate({
       generationKind,
       sourceImageUrl: resolvedSourceImageUrl,
+      sourceImageUrls: resolvedSourceImageUrls.length
+        ? resolvedSourceImageUrls
+        : undefined,
       trustedSourceImageUrl,
       sourceImageProvenance: trustedSourceImageUrl ? "storeInbound" : undefined,
       promptHint: input.promptHint,
       onProviderAttempt: input.onProviderAttempt,
+      bypassBudgetLimits: input.bypassBudgetLimits,
       model: input.imageModel,
       quality: input.imageQuality,
       userKey: input.userId,
@@ -307,6 +372,7 @@ export async function executeGenerationFlow(
       proof,
       mode,
       resolvedSourceImageUrl: resolvedSourceImageUrl ?? "",
+      resolvedSourceImageUrls,
       trustedSourceImageUrl,
     };
   } catch (error) {

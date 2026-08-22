@@ -3,6 +3,7 @@ import {
   type MessengerGenerationJob,
 } from "./messengerGenerationJob";
 import { normalizeSupportedUiLang } from "./i18n";
+import { MAX_SOURCE_IMAGES } from "./image-generation/generationTypes";
 
 const MESSENGER_GENERATION_KINDS = new Set([
   "text_to_image",
@@ -24,6 +25,16 @@ function isOptionalString(value: unknown): value is string | undefined {
   return value === undefined || typeof value === "string";
 }
 
+function isOptionalSourceImageUrls(value: unknown): value is string[] | undefined {
+  return (
+    value === undefined ||
+    (Array.isArray(value) &&
+      value.length >= 1 &&
+      value.length <= MAX_SOURCE_IMAGES &&
+      value.every(item => typeof item === "string" && item.trim().length > 0))
+  );
+}
+
 function isOptionalGenerationKind(value: unknown): boolean {
   return (
     value === undefined ||
@@ -37,6 +48,20 @@ function isOptionalAttempts(value: unknown): value is number | undefined {
   return (
     value === undefined ||
     (typeof value === "number" && Number.isInteger(value) && value >= 0)
+  );
+}
+
+function isOptionalPositiveId(value: unknown): value is number | undefined {
+  return (
+    value === undefined ||
+    (typeof value === "number" && Number.isSafeInteger(value) && value > 0)
+  );
+}
+
+function isOptionalTimestamp(value: unknown): value is number | undefined {
+  return (
+    value === undefined ||
+    (typeof value === "number" && Number.isSafeInteger(value) && value > 0)
   );
 }
 
@@ -65,8 +90,27 @@ function parseMessengerGenerationJob(
     !isOptionalGenerationKind(value.generationKind) ||
     !isOptionalOperation(value.operation) ||
     !isOptionalString(value.sourceImageUrl) ||
+    !isOptionalSourceImageUrls(value.sourceImageUrls) ||
     !isOptionalString(value.promptHint) ||
     !isOptionalString(value.pageId) ||
+    !isOptionalPositiveId(value.workspaceId) ||
+    !isOptionalPositiveId(value.channelConnectionId) ||
+    !isOptionalPositiveId(value.bindingEpoch) ||
+    !isOptionalPositiveId(value.privacyEpoch) ||
+    !isOptionalTimestamp(value.createdAt) ||
+    !isOptionalTimestamp(value.expiresAt) ||
+    (value.createdAt !== undefined &&
+      value.expiresAt !== undefined &&
+      value.expiresAt <= value.createdAt) ||
+    (value.createdAt !== undefined &&
+      value.expiresAt !== undefined &&
+      value.expiresAt > value.createdAt + 24 * 60 * 60_000) ||
+    (process.env.NODE_ENV === "production" &&
+      (value.createdAt === undefined || value.expiresAt === undefined)) ||
+    (value.workspaceId === undefined) !==
+      (value.channelConnectionId === undefined) ||
+    (value.workspaceId === undefined) !== (value.bindingEpoch === undefined) ||
+    (value.workspaceId === undefined) !== (value.privacyEpoch === undefined) ||
     (value.tenantPartition !== undefined &&
       !isMessengerGenerationTenantPartition(value.tenantPartition)) ||
     !isOptionalAttempts(value.attempts)
@@ -90,8 +134,15 @@ function parseMessengerGenerationJob(
     reqId: value.reqId,
     lang,
     pageId: value.pageId?.trim() || undefined,
+    workspaceId: value.workspaceId,
+    channelConnectionId: value.channelConnectionId,
+    bindingEpoch: value.bindingEpoch,
+    privacyEpoch: value.privacyEpoch,
+    createdAt: value.createdAt,
+    expiresAt: value.expiresAt,
     tenantPartition: value.tenantPartition,
     sourceImageUrl: value.sourceImageUrl,
+    sourceImageUrls: value.sourceImageUrls,
     promptHint: value.promptHint,
     attempts: value.attempts,
     operation: value.operation,

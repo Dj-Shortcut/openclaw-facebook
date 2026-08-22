@@ -1,8 +1,11 @@
-import { desc, eq, and, isNotNull, sql } from "drizzle-orm";
+import { desc, eq, and, gt, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   aiIdentities,
   auditLog,
+  billingIntents,
+  billingHandoffRecoveryEvents,
+  billingOutbox,
   channelConnections,
   dailyQuota,
   imageRequests,
@@ -22,6 +25,7 @@ import {
   InsertWorkspacePrivacyRequest,
   InsertWorkspaceUpgradeRequest,
   messengerState,
+  messengerProviderAttemptFences,
   notificationLog,
   portalHandoffTokens,
   usageStats,
@@ -37,7 +41,7 @@ import {
   type Workspace,
   type WorkspaceMember,
 } from "../drizzle/schema";
-import { ENV } from './_core/env';
+import { ENV } from "./_core/env";
 import {
   ConversationIdentityError,
   resolveMessengerEndpoint,
@@ -126,8 +130,8 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       values.role = user.role;
       updateSet.role = user.role;
     } else if (user.openId === ENV.ownerOpenId) {
-      values.role = 'admin';
-      updateSet.role = 'admin';
+      values.role = "admin";
+      updateSet.role = "admin";
     }
 
     if (!values.lastSignedIn) {
@@ -157,7 +161,11 @@ export async function getUserByOpenId(openId: string) {
     return undefined;
   }
 
-  const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
+  const result = await db
+    .select()
+    .from(users)
+    .where(eq(users.openId, openId))
+    .limit(1);
 
   return result.length > 0 ? result[0] : undefined;
 }
@@ -206,9 +214,12 @@ export async function getOrCreateUserWorkspace(user: {
     name: user.name ? `${user.name}'s workspace` : "Leaderbot workspace",
     slug: `workspace-${user.id}`,
   };
-  await db.insert(workspaces).values(workspaceValues).onDuplicateKeyUpdate({
-    set: { slug: workspaceValues.slug },
-  });
+  await db
+    .insert(workspaces)
+    .values(workspaceValues)
+    .onDuplicateKeyUpdate({
+      set: { slug: workspaceValues.slug },
+    });
 
   const created = await db
     .select({
@@ -231,9 +242,12 @@ export async function getOrCreateUserWorkspace(user: {
     userId: user.id,
     role: "owner",
   };
-  await db.insert(workspaceMembers).values(memberValues).onDuplicateKeyUpdate({
-    set: { workspaceId: memberValues.workspaceId },
-  });
+  await db
+    .insert(workspaceMembers)
+    .values(memberValues)
+    .onDuplicateKeyUpdate({
+      set: { workspaceId: memberValues.workspaceId },
+    });
   await seedWorkspacePrivacyDefaults(workspace.id);
 
   return workspace;
@@ -265,19 +279,29 @@ export async function addWorkspaceMember(values: InsertWorkspaceMember) {
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("add_workspace_member");
-    throw new Error("Database unavailable: workspace membership was not persisted");
+    throw new Error(
+      "Database unavailable: workspace membership was not persisted"
+    );
   }
 
-  await db.insert(workspaceMembers).values(values).onDuplicateKeyUpdate({
-    set: {
-      role: values.role ?? "member",
-    },
-  });
+  await db
+    .insert(workspaceMembers)
+    .values(values)
+    .onDuplicateKeyUpdate({
+      set: {
+        role: values.role ?? "member",
+      },
+    });
   await seedWorkspacePrivacyDefaults(values.workspaceId);
 
-  const membership = await getWorkspaceMembership(values.workspaceId, values.userId);
+  const membership = await getWorkspaceMembership(
+    values.workspaceId,
+    values.userId
+  );
   if (!membership) {
-    throw new Error("Workspace membership insert succeeded but read-back failed");
+    throw new Error(
+      "Workspace membership insert succeeded but read-back failed"
+    );
   }
 
   return membership;
@@ -292,23 +316,35 @@ async function seedWorkspacePrivacyDefaults(workspaceId: number) {
 
   const defaults: InsertWorkspacePrivacySetting = {
     workspaceId,
-    allowKnowledgeIndexing: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowKnowledgeIndexing ? 1 : 0,
-    allowUsageAnalytics: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowUsageAnalytics ? 1 : 0,
-    imageMemoryRetentionDays: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.imageMemoryRetentionDays,
+    allowKnowledgeIndexing:
+      DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowKnowledgeIndexing ? 1 : 0,
+    allowUsageAnalytics: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowUsageAnalytics
+      ? 1
+      : 0,
+    imageMemoryRetentionDays:
+      DEFAULT_WORKSPACE_PRIVACY_SETTINGS.imageMemoryRetentionDays,
   };
 
-  await db.insert(workspacePrivacySettings).values(defaults).onDuplicateKeyUpdate({
-    set: {
-      workspaceId,
-    },
-  });
+  await db
+    .insert(workspacePrivacySettings)
+    .values(defaults)
+    .onDuplicateKeyUpdate({
+      set: {
+        workspaceId,
+      },
+    });
 }
 
-export async function getWorkspaceMembership(workspaceId: number, userId: number) {
+export async function getWorkspaceMembership(
+  workspaceId: number,
+  userId: number
+) {
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("get_workspace_membership");
-    throw new Error("Database unavailable: workspace membership was not loaded");
+    throw new Error(
+      "Database unavailable: workspace membership was not loaded"
+    );
   }
 
   const result = await db
@@ -345,7 +381,10 @@ export async function listWorkspaceMembers(workspaceId: number) {
     .where(eq(workspaceMembers.workspaceId, workspaceId));
 }
 
-export async function updateWorkspace(workspaceId: number, values: { name: string }) {
+export async function updateWorkspace(
+  workspaceId: number,
+  values: { name: string }
+) {
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("update_workspace");
@@ -358,7 +397,10 @@ export async function updateWorkspace(workspaceId: number, values: { name: strin
     };
   }
 
-  await db.update(workspaces).set({ name: values.name }).where(eq(workspaces.id, workspaceId));
+  await db
+    .update(workspaces)
+    .set({ name: values.name })
+    .where(eq(workspaces.id, workspaceId));
 
   const result = await db
     .select()
@@ -366,13 +408,15 @@ export async function updateWorkspace(workspaceId: number, values: { name: strin
     .where(eq(workspaces.id, workspaceId))
     .limit(1);
 
-  return result[0] ?? {
-    id: workspaceId,
-    name: values.name,
-    slug: `workspace-${workspaceId}`,
-    createdAt: new Date(0),
-    updatedAt: new Date(0),
-  };
+  return (
+    result[0] ?? {
+      id: workspaceId,
+      name: values.name,
+      slug: `workspace-${workspaceId}`,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    }
+  );
 }
 
 export async function getOrCreateAiIdentity(workspaceId: number) {
@@ -422,7 +466,10 @@ export async function getOrCreateAiIdentity(workspaceId: number) {
 
 export async function updateAiIdentity(
   workspaceId: number,
-  updates: Pick<InsertAiIdentity, "name" | "instructions" | "tone" | "language" | "modelDefault">
+  updates: Pick<
+    InsertAiIdentity,
+    "name" | "instructions" | "tone" | "language" | "modelDefault"
+  >
 ) {
   const db = await getDb();
   if (!db) {
@@ -460,6 +507,7 @@ export async function listChannelConnections(workspaceId: number) {
         providerAccountExternalId: null,
         displayName: null,
         encryptedAccessToken: null,
+        bindingEpoch: 1,
         grantedScopes: null,
         lastCheckedAt: null,
         createdAt: new Date(0),
@@ -474,6 +522,52 @@ export async function listChannelConnections(workspaceId: number) {
     .where(eq(channelConnections.workspaceId, workspaceId));
 
   return result;
+}
+
+export async function getConnectedFacebookPageConnection(
+  pageId: string,
+  expected?: {
+    workspaceId?: number | null;
+    channelConnectionId?: number | null;
+    bindingEpoch?: number | null;
+  }
+) {
+  const normalizedPageId = pageId.trim();
+  if (!normalizedPageId) {
+    throw new Error("Facebook Page ID is required");
+  }
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("get_connected_facebook_page_connection");
+    throw new Error(
+      "Database unavailable: Facebook Page binding was not loaded"
+    );
+  }
+
+  const matches = await db
+    .select()
+    .from(channelConnections)
+    .where(
+      and(
+        eq(channelConnections.channel, "facebook_messenger"),
+        eq(channelConnections.status, "connected"),
+        eq(channelConnections.externalId, normalizedPageId),
+        ...(expected?.workspaceId != null
+          ? [eq(channelConnections.workspaceId, expected.workspaceId)]
+          : []),
+        ...(expected?.channelConnectionId != null
+          ? [eq(channelConnections.id, expected.channelConnectionId)]
+          : []),
+        ...(expected?.bindingEpoch != null
+          ? [eq(channelConnections.bindingEpoch, expected.bindingEpoch)]
+          : [])
+      )
+    )
+    .limit(2);
+  if (matches.length !== 1) {
+    return null;
+  }
+  return matches[0];
 }
 
 type WorkspacePrivacySettingsRecord = {
@@ -507,9 +601,12 @@ function normalizeWorkspacePrivacySettings(
 ): WorkspacePrivacySettingsModel {
   if (!record) {
     return {
-      allowKnowledgeIndexing: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowKnowledgeIndexing,
-      allowUsageAnalytics: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowUsageAnalytics,
-      imageMemoryRetentionDays: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.imageMemoryRetentionDays,
+      allowKnowledgeIndexing:
+        DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowKnowledgeIndexing,
+      allowUsageAnalytics:
+        DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowUsageAnalytics,
+      imageMemoryRetentionDays:
+        DEFAULT_WORKSPACE_PRIVACY_SETTINGS.imageMemoryRetentionDays,
       createdAt: fallbackBase,
       updatedAt: fallbackBase,
     };
@@ -530,9 +627,14 @@ function unwrapDriverResult(result: unknown): unknown {
 
 function getInsertedId(result: unknown, label: string): number {
   const driverResult = unwrapDriverResult(result);
-  const insertId = (driverResult as { insertId?: unknown } | undefined)?.insertId;
+  const insertId = (driverResult as { insertId?: unknown } | undefined)
+    ?.insertId;
 
-  if (typeof insertId === "number" && Number.isSafeInteger(insertId) && insertId > 0) {
+  if (
+    typeof insertId === "number" &&
+    Number.isSafeInteger(insertId) &&
+    insertId > 0
+  ) {
     return insertId;
   }
 
@@ -586,7 +688,7 @@ export async function listWorkspaceKnowledgeSources(workspaceId: number) {
     .select()
     .from(workspaceKnowledgeSources)
     .where(eq(workspaceKnowledgeSources.workspaceId, workspaceId))
-    .orderBy((table) => table.name);
+    .orderBy(table => table.name);
 
   return result;
 }
@@ -621,15 +723,18 @@ export async function registerWorkspaceKnowledgeSource(
     };
   }
 
-  await db.insert(workspaceKnowledgeSources).values(source).onDuplicateKeyUpdate({
-    set: {
-      sourceType: source.sourceType,
-      sourceReference: source.sourceReference,
-      status: "queued",
-      itemCount: 0,
-      lastIndexedAt: null,
-    },
-  });
+  await db
+    .insert(workspaceKnowledgeSources)
+    .values(source)
+    .onDuplicateKeyUpdate({
+      set: {
+        sourceType: source.sourceType,
+        sourceReference: source.sourceReference,
+        status: "queued",
+        itemCount: 0,
+        lastIndexedAt: null,
+      },
+    });
 
   const created = await db
     .select()
@@ -642,14 +747,16 @@ export async function registerWorkspaceKnowledgeSource(
     )
     .limit(1);
 
-  return created[0] ?? {
-    id: workspaceId,
-    ...source,
-    lastIndexedAt: null,
-    metadata: null,
-    createdAt: new Date(0),
-    updatedAt: now,
-  };
+  return (
+    created[0] ?? {
+      id: workspaceId,
+      ...source,
+      lastIndexedAt: null,
+      metadata: null,
+      createdAt: new Date(0),
+      updatedAt: now,
+    }
+  );
 }
 
 export async function disableWorkspaceKnowledgeSource(
@@ -698,12 +805,15 @@ export async function getWorkspaceKnowledgeSummary(workspaceId: number) {
     totalSources: sources.length,
     activeSources: activeSources.length,
     lastUpdate:
-      sources.reduce((last: Date | null, source) => {
-        if (!source.updatedAt || (last && source.updatedAt <= last)) {
-          return last;
-        }
-        return source.updatedAt;
-      }, null as Date | null) ?? new Date(0),
+      sources.reduce(
+        (last: Date | null, source) => {
+          if (!source.updatedAt || (last && source.updatedAt <= last)) {
+            return last;
+          }
+          return source.updatedAt;
+        },
+        null as Date | null
+      ) ?? new Date(0),
     sources,
   };
 }
@@ -768,13 +878,16 @@ export async function updateWorkspacePrivacySettings(
     imageMemoryRetentionDays: updates.imageMemoryRetentionDays,
   };
 
-  await db.insert(workspacePrivacySettings).values(values).onDuplicateKeyUpdate({
-    set: {
-      allowKnowledgeIndexing: values.allowKnowledgeIndexing,
-      allowUsageAnalytics: values.allowUsageAnalytics,
-      imageMemoryRetentionDays: values.imageMemoryRetentionDays,
-    },
-  });
+  await db
+    .insert(workspacePrivacySettings)
+    .values(values)
+    .onDuplicateKeyUpdate({
+      set: {
+        allowKnowledgeIndexing: values.allowKnowledgeIndexing,
+        allowUsageAnalytics: values.allowUsageAnalytics,
+        imageMemoryRetentionDays: values.imageMemoryRetentionDays,
+      },
+    });
 
   return getWorkspacePrivacySettings(workspaceId);
 }
@@ -816,7 +929,9 @@ export async function createWorkspacePrivacyRequest(
   }
 
   return db.transaction(async tx => {
-    const insertResult = await tx.insert(workspacePrivacyRequests).values(request);
+    const insertResult = await tx
+      .insert(workspacePrivacyRequests)
+      .values(request);
     const insertedId = getInsertedId(insertResult, "privacy request");
 
     if (audit) {
@@ -889,7 +1004,9 @@ export async function createWorkspaceUpgradeRequest(
   }
 
   return db.transaction(async tx => {
-    const insertResult = await tx.insert(workspaceUpgradeRequests).values(request);
+    const insertResult = await tx
+      .insert(workspaceUpgradeRequests)
+      .values(request);
     const insertedId = getInsertedId(insertResult, "upgrade request");
 
     if (audit) {
@@ -915,11 +1032,15 @@ export async function createWorkspaceUpgradeRequest(
   });
 }
 
-export async function createPortalHandoffToken(values: InsertPortalHandoffToken) {
+export async function createPortalHandoffToken(
+  values: InsertPortalHandoffToken
+) {
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("create_portal_handoff_token");
-    throw new Error("Database unavailable: portal handoff token was not persisted");
+    throw new Error(
+      "Database unavailable: portal handoff token was not persisted"
+    );
   }
 
   const insertResult = await db.insert(portalHandoffTokens).values(values);
@@ -932,7 +1053,9 @@ export async function createPortalHandoffToken(values: InsertPortalHandoffToken)
     .limit(1);
 
   if (!created[0]) {
-    throw new Error("Portal handoff token insert succeeded but read-back failed");
+    throw new Error(
+      "Portal handoff token insert succeeded but read-back failed"
+    );
   }
 
   return created[0];
@@ -945,41 +1068,95 @@ export async function createPortalHandoffToken(values: InsertPortalHandoffToken)
  */
 export async function createOrGetPortalHandoffToken(
   values: InsertPortalHandoffToken,
-  now = new Date()
+  now = new Date(),
+  tokenHashForGeneration?: (generation: number) => string
 ) {
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("create_or_get_portal_handoff_token");
-    throw new Error("Database unavailable: portal handoff token was not persisted");
+    throw new Error(
+      "Database unavailable: portal handoff token was not persisted"
+    );
   }
 
   if (!values.deliveryIdempotencyKeyHash) {
     throw new Error("portal handoff delivery key hash is required");
   }
   return db.transaction(async tx => {
-    await tx.insert(portalHandoffTokens).values(values).onDuplicateKeyUpdate({
-      set: { deliveryIdempotencyKeyHash: values.deliveryIdempotencyKeyHash },
-    });
-    const stored = await tx.select().from(portalHandoffTokens).where(
-      eq(portalHandoffTokens.deliveryIdempotencyKeyHash, values.deliveryIdempotencyKeyHash!)
-    ).limit(1).for("update");
+    await tx
+      .insert(portalHandoffTokens)
+      .values(values)
+      .onDuplicateKeyUpdate({
+        set: { deliveryIdempotencyKeyHash: values.deliveryIdempotencyKeyHash },
+      });
+    const stored = await tx
+      .select()
+      .from(portalHandoffTokens)
+      .where(
+        eq(
+          portalHandoffTokens.deliveryIdempotencyKeyHash,
+          values.deliveryIdempotencyKeyHash!
+        )
+      )
+      .limit(1)
+      .for("update");
     const token = stored[0];
-    if (!token) throw new Error("Portal handoff token upsert succeeded but read-back failed");
-    if (token.tokenHash !== values.tokenHash || token.workspaceId !== values.workspaceId ||
+    if (!token)
+      throw new Error(
+        "Portal handoff token upsert succeeded but read-back failed"
+      );
+    const expectedTokenHash = tokenHashForGeneration
+      ? tokenHashForGeneration(token.capabilityGeneration)
+      : values.tokenHash;
+    if (
+      token.tokenHash !== expectedTokenHash ||
+      token.workspaceId !== values.workspaceId ||
       token.facebookPageId !== values.facebookPageId ||
-      token.messengerSenderUserKey !== values.messengerSenderUserKey || token.purpose !== values.purpose) {
+      token.messengerSenderUserKey !== values.messengerSenderUserKey ||
+      token.purpose !== values.purpose
+    ) {
       throw new Error("portal handoff delivery binding mismatch");
     }
-    if (token.status === "consumed" || token.status === "expired" || token.expiresAt.getTime() <= now.getTime()) {
+    if (token.status === "consumed") {
       throw new Error("portal handoff delivery is no longer active");
     }
-    if (token.status === "revoked") {
-      await tx.update(portalHandoffTokens).set({ status: "pending" }).where(and(
-        eq(portalHandoffTokens.id, token.id), eq(portalHandoffTokens.status, "revoked")
-      ));
-      return { ...token, status: "pending" as const };
+    if (
+      token.status === "revoked" ||
+      token.status === "expired" ||
+      token.expiresAt.getTime() <= now.getTime()
+    ) {
+      const capabilityGeneration = token.capabilityGeneration + 1;
+      const tokenHash = tokenHashForGeneration?.(capabilityGeneration);
+      if (!tokenHash) {
+        throw new Error("portal handoff capability rotation is unavailable");
+      }
+      await tx
+        .update(portalHandoffTokens)
+        .set({
+          status: "pending",
+          expiresAt: values.expiresAt,
+          capabilityGeneration,
+          tokenHash,
+        })
+        .where(
+          and(
+            eq(portalHandoffTokens.id, token.id),
+            eq(
+              portalHandoffTokens.capabilityGeneration,
+              token.capabilityGeneration
+            )
+          )
+        );
+      return {
+        ...token,
+        status: "pending" as const,
+        expiresAt: values.expiresAt,
+        capabilityGeneration,
+        tokenHash,
+      };
     }
-    if (token.status !== "pending") throw new Error("portal handoff delivery is no longer active");
+    if (token.status !== "pending")
+      throw new Error("portal handoff delivery is no longer active");
     return token;
   });
 }
@@ -988,7 +1165,9 @@ export async function getPortalHandoffTokenByHash(tokenHash: string) {
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("get_portal_handoff_token_by_hash");
-    throw new Error("Database unavailable: portal handoff token was not loaded");
+    throw new Error(
+      "Database unavailable: portal handoff token was not loaded"
+    );
   }
 
   const result = await db
@@ -1004,7 +1183,9 @@ export async function markPortalHandoffTokenConsumed(tokenHash: string) {
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("mark_portal_handoff_token_consumed");
-    throw new Error("Database unavailable: portal handoff token was not consumed");
+    throw new Error(
+      "Database unavailable: portal handoff token was not consumed"
+    );
   }
 
   const now = new Date();
@@ -1027,7 +1208,10 @@ export async function markPortalHandoffTokenConsumed(tokenHash: string) {
 export type ClaimPortalHandoffTokenForUserResult =
   | {
       ok: true;
-      workspace: Pick<Workspace, "id" | "name" | "slug" | "createdAt" | "updatedAt">;
+      workspace: Pick<
+        Workspace,
+        "id" | "name" | "slug" | "createdAt" | "updatedAt"
+      >;
       membership: WorkspaceMember;
       purpose: PortalHandoffToken["purpose"];
       messengerSenderUserKey: string | null;
@@ -1051,7 +1235,9 @@ export async function claimPortalHandoffTokenForUser(input: {
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("claim_portal_handoff_token_for_user");
-    throw new Error("Database unavailable: portal handoff token was not claimed");
+    throw new Error(
+      "Database unavailable: portal handoff token was not claimed"
+    );
   }
 
   const now = input.now ?? new Date();
@@ -1109,7 +1295,7 @@ export async function claimPortalHandoffTokenForUser(input: {
           eq(channelConnections.channel, "facebook_messenger"),
           eq(channelConnections.status, "connected"),
           eq(channelConnections.externalId, stored.facebookPageId)
-      )
+        )
       )
       .limit(2)
       .for("update");
@@ -1119,13 +1305,16 @@ export async function claimPortalHandoffTokenForUser(input: {
     }
 
     let priorClaim:
-      | { minUserId: number | null; maxUserId: number | null }
-      | undefined;
+      { minUserId: number | null; maxUserId: number | null } | undefined;
     if (stored.messengerSenderUserKey) {
       const priorClaims = await tx
         .select({
-          minUserId: sql<number | null>`MIN(${portalHandoffTokens.claimedByUserId})`,
-          maxUserId: sql<number | null>`MAX(${portalHandoffTokens.claimedByUserId})`,
+          minUserId: sql<
+            number | null
+          >`MIN(${portalHandoffTokens.claimedByUserId})`,
+          maxUserId: sql<
+            number | null
+          >`MAX(${portalHandoffTokens.claimedByUserId})`,
         })
         .from(portalHandoffTokens)
         .where(
@@ -1198,28 +1387,37 @@ export async function claimPortalHandoffTokenForUser(input: {
         userId: input.userId,
         role,
       };
-      await tx.insert(workspaceMembers).values(memberValues).onDuplicateKeyUpdate({
-        set: {
-          // A handoff proves control of this one onboarding link; it must not
-          // silently change privileges that were assigned through a separate
-          // workspace-membership workflow. New claims receive the onboarding
-          // role, while an existing member keeps their current role.
-          workspaceId: stored.workspaceId,
-        },
-      });
+      await tx
+        .insert(workspaceMembers)
+        .values(memberValues)
+        .onDuplicateKeyUpdate({
+          set: {
+            // A handoff proves control of this one onboarding link; it must not
+            // silently change privileges that were assigned through a separate
+            // workspace-membership workflow. New claims receive the onboarding
+            // role, while an existing member keeps their current role.
+            workspaceId: stored.workspaceId,
+          },
+        });
     }
 
     const privacyDefaults: InsertWorkspacePrivacySetting = {
       workspaceId: stored.workspaceId,
-      allowKnowledgeIndexing: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowKnowledgeIndexing ? 1 : 0,
-      allowUsageAnalytics: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowUsageAnalytics ? 1 : 0,
-      imageMemoryRetentionDays: DEFAULT_WORKSPACE_PRIVACY_SETTINGS.imageMemoryRetentionDays,
+      allowKnowledgeIndexing:
+        DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowKnowledgeIndexing ? 1 : 0,
+      allowUsageAnalytics:
+        DEFAULT_WORKSPACE_PRIVACY_SETTINGS.allowUsageAnalytics ? 1 : 0,
+      imageMemoryRetentionDays:
+        DEFAULT_WORKSPACE_PRIVACY_SETTINGS.imageMemoryRetentionDays,
     };
-    await tx.insert(workspacePrivacySettings).values(privacyDefaults).onDuplicateKeyUpdate({
-      set: {
-        workspaceId: stored.workspaceId,
-      },
-    });
+    await tx
+      .insert(workspacePrivacySettings)
+      .values(privacyDefaults)
+      .onDuplicateKeyUpdate({
+        set: {
+          workspaceId: stored.workspaceId,
+        },
+      });
 
     if (!membership) {
       const memberships = await tx
@@ -1236,7 +1434,9 @@ export async function claimPortalHandoffTokenForUser(input: {
     }
 
     if (!membership) {
-      throw new Error("Workspace membership insert succeeded but read-back failed");
+      throw new Error(
+        "Workspace membership insert succeeded but read-back failed"
+      );
     }
 
     await tx.insert(auditLog).values({
@@ -1272,7 +1472,9 @@ export async function findUniqueConnectedFacebookWorkspaceId(
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("find_unique_connected_facebook_workspace");
-    throw new Error("Database unavailable: Facebook workspace was not resolved");
+    throw new Error(
+      "Database unavailable: Facebook workspace was not resolved"
+    );
   }
 
   const connections = await db
@@ -1302,7 +1504,9 @@ export async function findPortalHandoffReentryBinding(input: {
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("find_portal_handoff_reentry_binding");
-    throw new Error("Database unavailable: portal handoff binding was not resolved");
+    throw new Error(
+      "Database unavailable: portal handoff binding was not resolved"
+    );
   }
 
   const claims = await db
@@ -1343,7 +1547,9 @@ export async function revokePortalHandoffToken(tokenHash: string) {
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("revoke_portal_handoff_token");
-    throw new Error("Database unavailable: portal handoff token was not revoked");
+    throw new Error(
+      "Database unavailable: portal handoff token was not revoked"
+    );
   }
 
   const result = await db
@@ -1370,14 +1576,226 @@ export async function deletePortalHandoffTokensForMessengerUserKey(
     if (process.env.NODE_ENV !== "production") {
       return 0;
     }
-    throw new Error("Database unavailable: portal handoff tokens were not deleted");
+    throw new Error(
+      "Database unavailable: portal handoff tokens were not deleted"
+    );
   }
 
   const result = await db
     .delete(portalHandoffTokens)
-    .where(eq(portalHandoffTokens.messengerSenderUserKey, messengerSenderUserKey));
+    .where(
+      eq(portalHandoffTokens.messengerSenderUserKey, messengerSenderUserKey)
+    );
 
   return getAffectedRows(result);
+}
+
+export async function eraseBillingHandoffIdentity(
+  workspaceId: number,
+  messengerSenderUserKey: string,
+  facebookPageId: string
+) {
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("erase_billing_handoff_identity");
+    if (process.env.NODE_ENV !== "production") return 0;
+    throw new Error(
+      "Database unavailable: billing handoff identity was not erased"
+    );
+  }
+  const pageId = facebookPageId.trim();
+  if (
+    !Number.isSafeInteger(workspaceId) ||
+    workspaceId <= 0 ||
+    !pageId ||
+    !messengerSenderUserKey
+  ) {
+    throw new Error("Exact billing handoff erasure scope is required");
+  }
+  return db.transaction(async tx => {
+    const outboxRows = await tx
+      .select({
+        id: billingOutbox.id,
+        deliveryState: billingOutbox.deliveryState,
+        intentId: sql<string>`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.intentId'))`,
+      })
+      .from(billingOutbox)
+      .where(
+        and(
+          eq(billingOutbox.workspaceId, workspaceId),
+          eq(billingOutbox.eventType, "send_portal_handoff"),
+          sql`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerSenderUserKey')) = ${messengerSenderUserKey}`,
+          sql`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerPageId')) = ${pageId}`
+        )
+      )
+      .for("update");
+    if (outboxRows.some(row => row.deliveryState === "transport_started")) {
+      throw new Error("Billing handoff delivery is in flight; retry erasure");
+    }
+    const intentIds = outboxRows.map(row => row.intentId).filter(Boolean);
+    if (intentIds.length) {
+      await tx
+        .select({ intentId: billingIntents.intentId })
+        .from(billingIntents)
+        .where(
+          and(
+            eq(billingIntents.workspaceId, workspaceId),
+            inArray(billingIntents.intentId, intentIds),
+            eq(billingIntents.messengerSenderUserKey, messengerSenderUserKey),
+            eq(billingIntents.messengerPageId, pageId)
+          )
+        )
+        .for("update");
+    }
+    for (const row of outboxRows) {
+      await tx
+        .delete(billingHandoffRecoveryEvents)
+        .where(
+          and(
+            eq(billingHandoffRecoveryEvents.outboxId, row.id),
+            eq(billingHandoffRecoveryEvents.workspaceId, workspaceId)
+          )
+        );
+      await tx
+        .update(billingOutbox)
+        .set({
+          status: "failed",
+          lockedAt: null,
+          leaseToken: null,
+          lastErrorCode: "privacy_erased",
+          deliveryEpoch: sql`${billingOutbox.deliveryEpoch} + 1`,
+          deliveryState: "idle",
+          privacyErasedAt: new Date(),
+          payload: { intentId: row.intentId, privacyErased: true },
+        })
+        .where(
+          and(
+            eq(billingOutbox.id, row.id),
+            eq(billingOutbox.workspaceId, workspaceId)
+          )
+        );
+    }
+    if (intentIds.length) {
+      await tx
+        .update(billingIntents)
+        .set({ messengerSenderUserKey: null, messengerPageId: null })
+        .where(
+          and(
+            eq(billingIntents.workspaceId, workspaceId),
+            inArray(billingIntents.intentId, intentIds),
+            eq(billingIntents.messengerSenderUserKey, messengerSenderUserKey),
+            eq(billingIntents.messengerPageId, pageId)
+          )
+        );
+    }
+    await tx
+      .delete(portalHandoffTokens)
+      .where(
+        and(
+          eq(portalHandoffTokens.workspaceId, workspaceId),
+          eq(
+            portalHandoffTokens.messengerSenderUserKey,
+            messengerSenderUserKey
+          ),
+          eq(portalHandoffTokens.facebookPageId, pageId)
+        )
+      );
+    return outboxRows.length;
+  });
+}
+
+export type BillingHandoffDeliveryFence = Readonly<{
+  outboxId: number;
+  workspaceId: number;
+  mode: "test" | "live";
+  leaseToken: string;
+  deliveryEpoch: number;
+}>;
+
+export async function beginBillingHandoffDelivery(input: {
+  outboxId: number;
+  workspaceId: number;
+  mode: "test" | "live";
+  leaseToken: string;
+  intentId: string;
+  messengerSenderUserKey: string;
+  messengerPageId: string;
+}): Promise<BillingHandoffDeliveryFence> {
+  const db = await getDb();
+  if (!db)
+    throw new Error("Database unavailable: billing delivery was not fenced");
+  return db.transaction(async tx => {
+    const jobs = await tx
+      .select({ deliveryEpoch: billingOutbox.deliveryEpoch })
+      .from(billingOutbox)
+      .where(
+        and(
+          eq(billingOutbox.id, input.outboxId),
+          eq(billingOutbox.workspaceId, input.workspaceId),
+          eq(billingOutbox.mode, input.mode),
+          eq(billingOutbox.status, "processing"),
+          eq(billingOutbox.leaseToken, input.leaseToken),
+          eq(billingOutbox.deliveryState, "idle"),
+          sql`${billingOutbox.privacyErasedAt} IS NULL`
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (!jobs[0]) throw new Error("portal_handoff_delivery_fence_unavailable");
+    const intents = await tx
+      .select({ intentId: billingIntents.intentId })
+      .from(billingIntents)
+      .where(
+        and(
+          eq(billingIntents.intentId, input.intentId),
+          eq(billingIntents.workspaceId, input.workspaceId),
+          eq(billingIntents.mode, input.mode),
+          eq(billingIntents.status, "paid"),
+          eq(
+            billingIntents.messengerSenderUserKey,
+            input.messengerSenderUserKey
+          ),
+          eq(billingIntents.messengerPageId, input.messengerPageId)
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (!intents[0]) throw new Error("portal_handoff_identity_unavailable");
+    const deliveryEpoch = jobs[0].deliveryEpoch + 1;
+    await tx
+      .update(billingOutbox)
+      .set({ deliveryEpoch, deliveryState: "preparing" })
+      .where(eq(billingOutbox.id, input.outboxId));
+    return { ...input, outboxId: input.outboxId, deliveryEpoch };
+  });
+}
+
+export async function advanceBillingHandoffDeliveryFence(
+  fence: BillingHandoffDeliveryFence,
+  state:
+    | "preparing"
+    | "transport_started"
+    | "transport_succeeded"
+    | "ambiguous"
+    | "idle"
+): Promise<boolean> {
+  const db = await getDb();
+  if (!db)
+    throw new Error("Database unavailable: billing delivery fence failed");
+  const result = await db
+    .update(billingOutbox)
+    .set({ deliveryState: state })
+    .where(
+      and(
+        eq(billingOutbox.id, fence.outboxId),
+        eq(billingOutbox.workspaceId, fence.workspaceId),
+        eq(billingOutbox.mode, fence.mode),
+        eq(billingOutbox.leaseToken, fence.leaseToken),
+        eq(billingOutbox.deliveryEpoch, fence.deliveryEpoch),
+        sql`${billingOutbox.privacyErasedAt} IS NULL`
+      )
+    );
+  return getAffectedRows(result) === 1;
 }
 
 export class ChannelConnectionClaimConflictError extends Error {
@@ -1489,6 +1907,7 @@ export async function upsertChannelConnection(values: InsertChannelConnection) {
     encryptedAccessToken: values.encryptedAccessToken ?? null,
     grantedScopes: values.grantedScopes ?? null,
     lastCheckedAt,
+    bindingEpoch: sql`${channelConnections.bindingEpoch} + 1`,
   };
 
   const writeConnection = () =>
@@ -1552,6 +1971,34 @@ export async function upsertChannelConnection(values: InsertChannelConnection) {
         .for("update");
 
       if (existing[0]) {
+        const activeAttempts = await tx
+          .select({ id: messengerProviderAttemptFences.id })
+          .from(messengerProviderAttemptFences)
+          .where(
+            and(
+              eq(
+                messengerProviderAttemptFences.channelConnectionId,
+                existing[0].id
+              ),
+              or(
+                inArray(messengerProviderAttemptFences.status, [
+                  "started",
+                  "ambiguous",
+                ]),
+                and(
+                  eq(messengerProviderAttemptFences.status, "reserved"),
+                  gt(messengerProviderAttemptFences.leaseUntil, new Date())
+                )
+              )
+            )
+          )
+          .limit(1)
+          .for("update");
+        if (activeAttempts[0]) {
+          throw new Error(
+            "Channel connection has an active provider attempt; retry later"
+          );
+        }
         await tx
           .update(channelConnections)
           .set(updateSet)
@@ -1570,6 +2017,7 @@ export async function upsertChannelConnection(values: InsertChannelConnection) {
         externalId,
         providerAccountExternalId,
         lastCheckedAt,
+        bindingEpoch: 1,
       });
     });
 
@@ -1608,21 +2056,16 @@ export async function disconnectChannelConnection(
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("disconnect_channel_connection");
-    throw new Error("Database unavailable: channel connection was not disconnected");
+    throw new Error(
+      "Database unavailable: channel connection was not disconnected"
+    );
   }
 
-  await db.insert(channelConnections).values({
-    workspaceId,
-    channel,
-    status: "disconnected",
-    externalId: null,
-    providerAccountExternalId: null,
-    displayName: null,
-    encryptedAccessToken: null,
-    grantedScopes: null,
-    lastCheckedAt: new Date(),
-  }).onDuplicateKeyUpdate({
-    set: {
+  await db
+    .insert(channelConnections)
+    .values({
+      workspaceId,
+      channel,
       status: "disconnected",
       externalId: null,
       providerAccountExternalId: null,
@@ -1630,8 +2073,19 @@ export async function disconnectChannelConnection(
       encryptedAccessToken: null,
       grantedScopes: null,
       lastCheckedAt: new Date(),
-    },
-  });
+    })
+    .onDuplicateKeyUpdate({
+      set: {
+        status: "disconnected",
+        externalId: null,
+        providerAccountExternalId: null,
+        displayName: null,
+        encryptedAccessToken: null,
+        bindingEpoch: sql`${channelConnections.bindingEpoch} + 1`,
+        grantedScopes: null,
+        lastCheckedAt: new Date(),
+      },
+    });
 
   return listChannelConnections(workspaceId);
 }
@@ -1650,7 +2104,8 @@ export async function getWorkspaceUsageSummary(workspaceId: number) {
     const imageCount = usage?.imageCount ?? 0;
     const blockedCount = usage?.blockedCount ?? 0;
     const imagesRemainingToday = Math.max(0, imageDailyLimit - imageCount);
-    const isImageLimitReached = imageDailyLimit > 0 && imagesRemainingToday === 0;
+    const isImageLimitReached =
+      imageDailyLimit > 0 && imagesRemainingToday === 0;
 
     return {
       workspaceId,
@@ -1719,8 +2174,8 @@ export async function insertAuditLog(values: InsertAuditLog) {
 function getTodayUTC(): string {
   const now = new Date();
   const year = now.getUTCFullYear();
-  const month = String(now.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(now.getUTCDate()).padStart(2, '0');
+  const month = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(now.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
@@ -1771,7 +2226,10 @@ async function incrementUserQuota(userId: number): Promise<void> {
   if (existing.length > 0) {
     await db
       .update(dailyQuota)
-      .set({ imagesGenerated: existing[0].imagesGenerated + 1, lastGeneratedAt: now })
+      .set({
+        imagesGenerated: existing[0].imagesGenerated + 1,
+        lastGeneratedAt: now,
+      })
       .where(eq(dailyQuota.id, existing[0].id));
   } else {
     // Create new quota record for today
@@ -1825,8 +2283,13 @@ async function reserveUserDailyQuota(userId: number): Promise<boolean> {
   `);
 
   const getAffectedRows = (value: unknown): number => {
-    if (typeof value === "object" && value !== null && "affectedRows" in value) {
-      const maybeAffectedRows = (value as { affectedRows?: unknown }).affectedRows;
+    if (
+      typeof value === "object" &&
+      value !== null &&
+      "affectedRows" in value
+    ) {
+      const maybeAffectedRows = (value as { affectedRows?: unknown })
+        .affectedRows;
       return typeof maybeAffectedRows === "number" ? maybeAffectedRows : 0;
     }
 
@@ -1879,14 +2342,26 @@ async function createImageRequest(data: InsertImageRequest) {
 /**
  * Update image request with completion details
  */
-async function updateImageRequest(id: number, updates: { imageUrl?: string; imageKey?: string; status: 'pending' | 'completed' | 'failed'; errorMessage?: string | null; completedAt?: Date }) {
+async function updateImageRequest(
+  id: number,
+  updates: {
+    imageUrl?: string;
+    imageKey?: string;
+    status: "pending" | "completed" | "failed";
+    errorMessage?: string | null;
+    completedAt?: Date;
+  }
+) {
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("update_image_request");
     return null;
   }
 
-  const result = await db.update(imageRequests).set(updates).where(eq(imageRequests.id, id));
+  const result = await db
+    .update(imageRequests)
+    .set(updates)
+    .where(eq(imageRequests.id, id));
   return result;
 }
 
@@ -1904,7 +2379,7 @@ async function getUserImageRequests(userId: number, limit = 50, offset = 0) {
     .select()
     .from(imageRequests)
     .where(eq(imageRequests.userId, userId))
-    .orderBy((t) => t.createdAt)
+    .orderBy(t => t.createdAt)
     .limit(limit)
     .offset(offset);
 
@@ -1932,8 +2407,8 @@ async function getCompletedImages(limit = 100, offset = 0) {
     })
     .from(imageRequests)
     .innerJoin(users, eq(imageRequests.userId, users.id))
-    .where(eq(imageRequests.status, 'completed'))
-    .orderBy((t) => t.createdAt)
+    .where(eq(imageRequests.status, "completed"))
+    .orderBy(t => t.createdAt)
     .limit(limit)
     .offset(offset);
 
@@ -2028,7 +2503,10 @@ async function getOrCreateMessengerState(psid: string, userKey: string) {
 /**
  * Update messenger state
  */
-async function updateMessengerState(psid: string, updates: Partial<InsertMessengerState>) {
+async function updateMessengerState(
+  psid: string,
+  updates: Partial<InsertMessengerState>
+) {
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("update_messenger_state");
@@ -2069,7 +2547,7 @@ async function getRecentNotifications(limit = 20) {
   const results = await db
     .select()
     .from(notificationLog)
-    .orderBy((t) => t.createdAt)
+    .orderBy(t => t.createdAt)
     .limit(limit);
 
   return results;

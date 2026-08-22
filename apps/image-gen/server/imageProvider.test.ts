@@ -820,6 +820,41 @@ describe("image provider boundary", () => {
     expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
   });
 
+  it("lets an explicit owner bypass every customer image budget while retaining cost accounting", async () => {
+    configureOpenAiImagesEnv("gpt-image-2");
+    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
+    process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "1";
+    process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "0.01";
+    process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD = "0.01";
+    process.env.MESSENGER_USER_DAILY_SPEND_CAP_USD = "0.01";
+    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
+    const onProviderAttempt = vi.fn(async () => undefined);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const generator = new OpenAiImageGenerator();
+    await expect(
+      generator.generate({
+        userKey: "owner-user",
+        reqId: "req-owner-budget-bypass",
+        bypassBudgetLimits: true,
+        onProviderAttempt,
+      })
+    ).resolves.toBeDefined();
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(onProviderAttempt).toHaveBeenCalledOnce();
+    expect(
+      await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))
+    ).toEqual([
+      expect.objectContaining({
+        status: "provider_attempt_succeeded",
+        providerUsage: expect.objectContaining({
+          budgetBypassApplied: true,
+        }),
+      }),
+    ]);
+  });
+
   it("uses the gpt-image-2 edits endpoint when source image data is provided", async () => {
     configureOpenAiImagesEnv("gpt-image-2");
 

@@ -518,6 +518,38 @@ describe("imageRequestFeature", () => {
     );
   });
 
+  it("turns a multi-photo instruction into one source-image composition request", async () => {
+    const runImageGeneration = vi.fn(async () => undefined);
+
+    const result = await imageRequestFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        messageText: "Zet beide personen samen op een podium",
+        normalizedText: "zet beide personen samen op een podium",
+        hasPhoto: true,
+        runImageGeneration,
+        state: makeState({
+          stage: "AWAITING_EDIT_PROMPT",
+          state: "AWAITING_EDIT_PROMPT",
+          pendingEditIntent: "combine_photos",
+          pendingImageUrls: [
+            "https://img.example/one.jpg",
+            "https://img.example/two.jpg",
+          ],
+          lastPhotoUrl: "https://img.example/two.jpg",
+          lastPhoto: "https://img.example/two.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(runImageGeneration).toHaveBeenCalledWith(
+      "https://img.example/two.jpg",
+      expect.stringContaining("Combine all uploaded source photos"),
+      "source_image_edit"
+    );
+  });
+
   it("defaults make-me visual requests to source edits with generated context", async () => {
     const runImageGeneration = vi.fn(async () => undefined);
 
@@ -1345,6 +1377,36 @@ describe("assistantCommandsFeature", () => {
     expect(setFlowState).toHaveBeenCalledWith("AWAITING_EDIT_PROMPT");
     expect(setPendingEditIntent).toHaveBeenCalledWith("change_background");
     expect(sendText).toHaveBeenCalledWith(t("nl", "changeBackgroundPrompt"));
+  });
+
+  it("asks for a composition instruction after the combine pill is selected", async () => {
+    const sendText = vi.fn(async () => undefined);
+    const setFlowState = vi.fn(async () => undefined);
+    const setPendingEditIntent = vi.fn(async () => undefined);
+
+    const result = await assistantCommandsFeature.onText?.(
+      makeContext({
+        lang: "nl",
+        normalizedText: "combine_photos",
+        messageText: "combine_photos",
+        hasPhoto: true,
+        sendText,
+        setFlowState,
+        setPendingEditIntent,
+        state: makeState({
+          pendingImageUrls: [
+            "https://img.example/one.jpg",
+            "https://img.example/two.jpg",
+          ],
+          lastPhotoUrl: "https://img.example/two.jpg",
+        }),
+      })
+    );
+
+    expect(result).toEqual({ handled: true });
+    expect(setFlowState).toHaveBeenCalledWith("AWAITING_EDIT_PROMPT");
+    expect(setPendingEditIntent).toHaveBeenCalledWith("combine_photos");
+    expect(sendText).toHaveBeenCalledWith(t("nl", "combinePhotosInstruction"));
   });
 
   it("maps the Dutch background pill label as explicit UI intent", async () => {

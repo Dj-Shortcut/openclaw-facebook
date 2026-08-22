@@ -1,4 +1,5 @@
 import { toUserKey } from "./privacy";
+import { MAX_SOURCE_IMAGES } from "./image-generation/generationTypes";
 import type {
   MessengerFlowState,
   MessengerUserState,
@@ -43,9 +44,14 @@ export function createDefaultState(
     psid,
     userKey: getUserKey(psid),
     pageId: null,
+    workspaceId: null,
+    channelConnectionId: null,
+    bindingEpoch: null,
+    privacyEpoch: null,
     stage: "IDLE",
     state: "IDLE",
     lastUserMessageAt: undefined,
+    lastPaidHandoffEligibleAt: undefined,
     lastPhotoUrl: null,
     lastPhoto: null,
     lastPhotoSource: null,
@@ -59,6 +65,7 @@ export function createDefaultState(
     pendingDeleteConfirmAt: undefined,
     hasSeenIntro: false,
     pendingImageUrl: undefined,
+    pendingImageUrls: undefined,
     pendingImageAt: undefined,
     faceMemoryConsent: null,
     lastSourceImageUrl: null,
@@ -122,7 +129,8 @@ function resolveLegacyStateFields(
   const rawStage = (value?.stage ??
     value?.state ??
     fallback.stage) as LegacyConversationState;
-  const stage = rawStage === "AWAITING_STYLE" ? "AWAITING_EDIT_PROMPT" : rawStage;
+  const stage =
+    rawStage === "AWAITING_STYLE" ? "AWAITING_EDIT_PROMPT" : rawStage;
   const lastPhoto =
     value?.lastPhotoUrl ?? value?.lastPhoto ?? fallback.lastPhoto;
   const lastGeneratedUrl =
@@ -179,11 +187,13 @@ function resolveConsentState(
 
 function resolveConversationContext(
   ctx: NormalizationCtx
-): Pick<MessengerUserState, "lastUserMessageAt"> {
+): Pick<MessengerUserState, "lastUserMessageAt" | "lastPaidHandoffEligibleAt"> {
   const { value, fallback } = ctx;
 
   return {
     lastUserMessageAt: value?.lastUserMessageAt ?? fallback.lastUserMessageAt,
+    lastPaidHandoffEligibleAt:
+      value?.lastPaidHandoffEligibleAt ?? fallback.lastPaidHandoffEligibleAt,
   };
 }
 
@@ -210,12 +220,7 @@ function resolveLanguageState(
 function resolvePhotoAndStyleState(
   ctx: NormalizationCtx,
   legacyFields: Pick<LegacyStateFields, "lastPhoto">
-): Pick<
-  MessengerUserState,
-  | "lastPhotoUrl"
-  | "lastPhoto"
-  | "lastPhotoSource"
-> {
+): Pick<MessengerUserState, "lastPhotoUrl" | "lastPhoto" | "lastPhotoSource"> {
   const { value, fallback } = ctx;
   const { lastPhoto } = legacyFields;
 
@@ -233,7 +238,8 @@ function resolveGeneratedImageState(
   const { value, fallback } = ctx;
 
   return {
-    lastImageUrl: value?.lastImageUrl ?? lastGeneratedUrl ?? fallback.lastImageUrl,
+    lastImageUrl:
+      value?.lastImageUrl ?? lastGeneratedUrl ?? fallback.lastImageUrl,
     lastGeneratedUrl,
   };
 }
@@ -252,19 +258,20 @@ function resolveSourceImageState(
 
   return {
     faceMemoryConsent: value?.faceMemoryConsent ?? fallback.faceMemoryConsent,
-    lastSourceImageUrl: value?.lastSourceImageUrl ?? fallback.lastSourceImageUrl,
+    lastSourceImageUrl:
+      value?.lastSourceImageUrl ?? fallback.lastSourceImageUrl,
     lastSourceImageUpdatedAt:
       value?.lastSourceImageUpdatedAt ?? fallback.lastSourceImageUpdatedAt,
     pendingSourceImageDeleteUrl:
-      value?.pendingSourceImageDeleteUrl ?? fallback.pendingSourceImageDeleteUrl,
+      value?.pendingSourceImageDeleteUrl ??
+      fallback.pendingSourceImageDeleteUrl,
     pendingSourceImageDeleteUrls:
-      value?.pendingSourceImageDeleteUrls ?? fallback.pendingSourceImageDeleteUrls,
+      value?.pendingSourceImageDeleteUrls ??
+      fallback.pendingSourceImageDeleteUrls,
   };
 }
 
-function resolveQuotaState(
-  ctx: NormalizationCtx
-): MessengerUserState["quota"] {
+function resolveQuotaState(ctx: NormalizationCtx): MessengerUserState["quota"] {
   const { value, fallback } = ctx;
 
   return {
@@ -302,8 +309,7 @@ function resolveVideoGenerationQuotaState(
       value?.videoGenerationQuota?.dayKey ??
       fallback.videoGenerationQuota.dayKey,
     count:
-      value?.videoGenerationQuota?.count ??
-      fallback.videoGenerationQuota.count,
+      value?.videoGenerationQuota?.count ?? fallback.videoGenerationQuota.count,
   };
 }
 
@@ -338,7 +344,8 @@ function resolveTranscriptionQuotaState(
   return {
     dayKey:
       value?.transcriptionQuota?.dayKey ?? fallback.transcriptionQuota.dayKey,
-    count: value?.transcriptionQuota?.count ?? fallback.transcriptionQuota.count,
+    count:
+      value?.transcriptionQuota?.count ?? fallback.transcriptionQuota.count,
   };
 }
 
@@ -349,6 +356,26 @@ function resolvePendingEditIntent(
 
   return {
     pendingEditIntent: value?.pendingEditIntent ?? fallback.pendingEditIntent,
+  };
+}
+
+function resolvePendingImageUrls(
+  ctx: NormalizationCtx
+): Pick<MessengerUserState, "pendingImageUrls"> {
+  const configured = Array.isArray(ctx.value?.pendingImageUrls)
+    ? ctx.value.pendingImageUrls
+    : [];
+  const pendingImageUrls = Array.from(
+    new Set(
+      configured
+        .filter((url): url is string => typeof url === "string")
+        .map(url => url.trim())
+        .filter(Boolean)
+    )
+  ).slice(0, MAX_SOURCE_IMAGES);
+
+  return {
+    pendingImageUrls: pendingImageUrls.length ? pendingImageUrls : undefined,
   };
 }
 
@@ -391,6 +418,7 @@ function applyNormalizedStateShape(
     ...resolvePhotoAndStyleState(ctx, { lastPhoto }),
     ...resolveGeneratedImageState(ctx, lastGeneratedUrl),
     ...resolveSourceImageState(ctx),
+    ...resolvePendingImageUrls(ctx),
     ...resolvePendingEditIntent(ctx),
     ...resolvePendingVideoGeneration(ctx),
     quota: resolveQuotaState(ctx),

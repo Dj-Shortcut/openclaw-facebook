@@ -1,7 +1,14 @@
-import { handleMessengerConsentGate } from "./consentService";
+import { randomUUID } from "node:crypto";
+import {
+  deleteUserDataAndSendResult,
+  handleMessengerConsentGate,
+  isDeleteCommand,
+} from "./consentService";
+import { GDPR_DELETE_CONFIRM } from "./consentActionIds";
 import { safeLog } from "./messengerApi";
 import { setPreferredLang } from "./messengerState";
-import { toLogUser } from "./privacy";
+import { normalizeLang } from "./i18n";
+import { toLogUser, toUserKey } from "./privacy";
 import { captureException } from "./observability/sentry";
 import { handlePostbackEvent } from "./webhookPayloadBranch";
 import {
@@ -15,7 +22,16 @@ import {
 } from "./webhookEventContext";
 import { handleMessageEvent } from "./webhookMessageRouter";
 import type { HandlerContext } from "./webhookHandlerTypes";
-import { runWithMessengerRequestContext } from "./messengerRequestContext";
+import {
+  getMessengerRequestOwnership,
+  runWithMessengerErasureControlDelivery,
+  runWithMessengerRequestContext,
+  setMessengerRequestOperationId,
+  setMessengerRequestPrivacySubject,
+} from "./messengerRequestContext";
+import { recordInboundUserActivity } from "./messengerInboundActivity";
+import { resolveMessengerGenerationOwnership } from "./workspaceEntitlementRuntime";
+import { getErasingMessengerPrivacySubjectEpoch } from "./messengerPrivacySubject";
 
 /** Routes every Messenger event in a Facebook webhook entry. */
 export async function handleEntry(
@@ -31,9 +47,18 @@ export async function handleEntry(
   }
 
   const events = Array.isArray(entry?.messaging) ? entry.messaging : [];
+  const ownership = await resolveMessengerGenerationOwnership(pageId);
+  if (!ownership && process.env.NODE_ENV === "production") {
+    logMessengerWebhookTrace("webhook_entry_skipped", {
+      reason: "page_ownership_unavailable",
+    });
+    return;
+  }
   for (const event of events) {
-    await runWithMessengerRequestContext(pageId, () =>
-      handleEvent(ctx, event, pageId)
+    await runWithMessengerRequestContext(
+      pageId,
+      () => handleEvent(ctx, event, pageId),
+      ownership ?? undefined
     );
   }
 }
@@ -43,6 +68,7 @@ async function handleEvent(
   event: FacebookWebhookEvent,
   entryId?: string
 ): Promise<void> {
+  if (await resumePendingMessengerErasure(ctx, event, entryId)) return;
   const eventContext = await createTrackedEventContext(ctx, event, entryId);
   if (!eventContext) return;
 
@@ -106,6 +132,47 @@ async function handleEvent(
   await eventContext.sendFallbackIfNeeded();
 }
 
+async function resumePendingMessengerErasure(
+  ctx: HandlerContext,
+  event: FacebookWebhookEvent,
+  entryId?: string
+): Promise<boolean> {
+  const psid = event.sender?.id;
+  const payload =
+    event.message?.quick_reply?.payload ?? event.postback?.payload;
+  if (
+    !psid ||
+    (!isDeleteCommand(event.message?.text) && payload !== GDPR_DELETE_CONFIRM)
+  ) {
+    return false;
+  }
+  const ownership = getMessengerRequestOwnership();
+  if (!ownership) return false;
+  const userId = toUserKey(psid);
+  const privacyEpoch = await getErasingMessengerPrivacySubjectEpoch({
+    workspaceId: ownership.workspaceId,
+    channelConnectionId: ownership.channelConnectionId,
+    userKey: userId,
+  });
+  if (!privacyEpoch) return false;
+
+  const reqId = randomUUID();
+  setMessengerRequestOperationId(reqId);
+  setMessengerRequestPrivacySubject({ userKey: userId, privacyEpoch });
+  if (!(await ctx.claimEventReplayOrLog(event, entryId, userId, reqId))) {
+    return true;
+  }
+  const senderLocale = event.sender?.locale?.trim();
+  const lang = senderLocale ? normalizeLang(senderLocale) : ctx.defaultLang;
+  await deleteUserDataAndSendResult(psid, lang, text =>
+    runWithMessengerErasureControlDelivery(async () => {
+      const outcome = await ctx.sendLoggedText(psid, text, reqId);
+      return outcome?.sent === true;
+    })
+  );
+  return true;
+}
+
 /** Selects the consent, postback, or message branch for a tracked event. */
 export async function routeTrackedEvent(
   context: TrackedEventContext,
@@ -113,6 +180,10 @@ export async function routeTrackedEvent(
 ): Promise<void> {
   const { psid, userId, reqId, lang, trackedCtx } = context;
   if (await routeConsentGate(context, event)) return;
+  await recordInboundUserActivity(psid, event, context.classification, {
+    entryId: context.entryId,
+    allowPaidRecovery: true,
+  });
 
   if (
     await handlePostbackEvent(trackedCtx, {
@@ -151,6 +222,11 @@ async function routeConsentGate(
       const outcome = await trackedCtx.sendLoggedText(psid, text, reqId);
       return outcome?.sent === true;
     },
+    sendDeletionOutcome: text =>
+      runWithMessengerErasureControlDelivery(async () => {
+        const outcome = await trackedCtx.sendLoggedText(psid, text, reqId);
+        return outcome?.sent === true;
+      }),
     sendActions: async (text, actions) => {
       const outcome = await trackedCtx.sendLoggedActions(
         psid,

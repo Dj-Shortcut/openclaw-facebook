@@ -5,11 +5,21 @@ import type { Express, Request, Response } from "express";
 import { z } from "zod";
 import * as db from "../db";
 import { getSessionCookieOptions } from "./cookies";
+import {
+  getFacebookPagesForUserAccessToken,
+  startFacebookConnect,
+  storeFacebookPages,
+} from "./facebookConnectStore";
+import { connectAuthorizedFacebookPage } from "./facebookPageConnection";
 import { safeLog } from "./logger";
 import { isFacebookLoginMethod } from "./portalAuthPolicy";
 
 const OAUTH_STATE_COOKIE_NAME = "lb_oauth_state_nonce";
 const FACEBOOK_OAUTH_TIMEOUT_MS = 10_000;
+const FACEBOOK_LOGIN_PERMISSIONS = [
+  "public_profile",
+  "pages_show_list",
+] as const;
 
 type OAuthStatePayload = {
   nonce: string;
@@ -33,6 +43,15 @@ function getSafeReturnTo(returnTo: string | undefined): string {
   if (!returnTo.startsWith("/") || returnTo.startsWith("//")) return "/";
   if (returnTo.includes("\\")) return "/";
   return returnTo;
+}
+
+function addFacebookConnectState(returnTo: string | undefined, state: string) {
+  const target = new URL(
+    getSafeReturnTo(returnTo),
+    "https://leaderbot.invalid"
+  );
+  target.searchParams.set("facebookConnectState", state);
+  return `${target.pathname}${target.search}${target.hash}`;
 }
 
 function isHandoffReturn(returnTo: string | undefined): boolean {
@@ -113,7 +132,9 @@ function getExternalOAuthLoginConfig(): {
 } | null {
   const appId = process.env.VITE_APP_ID?.trim();
   const rawPortalUrl = (
-    process.env.OAUTH_PORTAL_URL ?? process.env.OAUTH_SERVER_URL ?? ""
+    process.env.OAUTH_PORTAL_URL ??
+    process.env.OAUTH_SERVER_URL ??
+    ""
   ).trim();
   const rawBaseUrl = process.env.APP_BASE_URL?.trim();
   if (!appId || !rawPortalUrl || !rawBaseUrl) return null;
@@ -123,7 +144,8 @@ function getExternalOAuthLoginConfig(): {
     const baseUrl = new URL(rawBaseUrl);
     const portalLocal =
       portalUrl.protocol === "http:" &&
-      (portalUrl.hostname === "localhost" || portalUrl.hostname === "127.0.0.1");
+      (portalUrl.hostname === "localhost" ||
+        portalUrl.hostname === "127.0.0.1");
     const baseLocal =
       baseUrl.protocol === "http:" &&
       (baseUrl.hostname === "localhost" || baseUrl.hostname === "127.0.0.1");
@@ -155,7 +177,12 @@ async function getFacebookLoginIdentity(
   code: string,
   redirectUri: string,
   config: NonNullable<ReturnType<typeof getFacebookLoginConfig>>
-): Promise<{ openId: string; name: string | null; email: string | null }> {
+): Promise<{
+  openId: string;
+  name: string | null;
+  email: string | null;
+  accessToken: string;
+}> {
   if (redirectUri !== config.redirectUri) {
     throw new Error("facebook oauth redirect URI mismatch");
   }
@@ -172,7 +199,9 @@ async function getFacebookLoginIdentity(
     signal: AbortSignal.timeout(FACEBOOK_OAUTH_TIMEOUT_MS),
   });
   if (!tokenResponse.ok) {
-    throw new Error(`facebook login token exchange failed: ${tokenResponse.status}`);
+    throw new Error(
+      `facebook login token exchange failed: ${tokenResponse.status}`
+    );
   }
   const token = (await tokenResponse.json()) as { access_token?: unknown };
   if (typeof token.access_token !== "string" || !token.access_token) {
@@ -183,13 +212,17 @@ async function getFacebookLoginIdentity(
     `https://graph.facebook.com/${config.graphVersion}/me`
   );
   profileUrl.searchParams.set("fields", "id,name");
-  profileUrl.searchParams.set("access_token", token.access_token);
   const profileResponse = await fetch(profileUrl, {
-    headers: { Accept: "application/json" },
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${token.access_token}`,
+    },
     signal: AbortSignal.timeout(FACEBOOK_OAUTH_TIMEOUT_MS),
   });
   if (!profileResponse.ok) {
-    throw new Error(`facebook login profile lookup failed: ${profileResponse.status}`);
+    throw new Error(
+      `facebook login profile lookup failed: ${profileResponse.status}`
+    );
   }
   const profile = (await profileResponse.json()) as {
     id?: unknown;
@@ -204,6 +237,7 @@ async function getFacebookLoginIdentity(
     openId: `facebook:${profile.id}`,
     name: typeof profile.name === "string" ? profile.name : null,
     email: typeof profile.email === "string" ? profile.email : null,
+    accessToken: token.access_token,
   };
 }
 function parseOAuthState(state: string): OAuthStatePayload | null {
@@ -241,7 +275,8 @@ export function registerOAuthRoutes(app: Express) {
   const startOAuth = (req: Request, res: Response) => {
     const facebookConfig = getFacebookLoginConfig();
     const externalConfig = getExternalOAuthLoginConfig();
-    const redirectUri = facebookConfig?.redirectUri ?? externalConfig?.redirectUri;
+    const redirectUri =
+      facebookConfig?.redirectUri ?? externalConfig?.redirectUri;
     if (!redirectUri) {
       res.status(503).json({ error: "OAuth is not configured" });
       return;
@@ -287,7 +322,7 @@ export function registerOAuthRoutes(app: Express) {
       authorizationUrl.searchParams.set("response_type", "code");
       authorizationUrl.searchParams.set(
         "scope",
-        "public_profile,pages_show_list"
+        FACEBOOK_LOGIN_PERMISSIONS.join(",")
       );
     }
     res.redirect(302, authorizationUrl.toString());
@@ -320,15 +355,15 @@ export function registerOAuthRoutes(app: Express) {
       try {
         const { sdk } = await import("./sdk");
         const facebookConfig = getFacebookLoginConfig();
-        const userInfo = facebookConfig
-          ? {
-              ...(await getFacebookLoginIdentity(
-                code,
-                validatedState.redirectUri,
-                facebookConfig
-              )),
-              loginMethod: "facebook",
-            }
+        const facebookLogin = facebookConfig
+          ? await getFacebookLoginIdentity(
+              code,
+              validatedState.redirectUri,
+              facebookConfig
+            )
+          : null;
+        const userInfo = facebookLogin
+          ? { ...facebookLogin, loginMethod: "facebook" }
           : await (async () => {
               const tokenResponse = await sdk.exchangeCodeForToken(
                 code,
@@ -361,8 +396,90 @@ export function registerOAuthRoutes(app: Express) {
         if (!portalUser) {
           throw new Error("portal customer was not persisted");
         }
+        let redirectTarget = getSafeReturnTo(validatedState.returnTo);
+        let workspace: Awaited<
+          ReturnType<typeof db.getOrCreateUserWorkspace>
+        > | null = null;
         if (!isHandoffReturn(validatedState.returnTo)) {
-          await db.getOrCreateUserWorkspace(portalUser);
+          workspace = await db.getOrCreateUserWorkspace(portalUser);
+        }
+
+        if (facebookLogin && workspace) {
+          try {
+            const existingChannels = await db.listChannelConnections(
+              workspace.id
+            );
+            const alreadyConnected = existingChannels.some(
+              connection =>
+                connection.channel === "facebook_messenger" &&
+                connection.status === "connected" &&
+                Boolean(connection.externalId)
+            );
+            if (!alreadyConnected) {
+              const pages = await getFacebookPagesForUserAccessToken(
+                facebookLogin.accessToken
+              );
+              if (pages.length === 1) {
+                try {
+                  await connectAuthorizedFacebookPage({
+                    workspaceId: workspace.id,
+                    userId: portalUser.id,
+                    page: pages[0],
+                    source: "facebook_login",
+                  });
+                } catch (error) {
+                  const connectState = await startFacebookConnect({
+                    workspaceId: workspace.id,
+                    userId: portalUser.id,
+                  });
+                  await storeFacebookPages({
+                    state: connectState.state,
+                    pages,
+                  });
+                  redirectTarget = addFacebookConnectState(
+                    redirectTarget,
+                    connectState.state
+                  );
+                  safeLog("facebook_login_page_auto_connect_failed", {
+                    level: "warn",
+                    error:
+                      error instanceof Error ? error.message : String(error),
+                  });
+                }
+              } else if (pages.length > 1) {
+                const connectState = await startFacebookConnect({
+                  workspaceId: workspace.id,
+                  userId: portalUser.id,
+                });
+                await storeFacebookPages({
+                  state: connectState.state,
+                  pages,
+                });
+                redirectTarget = addFacebookConnectState(
+                  redirectTarget,
+                  connectState.state
+                );
+                await db.insertAuditLog({
+                  workspaceId: workspace.id,
+                  userId: portalUser.id,
+                  event: "facebook_login.page_selection_required",
+                  metadata: { pageCount: pages.length },
+                });
+              } else {
+                await db.insertAuditLog({
+                  workspaceId: workspace.id,
+                  userId: portalUser.id,
+                  event: "facebook_login.no_managed_pages",
+                  metadata: {},
+                });
+              }
+            }
+          } catch (error) {
+            safeLog("facebook_login_page_discovery_failed", {
+              level: "warn",
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
         }
 
         const sessionToken = await sdk.createSessionToken(userInfo.openId, {
@@ -384,7 +501,7 @@ export function registerOAuthRoutes(app: Express) {
         });
         clearOAuthStateCookie(req, res);
 
-        res.redirect(302, getSafeReturnTo(validatedState.returnTo));
+        res.redirect(302, redirectTarget);
       } catch (error) {
         clearOAuthStateCookie(req, res);
         safeLog("oauth_callback_failed", {
