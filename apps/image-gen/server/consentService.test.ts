@@ -50,6 +50,7 @@ import {
   getState,
   rememberFaceSourceImage,
   resetStateStore,
+  setConsentPromptedAt,
   setConsentState,
   setLastGenerated,
   setPendingStoredImage,
@@ -113,7 +114,7 @@ describe("Messenger consent deletion flow", () => {
 
     expect((await Promise.resolve(getState(psid)))?.consentGiven).toBe(true);
     expect(sendText).toHaveBeenCalledWith(
-      expect.stringContaining("Je bent klaar")
+      expect.stringContaining("Je toestemming is geregistreerd")
     );
     expect(sendActions).toHaveBeenCalledWith(
       expect.any(String),
@@ -123,13 +124,27 @@ describe("Messenger consent deletion flow", () => {
 
   it.each([
     "Die toestemming heb je",
+    "Mijn toestemming heb je",
+    "Mijnt toestemming heb je van mij",
+    "Je hebt mijn toesteming",
+    "Permission granted",
+    "Ik geef mijn toestemming",
+    "Hierbij geef ik je mijn toestemming",
+    "U hebt mijn akkoord",
+    "Jullie hebben mijn toestemming",
+    "Ik stem hiermee in",
+    "I consent",
+    "Ja, ik ga akkoord",
+    "Yes, I do agree",
     "akoord",
     "akord",
     "akkoort",
     "accoort",
     "I aggre",
+    "Ja akkoord, geen probleem",
+    "No problem, I agree",
   ])(
-    "accepts an explicit consent keyword with a small typo: %s",
+    "accepts conservative explicit consent phrases and supported typos: %s",
     async consentText => {
       const psid = `messenger-consent-typo-${consentText}`;
       const sendText = vi.fn(async () => undefined);
@@ -151,10 +166,113 @@ describe("Messenger consent deletion flow", () => {
     }
   );
 
-  it.each(["niet akoord", "ik ga niet akkoort", "I do not aggre"])(
-    "never treats a negated typo as consent: %s",
-    async consentText => {
-      const psid = `messenger-consent-negated-${consentText}`;
+  it("accepts a short contextual acknowledgement only after the notice was shown", async () => {
+    const psid = "messenger-consent-contextual-ok-user";
+    const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
+    const initialState = await Promise.resolve(getOrCreateState(psid));
+
+    await expect(
+      handleMessengerConsentGate({
+        psid,
+        lang: "nl",
+        text: "Is ok",
+        state: initialState,
+        sendText,
+        sendActions,
+      })
+    ).resolves.toBe(true);
+
+    expect((await Promise.resolve(getState(psid)))?.consentGiven).toBe(false);
+    expect((await Promise.resolve(getState(psid)))?.consentPromptedAt).toEqual(
+      expect.any(Number)
+    );
+    expect(sendText).not.toHaveBeenCalled();
+
+    const promptedState = await Promise.resolve(getState(psid));
+    await expect(
+      handleMessengerConsentGate({
+        psid,
+        lang: "nl",
+        text: "Is ok",
+        state: promptedState!,
+        sendText,
+        sendActions,
+      })
+    ).resolves.toBe(true);
+
+    expect((await Promise.resolve(getState(psid)))?.consentGiven).toBe(true);
+    expect(
+      (await Promise.resolve(getState(psid)))?.consentPromptedAt
+    ).toBeUndefined();
+  });
+
+  it.each(["Goed", "Dat mag", "Doe maar", "Ga maar door", "Sure", "Go ahead"])(
+    "accepts a common short acknowledgement only in fresh prompt context: %s",
+    async acknowledgement => {
+      const psid = `messenger-consent-contextual-${acknowledgement}`;
+      const sendText = vi.fn(async () => undefined);
+      const sendActions = vi.fn(async () => undefined);
+      await Promise.resolve(getOrCreateState(psid));
+      await Promise.resolve(setConsentPromptedAt(psid));
+      const promptedState = await Promise.resolve(getState(psid));
+
+      await expect(
+        handleMessengerConsentGate({
+          psid,
+          lang: "nl",
+          text: acknowledgement,
+          state: promptedState!,
+          sendText,
+          sendActions,
+        })
+      ).resolves.toBe(true);
+
+      expect((await Promise.resolve(getState(psid)))?.consentGiven).toBe(true);
+    }
+  );
+
+  it("does not accept a contextual acknowledgement after the 15-minute prompt window", async () => {
+    const psid = "messenger-consent-stale-context-user";
+    const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
+
+    await Promise.resolve(getOrCreateState(psid));
+    await Promise.resolve(
+      setConsentPromptedAt(psid, Date.now() - 15 * 60 * 1000 - 1)
+    );
+    const stalePromptState = await Promise.resolve(getState(psid));
+
+    await expect(
+      handleMessengerConsentGate({
+        psid,
+        lang: "nl",
+        text: "Is ok",
+        state: stalePromptState!,
+        sendText,
+        sendActions,
+      })
+    ).resolves.toBe(true);
+
+    expect((await Promise.resolve(getState(psid)))?.consentGiven).toBe(false);
+    expect(sendText).not.toHaveBeenCalled();
+    expect(sendActions).toHaveBeenCalledWith(
+      expect.stringContaining("toestemming"),
+      expect.any(Array)
+    );
+  });
+
+  it.each([
+    "misschien akkoord later",
+    "I might agree later",
+    "I agree, I guess",
+    "I agree, unless something changes",
+    "I agree, but I revoke my consent",
+    "Ik ga akkoord, maar ik trek mijn toestemming in",
+  ])(
+    "reprompts instead of treating qualified or uncertain wording as consent: %s",
+    async text => {
+      const psid = `messenger-consent-deferred-${text}`;
       const sendText = vi.fn(async () => undefined);
       const sendActions = vi.fn(async () => undefined);
       const state = await Promise.resolve(getOrCreateState(psid));
@@ -163,7 +281,7 @@ describe("Messenger consent deletion flow", () => {
         handleMessengerConsentGate({
           psid,
           lang: "nl",
-          text: consentText,
+          text,
           state,
           sendText,
           sendActions,
@@ -171,8 +289,106 @@ describe("Messenger consent deletion flow", () => {
       ).resolves.toBe(true);
 
       expect((await Promise.resolve(getState(psid)))?.consentGiven).toBe(false);
-      expect(sendText).toHaveBeenCalledWith(
-        expect.stringContaining("Zonder je toestemming")
+      expect(sendText).not.toHaveBeenCalled();
+      expect(sendActions).toHaveBeenCalledWith(
+        expect.stringContaining("toestemming"),
+        expect.any(Array)
+      );
+    }
+  );
+
+  it.each(["green", "you have my content"])(
+    "never turns an ordinary near-match into consent: %s",
+    async text => {
+      const psid = `messenger-consent-near-match-${text}`;
+      const sendText = vi.fn(async () => undefined);
+      const sendActions = vi.fn(async () => undefined);
+      const state = await Promise.resolve(getOrCreateState(psid));
+
+      await expect(
+        handleMessengerConsentGate({
+          psid,
+          lang: "nl",
+          text,
+          state,
+          sendText,
+          sendActions,
+        })
+      ).resolves.toBe(true);
+
+      expect((await Promise.resolve(getState(psid)))?.consentGiven).toBe(false);
+      expect(sendActions).toHaveBeenCalledWith(
+        expect.stringContaining("toestemming"),
+        expect.any(Array)
+      );
+    }
+  );
+
+  it.each([
+    "niet akoord",
+    "ik ga niet akkoort",
+    "Ik kan niet akkoord gaan",
+    "Nooit akkoord",
+    "Mijn toestemming heb je niet",
+    "Je hebt geen toestemming van mij",
+    "Is niet ok",
+    "I do not aggre",
+    "I won't agree",
+    "I cannot agree",
+    "I never agree",
+    "ok maar niet met mijn foto",
+  ])("never treats a negated typo as consent: %s", async consentText => {
+    const psid = `messenger-consent-negated-${consentText}`;
+    const sendText = vi.fn(async () => undefined);
+    const sendActions = vi.fn(async () => undefined);
+    const state = await Promise.resolve(getOrCreateState(psid));
+
+    await expect(
+      handleMessengerConsentGate({
+        psid,
+        lang: "nl",
+        text: consentText,
+        state,
+        sendText,
+        sendActions,
+      })
+    ).resolves.toBe(true);
+
+    expect((await Promise.resolve(getState(psid)))?.consentGiven).toBe(false);
+    expect(sendText).toHaveBeenCalledWith(
+      expect.stringContaining("Zonder je toestemming")
+    );
+  });
+
+  it.each([
+    "Akkoord?",
+    "Is dit ok?",
+    "Waarom heb je toestemming nodig?",
+    "Heb je mijn toestemming?",
+  ])(
+    "reprompts instead of treating a consent question as agreement: %s",
+    async text => {
+      const psid = `messenger-consent-question-${text}`;
+      const sendText = vi.fn(async () => undefined);
+      const sendActions = vi.fn(async () => undefined);
+      const state = await Promise.resolve(getOrCreateState(psid));
+
+      await expect(
+        handleMessengerConsentGate({
+          psid,
+          lang: "nl",
+          text,
+          state,
+          sendText,
+          sendActions,
+        })
+      ).resolves.toBe(true);
+
+      expect((await Promise.resolve(getState(psid)))?.consentGiven).toBe(false);
+      expect(sendText).not.toHaveBeenCalled();
+      expect(sendActions).toHaveBeenCalledWith(
+        expect.stringContaining("toestemming"),
+        expect.any(Array)
       );
     }
   );
@@ -201,6 +417,28 @@ describe("Messenger consent deletion flow", () => {
         expect.objectContaining({ id: "GDPR_CONSENT_DECLINE" }),
       ])
     );
+  });
+
+  it("does not mark the notice as delivered when controls and text both fail", async () => {
+    const psid = "messenger-consent-undelivered-notice-user";
+    const sendText = vi.fn(async () => false);
+    const sendActions = vi.fn(async () => false);
+    const state = await Promise.resolve(getOrCreateState(psid));
+
+    await expect(
+      handleMessengerConsentGate({
+        psid,
+        lang: "nl",
+        text: "Hallo",
+        state,
+        sendText,
+        sendActions,
+      })
+    ).resolves.toBe(true);
+
+    expect(
+      (await Promise.resolve(getState(psid)))?.consentPromptedAt
+    ).toBeUndefined();
   });
 
   it("deletes state, retained source assets, generated assets, and completion markers after confirmation", async () => {

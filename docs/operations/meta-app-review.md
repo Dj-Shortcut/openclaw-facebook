@@ -1,6 +1,6 @@
 # Meta App Review notes
 
-Last reviewed: 2026-08-21.
+Last reviewed: 2026-08-22.
 
 This note records the current Meta App Review impact for the public
 Leaderbot/OpenClaw Messenger surface. Keep this file aligned with Messenger
@@ -20,7 +20,7 @@ runtime behavior before enabling broader public traffic or adding capabilities.
 | Capability                    | User-visible behavior                                                                                                                                                                                                      | Review/demo notes                                                                                                                                    | Permission impact                                                                                                            |
 | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | Text replies                  | User sends a Page DM and receives a normal assistant reply. Gateway-owned operational/fallback copy, attachment context, and bridged image responses use the account-configured Dutch or English default language.         | Demo with a user-initiated DM and response within the Messenger response window; verify one `defaultLang: "nl"` and one `defaultLang: "en"` account. | No extra permission beyond Page messaging; the language is static account configuration and does not require profile lookup. |
-| Processing consent            | A new Messenger user receives persistent `Akkoord` / `Nee` postback buttons before any image or data processing. Explicit typed consent remains a fallback when Messenger cannot render the template.                      | Demo both buttons, verify the postback is stored before the prompt-first flow starts, and confirm that a negative choice remains blocked.            | No extra permission or webhook field; uses ordinary Page messaging postbacks.                                                |
+| Processing consent            | Image and assistant-content processing is gated on either an unambiguous explicit typed grant or a delivered consent notice followed by a positive postback/text reply. The notice uses persistent `Akkoord` / `Nee` postbacks; if Messenger rejects that template, Leaderbot immediately attempts the typed-consent notice as plain text. Questions, refusals, uncertain wording, and ordinary typo-neighbour words never grant consent. | Demo both postbacks and typed consent. Verify the prompt-delivery marker is written only after Messenger accepts either the controls or plain-text fallback, short replies expire after 15 minutes, GDPR postbacks remain eligible for a fallback after handler failure, and refusal stays blocked. | No extra permission or webhook field; uses the existing Page messaging and `messaging_postbacks` surface.                     |
 | Prompt-first image generation | User sends a natural-language image prompt and receives a generated image.                                                                                                                                                 | Demo one text-to-image prompt, quota exhaustion copy, and Graph API send failure handling.                                                           | No extra Meta permission beyond Page messaging; provider cost is controlled by runtime quotas/budgets.                       |
 | Source-photo edit             | User sends an image and asks for an edit/restyle.                                                                                                                                                                          | Demo a user-uploaded image, retained source-image handling, and generated output delivery.                                                           | Uses Messenger media payload URLs delivered by the webhook; no profile/photo-library permission requested.                   |
 | Optional photo memory         | Disabled by default. If enabled later, user must explicitly consent before retaining a source photo for reuse.                                                                                                             | Keep disabled until consent copy, privacy copy, and deletion proof are approved. Demo opt-in, withdrawal, and retention expiry before enabling.      | No additional Meta permission expected; do not infer consent from upload alone.                                              |
@@ -35,14 +35,21 @@ Before requesting review or changing public access, record:
 
 1. Webhook verification and signed POST delivery.
 2. A user-initiated text reply.
-3. Prompt-first text-to-image generation.
-4. Source-photo edit with durable image delivery.
-5. Localized, plan-neutral quota or spend-cap exhaustion copy before an
+3. Persistent consent postbacks on Messenger Android, iOS, and Web, plus the
+   explicit typed fallback when controls are unavailable.
+4. Conservative typed-consent variants, questions, refusals, uncertainty, a
+   stale short reply, and a rejected Messenger control delivery.
+5. A GDPR postback handler failure that still produces the normal safe
+   fallback instead of being classified as an intentionally silent payload.
+6. Prompt-first text-to-image generation.
+7. Source-photo edit with durable image delivery.
+8. Localized, plan-neutral quota or spend-cap exhaustion copy before an
    expensive provider call.
-6. Delete-my-data behavior with production-equivalent state.
-7. Public `/privacy`, `/terms`, and `/data-deletion` routes.
-8. Confirmation that no raw PSIDs, prompts, tokens, customer messages, or
-   uploaded/generated content appear in logs.
+9. Delete-my-data behavior with production-equivalent state.
+10. Public `/privacy`, `/terms`, and `/data-deletion` routes.
+11. Confirmation that the pre-redaction inbound logger receives metadata only:
+    no raw PSIDs, prompts, tokens, customer messages, payload values, attachment
+    URLs, message ids, referrals, or uploaded/generated content.
 
 ## Change policy
 

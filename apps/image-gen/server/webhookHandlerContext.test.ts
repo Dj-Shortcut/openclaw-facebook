@@ -23,9 +23,12 @@ describe("webhook handler context logging", () => {
     process.env.LOG_LEVEL = "debug";
     process.env.PRIVACY_PEPPER = "handler-context-test-pepper";
     vi.resetModules();
+    const messengerApi = await import("./_core/messengerApi");
+    const safeLogSpy = vi
+      .spyOn(messengerApi, "safeLog")
+      .mockImplementation(() => undefined);
     const { createHandlerContext } =
       await import("./_core/webhookHandlerContext");
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const ctx = createHandlerContext({
       defaultLang: "en",
       runImageGeneration: vi.fn(async () => ({ sent: true })),
@@ -40,7 +43,7 @@ describe("webhook handler context logging", () => {
         timestamp: 1,
         message: {
           mid: "mid-sensitive",
-          text: "make me a secret robot",
+          text: "make me a secret robot caption",
           quick_reply: { payload: "SECRET_QUICK_REPLY" },
           attachments: [
             {
@@ -51,27 +54,42 @@ describe("webhook handler context logging", () => {
             },
           ],
         },
+        postback: {
+          payload: "SECRET_POSTBACK_PAYLOAD",
+        },
         referral: { ref: "SECRET_REFERRAL_VALUE" },
       },
       "req-debug-log"
     );
 
-    expect(logSpy).toHaveBeenCalledTimes(1);
-    const payload = JSON.parse(String(logSpy.mock.calls[0][0])) as {
-      event: string;
-      hasReferralRef: boolean;
-      psidHash: string;
-    };
-    const serialized = JSON.stringify(payload);
+    expect(safeLogSpy).toHaveBeenCalledTimes(1);
+    const [eventName, metadata] = safeLogSpy.mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    const serialized = JSON.stringify(metadata);
 
-    expect(payload.event).toBe("incoming_message");
-    expect(payload.hasReferralRef).toBe(true);
-    expect(payload.psidHash).toMatch(/^[a-f0-9]{12}$/);
+    expect(eventName).toBe("incoming_message");
+    expect(metadata).toMatchObject({
+      hasContent: true,
+      contentLength: "make me a secret robot caption".length,
+      hasQuickReplyAction: true,
+      quickReplyActionLength: "SECRET_QUICK_REPLY".length,
+      hasPostbackAction: true,
+      postbackActionLength: "SECRET_POSTBACK_PAYLOAD".length,
+      mediaCount: 1,
+      mediaCategories: ["image"],
+      mediaUrlCount: 1,
+      hasReferralRef: true,
+    });
+    expect(metadata.psidHash).toMatch(/^[a-f0-9]{12}$/);
     expect(serialized).not.toContain("raw-psid-debug-log");
     expect(serialized).not.toContain("raw-user-id-debug-log");
-    expect(serialized).not.toContain("make me a secret robot");
+    expect(serialized).not.toContain("make me a secret robot caption");
     expect(serialized).not.toContain("SECRET_QUICK_REPLY");
+    expect(serialized).not.toContain("SECRET_POSTBACK_PAYLOAD");
     expect(serialized).not.toContain("SECRET_REFERRAL_VALUE");
+    expect(serialized).not.toContain("mid-sensitive");
     expect(serialized).not.toContain("secret.example");
     expect(serialized).not.toContain("token=abc");
   });

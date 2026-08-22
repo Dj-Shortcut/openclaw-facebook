@@ -2,21 +2,23 @@ import {
   deleteUserData,
   type UserDataDeletionOutcome,
 } from "./dataDeletionService";
+import {
+  GDPR_CONSENT_AGREE,
+  GDPR_CONSENT_DECLINE,
+  GDPR_DELETE_CANCEL,
+  GDPR_DELETE_CONFIRM,
+} from "./consentActionIds";
 import type { Lang } from "./i18n";
 import type { ConversationAction } from "./botResponse";
 import { buildQuickStartResponse } from "./conversationActions";
 import {
   getState,
+  setConsentPromptedAt,
   setConsentState,
   setPendingDeleteConfirm,
   type MessengerUserState,
 } from "./messengerState";
 import type { NormalizedWhatsAppEvent } from "./whatsappTypes";
-
-const GDPR_CONSENT_AGREE = "GDPR_CONSENT_AGREE";
-const GDPR_CONSENT_DECLINE = "GDPR_CONSENT_DECLINE";
-const GDPR_DELETE_CONFIRM = "GDPR_DELETE_CONFIRM";
-const GDPR_DELETE_CANCEL = "GDPR_DELETE_CANCEL";
 
 const DELETE_COMMAND_BY_LANG: Record<Lang, string> = {
   en: "delete my data",
@@ -25,24 +27,66 @@ const DELETE_COMMAND_BY_LANG: Record<Lang, string> = {
 const DELETE_COMMANDS = new Set(Object.values(DELETE_COMMAND_BY_LANG));
 const DELETE_CONFIRM_TEXTS = new Set(["ja", "ja verwijder", "yes", "confirm"]);
 const DELETE_CANCEL_TEXTS = new Set(["nee", "no", "cancel", "stop"]);
-const CONSENT_AGREE_TEXTS = new Set([
-  "akkoord",
-  "die toestemming heb je",
-  "ik ga akkoord",
-  "je hebt mijn toestemming",
-  "ja ik ga akkoord",
-  "agree",
-  "i agree",
-  "yes i agree",
+const DIRECT_CONSENT_AGREE_TEXTS = new Set([
+  "ja",
+  "yes",
+  "ok",
+  "oke",
+  "oké",
+  "okay",
+  "is ok",
+  "is oke",
+  "is oké",
+  "is goed",
+  "dat is ok",
+  "dat is oke",
+  "dat is oké",
+  "dat is goed",
+  "goed",
+  "helemaal goed",
+  "voor mij goed",
+  "dat mag",
+  "mag",
+  "doe maar",
+  "ga maar door",
+  "prima",
+  "sure",
+  "thats fine",
+  "fine by me",
+  "go ahead",
+  "you may",
 ]);
-const CONSENT_DECLINE_TEXTS = new Set([
+const DIRECT_CONSENT_DECLINE_TEXTS = new Set([
+  "nee",
+  "no",
   "nee bedankt",
-  "ik ga niet akkoord",
   "no thanks",
-  "i do not agree",
   "decline",
 ]);
-const COMMON_CONSENT_KEYWORD_TYPOS = new Set(["accoort"]);
+
+const CONSENT_ACKNOWLEDGEMENT_WINDOW_MS = 15 * 60 * 1000;
+const AGREEMENT_TERM_VARIANTS = new Set([
+  "akkoord",
+  "akoord",
+  "akord",
+  "akkoort",
+  "accoort",
+  "agree",
+  "aggre",
+  "agre",
+]);
+const PERMISSION_TERM_VARIANTS = new Set([
+  "toestemming",
+  "toesteming",
+  "toestmming",
+  "toestemmng",
+  "consent",
+  "consnt",
+  "consnet",
+  "permission",
+  "permision",
+  "permisson",
+]);
 
 type MessengerConsentGateInput = {
   psid: string;
@@ -50,8 +94,12 @@ type MessengerConsentGateInput = {
   text?: string | null;
   payload?: string | null;
   state: MessengerUserState;
-  sendText: (text: string) => Promise<void>;
-  sendActions: (text: string, actions: ConversationAction[]) => Promise<void>;
+  sendText: (text: string) => Promise<boolean | void>;
+  sendActions: (
+    text: string,
+    actions: ConversationAction[]
+  ) => Promise<boolean | void>;
+  onConsentControlsError?: (error: unknown) => void;
 };
 
 type WhatsAppConsentGateInput = {
@@ -96,57 +144,156 @@ function isDeleteCancelText(text: string | null | undefined): boolean {
   return DELETE_CANCEL_TEXTS.has(normalizeControlText(text));
 }
 
-function editDistance(left: string, right: string): number {
-  const previous = Array.from(
-    { length: right.length + 1 },
-    (_, index) => index
+function canonicalizeConsentTerms(normalized: string): string {
+  return normalized
+    .split(" ")
+    .map(token => {
+      if (AGREEMENT_TERM_VARIANTS.has(token)) {
+        return "agreement";
+      }
+
+      if (PERMISSION_TERM_VARIANTS.has(token)) {
+        return "permission";
+      }
+
+      return token;
+    })
+    .join(" ");
+}
+
+function stripBenignNegativePhrases(normalized: string): string {
+  return normalized
+    .replace(
+      /\b(?:geen(?: enkel)? probleem|geen bezwaar|no problem|not a problem|no objection)\b/g,
+      " "
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function semanticConsentText(normalized: string): string {
+  return canonicalizeConsentTerms(stripBenignNegativePhrases(normalized));
+}
+
+function hasConsentCue(semantic: string): boolean {
+  return /\b(?:agreement|permission|ja|yes|ok|oke|oké|okay|goed|prima)\b/.test(
+    semantic
+  );
+}
+
+function hasDeferredOrUncertainConsent(semantic: string): boolean {
+  return (
+    hasConsentCue(semantic) &&
+    /\b(?:misschien|wellicht|mogelijk|eventueel|later|ooit|zou|zouden|maybe|perhaps|possibly|might|eventually|would|unsure)\b/.test(
+      semantic
+    )
+  );
+}
+
+function hasExplicitConsentRefusal(semantic: string): boolean {
+  const consentTarget = "(?:agreement|permission|ok|oke|oké|okay|goed)";
+  const refusal =
+    "(?:niet|geen|nee|nooit|weiger|weigeren|not|no|never|wont|dont|cannot|cant|decline|refuse)";
+  const refusalBeforeTarget = new RegExp(
+    `\\b${refusal}(?: [\\p{L}\\p{N}]+){0,4} ${consentTarget}\\b`,
+    "u"
+  );
+  const refusalAfterTarget = new RegExp(
+    `\\b${consentTarget}(?: [\\p{L}\\p{N}]+){0,4} ${refusal}\\b`,
+    "u"
   );
 
-  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
-    const current = [leftIndex];
-    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
-      current[rightIndex] = Math.min(
-        current[rightIndex - 1]! + 1,
-        previous[rightIndex]! + 1,
-        previous[rightIndex - 1]! +
-          (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1)
-      );
-    }
-    previous.splice(0, previous.length, ...current);
+  return (
+    refusalBeforeTarget.test(semantic) ||
+    refusalAfterTarget.test(semantic) ||
+    /\b(?:maar|but) (?:[\p{L}\p{N}]+ ){0,2}(?:niet|geen|not|no)\b/u.test(
+      semantic
+    )
+  );
+}
+
+function looksLikeConsentQuestion(
+  text: string | null | undefined,
+  normalized: string
+): boolean {
+  if (text?.includes("?")) {
+    return true;
   }
 
-  return previous[right.length]!;
-}
-
-function hasConsentKeywordTypo(normalized: string): boolean {
-  return normalized.split(" ").some(token => {
-    if (COMMON_CONSENT_KEYWORD_TYPOS.has(token)) {
-      return true;
-    }
-    if (token.length >= 5 && editDistance(token, "akkoord") <= 2) {
-      return true;
-    }
-    return token.length >= 4 && editDistance(token, "agree") <= 2;
-  });
-}
-
-function hasConsentNegation(normalized: string): boolean {
-  return /\b(?:niet|geen|nee|not|no|dont|decline)\b/.test(normalized);
-}
-
-function isConsentAgreeText(text: string | null | undefined): boolean {
-  const normalized = normalizeControlText(text);
-  return (
-    CONSENT_AGREE_TEXTS.has(normalized) ||
-    (!hasConsentNegation(normalized) && hasConsentKeywordTypo(normalized))
+  return /^(?:waarom|wat|welke|hoe|kan|kun|mag|moet|wil|ben|heb|hebt|ga|is (?:dit|dat|het)|why|what|which|how|can|could|may|must|do|does|did|are|have|has|is (?:this|that|it))\b/.test(
+    normalized
   );
+}
+
+function isExplicitConsentGrantClause(normalizedClause: string): boolean {
+  const semantic = semanticConsentText(normalizedClause);
+  if (!semantic) {
+    return false;
+  }
+
+  return [
+    /^(?:ja|yes)(?: (?:ik|i|wij|we)(?: (?:ga|gaan|ben|zijn|am|are|do))?)? agreement$/,
+    /^(?:ik|i|wij|we) (?:(?:ga|gaan|ben|zijn|am|are|do) )?(?:(?:helemaal|volledig|fully) )?agreement(?: (?:met|with|to|voor) .+)?$/,
+    /^(?:(?:helemaal|volledig|fully) )?agreement$/,
+    /^(?:die|deze|mijn|mijnt|my|the)? ?(?:permission|agreement) (?:heb|hebt|heeft|hebben|have|has|got) (?:je|jij|u|jullie|you)(?: (?:van mij|van ons|from me|from us))?$/,
+    /^(?:je|jij|u|jullie|you) (?:hebt|heeft|hebben|have|has|got) (?:mijn|ons|onze|my|our)? ?(?:permission|agreement)(?: (?:van mij|van ons|from me|from us))?$/,
+    /^(?:ik|i|wij|we) (?:hierbij |hereby )?(?:geef|geven|verleen|verlenen|give|grant) (?:je|jij|u|jullie|you)? ?(?:mijn|ons|onze|my|our)? ?permission(?: (?:voor|to|for) .+)?$/,
+    /^(?:hierbij|bij deze|hereby) (?:geef|geven|verleen|verlenen|give|grant) (?:ik|wij|i|we) (?:je|jij|u|jullie|you)? ?(?:mijn|ons|onze|my|our)? ?permission(?: (?:voor|to|for) .+)?$/,
+    /^(?:ik|i|wij|we)(?: hereby)? permission$/,
+    /^(?:ik|wij) stem(?:men)? (?:hiermee |ermee )?in$/,
+    /^permission (?:is )?(?:gegeven|verleend|granted|given)$/,
+  ].some(pattern => pattern.test(semantic));
+}
+
+function hasExplicitConsentGrant(text: string | null | undefined): boolean {
+  return isExplicitConsentGrantClause(normalizeControlText(text));
+}
+
+function wasConsentPromptedRecently(
+  consentPromptedAt: number | undefined,
+  now = Date.now()
+): boolean {
+  return (
+    typeof consentPromptedAt === "number" &&
+    Number.isFinite(consentPromptedAt) &&
+    consentPromptedAt <= now &&
+    now - consentPromptedAt <= CONSENT_ACKNOWLEDGEMENT_WINDOW_MS
+  );
+}
+
+function isConsentAgreeText(
+  text: string | null | undefined,
+  allowContextualAcknowledgement: boolean
+): boolean {
+  const normalized = normalizeControlText(text);
+  const semantic = semanticConsentText(normalized);
+  if (!normalized || text?.includes("?")) {
+    return false;
+  }
+
+  if (
+    allowContextualAcknowledgement &&
+    DIRECT_CONSENT_AGREE_TEXTS.has(normalized)
+  ) {
+    return true;
+  }
+
+  if (
+    looksLikeConsentQuestion(text, normalized) ||
+    hasDeferredOrUncertainConsent(semantic) ||
+    hasExplicitConsentRefusal(semantic)
+  ) {
+    return false;
+  }
+
+  return hasExplicitConsentGrant(text);
 }
 
 function isConsentDeclineText(text: string | null | undefined): boolean {
   const normalized = normalizeControlText(text);
   return (
-    CONSENT_DECLINE_TEXTS.has(normalized) ||
-    (hasConsentNegation(normalized) && hasConsentKeywordTypo(normalized))
+    DIRECT_CONSENT_DECLINE_TEXTS.has(normalized) ||
+    hasExplicitConsentRefusal(semanticConsentText(normalized))
   );
 }
 
@@ -200,7 +347,7 @@ function deletionOutcomeText(
 async function deleteUserDataAndSendResult(
   psid: string,
   lang: Lang,
-  sendText: (text: string) => Promise<void>
+  sendText: (text: string) => Promise<boolean | void>
 ): Promise<void> {
   const outcome = await deleteUserData(psid);
   if (outcome.status !== "completed") {
@@ -236,8 +383,8 @@ function deleteCancelledText(lang: Lang): string {
 function messengerConsentAcceptedText(lang: Lang): string {
   const command = deleteCommand(lang);
   return lang === "en"
-    ? `You're all set ✅\nYou can delete your data anytime by typing '${command}'.`
-    : `Je bent klaar ✅\nJe kan je data altijd verwijderen door '${command}' te typen.`;
+    ? `Your consent is registered ✅\nYou can delete your data anytime by typing '${command}'.`
+    : `Je toestemming is geregistreerd ✅\nJe kan je data altijd verwijderen door '${command}' te typen.`;
 }
 
 function consentActions(lang: Lang): ConversationAction[] {
@@ -308,20 +455,32 @@ function whatsAppDeleteNoticeButtons(
   ];
 }
 
+async function acceptMessengerConsent(
+  input: MessengerConsentGateInput
+): Promise<void> {
+  await Promise.resolve(setConsentState(input.psid, true));
+  await input.sendText(messengerConsentAcceptedText(input.lang));
+  const response = buildQuickStartResponse(input.lang);
+  await input.sendActions(response.text ?? "", response.actions ?? []);
+}
+
+async function declineMessengerConsent(
+  input: MessengerConsentGateInput
+): Promise<void> {
+  await Promise.resolve(setConsentState(input.psid, false));
+  await input.sendText(consentDeclinedText(input.lang));
+}
+
 export async function handleMessengerConsentGate(
   input: MessengerConsentGateInput
 ): Promise<boolean> {
   if (input.payload === GDPR_CONSENT_AGREE) {
-    await Promise.resolve(setConsentState(input.psid, true));
-    await input.sendText(messengerConsentAcceptedText(input.lang));
-    const response = buildQuickStartResponse(input.lang);
-    await input.sendActions(response.text ?? "", response.actions ?? []);
+    await acceptMessengerConsent(input);
     return true;
   }
 
   if (input.payload === GDPR_CONSENT_DECLINE) {
-    await Promise.resolve(setConsentState(input.psid, false));
-    await input.sendText(consentDeclinedText(input.lang));
+    await declineMessengerConsent(input);
     return true;
   }
 
@@ -365,24 +524,37 @@ export async function handleMessengerConsentGate(
   }
 
   if (input.state.consentGiven !== true) {
-    if (isConsentAgreeText(input.text)) {
-      await Promise.resolve(setConsentState(input.psid, true));
-      await input.sendText(messengerConsentAcceptedText(input.lang));
-      const response = buildQuickStartResponse(input.lang);
-      await input.sendActions(response.text ?? "", response.actions ?? []);
+    if (
+      isConsentAgreeText(
+        input.text,
+        wasConsentPromptedRecently(input.state.consentPromptedAt)
+      )
+    ) {
+      await acceptMessengerConsent(input);
       return true;
     }
 
     if (isConsentDeclineText(input.text)) {
-      await Promise.resolve(setConsentState(input.psid, false));
-      await input.sendText(consentDeclinedText(input.lang));
+      await declineMessengerConsent(input);
       return true;
     }
 
-    await input.sendActions(
-      consentText(input.lang),
-      consentActions(input.lang)
-    );
+    const notice = consentText(input.lang);
+    let controlsDelivered: boolean | void;
+    try {
+      controlsDelivered = await input.sendActions(
+        notice,
+        consentActions(input.lang)
+      );
+    } catch (error) {
+      input.onConsentControlsError?.(error);
+      controlsDelivered = false;
+    }
+    const promptDelivered =
+      controlsDelivered === false ? await input.sendText(notice) : true;
+    if (promptDelivered !== false) {
+      await Promise.resolve(setConsentPromptedAt(input.psid));
+    }
     return true;
   }
 

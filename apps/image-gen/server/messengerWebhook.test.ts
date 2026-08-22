@@ -1542,6 +1542,39 @@ describe("messenger webhook dedupe", () => {
     );
   });
 
+  it("sends the typed-consent fallback when Messenger rejects the button template", async () => {
+    const psid = "fresh-consent-template-fallback-user";
+    sendButtonTemplateMock.mockRejectedValueOnce(
+      new Error("template rejected")
+    );
+
+    await processFacebookWebhookPayloadWithoutConsent({
+      entry: [
+        {
+          messaging: [
+            {
+              sender: { id: psid },
+              timestamp: 1730000000500,
+              message: { mid: "mid-consent-template-fallback", text: "Hi" },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(sendTextMock).toHaveBeenCalledWith(
+      psid,
+      expect.stringContaining("IK GA AKKOORD")
+    );
+    expect((await getTestMessengerState(psid))?.consentPromptedAt).toEqual(
+      expect.any(Number)
+    );
+    expect(safeLogMock).toHaveBeenCalledWith(
+      "messenger_consent_controls_failed",
+      expect.objectContaining({ errorCode: "Error" })
+    );
+  });
+
   it("continues with prompt-first quick start actions after consent is granted", async () => {
     const psid = "fresh-consent-accepted-user";
 
@@ -1552,9 +1585,9 @@ describe("messenger webhook dedupe", () => {
             {
               sender: { id: psid },
               timestamp: 1730000000555,
-              message: {
-                mid: "mid-fresh-consent-accepted",
-                quick_reply: { payload: "GDPR_CONSENT_AGREE" },
+              postback: {
+                title: "Ik ga akkoord",
+                payload: "GDPR_CONSENT_AGREE",
               },
             },
           ],
@@ -1566,7 +1599,7 @@ describe("messenger webhook dedupe", () => {
     expect((await getTestMessengerState(psid))?.stage).toBe("IDLE");
     expect(sendTextMock).toHaveBeenCalledWith(
       psid,
-      expect.stringContaining("Je bent klaar")
+      expect.stringContaining("Je toestemming is geregistreerd")
     );
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       psid,

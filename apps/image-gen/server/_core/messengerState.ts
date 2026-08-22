@@ -59,6 +59,8 @@ export type MessengerUserState = {
   preferredLangSource?: "account_default" | "sender_locale";
   consentGiven: boolean;
   consentTimestamp?: number;
+  /** Metadata marker that Messenger accepted delivery of the processing notice. */
+  consentPromptedAt?: number;
   pendingDeleteConfirm?: boolean;
   hasSeenIntro: boolean;
   pendingImageUrl?: string;
@@ -296,11 +298,22 @@ export function setConsentState(
     {
       consentGiven,
       consentTimestamp: consentGiven ? now : undefined,
+      consentPromptedAt: undefined,
       pendingDeleteConfirm: false,
     },
     now
   );
 
+  if (isPromiseLike(result)) {
+    return result.then(() => undefined);
+  }
+}
+
+export function setConsentPromptedAt(
+  psid: string,
+  now = Date.now()
+): MaybePromise<void> {
+  const result = patchState(psid, { consentPromptedAt: now }, now);
   if (isPromiseLike(result)) {
     return result.then(() => undefined);
   }

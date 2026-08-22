@@ -1,4 +1,5 @@
 import { handleMessengerConsentGate } from "./consentService";
+import { safeLog } from "./messengerApi";
 import { setPreferredLang } from "./messengerState";
 import { toLogUser } from "./privacy";
 import { captureException } from "./observability/sentry";
@@ -134,7 +135,8 @@ async function routeConsentGate(
   context: TrackedEventContext,
   event: FacebookWebhookEvent
 ): Promise<boolean> {
-  const { psid, lang, reqId, state, classification, trackedCtx } = context;
+  const { psid, userId, lang, reqId, state, classification, trackedCtx } =
+    context;
   if (!classification.isInboundUserEvent) {
     return false;
   }
@@ -146,10 +148,26 @@ async function routeConsentGate(
     payload: classification.eventPayload,
     state,
     sendText: async text => {
-      await trackedCtx.sendLoggedText(psid, text, reqId);
+      const outcome = await trackedCtx.sendLoggedText(psid, text, reqId);
+      return outcome?.sent === true;
     },
     sendActions: async (text, actions) => {
-      await trackedCtx.sendLoggedActions(psid, text, actions, reqId);
+      const outcome = await trackedCtx.sendLoggedActions(
+        psid,
+        text,
+        actions,
+        reqId
+      );
+      return outcome?.sent === true;
+    },
+    onConsentControlsError: error => {
+      safeLog("messenger_consent_controls_failed", {
+        level: "warn",
+        reqId,
+        user: toLogUser(userId),
+        errorCode:
+          error instanceof Error ? error.constructor.name : "UnknownError",
+      });
     },
   });
 

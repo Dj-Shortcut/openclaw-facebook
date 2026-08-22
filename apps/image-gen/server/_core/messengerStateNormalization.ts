@@ -53,6 +53,7 @@ export function createDefaultState(
     preferredLangSource: undefined,
     consentGiven: false,
     consentTimestamp: undefined,
+    consentPromptedAt: undefined,
     pendingDeleteConfirm: false,
     hasSeenIntro: false,
     pendingImageUrl: undefined,
@@ -132,13 +133,18 @@ function resolveConsentState(
   ctx: NormalizationCtx
 ): Pick<
   MessengerUserState,
-  "consentGiven" | "consentTimestamp" | "pendingDeleteConfirm" | "hasSeenIntro"
+  | "consentGiven"
+  | "consentTimestamp"
+  | "consentPromptedAt"
+  | "pendingDeleteConfirm"
+  | "hasSeenIntro"
 > {
   const { value, fallback } = ctx;
 
   return {
     consentGiven: value?.consentGiven ?? fallback.consentGiven,
     consentTimestamp: value?.consentTimestamp ?? fallback.consentTimestamp,
+    consentPromptedAt: value?.consentPromptedAt ?? fallback.consentPromptedAt,
     pendingDeleteConfirm:
       value?.pendingDeleteConfirm ?? fallback.pendingDeleteConfirm,
     hasSeenIntro: value?.hasSeenIntro ?? fallback.hasSeenIntro,
