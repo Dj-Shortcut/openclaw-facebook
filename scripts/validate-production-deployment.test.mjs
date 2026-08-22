@@ -277,40 +277,51 @@ describe("production deployment contract", () => {
   });
 
   it("blocks an image-gen Machine that is not on the reviewed digest", () => {
+    function runFly(args) {
+      const command = args.slice(0, 2).join(" ");
+      if (command === "config show") {
+        return JSON.stringify({
+          app: "leaderbot-fb-image-gen",
+          env: {},
+          processes: {},
+          http_service: { processes: ["app"], checks: [{ path: "/healthz" }] },
+        });
+      }
+      if (command === "machine list") {
+        return JSON.stringify([
+          {
+            id: "unreviewed-image-machine",
+            config: {
+              image: "registry.fly.io/leaderbot-fb-image-gen@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              metadata: { fly_platform_version: "v2", fly_process_group: "app" },
+            },
+          },
+        ]);
+      }
+      if (command === "scale show") {
+        return JSON.stringify([
+          { Process: "app", Count: 2, CPUKind: "shared", CPUs: 1, Memory: 256 },
+          { Process: "worker", Count: 2, CPUKind: "shared", CPUs: 1, Memory: 256 },
+        ]);
+      }
+      throw new Error(`Unexpected fly command: ${args.join(" ")}`);
+    }
+
     const result = checkLiveFlyDrift("image-gen", {
       rootDir: repoRoot,
-      runFly(args) {
-        const command = args.slice(0, 2).join(" ");
-        if (command === "config show") {
-          return JSON.stringify({
-            app: "leaderbot-fb-image-gen",
-            env: {},
-            processes: {},
-            http_service: { processes: ["app"], checks: [{ path: "/healthz" }] },
-          });
-        }
-        if (command === "machine list") {
-          return JSON.stringify([
-            {
-              id: "unreviewed-image-machine",
-              config: {
-                image: "registry.fly.io/leaderbot-fb-image-gen@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                metadata: { fly_platform_version: "v2", fly_process_group: "app" },
-              },
-            },
-          ]);
-        }
-        if (command === "scale show") {
-          return JSON.stringify([
-            { Process: "app", Count: 2, CPUKind: "shared", CPUs: 1, Memory: 256 },
-            { Process: "worker", Count: 2, CPUKind: "shared", CPUs: 1, Memory: 256 },
-          ]);
-        }
-        throw new Error(`Unexpected fly command: ${args.join(" ")}`);
-      },
+      runFly,
     });
 
     expect(result.blockingErrors).toContain(
+      "Machine unreviewed-image-machine image differs from the reviewed production digest",
+    );
+
+    const predeploy = checkLiveFlyDrift("image-gen", {
+      rootDir: repoRoot,
+      runFly,
+      enforceReviewedImage: false,
+    });
+    expect(predeploy.blockingErrors).not.toContain(
       "Machine unreviewed-image-machine image differs from the reviewed production digest",
     );
   });

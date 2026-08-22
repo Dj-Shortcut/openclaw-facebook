@@ -56,11 +56,12 @@ be able to mutate the stateful gateway, and vice versa.
    enforcement remains active.
 
 Pre-deploy drift that the selected `fly.toml` can safely reconcile is reported
-as a warning. Detached Machines, unknown process groups, or scale/VM drift stop
-the deployment. Gateway volume drift and image-gen digest drift are always
-blocking. Post-deploy drift is always blocking and automatically redeploys the
-captured pre-release image plus the explicit desired scale before the job exits
-failed.
+as a warning. Detached Machines, unknown process groups, scale/VM drift, and
+gateway volume drift stop the deployment. An old image-gen digest is permitted
+only during pre-deploy validation so a newly reviewed digest can roll out;
+post-deploy digest drift is blocking. Any failed post-deploy check automatically
+redeploys the captured pre-release image plus the explicit desired scale before
+the job exits failed.
 
 Image-gen is temporarily stricter: its production privacy-boundary release is
 ahead of `main`, so the workflow requires an explicitly reviewed immutable

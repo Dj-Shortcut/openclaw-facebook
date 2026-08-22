@@ -373,7 +373,11 @@ export function checkLiveFlyDrift(target, options = {}) {
     ) {
       blockingErrors.push(`unexpected process group on Machine ${machine.id}`);
     }
-    if (app.reviewedImage && machine.config?.image !== app.reviewedImage) {
+    if (
+      options.enforceReviewedImage !== false &&
+      app.reviewedImage &&
+      machine.config?.image !== app.reviewedImage
+    ) {
       blockingErrors.push(
         `Machine ${machine.id} image differs from the reviewed production digest`,
       );
@@ -411,8 +415,12 @@ if (isMain) {
   const liveIndex = process.argv.indexOf("--live");
   if (liveIndex >= 0) {
     const target = process.argv[liveIndex + 1];
-    const result = checkLiveFlyDrift(target);
     const predeploy = process.argv.includes("--predeploy");
+    const result = checkLiveFlyDrift(target, {
+      // A new reviewed digest necessarily differs from the currently running
+      // digest before rollout. Enforce it strictly after deployment instead.
+      enforceReviewedImage: !predeploy,
+    });
     if (result.reconcilableDrift.length) {
       const stream = predeploy ? process.stdout : process.stderr;
       stream.write(
