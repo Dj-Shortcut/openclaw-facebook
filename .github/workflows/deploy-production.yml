@@ -133,6 +133,13 @@ jobs:
         with:
           version: ${{ env.FLYCTL_VERSION }}
 
+      - name: Expose pinned flyctl compatibility command
+        timeout-minutes: 1
+        run: |
+          flyctl version
+          ln -s "$(command -v flyctl)" "$RUNNER_TEMP/fly"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
       - name: Validate Fly configuration
         timeout-minutes: 2
         run: fly config validate --strict --config fly.toml
@@ -263,6 +270,13 @@ jobs:
         uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master
         with:
           version: ${{ env.FLYCTL_VERSION }}
+
+      - name: Expose pinned flyctl compatibility command
+        timeout-minutes: 1
+        run: |
+          flyctl version
+          ln -s "$(command -v flyctl)" "$RUNNER_TEMP/fly"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
       - name: Validate Fly configuration
         timeout-minutes: 2
