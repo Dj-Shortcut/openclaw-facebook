@@ -5,6 +5,7 @@ import { safeLog } from "./messengerApi";
 import { recordMessengerDuplicateSkip } from "./botRuntimeStats";
 import {
   createMessengerGenerationTenantPartition,
+  createMessengerGenerationOwnershipPartition,
   isMessengerGenerationTenantPartition,
   type MessengerGenerationJob,
 } from "./messengerGenerationJob";
@@ -22,6 +23,13 @@ const MESSENGER_GENERATION_PARTITION_INDEX_KEY =
   "messenger-generation-job-partitions:v1";
 const MESSENGER_GENERATION_DRAIN_CURSOR_KEY =
   "messenger-generation-job-drain-cursor:v1";
+const MESSENGER_GENERATION_SUBJECT_PARTITIONS_PREFIX =
+  "messenger-generation-subject-partitions:v1";
+const MESSENGER_GENERATION_SUBJECT_ERASED_PREFIX =
+  "messenger-generation-subject-erased:v1";
+const MESSENGER_GENERATION_PRIVACY_INDEX_VERSION_KEY =
+  "messenger-generation-privacy-index-version";
+const MESSENGER_GENERATION_PRIVACY_INDEX_VERSION = "v2";
 const DEFAULT_JOB_LEASE_BUFFER_SECONDS = 60;
 const OPENAI_TIMEOUT_MS_DEFAULT = 180_000;
 const OPENAI_RETRY_LIMIT_DEFAULT = 1;
@@ -46,19 +54,65 @@ const ATOMIC_PARTITION_ENQUEUE_SCRIPT = `
     return redis.error_reply("queue key is not a list")
   end
 
+  local contentType = redis.call("TYPE", KEYS[3]).ok
+  if contentType ~= "none" and contentType ~= "string" then
+    return redis.error_reply("content key is not a string")
+  end
+  local subjectType = redis.call("TYPE", KEYS[4]).ok
+  if subjectType ~= "none" and subjectType ~= "set" then
+    return redis.error_reply("subject index is not a set")
+  end
+  local tombstoneType = redis.call("TYPE", KEYS[5]).ok
+  if tombstoneType ~= "none" and tombstoneType ~= "string" then
+    return redis.error_reply("subject tombstone is not a string")
+  end
+  local processingType = redis.call("TYPE", KEYS[6]).ok
+  if processingType ~= "none" and processingType ~= "list" then
+    return redis.error_reply("processing key is not a list")
+  end
+
+  if redis.call("EXISTS", KEYS[5]) == 1 then
+    return -4
+  end
+
   if redis.call("EXISTS", KEYS[1]) == 1 then
+    local queued = redis.call("LPOS", KEYS[2], ARGV[2])
+    local processing = redis.call("LPOS", KEYS[6], ARGV[2])
+    if redis.call("GET", KEYS[3]) ~= ARGV[4] or
+       redis.call("SISMEMBER", KEYS[4], ARGV[2]) ~= 1 or
+       (not queued and not processing) then
+      return -5
+    end
     return 0
   end
 
-  local accepted = redis.call("SET", KEYS[1], ARGV[3], "EX", ARGV[1], "NX")
-  if not accepted then
+  if redis.call("GET", KEYS[3]) == ARGV[4] and
+     redis.call("SISMEMBER", KEYS[4], ARGV[2]) == 1 and
+     redis.call("LPOS", KEYS[2], ARGV[2]) then
+    local reconciled = redis.call("SET", KEYS[1], ARGV[3], "EX", ARGV[1], "NX")
+    if reconciled then return 1 end
     return 0
   end
 
+  redis.call("SET", KEYS[3], ARGV[4], "PXAT", ARGV[6])
+  redis.call("SADD", KEYS[4], ARGV[2])
+  if redis.call("PTTL", KEYS[4]) < 0 then
+    redis.call("PEXPIREAT", KEYS[4], ARGV[6])
+  else
+    redis.call("PEXPIREAT", KEYS[4], ARGV[6], "GT")
+  end
   local pushed = redis.pcall("LPUSH", KEYS[2], ARGV[2])
   if type(pushed) == "table" and pushed.err then
-    redis.call("DEL", KEYS[1])
+    redis.call("DEL", KEYS[3])
+    redis.call("SREM", KEYS[4], ARGV[2])
     return redis.error_reply(pushed.err)
+  end
+  local accepted = redis.call("SET", KEYS[1], ARGV[3], "EX", ARGV[1], "NX")
+  if not accepted then
+    redis.call("LREM", KEYS[2], 1, ARGV[2])
+    redis.call("DEL", KEYS[3])
+    redis.call("SREM", KEYS[4], ARGV[2])
+    return 0
   end
   return 1
 `;
@@ -77,6 +131,10 @@ const ATOMIC_PARTITION_RESERVE_SCRIPT = `
   local leaseType = redis.call("TYPE", KEYS[3]).ok
   if leaseType ~= "none" and leaseType ~= "string" then
     return redis.error_reply("lease key is not a string")
+  end
+
+  if redis.call("EXISTS", KEYS[4]) == 1 then
+    return -4
   end
 
   if redis.call("GET", KEYS[3]) == ARGV[2] then
@@ -136,6 +194,13 @@ const ATOMIC_PARTITION_COMPLETE_SCRIPT = `
   if redis.call("GET", KEYS[3]) == "completed" then
     return 2
   end
+  if redis.call("EXISTS", KEYS[6]) == 1 then
+    redis.call("LREM", KEYS[1], 0, ARGV[1])
+    redis.call("DEL", KEYS[2])
+    redis.call("DEL", KEYS[4])
+    redis.call("SREM", KEYS[5], ARGV[1])
+    return -4
+  end
   if redis.call("GET", KEYS[2]) ~= ARGV[2] then
     return 0
   end
@@ -154,6 +219,8 @@ const ATOMIC_PARTITION_COMPLETE_SCRIPT = `
 
   redis.call("LREM", KEYS[1], 1, ARGV[1])
   redis.call("DEL", KEYS[2])
+  redis.call("DEL", KEYS[4])
+  redis.call("SREM", KEYS[5], ARGV[1])
   local receipt = redis.pcall("SET", KEYS[3], "completed", "EX", ARGV[3])
   if type(receipt) == "table" and receipt.err then
     return 3
@@ -186,6 +253,14 @@ const ATOMIC_PARTITION_TRANSITION_SCRIPT = `
     return 2
   end
 
+  if redis.call("EXISTS", KEYS[7]) == 1 then
+    redis.call("LREM", KEYS[1], 0, ARGV[1])
+    redis.call("DEL", KEYS[2])
+    redis.call("DEL", KEYS[5])
+    redis.call("SREM", KEYS[6], ARGV[1])
+    return -4
+  end
+
   if ARGV[6] == "owned" then
     if redis.call("GET", KEYS[2]) ~= ARGV[3] then
       return 0
@@ -208,7 +283,19 @@ const ATOMIC_PARTITION_TRANSITION_SCRIPT = `
 
   local pushed
   if ARGV[5] == "dead" then
+    redis.call("DEL", KEYS[5])
+  else
+    redis.call("SET", KEYS[5], ARGV[8], "PXAT", ARGV[11])
+    if redis.call("PTTL", KEYS[6]) < 0 then
+      redis.call("PEXPIREAT", KEYS[6], ARGV[11])
+    else
+      redis.call("PEXPIREAT", KEYS[6], ARGV[11], "GT")
+    end
+  end
+  if ARGV[5] == "dead" then
     pushed = redis.pcall("RPUSH", KEYS[3], ARGV[2])
+    redis.call("LTRIM", KEYS[3], -1000, -1)
+    redis.call("EXPIRE", KEYS[3], ARGV[10])
   else
     pushed = redis.pcall("LPUSH", KEYS[3], ARGV[2])
   end
@@ -236,6 +323,10 @@ const ATOMIC_PARTITION_INVALID_QUEUED_SCRIPT = `
   end
   if redis.call("LINDEX", KEYS[1], -1) ~= ARGV[1] then
     return 0
+  end
+  if string.match(ARGV[1], "^job%-%x+$") == nil then
+    redis.call("RPOP", KEYS[1])
+    return 2
   end
   redis.call("RPOPLPUSH", KEYS[1], KEYS[2])
   return 1
@@ -270,9 +361,11 @@ const ATOMIC_PARTITION_INVALID_PROCESSING_SCRIPT = `
     return 0
   end
 
-  local pushed = redis.pcall("RPUSH", KEYS[2], ARGV[1])
-  if type(pushed) == "table" and pushed.err then
-    return redis.error_reply(pushed.err)
+  if string.match(ARGV[1], "^job%-%x+$") ~= nil then
+    local pushed = redis.pcall("RPUSH", KEYS[2], ARGV[1])
+    if type(pushed) == "table" and pushed.err then
+      return redis.error_reply(pushed.err)
+    end
   end
   redis.call("LREM", KEYS[1], 1, ARGV[1])
   return 1
@@ -496,13 +589,49 @@ function getPartitionedJob(job: MessengerGenerationJob): {
     );
   }
 
-  const tenantPartition = createMessengerGenerationTenantPartition(
-    pageId,
-    partitionSecret
-  );
+  const hasOwnership =
+    Number.isSafeInteger(job.workspaceId) &&
+    (job.workspaceId ?? 0) > 0 &&
+    Number.isSafeInteger(job.channelConnectionId) &&
+    (job.channelConnectionId ?? 0) > 0 &&
+    Number.isSafeInteger(job.bindingEpoch) &&
+    (job.bindingEpoch ?? 0) > 0 &&
+    Number.isSafeInteger(job.privacyEpoch) &&
+    (job.privacyEpoch ?? 0) > 0;
+  if (
+    (job.workspaceId !== undefined ||
+      job.channelConnectionId !== undefined ||
+      job.bindingEpoch !== undefined ||
+      job.privacyEpoch !== undefined) &&
+    !hasOwnership
+  ) {
+    throw new Error("Messenger generation queue ownership is incomplete");
+  }
+  if (!hasOwnership && process.env.NODE_ENV === "production") {
+    throw new Error(
+      "Messenger generation queue requires workspace connection ownership"
+    );
+  }
+  const tenantPartition = hasOwnership
+    ? createMessengerGenerationOwnershipPartition(
+        {
+          workspaceId: job.workspaceId!,
+          channelConnectionId: job.channelConnectionId!,
+          bindingEpoch: job.bindingEpoch!,
+          privacyEpoch: job.privacyEpoch!,
+          pageId,
+        },
+        partitionSecret
+      )
+    : createMessengerGenerationTenantPartition(pageId, partitionSecret);
+  // The queue, not an untrusted caller, establishes the retention clock.
+  const createdAt = Date.now();
+  const expiresAt = createdAt + getGenerationJobContentSeconds() * 1000;
   return {
     job: {
       ...job,
+      createdAt,
+      expiresAt,
       pageId,
       tenantPartition,
     },
@@ -539,6 +668,124 @@ export function assertMessengerGenerationQueueConfig(): void {
       "MESSENGER_GENERATION_QUEUE_ENABLED=1 requires MESSENGER_GENERATION_PARTITION_SECRET or FB_APP_SECRET"
     );
   }
+}
+
+const ASSERT_NO_RAW_PARTITION_PAYLOADS_SCRIPT = `
+  for keyIndex = 1, #KEYS do
+    local keyType = redis.call("TYPE", KEYS[keyIndex]).ok
+    if keyType ~= "none" and keyType ~= "list" then
+      return redis.error_reply("generation queue metadata key is not a list")
+    end
+    local cursor = 0
+    repeat
+      local values = redis.call("LRANGE", KEYS[keyIndex], cursor, cursor + 99)
+      for valueIndex = 1, #values do
+        if string.match(values[valueIndex], "^job%-%x+$") == nil then
+          return 0
+        end
+      end
+      cursor = cursor + #values
+    until #values < 100
+  end
+  return 1
+`;
+
+/** Runtime gate: legacy/raw queues must be purged before a production worker starts. */
+export async function ensureMessengerGenerationQueueReady(): Promise<void> {
+  assertMessengerGenerationQueueConfig();
+  if (!isMessengerGenerationQueueEnabled()) return;
+  const redis = await getRedisClient();
+  const legacyDepths = await getGenerationQueueDepths(
+    redis,
+    LEGACY_GENERATION_QUEUE_SCOPE
+  );
+  if (!isGenerationQueueScopeEmpty(legacyDepths)) {
+    throw new Error(
+      "Legacy Messenger generation queue must be purged before startup"
+    );
+  }
+  const partitions = await redis.smembers(
+    MESSENGER_GENERATION_PARTITION_INDEX_KEY
+  );
+  const privacyIndexVersion = await redis.get(
+    MESSENGER_GENERATION_PRIVACY_INDEX_VERSION_KEY
+  );
+  if (privacyIndexVersion === null && partitions.length === 0) {
+    await redis.set(
+      MESSENGER_GENERATION_PRIVACY_INDEX_VERSION_KEY,
+      MESSENGER_GENERATION_PRIVACY_INDEX_VERSION
+    );
+  } else if (
+    privacyIndexVersion !== MESSENGER_GENERATION_PRIVACY_INDEX_VERSION
+  ) {
+    throw new Error(
+      "Messenger generation queues require the privacy-index purge rehearsal"
+    );
+  }
+  for (const tenantPartition of partitions) {
+    if (!isMessengerGenerationTenantPartition(tenantPartition)) {
+      throw new Error("Messenger generation partition index is invalid");
+    }
+    const scope = getPartitionedGenerationQueueScope(tenantPartition);
+    const clean = await evalPartitionScriptWithRetry(
+      redis,
+      ASSERT_NO_RAW_PARTITION_PAYLOADS_SCRIPT,
+      [scope.queuedKey, scope.processingKey, scope.deadLetterKey],
+      []
+    );
+    if (clean !== 1) {
+      throw new Error(
+        "Raw Messenger generation payloads must be purged before startup"
+      );
+    }
+  }
+}
+
+/** Metadata-safe one-time purge; it never reads or requeues stored payloads. */
+export async function purgeUnsafeMessengerGenerationQueues(): Promise<void> {
+  if (!isMessengerGenerationQueueEnabled()) {
+    throw new Error("Messenger generation Redis queue is unavailable");
+  }
+  const redis = await getRedisClient();
+  await redis.del(LEGACY_MESSENGER_GENERATION_QUEUE_KEY);
+  await redis.del(LEGACY_MESSENGER_GENERATION_PROCESSING_KEY);
+  await redis.del(LEGACY_MESSENGER_GENERATION_DEAD_LETTER_KEY);
+  await deleteRedisKeysByPattern(redis, "messenger-generation-jobs:{*}:*");
+  await deleteRedisKeysByPattern(
+    redis,
+    `${MESSENGER_GENERATION_SUBJECT_PARTITIONS_PREFIX}:*`
+  );
+  await deleteRedisKeysByPattern(
+    redis,
+    `${MESSENGER_GENERATION_SUBJECT_ERASED_PREFIX}:*`
+  );
+  await redis.del(MESSENGER_GENERATION_PARTITION_INDEX_KEY);
+  await redis.set(
+    MESSENGER_GENERATION_PRIVACY_INDEX_VERSION_KEY,
+    MESSENGER_GENERATION_PRIVACY_INDEX_VERSION
+  );
+}
+
+/** Backwards-compatible operator entry point; now purges every unsafe shape. */
+export const purgeLegacyMessengerGenerationQueues =
+  purgeUnsafeMessengerGenerationQueues;
+
+async function deleteRedisKeysByPattern(
+  redis: RedisLike,
+  pattern: string
+): Promise<void> {
+  let cursor = "0";
+  do {
+    const [next, keys] = await redis.scan(
+      cursor,
+      "MATCH",
+      pattern,
+      "COUNT",
+      200
+    );
+    for (const key of keys) await redis.del(key);
+    cursor = next;
+  } while (cursor !== "0");
 }
 
 function getGenerationJobLeaseSeconds(): number {
@@ -592,7 +839,85 @@ function getGenerationDrainBatchSize(): number {
 }
 
 function getGenerationJobKeyToken(job: MessengerGenerationJob): string {
-  return createHash("sha256").update(job.reqId).digest("hex");
+  return createHash("sha256")
+    .update(`${job.userId}\0${job.privacyEpoch ?? 0}\0${job.reqId}`)
+    .digest("hex");
+}
+
+function getGenerationJobReference(job: MessengerGenerationJob): string {
+  return `job-${getGenerationJobKeyToken(job)}`;
+}
+
+function getGenerationJobContentKey(
+  scope: PartitionedGenerationQueueScope,
+  job: MessengerGenerationJob
+): string {
+  return `messenger-generation-jobs:{${scope.tenantPartition}}:content:${getGenerationJobKeyToken(job)}`;
+}
+
+function getGenerationSubjectIndexKey(
+  scope: PartitionedGenerationQueueScope,
+  userKey: string
+): string {
+  const digest = createHash("sha256").update(userKey).digest("hex");
+  return `messenger-generation-jobs:{${scope.tenantPartition}}:subject:${digest}`;
+}
+
+function getGenerationSubjectDigest(input: {
+  workspaceId?: number;
+  channelConnectionId?: number;
+  userKey: string;
+}): string {
+  return createHash("sha256")
+    .update(
+      `${input.workspaceId ?? 0}\0${input.channelConnectionId ?? 0}\0${input.userKey}`
+    )
+    .digest("hex");
+}
+
+function getGenerationSubjectPartitionsKey(input: {
+  workspaceId?: number;
+  channelConnectionId?: number;
+  userKey: string;
+}): string {
+  return `${MESSENGER_GENERATION_SUBJECT_PARTITIONS_PREFIX}:${getGenerationSubjectDigest(input)}`;
+}
+
+function getGenerationSubjectErasedKey(input: {
+  workspaceId?: number;
+  channelConnectionId?: number;
+  userKey: string;
+}): string {
+  return `${MESSENGER_GENERATION_SUBJECT_ERASED_PREFIX}:${getGenerationSubjectDigest(input)}`;
+}
+
+function parseErasedPrivacyEpoch(value: string | null): number | null {
+  if (value === null || !/^\d+$/.test(value)) return null;
+  const epoch = Number(value);
+  return Number.isSafeInteger(epoch) && epoch > 0 ? epoch : null;
+}
+
+async function isGenerationJobSubjectErased(
+  redis: RedisLike,
+  job: MessengerGenerationJob
+): Promise<boolean> {
+  const erasedEpoch = parseErasedPrivacyEpoch(
+    await redis.get(
+      getGenerationSubjectErasedKey({
+        workspaceId: job.workspaceId,
+        channelConnectionId: job.channelConnectionId,
+        userKey: job.userId,
+      })
+    )
+  );
+  return erasedEpoch !== null && erasedEpoch >= (job.privacyEpoch ?? 0);
+}
+
+function getGenerationSubjectTombstoneKey(
+  scope: PartitionedGenerationQueueScope,
+  userKey: string
+): string {
+  return `messenger-generation-jobs:{${scope.tenantPartition}}:erased:${createHash("sha256").update(userKey).digest("hex")}`;
 }
 
 function getGenerationJobLeaseKey(
@@ -624,6 +949,37 @@ function getGenerationJobAcceptedSeconds(): number {
       ? Math.floor(configured)
       : DEFAULT_ACCEPTED_TTL_SECONDS;
   return Math.max(minimumSeconds, requestedSeconds);
+}
+
+function getGenerationJobContentSeconds(): number {
+  const maximumSeconds = 24 * 60 * 60;
+  const minimumSeconds =
+    getGenerationJobLeaseSeconds() * getGenerationJobMaxAttempts();
+  if (minimumSeconds > maximumSeconds) {
+    throw new Error(
+      "Messenger generation operation deadline exceeds the 24h content retention cap"
+    );
+  }
+  const configured = Number(
+    process.env.MESSENGER_GENERATION_CONTENT_TTL_SECONDS
+  );
+  const requested =
+    Number.isFinite(configured) && configured > 0
+      ? Math.floor(configured)
+      : maximumSeconds;
+  if (requested < minimumSeconds || requested > maximumSeconds) {
+    throw new Error(
+      "MESSENGER_GENERATION_CONTENT_TTL_SECONDS must cover the operation deadline and be at most 24h"
+    );
+  }
+  return requested;
+}
+
+function getGenerationJobRemainingContentSeconds(
+  job: MessengerGenerationJob
+): number {
+  if (!job.expiresAt) return getGenerationJobContentSeconds();
+  return Math.max(0, Math.ceil((job.expiresAt - Date.now()) / 1000));
 }
 
 function getGenerationTransitionReceiptSeconds(): number {
@@ -695,6 +1051,27 @@ export async function enqueueMessengerGenerationJob(
 ): Promise<boolean> {
   const partitioned = getPartitionedJob(job);
   const redis = await getRedisClient();
+  const subjectScope = {
+    workspaceId: partitioned.job.workspaceId,
+    channelConnectionId: partitioned.job.channelConnectionId,
+    userKey: partitioned.job.userId,
+  };
+  const subjectPartitionsKey = getGenerationSubjectPartitionsKey(subjectScope);
+  const subjectErasedKey = getGenerationSubjectErasedKey(subjectScope);
+  const subjectPartitionMember = `${partitioned.job.privacyEpoch ?? 0}:${partitioned.scope.tenantPartition}`;
+  // Add discovery metadata before checking the durable erasure epoch. This
+  // ordering guarantees that a concurrent erase either discovers this
+  // partition or is observed below by the producer.
+  await redis.sadd(subjectPartitionsKey, subjectPartitionMember);
+  const erasedEpoch = parseErasedPrivacyEpoch(
+    await redis.get(subjectErasedKey)
+  );
+  if (
+    erasedEpoch !== null &&
+    erasedEpoch >= (partitioned.job.privacyEpoch ?? 0)
+  ) {
+    throw new Error("Messenger generation subject epoch is erased");
+  }
   const acceptedKey = getGenerationJobAcceptedKey(
     partitioned.scope,
     partitioned.job
@@ -710,11 +1087,27 @@ export async function enqueueMessengerGenerationJob(
       accepted = await evalPartitionScriptWithRetry(
         redis,
         ATOMIC_PARTITION_ENQUEUE_SCRIPT,
-        [acceptedKey, partitioned.scope.queuedKey],
+        [
+          acceptedKey,
+          partitioned.scope.queuedKey,
+          getGenerationJobContentKey(partitioned.scope, partitioned.job),
+          getGenerationSubjectIndexKey(
+            partitioned.scope,
+            partitioned.job.userId
+          ),
+          getGenerationSubjectTombstoneKey(
+            partitioned.scope,
+            partitioned.job.userId
+          ),
+          partitioned.scope.processingKey,
+        ],
         [
           getGenerationJobAcceptedSeconds(),
-          JSON.stringify(partitioned.job),
+          getGenerationJobReference(partitioned.job),
           enqueueAttemptToken,
+          JSON.stringify(partitioned.job),
+          Math.max(1, getGenerationJobRemainingContentSeconds(partitioned.job)),
+          partitioned.job.expiresAt!,
         ]
       );
     } catch (error) {
@@ -757,12 +1150,185 @@ export async function enqueueMessengerGenerationJob(
     });
     return false;
   }
+  if (accepted === -4) {
+    throw new Error("Messenger generation subject epoch is erased");
+  }
+  if (accepted === -5) {
+    throw new Error("Messenger generation accepted marker is inconsistent");
+  }
   if (accepted !== 1) {
     throw new Error("Messenger generation enqueue returned an invalid result");
   }
 
+  const erasedAfterCommit = parseErasedPrivacyEpoch(
+    await redis.get(subjectErasedKey)
+  );
+  if (
+    erasedAfterCommit !== null &&
+    erasedAfterCommit >= (partitioned.job.privacyEpoch ?? 0)
+  ) {
+    await scrubGenerationPartitionSubject(
+      redis,
+      partitioned.scope,
+      partitioned.job.userId
+    );
+    throw new Error(
+      "Messenger generation subject epoch was erased during enqueue"
+    );
+  }
+
   logMessengerGenerationQueueTransition("enqueue");
   return true;
+}
+
+export async function eraseMessengerGenerationJobsForSubject(input: {
+  workspaceId: number;
+  channelConnectionId: number;
+  bindingEpoch: number;
+  privacyEpoch: number;
+  pageId: string;
+  userKey: string;
+}): Promise<number> {
+  if (!isMessengerGenerationQueueEnabled()) {
+    throw new Error(
+      "Messenger generation queue must be available for privacy erasure"
+    );
+  }
+  const secret = getMessengerGenerationPartitionSecret();
+  if (!secret)
+    throw new Error("Messenger generation partition secret is required");
+  const redis = await getRedisClient();
+  const subjectScope = {
+    workspaceId: input.workspaceId,
+    channelConnectionId: input.channelConnectionId,
+    userKey: input.userKey,
+  };
+  const erasedKey = getGenerationSubjectErasedKey(subjectScope);
+  const storedErasedEpoch = Number(
+    await redis.eval(
+      `
+        local current = tonumber(redis.call("GET", KEYS[1]) or "0")
+        local requested = tonumber(ARGV[1])
+        if current < requested then
+          redis.call("SET", KEYS[1], ARGV[1])
+          return requested
+        end
+        return current
+      `,
+      1,
+      erasedKey,
+      input.privacyEpoch
+    )
+  );
+  if (
+    !Number.isSafeInteger(storedErasedEpoch) ||
+    storedErasedEpoch < input.privacyEpoch
+  ) {
+    throw new Error("Messenger generation erasure epoch update failed");
+  }
+  const indexedPartitions = await redis.smembers(
+    getGenerationSubjectPartitionsKey(subjectScope)
+  );
+  const currentPartition = createMessengerGenerationOwnershipPartition(
+    input,
+    secret
+  );
+  const partitions = new Set<string>([currentPartition]);
+  for (const indexed of indexedPartitions) {
+    const separator = indexed.indexOf(":");
+    const epoch = Number(indexed.slice(0, separator));
+    const partition = indexed.slice(separator + 1);
+    if (
+      separator > 0 &&
+      Number.isSafeInteger(epoch) &&
+      epoch <= input.privacyEpoch &&
+      isMessengerGenerationTenantPartition(partition)
+    ) {
+      partitions.add(partition);
+    }
+  }
+  // Fence every historical partition before scrubbing any one of them. A
+  // claimed job may still run local validation, but cannot cross its provider
+  // privacy boundary once this phase completes.
+  for (const tenantPartition of partitions) {
+    const scope = getPartitionedGenerationQueueScope(tenantPartition);
+    await redis.set(
+      getGenerationSubjectTombstoneKey(scope, input.userKey),
+      "erased"
+    );
+  }
+  let total = 0;
+  for (const tenantPartition of partitions) {
+    const scope = getPartitionedGenerationQueueScope(tenantPartition);
+    total += await scrubGenerationPartitionSubject(redis, scope, input.userKey);
+  }
+  return total;
+}
+
+async function scrubGenerationPartitionSubject(
+  redis: RedisLike,
+  scope: PartitionedGenerationQueueScope,
+  userKey: string
+): Promise<number> {
+  const subjectKey = getGenerationSubjectIndexKey(scope, userKey);
+  let total = 0;
+  let cursor = "0";
+  let iterations = 0;
+  do {
+    iterations += 1;
+    if (iterations > 10_000) {
+      throw new Error("Messenger generation subject scrub did not converge");
+    }
+    const result = await redis.eval(
+      `
+          local subjectType = redis.call("TYPE", KEYS[4]).ok
+          if subjectType ~= "none" and subjectType ~= "set" then
+            redis.call("SET", KEYS[5], "corrupt")
+            return redis.error_reply("subject index is not a set")
+          end
+          redis.call("SET", KEYS[5], "erased")
+          local scan = redis.call("SSCAN", KEYS[4], ARGV[4], "COUNT", 100)
+          local ids = scan[2]
+          for i = 1, #ids do
+            local ref = ids[i]
+            if string.match(ref, "^job%-%x+$") == nil then
+              redis.call("SET", KEYS[5], "corrupt")
+              return redis.error_reply("subject index contains an invalid job reference")
+            end
+            local digest = string.gsub(ref, "^job%-", "")
+            redis.call("LREM", KEYS[1], 0, ref)
+            redis.call("LREM", KEYS[2], 0, ref)
+            redis.call("LREM", KEYS[3], 0, ref)
+            redis.call("DEL", ARGV[1] .. digest)
+            redis.call("DEL", ARGV[2] .. digest)
+            redis.call("DEL", ARGV[3] .. digest)
+            redis.call("SREM", KEYS[4], ref)
+          end
+          if redis.call("SCARD", KEYS[4]) == 0 then redis.call("DEL", KEYS[4]) end
+          return {scan[1], #ids, redis.call("SCARD", KEYS[4])}
+      `,
+      5,
+      scope.queuedKey,
+      scope.processingKey,
+      scope.deadLetterKey,
+      subjectKey,
+      getGenerationSubjectTombstoneKey(scope, userKey),
+      `messenger-generation-jobs:{${scope.tenantPartition}}:content:`,
+      `messenger-generation-jobs:{${scope.tenantPartition}}:lease:`,
+      `messenger-generation-jobs:{${scope.tenantPartition}}:accepted:`,
+      cursor
+    );
+    if (!Array.isArray(result) || result.length !== 3) {
+      throw new Error(
+        "Messenger generation subject scrub returned invalid progress"
+      );
+    }
+    cursor = String(result[0]);
+    total += Number(result[1]);
+    const remaining = Number(result[2]);
+    if (cursor === "0" && remaining > 0) cursor = "0";
+    else if (cursor === "0") return total;
+  } while (true);
 }
 
 export async function getMessengerGenerationQueueStats(): Promise<MessengerGenerationQueueStats> {
@@ -829,6 +1395,15 @@ async function reserveMessengerGenerationJobFrom(
   scope: GenerationQueueScope
 ): Promise<OwnedReservedGenerationJob | InvalidReservedGenerationJob | null> {
   if (scope.kind === "legacy") {
+    if (process.env.NODE_ENV === "production") {
+      const legacyDepths = await getGenerationQueueDepths(redis, scope);
+      if (!isGenerationQueueScopeEmpty(legacyDepths)) {
+        throw new Error(
+          "Legacy Messenger generation queue is blocked in production"
+        );
+      }
+      return null;
+    }
     let raw: string | null;
     try {
       raw = await redis.rpoplpush(scope.queuedKey, scope.processingKey);
@@ -862,7 +1437,16 @@ async function reserveMessengerGenerationJobFrom(
       return null;
     }
 
-    const reserved = parseReservedGenerationJobForScope(raw, scope);
+    const serialized =
+      raw.startsWith("{") && process.env.NODE_ENV === "test"
+        ? raw
+        : await redis.get(
+            `messenger-generation-jobs:{${scope.tenantPartition}}:content:${raw.replace(/^job-/, "")}`
+          );
+    const parsed = serialized
+      ? parseReservedGenerationJobForScope(serialized, scope)
+      : null;
+    const reserved = parsed ? { ...parsed, raw } : null;
     if (!reserved) {
       const moved = await evalPartitionScriptWithRetry(
         redis,
@@ -870,7 +1454,7 @@ async function reserveMessengerGenerationJobFrom(
         [scope.queuedKey, scope.deadLetterKey],
         [raw]
       );
-      if (moved === 1) {
+      if (moved === 1 || moved === 2) {
         return { raw, invalid: true, deadLettered: true };
       }
       if (moved === 0) {
@@ -881,6 +1465,11 @@ async function reserveMessengerGenerationJobFrom(
       );
     }
 
+    if (await isGenerationJobSubjectErased(redis, reserved.job)) {
+      await scrubGenerationPartitionSubject(redis, scope, reserved.job.userId);
+      return null;
+    }
+
     const leaseToken = randomUUID();
     const result = await evalPartitionScriptWithRetry(
       redis,
@@ -889,6 +1478,7 @@ async function reserveMessengerGenerationJobFrom(
         scope.queuedKey,
         scope.processingKey,
         getGenerationJobLeaseKey(scope, reserved.job),
+        getGenerationSubjectTombstoneKey(scope, reserved.job.userId),
       ],
       [raw, leaseToken, getGenerationJobLeaseSeconds()]
     );
@@ -902,6 +1492,10 @@ async function reserveMessengerGenerationJobFrom(
       continue;
     }
     if (result === -2) {
+      return null;
+    }
+    if (result === -4) {
+      await scrubGenerationPartitionSubject(redis, scope, reserved.job.userId);
       return null;
     }
     throw new Error("Messenger generation reserve returned an invalid result");
@@ -928,10 +1522,28 @@ function parseReservedGenerationJobForScope(
   if (!pageId || !partitionSecret) {
     return null;
   }
-  const expectedPartition = createMessengerGenerationTenantPartition(
-    pageId,
-    partitionSecret
-  );
+  const hasOwnership =
+    Number.isSafeInteger(reserved.job.workspaceId) &&
+    (reserved.job.workspaceId ?? 0) > 0 &&
+    Number.isSafeInteger(reserved.job.channelConnectionId) &&
+    (reserved.job.channelConnectionId ?? 0) > 0 &&
+    Number.isSafeInteger(reserved.job.bindingEpoch) &&
+    (reserved.job.bindingEpoch ?? 0) > 0 &&
+    Number.isSafeInteger(reserved.job.privacyEpoch) &&
+    (reserved.job.privacyEpoch ?? 0) > 0;
+  if (!hasOwnership && process.env.NODE_ENV === "production") return null;
+  const expectedPartition = hasOwnership
+    ? createMessengerGenerationOwnershipPartition(
+        {
+          workspaceId: reserved.job.workspaceId!,
+          channelConnectionId: reserved.job.channelConnectionId!,
+          bindingEpoch: reserved.job.bindingEpoch!,
+          privacyEpoch: reserved.job.privacyEpoch!,
+          pageId,
+        },
+        partitionSecret
+      )
+    : createMessengerGenerationTenantPartition(pageId, partitionSecret);
   return reserved.job.tenantPartition === scope.tenantPartition &&
     expectedPartition === scope.tenantPartition
     ? reserved
@@ -951,6 +1563,10 @@ async function completeMessengerGenerationJob(
   if (!reserved.leaseToken) {
     return false;
   }
+  if (await isGenerationJobSubjectErased(redis, reserved.job)) {
+    await scrubGenerationPartitionSubject(redis, scope, reserved.job.userId);
+    return false;
+  }
 
   const result = await evalPartitionScriptWithRetry(
     redis,
@@ -959,13 +1575,16 @@ async function completeMessengerGenerationJob(
       scope.processingKey,
       getGenerationJobLeaseKey(scope, reserved.job),
       getGenerationTransitionReceiptKey(scope, reserved.leaseToken),
+      getGenerationJobContentKey(scope, reserved.job),
+      getGenerationSubjectIndexKey(scope, reserved.job.userId),
+      getGenerationSubjectTombstoneKey(scope, reserved.job.userId),
     ],
     [reserved.raw, reserved.leaseToken, getGenerationTransitionReceiptSeconds()]
   );
   if (result === 1 || result === 2 || result === 3) {
     return true;
   }
-  if (result === 0 || result === -1) {
+  if (result === 0 || result === -1 || result === -4) {
     return false;
   }
   throw new Error("Messenger generation completion returned an invalid result");
@@ -984,7 +1603,11 @@ async function releaseMessengerGenerationJob(
     attempts: nextAttempt,
   };
 
-  const isDeadLetter = nextAttempt >= getGenerationJobMaxAttempts();
+  const remainingContentSeconds =
+    getGenerationJobRemainingContentSeconds(retryJob);
+  const isDeadLetter =
+    nextAttempt >= getGenerationJobMaxAttempts() ||
+    remainingContentSeconds === 0;
   if (scope.kind === "legacy") {
     if (ownership === "expired") {
       const lease = await redis.get(
@@ -1008,7 +1631,15 @@ async function releaseMessengerGenerationJob(
     if (ownership === "owned" && !reserved.leaseToken) {
       return "lost_ownership";
     }
+    if (await isGenerationJobSubjectErased(redis, reserved.job)) {
+      await scrubGenerationPartitionSubject(redis, scope, reserved.job.userId);
+      return "lost_ownership";
+    }
     const transitionName = isDeadLetter ? "dead_lettered" : "requeued";
+    const nextReference =
+      reserved.raw.startsWith("{") && process.env.NODE_ENV === "test"
+        ? JSON.stringify(retryJob)
+        : reserved.raw;
     const receiptToken =
       ownership === "owned" ? reserved.leaseToken! : randomUUID();
     const result = await evalPartitionScriptWithRetry(
@@ -1019,21 +1650,28 @@ async function releaseMessengerGenerationJob(
         getGenerationJobLeaseKey(scope, reserved.job),
         isDeadLetter ? scope.deadLetterKey : scope.queuedKey,
         getGenerationTransitionReceiptKey(scope, receiptToken),
+        getGenerationJobContentKey(scope, reserved.job),
+        getGenerationSubjectIndexKey(scope, reserved.job.userId),
+        getGenerationSubjectTombstoneKey(scope, reserved.job.userId),
       ],
       [
         reserved.raw,
-        JSON.stringify(retryJob),
+        nextReference,
         reserved.leaseToken ?? "",
         transitionName,
         isDeadLetter ? "dead" : "retry",
         ownership,
         getGenerationTransitionReceiptSeconds(),
+        JSON.stringify(retryJob),
+        Math.max(1, remainingContentSeconds),
+        Math.max(60, remainingContentSeconds),
+        retryJob.expiresAt!,
       ]
     );
     if (result === -2) {
       return "active";
     }
-    if (result === 0 || result === -1) {
+    if (result === 0 || result === -1 || result === -4) {
       return "lost_ownership";
     }
     if (result !== 1 && result !== 2 && result !== 3) {
@@ -1116,7 +1754,18 @@ export async function reclaimReservedMessengerGenerationJobs(
   for (const scope of scopes) {
     const reservedJobs = await redis.lrange(scope.processingKey, 0, -1);
     for (const raw of reservedJobs) {
-      const reserved = parseReservedGenerationJobForScope(raw, scope);
+      const serialized =
+        scope.kind === "partition"
+          ? raw.startsWith("{") && process.env.NODE_ENV === "test"
+            ? raw
+            : await redis.get(
+                `messenger-generation-jobs:{${scope.tenantPartition}}:content:${raw.replace(/^job-/, "")}`
+              )
+          : raw;
+      const parsed = serialized
+        ? parseReservedGenerationJobForScope(serialized, scope)
+        : null;
+      const reserved = parsed ? { ...parsed, raw } : null;
       if (!reserved) {
         const deadLettered = await deadLetterInvalidGenerationJob(
           redis,

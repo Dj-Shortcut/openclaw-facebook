@@ -8,6 +8,7 @@ export type InboundEventClassification = {
   eventPayload: string | undefined;
   isIntentionalSilentAck: boolean;
   isIntentionalSilentUnknownPayload: boolean;
+  isPrivacyOrConsentControl: boolean;
 };
 
 function isKnownMessengerPayload(payload: string | undefined): boolean {
@@ -35,11 +36,15 @@ export function classifyInboundEvent(
   const isIntentionalSilentUnknownPayload = Boolean(
     eventPayload && !isKnownMessengerPayload(eventPayload)
   );
+  const isPrivacyOrConsentControl = Boolean(
+    eventPayload && /^(?:GDPR_|CONSENT_)/.test(eventPayload)
+  );
 
   return {
     isInboundUserEvent,
     eventPayload,
     isIntentionalSilentAck,
     isIntentionalSilentUnknownPayload,
+    isPrivacyOrConsentControl,
   };
 }

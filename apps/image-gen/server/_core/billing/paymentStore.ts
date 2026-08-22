@@ -10,6 +10,7 @@ import {
   workspaceEntitlements,
   workspaceEntitlementUsage,
   workspaceEntitlementUsageReservations,
+  workspaceBillingProfiles,
 } from "../../../drizzle/schema";
 import { getDatabaseOrThrow } from "../../db";
 import {
@@ -24,6 +25,10 @@ import { assertMollieId, type MolliePayment } from "./mollieClient";
 import { createPaymentSnapshot } from "./paymentSnapshot";
 import { metadataIntentId } from "./providerMetadata";
 import { blocksSubscriptionStart } from "./checkoutStore";
+import {
+  assertBillingTenantLeaseOwnedInTransaction,
+  type BillingTenantLease,
+} from "./billingSchedulerStore";
 
 const GRACE_PERIOD_DAYS = 7;
 
@@ -32,6 +37,7 @@ type PaymentContext = {
   intent: typeof billingIntents.$inferSelect;
   customer: typeof billingCustomers.$inferSelect;
   subscription: typeof billingSubscriptions.$inferSelect | null;
+  billingProfile: typeof workspaceBillingProfiles.$inferSelect | null;
 };
 
 type RecurringPlanSnapshot = {
@@ -74,10 +80,19 @@ export type PaymentProcessingResult =
 
 export async function applyMolliePaymentSnapshot(
   payment: MolliePayment,
-  expectedWorkspaceId: number
+  expectedWorkspaceId: number,
+  options: Readonly<{ schedulerLease?: BillingTenantLease }> = {}
 ): Promise<PaymentProcessingResult> {
   if (!Number.isSafeInteger(expectedWorkspaceId) || expectedWorkspaceId <= 0) {
     throw new Error("invalid billing payment workspace");
+  }
+  if (
+    options.schedulerLease &&
+    (options.schedulerLease.workspaceId !== expectedWorkspaceId ||
+      options.schedulerLease.mode !== payment.mode ||
+      options.schedulerLease.kind !== "reconciliation")
+  ) {
+    throw new Error("billing reconciliation lease scope mismatch");
   }
   const database = await getDatabaseOrThrow();
   const observed = createPaymentSnapshot(payment);
@@ -87,7 +102,8 @@ export async function applyMolliePaymentSnapshot(
       const context = await resolvePaymentContext(
         tx,
         payment,
-        expectedWorkspaceId
+        expectedWorkspaceId,
+        options.schedulerLease
       );
       if (!context) {
         return { result: "unknown" as const };
@@ -127,7 +143,7 @@ export async function applyMolliePaymentSnapshot(
         };
       }
 
-      const paidEffectAlreadyApplied = await upsertLedger(tx, {
+      const ledgerResult = await upsertLedger(tx, {
         payment,
         workspaceId: context.workspaceId,
         snapshotHash: observed.snapshotHash,
@@ -135,6 +151,49 @@ export async function applyMolliePaymentSnapshot(
         chargebacks: observed.chargebacks,
         occurredAt,
       });
+      if (!ledgerResult.shouldApplyDomainEffects) {
+        await finishDelivery(
+          tx,
+          context.workspaceId,
+          payment.mode,
+          payment.id,
+          observed.snapshotHash,
+          "stale_snapshot_ignored"
+        );
+        return {
+          result: "processed" as const,
+          workspaceId: context.workspaceId,
+        };
+      }
+      const paidEffectAlreadyApplied = ledgerResult.paidEffectAlreadyApplied;
+
+      // Revocation/expiry containment is monotone. Provider snapshots remain
+      // financially recorded, but can never reopen the intent or grant paid
+      // effects after the server-owned eligibility boundary was closed.
+      if (context.intent.status === "contained") {
+        await enqueueOutbox(tx, {
+          workspaceId: context.workspaceId,
+          mode: context.intent.mode,
+          eventType: "manual_review",
+          deduplicationKey: `contained_payment_snapshot:${payment.id}:${observed.snapshotHash}`,
+          payload: {
+            reason: "billing_profile_ineligible_at_payment",
+            paymentId: payment.id,
+          },
+        });
+        await finishDelivery(
+          tx,
+          context.workspaceId,
+          payment.mode,
+          payment.id,
+          observed.snapshotHash,
+          "billing_profile_manual_review"
+        );
+        return {
+          result: "mismatch" as const,
+          workspaceId: context.workspaceId,
+        };
+      }
 
       const supersededReplacement = isSupersededPaymentMethodChangeIntent(
         context.intent
@@ -194,6 +253,44 @@ export async function applyMolliePaymentSnapshot(
           payment.id,
           observed.snapshotHash,
           "mismatch"
+        );
+        return {
+          result: "mismatch" as const,
+          workspaceId: context.workspaceId,
+        };
+      }
+
+      if (
+        payment.status === "paid" &&
+        !isBillingProfileSnapshotEligible(context, new Date())
+      ) {
+        await tx
+          .update(billingIntents)
+          .set({ status: "contained" })
+          .where(
+            and(
+              eq(billingIntents.intentId, context.intent.intentId),
+              eq(billingIntents.workspaceId, context.workspaceId),
+              eq(billingIntents.mode, context.intent.mode)
+            )
+          );
+        await enqueueOutbox(tx, {
+          workspaceId: context.workspaceId,
+          mode: context.intent.mode,
+          eventType: "manual_review",
+          deduplicationKey: `billing_profile_late_paid:${payment.id}`,
+          payload: {
+            reason: "billing_profile_ineligible_at_payment",
+            paymentId: payment.id,
+          },
+        });
+        await finishDelivery(
+          tx,
+          context.workspaceId,
+          payment.mode,
+          payment.id,
+          observed.snapshotHash,
+          "billing_profile_manual_review"
         );
         return {
           result: "mismatch" as const,
@@ -525,12 +622,19 @@ async function resolvePaymentContext(
     Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
   >[0],
   payment: MolliePayment,
-  expectedWorkspaceId: number
+  expectedWorkspaceId: number,
+  schedulerLease?: BillingTenantLease
 ): Promise<PaymentContext | null> {
   const paymentIntentId = metadataIntentId(payment.metadata);
   if (!paymentIntentId) {
     return null;
   }
+  const profiles = await tx
+    .select()
+    .from(workspaceBillingProfiles)
+    .where(eq(workspaceBillingProfiles.workspaceId, expectedWorkspaceId))
+    .limit(1)
+    .for("update");
   const intents = await tx
     .select()
     .from(billingIntents)
@@ -546,6 +650,9 @@ async function resolvePaymentContext(
   const intent = intents[0];
   if (!intent) {
     return null;
+  }
+  if (schedulerLease) {
+    await assertBillingTenantLeaseOwnedInTransaction(tx, schedulerLease);
   }
   const customers = await tx
     .select()
@@ -579,7 +686,13 @@ async function resolvePaymentContext(
       return null;
     }
   }
-  return { workspaceId: intent.workspaceId, intent, customer, subscription };
+  return {
+    workspaceId: intent.workspaceId,
+    intent,
+    customer,
+    subscription,
+    billingProfile: profiles[0] ?? null,
+  };
 }
 
 async function findPaymentContextOutsideTransaction(
@@ -601,6 +714,28 @@ async function findPaymentContextOutsideTransaction(
     )
     .limit(1);
   return intents[0] ?? null;
+}
+
+function isBillingProfileSnapshotEligible(
+  context: PaymentContext,
+  now: Date
+): boolean {
+  if (!context.intent.billingProfileVersion) return false;
+  const profile = context.billingProfile;
+  return Boolean(
+    profile &&
+    profile.workspaceId === context.workspaceId &&
+    profile.eligibilityVersion === context.intent.billingProfileVersion &&
+    profile.verificationStatus === "verified" &&
+    profile.countryCode === "BE" &&
+    profile.customerType === "consumer" &&
+    !profile.peppolReady &&
+    profile.verifiedAt &&
+    profile.verifiedAt <= now &&
+    profile.verificationExpiresAt &&
+    profile.verificationExpiresAt > now &&
+    !profile.revokedAt
+  );
 }
 
 async function applyStartpilotPaymentStatus(
@@ -1264,6 +1399,30 @@ async function upsertLedger(
     occurredAt: Date;
   }
 ) {
+  const existingRows = await tx
+    .select({
+      id: paymentLedger.id,
+      status: paymentLedger.status,
+      occurredAt: paymentLedger.occurredAt,
+      paidEffectApplied: paymentLedger.paidEffectApplied,
+    })
+    .from(paymentLedger)
+    .where(
+      and(
+        eq(paymentLedger.workspaceId, input.workspaceId),
+        eq(paymentLedger.mode, input.payment.mode),
+        eq(paymentLedger.molliePaymentId, input.payment.id)
+      )
+    )
+    .limit(1)
+    .for("update");
+  const existing = existingRows[0];
+  if (existing && !shouldApplyLedgerSnapshot(existing, input)) {
+    return {
+      paidEffectAlreadyApplied: existing.paidEffectApplied === 1,
+      shouldApplyDomainEffects: false,
+    };
+  }
   const settlementAmount = input.payment.settlementAmount?.value ?? null;
   await tx
     .insert(paymentLedger)
@@ -1323,7 +1482,26 @@ async function upsertLedger(
       ledger.occurredAt
     );
   }
-  return ledger?.paidEffectApplied === 1;
+  return {
+    paidEffectAlreadyApplied: ledger?.paidEffectApplied === 1,
+    shouldApplyDomainEffects: true,
+  };
+}
+
+function shouldApplyLedgerSnapshot(
+  existing: { status: string; occurredAt: Date },
+  input: { payment: MolliePayment; occurredAt: Date }
+): boolean {
+  if (input.occurredAt.getTime() < existing.occurredAt.getTime()) {
+    return false;
+  }
+  // A provider Payment cannot legitimately leave `paid`. Preserve financial
+  // and entitlement truth even if an older or contradictory terminal snapshot
+  // is delivered later with a malformed/newer timestamp.
+  if (existing.status === "paid" && input.payment.status !== "paid") {
+    return false;
+  }
+  return true;
 }
 
 async function allocateInvoiceNumber(
@@ -1580,7 +1758,7 @@ function metadataMatchesIntent(metadata: unknown, intentId: string): boolean {
 function cancellationTargetPayload(context: PaymentContext, reason: string) {
   return {
     reason,
-    sourceIntentId: context.intent.intentId,
+    expectedSourceIntentId: context.intent.intentId,
     targetCustomerId: context.customer.mollieCustomerId,
     targetSubscriptionId: context.subscription?.mollieSubscriptionId ?? null,
   };

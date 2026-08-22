@@ -192,6 +192,13 @@ export class MollieClient {
     );
   }
 
+  async cancelPayment(paymentId: string): Promise<void> {
+    assertMollieId(paymentId, "tr_");
+    await this.request<null>(`/payments/${encodeURIComponent(paymentId)}`, {
+      method: "DELETE",
+    });
+  }
+
   async listCustomerPayments(customerId: string): Promise<MolliePayment[]> {
     assertMollieId(customerId, "cst_");
     return this.requestAllPages<MolliePayment>(

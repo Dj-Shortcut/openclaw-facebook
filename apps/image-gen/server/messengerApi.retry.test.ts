@@ -1,10 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { getConnectedFacebookPageConnectionMock } = vi.hoisted(() => ({
+  getConnectedFacebookPageConnectionMock: vi.fn(),
+}));
+
+vi.mock("./db", () => ({
+  getConnectedFacebookPageConnection: getConnectedFacebookPageConnectionMock,
+}));
+
 import {
   sendButtonTemplate,
   sendImage,
   sendText,
   sendVideo,
 } from "./_core/messengerApi";
+import { sealFacebookPageToken } from "./_core/facebookConnectStore";
 import {
   getOrCreateState,
   resetStateStore,
@@ -12,6 +22,7 @@ import {
   setMessengerPageId,
 } from "./_core/messengerState";
 import { runWithMessengerRequestContext } from "./_core/messengerRequestContext";
+import { toUserKey } from "./_core/privacy";
 
 describe("messengerApi retries", () => {
   const originalFetch = global.fetch;
@@ -19,12 +30,15 @@ describe("messengerApi retries", () => {
   const originalMaxRetries = process.env.GRAPH_API_MAX_RETRIES;
   const originalRetryBase = process.env.GRAPH_API_RETRY_BASE_MS;
   const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
+  const originalJwtSecret = process.env.JWT_SECRET;
 
   beforeEach(() => {
     process.env.FB_PAGE_ACCESS_TOKEN = "test-token";
     process.env.GRAPH_API_MAX_RETRIES = "2";
     process.env.GRAPH_API_RETRY_BASE_MS = "1";
     process.env.PRIVACY_PEPPER = "ci-test-pepper";
+    process.env.JWT_SECRET = "messenger-api-tenant-token-test-secret";
+    getConnectedFacebookPageConnectionMock.mockReset();
     resetStateStore();
     setLastUserMessageAt("psid-1", Date.now());
   });
@@ -54,6 +68,12 @@ describe("messengerApi retries", () => {
       delete process.env.PRIVACY_PEPPER;
     } else {
       process.env.PRIVACY_PEPPER = originalPrivacyPepper;
+    }
+
+    if (originalJwtSecret === undefined) {
+      delete process.env.JWT_SECRET;
+    } else {
+      process.env.JWT_SECRET = originalJwtSecret;
     }
   });
 
@@ -96,14 +116,155 @@ describe("messengerApi retries", () => {
       await setMessengerPageId(psid, "page-a", now);
       await setLastUserMessageAt(psid, now);
     });
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response("ok"));
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response("ok"));
     global.fetch = fetchMock;
+    getConnectedFacebookPageConnectionMock.mockResolvedValue({
+      workspaceId: 7,
+      encryptedAccessToken: sealFacebookPageToken("tenant-page-token"),
+    });
 
-    await expect(sendText(psid, "hello", { pageId: "page-a" })).resolves.toEqual({ sent: true });
-    await expect(sendText(psid, "hello", { pageId: "page-b" })).resolves.toEqual({
-      sent: false, reason: "response_window_closed",
+    await expect(
+      sendText(psid, "hello", { pageId: "page-a" })
+    ).resolves.toEqual({ sent: true });
+    await expect(
+      sendText(psid, "hello", { pageId: "page-b" })
+    ).resolves.toEqual({
+      sent: false,
+      reason: "response_window_closed",
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("selects the exact tenant Page credential at the transport boundary", async () => {
+    const psid = "tenant-token-psid";
+    const now = Date.now();
+    await runWithMessengerRequestContext("page-tenant", async () => {
+      await getOrCreateState(psid);
+      await setMessengerPageId(psid, "page-tenant", now);
+      await setLastUserMessageAt(psid, now);
+    });
+    getConnectedFacebookPageConnectionMock.mockResolvedValue({
+      id: 19,
+      workspaceId: 71,
+      bindingEpoch: 4,
+      encryptedAccessToken: sealFacebookPageToken("exact-tenant-token"),
+    });
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response("ok"));
+    global.fetch = fetchMock;
+
+    await expect(
+      sendText(psid, "handoff", {
+        pageId: "page-tenant",
+        workspaceId: 71,
+        channelConnectionId: 19,
+        bindingEpoch: 4,
+      })
+    ).resolves.toEqual({ sent: true });
+
+    const [url, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).not.toContain("exact-tenant-token");
+    expect(url).not.toContain("access_token");
+    expect(request.headers).toMatchObject({
+      Authorization: "Bearer exact-tenant-token",
+    });
+    expect(getConnectedFacebookPageConnectionMock).toHaveBeenCalledWith(
+      "page-tenant",
+      { workspaceId: 71, channelConnectionId: 19, bindingEpoch: 4 }
+    );
+  });
+
+  it("fails closed before transport on a workspace/Page credential mismatch", async () => {
+    const psid = "tenant-mismatch-psid";
+    const now = Date.now();
+    await runWithMessengerRequestContext("page-tenant", async () => {
+      await getOrCreateState(psid);
+      await setMessengerPageId(psid, "page-tenant", now);
+      await setLastUserMessageAt(psid, now);
+    });
+    getConnectedFacebookPageConnectionMock.mockResolvedValue(null);
+    const fetchMock = vi.fn<typeof fetch>();
+    global.fetch = fetchMock;
+
+    await expect(
+      sendText(psid, "handoff", {
+        pageId: "page-tenant",
+        workspaceId: 71,
+        channelConnectionId: 19,
+        bindingEpoch: 4,
+      })
+    ).rejects.toThrow("credential binding is unavailable");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a recipient that does not hash to the fenced privacy subject", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    global.fetch = fetchMock;
+
+    await expect(
+      sendText("recipient-b", "must not send", {
+        pageId: "page-tenant",
+        workspaceId: 71,
+        channelConnectionId: 19,
+        bindingEpoch: 4,
+        userKey: toUserKey("recipient-a"),
+        privacyEpoch: 2,
+      })
+    ).rejects.toThrow("recipient does not match privacy subject");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(getConnectedFacebookPageConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it("selects separate tenant Bearer tokens for parallel normal replies", async () => {
+    const now = Date.now();
+    for (const [psid, pageId] of [
+      ["user-a", "page-a"],
+      ["user-b", "page-b"],
+    ] as const) {
+      await runWithMessengerRequestContext(pageId, async () => {
+        await getOrCreateState(psid);
+        await setMessengerPageId(psid, pageId, now);
+        await setLastUserMessageAt(psid, now);
+      });
+    }
+    getConnectedFacebookPageConnectionMock.mockImplementation(async pageId => ({
+      workspaceId: pageId === "page-a" ? 1 : 2,
+      encryptedAccessToken: sealFacebookPageToken(`token-${pageId}`),
+    }));
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response("ok"));
+    global.fetch = fetchMock;
+
+    await Promise.all([
+      runWithMessengerRequestContext("page-a", () => sendText("user-a", "a")),
+      runWithMessengerRequestContext("page-b", () => sendText("user-b", "b")),
+    ]);
+
+    const auth = fetchMock.mock.calls.map(
+      ([, request]) =>
+        (request?.headers as Record<string, string>).Authorization
+    );
+    expect(auth).toEqual(
+      expect.arrayContaining(["Bearer token-page-a", "Bearer token-page-b"])
+    );
+    expect(
+      fetchMock.mock.calls.map(([url]) => String(url)).join(" ")
+    ).not.toContain("token-page");
+  });
+
+  it("rejects an explicit background Page that conflicts with verified request context", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    global.fetch = fetchMock;
+    await expect(
+      runWithMessengerRequestContext("page-a", () =>
+        sendText("psid-1", "hello", { pageId: "page-b" })
+      )
+    ).rejects.toThrow("does not match");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("throws after max retries", async () => {

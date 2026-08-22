@@ -16,7 +16,7 @@ import {
 } from "./image-generation/imageServiceConfig";
 import { estimateOpenAiImageRequestCost } from "./image-generation/imageCostEstimate";
 import {
-  safelyAppendCostLedgerEntry,
+  appendCostLedgerEntry,
   safelyUpdateCostLedgerEntry,
 } from "./costLedger";
 import { publishGeneratedImage } from "./image-generation/generatedImagePublisher";
@@ -27,9 +27,7 @@ import {
 } from "./image-generation/imageServiceErrors";
 import {
   assertMessengerDailyImageBudgetAvailable,
-  assertMessengerDailySpendBudgetAvailable,
-  assertMessengerMonthlySpendBudgetAvailable,
-  assertMessengerUserDailySpendBudgetAvailable,
+  admitMessengerProviderSpend,
   getMessengerDailyImageBudgetConfig,
   getMessengerGenerationGlobalLimitConfig,
   releaseMessengerDailyImageBudgetReservation,
@@ -248,85 +246,73 @@ export class OpenAiImageGenerator implements ImageGenerator {
         partialMetrics,
         onProviderAttempt: async () => {
           const budgetNow = new Date();
+          providerAttemptCount += 1;
+          const costLedgerEntryId = `${input.reqId}:openai-image:${providerAttemptCount}`;
           await assertMessengerDailyImageBudgetAvailable({
             reqId: input.reqId,
             now: budgetNow,
           });
           try {
-            await assertMessengerDailySpendBudgetAvailable({
+            await admitMessengerProviderSpend({
               reqId: input.reqId,
-              estimatedCostUsd: costEstimate.estimatedCostUsd ?? null,
-              estimatedOutputCostUsd:
-                costEstimate.estimatedOutputCostUsd ?? null,
-              costEstimateComplete: costEstimate.costEstimateComplete,
-              now: budgetNow,
-            });
-            await assertMessengerMonthlySpendBudgetAvailable({
-              reqId: input.reqId,
-              estimatedCostUsd: costEstimate.estimatedCostUsd ?? null,
-              estimatedOutputCostUsd:
-                costEstimate.estimatedOutputCostUsd ?? null,
-              costEstimateComplete: costEstimate.costEstimateComplete,
-              now: budgetNow,
-            });
-            await assertMessengerUserDailySpendBudgetAvailable({
-              reqId: input.reqId,
+              attemptId: costLedgerEntryId,
               userKey: input.userKey,
               estimatedCostUsd: costEstimate.estimatedCostUsd ?? null,
               estimatedOutputCostUsd:
                 costEstimate.estimatedOutputCostUsd ?? null,
               costEstimateComplete: costEstimate.costEstimateComplete,
               now: budgetNow,
+              recordAttempt: async () => {
+                await input.onProviderAttempt?.();
+                if (lastCostLedgerEntryId && lastCostLedgerEntryRecordedAt) {
+                  await safelyUpdateCostLedgerEntry(
+                    lastCostLedgerEntryId,
+                    {
+                      status: "provider_attempt_failed",
+                      finalCostUsd: null,
+                    },
+                    lastCostLedgerEntryRecordedAt
+                  );
+                }
+                await appendCostLedgerEntry(
+                  {
+                    id: costLedgerEntryId,
+                    channel: "image_gen",
+                    operation: "image_generation",
+                    provider,
+                    model: costEstimate.model,
+                    providerUsage: {
+                      pricingModel: costEstimate.pricingModel,
+                      generationKind: input.generationKind ?? null,
+                      hasSourceImage: preparedInput.hasSourceImage,
+                      size: costEstimate.size,
+                      quality: costEstimate.quality,
+                      inputFidelity: costEstimate.inputFidelity ?? null,
+                    },
+                    userKey: input.userKey,
+                    reqId: input.reqId,
+                    status: "provider_attempt_started",
+                    estimatedCostUsd: costEstimate.estimatedCostUsd ?? null,
+                    estimatedOutputCostUsd:
+                      costEstimate.estimatedOutputCostUsd ?? null,
+                    finalCostUsd: null,
+                    costEstimateComplete: costEstimate.costEstimateComplete,
+                    estimateSource: costEstimate.estimateSource,
+                    unpricedCostComponents:
+                      costEstimate.unpricedCostComponents ?? [],
+                  },
+                  budgetNow
+                );
+                lastCostLedgerEntryId = costLedgerEntryId;
+                lastCostLedgerEntryRecordedAt = budgetNow;
+              },
             });
-            await input.onProviderAttempt?.();
           } catch (error) {
             await releaseMessengerDailyImageBudgetReservation({
               now: budgetNow,
             });
             throw error;
           }
-          providerAttemptCount += 1;
-          if (lastCostLedgerEntryId && lastCostLedgerEntryRecordedAt) {
-            await safelyUpdateCostLedgerEntry(
-              lastCostLedgerEntryId,
-              {
-                status: "provider_attempt_failed",
-                finalCostUsd: null,
-              },
-              lastCostLedgerEntryRecordedAt
-            );
-          }
-          const costLedgerEntryId = `${input.reqId}:openai-image:${providerAttemptCount}`;
-          await safelyAppendCostLedgerEntry(
-            {
-              id: costLedgerEntryId,
-              channel: "image_gen",
-              operation: "image_generation",
-              provider,
-              model: costEstimate.model,
-              providerUsage: {
-                pricingModel: costEstimate.pricingModel,
-                generationKind: input.generationKind ?? null,
-                hasSourceImage: preparedInput.hasSourceImage,
-                size: costEstimate.size,
-                quality: costEstimate.quality,
-                inputFidelity: costEstimate.inputFidelity ?? null,
-              },
-              userKey: input.userKey,
-              reqId: input.reqId,
-              status: "provider_attempt_started",
-              estimatedCostUsd: costEstimate.estimatedCostUsd ?? null,
-              estimatedOutputCostUsd:
-                costEstimate.estimatedOutputCostUsd ?? null,
-              finalCostUsd: null,
-              costEstimateComplete: costEstimate.costEstimateComplete,
-              estimateSource: costEstimate.estimateSource,
-              unpricedCostComponents: costEstimate.unpricedCostComponents ?? [],
-            },
-            budgetNow
-          );
-          lastCostLedgerEntryId = costLedgerEntryId;
-          lastCostLedgerEntryRecordedAt = budgetNow;
         },
       });
       safeLog("image_generation_cost_estimate", {

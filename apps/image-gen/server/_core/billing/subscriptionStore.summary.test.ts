@@ -40,6 +40,7 @@ describe("workspace billing summary visibility", () => {
     mocks.getDatabaseOrThrow.mockResolvedValue(database);
 
     await expect(getWorkspaceBillingSummary(42, "test")).resolves.toEqual({
+      mode: "test",
       subscription: null,
       entitlement: null,
       payments: [],

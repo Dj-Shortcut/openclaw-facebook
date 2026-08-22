@@ -16,6 +16,8 @@ import {
 import { handleMessageEvent } from "./webhookMessageRouter";
 import type { HandlerContext } from "./webhookHandlerTypes";
 import { runWithMessengerRequestContext } from "./messengerRequestContext";
+import { recordInboundUserActivity } from "./messengerInboundActivity";
+import { resolveMessengerGenerationOwnership } from "./workspaceEntitlementRuntime";
 
 /** Routes every Messenger event in a Facebook webhook entry. */
 export async function handleEntry(
@@ -31,9 +33,18 @@ export async function handleEntry(
   }
 
   const events = Array.isArray(entry?.messaging) ? entry.messaging : [];
+  const ownership = await resolveMessengerGenerationOwnership(pageId);
+  if (!ownership && process.env.NODE_ENV === "production") {
+    logMessengerWebhookTrace("webhook_entry_skipped", {
+      reason: "page_ownership_unavailable",
+    });
+    return;
+  }
   for (const event of events) {
-    await runWithMessengerRequestContext(pageId, () =>
-      handleEvent(ctx, event, pageId)
+    await runWithMessengerRequestContext(
+      pageId,
+      () => handleEvent(ctx, event, pageId),
+      ownership ?? undefined
     );
   }
 }
@@ -113,6 +124,10 @@ export async function routeTrackedEvent(
 ): Promise<void> {
   const { psid, userId, reqId, lang, trackedCtx } = context;
   if (await routeConsentGate(context, event)) return;
+  await recordInboundUserActivity(psid, event, context.classification, {
+    entryId: context.entryId,
+    allowPaidRecovery: true,
+  });
 
   if (
     await handlePostbackEvent(trackedCtx, {

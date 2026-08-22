@@ -4,6 +4,8 @@ import { createHash } from "node:crypto";
 const {
   safeLogMock,
   storagePutMock,
+  storageDeleteMock,
+  assertPrivacySubjectMock,
   generateSpeechAudioMock,
   muxMp4WithMp3Mock,
   resolvePremiumMediaAccessMock,
@@ -13,6 +15,8 @@ const {
     key: "generated/videos/test.mp4",
     url: "https://cdn.example/generated/videos/test.mp4",
   })),
+  storageDeleteMock: vi.fn(async () => undefined),
+  assertPrivacySubjectMock: vi.fn(async () => undefined),
   generateSpeechAudioMock: vi.fn(async () => new Uint8Array([4, 5, 6])),
   muxMp4WithMp3Mock: vi.fn(async (video: Uint8Array) => video),
   resolvePremiumMediaAccessMock: vi.fn(async () => null),
@@ -23,6 +27,16 @@ vi.mock("./storage", async importOriginal => {
   return {
     ...actual,
     storagePut: storagePutMock,
+    storageDelete: storageDeleteMock,
+  };
+});
+
+vi.mock("./_core/messengerPrivacySubject", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("./_core/messengerPrivacySubject")>();
+  return {
+    ...actual,
+    assertMessengerPrivacySubject: assertPrivacySubjectMock,
   };
 });
 
@@ -64,6 +78,12 @@ import {
   reserveVideoGenerationForAttempt,
 } from "./_core/messengerQuota";
 import { createMessengerVideoGenerationRunner } from "./_core/videoGenerationFlow";
+import {
+  runWithMessengerRequestContext,
+  setMessengerRequestPrivacySubject,
+} from "./_core/messengerRequestContext";
+import { toUserKey } from "./_core/privacy";
+import { MessengerPrivacyFenceError } from "./_core/messengerPrivacySubject";
 import { setVideoProviderForTests } from "./_core/video-generation/videoProviderRegistry";
 import { OpenAiVideoProvider } from "./_core/video-generation/openAiVideoProvider";
 import type { VideoProvider } from "./_core/video-generation/videoProvider";
@@ -121,6 +141,9 @@ describe("messenger video generation flow", () => {
     process.env.MESSENGER_PSID_LOCK_TTL_MS = "1000";
     resetStateStore();
     storagePutMock.mockClear();
+    storageDeleteMock.mockClear();
+    assertPrivacySubjectMock.mockReset();
+    assertPrivacySubjectMock.mockResolvedValue(undefined);
     safeLogMock.mockClear();
     generateSpeechAudioMock.mockReset();
     generateSpeechAudioMock.mockResolvedValue(new Uint8Array([4, 5, 6]));
@@ -189,6 +212,51 @@ describe("messenger video generation flow", () => {
     expect(state.lastGeneratedVideoUrl).toBe(
       "https://cdn.example/generated/videos/test.mp4"
     );
+  });
+
+  it("cleans the stored video when privacy changes during Graph delivery", async () => {
+    const psid = "video-delete-during-send";
+    const userKey = toUserKey(psid);
+    let graphReturned = false;
+    setVideoProviderForTests(
+      makeProvider({
+        kind: "success",
+        provider: "test",
+        providerJobId: "video-job-delete-race",
+        videoBytes: new Uint8Array([1, 2, 3]),
+        contentType: "video/mp4",
+      })
+    );
+    const deps = makeDeps();
+    deps.sendLoggedVideo.mockImplementationOnce(async () => {
+      graphReturned = true;
+      return { sent: true as const, messageId: "mid-delete-race" };
+    });
+    assertPrivacySubjectMock.mockImplementation(async () => {
+      if (graphReturned) throw new MessengerPrivacyFenceError();
+    });
+
+    const outcome = await runWithMessengerRequestContext(
+      "page-delete-race",
+      async () => {
+        setMessengerRequestPrivacySubject({ userKey, privacyEpoch: 5 });
+        const result = await createMessengerVideoGenerationRunner(deps)(
+          psid,
+          userKey,
+          "req-video-delete-race",
+          "nl",
+          "https://img.example/source.jpg",
+          "laat hem zwaaien"
+        );
+        const state = await Promise.resolve(getOrCreateState(psid));
+        expect(state.lastGeneratedVideoUrl).toBeNull();
+        return result;
+      },
+      { workspaceId: 42, channelConnectionId: 7, bindingEpoch: 3 }
+    );
+
+    expect(outcome).toEqual({ sent: false, reason: "response_window_closed" });
+    expect(storageDeleteMock).toHaveBeenCalledWith("generated/videos/test.mp4");
   });
 
   it("uses the active Premium plan's server-side daily video limit", async () => {

@@ -17,6 +17,7 @@ import {
 import { safeLog } from "./logger";
 import { notifyOwner } from "./notification";
 import { toLogUser } from "./privacy";
+import { getRedisClient } from "./redis";
 
 const DEFAULT_GLOBAL_CONCURRENCY = 3;
 const DEFAULT_GLOBAL_LOCK_MS = 240000;
@@ -28,6 +29,47 @@ const DAILY_BUDGET_KEY_PREFIX = "messenger:daily-image-budget";
 const DAILY_VIDEO_BUDGET_KEY_PREFIX = "messenger:daily-video-budget";
 const DAILY_AUDIO_TRANSCRIPTION_BUDGET_KEY_PREFIX =
   "messenger:daily-audio-transcription-budget";
+const SPEND_COUNTER_SCALE = 1_000_000;
+
+const RESERVE_SPEND_SCRIPT = `
+  if redis.call("EXISTS", KEYS[1]) == 1 then
+    return 2
+  end
+
+  local amount = tonumber(ARGV[1])
+  local dailyCap = tonumber(ARGV[2])
+  local monthlyCap = tonumber(ARGV[3])
+  local userCap = tonumber(ARGV[4])
+  local dailyBaseline = tonumber(ARGV[5])
+  local monthlyBaseline = tonumber(ARGV[6])
+  local userBaseline = tonumber(ARGV[7])
+  local ttl = tonumber(ARGV[8])
+
+  local daily = math.max(tonumber(redis.call("GET", KEYS[2]) or "0"), dailyBaseline)
+  local monthly = math.max(tonumber(redis.call("GET", KEYS[3]) or "0"), monthlyBaseline)
+  local user = math.max(tonumber(redis.call("GET", KEYS[4]) or "0"), userBaseline)
+
+  if dailyCap > 0 and daily + amount > dailyCap then return -1 end
+  if monthlyCap > 0 and monthly + amount > monthlyCap then return -2 end
+  if userCap > 0 and user + amount > userCap then return -3 end
+
+  redis.call("SET", KEYS[1], amount, "EX", ttl, "NX")
+  redis.call("SET", KEYS[2], daily + amount, "EX", ttl)
+  redis.call("SET", KEYS[3], monthly + amount, "EX", ttl)
+  redis.call("SET", KEYS[4], user + amount, "EX", ttl)
+  return 1
+`;
+
+const RELEASE_SPEND_SCRIPT = `
+  local amount = tonumber(redis.call("GET", KEYS[1]) or "0")
+  if amount <= 0 then return 0 end
+  redis.call("DEL", KEYS[1])
+  for index = 2, 4 do
+    local current = tonumber(redis.call("GET", KEYS[index]) or "0")
+    redis.call("SET", KEYS[index], math.max(0, current - amount), "EX", ARGV[1])
+  end
+  return 1
+`;
 
 function hashRequestId(reqId: string): string {
   const digest = createHash("sha256").update(reqId).digest("hex").slice(0, 24);
@@ -193,6 +235,7 @@ const globalLimiter = new ConcurrencyLimiter(
     readNonNegativeInt("MESSENGER_MAX_IMAGE_JOBS", DEFAULT_GLOBAL_CONCURRENCY)
   )
 );
+const inMemorySpendAdmissionLimiter = new ConcurrencyLimiter(1);
 
 type MessengerGenerationGlobalLimitStats = {
   redisBacked: boolean;
@@ -371,6 +414,151 @@ export function getMessengerUserDailySpendBudgetConfig(): MessengerUserDailySpen
     enabled: capUsd !== null,
     capUsd,
   };
+}
+
+/**
+ * Serializes the spend-cap decision with the durable attempt-ledger write.
+ * Provider code must not start the external request until `recordAttempt`
+ * completes. Production uses the shared Redis state store, so concurrent app
+ * and worker processes cannot all pass the same remaining budget.
+ */
+export async function admitMessengerProviderSpend<T>(input: {
+  reqId: string;
+  attemptId: string;
+  userKey: string;
+  estimatedCostUsd: number | null;
+  estimatedOutputCostUsd?: number | null;
+  costEstimateComplete?: boolean;
+  now?: Date;
+  recordAttempt: () => Promise<T>;
+}): Promise<T> {
+  const dailyEnabled = getMessengerDailySpendBudgetConfig().enabled;
+  const monthlyEnabled = getMessengerMonthlySpendBudgetConfig().enabled;
+  const userDailyEnabled = getMessengerUserDailySpendBudgetConfig().enabled;
+  if (!dailyEnabled && !monthlyEnabled && !userDailyEnabled) {
+    return await input.recordAttempt();
+  }
+
+  const now = input.now ?? new Date();
+  if (!isRedisStateStoreEnabled()) {
+    if (process.env.NODE_ENV === "production") {
+      safeLog("messenger_spend_admission_redis_required", {
+        level: "error",
+        reqId: hashRequestId(input.reqId),
+      });
+      throw new MessengerSpendBudgetExceededError(
+        "Redis is required for production spend-cap admission"
+      );
+    }
+    return await inMemorySpendAdmissionLimiter.run(async () => {
+      await assertMessengerDailySpendBudgetAvailable({ ...input, now });
+      await assertMessengerMonthlySpendBudgetAvailable({ ...input, now });
+      await assertMessengerUserDailySpendBudgetAvailable({ ...input, now });
+      return await input.recordAttempt();
+    });
+  }
+
+  const estimate =
+    (input.estimatedCostUsd ?? 0) + (input.estimatedOutputCostUsd ?? 0);
+  if (
+    input.costEstimateComplete === false ||
+    !Number.isFinite(estimate) ||
+    estimate <= 0
+  ) {
+    await assertMessengerDailySpendBudgetAvailable({ ...input, now });
+    await assertMessengerMonthlySpendBudgetAvailable({ ...input, now });
+    await assertMessengerUserDailySpendBudgetAvailable({ ...input, now });
+    throw new MessengerSpendBudgetExceededError();
+  }
+
+  const day = getUtcDayKey(now);
+  const month = getUtcMonthKey(now);
+  const [dailySummary, monthlySummary, userSummary] = await Promise.all([
+    summarizeCostLedgerPeriod(day),
+    summarizeCostLedgerPeriods(getUtcMonthDayPeriods(now), month),
+    summarizeCostLedgerPeriodForUser(day, input.userKey),
+  ]);
+  const tag = `{messenger-spend:${month}}`;
+  const attemptKey = createHash("sha256")
+    .update(input.attemptId)
+    .digest("hex")
+    .slice(0, 32);
+  const userKey = createHash("sha256")
+    .update(input.userKey)
+    .digest("hex")
+    .slice(0, 32);
+  const keys = [
+    `${tag}:attempt:${attemptKey}`,
+    `${tag}:daily:${day}`,
+    `${tag}:monthly`,
+    `${tag}:user:${userKey}:${day}`,
+  ];
+  const ttlSeconds = secondsUntilSpendCounterExpiry(now);
+  const redis = await getRedisClient();
+  const result = Number(
+    await redis.eval(
+      RESERVE_SPEND_SCRIPT,
+      keys.length,
+      ...keys,
+      usdToSpendUnits(estimate),
+      usdToSpendUnits(getMessengerDailySpendBudgetConfig().capUsd ?? 0),
+      usdToSpendUnits(getMessengerMonthlySpendBudgetConfig().capUsd ?? 0),
+      usdToSpendUnits(getMessengerUserDailySpendBudgetConfig().capUsd ?? 0),
+      usdToSpendUnits(dailySummary.estimatedCostUsd),
+      usdToSpendUnits(monthlySummary.estimatedCostUsd),
+      usdToSpendUnits(userSummary.estimatedCostUsd),
+      ttlSeconds
+    )
+  );
+  if (result !== 1) {
+    safeLog("messenger_spend_admission_rejected", {
+      level: "warn",
+      reqId: hashRequestId(input.reqId),
+      reason:
+        result === 2
+          ? "duplicate_attempt"
+          : result === -1
+            ? "daily_cap"
+            : result === -2
+              ? "monthly_cap"
+              : result === -3
+                ? "user_daily_cap"
+                : "store_result_invalid",
+    });
+    throw new MessengerSpendBudgetExceededError();
+  }
+
+  try {
+    return await input.recordAttempt();
+  } catch (error) {
+    try {
+      const released = Number(
+        await redis.eval(RELEASE_SPEND_SCRIPT, keys.length, ...keys, ttlSeconds)
+      );
+      if (released !== 1) {
+        safeLog("messenger_spend_reservation_release_incomplete", {
+          level: "error",
+          reqId: hashRequestId(input.reqId),
+        });
+      }
+    } catch (releaseError) {
+      safeLog("messenger_spend_reservation_release_failed", {
+        level: "error",
+        reqId: hashRequestId(input.reqId),
+        error: releaseError,
+      });
+    }
+    throw error;
+  }
+}
+
+function usdToSpendUnits(value: number): number {
+  return Math.max(0, Math.round(value * SPEND_COUNTER_SCALE));
+}
+
+function secondsUntilSpendCounterExpiry(now: Date): number {
+  const expiry = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 3);
+  return Math.max(1, Math.ceil((expiry - now.getTime()) / 1000));
 }
 
 export async function assertMessengerDailySpendBudgetAvailable(input: {
@@ -577,7 +765,10 @@ export async function assertMessengerDailyImageBudgetAvailable(input: {
 
   const now = input.now ?? new Date();
   const key = `${DAILY_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
-  const count = await incrementExpiringCounter(key, secondsUntilNextUtcDay(now));
+  const count = await incrementExpiringCounter(
+    key,
+    secondsUntilNextUtcDay(now)
+  );
   if (count > cap) {
     await decrementExpiringCounter(key);
     safeLog("messenger_daily_image_budget_reached", {
@@ -590,9 +781,11 @@ export async function assertMessengerDailyImageBudgetAvailable(input: {
   }
 }
 
-export async function releaseMessengerDailyImageBudgetReservation(input: {
-  now?: Date;
-} = {}): Promise<void> {
+export async function releaseMessengerDailyImageBudgetReservation(
+  input: {
+    now?: Date;
+  } = {}
+): Promise<void> {
   const { cap } = getMessengerDailyImageBudgetConfig();
   if (!cap) {
     return;
@@ -614,7 +807,10 @@ export async function assertMessengerDailyVideoBudgetAvailable(input: {
 
   const now = input.now ?? new Date();
   const key = `${DAILY_VIDEO_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
-  const count = await incrementExpiringCounter(key, secondsUntilNextUtcDay(now));
+  const count = await incrementExpiringCounter(
+    key,
+    secondsUntilNextUtcDay(now)
+  );
   if (count > cap) {
     await decrementExpiringCounter(key);
     safeLog("messenger_daily_video_budget_reached", {
@@ -627,9 +823,11 @@ export async function assertMessengerDailyVideoBudgetAvailable(input: {
   }
 }
 
-export async function releaseMessengerDailyVideoBudgetReservation(input: {
-  now?: Date;
-} = {}): Promise<void> {
+export async function releaseMessengerDailyVideoBudgetReservation(
+  input: {
+    now?: Date;
+  } = {}
+): Promise<void> {
   const cap = readPositiveInt("MESSENGER_GLOBAL_DAILY_VIDEO_CAP");
   if (!cap) {
     return;
@@ -644,14 +842,19 @@ export async function assertMessengerDailyAudioTranscriptionBudgetAvailable(inpu
   reqId: string;
   now?: Date;
 }): Promise<void> {
-  const cap = readPositiveInt("MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP");
+  const cap = readPositiveInt(
+    "MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP"
+  );
   if (!cap) {
     return;
   }
 
   const now = input.now ?? new Date();
   const key = `${DAILY_AUDIO_TRANSCRIPTION_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
-  const count = await incrementExpiringCounter(key, secondsUntilNextUtcDay(now));
+  const count = await incrementExpiringCounter(
+    key,
+    secondsUntilNextUtcDay(now)
+  );
   if (count > cap) {
     await decrementExpiringCounter(key);
     safeLog("messenger_daily_audio_transcription_budget_reached", {
@@ -664,10 +867,14 @@ export async function assertMessengerDailyAudioTranscriptionBudgetAvailable(inpu
   }
 }
 
-export async function releaseMessengerDailyAudioTranscriptionBudgetReservation(input: {
-  now?: Date;
-} = {}): Promise<void> {
-  const cap = readPositiveInt("MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP");
+export async function releaseMessengerDailyAudioTranscriptionBudgetReservation(
+  input: {
+    now?: Date;
+  } = {}
+): Promise<void> {
+  const cap = readPositiveInt(
+    "MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP"
+  );
   if (!cap) {
     return;
   }
@@ -741,5 +948,8 @@ export async function runGuardedVideoGeneration<T>(
 }
 
 export async function hasInFlightGeneration(psid: string): Promise<boolean> {
-  return (await hasEphemeralKey(lockKey(psid))) || (await hasEphemeralKey(videoLockKey(psid)));
+  return (
+    (await hasEphemeralKey(lockKey(psid))) ||
+    (await hasEphemeralKey(videoLockKey(psid)))
+  );
 }

@@ -31,7 +31,9 @@ export function isFaceMemoryEnabled(): boolean {
   return process.env.ENABLE_FACE_MEMORY === "true";
 }
 
-async function deleteStoredImageUrl(imageUrl: string | null | undefined): Promise<boolean> {
+async function deleteStoredImageUrl(
+  imageUrl: string | null | undefined
+): Promise<boolean> {
   if (!imageUrl) {
     return true;
   }
@@ -53,7 +55,9 @@ async function deleteStoredImageUrl(imageUrl: string | null | undefined): Promis
   }
 }
 
-function getInboundSourceUrl(imageUrl: string | null | undefined): string | null {
+function getInboundSourceUrl(
+  imageUrl: string | null | undefined
+): string | null {
   if (!imageUrl) {
     return null;
   }
@@ -78,15 +82,22 @@ function getExpiredInboundSourceUrls(
     const isRetainedSource =
       hasRetainedSource && inboundSourceUrl === state.lastSourceImageUrl;
     const timestamp = isRetainedSource
-      ? state.lastSourceImageUpdatedAt ?? state.pendingImageAt ?? state.updatedAt
-      : state.pendingImageAt ?? state.lastSourceImageUpdatedAt ?? state.updatedAt;
+      ? (state.lastSourceImageUpdatedAt ??
+        state.pendingImageAt ??
+        state.updatedAt)
+      : (state.pendingImageAt ??
+        state.lastSourceImageUpdatedAt ??
+        state.updatedAt);
     return { url: inboundSourceUrl, timestamp };
   });
 
   return Array.from(
     new Set(
       candidates
-        .filter(candidate => candidate.timestamp && candidate.timestamp < expiredBefore)
+        .filter(
+          candidate =>
+            candidate.timestamp && candidate.timestamp < expiredBefore
+        )
         .map(candidate => candidate.url)
         .filter((url): url is string => Boolean(url))
     )
@@ -106,8 +117,14 @@ function getPendingSourceDeleteUrls(
   );
 }
 
-export async function deleteFaceMemoryForUser(psid: string): Promise<string[]> {
-  const state = await getState(psid);
+export async function deleteFaceMemoryForUser(
+  psid: string,
+  options: {
+    state?: MessengerUserState;
+    persistState?: boolean;
+  } = {}
+): Promise<string[]> {
+  const state = options.state ?? (await getState(psid));
   if (!state) {
     return [];
   }
@@ -125,12 +142,14 @@ export async function deleteFaceMemoryForUser(psid: string): Promise<string[]> {
     }
   }
 
-  await clearFaceMemoryState(
-    psid,
-    Date.now(),
-    failedDeleteUrls[0] ?? null,
-    failedDeleteUrls
-  );
+  if (options.persistState !== false) {
+    await clearFaceMemoryState(
+      psid,
+      Date.now(),
+      failedDeleteUrls[0] ?? null,
+      failedDeleteUrls
+    );
+  }
   return failedDeleteUrls;
 }
 
@@ -163,11 +182,13 @@ export async function expireFaceMemory(
     }
 
     const urlsToDelete = Array.from(
-      new Set([
-        ...pendingDeleteUrls,
-        ...(shouldClear ? [state.lastSourceImageUrl] : []),
-        ...expiredInboundSourceUrls,
-      ].filter((url): url is string => Boolean(url)))
+      new Set(
+        [
+          ...pendingDeleteUrls,
+          ...(shouldClear ? [state.lastSourceImageUrl] : []),
+          ...expiredInboundSourceUrls,
+        ].filter((url): url is string => Boolean(url))
+      )
     );
     const failedDeleteUrls: string[] = [];
     for (const imageUrl of urlsToDelete) {
@@ -179,7 +200,11 @@ export async function expireFaceMemory(
 
     if (!shouldClear && expiredInboundSourceUrls.length === 0) {
       if (failedDeleteUrls.length) {
-        await setPendingSourceImageDeleteUrls(psid, failedDeleteUrls, finiteNow);
+        await setPendingSourceImageDeleteUrls(
+          psid,
+          failedDeleteUrls,
+          finiteNow
+        );
       } else {
         await clearPendingSourceImageDeleteUrls(psid, finiteNow);
       }

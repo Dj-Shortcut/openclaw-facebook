@@ -45,6 +45,7 @@ import {
 } from "./portalLocales";
 
 const FACEBOOK_CONNECT_STATE_KEY = "leaderbot.facebookConnectState";
+const FACEBOOK_CONNECT_QUERY_KEY = "facebookConnectState";
 const LOCALE_STORAGE_KEY = "leaderbot.portal.locale";
 const BILLING_RETURN_FAILURE_STATUSES = new Set<string>([
   "failed",
@@ -297,6 +298,14 @@ function getBillingReturnIntent() {
     : null;
 }
 
+function getFacebookConnectStateFromLocation() {
+  if (typeof window === "undefined") return null;
+  const state = new URLSearchParams(window.location.search).get(
+    FACEBOOK_CONNECT_QUERY_KEY
+  );
+  return state && /^[A-Za-z0-9_-]{32}$/.test(state) ? state : null;
+}
+
 function Home() {
   const auth = useAuth();
   const utils = trpc.useUtils();
@@ -307,6 +316,11 @@ function Home() {
   const [showHandoffBanner] = useState(hasHandoffOnboardingFlag);
   const [billingReturnIntent] = useState(getBillingReturnIntent);
   const billingReturnHandled = useRef(false);
+  const facebookAutoCompleteState = useRef<string | null>(null);
+  const facebookAutoSelectState = useRef<string | null>(null);
+  const billingProfileAttestationRequestId = useRef<string | null>(null);
+  const [peppolEvidenceReference, setPeppolEvidenceReference] = useState("");
+  const [peppolEvidenceConfirmed, setPeppolEvidenceConfirmed] = useState(false);
   const [locale, setLocale] = useState<AppLocale>(getInitialLocale);
   const [isEditingIdentity, setIsEditingIdentity] = useState(false);
   const [identityForm, setIdentityForm] = useState({
@@ -318,6 +332,15 @@ function Home() {
   });
   const [isEditingWorkspace, setIsEditingWorkspace] = useState(false);
   const [workspaceName, setWorkspaceName] = useState("");
+  const [accountingFrom, setAccountingFrom] = useState(() => {
+    const now = new Date();
+    return `${now.getUTCFullYear()}-01-01`;
+  });
+  const [accountingUntil, setAccountingUntil] = useState(() => {
+    const tomorrow = new Date();
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    return tomorrow.toISOString().slice(0, 10);
+  });
   const [knowledgeForm, setKnowledgeForm] = useState<{
     sourceType: "website" | "manual_text" | "integration";
     name: string;
@@ -327,9 +350,16 @@ function Home() {
     name: "",
     sourceReference: "",
   });
+  const [facebookConnectStateFromLogin] = useState(
+    getFacebookConnectStateFromLocation
+  );
   const [facebookConnectState, setFacebookConnectState] = useState<
     string | null
-  >(() => readBrowserStorage(FACEBOOK_CONNECT_STATE_KEY));
+  >(
+    () =>
+      facebookConnectStateFromLogin ??
+      readBrowserStorage(FACEBOOK_CONNECT_STATE_KEY)
+  );
   const [facebookConnectPages, setFacebookConnectPages] = useState<
     FacebookConnectPage[]
   >([]);
@@ -341,6 +371,21 @@ function Home() {
   useEffect(() => {
     document.documentElement.lang = locale;
   }, [locale]);
+
+  useEffect(() => {
+    if (!facebookConnectStateFromLogin || typeof window === "undefined") return;
+    writeBrowserStorage(
+      FACEBOOK_CONNECT_STATE_KEY,
+      facebookConnectStateFromLogin
+    );
+    const url = new URL(window.location.href);
+    url.searchParams.delete(FACEBOOK_CONNECT_QUERY_KEY);
+    window.history.replaceState(
+      null,
+      "",
+      `${url.pathname}${url.search}${url.hash}`
+    );
+  }, [facebookConnectStateFromLogin]);
 
   const changeLocale = (nextLocale: AppLocale) => {
     setLocale(nextLocale);
@@ -409,6 +454,8 @@ function Home() {
     { workspaceId: workspaceId ?? 0 },
     { enabled: Boolean(workspaceId) }
   );
+  const facebookStatus =
+    channelStatusQuery.data?.facebook.status ?? "disconnected";
   const usageQuery = trpc.portal.usage.summary.useQuery(
     { workspaceId: workspaceId ?? 0 },
     { enabled: Boolean(workspaceId) }
@@ -419,6 +466,13 @@ function Home() {
   const billingSummaryQuery = trpc.portal.billing.summary.useQuery(
     { workspaceId: workspaceId ?? 0 },
     { enabled: Boolean(workspaceId) }
+  );
+  const billingProfileStatusQuery = trpc.billingAdmin.profileStatus.useQuery(
+    { workspaceId: workspaceId ?? 0 },
+    {
+      enabled:
+        Boolean(workspaceId) && portalSessionQuery.data?.user.role === "admin",
+    }
   );
   const billingReturnStatusQuery = trpc.portal.billing.returnStatus.useQuery(
     {
@@ -484,6 +538,18 @@ function Home() {
       await utils.portal.billing.summary.invalidate({ workspaceId });
     },
   });
+  const billingProfileAttestationMutation =
+    trpc.billingAdmin.attestProfile.useMutation({
+      onSuccess: async () => {
+        setPeppolEvidenceReference("");
+        setPeppolEvidenceConfirmed(false);
+        if (!workspaceId) return;
+        await utils.billingAdmin.profileStatus.invalidate({ workspaceId });
+      },
+    });
+  const peppolAttestationComplete =
+    billingProfileAttestationMutation.isSuccess ||
+    billingProfileStatusQuery.data?.peppolAttestationActive === true;
 
   useEffect(() => {
     if (billingReturnHandled.current || !workspaceId || !billingReturnIntent) {
@@ -525,7 +591,9 @@ function Home() {
   const facebookCompleteMutation =
     trpc.portal.facebook.completeConnect.useMutation({
       onSuccess: data => {
-        setFacebookConnectIssue(null);
+        setFacebookConnectIssue(
+          data.pages.length === 0 ? copy.messenger.noManagedPages : null
+        );
         setFacebookConnectPages(data.pages);
       },
     });
@@ -551,6 +619,59 @@ function Home() {
         await utils.portal.channels.status.invalidate({ workspaceId });
       },
     });
+  const completeFacebookConnect = facebookCompleteMutation.mutate;
+  const selectFacebookPageFromAuthorization = facebookSelectPageMutation.mutate;
+  const facebookPageSelectionPending = facebookSelectPageMutation.isPending;
+  const singleAuthorizedFacebookPageId =
+    facebookConnectPages.length === 1 ? facebookConnectPages[0]?.id : null;
+
+  useEffect(() => {
+    if (
+      !workspaceId ||
+      !facebookConnectState ||
+      facebookStatus === "connected" ||
+      facebookConnectPages.length > 0 ||
+      facebookAutoCompleteState.current === facebookConnectState
+    ) {
+      return;
+    }
+    facebookAutoCompleteState.current = facebookConnectState;
+    completeFacebookConnect({
+      workspaceId,
+      state: facebookConnectState,
+    });
+  }, [
+    completeFacebookConnect,
+    facebookConnectPages.length,
+    facebookConnectState,
+    facebookStatus,
+    workspaceId,
+  ]);
+
+  useEffect(() => {
+    if (
+      !workspaceId ||
+      !facebookConnectState ||
+      !singleAuthorizedFacebookPageId ||
+      facebookPageSelectionPending
+    ) {
+      return;
+    }
+    const selectionKey = `${facebookConnectState}:${singleAuthorizedFacebookPageId}`;
+    if (facebookAutoSelectState.current === selectionKey) return;
+    facebookAutoSelectState.current = selectionKey;
+    selectFacebookPageFromAuthorization({
+      workspaceId,
+      state: facebookConnectState,
+      pageId: singleAuthorizedFacebookPageId,
+    });
+  }, [
+    facebookConnectState,
+    facebookPageSelectionPending,
+    selectFacebookPageFromAuthorization,
+    singleAuthorizedFacebookPageId,
+    workspaceId,
+  ]);
   const aiIdentityMutation = trpc.portal.aiIdentity.update.useMutation({
     onSuccess: async () => {
       if (!workspaceId) return;
@@ -595,6 +716,7 @@ function Home() {
   const billingEntitlement = billingSummary?.entitlement;
   const billingPlan = billingSummary?.plan;
   const billingPayments = billingSummary?.payments ?? [];
+  const billingNotifications = billingSummary?.notifications ?? [];
   const showBillingSection = Boolean(
     billingPlans.length > 0 ||
     billingSubscription ||
@@ -635,8 +757,6 @@ function Home() {
   }, [auth.isAuthenticated, isLoading, showBillingSection]);
   const upgradeRequests = upgradeRequestsQuery.data ?? [];
   const latestUpgradeRequest = upgradeRequests[0];
-  const facebookStatus =
-    channelStatusQuery.data?.facebook.status ?? "disconnected";
   const knowledgeSources = knowledgeQuery.data?.sources ?? [];
   const privacyRequests = privacyRequestsQuery.data ?? [];
   const privacyRequestsError = privacyRequestsQuery.error;
@@ -712,7 +832,6 @@ function Home() {
     billingCheckoutMutation.mutate({
       workspaceId,
       planCode,
-      countryCode: "BE",
       kind,
       businessCheckout: false,
       handoffToken: readActiveHandoffToken() ?? undefined,
@@ -724,6 +843,29 @@ function Home() {
     billingCancelMutation.reset();
     billingCheckoutMutation.reset();
     billingCancelMutation.mutate({ workspaceId });
+  };
+  const attestPeppolBusinessProfile = () => {
+    const evidenceReference = peppolEvidenceReference.trim();
+    if (
+      !workspaceId ||
+      portalSessionQuery.data?.user.role !== "admin" ||
+      !peppolEvidenceConfirmed ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:/-]{7,255}$/.test(evidenceReference)
+    ) {
+      return;
+    }
+    billingProfileAttestationRequestId.current ??= crypto.randomUUID();
+    billingProfileAttestationMutation.mutate({
+      requestId: billingProfileAttestationRequestId.current,
+      workspaceId,
+      expectedVersion: billingProfileStatusQuery.data?.eligibilityVersion ?? 0,
+      countryCode: "BE",
+      customerType: "business",
+      evidenceReference,
+      verificationMethod: "provider_attestation",
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000),
+      peppolReady: true,
+    });
   };
   const startFacebookConnectFlow = () => {
     if (!workspaceId) return;
@@ -938,6 +1080,83 @@ function Home() {
                 </p>
               </div>
             </div>
+          </section>
+        ) : null}
+
+        {workspaceId &&
+        portalSessionQuery.data?.user.role === "admin" &&
+        billingProfileStatusQuery.isSuccess &&
+        !peppolAttestationComplete ? (
+          <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-950 lg:col-start-2">
+            <div>
+              <h2 className="text-sm font-semibold">
+                Zakelijk billingprofiel via Peppol attesteren
+              </h2>
+              <p className="mt-1 text-sm leading-6 text-amber-900">
+                Alleen gebruiken nadat de Belgische onderneming publiek als
+                actieve Peppol-ontvanger is geverifieerd. De attestatie geldt 30
+                dagen en bewaart uitsluitend een HMAC van de bewijsreferentie.
+              </p>
+            </div>
+            <form
+              className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]"
+              onSubmit={event => {
+                event.preventDefault();
+                attestPeppolBusinessProfile();
+              }}
+            >
+              <label className="grid gap-1 text-sm font-medium">
+                Externe Peppol-bewijsreferentie
+                <input
+                  className="min-h-10 rounded-md border border-amber-300 bg-white px-3 text-slate-950 outline-none focus:border-amber-600"
+                  disabled={billingProfileAttestationMutation.isSuccess}
+                  maxLength={255}
+                  pattern="[A-Za-z0-9][A-Za-z0-9._:/-]{7,255}"
+                  placeholder="peppol:0208:ondernemingsnummer"
+                  required
+                  value={peppolEvidenceReference}
+                  onChange={event =>
+                    setPeppolEvidenceReference(event.target.value)
+                  }
+                />
+              </label>
+              <Button
+                className="self-end"
+                disabled={
+                  !peppolEvidenceConfirmed ||
+                  !peppolEvidenceReference.trim() ||
+                  billingProfileAttestationMutation.isPending ||
+                  billingProfileAttestationMutation.isSuccess
+                }
+                type="submit"
+                variant="outline"
+              >
+                {billingProfileAttestationMutation.isPending
+                  ? "Attestatie opslaan…"
+                  : billingProfileAttestationMutation.isSuccess
+                    ? "Attestatie opgeslagen"
+                    : "Zakelijk profiel attesteren"}
+              </Button>
+              <label className="flex items-start gap-2 text-sm leading-6 sm:col-span-2">
+                <input
+                  checked={peppolEvidenceConfirmed}
+                  className="mt-1"
+                  disabled={billingProfileAttestationMutation.isSuccess}
+                  type="checkbox"
+                  onChange={event =>
+                    setPeppolEvidenceConfirmed(event.target.checked)
+                  }
+                />
+                Ik heb gecontroleerd dat deze exacte onderneming actief is op
+                Peppol en als Belgische zakelijke klant mag worden verwerkt.
+              </label>
+              {billingProfileAttestationMutation.error ? (
+                <p className="text-sm font-medium text-red-800 sm:col-span-2">
+                  Attestatie geweigerd:{" "}
+                  {billingProfileAttestationMutation.error.message}
+                </p>
+              ) : null}
+            </form>
           </section>
         ) : null}
 
@@ -1449,6 +1668,17 @@ function Home() {
                   </div>
                 </div>
 
+                {billingNotifications.map(notification => (
+                  <p
+                    key={notification.id}
+                    className="mt-5 rounded-lg bg-amber-50 px-4 py-3 text-sm text-amber-900"
+                  >
+                    {locale.startsWith("nl")
+                      ? "We konden een betaling niet bevestigen. Controleer je facturatie of neem contact op met support."
+                      : "We could not confirm a payment. Check your billing details or contact support."}
+                  </p>
+                ))}
+
                 {billingPlansQuery.error ? (
                   <p className="mt-5 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">
                     {copy.billing.planLoadError}
@@ -1861,7 +2091,7 @@ function Home() {
 
                 {canManageBilling ? (
                   <>
-                    <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                       <div>
                         <h3 className="font-semibold text-stone-950">
                           {copy.billing.paymentHistory}
@@ -1870,15 +2100,47 @@ function Home() {
                           {copy.billing.accountingExportBody}
                         </p>
                       </div>
-                      {workspaceId ? (
-                        <Button asChild size="sm" variant="outline">
-                          <a
-                            href={`/api/portal/billing/export.csv?workspaceId=${encodeURIComponent(String(workspaceId))}`}
-                          >
-                            <FileDown className="h-4 w-4" />
-                            {copy.billing.accountingExport}
-                          </a>
-                        </Button>
+                      {workspaceId && billingSummary?.mode ? (
+                        <div className="flex flex-wrap items-end gap-2">
+                          <label className="grid gap-1 text-xs text-stone-600">
+                            {locale === "nl-BE"
+                              ? "Van (inclusief)"
+                              : locale === "fr-BE"
+                                ? "Du (inclus)"
+                                : "From (inclusive)"}
+                            <input
+                              className="rounded-md border border-stone-300 bg-white px-2 py-1.5 text-sm"
+                              type="date"
+                              value={accountingFrom}
+                              onChange={event =>
+                                setAccountingFrom(event.target.value)
+                              }
+                            />
+                          </label>
+                          <label className="grid gap-1 text-xs text-stone-600">
+                            {locale === "nl-BE"
+                              ? "Tot (exclusief)"
+                              : locale === "fr-BE"
+                                ? "Au (exclus)"
+                                : "Until (exclusive)"}
+                            <input
+                              className="rounded-md border border-stone-300 bg-white px-2 py-1.5 text-sm"
+                              type="date"
+                              value={accountingUntil}
+                              onChange={event =>
+                                setAccountingUntil(event.target.value)
+                              }
+                            />
+                          </label>
+                          <Button asChild size="sm" variant="outline">
+                            <a
+                              href={`/api/portal/billing/export.csv?workspaceId=${encodeURIComponent(String(workspaceId))}&from=${encodeURIComponent(accountingFrom)}&until=${encodeURIComponent(accountingUntil)}`}
+                            >
+                              <FileDown className="h-4 w-4" />
+                              {copy.billing.accountingExport}
+                            </a>
+                          </Button>
+                        </div>
                       ) : null}
                     </div>
                     <div className="mt-4 overflow-x-auto rounded-lg border border-stone-200">

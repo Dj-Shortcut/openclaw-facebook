@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   executeGenerationFlowMock,
+  assertMessengerGenerationOwnershipMock,
   reserveStartpilotImageUsageMock,
   resolveWorkspaceRuntimePolicyMock,
   safeLogMock,
@@ -11,6 +12,7 @@ const {
   sendTextMock,
 } = vi.hoisted(() => ({
   executeGenerationFlowMock: vi.fn(),
+  assertMessengerGenerationOwnershipMock: vi.fn(),
   reserveStartpilotImageUsageMock: vi.fn(),
   resolveWorkspaceRuntimePolicyMock: vi.fn(),
   safeLogMock: vi.fn(),
@@ -25,6 +27,7 @@ vi.mock("./_core/generationFlow", () => ({
 }));
 
 vi.mock("./_core/workspaceEntitlementRuntime", () => ({
+  assertMessengerGenerationOwnership: assertMessengerGenerationOwnershipMock,
   resolveWorkspaceRuntimePolicy: resolveWorkspaceRuntimePolicyMock,
 }));
 
@@ -84,6 +87,8 @@ afterAll(() => {
 beforeEach(() => {
   process.env.PRIVACY_PEPPER = "webhook-generation-jobs-test-pepper";
   executeGenerationFlowMock.mockReset();
+  assertMessengerGenerationOwnershipMock.mockReset();
+  assertMessengerGenerationOwnershipMock.mockResolvedValue(undefined);
   reserveStartpilotImageUsageMock.mockReset();
   reserveStartpilotImageUsageMock.mockResolvedValue({ allowed: true });
   resolveWorkspaceRuntimePolicyMock.mockReset();
@@ -104,6 +109,34 @@ beforeEach(() => {
 });
 
 describe("messenger generation job safety", () => {
+  it("fails closed before provider start when a queued Page is rebound", async () => {
+    const runner = createTestRunner();
+    assertMessengerGenerationOwnershipMock
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("ownership changed"));
+    const providerTransport = vi.fn();
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      await input.onProviderAttempt();
+      providerTransport();
+      return successGenerationResult();
+    });
+
+    await runner.processMessengerGenerationJob({
+      psid: "rebound-user",
+      userId: "rebound-user-key",
+      pageId: "rebound-page",
+      workspaceId: 42,
+      channelConnectionId: 7,
+      reqId: "req-rebound",
+      lang: "nl",
+    });
+
+    expect(assertMessengerGenerationOwnershipMock).toHaveBeenCalledTimes(2);
+    expect(executeGenerationFlowMock).toHaveBeenCalledOnce();
+    expect(providerTransport).not.toHaveBeenCalled();
+    expect(getState("rebound-user")?.stage).not.toBe("PROCESSING");
+  });
+
   it("dead-letters only the owning Page state and sends the localized failure", async () => {
     const psid = "shared-dead-letter-user";
     const owningPageId = "dead-letter-owning-page";

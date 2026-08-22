@@ -74,6 +74,15 @@ prior gate is proven in production.
   explicit immutable image digest. Owner: Leaderbot production owner. Target:
   2026-09-30; delete `Dockerfile.completion-readiness-hotfix` and its patch
   script as part of this reconciliation.
+  - 2026-08-22 progress: release 344 was traced to commit
+    `12b69bdbad721e1d419d9ca0bdb1cbd38ba6835a`; a clean build of its
+    `apps/image-gen` source produced the exact `dist/index.cjs` SHA-256 stored
+    in the immutable Fly image. That app-scoped runtime source is reconciled
+    locally onto current `main` while retaining the newer GDPR classification,
+    button, liveness, and deployment controls. Source deployment remains
+    disabled until this reconciliation and its feature follow-up are reviewed,
+    merged, built to an immutable digest, and recorded in the production
+    manifest.
 - [ ] Rehearse and approve the stateful gateway volume migration before removing
   or replacing any detached gateway Machine. Until then the gateway drift gate
   must remain fail-closed. Add the proven pre-migration managed release to the

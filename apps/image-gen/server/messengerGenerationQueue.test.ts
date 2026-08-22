@@ -17,6 +17,7 @@ import {
   drainMessengerGenerationQueue,
   enqueueMessengerGenerationJob,
   enqueueOrRunMessengerGenerationJob,
+  eraseMessengerGenerationJobsForSubject,
   getMessengerGenerationQueueStats,
   isMessengerGenerationQueueEnabled,
   reclaimReservedMessengerGenerationJobs,
@@ -33,6 +34,8 @@ import {
 } from "./_core/messengerGenerationJob";
 
 const TEST_PARTITION_SECRET = "queue-partition-test-secret";
+const MESSENGER_GENERATION_PARTITION_INDEX_KEY_FOR_TEST =
+  "messenger-generation-job-partitions:v1";
 const UUID_V4_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -43,8 +46,18 @@ function getTenantPartition(pageId: string): string {
   );
 }
 
-function getJobKeyToken(reqId: string): string {
-  return createHash("sha256").update(reqId).digest("hex");
+function getJobKeyToken(
+  reqId: string,
+  userId = "user-1",
+  privacyEpoch = 0
+): string {
+  return createHash("sha256")
+    .update(`${userId}\0${privacyEpoch}\0${reqId}`)
+    .digest("hex");
+}
+
+function getJobReference(reqId: string): string {
+  return `job-${getJobKeyToken(reqId)}`;
 }
 
 function getPartitionKey(
@@ -129,7 +142,7 @@ function createDrainRedis(
 function createKeyedRedis(
   initialLists: Record<string, string[]> = {},
   initialTenantPartitions: string[] = [],
-  options: { failingListKeys?: string[] } = {}
+  options: { failingListKeys?: string[]; emptyFirstScrubPage?: boolean } = {}
 ) {
   const lists = new Map(
     Object.entries(initialLists).map(([key, values]) => [key, [...values]])
@@ -137,7 +150,11 @@ function createKeyedRedis(
   const strings = new Map<string, string>();
   const expirations = new Map<string, number>();
   const tenantPartitions = new Set(initialTenantPartitions);
+  const sets = new Map<string, Set<string>>([
+    [MESSENGER_GENERATION_PARTITION_INDEX_KEY_FOR_TEST, tenantPartitions],
+  ]);
   const failingListKeys = new Set(options.failingListKeys ?? []);
+  let returnedEmptyScrubPage = false;
   const getList = (key: string) => {
     let list = lists.get(key);
     if (!list) {
@@ -167,9 +184,20 @@ function createKeyedRedis(
     script: string,
     numKeys: number,
     ...redisArgs: Array<string | number>
-  ): Promise<number> => {
+  ): Promise<unknown> => {
     const keys = redisArgs.slice(0, numKeys).map(String);
     const args = redisArgs.slice(numKeys).map(String);
+
+    if (
+      script.includes('local current = tonumber(redis.call("GET", KEYS[1])')
+    ) {
+      const [key] = keys;
+      const requested = Number(args[0]);
+      const current = Number(strings.get(key) ?? "0");
+      const stored = Math.max(current, requested);
+      strings.set(key, String(stored));
+      return stored;
+    }
 
     if (script.includes('local queued = redis.call("LLEN", KEYS[1])')) {
       const [queuedKey, processingKey, deadLetterKey] = keys;
@@ -181,20 +209,62 @@ function createKeyedRedis(
     }
 
     if (script.includes('redis.pcall("LPUSH", KEYS[2], ARGV[2])')) {
-      const [acceptedKey, queueKey] = keys;
-      const [acceptedTtl, raw, enqueueAttemptToken] = args;
+      const [acceptedKey, queueKey, contentKey, subjectKey, tombstoneKey] =
+        keys;
+      const [
+        acceptedTtl,
+        jobRef,
+        enqueueAttemptToken,
+        serializedJob,
+        contentTtl,
+      ] = args;
+      if (strings.has(tombstoneKey)) return -4;
       if (strings.has(acceptedKey)) {
         return 0;
       }
       strings.set(acceptedKey, enqueueAttemptToken);
       expirations.set(acceptedKey, Number(acceptedTtl));
+      strings.set(contentKey, serializedJob);
+      expirations.set(contentKey, Number(contentTtl));
+      const subjectSet = sets.get(subjectKey) ?? new Set<string>();
+      sets.set(subjectKey, subjectSet);
+      subjectSet.add(jobRef);
       if (failingListKeys.has(queueKey)) {
         strings.delete(acceptedKey);
         expirations.delete(acceptedKey);
         throw new Error("WRONGTYPE queue key is not a list");
       }
-      getList(queueKey).unshift(raw);
+      getList(queueKey).unshift(jobRef);
       return 1;
+    }
+
+    if (
+      script.includes('redis.call("SSCAN", KEYS[4], ARGV[4], "COUNT", 100)')
+    ) {
+      const [queuedKey, processingKey, deadKey, subjectKey, tombstoneKey] =
+        keys;
+      const [contentPrefix, leasePrefix, acceptedPrefix] = args;
+      strings.set(tombstoneKey, "erased");
+      const subjectSet = sets.get(subjectKey) ?? new Set<string>();
+      if (options.emptyFirstScrubPage && !returnedEmptyScrubPage) {
+        returnedEmptyScrubPage = true;
+        return ["17", 0, subjectSet.size];
+      }
+      const refs = [...subjectSet].slice(0, 100);
+      for (const ref of refs) {
+        for (const key of [queuedKey, processingKey, deadKey]) {
+          const list = getList(key);
+          for (let index = list.length - 1; index >= 0; index -= 1) {
+            if (list[index] === ref) list.splice(index, 1);
+          }
+        }
+        const digest = ref.replace(/^job-/, "");
+        strings.delete(`${contentPrefix}${digest}`);
+        strings.delete(`${leasePrefix}${digest}`);
+        strings.delete(`${acceptedPrefix}${digest}`);
+        subjectSet.delete(ref);
+      }
+      return ["0", refs.length, subjectSet.size];
     }
 
     if (script.includes("return -3") && script.includes('redis.call("RPOP"')) {
@@ -226,7 +296,7 @@ function createKeyedRedis(
     if (
       script.includes('redis.pcall("SET", KEYS[3], "completed", "EX", ARGV[3])')
     ) {
-      const [processingKey, leaseKey, receiptKey] = keys;
+      const [processingKey, leaseKey, receiptKey, contentKey] = keys;
       const [raw, leaseToken, receiptTtl] = args;
       if (strings.get(receiptKey) === "completed") {
         return 2;
@@ -241,6 +311,7 @@ function createKeyedRedis(
       }
       processing.splice(index, 1);
       strings.delete(leaseKey);
+      strings.delete(contentKey);
       expirations.delete(leaseKey);
       strings.set(receiptKey, "completed");
       expirations.set(receiptKey, Number(receiptTtl));
@@ -248,7 +319,8 @@ function createKeyedRedis(
     }
 
     if (script.includes('ARGV[6] == "owned"')) {
-      const [processingKey, leaseKey, destinationKey, receiptKey] = keys;
+      const [processingKey, leaseKey, destinationKey, receiptKey, contentKey] =
+        keys;
       const [
         raw,
         nextRaw,
@@ -257,6 +329,8 @@ function createKeyedRedis(
         destination,
         ownership,
         receiptTtl,
+        serializedJob,
+        contentTtl,
       ] = args;
       if (strings.get(receiptKey) === transitionName) {
         return 2;
@@ -279,6 +353,13 @@ function createKeyedRedis(
       processing.splice(index, 1);
       strings.delete(leaseKey);
       expirations.delete(leaseKey);
+      if (destination === "dead") {
+        strings.delete(contentKey);
+        expirations.delete(contentKey);
+      } else {
+        strings.set(contentKey, serializedJob);
+        expirations.set(contentKey, Number(contentTtl));
+      }
       if (destination === "dead") {
         getList(destinationKey).push(nextRaw);
       } else {
@@ -331,7 +412,29 @@ function createKeyedRedis(
 
   const redis = {
     del: vi.fn(async (key: string) => (strings.delete(key) ? 1 : 0)),
-    get: vi.fn(async (key: string) => strings.get(key) ?? null),
+    get: vi.fn(async (key: string) => {
+      const stored = strings.get(key);
+      if (stored !== undefined) return stored;
+      if (key.includes(":content:")) {
+        for (const list of lists.values()) {
+          for (const value of list) {
+            if (!value.startsWith("{")) continue;
+            try {
+              const reqId = (JSON.parse(value) as { reqId?: unknown }).reqId;
+              if (
+                typeof reqId === "string" &&
+                key.endsWith(getJobKeyToken(reqId))
+              ) {
+                return value;
+              }
+            } catch {
+              // Invalid legacy fixtures intentionally remain unreadable.
+            }
+          }
+        }
+      }
+      return null;
+    }),
     set: vi.fn(
       async (key: string, value: string, ...args: Array<string | number>) => {
         return setString(key, value, args);
@@ -367,16 +470,18 @@ function createKeyedRedis(
       list.push(value);
       return list.length;
     }),
-    sadd: vi.fn(async (_key: string, member: string) => {
-      const before = tenantPartitions.size;
-      tenantPartitions.add(member);
-      return tenantPartitions.size - before;
+    sadd: vi.fn(async (key: string, member: string) => {
+      const set = sets.get(key) ?? new Set<string>();
+      sets.set(key, set);
+      const before = set.size;
+      set.add(member);
+      return set.size - before;
     }),
-    srem: vi.fn(async (_key: string, member: string) => {
-      const existed = tenantPartitions.delete(member);
+    srem: vi.fn(async (key: string, member: string) => {
+      const existed = sets.get(key)?.delete(member) ?? false;
       return existed ? 1 : 0;
     }),
-    smembers: vi.fn(async () => [...tenantPartitions]),
+    smembers: vi.fn(async (key: string) => [...(sets.get(key) ?? [])]),
     incr: vi.fn(async (key: string) => {
       const current = Number(strings.get(key) ?? "0") + 1;
       strings.set(key, String(current));
@@ -391,6 +496,7 @@ function createKeyedRedis(
     redis,
     strings,
     tenantPartitions,
+    sets,
   };
 }
 
@@ -494,6 +600,139 @@ describe("messengerGenerationQueue", () => {
     );
   });
 
+  it("fails erasure closed when the durable Redis queue is unavailable", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    isRedisEnabledMock.mockReturnValue(false);
+
+    await expect(
+      eraseMessengerGenerationJobsForSubject({
+        workspaceId: 1,
+        channelConnectionId: 2,
+        bindingEpoch: 3,
+        privacyEpoch: 4,
+        pageId: "page-erasure-unavailable",
+        userKey: "user-erasure-unavailable",
+      })
+    ).rejects.toThrow("must be available for privacy erasure");
+  });
+
+  it("tombstones an erased epoch while allowing a later explicit privacy epoch", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const { redis } = createKeyedRedis();
+    getRedisClientMock.mockResolvedValue(redis);
+    const base = {
+      workspaceId: 41,
+      channelConnectionId: 42,
+      bindingEpoch: 7,
+      pageId: "page-privacy-race",
+      userId: "subject-privacy-race",
+    };
+    const oldJob = createJob({
+      ...base,
+      privacyEpoch: 9,
+      reqId: "old-epoch-job",
+    });
+
+    await expect(enqueueMessengerGenerationJob(oldJob)).resolves.toBe(true);
+    await expect(
+      eraseMessengerGenerationJobsForSubject({
+        workspaceId: base.workspaceId,
+        channelConnectionId: base.channelConnectionId,
+        bindingEpoch: base.bindingEpoch,
+        privacyEpoch: 9,
+        pageId: base.pageId,
+        userKey: base.userId,
+      })
+    ).resolves.toBe(1);
+    await expect(
+      enqueueMessengerGenerationJob({ ...oldJob, reqId: "old-epoch-race" })
+    ).rejects.toThrow("subject epoch is erased");
+    await expect(
+      enqueueMessengerGenerationJob({
+        ...oldJob,
+        privacyEpoch: 10,
+        reqId: "new-consented-epoch",
+      })
+    ).resolves.toBe(true);
+  });
+
+  it("scrubs more than one batch and follows an empty nonzero SSCAN cursor", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const { redis } = createKeyedRedis({}, [], { emptyFirstScrubPage: true });
+    getRedisClientMock.mockResolvedValue(redis);
+    const scope = {
+      workspaceId: 71,
+      channelConnectionId: 72,
+      bindingEpoch: 1,
+      privacyEpoch: 3,
+      pageId: "page-many-erase",
+      userId: "subject-many-erase",
+    };
+    for (let index = 0; index < 105; index += 1) {
+      await enqueueMessengerGenerationJob(
+        createJob({ ...scope, reqId: `many-${index}` })
+      );
+    }
+
+    await expect(
+      eraseMessengerGenerationJobsForSubject({
+        workspaceId: scope.workspaceId,
+        channelConnectionId: scope.channelConnectionId,
+        bindingEpoch: scope.bindingEpoch,
+        privacyEpoch: scope.privacyEpoch,
+        pageId: scope.pageId,
+        userKey: scope.userId,
+      })
+    ).resolves.toBe(105);
+  });
+
+  it("does not apply one workspace subject tombstone to another scope", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const { redis } = createKeyedRedis();
+    getRedisClientMock.mockResolvedValue(redis);
+    const shared = {
+      userId: "same-provider-user-key",
+      privacyEpoch: 1,
+      bindingEpoch: 1,
+      pageId: "same-page-label",
+    };
+    const first = createJob({
+      ...shared,
+      workspaceId: 81,
+      channelConnectionId: 82,
+      reqId: "scope-a",
+    });
+    const second = createJob({
+      ...shared,
+      workspaceId: 91,
+      channelConnectionId: 92,
+      reqId: "scope-b",
+    });
+    await enqueueMessengerGenerationJob(first);
+    await enqueueMessengerGenerationJob(second);
+    await eraseMessengerGenerationJobsForSubject({
+      workspaceId: first.workspaceId!,
+      channelConnectionId: first.channelConnectionId!,
+      bindingEpoch: first.bindingEpoch!,
+      privacyEpoch: first.privacyEpoch!,
+      pageId: first.pageId!,
+      userKey: first.userId,
+    });
+
+    await expect(
+      enqueueMessengerGenerationJob({
+        ...second,
+        reqId: "scope-b-still-active",
+      })
+    ).resolves.toBe(true);
+  });
+
   it("fails fast when inline fallback is disabled without an active queue", () => {
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
     isRedisEnabledMock.mockReturnValue(false);
@@ -557,12 +796,13 @@ describe("messengerGenerationQueue", () => {
     const { expirations, lists, redis, strings } = createKeyedRedis();
     getRedisClientMock.mockResolvedValue(redis);
     const processor = vi.fn(async () => "should-not-run");
-    const job = createJob({ reqId: "req-handoff" });
+    const job = createJob({
+      reqId: "req-handoff",
+      promptHint: "private generation prompt sentinel",
+    });
 
     const result = await enqueueOrRunMessengerGenerationJob(job, processor);
     const tenantPartition = getTenantPartition(job.pageId!);
-    const partitionedJob = { ...job, tenantPartition };
-
     expect(result).toEqual({ mode: "queued" });
     expect(processor).not.toHaveBeenCalled();
     expect(redis.sadd).toHaveBeenCalledWith(
@@ -575,8 +815,21 @@ describe("messengerGenerationQueue", () => {
     expect(strings.get(acceptedKey)).toMatch(UUID_V4_PATTERN);
     expect(expirations.get(acceptedKey)).toBe(7 * 24 * 60 * 60);
     expect(lists.get(getPartitionKey(tenantPartition, "queued"))).toEqual([
-      JSON.stringify(partitionedJob),
+      getJobReference(job.reqId),
     ]);
+    const contentKey =
+      `messenger-generation-jobs:{${tenantPartition}}:content:` +
+      getJobKeyToken(job.reqId);
+    expect(JSON.parse(strings.get(contentKey)!)).toMatchObject({
+      psid: job.psid,
+      promptHint: job.promptHint,
+      createdAt: expect.any(Number),
+      expiresAt: expect.any(Number),
+    });
+    expect(expirations.get(contentKey)).toBe(24 * 60 * 60);
+    expect(
+      JSON.stringify(lists.get(getPartitionKey(tenantPartition, "queued")))
+    ).not.toContain("private generation prompt sentinel");
     expect(lists.has("messenger-generation-jobs")).toBe(false);
     const firstEvalArgs = redis.eval.mock.calls[0]?.slice(2);
     expect(firstEvalArgs?.[0]).not.toContain(job.pageId);
@@ -596,7 +849,7 @@ describe("messengerGenerationQueue", () => {
 
     const tenantPartition = getTenantPartition(job.pageId!);
     expect(lists.get(getPartitionKey(tenantPartition, "queued"))).toEqual([
-      JSON.stringify({ ...job, tenantPartition }),
+      getJobReference(job.reqId),
     ]);
     expect(redis.eval).toHaveBeenCalledTimes(2);
     expect(redis.get).toHaveBeenCalledWith(
@@ -605,7 +858,7 @@ describe("messengerGenerationQueue", () => {
     expect(getTodayRuntimeStats().duplicateSkipCountToday).toBe(1);
   });
 
-  it("treats an unreadable existing accepted marker as a duplicate", async () => {
+  it("fails closed when the durable privacy tombstone cannot be read", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
     isRedisEnabledMock.mockReturnValue(true);
@@ -615,13 +868,15 @@ describe("messengerGenerationQueue", () => {
 
     await expect(enqueueMessengerGenerationJob(job)).resolves.toBe(true);
     redis.get.mockRejectedValueOnce(new Error("temporary Redis read failure"));
-    await expect(enqueueMessengerGenerationJob(job)).resolves.toBe(false);
+    await expect(enqueueMessengerGenerationJob(job)).rejects.toThrow(
+      "temporary Redis read failure"
+    );
 
     const tenantPartition = getTenantPartition(job.pageId!);
     expect(lists.get(getPartitionKey(tenantPartition, "queued"))).toEqual([
-      JSON.stringify({ ...job, tenantPartition }),
+      getJobReference(job.reqId),
     ]);
-    expect(getTodayRuntimeStats().duplicateSkipCountToday).toBe(1);
+    expect(getTodayRuntimeStats().duplicateSkipCountToday).toBe(0);
   });
 
   it("rolls back the accepted marker when the atomic queue push fails", async () => {
@@ -675,9 +930,7 @@ describe("messengerGenerationQueue", () => {
 
     expect(redis.eval).toHaveBeenCalledTimes(2);
     expect(strings.get(acceptedKey)).toMatch(UUID_V4_PATTERN);
-    expect(lists.get(queueKey)).toEqual([
-      JSON.stringify({ ...job, tenantPartition }),
-    ]);
+    expect(lists.get(queueKey)).toEqual([getJobReference(job.reqId)]);
     expect(redis.get).toHaveBeenCalledWith(acceptedKey);
     expect(getTodayRuntimeStats().duplicateSkipCountToday).toBe(0);
   });
@@ -712,9 +965,7 @@ describe("messengerGenerationQueue", () => {
     expect(redis.eval).toHaveBeenCalledTimes(2);
     expect(redis.get).toHaveBeenCalledWith(acceptedKey);
     expect(strings.get(acceptedKey)).toMatch(UUID_V4_PATTERN);
-    expect(lists.get(queueKey)).toEqual([
-      JSON.stringify({ ...job, tenantPartition }),
-    ]);
+    expect(lists.get(queueKey)).toEqual([getJobReference(job.reqId)]);
     expect(getTodayRuntimeStats().duplicateSkipCountToday).toBe(0);
   });
 
@@ -777,7 +1028,7 @@ describe("messengerGenerationQueue", () => {
 
     const tenantPartition = getTenantPartition(job.pageId!);
     expect(lists.get(getPartitionKey(tenantPartition, "queued"))).toEqual([
-      JSON.stringify({ ...job, tenantPartition }),
+      getJobReference(job.reqId),
     ]);
     expect(processor).not.toHaveBeenCalled();
   });
@@ -834,12 +1085,14 @@ describe("messengerGenerationQueue", () => {
 
     expect(tenantPartitions.has(tenantPartition)).toBe(true);
     expect(lists.get(getPartitionKey(tenantPartition, "queued"))).toEqual([
-      JSON.stringify({ ...job, tenantPartition }),
+      getJobReference(job.reqId),
     ]);
 
     const processor = vi.fn(async () => undefined);
     await drainMessengerGenerationQueue(processor);
-    expect(processor).toHaveBeenCalledWith({ ...job, tenantPartition });
+    expect(processor).toHaveBeenCalledWith(
+      expect.objectContaining({ ...job, tenantPartition })
+    );
     expect(tenantPartitions.has(tenantPartition)).toBe(false);
   });
 
@@ -875,7 +1128,9 @@ describe("messengerGenerationQueue", () => {
         ([key, value]) => key.includes(":transition:") && value === "completed"
       )
     ).toBe(true);
-    expect(processor).toHaveBeenCalledWith(partitionedJob);
+    expect(processor).toHaveBeenCalledWith(
+      expect.objectContaining(partitionedJob)
+    );
   });
 
   it("keeps a reservation when a stale worker loses its fenced lease", async () => {

@@ -9,9 +9,10 @@ const mocks = vi.hoisted(() => ({
   revokePortalHandoffToken: vi.fn(),
   listChannelConnections: vi.fn(),
   findStateByUserKey: vi.fn(),
-  hasOpenMessengerResponseWindow: vi.fn(),
+  hasOpenPaidHandoffWindow: vi.fn(),
   sendText: vi.fn(),
   safeLog: vi.fn(),
+  getActivePrivacyEpoch: vi.fn(),
 }));
 
 vi.mock("./_core/portalHandoff", () => ({
@@ -25,7 +26,7 @@ vi.mock("./db", () => ({
 
 vi.mock("./_core/messengerState", () => ({
   findStateByUserKey: mocks.findStateByUserKey,
-  hasOpenMessengerResponseWindow: mocks.hasOpenMessengerResponseWindow,
+  hasOpenPaidHandoffWindow: mocks.hasOpenPaidHandoffWindow,
 }));
 
 vi.mock("./_core/messengerApi", () => ({
@@ -34,6 +35,10 @@ vi.mock("./_core/messengerApi", () => ({
 
 vi.mock("./_core/logger", () => ({
   safeLog: mocks.safeLog,
+}));
+
+vi.mock("./_core/messengerPrivacySubject", () => ({
+  getActiveMessengerPrivacySubjectEpoch: mocks.getActivePrivacyEpoch,
 }));
 
 const messengerSenderUserKey = "a".repeat(64);
@@ -61,12 +66,14 @@ describe("portal handoff delivery", () => {
     mocks.findStateByUserKey.mockResolvedValue(messengerState);
     mocks.listChannelConnections.mockResolvedValue([
       {
+        id: 12,
         channel: "facebook_messenger",
         status: "connected",
         externalId: "facebook-page-42",
+        bindingEpoch: 3,
       },
     ]);
-    mocks.hasOpenMessengerResponseWindow.mockResolvedValue(true);
+    mocks.hasOpenPaidHandoffWindow.mockResolvedValue(true);
     mocks.createPortalHandoffToken.mockResolvedValue({
       token: "opaque-token",
       tokenHash: "sha256:opaque-token-hash",
@@ -74,12 +81,13 @@ describe("portal handoff delivery", () => {
     });
     mocks.sendText.mockResolvedValue({ sent: true });
     mocks.revokePortalHandoffToken.mockResolvedValue(true);
+    mocks.getActivePrivacyEpoch.mockResolvedValue(4);
   });
 
   it("builds handoff links on the portal domain", () => {
-    expect(buildPortalHandoffUrl("opaque-token", "https://leaderbot.live")).toBe(
-      "https://leaderbot.live/handoff/opaque-token"
-    );
+    expect(
+      buildPortalHandoffUrl("opaque-token", "https://leaderbot.live")
+    ).toBe("https://leaderbot.live/handoff/opaque-token");
   });
 
   it("creates and sends a one-time portal link through Messenger", async () => {
@@ -87,6 +95,7 @@ describe("portal handoff delivery", () => {
       sendPortalHandoffLink({
         workspaceId: 42,
         messengerSenderUserKey,
+        expectedFacebookPageId: "facebook-page-42",
         createdByUserId: 7,
         baseUrl: "https://leaderbot.live",
         now: new Date("2026-07-06T10:30:00.000Z"),
@@ -100,12 +109,24 @@ describe("portal handoff delivery", () => {
 
     expect(mocks.findStateByUserKey).toHaveBeenCalledWith(
       messengerSenderUserKey,
-      undefined
+      "facebook-page-42",
+      {
+        workspaceId: 42,
+        channelConnectionId: 12,
+        bindingEpoch: 3,
+        privacyEpoch: 4,
+      }
     );
-    expect(mocks.hasOpenMessengerResponseWindow).toHaveBeenCalledWith(
+    expect(mocks.hasOpenPaidHandoffWindow).toHaveBeenCalledWith(
       "page-scoped-user-id",
       undefined,
-      "facebook-page-42"
+      "facebook-page-42",
+      {
+        workspaceId: 42,
+        channelConnectionId: 12,
+        bindingEpoch: 3,
+        privacyEpoch: 4,
+      }
     );
     expect(mocks.createPortalHandoffToken).toHaveBeenCalledWith({
       workspaceId: 42,
@@ -119,11 +140,23 @@ describe("portal handoff delivery", () => {
     expect(mocks.sendText).toHaveBeenCalledWith(
       "page-scoped-user-id",
       expect.stringContaining("https://leaderbot.live/handoff/opaque-token"),
-      { pageId: "facebook-page-42" }
+      {
+        pageId: "facebook-page-42",
+        workspaceId: 42,
+        channelConnectionId: 12,
+        bindingEpoch: 3,
+        userKey: messengerSenderUserKey,
+        privacyEpoch: 4,
+        operationId: "portal-handoff:42",
+      }
     );
     expect(mocks.revokePortalHandoffToken).not.toHaveBeenCalled();
-    expect(JSON.stringify(mocks.safeLog.mock.calls)).not.toContain("opaque-token");
-    expect(JSON.stringify(mocks.safeLog.mock.calls)).not.toContain("page-scoped-user-id");
+    expect(JSON.stringify(mocks.safeLog.mock.calls)).not.toContain(
+      "opaque-token"
+    );
+    expect(JSON.stringify(mocks.safeLog.mock.calls)).not.toContain(
+      "page-scoped-user-id"
+    );
   });
 
   it("sends account-bound re-entry instructions for the customer portal", async () => {
@@ -131,6 +164,7 @@ describe("portal handoff delivery", () => {
       sendPortalHandoffLink({
         workspaceId: 42,
         messengerSenderUserKey,
+        expectedFacebookPageId: "facebook-page-42",
         createdByUserId: 7,
         messageVariant: "portal_reentry",
       })
@@ -139,7 +173,15 @@ describe("portal handoff delivery", () => {
     expect(mocks.sendText).toHaveBeenCalledWith(
       "page-scoped-user-id",
       expect.stringMatching(/klantenportaal[\s\S]*hetzelfde Facebook-account/),
-      { pageId: "facebook-page-42" }
+      {
+        pageId: "facebook-page-42",
+        workspaceId: 42,
+        channelConnectionId: 12,
+        bindingEpoch: 3,
+        userKey: messengerSenderUserKey,
+        privacyEpoch: 4,
+        operationId: "portal-handoff:42",
+      }
     );
   });
 
@@ -153,6 +195,7 @@ describe("portal handoff delivery", () => {
       sendPortalHandoffLink({
         workspaceId: 42,
         messengerSenderUserKey,
+        expectedFacebookPageId: "facebook-page-42",
         messageVariant: "portal_reentry",
       })
     ).resolves.toMatchObject({ ok: true, sent: true });
@@ -160,7 +203,15 @@ describe("portal handoff delivery", () => {
     expect(mocks.sendText).toHaveBeenCalledWith(
       "page-scoped-user-id",
       expect.stringContaining("Open je Leaderbot-klantenportaal"),
-      { pageId: "facebook-page-42" }
+      {
+        pageId: "facebook-page-42",
+        workspaceId: 42,
+        channelConnectionId: 12,
+        bindingEpoch: 3,
+        userKey: messengerSenderUserKey,
+        privacyEpoch: 4,
+        operationId: "portal-handoff:42",
+      }
     );
   });
 
@@ -174,6 +225,7 @@ describe("portal handoff delivery", () => {
       sendPortalHandoffLink({
         workspaceId: 42,
         messengerSenderUserKey,
+        expectedFacebookPageId: "facebook-page-42",
         messageVariant: "portal_reentry",
       })
     ).resolves.toMatchObject({ ok: true, sent: true });
@@ -181,7 +233,15 @@ describe("portal handoff delivery", () => {
     expect(mocks.sendText).toHaveBeenCalledWith(
       "page-scoped-user-id",
       expect.stringContaining("Open your Leaderbot customer portal"),
-      { pageId: "facebook-page-42" }
+      {
+        pageId: "facebook-page-42",
+        workspaceId: 42,
+        channelConnectionId: 12,
+        bindingEpoch: 3,
+        userKey: messengerSenderUserKey,
+        privacyEpoch: 4,
+        operationId: "portal-handoff:42",
+      }
     );
   });
 
@@ -192,6 +252,7 @@ describe("portal handoff delivery", () => {
       sendPortalHandoffLink({
         workspaceId: 42,
         messengerSenderUserKey,
+        expectedFacebookPageId: "facebook-page-42",
       })
     ).resolves.toEqual({
       ok: false,
@@ -203,12 +264,13 @@ describe("portal handoff delivery", () => {
   });
 
   it("does not create a token when the Messenger response window is closed", async () => {
-    mocks.hasOpenMessengerResponseWindow.mockResolvedValue(false);
+    mocks.hasOpenPaidHandoffWindow.mockResolvedValue(false);
 
     await expect(
       sendPortalHandoffLink({
         workspaceId: 42,
         messengerSenderUserKey,
+        expectedFacebookPageId: "facebook-page-42",
       })
     ).resolves.toEqual({
       ok: false,
@@ -239,6 +301,7 @@ describe("portal handoff delivery", () => {
       sendPortalHandoffLink({
         workspaceId: 42,
         messengerSenderUserKey,
+        expectedFacebookPageId: "facebook-page-42",
       })
     ).resolves.toEqual({ ok: false, reason: "page_binding_unavailable" });
 
@@ -247,7 +310,7 @@ describe("portal handoff delivery", () => {
   });
 
   it("can safely recover after the customer reopens the Messenger response window", async () => {
-    mocks.hasOpenMessengerResponseWindow
+    mocks.hasOpenPaidHandoffWindow
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(true);
 
@@ -255,6 +318,7 @@ describe("portal handoff delivery", () => {
       sendPortalHandoffLink({
         workspaceId: 42,
         messengerSenderUserKey,
+        expectedFacebookPageId: "facebook-page-42",
       })
     ).resolves.toEqual({ ok: false, reason: "response_window_closed" });
 
@@ -262,6 +326,7 @@ describe("portal handoff delivery", () => {
       sendPortalHandoffLink({
         workspaceId: 42,
         messengerSenderUserKey,
+        expectedFacebookPageId: "facebook-page-42",
       })
     ).resolves.toEqual({
       ok: true,
@@ -285,6 +350,7 @@ describe("portal handoff delivery", () => {
       sendPortalHandoffLink({
         workspaceId: 42,
         messengerSenderUserKey,
+        expectedFacebookPageId: "facebook-page-42",
       })
     ).resolves.toEqual({
       ok: false,
@@ -303,6 +369,7 @@ describe("portal handoff delivery", () => {
       sendPortalHandoffLink({
         workspaceId: 42,
         messengerSenderUserKey,
+        expectedFacebookPageId: "facebook-page-42",
       })
     ).resolves.toEqual({
       ok: false,
@@ -312,7 +379,9 @@ describe("portal handoff delivery", () => {
     expect(mocks.revokePortalHandoffToken).toHaveBeenCalledWith(
       "sha256:opaque-token-hash"
     );
-    expect(JSON.stringify(mocks.safeLog.mock.calls)).not.toContain("graph send failed");
+    expect(JSON.stringify(mocks.safeLog.mock.calls)).not.toContain(
+      "graph send failed"
+    );
   });
 
   it("returns send_failed when token cleanup also fails after a delivery error", async () => {
@@ -323,6 +392,7 @@ describe("portal handoff delivery", () => {
       sendPortalHandoffLink({
         workspaceId: 42,
         messengerSenderUserKey,
+        expectedFacebookPageId: "facebook-page-42",
       })
     ).resolves.toEqual({
       ok: false,

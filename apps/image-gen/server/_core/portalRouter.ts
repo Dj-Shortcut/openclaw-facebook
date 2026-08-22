@@ -7,11 +7,11 @@ import {
   getFacebookOAuthUrl,
   getStoredFacebookState,
   REQUIRED_FACEBOOK_SCOPES,
-  sealFacebookPageToken,
   startFacebookConnect,
   storeFacebookPages,
   validateStoredFacebookState,
 } from "./facebookConnectStore";
+import { connectAuthorizedFacebookPage } from "./facebookPageConnection";
 import {
   claimPortalHandoffToken,
   getPortalHandoffContext,
@@ -34,6 +34,7 @@ import {
 import { getMollieConfig, isMollieBillingEnabled } from "./billing/config";
 import { safeBillingErrorCode } from "./billing/errorCode";
 import { getWorkspaceBillingSummary } from "./billing/subscriptionStore";
+import { listWorkspaceBillingNotifications } from "./billing/billingNotificationReceiverWorker";
 
 const workspaceInput = z.object({
   workspaceId: z.number().int().positive(),
@@ -84,7 +85,6 @@ const knowledgeSourceActionInput = workspaceInput.extend({
 
 const billingCheckoutInput = workspaceInput.extend({
   planCode: z.string().trim().min(1).max(80),
-  countryCode: z.literal("BE"),
   kind: z.enum([
     "subscription_start",
     "payment_method_change",
@@ -335,9 +335,11 @@ export const portalRouter = router({
           membership.role === "owner" || membership.role === "admin";
         if (!isMollieBillingEnabled()) {
           return {
+            mode: null,
             subscription: null,
             entitlement: null,
             payments: [],
+            notifications: [],
             plan: null,
             salesCountry: "BE" as const,
             b2bCheckoutEnabled: false,
@@ -349,11 +351,16 @@ export const portalRouter = router({
           config.mode,
           { includePayments }
         );
+        const notifications = await listWorkspaceBillingNotifications({
+          workspaceId: input.workspaceId,
+          audience: "customer",
+        });
         const planCode =
           summary.subscription?.planCode ?? summary.entitlement?.planCode;
         const plan = planCode ? getBillingPlan(planCode) : null;
         return {
           ...summary,
+          notifications,
           plan: plan
             ? {
                 code: plan.code,
@@ -639,6 +646,11 @@ export const portalRouter = router({
         }
 
         const stored = await getStoredFacebookState(input.state);
+        if (stored?.pages) {
+          return {
+            pages: stored.pages.map(redactFacebookPageToken),
+          };
+        }
         const code = input.code ?? stored?.authorizationCode;
         if (!code || code !== stored?.authorizationCode) {
           throw badRequest(
@@ -688,28 +700,11 @@ export const portalRouter = router({
           throw badRequest(error, "facebook page was not authorized");
         }
 
-        const hasAllScopes = REQUIRED_FACEBOOK_SCOPES.every(scope =>
-          page.grantedScopes.includes(scope)
-        );
-        await db.upsertChannelConnection({
-          workspaceId: input.workspaceId,
-          channel: "facebook_messenger",
-          status: hasAllScopes ? "connected" : "missing_permissions",
-          externalId: page.id,
-          displayName: page.name,
-          grantedScopes: page.grantedScopes,
-          encryptedAccessToken: sealFacebookPageToken(page.accessToken),
-          lastCheckedAt: new Date(),
-        });
-        await db.insertAuditLog({
+        await connectAuthorizedFacebookPage({
           workspaceId: input.workspaceId,
           userId: ctx.user.id,
-          event: "facebook_page.selected",
-          metadata: {
-            pageId: page.id,
-            pageName: page.name,
-            status: hasAllScopes ? "connected" : "missing_permissions",
-          },
+          page,
+          source: "customer_app",
         });
         return { success: true } as const;
       }),
