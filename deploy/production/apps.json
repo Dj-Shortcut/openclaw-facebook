@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "apps": {
+    "gateway": {
+      "app": "leaderbot-openclaw-gateway",
+      "config": "fly.toml",
+      "workingDirectory": ".",
+      "deployScript": "deploy:gateway",
+      "strategy": "rolling",
+      "serviceProcessGroups": ["app"],
+      "serviceCheckPath": "/healthz",
+      "allowDetachedMachines": false,
+      "desiredScale": {
+        "app": {
+          "count": 1,
+          "cpuKind": "shared",
+          "cpus": 4,
+          "memoryMb": 4096
+        }
+      }
+    },
+    "image-gen": {
+      "app": "leaderbot-fb-image-gen",
+      "config": "apps/image-gen/fly.toml",
+      "workingDirectory": "apps/image-gen",
+      "deployScript": "deploy:image-gen",
+      "sourceDeployEnabled": false,
+      "sourceDeployBlockReason": "Production release 344 contains privacy-boundary code not yet reconciled into main; deploy only an explicitly reviewed immutable image digest.",
+      "reviewedImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:4c037101bd7849af818760cab037e1ab046717c9e6dda5815e5219f72c80d952",
+      "strategy": "rolling",
+      "serviceProcessGroups": ["app"],
+      "serviceCheckPath": "/healthz",
+      "readinessCheckPath": "/readyz",
+      "readinessMonitor": ".github/workflows/production-uptime.yml",
+      "allowDetachedMachines": false,
+      "desiredScale": {
+        "app": {
+          "count": 2,
+          "cpuKind": "shared",
+          "cpus": 1,
+          "memoryMb": 256
+        },
+        "worker": {
+          "count": 2,
+          "cpuKind": "shared",
+          "cpus": 1,
+          "memoryMb": 256
+        }
+      }
+    }
+  },
+  "meta": {
+    "page": {
+      "expectedCallback": "https://leaderbot-openclaw-gateway.fly.dev/facebook/webhook",
+      "temporarilyAllowedCallbacks": [
+        "https://leaderbot-fb-image-gen.fly.dev/facebook/webhook"
+      ],
+      "migrationState": "pending_gateway_cutover",
+      "requiredFields": [
+        "messages",
+        "messaging_postbacks",
+        "message_deliveries",
+        "message_reads"
+      ]
+    },
+    "whatsapp_business_account": {
+      "expectedCallback": "https://leaderbot-fb-image-gen.fly.dev/webhook/whatsapp",
+      "temporarilyAllowedCallbacks": [],
+      "migrationState": "canonical",
+      "requiredFields": ["messages", "message_template_status_update"]
+    }
+  }
+}

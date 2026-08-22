@@ -76,8 +76,16 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
         "package.json: root packageManager must stay unset so the pnpm compatibility lock can be regenerated",
       );
     }
-    if (rootPackage.scripts?.deploy !== "npm run deploy:image-gen && npm run deploy:gateway") {
-      failures.push("package.json: root deploy orchestration must use npm");
+    if (rootPackage.scripts?.deploy !== undefined) {
+      failures.push("package.json: combined root deploy orchestration is not allowed");
+    }
+    for (const [scriptName, expectedCommand] of Object.entries({
+      "deploy:gateway": "fly deploy --config fly.toml --strategy rolling",
+      "deploy:image-gen": "cd apps/image-gen && fly deploy --config fly.toml --strategy rolling",
+    })) {
+      if (rootPackage.scripts?.[scriptName] !== expectedCommand) {
+        failures.push(`package.json: ${scriptName} must use the canonical app-specific command`);
+      }
     }
     if (
       rootPackage.scripts?.["check:package-managers"] !==

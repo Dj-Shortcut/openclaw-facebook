@@ -50,6 +50,35 @@ with targeted tests and metadata-only observability. Do not expand public access
 Meta permissions, paid provider usage, or customer self-serve features until the
 prior gate is proven in production.
 
+### Canonical Fly deployment ownership - 2026-08-22
+
+- [x] Define one production manifest and one `fly deploy` entry point per app;
+  remove the multi-app and duplicate deploy aliases.
+- [x] Add a manual GitHub Actions release workflow with protected production
+  approval, separate app-scoped Fly tokens, rollback-image capture, static/live
+  drift gates, Meta callback verification, and post-deploy smoke checks.
+- [x] Route image-gen traffic on liveness (`/healthz`) and monitor dependency
+  readiness (`/readyz`) separately so a queue incident does not black-hole the
+  Meta webhook.
+- [x] Restore image-gen production with the immutable completion-readiness
+  overlay after proving that zero legacy records existed and that release 344
+  misclassified canonical nested user-index keys. Both web replicas, the
+  primary worker, `/healthz`, and `/readyz` were green on 2026-08-22 without
+  deleting queue or completion data.
+- [ ] Configure the GitHub `production` environment, required reviewers, and
+  scoped secrets in the repository settings; then prove the workflow from a
+  reviewed `main` commit.
+- [ ] Reconcile the production image-gen privacy-boundary source with `main`,
+  port the canonical completion user-index readiness regression test, and only
+  then set `sourceDeployEnabled` back to true. Until then CI must require an
+  explicit immutable image digest.
+- [ ] Rehearse and approve the stateful gateway volume migration before removing
+  or replacing any detached gateway Machine. Until then the gateway drift gate
+  must remain fail-closed.
+- [ ] Move the Page callback to the canonical gateway only after its managed
+  Machine/volume state is converged and the complete Messenger image flow passes
+  a staged smoke test.
+
 ### Local launch-hardening tranche - 2026-08-02 (no launch-go)
 
 Completed locally and covered by focused regression tests in the current

@@ -8,6 +8,7 @@ on:
       - ".github/workflows/customer-app-ci.yml"
       - ".github/workflows/image-gen-ci.yml"
       - ".github/workflows/image-gen-fallow.yml"
+      - ".github/workflows/deploy-production.yml"
       - "apps/**/package-lock.json"
       - "apps/customer-app/package.json"
       - "apps/customer-app/pnpm-lock.yaml"
@@ -25,6 +26,7 @@ on:
       - "README.md"
       - "docs/**"
       - "deploy/fly-gateway/**"
+      - "deploy/production/**"
       - "fly.toml"
       - "examples/**"
       - "scripts/**"
@@ -89,6 +91,9 @@ jobs:
 
       - name: Validate gateway deployment safety
         run: npm run gateway:deployment-safety
+
+      - name: Validate production deployment contract
+        run: npm run production:validate
 
       - name: Install dependencies
         run: npm ci

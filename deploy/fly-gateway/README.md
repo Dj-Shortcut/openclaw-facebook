@@ -28,11 +28,16 @@ dashboard handoff design. The current authoritative operator workflow is
 
 ## Deploy
 
-Run from the `openclaw-facebook` repository root:
+Dispatch the `Deploy production` GitHub Actions workflow, select `gateway`, and
+approve the protected `production` environment. The workflow runs this one
+canonical command from the repository root:
 
 ```bash
 npm run deploy:gateway
 ```
+
+Direct invocation is reserved for an explicitly approved emergency. Do not use
+`fly machine run`; detached Machines are rejected by the deployment drift gate.
 
 ### Temporary production route-guard hotfix
 

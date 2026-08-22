@@ -1,0 +1,252 @@
+name: Deploy production
+run-name: Deploy ${{ inputs.target }} to production
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Production app to deploy
+        required: true
+        type: choice
+        options:
+          - gateway
+          - image-gen
+      rollback_image:
+        description: Optional exact registry image/digest to restore
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FLYCTL_VERSION: 0.4.85
+
+concurrency:
+  group: production-deploy-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate ${{ inputs.target }} release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the reviewed main branch
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5d
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Validate production deployment contract
+        run: npm run production:validate
+
+      - name: Require an immutable image for image-gen
+        if: inputs.target == 'image-gen'
+        env:
+          REVIEWED_IMAGE: ${{ inputs.rollback_image }}
+        run: |
+          test -n "$REVIEWED_IMAGE"
+          case "$REVIEWED_IMAGE" in
+            registry.fly.io/leaderbot-fb-image-gen@sha256:*) ;;
+            *) echo "image-gen requires an exact reviewed registry digest" >&2; exit 1 ;;
+          esac
+
+      - name: Validate gateway release
+        if: inputs.target == 'gateway'
+        run: |
+          npm run gateway:deployment-safety
+          npm run build
+          npm test
+
+      - name: Prepare image-gen package manager
+        if: inputs.target == 'image-gen'
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.28.1 --activate
+
+      - name: Validate image-gen release
+        if: inputs.target == 'image-gen'
+        run: |
+          pnpm --dir apps/image-gen install --frozen-lockfile
+          pnpm --dir apps/image-gen lint
+          pnpm --dir apps/image-gen check
+          pnpm --dir apps/image-gen test
+          pnpm --dir apps/image-gen build
+
+  deploy-gateway:
+    name: Deploy gateway
+    if: inputs.target == 'gateway'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
+      META_APP_ID: ${{ secrets.META_APP_ID }}
+      META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5d
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+
+      - name: Setup pinned flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master
+        with:
+          version: ${{ env.FLYCTL_VERSION }}
+
+      - name: Validate Fly configuration
+        run: fly config validate --strict --config fly.toml
+
+      - name: Reject unsafe Machine drift
+        run: node scripts/validate-production-deployment.mjs --live gateway --predeploy
+
+      - name: Validate Meta callbacks
+        run: node scripts/check-meta-callbacks.mjs
+
+      - name: Record rollback release
+        run: |
+          mkdir -p "$RUNNER_TEMP/leaderbot-release"
+          fly releases --app leaderbot-openclaw-gateway --image --json \
+            > "$RUNNER_TEMP/leaderbot-release/before.json"
+          jq -r '[.[] | select((.Status == "complete" or .Status == "running") and (.ImageRef | type == "string"))][0].ImageRef' \
+            "$RUNNER_TEMP/leaderbot-release/before.json" \
+            > "$RUNNER_TEMP/leaderbot-release/rollback-image.txt"
+
+      - name: Deploy reviewed gateway config
+        id: deploy
+        env:
+          ROLLBACK_IMAGE: ${{ inputs.rollback_image }}
+        run: |
+          args=(--remote-only --yes --image-label "git-${GITHUB_SHA}")
+          if [[ -n "$ROLLBACK_IMAGE" ]]; then
+            args+=(--image "$ROLLBACK_IMAGE")
+          fi
+          npm run deploy:gateway -- "${args[@]}"
+
+      - name: Verify deployed gateway drift
+        run: node scripts/validate-production-deployment.mjs --live gateway
+
+      - name: Smoke-test gateway
+        run: |
+          body="$(mktemp)"
+          status="$(curl --silent --show-error --location --max-time 20 --output "$body" --write-out '%{http_code}' https://leaderbot-openclaw-gateway.fly.dev/healthz)"
+          test "$status" = "200"
+          grep -F '"ok":true' "$body"
+
+      - name: Record deployed release
+        if: always() && steps.deploy.outcome != 'skipped'
+        run: |
+          fly releases --app leaderbot-openclaw-gateway --image --json \
+            > "$RUNNER_TEMP/leaderbot-release/after.json"
+
+      - name: Upload rollback metadata
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gateway-release-${{ github.run_id }}
+          path: ${{ runner.temp }}/leaderbot-release
+          if-no-files-found: error
+          retention-days: 30
+
+  deploy-image-gen:
+    name: Deploy image-gen
+    if: inputs.target == 'image-gen'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+      META_APP_ID: ${{ secrets.META_APP_ID }}
+      META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5d
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+
+      - name: Setup pinned flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master
+        with:
+          version: ${{ env.FLYCTL_VERSION }}
+
+      - name: Validate Fly configuration
+        working-directory: apps/image-gen
+        run: fly config validate --strict --config fly.toml
+
+      - name: Reject unsafe Machine drift
+        run: node scripts/validate-production-deployment.mjs --live image-gen --predeploy
+
+      - name: Validate Meta callbacks
+        run: node scripts/check-meta-callbacks.mjs
+
+      - name: Record rollback release
+        run: |
+          mkdir -p "$RUNNER_TEMP/leaderbot-release"
+          fly releases --app leaderbot-fb-image-gen --image --json \
+            > "$RUNNER_TEMP/leaderbot-release/before.json"
+          jq -r '[.[] | select((.Status == "complete" or .Status == "running") and (.ImageRef | type == "string"))][0].ImageRef' \
+            "$RUNNER_TEMP/leaderbot-release/before.json" \
+            > "$RUNNER_TEMP/leaderbot-release/rollback-image.txt"
+
+      - name: Deploy reviewed image-gen config
+        id: deploy
+        env:
+          ROLLBACK_IMAGE: ${{ inputs.rollback_image }}
+        run: |
+          args=(--remote-only --yes --image-label "git-${GITHUB_SHA}")
+          if [[ -n "$ROLLBACK_IMAGE" ]]; then
+            args+=(--image "$ROLLBACK_IMAGE")
+          fi
+          npm run deploy:image-gen -- "${args[@]}"
+
+      - name: Verify deployed image-gen drift
+        run: node scripts/validate-production-deployment.mjs --live image-gen
+
+      - name: Smoke-test image-gen
+        run: |
+          health_body="$(mktemp)"
+          health_status="$(curl --silent --show-error --location --max-time 20 --output "$health_body" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/healthz)"
+          test "$health_status" = "200"
+          grep -Fx "ok" "$health_body"
+
+          ready_body="$(mktemp)"
+          ready_status="$(curl --silent --show-error --location --max-time 20 --output "$ready_body" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/readyz)"
+          test "$ready_status" = "200"
+          jq -e '.ok == true' "$ready_body"
+
+      - name: Record deployed release
+        if: always() && steps.deploy.outcome != 'skipped'
+        run: |
+          fly releases --app leaderbot-fb-image-gen --image --json \
+            > "$RUNNER_TEMP/leaderbot-release/after.json"
+
+      - name: Upload rollback metadata
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-gen-release-${{ github.run_id }}
+          path: ${{ runner.temp }}/leaderbot-release
+          if-no-files-found: error
+          retention-days: 30

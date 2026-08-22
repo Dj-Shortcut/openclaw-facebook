@@ -64,6 +64,30 @@ describe("package-manager contract", () => {
     );
   });
 
+  it("rejects combined production deploy orchestration", () => {
+    const fixture = makeFixture();
+    const packagePath = path.join(fixture, "package.json");
+    const rootPackage = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    rootPackage.scripts.deploy = "npm run deploy:image-gen && npm run deploy:gateway";
+    fs.writeFileSync(packagePath, `${JSON.stringify(rootPackage, null, 2)}\n`);
+
+    expect(validatePackageManagerContract(fixture)).toContain(
+      "package.json: combined root deploy orchestration is not allowed",
+    );
+  });
+
+  it("rejects a non-canonical app-specific deploy command", () => {
+    const fixture = makeFixture();
+    const packagePath = path.join(fixture, "package.json");
+    const rootPackage = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    rootPackage.scripts["deploy:image-gen"] = "fly deploy --config apps/image-gen/fly.toml";
+    fs.writeFileSync(packagePath, `${JSON.stringify(rootPackage, null, 2)}\n`);
+
+    expect(validatePackageManagerContract(fixture)).toContain(
+      "package.json: deploy:image-gen must use the canonical app-specific command",
+    );
+  });
+
   it("does not accept unrelated version text as a pnpm setup pin", () => {
     const fixture = makeFixture();
     const workflowPath = path.join(fixture, ".github/workflows/customer-app-ci.yml");
