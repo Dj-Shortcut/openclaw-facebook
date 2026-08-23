@@ -14,7 +14,10 @@ import {
   type BillingCustomer,
   type BillingIntent,
 } from "../../../drizzle/schema";
-import { getDatabaseOrThrow } from "../../db";
+import {
+  getDatabaseOrThrow,
+  lockActiveMessengerPrivacyIdentity,
+} from "../../db";
 import type { BillingPlan } from "./catalog";
 import { formatAmountMinor } from "./catalog";
 import type { MollieMode } from "./config";
@@ -72,11 +75,23 @@ export async function reserveCheckoutIntent(input: {
   kind: CheckoutKind;
   messengerSenderUserKey?: string | null;
   messengerPageId?: string | null;
+  messengerChannelConnectionId?: number | null;
+  messengerPrivacyEpoch?: number | null;
   billingProfileVersion: number;
   authorizationEpoch: number;
 }): Promise<BillingIntent> {
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
+    const messengerIdentity = readCheckoutMessengerIdentity(input);
+    if (messengerIdentity) {
+      await lockActiveMessengerPrivacyIdentity(tx, {
+        workspaceId: input.workspaceId,
+        channelConnectionId: messengerIdentity.channelConnectionId,
+        userKey: messengerIdentity.userKey,
+        privacyEpoch: messengerIdentity.privacyEpoch,
+        pageId: messengerIdentity.pageId,
+      });
+    }
     const controls = await tx
       .select({
         commercialEnabled: billingExecutionControls.commercialEnabled,
@@ -175,6 +190,10 @@ export async function reserveCheckoutIntent(input: {
           (reusable[0].messengerSenderUserKey ?? null) ||
         (input.messengerPageId ?? null) !==
           (reusable[0].messengerPageId ?? null) ||
+        (input.messengerChannelConnectionId ?? null) !==
+          (reusable[0].messengerChannelConnectionId ?? null) ||
+        (input.messengerPrivacyEpoch ?? null) !==
+          (reusable[0].messengerPrivacyEpoch ?? null) ||
         reusable[0].billingProfileVersion !== input.billingProfileVersion ||
         reusable[0].authorizationEpoch !== input.authorizationEpoch
       ) {
@@ -201,6 +220,8 @@ export async function reserveCheckoutIntent(input: {
       checkoutScopeKey: `${input.mode}:${input.workspaceId}:${input.kind}:${intentId}`,
       messengerSenderUserKey: input.messengerSenderUserKey ?? null,
       messengerPageId: input.messengerPageId ?? null,
+      messengerChannelConnectionId: input.messengerChannelConnectionId ?? null,
+      messengerPrivacyEpoch: input.messengerPrivacyEpoch ?? null,
       billingProfileVersion: input.billingProfileVersion,
       authorizationEpoch: input.authorizationEpoch,
     });
@@ -215,6 +236,37 @@ export async function reserveCheckoutIntent(input: {
     }
     return created[0];
   });
+}
+
+function readCheckoutMessengerIdentity(input: {
+  messengerSenderUserKey?: string | null;
+  messengerPageId?: string | null;
+  messengerChannelConnectionId?: number | null;
+  messengerPrivacyEpoch?: number | null;
+}): {
+  userKey: string;
+  pageId: string;
+  channelConnectionId: number;
+  privacyEpoch: number;
+} | null {
+  const values = [
+    input.messengerSenderUserKey,
+    input.messengerPageId,
+    input.messengerChannelConnectionId,
+    input.messengerPrivacyEpoch,
+  ];
+  if (values.every(value => value === null || value === undefined)) {
+    return null;
+  }
+  if (values.some(value => value === null || value === undefined)) {
+    throw new Error("Complete Messenger checkout privacy identity is required");
+  }
+  return {
+    userKey: input.messengerSenderUserKey!,
+    pageId: input.messengerPageId!,
+    channelConnectionId: input.messengerChannelConnectionId!,
+    privacyEpoch: input.messengerPrivacyEpoch!,
+  };
 }
 
 export async function reserveBillingCustomer(

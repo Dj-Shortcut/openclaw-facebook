@@ -16,6 +16,12 @@ import {
 } from "./openAiImageClient";
 import { summarizeSensitiveUrl } from "../utils/urlSummarizer";
 import { safeLog } from "../logger";
+import {
+  buildMessengerStorageObjectKey,
+  getMessengerStorageRequestScope,
+  hashStorageObjectKeyForLog,
+} from "../messengerStorageObject";
+import { uploadMessengerStorageObject } from "../messengerStorageUpload";
 
 export async function publishGeneratedImage(
   imageBuffer: Buffer,
@@ -25,13 +31,38 @@ export async function publishGeneratedImage(
   const extension = getOpenAiImageOutputExtension();
 
   if (hasObjectStorageConfig()) {
-    const key = `generated/images/${Date.now()}-${randomUUID()}.${extension}`;
+    const requestScope = getMessengerStorageRequestScope();
+    const fileName = `${Date.now()}-${randomUUID()}.${extension}`;
+    if (
+      !requestScope &&
+      process.env.NODE_ENV === "production" &&
+      process.env.STORAGE_ALLOW_LEGACY_KEYS !== "true"
+    ) {
+      throw new Error("Tenant-scoped generated image storage is required");
+    }
+    const key = requestScope
+      ? buildMessengerStorageObjectKey({
+          kind: "generated_image",
+          scope: requestScope,
+          fileName,
+        })
+      : `generated/images/${fileName}`;
     try {
-      const { url } = await storagePut(key, imageBuffer, contentType);
+      const upload = async () =>
+        await storagePut(key, imageBuffer, contentType);
+      const { url } = requestScope
+        ? await uploadMessengerStorageObject({
+            objectKey: key,
+            scope: requestScope,
+            reqId: reqId?.trim() || randomUUID(),
+            providerOperation: "generated_image_storage_upload",
+            upload,
+          })
+        : await upload();
       safeLog("generated_image_upload_success", {
         reqId,
         contentType,
-        storageKey: key,
+        objectKeyHash: hashStorageObjectKeyForLog(key),
         publicUrl: summarizeSensitiveUrl(url),
       });
       return url;
@@ -39,7 +70,7 @@ export async function publishGeneratedImage(
       safeLog("generated_image_upload_failed", {
         level: "error",
         reqId,
-        storageKey: key,
+        objectKeyHash: hashStorageObjectKeyForLog(key),
         error,
       });
       throw error;

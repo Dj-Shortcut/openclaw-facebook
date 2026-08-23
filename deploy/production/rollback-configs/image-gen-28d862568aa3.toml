@@ -1,0 +1,69 @@
+# Reviewed rollback configuration captured from the live image-gen release.
+# This file contains no Fly secrets and is bound to its image digest in apps.json.
+
+app = 'leaderbot-fb-image-gen'
+primary_region = 'ams'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[deploy]
+  strategy = 'rolling'
+
+[env]
+  AI_ANSWER_FINALIZATION_DRAIN_ENABLED = 'false'
+  AI_ANSWER_QUOTA_PREFLIGHT_ENABLED = 'false'
+  APP_BASE_URL = 'https://app.leaderbot.live'
+  BILLING_CUSTOMER_NOTIFICATION_KEY_ID = 'test-customer-v1'
+  BILLING_CUSTOMER_NOTIFICATION_WEBHOOK_URL = 'https://app.leaderbot.live/api/internal/billing/notifications/customer'
+  BILLING_NOTIFICATION_ORIGIN_ALLOWLIST = 'https://app.leaderbot.live'
+  BILLING_NOTIFICATION_PLANE_ENABLED = 'false'
+  BILLING_NOTIFICATION_RECEIVER_CUSTOMER_KEY_ID = 'test-customer-v1'
+  BILLING_NOTIFICATION_RECEIVER_OPERATOR_KEY_ID = 'test-operator-v1'
+  BILLING_NOTIFICATION_RECEIVER_PREFLIGHT_ACK = 'true'
+  BILLING_NOTIFICATION_RECEIVER_PUBLIC_ORIGIN = 'https://app.leaderbot.live'
+  BILLING_NOTIFICATION_RECEIVER_SOURCE_ID = 'leaderbot-fly-test-v1'
+  BILLING_NOTIFICATION_SOURCE_ID = 'leaderbot-fly-test-v1'
+  BILLING_OPERATOR_NOTIFICATION_KEY_ID = 'test-operator-v1'
+  BILLING_OPERATOR_NOTIFICATION_WEBHOOK_URL = 'https://app.leaderbot.live/api/internal/billing/notifications/operator'
+  BILLING_SUPPORT_EMAIL = 'privacy@leaderbot.live'
+  FB_PAGE_CONNECT_CONFIG_ID = '2097873054148678'
+  MESSENGER_FREE_DAILY_LIMIT = '5'
+  MESSENGER_GLOBAL_DAILY_IMAGE_CAP = '5'
+  MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = '5.00'
+  MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD = '25.00'
+  MESSENGER_USER_DAILY_SPEND_CAP_USD = '2.00'
+  MOLLIE_ACCOUNTING_IMPORT_ENABLED = 'false'
+  MOLLIE_BILLING_ENABLED = 'false'
+  MOLLIE_BILLING_PREFLIGHT_ENABLED = 'false'
+  MOLLIE_BILLING_SCHEDULER_MODE = 'pilot_pin'
+  MOLLIE_BILLING_WORKER_WORKSPACE_ID = '1'
+  MOLLIE_CREDENTIAL_GENERATION_ID = 'test-fly-v1'
+  MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED = 'false'
+  MOLLIE_LIVE_BILLING_ENABLED = 'false'
+  MOLLIE_MODE = 'test'
+  MOLLIE_PAYMENT_WEBHOOK_URL = 'https://app.leaderbot.live/api/webhooks/mollie/payments'
+  MOLLIE_RECONCILIATION_ENABLED = 'true'
+  NODE_ENV = 'production'
+  OPENAI_IMAGE_ESTIMATED_COST_USD = '1.00'
+  PORT = '8080'
+  PORTAL_BASE_URL = 'https://app.leaderbot.live'
+
+[processes]
+  app = 'env MESSENGER_GENERATION_QUEUE_ENABLED=1 MESSENGER_GENERATION_INLINE_FALLBACK=0 node dist/index.cjs'
+  worker = 'env MESSENGER_GENERATION_QUEUE_ENABLED=1 MESSENGER_GENERATION_WORKER_ONLY=1 node dist/index.cjs'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+  [[http_service.checks]]
+    interval = '15s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/healthz'

@@ -10,14 +10,13 @@ describe("Messenger i18n", () => {
   it("keeps Dutch as the backward-compatible default", () => {
     expect(normalizeMessengerLanguage(undefined)).toBe("nl");
     expect(normalizeMessengerLanguage("fr")).toBe("nl");
-    expect(tMessenger("nl", "fastLaneStatus")).toContain("Messenger is verbonden");
+    expect(tMessenger("nl", "fastLaneStatus")).toContain(
+      "Messenger is verbonden",
+    );
   });
 
   it("returns English operational and plan-neutral copy", () => {
     expect(normalizeMessengerLanguage(" en ")).toBe("en");
-    expect(tMessenger("en", "gatewayImageBudgetReached")).toContain(
-      "daily image budget",
-    );
     const quotaCopy = tMessenger("en", "planQuotaReached");
     expect(quotaCopy).toContain("current plan");
     expect(quotaCopy).not.toContain("Startpilot");
@@ -31,8 +30,9 @@ describe("Messenger i18n", () => {
         "https://portal.example.test/account",
       ),
     ).toContain("https://portal.example.test/account");
-    expect(normalizeMessengerCustomerPortalUrl("http://unsafe.example.test"))
-      .toBe("https://leaderbot.live/");
+    expect(
+      normalizeMessengerCustomerPortalUrl("http://unsafe.example.test"),
+    ).toBe("https://leaderbot.live/");
     expect(
       normalizeMessengerCustomerPortalUrl(
         "https://user:secret@unsafe.example.test",

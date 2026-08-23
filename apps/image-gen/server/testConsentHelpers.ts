@@ -59,8 +59,9 @@ export function withTestMessengerPageId(payload: unknown): unknown {
 export async function runWithTestMessengerPageContext<T>(
   task: () => T | Promise<T>
 ): Promise<T> {
-  return await runWithMessengerRequestContext(TEST_MESSENGER_PAGE_ID, async () =>
-    await task()
+  return await runWithMessengerRequestContext(
+    TEST_MESSENGER_PAGE_ID,
+    async () => await task()
   );
 }
 
@@ -73,7 +74,11 @@ export async function getTestMessengerState(
 }
 
 async function grantConsent(senderIds: string[]): Promise<void> {
-  await Promise.all(senderIds.map(senderId => setConsentState(senderId, true)));
+  await Promise.all(
+    senderIds.map(async senderId => {
+      await setConsentState(senderId, true);
+    })
+  );
 }
 
 async function grantMessengerConsent(payload: unknown): Promise<void> {

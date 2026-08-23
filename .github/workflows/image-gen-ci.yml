@@ -2,14 +2,8 @@ name: Image Gen CI
 
 on:
   pull_request:
-    paths:
-      - "apps/image-gen/**"
-      - ".github/workflows/image-gen-ci.yml"
   push:
     branches: [main]
-    paths:
-      - "apps/image-gen/**"
-      - ".github/workflows/image-gen-ci.yml"
 
 permissions:
   contents: read
@@ -20,31 +14,74 @@ env:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      mysql:
+        image: mysql:8.4.11@sha256:1d6b6a8fcee8ff758ff151d017f5203cd06792a0e698f0a593c9dfcb14609cf0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: test_image_gen_ci
+        options: >-
+          --health-cmd "mysqladmin ping -h127.0.0.1 -uroot -proot --silent"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 3306:3306
     defaults:
       run:
         working-directory: apps/image-gen
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 10.28.1
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           cache: pnpm
-          cache-dependency-path: apps/image-gen/pnpm-lock.yaml
+          cache-dependency-path: |
+            apps/image-gen/pnpm-lock.yaml
+            apps/image-gen/storage-proxy/pnpm-lock.yaml
+            apps/image-gen/storage-proxy/pnpm-workspace.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install storage proxy dependencies
+        run: pnpm --dir storage-proxy install --frozen-lockfile
+
+      - name: Validate bounded storage proxy operations
+        run: |
+          pnpm --dir storage-proxy run typecheck:proxy
+          pnpm --dir storage-proxy run test:proxy
+          pnpm --dir storage-proxy run build:proxy
+          image="leaderbot-storage-proxy-ci:${GITHUB_SHA}"
+          docker build --build-arg SOURCE_REVISION="$GITHUB_SHA" \
+            --tag "$image" storage-proxy
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")" = "$GITHUB_SHA"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.artifact.kind" }}' "$image")" = "runtime"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.base.node" }}' "$image")" = "node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43"
+          pnpm --dir storage-proxy audit --audit-level=moderate
+
       - name: Lint
-        run: pnpm run lint
+        run: |
+          pnpm run lint
+          pnpm run lint:server
 
       - name: Type-check production code
         run: pnpm run check
@@ -52,8 +89,49 @@ jobs:
       - name: Test
         run: pnpm run test
 
+      - name: Test Messenger privacy stores with Redis
+        run: |
+          pnpm exec vitest run server/messengerImageQuotaStore.redis.test.ts
+          pnpm exec vitest run server/messengerGenerationCompletion.redis.test.ts
+          pnpm exec vitest run server/messengerGenerationQueue.redis.test.ts
+          pnpm exec vitest run server/webhookIngressPrivacy.redis.test.ts
+        env:
+          RUN_REDIS_INTEGRATION: "1"
+          REDIS_URL: redis://127.0.0.1:6379/14
+
+      - name: Test billing privacy serialization with MySQL
+        run: |
+          pnpm run db:migrate:test-bootstrap
+          pnpm exec vitest run \
+            server/billingHandoffErasure.mysql.test.ts \
+            server/billingPrivacySerialization.mysql.test.ts \
+            server/messengerErasureRetry.mysql.test.ts \
+            server/messengerProviderAttemptFence.mysql.test.ts \
+            server/portalHandoff.mysql.test.ts \
+            server/paymentSnapshot.mysql.test.ts
+        env:
+          DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_image_gen_ci
+          RUN_MYSQL_INTEGRATION: "1"
+
       - name: Build
         run: pnpm run build
+
+      - name: Build and inspect the production image
+        run: |
+          image="leaderbot-image-gen-ci:${GITHUB_SHA}"
+          docker build --build-arg SOURCE_REVISION="$GITHUB_SHA" --tag "$image" .
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")" = "$GITHUB_SHA"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.minimum" }}' "$image")" = "0016_expand"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.maximum" }}' "$image")" = "0016_expand"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.base.node" }}' "$image")" = "node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.runtime.ffmpeg" }}' "$image")" = "8.1.2-r0"
+          docker run --rm "$image" timeout -k 1s 1s true
+          set +e
+          output="$(docker run --rm "$image" node dist/migrate-production.cjs 2>&1)"
+          status="$?"
+          set -e
+          test "$status" = "1"
+          test "$output" = "Production migration refused: set LEADERBOT_PRODUCTION_MIGRATION_MODE to an explicit staged mode."
 
       - name: Audit all dependencies
         run: pnpm audit --audit-level=moderate

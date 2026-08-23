@@ -37,8 +37,12 @@ try {
   const through0014 = migrationFiles.filter(
     name => Number(name.slice(0, 4)) <= 14
   );
-  const finalMigration = migrationFiles.find(name => name.startsWith("0015_"));
-  if (!finalMigration) throw new Error("0015 migration is required");
+  const migration0015 = migrationFiles.find(name => name.startsWith("0015_"));
+  const migration0016 = migrationFiles.find(name => name.startsWith("0016_"));
+  const migration0017 = migrationFiles.find(name => name.startsWith("0017_"));
+  if (!migration0015 || !migration0016 || !migration0017) {
+    throw new Error("0015, 0016 and 0017 migrations are required");
+  }
   const journal = JSON.parse(
     await fs.readFile(
       path.join(appDirectory, "drizzle", "meta", "_journal.json"),
@@ -67,6 +71,15 @@ try {
   let base0014;
   let baseHistory;
   let final0015;
+  let history0015;
+  let partial0016LastErasedAt;
+  let partial0016ProviderScope;
+  let partial0016StaticScope;
+  let partial0016BillingColumns;
+  let final0016;
+  let history0016;
+  let partial0017BillingConstraints;
+  let final0017;
   let finalHistory;
   try {
     await assertProductionMigrationRuntime(connection);
@@ -74,8 +87,31 @@ try {
     await applyFiles(connection, through0014);
     base0014 = await captureProductionSchemaState(connection);
     baseHistory = await captureMigrationHistory(connection);
-    await applyFile(connection, finalMigration);
+    await applyFile(connection, migration0015);
     final0015 = await captureProductionSchemaState(connection);
+    history0015 = await captureMigrationHistory(connection);
+
+    const statements0016 = await readFileStatements(migration0016);
+    await applyStatements(connection, statements0016.slice(0, 4));
+    partial0016LastErasedAt = await captureProductionSchemaState(connection);
+    await applyStatements(connection, statements0016.slice(4, 6));
+    partial0016ProviderScope = await captureProductionSchemaState(connection);
+    await applyStatements(connection, statements0016.slice(6, 7));
+    partial0016StaticScope = await captureProductionSchemaState(connection);
+    await applyStatements(connection, statements0016.slice(7, 8));
+    partial0016BillingColumns = await captureProductionSchemaState(connection);
+    await applyStatements(connection, statements0016.slice(8));
+    final0016 = await captureProductionSchemaState(connection);
+    await insertMigrationHistory(connection, migration0016);
+    history0016 = await captureMigrationHistory(connection);
+
+    const statements0017 = await readFileStatements(migration0017);
+    await applyStatements(connection, statements0017.slice(0, 16));
+    partial0017BillingConstraints =
+      await captureProductionSchemaState(connection);
+    await applyStatements(connection, statements0017.slice(16));
+    final0017 = await captureProductionSchemaState(connection);
+    await insertMigrationHistory(connection, migration0017);
     finalHistory = await captureMigrationHistory(connection);
   } finally {
     await connection.end();
@@ -121,6 +157,15 @@ try {
     base0014,
     baseHistory,
     final0015,
+    history0015,
+    partial0016LastErasedAt,
+    partial0016ProviderScope,
+    partial0016StaticScope,
+    history0016,
+    partial0016BillingColumns,
+    final0016,
+    partial0017BillingConstraints,
+    final0017,
     finalHistory,
   };
   await fs.writeFile(
@@ -189,16 +234,30 @@ async function applyFiles(connection, files) {
 }
 
 async function applyFile(connection, file) {
+  await applyStatements(connection, await readFileStatements(file));
+  await insertMigrationHistory(connection, file);
+}
+
+async function readFileStatements(file) {
   const sql = await fs.readFile(
     path.join(appDirectory, "drizzle", file),
     "utf8"
   );
-  for (const statement of sql
+  return sql
     .split("--> statement-breakpoint")
     .map(value => value.trim())
-    .filter(Boolean)) {
-    await connection.query(statement);
-  }
+    .filter(Boolean);
+}
+
+async function applyStatements(connection, statements) {
+  for (const statement of statements) await connection.query(statement);
+}
+
+async function insertMigrationHistory(connection, file) {
+  const sql = await fs.readFile(
+    path.join(appDirectory, "drizzle", file),
+    "utf8"
+  );
   const journal = JSON.parse(
     await fs.readFile(
       path.join(appDirectory, "drizzle", "meta", "_journal.json"),

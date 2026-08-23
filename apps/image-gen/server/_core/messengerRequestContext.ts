@@ -7,6 +7,7 @@ type MessengerRequestContext = {
   bindingEpoch?: number;
   userKey?: string;
   privacyEpoch?: number;
+  erasureDataPrivacyEpoch?: number;
   operationId?: string;
   erasureControlDelivery?: boolean;
 };
@@ -50,6 +51,36 @@ export function setMessengerRequestPrivacySubject(input: {
   }
   context.userKey = input.userKey;
   context.privacyEpoch = input.privacyEpoch;
+  delete context.erasureDataPrivacyEpoch;
+}
+
+/**
+ * Marks a retry of an already-started erasure.
+ *
+ * The database subject has already advanced to `privacyEpoch`, while customer
+ * state still belongs to the immediately preceding data epoch. Keeping both
+ * values explicit prevents a retry from opening normal state at the erasing
+ * epoch or accidentally targeting a later reactivation.
+ */
+export function setMessengerRequestErasurePrivacySubject(input: {
+  userKey: string;
+  privacyEpoch: number;
+  dataPrivacyEpoch: number;
+}): void {
+  const context = messengerRequestContext.getStore();
+  if (
+    !context ||
+    !input.userKey.trim() ||
+    !Number.isSafeInteger(input.privacyEpoch) ||
+    !Number.isSafeInteger(input.dataPrivacyEpoch) ||
+    input.dataPrivacyEpoch <= 0 ||
+    input.privacyEpoch !== input.dataPrivacyEpoch + 1
+  ) {
+    throw new Error("Messenger erasure request context is unavailable");
+  }
+  context.userKey = input.userKey;
+  context.privacyEpoch = input.privacyEpoch;
+  context.erasureDataPrivacyEpoch = input.dataPrivacyEpoch;
 }
 
 export function setMessengerRequestOperationId(operationId: string): void {
@@ -91,6 +122,29 @@ export function getMessengerRequestPrivacySubject():
   const context = messengerRequestContext.getStore();
   if (!context?.userKey || !context.privacyEpoch) return undefined;
   return { userKey: context.userKey, privacyEpoch: context.privacyEpoch };
+}
+
+export function getMessengerRequestErasurePrivacySubject():
+  | Readonly<{
+      userKey: string;
+      privacyEpoch: number;
+      dataPrivacyEpoch: number;
+    }>
+  | undefined {
+  const context = messengerRequestContext.getStore();
+  if (
+    !context?.userKey ||
+    !context.privacyEpoch ||
+    !context.erasureDataPrivacyEpoch ||
+    context.privacyEpoch !== context.erasureDataPrivacyEpoch + 1
+  ) {
+    return undefined;
+  }
+  return {
+    userKey: context.userKey,
+    privacyEpoch: context.privacyEpoch,
+    dataPrivacyEpoch: context.erasureDataPrivacyEpoch,
+  };
 }
 
 export function getMessengerRequestPageId(): string | undefined {

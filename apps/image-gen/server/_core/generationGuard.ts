@@ -6,13 +6,16 @@ import {
   hasEphemeralKey,
   incrementExpiringCounter,
   isRedisStateStoreEnabled,
+  refreshEphemeralKeyIfValue,
   setEphemeralKey,
   setEphemeralKeyIfAbsent,
 } from "./stateStore";
 import {
+  assertCostLedgerTenantScope,
   summarizeBudgetedCostLedgerPeriod,
   summarizeBudgetedCostLedgerPeriods,
   summarizeCostLedgerPeriodForUser,
+  type CostLedgerTenantScope,
 } from "./costLedger";
 import { safeLog } from "./logger";
 import { notifyOwner } from "./notification";
@@ -20,12 +23,12 @@ import { toLogUser } from "./privacy";
 import { getRedisClient } from "./redis";
 
 const DEFAULT_GLOBAL_CONCURRENCY = 3;
-const DEFAULT_GLOBAL_LOCK_MS = 240000;
+const DEFAULT_GLOBAL_LOCK_MS = 15 * 60_000;
 const DEFAULT_PSID_COOLDOWN_MS = 0;
-const DEFAULT_PSID_LOCK_MS = 240000;
+const DEFAULT_PSID_LOCK_MS = 15 * 60_000;
 const DEFAULT_VIDEO_PSID_LOCK_MS = 900000;
 const DEFAULT_GLOBAL_SLOT_WAIT_MS = 100;
-const DAILY_BUDGET_KEY_PREFIX = "messenger:daily-image-budget";
+const MAX_LEASE_HEARTBEAT_INTERVAL_MS = 30_000;
 const DAILY_VIDEO_BUDGET_KEY_PREFIX = "messenger:daily-video-budget";
 const DAILY_AUDIO_TRANSCRIPTION_BUDGET_KEY_PREFIX =
   "messenger:daily-audio-transcription-budget";
@@ -74,13 +77,6 @@ const RELEASE_SPEND_SCRIPT = `
 function hashRequestId(reqId: string): string {
   const digest = createHash("sha256").update(reqId).digest("hex").slice(0, 24);
   return `req_${digest}`;
-}
-
-export class MessengerDailyImageBudgetExceededError extends Error {
-  constructor(message = "Messenger daily image budget reached") {
-    super(message);
-    this.name = "MessengerDailyImageBudgetExceededError";
-  }
 }
 
 export class MessengerDailyVideoBudgetExceededError extends Error {
@@ -249,11 +245,6 @@ type MessengerGenerationGlobalLimitConfig = {
   lockTtlMs: number;
 };
 
-type MessengerDailyImageBudgetConfig = {
-  enabled: boolean;
-  cap: number | null;
-};
-
 type MessengerDailySpendBudgetConfig = {
   enabled: boolean;
   capUsd: number | null;
@@ -309,6 +300,54 @@ function wait(ms: number): Promise<void> {
   });
 }
 
+async function runWithLeaseHeartbeat<T>(input: {
+  key: string;
+  token: string;
+  ttlSeconds: number;
+  kind: "global" | "user" | "video";
+  task: () => Promise<T>;
+}): Promise<T> {
+  if (!isRedisStateStoreEnabled()) return await input.task();
+
+  const intervalMs = Math.max(
+    1_000,
+    Math.min(MAX_LEASE_HEARTBEAT_INTERVAL_MS, input.ttlSeconds * 1_000 * 0.25)
+  );
+  let refreshInFlight: Promise<void> = Promise.resolve();
+  const refresh = () => {
+    refreshInFlight = refreshInFlight.then(async () => {
+      try {
+        const refreshed = await refreshEphemeralKeyIfValue(
+          input.key,
+          input.token,
+          input.ttlSeconds
+        );
+        if (!refreshed) {
+          safeLog("messenger_generation_lease_lost", {
+            level: "error",
+            kind: input.kind,
+          });
+        }
+      } catch (error) {
+        safeLog("messenger_generation_lease_refresh_failed", {
+          level: "error",
+          kind: input.kind,
+          errorCode:
+            error instanceof Error ? error.constructor.name : "UnknownError",
+        });
+      }
+    });
+  };
+  const timer = setInterval(refresh, intervalMs);
+  timer.unref?.();
+  try {
+    return await input.task();
+  } finally {
+    clearInterval(timer);
+    await refreshInFlight;
+  }
+}
+
 async function acquireGlobalGenerationSlot(
   token: string,
   maxConcurrency: number,
@@ -345,7 +384,13 @@ async function runWithGlobalGenerationLimit<T>(
       ttlSeconds
     );
     try {
-      return await task();
+      return await runWithLeaseHeartbeat({
+        key: slotKey,
+        token,
+        ttlSeconds,
+        kind: "global",
+        task,
+      });
     } finally {
       await deleteEphemeralKeyIfValue(slotKey, token);
     }
@@ -384,14 +429,6 @@ export function getMessengerGenerationGlobalLimitConfig(): MessengerGenerationGl
   };
 }
 
-export function getMessengerDailyImageBudgetConfig(): MessengerDailyImageBudgetConfig {
-  const cap = readPositiveInt("MESSENGER_GLOBAL_DAILY_IMAGE_CAP");
-  return {
-    enabled: cap !== null,
-    cap,
-  };
-}
-
 export function getMessengerDailySpendBudgetConfig(): MessengerDailySpendBudgetConfig {
   const capUsd = readPositiveUsd("MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD");
   return {
@@ -426,6 +463,7 @@ export async function admitMessengerProviderSpend<T>(input: {
   reqId: string;
   attemptId: string;
   userKey: string;
+  tenantScope?: CostLedgerTenantScope;
   estimatedCostUsd: number | null;
   estimatedOutputCostUsd?: number | null;
   costEstimateComplete?: boolean;
@@ -440,6 +478,14 @@ export async function admitMessengerProviderSpend<T>(input: {
   }
 
   const now = input.now ?? new Date();
+  if (userDailyEnabled) {
+    if (!input.tenantScope || input.tenantScope.userKey !== input.userKey) {
+      throw new MessengerSpendBudgetExceededError(
+        "Messenger user spend admission requires tenant scope"
+      );
+    }
+    assertCostLedgerTenantScope(input.tenantScope);
+  }
   if (!isRedisStateStoreEnabled()) {
     if (process.env.NODE_ENV === "production") {
       safeLog("messenger_spend_admission_redis_required", {
@@ -476,7 +522,9 @@ export async function admitMessengerProviderSpend<T>(input: {
   const [dailySummary, monthlySummary, userSummary] = await Promise.all([
     summarizeBudgetedCostLedgerPeriod(day),
     summarizeBudgetedCostLedgerPeriods(getUtcMonthDayPeriods(now), month),
-    summarizeCostLedgerPeriodForUser(day, input.userKey),
+    input.tenantScope
+      ? summarizeCostLedgerPeriodForUser(day, input.tenantScope)
+      : Promise.resolve({ estimatedCostUsd: 0 }),
   ]);
   const tag = `{messenger-spend:${month}}`;
   const attemptKey = createHash("sha256")
@@ -484,7 +532,17 @@ export async function admitMessengerProviderSpend<T>(input: {
     .digest("hex")
     .slice(0, 32);
   const userKey = createHash("sha256")
-    .update(input.userKey)
+    .update(
+      input.tenantScope
+        ? [
+            input.tenantScope.workspaceId,
+            input.tenantScope.channelConnectionId,
+            input.tenantScope.bindingEpoch,
+            input.tenantScope.privacyEpoch,
+            input.userKey,
+          ].join("\0")
+        : input.userKey
+    )
     .digest("hex")
     .slice(0, 32);
   const keys = [
@@ -690,6 +748,7 @@ export async function assertMessengerMonthlySpendBudgetAvailable(input: {
 export async function assertMessengerUserDailySpendBudgetAvailable(input: {
   reqId: string;
   userKey: string;
+  tenantScope?: CostLedgerTenantScope;
   estimatedCostUsd: number | null;
   estimatedOutputCostUsd?: number | null;
   /** Explicit false fails closed; omitted preserves complete-or-unpriced callers. */
@@ -700,6 +759,12 @@ export async function assertMessengerUserDailySpendBudgetAvailable(input: {
   if (!capUsd) {
     return;
   }
+  if (!input.tenantScope || input.tenantScope.userKey !== input.userKey) {
+    throw new MessengerSpendBudgetExceededError(
+      "Messenger user spend budget requires tenant scope"
+    );
+  }
+  assertCostLedgerTenantScope(input.tenantScope);
 
   const attemptEstimate =
     (input.estimatedCostUsd ?? 0) + (input.estimatedOutputCostUsd ?? 0);
@@ -728,7 +793,10 @@ export async function assertMessengerUserDailySpendBudgetAvailable(input: {
     );
   }
 
-  const summary = await summarizeCostLedgerPeriodForUser(period, input.userKey);
+  const summary = await summarizeCostLedgerPeriodForUser(
+    period,
+    input.tenantScope
+  );
   const projectedSpendUsd = summary.estimatedCostUsd + attemptEstimate;
   if (projectedSpendUsd > capUsd) {
     safeLog("messenger_user_daily_spend_budget_reached", {
@@ -752,48 +820,6 @@ export async function assertMessengerUserDailySpendBudgetAvailable(input: {
     });
     throw new MessengerSpendBudgetExceededError();
   }
-}
-
-export async function assertMessengerDailyImageBudgetAvailable(input: {
-  reqId: string;
-  now?: Date;
-}): Promise<void> {
-  const { cap } = getMessengerDailyImageBudgetConfig();
-  if (!cap) {
-    return;
-  }
-
-  const now = input.now ?? new Date();
-  const key = `${DAILY_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
-  const count = await incrementExpiringCounter(
-    key,
-    secondsUntilNextUtcDay(now)
-  );
-  if (count > cap) {
-    await decrementExpiringCounter(key);
-    safeLog("messenger_daily_image_budget_reached", {
-      level: "warn",
-      reqId: hashRequestId(input.reqId),
-      cap,
-      count,
-    });
-    throw new MessengerDailyImageBudgetExceededError();
-  }
-}
-
-export async function releaseMessengerDailyImageBudgetReservation(
-  input: {
-    now?: Date;
-  } = {}
-): Promise<void> {
-  const { cap } = getMessengerDailyImageBudgetConfig();
-  if (!cap) {
-    return;
-  }
-
-  const now = input.now ?? new Date();
-  const key = `${DAILY_BUDGET_KEY_PREFIX}:${getUtcDayKey(now)}`;
-  await decrementExpiringCounter(key);
 }
 
 export async function assertMessengerDailyVideoBudgetAvailable(input: {
@@ -912,7 +938,13 @@ export async function runGuardedGeneration<T>(
   }
 
   try {
-    return await runWithGlobalGenerationLimit(task);
+    return await runWithLeaseHeartbeat({
+      key: lockKey(psid),
+      token: lockToken,
+      ttlSeconds: toSeconds(lockMs),
+      kind: "user",
+      task: () => runWithGlobalGenerationLimit(task),
+    });
   } finally {
     await deleteEphemeralKeyIfValue(lockKey(psid), lockToken);
     if (cooldownMs > 0) {
@@ -941,7 +973,13 @@ export async function runGuardedVideoGeneration<T>(
   }
 
   try {
-    return await runWithGlobalGenerationLimit(task);
+    return await runWithLeaseHeartbeat({
+      key: videoLockKey(psid),
+      token: lockToken,
+      ttlSeconds: toSeconds(lockMs),
+      kind: "video",
+      task: () => runWithGlobalGenerationLimit(task),
+    });
   } finally {
     await deleteEphemeralKeyIfValue(videoLockKey(psid), lockToken);
   }

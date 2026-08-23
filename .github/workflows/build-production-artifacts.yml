@@ -1,0 +1,356 @@
+name: Build trusted production artifact
+run-name: Build ${{ inputs.target }} from reviewed main
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Exact production artifact to build
+        required: true
+        type: choice
+        options:
+          - image-gen-bridge
+          - image-gen-runtime
+          - storage-proxy
+
+permissions:
+  actions: read
+  attestations: write
+  contents: read
+  id-token: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FLYCTL_VERSION: 0.4.85
+
+concurrency:
+  group: production-artifact-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and attest reviewed artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: production
+    services:
+      mysql:
+        image: mysql:8.4.11@sha256:1d6b6a8fcee8ff758ff151d017f5203cd06792a0e698f0a593c9dfcb14609cf0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        options: >-
+          --health-cmd "mysqladmin ping -h127.0.0.1 -uroot -proot --silent"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 3306:3306
+    steps:
+      - name: Require the reviewed main branch
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - name: Checkout exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install root validation dependencies
+        run: npm ci
+
+      - name: Require green CI for this exact source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/validate-production-deployment.mjs --verify-source-ci "$GITHUB_SHA"
+
+      - name: Validate reviewed repository contract
+        run: npm run production:validate
+
+      - name: Install image-gen build validation dependencies
+        if: startsWith(inputs.target, 'image-gen-')
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.28.1 --activate
+          pnpm --dir apps/image-gen install --frozen-lockfile
+
+      - name: Install exact verified flyctl
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          install_root="$(mktemp -d "$RUNNER_TEMP/leaderbot-flyctl.XXXXXX")"
+          archive="$install_root/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          extract_dir="$install_root/extract"
+          bin_dir="$install_root/bin"
+          install -d -m 0700 "$extract_dir" "$bin_dir"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' \
+            "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90" \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$extract_dir" flyctl
+          test -f "$extract_dir/flyctl"
+          test ! -L "$extract_dir/flyctl"
+          install -m 0755 "$extract_dir/flyctl" "$bin_dir/flyctl"
+          ln -s flyctl "$bin_dir/fly"
+          version_output="$("$bin_dir/flyctl" version)"
+          [[ "$version_output" =~ ^flyctl\ v0\.4\.85([[:space:]]|$) ]]
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+
+      - name: Select immutable build contract
+        id: contract
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          case "$TARGET" in
+            image-gen-bridge)
+              app="leaderbot-fb-image-gen"
+              context="apps/image-gen"
+              kind="migration-bridge"
+              schema_minimum="0015_base"
+              schema_maximum="0016_expand"
+              base_image="$(jq -er '.apps["image-gen"].databaseSchemaTransition.legacyBaseImage' deploy/production/apps.json)"
+              ;;
+            image-gen-runtime)
+              app="leaderbot-fb-image-gen"
+              context="apps/image-gen"
+              kind="runtime"
+              schema_minimum="0016_expand"
+              schema_maximum="0016_expand"
+              base_image=""
+              ;;
+            storage-proxy)
+              app="leaderbot-storage-proxy"
+              context="apps/image-gen/storage-proxy"
+              kind="runtime"
+              schema_minimum=""
+              schema_maximum=""
+              base_image=""
+              ;;
+            *)
+              exit 1
+              ;;
+          esac
+          if [[ -n "$base_image" ]]; then
+            [[ "$base_image" =~ ^registry\.fly\.io/leaderbot-fb-image-gen@sha256:[a-f0-9]{64}$ ]]
+          fi
+          {
+            echo "ARTIFACT_APP=$app"
+            echo "ARTIFACT_CONTEXT=$context"
+            echo "ARTIFACT_KIND=$kind"
+            echo "ARTIFACT_SCHEMA_MINIMUM=$schema_minimum"
+            echo "ARTIFACT_SCHEMA_MAXIMUM=$schema_maximum"
+            echo "ARTIFACT_BASE_IMAGE=$base_image"
+            echo "ARTIFACT_TAG=registry.fly.io/$app:reviewed-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          } >> "$GITHUB_ENV"
+          {
+            echo "app=$app"
+            echo "kind=$kind"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to the image-gen registry
+        if: inputs.target != 'storage-proxy'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+        run: |
+          test -n "$FLY_API_TOKEN"
+          flyctl auth docker
+
+      - name: Authenticate to the storage-proxy registry
+        if: inputs.target == 'storage-proxy'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_STORAGE_PROXY_DEPLOY_TOKEN }}
+        run: |
+          test -n "$FLY_API_TOKEN"
+          flyctl auth docker
+
+      - name: Build and push exact artifact
+        id: image
+        run: |
+          metadata="$RUNNER_TEMP/leaderbot-build-metadata.json"
+          args=(
+            --platform linux/amd64
+            --push
+            --metadata-file "$metadata"
+            --build-arg "SOURCE_REVISION=$GITHUB_SHA"
+            --tag "$ARTIFACT_TAG"
+          )
+          if [[ "$ARTIFACT_KIND" = "migration-bridge" ]]; then
+            args+=(
+              --target migration_bridge
+              --build-arg "MIGRATION_BRIDGE_BASE_IMAGE=$ARTIFACT_BASE_IMAGE"
+            )
+          elif [[ "$ARTIFACT_APP" = "leaderbot-fb-image-gen" ]]; then
+            args+=(--target runtime)
+          fi
+          docker buildx build "${args[@]}" "$ARTIFACT_CONTEXT"
+          digest="$(jq -er '."containerimage.digest"' "$metadata")"
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          echo "ARTIFACT_DIGEST=$digest" >> "$GITHUB_ENV"
+          echo "ARTIFACT_IMAGE=registry.fly.io/$ARTIFACT_APP@$digest" >> "$GITHUB_ENV"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Verify pushed immutable labels
+        run: |
+          docker pull "$ARTIFACT_IMAGE"
+          revision="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$ARTIFACT_IMAGE")"
+          kind="$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.artifact.kind" }}' "$ARTIFACT_IMAGE")"
+          test "$revision" = "$GITHUB_SHA"
+          test "$kind" = "$ARTIFACT_KIND"
+          if [[ "$ARTIFACT_APP" = "leaderbot-fb-image-gen" ]]; then
+            minimum="$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.minimum" }}' "$ARTIFACT_IMAGE")"
+            maximum="$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.maximum" }}' "$ARTIFACT_IMAGE")"
+            test "$minimum" = "$ARTIFACT_SCHEMA_MINIMUM"
+            test "$maximum" = "$ARTIFACT_SCHEMA_MAXIMUM"
+            marker="$(docker run --rm --entrypoint cat "$ARTIFACT_IMAGE" /app/.leaderbot-artifact-kind)"
+            test "$marker" = "$ARTIFACT_KIND"
+          fi
+          if [[ "$ARTIFACT_KIND" = "runtime" ]]; then
+            node_base="$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.base.node" }}' "$ARTIFACT_IMAGE")"
+            test "$node_base" = "node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43"
+          fi
+          if [[ "$ARTIFACT_APP" = "leaderbot-fb-image-gen" && "$ARTIFACT_KIND" = "runtime" ]]; then
+            ffmpeg_version="$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.runtime.ffmpeg" }}' "$ARTIFACT_IMAGE")"
+            test "$ffmpeg_version" = "8.1.2-r0"
+          fi
+          if [[ "$ARTIFACT_KIND" = "migration-bridge" ]]; then
+            base="$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.bridge.base-image" }}' "$ARTIFACT_IMAGE")"
+            test "$base" = "$ARTIFACT_BASE_IMAGE"
+          fi
+
+      - name: Prepare exact base and expand schema fixtures
+        if: startsWith(inputs.target, 'image-gen-')
+        run: |
+          mysql -h127.0.0.1 -uroot -proot -e "CREATE DATABASE leaderbot_artifact_base CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci; CREATE DATABASE leaderbot_artifact_expand CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"
+          NODE_ENV=test \
+            LEADERBOT_ALLOW_TEST_SCHEMA_FIXTURE=1 \
+            LEADERBOT_TEST_SCHEMA_PHASE=0015_base \
+            DATABASE_URL=mysql://root:root@127.0.0.1:3306/leaderbot_artifact_base \
+            node apps/image-gen/scripts/prepare-artifact-schema-fixture.mjs
+          NODE_ENV=test \
+            LEADERBOT_ALLOW_TEST_SCHEMA_FIXTURE=1 \
+            LEADERBOT_TEST_SCHEMA_PHASE=0016_expand \
+            DATABASE_URL=mysql://root:root@127.0.0.1:3306/leaderbot_artifact_expand \
+            node apps/image-gen/scripts/prepare-artifact-schema-fixture.mjs
+          mysql -h127.0.0.1 -uroot -proot -e "CREATE USER 'runtime_base'@'%' IDENTIFIED BY 'runtime_base'; GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_base.* TO 'runtime_base'@'%'; CREATE USER 'runtime_expand'@'%' IDENTIFIED BY 'runtime_expand'; GRANT SELECT, INSERT, UPDATE, DELETE ON leaderbot_artifact_expand.* TO 'runtime_expand'@'%';"
+
+      - name: Prove exact bridge runtime and both supported schemas
+        if: inputs.target == 'image-gen-bridge'
+        run: |
+          docker run --rm "$ARTIFACT_IMAGE" timeout -k 1s 1s true
+          docker pull "$ARTIFACT_BASE_IMAGE"
+          base_runtime_hash="$(docker run --rm --entrypoint sha256sum "$ARTIFACT_BASE_IMAGE" /app/dist/index.cjs | cut -d' ' -f1)"
+          bridge_runtime_hash="$(docker run --rm --entrypoint sha256sum "$ARTIFACT_IMAGE" /app/dist/index.cjs | cut -d' ' -f1)"
+          test "$base_runtime_hash" = "$bridge_runtime_hash"
+          test "$(docker image inspect --format '{{json .Config.Cmd}}' "$ARTIFACT_BASE_IMAGE")" = "$(docker image inspect --format '{{json .Config.Cmd}}' "$ARTIFACT_IMAGE")"
+          test "$(docker image inspect --format '{{json .Config.Entrypoint}}' "$ARTIFACT_BASE_IMAGE")" = "$(docker image inspect --format '{{json .Config.Entrypoint}}' "$ARTIFACT_IMAGE")"
+          docker run --rm --entrypoint node "$ARTIFACT_IMAGE" --check /app/dist/index.cjs
+          for phase in base expand; do
+            docker run --rm --network host \
+              --env "DATABASE_URL=mysql://runtime_${phase}:runtime_${phase}@127.0.0.1:3306/leaderbot_artifact_${phase}" \
+              --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \
+              "$ARTIFACT_IMAGE" node dist/migrate-production.cjs
+          done
+
+      - name: Prove runtime refuses base and accepts expand
+        if: inputs.target == 'image-gen-runtime'
+        run: |
+          docker run --rm "$ARTIFACT_IMAGE" timeout -k 1s 1s true
+          docker run --rm --entrypoint node "$ARTIFACT_IMAGE" --check /app/dist/index.cjs
+          if docker run --rm --network host \
+            --env DATABASE_URL=mysql://runtime_base:runtime_base@127.0.0.1:3306/leaderbot_artifact_base \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \
+            "$ARTIFACT_IMAGE" node dist/migrate-production.cjs; then
+            echo "Runtime unexpectedly accepted the base schema" >&2
+            exit 1
+          fi
+          docker run --rm --network host \
+            --env DATABASE_URL=mysql://runtime_expand:runtime_expand@127.0.0.1:3306/leaderbot_artifact_expand \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact \
+            "$ARTIFACT_IMAGE" node dist/migrate-production.cjs
+
+      - name: Remove registry credential before attestation
+        if: always()
+        run: docker logout registry.fly.io
+
+      - name: Attest exact build provenance
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: registry.fly.io/${{ steps.contract.outputs.app }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: false
+
+      - name: Create bridge-material predicate
+        if: inputs.target == 'image-gen-bridge'
+        run: |
+          jq -n \
+            --arg baseImage "$ARTIFACT_BASE_IMAGE" \
+            --arg sourceCommit "$GITHUB_SHA" \
+            --arg sourceRef "$GITHUB_REF" \
+            --arg schemaMinimum "$ARTIFACT_SCHEMA_MINIMUM" \
+            --arg schemaMaximum "$ARTIFACT_SCHEMA_MAXIMUM" \
+            '{baseImage:$baseImage,sourceCommit:$sourceCommit,sourceRef:$sourceRef,schema:{minimum:$schemaMinimum,maximum:$schemaMaximum}}' \
+            > "$RUNNER_TEMP/leaderbot-bridge-predicate.json"
+
+      - name: Attest exact bridge base material
+        if: inputs.target == 'image-gen-bridge'
+        id: bridge-material
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: registry.fly.io/${{ steps.contract.outputs.app }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          predicate-type: https://leaderbot.live/attestations/migration-bridge/v1
+          predicate-path: ${{ runner.temp }}/leaderbot-bridge-predicate.json
+          push-to-registry: false
+
+      - name: Package reviewed artifact metadata
+        env:
+          ARTIFACT_TARGET: ${{ inputs.target }}
+          PROVENANCE_ATTESTATION_ID: ${{ steps.provenance.outputs.attestation-id }}
+          PROVENANCE_ATTESTATION_URL: ${{ steps.provenance.outputs.attestation-url }}
+          PROVENANCE_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          BRIDGE_ATTESTATION_ID: ${{ steps.bridge-material.outputs.attestation-id }}
+          BRIDGE_ATTESTATION_URL: ${{ steps.bridge-material.outputs.attestation-url }}
+          BRIDGE_BUNDLE: ${{ steps.bridge-material.outputs.bundle-path }}
+        run: |
+          output="$RUNNER_TEMP/leaderbot-production-artifact"
+          mkdir -p "$output"
+          cp "$PROVENANCE_BUNDLE" "$output/provenance.json"
+          if [[ -n "$BRIDGE_BUNDLE" ]]; then
+            cp "$BRIDGE_BUNDLE" "$output/bridge-material.json"
+          fi
+          jq -n \
+            --arg target "$ARTIFACT_TARGET" \
+            --arg image "$ARTIFACT_IMAGE" \
+            --arg sourceCommit "$GITHUB_SHA" \
+            --arg sourceRef "$GITHUB_REF" \
+            --arg kind "$ARTIFACT_KIND" \
+            --arg baseImage "$ARTIFACT_BASE_IMAGE" \
+            --arg schemaMinimum "$ARTIFACT_SCHEMA_MINIMUM" \
+            --arg schemaMaximum "$ARTIFACT_SCHEMA_MAXIMUM" \
+            --arg builderWorkflow "$GITHUB_WORKFLOW_REF" \
+            --arg provenanceAttestationId "$PROVENANCE_ATTESTATION_ID" \
+            --arg provenanceAttestationUrl "$PROVENANCE_ATTESTATION_URL" \
+            --arg bridgeAttestationId "$BRIDGE_ATTESTATION_ID" \
+            --arg bridgeAttestationUrl "$BRIDGE_ATTESTATION_URL" \
+            '{target:$target,image:$image,sourceCommit:$sourceCommit,sourceRef:$sourceRef,kind:$kind,baseImage:(if ($baseImage|length)>0 then $baseImage else null end),schema:(if ($schemaMinimum|length)>0 then {minimum:$schemaMinimum,maximum:$schemaMaximum} else null end),builderWorkflow:$builderWorkflow,attestations:{provenance:{id:$provenanceAttestationId,url:$provenanceAttestationUrl},bridgeMaterial:(if ($bridgeAttestationId|length)>0 then {id:$bridgeAttestationId,url:$bridgeAttestationUrl} else null end)}}' \
+            > "$output/artifact.json"
+
+      - name: Upload immutable build record
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: production-artifact-${{ inputs.target }}-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/leaderbot-production-artifact
+          if-no-files-found: error
+          retention-days: 90

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-export const productionSchemaContractVersion = 1;
+export const productionSchemaContractVersion = 4;
 export const productionSchemaSqlMode =
   "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION";
 
@@ -23,7 +23,17 @@ export async function configureProductionSchemaSession(connection) {
   await connection.query("SET NAMES utf8mb4 COLLATE utf8mb4_0900_ai_ci");
 }
 
-export async function assertProductionMigrationRuntime(connection) {
+export async function assertProductionMigrationRuntime(
+  connection,
+  privilegeProfile = "bootstrap"
+) {
+  if (
+    !new Set(["inspection", "runtime", "expand", "bootstrap"]).has(
+      privilegeProfile
+    )
+  ) {
+    throw new Error("production database privilege profile is unsupported");
+  }
   await configureProductionSchemaSession(connection);
   const [[runtime]] = await connection.query(
     "SELECT VERSION() AS version,DATABASE() AS databaseName,@@SESSION.sql_mode AS sqlMode,@@SESSION.time_zone AS timeZone,@@SESSION.transaction_isolation AS transactionIsolation,@@SESSION.foreign_key_checks AS foreignKeyChecks,@@SESSION.default_storage_engine AS defaultStorageEngine,@@GLOBAL.innodb_default_row_format AS innodbDefaultRowFormat,@@GLOBAL.innodb_page_size AS innodbPageSize,@@GLOBAL.innodb_force_recovery AS innodbForceRecovery,@@GLOBAL.innodb_read_only AS innodbReadOnly,@@GLOBAL.read_only AS readOnly,@@GLOBAL.super_read_only AS superReadOnly,@@GLOBAL.disabled_storage_engines AS disabledStorageEngines,@@SESSION.innodb_strict_mode AS innodbStrictMode,@@lower_case_table_names AS lowerCaseTableNames,@@SESSION.explicit_defaults_for_timestamp AS explicitTimestampDefaults,@@SESSION.auto_increment_increment AS autoIncrementIncrement,@@SESSION.auto_increment_offset AS autoIncrementOffset,@@SESSION.information_schema_stats_expiry AS informationSchemaStatsExpiry,@@SESSION.sql_quote_show_create AS sqlQuoteShowCreate,@@SESSION.show_create_table_verbosity AS showCreateTableVerbosity,@@SESSION.sql_safe_updates AS sqlSafeUpdates,@@SESSION.unique_checks AS uniqueChecks,@@SESSION.transaction_read_only AS transactionReadOnly,(ABS(@@SESSION.timestamp-UNIX_TIMESTAMP()) <= 1) AS timestampIsDefault,@@SESSION.insert_id AS insertId,(@@SESSION.sql_select_limit = 18446744073709551615) AS sqlSelectLimitIsDefault,@@SESSION.sql_big_selects AS sqlBigSelects,@@GLOBAL.log_bin AS logBin,@@GLOBAL.log_bin_trust_function_creators AS logBinTrustFunctionCreators"
@@ -32,8 +42,23 @@ export async function assertProductionMigrationRuntime(connection) {
     "SELECT DEFAULT_CHARACTER_SET_NAME AS characterSet,DEFAULT_COLLATION_NAME AS collationName,DEFAULT_ENCRYPTION AS defaultEncryption,(SELECT EXISTS(SELECT 1 FROM information_schema.SCHEMATA_EXTENSIONS se WHERE se.SCHEMA_NAME=DATABASE() AND UPPER(COALESCE(se.OPTIONS,'')) LIKE '%READ ONLY=1%')) AS schemaReadOnly FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=DATABASE()"
   );
   assertProductionRuntimeValues({ ...runtime, ...schema });
-  await assertCheckConstraintsEnforced(connection);
-  await assertTriggerCapability(connection, runtime);
+  const grants = await currentUserGrants(connection);
+  if (privilegeProfile === "inspection") {
+    assertProductionInspectionGrantScope(grants, runtime.databaseName);
+  } else if (privilegeProfile === "runtime") {
+    assertProductionRuntimeGrantScope(grants, runtime.databaseName);
+  } else if (privilegeProfile === "expand") {
+    assertExpandMigrationGrantScope(grants, runtime.databaseName);
+    await assertCheckConstraintsEnforced(connection);
+  } else {
+    await assertCheckConstraintsEnforced(connection);
+    assertTriggerGrantScope(
+      grants,
+      runtime.databaseName,
+      Number(runtime.logBin) === 1 &&
+        Number(runtime.logBinTrustFunctionCreators) !== 1
+    );
+  }
   return { databaseName: runtime.databaseName };
 }
 
@@ -49,13 +74,105 @@ export async function assertPreparedStatementCapacity(connection) {
   }
 }
 
-async function assertTriggerCapability(connection, runtime) {
+async function currentUserGrants(connection) {
   const [rows] = await connection.query("SHOW GRANTS FOR CURRENT_USER()");
-  assertTriggerGrantScope(
-    rows.flatMap(row => Object.values(row)).map(String),
-    runtime.databaseName,
-    Number(runtime.logBin) === 1 &&
-      Number(runtime.logBinTrustFunctionCreators) !== 1
+  return rows.flatMap(row => Object.values(row)).map(String);
+}
+
+function scopedPrivileges(grants, databaseName) {
+  const schemaPrivileges = new Set();
+  const revokedSchemaPrivileges = new Set();
+  const unexpected = [];
+  for (const grant of grants) {
+    const parsed = /^(GRANT|REVOKE) (.+) ON (.+) (?:TO|FROM) /i.exec(grant);
+    if (!parsed) {
+      unexpected.push(grant);
+      continue;
+    }
+    const operation = parsed[1].toUpperCase();
+    const privileges = parsed[2]
+      .split(",")
+      .map(value => value.trim().toUpperCase());
+    const scope = parsed[3].replaceAll("`", "");
+    if (
+      scope === "*.*" &&
+      privileges.length === 1 &&
+      privileges[0] === "USAGE"
+    ) {
+      continue;
+    }
+    if (scope !== `${databaseName}.*` || /\bWITH GRANT OPTION\b/i.test(grant)) {
+      unexpected.push(grant);
+      continue;
+    }
+    const target =
+      operation === "REVOKE" ? revokedSchemaPrivileges : schemaPrivileges;
+    for (const privilege of privileges) target.add(privilege);
+  }
+  for (const privilege of revokedSchemaPrivileges) {
+    schemaPrivileges.delete(privilege);
+  }
+  return { schemaPrivileges, unexpected };
+}
+
+function assertExactScopedPrivileges(
+  grants,
+  databaseName,
+  requiredPrivileges,
+  label
+) {
+  const { schemaPrivileges, unexpected } = scopedPrivileges(
+    grants,
+    databaseName
+  );
+  const required = new Set(requiredPrivileges);
+  const missing = [...required].filter(
+    privilege => !schemaPrivileges.has(privilege)
+  );
+  const excessive = [...schemaPrivileges].filter(
+    privilege => !required.has(privilege)
+  );
+  if (unexpected.length > 0 || missing.length > 0 || excessive.length > 0) {
+    throw new Error(
+      `${label} privilege boundary mismatch` +
+        (missing.length > 0 ? `; missing ${missing.join(",")}` : "") +
+        (excessive.length > 0 ? `; excessive ${excessive.join(",")}` : "")
+    );
+  }
+}
+
+export function assertProductionRuntimeGrantScope(grants, databaseName) {
+  assertExactScopedPrivileges(
+    grants,
+    databaseName,
+    ["SELECT", "INSERT", "UPDATE", "DELETE"],
+    "runtime principal"
+  );
+}
+
+export function assertProductionInspectionGrantScope(grants, databaseName) {
+  assertExactScopedPrivileges(
+    grants,
+    databaseName,
+    ["SELECT"],
+    "inspection principal"
+  );
+}
+
+export function assertExpandMigrationGrantScope(grants, databaseName) {
+  assertExactScopedPrivileges(
+    grants,
+    databaseName,
+    [
+      "CREATE TEMPORARY TABLES",
+      "ALTER",
+      "INDEX",
+      "REFERENCES",
+      "SELECT",
+      "INSERT",
+      "UPDATE",
+    ],
+    "expand migration principal"
   );
 }
 
@@ -344,10 +461,10 @@ export function normalizeSqlOutsideQuotedValues(value) {
   return output;
 }
 
-export async function captureProductionSchemaState(connection) {
-  const [[identity]] = await connection.query(
-    "SELECT CURRENT_USER() AS currentUser"
-  );
+export async function captureProductionSchemaState(
+  connection,
+  { includePrivilegedObjects = true } = {}
+) {
   const [objects] = await connection.query(
     "SELECT `TABLE_NAME` AS name,`TABLE_TYPE` AS objectType FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() ORDER BY `TABLE_TYPE`,`TABLE_NAME`"
   );
@@ -375,26 +492,31 @@ export async function captureProductionSchemaState(connection) {
     throw new Error(`unsupported database object type ${object.objectType}`);
   }
 
-  const [triggerRows] = await connection.query(
-    "SELECT `TRIGGER_NAME` AS name,`DEFINER` AS definer,`ACTION_TIMING` AS timing,`EVENT_MANIPULATION` AS eventName,`EVENT_OBJECT_TABLE` AS tableName,`ACTION_ORIENTATION` AS orientation,`ACTION_ORDER` AS actionOrder,`ACTION_CONDITION` AS actionCondition,`ACTION_STATEMENT` AS actionStatement,`SQL_MODE` AS sqlMode,`CHARACTER_SET_CLIENT` AS characterSetClient,`COLLATION_CONNECTION` AS collationConnection,`DATABASE_COLLATION` AS databaseCollation FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() ORDER BY `TRIGGER_NAME`"
-  );
   const triggers = {};
-  for (const trigger of triggerRows) {
-    triggers[trigger.name] = sha256(
-      JSON.stringify(canonicalTriggerTuple(trigger, identity.currentUser))
+  if (includePrivilegedObjects) {
+    const [[identity]] = await connection.query(
+      "SELECT CURRENT_USER() AS currentUser"
     );
-  }
+    const [triggerRows] = await connection.query(
+      "SELECT `TRIGGER_NAME` AS name,`DEFINER` AS definer,`ACTION_TIMING` AS timing,`EVENT_MANIPULATION` AS eventName,`EVENT_OBJECT_TABLE` AS tableName,`ACTION_ORIENTATION` AS orientation,`ACTION_ORDER` AS actionOrder,`ACTION_CONDITION` AS actionCondition,`ACTION_STATEMENT` AS actionStatement,`SQL_MODE` AS sqlMode,`CHARACTER_SET_CLIENT` AS characterSetClient,`COLLATION_CONNECTION` AS collationConnection,`DATABASE_COLLATION` AS databaseCollation FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE() ORDER BY `TRIGGER_NAME`"
+    );
+    for (const trigger of triggerRows) {
+      triggers[trigger.name] = sha256(
+        JSON.stringify(canonicalTriggerTuple(trigger, identity.currentUser))
+      );
+    }
 
-  const [[programmable]] = await connection.query(
-    "SELECT (SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=DATABASE()) AS routineCount,(SELECT COUNT(*) FROM information_schema.EVENTS WHERE EVENT_SCHEMA=DATABASE()) AS eventCount"
-  );
-  if (
-    Number(programmable.routineCount) !== 0 ||
-    Number(programmable.eventCount) !== 0
-  ) {
-    throw new Error(
-      "production schema contract requires no routines or events"
+    const [[programmable]] = await connection.query(
+      "SELECT (SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA=DATABASE()) AS routineCount,(SELECT COUNT(*) FROM information_schema.EVENTS WHERE EVENT_SCHEMA=DATABASE()) AS eventCount"
     );
+    if (
+      Number(programmable.routineCount) !== 0 ||
+      Number(programmable.eventCount) !== 0
+    ) {
+      throw new Error(
+        "production schema contract requires no routines or events"
+      );
+    }
   }
 
   return { tables, views, triggers };

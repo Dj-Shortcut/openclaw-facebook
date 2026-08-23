@@ -1,12 +1,16 @@
+import { createHash, randomUUID } from "node:crypto";
 import type { Lang } from "./i18n";
 import type { ConversationAction } from "./botResponse";
 import {
   clearStateStore,
+  deleteEphemeralKeyIfValue,
   isPromiseLike,
+  setEphemeralKeyIfAbsent,
   type MaybePromise,
 } from "./stateStore";
 import { toUserKey } from "./privacy";
 import { MAX_SOURCE_IMAGES } from "./image-generation/generationTypes";
+import { getMessengerRequestPageId } from "./messengerRequestContext";
 import {
   deletePersistedState,
   findPersistedStateByUserKeyForPage,
@@ -409,44 +413,97 @@ export function setPendingStoredImage(
   imageUrl: string,
   now = Date.now()
 ): MaybePromise<void> {
-  return setPendingStoredImages(psid, [imageUrl], now);
+  return setPendingStoredImages(psid, [imageUrl], now).then(() => undefined);
 }
+
+export type PendingStoredImagesUpdate = {
+  pendingImageUrls: string[];
+  retainedIncomingImageUrls: string[];
+  rejectedIncomingImageUrls: string[];
+};
 
 export async function setPendingStoredImages(
   psid: string,
   imageUrls: string[],
   now = Date.now()
-): Promise<void> {
-  const state = await Promise.resolve(getOrCreateState(psid));
+): Promise<PendingStoredImagesUpdate> {
   const incoming = imageUrls.map(url => url.trim()).filter(Boolean);
-  if (!incoming.length) return;
+  if (!incoming.length) {
+    return {
+      pendingImageUrls: [],
+      retainedIncomingImageUrls: [],
+      rejectedIncomingImageUrls: [],
+    };
+  }
 
-  const shouldAppend =
-    state.stage === "AWAITING_EDIT_PROMPT" &&
-    Boolean(state.pendingImageUrls?.length);
-  const pendingImageUrls = Array.from(
-    new Set([...(shouldAppend ? state.pendingImageUrls ?? [] : []), ...incoming])
-  ).slice(0, MAX_SOURCE_IMAGES);
-  const lastImageUrl = pendingImageUrls.at(-1)!;
-  await Promise.resolve(
-    patchState(
-      psid,
-      {
-        lastPhotoUrl: lastImageUrl,
-        lastPhoto: lastImageUrl,
-        lastPhotoSource: "stored",
-        lastImageUrl: undefined,
-        lastGeneratedUrl: null,
-        pendingImageUrl: lastImageUrl,
-        pendingImageUrls,
-        pendingImageAt: now,
-        pendingEditIntent: null,
-        stage: "AWAITING_EDIT_PROMPT",
-        state: "AWAITING_EDIT_PROMPT",
-      },
-      now
-    )
-  );
+  return await withPendingStoredImagesLock(psid, async () => {
+    const state = await Promise.resolve(getOrCreateState(psid));
+    const shouldAppend =
+      state.stage === "AWAITING_EDIT_PROMPT" &&
+      Boolean(state.pendingImageUrls?.length);
+    const pendingImageUrls = Array.from(
+      new Set([
+        ...(shouldAppend ? (state.pendingImageUrls ?? []) : []),
+        ...incoming,
+      ])
+    ).slice(0, MAX_SOURCE_IMAGES);
+    const retainedIncomingImageUrls = incoming.filter(imageUrl =>
+      pendingImageUrls.includes(imageUrl)
+    );
+    const rejectedIncomingImageUrls = incoming.filter(
+      imageUrl => !pendingImageUrls.includes(imageUrl)
+    );
+    if (retainedIncomingImageUrls.length > 0) {
+      const lastImageUrl = pendingImageUrls.at(-1)!;
+      await Promise.resolve(
+        patchState(
+          psid,
+          {
+            lastPhotoUrl: lastImageUrl,
+            lastPhoto: lastImageUrl,
+            lastPhotoSource: "stored",
+            lastImageUrl: undefined,
+            lastGeneratedUrl: null,
+            pendingImageUrl: lastImageUrl,
+            pendingImageUrls,
+            pendingImageAt: now,
+            pendingEditIntent: null,
+            stage: "AWAITING_EDIT_PROMPT",
+            state: "AWAITING_EDIT_PROMPT",
+          },
+          now
+        )
+      );
+    }
+    return {
+      pendingImageUrls,
+      retainedIncomingImageUrls,
+      rejectedIncomingImageUrls,
+    };
+  });
+}
+
+async function withPendingStoredImagesLock<T>(
+  psid: string,
+  action: () => Promise<T>
+): Promise<T> {
+  const lockKey = `messenger-pending-images:${createHash("sha256")
+    .update(getMessengerRequestPageId() ?? "no-page")
+    .update("\0")
+    .update(toUserKey(psid))
+    .digest("hex")}`;
+  const token = randomUUID();
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (await setEphemeralKeyIfAbsent(lockKey, token, 10)) {
+      try {
+        return await action();
+      } finally {
+        await deleteEphemeralKeyIfValue(lockKey, token);
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  throw new Error("Messenger pending image update contention exceeded limit");
 }
 
 export function rememberFaceSourceImage(

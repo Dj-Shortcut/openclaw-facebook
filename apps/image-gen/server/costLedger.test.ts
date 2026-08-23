@@ -7,13 +7,21 @@ import {
   resetCostLedgerReliabilityStatsForTests,
   summarizeBudgetedCostLedgerPeriod,
   summarizeCostLedgerPeriod,
+  summarizeCostLedgerPeriodForUser,
   summarizeCostLedgerPeriods,
   updateCostLedgerEntry,
   type CostLedgerEntry,
+  type CostLedgerTenantScope,
+  type StoredCostLedgerEntry,
 } from "./_core/costLedger";
-import { clearStateStore, writeScopedState } from "./_core/stateStore";
+import {
+  clearStateStore,
+  readScopedState,
+  writeScopedState,
+} from "./_core/stateStore";
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   clearStateStore();
   resetCostLedgerReliabilityStatsForTests();
@@ -26,6 +34,10 @@ function entry(overrides: Partial<CostLedgerEntry>): CostLedgerEntry {
     operation: "image_generation",
     provider: "openai-images",
     model: "gpt-image-2",
+    workspaceId: 42,
+    channelConnectionId: 7,
+    bindingEpoch: 3,
+    privacyEpoch: 5,
     userKey: "user-key-1",
     reqId: "req-cost",
     status: "provider_attempt_started",
@@ -35,6 +47,19 @@ function entry(overrides: Partial<CostLedgerEntry>): CostLedgerEntry {
     costEstimateComplete: true,
     estimateSource: "env_override",
     unpricedCostComponents: [],
+    ...overrides,
+  };
+}
+
+function tenantScope(
+  overrides: Partial<CostLedgerTenantScope> = {}
+): CostLedgerTenantScope {
+  return {
+    workspaceId: 42,
+    channelConnectionId: 7,
+    bindingEpoch: 3,
+    privacyEpoch: 5,
+    userKey: "user-key-1",
     ...overrides,
   };
 }
@@ -72,6 +97,28 @@ it("keeps owner bypass costs visible without consuming customer budget", async (
 });
 
 describe("cost ledger", () => {
+  it("fails closed before storing an unscoped Messenger entry in production", async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      await expect(
+        appendCostLedgerEntry(
+          entry({
+            workspaceId: undefined,
+            channelConnectionId: undefined,
+            bindingEpoch: undefined,
+            privacyEpoch: undefined,
+          }),
+          new Date("2026-06-21T10:00:00.000Z")
+        )
+      ).rejects.toThrow("Messenger cost ledger tenant scope is required");
+      await expect(readCostLedgerPeriod("2026-06-21")).resolves.toEqual([]);
+    } finally {
+      if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
   it("stores a stable request-id hash for repeated raw request IDs", async () => {
     await appendCostLedgerEntry(
       {
@@ -387,15 +434,27 @@ describe("cost ledger", () => {
 
   it("summarizes multiple UTC periods for monthly spend checks", async () => {
     await appendCostLedgerEntry(
-      entry({ id: "req-month-a:attempt-1", reqId: "req-month-a", estimatedCostUsd: 0.02 }),
+      entry({
+        id: "req-month-a:attempt-1",
+        reqId: "req-month-a",
+        estimatedCostUsd: 0.02,
+      }),
       new Date("2026-06-01T12:00:00.000Z")
     );
     await appendCostLedgerEntry(
-      entry({ id: "req-month-b:attempt-1", reqId: "req-month-b", estimatedCostUsd: 0.03 }),
+      entry({
+        id: "req-month-b:attempt-1",
+        reqId: "req-month-b",
+        estimatedCostUsd: 0.03,
+      }),
       new Date("2026-06-15T12:00:00.000Z")
     );
     await appendCostLedgerEntry(
-      entry({ id: "req-other-month:attempt-1", reqId: "req-other-month", estimatedCostUsd: 99 }),
+      entry({
+        id: "req-other-month:attempt-1",
+        reqId: "req-other-month",
+        estimatedCostUsd: 99,
+      }),
       new Date("2026-07-01T12:00:00.000Z")
     );
 
@@ -527,8 +586,34 @@ describe("cost ledger", () => {
     expect(await readCostLedgerPeriod("2026-06-22")).toEqual([]);
   });
 
+  it("keeps the original absolute expiry when updating after UTC midnight", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-21T23:59:59.000Z"));
+    await appendCostLedgerEntry(
+      entry({
+        id: "req-fixed-expiry:attempt-1",
+        reqId: "req-fixed-expiry",
+        status: "provider_attempt_started",
+      })
+    );
+
+    vi.setSystemTime(new Date("2026-06-22T00:00:01.000Z"));
+    await updateCostLedgerEntry("req-fixed-expiry:attempt-1", {
+      status: "provider_attempt_succeeded",
+    });
+
+    vi.setSystemTime(new Date("2026-09-19T23:59:59.000Z"));
+    await expect(readCostLedgerPeriod("2026-06-21")).resolves.toHaveLength(1);
+
+    // End of the UTC bucket plus 90 days: the midnight update cannot extend it.
+    vi.setSystemTime(new Date("2026-09-20T00:00:00.000Z"));
+    await expect(readCostLedgerPeriod("2026-06-21")).resolves.toEqual([]);
+  });
+
   it("warns and reports dropped entries when a period exceeds the retention cap", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const warnSpy = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
     const recordedAt = new Date("2026-06-21T12:00:00.000Z");
     await writeScopedState(
       "cost:ledger:period",
@@ -604,7 +689,7 @@ describe("cost ledger", () => {
 
     await expect(
       deleteCostLedgerEntriesForUser(
-        targetUserKey,
+        tenantScope({ userKey: targetUserKey }),
         new Date("2026-06-21T23:59:59.000Z")
       )
     ).resolves.toBe(2);
@@ -621,10 +706,134 @@ describe("cost ledger", () => {
     const loggedPayload = JSON.parse(String(logSpy.mock.calls.at(-1)?.[0]));
     expect(loggedPayload).toMatchObject({
       event: "cost_ledger_user_delete_completed",
-      scannedPeriods: 90,
+      scannedPeriods: 91,
       touchedPeriods: 2,
       deletedEntries: 2,
     });
     expect(JSON.stringify(loggedPayload)).not.toContain(targetUserKey);
+  });
+
+  it("deletes the oldest still-live UTC period and removes its empty key", async () => {
+    vi.useFakeTimers();
+    const targetUserKey = "oldest-live-target-user";
+    vi.setSystemTime(new Date("2026-05-25T12:00:00.000Z"));
+    await appendCostLedgerEntry(
+      entry({
+        id: "req-oldest-live:attempt-1",
+        reqId: "req-oldest-live",
+        userKey: targetUserKey,
+      })
+    );
+
+    vi.setSystemTime(new Date("2026-08-23T12:00:00.000Z"));
+    await appendCostLedgerEntry(
+      entry({
+        id: "req-current-other:attempt-1",
+        reqId: "req-current-other",
+        userKey: "other-user-key",
+      })
+    );
+
+    await expect(
+      deleteCostLedgerEntriesForUser(tenantScope({ userKey: targetUserKey }))
+    ).resolves.toBe(1);
+    await expect(
+      Promise.resolve(readScopedState("cost:ledger:period", "2026-05-25"))
+    ).resolves.toBeNull();
+    await expect(readCostLedgerPeriod("2026-08-23")).resolves.toEqual([
+      expect.objectContaining({
+        id: "req-current-other:attempt-1",
+        userKey: "other-user-key",
+      }),
+    ]);
+  });
+
+  it("keeps the same user isolated between tenant and privacy epochs", async () => {
+    const recordedAt = new Date("2026-06-21T12:00:00.000Z");
+    const userKey = "shared-user-key";
+    const targetScope = tenantScope({ userKey });
+    const otherTenantScope = tenantScope({
+      workspaceId: 43,
+      channelConnectionId: 8,
+      userKey,
+    });
+    const laterPrivacyScope = tenantScope({ privacyEpoch: 6, userKey });
+    const earlierBindingScope = tenantScope({ bindingEpoch: 2, userKey });
+
+    await appendCostLedgerEntry(
+      entry({ id: "scope-a", reqId: "scope-a", ...targetScope }),
+      recordedAt
+    );
+    await appendCostLedgerEntry(
+      entry({ id: "scope-b", reqId: "scope-b", ...otherTenantScope }),
+      recordedAt
+    );
+    await appendCostLedgerEntry(
+      entry({ id: "scope-a-e6", reqId: "scope-a-e6", ...laterPrivacyScope }),
+      recordedAt
+    );
+    await appendCostLedgerEntry(
+      entry({
+        id: "scope-a-binding-2",
+        reqId: "scope-a-binding-2",
+        ...earlierBindingScope,
+      }),
+      recordedAt
+    );
+
+    await expect(
+      summarizeCostLedgerPeriodForUser("2026-06-21", targetScope)
+    ).resolves.toMatchObject({ totalEntries: 2 });
+    await expect(
+      deleteCostLedgerEntriesForUser(
+        targetScope,
+        new Date("2026-06-21T23:59:59.000Z")
+      )
+    ).resolves.toBe(2);
+
+    await expect(readCostLedgerPeriod("2026-06-21")).resolves.toEqual([
+      expect.objectContaining({ id: "scope-b", workspaceId: 43 }),
+      expect.objectContaining({ id: "scope-a-e6", privacyEpoch: 6 }),
+    ]);
+  });
+
+  it("purges ambiguous legacy records without assigning them to a tenant", async () => {
+    const period = "2026-06-21";
+    const recordedAt = new Date(`${period}T12:00:00.000Z`);
+    const userKey = "legacy-shared-user";
+    const targetScope = tenantScope({ userKey });
+    const otherScope = tenantScope({ workspaceId: 43, userKey });
+    await appendCostLedgerEntry(
+      entry({ id: "scoped-other", reqId: "scoped-other", ...otherScope }),
+      recordedAt
+    );
+    const current = await readCostLedgerPeriod(period);
+    const legacyEntry: StoredCostLedgerEntry = {
+      ...entry({ id: "legacy-entry", reqId: "legacy-entry", userKey }),
+      workspaceId: undefined,
+      channelConnectionId: undefined,
+      bindingEpoch: undefined,
+      privacyEpoch: undefined,
+      period,
+      recordedAt: recordedAt.toISOString(),
+    };
+    await Promise.resolve(
+      writeScopedState(
+        "cost:ledger:period",
+        period,
+        [...current, legacyEntry],
+        60
+      )
+    );
+
+    await expect(
+      deleteCostLedgerEntriesForUser(
+        targetScope,
+        new Date(`${period}T23:59:59.000Z`)
+      )
+    ).resolves.toBe(1);
+    await expect(readCostLedgerPeriod(period)).resolves.toEqual([
+      expect.objectContaining({ id: "scoped-other", workspaceId: 43 }),
+    ]);
   });
 });

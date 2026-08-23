@@ -172,6 +172,60 @@ describe("channel connection database claims", () => {
     expect(dbMock.insert).not.toHaveBeenCalled();
   });
 
+  it("reconciles expired provider fences before reconnecting a Page", async () => {
+    const pageClaim = lockedSelect([{ id: 7, workspaceId: 42 }]);
+    const workspaceConnection = lockedSelect([{ id: 7 }]);
+    const activeAttempts = lockedSelect([]);
+    const listed = [{ id: 7, ...connection }];
+    const list = listSelect(listed);
+    dbMock.select
+      .mockReturnValueOnce({ from: pageClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from })
+      .mockReturnValueOnce({ from: activeAttempts.from })
+      .mockReturnValueOnce({ from: list.from });
+    const updateWhere = vi.fn(async () => undefined);
+    const set = vi.fn(() => ({ where: updateWhere }));
+    dbMock.update.mockReturnValue({ set });
+
+    await expect(upsertChannelConnection(connection)).resolves.toEqual(listed);
+
+    expect(set).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        status: "contained",
+        completedAt: expect.any(Date),
+        leaseUntil: expect.any(Date),
+      })
+    );
+    expect(set).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ status: "connected" })
+    );
+  });
+
+  it("still blocks reconnect while a provider fence lease is active", async () => {
+    const pageClaim = lockedSelect([{ id: 7, workspaceId: 42 }]);
+    const workspaceConnection = lockedSelect([{ id: 7 }]);
+    const activeAttempts = lockedSelect([{ id: 91 }]);
+    dbMock.select
+      .mockReturnValueOnce({ from: pageClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from })
+      .mockReturnValueOnce({ from: activeAttempts.from });
+    const updateWhere = vi.fn(async () => undefined);
+    const set = vi.fn(() => ({ where: updateWhere }));
+    dbMock.update.mockReturnValue({ set });
+
+    await expect(upsertChannelConnection(connection)).rejects.toThrow(
+      "Channel connection has an active provider attempt; retry later"
+    );
+
+    expect(set).toHaveBeenCalledOnce();
+    expect(set).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "contained" })
+    );
+    expect(dbMock.insert).not.toHaveBeenCalled();
+  });
+
   it("inserts an unclaimed Page without a duplicate-key update path", async () => {
     const pageClaim = lockedSelect([]);
     const workspaceConnection = lockedSelect([]);
@@ -311,7 +365,7 @@ describe("channel connection database claims", () => {
 
       expect(dbMock.transaction).toHaveBeenCalledTimes(2);
       expect(retriedPageClaim.lock).toHaveBeenCalledWith("update");
-      expect(dbMock.update).toHaveBeenCalledOnce();
+      expect(dbMock.update).toHaveBeenCalledTimes(2);
     }
   );
 
@@ -357,7 +411,7 @@ describe("channel connection database claims", () => {
     expect(dbMock.transaction).toHaveBeenCalledTimes(2);
     expect(retriedProviderAccountClaim.lock).toHaveBeenCalledWith("update");
     expect(retriedEndpointClaim.lock).toHaveBeenCalledWith("update");
-    expect(dbMock.update).toHaveBeenCalledOnce();
+    expect(dbMock.update).toHaveBeenCalledTimes(2);
   });
 
   it("fails closed when a WABA-constraint race resolves to another workspace", async () => {

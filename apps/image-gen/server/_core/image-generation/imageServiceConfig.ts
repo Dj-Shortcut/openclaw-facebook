@@ -79,4 +79,30 @@ export function assertProductionImageStorageConfig(): void {
       "BUILT_IN_FORGE_API_URL and BUILT_IN_FORGE_API_KEY are required in production for durable generated image storage"
     );
   }
+
+  const trustedPublicOrigins = [
+    ...(process.env.STORAGE_PUBLIC_BASE_URLS ?? "").split(","),
+    process.env.PUBLIC_BASE_URL ?? "",
+  ]
+    .map(value => value.trim())
+    .filter(Boolean);
+  const hasValidTrustedOrigin = trustedPublicOrigins.some(value => {
+    try {
+      const parsed = new URL(value);
+      return (
+        parsed.protocol === "https:" &&
+        !parsed.username &&
+        !parsed.password &&
+        !parsed.search &&
+        !parsed.hash
+      );
+    } catch {
+      return false;
+    }
+  });
+  if (!hasValidTrustedOrigin) {
+    throw new MissingObjectStorageConfigError(
+      "PUBLIC_BASE_URL or STORAGE_PUBLIC_BASE_URLS must contain a trusted HTTPS storage origin in production"
+    );
+  }
 }

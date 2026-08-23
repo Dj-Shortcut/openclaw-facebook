@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   deleteAndSend: vi.fn(),
-  getErasingEpoch: vi.fn(),
+  getErasingSubject: vi.fn(),
   resolveOwnership: vi.fn(),
 }));
 
@@ -19,7 +19,7 @@ vi.mock("./_core/messengerPrivacySubject", async importOriginal => {
     await importOriginal<typeof import("./_core/messengerPrivacySubject")>();
   return {
     ...actual,
-    getErasingMessengerPrivacySubjectEpoch: mocks.getErasingEpoch,
+    getErasingMessengerPrivacySubject: mocks.getErasingSubject,
   };
 });
 vi.mock("./_core/workspaceEntitlementRuntime", async importOriginal => {
@@ -34,7 +34,10 @@ vi.mock("./_core/workspaceEntitlementRuntime", async importOriginal => {
 });
 
 import { handleEntry } from "./_core/webhookEventRouter";
-import { isMessengerErasureControlDelivery } from "./_core/messengerRequestContext";
+import {
+  getMessengerRequestErasurePrivacySubject,
+  isMessengerErasureControlDelivery,
+} from "./_core/messengerRequestContext";
 import type { HandlerContext } from "./_core/webhookHandlerTypes";
 
 describe("Messenger erasure retry routing", () => {
@@ -45,7 +48,10 @@ describe("Messenger erasure retry routing", () => {
       channelConnectionId: 7,
       bindingEpoch: 3,
     });
-    mocks.getErasingEpoch.mockReset().mockResolvedValue(9);
+    mocks.getErasingSubject.mockReset().mockResolvedValue({
+      privacyEpoch: 9,
+      dataPrivacyEpoch: 8,
+    });
     mocks.deleteAndSend
       .mockReset()
       .mockImplementation(
@@ -54,6 +60,11 @@ describe("Messenger erasure retry routing", () => {
           _lang: string,
           sendText: (text: string) => Promise<unknown>
         ) => {
+          expect(getMessengerRequestErasurePrivacySubject()).toEqual({
+            userKey: expect.any(String),
+            privacyEpoch: 9,
+            dataPrivacyEpoch: 8,
+          });
           await sendText("deletion pending");
         }
       );

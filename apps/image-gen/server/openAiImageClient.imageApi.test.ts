@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOpenAiRequest,
   fetchOpenAiImageResponse,
+  getGenerationMetrics,
+  OpenAiBudgetExceededError,
   parseOpenAiImageResponse,
 } from "./_core/image-generation/openAiImageClient";
 
@@ -20,12 +22,14 @@ const ENV_NAMES = [
   "OPENAI_IMAGE_QUALITY",
   "OPENAI_IMAGE_RETRY_BASE_MS",
   "OPENAI_IMAGE_SIZE",
+  "OPENAI_IMAGE_TIMEOUT_MS",
 ] as const;
 const originalEnv = Object.fromEntries(
   ENV_NAMES.map(name => [name, process.env[name]])
 );
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   for (const name of ENV_NAMES) {
@@ -62,7 +66,7 @@ describe("gpt-image-2 Image API requests", () => {
       "https://api.openai.com/v1/images/generations"
     );
     expect(request.model).toBe("gpt-image-2");
-    expect(request.imageCostOptions).toEqual({
+    expect(request.imageRequestOptions).toEqual({
       size: "1024x1536",
       quality: "high",
     });
@@ -108,7 +112,7 @@ describe("gpt-image-2 Image API requests", () => {
       "Bearer test-key"
     );
     expect(requestHeaders(request.requestInit).has("content-type")).toBe(false);
-    expect(request.imageCostOptions).toEqual({
+    expect(request.imageRequestOptions).toEqual({
       size: "1536x1024",
       quality: "high",
     });
@@ -261,5 +265,260 @@ describe("OpenAI image response parsing", () => {
     await expect(parseOpenAiImageResponse(response)).resolves.toEqual(
       Buffer.from(GENERATED_IMAGE_BASE64, "base64")
     );
+  });
+});
+
+describe("OpenAI image provider errors", () => {
+  function createRequest() {
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.OPENAI_IMAGE_MAX_RETRIES = "0";
+    return buildOpenAiRequest({
+      model: "gpt-image-2",
+      prompt: "private prompt",
+      sourceImage: { buffer: Buffer.alloc(0), contentType: "image/png" },
+      hasSourceImage: false,
+    });
+  }
+
+  function createHangingBodyResponse(status: number, statusText: string) {
+    const pull = vi.fn(() => new Promise<void>(() => undefined));
+    const cancel = vi.fn(() => undefined);
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(status < 400 ? '{"data":[' : '{"error":')
+          );
+        },
+        pull,
+        cancel,
+      }),
+      { status, statusText }
+    );
+    return { response, pull, cancel };
+  }
+
+  it.each([
+    ["code", "insufficient_quota"],
+    ["type", "billing_hard_limit_reached"],
+  ] as const)(
+    "classifies structured OpenAI error %s=%s as a hard budget limit",
+    async (field, value) => {
+      const onProviderAttempt = vi.fn(async () => undefined);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(JSON.stringify({ error: { [field]: value } }), {
+              status: 429,
+              statusText: "Too Many Requests",
+            })
+        )
+      );
+
+      await expect(
+        fetchOpenAiImageResponse(createRequest(), {
+          reqId: "request-hard-limit",
+          startedAt: Date.now(),
+          partialMetrics: {},
+          onProviderAttempt,
+        })
+      ).rejects.toBeInstanceOf(OpenAiBudgetExceededError);
+      expect(onProviderAttempt).toHaveBeenCalledOnce();
+    }
+  );
+
+  it("records a failed response attempt duration exactly once", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        vi.setSystemTime(1_050);
+        return new Response(JSON.stringify({ error: { type: "invalid" } }), {
+          status: 400,
+          statusText: "Bad Request",
+        });
+      })
+    );
+
+    const error = await fetchOpenAiImageResponse(createRequest(), {
+      reqId: "request-metrics-once",
+      startedAt: 1_000,
+      partialMetrics: {},
+    }).catch(caught => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(getGenerationMetrics(error)?.openAiMs).toBe(50);
+  });
+
+  it.each([
+    JSON.stringify({
+      error: {
+        type: "rate_limit_error",
+        message: "Temporary quota pressure; try again later",
+      },
+    }),
+    "billing_hard_limit_reached",
+    JSON.stringify({ error: { message: "Monthly budget reached" } }),
+  ])(
+    "does not infer a hard budget limit from ordinary 429 text",
+    async body => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(body, {
+              status: 429,
+              statusText: "Too Many Requests",
+            })
+        )
+      );
+
+      await expect(
+        fetchOpenAiImageResponse(createRequest(), {
+          reqId: "request-rate-limit",
+          startedAt: Date.now(),
+          partialMetrics: {},
+        })
+      ).rejects.toThrow("OpenAI request failed");
+    }
+  );
+
+  it("never retries a provider-attempt hook failure as a network error", async () => {
+    const request = createRequest();
+    process.env.OPENAI_IMAGE_MAX_RETRIES = "1";
+    const admissionError = new TypeError("cost ledger unavailable");
+    const onProviderAttempt = vi.fn(async () => {
+      throw admissionError;
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchOpenAiImageResponse(request, {
+        reqId: "request-hook-failure",
+        startedAt: Date.now(),
+        partialMetrics: {},
+        onProviderAttempt,
+      })
+    ).rejects.toBe(admissionError);
+    expect(onProviderAttempt).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("caps a misconfigured provider timeout below the privacy-fence window", async () => {
+    vi.useFakeTimers();
+    process.env.OPENAI_IMAGE_TIMEOUT_MS = String(60 * 60_000);
+    const fetchMock = vi.fn(
+      async (_url: URL, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            const error = new Error("aborted");
+            error.name = "AbortError";
+            reject(error);
+          });
+        })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = fetchOpenAiImageResponse(createRequest(), {
+      reqId: "request-timeout-cap",
+      startedAt: Date.now(),
+      partialMetrics: {},
+    });
+    const rejection = expect(pending).rejects.toMatchObject({
+      name: "AbortError",
+    });
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+    await rejection;
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the original deadline while a successful response body hangs", async () => {
+    vi.useFakeTimers();
+    process.env.OPENAI_IMAGE_TIMEOUT_MS = "20";
+    const hangingBody = createHangingBodyResponse(200, "OK");
+    const fetchMock = vi.fn(
+      async () =>
+        await new Promise<Response>(resolve => {
+          setTimeout(() => {
+            resolve(hangingBody.response);
+          }, 15);
+        })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = fetchOpenAiImageResponse(createRequest(), {
+      reqId: "request-success-body-timeout",
+      startedAt: Date.now(),
+      partialMetrics: {},
+    });
+    let settled = false;
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+    const rejection = expect(pending).rejects.toMatchObject({
+      name: "AbortError",
+    });
+
+    await vi.advanceTimersByTimeAsync(15);
+    expect(hangingBody.pull).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(4);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await rejection;
+    expect(hangingBody.cancel).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the original deadline while an error response body hangs", async () => {
+    vi.useFakeTimers();
+    process.env.OPENAI_IMAGE_TIMEOUT_MS = "20";
+    const hangingBody = createHangingBodyResponse(429, "Too Many Requests");
+    const fetchMock = vi.fn(
+      async () =>
+        await new Promise<Response>(resolve => {
+          setTimeout(() => {
+            resolve(hangingBody.response);
+          }, 15);
+        })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = fetchOpenAiImageResponse(createRequest(), {
+      reqId: "request-error-body-timeout",
+      startedAt: Date.now(),
+      partialMetrics: {},
+    });
+    let settled = false;
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+    const rejection = expect(pending).rejects.toMatchObject({
+      name: "AbortError",
+    });
+
+    await vi.advanceTimersByTimeAsync(15);
+    expect(hangingBody.pull).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(4);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await rejection;
+    expect(hangingBody.cancel).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });

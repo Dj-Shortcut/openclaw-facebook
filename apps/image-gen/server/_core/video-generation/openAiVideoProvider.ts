@@ -1,5 +1,8 @@
 import { safeLog } from "../logger";
-import { safelyAppendCostLedgerEntry } from "../costLedger";
+import {
+  assertCostLedgerTenantScope,
+  safelyAppendCostLedgerEntry,
+} from "../costLedger";
 import type {
   VideoProvider,
   VideoProviderFailure,
@@ -246,7 +249,17 @@ function classifyResponse(status: number, body: string): VideoProviderFailure {
 
 function readProviderErrorCode(body: string): string | undefined {
   try {
-    const code = JSON.parse(body)?.error?.code;
+    const parsed: unknown = JSON.parse(body);
+    const providerError =
+      parsed !== null && typeof parsed === "object" && "error" in parsed
+        ? parsed.error
+        : undefined;
+    const code =
+      providerError !== null &&
+      typeof providerError === "object" &&
+      "code" in providerError
+        ? providerError.code
+        : undefined;
     return typeof code === "string" && /^[A-Za-z0-9_.-]{1,80}$/.test(code)
       ? code
       : undefined;
@@ -306,7 +319,15 @@ async function createVideoJob(
   const suppliedEntryId = await input.onProviderAttempt?.();
   const ledgerEntryId =
     suppliedEntryId || `${input.reqId}:${attemptNow.toISOString()}`;
-  if (!suppliedEntryId)
+  if (!suppliedEntryId) {
+    if (input.costLedgerScope) {
+      assertCostLedgerTenantScope(input.costLedgerScope);
+      if (input.costLedgerScope.userKey !== input.userKey) {
+        throw new Error("Video cost ledger user scope does not match");
+      }
+    } else if (process.env.NODE_ENV === "production") {
+      throw new Error("Messenger video cost ledger tenant scope is required");
+    }
     await safelyAppendCostLedgerEntry(
       {
         id: ledgerEntryId,
@@ -314,6 +335,7 @@ async function createVideoJob(
         operation: "video_generation",
         provider: "openai-video",
         model: getModel(),
+        ...(input.costLedgerScope ?? {}),
         userKey: input.userKey,
         reqId: input.reqId,
         status: "provider_attempt_started",
@@ -333,6 +355,7 @@ async function createVideoJob(
       },
       attemptNow
     );
+  }
   const response = await fetchWithTimeout(
     OPENAI_VIDEO_ENDPOINT,
     {

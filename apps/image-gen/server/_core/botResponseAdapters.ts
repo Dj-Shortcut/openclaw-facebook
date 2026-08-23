@@ -6,11 +6,13 @@ import type {
 } from "./botResponse";
 import {
   inferConversationActions,
-  inferNumberedConversationActions,
   stripNumberedConversationChoices,
 } from "./conversationActionInference";
 
-function assertNever(_value: never): void {}
+function assertNever(value: never): never {
+  void value;
+  throw new Error("Unsupported bot response kind");
+}
 
 type BotResponseSendOptions = {
   replyState?: ConversationState;

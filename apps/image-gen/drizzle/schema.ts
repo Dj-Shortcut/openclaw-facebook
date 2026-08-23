@@ -279,6 +279,7 @@ export const messengerPrivacySubjects = mysqlTable(
       .default("active")
       .notNull(),
     erasedAt: timestamp("erased_at"),
+    lastErasedAt: timestamp("last_erased_at", { fsp: 3 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
@@ -463,6 +464,8 @@ export const portalHandoffTokens = mysqlTable(
     }),
     messengerSenderUserKey: varchar("messengerSenderUserKey", { length: 96 }),
     facebookPageId: varchar("facebookPageId", { length: 160 }),
+    messengerChannelConnectionId: int("messenger_channel_connection_id"),
+    messengerPrivacyEpoch: int("messenger_privacy_epoch"),
     claimedByUserId: int("claimedByUserId"),
     purpose: mysqlEnum("purpose", ["workspace_onboarding"]).notNull(),
     status: mysqlEnum("status", ["pending", "consumed", "expired", "revoked"])
@@ -474,18 +477,44 @@ export const portalHandoffTokens = mysqlTable(
     createdAt: timestamp("createdAt").defaultNow().notNull(),
     updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
   },
-  table => ({
-    tokenHashUnique: uniqueIndex("portalHandoffTokens_tokenHash_unique").on(
-      table.tokenHash
+  table => [
+    foreignKey({
+      name: "portal_handoff_tokens_static_connection_fk",
+      columns: [table.messengerChannelConnectionId, table.workspaceId],
+      foreignColumns: [channelConnections.id, channelConnections.workspaceId],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "portal_handoff_tokens_static_subject_fk",
+      columns: [
+        table.workspaceId,
+        table.messengerChannelConnectionId,
+        table.messengerSenderUserKey,
+      ],
+      foreignColumns: [
+        messengerPrivacySubjects.workspaceId,
+        messengerPrivacySubjects.channelConnectionId,
+        messengerPrivacySubjects.userKey,
+      ],
+    }).onDelete("restrict"),
+    uniqueIndex("portalHandoffTokens_tokenHash_unique").on(table.tokenHash),
+    uniqueIndex("portalHandoffTokens_delivery_key_hash_unique").on(
+      table.deliveryIdempotencyKeyHash
     ),
-    deliveryIdempotencyKeyHashUnique: uniqueIndex(
-      "portalHandoffTokens_delivery_key_hash_unique"
-    ).on(table.deliveryIdempotencyKeyHash),
-    workspaceStatusIdx: index("portalHandoffTokens_workspace_status_idx").on(
+    index("portalHandoffTokens_workspace_status_idx").on(
       table.workspaceId,
       table.status
     ),
-  })
+    index("portal_handoff_tokens_messenger_subject_idx").on(
+      table.workspaceId,
+      table.messengerChannelConnectionId,
+      table.messengerSenderUserKey,
+      table.messengerPrivacyEpoch
+    ),
+    check(
+      "portal_handoff_tokens_messenger_identity_scope",
+      sql`(${table.messengerSenderUserKey} IS NULL AND ${table.facebookPageId} IS NULL AND ${table.messengerChannelConnectionId} IS NULL AND ${table.messengerPrivacyEpoch} IS NULL) OR (${table.messengerSenderUserKey} IS NOT NULL AND ${table.facebookPageId} IS NOT NULL AND ${table.messengerChannelConnectionId} IS NOT NULL AND ${table.messengerPrivacyEpoch} > 0)`
+    ),
+  ]
 );
 
 export type PortalHandoffToken = typeof portalHandoffTokens.$inferSelect;
@@ -843,31 +872,17 @@ export const messengerProviderAttemptFences = mysqlTable(
   },
   table => [
     foreignKey({
-      name: "messenger_provider_fence_connection_workspace_fk",
-      columns: [
-        table.channelConnectionId,
-        table.workspaceId,
-        table.bindingEpoch,
-      ],
-      foreignColumns: [
-        channelConnections.id,
-        channelConnections.workspaceId,
-        channelConnections.bindingEpoch,
-      ],
+      name: "messenger_provider_fence_static_connection_fk",
+      columns: [table.channelConnectionId, table.workspaceId],
+      foreignColumns: [channelConnections.id, channelConnections.workspaceId],
     }).onDelete("restrict"),
     foreignKey({
-      name: "messenger_provider_fence_privacy_subject_fk",
-      columns: [
-        table.workspaceId,
-        table.channelConnectionId,
-        table.userKey,
-        table.privacyEpoch,
-      ],
+      name: "messenger_provider_fence_static_subject_fk",
+      columns: [table.workspaceId, table.channelConnectionId, table.userKey],
       foreignColumns: [
         messengerPrivacySubjects.workspaceId,
         messengerPrivacySubjects.channelConnectionId,
         messengerPrivacySubjects.userKey,
-        messengerPrivacySubjects.privacyEpoch,
       ],
     }).onDelete("restrict"),
     uniqueIndex("messenger_provider_attempt_fences_attempt_unique").on(
@@ -936,6 +951,10 @@ export const billingIntents = mysqlTable(
     }),
     /** Receiving Facebook Page bound to the handoff checkout. */
     messengerPageId: varchar("messenger_page_id", { length: 160 }),
+    /** Immutable channel scope that authorized the Messenger checkout handoff. */
+    messengerChannelConnectionId: int("messenger_channel_connection_id"),
+    /** Privacy epoch snapshot; historical rows never follow a reactivated subject. */
+    messengerPrivacyEpoch: int("messenger_privacy_epoch"),
     billingProfileVersion: int("billing_profile_version").notNull(),
     authorizationEpoch: int("authorization_epoch").notNull(),
     urlExposedAt: timestamp("url_exposed_at"),
@@ -944,6 +963,24 @@ export const billingIntents = mysqlTable(
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },
   table => [
+    foreignKey({
+      name: "billing_intents_static_messenger_connection_fk",
+      columns: [table.messengerChannelConnectionId, table.workspaceId],
+      foreignColumns: [channelConnections.id, channelConnections.workspaceId],
+    }).onDelete("restrict"),
+    foreignKey({
+      name: "billing_intents_static_messenger_subject_fk",
+      columns: [
+        table.workspaceId,
+        table.messengerChannelConnectionId,
+        table.messengerSenderUserKey,
+      ],
+      foreignColumns: [
+        messengerPrivacySubjects.workspaceId,
+        messengerPrivacySubjects.channelConnectionId,
+        messengerPrivacySubjects.userKey,
+      ],
+    }).onDelete("restrict"),
     uniqueIndex("billing_intents_scope_profile_unique").on(
       table.intentId,
       table.workspaceId,
@@ -961,6 +998,12 @@ export const billingIntents = mysqlTable(
       table.mode,
       table.createdAt
     ),
+    index("billing_intents_messenger_subject_idx").on(
+      table.workspaceId,
+      table.messengerChannelConnectionId,
+      table.messengerSenderUserKey,
+      table.messengerPrivacyEpoch
+    ),
     uniqueIndex("billing_intents_mollie_payment_mode_unique").on(
       table.mode,
       table.molliePaymentId
@@ -968,6 +1011,10 @@ export const billingIntents = mysqlTable(
     uniqueIndex("billing_intents_idempotency_unique").on(table.idempotencyKey),
     uniqueIndex("billing_intents_checkout_scope_unique").on(
       table.checkoutScopeKey
+    ),
+    check(
+      "billing_intents_messenger_identity_scope",
+      sql`(${table.messengerSenderUserKey} IS NULL AND ${table.messengerPageId} IS NULL AND ${table.messengerChannelConnectionId} IS NULL AND ${table.messengerPrivacyEpoch} IS NULL) OR (${table.messengerSenderUserKey} IS NOT NULL AND ${table.messengerPageId} IS NOT NULL AND ${table.messengerChannelConnectionId} IS NOT NULL AND ${table.messengerPrivacyEpoch} > 0)`
     ),
   ]
 );
@@ -1407,17 +1454,9 @@ export const workspaceEntitlementUsageReservations = mysqlTable(
       foreignColumns: [workspaces.id],
     }).onDelete("restrict"),
     foreignKey({
-      name: "weur_connection_workspace_fk",
-      columns: [
-        table.channelConnectionId,
-        table.workspaceId,
-        table.bindingEpoch,
-      ],
-      foreignColumns: [
-        channelConnections.id,
-        channelConnections.workspaceId,
-        channelConnections.bindingEpoch,
-      ],
+      name: "weur_static_connection_workspace_fk",
+      columns: [table.channelConnectionId, table.workspaceId],
+      foreignColumns: [channelConnections.id, channelConnections.workspaceId],
     }).onDelete("restrict"),
     foreignKey({
       name: "weur_entitlement_scope_fk",

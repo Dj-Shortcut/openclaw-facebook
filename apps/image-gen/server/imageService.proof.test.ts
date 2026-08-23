@@ -22,7 +22,9 @@ function toUrlString(url: string | URL): string {
 }
 
 function requestJson(init: RequestInit | undefined): {
-  input?: Array<{ content?: Array<{ type?: string; text?: string; image_url?: string }> }>;
+  input?: Array<{
+    content?: Array<{ type?: string; text?: string; image_url?: string }>;
+  }>;
   tools?: Array<{
     type?: string;
     size?: string;
@@ -40,8 +42,8 @@ function requestJson(init: RequestInit | undefined): {
 function promptFromRequest(init: RequestInit | undefined): string {
   const payload = requestJson(init);
   return (
-    payload.input?.[0]?.content?.find(part => part.type === "input_text")?.text ??
-    ""
+    payload.input?.[0]?.content?.find(part => part.type === "input_text")
+      ?.text ?? ""
   );
 }
 
@@ -73,7 +75,8 @@ function createOpenAiEditsFetchMock(options?: {
   payload?: { output: Array<{ type: string; result: string }> };
   failureFactory?: (attempt: number) => Error;
 }) {
-  const sourceImageFixture = options?.sourceImageFixture ?? Buffer.alloc(7000, 9);
+  const sourceImageFixture =
+    options?.sourceImageFixture ?? Buffer.alloc(7000, 9);
   const failuresBeforeSuccess = options?.failuresBeforeSuccess ?? 0;
   const payload = options?.payload ?? {
     output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }],
@@ -122,8 +125,12 @@ function expectPromptFirstLegacyFallback(
   prompt: string,
   promptHint: string
 ): void {
-  expect(prompt).toContain("Edit the uploaded/source image according to the user's request.");
-  expect(prompt).toContain("Use the source image as the visual reference, not as a preset style catalog.");
+  expect(prompt).toContain(
+    "Edit the uploaded/source image according to the user's request."
+  );
+  expect(prompt).toContain(
+    "Use the source image as the visual reference, not as a preset style catalog."
+  );
   expect(prompt).toContain(`User request: ${promptHint}`);
   expect(prompt).not.toContain("Additional direction:");
   expect(prompt).not.toContain("glamorous disco-era hero shot");
@@ -152,7 +159,11 @@ function installStoredSourcePromptFetchMock(
 
     return {
       ok: true,
-      json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
+      json: async () => ({
+        output: [
+          { type: "image_generation_call", result: GENERATED_IMAGE_BASE64 },
+        ],
+      }),
     } as Response;
   });
 
@@ -168,7 +179,8 @@ describe("OpenAi image-to-image proof", () => {
       });
       return {
         response,
-        contentType: response.headers.get("content-type") ?? "application/octet-stream",
+        contentType:
+          response.headers.get("content-type") ?? "application/octet-stream",
       };
     });
   };
@@ -201,6 +213,8 @@ describe("OpenAi image-to-image proof", () => {
     delete process.env.SOURCE_IMAGE_ALLOWED_HOSTS;
     delete process.env.BUILT_IN_FORGE_API_URL;
     delete process.env.BUILT_IN_FORGE_API_KEY;
+    delete process.env.PUBLIC_BASE_URL;
+    delete process.env.STORAGE_ALLOW_LEGACY_KEYS;
     setSourceImageRequestForTests(null);
   });
 
@@ -241,7 +255,8 @@ describe("OpenAi image-to-image proof", () => {
     async style => {
       process.env.OPENAI_API_KEY = "dummy-key";
       process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
-      process.env.SOURCE_IMAGE_ALLOWED_HOSTS = STORED_SOURCE_IMAGE_ALLOWED_HOSTS;
+      process.env.SOURCE_IMAGE_ALLOWED_HOSTS =
+        STORED_SOURCE_IMAGE_ALLOWED_HOSTS;
 
       const fixture = Buffer.alloc(7000, 9);
       const fixtureHash = sha256(fixture);
@@ -272,7 +287,11 @@ describe("OpenAi image-to-image proof", () => {
 
         return {
           ok: true,
-          json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
+          json: async () => ({
+            output: [
+              { type: "image_generation_call", result: GENERATED_IMAGE_BASE64 },
+            ],
+          }),
         } as Response;
       });
 
@@ -315,7 +334,11 @@ describe("OpenAi image-to-image proof", () => {
 
       return {
         ok: true,
-        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
+        json: async () => ({
+          output: [
+            { type: "image_generation_call", result: GENERATED_IMAGE_BASE64 },
+          ],
+        }),
       } as Response;
     });
 
@@ -354,7 +377,11 @@ describe("OpenAi image-to-image proof", () => {
 
       return {
         ok: true,
-        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
+        json: async () => ({
+          output: [
+            { type: "image_generation_call", result: GENERATED_IMAGE_BASE64 },
+          ],
+        }),
       } as Response;
     });
 
@@ -397,7 +424,11 @@ describe("OpenAi image-to-image proof", () => {
 
       return {
         ok: true,
-        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
+        json: async () => ({
+          output: [
+            { type: "image_generation_call", result: GENERATED_IMAGE_BASE64 },
+          ],
+        }),
       } as Response;
     });
 
@@ -455,7 +486,11 @@ describe("OpenAi image-to-image proof", () => {
 
       return {
         ok: true,
-        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
+        json: async () => ({
+          output: [
+            { type: "image_generation_call", result: GENERATED_IMAGE_BASE64 },
+          ],
+        }),
       } as Response;
     });
 
@@ -644,11 +679,14 @@ describe("OpenAi image-to-image proof", () => {
 
   it("does not require APP_BASE_URL when production uses durable object storage", async () => {
     process.env.NODE_ENV = "production";
+    process.env.OPENAI_IMAGE_MAX_RETRIES = "0";
     process.env.OPENAI_API_KEY = "dummy-key";
     process.env.APP_BASE_URL = "http://leaderbot.example";
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS = "leaderbot-fb-image-gen.fly.dev";
     process.env.BUILT_IN_FORGE_API_URL = "https://forge.example";
     process.env.BUILT_IN_FORGE_API_KEY = "forge-secret";
+    process.env.PUBLIC_BASE_URL = "https://cdn.example";
+    process.env.STORAGE_ALLOW_LEGACY_KEYS = "true";
 
     const fixture = Buffer.alloc(7000, 9);
     const fetchMock = vi.fn(async (url: string | URL) => {
@@ -665,17 +703,22 @@ describe("OpenAi image-to-image proof", () => {
           "https://forge.example/v1/storage/upload?path=generated%2Fimages%2F"
         )
       ) {
+        const objectKey = new URL(toUrlString(url)).searchParams.get("path");
         return {
           ok: true,
           json: async () => ({
-            url: "https://cdn.example/generated/images/result.jpg?signature=prod",
+            url: `https://cdn.example/${objectKey}`,
           }),
         } as Response;
       }
 
       return {
         ok: true,
-        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
+        json: async () => ({
+          output: [
+            { type: "image_generation_call", result: GENERATED_IMAGE_BASE64 },
+          ],
+        }),
       } as Response;
     });
 
@@ -689,8 +732,8 @@ describe("OpenAi image-to-image proof", () => {
       }),
     });
 
-    expect(result.imageUrl).toBe(
-      "https://cdn.example/generated/images/result.jpg?signature=prod"
+    expect(result.imageUrl).toMatch(
+      /^https:\/\/cdn\.example\/generated\/images\/\d+-[0-9a-f-]+\.png$/
     );
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
@@ -724,7 +767,11 @@ describe("OpenAi image-to-image proof", () => {
 
       return {
         ok: true,
-        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
+        json: async () => ({
+          output: [
+            { type: "image_generation_call", result: GENERATED_IMAGE_BASE64 },
+          ],
+        }),
       } as Response;
     });
 
@@ -829,7 +876,11 @@ describe("OpenAi image-to-image proof", () => {
 
       return {
         ok: true,
-        json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
+        json: async () => ({
+          output: [
+            { type: "image_generation_call", result: GENERATED_IMAGE_BASE64 },
+          ],
+        }),
       } as Response;
     });
 
@@ -901,7 +952,9 @@ describe("OpenAi image-to-image proof", () => {
 
       return {
         ok: true,
-        json: async () => ({ output: [{ type: "image_generation_call", result: "!!!" }] }),
+        json: async () => ({
+          output: [{ type: "image_generation_call", result: "!!!" }],
+        }),
       } as Response;
     });
 

@@ -65,6 +65,8 @@ describe("payment snapshot persistence flow", () => {
         ...startpilotIntent(),
         messengerSenderUserKey: "a".repeat(64),
         messengerPageId: "page_123",
+        messengerChannelConnectionId: 12,
+        messengerPrivacyEpoch: 4,
       } as BillingIntent,
     });
     databaseMock.mockResolvedValue(flow.database);
@@ -90,6 +92,8 @@ describe("payment snapshot persistence flow", () => {
             intentId: INTENT_ID,
             messengerSenderUserKey: "a".repeat(64),
             messengerPageId: "page_123",
+            messengerChannelConnectionId: 12,
+            messengerPrivacyEpoch: 4,
           },
         }),
       }),

@@ -42,6 +42,7 @@ function createHttpResponse(options: {
 
 describe("source image fetcher", () => {
   afterEach(() => {
+    vi.useRealTimers();
     mockHttpsRequest.mockReset();
     delete process.env.SOURCE_IMAGE_ALLOWED_HOSTS;
     setSourceImageDnsLookupForTests(null);
@@ -198,6 +199,48 @@ describe("source image fetcher", () => {
     });
 
     expect(downloaded.buffer).toEqual(fixture);
+    expect(requestAttempt).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses one total deadline across the first attempt and its retry", async () => {
+    vi.useFakeTimers();
+    setSourceImageDnsLookupForTests(async () => [
+      { address: "31.13.84.36", family: 4 },
+    ]);
+    const requestAttempt = vi
+      .fn()
+      .mockImplementationOnce(
+        async () =>
+          await new Promise(resolve => {
+            setTimeout(
+              () =>
+                resolve({
+                  response: new Response("temporary", { status: 503 }),
+                  contentType: "text/plain",
+                }),
+              20
+            );
+          })
+      )
+      .mockImplementationOnce(async () => await new Promise(() => undefined));
+    setSourceImageRequestForTests(requestAttempt);
+
+    const pending = fetchExternalSourceImageForIngress({
+      sourceImageUrl:
+        "https://scontent-atl3-3.xx.fbcdn.net/v/t39.30808-6/total-deadline.jpg",
+      reqId: "req-total-source-deadline",
+      fetchConfig: {
+        allowedHosts: ["scontent.xx.fbcdn.net"],
+        retryLimit: 1,
+        timeoutMs: 25,
+      },
+    });
+    const rejection = expect(pending).rejects.toThrow(
+      "Failed to download source image"
+    );
+
+    await vi.advanceTimersByTimeAsync(26);
+    await rejection;
     expect(requestAttempt).toHaveBeenCalledTimes(2);
   });
 
@@ -363,5 +406,89 @@ describe("source image fetcher", () => {
 
     expect(downloaded.buffer).toEqual(fixture);
     expect(downloaded.contentType).toBe("image/jpeg");
+  });
+
+  it("times out when headers arrive but the response body stalls", async () => {
+    setSourceImageDnsLookupForTests(async () => [
+      { address: "31.13.84.36", family: 4 },
+    ]);
+    mockHttpsRequest.mockImplementation(
+      (_: unknown, callback?: (res: IncomingMessage) => void) => {
+        const response = new PassThrough() as IncomingMessage;
+        Object.assign(response, {
+          statusCode: 200,
+          statusMessage: "OK",
+          headers: { "content-type": "image/jpeg" },
+        });
+        callback?.(response);
+        return new PassThrough() as ClientRequest;
+      }
+    );
+
+    await expect(
+      fetchExternalSourceImageForIngress({
+        sourceImageUrl:
+          "https://scontent-atl3-3.xx.fbcdn.net/v/t39.30808-6/stalled.jpg",
+        reqId: "req-stalled-source-body",
+        fetchConfig: {
+          allowedHosts: ["scontent.xx.fbcdn.net"],
+          retryLimit: 0,
+          timeoutMs: 25,
+        },
+      })
+    ).rejects.toThrow("Failed to download source image");
+  });
+
+  it("times out a DNS lookup before any network request starts", async () => {
+    setSourceImageDnsLookupForTests(
+      async () => await new Promise(() => undefined)
+    );
+
+    await expect(
+      fetchExternalSourceImageForIngress({
+        sourceImageUrl:
+          "https://scontent-atl3-3.xx.fbcdn.net/v/t39.30808-6/dns.jpg",
+        reqId: "req-stalled-source-dns",
+        fetchConfig: {
+          allowedHosts: ["scontent.xx.fbcdn.net"],
+          retryLimit: 0,
+          timeoutMs: 25,
+        },
+      })
+    ).rejects.toThrow("Failed to download source image");
+    expect(mockHttpsRequest).not.toHaveBeenCalled();
+  });
+
+  it("passes at most four validated public addresses to one attempt", async () => {
+    setSourceImageDnsLookupForTests(async () =>
+      Array.from({ length: 8 }, (_, index) => ({
+        address: `31.13.84.${index + 1}`,
+        family: 4 as const,
+      }))
+    );
+    const fixture = Buffer.alloc(7000, 4);
+    const requestAttempt = vi.fn(async () => ({
+      response: new Response(new Uint8Array(fixture), { status: 200 }),
+      contentType: "image/jpeg",
+    }));
+    setSourceImageRequestForTests(requestAttempt);
+
+    await fetchExternalSourceImageForIngress({
+      sourceImageUrl:
+        "https://scontent-atl3-3.xx.fbcdn.net/v/t39.30808-6/many-ips.jpg",
+      reqId: "req-many-source-ips",
+      fetchConfig: {
+        allowedHosts: ["scontent.xx.fbcdn.net"],
+        retryLimit: 0,
+        timeoutMs: 2_500,
+      },
+    });
+
+    expect(requestAttempt.mock.calls[0]?.[1]).toEqual([
+      "31.13.84.1",
+      "31.13.84.2",
+      "31.13.84.3",
+      "31.13.84.4",
+    ]);
   });
 });

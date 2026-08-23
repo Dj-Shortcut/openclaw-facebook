@@ -16,6 +16,7 @@ vi.mock("./_core/costLedger", async importOriginal => {
   return {
     ...actual,
     deleteCostLedgerEntriesForUser: deleteCostLedgerEntriesForUserMock,
+    purgeLegacyCostLedgerEntriesForUser: deleteCostLedgerEntriesForUserMock,
   };
 });
 
@@ -78,6 +79,7 @@ describe("Messenger consent deletion flow", () => {
   beforeEach(() => {
     delete process.env.REDIS_URL;
     process.env.PRIVACY_PEPPER = "consent-service-test-pepper";
+    process.env.PUBLIC_BASE_URL = "https://assets.example";
     resetStateStore();
     storageDeleteMock.mockReset();
     storageDeleteMock.mockResolvedValue(undefined);
@@ -95,6 +97,7 @@ describe("Messenger consent deletion flow", () => {
     deleteProviderVideoForUserMock.mockReset();
     deletePortalHandoffTokensForMessengerUserKeyMock.mockReset();
     deleteCostLedgerEntriesForUserMock.mockReset();
+    delete process.env.PUBLIC_BASE_URL;
     if (originalRedisUrl === undefined) {
       delete process.env.REDIS_URL;
     } else {

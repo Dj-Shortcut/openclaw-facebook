@@ -15,6 +15,8 @@ export type CreatePortalHandoffInput = {
   facebookPageId: string;
   purpose?: PortalHandoffPurpose;
   messengerSenderUserKey?: string | null;
+  messengerChannelConnectionId?: number | null;
+  messengerPrivacyEpoch?: number | null;
   createdByUserId?: number | null;
   now?: Date;
   ttlMs?: number;
@@ -31,6 +33,8 @@ export type PortalHandoffContext = {
   workspaceId: number;
   facebookPageId: string | null;
   messengerSenderUserKey: string | null;
+  messengerChannelConnectionId: number | null;
+  messengerPrivacyEpoch: number | null;
   claimedByUserId: number | null;
   status: "pending" | "consumed" | "expired" | "revoked";
   expiresAt: Date;
@@ -109,6 +113,8 @@ export async function createPortalHandoffToken(
       : null,
     messengerSenderUserKey: input.messengerSenderUserKey ?? null,
     facebookPageId: input.facebookPageId,
+    messengerChannelConnectionId: input.messengerChannelConnectionId ?? null,
+    messengerPrivacyEpoch: input.messengerPrivacyEpoch ?? null,
     purpose: input.purpose ?? "workspace_onboarding",
     status: "pending" as const,
     expiresAt,
@@ -207,6 +213,8 @@ export async function getPortalHandoffContext(
     workspaceId: stored.workspaceId,
     facebookPageId: stored.facebookPageId ?? null,
     messengerSenderUserKey: stored.messengerSenderUserKey ?? null,
+    messengerChannelConnectionId: stored.messengerChannelConnectionId ?? null,
+    messengerPrivacyEpoch: stored.messengerPrivacyEpoch ?? null,
     claimedByUserId: stored.claimedByUserId ?? null,
     status,
     expiresAt: stored.expiresAt,

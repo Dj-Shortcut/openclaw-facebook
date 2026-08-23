@@ -8,10 +8,7 @@ export type MessengerStateScope = Readonly<{
   pageId: string;
 }>;
 
-export type MessengerBudgetKind =
-  | "image_forward"
-  | "audio_transcription"
-  | "leaderbot_event_forward";
+export type MessengerBudgetKind = "image_forward" | "audio_transcription";
 
 export type MessengerDailyBudgetResult =
   | { ok: true; count: number; cap: number }
@@ -20,22 +17,26 @@ export type MessengerDailyBudgetResult =
 export interface MessengerEphemeralStateStore {
   readonly mode: MessengerSharedStateStoreMode;
   ensureReady(): Promise<void>;
-  claimMessage(input: Readonly<{
-    scope: MessengerStateScope;
-    eventIdentity: string;
-    ownerToken: string;
-    ttlMs: number;
-    now?: number;
-  }>): Promise<boolean>;
-  reserveDaily(input: Readonly<{
-    scope: MessengerStateScope;
-    kind: MessengerBudgetKind;
-    dayKey: string;
-    eventIdentity: string;
-    cap: number;
-    expiresAtMs: number;
-    now?: number;
-  }>): Promise<MessengerDailyBudgetResult>;
+  claimMessage(
+    input: Readonly<{
+      scope: MessengerStateScope;
+      eventIdentity: string;
+      ownerToken: string;
+      ttlMs: number;
+      now?: number;
+    }>,
+  ): Promise<boolean>;
+  reserveDaily(
+    input: Readonly<{
+      scope: MessengerStateScope;
+      kind: MessengerBudgetKind;
+      dayKey: string;
+      eventIdentity: string;
+      cap: number;
+      expiresAtMs: number;
+      now?: number;
+    }>,
+  ): Promise<MessengerDailyBudgetResult>;
   close(): Promise<void>;
 }
 
@@ -75,8 +76,14 @@ const MESSAGE_DEDUPE_MAX_ENTRIES = 5_000;
 
 class MemoryMessengerEphemeralStateStore implements MessengerEphemeralStateStore {
   readonly mode = "memory" as const;
-  private readonly claims = new Map<string, { ownerToken: string; expiresAt: number }>();
-  private readonly counters = new Map<string, { count: number; expiresAt: number }>();
+  private readonly claims = new Map<
+    string,
+    { ownerToken: string; expiresAt: number }
+  >();
+  private readonly counters = new Map<
+    string,
+    { count: number; expiresAt: number }
+  >();
   private readonly reservations = new Map<
     string,
     { result: MessengerDailyBudgetResult; expiresAt: number }
@@ -84,13 +91,15 @@ class MemoryMessengerEphemeralStateStore implements MessengerEphemeralStateStore
 
   async ensureReady(): Promise<void> {}
 
-  async claimMessage(input: Readonly<{
-    scope: MessengerStateScope;
-    eventIdentity: string;
-    ownerToken: string;
-    ttlMs: number;
-    now?: number;
-  }>): Promise<boolean> {
+  async claimMessage(
+    input: Readonly<{
+      scope: MessengerStateScope;
+      eventIdentity: string;
+      ownerToken: string;
+      ttlMs: number;
+      now?: number;
+    }>,
+  ): Promise<boolean> {
     validateMessengerStateIdentity(input.scope, input.eventIdentity);
     if (!Number.isSafeInteger(input.ttlMs) || input.ttlMs <= 0) {
       throw new MessengerSharedStateUnavailableError(
@@ -113,15 +122,17 @@ class MemoryMessengerEphemeralStateStore implements MessengerEphemeralStateStore
     return true;
   }
 
-  async reserveDaily(input: Readonly<{
-    scope: MessengerStateScope;
-    kind: MessengerBudgetKind;
-    dayKey: string;
-    eventIdentity: string;
-    cap: number;
-    expiresAtMs: number;
-    now?: number;
-  }>): Promise<MessengerDailyBudgetResult> {
+  async reserveDaily(
+    input: Readonly<{
+      scope: MessengerStateScope;
+      kind: MessengerBudgetKind;
+      dayKey: string;
+      eventIdentity: string;
+      cap: number;
+      expiresAtMs: number;
+      now?: number;
+    }>,
+  ): Promise<MessengerDailyBudgetResult> {
     validateMessengerStateIdentity(input.scope, input.eventIdentity);
     if (!Number.isSafeInteger(input.cap) || input.cap <= 0) {
       throw new MessengerSharedStateUnavailableError(
@@ -138,19 +149,23 @@ class MemoryMessengerEphemeralStateStore implements MessengerEphemeralStateStore
     }
     this.prune(now);
     const counterKey = this.counterKey(input.scope, input.kind, input.dayKey);
-    const reservationKey = this.opaqueKey("reservation", counterKey, input.eventIdentity);
+    const reservationKey = this.opaqueKey(
+      "reservation",
+      counterKey,
+      input.eventIdentity,
+    );
     const prior = this.reservations.get(reservationKey);
     if (prior && prior.expiresAt > now) {
       return prior.result;
     }
 
     const current = this.counters.get(counterKey);
-    const currentCount = current?.expiresAt && current.expiresAt > now
-      ? current.count
-      : 0;
-    const result: MessengerDailyBudgetResult = currentCount >= input.cap
-      ? { ok: false, count: currentCount, cap: input.cap }
-      : { ok: true, count: currentCount + 1, cap: input.cap };
+    const currentCount =
+      current?.expiresAt && current.expiresAt > now ? current.count : 0;
+    const result: MessengerDailyBudgetResult =
+      currentCount >= input.cap
+        ? { ok: false, count: currentCount, cap: input.cap }
+        : { ok: true, count: currentCount + 1, cap: input.cap };
     if (result.ok) {
       this.counters.set(counterKey, {
         count: result.count,
@@ -181,7 +196,12 @@ class MemoryMessengerEphemeralStateStore implements MessengerEphemeralStateStore
   }
 
   private claimKey(scope: MessengerStateScope, eventIdentity: string): string {
-    return this.opaqueKey("dedupe", scope.accountId, scope.pageId, eventIdentity);
+    return this.opaqueKey(
+      "dedupe",
+      scope.accountId,
+      scope.pageId,
+      eventIdentity,
+    );
   }
 
   private counterKey(
@@ -189,7 +209,13 @@ class MemoryMessengerEphemeralStateStore implements MessengerEphemeralStateStore
     kind: MessengerBudgetKind,
     dayKey: string,
   ): string {
-    return this.opaqueKey("budget", scope.accountId, scope.pageId, kind, dayKey);
+    return this.opaqueKey(
+      "budget",
+      scope.accountId,
+      scope.pageId,
+      kind,
+      dayKey,
+    );
   }
 
   private opaqueKey(...parts: string[]): string {
@@ -256,9 +282,8 @@ export async function getMessengerEphemeralStateStore(
     }
     return sharedStore.store;
   }
-  const store = mode === "memory"
-    ? memoryStore
-    : createRedisMessengerEphemeralStateStore();
+  const store =
+    mode === "memory" ? memoryStore : createRedisMessengerEphemeralStateStore();
   sharedStore = { mode, store };
   return store;
 }

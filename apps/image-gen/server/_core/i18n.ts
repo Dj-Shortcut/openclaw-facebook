@@ -9,6 +9,7 @@ type TranslationKey =
   | "flowExplanation"
   | "photoEditPrompt"
   | "multiPhotoPrompt"
+  | "maxSourceImagesRetained"
   | "combinePhotos"
   | "combinePhotosInstruction"
   | "combinePhotosRequiresTwo"
@@ -66,8 +67,10 @@ type TranslationKey =
   | "hdUnavailable"
   | "generationUnavailable"
   | "generationTimeout"
-  | "generationBudgetReached"
+  | "generationProviderUnavailable"
   | "outOfFreeCredits"
+  | "outOfDailyImageCredits"
+  | "outOfMonthlyImageCredits"
   | "startpilotQuotaReached"
   | "openLeaderbot"
   | "openPortal"
@@ -92,6 +95,8 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Foto ontvangen. Beschrijf wat je aan de foto wilt aanpassen.",
     multiPhotoPrompt:
       "Ik heb meerdere foto's ontvangen. Kies Samenvoegen of beschrijf meteen hoe ik ze in één beeld moet combineren.",
+    maxSourceImagesRetained:
+      "Ik bewaar maximaal 4 foto's. Extra foto's heb ik niet bewaard.",
     combinePhotos: "Samenvoegen",
     combinePhotosInstruction:
       "Hoe wil je de foto's samenvoegen? Beschrijf bijvoorbeeld wie of wat uit elke foto in het eindbeeld moet komen.",
@@ -152,10 +157,14 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     generationUnavailable: "Beeldgeneratie staat nog niet aan.",
     generationTimeout:
       "Dit duurde te lang bij de beeldprovider. Probeer nog eens.",
-    generationBudgetReached:
-      "Even pauze, ons maandbudget is bereikt. Probeer later opnieuw.",
+    generationProviderUnavailable:
+      "Ik kan nu even geen afbeelding maken. Probeer later opnieuw.",
     outOfFreeCredits:
       "Je hebt je gratis credits voor vandaag opgebruikt. Kom morgen terug.",
+    outOfDailyImageCredits:
+      "Je foto's voor vandaag zijn op. Morgen kun je opnieuw beginnen.",
+    outOfMonthlyImageCredits:
+      "Je foto's voor deze maand zijn op. Volgende maand kun je opnieuw beginnen.",
     startpilotQuotaReached:
       "Je Startpilot-tegoed is opgebruikt. Open Leaderbot om je gebruik te bekijken of een nieuw pakket te kiezen.",
     openLeaderbot: "Open Leaderbot",
@@ -225,6 +234,8 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Photo received. Describe what you want me to change in the photo.",
     multiPhotoPrompt:
       "I received multiple photos. Choose Combine or describe how I should merge them into one image.",
+    maxSourceImagesRetained:
+      "I keep at most 4 photos. I did not keep the extra photos.",
     combinePhotos: "Combine",
     combinePhotosInstruction:
       "How should I combine the photos? For example, describe who or what from each photo should appear in the final image.",
@@ -282,10 +293,14 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     generationUnavailable: "Image generation is not enabled yet.",
     generationTimeout:
       "This took too long at the image provider. Please try again.",
-    generationBudgetReached:
-      "Quick pause, our monthly budget has been reached. Please try again later.",
+    generationProviderUnavailable:
+      "I can't make an image right now. Please try again later.",
     outOfFreeCredits:
       "You used your free credits for today. Come back tomorrow.",
+    outOfDailyImageCredits:
+      "Your photos for today are used up. You can start again tomorrow.",
+    outOfMonthlyImageCredits:
+      "Your photos for this month are used up. You can start again next month.",
     startpilotQuotaReached:
       "Your Startpilot credit is used up. Open Leaderbot to review usage or choose a new package.",
     openLeaderbot: "Open Leaderbot",

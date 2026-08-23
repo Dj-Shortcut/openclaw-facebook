@@ -25,6 +25,19 @@
           "maxAge": 2592000
         }
       }
+    },
+    {
+      "id": "expire-generated-videos-after-30-days",
+      "enabled": true,
+      "conditions": {
+        "prefix": "generated/videos/"
+      },
+      "deleteObjectsTransition": {
+        "condition": {
+          "type": "Age",
+          "maxAge": 2592000
+        }
+      }
     }
   ]
 }

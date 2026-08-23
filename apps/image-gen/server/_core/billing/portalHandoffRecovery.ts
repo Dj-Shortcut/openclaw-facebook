@@ -5,8 +5,12 @@ import {
   billingHandoffRecoveryEvents,
   billingOutbox,
   channelConnections,
+  messengerPrivacySubjects,
 } from "../../../drizzle/schema";
-import { getDatabaseOrThrow } from "../../db";
+import {
+  getDatabaseOrThrow,
+  lockActiveMessengerPrivacyIdentity,
+} from "../../db";
 import { safeLog } from "../logger";
 
 const RECOVERABLE_HANDOFF_FAILURES = new Set([
@@ -60,7 +64,10 @@ export async function rearmFailedPortalHandoffAfterInbound(
     const database = await getDatabaseOrThrow();
     const rearmed = await database.transaction(async tx => {
       const bindings = await tx
-        .select({ workspaceId: channelConnections.workspaceId })
+        .select({
+          workspaceId: channelConnections.workspaceId,
+          channelConnectionId: channelConnections.id,
+        })
         .from(channelConnections)
         .where(
           and(
@@ -69,11 +76,37 @@ export async function rearmFailedPortalHandoffAfterInbound(
             eq(channelConnections.externalId, facebookPageId)
           )
         )
-        .limit(2)
-        .for("update");
+        .limit(2);
       if (bindings.length !== 1) return null;
-      const workspaceId = bindings[0].workspaceId;
+      const { workspaceId, channelConnectionId } = bindings[0];
 
+      const subjects = await tx
+        .select({ privacyEpoch: messengerPrivacySubjects.privacyEpoch })
+        .from(messengerPrivacySubjects)
+        .where(
+          and(
+            eq(messengerPrivacySubjects.workspaceId, workspaceId),
+            eq(
+              messengerPrivacySubjects.channelConnectionId,
+              channelConnectionId
+            ),
+            eq(messengerPrivacySubjects.userKey, input.messengerSenderUserKey),
+            eq(messengerPrivacySubjects.status, "active")
+          )
+        )
+        .limit(1);
+      const privacyEpoch = subjects[0]?.privacyEpoch;
+      if (!privacyEpoch) return null;
+      await lockActiveMessengerPrivacyIdentity(tx, {
+        workspaceId,
+        channelConnectionId,
+        userKey: input.messengerSenderUserKey,
+        privacyEpoch,
+        pageId: facebookPageId,
+      });
+
+      // First read only enough metadata to identify the immutable intent. The
+      // actual outbox row is locked only after that intent is locked.
       const jobs = await tx
         .select()
         .from(billingOutbox)
@@ -83,41 +116,84 @@ export async function rearmFailedPortalHandoffAfterInbound(
             eq(billingOutbox.eventType, "send_portal_handoff"),
             eq(billingOutbox.status, "failed"),
             sql`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerSenderUserKey')) = ${input.messengerSenderUserKey}`,
-            sql`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerPageId')) = ${facebookPageId}`
+            sql`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerPageId')) = ${facebookPageId}`,
+            sql`CAST(JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerChannelConnectionId')) AS UNSIGNED) = ${channelConnectionId}`,
+            sql`CAST(JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerPrivacyEpoch')) AS UNSIGNED) = ${privacyEpoch}`
           )
         )
         .orderBy(desc(billingOutbox.id))
-        .limit(1)
-        .for("update");
-      const job = jobs[0];
+        .limit(1);
+      const candidate = jobs[0];
       if (
-        !job?.lastErrorCode ||
-        !RECOVERABLE_HANDOFF_FAILURES.has(job.lastErrorCode)
+        !candidate?.lastErrorCode ||
+        !RECOVERABLE_HANDOFF_FAILURES.has(candidate.lastErrorCode)
       ) {
         return null;
       }
 
-      const payload = readHandoffPayload(job.payload);
-      if (!payload) return null;
+      const candidatePayload = readHandoffPayload(candidate.payload);
+      if (
+        !candidatePayload ||
+        candidatePayload.messengerSenderUserKey !==
+          input.messengerSenderUserKey ||
+        candidatePayload.messengerPageId !== facebookPageId ||
+        candidatePayload.messengerChannelConnectionId !== channelConnectionId ||
+        candidatePayload.messengerPrivacyEpoch !== privacyEpoch
+      ) {
+        return null;
+      }
       const intents = await tx
         .select({ intentId: billingIntents.intentId })
         .from(billingIntents)
         .where(
           and(
-            eq(billingIntents.intentId, payload.intentId),
+            eq(billingIntents.intentId, candidatePayload.intentId),
             eq(billingIntents.workspaceId, workspaceId),
-            eq(billingIntents.mode, job.mode),
+            eq(billingIntents.mode, candidate.mode),
             eq(billingIntents.status, "paid"),
             eq(
               billingIntents.messengerSenderUserKey,
               input.messengerSenderUserKey
             ),
-            eq(billingIntents.messengerPageId, facebookPageId)
+            eq(billingIntents.messengerPageId, facebookPageId),
+            eq(
+              billingIntents.messengerChannelConnectionId,
+              channelConnectionId
+            ),
+            eq(billingIntents.messengerPrivacyEpoch, privacyEpoch)
           )
         )
         .limit(1)
         .for("update");
       if (!intents[0]) return null;
+
+      const lockedJobs = await tx
+        .select()
+        .from(billingOutbox)
+        .where(eq(billingOutbox.id, candidate.id))
+        .limit(1)
+        .for("update");
+      const job = lockedJobs[0];
+      const payload = readHandoffPayload(job?.payload);
+      if (
+        !job ||
+        job.workspaceId !== workspaceId ||
+        job.mode !== candidate.mode ||
+        job.eventType !== "send_portal_handoff" ||
+        job.status !== "failed" ||
+        job.deliveryState !== "idle" ||
+        job.privacyErasedAt !== null ||
+        !job.lastErrorCode ||
+        !RECOVERABLE_HANDOFF_FAILURES.has(job.lastErrorCode) ||
+        !payload ||
+        payload.intentId !== candidatePayload.intentId ||
+        payload.messengerSenderUserKey !== input.messengerSenderUserKey ||
+        payload.messengerPageId !== facebookPageId ||
+        payload.messengerChannelConnectionId !== channelConnectionId ||
+        payload.messengerPrivacyEpoch !== privacyEpoch
+      ) {
+        return null;
+      }
 
       const recoveryHistory = readRecoveryHistory(job.payload);
       const receipts = await tx
@@ -172,7 +248,9 @@ export async function rearmFailedPortalHandoffAfterInbound(
             eq(billingOutbox.id, job.id),
             eq(billingOutbox.workspaceId, workspaceId),
             eq(billingOutbox.mode, job.mode),
-            eq(billingOutbox.status, "failed")
+            eq(billingOutbox.status, "failed"),
+            eq(billingOutbox.deliveryState, "idle"),
+            sql`${billingOutbox.privacyErasedAt} IS NULL`
           )
         );
 
@@ -212,6 +290,8 @@ function readHandoffPayload(payload: unknown): {
   intentId: string;
   messengerSenderUserKey: string;
   messengerPageId: string;
+  messengerChannelConnectionId: number;
+  messengerPrivacyEpoch: number;
 } | null {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return null;
@@ -223,7 +303,12 @@ function readHandoffPayload(payload: unknown): {
     typeof record.messengerSenderUserKey !== "string" ||
     !/^[a-f0-9]{64}$/.test(record.messengerSenderUserKey) ||
     typeof record.messengerPageId !== "string" ||
-    !record.messengerPageId.trim()
+    !record.messengerPageId.trim() ||
+    record.messengerPageId.length > 160 ||
+    !Number.isSafeInteger(record.messengerChannelConnectionId) ||
+    Number(record.messengerChannelConnectionId) <= 0 ||
+    !Number.isSafeInteger(record.messengerPrivacyEpoch) ||
+    Number(record.messengerPrivacyEpoch) <= 0
   ) {
     return null;
   }
@@ -231,5 +316,7 @@ function readHandoffPayload(payload: unknown): {
     intentId: record.intentId,
     messengerSenderUserKey: record.messengerSenderUserKey,
     messengerPageId: record.messengerPageId.trim(),
+    messengerChannelConnectionId: Number(record.messengerChannelConnectionId),
+    messengerPrivacyEpoch: Number(record.messengerPrivacyEpoch),
   };
 }

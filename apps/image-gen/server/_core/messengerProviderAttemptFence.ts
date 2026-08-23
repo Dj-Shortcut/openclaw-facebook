@@ -25,6 +25,24 @@ export type MessengerProviderAttemptFence = Readonly<{
 export type MessengerProviderAttemptOutcome =
   "known_failed" | "succeeded" | "ambiguous";
 
+export type MessengerProviderAttemptStoredStatus =
+  | "reserved"
+  | "started"
+  | "known_failed"
+  | "succeeded"
+  | "ambiguous"
+  | "contained"
+  | "abandoned";
+
+export type MessengerProviderAttemptClaim =
+  | { kind: "owned"; fence: MessengerProviderAttemptFence }
+  | { kind: "busy"; retryAt: Date }
+  | {
+      kind: "unsafe_or_done";
+      status: "started" | "ambiguous" | "succeeded";
+    }
+  | { kind: "blocked"; status: "contained" | "abandoned" };
+
 export async function containMessengerProviderAttemptsForPrivacy(
   input: {
     workspaceId: number;
@@ -53,9 +71,11 @@ export async function containMessengerProviderAttemptsForPrivacy(
             eq(messengerProviderAttemptFences.status, "reserved"),
             eq(messengerProviderAttemptFences.status, "known_failed"),
             eq(messengerProviderAttemptFences.status, "succeeded"),
-            eq(messengerProviderAttemptFences.status, "ambiguous"),
             and(
-              eq(messengerProviderAttemptFences.status, "started"),
+              or(
+                eq(messengerProviderAttemptFences.status, "started"),
+                eq(messengerProviderAttemptFences.status, "ambiguous")
+              ),
               lte(messengerProviderAttemptFences.leaseUntil, now)
             )
           )
@@ -64,7 +84,15 @@ export async function containMessengerProviderAttemptsForPrivacy(
     const active = await tx
       .select({ id: messengerProviderAttemptFences.id })
       .from(messengerProviderAttemptFences)
-      .where(and(scope, eq(messengerProviderAttemptFences.status, "started")))
+      .where(
+        and(
+          scope,
+          or(
+            eq(messengerProviderAttemptFences.status, "started"),
+            eq(messengerProviderAttemptFences.status, "ambiguous")
+          )
+        )
+      )
       .limit(1)
       .for("update");
     return active.length === 0;
@@ -76,17 +104,18 @@ const LOCAL_FENCE: MessengerProviderAttemptFence = {
   attemptKeyHash: null,
 };
 
-export async function reserveMessengerProviderAttemptFence(
+export async function claimMessengerProviderAttemptFence(
   job: MessengerGenerationJob,
   providerOperation: string,
   providerAttemptSequence: number,
-  now = new Date()
-): Promise<MessengerProviderAttemptFence> {
+  now = new Date(),
+  options: { takeOverReserved?: boolean } = {}
+): Promise<MessengerProviderAttemptClaim> {
   if (
     process.env.NODE_ENV !== "production" &&
     !process.env.DATABASE_URL?.trim()
   ) {
-    return LOCAL_FENCE;
+    return { kind: "owned", fence: LOCAL_FENCE };
   }
   if (
     !job.pageId ||
@@ -120,6 +149,8 @@ export async function reserveMessengerProviderAttemptFence(
     .update(String(privacyEpoch))
     .update("\0")
     .update(operation)
+    .update("\0")
+    .update(String(providerAttemptSequence))
     .update("\0")
     .update(job.reqId)
     .digest("hex");
@@ -181,50 +212,82 @@ export async function reserveMessengerProviderAttemptFence(
         attemptNumber: messengerProviderAttemptFences.attemptNumber,
       })
       .from(messengerProviderAttemptFences)
-      .where(eq(messengerProviderAttemptFences.attemptKeyHash, attemptKeyHash))
+      .where(
+        and(
+          eq(messengerProviderAttemptFences.workspaceId, workspaceId),
+          eq(
+            messengerProviderAttemptFences.channelConnectionId,
+            channelConnectionId
+          ),
+          eq(messengerProviderAttemptFences.bindingEpoch, bindingEpoch),
+          eq(messengerProviderAttemptFences.userKey, userKey),
+          eq(messengerProviderAttemptFences.privacyEpoch, privacyEpoch),
+          eq(messengerProviderAttemptFences.attemptKeyHash, attemptKeyHash)
+        )
+      )
       .limit(1)
       .for("update");
     const fence = existing[0];
     if (fence?.leaseToken === leaseToken) {
       return {
-        leaseToken,
-        attemptKeyHash,
-        workspaceId,
-        channelConnectionId,
-        bindingEpoch,
-        pageId,
-        userKey,
-        privacyEpoch,
+        kind: "owned",
+        fence: {
+          leaseToken,
+          attemptKeyHash,
+          workspaceId,
+          channelConnectionId,
+          bindingEpoch,
+          pageId,
+          userKey,
+          privacyEpoch,
+        },
       };
     }
     // Only a reservation proves that no provider request started. Started or
     // ambiguous attempts are never reclaimed without provider-side evidence.
-    if (fence?.status === "reserved" && fence.leaseUntil <= now) {
+    if (
+      fence?.status === "reserved" &&
+      (options.takeOverReserved === true || fence.leaseUntil <= now)
+    ) {
       const takeover = await tx
         .update(messengerProviderAttemptFences)
         .set({
           leaseToken,
           leaseUntil: new Date(now.getTime() + PROVIDER_FENCE_LEASE_MS),
+          attemptNumber: fence.attemptNumber + 1,
+          startedAt: null,
+          completedAt: null,
         })
         .where(
           and(
+            eq(messengerProviderAttemptFences.workspaceId, workspaceId),
+            eq(
+              messengerProviderAttemptFences.channelConnectionId,
+              channelConnectionId
+            ),
+            eq(messengerProviderAttemptFences.bindingEpoch, bindingEpoch),
+            eq(messengerProviderAttemptFences.userKey, userKey),
+            eq(messengerProviderAttemptFences.privacyEpoch, privacyEpoch),
             eq(messengerProviderAttemptFences.attemptKeyHash, attemptKeyHash),
             eq(messengerProviderAttemptFences.status, "reserved"),
-            lte(messengerProviderAttemptFences.leaseUntil, now)
+            eq(messengerProviderAttemptFences.leaseToken, fence.leaseToken)
           )
         );
       if (affectedRows(takeover) !== 1) {
         throw new Error("Messenger provider attempt fence takeover was lost");
       }
       return {
-        leaseToken,
-        attemptKeyHash,
-        workspaceId,
-        channelConnectionId,
-        bindingEpoch,
-        pageId,
-        userKey,
-        privacyEpoch,
+        kind: "owned",
+        fence: {
+          leaseToken,
+          attemptKeyHash,
+          workspaceId,
+          channelConnectionId,
+          bindingEpoch,
+          pageId,
+          userKey,
+          privacyEpoch,
+        },
       };
     }
     if (fence?.status === "known_failed") {
@@ -240,6 +303,14 @@ export async function reserveMessengerProviderAttemptFence(
         })
         .where(
           and(
+            eq(messengerProviderAttemptFences.workspaceId, workspaceId),
+            eq(
+              messengerProviderAttemptFences.channelConnectionId,
+              channelConnectionId
+            ),
+            eq(messengerProviderAttemptFences.bindingEpoch, bindingEpoch),
+            eq(messengerProviderAttemptFences.userKey, userKey),
+            eq(messengerProviderAttemptFences.privacyEpoch, privacyEpoch),
             eq(messengerProviderAttemptFences.attemptKeyHash, attemptKeyHash),
             eq(messengerProviderAttemptFences.status, "known_failed"),
             eq(
@@ -252,18 +323,54 @@ export async function reserveMessengerProviderAttemptFence(
         throw new Error("Messenger provider attempt retry fence was lost");
       }
       return {
-        leaseToken,
-        attemptKeyHash,
-        workspaceId,
-        channelConnectionId,
-        bindingEpoch,
-        pageId,
-        userKey,
-        privacyEpoch,
+        kind: "owned",
+        fence: {
+          leaseToken,
+          attemptKeyHash,
+          workspaceId,
+          channelConnectionId,
+          bindingEpoch,
+          pageId,
+          userKey,
+          privacyEpoch,
+        },
       };
     }
-    throw new Error("Messenger provider attempt already fenced");
+    if (fence?.status === "reserved") {
+      return { kind: "busy", retryAt: fence.leaseUntil };
+    }
+    if (
+      fence?.status === "started" ||
+      fence?.status === "ambiguous" ||
+      fence?.status === "succeeded"
+    ) {
+      return { kind: "unsafe_or_done", status: fence.status };
+    }
+    if (fence?.status === "contained" || fence?.status === "abandoned") {
+      return { kind: "blocked", status: fence.status };
+    }
+    throw new Error("Messenger provider attempt fence state is unavailable");
   });
+}
+
+export async function reserveMessengerProviderAttemptFence(
+  job: MessengerGenerationJob,
+  providerOperation: string,
+  providerAttemptSequence: number,
+  now = new Date()
+): Promise<MessengerProviderAttemptFence> {
+  const claim = await claimMessengerProviderAttemptFence(
+    job,
+    providerOperation,
+    providerAttemptSequence,
+    now
+  );
+  if (claim.kind === "owned") return claim.fence;
+  throw new Error(
+    claim.kind === "busy"
+      ? "Messenger provider attempt is reserved"
+      : `Messenger provider attempt is ${claim.status}`
+  );
 }
 
 export async function markMessengerProviderAttemptStarted(
@@ -315,6 +422,18 @@ export async function markMessengerProviderAttemptStarted(
       })
       .where(
         and(
+          eq(messengerProviderAttemptFences.workspaceId, fence.workspaceId!),
+          eq(
+            messengerProviderAttemptFences.channelConnectionId,
+            fence.channelConnectionId!
+          ),
+          eq(messengerProviderAttemptFences.bindingEpoch, fence.bindingEpoch!),
+          eq(messengerProviderAttemptFences.userKey, fence.userKey!),
+          eq(messengerProviderAttemptFences.privacyEpoch, fence.privacyEpoch!),
+          eq(
+            messengerProviderAttemptFences.attemptKeyHash,
+            fence.attemptKeyHash!
+          ),
           eq(messengerProviderAttemptFences.leaseToken, fence.leaseToken!),
           eq(messengerProviderAttemptFences.status, "reserved")
         )
@@ -343,9 +462,25 @@ export async function finalizeMessengerProviderAttemptFence(
   const database = await getDatabaseOrThrow();
   const result = await database
     .update(messengerProviderAttemptFences)
-    .set({ status: outcome, completedAt: now, leaseUntil: now })
+    .set(
+      outcome === "ambiguous"
+        ? { status: outcome, completedAt: now }
+        : { status: outcome, completedAt: now, leaseUntil: now }
+    )
     .where(
       and(
+        eq(messengerProviderAttemptFences.workspaceId, fence.workspaceId!),
+        eq(
+          messengerProviderAttemptFences.channelConnectionId,
+          fence.channelConnectionId!
+        ),
+        eq(messengerProviderAttemptFences.bindingEpoch, fence.bindingEpoch!),
+        eq(messengerProviderAttemptFences.userKey, fence.userKey!),
+        eq(messengerProviderAttemptFences.privacyEpoch, fence.privacyEpoch!),
+        eq(
+          messengerProviderAttemptFences.attemptKeyHash,
+          fence.attemptKeyHash!
+        ),
         eq(messengerProviderAttemptFences.leaseToken, fence.leaseToken),
         or(
           eq(messengerProviderAttemptFences.status, "reserved"),

@@ -5,6 +5,7 @@ export type SourceImageFetchConfig = {
 };
 
 const SOURCE_IMAGE_FETCH_TIMEOUT_MS_DEFAULT = 10_000;
+export const SOURCE_IMAGE_FETCH_TIMEOUT_MS_MAX = 30_000;
 const SOURCE_IMAGE_FETCH_RETRY_LIMIT_DEFAULT = 1;
 
 function parseAllowedHosts(raw: string | undefined): string[] {
@@ -16,10 +17,13 @@ function parseAllowedHosts(raw: string | undefined): string[] {
 
 function parsePositiveInteger(
   raw: string | undefined,
-  fallback: number
+  fallback: number,
+  maximum = Number.POSITIVE_INFINITY
 ): number {
   const parsed = Number.parseInt(raw ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.min(parsed, maximum)
+    : fallback;
 }
 
 export function resolveSourceImageFetchConfig(
@@ -30,7 +34,8 @@ export function resolveSourceImageFetchConfig(
     retryLimit: SOURCE_IMAGE_FETCH_RETRY_LIMIT_DEFAULT,
     timeoutMs: parsePositiveInteger(
       env.FB_IMAGE_FETCH_TIMEOUT_MS,
-      SOURCE_IMAGE_FETCH_TIMEOUT_MS_DEFAULT
+      SOURCE_IMAGE_FETCH_TIMEOUT_MS_DEFAULT,
+      SOURCE_IMAGE_FETCH_TIMEOUT_MS_MAX
     ),
   };
 }

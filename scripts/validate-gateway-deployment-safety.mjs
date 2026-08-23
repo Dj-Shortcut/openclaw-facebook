@@ -203,6 +203,21 @@ export function validateManagedUpdateWorkflow(text) {
 }
 
 export function validatePluginWorkflow(text) {
+  const lines = text.split(/\r?\n/);
+  const triggerIndex = lines.findIndex((line) =>
+    /^  pull_request:\s*(?:\{\})?\s*$/.test(line),
+  );
+  if (triggerIndex >= 0) {
+    let isPathFiltered = false;
+    for (const line of lines.slice(triggerIndex + 1)) {
+      if (/^\S/.test(line) || /^  \S/.test(line)) break;
+      if (/^    paths(?:-ignore)?:\s*$/.test(line)) {
+        isPathFiltered = true;
+        break;
+      }
+    }
+    if (!isPathFiltered) return;
+  }
   requireMatch(
     text,
     /^\s*-\s*["']?fly\.toml["']?\s*$/m,

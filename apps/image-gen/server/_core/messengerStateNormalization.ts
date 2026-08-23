@@ -1,9 +1,6 @@
 import { toUserKey } from "./privacy";
 import { MAX_SOURCE_IMAGES } from "./image-generation/generationTypes";
-import type {
-  MessengerFlowState,
-  MessengerUserState,
-} from "./messengerState";
+import type { MessengerFlowState, MessengerUserState } from "./messengerState";
 
 type PartialState = Partial<MessengerUserState>;
 type LegacyConversationState = MessengerFlowState | "AWAITING_STYLE";
@@ -170,7 +167,8 @@ function resolveConsentState(
       ? value.pendingDeleteConfirmAt
       : undefined;
   const pendingDeleteConfirm =
-    value?.pendingDeleteConfirm === true && pendingDeleteConfirmAt !== undefined;
+    value?.pendingDeleteConfirm === true &&
+    pendingDeleteConfirmAt !== undefined;
 
   return {
     consentGiven,
@@ -360,14 +358,19 @@ function resolvePendingEditIntent(
 }
 
 function resolvePendingImageUrls(
-  ctx: NormalizationCtx
+  ctx: NormalizationCtx,
+  legacyFields: Pick<LegacyStateFields, "stage" | "lastPhoto">
 ): Pick<MessengerUserState, "pendingImageUrls"> {
   const configured = Array.isArray(ctx.value?.pendingImageUrls)
     ? ctx.value.pendingImageUrls
     : [];
+  const legacySingleImages =
+    configured.length === 0 && legacyFields.stage === "AWAITING_EDIT_PROMPT"
+      ? [ctx.value?.pendingImageUrl, legacyFields.lastPhoto]
+      : [];
   const pendingImageUrls = Array.from(
     new Set(
-      configured
+      [...configured, ...legacySingleImages]
         .filter((url): url is string => typeof url === "string")
         .map(url => url.trim())
         .filter(Boolean)
@@ -418,7 +421,7 @@ function applyNormalizedStateShape(
     ...resolvePhotoAndStyleState(ctx, { lastPhoto }),
     ...resolveGeneratedImageState(ctx, lastGeneratedUrl),
     ...resolveSourceImageState(ctx),
-    ...resolvePendingImageUrls(ctx),
+    ...resolvePendingImageUrls(ctx, { stage, lastPhoto }),
     ...resolvePendingEditIntent(ctx),
     ...resolvePendingVideoGeneration(ctx),
     quota: resolveQuotaState(ctx),

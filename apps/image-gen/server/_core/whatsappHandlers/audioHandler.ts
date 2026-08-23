@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import { t } from "../i18n";
 import { safeLog } from "../logger";
-import type { NormalizedWhatsAppEvent, WhatsAppHandlerContext } from "../whatsappTypes";
+import type {
+  NormalizedWhatsAppEvent,
+  WhatsAppHandlerContext,
+} from "../whatsappTypes";
 import { toLogUser } from "../privacy";
 import {
   assertMessengerDailyAudioTranscriptionBudgetAvailable,
@@ -32,14 +35,19 @@ export async function handleWhatsAppAudioEvent(
       user: toLogUser(event.userId),
       reqId: context.reqId,
     });
-    await sendWhatsAppTextReply(event.senderId, t(context.lang, "unsupportedAudio"));
+    await sendWhatsAppTextReply(
+      event.senderId,
+      t(context.lang, "unsupportedAudio")
+    );
     return;
   }
 
   const audioBudgetNow = new Date();
   let sourceAudioBuffer: Buffer | undefined;
   let sourceAudioContentType: string | undefined;
-  let reservation: Awaited<ReturnType<typeof reserveTranscriptionForAttempt>> | null = null;
+  let reservation: Awaited<
+    ReturnType<typeof reserveTranscriptionForAttempt>
+  > | null = null;
   let audioBudgetReserved = false;
   let audioBudgetCommitted = false;
 
@@ -50,13 +58,19 @@ export async function handleWhatsAppAudioEvent(
     });
     audioBudgetReserved = true;
     if (!process.env.OPENAI_API_KEY?.trim()) {
-      await sendWhatsAppTextReply(event.senderId, t(context.lang, "unsupportedAudio"));
+      await sendWhatsAppTextReply(
+        event.senderId,
+        t(context.lang, "unsupportedAudio")
+      );
       return;
     }
 
     reservation = await reserveTranscriptionForAttempt(event.senderId);
     if (!reservation) {
-      await sendWhatsAppTextReply(event.senderId, t(context.lang, "outOfFreeCredits"));
+      await sendWhatsAppTextReply(
+        event.senderId,
+        t(context.lang, "outOfFreeCredits")
+      );
       return;
     }
 
@@ -74,7 +88,10 @@ export async function handleWhatsAppAudioEvent(
           .digest("hex")
           .slice(0, 12),
       });
-      await sendWhatsAppTextReply(event.senderId, t(context.lang, "unsupportedAudio"));
+      await sendWhatsAppTextReply(
+        event.senderId,
+        t(context.lang, "unsupportedAudio")
+      );
       return;
     }
 
@@ -82,11 +99,14 @@ export async function handleWhatsAppAudioEvent(
       context.reqId,
       event.senderId,
       event.audioId,
-      sourceAudioBuffer!,
+      sourceAudioBuffer,
       sourceAudioContentType
     );
     if (!preparedAudio) {
-      await sendWhatsAppTextReply(event.senderId, t(context.lang, "unsupportedAudio"));
+      await sendWhatsAppTextReply(
+        event.senderId,
+        t(context.lang, "unsupportedAudio")
+      );
       return;
     }
 
@@ -95,11 +115,17 @@ export async function handleWhatsAppAudioEvent(
         return;
       }
       if (!reservation) {
-        throw new MessengerQuotaReservationCommitError("Missing transcription reservation");
+        throw new MessengerQuotaReservationCommitError(
+          "Missing transcription reservation"
+        );
       }
-      const committed = await commitTranscriptionSuccess(event.senderId, reservation, {
-        releaseReservation: false,
-      });
+      const committed = await commitTranscriptionSuccess(
+        event.senderId,
+        reservation,
+        {
+          releaseReservation: false,
+        }
+      );
       if (!committed) {
         throw new MessengerQuotaReservationCommitError(
           "Messenger audio transcription quota reservation could not be committed"
@@ -118,7 +144,10 @@ export async function handleWhatsAppAudioEvent(
       "whatsapp"
     );
     if (!transcript) {
-      await sendWhatsAppTextReply(event.senderId, t(context.lang, "unsupportedAudio"));
+      await sendWhatsAppTextReply(
+        event.senderId,
+        t(context.lang, "unsupportedAudio")
+      );
       return;
     }
 
@@ -132,14 +161,20 @@ export async function handleWhatsAppAudioEvent(
     );
   } catch (error) {
     if (error instanceof MessengerDailyAudioTranscriptionBudgetExceededError) {
-      await sendWhatsAppTextReply(event.senderId, t(context.lang, "outOfFreeCredits"));
+      await sendWhatsAppTextReply(
+        event.senderId,
+        t(context.lang, "outOfFreeCredits")
+      );
       return;
     }
     if (
       error instanceof MessengerQuotaReservationCommitError ||
       error instanceof MessengerSpendBudgetExceededError
     ) {
-      await sendWhatsAppTextReply(event.senderId, t(context.lang, "outOfFreeCredits"));
+      await sendWhatsAppTextReply(
+        event.senderId,
+        t(context.lang, "outOfFreeCredits")
+      );
       return;
     }
 

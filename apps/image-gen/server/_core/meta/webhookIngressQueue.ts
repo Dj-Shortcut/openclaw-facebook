@@ -7,8 +7,15 @@ import {
   resetRedisClientForTests,
 } from "../redis";
 import { safeLog } from "../messengerApi";
+import type { Lang } from "../i18n";
 import { toUserKey } from "../privacy";
-import { ensureActiveMessengerPrivacySubject } from "../messengerPrivacySubject";
+import { classifyInboundEvent } from "../messengerInboundClassification";
+import {
+  admitMessengerPrivacySubjectFromMetaEvent,
+  MessengerPrivacyFenceError,
+} from "../messengerPrivacySubject";
+import { runWithMessengerRequestContext } from "../messengerRequestContext";
+import type { FacebookWebhookEvent } from "../webhookHelpers";
 import { resolveMessengerGenerationOwnership } from "../workspaceEntitlementRuntime";
 
 const WEBHOOK_INGRESS_QUEUE_KEY = "{meta-webhook-ingress}:queued";
@@ -306,12 +313,28 @@ async function createFacebookIngressDeliveries(
       if (typeof senderId !== "string" || !senderId.trim()) {
         continue;
       }
+      const messengerEvent = event as FacebookWebhookEvent;
+      const eventOccurredAt = parseMetaEventOccurredAt(
+        messengerEvent.timestamp
+      );
       const userKey = toUserKey(senderId);
-      const privacyEpoch = await ensureActiveMessengerPrivacySubject({
-        workspaceId: ownership.workspaceId,
-        channelConnectionId: ownership.channelConnectionId,
-        userKey,
-      });
+      let privacyEpoch: number;
+      try {
+        privacyEpoch = await admitMessengerPrivacySubjectFromMetaEvent({
+          workspaceId: ownership.workspaceId,
+          channelConnectionId: ownership.channelConnectionId,
+          userKey,
+          eventOccurredAt,
+          allowReactivation:
+            classifyInboundEvent(messengerEvent).isInboundUserEvent,
+        });
+      } catch (error) {
+        if (error instanceof MessengerPrivacyFenceError) {
+          safeLog("webhook_ingress_event_privacy_rejected", {});
+          continue;
+        }
+        throw error;
+      }
       deliveries.push({
         payload: { object, entry: [{ ...entry, messaging: [event] }] },
         subjects: [{ ...ownership, userKey, privacyEpoch }],
@@ -319,6 +342,17 @@ async function createFacebookIngressDeliveries(
     }
   }
   return deliveries;
+}
+
+function parseMetaEventOccurredAt(value: unknown): Date {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new Error("Webhook ingress event timestamp is unavailable");
+  }
+  const eventOccurredAt = new Date(value);
+  if (!Number.isSafeInteger(eventOccurredAt.getTime())) {
+    throw new Error("Webhook ingress event timestamp is unavailable");
+  }
+  return eventOccurredAt;
 }
 
 async function processWhatsAppWebhookPayloadSafely(
@@ -329,9 +363,14 @@ async function processWhatsAppWebhookPayloadSafely(
 }
 
 async function processFacebookWebhookPayloadSafely(
-  payload: unknown
+  payload: unknown,
+  options: { defaultLang?: Lang } = {}
 ): Promise<void> {
   const module = await import("../messengerWebhook");
+  if (options.defaultLang) {
+    await module.processFacebookWebhookPayload(payload, options);
+    return;
+  }
   await module.processFacebookWebhookPayload(payload);
 }
 
@@ -343,7 +382,47 @@ async function processQueuedWebhookDelivery(
     return;
   }
 
-  await processFacebookWebhookPayloadSafely(delivery.payload);
+  if (delivery.subjects.length === 0 && process.env.NODE_ENV !== "production") {
+    await processFacebookWebhookPayloadSafely(delivery.payload);
+    return;
+  }
+  if (delivery.subjects.length !== 1) {
+    throw new Error("Messenger webhook delivery privacy scope is unavailable");
+  }
+  const subject = delivery.subjects[0];
+  await runWithMessengerRequestContext(
+    subject.pageId,
+    () => processFacebookWebhookPayloadSafely(delivery.payload),
+    {
+      workspaceId: subject.workspaceId,
+      channelConnectionId: subject.channelConnectionId,
+      bindingEpoch: subject.bindingEpoch,
+      userKey: subject.userKey,
+      privacyEpoch: subject.privacyEpoch,
+    }
+  );
+}
+
+/** Processes an already-authenticated Meta ingress without granting workers reactivation authority. */
+export async function processAuthenticatedFacebookIngressPayload(
+  payload: unknown,
+  options: { defaultLang?: Lang } = {}
+): Promise<void> {
+  const units = await createFacebookIngressDeliveries(payload);
+  for (const unit of units) {
+    const subject = unit.subjects[0];
+    await runWithMessengerRequestContext(
+      subject.pageId,
+      () => processFacebookWebhookPayloadSafely(unit.payload, options),
+      {
+        workspaceId: subject.workspaceId,
+        channelConnectionId: subject.channelConnectionId,
+        bindingEpoch: subject.bindingEpoch,
+        userKey: subject.userKey,
+        privacyEpoch: subject.privacyEpoch,
+      }
+    );
+  }
 }
 
 export function isWebhookIngressQueueEnabled(): boolean {
@@ -398,9 +477,6 @@ export async function enqueueWebhookIngressDelivery(
     channel === "facebook"
       ? await createFacebookIngressDeliveries(payload)
       : [{ payload, subjects: [] }];
-  if (channel === "facebook" && units.length === 0) {
-    throw new Error("Webhook ingress contains no scoped Messenger events");
-  }
   for (const unit of units) {
     await enqueueWebhookIngressUnit(channel, unit.payload, unit.subjects);
   }
@@ -1056,14 +1132,18 @@ export function processWebhookDeliveryInline(
   }
   const now = Date.now();
   setImmediate(() => {
-    void processQueuedWebhookDelivery({
-      deliveryId: "inline",
-      channel,
-      payload,
-      receivedAt: new Date(now).toISOString(),
-      expiresAt: now + getWebhookIngressContentTtlSeconds() * 1_000,
-      subjects: [],
-    }).catch(error => {
+    const processing =
+      channel === "facebook"
+        ? processAuthenticatedFacebookIngressPayload(payload)
+        : processQueuedWebhookDelivery({
+            deliveryId: "inline",
+            channel,
+            payload,
+            receivedAt: new Date(now).toISOString(),
+            expiresAt: now + getWebhookIngressContentTtlSeconds() * 1_000,
+            subjects: [],
+          });
+    void processing.catch(error => {
       safeLog("webhook_async_processing_failed", {
         channel,
         error: serializeError(error),
@@ -1079,6 +1159,8 @@ export function resetWebhookIngressQueueForTests(): void {
 }
 
 export const webhookIngressQueueTestHooks = {
+  createFacebookIngressDeliveries,
+  processQueuedWebhookDelivery,
   reserveWebhookIngressDelivery,
   completeWebhookIngressDelivery,
 };

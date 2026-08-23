@@ -1,14 +1,19 @@
+import { createHash } from "node:crypto";
 import { downloadWhatsAppMedia } from "../whatsappApi";
 import { storeInboundSourceImage } from "../sourceImageStore";
 import { toLogUser } from "../privacy";
 import { t } from "../i18n";
-import {
-  setPendingImage,
-  setFlowState,
-} from "../messengerState";
+import { setPendingImage, setFlowState } from "../messengerState";
 import { sendWhatsAppTextReply } from "../whatsappResponseService";
-import type { NormalizedWhatsAppEvent, WhatsAppHandlerContext } from "../whatsappTypes";
+import type {
+  NormalizedWhatsAppEvent,
+  WhatsAppHandlerContext,
+} from "../whatsappTypes";
 import { safeLog } from "../logger";
+
+function hashMediaId(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 12);
+}
 
 export async function handleWhatsAppImageEvent(
   event: NormalizedWhatsAppEvent,
@@ -27,7 +32,7 @@ export async function handleWhatsAppImageEvent(
     const media = await downloadWhatsAppMedia(event.imageId);
     safeLog("whatsapp_image_downloaded", {
       user: toLogUser(event.userId),
-      imageId: event.imageId,
+      mediaIdHash: hashMediaId(event.imageId),
       contentType: media.contentType,
       byteLength: media.buffer.length,
     });
@@ -39,25 +44,36 @@ export async function handleWhatsAppImageEvent(
     );
     safeLog("whatsapp_image_persisted", {
       user: toLogUser(event.userId),
-      imageId: event.imageId,
+      mediaIdHash: hashMediaId(event.imageId),
       persistedImageLocation: summarizePersistedImageUrl(persistedImageUrl),
     });
   } catch (error) {
     safeLog("whatsapp_inbound_image_processing_failed", {
       level: "error",
       user: toLogUser(event.userId),
-      imageId: event.imageId,
+      mediaIdHash: hashMediaId(event.imageId),
       reqId: context.reqId,
       error: error instanceof Error ? error.message : String(error),
     });
     await setFlowState(event.senderId, "AWAITING_PHOTO");
-    await sendWhatsAppTextReply(event.senderId, t(context.lang, "missingInputImage"));
+    await sendWhatsAppTextReply(
+      event.senderId,
+      t(context.lang, "missingInputImage")
+    );
     return;
   }
 
-  await setPendingImage(event.senderId, persistedImageUrl, Date.now(), "stored");
+  await setPendingImage(
+    event.senderId,
+    persistedImageUrl,
+    Date.now(),
+    "stored"
+  );
 
-  await sendWhatsAppTextReply(event.senderId, t(context.lang, "photoEditPrompt"));
+  await sendWhatsAppTextReply(
+    event.senderId,
+    t(context.lang, "photoEditPrompt")
+  );
 }
 
 function summarizePersistedImageUrl(value: string): string {

@@ -4,6 +4,7 @@ import {
   buildGeneratedImageUrl,
   getGeneratedImage,
   hashGeneratedImageToken,
+  isLocalGeneratedImageUrl,
   putGeneratedImage,
 } from "./_core/generatedImageStore";
 
@@ -30,6 +31,41 @@ describe("generatedImageStore", () => {
   it("builds generated URL with token", () => {
     const url = buildGeneratedImageUrl("https://example.com", "abc-123");
     expect(url).toBe("https://example.com/generated/abc-123.png");
+  });
+
+  it("trusts only live process-owned fallback URLs outside production", () => {
+    const originalAppBaseUrl = process.env.APP_BASE_URL;
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.APP_BASE_URL = "https://example.com";
+    process.env.NODE_ENV = "test";
+    try {
+      const token = putGeneratedImage(Buffer.from([4, 5, 6]), "image/jpeg");
+      const storedUrl = buildGeneratedImageUrl(
+        "https://example.com",
+        token,
+        "jpg"
+      );
+
+      expect(isLocalGeneratedImageUrl(storedUrl)).toBe(true);
+      expect(
+        isLocalGeneratedImageUrl(
+          "https://example.com/generated/00000000-0000-4000-8000-000000000000.jpg"
+        )
+      ).toBe(false);
+      expect(
+        isLocalGeneratedImageUrl(
+          buildGeneratedImageUrl("https://attacker.example", token, "jpg")
+        )
+      ).toBe(false);
+
+      process.env.NODE_ENV = "production";
+      expect(isLocalGeneratedImageUrl(storedUrl)).toBe(false);
+    } finally {
+      if (originalAppBaseUrl === undefined) delete process.env.APP_BASE_URL;
+      else process.env.APP_BASE_URL = originalAppBaseUrl;
+      if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = originalNodeEnv;
+    }
   });
 
   it("hashes generated image tokens for logs without exposing the token", () => {

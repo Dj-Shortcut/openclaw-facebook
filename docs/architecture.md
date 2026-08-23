@@ -125,10 +125,11 @@ flowchart TD
 9. Image flow state is still updated directly in channel orchestration (`setFlowState`, `setPendingImage`, `setLastGenerationContext`, ...). Messenger now treats free image prompts as text-to-image by default; source-image generation only uses a stored/uploaded photo when the user explicitly asks to edit/restyle that photo.
 10. If Messenger face memory is enabled, the first source-photo upload asks for explicit reuse consent for the configured retention window before asking for a natural-language edit prompt.
 11. If generation is triggered:
-   - state -> `PROCESSING`,
-   - OpenAI image generator configuration,
-   - result sent via Messenger Send API or WhatsApp Cloud API,
-   - state -> `RESULT_READY` (or `FAILURE` on error).
+
+- state -> `PROCESSING`,
+- OpenAI image generator configuration,
+- result sent via Messenger Send API or WhatsApp Cloud API,
+- state -> `RESULT_READY` (or `FAILURE` on error).
 
 Face memory is Messenger-only and disabled by default. See [`face-memory.md`](face-memory.md) for the legal/ops checklist.
 
@@ -196,21 +197,39 @@ Face-memory state is intentionally limited to consent metadata plus the retained
 
 There are two quota strategies represented in code:
 
-### A. Messenger in-state quota
+### A. Messenger customer image quota
+
+- Implemented in `server/_core/messengerImageQuotaStore.ts`.
+- Production uses atomic Redis operations scoped by workspace, channel
+  connection, binding epoch, privacy epoch, and pseudonymous user key.
+- Free-tier image generation allows `5` usable generated photos per Brussels
+  calendar day and `20` per Brussels calendar month.
+- Only a usable, durably recorded generation result consumes one photo.
+  Validation/provider failures consume zero, and request receipts make replayed
+  jobs count once.
+- The exact remaining day/month balance is sent after each successful image.
+- Customer image admission does not use a shared image counter or an estimated
+  dollar-price gate. The external OpenAI account hard limit remains the final
+  provider-side cost stop.
+
+### B. Legacy channel/feature in-state quota
 
 - Implemented in `server/_core/messengerQuota.ts`.
 - Daily key derived in UTC (`YYYY-MM-DD`).
-- Free-tier image generation default: `20` provider attempts per sender/user identity per UTC day.
 - Free-tier audio transcription default: `5` provider attempts per sender/user identity per UTC day.
 - Free-tier video generation default: `1` provider attempt per sender/user identity per UTC day.
 - Bot text rate-limit default: `30` messages per sender per `60` seconds.
-- Provider attempts count when the paid provider call is about to run. Preflight failures such as missing or invalid source images remain retryable without burning credits; provider failures, timeouts, parse/upload failures, and delivery failures after provider attempt start are counted.
-- Optional global UTC-day caps block provider calls before OpenAI for image generation (`MESSENGER_GLOBAL_DAILY_IMAGE_CAP`), audio transcription (`MESSENGER_GLOBAL_DAILY_AUDIO_CAP`), and video generation (`MESSENGER_GLOBAL_DAILY_VIDEO_CAP`).
+- WhatsApp image generation plus Messenger audio/video still count provider
+  attempts when the paid call is about to run. Preflight failures remain
+  retryable without burning those feature credits.
+- Optional global UTC-day caps remain available for audio transcription
+  (`MESSENGER_GLOBAL_DAILY_AUDIO_CAP`) and video generation
+  (`MESSENGER_GLOBAL_DAILY_VIDEO_CAP`).
 - OpenAI image, audio transcription, and video provider attempts also write metadata-only UTC-day cost ledger entries with pseudonymous `userKey`, provider/model, estimate metadata, and status. Ledger records must not include prompts, transcripts, raw PSIDs, source media URLs, generated outputs, or customer message text.
 - Cost ledger summaries aggregate attempts, unique pseudonymous users, estimated/final-cost fields, incomplete estimates, and operation/provider breakdowns for owner monitoring without exposing user content.
 - Used with state store abstraction.
 
-### B. DB-backed quota
+### C. DB-backed quota
 
 - Implemented via `dailyQuota` table + helpers in `server/db.ts`.
 - Unique index on `(userId, date)`.
@@ -271,6 +290,13 @@ Cloudflare is part of the production asset-delivery path, not the main app runti
 - The storage proxy writes generated assets to Cloudflare R2.
 - The storage proxy returns durable public URLs built from `PUBLIC_BASE_URL`.
 - `PUBLIC_BASE_URL` can be an R2 public URL such as `*.r2.dev` or a Cloudflare-backed custom domain.
+- Active Messenger objects keep the lifecycle prefix, followed by immutable
+  workspace, channel-connection, binding-epoch, privacy-epoch, and HMAC-user
+  segments. The exact key is inventoried before the first PUT, so deletion can
+  still find an object after a worker crash or an ambiguous remote timeout.
+- Every proxy request is short-lived HMAC-authenticated over method, exact key,
+  and scope. The proxy independently parses the key and rejects traversal,
+  unknown prefixes, scope mismatch, and expired signatures.
 
 This means Cloudflare currently sits behind the storage proxy for durable asset storage and delivery, rather than acting as the primary reverse proxy in front of the main Leaderbot app.
 

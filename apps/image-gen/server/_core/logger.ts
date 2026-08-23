@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 /** @public */
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -130,8 +132,36 @@ function sanitizeString(value: string): string {
     .replace(/https?:\/\/[^\s)]+/gi, "[URL_REDACTED]");
 }
 
-function truncateLogUser(value: unknown): unknown {
-  return typeof value === "string" ? value.slice(0, 8) : value;
+function summarizeLogUser(value: unknown): unknown {
+  return typeof value === "string"
+    ? `usr_${createHash("sha256").update(value).digest("hex").slice(0, 12)}`
+    : value;
+}
+
+function isErrorDetailKey(key: string): boolean {
+  const normalized = key.toLowerCase().replace(/[_-]/g, "");
+  return (
+    normalized === "error" ||
+    normalized === "err" ||
+    normalized === "exception" ||
+    normalized.endsWith("exception")
+  );
+}
+
+function normalizeErrorDetail(value: unknown): unknown {
+  if (value instanceof Error) {
+    return normalizeLogValue(value);
+  }
+  if (typeof value === "string") {
+    return {
+      class: "RedactedError",
+      fingerprint: createHash("sha256")
+        .update(value)
+        .digest("hex")
+        .slice(0, 12),
+    };
+  }
+  return { class: "UnknownError" };
 }
 
 function getSafeErrorClass(error: Error): string {
@@ -206,10 +236,12 @@ function normalizeLogValue(
         .filter(([key]) => !shouldDropLogKey(key))
         .map(([key, nested]) => [
           key,
-          normalizeLogValue(
-            key === "user" ? truncateLogUser(nested) : nested,
-            seen
-          ),
+          isErrorDetailKey(key)
+            ? normalizeErrorDetail(nested)
+            : normalizeLogValue(
+                key === "user" ? summarizeLogUser(nested) : nested,
+                seen
+              ),
         ])
     );
   }
@@ -223,7 +255,11 @@ function redactLogDetails(details: LogFields): LogFields {
       .filter(([key]) => !shouldDropLogKey(key))
       .map(([key, value]) => {
         if (key === "user") {
-          return [key, normalizeLogValue(truncateLogUser(value))];
+          return [key, normalizeLogValue(summarizeLogUser(value))];
+        }
+
+        if (isErrorDetailKey(key)) {
+          return [key, normalizeErrorDetail(value)];
         }
 
         return [key, normalizeLogValue(value)];

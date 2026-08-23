@@ -1,6 +1,11 @@
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createLogger, safeLog } from "./_core/logger";
+
+function logUser(value: string): string {
+  return `usr_${createHash("sha256").update(value).digest("hex").slice(0, 12)}`;
+}
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -23,7 +28,7 @@ describe("safeLog routing", () => {
     expect(payload).toEqual({
       level: "info",
       event: "messenger_event",
-      user: "12345678",
+      user: logUser("1234567890"),
       reason: "ok",
     });
   });
@@ -171,6 +176,28 @@ describe("safeLog redaction", () => {
     expect(JSON.stringify(payload)).not.toContain(privateContent);
   });
 
+  it("fingerprints caller-stringified errors without logging their content", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const privateContent =
+      "provider rejected private customer prompt with raw-psid-123";
+
+    safeLog("string_error_event", {
+      level: "error",
+      error: privateContent,
+    });
+
+    const payload = JSON.parse(String(errorSpy.mock.calls[0]?.[0]));
+    expect(payload.error).toEqual({
+      class: "RedactedError",
+      fingerprint: createHash("sha256")
+        .update(privateContent)
+        .digest("hex")
+        .slice(0, 12),
+    });
+    expect(JSON.stringify(payload)).not.toContain(privateContent);
+    expect(JSON.stringify(payload)).not.toContain("raw-psid-123");
+  });
+
   it("redacts Mollie keys, resource identifiers, and customer fields", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const fakeMollieKey = ["test", "aaaaaaaaaaaa"].join("_");
@@ -226,7 +253,7 @@ describe("safeLog redaction", () => {
     expect(payload).toMatchObject({
       event: "trusted_event",
       context: {
-        user: "12345678",
+        user: logUser("1234567890"),
         items: ["[Circular]"],
       },
     });

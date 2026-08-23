@@ -1,5 +1,17 @@
-import { desc, eq, and, gt, inArray, isNotNull, or, sql } from "drizzle-orm";
+import {
+  desc,
+  eq,
+  and,
+  gt,
+  inArray,
+  isNotNull,
+  lte,
+  or,
+  sql,
+} from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
+import type { RowDataPacket } from "mysql2";
+import mysql from "mysql2/promise";
 import {
   aiIdentities,
   auditLog,
@@ -8,15 +20,10 @@ import {
   billingOutbox,
   channelConnections,
   dailyQuota,
-  imageRequests,
   InsertAiIdentity,
   InsertAuditLog,
   InsertChannelConnection,
-  InsertImageRequest,
-  InsertMessengerState,
-  InsertNotificationLog,
   InsertPortalHandoffToken,
-  InsertUsageStats,
   InsertUser,
   InsertWorkspace,
   InsertWorkspaceKnowledgeSource,
@@ -24,11 +31,9 @@ import {
   InsertWorkspacePrivacySetting,
   InsertWorkspacePrivacyRequest,
   InsertWorkspaceUpgradeRequest,
-  messengerState,
+  messengerPrivacySubjects,
   messengerProviderAttemptFences,
-  notificationLog,
   portalHandoffTokens,
-  usageStats,
   users,
   workspaceMembers,
   workspacePrivacySettings,
@@ -55,6 +60,11 @@ import {
 } from "./_core/quotaPolicy";
 
 let _db: ReturnType<typeof drizzle> | null = null;
+
+type NamedLockRow = RowDataPacket & {
+  acquired?: number | string | null;
+  released?: number | string | null;
+};
 
 function logDatabaseUnavailable(operation: string): void {
   safeLog("database_unavailable", {
@@ -90,6 +100,82 @@ export async function getDatabaseOrThrow() {
     throw new Error("Database unavailable for billing operation");
   }
   return db;
+}
+
+type ImageGenDatabase = NonNullable<Awaited<ReturnType<typeof getDb>>>;
+export type ImageGenTransaction = Parameters<
+  Parameters<ImageGenDatabase["transaction"]>[0]
+>[0];
+
+export type MessengerPrivacyIdentityFence = Readonly<{
+  workspaceId: number;
+  channelConnectionId: number;
+  userKey: string;
+  privacyEpoch: number;
+  pageId: string;
+}>;
+
+/**
+ * Serializes identity-bearing SQL writes with Messenger erasure. The subject
+ * row is always locked before any intent, outbox, or handoff-token row.
+ */
+export async function lockActiveMessengerPrivacyIdentity(
+  tx: ImageGenTransaction,
+  input: MessengerPrivacyIdentityFence
+): Promise<void> {
+  const pageId = input.pageId.trim();
+  if (
+    !Number.isSafeInteger(input.workspaceId) ||
+    input.workspaceId <= 0 ||
+    !Number.isSafeInteger(input.channelConnectionId) ||
+    input.channelConnectionId <= 0 ||
+    !Number.isSafeInteger(input.privacyEpoch) ||
+    input.privacyEpoch <= 0 ||
+    !/^[A-Za-z0-9:_-]{16,96}$/.test(input.userKey) ||
+    !pageId ||
+    pageId.length > 160
+  ) {
+    throw new Error("Exact Messenger privacy identity fence is required");
+  }
+
+  const subjects = await tx
+    .select({ id: messengerPrivacySubjects.id })
+    .from(messengerPrivacySubjects)
+    .where(
+      and(
+        eq(messengerPrivacySubjects.workspaceId, input.workspaceId),
+        eq(
+          messengerPrivacySubjects.channelConnectionId,
+          input.channelConnectionId
+        ),
+        eq(messengerPrivacySubjects.userKey, input.userKey),
+        eq(messengerPrivacySubjects.privacyEpoch, input.privacyEpoch),
+        eq(messengerPrivacySubjects.status, "active")
+      )
+    )
+    .limit(1)
+    .for("update");
+  if (!subjects[0]) {
+    throw new Error("Messenger privacy identity is no longer active");
+  }
+
+  const connections = await tx
+    .select({ id: channelConnections.id })
+    .from(channelConnections)
+    .where(
+      and(
+        eq(channelConnections.id, input.channelConnectionId),
+        eq(channelConnections.workspaceId, input.workspaceId),
+        eq(channelConnections.channel, "facebook_messenger"),
+        eq(channelConnections.status, "connected"),
+        eq(channelConnections.externalId, pageId)
+      )
+    )
+    .limit(1)
+    .for("update");
+  if (!connections[0]) {
+    throw new Error("Messenger Page privacy identity binding is unavailable");
+  }
 }
 
 export async function upsertUser(user: InsertUser): Promise<void> {
@@ -166,18 +252,6 @@ export async function getUserByOpenId(openId: string) {
     .from(users)
     .where(eq(users.openId, openId))
     .limit(1);
-
-  return result.length > 0 ? result[0] : undefined;
-}
-
-async function getUserById(id: number) {
-  const db = await getDb();
-  if (!db) {
-    logDatabaseUnavailable("get_user_by_id");
-    return undefined;
-  }
-
-  const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
 
   return result.length > 0 ? result[0] : undefined;
 }
@@ -1043,22 +1117,25 @@ export async function createPortalHandoffToken(
     );
   }
 
-  const insertResult = await db.insert(portalHandoffTokens).values(values);
-  const insertedId = getInsertedId(insertResult, "portal handoff token");
+  return db.transaction(async tx => {
+    await lockPortalHandoffIdentityBeforeWrite(tx, values);
+    const insertResult = await tx.insert(portalHandoffTokens).values(values);
+    const insertedId = getInsertedId(insertResult, "portal handoff token");
 
-  const created = await db
-    .select()
-    .from(portalHandoffTokens)
-    .where(eq(portalHandoffTokens.id, insertedId))
-    .limit(1);
+    const created = await tx
+      .select()
+      .from(portalHandoffTokens)
+      .where(eq(portalHandoffTokens.id, insertedId))
+      .limit(1);
 
-  if (!created[0]) {
-    throw new Error(
-      "Portal handoff token insert succeeded but read-back failed"
-    );
-  }
+    if (!created[0]) {
+      throw new Error(
+        "Portal handoff token insert succeeded but read-back failed"
+      );
+    }
 
-  return created[0];
+    return created[0];
+  });
 }
 
 /**
@@ -1083,6 +1160,7 @@ export async function createOrGetPortalHandoffToken(
     throw new Error("portal handoff delivery key hash is required");
   }
   return db.transaction(async tx => {
+    await lockPortalHandoffIdentityBeforeWrite(tx, values);
     await tx
       .insert(portalHandoffTokens)
       .values(values)
@@ -1111,8 +1189,6 @@ export async function createOrGetPortalHandoffToken(
     if (
       token.tokenHash !== expectedTokenHash ||
       token.workspaceId !== values.workspaceId ||
-      token.facebookPageId !== values.facebookPageId ||
-      token.messengerSenderUserKey !== values.messengerSenderUserKey ||
       token.purpose !== values.purpose
     ) {
       throw new Error("portal handoff delivery binding mismatch");
@@ -1125,6 +1201,17 @@ export async function createOrGetPortalHandoffToken(
       token.status === "expired" ||
       token.expiresAt.getTime() <= now.getTime()
     ) {
+      const storedIdentityWasScrubbed =
+        token.messengerSenderUserKey === null &&
+        token.facebookPageId === null &&
+        token.messengerChannelConnectionId === null &&
+        token.messengerPrivacyEpoch === null;
+      if (
+        !storedIdentityWasScrubbed &&
+        !portalHandoffIdentityMatches(token, values)
+      ) {
+        throw new Error("portal handoff delivery binding mismatch");
+      }
       const capabilityGeneration = token.capabilityGeneration + 1;
       const tokenHash = tokenHashForGeneration?.(capabilityGeneration);
       if (!tokenHash) {
@@ -1137,6 +1224,11 @@ export async function createOrGetPortalHandoffToken(
           expiresAt: values.expiresAt,
           capabilityGeneration,
           tokenHash,
+          messengerSenderUserKey: values.messengerSenderUserKey ?? null,
+          facebookPageId: values.facebookPageId ?? null,
+          messengerChannelConnectionId:
+            values.messengerChannelConnectionId ?? null,
+          messengerPrivacyEpoch: values.messengerPrivacyEpoch ?? null,
         })
         .where(
           and(
@@ -1153,11 +1245,63 @@ export async function createOrGetPortalHandoffToken(
         expiresAt: values.expiresAt,
         capabilityGeneration,
         tokenHash,
+        messengerSenderUserKey: values.messengerSenderUserKey ?? null,
+        facebookPageId: values.facebookPageId ?? null,
+        messengerChannelConnectionId:
+          values.messengerChannelConnectionId ?? null,
+        messengerPrivacyEpoch: values.messengerPrivacyEpoch ?? null,
       };
+    }
+    if (!portalHandoffIdentityMatches(token, values)) {
+      throw new Error("portal handoff delivery binding mismatch");
     }
     if (token.status !== "pending")
       throw new Error("portal handoff delivery is no longer active");
     return token;
+  });
+}
+
+function portalHandoffIdentityMatches(
+  stored: Pick<
+    PortalHandoffToken,
+    | "messengerSenderUserKey"
+    | "facebookPageId"
+    | "messengerChannelConnectionId"
+    | "messengerPrivacyEpoch"
+  >,
+  values: InsertPortalHandoffToken
+): boolean {
+  return (
+    stored.messengerSenderUserKey === (values.messengerSenderUserKey ?? null) &&
+    stored.facebookPageId === (values.facebookPageId ?? null) &&
+    stored.messengerChannelConnectionId ===
+      (values.messengerChannelConnectionId ?? null) &&
+    stored.messengerPrivacyEpoch === (values.messengerPrivacyEpoch ?? null)
+  );
+}
+
+async function lockPortalHandoffIdentityBeforeWrite(
+  tx: ImageGenTransaction,
+  values: InsertPortalHandoffToken
+): Promise<void> {
+  const identityValues = [
+    values.messengerSenderUserKey,
+    values.facebookPageId,
+    values.messengerChannelConnectionId,
+    values.messengerPrivacyEpoch,
+  ];
+  if (identityValues.every(value => value === null || value === undefined)) {
+    return;
+  }
+  if (identityValues.some(value => value === null || value === undefined)) {
+    throw new Error("Complete Messenger portal handoff identity is required");
+  }
+  await lockActiveMessengerPrivacyIdentity(tx, {
+    workspaceId: values.workspaceId,
+    channelConnectionId: values.messengerChannelConnectionId!,
+    userKey: values.messengerSenderUserKey!,
+    privacyEpoch: values.messengerPrivacyEpoch!,
+    pageId: values.facebookPageId!,
   });
 }
 
@@ -1556,6 +1700,10 @@ export async function revokePortalHandoffToken(tokenHash: string) {
     .update(portalHandoffTokens)
     .set({
       status: "revoked",
+      messengerSenderUserKey: null,
+      facebookPageId: null,
+      messengerChannelConnectionId: null,
+      messengerPrivacyEpoch: null,
     })
     .where(
       and(
@@ -1613,39 +1761,47 @@ export async function eraseBillingHandoffIdentity(
     throw new Error("Exact billing handoff erasure scope is required");
   }
   return db.transaction(async tx => {
+    // Payment processing locks the intent before it can enqueue a handoff.
+    // Keep the same order here so a concurrent paid snapshot either observes
+    // the erased identity or commits its outbox row before we inspect it.
+    const intentRows = await tx
+      .select({ intentId: billingIntents.intentId })
+      .from(billingIntents)
+      .where(
+        and(
+          eq(billingIntents.workspaceId, workspaceId),
+          eq(billingIntents.messengerSenderUserKey, messengerSenderUserKey),
+          eq(billingIntents.messengerPageId, pageId)
+        )
+      )
+      .orderBy(billingIntents.intentId)
+      .for("update");
+    const intentIds = intentRows.map(row => row.intentId);
+    const payloadIntentId = sql<string>`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.intentId'))`;
+    const payloadIdentityScope = and(
+      sql`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerSenderUserKey')) = ${messengerSenderUserKey}`,
+      sql`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerPageId')) = ${pageId}`
+    );
     const outboxRows = await tx
       .select({
         id: billingOutbox.id,
         deliveryState: billingOutbox.deliveryState,
-        intentId: sql<string>`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.intentId'))`,
+        intentId: payloadIntentId,
       })
       .from(billingOutbox)
       .where(
         and(
           eq(billingOutbox.workspaceId, workspaceId),
           eq(billingOutbox.eventType, "send_portal_handoff"),
-          sql`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerSenderUserKey')) = ${messengerSenderUserKey}`,
-          sql`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerPageId')) = ${pageId}`
+          intentIds.length
+            ? or(payloadIdentityScope, inArray(payloadIntentId, intentIds))
+            : payloadIdentityScope
         )
       )
+      .orderBy(billingOutbox.id)
       .for("update");
     if (outboxRows.some(row => row.deliveryState === "transport_started")) {
       throw new Error("Billing handoff delivery is in flight; retry erasure");
-    }
-    const intentIds = outboxRows.map(row => row.intentId).filter(Boolean);
-    if (intentIds.length) {
-      await tx
-        .select({ intentId: billingIntents.intentId })
-        .from(billingIntents)
-        .where(
-          and(
-            eq(billingIntents.workspaceId, workspaceId),
-            inArray(billingIntents.intentId, intentIds),
-            eq(billingIntents.messengerSenderUserKey, messengerSenderUserKey),
-            eq(billingIntents.messengerPageId, pageId)
-          )
-        )
-        .for("update");
     }
     for (const row of outboxRows) {
       await tx
@@ -1678,7 +1834,12 @@ export async function eraseBillingHandoffIdentity(
     if (intentIds.length) {
       await tx
         .update(billingIntents)
-        .set({ messengerSenderUserKey: null, messengerPageId: null })
+        .set({
+          messengerSenderUserKey: null,
+          messengerPageId: null,
+          messengerChannelConnectionId: null,
+          messengerPrivacyEpoch: null,
+        })
         .where(
           and(
             eq(billingIntents.workspaceId, workspaceId),
@@ -1720,11 +1881,46 @@ export async function beginBillingHandoffDelivery(input: {
   intentId: string;
   messengerSenderUserKey: string;
   messengerPageId: string;
+  messengerChannelConnectionId: number;
+  messengerPrivacyEpoch: number;
 }): Promise<BillingHandoffDeliveryFence> {
   const db = await getDb();
   if (!db)
     throw new Error("Database unavailable: billing delivery was not fenced");
   return db.transaction(async tx => {
+    // Privacy subject -> intent -> outbox is the shared order for every
+    // identity-bearing handoff path.
+    await lockActiveMessengerPrivacyIdentity(tx, {
+      workspaceId: input.workspaceId,
+      channelConnectionId: input.messengerChannelConnectionId,
+      userKey: input.messengerSenderUserKey,
+      privacyEpoch: input.messengerPrivacyEpoch,
+      pageId: input.messengerPageId,
+    });
+    const intents = await tx
+      .select({ intentId: billingIntents.intentId })
+      .from(billingIntents)
+      .where(
+        and(
+          eq(billingIntents.intentId, input.intentId),
+          eq(billingIntents.workspaceId, input.workspaceId),
+          eq(billingIntents.mode, input.mode),
+          eq(billingIntents.status, "paid"),
+          eq(
+            billingIntents.messengerSenderUserKey,
+            input.messengerSenderUserKey
+          ),
+          eq(billingIntents.messengerPageId, input.messengerPageId),
+          eq(
+            billingIntents.messengerChannelConnectionId,
+            input.messengerChannelConnectionId
+          ),
+          eq(billingIntents.messengerPrivacyEpoch, input.messengerPrivacyEpoch)
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (!intents[0]) throw new Error("portal_handoff_identity_unavailable");
     const jobs = await tx
       .select({ deliveryEpoch: billingOutbox.deliveryEpoch })
       .from(billingOutbox)
@@ -1742,25 +1938,6 @@ export async function beginBillingHandoffDelivery(input: {
       .limit(1)
       .for("update");
     if (!jobs[0]) throw new Error("portal_handoff_delivery_fence_unavailable");
-    const intents = await tx
-      .select({ intentId: billingIntents.intentId })
-      .from(billingIntents)
-      .where(
-        and(
-          eq(billingIntents.intentId, input.intentId),
-          eq(billingIntents.workspaceId, input.workspaceId),
-          eq(billingIntents.mode, input.mode),
-          eq(billingIntents.status, "paid"),
-          eq(
-            billingIntents.messengerSenderUserKey,
-            input.messengerSenderUserKey
-          ),
-          eq(billingIntents.messengerPageId, input.messengerPageId)
-        )
-      )
-      .limit(1)
-      .for("update");
-    if (!intents[0]) throw new Error("portal_handoff_identity_unavailable");
     const deliveryEpoch = jobs[0].deliveryEpoch + 1;
     await tx
       .update(billingOutbox)
@@ -1782,20 +1959,96 @@ export async function advanceBillingHandoffDeliveryFence(
   const db = await getDb();
   if (!db)
     throw new Error("Database unavailable: billing delivery fence failed");
-  const result = await db
-    .update(billingOutbox)
-    .set({ deliveryState: state })
-    .where(
-      and(
-        eq(billingOutbox.id, fence.outboxId),
-        eq(billingOutbox.workspaceId, fence.workspaceId),
-        eq(billingOutbox.mode, fence.mode),
-        eq(billingOutbox.leaseToken, fence.leaseToken),
-        eq(billingOutbox.deliveryEpoch, fence.deliveryEpoch),
-        sql`${billingOutbox.privacyErasedAt} IS NULL`
-      )
+  const updateFence = async (
+    database: ImageGenDatabase | ImageGenTransaction
+  ): Promise<boolean> => {
+    const result = await database
+      .update(billingOutbox)
+      .set({ deliveryState: state })
+      .where(
+        and(
+          eq(billingOutbox.id, fence.outboxId),
+          eq(billingOutbox.workspaceId, fence.workspaceId),
+          eq(billingOutbox.mode, fence.mode),
+          eq(billingOutbox.leaseToken, fence.leaseToken),
+          eq(billingOutbox.deliveryEpoch, fence.deliveryEpoch),
+          sql`${billingOutbox.privacyErasedAt} IS NULL`
+        )
+      );
+    return getAffectedRows(result) === 1;
+  };
+
+  if (state !== "transport_started") {
+    return await updateFence(db);
+  }
+
+  // Migration 0017 rewrites privacy-bearing handoff payloads. The named lock
+  // is held only while a writer makes transport irrevocable; the production
+  // migrator holds the same lock across its final preflight and data repair.
+  // A writer that encounters the migration fails closed and is retried without
+  // starting the external Messenger transport.
+  const databaseUrl = process.env.DATABASE_URL?.trim();
+  if (!databaseUrl) {
+    throw new Error("Database unavailable: billing delivery fence failed");
+  }
+  const lockConnection = await mysql.createConnection(databaseUrl);
+  let lockHeld = false;
+  let result = false;
+  let operationError: unknown;
+  try {
+    const [[acquired]] = await lockConnection.query<NamedLockRow[]>(
+      "SELECT GET_LOCK(CONCAT('leaderbot:handoff:', LEFT(SHA2(DATABASE(), 256), 40)), 0) AS acquired"
     );
-  return getAffectedRows(result) === 1;
+    if (Number(acquired?.acquired) === 1) {
+      lockHeld = true;
+      // Drizzle's update resolves only after the autocommit is durable, so the
+      // migration cannot acquire the lock between the state write and commit.
+      result = await updateFence(db);
+    }
+  } catch (error) {
+    operationError = error;
+  }
+
+  let cleanupError: unknown;
+  if (lockHeld) {
+    try {
+      const [[released]] = await lockConnection.query<NamedLockRow[]>(
+        "SELECT RELEASE_LOCK(CONCAT('leaderbot:handoff:', LEFT(SHA2(DATABASE(), 256), 40))) AS released"
+      );
+      if (Number(released?.released) !== 1) {
+        cleanupError = new Error(
+          "Billing handoff migration fence release failed"
+        );
+      }
+    } catch (error) {
+      cleanupError = error;
+    }
+  }
+  try {
+    await lockConnection.end();
+  } catch (error) {
+    cleanupError ??= error;
+  }
+  if (operationError && cleanupError) {
+    throw new AggregateError(
+      [operationError, cleanupError],
+      "Billing handoff delivery failed and migration fence cleanup failed",
+      { cause: operationError }
+    );
+  }
+  if (operationError) {
+    throw operationError instanceof Error
+      ? operationError
+      : new Error("Billing handoff delivery failed", { cause: operationError });
+  }
+  if (cleanupError) {
+    throw cleanupError instanceof Error
+      ? cleanupError
+      : new Error("Billing handoff migration fence cleanup failed", {
+          cause: cleanupError,
+        });
+  }
+  return result;
 }
 
 export class ChannelConnectionClaimConflictError extends Error {
@@ -1971,6 +2224,33 @@ export async function upsertChannelConnection(values: InsertChannelConnection) {
         .for("update");
 
       if (existing[0]) {
+        const providerFenceNow = new Date();
+        // Every external provider call is hard-bounded below the 15-minute
+        // fence lease. Reconcile expired reservations/attempts while the
+        // connection row is locked so a transient ambiguous upload cannot
+        // block this Page binding forever, and no new attempt can race the
+        // binding-epoch bump.
+        await tx
+          .update(messengerProviderAttemptFences)
+          .set({
+            status: "contained",
+            completedAt: providerFenceNow,
+            leaseUntil: providerFenceNow,
+          })
+          .where(
+            and(
+              eq(
+                messengerProviderAttemptFences.channelConnectionId,
+                existing[0].id
+              ),
+              inArray(messengerProviderAttemptFences.status, [
+                "reserved",
+                "started",
+                "ambiguous",
+              ]),
+              lte(messengerProviderAttemptFences.leaseUntil, providerFenceNow)
+            )
+          );
         const activeAttempts = await tx
           .select({ id: messengerProviderAttemptFences.id })
           .from(messengerProviderAttemptFences)
@@ -2201,354 +2481,4 @@ export async function canUserGenerateImage(userId: number): Promise<boolean> {
   }
 
   return quota[0].imagesGenerated < getImageGenerationDailyLimit();
-}
-
-/**
- * Increment user's daily image count
- */
-async function incrementUserQuota(userId: number): Promise<void> {
-  const db = await getDb();
-  if (!db) {
-    logDatabaseUnavailable("increment_quota");
-    return;
-  }
-
-  const today = getTodayUTC();
-  const now = new Date();
-
-  // Try to update existing quota record
-  const existing = await db
-    .select()
-    .from(dailyQuota)
-    .where(and(eq(dailyQuota.userId, userId), eq(dailyQuota.date, today)))
-    .limit(1);
-
-  if (existing.length > 0) {
-    await db
-      .update(dailyQuota)
-      .set({
-        imagesGenerated: existing[0].imagesGenerated + 1,
-        lastGeneratedAt: now,
-      })
-      .where(eq(dailyQuota.id, existing[0].id));
-  } else {
-    // Create new quota record for today
-    await db.insert(dailyQuota).values({
-      userId,
-      date: today,
-      imagesGenerated: 1,
-      lastGeneratedAt: now,
-    });
-  }
-}
-
-/**
- * Atomically reserve daily quota for a user.
- * Returns true only when quota is successfully claimed for the current day.
- */
-async function reserveUserDailyQuota(userId: number): Promise<boolean> {
-  const db = await getDb();
-  if (!db) {
-    logDatabaseUnavailable("reserve_quota");
-    return false;
-  }
-
-  const today = getTodayUTC();
-  const now = new Date();
-  const dailyLimit = getImageGenerationDailyLimit();
-  if (dailyLimit <= 0) {
-    return false;
-  }
-
-  try {
-    await db.insert(dailyQuota).values({
-      userId,
-      date: today,
-      imagesGenerated: 1,
-      lastGeneratedAt: now,
-    });
-    return true;
-  } catch {
-    // Row likely already exists for (userId, today). Continue with conditional update.
-  }
-
-  const result = await db.execute(sql`
-    UPDATE dailyQuota
-    SET imagesGenerated = imagesGenerated + 1,
-        lastGeneratedAt = ${now},
-        updatedAt = NOW()
-    WHERE userId = ${userId}
-      AND date = ${today}
-      AND imagesGenerated < ${dailyLimit}
-  `);
-
-  const getAffectedRows = (value: unknown): number => {
-    if (
-      typeof value === "object" &&
-      value !== null &&
-      "affectedRows" in value
-    ) {
-      const maybeAffectedRows = (value as { affectedRows?: unknown })
-        .affectedRows;
-      return typeof maybeAffectedRows === "number" ? maybeAffectedRows : 0;
-    }
-
-    if (Array.isArray(value) && value.length > 0) {
-      return getAffectedRows(value[0]);
-    }
-
-    return 0;
-  };
-
-  const affectedRows = getAffectedRows(result);
-  return affectedRows > 0;
-}
-
-/**
- * Releases one reserved daily quota slot when an operation fails after reservation.
- */
-async function releaseUserDailyQuota(userId: number): Promise<void> {
-  const db = await getDb();
-  if (!db) {
-    logDatabaseUnavailable("release_quota");
-    return;
-  }
-
-  const today = getTodayUTC();
-  await db.execute(sql`
-    UPDATE dailyQuota
-    SET imagesGenerated = GREATEST(imagesGenerated - 1, 0),
-        updatedAt = NOW()
-    WHERE userId = ${userId}
-      AND date = ${today}
-      AND imagesGenerated > 0
-  `);
-}
-
-/**
- * Create an image request record
- */
-async function createImageRequest(data: InsertImageRequest) {
-  const db = await getDb();
-  if (!db) {
-    logDatabaseUnavailable("create_image_request");
-    return null;
-  }
-
-  const result = await db.insert(imageRequests).values(data);
-  return result;
-}
-
-/**
- * Update image request with completion details
- */
-async function updateImageRequest(
-  id: number,
-  updates: {
-    imageUrl?: string;
-    imageKey?: string;
-    status: "pending" | "completed" | "failed";
-    errorMessage?: string | null;
-    completedAt?: Date;
-  }
-) {
-  const db = await getDb();
-  if (!db) {
-    logDatabaseUnavailable("update_image_request");
-    return null;
-  }
-
-  const result = await db
-    .update(imageRequests)
-    .set(updates)
-    .where(eq(imageRequests.id, id));
-  return result;
-}
-
-/**
- * Get all image requests for a user
- */
-async function getUserImageRequests(userId: number, limit = 50, offset = 0) {
-  const db = await getDb();
-  if (!db) {
-    logDatabaseUnavailable("get_image_requests");
-    return [];
-  }
-
-  const results = await db
-    .select()
-    .from(imageRequests)
-    .where(eq(imageRequests.userId, userId))
-    .orderBy(t => t.createdAt)
-    .limit(limit)
-    .offset(offset);
-
-  return results;
-}
-
-/**
- * Get all completed image requests for gallery (public)
- */
-async function getCompletedImages(limit = 100, offset = 0) {
-  const db = await getDb();
-  if (!db) {
-    logDatabaseUnavailable("get_completed_images");
-    return [];
-  }
-
-  const results = await db
-    .select({
-      id: imageRequests.id,
-      userId: imageRequests.userId,
-      prompt: imageRequests.prompt,
-      imageUrl: imageRequests.imageUrl,
-      createdAt: imageRequests.createdAt,
-      userName: users.name,
-    })
-    .from(imageRequests)
-    .innerJoin(users, eq(imageRequests.userId, users.id))
-    .where(eq(imageRequests.status, "completed"))
-    .orderBy(t => t.createdAt)
-    .limit(limit)
-    .offset(offset);
-
-  return results;
-}
-
-/**
- * Get today's usage statistics
- */
-async function getTodayStats() {
-  const db = await getDb();
-  if (!db) {
-    logDatabaseUnavailable("get_stats");
-    return null;
-  }
-
-  const today = getTodayUTC();
-  const stats = await db
-    .select()
-    .from(usageStats)
-    .where(eq(usageStats.date, today))
-    .limit(1);
-
-  return stats.length > 0 ? stats[0] : null;
-}
-
-/**
- * Update or create today's usage statistics
- */
-async function updateTodayStats(updates: Partial<InsertUsageStats>) {
-  const db = await getDb();
-  if (!db) {
-    logDatabaseUnavailable("update_stats");
-    return null;
-  }
-
-  const today = getTodayUTC();
-  const existing = await getTodayStats();
-
-  if (existing) {
-    await db.update(usageStats).set(updates).where(eq(usageStats.date, today));
-  } else {
-    await db.insert(usageStats).values({
-      date: today,
-      ...updates,
-    });
-  }
-}
-
-/**
- * Log a notification
- */
-async function logNotification(data: InsertNotificationLog) {
-  const db = await getDb();
-  if (!db) {
-    logDatabaseUnavailable("log_notification");
-    return null;
-  }
-
-  const result = await db.insert(notificationLog).values(data);
-  return result;
-}
-
-/**
- * Get or create messenger state for a PSID
- */
-async function getOrCreateMessengerState(psid: string, userKey: string) {
-  const db = await getDb();
-  if (!db) {
-    logDatabaseUnavailable("get_or_create_messenger_state");
-    return null;
-  }
-
-  const existing = await db
-    .select()
-    .from(messengerState)
-    .where(eq(messengerState.psid, psid))
-    .limit(1);
-
-  if (existing.length > 0) return existing[0];
-
-  const newState: InsertMessengerState = { psid, userKey, stage: "IDLE" };
-  await db.insert(messengerState).values(newState);
-  const created = await db
-    .select()
-    .from(messengerState)
-    .where(eq(messengerState.psid, psid))
-    .limit(1);
-  return created[0];
-}
-
-/**
- * Update messenger state
- */
-async function updateMessengerState(
-  psid: string,
-  updates: Partial<InsertMessengerState>
-) {
-  const db = await getDb();
-  if (!db) {
-    logDatabaseUnavailable("update_messenger_state");
-    return;
-  }
-
-  await db
-    .update(messengerState)
-    .set(updates)
-    .where(eq(messengerState.psid, psid));
-}
-
-/**
- * Check and increment daily quota for a PSID (Messenger specific)
- */
-async function checkAndIncrementMessengerQuota(psid: string): Promise<boolean> {
-  void psid;
-
-  if (!(await getDb())) {
-    logDatabaseUnavailable("check_and_increment_messenger_quota");
-    return true; // Fail open for quota if DB is down
-  }
-
-  // Current implementation intentionally stays fail-open for compatibility.
-  return true;
-}
-
-/**
- * Get recent notifications for admin dashboard
- */
-async function getRecentNotifications(limit = 20) {
-  const db = await getDb();
-  if (!db) {
-    logDatabaseUnavailable("get_notifications");
-    return [];
-  }
-
-  const results = await db
-    .select()
-    .from(notificationLog)
-    .orderBy(t => t.createdAt)
-    .limit(limit);
-
-  return results;
 }

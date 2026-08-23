@@ -3,9 +3,29 @@
 app = "leaderbot-storage-proxy"
 primary_region = 'ams'
 
+[env]
+  STORAGE_OPERATION_TIMEOUT_MS = "60000"
+  # Phase 1 bridge: the currently running image-gen release still sends only
+  # bearer auth and uses unscoped historical keys. Remove bearer auth only
+  # after every image-gen Machine is on signed requests; retain legacy keys
+  # until the 30-day lifecycle window and inventory migration are complete.
+  STORAGE_ALLOW_LEGACY_BEARER_AUTH = "true"
+  STORAGE_ALLOW_LEGACY_KEYS = "true"
+
+[processes]
+  app = "node dist/index.cjs"
+
 [http_service]
   internal_port = 8787
   force_https = true
   auto_stop_machines = "stop"
   auto_start_machines = true
   min_machines_running = 1
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "60s"
+    method = "GET"
+    path = "/healthz"

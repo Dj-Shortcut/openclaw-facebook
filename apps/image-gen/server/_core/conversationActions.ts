@@ -2,6 +2,7 @@ import { type Lang, t } from "./i18n";
 import type { ConversationResponse } from "./botResponse";
 import { FACE_MEMORY_CONSENT_NO, FACE_MEMORY_CONSENT_YES } from "./faceMemory";
 import { formatFaceMemoryRetentionDays } from "./faceMemoryRetention";
+import type { MessengerImageQuotaStatus } from "./messengerImageQuotaStore";
 
 const CONVERSATION_ACTION_NEW_IMAGE = "new_image";
 const CONVERSATION_ACTION_EDIT_PHOTO = "edit_photo";
@@ -43,10 +44,13 @@ export function buildQuickStartResponse(lang: Lang): ConversationResponse {
 }
 
 export function buildGenerationSuccessResponse(
-  lang: Lang
+  lang: Lang,
+  quotaStatus?: MessengerImageQuotaStatus
 ): ConversationResponse {
   return {
-    text: t(lang, "success"),
+    text: quotaStatus
+      ? `${t(lang, "success")}\n${formatImageQuotaBalance(lang, quotaStatus)}`
+      : t(lang, "success"),
     actions: [
       {
         id: CONVERSATION_ACTION_NEW_IMAGE,
@@ -159,8 +163,38 @@ export function buildStartpilotQuotaReachedResponse(
 }
 
 /** Free users get the same safe portal handoff when today's allowance ends. */
-export function buildFreeQuotaReachedResponse(lang: Lang): ConversationResponse {
-  return buildStartpilotPortalResponse(lang, t(lang, "outOfFreeCredits"));
+export function buildFreeQuotaReachedResponse(
+  lang: Lang,
+  quotaStatus?: MessengerImageQuotaStatus
+): ConversationResponse {
+  const exhaustedText =
+    quotaStatus?.monthly.remaining === 0
+      ? t(lang, "outOfMonthlyImageCredits")
+      : quotaStatus
+        ? t(lang, "outOfDailyImageCredits")
+        : t(lang, "outOfFreeCredits");
+  const text = quotaStatus
+    ? `${exhaustedText}\n${formatImageQuotaBalance(lang, quotaStatus)}`
+    : exhaustedText;
+  return buildStartpilotPortalResponse(lang, text);
+}
+
+export function formatImageQuotaBalance(
+  lang: Lang,
+  status: MessengerImageQuotaStatus
+): string {
+  if (lang === "nl") {
+    return `Vandaag nog ${status.daily.remaining} van ${status.daily.limit} foto's. Deze maand nog ${status.monthly.remaining} van ${status.monthly.limit}.`;
+  }
+  return `Today you have ${status.daily.remaining} of ${status.daily.limit} photos left. This month you have ${status.monthly.remaining} of ${status.monthly.limit} left.`;
+}
+
+/** Neutral balance-only response for an image whose Meta outcome is unknown. */
+export function buildImageQuotaBalanceResponse(
+  lang: Lang,
+  status: MessengerImageQuotaStatus
+): ConversationResponse {
+  return { text: formatImageQuotaBalance(lang, status), actions: [] };
 }
 
 function buildStartpilotPortalResponse(

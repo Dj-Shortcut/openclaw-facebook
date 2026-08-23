@@ -1,4 +1,5 @@
 # Leaderbot AI Image Generator
+
 [![Fallow Maintainability](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Dj-Shortcut/openclaw-facebook/main/apps/image-gen/public/badges/fallow-maintainability.json)](https://github.com/Dj-Shortcut/openclaw-facebook/actions/workflows/fallow.yml)
 
 A Meta messaging bot with a shared bot-core for Messenger and WhatsApp.
@@ -180,29 +181,51 @@ There are multiple quota and rate-limit layers in the codebase:
 
 Free Leaderbot users should be generous enough to complete a real creative loop while still bounded by abuse and budget controls:
 
-- Image generation: `20` provider attempts per sender/user identity per UTC day.
+- Messenger image generation: `5` usable generated photos per customer-bound
+  user per Brussels calendar day and `20` per Brussels calendar month. Failed
+  provider attempts do not count. After every success the user sees the exact
+  day and month balance.
 - Bot text messages: `30` messages per sender per `60` seconds.
 - Audio transcription: `5` provider attempts per sender/user identity per UTC day.
 - Video generation: `1` provider attempt per sender/user identity per UTC day.
-- Global daily image/video caps remain operator-configured emergency brakes, not the user-facing free-tier promise.
+- There is no shared global image counter or internal estimated-price gate that
+  can let one customer block another. Video and audio keep their separate
+  operator safeguards.
 
-1. **Channel user quota in state** (`server/_core/messengerQuota.ts`)
+1. **Messenger customer image quota** (`server/_core/messengerImageQuotaStore.ts`)
+   - Redis-backed in production and atomically scoped to workspace, channel
+     connection, privacy epoch, and pseudonymous user key. Reconnecting the
+     same Page does not reset usage; active reservations still require the
+     current binding epoch.
+   - A reservation is committed only after a usable generated image has been
+     durably recorded. Validation errors, provider errors, and failed attempts
+     release or expire without consuming a photo.
+   - Request receipts make retries count once. Calendar resets use
+     `Europe/Brussels`, including daylight-saving changes.
+
+2. **Legacy channel/feature quota in state** (`server/_core/messengerQuota.ts`)
    - Stored with `quota.dayKey` + `quota.count` in the user conversation state.
    - Resets by UTC day key.
-   - Messenger and WhatsApp image-generation attempts reserve quota before work starts and commit the quota when the OpenAI provider request is about to run. Messenger audio transcription and generated-video attempts follow the same rule. Preflight failures such as missing/invalid source images, missing API keys, oversized audio, or unsupported media can be retried without burning credits; provider attempts, timeouts, parse/upload failures, and delivery failures are counted.
+   - WhatsApp image-generation, Messenger audio transcription, and generated
+     video still use provider-attempt semantics. Preflight failures such as
+     missing/invalid source images, missing API keys, oversized audio, or
+     unsupported media can be retried without burning credits.
 
-2. **Database-backed quota** (`dailyQuota` table, used by DB helpers)
+3. **Database-backed quota** (`dailyQuota` table, used by DB helpers)
    - Tracks per-user daily usage (`YYYY-MM-DD`, UTC).
    - Includes atomic reserve/release helpers for safer concurrent updates.
 
-3. **Provider and bot rate limits**
-   - Global image/video caps and concurrency locks bound costly provider calls.
+4. **Provider and bot rate limits**
+   - Image concurrency locks bound simultaneous provider work without acting as
+     a customer usage counter. Audio/video retain their configured global caps.
    - Bot text rate limiting is feature-scoped and configurable so new bot features can use the same env-driven balancing pattern instead of hardcoded limits.
    - New feature-specific limiters should use `server/_core/featureRateLimit.ts` and the `FEATURE_RATE_LIMIT_<FEATURE>_MAX` / `FEATURE_RATE_LIMIT_<FEATURE>_WINDOW_SECONDS` env convention, with explicit aliases only when needed for backwards compatibility.
 
 Related files:
 
+- `server/_core/messengerImageQuotaStore.ts`
 - `server/_core/messengerQuota.ts`
+- `server/_core/quotaPolicy.ts`
 - `server/db.ts`
 - `drizzle/schema.ts`
 - `drizzle/0001_big_the_phantom.sql`
@@ -234,36 +257,45 @@ Operational env shortlist: [`docs/operations/ENV_SHORTLIST.md`](docs/operations/
 - `WEBHOOK_REPLAY_TTL_SECONDS` (override webhook replay-protection TTL, default `300`)
 - `HTTP_RATE_LIMIT_WINDOW_MS` (global HTTP rate-limit window, default `60000`; Redis-backed when `REDIS_URL` is set)
 - `HTTP_RATE_LIMIT_MAX_REQUESTS` (max requests per IP per window, default `120`)
-- `OPENAI_IMAGE_TIMEOUT_MS`, `FB_IMAGE_FETCH_TIMEOUT_MS` (per-request timeouts; OpenAI defaults to `180000ms` and applies per retry attempt)
+- `OPENAI_IMAGE_TIMEOUT_MS`, `FB_IMAGE_FETCH_TIMEOUT_MS` (OpenAI defaults to `180000ms` and is hard-capped at `300000ms`; a source-photo fetch, including its one retry, shares one total deadline that defaults to `10000ms` and is hard-capped at `30000ms`)
 - `OPENAI_IMAGE_MAX_OUTPUT_BYTES` (max decoded bytes accepted from the image provider before buffering the generated image, default `26214400`)
-- `OPENAI_IMAGE_MAX_RETRIES`, `OPENAI_IMAGE_RETRY_BASE_MS` (retry policy for OpenAI image generation on `408`/`429`/`5xx`/transient network errors)
+- `OPENAI_IMAGE_MAX_RETRIES`, `OPENAI_IMAGE_RETRY_BASE_MS` (production requires `OPENAI_IMAGE_MAX_RETRIES=0`, so one provider invocation cannot automatically start a second billable image request; retries are an explicit non-production-only diagnostic option)
 - `OPENAI_IMAGE_SIZE`, `OPENAI_IMAGE_QUALITY`, `OPENAI_IMAGE_OUTPUT_FORMAT`, `OPENAI_IMAGE_OUTPUT_COMPRESSION`, `OPENAI_IMAGE_BACKGROUND`, `OPENAI_IMAGE_ACTION`, `OPENAI_IMAGE_INPUT_FIDELITY` (optional Responses image-generation tool knobs; use `jpeg`/`webp` plus `medium` or `low` quality for faster Messenger tests, and keep `png`/higher quality for final quality-sensitive runs)
 - `IMAGE_PROVIDER` (image provider boundary; currently only `openai-images`, which uses the existing OpenAI Responses image_generation tool flow)
 - `OPENAI_EDIT_INTERPRETER_MODEL`, `OPENAI_EDIT_INTERPRETER_TIMEOUT_MS`, `OPENAI_EDIT_INTERPRETER_MAX_RETRIES` (optional classifier for conversational edit commands after a generated result)
 - `DEFAULT_MESSENGER_LANG` (`nl`/`en` fallback behavior)
 - `PRIVACY_POLICY_URL` (link sent in privacy quick reply)
 - `MESSENGER_MAX_IMAGE_JOBS` (global cap for concurrent image generations, default `3`; Redis-backed across instances when `REDIS_URL` is set)
-- `MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS` (Redis-backed global generation slot TTL, default `240000`)
+- `MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS` (Redis-backed global generation slot TTL, default `900000`; renewed while work is active)
 - `MESSENGER_PSID_COOLDOWN_MS` (optional per-PSID cooldown between generations, default `0`)
-- `MESSENGER_PSID_LOCK_TTL_MS` (per-PSID image in-flight lock TTL, default `240000`)
+- `MESSENGER_PSID_LOCK_TTL_MS` (per-PSID image in-flight lock TTL, default `900000`; renewed while work is active)
 - `MESSENGER_VIDEO_PSID_LOCK_TTL_MS` (per-PSID video in-flight lock TTL, default `900000`)
-- `MESSENGER_FREE_DAILY_LIMIT` (per-user daily image-generation provider-attempt cap, default `20`)
+- `MESSENGER_FREE_DAILY_LIMIT` (Messenger usable-image limit per local day; production/default `5`)
+- `MESSENGER_FREE_MONTHLY_LIMIT` (Messenger usable-image limit per local month; production/default `20`)
+- `MESSENGER_IMAGE_QUOTA_TIME_ZONE` (calendar used for Messenger day/month resets; production/default `Europe/Brussels`)
 - `MESSENGER_AUDIO_TRANSCRIPTION_DAILY_LIMIT` (per-user daily audio transcription cap, default `5`)
 - `MESSENGER_VIDEO_GENERATION_DAILY_LIMIT` (per-user daily video-generation cap, default `1`)
-- `MESSENGER_GLOBAL_DAILY_IMAGE_CAP` (optional global daily image provider-attempt cap)
 - `MESSENGER_GLOBAL_DAILY_AUDIO_CAP` (optional global daily audio transcription provider-attempt cap)
 - `MESSENGER_GLOBAL_DAILY_VIDEO_CAP` (optional global daily video provider-attempt cap)
 - `BOT_TEXT_RATE_LIMIT_MAX` (shared bot text-message limit per sender/window, default `30`; set `0` to disable this text limiter)
 - `BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS` (shared bot text rate-limit window, default `60`)
 - `FEATURE_RATE_LIMIT_<FEATURE>_MAX`, `FEATURE_RATE_LIMIT_<FEATURE>_WINDOW_SECONDS` (generic convention for new feature-scoped rate limits; feature names are uppercased with non-alphanumeric separators converted to `_`)
 - `GRAPH_API_MAX_RETRIES`, `GRAPH_API_RETRY_BASE_MS` (retry policy for Meta Graph API `429`/`5xx` responses)
+- `GRAPH_API_REQUEST_TIMEOUT_MS` (hard deadline for one complete Messenger Graph request, including its response body; default `30000`, capped at `120000`)
+- `STORAGE_REQUEST_TIMEOUT_MS` (hard deadline for one complete storage-proxy upload, download-URL lookup, or delete; default `30000`, capped at `120000`)
+- `PUBLIC_BASE_URL` (required trusted HTTPS R2/custom-domain origin in
+  production; URL-to-key conversion rejects all other origins/base paths)
+- `STORAGE_PUBLIC_BASE_URLS` (optional comma-separated trusted aliases during a
+  controlled storage-domain migration)
+- `STORAGE_ALLOW_LEGACY_KEYS` (temporary staged-rollout bridge only; default
+  `false`, and must be removed after old keys age out)
 - `ADMIN_TOKEN` (protects `/debug/build`)
 - `NODE_ENV` (set to `production` to enforce production-only checks such as required `REDIS_URL`)
 - `OAUTH_SERVER_URL` (enables OAuth token exchange and callback initialization)
 - `OAUTH_PORTAL_URL` (optional public browser authorization origin; falls back
   to `OAUTH_SERVER_URL` when both services share an origin)
 - `LOG_LEVEL`, `DEBUG_STATE_DUMP`, `DEBUG_IMAGE_PROOF` (diagnostics)
-- `MESSENGER_QUOTA_BYPASS_IDS` (comma-separated PSIDs or hashed user keys that skip Messenger daily quota; intended for internal testing/admin)
+- `MESSENGER_QUOTA_BYPASS_IDS` (comma-separated PSIDs or hashed user keys that skip the Messenger customer photo quota; intended for internal testing/admin)
 - `ENABLE_FACE_MEMORY` (`false` by default; enables explicit-consent Messenger source-photo reuse after legal approval)
 - `FACE_MEMORY_RETENTION_DAYS` (optional positive whole number; defaults to `30`, is capped at `30`, and controls retained source-photo expiry plus Redis state TTL buffer)
 - `PORT` (default `8080`)
@@ -335,8 +367,12 @@ pnpm lint:server
 Database migration helpers:
 
 ```bash
-pnpm db:migrate
+pnpm db:migrate:test-bootstrap  # empty local/CI test database only
 ```
+
+Do not run a production migration from a laptop. The protected schema workflow
+owns the reviewed backup, restore-test and 0016 expand. Migration 0017 remains
+blocked and has no production command.
 
 The repository includes focused unit tests for webhook handling, state transitions, signature verification, and image generation behavior under OpenAI configuration.
 
@@ -384,7 +420,7 @@ This app is configured for Fly.io using `Dockerfile` + `fly.toml`.
 
 ### Durable image storage
 
-Production Messenger image delivery and inbound source-image persistence use the R2-backed storage proxy described in [`docs/storage-proxy-r2.md`](docs/storage-proxy-r2.md). Without this proxy config, production image storage fails fast instead of creating gateway-local `/generated/*` URLs that would break across restarts or multiple Fly machines.
+Production Messenger image delivery and inbound source-image persistence use the R2-backed storage proxy described in [`docs/storage-proxy-r2.md`](../../docs/storage-proxy-r2.md). Without this proxy config, production image storage fails fast instead of creating gateway-local `/generated/*` URLs that would break across restarts or multiple Fly machines.
 
 Main app settings:
 
@@ -395,23 +431,17 @@ Proxy app notes:
 
 - The deployed Fly app is `leaderbot-storage-proxy`
 - The separate empty Fly app `storage-proxy` is not used
-- Preferred proxy commands are:
+- Read-only inspection commands are:
 
 ```bash
 fly status -a leaderbot-storage-proxy
 fly logs -a leaderbot-storage-proxy --no-tail
-fly deploy --depot=false -a leaderbot-storage-proxy
 fly secrets list -a leaderbot-storage-proxy
 ```
 
-Typical deployment flow:
-
-```bash
-fly secrets set REDIS_URL=redis://<user>:<password>@<host>:<port> -a <app-name>
-fly secrets set KEY=value -a <app-name>
-fly deploy -a <app-name>
-fly logs -a <app-name>
-```
+Production changes use only the manually dispatched `Deploy production`
+workflow with target `storage-proxy` and the exact immutable digest recorded in
+`deploy/production/apps.json`. Do not run a source deploy locally.
 
 Customer portal database rollout:
 
@@ -451,20 +481,24 @@ Use this order for `leaderbot-fb-image-gen`:
    (`OAUTH_PORTAL_URL`, `OAUTH_SERVER_URL`, `VITE_APP_ID`) remain an optional
    fallback when direct Facebook Login is not configured.
 
-3. Run migrations from a trusted operator shell with the same `DATABASE_URL`:
+3. Follow the staged migration runbook in
+   `../../docs/operations/production-deployments.md`. In short: build and attest
+   the compatibility bridge from reviewed `main`, record its exact digest in a
+   reviewed manifest change, deploy it, freeze normal deploys, and dispatch the
+   protected schema workflow. That workflow makes a fresh encrypted snapshot,
+   proves a separate restore opens cleanly, and applies only migration 0016.
+   Then build, attest and deploy the runtime whose immutable marker refuses the
+   old schema. Migration 0017 stays blocked. Never paste `DATABASE_URL` into a
+   shell or CI log.
 
-   ```bash
-   DATABASE_URL='mysql://<user>:<password>@<host>:<port>/<database>' pnpm db:migrate
-   ```
-
-4. After the migration succeeds, manually dispatch the repository's
-   `Deploy production` GitHub Actions workflow with target `image-gen`. Set
+4. Manually dispatch the repository's `Deploy production` GitHub Actions
+   workflow with target `image-gen`. Set
    `rollback_image` to the exact immutable
    `registry.fly.io/leaderbot-fb-image-gen@sha256:...` digest recorded as
-   `reviewedImage` in `deploy/production/apps.json`; it must be the reviewed
-   completion-readiness overlay or a later reviewed image. Then approve the
-   protected `production` environment. Do not create a Machine with
-   `fly machine run` or bypass the app's canonical `fly.toml`.
+   `reviewedImage` in `deploy/production/apps.json`. The selected image and every
+   rollback must explicitly support the current schema phase. Approve the
+   protected `production` environment only after exact-source CI and review are
+   green; never bypass the canonical workflows or `fly.toml`.
 
 5. Verify readiness and the public portal:
 
@@ -515,22 +549,24 @@ Operational notes:
 Recommended migration sequence:
 
 1. Set one stable `MESSENGER_GENERATION_PARTITION_SECRET` on every gateway and worker process. A dedicated random secret is preferred; `FB_APP_SECRET` is the compatibility fallback.
-2. Start or roll at least one worker first. On standalone Redis, the partition-aware worker drains both the pre-migration global lists and the new opaque Page-partitioned lists; do not delete or rename the legacy lists during rollout. On Redis Cluster the old global queued/processing keys occupy different hash slots, so the worker skips that legacy reservation path with one redacted warning while continuing all partitioned queues. In that case, drain or migrate legacy jobs on the old compatible topology before the cluster cutover; never copy raw jobs through logs or ad-hoc support notes.
-3. Deploy the code with the default gateway behavior. The gateway still runs generation inline unless `MESSENGER_GENERATION_QUEUE_ENABLED=1` is set for the app process.
-4. Enable `MESSENGER_GENERATION_QUEUE_ENABLED=1` for the gateway while leaving `MESSENGER_GENERATION_INLINE_FALLBACK` unset. This keeps same-process draining available during rollout. New enqueues now write only partition-scoped content, lease, dead-letter, and dedupe keys; only retries of already-present legacy jobs may write back to the legacy lists while they drain.
-5. After worker logs show both legacy and partitioned jobs are draining, set `MESSENGER_GENERATION_INLINE_FALLBACK=0` for gateway instances so image generation no longer runs in the HTTP process.
-6. Watch the compact `messenger_generation_diagnostic`, `webhook_ack_sent`, and event-loop diagnostic logs before scaling gateway machines above one instance.
+2. In the Phase-A manifest PR, record the bridge digest as `reviewedImage`, add it to `generationQueueV2ReaderImages`, retain only proven v1 rollback images, and keep both the manifest and `fly.toml` write versions on `v1`. Deploy the bridge release. Bridge gateways and workers read both partitioned `v1` and isolated `v2` queues, but every producer still writes `v1`. Wait until every Machine runs this bridge image before continuing.
+3. Verify combined v1+v2 queue stats, processing leases, dead letters, privacy erasure, and normal image delivery. The bridge reader may drain old v1 work; token-checked heartbeats keep an active partition lease alive while bounded provider, storage, and Graph calls finish.
+4. In a separate Phase-B config-only release, change both the manifest write version and `MESSENGER_GENERATION_QUEUE_WRITE_VERSION` to `v2`. Remove every v1-only digest from `reviewedRollbackImages`; every remaining reviewed deploy or rollback digest must be listed in `generationQueueV2ReaderImages`. No application-code change belongs in this step. Every already-deployed bridge worker can read v2, while cross-version accepted markers prevent the same request from being queued once in each namespace during the rolling config change.
+5. After v2 writes begin, the bridge image is the permanent rollback floor. Never roll back to an older v1-only reader: it cannot discover v2 jobs. Rolling the bridge image back to `WRITE_VERSION=v1` is safe because it still reads and erases both namespaces.
+6. Keep dual reads and dual erasure until v1 queued, processing, and dead-letter counts are zero and the accepted-request retention window has passed. Do not delete or copy raw queue content through logs or support notes.
 
 Keep the effective partition secret stable across ordinary deploys. Rotating it creates a new opaque partition namespace and breaks dedupe continuity with jobs accepted under the previous secret. Rotate only as an explicit migration: stop producers, drain queued and processing counts to zero, review dead letters, and then wait at least the configured accepted-request TTL after the last enqueue before switching every gateway and worker together. The default accepted TTL is seven days and is never shorter than `lease_seconds * max_attempts`; indexed old partitions remain discoverable for dead-letter review and legacy draining.
 
 Worker-related env:
 
 - `MESSENGER_GENERATION_QUEUE_ENABLED=1`: enqueue Messenger image generation jobs in Redis.
+- `MESSENGER_GENERATION_QUEUE_WRITE_VERSION=v1|v2`: required explicitly in production. Use `v1` for the bridge release and switch to `v2` only in the later config-only activation release.
 - `MESSENGER_GENERATION_PARTITION_SECRET=<random>`: HMAC key for opaque Page-derived queue partitions, shared unchanged by gateway and workers; falls back to `FB_APP_SECRET` for compatibility.
 - `MESSENGER_GENERATION_ACCEPTED_TTL_SECONDS=604800`: dedupe retention for accepted request ids; defaults to seven days and is clamped to at least the lease duration multiplied by the maximum attempt count.
 - `MESSENGER_GENERATION_INLINE_FALLBACK=0`: gateway does not drain queued jobs itself.
 - `MESSENGER_GENERATION_WORKER_ONLY=1`: run only the worker loop, no HTTP listener.
 - `MESSENGER_GENERATION_JOB_LEASE_SECONDS=900`: reserved-job lease before reclaim. The runtime derives a minimum from every configured OpenAI timeout/retry attempt, exponential retry waits, and a 60-second delivery buffer and clamps smaller explicit values to that minimum. Configure a larger value when the complete source-fetch, provider, storage, and Messenger-delivery path can exceed it.
+- `MESSENGER_GENERATION_LEASE_HEARTBEAT_MS`: optional renewal cadence for an owned partition lease. It is always clamped to at most one third of the lease and defaults to at most 30 seconds.
 - `MESSENGER_GENERATION_MAX_ATTEMPTS=3`: failed generation jobs are retried up to this many processor attempts, then moved to the Redis dead-letter list.
 - `MESSENGER_GENERATION_DRAIN_BATCH_SIZE=10`: max jobs a worker or inline fallback drain processes per drain pass before yielding to the next poll/enqueue.
 - `MESSENGER_GENERATION_WORKER_POLL_MS=1000`: worker poll interval.

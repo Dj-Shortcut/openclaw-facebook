@@ -4,7 +4,8 @@ import {
   setSourceImageRequestForTests,
 } from "./_core/image-generation/sourceImageFetcher";
 
-const GENERATED_IMAGE_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0ioAAAAASUVORK5CYII=";
+const GENERATED_IMAGE_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0ioAAAAASUVORK5CYII=";
 const STORED_SOURCE_IMAGE_URL =
   "https://leaderbot-fb-image-gen.fly.dev/generated/source.jpg";
 const TEST_SOURCE_IMAGE_FETCH_URL = "https://source-image.test/mock.jpg";
@@ -24,7 +25,8 @@ describe("OpenAi image delivery via object storage", () => {
       });
       return {
         response,
-        contentType: response.headers.get("content-type") ?? "application/octet-stream",
+        contentType:
+          response.headers.get("content-type") ?? "application/octet-stream",
       };
     });
   });
@@ -41,6 +43,8 @@ describe("OpenAi image delivery via object storage", () => {
     delete process.env.BUILT_IN_FORGE_API_URL;
     delete process.env.BUILT_IN_FORGE_API_KEY;
     delete process.env.APP_BASE_URL;
+    delete process.env.PUBLIC_BASE_URL;
+    delete process.env.STORAGE_ALLOW_LEGACY_KEYS;
   });
 
   it("uploads generated image to storage and returns signed URL", async () => {
@@ -49,6 +53,7 @@ describe("OpenAi image delivery via object storage", () => {
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS = "leaderbot-fb-image-gen.fly.dev";
     process.env.BUILT_IN_FORGE_API_URL = "https://forge.example";
     process.env.BUILT_IN_FORGE_API_KEY = "forge-secret";
+    process.env.PUBLIC_BASE_URL = "https://cdn.example";
 
     const { OpenAiImageGenerator } = await import("./_core/imageService");
 
@@ -65,22 +70,38 @@ describe("OpenAi image delivery via object storage", () => {
       if (toUrlString(url) === "https://api.openai.com/v1/responses") {
         return {
           ok: true,
-          json: async () => ({ output: [{ type: "image_generation_call", result: GENERATED_IMAGE_BASE64 }] }),
+          json: async () => ({
+            output: [
+              { type: "image_generation_call", result: GENERATED_IMAGE_BASE64 },
+            ],
+          }),
         } as Response;
       }
 
-      if (toUrlString(url).startsWith("https://forge.example/v1/storage/upload?path=generated%2Fimages%2F")) {
+      if (
+        toUrlString(url).startsWith(
+          "https://forge.example/v1/storage/upload?path=generated%2Fimages%2F"
+        )
+      ) {
         expect(toUrlString(url)).toMatch(/\.jpg$/);
         expect(init?.method).toBe("POST");
-        expect(init?.headers).toEqual({ Authorization: "Bearer forge-secret" });
+        expect(init?.headers).toEqual(
+          expect.objectContaining({
+            Authorization: "Bearer forge-secret",
+            "X-Leaderbot-Storage-Scope": "legacy-v1",
+            "X-Leaderbot-Storage-Signature":
+              expect.stringMatching(/^v1=[a-f0-9]{64}$/),
+          })
+        );
         expect(init?.body).toBeInstanceOf(FormData);
         const file = (init?.body as FormData).get("file") as File;
         expect(file.name).toMatch(/\.jpg$/);
         expect(file.type).toBe("image/jpeg");
 
+        const objectKey = new URL(toUrlString(url)).searchParams.get("path");
         return {
           ok: true,
-          json: async () => ({ url: "https://cdn.example/generated/images/result.jpg?signature=abc" }),
+          json: async () => ({ url: `https://cdn.example/${objectKey}` }),
         } as Response;
       }
 
@@ -98,25 +119,38 @@ describe("OpenAi image delivery via object storage", () => {
       reqId: "req-storage-1",
     });
 
-    expect(result.imageUrl).toBe("https://cdn.example/generated/images/result.jpg?signature=abc");
+    expect(result.imageUrl).toMatch(
+      /^https:\/\/cdn\.example\/generated\/images\/\d+-[0-9a-f-]+\.jpg$/
+    );
     expect(fetchMock).toHaveBeenCalledTimes(3);
   }, 10_000);
 
   it("fails clearly in production when durable storage config is missing", async () => {
     process.env.NODE_ENV = "production";
 
-    const { assertProductionImageStorageConfig } = await import(
-      "./_core/image-generation/imageServiceConfig"
-    );
-    const { MissingObjectStorageConfigError } = await import(
-      "./_core/image-generation/imageServiceErrors"
-    );
+    const { assertProductionImageStorageConfig } =
+      await import("./_core/image-generation/imageServiceConfig");
+    const { MissingObjectStorageConfigError } =
+      await import("./_core/image-generation/imageServiceErrors");
 
     expect(() => assertProductionImageStorageConfig()).toThrow(
       MissingObjectStorageConfigError
     );
     expect(() => assertProductionImageStorageConfig()).toThrow(
       "BUILT_IN_FORGE_API_URL and BUILT_IN_FORGE_API_KEY are required in production"
+    );
+  });
+
+  it("fails closed in production without an exact trusted storage origin", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.BUILT_IN_FORGE_API_URL = "https://forge.example";
+    process.env.BUILT_IN_FORGE_API_KEY = "forge-secret";
+
+    const { assertProductionImageStorageConfig } =
+      await import("./_core/image-generation/imageServiceConfig");
+
+    expect(() => assertProductionImageStorageConfig()).toThrow(
+      /trusted HTTPS storage origin/
     );
   });
 });

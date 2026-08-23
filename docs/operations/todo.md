@@ -31,8 +31,8 @@
 - State, quota, and storage boundaries must later become explicitly tenant-, workspace-, and channel-scoped before broader customer rollout, with no shared customer-content paths across tenants.
 - The root Facebook gateway now has a root-only `sharedStateStore` boundary.
   `memory` remains the default for one replica; `redis` uses versioned HMAC-only
-  account/Page keys and atomically shares webhook deduplication plus optional
-  daily gateway caps without storing message content. Store failures block
+  account/Page keys and atomically shares webhook deduplication plus the optional
+  daily audio-transcription cap without storing message content. Store failures block
   ordinary work and billable forwards, while explicit `delete-my-data` requests
   remain routable. This is not a durable ingress queue: keep one gateway replica
   until acknowledged webhook work is persisted in a tenant-scoped queue/outbox.
@@ -53,58 +53,34 @@ prior gate is proven in production.
 ### Multi-photo composition - 2026-08-22
 
 - [x] Detect two to four tenant-scoped Messenger photo uploads, retain them as
-  one bounded source set, and expose a channel-neutral `combine_photos`
-  conversation action that Messenger renders as the `Samenvoegen` pill.
+      one bounded source set, and expose a channel-neutral `combine_photos`
+      conversation action that Messenger renders as the `Samenvoegen` pill.
 - [x] Ask for a natural-language composition instruction after action
-  selection and send each stored source as a distinct GPT Image edit input.
-  The existing provider-attempt quota, daily/monthly spend guards, queue tenant
-  partition, redacted logging, retention, and delete-my-data paths remain in
-  force.
+      selection and send each stored source as a distinct GPT Image edit input.
+      The photo limits, external provider hard limit, tenant boundaries, private
+      logging, retention, and delete-my-data paths remain active.
 - [ ] Complete a staged Messenger smoke with two photos in one message and two
-  sequential photo messages, then record Android, iOS, and Web evidence before
-  production rollout. No additional Meta permission is expected.
+      sequential photo messages, then record Android, iOS, and Web evidence before
+      production rollout. No additional Meta permission is expected.
 
-### Canonical Fly deployment ownership - 2026-08-22
+### Veilige livegang - 2026-08-23
 
-- [x] Define one production manifest and one `fly deploy` entry point per app;
-  remove the multi-app and duplicate deploy aliases.
-- [x] Add a manual GitHub Actions release workflow with protected production
-  approval, separate app-scoped Fly tokens, rollback-image capture, static/live
-  drift gates, Meta callback verification, and post-deploy smoke checks.
-- [x] Route image-gen traffic on liveness (`/healthz`) and monitor dependency
-  readiness (`/readyz`) separately so a queue incident does not black-hole the
-  Meta webhook.
-- [x] Restore image-gen production with the immutable completion-readiness
-  overlay after proving that zero legacy records existed and that release 344
-  misclassified canonical nested user-index keys. Both web replicas, the
-  primary worker, `/healthz`, and `/readyz` were green on 2026-08-22 without
-  deleting queue or completion data.
-- [ ] Configure the GitHub `production` environment, required reviewers, and
-  scoped secrets in the repository settings; then prove the workflow from a
-  reviewed `main` commit.
-- [ ] Reconcile the production image-gen privacy-boundary source with `main`,
-  port the canonical completion user-index readiness regression test, and only
-  then set `sourceDeployEnabled` back to true. Until then CI must require an
-  explicit immutable image digest. Owner: Leaderbot production owner. Target:
-  2026-09-30; delete `Dockerfile.completion-readiness-hotfix` and its patch
-  script as part of this reconciliation.
-  - 2026-08-22 progress: release 344 was traced to commit
-    `12b69bdbad721e1d419d9ca0bdb1cbd38ba6835a`; a clean build of its
-    `apps/image-gen` source produced the exact `dist/index.cjs` SHA-256 stored
-    in the immutable Fly image. That app-scoped runtime source is reconciled
-    locally onto current `main` while retaining the newer GDPR classification,
-    button, liveness, and deployment controls. Source deployment remains
-    disabled until this reconciliation and its feature follow-up are reviewed,
-    merged, built to an immutable digest, and recorded in the production
-    manifest.
-- [ ] Rehearse and approve the stateful gateway volume migration before removing
-  or replacing any detached gateway Machine. Until then the gateway drift gate
-  must remain fail-closed. Add the proven pre-migration managed release to the
-  gateway `reviewedRollbackImages` allowlist through the same reviewed PR before
-  enabling its first workflow deployment.
-- [ ] Move the Page callback to the canonical gateway only after its managed
-  Machine/volume state is converged and the complete Messenger image flow passes
-  a staged smoke test.
+- [x] Er is één bewaakte route om iets live te zetten. Bij een fout wordt de
+      vorige goede versie teruggezet.
+- [x] De foto-app en opslag-app aanvaarden alleen een exacte versie die GitHub
+      uit goedgekeurde code bouwde en ondertekende.
+- [x] Een app uitrollen en de database aanpassen zijn twee aparte stappen. Er
+      is geen handmatige binnenweg.
+- [ ] Zet de productiebeveiliging, goedkeurders en vier beperkte sleutels in
+      GitHub klaar en bewijs de route één keer van begin tot einde.
+- [ ] Zet de foto-app in kleine stappen live: eerst de veilige tussenversie,
+      dan een nieuwe back-up met geslaagde hersteltest, daarna alleen
+      database-uitbreiding 0016, en ten slotte de ondertekende nieuwe app.
+- [x] Databasewijziging 0017 blijft uit. Daar komt pas later een apart plan voor.
+- [ ] Bouw en controleer de opslag-app via dezelfde bewaakte route.
+- [ ] Houd de gateway uit tot zijn gegevensschijf veilig is gekopieerd en getest.
+- [ ] Test na de livegang een gewone foto, een fotobewerking en de teller in
+      echte Messenger-gesprekken.
 
 ### Messenger processing-consent incident follow-up - 2026-08-22
 
@@ -116,44 +92,44 @@ Keep this incident metadata-only; do not add names, PSIDs, screenshots, photos,
 or raw conversation content to repository notes or logs.
 
 - [x] Replace GDPR consent quick replies with persistent Messenger postback
-  button templates while retaining explicit typed consent as a UI fallback.
-  Keep destructive deletion confirmations as temporary quick replies.
+      button templates while retaining explicit typed consent as a UI fallback.
+      Keep destructive deletion confirmations as temporary quick replies.
 - [x] Normalize typed consent with bounded typo tolerance, structural
-  permission-grant matching, contextual short acknowledgements only for 15
-  minutes after a delivered notice, and fail-safe question, refusal, and
-  uncertainty handling.
+      permission-grant matching, contextual short acknowledgements only for 15
+      minutes after a delivered notice, and fail-safe question, refusal, and
+      uncertainty handling.
 - [x] Register every GDPR consent/deletion postback as a known Messenger payload
-  so a handler/send failure remains eligible for the safe fallback instead of
-  appearing to hang silently.
+      so a handler/send failure remains eligible for the safe fallback instead of
+      appearing to hang silently.
 - [x] Restrict pre-redaction inbound diagnostics to metadata-only booleans,
-  lengths, counts, and normalized media categories; tests prove that raw text,
-  captions, payloads, attachment URLs, message ids, referrals, and identifiers
-  never reach that logger.
+      lengths, counts, and normalized media categories; tests prove that raw text,
+      captions, payloads, attachment URLs, message ids, referrals, and identifiers
+      never reach that logger.
 - [x] Cover real Messenger postback event shape, typed-language variation,
-  negative and uncertain counterexamples, stale short acknowledgements,
-  rejected control delivery, GDPR fallback eligibility, and privacy-safe
-  inbound diagnostics in focused tests.
+      negative and uncertain counterexamples, stale short acknowledgements,
+      rejected control delivery, GDPR fallback eligibility, and privacy-safe
+      inbound diagnostics in focused tests.
 - [x] Preserve explicit consent refusals as distinct from unanswered consent so
-  later ordinary messages remain blocked without presenting the controls again.
-  Expire destructive deletion confirmation state after 15 minutes, arm it only
-  after the warning controls are delivered, consume it before deletion, and
-  reject stale Messenger/WhatsApp confirmation payloads without deleting data.
+      later ordinary messages remain blocked without presenting the controls again.
+      Expire destructive deletion confirmation state after 15 minutes, arm it only
+      after the warning controls are delivered, consume it before deletion, and
+      reject stale Messenger/WhatsApp confirmation payloads without deleting data.
 - [ ] Implement no-second-upload photo-first continuation only on the verified
-  workspace privacy boundary. It must bind the temporary reference to
-  `workspaceId`, `channelConnectionId`, `bindingEpoch`, `userKey`, and
-  `privacyEpoch`, serialize consent decisions, retain the reference across
-  transient fetch/storage failure, preserve a bounded encrypted caption, and
-  revalidate consent plus ownership before image fetch. The Page/sender-only
-  prototype was rejected and removed; never deploy it or tell a customer the
-  automated flow retained a photo when it did not.
+      workspace privacy boundary. It must bind the temporary reference to
+      `workspaceId`, `channelConnectionId`, `bindingEpoch`, `userKey`, and
+      `privacyEpoch`, serialize consent decisions, retain the reference across
+      transient fetch/storage failure, preserve a bounded encrypted caption, and
+      revalidate consent plus ownership before image fetch. The Page/sender-only
+      prototype was rejected and removed; never deploy it or tell a customer the
+      automated flow retained a photo when it did not.
 - [ ] Review and merge the hotfix, promote it through the canonical immutable
-  image-gen deployment path, and retain the current reviewed digest as the
-  explicit rollback image. Repository tests are not production evidence.
+      image-gen deployment path, and retain the current reviewed digest as the
+      explicit rollback image. Repository tests are not production evidence.
 - [ ] Complete a privacy-safe production smoke on Android, iOS, and Web for
-  fresh text-first and photo-first users, including typed fallback and refusal.
+      fresh text-first and photo-first users, including typed fallback and refusal.
 - [ ] Add metadata-only funnel signals for consent prompt, consent acceptance,
-  refusal, and repeated-prompt loops; alert on abnormal repetition without
-  logging message text, attachment URLs, raw identifiers, or customer content.
+      refusal, and repeated-prompt loops; alert on abnormal repetition without
+      logging message text, attachment URLs, raw identifiers, or customer content.
 
 ### Local launch-hardening tranche - 2026-08-02 (no launch-go)
 
@@ -161,198 +137,202 @@ Completed locally and covered by focused regression tests in the current
 worktree; none of these items counts as production rollout proof:
 
 - [x] Scope short-lived gateway prompt/reply memory by Messenger account, Page,
-  and sender so identical sender/message identifiers cannot share remembered
-  assistant prompts across account/Page boundaries.
+      and sender so identical sender/message identifiers cannot share remembered
+      assistant prompts across account/Page boundaries.
 - [x] Make `delete-my-data` outcomes truthful: Messenger and WhatsApp now report
-  `completed`, `pending`, or `failed`, and send success copy only after all
-  required deletion work completed. Incomplete deletion retains safe retry
-  context and gives the user retry/support guidance.
+      `completed`, `pending`, or `failed`, and send success copy only after all
+      required deletion work completed. Incomplete deletion retains safe retry
+      context and gives the user retry/support guidance.
 - [x] Upgrade the affected image-gen Axios, Sentry, and `express-rate-limit`
-  dependencies and make the production-dependency high-severity audit blocking
-  in CI. `pnpm audit --prod` reports no known production vulnerabilities in the
-  current worktree (zero critical, high, moderate, and low advisories). Keep the
-  security overrides in the pnpm-10-supported app-local `pnpm-workspace.yaml` so
-  fresh installs enforce the same dependency graph as the lockfile.
+      dependencies and make the production-dependency high-severity audit blocking
+      in CI. `pnpm audit --prod` reports no known production vulnerabilities in the
+      current worktree (zero critical, high, moderate, and low advisories). Keep the
+      security overrides in the pnpm-10-supported app-local `pnpm-workspace.yaml` so
+      fresh installs enforce the same dependency graph as the lockfile.
 - [x] Add an interim opaque Page-partitioned image queue and make partitioned
-  enqueue, reserve/lease, completion, retry, and dead-letter transitions atomic
-  and idempotent under ambiguous Redis responses. Consumers recompute the Page
-  HMAC, stale workers are fenced by random lease tokens, legacy Redis Cluster
-  `CROSSSLOT` errors no longer block partitioned work, and the default lease now
-  covers every configured OpenAI retry attempt. This is an atomicity milestone,
-  not the final workspace tenant boundary.
+      enqueue, reserve/lease, completion, retry, and dead-letter transitions atomic
+      and idempotent under ambiguous Redis responses. Consumers recompute the Page
+      HMAC, stale workers are fenced by random lease tokens, legacy Redis Cluster
+      `CROSSSLOT` errors no longer block partitioned work, and the default lease now
+      covers every configured OpenAI retry attempt. This is an atomicity milestone,
+      not the final workspace tenant boundary.
 - [x] Replace raw-PSID request ids with random UUIDs, remove raw Page/message ids
-  and error bodies from operational logs, apply redaction to both logger APIs,
-  and scrub Sentry exception messages, request data, breadcrumbs, variables,
-  and unapproved context before export. Disable Sentry performance tracing until
-  transaction/span exports have a tested metadata-only allowlist; error events
-  remain enabled behind the scrubber.
+      and error bodies from operational logs, apply redaction to both logger APIs,
+      and scrub Sentry exception messages, request data, breadcrumbs, variables,
+      and unapproved context before export. Disable Sentry performance tracing until
+      transaction/span exports have a tested metadata-only allowlist; error events
+      remain enabled behind the scrubber.
 - [x] Stop creating the redundant `psid:<hashed-userKey>` Messenger shadow-state
-  and make `delete-my-data` remove existing shadow records during the transition.
+      and make `delete-my-data` remove existing shadow records during the transition.
 - [x] Fail closed for both legacy portal-handoff issuance and claim with no
-  environment bypass until an immutable Page/channel/workspace authorization
-  boundary exists.
+      environment bypass until an immutable Page/channel/workspace authorization
+      boundary exists.
 - [x] Add the first additive `ConversationSubjectV2` identity foundation:
-  strict byte-exact Messenger Page and WhatsApp WABA/`phone_number_id`
-  endpoints, a dedicated versioned 256-bit HMAC key, branded opaque tenant,
-  binding, and user keys, an exact fail-closed `channelConnections` resolver,
-  nullable WABA schema support in migration `0011`, and globally unique
-  workspace ownership for non-null WABA IDs in migration `0012`. The
-  channel-connection write path now rejects non-canonical Meta IDs, enforces
-  the Messenger/WhatsApp endpoint shape, and locks both WhatsApp WABA and phone
-  claims. Startup/readiness and CI production type-checking now enforce the
-  local foundation. Existing webhook/state/queue paths are deliberately not
-  switched to v2 in this tranche.
+      strict byte-exact Messenger Page and WhatsApp WABA/`phone_number_id`
+      endpoints, a dedicated versioned 256-bit HMAC key, branded opaque tenant,
+      binding, and user keys, an exact fail-closed `channelConnections` resolver,
+      nullable WABA schema support in migration `0011`, and globally unique
+      workspace ownership for non-null WABA IDs in migration `0012`. The
+      channel-connection write path now rejects non-canonical Meta IDs, enforces
+      the Messenger/WhatsApp endpoint shape, and locks both WhatsApp WABA and phone
+      claims. Startup/readiness and CI production type-checking now enforce the
+      local foundation. Existing webhook/state/queue paths are deliberately not
+      switched to v2 in this tranche.
 - [x] Add the next additive, still-unwired V2 boundary primitives: an exact
-  allowlisted detached envelope with authenticated payload purpose and bytes,
-  current-key-only verification, mandatory physical queue-scope verification,
-  authoritative binding re-derivation, safe stale/reassigned/inactive/
-  ambiguous quarantine codes, and a branded connected-delivery gate. Add a
-  V2-only replay claim with a binding-scoped opaque Redis key, dedicated-key
-  HMAC framing, strict Meta-ID/fallback identities, a stable authenticated
-  per-unit claim id, a fresh random owner token for every short `processing`
-  lease attempt, and an atomic owner-specific `completed` transition. Ambiguous/
-  busy outcomes remain retryable, Redis readiness is strict, and there is no
-  process-memory or V1 fallback. Only an explicit `completed` state is treated
-  as a duplicate. These primitives do not change live webhook behavior yet.
+      allowlisted detached envelope with authenticated payload purpose and bytes,
+      current-key-only verification, mandatory physical queue-scope verification,
+      authoritative binding re-derivation, safe stale/reassigned/inactive/
+      ambiguous quarantine codes, and a branded connected-delivery gate. Add a
+      V2-only replay claim with a binding-scoped opaque Redis key, dedicated-key
+      HMAC framing, strict Meta-ID/fallback identities, a stable authenticated
+      per-unit claim id, a fresh random owner token for every short `processing`
+      lease attempt, and an atomic owner-specific `completed` transition. Ambiguous/
+      busy outcomes remain retryable, Redis readiness is strict, and there is no
+      process-memory or V1 fallback. Only an explicit `completed` state is treated
+      as a duplicate. These primitives do not change live webhook behavior yet.
 - [x] Add the additive, still-unwired persisted V2 Meta ingress-unit contract:
-  mint a private runtime brand only after exact raw-body HMAC verification, bind
-  its signature-provider claim to the payload root, strictly cap every provider
-  array, split a verified delivery into deterministic per-event order,
-  retain only allowlisted canonical payload fields, and reject the whole batch
-  before identity resolution on an invalid event. Conversation events with no
-  stable provider ID or timestamp deliberately fail closed so replay identity
-  remains stable. Messenger echo/delivery/read/referral and WhatsApp status-only
-  notifications remain metadata-only and do not mint a conversation subject.
-  The unit HMAC binds the exact payload digest, stable replay claim id, complete
-  detached boundary, and key epoch. Queue verification authenticates the unit
-  before decoding, derives endpoint/sender only from those authenticated bytes,
-  re-resolves the current binding, and requires the external physical tenant/
-  binding scope. It mints a separate non-forgeable queued capability; replay
-  rejects a generic verified boundary that never saw physical scope. Tamper,
-  transplant, reassignment, multi-entry, canonical-byte, provider-mismatch, and
-  stale-worker fencing tests are included. No route or queue uses this contract
-  yet.
+      mint a private runtime brand only after exact raw-body HMAC verification, bind
+      its signature-provider claim to the payload root, strictly cap every provider
+      array, split a verified delivery into deterministic per-event order,
+      retain only allowlisted canonical payload fields, and reject the whole batch
+      before identity resolution on an invalid event. Conversation events with no
+      stable provider ID or timestamp deliberately fail closed so replay identity
+      remains stable. Messenger echo/delivery/read/referral and WhatsApp status-only
+      notifications remain metadata-only and do not mint a conversation subject.
+      The unit HMAC binds the exact payload digest, stable replay claim id, complete
+      detached boundary, and key epoch. Queue verification authenticates the unit
+      before decoding, derives endpoint/sender only from those authenticated bytes,
+      re-resolves the current binding, and requires the external physical tenant/
+      binding scope. It mints a separate non-forgeable queued capability; replay
+      rejects a generic verified boundary that never saw physical scope. Tamper,
+      transplant, reassignment, multi-entry, canonical-byte, provider-mismatch, and
+      stale-worker fencing tests are included. No route or queue uses this contract
+      yet.
 
 Still open before broad customer launch or paid activation:
 
 - [ ] Wire the new `ConversationSubjectV2` foundation before multi-tenant
-  traffic: require and compare both Messenger outer `entry.id` and inner
-  `recipient.id`, preserve WhatsApp outer WABA plus
-  `metadata.phone_number_id`, then resolve exactly one
-  `channelConnection` and workspace before any state/quota/consent/replay read.
-  Missing, duplicate, changed, inactive, or unavailable mappings must fail
-  closed; free versus paid entitlement is policy after identity resolution,
-  never an identity fallback.
+      traffic: require and compare both Messenger outer `entry.id` and inner
+      `recipient.id`, preserve WhatsApp outer WABA plus
+      `metadata.phone_number_id`, then resolve exactly one
+      `channelConnection` and workspace before any state/quota/consent/replay read.
+      Missing, duplicate, changed, inactive, or unavailable mappings must fail
+      closed; free versus paid entitlement is policy after identity resolution,
+      never an identity fallback.
 - [ ] Connect the unforgeable V2 raw-body verifier at the live signature seam and
-  select its Messenger or WhatsApp secret from an authenticated route contract,
-  not by trusting payload fields. Both the generic and WhatsApp-specific webhook
-  paths must reject a signature-provider/payload-root mismatch. Seal the complete
-  delivery before any queue write, then persist each unit only in its external
-  tenant/binding partition. A consumer must receive that physical scope from an
-  independently authenticated queue/lease context and verify it before replay,
-  state, provider, or delivery access. Multi-unit persistence across tenant
-  partitions must be atomic and idempotent, or use a durable resumable manifest;
-  a partial enqueue must never be acknowledged as a completed delivery.
+      select its Messenger or WhatsApp secret from an authenticated route contract,
+      not by trusting payload fields. Both the generic and WhatsApp-specific webhook
+      paths must reject a signature-provider/payload-root mismatch. Seal the complete
+      delivery before any queue write, then persist each unit only in its external
+      tenant/binding partition. A consumer must receive that physical scope from an
+      independently authenticated queue/lease context and verify it before replay,
+      state, provider, or delivery access. Multi-unit persistence across tenant
+      partitions must be atomic and idempotent, or use a durable resumable manifest;
+      a partial enqueue must never be acknowledged as a completed delivery.
 - [ ] Add an authoritative binding lifecycle epoch or durable cancellation/
-  deletion tombstone before enabling queued V2 content. The current
-  `(workspaceId, channel)` row is reused, so disconnecting and reconnecting the
-  identical endpoint can recreate the same subject and otherwise resurrect old
-  authenticated work. Cover the chosen epoch/tombstone in queue verification
-  and test disconnect -> same-row reconnect explicitly.
+      deletion tombstone before enabling queued V2 content. The current
+      `(workspaceId, channel)` row is reused, so disconnecting and reconnecting the
+      identical endpoint can recreate the same subject and otherwise resurrect old
+      authenticated work. Cover the chosen epoch/tombstone in queue verification
+      and test disconnect -> same-row reconnect explicitly.
 - [ ] Activate the implemented V2 replay claim only after every ingress producer
-  and worker consumes a verified V2 unit under one deployment-wide key epoch.
-  Do not dual-write, read V1 on a V2 miss, or run mixed V1/V2 processors; drain
-  old ingress first so a Meta redelivery cannot execute once in each namespace.
-  Claim replay immediately before one durable, tenant-scoped, idempotent event-
-  job enqueue; mark it `completed` only after that enqueue succeeds and before
-  webhook ACK. Propagate `claim_busy`, store-unavailable, and lost-lease outcomes
-  as retry/requeue rather than catch-and-ack. Never persist or reuse the fresh
-  per-attempt owner token, and do not put slow provider work inside the current
-  30-second lease. Validate the completed TTL against Meta's retry horizon and
-  prove the Lua CAS/ACL/expiry behavior against production-like Redis or Redis
-  Cluster before enabling traffic.
+      and worker consumes a verified V2 unit under one deployment-wide key epoch.
+      Do not dual-write, read V1 on a V2 miss, or run mixed V1/V2 processors; drain
+      old ingress first so a Meta redelivery cannot execute once in each namespace.
+      Claim replay immediately before one durable, tenant-scoped, idempotent event-
+      job enqueue; mark it `completed` only after that enqueue succeeds and before
+      webhook ACK. Propagate `claim_busy`, store-unavailable, and lost-lease outcomes
+      as retry/requeue rather than catch-and-ack. Never persist or reuse the fresh
+      per-attempt owner token, and do not put slow provider work inside the current
+      30-second lease. Validate the completed TTL against Meta's retry horizon and
+      prove the Lua CAS/ACL/expiry behavior against production-like Redis or Redis
+      Cluster before enabling traffic.
 - [ ] Replace live Redis `psid:<raw sender>` state with workspace/channel-bound
-  v2 state, locks, quota, completions, cost history, chat history, consent, face
-  memory, and deletion keys. The legacy data has no Page/WABA owner and therefore
-  requires an offline, backed-up, resumable one-owner migration; do not add a
-  runtime v2-miss-to-v1 fallback. Remove the global in-memory alias scan and dead
-  SQL `messengerState` shadow only after migration evidence and retention review.
+      v2 state, locks, quota, completions, cost history, chat history, consent, face
+      memory, and deletion keys. The legacy data has no Page/WABA owner and therefore
+      requires an offline, backed-up, resumable one-owner migration; do not add a
+      runtime v2-miss-to-v1 fallback. Remove the global in-memory alias scan and dead
+      SQL `messengerState` shadow only after migration evidence and retention review.
 - [ ] Replace the global webhook ingress queue before multi-tenant traffic. It
-  currently persists complete Facebook/WhatsApp payloads, including customer
-  content and identifiers, in shared queued/processing/dead-letter lists without
-  a tenant partition, retention TTL, or bounded cap. Split multi-entry payloads
-  by resolved workspace before enqueue and make deletion/cancellation explicit.
+      currently persists complete Facebook/WhatsApp payloads, including customer
+      content and identifiers, in shared queued/processing/dead-letter lists without
+      a tenant partition, retention TTL, or bounded cap. Split multi-entry payloads
+      by resolved workspace before enqueue and make deletion/cancellation explicit.
 - [ ] Finish the image queue's final workspace boundary. Page-HMAC partitioning
-  now protects mechanics, but Page identity alone does not prevent a queued job
-  from crossing policy after Page reassignment. The v2 envelope must bind and
-  revalidate workspace, channel connection, Page binding, and subject before
-  state/provider/delivery; delete-my-data must tombstone/cancel queued work and
-  suppress late processing/output. Add a durable, idempotent dead-letter
-  notification/outbox so a double-lost Redis reply cannot strand the user in
-  `PROCESSING`; add bounded dead-letter retention/caps and fail readiness while
-  unmigrated legacy Cluster jobs remain. Prove the Lua scripts against real
-  Redis/Redis Cluster, not only the deterministic test fake.
+      now protects mechanics, but Page identity alone does not prevent a queued job
+      from crossing policy after Page reassignment. The v2 envelope must bind and
+      revalidate workspace, channel connection, Page binding, and subject before
+      state/provider/delivery; delete-my-data must tombstone/cancel queued work and
+      suppress late processing/output. Add a durable, idempotent dead-letter
+      notification/outbox so a double-lost Redis reply cannot strand the user in
+      `PROCESSING`; add bounded dead-letter retention/caps and fail readiness while
+      unmigrated legacy Cluster jobs remain. Prove the Lua scripts against real
+      Redis/Redis Cluster, not only the deterministic test fake.
+- [ ] P2: Bound completion/object inventory growth for customers active over many
+      years. A sliding TTL can keep old members alive; later move inventory to fixed
+      time windows or a scored sorted set with explicit age-based cleanup. This is
+      not a release blocker.
 - [ ] Scope or remove the remaining globally stable log hashes (`user` and
-  `psidHash`) once the workspace binding exists; per-request UUID correlation is
-  now available and replay logs no longer expose a stable event hash.
+      `psidHash`) once the workspace binding exists; per-request UUID correlation is
+      now available and replay logs no longer expose a stable event hash.
 - [ ] Replace the unsafe legacy Messenger-to-portal handoff boundary before
-  onboarding customers through it. The 2026-08-02 local containment disables
-  both token issuance and claim with a non-configurable fail-closed gate because
-  the current admin call can pair any workspace with a global sender hash. A
-  safe replacement must derive the workspace from an immutable receiving-Page
-  / `channelConnections` binding, revalidate that binding atomically on claim,
-  use authenticated non-forgeable operator attribution, and refuse ambiguous,
-  disconnected, legacy-unbound, or cross-workspace mappings. Existing tokens
-  must remain unclaimable and be allowed to expire or be explicitly revoked.
+      onboarding customers through it. The 2026-08-02 local containment disables
+      both token issuance and claim with a non-configurable fail-closed gate because
+      the current admin call can pair any workspace with a global sender hash. A
+      safe replacement must derive the workspace from an immutable receiving-Page
+      / `channelConnections` binding, revalidate that binding atomically on claim,
+      use authenticated non-forgeable operator attribution, and refuse ambiguous,
+      disconnected, legacy-unbound, or cross-workspace mappings. Existing tokens
+      must remain unclaimable and be allowed to expire or be explicitly revoked.
 - [ ] Before deploying the partitioned queue, configure one stable
-  `MESSENGER_GENERATION_PARTITION_SECRET` across gateway and workers, prove the
-  unique Page-to-workspace ownership invariant, and drain/review existing
-  global legacy and dead-letter jobs before multi-tenant onboarding.
-  Before switching to Page-scoped Messenger state, pause new Messenger ingress;
-  verify queued, processing, and reserved generation counts are zero; and review
-  the dead-letter queue. From an authoritative channel inventory, build a
-  resumable offline migration manifest that maps every proven legacy Messenger
-  PSID state to exactly one receiving Page, preserves consent, response-window,
-  quota/reservation, face-memory, and pending-deletion fields, and writes the
-  full record to its Page+PSID key. After verifying the copy, purge its proven
-  legacy Messenger raw-PSID record and retain auditable evidence that no
-  identified Messenger record remains unmigrated or undeleted. Preserve
-  non-Messenger records; move them only through a separately verified
-  channel-scoping migration. Runtime `delete-my-data` must not guess that an
-  unmarked raw-PSID record belongs to Messenger because the old keyspace is
-  shared by non-Messenger callers. Abort on missing or ambiguous Page ownership:
-  runtime code never falls back to an unowned PSID record.
-  Deploy gateway and workers as one rollout only after that evidence, then
-  resume ingress.
+      `MESSENGER_GENERATION_PARTITION_SECRET` across gateway and workers, prove the
+      unique Page-to-workspace ownership invariant, and drain/review existing
+      global legacy and dead-letter jobs before multi-tenant onboarding.
+      Before switching to Page-scoped Messenger state, pause new Messenger ingress;
+      verify queued, processing, and reserved generation counts are zero; and review
+      the dead-letter queue. From an authoritative channel inventory, build a
+      resumable offline migration manifest that maps every proven legacy Messenger
+      PSID state to exactly one receiving Page, preserves consent, response-window,
+      quota/reservation, face-memory, and pending-deletion fields, and writes the
+      full record to its Page+PSID key. After verifying the copy, purge its proven
+      legacy Messenger raw-PSID record and retain auditable evidence that no
+      identified Messenger record remains unmigrated or undeleted. Preserve
+      non-Messenger records; move them only through a separately verified
+      channel-scoping migration. Runtime `delete-my-data` must not guess that an
+      unmarked raw-PSID record belongs to Messenger because the old keyspace is
+      shared by non-Messenger callers. Abort on missing or ambiguous Page ownership:
+      runtime code never falls back to an unowned PSID record.
+      Deploy gateway and workers as one rollout only after that evidence, then
+      resume ingress.
 - [ ] Before deploying this identity foundation, provision the same immutable
-  `CONVERSATION_SCOPE_HMAC_KEY_ID` and 256-bit
-  `CONVERSATION_SCOPE_HMAC_SECRET` version on every app and worker process,
-  back up the database, apply and verify migrations `0011` and `0012`, and
-  inventory existing Page/WhatsApp identifiers for the strict decimal
-  canonical form and duplicate WABA ownership. Abort rather than normalizing
-  ambiguous data. Do not derive or backfill WABA ownership from environment
-  variables. Prove the unique Page, phone, and WABA claims under concurrent
-  writes against real MySQL before activation.
+      `CONVERSATION_SCOPE_HMAC_KEY_ID` and 256-bit
+      `CONVERSATION_SCOPE_HMAC_SECRET` version on every app and worker process,
+      back up the database, apply and verify migrations `0011` and `0012`, and
+      inventory existing Page/WhatsApp identifiers for the strict decimal
+      canonical form and duplicate WABA ownership. Abort rather than normalizing
+      ambiguous data. Do not derive or backfill WABA ownership from environment
+      variables. Prove the unique Page, phone, and WABA claims under concurrent
+      writes against real MySQL before activation.
 - [ ] Add deployment-wide identity-key epoch consensus and schema readiness.
-  Local syntax readiness cannot detect two nodes using the same key ID with
-  different secret material or a database missing migrations. Rotation must
-  use an immutable secret-manager version, an offline resumable migration
-  manifest, deletion-completeness checks, and zero-old-record evidence; never
-  add runtime try-all-key or v2-to-v1 fallback behavior.
+      Local syntax readiness cannot detect two nodes using the same key ID with
+      different secret material or a database missing migrations. Rotation must
+      use an immutable secret-manager version, an offline resumable migration
+      manifest, deletion-completeness checks, and zero-old-record evidence; never
+      add runtime try-all-key or v2-to-v1 fallback behavior.
 - [ ] Clear the existing image-gen server ESLint baseline (37 errors outside
-  this tranche, including unsafe-value and unused-code findings) and add the
-  server lint command to CI once green. The production files changed in this
-  tranche pass targeted ESLint, but the repository-wide server gate is not yet
-  clean.
+      this tranche, including unsafe-value and unused-code findings) and add the
+      server lint command to CI once green. The production files changed in this
+      tranche pass targeted ESLint, but the repository-wide server gate is not yet
+      clean.
 - [ ] Configure and verify production OAuth, explicit spend caps, and the
-  intended entitlement/billing feature flags. Paid/live billing stays fail-closed.
+      intended entitlement/billing feature flags. Paid/live billing stays fail-closed.
 - [ ] Rehearse, back up, run, and verify required live database/state migrations,
-  including the Page-ownership preflight and the blocked OpenClaw Memory Core
-  state repair, with an approved rollback path.
+      including the Page-ownership preflight and the blocked OpenClaw Memory Core
+      state repair, with an approved rollback path.
 - [ ] After deployment, run and record production route/security, portal login,
-  workspace isolation, Messenger, `delete-my-data`, quota/budget, queue, and
-  rollback smokes. Until that evidence exists, broad customer launch remains
-  **NO-GO** and Mollie live billing remains **NO-GO**.
+      workspace isolation, Messenger, `delete-my-data`, quota/budget, queue, and
+      rollback smokes. Until that evidence exists, broad customer launch remains
+      **NO-GO** and Mollie live billing remains **NO-GO**.
 
 ## Finish cut - 2026-06-30
 
@@ -401,7 +381,9 @@ Required before any broader traffic, marketing, or customer onboarding:
 
 1. [x] Preserve Meta webhook verification, POST signature validation, request-size limits, fast ACK behavior, and Messenger response-window compatibility.
 2. [x] Keep the OpenClaw public gateway shielded: expose only required webhook/health routes and deny built-in high-cost `image_generate` on the gateway.
-3. [x] Keep Messenger image/audio/video quota commits tied to provider attempts, with retryable preflight failures releasing reservations.
+3. [x] Count Messenger images only after a usable result is durably recorded;
+       keep audio/video tied to provider attempts. Retryable failures consume no
+       Messenger photo, and a replayed successful job counts once.
 4. [x] Keep Redis-backed webhook ingress, generation queue dedupe, worker lease/reclaim behavior, and queue metrics enabled for production image-generation traffic.
 5. [x] Keep privacy-safe logging defaults: hashed/pseudonymous sender identifiers, redacted errors, and no raw PSIDs, tokens, customer messages, uploaded knowledge, or generated prompts/outputs in logs.
 6. [x] Keep face memory disabled by default and retain the protected emergency disable route for rollback.
@@ -421,11 +403,18 @@ Goal: make the public bot safe for sustained usage beyond controlled smoke.
 Required before enabling open `dmPolicy`, public promotion, or broader free-tier
 access:
 
-1. [x] Implement per-image/request cost tracking.
-2. [x] Add full host-level budget gates before all expensive model/image/tool calls. Current Facebook-host expensive paths are covered by default-deny OpenClaw tool policy plus optional root-gateway caps for image-intent forwards, voice transcription, and generic Leaderbot event forwards; image-gen runtime provider calls keep their quota/spend gates.
+1. [x] Track image provider attempts and outcomes without calculating an image price.
+2. [x] Bound expensive paths before provider calls. Messenger images use the
+       customer day/month photo quota plus provider concurrency and the external
+       OpenAI hard limit; audio/video retain spend gates; Facebook-host tools remain
+       default-deny.
 3. [x] Add default-deny tool policy for all high-cost tools exposed to untrusted Facebook-originated users.
-4. [x] Add per-user daily spend caps, a global Facebook daily spend cap, and monthly cost cap enforcement.
-5. [x] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, estimated cost, final cost, status, and UTC period.
+4. [x] Add per-user/global spend caps for priced audio/video. Image admission is
+       deliberately count-based per customer and never decided by an internal price
+       estimate.
+5. [x] Write provider attempts to a pseudonymous ledger. Images record attempt
+       status and safe request metadata only; optional audio/video controls may
+       record their configured estimates.
 6. [x] Add richer provider usage dimensions to cost-ledger entries where providers expose safe metadata.
 7. [x] Add owner cost alerts and an owner dashboard for spend, quota blocks, duplicate skips, provider failures, queue health, and delivery failures. Admin-only aggregate cost monitoring exists at `/admin/cost-summary` and `/admin/cost-dashboard`; richer failure drilldown UX is deferred.
 8. [x] Continue verifying storage-proxy delivery under Messenger crawler constraints, including generated outputs and retained source images. Operator-verified on 2026-06-30 with tester photo forwards through Messenger.
@@ -433,7 +422,7 @@ access:
 10. [x] Keep public legal pages current (`/privacy`, `/terms`, `/data-deletion`) and aligned with Meta App Review, face-memory status, retention, and deletion behavior. Current image-gen runtime legal pages include tested privacy, terms, and data-deletion routes; future portal relocation remains a Gate 3 task.
 11. [x] Document Meta App Review impact for each new Messenger capability and avoid permission expansion unless product/policy approval is explicit. Current review notes live in `docs/operations/meta-app-review.md`; keep them updated for future Messenger capability changes.
 
-Exit criteria: all paid/provider calls are budget-gated and ledgered, public legal
+Exit criteria: all paid/provider calls are bounded and ledgered, public legal
 copy matches behavior, owner monitoring can detect cost/reliability regressions,
 and Meta review/demo notes are reproducible.
 
@@ -513,16 +502,16 @@ traffic cannot reach internal gateway admin/API surfaces.
   - [ ] Re-enable the operator-only sender only after the tenant boundary is proven; the existing short-lived-token and response-window mechanics may be reused behind that boundary.
   - [x] Allow `/handoff` portal pages through the guarded public gateway and redact `/handoff/:token` from HTTP logs and metrics.
   - [x] Wire paid Mollie webhook completion to the same handoff sender after the billing and tenant-runtime launch gates pass.
-    Delivery is deliberately separate from payment truth: a closed response
-    window, stale sender state, changed Page binding, or exhausted bounded send
-    retry records a failed `send_portal_handoff` outbox item without creating a
-    second payment. Automated outbox retries reuse the same idempotent delivery
-    identity; terminal response-window or Page-binding failures remain auditable
-    through the outbox record and redacted delivery logs, without recharge.
-    Human recovery is unavailable: the protected admin sender is deliberately
-    fail-closed until recovery is bound to the failed outbox operation and an
-    authenticated, non-forgeable support principal. Never copy a raw token into
-    support tooling.
+        Delivery is deliberately separate from payment truth: a closed response
+        window, stale sender state, changed Page binding, or exhausted bounded send
+        retry records a failed `send_portal_handoff` outbox item without creating a
+        second payment. Automated outbox retries reuse the same idempotent delivery
+        identity; terminal response-window or Page-binding failures remain auditable
+        through the outbox record and redacted delivery logs, without recharge.
+        Human recovery is unavailable: the protected admin sender is deliberately
+        fail-closed until recovery is bound to the failed outbox operation and an
+        authenticated, non-forgeable support principal. Never copy a raw token into
+        support tooling.
   - Storage boundary: `portalHandoffTokens` rows are scoped to one `workspaceId`; the opaque token is never stored, only its hash is persisted, and Messenger identity may be stored only as the privacy-peppered `messengerSenderUserKey`.
   - Deletion boundary: `delete-my-data` must delete handoff rows for the erased Messenger `userKey`, including pending and consumed links.
   - Consumption boundary: only the portal handoff route may consume a pending, unexpired token and convert it into that workspace's onboarding/session flow.
@@ -567,41 +556,47 @@ Validated controls:
 3. [x] Duplicate Messenger generation queue enqueues are deduped by request id.
 4. [x] Production queue metrics expose queued, processing, failed, global-slot, Redis-backed, and scrape-error state.
 5. [x] Public OpenClaw gateway denies the built-in `image_generate` tool; Messenger image generation routes through the separate image-gen service.
-6. [x] Optional global daily Messenger image cap (`MESSENGER_GLOBAL_DAILY_IMAGE_CAP`) blocks OpenAI image requests before the provider call.
-7. [x] Messenger and WhatsApp image quota now commits when a provider attempt starts, so billable provider failures/timeouts count against user limits while preflight source-image validation failures remain retryable.
+6. [x] Retire the global image-count and estimated-price admission gates; customer daily/monthly photo quotas own image admission, while the cost ledger remains metadata-only observability.
+7. [x] Messenger photo quota reserves before generation and commits only after a
+       usable result is durably recorded. Failures consume zero; retries of the same
+       successful request count once. WhatsApp retains its existing provider-attempt
+       quota until its channel flow is migrated separately.
 8. [x] Messenger generated-video and audio-transcription quota also commits when provider attempts start, closing the same retry leak for newer paid features.
 9. [x] Shared bot text rate limiting is configurable via `BOT_TEXT_RATE_LIMIT_MAX` and `BOT_TEXT_RATE_LIMIT_WINDOW_SECONDS` instead of hardcoded limits.
 10. [x] New bot features have a reusable feature-scoped limiter helper and generic `FEATURE_RATE_LIMIT_<FEATURE>_*` env convention.
-11. [x] Free-tier product targets are documented before runtime changes: `20` image provider attempts per UTC day, `30` bot text messages per `60` seconds, `5` audio transcription attempts per UTC day, and `1` video generation attempt per UTC day.
+11. [x] Free-tier product targets: Messenger gets `5` successful photos per
+        Brussels day and `20` per Brussels month; bot text gets `30` messages per
+        `60` seconds; audio gets `5` attempts per UTC day; video gets `1` attempt per
+        UTC day.
 12. [x] Admin-only `/admin/cost-summary` exposes owner-safe aggregate cost ledger summaries without raw PSIDs, prompts, tokens, or customer content.
-13. [x] OpenAI image, audio transcription, and generated-video provider attempts append metadata-only cost ledger entries after quota/budget checks and before external provider calls.
-14. [x] Optional global daily Messenger provider spend cap (`MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD`) blocks priced attempts that would exceed the cap and fails closed for unpriced attempts.
-15. [x] Optional per-user daily Messenger provider spend cap (`MESSENGER_USER_DAILY_SPEND_CAP_USD`) blocks priced attempts per `userKey` and fails closed for unpriced attempts.
+13. [x] OpenAI image, audio transcription, and generated-video provider attempts append metadata-only ledger entries before external provider calls; images do not calculate or store a price.
+14. [x] Optional global daily Messenger provider spend cap (`MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD`) continues to protect priced audio/video attempts; image admission uses photo quotas instead.
+15. [x] Optional per-user daily Messenger provider spend cap (`MESSENGER_USER_DAILY_SPEND_CAP_USD`) continues to protect priced audio/video attempts per `userKey`.
 16. [x] Root Facebook gateway stamps untrusted inbound turns with a default-deny `tools.deny` policy for high-cost, runtime, and filesystem tools.
 17. [x] Cost ledger summaries roll up provider-attempt cost metadata per request using hashed request keys instead of raw Messenger message IDs.
-18. [x] Optional global monthly Messenger provider spend cap (`MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD`) blocks image/audio/video provider attempts before external calls and is exposed in metrics.
+18. [x] Optional global monthly Messenger provider spend cap (`MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD`) blocks audio/video provider attempts before external calls and is exposed in metrics; it does not gate images.
 19. [x] `delete-my-data` erasure removes the erased user's cost-ledger entries and deletion failure logs use pseudonymous `user` metadata instead of raw PSIDs.
-20. [x] Image, audio transcription, and generated-video cost-ledger entries are reconciled from `provider_attempt_started` to success/failure status, with image final cost populated when the estimate is complete.
+20. [x] Image, audio transcription, and generated-video ledger entries are reconciled from `provider_attempt_started` to success/failure status. Image price fields remain empty.
 21. [x] Admin cost summaries expose owner-safe open, failed, blocked, and per-status provider-attempt counts for monitoring regressions without raw PSIDs or prompts.
-22. [x] Optional owner cost alerts (`MESSENGER_OWNER_COST_ALERTS=1`) notify on daily/monthly/user spend-cap blocks with metadata-only budget details.
-23. [x] Optional root-gateway daily image forward cap (`MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP`) blocks Facebook image-intent bridge calls before they reach Leaderbot image-gen.
+22. [x] Optional owner cost alerts (`MESSENGER_OWNER_COST_ALERTS=1`) notify on remaining audio/video spend-cap blocks with metadata-only budget details.
+23. [x] Retire the root-gateway daily image-forward cap so one customer's use can never block another customer before tenant-scoped image quota runs.
 24. [x] Optional root-gateway daily audio transcription cap (`MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP`) blocks Facebook voice attachment transcription before media download or model transcription.
-25. [x] Optional root-gateway daily Leaderbot event forward cap (`MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP`) blocks generic free-tier/interactive Messenger event forwards before they reach Leaderbot image-gen, while preserving delete-data forwards.
+25. [x] Retire the root-gateway daily Leaderbot event-forward cap so unknown senders' first photos and interactive image actions always reach tenant-scoped Leaderbot controls; the production validator rejects the stale environment variable.
 26. [x] Optional audio transcription cost estimate (`OPENAI_AUDIO_TRANSCRIPTION_ESTIMATED_COST_USD`) feeds spend-cap checks and reconciles successful audio ledger attempts with final cost.
 27. [x] Optional video generation cost estimate (`OPENAI_VIDEO_GENERATION_ESTIMATED_COST_USD`) feeds spend-cap checks and reconciles successful video ledger attempts with final cost.
-28. [x] Exact `MESSENGER_ADMIN_IDS` owner accounts bypass customer image quota, Startpilot entitlement, and daily/monthly image spend caps; their attempts remain auditable in aggregate cost reporting but do not consume customer budget.
+28. [x] Exact `MESSENGER_ADMIN_IDS` owner accounts retain the existing customer-quota/entitlement behavior; all image attempts remain auditable by count and outcome without image-price calculations.
 
 Open cost-control work:
 
-1. [x] Implement per-image/request cost tracking.
-2. [x] Add full host-level budget gates before all expensive model/image/tool calls. Current Facebook-host expensive paths are covered by default-deny OpenClaw tool policy plus optional root-gateway caps for image-intent forwards, voice transcription, and generic Leaderbot event forwards; image-gen runtime provider calls keep their quota/spend gates.
+1. [x] Implement per-image provider-attempt and outcome tracking without image prices.
+2. [x] Keep expensive paths bounded: image generation uses customer photo quotas and the external OpenAI hard limit, while audio/video keep their provider spend gates and Facebook-host tools remain default-deny.
 3. [x] Add default-deny tool policy for all high-cost tools exposed to untrusted Facebook-originated users.
 4. [x] Add per-user daily spend caps for paired Facebook users.
 5. [x] Add global Facebook daily spend cap.
-6. [x] Write expensive provider calls to a cost ledger with pseudonymous `userKey`, provider/model, estimated cost, final cost, and status. Image, audio transcription, and generated-video attempts now write metadata-only entries and reconcile success/failure status; image plus optionally-priced audio/video attempts populate final cost when the estimate is complete.
+6. [x] Write provider calls to a pseudonymous ledger. Image attempts record no estimated or final price; optionally-priced audio/video attempts keep their existing controls.
 7. [x] Add richer provider usage dimensions to cost-ledger entries where providers expose safe metadata.
 8. [x] Add owner dashboard for Facebook spend by day/month, account/page, `userKey`, blocked attempts, duplicate skips, and provider failures. The admin-only cost summary route includes stored spend plus open/failed/blocked/status counts and Messenger generation queue health; `/admin/cost-dashboard` renders an aggregate owner view with duplicate-skip and delivery-failure counts without raw identifiers or prompt content. Richer drilldowns are deferred.
-9. [x] Add user-facing balance/spend overview before paid rollout. Initial free-plan image balance, rate-limit context, blocked count, and upgrade prompt are visible in the customer portal; paid spend and subscription billing are deferred.
+9. [x] Add a user-facing usage overview before paid rollout. The image balance, rate-limit context, blocked count, and upgrade prompt are visible in the customer portal; paid subscription billing is deferred.
 10. [x] Add monthly cost cap enforcement.
 11. [x] Send cost alerts to owner for spend-cap blocks.
 12. [x] Add external uptime monitor for `/healthz`.
@@ -613,20 +608,28 @@ Open cost-control work:
 - [x] P1 | owner: image-gen-runtime | Handle cost-ledger per-period overflow explicitly. Emit structured warnings + metric and report dropped-entry count when cap truncation occurs.
 - [x] P1 | owner: image-gen-runtime | Make cost-ledger append/update writes resilient under same-period concurrent updates using single-writer or safe retry semantics.
 - [x] P2 | owner: image-gen-runtime | Make provider-attempt updates period-safe across midnight retries by reconciling by entry identity rather than current-period-only assumptions.
-- [x] P2 | owner: image-gen-runtime, storage-platform | Reduce worst-case delete-my-data ledger cleanup latency by making `deleteCostLedgerEntriesForUser` bounded/performance-safe for high-history users. Cleanup now scans the fixed 90-day retention window, skips locks for periods without matching user entries, and emits metadata-only completion counts.
+- [x] P2 | owner: image-gen-runtime, storage-platform | Keep cost-ledger
+      retention and deletion exact: each UTC bucket expires at its original fixed
+      day-end + 90-day boundary, updates never extend it, and delete-my-data scans
+      all 91 possibly live day buckets while skipping locks without matching data.
 
 Historical branch review note:
 
-- [x] Reviewed stale branch `chore/image-gen-cost-ledger` on 2026-06-23. Do not merge or revive it wholesale: it predates the current portal/privacy work and would remove newer customer-portal, privacy-request, and OpenClaw login changes. Useful ideas from that branch are already represented on `main`: Redis legacy cost-ledger compatibility, deletion retry safety, admin cost-summary validation, Facebook inbound tool-policy config merging, delete-data attachment forwarding, and stricter positive USD cost estimate parsing.
+- [x] Reviewed stale branch `chore/image-gen-cost-ledger` on 2026-06-23. Do not merge or revive it wholesale: it predates the current portal/privacy work and would remove newer customer-portal, privacy-request, and OpenClaw login changes. Useful ideas from that branch are already represented on `main`: Redis legacy ledger compatibility, deletion retry safety, admin summaries, Facebook inbound tool-policy config merging, and delete-data attachment forwarding.
 
-Quota drift investigation note:
+### Fototeller-fout - 2026-08-23
 
-- Root cause: free-tier product targets were documented before runtime defaults changed, while older constants and tests still encoded `3` image/audio attempts and `10` bot text messages. Image and audio provider retry loops also reported only one quota commit for a multi-attempt provider operation.
-- Affected paths reviewed: Messenger primary image generation, queued/background generation, internal Messenger image requests, duplicate delivery recovery, WhatsApp text-to-image and source-image edits, audio transcription, generated video, bot text rate limiting, global daily image/video caps, and provider-attempt callbacks.
-- Bypasses closed: image and audio provider retries now require quota before each external provider call; preflight failures still release reservations without burning credits; duplicate completed deliveries still return before quota reserve/commit.
-- Duplicated logic found: state quota in `messengerQuota.ts`, channel-neutral wrappers in `limits/generationQuota.ts`, global caps/concurrency in `generationGuard.ts`, feature rate limits in `featureRateLimit.ts`, and legacy DB daily quota helpers in `server/db.ts`.
-- Concurrency risks remaining: state-store reservation locks reduce same-sender overlap, but global budget counters can overcount after failed attempts and reservation TTL expiry can still strand in-flight work during long provider calls. The root Facebook plugin can now share its webhook dedupe and gateway caps through Redis, but acknowledged webhook work is not durably queued; keep one gateway replica until that queue/outbox exists.
-- Follow-up: replace scattered quota constants/counters with one channel-neutral usage ledger/reservation service keyed by channel, sender/user identity, workspace/tenant, operation type, provider/model, reservation token, attempt status, estimated/final cost, and UTC period.
+- [x] Mensen delen niet langer één fototeller.
+- [x] Elke persoon krijgt maximaal 5 geslaagde foto's per dag en 20 per maand.
+- [x] Een mislukte foto telt niet. Dezelfde opdracht telt nooit dubbel.
+- [x] Na een foto ziet de persoon hoeveel er vandaag en deze maand nog over is.
+- [x] Een gewone fout zegt niet meer ten onrechte dat het maandbudget op is.
+- [x] De app raadt geen fotoprijzen meer. De aparte harde OpenAI-maandgrens van
+      €10 blijft de laatste noodrem.
+- [x] Automatische tests controleren de teller, aparte klanten, wissen en
+      opnieuw proberen.
+- [ ] De laatste bevestiging gebeurt met echte Messenger-foto's na de veilige
+      livegang.
 
 ### Opslag & platform
 
@@ -644,13 +647,13 @@ Quota drift investigation note:
 - [ ] Approve the draft Startpilot legal copy, accounting treatment, refund/withdrawal terms, invoice treatment, and financial-retention policy before live payment.
 - [ ] Run and record all Mollie sandbox cases in `docs/MOLLIE_TEST_RESULTS.md`.
 - [ ] Add real-MySQL concurrency/integrity tests for intents, webhooks, ledger, outbox, and duplicate subscription prevention.
-- [ ] Before paid Images 2.0 activation, smoke-test direct GPT Image 2 generation and editing and set a conservative `OPENAI_IMAGE_ESTIMATED_COST_USD` that covers output plus prompt/high-fidelity source-image input until actual usage reconciliation is implemented.
-- [ ] Replace the non-atomic USD spend-cap summary-check/ledger-append sequence with a concurrency-tested atomic reservation/commit/release path; simultaneous workers can currently pass the same remaining budget, so paid activation stays NO-GO until this is closed.
+- [ ] Before paid Images 2.0 activation, smoke-test direct GPT Image 2 generation and editing, verify the fixed 5/day and 20/month customer counters, and separately confirm the provider-account hard limit.
+- [x] Keep the optional audio/video USD spend caps atomic across workers. Image admission never uses these caps.
 - [ ] Add a durable, tenant-scoped finalize retry/outbox for AI-answer reservations so an ambiguous gateway-to-image-gen outage after successful Messenger delivery cannot let a reservation expire and undercount one answer.
 - [ ] Partition the Redis image-generation queue by owning workspace before multi-tenant paid onboarding; queued PSID, prompt, and source-image jobs must never share an unscoped global customer queue.
 - [ ] Define a separate immutable subscription-history/event model if historical rows become a product or accounting requirement; `billing_subscriptions` currently stores one mutable current-state row per workspace and Mollie mode.
 - [x] Map inbound channel/Page identity uniquely to a workspace and enforce `workspace_entitlements` before the actual image-provider attempt; the database claim now fails closed instead of overwriting another workspace's Page credentials.
-- [x] Count one Startpilot image unit when the first provider attempt for a Messenger generation job starts; provider retries remain individually cost-ledgered and budget-gated but do not consume extra customer pilot generations.
+- [x] Count one Startpilot image unit when the first provider attempt for a Messenger generation job starts; provider retries remain individually audited but do not consume extra customer pilot generations.
 - [ ] Prove the Page-to-workspace mapping and both paid quota gates in a production-like end-to-end test after the duplicate-Page preflight and migration, without any free-tier fallback.
 - [ ] Replace the isolated single-workspace billing worker with a durable tenant-partitioned scheduler that never performs cross-tenant reads.
 - [ ] Extract billing outbox queue mechanics from provider handlers after the billing behavior is stable; keep this follow-up separate from launch-critical correctness changes.
@@ -667,10 +670,10 @@ Quota drift investigation note:
 - [x] Document operator-facing prompt routing and OpenClaw-vs-image-generation fallback behavior separately from the completed customer-facing bot instructions. See `../../../../docs/operator-prompt-routing.md`.
 - [x] Provide cost monitoring dashboard. Admin-only aggregate view exists at `/admin/cost-dashboard` with duplicate-skip and delivery-failure counts; production dashboard polish and failure drilldowns are deferred.
 - [x] Record the 2026-07-09 CodeQL/customer-preview follow-up so the merged
-  branches are reviewable after the fact:
+      branches are reviewable after the fact:
   - CodeQL is intentionally configured through the checked-in advanced workflow
     at `.github/workflows/codeql.yml`, with `languages:
-    javascript-typescript`; GitHub CodeQL default setup must stay disabled or
+javascript-typescript`; GitHub CodeQL default setup must stay disabled or
     GitHub rejects advanced-workflow SARIF uploads.
   - CodeQL pull request and `main` push triggers intentionally cover root
     plugin JS/TS, `apps/**` JS/TS, `scripts/**` JS/TS, lockfiles, and

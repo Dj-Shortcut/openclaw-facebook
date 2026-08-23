@@ -57,58 +57,57 @@ document.
 ## Open blockers
 
 - [x] Product owner selected the bounded `EUR 19.00` one-time Startpilot offer
-  encoded in `apps/image-gen/server/_core/billing/catalog.ts`.
+      encoded in `apps/image-gen/server/_core/billing/catalog.ts`.
 - [ ] A verified billing-country/customer-profile control replaces reliance on
-  the fixed BE checkout contract so Belgium-only eligibility cannot be faked by
-  a client.
+      the fixed BE checkout contract so Belgium-only eligibility cannot be faked by
+      a client.
 - [ ] A real Mollie Test profile proves Bancontact is enabled for the one-time
-  Startpilot checkout. SEPA Direct Debit remains deferred with the unpublished
-  subscription offer.
+      Startpilot checkout. SEPA Direct Debit remains deferred with the unpublished
+      subscription offer.
 - [ ] Every scenario in `MOLLIE_TEST_RESULTS.md` is run with a `test_` key and
-  evidence is recorded without customer data or secrets.
+      evidence is recorded without customer data or secrets.
 - [ ] MySQL integration tests prove transaction rollback, unique constraints,
-  checkout races, duplicate webhooks, outbox leases, and subscription races.
+      checkout races, duplicate webhooks, outbox leases, and subscription races.
 - [ ] AI-answer finalization is durable or conservatively resolved after a
-  successful Messenger delivery. The current single best-effort finalize call
-  can undercount repeatedly during an extended gateway-to-image-gen outage and
-  therefore must not be enabled for paid customers yet.
+      successful Messenger delivery. The current single best-effort finalize call
+      can undercount repeatedly during an extended gateway-to-image-gen outage and
+      therefore must not be enabled for paid customers yet.
 - [ ] Paid Images 2.0 is smoke-tested through the explicit GPT Image 2 Image
-  API path, and `OPENAI_IMAGE_ESTIMATED_COST_USD` conservatively covers output,
-  prompt, and high-fidelity source-image input until actual provider usage is
-  reconciled into the cost ledger.
+      API path. Customer admission remains the fixed 5/day and 20/month photo
+      quota; the operator separately verifies the provider-account hard limit.
 - [ ] USD spend-cap admission is atomically reserved across concurrent workers.
-  The current summary-check followed by ledger append can admit simultaneous
-  attempts past a configured cap; paid activation remains **NO-GO** until an
-  atomic reservation/commit/release path is implemented and concurrency-tested.
+      The current summary-check followed by ledger append can admit simultaneous
+      attempts past a configured cap; paid activation remains **NO-GO** until an
+      atomic reservation/commit/release path is implemented and concurrency-tested.
 - [ ] End-to-end production-like tests prove that one inbound Messenger Page
-  maps uniquely to its workspace and that the resulting entitlement reaches the
-  real AI-answer and image-provider quota gates without a free-tier fallback.
+      maps uniquely to its workspace and that the resulting entitlement reaches the
+      real AI-answer and image-provider quota gates without a free-tier fallback.
 - [ ] The Redis image-generation queue is explicitly workspace-partitioned;
-  PSID, prompt, and source-image jobs must never share an unscoped global
-  tenant queue before more than one customer workspace is onboarded.
+      PSID, prompt, and source-image jobs must never share an unscoped global
+      tenant queue before more than one customer workspace is onboarded.
 - [ ] Accounting approves sequential proof/invoice numbering, Belgian retention,
-  Mollie fee/settlement import, and the small-enterprise VAT wording.
+      Mollie fee/settlement import, and the small-enterprise VAT wording.
 - [ ] A tenant-partitioned durable scheduler replaces the current
-  single-workspace worker configuration and proves restart recovery for every
-  tenant without cross-tenant reads.
+      single-workspace worker configuration and proves restart recovery for every
+      tenant without cross-tenant reads.
 - [ ] Real customer-warning and operator-incident delivery is configured and
-  tested; durable failed outbox records alone are not notification.
+      tested; durable failed outbox records alone are not notification.
 - [ ] Legal review approves the one-time pilot terms, withdrawal/refund,
-  privacy, invoice, and financial-retention copy. The current copy is an
-  explicitly pre-launch draft, not legal approval.
+      privacy, invoice, and financial-retention copy. The current copy is an
+      explicitly pre-launch draft, not legal approval.
 - [ ] Settlement and balance reconciliation is proven in live-read-only mode;
-  Mollie Business Operations endpoints are not available in Test Mode.
+      Mollie Business Operations endpoints are not available in Test Mode.
 - [ ] A database migration backup, rollback rehearsal, monitoring alerts, and
-  operator incident drill are complete.
+      operator incident drill are complete.
 - [x] Fresh-database migration for the current guarded `0010` revision passed
-  MySQL 8.4 GitHub CI run `30715666890` / job `91410691295` on 2026-08-01.
-  This is fresh-database CI evidence only, not an upgrade-path or production
-  migration authorization.
+      MySQL 8.4 GitHub CI run `30715666890` / job `91410691295` on 2026-08-01.
+      This is fresh-database CI evidence only, not an upgrade-path or production
+      migration authorization.
 - [ ] Upgrade-path migration through `0010` from the exact supported
-  production-like schema is **NOT RUN / NO-GO**. Production migration is also
-  **NOT RUN**.
+      production-like schema is **NOT RUN / NO-GO**. Production migration is also
+      **NOT RUN**.
 - [ ] All remote deployment secrets and configuration are checked for legacy
-  payment-provider values and those are removed by an authorized operator.
+      payment-provider values and those are removed by an authorized operator.
 
 ## Manual launch checklist
 
@@ -134,14 +133,15 @@ document.
    ```
 
    The result must be empty before `0010` adds the tenant-boundary unique key.
+
 3. Set `MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED=true` on image-gen and
    `LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED=true` on the gateway, verify the
    reserve/commit/release flow, and only then set `MOLLIE_BILLING_ENABLED=true`
    in that isolated test environment,
    using a `test_` key, `MOLLIE_BILLING_WORKER_WORKSPACE_ID` for the isolated
    test workspace, and approved non-customer test data.
-4. Configure a conservative `OPENAI_IMAGE_ESTIMATED_COST_USD`, run an explicit
-   GPT Image 2 generation and edit smoke with approved test data, then run
+4. Verify the provider-account hard limit, run an explicit GPT Image 2
+   generation and edit smoke with approved test data, then run
    TypeScript, unit, route-guard, MySQL integration, and Mollie sandbox tests.
 5. In the Mollie profile, enable and verify Bancontact for the Startpilot.
 6. Verify the configured webhook is HTTPS and has the exact classic path.

@@ -83,6 +83,7 @@ describe("photo-first onboarding", () => {
     process.env.SOURCE_IMAGE_ALLOWED_HOSTS =
       "img.example,lookaside.fbsbx.com,leaderbot-fb-image-gen.fly.dev";
     process.env.APP_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
+    process.env.PUBLIC_BASE_URL = "https://leaderbot-fb-image-gen.fly.dev";
     delete process.env.FACE_MEMORY_RETENTION_DAYS;
     sendButtonTemplateMock.mockClear();
     sendImageMock.mockClear();
@@ -121,6 +122,7 @@ describe("photo-first onboarding", () => {
     setSourceImageRequestForTests(null);
     setSourceImageDnsLookupForTests(null);
     vi.unstubAllGlobals();
+    delete process.env.PUBLIC_BASE_URL;
     if (originalEnableFaceMemory === undefined) {
       delete process.env.ENABLE_FACE_MEMORY;
     } else {

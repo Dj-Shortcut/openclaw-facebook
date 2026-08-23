@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { and, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 import {
   billingSchedulerTenants,
+  channelConnections,
   workspaceEntitlements,
   workspaceEntitlementUsage,
   workspaceEntitlementUsageReservations,
@@ -146,6 +147,15 @@ export async function reserveStartpilotAiAnswerUsage(input: {
   assertPositiveId(input.workspaceId, "workspace");
   assertPositiveId(input.entitlementId, "entitlement");
   assertOpaqueIdempotencyKey(input.idempotencyKey);
+  const channelConnectionId = input.channelConnectionId ?? null;
+  const bindingEpoch = input.bindingEpoch ?? null;
+  if ((channelConnectionId === null) !== (bindingEpoch === null)) {
+    throw new Error("incomplete AI answer reservation binding");
+  }
+  if (channelConnectionId !== null && bindingEpoch !== null) {
+    assertPositiveId(channelConnectionId, "channel connection");
+    assertPositiveId(bindingEpoch, "binding epoch");
+  }
   if (!/^[0-9a-f-]{36}$/i.test(input.ownerToken)) {
     throw new Error("invalid AI answer reservation owner");
   }
@@ -217,6 +227,23 @@ export async function reserveStartpilotAiAnswerUsage(input: {
         (existing[0].bindingEpoch ?? null) !== (input.bindingEpoch ?? null))
     ) {
       return { allowed: false as const, reason: "idempotency_reused" as const };
+    }
+    if (channelConnectionId !== null && bindingEpoch !== null) {
+      const bindings = await tx
+        .select({ id: channelConnections.id })
+        .from(channelConnections)
+        .where(
+          and(
+            eq(channelConnections.id, channelConnectionId),
+            eq(channelConnections.workspaceId, input.workspaceId),
+            eq(channelConnections.bindingEpoch, bindingEpoch)
+          )
+        )
+        .limit(1)
+        .for("update");
+      if (!bindings[0]) {
+        throw new Error("AI answer reservation binding changed");
+      }
     }
     if (existing[0]?.status === "reserved") {
       if (
@@ -302,8 +329,8 @@ export async function reserveStartpilotAiAnswerUsage(input: {
       workspaceId: input.workspaceId,
       mode: input.mode,
       entitlementId: input.entitlementId,
-      channelConnectionId: input.channelConnectionId ?? null,
-      bindingEpoch: input.bindingEpoch ?? null,
+      channelConnectionId,
+      bindingEpoch,
       kind: "ai_answer",
       status: "reserved",
       idempotencyKey: input.idempotencyKey,

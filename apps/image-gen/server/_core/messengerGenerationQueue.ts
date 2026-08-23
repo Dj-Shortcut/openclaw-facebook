@@ -19,10 +19,14 @@ const LEGACY_MESSENGER_GENERATION_PROCESSING_KEY =
   "messenger-generation-jobs:processing";
 const LEGACY_MESSENGER_GENERATION_DEAD_LETTER_KEY =
   "messenger-generation-jobs:dead";
-const MESSENGER_GENERATION_PARTITION_INDEX_KEY =
+const MESSENGER_GENERATION_V1_PARTITION_INDEX_KEY =
   "messenger-generation-job-partitions:v1";
-const MESSENGER_GENERATION_DRAIN_CURSOR_KEY =
+const MESSENGER_GENERATION_V2_PARTITION_INDEX_KEY =
+  "messenger-generation-job-partitions:v2";
+const MESSENGER_GENERATION_V1_DRAIN_CURSOR_KEY =
   "messenger-generation-job-drain-cursor:v1";
+const MESSENGER_GENERATION_DRAIN_CURSOR_KEY =
+  "messenger-generation-job-drain-cursor:v2";
 const MESSENGER_GENERATION_SUBJECT_PARTITIONS_PREFIX =
   "messenger-generation-subject-partitions:v1";
 const MESSENGER_GENERATION_SUBJECT_ERASED_PREFIX =
@@ -32,16 +36,24 @@ const MESSENGER_GENERATION_PRIVACY_INDEX_VERSION_KEY =
 const MESSENGER_GENERATION_PRIVACY_INDEX_VERSION = "v2";
 const DEFAULT_JOB_LEASE_BUFFER_SECONDS = 60;
 const OPENAI_TIMEOUT_MS_DEFAULT = 180_000;
+const OPENAI_TIMEOUT_MS_MAX = 5 * 60_000;
 const OPENAI_RETRY_LIMIT_DEFAULT = 1;
 const OPENAI_RETRY_BASE_MS_DEFAULT = 500;
 const DEFAULT_MAX_JOB_ATTEMPTS = 3;
 const DEFAULT_DRAIN_BATCH_SIZE = 10;
 const DEFAULT_ACCEPTED_TTL_SECONDS = 7 * 24 * 60 * 60;
 const DEFAULT_DRAIN_RETRY_MS = 1_000;
+const MAX_LEASE_HEARTBEAT_INTERVAL_MS = 30_000;
+const MIN_LEASE_HEARTBEAT_INTERVAL_MS = 100;
 let drainPromise: Promise<void> | null = null;
 let drainRequested = false;
 let drainRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let didWarnLegacyCrossSlot = false;
+
+type MessengerGenerationQueueVersion = "v1" | "v2";
+
+const MESSENGER_GENERATION_QUEUE_VERSIONS: readonly MessengerGenerationQueueVersion[] =
+  ["v2", "v1"];
 
 const ATOMIC_PARTITION_ENQUEUE_SCRIPT = `
   local acceptedType = redis.call("TYPE", KEYS[1]).ok
@@ -70,9 +82,20 @@ const ATOMIC_PARTITION_ENQUEUE_SCRIPT = `
   if processingType ~= "none" and processingType ~= "list" then
     return redis.error_reply("processing key is not a list")
   end
+  local alternateAcceptedType = redis.call("TYPE", KEYS[7]).ok
+  if alternateAcceptedType ~= "none" and alternateAcceptedType ~= "string" then
+    return redis.error_reply("alternate accepted key is not a string")
+  end
 
   if redis.call("EXISTS", KEYS[5]) == 1 then
     return -4
+  end
+
+  -- During the v1 -> v2 bridge rollout, producers may temporarily write to
+  -- either namespace. Both accepted markers share this tenant hash slot, so
+  -- this check and the marker write below remain atomic across versions.
+  if redis.call("EXISTS", KEYS[7]) == 1 then
+    return -6
   end
 
   if redis.call("EXISTS", KEYS[1]) == 1 then
@@ -171,6 +194,29 @@ const ATOMIC_PARTITION_RESERVE_SCRIPT = `
     redis.call("LPOP", KEYS[2])
     redis.call("RPUSH", KEYS[1], raw)
     return redis.error_reply(leased.err)
+  end
+  return 1
+`;
+
+const ATOMIC_PARTITION_RENEW_LEASE_SCRIPT = `
+  local leaseType = redis.call("TYPE", KEYS[1]).ok
+  if leaseType ~= "none" and leaseType ~= "string" then
+    return redis.error_reply("lease key is not a string")
+  end
+
+  local processingType = redis.call("TYPE", KEYS[2]).ok
+  if processingType ~= "none" and processingType ~= "list" then
+    return redis.error_reply("processing key is not a list")
+  end
+
+  if redis.call("GET", KEYS[1]) ~= ARGV[1] then
+    return 0
+  end
+  if not redis.call("LPOS", KEYS[2], ARGV[2]) then
+    return -1
+  end
+  if redis.call("EXPIRE", KEYS[1], ARGV[3]) ~= 1 then
+    return 0
   end
   return 1
 `;
@@ -390,6 +436,7 @@ type GenerationQueueScope =
     }
   | {
       kind: "partition";
+      queueVersion: MessengerGenerationQueueVersion;
       tenantPartition: string;
       queuedKey: string;
       processingKey: string;
@@ -404,6 +451,16 @@ type PartitionedGenerationQueueScope = Extract<
 type OwnedReservedGenerationJob = ReservedGenerationJob & {
   leaseToken: string | null;
 };
+
+type GenerationJobLeaseHeartbeatStatus =
+  "owned" | "lost_ownership" | "renewal_failed";
+
+type GenerationJobLeaseHeartbeat = {
+  stop(): Promise<GenerationJobLeaseHeartbeatStatus>;
+};
+
+const activeGenerationJobLeaseHeartbeats =
+  new Set<GenerationJobLeaseHeartbeat>();
 
 const LEGACY_GENERATION_QUEUE_SCOPE: GenerationQueueScope = {
   kind: "legacy",
@@ -460,11 +517,15 @@ function getMessengerGenerationPartitionSecret(): string | null {
 }
 
 function getPartitionedGenerationQueueScope(
-  tenantPartition: string
+  tenantPartition: string,
+  queueVersion: MessengerGenerationQueueVersion
 ): PartitionedGenerationQueueScope {
-  const keyPrefix = `messenger-generation-jobs:{${tenantPartition}}`;
+  const baseKeyPrefix = `messenger-generation-jobs:{${tenantPartition}}`;
+  const keyPrefix =
+    queueVersion === "v1" ? baseKeyPrefix : `${baseKeyPrefix}:v2`;
   return {
     kind: "partition",
+    queueVersion,
     tenantPartition,
     queuedKey: `${keyPrefix}:queued`,
     processingKey: `${keyPrefix}:processing`,
@@ -472,17 +533,51 @@ function getPartitionedGenerationQueueScope(
   };
 }
 
+function getGenerationPartitionIndexKey(
+  queueVersion: MessengerGenerationQueueVersion
+): string {
+  return queueVersion === "v1"
+    ? MESSENGER_GENERATION_V1_PARTITION_INDEX_KEY
+    : MESSENGER_GENERATION_V2_PARTITION_INDEX_KEY;
+}
+
+function getMessengerGenerationQueueWriteVersion(): MessengerGenerationQueueVersion {
+  const configured = process.env.MESSENGER_GENERATION_QUEUE_WRITE_VERSION;
+  if (configured === "v1" || configured === "v2") {
+    return configured;
+  }
+  if (configured !== undefined || process.env.NODE_ENV === "production") {
+    throw new Error(
+      "MESSENGER_GENERATION_QUEUE_WRITE_VERSION must be exactly v1 or v2"
+    );
+  }
+  return "v2";
+}
+
+export function assertMessengerGenerationQueueWriteVersionConfig(): void {
+  getMessengerGenerationQueueWriteVersion();
+}
+
 async function getGenerationQueueScopes(
   redis: RedisLike
 ): Promise<GenerationQueueScope[]> {
-  const tenantPartitions = await redis.smembers(
-    MESSENGER_GENERATION_PARTITION_INDEX_KEY
+  const indexedPartitions = await Promise.all(
+    MESSENGER_GENERATION_QUEUE_VERSIONS.map(async queueVersion => ({
+      queueVersion,
+      tenantPartitions: await redis.smembers(
+        getGenerationPartitionIndexKey(queueVersion)
+      ),
+    }))
   );
   return [
-    ...tenantPartitions
-      .filter(isMessengerGenerationTenantPartition)
-      .sort()
-      .map(getPartitionedGenerationQueueScope),
+    ...indexedPartitions.flatMap(({ queueVersion, tenantPartitions }) =>
+      tenantPartitions
+        .filter(isMessengerGenerationTenantPartition)
+        .sort()
+        .map(tenantPartition =>
+          getPartitionedGenerationQueueScope(tenantPartition, queueVersion)
+        )
+    ),
     LEGACY_GENERATION_QUEUE_SCOPE,
   ];
 }
@@ -556,7 +651,7 @@ async function pruneEmptyGenerationQueueScope(
   }
 
   await redis.srem(
-    MESSENGER_GENERATION_PARTITION_INDEX_KEY,
+    getGenerationPartitionIndexKey(scope.queueVersion),
     scope.tenantPartition
   );
 
@@ -565,7 +660,7 @@ async function pruneEmptyGenerationQueueScope(
   // opaque member if an enqueue raced the empty observation.
   if (!(await isEmpty())) {
     await redis.sadd(
-      MESSENGER_GENERATION_PARTITION_INDEX_KEY,
+      getGenerationPartitionIndexKey(scope.queueVersion),
       scope.tenantPartition
     );
   }
@@ -635,11 +730,15 @@ function getPartitionedJob(job: MessengerGenerationJob): {
       pageId,
       tenantPartition,
     },
-    scope: getPartitionedGenerationQueueScope(tenantPartition),
+    scope: getPartitionedGenerationQueueScope(
+      tenantPartition,
+      getMessengerGenerationQueueWriteVersion()
+    ),
   };
 }
 
 export function assertMessengerGenerationQueueConfig(): void {
+  assertMessengerGenerationQueueWriteVersionConfig();
   const queueRequested = isExplicitlyEnabled(
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED
   );
@@ -704,13 +803,22 @@ export async function ensureMessengerGenerationQueueReady(): Promise<void> {
       "Legacy Messenger generation queue must be purged before startup"
     );
   }
-  const partitions = await redis.smembers(
-    MESSENGER_GENERATION_PARTITION_INDEX_KEY
+  const indexedPartitions = await Promise.all(
+    MESSENGER_GENERATION_QUEUE_VERSIONS.map(async queueVersion => ({
+      queueVersion,
+      partitions: await redis.smembers(
+        getGenerationPartitionIndexKey(queueVersion)
+      ),
+    }))
+  );
+  const partitionCount = indexedPartitions.reduce(
+    (total, entry) => total + entry.partitions.length,
+    0
   );
   const privacyIndexVersion = await redis.get(
     MESSENGER_GENERATION_PRIVACY_INDEX_VERSION_KEY
   );
-  if (privacyIndexVersion === null && partitions.length === 0) {
+  if (privacyIndexVersion === null && partitionCount === 0) {
     await redis.set(
       MESSENGER_GENERATION_PRIVACY_INDEX_VERSION_KEY,
       MESSENGER_GENERATION_PRIVACY_INDEX_VERSION
@@ -722,21 +830,26 @@ export async function ensureMessengerGenerationQueueReady(): Promise<void> {
       "Messenger generation queues require the privacy-index purge rehearsal"
     );
   }
-  for (const tenantPartition of partitions) {
-    if (!isMessengerGenerationTenantPartition(tenantPartition)) {
-      throw new Error("Messenger generation partition index is invalid");
-    }
-    const scope = getPartitionedGenerationQueueScope(tenantPartition);
-    const clean = await evalPartitionScriptWithRetry(
-      redis,
-      ASSERT_NO_RAW_PARTITION_PAYLOADS_SCRIPT,
-      [scope.queuedKey, scope.processingKey, scope.deadLetterKey],
-      []
-    );
-    if (clean !== 1) {
-      throw new Error(
-        "Raw Messenger generation payloads must be purged before startup"
+  for (const { queueVersion, partitions } of indexedPartitions) {
+    for (const tenantPartition of partitions) {
+      if (!isMessengerGenerationTenantPartition(tenantPartition)) {
+        throw new Error("Messenger generation partition index is invalid");
+      }
+      const scope = getPartitionedGenerationQueueScope(
+        tenantPartition,
+        queueVersion
       );
+      const clean = await evalPartitionScriptWithRetry(
+        redis,
+        ASSERT_NO_RAW_PARTITION_PAYLOADS_SCRIPT,
+        [scope.queuedKey, scope.processingKey, scope.deadLetterKey],
+        []
+      );
+      if (clean !== 1) {
+        throw new Error(
+          "Raw Messenger generation payloads must be purged before startup"
+        );
+      }
     }
   }
 }
@@ -759,7 +872,10 @@ export async function purgeUnsafeMessengerGenerationQueues(): Promise<void> {
     redis,
     `${MESSENGER_GENERATION_SUBJECT_ERASED_PREFIX}:*`
   );
-  await redis.del(MESSENGER_GENERATION_PARTITION_INDEX_KEY);
+  await redis.del(MESSENGER_GENERATION_V1_PARTITION_INDEX_KEY);
+  await redis.del(MESSENGER_GENERATION_V2_PARTITION_INDEX_KEY);
+  await redis.del(MESSENGER_GENERATION_V1_DRAIN_CURSOR_KEY);
+  await redis.del(MESSENGER_GENERATION_DRAIN_CURSOR_KEY);
   await redis.set(
     MESSENGER_GENERATION_PRIVACY_INDEX_VERSION_KEY,
     MESSENGER_GENERATION_PRIVACY_INDEX_VERSION
@@ -788,7 +904,7 @@ async function deleteRedisKeysByPattern(
   } while (cursor !== "0");
 }
 
-function getGenerationJobLeaseSeconds(): number {
+export function getMessengerGenerationJobLeaseSeconds(): number {
   const derivedMinimum = getDefaultGenerationJobLeaseSeconds();
   const configured = Number(process.env.MESSENGER_GENERATION_JOB_LEASE_SECONDS);
   return Number.isFinite(configured) && configured > 0
@@ -800,7 +916,7 @@ function getDefaultGenerationJobLeaseSeconds(): number {
   const configuredOpenAiTimeoutMs = Number(process.env.OPENAI_IMAGE_TIMEOUT_MS);
   const openAiTimeoutMs =
     Number.isFinite(configuredOpenAiTimeoutMs) && configuredOpenAiTimeoutMs > 0
-      ? configuredOpenAiTimeoutMs
+      ? Math.min(configuredOpenAiTimeoutMs, OPENAI_TIMEOUT_MS_MAX)
       : OPENAI_TIMEOUT_MS_DEFAULT;
   const configuredRetryLimit = Number(process.env.OPENAI_IMAGE_MAX_RETRIES);
   const retryLimit =
@@ -848,11 +964,19 @@ function getGenerationJobReference(job: MessengerGenerationJob): string {
   return `job-${getGenerationJobKeyToken(job)}`;
 }
 
+function getGenerationQueueKeyPrefix(
+  scope: PartitionedGenerationQueueScope
+): string {
+  return scope.queueVersion === "v1"
+    ? `messenger-generation-jobs:{${scope.tenantPartition}}`
+    : `messenger-generation-jobs:{${scope.tenantPartition}}:v2`;
+}
+
 function getGenerationJobContentKey(
   scope: PartitionedGenerationQueueScope,
   job: MessengerGenerationJob
 ): string {
-  return `messenger-generation-jobs:{${scope.tenantPartition}}:content:${getGenerationJobKeyToken(job)}`;
+  return `${getGenerationQueueKeyPrefix(scope)}:content:${getGenerationJobKeyToken(job)}`;
 }
 
 function getGenerationSubjectIndexKey(
@@ -860,7 +984,7 @@ function getGenerationSubjectIndexKey(
   userKey: string
 ): string {
   const digest = createHash("sha256").update(userKey).digest("hex");
-  return `messenger-generation-jobs:{${scope.tenantPartition}}:subject:${digest}`;
+  return `${getGenerationQueueKeyPrefix(scope)}:subject:${digest}`;
 }
 
 function getGenerationSubjectDigest(input: {
@@ -917,7 +1041,7 @@ function getGenerationSubjectTombstoneKey(
   scope: PartitionedGenerationQueueScope,
   userKey: string
 ): string {
-  return `messenger-generation-jobs:{${scope.tenantPartition}}:erased:${createHash("sha256").update(userKey).digest("hex")}`;
+  return `${getGenerationQueueKeyPrefix(scope)}:erased:${createHash("sha256").update(userKey).digest("hex")}`;
 }
 
 function getGenerationJobLeaseKey(
@@ -928,19 +1052,30 @@ function getGenerationJobLeaseKey(
     return `messenger-generation-job-lease:${job.reqId}`;
   }
 
-  return `messenger-generation-jobs:{${scope.tenantPartition}}:lease:${getGenerationJobKeyToken(job)}`;
+  return `${getGenerationQueueKeyPrefix(scope)}:lease:${getGenerationJobKeyToken(job)}`;
 }
 
 function getGenerationJobAcceptedKey(
   scope: PartitionedGenerationQueueScope,
   job: MessengerGenerationJob
 ): string {
-  return `messenger-generation-jobs:{${scope.tenantPartition}}:accepted:${getGenerationJobKeyToken(job)}`;
+  return `${getGenerationQueueKeyPrefix(scope)}:accepted:${getGenerationJobKeyToken(job)}`;
+}
+
+function getAlternateGenerationJobAcceptedKey(
+  scope: PartitionedGenerationQueueScope,
+  job: MessengerGenerationJob
+): string {
+  const alternateVersion = scope.queueVersion === "v1" ? "v2" : "v1";
+  return getGenerationJobAcceptedKey(
+    getPartitionedGenerationQueueScope(scope.tenantPartition, alternateVersion),
+    job
+  );
 }
 
 function getGenerationJobAcceptedSeconds(): number {
   const minimumSeconds =
-    getGenerationJobLeaseSeconds() * getGenerationJobMaxAttempts();
+    getMessengerGenerationJobLeaseSeconds() * getGenerationJobMaxAttempts();
   const configured = Number(
     process.env.MESSENGER_GENERATION_ACCEPTED_TTL_SECONDS
   );
@@ -954,7 +1089,7 @@ function getGenerationJobAcceptedSeconds(): number {
 function getGenerationJobContentSeconds(): number {
   const maximumSeconds = 24 * 60 * 60;
   const minimumSeconds =
-    getGenerationJobLeaseSeconds() * getGenerationJobMaxAttempts();
+    getMessengerGenerationJobLeaseSeconds() * getGenerationJobMaxAttempts();
   if (minimumSeconds > maximumSeconds) {
     throw new Error(
       "Messenger generation operation deadline exceeds the 24h content retention cap"
@@ -983,14 +1118,14 @@ function getGenerationJobRemainingContentSeconds(
 }
 
 function getGenerationTransitionReceiptSeconds(): number {
-  return Math.max(60, getGenerationJobLeaseSeconds() * 2);
+  return Math.max(60, getMessengerGenerationJobLeaseSeconds() * 2);
 }
 
 function getGenerationTransitionReceiptKey(
   scope: PartitionedGenerationQueueScope,
   leaseToken: string
 ): string {
-  return `messenger-generation-jobs:{${scope.tenantPartition}}:transition:${leaseToken}`;
+  return `${getGenerationQueueKeyPrefix(scope)}:transition:${leaseToken}`;
 }
 
 function getPotentialGenerationJobLeaseKey(
@@ -1002,7 +1137,7 @@ function getPotentialGenerationJobLeaseKey(
     return getGenerationJobLeaseKey(scope, reserved.job);
   }
   const rawToken = createHash("sha256").update(raw).digest("hex");
-  return `messenger-generation-jobs:{${scope.tenantPartition}}:invalid-lease:${rawToken}`;
+  return `${getGenerationQueueKeyPrefix(scope)}:invalid-lease:${rawToken}`;
 }
 
 async function evalPartitionScriptWithRetry(
@@ -1023,6 +1158,119 @@ async function evalPartitionScriptWithRetry(
     });
     return await evaluate();
   }
+}
+
+function getGenerationJobLeaseHeartbeatIntervalMs(): number {
+  const leaseMs = getMessengerGenerationJobLeaseSeconds() * 1000;
+  const maximumSafeInterval = Math.max(
+    MIN_LEASE_HEARTBEAT_INTERVAL_MS,
+    Math.floor(leaseMs / 3)
+  );
+  const configured = Number(
+    process.env.MESSENGER_GENERATION_LEASE_HEARTBEAT_MS
+  );
+  if (Number.isFinite(configured) && configured > 0) {
+    return Math.max(
+      MIN_LEASE_HEARTBEAT_INTERVAL_MS,
+      Math.min(Math.floor(configured), maximumSafeInterval)
+    );
+  }
+  return Math.min(MAX_LEASE_HEARTBEAT_INTERVAL_MS, maximumSafeInterval);
+}
+
+function startGenerationJobLeaseHeartbeat(
+  redis: RedisLike,
+  scope: GenerationQueueScope,
+  reserved: OwnedReservedGenerationJob
+): GenerationJobLeaseHeartbeat | null {
+  if (scope.kind !== "partition" || !reserved.leaseToken) {
+    return null;
+  }
+
+  const intervalMs = getGenerationJobLeaseHeartbeatIntervalMs();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let inFlight: Promise<void> | null = null;
+  let stopped = false;
+  let status: GenerationJobLeaseHeartbeatStatus = "owned";
+  let consecutiveFailures = 0;
+
+  const schedule = (delayMs: number): void => {
+    if (stopped || status === "lost_ownership") return;
+    timer = setTimeout(() => {
+      timer = null;
+      inFlight = renew().finally(() => {
+        inFlight = null;
+      });
+    }, delayMs);
+    timer.unref?.();
+  };
+
+  const renew = async (): Promise<void> => {
+    if (stopped) return;
+    try {
+      const result = await evalPartitionScriptWithRetry(
+        redis,
+        ATOMIC_PARTITION_RENEW_LEASE_SCRIPT,
+        [getGenerationJobLeaseKey(scope, reserved.job), scope.processingKey],
+        [
+          reserved.leaseToken!,
+          reserved.raw,
+          getMessengerGenerationJobLeaseSeconds(),
+        ]
+      );
+      if (result !== 1) {
+        status = "lost_ownership";
+        safeLog("messenger_generation_job_heartbeat_ownership_lost", {
+          level: "warn",
+          reqId: reserved.job.reqId,
+          generationKind: reserved.job.generationKind ?? null,
+          queueVersion: scope.queueVersion,
+        });
+        return;
+      }
+      if (consecutiveFailures > 0) {
+        safeLog("messenger_generation_job_heartbeat_recovered", {
+          reqId: reserved.job.reqId,
+          generationKind: reserved.job.generationKind ?? null,
+          queueVersion: scope.queueVersion,
+        });
+      }
+      consecutiveFailures = 0;
+      status = "owned";
+      schedule(intervalMs);
+    } catch (error) {
+      consecutiveFailures += 1;
+      status = "renewal_failed";
+      safeLog("messenger_generation_job_heartbeat_failed", {
+        level: "error",
+        reqId: reserved.job.reqId,
+        generationKind: reserved.job.generationKind ?? null,
+        queueVersion: scope.queueVersion,
+        consecutiveFailures,
+        errorCode:
+          error instanceof Error ? error.constructor.name : "UnknownError",
+      });
+      schedule(Math.min(intervalMs, 1_000));
+    }
+  };
+
+  const heartbeat: GenerationJobLeaseHeartbeat = {
+    async stop() {
+      if (!stopped) {
+        stopped = true;
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+      }
+      await inFlight;
+      activeGenerationJobLeaseHeartbeats.delete(heartbeat);
+      return status;
+    },
+  };
+  activeGenerationJobLeaseHeartbeats.add(heartbeat);
+  schedule(intervalMs);
+  return heartbeat;
 }
 
 function logMessengerGenerationQueueTransition(stage: string): void {
@@ -1078,7 +1326,7 @@ export async function enqueueMessengerGenerationJob(
   );
   const enqueueAttemptToken = randomUUID();
   await redis.sadd(
-    MESSENGER_GENERATION_PARTITION_INDEX_KEY,
+    getGenerationPartitionIndexKey(partitioned.scope.queueVersion),
     partitioned.scope.tenantPartition
   );
   let accepted: number;
@@ -1100,6 +1348,10 @@ export async function enqueueMessengerGenerationJob(
             partitioned.job.userId
           ),
           partitioned.scope.processingKey,
+          getAlternateGenerationJobAcceptedKey(
+            partitioned.scope,
+            partitioned.job
+          ),
         ],
         [
           getGenerationJobAcceptedSeconds(),
@@ -1126,7 +1378,7 @@ export async function enqueueMessengerGenerationJob(
     // Fence a concurrent empty-scope prune that may have removed the member
     // after the pre-enqueue SADD but before the partition push committed.
     await redis.sadd(
-      MESSENGER_GENERATION_PARTITION_INDEX_KEY,
+      getGenerationPartitionIndexKey(partitioned.scope.queueVersion),
       partitioned.scope.tenantPartition
     );
   }
@@ -1155,6 +1407,15 @@ export async function enqueueMessengerGenerationJob(
   }
   if (accepted === -5) {
     throw new Error("Messenger generation accepted marker is inconsistent");
+  }
+  if (accepted === -6) {
+    recordMessengerDuplicateSkip();
+    safeLog("messenger_generation_job_cross_version_duplicate_ignored", {
+      reqId: job.reqId,
+      generationKind: job.generationKind ?? null,
+      writeVersion: partitioned.scope.queueVersion,
+    });
+    return false;
   }
   if (accepted !== 1) {
     throw new Error("Messenger generation enqueue returned an invalid result");
@@ -1247,19 +1508,23 @@ export async function eraseMessengerGenerationJobsForSubject(input: {
       partitions.add(partition);
     }
   }
-  // Fence every historical partition before scrubbing any one of them. A
+  const scopes = [...partitions].flatMap(tenantPartition =>
+    MESSENGER_GENERATION_QUEUE_VERSIONS.map(queueVersion =>
+      getPartitionedGenerationQueueScope(tenantPartition, queueVersion)
+    )
+  );
+  // Fence every historical partition and both queue versions before scrubbing
+  // any one of them. A
   // claimed job may still run local validation, but cannot cross its provider
   // privacy boundary once this phase completes.
-  for (const tenantPartition of partitions) {
-    const scope = getPartitionedGenerationQueueScope(tenantPartition);
+  for (const scope of scopes) {
     await redis.set(
       getGenerationSubjectTombstoneKey(scope, input.userKey),
       "erased"
     );
   }
   let total = 0;
-  for (const tenantPartition of partitions) {
-    const scope = getPartitionedGenerationQueueScope(tenantPartition);
+  for (const scope of scopes) {
     total += await scrubGenerationPartitionSubject(redis, scope, input.userKey);
   }
   return total;
@@ -1313,9 +1578,9 @@ async function scrubGenerationPartitionSubject(
       scope.deadLetterKey,
       subjectKey,
       getGenerationSubjectTombstoneKey(scope, userKey),
-      `messenger-generation-jobs:{${scope.tenantPartition}}:content:`,
-      `messenger-generation-jobs:{${scope.tenantPartition}}:lease:`,
-      `messenger-generation-jobs:{${scope.tenantPartition}}:accepted:`,
+      `${getGenerationQueueKeyPrefix(scope)}:content:`,
+      `${getGenerationQueueKeyPrefix(scope)}:lease:`,
+      `${getGenerationQueueKeyPrefix(scope)}:accepted:`,
       cursor
     );
     if (!Array.isArray(result) || result.length !== 3) {
@@ -1426,7 +1691,7 @@ async function reserveMessengerGenerationJobFrom(
       getGenerationJobLeaseKey(scope, reserved.job),
       "1",
       "EX",
-      getGenerationJobLeaseSeconds()
+      getMessengerGenerationJobLeaseSeconds()
     );
     return { ...reserved, leaseToken: null };
   }
@@ -1441,7 +1706,7 @@ async function reserveMessengerGenerationJobFrom(
       raw.startsWith("{") && process.env.NODE_ENV === "test"
         ? raw
         : await redis.get(
-            `messenger-generation-jobs:{${scope.tenantPartition}}:content:${raw.replace(/^job-/, "")}`
+            `${getGenerationQueueKeyPrefix(scope)}:content:${raw.replace(/^job-/, "")}`
           );
     const parsed = serialized
       ? parseReservedGenerationJobForScope(serialized, scope)
@@ -1480,7 +1745,7 @@ async function reserveMessengerGenerationJobFrom(
         getGenerationJobLeaseKey(scope, reserved.job),
         getGenerationSubjectTombstoneKey(scope, reserved.job.userId),
       ],
-      [raw, leaseToken, getGenerationJobLeaseSeconds()]
+      [raw, leaseToken, getMessengerGenerationJobLeaseSeconds()]
     );
     if (result === 1 || result === 2) {
       return { ...reserved, leaseToken };
@@ -1759,7 +2024,7 @@ export async function reclaimReservedMessengerGenerationJobs(
           ? raw.startsWith("{") && process.env.NODE_ENV === "test"
             ? raw
             : await redis.get(
-                `messenger-generation-jobs:{${scope.tenantPartition}}:content:${raw.replace(/^job-/, "")}`
+                `${getGenerationQueueKeyPrefix(scope)}:content:${raw.replace(/^job-/, "")}`
               )
           : raw;
       const parsed = serialized
@@ -1875,11 +2140,28 @@ async function drainMessengerGenerationQueueWithResult(
         continue;
       }
 
+      const leaseHeartbeat = startGenerationJobLeaseHeartbeat(
+        redis,
+        scope,
+        reserved
+      );
       let processorError: unknown = null;
       try {
         await processor(reserved.job);
       } catch (error) {
         processorError = error;
+      }
+      const heartbeatStatus = await leaseHeartbeat?.stop();
+      if (
+        heartbeatStatus === "lost_ownership" ||
+        heartbeatStatus === "renewal_failed"
+      ) {
+        safeLog("messenger_generation_job_heartbeat_stopped_unhealthy", {
+          level: "warn",
+          reqId: reserved.job.reqId,
+          generationKind: reserved.job.generationKind ?? null,
+          heartbeatStatus,
+        });
       }
 
       if (processorError === null) {
@@ -2042,6 +2324,10 @@ export async function enqueueOrRunMessengerGenerationJob(
 }
 
 export function resetMessengerGenerationQueueForTests(): void {
+  for (const heartbeat of activeGenerationJobLeaseHeartbeats) {
+    void heartbeat.stop();
+  }
+  activeGenerationJobLeaseHeartbeats.clear();
   drainPromise = null;
   drainRequested = false;
   if (drainRetryTimer) {

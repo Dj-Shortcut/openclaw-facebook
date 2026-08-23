@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { safeLog } from "./messengerApi";
 import { toLogUser } from "./privacy";
 import {
+  deleteScopedState,
   deleteEphemeralKeyIfValue,
   readScopedState,
   setEphemeralKeyIfAbsent,
@@ -10,7 +11,7 @@ import {
 import { getRedisClient, isRedisEnabled } from "./redis";
 
 const COST_LEDGER_SCOPE = "cost:ledger:period";
-const COST_LEDGER_TTL_SECONDS = 90 * 24 * 60 * 60;
+const COST_LEDGER_RETENTION_DAYS = 90;
 const COST_LEDGER_MAX_ENTRIES_PER_PERIOD = 5_000;
 const COST_LEDGER_PERIOD_LOCK_TTL_SECONDS = 5;
 const COST_LEDGER_PERIOD_LOCK_MAX_ATTEMPTS = 20;
@@ -21,6 +22,21 @@ export type CostLedgerStatus =
   | "provider_attempt_succeeded"
   | "provider_attempt_failed"
   | "blocked";
+
+/**
+ * Immutable customer boundary attached to every new Messenger ledger entry.
+ *
+ * Historical entries can be missing these fields. They remain readable only
+ * as legacy aggregate metadata and are purged (never attributed) when the
+ * matching user asks for erasure.
+ */
+export type CostLedgerTenantScope = Readonly<{
+  workspaceId: number;
+  channelConnectionId: number;
+  bindingEpoch: number;
+  privacyEpoch: number;
+  userKey: string;
+}>;
 
 export type CostLedgerEntry = {
   id: string;
@@ -38,7 +54,7 @@ export type CostLedgerEntry = {
   costEstimateComplete: boolean;
   estimateSource: string | null;
   unpricedCostComponents: string[];
-};
+} & Partial<Omit<CostLedgerTenantScope, "userKey">>;
 
 export type StoredCostLedgerEntry = CostLedgerEntry & {
   period: string;
@@ -134,7 +150,90 @@ function toRequestSummaryKey(reqId: string): string {
 }
 
 function createStringRecord<T>(): Record<string, T> {
-  return Object.create(null);
+  return Object.create(null) as Record<string, T>;
+}
+
+const TENANT_SCOPE_FIELDS = [
+  "workspaceId",
+  "channelConnectionId",
+  "bindingEpoch",
+  "privacyEpoch",
+] as const;
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) > 0;
+}
+
+function hasAnyTenantScopeField(
+  entry: Partial<CostLedgerTenantScope>
+): boolean {
+  return TENANT_SCOPE_FIELDS.some(field => entry[field] !== undefined);
+}
+
+export function hasCompleteCostLedgerTenantScope(
+  entry: Partial<CostLedgerTenantScope>
+): entry is CostLedgerTenantScope {
+  return (
+    typeof entry.userKey === "string" &&
+    entry.userKey.trim().length > 0 &&
+    isPositiveSafeInteger(entry.workspaceId) &&
+    isPositiveSafeInteger(entry.channelConnectionId) &&
+    isPositiveSafeInteger(entry.bindingEpoch) &&
+    isPositiveSafeInteger(entry.privacyEpoch)
+  );
+}
+
+export function assertCostLedgerTenantScope(
+  scope: Partial<CostLedgerTenantScope>
+): asserts scope is CostLedgerTenantScope {
+  if (!hasCompleteCostLedgerTenantScope(scope)) {
+    throw new Error("Cost ledger tenant scope is incomplete");
+  }
+}
+
+function assertNewEntryTenantScope(entry: CostLedgerEntry): void {
+  const hasAnyScope = hasAnyTenantScopeField(entry);
+  if (hasAnyScope) {
+    assertCostLedgerTenantScope(entry);
+    return;
+  }
+
+  // Non-Messenger channels are not yet all backed by the Messenger workspace
+  // identity model. A Messenger provider attempt must never create a new
+  // ambiguous record in production.
+  if (
+    entry.channel === "facebook_messenger" &&
+    process.env.NODE_ENV === "production"
+  ) {
+    throw new Error("Messenger cost ledger tenant scope is required");
+  }
+}
+
+function hasSameCostLedgerTenantScope(
+  entry: Partial<CostLedgerTenantScope>,
+  scope: CostLedgerTenantScope
+): boolean {
+  return (
+    hasCompleteCostLedgerTenantScope(entry) &&
+    entry.workspaceId === scope.workspaceId &&
+    entry.channelConnectionId === scope.channelConnectionId &&
+    entry.bindingEpoch === scope.bindingEpoch &&
+    entry.privacyEpoch === scope.privacyEpoch &&
+    entry.userKey === scope.userKey
+  );
+}
+
+function hasSameCostLedgerPrivacySubject(
+  entry: Partial<CostLedgerTenantScope>,
+  scope: CostLedgerTenantScope
+): boolean {
+  return (
+    hasCompleteCostLedgerTenantScope(entry) &&
+    entry.workspaceId === scope.workspaceId &&
+    entry.channelConnectionId === scope.channelConnectionId &&
+    entry.privacyEpoch === scope.privacyEpoch &&
+    entry.userKey === scope.userKey
+  );
 }
 
 function costLedgerPeriodLockKey(period: string): string {
@@ -143,6 +242,30 @@ function costLedgerPeriodLockKey(period: string): string {
 
 function costLedgerPeriodStorageKey(period: string): string {
   return `${COST_LEDGER_SCOPE}:${period}`;
+}
+
+function costLedgerPeriodExpiry(period: string): number {
+  return addUtcDays(
+    dateFromPeriod(period),
+    COST_LEDGER_RETENTION_DAYS + 1
+  ).getTime();
+}
+
+async function writeCostLedgerPeriod(
+  period: string,
+  entries: StoredCostLedgerEntry[]
+): Promise<void> {
+  const ttlSeconds = Math.floor(
+    (costLedgerPeriodExpiry(period) - Date.now()) / 1_000
+  );
+  if (!entries.length || ttlSeconds <= 0) {
+    await Promise.resolve(deleteScopedState(COST_LEDGER_SCOPE, period));
+    return;
+  }
+
+  await Promise.resolve(
+    writeScopedState(COST_LEDGER_SCOPE, period, entries, ttlSeconds)
+  );
 }
 
 function isRedisWrongTypeError(error: unknown): boolean {
@@ -329,7 +452,7 @@ function getRetainedLedgerPeriods(now = new Date()): string[] {
   const cursor = new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
   );
-  for (let offset = 0; offset < 90; offset += 1) {
+  for (let offset = 0; offset <= COST_LEDGER_RETENTION_DAYS; offset += 1) {
     periods.add(cursor.toISOString().slice(0, 10));
     cursor.setUTCDate(cursor.getUTCDate() - 1);
   }
@@ -340,6 +463,7 @@ export async function appendCostLedgerEntry(
   entry: CostLedgerEntry,
   recordedAt = new Date()
 ): Promise<StoredCostLedgerEntry> {
+  assertNewEntryTenantScope(entry);
   const period = periodFromDate(recordedAt);
   return await withCostLedgerPeriodLock(period, async () => {
     const storedEntry: StoredCostLedgerEntry = {
@@ -365,9 +489,7 @@ export async function appendCostLedgerEntry(
         totalDroppedEntries: costLedgerDroppedEntryCount,
       });
     }
-    await Promise.resolve(
-      writeScopedState(COST_LEDGER_SCOPE, period, next, COST_LEDGER_TTL_SECONDS)
-    );
+    await writeCostLedgerPeriod(period, next);
     return storedEntry;
   });
 }
@@ -384,19 +506,30 @@ export function resetCostLedgerReliabilityStatsForTests(): void {
 }
 
 export async function deleteCostLedgerEntriesForUser(
-  userKey: string,
+  scope: CostLedgerTenantScope,
   now = new Date()
 ): Promise<number> {
+  assertCostLedgerTenantScope(scope);
   let deleted = 0;
+  let legacyPurged = 0;
   let scannedPeriods = 0;
   let touchedPeriods = 0;
+  const shouldDelete = (entry: StoredCostLedgerEntry): boolean => {
+    if (entry.userKey !== scope.userKey) return false;
+    if (!hasCompleteCostLedgerTenantScope(entry)) {
+      // Legacy records are ambiguous. Purging all legacy records for this
+      // privacy-safe user key is safer than assigning one to a tenant.
+      return true;
+    }
+    // A reconnect rotates the transport binding epoch, not the customer's
+    // privacy identity. Delete every event for this exact tenant/privacy
+    // subject so old bindings cannot survive delete-my-data.
+    return hasSameCostLedgerPrivacySubject(entry, scope);
+  };
   for (const period of getRetainedLedgerPeriods(now)) {
     scannedPeriods += 1;
     const currentBeforeLock = await readCostLedgerPeriod(period);
-    if (
-      !currentBeforeLock.length ||
-      !currentBeforeLock.some(entry => entry.userKey === userKey)
-    ) {
+    if (!currentBeforeLock.length || !currentBeforeLock.some(shouldDelete)) {
       continue;
     }
 
@@ -406,25 +539,59 @@ export async function deleteCostLedgerEntriesForUser(
       if (!current.length) {
         return 0;
       }
-      const next = current.filter(entry => entry.userKey !== userKey);
+      const deletedEntries = current.filter(shouldDelete);
+      const next = current.filter(entry => !shouldDelete(entry));
       const deletedInPeriod = current.length - next.length;
       if (deletedInPeriod === 0) {
         return 0;
       }
-      await Promise.resolve(
-        writeScopedState(
-          COST_LEDGER_SCOPE,
-          period,
-          next,
-          COST_LEDGER_TTL_SECONDS
-        )
-      );
+      legacyPurged += deletedEntries.filter(
+        entry => !hasCompleteCostLedgerTenantScope(entry)
+      ).length;
+      await writeCostLedgerPeriod(period, next);
       return deletedInPeriod;
     });
   }
   safeLog("cost_ledger_user_delete_completed", {
-    user: toLogUser(userKey),
+    user: toLogUser(scope.userKey),
     scannedPeriods,
+    touchedPeriods,
+    deletedEntries: deleted,
+    legacyPurgedEntries: legacyPurged,
+  });
+  return deleted;
+}
+
+/**
+ * Development/transition cleanup for records written before tenant scope was
+ * stored. Scoped records are deliberately never touched by this function.
+ */
+export async function purgeLegacyCostLedgerEntriesForUser(
+  userKey: string,
+  now = new Date()
+): Promise<number> {
+  if (!userKey.trim())
+    throw new Error("Cost ledger legacy user key is invalid");
+  let deleted = 0;
+  let touchedPeriods = 0;
+  const shouldDelete = (entry: StoredCostLedgerEntry): boolean =>
+    entry.userKey === userKey && !hasCompleteCostLedgerTenantScope(entry);
+
+  for (const period of getRetainedLedgerPeriods(now)) {
+    const currentBeforeLock = await readCostLedgerPeriod(period);
+    if (!currentBeforeLock.some(shouldDelete)) continue;
+    touchedPeriods += 1;
+    deleted += await withCostLedgerPeriodLock(period, async () => {
+      const current = await readCostLedgerPeriod(period);
+      const next = current.filter(entry => !shouldDelete(entry));
+      const deletedInPeriod = current.length - next.length;
+      if (deletedInPeriod > 0) await writeCostLedgerPeriod(period, next);
+      return deletedInPeriod;
+    });
+  }
+
+  safeLog("cost_ledger_legacy_user_delete_completed", {
+    user: toLogUser(userKey),
     touchedPeriods,
     deletedEntries: deleted,
   });
@@ -439,14 +606,28 @@ export async function updateCostLedgerEntry(
       "status" | "finalCostUsd" | "costEstimateComplete" | "estimateSource"
     >
   >,
-  periodDate = new Date()
+  periodDate = new Date(),
+  tenantScope?: CostLedgerTenantScope
 ): Promise<StoredCostLedgerEntry | null> {
+  if (tenantScope) assertCostLedgerTenantScope(tenantScope);
   for (const period of candidateUpdatePeriods(periodDate)) {
     const updated = await withCostLedgerPeriodLock(period, async () => {
       const current = await readCostLedgerPeriod(period);
-      const index = current.findIndex(entry => entry.id === id);
+      const index = current.findIndex(
+        entry =>
+          entry.id === id &&
+          (!tenantScope || hasSameCostLedgerTenantScope(entry, tenantScope))
+      );
       if (index < 0) {
         return null;
+      }
+
+      if (
+        !tenantScope &&
+        hasCompleteCostLedgerTenantScope(current[index]) &&
+        process.env.NODE_ENV === "production"
+      ) {
+        throw new Error("Cost ledger update tenant scope is required");
       }
 
       const updatedEntry: StoredCostLedgerEntry = {
@@ -455,14 +636,7 @@ export async function updateCostLedgerEntry(
       };
       const next = [...current];
       next[index] = updatedEntry;
-      await Promise.resolve(
-        writeScopedState(
-          COST_LEDGER_SCOPE,
-          period,
-          next,
-          COST_LEDGER_TTL_SECONDS
-        )
-      );
+      await writeCostLedgerPeriod(period, next);
       return updatedEntry;
     });
     if (updated) {
@@ -481,10 +655,11 @@ export async function safelyUpdateCostLedgerEntry(
       "status" | "finalCostUsd" | "costEstimateComplete" | "estimateSource"
     >
   >,
-  periodDate = new Date()
+  periodDate = new Date(),
+  tenantScope?: CostLedgerTenantScope
 ): Promise<StoredCostLedgerEntry | null> {
   try {
-    return await updateCostLedgerEntry(id, updates, periodDate);
+    return await updateCostLedgerEntry(id, updates, periodDate, tenantScope);
   } catch (error) {
     safeLog("cost_ledger_update_failed", {
       id: toRequestSummaryKey(id),
@@ -623,10 +798,11 @@ export async function summarizeBudgetedCostLedgerPeriods(
 
 export async function summarizeCostLedgerPeriodForUser(
   period: string,
-  userKey: string
+  tenantScope: CostLedgerTenantScope
 ): Promise<CostLedgerSummary> {
-  const entries = (await readCostLedgerPeriod(period)).filter(
-    entry => entry.userKey === userKey
+  assertCostLedgerTenantScope(tenantScope);
+  const entries = (await readCostLedgerPeriod(period)).filter(entry =>
+    hasSameCostLedgerPrivacySubject(entry, tenantScope)
   );
   return summarizeCostLedgerEntries(period, entries);
 }

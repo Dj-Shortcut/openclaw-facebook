@@ -6,11 +6,12 @@ backstop for objects whose Redis/application state reference has been lost.
 
 ## Prefix Inventory
 
-| Prefix | Classification | Active writer | Retention policy |
-| --- | --- | --- | --- |
-| `inbound-source/` | User-uploaded source images, including face-memory source photos | `server/_core/sourceImageStore.ts` | Expire after 30 days; this is the hard maximum |
-| `generated/images/` | Generated image outputs returned to Messenger/WhatsApp | `server/_core/image-generation/generatedImagePublisher.ts` | Expire after 30 days |
-| `generated/` | Generated outputs and possible legacy generated artifacts | No current R2 writer found for this parent prefix except `generated/images/`; examples/tests still reference older keys | Do not add a parent-prefix rule until production inventory confirms every child is safe to expire |
+| Prefix              | Classification                                                   | Active writer                                                                                                           | Retention policy                                                                                  |
+| ------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `inbound-source/`   | User-uploaded source images, including face-memory source photos | `server/_core/sourceImageStore.ts`                                                                                      | Expire after 30 days; this is the hard maximum                                                    |
+| `generated/images/` | Generated image outputs returned to Messenger/WhatsApp           | `server/_core/image-generation/generatedImagePublisher.ts`                                                              | Expire after 30 days                                                                              |
+| `generated/videos/` | Generated Messenger video outputs                                | `server/_core/videoGenerationFlow.ts`                                                                                   | Expire after 30 days                                                                              |
+| `generated/`        | Generated outputs and possible legacy generated artifacts        | No current R2 writer found for this parent prefix except `generated/images/`; examples/tests still reference older keys | Do not add a parent-prefix rule until production inventory confirms every child is safe to expire |
 
 No active R2 writer was found for preview/style-catalog assets. The legacy
 style-picker flow is deprecated, but the lifecycle policy intentionally targets
@@ -32,6 +33,13 @@ Then verify:
 ```bash
 npx wrangler r2 bucket lifecycle list "$R2_BUCKET"
 ```
+
+The production storage proxy also verifies these three exact enabled 30-day
+rules through R2's S3-compatible lifecycle API before it starts listening. A
+missing, disabled, broadened, or longer-lived rule therefore fails the storage
+proxy rollout closed instead of silently removing the orphan-cleanup backstop.
+Its R2 calls use one attempt and a hard 60-second deadline; Messenger privacy
+fences retain ambiguous upload inventory for a longer cooldown.
 
 The policy intentionally uses prefix-scoped delete rules rather than an empty
 prefix. Do not add a bucket-wide expiration rule unless the bucket is dedicated
@@ -91,12 +99,13 @@ changing this lifecycle policy.
 
 1. Apply `apps/image-gen/infra/cloudflare/r2-lifecycle.json` to the production
    R2 bucket.
-2. List lifecycle rules and confirm `inbound-source/` and `generated/images/`
-   are enabled with a 30-day age condition.
+2. List lifecycle rules and confirm `inbound-source/`, `generated/images/`,
+   and `generated/videos/` are enabled with a 30-day age condition.
 3. Wait for R2 lifecycle processing. Existing objects may not disappear
    immediately; Cloudflare documents lifecycle deletion as asynchronous after
    expiration.
-4. Re-check sampled stale keys under `inbound-source/` and `generated/images/`.
+4. Re-check sampled stale keys under `inbound-source/`, `generated/images/`,
+   and `generated/videos/`.
 5. If stale keys remain after lifecycle processing has had time to run, perform
    a one-time R2 inventory delete by prefix and age using Cloudflare/R2
    credentials outside the app runtime. Do not add broad R2 listing credentials

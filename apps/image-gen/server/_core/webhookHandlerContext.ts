@@ -165,7 +165,8 @@ export function createHandlerContext({
   async function sendLoggedText(
     psid: string,
     text: string,
-    reqId: string
+    reqId: string,
+    deliveryControl?: Parameters<HandlerContext["sendLoggedText"]>[3]
   ): Promise<MessengerSendOutcome> {
     debugWebhookLog({
       level: "debug",
@@ -175,14 +176,19 @@ export function createHandlerContext({
       psidHash: anonymizePsid(psid).slice(0, 12),
       text,
     });
-    return await sendText(psid, text);
+    return deliveryControl
+      ? await sendText(psid, text, {
+          providerAttemptKey: deliveryControl.providerAttemptKey,
+        })
+      : await sendText(psid, text);
   }
 
   async function sendLoggedQuickReplies(
     psid: string,
     text: string,
     replies: Parameters<typeof sendQuickReplies>[2],
-    reqId: string
+    reqId: string,
+    deliveryControl?: Parameters<HandlerContext["sendLoggedActions"]>[4]
   ): Promise<MessengerSendOutcome> {
     debugWebhookLog({
       level: "debug",
@@ -196,14 +202,19 @@ export function createHandlerContext({
         payload: reply.payload,
       })),
     });
-    return await sendQuickReplies(psid, text, replies);
+    return deliveryControl
+      ? await sendQuickReplies(psid, text, replies, {
+          providerAttemptKey: deliveryControl.providerAttemptKey,
+        })
+      : await sendQuickReplies(psid, text, replies);
   }
 
   async function sendLoggedActions(
     psid: string,
     text: string,
     actions: ConversationAction[],
-    reqId: string
+    reqId: string,
+    deliveryControl?: Parameters<HandlerContext["sendLoggedActions"]>[4]
   ): Promise<MessengerSendOutcome> {
     const postbackButtons = renderMessengerPostbackButtons(actions);
     if (
@@ -221,7 +232,11 @@ export function createHandlerContext({
           label: action.label,
         })),
       });
-      return await sendButtonTemplate(psid, text, postbackButtons);
+      return deliveryControl
+        ? await sendButtonTemplate(psid, text, postbackButtons, {
+            providerAttemptKey: deliveryControl.providerAttemptKey,
+          })
+        : await sendButtonTemplate(psid, text, postbackButtons);
     }
 
     const urlButtons = renderMessengerUrlButtons(actions);
@@ -236,14 +251,19 @@ export function createHandlerContext({
           .filter(action => action.url)
           .map(action => ({ id: action.id, label: action.label })),
       });
-      return await sendButtonTemplate(psid, text, urlButtons);
+      return deliveryControl
+        ? await sendButtonTemplate(psid, text, urlButtons, {
+            providerAttemptKey: deliveryControl.providerAttemptKey,
+          })
+        : await sendButtonTemplate(psid, text, urlButtons);
     }
 
     return await sendLoggedQuickReplies(
       psid,
       text,
       renderMessengerQuickReplies(actions),
-      reqId
+      reqId,
+      deliveryControl
     );
   }
 

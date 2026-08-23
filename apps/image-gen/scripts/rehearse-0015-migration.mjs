@@ -36,7 +36,9 @@ const migration0015 = await readStatements(
 );
 await assertMySqlIdentifierContract();
 if (identifiersOnly) {
-  process.stdout.write("MySQL identifier contract passed (maximum 64 bytes).\n");
+  process.stdout.write(
+    "MySQL identifier contract passed (maximum 64 bytes).\n"
+  );
   process.exit(0);
 }
 
@@ -68,7 +70,10 @@ try {
     const [[permanentTable]] = await connection.query(
       "SELECT COUNT(*) AS count FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='billing_accounting_event_links'"
     );
-    assert(Number(permanentTable.count) === 0, "preflight precedes permanent DDL");
+    assert(
+      Number(permanentTable.count) === 0,
+      "preflight precedes permanent DDL"
+    );
     await connection.query("DROP TEMPORARY TABLE `_0015_scope_preflight`");
     await connection.query(
       "UPDATE `workspace_entitlements` SET `source_intent_id`=NULL WHERE `id`=22"
@@ -347,7 +352,8 @@ async function assertUpgradeInvariants(connection) {
     "SELECT `enabled`,YEAR(`next_due_at`) AS dueYear FROM `billing_scheduler_tenants` WHERE `workspace_id`=1 AND `mode`='test' AND `kind`='outbox'"
   );
   assert(
-    Boolean(disabledContainment.enabled) && disabledContainment.dueYear === 2000,
+    Boolean(disabledContainment.enabled) &&
+      disabledContainment.dueYear === 2000,
     "containment persists and wakes the safety lane without activating commercial rollout"
   );
   await connection.query(
@@ -492,9 +498,20 @@ async function assertSchemaContract(connection) {
   const [constraints] = await connection.query(
     "SELECT `CONSTRAINT_NAME` AS constraintName FROM information_schema.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA=DATABASE()"
   );
-  const constraintNames = new Set(
-    constraints.map(row => row.constraintName)
-  );
+  const constraintNames = new Set(constraints.map(row => row.constraintName));
+  const epochConstraintNames = shape.has(
+    "messenger_privacy_subjects.last_erased_at"
+  )
+    ? [
+        "messenger_provider_fence_static_connection_fk",
+        "messenger_provider_fence_static_subject_fk",
+        "weur_static_connection_workspace_fk",
+      ]
+    : [
+        "messenger_provider_fence_connection_workspace_fk",
+        "messenger_provider_fence_privacy_subject_fk",
+        "weur_connection_workspace_fk",
+      ];
   for (const constraint of [
     "billing_accounting_event_links_provider_event_mode_fk",
     "billing_accounting_event_links_ledger_workspace_fk",
@@ -508,11 +525,9 @@ async function assertSchemaContract(connection) {
     "billing_webhook_routes_intent_scope_fk",
     "channelConnections_workspaceId_workspaces_id_fk",
     "channelConnections_id_workspace_binding_unique",
-    "messenger_provider_fence_connection_workspace_fk",
-    "messenger_provider_fence_privacy_subject_fk",
+    ...epochConstraintNames,
     "weu_entitlement_scope_fk",
     "weu_source_intent_scope_fk",
-    "weur_connection_workspace_fk",
     "weur_entitlement_scope_fk",
     "weur_usage_scope_fk",
     "workspace_entitlement_usage_scope_unique",

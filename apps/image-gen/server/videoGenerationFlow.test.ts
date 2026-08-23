@@ -256,6 +256,15 @@ describe("messenger video generation flow", () => {
     );
 
     expect(outcome).toEqual({ sent: false, reason: "response_window_closed" });
+    expect(storagePutMock).toHaveBeenCalledWith(
+      expect.stringMatching(
+        new RegExp(
+          `^generated/videos/v1/workspace-42/connection-7/binding-3/privacy-5/user-${userKey}/\\d+-req-video-delete-race\\.mp4$`
+        )
+      ),
+      new Uint8Array([1, 2, 3]),
+      "video/mp4"
+    );
     expect(storageDeleteMock).toHaveBeenCalledWith("generated/videos/test.mp4");
   });
 
@@ -315,13 +324,23 @@ describe("messenger video generation flow", () => {
     const deps = makeDeps();
     const runVideoGeneration = createMessengerVideoGenerationRunner(deps);
 
-    await runVideoGeneration(
-      "video-priced-user",
-      "video-priced-user-key",
-      "req-video-priced",
-      "nl",
-      "https://img.example/source.jpg",
-      "laat hem zwaaien"
+    await runWithMessengerRequestContext(
+      "page-video-priced",
+      async () => {
+        setMessengerRequestPrivacySubject({
+          userKey: "video-priced-user-key",
+          privacyEpoch: 5,
+        });
+        await runVideoGeneration(
+          "video-priced-user",
+          "video-priced-user-key",
+          "req-video-priced",
+          "nl",
+          "https://img.example/source.jpg",
+          "laat hem zwaaien"
+        );
+      },
+      { workspaceId: 42, channelConnectionId: 7, bindingEpoch: 3 }
     );
 
     const ledgerEntries = await readCostLedgerPeriod(FIXED_LEDGER_PERIOD);
@@ -331,6 +350,10 @@ describe("messenger video generation flow", () => {
         operation: "video_generation",
         provider: "video-provider",
         model: null,
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        privacyEpoch: 5,
         userKey: "video-priced-user-key",
         reqId: requestSummaryKey("req-video-priced"),
         status: "provider_attempt_succeeded",

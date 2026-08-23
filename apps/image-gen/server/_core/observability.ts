@@ -2,7 +2,6 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type express from "express";
 import { isDebugLogEnabled } from "./logLevel";
 import {
-  getMessengerDailyImageBudgetConfig,
   getMessengerDailySpendBudgetConfig,
   getMessengerGenerationGlobalLimitStats,
   getMessengerMonthlySpendBudgetConfig,
@@ -78,15 +77,26 @@ function durationBucketKey(method: string, path: string, le: string): string {
   return `method="${escapeLabelValue(method)}",path="${escapeLabelValue(path)}",le="${escapeLabelValue(le)}"`;
 }
 
-function webhookAckMetricLabelKey({ channel, mode }: WebhookAckMetricKey): string {
+function webhookAckMetricLabelKey({
+  channel,
+  mode,
+}: WebhookAckMetricKey): string {
   return `channel="${escapeLabelValue(channel)}",mode="${escapeLabelValue(mode)}"`;
 }
 
-function webhookAckDurationBucketKey(channel: string, mode: string, le: string): string {
+function webhookAckDurationBucketKey(
+  channel: string,
+  mode: string,
+  le: string
+): string {
   return `channel="${escapeLabelValue(channel)}",mode="${escapeLabelValue(mode)}",le="${escapeLabelValue(le)}"`;
 }
 
-function incrementMetric(map: Map<string, number>, key: string, delta = 1): void {
+function incrementMetric(
+  map: Map<string, number>,
+  key: string,
+  delta = 1
+): void {
   map.set(key, (map.get(key) ?? 0) + delta);
 }
 
@@ -119,7 +129,12 @@ export function getTraceContext(req: express.Request):
   return (req as RequestWithId).traceContext;
 }
 
-export function recordHttpRequestMetric(method: string, path: string, statusCode: number, durationMs: number): void {
+export function recordHttpRequestMetric(
+  method: string,
+  path: string,
+  statusCode: number,
+  durationMs: number
+): void {
   const normalizedPath = normalizePath(path);
   const status = String(statusCode);
   const labels = metricLabelKey({ method, path: normalizedPath, status });
@@ -129,10 +144,16 @@ export function recordHttpRequestMetric(method: string, path: string, statusCode
 
   for (const bucketMs of latencyBucketBoundariesMs) {
     if (durationMs <= bucketMs) {
-      incrementMetric(durationBuckets, durationBucketKey(method, normalizedPath, String(bucketMs / 1000)));
+      incrementMetric(
+        durationBuckets,
+        durationBucketKey(method, normalizedPath, String(bucketMs / 1000))
+      );
     }
   }
-  incrementMetric(durationBuckets, durationBucketKey(method, normalizedPath, "+Inf"));
+  incrementMetric(
+    durationBuckets,
+    durationBucketKey(method, normalizedPath, "+Inf")
+  );
 }
 
 export function createRequestMetricsMiddleware(): express.RequestHandler {
@@ -152,7 +173,12 @@ export function createRequestMetricsMiddleware(): express.RequestHandler {
         status: res.statusCode,
         ms: Number(durationMs.toFixed(1)),
       };
-      recordHttpRequestMetric(req.method, sanitizedPath, res.statusCode, durationMs);
+      recordHttpRequestMetric(
+        req.method,
+        sanitizedPath,
+        res.statusCode,
+        durationMs
+      );
 
       // Keep info logs compact: skip webhook and health checks unless debug logging is enabled.
       const shouldLogAtInfo =
@@ -169,24 +195,33 @@ export function createRequestMetricsMiddleware(): express.RequestHandler {
   };
 }
 
-export function recordWebhookAckMetric(channel: string, mode: string, durationMs: number): void {
+export function recordWebhookAckMetric(
+  channel: string,
+  mode: string,
+  durationMs: number
+): void {
   const labels = webhookAckMetricLabelKey({ channel, mode });
   incrementMetric(webhookAckDurationSums, labels, durationMs / 1000);
   incrementMetric(webhookAckDurationCounts, labels);
 
   for (const bucketMs of latencyBucketBoundariesMs) {
     if (durationMs <= bucketMs) {
-      incrementMetric(webhookAckDurationBuckets, webhookAckDurationBucketKey(channel, mode, String(bucketMs / 1000)));
+      incrementMetric(
+        webhookAckDurationBuckets,
+        webhookAckDurationBucketKey(channel, mode, String(bucketMs / 1000))
+      );
     }
   }
-  incrementMetric(webhookAckDurationBuckets, webhookAckDurationBucketKey(channel, mode, "+Inf"));
+  incrementMetric(
+    webhookAckDurationBuckets,
+    webhookAckDurationBucketKey(channel, mode, "+Inf")
+  );
 }
 
 async function renderMessengerGenerationQueueMetrics(): Promise<string[]> {
   try {
     const stats = await getMessengerGenerationQueueStats();
     const globalLimitStats = await getMessengerGenerationGlobalLimitStats();
-    const dailyBudget = getMessengerDailyImageBudgetConfig();
     const dailySpendBudget = getMessengerDailySpendBudgetConfig();
     const monthlySpendBudget = getMessengerMonthlySpendBudgetConfig();
     const userDailySpendBudget = getMessengerUserDailySpendBudgetConfig();
@@ -215,12 +250,6 @@ async function renderMessengerGenerationQueueMetrics(): Promise<string[]> {
       "# HELP messenger_generation_global_slots_redis_backed Whether global generation slots are Redis-backed",
       "# TYPE messenger_generation_global_slots_redis_backed gauge",
       `messenger_generation_global_slots_redis_backed ${globalLimitStats.redisBacked ? 1 : 0}`,
-      "# HELP messenger_generation_daily_budget_enabled Whether the optional daily Messenger image budget cap is enabled",
-      "# TYPE messenger_generation_daily_budget_enabled gauge",
-      `messenger_generation_daily_budget_enabled ${dailyBudget.enabled ? 1 : 0}`,
-      "# HELP messenger_generation_daily_budget_cap Configured optional daily Messenger image request cap, or 0 when disabled",
-      "# TYPE messenger_generation_daily_budget_cap gauge",
-      `messenger_generation_daily_budget_cap ${dailyBudget.cap ?? 0}`,
       "# HELP messenger_generation_daily_spend_budget_enabled Whether the optional daily Messenger provider spend cap is enabled",
       "# TYPE messenger_generation_daily_spend_budget_enabled gauge",
       `messenger_generation_daily_spend_budget_enabled ${dailySpendBudget.enabled ? 1 : 0}`,
@@ -264,7 +293,9 @@ async function renderPrometheusMetrics(): Promise<string> {
     lines.push(`http_requests_total{${labels}} ${value}`);
   }
 
-  lines.push("# HELP http_request_duration_seconds HTTP request duration in seconds");
+  lines.push(
+    "# HELP http_request_duration_seconds HTTP request duration in seconds"
+  );
   lines.push("# TYPE http_request_duration_seconds histogram");
 
   for (const [labels, value] of durationBuckets.entries()) {
@@ -272,14 +303,18 @@ async function renderPrometheusMetrics(): Promise<string> {
   }
 
   for (const [labels, value] of durationSums.entries()) {
-    lines.push(`http_request_duration_seconds_sum{${labels}} ${value.toFixed(6)}`);
+    lines.push(
+      `http_request_duration_seconds_sum{${labels}} ${value.toFixed(6)}`
+    );
   }
 
   for (const [labels, value] of durationCounts.entries()) {
     lines.push(`http_request_duration_seconds_count{${labels}} ${value}`);
   }
 
-  lines.push("# HELP webhook_ack_duration_seconds Webhook acknowledgement latency in seconds");
+  lines.push(
+    "# HELP webhook_ack_duration_seconds Webhook acknowledgement latency in seconds"
+  );
   lines.push("# TYPE webhook_ack_duration_seconds histogram");
 
   for (const [labels, value] of webhookAckDurationBuckets.entries()) {
@@ -287,46 +322,84 @@ async function renderPrometheusMetrics(): Promise<string> {
   }
 
   for (const [labels, value] of webhookAckDurationSums.entries()) {
-    lines.push(`webhook_ack_duration_seconds_sum{${labels}} ${value.toFixed(6)}`);
+    lines.push(
+      `webhook_ack_duration_seconds_sum{${labels}} ${value.toFixed(6)}`
+    );
   }
 
   for (const [labels, value] of webhookAckDurationCounts.entries()) {
     lines.push(`webhook_ack_duration_seconds_count{${labels}} ${value}`);
   }
 
-  lines.push("# HELP cost_ledger_dropped_entries_total Cost ledger entries dropped because the per-period cap was exceeded");
+  lines.push(
+    "# HELP cost_ledger_dropped_entries_total Cost ledger entries dropped because the per-period cap was exceeded"
+  );
   lines.push("# TYPE cost_ledger_dropped_entries_total counter");
-  lines.push(`cost_ledger_dropped_entries_total ${costLedgerReliability.droppedEntryCount}`);
-  lines.push("# HELP cost_ledger_max_entries_per_period Configured maximum cost ledger entries retained per period");
+  lines.push(
+    `cost_ledger_dropped_entries_total ${costLedgerReliability.droppedEntryCount}`
+  );
+  lines.push(
+    "# HELP cost_ledger_max_entries_per_period Configured maximum cost ledger entries retained per period"
+  );
   lines.push("# TYPE cost_ledger_max_entries_per_period gauge");
-  lines.push(`cost_ledger_max_entries_per_period ${costLedgerReliability.maxEntriesPerPeriod}`);
+  lines.push(
+    `cost_ledger_max_entries_per_period ${costLedgerReliability.maxEntriesPerPeriod}`
+  );
 
-  lines.push(...await renderMessengerGenerationQueueMetrics());
-  lines.push("# HELP messenger_generation_today_total Successful Messenger image generations recorded by this process today");
+  lines.push(...(await renderMessengerGenerationQueueMetrics()));
+  lines.push(
+    "# HELP messenger_generation_today_total Successful Messenger image generations recorded by this process today"
+  );
   lines.push("# TYPE messenger_generation_today_total gauge");
-  lines.push(`messenger_generation_today_total ${runtimeStats.imagesGeneratedToday}`);
-  lines.push("# HELP messenger_generation_errors_today_total Failed Messenger image generations recorded by this process today");
+  lines.push(
+    `messenger_generation_today_total ${runtimeStats.imagesGeneratedToday}`
+  );
+  lines.push(
+    "# HELP messenger_generation_errors_today_total Failed Messenger image generations recorded by this process today"
+  );
   lines.push("# TYPE messenger_generation_errors_today_total gauge");
-  lines.push(`messenger_generation_errors_today_total ${runtimeStats.errorCountToday}`);
-  lines.push("# HELP messenger_delivery_failures_today_total Failed Messenger delivery attempts recorded by this process today");
+  lines.push(
+    `messenger_generation_errors_today_total ${runtimeStats.errorCountToday}`
+  );
+  lines.push(
+    "# HELP messenger_delivery_failures_today_total Failed Messenger delivery attempts recorded by this process today"
+  );
   lines.push("# TYPE messenger_delivery_failures_today_total gauge");
-  lines.push(`messenger_delivery_failures_today_total ${runtimeStats.deliveryFailureCountToday}`);
-  lines.push("# HELP messenger_duplicate_skips_today_total Duplicate Messenger generation attempts skipped by this process today");
+  lines.push(
+    `messenger_delivery_failures_today_total ${runtimeStats.deliveryFailureCountToday}`
+  );
+  lines.push(
+    "# HELP messenger_duplicate_skips_today_total Duplicate Messenger generation attempts skipped by this process today"
+  );
   lines.push("# TYPE messenger_duplicate_skips_today_total gauge");
-  lines.push(`messenger_duplicate_skips_today_total ${runtimeStats.duplicateSkipCountToday}`);
-  lines.push("# HELP messenger_generation_active_users_today Active Messenger users recorded by this process today");
+  lines.push(
+    `messenger_duplicate_skips_today_total ${runtimeStats.duplicateSkipCountToday}`
+  );
+  lines.push(
+    "# HELP messenger_generation_active_users_today Active Messenger users recorded by this process today"
+  );
   lines.push("# TYPE messenger_generation_active_users_today gauge");
-  lines.push(`messenger_generation_active_users_today ${runtimeStats.activeUsersToday}`);
-  lines.push("# HELP messenger_generation_kinds_used_today Distinct generation kinds recorded by this process today");
+  lines.push(
+    `messenger_generation_active_users_today ${runtimeStats.activeUsersToday}`
+  );
+  lines.push(
+    "# HELP messenger_generation_kinds_used_today Distinct generation kinds recorded by this process today"
+  );
   lines.push("# TYPE messenger_generation_kinds_used_today gauge");
-  lines.push(`messenger_generation_kinds_used_today ${runtimeStats.generationKindsUsedToday}`);
-  lines.push("# HELP messenger_generation_average_latency_seconds Average successful Messenger image generation latency recorded by this process today");
+  lines.push(
+    `messenger_generation_kinds_used_today ${runtimeStats.generationKindsUsedToday}`
+  );
+  lines.push(
+    "# HELP messenger_generation_average_latency_seconds Average successful Messenger image generation latency recorded by this process today"
+  );
   lines.push("# TYPE messenger_generation_average_latency_seconds gauge");
-  lines.push(`messenger_generation_average_latency_seconds ${
-    runtimeStats.averageGenerationLatencyMs === null
-      ? 0
-      : (runtimeStats.averageGenerationLatencyMs / 1000).toFixed(6)
-  }`);
+  lines.push(
+    `messenger_generation_average_latency_seconds ${
+      runtimeStats.averageGenerationLatencyMs === null
+        ? 0
+        : (runtimeStats.averageGenerationLatencyMs / 1000).toFixed(6)
+    }`
+  );
 
   return `${lines.join("\n")}\n`;
 }
@@ -337,18 +410,10 @@ export function registerMetricsRoute(app: express.Express): void {
   });
 }
 
-function resetObservabilityMetrics(): void {
-  requestCounters.clear();
-  durationSums.clear();
-  durationCounts.clear();
-  durationBuckets.clear();
-  webhookAckDurationSums.clear();
-  webhookAckDurationCounts.clear();
-  webhookAckDurationBuckets.clear();
-}
-
 function parseOrCreateTraceContext(traceparentHeader: string | undefined) {
-  const parsed = traceparentHeader ? TRACEPARENT_REGEX.exec(traceparentHeader.trim()) : null;
+  const parsed = traceparentHeader
+    ? TRACEPARENT_REGEX.exec(traceparentHeader.trim())
+    : null;
   const traceId = parsed?.[1]?.toLowerCase() ?? randomBytes(16).toString("hex");
   const spanId = randomBytes(8).toString("hex");
   const traceFlags = parsed?.[3]?.toLowerCase() ?? "01";

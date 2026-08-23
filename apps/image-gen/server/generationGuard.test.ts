@@ -8,6 +8,7 @@ const stateStoreMocks = vi.hoisted(() => ({
   incrementExpiringCounter: vi.fn(),
   isRedisStateStoreEnabled: vi.fn(),
   readScopedState: vi.fn(),
+  refreshEphemeralKeyIfValue: vi.fn(),
   setEphemeralKey: vi.fn(),
   setEphemeralKeyIfAbsent: vi.fn(),
   writeScopedState: vi.fn(),
@@ -26,6 +27,16 @@ function hashRequestId(reqId: string): string {
   return `req_${digest}`;
 }
 
+function tenantScope(userKey: string) {
+  return {
+    workspaceId: 42,
+    channelConnectionId: 7,
+    bindingEpoch: 3,
+    privacyEpoch: 5,
+    userKey,
+  };
+}
+
 describe("generationGuard", () => {
   let guard: typeof import("./_core/generationGuard");
 
@@ -40,6 +51,7 @@ describe("generationGuard", () => {
     stateStoreMocks.incrementExpiringCounter.mockResolvedValue(1);
     stateStoreMocks.isRedisStateStoreEnabled.mockReturnValue(false);
     stateStoreMocks.readScopedState.mockResolvedValue(null);
+    stateStoreMocks.refreshEphemeralKeyIfValue.mockResolvedValue(true);
     stateStoreMocks.setEphemeralKeyIfAbsent.mockResolvedValue(true);
     stateStoreMocks.writeScopedState.mockResolvedValue(undefined);
     stateStoreMocks.deleteEphemeralKeyIfValue.mockResolvedValue(true);
@@ -102,6 +114,38 @@ describe("generationGuard", () => {
     );
   });
 
+  it("refreshes a distributed generation lease while provider work is running", async () => {
+    vi.useFakeTimers();
+    process.env.MESSENGER_MAX_IMAGE_JOBS = "1";
+    process.env.MESSENGER_GLOBAL_IMAGE_LOCK_TTL_MS = "5000";
+    stateStoreMocks.isRedisStateStoreEnabled.mockReturnValue(true);
+    stateStoreMocks.setEphemeralKeyIfAbsent.mockResolvedValue(true);
+
+    let markStarted!: () => void;
+    const started = new Promise<void>(resolve => {
+      markStarted = resolve;
+    });
+    let finishTask!: () => void;
+    const taskFinished = new Promise<void>(resolve => {
+      finishTask = resolve;
+    });
+    const running = guard.runGuardedGeneration("psid-heartbeat", async () => {
+      markStarted();
+      await taskFinished;
+      return "done";
+    });
+
+    await started;
+    await vi.advanceTimersByTimeAsync(1_300);
+    expect(stateStoreMocks.refreshEphemeralKeyIfValue).toHaveBeenCalledWith(
+      "messenger:global-inflight:0",
+      expect.any(String),
+      5
+    );
+    finishTask();
+    await expect(running).resolves.toBe("done");
+  });
+
   it("skips distributed global slots in memory mode", async () => {
     stateStoreMocks.hasEphemeralKey.mockResolvedValue(false);
     stateStoreMocks.isRedisStateStoreEnabled.mockReturnValue(false);
@@ -121,12 +165,15 @@ describe("generationGuard", () => {
   it("reports Redis-backed global slot usage", async () => {
     process.env.MESSENGER_MAX_IMAGE_JOBS = "3";
     stateStoreMocks.isRedisStateStoreEnabled.mockReturnValue(true);
-    stateStoreMocks.hasEphemeralKey.mockImplementation(async (key: string) =>
-      key === "messenger:global-inflight:0" ||
-      key === "messenger:global-inflight:2"
+    stateStoreMocks.hasEphemeralKey.mockImplementation(
+      async (key: string) =>
+        key === "messenger:global-inflight:0" ||
+        key === "messenger:global-inflight:2"
     );
 
-    await expect(guard.getMessengerGenerationGlobalLimitStats()).resolves.toEqual({
+    await expect(
+      guard.getMessengerGenerationGlobalLimitStats()
+    ).resolves.toEqual({
       redisBacked: true,
       max: 3,
       active: 2,
@@ -137,7 +184,9 @@ describe("generationGuard", () => {
     process.env.MESSENGER_MAX_IMAGE_JOBS = "4";
     stateStoreMocks.isRedisStateStoreEnabled.mockReturnValue(false);
 
-    await expect(guard.getMessengerGenerationGlobalLimitStats()).resolves.toEqual({
+    await expect(
+      guard.getMessengerGenerationGlobalLimitStats()
+    ).resolves.toEqual({
       redisBacked: false,
       max: 4,
       active: 0,
@@ -154,68 +203,6 @@ describe("generationGuard", () => {
       max: 5,
       lockTtlMs: 45000,
     });
-  });
-
-  it("reports whether the daily image budget cap is enabled", () => {
-    expect(guard.getMessengerDailyImageBudgetConfig()).toEqual({
-      enabled: false,
-      cap: null,
-    });
-
-    process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "25";
-
-    expect(guard.getMessengerDailyImageBudgetConfig()).toEqual({
-      enabled: true,
-      cap: 25,
-    });
-  });
-
-  it("does not reserve daily image budget when no cap is configured", async () => {
-    await expect(
-      guard.assertMessengerDailyImageBudgetAvailable({ reqId: "req-no-cap" })
-    ).resolves.toBeUndefined();
-
-    expect(stateStoreMocks.incrementExpiringCounter).not.toHaveBeenCalled();
-  });
-
-  it("reserves budget in a UTC daily counter when a cap is configured", async () => {
-    process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "2";
-    const now = new Date("2026-06-01T23:59:30.000Z");
-
-    await expect(
-      guard.assertMessengerDailyImageBudgetAvailable({ reqId: "req-budget", now })
-    ).resolves.toBeUndefined();
-
-    expect(stateStoreMocks.incrementExpiringCounter).toHaveBeenCalledWith(
-      "messenger:daily-image-budget:2026-06-01",
-      30
-    );
-  });
-
-  it("throws when the configured daily image budget is exceeded", async () => {
-    process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "1";
-    stateStoreMocks.incrementExpiringCounter.mockResolvedValue(2);
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
-
-    await expect(
-      guard.assertMessengerDailyImageBudgetAvailable({
-        reqId: "req-over-budget",
-        now: new Date("2026-06-01T12:00:00.000Z"),
-      })
-    ).rejects.toBeInstanceOf(guard.MessengerDailyImageBudgetExceededError);
-    expect(stateStoreMocks.decrementExpiringCounter).toHaveBeenCalledWith(
-      "messenger:daily-image-budget:2026-06-01"
-    );
-    expect(loggerMocks.safeLog).toHaveBeenCalledWith(
-      "messenger_daily_image_budget_reached",
-      expect.objectContaining({
-        reqId: hashRequestId("req-over-budget"),
-        cap: 1,
-        count: 2,
-        level: "warn",
-      })
-    );
-    expect(loggerMocks.safeLog).toHaveBeenCalledTimes(1);
   });
 
   it("reserves audio transcription budget in a UTC daily counter", async () => {
@@ -434,29 +421,30 @@ describe("generationGuard", () => {
   it("throws when a priced provider attempt would exceed the monthly spend cap", async () => {
     process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD = "0.03";
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    stateStoreMocks.readScopedState.mockImplementation(async (_scope: string, period: string) =>
-      period === "2026-06-01"
-        ? [
-            {
-              id: "existing",
-              channel: "facebook_messenger",
-              operation: "image_generation",
-              provider: "openai-images",
-              model: "gpt-image-2",
-              userKey: "user-key",
-              reqId: "req-existing",
-              status: "provider_attempt_started",
-              estimatedCostUsd: 0.02,
-              estimatedOutputCostUsd: null,
-              finalCostUsd: null,
-              costEstimateComplete: true,
-              estimateSource: "env_override",
-              unpricedCostComponents: [],
-              period: "2026-06-01",
-              recordedAt: "2026-06-01T10:00:00.000Z",
-            },
-          ]
-        : null
+    stateStoreMocks.readScopedState.mockImplementation(
+      async (_scope: string, period: string) =>
+        period === "2026-06-01"
+          ? [
+              {
+                id: "existing",
+                channel: "facebook_messenger",
+                operation: "image_generation",
+                provider: "openai-images",
+                model: "gpt-image-2",
+                userKey: "user-key",
+                reqId: "req-existing",
+                status: "provider_attempt_started",
+                estimatedCostUsd: 0.02,
+                estimatedOutputCostUsd: null,
+                finalCostUsd: null,
+                costEstimateComplete: true,
+                estimateSource: "env_override",
+                unpricedCostComponents: [],
+                period: "2026-06-01",
+                recordedAt: "2026-06-01T10:00:00.000Z",
+              },
+            ]
+          : null
     );
 
     await expect(
@@ -517,6 +505,7 @@ describe("generationGuard", () => {
         operation: "image_generation",
         provider: "openai-images",
         model: "gpt-image-2",
+        ...tenantScope("same-user-key"),
         userKey: "same-user-key",
         reqId: "req-same-user",
         status: "provider_attempt_started",
@@ -535,6 +524,7 @@ describe("generationGuard", () => {
         operation: "image_generation",
         provider: "openai-images",
         model: "gpt-image-2",
+        ...tenantScope("other-user-key"),
         userKey: "other-user-key",
         reqId: "req-other-user",
         status: "provider_attempt_started",
@@ -553,6 +543,7 @@ describe("generationGuard", () => {
       guard.assertMessengerUserDailySpendBudgetAvailable({
         reqId: "req-user-spend-ok",
         userKey: "same-user-key",
+        tenantScope: tenantScope("same-user-key"),
         estimatedCostUsd: 0.025,
         now: new Date("2026-06-01T12:00:00.000Z"),
       })
@@ -569,6 +560,7 @@ describe("generationGuard", () => {
         operation: "image_generation",
         provider: "openai-images",
         model: "gpt-image-2",
+        ...tenantScope("same-user-key"),
         userKey: "same-user-key",
         reqId: "req-same-user",
         status: "provider_attempt_started",
@@ -587,6 +579,7 @@ describe("generationGuard", () => {
       guard.assertMessengerUserDailySpendBudgetAvailable({
         reqId: "req-user-spend-over",
         userKey: "same-user-key",
+        tenantScope: tenantScope("same-user-key"),
         estimatedCostUsd: 0.025,
         now: new Date("2026-06-01T12:00:00.000Z"),
       })
@@ -610,6 +603,7 @@ describe("generationGuard", () => {
       guard.assertMessengerUserDailySpendBudgetAvailable({
         reqId: "req-user-unpriced",
         userKey: "user-key",
+        tenantScope: tenantScope("user-key"),
         estimatedCostUsd: null,
       })
     ).rejects.toBeInstanceOf(guard.MessengerSpendBudgetExceededError);
@@ -622,6 +616,7 @@ describe("generationGuard", () => {
       guard.assertMessengerUserDailySpendBudgetAvailable({
         reqId: "req-user-partial",
         userKey: "user-key",
+        tenantScope: tenantScope("user-key"),
         estimatedCostUsd: null,
         estimatedOutputCostUsd: 0.25,
         costEstimateComplete: false,

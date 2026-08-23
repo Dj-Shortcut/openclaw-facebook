@@ -17,6 +17,7 @@ const requiredFiles = [
   "apps/customer-app/src-tauri/tauri.conf.json",
   "apps/image-gen/storage-proxy/package.json",
   "apps/image-gen/storage-proxy/pnpm-lock.yaml",
+  "apps/image-gen/storage-proxy/pnpm-workspace.yaml",
   ".github/workflows/customer-app-ci.yml",
   ".github/workflows/image-gen-ci.yml",
   ".github/workflows/image-gen-fallow.yml",
@@ -31,7 +32,9 @@ const requiredFiles = [
 const tempDirs = [];
 
 function makeFixture() {
-  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "package-manager-contract-"));
+  const fixture = fs.mkdtempSync(
+    path.join(os.tmpdir(), "package-manager-contract-"),
+  );
   tempDirs.push(fixture);
   for (const relativePath of requiredFiles) {
     const destination = path.join(fixture, relativePath);
@@ -64,11 +67,23 @@ describe("package-manager contract", () => {
     );
   });
 
+  it("requires the storage-proxy workspace policy", () => {
+    const fixture = makeFixture();
+    fs.rmSync(
+      path.join(fixture, "apps/image-gen/storage-proxy/pnpm-workspace.yaml"),
+    );
+
+    expect(validatePackageManagerContract(fixture)).toContain(
+      "apps/image-gen/storage-proxy/pnpm-workspace.yaml: required file is missing",
+    );
+  });
+
   it("rejects combined production deploy orchestration", () => {
     const fixture = makeFixture();
     const packagePath = path.join(fixture, "package.json");
     const rootPackage = JSON.parse(fs.readFileSync(packagePath, "utf8"));
-    rootPackage.scripts.deploy = "npm run deploy:image-gen && npm run deploy:gateway";
+    rootPackage.scripts.deploy =
+      "npm run deploy:image-gen && npm run deploy:gateway";
     fs.writeFileSync(packagePath, `${JSON.stringify(rootPackage, null, 2)}\n`);
 
     expect(validatePackageManagerContract(fixture)).toContain(
@@ -80,7 +95,8 @@ describe("package-manager contract", () => {
     const fixture = makeFixture();
     const packagePath = path.join(fixture, "package.json");
     const rootPackage = JSON.parse(fs.readFileSync(packagePath, "utf8"));
-    rootPackage.scripts["deploy:image-gen"] = "fly deploy --config apps/image-gen/fly.toml";
+    rootPackage.scripts["deploy:image-gen"] =
+      "fly deploy --config apps/image-gen/fly.toml";
     fs.writeFileSync(packagePath, `${JSON.stringify(rootPackage, null, 2)}\n`);
 
     expect(validatePackageManagerContract(fixture)).toContain(
@@ -88,16 +104,49 @@ describe("package-manager contract", () => {
     );
   });
 
+  it("rejects a gateway deploy command that can build from source", () => {
+    const fixture = makeFixture();
+    const packagePath = path.join(fixture, "package.json");
+    const rootPackage = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+    rootPackage.scripts["deploy:gateway"] =
+      "node scripts/validate-production-deployment.mjs --validate-target-enabled gateway && fly deploy --config fly.toml --strategy rolling";
+    fs.writeFileSync(packagePath, `${JSON.stringify(rootPackage, null, 2)}\n`);
+
+    expect(validatePackageManagerContract(fixture)).toContain(
+      "package.json: deploy:gateway must use the canonical app-specific command",
+    );
+  });
+
   it("does not accept unrelated version text as a pnpm setup pin", () => {
     const fixture = makeFixture();
-    const workflowPath = path.join(fixture, ".github/workflows/customer-app-ci.yml");
-    const workflow = fs.readFileSync(workflowPath, "utf8")
+    const workflowPath = path.join(
+      fixture,
+      ".github/workflows/customer-app-ci.yml",
+    );
+    const workflow = fs
+      .readFileSync(workflowPath, "utf8")
       .replaceAll("version: 10.28.1", "version: 10.4.1")
       .concat("\n# unrelated versions\nversion: 10.28.1\nversion: 10.28.1\n");
     fs.writeFileSync(workflowPath, workflow);
 
     expect(validatePackageManagerContract(fixture)).toContain(
       ".github/workflows/customer-app-ci.yml: both pnpm setup steps must use version 10.28.1",
+    );
+  });
+
+  it("rejects a filtered root CI trigger that omits package-manager inputs", () => {
+    const fixture = makeFixture();
+    const workflowPath = path.join(fixture, ".github/workflows/main.yml");
+    const workflow = fs
+      .readFileSync(workflowPath, "utf8")
+      .replace(
+        "  pull_request:\n",
+        '  pull_request:\n    paths:\n      - "docs/**"\n',
+      );
+    fs.writeFileSync(workflowPath, workflow);
+
+    expect(validatePackageManagerContract(fixture)).toContain(
+      ".github/workflows/main.yml: paths must include pnpm-lock.yaml",
     );
   });
 });

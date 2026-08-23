@@ -8,9 +8,14 @@ const { resolveOwnershipMock, ensurePrivacyMock } = vi.hoisted(() => ({
 vi.mock("./_core/workspaceEntitlementRuntime", () => ({
   resolveMessengerGenerationOwnership: resolveOwnershipMock,
 }));
-vi.mock("./_core/messengerPrivacySubject", () => ({
-  ensureActiveMessengerPrivacySubject: ensurePrivacyMock,
-}));
+vi.mock("./_core/messengerPrivacySubject", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("./_core/messengerPrivacySubject")>();
+  return {
+    ...actual,
+    admitMessengerPrivacySubjectFromMetaEvent: ensurePrivacyMock,
+  };
+});
 
 import {
   enqueueWebhookIngressDelivery,

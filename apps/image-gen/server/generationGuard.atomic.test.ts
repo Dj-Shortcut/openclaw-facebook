@@ -13,6 +13,16 @@ import { writeScopedState } from "./_core/stateStore";
 const PERIOD = "2026-08-18";
 const NOW = new Date(`${PERIOD}T12:00:00.000Z`);
 
+function tenantScope(userKey: string) {
+  return {
+    workspaceId: 42,
+    channelConnectionId: 7,
+    bindingEpoch: 3,
+    privacyEpoch: 5,
+    userKey,
+  };
+}
+
 describe("atomic Messenger spend admission", () => {
   beforeEach(async () => {
     delete process.env.REDIS_URL;
@@ -84,6 +94,7 @@ describe("atomic Messenger spend admission", () => {
         reqId: "ledger-failure",
         attemptId: "ledger-failure:attempt-1",
         userKey: "user-a",
+        tenantScope: tenantScope("user-a"),
         estimatedCostUsd: 0.01,
         costEstimateComplete: true,
         now: NOW,
@@ -111,6 +122,7 @@ async function recordAttempt(
     reqId,
     attemptId: reqId,
     userKey,
+    tenantScope: tenantScope(userKey),
     estimatedCostUsd,
     costEstimateComplete: true,
     now: NOW,
@@ -122,6 +134,7 @@ async function recordAttempt(
           operation: "image_generation",
           provider: "test-provider",
           model: "test-model",
+          ...tenantScope(userKey),
           userKey,
           reqId,
           status: "provider_attempt_started",

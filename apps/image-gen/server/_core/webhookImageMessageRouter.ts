@@ -5,6 +5,7 @@ import {
 } from "./faceMemory";
 import { t, type Lang } from "./i18n";
 import {
+  cleanupNormalizedMessengerInboundImages,
   getStoredMessengerImageDecision,
   normalizeMessengerInboundImage,
 } from "./messengerImageIngress";
@@ -53,15 +54,45 @@ export async function tryHandleImageMessage(
   ctx: HandlerContext,
   input: ImageMessageInput
 ): Promise<boolean> {
-  const inboundImageUrls = getInboundImageUrls(input.attachments).slice(
-    0,
-    MAX_SOURCE_IMAGES
-  );
-  if (!inboundImageUrls.length) {
+  const receivedImageUrls = getInboundImageUrls(input.attachments);
+  if (!receivedImageUrls.length) {
     return false;
   }
 
-  logParsedImageMessage(ctx, input, inboundImageUrls);
+  const stateBeforePersistence = await getOrCreateState(input.psid);
+  const retainedImageCount = getRetainedSourceImageCount(
+    stateBeforePersistence
+  );
+  const availableImageSlots = Math.max(
+    0,
+    MAX_SOURCE_IMAGES - retainedImageCount
+  );
+  const inboundImageUrls = receivedImageUrls.slice(0, availableImageSlots);
+  const hasExtraImages = receivedImageUrls.length > inboundImageUrls.length;
+
+  logParsedImageMessage(ctx, input, receivedImageUrls);
+  if (hasExtraImages) {
+    await ctx.sendLoggedText(
+      input.psid,
+      t(input.lang, "maxSourceImagesRetained"),
+      input.reqId
+    );
+  }
+
+  if (!inboundImageUrls.length) {
+    if (shouldHandleImageCaptionAsConversation(input.text)) {
+      await handleTextMessage(ctx, {
+        psid: input.psid,
+        userId: input.userId,
+        reqId: input.reqId,
+        lang: input.lang,
+        text: input.text.trim(),
+        timestamp: input.timestamp,
+      });
+    }
+    return true;
+  }
+
   const storedSourceImageUrls = await persistInboundImages(
     input,
     inboundImageUrls
@@ -70,28 +101,72 @@ export async function tryHandleImageMessage(
     await handleMissingStoredImage(ctx, input);
     return true;
   }
-  const storedSourceImageUrl = storedSourceImageUrls.at(-1)!;
+  const newlyStoredImageUrls = excludeAlreadyRetainedImages(
+    storedSourceImageUrls,
+    stateBeforePersistence
+  );
+  let state: Awaited<ReturnType<typeof getOrCreateState>>;
+  let prepared: Awaited<ReturnType<typeof prepareStoredImageDecision>>;
+  try {
+    state = await getOrCreateState(input.psid);
+    prepared = await prepareStoredImageDecision(
+      ctx,
+      input,
+      state,
+      storedSourceImageUrls
+    );
+  } catch (error) {
+    await cleanupNormalizedMessengerInboundImages(newlyStoredImageUrls).catch(
+      () => undefined
+    );
+    throw error;
+  }
+  const newlyStoredSet = new Set(newlyStoredImageUrls);
+  const rejectedNewImages = prepared.rejectedIncomingImageUrls.filter(url =>
+    newlyStoredSet.has(url)
+  );
+  if (rejectedNewImages.length > 0) {
+    await cleanupNormalizedMessengerInboundImages(rejectedNewImages).catch(
+      () => undefined
+    );
+    if (!hasExtraImages) {
+      await ctx.sendLoggedText(
+        input.psid,
+        t(input.lang, "maxSourceImagesRetained"),
+        input.reqId
+      );
+    }
+  }
+  const storedSourceImageUrl = prepared.retainedIncomingImageUrls.at(-1);
+  if (!storedSourceImageUrl || !prepared.imageDecision) {
+    if (shouldHandleImageCaptionAsConversation(input.text)) {
+      await handleTextMessage(ctx, {
+        psid: input.psid,
+        userId: input.userId,
+        reqId: input.reqId,
+        lang: input.lang,
+        text: input.text.trim(),
+        timestamp: input.timestamp,
+      });
+    }
+    return true;
+  }
+  const imageDecision = prepared.imageDecision;
 
-  const state = await getOrCreateState(input.psid);
   if (await runImageFeatures(ctx, input, state, storedSourceImageUrl)) {
     return true;
   }
 
-  const imageDecision = await prepareStoredImageDecision(
-    ctx,
-    input,
-    state,
-    storedSourceImageUrls
-  );
   const updatedState = await getOrCreateState(input.psid);
   const pendingImageCount = updatedState.pendingImageUrls?.length ?? 1;
   await setPendingScreenshotIntentContinuation(input.psid, false);
 
-  const shouldContinueScreenshotIntent = shouldContinueImageIntentAfterScreenshot({
-    text: input.text,
-    state,
-    storedSourceImageUrl,
-  });
+  const shouldContinueScreenshotIntent =
+    shouldContinueImageIntentAfterScreenshot({
+      text: input.text,
+      state,
+      storedSourceImageUrl,
+    });
 
   if (
     isScreenshotUploadCaption(input.text ?? "") &&
@@ -109,14 +184,14 @@ export async function tryHandleImageMessage(
 
   if (
     pendingImageCount < 2 &&
-    await promptForFaceMemoryConsent(
+    (await promptForFaceMemoryConsent(
       ctx,
       input,
       state,
       imageDecision.action,
       storedSourceImageUrl,
       shouldContinueScreenshotIntent
-    )
+    ))
   ) {
     return true;
   }
@@ -213,13 +288,43 @@ function getInboundImageUrls(
   );
 }
 
+function getRetainedSourceImageCount(
+  state: Awaited<ReturnType<typeof getOrCreateState>>
+): number {
+  if (state.stage !== "AWAITING_EDIT_PROMPT") {
+    return 0;
+  }
+
+  return Math.min(state.pendingImageUrls?.length ?? 0, MAX_SOURCE_IMAGES);
+}
+
+function excludeAlreadyRetainedImages(
+  imageUrls: readonly string[],
+  state: Awaited<ReturnType<typeof getOrCreateState>>
+): string[] {
+  const alreadyRetained = new Set(
+    [
+      ...(state.pendingImageUrls ?? []),
+      state.pendingImageUrl,
+      state.lastPhotoUrl,
+      state.lastPhoto,
+      state.lastSourceImageUrl,
+      state.lastGeneratedUrl,
+      state.lastImageUrl,
+    ].filter((url): url is string => Boolean(url))
+  );
+  return Array.from(new Set(imageUrls)).filter(
+    imageUrl => !alreadyRetained.has(imageUrl)
+  );
+}
+
 function logParsedImageMessage(
   ctx: HandlerContext,
   input: ImageMessageInput,
   inboundImageUrls: string[]
 ): void {
   const psidHash = anonymizePsid(input.psid).slice(0, 12);
-  const inboundImageUrl = inboundImageUrls[0]!;
+  const inboundImageUrl = inboundImageUrls[0];
   const attachmentHostname = ctx.getAttachmentHostname(inboundImageUrl);
   const attachmentType = input.attachments?.find(
     att => isImageAttachment(att) && att.payload?.url === inboundImageUrl
@@ -256,6 +361,7 @@ async function persistInboundImages(
     inboundImageUrls.map((inboundImageUrl, index) =>
       normalizeMessengerInboundImage({
         inboundImageUrl,
+        psid: input.psid,
         psidHash: anonymizePsid(input.psid).slice(0, 12),
         reqId:
           inboundImageUrls.length === 1
@@ -274,15 +380,18 @@ async function handleMissingStoredImage(
   const state = await getOrCreateState(input.psid);
   const hasEditableImage = Boolean(
     state.lastPhotoUrl ??
-      state.lastPhoto ??
-      state.lastGeneratedUrl ??
-      state.lastImageUrl
+    state.lastPhoto ??
+    state.lastGeneratedUrl ??
+    state.lastImageUrl
   );
   await setFlowState(
     input.psid,
     hasEditableImage ? "AWAITING_EDIT_PROMPT" : "AWAITING_PHOTO"
   );
-  const response = buildImageUploadFailureResponse(input.lang, hasEditableImage);
+  const response = buildImageUploadFailureResponse(
+    input.lang,
+    hasEditableImage
+  );
   await ctx.sendLoggedActions(
     input.psid,
     response.text ?? "",
@@ -329,12 +438,24 @@ async function prepareStoredImageDecision(
     input.reqId,
     "image_received"
   );
-  const imageDecision = getStoredMessengerImageDecision({
-    lastPhotoUrl: state.lastPhotoUrl,
-    storedSourceImageUrl: storedSourceImageUrls.at(-1)!,
-  });
-  await setPendingStoredImages(input.psid, storedSourceImageUrls);
-  return imageDecision;
+  const update = await setPendingStoredImages(
+    input.psid,
+    storedSourceImageUrls
+  );
+  const retainedIncomingImageUrls = storedSourceImageUrls.filter(imageUrl =>
+    update.retainedIncomingImageUrls.includes(imageUrl)
+  );
+  const storedSourceImageUrl = retainedIncomingImageUrls.at(-1);
+  return {
+    imageDecision: storedSourceImageUrl
+      ? getStoredMessengerImageDecision({
+          lastPhotoUrl: state.lastPhotoUrl,
+          storedSourceImageUrl,
+        })
+      : undefined,
+    retainedIncomingImageUrls,
+    rejectedIncomingImageUrls: update.rejectedIncomingImageUrls,
+  };
 }
 
 async function promptForFaceMemoryConsent(

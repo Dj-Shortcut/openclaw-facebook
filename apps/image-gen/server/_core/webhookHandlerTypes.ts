@@ -1,6 +1,11 @@
 export type MessengerSendOutcome =
   | { sent: true; messageId?: string }
   | { sent: false; reason: "response_window_closed" };
+
+export type MessengerProviderAttemptControl = Readonly<{
+  /** Stable within one logical notice, even when its live balance text changes. */
+  providerAttemptKey: string;
+}>;
 import type {
   BotImageContext,
   BotPayloadContext,
@@ -133,12 +138,14 @@ export type HandlerContext = {
     psid: string,
     text: string,
     actions: ConversationAction[],
-    reqId: string
+    reqId: string,
+    deliveryControl?: MessengerProviderAttemptControl
   ) => Promise<MessengerSendOutcome>;
   sendLoggedText: (
     psid: string,
     text: string,
-    reqId: string
+    reqId: string,
+    deliveryControl?: MessengerProviderAttemptControl
   ) => Promise<MessengerSendOutcome>;
   sendPhotoReceivedPrompt: (
     psid: string,

@@ -93,6 +93,58 @@ export function getGeneratedImage(
   };
 }
 
+/**
+ * Recognises only URLs that point at an image currently held by this process.
+ *
+ * The in-memory image route is a development/test fallback; production must
+ * use tenant-scoped object storage. Checking the live token prevents a state
+ * value that merely looks like `/generated/...` from becoming trusted input.
+ */
+export function isLocalGeneratedImageUrl(publicUrl: string): boolean {
+  if (process.env.NODE_ENV === "production") {
+    return false;
+  }
+
+  const configuredBaseUrl =
+    process.env.APP_BASE_URL?.trim() || process.env.BASE_URL?.trim();
+  if (!configuredBaseUrl) {
+    return false;
+  }
+
+  try {
+    const base = new URL(configuredBaseUrl);
+    const candidate = new URL(publicUrl);
+    if (
+      (base.protocol !== "https:" && base.protocol !== "http:") ||
+      base.username ||
+      base.password ||
+      base.search ||
+      base.hash ||
+      candidate.origin !== base.origin ||
+      candidate.username ||
+      candidate.password ||
+      candidate.search ||
+      candidate.hash
+    ) {
+      return false;
+    }
+
+    const basePath = base.pathname.replace(/\/+$/u, "");
+    const routePrefix = `${basePath}/generated/`;
+    if (!candidate.pathname.startsWith(routePrefix)) {
+      return false;
+    }
+    const fileName = candidate.pathname.slice(routePrefix.length);
+    const match =
+      /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(?:jpe?g|png|webp)$/iu.exec(
+        fileName
+      );
+    return Boolean(match && getGeneratedImage(match[1]));
+  } catch {
+    return false;
+  }
+}
+
 export function buildGeneratedImageUrl(
   baseUrl: string,
   token: string,

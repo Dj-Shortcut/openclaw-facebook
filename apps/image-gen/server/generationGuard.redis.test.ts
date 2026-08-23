@@ -21,6 +21,16 @@ const originalRedisUrl = process.env.REDIS_URL;
 const USER = "redis-spend-user";
 const NOW = new Date("2031-02-14T12:00:00.000Z");
 
+function tenantScope(userKey: string) {
+  return {
+    workspaceId: 42,
+    channelConnectionId: 7,
+    bindingEpoch: 3,
+    privacyEpoch: 5,
+    userKey,
+  };
+}
+
 suite("distributed Redis spend admission", () => {
   beforeAll(() => {
     process.env.REDIS_URL ||= "redis://127.0.0.1:6379/15";
@@ -145,6 +155,7 @@ suite("distributed Redis spend admission", () => {
         operation: "image_generation",
         provider: "test",
         model: null,
+        ...tenantScope(USER),
         userKey: USER,
         reqId: "baseline",
         status: "provider_attempt_started",
@@ -190,6 +201,7 @@ async function admit(
     reqId: `req-${createHash("sha256").update(attemptId).digest("hex").slice(0, 8)}`,
     attemptId,
     userKey,
+    tenantScope: tenantScope(userKey),
     estimatedCostUsd: cost,
     costEstimateComplete: true,
     now,

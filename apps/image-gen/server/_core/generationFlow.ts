@@ -17,13 +17,11 @@ import type { SourceImageOrigin } from "./messengerState";
 import type { GenerationKind } from "./image-generation/generationTypes";
 import { summarizeSensitiveUrl } from "./utils/urlSummarizer";
 import { storageGet, storageKeyFromPublicUrl } from "../storage";
-import {
-  MessengerDailyImageBudgetExceededError,
-  MessengerSpendBudgetExceededError,
-} from "./generationGuard";
-import { MessengerQuotaReservationCommitError } from "./messengerQuota";
 import { safeLog } from "./logger";
 import type { OpenAiImageQuality } from "./image-generation/openAiImageClient";
+import type { CostLedgerTenantScope } from "./costLedger";
+import { hashStorageObjectKeyForLog } from "./messengerStorageObject";
+import { isLocalGeneratedImageUrl } from "./generatedImageStore";
 
 type GenerationProof = {
   incomingLen: number;
@@ -86,6 +84,8 @@ type ExecuteGenerationFlowInput = {
   lastPhotoSource?: SourceImageOrigin | null;
   onProviderAttempt?: () => Promise<void>;
   bypassBudgetLimits?: boolean;
+  costLedgerChannel?: string;
+  costLedgerScope?: CostLedgerTenantScope;
   imageModel?: string;
   imageQuality?: OpenAiImageQuality;
 };
@@ -151,7 +151,10 @@ async function resolveStoredRuntimeSourceUrl(input: {
   if (input.sourceImageUrls?.length) {
     const sourceImageUrls = Array.from(new Set(input.sourceImageUrls));
     const storageKeys = sourceImageUrls.map(storageKeyFromPublicUrl);
-    if (storageKeys.some(key => !key)) {
+    const trustedLocalUrls = sourceImageUrls.map(isLocalGeneratedImageUrl);
+    if (
+      storageKeys.some((key, index) => !key && trustedLocalUrls[index] !== true)
+    ) {
       return {
         resolvedSourceImageUrl: sourceImageUrls.at(-1),
         resolvedSourceImageUrls: sourceImageUrls,
@@ -169,7 +172,9 @@ async function resolveStoredRuntimeSourceUrl(input: {
 
     try {
       const refreshedUrls = await Promise.all(
-        storageKeys.map(async key => (await storageGet(key!)).url)
+        storageKeys.map(async (key, index) =>
+          key ? (await storageGet(key)).url : sourceImageUrls[index]
+        )
       );
       return {
         resolvedSourceImageUrl: refreshedUrls.at(-1),
@@ -211,10 +216,11 @@ async function resolveStoredRuntimeSourceUrl(input: {
 
   const storageKey = storageKeyFromPublicUrl(originalSourceImageUrl);
   if (!storageKey) {
+    const trustedLocalUrl = isLocalGeneratedImageUrl(originalSourceImageUrl);
     return {
       resolvedSourceImageUrl: originalSourceImageUrl,
       resolvedSourceImageUrls: [originalSourceImageUrl],
-      trustedSourceImageUrl: false,
+      trustedSourceImageUrl: trustedLocalUrl,
     };
   }
 
@@ -237,7 +243,7 @@ async function resolveStoredRuntimeSourceUrl(input: {
     safeLog("stored_source_image_url_refresh_failed", {
       level: "warn",
       reqId: input.reqId,
-      storageKey,
+      objectKeyHash: hashStorageObjectKeyForLog(storageKey),
       error,
     });
     return {
@@ -284,17 +290,6 @@ function classifyGenerationError(error: unknown): GenerationFlowFailureKind {
     return "generation_budget_reached";
   }
 
-  if (
-    error instanceof MessengerDailyImageBudgetExceededError ||
-    error instanceof MessengerSpendBudgetExceededError
-  ) {
-    return "generation_budget_reached";
-  }
-
-  if (error instanceof MessengerQuotaReservationCommitError) {
-    return "generation_budget_reached";
-  }
-
   return "generation_failed";
 }
 
@@ -305,8 +300,7 @@ export async function executeGenerationFlow(
     resolvedSourceImageUrl,
     resolvedSourceImageUrls,
     trustedSourceImageUrl,
-  } =
-    await resolveStoredRuntimeSourceUrl(input);
+  } = await resolveStoredRuntimeSourceUrl(input);
   const generationKind = resolveEffectiveGenerationKind({
     generationKind: input.generationKind,
     resolvedSourceImageUrl,
@@ -359,6 +353,8 @@ export async function executeGenerationFlow(
       promptHint: input.promptHint,
       onProviderAttempt: input.onProviderAttempt,
       bypassBudgetLimits: input.bypassBudgetLimits,
+      costLedgerChannel: input.costLedgerChannel,
+      costLedgerScope: input.costLedgerScope,
       model: input.imageModel,
       quality: input.imageQuality,
       userKey: input.userId,

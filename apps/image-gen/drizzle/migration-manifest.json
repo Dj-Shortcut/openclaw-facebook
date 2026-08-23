@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "journalSha256": "e1022c931fe83e84f6c784a76a84d23517f5b21f24dd26604bb6fd5ccadd214c",
+  "journalSha256": "635a80d1ff0fb61b8777ccd8cc74dd01cc075c7c4a7788c87fa592557cf65df6",
   "baseSchemaSnapshot": "meta/0014_snapshot.json",
   "baseSchemaSnapshotSha256": "e0102aad23d607b4b359d1a11458d56c63533d73f056f332076ba952b7468b35",
-  "schemaSnapshot": "meta/0015_snapshot.json",
-  "schemaSnapshotSha256": "ea37ae186efb289955014e2b62acdcf337e28fad5edfaed598e99ab69992f163",
+  "schemaSnapshot": "meta/0017_snapshot.json",
+  "schemaSnapshotSha256": "8b18f94ffeb8d603e82049aebe0b2f60960556a837ce02e467f43aa78194a4c6",
   "productionSchemaContract": "production-schema-contract.json",
-  "productionSchemaContractSha256": "f936e2a9ddfb3a97c1ba9576eb128cfa19676613aa14bb505df7ec7cb605e727",
+  "productionSchemaContractSha256": "d1c2f4bebec39e4103ef3f2ba460b94acb006d4b3ed9e603f450d9ae1d6dcaca",
   "migrations": [
     {
       "idx": 0,
@@ -103,6 +103,18 @@
       "when": 1787056321209,
       "tag": "0015_production_readiness_registry",
       "sha256": "75b3299156526d862fee25d37ca09647b4e8113f38757618b097b71d1b2fe508"
+    },
+    {
+      "idx": 16,
+      "when": 1787477710719,
+      "tag": "0016_static_epoch_scope_fks",
+      "sha256": "015e06e5c5831a71f7a7b1c1c98283c24257b8ff5e99e2c4c73364f0afc40a6b"
+    },
+    {
+      "idx": 17,
+      "when": 1787481815801,
+      "tag": "0017_handoff_privacy_scope",
+      "sha256": "2caad5e16a76f11cd365afa3566113361da0da7318d0fdfa2af3f33a9da2326a"
     }
   ]
 }
