@@ -21,7 +21,8 @@ describe("sourceImageStore", () => {
 
   it("keeps local in-memory fallback outside production", async () => {
     process.env.APP_BASE_URL = "https://gateway.example";
-    const { storeInboundSourceImage } = await import("./_core/sourceImageStore");
+    const { storeInboundSourceImage } =
+      await import("./_core/sourceImageStore");
 
     const url = await storeInboundSourceImage(
       Buffer.from([1, 2, 3]),
@@ -36,10 +37,10 @@ describe("sourceImageStore", () => {
   it("fails in production when durable source image storage is missing", async () => {
     process.env.NODE_ENV = "production";
     process.env.APP_BASE_URL = "https://gateway.example";
-    const { storeInboundSourceImage } = await import("./_core/sourceImageStore");
-    const { MissingObjectStorageConfigError } = await import(
-      "./_core/image-generation/imageServiceErrors"
-    );
+    const { storeInboundSourceImage } =
+      await import("./_core/sourceImageStore");
+    const { MissingObjectStorageConfigError } =
+      await import("./_core/image-generation/imageServiceErrors");
 
     await expect(
       storeInboundSourceImage(
@@ -59,19 +60,30 @@ describe("sourceImageStore", () => {
       key: "inbound-source/source.jpg",
       url: "https://cdn.example/inbound-source/source.jpg?signature=abc",
     });
-    const { storeInboundSourceImage } = await import("./_core/sourceImageStore");
+    const { createInboundSourceImageObjectKey, storeInboundSourceImage } =
+      await import("./_core/sourceImageStore");
+    const objectKey = createInboundSourceImageObjectKey("image/jpeg", {
+      workspaceId: 42,
+      channelConnectionId: 7,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      userKey: "a".repeat(64),
+    });
 
     const url = await storeInboundSourceImage(
       Buffer.from([1, 2, 3]),
       "image/jpeg",
-      "req-prod-source"
+      "req-prod-source",
+      objectKey
     );
 
     expect(url).toBe(
       "https://cdn.example/inbound-source/source.jpg?signature=abc"
     );
     expect(storagePutMock).toHaveBeenCalledWith(
-      expect.stringMatching(/^inbound-source\/\d+-[0-9a-f-]+\.jpg$/),
+      expect.stringMatching(
+        /^inbound-source\/v1\/workspace-42\/connection-7\/binding-3\/privacy-5\/user-[a-f0-9]{64}\/\d+-[0-9a-f-]+\.jpg$/
+      ),
       Buffer.from([1, 2, 3]),
       "image/jpeg"
     );

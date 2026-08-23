@@ -24,6 +24,7 @@ import {
 } from "../whatsappResponseService";
 import { summarizeSensitiveUrl } from "../utils/urlSummarizer";
 import { safeLog } from "../logger";
+import { toLogUser } from "../privacy";
 
 type ImageGenerationInput = {
   senderId: string;
@@ -57,7 +58,7 @@ function logGenerationRequested(input: {
   trustedSourceImageUrl: boolean;
 }): void {
   safeLog("whatsapp_generation_requested", {
-    user: input.userId,
+    user: toLogUser(input.userId),
     hasPromptHint: Boolean(input.promptHint?.trim()),
     sourceImageUrlHost: resolvedSourceHost(input.resolvedSourceImageUrl),
     trustedSourceImageUrl: input.trustedSourceImageUrl,
@@ -135,7 +136,7 @@ function logGenerationFailure(input: {
     input.result.metrics ?? getGenerationMetrics(input.result.error);
   safeLog("whatsapp_generation_failed", {
     level: "error",
-    user: input.userId,
+    user: toLogUser(input.userId),
     totalMs: metrics?.totalMs,
     error:
       input.result.error instanceof Error
@@ -157,7 +158,7 @@ function logRejectedSourceImage(input: {
 
   safeLog("whatsapp_source_image_rejected", {
     level: "error",
-    user: input.userId,
+    user: toLogUser(input.userId),
     sourceImageLocation: summarizeSensitiveUrl(
       input.result.resolvedSourceImageUrl
     ),
@@ -205,7 +206,7 @@ async function resolveGenerationFailure(input: {
 
   if (input.result.errorKind === "generation_budget_reached") {
     await setFlowState(input.senderId, "AWAITING_EDIT_PROMPT");
-    return t(input.lang, "generationBudgetReached");
+    return t(input.lang, "generationProviderUnavailable");
   }
 
   await setFlowState(input.senderId, "FAILURE");
@@ -265,11 +266,13 @@ async function runWhatsAppImageGenerationOnce(
     return;
   }
 
-  let pendingQuotaReservation: typeof quotaReservation | null = quotaReservation;
+  let pendingQuotaReservation: typeof quotaReservation | null =
+    quotaReservation;
   let providerAttemptsCommitted = 0;
   const commitProviderAttemptQuota = async () => {
     const reservationForAttempt =
-      pendingQuotaReservation ?? (await reserveImageGenerationUsage(quotaInput));
+      pendingQuotaReservation ??
+      (await reserveImageGenerationUsage(quotaInput));
     if (!reservationForAttempt) {
       throw new MessengerQuotaReservationCommitError();
     }
@@ -306,6 +309,7 @@ async function runWhatsAppImageGenerationOnce(
       lastPhotoUrl: generationContext.lastPhotoUrl,
       lastPhotoSource: generationContext.lastPhotoSource,
       onProviderAttempt: commitProviderAttemptQuota,
+      costLedgerChannel: "whatsapp",
     });
 
     if (result.kind === "success") {

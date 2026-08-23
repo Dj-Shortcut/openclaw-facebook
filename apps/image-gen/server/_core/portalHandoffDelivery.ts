@@ -17,6 +17,8 @@ export type SendPortalHandoffInput = {
   workspaceId: number;
   messengerSenderUserKey: string;
   expectedFacebookPageId?: string | null;
+  expectedChannelConnectionId?: number | null;
+  expectedPrivacyEpoch?: number | null;
   createdByUserId?: number | null;
   baseUrl?: string;
   now?: Date;
@@ -168,12 +170,24 @@ export async function sendPortalHandoffLink(
   if (!facebookConnection) {
     return { ok: false, reason: "page_binding_unavailable" };
   }
+  if (
+    input.expectedChannelConnectionId &&
+    facebookConnection.id !== input.expectedChannelConnectionId
+  ) {
+    return { ok: false, reason: "privacy_erased" };
+  }
   const privacyEpoch = await getActiveMessengerPrivacySubjectEpoch({
     workspaceId: input.workspaceId,
     channelConnectionId: facebookConnection.id,
     userKey: input.messengerSenderUserKey,
   });
   if (!privacyEpoch) {
+    return { ok: false, reason: "privacy_erased" };
+  }
+  if (
+    input.expectedPrivacyEpoch &&
+    privacyEpoch !== input.expectedPrivacyEpoch
+  ) {
     return { ok: false, reason: "privacy_erased" };
   }
   const stateFence = {
@@ -239,6 +253,8 @@ export async function sendPortalHandoffLink(
       workspaceId: input.workspaceId,
       facebookPageId: pageId,
       messengerSenderUserKey: input.messengerSenderUserKey,
+      messengerChannelConnectionId: facebookConnection.id,
+      messengerPrivacyEpoch: privacyEpoch,
       createdByUserId: input.createdByUserId ?? null,
       now: input.now,
       ttlMs: input.ttlMs,

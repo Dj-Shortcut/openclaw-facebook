@@ -187,5 +187,10 @@ describe("gateway deployment safety validation", () => {
     expect(() =>
       validatePluginWorkflow('paths:\n  - "fly.toml"'),
     ).not.toThrow();
+    expect(() =>
+      validatePluginWorkflow(
+        "on:\n  pull_request:\n  push:\n    branches: [main]",
+      ),
+    ).not.toThrow();
   });
 });

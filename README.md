@@ -58,23 +58,21 @@ This repository is a monorepo containing the Facebook/OpenClaw integration and t
 └── scripts                     # Operational and maintenance scripts
 ```
 
-Production deploys run only through the manually dispatched, approval-protected
-`Deploy production` GitHub Actions workflow. It selects exactly one app, checks
-Machine/config drift, captures the immutable rollback image and active Fly
-configuration, deploys from `main`, and verifies Fly plus Meta afterward.
-Bounded deployment and verification steps reserve time for restoring the
-captured image, configuration, and desired scale after a failure. The canonical
-app-specific commands used by that workflow are:
+Production changes use only approval-protected GitHub workflows:
 
-```bash
-npm run deploy:image-gen
-npm run deploy:gateway
-```
+1. `Build trusted production artifact` builds an exact image from reviewed
+   `main` and records proof of its source.
+2. A reviewed manifest PR approves that immutable digest and its safe rollback.
+3. `Deploy production` deploys one approved app and restores the captured
+   release if its checks fail.
 
-Do not create production Machines with `fly machine run`. See
+The image-gen database has one additional protected route:
+`Apply reviewed image-gen schema expand` first proves a fresh encrypted backup
+can be restored and then applies only the backwards-compatible 0016 addition.
+Migration 0017 is blocked. Do not run production migrations, `fly deploy`, or
+`fly machine run` by hand. See
 [`docs/operations/production-deployments.md`](docs/operations/production-deployments.md).
-The stateful gateway remains manifest-blocked until its volume migration is
-rehearsed and its proven managed rollback digest is approved in the same PR.
+The gateway remains blocked until its volume migration is safely rehearsed.
 
 ## Configure
 
@@ -163,9 +161,9 @@ and the Page's privacy/data-retention terms disclose that processing:
       unknownSenderMode: "leaderbot_free_tier",
       defaultLang: "nl",
       customerPortalUrl: "https://leaderbot.live/",
-      sharedStateStore: "memory"
-    }
-  }
+      sharedStateStore: "memory",
+    },
+  },
 }
 ```
 

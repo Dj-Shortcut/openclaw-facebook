@@ -42,15 +42,21 @@ function getUnsupportedResponseKey(
   }
 
   if (route === "unsupported_video") {
-    return hasEditablePhoto ? "unsupportedVideoWithEditableImage" : "unsupportedVideo";
+    return hasEditablePhoto
+      ? "unsupportedVideoWithEditableImage"
+      : "unsupportedVideo";
   }
 
   if (route === "unsupported_file") {
-    return hasEditablePhoto ? "unsupportedFileWithEditableImage" : "unsupportedFile";
+    return hasEditablePhoto
+      ? "unsupportedFileWithEditableImage"
+      : "unsupportedFile";
   }
 
   if (route === "unsupported_share") {
-    return hasEditablePhoto ? "unsupportedShareWithEditableImage" : "unsupportedShare";
+    return hasEditablePhoto
+      ? "unsupportedShareWithEditableImage"
+      : "unsupportedShare";
   }
 
   if (route === "unsupported_sticker") {
@@ -71,7 +77,9 @@ function getUnsupportedResponseKey(
       : "unsupportedMedia";
   }
 
-  return hasEditablePhoto ? "unsupportedMediaWithEditableImage" : "unsupportedUnknown";
+  return hasEditablePhoto
+    ? "unsupportedMediaWithEditableImage"
+    : "unsupportedUnknown";
 }
 
 type UnsupportedAttachmentCopyKey =
@@ -100,9 +108,9 @@ function getAfterRouteTextResponse(
 function hasEditableImage(state: MessengerUserState | null): boolean {
   return Boolean(
     state?.lastPhotoUrl ??
-      state?.lastPhoto ??
-      state?.lastGeneratedUrl ??
-      state?.lastImageUrl
+    state?.lastPhoto ??
+    state?.lastGeneratedUrl ??
+    state?.lastImageUrl
   );
 }
 
@@ -159,7 +167,7 @@ export async function handleMessageEvent(
     : null;
 
   if (normalizedAttachments.length) {
-    await logMessengerAttachments(ctx, input, normalizedAttachments, trimmedText);
+    logMessengerAttachments(ctx, input, normalizedAttachments, trimmedText);
   }
 
   if (
@@ -178,7 +186,7 @@ export async function handleMessageEvent(
     });
     if (imageHandled) {
       const stateAfter = await getOrCreateState(input.psid);
-      await logMessengerImageRouted(
+      logMessengerImageRouted(
         ctx,
         input,
         normalizedAttachments,
@@ -203,7 +211,7 @@ export async function handleMessageEvent(
     });
     if (audioHandled) {
       const stateAfter = await getOrCreateState(input.psid);
-      await logMessengerAttachmentRouted(
+      logMessengerAttachmentRouted(
         ctx,
         input,
         normalizedAttachments,
@@ -259,12 +267,12 @@ export async function handleMessageEvent(
   }
 }
 
-async function logMessengerAttachments(
+function logMessengerAttachments(
   ctx: HandlerContext,
   input: MessageEventInput,
   attachments: MessengerNormalizedAttachment[],
   trimmedText: string | undefined
-): Promise<void> {
+): void {
   safeLog("messenger_attachment_received", {
     reqId: input.reqId,
     psidHash: anonymizePsid(input.psid).slice(0, 12),
@@ -282,7 +290,7 @@ async function logMessengerAttachments(
   });
 }
 
-async function logMessengerImageRouted(
+function logMessengerImageRouted(
   ctx: HandlerContext,
   input: MessageEventInput,
   attachments: MessengerNormalizedAttachment[],
@@ -290,8 +298,8 @@ async function logMessengerImageRouted(
   route: MessengerAttachmentRoute,
   stateBefore?: MessengerUserState | null,
   stateAfter?: MessengerUserState | null
-): Promise<void> {
-  await logMessengerAttachmentRouted(
+): void {
+  logMessengerAttachmentRouted(
     ctx,
     input,
     attachments,
@@ -313,7 +321,7 @@ async function sendUnsupportedAttachmentResponse(
   stateBefore?: MessengerUserState | null
 ): Promise<void> {
   const stateAfter = await getOrCreateState(input.psid);
-  await logMessengerAttachmentRouted(
+  logMessengerAttachmentRouted(
     ctx,
     input,
     attachments,
@@ -345,7 +353,7 @@ async function sendUnsupportedAttachmentResponse(
   );
 }
 
-async function logMessengerAttachmentRouted(
+function logMessengerAttachmentRouted(
   ctx: HandlerContext,
   input: MessageEventInput,
   attachments: MessengerNormalizedAttachment[],
@@ -355,7 +363,7 @@ async function logMessengerAttachmentRouted(
   stateBefore?: MessengerUserState | null,
   stateAfter?: MessengerUserState | null,
   hasUrl?: boolean
-): Promise<void> {
+): void {
   safeLog("messenger_attachment_routed", {
     reqId: input.reqId,
     psidHash: anonymizePsid(input.psid).slice(0, 12),

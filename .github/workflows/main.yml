@@ -2,39 +2,6 @@ name: Validate plugin package
 
 on:
   pull_request:
-    paths:
-      - ".github/workflows/main.yml"
-      - ".github/workflows/update-openclaw.yml"
-      - ".github/workflows/customer-app-ci.yml"
-      - ".github/workflows/image-gen-ci.yml"
-      - ".github/workflows/image-gen-fallow.yml"
-      - ".github/workflows/deploy-production.yml"
-      - ".github/workflows/production-uptime.yml"
-      - "apps/**/package-lock.json"
-      - "apps/customer-app/package.json"
-      - "apps/customer-app/pnpm-lock.yaml"
-      - "apps/customer-app/src-tauri/tauri.conf.json"
-      - "apps/image-gen/package.json"
-      - "apps/image-gen/pnpm-lock.yaml"
-      - "apps/image-gen/README.md"
-      - "apps/image-gen/fly.toml"
-      - "apps/image-gen/scripts/run-fallow-report.mjs"
-      - "apps/image-gen/storage-proxy/package.json"
-      - "apps/image-gen/storage-proxy/pnpm-lock.yaml"
-      - "package.json"
-      - "package-lock.json"
-      - "pnpm-lock.yaml"
-      - "openclaw.plugin.json"
-      - "README.md"
-      - "docs/**"
-      - "deploy/fly-gateway/**"
-      - "deploy/production/**"
-      - "fly.toml"
-      - "examples/**"
-      - "scripts/**"
-      - "src/**"
-      - "*.ts"
-      - "tsconfig.json"
   push:
     branches: [main]
 
@@ -47,7 +14,7 @@ jobs:
 
     services:
       redis:
-        image: redis:7-alpine
+        image: redis:7-alpine@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf
         ports:
           - 6379:6379
         options: >-
@@ -58,10 +25,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           cache: npm
@@ -122,7 +89,7 @@ jobs:
 
       - name: Validate tarball contents
         run: |
-          tarball="$(ls dj-shortcut-facebook-*.tgz | head -n 1)"
+          tarball="$(find . -maxdepth 1 -type f -name 'dj-shortcut-facebook-*.tgz' -print -quit)"
           test -n "$tarball"
           tar -tzf "$tarball" > /tmp/openclaw-facebook-tarball-files.txt
           grep -Fx "package/dist/index.js" /tmp/openclaw-facebook-tarball-files.txt
@@ -135,7 +102,7 @@ jobs:
 
       - name: Install tarball in isolated OpenClaw profile
         run: |
-          tarball="$(ls dj-shortcut-facebook-*.tgz | head -n 1)"
+          tarball="$(find . -maxdepth 1 -type f -name 'dj-shortcut-facebook-*.tgz' -print -quit)"
           ./node_modules/.bin/openclaw --profile ci-facebook-plugin-test plugins install "./$tarball" --force
           ./node_modules/.bin/openclaw --profile ci-facebook-plugin-test plugins inspect facebook --json > /tmp/facebook-plugin-inspect.json
           ./node_modules/.bin/openclaw --profile ci-facebook-plugin-test channels list --all --json > /tmp/openclaw-channels.json

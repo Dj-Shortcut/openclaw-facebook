@@ -5,12 +5,8 @@ permissions:
 
 on:
   pull_request:
-    paths:
-      - 'apps/image-gen/drizzle/**'
-      - 'apps/image-gen/drizzle.config.ts'
-      - 'apps/image-gen/package.json'
-      - 'apps/image-gen/pnpm-lock.yaml'
-      - '.github/workflows/image-gen-migration-smoke.yml'
+  push:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -23,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       mysql:
-        image: mysql:8.4@sha256:02aa6476f6b675e5d4d19c5b437798b1b8a4048ae39383eac609814998ed15b8
+        image: mysql:8.4.11@sha256:1d6b6a8fcee8ff758ff151d017f5203cd06792a0e698f0a593c9dfcb14609cf0
         env:
           MYSQL_ROOT_PASSWORD: root
           MYSQL_DATABASE: test_image_gen
@@ -49,20 +45,53 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: '24'
-          cache: 'pnpm'
+          node-version: "24"
+          cache: "pnpm"
           cache-dependency-path: apps/image-gen/pnpm-lock.yaml
 
       - name: Install dependencies
         run: |
           corepack pnpm --dir apps/image-gen install --frozen-lockfile
 
-      - name: Run drizzle migrations
+      - name: Rehearse and apply the production migration contract
         working-directory: apps/image-gen
         env:
           DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_image_gen
+          MYSQL_REHEARSAL_URL: mysql://root:root@127.0.0.1:3306/mysql
         run: |
-          ./node_modules/.bin/drizzle-kit migrate
+          pnpm run db:rehearse-0015
+          pnpm run db:rehearse-0016
+          pnpm run db:test-production-migrator
+          pnpm run db:generate-production-contract
+          git diff --exit-code -- drizzle/production-schema-contract.json
+          pnpm run db:migrate:test-bootstrap
+
+      - name: Verify migrated schema and history are exact and idempotent
+        working-directory: apps/image-gen
+        env:
+          DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_image_gen
+          LEADERBOT_PRODUCTION_MIGRATION_MODE: verify-contract
+        run: node scripts/run-production-migrations.mjs
+
+      - name: Apply and verify from the exact production container
+        working-directory: apps/image-gen
+        run: |
+          mysql -h127.0.0.1 -uroot -proot -e "CREATE DATABASE test_image_gen_container CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"
+          image="leaderbot-image-gen-migration:${GITHUB_SHA}"
+          docker build --build-arg SOURCE_REVISION="$GITHUB_SHA" --tag "$image" .
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")" = "$GITHUB_SHA"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.minimum" }}' "$image")" = "0016_expand"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.maximum" }}' "$image")" = "0016_expand"
+          docker run --rm --network host \
+            --env DATABASE_URL=mysql://root:root@127.0.0.1:3306/test_image_gen_container \
+            --env NODE_ENV=test \
+            --env LEADERBOT_ALLOW_TEST_SCHEMA_BOOTSTRAP=1 \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-empty-bootstrap \
+            "$image" node dist/migrate-production.cjs
+          docker run --rm --network host \
+            --env DATABASE_URL=mysql://root:root@127.0.0.1:3306/test_image_gen_container \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-contract \
+            "$image" node dist/migrate-production.cjs
 
       - name: Verify dailyQuota composite index exists
         run: |

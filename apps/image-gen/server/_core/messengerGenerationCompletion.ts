@@ -10,6 +10,16 @@ import {
 import { assertMessengerPrivacySubject } from "./messengerPrivacySubject";
 import { getRedisClient, isRedisEnabled } from "./redis";
 import { assertMessengerGenerationOwnership } from "./workspaceEntitlementRuntime";
+import type { MessengerImageQuotaStatus } from "./messengerImageQuotaStore";
+import {
+  assertMessengerStorageScope,
+  isLegacyMessengerStorageObjectKey,
+  isMessengerStorageLegacyBridgeEnabled,
+  messengerStorageObjectIsAllowedForScope,
+  messengerStorageObjectMatchesScope,
+  parseMessengerStorageObjectKey,
+  type MessengerStorageScope,
+} from "./messengerStorageObject";
 
 const GENERATION_COMPLETION_SCOPE = "messenger-generation-completion";
 const GENERATION_COMPLETION_USER_INDEX_SCOPE =
@@ -23,8 +33,23 @@ export type MessengerGenerationCompletion = {
   reqId: string;
   imageUrl: string;
   completedAt: number;
-  deliveryStatus?: "pending" | "delivered";
+  /**
+   * `transport_started` is sticky delivery intent, not proof of a Meta call.
+   * Recovery consults the durable DB provider fence before deciding whether a
+   * reserved attempt is safe or an actually started attempt is ambiguous.
+   */
+  deliveryStatus?: "pending" | "transport_started" | "delivered";
+  deliveryStartedAt?: number;
   deliveredAt?: number;
+  /**
+   * New completions must commit success-only quota before delivery. The legacy
+   * value is only for explicitly identified pre-migration completions.
+   */
+  quotaAccountingMode?: "success_only_v1" | "legacy_pre_success_v1";
+  quotaStatus?: MessengerImageQuotaStatus;
+  quotaCommittedAt?: number;
+  successNoticeStatus?: "pending" | "sent";
+  successNoticeSentAt?: number;
   userKey?: string;
   workspaceId?: number;
   channelConnectionId?: number;
@@ -43,8 +68,16 @@ export type MessengerGenerationCompletionFence = Readonly<{
   pageId: string;
 }>;
 
+export type MessengerGenerationDeliveryStart =
+  "started" | "already_started" | "already_delivered";
+
 const WRITE_COMPLETION_SCRIPT = `
-if redis.call('exists', KEYS[3]) == 1 then return {'erased'} end
+local erasedEpoch = tonumber(redis.call('get', KEYS[3]) or '0')
+local incomingEpoch = tonumber(ARGV[7])
+if not incomingEpoch or incomingEpoch <= 0 then
+  return redis.error_reply('invalid completion privacy epoch')
+end
+if erasedEpoch >= incomingEpoch then return {'erased'} end
 local existing = redis.call('get', KEYS[1])
 if ARGV[4] == 'create' then
   if existing then return {'exists', existing} end
@@ -59,6 +92,55 @@ elseif ARGV[4] == 'deliver' then
     decoded.deliveredAt = incoming.deliveredAt
     redis.call('set', KEYS[1], cjson.encode(decoded), 'PXAT', decoded.expiresAt)
   end
+  ARGV[3] = tostring(decoded.expiresAt)
+elseif ARGV[4] == 'delivery_start' then
+  if not existing then return {'missing'} end
+  local decoded = cjson.decode(existing)
+  local incoming = cjson.decode(ARGV[1])
+  if decoded.imageUrl ~= incoming.imageUrl then return {'conflict', existing} end
+  if decoded.deliveryStatus == 'delivered' then
+    return {'already_delivered'}
+  end
+  if decoded.deliveryStatus == 'transport_started' then
+    return {'already_started'}
+  end
+  decoded.deliveryStatus = 'transport_started'
+  decoded.deliveryStartedAt = incoming.deliveryStartedAt
+  redis.call('set', KEYS[1], cjson.encode(decoded), 'PXAT', decoded.expiresAt)
+  ARGV[3] = tostring(decoded.expiresAt)
+elseif ARGV[4] == 'delivery_retry' then
+  if not existing then return {'missing'} end
+  local decoded = cjson.decode(existing)
+  local incoming = cjson.decode(ARGV[1])
+  if decoded.imageUrl ~= incoming.imageUrl then return {'conflict', existing} end
+  if decoded.deliveryStatus == 'delivered' then
+    return {'already_delivered'}
+  end
+  if decoded.deliveryStatus ~= 'transport_started' then
+    return {'already_pending'}
+  end
+  decoded.deliveryStatus = 'pending'
+  decoded.deliveryStartedAt = nil
+  redis.call('set', KEYS[1], cjson.encode(decoded), 'PXAT', decoded.expiresAt)
+  ARGV[3] = tostring(decoded.expiresAt)
+elseif ARGV[4] == 'quota' then
+  if not existing then return {'missing'} end
+  local decoded = cjson.decode(existing)
+  local incoming = cjson.decode(ARGV[1])
+  if decoded.imageUrl ~= incoming.imageUrl then return {'conflict', existing} end
+  decoded.quotaStatus = incoming.quotaStatus
+  decoded.quotaCommittedAt = decoded.quotaCommittedAt or incoming.quotaCommittedAt
+  decoded.successNoticeStatus = decoded.successNoticeStatus or 'pending'
+  redis.call('set', KEYS[1], cjson.encode(decoded), 'PXAT', decoded.expiresAt)
+  ARGV[3] = tostring(decoded.expiresAt)
+elseif ARGV[4] == 'notice' then
+  if not existing then return {'missing'} end
+  local decoded = cjson.decode(existing)
+  local incoming = cjson.decode(ARGV[1])
+  if decoded.imageUrl ~= incoming.imageUrl then return {'conflict', existing} end
+  decoded.successNoticeStatus = 'sent'
+  decoded.successNoticeSentAt = incoming.successNoticeSentAt
+  redis.call('set', KEYS[1], cjson.encode(decoded), 'PXAT', decoded.expiresAt)
   ARGV[3] = tostring(decoded.expiresAt)
 else
   return redis.error_reply('invalid completion write mode')
@@ -79,29 +161,95 @@ if ARGV[5] ~= '' then
     redis.call('pexpireat', KEYS[4], ARGV[6], 'GT')
   end
 end
+redis.call('sadd', KEYS[5], ARGV[7])
+local epochIndexTtl = redis.call('pttl', KEYS[5])
+if epochIndexTtl < 0 then
+  redis.call('pexpireat', KEYS[5], ARGV[6])
+else
+  redis.call('pexpireat', KEYS[5], ARGV[6], 'GT')
+end
 return {'stored'}
 `;
 
-const ERASE_COMPLETIONS_SCRIPT = `
-redis.call('set', KEYS[2], ARGV[1])
-local keys = redis.call('smembers', KEYS[1])
-local values = {}
-for _, key in ipairs(keys) do
+const BEGIN_ERASE_COMPLETIONS_SCRIPT = `
+local currentEpoch = tonumber(redis.call('get', KEYS[1]) or '0')
+local requestedEpoch = tonumber(ARGV[1])
+if not requestedEpoch or requestedEpoch <= 0 then
+  return redis.error_reply('invalid completion erasure epoch')
+end
+if currentEpoch < requestedEpoch then
+  redis.call('set', KEYS[1], ARGV[1])
+end
+
+-- The first two indexes are the pre-epoch layout. Snapshot them in the same
+-- atomic step that raises the erasure fence. A higher privacy epoch can start
+-- immediately afterwards without being swept into this erasure attempt.
+local legacyValues = {}
+local protectedLegacyValues = {}
+local legacyKeys = redis.call('smembers', KEYS[3])
+for _, key in ipairs(legacyKeys) do
   local value = redis.call('get', key)
   if value then
-    table.insert(values, key)
-    table.insert(values, value)
+    local shouldDelete = true
+    local decodedOk, decoded = pcall(cjson.decode, value)
+    if decodedOk and decoded.privacyEpoch ~= nil then
+      local valueEpoch = tonumber(decoded.privacyEpoch)
+      shouldDelete = not valueEpoch or valueEpoch <= requestedEpoch
+    end
+    if shouldDelete then
+      table.insert(legacyValues, key)
+      table.insert(legacyValues, value)
+    else
+      table.insert(protectedLegacyValues, value)
+    end
   end
 end
-return values
+return {
+  redis.call('smembers', KEYS[2]),
+  legacyValues,
+  redis.call('smembers', KEYS[4]),
+  protectedLegacyValues
+}
 `;
 
-const FINALIZE_ERASE_COMPLETIONS_SCRIPT = `
-if redis.call('exists', KEYS[2]) == 0 then return 0 end
-for index = 1, #ARGV do redis.call('del', ARGV[index]) end
-redis.call('del', KEYS[1])
+const FINALIZE_EPOCH_ERASE_SCRIPT = `
+local erasedEpoch = tonumber(redis.call('get', KEYS[1]) or '0')
+local requestedEpoch = tonumber(ARGV[1])
+local indexedEpoch = tonumber(ARGV[2])
+local completionCount = tonumber(ARGV[3])
+if not requestedEpoch or not indexedEpoch or not completionCount then
+  return redis.error_reply('invalid completion epoch finalization')
+end
+if erasedEpoch < requestedEpoch or indexedEpoch > requestedEpoch then return 0 end
+for index = 1, completionCount do
+  redis.call('del', ARGV[index + 3])
+end
 redis.call('del', KEYS[3])
-return #ARGV
+redis.call('del', KEYS[4])
+redis.call('srem', KEYS[2], ARGV[2])
+return completionCount
+`;
+
+const FINALIZE_LEGACY_ERASE_SCRIPT = `
+local erasedEpoch = tonumber(redis.call('get', KEYS[1]) or '0')
+local requestedEpoch = tonumber(ARGV[1])
+local completionCount = tonumber(ARGV[2])
+local objectCount = tonumber(ARGV[3])
+if not requestedEpoch or not completionCount or not objectCount then
+  return redis.error_reply('invalid legacy completion finalization')
+end
+if erasedEpoch < requestedEpoch then return 0 end
+local offset = 3
+for index = 1, completionCount do
+  local completionKey = ARGV[offset + index]
+  redis.call('del', completionKey)
+  redis.call('srem', KEYS[2], completionKey)
+end
+offset = offset + completionCount
+for index = 1, objectCount do
+  redis.call('srem', KEYS[3], ARGV[offset + index])
+end
+return completionCount + objectCount
 `;
 
 const DELETE_EXACT_COMPLETION_SCRIPT = `
@@ -245,7 +393,22 @@ function completionStorageId(
 }
 
 function rootIndexStorageId(fence: MessengerGenerationCompletionFence): string {
+  // Kept for cleanup of the pre-epoch Redis layout and the non-Redis fallback.
+  // New Redis writes must use epochIndexStorageId instead.
   return `${subjectTag(fence)}:index`;
+}
+
+function epochIndexStorageId(
+  fence: MessengerGenerationCompletionFence,
+  privacyEpoch = fence.privacyEpoch
+): string {
+  return `${subjectTag(fence)}:epoch:${privacyEpoch}:index`;
+}
+
+function epochRegistryStorageId(
+  fence: MessengerGenerationCompletionFence
+): string {
+  return `${subjectTag(fence)}:epochs`;
 }
 
 function tombstoneStorageId(fence: MessengerGenerationCompletionFence): string {
@@ -255,7 +418,15 @@ function tombstoneStorageId(fence: MessengerGenerationCompletionFence): string {
 function objectIndexStorageId(
   fence: MessengerGenerationCompletionFence
 ): string {
+  // Pre-epoch Redis object inventory; new writes are privacy-epoch scoped.
   return `${subjectTag(fence)}:objects`;
+}
+
+function epochObjectIndexStorageId(
+  fence: MessengerGenerationCompletionFence,
+  privacyEpoch = fence.privacyEpoch
+): string {
+  return `${subjectTag(fence)}:epoch:${privacyEpoch}:objects`;
 }
 
 function userIndexLockKey(subjectKey: string): string {
@@ -295,14 +466,76 @@ async function withUserIndexLock(
   );
 }
 
-export function markMessengerGenerationCompleted(
+export async function markMessengerGenerationCompleted(
   reqId: string,
   imageUrl: string,
   userKey?: string,
   now = Date.now(),
   fence?: MessengerGenerationCompletionFence
 ): Promise<void> {
-  return writeMessengerGenerationCompletion(
+  await writeMessengerGenerationCompletion(
+    {
+      reqId,
+      imageUrl,
+      completedAt: now,
+      deliveryStatus: "pending",
+      successNoticeStatus: "pending",
+      quotaAccountingMode: "success_only_v1",
+      userKey,
+      ...fence,
+      expiresAt: now + GENERATION_COMPLETION_TTL_SECONDS * 1_000,
+    },
+    fence,
+    "create"
+  );
+}
+
+/**
+ * Records Messenger image-delivery intent before the external call.
+ * A replay may continue after `already_started`: the durable DB provider fence
+ * decides whether absent/reserved work is safe or started/ambiguous work must
+ * be contained without another Meta call.
+ */
+export async function markMessengerGenerationDeliveryStarted(
+  reqId: string,
+  imageUrl: string,
+  userKey?: string,
+  now = Date.now(),
+  fence?: MessengerGenerationCompletionFence
+): Promise<MessengerGenerationDeliveryStart> {
+  const result = await writeMessengerGenerationCompletion(
+    {
+      reqId,
+      imageUrl,
+      completedAt: now,
+      deliveryStatus: "transport_started",
+      deliveryStartedAt: now,
+      userKey,
+      ...fence,
+      expiresAt: now + GENERATION_COMPLETION_TTL_SECONDS * 1_000,
+    },
+    fence,
+    "delivery_start"
+  );
+  if (
+    result !== "started" &&
+    result !== "already_started" &&
+    result !== "already_delivered"
+  ) {
+    throw new Error(`Messenger completion delivery start ${result}`);
+  }
+  return result;
+}
+
+/** Re-opens delivery only when the transport is known not to have started. */
+export async function markMessengerGenerationDeliveryRetryable(
+  reqId: string,
+  imageUrl: string,
+  userKey?: string,
+  now = Date.now(),
+  fence?: MessengerGenerationCompletionFence
+): Promise<void> {
+  await writeMessengerGenerationCompletion(
     {
       reqId,
       imageUrl,
@@ -313,7 +546,57 @@ export function markMessengerGenerationCompleted(
       expiresAt: now + GENERATION_COMPLETION_TTL_SECONDS * 1_000,
     },
     fence,
-    "create"
+    "delivery_retry"
+  );
+}
+
+export async function markMessengerGenerationQuotaCommitted(
+  reqId: string,
+  imageUrl: string,
+  userKey: string,
+  quotaStatus: MessengerImageQuotaStatus,
+  now = Date.now(),
+  fence?: MessengerGenerationCompletionFence
+): Promise<void> {
+  await writeMessengerGenerationCompletion(
+    {
+      reqId,
+      imageUrl,
+      completedAt: now,
+      deliveryStatus: "pending",
+      quotaStatus,
+      quotaCommittedAt: now,
+      successNoticeStatus: "pending",
+      userKey,
+      ...fence,
+      expiresAt: now + GENERATION_COMPLETION_TTL_SECONDS * 1_000,
+    },
+    fence,
+    "quota"
+  );
+}
+
+export async function markMessengerGenerationSuccessNoticeSent(
+  reqId: string,
+  imageUrl: string,
+  userKey: string,
+  now = Date.now(),
+  fence?: MessengerGenerationCompletionFence
+): Promise<void> {
+  await writeMessengerGenerationCompletion(
+    {
+      reqId,
+      imageUrl,
+      completedAt: now,
+      deliveryStatus: "delivered",
+      successNoticeStatus: "sent",
+      successNoticeSentAt: now,
+      userKey,
+      ...fence,
+      expiresAt: now + GENERATION_COMPLETION_TTL_SECONDS * 1_000,
+    },
+    fence,
+    "notice"
   );
 }
 
@@ -343,16 +626,28 @@ export async function markMessengerGenerationDelivered(
 function writeMessengerGenerationCompletion(
   completion: MessengerGenerationCompletion,
   fence: MessengerGenerationCompletionFence | undefined,
-  mode: "create" | "deliver"
-): Promise<void> {
+  mode:
+    | "create"
+    | "deliver"
+    | "delivery_start"
+    | "delivery_retry"
+    | "quota"
+    | "notice"
+): Promise<string> {
   return Promise.resolve().then(async () => {
+    const completionObjectKey = fence
+      ? completionObjectKeyForFence(completion, fence)
+      : null;
     if (mode === "create" && fence && isRedisEnabled()) {
       const inventoried = await indexCompletionObjectForPrivacyCleanup(
-        completion,
+        completionObjectKey,
         fence
       );
       if (!inventoried) {
-        await cleanupCompletionObject(JSON.stringify(completion));
+        await cleanupCompletionObject(JSON.stringify(completion), {
+          mode: "exact",
+          fence,
+        });
         throw new Error("Messenger completion subject is erased");
       }
     }
@@ -365,7 +660,10 @@ function writeMessengerGenerationCompletion(
         // If deletion/rebind wins at this first fence, no durable inventory
         // exists yet to scrub it later.
         if (mode === "create") {
-          await cleanupCompletionObject(JSON.stringify(completion));
+          await cleanupCompletionObject(JSON.stringify(completion), {
+            mode: "exact",
+            fence,
+          });
         }
         throw error;
       }
@@ -380,17 +678,19 @@ function writeMessengerGenerationCompletion(
       }
       const result = await redis.eval(
         WRITE_COMPLETION_SCRIPT,
-        4,
+        5,
         `${GENERATION_COMPLETION_SCOPE}:${completionStorageId(completion.reqId, fence)}`,
-        `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${rootIndexStorageId(fence)}`,
+        `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochIndexStorageId(fence)}`,
         `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${tombstoneStorageId(fence)}`,
-        `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${objectIndexStorageId(fence)}`,
+        `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochObjectIndexStorageId(fence)}`,
+        `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochRegistryStorageId(fence)}`,
         JSON.stringify(completion),
         completion.deliveryStatus ?? "pending",
         expiresAt,
         mode,
-        storageKeyFromPublicUrl(completion.imageUrl) ?? "",
-        Date.now() + GENERATION_OBJECT_INVENTORY_TTL_SECONDS * 1_000
+        completionObjectKey ?? "",
+        Date.now() + GENERATION_OBJECT_INVENTORY_TTL_SECONDS * 1_000,
+        fence.privacyEpoch
       );
       const resultCode = Array.isArray(result) ? String(result[0]) : "unknown";
       if (resultCode === "stored") {
@@ -399,19 +699,37 @@ function writeMessengerGenerationCompletion(
           await assertMessengerGenerationOwnership(fence);
         } catch (error) {
           await deleteCompletionIfExact(redis, completion, fence);
-          await cleanupCompletionObject(JSON.stringify(completion));
+          await cleanupCompletionObject(JSON.stringify(completion), {
+            mode: "exact",
+            fence,
+          });
           throw error;
         }
-        return;
+        if (mode === "delivery_start") return "started";
+        if (mode === "delivery_retry") return "retryable";
+        return "stored";
+      }
+      if (
+        resultCode === "already_started" ||
+        resultCode === "already_delivered" ||
+        resultCode === "already_pending"
+      ) {
+        return resultCode;
       }
       const retained =
         Array.isArray(result) && result[1]
           ? parseCompletion(String(result[1]))
           : null;
-      if (!retained || retained.imageUrl !== completion.imageUrl) {
-        await cleanupCompletionObject(JSON.stringify(completion));
+      if (
+        mode !== "notice" &&
+        (!retained || retained.imageUrl !== completion.imageUrl)
+      ) {
+        await cleanupCompletionObject(
+          JSON.stringify(completion),
+          fence ? { mode: "exact", fence } : undefined
+        );
       }
-      if (resultCode === "exists") return;
+      if (resultCode === "exists") return "exists";
       if (resultCode === "erased") {
         throw new Error("Messenger completion subject is erased");
       }
@@ -426,22 +744,81 @@ function writeMessengerGenerationCompletion(
         storageId
       )
     );
-    if (mode === "deliver" && !existing) {
-      await cleanupCompletionObject(JSON.stringify(completion));
+    if (mode !== "create" && !existing) {
+      if (
+        mode === "deliver" ||
+        mode === "delivery_start" ||
+        mode === "delivery_retry" ||
+        mode === "quota"
+      ) {
+        await cleanupCompletionObject(
+          JSON.stringify(completion),
+          fence ? { mode: "exact", fence } : undefined
+        );
+      }
       throw new Error("Messenger completion missing");
     }
     if (existing) {
       if (existing.imageUrl !== completion.imageUrl) {
-        await cleanupCompletionObject(JSON.stringify(completion));
-        if (mode === "create") return;
+        if (mode !== "notice") {
+          await cleanupCompletionObject(
+            JSON.stringify(completion),
+            fence ? { mode: "exact", fence } : undefined
+          );
+        }
+        if (mode === "create") return "exists";
         throw new Error("Messenger completion conflict");
       }
-      if (mode === "create" || existing.deliveryStatus === "delivered") return;
-      completion = {
-        ...existing,
-        deliveryStatus: "delivered",
-        deliveredAt: completion.deliveredAt,
-      };
+      if (mode === "create") return "exists";
+      if (mode === "deliver") {
+        if (existing.deliveryStatus === "delivered") {
+          return "already_delivered";
+        }
+        completion = {
+          ...existing,
+          deliveryStatus: "delivered",
+          deliveredAt: completion.deliveredAt,
+        };
+      } else if (mode === "delivery_start") {
+        if (existing.deliveryStatus === "delivered") {
+          return "already_delivered";
+        }
+        if (existing.deliveryStatus === "transport_started") {
+          return "already_started";
+        }
+        completion = {
+          ...existing,
+          deliveryStatus: "transport_started",
+          deliveryStartedAt: completion.deliveryStartedAt,
+        };
+      } else if (mode === "delivery_retry") {
+        if (existing.deliveryStatus === "delivered") {
+          return "already_delivered";
+        }
+        if (existing.deliveryStatus !== "transport_started") {
+          return "already_pending";
+        }
+        completion = {
+          ...existing,
+          deliveryStatus: "pending",
+          deliveryStartedAt: undefined,
+        };
+      } else if (mode === "quota") {
+        completion = {
+          ...existing,
+          quotaStatus: completion.quotaStatus,
+          quotaCommittedAt:
+            existing.quotaCommittedAt ?? completion.quotaCommittedAt,
+          successNoticeStatus: existing.successNoticeStatus ?? "pending",
+        };
+      } else {
+        if (existing.successNoticeStatus === "sent") return "already_sent";
+        completion = {
+          ...existing,
+          successNoticeStatus: "sent",
+          successNoticeSentAt: completion.successNoticeSentAt,
+        };
+      }
     }
     const expiresAt =
       completion.expiresAt ??
@@ -468,7 +845,11 @@ function writeMessengerGenerationCompletion(
     }
     const userKey = completion.userKey;
     if (!userKey) {
-      return;
+      return mode === "delivery_start"
+        ? "started"
+        : mode === "delivery_retry"
+          ? "retryable"
+          : "stored";
     }
 
     const subjectKey = fence
@@ -492,20 +873,55 @@ function writeMessengerGenerationCompletion(
         )
       );
     });
+    return mode === "delivery_start"
+      ? "started"
+      : mode === "delivery_retry"
+        ? "retryable"
+        : "stored";
   });
 }
 
 async function indexCompletionObjectForPrivacyCleanup(
-  completion: MessengerGenerationCompletion,
+  objectKey: string | null,
   fence: MessengerGenerationCompletionFence
 ): Promise<boolean> {
-  const objectKey = storageKeyFromPublicUrl(completion.imageUrl);
   if (!objectKey) return true;
+  return await registerMessengerObjectForPrivacyCleanup(objectKey, fence);
+}
+
+/**
+ * Durably records an object before the first external write can start.
+ *
+ * Source-image uploads use the same tenant-scoped inventory as generated
+ * images so delete-my-data can still scrub an object when a worker exits
+ * after the upload but before it publishes normal Messenger state.
+ */
+export async function registerMessengerObjectForPrivacyCleanup(
+  objectKey: string,
+  fence: MessengerGenerationCompletionFence,
+  now = Date.now()
+): Promise<boolean> {
+  const normalizedObjectKey = objectKey.trim();
+  if (!normalizedObjectKey) {
+    throw new Error("Messenger object inventory key is required");
+  }
+  assertCompletionObjectKeyMatchesFence(normalizedObjectKey, fence);
+  if (!isRedisEnabled()) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("Messenger object inventory Redis store is unavailable");
+    }
+    return true;
+  }
   const redis = await getRedisClient();
   const result = Number(
     await redis.eval(
       `
-        if redis.call('exists', KEYS[2]) == 1 then return 0 end
+        local erasedEpoch = tonumber(redis.call('get', KEYS[2]) or '0')
+        local incomingEpoch = tonumber(ARGV[3])
+        if not incomingEpoch or incomingEpoch <= 0 then
+          return redis.error_reply('invalid completion object privacy epoch')
+        end
+        if erasedEpoch >= incomingEpoch then return 0 end
         redis.call('sadd', KEYS[1], ARGV[1])
         local ttl = redis.call('pttl', KEYS[1])
         if ttl < 0 then
@@ -513,13 +929,59 @@ async function indexCompletionObjectForPrivacyCleanup(
         else
           redis.call('pexpireat', KEYS[1], ARGV[2], 'GT')
         end
+        redis.call('sadd', KEYS[3], ARGV[3])
+        local epochIndexTtl = redis.call('pttl', KEYS[3])
+        if epochIndexTtl < 0 then
+          redis.call('pexpireat', KEYS[3], ARGV[2])
+        else
+          redis.call('pexpireat', KEYS[3], ARGV[2], 'GT')
+        end
+        return 1
+      `,
+      3,
+      `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochObjectIndexStorageId(fence)}`,
+      `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${tombstoneStorageId(fence)}`,
+      `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochRegistryStorageId(fence)}`,
+      normalizedObjectKey,
+      now + GENERATION_OBJECT_INVENTORY_TTL_SECONDS * 1_000,
+      fence.privacyEpoch
+    )
+  );
+  return result === 1;
+}
+
+/** Removes only a confirmed-absent object from the cleanup inventory. */
+export async function unregisterMessengerObjectFromPrivacyCleanup(
+  objectKey: string,
+  fence: MessengerGenerationCompletionFence
+): Promise<boolean> {
+  const normalizedObjectKey = objectKey.trim();
+  if (!normalizedObjectKey) return true;
+  assertCompletionObjectKeyMatchesFence(normalizedObjectKey, fence);
+  if (!isRedisEnabled()) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("Messenger object inventory Redis store is unavailable");
+    }
+    return true;
+  }
+  const redis = await getRedisClient();
+  const result = Number(
+    await redis.eval(
+      `
+        local erasedEpoch = tonumber(redis.call('get', KEYS[2]) or '0')
+        local incomingEpoch = tonumber(ARGV[2])
+        if not incomingEpoch or incomingEpoch <= 0 then
+          return redis.error_reply('invalid completion object privacy epoch')
+        end
+        if erasedEpoch >= incomingEpoch then return 0 end
+        redis.call('srem', KEYS[1], ARGV[1])
         return 1
       `,
       2,
-      `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${objectIndexStorageId(fence)}`,
+      `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochObjectIndexStorageId(fence)}`,
       `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${tombstoneStorageId(fence)}`,
-      objectKey,
-      Date.now() + GENERATION_OBJECT_INVENTORY_TTL_SECONDS * 1_000
+      normalizedObjectKey,
+      fence.privacyEpoch
     )
   );
   return result === 1;
@@ -535,9 +997,167 @@ async function deleteCompletionIfExact(
     DELETE_EXACT_COMPLETION_SCRIPT,
     2,
     key,
-    `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${rootIndexStorageId(fence)}`,
+    `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochIndexStorageId(fence)}`,
     completion.imageUrl,
     String(completion.completedAt)
+  );
+}
+
+type CompletionEraseEntry = Readonly<{
+  key: string;
+  serialized: string;
+}>;
+
+type EpochEraseSnapshot = Readonly<{
+  privacyEpoch: number;
+  completionKeys: string[];
+  completions: CompletionEraseEntry[];
+  objectKeys: string[];
+}>;
+
+type CompletionEraseSnapshot = Readonly<{
+  legacyCompletionKeys: string[];
+  legacyCompletions: CompletionEraseEntry[];
+  legacyObjectKeys: string[];
+  epochs: EpochEraseSnapshot[];
+}>;
+
+function parseRedisArray(value: unknown, label: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`Invalid Messenger completion ${label} snapshot`);
+  }
+  return value.map(item => String(item));
+}
+
+function parseIndexedPrivacyEpochs(
+  members: string[],
+  requestedEpoch: number
+): number[] {
+  const epochs: number[] = [];
+  for (const member of members) {
+    if (!/^[1-9]\d*$/.test(member)) {
+      throw new Error("Invalid Messenger completion privacy epoch index");
+    }
+    const epoch = Number(member);
+    if (!Number.isSafeInteger(epoch)) {
+      throw new Error("Invalid Messenger completion privacy epoch index");
+    }
+    if (epoch <= requestedEpoch) epochs.push(epoch);
+  }
+  return epochs.sort((left, right) => left - right);
+}
+
+async function beginCompletionErasure(
+  redis: Awaited<ReturnType<typeof getRedisClient>>,
+  fence: MessengerGenerationCompletionFence
+): Promise<CompletionEraseSnapshot> {
+  const result = await redis.eval(
+    BEGIN_ERASE_COMPLETIONS_SCRIPT,
+    4,
+    `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${tombstoneStorageId(fence)}`,
+    `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochRegistryStorageId(fence)}`,
+    `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${rootIndexStorageId(fence)}`,
+    `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${objectIndexStorageId(fence)}`,
+    String(fence.privacyEpoch)
+  );
+  if (!Array.isArray(result) || result.length !== 4) {
+    throw new Error("Invalid Messenger completion erasure snapshot");
+  }
+
+  const indexedEpochs = parseIndexedPrivacyEpochs(
+    parseRedisArray(result[0], "epoch index"),
+    fence.privacyEpoch
+  );
+  const legacyPairs = parseRedisArray(result[1], "legacy completion");
+  if (legacyPairs.length % 2 !== 0) {
+    throw new Error("Invalid Messenger legacy completion snapshot");
+  }
+  const legacyCompletions: CompletionEraseEntry[] = [];
+  for (let index = 0; index < legacyPairs.length; index += 2) {
+    legacyCompletions.push({
+      key: legacyPairs[index],
+      serialized: legacyPairs[index + 1],
+    });
+  }
+  const protectedLegacyObjectKeys = new Set(
+    parseRedisArray(result[3], "protected legacy completion")
+      .map(parseCompletion)
+      .map(completion =>
+        completion ? safeStorageKeyFromPublicUrl(completion.imageUrl) : null
+      )
+      .filter((key): key is string => Boolean(key))
+  );
+
+  const epochs = await Promise.all(
+    indexedEpochs.map(async privacyEpoch => {
+      const indexKey = `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochIndexStorageId(fence, privacyEpoch)}`;
+      const objectIndexKey = `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochObjectIndexStorageId(fence, privacyEpoch)}`;
+      const [completionKeys, objectKeys] = await Promise.all([
+        redis.smembers(indexKey),
+        redis.smembers(objectIndexKey),
+      ]);
+      const serialized = await Promise.all(
+        completionKeys.map(key => redis.get(key))
+      );
+      const completions: CompletionEraseEntry[] = [];
+      for (let index = 0; index < completionKeys.length; index += 1) {
+        const value = serialized[index];
+        if (value !== null) {
+          completions.push({ key: completionKeys[index], serialized: value });
+        }
+      }
+      return {
+        privacyEpoch,
+        completionKeys,
+        completions,
+        objectKeys,
+      };
+    })
+  );
+
+  return {
+    legacyCompletionKeys: legacyCompletions.map(entry => entry.key),
+    legacyCompletions,
+    legacyObjectKeys: parseRedisArray(result[2], "legacy object").filter(
+      objectKey => !protectedLegacyObjectKeys.has(objectKey)
+    ),
+    epochs,
+  };
+}
+
+async function finalizeCompletionErasure(
+  redis: Awaited<ReturnType<typeof getRedisClient>>,
+  fence: MessengerGenerationCompletionFence,
+  snapshot: CompletionEraseSnapshot
+): Promise<void> {
+  await redis.eval(
+    FINALIZE_LEGACY_ERASE_SCRIPT,
+    3,
+    `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${tombstoneStorageId(fence)}`,
+    `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${rootIndexStorageId(fence)}`,
+    `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${objectIndexStorageId(fence)}`,
+    String(fence.privacyEpoch),
+    snapshot.legacyCompletionKeys.length,
+    snapshot.legacyObjectKeys.length,
+    ...snapshot.legacyCompletionKeys,
+    ...snapshot.legacyObjectKeys
+  );
+
+  await Promise.all(
+    snapshot.epochs.map(epoch =>
+      redis.eval(
+        FINALIZE_EPOCH_ERASE_SCRIPT,
+        4,
+        `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${tombstoneStorageId(fence)}`,
+        `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochRegistryStorageId(fence)}`,
+        `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochIndexStorageId(fence, epoch.privacyEpoch)}`,
+        `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${epochObjectIndexStorageId(fence, epoch.privacyEpoch)}`,
+        String(fence.privacyEpoch),
+        String(epoch.privacyEpoch),
+        epoch.completionKeys.length,
+        ...epoch.completionKeys
+      )
+    )
   );
 }
 
@@ -547,32 +1167,35 @@ export async function deleteMessengerGenerationCompletionsForUser(
 ): Promise<void> {
   if (fence && isRedisEnabled()) {
     const redis = await getRedisClient();
-    const values = await redis.eval(
-      ERASE_COMPLETIONS_SCRIPT,
-      2,
-      `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${rootIndexStorageId(fence)}`,
-      `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${tombstoneStorageId(fence)}`,
-      String(fence.privacyEpoch)
-    );
-    const objectKeys = await redis.smembers(
-      `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${objectIndexStorageId(fence)}`
-    );
-    if (Array.isArray(values)) {
-      const keys: string[] = [];
-      for (let index = 0; index < values.length; index += 2) {
-        keys.push(String(values[index]));
-        await cleanupCompletionObject(String(values[index + 1]));
-      }
-      for (const objectKey of objectKeys) await storageDelete(objectKey);
-      await redis.eval(
-        FINALIZE_ERASE_COMPLETIONS_SCRIPT,
-        3,
-        `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${rootIndexStorageId(fence)}`,
-        `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${tombstoneStorageId(fence)}`,
-        `${GENERATION_COMPLETION_USER_INDEX_SCOPE}:${objectIndexStorageId(fence)}`,
-        ...keys
-      );
+    const snapshot = await beginCompletionErasure(redis, fence);
+    for (const completion of snapshot.legacyCompletions) {
+      await cleanupCompletionObject(completion.serialized, {
+        mode: "erasure",
+        fence,
+      });
     }
+    for (const epoch of snapshot.epochs) {
+      for (const completion of epoch.completions) {
+        await cleanupCompletionObject(completion.serialized, {
+          mode: "erasure",
+          fence,
+          indexedPrivacyEpoch: epoch.privacyEpoch,
+        });
+      }
+    }
+    for (const objectKey of snapshot.legacyObjectKeys) {
+      await cleanupIndexedObjectForErasure(objectKey, fence);
+    }
+    for (const epoch of snapshot.epochs) {
+      for (const objectKey of epoch.objectKeys) {
+        await cleanupIndexedObjectForErasure(
+          objectKey,
+          fence,
+          epoch.privacyEpoch
+        );
+      }
+    }
+    await finalizeCompletionErasure(redis, fence, snapshot);
     return;
   }
   const subjectKey = fence
@@ -594,7 +1217,12 @@ export async function deleteMessengerGenerationCompletionsForUser(
           storageId
         )
       );
-      if (completion) await cleanupCompletionObject(JSON.stringify(completion));
+      if (completion) {
+        await cleanupCompletionObject(
+          JSON.stringify(completion),
+          fence ? { mode: "erasure", fence } : undefined
+        );
+      }
       await Promise.resolve(
         deleteScopedState(GENERATION_COMPLETION_SCOPE, storageId)
       );
@@ -615,15 +1243,152 @@ function parseCompletion(
   }
 }
 
-async function cleanupCompletionObject(serialized: string): Promise<void> {
+type CompletionObjectCleanupContext =
+  | Readonly<{
+      mode: "exact";
+      fence: MessengerGenerationCompletionFence;
+    }>
+  | Readonly<{
+      mode: "erasure";
+      fence: MessengerGenerationCompletionFence;
+      indexedPrivacyEpoch?: number;
+    }>;
+
+function completionStorageScope(
+  completion: MessengerGenerationCompletion
+): MessengerStorageScope | null {
+  const scope = {
+    workspaceId: completion.workspaceId,
+    channelConnectionId: completion.channelConnectionId,
+    bindingEpoch: completion.bindingEpoch,
+    privacyEpoch: completion.privacyEpoch,
+    userKey: completion.userKey,
+  };
+  if (
+    typeof scope.workspaceId !== "number" ||
+    typeof scope.channelConnectionId !== "number" ||
+    typeof scope.bindingEpoch !== "number" ||
+    typeof scope.privacyEpoch !== "number" ||
+    typeof scope.userKey !== "string"
+  ) {
+    return null;
+  }
+  try {
+    assertMessengerStorageScope(scope as MessengerStorageScope);
+  } catch {
+    return null;
+  }
+  return scope as MessengerStorageScope;
+}
+
+function completionMatchesCleanupContext(
+  completion: MessengerGenerationCompletion,
+  scope: MessengerStorageScope,
+  context: CompletionObjectCleanupContext
+): boolean {
+  if (context.mode === "exact") {
+    return matchesFence(completion, context.fence);
+  }
+  if (
+    scope.workspaceId !== context.fence.workspaceId ||
+    scope.channelConnectionId !== context.fence.channelConnectionId ||
+    scope.userKey !== context.fence.userKey ||
+    scope.privacyEpoch > context.fence.privacyEpoch
+  ) {
+    return false;
+  }
+  return (
+    context.indexedPrivacyEpoch === undefined ||
+    scope.privacyEpoch === context.indexedPrivacyEpoch
+  );
+}
+
+function assertCompletionObjectKeyMatchesFence(
+  objectKey: string,
+  fence: MessengerGenerationCompletionFence
+): void {
+  if (!messengerStorageObjectIsAllowedForScope(objectKey, fence)) {
+    throw new Error(
+      "Messenger storage object does not match completion privacy fence"
+    );
+  }
+}
+
+function completionObjectKeyForFence(
+  completion: MessengerGenerationCompletion,
+  fence: MessengerGenerationCompletionFence
+): string | null {
+  const objectKey = storageKeyFromPublicUrl(completion.imageUrl);
+  if (objectKey) assertCompletionObjectKeyMatchesFence(objectKey, fence);
+  return objectKey;
+}
+
+function safeStorageKeyFromPublicUrl(publicUrl: string): string | null {
+  try {
+    return storageKeyFromPublicUrl(publicUrl);
+  } catch {
+    return null;
+  }
+}
+
+async function cleanupCompletionObject(
+  serialized: string,
+  context?: CompletionObjectCleanupContext
+): Promise<void> {
   let completion: MessengerGenerationCompletion;
   try {
     completion = JSON.parse(serialized) as MessengerGenerationCompletion;
   } catch {
     return;
   }
-  const key = storageKeyFromPublicUrl(completion.imageUrl);
-  if (key) await storageDelete(key);
+  const key = safeStorageKeyFromPublicUrl(completion.imageUrl);
+  if (!key) return;
+  const parsed = parseMessengerStorageObjectKey(key);
+  if (parsed) {
+    const scope = completionStorageScope(completion);
+    if (!scope || !messengerStorageObjectMatchesScope(key, scope)) return;
+    if (
+      context &&
+      !completionMatchesCleanupContext(completion, scope, context)
+    ) {
+      return;
+    }
+  } else if (
+    !isMessengerStorageLegacyBridgeEnabled() ||
+    !isLegacyMessengerStorageObjectKey(key)
+  ) {
+    return;
+  }
+  await storageDelete(key);
+}
+
+async function cleanupIndexedObjectForErasure(
+  objectKey: string,
+  fence: MessengerGenerationCompletionFence,
+  indexedPrivacyEpoch?: number
+): Promise<void> {
+  const parsed = parseMessengerStorageObjectKey(objectKey);
+  if (!parsed) {
+    if (
+      isMessengerStorageLegacyBridgeEnabled() &&
+      isLegacyMessengerStorageObjectKey(objectKey)
+    ) {
+      await storageDelete(objectKey);
+    }
+    return;
+  }
+  const scope = parsed.scope;
+  if (
+    scope.workspaceId !== fence.workspaceId ||
+    scope.channelConnectionId !== fence.channelConnectionId ||
+    scope.userKey !== fence.userKey ||
+    scope.privacyEpoch > fence.privacyEpoch ||
+    (indexedPrivacyEpoch !== undefined &&
+      scope.privacyEpoch !== indexedPrivacyEpoch)
+  ) {
+    return;
+  }
+  await storageDelete(objectKey);
 }
 
 function matchesFence(

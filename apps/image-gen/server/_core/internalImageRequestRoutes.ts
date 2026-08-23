@@ -2,10 +2,8 @@ import type { Express, Request, Response } from "express";
 import { timingSafeEqual } from "node:crypto";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
-import {
-  acceptInternalMessengerImageRequest,
-  processFacebookWebhookPayload,
-} from "./messengerWebhook";
+import { acceptInternalMessengerImageRequest } from "./messengerWebhook";
+import { processAuthenticatedFacebookIngressPayload } from "./meta/webhookIngressQueue";
 import { safeLog } from "./logger";
 import { isInternalMessengerImageRequestNotQueuedError } from "./internalImageRequestErrors";
 import { MESSENGER_SEND_SKIPPED } from "./webhookFallback";
@@ -347,7 +345,7 @@ export function registerInternalImageRequestRoutes(app: Express): void {
 
       res.status(202).json({ status: "queued" });
 
-      void processFacebookWebhookPayload(
+      void processAuthenticatedFacebookIngressPayload(
         {
           object: "page",
           entry: [

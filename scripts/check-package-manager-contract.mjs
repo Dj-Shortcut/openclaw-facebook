@@ -42,7 +42,11 @@ function pnpmSetupVersions(source) {
     for (let next = index + 1; next < lines.length; next += 1) {
       const line = lines[next];
       const nonWhitespace = line.search(/\S/);
-      if (nonWhitespace >= 0 && nonWhitespace <= stepIndent && /^\s*-\s/.test(line)) {
+      if (
+        nonWhitespace >= 0 &&
+        nonWhitespace <= stepIndent &&
+        /^\s*-\s/.test(line)
+      ) {
         break;
       }
       if (nonWhitespace === stepIndent && /^\s*with:\s*$/.test(line)) {
@@ -64,6 +68,19 @@ function pnpmSetupVersions(source) {
   return versions;
 }
 
+function workflowRunsForAllPullRequestPaths(source) {
+  const lines = source.split(/\r?\n/);
+  const triggerIndex = lines.findIndex((line) =>
+    /^  pull_request:\s*(?:\{\})?\s*$/.test(line),
+  );
+  if (triggerIndex < 0) return false;
+  for (const line of lines.slice(triggerIndex + 1)) {
+    if (/^\S/.test(line) || /^  \S/.test(line)) break;
+    if (/^    paths(?:-ignore)?:\s*$/.test(line)) return false;
+  }
+  return true;
+}
+
 export function validatePackageManagerContract(repoRoot = process.cwd()) {
   const failures = [];
   const rootPackage = readJson(repoRoot, "package.json", failures);
@@ -77,22 +94,31 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
       );
     }
     if (rootPackage.scripts?.deploy !== undefined) {
-      failures.push("package.json: combined root deploy orchestration is not allowed");
+      failures.push(
+        "package.json: combined root deploy orchestration is not allowed",
+      );
     }
     for (const [scriptName, expectedCommand] of Object.entries({
-      "deploy:gateway": "fly deploy --config fly.toml --strategy rolling",
+      "deploy:gateway":
+        'test -n "$FLY_GATEWAY_REVIEWED_IMAGE" && node scripts/validate-production-deployment.mjs --validate-target-enabled gateway && node scripts/validate-production-deployment.mjs --validate-rollback-image gateway "$FLY_GATEWAY_REVIEWED_IMAGE" && fly deploy --config fly.toml --strategy rolling --image "$FLY_GATEWAY_REVIEWED_IMAGE"',
       "deploy:image-gen":
-        'test -n "$FLY_IMAGE_GEN_REVIEWED_IMAGE" && cd apps/image-gen && fly deploy --config fly.toml --strategy rolling --image "$FLY_IMAGE_GEN_REVIEWED_IMAGE"',
+        'test -n "$FLY_IMAGE_GEN_REVIEWED_IMAGE" && node scripts/validate-production-deployment.mjs --validate-target-enabled image-gen && node scripts/validate-production-deployment.mjs --validate-rollback-image image-gen "$FLY_IMAGE_GEN_REVIEWED_IMAGE" && cd apps/image-gen && fly deploy --config fly.toml --strategy rolling --image "$FLY_IMAGE_GEN_REVIEWED_IMAGE"',
+      "deploy:storage-proxy":
+        'test -n "$FLY_STORAGE_PROXY_REVIEWED_IMAGE" && node scripts/validate-production-deployment.mjs --validate-target-enabled storage-proxy && node scripts/validate-production-deployment.mjs --validate-rollback-image storage-proxy "$FLY_STORAGE_PROXY_REVIEWED_IMAGE" && cd apps/image-gen/storage-proxy && fly deploy --config fly.toml --strategy rolling --image "$FLY_STORAGE_PROXY_REVIEWED_IMAGE"',
     })) {
       if (rootPackage.scripts?.[scriptName] !== expectedCommand) {
-        failures.push(`package.json: ${scriptName} must use the canonical app-specific command`);
+        failures.push(
+          `package.json: ${scriptName} must use the canonical app-specific command`,
+        );
       }
     }
     if (
       rootPackage.scripts?.["check:package-managers"] !==
       "node scripts/check-package-manager-contract.mjs"
     ) {
-      failures.push("package.json: check:package-managers must run the contract guard");
+      failures.push(
+        "package.json: check:package-managers must run the contract guard",
+      );
     }
   }
 
@@ -114,14 +140,25 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
     }
     requireFile(repoRoot, `${subapp}/pnpm-lock.yaml`, failures);
     if (fs.existsSync(path.join(repoRoot, subapp, "package-lock.json"))) {
-      failures.push(`${subapp}/package-lock.json: npm lockfiles are not allowed in pnpm subapps`);
+      failures.push(
+        `${subapp}/package-lock.json: npm lockfiles are not allowed in pnpm subapps`,
+      );
     }
-    for (const [scriptName, command] of Object.entries(appPackage?.scripts ?? {})) {
+    for (const [scriptName, command] of Object.entries(
+      appPackage?.scripts ?? {},
+    )) {
       if (/\b(?:npm|npx)\s/.test(String(command))) {
-        failures.push(`${packagePath}: script ${scriptName} must use pnpm inside the subapp`);
+        failures.push(
+          `${packagePath}: script ${scriptName} must use pnpm inside the subapp`,
+        );
       }
     }
   }
+  requireFile(
+    repoRoot,
+    "apps/image-gen/storage-proxy/pnpm-workspace.yaml",
+    failures,
+  );
 
   const customerWorkflowPath = ".github/workflows/customer-app-ci.yml";
   const customerWorkflow = path.join(repoRoot, customerWorkflowPath);
@@ -130,7 +167,10 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
   } else {
     const source = fs.readFileSync(customerWorkflow, "utf8");
     const versions = pnpmSetupVersions(source);
-    if (versions.length !== 2 || versions.some((version) => version !== "10.28.1")) {
+    if (
+      versions.length !== 2 ||
+      versions.some((version) => version !== "10.28.1")
+    ) {
       failures.push(
         `${customerWorkflowPath}: both pnpm setup steps must use version 10.28.1`,
       );
@@ -144,7 +184,9 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
   } else {
     const versions = pnpmSetupVersions(fs.readFileSync(imageWorkflow, "utf8"));
     if (versions.length !== 1 || versions[0] !== "10.28.1") {
-      failures.push(`${imageWorkflowPath}: pnpm setup must use version 10.28.1`);
+      failures.push(
+        `${imageWorkflowPath}: pnpm setup must use version 10.28.1`,
+      );
     }
   }
 
@@ -156,9 +198,15 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
     const source = fs.readFileSync(fallowWorkflow, "utf8");
     const versions = pnpmSetupVersions(source);
     if (versions.length !== 1 || versions[0] !== "10.28.1") {
-      failures.push(`${fallowWorkflowPath}: pnpm setup must use version 10.28.1`);
+      failures.push(
+        `${fallowWorkflowPath}: pnpm setup must use version 10.28.1`,
+      );
     }
-    if (!/uses:\s*actions\/setup-node@v6[\s\S]*?node-version:\s*24\b/.test(source)) {
+    if (
+      !/uses:\s*actions\/setup-node@[a-f0-9]{40}[\s\S]*?node-version:\s*24\b/.test(
+        source,
+      )
+    ) {
       failures.push(`${fallowWorkflowPath}: must set up Node 24`);
     }
     for (const command of [
@@ -166,7 +214,9 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
       "run: pnpm run fallow:report:production",
     ]) {
       if (!source.includes(command)) {
-        failures.push(`${fallowWorkflowPath}: image-gen Fallow steps must use pnpm`);
+        failures.push(
+          `${fallowWorkflowPath}: image-gen Fallow steps must use pnpm`,
+        );
         break;
       }
     }
@@ -200,7 +250,10 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
       ) {
         failures.push(`${docsPath}: root deploy examples must use npm`);
       }
-      if (docsPath === "apps/image-gen/README.md" && /\bnpm run\b/.test(source)) {
+      if (
+        docsPath === "apps/image-gen/README.md" &&
+        /\bnpm run\b/.test(source)
+      ) {
         failures.push(`${docsPath}: image-gen commands must use pnpm`);
       }
     }
@@ -213,10 +266,14 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
   } else {
     const source = fs.readFileSync(fallowRunner, "utf8");
     if (/\bnpx(?:\.cmd)?\b/.test(source)) {
-      failures.push(`${fallowRunnerPath}: image-gen tooling must invoke pnpm, not npx`);
+      failures.push(
+        `${fallowRunnerPath}: image-gen tooling must invoke pnpm, not npx`,
+      );
     }
     if (!source.includes('"--reporter=silent"')) {
-      failures.push(`${fallowRunnerPath}: pnpm dlx must keep management output off JSON stdout`);
+      failures.push(
+        `${fallowRunnerPath}: pnpm dlx must keep management output off JSON stdout`,
+      );
     }
   }
 
@@ -226,22 +283,29 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
     failures.push(`${mainWorkflowPath}: required file is missing`);
   } else {
     const source = fs.readFileSync(mainWorkflow, "utf8");
-    if (!/run:\s*node scripts\/check-package-manager-contract\.mjs\b/.test(source)) {
-      failures.push(`${mainWorkflowPath}: must run the package-manager contract guard`);
+    if (
+      !/run:\s*node scripts\/check-package-manager-contract\.mjs\b/.test(source)
+    ) {
+      failures.push(
+        `${mainWorkflowPath}: must run the package-manager contract guard`,
+      );
     }
-    for (const trigger of [
-      "pnpm-lock.yaml",
-      "apps/customer-app/pnpm-lock.yaml",
-      "apps/image-gen/pnpm-lock.yaml",
-      "apps/image-gen/storage-proxy/pnpm-lock.yaml",
-      "apps/**/package-lock.json",
-      ".github/workflows/image-gen-fallow.yml",
-      "apps/image-gen/README.md",
-      "apps/image-gen/scripts/run-fallow-report.mjs",
-      ".github/workflows/update-openclaw.yml",
-    ]) {
-      if (!source.includes(`- "${trigger}"`)) {
-        failures.push(`${mainWorkflowPath}: paths must include ${trigger}`);
+    if (!workflowRunsForAllPullRequestPaths(source)) {
+      for (const trigger of [
+        "pnpm-lock.yaml",
+        "apps/customer-app/pnpm-lock.yaml",
+        "apps/image-gen/pnpm-lock.yaml",
+        "apps/image-gen/storage-proxy/pnpm-lock.yaml",
+        "apps/image-gen/storage-proxy/pnpm-workspace.yaml",
+        "apps/**/package-lock.json",
+        ".github/workflows/image-gen-fallow.yml",
+        "apps/image-gen/README.md",
+        "apps/image-gen/scripts/run-fallow-report.mjs",
+        ".github/workflows/update-openclaw.yml",
+      ]) {
+        if (!source.includes(`- "${trigger}"`)) {
+          failures.push(`${mainWorkflowPath}: paths must include ${trigger}`);
+        }
       }
     }
   }
@@ -254,13 +318,17 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
     const source = fs.readFileSync(updateWorkflow, "utf8");
     const versions = pnpmSetupVersions(source);
     if (versions.length !== 1 || versions[0] !== "10.28.1") {
-      failures.push(`${updateWorkflowPath}: compatibility lock must use pnpm 10.28.1`);
+      failures.push(
+        `${updateWorkflowPath}: compatibility lock must use pnpm 10.28.1`,
+      );
     }
     if (
       !source.includes("npm install --package-lock-only") ||
       !source.includes("pnpm install --lockfile-only")
     ) {
-      failures.push(`${updateWorkflowPath}: must regenerate both root compatibility locks`);
+      failures.push(
+        `${updateWorkflowPath}: must regenerate both root compatibility locks`,
+      );
     }
   }
 
@@ -272,7 +340,9 @@ if (invokedPath === fileURLToPath(import.meta.url)) {
   const failures = validatePackageManagerContract();
   for (const failure of failures) console.error(`error: ${failure}`);
   if (failures.length > 0) {
-    console.error(`\nPackage-manager contract failed with ${failures.length} error(s).`);
+    console.error(
+      `\nPackage-manager contract failed with ${failures.length} error(s).`,
+    );
     process.exit(1);
   }
   console.log("Package-manager contract passed.");

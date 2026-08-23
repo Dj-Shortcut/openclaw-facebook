@@ -1,13 +1,10 @@
 export type MessengerLanguage = "nl" | "en";
 
-export const DEFAULT_MESSENGER_CUSTOMER_PORTAL_URL =
-  "https://leaderbot.live/";
+export const DEFAULT_MESSENGER_CUSTOMER_PORTAL_URL = "https://leaderbot.live/";
 
 type MessengerTranslationKey =
   | "missingReferencedPrompt"
-  | "gatewayImageBudgetReached"
   | "gatewayAudioBudgetReached"
-  | "gatewayEventBudgetReached"
   | "planQuotaReached"
   | "planQuotaUnavailable"
   | "internalActionFailed"
@@ -38,12 +35,8 @@ const translations: Record<
   nl: {
     missingReferencedPrompt:
       "Ik vind die prompt niet meer terug. Plak hem even opnieuw, dan maak ik de afbeelding.",
-    gatewayImageBudgetReached:
-      "Even pauze, ons dagbudget voor afbeeldingen is bereikt. Probeer later opnieuw.",
     gatewayAudioBudgetReached:
       "Even pauze, ons dagbudget voor voiceberichten is bereikt. Typ je bericht even uit, dan help ik meteen verder.",
-    gatewayEventBudgetReached:
-      "Even pauze, ons dagbudget is bereikt. Probeer later opnieuw.",
     planQuotaReached:
       "Je tegoed voor je huidige plan is opgebruikt. Open je klantenportaal om je gebruik te bekijken.",
     planQuotaUnavailable:
@@ -87,12 +80,8 @@ const translations: Record<
   en: {
     missingReferencedPrompt:
       "I can no longer find that prompt. Paste it again and I will create the image.",
-    gatewayImageBudgetReached:
-      "Quick pause: our daily image budget has been reached. Please try again later.",
     gatewayAudioBudgetReached:
       "Quick pause: our daily voice-message budget has been reached. Type your message and I will help right away.",
-    gatewayEventBudgetReached:
-      "Quick pause: our daily budget has been reached. Please try again later.",
     planQuotaReached:
       "The credit for your current plan has been used up. Open your customer portal to review your usage.",
     planQuotaUnavailable:
@@ -107,7 +96,8 @@ const translations: Record<
       "I could not process this button action. Please try again shortly.",
     audioTranscriptionUnavailable:
       "I received your voice message, but I cannot reliably convert audio to text right now. Type your message and I will help right away.",
-    fastLaneGreeting: "Hi! I am here. Send me your question whenever you are ready.",
+    fastLaneGreeting:
+      "Hi! I am here. Send me your question whenever you are ready.",
     fastLaneHelp:
       "I can answer short questions, help with tasks, and recognize when you want to create an image. Just send what you need.",
     fastLaneStatus:

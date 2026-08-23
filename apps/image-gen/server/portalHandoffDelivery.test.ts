@@ -132,6 +132,8 @@ describe("portal handoff delivery", () => {
       workspaceId: 42,
       facebookPageId: "facebook-page-42",
       messengerSenderUserKey,
+      messengerChannelConnectionId: 12,
+      messengerPrivacyEpoch: 4,
       createdByUserId: 7,
       now: new Date("2026-07-06T10:30:00.000Z"),
       ttlMs: 3_600_000,

@@ -383,19 +383,29 @@ describe("webhook audio message router", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await tryHandleAudioMessage(ctx, {
-      psid: "psid-audio-priced",
-      userId: "user-audio-priced",
-      reqId: "req-audio-priced",
-      lang: "nl",
-      attachments: [
-        {
-          type: "audio",
-          payload: { url: "https://audio.example/message-priced.mp3" },
-        },
-      ],
-      text: "",
-    });
+    const result = await runWithMessengerRequestContext(
+      "page-audio-priced",
+      async () => {
+        setMessengerRequestPrivacySubject({
+          userKey: "user-audio-priced",
+          privacyEpoch: 5,
+        });
+        return await tryHandleAudioMessage(ctx, {
+          psid: "psid-audio-priced",
+          userId: "user-audio-priced",
+          reqId: "req-audio-priced",
+          lang: "nl",
+          attachments: [
+            {
+              type: "audio",
+              payload: { url: "https://audio.example/message-priced.mp3" },
+            },
+          ],
+          text: "",
+        });
+      },
+      { workspaceId: 42, channelConnectionId: 7, bindingEpoch: 3 }
+    );
 
     expect(result).toBe(true);
     const ledgerEntries = await readCostLedgerPeriod(FIXED_LEDGER_PERIOD);
@@ -405,6 +415,10 @@ describe("webhook audio message router", () => {
         operation: "audio_transcription",
         provider: "openai-audio",
         model: "whisper-1",
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        privacyEpoch: 5,
         userKey: "user-audio-priced",
         status: "provider_attempt_succeeded",
         estimatedCostUsd: 0.0042,

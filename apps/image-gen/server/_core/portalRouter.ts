@@ -385,6 +385,8 @@ export const portalRouter = router({
         let handoffBinding: {
           messengerSenderUserKey: string;
           messengerPageId: string;
+          messengerChannelConnectionId: number;
+          messengerPrivacyEpoch: number;
         } | null = null;
         if (input.handoffToken) {
           const handoff = await getPortalHandoffContext(input.handoffToken);
@@ -394,7 +396,9 @@ export const portalRouter = router({
             handoff.workspaceId !== input.workspaceId ||
             handoff.claimedByUserId !== ctx.user.id ||
             !handoff.messengerSenderUserKey ||
-            !handoff.facebookPageId
+            !handoff.facebookPageId ||
+            !handoff.messengerChannelConnectionId ||
+            !handoff.messengerPrivacyEpoch
           ) {
             throw new TRPCError({
               code: "BAD_REQUEST",
@@ -404,6 +408,8 @@ export const portalRouter = router({
           handoffBinding = {
             messengerSenderUserKey: handoff.messengerSenderUserKey,
             messengerPageId: handoff.facebookPageId,
+            messengerChannelConnectionId: handoff.messengerChannelConnectionId,
+            messengerPrivacyEpoch: handoff.messengerPrivacyEpoch,
           };
         }
 
@@ -413,6 +419,9 @@ export const portalRouter = router({
             ...input,
             messengerSenderUserKey: handoffBinding?.messengerSenderUserKey,
             messengerPageId: handoffBinding?.messengerPageId,
+            messengerChannelConnectionId:
+              handoffBinding?.messengerChannelConnectionId,
+            messengerPrivacyEpoch: handoffBinding?.messengerPrivacyEpoch,
           });
         } catch (error) {
           throw badRequest(error, "billing checkout failed");

@@ -53,6 +53,8 @@ export type CheckoutRequest = {
   businessCheckout?: boolean;
   messengerSenderUserKey?: string | null;
   messengerPageId?: string | null;
+  messengerChannelConnectionId?: number | null;
+  messengerPrivacyEpoch?: number | null;
 };
 
 export async function startMollieCheckout(
@@ -111,6 +113,8 @@ export async function startMollieCheckout(
     kind: input.kind,
     messengerSenderUserKey: input.messengerSenderUserKey,
     messengerPageId: input.messengerPageId,
+    messengerChannelConnectionId: input.messengerChannelConnectionId,
+    messengerPrivacyEpoch: input.messengerPrivacyEpoch,
     billingProfileVersion: billingProfile.eligibilityVersion,
     authorizationEpoch: executionBoundary.authorizationEpoch,
   });

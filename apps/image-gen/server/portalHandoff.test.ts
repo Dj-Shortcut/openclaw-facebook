@@ -52,7 +52,10 @@ describe("portal handoff tokens", () => {
 
     const result = await createPortalHandoffToken({
       workspaceId: 42,
+      facebookPageId: "facebook-page-42",
       messengerSenderUserKey: "hashed-sender-key",
+      messengerChannelConnectionId: 12,
+      messengerPrivacyEpoch: 4,
       createdByUserId: 7,
       now,
       ttlMs: 60_000,
@@ -67,7 +70,9 @@ describe("portal handoff tokens", () => {
       deliveryIdempotencyKeyHash: null,
       capabilityGeneration: 1,
       messengerSenderUserKey: "hashed-sender-key",
-      facebookPageId: undefined,
+      facebookPageId: "facebook-page-42",
+      messengerChannelConnectionId: 12,
+      messengerPrivacyEpoch: 4,
       purpose: "workspace_onboarding",
       status: "pending",
       expiresAt: result.expiresAt,

@@ -1,8 +1,16 @@
 app = "leaderbot-fb-image-gen"
 primary_region = "ams"
+kill_signal = "SIGTERM"
+kill_timeout = 300
 
 [build]
   dockerfile = "Dockerfile"
+
+[deploy]
+  # The immutable artifact marker selects its fail-closed schema check:
+  # the bridge accepts 0015/0016, while the runtime requires 0016 or newer.
+  release_command = "timeout -k 30s 8m env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-artifact node dist/migrate-production.cjs"
+  release_command_timeout = "10m"
 
 [env]
   AI_ANSWER_FINALIZATION_DRAIN_ENABLED = "false"
@@ -22,10 +30,14 @@ primary_region = "ams"
   BILLING_OPERATOR_NOTIFICATION_WEBHOOK_URL = "https://app.leaderbot.live/api/internal/billing/notifications/operator"
   BILLING_SUPPORT_EMAIL = "privacy@leaderbot.live"
   FB_PAGE_CONNECT_CONFIG_ID = "2097873054148678"
-  MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "5"
   MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "5.00"
   MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD = "25.00"
   MESSENGER_FREE_DAILY_LIMIT = "5"
+  MESSENGER_FREE_MONTHLY_LIMIT = "20"
+  # Bridge phase: every Machine reads v1+v2 while writes remain on v1. Switch
+  # to v2 only in a later config-only release after this image is fully live.
+  MESSENGER_GENERATION_QUEUE_WRITE_VERSION = "v1"
+  MESSENGER_IMAGE_QUOTA_TIME_ZONE = "Europe/Brussels"
   MESSENGER_USER_DAILY_SPEND_CAP_USD = "2.00"
   MOLLIE_ACCOUNTING_IMPORT_ENABLED = "false"
   MOLLIE_BILLING_ENABLED = "false"
@@ -39,9 +51,12 @@ primary_region = "ams"
   MOLLIE_PAYMENT_WEBHOOK_URL = "https://app.leaderbot.live/api/webhooks/mollie/payments"
   MOLLIE_RECONCILIATION_ENABLED = "true"
   NODE_ENV = "production"
-  OPENAI_IMAGE_ESTIMATED_COST_USD = "1.00"
+  OPENAI_IMAGE_MAX_RETRIES = "0"
   PORT = "8080"
   PORTAL_BASE_URL = "https://app.leaderbot.live"
+  # Temporary storage migration bridge for existing and non-Messenger objects.
+  # New Messenger writes are scoped even while this read/delete bridge is on.
+  STORAGE_ALLOW_LEGACY_KEYS = "true"
   # REDIS_URL must be provided via Fly secrets for production startup.
 
 [processes]

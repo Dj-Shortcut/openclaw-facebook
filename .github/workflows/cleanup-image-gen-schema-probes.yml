@@ -1,0 +1,107 @@
+name: Clean image-gen schema restore probes
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FLYCTL_VERSION: 0.4.85
+
+jobs:
+  approve:
+    name: Approve orphan schema-probe cleanup
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: production
+    steps:
+      - name: Bind approval to protected main
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+  cleanup:
+    name: Remove only identified schema restore probes
+    needs: approve
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production-schema-cleanup
+    concurrency:
+      group: production-deploy-image-gen
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - name: Install exact verified flyctl
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          install_root="$(mktemp -d "$RUNNER_TEMP/leaderbot-flyctl.XXXXXX")"
+          archive="$install_root/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          extract_dir="$install_root/extract"
+          bin_dir="$install_root/bin"
+          install -d -m 0700 "$extract_dir" "$bin_dir"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' \
+            "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90" \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$extract_dir" flyctl
+          test -f "$extract_dir/flyctl"
+          test ! -L "$extract_dir/flyctl"
+          install -m 0755 "$extract_dir/flyctl" "$bin_dir/flyctl"
+          ln -s flyctl "$bin_dir/fly"
+          version_output="$("$bin_dir/flyctl" version)"
+          [[ "$version_output" =~ ^flyctl\ v0\.4\.85([[:space:]]|$) ]]
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+
+      - name: Remove only strictly identified restore probes
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+        run: |
+          test -n "$FLY_API_TOKEN"
+          db_app="leaderbot-portal-mysql"
+          machines="$(flyctl machine list --app "$db_app" --json)"
+          volumes="$(flyctl volumes list --app "$db_app" --json)"
+          machine_count="$(jq -r '[.[] | select((.name // "") | test("^leaderbot-restore-probe-[0-9]+-[0-9]+$"))] | length' <<<"$machines")"
+          test "$machine_count" -le 10
+          mapfile -t machine_ids < <(jq -r '.[] | select((.name // "") | test("^leaderbot-restore-probe-[0-9]+-[0-9]+$")) | .id' <<<"$machines")
+          for machine_id in "${machine_ids[@]}"; do
+            [[ "$machine_id" =~ ^[0-9a-f]{14}$ ]]
+            machine="$(jq -cer --arg id "$machine_id" '[.[] | select(.id==$id)] | if length==1 then .[0] else error("probe Machine mismatch") end' <<<"$machines")"
+            machine_name="$(jq -er '.name' <<<"$machine")"
+            [[ "$machine_name" =~ ^leaderbot-restore-probe-([0-9]+)-([0-9]+)$ ]]
+            probe_run="${BASH_REMATCH[1]}"
+            probe_attempt="${BASH_REMATCH[2]}"
+            volume_name="leaderbot_restore_probe_${probe_run}_${probe_attempt}"
+            volume="$(jq -cer --arg name "$volume_name" '[.[] | select(.name==$name)] | if length==1 then .[0] else error("probe volume mismatch") end' <<<"$volumes")"
+            volume_id="$(jq -er '.id' <<<"$volume")"
+            [[ "$volume_id" =~ ^vol_[a-z0-9]+$ ]]
+            jq -e --arg run "$probe_run" --arg attempt "$probe_attempt" --arg volume "$volume_id" '.state|IN("started","stopped","suspended","created","failed")' <<<"$machine" > /dev/null
+            jq -e --arg run "$probe_run" --arg attempt "$probe_attempt" --arg volume "$volume_id" '(.config.metadata.leaderbot_restore_probe // "")==$run and (.config.metadata.leaderbot_restore_probe_attempt // "")==$attempt and ([.config.mounts[]? | select(.volume==$volume and .path=="/var/lib/mysql")] | length)==1 and (.config.mounts|length)==1' <<<"$machine" > /dev/null
+            test "$(jq -er '.attached_machine_id // ""' <<<"$volume")" = "$machine_id"
+            flyctl machine destroy "$machine_id" --app "$db_app" --force
+          done
+          for _ in $(seq 1 60); do
+            volumes="$(flyctl volumes list --app "$db_app" --json)"
+            matching_count="$(jq -r '[.[] | select((.name // "") | test("^leaderbot_restore_probe_[0-9]+_[0-9]+$"))] | length' <<<"$volumes")"
+            test "$matching_count" -le 10
+            if test "$matching_count" = 0; then
+              break
+            fi
+            mapfile -t volume_ids < <(jq -r '.[] | select(((.name // "") | test("^leaderbot_restore_probe_[0-9]+_[0-9]+$")) and ((.attached_machine_id // "")=="")) | .id' <<<"$volumes")
+            for volume_id in "${volume_ids[@]}"; do
+              [[ "$volume_id" =~ ^vol_[a-z0-9]+$ ]]
+              flyctl volumes destroy "$volume_id" --app "$db_app" --yes
+            done
+            sleep 5
+          done
+          remaining="$(flyctl volumes list --app "$db_app" --json | jq '[.[] | select((.name // "") | test("^leaderbot_restore_probe_[0-9]+_[0-9]+$"))] | length')"
+          test "$remaining" = 0

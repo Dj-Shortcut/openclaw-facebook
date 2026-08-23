@@ -3,7 +3,10 @@ import {
   eraseBillingHandoffIdentity,
   getConnectedFacebookPageConnection,
 } from "../db";
-import { deleteCostLedgerEntriesForUser } from "./costLedger";
+import {
+  deleteCostLedgerEntriesForUser,
+  purgeLegacyCostLedgerEntriesForUser,
+} from "./costLedger";
 import { deleteFaceMemoryForUser } from "./faceMemory";
 import { safeLog } from "./messengerApi";
 import { deleteMessengerGenerationCompletionsForUser } from "./messengerGenerationCompletion";
@@ -17,18 +20,27 @@ import {
 } from "./messengerState";
 import {
   beginMessengerStatePrivacyErasure,
+  deletePersistedStateForErasure,
   deleteLegacyPersistedState,
   getPersistedStateForErasure,
   replacePersistedState,
 } from "./messengerStatePersistence";
-import { getMessengerRequestPageId } from "./messengerRequestContext";
+import {
+  getMessengerRequestErasurePrivacySubject,
+  getMessengerRequestOwnership,
+  getMessengerRequestPageId,
+} from "./messengerRequestContext";
 import {
   beginMessengerPrivacyErasure,
-  completeMessengerPrivacyErasure,
+  runWithLockedMessengerPrivacyErasure,
+  type MessengerErasingPrivacySubject,
 } from "./messengerPrivacySubject";
 import { containMessengerProviderAttemptsForPrivacy } from "./messengerProviderAttemptFence";
 import { eraseWebhookIngressDeliveriesForSubject } from "./meta/webhookIngressQueue";
 import { eraseMessengerGenerationJobsForSubject } from "./messengerGenerationQueue";
+import { eraseMessengerImageQuotaForUser } from "./messengerImageQuotaStore";
+import { hashStorageObjectKeyForLog } from "./messengerStorageObject";
+import { isLocalGeneratedImageUrl } from "./generatedImageStore";
 
 const LEGACY_CHAT_HISTORY_SCOPE = "chat:history";
 
@@ -60,7 +72,10 @@ async function deleteStoredUrl(
 ): Promise<boolean> {
   const key = storageKeyFromPublicUrl(imageUrl);
   if (!key) {
-    return true;
+    // The process-owned fallback is still live but has no object-storage key,
+    // so retain its cleanup reference until it expires. Foreign/legacy URLs
+    // are not objects owned by this storage service.
+    return !isLocalGeneratedImageUrl(imageUrl);
   }
 
   try {
@@ -69,7 +84,7 @@ async function deleteStoredUrl(
   } catch (error) {
     safeLog("user_data_storage_delete_failed", {
       user: logUser,
-      key,
+      objectKeyHash: hashStorageObjectKeyForLog(key),
       errorCode:
         error instanceof Error ? error.constructor.name : "UnknownError",
     });
@@ -77,10 +92,36 @@ async function deleteStoredUrl(
   }
 }
 
+type LockedPrivacyErasure = MessengerErasingPrivacySubject & {
+  workspaceId: number;
+  channelConnectionId: number;
+  userKey: string;
+};
+
 async function deleteUserDataInternal(
-  psid: string
+  psid: string,
+  lockedPrivacyErasure?: LockedPrivacyErasure
 ): Promise<UserDataDeletionOutcome> {
-  const state = await Promise.resolve(getPersistedStateForErasure(psid));
+  const erasureRetry = getMessengerRequestErasurePrivacySubject();
+  if (erasureRetry) {
+    const ownership = getMessengerRequestOwnership();
+    const expectedUserKey = anonymizePsid(psid);
+    if (!ownership || erasureRetry.userKey !== expectedUserKey) {
+      return { status: "failed" };
+    }
+    if (
+      lockedPrivacyErasure &&
+      (lockedPrivacyErasure.workspaceId !== ownership.workspaceId ||
+        lockedPrivacyErasure.channelConnectionId !==
+          ownership.channelConnectionId ||
+        lockedPrivacyErasure.userKey !== expectedUserKey ||
+        lockedPrivacyErasure.privacyEpoch !== erasureRetry.privacyEpoch ||
+        lockedPrivacyErasure.dataPrivacyEpoch !== erasureRetry.dataPrivacyEpoch)
+    ) {
+      return { status: "failed" };
+    }
+  }
+  let state = await Promise.resolve(getPersistedStateForErasure(psid));
   const userKey = state?.userKey ?? anonymizePsid(psid);
   const logUser = toLogUser(userKey);
   const retryContext = state
@@ -155,6 +196,23 @@ async function deleteUserDataInternal(
         privacyEpoch: number;
       }
     | undefined;
+  if (lockedPrivacyErasure) {
+    privacyErasure = {
+      workspaceId: lockedPrivacyErasure.workspaceId,
+      channelConnectionId: lockedPrivacyErasure.channelConnectionId,
+      userKey: lockedPrivacyErasure.userKey,
+      privacyEpoch: lockedPrivacyErasure.privacyEpoch,
+    };
+  } else if (erasureRetry) {
+    const ownership = getMessengerRequestOwnership();
+    if (!ownership) return { status: "failed" };
+    privacyErasure = {
+      workspaceId: ownership.workspaceId,
+      channelConnectionId: ownership.channelConnectionId,
+      userKey,
+      privacyEpoch: erasureRetry.privacyEpoch,
+    };
+  }
   if (
     state?.pageId &&
     state.workspaceId &&
@@ -168,43 +226,87 @@ async function deleteUserDataInternal(
       bindingEpoch: state.bindingEpoch,
     });
     if (!connection) return { status: "failed" };
-    const privacyEpoch = await beginMessengerPrivacyErasure({
-      workspaceId: state.workspaceId,
-      channelConnectionId: state.channelConnectionId,
-      userKey,
-    });
+    if (
+      erasureRetry &&
+      (erasureRetry.userKey !== userKey ||
+        erasureRetry.dataPrivacyEpoch !== state.privacyEpoch)
+    ) {
+      return { status: "failed" };
+    }
+    if (
+      lockedPrivacyErasure &&
+      lockedPrivacyErasure.dataPrivacyEpoch !== state.privacyEpoch
+    ) {
+      return { status: "failed" };
+    }
+    const privacyEpoch =
+      lockedPrivacyErasure?.privacyEpoch ??
+      privacyErasure?.privacyEpoch ??
+      (await beginMessengerPrivacyErasure({
+        workspaceId: state.workspaceId,
+        channelConnectionId: state.channelConnectionId,
+        userKey,
+      }));
     privacyErasure = {
       workspaceId: state.workspaceId,
       channelConnectionId: state.channelConnectionId,
       userKey,
       privacyEpoch,
     };
-  } else if (process.env.NODE_ENV === "production") {
+  } else if (!privacyErasure && process.env.NODE_ENV === "production") {
     return { status: "failed" };
+  }
+
+  if (privacyErasure && !lockedPrivacyErasure) {
+    const dataPrivacyEpoch =
+      state?.privacyEpoch ?? erasureRetry?.dataPrivacyEpoch;
+    if (!dataPrivacyEpoch) return { status: "failed" };
+    const erasure = { ...privacyErasure, dataPrivacyEpoch };
+    return await runWithLockedMessengerPrivacyErasure(erasure, async () => {
+      const value = await deleteUserDataInternal(psid, erasure);
+      return { value, complete: value.status === "completed" };
+    });
   }
 
   let deleteStepsSucceeded = true;
   let providerDrainPending = false;
 
   if (privacyErasure && state?.bindingEpoch) {
+    const tombstoneBindingEpoch = state.bindingEpoch;
     const stateTombstoned = await runStep(
       "messenger_state_privacy_tombstone",
       async () => {
         await beginMessengerStatePrivacyErasure({
           ...privacyErasure,
-          bindingEpoch: state.bindingEpoch!,
+          bindingEpoch: tombstoneBindingEpoch,
         });
       }
     );
     if (!stateTombstoned) return { status: "failed" };
 
+    const refreshedState = await runStep(
+      "messenger_state_privacy_snapshot",
+      async () => {
+        const latestState = await Promise.resolve(
+          getPersistedStateForErasure(psid)
+        );
+        if (latestState) state = latestState;
+      }
+    );
+    if (!refreshedState) return { status: "pending" };
+
     deleteStepsSucceeded =
       (await runStep("webhook_ingress_queue", async () => {
-        await eraseWebhookIngressDeliveriesForSubject(privacyErasure!);
+        await eraseWebhookIngressDeliveriesForSubject(privacyErasure);
       })) && deleteStepsSucceeded;
   }
 
-  if (privacyErasure && state?.pageId && state.bindingEpoch) {
+  const generationState = state;
+  if (
+    privacyErasure &&
+    generationState?.pageId &&
+    generationState.bindingEpoch
+  ) {
     deleteStepsSucceeded =
       (await runStep("messenger_provider_attempts", async () => {
         const drained =
@@ -222,17 +324,42 @@ async function deleteUserDataInternal(
       (await runStep("messenger_generation_queue", async () => {
         await eraseMessengerGenerationJobsForSubject({
           ...privacyErasure,
-          bindingEpoch: state.bindingEpoch!,
-          pageId: state.pageId!,
-          privacyEpoch: state.privacyEpoch!,
+          bindingEpoch: generationState.bindingEpoch!,
+          pageId: generationState.pageId!,
+          privacyEpoch: generationState.privacyEpoch!,
         });
       })) && deleteStepsSucceeded;
   }
 
   deleteStepsSucceeded =
     (await runStep("cost_ledger", async () => {
-      await deleteCostLedgerEntriesForUser(userKey);
+      const bindingEpoch =
+        state?.bindingEpoch ?? getMessengerRequestOwnership()?.bindingEpoch;
+      if (lockedPrivacyErasure && bindingEpoch) {
+        await deleteCostLedgerEntriesForUser({
+          workspaceId: lockedPrivacyErasure.workspaceId,
+          channelConnectionId: lockedPrivacyErasure.channelConnectionId,
+          bindingEpoch,
+          privacyEpoch: lockedPrivacyErasure.dataPrivacyEpoch,
+          userKey,
+        });
+        return;
+      }
+      if (process.env.NODE_ENV === "production") {
+        throw new Error("Tenant-scoped cost ledger erasure is required");
+      }
+      // Old development/test states have no trustworthy tenant boundary. Only
+      // purge equally unscoped legacy records; never attribute or delete a
+      // scoped record from a guessed tenant.
+      await purgeLegacyCostLedgerEntriesForUser(userKey);
     })) && deleteStepsSucceeded;
+
+  if (privacyErasure) {
+    deleteStepsSucceeded =
+      (await runStep("messenger_image_quota", async () => {
+        await eraseMessengerImageQuotaForUser(privacyErasure);
+      })) && deleteStepsSucceeded;
+  }
 
   deleteStepsSucceeded =
     (await runStep("billing_handoff_identity", async () => {
@@ -277,14 +404,18 @@ async function deleteUserDataInternal(
     if (!deleteStepsSucceeded) {
       return { status: "failed" };
     }
+    if (privacyErasure) return { status: "completed" };
     await Promise.resolve(clearUserState(psid));
     return { status: "completed" };
   }
+  const deletionState = state;
 
-  const faceMemoryUrls = new Set(getFaceMemoryStateImageUrls(state));
+  const faceMemoryUrls = new Set(getFaceMemoryStateImageUrls(deletionState));
   const urls = Array.from(
     new Set(
-      getGeneralStateImageUrls(state).filter(url => !faceMemoryUrls.has(url))
+      getGeneralStateImageUrls(deletionState).filter(
+        url => !faceMemoryUrls.has(url)
+      )
     )
   );
 
@@ -292,7 +423,7 @@ async function deleteUserDataInternal(
   deleteStepsSucceeded =
     (await runStep("face_memory", async () => {
       faceMemoryFailedDeletes = await deleteFaceMemoryForUser(psid, {
-        state,
+        state: deletionState,
         persistState: false,
       });
     })) && deleteStepsSucceeded;
@@ -305,31 +436,33 @@ async function deleteUserDataInternal(
   deleteStepsSucceeded =
     (await runStep("legacy_chat_history", () =>
       Promise.resolve(
-        deleteScopedState(LEGACY_CHAT_HISTORY_SCOPE, state.userKey)
+        deleteScopedState(LEGACY_CHAT_HISTORY_SCOPE, deletionState.userKey)
       )
     )) && deleteStepsSucceeded;
   deleteStepsSucceeded =
     (await runStep("messenger_generation_completion", () =>
       deleteMessengerGenerationCompletionsForUser(
-        state.userKey,
-        privacyErasure && state.bindingEpoch && state.privacyEpoch
+        deletionState.userKey,
+        privacyErasure &&
+          deletionState.bindingEpoch &&
+          deletionState.privacyEpoch
           ? {
               workspaceId: privacyErasure.workspaceId,
               channelConnectionId: privacyErasure.channelConnectionId,
-              bindingEpoch: state.bindingEpoch,
-              privacyEpoch: state.privacyEpoch,
-              userKey: state.userKey,
-              pageId: state.pageId!,
+              bindingEpoch: deletionState.bindingEpoch,
+              privacyEpoch: deletionState.privacyEpoch,
+              userKey: deletionState.userKey,
+              pageId: deletionState.pageId!,
             }
           : undefined
       )
     )) && deleteStepsSucceeded;
-  if (state.lastGeneratedVideoProviderJobId) {
+  if (deletionState.lastGeneratedVideoProviderJobId) {
     deleteStepsSucceeded =
       (await runStep("video_provider_artifact", () =>
         deleteProviderVideoForUser({
-          provider: state.lastGeneratedVideoProvider ?? null,
-          providerJobId: state.lastGeneratedVideoProviderJobId!,
+          provider: deletionState.lastGeneratedVideoProvider ?? null,
+          providerJobId: deletionState.lastGeneratedVideoProviderJobId!,
           reqId: "delete-my-data",
         })
       )) && deleteStepsSucceeded;
@@ -365,10 +498,11 @@ async function deleteUserDataInternal(
     return { status: "failed" };
   }
 
-  await Promise.resolve(clearUserState(psid));
-  if (privacyErasure) {
-    await completeMessengerPrivacyErasure(privacyErasure);
-  }
+  await Promise.resolve(
+    privacyErasure
+      ? deletePersistedStateForErasure(psid, deletionState)
+      : clearUserState(psid)
+  );
   return { status: "completed" };
 }
 

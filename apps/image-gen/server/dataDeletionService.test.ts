@@ -5,6 +5,14 @@ const {
   deleteProviderVideoForUserMock,
   eraseBillingHandoffIdentityMock,
   getConnectedFacebookPageConnectionMock,
+  beginPrivacyErasureMock,
+  runPrivacyErasureMock,
+  completePrivacyErasureMock,
+  beginStatePrivacyErasureMock,
+  eraseWebhookIngressMock,
+  containProviderAttemptsMock,
+  eraseGenerationJobsMock,
+  eraseImageQuotaMock,
 } = vi.hoisted(() => ({
   storageDeleteMock: vi.fn(async () => undefined),
   deleteProviderVideoForUserMock: vi.fn(async () => undefined),
@@ -13,6 +21,14 @@ const {
     id: 12,
     workspaceId: 42,
   })),
+  beginPrivacyErasureMock: vi.fn(async () => 6),
+  runPrivacyErasureMock: vi.fn(),
+  completePrivacyErasureMock: vi.fn(async () => undefined),
+  beginStatePrivacyErasureMock: vi.fn(async () => undefined),
+  eraseWebhookIngressMock: vi.fn(async () => 0),
+  containProviderAttemptsMock: vi.fn(async () => true),
+  eraseGenerationJobsMock: vi.fn(async () => 0),
+  eraseImageQuotaMock: vi.fn(async () => undefined),
 }));
 
 vi.mock("./storage", async importOriginal => {
@@ -43,6 +59,58 @@ vi.mock(
     };
   }
 );
+vi.mock("./_core/messengerPrivacySubject", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("./_core/messengerPrivacySubject")>();
+  return {
+    ...actual,
+    beginMessengerPrivacyErasure: beginPrivacyErasureMock,
+    completeMessengerPrivacyErasure: completePrivacyErasureMock,
+    runWithLockedMessengerPrivacyErasure: runPrivacyErasureMock,
+  };
+});
+vi.mock("./_core/messengerStatePersistence", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("./_core/messengerStatePersistence")>();
+  return {
+    ...actual,
+    beginMessengerStatePrivacyErasure: beginStatePrivacyErasureMock,
+  };
+});
+vi.mock("./_core/meta/webhookIngressQueue", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("./_core/meta/webhookIngressQueue")>();
+  return {
+    ...actual,
+    eraseWebhookIngressDeliveriesForSubject: eraseWebhookIngressMock,
+  };
+});
+vi.mock("./_core/messengerProviderAttemptFence", async importOriginal => {
+  const actual =
+    await importOriginal<
+      typeof import("./_core/messengerProviderAttemptFence")
+    >();
+  return {
+    ...actual,
+    containMessengerProviderAttemptsForPrivacy: containProviderAttemptsMock,
+  };
+});
+vi.mock("./_core/messengerGenerationQueue", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("./_core/messengerGenerationQueue")>();
+  return {
+    ...actual,
+    eraseMessengerGenerationJobsForSubject: eraseGenerationJobsMock,
+  };
+});
+vi.mock("./_core/messengerImageQuotaStore", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("./_core/messengerImageQuotaStore")>();
+  return {
+    ...actual,
+    eraseMessengerImageQuotaForUser: eraseImageQuotaMock,
+  };
+});
 import { deleteUserData } from "./_core/dataDeletionService";
 import {
   appendCostLedgerEntry,
@@ -60,14 +128,19 @@ import {
   resetStateStore,
   setLastGenerationContext,
   setPendingImage,
+  setPendingStoredImage,
 } from "./_core/messengerState";
-import { runWithMessengerRequestContext } from "./_core/messengerRequestContext";
+import {
+  runWithMessengerRequestContext,
+  setMessengerRequestErasurePrivacySubject,
+} from "./_core/messengerRequestContext";
 import {
   readScopedState,
   readState,
   writeScopedState,
   writeState,
 } from "./_core/stateStore";
+import { deletePersistedStateForErasure } from "./_core/messengerStatePersistence";
 
 describe("data deletion service", () => {
   const originalRedisUrl = process.env.REDIS_URL;
@@ -76,7 +149,38 @@ describe("data deletion service", () => {
   beforeEach(() => {
     delete process.env.REDIS_URL;
     process.env.PRIVACY_PEPPER = "data-deletion-test-pepper";
+    process.env.PUBLIC_BASE_URL = "https://assets.example";
     resetStateStore();
+    beginPrivacyErasureMock.mockClear();
+    runPrivacyErasureMock.mockReset().mockImplementation(
+      async (
+        input: {
+          workspaceId: number;
+          channelConnectionId: number;
+          userKey: string;
+          privacyEpoch: number;
+          dataPrivacyEpoch: number;
+        },
+        task: () => Promise<{ value: unknown; complete: boolean }>
+      ) => {
+        const result = await task();
+        if (result.complete) {
+          await completePrivacyErasureMock({
+            workspaceId: input.workspaceId,
+            channelConnectionId: input.channelConnectionId,
+            userKey: input.userKey,
+            privacyEpoch: input.privacyEpoch,
+          });
+        }
+        return result.value;
+      }
+    );
+    completePrivacyErasureMock.mockClear();
+    beginStatePrivacyErasureMock.mockClear();
+    eraseWebhookIngressMock.mockClear();
+    containProviderAttemptsMock.mockClear();
+    eraseGenerationJobsMock.mockClear();
+    eraseImageQuotaMock.mockClear();
   });
 
   afterEach(() => {
@@ -85,6 +189,7 @@ describe("data deletion service", () => {
     deleteProviderVideoForUserMock.mockReset();
     eraseBillingHandoffIdentityMock.mockReset();
     eraseBillingHandoffIdentityMock.mockResolvedValue(0);
+    delete process.env.PUBLIC_BASE_URL;
     getConnectedFacebookPageConnectionMock.mockReset();
     getConnectedFacebookPageConnectionMock.mockResolvedValue({
       id: 12,
@@ -130,6 +235,205 @@ describe("data deletion service", () => {
     ).toBeNull();
   });
 
+  it("scrubs image quota by workspace user and uses the new erasure epoch", async () => {
+    const psid = "delete-all-image-quota-epochs";
+    const userKey = anonymizePsid(psid);
+
+    await runWithMessengerRequestContext(
+      "page-quota-erasure",
+      async () => {
+        await Promise.resolve(getOrCreateState(psid));
+        await expect(deleteUserData(psid)).resolves.toEqual({
+          status: "completed",
+        });
+      },
+      {
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        userKey,
+        privacyEpoch: 5,
+      }
+    );
+
+    expect(beginPrivacyErasureMock).toHaveBeenCalledWith({
+      workspaceId: 42,
+      channelConnectionId: 7,
+      userKey,
+    });
+    expect(eraseImageQuotaMock).toHaveBeenCalledWith({
+      workspaceId: 42,
+      channelConnectionId: 7,
+      userKey,
+      privacyEpoch: 6,
+    });
+    expect(completePrivacyErasureMock).toHaveBeenCalledWith({
+      workspaceId: 42,
+      channelConnectionId: 7,
+      userKey,
+      privacyEpoch: 6,
+    });
+  });
+
+  it("resumes a pending E5 deletion through erasing E6 without losing the old state", async () => {
+    const psid = "delete-provider-pending-epoch-retry";
+    const pageId = "page-delete-provider-pending-epoch-retry";
+    const userKey = anonymizePsid(psid);
+
+    containProviderAttemptsMock
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+
+    await runWithMessengerRequestContext(
+      pageId,
+      async () => {
+        await Promise.resolve(getOrCreateState(psid));
+        await Promise.resolve(
+          setLastGenerationContext(psid, { prompt: "private E5 state" })
+        );
+        await expect(deleteUserData(psid)).resolves.toEqual({
+          status: "pending",
+        });
+      },
+      {
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        userKey,
+        privacyEpoch: 5,
+      }
+    );
+
+    await runWithMessengerRequestContext(
+      pageId,
+      async () => {
+        setMessengerRequestErasurePrivacySubject({
+          userKey,
+          privacyEpoch: 6,
+          dataPrivacyEpoch: 5,
+        });
+        await expect(deleteUserData(psid)).resolves.toEqual({
+          status: "completed",
+        });
+      },
+      {
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+      }
+    );
+
+    expect(beginPrivacyErasureMock).toHaveBeenCalledTimes(1);
+    expect(runPrivacyErasureMock).toHaveBeenLastCalledWith(
+      {
+        workspaceId: 42,
+        channelConnectionId: 7,
+        userKey,
+        privacyEpoch: 6,
+        dataPrivacyEpoch: 5,
+      },
+      expect.any(Function)
+    );
+    expect(completePrivacyErasureMock).toHaveBeenCalledWith({
+      workspaceId: 42,
+      channelConnectionId: 7,
+      userKey,
+      privacyEpoch: 6,
+    });
+
+    await runWithMessengerRequestContext(
+      pageId,
+      async () => {
+        await expect(Promise.resolve(getState(psid))).resolves.toBeNull();
+      },
+      {
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        userKey,
+        privacyEpoch: 5,
+      }
+    );
+  });
+
+  it("completes an E6 retry after a crash deleted the E5 state first", async () => {
+    const psid = "delete-crash-after-state-removal";
+    const pageId = "page-delete-crash-after-state-removal";
+    const userKey = anonymizePsid(psid);
+    const oldState = await runWithMessengerRequestContext(
+      pageId,
+      async () => Promise.resolve(getOrCreateState(psid)),
+      {
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        userKey,
+        privacyEpoch: 5,
+      }
+    );
+
+    await runWithMessengerRequestContext(
+      pageId,
+      async () => {
+        setMessengerRequestErasurePrivacySubject({
+          userKey,
+          privacyEpoch: 6,
+          dataPrivacyEpoch: 5,
+        });
+        await Promise.resolve(deletePersistedStateForErasure(psid, oldState));
+        await expect(deleteUserData(psid)).resolves.toEqual({
+          status: "completed",
+        });
+      },
+      {
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+      }
+    );
+
+    expect(beginPrivacyErasureMock).not.toHaveBeenCalled();
+    expect(completePrivacyErasureMock).toHaveBeenCalledWith({
+      workspaceId: 42,
+      channelConnectionId: 7,
+      userKey,
+      privacyEpoch: 6,
+    });
+  });
+
+  it("re-reads fenced state so an ingress upload committed during erasure is scrubbed", async () => {
+    const psid = "delete-ingress-upload-race";
+    const pageId = "page-delete-ingress-upload-race";
+    const userKey = anonymizePsid(psid);
+    const lateSourceUrl =
+      "https://assets.example/inbound-source/late-erasure-race.jpg";
+
+    await runWithMessengerRequestContext(
+      pageId,
+      async () => {
+        await Promise.resolve(getOrCreateState(psid));
+        beginStatePrivacyErasureMock.mockImplementationOnce(async () => {
+          await setPendingStoredImage(psid, lateSourceUrl);
+        });
+
+        await expect(deleteUserData(psid)).resolves.toEqual({
+          status: "completed",
+        });
+      },
+      {
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        userKey,
+        privacyEpoch: 5,
+      }
+    );
+
+    expect(storageDeleteMock).toHaveBeenCalledWith(
+      "inbound-source/late-erasure-race.jpg"
+    );
+  });
+
   it("deletes Messenger generation completion markers during user erasure", async () => {
     const psid = "delete-generation-completion-user";
     const userKey = anonymizePsid(psid);
@@ -166,49 +470,69 @@ describe("data deletion service", () => {
     const recordedAt = new Date();
     const period = recordedAt.toISOString().slice(0, 10);
 
-    await Promise.resolve(getOrCreateState(psid));
-    await appendCostLedgerEntry(
-      {
-        id: "req-delete-cost:attempt-1",
-        channel: "facebook_messenger",
-        operation: "image_generation",
-        provider: "openai-images",
-        model: "gpt-image-2",
-        userKey,
-        reqId: "req-delete-cost",
-        status: "provider_attempt_started",
-        estimatedCostUsd: 0.025,
-        estimatedOutputCostUsd: null,
-        finalCostUsd: null,
-        costEstimateComplete: true,
-        estimateSource: "env_override",
-        unpricedCostComponents: [],
-      },
-      recordedAt
-    );
-    await appendCostLedgerEntry(
-      {
-        id: "req-keep-cost:attempt-1",
-        channel: "facebook_messenger",
-        operation: "image_generation",
-        provider: "openai-images",
-        model: "gpt-image-2",
-        userKey: otherUserKey,
-        reqId: "req-keep-cost",
-        status: "provider_attempt_started",
-        estimatedCostUsd: 0.025,
-        estimatedOutputCostUsd: null,
-        finalCostUsd: null,
-        costEstimateComplete: true,
-        estimateSource: "env_override",
-        unpricedCostComponents: [],
-      },
-      recordedAt
-    );
+    await runWithMessengerRequestContext(
+      "page-delete-cost",
+      async () => {
+        await Promise.resolve(getOrCreateState(psid));
+        await appendCostLedgerEntry(
+          {
+            id: "req-delete-cost:attempt-1",
+            channel: "facebook_messenger",
+            operation: "image_generation",
+            provider: "openai-images",
+            model: "gpt-image-2",
+            workspaceId: 42,
+            channelConnectionId: 7,
+            bindingEpoch: 3,
+            privacyEpoch: 5,
+            userKey,
+            reqId: "req-delete-cost",
+            status: "provider_attempt_started",
+            estimatedCostUsd: 0.025,
+            estimatedOutputCostUsd: null,
+            finalCostUsd: null,
+            costEstimateComplete: true,
+            estimateSource: "env_override",
+            unpricedCostComponents: [],
+          },
+          recordedAt
+        );
+        await appendCostLedgerEntry(
+          {
+            id: "req-keep-cost:attempt-1",
+            channel: "facebook_messenger",
+            operation: "image_generation",
+            provider: "openai-images",
+            model: "gpt-image-2",
+            workspaceId: 42,
+            channelConnectionId: 7,
+            bindingEpoch: 3,
+            privacyEpoch: 5,
+            userKey: otherUserKey,
+            reqId: "req-keep-cost",
+            status: "provider_attempt_started",
+            estimatedCostUsd: 0.025,
+            estimatedOutputCostUsd: null,
+            finalCostUsd: null,
+            costEstimateComplete: true,
+            estimateSource: "env_override",
+            unpricedCostComponents: [],
+          },
+          recordedAt
+        );
 
-    await expect(deleteUserData(psid)).resolves.toEqual({
-      status: "completed",
-    });
+        await expect(deleteUserData(psid)).resolves.toEqual({
+          status: "completed",
+        });
+      },
+      {
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        userKey,
+        privacyEpoch: 5,
+      }
+    );
 
     const remainingEntries = await readCostLedgerPeriod(period);
     expect(remainingEntries).toEqual([
@@ -660,7 +984,7 @@ describe("data deletion service", () => {
     expect(storageDeleteMock).toHaveBeenCalledWith(
       "generated/images/result.jpg"
     );
-    expect(storageDeleteMock).toHaveBeenCalledWith(
+    expect(storageDeleteMock).not.toHaveBeenCalledWith(
       "generated/legacy-result.jpg"
     );
     expect(await Promise.resolve(getState(psid))).toBeNull();

@@ -26,6 +26,7 @@ import {
   createPortalHandoffToken,
   createOrGetPortalHandoffToken,
   deletePortalHandoffTokensForMessengerUserKey,
+  eraseBillingHandoffIdentity,
   findPortalHandoffReentryBinding,
   getWorkspaceById,
   markPortalHandoffTokenConsumed,
@@ -48,6 +49,14 @@ function selectWhereRows(rows: unknown[]) {
   const where = vi.fn(async () => rows);
   const from = vi.fn(() => ({ where }));
   return { from, where };
+}
+
+function orderedSelectRows(rows: unknown[]) {
+  const forUpdate = vi.fn(async () => rows);
+  const orderBy = vi.fn(() => ({ for: forUpdate }));
+  const where = vi.fn(() => ({ orderBy }));
+  const from = vi.fn(() => ({ where }));
+  return { from, where, orderBy, forUpdate };
 }
 
 function duplicateInsert() {
@@ -75,8 +84,10 @@ describe("portal handoff database helpers", () => {
       id: 123,
       workspaceId: 42,
       tokenHash: "sha256:token",
-      messengerSenderUserKey: "sender-user-key",
-      facebookPageId: "facebook-page-42",
+      messengerSenderUserKey: null,
+      facebookPageId: null,
+      messengerChannelConnectionId: null,
+      messengerPrivacyEpoch: null,
       claimedByUserId: null,
       purpose: "workspace_onboarding" as const,
       status: "pending" as const,
@@ -97,7 +108,10 @@ describe("portal handoff database helpers", () => {
       createPortalHandoffToken({
         workspaceId: 42,
         tokenHash: "sha256:token",
-        messengerSenderUserKey: "sender-user-key",
+        messengerSenderUserKey: null,
+        facebookPageId: null,
+        messengerChannelConnectionId: null,
+        messengerPrivacyEpoch: null,
         purpose: "workspace_onboarding",
         status: "pending",
         expiresAt: created.expiresAt,
@@ -122,6 +136,13 @@ describe("portal handoff database helpers", () => {
     dbMock.update.mockReturnValue({ set });
 
     await expect(revokePortalHandoffToken("sha256:token")).resolves.toBe(true);
+    expect(set).toHaveBeenCalledWith({
+      status: "revoked",
+      messengerSenderUserKey: null,
+      facebookPageId: null,
+      messengerChannelConnectionId: null,
+      messengerPrivacyEpoch: null,
+    });
   });
 
   it("reuses the stored pending delivery capability and its expiry", async () => {
@@ -131,8 +152,10 @@ describe("portal handoff database helpers", () => {
       tokenHash: "sha256:token",
       capabilityGeneration: 1,
       deliveryIdempotencyKeyHash: "sha256:delivery",
-      messengerSenderUserKey: "sender",
-      facebookPageId: "page",
+      messengerSenderUserKey: null,
+      facebookPageId: null,
+      messengerChannelConnectionId: null,
+      messengerPrivacyEpoch: null,
       purpose: "workspace_onboarding" as const,
       status: "pending" as const,
       expiresAt: new Date("2026-07-01T00:00:00.000Z"),
@@ -161,8 +184,10 @@ describe("portal handoff database helpers", () => {
       tokenHash: "sha256:token",
       capabilityGeneration: 1,
       deliveryIdempotencyKeyHash: "sha256:delivery",
-      messengerSenderUserKey: "sender",
-      facebookPageId: "page",
+      messengerSenderUserKey: null,
+      facebookPageId: null,
+      messengerChannelConnectionId: null,
+      messengerPrivacyEpoch: null,
       purpose: "workspace_onboarding" as const,
       status: "pending" as const,
       expiresAt: new Date("2026-07-01T00:00:00.000Z"),
@@ -198,6 +223,10 @@ describe("portal handoff database helpers", () => {
       expiresAt: stored.expiresAt,
       capabilityGeneration: 2,
       tokenHash: "sha256:token-2",
+      messengerSenderUserKey: null,
+      facebookPageId: null,
+      messengerChannelConnectionId: null,
+      messengerPrivacyEpoch: null,
     });
     expect(where).toHaveBeenCalled();
   });
@@ -235,24 +264,21 @@ describe("portal handoff database helpers", () => {
     });
   });
 
-  it.each([
-    "tokenHash",
-    "workspaceId",
-    "facebookPageId",
-    "messengerSenderUserKey",
-    "purpose",
-  ])("fails closed for %s binding mismatch", async field => {
-    const stored = deliveryToken();
-    const input = {
-      ...stored,
-      [field]: field === "workspaceId" ? 99 : "other",
-    };
-    mockDeliveryToken(stored);
-    await expect(
-      createOrGetPortalHandoffToken(input, new Date("2026-06-30"))
-    ).rejects.toThrow("binding mismatch");
-    expect(dbMock.update).not.toHaveBeenCalled();
-  });
+  it.each(["tokenHash", "workspaceId", "purpose"])(
+    "fails closed for %s binding mismatch",
+    async field => {
+      const stored = deliveryToken();
+      const input = {
+        ...stored,
+        [field]: field === "workspaceId" ? 99 : "other",
+      };
+      mockDeliveryToken(stored);
+      await expect(
+        createOrGetPortalHandoffToken(input, new Date("2026-06-30"))
+      ).rejects.toThrow("binding mismatch");
+      expect(dbMock.update).not.toHaveBeenCalled();
+    }
+  );
 
   it("rejects a missing delivery hash before transaction writes", async () => {
     await expect(
@@ -271,6 +297,35 @@ describe("portal handoff database helpers", () => {
     await expect(
       deletePortalHandoffTokensForMessengerUserKey("sender-user-key")
     ).resolves.toBe(2);
+  });
+
+  it("erases billing intent identity even when no handoff outbox exists", async () => {
+    const intents = orderedSelectRows([{ intentId: "intent-without-outbox" }]);
+    const outbox = orderedSelectRows([]);
+    dbMock.select
+      .mockReturnValueOnce({ from: intents.from })
+      .mockReturnValueOnce({ from: outbox.from });
+
+    const updateWhere = vi.fn(async () => [{ affectedRows: 1 }, []]);
+    const updateSet = vi.fn(() => ({ where: updateWhere }));
+    dbMock.update.mockReturnValue({ set: updateSet });
+    const deleteWhere = vi.fn(async () => [{ affectedRows: 0 }, []]);
+    dbMock.delete.mockReturnValue({ where: deleteWhere });
+
+    await expect(
+      eraseBillingHandoffIdentity(42, "sender-user-key", "facebook-page-42")
+    ).resolves.toBe(0);
+
+    expect(intents.forUpdate).toHaveBeenCalledWith("update");
+    expect(outbox.forUpdate).toHaveBeenCalledWith("update");
+    expect(updateSet).toHaveBeenCalledTimes(1);
+    expect(updateSet).toHaveBeenCalledWith({
+      messengerSenderUserKey: null,
+      messengerPageId: null,
+      messengerChannelConnectionId: null,
+      messengerPrivacyEpoch: null,
+    });
+    expect(deleteWhere).toHaveBeenCalledTimes(1);
   });
 
   it("loads a workspace by id for claimed handoff sessions", async () => {

@@ -36,10 +36,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           cache: npm
@@ -89,7 +89,7 @@ jobs:
           node -e "const fs=require('node:fs'); const inspect=JSON.parse(fs.readFileSync('/tmp/facebook-plugin-inspect.json','utf8')); if (inspect.diagnostics?.length) throw new Error(JSON.stringify(inspect.diagnostics)); if (!inspect.plugin?.channelIds?.includes('facebook')) throw new Error('facebook channel not loaded from plugin'); const channels=JSON.parse(fs.readFileSync('/tmp/openclaw-channels.json','utf8')).chat ?? {}; if (!channels.facebook?.installed) throw new Error('facebook is not installed in channel catalog'); if (channels.messenger) throw new Error('messenger appeared as a separate channel');"
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: ${{ steps.pack.outputs.tarball_name }}
           path: ${{ steps.pack.outputs.tarball }}
@@ -98,7 +98,7 @@ jobs:
   clawhub-dry-run:
     if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.publish == false)
     needs: package-artifact
-    uses: openclaw/clawhub/.github/workflows/package-publish.yml@v0.12.0
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@ecf09b868a986751137f4272283f84967a16c765 # v0.12.0
     with:
       dry_run: true
       source_repo: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
@@ -111,7 +111,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: openclaw/clawhub/.github/workflows/package-publish.yml@v0.12.0
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@ecf09b868a986751137f4272283f84967a16c765 # v0.12.0
     with:
       dry_run: false
 
@@ -121,7 +121,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: openclaw/clawhub/.github/workflows/package-publish.yml@v0.12.0
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@ecf09b868a986751137f4272283f84967a16c765 # v0.12.0
     with:
       dry_run: false
     secrets:

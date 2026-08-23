@@ -11,7 +11,8 @@ and which fallback path is expected.
   signature validation, sender access checks, fast acknowledgement, and ordinary
   Messenger conversation turns.
 - The Leaderbot image-generation runtime owns prompt-first image generation,
-  source-photo edits, image quotas, provider spend gates, generated asset
+  source-photo edits, customer day/month photo quotas, provider concurrency,
+  generated asset
   storage, and GDPR deletion for generated assets it stores.
 - The bridge between the two runtimes is opt-in per account through
   `channels.facebook.leaderbotBridgeEnabled`. Host-level Leaderbot tokens alone
@@ -37,24 +38,23 @@ and sender policy first.
    Leaderbot only when the bridge is enabled.
 5. Source-photo edits, image-only uploads, media with image prompts, remembered
    assistant prompt references, and text-only image-generation intents are routed
-   to Leaderbot when the bridge is enabled and the gateway budget reservation
-   succeeds.
+   to Leaderbot when the bridge is enabled. Customer-scoped photo quota is
+   enforced by Leaderbot image-gen, not by a shared gateway image counter.
 6. Greetings, help, status, ordinary text, image analysis, prompt-writing
    requests, unsupported media, and audio after transcription continue through
    OpenClaw.
 
 ## Budget And Fallback Behavior
 
-The gateway has host-level caps before it forwards expensive work to Leaderbot:
+The gateway retains one host-level cap for audio transcription before it starts
+that expensive work: `MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP`. When the
+audio cap is exceeded, the gateway sends a short Messenger fallback reply and
+does not transcribe the attachment.
 
-- `MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP`
-- `MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP`
-- `MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP`
-
-When a cap is exceeded, the gateway sends a short Messenger fallback reply and
-does not forward the event. These caps protect the root gateway before the
-image-generation runtime applies its own quota, spend, queue, and provider
-attempt controls.
+Generic Leaderbot, photo, and interactive-action forwards deliberately have no
+shared Page-global gateway cap. The image-generation runtime applies
+customer-scoped quota, queue, and provider controls. A usable Messenger result
+consumes one photo; a failed provider attempt consumes none.
 
 If the Leaderbot bridge is disabled, image-generation-looking events are logged
 as skipped with `reason=disabled_by_config` and then fall back to the normal
@@ -103,7 +103,7 @@ After a deploy, operator smoke evidence should distinguish these paths:
 - ordinary text reply through OpenClaw
 - text-to-image forward through Leaderbot
 - source-photo edit forward through Leaderbot
-- quota or gateway-cap exhaustion fallback
+- customer photo-quota or audio gateway-cap exhaustion fallback
 - Leaderbot forward failure fallback
 - `delete my data` forwarding or privacy fallback
 

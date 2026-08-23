@@ -45,9 +45,7 @@ describe("R2 lifecycle retention policy", () => {
         enabled: true,
       })
     );
-    expect(
-      inboundSourceRule?.deleteObjectsTransition?.condition
-    ).toEqual({
+    expect(inboundSourceRule?.deleteObjectsTransition?.condition).toEqual({
       type: "Age",
       maxAge: THIRTY_DAYS_SECONDS,
     });
@@ -75,6 +73,24 @@ describe("R2 lifecycle retention policy", () => {
     const policy = loadPolicy();
 
     expect(policy.rules.map(rule => rule.conditions.prefix)).not.toContain("");
+  });
+
+  it("expires generated videos after the hard maximum retention window", () => {
+    const policy = loadPolicy();
+    const generatedVideoRule = policy.rules.find(
+      rule => rule.conditions.prefix === "generated/videos/"
+    );
+
+    expect(generatedVideoRule).toEqual(
+      expect.objectContaining({
+        id: "expire-generated-videos-after-30-days",
+        enabled: true,
+      })
+    );
+    expect(generatedVideoRule?.deleteObjectsTransition?.condition).toEqual({
+      type: "Age",
+      maxAge: THIRTY_DAYS_SECONDS,
+    });
   });
 
   it("does not expire the whole generated namespace without a legacy inventory", () => {

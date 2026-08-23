@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   billingSchedulerTenants,
+  channelConnections,
   workspaceEntitlements,
   workspaceEntitlementUsage,
   workspaceEntitlementUsageReservations,
@@ -127,6 +128,65 @@ describe("Startpilot finite entitlement usage", () => {
       })
     );
     expect(flow.usage.aiAnswersReserved).toBe(1);
+  });
+
+  it("refuses a stale binding snapshot before reserving usage", async () => {
+    const flow = aiUsageFlow({ bindingMatches: false });
+    databaseMock.mockResolvedValue(flow.database);
+
+    await expect(
+      reserveStartpilotAiAnswerUsage({
+        workspaceId: 1,
+        entitlementId: 9,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        mode: "test",
+        idempotencyKey: "request-key-stale-binding",
+        ownerToken: OWNER_TOKEN,
+        now: new Date("2026-08-01T12:00:00.000Z"),
+      })
+    ).rejects.toThrow("AI answer reservation binding changed");
+    expect(flow.insertValues).not.toHaveBeenCalled();
+    expect(flow.usage.aiAnswersReserved).toBe(0);
+  });
+
+  it("refuses a partial connection snapshot before opening a transaction", async () => {
+    await expect(
+      reserveStartpilotAiAnswerUsage({
+        workspaceId: 1,
+        entitlementId: 9,
+        channelConnectionId: 7,
+        mode: "test",
+        idempotencyKey: "request-key-partial-binding",
+        ownerToken: OWNER_TOKEN,
+      })
+    ).rejects.toThrow("incomplete AI answer reservation binding");
+    expect(databaseMock).not.toHaveBeenCalled();
+  });
+
+  it("stores a binding only after locking the exact current epoch", async () => {
+    const flow = aiUsageFlow({ bindingMatches: true });
+    databaseMock.mockResolvedValue(flow.database);
+
+    await expect(
+      reserveStartpilotAiAnswerUsage({
+        workspaceId: 1,
+        entitlementId: 9,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        mode: "test",
+        idempotencyKey: "request-key-current-binding",
+        ownerToken: OWNER_TOKEN,
+        now: new Date("2026-08-01T12:00:00.000Z"),
+      })
+    ).resolves.toEqual({
+      allowed: true,
+      reservationId: expect.stringMatching(/^[0-9a-f-]{36}$/i),
+      alreadyReserved: false,
+    });
+    expect(flow.insertValues).toHaveBeenCalledWith(
+      expect.objectContaining({ channelConnectionId: 7, bindingEpoch: 3 })
+    );
   });
 
   it("reuses only a reserved idempotency key from the same entitlement", async () => {
@@ -445,6 +505,7 @@ function aiUsageFlow(
     lookupReservations?: AiReservation[];
     staleReservations?: AiReservation[];
     schedulerEnabled?: boolean;
+    bindingMatches?: boolean;
   } = {}
 ) {
   const validUntil = new Date("2026-09-01T00:00:00.000Z");
@@ -490,15 +551,19 @@ function aiUsageFlow(
                     validUntil,
                   },
                 ]
-              : table === workspaceEntitlementUsage
-                ? [usage]
-                : table === billingSchedulerTenants
-                  ? [{ enabled: options.schedulerEnabled ?? true }]
-                  : table === workspaceEntitlementUsageReservations
-                    ? selection === undefined
-                      ? lookupReservations
-                      : staleReservations
-                    : [];
+              : table === channelConnections
+                ? options.bindingMatches === false
+                  ? []
+                  : [{ id: 7 }]
+                : table === workspaceEntitlementUsage
+                  ? [usage]
+                  : table === billingSchedulerTenants
+                    ? [{ enabled: options.schedulerEnabled ?? true }]
+                    : table === workspaceEntitlementUsageReservations
+                      ? selection === undefined
+                        ? lookupReservations
+                        : staleReservations
+                      : [];
           const lock = vi.fn(async () => rows);
           return {
             limit: vi.fn(() => ({ for: lock })),

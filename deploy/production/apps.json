@@ -7,12 +7,13 @@
       "workingDirectory": ".",
       "deployScript": "deploy:gateway",
       "deploymentEnabled": false,
-      "deploymentBlockReason": "Bootstrap is blocked until the stateful volume migration is rehearsed and the proven current managed gateway digest is added to reviewedRollbackImages in the same reviewed PR.",
+      "deploymentBlockReason": "Bootstrap is blocked until the stateful volume migration is rehearsed and a separate reviewed manifest-bound rebaseline proves the live identity, exact volume and Machine configuration, plus an attested artifact built from fully pinned inputs.",
       "strategy": "rolling",
       "serviceProcessGroups": ["app"],
       "serviceCheckPath": "/healthz",
       "allowDetachedMachines": false,
       "reviewedRollbackImages": [],
+      "reviewedRollbackConfigs": {},
       "desiredScale": {
         "app": {
           "count": 1,
@@ -27,13 +28,54 @@
       "config": "apps/image-gen/fly.toml",
       "workingDirectory": "apps/image-gen",
       "deployScript": "deploy:image-gen",
-      "deploymentEnabled": true,
+      "deploymentEnabled": false,
+      "deploymentBlockReason": "The reviewed 0015-to-0016 transition is waiting for a trusted, attested compatibility-bridge artifact.",
       "sourceDeployEnabled": false,
       "sourceDeployBlockReason": "Production deploys require an immutable image built from reviewed source and recorded in this manifest before rollout.",
+      "trustedBuilderWorkflow": ".github/workflows/build-production-artifacts.yml",
       "reviewedImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:28d862568aa3cb049ac4aba164bb1e01792691feec646ff87c657f72bd306804",
+      "reviewedArtifactKind": "legacy-bootstrap",
+      "reviewedSourceCommit": null,
       "reviewedRollbackImages": [
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:4c037101bd7849af818760cab037e1ab046717c9e6dda5815e5219f72c80d952"
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:28d862568aa3cb049ac4aba164bb1e01792691feec646ff87c657f72bd306804"
       ],
+      "reviewedRollbackConfigs": {
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:28d862568aa3cb049ac4aba164bb1e01792691feec646ff87c657f72bd306804": {
+          "path": "deploy/production/rollback-configs/image-gen-28d862568aa3.toml",
+          "sha256": "c449016cd8a66ec563c71e8fbb7e6fc0a1953f5ad0a7d6c1313936aaff911b64"
+        }
+      },
+      "reviewedRollbackArtifactKinds": {
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:28d862568aa3cb049ac4aba164bb1e01792691feec646ff87c657f72bd306804": "legacy-bootstrap"
+      },
+      "reviewedRollbackSourceCommits": {},
+      "databaseSchemaPhase": "0015_base",
+      "databaseSchemaTransition": {
+        "from": "0015_base",
+        "to": "0016_expand",
+        "state": "awaiting_attested_bridge",
+        "legacyBaseImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:28d862568aa3cb049ac4aba164bb1e01792691feec646ff87c657f72bd306804",
+        "bridgeImage": null,
+        "bridgeSourceCommit": null,
+        "bridgePredicateType": "https://leaderbot.live/attestations/migration-bridge/v1"
+      },
+      "databaseRecovery": {
+        "app": "leaderbot-portal-mysql",
+        "volumeId": "vol_49165px70nx9ylzr",
+        "databaseName": "leaderbot",
+        "region": "ams",
+        "sizeGb": 10,
+        "probeVmMemoryMb": 2048,
+        "mysqlImage": "docker-hub-mirror.fly.io/library/mysql:8.4.11@sha256:1d6b6a8fcee8ff758ff151d017f5203cd06792a0e698f0a593c9dfcb14609cf0"
+      },
+      "reviewedImageSchemaPhases": ["0015_base"],
+      "reviewedRollbackImageSchemaPhases": {
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:28d862568aa3cb049ac4aba164bb1e01792691feec646ff87c657f72bd306804": [
+          "0015_base"
+        ]
+      },
+      "generationQueueWriteVersion": "v1",
+      "generationQueueV2ReaderImages": [],
       "strategy": "rolling",
       "serviceProcessGroups": ["app"],
       "serviceCheckPath": "/healthz",
@@ -49,6 +91,49 @@
         },
         "worker": {
           "count": 2,
+          "cpuKind": "shared",
+          "cpus": 1,
+          "memoryMb": 256
+        }
+      }
+    },
+    "storage-proxy": {
+      "app": "leaderbot-storage-proxy",
+      "config": "apps/image-gen/storage-proxy/fly.toml",
+      "workingDirectory": "apps/image-gen/storage-proxy",
+      "deployScript": "deploy:storage-proxy",
+      "deploymentEnabled": false,
+      "deploymentBlockReason": "The storage privacy fix is waiting for an exact trusted, attested production artifact.",
+      "sourceDeployEnabled": false,
+      "sourceDeployBlockReason": "Production deploys require an immutable storage-proxy image built from reviewed source and recorded in this manifest before rollout.",
+      "trustedBuilderWorkflow": ".github/workflows/build-production-artifacts.yml",
+      "reviewedImage": "registry.fly.io/leaderbot-storage-proxy@sha256:334f78b92816a92e302a66c4d08742c28361a718b190227d3dbf7b933350cc28",
+      "reviewedArtifactKind": "legacy-bootstrap",
+      "reviewedSourceCommit": null,
+      "artifactTransition": {
+        "state": "awaiting_attested_runtime",
+        "legacyImage": "registry.fly.io/leaderbot-storage-proxy@sha256:334f78b92816a92e302a66c4d08742c28361a718b190227d3dbf7b933350cc28"
+      },
+      "reviewedRollbackImages": [
+        "registry.fly.io/leaderbot-storage-proxy@sha256:334f78b92816a92e302a66c4d08742c28361a718b190227d3dbf7b933350cc28"
+      ],
+      "reviewedRollbackConfigs": {
+        "registry.fly.io/leaderbot-storage-proxy@sha256:334f78b92816a92e302a66c4d08742c28361a718b190227d3dbf7b933350cc28": {
+          "path": "deploy/production/rollback-configs/storage-proxy-334f78b92816.toml",
+          "sha256": "078177ad857389ed979adc908f11c21dd75b7cb7d3d14037da3e3b26f4cc6420"
+        }
+      },
+      "reviewedRollbackArtifactKinds": {
+        "registry.fly.io/leaderbot-storage-proxy@sha256:334f78b92816a92e302a66c4d08742c28361a718b190227d3dbf7b933350cc28": "legacy-bootstrap"
+      },
+      "reviewedRollbackSourceCommits": {},
+      "strategy": "rolling",
+      "serviceProcessGroups": ["app"],
+      "serviceCheckPath": "/healthz",
+      "allowDetachedMachines": false,
+      "desiredScale": {
+        "app": {
+          "count": 1,
           "cpuKind": "shared",
           "cpus": 1,
           "memoryMb": 256

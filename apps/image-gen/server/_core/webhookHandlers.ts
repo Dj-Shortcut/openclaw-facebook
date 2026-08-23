@@ -7,6 +7,7 @@ import { createMessengerVideoGenerationRunner } from "./videoGenerationFlow";
 import { enqueueOrRunMessengerGenerationJob } from "./messengerGenerationQueue";
 import {
   getMessengerRequestPageId,
+  getMessengerRequestPrivacySubject,
   runWithMessengerRequestContext,
   setMessengerRequestOperationId,
 } from "./messengerRequestContext";
@@ -20,7 +21,6 @@ import {
 } from "./workspaceEntitlementRuntime";
 import {
   assertMessengerPrivacySubject,
-  ensureActiveMessengerPrivacySubject,
   MessengerPrivacyFenceError,
 } from "./messengerPrivacySubject";
 import { createInternalMessengerImageRequestHandler } from "./webhookInternalImageRequest";
@@ -54,10 +54,10 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       ctx.maybeSendInFlightMessage(psid, reqId, lang),
     sendLoggedImage: (psid, imageUrl, reqId) =>
       ctx.sendLoggedImage(psid, imageUrl, reqId),
-    sendLoggedActions: (psid, text, actions, reqId) =>
-      ctx.sendLoggedActions(psid, text, actions, reqId),
-    sendLoggedText: (psid, text, reqId) =>
-      ctx.sendLoggedText(psid, text, reqId),
+    sendLoggedActions: (psid, text, actions, reqId, deliveryControl) =>
+      ctx.sendLoggedActions(psid, text, actions, reqId, deliveryControl),
+    sendLoggedText: (psid, text, reqId, deliveryControl) =>
+      ctx.sendLoggedText(psid, text, reqId, deliveryControl),
   });
   const videoGenerationRunner = createMessengerVideoGenerationRunner({
     maybeSendInFlightMessage: (psid, reqId, lang) =>
@@ -117,13 +117,21 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
   ): Promise<MessengerSendOutcome> => {
     const pageId = getMessengerRequestPageId();
     const ownership = await resolveMessengerGenerationOwnership(pageId);
-    const privacyEpoch = ownership
-      ? await ensureActiveMessengerPrivacySubject({
-          workspaceId: ownership.workspaceId,
-          channelConnectionId: ownership.channelConnectionId,
-          userKey: userId,
-        })
-      : undefined;
+    const requestPrivacy = getMessengerRequestPrivacySubject();
+    if (requestPrivacy && requestPrivacy.userKey !== userId) {
+      throw new MessengerPrivacyFenceError();
+    }
+    if (ownership && requestPrivacy) {
+      await assertMessengerPrivacySubject({
+        workspaceId: ownership.workspaceId,
+        channelConnectionId: ownership.channelConnectionId,
+        userKey: userId,
+        privacyEpoch: requestPrivacy.privacyEpoch,
+      });
+    } else if (ownership && process.env.NODE_ENV === "production") {
+      throw new MessengerPrivacyFenceError();
+    }
+    const privacyEpoch = requestPrivacy?.privacyEpoch;
     const result = await enqueueOrRunMessengerGenerationJob(
       {
         operation: "video",

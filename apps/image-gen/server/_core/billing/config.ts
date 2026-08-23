@@ -270,17 +270,10 @@ export function assertMollieNonSecretLaunchConfig(): void {
     "MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD",
     "MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD",
     "MESSENGER_USER_DAILY_SPEND_CAP_USD",
-    "OPENAI_IMAGE_ESTIMATED_COST_USD",
   ] as const) {
     const value = Number(required(name));
     if (!Number.isFinite(value) || value <= 0) {
       throw new Error(`${name} must be a positive finite amount`);
     }
-  }
-  const dailyImageCap = Number(required("MESSENGER_GLOBAL_DAILY_IMAGE_CAP"));
-  if (!Number.isSafeInteger(dailyImageCap) || dailyImageCap <= 0) {
-    throw new Error(
-      "MESSENGER_GLOBAL_DAILY_IMAGE_CAP must be a positive integer"
-    );
   }
 }

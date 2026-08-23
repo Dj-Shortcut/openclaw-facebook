@@ -6,6 +6,7 @@ import {
   billingIntents,
   billingOutbox,
   channelConnections,
+  messengerPrivacySubjects,
   portalHandoffTokens,
   users,
   workspaceBillingProfiles,
@@ -37,6 +38,7 @@ suite("portal handoff MySQL concurrency", () => {
 
   let workspaceId = 0;
   let userId = 0;
+  let channelConnectionId = 0;
 
   beforeAll(async () => {
     const database = await getDatabaseOrThrow();
@@ -71,6 +73,25 @@ suite("portal handoff MySQL concurrency", () => {
       channel: "facebook_messenger",
       status: "connected",
       externalId: pageId,
+    });
+    channelConnectionId = (
+      await database
+        .select({ id: channelConnections.id })
+        .from(channelConnections)
+        .where(
+          and(
+            eq(channelConnections.workspaceId, workspaceId),
+            eq(channelConnections.externalId, pageId)
+          )
+        )
+        .limit(1)
+    )[0]!.id;
+    await database.insert(messengerPrivacySubjects).values({
+      workspaceId,
+      channelConnectionId,
+      userKey: senderKey,
+      privacyEpoch: 1,
+      status: "active",
     });
     await database.insert(workspaceMembers).values({
       workspaceId,
@@ -117,6 +138,9 @@ suite("portal handoff MySQL concurrency", () => {
       .delete(portalHandoffTokens)
       .where(eq(portalHandoffTokens.workspaceId, workspaceId));
     await database
+      .delete(messengerPrivacySubjects)
+      .where(eq(messengerPrivacySubjects.workspaceId, workspaceId));
+    await database
       .delete(channelConnections)
       .where(eq(channelConnections.workspaceId, workspaceId));
     await database.delete(users).where(eq(users.id, userId));
@@ -130,6 +154,8 @@ suite("portal handoff MySQL concurrency", () => {
       deliveryIdempotencyKeyHash: deliveryHash,
       messengerSenderUserKey: senderKey,
       facebookPageId: pageId,
+      messengerChannelConnectionId: channelConnectionId,
+      messengerPrivacyEpoch: 1,
       purpose: "workspace_onboarding" as const,
       status: "pending" as const,
       expiresAt,
@@ -240,6 +266,8 @@ suite("portal handoff MySQL concurrency", () => {
       checkoutScopeKey: `mysql-recovery-scope-${suffix}`,
       messengerSenderUserKey: senderKey,
       messengerPageId: pageId,
+      messengerChannelConnectionId: channelConnectionId,
+      messengerPrivacyEpoch: 1,
       billingProfileVersion: 1,
       authorizationEpoch: 1,
       paidAt: new Date(),
@@ -253,6 +281,8 @@ suite("portal handoff MySQL concurrency", () => {
         intentId,
         messengerSenderUserKey: senderKey,
         messengerPageId: pageId,
+        messengerChannelConnectionId: channelConnectionId,
+        messengerPrivacyEpoch: 1,
       },
       status: "failed",
       attemptCount: 1,
@@ -363,6 +393,8 @@ suite("portal handoff MySQL concurrency", () => {
       deliveryIdempotencyKeyHash: cycleDeliveryHash,
       messengerSenderUserKey: senderKey,
       facebookPageId: pageId,
+      messengerChannelConnectionId: channelConnectionId,
+      messengerPrivacyEpoch: 1,
       purpose: "workspace_onboarding" as const,
       status: "pending" as const,
       expiresAt: new Date(initial.getTime() + 48 * 60 * 60_000),

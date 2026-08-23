@@ -198,10 +198,7 @@ export async function runBillingNotificationReceiverOnce(
       if (affectedRows(completed) !== 1) {
         throw new Error("notification receiver completion lease lost");
       }
-      await releaseNotificationSchedulerTenant(tx, claim, now, {
-        completed: true,
-        deadLetter: false,
-      });
+      await releaseNotificationSchedulerTenant(tx, claim, now);
     });
   } catch (error) {
     const exhausted = claim.attemptCount >= claim.maxAttempts;
@@ -227,10 +224,7 @@ export async function runBillingNotificationReceiverOnce(
       if (affectedRows(failed) !== 1) {
         throw new Error("notification receiver failure lease lost");
       }
-      await releaseNotificationSchedulerTenant(tx, claim, now, {
-        completed: false,
-        deadLetter: exhausted,
-      });
+      await releaseNotificationSchedulerTenant(tx, claim, now);
     });
     safeLog("billing_notification_receiver_delivery_failed", {
       level: "error",
@@ -255,8 +249,7 @@ async function releaseNotificationSchedulerTenant(
     tenantLeaseToken: string;
     attemptCount: number;
   },
-  now: Date,
-  _outcome: { completed: boolean; deadLetter: boolean }
+  now: Date
 ): Promise<void> {
   const next = await tx
     .select({

@@ -7,7 +7,6 @@ const {
   createHandlerContextMock,
   enqueueGenerationMock,
   resolveOwnershipMock,
-  ensurePrivacySubjectMock,
   assertOwnershipMock,
   assertPrivacySubjectMock,
 } = vi.hoisted(() => ({
@@ -17,7 +16,6 @@ const {
   createHandlerContextMock: vi.fn(),
   enqueueGenerationMock: vi.fn(),
   resolveOwnershipMock: vi.fn(),
-  ensurePrivacySubjectMock: vi.fn(),
   assertOwnershipMock: vi.fn(),
   assertPrivacySubjectMock: vi.fn(),
 }));
@@ -51,7 +49,6 @@ vi.mock("./_core/workspaceEntitlementRuntime", () => ({
 }));
 vi.mock("./_core/messengerPrivacySubject", () => ({
   assertMessengerPrivacySubject: assertPrivacySubjectMock,
-  ensureActiveMessengerPrivacySubject: ensurePrivacySubjectMock,
   MessengerPrivacyFenceError: class MessengerPrivacyFenceError extends Error {},
 }));
 vi.mock("./_core/webhookInternalImageRequest", () => ({
@@ -90,8 +87,6 @@ describe("queued Messenger video handlers", () => {
       bindingEpoch: 3,
       pageId: "page-42",
     });
-    ensurePrivacySubjectMock.mockReset();
-    ensurePrivacySubjectMock.mockResolvedValue(5);
     assertOwnershipMock.mockReset();
     assertPrivacySubjectMock.mockReset();
   });
@@ -109,16 +104,26 @@ describe("queued Messenger video handlers", () => {
       ) => Promise<unknown>;
     };
 
-    await runWithMessengerRequestContext("page-42", async () => {
-      await context.runVideoGeneration(
-        "video-user",
-        "video-user-key",
-        "req-video-enqueue",
-        "nl",
-        "https://img.example/source.jpg",
-        "laat hem zwaaien"
-      );
-    });
+    await runWithMessengerRequestContext(
+      "page-42",
+      async () => {
+        await context.runVideoGeneration(
+          "video-user",
+          "video-user-key",
+          "req-video-enqueue",
+          "nl",
+          "https://img.example/source.jpg",
+          "laat hem zwaaien"
+        );
+      },
+      {
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        userKey: "video-user-key",
+        privacyEpoch: 5,
+      }
+    );
 
     expect(enqueueGenerationMock).toHaveBeenCalledWith(
       expect.objectContaining({

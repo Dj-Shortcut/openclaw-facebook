@@ -9,6 +9,8 @@ import {
   buildImageUploadFailureResponse,
   buildPortalEnrollmentResponse,
 } from "./_core/conversationActions";
+import { getGenerationFailureMessage } from "./_core/generation/generationJobCore";
+import { t } from "./_core/i18n";
 import {
   renderMessengerPostbackButtons,
   renderMessengerQuickReplies,
@@ -62,6 +64,50 @@ describe("conversation actions", () => {
         { id: "privacy", label: "Privacy", inputText: "Privacy" },
         { id: "portal", label: "Customer portal", inputText: "portal" },
       ],
+    });
+  });
+
+  it("tells a Dutch customer the exact daily and monthly balance after success", () => {
+    const response = buildGenerationSuccessResponse("nl", {
+      daily: { used: 1, limit: 5, remaining: 4 },
+      monthly: { used: 1, limit: 20, remaining: 19 },
+    });
+
+    expect(response.text).toBe(
+      "Klaar.\nVandaag nog 4 van 5 foto's. Deze maand nog 19 van 20."
+    );
+  });
+
+  it("tells an English customer the exact daily and monthly balance after success", () => {
+    const response = buildGenerationSuccessResponse("en", {
+      daily: { used: 1, limit: 5, remaining: 4 },
+      monthly: { used: 1, limit: 20, remaining: 19 },
+    });
+
+    expect(response.text).toBe(
+      "Done.\nToday you have 4 of 5 photos left. This month you have 19 of 20 left."
+    );
+  });
+
+  it("never presents an OpenAI account failure as the customer's monthly quota", () => {
+    expect(t("nl", "generationProviderUnavailable")).toBe(
+      "Ik kan nu even geen afbeelding maken. Probeer later opnieuw."
+    );
+    expect(t("en", "generationProviderUnavailable")).toBe(
+      "I can't make an image right now. Please try again later."
+    );
+    expect(t("nl", "generationProviderUnavailable")).not.toMatch(
+      /budget|maand/i
+    );
+    expect(t("en", "generationProviderUnavailable")).not.toMatch(
+      /budget|month/i
+    );
+    expect(
+      getGenerationFailureMessage("generation_budget_reached", "nl")
+    ).toEqual({
+      handled: true,
+      text: "Ik kan nu even geen afbeelding maken. Probeer later opnieuw.",
+      nextState: "AWAITING_EDIT_PROMPT",
     });
   });
 

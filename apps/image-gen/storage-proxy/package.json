@@ -5,19 +5,20 @@
   "type": "module",
   "scripts": {
     "typecheck:proxy": "tsc --noEmit -p tsconfig.json",
-    "build:proxy": "esbuild index.ts --platform=node --target=node20 --bundle --format=cjs --outfile=dist/index.cjs",
+    "test:proxy": "node --import tsx --test deadline.test.ts",
+    "build:proxy": "esbuild index.ts --platform=node --target=node24 --bundle --format=cjs --outfile=dist/index.cjs",
     "start:proxy": "tsx index.ts",
     "start:proxy:dist": "node dist/index.cjs"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1011.0",
+    "@aws-sdk/client-s3": "^3.1014.0",
     "express": "^4.21.2"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
     "@types/node": "^24.5.2",
     "esbuild": "^0.25.0",
-    "tsx": "^4.19.1",
+    "tsx": "^4.23.12",
     "typescript": "^5.9.3"
   },
   "packageManager": "pnpm@10.28.1"

@@ -162,12 +162,9 @@ describe("messenger state normalization", () => {
     ["positive infinity", Number.POSITIVE_INFINITY],
     ["negative infinity", Number.NEGATIVE_INFINITY],
   ])("drops a malformed consentPromptedAt %s value", (_label, value) => {
-    const normalized = normalizeState(
-      "malformed-consent-prompt-timestamp",
-      { consentPromptedAt: value } as unknown as Parameters<
-        typeof normalizeState
-      >[1]
-    );
+    const normalized = normalizeState("malformed-consent-prompt-timestamp", {
+      consentPromptedAt: value,
+    } as unknown as Parameters<typeof normalizeState>[1]);
 
     expect(normalized.consentPromptedAt).toBeUndefined();
   });
@@ -211,7 +208,19 @@ describe("messenger state normalization", () => {
       stage: "AWAITING_EDIT_PROMPT",
       state: "AWAITING_EDIT_PROMPT",
       lastPhotoUrl: "https://example.test/source.jpg",
+      pendingImageUrls: ["https://example.test/source.jpg"],
     });
+  });
+
+  it("restores a legacy single pending photo into the bounded source inventory", () => {
+    const imageUrl = "https://assets.example/generated/legacy-pending.jpg";
+    const normalized = normalizeState("legacy-pending-photo", {
+      stage: "AWAITING_EDIT_PROMPT",
+      pendingImageUrl: imageUrl,
+      lastPhotoUrl: imageUrl,
+    });
+
+    expect(normalized.pendingImageUrls).toEqual([imageUrl]);
   });
 
   it("derives a UTC day key from a timestamp", () => {

@@ -13,6 +13,7 @@ import {
   billingSchedulerTenants,
   billingWebhookRoutes,
   channelConnections,
+  messengerPrivacySubjects,
   paymentLedger,
   portalHandoffTokens,
   users,
@@ -42,6 +43,7 @@ suite("payment snapshot MySQL concurrency", () => {
   let operatorUserId = 0;
   let claimantUserId = 0;
   let pageId = "";
+  let channelConnectionId = 0;
 
   beforeEach(async () => {
     const database = await getDatabaseOrThrow();
@@ -72,6 +74,20 @@ suite("payment snapshot MySQL concurrency", () => {
       channel: "facebook_messenger",
       status: "connected",
       externalId: pageId,
+    });
+    channelConnectionId = (
+      await database
+        .select({ id: channelConnections.id })
+        .from(channelConnections)
+        .where(eq(channelConnections.workspaceId, workspaceId))
+        .limit(1)
+    )[0]!.id;
+    await database.insert(messengerPrivacySubjects).values({
+      workspaceId,
+      channelConnectionId,
+      userKey: "a".repeat(64),
+      privacyEpoch: 1,
+      status: "active",
     });
     await database.insert(workspaceBillingProfiles).values({
       workspaceId,
@@ -191,6 +207,9 @@ suite("payment snapshot MySQL concurrency", () => {
       .delete(workspaceMembers)
       .where(eq(workspaceMembers.workspaceId, workspaceId));
     await database
+      .delete(messengerPrivacySubjects)
+      .where(eq(messengerPrivacySubjects.workspaceId, workspaceId));
+    await database
       .delete(channelConnections)
       .where(eq(channelConnections.workspaceId, workspaceId));
     if (claimantUserId) {
@@ -202,6 +221,7 @@ suite("payment snapshot MySQL concurrency", () => {
     operatorUserId = 0;
     claimantUserId = 0;
     pageId = "";
+    channelConnectionId = 0;
     process.env = { ...originalEnv };
   });
 
@@ -295,6 +315,8 @@ suite("payment snapshot MySQL concurrency", () => {
         deliveryIdempotencyKeyHash: `sha256:${"c".repeat(64)}`,
         messengerSenderUserKey: senderKey,
         facebookPageId: pageId,
+        messengerChannelConnectionId: channelConnectionId,
+        messengerPrivacyEpoch: 1,
         purpose: "workspace_onboarding",
         status: "pending",
         expiresAt: new Date(Date.now() + 60 * 60_000),
@@ -335,6 +357,8 @@ suite("payment snapshot MySQL concurrency", () => {
           intentId: unpaidIntentId,
           messengerSenderUserKey: senderKey,
           messengerPageId: pageId,
+          messengerChannelConnectionId: channelConnectionId,
+          messengerPrivacyEpoch: 1,
         },
         status: "failed",
         attemptCount: 2,
@@ -349,6 +373,8 @@ suite("payment snapshot MySQL concurrency", () => {
           intentId: nonRecoverableIntentId,
           messengerSenderUserKey: senderKey,
           messengerPageId: pageId,
+          messengerChannelConnectionId: channelConnectionId,
+          messengerPrivacyEpoch: 1,
         },
         status: "failed",
         attemptCount: 3,
@@ -363,6 +389,8 @@ suite("payment snapshot MySQL concurrency", () => {
           intentId: unpaidIntentId,
           messengerSenderUserKey: senderKey,
           messengerPageId: `${pageId}-other`,
+          messengerChannelConnectionId: channelConnectionId,
+          messengerPrivacyEpoch: 1,
         },
         status: "failed",
         attemptCount: 1,
@@ -405,6 +433,8 @@ suite("payment snapshot MySQL concurrency", () => {
           businessCheckout: false,
           messengerSenderUserKey: senderKey,
           messengerPageId: pageId,
+          messengerChannelConnectionId: channelConnectionId,
+          messengerPrivacyEpoch: 1,
         },
         client
       )
@@ -754,6 +784,8 @@ suite("payment snapshot MySQL concurrency", () => {
       checkoutScopeKey: `checkout-${intentId}`,
       messengerSenderUserKey: "a".repeat(64),
       messengerPageId: String(10_000_000 + workspaceId),
+      messengerChannelConnectionId: channelConnectionId,
+      messengerPrivacyEpoch: 1,
       billingProfileVersion: 1,
       authorizationEpoch: 1,
     });

@@ -30,7 +30,9 @@ vi.mock("node:crypto", async importOriginal => {
 
 vi.mock("./_core/messengerWebhook", () => ({
   acceptInternalMessengerImageRequest: acceptInternalMessengerImageRequestMock,
-  processFacebookWebhookPayload: processFacebookWebhookPayloadMock,
+}));
+vi.mock("./_core/meta/webhookIngressQueue", () => ({
+  processAuthenticatedFacebookIngressPayload: processFacebookWebhookPayloadMock,
 }));
 
 vi.mock("./_core/internalAiAnswerQuota", () => ({

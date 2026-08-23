@@ -18,42 +18,47 @@ function getWorkerPollMs(): number {
     : DEFAULT_WORKER_POLL_MS;
 }
 
-export function startMessengerGenerationWorker(options: {
-  keepAlive?: boolean;
-} = {}): void {
+export function startMessengerGenerationWorker(
+  options: {
+    keepAlive?: boolean;
+  } = {}
+): { stop: () => Promise<void> } {
   if (!isMessengerGenerationQueueEnabled()) {
     safeLog("messenger_generation_worker_queue_disabled", { level: "warn" });
-    return;
+    return { stop: () => Promise.resolve() };
   }
 
-  let running = false;
+  let stopping = false;
+  let running: Promise<void> | null = null;
   const runOnce = async () => {
-    if (running) {
-      return;
+    if (stopping || running) {
+      return running ?? undefined;
     }
 
-    running = true;
-    try {
-      const reclaimed = await reclaimReservedMessengerGenerationJobs({
-        onDeadLetter: processMessengerGenerationJobDeadLetter,
-      });
-      if (reclaimed > 0) {
-        safeLog("messenger_generation_worker_reclaimed_reserved_jobs", {
-          level: "warn",
-          reclaimed,
+    running = (async () => {
+      try {
+        const reclaimed = await reclaimReservedMessengerGenerationJobs({
+          onDeadLetter: processMessengerGenerationJobDeadLetter,
         });
+        if (reclaimed > 0) {
+          safeLog("messenger_generation_worker_reclaimed_reserved_jobs", {
+            level: "warn",
+            reclaimed,
+          });
+        }
+        await drainMessengerGenerationQueue(processMessengerGenerationJob, {
+          onDeadLetter: processMessengerGenerationJobDeadLetter,
+        });
+      } catch (error) {
+        safeLog("messenger_generation_worker_drain_failed", {
+          level: "error",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        running = null;
       }
-      await drainMessengerGenerationQueue(processMessengerGenerationJob, {
-        onDeadLetter: processMessengerGenerationJobDeadLetter,
-      });
-    } catch (error) {
-      safeLog("messenger_generation_worker_drain_failed", {
-        level: "error",
-        error: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      running = false;
-    }
+    })();
+    await running;
   };
 
   void runOnce();
@@ -64,4 +69,14 @@ export function startMessengerGenerationWorker(options: {
     timer.unref();
   }
   safeLog("messenger_generation_worker_started");
+  return {
+    async stop() {
+      if (!stopping) {
+        stopping = true;
+        clearInterval(timer);
+      }
+      await running;
+      safeLog("messenger_generation_worker_stopped");
+    },
+  };
 }

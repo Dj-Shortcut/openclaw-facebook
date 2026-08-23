@@ -84,9 +84,7 @@ import {
   decodeOpenClawActionPayload,
   getMessengerQuickReplies,
 } from "./messengerQuickReplies.js";
-import {
-  renderMessengerReplyPayload,
-} from "./messengerReplyPayloadRenderer.js";
+import { renderMessengerReplyPayload } from "./messengerReplyPayloadRenderer.js";
 import type {
   MessengerWebhookBody,
   MessengerWebhookMessaging,
@@ -144,7 +142,10 @@ const MESSENGER_MESSAGE_DEDUPE_TTL_MS = 10 * 60 * 1000;
 const MESSENGER_SLOW_REQUEST_LOG_MS = 5_000;
 const MESSENGER_PROMPT_MEMORY_TTL_MS = 30 * 60 * 1000;
 const MESSENGER_PROMPT_MEMORY_MAX_ENTRIES = 2_000;
-const recentMessengerAssistantPrompts = new Map<string, { prompt: string; expiresAt: number }>();
+const recentMessengerAssistantPrompts = new Map<
+  string,
+  { prompt: string; expiresAt: number }
+>();
 const recentMessengerAssistantPromptsByMessage = new Map<
   string,
   { prompt: string; expiresAt: number }
@@ -153,7 +154,10 @@ const recentMessengerAssistantRepliesByMessage = new Map<
   string,
   { text: string; expiresAt: number }
 >();
-const recentMessengerAssistantReplies = new Map<string, { text: string; expiresAt: number }>();
+const recentMessengerAssistantReplies = new Map<
+  string,
+  { text: string; expiresAt: number }
+>();
 const FACEBOOK_UNTRUSTED_TOOL_DENY = [
   "image_generate",
   "video_generate",
@@ -224,7 +228,9 @@ export function redactMessengerIdentifier(value: string | undefined): string {
   return `sha256:${createHash("sha256").update(normalized).digest("hex").slice(0, 12)}`;
 }
 
-export function formatUnmatchedMessengerPageLog(event: MessengerWebhookMessaging): string {
+export function formatUnmatchedMessengerPageLog(
+  event: MessengerWebhookMessaging,
+): string {
   return `messenger: skipped event for unmatched page ${redactMessengerIdentifier(
     event.recipient?.id,
   )} sender=${redactMessengerIdentifier(event.sender?.id)}`;
@@ -239,16 +245,10 @@ function readPositiveIntEnvValue(value: string | undefined): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
 }
 
-function readMessengerGatewayDailyImageForwardCap(): number | null {
-  return readPositiveIntEnvValue(process.env.MESSENGER_GATEWAY_DAILY_IMAGE_FORWARD_CAP);
-}
-
 function readMessengerGatewayDailyAudioTranscriptionCap(): number | null {
-  return readPositiveIntEnvValue(process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP);
-}
-
-function readMessengerGatewayDailyLeaderbotEventForwardCap(): number | null {
-  return readPositiveIntEnvValue(process.env.MESSENGER_GATEWAY_DAILY_LEADERBOT_EVENT_FORWARD_CAP);
+  return readPositiveIntEnvValue(
+    process.env.MESSENGER_GATEWAY_DAILY_AUDIO_TRANSCRIPTION_CAP,
+  );
 }
 
 function utcDayKey(now = Date.now()): string {
@@ -257,10 +257,14 @@ function utcDayKey(now = Date.now()): string {
 
 function nextUtcDayTimestamp(now = Date.now()): number {
   const date = new Date(now);
-  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + 1);
+  return Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    date.getUTCDate() + 1,
+  );
 }
 
-export function resetMessengerGatewayDailyImageForwardBudgetForTests(): void {
+export function resetMessengerGatewayBudgetsForTests(): void {
   resetMemoryMessengerEphemeralStateStoreForTests();
 }
 
@@ -282,7 +286,9 @@ async function reserveMessengerGatewayDailyBudget(params: {
   }
 
   const now = params.now ?? Date.now();
-  return await (params.stateStore ?? getMemoryMessengerEphemeralStateStore()).reserveDaily({
+  return await (
+    params.stateStore ?? getMemoryMessengerEphemeralStateStore()
+  ).reserveDaily({
     scope: { accountId: params.accountId, pageId: params.pageId },
     kind: params.kind,
     dayKey: utcDayKey(now),
@@ -290,27 +296,6 @@ async function reserveMessengerGatewayDailyBudget(params: {
     cap,
     expiresAtMs: nextUtcDayTimestamp(now),
     now,
-  });
-}
-
-export async function reserveMessengerGatewayDailyImageForwardBudget(params: {
-  accountId: string;
-  pageId: string;
-  stateStore?: MessengerEphemeralStateStore;
-  eventIdentity?: string;
-  now?: number;
-}): Promise<
-  | { ok: true; count: number; cap: number | null }
-  | { ok: false; count: number; cap: number }
-> {
-  return await reserveMessengerGatewayDailyBudget({
-    accountId: params.accountId,
-    pageId: params.pageId,
-    cap: readMessengerGatewayDailyImageForwardCap(),
-    kind: "image_forward",
-    stateStore: params.stateStore,
-    eventIdentity: params.eventIdentity,
-    now: params.now,
   });
 }
 
@@ -335,27 +320,6 @@ export async function reserveMessengerGatewayDailyAudioTranscriptionBudget(param
   });
 }
 
-export async function reserveMessengerGatewayDailyLeaderbotEventForwardBudget(params: {
-  accountId: string;
-  pageId: string;
-  stateStore?: MessengerEphemeralStateStore;
-  eventIdentity?: string;
-  now?: number;
-}): Promise<
-  | { ok: true; count: number; cap: number | null }
-  | { ok: false; count: number; cap: number }
-> {
-  return await reserveMessengerGatewayDailyBudget({
-    accountId: params.accountId,
-    pageId: params.pageId,
-    cap: readMessengerGatewayDailyLeaderbotEventForwardCap(),
-    kind: "leaderbot_event_forward",
-    stateStore: params.stateStore,
-    eventIdentity: params.eventIdentity,
-    now: params.now,
-  });
-}
-
 function hashTracePart(value: string | undefined, fallback: string): string {
   const normalized = value?.trim() || fallback;
   return createHash("sha256").update(normalized).digest("hex").slice(0, 12);
@@ -367,7 +331,8 @@ function createMessengerTrace(params: {
 }): MessengerTrace {
   const senderId = params.event.sender?.id;
   const timestamp = params.event.timestamp ?? Date.now();
-  const messageKey = params.event.message?.mid ?? `${senderId ?? "unknown"}:${timestamp}`;
+  const messageKey =
+    params.event.message?.mid ?? `${senderId ?? "unknown"}:${timestamp}`;
   return {
     reqId: `msg_${hashTracePart(messageKey, "unknown")}`,
     psidHash: redactMessengerIdentifier(senderId),
@@ -443,13 +408,19 @@ export function sanitizeMessengerSourceImageUrl(url: string): string | null {
   } catch {
     return null;
   }
-  if (parsed.protocol !== "https:" || !isAllowedMessengerMediaHost(parsed.hostname)) {
+  if (
+    parsed.protocol !== "https:" ||
+    !isAllowedMessengerMediaHost(parsed.hostname)
+  ) {
     return null;
   }
   return parsed.toString();
 }
 
-function extensionFromContentType(contentType: string | null, kind: MessengerAttachmentKind): string {
+function extensionFromContentType(
+  contentType: string | null,
+  kind: MessengerAttachmentKind,
+): string {
   const normalized = contentType?.split(";")[0]?.trim().toLowerCase();
   switch (normalized) {
     case "image/jpeg":
@@ -495,7 +466,17 @@ function extensionFromUrl(url: string, kind: MessengerAttachmentKind): string {
       image: [".jpg", ".jpeg", ".png", ".gif", ".webp"],
       audio: [".mp3", ".m4a", ".aac", ".ogg", ".wav", ".webm"],
       video: [".mp4", ".mov", ".webm", ".m4v"],
-      file: [".pdf", ".txt", ".csv", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"],
+      file: [
+        ".pdf",
+        ".txt",
+        ".csv",
+        ".doc",
+        ".docx",
+        ".xls",
+        ".xlsx",
+        ".ppt",
+        ".pptx",
+      ],
       unknown: [],
     };
     return allowedByKind[kind].includes(ext) ? ext : "";
@@ -504,7 +485,9 @@ function extensionFromUrl(url: string, kind: MessengerAttachmentKind): string {
   }
 }
 
-function mediaKindForMessengerAttachment(kind: MessengerAttachmentKind): ChannelInboundMediaInput["kind"] {
+function mediaKindForMessengerAttachment(
+  kind: MessengerAttachmentKind,
+): ChannelInboundMediaInput["kind"] {
   switch (kind) {
     case "image":
     case "audio":
@@ -557,12 +540,18 @@ export async function downloadMessengerMediaAttachment(params: {
   } catch {
     return null;
   }
-  if (parsed.protocol !== "https:" || !isAllowedMessengerMediaHost(parsed.hostname)) {
+  if (
+    parsed.protocol !== "https:" ||
+    !isAllowedMessengerMediaHost(parsed.hostname)
+  ) {
     return null;
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), MESSENGER_IMAGE_FETCH_TIMEOUT_MS);
+  const timeout = setTimeout(
+    () => controller.abort(),
+    MESSENGER_IMAGE_FETCH_TIMEOUT_MS,
+  );
   try {
     let currentUrl = parsed;
     let response: Response | null = null;
@@ -571,7 +560,10 @@ export async function downloadMessengerMediaAttachment(params: {
       redirectCount <= MESSENGER_MEDIA_FETCH_MAX_REDIRECTS;
       redirectCount += 1
     ) {
-      response = await fetch(currentUrl, { redirect: "manual", signal: controller.signal });
+      response = await fetch(currentUrl, {
+        redirect: "manual",
+        signal: controller.signal,
+      });
       if (response.status < 300 || response.status >= 400) {
         break;
       }
@@ -584,7 +576,10 @@ export async function downloadMessengerMediaAttachment(params: {
         return null;
       }
       const nextUrl = new URL(location, currentUrl);
-      if (nextUrl.protocol !== "https:" || !isAllowedMessengerMediaHost(nextUrl.hostname)) {
+      if (
+        nextUrl.protocol !== "https:" ||
+        !isAllowedMessengerMediaHost(nextUrl.hostname)
+      ) {
         return null;
       }
       currentUrl = nextUrl;
@@ -594,7 +589,12 @@ export async function downloadMessengerMediaAttachment(params: {
       return null;
     }
     const contentType = response.headers.get("content-type");
-    if (!contentTypeMatchesMessengerAttachmentKind(contentType, params.attachment.kind)) {
+    if (
+      !contentTypeMatchesMessengerAttachmentKind(
+        contentType,
+        params.attachment.kind,
+      )
+    ) {
       return null;
     }
 
@@ -612,7 +612,11 @@ export async function downloadMessengerMediaAttachment(params: {
       return null;
     }
 
-    const mediaDir = join(process.env.OPENCLAW_STATE_DIR?.trim() || "/tmp/openclaw", "media", "inbound");
+    const mediaDir = join(
+      process.env.OPENCLAW_STATE_DIR?.trim() || "/tmp/openclaw",
+      "media",
+      "inbound",
+    );
     await mkdir(mediaDir, { recursive: true });
     const digest = createHash("sha256")
       .update(params.reqId)
@@ -645,17 +649,31 @@ async function resolveMessengerMedia(params: {
 }): Promise<ChannelInboundMediaInput[]> {
   const media = await Promise.all(
     params.attachments.map((attachment, index) =>
-      downloadMessengerMediaAttachment({ attachment, reqId: params.trace.reqId, index }),
+      downloadMessengerMediaAttachment({
+        attachment,
+        reqId: params.trace.reqId,
+        index,
+      }),
     ),
   );
-  const resolved = media.filter((entry): entry is ChannelInboundMediaInput => entry !== null);
+  const resolved = media.filter(
+    (entry): entry is ChannelInboundMediaInput => entry !== null,
+  );
   if (params.attachments.length > 0) {
     logMessengerStage(params.trace, "media_resolved", {
       media: params.attachments.length,
-      images: params.attachments.filter((attachment) => attachment.kind === "image").length,
-      audio: params.attachments.filter((attachment) => attachment.kind === "audio").length,
-      video: params.attachments.filter((attachment) => attachment.kind === "video").length,
-      files: params.attachments.filter((attachment) => attachment.kind === "file").length,
+      images: params.attachments.filter(
+        (attachment) => attachment.kind === "image",
+      ).length,
+      audio: params.attachments.filter(
+        (attachment) => attachment.kind === "audio",
+      ).length,
+      video: params.attachments.filter(
+        (attachment) => attachment.kind === "video",
+      ).length,
+      files: params.attachments.filter(
+        (attachment) => attachment.kind === "file",
+      ).length,
       downloaded: resolved.length,
     });
   }
@@ -671,21 +689,22 @@ function describeMessengerAttachments(
     counts.set(attachment.kind, (counts.get(attachment.kind) ?? 0) + 1);
   }
   const parts: string[] = [];
-  const labels = lang === "en"
-    ? ([
-        ["image", "photo", "photos"],
-        ["audio", "voice/audio message", "voice/audio messages"],
-        ["video", "video", "videos"],
-        ["file", "file", "files"],
-        ["unknown", "attachment", "attachments"],
-      ] as const)
-    : ([
-        ["image", "foto", "foto's"],
-        ["audio", "voice/audio", "voice/audio"],
-        ["video", "video", "video's"],
-        ["file", "bestand", "bestanden"],
-        ["unknown", "bijlage", "bijlagen"],
-      ] as const);
+  const labels =
+    lang === "en"
+      ? ([
+          ["image", "photo", "photos"],
+          ["audio", "voice/audio message", "voice/audio messages"],
+          ["video", "video", "videos"],
+          ["file", "file", "files"],
+          ["unknown", "attachment", "attachments"],
+        ] as const)
+      : ([
+          ["image", "foto", "foto's"],
+          ["audio", "voice/audio", "voice/audio"],
+          ["video", "video", "video's"],
+          ["file", "bestand", "bestanden"],
+          ["unknown", "bijlage", "bijlagen"],
+        ] as const);
   for (const [kind, singular, plural] of labels) {
     const count = counts.get(kind);
     if (count) {
@@ -737,10 +756,12 @@ export function buildMessengerAgentTextForAttachments(params: {
     return userText ? `${userText}\n\n${transcriptText}` : transcriptText;
   }
 
-  return userText ||
+  return (
+    userText ||
     (params.attachments.length > 0
       ? fallbackTextForMessengerAttachments(params.attachments, lang)
-      : "");
+      : "")
+  );
 }
 
 async function resolveMessengerAudioTranscripts(params: {
@@ -751,8 +772,16 @@ async function resolveMessengerAudioTranscripts(params: {
   const audioMedia = params.media
     .map((entry, mediaIndex) => ({ entry, mediaIndex, path: entry.path }))
     .filter(
-      (item): item is { entry: ChannelInboundMediaInput; mediaIndex: number; path: string } =>
-        item.entry.kind === "audio" && typeof item.path === "string" && item.path.length > 0,
+      (
+        item,
+      ): item is {
+        entry: ChannelInboundMediaInput;
+        mediaIndex: number;
+        path: string;
+      } =>
+        item.entry.kind === "audio" &&
+        typeof item.path === "string" &&
+        item.path.length > 0,
     );
   if (audioMedia.length === 0) {
     return [];
@@ -784,14 +813,17 @@ async function resolveMessengerAudioTranscripts(params: {
       } catch (error) {
         logMessengerStage(params.trace, "audio_transcription_skipped", {
           mediaIndex,
-          errorCode: error instanceof Error ? error.constructor.name : "UnknownError",
+          errorCode:
+            error instanceof Error ? error.constructor.name : "UnknownError",
         });
         return null;
       }
     }),
   );
 
-  return transcripts.filter((entry): entry is MessengerAudioTranscript => entry !== null);
+  return transcripts.filter(
+    (entry): entry is MessengerAudioTranscript => entry !== null,
+  );
 }
 
 function pruneRecentMessengerAssistantPrompts(now: number): void {
@@ -824,13 +856,17 @@ function pruneRecentMessengerAssistantPrompts(now: number): void {
   pruneMap(recentMessengerAssistantRepliesByMessage);
 }
 
-export function extractImagePromptFromAssistantReply(text: string): string | null {
+export function extractImagePromptFromAssistantReply(
+  text: string,
+): string | null {
   const trimmed = text.trim();
   if (!trimmed || !/\bprompt\b/i.test(trimmed)) {
     return null;
   }
 
-  const fencedMatches = [...trimmed.matchAll(/```(?:text|prompt)?\s*([\s\S]*?)```/gi)];
+  const fencedMatches = [
+    ...trimmed.matchAll(/```(?:text|prompt)?\s*([\s\S]*?)```/gi),
+  ];
   const fencedPrompt = fencedMatches
     .map((match) => match[1]?.trim())
     .filter((value): value is string => Boolean(value && value.length >= 20))
@@ -839,7 +875,9 @@ export function extractImagePromptFromAssistantReply(text: string): string | nul
     return fencedPrompt;
   }
 
-  const afterPromptLabel = trimmed.match(/\bprompt\s*[:-]\s*([\s\S]+)/i)?.[1]?.trim();
+  const afterPromptLabel = trimmed
+    .match(/\bprompt\s*[:-]\s*([\s\S]+)/i)?.[1]
+    ?.trim();
   if (afterPromptLabel && afterPromptLabel.length >= 20) {
     return afterPromptLabel;
   }
@@ -864,7 +902,12 @@ function messengerPromptMessageKey(
   scope: MessengerPromptMemoryScope,
   messageId: string,
 ): string {
-  return JSON.stringify([scope.accountId, scope.pageId, scope.senderId, messageId]);
+  return JSON.stringify([
+    scope.accountId,
+    scope.pageId,
+    scope.senderId,
+    messageId,
+  ]);
 }
 
 function selectedOptionNumber(text: string): number | null {
@@ -916,18 +959,23 @@ function extractNumberedImageOptionFromAssistantReply(
     : `Maak deze afbeelding: ${option}`;
 }
 
-export function rememberMessengerAssistantPrompt(params: MessengerPromptMemoryScope & {
-  text: string;
-  now?: number;
-  messageId?: string;
-}): void {
+export function rememberMessengerAssistantPrompt(
+  params: MessengerPromptMemoryScope & {
+    text: string;
+    now?: number;
+    messageId?: string;
+  },
+): void {
   const prompt = extractImagePromptFromAssistantReply(params.text);
   const now = params.now ?? Date.now();
   const expiresAt = now + MESSENGER_PROMPT_MEMORY_TTL_MS;
   const normalizedMessageId = params.messageId?.trim();
   const senderKey = messengerPromptSenderKey(params);
   pruneRecentMessengerAssistantPrompts(now);
-  recentMessengerAssistantReplies.set(senderKey, { text: params.text, expiresAt });
+  recentMessengerAssistantReplies.set(senderKey, {
+    text: params.text,
+    expiresAt,
+  });
   if (normalizedMessageId) {
     recentMessengerAssistantRepliesByMessage.set(
       messengerPromptMessageKey(params, normalizedMessageId),
@@ -949,10 +997,12 @@ export function rememberMessengerAssistantPrompt(params: MessengerPromptMemorySc
   }
 }
 
-function resolveRememberedMessengerAssistantPrompt(params: MessengerPromptMemoryScope & {
-  now?: number;
-  replyToMessageId?: string;
-}): string | null {
+function resolveRememberedMessengerAssistantPrompt(
+  params: MessengerPromptMemoryScope & {
+    now?: number;
+    replyToMessageId?: string;
+  },
+): string | null {
   const now = params.now ?? Date.now();
   pruneRecentMessengerAssistantPrompts(now);
   const normalizedMessageId = params.replyToMessageId?.trim();
@@ -964,14 +1014,19 @@ function resolveRememberedMessengerAssistantPrompt(params: MessengerPromptMemory
       return exact;
     }
   }
-  return recentMessengerAssistantPrompts.get(messengerPromptSenderKey(params))?.prompt ?? null;
+  return (
+    recentMessengerAssistantPrompts.get(messengerPromptSenderKey(params))
+      ?.prompt ?? null
+  );
 }
 
-function resolveMessengerAssistantReplyOptionPrompt(params: MessengerPromptMemoryScope & {
-  text: string;
-  now?: number;
-  replyToMessageId?: string;
-}): string | null {
+function resolveMessengerAssistantReplyOptionPrompt(
+  params: MessengerPromptMemoryScope & {
+    text: string;
+    now?: number;
+    replyToMessageId?: string;
+  },
+): string | null {
   pruneRecentMessengerAssistantPrompts(params.now ?? Date.now());
   const normalizedMessageId = params.replyToMessageId?.trim();
   if (normalizedMessageId) {
@@ -979,7 +1034,10 @@ function resolveMessengerAssistantReplyOptionPrompt(params: MessengerPromptMemor
       messengerPromptMessageKey(params, normalizedMessageId),
     )?.text;
     if (exactAssistantReply) {
-      return extractNumberedImageOptionFromAssistantReply(exactAssistantReply, params.text);
+      return extractNumberedImageOptionFromAssistantReply(
+        exactAssistantReply,
+        params.text,
+      );
     }
   }
 
@@ -1000,7 +1058,9 @@ function isPromptReferenceImageRequest(text: string): boolean {
     /^(?:maak|genereer|create|generate)\s+(?:deze|dit|this)\s*(?:afbeelding|foto|plaatje|image|picture|photo)?$/.test(
       normalized,
     ) ||
-    /^(?:maak|generate|create|go|start|ja|yes|ok|nr\s*\d+\s*go)$/.test(normalized) ||
+    /^(?:maak|generate|create|go|start|ja|yes|ok|nr\s*\d+\s*go)$/.test(
+      normalized,
+    ) ||
     selectedOptionNumber(text) !== null
   );
 }
@@ -1017,11 +1077,13 @@ function isExplicitPromptReferenceImageRequest(text: string): boolean {
   );
 }
 
-export function resolveMessengerImagePromptFromUserText(params: MessengerPromptMemoryScope & {
-  text: string;
-  now?: number;
-  replyToMessageId?: string;
-}): string | null {
+export function resolveMessengerImagePromptFromUserText(
+  params: MessengerPromptMemoryScope & {
+    text: string;
+    now?: number;
+    replyToMessageId?: string;
+  },
+): string | null {
   const text = params.text.trim();
   if (isPromptReferenceImageRequest(text)) {
     return (
@@ -1034,7 +1096,8 @@ export function resolveMessengerImagePromptFromUserText(params: MessengerPromptM
     : null;
   if (
     exactReplyPrompt &&
-    (isPromptReferenceImageRequest(text) || hasMessengerImageGenerationIntent(text))
+    (isPromptReferenceImageRequest(text) ||
+      hasMessengerImageGenerationIntent(text))
   ) {
     return exactReplyPrompt;
   }
@@ -1071,7 +1134,7 @@ export function resolveFacebookInboundToolPolicy(params: {
 
 export function applyFacebookInboundToolPolicyToConfig(
   cfg: OpenClawConfig,
-  policy: FacebookInboundToolPolicy | null
+  policy: FacebookInboundToolPolicy | null,
 ): OpenClawConfig {
   if (!policy) {
     return cfg;
@@ -1079,7 +1142,9 @@ export function applyFacebookInboundToolPolicyToConfig(
 
   const currentTools = (cfg as { tools?: Record<string, unknown> }).tools ?? {};
   const currentDeny = Array.isArray(currentTools.deny)
-    ? currentTools.deny.filter((tool): tool is string => typeof tool === "string")
+    ? currentTools.deny.filter(
+        (tool): tool is string => typeof tool === "string",
+      )
     : [];
 
   return {
@@ -1091,7 +1156,9 @@ export function applyFacebookInboundToolPolicyToConfig(
   } as OpenClawConfig;
 }
 
-function isMessengerToolFeedbackPayload(payload: ReplyPayload & { text: string }): boolean {
+function isMessengerToolFeedbackPayload(
+  payload: ReplyPayload & { text: string },
+): boolean {
   if (isReplyPayloadNonTerminalToolErrorWarning(payload)) {
     return true;
   }
@@ -1118,52 +1185,6 @@ export function normalizeMessengerReplyPayloadForDelivery(
     ...renderedPayload,
     text: tMessenger(lang, "internalActionFailed"),
   };
-}
-
-async function reserveMessengerGatewayImageForwardOrReply(params: {
-  senderId: string;
-  cfg: OpenClawConfig;
-  accountId: string;
-  pageId: string;
-  stateStore: MessengerEphemeralStateStore;
-  lang: MessengerLanguage;
-  trace: MessengerTrace;
-  route: string;
-}): Promise<boolean> {
-  let reservation;
-  try {
-    reservation = await reserveMessengerGatewayDailyImageForwardBudget({
-      accountId: params.accountId,
-      pageId: params.pageId,
-      stateStore: params.stateStore,
-    });
-  } catch (error) {
-    await sendMessengerSharedStateUnavailableReply({
-      ...params,
-      stage: "image_gen_request_skipped",
-      error,
-    });
-    return false;
-  }
-  if (reservation.ok) {
-    return true;
-  }
-
-  logMessengerStage(params.trace, "image_gen_request_skipped", {
-    reason: "gateway_daily_image_forward_cap",
-    route: params.route,
-    cap: reservation.cap,
-    count: reservation.count,
-  });
-  await sendMessengerText(
-    params.senderId,
-    tMessenger(params.lang, "gatewayImageBudgetReached"),
-    {
-      cfg: params.cfg,
-      accountId: params.accountId,
-    },
-  );
-  return false;
 }
 
 async function reserveMessengerGatewayAudioTranscriptionOrReply(params: {
@@ -1210,52 +1231,6 @@ async function reserveMessengerGatewayAudioTranscriptionOrReply(params: {
   return false;
 }
 
-async function reserveMessengerGatewayLeaderbotEventForwardOrReply(params: {
-  senderId: string;
-  cfg: OpenClawConfig;
-  accountId: string;
-  pageId: string;
-  stateStore: MessengerEphemeralStateStore;
-  lang: MessengerLanguage;
-  trace: MessengerTrace;
-  route: string;
-}): Promise<boolean> {
-  let reservation;
-  try {
-    reservation = await reserveMessengerGatewayDailyLeaderbotEventForwardBudget({
-      accountId: params.accountId,
-      pageId: params.pageId,
-      stateStore: params.stateStore,
-    });
-  } catch (error) {
-    await sendMessengerSharedStateUnavailableReply({
-      ...params,
-      stage: "messenger_event_forward_skipped",
-      error,
-    });
-    return false;
-  }
-  if (reservation.ok) {
-    return true;
-  }
-
-  logMessengerStage(params.trace, "messenger_event_forward_skipped", {
-    reason: "gateway_daily_leaderbot_event_forward_cap",
-    route: params.route,
-    cap: reservation.cap,
-    count: reservation.count,
-  });
-  await sendMessengerText(
-    params.senderId,
-    tMessenger(params.lang, "gatewayEventBudgetReached"),
-    {
-      cfg: params.cfg,
-      accountId: params.accountId,
-    },
-  );
-  return false;
-}
-
 function messengerSharedStateErrorCode(error: unknown): string {
   return error instanceof MessengerSharedStateUnavailableError
     ? error.code
@@ -1268,10 +1243,7 @@ async function sendMessengerSharedStateUnavailableReply(params: {
   accountId: string;
   lang: MessengerLanguage;
   trace: MessengerTrace;
-  stage:
-    | "image_gen_request_skipped"
-    | "audio_transcription_skipped"
-    | "messenger_event_forward_skipped";
+  stage: "audio_transcription_skipped";
   error: unknown;
 }): Promise<void> {
   logMessengerStage(params.trace, params.stage, {
@@ -1285,11 +1257,18 @@ async function sendMessengerSharedStateUnavailableReply(params: {
   );
 }
 
-function hasMessengerInteractivePayload(event: MessengerWebhookMessaging): boolean {
-  return Boolean(event.message?.quick_reply?.payload?.trim() || event.postback?.payload?.trim());
+function hasMessengerInteractivePayload(
+  event: MessengerWebhookMessaging,
+): boolean {
+  return Boolean(
+    event.message?.quick_reply?.payload?.trim() ||
+    event.postback?.payload?.trim(),
+  );
 }
 
-export function getOpenClawActionText(event: MessengerWebhookMessaging): string | null {
+export function getOpenClawActionText(
+  event: MessengerWebhookMessaging,
+): string | null {
   return decodeOpenClawActionPayload(
     event.message?.quick_reply?.payload ?? event.postback?.payload,
   );
@@ -1307,12 +1286,16 @@ export async function shouldProcessMessengerMessageOnce(params: {
 }): Promise<boolean> {
   const stableMessageId =
     normalizeOptionalString(params.messageId) ??
-    (params.senderId && params.timestamp ? `${params.senderId}:${params.timestamp}` : undefined);
+    (params.senderId && params.timestamp
+      ? `${params.senderId}:${params.timestamp}`
+      : undefined);
   if (!stableMessageId) {
     return true;
   }
   const now = params.now ?? Date.now();
-  return await (params.stateStore ?? getMemoryMessengerEphemeralStateStore()).claimMessage({
+  return await (
+    params.stateStore ?? getMemoryMessengerEphemeralStateStore()
+  ).claimMessage({
     scope: { accountId: params.accountId, pageId: params.pageId },
     eventIdentity: stableMessageId,
     ownerToken: params.ownerToken ?? createMessengerStateOwnerToken(),
@@ -1340,7 +1323,9 @@ export function resolveMessengerVerificationTarget(
     return null;
   }
   const verifyToken = url.searchParams.get("hub.verify_token") ?? "";
-  return targets.find((target) => target.account.verifyToken === verifyToken) ?? null;
+  return (
+    targets.find((target) => target.account.verifyToken === verifyToken) ?? null
+  );
 }
 
 async function sendMessengerPairingReply(params: {
@@ -1365,7 +1350,9 @@ async function sendMessengerPairingReply(params: {
     buildReplyText: ({ code }) =>
       buildMessengerPairingReply(lang, { code, senderId: params.senderId }),
     onCreated: () =>
-      logVerbose(`messenger pairing request sender=${redactMessengerIdentifier(params.senderId)}`),
+      logVerbose(
+        `messenger pairing request sender=${redactMessengerIdentifier(params.senderId)}`,
+      ),
     sendPairingReply: async (text) => {
       await sendMessengerText(params.senderId, text, {
         cfg: params.cfg,
@@ -1420,7 +1407,10 @@ async function shouldProcessMessengerEvent(params: {
   account: ResolvedMessengerAccount;
   trace?: MessengerTrace;
 }): Promise<MessengerIngressDecision> {
-  params.trace && logMessengerStage(params.trace, "intent_classified", { decision: "checking" });
+  params.trace &&
+    logMessengerStage(params.trace, "intent_classified", {
+      decision: "checking",
+    });
   const senderId = params.event.sender?.id ?? "";
   const rawText = params.event.message?.text ?? "";
   const dmPolicy = params.account.config.dmPolicy ?? "pairing";
@@ -1453,7 +1443,9 @@ async function shouldProcessMessengerEvent(params: {
         allowTextCommands: true,
       },
     },
-    allowFrom: (params.account.config.allowFrom ?? []).map((value) => String(value)),
+    allowFrom: (params.account.config.allowFrom ?? []).map((value) =>
+      String(value),
+    ),
     groupAllowFrom: [],
     command: {
       hasControlCommand: shouldComputeCommandAuthorized(rawText, params.cfg),
@@ -1462,7 +1454,10 @@ async function shouldProcessMessengerEvent(params: {
   });
 
   if (access.senderAccess.decision === "allow") {
-    params.trace && logMessengerStage(params.trace, "intent_classified", { decision: "allow" });
+    params.trace &&
+      logMessengerStage(params.trace, "intent_classified", {
+        decision: "allow",
+      });
     logVerbose(
       `messenger: allowed sender ${redactMessengerIdentifier(senderId)} account=${
         params.account.accountId
@@ -1497,7 +1492,10 @@ async function shouldProcessMessengerEvent(params: {
       isLeaderbotBridgeEnabled(params.account) &&
       params.account.config.unknownSenderMode === "leaderbot_free_tier"
     ) {
-      params.trace && logMessengerStage(params.trace, "intent_classified", { decision: "allow" });
+      params.trace &&
+        logMessengerStage(params.trace, "intent_classified", {
+          decision: "allow",
+        });
       logVerbose(
         `messenger: routing unknown sender ${redactMessengerIdentifier(
           senderId,
@@ -1505,13 +1503,23 @@ async function shouldProcessMessengerEvent(params: {
       );
       return "process";
     }
-    params.trace && logMessengerStage(params.trace, "intent_classified", { decision: "pairing" });
+    params.trace &&
+      logMessengerStage(params.trace, "intent_classified", {
+        decision: "pairing",
+      });
     if (senderId) {
-      await sendMessengerPairingReply({ senderId, account: params.account, cfg: params.cfg });
+      await sendMessengerPairingReply({
+        senderId,
+        account: params.account,
+        cfg: params.cfg,
+      });
     }
     return "stop";
   }
-  params.trace && logMessengerStage(params.trace, "intent_classified", { decision: "blocked" });
+  params.trace &&
+    logMessengerStage(params.trace, "intent_classified", {
+      decision: "blocked",
+    });
   logVerbose(
     `Blocked messenger sender ${redactMessengerIdentifier(senderId)} (dmPolicy: ${
       dmPolicy
@@ -1535,7 +1543,8 @@ export async function processMessengerEvent(params: {
       return;
     }
     const senderId = params.event.sender?.id ?? "";
-    const stateStore = params.stateStore ?? getMemoryMessengerEphemeralStateStore();
+    const stateStore =
+      params.stateStore ?? getMemoryMessengerEphemeralStateStore();
     const lang = normalizeMessengerLanguage(params.account.config.defaultLang);
     const customerPortalUrl = normalizeMessengerCustomerPortalUrl(
       params.account.config.customerPortalUrl,
@@ -1627,20 +1636,6 @@ export async function processMessengerEvent(params: {
       return;
     }
     if (ingressDecision === "leaderbot_free_tier") {
-      if (
-        !(await reserveMessengerGatewayLeaderbotEventForwardOrReply({
-          senderId,
-          cfg: params.cfg,
-          accountId: params.account.accountId,
-          pageId: params.account.pageId,
-          stateStore,
-          lang,
-          trace: params.trace,
-          route: "unknown_sender_leaderbot_free_tier",
-        }))
-      ) {
-        return;
-      }
       logMessengerStage(params.trace, "messenger_event_forward_started", {
         reason: "unknown_sender_leaderbot_free_tier",
       });
@@ -1669,7 +1664,9 @@ export async function processMessengerEvent(params: {
       });
       return;
     }
-    const sourceImageAttachment = attachments.find((attachment) => attachment.kind === "image");
+    const sourceImageAttachment = attachments.find(
+      (attachment) => attachment.kind === "image",
+    );
     const replyToMessageId = params.event.message?.reply_to?.mid;
     logVerbose(
       `messenger: received inbound event sender=${redactMessengerIdentifier(
@@ -1679,25 +1676,15 @@ export async function processMessengerEvent(params: {
       )} media=${attachments.length}`,
     );
     if (!openClawActionText && hasMessengerInteractivePayload(params.event)) {
-      logMessengerStage(params.trace, "messenger_interactive_payload_received", {
-        quickReply: Boolean(params.event.message?.quick_reply?.payload),
-        postback: Boolean(params.event.postback?.payload),
-      });
+      logMessengerStage(
+        params.trace,
+        "messenger_interactive_payload_received",
+        {
+          quickReply: Boolean(params.event.message?.quick_reply?.payload),
+          postback: Boolean(params.event.postback?.payload),
+        },
+      );
       if (leaderbotBridgeEnabled) {
-        if (
-          !(await reserveMessengerGatewayLeaderbotEventForwardOrReply({
-            senderId,
-            cfg: params.cfg,
-            accountId: params.account.accountId,
-            pageId: params.account.pageId,
-            stateStore,
-            lang,
-            trace: params.trace,
-            route: "interactive_payload",
-          }))
-        ) {
-          return;
-        }
         if (
           await forwardLeaderbotMessengerEvent({
             event: params.event,
@@ -1717,7 +1704,9 @@ export async function processMessengerEvent(params: {
             accountId: params.account.accountId,
           },
         ).catch((err: unknown) => {
-          params.runtime.error?.(danger(`messenger interactive fallback failed: ${String(err)}`));
+          params.runtime.error?.(
+            danger(`messenger interactive fallback failed: ${String(err)}`),
+          );
         });
         return;
       }
@@ -1727,10 +1716,11 @@ export async function processMessengerEvent(params: {
       });
       return;
     }
-    const sourceImageGenerationPrompt = resolveMessengerSourceImageGenerationPrompt({
-      hasSourceImage: Boolean(sourceImageAttachment),
-      text,
-    });
+    const sourceImageGenerationPrompt =
+      resolveMessengerSourceImageGenerationPrompt({
+        hasSourceImage: Boolean(sourceImageAttachment),
+        text,
+      });
     if (
       leaderbotBridgeEnabled &&
       shouldForwardMessengerImageOnlyEventToImageGen({
@@ -1738,20 +1728,6 @@ export async function processMessengerEvent(params: {
         text,
       })
     ) {
-      if (
-        !(await reserveMessengerGatewayImageForwardOrReply({
-          senderId,
-          cfg: params.cfg,
-          accountId: params.account.accountId,
-          pageId: params.account.pageId,
-          stateStore,
-          lang,
-          trace: params.trace,
-          route: "source_image_without_prompt",
-        }))
-      ) {
-        return;
-      }
       logMessengerStage(params.trace, "messenger_event_forward_started", {
         reason: "source_image_without_prompt",
         sourceImage: true,
@@ -1779,21 +1755,11 @@ export async function processMessengerEvent(params: {
         route: "source_image_without_prompt",
       });
     }
-    if (leaderbotBridgeEnabled && sourceImageAttachment && sourceImageGenerationPrompt) {
-      if (
-        !(await reserveMessengerGatewayImageForwardOrReply({
-          senderId,
-          cfg: params.cfg,
-          accountId: params.account.accountId,
-          pageId: params.account.pageId,
-          stateStore,
-          lang,
-          trace: params.trace,
-          route: "source_image_with_prompt",
-        }))
-      ) {
-        return;
-      }
+    if (
+      leaderbotBridgeEnabled &&
+      sourceImageAttachment &&
+      sourceImageGenerationPrompt
+    ) {
       logMessengerStage(params.trace, "messenger_event_forward_started", {
         reason: "source_image_with_prompt",
         sourceImage: true,
@@ -1823,7 +1789,11 @@ export async function processMessengerEvent(params: {
         );
       });
       return;
-    } else if (!leaderbotBridgeEnabled && sourceImageAttachment && sourceImageGenerationPrompt) {
+    } else if (
+      !leaderbotBridgeEnabled &&
+      sourceImageAttachment &&
+      sourceImageGenerationPrompt
+    ) {
       logMessengerStage(params.trace, "messenger_event_forward_skipped", {
         reason: "disabled_by_config",
         route: "source_image_with_prompt",
@@ -1835,20 +1805,6 @@ export async function processMessengerEvent(params: {
       !sourceImageGenerationPrompt &&
       hasMessengerImageGenerationIntent(text)
     ) {
-      if (
-        !(await reserveMessengerGatewayImageForwardOrReply({
-          senderId,
-          cfg: params.cfg,
-          accountId: params.account.accountId,
-          pageId: params.account.pageId,
-          stateStore,
-          lang,
-          trace: params.trace,
-          route: "media_with_image_prompt",
-        }))
-      ) {
-        return;
-      }
       logMessengerStage(params.trace, "messenger_event_forward_started", {
         reason: "media_with_image_prompt",
         isSourceImageEdit: false,
@@ -1902,24 +1858,12 @@ export async function processMessengerEvent(params: {
       referencedPrompt &&
       referencedPrompt !== text.trim()
     ) {
-      if (
-        !(await reserveMessengerGatewayImageForwardOrReply({
-          senderId,
-          cfg: params.cfg,
-          accountId: params.account.accountId,
-          pageId: params.account.pageId,
-          stateStore,
-          lang,
-          trace: params.trace,
-          route: "assistant_reference_prompt",
-        }))
-      ) {
-        return;
-      }
       logMessengerStage(params.trace, "image_gen_request_started", {
         sourceImage: false,
         hasPrompt: true,
-        promptSource: replyToMessageId ? "messenger_reply" : "assistant_reference",
+        promptSource: replyToMessageId
+          ? "messenger_reply"
+          : "assistant_reference",
       });
       const queued = await requestLeaderbotImageGeneration({
         psid: senderId,
@@ -1952,7 +1896,9 @@ export async function processMessengerEvent(params: {
     ) {
       logMessengerStage(params.trace, "image_gen_request_skipped", {
         reason: "disabled_by_config",
-        promptSource: replyToMessageId ? "messenger_reply" : "assistant_reference",
+        promptSource: replyToMessageId
+          ? "messenger_reply"
+          : "assistant_reference",
       });
     }
     if (
@@ -1970,7 +1916,9 @@ export async function processMessengerEvent(params: {
       );
       return;
     }
-    const hasAudioAttachment = attachments.some((attachment) => attachment.kind === "audio");
+    const hasAudioAttachment = attachments.some(
+      (attachment) => attachment.kind === "audio",
+    );
     if (
       hasAudioAttachment &&
       !(await reserveMessengerGatewayAudioTranscriptionOrReply({
@@ -1985,7 +1933,10 @@ export async function processMessengerEvent(params: {
     ) {
       return;
     }
-    const media = await resolveMessengerMedia({ attachments, trace: params.trace });
+    const media = await resolveMessengerMedia({
+      attachments,
+      trace: params.trace,
+    });
     const audioTranscripts = await resolveMessengerAudioTranscripts({
       media,
       cfg: params.cfg,
@@ -2024,21 +1975,11 @@ export async function processMessengerEvent(params: {
     ]
       .filter(Boolean)
       .join("\n");
-    if (leaderbotBridgeEnabled && !hasMedia && shouldForwardMessengerTextToImageGen(text)) {
-      if (
-        !(await reserveMessengerGatewayImageForwardOrReply({
-          senderId,
-          cfg: params.cfg,
-          accountId: params.account.accountId,
-          pageId: params.account.pageId,
-          stateStore,
-          lang,
-          trace: params.trace,
-          route: "text_image_intent",
-        }))
-      ) {
-        return;
-      }
+    if (
+      leaderbotBridgeEnabled &&
+      !hasMedia &&
+      shouldForwardMessengerTextToImageGen(text)
+    ) {
       logMessengerStage(params.trace, "messenger_event_forward_started", {
         reason: "text_image_intent",
         sourceImage: false,
@@ -2064,15 +2005,23 @@ export async function processMessengerEvent(params: {
         },
       );
       return;
-    } else if (!leaderbotBridgeEnabled && !hasMedia && shouldForwardMessengerTextToImageGen(text)) {
+    } else if (
+      !leaderbotBridgeEnabled &&
+      !hasMedia &&
+      shouldForwardMessengerTextToImageGen(text)
+    ) {
       logMessengerStage(params.trace, "messenger_event_forward_skipped", {
         reason: "disabled_by_config",
         route: "text_image_intent",
       });
     }
-    const fastLane = hasMedia ? null : resolveMessengerFastLaneReply(text, lang);
+    const fastLane = hasMedia
+      ? null
+      : resolveMessengerFastLaneReply(text, lang);
     if (fastLane) {
-      logMessengerStage(params.trace, "first_response_ready", { intent: fastLane.intent });
+      logMessengerStage(params.trace, "first_response_ready", {
+        intent: fastLane.intent,
+      });
       const result = await sendMessengerText(senderId, fastLane.reply, {
         cfg: params.cfg,
         accountId: params.account.accountId,
@@ -2083,265 +2032,287 @@ export async function processMessengerEvent(params: {
       });
       return;
     }
-  const commandAuthorized = shouldComputeCommandAuthorized(text, params.cfg);
-  const facebookToolPolicy = resolveFacebookInboundToolPolicy({ commandAuthorized });
-  const inboundCfg = applyFacebookInboundToolPolicyToConfig(
-    params.cfg,
-    facebookToolPolicy
-  );
-  const route = resolveAgentRoute({
-    cfg: inboundCfg,
-    channel: FACEBOOK_CHANNEL_ID,
-    accountId: params.account.accountId,
-    peer: { kind: "direct", id: senderId },
-  });
-  const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
-    cfg: inboundCfg,
-    agentId: route.agentId,
-    sessionKey: route.sessionKey,
-  });
-  const body = formatInboundEnvelope({
-    channel: "Facebook",
-    from: `facebook:${senderId}`,
-    timestamp,
-    body: displayBody,
-    chatType: "direct",
-    sender: { id: senderId },
-    previousTimestamp,
-    envelope: envelopeOptions,
-  });
-  const ctxPayload = finalizeInboundContext({
-    Body: body,
-    BodyForAgent: textForAgent,
-    RawBody: displayBody,
-    CommandBody: text,
-    From: `facebook:${senderId}`,
-    To: `facebook:${senderId}`,
-    SessionKey: route.sessionKey,
-    AccountId: route.accountId,
-    ChatType: "direct",
-    ConversationLabel: `facebook:${senderId}`,
-    SenderId: senderId,
-    Provider: FACEBOOK_CHANNEL_ID,
-    Surface: FACEBOOK_CHANNEL_ID,
-    MessageSid: normalizeOptionalString(params.event.message?.mid) ?? `${senderId}:${timestamp}`,
-    Timestamp: timestamp,
-    CommandAuthorized: commandAuthorized,
-    OriginatingChannel: FACEBOOK_CHANNEL_ID,
-    OriginatingTo: `facebook:${senderId}`,
-    ...(facebookToolPolicy
-      ? {
-          ToolPolicy: facebookToolPolicy,
-          Tools: facebookToolPolicy.tools,
-          ToolPolicySource: facebookToolPolicy.source,
-        }
-      : {}),
-    ...mediaPayload,
-  });
-  const core = getMessengerRuntime();
-  let aiAnswerQuotaReservationId: string | null = null;
-  if (isLeaderbotAiAnswerEnforcementEnabled()) {
-    const quotaDecision = await reserveLeaderbotAiAnswerQuota({
-      pageId: params.account.pageId,
-      idempotencyKey: createLeaderbotAiAnswerIdempotencyKey({
-        accountId: params.account.accountId,
-        pageId: params.account.pageId,
-        messageId: params.event.message?.mid,
-        traceRequestId: params.trace.reqId,
-        timestamp,
-      }),
+    const commandAuthorized = shouldComputeCommandAuthorized(text, params.cfg);
+    const facebookToolPolicy = resolveFacebookInboundToolPolicy({
+      commandAuthorized,
     });
-    if (quotaDecision.status === "exhausted") {
-      await sendMessengerText(
-        senderId,
-        buildMessengerPlanQuotaReachedReply(lang, customerPortalUrl),
-        {
-          cfg: params.cfg,
-          accountId: params.account.accountId,
-        },
-      );
-      return;
-    }
-    if (quotaDecision.status === "unavailable") {
-      await sendMessengerText(
-        senderId,
-        tMessenger(lang, "planQuotaUnavailable"),
-        {
-          cfg: params.cfg,
-          accountId: params.account.accountId,
-        },
-      );
-      return;
-    }
-    if (quotaDecision.status === "duplicate") {
-      return;
-    }
-    if (quotaDecision.status === "reserved") {
-      aiAnswerQuotaReservationId = quotaDecision.reservationId;
-    }
-  }
-  const typingScopeKey = beginMessengerTypingTurn({
-    accountId: params.account.accountId,
-    pageId: params.account.pageId,
-    senderId,
-  });
-  try {
-    await sendMessengerSenderAction(senderId, "typing_on", {
-      cfg: params.cfg,
+    const inboundCfg = applyFacebookInboundToolPolicyToConfig(
+      params.cfg,
+      facebookToolPolicy,
+    );
+    const route = resolveAgentRoute({
+      cfg: inboundCfg,
+      channel: FACEBOOK_CHANNEL_ID,
       accountId: params.account.accountId,
+      peer: { kind: "direct", id: senderId },
     });
-    logMessengerStage(params.trace, "messenger_response_sent", {
-      senderAction: "typing_on",
-    });
-  } catch (err) {
-    params.runtime.error?.(danger(`messenger typing_on failed: ${String(err)}`));
-  }
-  logMessengerStage(params.trace, "openclaw_call_started", {
-    openclawSessionId: route.sessionKey,
-  });
-  logVerbose(
-    `messenger: dispatching inbound turn session=${route.sessionKey} account=${route.accountId}`,
-  );
-  let visibleFinalAiReplySent = false;
-  let turnResult: Awaited<ReturnType<typeof core.channel.inbound.run>> | undefined;
-  let openClawError: unknown;
-  try {
-    turnResult = await core.channel.inbound.run({
-    channel: FACEBOOK_CHANNEL_ID,
-    accountId: route.accountId,
-    raw: params.event,
-    adapter: {
-      ingest: () => ({
-        id: ctxPayload.MessageSid ?? `${senderId}:${timestamp}`,
-        rawText: displayBody,
-        textForAgent,
-        textForCommands: text,
-      }),
-      resolveTurn: () => ({
+    const { storePath, envelopeOptions, previousTimestamp } =
+      resolveInboundSessionEnvelopeContext({
         cfg: inboundCfg,
-        channel: FACEBOOK_CHANNEL_ID,
-        accountId: route.accountId,
         agentId: route.agentId,
-        routeSessionKey: route.sessionKey,
-        storePath,
-        ctxPayload,
-        recordInboundSession: core.channel.session.recordInboundSession,
-        dispatchReplyWithBufferedBlockDispatcher:
-          core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-        record: {
-          updateLastRoute: {
-            sessionKey: route.mainSessionKey,
-            channel: FACEBOOK_CHANNEL_ID,
-            to: senderId,
-            accountId: route.accountId,
-          },
-          onRecordError: (err: unknown) =>
-            logVerbose(`messenger: failed updating session meta: ${String(err)}`),
-        },
-        replyPipeline: {},
-        delivery: {
-          deliver: async (payload: ReplyPayload, info: { kind: string }) => {
-            const deliveryPayload = normalizeMessengerReplyPayloadForDelivery(payload, lang);
-            if (!deliveryPayload) {
-              return { visibleReplySent: false };
-            }
-            logMessengerStage(params.trace, "first_response_ready", {
-              openclawSessionId: route.sessionKey,
-            });
-            const result = await sendMessengerText(senderId, deliveryPayload.text, {
-              cfg: params.cfg,
-              accountId: params.account.accountId,
-              quickReplies: getMessengerQuickReplies(deliveryPayload),
-            });
-            rememberMessengerAssistantPrompt({
-              accountId: params.account.accountId,
-              pageId: params.account.pageId,
-              senderId,
-              text: deliveryPayload.text,
-              now: Date.now(),
-              messageId: result.messageId,
-            });
-            logMessengerStage(params.trace, "messenger_response_sent", {
-              message: redactMessengerIdentifier(result.messageId),
-            });
-            logVerbose(
-              `messenger: sent ${deliveryPayload.text.length} char reply to ${redactMessengerIdentifier(
-                senderId,
-              )} message=${redactMessengerIdentifier(result.messageId)}`,
-            );
-            if (info.kind === "final") {
-              visibleFinalAiReplySent = true;
-            }
-            return {
-              messageIds: [result.messageId],
-              receipt: result.receipt,
-              visibleReplySent: true,
-            };
-          },
-          onError: (err: unknown, info: { kind: string }) => {
-            params.runtime.error?.(danger(`messenger ${info.kind} reply failed: ${String(err)}`));
-          },
-        },
-      }),
-    },
+        sessionKey: route.sessionKey,
+      });
+    const body = formatInboundEnvelope({
+      channel: "Facebook",
+      from: `facebook:${senderId}`,
+      timestamp,
+      body: displayBody,
+      chatType: "direct",
+      sender: { id: senderId },
+      previousTimestamp,
+      envelope: envelopeOptions,
     });
-  } catch (error) {
-    openClawError = error;
-  } finally {
-    if (finishMessengerTypingTurn(typingScopeKey)) {
-      try {
-        await sendMessengerSenderAction(senderId, "typing_off", {
-          cfg: params.cfg,
+    const ctxPayload = finalizeInboundContext({
+      Body: body,
+      BodyForAgent: textForAgent,
+      RawBody: displayBody,
+      CommandBody: text,
+      From: `facebook:${senderId}`,
+      To: `facebook:${senderId}`,
+      SessionKey: route.sessionKey,
+      AccountId: route.accountId,
+      ChatType: "direct",
+      ConversationLabel: `facebook:${senderId}`,
+      SenderId: senderId,
+      Provider: FACEBOOK_CHANNEL_ID,
+      Surface: FACEBOOK_CHANNEL_ID,
+      MessageSid:
+        normalizeOptionalString(params.event.message?.mid) ??
+        `${senderId}:${timestamp}`,
+      Timestamp: timestamp,
+      CommandAuthorized: commandAuthorized,
+      OriginatingChannel: FACEBOOK_CHANNEL_ID,
+      OriginatingTo: `facebook:${senderId}`,
+      ...(facebookToolPolicy
+        ? {
+            ToolPolicy: facebookToolPolicy,
+            Tools: facebookToolPolicy.tools,
+            ToolPolicySource: facebookToolPolicy.source,
+          }
+        : {}),
+      ...mediaPayload,
+    });
+    const core = getMessengerRuntime();
+    let aiAnswerQuotaReservationId: string | null = null;
+    if (isLeaderbotAiAnswerEnforcementEnabled()) {
+      const quotaDecision = await reserveLeaderbotAiAnswerQuota({
+        pageId: params.account.pageId,
+        idempotencyKey: createLeaderbotAiAnswerIdempotencyKey({
           accountId: params.account.accountId,
-        });
-        logMessengerStage(params.trace, "messenger_response_sent", {
-          senderAction: "typing_off",
-        });
-      } catch (err) {
-        params.runtime.error?.(danger(`messenger typing_off failed: ${String(err)}`));
+          pageId: params.account.pageId,
+          messageId: params.event.message?.mid,
+          traceRequestId: params.trace.reqId,
+          timestamp,
+        }),
+      });
+      if (quotaDecision.status === "exhausted") {
+        await sendMessengerText(
+          senderId,
+          buildMessengerPlanQuotaReachedReply(lang, customerPortalUrl),
+          {
+            cfg: params.cfg,
+            accountId: params.account.accountId,
+          },
+        );
+        return;
+      }
+      if (quotaDecision.status === "unavailable") {
+        await sendMessengerText(
+          senderId,
+          tMessenger(lang, "planQuotaUnavailable"),
+          {
+            cfg: params.cfg,
+            accountId: params.account.accountId,
+          },
+        );
+        return;
+      }
+      if (quotaDecision.status === "duplicate") {
+        return;
+      }
+      if (quotaDecision.status === "reserved") {
+        aiAnswerQuotaReservationId = quotaDecision.reservationId;
       }
     }
-  }
-  if (aiAnswerQuotaReservationId) {
-    const outcome = visibleFinalAiReplySent ? "committed" : "released";
-    const finalized = await finalizeLeaderbotAiAnswerQuota({
+    const typingScopeKey = beginMessengerTypingTurn({
+      accountId: params.account.accountId,
       pageId: params.account.pageId,
-      reservationId: aiAnswerQuotaReservationId,
-      outcome,
+      senderId,
     });
-    if (!finalized) {
+    try {
+      await sendMessengerSenderAction(senderId, "typing_on", {
+        cfg: params.cfg,
+        accountId: params.account.accountId,
+      });
+      logMessengerStage(params.trace, "messenger_response_sent", {
+        senderAction: "typing_on",
+      });
+    } catch (err) {
       params.runtime.error?.(
-        danger(
-          `messenger paid AI answer quota finalization failed outcome=${outcome} account=${params.account.accountId}`,
-        ),
+        danger(`messenger typing_on failed: ${String(err)}`),
       );
     }
-  }
-  if (openClawError) {
-    throw openClawError;
-  }
-  if (!turnResult) {
-    throw new Error("OpenClaw turn ended without a result");
-  }
-  const dispatchResult = turnResult.dispatched
-    ? (turnResult.dispatchResult as Parameters<
-        typeof hasFinalInboundReplyDispatch
-      >[0])
-    : undefined;
-  if (!hasFinalInboundReplyDispatch(dispatchResult)) {
-    logVerbose(
-      `messenger: no response generated for message from ${redactMessengerIdentifier(senderId)}`,
-    );
-  } else {
-    logMessengerStage(params.trace, "openclaw_call_completed", {
+    logMessengerStage(params.trace, "openclaw_call_started", {
       openclawSessionId: route.sessionKey,
     });
     logVerbose(
-      `messenger: completed inbound turn sender=${redactMessengerIdentifier(
-        senderId,
-      )} account=${route.accountId}`,
+      `messenger: dispatching inbound turn session=${route.sessionKey} account=${route.accountId}`,
     );
-  }
+    let visibleFinalAiReplySent = false;
+    let turnResult:
+      Awaited<ReturnType<typeof core.channel.inbound.run>> | undefined;
+    let openClawError: unknown;
+    try {
+      turnResult = await core.channel.inbound.run({
+        channel: FACEBOOK_CHANNEL_ID,
+        accountId: route.accountId,
+        raw: params.event,
+        adapter: {
+          ingest: () => ({
+            id: ctxPayload.MessageSid ?? `${senderId}:${timestamp}`,
+            rawText: displayBody,
+            textForAgent,
+            textForCommands: text,
+          }),
+          resolveTurn: () => ({
+            cfg: inboundCfg,
+            channel: FACEBOOK_CHANNEL_ID,
+            accountId: route.accountId,
+            agentId: route.agentId,
+            routeSessionKey: route.sessionKey,
+            storePath,
+            ctxPayload,
+            recordInboundSession: core.channel.session.recordInboundSession,
+            dispatchReplyWithBufferedBlockDispatcher:
+              core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+            record: {
+              updateLastRoute: {
+                sessionKey: route.mainSessionKey,
+                channel: FACEBOOK_CHANNEL_ID,
+                to: senderId,
+                accountId: route.accountId,
+              },
+              onRecordError: (err: unknown) =>
+                logVerbose(
+                  `messenger: failed updating session meta: ${String(err)}`,
+                ),
+            },
+            replyPipeline: {},
+            delivery: {
+              deliver: async (
+                payload: ReplyPayload,
+                info: { kind: string },
+              ) => {
+                const deliveryPayload =
+                  normalizeMessengerReplyPayloadForDelivery(payload, lang);
+                if (!deliveryPayload) {
+                  return { visibleReplySent: false };
+                }
+                logMessengerStage(params.trace, "first_response_ready", {
+                  openclawSessionId: route.sessionKey,
+                });
+                const result = await sendMessengerText(
+                  senderId,
+                  deliveryPayload.text,
+                  {
+                    cfg: params.cfg,
+                    accountId: params.account.accountId,
+                    quickReplies: getMessengerQuickReplies(deliveryPayload),
+                  },
+                );
+                rememberMessengerAssistantPrompt({
+                  accountId: params.account.accountId,
+                  pageId: params.account.pageId,
+                  senderId,
+                  text: deliveryPayload.text,
+                  now: Date.now(),
+                  messageId: result.messageId,
+                });
+                logMessengerStage(params.trace, "messenger_response_sent", {
+                  message: redactMessengerIdentifier(result.messageId),
+                });
+                logVerbose(
+                  `messenger: sent ${deliveryPayload.text.length} char reply to ${redactMessengerIdentifier(
+                    senderId,
+                  )} message=${redactMessengerIdentifier(result.messageId)}`,
+                );
+                if (info.kind === "final") {
+                  visibleFinalAiReplySent = true;
+                }
+                return {
+                  messageIds: [result.messageId],
+                  receipt: result.receipt,
+                  visibleReplySent: true,
+                };
+              },
+              onError: (err: unknown, info: { kind: string }) => {
+                params.runtime.error?.(
+                  danger(`messenger ${info.kind} reply failed: ${String(err)}`),
+                );
+              },
+            },
+          }),
+        },
+      });
+    } catch (error) {
+      openClawError = error;
+    } finally {
+      if (finishMessengerTypingTurn(typingScopeKey)) {
+        try {
+          await sendMessengerSenderAction(senderId, "typing_off", {
+            cfg: params.cfg,
+            accountId: params.account.accountId,
+          });
+          logMessengerStage(params.trace, "messenger_response_sent", {
+            senderAction: "typing_off",
+          });
+        } catch (err) {
+          params.runtime.error?.(
+            danger(`messenger typing_off failed: ${String(err)}`),
+          );
+        }
+      }
+    }
+    if (aiAnswerQuotaReservationId) {
+      const outcome = visibleFinalAiReplySent ? "committed" : "released";
+      const finalized = await finalizeLeaderbotAiAnswerQuota({
+        pageId: params.account.pageId,
+        reservationId: aiAnswerQuotaReservationId,
+        outcome,
+      });
+      if (!finalized) {
+        params.runtime.error?.(
+          danger(
+            `messenger paid AI answer quota finalization failed outcome=${outcome} account=${params.account.accountId}`,
+          ),
+        );
+      }
+    }
+    if (openClawError) {
+      throw openClawError;
+    }
+    if (!turnResult) {
+      throw new Error("OpenClaw turn ended without a result");
+    }
+    const dispatchResult = turnResult.dispatched
+      ? (turnResult.dispatchResult as Parameters<
+          typeof hasFinalInboundReplyDispatch
+        >[0])
+      : undefined;
+    if (!hasFinalInboundReplyDispatch(dispatchResult)) {
+      logVerbose(
+        `messenger: no response generated for message from ${redactMessengerIdentifier(senderId)}`,
+      );
+    } else {
+      logMessengerStage(params.trace, "openclaw_call_completed", {
+        openclawSessionId: route.sessionKey,
+      });
+      logVerbose(
+        `messenger: completed inbound turn sender=${redactMessengerIdentifier(
+          senderId,
+        )} account=${route.accountId}`,
+      );
+    }
   } finally {
     logMessengerStage(params.trace, "request_completed", {
       activeMessengerEventJobs,
@@ -2373,7 +2344,9 @@ async function processScheduledMessengerEvents(params: {
         stateStore: item.target.stateStore,
       });
     } catch (error) {
-      params.runtime.error?.(danger(`messenger webhook background error: ${String(error)}`));
+      params.runtime.error?.(
+        danger(`messenger webhook background error: ${String(error)}`),
+      );
     }
   }
 }
@@ -2381,7 +2354,8 @@ async function processScheduledMessengerEvents(params: {
 export async function monitorMessengerProvider(
   opts: MonitorMessengerProviderOptions,
 ): Promise<{ stop: () => void }> {
-  const accountId = opts.account.accountId ?? resolveDefaultMessengerAccountId(opts.config);
+  const accountId =
+    opts.account.accountId ?? resolveDefaultMessengerAccountId(opts.config);
   const normalizedPath =
     normalizePluginHttpPath(
       opts.webhookPath ?? opts.account.config.webhookPath,
@@ -2410,7 +2384,10 @@ export async function monitorMessengerProvider(
         if (req.method === "GET") {
           const firstTarget = targets[0];
           if (!firstTarget) {
-            logMessengerWebhookRejected("no registered target for verification", normalizedPath);
+            logMessengerWebhookRejected(
+              "no registered target for verification",
+              normalizedPath,
+            );
             res.statusCode = 404;
             res.end("Not Found");
             return;
@@ -2418,7 +2395,10 @@ export async function monitorMessengerProvider(
           const url = new URL(req.url ?? "", "http://localhost");
           const target = resolveMessengerVerificationTarget(targets, url);
           if (!target) {
-            logMessengerWebhookRejected("verification token mismatch", normalizedPath);
+            logMessengerWebhookRejected(
+              "verification token mismatch",
+              normalizedPath,
+            );
             res.statusCode = 403;
             res.end("Forbidden");
             return;
@@ -2440,7 +2420,10 @@ export async function monitorMessengerProvider(
           requireJsonContentType: true,
         });
         if (!requestLifecycle.ok) {
-          logMessengerWebhookRejected("request pipeline rejected", normalizedPath);
+          logMessengerWebhookRejected(
+            "request pipeline rejected",
+            normalizedPath,
+          );
           return;
         }
         try {
@@ -2462,7 +2445,11 @@ export async function monitorMessengerProvider(
             return;
           }
           const matchingTargets = targets.filter((target) =>
-            validateMessengerSignature(raw.value, signature, target.account.appSecret),
+            validateMessengerSignature(
+              raw.value,
+              signature,
+              target.account.appSecret,
+            ),
           );
           if (matchingTargets.length === 0) {
             logMessengerWebhookRejected("invalid signature", normalizedPath);
@@ -2479,7 +2466,9 @@ export async function monitorMessengerProvider(
             res.end("Invalid webhook payload");
             return;
           }
-          const events = extractMessengerInboundMessages(body as MessengerWebhookBody);
+          const events = extractMessengerInboundMessages(
+            body as MessengerWebhookBody,
+          );
           logVerbose(
             `messenger webhook accepted: events=${events.length} targets=${matchingTargets.length} path=${normalizedPath}`,
           );
@@ -2497,7 +2486,10 @@ export async function monitorMessengerProvider(
             scheduledEvents.push({
               event,
               target,
-              trace: createMessengerTrace({ event, accountId: target.account.accountId }),
+              trace: createMessengerTrace({
+                event,
+                accountId: target.account.accountId,
+              }),
             });
           }
           for (const item of scheduledEvents) {
@@ -2514,7 +2506,9 @@ export async function monitorMessengerProvider(
             runtime: opts.runtime,
           });
         } catch (error) {
-          opts.runtime.error?.(danger(`messenger webhook error: ${String(error)}`));
+          opts.runtime.error?.(
+            danger(`messenger webhook error: ${String(error)}`),
+          );
           if (!res.headersSent) {
             res.statusCode = 500;
             res.end("Internal Server Error");

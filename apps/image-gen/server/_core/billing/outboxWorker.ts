@@ -1342,7 +1342,7 @@ export async function reconcileExecutionDisabledSubscription(
       .update(billingProviderOperations)
       .set({
         state: "contained",
-        providerResourceId: matches.length === 1 ? matches[0]!.id : null,
+        providerResourceId: matches.length === 1 ? matches[0].id : null,
         completedAt: now,
         resolutionDueAt: now,
       })
@@ -1671,7 +1671,7 @@ export async function reconcileExecutionDisabledPayment(
       .update(billingProviderOperations)
       .set({
         state: "contained",
-        providerResourceId: matches.length === 1 ? matches[0]!.id : null,
+        providerResourceId: matches.length === 1 ? matches[0].id : null,
         completedAt: now,
         resolutionDueAt: now,
       })
@@ -2250,6 +2250,8 @@ export async function sendPaymentHandoff(
     intentId: target.intentId,
     messengerSenderUserKey: target.messengerSenderUserKey,
     messengerPageId: target.messengerPageId,
+    messengerChannelConnectionId: target.messengerChannelConnectionId,
+    messengerPrivacyEpoch: target.messengerPrivacyEpoch,
   });
   let result;
   let transportStarted = false;
@@ -2258,6 +2260,8 @@ export async function sendPaymentHandoff(
       workspaceId: job.workspaceId,
       messengerSenderUserKey: target.messengerSenderUserKey,
       expectedFacebookPageId: target.messengerPageId,
+      expectedChannelConnectionId: target.messengerChannelConnectionId,
+      expectedPrivacyEpoch: target.messengerPrivacyEpoch,
       createdByUserId: null,
       deliveryIdempotencyKey: target.intentId,
       beforeCapabilityCreate: () =>
@@ -2297,6 +2301,8 @@ function readPortalHandoffTarget(payload: unknown): {
   intentId: string;
   messengerSenderUserKey: string;
   messengerPageId: string;
+  messengerChannelConnectionId: number;
+  messengerPrivacyEpoch: number;
 } {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new PermanentOutboxError("invalid_portal_handoff_target");
@@ -2305,6 +2311,8 @@ function readPortalHandoffTarget(payload: unknown): {
   const messengerSenderUserKey = record.messengerSenderUserKey;
   const messengerPageId = record.messengerPageId;
   const intentId = record.intentId;
+  const messengerChannelConnectionId = record.messengerChannelConnectionId;
+  const messengerPrivacyEpoch = record.messengerPrivacyEpoch;
   if (
     typeof intentId !== "string" ||
     !/^[0-9a-f-]{36}$/i.test(intentId) ||
@@ -2312,7 +2320,11 @@ function readPortalHandoffTarget(payload: unknown): {
     !/^[a-f0-9]{64}$/.test(messengerSenderUserKey) ||
     typeof messengerPageId !== "string" ||
     messengerPageId.trim().length === 0 ||
-    messengerPageId.length > 160
+    messengerPageId.length > 160 ||
+    !Number.isSafeInteger(messengerChannelConnectionId) ||
+    Number(messengerChannelConnectionId) <= 0 ||
+    !Number.isSafeInteger(messengerPrivacyEpoch) ||
+    Number(messengerPrivacyEpoch) <= 0
   ) {
     throw new PermanentOutboxError("invalid_portal_handoff_target");
   }
@@ -2320,6 +2332,8 @@ function readPortalHandoffTarget(payload: unknown): {
     intentId,
     messengerSenderUserKey,
     messengerPageId: messengerPageId.trim(),
+    messengerChannelConnectionId: Number(messengerChannelConnectionId),
+    messengerPrivacyEpoch: Number(messengerPrivacyEpoch),
   };
 }
 

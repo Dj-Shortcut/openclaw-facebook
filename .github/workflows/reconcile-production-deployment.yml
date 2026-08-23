@@ -1,0 +1,751 @@
+name: Reconcile interrupted production deployment
+
+on:
+  workflow_call:
+    inputs:
+      invocation_mode:
+        required: true
+        type: string
+      recovery_run_id:
+        required: true
+        type: string
+      recovery_run_attempt:
+        required: true
+        type: string
+      target:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      recovery_run_id:
+        description: Exact failed Deploy production run ID
+        required: true
+        type: string
+      recovery_run_attempt:
+        description: Exact failed run attempt
+        required: true
+        type: string
+      target:
+        description: Exact failed production target
+        required: true
+        type: choice
+        options:
+          - gateway
+          - image-gen
+          - storage-proxy
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FLYCTL_VERSION: 0.4.85
+
+concurrency:
+  group: ${{ inputs.invocation_mode == 'inline' && format('recovery-child-{0}', github.run_id) || format('production-deploy-{0}', inputs.target) }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  inspect:
+    name: Find durable rollback plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      needed: ${{ steps.plan.outputs.needed }}
+      target: ${{ steps.plan.outputs.target }}
+      artifact_id: ${{ steps.plan.outputs.artifact_id }}
+      source_sha: ${{ steps.plan.outputs.source_sha }}
+      run_attempt: ${{ steps.plan.outputs.run_attempt }}
+    steps:
+      - name: Select exactly one plan from the interrupted protected run
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.recovery_run_id }}
+          RUN_ATTEMPT: ${{ inputs.recovery_run_attempt }}
+          REQUESTED_TARGET: ${{ inputs.target }}
+          RECOVERY_MODE: ${{ inputs.invocation_mode || 'manual' }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/main"
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          [[ "$REQUESTED_TARGET" =~ ^(gateway|image-gen|storage-proxy)$ ]]
+          [[ "$RECOVERY_MODE" =~ ^(inline|post_completion|manual)$ ]]
+          if test "$RECOVERY_MODE" = "inline"; then
+            test "$RUN_ID" = "$GITHUB_RUN_ID"
+            test "$RUN_ATTEMPT" = "$GITHUB_RUN_ATTEMPT"
+          fi
+          run="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT")"
+          jq -e --argjson runId "$RUN_ID" --argjson runAttempt "$RUN_ATTEMPT" --arg mode "$RECOVERY_MODE" '.id==$runId and .run_attempt==$runAttempt and .head_branch=="main" and .event=="workflow_dispatch" and .path==".github/workflows/deploy-production.yml" and (.head_sha|test("^[a-f0-9]{40}$")) and (($mode=="inline" and .status=="in_progress") or ($mode!="inline" and .status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required","stale","startup_failure"))))' <<<"$run" > /dev/null
+          source_sha="$(jq -er '.head_sha' <<<"$run")"
+          artifacts="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100")"
+          artifact_name="${REQUESTED_TARGET}-rollback-${RUN_ID}-${RUN_ATTEMPT}"
+          artifact_id="$(jq -er --arg name "$artifact_name" '[.artifacts[] | select(.name==$name and .expired==false)] | if length==1 then .[0].id else error("rollback plan mismatch") end' <<<"$artifacts")"
+          [[ "$artifact_id" =~ ^[0-9]+$ ]]
+          {
+            echo "needed=true"
+            echo "target=$REQUESTED_TARGET"
+            echo "artifact_id=$artifact_id"
+            echo "source_sha=$source_sha"
+            echo "run_attempt=$RUN_ATTEMPT"
+          } >> "$GITHUB_OUTPUT"
+
+  recover-gateway:
+    name: Restore interrupted gateway deployment
+    needs: inspect
+    if: needs.inspect.outputs.needed == 'true' && needs.inspect.outputs.target == 'gateway'
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    environment: production-recovery
+    steps:
+      - name: Checkout trusted recovery controller
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: leaderbot-recovery-controller-source
+          persist-credentials: false
+
+      - name: Bind trusted recovery controller
+        env:
+          RECOVERY_CONTROLLER_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          [[ "$RECOVERY_CONTROLLER_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          controller_source="$GITHUB_WORKSPACE/leaderbot-recovery-controller-source/scripts/validate-production-deployment.mjs"
+          test "$(git -C "$GITHUB_WORKSPACE/leaderbot-recovery-controller-source" rev-parse HEAD)" = "$RECOVERY_CONTROLLER_SOURCE_SHA"
+          test -f "$controller_source"
+          test ! -L "$controller_source"
+          controller="$RUNNER_TEMP/leaderbot-recovery-controller-v1.mjs"
+          install -m 0500 "$controller_source" "$controller"
+          controller_sha256="$(sha256sum "$controller" | cut -d ' ' -f1)"
+          [[ "$controller_sha256" =~ ^[a-f0-9]{64}$ ]]
+          {
+            echo "RECOVERY_CONTROLLER=$controller"
+            echo "RECOVERY_CONTROLLER_SHA256=$controller_sha256"
+          } >> "$GITHUB_ENV"
+
+      - name: Checkout exact interrupted source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.inspect.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+
+      - name: Install exact verified flyctl
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          install_root="$(mktemp -d "$RUNNER_TEMP/leaderbot-flyctl.XXXXXX")"
+          archive="$install_root/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          extract_dir="$install_root/extract"
+          bin_dir="$install_root/bin"
+          install -d -m 0700 "$extract_dir" "$bin_dir"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' \
+            "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90" \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$extract_dir" flyctl
+          test -f "$extract_dir/flyctl"
+          test ! -L "$extract_dir/flyctl"
+          install -m 0755 "$extract_dir/flyctl" "$bin_dir/flyctl"
+          ln -s flyctl "$bin_dir/fly"
+          version_output="$("$bin_dir/flyctl" version)"
+          [[ "$version_output" =~ ^flyctl\ v0\.4\.85([[:space:]]|$) ]]
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+
+      - name: Download exact durable rollback plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.inspect.outputs.artifact_id }}
+        run: |
+          test "$(sha256sum "$RECOVERY_CONTROLLER" | cut -d ' ' -f1)" = "$RECOVERY_CONTROLLER_SHA256"
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          mkdir -p "$RUNNER_TEMP/leaderbot-recovery"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > "$RUNNER_TEMP/leaderbot-recovery.zip"
+          unzip -q "$RUNNER_TEMP/leaderbot-recovery.zip" -d "$RUNNER_TEMP/leaderbot-recovery"
+          test -f "$RUNNER_TEMP/leaderbot-recovery/rollback-image.txt"
+          test -f "$RUNNER_TEMP/leaderbot-recovery/before.fly.toml"
+          test -f "$RUNNER_TEMP/leaderbot-recovery/before.json"
+          test -f "$RUNNER_TEMP/leaderbot-recovery/rollback-identity.txt"
+          test -f "$RUNNER_TEMP/leaderbot-recovery/recovery-protocol.txt"
+          node "$RECOVERY_CONTROLLER" --validate-recovery-protocol "$RUNNER_TEMP/leaderbot-recovery/recovery-protocol.txt" --root-dir "$GITHUB_WORKSPACE"
+
+      - name: Classify gateway successor from exact approved source
+        id: successor
+        timeout-minutes: 8
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_RECOVERY_READONLY_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
+          RECOVERY_RUN_ATTEMPT: ${{ needs.inspect.outputs.run_attempt }}
+        run: |
+          test "$(sha256sum "$RECOVERY_CONTROLLER" | cut -d ' ' -f1)" = "$RECOVERY_CONTROLLER_SHA256"
+          test -n "$FLY_API_TOKEN"
+          prior_identity="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-identity.txt")"
+          interrupted_identity="deploy-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}"
+          live_config="$(flyctl config show --app leaderbot-openclaw-gateway)"
+          live_identity="$(jq -er '.env.LEADERBOT_DEPLOYMENT_IDENTITY // "none"' <<<"$live_config")"
+          if test "$live_identity" = "$prior_identity" || test "$live_identity" = "$interrupted_identity"; then
+            echo "superseded=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ "$live_identity" =~ ^deploy-[0-9]+-[0-9]+$ ]]
+          successor_root="$RUNNER_TEMP/leaderbot-successor-gateway"
+          successor="$(node "$RECOVERY_CONTROLLER" --prepare-successor-root gateway "$live_identity" "$interrupted_identity" "$successor_root" --root-dir "$GITHUB_WORKSPACE")"
+          successor_sha="$(jq -er '.sourceSha' <<<"$successor")"
+          node "$RECOVERY_CONTROLLER" --settled-live gateway \
+            --root-dir "$successor_root" \
+            --expected-source-sha "$successor_sha" \
+            --require-current-reviewed-image
+          body="$(mktemp)"
+          status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$body" --write-out '%{http_code}' https://leaderbot-openclaw-gateway.fly.dev/healthz)"
+          test "$status" = "200"
+          grep -F '"ok":true' "$body"
+          echo "superseded=true" >> "$GITHUB_OUTPUT"
+
+      - name: Restore and verify captured gateway release
+        if: steps.successor.outputs.superseded != 'true'
+        timeout-minutes: 40
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_RECOVERY_TOKEN }}
+          RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
+          RECOVERY_RUN_ATTEMPT: ${{ needs.inspect.outputs.run_attempt }}
+        run: |
+          test "$(sha256sum "$RECOVERY_CONTROLLER" | cut -d ' ' -f1)" = "$RECOVERY_CONTROLLER_SHA256"
+          test -n "$FLY_API_TOKEN"
+          rollback_image="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-image.txt")"
+          rollback_config="$RUNNER_TEMP/leaderbot-recovery/before.fly.toml"
+          prior_identity="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-identity.txt")"
+          [[ "$RECOVERY_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          [[ "$prior_identity" =~ ^(none|deploy-[0-9]+-[0-9]+)$ ]]
+          node "$RECOVERY_CONTROLLER" --validate-target-enabled gateway --root-dir "$GITHUB_WORKSPACE"
+          expected_config="$(node "$RECOVERY_CONTROLLER" --reviewed-rollback-config gateway "$rollback_image" --root-dir "$GITHUB_WORKSPACE")"
+          cmp --silent "$expected_config" "$rollback_config"
+          node "$RECOVERY_CONTROLLER" --validate-rollback-image gateway "$rollback_image" --root-dir "$GITHUB_WORKSPACE"
+          flyctl config validate --strict --config "$rollback_config"
+          live_config="$(flyctl config show --app leaderbot-openclaw-gateway)"
+          live_identity="$(jq -er '.env.LEADERBOT_DEPLOYMENT_IDENTITY // "none"' <<<"$live_config")"
+          superseded=false
+          if test "$live_identity" != "$prior_identity" && \
+             test "$live_identity" != "deploy-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}"; then
+            echo "Live gateway identity changed after readonly successor classification" >&2
+            exit 1
+          fi
+          if test "$superseded" = false; then
+            if node "$RECOVERY_CONTROLLER" --verify-restored-release gateway "$rollback_image" "$rollback_config" --expected-deployment-identity "$prior_identity" --root-dir "$GITHUB_WORKSPACE"; then
+              :
+            else
+              if node "$RECOVERY_CONTROLLER" --live gateway --predeploy --expected-deployment-identity "deploy-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}" --allow-interrupted-scale-count-drift --captured-prior-identity "$prior_identity" --captured-prior-image "$rollback_image" --root-dir "$GITHUB_WORKSPACE"; then
+                :
+              elif node "$RECOVERY_CONTROLLER" --verify-restored-release gateway "$rollback_image" "$rollback_config" --expected-deployment-identity "$prior_identity" --allow-reviewed-machine-images --allow-scale-count-drift --captured-prior-identity "$prior_identity" --captured-prior-image "$rollback_image" --interrupted-deployment-identity "deploy-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}" --root-dir "$GITHUB_WORKSPACE"; then
+                :
+              else
+                exit 1
+              fi
+              flyctl deploy --config "$rollback_config" --strategy rolling \
+                --remote-only --yes --image "$rollback_image" \
+                --image-label "recovery-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}" \
+                --env "LEADERBOT_DEPLOYMENT_IDENTITY=$prior_identity"
+            fi
+            scale_plan="$(node "$RECOVERY_CONTROLLER" --reviewed-scale-plan gateway --root-dir "$GITHUB_WORKSPACE")"
+            jq -e 'type=="array" and length>0 and all(.[]; (.process|test("^[a-z][a-z0-9-]{0,31}$")) and (.count|type=="number" and floor==. and .>=1 and .<=20))' <<<"$scale_plan" > /dev/null
+            while IFS= read -r scale_entry; do
+              process="$(jq -er '.process' <<<"$scale_entry")"
+              count="$(jq -er '.count' <<<"$scale_entry")"
+              flyctl scale count "$count" --process-group "$process" --app leaderbot-openclaw-gateway --yes
+            done < <(jq -c '.[]' <<<"$scale_plan")
+            node "$RECOVERY_CONTROLLER" --verify-restored-release gateway "$rollback_image" "$rollback_config" --expected-deployment-identity "$prior_identity" --root-dir "$GITHUB_WORKSPACE"
+          fi
+          body="$(mktemp)"
+          status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$body" --write-out '%{http_code}' https://leaderbot-openclaw-gateway.fly.dev/healthz)"
+          test "$status" = "200"
+          grep -F '"ok":true' "$body"
+
+  recover-image-gen:
+    name: Restore interrupted image-gen deployment
+    needs: inspect
+    if: needs.inspect.outputs.needed == 'true' && needs.inspect.outputs.target == 'image-gen'
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+    environment: production-recovery
+    steps:
+      - name: Checkout trusted recovery controller
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: leaderbot-recovery-controller-source
+          persist-credentials: false
+
+      - name: Bind trusted recovery controller
+        env:
+          RECOVERY_CONTROLLER_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          [[ "$RECOVERY_CONTROLLER_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          controller_source="$GITHUB_WORKSPACE/leaderbot-recovery-controller-source/scripts/validate-production-deployment.mjs"
+          test "$(git -C "$GITHUB_WORKSPACE/leaderbot-recovery-controller-source" rev-parse HEAD)" = "$RECOVERY_CONTROLLER_SOURCE_SHA"
+          test -f "$controller_source"
+          test ! -L "$controller_source"
+          controller="$RUNNER_TEMP/leaderbot-recovery-controller-v1.mjs"
+          install -m 0500 "$controller_source" "$controller"
+          controller_sha256="$(sha256sum "$controller" | cut -d ' ' -f1)"
+          [[ "$controller_sha256" =~ ^[a-f0-9]{64}$ ]]
+          {
+            echo "RECOVERY_CONTROLLER=$controller"
+            echo "RECOVERY_CONTROLLER_SHA256=$controller_sha256"
+          } >> "$GITHUB_ENV"
+
+      - name: Checkout exact interrupted source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.inspect.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+
+      - name: Install exact verified flyctl
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          install_root="$(mktemp -d "$RUNNER_TEMP/leaderbot-flyctl.XXXXXX")"
+          archive="$install_root/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          extract_dir="$install_root/extract"
+          bin_dir="$install_root/bin"
+          install -d -m 0700 "$extract_dir" "$bin_dir"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' \
+            "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90" \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$extract_dir" flyctl
+          test -f "$extract_dir/flyctl"
+          test ! -L "$extract_dir/flyctl"
+          install -m 0755 "$extract_dir/flyctl" "$bin_dir/flyctl"
+          ln -s flyctl "$bin_dir/fly"
+          version_output="$("$bin_dir/flyctl" version)"
+          [[ "$version_output" =~ ^flyctl\ v0\.4\.85([[:space:]]|$) ]]
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+
+      - name: Download exact durable rollback plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.inspect.outputs.artifact_id }}
+        run: |
+          test "$(sha256sum "$RECOVERY_CONTROLLER" | cut -d ' ' -f1)" = "$RECOVERY_CONTROLLER_SHA256"
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          mkdir -p "$RUNNER_TEMP/leaderbot-recovery"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > "$RUNNER_TEMP/leaderbot-recovery.zip"
+          unzip -q "$RUNNER_TEMP/leaderbot-recovery.zip" -d "$RUNNER_TEMP/leaderbot-recovery"
+          test -f "$RUNNER_TEMP/leaderbot-recovery/rollback-image.txt"
+          test -f "$RUNNER_TEMP/leaderbot-recovery/before.fly.toml"
+          test -f "$RUNNER_TEMP/leaderbot-recovery/before.json"
+          test -f "$RUNNER_TEMP/leaderbot-recovery/rollback-identity.txt"
+          test -f "$RUNNER_TEMP/leaderbot-recovery/rollback-schema-phase.txt"
+          test -f "$RUNNER_TEMP/leaderbot-recovery/recovery-protocol.txt"
+          node "$RECOVERY_CONTROLLER" --validate-recovery-protocol "$RUNNER_TEMP/leaderbot-recovery/recovery-protocol.txt" --root-dir "$GITHUB_WORKSPACE"
+
+      - name: Classify image-gen successor before schema compatibility proof
+        id: successor
+        timeout-minutes: 8
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_RECOVERY_READONLY_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
+          RECOVERY_RUN_ATTEMPT: ${{ needs.inspect.outputs.run_attempt }}
+        run: |
+          test "$(sha256sum "$RECOVERY_CONTROLLER" | cut -d ' ' -f1)" = "$RECOVERY_CONTROLLER_SHA256"
+          test -n "$FLY_API_TOKEN"
+          prior_identity="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-identity.txt")"
+          [[ "$prior_identity" =~ ^(none|deploy-[0-9]+-[0-9]+)$ ]]
+          [[ "$RECOVERY_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$RECOVERY_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          interrupted_identity="deploy-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}"
+          live_config="$(flyctl config show --app leaderbot-fb-image-gen)"
+          live_identity="$(jq -er '.env.LEADERBOT_DEPLOYMENT_IDENTITY // "none"' <<<"$live_config")"
+          if test "$live_identity" = "$prior_identity" || \
+             test "$live_identity" = "$interrupted_identity"; then
+            echo "superseded=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ "$live_identity" =~ ^deploy-[0-9]+-[0-9]+$ ]]
+          successor_root="$RUNNER_TEMP/leaderbot-successor-image-gen-before-schema"
+          successor="$(node "$RECOVERY_CONTROLLER" --prepare-successor-root image-gen "$live_identity" "$interrupted_identity" "$successor_root" --root-dir "$GITHUB_WORKSPACE")"
+          successor_sha="$(jq -er '.sourceSha' <<<"$successor")"
+          node "$RECOVERY_CONTROLLER" --settled-live image-gen \
+            --root-dir "$successor_root" \
+            --expected-source-sha "$successor_sha" \
+            --require-current-reviewed-image
+          health="$(mktemp)"
+          test "$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$health" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/healthz)" = "200"
+          grep -Fx "ok" "$health"
+          ready="$(mktemp)"
+          test "$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$ready" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/readyz)" = "200"
+          jq -e '.ok == true' "$ready"
+          echo "superseded=true" >> "$GITHUB_OUTPUT"
+
+      - name: Prove captured rollback schema compatibility evidence
+        if: steps.successor.outputs.superseded != 'true'
+        timeout-minutes: 2
+        run: |
+          rollback_image="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-image.txt")"
+          phase="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-schema-phase.txt")"
+          [[ "$phase" =~ ^(0015_base|0016_expand)$ ]]
+          test "$phase" = "$(jq -er '.apps["image-gen"].databaseSchemaPhase' deploy/production/apps.json)"
+          jq -e --arg image "$rollback_image" --arg phase "$phase" '.apps["image-gen"].reviewedRollbackImageSchemaPhases[$image] | index($phase) != null' deploy/production/apps.json > /dev/null
+
+      - name: Recheck image-gen successor before recovery mutation
+        id: successor_recheck
+        if: steps.successor.outputs.superseded != 'true'
+        timeout-minutes: 8
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_RECOVERY_READONLY_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
+          RECOVERY_RUN_ATTEMPT: ${{ needs.inspect.outputs.run_attempt }}
+        run: |
+          test "$(sha256sum "$RECOVERY_CONTROLLER" | cut -d ' ' -f1)" = "$RECOVERY_CONTROLLER_SHA256"
+          test -n "$FLY_API_TOKEN"
+          prior_identity="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-identity.txt")"
+          interrupted_identity="deploy-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}"
+          live_config="$(flyctl config show --app leaderbot-fb-image-gen)"
+          live_identity="$(jq -er '.env.LEADERBOT_DEPLOYMENT_IDENTITY // "none"' <<<"$live_config")"
+          if test "$live_identity" = "$prior_identity" || test "$live_identity" = "$interrupted_identity"; then
+            echo "superseded=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ "$live_identity" =~ ^deploy-[0-9]+-[0-9]+$ ]]
+          successor_root="$RUNNER_TEMP/leaderbot-successor-image-gen-before-mutation"
+          successor="$(node "$RECOVERY_CONTROLLER" --prepare-successor-root image-gen "$live_identity" "$interrupted_identity" "$successor_root" --root-dir "$GITHUB_WORKSPACE")"
+          successor_sha="$(jq -er '.sourceSha' <<<"$successor")"
+          node "$RECOVERY_CONTROLLER" --settled-live image-gen \
+            --root-dir "$successor_root" \
+            --expected-source-sha "$successor_sha" \
+            --require-current-reviewed-image
+          health="$(mktemp)"
+          test "$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$health" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/healthz)" = "200"
+          grep -Fx "ok" "$health"
+          ready="$(mktemp)"
+          test "$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$ready" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/readyz)" = "200"
+          jq -e '.ok == true' "$ready"
+          echo "superseded=true" >> "$GITHUB_OUTPUT"
+
+      - name: Remove exact image-gen recovery release-command Machines
+        if: steps.successor.outputs.superseded != 'true' && steps.successor_recheck.outputs.superseded != 'true'
+        timeout-minutes: 10
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_RECOVERY_TOKEN }}
+          RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
+          RECOVERY_RUN_ATTEMPT: ${{ needs.inspect.outputs.run_attempt }}
+        run: |
+          test "$(sha256sum "$RECOVERY_CONTROLLER" | cut -d ' ' -f1)" = "$RECOVERY_CONTROLLER_SHA256"
+          test -n "$FLY_API_TOKEN"
+          rollback_image="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-image.txt")"
+          rollback_config="$RUNNER_TEMP/leaderbot-recovery/before.fly.toml"
+          prior_identity="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-identity.txt")"
+          [[ "$RECOVERY_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$RECOVERY_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          [[ "$prior_identity" =~ ^(none|deploy-[0-9]+-[0-9]+)$ ]]
+          interrupted_identity="deploy-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}"
+          node "$RECOVERY_CONTROLLER" --validate-target-enabled image-gen --root-dir "$GITHUB_WORKSPACE"
+          expected_config="$(node "$RECOVERY_CONTROLLER" --reviewed-rollback-config image-gen "$rollback_image" --root-dir "$GITHUB_WORKSPACE")"
+          cmp --silent "$expected_config" "$rollback_config"
+          node "$RECOVERY_CONTROLLER" --validate-rollback-image image-gen "$rollback_image" --root-dir "$GITHUB_WORKSPACE"
+          live_config="$(flyctl config show --app leaderbot-fb-image-gen)"
+          live_identity="$(jq -er '.env.LEADERBOT_DEPLOYMENT_IDENTITY // "none"' <<<"$live_config")"
+          if test "$live_identity" != "$prior_identity" && test "$live_identity" != "$interrupted_identity"; then
+            echo "Live image-gen identity changed before release-command cleanup" >&2
+            exit 1
+          fi
+          release_machines="$(node "$RECOVERY_CONTROLLER" --recovery-release-command-machines image-gen --interrupted-deployment-identity "$interrupted_identity" --captured-prior-identity "$prior_identity" --captured-prior-image "$rollback_image" --root-dir "$GITHUB_WORKSPACE")"
+          jq -e 'type=="array" and length<=2 and all(.[]; (.id|test("^[a-f0-9]{14}$")) and (.needsDestroy|type=="boolean")) and (map(.id)|unique|length)==length' <<<"$release_machines" > /dev/null
+          while IFS= read -r release_machine; do
+            machine_id="$(jq -er '.id' <<<"$release_machine")"
+            if test "$(jq -er '.needsDestroy' <<<"$release_machine")" = "true"; then
+              if ! flyctl machine destroy --force --app leaderbot-fb-image-gen "$machine_id"; then
+                after_destroy_error="$(node "$RECOVERY_CONTROLLER" --recovery-release-command-machines image-gen --interrupted-deployment-identity "$interrupted_identity" --captured-prior-identity "$prior_identity" --captured-prior-image "$rollback_image" --root-dir "$GITHUB_WORKSPACE")"
+                jq -e --argjson selected "$release_machines" 'all(.[]; .id as $id | $selected | map(.id) | index($id) != null)' <<<"$after_destroy_error" > /dev/null
+                remaining_target="$(jq -c --arg id "$machine_id" '[.[] | select(.id==$id)]' <<<"$after_destroy_error")"
+                test "$(jq -r 'length' <<<"$remaining_target")" -le 1
+                if test "$(jq -r 'length' <<<"$remaining_target")" = "1"; then
+                  test "$(jq -er '.[0].needsDestroy' <<<"$remaining_target")" = "false"
+                fi
+              fi
+            fi
+          done < <(jq -c '.[]' <<<"$release_machines")
+          remaining="$release_machines"
+          for _ in {1..60}; do
+            remaining="$(node "$RECOVERY_CONTROLLER" --recovery-release-command-machines image-gen --interrupted-deployment-identity "$interrupted_identity" --captured-prior-identity "$prior_identity" --captured-prior-image "$rollback_image" --root-dir "$GITHUB_WORKSPACE")"
+            if test "$(jq -r 'length' <<<"$remaining")" = "0"; then
+              break
+            fi
+            jq -e --argjson selected "$release_machines" 'all(.[]; .id as $id | $selected | map(.id) | index($id) != null)' <<<"$remaining" > /dev/null
+            sleep 2
+          done
+          test "$(jq -r 'length' <<<"$remaining")" = "0"
+          live_config="$(flyctl config show --app leaderbot-fb-image-gen)"
+          live_identity="$(jq -er '.env.LEADERBOT_DEPLOYMENT_IDENTITY // "none"' <<<"$live_config")"
+          if test "$live_identity" != "$prior_identity" && test "$live_identity" != "$interrupted_identity"; then
+            echo "Live image-gen identity changed during release-command cleanup" >&2
+            exit 1
+          fi
+
+      - name: Restore and verify captured image-gen release
+        if: steps.successor.outputs.superseded != 'true' && steps.successor_recheck.outputs.superseded != 'true'
+        timeout-minutes: 45
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_RECOVERY_TOKEN }}
+          RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
+          RECOVERY_RUN_ATTEMPT: ${{ needs.inspect.outputs.run_attempt }}
+        run: |
+          test "$(sha256sum "$RECOVERY_CONTROLLER" | cut -d ' ' -f1)" = "$RECOVERY_CONTROLLER_SHA256"
+          test -n "$FLY_API_TOKEN"
+          rollback_image="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-image.txt")"
+          rollback_config="$RUNNER_TEMP/leaderbot-recovery/before.fly.toml"
+          prior_identity="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-identity.txt")"
+          [[ "$RECOVERY_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          [[ "$prior_identity" =~ ^(none|deploy-[0-9]+-[0-9]+)$ ]]
+          node "$RECOVERY_CONTROLLER" --validate-target-enabled image-gen --root-dir "$GITHUB_WORKSPACE"
+          expected_config="$(node "$RECOVERY_CONTROLLER" --reviewed-rollback-config image-gen "$rollback_image" --root-dir "$GITHUB_WORKSPACE")"
+          cmp --silent "$expected_config" "$rollback_config"
+          node "$RECOVERY_CONTROLLER" --validate-rollback-image image-gen "$rollback_image" --root-dir "$GITHUB_WORKSPACE"
+          flyctl config validate --strict --config "$rollback_config"
+          live_config="$(flyctl config show --app leaderbot-fb-image-gen)"
+          live_identity="$(jq -er '.env.LEADERBOT_DEPLOYMENT_IDENTITY // "none"' <<<"$live_config")"
+          superseded=false
+          if test "$live_identity" != "$prior_identity" && \
+             test "$live_identity" != "deploy-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}"; then
+            echo "Live image-gen identity changed after readonly successor recheck" >&2
+            exit 1
+          fi
+          if test "$superseded" = false; then
+            if node "$RECOVERY_CONTROLLER" --verify-restored-release image-gen "$rollback_image" "$rollback_config" --expected-deployment-identity "$prior_identity" --root-dir "$GITHUB_WORKSPACE"; then
+              :
+            else
+              if node "$RECOVERY_CONTROLLER" --live image-gen --predeploy --expected-deployment-identity "deploy-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}" --allow-interrupted-scale-count-drift --captured-prior-identity "$prior_identity" --captured-prior-image "$rollback_image" --root-dir "$GITHUB_WORKSPACE"; then
+                :
+              elif node "$RECOVERY_CONTROLLER" --verify-restored-release image-gen "$rollback_image" "$rollback_config" --expected-deployment-identity "$prior_identity" --allow-reviewed-machine-images --allow-scale-count-drift --captured-prior-identity "$prior_identity" --captured-prior-image "$rollback_image" --interrupted-deployment-identity "deploy-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}" --root-dir "$GITHUB_WORKSPACE"; then
+                :
+              else
+                exit 1
+              fi
+              flyctl deploy --config "$rollback_config" --strategy rolling \
+                --remote-only --yes --image "$rollback_image" \
+                --image-label "recovery-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}" \
+                --env "LEADERBOT_DEPLOYMENT_IDENTITY=$prior_identity"
+            fi
+            scale_plan="$(node "$RECOVERY_CONTROLLER" --reviewed-scale-plan image-gen --root-dir "$GITHUB_WORKSPACE")"
+            jq -e 'type=="array" and length>0 and all(.[]; (.process|test("^[a-z][a-z0-9-]{0,31}$")) and (.count|type=="number" and floor==. and .>=1 and .<=20))' <<<"$scale_plan" > /dev/null
+            while IFS= read -r scale_entry; do
+              process="$(jq -er '.process' <<<"$scale_entry")"
+              count="$(jq -er '.count' <<<"$scale_entry")"
+              flyctl scale count "$count" --process-group "$process" --app leaderbot-fb-image-gen --yes
+            done < <(jq -c '.[]' <<<"$scale_plan")
+            node "$RECOVERY_CONTROLLER" --verify-restored-release image-gen "$rollback_image" "$rollback_config" --expected-deployment-identity "$prior_identity" --root-dir "$GITHUB_WORKSPACE"
+          fi
+          health="$(mktemp)"
+          test "$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$health" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/healthz)" = "200"
+          grep -Fx "ok" "$health"
+          ready="$(mktemp)"
+          test "$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$ready" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/readyz)" = "200"
+          jq -e '.ok == true' "$ready"
+
+  recover-storage-proxy:
+    name: Restore interrupted storage-proxy deployment
+    needs: inspect
+    if: needs.inspect.outputs.needed == 'true' && needs.inspect.outputs.target == 'storage-proxy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    environment: production-recovery
+    steps:
+      - name: Checkout trusted recovery controller
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: leaderbot-recovery-controller-source
+          persist-credentials: false
+
+      - name: Bind trusted recovery controller
+        env:
+          RECOVERY_CONTROLLER_SOURCE_SHA: ${{ github.sha }}
+        run: |
+          [[ "$RECOVERY_CONTROLLER_SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          controller_source="$GITHUB_WORKSPACE/leaderbot-recovery-controller-source/scripts/validate-production-deployment.mjs"
+          test "$(git -C "$GITHUB_WORKSPACE/leaderbot-recovery-controller-source" rev-parse HEAD)" = "$RECOVERY_CONTROLLER_SOURCE_SHA"
+          test -f "$controller_source"
+          test ! -L "$controller_source"
+          controller="$RUNNER_TEMP/leaderbot-recovery-controller-v1.mjs"
+          install -m 0500 "$controller_source" "$controller"
+          controller_sha256="$(sha256sum "$controller" | cut -d ' ' -f1)"
+          [[ "$controller_sha256" =~ ^[a-f0-9]{64}$ ]]
+          {
+            echo "RECOVERY_CONTROLLER=$controller"
+            echo "RECOVERY_CONTROLLER_SHA256=$controller_sha256"
+          } >> "$GITHUB_ENV"
+
+      - name: Checkout exact interrupted source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.inspect.outputs.source_sha }}
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+
+      - name: Install exact verified flyctl
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          install_root="$(mktemp -d "$RUNNER_TEMP/leaderbot-flyctl.XXXXXX")"
+          archive="$install_root/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          extract_dir="$install_root/extract"
+          bin_dir="$install_root/bin"
+          install -d -m 0700 "$extract_dir" "$bin_dir"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' \
+            "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90" \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$extract_dir" flyctl
+          test -f "$extract_dir/flyctl"
+          test ! -L "$extract_dir/flyctl"
+          install -m 0755 "$extract_dir/flyctl" "$bin_dir/flyctl"
+          ln -s flyctl "$bin_dir/fly"
+          version_output="$("$bin_dir/flyctl" version)"
+          [[ "$version_output" =~ ^flyctl\ v0\.4\.85([[:space:]]|$) ]]
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+
+      - name: Download exact durable rollback plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.inspect.outputs.artifact_id }}
+        run: |
+          test "$(sha256sum "$RECOVERY_CONTROLLER" | cut -d ' ' -f1)" = "$RECOVERY_CONTROLLER_SHA256"
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          mkdir -p "$RUNNER_TEMP/leaderbot-recovery"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > "$RUNNER_TEMP/leaderbot-recovery.zip"
+          unzip -q "$RUNNER_TEMP/leaderbot-recovery.zip" -d "$RUNNER_TEMP/leaderbot-recovery"
+          test -f "$RUNNER_TEMP/leaderbot-recovery/rollback-image.txt"
+          test -f "$RUNNER_TEMP/leaderbot-recovery/before.fly.toml"
+          test -f "$RUNNER_TEMP/leaderbot-recovery/before.json"
+          test -f "$RUNNER_TEMP/leaderbot-recovery/rollback-identity.txt"
+          test -f "$RUNNER_TEMP/leaderbot-recovery/recovery-protocol.txt"
+          node "$RECOVERY_CONTROLLER" --validate-recovery-protocol "$RUNNER_TEMP/leaderbot-recovery/recovery-protocol.txt" --root-dir "$GITHUB_WORKSPACE"
+
+      - name: Classify storage-proxy successor from exact approved source
+        id: successor
+        timeout-minutes: 8
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_RECOVERY_READONLY_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
+          RECOVERY_RUN_ATTEMPT: ${{ needs.inspect.outputs.run_attempt }}
+        run: |
+          test "$(sha256sum "$RECOVERY_CONTROLLER" | cut -d ' ' -f1)" = "$RECOVERY_CONTROLLER_SHA256"
+          test -n "$FLY_API_TOKEN"
+          prior_identity="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-identity.txt")"
+          interrupted_identity="deploy-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}"
+          live_config="$(flyctl config show --app leaderbot-storage-proxy)"
+          live_identity="$(jq -er '.env.LEADERBOT_DEPLOYMENT_IDENTITY // "none"' <<<"$live_config")"
+          if test "$live_identity" = "$prior_identity" || test "$live_identity" = "$interrupted_identity"; then
+            echo "superseded=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ "$live_identity" =~ ^deploy-[0-9]+-[0-9]+$ ]]
+          successor_root="$RUNNER_TEMP/leaderbot-successor-storage-proxy"
+          successor="$(node "$RECOVERY_CONTROLLER" --prepare-successor-root storage-proxy "$live_identity" "$interrupted_identity" "$successor_root" --root-dir "$GITHUB_WORKSPACE")"
+          successor_sha="$(jq -er '.sourceSha' <<<"$successor")"
+          node "$RECOVERY_CONTROLLER" --settled-live storage-proxy \
+            --root-dir "$successor_root" \
+            --expected-source-sha "$successor_sha" \
+            --require-current-reviewed-image
+          body="$(mktemp)"
+          status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/healthz)"
+          test "$status" = "200"
+          grep -Fx "ok" "$body"
+          echo "superseded=true" >> "$GITHUB_OUTPUT"
+
+      - name: Restore and verify captured storage-proxy release
+        if: steps.successor.outputs.superseded != 'true'
+        timeout-minutes: 40
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_STORAGE_PROXY_RECOVERY_TOKEN }}
+          RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
+          RECOVERY_RUN_ATTEMPT: ${{ needs.inspect.outputs.run_attempt }}
+        run: |
+          test "$(sha256sum "$RECOVERY_CONTROLLER" | cut -d ' ' -f1)" = "$RECOVERY_CONTROLLER_SHA256"
+          test -n "$FLY_API_TOKEN"
+          rollback_image="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-image.txt")"
+          rollback_config="$RUNNER_TEMP/leaderbot-recovery/before.fly.toml"
+          prior_identity="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-identity.txt")"
+          [[ "$RECOVERY_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          [[ "$prior_identity" =~ ^(none|deploy-[0-9]+-[0-9]+)$ ]]
+          node "$RECOVERY_CONTROLLER" --validate-target-enabled storage-proxy --root-dir "$GITHUB_WORKSPACE"
+          expected_config="$(node "$RECOVERY_CONTROLLER" --reviewed-rollback-config storage-proxy "$rollback_image" --root-dir "$GITHUB_WORKSPACE")"
+          cmp --silent "$expected_config" "$rollback_config"
+          node "$RECOVERY_CONTROLLER" --validate-rollback-image storage-proxy "$rollback_image" --root-dir "$GITHUB_WORKSPACE"
+          flyctl config validate --strict --config "$rollback_config"
+          live_config="$(flyctl config show --app leaderbot-storage-proxy)"
+          live_identity="$(jq -er '.env.LEADERBOT_DEPLOYMENT_IDENTITY // "none"' <<<"$live_config")"
+          superseded=false
+          if test "$live_identity" != "$prior_identity" && \
+             test "$live_identity" != "deploy-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}"; then
+            echo "Live storage-proxy identity changed after readonly successor classification" >&2
+            exit 1
+          fi
+          if test "$superseded" = false; then
+            if node "$RECOVERY_CONTROLLER" --verify-restored-release storage-proxy "$rollback_image" "$rollback_config" --expected-deployment-identity "$prior_identity" --root-dir "$GITHUB_WORKSPACE"; then
+              :
+            else
+              if node "$RECOVERY_CONTROLLER" --live storage-proxy --predeploy --expected-deployment-identity "deploy-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}" --allow-interrupted-scale-count-drift --captured-prior-identity "$prior_identity" --captured-prior-image "$rollback_image" --root-dir "$GITHUB_WORKSPACE"; then
+                :
+              elif node "$RECOVERY_CONTROLLER" --verify-restored-release storage-proxy "$rollback_image" "$rollback_config" --expected-deployment-identity "$prior_identity" --allow-reviewed-machine-images --allow-scale-count-drift --captured-prior-identity "$prior_identity" --captured-prior-image "$rollback_image" --interrupted-deployment-identity "deploy-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}" --root-dir "$GITHUB_WORKSPACE"; then
+                :
+              else
+                exit 1
+              fi
+              flyctl deploy --config "$rollback_config" --strategy rolling \
+                --remote-only --yes --image "$rollback_image" \
+                --image-label "recovery-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}" \
+                --env "LEADERBOT_DEPLOYMENT_IDENTITY=$prior_identity"
+            fi
+            scale_plan="$(node "$RECOVERY_CONTROLLER" --reviewed-scale-plan storage-proxy --root-dir "$GITHUB_WORKSPACE")"
+            jq -e 'type=="array" and length>0 and all(.[]; (.process|test("^[a-z][a-z0-9-]{0,31}$")) and (.count|type=="number" and floor==. and .>=1 and .<=20))' <<<"$scale_plan" > /dev/null
+            while IFS= read -r scale_entry; do
+              process="$(jq -er '.process' <<<"$scale_entry")"
+              count="$(jq -er '.count' <<<"$scale_entry")"
+              flyctl scale count "$count" --process-group "$process" --app leaderbot-storage-proxy --yes
+            done < <(jq -c '.[]' <<<"$scale_plan")
+            node "$RECOVERY_CONTROLLER" --verify-restored-release storage-proxy "$rollback_image" "$rollback_config" --expected-deployment-identity "$prior_identity" --root-dir "$GITHUB_WORKSPACE"
+          fi
+          body="$(mktemp)"
+          status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/healthz)"
+          test "$status" = "200"
+          grep -Fx "ok" "$body"

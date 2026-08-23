@@ -81,6 +81,10 @@ import {
   setEphemeralKey,
   writeScopedState,
 } from "./_core/stateStore";
+import {
+  buildGeneratedImageUrl,
+  putGeneratedImage,
+} from "./_core/generatedImageStore";
 
 const TEST_PEPPER = "ci-test-pepper";
 const INTERNAL_TEST_PAGE_ID = "internal-test-page";
@@ -219,6 +223,15 @@ function installImageIngressFetchMock() {
   return fetchMock;
 }
 
+function createLocallyStoredSourceImageUrl(): string {
+  const token = putGeneratedImage(Buffer.alloc(6000, 7), "image/jpeg");
+  return buildGeneratedImageUrl(
+    "https://leaderbot-fb-image-gen.fly.dev",
+    token,
+    "jpg"
+  );
+}
+
 async function sendMessengerPhoto(
   processPayload: typeof processFacebookWebhookPayloadBase,
   psid: string,
@@ -305,6 +318,7 @@ afterEach(() => {
   setSourceImageDnsLookupForTests(null);
   delete process.env.OPENAI_API_KEY;
   delete process.env.APP_BASE_URL;
+  delete process.env.STORAGE_PUBLIC_BASE_URLS;
   delete process.env.SOURCE_IMAGE_ALLOWED_HOSTS;
   delete process.env.ENABLE_FACE_MEMORY;
   if (originalFaceMemoryRetentionDays === undefined) {
@@ -342,6 +356,8 @@ beforeEach(() => {
   setSourceImageDnsLookupForTests(async () => [
     { address: "93.184.216.34", family: 4 },
   ]);
+  process.env.STORAGE_PUBLIC_BASE_URLS =
+    "https://leaderbot-fb-image-gen.fly.dev,https://img.example";
 });
 
 describe("messenger webhook dedupe", () => {
@@ -558,7 +574,7 @@ describe("messenger webhook dedupe", () => {
     }
   });
 
-  it("does not send a duplicate generated image for a completed queued job", async () => {
+  it("does not resend a completed image and recovers its missing balance notice", async () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("duplicate job should not call the image provider");
     });
@@ -588,7 +604,12 @@ describe("messenger webhook dedupe", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(sendImageMock).not.toHaveBeenCalled();
     expect(sendTextMock).not.toHaveBeenCalled();
-    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
+    expect(sendQuickRepliesMock).toHaveBeenCalledWith(
+      "completed-job-user",
+      "Klaar.\nVandaag nog 4 van 5 foto's. Deze maand nog 19 van 20.",
+      expect.any(Array),
+      { providerAttemptKey: "generation-success-notice-v1" }
+    );
     expect(safeLogMock).toHaveBeenCalledWith(
       "messenger_generation_job_duplicate_completed",
       expect.objectContaining({
@@ -669,8 +690,9 @@ describe("messenger webhook dedupe", () => {
     );
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       "undelivered-completed-job-user",
-      t("nl", "success"),
-      expect.any(Array)
+      "Klaar.\nVandaag nog 4 van 5 foto's. Deze maand nog 19 van 20.",
+      expect.any(Array),
+      { providerAttemptKey: "generation-success-notice-v1" }
     );
     expect(safeLogMock).toHaveBeenCalledWith(
       "messenger_generation_job_duplicate_delivery_recovered",
@@ -822,11 +844,12 @@ describe("messenger webhook dedupe", () => {
 
   it("uses a retained source photo for explicit personal transform requests", async () => {
     const fetchMock = installOpenAiSuccessFetchMock();
+    const retainedSourceImageUrl = createLocallyStoredSourceImageUrl();
     await runWithMessengerRequestContext(INTERNAL_TEST_PAGE_ID, () =>
       Promise.resolve(
         setPendingStoredImage(
           "internal-transform-source-user",
-          "https://img.example/retained-source.jpg"
+          retainedSourceImageUrl
         )
       )
     );
@@ -842,8 +865,7 @@ describe("messenger webhook dedupe", () => {
 
     expect(
       sourceImageRequestMock.mock.calls.some(
-        ([url]) =>
-          toUrlString(url) === "https://img.example/retained-source.jpg"
+        ([url]) => toUrlString(url) === retainedSourceImageUrl
       )
     ).toBe(true);
     const openAiCall = fetchMock.mock.calls.find(
@@ -887,12 +909,10 @@ describe("messenger webhook dedupe", () => {
 
   it("applies visual correction prompts to the last generated image", async () => {
     const fetchMock = installOpenAiSuccessFetchMock();
+    const generatedImageUrl = createLocallyStoredSourceImageUrl();
     await runWithMessengerRequestContext(INTERNAL_TEST_PAGE_ID, () =>
       Promise.resolve(
-        setLastGenerated(
-          "internal-visual-correction-user",
-          "https://leaderbot-fb-image-gen.fly.dev/generated/generated-landscape.jpg"
-        )
+        setLastGenerated("internal-visual-correction-user", generatedImageUrl)
       )
     );
 
@@ -907,9 +927,7 @@ describe("messenger webhook dedupe", () => {
 
     expect(
       sourceImageRequestMock.mock.calls.some(
-        ([url]) =>
-          toUrlString(url) ===
-          "https://leaderbot-fb-image-gen.fly.dev/generated/generated-landscape.jpg"
+        ([url]) => toUrlString(url) === generatedImageUrl
       )
     ).toBe(true);
     const openAiCall = fetchMock.mock.calls.find(
@@ -984,11 +1002,12 @@ describe("messenger webhook dedupe", () => {
 
   it("keeps legacy style words inside explicit source-image edit prompts instead of routing through preset restyles", async () => {
     const fetchMock = installOpenAiSuccessFetchMock();
+    const retainedSourceImageUrl = createLocallyStoredSourceImageUrl();
     await runWithMessengerRequestContext(INTERNAL_TEST_PAGE_ID, () =>
       Promise.resolve(
         setPendingStoredImage(
           "internal-style-word-source-user",
-          "https://img.example/retained-source.jpg"
+          retainedSourceImageUrl
         )
       )
     );
@@ -1005,8 +1024,7 @@ describe("messenger webhook dedupe", () => {
 
     expect(
       sourceImageRequestMock.mock.calls.some(
-        ([url]) =>
-          toUrlString(url) === "https://img.example/retained-source.jpg"
+        ([url]) => toUrlString(url) === retainedSourceImageUrl
       )
     ).toBe(true);
     const openAiCall = fetchMock.mock.calls.find(
@@ -1061,13 +1079,18 @@ describe("messenger webhook dedupe", () => {
     const enqueueStarted = new Promise<void>(resolve => {
       const redis = {
         del: vi.fn(async (key: string) => (redisState.delete(key) ? 1 : 0)),
-        eval: vi.fn(
-          () =>
-            new Promise<number>(innerResolve => {
-              resolve();
-              resolveEnqueue = () => innerResolve(1);
-            })
-        ),
+        eval: vi.fn((script: string) => {
+          // Privacy/state writes now also use Lua. Only pause the atomic queue
+          // enqueue itself; treating every Lua call as the enqueue made this
+          // test deadlock before it reached the behavior under test.
+          if (!script.includes("local acceptedType")) {
+            return Promise.resolve(1);
+          }
+          return new Promise<number>(innerResolve => {
+            resolve();
+            resolveEnqueue = () => innerResolve(1);
+          });
+        }),
         get: vi.fn(async (key: string) => redisState.get(key) ?? null),
         llen: vi.fn(async () => 1),
         lpush: vi.fn(async () => 1),
@@ -3143,14 +3166,15 @@ describe("disabled bot features stay out of the runtime flow", () => {
     );
     expect(sendQuickRepliesMock).toHaveBeenCalledWith(
       "edit-text-user",
-      t("nl", "success"),
+      "Klaar.\nVandaag nog 4 van 5 foto's. Deze maand nog 19 van 20.",
       expect.arrayContaining([
         {
           content_type: "text",
           title: "Pas aan",
           payload: "OPENCLAW_ACTION:Pas%20aan",
         },
-      ])
+      ]),
+      { providerAttemptKey: "generation-success-notice-v1" }
     );
   });
 

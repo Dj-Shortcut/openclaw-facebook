@@ -15,6 +15,8 @@ import { storageDelete, storageKeyFromPublicUrl } from "../storage";
 import { createAdminAuthRateLimiter, verifyAdminToken } from "./adminAuth";
 import { getFaceMemoryRetentionMs } from "./faceMemoryRetention";
 import { safeLog } from "./messengerApi";
+import { hashStorageObjectKeyForLog } from "./messengerStorageObject";
+import { isLocalGeneratedImageUrl } from "./generatedImageStore";
 
 export const FACE_MEMORY_CONSENT_YES = "CONSENT_FACE_YES";
 export const FACE_MEMORY_CONSENT_NO = "CONSENT_FACE_NO";
@@ -40,7 +42,10 @@ async function deleteStoredImageUrl(
 
   const key = storageKeyFromPublicUrl(imageUrl);
   if (!key) {
-    return true;
+    // A live process-owned fallback cannot be erased through the storage
+    // proxy. Keep it pending until its short TTL removes it. Foreign/legacy
+    // URLs are outside the storage service's ownership.
+    return !isLocalGeneratedImageUrl(imageUrl);
   }
 
   try {
@@ -48,7 +53,7 @@ async function deleteStoredImageUrl(
     return true;
   } catch (error) {
     safeLog("face_memory_storage_delete_failed", {
-      key,
+      objectKeyHash: hashStorageObjectKeyForLog(key),
       error: error instanceof Error ? error.message : String(error),
     });
     return false;

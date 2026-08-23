@@ -1,16 +1,14 @@
+import type { CostLedgerTenantScope } from "../costLedger";
+
 export type VideoProviderErrorClass =
-  | "timeout"
-  | "rate_limited"
-  | "budget"
-  | "policy"
-  | "provider"
-  | "unknown";
+  "timeout" | "rate_limited" | "budget" | "policy" | "provider" | "unknown";
 
 export type VideoProviderRequest = {
   prompt: string;
   sourceImageUrl: string;
   reqId: string;
   userKey: string;
+  costLedgerScope?: CostLedgerTenantScope;
   timeoutMs: number;
   onProviderAttempt?: () => Promise<string | undefined>;
 };

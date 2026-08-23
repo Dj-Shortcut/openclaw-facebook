@@ -11,12 +11,13 @@ import { clearStateStore } from "./_core/stateStore";
 const GENERATED_IMAGE_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0ioAAAAASUVORK5CYII=";
 const originalImageProvider = process.env.IMAGE_PROVIDER;
+const originalNodeEnv = process.env.NODE_ENV;
 const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
 const originalAppBaseUrl = process.env.APP_BASE_URL;
 const originalOpenAiImageMaxRetries = process.env.OPENAI_IMAGE_MAX_RETRIES;
 const originalOpenAiImageRetryBaseMs = process.env.OPENAI_IMAGE_RETRY_BASE_MS;
 const originalOpenAiImageModel = process.env.OPENAI_IMAGE_MODEL;
-const originalOpenAiImageEstimatedCostUsd =
+const originalRemovedOpenAiImageEstimatedCostUsd =
   process.env.OPENAI_IMAGE_ESTIMATED_COST_USD;
 const originalOpenAiImageSize = process.env.OPENAI_IMAGE_SIZE;
 const originalOpenAiImageQuality = process.env.OPENAI_IMAGE_QUALITY;
@@ -35,6 +36,11 @@ const originalMessengerGenerationInlineFallback =
   process.env.MESSENGER_GENERATION_INLINE_FALLBACK;
 const originalMessengerGlobalDailyImageCap =
   process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP;
+const originalMessengerFreeDailyLimit = process.env.MESSENGER_FREE_DAILY_LIMIT;
+const originalMessengerFreeMonthlyLimit =
+  process.env.MESSENGER_FREE_MONTHLY_LIMIT;
+const originalMessengerImageQuotaTimeZone =
+  process.env.MESSENGER_IMAGE_QUOTA_TIME_ZONE;
 const originalMessengerGlobalDailySpendCapUsd =
   process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD;
 const originalMessengerGlobalMonthlySpendCapUsd =
@@ -55,7 +61,9 @@ function toUrlString(url: string | URL): string {
   return typeof url === "string" ? url : url.toString();
 }
 
-async function promptFromRequest(init: RequestInit | undefined): Promise<string> {
+async function promptFromRequest(
+  init: RequestInit | undefined
+): Promise<string> {
   const body = init?.body;
 
   if (body instanceof FormData) {
@@ -65,7 +73,8 @@ async function promptFromRequest(init: RequestInit | undefined): Promise<string>
   if (typeof body === "string") {
     const payload = JSON.parse(body) as {
       prompt?: string;
-      input?: string | Array<{ content?: Array<{ type?: string; text?: string }> }>;
+      input?:
+        string | Array<{ content?: Array<{ type?: string; text?: string }> }>;
     };
     if (typeof payload.prompt === "string") {
       return payload.prompt;
@@ -143,6 +152,7 @@ describe("image provider boundary", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     restoreEnv("IMAGE_PROVIDER", originalImageProvider);
+    restoreEnv("NODE_ENV", originalNodeEnv);
     restoreEnv("OPENAI_API_KEY", originalOpenAiApiKey);
     restoreEnv("APP_BASE_URL", originalAppBaseUrl);
     restoreEnv("OPENAI_IMAGE_MAX_RETRIES", originalOpenAiImageMaxRetries);
@@ -150,7 +160,7 @@ describe("image provider boundary", () => {
     restoreEnv("OPENAI_IMAGE_MODEL", originalOpenAiImageModel);
     restoreEnv(
       "OPENAI_IMAGE_ESTIMATED_COST_USD",
-      originalOpenAiImageEstimatedCostUsd
+      originalRemovedOpenAiImageEstimatedCostUsd
     );
     restoreEnv("OPENAI_IMAGE_SIZE", originalOpenAiImageSize);
     restoreEnv("OPENAI_IMAGE_QUALITY", originalOpenAiImageQuality);
@@ -164,7 +174,10 @@ describe("image provider boundary", () => {
       "MESSENGER_GENERATION_QUEUE_ENABLED",
       originalMessengerGenerationQueueEnabled
     );
-    restoreEnv("MESSENGER_GENERATION_WORKER", originalMessengerGenerationWorker);
+    restoreEnv(
+      "MESSENGER_GENERATION_WORKER",
+      originalMessengerGenerationWorker
+    );
     restoreEnv(
       "MESSENGER_GENERATION_WORKER_ONLY",
       originalMessengerGenerationWorkerOnly
@@ -176,6 +189,15 @@ describe("image provider boundary", () => {
     restoreEnv(
       "MESSENGER_GLOBAL_DAILY_IMAGE_CAP",
       originalMessengerGlobalDailyImageCap
+    );
+    restoreEnv("MESSENGER_FREE_DAILY_LIMIT", originalMessengerFreeDailyLimit);
+    restoreEnv(
+      "MESSENGER_FREE_MONTHLY_LIMIT",
+      originalMessengerFreeMonthlyLimit
+    );
+    restoreEnv(
+      "MESSENGER_IMAGE_QUOTA_TIME_ZONE",
+      originalMessengerImageQuotaTimeZone
     );
     restoreEnv(
       "MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD",
@@ -205,11 +227,7 @@ describe("image provider boundary", () => {
         messengerGenerationGlobalLimit: {
           redisBacked: false,
           max: 3,
-          lockTtlMs: 240000,
-        },
-        messengerGenerationDailyBudget: {
-          enabled: false,
-          cap: null,
+          lockTtlMs: 900000,
         },
         messengerGenerationRuntime: {
           queueEnabled: false,
@@ -241,6 +259,41 @@ describe("image provider boundary", () => {
     );
   });
 
+  it("requires image retries to be explicitly disabled in production", () => {
+    process.env.NODE_ENV = "production";
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "5";
+    process.env.MESSENGER_FREE_MONTHLY_LIMIT = "20";
+    process.env.MESSENGER_IMAGE_QUOTA_TIME_ZONE = "Europe/Brussels";
+    delete process.env.OPENAI_IMAGE_MAX_RETRIES;
+
+    expect(() => getGeneratorStartupConfig()).toThrow(
+      "OPENAI_IMAGE_MAX_RETRIES must be explicitly set to 0 in production"
+    );
+
+    process.env.OPENAI_IMAGE_MAX_RETRIES = "1";
+    expect(() => getGeneratorStartupConfig()).toThrow(
+      "OPENAI_IMAGE_MAX_RETRIES must be explicitly set to 0 in production"
+    );
+
+    process.env.OPENAI_IMAGE_MAX_RETRIES = "0";
+    expect(() => getGeneratorStartupConfig()).not.toThrow();
+  });
+
+  it("requires the simple 5/day and 20/month photo policy in production", () => {
+    process.env.NODE_ENV = "production";
+    process.env.OPENAI_IMAGE_MAX_RETRIES = "0";
+    process.env.MESSENGER_FREE_DAILY_LIMIT = "5";
+    process.env.MESSENGER_FREE_MONTHLY_LIMIT = "20";
+    process.env.MESSENGER_IMAGE_QUOTA_TIME_ZONE = "Europe/Brussels";
+
+    expect(() => getGeneratorStartupConfig()).not.toThrow();
+
+    process.env.MESSENGER_FREE_MONTHLY_LIMIT = "21";
+    expect(() => getGeneratorStartupConfig()).toThrow(
+      "MESSENGER_FREE_MONTHLY_LIMIT must be explicitly set to 20 in production"
+    );
+  });
+
   it.each(["openai-responses", "openai-responses-image"])(
     "fails fast for unsupported image provider %s",
     provider => {
@@ -257,9 +310,7 @@ describe("image provider boundary", () => {
     process.env.OPENAI_IMAGE_MAX_RETRIES = "1";
     process.env.OPENAI_IMAGE_RETRY_BASE_MS = "1";
 
-    const logSpy = vi
-      .spyOn(console, "log")
-      .mockImplementation(() => undefined);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     const fetchMock = vi.fn(async (url: string | URL) => {
@@ -279,11 +330,12 @@ describe("image provider boundary", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
+    const onProviderAttempt = vi.fn(async () => undefined);
     const generator = new OpenAiImageGenerator();
     const result = await generateWithSourceImageData(generator, {
       userKey: "user-1",
       reqId: "req-provider-log",
-      onProviderAttempt: vi.fn(async () => undefined),
+      onProviderAttempt,
     });
 
     const providerLogs = logSpy.mock.calls
@@ -296,6 +348,7 @@ describe("image provider boundary", () => {
       /^https:\/\/leaderbot-fb-image-gen\.fly\.dev\/generated\/[0-9a-f-]+\.png$/
     );
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(onProviderAttempt).toHaveBeenCalledOnce();
     expect(providerLogs).toEqual([
       {
         level: "info",
@@ -307,9 +360,8 @@ describe("image provider boundary", () => {
     ]);
   });
 
-  it("does not burn the global image cap when user quota rejects before fetch", async () => {
+  it("does not call the provider when provider-attempt admission rejects", async () => {
     configureOpenAiImagesEnv();
-    process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "1";
 
     const fetchMock = vi.fn(async () => createGeneratedImageResponse());
     vi.stubGlobal("fetch", fetchMock);
@@ -317,8 +369,8 @@ describe("image provider boundary", () => {
     const generator = new OpenAiImageGenerator();
     await expect(
       generator.generate({
-        userKey: "user-quota-rejected",
-        reqId: "req-user-quota-rejected",
+        userKey: "user-admission-rejected",
+        reqId: "req-admission-rejected",
         onProviderAttempt: async () => {
           throw new Error("user quota exhausted");
         },
@@ -326,12 +378,14 @@ describe("image provider boundary", () => {
     ).rejects.toThrow("user quota exhausted");
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
+    expect(
+      await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))
+    ).toEqual([]);
 
     await expect(
       generator.generate({
-        userKey: "user-cap-still-available",
-        reqId: "req-cap-still-available",
+        userKey: "user-next-request",
+        reqId: "req-next-request",
         onProviderAttempt: async () => undefined,
       })
     ).resolves.toEqual(
@@ -350,7 +404,9 @@ describe("image provider boundary", () => {
 
     const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
       const prompt = await promptFromRequest(init);
-      expect(prompt).toContain("Edit the uploaded/source image according to the user's request.");
+      expect(prompt).toContain(
+        "Edit the uploaded/source image according to the user's request."
+      );
       expect(prompt).toContain("not as a preset style catalog");
       expect(prompt).toContain("User request: more glitter in the background");
       expect(prompt).not.toContain("glamorous disco-era hero shot");
@@ -424,9 +480,8 @@ describe("image provider boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("logs image cost estimate metadata without prompt content", async () => {
+  it("records image attempt metadata without prices or prompt content", async () => {
     configureOpenAiImagesEnv("gpt-image-2");
-    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
     process.env.OPENAI_IMAGE_SIZE = "1024x1536";
     process.env.OPENAI_IMAGE_QUALITY = "medium";
     const privatePrompt = "private tester prompt for a neon train station";
@@ -441,48 +496,40 @@ describe("image provider boundary", () => {
       promptHint: privatePrompt,
       userKey: "testuser",
       reqId: "req-cost-estimate",
+      costLedgerChannel: "facebook_messenger",
+      costLedgerScope: {
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        privacyEpoch: 5,
+        userKey: "testuser",
+      },
     });
-    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const ledgerEntries = await readCostLedgerPeriod(
+      new Date().toISOString().slice(0, 10)
+    );
 
     const parsedLogs = logSpy.mock.calls.map(([payload]) =>
       typeof payload === "string" ? JSON.parse(payload) : payload
     );
     const serializedLogs = JSON.stringify(parsedLogs);
-    const costLogs = parsedLogs.filter(
+    const priceLogs = parsedLogs.filter(
       payload => payload?.event === "image_generation_cost_estimate"
     );
 
-    expect(costLogs).toEqual([
-      {
-        level: "info",
-        event: "image_generation_cost_estimate",
-        reqId: "req-cost-estimate",
-        user: "testuser",
-        provider: "openai-images",
-        model: "gpt-image-2",
-        pricingModel: "gpt-image-2",
-        generationKind: "text_to_image",
-        hasSourceImage: false,
-        size: "1024x1536",
-        quality: "medium",
-        inputFidelity: null,
-        estimatedCostUsd: 0.025,
-        estimatedOutputCostUsd: null,
-        costEstimateComplete: true,
-        unpricedCostComponents: [],
-        estimateSource: "env_override",
-        status: "provider_response_received",
-      },
-    ]);
+    expect(priceLogs).toEqual([]);
     expect(ledgerEntries).toEqual([
       expect.objectContaining({
         id: "req-cost-estimate:openai-image:1",
-        channel: "image_gen",
+        channel: "facebook_messenger",
         operation: "image_generation",
         provider: "openai-images",
         model: "gpt-image-2",
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        privacyEpoch: 5,
         providerUsage: {
-          pricingModel: "gpt-image-2",
           generationKind: "text_to_image",
           hasSourceImage: false,
           size: "1024x1536",
@@ -492,12 +539,12 @@ describe("image provider boundary", () => {
         userKey: "testuser",
         reqId: requestSummaryKey("req-cost-estimate"),
         status: "provider_attempt_succeeded",
-        estimatedCostUsd: 0.025,
+        estimatedCostUsd: null,
         estimatedOutputCostUsd: null,
-        finalCostUsd: 0.025,
-        costEstimateComplete: true,
-        estimateSource: "env_override",
-        unpricedCostComponents: [],
+        finalCostUsd: null,
+        costEstimateComplete: false,
+        estimateSource: null,
+        unpricedCostComponents: ["image_generation"],
       }),
     ]);
     expect(serializedLogs).not.toContain(privatePrompt);
@@ -506,17 +553,19 @@ describe("image provider boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("marks image cost ledger attempts failed when the provider request fails", async () => {
+  it("marks image attempt ledger entries failed when the provider request fails", async () => {
     configureOpenAiImagesEnv("gpt-image-2");
-    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
     process.env.OPENAI_IMAGE_MAX_RETRIES = "0";
     const fetchMock = vi.fn(
       async () =>
-        new Response(JSON.stringify({ error: { message: "provider unavailable" } }), {
-          headers: { "content-type": "application/json" },
-          status: 500,
-          statusText: "Internal Server Error",
-        })
+        new Response(
+          JSON.stringify({ error: { message: "provider unavailable" } }),
+          {
+            headers: { "content-type": "application/json" },
+            status: 500,
+            statusText: "Internal Server Error",
+          }
+        )
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -530,14 +579,16 @@ describe("image provider boundary", () => {
       })
     ).rejects.toThrow("OpenAI request failed");
 
-    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const ledgerEntries = await readCostLedgerPeriod(
+      new Date().toISOString().slice(0, 10)
+    );
     expect(ledgerEntries).toEqual([
       expect.objectContaining({
         id: "req-cost-failed:openai-image:1",
         userKey: "failed-cost-user",
         reqId: requestSummaryKey("req-cost-failed"),
         status: "provider_attempt_failed",
-        estimatedCostUsd: 0.025,
+        estimatedCostUsd: null,
         finalCostUsd: null,
       }),
     ]);
@@ -545,9 +596,8 @@ describe("image provider boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("closes failed image cost ledger attempts before retrying", async () => {
+  it("closes failed image attempt ledger entries before retrying", async () => {
     configureOpenAiImagesEnv("gpt-image-2");
-    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
     process.env.OPENAI_IMAGE_MAX_RETRIES = "1";
     process.env.OPENAI_IMAGE_RETRY_BASE_MS = "1";
     const fetchMock = vi
@@ -570,14 +620,16 @@ describe("image provider boundary", () => {
       reqId: "req-cost-retry",
     });
 
-    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const ledgerEntries = await readCostLedgerPeriod(
+      new Date().toISOString().slice(0, 10)
+    );
     expect(ledgerEntries).toEqual([
       expect.objectContaining({
         id: "req-cost-retry:openai-image:1",
         userKey: "retry-cost-user",
         reqId: requestSummaryKey("req-cost-retry"),
         status: "provider_attempt_failed",
-        estimatedCostUsd: 0.025,
+        estimatedCostUsd: null,
         finalCostUsd: null,
       }),
       expect.objectContaining({
@@ -585,15 +637,15 @@ describe("image provider boundary", () => {
         userKey: "retry-cost-user",
         reqId: requestSummaryKey("req-cost-retry"),
         status: "provider_attempt_succeeded",
-        estimatedCostUsd: 0.025,
-        finalCostUsd: 0.025,
+        estimatedCostUsd: null,
+        finalCostUsd: null,
       }),
     ]);
     expect(JSON.stringify(ledgerEntries)).not.toContain("private prompt");
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("marks source-image edit cost estimates as partial input-unpriced metadata", async () => {
+  it("records source-image request metadata without calculating a price", async () => {
     configureOpenAiImagesEnv("gpt-5");
     process.env.OPENAI_IMAGE_SIZE = "1024x1024";
     process.env.OPENAI_IMAGE_QUALITY = "medium";
@@ -611,42 +663,22 @@ describe("image provider boundary", () => {
       reqId: "req-source-edit-cost-estimate",
     });
 
-    const costLogs = logSpy.mock.calls
+    const priceLogs = logSpy.mock.calls
       .map(([payload]) =>
         typeof payload === "string" ? JSON.parse(payload) : payload
       )
       .filter(payload => payload?.event === "image_generation_cost_estimate");
-    const ledgerEntries = await readCostLedgerPeriod(new Date().toISOString().slice(0, 10));
+    const ledgerEntries = await readCostLedgerPeriod(
+      new Date().toISOString().slice(0, 10)
+    );
 
-    expect(costLogs).toEqual([
-      {
-        level: "info",
-        event: "image_generation_cost_estimate",
-        reqId: "req-source-edit-cost-estimate",
-        user: "source-e",
-        provider: "openai-images",
-        model: "gpt-5",
-        pricingModel: "gpt-image-1",
-        generationKind: "source_image_edit",
-        hasSourceImage: true,
-        size: "1024x1024",
-        quality: "medium",
-        inputFidelity: "high",
-        estimatedCostUsd: null,
-        estimatedOutputCostUsd: 0.042,
-        costEstimateComplete: false,
-        unpricedCostComponents: ["source_image_input"],
-        estimateSource: "partial_source_image_input_unpriced",
-        status: "provider_response_received",
-      },
-    ]);
+    expect(priceLogs).toEqual([]);
     expect(ledgerEntries).toEqual([
       expect.objectContaining({
         id: "req-source-edit-cost-estimate:openai-image:1",
         userKey: "source-edit-user",
         reqId: requestSummaryKey("req-source-edit-cost-estimate"),
         providerUsage: {
-          pricingModel: "gpt-image-1",
           generationKind: "source_image_edit",
           hasSourceImage: true,
           size: "1024x1024",
@@ -654,175 +686,55 @@ describe("image provider boundary", () => {
           inputFidelity: "high",
         },
         estimatedCostUsd: null,
-        estimatedOutputCostUsd: 0.042,
+        estimatedOutputCostUsd: null,
         costEstimateComplete: false,
-        unpricedCostComponents: ["source_image_input"],
+        estimateSource: null,
+        unpricedCostComponents: ["image_generation"],
       }),
     ]);
-    expect(JSON.stringify(ledgerEntries)).not.toContain("make the product shot brighter");
+    expect(JSON.stringify(ledgerEntries)).not.toContain(
+      "make the product shot brighter"
+    );
     expect(JSON.stringify(ledgerEntries)).not.toContain("https://");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("records one complete total override for a source-image provider attempt", async () => {
-    configureOpenAiImagesEnv("gpt-5");
-    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.30";
-    process.env.OPENAI_IMAGE_SIZE = "1024x1024";
-    process.env.OPENAI_IMAGE_QUALITY = "high";
-    process.env.OPENAI_IMAGE_INPUT_FIDELITY = "high";
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
-    vi.stubGlobal("fetch", vi.fn(async () => createGeneratedImageResponse()));
+  it("ignores removed image-price and global spend settings", async () => {
+    configureOpenAiImagesEnv("gpt-image-2");
+    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "999";
+    process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "1";
+    process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "0.01";
+    process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD = "0.02";
+    process.env.MESSENGER_USER_DAILY_SPEND_CAP_USD = "0.01";
+    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
+    const onProviderAttempt = vi.fn(async () => undefined);
+    vi.stubGlobal("fetch", fetchMock);
 
     const generator = new OpenAiImageGenerator();
-    await generateWithSourceImageData(generator, {
-      generationKind: "source_image_edit",
-      promptHint: "private source edit prompt",
-      userKey: "source-edit-override-user",
-      reqId: "req-source-edit-total-override",
-    });
+    await expect(
+      generator.generate({
+        userKey: "user-with-customer-quota",
+        reqId: "req-no-internal-price-gate",
+        onProviderAttempt,
+      })
+    ).resolves.toBeDefined();
 
-    const ledgerEntries = await readCostLedgerPeriod(
-      new Date().toISOString().slice(0, 10)
-    );
-    expect(ledgerEntries).toEqual([
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(onProviderAttempt).toHaveBeenCalledOnce();
+    expect(
+      await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))
+    ).toEqual([
       expect.objectContaining({
-        id: "req-source-edit-total-override:openai-image:1",
+        id: "req-no-internal-price-gate:openai-image:1",
         status: "provider_attempt_succeeded",
-        estimatedCostUsd: 0.3,
-        estimatedOutputCostUsd: null,
-        finalCostUsd: 0.3,
-        costEstimateComplete: true,
-        estimateSource: "env_override",
-        unpricedCostComponents: [],
+        estimatedCostUsd: null,
+        finalCostUsd: null,
       }),
     ]);
   });
 
-  it("blocks a partially priced source edit when a spend cap is active", async () => {
-    configureOpenAiImagesEnv("gpt-5");
-    delete process.env.OPENAI_IMAGE_ESTIMATED_COST_USD;
-    process.env.OPENAI_IMAGE_SIZE = "1024x1024";
-    process.env.OPENAI_IMAGE_QUALITY = "medium";
-    process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "1";
-    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
-    const onProviderAttempt = vi.fn(async () => undefined);
-    vi.stubGlobal("fetch", fetchMock);
-
-    const generator = new OpenAiImageGenerator();
-    await expect(
-      generateWithSourceImageData(generator, {
-        generationKind: "source_image_edit",
-        promptHint: "private source edit prompt",
-        userKey: "source-edit-partial-user",
-        reqId: "req-source-edit-partial-cap",
-        onProviderAttempt,
-      })
-    ).rejects.toThrow("requires completely priced provider attempts");
-
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(onProviderAttempt).not.toHaveBeenCalled();
-    expect(
-      await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))
-    ).toEqual([]);
-  });
-
-  it("blocks the OpenAI request when the host daily image cap is reached", async () => {
+  it("retains legacy owner-bypass metadata for cost observability", async () => {
     configureOpenAiImagesEnv("gpt-image-2");
-    process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "1";
-    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
-    vi.stubGlobal("fetch", fetchMock);
-
-    const generator = new OpenAiImageGenerator();
-    await expect(
-      generator.generate({
-        userKey: "user-budget-cap",
-        reqId: "req-budget-cap",
-      })
-    ).resolves.toBeDefined();
-
-    process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "1";
-    const onProviderAttempt = vi.fn(async () => undefined);
-    await expect(
-      generator.generate({
-        userKey: "user-budget-cap",
-        reqId: "req-budget-over-cap",
-        onProviderAttempt,
-      })
-    ).rejects.toThrow("Messenger daily image budget reached");
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(onProviderAttempt).not.toHaveBeenCalled();
-  });
-
-  it("blocks the OpenAI request when the global daily spend cap would be exceeded", async () => {
-    configureOpenAiImagesEnv("gpt-image-2");
-    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
-    process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "0.02";
-    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
-    const onProviderAttempt = vi.fn(async () => undefined);
-    vi.stubGlobal("fetch", fetchMock);
-
-    const generator = new OpenAiImageGenerator();
-    await expect(
-      generator.generate({
-        userKey: "user-spend-cap",
-        reqId: "req-spend-cap",
-        onProviderAttempt,
-      })
-    ).rejects.toThrow("Messenger spend budget reached");
-
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(onProviderAttempt).not.toHaveBeenCalled();
-    expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
-  });
-
-  it("blocks the OpenAI request when the per-user daily spend cap would be exceeded", async () => {
-    configureOpenAiImagesEnv("gpt-image-2");
-    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
-    process.env.MESSENGER_USER_DAILY_SPEND_CAP_USD = "0.02";
-    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
-    const onProviderAttempt = vi.fn(async () => undefined);
-    vi.stubGlobal("fetch", fetchMock);
-
-    const generator = new OpenAiImageGenerator();
-    await expect(
-      generator.generate({
-        userKey: "user-spend-cap",
-        reqId: "req-user-spend-cap",
-        onProviderAttempt,
-      })
-    ).rejects.toThrow("Messenger spend budget reached");
-
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(onProviderAttempt).not.toHaveBeenCalled();
-    expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
-  });
-
-  it("blocks the OpenAI request when the global monthly spend cap would be exceeded", async () => {
-    configureOpenAiImagesEnv("gpt-image-2");
-    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
-    process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD = "0.02";
-    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
-    const onProviderAttempt = vi.fn(async () => undefined);
-    vi.stubGlobal("fetch", fetchMock);
-
-    const generator = new OpenAiImageGenerator();
-    await expect(
-      generator.generate({
-        userKey: "user-monthly-spend-cap",
-        reqId: "req-monthly-spend-cap",
-        onProviderAttempt,
-      })
-    ).rejects.toThrow("Messenger spend budget reached");
-
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(onProviderAttempt).not.toHaveBeenCalled();
-    expect(await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))).toEqual([]);
-  });
-
-  it("lets an explicit owner bypass every customer image budget while retaining cost accounting", async () => {
-    configureOpenAiImagesEnv("gpt-image-2");
-    process.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.025";
     process.env.MESSENGER_GLOBAL_DAILY_IMAGE_CAP = "1";
     process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "0.01";
     process.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD = "0.01";
@@ -859,9 +771,7 @@ describe("image provider boundary", () => {
     configureOpenAiImagesEnv("gpt-image-2");
 
     const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
-      expect(toUrlString(url)).toBe(
-        "https://api.openai.com/v1/images/edits"
-      );
+      expect(toUrlString(url)).toBe("https://api.openai.com/v1/images/edits");
       expect(new Headers(init?.headers).has("content-type")).toBe(false);
       const body = init?.body as FormData;
       expect(body).toBeInstanceOf(FormData);
@@ -889,7 +799,9 @@ describe("image provider boundary", () => {
     const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => {
       const prompt = await promptFromRequest(init);
       expect(prompt).toContain("Edit the uploaded/source image");
-      expect(prompt).toContain("User request: make it feel like a late-night event poster");
+      expect(prompt).toContain(
+        "User request: make it feel like a late-night event poster"
+      );
       expect(prompt).not.toContain("Berlin Underground");
       expect(prompt).not.toContain("raw techno-club energy");
       expect(prompt).not.toContain("Photo analysis:");

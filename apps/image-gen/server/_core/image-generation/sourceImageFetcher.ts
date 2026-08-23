@@ -12,6 +12,7 @@ import { safeLog } from "../logger";
 import { canRetryAttempt } from "./retryPolicy";
 import {
   resolveSourceImageFetchConfig,
+  SOURCE_IMAGE_FETCH_TIMEOUT_MS_MAX,
   type SourceImageFetchConfig,
 } from "./sourceImageFetchConfig";
 
@@ -37,7 +38,7 @@ type SourceImageFetchAttemptResult = {
 type SourceImageRequestAttempt = (
   sourceImageUrl: URL,
   resolvedIpAddresses: string[],
-  timeoutMs: number,
+  deadlineAtMs: number,
   reqId: string
 ) => Promise<SourceImageFetchAttemptResult>;
 
@@ -66,9 +67,44 @@ type SourceImageResolveInput = {
 
 const MIN_INPUT_IMAGE_BYTES = 5 * 1024;
 const MAX_INBOUND_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_SOURCE_IMAGE_IP_ADDRESSES = 4;
 let dnsLookup: SourceImageDnsLookup = lookup as SourceImageDnsLookup;
 let fetchSourceImageAttemptForTests: SourceImageRequestAttempt =
   fetchSourceImageAttempt;
+
+function createSourceImageTimeoutError(): Error {
+  const error = new Error("Source image fetch timed out");
+  error.name = "AbortError";
+  return error;
+}
+
+function getRemainingSourceImageTimeMs(deadlineAtMs: number): number {
+  const remainingMs = deadlineAtMs - Date.now();
+  if (remainingMs <= 0) throw createSourceImageTimeoutError();
+  return remainingMs;
+}
+
+async function runWithinSourceImageDeadline<T>(
+  task: () => Promise<T>,
+  deadlineAtMs: number,
+  onTimeout?: () => void | Promise<void>
+): Promise<T> {
+  const remainingMs = getRemainingSourceImageTimeMs(deadlineAtMs);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      if (onTimeout) {
+        Promise.resolve(onTimeout()).catch(() => undefined);
+      }
+      reject(createSourceImageTimeoutError());
+    }, remainingMs);
+  });
+  try {
+    return await Promise.race([task(), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 function getSourceUrlDiagnostics(sourceImageUrl: string): {
   hostname?: string;
@@ -302,7 +338,7 @@ function validateSourceImageUrlOrThrow(
 async function fetchSourceImageAttempt(
   sourceImageUrl: URL,
   resolvedIpAddresses: string[],
-  timeoutMs: number,
+  deadlineAtMs: number,
   reqId: string
 ): Promise<SourceImageFetchAttemptResult> {
   if (resolvedIpAddresses.length === 0) {
@@ -317,7 +353,7 @@ async function fetchSourceImageAttempt(
       return await fetchSourceImageAttemptForAddress(
         sourceImageUrl,
         resolvedIpAddress,
-        timeoutMs
+        deadlineAtMs
       );
     } catch (error) {
       lastError = error;
@@ -336,9 +372,10 @@ async function fetchSourceImageAttempt(
 async function fetchSourceImageAttemptForAddress(
   sourceImageUrl: URL,
   resolvedIpAddress: string,
-  timeoutMs: number
+  deadlineAtMs: number
 ): Promise<SourceImageFetchAttemptResult> {
   const controller = new AbortController();
+  const timeoutMs = getRemainingSourceImageTimeMs(deadlineAtMs);
   const timeout = setTimeout(() => {
     controller.abort();
   }, timeoutMs);
@@ -370,6 +407,10 @@ async function fetchSourceImageAttemptForAddress(
 
       request.end();
     });
+    const clearRequestTimeout = () => clearTimeout(timeout);
+    response.once("end", clearRequestTimeout);
+    response.once("close", clearRequestTimeout);
+    response.once("error", clearRequestTimeout);
     const responseHeaders = new Headers();
     for (const [key, rawValue] of Object.entries(response.headers)) {
       if (Array.isArray(rawValue)) {
@@ -390,8 +431,9 @@ async function fetchSourceImageAttemptForAddress(
       contentType:
         responseHeaders.get("content-type") ?? "application/octet-stream",
     };
-  } finally {
+  } catch (error) {
     clearTimeout(timeout);
+    throw error;
   }
 }
 
@@ -439,7 +481,10 @@ async function assertHostnameResolvesToPublicIpOrThrow(
     });
   }
 
-  return addresses.map(address => address.address);
+  return Array.from(new Set(addresses.map(address => address.address))).slice(
+    0,
+    MAX_SOURCE_IMAGE_IP_ADDRESSES
+  );
 }
 
 export function setSourceImageDnsLookupForTests(
@@ -722,20 +767,36 @@ async function downloadSourceImageOrThrow(
     config
   );
   let totalFetchMs = 0;
+  const boundedAttemptTimeoutMs =
+    Number.isSafeInteger(config.timeoutMs) && config.timeoutMs > 0
+      ? Math.min(config.timeoutMs, SOURCE_IMAGE_FETCH_TIMEOUT_MS_MAX)
+      : SOURCE_IMAGE_FETCH_TIMEOUT_MS_MAX;
+  const boundedRetryLimit =
+    Number.isSafeInteger(config.retryLimit) && config.retryLimit > 0 ? 1 : 0;
+  const fetchStartedAt = Date.now();
+  const totalDeadlineAt = fetchStartedAt + boundedAttemptTimeoutMs;
 
-  for (let attempt = 0; attempt <= config.retryLimit; attempt += 1) {
+  for (let attempt = 0; attempt <= boundedRetryLimit; attempt += 1) {
     const attemptStartedAt = Date.now();
 
     try {
-      const resolvedIpAddresses = await assertHostnameResolvesToPublicIpOrThrow(
-        validatedSourceImageUrl.url,
-        reqId
+      const resolvedIpAddresses = await runWithinSourceImageDeadline(
+        () =>
+          assertHostnameResolvesToPublicIpOrThrow(
+            validatedSourceImageUrl.url,
+            reqId
+          ),
+        totalDeadlineAt
       );
-      const { response, contentType } = await fetchSourceImageAttemptForTests(
-        validatedSourceImageUrl.url,
-        resolvedIpAddresses,
-        config.timeoutMs,
-        reqId
+      const { response, contentType } = await runWithinSourceImageDeadline(
+        () =>
+          fetchSourceImageAttemptForTests(
+            validatedSourceImageUrl.url,
+            resolvedIpAddresses,
+            totalDeadlineAt,
+            reqId
+          ),
+        totalDeadlineAt
       );
       try {
         assertNoRedirectResponse(response, reqId);
@@ -752,7 +813,7 @@ async function downloadSourceImageOrThrow(
             attempt,
             response,
             reqId,
-            config.retryLimit
+            boundedRetryLimit
           )
         ) {
           continue;
@@ -761,17 +822,22 @@ async function downloadSourceImageOrThrow(
       }
 
       totalFetchMs += Date.now() - attemptStartedAt;
-      return buildDownloadedSourceImage(
-        reqId,
-        contentType,
-        response,
-        totalFetchMs,
-        options
+      return await runWithinSourceImageDeadline(
+        () =>
+          buildDownloadedSourceImage(
+            reqId,
+            contentType,
+            response,
+            totalFetchMs,
+            options
+          ),
+        totalDeadlineAt,
+        () => response.body?.cancel()
       );
     } catch (error) {
       totalFetchMs += Date.now() - attemptStartedAt;
       if (
-        shouldRetrySourceImageError(attempt, error, reqId, config.retryLimit)
+        shouldRetrySourceImageError(attempt, error, reqId, boundedRetryLimit)
       ) {
         continue;
       }

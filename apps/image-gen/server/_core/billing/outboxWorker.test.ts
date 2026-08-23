@@ -284,6 +284,8 @@ describe("billing outbox containment safeguards", () => {
         intentId: "550e8400-e29b-41d4-a716-446655440000",
         messengerSenderUserKey: "a".repeat(64),
         messengerPageId: "page-42",
+        messengerChannelConnectionId: 12,
+        messengerPrivacyEpoch: 4,
       },
     } as BillingOutboxItem & { leaseToken: string };
     await sendPaymentHandoff(job);
@@ -295,6 +297,8 @@ describe("billing outbox containment safeguards", () => {
         workspaceId: 42,
         messengerSenderUserKey: "a".repeat(64),
         expectedFacebookPageId: "page-42",
+        expectedChannelConnectionId: 12,
+        expectedPrivacyEpoch: 4,
         deliveryIdempotencyKey: "550e8400-e29b-41d4-a716-446655440000",
       })
     );
@@ -304,6 +308,8 @@ describe("billing outbox containment safeguards", () => {
         workspaceId: 42,
         messengerSenderUserKey: "a".repeat(64),
         expectedFacebookPageId: "page-42",
+        expectedChannelConnectionId: 12,
+        expectedPrivacyEpoch: 4,
         deliveryIdempotencyKey: "550e8400-e29b-41d4-a716-446655440000",
       })
     );
@@ -315,6 +321,8 @@ describe("billing outbox containment safeguards", () => {
       payload: {
         messengerSenderUserKey: "a".repeat(64),
         messengerPageId: "page-42",
+        messengerChannelConnectionId: 12,
+        messengerPrivacyEpoch: 4,
       },
     } as BillingOutboxItem & { leaseToken: string };
     await expect(sendPaymentHandoff(job)).rejects.toThrow(
@@ -334,6 +342,8 @@ describe("billing outbox containment safeguards", () => {
         intentId: "550e8400-e29b-41d4-a716-446655440000",
         messengerSenderUserKey: "a".repeat(64),
         messengerPageId: "page-42",
+        messengerChannelConnectionId: 12,
+        messengerPrivacyEpoch: 4,
       },
     } as BillingOutboxItem & { leaseToken: string };
 

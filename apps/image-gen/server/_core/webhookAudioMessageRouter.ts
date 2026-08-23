@@ -3,6 +3,7 @@ import { safeLog } from "./messengerApi";
 import {
   appendCostLedgerEntry,
   safelyUpdateCostLedgerEntry,
+  type CostLedgerTenantScope,
 } from "./costLedger";
 import { fetchExternalSourceImageForIngress } from "./image-generation/sourceImageFetcher";
 import { anonymizePsid } from "./messengerState";
@@ -253,6 +254,33 @@ async function assertAudioProviderFence(
   });
 }
 
+function getAudioCostLedgerScope(
+  channel: string,
+  userId: string,
+  job?: MessengerGenerationJob
+): CostLedgerTenantScope | undefined {
+  if (channel !== "facebook_messenger") return undefined;
+  if (
+    job?.workspaceId &&
+    job.channelConnectionId &&
+    job.bindingEpoch &&
+    job.privacyEpoch &&
+    job.userId === userId
+  ) {
+    return {
+      workspaceId: job.workspaceId,
+      channelConnectionId: job.channelConnectionId,
+      bindingEpoch: job.bindingEpoch,
+      privacyEpoch: job.privacyEpoch,
+      userKey: userId,
+    };
+  }
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("Messenger audio cost ledger tenant scope is required");
+  }
+  return undefined;
+}
+
 function getInboundAudioUrl(
   attachments: AudioMessageInput["attachments"]
 ): string | null {
@@ -382,6 +410,7 @@ export async function transcribePreparedAudioMessage(
   providerJob?: MessengerGenerationJob
 ): Promise<string | null> {
   const { apiKey, sourceAudio } = prepared;
+  const costLedgerScope = getAudioCostLedgerScope(channel, userId, providerJob);
   const costEstimate = estimateAudioTranscriptionAttemptCost();
   const attemptPayload = {
     reqId,
@@ -414,6 +443,7 @@ export async function transcribePreparedAudioMessage(
         reqId,
         attemptId: ledgerEntryId,
         userKey: userId,
+        tenantScope: costLedgerScope,
         estimatedCostUsd: costEstimate.estimatedCostUsd,
         estimatedOutputCostUsd: null,
         costEstimateComplete: costEstimate.costEstimateComplete,
@@ -427,6 +457,7 @@ export async function transcribePreparedAudioMessage(
               operation: "audio_transcription",
               provider: "openai-audio",
               model: OPENAI_AUDIO_TRANSCRIPTION_MODEL,
+              ...(costLedgerScope ?? {}),
               userKey: userId,
               reqId,
               status: "provider_attempt_started",
@@ -489,7 +520,8 @@ export async function transcribePreparedAudioMessage(
           await safelyUpdateCostLedgerEntry(
             ledgerEntryId,
             { status: "provider_attempt_failed" },
-            attemptNow
+            attemptNow,
+            costLedgerScope
           );
           safeLog("messenger_audio_transcription_retry", {
             ...attemptPayload,
@@ -510,7 +542,8 @@ export async function transcribePreparedAudioMessage(
         await safelyUpdateCostLedgerEntry(
           ledgerEntryId,
           { status: "provider_attempt_failed" },
-          attemptNow
+          attemptNow,
+          costLedgerScope
         );
         if (providerFence) {
           await finalizeMessengerProviderAttemptFence(
@@ -542,7 +575,8 @@ export async function transcribePreparedAudioMessage(
         await safelyUpdateCostLedgerEntry(
           ledgerEntryId,
           { status: "provider_attempt_failed" },
-          attemptNow
+          attemptNow,
+          costLedgerScope
         );
         if (providerFence) {
           await finalizeMessengerProviderAttemptFence(
@@ -567,7 +601,8 @@ export async function transcribePreparedAudioMessage(
         await safelyUpdateCostLedgerEntry(
           ledgerEntryId,
           { status: "provider_attempt_failed" },
-          attemptNow
+          attemptNow,
+          costLedgerScope
         );
         if (providerFence) {
           await finalizeMessengerProviderAttemptFence(
@@ -585,7 +620,8 @@ export async function transcribePreparedAudioMessage(
           status: "provider_attempt_succeeded",
           finalCostUsd: costEstimate.finalCostUsd,
         },
-        attemptNow
+        attemptNow,
+        costLedgerScope
       );
       safeLog("messenger_audio_transcription_complete", {
         ...attemptPayload,
@@ -609,7 +645,8 @@ export async function transcribePreparedAudioMessage(
         await safelyUpdateCostLedgerEntry(
           ledgerEntryId,
           { status: "provider_attempt_failed" },
-          attemptNow
+          attemptNow,
+          costLedgerScope
         );
         safeLog("messenger_audio_transcription_retry", {
           ...attemptPayload,
@@ -629,7 +666,8 @@ export async function transcribePreparedAudioMessage(
       await safelyUpdateCostLedgerEntry(
         ledgerEntryId,
         { status: "provider_attempt_failed" },
-        attemptNow
+        attemptNow,
+        costLedgerScope
       );
       if (providerFence) {
         await finalizeMessengerProviderAttemptFence(providerFence, "ambiguous");

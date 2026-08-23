@@ -24,14 +24,16 @@ import { handleMessageEvent } from "./webhookMessageRouter";
 import type { HandlerContext } from "./webhookHandlerTypes";
 import {
   getMessengerRequestOwnership,
+  getMessengerRequestPageId,
+  getMessengerRequestPrivacySubject,
   runWithMessengerErasureControlDelivery,
   runWithMessengerRequestContext,
   setMessengerRequestOperationId,
-  setMessengerRequestPrivacySubject,
+  setMessengerRequestErasurePrivacySubject,
 } from "./messengerRequestContext";
 import { recordInboundUserActivity } from "./messengerInboundActivity";
 import { resolveMessengerGenerationOwnership } from "./workspaceEntitlementRuntime";
-import { getErasingMessengerPrivacySubjectEpoch } from "./messengerPrivacySubject";
+import { getErasingMessengerPrivacySubject } from "./messengerPrivacySubject";
 
 /** Routes every Messenger event in a Facebook webhook entry. */
 export async function handleEntry(
@@ -47,6 +49,9 @@ export async function handleEntry(
   }
 
   const events = Array.isArray(entry?.messaging) ? entry.messaging : [];
+  const ingressOwnership = getMessengerRequestOwnership();
+  const ingressPrivacy = getMessengerRequestPrivacySubject();
+  const ingressPageId = getMessengerRequestPageId();
   const ownership = await resolveMessengerGenerationOwnership(pageId);
   if (!ownership && process.env.NODE_ENV === "production") {
     logMessengerWebhookTrace("webhook_entry_skipped", {
@@ -54,11 +59,33 @@ export async function handleEntry(
     });
     return;
   }
+  const inheritedPrivacy =
+    ingressPrivacy &&
+    ingressOwnership &&
+    ownership &&
+    ingressPageId === pageId &&
+    ingressOwnership.workspaceId === ownership.workspaceId &&
+    ingressOwnership.channelConnectionId === ownership.channelConnectionId &&
+    ingressOwnership.bindingEpoch === ownership.bindingEpoch
+      ? ingressPrivacy
+      : undefined;
+  if (ingressPrivacy && !inheritedPrivacy) {
+    logMessengerWebhookTrace("webhook_entry_skipped", {
+      reason: "privacy_scope_mismatch",
+    });
+    return;
+  }
   for (const event of events) {
     await runWithMessengerRequestContext(
       pageId,
       () => handleEvent(ctx, event, pageId),
-      ownership ?? undefined
+      ownership
+        ? {
+            ...ownership,
+            userKey: inheritedPrivacy?.userKey,
+            privacyEpoch: inheritedPrivacy?.privacyEpoch,
+          }
+        : undefined
     );
   }
 }
@@ -149,16 +176,27 @@ async function resumePendingMessengerErasure(
   const ownership = getMessengerRequestOwnership();
   if (!ownership) return false;
   const userId = toUserKey(psid);
-  const privacyEpoch = await getErasingMessengerPrivacySubjectEpoch({
+  const requestPrivacy = getMessengerRequestPrivacySubject();
+  if (
+    requestPrivacy &&
+    (requestPrivacy.userKey !== userId || requestPrivacy.privacyEpoch <= 0)
+  ) {
+    return true;
+  }
+  if (!requestPrivacy && process.env.NODE_ENV === "production") return true;
+  const erasure = await getErasingMessengerPrivacySubject({
     workspaceId: ownership.workspaceId,
     channelConnectionId: ownership.channelConnectionId,
     userKey: userId,
   });
-  if (!privacyEpoch) return false;
+  if (!erasure) return false;
+  if (requestPrivacy && requestPrivacy.privacyEpoch !== erasure.privacyEpoch) {
+    return true;
+  }
 
   const reqId = randomUUID();
   setMessengerRequestOperationId(reqId);
-  setMessengerRequestPrivacySubject({ userKey: userId, privacyEpoch });
+  setMessengerRequestErasurePrivacySubject({ userKey: userId, ...erasure });
   if (!(await ctx.claimEventReplayOrLog(event, entryId, userId, reqId))) {
     return true;
   }

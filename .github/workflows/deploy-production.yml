@@ -11,12 +11,15 @@ on:
         options:
           - gateway
           - image-gen
+          - storage-proxy
       rollback_image:
-        description: Exact reviewed immutable digest; required for image-gen and gateway rollback
-        required: false
+        description: Exact reviewed immutable digest required for every production target
+        required: true
         type: string
 
 permissions:
+  actions: read
+  attestations: read
   contents: read
 
 env:
@@ -27,11 +30,13 @@ env:
 concurrency:
   group: production-deploy-${{ inputs.target }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   validate:
     name: Validate ${{ inputs.target }} release
     runs-on: ubuntu-latest
+    environment: production-inspection
     steps:
       - name: Require the reviewed main branch
         run: test "$GITHUB_REF" = "refs/heads/main"
@@ -40,6 +45,57 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
+
+      - name: Require an enabled production target
+        env:
+          TARGET: ${{ inputs.target }}
+        run: node scripts/validate-production-deployment.mjs --validate-target-enabled "$TARGET"
+
+      - name: Install exact verified flyctl for metadata-only preflight
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          install_root="$(mktemp -d "$RUNNER_TEMP/leaderbot-flyctl.XXXXXX")"
+          archive="$install_root/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          extract_dir="$install_root/extract"
+          bin_dir="$install_root/bin"
+          install -d -m 0700 "$extract_dir" "$bin_dir"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' \
+            "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90" \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$extract_dir" flyctl
+          test -f "$extract_dir/flyctl"
+          test ! -L "$extract_dir/flyctl"
+          install -m 0755 "$extract_dir/flyctl" "$bin_dir/flyctl"
+          ln -s flyctl "$bin_dir/fly"
+          version_output="$("$bin_dir/flyctl" version)"
+          [[ "$version_output" =~ ^flyctl\ v0\.4\.85([[:space:]]|$) ]]
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+
+      - name: Preflight settled production baseline before approval
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_PRODUCTION_READONLY_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          test -n "$FLY_API_TOKEN"
+          settled_output="$(node scripts/validate-production-deployment.mjs --settled-live "$TARGET")"
+          printf '%s\n' "$settled_output"
+          live_identity="$(sed -nE 's/^.* matches settled identity (none|deploy-[0-9]+-[0-9]+)\.$/\1/p' <<<"$settled_output")"
+          [[ "$live_identity" =~ ^(none|deploy-[0-9]+-[0-9]+)$ ]]
+          node scripts/validate-production-deployment.mjs \
+            --verify-deployment-candidate "$TARGET" "$live_identity" \
+            "deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --expected-source-sha "$GITHUB_SHA"
 
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -53,32 +109,45 @@ jobs:
       - name: Validate production deployment contract
         run: npm run production:validate
 
-      - name: Require an enabled production target
+      - name: Require green CI for this exact deployment source
         env:
-          TARGET: ${{ inputs.target }}
-        run: node scripts/validate-production-deployment.mjs --validate-target-enabled "$TARGET"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/validate-production-deployment.mjs --verify-source-ci "$GITHUB_SHA"
 
-      - name: Validate requested gateway rollback image
-        if: inputs.target == 'gateway' && inputs.rollback_image != ''
+      - name: Require an exact allowlisted image for gateway
+        if: inputs.target == 'gateway'
         env:
-          ROLLBACK_IMAGE: ${{ inputs.rollback_image }}
-        run: node scripts/validate-production-deployment.mjs --validate-rollback-image gateway "$ROLLBACK_IMAGE"
+          REVIEWED_IMAGE: ${{ inputs.rollback_image }}
+        run: |
+          test -n "$REVIEWED_IMAGE"
+          node scripts/validate-production-deployment.mjs \
+            --validate-rollback-image gateway "$REVIEWED_IMAGE"
 
-      - name: Require an immutable image for image-gen
+      - name: Require the exact reviewed image for image-gen
         if: inputs.target == 'image-gen'
         env:
           REVIEWED_IMAGE: ${{ inputs.rollback_image }}
         run: |
           test -n "$REVIEWED_IMAGE"
-          MANIFEST_IMAGE="$(node -p "require('./deploy/production/apps.json').apps['image-gen'].reviewedImage")"
-          if [[ "$REVIEWED_IMAGE" != "$MANIFEST_IMAGE" ]]; then
-            echo "image-gen image must exactly match the reviewed manifest digest" >&2
-            exit 1
-          fi
-          case "$REVIEWED_IMAGE" in
-            registry.fly.io/leaderbot-fb-image-gen@sha256:*) ;;
-            *) echo "image-gen requires an exact reviewed registry digest" >&2; exit 1 ;;
-          esac
+          node scripts/validate-production-deployment.mjs \
+            --validate-reviewed-image image-gen "$REVIEWED_IMAGE"
+
+      - name: Require the exact reviewed image for storage-proxy
+        if: inputs.target == 'storage-proxy'
+        env:
+          REVIEWED_IMAGE: ${{ inputs.rollback_image }}
+        run: |
+          test -n "$REVIEWED_IMAGE"
+          node scripts/validate-production-deployment.mjs \
+            --validate-reviewed-image storage-proxy "$REVIEWED_IMAGE"
+
+      - name: Require green CI for the exact artifact source
+        if: inputs.target == 'image-gen' || inputs.target == 'storage-proxy'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TARGET: ${{ inputs.target }}
+          REVIEWED_IMAGE: ${{ inputs.rollback_image }}
+        run: node scripts/validate-production-deployment.mjs --verify-reviewed-ci "$TARGET" "$REVIEWED_IMAGE"
 
       - name: Validate gateway release
         if: inputs.target == 'gateway'
@@ -107,13 +176,9 @@ jobs:
     if: inputs.target == 'gateway'
     needs: validate
     runs-on: ubuntu-latest
-    # Bounded steps total at most 70 minutes, reserving five for runner overhead.
-    timeout-minutes: 75
+    # Includes enough headroom for the full bounded rollback after a late failure.
+    timeout-minutes: 100
     environment: production
-    env:
-      FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
-      META_APP_ID: ${{ secrets.META_APP_ID }}
-      META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
     steps:
       - name: Checkout
         timeout-minutes: 3
@@ -127,35 +192,55 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Setup pinned flyctl
+      - name: Install exact verified flyctl
         timeout-minutes: 3
-        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master
-        with:
-          version: ${{ env.FLYCTL_VERSION }}
-
-      - name: Expose pinned flyctl compatibility command
-        timeout-minutes: 1
+        shell: bash
         run: |
-          flyctl version
-          ln -s "$(command -v flyctl)" "$RUNNER_TEMP/fly"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          install_root="$(mktemp -d "$RUNNER_TEMP/leaderbot-flyctl.XXXXXX")"
+          archive="$install_root/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          extract_dir="$install_root/extract"
+          bin_dir="$install_root/bin"
+          install -d -m 0700 "$extract_dir" "$bin_dir"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' \
+            "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90" \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$extract_dir" flyctl
+          test -f "$extract_dir/flyctl"
+          test ! -L "$extract_dir/flyctl"
+          install -m 0755 "$extract_dir/flyctl" "$bin_dir/flyctl"
+          ln -s flyctl "$bin_dir/fly"
+          version_output="$("$bin_dir/flyctl" version)"
+          [[ "$version_output" =~ ^flyctl\ v0\.4\.85([[:space:]]|$) ]]
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
 
       - name: Validate Fly configuration
         timeout-minutes: 2
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
         run: fly config validate --strict --config fly.toml
-
-      - name: Reject unsafe Machine drift
-        timeout-minutes: 5
-        run: node scripts/validate-production-deployment.mjs --live gateway --predeploy
 
       - name: Validate Meta callbacks
         timeout-minutes: 2
+        env:
+          META_APP_ID: ${{ secrets.META_APP_ID }}
+          META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
         run: node scripts/check-meta-callbacks.mjs
 
       - name: Record rollback release
         timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
         run: |
           mkdir -p "$RUNNER_TEMP/leaderbot-release"
+          printf '%s\n' "v1" > "$RUNNER_TEMP/leaderbot-release/recovery-protocol.txt"
           fly releases --app leaderbot-openclaw-gateway --image --json \
             > "$RUNNER_TEMP/leaderbot-release/before.json"
           fly image show --app leaderbot-openclaw-gateway --json \
@@ -169,19 +254,41 @@ jobs:
           node scripts/validate-production-deployment.mjs \
             --validate-rollback-image gateway "$rollback_image"
           printf '%s\n' "$rollback_image" > "$RUNNER_TEMP/leaderbot-release/rollback-image.txt"
-          (
-            cd "$RUNNER_TEMP/leaderbot-release"
-            fly config save --app leaderbot-openclaw-gateway --yes
-            mv fly.toml before.fly.toml
-          )
+          rollback_config_path="$(node scripts/validate-production-deployment.mjs \
+            --reviewed-rollback-config gateway "$rollback_image")"
+          cp "$rollback_config_path" "$RUNNER_TEMP/leaderbot-release/before.fly.toml"
+          live_config="$(fly config show --app leaderbot-openclaw-gateway)"
+          rollback_identity="$(jq -er '.env.LEADERBOT_DEPLOYMENT_IDENTITY // "none"' <<<"$live_config")"
+          [[ "$rollback_identity" =~ ^(none|deploy-[0-9]+-[0-9]+)$ ]]
+          printf '%s\n' "$rollback_identity" > "$RUNNER_TEMP/leaderbot-release/rollback-identity.txt"
           fly config validate --strict \
             --config "$RUNNER_TEMP/leaderbot-release/before.fly.toml"
+          node scripts/validate-production-deployment.mjs \
+            --verify-restored-release gateway "$rollback_image" \
+            "$RUNNER_TEMP/leaderbot-release/before.fly.toml" \
+            --expected-deployment-identity "$rollback_identity"
+
+      - name: Verify settled gateway predecessor
+        timeout-minutes: 3
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          prior_identity="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-identity.txt")"
+          rollback_image="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-image.txt")"
+          node scripts/validate-production-deployment.mjs \
+            --verify-settled-baseline gateway "$prior_identity" \
+            --expected-image "$rollback_image"
+          node scripts/validate-production-deployment.mjs \
+            --verify-deployment-candidate gateway "$prior_identity" \
+            "deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --expected-source-sha "$GITHUB_SHA" \
+            --expected-live-image "$rollback_image"
 
       - name: Upload gateway rollback plan
         timeout-minutes: 3
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: gateway-rollback-${{ github.run_id }}
+          name: gateway-rollback-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/leaderbot-release
           if-no-files-found: error
           retention-days: 30
@@ -190,17 +297,19 @@ jobs:
         id: deploy
         timeout-minutes: 20
         env:
-          ROLLBACK_IMAGE: ${{ inputs.rollback_image }}
+          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
+          FLY_GATEWAY_REVIEWED_IMAGE: ${{ inputs.rollback_image }}
         run: |
-          args=(--remote-only --yes --image-label "git-${GITHUB_SHA}")
-          if [[ -n "$ROLLBACK_IMAGE" ]]; then
-            args+=(--image "$ROLLBACK_IMAGE")
-          fi
+          test -n "$FLY_GATEWAY_REVIEWED_IMAGE"
+          args=(--remote-only --yes --image-label "git-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --env "LEADERBOT_DEPLOYMENT_IDENTITY=deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}")
           npm run deploy:gateway -- "${args[@]}"
 
       - name: Verify deployed gateway drift
         timeout-minutes: 5
-        run: node scripts/validate-production-deployment.mjs --live gateway
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
+        run: node scripts/validate-production-deployment.mjs --live gateway --expected-deployment-identity "deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
       - name: Smoke-test gateway
         timeout-minutes: 4
@@ -213,20 +322,30 @@ jobs:
       - name: Restore captured gateway release
         if: failure() && steps.deploy.outcome != 'skipped'
         timeout-minutes: 15
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
         run: |
           rollback_image="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-image.txt")"
           rollback_config="$RUNNER_TEMP/leaderbot-release/before.fly.toml"
+          prior_identity="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-identity.txt")"
+          [[ "$prior_identity" =~ ^(none|deploy-[0-9]+-[0-9]+)$ ]]
           node scripts/validate-production-deployment.mjs \
             --validate-rollback-image gateway "$rollback_image"
           fly config validate --strict --config "$rollback_config"
           npm run deploy:gateway -- --remote-only --yes \
             --config "$rollback_config" --image "$rollback_image" \
-            --image-label "rollback-${GITHUB_RUN_ID}"
+            --image-label "rollback-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --env "LEADERBOT_DEPLOYMENT_IDENTITY=$prior_identity"
           fly scale count 1 --process-group app \
             --app leaderbot-openclaw-gateway --yes
+          node scripts/validate-production-deployment.mjs \
+            --verify-restored-release gateway "$rollback_image" "$rollback_config" \
+            --expected-deployment-identity "$prior_identity"
 
       - name: Record deployed release
         if: always() && steps.deploy.outcome != 'skipped'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_GATEWAY_DEPLOY_TOKEN }}
         run: |
           fly releases --app leaderbot-openclaw-gateway --image --json \
             > "$RUNNER_TEMP/leaderbot-release/after.json"
@@ -235,7 +354,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: gateway-release-${{ github.run_id }}
+          name: gateway-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/leaderbot-release
           if-no-files-found: error
           retention-days: 30
@@ -245,13 +364,9 @@ jobs:
     if: inputs.target == 'image-gen'
     needs: validate
     runs-on: ubuntu-latest
-    # Bounded steps total at most 70 minutes, reserving five for runner overhead.
-    timeout-minutes: 75
+    # Includes enough headroom for the full bounded rollback after a late failure.
+    timeout-minutes: 150
     environment: production
-    env:
-      FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
-      META_APP_ID: ${{ secrets.META_APP_ID }}
-      META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
     steps:
       - name: Checkout
         timeout-minutes: 3
@@ -265,36 +380,109 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Setup pinned flyctl
+      - name: Install exact verified flyctl
         timeout-minutes: 3
-        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master
-        with:
-          version: ${{ env.FLYCTL_VERSION }}
-
-      - name: Expose pinned flyctl compatibility command
-        timeout-minutes: 1
+        shell: bash
         run: |
-          flyctl version
-          ln -s "$(command -v flyctl)" "$RUNNER_TEMP/fly"
-          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          install_root="$(mktemp -d "$RUNNER_TEMP/leaderbot-flyctl.XXXXXX")"
+          archive="$install_root/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          extract_dir="$install_root/extract"
+          bin_dir="$install_root/bin"
+          install -d -m 0700 "$extract_dir" "$bin_dir"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' \
+            "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90" \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$extract_dir" flyctl
+          test -f "$extract_dir/flyctl"
+          test ! -L "$extract_dir/flyctl"
+          install -m 0755 "$extract_dir/flyctl" "$bin_dir/flyctl"
+          ln -s flyctl "$bin_dir/fly"
+          version_output="$("$bin_dir/flyctl" version)"
+          [[ "$version_output" =~ ^flyctl\ v0\.4\.85([[:space:]]|$) ]]
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
 
       - name: Validate Fly configuration
         timeout-minutes: 2
         working-directory: apps/image-gen
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
         run: fly config validate --strict --config fly.toml
 
-      - name: Reject unsafe Machine drift
-        timeout-minutes: 5
-        run: node scripts/validate-production-deployment.mjs --live image-gen --predeploy
+      - name: Verify reviewed image-gen artifact provenance
+        timeout-minutes: 10
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          REVIEWED_IMAGE: ${{ inputs.rollback_image }}
+        run: |
+          source_commit="$(node scripts/validate-production-deployment.mjs \
+            --reviewed-source-commit image-gen "$REVIEWED_IMAGE")"
+          artifact_kind="$(node scripts/validate-production-deployment.mjs \
+            --reviewed-artifact-kind image-gen "$REVIEWED_IMAGE")"
+          expected_schema_minimum="$(node scripts/validate-production-deployment.mjs \
+            --reviewed-schema-minimum image-gen "$REVIEWED_IMAGE")"
+          expected_schema_maximum="$(node scripts/validate-production-deployment.mjs \
+            --reviewed-schema-maximum image-gen "$REVIEWED_IMAGE")"
+          fly auth docker
+          docker pull "$REVIEWED_IMAGE"
+          signer="$GITHUB_REPOSITORY/.github/workflows/build-production-artifacts.yml"
+          gh attestation verify "oci://$REVIEWED_IMAGE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$signer" \
+            --source-digest "$source_commit" \
+            --source-ref refs/heads/main \
+            --deny-self-hosted-runners
+          actual_source_commit="$(docker image inspect \
+            --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+            "$REVIEWED_IMAGE")"
+          test "$actual_source_commit" = "$source_commit"
+          actual_schema_minimum="$(docker image inspect \
+            --format '{{ index .Config.Labels "io.leaderbot.schema.minimum" }}' \
+            "$REVIEWED_IMAGE")"
+          actual_schema_maximum="$(docker image inspect \
+            --format '{{ index .Config.Labels "io.leaderbot.schema.maximum" }}' \
+            "$REVIEWED_IMAGE")"
+          test "$actual_schema_minimum" = "$expected_schema_minimum"
+          test "$actual_schema_maximum" = "$expected_schema_maximum"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.artifact.kind" }}' "$REVIEWED_IMAGE")" = "$artifact_kind"
+          test "$(docker run --rm --entrypoint cat "$REVIEWED_IMAGE" /app/.leaderbot-artifact-kind)" = "$artifact_kind"
+          if [[ "$artifact_kind" = "migration-bridge" ]]; then
+            expected_base="$(jq -er '.apps["image-gen"].databaseSchemaTransition.legacyBaseImage' deploy/production/apps.json)"
+            predicate_type="$(jq -er '.apps["image-gen"].databaseSchemaTransition.bridgePredicateType' deploy/production/apps.json)"
+            actual_base="$(gh attestation verify "oci://$REVIEWED_IMAGE" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$signer" \
+              --source-digest "$source_commit" \
+              --source-ref refs/heads/main \
+              --predicate-type "$predicate_type" \
+              --deny-self-hosted-runners \
+              --jq '.[0].verificationResult.statement.predicate.baseImage')"
+            test "$actual_base" = "$expected_base"
+          fi
 
       - name: Validate Meta callbacks
         timeout-minutes: 2
+        env:
+          META_APP_ID: ${{ secrets.META_APP_ID }}
+          META_APP_SECRET: ${{ secrets.META_APP_SECRET }}
         run: node scripts/check-meta-callbacks.mjs
 
       - name: Record rollback release
         timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "$RUNNER_TEMP/leaderbot-release"
+          printf '%s\n' "v1" > "$RUNNER_TEMP/leaderbot-release/recovery-protocol.txt"
           fly releases --app leaderbot-fb-image-gen --image --json \
             > "$RUNNER_TEMP/leaderbot-release/before.json"
           fly image show --app leaderbot-fb-image-gen --json \
@@ -305,38 +493,124 @@ jobs:
             --resolve-release-image image-gen "$release_image" \
             "$RUNNER_TEMP/leaderbot-release/images.json")"
           test -n "$rollback_image"
-          node scripts/validate-production-deployment.mjs \
-            --validate-rollback-image image-gen "$rollback_image"
+          rollback_kind="$(node scripts/validate-production-deployment.mjs \
+            --reviewed-artifact-kind image-gen "$rollback_image")"
+          if [[ "$rollback_kind" = "legacy-bootstrap" ]]; then
+            node scripts/validate-production-deployment.mjs \
+              --validate-legacy-transition-rollback image-gen "$rollback_image"
+            rollback_source_commit=""
+          else
+            node scripts/validate-production-deployment.mjs \
+              --validate-rollback-image image-gen "$rollback_image"
+            rollback_source_commit="$(node scripts/validate-production-deployment.mjs \
+              --reviewed-source-commit image-gen "$rollback_image")"
+          fi
+          rollback_schema_minimum="$(node scripts/validate-production-deployment.mjs \
+            --reviewed-schema-minimum image-gen "$rollback_image")"
+          rollback_schema_maximum="$(node scripts/validate-production-deployment.mjs \
+            --reviewed-schema-maximum image-gen "$rollback_image")"
+          rollback_schema_phase="$(jq -er '.apps["image-gen"].databaseSchemaPhase' deploy/production/apps.json)"
+          [[ "$rollback_schema_phase" =~ ^(0015_base|0016_expand)$ ]]
+          jq -e --arg image "$rollback_image" --arg phase "$rollback_schema_phase" '.apps["image-gen"].reviewedRollbackImageSchemaPhases[$image] | index($phase) != null' deploy/production/apps.json > /dev/null
+          docker pull "$rollback_image"
+          if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then
+            signer="$GITHUB_REPOSITORY/.github/workflows/build-production-artifacts.yml"
+            gh attestation verify "oci://$rollback_image" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$signer" \
+              --source-digest "$rollback_source_commit" \
+              --source-ref refs/heads/main \
+              --deny-self-hosted-runners
+            actual_rollback_source_commit="$(docker image inspect \
+              --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+              "$rollback_image")"
+            test "$actual_rollback_source_commit" = "$rollback_source_commit"
+            test "$(docker run --rm --entrypoint cat "$rollback_image" /app/.leaderbot-artifact-kind)" = "$rollback_kind"
+          fi
+          if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then
+            actual_rollback_schema_minimum="$(docker image inspect \
+              --format '{{ index .Config.Labels "io.leaderbot.schema.minimum" }}' \
+              "$rollback_image")"
+            actual_rollback_schema_maximum="$(docker image inspect \
+              --format '{{ index .Config.Labels "io.leaderbot.schema.maximum" }}' \
+              "$rollback_image")"
+            test "$actual_rollback_schema_minimum" = "$rollback_schema_minimum"
+            test "$actual_rollback_schema_maximum" = "$rollback_schema_maximum"
+          fi
+          if [[ "$rollback_kind" = "migration-bridge" ]]; then
+            expected_base="$(jq -er '.apps["image-gen"].databaseSchemaTransition.legacyBaseImage' deploy/production/apps.json)"
+            predicate_type="$(jq -er '.apps["image-gen"].databaseSchemaTransition.bridgePredicateType' deploy/production/apps.json)"
+            actual_base="$(gh attestation verify "oci://$rollback_image" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$signer" \
+              --source-digest "$rollback_source_commit" \
+              --source-ref refs/heads/main \
+              --predicate-type "$predicate_type" \
+              --deny-self-hosted-runners \
+              --jq '.[0].verificationResult.statement.predicate.baseImage')"
+            test "$actual_base" = "$expected_base"
+          fi
           printf '%s\n' "$rollback_image" > "$RUNNER_TEMP/leaderbot-release/rollback-image.txt"
-          (
-            cd "$RUNNER_TEMP/leaderbot-release"
-            fly config save --app leaderbot-fb-image-gen --yes
-            mv fly.toml before.fly.toml
-          )
+          printf '%s\n' "$rollback_schema_phase" > "$RUNNER_TEMP/leaderbot-release/rollback-schema-phase.txt"
+          rollback_config_path="$(node scripts/validate-production-deployment.mjs \
+            --reviewed-rollback-config image-gen "$rollback_image")"
+          cp "$rollback_config_path" "$RUNNER_TEMP/leaderbot-release/before.fly.toml"
+          live_config="$(fly config show --app leaderbot-fb-image-gen)"
+          rollback_identity="$(jq -er '.env.LEADERBOT_DEPLOYMENT_IDENTITY // "none"' <<<"$live_config")"
+          [[ "$rollback_identity" =~ ^(none|deploy-[0-9]+-[0-9]+)$ ]]
+          printf '%s\n' "$rollback_identity" > "$RUNNER_TEMP/leaderbot-release/rollback-identity.txt"
           fly config validate --strict \
             --config "$RUNNER_TEMP/leaderbot-release/before.fly.toml"
+          node scripts/validate-production-deployment.mjs \
+            --verify-restored-release image-gen "$rollback_image" \
+            "$RUNNER_TEMP/leaderbot-release/before.fly.toml" \
+            --expected-deployment-identity "$rollback_identity"
+
+      - name: Verify settled image-gen predecessor
+        timeout-minutes: 3
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          prior_identity="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-identity.txt")"
+          rollback_image="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-image.txt")"
+          node scripts/validate-production-deployment.mjs \
+            --verify-settled-baseline image-gen "$prior_identity" \
+            --expected-image "$rollback_image"
+          node scripts/validate-production-deployment.mjs \
+            --verify-deployment-candidate image-gen "$prior_identity" \
+            "deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --expected-source-sha "$GITHUB_SHA" \
+            --expected-live-image "$rollback_image"
+
+      - name: Remove image-gen registry credential
+        if: always()
+        run: docker logout registry.fly.io
 
       - name: Upload image-gen rollback plan
         timeout-minutes: 3
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: image-gen-rollback-${{ github.run_id }}
+          name: image-gen-rollback-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/leaderbot-release
           if-no-files-found: error
           retention-days: 30
 
       - name: Deploy reviewed image-gen config
         id: deploy
-        timeout-minutes: 20
+        timeout-minutes: 35
         env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
           FLY_IMAGE_GEN_REVIEWED_IMAGE: ${{ inputs.rollback_image }}
         run: |
-          args=(--remote-only --yes --image-label "git-${GITHUB_SHA}")
+          args=(--remote-only --yes --image-label "git-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --env "LEADERBOT_DEPLOYMENT_IDENTITY=deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}")
           npm run deploy:image-gen -- "${args[@]}"
 
       - name: Verify deployed image-gen drift
         timeout-minutes: 5
-        run: node scripts/validate-production-deployment.mjs --live image-gen
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+        run: node scripts/validate-production-deployment.mjs --live image-gen --expected-deployment-identity "deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
       - name: Smoke-test image-gen
         timeout-minutes: 4
@@ -353,24 +627,54 @@ jobs:
 
       - name: Restore captured image-gen release
         if: failure() && steps.deploy.outcome != 'skipped'
-        timeout-minutes: 15
+        timeout-minutes: 35
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
         run: |
           rollback_image="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-image.txt")"
           rollback_config="$RUNNER_TEMP/leaderbot-release/before.fly.toml"
+          prior_identity="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-identity.txt")"
+          [[ "$prior_identity" =~ ^(none|deploy-[0-9]+-[0-9]+)$ ]]
           node scripts/validate-production-deployment.mjs \
             --validate-rollback-image image-gen "$rollback_image"
           fly config validate --strict --config "$rollback_config"
           FLY_IMAGE_GEN_REVIEWED_IMAGE="$rollback_image" \
             npm run deploy:image-gen -- --remote-only --yes \
             --config "$rollback_config" \
-            --image-label "rollback-${GITHUB_RUN_ID}"
+            --image-label "rollback-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --env "LEADERBOT_DEPLOYMENT_IDENTITY=$prior_identity"
           fly scale count 2 --process-group app \
             --app leaderbot-fb-image-gen --yes
           fly scale count 2 --process-group worker \
             --app leaderbot-fb-image-gen --yes
 
+      - name: Verify restored image-gen release
+        if: failure() && steps.deploy.outcome != 'skipped'
+        timeout-minutes: 6
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+        run: |
+          rollback_image="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-image.txt")"
+          rollback_config="$RUNNER_TEMP/leaderbot-release/before.fly.toml"
+          prior_identity="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-identity.txt")"
+          node scripts/validate-production-deployment.mjs \
+            --verify-restored-release image-gen "$rollback_image" "$rollback_config" \
+            --expected-deployment-identity "$prior_identity"
+
+          health_body="$(mktemp)"
+          health_status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$health_body" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/healthz)"
+          test "$health_status" = "200"
+          grep -Fx "ok" "$health_body"
+
+          ready_body="$(mktemp)"
+          ready_status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$ready_body" --write-out '%{http_code}' https://leaderbot-fb-image-gen.fly.dev/readyz)"
+          test "$ready_status" = "200"
+          jq -e '.ok == true' "$ready_body"
+
       - name: Record deployed release
         if: always() && steps.deploy.outcome != 'skipped'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
         run: |
           fly releases --app leaderbot-fb-image-gen --image --json \
             > "$RUNNER_TEMP/leaderbot-release/after.json"
@@ -379,7 +683,290 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: image-gen-release-${{ github.run_id }}
+          name: image-gen-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/leaderbot-release
           if-no-files-found: error
           retention-days: 30
+
+  deploy-storage-proxy:
+    name: Deploy storage-proxy
+    if: inputs.target == 'storage-proxy'
+    needs: validate
+    runs-on: ubuntu-latest
+    # Includes enough headroom for the full bounded rollback after a late failure.
+    timeout-minutes: 110
+    environment: production
+    steps:
+      - name: Checkout
+        timeout-minutes: 3
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        timeout-minutes: 3
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+
+      - name: Install exact verified flyctl
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          install_root="$(mktemp -d "$RUNNER_TEMP/leaderbot-flyctl.XXXXXX")"
+          archive="$install_root/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          extract_dir="$install_root/extract"
+          bin_dir="$install_root/bin"
+          install -d -m 0700 "$extract_dir" "$bin_dir"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' \
+            "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90" \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$extract_dir" flyctl
+          test -f "$extract_dir/flyctl"
+          test ! -L "$extract_dir/flyctl"
+          install -m 0755 "$extract_dir/flyctl" "$bin_dir/flyctl"
+          ln -s flyctl "$bin_dir/fly"
+          version_output="$("$bin_dir/flyctl" version)"
+          [[ "$version_output" =~ ^flyctl\ v0\.4\.85([[:space:]]|$) ]]
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+
+      - name: Validate Fly configuration
+        timeout-minutes: 2
+        working-directory: apps/image-gen/storage-proxy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_STORAGE_PROXY_DEPLOY_TOKEN }}
+        run: fly config validate --strict --config fly.toml
+
+      - name: Verify reviewed storage-proxy artifact provenance
+        timeout-minutes: 10
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_STORAGE_PROXY_DEPLOY_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          REVIEWED_IMAGE: ${{ inputs.rollback_image }}
+        run: |
+          source_commit="$(node scripts/validate-production-deployment.mjs \
+            --reviewed-source-commit storage-proxy "$REVIEWED_IMAGE")"
+          fly auth docker
+          docker pull "$REVIEWED_IMAGE"
+          gh attestation verify "oci://$REVIEWED_IMAGE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/build-production-artifacts.yml" \
+            --source-digest "$source_commit" \
+            --source-ref refs/heads/main \
+            --deny-self-hosted-runners
+          actual_source_commit="$(docker image inspect \
+            --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+            "$REVIEWED_IMAGE")"
+          test "$actual_source_commit" = "$source_commit"
+
+      - name: Record rollback release
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_STORAGE_PROXY_DEPLOY_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/leaderbot-release"
+          printf '%s\n' "v1" > "$RUNNER_TEMP/leaderbot-release/recovery-protocol.txt"
+          fly releases --app leaderbot-storage-proxy --image --json \
+            > "$RUNNER_TEMP/leaderbot-release/before.json"
+          fly image show --app leaderbot-storage-proxy --json \
+            > "$RUNNER_TEMP/leaderbot-release/images.json"
+          release_image="$(jq -er '[.[] | select((.Status == "complete" or .Status == "running") and (.ImageRef | type == "string"))] | max_by(.Version).ImageRef // empty' \
+            "$RUNNER_TEMP/leaderbot-release/before.json")"
+          rollback_image="$(node scripts/validate-production-deployment.mjs \
+            --resolve-release-image storage-proxy "$release_image" \
+            "$RUNNER_TEMP/leaderbot-release/images.json")"
+          test -n "$rollback_image"
+          rollback_kind="$(node scripts/validate-production-deployment.mjs \
+            --reviewed-artifact-kind storage-proxy "$rollback_image")"
+          node scripts/validate-production-deployment.mjs \
+            --validate-rollback-image storage-proxy "$rollback_image"
+          if [[ "$rollback_kind" = "legacy-bootstrap" ]]; then
+            rollback_source_commit=""
+          else
+            rollback_source_commit="$(node scripts/validate-production-deployment.mjs \
+              --reviewed-source-commit storage-proxy "$rollback_image")"
+          fi
+          docker pull "$rollback_image"
+          if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then
+            gh attestation verify "oci://$rollback_image" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/build-production-artifacts.yml" \
+              --source-digest "$rollback_source_commit" \
+              --source-ref refs/heads/main \
+              --deny-self-hosted-runners
+            actual_rollback_source_commit="$(docker image inspect \
+              --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' \
+              "$rollback_image")"
+            test "$actual_rollback_source_commit" = "$rollback_source_commit"
+          fi
+          printf '%s\n' "$rollback_image" > "$RUNNER_TEMP/leaderbot-release/rollback-image.txt"
+          rollback_config_path="$(node scripts/validate-production-deployment.mjs \
+            --reviewed-rollback-config storage-proxy "$rollback_image")"
+          cp "$rollback_config_path" "$RUNNER_TEMP/leaderbot-release/before.fly.toml"
+          live_config="$(fly config show --app leaderbot-storage-proxy)"
+          rollback_identity="$(jq -er '.env.LEADERBOT_DEPLOYMENT_IDENTITY // "none"' <<<"$live_config")"
+          [[ "$rollback_identity" =~ ^(none|deploy-[0-9]+-[0-9]+)$ ]]
+          printf '%s\n' "$rollback_identity" > "$RUNNER_TEMP/leaderbot-release/rollback-identity.txt"
+          fly config validate --strict \
+            --config "$RUNNER_TEMP/leaderbot-release/before.fly.toml"
+          node scripts/validate-production-deployment.mjs \
+            --verify-restored-release storage-proxy "$rollback_image" \
+            "$RUNNER_TEMP/leaderbot-release/before.fly.toml" \
+            --expected-deployment-identity "$rollback_identity"
+
+      - name: Verify settled storage-proxy predecessor
+        timeout-minutes: 3
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          prior_identity="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-identity.txt")"
+          rollback_image="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-image.txt")"
+          node scripts/validate-production-deployment.mjs \
+            --verify-settled-baseline storage-proxy "$prior_identity" \
+            --expected-image "$rollback_image"
+          node scripts/validate-production-deployment.mjs \
+            --verify-deployment-candidate storage-proxy "$prior_identity" \
+            "deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --expected-source-sha "$GITHUB_SHA" \
+            --expected-live-image "$rollback_image"
+
+      - name: Remove storage-proxy registry credential
+        if: always()
+        run: docker logout registry.fly.io
+
+      - name: Upload storage-proxy rollback plan
+        timeout-minutes: 3
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: storage-proxy-rollback-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-release
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Deploy reviewed storage-proxy config
+        id: deploy
+        timeout-minutes: 20
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_STORAGE_PROXY_DEPLOY_TOKEN }}
+          FLY_STORAGE_PROXY_REVIEWED_IMAGE: ${{ inputs.rollback_image }}
+        run: |
+          args=(--remote-only --yes --image-label "git-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --env "LEADERBOT_DEPLOYMENT_IDENTITY=deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}")
+          npm run deploy:storage-proxy -- "${args[@]}"
+
+      - name: Verify deployed storage-proxy drift
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_STORAGE_PROXY_DEPLOY_TOKEN }}
+        run: node scripts/validate-production-deployment.mjs --live storage-proxy --expected-deployment-identity "deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+      - name: Smoke-test storage-proxy
+        timeout-minutes: 4
+        run: |
+          body="$(mktemp)"
+          status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/healthz)"
+          test "$status" = "200"
+          grep -Fx "ok" "$body"
+
+      - name: Restore captured storage-proxy release
+        if: failure() && steps.deploy.outcome != 'skipped'
+        timeout-minutes: 15
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_STORAGE_PROXY_DEPLOY_TOKEN }}
+        run: |
+          rollback_image="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-image.txt")"
+          rollback_config="$RUNNER_TEMP/leaderbot-release/before.fly.toml"
+          prior_identity="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-identity.txt")"
+          [[ "$prior_identity" =~ ^(none|deploy-[0-9]+-[0-9]+)$ ]]
+          node scripts/validate-production-deployment.mjs \
+            --validate-rollback-image storage-proxy "$rollback_image"
+          fly config validate --strict --config "$rollback_config"
+          FLY_STORAGE_PROXY_REVIEWED_IMAGE="$rollback_image" \
+            npm run deploy:storage-proxy -- --remote-only --yes \
+            --config "$rollback_config" \
+            --image-label "rollback-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --env "LEADERBOT_DEPLOYMENT_IDENTITY=$prior_identity"
+          fly scale count 1 --process-group app \
+            --app leaderbot-storage-proxy --yes
+
+      - name: Verify restored storage-proxy release
+        if: failure() && steps.deploy.outcome != 'skipped'
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_STORAGE_PROXY_DEPLOY_TOKEN }}
+        run: |
+          rollback_image="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-image.txt")"
+          rollback_config="$RUNNER_TEMP/leaderbot-release/before.fly.toml"
+          prior_identity="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-identity.txt")"
+          node scripts/validate-production-deployment.mjs \
+            --verify-restored-release storage-proxy "$rollback_image" "$rollback_config" \
+            --expected-deployment-identity "$prior_identity"
+          body="$(mktemp)"
+          status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/healthz)"
+          test "$status" = "200"
+          grep -Fx "ok" "$body"
+
+      - name: Record deployed release
+        if: always() && steps.deploy.outcome != 'skipped'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_STORAGE_PROXY_DEPLOY_TOKEN }}
+        run: |
+          fly releases --app leaderbot-storage-proxy --image --json \
+            > "$RUNNER_TEMP/leaderbot-release/after.json"
+
+      - name: Upload rollback metadata
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: storage-proxy-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-release
+          if-no-files-found: error
+          retention-days: 30
+
+  recover-gateway:
+    name: Finish a failed gateway rollback
+    needs:
+      - validate
+      - deploy-gateway
+    if: ${{ always() && (failure() || cancelled()) && inputs.target == 'gateway' && needs.validate.result == 'success' && (needs.deploy-gateway.result == 'failure' || needs.deploy-gateway.result == 'cancelled') }}
+    uses: ./.github/workflows/reconcile-production-deployment.yml
+    with:
+      invocation_mode: inline
+      recovery_run_id: ${{ github.run_id }}
+      recovery_run_attempt: ${{ github.run_attempt }}
+      target: gateway
+
+  recover-image-gen:
+    name: Finish a failed image-gen rollback
+    needs:
+      - validate
+      - deploy-image-gen
+    if: ${{ always() && (failure() || cancelled()) && inputs.target == 'image-gen' && needs.validate.result == 'success' && (needs.deploy-image-gen.result == 'failure' || needs.deploy-image-gen.result == 'cancelled') }}
+    uses: ./.github/workflows/reconcile-production-deployment.yml
+    with:
+      invocation_mode: inline
+      recovery_run_id: ${{ github.run_id }}
+      recovery_run_attempt: ${{ github.run_attempt }}
+      target: image-gen
+
+  recover-storage-proxy:
+    name: Finish a failed storage-proxy rollback
+    needs:
+      - validate
+      - deploy-storage-proxy
+    if: ${{ always() && (failure() || cancelled()) && inputs.target == 'storage-proxy' && needs.validate.result == 'success' && (needs.deploy-storage-proxy.result == 'failure' || needs.deploy-storage-proxy.result == 'cancelled') }}
+    uses: ./.github/workflows/reconcile-production-deployment.yml
+    with:
+      invocation_mode: inline
+      recovery_run_id: ${{ github.run_id }}
+      recovery_run_attempt: ${{ github.run_attempt }}
+      target: storage-proxy

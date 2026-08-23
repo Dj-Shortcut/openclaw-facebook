@@ -1,8 +1,9 @@
 import express from "express";
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import {
   DeleteObjectCommand,
+  GetBucketLifecycleConfigurationCommand,
   HeadObjectCommand,
   PutObjectCommand,
   S3Client,
@@ -17,14 +18,54 @@ type ProxyEnv = {
   r2SecretAccessKey: string;
   port: number;
   maxUploadBytes: number;
+  storageOperationTimeoutMs: number;
+  allowLegacyBearerAuth: boolean;
+  allowLegacyObjectKeys: boolean;
 };
 
 const DEFAULT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const DEFAULT_STORAGE_OPERATION_TIMEOUT_MS = 60_000;
+const MAX_STORAGE_OPERATION_TIMEOUT_MS = 5 * 60_000;
+const REQUIRED_LIFECYCLE_RULES = [
+  {
+    id: "expire-inbound-source-after-30-days",
+    prefix: "inbound-source/",
+    expirationDays: 30,
+  },
+  {
+    id: "expire-generated-images-after-30-days",
+    prefix: "generated/images/",
+    expirationDays: 30,
+  },
+  {
+    id: "expire-generated-videos-after-30-days",
+    prefix: "generated/videos/",
+    expirationDays: 30,
+  },
+] as const;
+const STORAGE_SIGNATURE_MAX_FUTURE_SECONDS = 120;
+const STORAGE_SIGNATURE_CLOCK_SKEW_SECONDS = 5;
+const LEGACY_STORAGE_SCOPE = "legacy-v1";
+const LEGACY_OBJECT_KEY_PATTERN =
+  /^(?:inbound-source|generated\/images|generated\/videos)\/[A-Za-z0-9][A-Za-z0-9._-]{0,200}$/u;
+const SCOPED_OBJECT_KEY_PATTERN =
+  /^(inbound-source|generated\/images|generated\/videos)\/v1\/workspace-([1-9]\d*)\/connection-([1-9]\d*)\/binding-([1-9]\d*)\/privacy-([1-9]\d*)\/user-([a-f0-9]{64})\/([^/]+)$/u;
+const IMAGE_FILE_PATTERN =
+  /^[1-9]\d{9,15}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:jpg|png|webp)$/u;
+const VIDEO_FILE_PATTERN =
+  /^[1-9]\d{9,15}-[A-Za-z0-9][A-Za-z0-9_-]{0,79}\.mp4$/u;
 
 class PayloadTooLargeError extends Error {
   constructor(readonly maxBytes: number) {
     super("payload_too_large");
     this.name = "PayloadTooLargeError";
+  }
+}
+
+export class StorageOperationTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super(`storage_operation_timed_out_after_${timeoutMs}ms`);
+    this.name = "StorageOperationTimeoutError";
   }
 }
 
@@ -53,7 +94,7 @@ function loadDotEnvFromDisk(): void {
 
     let value = trimmed.slice(separatorIndex + 1).trim();
     if (
-      (value.startsWith("\"") && value.endsWith("\"")) ||
+      (value.startsWith('"') && value.endsWith('"')) ||
       (value.startsWith("'") && value.endsWith("'"))
     ) {
       value = value.slice(1, -1);
@@ -128,12 +169,28 @@ function readPositiveIntegerEnv(name: string, fallback: number): number {
   return value;
 }
 
-function ensureTrailingSlash(value: string): string {
-  return value.endsWith("/") ? value : `${value}/`;
+function readBoundedPositiveIntegerEnv(
+  name: string,
+  fallback: number,
+  maximum: number
+): number {
+  const value = readPositiveIntegerEnv(name, fallback);
+  if (value > maximum) {
+    throw new Error(`${name} must be at most ${maximum}`);
+  }
+  return value;
 }
 
-function normalizeObjectKey(value: string): string {
-  return value.replace(/^\/+/, "").trim();
+function readBooleanEnv(name: string): boolean {
+  const value = readEnv(name).trim();
+  if (!value) return false;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`${name} must be true or false`);
+}
+
+function ensureTrailingSlash(value: string): string {
+  return value.endsWith("/") ? value : `${value}/`;
 }
 
 function buildR2Endpoint(accountId: string): string {
@@ -146,7 +203,19 @@ function loadConfig(): ProxyEnv {
   const configuredEndpoint = readEnv("R2_ENDPOINT").trim();
 
   const publicBaseUrl = getEnv("PUBLIC_BASE_URL");
-  new URL(publicBaseUrl);
+  const parsedPublicBaseUrl = new URL(publicBaseUrl);
+  if (
+    (process.env.NODE_ENV === "production" &&
+      parsedPublicBaseUrl.protocol !== "https:") ||
+    (parsedPublicBaseUrl.protocol !== "https:" &&
+      parsedPublicBaseUrl.protocol !== "http:") ||
+    parsedPublicBaseUrl.username ||
+    parsedPublicBaseUrl.password ||
+    parsedPublicBaseUrl.search ||
+    parsedPublicBaseUrl.hash
+  ) {
+    throw new Error("PUBLIC_BASE_URL must be a trusted HTTPS origin/base path");
+  }
 
   return {
     forgeApiKey: getEnv("FORGE_API_KEY"),
@@ -160,6 +229,13 @@ function loadConfig(): ProxyEnv {
       "MAX_UPLOAD_BYTES",
       DEFAULT_MAX_UPLOAD_BYTES
     ),
+    storageOperationTimeoutMs: readBoundedPositiveIntegerEnv(
+      "STORAGE_OPERATION_TIMEOUT_MS",
+      DEFAULT_STORAGE_OPERATION_TIMEOUT_MS,
+      MAX_STORAGE_OPERATION_TIMEOUT_MS
+    ),
+    allowLegacyBearerAuth: readBooleanEnv("STORAGE_ALLOW_LEGACY_BEARER_AUTH"),
+    allowLegacyObjectKeys: readBooleanEnv("STORAGE_ALLOW_LEGACY_KEYS"),
   };
 }
 
@@ -172,11 +248,223 @@ function createS3Client(config: ProxyEnv): S3Client {
       accessKeyId: config.r2AccessKeyId,
       secretAccessKey: config.r2SecretAccessKey,
     },
+    // One bounded attempt keeps the worst-case operation window far below the
+    // Messenger privacy-fence cooldown. Application-level retries use a new,
+    // independently inventoried operation instead of hidden SDK retries.
+    maxAttempts: 1,
   });
 }
 
+export async function runStorageOperationWithDeadline<T>(
+  operation: (abortSignal: AbortSignal) => Promise<T>,
+  timeoutMs: number
+): Promise<T> {
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs <= 0 ||
+    timeoutMs > MAX_STORAGE_OPERATION_TIMEOUT_MS
+  ) {
+    throw new Error("Storage operation timeout is outside the safe range");
+  }
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new StorageOperationTimeoutError(timeoutMs));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([operation(controller.signal), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+type R2LifecycleRule = {
+  ID?: string;
+  Status?: string;
+  Prefix?: string;
+  Filter?: { Prefix?: string };
+  Expiration?: { Days?: number };
+};
+
+export function assertRequiredR2LifecycleRules(
+  rules: readonly R2LifecycleRule[]
+): void {
+  for (const required of REQUIRED_LIFECYCLE_RULES) {
+    const matchingRule = rules.find(rule => rule.ID === required.id);
+    const prefix = matchingRule?.Filter?.Prefix ?? matchingRule?.Prefix;
+    if (
+      matchingRule?.Status !== "Enabled" ||
+      prefix !== required.prefix ||
+      matchingRule.Expiration?.Days !== required.expirationDays
+    ) {
+      throw new Error(
+        `Required R2 lifecycle rule is missing or unsafe: ${required.id}`
+      );
+    }
+  }
+}
+
+async function verifyRequiredR2LifecycleConfig(
+  config: ProxyEnv
+): Promise<void> {
+  const s3 = createS3Client(config);
+  const lifecycle = await runStorageOperationWithDeadline(
+    abortSignal =>
+      s3.send(
+        new GetBucketLifecycleConfigurationCommand({
+          Bucket: config.r2Bucket,
+        }),
+        { abortSignal }
+      ),
+    config.storageOperationTimeoutMs
+  );
+  assertRequiredR2LifecycleRules(lifecycle.Rules ?? []);
+}
+
 function buildPublicUrl(config: ProxyEnv, objectKey: string): string {
-  return new URL(normalizeObjectKey(objectKey), ensureTrailingSlash(config.publicBaseUrl)).toString();
+  return new URL(
+    objectKey,
+    ensureTrailingSlash(config.publicBaseUrl)
+  ).toString();
+}
+
+type ParsedStorageObjectKey = Readonly<{
+  objectKey: string;
+  authorizationScope: string;
+  legacy: boolean;
+}>;
+
+function isSafePositiveInteger(value: string): boolean {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0;
+}
+
+export function parseStorageObjectKey(
+  objectKey: string,
+  allowLegacyObjectKeys = false
+): ParsedStorageObjectKey | null {
+  if (
+    !objectKey ||
+    objectKey.trim() !== objectKey ||
+    objectKey.startsWith("/") ||
+    objectKey.includes("\\") ||
+    objectKey.includes("\0") ||
+    objectKey.includes("%") ||
+    objectKey.length > 512
+  ) {
+    return null;
+  }
+  const match = SCOPED_OBJECT_KEY_PATTERN.exec(objectKey);
+  if (match) {
+    if (
+      !isSafePositiveInteger(match[2]) ||
+      !isSafePositiveInteger(match[3]) ||
+      !isSafePositiveInteger(match[4]) ||
+      !isSafePositiveInteger(match[5])
+    ) {
+      return null;
+    }
+    const isVideo = match[1] === "generated/videos";
+    if (
+      !(isVideo
+        ? VIDEO_FILE_PATTERN.test(match[7])
+        : IMAGE_FILE_PATTERN.test(match[7]))
+    ) {
+      return null;
+    }
+    return {
+      objectKey,
+      authorizationScope: [
+        "v1",
+        `workspace-${match[2]}`,
+        `connection-${match[3]}`,
+        `binding-${match[4]}`,
+        `privacy-${match[5]}`,
+        `user-${match[6]}`,
+      ].join("/"),
+      legacy: false,
+    };
+  }
+  if (allowLegacyObjectKeys && LEGACY_OBJECT_KEY_PATTERN.test(objectKey)) {
+    return {
+      objectKey,
+      authorizationScope: LEGACY_STORAGE_SCOPE,
+      legacy: true,
+    };
+  }
+  return null;
+}
+
+export function buildStorageRequestSignature(input: {
+  apiKey: string;
+  method: string;
+  objectKey: string;
+  scope: string;
+  expiresAt: number;
+}): string {
+  return createHmac("sha256", input.apiKey)
+    .update(
+      [
+        "leaderbot-storage-v1",
+        input.method.toUpperCase(),
+        input.objectKey,
+        input.scope,
+        String(input.expiresAt),
+      ].join("\n")
+    )
+    .digest("hex");
+}
+
+function constantTimeTextEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return (
+    leftBuffer.length === rightBuffer.length &&
+    timingSafeEqual(leftBuffer, rightBuffer)
+  );
+}
+
+export function verifyStorageRequestAuthorization(input: {
+  apiKey: string;
+  method: string;
+  parsedKey: ParsedStorageObjectKey;
+  scopeHeader?: string;
+  expiresHeader?: string;
+  signatureHeader?: string;
+  nowSeconds?: number;
+}): boolean {
+  const scope = input.scopeHeader?.trim() ?? "";
+  const expiresRaw = input.expiresHeader?.trim() ?? "";
+  const signatureMatch = /^v1=([a-f0-9]{64})$/u.exec(
+    input.signatureHeader?.trim() ?? ""
+  );
+  if (
+    !constantTimeTextEqual(scope, input.parsedKey.authorizationScope) ||
+    !/^[1-9]\d{9,11}$/u.test(expiresRaw) ||
+    !signatureMatch
+  ) {
+    return false;
+  }
+  const expiresAt = Number(expiresRaw);
+  const nowSeconds = input.nowSeconds ?? Math.floor(Date.now() / 1_000);
+  if (
+    !Number.isSafeInteger(expiresAt) ||
+    expiresAt < nowSeconds - STORAGE_SIGNATURE_CLOCK_SKEW_SECONDS ||
+    expiresAt > nowSeconds + STORAGE_SIGNATURE_MAX_FUTURE_SECONDS
+  ) {
+    return false;
+  }
+  const expected = buildStorageRequestSignature({
+    apiKey: input.apiKey,
+    method: input.method,
+    objectKey: input.parsedKey.objectKey,
+    scope,
+    expiresAt,
+  });
+  return constantTimeTextEqual(expected, signatureMatch[1]);
 }
 
 function getBearerToken(authorization: string | undefined): string | null {
@@ -284,7 +572,10 @@ async function readMultipartFile(
   };
 }
 
-function logJson(level: "info" | "warn" | "error", payload: Record<string, unknown>): void {
+function logJson(
+  level: "info" | "warn" | "error",
+  payload: Record<string, unknown>
+): void {
   const serialized = JSON.stringify({ level, ...payload });
   if (level === "error") {
     console.error(serialized);
@@ -345,6 +636,47 @@ function isMissingStorageObjectError(error: unknown): boolean {
   return error.name === "NotFound" || error.name === "NoSuchKey";
 }
 
+function readObjectKeyQuery(req: express.Request): string | null {
+  const value = req.query.path;
+  return typeof value === "string" ? value : null;
+}
+
+function authorizeObjectRequest(
+  req: express.Request,
+  res: express.Response,
+  config: ProxyEnv
+): string | null {
+  const rawObjectKey = readObjectKeyQuery(req);
+  const parsedKey = rawObjectKey
+    ? parseStorageObjectKey(rawObjectKey, config.allowLegacyObjectKeys)
+    : null;
+  if (!parsedKey) {
+    res.status(400).json({ error: "Invalid storage object path" });
+    return null;
+  }
+  if (res.locals.legacyStorageBearerAuthorized === true) {
+    return parsedKey.objectKey;
+  }
+  const authorized = verifyStorageRequestAuthorization({
+    apiKey: config.forgeApiKey,
+    method: req.method,
+    parsedKey,
+    scopeHeader: req.header("x-leaderbot-storage-scope"),
+    expiresHeader: req.header("x-leaderbot-storage-expires"),
+    signatureHeader: req.header("x-leaderbot-storage-signature"),
+  });
+  if (!authorized) {
+    logJson("warn", {
+      msg: "storage_proxy_signature_failed",
+      method: req.method,
+      ...objectKeyLogFields(parsedKey.objectKey),
+    });
+    res.status(403).json({ error: "Invalid storage request signature" });
+    return null;
+  }
+  return parsedKey.objectKey;
+}
+
 export function createStorageProxyApp(config: ProxyEnv): express.Express {
   const app = express();
   const s3 = createS3Client(config);
@@ -355,7 +687,7 @@ export function createStorageProxyApp(config: ProxyEnv): express.Express {
 
   app.use((req, res, next) => {
     const token = getBearerToken(req.header("authorization"));
-    if (token !== config.forgeApiKey) {
+    if (!token || !constantTimeTextEqual(token, config.forgeApiKey)) {
       logJson("warn", {
         msg: "storage_proxy_auth_failed",
         method: req.method,
@@ -364,25 +696,39 @@ export function createStorageProxyApp(config: ProxyEnv): express.Express {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
+    const hasSignatureHeaders = [
+      "x-leaderbot-storage-scope",
+      "x-leaderbot-storage-expires",
+      "x-leaderbot-storage-signature",
+    ].some(header => Boolean(req.header(header)));
+    if (!hasSignatureHeaders) {
+      if (!config.allowLegacyBearerAuth) {
+        res.status(401).json({ error: "Signed storage request required" });
+        return;
+      }
+      res.locals.legacyStorageBearerAuthorized = true;
+    }
     next();
   });
 
   app.post("/v1/storage/upload", async (req, res) => {
-    const objectKey = normalizeObjectKey(String(req.query.path ?? ""));
-    if (!objectKey) {
-      res.status(400).json({ error: "Query param 'path' is required" });
-      return;
-    }
+    const objectKey = authorizeObjectRequest(req, res, config);
+    if (!objectKey) return;
 
     try {
       const file = await readMultipartFile(req, config.maxUploadBytes);
-      await s3.send(
-        new PutObjectCommand({
-          Bucket: config.r2Bucket,
-          Key: objectKey,
-          Body: file.buffer,
-          ContentType: file.contentType,
-        })
+      await runStorageOperationWithDeadline(
+        abortSignal =>
+          s3.send(
+            new PutObjectCommand({
+              Bucket: config.r2Bucket,
+              Key: objectKey,
+              Body: file.buffer,
+              ContentType: file.contentType,
+            }),
+            { abortSignal }
+          ),
+        config.storageOperationTimeoutMs
       );
 
       const publicUrl = buildPublicUrl(config, objectKey);
@@ -416,18 +762,20 @@ export function createStorageProxyApp(config: ProxyEnv): express.Express {
   });
 
   app.get("/v1/storage/downloadUrl", async (req, res) => {
-    const objectKey = normalizeObjectKey(String(req.query.path ?? ""));
-    if (!objectKey) {
-      res.status(400).json({ error: "Query param 'path' is required" });
-      return;
-    }
+    const objectKey = authorizeObjectRequest(req, res, config);
+    if (!objectKey) return;
 
     try {
-      await s3.send(
-        new HeadObjectCommand({
-          Bucket: config.r2Bucket,
-          Key: objectKey,
-        })
+      await runStorageOperationWithDeadline(
+        abortSignal =>
+          s3.send(
+            new HeadObjectCommand({
+              Bucket: config.r2Bucket,
+              Key: objectKey,
+            }),
+            { abortSignal }
+          ),
+        config.storageOperationTimeoutMs
       );
 
       const publicUrl = buildPublicUrl(config, objectKey);
@@ -451,18 +799,20 @@ export function createStorageProxyApp(config: ProxyEnv): express.Express {
   });
 
   app.delete("/v1/storage/object", async (req, res) => {
-    const objectKey = normalizeObjectKey(String(req.query.path ?? ""));
-    if (!objectKey) {
-      res.status(400).json({ error: "Query param 'path' is required" });
-      return;
-    }
+    const objectKey = authorizeObjectRequest(req, res, config);
+    if (!objectKey) return;
 
     try {
-      await s3.send(
-        new DeleteObjectCommand({
-          Bucket: config.r2Bucket,
-          Key: objectKey,
-        })
+      await runStorageOperationWithDeadline(
+        abortSignal =>
+          s3.send(
+            new DeleteObjectCommand({
+              Bucket: config.r2Bucket,
+              Key: objectKey,
+            }),
+            { abortSignal }
+          ),
+        config.storageOperationTimeoutMs
       );
 
       logJson("info", {
@@ -483,8 +833,16 @@ export function createStorageProxyApp(config: ProxyEnv): express.Express {
   return app;
 }
 
-export function startStorageProxy(): void {
+export async function startStorageProxy(): Promise<void> {
   const config = loadConfig();
+  await verifyRequiredR2LifecycleConfig(config);
+  if (config.allowLegacyBearerAuth || config.allowLegacyObjectKeys) {
+    logJson("warn", {
+      msg: "storage_proxy_legacy_bridge_enabled",
+      allowLegacyBearerAuth: config.allowLegacyBearerAuth,
+      allowLegacyObjectKeys: config.allowLegacyObjectKeys,
+    });
+  }
   const app = createStorageProxyApp(config);
   const host = "0.0.0.0";
 
@@ -497,11 +855,20 @@ export function startStorageProxy(): void {
       publicBaseUrl: config.publicBaseUrl,
       r2Bucket: config.r2Bucket,
       r2Endpoint: config.r2Endpoint,
+      storageOperationTimeoutMs: config.storageOperationTimeoutMs,
+      allowLegacyBearerAuth: config.allowLegacyBearerAuth,
+      allowLegacyObjectKeys: config.allowLegacyObjectKeys,
     });
   });
 }
 
 const entryScript = process.argv[1]?.replace(/\\/g, "/") ?? "";
 if (/\/index\.(?:ts|js|cjs)$/u.test(entryScript)) {
-  startStorageProxy();
+  startStorageProxy().catch(error => {
+    logJson("error", {
+      msg: "storage_proxy_startup_refused",
+      ...storageErrorLogFields(error),
+    });
+    process.exitCode = 1;
+  });
 }

@@ -1,16 +1,17 @@
 import type { executeGenerationFlow } from "../generationFlow";
 import { t } from "../i18n";
+import { MessengerQuotaReservationCommitError } from "../messengerQuota";
 import {
-  getFreeDailyLimit,
-  hasQuotaBypass,
-  MessengerQuotaReservationCommitError,
-} from "../messengerQuota";
-import {
-  commitImageGenerationUsage,
-  releaseImageGenerationUsage,
-  reserveImageGenerationUsage,
-  type ImageGenerationQuotaReservation,
-} from "../limits/generationQuota";
+  commitMessengerImageQuotaSuccess,
+  getMessengerImageQuotaReservationRenewIntervalMs,
+  releaseMessengerImageQuotaReservation,
+  renewMessengerImageQuotaReservation,
+  reserveMessengerImageQuota,
+  type MessengerImageQuotaCommitResult,
+  type MessengerImageQuotaIdentity,
+  type MessengerImageQuotaReservation,
+  type MessengerImageQuotaReservationDecision,
+} from "../messengerImageQuotaStore";
 import { anonymizePsid } from "../messengerState";
 import { safeLog } from "../messengerApi";
 import type { MessengerGenerationJob } from "../messengerGenerationJob";
@@ -28,67 +29,154 @@ type GenerationFlowError = Extract<
 
 type GenerationMetrics = NonNullable<GenerationFlowSuccess["metrics"]>;
 
+export type MessengerGenerationQuotaLeaseHeartbeat = {
+  stopAndAssertOwned: () => Promise<void>;
+};
+
+export class MessengerImageQuotaLeaseLostError extends MessengerQuotaReservationCommitError {
+  constructor() {
+    super("Messenger image quota reservation lease was lost");
+    this.name = "MessengerImageQuotaLeaseLostError";
+  }
+}
+
 export function resolveGenerationKind(input: {
   generationKind?: GenerationKind;
   sourceImageUrl?: string;
 }): GenerationKind {
-  return input.generationKind ??
-    (input.sourceImageUrl ? "source_image_edit" : "text_to_image");
+  return (
+    input.generationKind ??
+    (input.sourceImageUrl ? "source_image_edit" : "text_to_image")
+  );
 }
 
 export async function reserveMessengerGenerationQuota(input: {
   psid: string;
-  userKey: string;
-  quotaCount: number;
-}): Promise<ImageGenerationQuotaReservation | null> {
-  const reservation = await reserveImageGenerationUsage({
-    channel: "messenger",
-    senderId: input.psid,
-  });
-  const bypassApplied = hasQuotaBypass(input.psid, input.userKey);
-  const allowed = Boolean(reservation);
+  identity: MessengerImageQuotaIdentity;
+  requestId: string;
+}): Promise<MessengerImageQuotaReservationDecision> {
+  const decision = await reserveMessengerImageQuota(
+    input.identity,
+    input.requestId
+  );
   safeLog("quota_decision", {
     action: "reserve",
     psidHash: anonymizePsid(input.psid).slice(0, 12),
-    count: input.quotaCount,
-    limit: getFreeDailyLimit(),
-    bypassApplied,
-    allowed,
+    dailyUsed: decision.quotaStatus.daily.used,
+    dailyLimit: decision.quotaStatus.daily.limit,
+    monthlyUsed: decision.quotaStatus.monthly.used,
+    monthlyLimit: decision.quotaStatus.monthly.limit,
+    result: decision.status,
+    allowed:
+      decision.status === "reserved" || decision.status === "already_committed",
   });
-  return reservation;
+  return decision;
 }
 
 export async function commitMessengerGenerationQuota(input: {
   psid: string;
-  reservation: ImageGenerationQuotaReservation;
+  identity: MessengerImageQuotaIdentity;
+  reservation: MessengerImageQuotaReservation;
   generationKind: GenerationKind;
-}): Promise<void> {
-  const committed = await commitImageGenerationUsage({
-    channel: "messenger",
-    senderId: input.psid,
-    reservation: input.reservation,
-  });
-  if (!committed) {
+  /** Revalidates the current Page binding immediately before quota commit. */
+  assertCurrentBinding: () => Promise<void>;
+}): Promise<MessengerImageQuotaCommitResult> {
+  await input.assertCurrentBinding();
+  const result = await commitMessengerImageQuotaSuccess(
+    input.identity,
+    input.reservation
+  );
+  if (!result.committed) {
     throw new MessengerQuotaReservationCommitError();
   }
 
   safeLog("quota_decision", {
-    action: "commit_provider_attempt",
+    action: "commit_generation_success",
     psidHash: anonymizePsid(input.psid).slice(0, 12),
     generationKind: input.generationKind,
+    alreadyCommitted: result.alreadyCommitted,
+    dailyRemaining: result.quotaStatus.daily.remaining,
+    monthlyRemaining: result.quotaStatus.monthly.remaining,
     allowed: true,
   });
+  return result;
 }
 
 export async function releaseMessengerGenerationQuota(input: {
-  psid: string;
-  reservation: ImageGenerationQuotaReservation;
+  identity: MessengerImageQuotaIdentity;
+  reservation: MessengerImageQuotaReservation;
 }): Promise<void> {
-  await releaseImageGenerationUsage({
-    channel: "messenger",
-    senderId: input.psid,
-    reservation: input.reservation,
+  await releaseMessengerImageQuotaReservation(
+    input.identity,
+    input.reservation
+  );
+}
+
+/** Keeps a billable image reservation alive while the provider is running. */
+export function startMessengerGenerationQuotaLeaseHeartbeat(input: {
+  identity: MessengerImageQuotaIdentity;
+  reservation: MessengerImageQuotaReservation;
+}): MessengerGenerationQuotaLeaseHeartbeat {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let renewalInFlight: Promise<void> | null = null;
+  let failure: Error | undefined;
+  let stopPromise: Promise<void> | null = null;
+  const intervalMs = getMessengerImageQuotaReservationRenewIntervalMs();
+
+  const renewOnce = async (): Promise<void> => {
+    try {
+      const owned = await renewMessengerImageQuotaReservation(
+        input.identity,
+        input.reservation
+      );
+      if (!owned && failure === undefined) {
+        failure = new MessengerImageQuotaLeaseLostError();
+      }
+    } catch (error) {
+      if (failure === undefined) {
+        failure =
+          error instanceof Error
+            ? error
+            : new MessengerImageQuotaLeaseLostError();
+      }
+    }
+  };
+  const schedule = (): void => {
+    if (stopped || failure !== undefined) return;
+    timer = setTimeout(() => {
+      timer = null;
+      renewalInFlight = renewOnce().finally(() => {
+        renewalInFlight = null;
+        schedule();
+      });
+    }, intervalMs);
+    timer.unref?.();
+  };
+
+  // Renew immediately so a reservation made near a queue-lease boundary gets
+  // a full provider window before the first scheduled heartbeat.
+  renewalInFlight = renewOnce().finally(() => {
+    renewalInFlight = null;
+    schedule();
   });
+
+  return {
+    stopAndAssertOwned: () => {
+      stopPromise ??= (async () => {
+        stopped = true;
+        if (timer) clearTimeout(timer);
+        if (renewalInFlight) await renewalInFlight;
+        if (failure !== undefined) throw failure;
+        const owned = await renewMessengerImageQuotaReservation(
+          input.identity,
+          input.reservation
+        );
+        if (!owned) throw new MessengerImageQuotaLeaseLostError();
+      })();
+      return stopPromise;
+    },
+  };
 }
 
 export function buildGenerationSuccessDiagnosticPayload(input: {
@@ -171,7 +259,7 @@ export function getGenerationFailureMessage(
   if (errorKind === "generation_budget_reached") {
     return {
       handled: true,
-      text: t(lang, "generationBudgetReached"),
+      text: t(lang, "generationProviderUnavailable"),
       nextState: "AWAITING_EDIT_PROMPT",
     };
   }

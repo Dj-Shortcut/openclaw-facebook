@@ -27,4 +27,12 @@ describe("source image fetch config", () => {
         .timeoutMs
     ).toBe(10_000);
   });
+
+  it("caps configured fetch time so retries cannot create an unbounded worker", () => {
+    expect(
+      resolveSourceImageFetchConfig({
+        FB_IMAGE_FETCH_TIMEOUT_MS: "999999999",
+      }).timeoutMs
+    ).toBe(30_000);
+  });
 });

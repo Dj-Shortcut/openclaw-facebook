@@ -268,11 +268,31 @@ async function startServer() {
   assertMessengerGenerationQueueConfig();
   await ensureMessengerGenerationQueueReady();
   await ensureMessengerGenerationCompletionReady();
+  let generationWorker:
+    ReturnType<typeof startMessengerGenerationWorker> | undefined;
   if (isMessengerGenerationWorkerMode() || generationWorkerOnly) {
-    startMessengerGenerationWorker({ keepAlive: generationWorkerOnly });
+    generationWorker = startMessengerGenerationWorker({
+      keepAlive: generationWorkerOnly,
+    });
   }
   if (generationWorkerOnly) {
     safeLog("messenger_generation_worker_only_mode_active");
+    let stopping = false;
+    process.on("SIGTERM", () => {
+      if (stopping) return;
+      stopping = true;
+      safeLog("messenger_generation_worker_shutdown_started");
+      void generationWorker
+        ?.stop()
+        .then(() => process.exit(0))
+        .catch(error => {
+          safeLog("messenger_generation_worker_shutdown_failed", {
+            level: "error",
+            error,
+          });
+          process.exit(1);
+        });
+    });
     return;
   }
 

@@ -428,6 +428,36 @@ export async function deleteEphemeralKeyIfValue(
   return result === 1;
 }
 
+export async function refreshEphemeralKeyIfValue(
+  key: string,
+  expectedValue: string,
+  ttlSeconds: number
+): Promise<boolean> {
+  if (!isRedisStateStoreEnabled()) {
+    clearExpiredMemoryEphemeral();
+    const entry = memoryEphemeral.get(key);
+    if (!entry || entry.value !== expectedValue) {
+      return false;
+    }
+
+    memoryEphemeral.set(key, {
+      value: expectedValue,
+      expiresAt: Date.now() + ttlSeconds * 1000,
+    });
+    return true;
+  }
+
+  const redis = await getRedisClient();
+  const result = await redis.eval(
+    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end",
+    1,
+    key,
+    expectedValue,
+    ttlSeconds * 1000
+  );
+  return result === 1;
+}
+
 export async function incrementExpiringCounter(
   key: string,
   ttlSeconds: number

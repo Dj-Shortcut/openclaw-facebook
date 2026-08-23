@@ -1,0 +1,12 @@
+# Reviewed rollback configuration captured from the live storage-proxy release.
+# This file contains no Fly secrets and is bound to its image digest in apps.json.
+
+app = 'leaderbot-storage-proxy'
+primary_region = 'ams'
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 1

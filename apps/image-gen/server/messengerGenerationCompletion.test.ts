@@ -11,8 +11,12 @@ vi.mock("./_core/messengerPrivacySubject", () => ({
   assertMessengerPrivacySubject: assertPrivacyMock,
 }));
 vi.mock("./storage", () => ({
-  storageKeyFromPublicUrl: (url: string) =>
-    `generated/${url.split("/").at(-1)}`,
+  storageKeyFromPublicUrl: (url: string) => {
+    const path = new URL(url).pathname.replace(/^\/+/, "");
+    return path.startsWith("generated/images/v1/")
+      ? path
+      : `generated/images/${url.split("/").at(-1)}`;
+  },
   storageDelete: storageDeleteMock,
 }));
 
@@ -21,8 +25,15 @@ import {
   getMessengerGenerationCompletion,
   isLegacyMessengerGenerationCompletionKey,
   markMessengerGenerationCompleted,
+  markMessengerGenerationDeliveryRetryable,
+  markMessengerGenerationDeliveryStarted,
   markMessengerGenerationDelivered,
+  markMessengerGenerationQuotaCommitted,
+  markMessengerGenerationSuccessNoticeSent,
+  registerMessengerObjectForPrivacyCleanup,
+  unregisterMessengerObjectFromPrivacyCleanup,
 } from "./_core/messengerGenerationCompletion";
+import { buildMessengerStorageObjectKey } from "./_core/messengerStorageObject";
 import { clearStateStore } from "./_core/stateStore";
 
 describe("messengerGenerationCompletion", () => {
@@ -63,6 +74,50 @@ describe("messengerGenerationCompletion", () => {
         `${userIndexScope}:legacy-user`
       )
     ).toBe(true);
+  });
+
+  it("rejects a scoped object owned by another privacy fence before inventory or completion writes", async () => {
+    const fence = {
+      workspaceId: 42,
+      channelConnectionId: 7,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      userKey: "a".repeat(64),
+      pageId: "page-fenced-storage",
+    };
+    const ownKey = buildMessengerStorageObjectKey({
+      kind: "generated_image",
+      scope: fence,
+      fileName: "1787461200000-123e4567-e89b-42d3-a456-426614174000.png",
+    });
+    const foreignKey = buildMessengerStorageObjectKey({
+      kind: "generated_image",
+      scope: { ...fence, workspaceId: fence.workspaceId + 1 },
+      fileName: "1787461200001-123e4567-e89b-42d3-a456-426614174001.png",
+    });
+
+    await expect(
+      registerMessengerObjectForPrivacyCleanup(ownKey, fence)
+    ).resolves.toBe(true);
+    await expect(
+      registerMessengerObjectForPrivacyCleanup(foreignKey, fence)
+    ).rejects.toThrow("does not match completion privacy fence");
+    await expect(
+      unregisterMessengerObjectFromPrivacyCleanup(foreignKey, fence)
+    ).rejects.toThrow("does not match completion privacy fence");
+    await expect(
+      markMessengerGenerationCompleted(
+        "req-foreign-storage-object",
+        `https://assets.example/${foreignKey}`,
+        fence.userKey,
+        1_771_000_000_000,
+        fence
+      )
+    ).rejects.toThrow("does not match completion privacy fence");
+    await expect(
+      getMessengerGenerationCompletion("req-foreign-storage-object", fence)
+    ).resolves.toBeNull();
+    expect(storageDeleteMock).not.toHaveBeenCalledWith(foreignKey);
   });
 
   it("binds completion reads and writes to the immutable privacy fence", async () => {
@@ -199,7 +254,9 @@ describe("messengerGenerationCompletion", () => {
       imageUrl: "https://assets.example/generated/monotone.jpg",
       expiresAt: 1_771_604_800_000,
     });
-    expect(storageDeleteMock).toHaveBeenCalledWith("generated/replayed.jpg");
+    expect(storageDeleteMock).toHaveBeenCalledWith(
+      "generated/images/replayed.jpg"
+    );
   });
 
   it("fails closed when delivery has no create-once completion", async () => {
@@ -220,7 +277,9 @@ describe("messengerGenerationCompletion", () => {
         fence
       )
     ).rejects.toThrow("Messenger completion missing");
-    expect(storageDeleteMock).toHaveBeenCalledWith("generated/missing.jpg");
+    expect(storageDeleteMock).toHaveBeenCalledWith(
+      "generated/images/missing.jpg"
+    );
   });
 
   it("stores completion markers by generation request id", async () => {
@@ -240,6 +299,8 @@ describe("messengerGenerationCompletion", () => {
       imageUrl: "https://assets.example/generated/req-complete.jpg",
       completedAt: 1_771_000_000_000,
       deliveryStatus: "pending",
+      quotaAccountingMode: "success_only_v1",
+      successNoticeStatus: "pending",
       userKey: "user-key-1",
       expiresAt: 1_771_604_800_000,
     });
@@ -268,9 +329,152 @@ describe("messengerGenerationCompletion", () => {
       completedAt: 1_771_000_000_000,
       deliveryStatus: "delivered",
       deliveredAt: 1_771_000_000_100,
+      quotaAccountingMode: "success_only_v1",
+      successNoticeStatus: "pending",
       userKey: "user-key-delivered",
       expiresAt: 1_771_604_800_000,
     });
+  });
+
+  it("claims image transport once and reopens it only after a known rejection", async () => {
+    const reqId = "req-delivery-claim";
+    const imageUrl = "https://assets.example/generated/delivery-claim.jpg";
+    const userKey = "user-key-delivery-claim";
+    await markMessengerGenerationCompleted(
+      reqId,
+      imageUrl,
+      userKey,
+      1_771_000_000_000
+    );
+
+    await expect(
+      markMessengerGenerationDeliveryStarted(
+        reqId,
+        imageUrl,
+        userKey,
+        1_771_000_000_050
+      )
+    ).resolves.toBe("started");
+    await expect(
+      markMessengerGenerationDeliveryStarted(
+        reqId,
+        imageUrl,
+        userKey,
+        1_771_000_000_060
+      )
+    ).resolves.toBe("already_started");
+    await expect(
+      getMessengerGenerationCompletion(reqId)
+    ).resolves.toMatchObject({
+      deliveryStatus: "transport_started",
+      deliveryStartedAt: 1_771_000_000_050,
+    });
+
+    await markMessengerGenerationDeliveryRetryable(
+      reqId,
+      imageUrl,
+      userKey,
+      1_771_000_000_070
+    );
+    await expect(
+      getMessengerGenerationCompletion(reqId)
+    ).resolves.toMatchObject({ deliveryStatus: "pending" });
+    await expect(
+      markMessengerGenerationDeliveryStarted(
+        reqId,
+        imageUrl,
+        userKey,
+        1_771_000_000_080
+      )
+    ).resolves.toBe("started");
+    await markMessengerGenerationDelivered(
+      reqId,
+      imageUrl,
+      userKey,
+      1_771_000_000_090
+    );
+    await markMessengerGenerationDeliveryRetryable(
+      reqId,
+      imageUrl,
+      userKey,
+      1_771_000_000_100
+    );
+    await expect(
+      getMessengerGenerationCompletion(reqId)
+    ).resolves.toMatchObject({
+      deliveryStatus: "delivered",
+      deliveredAt: 1_771_000_000_090,
+    });
+  });
+
+  it("keeps the exact quota balance pending until the success notice is sent", async () => {
+    const quotaStatus = {
+      daily: { used: 1, limit: 5, remaining: 4 },
+      monthly: { used: 1, limit: 20, remaining: 19 },
+    };
+    await markMessengerGenerationCompleted(
+      "req-quota-notice",
+      "https://assets.example/generated/quota-notice.jpg",
+      "user-key-quota-notice",
+      1_771_000_000_000
+    );
+    await markMessengerGenerationQuotaCommitted(
+      "req-quota-notice",
+      "https://assets.example/generated/quota-notice.jpg",
+      "user-key-quota-notice",
+      quotaStatus,
+      1_771_000_000_050
+    );
+    await markMessengerGenerationDelivered(
+      "req-quota-notice",
+      "https://assets.example/generated/quota-notice.jpg",
+      "user-key-quota-notice",
+      1_771_000_000_100
+    );
+
+    await expect(
+      getMessengerGenerationCompletion("req-quota-notice")
+    ).resolves.toEqual(
+      expect.objectContaining({
+        deliveryStatus: "delivered",
+        deliveredAt: 1_771_000_000_100,
+        quotaStatus,
+        quotaCommittedAt: 1_771_000_000_050,
+        successNoticeStatus: "pending",
+      })
+    );
+
+    const refreshedQuotaStatus = {
+      daily: { used: 2, limit: 5, remaining: 3 },
+      monthly: { used: 2, limit: 20, remaining: 18 },
+    };
+    await markMessengerGenerationQuotaCommitted(
+      "req-quota-notice",
+      "https://assets.example/generated/quota-notice.jpg",
+      "user-key-quota-notice",
+      refreshedQuotaStatus,
+      1_771_000_000_125
+    );
+
+    await markMessengerGenerationSuccessNoticeSent(
+      "req-quota-notice",
+      "https://assets.example/generated/quota-notice.jpg",
+      "user-key-quota-notice",
+      1_771_000_000_150
+    );
+
+    await expect(
+      getMessengerGenerationCompletion("req-quota-notice")
+    ).resolves.toEqual(
+      expect.objectContaining({
+        deliveryStatus: "delivered",
+        deliveredAt: 1_771_000_000_100,
+        quotaStatus: refreshedQuotaStatus,
+        quotaCommittedAt: 1_771_000_000_050,
+        successNoticeStatus: "sent",
+        successNoticeSentAt: 1_771_000_000_150,
+      })
+    );
   });
 
   it("returns null for unknown generation request ids", async () => {

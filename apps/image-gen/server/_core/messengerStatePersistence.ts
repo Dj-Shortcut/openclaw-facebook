@@ -20,6 +20,7 @@ import {
 } from "./messengerStateNormalization";
 import type { MessengerUserState } from "./messengerState";
 import {
+  getMessengerRequestErasurePrivacySubject,
   getMessengerRequestOwnership,
   getMessengerRequestPageId,
   getMessengerRequestPrivacySubject,
@@ -53,6 +54,14 @@ function requestStateFence(): MessengerStateFence | undefined {
   const subject = getMessengerRequestPrivacySubject();
   return ownership && subject
     ? { ...ownership, privacyEpoch: subject.privacyEpoch }
+    : undefined;
+}
+
+function requestErasureDataFence(): MessengerStateFence | undefined {
+  const ownership = getMessengerRequestOwnership();
+  const erasure = getMessengerRequestErasurePrivacySubject();
+  return ownership && erasure
+    ? { ...ownership, privacyEpoch: erasure.dataPrivacyEpoch }
     : undefined;
 }
 
@@ -337,7 +346,7 @@ export function getPersistedState(
 export function getPersistedStateForErasure(
   psid: string
 ): MaybePromise<MessengerUserState | null> {
-  const fence = requestStateFence();
+  const fence = requestErasureDataFence() ?? requestStateFence();
   const pageId = getMessengerRequestPageId();
   if (!fence || !pageId) {
     if (process.env.NODE_ENV === "production") {
@@ -360,6 +369,70 @@ export function getPersistedStateForErasure(
   };
   const raw = readState<PartialState>(key);
   return isPromiseLike(raw) ? raw.then(normalizeOwned) : normalizeOwned(raw);
+}
+
+/** Deletes only the exact Page/ownership/privacy epoch already read by erasure. */
+export function deletePersistedStateForErasure(
+  psid: string,
+  state: MessengerUserState
+): MaybePromise<void> {
+  const fence = stateFenceFromState(state);
+  const pageId = state.pageId?.trim();
+  const userKey = state.userKey?.trim();
+  const requestOwnership = getMessengerRequestOwnership();
+  const requestSubject = getMessengerRequestPrivacySubject();
+  const requestErasure = getMessengerRequestErasurePrivacySubject();
+  const ownsDataEpoch = requestErasure
+    ? requestErasure.userKey === userKey &&
+      requestErasure.dataPrivacyEpoch === state.privacyEpoch
+    : requestSubject?.userKey === userKey &&
+      requestSubject.privacyEpoch === state.privacyEpoch;
+  if (
+    !fence ||
+    !pageId ||
+    !userKey ||
+    state.psid !== psid ||
+    userKey !== toUserKey(psid) ||
+    pageId !== getMessengerRequestPageId() ||
+    !requestOwnership ||
+    requestOwnership.workspaceId !== fence.workspaceId ||
+    requestOwnership.channelConnectionId !== fence.channelConnectionId ||
+    requestOwnership.bindingEpoch !== fence.bindingEpoch ||
+    !ownsDataEpoch
+  ) {
+    throw new Error("Messenger erasure state ownership is inconsistent");
+  }
+
+  const stateKey = getPersistedStateKey(psid, pageId, fence);
+  const indexKey = getUserPageIndexKey(userKey, pageId, fence);
+  if (isRedisStateStoreEnabled()) {
+    return getRedisClient().then(async redis => {
+      await redis.eval(
+        `
+          redis.call("DEL", KEYS[1])
+          local index = redis.call("GET", KEYS[2])
+          if index then
+            local ok, decoded = pcall(cjson.decode, index)
+            if ok and decoded["stateKey"] == ARGV[1] then
+              redis.call("DEL", KEYS[2])
+            end
+          end
+          return 1
+        `,
+        2,
+        getStateStorageKey(stateKey),
+        getScopedStateStorageKey(MESSENGER_USER_PAGE_INDEX_SCOPE, indexKey),
+        stateKey
+      );
+    });
+  }
+
+  const deleted = deleteState(stateKey);
+  const deleteIndex = () =>
+    deleteScopedState(MESSENGER_USER_PAGE_INDEX_SCOPE, indexKey);
+  return isPromiseLike(deleted)
+    ? deleted.then(() => Promise.resolve(deleteIndex()))
+    : deleteIndex();
 }
 
 /** Reads Page-scoped Messenger state without relying on request AsyncLocalStorage. */

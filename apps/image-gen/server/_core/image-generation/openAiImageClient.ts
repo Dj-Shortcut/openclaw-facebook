@@ -29,7 +29,7 @@ type OpenAiRequestContext = {
   requestInit: RequestInit;
   createRequestInit?: () => RequestInit;
   model: string;
-  imageCostOptions: {
+  imageRequestOptions: {
     size: string;
     quality: string;
     inputFidelity?: string;
@@ -53,10 +53,16 @@ type OpenAiResponseContext = {
   onProviderAttempt?: () => Promise<void>;
 };
 
-const OPENAI_RETRY_LIMIT_DEFAULT = 1;
+const OPENAI_RETRY_LIMIT_DEFAULT = 0;
 const OPENAI_RETRY_BASE_MS_DEFAULT = 500;
 const OPENAI_TIMEOUT_MS_DEFAULT = 180_000;
+// Must remain comfortably below the 15-minute durable provider privacy fence.
+// This leaves time to parse and store a result before that fence can expire.
+const OPENAI_TIMEOUT_MS_MAX = 5 * 60_000;
 const OPENAI_IMAGE_MAX_OUTPUT_BYTES_DEFAULT = 25 * 1024 * 1024;
+const OPENAI_IMAGE_RESPONSE_ENVELOPE_BYTES = 1024 * 1024;
+const OPENAI_IMAGE_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
+const OPENAI_ERROR_RESPONSE_MAX_BYTES = 64 * 1024;
 const OPENAI_RESPONSES_IMAGE_ENDPOINT = "https://api.openai.com/v1/responses";
 const OPENAI_IMAGE_GENERATIONS_ENDPOINT =
   "https://api.openai.com/v1/images/generations";
@@ -116,19 +122,32 @@ export function getOpenAiImageOutputExtension(): string {
 function getOpenAiTimeoutMs(): number {
   const raw = Number.parseInt(process.env.OPENAI_IMAGE_TIMEOUT_MS ?? "", 10);
   if (Number.isFinite(raw) && raw > 0) {
-    return raw;
+    return Math.min(raw, OPENAI_TIMEOUT_MS_MAX);
   }
 
   return OPENAI_TIMEOUT_MS_DEFAULT;
 }
 
 function getOpenAiRetryLimit(): number {
+  assertProductionOpenAiImageRetryConfig();
   const raw = Number.parseInt(process.env.OPENAI_IMAGE_MAX_RETRIES ?? "", 10);
   if (Number.isFinite(raw) && raw >= 0) {
     return raw;
   }
 
   return OPENAI_RETRY_LIMIT_DEFAULT;
+}
+
+export function assertProductionOpenAiImageRetryConfig(): void {
+  if (process.env.NODE_ENV !== "production") {
+    return;
+  }
+
+  if (process.env.OPENAI_IMAGE_MAX_RETRIES?.trim() !== "0") {
+    throw new Error(
+      "OPENAI_IMAGE_MAX_RETRIES must be explicitly set to 0 in production"
+    );
+  }
 }
 
 function getOpenAiRetryBaseMs(): number {
@@ -150,6 +169,15 @@ function getOpenAiMaxOutputBytes(): number {
   }
 
   return OPENAI_IMAGE_MAX_OUTPUT_BYTES_DEFAULT;
+}
+
+function getOpenAiImageResponseMaxBytes(): number {
+  const maxOutputBytes = getOpenAiMaxOutputBytes();
+  const maxEncodedImageBytes = Math.ceil(maxOutputBytes / 3) * 4;
+  return Math.min(
+    maxEncodedImageBytes + OPENAI_IMAGE_RESPONSE_ENVELOPE_BYTES,
+    OPENAI_IMAGE_RESPONSE_MAX_BYTES
+  );
 }
 
 function readEnumEnv(
@@ -326,29 +354,202 @@ function isBudgetExceededErrorResponse(
     return false;
   }
 
-  const normalized = errorBody.toLowerCase();
-  return (
-    normalized.includes("insufficient_quota") ||
-    normalized.includes("billing_hard_limit_reached") ||
-    normalized.includes("budget") ||
-    normalized.includes("quota")
+  try {
+    const parsed = JSON.parse(errorBody) as {
+      error?: { code?: unknown; type?: unknown };
+    };
+    const identifiers = [parsed?.error?.code, parsed?.error?.type];
+    return identifiers.some(
+      identifier =>
+        identifier === "insufficient_quota" ||
+        identifier === "billing_hard_limit_reached"
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Successful bodies are consumed and parsed before the request deadline is
+// cleared. The cache prevents the later image extraction step from rereading
+// an already-consumed body outside that deadline.
+const parsedOpenAiResponseBodies = new WeakMap<Response, unknown>();
+
+function getAbortReason(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) {
+    return signal.reason;
+  }
+
+  const error = new Error("OpenAI response deadline exceeded");
+  error.name = "AbortError";
+  return error;
+}
+
+function assertBeforeDeadline(signal: AbortSignal, deadlineAt: number): void {
+  if (signal.aborted || Date.now() >= deadlineAt) {
+    throw getAbortReason(signal);
+  }
+}
+
+async function raceWithAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal
+): Promise<T> {
+  if (signal.aborted) {
+    throw getAbortReason(signal);
+  }
+
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      reject(getAbortReason(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      value => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(
+          error instanceof Error
+            ? error
+            : new Error("OpenAI response operation failed")
+        );
+      }
+    );
+  });
+}
+
+function throwResponseBodyTooLarge(kind: "success" | "error"): never {
+  throw new OpenAiGenerationError(
+    `OpenAI ${kind} response body exceeded the safe byte limit`
   );
 }
 
-async function readErrorBody(response: Response): Promise<string> {
-  if (typeof response.text === "function") {
-    return response.text();
+function stringifyJsonValue(value: unknown): string {
+  const serialized = JSON.stringify(value);
+  if (typeof serialized !== "string") {
+    throw new OpenAiGenerationError("OpenAI response body was not valid JSON");
   }
+  return serialized;
+}
+
+async function readStreamBodyText(input: {
+  response: Response;
+  signal: AbortSignal;
+  deadlineAt: number;
+  maxBytes: number;
+  kind: "success" | "error";
+}): Promise<string> {
+  const reader = input.response.body!.getReader();
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  const cancelOnAbort = () => {
+    void reader.cancel(getAbortReason(input.signal)).catch(() => undefined);
+  };
+  input.signal.addEventListener("abort", cancelOnAbort, { once: true });
 
   try {
-    if (typeof response.json === "function") {
-      return JSON.stringify(await response.json());
+    while (true) {
+      assertBeforeDeadline(input.signal, input.deadlineAt);
+      const chunk = await raceWithAbort(reader.read(), input.signal);
+      if (chunk.done) {
+        break;
+      }
+
+      if (chunk.value) {
+        totalBytes += chunk.value.byteLength;
+        if (totalBytes > input.maxBytes) {
+          void reader.cancel("response_body_too_large").catch(() => undefined);
+          throwResponseBodyTooLarge(input.kind);
+        }
+        chunks.push(Buffer.from(chunk.value));
+      }
     }
-  } catch {
-    return "";
+  } finally {
+    input.signal.removeEventListener("abort", cancelOnAbort);
+    try {
+      reader.releaseLock();
+    } catch {
+      // An abort may leave a read pending; the request signal owns cleanup.
+    }
+  }
+
+  assertBeforeDeadline(input.signal, input.deadlineAt);
+  return Buffer.concat(chunks, totalBytes).toString("utf8");
+}
+
+async function readResponseBodyText(input: {
+  response: Response;
+  signal: AbortSignal;
+  deadlineAt: number;
+  maxBytes: number;
+  kind: "success" | "error";
+}): Promise<string> {
+  if (input.response.body) {
+    return readStreamBodyText(input);
+  }
+
+  // The fallback supports lightweight Response doubles in tests. Real fetch
+  // responses use the bounded streaming path above.
+  if (typeof input.response.text === "function") {
+    const text = await raceWithAbort(input.response.text(), input.signal);
+    assertBeforeDeadline(input.signal, input.deadlineAt);
+    if (Buffer.byteLength(text) > input.maxBytes) {
+      throwResponseBodyTooLarge(input.kind);
+    }
+    return text;
+  }
+
+  if (typeof input.response.json === "function") {
+    const value = await raceWithAbort<unknown>(
+      input.response.json() as Promise<unknown>,
+      input.signal
+    );
+    assertBeforeDeadline(input.signal, input.deadlineAt);
+    const text = stringifyJsonValue(value);
+    assertBeforeDeadline(input.signal, input.deadlineAt);
+    if (Buffer.byteLength(text) > input.maxBytes) {
+      throwResponseBodyTooLarge(input.kind);
+    }
+    return text;
   }
 
   return "";
+}
+
+async function readSuccessResponseJson(input: {
+  response: Response;
+  signal: AbortSignal;
+  deadlineAt: number;
+}): Promise<unknown> {
+  if (
+    !input.response.body &&
+    typeof input.response.text !== "function" &&
+    typeof input.response.json === "function"
+  ) {
+    const value = await raceWithAbort<unknown>(
+      input.response.json() as Promise<unknown>,
+      input.signal
+    );
+    assertBeforeDeadline(input.signal, input.deadlineAt);
+    const serialized = stringifyJsonValue(value);
+    assertBeforeDeadline(input.signal, input.deadlineAt);
+    if (Buffer.byteLength(serialized) > getOpenAiImageResponseMaxBytes()) {
+      throwResponseBodyTooLarge("success");
+    }
+    return value;
+  }
+
+  const body = await readResponseBodyText({
+    ...input,
+    maxBytes: getOpenAiImageResponseMaxBytes(),
+    kind: "success",
+  });
+  assertBeforeDeadline(input.signal, input.deadlineAt);
+  const parsed = JSON.parse(body) as unknown;
+  assertBeforeDeadline(input.signal, input.deadlineAt);
+  return parsed;
 }
 
 function isRetryableNetworkError(error: unknown): boolean {
@@ -359,22 +560,52 @@ function isRetryableNetworkError(error: unknown): boolean {
   return error instanceof TypeError;
 }
 
-async function fetchWithTimeout(
+async function fetchAndReadWithDeadline(
   input: URL,
   init: RequestInit | undefined,
   timeoutMs: number
-): Promise<Response> {
+): Promise<{ response: Response; budgetExceeded: boolean }> {
   const controller = new AbortController();
+  const deadlineAt = Date.now() + timeoutMs;
   const timeout = setTimeout(() => {
     controller.abort();
   }, timeoutMs);
 
   try {
-    return await fetch(input, {
-      ...init,
-      redirect: init?.redirect ?? "manual",
+    const response = await raceWithAbort(
+      fetch(input, {
+        ...init,
+        redirect: init?.redirect ?? "manual",
+        signal: controller.signal,
+      }),
+      controller.signal
+    );
+    assertBeforeDeadline(controller.signal, deadlineAt);
+
+    if (response.ok) {
+      const parsedBody = await readSuccessResponseJson({
+        response,
+        signal: controller.signal,
+        deadlineAt,
+      });
+      parsedOpenAiResponseBodies.set(response, parsedBody);
+      return { response, budgetExceeded: false };
+    }
+
+    const errorBody = await readResponseBodyText({
+      response,
       signal: controller.signal,
+      deadlineAt,
+      maxBytes: OPENAI_ERROR_RESPONSE_MAX_BYTES,
+      kind: "error",
     });
+    assertBeforeDeadline(controller.signal, deadlineAt);
+    const budgetExceeded = isBudgetExceededErrorResponse(
+      response.status,
+      errorBody
+    );
+    assertBeforeDeadline(controller.signal, deadlineAt);
+    return { response, budgetExceeded };
   } finally {
     clearTimeout(timeout);
   }
@@ -410,7 +641,7 @@ export function buildOpenAiRequest(
   return {
     endpoint: new URL(OPENAI_RESPONSES_IMAGE_ENDPOINT),
     model: imageGenerationModel,
-    imageCostOptions: {
+    imageRequestOptions: {
       size: imageOptions.size,
       quality: imageOptions.quality ?? "auto",
       ...(imageOptions.inputFidelity
@@ -475,7 +706,7 @@ function buildGptImage2Request(
     imageOptions: ResolvedOpenAiImageOptions;
   }
 ): OpenAiRequestContext {
-  const imageCostOptions = {
+  const imageRequestOptions = {
     size: input.imageOptions.size,
     quality: input.imageOptions.quality ?? "auto",
   };
@@ -500,7 +731,7 @@ function buildGptImage2Request(
     return {
       endpoint: new URL(OPENAI_IMAGE_GENERATIONS_ENDPOINT),
       model: input.model,
-      imageCostOptions,
+      imageRequestOptions,
       requestInit: {
         method: "POST",
         headers: {
@@ -530,7 +761,7 @@ function buildGptImage2Request(
   return {
     endpoint: new URL(OPENAI_IMAGE_EDITS_ENDPOINT),
     model: input.model,
-    imageCostOptions,
+    imageRequestOptions,
     requestInit: {
       method: "POST",
       headers: {
@@ -621,22 +852,30 @@ export async function fetchOpenAiImageResponse(
   const openAiTimeoutMs = getOpenAiTimeoutMs();
 
   for (let attempt = 0; attempt <= openAiRetryLimit; attempt += 1) {
+    safeLog("openai_image_request_started", {
+      reqId: context.reqId,
+      attempt: attempt + 1,
+    });
+    // Admission/ledger failures are not provider network failures and must
+    // never trigger an automatic paid-provider retry.
+    await context.onProviderAttempt?.();
     const openAiStartedAt = Date.now();
+    let attemptDurationRecorded = false;
+    const recordAttemptDuration = () => {
+      if (attemptDurationRecorded) return;
+      context.partialMetrics.openAiMs =
+        (context.partialMetrics.openAiMs ?? 0) + (Date.now() - openAiStartedAt);
+      attemptDurationRecorded = true;
+    };
 
     try {
-      safeLog("openai_image_request_started", {
-        reqId: context.reqId,
-        attempt: attempt + 1,
-      });
-      await context.onProviderAttempt?.();
-      const response = await fetchWithTimeout(
+      const { response, budgetExceeded } = await fetchAndReadWithDeadline(
         requestContext.endpoint,
         requestContext.createRequestInit?.() ?? requestContext.requestInit,
         openAiTimeoutMs
       );
 
-      context.partialMetrics.openAiMs =
-        (context.partialMetrics.openAiMs ?? 0) + (Date.now() - openAiStartedAt);
+      recordAttemptDuration();
 
       if (response.ok) {
         safeLog("openai_image_response_received", {
@@ -647,8 +886,7 @@ export async function fetchOpenAiImageResponse(
         return response;
       }
 
-      const errorBody = await readErrorBody(response);
-      if (isBudgetExceededErrorResponse(response.status, errorBody)) {
+      if (budgetExceeded) {
         safeLog("openai_budget_exceeded", {
           level: "error",
           reqId: context.reqId,
@@ -695,8 +933,7 @@ export async function fetchOpenAiImageResponse(
         finalizeGenerationMetrics(context.startedAt, context.partialMetrics)
       );
     } catch (error) {
-      context.partialMetrics.openAiMs =
-        (context.partialMetrics.openAiMs ?? 0) + (Date.now() - openAiStartedAt);
+      recordAttemptDuration();
 
       if (
         canRetryAttempt({
@@ -731,7 +968,11 @@ export async function parseOpenAiImageResponse(
   reqId?: string
 ): Promise<Buffer> {
   const startedAt = Date.now();
-  const result = (await response.json()) as {
+  const result = (
+    parsedOpenAiResponseBodies.has(response)
+      ? parsedOpenAiResponseBodies.get(response)
+      : await response.json()
+  ) as {
     data?: Array<{
       b64_json?: string;
     }>;

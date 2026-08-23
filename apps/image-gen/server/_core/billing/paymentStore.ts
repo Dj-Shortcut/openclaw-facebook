@@ -1570,8 +1570,20 @@ async function enqueuePaymentHandoff(
 ): Promise<void> {
   const messengerSenderUserKey = context.intent.messengerSenderUserKey?.trim();
   const messengerPageId = context.intent.messengerPageId?.trim();
-  if (!messengerSenderUserKey || !messengerPageId) {
+  const messengerChannelConnectionId =
+    context.intent.messengerChannelConnectionId;
+  const messengerPrivacyEpoch = context.intent.messengerPrivacyEpoch;
+  const identityValues = [
+    messengerSenderUserKey,
+    messengerPageId,
+    messengerChannelConnectionId,
+    messengerPrivacyEpoch,
+  ];
+  if (identityValues.every(value => value === null || value === undefined)) {
     return;
+  }
+  if (identityValues.some(value => value === null || value === undefined)) {
+    throw new Error("Billing intent Messenger identity is incomplete");
   }
 
   await enqueueOutbox(tx, {
@@ -1583,6 +1595,8 @@ async function enqueuePaymentHandoff(
       intentId: context.intent.intentId,
       messengerSenderUserKey,
       messengerPageId,
+      messengerChannelConnectionId,
+      messengerPrivacyEpoch,
     },
   });
 }

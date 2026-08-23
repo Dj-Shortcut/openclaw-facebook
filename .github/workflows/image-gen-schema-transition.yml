@@ -1,0 +1,668 @@
+name: Apply reviewed image-gen schema expand
+
+on:
+  workflow_dispatch:
+    inputs:
+      recovery_run_id:
+        description: Prior protected run that uploaded the exact 0015 recovery point (required only when resuming)
+        required: false
+        type: string
+      recovery_run_attempt:
+        description: Exact attempt of the prior protected run (required only when resuming)
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  attestations: read
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FLYCTL_VERSION: 0.4.85
+
+concurrency:
+  group: production-deploy-image-gen
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  preflight:
+    name: Refuse unresolved image-gen deployment before approval
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production-inspection
+    steps:
+      - name: Require the reviewed main branch
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - name: Checkout exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install exact verified flyctl for metadata-only preflight
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          install_root="$(mktemp -d "$RUNNER_TEMP/leaderbot-flyctl.XXXXXX")"
+          archive="$install_root/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          extract_dir="$install_root/extract"
+          bin_dir="$install_root/bin"
+          install -d -m 0700 "$extract_dir" "$bin_dir"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' \
+            "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90" \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$extract_dir" flyctl
+          test -f "$extract_dir/flyctl"
+          test ! -L "$extract_dir/flyctl"
+          install -m 0755 "$extract_dir/flyctl" "$bin_dir/flyctl"
+          ln -s flyctl "$bin_dir/fly"
+          version_output="$("$bin_dir/flyctl" version)"
+          [[ "$version_output" =~ ^flyctl\ v0\.4\.85([[:space:]]|$) ]]
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+
+      - name: Preflight settled image-gen baseline before approval
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_PRODUCTION_READONLY_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          test -n "$FLY_API_TOKEN"
+          node scripts/validate-production-deployment.mjs --settled-live image-gen
+
+  expand:
+    name: Snapshot, restore-test, and apply 0016
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    environment: production
+    steps:
+      - name: Require the reviewed main branch
+        run: test "$GITHUB_REF" = "refs/heads/main"
+
+      - name: Checkout exact source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install root validation dependencies
+        run: npm ci
+
+      - name: Require the frozen reviewed transition
+        run: |
+          npm run production:validate
+          test "$(jq -er '.apps["image-gen"].databaseSchemaTransition.state' deploy/production/apps.json)" = "expand_pending"
+          test "$(jq -er '.apps["image-gen"].databaseSchemaPhase' deploy/production/apps.json)" = "0015_base"
+          test "$(jq -er '.apps["image-gen"].deploymentEnabled' deploy/production/apps.json)" = "false"
+
+      - name: Require green CI for this exact transition source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/validate-production-deployment.mjs --verify-source-ci "$GITHUB_SHA"
+
+      - name: Install exact verified flyctl
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = "Linux"
+          test "$RUNNER_ARCH" = "X64"
+          install_root="$(mktemp -d "$RUNNER_TEMP/leaderbot-flyctl.XXXXXX")"
+          archive="$install_root/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          extract_dir="$install_root/extract"
+          bin_dir="$install_root/bin"
+          install -d -m 0700 "$extract_dir" "$bin_dir"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --retry 3 --retry-all-errors \
+            --output "$archive" \
+            "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz"
+          printf '%s  %s\n' \
+            "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90" \
+            "$archive" | sha256sum --check --strict
+          tar --extract --gzip --file "$archive" --directory "$extract_dir" flyctl
+          test -f "$extract_dir/flyctl"
+          test ! -L "$extract_dir/flyctl"
+          install -m 0755 "$extract_dir/flyctl" "$bin_dir/flyctl"
+          ln -s flyctl "$bin_dir/fly"
+          version_output="$("$bin_dir/flyctl" version)"
+          [[ "$version_output" =~ ^flyctl\ v0\.4\.85([[:space:]]|$) ]]
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+
+      - name: Load exact reviewed bridge
+        run: |
+          bridge_image="$(jq -er '.apps["image-gen"].databaseSchemaTransition.bridgeImage' deploy/production/apps.json)"
+          bridge_source="$(jq -er '.apps["image-gen"].databaseSchemaTransition.bridgeSourceCommit' deploy/production/apps.json)"
+          bridge_base="$(jq -er '.apps["image-gen"].databaseSchemaTransition.legacyBaseImage' deploy/production/apps.json)"
+          predicate_type="$(jq -er '.apps["image-gen"].databaseSchemaTransition.bridgePredicateType' deploy/production/apps.json)"
+          [[ "$bridge_image" =~ ^registry\.fly\.io/leaderbot-fb-image-gen@sha256:[a-f0-9]{64}$ ]]
+          [[ "$bridge_source" =~ ^[a-f0-9]{40}$ ]]
+          {
+            echo "BRIDGE_IMAGE=$bridge_image"
+            echo "BRIDGE_SOURCE=$bridge_source"
+            echo "BRIDGE_BASE=$bridge_base"
+            echo "BRIDGE_PREDICATE_TYPE=$predicate_type"
+          } >> "$GITHUB_ENV"
+
+      - name: Require green CI for the bridge source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/validate-production-deployment.mjs --verify-reviewed-ci image-gen "$BRIDGE_IMAGE"
+
+      - name: Verify trusted bridge attestations
+        timeout-minutes: 10
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test -n "$FLY_API_TOKEN"
+          flyctl auth docker
+          signer="$GITHUB_REPOSITORY/.github/workflows/build-production-artifacts.yml"
+          gh attestation verify "oci://$BRIDGE_IMAGE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$signer" \
+            --source-digest "$BRIDGE_SOURCE" \
+            --source-ref refs/heads/main \
+            --deny-self-hosted-runners
+          attested_base="$(gh attestation verify "oci://$BRIDGE_IMAGE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$signer" \
+            --source-digest "$BRIDGE_SOURCE" \
+            --source-ref refs/heads/main \
+            --predicate-type "$BRIDGE_PREDICATE_TYPE" \
+            --deny-self-hosted-runners \
+            --jq '.[0].verificationResult.statement.predicate.baseImage')"
+          test "$attested_base" = "$BRIDGE_BASE"
+          docker pull "$BRIDGE_IMAGE"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.artifact.kind" }}' "$BRIDGE_IMAGE")" = "migration-bridge"
+          test "$(docker run --rm --entrypoint cat "$BRIDGE_IMAGE" /app/.leaderbot-artifact-kind)" = "migration-bridge"
+
+      - name: Remove bridge registry credential
+        if: always()
+        run: docker logout registry.fly.io
+
+      - name: Prove every app and worker Machine is the bridge
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          live_config="$(flyctl config show --app leaderbot-fb-image-gen)"
+          settled_identity="$(jq -er '.env.LEADERBOT_DEPLOYMENT_IDENTITY // "none"' <<<"$live_config")"
+          [[ "$settled_identity" =~ ^deploy-[0-9]+-[0-9]+$ ]]
+          node scripts/validate-production-deployment.mjs \
+            --live image-gen \
+            --expected-deployment-identity "$settled_identity"
+          node scripts/validate-production-deployment.mjs \
+            --verify-settled-baseline image-gen "$settled_identity"
+
+      - name: Prepare metadata-only recovery record
+        run: mkdir -p "$RUNNER_TEMP/leaderbot-schema-transition"
+
+      - name: Remove abandoned restore probes from earlier protected runs
+        timeout-minutes: 8
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+        run: |
+          test -n "$FLY_API_TOKEN"
+          db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          machines="$(flyctl machine list --app "$db_app" --json)"
+          volumes="$(flyctl volumes list --app "$db_app" --json)"
+          machine_count="$(jq -r '[.[] | select((.name // "") | test("^leaderbot-restore-probe-[0-9]+-[0-9]+$"))] | length' <<<"$machines")"
+          test "$machine_count" -le 10
+          mapfile -t machine_ids < <(jq -er '.[] | select((.name // "") | test("^leaderbot-restore-probe-[0-9]+-[0-9]+$")) | .id' <<<"$machines")
+          for machine_id in "${machine_ids[@]}"; do
+            [[ "$machine_id" =~ ^[0-9a-f]{14}$ ]]
+            machine="$(jq -cer --arg id "$machine_id" '[.[] | select(.id==$id)] | if length==1 then .[0] else error("probe Machine mismatch") end' <<<"$machines")"
+            machine_name="$(jq -er '.name' <<<"$machine")"
+            [[ "$machine_name" =~ ^leaderbot-restore-probe-([0-9]+)-([0-9]+)$ ]]
+            probe_run="${BASH_REMATCH[1]}"
+            probe_attempt="${BASH_REMATCH[2]}"
+            volume_name="leaderbot_restore_probe_${probe_run}_${probe_attempt}"
+            volume="$(jq -cer --arg name "$volume_name" '[.[] | select(.name==$name)] | if length==1 then .[0] else error("probe volume mismatch") end' <<<"$volumes")"
+            volume_id="$(jq -er '.id' <<<"$volume")"
+            [[ "$volume_id" =~ ^vol_[a-z0-9]+$ ]]
+            jq -e '.state|IN("started","stopped","suspended","created","failed")' <<<"$machine" > /dev/null
+            jq -e --arg run "$probe_run" --arg attempt "$probe_attempt" --arg volume "$volume_id" '(.config.metadata.leaderbot_restore_probe // "")==$run and (.config.metadata.leaderbot_restore_probe_attempt // "")==$attempt and ([.config.mounts[]? | select(.volume==$volume and .path=="/var/lib/mysql")] | length)==1 and (.config.mounts|length)==1' <<<"$machine" > /dev/null
+            test "$(jq -er '.attached_machine_id // ""' <<<"$volume")" = "$machine_id"
+            flyctl machine destroy "$machine_id" --app "$db_app" --force
+          done
+          for _ in $(seq 1 30); do
+            volumes="$(flyctl volumes list --app "$db_app" --json)"
+            matching_count="$(jq -r '[.[] | select((.name // "") | test("^leaderbot_restore_probe_[0-9]+_[0-9]+$"))] | length' <<<"$volumes")"
+            if test "$matching_count" = 0; then
+              break
+            fi
+            mapfile -t volume_ids < <(jq -r '.[] | select(((.name // "") | test("^leaderbot_restore_probe_[0-9]+_[0-9]+$")) and ((.attached_machine_id // "")=="")) | .id' <<<"$volumes")
+            for volume_id in "${volume_ids[@]}"; do
+              [[ "$volume_id" =~ ^vol_[a-z0-9]+$ ]]
+              flyctl volumes destroy "$volume_id" --app "$db_app" --yes
+            done
+            sleep 5
+          done
+          remaining="$(flyctl volumes list --app "$db_app" --json | jq '[.[] | select((.name // "") | test("^leaderbot_restore_probe_[0-9]+_[0-9]+$"))] | length')"
+          test "$remaining" = 0
+
+      - name: Bind snapshot and tunnel to the one live database Machine
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+        run: |
+          test -n "$FLY_API_TOKEN"
+          db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          volume_id="$(jq -er '.apps["image-gen"].databaseRecovery.volumeId' deploy/production/apps.json)"
+          machines="$(flyctl machine list --app "$db_app" --json)"
+          test "$(jq -r '[.[] | select(.state=="started")] | length' <<<"$machines")" = 1
+          database_machine="$(jq -cer --arg volume "$volume_id" '[.[] | select(.state=="started" and any(.config.mounts[]?; .volume==$volume and .path=="/var/lib/mysql"))] | if length==1 then .[0] else error("database Machine/volume binding mismatch") end' <<<"$machines")"
+          machine_id="$(jq -er '.id' <<<"$database_machine")"
+          private_ip="$(jq -er '.private_ip' <<<"$database_machine")"
+          [[ "$machine_id" =~ ^[0-9a-f]{14}$ ]]
+          [[ "$private_ip" =~ ^fdaa:[0-9a-f:]+$ ]]
+          {
+            echo "DATABASE_MACHINE_ID=$machine_id"
+            echo "DATABASE_MACHINE_PRIVATE_IP=$private_ip"
+          } >> "$GITHUB_ENV"
+
+      - name: Start isolated database migration tunnel
+        timeout-minutes: 5
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+          DATABASE_MIGRATION_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
+        run: |
+          test -n "$FLY_API_TOKEN"
+          test -n "$DATABASE_MIGRATION_URL"
+          echo "::add-mask::$DATABASE_MIGRATION_URL"
+          database_name="$(jq -er '.apps["image-gen"].databaseRecovery.databaseName' deploy/production/apps.json)"
+          [[ "$database_name" =~ ^[a-z][a-z0-9_]+$ ]]
+          # This is JavaScript source; the template expression is evaluated by Node.
+          # shellcheck disable=SC2016
+          EXPECTED_DATABASE_NAME="$database_name" node -e 'const u=new URL(process.env.DATABASE_MIGRATION_URL);if(!new Set(["mysql:","mysql2:"]).has(u.protocol)||u.hostname!=="127.0.0.1"||u.port!=="13306"||!u.username||!u.password||u.pathname!==`/${process.env.EXPECTED_DATABASE_NAME}`)process.exit(1)'
+          db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          flyctl proxy 13306:3306 "$DATABASE_MACHINE_PRIVATE_IP" --app "$db_app" --bind-addr 127.0.0.1 --quiet \
+            > "$RUNNER_TEMP/leaderbot-schema-transition/proxy.log" 2>&1 &
+          proxy_pid="$!"
+          [[ "$proxy_pid" =~ ^[0-9]+$ ]]
+          printf '%s\n' "$proxy_pid" > "$RUNNER_TEMP/leaderbot-schema-transition/proxy.pid"
+          for _ in $(seq 1 60); do
+            kill -0 "$proxy_pid"
+            node -e 'const n=require("node:net");const s=n.createConnection(13306,"127.0.0.1",()=>{s.destroy();process.exit(0)});s.setTimeout(500,()=>{s.destroy();process.exit(1)});s.on("error",()=>process.exit(1))' && break
+            sleep 1
+          done
+          node -e 'const n=require("node:net");const s=n.createConnection(13306,"127.0.0.1",()=>{s.destroy();process.exit(0)});s.setTimeout(1000,()=>{s.destroy();process.exit(1)});s.on("error",()=>process.exit(1))'
+
+      - name: Inspect the exact live schema phase without changing it
+        timeout-minutes: 5
+        env:
+          DATABASE_MIGRATION_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
+        run: |
+          output="$(docker run --rm --network host \
+            --env "DATABASE_URL=$DATABASE_MIGRATION_URL" \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=inspect-expand-transition \
+            "$BRIDGE_IMAGE" node dist/migrate-production.cjs)"
+          phase="$(grep -Eo '^Production schema (0015_base|0016_expand|0016_partial_[0-9]+) inspected\.$' <<<"$output" | sed -E 's/^Production schema ([^ ]+) inspected\.$/\1/')"
+          test "$(wc -l <<<"$phase" | tr -d ' ')" = 1
+          [[ "$phase" =~ ^(0015_base|0016_expand|0016_partial_[0-9]+)$ ]]
+          echo "OBSERVED_SCHEMA_PHASE=$phase" >> "$GITHUB_ENV"
+
+      - name: Create fresh snapshot from the exact 0015 base
+        if: env.OBSERVED_SCHEMA_PHASE == '0015_base'
+        timeout-minutes: 15
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+          RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
+          RECOVERY_RUN_ATTEMPT: ${{ inputs.recovery_run_attempt }}
+        run: |
+          test -z "$RECOVERY_RUN_ID"
+          test -z "$RECOVERY_RUN_ATTEMPT"
+          db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          volume_id="$(jq -er '.apps["image-gen"].databaseRecovery.volumeId' deploy/production/apps.json)"
+          volume="$(flyctl volumes list --app "$db_app" --json | jq -cer --arg id "$volume_id" '[.[] | select(.id==$id)] | if length==1 then .[0] else error("database volume mismatch") end')"
+          test "$(jq -r '.encrypted' <<<"$volume")" = "true"
+          test "$(jq -r '.auto_backup_enabled' <<<"$volume")" = "true"
+          test "$(jq -er '.attached_machine_id' <<<"$volume")" = "$DATABASE_MACHINE_ID"
+          before="$RUNNER_TEMP/leaderbot-schema-transition/snapshots-before.json"
+          current="$RUNNER_TEMP/leaderbot-schema-transition/snapshots-current.json"
+          flyctl volumes snapshots list "$volume_id" --app "$db_app" --json > "$before"
+          snapshot_started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          flyctl volumes snapshots create "$volume_id" --app "$db_app"
+          selection='{"state":"waiting"}'
+          for _ in $(seq 1 60); do
+            flyctl volumes snapshots list "$volume_id" --app "$db_app" --json > "$current"
+            selection="$(node scripts/select-fresh-fly-snapshot.mjs "$before" "$current" "$snapshot_started_at")"
+            test "$(jq -er '.state' <<<"$selection")" = "ready" && break
+            sleep 10
+          done
+          test "$(jq -er '.state' <<<"$selection")" = "ready"
+          snapshot_id="$(jq -er '.snapshot.id' <<<"$selection")"
+          snapshot_digest="$(jq -er '.snapshot.digest' <<<"$selection")"
+          snapshot_created_at="$(jq -er '.snapshot.createdAt' <<<"$selection")"
+          {
+            echo "RECOVERY_SNAPSHOT_ID=$snapshot_id"
+            echo "RECOVERY_SNAPSHOT_DIGEST=$snapshot_digest"
+            echo "RECOVERY_SNAPSHOT_CREATED_AT=$snapshot_created_at"
+            echo "RECOVERY_SOURCE_RUN_ID=$GITHUB_RUN_ID"
+            echo "RECOVERY_SOURCE_RUN_ATTEMPT=$GITHUB_RUN_ATTEMPT"
+          } >> "$GITHUB_ENV"
+
+      - name: Load exact prior 0015 recovery point for a resume
+        if: env.OBSERVED_SCHEMA_PHASE != '0015_base'
+        timeout-minutes: 8
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
+          RECOVERY_RUN_ATTEMPT: ${{ inputs.recovery_run_attempt }}
+        run: |
+          [[ "$RECOVERY_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$RECOVERY_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
+          if test "$RECOVERY_RUN_ID" = "$GITHUB_RUN_ID"; then
+            test "$RECOVERY_RUN_ATTEMPT" -lt "$GITHUB_RUN_ATTEMPT"
+          fi
+          run="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RECOVERY_RUN_ID/attempts/$RECOVERY_RUN_ATTEMPT")"
+          jq -e \
+            --argjson runId "$RECOVERY_RUN_ID" \
+            --argjson runAttempt "$RECOVERY_RUN_ATTEMPT" \
+            '.id==$runId and .run_attempt==$runAttempt and .status=="completed" and (.head_sha|test("^[a-f0-9]{40}$")) and .head_branch=="main" and .event=="workflow_dispatch" and .path==".github/workflows/image-gen-schema-transition.yml"' \
+            <<<"$run" > /dev/null
+          prior_sha="$(jq -er '.head_sha' <<<"$run")"
+          artifact_name="image-gen-schema-pre-expand-${prior_sha}-${RECOVERY_RUN_ID}-${RECOVERY_RUN_ATTEMPT}"
+          artifacts="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RECOVERY_RUN_ID/artifacts?per_page=100")"
+          artifact_id="$(jq -er --arg name "$artifact_name" '[.artifacts[] | select(.name==$name and .expired==false)] | if length==1 then .[0].id else error("recovery artifact mismatch") end' <<<"$artifacts")"
+          [[ "$artifact_id" =~ ^[0-9]+$ ]]
+          archive="$RUNNER_TEMP/leaderbot-schema-transition/prior-recovery.zip"
+          prior="$RUNNER_TEMP/leaderbot-schema-transition/prior"
+          mkdir -p "$prior"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$archive"
+          unzip -q "$archive" -d "$prior"
+          test -f "$prior/snapshot.json"
+          db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          volume_id="$(jq -er '.apps["image-gen"].databaseRecovery.volumeId' deploy/production/apps.json)"
+          database_name="$(jq -er '.apps["image-gen"].databaseRecovery.databaseName' deploy/production/apps.json)"
+          migration_manifest_sha="$(sha256sum apps/image-gen/drizzle/migration-manifest.json | cut -d' ' -f1)"
+          schema_contract_sha="$(sha256sum apps/image-gen/drizzle/production-schema-contract.json | cut -d' ' -f1)"
+          jq -e \
+            --arg priorSha "$prior_sha" \
+            --arg bridge "$BRIDGE_IMAGE" \
+            --arg bridgeSource "$BRIDGE_SOURCE" \
+            --arg runId "$RECOVERY_RUN_ID" \
+            --arg runAttempt "$RECOVERY_RUN_ATTEMPT" \
+            --arg app "$db_app" \
+            --arg volume "$volume_id" \
+            --arg databaseName "$database_name" \
+            --arg migrationManifestSha "$migration_manifest_sha" \
+            --arg schemaContractSha "$schema_contract_sha" \
+            '.sourceCommit==$priorSha and .sourceRef=="refs/heads/main" and .workflowPath==".github/workflows/image-gen-schema-transition.yml" and .runId==$runId and .runAttempt==$runAttempt and .bridgeImage==$bridge and .bridgeSource==$bridgeSource and .migrationManifestSha256==$migrationManifestSha and .schemaContractSha256==$schemaContractSha and .from=="0015_base" and .database.app==$app and .database.volumeId==$volume and .database.name==$databaseName and (.database.machineId|type)=="string" and .snapshot.phase=="0015_base" and .snapshot.restoreVerified==true and (.snapshot.id|type)=="string" and (.snapshot.digest|type)=="string" and (.snapshot.createdAt|type)=="string"' \
+            "$prior/snapshot.json" > /dev/null
+          snapshot_id="$(jq -er '.snapshot.id' "$prior/snapshot.json")"
+          snapshot_digest="$(jq -er '.snapshot.digest' "$prior/snapshot.json")"
+          snapshot_created_at="$(jq -er '.snapshot.createdAt' "$prior/snapshot.json")"
+          live_snapshot="$(flyctl volumes snapshots list "$volume_id" --app "$db_app" --json | jq -cer --arg id "$snapshot_id" '[.[] | select(.id==$id)] | if length==1 then .[0] else error("recovery snapshot missing") end')"
+          test "$(jq -er '.status' <<<"$live_snapshot")" = "created"
+          test "$(jq -er '.digest' <<<"$live_snapshot")" = "$snapshot_digest"
+          cp "$prior/snapshot.json" "$RUNNER_TEMP/leaderbot-schema-transition/snapshot.json"
+          {
+            echo "RECOVERY_SNAPSHOT_ID=$snapshot_id"
+            echo "RECOVERY_SNAPSHOT_DIGEST=$snapshot_digest"
+            echo "RECOVERY_SNAPSHOT_CREATED_AT=$snapshot_created_at"
+            echo "RECOVERY_SOURCE_RUN_ID=$RECOVERY_RUN_ID"
+            echo "RECOVERY_SOURCE_RUN_ATTEMPT=$RECOVERY_RUN_ATTEMPT"
+          } >> "$GITHUB_ENV"
+
+      - name: Restore recovery snapshot into an isolated encrypted volume
+        timeout-minutes: 18
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+        run: |
+          db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          region="$(jq -er '.apps["image-gen"].databaseRecovery.region' deploy/production/apps.json)"
+          size_gb="$(jq -er '.apps["image-gen"].databaseRecovery.sizeGb' deploy/production/apps.json)"
+          name="leaderbot_restore_probe_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          printf '%s\n' "$name" > "$RUNNER_TEMP/leaderbot-schema-transition/restore-volume-name.txt"
+          restored="$(flyctl volumes create "$name" \
+            --app "$db_app" \
+            --region "$region" \
+            --size "$size_gb" \
+            --snapshot-id "$RECOVERY_SNAPSHOT_ID" \
+            --scheduled-snapshots=false \
+            --yes \
+            --json)"
+          restore_volume_id="$(jq -er 'if type=="array" and length==1 then .[0].id elif type=="object" then .id else error("restore volume response mismatch") end' <<<"$restored")"
+          [[ "$restore_volume_id" =~ ^vol_[a-z0-9]+$ ]]
+          printf '%s\n' "$restore_volume_id" > "$RUNNER_TEMP/leaderbot-schema-transition/restore-volume-id.txt"
+          echo "RESTORE_VOLUME_ID=$restore_volume_id" >> "$GITHUB_ENV"
+          restored=''
+          for _ in $(seq 1 90); do
+            restored="$(flyctl volumes list --app "$db_app" --json | jq -cer --arg id "$restore_volume_id" '[.[] | select(.id==$id)] | if length==1 then .[0] else error("restore volume disappeared") end')"
+            test "$(jq -er '.state' <<<"$restored")" = "created" && break
+            sleep 10
+          done
+          test "$(jq -er '.state' <<<"$restored")" = "created"
+          test "$(jq -r '.encrypted' <<<"$restored")" = "true"
+          test "$(jq -er '.region' <<<"$restored")" = "$region"
+          test "$(jq -er '.size_gb' <<<"$restored")" = "$size_gb"
+          test "$(jq -er '.name' <<<"$restored")" = "$name"
+          test -z "$(jq -er '.attached_machine_id // ""' <<<"$restored")"
+
+      - name: Prove the restored MySQL copy and remote command exit status
+        timeout-minutes: 25
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+        run: |
+          db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          region="$(jq -er '.apps["image-gen"].databaseRecovery.region' deploy/production/apps.json)"
+          mysql_image="$(jq -er '.apps["image-gen"].databaseRecovery.mysqlImage' deploy/production/apps.json)"
+          probe_memory="$(jq -er '.apps["image-gen"].databaseRecovery.probeVmMemoryMb' deploy/production/apps.json)"
+          machine_name="leaderbot-restore-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          printf '%s\n' "$machine_name" > "$RUNNER_TEMP/leaderbot-schema-transition/restore-machine-name.txt"
+          flyctl machine run "$mysql_image" \
+            --app "$db_app" \
+            --name "$machine_name" \
+            --region "$region" \
+            --vm-memory "$probe_memory" \
+            --volume "$RESTORE_VOLUME_ID:/var/lib/mysql" \
+            --restart no \
+            --rm \
+            --detach \
+            --skip-dns-registration \
+            --metadata "leaderbot_restore_probe=$GITHUB_RUN_ID" \
+            --metadata "leaderbot_restore_probe_attempt=$GITHUB_RUN_ATTEMPT" \
+            --entrypoint /bin/sh \
+            -- -c "sleep 1200"
+          probe_machine=''
+          for _ in $(seq 1 60); do
+            machines="$(flyctl machine list --app "$db_app" --json)"
+            probe_machine="$(jq -cer --arg name "$machine_name" --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" --arg volume "$RESTORE_VOLUME_ID" '[.[] | select(.name==$name and (.config.metadata.leaderbot_restore_probe // "")==$run and (.config.metadata.leaderbot_restore_probe_attempt // "")==$attempt and ([.config.mounts[]? | select(.volume==$volume and .path=="/var/lib/mysql")] | length)==1 and (.config.mounts|length)==1)] | if length==1 then .[0] elif length>1 then error("duplicate restore probe Machines") else empty end' <<<"$machines")" || true
+            if test -n "$probe_machine" && test "$(jq -er '.state' <<<"$probe_machine")" = "started"; then
+              break
+            fi
+            sleep 5
+          done
+          test -n "$probe_machine"
+          test "$(jq -er '.state' <<<"$probe_machine")" = "started"
+          probe_machine_id="$(jq -er '.id' <<<"$probe_machine")"
+          [[ "$probe_machine_id" =~ ^[0-9a-f]{14}$ ]]
+          printf '%s\n' "$probe_machine_id" > "$RUNNER_TEMP/leaderbot-schema-transition/restore-machine-id.txt"
+          # This script is intentionally expanded only inside the isolated Machine.
+          # shellcheck disable=SC2016
+          probe='set -eu; mkdir -p /var/run/mysqld; chown mysql:mysql /var/run/mysqld; mysqld --user=mysql --skip-networking --skip-grant-tables --socket=/var/run/mysqld/mysqld.sock --pid-file=/var/run/mysqld/mysqld.pid --log-error=/tmp/mysql-restore-probe.log & pid=$!; cleanup(){ kill -TERM "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; }; trap cleanup EXIT; ready=0; for i in $(seq 1 60); do if mysqladmin --protocol=socket --socket=/var/run/mysqld/mysqld.sock -uroot ping --silent >/dev/null 2>&1; then ready=1; break; fi; sleep 2; done; test "$ready" = 1; mysqlcheck --protocol=socket --socket=/var/run/mysqld/mysqld.sock -uroot --all-databases --check --silent >/dev/null; mysql --protocol=socket --socket=/var/run/mysqld/mysqld.sock -uroot -Nse "SELECT COUNT(*)>=1 FROM leaderbot.__drizzle_migrations" | grep -Fx 1 >/dev/null'
+          timeout --signal=TERM 8m flyctl ssh console \
+            --app "$db_app" \
+            --machine "$probe_machine_id" \
+            --quiet \
+            --command "$probe"
+
+      - name: Remove isolated restore Machine and volume
+        if: always()
+        timeout-minutes: 8
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_DATABASE_MIGRATION_TOKEN }}
+        run: |
+          test -n "$FLY_API_TOKEN"
+          db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          expected_machine_name="leaderbot-restore-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          expected_volume_name="leaderbot_restore_probe_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          volume_id=''
+          if test -f "$RUNNER_TEMP/leaderbot-schema-transition/restore-volume-id.txt"; then
+            volume_id="$(cat "$RUNNER_TEMP/leaderbot-schema-transition/restore-volume-id.txt")"
+          fi
+          if ! [[ "$volume_id" =~ ^vol_[a-z0-9]+$ ]] && test -f "$RUNNER_TEMP/leaderbot-schema-transition/restore-volume-name.txt"; then
+            volume_name="$(cat "$RUNNER_TEMP/leaderbot-schema-transition/restore-volume-name.txt")"
+            test "$volume_name" = "$expected_volume_name"
+            volumes="$(flyctl volumes list --app "$db_app" --json)"
+            volume_id="$(jq -er --arg name "$volume_name" '[.[] | select(.name==$name)] | if length==1 then .[0].id elif length==0 then "" else error("duplicate restore volumes") end' <<<"$volumes")"
+          fi
+          machines="$(flyctl machine list --app "$db_app" --json)"
+          machine_count="$(jq -r '[.[] | select((.name // "") | test("^leaderbot-restore-probe-[0-9]+-[0-9]+$"))] | length' <<<"$machines")"
+          test "$machine_count" -le 10
+          mapfile -t machine_ids < <(jq -er --arg name "$expected_machine_name" --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" --arg volume "$volume_id" '.[] | select(.name==$name and (.config.metadata.leaderbot_restore_probe // "")==$run and (.config.metadata.leaderbot_restore_probe_attempt // "")==$attempt and $volume!="" and ([.config.mounts[]? | select(.volume==$volume and .path=="/var/lib/mysql")] | length)==1 and (.config.mounts|length)==1) | .id' <<<"$machines")
+          test "${#machine_ids[@]}" -le 1
+          for machine_id in "${machine_ids[@]}"; do
+            [[ "$machine_id" =~ ^[0-9a-f]{14}$ ]]
+            machine="$(jq -cer --arg id "$machine_id" '[.[] | select(.id==$id)] | if length==1 then .[0] else error("probe Machine mismatch") end' <<<"$machines")"
+            jq -e '.state|IN("started","stopped","suspended","created","failed")' <<<"$machine" > /dev/null
+            jq -e --arg name "$expected_machine_name" --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" --arg volume "$volume_id" '(.name // "")==$name and (.config.metadata.leaderbot_restore_probe // "")==$run and (.config.metadata.leaderbot_restore_probe_attempt // "")==$attempt and $volume!="" and ([.config.mounts[]? | select(.volume==$volume and .path=="/var/lib/mysql")] | length)==1 and (.config.mounts|length)==1' <<<"$machine" > /dev/null
+            flyctl machine destroy "$machine_id" --app "$db_app" --force
+          done
+          if [[ "$volume_id" =~ ^vol_[a-z0-9]+$ ]]; then
+            for _ in $(seq 1 30); do
+              volume="$(flyctl volumes list --app "$db_app" --json | jq -cer --arg id "$volume_id" '[.[] | select(.id==$id)] | if length<=1 then .[0] // {} else error("duplicate restore volume id") end')"
+              test "$(jq -r 'length' <<<"$volume")" = 0 && break
+              attached="$(jq -er '.attached_machine_id // ""' <<<"$volume")"
+              if test -z "$attached"; then
+                flyctl volumes destroy "$volume_id" --app "$db_app" --yes
+              fi
+              sleep 5
+            done
+            remaining="$(flyctl volumes list --app "$db_app" --json | jq -r --arg id "$volume_id" '[.[] | select(.id==$id)] | length')"
+            test "$remaining" = 0
+          fi
+
+      - name: Record exact pre-expand recovery point
+        if: env.OBSERVED_SCHEMA_PHASE == '0015_base'
+        run: |
+          db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          volume_id="$(jq -er '.apps["image-gen"].databaseRecovery.volumeId' deploy/production/apps.json)"
+          database_name="$(jq -er '.apps["image-gen"].databaseRecovery.databaseName' deploy/production/apps.json)"
+          migration_manifest_sha="$(sha256sum apps/image-gen/drizzle/migration-manifest.json | cut -d' ' -f1)"
+          schema_contract_sha="$(sha256sum apps/image-gen/drizzle/production-schema-contract.json | cut -d' ' -f1)"
+          jq -n \
+            --arg sourceCommit "$GITHUB_SHA" \
+            --arg sourceRef "$GITHUB_REF" \
+            --arg workflowPath ".github/workflows/image-gen-schema-transition.yml" \
+            --arg runId "$GITHUB_RUN_ID" \
+            --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg bridgeImage "$BRIDGE_IMAGE" \
+            --arg bridgeSource "$BRIDGE_SOURCE" \
+            --arg migrationManifestSha "$migration_manifest_sha" \
+            --arg schemaContractSha "$schema_contract_sha" \
+            --arg databaseApp "$db_app" \
+            --arg databaseVolume "$volume_id" \
+            --arg databaseName "$database_name" \
+            --arg databaseMachine "$DATABASE_MACHINE_ID" \
+            --arg snapshotId "$RECOVERY_SNAPSHOT_ID" \
+            --arg snapshotDigest "$RECOVERY_SNAPSHOT_DIGEST" \
+            --arg snapshotCreatedAt "$RECOVERY_SNAPSHOT_CREATED_AT" \
+            --arg recordedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{sourceCommit:$sourceCommit,sourceRef:$sourceRef,workflowPath:$workflowPath,runId:$runId,runAttempt:$runAttempt,bridgeImage:$bridgeImage,bridgeSource:$bridgeSource,migrationManifestSha256:$migrationManifestSha,schemaContractSha256:$schemaContractSha,from:"0015_base",database:{app:$databaseApp,volumeId:$databaseVolume,name:$databaseName,machineId:$databaseMachine},snapshot:{phase:"0015_base",id:$snapshotId,digest:$snapshotDigest,createdAt:$snapshotCreatedAt,restoreVerified:true},recordedAt:$recordedAt}' \
+            > "$RUNNER_TEMP/leaderbot-schema-transition/snapshot.json"
+
+      - name: Validate exact 0015 recovery evidence before DDL
+        run: |
+          evidence="$RUNNER_TEMP/leaderbot-schema-transition/snapshot.json"
+          test -f "$evidence"
+          database_name="$(jq -er '.apps["image-gen"].databaseRecovery.databaseName' deploy/production/apps.json)"
+          database_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
+          database_volume="$(jq -er '.apps["image-gen"].databaseRecovery.volumeId' deploy/production/apps.json)"
+          migration_manifest_sha="$(sha256sum apps/image-gen/drizzle/migration-manifest.json | cut -d' ' -f1)"
+          schema_contract_sha="$(sha256sum apps/image-gen/drizzle/production-schema-contract.json | cut -d' ' -f1)"
+          jq -e \
+            --arg sha "$GITHUB_SHA" \
+            --arg bridge "$BRIDGE_IMAGE" \
+            --arg bridgeSource "$BRIDGE_SOURCE" \
+            --arg databaseName "$database_name" \
+            --arg databaseApp "$database_app" \
+            --arg databaseVolume "$database_volume" \
+            --arg databaseMachine "$DATABASE_MACHINE_ID" \
+            --arg observedPhase "$OBSERVED_SCHEMA_PHASE" \
+            --arg migrationManifestSha "$migration_manifest_sha" \
+            --arg schemaContractSha "$schema_contract_sha" \
+            '(.sourceCommit|test("^[a-f0-9]{40}$")) and .sourceRef=="refs/heads/main" and .workflowPath==".github/workflows/image-gen-schema-transition.yml" and .bridgeImage==$bridge and .bridgeSource==$bridgeSource and .migrationManifestSha256==$migrationManifestSha and .schemaContractSha256==$schemaContractSha and .from=="0015_base" and .database.name==$databaseName and .database.app==$databaseApp and .database.volumeId==$databaseVolume and (($observedPhase=="0015_base" and .sourceCommit==$sha and .database.machineId==$databaseMachine) or ($observedPhase!="0015_base" and (.database.machineId|type)=="string")) and .snapshot.phase=="0015_base" and .snapshot.restoreVerified==true' \
+            "$evidence" > /dev/null
+
+      - name: Upload immutable pre-expand recovery evidence before DDL
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-gen-schema-pre-expand-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-schema-transition/snapshot.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Apply only the reviewed 0016 expand migration
+        if: env.OBSERVED_SCHEMA_PHASE != '0016_expand'
+        timeout-minutes: 12
+        env:
+          DATABASE_MIGRATION_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
+        run: |
+          docker run --rm --network host \
+            --env "DATABASE_URL=$DATABASE_MIGRATION_URL" \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=apply-expand \
+            "$BRIDGE_IMAGE" node dist/migrate-production.cjs
+
+      - name: Verify the exact 0016 expanded schema
+        timeout-minutes: 8
+        env:
+          DATABASE_MIGRATION_URL: ${{ secrets.IMAGE_GEN_DATABASE_MIGRATION_URL }}
+        run: |
+          docker run --rm --network host \
+            --env "DATABASE_URL=$DATABASE_MIGRATION_URL" \
+            --env LEADERBOT_PRODUCTION_MIGRATION_MODE=verify-expand-transition \
+            "$BRIDGE_IMAGE" node dist/migrate-production.cjs
+
+      - name: Record metadata-only successful transition
+        run: |
+          jq -n \
+            --slurpfile recovery "$RUNNER_TEMP/leaderbot-schema-transition/snapshot.json" \
+            --arg sourceCommit "$GITHUB_SHA" \
+            --arg bridgeImage "$BRIDGE_IMAGE" \
+            --arg bridgeSource "$BRIDGE_SOURCE" \
+            --arg observedPhase "$OBSERVED_SCHEMA_PHASE" \
+            --arg recoveryRunId "$RECOVERY_SOURCE_RUN_ID" \
+            --arg recoveryRunAttempt "$RECOVERY_SOURCE_RUN_ATTEMPT" \
+            --arg completedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{sourceCommit:$sourceCommit,bridgeImage:$bridgeImage,bridgeSource:$bridgeSource,from:"0015_base",to:"0016_expand",observedPhase:$observedPhase,resumeFrom:(if $observedPhase=="0015_base" then null else $observedPhase end),recoveryRunId:$recoveryRunId,recoveryRunAttempt:$recoveryRunAttempt,recovery:$recovery[0],completedAt:$completedAt}' \
+            > "$RUNNER_TEMP/leaderbot-schema-transition/result.json"
+
+      - name: Stop isolated database migration tunnel
+        if: always()
+        run: |
+          pid_file="$RUNNER_TEMP/leaderbot-schema-transition/proxy.pid"
+          if test -f "$pid_file"; then
+            proxy_pid="$(cat "$pid_file")"
+            [[ "$proxy_pid" =~ ^[0-9]+$ ]]
+            kill "$proxy_pid" >/dev/null 2>&1 || true
+            wait "$proxy_pid" >/dev/null 2>&1 || true
+          fi
+
+      - name: Upload transition result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-gen-schema-transition-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/leaderbot-schema-transition/result.json
+          if-no-files-found: warn
+          retention-days: 90

@@ -44,7 +44,8 @@ function buildPromptForGeneration(
 
   return buildSourceImageEditPrompt(
     input.promptHint ?? "",
-    input.sourceImageUrls?.length ?? (input.sourceImageUrl || input.sourceImageData ? 1 : 0)
+    input.sourceImageUrls?.length ??
+      (input.sourceImageUrl || input.sourceImageData ? 1 : 0)
   );
 }
 
@@ -62,22 +63,22 @@ export async function prepareGenerationInput(
       ? [await prepareSourceImage(input, sourceImageFetchConfig)]
       : sourceImageUrls.length
         ? await Promise.all(
-        sourceImageUrls.map((sourceImageUrl, index) =>
-          prepareSourceImage(
-            {
-              ...input,
-              sourceImageUrl,
-              reqId:
-                sourceImageUrls.length === 1
-                  ? input.reqId
-                  : `${input.reqId}-source-${index + 1}`,
-            },
-            sourceImageFetchConfig
+            sourceImageUrls.map((sourceImageUrl, index) =>
+              prepareSourceImage(
+                {
+                  ...input,
+                  sourceImageUrl,
+                  reqId:
+                    sourceImageUrls.length === 1
+                      ? input.reqId
+                      : `${input.reqId}-source-${index + 1}`,
+                },
+                sourceImageFetchConfig
+              )
+            )
           )
-        )
-      )
         : [await prepareSourceImage(input, sourceImageFetchConfig)];
-  const sourceImage = sourceImages[0]!;
+  const sourceImage = sourceImages[0];
   const promptStartedAt = Date.now();
   const prompt = buildPromptForGeneration(input);
   const promptBuildMs = Date.now() - promptStartedAt;
