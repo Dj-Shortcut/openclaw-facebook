@@ -55,6 +55,14 @@ describe.skipIf(!enabled)("messenger completion Redis CAS", () => {
     userKey: `redis-completion-${run}`,
     pageId: `page-${suffix}`,
   });
+  const deliveryFence = {
+    ...fence("a"),
+    userKey: `redis-completion-delivery-${run}`,
+  };
+  const quotaFence = {
+    ...fence("a"),
+    userKey: `redis-completion-quota-${run}`,
+  };
 
   beforeAll(async () => {
     await (await getRedisClient()).ping();
@@ -65,7 +73,13 @@ describe.skipIf(!enabled)("messenger completion Redis CAS", () => {
   });
   afterAll(async () => {
     await Promise.all(
-      [fence("a"), { ...fence("a"), privacyEpoch: 6 }, fence("b")].map(scope =>
+      [
+        fence("a"),
+        { ...fence("a"), privacyEpoch: 6 },
+        fence("b"),
+        deliveryFence,
+        quotaFence,
+      ].map(scope =>
         deleteMessengerGenerationCompletionsForUser(scope.userKey, scope)
       )
     );
@@ -300,7 +314,7 @@ describe.skipIf(!enabled)("messenger completion Redis CAS", () => {
   });
 
   it("atomically claims one image transport and never reopens delivered state", async () => {
-    const scope = fence("a");
+    const scope = deliveryFence;
     const reqId = `req-delivery-claim-${run}`;
     const imageUrl = "https://assets.example/delivery-claim.jpg";
     await markMessengerGenerationCompleted(
@@ -365,7 +379,7 @@ describe.skipIf(!enabled)("messenger completion Redis CAS", () => {
   });
 
   it("refreshes a pending quota snapshot without moving its commit time", async () => {
-    const scope = fence("a");
+    const scope = quotaFence;
     const reqId = `req-quota-refresh-${run}`;
     const imageUrl = "https://assets.example/quota-refresh.jpg";
     const committedAt = Date.now();

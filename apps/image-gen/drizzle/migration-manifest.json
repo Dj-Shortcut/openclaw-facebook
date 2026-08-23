@@ -4,7 +4,7 @@
   "baseSchemaSnapshot": "meta/0014_snapshot.json",
   "baseSchemaSnapshotSha256": "e0102aad23d607b4b359d1a11458d56c63533d73f056f332076ba952b7468b35",
   "schemaSnapshot": "meta/0017_snapshot.json",
-  "schemaSnapshotSha256": "8b18f94ffeb8d603e82049aebe0b2f60960556a837ce02e467f43aa78194a4c6",
+  "schemaSnapshotSha256": "3d70ef983382af3252a1295b548b1dec6c7931ce8cc61401ad7b0247822fe4d6",
   "productionSchemaContract": "production-schema-contract.json",
   "productionSchemaContractSha256": "d1c2f4bebec39e4103ef3f2ba460b94acb006d4b3ed9e603f450d9ae1d6dcaca",
   "migrations": [
