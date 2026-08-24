@@ -394,6 +394,7 @@ async function processQueuedWebhookDelivery(
     subject.pageId,
     () => processFacebookWebhookPayloadSafely(delivery.payload),
     {
+      channel: "facebook_messenger",
       workspaceId: subject.workspaceId,
       channelConnectionId: subject.channelConnectionId,
       bindingEpoch: subject.bindingEpoch,
@@ -415,6 +416,7 @@ export async function processAuthenticatedFacebookIngressPayload(
       subject.pageId,
       () => processFacebookWebhookPayloadSafely(unit.payload, options),
       {
+        channel: "facebook_messenger",
         workspaceId: subject.workspaceId,
         channelConnectionId: subject.channelConnectionId,
         bindingEpoch: subject.bindingEpoch,

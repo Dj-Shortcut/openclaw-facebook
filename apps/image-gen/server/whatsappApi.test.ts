@@ -5,7 +5,8 @@ import { downloadWhatsAppMedia } from "./_core/whatsappApi";
 describe("whatsappApi media download", () => {
   const originalAccessToken = process.env.WHATSAPP_ACCESS_TOKEN;
   const originalMaxBytes = process.env.WHATSAPP_MEDIA_MAX_BYTES;
-  const originalDownloadTimeout = process.env.WHATSAPP_MEDIA_DOWNLOAD_TIMEOUT_MS;
+  const originalDownloadTimeout =
+    process.env.WHATSAPP_MEDIA_DOWNLOAD_TIMEOUT_MS;
 
   beforeEach(() => {
     process.env.WHATSAPP_ACCESS_TOKEN = "test-token";
@@ -107,6 +108,31 @@ describe("whatsappApi media download", () => {
       const rejection = expect(download).rejects.toThrow();
       await vi.advanceTimersByTimeAsync(5);
       await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds the media metadata request with the download timeout", async () => {
+    vi.useFakeTimers();
+    process.env.WHATSAPP_MEDIA_DOWNLOAD_TIMEOUT_MS = "5";
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(
+      async (_url, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal as AbortSignal | undefined;
+          signal?.addEventListener("abort", () => {
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const download = downloadWhatsAppMedia("media-id");
+      const rejection = expect(download).rejects.toThrow();
+      await vi.advanceTimersByTimeAsync(5);
+      await rejection;
+      expect(fetchMock).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }

@@ -51,8 +51,11 @@ export async function reserveWhatsAppProviderAttemptFence(input: {
   const requestChannel = getMessengerRequestChannel();
   const ownership = getMessengerRequestOwnership();
   const privacy = getMessengerRequestPrivacySubject();
+  const hasAnyRequestScope = Boolean(
+    pageId || requestChannel || ownership || privacy
+  );
   if (!pageId || !ownership || requestChannel !== "whatsapp" || !privacy) {
-    if (process.env.NODE_ENV === "production") {
+    if (process.env.NODE_ENV === "production" || hasAnyRequestScope) {
       throw new WhatsAppProviderAttemptFenceError();
     }
     return LOCAL_FENCE;

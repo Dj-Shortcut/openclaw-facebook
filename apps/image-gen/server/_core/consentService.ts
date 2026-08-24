@@ -144,8 +144,6 @@ export function isWhatsAppPrivacyOrConsentControl(
   const text = event.textBody;
   return Boolean(
     isDeleteCommand(text) ||
-    isDeleteConfirmText(text) ||
-    isDeleteCancelText(text) ||
     isConsentAgreeText(text, false) ||
     isConsentDeclineText(text)
   );

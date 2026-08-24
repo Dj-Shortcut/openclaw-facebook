@@ -75,6 +75,7 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
     const ownership =
       job.workspaceId && job.channelConnectionId && job.bindingEpoch
         ? {
+            channel: "facebook_messenger" as const,
             workspaceId: job.workspaceId,
             channelConnectionId: job.channelConnectionId,
             bindingEpoch: job.bindingEpoch,
@@ -191,6 +192,7 @@ export function createWebhookHandlers({ defaultLang }: HandlerDeps) {
       },
       job.workspaceId && job.channelConnectionId && job.bindingEpoch
         ? {
+            channel: "facebook_messenger",
             workspaceId: job.workspaceId,
             channelConnectionId: job.channelConnectionId,
             bindingEpoch: job.bindingEpoch,

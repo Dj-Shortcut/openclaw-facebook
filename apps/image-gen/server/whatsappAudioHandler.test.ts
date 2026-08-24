@@ -298,7 +298,7 @@ describe("WhatsApp audio handler", () => {
     assertAudioProviderFenceMock.mockRejectedValueOnce(
       new Error("privacy subject erased")
     );
-    finishDownload?.({
+    (finishDownload as NonNullable<typeof finishDownload>)({
       buffer: Buffer.from("private"),
       contentType: "audio/ogg",
     });

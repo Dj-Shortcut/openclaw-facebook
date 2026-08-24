@@ -353,14 +353,16 @@ describe("OpenAI image provider errors", () => {
   });
 
   it("records provider success before parsing a malformed 2xx body", async () => {
+    const request = createRequest();
+    process.env.OPENAI_IMAGE_MAX_RETRIES = "1";
     const onProviderSuccess = vi.fn(async () => undefined);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("not-json", { status: 200 }))
+    const fetchMock = vi.fn(
+      async () => new Response("not-json", { status: 200 })
     );
+    vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      fetchOpenAiImageResponse(createRequest(), {
+      fetchOpenAiImageResponse(request, {
         reqId: "request-malformed-success",
         startedAt: Date.now(),
         partialMetrics: {},
@@ -369,6 +371,7 @@ describe("OpenAI image provider errors", () => {
     ).rejects.toBeInstanceOf(SyntaxError);
 
     expect(onProviderSuccess).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("never retries after provider 2xx when success persistence fails", async () => {

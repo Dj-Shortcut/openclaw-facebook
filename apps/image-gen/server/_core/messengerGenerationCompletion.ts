@@ -8,6 +8,7 @@ import {
   writeScopedState,
 } from "./stateStore";
 import { assertMessengerPrivacySubject } from "./messengerPrivacySubject";
+import type { MessengerChannel } from "./messengerRequestContext";
 import { getRedisClient, isRedisEnabled } from "./redis";
 import { assertMessengerGenerationOwnership } from "./workspaceEntitlementRuntime";
 import type { MessengerImageQuotaStatus } from "./messengerImageQuotaStore";
@@ -56,7 +57,7 @@ export type MessengerGenerationCompletion = {
   bindingEpoch?: number;
   privacyEpoch?: number;
   pageId?: string;
-  channel?: "facebook_messenger" | "whatsapp";
+  channel?: MessengerChannel;
   expiresAt?: number;
 };
 
@@ -67,7 +68,7 @@ export type MessengerGenerationCompletionFence = Readonly<{
   privacyEpoch: number;
   userKey: string;
   pageId: string;
-  channel?: "facebook_messenger" | "whatsapp";
+  channel?: MessengerChannel;
 }>;
 
 export type MessengerGenerationDeliveryStart =
@@ -1167,17 +1168,30 @@ async function finalizeCompletionErasure(
   );
 }
 
-export async function deleteMessengerGenerationCompletionsForUser(
+export type DeleteMessengerGenerationCompletionsOptions = Readonly<{
+  /**
+   * During the WhatsApp channel-key rollout, delete the exact pre-channel
+   * indexes for this same workspace/connection/user tuple as well. The
+   * bridge is intentionally explicit so other channels cannot select the
+   * unqualified namespace by accident.
+   */
+  includeLegacyUnqualifiedWhatsAppIndexes?: boolean;
+}>;
+
+async function deleteMessengerGenerationCompletionsForFence(
   userKey: string,
-  fence?: MessengerGenerationCompletionFence
+  fence?: MessengerGenerationCompletionFence,
+  keyFence = fence,
+  allowLegacyUnqualifiedWhatsApp = false
 ): Promise<void> {
-  if (fence && isRedisEnabled()) {
+  if (fence && keyFence && isRedisEnabled()) {
     const redis = await getRedisClient();
-    const snapshot = await beginCompletionErasure(redis, fence);
+    const snapshot = await beginCompletionErasure(redis, keyFence);
     for (const completion of snapshot.legacyCompletions) {
       await cleanupCompletionObject(completion.serialized, {
         mode: "erasure",
         fence,
+        allowLegacyUnqualifiedWhatsApp,
       });
     }
     for (const epoch of snapshot.epochs) {
@@ -1186,6 +1200,7 @@ export async function deleteMessengerGenerationCompletionsForUser(
           mode: "erasure",
           fence,
           indexedPrivacyEpoch: epoch.privacyEpoch,
+          allowLegacyUnqualifiedWhatsApp,
         });
       }
     }
@@ -1201,12 +1216,12 @@ export async function deleteMessengerGenerationCompletionsForUser(
         );
       }
     }
-    await finalizeCompletionErasure(redis, fence, snapshot);
+    await finalizeCompletionErasure(redis, keyFence, snapshot);
     return;
   }
-  const subjectKey = fence
-    ? rootIndexStorageId(fence)
-    : completionSubjectKey(userKey, fence);
+  const subjectKey = keyFence
+    ? rootIndexStorageId(keyFence)
+    : completionSubjectKey(userKey, keyFence);
   const completionReqIds =
     (await Promise.resolve(
       readScopedState<string[]>(
@@ -1226,7 +1241,13 @@ export async function deleteMessengerGenerationCompletionsForUser(
       if (completion) {
         await cleanupCompletionObject(
           JSON.stringify(completion),
-          fence ? { mode: "erasure", fence } : undefined
+          fence
+            ? {
+                mode: "erasure",
+                fence,
+                allowLegacyUnqualifiedWhatsApp,
+              }
+            : undefined
         );
       }
       await Promise.resolve(
@@ -1236,6 +1257,34 @@ export async function deleteMessengerGenerationCompletionsForUser(
   );
   await Promise.resolve(
     deleteScopedState(GENERATION_COMPLETION_USER_INDEX_SCOPE, subjectKey)
+  );
+}
+
+export async function deleteMessengerGenerationCompletionsForUser(
+  userKey: string,
+  fence?: MessengerGenerationCompletionFence,
+  options: DeleteMessengerGenerationCompletionsOptions = {}
+): Promise<void> {
+  await deleteMessengerGenerationCompletionsForFence(userKey, fence);
+  if (!options.includeLegacyUnqualifiedWhatsAppIndexes) return;
+  if (!fence || fence.channel !== "whatsapp") {
+    throw new Error(
+      "Legacy unqualified completion cleanup requires an exact WhatsApp fence"
+    );
+  }
+  const legacyKeyFence: MessengerGenerationCompletionFence = {
+    workspaceId: fence.workspaceId,
+    channelConnectionId: fence.channelConnectionId,
+    bindingEpoch: fence.bindingEpoch,
+    privacyEpoch: fence.privacyEpoch,
+    userKey: fence.userKey,
+    pageId: fence.pageId,
+  };
+  await deleteMessengerGenerationCompletionsForFence(
+    userKey,
+    fence,
+    legacyKeyFence,
+    true
   );
 }
 
@@ -1258,6 +1307,7 @@ type CompletionObjectCleanupContext =
       mode: "erasure";
       fence: MessengerGenerationCompletionFence;
       indexedPrivacyEpoch?: number;
+      allowLegacyUnqualifiedWhatsApp?: boolean;
     }>;
 
 function completionStorageScope(
@@ -1292,7 +1342,15 @@ function completionMatchesCleanupContext(
   scope: MessengerStorageScope,
   context: CompletionObjectCleanupContext
 ): boolean {
-  if (!completionChannelMatchesFence(completion, context.fence)) {
+  const legacyUnqualifiedWhatsAppCompletion =
+    context.mode === "erasure" &&
+    context.allowLegacyUnqualifiedWhatsApp === true &&
+    context.fence.channel === "whatsapp" &&
+    completion.channel === undefined;
+  if (
+    !completionChannelMatchesFence(completion, context.fence) &&
+    !legacyUnqualifiedWhatsAppCompletion
+  ) {
     return false;
   }
   if (context.mode === "exact") {

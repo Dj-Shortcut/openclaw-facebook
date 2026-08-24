@@ -29,6 +29,7 @@ const PINNED_FLYCTL_ASSET_URL =
   "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz";
 const PINNED_FLYCTL_ASSET_SHA256 =
   "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90";
+const FORBIDDEN_FLY_API_HOSTNAME = "api.fly.io";
 const VERIFIED_FLYCTL_WORKFLOW_JOBS = Object.freeze({
   [TRUSTED_ARTIFACT_WORKFLOW_PATH]: ["build"],
   [SCHEMA_PROBE_CLEANUP_WORKFLOW_PATH]: ["cleanup"],
@@ -94,6 +95,25 @@ const CANONICAL_TARGETS = {
 
 function fail(message) {
   throw new Error(message);
+}
+
+export function referencesForbiddenFlyApiUrl(source) {
+  for (const match of source.matchAll(/https?:\/\/[^\s"'`<>()[\]{}]+/giu)) {
+    let parsed;
+    try {
+      parsed = new URL(match[0]);
+    } catch {
+      continue;
+    }
+    const hostname = parsed.hostname.toLowerCase().replace(/\.$/u, "");
+    if (
+      (parsed.protocol === "https:" || parsed.protocol === "http:") &&
+      hostname === FORBIDDEN_FLY_API_HOSTNAME
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function readJson(filePath) {
@@ -285,7 +305,7 @@ function assertExactVerifiedFlyctlInstaller(step, workflowPath, jobName) {
   if (
     step.includes("uses:") ||
     step.includes("setup-flyctl") ||
-    step.includes("api.fly.io") ||
+    referencesForbiddenFlyApiUrl(step) ||
     step.includes("--insecure") ||
     occurrenceCount(step, PINNED_FLYCTL_ASSET_URL) !== 1 ||
     occurrenceCount(step, PINNED_FLYCTL_ASSET_SHA256) !== 1 ||
@@ -353,7 +373,10 @@ function validateVerifiedFlyctlSupplyChain(rootDir) {
     );
   }
   for (const [workflowPath, workflow] of allWorkflowSources) {
-    if (workflow.includes("setup-flyctl") || workflow.includes("api.fly.io")) {
+    if (
+      workflow.includes("setup-flyctl") ||
+      referencesForbiddenFlyApiUrl(workflow)
+    ) {
       fail(
         `${workflowPath} must never use an unverified remote flyctl installer`,
       );
@@ -1742,6 +1765,24 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       fail(`${PRODUCTION_WORKFLOW_PATH} ${message}`);
     }
   }
+  for (const stepName of [
+    "Smoke-test storage-proxy",
+    "Verify restored storage-proxy release",
+  ]) {
+    const steps = namedWorkflowStepBodies(workflow, stepName);
+    if (
+      steps.length !== 1 ||
+      !steps[0].includes("https://leaderbot-storage-proxy.fly.dev/healthz") ||
+      !steps[0].includes("https://leaderbot-storage-proxy.fly.dev/readyz") ||
+      !steps[0].includes(
+        "jq -e '.ok == true and .rateLimiter == \"shared_redis\"'",
+      )
+    ) {
+      fail(
+        `${PRODUCTION_WORKFLOW_PATH} must prove storage-proxy liveness and shared-limiter readiness after deploy and rollback`,
+      );
+    }
+  }
   if (/^ {6}(?:FLY_API_TOKEN|META_APP_ID|META_APP_SECRET):/m.test(workflow)) {
     fail(
       `${PRODUCTION_WORKFLOW_PATH} must scope production secrets to only the steps that use them`,
@@ -2074,7 +2115,7 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     ],
     [
       "--retry-all-errors",
-      11,
+      13,
       "must retry exact flyctl downloads and transient deploy and rollback smokes",
     ],
     [
@@ -2317,6 +2358,17 @@ function validateStorageProxySafety(rootDir) {
       fail("storage proxy must fail closed on bounded R2 retention safety");
     }
   }
+  for (const requiredSource of [
+    "createSharedStorageRateLimitBackend",
+    'app.get("/readyz"',
+    'app.use("/v1/storage", authRateLimiter)',
+    'app.use("/v1/storage", storageOperationRateLimiter)',
+    "passOnStoreError: false",
+  ]) {
+    if (!source.includes(requiredSource)) {
+      fail("storage proxy must fail closed on shared Redis rate limiting");
+    }
+  }
   for (const requiredWorkflow of [
     "storage-proxy install --frozen-lockfile",
     "apps/image-gen/storage-proxy/pnpm-workspace.yaml",
@@ -2328,6 +2380,8 @@ function validateStorageProxySafety(rootDir) {
     "org.opencontainers.image.revision",
     "io.leaderbot.artifact.kind",
     "storage-proxy audit --audit-level=moderate",
+    'RUN_STORAGE_RATE_LIMIT_REDIS_INTEGRATION: "1"',
+    "STORAGE_RATE_LIMIT_REDIS_URL: redis://127.0.0.1:6379/13",
   ]) {
     if (!workflow.includes(requiredWorkflow)) {
       fail("image-gen CI must validate the independently locked storage proxy");
@@ -3787,6 +3841,18 @@ function validateProductionReconciliationWorkflow(rootDir) {
         `${PRODUCTION_RECONCILIATION_WORKFLOW_PATH} must fail closed on ${target} manifest, config, identity, and live-state drift before restoring`,
       );
     }
+    if (
+      target === "storage-proxy" &&
+      (!step.includes("https://leaderbot-storage-proxy.fly.dev/healthz") ||
+        !step.includes("https://leaderbot-storage-proxy.fly.dev/readyz") ||
+        !step.includes(
+          "jq -e '.ok == true and .rateLimiter == \"shared_redis\"'",
+        ))
+    ) {
+      fail(
+        `${PRODUCTION_RECONCILIATION_WORKFLOW_PATH} must prove restored storage-proxy liveness and shared-limiter readiness`,
+      );
+    }
     const expectedStepGate =
       target === "image-gen"
         ? "if: steps.successor.outputs.superseded != 'true' && steps.successor_recheck.outputs.superseded != 'true'"
@@ -3867,7 +3933,7 @@ function validateProductionReconciliationWorkflow(rootDir) {
     {
       target: "storage-proxy",
       stepName: "Classify storage-proxy successor from exact approved source",
-      ready: false,
+      ready: true,
     },
   ];
   for (const { target, stepName, ready, recheck } of successorSpecs) {
@@ -3898,8 +3964,17 @@ function validateProductionReconciliationWorkflow(rootDir) {
       !step.includes('--root-dir "$successor_root"') ||
       !step.includes('--expected-source-sha "$successor_sha"') ||
       !step.includes("--require-current-reviewed-image") ||
-      !step.includes("/healthz") ||
-      (ready && !step.includes("/readyz")) ||
+      !step.includes(
+        `https://${CANONICAL_TARGETS[target].app}.fly.dev/healthz`,
+      ) ||
+      (ready &&
+        !step.includes(
+          `https://${CANONICAL_TARGETS[target].app}.fly.dev/readyz`,
+        )) ||
+      (target === "storage-proxy" &&
+        !step.includes(
+          "jq -e '.ok == true and .rateLimiter == \"shared_redis\"'",
+        )) ||
       !step.includes('echo "superseded=true" >> "$GITHUB_OUTPUT"') ||
       (recheck &&
         !step.includes("if: steps.successor.outputs.superseded != 'true'")) ||
@@ -4950,6 +5025,16 @@ export function validateProductionRepository(rootDir = process.cwd()) {
           );
         }
       }
+      for (const requiredProvisioningFragment of [
+        "server/cli/provisionWhatsAppBinding.ts",
+        "--outfile=dist/provision-whatsapp-binding.cjs",
+      ]) {
+        if (!dockerBuild.includes(requiredProvisioningFragment)) {
+          fail(
+            "image-gen build:docker must bundle the provider-silent WhatsApp provisioning command",
+          );
+        }
+      }
       const dockerfile = fs.readFileSync(
         path.join(rootDir, "apps/image-gen/Dockerfile"),
         "utf8",
@@ -4982,6 +5067,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         'io.leaderbot.schema.maximum="0016_expand"',
         "'migration-bridge' > /app/.leaderbot-artifact-kind",
         "'runtime' > /app/.leaderbot-artifact-kind",
+        "RUN test -s /app/dist/provision-whatsapp-binding.cjs",
       ]) {
         if (!dockerfile.includes(requiredDockerFragment)) {
           fail(
@@ -4997,6 +5083,19 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       ) {
         fail(
           "image-gen runtime artifact must stay on the exact 0016_expand schema range until 0017 writer fencing is reviewed",
+        );
+      }
+      const imageGenCi = fs.readFileSync(
+        path.join(rootDir, ".github/workflows/image-gen-ci.yml"),
+        "utf8",
+      );
+      if (
+        !imageGenCi.includes(
+          'docker run --rm "$image" test -s /app/dist/provision-whatsapp-binding.cjs',
+        )
+      ) {
+        fail(
+          "image-gen CI must inspect the bundled WhatsApp provisioning command",
         );
       }
       const migrationRunner = fs.readFileSync(
@@ -5046,8 +5145,26 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       }
       const monitorPath = path.join(rootDir, app.readinessMonitor);
       const monitor = fs.readFileSync(monitorPath, "utf8");
-      if (!monitor.includes(app.readinessCheckPath)) {
+      const readinessUrl = `https://${app.app}.fly.dev${app.readinessCheckPath}`;
+      if (!monitor.includes(readinessUrl)) {
         fail(`${app.readinessMonitor} must monitor ${app.readinessCheckPath}`);
+      }
+      if (target === "storage-proxy") {
+        const readinessSteps = namedWorkflowStepBodies(
+          monitor,
+          "Check storage proxy readiness",
+        );
+        if (
+          readinessSteps.length !== 1 ||
+          !readinessSteps[0].includes(readinessUrl) ||
+          !readinessSteps[0].includes(
+            "jq -e '.ok == true and .rateLimiter == \"shared_redis\"'",
+          )
+        ) {
+          fail(
+            `${app.readinessMonitor} must verify storage-proxy shared Redis readiness`,
+          );
+        }
       }
     }
   }

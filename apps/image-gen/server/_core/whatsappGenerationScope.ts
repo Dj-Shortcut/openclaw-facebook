@@ -2,19 +2,56 @@ import { and, eq } from "drizzle-orm";
 import { channelConnections } from "../../drizzle/schema";
 import { getDatabaseOrThrow } from "../db";
 import type { CostLedgerTenantScope } from "./costLedger";
-import type { WhatsAppEndpoint } from "./conversationEndpoint";
+import {
+  ConversationIdentityError,
+  type WhatsAppEndpoint,
+} from "./conversationEndpoint";
 import { resolveConversationIdentityV2 } from "./conversationIdentityResolver";
+import { safeLog } from "./logger";
 import {
   admitMessengerPrivacySubjectFromMetaEvent,
   assertMessengerPrivacySubject,
+  MessengerPrivacyFenceError,
 } from "./messengerPrivacySubject";
 import { toUserKey } from "./privacy";
 
 export class WhatsAppGenerationScopeError extends Error {
-  constructor() {
+  readonly retryable: boolean;
+
+  constructor(options?: { retryable?: boolean }) {
     super("WhatsApp generation ownership is unavailable");
     this.name = "WhatsAppGenerationScopeError";
+    this.retryable = options?.retryable === true;
   }
+}
+
+function classifyWhatsAppGenerationScopeError(
+  error: unknown
+): WhatsAppGenerationScopeError {
+  if (error instanceof WhatsAppGenerationScopeError) {
+    return error;
+  }
+  if (error instanceof ConversationIdentityError) {
+    return new WhatsAppGenerationScopeError({ retryable: error.retryable });
+  }
+  if (error instanceof MessengerPrivacyFenceError) {
+    return new WhatsAppGenerationScopeError();
+  }
+  // Unexpected database/driver failures are retryable. Explicit ownership,
+  // binding and privacy mismatches above remain terminal and fail closed.
+  return new WhatsAppGenerationScopeError({ retryable: true });
+}
+
+function logWhatsAppGenerationScopeFailure(
+  stage: "resolve" | "ownership" | "admission" | "recheck",
+  error: unknown
+): void {
+  if (error instanceof WhatsAppGenerationScopeError) return;
+  safeLog("whatsapp_generation_scope_denied", {
+    level: "warn",
+    stage,
+    error: error instanceof Error ? error.name : "unknown_error",
+  });
 }
 
 export type WhatsAppGenerationOwnership = Readonly<
@@ -44,10 +81,8 @@ export async function resolveWhatsAppGenerationScope(input: {
       allowCreation: input.allowCreation ?? input.allowReactivation ?? true,
     });
   } catch (error) {
-    if (error instanceof WhatsAppGenerationScopeError) {
-      throw error;
-    }
-    throw new WhatsAppGenerationScopeError();
+    logWhatsAppGenerationScopeFailure("resolve", error);
+    throw classifyWhatsAppGenerationScopeError(error);
   }
 }
 
@@ -59,8 +94,8 @@ export async function resolveWhatsAppGenerationOwnership(input: {
   try {
     return await resolveWhatsAppGenerationOwnershipInternal(input);
   } catch (error) {
-    if (error instanceof WhatsAppGenerationScopeError) throw error;
-    throw new WhatsAppGenerationScopeError();
+    logWhatsAppGenerationScopeFailure("ownership", error);
+    throw classifyWhatsAppGenerationScopeError(error);
   }
 }
 
@@ -129,8 +164,8 @@ export async function admitWhatsAppGenerationScope(input: {
   try {
     return await admitWhatsAppGenerationScopeInternal(input);
   } catch (error) {
-    if (error instanceof WhatsAppGenerationScopeError) throw error;
-    throw new WhatsAppGenerationScopeError();
+    logWhatsAppGenerationScopeFailure("admission", error);
+    throw classifyWhatsAppGenerationScopeError(error);
   }
 }
 
@@ -214,7 +249,7 @@ export async function assertWhatsAppGenerationScopeActive(input: {
       privacyEpoch: scope.privacyEpoch,
     });
   } catch (error) {
-    if (error instanceof WhatsAppGenerationScopeError) throw error;
-    throw new WhatsAppGenerationScopeError();
+    logWhatsAppGenerationScopeFailure("recheck", error);
+    throw classifyWhatsAppGenerationScopeError(error);
   }
 }

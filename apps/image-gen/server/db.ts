@@ -4,6 +4,7 @@ import {
   and,
   gt,
   inArray,
+  isNull,
   isNotNull,
   lte,
   or,
@@ -606,42 +607,19 @@ export async function getConnectedFacebookPageConnection(
     bindingEpoch?: number | null;
   }
 ) {
-  const normalizedPageId = pageId.trim();
-  if (!normalizedPageId) {
+  if (!pageId.trim()) {
     throw new Error("Facebook Page ID is required");
   }
-  const db = await getDb();
-  if (!db) {
-    logDatabaseUnavailable("get_connected_facebook_page_connection");
-    throw new Error(
-      "Database unavailable: Facebook Page binding was not loaded"
-    );
-  }
-
-  const matches = await db
-    .select()
-    .from(channelConnections)
-    .where(
-      and(
-        eq(channelConnections.channel, "facebook_messenger"),
-        eq(channelConnections.status, "connected"),
-        eq(channelConnections.externalId, normalizedPageId),
-        ...(expected?.workspaceId != null
-          ? [eq(channelConnections.workspaceId, expected.workspaceId)]
-          : []),
-        ...(expected?.channelConnectionId != null
-          ? [eq(channelConnections.id, expected.channelConnectionId)]
-          : []),
-        ...(expected?.bindingEpoch != null
-          ? [eq(channelConnections.bindingEpoch, expected.bindingEpoch)]
-          : [])
-      )
-    )
-    .limit(2);
-  if (matches.length !== 1) {
-    return null;
-  }
-  return matches[0];
+  return getConnectedMetaChannelConnectionInternal(
+    "facebook_messenger",
+    pageId,
+    expected,
+    {
+      operation: "get_connected_facebook_page_connection",
+      unavailableMessage:
+        "Database unavailable: Facebook Page binding was not loaded",
+    }
+  );
 }
 
 export async function getConnectedMetaChannelConnection(
@@ -653,16 +631,41 @@ export async function getConnectedMetaChannelConnection(
     bindingEpoch?: number | null;
   }
 ) {
+  return getConnectedMetaChannelConnectionInternal(
+    channel,
+    externalId,
+    expected,
+    {
+      operation: "get_connected_meta_channel_connection",
+      unavailableMessage:
+        "Database unavailable: Meta channel binding was not loaded",
+    }
+  );
+}
+
+async function getConnectedMetaChannelConnectionInternal(
+  channel: "facebook_messenger" | "whatsapp",
+  externalId: string,
+  expected:
+    | {
+        workspaceId?: number | null;
+        channelConnectionId?: number | null;
+        bindingEpoch?: number | null;
+      }
+    | undefined,
+  diagnostics: Readonly<{
+    operation: string;
+    unavailableMessage: string;
+  }>
+) {
   const normalizedExternalId = externalId.trim();
   if (!normalizedExternalId) {
     throw new Error("Meta channel external ID is required");
   }
   const db = await getDb();
   if (!db) {
-    logDatabaseUnavailable("get_connected_meta_channel_connection");
-    throw new Error(
-      "Database unavailable: Meta channel binding was not loaded"
-    );
+    logDatabaseUnavailable(diagnostics.operation);
+    throw new Error(diagnostics.unavailableMessage);
   }
 
   const matches = await db
@@ -1817,6 +1820,47 @@ export async function eraseBillingHandoffIdentity(
     throw new Error("Exact billing handoff erasure scope is required");
   }
   return db.transaction(async tx => {
+    // Migration 0016 introduced the immutable connection/privacy columns as
+    // nullable so the 0017 backfill can populate them. During that bounded
+    // bridge, exact workspace + Page + user identity is still authoritative
+    // for rows where both new scope columns are NULL. Never treat a partially
+    // populated or mismatched non-NULL tuple as legacy.
+    const exactIntentScope = exactScope
+      ? or(
+          and(
+            eq(
+              billingIntents.messengerChannelConnectionId,
+              exactScope.channelConnectionId
+            ),
+            lte(
+              billingIntents.messengerPrivacyEpoch,
+              exactScope.maxPrivacyEpoch
+            )
+          ),
+          and(
+            isNull(billingIntents.messengerChannelConnectionId),
+            isNull(billingIntents.messengerPrivacyEpoch)
+          )
+        )
+      : undefined;
+    const exactTokenScope = exactScope
+      ? or(
+          and(
+            eq(
+              portalHandoffTokens.messengerChannelConnectionId,
+              exactScope.channelConnectionId
+            ),
+            lte(
+              portalHandoffTokens.messengerPrivacyEpoch,
+              exactScope.maxPrivacyEpoch
+            )
+          ),
+          and(
+            isNull(portalHandoffTokens.messengerChannelConnectionId),
+            isNull(portalHandoffTokens.messengerPrivacyEpoch)
+          )
+        )
+      : undefined;
     // Payment processing locks the intent before it can enqueue a handoff.
     // Keep the same order here so a concurrent paid snapshot either observes
     // the erased identity or commits its outbox row before we inspect it.
@@ -1828,33 +1872,35 @@ export async function eraseBillingHandoffIdentity(
           eq(billingIntents.workspaceId, workspaceId),
           eq(billingIntents.messengerSenderUserKey, messengerSenderUserKey),
           eq(billingIntents.messengerPageId, pageId),
-          ...(exactScope
-            ? [
-                eq(
-                  billingIntents.messengerChannelConnectionId,
-                  exactScope.channelConnectionId
-                ),
-                lte(
-                  billingIntents.messengerPrivacyEpoch,
-                  exactScope.maxPrivacyEpoch
-                ),
-              ]
-            : [])
+          ...(exactIntentScope ? [exactIntentScope] : [])
         )
       )
       .orderBy(billingIntents.intentId)
       .for("update");
     const intentIds = intentRows.map(row => row.intentId);
     const payloadIntentId = sql<string>`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.intentId'))`;
+    const payloadChannelConnectionId = sql<
+      string | null
+    >`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerChannelConnectionId'))`;
+    const payloadPrivacyEpoch = sql<
+      string | null
+    >`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerPrivacyEpoch'))`;
+    const exactPayloadScope = exactScope
+      ? or(
+          and(
+            sql`CAST(${payloadChannelConnectionId} AS UNSIGNED) = ${exactScope.channelConnectionId}`,
+            sql`CAST(${payloadPrivacyEpoch} AS UNSIGNED) <= ${exactScope.maxPrivacyEpoch}`
+          ),
+          and(
+            sql`${payloadChannelConnectionId} IS NULL`,
+            sql`${payloadPrivacyEpoch} IS NULL`
+          )
+        )
+      : undefined;
     const payloadIdentityScope = and(
       sql`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerSenderUserKey')) = ${messengerSenderUserKey}`,
       sql`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerPageId')) = ${pageId}`,
-      ...(exactScope
-        ? [
-            sql`CAST(JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerChannelConnectionId')) AS UNSIGNED) = ${exactScope.channelConnectionId}`,
-            sql`CAST(JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerPrivacyEpoch')) AS UNSIGNED) <= ${exactScope.maxPrivacyEpoch}`,
-          ]
-        : [])
+      ...(exactPayloadScope ? [exactPayloadScope] : [])
     );
     const outboxRows = await tx
       .select({
@@ -1920,18 +1966,7 @@ export async function eraseBillingHandoffIdentity(
             inArray(billingIntents.intentId, intentIds),
             eq(billingIntents.messengerSenderUserKey, messengerSenderUserKey),
             eq(billingIntents.messengerPageId, pageId),
-            ...(exactScope
-              ? [
-                  eq(
-                    billingIntents.messengerChannelConnectionId,
-                    exactScope.channelConnectionId
-                  ),
-                  lte(
-                    billingIntents.messengerPrivacyEpoch,
-                    exactScope.maxPrivacyEpoch
-                  ),
-                ]
-              : [])
+            ...(exactIntentScope ? [exactIntentScope] : [])
           )
         );
     }
@@ -1945,18 +1980,7 @@ export async function eraseBillingHandoffIdentity(
             messengerSenderUserKey
           ),
           eq(portalHandoffTokens.facebookPageId, pageId),
-          ...(exactScope
-            ? [
-                eq(
-                  portalHandoffTokens.messengerChannelConnectionId,
-                  exactScope.channelConnectionId
-                ),
-                lte(
-                  portalHandoffTokens.messengerPrivacyEpoch,
-                  exactScope.maxPrivacyEpoch
-                ),
-              ]
-            : [])
+          ...(exactTokenScope ? [exactTokenScope] : [])
         )
       );
     return outboxRows.length;
@@ -2156,6 +2180,13 @@ export class ChannelConnectionClaimConflictError extends Error {
   }
 }
 
+export class ChannelConnectionAuthorizationError extends Error {
+  constructor() {
+    super("Channel connection authorization failed");
+    this.name = "ChannelConnectionAuthorizationError";
+  }
+}
+
 function normalizeChannelConnectionEndpoint(
   values: InsertChannelConnection
 ): Readonly<{
@@ -2240,9 +2271,28 @@ function databaseErrorChainSome(
  * use an unscoped duplicate-key update here: a collision may belong to another
  * workspace and must fail closed instead of replacing that tenant's token.
  */
-export async function upsertChannelConnection(values: InsertChannelConnection) {
+export async function upsertChannelConnection(
+  values: InsertChannelConnection,
+  options: Readonly<{
+    auditLog?: InsertAuditLog;
+    authorization?: Readonly<{
+      actorUserId: number;
+      allowedRoles: readonly WorkspaceMember["role"][];
+    }>;
+  }> = {}
+) {
   const { externalId, providerAccountExternalId } =
     normalizeChannelConnectionEndpoint(values);
+  if (options.auditLog && options.auditLog.workspaceId !== values.workspaceId) {
+    throw new Error("Channel connection audit workspace does not match");
+  }
+  if (
+    options.auditLog &&
+    options.authorization &&
+    options.auditLog.userId !== options.authorization.actorUserId
+  ) {
+    throw new Error("Channel connection audit actor does not match");
+  }
   const db = await getDb();
   if (!db) {
     logDatabaseUnavailable("upsert_channel_connection");
@@ -2263,6 +2313,28 @@ export async function upsertChannelConnection(values: InsertChannelConnection) {
 
   const writeConnection = () =>
     db.transaction(async tx => {
+      if (options.authorization) {
+        const authorizedMemberships = await tx
+          .select({ role: workspaceMembers.role })
+          .from(workspaceMembers)
+          .where(
+            and(
+              eq(workspaceMembers.workspaceId, values.workspaceId),
+              eq(workspaceMembers.userId, options.authorization.actorUserId)
+            )
+          )
+          .limit(2)
+          .for("update");
+        if (
+          authorizedMemberships.length !== 1 ||
+          !options.authorization.allowedRoles.includes(
+            authorizedMemberships[0].role
+          )
+        ) {
+          throw new ChannelConnectionAuthorizationError();
+        }
+      }
+
       if (providerAccountExternalId) {
         const claimedProviderAccount = await tx
           .select({
@@ -2387,16 +2459,19 @@ export async function upsertChannelConnection(values: InsertChannelConnection) {
               eq(channelConnections.channel, values.channel)
             )
           );
-        return;
+      } else {
+        await tx.insert(channelConnections).values({
+          ...values,
+          externalId,
+          providerAccountExternalId,
+          lastCheckedAt,
+          bindingEpoch: 1,
+        });
       }
 
-      await tx.insert(channelConnections).values({
-        ...values,
-        externalId,
-        providerAccountExternalId,
-        lastCheckedAt,
-        bindingEpoch: 1,
-      });
+      if (options.auditLog) {
+        await tx.insert(auditLog).values(options.auditLog);
+      }
     });
 
   const maxWriteAttempts = 3;

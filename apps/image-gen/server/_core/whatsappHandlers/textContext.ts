@@ -37,7 +37,7 @@ function createWhatsAppTextContext(
   normalizedText: string,
   hasPhoto: boolean
 ): BotTextContext {
-  const sender = createWhatsAppResponseSender(event.senderId);
+  const sender = createWhatsAppResponseSender(event.senderId, context.reqId);
   return {
     channel: "whatsapp",
     capabilities: { quickReplies: false, richTemplates: false },

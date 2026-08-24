@@ -21,6 +21,7 @@ vi.mock("drizzle-orm/mysql2", () => ({
 }));
 
 import {
+  ChannelConnectionAuthorizationError,
   ChannelConnectionClaimConflictError,
   disconnectChannelConnection,
   getConnectedMetaChannelConnection,
@@ -290,9 +291,9 @@ describe("channel connection database claims", () => {
 
   it.each(["whatsapp_openai_image", "whatsapp_graph_erasure_control_text"])(
     "blocks disconnect while %s owns an active transport fence",
-    async () => {
+    async providerOperation => {
       const workspaceConnection = lockedSelect([{ id: 8 }]);
-      const activeAttempts = lockedSelect([{ id: 91 }]);
+      const activeAttempts = lockedSelect([{ id: 91, providerOperation }]);
       dbMock.select
         .mockReturnValueOnce({ from: workspaceConnection.from })
         .mockReturnValueOnce({ from: activeAttempts.from });
@@ -376,6 +377,86 @@ describe("channel connection database claims", () => {
     expect(values.mock.results[0]?.value).not.toHaveProperty(
       "onDuplicateKeyUpdate"
     );
+  });
+
+  it("writes a connection and its audit event inside the same transaction", async () => {
+    const membership = lockedSelect([{ role: "owner" }]);
+    const providerAccountClaim = lockedSelect([]);
+    const endpointClaim = lockedSelect([]);
+    const workspaceConnection = lockedSelect([]);
+    const list = listSelect([]);
+    dbMock.select
+      .mockReturnValueOnce({ from: membership.from })
+      .mockReturnValueOnce({ from: providerAccountClaim.from })
+      .mockReturnValueOnce({ from: endpointClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from })
+      .mockReturnValueOnce({ from: list.from });
+    const values = vi.fn(async () => undefined);
+    dbMock.insert.mockReturnValue({ values });
+    const audit = {
+      workspaceId: 42,
+      userId: 7,
+      event: "whatsapp_binding.provisioned",
+      metadata: { source: "operator_cli" },
+    };
+
+    await expect(
+      upsertChannelConnection(whatsAppConnection, {
+        authorization: {
+          actorUserId: 7,
+          allowedRoles: ["owner", "admin"],
+        },
+        auditLog: audit,
+      })
+    ).resolves.toEqual([]);
+
+    expect(membership.lock).toHaveBeenCalledWith("update");
+    expect(dbMock.transaction).toHaveBeenCalledOnce();
+    expect(dbMock.insert).toHaveBeenCalledTimes(2);
+    expect(values).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        workspaceId: 42,
+        channel: "whatsapp",
+        encryptedAccessToken: "sealed-whatsapp-token",
+      })
+    );
+    expect(values).toHaveBeenNthCalledWith(2, audit);
+  });
+
+  it("rejects a non-privileged membership before claiming provider identity", async () => {
+    const membership = lockedSelect([{ role: "member" }]);
+    dbMock.select.mockReturnValueOnce({ from: membership.from });
+
+    await expect(
+      upsertChannelConnection(whatsAppConnection, {
+        authorization: {
+          actorUserId: 7,
+          allowedRoles: ["owner", "admin"],
+        },
+      })
+    ).rejects.toBeInstanceOf(ChannelConnectionAuthorizationError);
+
+    expect(membership.lock).toHaveBeenCalledWith("update");
+    expect(dbMock.insert).not.toHaveBeenCalled();
+    expect(dbMock.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects a cross-workspace connection audit before any database write", async () => {
+    await expect(
+      upsertChannelConnection(whatsAppConnection, {
+        auditLog: {
+          workspaceId: 99,
+          userId: 7,
+          event: "whatsapp_binding.provisioned",
+          metadata: null,
+        },
+      })
+    ).rejects.toThrow("Channel connection audit workspace does not match");
+
+    expect(dbMock.transaction).not.toHaveBeenCalled();
+    expect(dbMock.insert).not.toHaveBeenCalled();
+    expect(dbMock.update).not.toHaveBeenCalled();
   });
 
   it("preserves the WhatsApp provider account when updating a connection", async () => {

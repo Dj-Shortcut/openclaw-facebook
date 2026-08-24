@@ -143,6 +143,7 @@ vi.mock("./_core/costLedger", async importOriginal => {
 import { deleteUserData } from "./_core/dataDeletionService";
 import {
   deleteMessengerGenerationCompletionsForUser,
+  getMessengerGenerationCompletion,
   markMessengerGenerationCompleted,
   type MessengerGenerationCompletionFence,
 } from "./_core/messengerGenerationCompletion";
@@ -228,6 +229,30 @@ describe("WhatsApp data deletion tenant boundary", () => {
   });
 
   it("tombstones and scrubs the exact WhatsApp subject, billing identity, completion, and object", async () => {
+    const legacyFence: MessengerGenerationCompletionFence = {
+      ...fence,
+      channel: undefined,
+    };
+    const legacyObjectKey = buildMessengerStorageObjectKey({
+      kind: "generated_image",
+      scope: legacyFence,
+      fileName: "1771000000001-00000000-0000-4000-8000-000000000002.jpg",
+    });
+    const legacyImageUrl = `https://assets.example/${legacyObjectKey}`;
+    const foreignFence: MessengerGenerationCompletionFence = {
+      ...fence,
+      workspaceId: 84,
+      channelConnectionId: 24,
+      pageId: "foreign-facebook-page",
+      channel: "facebook_messenger",
+    };
+    const foreignObjectKey = buildMessengerStorageObjectKey({
+      kind: "generated_image",
+      scope: foreignFence,
+      fileName: "1771000000002-00000000-0000-4000-8000-000000000003.jpg",
+    });
+    const foreignImageUrl = `https://assets.example/${foreignObjectKey}`;
+
     await runWithMessengerRequestContext(
       phoneNumberId,
       async () => {
@@ -238,6 +263,20 @@ describe("WhatsApp data deletion tenant boundary", () => {
           userKey,
           1_771_000_000_000,
           fence
+        );
+        await markMessengerGenerationCompleted(
+          "whatsapp-delete-legacy-completion",
+          legacyImageUrl,
+          userKey,
+          1_771_000_000_001,
+          legacyFence
+        );
+        await markMessengerGenerationCompleted(
+          "foreign-facebook-completion",
+          foreignImageUrl,
+          userKey,
+          1_771_000_000_002,
+          foreignFence
         );
 
         await expect(deleteUserData(senderId)).resolves.toEqual({
@@ -282,10 +321,85 @@ describe("WhatsApp data deletion tenant boundary", () => {
       phoneNumberId,
       { channelConnectionId: 12, maxPrivacyEpoch: 5 }
     );
+    expect(deleteCostLedgerEntriesMock).toHaveBeenCalledWith({
+      workspaceId: 42,
+      channelConnectionId: 12,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      userKey,
+    });
     expect(storageDeleteMock).toHaveBeenCalledWith(objectKey);
+    expect(storageDeleteMock).toHaveBeenCalledWith(legacyObjectKey);
+    expect(storageDeleteMock).not.toHaveBeenCalledWith(foreignObjectKey);
+    await expect(
+      getMessengerGenerationCompletion(
+        "whatsapp-delete-legacy-completion",
+        legacyFence
+      )
+    ).resolves.toBeNull();
+    await expect(
+      getMessengerGenerationCompletion(
+        "foreign-facebook-completion",
+        foreignFence
+      )
+    ).resolves.toEqual(
+      expect.objectContaining({ reqId: "foreign-facebook-completion" })
+    );
 
     storageDeleteMock.mockClear();
     await deleteMessengerGenerationCompletionsForUser(userKey, fence);
+    expect(storageDeleteMock).not.toHaveBeenCalled();
+  });
+
+  it("stays pending while a WhatsApp provider attempt is in flight", async () => {
+    containProviderAttemptsMock.mockResolvedValueOnce(false);
+
+    await runWithMessengerRequestContext(
+      phoneNumberId,
+      async () => {
+        await Promise.resolve(getOrCreateState(senderId));
+        await expect(deleteUserData(senderId)).resolves.toEqual({
+          status: "pending",
+        });
+      },
+      {
+        channel: "whatsapp",
+        workspaceId: 42,
+        channelConnectionId: 12,
+        bindingEpoch: 3,
+        userKey,
+        privacyEpoch: 5,
+      }
+    );
+
+    expect(eraseGenerationJobsMock).not.toHaveBeenCalled();
+    expect(storageDeleteMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed in production when the request channel is unavailable", async () => {
+    await runWithMessengerRequestContext(
+      phoneNumberId,
+      async () => {
+        await Promise.resolve(getOrCreateState(senderId));
+      },
+      {
+        channel: "whatsapp",
+        workspaceId: 42,
+        channelConnectionId: 12,
+        bindingEpoch: 3,
+        userKey,
+        privacyEpoch: 5,
+      }
+    );
+
+    await expect(deleteUserData(senderId)).resolves.toEqual({
+      status: "failed",
+    });
+
+    expect(getConnectedFacebookPageConnectionMock).not.toHaveBeenCalled();
+    expect(getConnectedMetaChannelConnectionMock).not.toHaveBeenCalled();
+    expect(beginPrivacyErasureMock).not.toHaveBeenCalled();
+    expect(eraseBillingHandoffIdentityMock).not.toHaveBeenCalled();
     expect(storageDeleteMock).not.toHaveBeenCalled();
   });
 

@@ -360,6 +360,7 @@ describe("portal handoff database helpers", () => {
       const query = dialect.sqlToQuery(expression);
       expect(query.sql).toContain("messenger_channel_connection_id");
       expect(query.sql).toContain("messenger_privacy_epoch");
+      expect(query.sql.toLowerCase()).toContain("is null");
       expect(query.params).toEqual(
         expect.arrayContaining([
           42,
@@ -370,6 +371,19 @@ describe("portal handoff database helpers", () => {
         ])
       );
     }
+    const outboxQuery = dialect.sqlToQuery(outbox.where.mock.calls[0]?.[0]);
+    expect(outboxQuery.sql).toContain("messengerChannelConnectionId");
+    expect(outboxQuery.sql).toContain("messengerPrivacyEpoch");
+    expect(outboxQuery.sql.toLowerCase()).toContain("is null");
+    expect(outboxQuery.params).toEqual(
+      expect.arrayContaining([
+        42,
+        "whatsapp-user-key",
+        "whatsapp-phone-42",
+        12,
+        5,
+      ])
+    );
   });
 
   it("rejects an incomplete exact billing erasure scope before DB writes", async () => {

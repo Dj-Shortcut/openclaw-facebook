@@ -657,7 +657,8 @@ describe.skipIf(!enabled)("messenger completion Redis CAS", () => {
 
     await deleteMessengerGenerationCompletionsForUser(
       legacyFence.userKey,
-      legacyFence
+      { ...legacyFence, channel: "whatsapp" },
+      { includeLegacyUnqualifiedWhatsAppIndexes: true }
     );
 
     await expect(redis.get(completionKey)).resolves.toBeNull();
@@ -683,5 +684,102 @@ describe.skipIf(!enabled)("messenger completion Redis CAS", () => {
     await expect(redis.smembers(completionIndex)).resolves.toEqual([]);
     await expect(redis.smembers(objectIndex)).resolves.toEqual([]);
     expect(storageDeleteMock).toHaveBeenCalledWith(higherGeneratedKey);
+  });
+
+  it("scrubs current and legacy WhatsApp epoch indexes without touching another scope", async () => {
+    const currentFence: MessengerGenerationCompletionFence = {
+      ...fence("a"),
+      userKey: `redis-completion-whatsapp-bridge-${run}`,
+      channel: "whatsapp",
+    };
+    const legacyFence: MessengerGenerationCompletionFence = {
+      ...currentFence,
+      channel: undefined,
+    };
+    const foreignFence: MessengerGenerationCompletionFence = {
+      ...currentFence,
+      workspaceId: currentFence.workspaceId + 1,
+      channelConnectionId: currentFence.channelConnectionId + 100,
+      pageId: "foreign-facebook-page",
+      channel: "facebook_messenger",
+    };
+    const currentObjectKey = buildMessengerStorageObjectKey({
+      kind: "generated_image",
+      scope: currentFence,
+      fileName: "1771000000100-00000000-0000-4000-8000-000000000100.jpg",
+    });
+    const legacyObjectKey = buildMessengerStorageObjectKey({
+      kind: "generated_image",
+      scope: legacyFence,
+      fileName: "1771000000101-00000000-0000-4000-8000-000000000101.jpg",
+    });
+    const foreignObjectKey = buildMessengerStorageObjectKey({
+      kind: "generated_image",
+      scope: foreignFence,
+      fileName: "1771000000102-00000000-0000-4000-8000-000000000102.jpg",
+    });
+
+    await markMessengerGenerationCompleted(
+      `req-whatsapp-current-${run}`,
+      `https://assets.example/${currentObjectKey}`,
+      currentFence.userKey,
+      Date.now(),
+      currentFence
+    );
+    await markMessengerGenerationCompleted(
+      `req-whatsapp-legacy-${run}`,
+      `https://assets.example/${legacyObjectKey}`,
+      legacyFence.userKey,
+      Date.now(),
+      legacyFence
+    );
+    await markMessengerGenerationCompleted(
+      `req-facebook-foreign-${run}`,
+      `https://assets.example/${foreignObjectKey}`,
+      foreignFence.userKey,
+      Date.now(),
+      foreignFence
+    );
+    await Promise.all([
+      registerMessengerObjectForPrivacyCleanup(currentObjectKey, currentFence),
+      registerMessengerObjectForPrivacyCleanup(legacyObjectKey, legacyFence),
+      registerMessengerObjectForPrivacyCleanup(foreignObjectKey, foreignFence),
+    ]);
+
+    storageDeleteMock.mockClear();
+    await deleteMessengerGenerationCompletionsForUser(
+      currentFence.userKey,
+      currentFence,
+      { includeLegacyUnqualifiedWhatsAppIndexes: true }
+    );
+
+    await expect(
+      getMessengerGenerationCompletion(
+        `req-whatsapp-current-${run}`,
+        currentFence
+      )
+    ).resolves.toBeNull();
+    await expect(
+      getMessengerGenerationCompletion(
+        `req-whatsapp-legacy-${run}`,
+        legacyFence
+      )
+    ).resolves.toBeNull();
+    await expect(
+      getMessengerGenerationCompletion(
+        `req-facebook-foreign-${run}`,
+        foreignFence
+      )
+    ).resolves.toEqual(
+      expect.objectContaining({ reqId: `req-facebook-foreign-${run}` })
+    );
+    expect(storageDeleteMock).toHaveBeenCalledWith(currentObjectKey);
+    expect(storageDeleteMock).toHaveBeenCalledWith(legacyObjectKey);
+    expect(storageDeleteMock).not.toHaveBeenCalledWith(foreignObjectKey);
+
+    await deleteMessengerGenerationCompletionsForUser(
+      foreignFence.userKey,
+      foreignFence
+    );
   });
 });

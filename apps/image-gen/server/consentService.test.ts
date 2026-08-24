@@ -72,6 +72,7 @@ import {
   getMessengerGenerationCompletion,
   markMessengerGenerationCompleted,
 } from "./_core/messengerGenerationCompletion";
+import { resolveWhatsAppEndpoint } from "./_core/conversationEndpoint";
 
 describe("Messenger consent deletion flow", () => {
   const originalRedisUrl = process.env.REDIS_URL;
@@ -946,6 +947,10 @@ describe("Messenger consent deletion flow", () => {
   it("classifies WhatsApp privacy controls before subject reactivation", () => {
     const event = {
       channel: "whatsapp" as const,
+      endpoint: resolveWhatsAppEndpoint({
+        wabaId: "303030303030303",
+        phoneNumberId: "404040404040404",
+      }),
       messageType: "text" as const,
       senderId: "whatsapp-control-user",
       userId: "hashed-user",
@@ -973,7 +978,7 @@ describe("Messenger consent deletion flow", () => {
         rawEventMeta: undefined,
         textBody: "yes",
       })
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isWhatsAppPrivacyOrConsentControl({
         ...event,

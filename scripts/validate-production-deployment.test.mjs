@@ -17,6 +17,7 @@ import {
   getReviewedRollbackConfig,
   getReviewedScalePlan,
   materializeSuccessorSourceRoot,
+  referencesForbiddenFlyApiUrl,
   resolveImmutableReleaseImage,
   validateDeploymentEnabled,
   validateProductionRepository,
@@ -654,6 +655,29 @@ function storageProxyFlyState(image) {
 }
 
 describe("production deployment contract", () => {
+  it("checks the parsed Fly API hostname instead of URL substrings", () => {
+    expect(
+      referencesForbiddenFlyApiUrl(
+        "curl https://api.fly.io/app/flyctl_releases/v0.4.85/flyctl.tar.gz",
+      ),
+    ).toBe(true);
+    expect(
+      referencesForbiddenFlyApiUrl(
+        "curl https://API.FLY.IO./app/flyctl_releases/v0.4.85/flyctl.tar.gz",
+      ),
+    ).toBe(true);
+
+    for (const deceptiveUrl of [
+      "https://example.invalid/api.fly.io/flyctl.tar.gz",
+      "https://example.invalid/?host=api.fly.io",
+      "https://api.fly.io@evil.example/flyctl.tar.gz",
+      "https://api.fly.io.evil.example/flyctl.tar.gz",
+      "https://evil-api.fly.io/flyctl.tar.gz",
+    ]) {
+      expect(referencesForbiddenFlyApiUrl(`curl ${deceptiveUrl}`)).toBe(false);
+    }
+  });
+
   it("accepts the checked-in production configs", () => {
     expect(validateProductionRepository(repoRoot)).toEqual({
       apps: 3,
@@ -874,6 +898,34 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires fail-closed shared storage-proxy rate limiting", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/storage-proxy/index.ts",
+      'app.use("/v1/storage", storageOperationRateLimiter)',
+      "// operation limiter removed",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "storage proxy must fail closed on shared Redis rate limiting",
+    );
+  });
+
+  it("requires the real shared-Redis storage-proxy CI test", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-ci.yml",
+      'RUN_STORAGE_RATE_LIMIT_REDIS_INTEGRATION: "1"',
+      'RUN_STORAGE_RATE_LIMIT_REDIS_INTEGRATION: "0"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "image-gen CI must validate the independently locked storage proxy",
+    );
+  });
+
   it("requires the independent storage-proxy dependency audit", () => {
     const root = createRepositoryFixture();
     const workflowPath = path.join(root, ".github/workflows/image-gen-ci.yml");
@@ -1058,6 +1110,60 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires separate external storage-proxy readiness monitoring", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      "https://leaderbot-storage-proxy.fly.dev/readyz",
+      "https://leaderbot-storage-proxy.fly.dev/healthz",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      ".github/workflows/production-uptime.yml must monitor /readyz",
+    );
+  });
+
+  it("requires deploy and rollback to prove storage-proxy readiness", () => {
+    const root = createRepositoryFixture();
+    const workflowPath = path.join(
+      root,
+      ".github/workflows/deploy-production.yml",
+    );
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    fs.writeFileSync(
+      workflowPath,
+      workflow.replaceAll(
+        "https://leaderbot-storage-proxy.fly.dev/readyz",
+        "https://leaderbot-storage-proxy.fly.dev/healthz",
+      ),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prove storage-proxy liveness and shared-limiter readiness after deploy and rollback",
+    );
+  });
+
+  it("requires successor and restore recovery to prove storage-proxy readiness", () => {
+    const root = createRepositoryFixture();
+    const workflowPath = path.join(
+      root,
+      ".github/workflows/reconcile-production-deployment.yml",
+    );
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    fs.writeFileSync(
+      workflowPath,
+      workflow.replaceAll(
+        "https://leaderbot-storage-proxy.fly.dev/readyz",
+        "https://leaderbot-storage-proxy.fly.dev/healthz",
+      ),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prove restored storage-proxy liveness and shared-limiter readiness",
+    );
+  });
+
   it("rejects the retired global image-forward cap in gateway production", () => {
     const root = createRepositoryFixture();
     const configPath = path.join(root, "fly.toml");
@@ -1239,6 +1345,34 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must include the hashed migration contract and exact schema range",
+    );
+  });
+
+  it("requires the provider-silent WhatsApp provisioning command in the runtime artifact", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/package.json",
+      "--outfile=dist/provision-whatsapp-binding.cjs",
+      "--outfile=dist/missing-whatsapp-provisioning.cjs",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "image-gen build:docker must bundle the provider-silent WhatsApp provisioning command",
+    );
+  });
+
+  it("requires CI to inspect the bundled WhatsApp provisioning command", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-ci.yml",
+      'docker run --rm "$image" test -s /app/dist/provision-whatsapp-binding.cjs',
+      'docker run --rm "$image" true',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "image-gen CI must inspect the bundled WhatsApp provisioning command",
     );
   });
 

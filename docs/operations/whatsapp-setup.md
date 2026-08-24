@@ -1,6 +1,6 @@
 # WhatsApp Setup
 
-Last verified: 2026-06-11
+Last verified: 2026-08-24
 
 Public Leaderbot WhatsApp number:
 
@@ -34,23 +34,23 @@ app.
 
 These must be deployed as Fly secrets:
 
-| Variable | Required for |
-| --- | --- |
-| `WHATSAPP_ACCESS_TOKEN` | WhatsApp Cloud API sends and media download |
-| `WHATSAPP_PHONE_NUMBER_ID` | WhatsApp Cloud API `/messages` endpoint |
-| `WHATSAPP_APP_SECRET` or `FB_APP_SECRET` | Meta webhook POST signature verification |
-| `META_VERIFY_TOKEN` or `WHATSAPP_VERIFY_TOKEN` | Meta webhook GET verification |
-| `APP_BASE_URL` | Public generated/source image URLs |
-| `SOURCE_IMAGE_ALLOWED_HOSTS` | Source-image fetch allowlist |
-| `OPENAI_API_KEY` | Image generation |
-| `REDIS_URL` | Replay protection, state store, queue/rate limits |
-| `PRIVACY_PEPPER` | Stable redacted user identifiers |
+| Variable                                       | Required for                                                                         |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `WHATSAPP_ACCESS_TOKEN`                        | Bootstrap input for the sealed tenant binding; never a production transport fallback |
+| `WHATSAPP_PHONE_NUMBER_ID`                     | Bootstrap identity for the exact WhatsApp phone binding                              |
+| `WHATSAPP_BUSINESS_ACCOUNT_ID`                 | Exact provider-account identity for provisioning and readiness                       |
+| `WHATSAPP_APP_SECRET` or `FB_APP_SECRET`       | Meta webhook POST signature verification                                             |
+| `META_VERIFY_TOKEN` or `WHATSAPP_VERIFY_TOKEN` | Meta webhook GET verification                                                        |
+| `APP_BASE_URL`                                 | Public generated/source image URLs                                                   |
+| `SOURCE_IMAGE_ALLOWED_HOSTS`                   | Source-image fetch allowlist                                                         |
+| `OPENAI_API_KEY`                               | Image generation                                                                     |
+| `REDIS_URL`                                    | Replay protection, state store, queue/rate limits                                    |
+| `PRIVACY_PEPPER`                               | Stable redacted user identifiers                                                     |
 
 Operationally useful:
 
-| Variable | Used for |
-| --- | --- |
-| `WHATSAPP_BUSINESS_ACCOUNT_ID` | Meta Business Manager diagnostics |
+| Variable    | Used for             |
+| ----------- | -------------------- |
 | `FB_APP_ID` | Meta app diagnostics |
 
 Use `WHATSAPP_APP_SECRET` when the WhatsApp Business Account / phone number is
@@ -60,6 +60,73 @@ when webhook GET verification succeeds.
 
 Current Fly secret-name check on 2026-06-11 found all required WhatsApp runtime
 secret names present. Secret values were not printed or copied.
+
+## One-time tenant binding provisioning
+
+Production transport does not read the global WhatsApp token as a fallback. A
+trusted infrastructure operator must first bind the WhatsApp Business Account
+and phone number to the exact customer workspace. This CLI is an operator tool,
+not customer authentication: `WHATSAPP_PROVISION_ACTOR_USER_ID` identifies the
+owner/admin who approved the action, but does not authenticate the shell user.
+Before running it, the operator must verify and retain a durable approval record
+from that exact owner/admin for the workspace, WABA and phone-number tuple. Put
+only the record identifier in `WHATSAPP_PROVISION_APPROVAL_REFERENCE`; the CLI
+stores only its SHA-256 digest in the metadata-only audit event.
+
+The provisioning command performs no Meta/Graph request. It reads the token
+only from the process environment, seals it with `JWT_SECRET`, and stores the
+sealed value and audit event atomically through the tenant-safe
+channel-connection claim.
+
+Set the following values outside chat in the operator shell or protected job:
+
+```text
+WHATSAPP_PROVISION_CONFIRM=provision
+WHATSAPP_PROVISION_WORKSPACE_ID=<workspace numeric id>
+WHATSAPP_PROVISION_ACTOR_USER_ID=<workspace owner/admin numeric user id>
+WHATSAPP_PROVISION_APPROVAL_REFERENCE=<durable approval record id>
+WHATSAPP_BUSINESS_ACCOUNT_ID=<numeric WABA id>
+WHATSAPP_PHONE_NUMBER_ID=<numeric phone-number id>
+WHATSAPP_ACCESS_TOKEN=<secret from the protected environment>
+JWT_SECRET=<existing application sealing secret>
+DATABASE_URL=<production MySQL URL>
+```
+
+During development, run from `apps/image-gen`:
+
+```bash
+pnpm run whatsapp:provision-binding
+```
+
+For production, use the exact reviewed immutable runtime image in a protected
+one-off process before exposing the new runtime, and run:
+
+```bash
+node /app/dist/provision-whatsapp-binding.cjs
+```
+
+The runtime image contains this bundled command, so the existing Fly secrets do
+not need to be printed, copied into chat, or exported to an untrusted checkout.
+Do not set the `WHATSAPP_PROVISION_*` controls as permanent app-wide secrets;
+inject them only into the protected one-off process. A failed provisioning run
+must block the runtime rollout.
+
+The command refuses a non-owner/non-admin, invalid identifiers, a cross-tenant
+provider-account claim, missing confirmation, and missing inputs. Its output
+contains only the event name, workspace id, and connection status. Never pass
+the access token as a command-line argument and never paste it into chat or
+logs.
+
+After provisioning, `GET /readyz` must report
+`whatsapp_tenant_binding: ok`. In production, env-only credentials with no
+unique connected and decryptable tenant binding deliberately keep readiness
+red. Readiness also requires the stored provider-account id to match
+`WHATSAPP_BUSINESS_ACCOUNT_ID` and the sealed credential to match the current
+`WHATSAPP_ACCESS_TOKEN` exactly. A token rotation therefore remains fail closed
+until the same protected provisioning action has atomically sealed and audited
+the new credential. The boot preflight runs this check before webhook drains or
+generation workers start; `/healthz` remains a liveness endpoint after a
+successful boot and is not a substitute for this rollout gate.
 
 ## Inbound Flow
 
@@ -91,7 +158,8 @@ tokens, phone numbers, or message text into diagnostics.
 
 Use metadata-only checks:
 
-1. `GET /healthz` returns `200 ok`.
+1. `GET /healthz` returns `200 ok`, and `GET /readyz` reports
+   `whatsapp_tenant_binding: ok`.
 2. `GET /webhook/whatsapp` with the deployed verify token returns the raw
    `hub.challenge`.
 3. The same route with a wrong token returns `403`.

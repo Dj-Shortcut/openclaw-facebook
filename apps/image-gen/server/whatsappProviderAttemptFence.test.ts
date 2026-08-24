@@ -149,6 +149,46 @@ describe("WhatsApp provider attempt fence", () => {
     expect(mocks.reserve).not.toHaveBeenCalled();
   });
 
+  it("rejects partial request scope outside production", async () => {
+    await expect(
+      runWithMessengerRequestContext(
+        "404040404040404",
+        () =>
+          reserveWhatsAppProviderAttemptFence({
+            reqId: "wa-request",
+            userKey: "u:whatsapp-user",
+            providerOperation: "whatsapp_graph_text",
+          }),
+        { ...SCOPE, channel: "facebook_messenger" }
+      )
+    ).rejects.toBeInstanceOf(WhatsAppProviderAttemptFenceError);
+
+    expect(mocks.reserve).not.toHaveBeenCalled();
+  });
+
+  it("refuses the erasure-control operation on a generation fence", async () => {
+    await expect(
+      runWithMessengerRequestContext(
+        "404040404040404",
+        async () => {
+          setMessengerRequestPrivacySubject({
+            userKey: SCOPE.userKey,
+            privacyEpoch: SCOPE.privacyEpoch,
+          });
+          return reserveWhatsAppProviderAttemptFence({
+            reqId: "wa-delete-outcome",
+            userKey: SCOPE.userKey,
+            providerOperation: "whatsapp_graph_erasure_control_text",
+          });
+        },
+        { ...SCOPE, channel: "whatsapp" }
+      )
+    ).rejects.toBeInstanceOf(WhatsAppProviderAttemptFenceError);
+
+    expect(mocks.reserve).not.toHaveBeenCalled();
+    expect(mocks.claimErasure).not.toHaveBeenCalled();
+  });
+
   it("fails closed without immutable request scope in production", async () => {
     process.env.NODE_ENV = "production";
     await expect(

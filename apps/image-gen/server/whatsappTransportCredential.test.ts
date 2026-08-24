@@ -218,6 +218,31 @@ describe("WhatsApp transport credential boundary", () => {
     expect(mocks.unsealFacebookPageToken).not.toHaveBeenCalled();
   });
 
+  it("rejects duplicate matching rows before unsealing a credential", async () => {
+    const row = {
+      encryptedAccessToken: "sealed-tenant-a",
+      phoneNumberId: "404040404040404",
+      wabaId: "303030303030303",
+    };
+    bindDatabaseRows([row, { ...row }]);
+
+    await expect(
+      withScope(
+        {
+          phoneNumberId: row.phoneNumberId,
+          workspaceId: 42,
+          channelConnectionId: 8,
+          bindingEpoch: 3,
+          userKey: "user-key-a",
+          privacyEpoch: 2,
+        },
+        resolveWhatsAppTransportCredential
+      )
+    ).rejects.toBeInstanceOf(WhatsAppTransportBindingError);
+
+    expect(mocks.unsealFacebookPageToken).not.toHaveBeenCalled();
+  });
+
   it("does not use global credentials for a contextless production send", async () => {
     await expect(resolveWhatsAppTransportCredential()).rejects.toBeInstanceOf(
       WhatsAppTransportBindingError
@@ -235,6 +260,19 @@ describe("WhatsApp transport credential boundary", () => {
         "404040404040404",
         resolveWhatsAppTransportCredential
       )
+    ).rejects.toBeInstanceOf(WhatsAppTransportBindingError);
+
+    expect(mocks.getDatabaseOrThrow).not.toHaveBeenCalled();
+    expect(mocks.unsealFacebookPageToken).not.toHaveBeenCalled();
+  });
+
+  it("rejects a channel-only request context outside production", async () => {
+    process.env.NODE_ENV = "test";
+
+    await expect(
+      runWithMessengerRequestContext("", resolveWhatsAppTransportCredential, {
+        channel: "facebook_messenger",
+      })
     ).rejects.toBeInstanceOf(WhatsAppTransportBindingError);
 
     expect(mocks.getDatabaseOrThrow).not.toHaveBeenCalled();

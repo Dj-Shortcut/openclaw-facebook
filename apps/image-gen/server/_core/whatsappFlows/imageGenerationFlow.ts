@@ -187,8 +187,11 @@ function resolveWhatsAppCompletionFence(
   const requestChannel = getMessengerRequestChannel();
   const ownership = getMessengerRequestOwnership();
   const privacy = getMessengerRequestPrivacySubject();
+  const hasAnyRequestScope = Boolean(
+    pageId || requestChannel || ownership || privacy
+  );
   if (!pageId || !ownership || !privacy) {
-    if (process.env.NODE_ENV === "production") {
+    if (process.env.NODE_ENV === "production" || hasAnyRequestScope) {
       throw new WhatsAppGenerationScopeError();
     }
     return undefined;
@@ -382,12 +385,20 @@ async function runWhatsAppImageGenerationOnce(
   let providerAttemptsCommitted = 0;
   const providerFences: WhatsAppProviderAttemptFence[] = [];
   const finalizeKnownProviderSuccess = async (): Promise<void> => {
-    const fences = providerFences.splice(0, providerFences.length);
-    await Promise.all(
+    const fences = [...providerFences];
+    const outcomes = await Promise.allSettled(
       fences.map(fence =>
         finalizeWhatsAppProviderAttemptFence(fence, "succeeded")
       )
     );
+    outcomes.forEach((outcome, index) => {
+      if (outcome.status !== "fulfilled") return;
+      const fence = fences[index];
+      const position = fence ? providerFences.indexOf(fence) : -1;
+      if (position >= 0) providerFences.splice(position, 1);
+    });
+    const failure = outcomes.find(outcome => outcome.status === "rejected");
+    if (failure?.status === "rejected") throw failure.reason;
   };
   const commitProviderAttemptQuota = async () => {
     const reservationForAttempt =

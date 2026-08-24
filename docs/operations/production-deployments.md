@@ -43,6 +43,15 @@ used here because Fly halts a deploy when one fails. A dependency incident
 therefore raises an alert without making Meta's webhook callback unreachable or
 blocking a liveness-only recovery rollout.
 
+The storage-proxy Fly app separately requires the runtime secret names
+`STORAGE_RATE_LIMIT_REDIS_URL` and `STORAGE_RATE_LIMIT_KEY_SECRET`. The Redis
+endpoint must be private and shared by every proxy Machine; the key secret must
+contain at least 32 random bytes. Never put either value in repository or CI
+logs. Startup and `/readyz` prove the shared limiter, while `/healthz` remains a
+liveness-only signal. The deploy, rollback/recovery, and scheduled uptime gates
+check `/readyz` separately. Storage operations fail closed when the limiter
+cannot be reached.
+
 ## Required GitHub configuration
 
 Protect `main` with a repository ruleset that requires a pull request and the

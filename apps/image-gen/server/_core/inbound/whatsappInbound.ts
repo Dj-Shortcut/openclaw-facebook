@@ -152,6 +152,9 @@ function extractMessagesFromChange(
 ): NormalizedWhatsAppEvent[] {
   const value = objectValue(objectValue(change)?.value);
   if (!value || !wabaId) {
+    safeLog("whatsapp_inbound_change_dropped", {
+      reason: "missing_identity",
+    });
     return [];
   }
   let endpoint: WhatsAppEndpoint;
@@ -165,6 +168,10 @@ function extractMessagesFromChange(
     });
   } catch (error) {
     if (error instanceof ConversationIdentityError) {
+      safeLog("whatsapp_inbound_change_dropped", {
+        reason: "identity_rejected",
+        code: error.code,
+      });
       return [];
     }
     throw error;

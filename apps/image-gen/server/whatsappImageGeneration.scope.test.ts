@@ -210,6 +210,18 @@ describe("WhatsApp image generation tenant scope", () => {
     expect(mocks.executeGenerationFlow).not.toHaveBeenCalled();
   });
 
+  it("rejects a partial request scope before provider admission", async () => {
+    mocks.getRequestPrivacySubject.mockReturnValue(undefined);
+
+    await expect(
+      runWhatsAppImageGeneration(generationInput("wa-partial-scope"))
+    ).rejects.toMatchObject({ name: "WhatsAppGenerationScopeError" });
+
+    expect(mocks.reserveProviderFence).not.toHaveBeenCalled();
+    expect(mocks.executeGenerationFlow).not.toHaveBeenCalled();
+    expect(mocks.releaseImageGenerationUsage).toHaveBeenCalledOnce();
+  });
+
   it("passes an immutable exact scope through provider and completion admission", async () => {
     const providerCall = vi.fn();
     mocks.executeGenerationFlow.mockImplementation(async input => {
@@ -325,6 +337,62 @@ describe("WhatsApp image generation tenant scope", () => {
       "ambiguous"
     );
     expect(mocks.sendWhatsAppImageReplyWithReceipt).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed success-finalization fence for ambiguous cleanup", async () => {
+    const fence = {
+      leaseToken: "provider-lease",
+      attemptKeyHash: "b".repeat(64),
+    };
+    mocks.reserveProviderFence.mockResolvedValueOnce(fence);
+    mocks.finalizeProviderFence
+      .mockRejectedValueOnce(new Error("provider fence persistence failed"))
+      .mockResolvedValueOnce(undefined);
+    mocks.executeGenerationFlow.mockImplementation(async input => {
+      const admission = await input.onProviderAttempt();
+      await admission.markTransportStarted();
+      await input.onProviderSuccess();
+      return successfulGenerationResult();
+    });
+
+    await expect(
+      runWhatsAppImageGeneration(generationInput("wa-finalize-failure"))
+    ).rejects.toThrow("provider fence persistence failed");
+
+    expect(mocks.finalizeProviderFence).toHaveBeenNthCalledWith(
+      1,
+      fence,
+      "succeeded"
+    );
+    expect(mocks.finalizeProviderFence).toHaveBeenNthCalledWith(
+      2,
+      fence,
+      "ambiguous"
+    );
+    expect(mocks.sendWhatsAppImageReplyWithReceipt).not.toHaveBeenCalled();
+  });
+
+  it("marks an outstanding fence ambiguous exactly once on generation failure", async () => {
+    mocks.executeGenerationFlow.mockImplementation(async input => {
+      const admission = await input.onProviderAttempt();
+      await admission.markTransportStarted();
+      return {
+        kind: "error" as const,
+        errorKind: "generation_timeout" as const,
+        error: new Error("generation timed out"),
+        trustedSourceImageUrl: false,
+      };
+    });
+
+    await runWhatsAppImageGeneration(generationInput("wa-failed"));
+
+    expect(
+      mocks.finalizeProviderFence.mock.calls.filter(
+        call => call[1] === "ambiguous"
+      )
+    ).toHaveLength(1);
+    expect(mocks.sendWhatsAppImageReplyWithReceipt).not.toHaveBeenCalled();
+    expect(mocks.markGenerationCompleted).not.toHaveBeenCalled();
   });
 
   it("retains completion inventory for an ambiguous Graph outcome", async () => {

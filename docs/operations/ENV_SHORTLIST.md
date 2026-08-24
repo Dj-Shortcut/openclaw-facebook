@@ -30,12 +30,12 @@ These variables are required for the public Leaderbot WhatsApp number. See
 
 | Variable                       | Required for                                          | Notes                                                                                                              |
 | ------------------------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `WHATSAPP_ACCESS_TOKEN`        | WhatsApp Cloud API sends and media downloads          | If wrong or expired, outbound replies and media downloads fail.                                                    |
-| `WHATSAPP_PHONE_NUMBER_ID`     | WhatsApp Cloud API `/messages` endpoint               | Must be the public number's phone-number ID, not the display number.                                               |
+| `WHATSAPP_ACCESS_TOKEN`        | Bootstrap input and sealed WhatsApp tenant credential | Must exactly match the sealed tenant binding; rotate it only through the protected provisioning action.            |
+| `WHATSAPP_PHONE_NUMBER_ID`     | Exact WhatsApp tenant-binding phone identity          | Must be the public number's phone-number ID, not the display number.                                               |
 | `META_VERIFY_TOKEN`            | Shared Meta webhook verification                      | Accepted on Messenger and WhatsApp routes.                                                                         |
 | `WHATSAPP_VERIFY_TOKEN`        | Dedicated WhatsApp webhook verification               | Accepted only on `/webhook/whatsapp`; useful when Meta's WhatsApp setup uses a channel-specific token.             |
 | `WHATSAPP_APP_SECRET`          | Optional dedicated WhatsApp POST signature validation | Set this when WhatsApp is configured under a different Meta app than Messenger; otherwise `FB_APP_SECRET` is used. |
-| `WHATSAPP_BUSINESS_ACCOUNT_ID` | Meta Business diagnostics                             | Not required by runtime sends, but useful for setup checks.                                                        |
+| `WHATSAPP_BUSINESS_ACCOUNT_ID` | Exact WhatsApp provider-account identity              | Required for provisioning, boot readiness, and WABA + phone tenant binding.                                        |
 
 ## 3. OpenAI paths
 
@@ -72,6 +72,8 @@ These show up in the repo and can be mistaken for the main OpenAI path.
 | `STORAGE_PUBLIC_BASE_URLS`                 | Temporary storage-domain aliases                                 | Optional comma-separated exact HTTPS origins/base paths during a controlled domain migration.                                                            |
 | `STORAGE_ALLOW_LEGACY_KEYS`                | Staged storage rollout bridge                                    | Default `false`; enable temporarily only while old unscoped objects or non-Messenger writers are drained, then remove after the 30-day lifecycle window. |
 | `STORAGE_ALLOW_LEGACY_BEARER_AUTH`         | Storage-proxy rolling bridge                                     | Proxy-only, default `false`; enable only while old app instances still send bearer-only requests, then disable immediately after that phase.             |
+| `STORAGE_RATE_LIMIT_REDIS_URL`             | Storage-proxy shared rate limiting                               | Required storage-proxy secret. Use a private Redis URL; startup, `/readyz`, and storage operations fail closed when it is unavailable.                   |
+| `STORAGE_RATE_LIMIT_KEY_SECRET`            | Storage-proxy rate-limit key privacy                             | Required storage-proxy secret of at least 32 random bytes; HMACs client and tenant bucket identities before Redis storage.                               |
 | `REDIS_URL`                                | Replay protection, rate limiting, state and customer photo quota | Required in production; the Messenger photo quota fails closed without atomic Redis storage.                                                             |
 | `HTTP_RATE_LIMIT_REDIS_GUARD_MAX_REQUESTS` | Global HTTP rate limiting                                        | Optional pre-Redis guard cap per window; defaults to `max(1000, HTTP_RATE_LIMIT_MAX_REQUESTS * 10)`.                                                     |
 | `ADMIN_TOKEN`                              | Debug/admin endpoints                                            | Required for `/admin/disable-face-memory` and `/debug/build`; those endpoints also have a stricter admin-auth rate limit.                                |
@@ -128,8 +130,9 @@ If WhatsApp is involved, also check:
 
 1. `WHATSAPP_ACCESS_TOKEN`
 2. `WHATSAPP_PHONE_NUMBER_ID`
-3. `META_VERIFY_TOKEN` or `WHATSAPP_VERIFY_TOKEN`
-4. Meta callback URL: `https://leaderbot-fb-image-gen.fly.dev/webhook/whatsapp`
+3. `WHATSAPP_BUSINESS_ACCOUNT_ID`
+4. `META_VERIFY_TOKEN` or `WHATSAPP_VERIFY_TOKEN`
+5. Meta callback URL: `https://leaderbot-fb-image-gen.fly.dev/webhook/whatsapp`
 
 ## 8. Current local-dev gotchas
 

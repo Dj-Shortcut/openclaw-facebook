@@ -81,6 +81,7 @@ export async function handleEntry(
       () => handleEvent(ctx, event, pageId),
       ownership
         ? {
+            channel: "facebook_messenger",
             ...ownership,
             userKey: inheritedPrivacy?.userKey,
             privacyEpoch: inheritedPrivacy?.privacyEpoch,

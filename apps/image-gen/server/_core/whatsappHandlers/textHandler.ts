@@ -9,7 +9,10 @@ import {
 import { resolveConversationActionInput } from "../conversationActionSelection";
 import { toLogUser } from "../privacy";
 import { sendWhatsAppBotStateResponse } from "../whatsappResponseService";
-import type { NormalizedWhatsAppEvent, WhatsAppHandlerContext } from "../whatsappTypes";
+import type {
+  NormalizedWhatsAppEvent,
+  WhatsAppHandlerContext,
+} from "../whatsappTypes";
 import { runWhatsAppTextFeatures } from "./textContext";
 import { safeLog } from "../logger";
 
@@ -27,7 +30,9 @@ export async function handleWhatsAppTextEvent(
     state.pendingConversationActions
   );
   if (selectedActionInput) {
-    await Promise.resolve(setPendingConversationActions(event.senderId, undefined));
+    await Promise.resolve(
+      setPendingConversationActions(event.senderId, undefined)
+    );
     textBody = selectedActionInput;
     normalizedText = textBody.toLowerCase();
     sharedEvent = {
@@ -55,7 +60,7 @@ export async function handleWhatsAppTextEvent(
         messageText,
         normalizedText: currentNormalizedText,
         hasPhoto,
-    }),
+      }),
     logState: (currentState, logContext) => {
       safeLog("whatsapp_shared_state", {
         context: logContext,
@@ -69,7 +74,8 @@ export async function handleWhatsAppTextEvent(
   await sendWhatsAppBotStateResponse(
     event.senderId,
     result.response,
-    result.replyState
+    result.replyState,
+    context.reqId
   );
   if (result.afterSend === "markIntroSeen") {
     await Promise.resolve(markIntroSeen(event.senderId));

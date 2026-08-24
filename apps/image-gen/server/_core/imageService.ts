@@ -341,16 +341,12 @@ export class OpenAiImageGenerator implements ImageGenerator {
           } catch (error) {
             const cleanupErrors: unknown[] = [];
             if (ledgerEntryRecorded) {
-              try {
-                await safelyUpdateCostLedgerEntry(
-                  costLedgerEntryId,
-                  { status: "provider_attempt_failed", finalCostUsd: null },
-                  attemptedAt,
-                  input.costLedgerScope
-                );
-              } catch (cleanupError) {
-                cleanupErrors.push(cleanupError);
-              }
+              await safelyUpdateCostLedgerEntry(
+                costLedgerEntryId,
+                { status: "provider_attempt_failed", finalCostUsd: null },
+                attemptedAt,
+                input.costLedgerScope
+              );
             }
             try {
               await admission?.abortBeforeTransport();

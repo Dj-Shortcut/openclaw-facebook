@@ -27,7 +27,7 @@ This document is the deploy/smoke checklist for the current gateway surface.
 - Fixed Fly gateway workspace persistence: OpenClaw now uses `/data/workspace` through `OPENCLAW_WORKSPACE_DIR` for static instruction files only.
 - Added startup migration for missing static instruction files from `/home/node/.openclaw/workspace` to `/data/workspace`.
 - Disabled shared public memory plugins, hooks, compaction flushes, search, and tools. Existing `USER.md`, `MEMORY.md`, and `memory/` content is moved to the recoverable `/data/private-memory-quarantine-v1` before startup; a collision fails closed.
-- Forced public Messenger direct messages to `per-account-channel-peer`, rejected secondary-agent Facebook bindings, and repeated both route checks before transcript dispatch.
+- Forced public Messenger direct messages to `per-account-channel-peer`. Startup rejects explicit non-`main` Facebook `agentId` values; the runtime route check rejects an inherited secondary default agent before transcript dispatch when the binding omits `agentId`.
 - Added immediate cleanup for downloaded Messenger media after successful and failed turns, with a maximum 24-hour persisted attachment TTL as crash recovery.
 - Repaired persisted config when it contains the known legacy default workspace path.
 - Kept OpenClaw built-in `image_generate` denied on the public gateway; Messenger image generation stays routed through Leaderbot image-gen.

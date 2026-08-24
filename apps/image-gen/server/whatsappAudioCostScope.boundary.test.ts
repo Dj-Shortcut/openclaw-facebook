@@ -134,6 +134,51 @@ describe("WhatsApp audio cost-admission boundary", () => {
     });
   });
 
+  it("keeps an empty provider 2xx transcript classified as succeeded", async () => {
+    const userId = toUserKey(SENDER_ID);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(JSON.stringify({ text: "" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      )
+    );
+
+    await expect(
+      transcribePreparedAudioMessage(
+        "req-wa-audio-empty",
+        SENDER_ID,
+        userId,
+        "wa-media-id",
+        {
+          apiKey: "test-key",
+          sourceAudio: {
+            buffer: Buffer.from("audio"),
+            contentType: "audio/ogg",
+            incomingLen: 5,
+          },
+        },
+        async () => undefined,
+        "whatsapp",
+        { ...providerJob(userId), reqId: "req-wa-audio-empty" }
+      )
+    ).resolves.toBeNull();
+
+    const period = new Date().toISOString().slice(0, 10);
+    expect(await readCostLedgerPeriod(period)).toEqual([
+      expect.objectContaining({
+        status: "provider_attempt_succeeded",
+        userKey: userId,
+      }),
+    ]);
+    expect(mocks.finalizeFence).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "ambiguous"
+    );
+  });
+
   it("rejects a recipient/user mismatch before provider admission or fetch", async () => {
     const userId = toUserKey(SENDER_ID);
     const fetchMock = vi.fn<typeof fetch>();
@@ -157,6 +202,38 @@ describe("WhatsApp audio cost-admission boundary", () => {
         providerAttempt,
         "whatsapp",
         providerJob(toUserKey("32479999999"))
+      )
+    ).rejects.toThrow(
+      "Audio transcription requires tenant-scoped cost admission"
+    );
+
+    expect(providerAttempt).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mocks.assertOwnership).not.toHaveBeenCalled();
+  });
+
+  it("rejects WhatsApp without a tenant-scoped provider job", async () => {
+    const userId = toUserKey(SENDER_ID);
+    const fetchMock = vi.fn<typeof fetch>();
+    const providerAttempt = vi.fn(async () => undefined);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      transcribePreparedAudioMessage(
+        "req-wa-audio-unscoped",
+        SENDER_ID,
+        userId,
+        "wa-media-id",
+        {
+          apiKey: "test-key",
+          sourceAudio: {
+            buffer: Buffer.from("audio"),
+            contentType: "audio/ogg",
+            incomingLen: 5,
+          },
+        },
+        providerAttempt,
+        "whatsapp"
       )
     ).rejects.toThrow(
       "Audio transcription requires tenant-scoped cost admission"

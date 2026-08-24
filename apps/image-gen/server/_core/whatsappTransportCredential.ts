@@ -52,7 +52,7 @@ async function resolveWhatsAppTransportCredentialInternal(): Promise<WhatsAppTra
   const ownership = getMessengerRequestOwnership();
   const privacySubject = getMessengerRequestPrivacySubject();
   const hasAnyRequestScope = Boolean(
-    phoneNumberId || ownership || privacySubject
+    phoneNumberId || requestChannel || ownership || privacySubject
   );
 
   if (

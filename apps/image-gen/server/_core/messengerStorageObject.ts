@@ -5,6 +5,7 @@ import {
   getMessengerRequestPageId,
   getMessengerRequestPrivacySubject,
   getMessengerRequestChannel,
+  type MessengerChannel,
 } from "./messengerRequestContext";
 
 export const MESSENGER_STORAGE_PREFIXES = [
@@ -28,7 +29,7 @@ export type MessengerStorageScope = Readonly<{
 export type MessengerStorageRequestScope = MessengerStorageScope &
   Readonly<{
     pageId: string;
-    channel?: "facebook_messenger" | "whatsapp";
+    channel?: MessengerChannel;
   }>;
 
 const USER_KEY_PATTERN = /^[a-f0-9]{64}$/u;

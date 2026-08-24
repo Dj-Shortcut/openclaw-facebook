@@ -690,6 +690,10 @@ jobs:
           status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/healthz)"
           test "$status" = "200"
           grep -Fx "ok" "$body"
+          ready_body="$(mktemp)"
+          ready_status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$ready_body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/readyz)"
+          test "$ready_status" = "200"
+          jq -e '.ok == true and .rateLimiter == "shared_redis"' "$ready_body"
           echo "superseded=true" >> "$GITHUB_OUTPUT"
 
       - name: Restore and verify captured storage-proxy release
@@ -749,3 +753,7 @@ jobs:
           status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/healthz)"
           test "$status" = "200"
           grep -Fx "ok" "$body"
+          ready_body="$(mktemp)"
+          ready_status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$ready_body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/readyz)"
+          test "$ready_status" = "200"
+          jq -e '.ok == true and .rateLimiter == "shared_redis"' "$ready_body"

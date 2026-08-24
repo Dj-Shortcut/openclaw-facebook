@@ -248,6 +248,7 @@ describe("data deletion service", () => {
         });
       },
       {
+        channel: "facebook_messenger",
         workspaceId: 42,
         channelConnectionId: 7,
         bindingEpoch: 3,
@@ -296,6 +297,7 @@ describe("data deletion service", () => {
         });
       },
       {
+        channel: "facebook_messenger",
         workspaceId: 42,
         channelConnectionId: 7,
         bindingEpoch: 3,
@@ -317,6 +319,7 @@ describe("data deletion service", () => {
         });
       },
       {
+        channel: "facebook_messenger",
         workspaceId: 42,
         channelConnectionId: 7,
         bindingEpoch: 3,
@@ -347,6 +350,7 @@ describe("data deletion service", () => {
         await expect(Promise.resolve(getState(psid))).resolves.toBeNull();
       },
       {
+        channel: "facebook_messenger",
         workspaceId: 42,
         channelConnectionId: 7,
         bindingEpoch: 3,
@@ -364,6 +368,7 @@ describe("data deletion service", () => {
       pageId,
       async () => Promise.resolve(getOrCreateState(psid)),
       {
+        channel: "facebook_messenger",
         workspaceId: 42,
         channelConnectionId: 7,
         bindingEpoch: 3,
@@ -386,6 +391,7 @@ describe("data deletion service", () => {
         });
       },
       {
+        channel: "facebook_messenger",
         workspaceId: 42,
         channelConnectionId: 7,
         bindingEpoch: 3,
@@ -419,6 +425,7 @@ describe("data deletion service", () => {
             pageId,
             () => setPendingStoredImage(psid, lateSourceUrl),
             {
+              channel: "facebook_messenger",
               workspaceId: 42,
               channelConnectionId: 7,
               bindingEpoch: 3,
@@ -433,6 +440,7 @@ describe("data deletion service", () => {
         });
       },
       {
+        channel: "facebook_messenger",
         workspaceId: 42,
         channelConnectionId: 7,
         bindingEpoch: 3,
@@ -538,6 +546,7 @@ describe("data deletion service", () => {
         });
       },
       {
+        channel: "facebook_messenger",
         workspaceId: 42,
         channelConnectionId: 7,
         bindingEpoch: 3,
@@ -559,12 +568,16 @@ describe("data deletion service", () => {
     const psid = "delete-handoff-token-user";
     const userKey = anonymizePsid(psid);
 
-    await runWithMessengerRequestContext("page-delete-handoff", async () => {
-      await Promise.resolve(getOrCreateState(psid));
-      await expect(deleteUserData(psid)).resolves.toEqual({
-        status: "completed",
-      });
-    });
+    await runWithMessengerRequestContext(
+      "page-delete-handoff",
+      async () => {
+        await Promise.resolve(getOrCreateState(psid));
+        await expect(deleteUserData(psid)).resolves.toEqual({
+          status: "completed",
+        });
+      },
+      { channel: "facebook_messenger" }
+    );
 
     expect(eraseBillingHandoffIdentityMock).toHaveBeenCalledWith(
       42,
@@ -616,26 +629,30 @@ describe("data deletion service", () => {
       })
     );
 
-    await runWithMessengerRequestContext(pageId, async () => {
-      await Promise.resolve(
-        setPendingImage(psid, sourceUrl, Date.now(), "stored")
-      );
-      await Promise.resolve(
-        setLastGenerationContext(psid, {
-          prompt: "private page-scoped prompt",
-        })
-      );
+    await runWithMessengerRequestContext(
+      pageId,
+      async () => {
+        await Promise.resolve(
+          setPendingImage(psid, sourceUrl, Date.now(), "stored")
+        );
+        await Promise.resolve(
+          setLastGenerationContext(psid, {
+            prompt: "private page-scoped prompt",
+          })
+        );
 
-      await expect(deleteUserData(psid)).resolves.toEqual({
-        status: "pending",
-      });
+        await expect(deleteUserData(psid)).resolves.toEqual({
+          status: "pending",
+        });
 
-      const stateAfter = await Promise.resolve(getState(psid));
-      expect(stateAfter?.lastPhotoUrl).toBeNull();
-      expect(stateAfter?.pendingImageUrl).toBeUndefined();
-      expect(stateAfter?.lastPrompt).toBeUndefined();
-      expect(stateAfter?.pendingSourceImageDeleteUrl).toBe(sourceUrl);
-    });
+        const stateAfter = await Promise.resolve(getState(psid));
+        expect(stateAfter?.lastPhotoUrl).toBeNull();
+        expect(stateAfter?.pendingImageUrl).toBeUndefined();
+        expect(stateAfter?.lastPrompt).toBeUndefined();
+        expect(stateAfter?.pendingSourceImageDeleteUrl).toBe(sourceUrl);
+      },
+      { channel: "facebook_messenger" }
+    );
 
     expect(await Promise.resolve(readState(psid))).toBeNull();
     expect(await Promise.resolve(readState(userKey))).toBeNull();
@@ -653,13 +670,17 @@ describe("data deletion service", () => {
       })
     );
 
-    await runWithMessengerRequestContext(pageId, async () => {
-      await Promise.resolve(getOrCreateState(psid));
-      await expect(deleteUserData(psid)).resolves.toEqual({
-        status: "completed",
-      });
-      expect(await Promise.resolve(getState(psid))).toBeNull();
-    });
+    await runWithMessengerRequestContext(
+      pageId,
+      async () => {
+        await Promise.resolve(getOrCreateState(psid));
+        await expect(deleteUserData(psid)).resolves.toEqual({
+          status: "completed",
+        });
+        expect(await Promise.resolve(getState(psid))).toBeNull();
+      },
+      { channel: "facebook_messenger" }
+    );
 
     expect(await Promise.resolve(readState(psid))).toMatchObject({
       lastPrompt: "private non-Messenger state",
@@ -841,9 +862,15 @@ describe("data deletion service", () => {
       new Error("temporary handoff-token deletion failure")
     );
 
-    await runWithMessengerRequestContext("page-delete-failure", async () => {
-      await expect(deleteUserData(psid)).resolves.toEqual({ status: "failed" });
-    });
+    await runWithMessengerRequestContext(
+      "page-delete-failure",
+      async () => {
+        await expect(deleteUserData(psid)).resolves.toEqual({
+          status: "failed",
+        });
+      },
+      { channel: "facebook_messenger" }
+    );
     expect(await Promise.resolve(getState(psid))).toBeNull();
   });
 

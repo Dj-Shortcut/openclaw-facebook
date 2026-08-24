@@ -95,7 +95,15 @@ vi.mock("./_core/whatsappHandlers/textHandler", () => ({
 }));
 
 vi.mock("./_core/whatsappGenerationScope", () => {
-  class WhatsAppGenerationScopeError extends Error {}
+  class WhatsAppGenerationScopeError extends Error {
+    readonly retryable: boolean;
+
+    constructor(options?: { retryable?: boolean }) {
+      super("WhatsApp generation ownership is unavailable");
+      this.name = "WhatsAppGenerationScopeError";
+      this.retryable = options?.retryable === true;
+    }
+  }
   return {
     resolveWhatsAppGenerationOwnership: resolveWhatsAppGenerationOwnershipMock,
     admitWhatsAppGenerationScope: admitWhatsAppGenerationScopeMock,
@@ -410,6 +418,7 @@ describe("whatsappWebhook", () => {
     claimWebhookReplayKeyMock.mockResolvedValue(true);
     deleteUserDataAndSendResultMock.mockImplementation(
       async (_senderId, _lang, sendDeletionOutcome) => {
+        expect(getMessengerRequestChannel()).toBe("whatsapp");
         expect(getMessengerRequestErasurePrivacySubject()).toEqual({
           userKey: "u2",
           privacyEpoch: 6,
@@ -581,7 +590,7 @@ describe("whatsappWebhook", () => {
     expect(sendWhatsAppTextReplyMock).not.toHaveBeenCalled();
   });
 
-  it("claims replay before privacy admission and keeps the request id stable", async () => {
+  it("admits privacy before claiming replay and keeps the request id stable", async () => {
     const event = {
       channel: "whatsapp" as const,
       endpoint: {
@@ -623,12 +632,12 @@ describe("whatsappWebhook", () => {
     expect(requestIds).toHaveLength(2);
     expect(requestIds[0]).toBe(requestIds[1]);
     expect(requestIds[0]).toMatch(/^[a-f0-9]{64}$/);
-    expect(claimWebhookReplayKeyMock.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(
       admitWhatsAppGenerationScopeMock.mock.invocationCallOrder[0]
-    );
+    ).toBeLessThan(claimWebhookReplayKeyMock.mock.invocationCallOrder[0]);
   });
 
-  it("does not admit privacy or touch state when a replay is rejected", async () => {
+  it("does not touch state or dispatch when a replay is rejected after admission", async () => {
     extractWhatsAppEventsMock.mockReturnValue([
       {
         channel: "whatsapp",
@@ -653,9 +662,225 @@ describe("whatsappWebhook", () => {
       object: "whatsapp_business_account",
     });
 
-    expect(admitWhatsAppGenerationScopeMock).not.toHaveBeenCalled();
+    expect(admitWhatsAppGenerationScopeMock).toHaveBeenCalledOnce();
     expect(getOrCreateStateMock).not.toHaveBeenCalled();
     expect(setLastUserMessageAtMock).not.toHaveBeenCalled();
     expect(handleWhatsAppTextEventMock).not.toHaveBeenCalled();
+  });
+
+  it("retries a transient admission failure without consuming replay", async () => {
+    const { WhatsAppGenerationScopeError } =
+      await import("./_core/whatsappGenerationScope");
+    extractWhatsAppEventsMock.mockReturnValue([
+      {
+        channel: "whatsapp",
+        endpoint: {
+          channel: "whatsapp",
+          wabaId: "303030303030303",
+          phoneNumberId: "404040404040404",
+        },
+        senderId: "32999999",
+        userId: "u2",
+        messageId: "wamid.transient-admission",
+        messageType: "text",
+        rawMessageType: "text",
+        textBody: "maak een beeld",
+      },
+    ]);
+    admitWhatsAppGenerationScopeMock
+      .mockRejectedValueOnce(
+        new WhatsAppGenerationScopeError({ retryable: true })
+      )
+      .mockResolvedValueOnce({
+        workspaceId: 42,
+        channelConnectionId: 8,
+        bindingEpoch: 3,
+        privacyEpoch: 2,
+        userKey: "u2",
+      });
+    claimWebhookReplayKeyMock.mockResolvedValue(true);
+    getOrCreateStateMock.mockResolvedValue({
+      consentGiven: true,
+      userKey: "u2",
+    });
+    handleWhatsAppConsentGateMock.mockResolvedValue(false);
+
+    const { processWhatsAppWebhookPayload } =
+      await import("./_core/whatsappWebhook");
+    await expect(
+      processWhatsAppWebhookPayload({ object: "whatsapp_business_account" })
+    ).rejects.toBeInstanceOf(WhatsAppGenerationScopeError);
+    expect(claimWebhookReplayKeyMock).not.toHaveBeenCalled();
+
+    await expect(
+      processWhatsAppWebhookPayload({ object: "whatsapp_business_account" })
+    ).resolves.toBeUndefined();
+    expect(claimWebhookReplayKeyMock).toHaveBeenCalledOnce();
+    expect(handleWhatsAppTextEventMock).toHaveBeenCalledOnce();
+  });
+
+  it("keeps concurrent duplicates behind the post-admission replay claim", async () => {
+    extractWhatsAppEventsMock.mockReturnValue([
+      {
+        channel: "whatsapp",
+        endpoint: {
+          channel: "whatsapp",
+          wabaId: "303030303030303",
+          phoneNumberId: "404040404040404",
+        },
+        senderId: "32999999",
+        userId: "u2",
+        messageId: "wamid.concurrent",
+        messageType: "text",
+        rawMessageType: "text",
+        textBody: "maak een beeld",
+      },
+    ]);
+    claimWebhookReplayKeyMock
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    getOrCreateStateMock.mockResolvedValue({
+      consentGiven: true,
+      userKey: "u2",
+    });
+    handleWhatsAppConsentGateMock.mockResolvedValue(false);
+
+    const { processWhatsAppWebhookPayload } =
+      await import("./_core/whatsappWebhook");
+    await Promise.all([
+      processWhatsAppWebhookPayload({ object: "whatsapp_business_account" }),
+      processWhatsAppWebhookPayload({ object: "whatsapp_business_account" }),
+    ]);
+
+    expect(admitWhatsAppGenerationScopeMock).toHaveBeenCalledTimes(2);
+    expect(claimWebhookReplayKeyMock).toHaveBeenCalledTimes(2);
+    expect(handleWhatsAppTextEventMock).toHaveBeenCalledOnce();
+  });
+
+  it("sends a generic handler fallback inside the verified tenant context", async () => {
+    extractWhatsAppEventsMock.mockReturnValue([
+      {
+        channel: "whatsapp",
+        endpoint: {
+          channel: "whatsapp",
+          wabaId: "303030303030303",
+          phoneNumberId: "404040404040404",
+        },
+        senderId: "32999999",
+        userId: "u2",
+        messageId: "wamid.fallback",
+        messageType: "text",
+        rawMessageType: "text",
+        textBody: "maak een beeld",
+      },
+    ]);
+    claimWebhookReplayKeyMock.mockResolvedValue(true);
+    getOrCreateStateMock.mockResolvedValue({
+      consentGiven: true,
+      userKey: "u2",
+    });
+    handleWhatsAppConsentGateMock.mockResolvedValue(false);
+    handleWhatsAppTextEventMock.mockRejectedValue(new Error("handler failed"));
+    sendWhatsAppTextReplyMock.mockImplementation(async () => {
+      expect(getMessengerRequestChannel()).toBe("whatsapp");
+      expect(getMessengerRequestOwnership()).toEqual({
+        workspaceId: 42,
+        channelConnectionId: 8,
+        bindingEpoch: 3,
+      });
+      expect(getMessengerRequestPrivacySubject()).toEqual({
+        userKey: "u2",
+        privacyEpoch: 2,
+      });
+    });
+
+    const { processWhatsAppWebhookPayload } =
+      await import("./_core/whatsappWebhook");
+    await expect(
+      processWhatsAppWebhookPayload({ object: "whatsapp_business_account" })
+    ).resolves.toBeUndefined();
+
+    expect(sendWhatsAppTextReplyMock).toHaveBeenCalledWith(
+      "32999999",
+      "localized message"
+    );
+  });
+
+  it("never sends the generic fallback for a terminal scope denial", async () => {
+    const { WhatsAppGenerationScopeError } =
+      await import("./_core/whatsappGenerationScope");
+    extractWhatsAppEventsMock.mockReturnValue([
+      {
+        channel: "whatsapp",
+        endpoint: {
+          channel: "whatsapp",
+          wabaId: "303030303030303",
+          phoneNumberId: "404040404040404",
+        },
+        senderId: "32999999",
+        userId: "u2",
+        messageId: "wamid.scope-denied",
+        messageType: "text",
+        rawMessageType: "text",
+        textBody: "maak een beeld",
+      },
+    ]);
+    claimWebhookReplayKeyMock.mockResolvedValue(true);
+    getOrCreateStateMock.mockResolvedValue({
+      consentGiven: true,
+      userKey: "u2",
+    });
+    handleWhatsAppConsentGateMock.mockResolvedValue(false);
+    handleWhatsAppTextEventMock.mockRejectedValue(
+      new WhatsAppGenerationScopeError()
+    );
+
+    const { processWhatsAppWebhookPayload } =
+      await import("./_core/whatsappWebhook");
+    await expect(
+      processWhatsAppWebhookPayload({ object: "whatsapp_business_account" })
+    ).resolves.toBeUndefined();
+
+    expect(sendWhatsAppTextReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("never sends a second fallback after an ambiguous Graph outcome", async () => {
+    const { WhatsAppDeliveryError } = await import("./_core/whatsappApi");
+    extractWhatsAppEventsMock.mockReturnValue([
+      {
+        channel: "whatsapp",
+        endpoint: {
+          channel: "whatsapp",
+          wabaId: "303030303030303",
+          phoneNumberId: "404040404040404",
+        },
+        senderId: "32999999",
+        userId: "u2",
+        messageId: "wamid.delivery-ambiguous",
+        messageType: "text",
+        rawMessageType: "text",
+        textBody: "maak een beeld",
+      },
+    ]);
+    claimWebhookReplayKeyMock.mockResolvedValue(true);
+    getOrCreateStateMock.mockResolvedValue({
+      consentGiven: true,
+      userKey: "u2",
+    });
+    handleWhatsAppConsentGateMock.mockResolvedValue(false);
+    handleWhatsAppTextEventMock.mockRejectedValue(
+      new WhatsAppDeliveryError("ambiguous", "a".repeat(64))
+    );
+
+    const { processWhatsAppWebhookPayload } =
+      await import("./_core/whatsappWebhook");
+    await expect(
+      processWhatsAppWebhookPayload({ object: "whatsapp_business_account" })
+    ).rejects.toMatchObject({
+      name: "WhatsAppDeliveryError",
+      outcome: "ambiguous",
+    });
+
+    expect(sendWhatsAppTextReplyMock).not.toHaveBeenCalled();
   });
 });

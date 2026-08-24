@@ -32,6 +32,7 @@ import {
   getMessengerRequestOwnership,
   getMessengerRequestPageId,
   setMessengerRequestErasurePrivacySubject,
+  type MessengerChannel,
 } from "./messengerRequestContext";
 import {
   beginMessengerPrivacyErasure,
@@ -102,7 +103,7 @@ type LockedPrivacyErasure = MessengerErasingPrivacySubject & {
 };
 
 function getConnectedDeletionChannelConnection(
-  channel: "facebook_messenger" | "whatsapp",
+  channel: MessengerChannel,
   externalId: string,
   expected?: {
     workspaceId?: number | null;
@@ -119,7 +120,10 @@ async function deleteUserDataInternal(
   psid: string,
   lockedPrivacyErasure?: LockedPrivacyErasure
 ): Promise<UserDataDeletionOutcome> {
-  const requestChannel = getMessengerRequestChannel() ?? "facebook_messenger";
+  const requestChannel = getMessengerRequestChannel();
+  if (!requestChannel && process.env.NODE_ENV === "production") {
+    return { status: "failed" };
+  }
   const erasureRetry = getMessengerRequestErasurePrivacySubject();
   if (erasureRetry) {
     const ownership = getMessengerRequestOwnership();
@@ -238,6 +242,7 @@ async function deleteUserDataInternal(
     state.bindingEpoch &&
     state.privacyEpoch
   ) {
+    if (!requestChannel) return { status: "failed" };
     const connection = await getConnectedDeletionChannelConnection(
       requestChannel,
       state.pageId,
@@ -397,6 +402,12 @@ async function deleteUserDataInternal(
         }
         return;
       }
+      if (!requestChannel) {
+        if (process.env.NODE_ENV === "production") {
+          throw new Error("Verified request channel is required for erasure");
+        }
+        return;
+      }
       const ownership = getMessengerRequestOwnership();
       const expectedConnection =
         state?.workspaceId && state.channelConnectionId && state.bindingEpoch
@@ -502,7 +513,8 @@ async function deleteUserDataInternal(
         deletionState.userKey,
         privacyErasure &&
           deletionState.bindingEpoch &&
-          deletionState.privacyEpoch
+          deletionState.privacyEpoch &&
+          requestChannel
           ? {
               workspaceId: privacyErasure.workspaceId,
               channelConnectionId: privacyErasure.channelConnectionId,
@@ -510,10 +522,11 @@ async function deleteUserDataInternal(
               privacyEpoch: deletionState.privacyEpoch,
               userKey: deletionState.userKey,
               pageId: deletionState.pageId!,
-              ...(requestChannel === "whatsapp"
-                ? { channel: "whatsapp" as const }
-                : {}),
+              channel: requestChannel,
             }
+          : undefined,
+        requestChannel === "whatsapp"
+          ? { includeLegacyUnqualifiedWhatsAppIndexes: true }
           : undefined
       )
     )) && deleteStepsSucceeded;

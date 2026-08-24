@@ -300,7 +300,7 @@ function getAudioCostLedgerScope(
   // job here would detach the billable provider attempt from its tenant. Keep
   // the existing non-production Messenger compatibility for focused tests and
   // local tooling, while production remains fail closed for both channels.
-  if (job?.providerChannel === "whatsapp") {
+  if (channel === "whatsapp" || job?.providerChannel === "whatsapp") {
     throw new Error(
       "Audio transcription requires tenant-scoped cost admission"
     );

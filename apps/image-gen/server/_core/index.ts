@@ -11,6 +11,7 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { assertAuthConfig, registerOAuthRoutes } from "./auth";
 import { isDirectFacebookLoginConfigured } from "./oauth";
 import { assertWhatsAppConfig } from "./env";
+import { assertWhatsAppTenantBindingReadiness } from "./whatsappBindingReadiness";
 import { captureBotWebhookRawBody, getBotStartupConfig } from "./bot";
 import { assertProductionImageStorageConfig } from "./image-generation/imageServiceConfig";
 import { appRouter } from "../routers";
@@ -207,6 +208,10 @@ async function startServer() {
   assertProductionImageStorageConfig();
   assertAuthConfig();
   assertWhatsAppConfig();
+  // Keep /healthz as liveness, but refuse to expose webhook drains or workers
+  // until the legacy env credential has been sealed into one exact tenant
+  // binding. The one-off provisioning artifact must run before this runtime.
+  await assertWhatsAppTenantBindingReadiness();
   const mollieBillingEnabled = isMollieBillingEnabled();
   const mollieBillingPreflightEnabled = isMollieBillingPreflightEnabled();
   const aiAnswerEnforcementEnabled = isMollieEntitlementEnforcementEnabled();

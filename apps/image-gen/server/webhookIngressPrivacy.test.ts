@@ -23,6 +23,7 @@ vi.mock("./_core/messengerWebhook", () => ({
 
 import { webhookIngressQueueTestHooks } from "./_core/meta/webhookIngressQueue";
 import {
+  getMessengerRequestChannel,
   getMessengerRequestOwnership,
   getMessengerRequestPrivacySubject,
 } from "./_core/messengerRequestContext";
@@ -108,6 +109,7 @@ describe("Messenger webhook ingress privacy admission", () => {
   it("processes queued work under its immutable privacy epoch without readmission", async () => {
     const userKey = toUserKey("sender-a");
     mocks.processFacebook.mockImplementationOnce(async () => {
+      expect(getMessengerRequestChannel()).toBe("facebook_messenger");
       expect(getMessengerRequestOwnership()).toEqual({
         workspaceId: 42,
         channelConnectionId: 7,

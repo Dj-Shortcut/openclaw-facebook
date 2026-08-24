@@ -95,18 +95,15 @@ export async function handleWhatsAppImageEvent(
       persistedImageLocation: summarizePersistedImageUrl(persistedImageUrl),
     });
   } catch (error) {
+    let fenceFinalizationFailed = false;
     if (downloadFence) {
       try {
         await finalizeWhatsAppProviderAttemptFence(
           downloadFence,
           downloadStarted ? "ambiguous" : "known_failed"
         );
-      } catch (fenceError) {
-        error = new AggregateError(
-          [error, fenceError],
-          "WhatsApp image download fence finalization failed",
-          { cause: error }
-        );
+      } catch {
+        fenceFinalizationFailed = true;
       }
     }
     safeLog("whatsapp_inbound_image_processing_failed", {
@@ -115,6 +112,7 @@ export async function handleWhatsAppImageEvent(
       mediaIdHash: hashMediaId(event.imageId),
       reqId: context.reqId,
       error: error instanceof Error ? error.name : "unknown_error",
+      fenceFinalizationFailed,
     });
     await setFlowState(event.senderId, "AWAITING_PHOTO");
     await sendWhatsAppTextReply(

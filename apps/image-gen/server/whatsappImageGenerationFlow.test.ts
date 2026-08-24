@@ -53,6 +53,7 @@ vi.mock("./_core/whatsappResponseService", () => ({
 vi.mock("./_core/logger", () => ({ safeLog: mocks.safeLog }));
 
 import { runWhatsAppImageGeneration } from "./_core/whatsappFlows/imageGenerationFlow";
+import { resolveWhatsAppEndpoint } from "./_core/conversationEndpoint";
 
 describe("WhatsApp image generation customer errors", () => {
   beforeEach(() => {
@@ -88,11 +89,10 @@ describe("WhatsApp image generation customer errors", () => {
       reqId: "request-id",
       lang: "nl",
       promptHint: "maak een kat",
-      endpoint: {
-        channel: "whatsapp",
-        wabaId: "303030303030303" as never,
-        phoneNumberId: "404040404040404" as never,
-      },
+      endpoint: resolveWhatsAppEndpoint({
+        wabaId: "303030303030303",
+        phoneNumberId: "404040404040404",
+      }),
       costLedgerScope: {
         workspaceId: 42,
         channelConnectionId: 8,

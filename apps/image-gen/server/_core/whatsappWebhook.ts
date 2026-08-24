@@ -17,6 +17,7 @@ import { handleWhatsAppImageEvent } from "./whatsappHandlers/imageHandler";
 import { handleWhatsAppAudioEvent } from "./whatsappHandlers/audioHandler";
 import { handleWhatsAppInteractiveEvent } from "./whatsappHandlers/interactiveHandler";
 import { handleWhatsAppTextEvent } from "./whatsappHandlers/textHandler";
+import { hasAmbiguousWhatsAppDeliveryOutcome } from "./whatsappApi";
 import {
   sendWhatsAppErasureControlTextReply,
   sendWhatsAppButtonsReply,
@@ -101,12 +102,12 @@ async function createWhatsAppEventContext(
     senderId: event.senderId,
     userKey: event.userId,
   });
-  if (!(await claimWhatsAppEventReplayOrLog(event, ownership))) {
-    return null;
-  }
   if (deletionRetryControl) {
     const erasure = await getErasingMessengerPrivacySubject(ownership);
     if (erasure) {
+      if (!(await claimWhatsAppEventReplayOrLog(event, ownership))) {
+        return null;
+      }
       return Object.freeze({
         reqId: createNonReversibleReqId(event, ownership),
         lang: DEFAULT_LANG,
@@ -125,6 +126,9 @@ async function createWhatsAppEventContext(
     allowReactivation: !privacyOrConsentControl,
     allowCreation: true,
   });
+  if (!(await claimWhatsAppEventReplayOrLog(event, ownership))) {
+    return null;
+  }
   return Object.freeze({
     reqId: createNonReversibleReqId(event, ownership),
     lang: DEFAULT_LANG,
@@ -230,46 +234,64 @@ async function processSingleWhatsAppEvent(
         userKey: event.userId,
         privacyEpoch: context.costLedgerScope.privacyEpoch,
       });
-      const state = await Promise.resolve(getOrCreateState(event.senderId));
+      try {
+        const state = await Promise.resolve(getOrCreateState(event.senderId));
 
-      safeLog("whatsapp_normalized_inbound_event", {
-        channel: event.channel,
-        user: toLogUser(event.userId),
-        messageType: event.messageType,
-        rawMessageType: event.rawMessageType,
-      });
+        safeLog("whatsapp_normalized_inbound_event", {
+          channel: event.channel,
+          user: toLogUser(event.userId),
+          messageType: event.messageType,
+          rawMessageType: event.rawMessageType,
+        });
 
-      if (
-        await handleWhatsAppConsentGate({
-          event,
-          lang: context.lang,
-          state,
-          sendText: text => sendWhatsAppTextReply(event.senderId, text),
-          sendDeletionOutcome: text =>
-            runWithMessengerErasureControlDelivery(() =>
-              sendWhatsAppErasureControlTextReply(
-                event.senderId,
-                text,
-                context.reqId
-              )
-            ),
-          sendButtons: (text, options) =>
-            sendWhatsAppButtonsReply(event.senderId, text, options),
-        })
-      ) {
-        return;
+        if (
+          await handleWhatsAppConsentGate({
+            event,
+            lang: context.lang,
+            state,
+            sendText: text => sendWhatsAppTextReply(event.senderId, text),
+            sendDeletionOutcome: text =>
+              runWithMessengerErasureControlDelivery(() =>
+                sendWhatsAppErasureControlTextReply(
+                  event.senderId,
+                  text,
+                  context.reqId
+                )
+              ),
+            sendButtons: (text, options) =>
+              sendWhatsAppButtonsReply(event.senderId, text, options),
+          })
+        ) {
+          return;
+        }
+
+        // Consent and deletion controls may be answered, but must never open
+        // the paid handoff/recovery window.
+        if (privacyOrConsentControl) {
+          return;
+        }
+        await Promise.resolve(
+          setLastUserMessageAt(event.senderId, event.timestamp ?? Date.now())
+        );
+
+        await dispatchWhatsAppEvent(event, context);
+      } catch (error) {
+        if (error instanceof WhatsAppGenerationScopeError) {
+          throw error;
+        }
+        if (hasAmbiguousWhatsAppDeliveryOutcome(error)) {
+          throw error;
+        }
+        safeLog("whatsapp_reply_failed", {
+          level: "error",
+          user: toLogUser(event.userId),
+          error: error instanceof Error ? error.name : "unknown_error",
+        });
+        await sendWhatsAppTextReply(
+          event.senderId,
+          t(context.lang, "errorFallback")
+        ).catch(() => undefined);
       }
-
-      // Consent and deletion controls may be answered, but must never open
-      // the paid handoff/recovery window.
-      if (privacyOrConsentControl) {
-        return;
-      }
-      await Promise.resolve(
-        setLastUserMessageAt(event.senderId, event.timestamp ?? Date.now())
-      );
-
-      await dispatchWhatsAppEvent(event, context);
     },
     {
       channel: "whatsapp",
@@ -318,7 +340,6 @@ async function claimWhatsAppEventReplayOrLog(
 async function safelyProcessSingleWhatsAppEvent(
   event: NormalizedWhatsAppEvent
 ): Promise<void> {
-  const lang = DEFAULT_LANG;
   try {
     await processSingleWhatsAppEvent(event);
   } catch (error) {
@@ -328,11 +349,14 @@ async function safelyProcessSingleWhatsAppEvent(
       error: error instanceof Error ? error.name : "unknown_error",
     });
     if (error instanceof WhatsAppGenerationScopeError) {
-      return;
+      if (!error.retryable) {
+        return;
+      }
     }
-    await sendWhatsAppTextReply(event.senderId, t(lang, "errorFallback")).catch(
-      () => undefined
-    );
+    // No immutable tenant context exists here. Let the durable ingress queue
+    // retry infrastructure/replay-store failures instead of attempting a
+    // contextless Graph send or permanently consuming the delivery.
+    throw error;
   }
 }
 

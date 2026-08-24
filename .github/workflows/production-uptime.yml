@@ -61,7 +61,7 @@ jobs:
           grep -F '"ok":true' "$body"
 
   readiness:
-    name: Image generation dependencies
+    name: Production dependencies
     runs-on: ubuntu-latest
     steps:
       - name: Check image generation readiness
@@ -81,3 +81,21 @@ jobs:
           cat "$body"
           test "$status" = "200"
           jq -e '.ok == true' "$body"
+
+      - name: Check storage proxy readiness
+        run: |
+          set -euo pipefail
+          body="$(mktemp)"
+          status="$(
+            curl --ipv4 --silent --show-error --location \
+              --max-time 20 \
+              --retry 2 \
+              --retry-delay 5 \
+              --retry-all-errors \
+              --output "$body" \
+              --write-out "%{http_code}" \
+              https://leaderbot-storage-proxy.fly.dev/readyz
+          )"
+          cat "$body"
+          test "$status" = "200"
+          jq -e '.ok == true and .rateLimiter == "shared_redis"' "$body"

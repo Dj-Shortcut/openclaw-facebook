@@ -35,6 +35,7 @@ import {
   getMollieAccountingImportConfig,
   isMollieAccountingImportEnabled,
 } from "./billing/accountingWorker";
+import { assertWhatsAppTenantBindingReadiness } from "./whatsappBindingReadiness";
 
 export type ReadinessCheck = {
   name: string;
@@ -123,6 +124,10 @@ export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
     {
       name: "portal_database_config",
       check: assertPortalDatabaseConfig,
+    },
+    {
+      name: "whatsapp_tenant_binding",
+      check: assertWhatsAppTenantBindingReadiness,
     },
     {
       name: "mollie_billing_config",

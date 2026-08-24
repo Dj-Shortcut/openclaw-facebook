@@ -1,12 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  resolveConversationIdentityV2: vi.fn(),
-  getDatabaseOrThrow: vi.fn(),
-  admitMessengerPrivacySubjectFromMetaEvent: vi.fn(),
-  assertMessengerPrivacySubject: vi.fn(),
-  toUserKey: vi.fn(() => "u:expected-subject"),
-}));
+const mocks = vi.hoisted(() => {
+  class MessengerPrivacyFenceError extends Error {
+    constructor() {
+      super("Messenger privacy fence is unavailable");
+      this.name = "MessengerPrivacyFenceError";
+    }
+  }
+  return {
+    resolveConversationIdentityV2: vi.fn(),
+    getDatabaseOrThrow: vi.fn(),
+    admitMessengerPrivacySubjectFromMetaEvent: vi.fn(),
+    assertMessengerPrivacySubject: vi.fn(),
+    toUserKey: vi.fn(() => "u:expected-subject"),
+    MessengerPrivacyFenceError,
+  };
+});
 
 vi.mock("./_core/conversationIdentityResolver", () => ({
   resolveConversationIdentityV2: mocks.resolveConversationIdentityV2,
@@ -20,6 +29,7 @@ vi.mock("./_core/messengerPrivacySubject", () => ({
   admitMessengerPrivacySubjectFromMetaEvent:
     mocks.admitMessengerPrivacySubjectFromMetaEvent,
   assertMessengerPrivacySubject: mocks.assertMessengerPrivacySubject,
+  MessengerPrivacyFenceError: mocks.MessengerPrivacyFenceError,
 }));
 
 vi.mock("./_core/privacy", () => ({ toUserKey: mocks.toUserKey }));
@@ -28,11 +38,14 @@ import {
   resolveWhatsAppGenerationScope,
   WhatsAppGenerationScopeError,
 } from "./_core/whatsappGenerationScope";
+import {
+  ConversationIdentityError,
+  resolveWhatsAppEndpoint,
+} from "./_core/conversationEndpoint";
 
-const ENDPOINT = Object.freeze({
-  channel: "whatsapp" as const,
-  wabaId: "303030303030303" as never,
-  phoneNumberId: "404040404040404" as never,
+const ENDPOINT = resolveWhatsAppEndpoint({
+  wabaId: "303030303030303",
+  phoneNumberId: "404040404040404",
 });
 const EVENT_OCCURRED_AT = new Date("2026-08-24T07:00:00.000Z");
 
@@ -55,8 +68,9 @@ function bindDatabase(rows: unknown[]) {
   const where = vi.fn(() => ({ limit }));
   const from = vi.fn(() => ({ where }));
   const select = vi.fn(() => ({ from }));
-  mocks.getDatabaseOrThrow.mockResolvedValue({ select });
-  return { select, from, where, limit };
+  const database = { select };
+  mocks.getDatabaseOrThrow.mockResolvedValue(database);
+  return { database, select, from, where, limit };
 }
 
 afterEach(() => {
@@ -156,5 +170,81 @@ describe("WhatsApp generation scope resolver", () => {
     expect(
       mocks.admitMessengerPrivacySubjectFromMetaEvent
     ).not.toHaveBeenCalled();
+  });
+
+  it("rejects a binding lost after privacy admission", async () => {
+    mocks.resolveConversationIdentityV2.mockResolvedValue(connectedIdentity());
+    const firstBinding = bindDatabase([{ bindingEpoch: 5 }]);
+    const postAdmissionBinding = bindDatabase([]);
+    mocks.getDatabaseOrThrow
+      .mockResolvedValueOnce(firstBinding.database)
+      .mockResolvedValueOnce(postAdmissionBinding.database);
+    mocks.admitMessengerPrivacySubjectFromMetaEvent.mockResolvedValue(3);
+
+    await expect(
+      resolveWhatsAppGenerationScope({
+        endpoint: ENDPOINT,
+        senderId: "32470000001",
+        userKey: "u:expected-subject",
+        eventOccurredAt: EVENT_OCCURRED_AT,
+      })
+    ).rejects.toBeInstanceOf(WhatsAppGenerationScopeError);
+
+    expect(
+      mocks.admitMessengerPrivacySubjectFromMetaEvent
+    ).toHaveBeenCalledOnce();
+    expect(mocks.assertMessengerPrivacySubject).not.toHaveBeenCalled();
+  });
+
+  it("marks a transient identity lookup failure as retryable", async () => {
+    mocks.resolveConversationIdentityV2.mockRejectedValue(
+      new ConversationIdentityError("binding_lookup_failed", true)
+    );
+
+    const error = await resolveWhatsAppGenerationScope({
+      endpoint: ENDPOINT,
+      senderId: "32470000001",
+      userKey: "u:expected-subject",
+      eventOccurredAt: EVENT_OCCURRED_AT,
+    }).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(WhatsAppGenerationScopeError);
+    expect(error).toMatchObject({ retryable: true });
+  });
+
+  it("marks an unexpected privacy-store failure as retryable", async () => {
+    mocks.resolveConversationIdentityV2.mockResolvedValue(connectedIdentity());
+    bindDatabase([{ bindingEpoch: 5 }]);
+    mocks.admitMessengerPrivacySubjectFromMetaEvent.mockRejectedValue(
+      new Error("database unavailable")
+    );
+
+    const error = await resolveWhatsAppGenerationScope({
+      endpoint: ENDPOINT,
+      senderId: "32470000001",
+      userKey: "u:expected-subject",
+      eventOccurredAt: EVENT_OCCURRED_AT,
+    }).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(WhatsAppGenerationScopeError);
+    expect(error).toMatchObject({ retryable: true });
+  });
+
+  it("keeps privacy-fence rejection terminal", async () => {
+    mocks.resolveConversationIdentityV2.mockResolvedValue(connectedIdentity());
+    bindDatabase([{ bindingEpoch: 5 }]);
+    mocks.admitMessengerPrivacySubjectFromMetaEvent.mockRejectedValue(
+      new mocks.MessengerPrivacyFenceError()
+    );
+
+    const error = await resolveWhatsAppGenerationScope({
+      endpoint: ENDPOINT,
+      senderId: "32470000001",
+      userKey: "u:expected-subject",
+      eventOccurredAt: EVENT_OCCURRED_AT,
+    }).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(WhatsAppGenerationScopeError);
+    expect(error).toMatchObject({ retryable: false });
   });
 });

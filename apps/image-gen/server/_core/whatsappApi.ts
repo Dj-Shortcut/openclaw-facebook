@@ -56,6 +56,20 @@ export class WhatsAppDeliveryError extends Error {
   }
 }
 
+export function hasAmbiguousWhatsAppDeliveryOutcome(error: unknown): boolean {
+  if (error instanceof WhatsAppDeliveryError) {
+    return error.outcome === "ambiguous";
+  }
+  if (error instanceof AggregateError) {
+    return error.errors.some(hasAmbiguousWhatsAppDeliveryOutcome);
+  }
+  return (
+    error instanceof Error &&
+    error.cause !== undefined &&
+    hasAmbiguousWhatsAppDeliveryOutcome(error.cause)
+  );
+}
+
 function getWhatsAppSendUrl(phoneNumberId: string): string {
   return `https://graph.facebook.com/${GRAPH_API_VERSION}/${encodeURIComponent(phoneNumberId)}/messages`;
 }
@@ -368,7 +382,7 @@ export async function sendWhatsAppErasureControlText(
   } catch (error) {
     return throwWithFenceFailure(error, fence, "known_failed", "pre_transport");
   }
-  const { response } = await sendWhatsAppGraph({
+  const result = await sendWhatsAppGraph({
     recipient: to,
     credential,
     operation: "whatsapp_graph_text",
@@ -384,15 +398,29 @@ export async function sendWhatsAppErasureControlText(
       }),
     },
   });
-  assertWhatsAppResponseOk(response, "whatsapp_send_failed");
+  if (!result.response.ok) {
+    logger.error({
+      event: "whatsapp_send_failed",
+      status: result.response.status,
+    });
+    throw new WhatsAppDeliveryError(
+      result.failureOutcome ?? "ambiguous",
+      result.attemptKeyHash
+    );
+  }
 }
 
 export async function sendWhatsAppText(
   to: string,
   message: string
 ): Promise<void> {
-  const credential = await resolveWhatsAppSendCredential(to);
-  const { response } = await sendWhatsAppGraph({
+  let credential: WhatsAppTransportCredential & { phoneNumberId: string };
+  try {
+    credential = await resolveWhatsAppSendCredential(to);
+  } catch (error) {
+    throw new WhatsAppDeliveryError("pre_transport", null, error);
+  }
+  const result = await sendWhatsAppGraph({
     recipient: to,
     credential,
     operation: "whatsapp_graph_text",
@@ -409,8 +437,16 @@ export async function sendWhatsAppText(
       }),
     },
   });
-
-  assertWhatsAppResponseOk(response, "whatsapp_send_failed");
+  if (!result.response.ok) {
+    logger.error({
+      event: "whatsapp_send_failed",
+      status: result.response.status,
+    });
+    throw new WhatsAppDeliveryError(
+      result.failureOutcome ?? "ambiguous",
+      result.attemptKeyHash
+    );
+  }
 }
 
 export async function sendWhatsAppImageWithReceipt(
@@ -456,9 +492,10 @@ export async function sendWhatsAppImageWithReceipt(
 
 export async function sendWhatsAppImage(
   to: string,
-  imageUrl: string
+  imageUrl: string,
+  reqId: string
 ): Promise<void> {
-  await sendWhatsAppImageWithReceipt(to, imageUrl, randomUUID());
+  await sendWhatsAppImageWithReceipt(to, imageUrl, reqId);
 }
 
 export async function sendWhatsAppButtons(
@@ -466,8 +503,13 @@ export async function sendWhatsAppButtons(
   bodyText: string,
   buttons: WhatsAppReplyButton[]
 ): Promise<void> {
-  const credential = await resolveWhatsAppSendCredential(to);
-  const { response } = await sendWhatsAppGraph({
+  let credential: WhatsAppTransportCredential & { phoneNumberId: string };
+  try {
+    credential = await resolveWhatsAppSendCredential(to);
+  } catch (error) {
+    throw new WhatsAppDeliveryError("pre_transport", null, error);
+  }
+  const result = await sendWhatsAppGraph({
     recipient: to,
     credential,
     operation: "whatsapp_graph_buttons",
@@ -496,22 +538,42 @@ export async function sendWhatsAppButtons(
       }),
     },
   });
-
-  assertWhatsAppResponseOk(response, "whatsapp_buttons_send_failed");
+  if (!result.response.ok) {
+    logger.error({
+      event: "whatsapp_buttons_send_failed",
+      status: result.response.status,
+    });
+    throw new WhatsAppDeliveryError(
+      result.failureOutcome ?? "ambiguous",
+      result.attemptKeyHash
+    );
+  }
 }
 
 export async function downloadWhatsAppMedia(
   mediaId: string
 ): Promise<{ buffer: Buffer; contentType: string }> {
-  const metadataResponse = await fetchWhatsAppGraph(
-    `${encodeURIComponent(mediaId)}`
-  );
-  assertWhatsAppResponseOk(metadataResponse, "whatsapp_media_metadata_failed");
-
-  const metadata = (await metadataResponse.json()) as {
-    url?: string;
-    mime_type?: string;
-  };
+  const metadataController = new AbortController();
+  const metadataTimeout = setTimeout(() => {
+    metadataController.abort();
+  }, getWhatsAppMediaDownloadTimeoutMs());
+  let metadata: { url?: string; mime_type?: string };
+  try {
+    const metadataResponse = await fetchWhatsAppGraph(
+      `${encodeURIComponent(mediaId)}`,
+      { signal: metadataController.signal }
+    );
+    assertWhatsAppResponseOk(
+      metadataResponse,
+      "whatsapp_media_metadata_failed"
+    );
+    metadata = (await metadataResponse.json()) as {
+      url?: string;
+      mime_type?: string;
+    };
+  } finally {
+    clearTimeout(metadataTimeout);
+  }
   const rawMediaUrl = metadata.url?.trim();
   if (!rawMediaUrl) {
     throw new Error("WhatsApp media metadata response missing url");

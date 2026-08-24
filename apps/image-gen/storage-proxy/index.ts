@@ -1,6 +1,10 @@
 import express from "express";
+import rateLimit, { ipKeyGenerator, type Store } from "express-rate-limit";
+import { Redis } from "ioredis";
+import { RedisStore, type RedisReply } from "rate-limit-redis";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { isIP } from "node:net";
 import {
   DeleteObjectCommand,
   GetBucketLifecycleConfigurationCommand,
@@ -21,11 +25,22 @@ type ProxyEnv = {
   storageOperationTimeoutMs: number;
   allowLegacyBearerAuth: boolean;
   allowLegacyObjectKeys: boolean;
+  rateLimitRedisUrl: string;
+  rateLimitKeySecret: string;
+  trustFlyClientIp: boolean;
 };
 
 const DEFAULT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 const DEFAULT_STORAGE_OPERATION_TIMEOUT_MS = 60_000;
 const MAX_STORAGE_OPERATION_TIMEOUT_MS = 5 * 60_000;
+const STORAGE_RATE_LIMIT_WINDOW_MS = 60_000;
+const STORAGE_AUTH_RATE_LIMIT_MAX_REQUESTS = 600;
+const STORAGE_UPLOAD_RATE_LIMIT_MAX_REQUESTS = 60;
+const STORAGE_READ_RATE_LIMIT_MAX_REQUESTS = 600;
+const STORAGE_DELETE_RATE_LIMIT_MAX_REQUESTS = 600;
+const STORAGE_RATE_LIMIT_REDIS_TIMEOUT_MS = 2_000;
+const STORAGE_RATE_LIMIT_EDGE_PREFIX = "leaderbot:storage-proxy:edge:v1:";
+const STORAGE_RATE_LIMIT_SCOPE_PREFIX = "leaderbot:storage-proxy:scope:v1:";
 const REQUIRED_LIFECYCLE_RULES = [
   {
     id: "expire-inbound-source-after-30-days",
@@ -189,6 +204,14 @@ function readBooleanEnv(name: string): boolean {
   throw new Error(`${name} must be true or false`);
 }
 
+function readRateLimitKeySecret(): string {
+  const secret = getEnv("STORAGE_RATE_LIMIT_KEY_SECRET");
+  if (Buffer.byteLength(secret, "utf8") < 32) {
+    throw new Error("STORAGE_RATE_LIMIT_KEY_SECRET must be at least 32 bytes");
+  }
+  return secret;
+}
+
 function ensureTrailingSlash(value: string): string {
   return value.endsWith("/") ? value : `${value}/`;
 }
@@ -236,6 +259,9 @@ function loadConfig(): ProxyEnv {
     ),
     allowLegacyBearerAuth: readBooleanEnv("STORAGE_ALLOW_LEGACY_BEARER_AUTH"),
     allowLegacyObjectKeys: readBooleanEnv("STORAGE_ALLOW_LEGACY_KEYS"),
+    rateLimitRedisUrl: getEnv("STORAGE_RATE_LIMIT_REDIS_URL"),
+    rateLimitKeySecret: readRateLimitKeySecret(),
+    trustFlyClientIp: process.env.NODE_ENV === "production",
   };
 }
 
@@ -334,6 +360,7 @@ function buildPublicUrl(config: ProxyEnv, objectKey: string): string {
 type ParsedStorageObjectKey = Readonly<{
   objectKey: string;
   authorizationScope: string;
+  rateLimitScope: string;
   legacy: boolean;
 }>;
 
@@ -385,6 +412,7 @@ export function parseStorageObjectKey(
         `privacy-${match[5]}`,
         `user-${match[6]}`,
       ].join("/"),
+      rateLimitScope: `workspace-${match[2]}/connection-${match[3]}`,
       legacy: false,
     };
   }
@@ -392,6 +420,7 @@ export function parseStorageObjectKey(
     return {
       objectKey,
       authorizationScope: LEGACY_STORAGE_SCOPE,
+      rateLimitScope: LEGACY_STORAGE_SCOPE,
       legacy: true,
     };
   }
@@ -592,6 +621,185 @@ function hashForLog(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 16);
 }
 
+function opaqueRateLimitKey(
+  secret: string,
+  namespace: string,
+  value: string
+): string {
+  return createHmac("sha256", secret)
+    .update(`leaderbot-storage-rate-limit-v1\n${namespace}\n${value}`)
+    .digest("hex");
+}
+
+function getRateLimitClientAddress(
+  req: express.Request,
+  config: ProxyEnv
+): string {
+  if (config.trustFlyClientIp) {
+    const flyClientIp = req.header("fly-client-ip")?.trim() ?? "";
+    return isIP(flyClientIp)
+      ? ipKeyGenerator(flyClientIp)
+      : "invalid-fly-client-ip";
+  }
+  const directAddress = req.socket.remoteAddress ?? "";
+  return isIP(directAddress)
+    ? ipKeyGenerator(directAddress)
+    : "invalid-direct-client-ip";
+}
+
+function getAuthorizedStorageRequest(
+  res: express.Response
+): ParsedStorageObjectKey {
+  const parsedKey: unknown = res.locals.storageAuthorization;
+  if (
+    typeof parsedKey !== "object" ||
+    parsedKey === null ||
+    !("objectKey" in parsedKey) ||
+    typeof parsedKey.objectKey !== "string" ||
+    !("rateLimitScope" in parsedKey) ||
+    typeof parsedKey.rateLimitScope !== "string"
+  ) {
+    throw new Error("storage request reached handler without authorization");
+  }
+  return parsedKey as ParsedStorageObjectKey;
+}
+
+export type StorageRateLimitBackend = Readonly<{
+  edgeStore: Store;
+  scopeStore: Store;
+  assertReady: () => Promise<void>;
+  close: () => Promise<void>;
+}>;
+
+function toRedisReply(value: unknown): RedisReply {
+  if (
+    typeof value === "boolean" ||
+    typeof value === "number" ||
+    typeof value === "string" ||
+    (Array.isArray(value) &&
+      value.every(
+        item =>
+          typeof item === "boolean" ||
+          typeof item === "number" ||
+          typeof item === "string"
+      ))
+  ) {
+    return value;
+  }
+  throw new Error("storage rate limiter returned an invalid Redis reply");
+}
+
+async function withRateLimitRedisDeadline<T>(
+  operation: Promise<T>
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("storage rate limiter Redis operation timed out")),
+      STORAGE_RATE_LIMIT_REDIS_TIMEOUT_MS
+    );
+  });
+  try {
+    return await Promise.race([operation, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export async function createSharedStorageRateLimitBackend(
+  redisUrl: string
+): Promise<StorageRateLimitBackend> {
+  const parsedRedisUrl = new URL(redisUrl);
+  if (
+    (parsedRedisUrl.protocol !== "redis:" &&
+      parsedRedisUrl.protocol !== "rediss:") ||
+    parsedRedisUrl.hash
+  ) {
+    throw new Error("STORAGE_RATE_LIMIT_REDIS_URL must be a Redis URL");
+  }
+
+  const redis = new Redis(redisUrl, {
+    lazyConnect: true,
+    enableOfflineQueue: false,
+    connectTimeout: STORAGE_RATE_LIMIT_REDIS_TIMEOUT_MS,
+    commandTimeout: STORAGE_RATE_LIMIT_REDIS_TIMEOUT_MS,
+    maxRetriesPerRequest: 0,
+    retryStrategy: (retries: number) => Math.min(retries * 100, 1_000),
+  });
+  redis.on("error", () => {
+    // The request and readiness paths report metadata-only failure responses.
+  });
+  try {
+    await withRateLimitRedisDeadline(redis.connect());
+  } catch (error) {
+    redis.disconnect(false);
+    throw error;
+  }
+
+  const callRedis = redis.call.bind(redis) as (
+    ...args: string[]
+  ) => Promise<unknown>;
+  const sendCommand = async (...args: string[]): Promise<RedisReply> =>
+    toRedisReply(await withRateLimitRedisDeadline(callRedis(...args)));
+  const edgeStore = new RedisStore({
+    prefix: STORAGE_RATE_LIMIT_EDGE_PREFIX,
+    sendCommand,
+  });
+  const scopeStore = new RedisStore({
+    prefix: STORAGE_RATE_LIMIT_SCOPE_PREFIX,
+    sendCommand,
+  });
+  let closed = false;
+
+  return {
+    edgeStore,
+    scopeStore,
+    async assertReady(): Promise<void> {
+      for (const [name, store] of [
+        ["edge", edgeStore],
+        ["scope", scopeStore],
+      ] as const) {
+        const probeKey = `readiness-contract-${name}`;
+        const result = await withRateLimitRedisDeadline(
+          store.increment(probeKey)
+        );
+        try {
+          if (
+            !Number.isSafeInteger(result.totalHits) ||
+            result.totalHits < 1 ||
+            !(result.resetTime instanceof Date)
+          ) {
+            throw new Error("storage rate limiter readiness contract failed");
+          }
+        } finally {
+          await withRateLimitRedisDeadline(store.resetKey(probeKey));
+        }
+      }
+    },
+    async close(): Promise<void> {
+      if (closed) return;
+      closed = true;
+      try {
+        await withRateLimitRedisDeadline(redis.quit());
+      } finally {
+        redis.disconnect(false);
+      }
+    },
+  };
+}
+
+function storageRateLimitHandler(
+  req: express.Request,
+  res: express.Response
+): void {
+  logJson("warn", {
+    msg: "storage_proxy_rate_limited",
+    method: req.method,
+    path: req.path,
+  });
+  res.status(429).json({ error: "Too many storage requests" });
+}
+
 function objectKeyLogFields(objectKey: string): Record<string, unknown> {
   return {
     objectKeyHash: hashForLog(objectKey),
@@ -645,7 +853,7 @@ function authorizeObjectRequest(
   req: express.Request,
   res: express.Response,
   config: ProxyEnv
-): string | null {
+): ParsedStorageObjectKey | null {
   const rawObjectKey = readObjectKeyQuery(req);
   const parsedKey = rawObjectKey
     ? parseStorageObjectKey(rawObjectKey, config.allowLegacyObjectKeys)
@@ -655,7 +863,7 @@ function authorizeObjectRequest(
     return null;
   }
   if (res.locals.legacyStorageBearerAuthorized === true) {
-    return parsedKey.objectKey;
+    return parsedKey;
   }
   const authorized = verifyStorageRequestAuthorization({
     apiKey: config.forgeApiKey,
@@ -674,18 +882,107 @@ function authorizeObjectRequest(
     res.status(403).json({ error: "Invalid storage request signature" });
     return null;
   }
-  return parsedKey.objectKey;
+  return parsedKey;
 }
 
-export function createStorageProxyApp(config: ProxyEnv): express.Express {
+function createStorageAuthorizationMiddleware(
+  config: ProxyEnv
+): express.RequestHandler {
+  return (req, res, next) => {
+    const parsedKey = authorizeObjectRequest(req, res, config);
+    if (!parsedKey) return;
+    res.locals.storageAuthorization = parsedKey;
+    next();
+  };
+}
+
+export function createStorageProxyApp(
+  config: ProxyEnv,
+  rateLimitOverrides: Readonly<{
+    windowMs?: number;
+    authMaxRequests?: number;
+    operationMaxRequests?: number;
+    backend?: StorageRateLimitBackend;
+  }> = {}
+): express.Express {
   const app = express();
   const s3 = createS3Client(config);
+  const windowMs = rateLimitOverrides.windowMs ?? STORAGE_RATE_LIMIT_WINDOW_MS;
+  const backend = rateLimitOverrides.backend;
+  if (process.env.NODE_ENV === "production" && !backend) {
+    throw new Error(
+      "production storage proxy requires shared Redis rate limiting"
+    );
+  }
+
+  const authRateLimiter = rateLimit({
+    windowMs,
+    limit:
+      rateLimitOverrides.authMaxRequests ??
+      STORAGE_AUTH_RATE_LIMIT_MAX_REQUESTS,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: req =>
+      opaqueRateLimitKey(
+        config.rateLimitKeySecret,
+        "edge",
+        getRateLimitClientAddress(req, config)
+      ),
+    ...(backend ? { store: backend.edgeStore } : {}),
+    passOnStoreError: false,
+    handler: storageRateLimitHandler,
+  });
+  const storageOperationRateLimiter = rateLimit({
+    windowMs,
+    limit: req => {
+      if (rateLimitOverrides.operationMaxRequests !== undefined) {
+        return rateLimitOverrides.operationMaxRequests;
+      }
+      if (req.method === "POST") return STORAGE_UPLOAD_RATE_LIMIT_MAX_REQUESTS;
+      if (req.method === "DELETE")
+        return STORAGE_DELETE_RATE_LIMIT_MAX_REQUESTS;
+      return STORAGE_READ_RATE_LIMIT_MAX_REQUESTS;
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (_req, res) => {
+      const parsedKey = getAuthorizedStorageRequest(res);
+      return opaqueRateLimitKey(
+        config.rateLimitKeySecret,
+        "scope",
+        `${_req.method}\n${parsedKey.rateLimitScope}`
+      );
+    },
+    ...(backend ? { store: backend.scopeStore } : {}),
+    passOnStoreError: false,
+    handler: storageRateLimitHandler,
+  });
 
   app.get("/healthz", (_req, res) => {
     res.status(200).send("ok");
   });
 
-  app.use((req, res, next) => {
+  app.get("/readyz", (_req, res) => {
+    if (!backend) {
+      res.status(process.env.NODE_ENV === "production" ? 503 : 200).json({
+        ok: process.env.NODE_ENV !== "production",
+        rateLimiter: "in_memory_test_only",
+      });
+      return;
+    }
+    void backend
+      .assertReady()
+      .then(() =>
+        res.status(200).json({ ok: true, rateLimiter: "shared_redis" })
+      )
+      .catch(() =>
+        res.status(503).json({ ok: false, rateLimiter: "unavailable" })
+      );
+  });
+
+  app.use("/v1/storage", authRateLimiter);
+
+  app.use("/v1/storage", (req, res, next) => {
     const token = getBearerToken(req.header("authorization"));
     if (!token || !constantTimeTextEqual(token, config.forgeApiKey)) {
       logJson("warn", {
@@ -711,9 +1008,11 @@ export function createStorageProxyApp(config: ProxyEnv): express.Express {
     next();
   });
 
+  app.use("/v1/storage", createStorageAuthorizationMiddleware(config));
+  app.use("/v1/storage", storageOperationRateLimiter);
+
   app.post("/v1/storage/upload", async (req, res) => {
-    const objectKey = authorizeObjectRequest(req, res, config);
-    if (!objectKey) return;
+    const { objectKey } = getAuthorizedStorageRequest(res);
 
     try {
       const file = await readMultipartFile(req, config.maxUploadBytes);
@@ -762,8 +1061,7 @@ export function createStorageProxyApp(config: ProxyEnv): express.Express {
   });
 
   app.get("/v1/storage/downloadUrl", async (req, res) => {
-    const objectKey = authorizeObjectRequest(req, res, config);
-    if (!objectKey) return;
+    const { objectKey } = getAuthorizedStorageRequest(res);
 
     try {
       await runStorageOperationWithDeadline(
@@ -799,8 +1097,7 @@ export function createStorageProxyApp(config: ProxyEnv): express.Express {
   });
 
   app.delete("/v1/storage/object", async (req, res) => {
-    const objectKey = authorizeObjectRequest(req, res, config);
-    if (!objectKey) return;
+    const { objectKey } = getAuthorizedStorageRequest(res);
 
     try {
       await runStorageOperationWithDeadline(
@@ -830,36 +1127,66 @@ export function createStorageProxyApp(config: ProxyEnv): express.Express {
     }
   });
 
+  app.use(
+    (
+      error: unknown,
+      req: express.Request,
+      res: express.Response,
+      next: express.NextFunction
+    ) => {
+      void next;
+      logJson("error", {
+        msg: "storage_proxy_rate_limiter_unavailable",
+        method: req.method,
+        path: req.path,
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+      res
+        .status(503)
+        .json({ error: "Storage service temporarily unavailable" });
+    }
+  );
+
   return app;
 }
 
 export async function startStorageProxy(): Promise<void> {
   const config = loadConfig();
-  await verifyRequiredR2LifecycleConfig(config);
-  if (config.allowLegacyBearerAuth || config.allowLegacyObjectKeys) {
-    logJson("warn", {
-      msg: "storage_proxy_legacy_bridge_enabled",
-      allowLegacyBearerAuth: config.allowLegacyBearerAuth,
-      allowLegacyObjectKeys: config.allowLegacyObjectKeys,
-    });
-  }
-  const app = createStorageProxyApp(config);
-  const host = "0.0.0.0";
+  const rateLimitBackend = await createSharedStorageRateLimitBackend(
+    config.rateLimitRedisUrl
+  );
+  try {
+    const app = createStorageProxyApp(config, { backend: rateLimitBackend });
+    await rateLimitBackend.assertReady();
+    await verifyRequiredR2LifecycleConfig(config);
+    if (config.allowLegacyBearerAuth || config.allowLegacyObjectKeys) {
+      logJson("warn", {
+        msg: "storage_proxy_legacy_bridge_enabled",
+        allowLegacyBearerAuth: config.allowLegacyBearerAuth,
+        allowLegacyObjectKeys: config.allowLegacyObjectKeys,
+      });
+    }
+    const host = "0.0.0.0";
 
-  app.listen(config.port, host, () => {
-    logJson("info", {
-      msg: "storage_proxy_started",
-      host,
-      port: config.port,
-      bind: `${host}:${config.port}`,
-      publicBaseUrl: config.publicBaseUrl,
-      r2Bucket: config.r2Bucket,
-      r2Endpoint: config.r2Endpoint,
-      storageOperationTimeoutMs: config.storageOperationTimeoutMs,
-      allowLegacyBearerAuth: config.allowLegacyBearerAuth,
-      allowLegacyObjectKeys: config.allowLegacyObjectKeys,
+    app.listen(config.port, host, () => {
+      logJson("info", {
+        msg: "storage_proxy_started",
+        host,
+        port: config.port,
+        bind: `${host}:${config.port}`,
+        publicBaseUrl: config.publicBaseUrl,
+        r2Bucket: config.r2Bucket,
+        r2Endpoint: config.r2Endpoint,
+        storageOperationTimeoutMs: config.storageOperationTimeoutMs,
+        rateLimiter: "shared_redis",
+        allowLegacyBearerAuth: config.allowLegacyBearerAuth,
+        allowLegacyObjectKeys: config.allowLegacyObjectKeys,
+      });
     });
-  });
+  } catch (error) {
+    await rateLimitBackend.close().catch(() => undefined);
+    throw error;
+  }
 }
 
 const entryScript = process.argv[1]?.replace(/\\/g, "/") ?? "";

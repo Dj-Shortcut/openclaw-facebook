@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { inspect } from "node:util";
 
 const mocks = vi.hoisted(() => ({
   resolveCredential: vi.fn(),
@@ -42,6 +43,7 @@ import {
 import { toUserKey } from "./_core/privacy";
 import {
   downloadWhatsAppMedia,
+  sendWhatsAppErasureControlText,
   sendWhatsAppImageWithReceipt,
   sendWhatsAppText,
   WhatsAppDeliveryError,
@@ -189,7 +191,10 @@ describe("WhatsApp Graph tenant transport boundary", () => {
 
     await expect(
       withScope(TENANT_A, () => sendWhatsAppText(TENANT_B.senderId, "wrong"))
-    ).rejects.toMatchObject({ name: "WhatsAppTransportBindingError" });
+    ).rejects.toMatchObject({
+      name: "WhatsAppDeliveryError",
+      outcome: "pre_transport",
+    });
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -296,6 +301,54 @@ describe("WhatsApp Graph tenant transport boundary", () => {
       );
     }
   );
+
+  it("preserves an ambiguous text response instead of throwing a plain error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response("sensitive", { status: 503 }))
+    );
+
+    await expect(
+      withScope(TENANT_A, () => sendWhatsAppText(TENANT_A.senderId, "reply"))
+    ).rejects.toMatchObject({
+      name: "WhatsAppDeliveryError",
+      outcome: "ambiguous",
+      attemptKeyHash: "a".repeat(64),
+    });
+    expect(mocks.finalizeFence).toHaveBeenCalledWith(
+      expect.any(Object),
+      "ambiguous"
+    );
+  });
+
+  it("preserves a rejected erasure delivery outcome and attempt hash", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response("sensitive", { status: 400 }))
+    );
+
+    await expect(
+      withScope(TENANT_A, () =>
+        sendWhatsAppErasureControlText(
+          TENANT_A.senderId,
+          "deletion outcome",
+          "erasure-operation-1"
+        )
+      )
+    ).rejects.toMatchObject({
+      name: "WhatsAppDeliveryError",
+      outcome: "known_rejected",
+      attemptKeyHash: "e".repeat(64),
+    });
+    expect(mocks.finalizeFence).toHaveBeenCalledWith(
+      expect.any(Object),
+      "known_failed"
+    );
+  });
 
   it("classifies a transport reset as ambiguous and never retries fetch", async () => {
     const fetchMock = vi
@@ -418,11 +471,13 @@ describe("WhatsApp Graph tenant transport boundary", () => {
       )
     );
 
-    const result = withScope(TENANT_A, () =>
+    const error = await withScope(TENANT_A, () =>
       sendWhatsAppText(TENANT_A.senderId, "reply")
-    );
-    await expect(result).rejects.not.toThrow(TENANT_A.token);
-    await expect(result).rejects.not.toThrow(TENANT_A.senderId);
+    ).catch((thrown: unknown) => thrown);
+    expect(error).toBeInstanceOf(Error);
+    const serializedError = inspect(error, { depth: 8 });
+    expect(serializedError).not.toContain(TENANT_A.token);
+    expect(serializedError).not.toContain(TENANT_A.senderId);
     expect(JSON.stringify(mocks.loggerError.mock.calls)).not.toContain(
       TENANT_A.token
     );

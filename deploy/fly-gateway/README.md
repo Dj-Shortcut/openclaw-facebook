@@ -100,7 +100,7 @@ npm run gateway:deployment-safety
 
 - `OPENCLAW_WORKSPACE_DIR` defaults to `/data/workspace` for static instruction files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, and `IDENTITY.md`). Public Messenger memory plugins, session-memory hooks, compaction memory flushes, memory search, and memory tools are disabled because this gateway serves multiple tenant Pages.
 - Startup moves any legacy shared `USER.md`, `MEMORY.md`, or `memory/` content to the recoverable, operator-only `/data/private-memory-quarantine-v1` directory before accepting traffic. If shared memory reappears after a prior quarantine, startup fails closed instead of overwriting either copy.
-- `session.dmScope` is forced to `per-account-channel-peer`, keeping direct-message history isolated by Page account, channel, and sender. A Facebook binding to a secondary shared agent fails startup, and the public plugin path repeats both checks before transcript dispatch.
+- `session.dmScope` is forced to `per-account-channel-peer`, keeping direct-message history isolated by Page account, channel, and sender. Startup rejects an explicit Facebook `agentId` other than `main`; when a binding omits `agentId`, the public plugin still rejects an inherited secondary default agent at runtime before transcript dispatch.
 - `attachments.ttlHours` is capped at 24 hours as crash-recovery cleanup; normal Messenger turns delete their downloaded temporary media immediately after completion or failure.
 - On startup, missing static workspace instruction files are copied once from the legacy `/home/node/.openclaw/workspace` fallback into `/data/workspace`; legacy user or memory content is never copied into the public workspace.
 - `plugins.load.paths` includes `/app/node_modules/@dj-shortcut/facebook`.

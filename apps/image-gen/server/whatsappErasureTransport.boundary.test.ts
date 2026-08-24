@@ -311,14 +311,25 @@ describe("WhatsApp deletion outcome transport boundary", () => {
         status: "succeeded",
       });
       expect(new Set(flow.insertedAttemptHashes).size).toBe(1);
-      expect(flow.privacyPredicates).toHaveLength(4);
-      expect(flow.privacyPredicates[1]).toEqual(
+      const erasureDeliveryPredicate = flow.privacyPredicates.find(
+        predicate =>
+          predicate.includes("active") &&
+          predicate.includes("erasing") &&
+          predicate.includes("erased")
+      );
+      const erasureOnlyPredicate = flow.privacyPredicates.find(
+        predicate =>
+          !predicate.includes("active") &&
+          predicate.includes("erasing") &&
+          predicate.includes("erased")
+      );
+      expect(erasureDeliveryPredicate).toEqual(
         expect.arrayContaining(["active", "erasing", "erased"])
       );
-      expect(flow.privacyPredicates[2]).toEqual(
+      expect(erasureOnlyPredicate).toEqual(
         expect.arrayContaining(["erasing", "erased"])
       );
-      expect(flow.privacyPredicates[2]).not.toContain("active");
+      expect(erasureOnlyPredicate).not.toContain("active");
     }
   );
 
@@ -371,7 +382,11 @@ describe("WhatsApp deletion outcome transport boundary", () => {
           bindingEpoch: BINDING_EPOCH,
         }
       )
-    ).rejects.toMatchObject({ name: "WhatsAppTransportBindingError" });
+    ).rejects.toMatchObject({
+      name: WhatsAppDeliveryError.name,
+      outcome: "pre_transport",
+      cause: { name: "WhatsAppTransportBindingError" },
+    });
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(flow.insertedOperations).toEqual([]);

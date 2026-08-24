@@ -5,6 +5,8 @@ primary_region = 'ams'
 
 [env]
   STORAGE_OPERATION_TIMEOUT_MS = "60000"
+  # STORAGE_RATE_LIMIT_REDIS_URL and STORAGE_RATE_LIMIT_KEY_SECRET are required
+  # Fly secrets. Startup and /readyz fail closed when shared Redis is unavailable.
   # Phase 1 bridge: the currently running image-gen release still sends only
   # bearer auth and uses unscoped historical keys. Remove bearer auth only
   # after every image-gen Machine is on signed requests; retain legacy keys

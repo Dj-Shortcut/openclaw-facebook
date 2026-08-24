@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { sendWhatsAppBotResponse } from "./botResponseAdapters";
 import type { BotResponse, ConversationAction } from "./botResponse";
 import type { ConversationState } from "./messengerState";
@@ -28,9 +30,10 @@ export async function sendWhatsAppErasureControlTextReply(
 
 export async function sendWhatsAppImageReply(
   senderId: string,
-  imageUrl: string
+  imageUrl: string,
+  reqId: string
 ): Promise<void> {
-  await sendWhatsAppImage(senderId, imageUrl);
+  await sendWhatsAppImage(senderId, imageUrl, reqId);
 }
 
 export async function sendWhatsAppImageReplyWithReceipt(
@@ -75,8 +78,16 @@ async function sendWhatsAppStateText(
 export async function sendWhatsAppBotStateResponse(
   senderId: string,
   response: BotResponse | null,
-  replyState: ConversationState | null | undefined
+  replyState: ConversationState | null | undefined,
+  reqId: string
 ): Promise<void> {
+  const imageOperationId = (imageUrl: string) =>
+    createHash("sha256")
+      .update("whatsapp-bot-image\0")
+      .update(reqId)
+      .update("\0")
+      .update(imageUrl)
+      .digest("hex");
   await sendWhatsAppBotResponse(response, {
     sendText: text => sendWhatsAppText(senderId, text),
     sendActionPrompt: async (text, actions) => {
@@ -87,15 +98,25 @@ export async function sendWhatsAppBotStateResponse(
       );
     },
     replyState: replyState ?? undefined,
+    sendImage: imageUrl =>
+      sendWhatsAppImage(senderId, imageUrl, imageOperationId(imageUrl)),
     sendStateText: (stateName, text) =>
       sendWhatsAppStateText(senderId, stateName, text),
   });
 }
 
-export function createWhatsAppResponseSender(senderId: string) {
+export function createWhatsAppResponseSender(senderId: string, reqId: string) {
+  const imageOperationId = (imageUrl: string) =>
+    createHash("sha256")
+      .update("whatsapp-feature-image\0")
+      .update(reqId)
+      .update("\0")
+      .update(imageUrl)
+      .digest("hex");
   return {
     sendText: (text: string) => sendWhatsAppText(senderId, text),
-    sendImage: (imageUrl: string) => sendWhatsAppImage(senderId, imageUrl),
+    sendImage: (imageUrl: string) =>
+      sendWhatsAppImage(senderId, imageUrl, imageOperationId(imageUrl)),
     sendActions: async (text: string, actions: ConversationAction[]) => {
       await Promise.resolve(setPendingConversationActions(senderId, actions));
       await sendWhatsAppText(
