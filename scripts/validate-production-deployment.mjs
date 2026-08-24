@@ -3067,10 +3067,19 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "tail -n 120 /tmp/mysql-restore-probe.log",
       "must emit a bounded MySQL startup diagnostic before failing closed",
     ],
+    [
+      "chown mysql:root /var/lib/mysql",
+      "must restore only the disposable mount-root ownership expected by the pinned MySQL image",
+    ],
   ]) {
     if (!restoreProbeStep?.includes(required)) {
       fail(`${SCHEMA_TRANSITION_WORKFLOW_PATH} ${message}`);
     }
+  }
+  if (restoreProbeStep?.includes("chown -R")) {
+    fail(
+      `${SCHEMA_TRANSITION_WORKFLOW_PATH} must not recursively rewrite restored snapshot ownership`,
+    );
   }
   if (
     namedWorkflowStepTimeout(

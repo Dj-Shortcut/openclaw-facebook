@@ -1947,6 +1947,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("allows only a non-recursive restore mount-root ownership repair", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      "chown mysql:root /var/lib/mysql",
+      "chown -R mysql:root /var/lib/mysql",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must restore only the disposable mount-root ownership expected by the pinned MySQL image",
+    );
+  });
+
   it("keeps the restore-probe outer timeout above all bounded subphases", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
