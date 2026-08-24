@@ -234,7 +234,8 @@ jobs:
             [[ "$machine_name" =~ ^leaderbot-restore-probe-([0-9]+)-([0-9]+)$ ]]
             probe_run="${BASH_REMATCH[1]}"
             probe_attempt="${BASH_REMATCH[2]}"
-            volume_name="leaderbot_restore_probe_${probe_run}_${probe_attempt}"
+            volume_name="lbr_${probe_run}_${probe_attempt}"
+            test "${#volume_name}" -le 30
             volume="$(jq -cer --arg name "$volume_name" '[.[] | select(.name==$name)] | if length==1 then .[0] else error("probe volume mismatch") end' <<<"$volumes")"
             volume_id="$(jq -er '.id' <<<"$volume")"
             [[ "$volume_id" =~ ^vol_[a-z0-9]+$ ]]
@@ -245,18 +246,18 @@ jobs:
           done
           for _ in $(seq 1 30); do
             volumes="$(flyctl volumes list --app "$db_app" --json)"
-            matching_count="$(jq -r '[.[] | select((.name // "") | test("^leaderbot_restore_probe_[0-9]+_[0-9]+$"))] | length' <<<"$volumes")"
+            matching_count="$(jq -r '[.[] | select((.name // "") | test("^lbr_[0-9]+_[0-9]+$"))] | length' <<<"$volumes")"
             if test "$matching_count" = 0; then
               break
             fi
-            mapfile -t volume_ids < <(jq -r '.[] | select(((.name // "") | test("^leaderbot_restore_probe_[0-9]+_[0-9]+$")) and ((.attached_machine_id // "")=="")) | .id' <<<"$volumes")
+            mapfile -t volume_ids < <(jq -r '.[] | select(((.name // "") | test("^lbr_[0-9]+_[0-9]+$")) and ((.attached_machine_id // "")=="")) | .id' <<<"$volumes")
             for volume_id in "${volume_ids[@]}"; do
               [[ "$volume_id" =~ ^vol_[a-z0-9]+$ ]]
               flyctl volumes destroy "$volume_id" --app "$db_app" --yes
             done
             sleep 5
           done
-          remaining="$(flyctl volumes list --app "$db_app" --json | jq '[.[] | select((.name // "") | test("^leaderbot_restore_probe_[0-9]+_[0-9]+$"))] | length')"
+          remaining="$(flyctl volumes list --app "$db_app" --json | jq '[.[] | select((.name // "") | test("^lbr_[0-9]+_[0-9]+$"))] | length')"
           test "$remaining" = 0
 
       - name: Bind snapshot and tunnel to the one live database Machine
@@ -432,7 +433,8 @@ jobs:
           db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
           region="$(jq -er '.apps["image-gen"].databaseRecovery.region' deploy/production/apps.json)"
           size_gb="$(jq -er '.apps["image-gen"].databaseRecovery.sizeGb' deploy/production/apps.json)"
-          name="leaderbot_restore_probe_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          name="lbr_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          test "${#name}" -le 30
           printf '%s\n' "$name" > "$RUNNER_TEMP/leaderbot-schema-transition/restore-volume-name.txt"
           restored="$(flyctl volumes create "$name" \
             --app "$db_app" \
@@ -516,7 +518,8 @@ jobs:
           test -n "$FLY_API_TOKEN"
           db_app="$(jq -er '.apps["image-gen"].databaseRecovery.app' deploy/production/apps.json)"
           expected_machine_name="leaderbot-restore-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          expected_volume_name="leaderbot_restore_probe_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          expected_volume_name="lbr_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          test "${#expected_volume_name}" -le 30
           volume_id=''
           if test -f "$RUNNER_TEMP/leaderbot-schema-transition/restore-volume-id.txt"; then
             volume_id="$(cat "$RUNNER_TEMP/leaderbot-schema-transition/restore-volume-id.txt")"

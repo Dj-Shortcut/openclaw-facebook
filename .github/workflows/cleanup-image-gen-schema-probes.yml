@@ -80,7 +80,8 @@ jobs:
             [[ "$machine_name" =~ ^leaderbot-restore-probe-([0-9]+)-([0-9]+)$ ]]
             probe_run="${BASH_REMATCH[1]}"
             probe_attempt="${BASH_REMATCH[2]}"
-            volume_name="leaderbot_restore_probe_${probe_run}_${probe_attempt}"
+            volume_name="lbr_${probe_run}_${probe_attempt}"
+            test "${#volume_name}" -le 30
             volume="$(jq -cer --arg name "$volume_name" '[.[] | select(.name==$name)] | if length==1 then .[0] else error("probe volume mismatch") end' <<<"$volumes")"
             volume_id="$(jq -er '.id' <<<"$volume")"
             [[ "$volume_id" =~ ^vol_[a-z0-9]+$ ]]
@@ -91,17 +92,17 @@ jobs:
           done
           for _ in $(seq 1 60); do
             volumes="$(flyctl volumes list --app "$db_app" --json)"
-            matching_count="$(jq -r '[.[] | select((.name // "") | test("^leaderbot_restore_probe_[0-9]+_[0-9]+$"))] | length' <<<"$volumes")"
+            matching_count="$(jq -r '[.[] | select((.name // "") | test("^lbr_[0-9]+_[0-9]+$"))] | length' <<<"$volumes")"
             test "$matching_count" -le 10
             if test "$matching_count" = 0; then
               break
             fi
-            mapfile -t volume_ids < <(jq -r '.[] | select(((.name // "") | test("^leaderbot_restore_probe_[0-9]+_[0-9]+$")) and ((.attached_machine_id // "")=="")) | .id' <<<"$volumes")
+            mapfile -t volume_ids < <(jq -r '.[] | select(((.name // "") | test("^lbr_[0-9]+_[0-9]+$")) and ((.attached_machine_id // "")=="")) | .id' <<<"$volumes")
             for volume_id in "${volume_ids[@]}"; do
               [[ "$volume_id" =~ ^vol_[a-z0-9]+$ ]]
               flyctl volumes destroy "$volume_id" --app "$db_app" --yes
             done
             sleep 5
           done
-          remaining="$(flyctl volumes list --app "$db_app" --json | jq '[.[] | select((.name // "") | test("^leaderbot_restore_probe_[0-9]+_[0-9]+$"))] | length')"
+          remaining="$(flyctl volumes list --app "$db_app" --json | jq '[.[] | select((.name // "") | test("^lbr_[0-9]+_[0-9]+$"))] | length')"
           test "$remaining" = 0
