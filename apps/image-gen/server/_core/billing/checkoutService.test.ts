@@ -41,17 +41,25 @@ describe("Mollie checkout launch gate", () => {
   });
 
   it("fails before database or provider work while billing is disabled", async () => {
-    delete process.env.MOLLIE_BILLING_ENABLED;
+    process.env = billingTestEnv();
+    process.env.MOLLIE_BILLING_ENABLED = "false";
+    const listMethods = vi.fn();
 
     await expect(
-      startMollieCheckout({
-        workspaceId: 1,
-        planCode: "premium_monthly_v1",
-        countryCode: "BE",
-        kind: "subscription_start",
-        businessCheckout: false,
-      })
+      startMollieCheckout(
+        {
+          workspaceId: 1,
+          planCode: "premium_monthly_v1",
+          countryCode: "BE",
+          kind: "subscription_start",
+          businessCheckout: false,
+        },
+        { listMethods } as unknown as MollieClient
+      )
     ).rejects.toThrow("Mollie billing is disabled");
+    expect(schedulerEnabledMock).not.toHaveBeenCalled();
+    expect(profileEligibilityMock).not.toHaveBeenCalled();
+    expect(listMethods).not.toHaveBeenCalled();
   });
 
   it("ignores a forged body country and blocks on server profile state", async () => {
@@ -251,6 +259,7 @@ function billingTestEnv(): NodeJS.ProcessEnv {
     ...originalEnv,
     NODE_ENV: "test",
     MOLLIE_BILLING_ENABLED: "true",
+    MOLLIE_BILLING_DRAIN_ENABLED: "true",
     MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED: "true",
     MOLLIE_API_KEY: "test_example123",
     MOLLIE_MODE: "test",
@@ -270,6 +279,7 @@ function offlineBillingTestEnv(): NodeJS.ProcessEnv {
   return {
     ...env,
     MOLLIE_BILLING_ENABLED: "false",
+    MOLLIE_BILLING_DRAIN_ENABLED: "false",
     MOLLIE_BILLING_PREFLIGHT_ENABLED: "true",
     MOLLIE_LIVE_BILLING_ENABLED: "false",
     MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED: "false",

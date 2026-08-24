@@ -14,12 +14,24 @@
   generation-input preparation were extracted behind typed/tested boundaries;
   and the Fly model/memory plus managed-redeploy invariants are now CI-checked.
   This is repository evidence only, not production rollout proof.
-- Last reviewed against code: **2026-08-02** (HEAD plus the local launch-hardening worktree described below).
-- Reviewed HEAD baseline: **`808f207`**. The 2026-08-02 launch-hardening changes are local only until they are committed, deployed, and proven in production.
-- Latest operator production verification: **2026-06-30** live Messenger smoke and `delete-my-data` flow verified by operator.
+- Last reviewed against code: **2026-08-24**, PR #400 commit
+  **`276bab2ac4f1d8396dedb055fa3f26c3c2e7360a`**. All GitHub checks on
+  that commit are green; review, protected rollout and provider evidence remain
+  separate gates.
+- Reviewed `main` baseline: **`29666ab9a9fc3830a464577a599c5b26de6162c5`**.
+- Latest operator production verification: **2026-08-24** public
+  `/healthz` and core `/readyz` returned HTTP 200. This is not billing
+  readiness because `MOLLIE_BILLING_PREFLIGHT_ENABLED=false`; the latest
+  recorded Messenger/delete-my-data smoke remains 2026-06-30.
 - Current direction: generic prompt-first image generation; legacy style-picker UI, quick-reply flows, and director-mode preset plumbing are removed. Internal style-preset compatibility may remain only as backend fallback.
 - Product direction: `leaderbot.live` becomes a tenant/customer portal for managing each customer's own AI. The OpenClaw/Messenger gateway remains shielded and is not the customer-facing app.
-- 2026-08-01 production update: image-gen v312 is deployed default-off with the new portal/legal surfaces and one primary queue worker; the standby worker remains stopped. No database migration ran and all Mollie, entitlement, live-billing, and AI-answer enforcement flags remain absent. The gateway upgrade to OpenClaw 2026.7.1 was rolled back because the mounted state has conflicting legacy/canonical Memory Core index rows. Production retains the known-good 2026.6.11 runtime; this hotfix pins that exact image and overlays only the reviewed route guard. Standard gateway upgrades and `openclaw doctor --fix` remain blocked until the state repair is rehearsed on a copy, backed up, and explicitly approved. The owner reports Mollie account onboarding complete; Bancontact/Test Mode evidence and every technical, legal, accounting, entitlement, and live-billing gate remain open.
+- 2026-08-24 production update: image-gen remains on reviewed legacy image
+  `sha256:28d862...` and schema phase `0015_base`, with every Mollie
+  commercial, entitlement, live, notification and accounting flag off. The
+  manifest intentionally blocks deployment until an attested compatibility
+  bridge is reviewed. The protected sequence is bridge deployment, encrypted
+  snapshot plus isolated restore proof, `0016_expand`, then an attested
+  runtime. Migration 0017 remains blocked.
 - Historical audit and inventory files are not active plans. Keep valid open work here instead of reviving stale audit snapshots.
 
 ## Architecture boundary notes
@@ -642,6 +654,12 @@ Historical branch review note:
 
 - [x] Add workspace-scoped Mollie billing schema, classic payment webhook, one-time Startpilot checkout, dormant subscription provisioning, entitlement records, portal controls, and daily reconciliation.
 - [x] Keep live Mollie billing disabled by default and reject key/mode or insecure URL mismatches.
+- [x] Split commercial exposure from the retained provider drain:
+      `MOLLIE_BILLING_ENABLED=false` blocks new plans/provider creates/checkout
+      URLs, while `MOLLIE_BILLING_DRAIN_ENABLED=true` preserves classic
+      webhook, history/export, reconciliation and safety outbox after the first
+      exposure. Boot/readiness refuses drain-off when durable provider activity
+      exists.
 - [x] Separate provider-silent offline readiness from operational paid workers:
       `MOLLIE_BILLING_PREFLIGHT_ENABLED=true` now requires every billing,
       entitlement, finalization, notification and accounting execution flag to
@@ -652,21 +670,41 @@ Historical branch review note:
       operational paid lane or starting a Mollie sandbox checkout.
 - [x] Validate the effective portal handoff origin (`PORTAL_BASE_URL`, falling back to `APP_BASE_URL`) before billing readiness/checkout; production/live requires HTTPS and an origin-only URL.
 - [x] Select the bounded product offer: `€19` once, 30 days, one workspace/Page, 300 AI answers, 20 Images 2.0 generations, and at most five images per day, without renewal, top-ups, or overage.
+- [x] Enforce an audited, expiring Belgian-consumer billing profile before
+      checkout. Seller Peppol registration is separate; business/Peppol buyer
+      profiles remain ineligible.
 - [ ] Approve the draft Startpilot legal copy, accounting treatment, refund/withdrawal terms, invoice treatment, and financial-retention policy before live payment.
 - [ ] Run and record all Mollie sandbox cases in `docs/MOLLIE_TEST_RESULTS.md`.
-- [ ] Add real-MySQL concurrency/integrity tests for intents, webhooks, ledger, outbox, and duplicate subscription prevention.
+- [x] Add real-MySQL concurrency/integrity tests for intents, webhooks, ledger,
+      outbox, provider-operation/disable races and duplicate subscription
+      prevention. PR #400 CI also runs the privacy/billing MySQL lane on 8.4.11.
 - [ ] Before paid Images 2.0 activation, smoke-test direct GPT Image 2 generation and editing, verify the fixed 5/day and 20/month customer counters, and separately confirm the provider-account hard limit.
 - [x] Keep the optional audio/video USD spend caps atomic across workers. Image admission never uses these caps.
-- [ ] Add a durable, tenant-scoped finalize retry/outbox for AI-answer reservations so an ambiguous gateway-to-image-gen outage after successful Messenger delivery cannot let a reservation expire and undercount one answer.
-- [ ] Partition the Redis image-generation queue by owning workspace before multi-tenant paid onboarding; queued PSID, prompt, and source-image jobs must never share an unscoped global customer queue.
+- [x] Add a durable, tenant-scoped finalize drain for AI-answer reservations so
+      an ambiguous gateway-to-image-gen outage cannot silently release a
+      delivered answer.
+- [x] Partition and privacy-fence the Redis image-generation queue by immutable
+      workspace/connection/binding/user/epoch scope. Real Redis tests cover
+      retries, lease loss, erasure races and legacy drain.
 - [ ] Define a separate immutable subscription-history/event model if historical rows become a product or accounting requirement; `billing_subscriptions` currently stores one mutable current-state row per workspace and Mollie mode.
 - [x] Map inbound channel/Page identity uniquely to a workspace and enforce `workspace_entitlements` before the actual image-provider attempt; the database claim now fails closed instead of overwriting another workspace's Page credentials.
 - [x] Count one Startpilot image unit when the first provider attempt for a Messenger generation job starts; provider retries remain individually audited but do not consume extra customer pilot generations.
 - [ ] Prove the Page-to-workspace mapping and both paid quota gates in a production-like end-to-end test after the duplicate-Page preflight and migration, without any free-tier fallback.
-- [ ] Replace the isolated single-workspace billing worker with a durable tenant-partitioned scheduler that never performs cross-tenant reads.
+- [x] Replace the isolated worker with a durable tenant-partitioned scheduler
+      and explicit `pilot_pin`/`multi_tenant` rollout, per-lane epochs,
+      heartbeats, safety drain, backlog and dead-letter readiness.
 - [ ] Extract billing outbox queue mechanics from provider handlers after the billing behavior is stable; keep this follow-up separate from launch-critical correctness changes.
-- [ ] Connect customer payment warnings and operator manual-review incidents to tested notification delivery.
-- [ ] Make accounting exports complete and bounded through an explicit date range, pagination, or streaming; never silently truncate financial rows.
+- [x] Implement key-free signed customer/operator notification transport,
+      durable receipts/outbox, dedupe, retry, fair scheduling and dead-letter
+      readiness.
+- [x] Expose materialized operator manual-review incidents to an authenticated,
+      tenant-scoped platform-admin surface with metadata-only monotone ACK.
+      Receiver dead letters remain authoritative red readiness signals for the
+      required on-call drill rather than being acknowledged away in the portal.
+- [x] Make accounting exports bounded and stream-safe with an explicit date
+      range, high-water mark and canonical money validation.
+- [ ] Add an authenticated operator quarantine/fees/settlements report or
+      designate an approved external bookkeeping workflow as authoritative.
 - [ ] Reconcile Mollie Balances/Settlements in an approved live read-only accounting workflow.
 - [ ] Close every blocker in `docs/LAUNCH_READINESS.md` before enabling a `live_` key.
 

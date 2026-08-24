@@ -187,6 +187,25 @@ function tableAssignments(tables, tableName) {
   return result;
 }
 
+function tableAssignmentGroups(text, tableName) {
+  const groups = [];
+  let current = null;
+  for (const line of text.split(/\r?\n/)) {
+    const heading = line.match(/^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$/);
+    if (heading) {
+      current = heading[1] === tableName ? {} : null;
+      if (current) groups.push(current);
+      continue;
+    }
+    if (!current) continue;
+    const assignment = line.match(/^\s*([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*$/);
+    if (assignment) {
+      current[assignment[1]] = unquoteToml(assignment[2]);
+    }
+  }
+  return groups;
+}
+
 function allAssignments(text, key) {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return [
@@ -5176,6 +5195,37 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     if (!serviceCheckPaths.includes(app.serviceCheckPath)) {
       fail(`${app.config} must define a /healthz service check`);
     }
+    if (target === "image-gen") {
+      const configuredChecks = tableAssignmentGroups(
+        text,
+        "http_service.checks",
+      ).sort((left, right) =>
+        String(left.path ?? "").localeCompare(String(right.path ?? "")),
+      );
+      const canonicalChecks = [
+        {
+          interval: "15s",
+          timeout: "5s",
+          grace_period: "10s",
+          method: "GET",
+          path: "/healthz",
+        },
+        {
+          interval: "15s",
+          timeout: "5s",
+          grace_period: "45s",
+          method: "GET",
+          path: "/readyz",
+        },
+      ];
+      if (
+        JSON.stringify(configuredChecks) !== JSON.stringify(canonicalChecks)
+      ) {
+        fail(
+          `${app.config} must define exactly the canonical /healthz and /readyz service checks`,
+        );
+      }
+    }
     if (app.readinessCheckPath) {
       if (!app.readinessMonitor) {
         fail(`${target} must define an external readiness monitor`);
@@ -5496,7 +5546,7 @@ function normalizedMachineService(service) {
   return result;
 }
 
-function expectedMachineService(httpService, httpCheck) {
+function expectedMachineService(httpService, httpChecks) {
   if (Object.keys(httpService).length === 0) return [];
   const service = {
     protocol: "tcp",
@@ -5512,22 +5562,19 @@ function expectedMachineService(httpService, httpCheck) {
       },
       { port: 443, handlers: ["http", "tls"] },
     ],
-    checks:
-      Object.keys(httpCheck).length === 0
-        ? []
-        : [
-            normalizedMachineServiceCheck({
-              type: "http",
-              interval: httpCheck.interval,
-              timeout: httpCheck.timeout,
-              grace_period: httpCheck.grace_period,
-              method: httpCheck.method,
-              path: httpCheck.path,
-              protocol: httpCheck.protocol,
-              tls_server_name: httpCheck.tls_server_name,
-              tls_skip_verify: httpCheck.tls_skip_verify,
-            }),
-          ],
+    checks: httpChecks.map((httpCheck) =>
+      normalizedMachineServiceCheck({
+        type: "http",
+        interval: httpCheck.interval,
+        timeout: httpCheck.timeout,
+        grace_period: httpCheck.grace_period,
+        method: httpCheck.method,
+        path: httpCheck.path,
+        protocol: httpCheck.protocol,
+        tls_server_name: httpCheck.tls_server_name,
+        tls_skip_verify: httpCheck.tls_skip_verify,
+      }),
+    ),
   };
   service.ports.sort((left, right) => Number(left.port) - Number(right.port));
   service.checks.sort((left, right) =>
@@ -5684,7 +5731,7 @@ function readMachineConfigProfile(rootDir, selectedConfigPath, app) {
     env: tableAssignments(tables, "env"),
     processes: tableAssignments(tables, "processes"),
     httpService,
-    httpCheck: tableAssignments(tables, "http_service.checks"),
+    httpChecks: tableAssignmentGroups(configText, "http_service.checks"),
     mount: tableAssignments(tables, "mounts"),
     serviceGroups: [
       ...(configuredServiceGroups.length > 0
@@ -6079,7 +6126,7 @@ export function checkLiveFlyDrift(target, options = {}) {
     env: expectedEnv,
     processes: expectedProcesses,
     httpService: expectedHttpService,
-    httpCheck: expectedHttpCheck,
+    httpChecks: expectedHttpChecks,
     mount: configuredMount,
   } = selectedProfile;
   const expectedMounts = Object.keys(configuredMount).length
@@ -6206,19 +6253,27 @@ export function checkLiveFlyDrift(target, options = {}) {
     .map((check) => check.path)
     .filter(Boolean)
     .sort();
-  if (Object.keys(expectedHttpCheck).length > 0) {
-    const liveChecks = live.http_service?.checks ?? [];
-    if (liveChecks.length !== 1) {
+  if (expectedHttpChecks.length > 0) {
+    const liveChecks = [...(live.http_service?.checks ?? [])].sort(
+      (left, right) =>
+        String(left.path ?? "").localeCompare(String(right.path ?? "")),
+    );
+    const canonicalChecks = [...expectedHttpChecks].sort((left, right) =>
+      String(left.path ?? "").localeCompare(String(right.path ?? "")),
+    );
+    if (liveChecks.length !== canonicalChecks.length) {
       reconcilableDrift.push(
-        `live HTTP service must have exactly one canonical check; found ${liveChecks.length}`,
+        `live HTTP service must have exactly ${canonicalChecks.length} canonical checks; found ${liveChecks.length}`,
       );
     } else {
-      compareObject(
-        liveChecks[0],
-        expectedHttpCheck,
-        "http_service.checks[0]",
-        reconcilableDrift,
-      );
+      canonicalChecks.forEach((expectedCheck, index) => {
+        compareObject(
+          liveChecks[index],
+          expectedCheck,
+          `http_service.checks[${index}]`,
+          reconcilableDrift,
+        );
+      });
     }
   }
   if (options.configPath) {
@@ -6475,7 +6530,7 @@ export function checkLiveFlyDrift(target, options = {}) {
       )
         ? expectedMachineService(
             machineProfile.httpService,
-            machineProfile.httpCheck,
+            machineProfile.httpChecks,
           )
         : [];
       const actualServices = (machine.config?.services ?? []).map(

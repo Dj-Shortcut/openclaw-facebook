@@ -388,7 +388,12 @@ function addReleaseCommandToCapturedImageConfig(root, manifest, image) {
   return record.path;
 }
 
-function httpMachineService({ port, autoStop, gracePeriod }) {
+function httpMachineService({
+  port,
+  autoStop,
+  gracePeriod,
+  readiness = false,
+}) {
   return {
     protocol: "tcp",
     internal_port: port,
@@ -408,6 +413,18 @@ function httpMachineService({ port, autoStop, gracePeriod }) {
         method: "GET",
         path: "/healthz",
       },
+      ...(readiness
+        ? [
+            {
+              type: "http",
+              interval: "15s",
+              timeout: "5s",
+              grace_period: "45s",
+              method: "GET",
+              path: "/readyz",
+            },
+          ]
+        : []),
     ],
   };
 }
@@ -447,6 +464,7 @@ function imageGenMachineConfig(image, processGroup) {
               port: 8080,
               autoStop: "off",
               gracePeriod: "10s",
+              readiness: true,
             }),
           ]
         : [],
@@ -463,6 +481,11 @@ function imageGenRollbackMachineConfig(image, processGroup) {
     FLY_PROCESS_GROUP: processGroup,
     PRIMARY_REGION: "ams",
   };
+  if (processGroup === "app") {
+    config.services[0].checks = config.services[0].checks.filter(
+      (check) => check.path === "/healthz",
+    );
+  }
   delete config.stop_config;
   return config;
 }
@@ -596,6 +619,17 @@ function imageGenLiveConfig(identity, { rollback = false } = {}) {
           method: "GET",
           path: "/healthz",
         },
+        ...(rollback
+          ? []
+          : [
+              {
+                interval: "15s",
+                timeout: "5s",
+                grace_period: "45s",
+                method: "GET",
+                path: "/readyz",
+              },
+            ]),
       ],
     },
   };
@@ -3033,6 +3067,42 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must define a /healthz service check",
+    );
+  });
+
+  it("requires image-gen traffic readiness routing", () => {
+    const root = createRepositoryFixture();
+    const configPath = path.join(root, "apps/image-gen/fly.toml");
+    const config = fs.readFileSync(configPath, "utf8");
+    fs.writeFileSync(
+      configPath,
+      config.replace('path = "/readyz"', 'path = "/healthz"'),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must define exactly the canonical /healthz and /readyz service checks",
+    );
+  });
+
+  it("rejects an extra image-gen service check", () => {
+    const root = createRepositoryFixture();
+    const configPath = path.join(root, "apps/image-gen/fly.toml");
+    fs.appendFileSync(
+      configPath,
+      [
+        "",
+        "[[http_service.checks]]",
+        'interval = "15s"',
+        'timeout = "5s"',
+        'grace_period = "45s"',
+        'method = "GET"',
+        'path = "/extra"',
+        "",
+      ].join("\n"),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must define exactly the canonical /healthz and /readyz service checks",
     );
   });
 

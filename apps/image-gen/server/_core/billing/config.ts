@@ -1,5 +1,6 @@
 const MOLLIE_WEBHOOK_PATH = "/api/webhooks/mollie/payments";
 const MOLLIE_BILLING_ENABLED_VALUE = "true";
+const MOLLIE_BILLING_DRAIN_ENABLED_VALUE = "true";
 const MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED_VALUE = "true";
 
 export type MollieMode = "test" | "live";
@@ -69,6 +70,14 @@ function requireHttps(url: URL, name: string): void {
   }
 }
 
+export function getBillingSupportEmail(): string {
+  const billingSupportEmail = required("BILLING_SUPPORT_EMAIL");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(billingSupportEmail)) {
+    throw new Error("BILLING_SUPPORT_EMAIL must be a valid email address");
+  }
+  return billingSupportEmail;
+}
+
 export function getMollieConfig(): MollieConfig {
   const apiKey = required("MOLLIE_API_KEY");
   const rawMode = required("MOLLIE_MODE");
@@ -103,10 +112,7 @@ export function getMollieConfig(): MollieConfig {
     );
   }
 
-  const billingSupportEmail = required("BILLING_SUPPORT_EMAIL");
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(billingSupportEmail)) {
-    throw new Error("BILLING_SUPPORT_EMAIL must be a valid email address");
-  }
+  const billingSupportEmail = getBillingSupportEmail();
 
   const liveBillingEnabled = process.env.MOLLIE_LIVE_BILLING_ENABLED === "true";
   const requireSecureUrls =
@@ -138,6 +144,18 @@ export function isMollieBillingEnabled(): boolean {
   return process.env.MOLLIE_BILLING_ENABLED === MOLLIE_BILLING_ENABLED_VALUE;
 }
 
+/**
+ * Keeps already-started provider work recoverable after commercial checkout is
+ * disabled. This lifecycle flag must be enabled before the first checkout and
+ * then remain enabled for the retained financial record lifetime.
+ */
+export function isMollieBillingDrainEnabled(): boolean {
+  return (
+    process.env.MOLLIE_BILLING_DRAIN_ENABLED ===
+    MOLLIE_BILLING_DRAIN_ENABLED_VALUE
+  );
+}
+
 export function isMollieEntitlementEnforcementEnabled(): boolean {
   return (
     process.env.MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED ===
@@ -149,6 +167,11 @@ export function assertMollieBillingEnabled(): void {
   if (!isMollieBillingEnabled()) {
     throw new Error(
       "Mollie billing is disabled; enable it only after the billing launch gates are approved"
+    );
+  }
+  if (!isMollieBillingDrainEnabled()) {
+    throw new Error(
+      "MOLLIE_BILLING_DRAIN_ENABLED must be true before checkout can be enabled"
     );
   }
   if (!isMollieEntitlementEnforcementEnabled()) {
@@ -237,12 +260,13 @@ export function assertTenantBillingWorkerConfigured(): void {
 export function isMollieBillingPreflightEnabled(): boolean {
   return (
     isMollieBillingEnabled() ||
+    isMollieBillingDrainEnabled() ||
     process.env.MOLLIE_BILLING_PREFLIGHT_ENABLED === "true"
   );
 }
 
 export function getMollieReadinessPhase(): MollieReadinessPhase {
-  if (isMollieBillingEnabled()) {
+  if (isMollieBillingEnabled() || isMollieBillingDrainEnabled()) {
     return "operational";
   }
   if (process.env.MOLLIE_BILLING_PREFLIGHT_ENABLED === "true") {
@@ -271,6 +295,7 @@ export function assertMollieNonSecretLaunchConfig(
     }
     for (const name of [
       "MOLLIE_LIVE_BILLING_ENABLED",
+      "MOLLIE_BILLING_DRAIN_ENABLED",
       "MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED",
       "AI_ANSWER_FINALIZATION_DRAIN_ENABLED",
       "AI_ANSWER_QUOTA_PREFLIGHT_ENABLED",
@@ -284,6 +309,9 @@ export function assertMollieNonSecretLaunchConfig(
   }
   required("DATABASE_URL");
   required("REDIS_URL");
+  if (requireOperationalFlags && !isMollieBillingDrainEnabled()) {
+    throw new Error("MOLLIE_BILLING_DRAIN_ENABLED must be true");
+  }
   if (
     requireOperationalFlags &&
     process.env.BILLING_NOTIFICATION_PLANE_ENABLED !== "true"

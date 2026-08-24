@@ -66,6 +66,7 @@ import {
   assertTenantBillingWorkerConfigured,
   getMollieConfig,
   getConfiguredBillingMode,
+  isMollieBillingDrainEnabled,
   isMollieBillingEnabled,
   isMollieBillingPreflightEnabled,
   isMollieEntitlementEnforcementEnabled,
@@ -100,6 +101,8 @@ import { startDailyBillingReconciliation } from "./billing/reconciliation";
 import { startAiAnswerFinalizationWorker } from "./billing/aiAnswerFinalizationWorker";
 import { startBillingProfileExpiryWorker } from "./billing/billingProfileExpiryWorker";
 import { startBillingNotificationReceiverWorker } from "./billing/billingNotificationReceiverWorker";
+import { assertMollieBillingDrainLifecycle } from "./billing/billingDrainLifecycle";
+import { getMollieRuntimePolicy } from "./billing/billingRuntimePolicy";
 import {
   getMollieAccountingImportConfig,
   isMollieAccountingImportEnabled,
@@ -213,6 +216,7 @@ async function startServer() {
   // binding. The one-off provisioning artifact must run before this runtime.
   await assertWhatsAppTenantBindingReadiness();
   const mollieBillingEnabled = isMollieBillingEnabled();
+  const mollieBillingDrainEnabled = isMollieBillingDrainEnabled();
   const mollieBillingPreflightEnabled = isMollieBillingPreflightEnabled();
   const aiAnswerEnforcementEnabled = isMollieEntitlementEnforcementEnabled();
   const aiFinalizationDrainEnabled =
@@ -221,6 +225,14 @@ async function startServer() {
     process.env.AI_ANSWER_QUOTA_PREFLIGHT_ENABLED === "true";
   const accountingImportEnabled = isMollieAccountingImportEnabled();
   const notificationPlaneEnabled = isBillingNotificationPlaneEnabled();
+  const mollieRuntimePolicy = getMollieRuntimePolicy({
+    commercialExposureEnabled: mollieBillingEnabled,
+    providerDrainEnabled: mollieBillingDrainEnabled,
+    notificationPlaneEnabled,
+  });
+  if (!generationWorkerOnly) {
+    await assertMollieBillingDrainLifecycle();
+  }
   if (notificationPlaneEnabled && !generationWorkerOnly) {
     assertBillingNotificationConfig();
   }
@@ -231,15 +243,18 @@ async function startServer() {
   if (mollieBillingPreflightEnabled && !generationWorkerOnly) {
     assertTenantBillingWorkerConfigured();
     assertMollieNonSecretLaunchConfig({
-      requireOperationalFlags: mollieBillingEnabled,
+      requireOperationalFlags: mollieBillingDrainEnabled,
     });
     await assertBillingDatabaseReadiness(getConfiguredBillingMode(), {
       requireRuntimeHeartbeat: false,
     });
   }
-  if (mollieBillingEnabled && !generationWorkerOnly) {
-    assertMollieBillingEnabled();
+  if (mollieBillingDrainEnabled && !generationWorkerOnly) {
+    if (mollieBillingEnabled) assertMollieBillingEnabled();
     void getMollieConfig();
+    if (!mollieBillingEnabled) {
+      safeLog("mollie_commercial_billing_disabled_provider_drain_active");
+    }
   } else {
     safeLog("mollie_billing_disabled");
   }
@@ -319,7 +334,7 @@ async function startServer() {
 
   // The classic Mollie route owns a strict 2 KB form parser and must be
   // registered before the global 10 MB parsers used by Messenger/media APIs.
-  if (mollieBillingEnabled) {
+  if (mollieRuntimePolicy.registerClassicWebhook) {
     registerMollieWebhookRoute(app);
   }
   if (notificationPlaneEnabled) {
@@ -345,7 +360,7 @@ async function startServer() {
   registerMetricsRoute(app);
   registerFaceMemoryAdminRoutes(app);
   registerPortalRoutes(app);
-  if (mollieBillingEnabled) {
+  if (mollieRuntimePolicy.registerBillingHistory) {
     registerBillingPortalRoutes(app);
   }
 
@@ -368,10 +383,10 @@ async function startServer() {
   if (notificationPlaneEnabled) {
     startBillingNotificationReceiverWorker();
   }
-  if (mollieBillingEnabled || notificationPlaneEnabled) {
+  if (mollieRuntimePolicy.startSafetyOutbox) {
     startBillingOutboxWorker();
   }
-  if (mollieBillingEnabled) {
+  if (mollieRuntimePolicy.startReconciliation) {
     startDailyBillingReconciliation();
   }
 

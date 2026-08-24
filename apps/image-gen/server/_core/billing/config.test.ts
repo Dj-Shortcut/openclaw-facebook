@@ -10,6 +10,7 @@ import {
   getMollieConfig,
   getMollieReadinessPhase,
   getTenantBillingWorkerWorkspaceId,
+  isMollieBillingDrainEnabled,
   isMollieBillingEnabled,
 } from "./config";
 
@@ -32,6 +33,7 @@ function useValidTestConfig(): void {
   delete process.env.PORTAL_BASE_URL;
   delete process.env.MOLLIE_LIVE_BILLING_ENABLED;
   delete process.env.MOLLIE_BILLING_ENABLED;
+  delete process.env.MOLLIE_BILLING_DRAIN_ENABLED;
   delete process.env.MOLLIE_BILLING_PREFLIGHT_ENABLED;
   delete process.env.MOLLIE_BILLING_WORKER_WORKSPACE_ID;
 }
@@ -100,12 +102,17 @@ describe("Mollie configuration", () => {
 
   it("keeps all Mollie billing disabled until the launch switch is explicit", () => {
     expect(isMollieBillingEnabled()).toBe(false);
+    expect(isMollieBillingDrainEnabled()).toBe(false);
     expect(() => assertMollieBillingEnabled()).toThrow(
       "Mollie billing is disabled"
     );
 
     process.env.MOLLIE_BILLING_ENABLED = "true";
     expect(isMollieBillingEnabled()).toBe(true);
+    expect(() => assertMollieBillingEnabled()).toThrow(
+      "MOLLIE_BILLING_DRAIN_ENABLED must be true"
+    );
+    process.env.MOLLIE_BILLING_DRAIN_ENABLED = "true";
     expect(() => assertMollieBillingEnabled()).not.toThrow();
   });
 
@@ -114,6 +121,9 @@ describe("Mollie configuration", () => {
 
     process.env.MOLLIE_BILLING_PREFLIGHT_ENABLED = "true";
     expect(getMollieReadinessPhase()).toBe("offline");
+
+    process.env.MOLLIE_BILLING_DRAIN_ENABLED = "true";
+    expect(getMollieReadinessPhase()).toBe("operational");
 
     process.env.MOLLIE_BILLING_ENABLED = "true";
     expect(getMollieReadinessPhase()).toBe("operational");
@@ -126,7 +136,7 @@ describe("Mollie configuration", () => {
       assertMollieNonSecretLaunchConfig({ requireOperationalFlags: false })
     ).not.toThrow();
     expect(() => assertMollieNonSecretLaunchConfig()).toThrow(
-      "BILLING_NOTIFICATION_PLANE_ENABLED must be true"
+      "MOLLIE_BILLING_DRAIN_ENABLED must be true"
     );
   });
 
@@ -151,6 +161,7 @@ describe("Mollie configuration", () => {
   it.each([
     "MOLLIE_BILLING_ENABLED",
     "MOLLIE_LIVE_BILLING_ENABLED",
+    "MOLLIE_BILLING_DRAIN_ENABLED",
     "MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED",
     "AI_ANSWER_FINALIZATION_DRAIN_ENABLED",
     "AI_ANSWER_QUOTA_PREFLIGHT_ENABLED",
@@ -167,6 +178,7 @@ describe("Mollie configuration", () => {
 
   it("rejects checkout until paid entitlements are independently enforced", () => {
     process.env.MOLLIE_BILLING_ENABLED = "true";
+    process.env.MOLLIE_BILLING_DRAIN_ENABLED = "true";
     delete process.env.MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED;
 
     expect(() => assertMollieBillingEnabled()).toThrow(
@@ -207,6 +219,7 @@ describe("Mollie configuration", () => {
       liveBillingEnabled: false,
     });
     process.env.MOLLIE_BILLING_ENABLED = "true";
+    process.env.MOLLIE_BILLING_DRAIN_ENABLED = "true";
     expect(() => assertMollieBillingEnabled()).toThrow(
       "Mollie live billing is disabled"
     );

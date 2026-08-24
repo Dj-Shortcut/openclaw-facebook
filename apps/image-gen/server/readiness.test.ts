@@ -15,6 +15,7 @@ import { bindTestHttpServer } from "./testHttpServer";
 const READINESS_ENV_KEYS = [
   "NODE_ENV",
   "MOLLIE_BILLING_ENABLED",
+  "MOLLIE_BILLING_DRAIN_ENABLED",
   "MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED",
   "AI_ANSWER_FINALIZATION_DRAIN_ENABLED",
   "AI_ANSWER_QUOTA_PREFLIGHT_ENABLED",
@@ -104,6 +105,7 @@ describe("readiness", () => {
 
   it("fails the Mollie readiness check when billing is enabled but unconfigured", () => {
     vi.stubEnv("MOLLIE_BILLING_ENABLED", "true");
+    vi.stubEnv("MOLLIE_BILLING_DRAIN_ENABLED", "true");
     vi.stubEnv("MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED", "true");
     vi.stubEnv("PORTAL_HANDOFF_TOKEN_SECRET", "x".repeat(32));
     delete process.env.MOLLIE_API_KEY;
@@ -117,6 +119,7 @@ describe("readiness", () => {
   it("allows database-driven multi-tenant workers without a pilot workspace", () => {
     vi.stubEnv("NODE_ENV", "test");
     vi.stubEnv("MOLLIE_BILLING_ENABLED", "true");
+    vi.stubEnv("MOLLIE_BILLING_DRAIN_ENABLED", "true");
     vi.stubEnv("MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED", "true");
     vi.stubEnv("PORTAL_HANDOFF_TOKEN_SECRET", "x".repeat(32));
     vi.stubEnv("MOLLIE_API_KEY", "test_example123");
@@ -138,6 +141,7 @@ describe("readiness", () => {
 
   it("fails rate-limiter readiness when Mollie billing has no shared Redis", async () => {
     vi.stubEnv("MOLLIE_BILLING_ENABLED", "true");
+    vi.stubEnv("MOLLIE_BILLING_DRAIN_ENABLED", "true");
     delete process.env.REDIS_URL;
     const rateLimiterCheck = buildRuntimeReadinessChecks().find(
       check => check.name === "http_rate_limiter"
@@ -176,6 +180,7 @@ describe("readiness", () => {
   it("runs offline Mollie preflight without runtime-heartbeat workers", async () => {
     for (const [name, value] of Object.entries({
       MOLLIE_BILLING_ENABLED: "false",
+      MOLLIE_BILLING_DRAIN_ENABLED: "false",
       MOLLIE_BILLING_PREFLIGHT_ENABLED: "true",
       MOLLIE_LIVE_BILLING_ENABLED: "false",
       MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED: "false",

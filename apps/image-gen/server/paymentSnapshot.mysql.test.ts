@@ -140,6 +140,7 @@ suite("payment snapshot MySQL concurrency", () => {
       ...originalEnv,
       NODE_ENV: "test",
       MOLLIE_BILLING_ENABLED: "true",
+      MOLLIE_BILLING_DRAIN_ENABLED: "true",
       MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED: "true",
       MOLLIE_API_KEY: "test_localfixture",
       MOLLIE_MODE: "test",

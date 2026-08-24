@@ -2,7 +2,7 @@ import type express from "express";
 import { ensureRedisReady, getRedisClient, isRedisEnabled } from "./redis";
 import {
   getMollieWebhookPath,
-  isMollieBillingEnabled,
+  isMollieBillingDrainEnabled,
 } from "./billing/config";
 
 const DEFAULT_WINDOW_MS = 60_000;
@@ -62,7 +62,7 @@ export function shouldSkipHttpRateLimit(req: express.Request): boolean {
     req.path === "/health" ||
     req.path === "/healthz" ||
     req.path === "/readyz" ||
-    (isMollieBillingEnabled() &&
+    (isMollieBillingDrainEnabled() &&
       req.method === "POST" &&
       req.path === getMollieWebhookPath())
   );
@@ -99,7 +99,7 @@ export function createGlobalHttpRateLimiter(): express.RequestHandler {
 async function applyRateLimit(
   req: express.Request,
   res: express.Response,
-  next: express.NextFunction,
+  next: express.NextFunction
 ): Promise<void> {
   try {
     const now = Date.now();
@@ -124,7 +124,10 @@ async function applyRateLimit(
       res.setHeader("X-RateLimit-Reset", String(Math.ceil(resetAt / 1000)));
 
       if (count > maxRequests) {
-        const retryAfterSeconds = Math.max(1, Math.ceil((resetAt - now) / 1000));
+        const retryAfterSeconds = Math.max(
+          1,
+          Math.ceil((resetAt - now) / 1000)
+        );
         res.setHeader("Retry-After", String(retryAfterSeconds));
         res.status(429).json({
           error: "Too Many Requests",
@@ -154,10 +157,16 @@ async function applyRateLimit(
     const remaining = Math.max(0, maxRequests - current.count);
     res.setHeader("X-RateLimit-Limit", String(maxRequests));
     res.setHeader("X-RateLimit-Remaining", String(remaining));
-    res.setHeader("X-RateLimit-Reset", String(Math.ceil(current.resetAt / 1000)));
+    res.setHeader(
+      "X-RateLimit-Reset",
+      String(Math.ceil(current.resetAt / 1000))
+    );
 
     if (current.count > maxRequests) {
-      const retryAfterSeconds = Math.max(1, Math.ceil((current.resetAt - now) / 1000));
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil((current.resetAt - now) / 1000)
+      );
       res.setHeader("Retry-After", String(retryAfterSeconds));
       res.status(429).json({
         error: "Too Many Requests",
@@ -173,7 +182,7 @@ async function applyRateLimit(
 }
 
 export async function ensureHttpRateLimiterReady(): Promise<void> {
-  if (isMollieBillingEnabled() && !isRedisEnabled()) {
+  if (isMollieBillingDrainEnabled() && !isRedisEnabled()) {
     throw new Error("Mollie webhook rate limiting requires Redis");
   }
   await ensureRedisReady();

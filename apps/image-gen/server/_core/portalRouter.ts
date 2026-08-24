@@ -30,7 +30,11 @@ import {
   getBillingPlan,
   listPublicBillingPlans,
 } from "./billing/catalog";
-import { getMollieConfig, isMollieBillingEnabled } from "./billing/config";
+import {
+  getConfiguredBillingMode,
+  isMollieBillingDrainEnabled,
+  isMollieBillingEnabled,
+} from "./billing/config";
 import { safeBillingErrorCode } from "./billing/errorCode";
 import { getWorkspaceBillingSummary } from "./billing/subscriptionStore";
 import { listWorkspaceBillingNotifications } from "./billing/billingNotificationReceiverWorker";
@@ -332,7 +336,7 @@ export const portalRouter = router({
         );
         const includePayments =
           membership.role === "owner" || membership.role === "admin";
-        if (!isMollieBillingEnabled()) {
+        if (!isMollieBillingDrainEnabled()) {
           return {
             mode: null,
             subscription: null,
@@ -344,10 +348,10 @@ export const portalRouter = router({
             b2bCheckoutEnabled: false,
           };
         }
-        const config = getMollieConfig();
+        const mode = getConfiguredBillingMode();
         const summary = await getWorkspaceBillingSummary(
           input.workspaceId,
-          config.mode,
+          mode,
           { includePayments }
         );
         const notifications = await listWorkspaceBillingNotifications({

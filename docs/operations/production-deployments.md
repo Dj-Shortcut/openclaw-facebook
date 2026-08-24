@@ -196,6 +196,12 @@ before production approval or any Fly mutation.
    both prompt-first generation and a source-photo edit while confirming quota
    enforcement remains active.
 
+Image-gen keeps `/healthz` as its liveness diagnostic and also configures
+`/readyz` as a Fly service check for traffic readiness. Operational billing
+therefore needs its initial scheduler heartbeats within the 45-second readiness
+grace; a missing database, schema, lane or heartbeat keeps the Machine out of
+service. The external uptime workflow checks both endpoints independently.
+
 ### Storage-proxy immutable release
 
 The storage proxy is an independent production app. Never build or deploy it

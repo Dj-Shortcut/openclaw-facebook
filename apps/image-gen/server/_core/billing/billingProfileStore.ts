@@ -22,10 +22,60 @@ export class BillingProfileEligibilityError extends Error {
   }
 }
 
+export type BillingProfileEligibilitySnapshot = Readonly<{
+  countryCode: string;
+  customerType: string;
+  verificationStatus: string;
+  verificationMethod: string | null;
+  evidenceReferenceHash: string | null;
+  verifiedAt: Date | null;
+  verificationExpiresAt: Date | null;
+  revokedAt: Date | null;
+  verifiedByUserId: number | null;
+  peppolReady: boolean;
+  eligibilityVersion: number;
+}>;
+
+export function getBillingProfileEligibilityFailure(
+  profile: BillingProfileEligibilitySnapshot,
+  now = new Date()
+):
+  | "billing_profile_unverified"
+  | "billing_country_not_eligible"
+  | "b2b_checkout_disabled"
+  | null {
+  if (
+    profile.verificationStatus !== "verified" ||
+    profile.verificationMethod !== "manual_legal_review" ||
+    !profile.evidenceReferenceHash ||
+    !(profile.verifiedAt instanceof Date) ||
+    !Number.isSafeInteger(profile.verifiedByUserId) ||
+    Number(profile.verifiedByUserId) <= 0 ||
+    profile.revokedAt !== null ||
+    !(profile.verificationExpiresAt instanceof Date) ||
+    profile.verifiedAt.getTime() > now.getTime() ||
+    profile.verificationExpiresAt.getTime() <= now.getTime() ||
+    !Number.isSafeInteger(profile.eligibilityVersion) ||
+    profile.eligibilityVersion <= 0
+  ) {
+    return "billing_profile_unverified";
+  }
+  if (profile.countryCode !== "BE") {
+    return "billing_country_not_eligible";
+  }
+  if (profile.customerType !== "consumer" || profile.peppolReady) {
+    return "b2b_checkout_disabled";
+  }
+  return null;
+}
+
 export async function getWorkspaceBillingProfileAttestationStatus(
   workspaceId: number,
   now = new Date()
-): Promise<{ eligibilityVersion: number; peppolAttestationActive: boolean }> {
+): Promise<{
+  eligibilityVersion: number;
+  consumerAttestationActive: boolean;
+}> {
   if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) {
     throw new BillingProfileEligibilityError(
       "billing_profile_invalid_workspace"
@@ -35,6 +85,7 @@ export async function getWorkspaceBillingProfileAttestationStatus(
   const rows = await database
     .select({
       workspaceId: workspaceBillingProfiles.workspaceId,
+      countryCode: workspaceBillingProfiles.countryCode,
       customerType: workspaceBillingProfiles.customerType,
       verificationStatus: workspaceBillingProfiles.verificationStatus,
       verificationMethod: workspaceBillingProfiles.verificationMethod,
@@ -50,7 +101,7 @@ export async function getWorkspaceBillingProfileAttestationStatus(
     .where(eq(workspaceBillingProfiles.workspaceId, workspaceId))
     .limit(2);
   if (rows.length === 0) {
-    return { eligibilityVersion: 0, peppolAttestationActive: false };
+    return { eligibilityVersion: 0, consumerAttestationActive: false };
   }
   if (rows.length !== 1 || rows[0].workspaceId !== workspaceId) {
     throw new BillingProfileEligibilityError("billing_profile_tenant_boundary");
@@ -58,18 +109,8 @@ export async function getWorkspaceBillingProfileAttestationStatus(
   const profile = rows[0];
   return {
     eligibilityVersion: profile.eligibilityVersion,
-    peppolAttestationActive:
-      profile.verificationStatus === "verified" &&
-      profile.customerType === "business" &&
-      Boolean(profile.peppolReady) &&
-      Boolean(profile.verificationMethod) &&
-      Boolean(profile.evidenceReferenceHash) &&
-      Boolean(profile.verifiedByUserId) &&
-      profile.revokedAt === null &&
-      profile.verifiedAt !== null &&
-      profile.verifiedAt.getTime() <= now.getTime() &&
-      profile.verificationExpiresAt !== null &&
-      profile.verificationExpiresAt.getTime() > now.getTime(),
+    consumerAttestationActive:
+      getBillingProfileEligibilityFailure(profile, now) === null,
   };
 }
 
@@ -108,30 +149,9 @@ export async function assertWorkspaceBillingProfileEligible(
   if (profile.workspaceId !== workspaceId) {
     throw new BillingProfileEligibilityError("billing_profile_tenant_boundary");
   }
-  if (
-    profile.verificationStatus !== "verified" ||
-    !profile.verificationMethod ||
-    !profile.evidenceReferenceHash ||
-    !profile.verifiedAt ||
-    !profile.verifiedByUserId ||
-    profile.revokedAt ||
-    !profile.verificationExpiresAt ||
-    profile.verifiedAt.getTime() > now.getTime() ||
-    profile.verificationExpiresAt.getTime() <= now.getTime()
-  ) {
-    throw new BillingProfileEligibilityError("billing_profile_unverified");
-  }
-  if (profile.countryCode !== "BE") {
-    throw new BillingProfileEligibilityError("billing_country_not_eligible");
-  }
-  if (profile.customerType === "business" || profile.peppolReady) {
-    throw new BillingProfileEligibilityError("b2b_checkout_disabled");
-  }
-  if (
-    !Number.isSafeInteger(profile.eligibilityVersion) ||
-    profile.eligibilityVersion <= 0
-  ) {
-    throw new BillingProfileEligibilityError("billing_profile_unverified");
+  const failure = getBillingProfileEligibilityFailure(profile, now);
+  if (failure) {
+    throw new BillingProfileEligibilityError(failure);
   }
   return { eligibilityVersion: profile.eligibilityVersion };
 }
@@ -141,12 +161,8 @@ export async function attestWorkspaceBillingProfile(input: {
   workspaceId: number;
   actorUserId: number;
   expectedVersion: number;
-  countryCode: string;
-  customerType: "consumer" | "business";
   evidenceReference: string;
-  verificationMethod: "manual_legal_review" | "provider_attestation";
   expiresAt: Date;
-  peppolReady?: boolean;
   now?: Date;
 }): Promise<{ eligibilityVersion: number }> {
   const now = input.now ?? new Date();
@@ -163,7 +179,6 @@ export async function attestWorkspaceBillingProfile(input: {
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       input.requestId
     ) ||
-    !/^[A-Z]{2}$/.test(input.countryCode) ||
     !/^[A-Za-z0-9][A-Za-z0-9._:/-]{7,255}$/.test(evidenceReference) ||
     !evidenceSecret ||
     evidenceSecret.length < 32 ||
@@ -187,12 +202,12 @@ export async function attestWorkspaceBillingProfile(input: {
         workspaceId: input.workspaceId,
         actorUserId: input.actorUserId,
         expectedVersion: input.expectedVersion,
-        countryCode: input.countryCode,
-        customerType: input.customerType,
+        countryCode: "BE",
+        customerType: "consumer",
         evidenceReferenceHash,
-        verificationMethod: input.verificationMethod,
+        verificationMethod: "manual_legal_review",
         expiresAt: input.expiresAt.toISOString(),
-        peppolReady: input.peppolReady ?? false,
+        peppolReady: false,
       })
     )
     .digest("hex");
@@ -222,8 +237,8 @@ export async function attestWorkspaceBillingProfile(input: {
       .insert(workspaceBillingProfiles)
       .values({
         workspaceId: input.workspaceId,
-        countryCode: input.countryCode,
-        customerType: input.customerType,
+        countryCode: "BE",
+        customerType: "consumer",
         verificationStatus: "unverified",
         peppolReady: false,
         eligibilityVersion: 0,
@@ -270,16 +285,16 @@ export async function attestWorkspaceBillingProfile(input: {
     await tx
       .update(workspaceBillingProfiles)
       .set({
-        countryCode: input.countryCode,
-        customerType: input.customerType,
+        countryCode: "BE",
+        customerType: "consumer",
         verificationStatus: "verified",
-        verificationMethod: input.verificationMethod,
+        verificationMethod: "manual_legal_review",
         evidenceReferenceHash,
         verifiedAt: now,
         verificationExpiresAt: input.expiresAt,
         revokedAt: null,
         verifiedByUserId: input.actorUserId,
-        peppolReady: input.peppolReady ?? false,
+        peppolReady: false,
         eligibilityVersion: resultingVersion,
       })
       .where(
@@ -296,7 +311,7 @@ export async function attestWorkspaceBillingProfile(input: {
       expectedVersion: input.expectedVersion,
       resultingVersion,
       requestFingerprint,
-      reason: input.verificationMethod,
+      reason: "manual_legal_review",
     });
     await tx.insert(auditLog).values({
       workspaceId: input.workspaceId,
@@ -304,7 +319,10 @@ export async function attestWorkspaceBillingProfile(input: {
       event: "billing_profile.attested",
       metadata: {
         actorKind: "platform_admin",
-        verificationMethod: input.verificationMethod,
+        countryCode: "BE",
+        customerType: "consumer",
+        verificationMethod: "manual_legal_review",
+        peppolReady: false,
         evidenceReferenceStoredAsHash: true,
         requestId: input.requestId,
         oldVersion: input.expectedVersion,

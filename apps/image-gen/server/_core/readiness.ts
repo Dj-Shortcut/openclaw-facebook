@@ -17,11 +17,14 @@ import {
   assertMollieNonSecretLaunchConfig,
   assertTenantBillingWorkerConfigured,
   getConfiguredBillingMode,
+  getMollieConfig,
   getMollieReadinessPhase,
+  isMollieBillingDrainEnabled,
   isMollieBillingPreflightEnabled,
   isMollieBillingEnabled,
   isMollieEntitlementEnforcementEnabled,
 } from "./billing/config";
+import { assertMollieBillingDrainLifecycle } from "./billing/billingDrainLifecycle";
 import {
   assertBillingNotificationConfig,
   isBillingNotificationPlaneEnabled,
@@ -135,8 +138,15 @@ export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
         if (isMollieBillingEnabled()) {
           assertMollieBillingEnabled();
           assertTenantBillingWorkerConfigured();
+        } else if (isMollieBillingDrainEnabled()) {
+          void getMollieConfig();
+          assertTenantBillingWorkerConfigured();
         }
       },
+    },
+    {
+      name: "mollie_billing_drain_lifecycle",
+      check: assertMollieBillingDrainLifecycle,
     },
     {
       name: "billing_notification_plane",

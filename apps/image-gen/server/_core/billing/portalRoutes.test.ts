@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   authenticatePortalRequest: vi.fn(),
-  getMollieConfig: vi.fn(),
+  getBillingSupportEmail: vi.fn(),
+  getConfiguredBillingMode: vi.fn(),
   getWorkspaceAccountingHighWaterId: vi.fn(),
   getWorkspaceLedgerPayment: vi.fn(),
   getWorkspaceMembership: vi.fn(),
@@ -20,7 +21,8 @@ vi.mock("../portalAuth", () => ({
 }));
 
 vi.mock("./config", () => ({
-  getMollieConfig: mocks.getMollieConfig,
+  getBillingSupportEmail: mocks.getBillingSupportEmail,
+  getConfiguredBillingMode: mocks.getConfiguredBillingMode,
 }));
 
 vi.mock("./subscriptionStore", () => ({
@@ -141,10 +143,8 @@ describe("billing portal response caching", () => {
     mocks.authenticatePortalRequest.mockResolvedValue({ id: 7 });
     mocks.requirePortalWorkspace.mockResolvedValue({ id: 42 });
     mocks.getWorkspaceMembership.mockResolvedValue({ role: "owner" });
-    mocks.getMollieConfig.mockReturnValue({
-      mode: "test",
-      billingSupportEmail: "billing@leaderbot.test",
-    });
+    mocks.getConfiguredBillingMode.mockReturnValue("test");
+    mocks.getBillingSupportEmail.mockReturnValue("billing@leaderbot.test");
   });
 
   it("marks receipt and accounting CSV responses private and non-cacheable", async () => {
@@ -231,7 +231,8 @@ describe("billing portal response caching", () => {
       expect(response.body).toBe("Not found");
       expect(mocks.authenticatePortalRequest).toHaveBeenCalledOnce();
       expect(mocks.getWorkspaceMembership).toHaveBeenCalledWith(42, 7);
-      expect(mocks.getMollieConfig).not.toHaveBeenCalled();
+      expect(mocks.getConfiguredBillingMode).not.toHaveBeenCalled();
+      expect(mocks.getBillingSupportEmail).not.toHaveBeenCalled();
       expect(mocks.getWorkspaceLedgerPayment).not.toHaveBeenCalled();
     }
   );

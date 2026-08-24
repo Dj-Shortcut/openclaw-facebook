@@ -6,13 +6,14 @@ const mocks = vi.hoisted(() => ({
   formatAmountMinor: vi.fn(),
   getBillingPlan: vi.fn(),
   getBillingSummary: vi.fn(),
+  getConfiguredBillingMode: vi.fn(),
   getCheckoutReturnStatus: vi.fn(),
-  getMollieConfig: vi.fn(),
   getMollieLaunchCheck: vi.fn(),
   getWorkspaceById: vi.fn(),
   getWorkspaceMembership: vi.fn(),
   insertAuditLog: vi.fn(),
   isMollieBillingEnabled: vi.fn(),
+  isMollieBillingDrainEnabled: vi.fn(),
   listPublicBillingPlans: vi.fn(),
   listWorkspaceBillingNotifications: vi.fn(),
   safeLog: vi.fn(),
@@ -43,7 +44,8 @@ vi.mock("./_core/billing/catalog", () => ({
 }));
 
 vi.mock("./_core/billing/config", () => ({
-  getMollieConfig: mocks.getMollieConfig,
+  getConfiguredBillingMode: mocks.getConfiguredBillingMode,
+  isMollieBillingDrainEnabled: mocks.isMollieBillingDrainEnabled,
   isMollieBillingEnabled: mocks.isMollieBillingEnabled,
 }));
 
@@ -93,18 +95,20 @@ describe("portal router billing", () => {
       role: "owner",
     });
     mocks.getWorkspaceById.mockResolvedValue({ id: workspaceId });
-    mocks.getMollieConfig.mockReturnValue({ mode: "test" });
+    mocks.getConfiguredBillingMode.mockReturnValue("test");
     mocks.listWorkspaceBillingNotifications.mockResolvedValue([]);
     mocks.isMollieBillingEnabled.mockReturnValue(true);
+    mocks.isMollieBillingDrainEnabled.mockReturnValue(true);
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  it("keeps the admin launch check provider-silent while billing is off", async () => {
+  it("keeps the admin launch check provider-silent during drain-only mode", async () => {
     const adminUser = { ...user, role: "admin" as const };
     mocks.isMollieBillingEnabled.mockReturnValue(false);
+    mocks.isMollieBillingDrainEnabled.mockReturnValue(true);
     mocks.getMollieLaunchCheck.mockResolvedValue({
       ok: true,
       phase: "offline",
@@ -155,6 +159,37 @@ describe("portal router billing", () => {
       plan: { amount: "29.00" },
     });
     expect(mocks.formatAmountMinor).toHaveBeenCalledWith(2_900);
+    expect(mocks.getBillingSummary).toHaveBeenCalledWith(workspaceId, "test", {
+      includePayments: true,
+    });
+  });
+
+  it("keeps local billing history visible while commercial checkout is off", async () => {
+    mocks.isMollieBillingEnabled.mockReturnValue(false);
+    mocks.isMollieBillingDrainEnabled.mockReturnValue(true);
+    mocks.listPublicBillingPlans.mockReturnValue([{ code: "hidden" }]);
+    mocks.getBillingSummary.mockResolvedValue({
+      subscription: null,
+      entitlement: { planCode: "startpilot_once_v1", status: "active" },
+      payments: [{ molliePaymentId: "tr_existing" }],
+    });
+    mocks.getBillingPlan.mockReturnValue({
+      code: "startpilot_once_v1",
+      publicName: "Leaderbot Startpilot",
+      amountMinor: 1_900,
+      currency: "EUR",
+      interval: "30 days",
+    });
+    mocks.formatAmountMinor.mockReturnValue("19.00");
+
+    await expect(createCaller().billing.plans()).resolves.toEqual([]);
+    await expect(
+      createCaller().billing.summary({ workspaceId })
+    ).resolves.toMatchObject({
+      entitlement: { status: "active" },
+      payments: [{ molliePaymentId: "tr_existing" }],
+    });
+    expect(mocks.listPublicBillingPlans).not.toHaveBeenCalled();
     expect(mocks.getBillingSummary).toHaveBeenCalledWith(workspaceId, "test", {
       includePayments: true,
     });

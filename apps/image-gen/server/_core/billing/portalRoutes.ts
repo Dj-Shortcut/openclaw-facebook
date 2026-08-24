@@ -5,7 +5,7 @@ import {
   requirePortalWorkspace,
 } from "../portalAuth";
 import { escapeHtml } from "../html";
-import { getMollieConfig } from "./config";
+import { getBillingSupportEmail, getConfiguredBillingMode } from "./config";
 import {
   getWorkspaceLedgerPayment,
   getWorkspaceAccountingHighWaterId,
@@ -31,17 +31,17 @@ export function registerBillingPortalRoutes(app: Express): void {
         res.status(404).send("Not found");
         return;
       }
-      const config = getMollieConfig();
+      const mode = getConfiguredBillingMode();
       const payment = await getWorkspaceLedgerPayment(
         access.workspaceId,
-        config.mode,
+        mode,
         paymentId
       );
       if (!payment) {
         res.status(404).send("Not found");
         return;
       }
-      const supportEmail = config.billingSupportEmail;
+      const supportEmail = getBillingSupportEmail();
       res
         .status(200)
         .type("html")
@@ -55,7 +55,7 @@ export function registerBillingPortalRoutes(app: Express): void {
     asyncRoute(async (req, res) => {
       const access = await requireBillingManagerAccess(req, res);
       if (!access) return;
-      const config = getMollieConfig();
+      const mode = getConfiguredBillingMode();
       const range = parseAccountingRange(req);
       if (!range) {
         res.status(400).json({ error: "invalid accounting export range" });
@@ -63,7 +63,7 @@ export function registerBillingPortalRoutes(app: Express): void {
       }
       const streamInput = {
         workspaceId: access.workspaceId,
-        mode: config.mode,
+        mode,
         from: range.from,
         until: range.until,
       } as const;
@@ -78,7 +78,7 @@ export function registerBillingPortalRoutes(app: Express): void {
       res.setHeader("Cache-Control", "private, no-store, max-age=0");
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="leaderbot-billing-${config.mode}-${access.workspaceId}-${range.fromText}-${range.untilText}.csv"`
+        `attachment; filename="leaderbot-billing-${mode}-${access.workspaceId}-${range.fromText}-${range.untilText}.csv"`
       );
       res.status(200);
       try {
@@ -91,7 +91,7 @@ export function registerBillingPortalRoutes(app: Express): void {
         safeLog("billing_accounting_export_stream_failed", {
           level: "error",
           workspaceId: access.workspaceId,
-          mode: config.mode,
+          mode,
           errorCode: error instanceof Error ? error.name : "UnknownError",
         });
         if (!res.destroyed)

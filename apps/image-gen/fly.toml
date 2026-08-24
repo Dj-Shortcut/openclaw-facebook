@@ -46,6 +46,7 @@ kill_timeout = 300
   MESSENGER_USER_DAILY_SPEND_CAP_USD = "2.00"
   MOLLIE_ACCOUNTING_IMPORT_ENABLED = "false"
   MOLLIE_BILLING_ENABLED = "false"
+  MOLLIE_BILLING_DRAIN_ENABLED = "false"
   MOLLIE_BILLING_PREFLIGHT_ENABLED = "false"
   MOLLIE_BILLING_SCHEDULER_MODE = "pilot_pin"
   MOLLIE_BILLING_WORKER_WORKSPACE_ID = "1"
@@ -82,3 +83,10 @@ kill_timeout = 300
     grace_period = "10s"
     method = "GET"
     path = "/healthz"
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "45s"
+    method = "GET"
+    path = "/readyz"
