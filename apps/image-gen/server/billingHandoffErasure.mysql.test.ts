@@ -526,10 +526,24 @@ suite("billing handoff privacy erasure", () => {
 
       expect(
         await database
-          .select({ intentId: billingIntents.intentId })
+          .select({
+            intentId: billingIntents.intentId,
+            senderKey: billingIntents.messengerSenderUserKey,
+            pageId: billingIntents.messengerPageId,
+            channelConnectionId: billingIntents.messengerChannelConnectionId,
+            privacyEpoch: billingIntents.messengerPrivacyEpoch,
+          })
           .from(billingIntents)
           .where(eq(billingIntents.intentId, intentId))
-      ).toHaveLength(0);
+      ).toEqual([
+        {
+          intentId,
+          senderKey: null,
+          pageId: null,
+          channelConnectionId: null,
+          privacyEpoch: null,
+        },
+      ]);
       expect(
         await database
           .select({ id: portalHandoffTokens.id })
