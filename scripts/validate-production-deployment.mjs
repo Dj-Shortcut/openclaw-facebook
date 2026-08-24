@@ -1721,6 +1721,10 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     ["--source-digest", "must bind provenance to the reviewed source SHA"],
     ["--source-ref refs/heads/main", "must bind provenance to reviewed main"],
     [
+      "--format json",
+      "must request JSON before querying bridge attestation predicates",
+    ],
+    [
       "--reviewed-artifact-kind",
       "must enforce reviewed runtime and migration-bridge artifact roles",
     ],
@@ -2749,6 +2753,10 @@ function validateSchemaTransitionWorkflow(rootDir) {
     ["gh attestation verify", "must verify trusted bridge provenance"],
     ["--source-digest", "must bind the exact bridge source"],
     ["--signer-workflow", "must bind the trusted builder workflow"],
+    [
+      "--format json",
+      "must request JSON before querying the bridge attestation predicate",
+    ],
     ["--live image-gen", "must prove all app and worker Machines"],
     [
       "FLY_PRODUCTION_READONLY_TOKEN",

@@ -464,6 +464,7 @@ jobs:
               --source-ref refs/heads/main \
               --predicate-type "$predicate_type" \
               --deny-self-hosted-runners \
+              --format json \
               --jq '.[0].verificationResult.statement.predicate.baseImage')"
             test "$actual_base" = "$expected_base"
           fi
@@ -547,6 +548,7 @@ jobs:
               --source-ref refs/heads/main \
               --predicate-type "$predicate_type" \
               --deny-self-hosted-runners \
+              --format json \
               --jq '.[0].verificationResult.statement.predicate.baseImage')"
             test "$actual_base" = "$expected_base"
           fi
