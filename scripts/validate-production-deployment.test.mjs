@@ -1961,6 +1961,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires every restored base-table check to report status OK", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      'test "$invalid" = 0',
+      "true",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must fail unless every restored base-table check reports status OK",
+    );
+  });
+
   it("keeps the restore-probe outer timeout above all bounded subphases", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
