@@ -561,10 +561,15 @@ jobs:
           printf '%s\n' "$rollback_identity" > "$RUNNER_TEMP/leaderbot-release/rollback-identity.txt"
           fly config validate --strict \
             --config "$RUNNER_TEMP/leaderbot-release/before.fly.toml"
+          bootstrap_drift_args=()
+          if [[ "$rollback_kind" = "legacy-bootstrap" && "$rollback_identity" = "none" ]]; then
+            bootstrap_drift_args+=(--allow-first-trusted-bootstrap-drift)
+          fi
           node scripts/validate-production-deployment.mjs \
             --verify-restored-release image-gen "$rollback_image" \
             "$RUNNER_TEMP/leaderbot-release/before.fly.toml" \
-            --expected-deployment-identity "$rollback_identity"
+            --expected-deployment-identity "$rollback_identity" \
+            "${bootstrap_drift_args[@]}"
 
       - name: Verify settled image-gen predecessor
         timeout-minutes: 3

@@ -578,6 +578,67 @@ function imageGenFlyState(image) {
   };
 }
 
+function imageGenLegacyBootstrapFlyState(image, mutate = () => {}) {
+  const live = imageGenLiveConfig("none", { rollback: true });
+  live.http_service.auto_stop_machines = false;
+  const machines = [
+    {
+      id: "legacy-app-ams",
+      state: "started",
+      region: "ams",
+      image_ref: immutableImageRef(image),
+      config: imageGenRollbackMachineConfig(image, "app"),
+    },
+    {
+      id: "legacy-app-fra",
+      state: "started",
+      region: "fra",
+      image_ref: immutableImageRef(image),
+      config: imageGenRollbackMachineConfig(image, "app"),
+    },
+    {
+      id: "legacy-worker-primary",
+      state: "started",
+      region: "ams",
+      image_ref: immutableImageRef(image),
+      config: imageGenRollbackMachineConfig(image, "worker"),
+    },
+    {
+      id: "legacy-worker-standby",
+      state: "stopped",
+      region: "ams",
+      image_ref: immutableImageRef(image),
+      config: {
+        ...imageGenRollbackMachineConfig(image, "worker"),
+        standbys: ["legacy-worker-primary"],
+      },
+    },
+  ];
+  for (const machine of machines) {
+    machine.config.metadata.fly_builder_id = "a".repeat(14);
+    machine.config.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD = "50.00";
+    machine.config.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.30";
+  }
+  const scale = [
+    { Process: "app", Count: 2, CPUKind: "shared", CPUs: 1, Memory: 256 },
+    {
+      Process: "worker",
+      Count: 2,
+      CPUKind: "shared",
+      CPUs: 1,
+      Memory: 256,
+    },
+  ];
+  mutate({ live, machines, scale });
+  return (args) => {
+    const command = args.slice(0, 2).join(" ");
+    if (command === "config show") return JSON.stringify(live);
+    if (command === "machine list") return JSON.stringify(machines);
+    if (command === "scale show") return JSON.stringify(scale);
+    throw new Error(`Unexpected fly command: ${args.join(" ")}`);
+  };
+}
+
 function imageGenLiveConfig(identity, { rollback = false } = {}) {
   const configPath = rollback
     ? "deploy/production/rollback-configs/image-gen-28d862568aa3.toml"
@@ -3944,6 +4005,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires the protected deploy to constrain first-bootstrap drift", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      "--allow-first-trusted-bootstrap-drift",
+      "--allow-unreviewed-bootstrap-drift",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must narrowly reconcile the exact legacy image-gen predecessor",
+    );
+  });
+
   it("requires the canonical storage-proxy script to carry an allowlisted digest", () => {
     const root = createRepositoryFixture();
     const packagePath = path.join(root, "package.json");
@@ -6132,6 +6207,71 @@ describe("settled production identity", () => {
       ]),
     );
   });
+
+  it("accepts only the exact known image-gen legacy predecessor for the first trusted bootstrap", async () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const { legacyImage } = stageImageGenBridge(manifest);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    await expect(
+      checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly: imageGenLegacyBootstrapFlyState(legacyImage),
+      }),
+    ).resolves.toMatchObject({
+      identity: "none",
+      expectedImage: legacyImage,
+      blockingErrors: [],
+      reconcilableDrift: [],
+      acceptedBootstrapDrift: expect.arrayContaining([
+        expect.stringContaining("legacy cost limits will be tightened"),
+        expect.stringContaining("legacy worker standby will be reconciled"),
+      ]),
+    });
+  });
+
+  it.each([
+    [
+      "an extra environment change",
+      ({ machines }) => {
+        machines[0].config.env.MOLLIE_BILLING_ENABLED = "true";
+      },
+      "environment differs",
+    ],
+    [
+      "a mounted volume",
+      ({ machines }) => {
+        machines[0].config.mounts = [{ volume: "unknown", path: "/data" }];
+      },
+      "mounts differ",
+    ],
+    [
+      "a malformed standby",
+      ({ machines }) => {
+        machines[3].config.standbys = ["missing-worker"];
+      },
+      "invalid legacy standby binding",
+    ],
+  ])(
+    "rejects first-bootstrap drift with %s",
+    async (_label, mutate, message) => {
+      const root = createRepositoryFixture();
+      const manifestPath = path.join(root, "deploy/production/apps.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      const { legacyImage } = stageImageGenBridge(manifest);
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = await checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly: imageGenLegacyBootstrapFlyState(legacyImage, mutate),
+      });
+      expect(result.blockingErrors).toEqual(
+        expect.arrayContaining([expect.stringContaining(message)]),
+      );
+    },
+  );
 
   it("validates the exact reviewed live rollback image and config during upgrade preflight", async () => {
     const root = createRepositoryFixture();

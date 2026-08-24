@@ -1729,6 +1729,10 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       "must narrowly validate the pre-expand bootstrap rollback exception",
     ],
     [
+      "--allow-first-trusted-bootstrap-drift",
+      "must narrowly reconcile the exact legacy image-gen predecessor",
+    ],
+    [
       "FLY_IMAGE_GEN_REVIEWED_IMAGE: ${{ inputs.rollback_image }}",
       "must pass the reviewed manifest input to the canonical image-gen deploy command",
     ],
@@ -6051,6 +6055,8 @@ export function checkLiveFlyDrift(target, options = {}) {
   const allowScaleCountDrift = options.allowScaleCountDrift === true;
   const allowInterruptedScaleCountDrift =
     options.allowInterruptedScaleCountDrift === true;
+  const allowFirstTrustedBootstrapDrift =
+    options.allowFirstTrustedBootstrapDrift === true;
   const capturedPriorImage = options.capturedPriorImage;
   if (
     allowInterruptedScaleCountDrift &&
@@ -6158,6 +6164,28 @@ export function checkLiveFlyDrift(target, options = {}) {
   ) {
     fail("expected deployment identity is invalid");
   }
+  if (allowFirstTrustedBootstrapDrift) {
+    const transition = app.databaseSchemaTransition;
+    const reviewedRollbackConfig = getReviewedRollbackConfig(
+      target,
+      options.expectedImage,
+      rootDir,
+    );
+    if (
+      target !== "image-gen" ||
+      expectedDeploymentIdentity !== "none" ||
+      transition?.state !== "bridge_reviewed" ||
+      options.expectedImage !== transition.legacyBaseImage ||
+      !allowsFirstTrustedBootstrap(target, app, options.expectedImage) ||
+      path.resolve(rootDir, selectedConfigPath) !==
+        path.resolve(rootDir, reviewedRollbackConfig)
+    ) {
+      fail(
+        "first trusted bootstrap drift requires the exact reviewed image-gen legacy predecessor",
+      );
+    }
+  }
+  const acceptedBootstrapDrift = [];
   const liveEnv = { ...(live.env ?? {}) };
   const actualDeploymentIdentity =
     liveEnv.LEADERBOT_DEPLOYMENT_IDENTITY ?? "none";
@@ -6240,9 +6268,14 @@ export function checkLiveFlyDrift(target, options = {}) {
     "auto_start_machines",
     "min_machines_running",
   ]) {
+    const normalizedAutoStopMatch =
+      key === "auto_stop_machines" &&
+      new Set([false, "off"]).has(live.http_service?.[key]) &&
+      new Set([false, "off"]).has(expectedHttpService[key]);
     if (
       key in expectedHttpService &&
-      live.http_service?.[key] !== expectedHttpService[key]
+      live.http_service?.[key] !== expectedHttpService[key] &&
+      !normalizedAutoStopMatch
     ) {
       const drift = `http_service.${key}: expected ${JSON.stringify(expectedHttpService[key])}, got ${JSON.stringify(live.http_service?.[key])}`;
       (["internal_port", "force_https"].includes(key)
@@ -6336,9 +6369,21 @@ export function checkLiveFlyDrift(target, options = {}) {
         );
       }
     }
-    if (machine.region !== machineProfile.root.primary_region) {
+    const bootstrapRegionDrift =
+      allowFirstTrustedBootstrapDrift &&
+      metadata.fly_process_group === "app" &&
+      machineProfile.root.primary_region === "ams" &&
+      machine.region === "fra";
+    if (
+      machine.region !== machineProfile.root.primary_region &&
+      !bootstrapRegionDrift
+    ) {
       blockingErrors.push(
         `Machine ${machine.id} region differs from its exact reviewed release config`,
+      );
+    } else if (bootstrapRegionDrift) {
+      acceptedBootstrapDrift.push(
+        `Machine ${machine.id} legacy app region will be reconciled`,
       );
     }
     const allowedMachineConfigKeys = new Set([
@@ -6356,7 +6401,11 @@ export function checkLiveFlyDrift(target, options = {}) {
     ]);
     const unexpectedMachineConfigKeys = Object.keys(
       machine.config ?? {},
-    ).filter((key) => !allowedMachineConfigKeys.has(key));
+    ).filter(
+      (key) =>
+        !allowedMachineConfigKeys.has(key) &&
+        !(allowFirstTrustedBootstrapDrift && key === "standbys"),
+    );
     if (unexpectedMachineConfigKeys.length > 0) {
       blockingErrors.push(
         `Machine ${machine.id} has unreviewed MachineConfig fields: ${unexpectedMachineConfigKeys.sort().join(", ")}`,
@@ -6417,8 +6466,21 @@ export function checkLiveFlyDrift(target, options = {}) {
       "fly_previous_alloc",
       "fly_bluegreen_deployment_tag",
     ]);
-    if (Object.keys(metadata).some((key) => !allowedMetadataKeys.has(key))) {
+    const unexpectedMetadataKeys = Object.keys(metadata).filter(
+      (key) =>
+        !allowedMetadataKeys.has(key) &&
+        !(
+          allowFirstTrustedBootstrapDrift &&
+          key === "fly_builder_id" &&
+          /^[a-f0-9]{14}$/.test(String(metadata[key] ?? ""))
+        ),
+    );
+    if (unexpectedMetadataKeys.length > 0) {
       blockingErrors.push(`Machine ${machine.id} has unreviewed metadata`);
+    } else if (metadata.fly_builder_id != null) {
+      acceptedBootstrapDrift.push(
+        `Machine ${machine.id} legacy builder metadata will be replaced`,
+      );
     }
     if (
       metadata.fly_release_version != null &&
@@ -6496,12 +6558,35 @@ export function checkLiveFlyDrift(target, options = {}) {
           machineProfile.root.primary_region,
         );
       }
-      if (
-        JSON.stringify(sortedStringRecord(actualMachineEnv)) !==
-        JSON.stringify(sortedStringRecord(expectedMachineEnv))
-      ) {
+      const differingEnvironmentKeys = [
+        ...new Set([
+          ...Object.keys(actualMachineEnv),
+          ...Object.keys(expectedMachineEnv),
+        ]),
+      ]
+        .filter(
+          (key) =>
+            String(actualMachineEnv[key]) !== String(expectedMachineEnv[key]),
+        )
+        .sort();
+      const exactLegacyCostDrift =
+        allowFirstTrustedBootstrapDrift &&
+        JSON.stringify(differingEnvironmentKeys) ===
+          JSON.stringify([
+            "MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD",
+            "OPENAI_IMAGE_ESTIMATED_COST_USD",
+          ]) &&
+        actualMachineEnv.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD === "50.00" &&
+        actualMachineEnv.OPENAI_IMAGE_ESTIMATED_COST_USD === "0.30" &&
+        expectedMachineEnv.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD === "25.00" &&
+        expectedMachineEnv.OPENAI_IMAGE_ESTIMATED_COST_USD === "1.00";
+      if (differingEnvironmentKeys.length > 0 && !exactLegacyCostDrift) {
         blockingErrors.push(
           `Machine ${machine.id} environment differs from the exact reviewed process environment`,
+        );
+      } else if (exactLegacyCostDrift) {
+        acceptedBootstrapDrift.push(
+          `Machine ${machine.id} legacy cost limits will be tightened`,
         );
       }
 
@@ -6549,10 +6634,42 @@ export function checkLiveFlyDrift(target, options = {}) {
         );
       }
     }
+    const standbyTargets = machine.config?.standbys;
+    const validBootstrapStandby =
+      allowFirstTrustedBootstrapDrift &&
+      machine.state === "stopped" &&
+      metadata.fly_process_group === "worker" &&
+      Array.isArray(standbyTargets) &&
+      standbyTargets.length === 1 &&
+      machines.some(
+        (candidate) =>
+          candidate.id === standbyTargets[0] &&
+          candidate.state === "started" &&
+          candidate.config?.metadata?.fly_process_group === "worker" &&
+          immutableMachineImage(app, candidate, options.resolveMachineImage) ===
+            actualMachineImage,
+      );
+    if (
+      allowFirstTrustedBootstrapDrift &&
+      standbyTargets != null &&
+      !validBootstrapStandby
+    ) {
+      blockingErrors.push(
+        `Machine ${machine.id} has an invalid legacy standby binding`,
+      );
+    } else if (validBootstrapStandby) {
+      acceptedBootstrapDrift.push(
+        `Machine ${machine.id} legacy worker standby will be reconciled`,
+      );
+    }
     if (
       metadata.fly_process_group &&
       machine.state !== "started" &&
-      !(allowInterruptedScaleCountDrift || allowScaleCountDrift)
+      !(
+        allowInterruptedScaleCountDrift ||
+        allowScaleCountDrift ||
+        validBootstrapStandby
+      )
     ) {
       blockingErrors.push(
         `Machine ${machine.id} in ${metadata.fly_process_group} is not started`,
@@ -6630,10 +6747,14 @@ export function checkLiveFlyDrift(target, options = {}) {
     ).length;
     if (startedMachineCount !== desired.count) {
       const drift = `started Machines for ${process}: expected ${desired.count}, got ${startedMachineCount}`;
-      (allowScaleCountDrift || allowInterruptedScaleCountDrift
-        ? reconcilableDrift
-        : blockingErrors
-      ).push(drift);
+      if (allowFirstTrustedBootstrapDrift) {
+        acceptedBootstrapDrift.push(drift);
+      } else {
+        (allowScaleCountDrift || allowInterruptedScaleCountDrift
+          ? reconcilableDrift
+          : blockingErrors
+        ).push(drift);
+      }
     }
     const actual = scaleByProcess[process];
     if (!actual) {
@@ -6656,6 +6777,13 @@ export function checkLiveFlyDrift(target, options = {}) {
       memoryMb: actual.Memory,
     };
     if (
+      allowFirstTrustedBootstrapDrift &&
+      actualScale.count !== desired.count
+    ) {
+      acceptedBootstrapDrift.push(
+        `scale.${process}.count: expected ${JSON.stringify(desired.count)}, got ${JSON.stringify(actualScale.count)}`,
+      );
+    } else if (
       (allowScaleCountDrift || allowInterruptedScaleCountDrift) &&
       actualScale.count !== desired.count
     ) {
@@ -6713,7 +6841,13 @@ export function checkLiveFlyDrift(target, options = {}) {
     );
   }
 
-  return { target, app: app.app, reconcilableDrift, blockingErrors };
+  return {
+    target,
+    app: app.app,
+    reconcilableDrift,
+    blockingErrors,
+    acceptedBootstrapDrift,
+  };
 }
 
 export async function checkSettledLiveFlyDrift(target, options = {}) {
@@ -6859,6 +6993,12 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
       fail(`Unexpected uncached Fly read: ${args.join(" ")}`);
     return cachedOutputs.get(key);
   };
+  const reviewedLegacyConfig =
+    target === "image-gen" &&
+    identity === "none" &&
+    allowsFirstTrustedBootstrap(target, app, expectedImage)
+      ? getReviewedRollbackConfig(target, expectedImage, rootDir)
+      : null;
   const results = uniqueConfigPaths.map((configPath) =>
     checkLiveFlyDrift(target, {
       rootDir,
@@ -6866,6 +7006,10 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
       expectedImage,
       configPath,
       expectedDeploymentIdentity: identity,
+      allowFirstTrustedBootstrapDrift:
+        reviewedLegacyConfig != null &&
+        path.resolve(rootDir, configPath) ===
+          path.resolve(rootDir, reviewedLegacyConfig),
       resolveMachineImage: (image) => resolvedImages.get(image) ?? image,
     }),
   );
@@ -6941,6 +7085,9 @@ if (isMain) {
   const allowInterruptedScaleCountDrift = process.argv.includes(
     "--allow-interrupted-scale-count-drift",
   );
+  const allowFirstTrustedBootstrapDrift = process.argv.includes(
+    "--allow-first-trusted-bootstrap-drift",
+  );
   const capturedPriorIdentityIndex = process.argv.indexOf(
     "--captured-prior-identity",
   );
@@ -6970,6 +7117,11 @@ if (isMain) {
   if (allowScaleCountDrift && restoreIndex < 0) {
     fail(
       "--allow-scale-count-drift is available only for restored-release verification",
+    );
+  }
+  if (allowFirstTrustedBootstrapDrift && restoreIndex < 0) {
+    fail(
+      "--allow-first-trusted-bootstrap-drift is available only for restored-release verification",
     );
   }
   if (
@@ -7183,6 +7335,7 @@ if (isMain) {
       expectedDeploymentIdentity,
       allowReviewedMachineImages,
       allowScaleCountDrift,
+      allowFirstTrustedBootstrapDrift,
       capturedPriorIdentity,
       interruptedDeploymentIdentity,
       capturedPriorImage,
