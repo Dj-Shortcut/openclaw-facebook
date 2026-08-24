@@ -446,6 +446,10 @@ suite("webhook ingress Redis privacy fence", () => {
         privacyEpoch: 2,
         userKey: toUserKey(senderId),
       }),
+      expectedErasure: {
+        privacyEpoch: 2,
+        dataPrivacyEpoch: 1,
+      },
     });
     await vi.waitFor(async () => {
       await expect(
