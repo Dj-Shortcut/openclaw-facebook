@@ -318,6 +318,7 @@ describe("OAuth callback security", () => {
   });
 
   it("uses the login authorization for Page selection without a second OAuth redirect", async () => {
+    vi.stubEnv("FACEBOOK_CONNECT_STORAGE_MODE", "sealed_compat");
     vi.stubEnv("FB_APP_ID", "facebook-app-123");
     vi.stubEnv("FB_APP_SECRET", "server-only-secret");
     vi.stubEnv("APP_BASE_URL", "https://leaderbot.live");

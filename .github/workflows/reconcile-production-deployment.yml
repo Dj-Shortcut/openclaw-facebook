@@ -690,6 +690,10 @@ jobs:
           status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/healthz)"
           test "$status" = "200"
           grep -Fx "ok" "$body"
+          ready_body="$(mktemp)"
+          ready_status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$ready_body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/readyz)"
+          test "$ready_status" = "200"
+          jq -e '.ok == true and .rateLimiter == "shared_redis"' "$ready_body"
           echo "superseded=true" >> "$GITHUB_OUTPUT"
 
       - name: Restore and verify captured storage-proxy release
@@ -705,6 +709,9 @@ jobs:
           rollback_image="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-image.txt")"
           rollback_config="$RUNNER_TEMP/leaderbot-recovery/before.fly.toml"
           prior_identity="$(cat "$RUNNER_TEMP/leaderbot-recovery/rollback-identity.txt")"
+          rollback_kind="$(node "$RECOVERY_CONTROLLER" \
+            --reviewed-artifact-kind storage-proxy "$rollback_image" \
+            --root-dir "$GITHUB_WORKSPACE")"
           [[ "$RECOVERY_RUN_ATTEMPT" =~ ^[0-9]+$ ]]
           [[ "$prior_identity" =~ ^(none|deploy-[0-9]+-[0-9]+)$ ]]
           node "$RECOVERY_CONTROLLER" --validate-target-enabled storage-proxy --root-dir "$GITHUB_WORKSPACE"
@@ -749,3 +756,9 @@ jobs:
           status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/healthz)"
           test "$status" = "200"
           grep -Fx "ok" "$body"
+          if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then
+            ready_body="$(mktemp)"
+            ready_status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$ready_body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/readyz)"
+            test "$ready_status" = "200"
+            jq -e '.ok == true and .rateLimiter == "shared_redis"' "$ready_body"
+          fi

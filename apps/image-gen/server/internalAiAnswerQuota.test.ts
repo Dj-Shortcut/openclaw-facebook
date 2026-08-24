@@ -271,6 +271,8 @@ describe("internal Startpilot AI-answer quota service", () => {
       workspaceId: 41,
       entitlementId: 73,
       mode: "test" as const,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
       kind: "ai_answer" as const,
       status: "reserved" as const,
       ownerTokenHash: createHash("sha256").update(OWNER_TOKEN).digest("hex"),
@@ -284,21 +286,39 @@ describe("internal Startpilot AI-answer quota service", () => {
         return [{ affectedRows: 1 }];
       }),
     }));
+    let scopedSelectCount = 0;
     const tx = {
       select: vi.fn((selection?: unknown) => ({
         from: vi.fn(() => ({
           where: vi.fn(() => ({
             limit: vi.fn(() => ({
-              for: vi.fn(async () =>
-                selection === undefined ? [reservation] : [{ enabled: true }]
-              ),
+              for: vi.fn(async () => {
+                if (selection === undefined) return [reservation];
+                scopedSelectCount += 1;
+                return scopedSelectCount % 2 === 1
+                  ? [{ id: reservation.channelConnectionId }]
+                  : [{ enabled: true }];
+              }),
             })),
           })),
         })),
       })),
       update: vi.fn(() => ({ set: updateSet })),
     };
+    const scopeLimit = vi.fn(async () => [
+      {
+        workspaceId: reservation.workspaceId,
+        mode: reservation.mode,
+        channelConnectionId: reservation.channelConnectionId,
+        bindingEpoch: reservation.bindingEpoch,
+      },
+    ]);
     getDatabaseOrThrowMock.mockResolvedValue({
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({ limit: scopeLimit })),
+        })),
+      })),
       transaction: vi.fn(async callback => callback(tx)),
     });
     const input = {

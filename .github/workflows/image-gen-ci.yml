@@ -77,6 +77,9 @@ jobs:
           test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.artifact.kind" }}' "$image")" = "runtime"
           test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.base.node" }}' "$image")" = "node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43"
           pnpm --dir storage-proxy audit --audit-level=moderate
+        env:
+          RUN_STORAGE_RATE_LIMIT_REDIS_INTEGRATION: "1"
+          STORAGE_RATE_LIMIT_REDIS_URL: redis://127.0.0.1:6379/13
 
       - name: Lint
         run: |
@@ -95,6 +98,7 @@ jobs:
           pnpm exec vitest run server/messengerGenerationCompletion.redis.test.ts
           pnpm exec vitest run server/messengerGenerationQueue.redis.test.ts
           pnpm exec vitest run server/webhookIngressPrivacy.redis.test.ts
+          pnpm exec vitest run server/webhookReplayProtection.redis.test.ts
         env:
           RUN_REDIS_INTEGRATION: "1"
           REDIS_URL: redis://127.0.0.1:6379/14
@@ -102,13 +106,15 @@ jobs:
       - name: Test billing privacy serialization with MySQL
         run: |
           pnpm run db:migrate:test-bootstrap
-          pnpm exec vitest run \
+          pnpm exec vitest run --no-file-parallelism \
             server/billingHandoffErasure.mysql.test.ts \
             server/billingPrivacySerialization.mysql.test.ts \
+            server/internalAiAnswerQuota.mysql.test.ts \
             server/messengerErasureRetry.mysql.test.ts \
             server/messengerProviderAttemptFence.mysql.test.ts \
             server/portalHandoff.mysql.test.ts \
-            server/paymentSnapshot.mysql.test.ts
+            server/paymentSnapshot.mysql.test.ts \
+            server/whatsappProvisioning.mysql.test.ts
         env:
           DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_image_gen_ci
           RUN_MYSQL_INTEGRATION: "1"
@@ -125,6 +131,7 @@ jobs:
           test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.schema.maximum" }}' "$image")" = "0016_expand"
           test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.base.node" }}' "$image")" = "node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43"
           test "$(docker image inspect --format '{{ index .Config.Labels "io.leaderbot.runtime.ffmpeg" }}' "$image")" = "8.1.2-r0"
+          docker run --rm "$image" test -s /app/dist/provision-whatsapp-binding.cjs
           docker run --rm "$image" timeout -k 1s 1s true
           set +e
           output="$(docker run --rm "$image" node dist/migrate-production.cjs 2>&1)"

@@ -71,7 +71,14 @@ export function createInternalMessengerImageRequestHandler(
         setMessengerRequestOperationId(input.reqId);
         return acceptInternalMessengerImageRequestInContext(input);
       },
-      ownership ? { ...ownership, userKey, privacyEpoch } : undefined
+      ownership
+        ? {
+            channel: "facebook_messenger",
+            ...ownership,
+            userKey,
+            privacyEpoch,
+          }
+        : undefined
     );
   }
 

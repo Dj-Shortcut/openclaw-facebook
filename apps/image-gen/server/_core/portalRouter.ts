@@ -5,7 +5,6 @@ import {
   consumeFacebookPage,
   exchangeFacebookCodeForPages,
   getFacebookOAuthUrl,
-  getStoredFacebookState,
   REQUIRED_FACEBOOK_SCOPES,
   startFacebookConnect,
   storeFacebookPages,
@@ -31,7 +30,11 @@ import {
   getBillingPlan,
   listPublicBillingPlans,
 } from "./billing/catalog";
-import { getMollieConfig, isMollieBillingEnabled } from "./billing/config";
+import {
+  getConfiguredBillingMode,
+  isMollieBillingDrainEnabled,
+  isMollieBillingEnabled,
+} from "./billing/config";
 import { safeBillingErrorCode } from "./billing/errorCode";
 import { getWorkspaceBillingSummary } from "./billing/subscriptionStore";
 import { listWorkspaceBillingNotifications } from "./billing/billingNotificationReceiverWorker";
@@ -333,7 +336,7 @@ export const portalRouter = router({
         );
         const includePayments =
           membership.role === "owner" || membership.role === "admin";
-        if (!isMollieBillingEnabled()) {
+        if (!isMollieBillingDrainEnabled()) {
           return {
             mode: null,
             subscription: null,
@@ -345,10 +348,10 @@ export const portalRouter = router({
             b2bCheckoutEnabled: false,
           };
         }
-        const config = getMollieConfig();
+        const mode = getConfiguredBillingMode();
         const summary = await getWorkspaceBillingSummary(
           input.workspaceId,
-          config.mode,
+          mode,
           { includePayments }
         );
         const notifications = await listWorkspaceBillingNotifications({
@@ -492,7 +495,9 @@ export const portalRouter = router({
       if (ctx.user.role !== "admin") {
         throw new TRPCError({ code: "FORBIDDEN", message: "admin required" });
       }
-      return getMollieLaunchCheck();
+      return getMollieLaunchCheck(undefined, {
+        phase: isMollieBillingEnabled() ? "provider" : "offline",
+      });
     }),
   }),
 
@@ -644,8 +649,9 @@ export const portalRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireWorkspace(ctx, input.workspaceId);
+        let stored;
         try {
-          await validateStoredFacebookState({
+          stored = await validateStoredFacebookState({
             state: input.state,
             workspaceId: input.workspaceId,
             userId: ctx.user.id,
@@ -654,7 +660,6 @@ export const portalRouter = router({
           throw badRequest(error, "invalid facebook connect state");
         }
 
-        const stored = await getStoredFacebookState(input.state);
         if (stored?.pages) {
           return {
             pages: stored.pages.map(redactFacebookPageToken),

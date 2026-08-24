@@ -6,7 +6,7 @@ const PUBLIC_CONFIG_PATH = "/api/public/config";
 const PUBLIC_CONFIG_TIMEOUT_MS = 5_000;
 
 type OAuthBrowserConfig = {
-  loginUrl: "/api/oauth/start";
+  loginUrl: string;
 };
 
 let runtimeOAuthConfig: OAuthBrowserConfig | null | undefined;
@@ -54,6 +54,25 @@ function parsePublicRuntimeConfig(value: unknown): OAuthBrowserConfig | null {
     loginUrl === "/api/oauth/facebook/start"
   ) {
     return { loginUrl: "/api/oauth/start" };
+  }
+  if (!loginUrl) return null;
+  try {
+    const url = new URL(loginUrl);
+    const localHttp =
+      url.protocol === "http:" &&
+      (url.hostname === "localhost" || url.hostname === "127.0.0.1");
+    if (
+      (url.protocol === "https:" || localHttp) &&
+      !url.username &&
+      !url.password &&
+      url.pathname === "/api/oauth/start" &&
+      !url.search &&
+      !url.hash
+    ) {
+      return { loginUrl: url.toString() };
+    }
+  } catch {
+    // Fail closed for malformed or non-canonical login URLs.
   }
   return null;
 }

@@ -17,6 +17,7 @@ import {
   getReviewedRollbackConfig,
   getReviewedScalePlan,
   materializeSuccessorSourceRoot,
+  referencesForbiddenFlyApiUrl,
   resolveImmutableReleaseImage,
   validateDeploymentEnabled,
   validateProductionRepository,
@@ -100,6 +101,17 @@ function replaceFixtureText(root, relativePath, before, after) {
   const source = fs.readFileSync(filePath, "utf8");
   expect(source).toContain(before);
   fs.writeFileSync(filePath, source.replace(before, after));
+}
+
+function replaceLastFixtureText(root, relativePath, before, after) {
+  const filePath = path.join(root, relativePath);
+  const source = fs.readFileSync(filePath, "utf8");
+  const index = source.lastIndexOf(before);
+  expect(index).toBeGreaterThanOrEqual(0);
+  fs.writeFileSync(
+    filePath,
+    `${source.slice(0, index)}${after}${source.slice(index + before.length)}`,
+  );
 }
 
 function stageImageGenBridge(manifest, sourceCommit = "a".repeat(40)) {
@@ -387,7 +399,12 @@ function addReleaseCommandToCapturedImageConfig(root, manifest, image) {
   return record.path;
 }
 
-function httpMachineService({ port, autoStop, gracePeriod }) {
+function httpMachineService({
+  port,
+  autoStop,
+  gracePeriod,
+  readiness = false,
+}) {
   return {
     protocol: "tcp",
     internal_port: port,
@@ -407,6 +424,18 @@ function httpMachineService({ port, autoStop, gracePeriod }) {
         method: "GET",
         path: "/healthz",
       },
+      ...(readiness
+        ? [
+            {
+              type: "http",
+              interval: "15s",
+              timeout: "5s",
+              grace_period: "45s",
+              method: "GET",
+              path: "/readyz",
+            },
+          ]
+        : []),
     ],
   };
 }
@@ -446,6 +475,7 @@ function imageGenMachineConfig(image, processGroup) {
               port: 8080,
               autoStop: "off",
               gracePeriod: "10s",
+              readiness: true,
             }),
           ]
         : [],
@@ -462,6 +492,11 @@ function imageGenRollbackMachineConfig(image, processGroup) {
     FLY_PROCESS_GROUP: processGroup,
     PRIMARY_REGION: "ams",
   };
+  if (processGroup === "app") {
+    config.services[0].checks = config.services[0].checks.filter(
+      (check) => check.path === "/healthz",
+    );
+  }
   delete config.stop_config;
   return config;
 }
@@ -474,6 +509,7 @@ function storageProxyMachineConfig(image) {
       STORAGE_OPERATION_TIMEOUT_MS: "60000",
       STORAGE_ALLOW_LEGACY_BEARER_AUTH: "true",
       STORAGE_ALLOW_LEGACY_KEYS: "true",
+      STORAGE_TRUST_FLY_CLIENT_IP: "true",
       FLY_PROCESS_GROUP: "app",
       PRIMARY_REGION: "ams",
     },
@@ -553,6 +589,67 @@ function imageGenFlyState(image) {
   };
 }
 
+function imageGenLegacyBootstrapFlyState(image, mutate = () => {}) {
+  const live = imageGenLiveConfig("none", { rollback: true });
+  live.http_service.auto_stop_machines = false;
+  const machines = [
+    {
+      id: "legacy-app-ams",
+      state: "started",
+      region: "ams",
+      image_ref: immutableImageRef(image),
+      config: imageGenRollbackMachineConfig(image, "app"),
+    },
+    {
+      id: "legacy-app-fra",
+      state: "started",
+      region: "fra",
+      image_ref: immutableImageRef(image),
+      config: imageGenRollbackMachineConfig(image, "app"),
+    },
+    {
+      id: "legacy-worker-primary",
+      state: "started",
+      region: "ams",
+      image_ref: immutableImageRef(image),
+      config: imageGenRollbackMachineConfig(image, "worker"),
+    },
+    {
+      id: "legacy-worker-standby",
+      state: "stopped",
+      region: "ams",
+      image_ref: immutableImageRef(image),
+      config: {
+        ...imageGenRollbackMachineConfig(image, "worker"),
+        standbys: ["legacy-worker-primary"],
+      },
+    },
+  ];
+  for (const machine of machines) {
+    machine.config.metadata.fly_builder_id = "a".repeat(14);
+    machine.config.env.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD = "50.00";
+    machine.config.env.OPENAI_IMAGE_ESTIMATED_COST_USD = "0.30";
+  }
+  const scale = [
+    { Process: "app", Count: 2, CPUKind: "shared", CPUs: 1, Memory: 256 },
+    {
+      Process: "worker",
+      Count: 2,
+      CPUKind: "shared",
+      CPUs: 1,
+      Memory: 256,
+    },
+  ];
+  mutate({ live, machines, scale });
+  return (args) => {
+    const command = args.slice(0, 2).join(" ");
+    if (command === "config show") return JSON.stringify(live);
+    if (command === "machine list") return JSON.stringify(machines);
+    if (command === "scale show") return JSON.stringify(scale);
+    throw new Error(`Unexpected fly command: ${args.join(" ")}`);
+  };
+}
+
 function imageGenLiveConfig(identity, { rollback = false } = {}) {
   const configPath = rollback
     ? "deploy/production/rollback-configs/image-gen-28d862568aa3.toml"
@@ -595,6 +692,17 @@ function imageGenLiveConfig(identity, { rollback = false } = {}) {
           method: "GET",
           path: "/healthz",
         },
+        ...(rollback
+          ? []
+          : [
+              {
+                interval: "15s",
+                timeout: "5s",
+                grace_period: "45s",
+                method: "GET",
+                path: "/readyz",
+              },
+            ]),
       ],
     },
   };
@@ -612,6 +720,7 @@ function storageProxyFlyState(image) {
           STORAGE_OPERATION_TIMEOUT_MS: "60000",
           STORAGE_ALLOW_LEGACY_BEARER_AUTH: "true",
           STORAGE_ALLOW_LEGACY_KEYS: "true",
+          STORAGE_TRUST_FLY_CLIENT_IP: "true",
         },
         processes: { app: "node dist/index.cjs" },
         http_service: {
@@ -654,6 +763,29 @@ function storageProxyFlyState(image) {
 }
 
 describe("production deployment contract", () => {
+  it("checks the parsed Fly API hostname instead of URL substrings", () => {
+    expect(
+      referencesForbiddenFlyApiUrl(
+        "curl https://api.fly.io/app/flyctl_releases/v0.4.85/flyctl.tar.gz",
+      ),
+    ).toBe(true);
+    expect(
+      referencesForbiddenFlyApiUrl(
+        "curl https://API.FLY.IO./app/flyctl_releases/v0.4.85/flyctl.tar.gz",
+      ),
+    ).toBe(true);
+
+    for (const deceptiveUrl of [
+      "https://example.invalid/api.fly.io/flyctl.tar.gz",
+      "https://example.invalid/?host=api.fly.io",
+      "https://api.fly.io@evil.example/flyctl.tar.gz",
+      "https://api.fly.io.evil.example/flyctl.tar.gz",
+      "https://evil-api.fly.io/flyctl.tar.gz",
+    ]) {
+      expect(referencesForbiddenFlyApiUrl(`curl ${deceptiveUrl}`)).toBe(false);
+    }
+  });
+
   it("accepts the checked-in production configs", () => {
     expect(validateProductionRepository(repoRoot)).toEqual({
       apps: 3,
@@ -874,6 +1006,34 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires fail-closed shared storage-proxy rate limiting", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/storage-proxy/index.ts",
+      'app.use("/v1/storage", storageOperationRateLimiter)',
+      "// operation limiter removed",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "storage proxy must fail closed on shared Redis rate limiting",
+    );
+  });
+
+  it("requires the real shared-Redis storage-proxy CI test", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-ci.yml",
+      'RUN_STORAGE_RATE_LIMIT_REDIS_INTEGRATION: "1"',
+      'RUN_STORAGE_RATE_LIMIT_REDIS_INTEGRATION: "0"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "image-gen CI must validate the independently locked storage proxy",
+    );
+  });
+
   it("requires the independent storage-proxy dependency audit", () => {
     const root = createRepositoryFixture();
     const workflowPath = path.join(root, ".github/workflows/image-gen-ci.yml");
@@ -1058,6 +1218,124 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires separate external storage-proxy readiness monitoring", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      "https://leaderbot-storage-proxy.fly.dev/readyz",
+      "https://leaderbot-storage-proxy.fly.dev/healthz",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      ".github/workflows/production-uptime.yml must monitor /readyz",
+    );
+  });
+
+  it("does not require an undeployed storage-proxy readiness route on pull requests", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      "        if: github.event_name != 'pull_request'\n",
+      "",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must defer storage-proxy readiness until post-deploy monitoring",
+    );
+  });
+
+  it("requires deploy and rollback to prove storage-proxy readiness", () => {
+    const root = createRepositoryFixture();
+    const workflowPath = path.join(
+      root,
+      ".github/workflows/deploy-production.yml",
+    );
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    fs.writeFileSync(
+      workflowPath,
+      workflow.replaceAll(
+        "https://leaderbot-storage-proxy.fly.dev/readyz",
+        "https://leaderbot-storage-proxy.fly.dev/healthz",
+      ),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prove storage-proxy liveness and shared-limiter readiness after deploy and rollback",
+    );
+  });
+
+  it("gates rollback readiness on the reviewed storage-proxy image contract", () => {
+    const root = createRepositoryFixture();
+    replaceLastFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      'if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then',
+      'if [[ "$rollback_kind" != "unreviewed-legacy" ]]; then',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prove storage-proxy liveness and shared-limiter readiness after deploy and rollback",
+    );
+  });
+
+  it("requires successor and restore recovery to prove storage-proxy readiness", () => {
+    const root = createRepositoryFixture();
+    const workflowPath = path.join(
+      root,
+      ".github/workflows/reconcile-production-deployment.yml",
+    );
+    const workflow = fs.readFileSync(workflowPath, "utf8");
+    fs.writeFileSync(
+      workflowPath,
+      workflow.replaceAll(
+        "https://leaderbot-storage-proxy.fly.dev/readyz",
+        "https://leaderbot-storage-proxy.fly.dev/healthz",
+      ),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prove restored storage-proxy liveness and shared-limiter readiness",
+    );
+  });
+
+  it("gates recovered readiness on the reviewed storage-proxy image contract", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/reconcile-production-deployment.yml",
+      'if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then',
+      'if [[ "$rollback_kind" != "unreviewed-legacy" ]]; then',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prove restored storage-proxy liveness and shared-limiter readiness",
+    );
+  });
+
+  it("rejects deceptive storage-proxy readiness URL substrings", () => {
+    for (const workflowFile of [
+      ".github/workflows/deploy-production.yml",
+      ".github/workflows/reconcile-production-deployment.yml",
+    ]) {
+      const root = createRepositoryFixture();
+      const workflowPath = path.join(root, workflowFile);
+      const workflow = fs.readFileSync(workflowPath, "utf8");
+      fs.writeFileSync(
+        workflowPath,
+        workflow.replaceAll(
+          "https://leaderbot-storage-proxy.fly.dev/readyz",
+          "https://attacker.invalid/https://leaderbot-storage-proxy.fly.dev/readyz",
+        ),
+      );
+
+      expect(() => validateProductionRepository(root)).toThrow(
+        /must prove .*storage-proxy .*readiness/u,
+      );
+    }
+  });
+
   it("rejects the retired global image-forward cap in gateway production", () => {
     const root = createRepositoryFixture();
     const configPath = path.join(root, "fly.toml");
@@ -1239,6 +1517,34 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must include the hashed migration contract and exact schema range",
+    );
+  });
+
+  it("requires the provider-silent WhatsApp provisioning command in the runtime artifact", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/package.json",
+      "--outfile=dist/provision-whatsapp-binding.cjs",
+      "--outfile=dist/missing-whatsapp-provisioning.cjs",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "image-gen build:docker must bundle the provider-silent WhatsApp provisioning command",
+    );
+  });
+
+  it("requires CI to inspect the bundled WhatsApp provisioning command", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-ci.yml",
+      'docker run --rm "$image" test -s /app/dist/provision-whatsapp-binding.cjs',
+      'docker run --rm "$image" true',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "image-gen CI must inspect the bundled WhatsApp provisioning command",
     );
   });
 
@@ -2866,6 +3172,42 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires image-gen traffic readiness routing", () => {
+    const root = createRepositoryFixture();
+    const configPath = path.join(root, "apps/image-gen/fly.toml");
+    const config = fs.readFileSync(configPath, "utf8");
+    fs.writeFileSync(
+      configPath,
+      config.replace('path = "/readyz"', 'path = "/healthz"'),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must define exactly the canonical /healthz and /readyz service checks",
+    );
+  });
+
+  it("rejects an extra image-gen service check", () => {
+    const root = createRepositoryFixture();
+    const configPath = path.join(root, "apps/image-gen/fly.toml");
+    fs.appendFileSync(
+      configPath,
+      [
+        "",
+        "[[http_service.checks]]",
+        'interval = "15s"',
+        'timeout = "5s"',
+        'grace_period = "45s"',
+        'method = "GET"',
+        'path = "/extra"',
+        "",
+      ].join("\n"),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must define exactly the canonical /healthz and /readyz service checks",
+    );
+  });
+
   it("requires separate external readiness monitoring", () => {
     const root = createRepositoryFixture();
     const workflowPath = path.join(
@@ -3699,6 +4041,20 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "image-gen deploy script must require the reviewed manifest image",
+    );
+  });
+
+  it("requires the protected deploy to constrain first-bootstrap drift", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      "--allow-first-trusted-bootstrap-drift",
+      "--allow-unreviewed-bootstrap-drift",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must narrowly reconcile the exact legacy image-gen predecessor",
     );
   });
 
@@ -4921,7 +5277,9 @@ describe("production deployment contract", () => {
             app: "leaderbot-storage-proxy",
             primary_region: "ams",
             deploy: { strategy: "rolling" },
-            env: { LEADERBOT_DEPLOYMENT_IDENTITY: "deploy-123-2" },
+            env: {
+              LEADERBOT_DEPLOYMENT_IDENTITY: "deploy-123-2",
+            },
             processes: {},
             http_service: {
               internal_port: 8787,
@@ -5888,6 +6246,71 @@ describe("settled production identity", () => {
       ]),
     );
   });
+
+  it("accepts only the exact known image-gen legacy predecessor for the first trusted bootstrap", async () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const { legacyImage } = stageImageGenBridge(manifest);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    await expect(
+      checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly: imageGenLegacyBootstrapFlyState(legacyImage),
+      }),
+    ).resolves.toMatchObject({
+      identity: "none",
+      expectedImage: legacyImage,
+      blockingErrors: [],
+      reconcilableDrift: [],
+      acceptedBootstrapDrift: expect.arrayContaining([
+        expect.stringContaining("legacy cost limits will be tightened"),
+        expect.stringContaining("legacy worker standby will be reconciled"),
+      ]),
+    });
+  });
+
+  it.each([
+    [
+      "an extra environment change",
+      ({ machines }) => {
+        machines[0].config.env.MOLLIE_BILLING_ENABLED = "true";
+      },
+      "environment differs",
+    ],
+    [
+      "a mounted volume",
+      ({ machines }) => {
+        machines[0].config.mounts = [{ volume: "unknown", path: "/data" }];
+      },
+      "mounts differ",
+    ],
+    [
+      "a malformed standby",
+      ({ machines }) => {
+        machines[3].config.standbys = ["missing-worker"];
+      },
+      "invalid legacy standby binding",
+    ],
+  ])(
+    "rejects first-bootstrap drift with %s",
+    async (_label, mutate, message) => {
+      const root = createRepositoryFixture();
+      const manifestPath = path.join(root, "deploy/production/apps.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      const { legacyImage } = stageImageGenBridge(manifest);
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+      const result = await checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly: imageGenLegacyBootstrapFlyState(legacyImage, mutate),
+      });
+      expect(result.blockingErrors).toEqual(
+        expect.arrayContaining([expect.stringContaining(message)]),
+      );
+    },
+  );
 
   it("validates the exact reviewed live rollback image and config during upgrade preflight", async () => {
     const root = createRepositoryFixture();

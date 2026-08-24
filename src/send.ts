@@ -13,6 +13,19 @@ export const MESSENGER_TEXT_CHUNK_LIMIT = MESSENGER_TEXT_MAX_LENGTH;
 
 type FetchLike = typeof fetch;
 
+export type MessengerDeliveryOutcome = "known_rejected" | "ambiguous";
+
+export class MessengerDeliveryError extends Error {
+  constructor(
+    readonly outcome: MessengerDeliveryOutcome,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "MessengerDeliveryError";
+  }
+}
+
 function resolveGraphApiVersion(value: string | undefined): string {
   const trimmed = value?.trim();
   return trimmed || DEFAULT_GRAPH_API_VERSION;
@@ -110,7 +123,11 @@ export async function sendMessengerText(
       }),
     });
   } catch (error) {
-    throw new Error(`Messenger send failed: ${formatErrorMessage(error)}`, { cause: error });
+    throw new MessengerDeliveryError(
+      "ambiguous",
+      `Messenger send failed: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
   } finally {
     clearTimeout(timeout);
   }
@@ -119,13 +136,18 @@ export async function sendMessengerText(
     recipient_id?: string;
   } | null;
   if (!response.ok) {
-    throw new Error(formatMessengerApiError(body));
+    const outcome: MessengerDeliveryOutcome =
+      response.status >= 400 && response.status < 500
+        ? "known_rejected"
+        : "ambiguous";
+    throw new MessengerDeliveryError(outcome, formatMessengerApiError(body));
   }
-  const result = body as { message_id?: string; recipient_id?: string };
+  const result = body ?? {};
   const messageId = result.message_id?.trim();
   const recipientId = result.recipient_id?.trim();
   if (!messageId || !recipientId) {
-    throw new Error(
+    throw new MessengerDeliveryError(
+      "ambiguous",
       "Messenger send succeeded but response did not include message_id and recipient_id.",
     );
   }

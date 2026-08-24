@@ -36,7 +36,7 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
       },
       {
         heading: "Payments",
-        body: "The public website currently collects interest only. If the signed-in pilot checkout is enabled after the launch gates pass, Mollie will process one €19 Startpilot payment. The proposed pilot does not create a subscription, automatic renewal, direct-debit mandate, top-up or overage charge.",
+        body: "A Startpilot purchase starts only inside the signed-in customer portal. Mollie processes one €19 payment after the customer reviews and confirms checkout. The pilot does not create a subscription, automatic renewal, direct-debit mandate, top-up or overage charge.",
       },
     ],
   },
@@ -46,8 +46,8 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
       "These pilot terms apply to the Leaderbot customer portal and connected Messenger assistant. Leaderbot provides AI-generated text and images together with workspace, usage and privacy controls.",
     sections: [
       {
-        heading: "Draft Startpilot offer",
-        body: "Leaderbot Startpilot is proposed at €19 as a single payment for 30 days. It includes one workspace, one connected Facebook Page, 300 AI answers and 20 Images 2.0 image generations, with a maximum of five image generations per day. An image generation counts once when its first AI-provider attempt starts; retries within that same request do not consume extra pilot generations. The public website is interest-only while paid launch remains disabled.",
+        heading: "Startpilot offer",
+        body: "Leaderbot Startpilot costs €19 as a single payment for 30 days. It includes one workspace, one connected Facebook Page, 300 AI answers and 20 Images 2.0 image generations, with a maximum of five image generations per day. An image generation counts once when its first AI-provider attempt starts; retries within that same request do not consume extra pilot generations. Purchase starts only in the signed-in portal.",
       },
       {
         heading: "No subscription or overage",
@@ -72,13 +72,13 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
     ],
   },
   "billing-policy": {
-    title: "Startpilot Pre-launch Pricing and Billing Information",
+    title: "Startpilot Pricing and Billing Information",
     intro:
-      "Leaderbot is validating a bounded one-time pilot before opening payments. The public website currently collects interest only and does not create a purchase.",
+      "Leaderbot offers a bounded one-time Startpilot. A purchase starts only in the signed-in customer portal and requires an explicit checkout confirmation.",
     sections: [
       {
-        heading: "Proposed one-time price",
-        body: "The current proposal is Leaderbot Startpilot at €19 once in EUR for 30 days. This is pre-launch information, not a present charge. Checkout may appear only inside the signed-in portal after the technical, entitlement, legal and accounting launch gates pass.",
+        heading: "One-time price",
+        body: "Leaderbot Startpilot costs €19 once in EUR for 30 days. Checkout is available only inside the signed-in customer portal, where the customer reviews the exact amount before continuing to Mollie.",
       },
       {
         heading: "Included pilot usage",
@@ -93,12 +93,12 @@ const legalCopy: Record<LegalPageKind, LegalPageCopy> = {
         body: "Sending an email or early-access request does not authorize a payment or create a contract. A payment can start only from an explicitly enabled checkout shown to an authenticated workspace owner or administrator.",
       },
       {
-        heading: "Before paid launch",
-        body: "Before any payment, Leaderbot will show the total price, 30-day access period, included usage, payment method, absence of renewal and overage, and applicable cancellation, refund, consumer or business terms. Payment and invoicing flows must first pass technical, legal and accounting review.",
+        heading: "Before payment",
+        body: "Before any payment, Leaderbot shows the total price, 30-day access period, included usage, payment method, absence of renewal and overage, and applicable cancellation and refund terms.",
       },
       {
         heading: "Questions",
-        body: "For pre-launch pricing, privacy or support questions, contact privacy@leaderbot.live. Do not send payment credentials or API keys by email.",
+        body: "For pricing, privacy or support questions, contact privacy@leaderbot.live. Do not send payment credentials or API keys by email.",
       },
     ],
   },

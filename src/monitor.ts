@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import {
@@ -41,11 +41,19 @@ import {
   type LeaderbotBridgeTrace,
 } from "./leaderbot-bridge.js";
 import {
+  createLeaderbotAiAnswerQuotaToken,
   createLeaderbotAiAnswerIdempotencyKey,
   finalizeLeaderbotAiAnswerQuota,
+  getLeaderbotAiAnswerQuotaReadiness,
+  heartbeatLeaderbotAiAnswerQuota,
   isLeaderbotAiAnswerEnforcementEnabled,
+  markLeaderbotAiAnswerDeliveryKnownRejected,
+  markLeaderbotAiAnswerDeliveryStarted,
   reserveLeaderbotAiAnswerQuota,
-} from "./leaderbot-answer-quota.js";
+  startLeaderbotAiAnswerQuotaHeartbeat,
+  type LeaderbotAiAnswerQuotaHeartbeat,
+  type LeaderbotAiAnswerQuotaLease,
+} from "./leaderbot-bridge.js";
 import {
   classifyMessengerFastLaneIntent,
   hasMessengerImageGenerationIntent,
@@ -78,7 +86,11 @@ import {
   stripFacebookTargetPrefix,
 } from "./naming.js";
 import { getMessengerRuntime } from "./runtime.js";
-import { sendMessengerSenderAction, sendMessengerText } from "./send.js";
+import {
+  MessengerDeliveryError,
+  sendMessengerSenderAction,
+  sendMessengerText,
+} from "./send.js";
 import { validateMessengerSignature } from "./signature.js";
 import {
   decodeOpenClawActionPayload,
@@ -158,6 +170,7 @@ const recentMessengerAssistantReplies = new Map<
   string,
   { text: string; expiresAt: number }
 >();
+const FACEBOOK_UNTRUSTED_TOOL_ALLOW = ["session_status"] as const;
 const FACEBOOK_UNTRUSTED_TOOL_DENY = [
   "image_generate",
   "video_generate",
@@ -169,11 +182,52 @@ const FACEBOOK_UNTRUSTED_TOOL_DENY = [
   "write",
   "edit",
   "apply_patch",
+  "memory_search",
+  "memory_get",
+  "memory_recall",
+  "group:memory",
   "group:runtime",
   "group:fs",
+  "group:web",
+  "group:ui",
+  "group:automation",
+  "group:messaging",
+  "group:nodes",
+  "group:agents",
+  "group:media",
+  "group:plugins",
+  "bundle-mcp",
+  "sessions",
+  "sessions_list",
+  "sessions_history",
+  "sessions_search",
+  "conversations_list",
+  "conversations_send",
+  "conversations_turn",
+  "sessions_send",
+  "sessions_spawn",
+  "sessions_yield",
+  "subagents",
+  "spawn_task",
+  "dismiss_task",
 ] as const;
 const messengerEventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
 let activeMessengerEventJobs = 0;
+
+type LeaderbotAiAnswerDeliveryState =
+  "not_started" | "started" | "succeeded" | "known_rejected" | "ambiguous";
+
+function shouldCommitLeaderbotAiAnswerQuota(
+  state: LeaderbotAiAnswerDeliveryState,
+  visibleReplySent: boolean,
+): boolean {
+  return (
+    visibleReplySent ||
+    state === "started" ||
+    state === "succeeded" ||
+    state === "ambiguous"
+  );
+}
 
 messengerEventLoopDelay.enable();
 
@@ -207,6 +261,7 @@ function finishMessengerTypingTurn(scopeKey: string): boolean {
 export type FacebookInboundToolPolicy = {
   source: "facebook_untrusted_default";
   tools: {
+    allow: string[];
     deny: string[];
   };
 };
@@ -680,6 +735,14 @@ async function resolveMessengerMedia(params: {
   return resolved;
 }
 
+async function cleanupMessengerMedia(
+  media: ChannelInboundMediaInput[],
+): Promise<void> {
+  await Promise.allSettled(
+    media.map((entry) => (entry.path ? unlink(entry.path) : Promise.resolve())),
+  );
+}
+
 function describeMessengerAttachments(
   attachments: MessengerAttachmentUrl[],
   lang: MessengerLanguage,
@@ -1128,7 +1191,10 @@ export function resolveFacebookInboundToolPolicy(params: {
   }
   return {
     source: "facebook_untrusted_default",
-    tools: { deny: [...FACEBOOK_UNTRUSTED_TOOL_DENY] },
+    tools: {
+      allow: [...FACEBOOK_UNTRUSTED_TOOL_ALLOW],
+      deny: [...FACEBOOK_UNTRUSTED_TOOL_DENY],
+    },
   };
 }
 
@@ -1140,18 +1206,16 @@ export function applyFacebookInboundToolPolicyToConfig(
     return cfg;
   }
 
-  const currentTools = (cfg as { tools?: Record<string, unknown> }).tools ?? {};
-  const currentDeny = Array.isArray(currentTools.deny)
-    ? currentTools.deny.filter(
-        (tool): tool is string => typeof tool === "string",
-      )
-    : [];
-
   return {
     ...cfg,
     tools: {
-      ...currentTools,
-      deny: [...new Set([...currentDeny, ...policy.tools.deny])],
+      // An untrusted public turn gets one closed tool surface. Persisted
+      // profiles, provider overrides, code mode, and additive allowlists must
+      // not widen it after this channel boundary has classified the turn.
+      profile: "minimal",
+      allow: [...policy.tools.allow],
+      deny: [...policy.tools.deny],
+      codeMode: false,
     },
   } as OpenClawConfig;
 }
@@ -1362,7 +1426,10 @@ async function sendMessengerPairingReply(params: {
   });
 }
 
-type MessengerIngressDecision = "process" | "leaderbot_free_tier" | "stop";
+type MessengerIngressDecision =
+  | { action: "process"; commandAuthorized: boolean }
+  | { action: "leaderbot_free_tier"; commandAuthorized: false }
+  | { action: "stop"; commandAuthorized: false };
 
 function isLeaderbotBridgeEnabled(account: ResolvedMessengerAccount): boolean {
   return account.config.leaderbotBridgeEnabled === true;
@@ -1414,6 +1481,7 @@ async function shouldProcessMessengerEvent(params: {
   const senderId = params.event.sender?.id ?? "";
   const rawText = params.event.message?.text ?? "";
   const dmPolicy = params.account.config.dmPolicy ?? "pairing";
+  const commandRequested = shouldComputeCommandAuthorized(rawText, params.cfg);
   const access = await resolveStableChannelMessageIngress({
     channelId: FACEBOOK_CHANNEL_ID,
     accountId: params.account.accountId,
@@ -1448,7 +1516,7 @@ async function shouldProcessMessengerEvent(params: {
     ),
     groupAllowFrom: [],
     command: {
-      hasControlCommand: shouldComputeCommandAuthorized(rawText, params.cfg),
+      hasControlCommand: commandRequested,
       groupOwnerAllowFrom: "none",
     },
   });
@@ -1463,7 +1531,11 @@ async function shouldProcessMessengerEvent(params: {
         params.account.accountId
       }`,
     );
-    return "process";
+    return {
+      action: "process",
+      commandAuthorized:
+        commandRequested && access.commandAccess.authorized === true,
+    };
   }
   if (access.senderAccess.decision === "pairing") {
     if (
@@ -1484,7 +1556,7 @@ async function shouldProcessMessengerEvent(params: {
           senderId,
         )} to Leaderbot free tier account=${params.account.accountId}`,
       );
-      return "leaderbot_free_tier";
+      return { action: "leaderbot_free_tier", commandAuthorized: false };
     }
     if (
       dmPolicy === "pairing" &&
@@ -1501,7 +1573,7 @@ async function shouldProcessMessengerEvent(params: {
           senderId,
         )} to OpenClaw turn account=${params.account.accountId}`,
       );
-      return "process";
+      return { action: "process", commandAuthorized: false };
     }
     params.trace &&
       logMessengerStage(params.trace, "intent_classified", {
@@ -1514,7 +1586,7 @@ async function shouldProcessMessengerEvent(params: {
         cfg: params.cfg,
       });
     }
-    return "stop";
+    return { action: "stop", commandAuthorized: false };
   }
   params.trace &&
     logMessengerStage(params.trace, "intent_classified", {
@@ -1525,7 +1597,7 @@ async function shouldProcessMessengerEvent(params: {
       dmPolicy
     })`,
   );
-  return "stop";
+  return { action: "stop", commandAuthorized: false };
 }
 
 export async function processMessengerEvent(params: {
@@ -1537,9 +1609,11 @@ export async function processMessengerEvent(params: {
   stateStore?: MessengerEphemeralStateStore;
 }) {
   activeMessengerEventJobs += 1;
+  let transientMedia: ChannelInboundMediaInput[] = [];
+  let aiAnswerQuotaHeartbeat: LeaderbotAiAnswerQuotaHeartbeat | null = null;
   try {
     const ingressDecision = await shouldProcessMessengerEvent(params);
-    if (ingressDecision === "stop") {
+    if (ingressDecision.action === "stop") {
       return;
     }
     const senderId = params.event.sender?.id ?? "";
@@ -1635,7 +1709,7 @@ export async function processMessengerEvent(params: {
       );
       return;
     }
-    if (ingressDecision === "leaderbot_free_tier") {
+    if (ingressDecision.action === "leaderbot_free_tier") {
       logMessengerStage(params.trace, "messenger_event_forward_started", {
         reason: "unknown_sender_leaderbot_free_tier",
       });
@@ -1937,6 +2011,7 @@ export async function processMessengerEvent(params: {
       attachments,
       trace: params.trace,
     });
+    transientMedia = media;
     const audioTranscripts = await resolveMessengerAudioTranscripts({
       media,
       cfg: params.cfg,
@@ -2032,7 +2107,13 @@ export async function processMessengerEvent(params: {
       });
       return;
     }
-    const commandAuthorized = shouldComputeCommandAuthorized(text, params.cfg);
+    // Command-shaped text is never authorization on the public gateway. The
+    // ingress resolver owns sender authorization, and the public boundary keeps
+    // even allowed senders on the same closed tool surface.
+    const commandAuthorized =
+      process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD === "1"
+        ? false
+        : ingressDecision.commandAuthorized;
     const facebookToolPolicy = resolveFacebookInboundToolPolicy({
       commandAuthorized,
     });
@@ -2046,6 +2127,19 @@ export async function processMessengerEvent(params: {
       accountId: params.account.accountId,
       peer: { kind: "direct", id: senderId },
     });
+    if (
+      process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD === "1" &&
+      route.dmScope !== "per-account-channel-peer"
+    ) {
+      throw new Error("Public Messenger session isolation is unavailable");
+    }
+    if (
+      process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD === "1" &&
+      route.agentId !== "main"
+    ) {
+      throw new Error("Public Messenger agent isolation is unavailable");
+    }
+    const redactedSessionKey = redactMessengerIdentifier(route.sessionKey);
     const { storePath, envelopeOptions, previousTimestamp } =
       resolveInboundSessionEnvelopeContext({
         cfg: inboundCfg,
@@ -2093,8 +2187,9 @@ export async function processMessengerEvent(params: {
       ...mediaPayload,
     });
     const core = getMessengerRuntime();
-    let aiAnswerQuotaReservationId: string | null = null;
+    let aiAnswerQuotaLease: LeaderbotAiAnswerQuotaLease | null = null;
     if (isLeaderbotAiAnswerEnforcementEnabled()) {
+      const ownerToken = createLeaderbotAiAnswerQuotaToken();
       const quotaDecision = await reserveLeaderbotAiAnswerQuota({
         pageId: params.account.pageId,
         idempotencyKey: createLeaderbotAiAnswerIdempotencyKey({
@@ -2104,6 +2199,7 @@ export async function processMessengerEvent(params: {
           traceRequestId: params.trace.reqId,
           timestamp,
         }),
+        ownerToken,
       });
       if (quotaDecision.status === "exhausted") {
         await sendMessengerText(
@@ -2131,7 +2227,12 @@ export async function processMessengerEvent(params: {
         return;
       }
       if (quotaDecision.status === "reserved") {
-        aiAnswerQuotaReservationId = quotaDecision.reservationId;
+        aiAnswerQuotaLease = {
+          reservationId: quotaDecision.reservationId,
+          ownerToken: quotaDecision.ownerToken,
+        };
+        aiAnswerQuotaHeartbeat =
+          startLeaderbotAiAnswerQuotaHeartbeat(aiAnswerQuotaLease);
       }
     }
     const typingScopeKey = beginMessengerTypingTurn({
@@ -2153,12 +2254,14 @@ export async function processMessengerEvent(params: {
       );
     }
     logMessengerStage(params.trace, "openclaw_call_started", {
-      openclawSessionId: route.sessionKey,
+      openclawSessionId: redactedSessionKey,
     });
     logVerbose(
-      `messenger: dispatching inbound turn session=${route.sessionKey} account=${route.accountId}`,
+      `messenger: dispatching inbound turn session=${redactedSessionKey} account=${route.accountId}`,
     );
-    let visibleFinalAiReplySent = false;
+    let aiAnswerDeliveryState: LeaderbotAiAnswerDeliveryState = "not_started";
+    let aiAnswerDeliveryAttemptToken: string | null = null;
+    let visibleAiReplySent = false;
     let turnResult:
       Awaited<ReturnType<typeof core.channel.inbound.run>> | undefined;
     let openClawError: unknown;
@@ -2201,7 +2304,7 @@ export async function processMessengerEvent(params: {
             delivery: {
               deliver: async (
                 payload: ReplyPayload,
-                info: { kind: string },
+                _info: { kind: string },
               ) => {
                 const deliveryPayload =
                   normalizeMessengerReplyPayloadForDelivery(payload, lang);
@@ -2209,17 +2312,84 @@ export async function processMessengerEvent(params: {
                   return { visibleReplySent: false };
                 }
                 logMessengerStage(params.trace, "first_response_ready", {
-                  openclawSessionId: route.sessionKey,
+                  openclawSessionId: redactedSessionKey,
                 });
-                const result = await sendMessengerText(
-                  senderId,
-                  deliveryPayload.text,
-                  {
-                    cfg: params.cfg,
-                    accountId: params.account.accountId,
-                    quickReplies: getMessengerQuickReplies(deliveryPayload),
-                  },
-                );
+                if (
+                  aiAnswerQuotaLease &&
+                  (aiAnswerDeliveryState === "known_rejected" ||
+                    aiAnswerDeliveryState === "ambiguous")
+                ) {
+                  throw new Error(
+                    "Messenger paid AI answer delivery cannot be retried safely",
+                  );
+                }
+                if (
+                  aiAnswerQuotaLease &&
+                  aiAnswerDeliveryState === "not_started"
+                ) {
+                  const leaseRenewed = aiAnswerQuotaHeartbeat
+                    ? await aiAnswerQuotaHeartbeat.renewBeforeDelivery()
+                    : await heartbeatLeaderbotAiAnswerQuota(aiAnswerQuotaLease);
+                  if (!leaseRenewed) {
+                    throw new Error(
+                      "Messenger paid AI answer quota lease is unavailable",
+                    );
+                  }
+                  aiAnswerDeliveryAttemptToken =
+                    createLeaderbotAiAnswerQuotaToken();
+                  const deliveryStarted =
+                    await markLeaderbotAiAnswerDeliveryStarted({
+                      ...aiAnswerQuotaLease,
+                      pageId: params.account.pageId,
+                      deliveryAttemptToken: aiAnswerDeliveryAttemptToken,
+                    });
+                  if (!deliveryStarted) {
+                    aiAnswerDeliveryAttemptToken = null;
+                    throw new Error(
+                      "Messenger paid AI answer delivery fence is unavailable",
+                    );
+                  }
+                  aiAnswerDeliveryState = "started";
+                }
+                let result: Awaited<ReturnType<typeof sendMessengerText>>;
+                try {
+                  result = await sendMessengerText(
+                    senderId,
+                    deliveryPayload.text,
+                    {
+                      cfg: params.cfg,
+                      accountId: params.account.accountId,
+                      quickReplies: getMessengerQuickReplies(deliveryPayload),
+                    },
+                  );
+                } catch (error) {
+                  if (
+                    aiAnswerQuotaLease &&
+                    aiAnswerDeliveryState === "started" &&
+                    aiAnswerDeliveryAttemptToken
+                  ) {
+                    if (
+                      error instanceof MessengerDeliveryError &&
+                      error.outcome === "known_rejected"
+                    ) {
+                      const rejectionRecorded =
+                        await markLeaderbotAiAnswerDeliveryKnownRejected({
+                          ...aiAnswerQuotaLease,
+                          pageId: params.account.pageId,
+                          deliveryAttemptToken: aiAnswerDeliveryAttemptToken,
+                        });
+                      aiAnswerDeliveryState = rejectionRecorded
+                        ? "known_rejected"
+                        : "ambiguous";
+                    } else {
+                      aiAnswerDeliveryState = "ambiguous";
+                    }
+                  }
+                  throw error;
+                }
+                if (aiAnswerQuotaLease && aiAnswerDeliveryState === "started") {
+                  aiAnswerDeliveryState = "succeeded";
+                }
                 rememberMessengerAssistantPrompt({
                   accountId: params.account.accountId,
                   pageId: params.account.pageId,
@@ -2236,9 +2406,7 @@ export async function processMessengerEvent(params: {
                     senderId,
                   )} message=${redactMessengerIdentifier(result.messageId)}`,
                 );
-                if (info.kind === "final") {
-                  visibleFinalAiReplySent = true;
-                }
+                visibleAiReplySent = true;
                 return {
                   messageIds: [result.messageId],
                   receipt: result.receipt,
@@ -2273,13 +2441,24 @@ export async function processMessengerEvent(params: {
         }
       }
     }
-    if (aiAnswerQuotaReservationId) {
-      const outcome = visibleFinalAiReplySent ? "committed" : "released";
-      const finalized = await finalizeLeaderbotAiAnswerQuota({
-        pageId: params.account.pageId,
-        reservationId: aiAnswerQuotaReservationId,
-        outcome,
-      });
+    if (aiAnswerQuotaLease) {
+      await aiAnswerQuotaHeartbeat?.stop();
+      const outcome = shouldCommitLeaderbotAiAnswerQuota(
+        aiAnswerDeliveryState,
+        visibleAiReplySent,
+      )
+        ? "committed"
+        : "released";
+      let finalized = false;
+      try {
+        finalized = await finalizeLeaderbotAiAnswerQuota({
+          pageId: params.account.pageId,
+          ...aiAnswerQuotaLease,
+          outcome,
+        });
+      } catch {
+        finalized = false;
+      }
       if (!finalized) {
         params.runtime.error?.(
           danger(
@@ -2305,7 +2484,7 @@ export async function processMessengerEvent(params: {
       );
     } else {
       logMessengerStage(params.trace, "openclaw_call_completed", {
-        openclawSessionId: route.sessionKey,
+        openclawSessionId: redactedSessionKey,
       });
       logVerbose(
         `messenger: completed inbound turn sender=${redactMessengerIdentifier(
@@ -2314,6 +2493,8 @@ export async function processMessengerEvent(params: {
       );
     }
   } finally {
+    await aiAnswerQuotaHeartbeat?.stop();
+    await cleanupMessengerMedia(transientMedia);
     logMessengerStage(params.trace, "request_completed", {
       activeMessengerEventJobs,
     });
@@ -2348,6 +2529,20 @@ async function processScheduledMessengerEvents(params: {
         danger(`messenger webhook background error: ${String(error)}`),
       );
     }
+  }
+}
+
+export async function assertMessengerPaidAnswerQuotaReadiness(): Promise<void> {
+  if (!isLeaderbotAiAnswerEnforcementEnabled()) {
+    return;
+  }
+  const readiness = await getLeaderbotAiAnswerQuotaReadiness();
+  if (
+    !readiness?.preflightReady ||
+    !readiness.admissionEnabled ||
+    !readiness.drainEnabled
+  ) {
+    throw new Error("Messenger paid AI answer quota readiness is unavailable");
   }
 }
 

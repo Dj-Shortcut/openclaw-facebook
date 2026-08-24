@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -388,6 +388,192 @@ suite("billing handoff privacy erasure", () => {
         { workspaceId: otherWorkspaceId, pageId: otherTenantPageId },
       ])
     );
+  });
+
+  it("keeps a mismatched non-null scope and erases the exact current scope", async () => {
+    const database = await getDatabaseOrThrow();
+    const intentId = randomUUID();
+    const tokenHash = `sha256:${"9".repeat(64)}`;
+    await database.insert(billingIntents).values(
+      intentValues({
+        intentId,
+        workspaceId: targetWorkspaceId,
+        senderKey: targetSenderKey,
+        pageId: targetPageId,
+      })
+    );
+    await database.insert(portalHandoffTokens).values({
+      workspaceId: targetWorkspaceId,
+      tokenHash,
+      messengerSenderUserKey: targetSenderKey,
+      facebookPageId: targetPageId,
+      messengerChannelConnectionId: targetChannelConnectionId,
+      messengerPrivacyEpoch: 1,
+      purpose: "workspace_onboarding",
+      expiresAt: new Date("2026-08-24T00:00:00.000Z"),
+    });
+
+    await eraseBillingHandoffIdentity(
+      targetWorkspaceId,
+      targetSenderKey,
+      targetPageId,
+      {
+        channelConnectionId: targetChannelConnectionId + 10_000,
+        maxPrivacyEpoch: 1,
+      }
+    );
+
+    expect(
+      await database
+        .select({ intentId: billingIntents.intentId })
+        .from(billingIntents)
+        .where(
+          and(
+            eq(billingIntents.intentId, intentId),
+            eq(billingIntents.messengerSenderUserKey, targetSenderKey)
+          )
+        )
+    ).toHaveLength(1);
+    expect(
+      await database
+        .select({ id: portalHandoffTokens.id })
+        .from(portalHandoffTokens)
+        .where(eq(portalHandoffTokens.tokenHash, tokenHash))
+    ).toHaveLength(1);
+
+    await eraseBillingHandoffIdentity(
+      targetWorkspaceId,
+      targetSenderKey,
+      targetPageId,
+      {
+        channelConnectionId: targetChannelConnectionId,
+        maxPrivacyEpoch: 1,
+      }
+    );
+
+    expect(
+      await database
+        .select({ intentId: billingIntents.intentId })
+        .from(billingIntents)
+        .where(
+          and(
+            eq(billingIntents.intentId, intentId),
+            eq(billingIntents.messengerSenderUserKey, targetSenderKey)
+          )
+        )
+    ).toHaveLength(0);
+    expect(
+      await database
+        .select({ id: portalHandoffTokens.id })
+        .from(portalHandoffTokens)
+        .where(eq(portalHandoffTokens.tokenHash, tokenHash))
+    ).toHaveLength(0);
+  });
+
+  it("erases legacy handoff rows whose expanded privacy scope is still null", async () => {
+    const database = await getDatabaseOrThrow();
+    const intentId = randomUUID();
+    const tokenHash = `sha256:${"8".repeat(64)}`;
+    let intentCheckRelaxed = false;
+    let tokenCheckRelaxed = false;
+    try {
+      // The final schema correctly refuses new unscoped identities. Relax the
+      // two exact checks only in this disposable, serialized MySQL fixture so
+      // it can reproduce rows that existed before the 0017 contract.
+      await database.execute(
+        sql.raw(
+          "ALTER TABLE `billing_intents` ALTER CHECK `billing_intents_messenger_identity_scope` NOT ENFORCED"
+        )
+      );
+      intentCheckRelaxed = true;
+      await database.execute(
+        sql.raw(
+          "ALTER TABLE `portalHandoffTokens` ALTER CHECK `portal_handoff_tokens_messenger_identity_scope` NOT ENFORCED"
+        )
+      );
+      tokenCheckRelaxed = true;
+
+      await database.insert(billingIntents).values({
+        ...intentValues({
+          intentId,
+          workspaceId: targetWorkspaceId,
+          senderKey: targetSenderKey,
+          pageId: targetPageId,
+        }),
+        messengerChannelConnectionId: null,
+        messengerPrivacyEpoch: null,
+      });
+      await database.insert(portalHandoffTokens).values({
+        workspaceId: targetWorkspaceId,
+        tokenHash,
+        messengerSenderUserKey: targetSenderKey,
+        facebookPageId: targetPageId,
+        messengerChannelConnectionId: null,
+        messengerPrivacyEpoch: null,
+        purpose: "workspace_onboarding",
+        expiresAt: new Date("2026-08-24T00:00:00.000Z"),
+      });
+
+      await eraseBillingHandoffIdentity(
+        targetWorkspaceId,
+        targetSenderKey,
+        targetPageId,
+        {
+          channelConnectionId: targetChannelConnectionId,
+          maxPrivacyEpoch: 1,
+        }
+      );
+
+      expect(
+        await database
+          .select({
+            intentId: billingIntents.intentId,
+            senderKey: billingIntents.messengerSenderUserKey,
+            pageId: billingIntents.messengerPageId,
+            channelConnectionId: billingIntents.messengerChannelConnectionId,
+            privacyEpoch: billingIntents.messengerPrivacyEpoch,
+          })
+          .from(billingIntents)
+          .where(eq(billingIntents.intentId, intentId))
+      ).toEqual([
+        {
+          intentId,
+          senderKey: null,
+          pageId: null,
+          channelConnectionId: null,
+          privacyEpoch: null,
+        },
+      ]);
+      expect(
+        await database
+          .select({ id: portalHandoffTokens.id })
+          .from(portalHandoffTokens)
+          .where(eq(portalHandoffTokens.tokenHash, tokenHash))
+      ).toHaveLength(0);
+    } finally {
+      if (intentCheckRelaxed) {
+        await database
+          .delete(billingIntents)
+          .where(eq(billingIntents.intentId, intentId));
+      }
+      if (tokenCheckRelaxed) {
+        await database
+          .delete(portalHandoffTokens)
+          .where(eq(portalHandoffTokens.tokenHash, tokenHash));
+        await database.execute(
+          sql.raw(
+            "ALTER TABLE `portalHandoffTokens` ALTER CHECK `portal_handoff_tokens_messenger_identity_scope` ENFORCED"
+          )
+        );
+      }
+      if (intentCheckRelaxed) {
+        await database.execute(
+          sql.raw(
+            "ALTER TABLE `billing_intents` ALTER CHECK `billing_intents_messenger_identity_scope` ENFORCED"
+          )
+        );
+      }
+    }
   });
 
   it("fails atomically while Messenger transport is already in flight", async () => {

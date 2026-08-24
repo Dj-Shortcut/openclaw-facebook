@@ -31,6 +31,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import LandingPage from "./LandingPage";
 import { PortalDashboardNav } from "@/components/PortalDashboardNav";
+import { BillingOperatorIncidentCard } from "@/components/BillingOperatorIncidentCard";
 import {
   getPortalDashboardSectionIdFromHash,
   PORTAL_DASHBOARD_SECTION_IDS,
@@ -319,8 +320,10 @@ function Home() {
   const facebookAutoCompleteState = useRef<string | null>(null);
   const facebookAutoSelectState = useRef<string | null>(null);
   const billingProfileAttestationRequestId = useRef<string | null>(null);
-  const [peppolEvidenceReference, setPeppolEvidenceReference] = useState("");
-  const [peppolEvidenceConfirmed, setPeppolEvidenceConfirmed] = useState(false);
+  const [consumerEvidenceReference, setConsumerEvidenceReference] =
+    useState("");
+  const [consumerEvidenceConfirmed, setConsumerEvidenceConfirmed] =
+    useState(false);
   const [locale, setLocale] = useState<AppLocale>(getInitialLocale);
   const [isEditingIdentity, setIsEditingIdentity] = useState(false);
   const [identityForm, setIdentityForm] = useState({
@@ -460,9 +463,7 @@ function Home() {
     { workspaceId: workspaceId ?? 0 },
     { enabled: Boolean(workspaceId) }
   );
-  const billingPlansQuery = trpc.portal.billing.plans.useQuery(undefined, {
-    enabled: auth.isAuthenticated,
-  });
+  const billingPlansQuery = trpc.portal.billing.plans.useQuery();
   const billingSummaryQuery = trpc.portal.billing.summary.useQuery(
     { workspaceId: workspaceId ?? 0 },
     { enabled: Boolean(workspaceId) }
@@ -474,6 +475,15 @@ function Home() {
         Boolean(workspaceId) && portalSessionQuery.data?.user.role === "admin",
     }
   );
+  const operatorBillingNotificationsQuery =
+    trpc.billingAdmin.operatorNotifications.useQuery(
+      { workspaceId: workspaceId ?? 0 },
+      {
+        enabled:
+          Boolean(workspaceId) &&
+          portalSessionQuery.data?.user.role === "admin",
+      }
+    );
   const billingReturnStatusQuery = trpc.portal.billing.returnStatus.useQuery(
     {
       workspaceId: workspaceId ?? 0,
@@ -541,15 +551,24 @@ function Home() {
   const billingProfileAttestationMutation =
     trpc.billingAdmin.attestProfile.useMutation({
       onSuccess: async () => {
-        setPeppolEvidenceReference("");
-        setPeppolEvidenceConfirmed(false);
+        setConsumerEvidenceReference("");
+        setConsumerEvidenceConfirmed(false);
         if (!workspaceId) return;
         await utils.billingAdmin.profileStatus.invalidate({ workspaceId });
       },
     });
-  const peppolAttestationComplete =
+  const operatorBillingNotificationAcknowledgementMutation =
+    trpc.billingAdmin.acknowledgeOperatorNotification.useMutation({
+      onSuccess: async () => {
+        if (!workspaceId) return;
+        await utils.billingAdmin.operatorNotifications.invalidate({
+          workspaceId,
+        });
+      },
+    });
+  const consumerAttestationComplete =
     billingProfileAttestationMutation.isSuccess ||
-    billingProfileStatusQuery.data?.peppolAttestationActive === true;
+    billingProfileStatusQuery.data?.consumerAttestationActive === true;
 
   useEffect(() => {
     if (billingReturnHandled.current || !workspaceId || !billingReturnIntent) {
@@ -844,12 +863,12 @@ function Home() {
     billingCheckoutMutation.reset();
     billingCancelMutation.mutate({ workspaceId });
   };
-  const attestPeppolBusinessProfile = () => {
-    const evidenceReference = peppolEvidenceReference.trim();
+  const attestBelgianConsumerProfile = () => {
+    const evidenceReference = consumerEvidenceReference.trim();
     if (
       !workspaceId ||
       portalSessionQuery.data?.user.role !== "admin" ||
-      !peppolEvidenceConfirmed ||
+      !consumerEvidenceConfirmed ||
       !/^[A-Za-z0-9][A-Za-z0-9._:/-]{7,255}$/.test(evidenceReference)
     ) {
       return;
@@ -859,12 +878,16 @@ function Home() {
       requestId: billingProfileAttestationRequestId.current,
       workspaceId,
       expectedVersion: billingProfileStatusQuery.data?.eligibilityVersion ?? 0,
-      countryCode: "BE",
-      customerType: "business",
       evidenceReference,
-      verificationMethod: "provider_attestation",
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1_000),
-      peppolReady: true,
+    });
+  };
+  const acknowledgeOperatorBillingNotification = (notificationId: number) => {
+    if (!workspaceId || portalSessionQuery.data?.user.role !== "admin") return;
+    operatorBillingNotificationAcknowledgementMutation.reset();
+    operatorBillingNotificationAcknowledgementMutation.mutate({
+      workspaceId,
+      notificationId,
     });
   };
   const startFacebookConnectFlow = () => {
@@ -949,6 +972,7 @@ function Home() {
       <LandingPage
         locale={locale}
         loginConfigured={loginConfigured}
+        commercialBillingAvailable={(billingPlansQuery.data?.length ?? 0) > 0}
         onLocaleChange={changeLocale}
       />
     );
@@ -1086,45 +1110,47 @@ function Home() {
         {workspaceId &&
         portalSessionQuery.data?.user.role === "admin" &&
         billingProfileStatusQuery.isSuccess &&
-        !peppolAttestationComplete ? (
+        !consumerAttestationComplete ? (
           <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-amber-950 lg:col-start-2">
             <div>
               <h2 className="text-sm font-semibold">
-                Zakelijk billingprofiel via Peppol attesteren
+                Belgische consumentenpilot verifiëren
               </h2>
               <p className="mt-1 text-sm leading-6 text-amber-900">
-                Alleen gebruiken nadat de Belgische onderneming publiek als
-                actieve Peppol-ontvanger is geverifieerd. De attestatie geldt 30
-                dagen en bewaart uitsluitend een HMAC van de bewijsreferentie.
+                Alleen gebruiken na een handmatige controle dat deze workspace
+                voor deze launch als Belgische particuliere klant koopt. De
+                attestatie geldt 30 dagen en bewaart uitsluitend een HMAC van de
+                bewijsreferentie. De Peppol-registratie van Leaderbot als
+                verkoper staat hier volledig los van.
               </p>
             </div>
             <form
               className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]"
               onSubmit={event => {
                 event.preventDefault();
-                attestPeppolBusinessProfile();
+                attestBelgianConsumerProfile();
               }}
             >
               <label className="grid gap-1 text-sm font-medium">
-                Externe Peppol-bewijsreferentie
+                Interne bewijsreferentie consumentencontrole
                 <input
                   className="min-h-10 rounded-md border border-amber-300 bg-white px-3 text-slate-950 outline-none focus:border-amber-600"
                   disabled={billingProfileAttestationMutation.isSuccess}
                   maxLength={255}
                   pattern="[A-Za-z0-9][A-Za-z0-9._:/-]{7,255}"
-                  placeholder="peppol:0208:ondernemingsnummer"
+                  placeholder="consumer-review:referentie"
                   required
-                  value={peppolEvidenceReference}
+                  value={consumerEvidenceReference}
                   onChange={event =>
-                    setPeppolEvidenceReference(event.target.value)
+                    setConsumerEvidenceReference(event.target.value)
                   }
                 />
               </label>
               <Button
                 className="self-end"
                 disabled={
-                  !peppolEvidenceConfirmed ||
-                  !peppolEvidenceReference.trim() ||
+                  !consumerEvidenceConfirmed ||
+                  !consumerEvidenceReference.trim() ||
                   billingProfileAttestationMutation.isPending ||
                   billingProfileAttestationMutation.isSuccess
                 }
@@ -1135,20 +1161,21 @@ function Home() {
                   ? "Attestatie opslaan…"
                   : billingProfileAttestationMutation.isSuccess
                     ? "Attestatie opgeslagen"
-                    : "Zakelijk profiel attesteren"}
+                    : "Consumentenprofiel attesteren"}
               </Button>
               <label className="flex items-start gap-2 text-sm leading-6 sm:col-span-2">
                 <input
-                  checked={peppolEvidenceConfirmed}
+                  checked={consumerEvidenceConfirmed}
                   className="mt-1"
                   disabled={billingProfileAttestationMutation.isSuccess}
                   type="checkbox"
                   onChange={event =>
-                    setPeppolEvidenceConfirmed(event.target.checked)
+                    setConsumerEvidenceConfirmed(event.target.checked)
                   }
                 />
-                Ik heb gecontroleerd dat deze exacte onderneming actief is op
-                Peppol en als Belgische zakelijke klant mag worden verwerkt.
+                Ik heb gecontroleerd dat deze workspace voor deze launch als
+                Belgische particuliere klant koopt. Zakelijke klanten en
+                Peppol-facturatie blijven geblokkeerd.
               </label>
               {billingProfileAttestationMutation.error ? (
                 <p className="text-sm font-medium text-red-800 sm:col-span-2">
@@ -1158,6 +1185,22 @@ function Home() {
               ) : null}
             </form>
           </section>
+        ) : null}
+
+        {workspaceId && portalSessionQuery.data?.user.role === "admin" ? (
+          <BillingOperatorIncidentCard
+            acknowledgementFailed={
+              operatorBillingNotificationAcknowledgementMutation.isError
+            }
+            acknowledgementPending={
+              operatorBillingNotificationAcknowledgementMutation.isPending
+            }
+            incidents={operatorBillingNotificationsQuery.data ?? []}
+            isLoading={operatorBillingNotificationsQuery.isLoading}
+            loadFailed={operatorBillingNotificationsQuery.isError}
+            locale={locale}
+            onAcknowledge={acknowledgeOperatorBillingNotification}
+          />
         ) : null}
 
         {isLoading ? (

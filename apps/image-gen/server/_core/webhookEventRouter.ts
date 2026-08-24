@@ -5,7 +5,7 @@ import {
   isDeleteCommand,
 } from "./consentService";
 import { GDPR_DELETE_CONFIRM } from "./consentActionIds";
-import { safeLog } from "./messengerApi";
+import { safeLog } from "./logger";
 import { setPreferredLang } from "./messengerState";
 import { normalizeLang } from "./i18n";
 import { toLogUser, toUserKey } from "./privacy";
@@ -81,6 +81,7 @@ export async function handleEntry(
       () => handleEvent(ctx, event, pageId),
       ownership
         ? {
+            channel: "facebook_messenger",
             ...ownership,
             userKey: inheritedPrivacy?.userKey,
             privacyEpoch: inheritedPrivacy?.privacyEpoch,

@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { sendMessengerSenderAction, sendMessengerText } from "./send.js";
+import {
+  MessengerDeliveryError,
+  sendMessengerSenderAction,
+  sendMessengerText,
+} from "./send.js";
 
 describe("sendMessengerText", () => {
   afterEach(() => {
@@ -163,8 +167,41 @@ describe("sendMessengerText", () => {
         ),
     );
 
-    await expect(
-      sendMessengerText("psid-1", "hello", {
+    const error = await sendMessengerText("psid-1", "hello", {
+      cfg: {
+        channels: {
+          facebook: {
+            pageId: "page-1",
+            pageAccessToken: "token-1",
+            appSecret: "secret-1",
+            verifyToken: "verify-1",
+          },
+        },
+      } as never,
+      fetch: fetchMock as never,
+    }).catch((thrown: unknown) => thrown);
+    expect(error).toBeInstanceOf(MessengerDeliveryError);
+    expect(error).toMatchObject({ outcome: "known_rejected" });
+    expect(String(error)).toContain("24-hour response window");
+  });
+
+  it.each([
+    { status: 429, expectedOutcome: "known_rejected" },
+    { status: 500, expectedOutcome: "ambiguous" },
+  ] as const)(
+    "classifies Graph HTTP $status as $expectedOutcome",
+    async ({ status, expectedOutcome }) => {
+      const fetchMock = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: { message: "provider response", code: status === 429 ? 4 : 2 },
+            }),
+            { status, headers: { "content-type": "application/json" } },
+          ),
+      );
+
+      const error = await sendMessengerText("psid-1", "hello", {
         cfg: {
           channels: {
             facebook: {
@@ -176,9 +213,12 @@ describe("sendMessengerText", () => {
           },
         } as never,
         fetch: fetchMock as never,
-      }),
-    ).rejects.toThrow("24-hour response window");
-  });
+      }).catch((thrown: unknown) => thrown);
+
+      expect(error).toBeInstanceOf(MessengerDeliveryError);
+      expect(error).toMatchObject({ outcome: expectedOutcome });
+    },
+  );
 
   it("fails on malformed successful responses", async () => {
     const fetchMock = vi.fn(
@@ -189,21 +229,46 @@ describe("sendMessengerText", () => {
         }),
     );
 
-    await expect(
-      sendMessengerText("psid-1", "hello", {
-        cfg: {
-          channels: {
-            facebook: {
-              pageId: "page-1",
-              pageAccessToken: "token-1",
-              appSecret: "secret-1",
-              verifyToken: "verify-1",
-            },
+    const error = await sendMessengerText("psid-1", "hello", {
+      cfg: {
+        channels: {
+          facebook: {
+            pageId: "page-1",
+            pageAccessToken: "token-1",
+            appSecret: "secret-1",
+            verifyToken: "verify-1",
           },
-        } as never,
-        fetch: fetchMock as never,
-      }),
-    ).rejects.toThrow("response did not include message_id and recipient_id");
+        },
+      } as never,
+      fetch: fetchMock as never,
+    }).catch((thrown: unknown) => thrown);
+    expect(error).toBeInstanceOf(MessengerDeliveryError);
+    expect(error).toMatchObject({ outcome: "ambiguous" });
+    expect(String(error)).toContain(
+      "response did not include message_id and recipient_id",
+    );
+  });
+
+  it("classifies a socket reset after POST as ambiguous", async () => {
+    const socketError = new Error("socket reset");
+    const error = await sendMessengerText("psid-1", "hello", {
+      cfg: {
+        channels: {
+          facebook: {
+            pageId: "page-1",
+            pageAccessToken: "token-1",
+            appSecret: "secret-1",
+            verifyToken: "verify-1",
+          },
+        },
+      } as never,
+      fetch: vi.fn(async () => {
+        throw socketError;
+      }) as never,
+    }).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(MessengerDeliveryError);
+    expect(error).toMatchObject({ outcome: "ambiguous", cause: socketError });
   });
 
 
@@ -260,9 +325,12 @@ describe("sendMessengerText", () => {
       fetch: fetchMock as never,
     });
 
-    const expectedFailure = expect(result).rejects.toThrow("Messenger send failed");
+    const expectedFailure = result.catch((thrown: unknown) => thrown);
     await vi.advanceTimersByTimeAsync(10_000);
-    await expectedFailure;
+    const error = await expectedFailure;
+    expect(error).toBeInstanceOf(MessengerDeliveryError);
+    expect(error).toMatchObject({ outcome: "ambiguous" });
+    expect(String(error)).toContain("Messenger send failed");
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(init.signal?.aborted).toBe(true);
   });

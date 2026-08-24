@@ -97,26 +97,51 @@ describe("client public runtime config", () => {
     const { getLoginUrl, isLoginConfigured, loadPublicRuntimeConfig } =
       await importClientPublicConfig();
     await loadPublicRuntimeConfig(
-      vi.fn<typeof fetch>(async () =>
-        new Response(
-          JSON.stringify({
-            oauth: {
-              configured: true,
-              portalUrl: null,
-              appId: null,
-              loginUrl: "/api/oauth/start",
-            },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
-        )
+      vi.fn<typeof fetch>(
+        async () =>
+          new Response(
+            JSON.stringify({
+              oauth: {
+                configured: true,
+                portalUrl: null,
+                appId: null,
+                loginUrl: "https://app.leaderbot.live/api/oauth/start",
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
       )
     );
 
     expect(isLoginConfigured()).toBe(true);
     stubBrowser();
     expect(getLoginUrl("/handoff/token-123")).toBe(
-      "https://leaderbot.live/api/oauth/start?returnTo=%2Fhandoff%2Ftoken-123"
+      "https://app.leaderbot.live/api/oauth/start?returnTo=%2Fhandoff%2Ftoken-123"
     );
+  });
+
+  it("rejects absolute login URLs that do not use the exact OAuth start path", async () => {
+    const { isLoginConfigured, loadPublicRuntimeConfig } =
+      await importClientPublicConfig();
+    await loadPublicRuntimeConfig(
+      vi.fn<typeof fetch>(
+        async () =>
+          new Response(
+            JSON.stringify({
+              oauth: {
+                configured: true,
+                portalUrl: null,
+                appId: null,
+                loginUrl:
+                  "https://app.leaderbot.live/api/oauth/start-elsewhere",
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          )
+      )
+    );
+
+    expect(isLoginConfigured()).toBe(false);
   });
 
   it.each([

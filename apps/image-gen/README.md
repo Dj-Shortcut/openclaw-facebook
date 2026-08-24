@@ -255,6 +255,8 @@ Operational env shortlist: [`docs/operations/ENV_SHORTLIST.md`](docs/operations/
 ### Common optional
 
 - `WEBHOOK_REPLAY_TTL_SECONDS` (override webhook replay-protection TTL, default `300`)
+- `WHATSAPP_WEBHOOK_REPLAY_TTL_SECONDS` (durable hashed WhatsApp replay/fallback phase, default `86400`; must cover the complete webhook-ingress content horizon and cannot exceed 24 hours)
+- `WHATSAPP_WEBHOOK_REPLAY_LEASE_SECONDS` (short renewable WhatsApp replay owner lease, default `300`; must not exceed `WEBHOOK_INGRESS_DELIVERY_LEASE_SECONDS`)
 - `HTTP_RATE_LIMIT_WINDOW_MS` (global HTTP rate-limit window, default `60000`; Redis-backed when `REDIS_URL` is set)
 - `HTTP_RATE_LIMIT_MAX_REQUESTS` (max requests per IP per window, default `120`)
 - `OPENAI_IMAGE_TIMEOUT_MS`, `FB_IMAGE_FETCH_TIMEOUT_MS` (OpenAI defaults to `180000ms` and is hard-capped at `300000ms`; a source-photo fetch, including its one retry, shares one total deadline that defaults to `10000ms` and is hard-capped at `30000ms`)

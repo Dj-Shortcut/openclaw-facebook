@@ -166,6 +166,7 @@ export function createMessengerGenerationJobRunner(
       },
       job.workspaceId && job.channelConnectionId && job.bindingEpoch
         ? {
+            channel: "facebook_messenger",
             workspaceId: job.workspaceId,
             channelConnectionId: job.channelConnectionId,
             bindingEpoch: job.bindingEpoch,
@@ -623,6 +624,7 @@ export function createMessengerGenerationJobRunner(
       },
       input.workspaceId && input.channelConnectionId && input.bindingEpoch
         ? {
+            channel: "facebook_messenger",
             workspaceId: input.workspaceId,
             channelConnectionId: input.channelConnectionId,
             bindingEpoch: input.bindingEpoch,

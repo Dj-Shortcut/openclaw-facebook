@@ -5,6 +5,11 @@ primary_region = 'ams'
 
 [env]
   STORAGE_OPERATION_TIMEOUT_MS = "60000"
+  # This public service is exposed only through Fly Proxy. Set false before
+  # introducing a direct/private or alternate-proxy ingress path.
+  STORAGE_TRUST_FLY_CLIENT_IP = "true"
+  # STORAGE_RATE_LIMIT_REDIS_URL and STORAGE_RATE_LIMIT_KEY_SECRET are required
+  # Fly secrets. Startup and /readyz fail closed when shared Redis is unavailable.
   # Phase 1 bridge: the currently running image-gen release still sends only
   # bearer auth and uses unscoped historical keys. Remove bearer auth only
   # after every image-gen Machine is on signed requests; retain legacy keys

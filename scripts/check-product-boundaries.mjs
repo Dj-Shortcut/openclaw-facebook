@@ -43,7 +43,16 @@ function findImports(source) {
   ];
   for (const pattern of patterns) {
     let match;
-    while ((match = pattern.exec(source))) matches.push({ specifier: match[1], index: match.index });
+    while ((match = pattern.exec(source))) {
+      const specifier = match[1];
+      const specifierOffset = match[0].lastIndexOf(specifier);
+      matches.push({
+        specifier,
+        index: match.index,
+        specifierStart: match.index + specifierOffset,
+        specifierEnd: match.index + specifierOffset + specifier.length,
+      });
+    }
   }
   return matches;
 }
@@ -55,6 +64,23 @@ function resolveImport(fromRel, specifier) {
 
 function isTestFile(file) {
   return /(^|[/.])(test|spec)\.[cm]?[jt]sx?$/.test(file) || file.includes("/__tests__/");
+}
+
+function findLeaderbotProductMatch(source, file, imports) {
+  const pattern = /leaderbot|LEADERBOT_/gi;
+  let match;
+  while ((match = pattern.exec(source))) {
+    const isBridgeImportSpecifier = imports.some(item => {
+      const resolved = resolveImport(file, item.specifier).replace(/\.[cm]?[jt]sx?$/, "");
+      return (
+        resolved === "src/leaderbot-bridge" &&
+        match.index >= item.specifierStart &&
+        match.index < item.specifierEnd
+      );
+    });
+    if (!isBridgeImportSpecifier) return match;
+  }
+  return null;
 }
 
 const rootSrcAllowLeaderbot = new Set([
@@ -120,10 +146,11 @@ for (const abs of files) {
       }
     }
 
+    const productMatch = findLeaderbotProductMatch(source, file, imports);
     if (!rootSrcAllowLeaderbot.has(file) && !isTestFile(file)) {
-      const match = /leaderbot|LEADERBOT_/i.exec(source);
+      const match = productMatch;
       if (match) report("failure", "root src/ may mention leaderbot/LEADERBOT_ only in src/leaderbot-bridge.ts or tests", file, lineOf(source, match.index));
-    } else if (file !== "src/leaderbot-bridge.ts" && !isTestFile(file) && /leaderbot|LEADERBOT_/i.test(source)) {
+    } else if (file !== "src/leaderbot-bridge.ts" && !isTestFile(file) && productMatch) {
       report("warning", "legacy allowlist: leaderbot string outside src/leaderbot-bridge.ts; migrate toward the bridge boundary", file);
     }
   }

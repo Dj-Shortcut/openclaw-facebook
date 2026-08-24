@@ -9,7 +9,7 @@ import {
   type CostLedgerSummary,
 } from "../costLedger";
 import { isRedisHttpRateLimitEnabled } from "../httpRateLimit";
-import { safeLog } from "../messengerApi";
+import { safeLog } from "../logger";
 import {
   getMessengerGenerationQueueStats,
   type MessengerGenerationQueueStats,

@@ -118,11 +118,36 @@ type WhatsAppConsentGateInput = {
   lang: Lang;
   state: MessengerUserState;
   sendText: (text: string) => Promise<void>;
+  sendDeletionOutcome?: (text: string) => Promise<void>;
   sendButtons: (
     text: string,
     options: Array<{ id: string; title: string }>
   ) => Promise<void>;
 };
+
+export function isWhatsAppPrivacyOrConsentControl(
+  event: NormalizedWhatsAppEvent
+): boolean {
+  const payload =
+    typeof event.rawEventMeta?.interactiveReplyId === "string"
+      ? event.rawEventMeta.interactiveReplyId
+      : null;
+  if (
+    payload === GDPR_CONSENT_AGREE ||
+    payload === GDPR_CONSENT_DECLINE ||
+    payload === GDPR_DELETE_CANCEL ||
+    payload === GDPR_DELETE_CONFIRM
+  ) {
+    return true;
+  }
+
+  const text = event.textBody;
+  return Boolean(
+    isDeleteCommand(text) ||
+    isConsentAgreeText(text, false) ||
+    isConsentDeclineText(text)
+  );
+}
 
 function normalizeControlText(text: string | null | undefined): string {
   return (
@@ -687,7 +712,7 @@ export async function handleWhatsAppConsentGate(
     await deleteUserDataAndSendResult(
       input.event.senderId,
       input.lang,
-      input.sendText
+      input.sendDeletionOutcome ?? input.sendText
     );
     return true;
   }
@@ -697,7 +722,7 @@ export async function handleWhatsAppConsentGate(
     await deleteUserDataAndSendResult(
       input.event.senderId,
       input.lang,
-      input.sendText
+      input.sendDeletionOutcome ?? input.sendText
     );
     return true;
   }

@@ -45,19 +45,27 @@ function isDirectFacebookOAuthConfigured(env: NodeJS.ProcessEnv): boolean {
       url.protocol === "http:" &&
       (url.hostname === "localhost" || url.hostname === "127.0.0.1");
     return (
-      (url.protocol === "https:" || localHttp) &&
-      !url.username &&
-      !url.password
+      (url.protocol === "https:" || localHttp) && !url.username && !url.password
     );
   } catch {
     return false;
   }
 }
 
+function readDirectFacebookLoginUrl(env: NodeJS.ProcessEnv): string | null {
+  if (!isDirectFacebookOAuthConfigured(env)) return null;
+  const appBaseUrl = new URL(env.APP_BASE_URL!.trim());
+  appBaseUrl.pathname = "/api/oauth/start";
+  appBaseUrl.search = "";
+  appBaseUrl.hash = "";
+  return appBaseUrl.toString();
+}
+
 export function getPublicRuntimeConfig(
   env: NodeJS.ProcessEnv = process.env
 ): PublicRuntimeConfig {
   const directFacebookConfigured = isDirectFacebookOAuthConfigured(env);
+  const directFacebookLoginUrl = readDirectFacebookLoginUrl(env);
   const portalUrl = readPublicOAuthPortalUrl(env);
   const appId = (env.VITE_APP_ID ?? "").trim() || null;
   const externalOAuthConfigured = Boolean(portalUrl && appId);
@@ -68,7 +76,11 @@ export function getPublicRuntimeConfig(
       configured,
       portalUrl: externalOAuthConfigured ? portalUrl : null,
       appId: externalOAuthConfigured ? appId : null,
-      loginUrl: configured ? "/api/oauth/start" : null,
+      // Direct Facebook Login must start on the same canonical host that owns
+      // the callback cookie. The public marketing host may serve this app too,
+      // but a host-only OAuth nonce cannot cross to APP_BASE_URL.
+      loginUrl:
+        directFacebookLoginUrl ?? (configured ? "/api/oauth/start" : null),
     },
   };
 }

@@ -30,6 +30,11 @@ kill_timeout = 300
   BILLING_OPERATOR_NOTIFICATION_WEBHOOK_URL = "https://app.leaderbot.live/api/internal/billing/notifications/operator"
   BILLING_SUPPORT_EMAIL = "privacy@leaderbot.live"
   FB_PAGE_CONNECT_CONFIG_ID = "2097873054148678"
+  # Phase 1 of the Facebook connect-state storage rollout. The first reviewed
+  # runtime image containing the dual-reader must keep legacy writes throughout
+  # its rolling deploy. The separate schema migration bridge does not contain
+  # this code. Change only in a later config release after the runbook gates.
+  FACEBOOK_CONNECT_STORAGE_MODE = "legacy_compat"
   MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD = "5.00"
   MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD = "25.00"
   MESSENGER_FREE_DAILY_LIMIT = "5"
@@ -41,6 +46,7 @@ kill_timeout = 300
   MESSENGER_USER_DAILY_SPEND_CAP_USD = "2.00"
   MOLLIE_ACCOUNTING_IMPORT_ENABLED = "false"
   MOLLIE_BILLING_ENABLED = "false"
+  MOLLIE_BILLING_DRAIN_ENABLED = "false"
   MOLLIE_BILLING_PREFLIGHT_ENABLED = "false"
   MOLLIE_BILLING_SCHEDULER_MODE = "pilot_pin"
   MOLLIE_BILLING_WORKER_WORKSPACE_ID = "1"
@@ -77,3 +83,10 @@ kill_timeout = 300
     grace_period = "10s"
     method = "GET"
     path = "/healthz"
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "45s"
+    method = "GET"
+    path = "/readyz"

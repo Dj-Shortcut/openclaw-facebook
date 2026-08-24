@@ -47,6 +47,7 @@ describe("Mollie checkout provider failure boundary", () => {
       ...originalEnv,
       NODE_ENV: "test",
       MOLLIE_BILLING_ENABLED: "true",
+      MOLLIE_BILLING_DRAIN_ENABLED: "true",
       MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED: "true",
       MOLLIE_API_KEY: "test_example123",
       MOLLIE_MODE: "test",

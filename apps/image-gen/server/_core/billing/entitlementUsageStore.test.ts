@@ -184,6 +184,12 @@ describe("Startpilot finite entitlement usage", () => {
       reservationId: expect.stringMatching(/^[0-9a-f-]{36}$/i),
       alreadyReserved: false,
     });
+    expect(flow.selectedTables.indexOf(channelConnections)).toBeLessThan(
+      flow.selectedTables.indexOf(billingSchedulerTenants)
+    );
+    expect(flow.selectedTables.indexOf(billingSchedulerTenants)).toBeLessThan(
+      flow.selectedTables.indexOf(workspaceEntitlementUsageReservations)
+    );
     expect(flow.insertValues).toHaveBeenCalledWith(
       expect.objectContaining({ channelConnectionId: 7, bindingEpoch: 3 })
     );
@@ -527,6 +533,7 @@ function aiUsageFlow(
   };
   const lookupReservations = options.lookupReservations ?? [];
   const staleReservations = options.staleReservations ?? [];
+  const selectedTables: unknown[] = [];
   const updates: Array<{ table: unknown; values: Record<string, unknown> }> =
     [];
   const insertValues = vi.fn((values: Record<string, unknown>) => ({
@@ -536,41 +543,44 @@ function aiUsageFlow(
 
   const tx = {
     select: vi.fn((selection?: unknown) => ({
-      from: vi.fn((table: unknown) => ({
-        where: vi.fn(() => {
-          const rows =
-            table === workspaceEntitlements
-              ? [
-                  {
-                    id: 9,
-                    workspaceId: 1,
-                    mode: "test",
-                    planCode: "startpilot_once_v1",
-                    status: "active",
-                    quota,
-                    validUntil,
-                  },
-                ]
-              : table === channelConnections
-                ? options.bindingMatches === false
-                  ? []
-                  : [{ id: 7 }]
-                : table === workspaceEntitlementUsage
-                  ? [usage]
-                  : table === billingSchedulerTenants
-                    ? [{ enabled: options.schedulerEnabled ?? true }]
-                    : table === workspaceEntitlementUsageReservations
-                      ? selection === undefined
-                        ? lookupReservations
-                        : staleReservations
-                      : [];
-          const lock = vi.fn(async () => rows);
-          return {
-            limit: vi.fn(() => ({ for: lock })),
-            for: lock,
-          };
-        }),
-      })),
+      from: vi.fn((table: unknown) => {
+        selectedTables.push(table);
+        return {
+          where: vi.fn(() => {
+            const rows =
+              table === workspaceEntitlements
+                ? [
+                    {
+                      id: 9,
+                      workspaceId: 1,
+                      mode: "test",
+                      planCode: "startpilot_once_v1",
+                      status: "active",
+                      quota,
+                      validUntil,
+                    },
+                  ]
+                : table === channelConnections
+                  ? options.bindingMatches === false
+                    ? []
+                    : [{ id: 7 }]
+                  : table === workspaceEntitlementUsage
+                    ? [usage]
+                    : table === billingSchedulerTenants
+                      ? [{ enabled: options.schedulerEnabled ?? true }]
+                      : table === workspaceEntitlementUsageReservations
+                        ? selection === undefined
+                          ? lookupReservations
+                          : staleReservations
+                        : [];
+            const lock = vi.fn(async () => rows);
+            return {
+              limit: vi.fn(() => ({ for: lock })),
+              for: lock,
+            };
+          }),
+        };
+      }),
     })),
     insert: vi.fn(() => ({ values: insertValues })),
     update: vi.fn((table: unknown) => ({
@@ -606,6 +616,7 @@ function aiUsageFlow(
     insertValues,
     lookupReservations,
     staleReservations,
+    selectedTables,
     updates,
     usage,
   };

@@ -39,10 +39,12 @@ import {
   scheduleWebhookIngressDrain,
   webhookIngressQueueTestHooks,
 } from "./_core/meta/webhookIngressQueue";
+import { toUserKey } from "./_core/privacy";
 
 describe("webhookIngressQueue", () => {
   const originalMaxAttempts = process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS;
   const originalRetryDelayMs = process.env.WEBHOOK_INGRESS_RETRY_DELAY_MS;
+  const originalPrivacyPepper = process.env.PRIVACY_PEPPER;
 
   afterEach(() => {
     vi.useRealTimers();
@@ -61,6 +63,11 @@ describe("webhookIngressQueue", () => {
       delete process.env.WEBHOOK_INGRESS_RETRY_DELAY_MS;
     } else {
       process.env.WEBHOOK_INGRESS_RETRY_DELAY_MS = originalRetryDelayMs;
+    }
+    if (originalPrivacyPepper === undefined) {
+      delete process.env.PRIVACY_PEPPER;
+    } else {
+      process.env.PRIVACY_PEPPER = originalPrivacyPepper;
     }
     resetWebhookIngressQueueForTests();
   });
@@ -93,6 +100,30 @@ describe("webhookIngressQueue", () => {
 
     await expect(ensureWebhookIngressQueueReady()).rejects.toThrow(
       "Legacy webhook ingress dead-letter requires purge"
+    );
+  });
+
+  it("rejects an unscoped WhatsApp delivery during readiness", async () => {
+    const deliveryId = "44444444-4444-4444-8444-444444444444";
+    const receivedAt = Date.now();
+    getRedisClientMock.mockResolvedValue({
+      lrange: vi.fn(async (key: string) =>
+        key === "{meta-webhook-ingress}:queued" ? [deliveryId] : []
+      ),
+      get: vi.fn(async () =>
+        JSON.stringify({
+          deliveryId,
+          channel: "whatsapp",
+          payload: { object: "whatsapp_business_account", entry: [] },
+          receivedAt: new Date(receivedAt).toISOString(),
+          expiresAt: receivedAt + 60_000,
+          subjects: [],
+        })
+      ),
+    });
+
+    await expect(ensureWebhookIngressQueueReady()).rejects.toThrow(
+      "Legacy or unscoped webhook ingress delivery requires purge"
     );
   });
 
@@ -511,13 +542,50 @@ describe("webhookIngressQueue", () => {
   it("requeues a failed delivery with an incremented attempt count", async () => {
     isRedisEnabledMock.mockReturnValue(true);
     process.env.WEBHOOK_INGRESS_MAX_ATTEMPTS = "2";
+    process.env.PRIVACY_PEPPER = "webhook-ingress-queue-test-pepper";
     processWhatsAppWebhookPayloadMock.mockRejectedValue(new Error("try again"));
+    const senderId = "32470000001";
+    const phoneNumberId = "404040404040404";
 
     const delivery = JSON.stringify({
       channel: "whatsapp",
-      payload: { entry: [{ id: "retry" }] },
+      payload: {
+        object: "whatsapp_business_account",
+        entry: [
+          {
+            id: "303030303030303",
+            changes: [
+              {
+                field: "messages",
+                value: {
+                  metadata: { phone_number_id: phoneNumberId },
+                  messages: [
+                    {
+                      from: senderId,
+                      id: "wamid.retry",
+                      timestamp: "1777000000",
+                      type: "text",
+                      text: { body: "retry" },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
       receivedAt: "2026-05-28T00:00:00.000Z",
       attempts: 1,
+      subjects: [
+        {
+          workspaceId: 42,
+          channelConnectionId: 8,
+          bindingEpoch: 3,
+          privacyEpoch: 2,
+          pageId: phoneNumberId,
+          userKey: toUserKey(senderId),
+        },
+      ],
     });
     const queue = [delivery];
     const processing: string[] = [];
@@ -899,55 +967,65 @@ function createQueueRedis(
 
   return {
     ...redis,
-    eval: vi.fn(
-      async (
-        _script: string,
-        _numKeys: number,
-        _processingKey: string,
-        leaseKey: string,
-        destinationKey: string,
-        rawDelivery: string,
-        pushDirection: string,
-        serializedDelivery: string
-      ) => {
-        const processingType = types.processingType ?? "list";
-        if (processingType !== "none" && processingType !== "list") {
-          throw new Error("processing key is not a list");
+    eval: vi.fn(async (script: string, numKeys: number, ...args: string[]) => {
+      const keys = args.slice(0, numKeys);
+      const argv = args.slice(numKeys);
+      if (script.includes('redis.call("EXISTS", KEYS[i])')) {
+        if (keys.some(key => leases.has(key))) return 0;
+        for (const key of keys) leases.set(key, argv[0]!);
+        return 1;
+      }
+      if (script.includes('redis.call("GET", KEYS[i]) == ARGV[1]')) {
+        for (const key of keys) {
+          if (leases.get(key) === argv[0]) leases.delete(key);
         }
-        const leaseType = types.leaseType ?? "string";
-        if (leaseType !== "none" && leaseType !== "string") {
-          throw new Error("lease key is not a string");
-        }
-        const destinationType = types.destinationType ?? "list";
-        if (destinationType !== "none" && destinationType !== "list") {
-          throw new Error("destination key is not a list");
-        }
+        return 1;
+      }
 
-        if (!processing.includes(rawDelivery)) {
-          return 0;
-        }
+      const [, leaseKey, destinationKey] = keys;
+      const [rawDelivery, pushDirection, serializedDelivery] = argv;
+      const processingType = types.processingType ?? "list";
+      if (processingType !== "none" && processingType !== "list") {
+        throw new Error("processing key is not a list");
+      }
+      const leaseType = types.leaseType ?? "string";
+      if (leaseType !== "none" && leaseType !== "string") {
+        throw new Error("lease key is not a string");
+      }
+      const destinationType = types.destinationType ?? "list";
+      if (destinationType !== "none" && destinationType !== "list") {
+        throw new Error("destination key is not a list");
+      }
 
-        if (types.pushError) {
-          throw types.pushError;
-        }
-        if (pushDirection === "LPUSH") {
-          await redis.lpush(destinationKey, serializedDelivery);
-        } else {
-          await redis.rpush(destinationKey, serializedDelivery);
-        }
+      if (
+        !rawDelivery ||
+        !destinationKey ||
+        !serializedDelivery ||
+        !processing.includes(rawDelivery)
+      ) {
+        return 0;
+      }
 
-        const removed = await redis.lrem(
-          "{meta-webhook-ingress}:processing",
-          1,
-          rawDelivery
-        );
-        if (removed <= 0) {
-          return removed;
-        }
+      if (types.pushError) {
+        throw types.pushError;
+      }
+      if (pushDirection === "LPUSH") {
+        await redis.lpush(destinationKey, serializedDelivery);
+      } else {
+        await redis.rpush(destinationKey, serializedDelivery);
+      }
 
-        await redis.del(leaseKey);
+      const removed = await redis.lrem(
+        "{meta-webhook-ingress}:processing",
+        1,
+        rawDelivery
+      );
+      if (removed <= 0) {
         return removed;
       }
-    ),
+
+      if (leaseKey) await redis.del(leaseKey);
+      return removed;
+    }),
   };
 }

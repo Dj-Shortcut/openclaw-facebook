@@ -194,6 +194,69 @@ describe("Messenger privacy-subject reactivation fence", () => {
     expect(flow.update).not.toHaveBeenCalled();
   });
 
+  it("never admits an inbound event while erasure is still running", async () => {
+    const flow = transactionFlow({
+      id: 11,
+      ...scope,
+      privacyEpoch: 9,
+      status: "erasing",
+      erasedAt: null,
+      lastErasedAt: null,
+    });
+    getDatabaseOrThrowMock.mockResolvedValue(flow.database);
+
+    await expect(
+      admitMessengerPrivacySubjectFromMetaEvent({
+        ...scope,
+        eventOccurredAt: new Date("2026-08-23T12:01:00.000Z"),
+        allowReactivation: true,
+      })
+    ).rejects.toBeInstanceOf(MessengerPrivacyFenceError);
+
+    expect(flow.update).not.toHaveBeenCalled();
+  });
+
+  it("can create a new control-event subject without reactivating an erased one", async () => {
+    const newSubjectFlow = transactionFlow({
+      id: 12,
+      ...scope,
+      privacyEpoch: 1,
+      status: "active",
+      erasedAt: null,
+      lastErasedAt: null,
+    });
+    getDatabaseOrThrowMock.mockResolvedValue(newSubjectFlow.database);
+
+    await expect(
+      admitMessengerPrivacySubjectFromMetaEvent({
+        ...scope,
+        eventOccurredAt: new Date("2026-08-23T12:02:00.000Z"),
+        allowCreation: true,
+        allowReactivation: false,
+      })
+    ).resolves.toBe(1);
+    expect(newSubjectFlow.insert).toHaveBeenCalledTimes(1);
+
+    const erasedFlow = transactionFlow({
+      id: 12,
+      ...scope,
+      privacyEpoch: 2,
+      status: "erased",
+      erasedAt: new Date("2026-08-23T12:01:00.000Z"),
+      lastErasedAt: new Date("2026-08-23T12:01:00.000Z"),
+    });
+    getDatabaseOrThrowMock.mockResolvedValue(erasedFlow.database);
+    await expect(
+      admitMessengerPrivacySubjectFromMetaEvent({
+        ...scope,
+        eventOccurredAt: new Date("2026-08-23T12:03:00.000Z"),
+        allowCreation: true,
+        allowReactivation: false,
+      })
+    ).rejects.toBeInstanceOf(MessengerPrivacyFenceError);
+    expect(erasedFlow.update).not.toHaveBeenCalled();
+  });
+
   it("preserves the durable boundary when an erasure completes", async () => {
     const completedAt = new Date("2026-08-23T12:00:00.123Z");
     const updateSet = vi.fn();

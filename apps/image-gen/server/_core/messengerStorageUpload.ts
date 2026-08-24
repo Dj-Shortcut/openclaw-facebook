@@ -35,6 +35,7 @@ function completionFenceFromScope(
     privacyEpoch: scope.privacyEpoch,
     userKey: scope.userKey,
     pageId: scope.pageId,
+    ...(scope.channel ? { channel: scope.channel } : {}),
   };
 }
 
@@ -79,7 +80,9 @@ export async function uploadMessengerStorageObject<T>(input: {
   const providerFence = await reserveMessengerProviderAttemptFence(
     providerJobFromScope(input),
     input.providerOperation,
-    1
+    1,
+    new Date(),
+    input.scope.channel ?? "facebook_messenger"
   );
   let inventoried = false;
   try {

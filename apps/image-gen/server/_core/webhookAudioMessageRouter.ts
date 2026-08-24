@@ -7,6 +7,7 @@ import {
 } from "./costLedger";
 import { fetchExternalSourceImageForIngress } from "./image-generation/sourceImageFetcher";
 import { anonymizePsid } from "./messengerState";
+import { toUserKey } from "./privacy";
 import { handleTextMessage } from "./webhookTextMessageRouter";
 import {
   assertMessengerDailyAudioTranscriptionBudgetAvailable,
@@ -47,6 +48,10 @@ type AudioMessageInput = {
   attachments: FacebookWebhookAttachment[];
   text?: string;
   timestamp?: number;
+};
+
+export type AudioProviderJob = MessengerGenerationJob & {
+  providerChannel: "facebook_messenger" | "whatsapp";
 };
 
 const OPENAI_AUDIO_TRANSCRIPTION_ENDPOINT =
@@ -112,7 +117,9 @@ export async function tryHandleAudioMessage(
       downloadFence = await reserveMessengerProviderAttemptFence(
         providerJob,
         "meta-audio-download",
-        1
+        1,
+        new Date(),
+        providerJob.providerChannel
       );
       await markMessengerProviderAttemptStarted(downloadFence);
       prepared = await prepareAudioForTranscription(
@@ -220,7 +227,7 @@ export async function tryHandleAudioMessage(
   }
 }
 
-function getAudioProviderJob(input: AudioMessageInput): MessengerGenerationJob {
+function getAudioProviderJob(input: AudioMessageInput): AudioProviderJob {
   const ownership = getMessengerRequestOwnership();
   const privacy = getMessengerRequestPrivacySubject();
   return {
@@ -233,19 +240,28 @@ function getAudioProviderJob(input: AudioMessageInput): MessengerGenerationJob {
     channelConnectionId: ownership?.channelConnectionId,
     bindingEpoch: ownership?.bindingEpoch,
     privacyEpoch: privacy?.privacyEpoch,
+    providerChannel: "facebook_messenger",
   };
 }
 
-async function assertAudioProviderFence(
-  job: MessengerGenerationJob
+export async function assertAudioProviderFence(
+  job: AudioProviderJob
 ): Promise<void> {
-  if (!job.workspaceId || !job.channelConnectionId || !job.privacyEpoch) {
+  if (
+    !job.workspaceId ||
+    !job.channelConnectionId ||
+    !job.bindingEpoch ||
+    !job.privacyEpoch
+  ) {
     if (process.env.NODE_ENV === "production") {
       throw new Error("Messenger audio privacy ownership is incomplete");
     }
     return;
   }
-  await assertMessengerGenerationOwnership(job);
+  await assertMessengerGenerationOwnership({
+    ...job,
+    channel: job.providerChannel,
+  });
   await assertMessengerPrivacySubject({
     workspaceId: job.workspaceId,
     channelConnectionId: job.channelConnectionId,
@@ -257,15 +273,20 @@ async function assertAudioProviderFence(
 function getAudioCostLedgerScope(
   channel: string,
   userId: string,
-  job?: MessengerGenerationJob
+  recipientId: string,
+  job?: AudioProviderJob
 ): CostLedgerTenantScope | undefined {
-  if (channel !== "facebook_messenger") return undefined;
+  if (channel !== "facebook_messenger" && channel !== "whatsapp") {
+    return undefined;
+  }
   if (
     job?.workspaceId &&
     job.channelConnectionId &&
     job.bindingEpoch &&
     job.privacyEpoch &&
-    job.userId === userId
+    job.userId === userId &&
+    job.providerChannel === channel &&
+    (channel !== "whatsapp" || toUserKey(recipientId) === userId)
   ) {
     return {
       workspaceId: job.workspaceId,
@@ -275,8 +296,17 @@ function getAudioCostLedgerScope(
       userKey: userId,
     };
   }
+  // WhatsApp never has a contextless transport path: accepting an incomplete
+  // job here would detach the billable provider attempt from its tenant. Keep
+  // the existing non-production Messenger compatibility for focused tests and
+  // local tooling, while production remains fail closed for both channels.
+  if (channel === "whatsapp" || job?.providerChannel === "whatsapp") {
+    throw new Error(
+      "Audio transcription requires tenant-scoped cost admission"
+    );
+  }
   if (process.env.NODE_ENV === "production") {
-    throw new Error("Messenger audio cost ledger tenant scope is required");
+    throw new Error("Meta audio cost ledger tenant scope is required");
   }
   return undefined;
 }
@@ -407,10 +437,15 @@ export async function transcribePreparedAudioMessage(
   prepared: PreparedAudioForTranscription,
   onProviderAttempt: () => Promise<void>,
   channel = "facebook_messenger",
-  providerJob?: MessengerGenerationJob
+  providerJob?: AudioProviderJob
 ): Promise<string | null> {
   const { apiKey, sourceAudio } = prepared;
-  const costLedgerScope = getAudioCostLedgerScope(channel, userId, providerJob);
+  const costLedgerScope = getAudioCostLedgerScope(
+    channel,
+    userId,
+    psid,
+    providerJob
+  );
   const costEstimate = estimateAudioTranscriptionAttemptCost();
   const attemptPayload = {
     reqId,
@@ -428,6 +463,9 @@ export async function transcribePreparedAudioMessage(
     attempt += 1
   ) {
     let providerFence: MessengerProviderAttemptFence | null = null;
+    let ledgerEntryRecorded = false;
+    let providerResponseAccepted = false;
+    let providerSuccessRecorded = false;
     const attemptNow = new Date();
     const ledgerEntryId = `${reqId}:openai-audio:${attempt + 1}`;
     try {
@@ -436,20 +474,21 @@ export async function transcribePreparedAudioMessage(
         providerFence = await reserveMessengerProviderAttemptFence(
           providerJob,
           "openai-audio-transcription",
-          attempt + 1
+          providerJob.providerChannel === "whatsapp" ? 1 : attempt + 1,
+          attemptNow,
+          providerJob.providerChannel
         );
       }
       await admitMessengerProviderSpend({
         reqId,
         attemptId: ledgerEntryId,
-        userKey: userId,
         tenantScope: costLedgerScope,
+        userKey: userId,
         estimatedCostUsd: costEstimate.estimatedCostUsd,
         estimatedOutputCostUsd: null,
         costEstimateComplete: costEstimate.costEstimateComplete,
         now: attemptNow,
         recordAttempt: async () => {
-          await onProviderAttempt();
           await appendCostLedgerEntry(
             {
               id: ledgerEntryId,
@@ -476,16 +515,44 @@ export async function transcribePreparedAudioMessage(
             },
             attemptNow
           );
+          ledgerEntryRecorded = true;
+          if (providerFence) {
+            await markMessengerProviderAttemptStarted(providerFence);
+          }
+          // Customer quota is consumed only after the final durable
+          // tenant/privacy CAS wins and immediately before fetch.
+          await onProviderAttempt();
         },
       });
-      if (providerJob) await assertAudioProviderFence(providerJob);
-      if (providerFence)
-        await markMessengerProviderAttemptStarted(providerFence);
     } catch (error) {
+      const cleanupErrors: unknown[] = [];
+      if (ledgerEntryRecorded) {
+        try {
+          await safelyUpdateCostLedgerEntry(
+            ledgerEntryId,
+            { status: "provider_attempt_failed" },
+            attemptNow,
+            costLedgerScope
+          );
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        }
+      }
       if (providerFence) {
-        await finalizeMessengerProviderAttemptFence(
-          providerFence,
-          "known_failed"
+        try {
+          await finalizeMessengerProviderAttemptFence(
+            providerFence,
+            "known_failed"
+          );
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        }
+      }
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [error, ...cleanupErrors],
+          "Audio provider admission cleanup failed",
+          { cause: error }
         );
       }
       throw error;
@@ -548,7 +615,7 @@ export async function transcribePreparedAudioMessage(
         if (providerFence) {
           await finalizeMessengerProviderAttemptFence(
             providerFence,
-            response.status >= 500 || response.status === 429
+            isAmbiguousProviderResponseStatus(response.status)
               ? "ambiguous"
               : "known_failed"
           );
@@ -556,6 +623,25 @@ export async function transcribePreparedAudioMessage(
         }
         return null;
       }
+
+      // A 2xx is a known billable provider outcome. Persist it before parsing
+      // or any privacy/delivery recheck so later local failures can suppress
+      // the transcript without rewriting provider spend as failed/ambiguous.
+      providerResponseAccepted = true;
+      await safelyUpdateCostLedgerEntry(
+        ledgerEntryId,
+        {
+          status: "provider_attempt_succeeded",
+          finalCostUsd: costEstimate.finalCostUsd,
+        },
+        attemptNow,
+        costLedgerScope
+      );
+      if (providerFence) {
+        await finalizeMessengerProviderAttemptFence(providerFence, "succeeded");
+        providerFence = null;
+      }
+      providerSuccessRecorded = true;
 
       const result: unknown = await response.json();
       const transcript =
@@ -572,19 +658,6 @@ export async function transcribePreparedAudioMessage(
           reason: "empty_transcript",
           attempt,
         });
-        await safelyUpdateCostLedgerEntry(
-          ledgerEntryId,
-          { status: "provider_attempt_failed" },
-          attemptNow,
-          costLedgerScope
-        );
-        if (providerFence) {
-          await finalizeMessengerProviderAttemptFence(
-            providerFence,
-            "ambiguous"
-          );
-          providerFence = null;
-        }
         return null;
       }
 
@@ -598,31 +671,8 @@ export async function transcribePreparedAudioMessage(
           textLength: transcript.length,
           wordCount,
         });
-        await safelyUpdateCostLedgerEntry(
-          ledgerEntryId,
-          { status: "provider_attempt_failed" },
-          attemptNow,
-          costLedgerScope
-        );
-        if (providerFence) {
-          await finalizeMessengerProviderAttemptFence(
-            providerFence,
-            "succeeded"
-          );
-          providerFence = null;
-        }
         return null;
       }
-
-      await safelyUpdateCostLedgerEntry(
-        ledgerEntryId,
-        {
-          status: "provider_attempt_succeeded",
-          finalCostUsd: costEstimate.finalCostUsd,
-        },
-        attemptNow,
-        costLedgerScope
-      );
       safeLog("messenger_audio_transcription_complete", {
         ...attemptPayload,
         route: "audio",
@@ -630,12 +680,51 @@ export async function transcribePreparedAudioMessage(
         hasText: true,
       });
       if (providerJob) await assertAudioProviderFence(providerJob);
-      if (providerFence) {
-        await finalizeMessengerProviderAttemptFence(providerFence, "succeeded");
-        providerFence = null;
-      }
       return transcript;
     } catch (error) {
+      if (providerResponseAccepted) {
+        const persistenceErrors: unknown[] = [];
+        if (!providerSuccessRecorded) {
+          try {
+            await safelyUpdateCostLedgerEntry(
+              ledgerEntryId,
+              {
+                status: "provider_attempt_succeeded",
+                finalCostUsd: costEstimate.finalCostUsd,
+              },
+              attemptNow,
+              costLedgerScope
+            );
+          } catch (persistenceError) {
+            persistenceErrors.push(persistenceError);
+          }
+          if (providerFence) {
+            try {
+              await finalizeMessengerProviderAttemptFence(
+                providerFence,
+                "succeeded"
+              );
+              providerFence = null;
+            } catch (persistenceError) {
+              persistenceErrors.push(persistenceError);
+            }
+          }
+        }
+        safeLog("messenger_audio_transcription_post_provider_failed", {
+          ...attemptPayload,
+          route: "audio",
+          attempt,
+          reason: error instanceof Error ? error.name : "unknown_error",
+        });
+        if (persistenceErrors.length > 0) {
+          throw new AggregateError(
+            [error, ...persistenceErrors],
+            "Audio provider success persistence failed",
+            { cause: error }
+          );
+        }
+        return null;
+      }
       const durableAttempt = Boolean(providerFence?.attemptKeyHash);
       if (
         !durableAttempt &&
@@ -757,6 +846,10 @@ function buildTranscriptionRequestBody(
   body.append("response_format", "json");
 
   return body;
+}
+
+function isAmbiguousProviderResponseStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
 }
 
 function isRetryableStatus(status: number): boolean {

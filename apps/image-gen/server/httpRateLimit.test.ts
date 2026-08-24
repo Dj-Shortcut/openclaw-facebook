@@ -12,6 +12,8 @@ import { bindTestHttpServer } from "./testHttpServer";
 const originalWindowMs = process.env.HTTP_RATE_LIMIT_WINDOW_MS;
 const originalMaxRequests = process.env.HTTP_RATE_LIMIT_MAX_REQUESTS;
 const originalMollieBillingEnabled = process.env.MOLLIE_BILLING_ENABLED;
+const originalMollieBillingDrainEnabled =
+  process.env.MOLLIE_BILLING_DRAIN_ENABLED;
 
 afterEach(() => {
   if (originalWindowMs === undefined) {
@@ -30,6 +32,13 @@ afterEach(() => {
     delete process.env.MOLLIE_BILLING_ENABLED;
   } else {
     process.env.MOLLIE_BILLING_ENABLED = originalMollieBillingEnabled;
+  }
+
+  if (originalMollieBillingDrainEnabled === undefined) {
+    delete process.env.MOLLIE_BILLING_DRAIN_ENABLED;
+  } else {
+    process.env.MOLLIE_BILLING_DRAIN_ENABLED =
+      originalMollieBillingDrainEnabled;
   }
 });
 
@@ -159,8 +168,9 @@ describe("global http rate limiter", () => {
     }
   });
 
-  it("delegates only the exact enabled Mollie POST route to its dedicated limiter", () => {
-    process.env.MOLLIE_BILLING_ENABLED = "true";
+  it("delegates the exact Mollie drain POST route to its dedicated limiter", () => {
+    process.env.MOLLIE_BILLING_ENABLED = "false";
+    process.env.MOLLIE_BILLING_DRAIN_ENABLED = "true";
     const request = (method: string, path: string) =>
       ({ method, path }) as express.Request;
 
@@ -176,7 +186,7 @@ describe("global http rate limiter", () => {
       )
     ).toBe(false);
 
-    delete process.env.MOLLIE_BILLING_ENABLED;
+    delete process.env.MOLLIE_BILLING_DRAIN_ENABLED;
     expect(
       shouldSkipHttpRateLimit(request("POST", "/api/webhooks/mollie/payments"))
     ).toBe(false);

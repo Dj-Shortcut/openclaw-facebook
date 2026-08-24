@@ -17,10 +17,14 @@ import {
   assertMollieNonSecretLaunchConfig,
   assertTenantBillingWorkerConfigured,
   getConfiguredBillingMode,
+  getMollieConfig,
+  getMollieReadinessPhase,
+  isMollieBillingDrainEnabled,
   isMollieBillingPreflightEnabled,
   isMollieBillingEnabled,
   isMollieEntitlementEnforcementEnabled,
 } from "./billing/config";
+import { assertMollieBillingDrainLifecycle } from "./billing/billingDrainLifecycle";
 import {
   assertBillingNotificationConfig,
   isBillingNotificationPlaneEnabled,
@@ -34,11 +38,14 @@ import {
   getMollieAccountingImportConfig,
   isMollieAccountingImportEnabled,
 } from "./billing/accountingWorker";
+import { assertWhatsAppTenantBindingReadiness } from "./whatsappBindingReadiness";
 
 export type ReadinessCheck = {
   name: string;
   check: () => Promise<void> | void;
 };
+
+export type ReadinessPhase = "core" | "offline" | "operational";
 
 type ReadinessCheckResult = {
   name: string;
@@ -79,7 +86,8 @@ async function runReadinessChecks(
 }
 
 export function createReadinessHandler(
-  checks: readonly ReadinessCheck[]
+  checks: readonly ReadinessCheck[],
+  options: { getPhase?: () => ReadinessPhase } = {}
 ): express.RequestHandler {
   return (_req, res, next) => {
     void runReadinessChecks(checks)
@@ -87,6 +95,7 @@ export function createReadinessHandler(
         const ok = checkResults.every(result => result.ok);
         res.status(ok ? 200 : 503).json({
           ok,
+          ...(options.getPhase ? { phase: options.getPhase() } : {}),
           checks: checkResults,
         });
       })
@@ -95,6 +104,7 @@ export function createReadinessHandler(
 }
 
 export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
+  const mollieReadinessPhase = getMollieReadinessPhase();
   const aiFinalizationDrainEnabled =
     process.env.AI_ANSWER_FINALIZATION_DRAIN_ENABLED === "true";
   const aiAnswerQuotaPreflightEnabled =
@@ -119,13 +129,24 @@ export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
       check: assertPortalDatabaseConfig,
     },
     {
+      name: "whatsapp_tenant_binding",
+      check: assertWhatsAppTenantBindingReadiness,
+    },
+    {
       name: "mollie_billing_config",
       check: () => {
         if (isMollieBillingEnabled()) {
           assertMollieBillingEnabled();
           assertTenantBillingWorkerConfigured();
+        } else if (isMollieBillingDrainEnabled()) {
+          void getMollieConfig();
+          assertTenantBillingWorkerConfigured();
         }
       },
+    },
+    {
+      name: "mollie_billing_drain_lifecycle",
+      check: assertMollieBillingDrainLifecycle,
     },
     {
       name: "billing_notification_plane",
@@ -149,8 +170,12 @@ export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
       name: "mollie_launch_nonsecret_preflight",
       check: async () => {
         if (isMollieBillingPreflightEnabled()) {
-          assertMollieNonSecretLaunchConfig();
-          await assertBillingDatabaseReadiness(getConfiguredBillingMode());
+          const requireOperationalFlags =
+            mollieReadinessPhase === "operational";
+          assertMollieNonSecretLaunchConfig({ requireOperationalFlags });
+          await assertBillingDatabaseReadiness(getConfiguredBillingMode(), {
+            requireRuntimeHeartbeat: requireOperationalFlags,
+          });
         }
       },
     },

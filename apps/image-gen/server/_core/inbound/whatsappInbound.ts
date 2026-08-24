@@ -1,6 +1,11 @@
 import { toUserKey } from "../privacy";
-import type { NormalizedInboundMessage } from "../normalizedInboundMessage";
 import { safeLog } from "../logger";
+import {
+  ConversationIdentityError,
+  resolveWhatsAppEndpoint,
+  type WhatsAppEndpoint,
+} from "../conversationEndpoint";
+import type { NormalizedWhatsAppEvent } from "../whatsappTypes";
 import { summarizeWhatsAppStatuses } from "./whatsappStatusSummary";
 import {
   arrayProperty,
@@ -20,7 +25,9 @@ export function isWhatsAppWebhookPayload(
 }
 
 export function logWhatsAppWebhookPayload(payload: unknown): void {
-  const entries = Array.isArray((payload as { entry?: unknown[] } | null)?.entry)
+  const entries = Array.isArray(
+    (payload as { entry?: unknown[] } | null)?.entry
+  )
     ? (payload as { entry: unknown[] }).entry.length
     : 0;
   const statusSummary = summarizeWhatsAppStatuses(payload);
@@ -90,12 +97,15 @@ function normalizeMessageType(
 function readAudioId(message: unknown): string | null {
   return (
     stringProperty(getNestedObject(message, "audio"), "id") ??
-    stringProperty(getNestedObject(message, "voice"), "id")
-    ?? stringProperty(getNestedObject(message, "ptt"), "id")
+    stringProperty(getNestedObject(message, "voice"), "id") ??
+    stringProperty(getNestedObject(message, "ptt"), "id")
   );
 }
 
-function buildWhatsAppEvent(message: unknown): NormalizedInboundMessage | null {
+function buildWhatsAppEvent(
+  message: unknown,
+  endpoint: WhatsAppEndpoint
+): NormalizedWhatsAppEvent | null {
   const from = stringProperty(message, "from") ?? "";
   if (!from) {
     return null;
@@ -110,6 +120,7 @@ function buildWhatsAppEvent(message: unknown): NormalizedInboundMessage | null {
 
   return {
     channel: "whatsapp",
+    endpoint,
     senderId: from,
     userId: toUserKey(from),
     channelCapabilities: {
@@ -135,19 +146,52 @@ function buildWhatsAppEvent(message: unknown): NormalizedInboundMessage | null {
   };
 }
 
-function extractMessagesFromChange(change: unknown): NormalizedInboundMessage[] {
-  return arrayProperty(objectValue(change)?.value, "messages")
-    .map(buildWhatsAppEvent)
-    .filter((event): event is NormalizedInboundMessage => event !== null);
+function extractMessagesFromChange(
+  change: unknown,
+  wabaId: string | null
+): NormalizedWhatsAppEvent[] {
+  const value = objectValue(objectValue(change)?.value);
+  if (!value || !wabaId) {
+    safeLog("whatsapp_inbound_change_dropped", {
+      reason: "missing_identity",
+    });
+    return [];
+  }
+  let endpoint: WhatsAppEndpoint;
+  try {
+    endpoint = resolveWhatsAppEndpoint({
+      wabaId,
+      phoneNumberId: stringProperty(
+        objectValue(value.metadata),
+        "phone_number_id"
+      ),
+    });
+  } catch (error) {
+    if (error instanceof ConversationIdentityError) {
+      safeLog("whatsapp_inbound_change_dropped", {
+        reason: "identity_rejected",
+        code: error.code,
+      });
+      return [];
+    }
+    throw error;
+  }
+
+  return arrayProperty(value, "messages")
+    .map(message => buildWhatsAppEvent(message, endpoint))
+    .filter((event): event is NormalizedWhatsAppEvent => event !== null);
 }
 
-function extractMessagesFromEntry(entry: unknown): NormalizedInboundMessage[] {
-  return arrayProperty(entry, "changes").flatMap(extractMessagesFromChange);
+function extractMessagesFromEntry(entry: unknown): NormalizedWhatsAppEvent[] {
+  const wabaId = stringProperty(entry, "id");
+  return arrayProperty(entry, "changes").flatMap(change =>
+    extractMessagesFromChange(change, wabaId)
+  );
 }
 
 export function extractWhatsAppEvents(
   payload: unknown
-): NormalizedInboundMessage[] {
+): NormalizedWhatsAppEvent[] {
   if (!objectValue(payload)) {
     return [];
   }

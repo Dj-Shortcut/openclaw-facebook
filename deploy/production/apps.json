@@ -130,6 +130,8 @@
       "strategy": "rolling",
       "serviceProcessGroups": ["app"],
       "serviceCheckPath": "/healthz",
+      "readinessCheckPath": "/readyz",
+      "readinessMonitor": ".github/workflows/production-uptime.yml",
       "allowDetachedMachines": false,
       "desiredScale": {
         "app": {

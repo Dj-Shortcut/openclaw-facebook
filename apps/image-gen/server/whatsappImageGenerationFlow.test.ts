@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   reserveImageGenerationUsage: vi.fn(),
   runGuardedGeneration: vi.fn(),
   safeLog: vi.fn(),
-  sendWhatsAppImageReply: vi.fn(),
+  sendWhatsAppImageReplyWithReceipt: vi.fn(),
   sendWhatsAppTextReply: vi.fn(),
   setFlowState: vi.fn(),
   setLastGenerated: vi.fn(),
@@ -46,13 +46,14 @@ vi.mock("./_core/messengerState", () => ({
 }));
 
 vi.mock("./_core/whatsappResponseService", () => ({
-  sendWhatsAppImageReply: mocks.sendWhatsAppImageReply,
+  sendWhatsAppImageReplyWithReceipt: mocks.sendWhatsAppImageReplyWithReceipt,
   sendWhatsAppTextReply: mocks.sendWhatsAppTextReply,
 }));
 
 vi.mock("./_core/logger", () => ({ safeLog: mocks.safeLog }));
 
 import { runWhatsAppImageGeneration } from "./_core/whatsappFlows/imageGenerationFlow";
+import { resolveWhatsAppEndpoint } from "./_core/conversationEndpoint";
 
 describe("WhatsApp image generation customer errors", () => {
   beforeEach(() => {
@@ -88,12 +89,25 @@ describe("WhatsApp image generation customer errors", () => {
       reqId: "request-id",
       lang: "nl",
       promptHint: "maak een kat",
+      endpoint: resolveWhatsAppEndpoint({
+        wabaId: "303030303030303",
+        phoneNumberId: "404040404040404",
+      }),
+      costLedgerScope: {
+        workspaceId: 42,
+        channelConnectionId: 8,
+        bindingEpoch: 3,
+        privacyEpoch: 2,
+        userKey: "opaque-user",
+      },
     });
 
     expect(mocks.sendWhatsAppTextReply).toHaveBeenNthCalledWith(
       2,
       "whatsapp-sender",
-      "Ik kan nu even geen afbeelding maken. Probeer later opnieuw."
+      "Ik kan nu even geen afbeelding maken. Probeer later opnieuw.",
+      "request-id",
+      "image-generation-failure:generation_budget_reached"
     );
     const customerMessages = mocks.sendWhatsAppTextReply.mock.calls
       .map(([, message]) => message)

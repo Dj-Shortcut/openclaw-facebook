@@ -27,6 +27,10 @@ import {
   getBillingSchedulerRollout,
   getTenantBillingWorkerWorkspaceId,
 } from "./config";
+import {
+  getBillingProfileEligibilityFailure,
+  type BillingProfileEligibilitySnapshot,
+} from "./billingProfileStore";
 
 type SchedulerControlReadinessRow = Readonly<{
   workspaceId: number;
@@ -44,6 +48,25 @@ type SchedulerLaneReadinessRow = Readonly<{
   enabledAt: Date | null;
   deadLetterCount: number;
 }>;
+
+type PinnedBillingProfileReadinessRow = BillingProfileEligibilitySnapshot &
+  Readonly<{ workspaceId: number }>;
+
+export function assertPinnedBillingProfileReadiness(
+  profiles: readonly PinnedBillingProfileReadinessRow[],
+  expectedWorkspaceId: number,
+  options: { commercialEnabled?: boolean; now?: Date } = {}
+): void {
+  if (options.commercialEnabled === false) return;
+  const now = options.now ?? new Date();
+  if (
+    profiles.length !== 1 ||
+    profiles[0]?.workspaceId !== expectedWorkspaceId ||
+    getBillingProfileEligibilityFailure(profiles[0], now) !== null
+  ) {
+    throw new Error("Pinned billing workspace has no eligible profile");
+  }
+}
 
 export function assertBillingSchedulerRegistryCoherence(
   controls: readonly SchedulerControlReadinessRow[],
@@ -272,9 +295,17 @@ export async function assertBillingDatabaseReadiness(
       .where(sql`1 = 0`),
     database
       .select({
+        countryCode: workspaceBillingProfiles.countryCode,
+        customerType: workspaceBillingProfiles.customerType,
+        verificationStatus: workspaceBillingProfiles.verificationStatus,
+        verificationMethod: workspaceBillingProfiles.verificationMethod,
+        evidenceReferenceHash: workspaceBillingProfiles.evidenceReferenceHash,
+        verifiedAt: workspaceBillingProfiles.verifiedAt,
         eligibilityVersion: workspaceBillingProfiles.eligibilityVersion,
-        expiresAt: workspaceBillingProfiles.verificationExpiresAt,
+        verificationExpiresAt: workspaceBillingProfiles.verificationExpiresAt,
         revokedAt: workspaceBillingProfiles.revokedAt,
+        verifiedByUserId: workspaceBillingProfiles.verifiedByUserId,
+        peppolReady: workspaceBillingProfiles.peppolReady,
       })
       .from(workspaceBillingProfiles)
       .where(sql`1 = 0`),
@@ -384,24 +415,33 @@ export async function assertBillingDatabaseReadiness(
     if (Number(rogue[0]?.count ?? 0) > 0) {
       throw new Error("Enabled billing scheduler tenant exceeds pilot pin");
     }
+    const pinnedControl = controls.find(
+      control => control.workspaceId === pinnedWorkspaceId
+    );
+    if (!pinnedControl) {
+      throw new Error("Pinned billing workspace has no execution control");
+    }
     const profiles = await database
       .select({
-        status: workspaceBillingProfiles.verificationStatus,
-        expiresAt: workspaceBillingProfiles.verificationExpiresAt,
+        workspaceId: workspaceBillingProfiles.workspaceId,
+        countryCode: workspaceBillingProfiles.countryCode,
+        customerType: workspaceBillingProfiles.customerType,
+        verificationStatus: workspaceBillingProfiles.verificationStatus,
+        verificationMethod: workspaceBillingProfiles.verificationMethod,
+        evidenceReferenceHash: workspaceBillingProfiles.evidenceReferenceHash,
+        verifiedAt: workspaceBillingProfiles.verifiedAt,
+        verificationExpiresAt: workspaceBillingProfiles.verificationExpiresAt,
         revokedAt: workspaceBillingProfiles.revokedAt,
+        verifiedByUserId: workspaceBillingProfiles.verifiedByUserId,
+        peppolReady: workspaceBillingProfiles.peppolReady,
+        eligibilityVersion: workspaceBillingProfiles.eligibilityVersion,
       })
       .from(workspaceBillingProfiles)
       .where(eq(workspaceBillingProfiles.workspaceId, pinnedWorkspaceId))
       .limit(2);
-    if (
-      profiles.length !== 1 ||
-      profiles[0]?.status !== "verified" ||
-      !profiles[0].expiresAt ||
-      profiles[0].expiresAt <= new Date() ||
-      profiles[0].revokedAt
-    ) {
-      throw new Error("Pinned billing workspace has no eligible profile");
-    }
+    assertPinnedBillingProfileReadiness(profiles, pinnedWorkspaceId, {
+      commercialEnabled: pinnedControl.commercialEnabled,
+    });
   }
 }
 

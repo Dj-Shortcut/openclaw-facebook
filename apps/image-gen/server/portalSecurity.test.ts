@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   consumeFacebookPage,
+  getStoredFacebookState,
   startFacebookConnect,
   storeFacebookAuthorizationCode,
   storeFacebookPages,
@@ -13,6 +14,15 @@ import {
 } from "./_core/portalSecurity";
 
 describe("portal security", () => {
+  beforeEach(() => {
+    vi.stubEnv("JWT_SECRET", "x".repeat(32));
+    vi.stubEnv("FACEBOOK_CONNECT_STORAGE_MODE", "sealed_only");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("accepts matching workspace membership", () => {
     expect(() =>
       assertWorkspaceMembership(
@@ -89,6 +99,9 @@ describe("portal security", () => {
         })
       ).authorizationCode
     ).toBe("oauth-code");
+    expect(
+      JSON.stringify(await getStoredFacebookState(state.state))
+    ).not.toContain("oauth-code");
 
     await storeFacebookPages({
       state: state.state,
@@ -105,6 +118,9 @@ describe("portal security", () => {
         },
       ],
     });
+    expect(
+      (await getStoredFacebookState(state.state))?.authorizationCodeEnvelope
+    ).toBeUndefined();
 
     expect(
       await consumeFacebookPage({

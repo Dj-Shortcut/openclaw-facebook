@@ -12,10 +12,37 @@ import {
   enableBillingSchedulerTenant,
   registerBillingSchedulerTenant,
 } from "./billingSchedulerStore";
+import {
+  acknowledgeOperatorBillingNotification,
+  listOperatorBillingNotifications,
+} from "./billingNotificationInboxStore";
 
 const workspaceId = z.number().int().positive();
 
 export const billingAdminRouter = router({
+  operatorNotifications: adminProcedure
+    .input(
+      z.object({
+        workspaceId,
+        limit: z.number().int().min(1).max(50).optional(),
+      })
+    )
+    .query(({ input }) => listOperatorBillingNotifications(input)),
+
+  acknowledgeOperatorNotification: adminProcedure
+    .input(
+      z.object({
+        workspaceId,
+        notificationId: z.number().int().positive(),
+      })
+    )
+    .mutation(({ ctx, input }) =>
+      acknowledgeOperatorBillingNotification({
+        ...input,
+        actorUserId: ctx.user.id,
+      })
+    ),
+
   profileStatus: adminProcedure
     .input(z.object({ workspaceId }))
     .query(({ input }) =>
@@ -24,22 +51,17 @@ export const billingAdminRouter = router({
 
   attestProfile: adminProcedure
     .input(
-      z.object({
-        requestId: z.uuid(),
-        workspaceId,
-        expectedVersion: z.number().int().nonnegative(),
-        countryCode: z.string().regex(/^[A-Z]{2}$/),
-        customerType: z.enum(["consumer", "business"]),
-        evidenceReference: z
-          .string()
-          .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{7,255}$/),
-        verificationMethod: z.enum([
-          "manual_legal_review",
-          "provider_attestation",
-        ]),
-        expiresAt: z.date(),
-        peppolReady: z.boolean().optional(),
-      })
+      z
+        .object({
+          requestId: z.uuid(),
+          workspaceId,
+          expectedVersion: z.number().int().nonnegative(),
+          evidenceReference: z
+            .string()
+            .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{7,255}$/),
+          expiresAt: z.date(),
+        })
+        .strict()
     )
     .mutation(async ({ ctx, input }) => {
       const result = await attestWorkspaceBillingProfile({

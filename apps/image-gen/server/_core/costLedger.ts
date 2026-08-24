@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { safeLog } from "./messengerApi";
+import { safeLog } from "./logger";
 import { toLogUser } from "./privacy";
 import {
   deleteScopedState,
@@ -202,7 +202,7 @@ function assertNewEntryTenantScope(entry: CostLedgerEntry): void {
   // identity model. A Messenger provider attempt must never create a new
   // ambiguous record in production.
   if (
-    entry.channel === "facebook_messenger" &&
+    (entry.channel === "facebook_messenger" || entry.channel === "whatsapp") &&
     process.env.NODE_ENV === "production"
   ) {
     throw new Error("Messenger cost ledger tenant scope is required");

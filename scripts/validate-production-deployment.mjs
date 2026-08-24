@@ -29,6 +29,7 @@ const PINNED_FLYCTL_ASSET_URL =
   "https://github.com/superfly/flyctl/releases/download/v0.4.85/flyctl_0.4.85_Linux_x86_64.tar.gz";
 const PINNED_FLYCTL_ASSET_SHA256 =
   "c3b5ed05319adf8a265d68171758ea7b37bd340c5c3dc4e09e17fb6344b8ff90";
+const FORBIDDEN_FLY_API_HOSTNAME = "api.fly.io";
 const VERIFIED_FLYCTL_WORKFLOW_JOBS = Object.freeze({
   [TRUSTED_ARTIFACT_WORKFLOW_PATH]: ["build"],
   [SCHEMA_PROBE_CLEANUP_WORKFLOW_PATH]: ["cleanup"],
@@ -96,6 +97,50 @@ function fail(message) {
   throw new Error(message);
 }
 
+export function referencesForbiddenFlyApiUrl(source) {
+  for (const match of source.matchAll(/https?:\/\/[^\s"'`<>()[\]{}]+/giu)) {
+    let parsed;
+    try {
+      parsed = new URL(match[0]);
+    } catch {
+      continue;
+    }
+    const hostname = parsed.hostname.toLowerCase().replace(/\.$/u, "");
+    if (
+      (parsed.protocol === "https:" || parsed.protocol === "http:") &&
+      hostname === FORBIDDEN_FLY_API_HOSTNAME
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function referencesExactHttpUrl(source, expected) {
+  const expectedUrl = new URL(expected);
+  for (const match of source.matchAll(/https?:\/\/[^\s"'`<>()[\]{}]+/giu)) {
+    let parsed;
+    try {
+      parsed = new URL(match[0]);
+    } catch {
+      continue;
+    }
+    if (
+      parsed.protocol === expectedUrl.protocol &&
+      parsed.username === expectedUrl.username &&
+      parsed.password === expectedUrl.password &&
+      parsed.hostname === expectedUrl.hostname &&
+      parsed.port === expectedUrl.port &&
+      parsed.pathname === expectedUrl.pathname &&
+      parsed.search === expectedUrl.search &&
+      parsed.hash === expectedUrl.hash
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
@@ -140,6 +185,25 @@ function tableAssignments(tables, tableName) {
     }
   }
   return result;
+}
+
+function tableAssignmentGroups(text, tableName) {
+  const groups = [];
+  let current = null;
+  for (const line of text.split(/\r?\n/)) {
+    const heading = line.match(/^\s*\[\[?\s*([^\]]+?)\s*\]\]?\s*(?:#.*)?$/);
+    if (heading) {
+      current = heading[1] === tableName ? {} : null;
+      if (current) groups.push(current);
+      continue;
+    }
+    if (!current) continue;
+    const assignment = line.match(/^\s*([A-Za-z0-9_-]+)\s*=\s*(.+?)\s*$/);
+    if (assignment) {
+      current[assignment[1]] = unquoteToml(assignment[2]);
+    }
+  }
+  return groups;
 }
 
 function allAssignments(text, key) {
@@ -285,7 +349,7 @@ function assertExactVerifiedFlyctlInstaller(step, workflowPath, jobName) {
   if (
     step.includes("uses:") ||
     step.includes("setup-flyctl") ||
-    step.includes("api.fly.io") ||
+    referencesForbiddenFlyApiUrl(step) ||
     step.includes("--insecure") ||
     occurrenceCount(step, PINNED_FLYCTL_ASSET_URL) !== 1 ||
     occurrenceCount(step, PINNED_FLYCTL_ASSET_SHA256) !== 1 ||
@@ -353,7 +417,10 @@ function validateVerifiedFlyctlSupplyChain(rootDir) {
     );
   }
   for (const [workflowPath, workflow] of allWorkflowSources) {
-    if (workflow.includes("setup-flyctl") || workflow.includes("api.fly.io")) {
+    if (
+      workflow.includes("setup-flyctl") ||
+      referencesForbiddenFlyApiUrl(workflow)
+    ) {
       fail(
         `${workflowPath} must never use an unverified remote flyctl installer`,
       );
@@ -1662,6 +1729,10 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       "must narrowly validate the pre-expand bootstrap rollback exception",
     ],
     [
+      "--allow-first-trusted-bootstrap-drift",
+      "must narrowly reconcile the exact legacy image-gen predecessor",
+    ],
+    [
       "FLY_IMAGE_GEN_REVIEWED_IMAGE: ${{ inputs.rollback_image }}",
       "must pass the reviewed manifest input to the canonical image-gen deploy command",
     ],
@@ -1740,6 +1811,39 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
         : workflow.includes(needle);
     if (!matched) {
       fail(`${PRODUCTION_WORKFLOW_PATH} ${message}`);
+    }
+  }
+  for (const stepName of [
+    "Smoke-test storage-proxy",
+    "Verify restored storage-proxy release",
+  ]) {
+    const steps = namedWorkflowStepBodies(workflow, stepName);
+    const rollbackReadinessIsContractGated =
+      stepName !== "Verify restored storage-proxy release" ||
+      (steps[0]?.includes(
+        '--reviewed-artifact-kind storage-proxy "$rollback_image"',
+      ) === true &&
+        steps[0]?.includes(
+          'if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then',
+        ) === true);
+    if (
+      steps.length !== 1 ||
+      !rollbackReadinessIsContractGated ||
+      !referencesExactHttpUrl(
+        steps[0],
+        "https://leaderbot-storage-proxy.fly.dev/healthz",
+      ) ||
+      !referencesExactHttpUrl(
+        steps[0],
+        "https://leaderbot-storage-proxy.fly.dev/readyz",
+      ) ||
+      !steps[0].includes(
+        "jq -e '.ok == true and .rateLimiter == \"shared_redis\"'",
+      )
+    ) {
+      fail(
+        `${PRODUCTION_WORKFLOW_PATH} must prove storage-proxy liveness and shared-limiter readiness after deploy and rollback`,
+      );
     }
   }
   if (/^ {6}(?:FLY_API_TOKEN|META_APP_ID|META_APP_SECRET):/m.test(workflow)) {
@@ -2074,7 +2178,7 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     ],
     [
       "--retry-all-errors",
-      11,
+      13,
       "must retry exact flyctl downloads and transient deploy and rollback smokes",
     ],
     [
@@ -2317,6 +2421,17 @@ function validateStorageProxySafety(rootDir) {
       fail("storage proxy must fail closed on bounded R2 retention safety");
     }
   }
+  for (const requiredSource of [
+    "createSharedStorageRateLimitBackend",
+    'app.get("/readyz"',
+    'app.use("/v1/storage", authRateLimiter)',
+    'app.use("/v1/storage", storageOperationRateLimiter)',
+    "passOnStoreError: false",
+  ]) {
+    if (!source.includes(requiredSource)) {
+      fail("storage proxy must fail closed on shared Redis rate limiting");
+    }
+  }
   for (const requiredWorkflow of [
     "storage-proxy install --frozen-lockfile",
     "apps/image-gen/storage-proxy/pnpm-workspace.yaml",
@@ -2328,6 +2443,8 @@ function validateStorageProxySafety(rootDir) {
     "org.opencontainers.image.revision",
     "io.leaderbot.artifact.kind",
     "storage-proxy audit --audit-level=moderate",
+    'RUN_STORAGE_RATE_LIMIT_REDIS_INTEGRATION: "1"',
+    "STORAGE_RATE_LIMIT_REDIS_URL: redis://127.0.0.1:6379/13",
   ]) {
     if (!workflow.includes(requiredWorkflow)) {
       fail("image-gen CI must validate the independently locked storage proxy");
@@ -3787,6 +3904,30 @@ function validateProductionReconciliationWorkflow(rootDir) {
         `${PRODUCTION_RECONCILIATION_WORKFLOW_PATH} must fail closed on ${target} manifest, config, identity, and live-state drift before restoring`,
       );
     }
+    if (
+      target === "storage-proxy" &&
+      (!referencesExactHttpUrl(
+        step,
+        "https://leaderbot-storage-proxy.fly.dev/healthz",
+      ) ||
+        !step.includes(
+          '--reviewed-artifact-kind storage-proxy "$rollback_image"',
+        ) ||
+        !step.includes(
+          'if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then',
+        ) ||
+        !referencesExactHttpUrl(
+          step,
+          "https://leaderbot-storage-proxy.fly.dev/readyz",
+        ) ||
+        !step.includes(
+          "jq -e '.ok == true and .rateLimiter == \"shared_redis\"'",
+        ))
+    ) {
+      fail(
+        `${PRODUCTION_RECONCILIATION_WORKFLOW_PATH} must prove restored storage-proxy liveness and shared-limiter readiness`,
+      );
+    }
     const expectedStepGate =
       target === "image-gen"
         ? "if: steps.successor.outputs.superseded != 'true' && steps.successor_recheck.outputs.superseded != 'true'"
@@ -3867,7 +4008,7 @@ function validateProductionReconciliationWorkflow(rootDir) {
     {
       target: "storage-proxy",
       stepName: "Classify storage-proxy successor from exact approved source",
-      ready: false,
+      ready: true,
     },
   ];
   for (const { target, stepName, ready, recheck } of successorSpecs) {
@@ -3898,8 +4039,19 @@ function validateProductionReconciliationWorkflow(rootDir) {
       !step.includes('--root-dir "$successor_root"') ||
       !step.includes('--expected-source-sha "$successor_sha"') ||
       !step.includes("--require-current-reviewed-image") ||
-      !step.includes("/healthz") ||
-      (ready && !step.includes("/readyz")) ||
+      !referencesExactHttpUrl(
+        step,
+        `https://${CANONICAL_TARGETS[target].app}.fly.dev/healthz`,
+      ) ||
+      (ready &&
+        !referencesExactHttpUrl(
+          step,
+          `https://${CANONICAL_TARGETS[target].app}.fly.dev/readyz`,
+        )) ||
+      (target === "storage-proxy" &&
+        !step.includes(
+          "jq -e '.ok == true and .rateLimiter == \"shared_redis\"'",
+        )) ||
       !step.includes('echo "superseded=true" >> "$GITHUB_OUTPUT"') ||
       (recheck &&
         !step.includes("if: steps.successor.outputs.superseded != 'true'")) ||
@@ -4067,8 +4219,8 @@ function validateProductionReconciliationWorkflow(rootDir) {
     occurrenceCount(workflow, "--require-current-reviewed-image") !== 4 ||
     occurrenceCount(workflow, "--verify-settled-baseline") !== 0 ||
     occurrenceCount(workflow, "--settled-live") !== 4 ||
-    occurrenceCount(workflow, 'node "$RECOVERY_CONTROLLER"') !== 41 ||
-    occurrenceCount(workflow, '--root-dir "$GITHUB_WORKSPACE"') !== 37 ||
+    occurrenceCount(workflow, 'node "$RECOVERY_CONTROLLER"') !== 42 ||
+    occurrenceCount(workflow, '--root-dir "$GITHUB_WORKSPACE"') !== 38 ||
     occurrenceCount(workflow, "--validate-recovery-protocol") !== 3 ||
     occurrenceCount(workflow, "--reviewed-scale-plan") !== 3 ||
     occurrenceCount(workflow, 'flyctl scale count "$count"') !== 3 ||
@@ -4950,6 +5102,16 @@ export function validateProductionRepository(rootDir = process.cwd()) {
           );
         }
       }
+      for (const requiredProvisioningFragment of [
+        "server/cli/provisionWhatsAppBinding.ts",
+        "--outfile=dist/provision-whatsapp-binding.cjs",
+      ]) {
+        if (!dockerBuild.includes(requiredProvisioningFragment)) {
+          fail(
+            "image-gen build:docker must bundle the provider-silent WhatsApp provisioning command",
+          );
+        }
+      }
       const dockerfile = fs.readFileSync(
         path.join(rootDir, "apps/image-gen/Dockerfile"),
         "utf8",
@@ -4982,6 +5144,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         'io.leaderbot.schema.maximum="0016_expand"',
         "'migration-bridge' > /app/.leaderbot-artifact-kind",
         "'runtime' > /app/.leaderbot-artifact-kind",
+        "RUN test -s /app/dist/provision-whatsapp-binding.cjs",
       ]) {
         if (!dockerfile.includes(requiredDockerFragment)) {
           fail(
@@ -4997,6 +5160,19 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       ) {
         fail(
           "image-gen runtime artifact must stay on the exact 0016_expand schema range until 0017 writer fencing is reviewed",
+        );
+      }
+      const imageGenCi = fs.readFileSync(
+        path.join(rootDir, ".github/workflows/image-gen-ci.yml"),
+        "utf8",
+      );
+      if (
+        !imageGenCi.includes(
+          'docker run --rm "$image" test -s /app/dist/provision-whatsapp-binding.cjs',
+        )
+      ) {
+        fail(
+          "image-gen CI must inspect the bundled WhatsApp provisioning command",
         );
       }
       const migrationRunner = fs.readFileSync(
@@ -5040,14 +5216,70 @@ export function validateProductionRepository(rootDir = process.cwd()) {
     if (!serviceCheckPaths.includes(app.serviceCheckPath)) {
       fail(`${app.config} must define a /healthz service check`);
     }
+    if (target === "image-gen") {
+      const configuredChecks = tableAssignmentGroups(
+        text,
+        "http_service.checks",
+      ).sort((left, right) =>
+        String(left.path ?? "").localeCompare(String(right.path ?? "")),
+      );
+      const canonicalChecks = [
+        {
+          interval: "15s",
+          timeout: "5s",
+          grace_period: "10s",
+          method: "GET",
+          path: "/healthz",
+        },
+        {
+          interval: "15s",
+          timeout: "5s",
+          grace_period: "45s",
+          method: "GET",
+          path: "/readyz",
+        },
+      ];
+      if (
+        JSON.stringify(configuredChecks) !== JSON.stringify(canonicalChecks)
+      ) {
+        fail(
+          `${app.config} must define exactly the canonical /healthz and /readyz service checks`,
+        );
+      }
+    }
     if (app.readinessCheckPath) {
       if (!app.readinessMonitor) {
         fail(`${target} must define an external readiness monitor`);
       }
       const monitorPath = path.join(rootDir, app.readinessMonitor);
       const monitor = fs.readFileSync(monitorPath, "utf8");
-      if (!monitor.includes(app.readinessCheckPath)) {
+      const readinessUrl = `https://${app.app}.fly.dev${app.readinessCheckPath}`;
+      if (!referencesExactHttpUrl(monitor, readinessUrl)) {
         fail(`${app.readinessMonitor} must monitor ${app.readinessCheckPath}`);
+      }
+      if (target === "storage-proxy") {
+        const readinessSteps = namedWorkflowStepBodies(
+          monitor,
+          "Check storage proxy readiness",
+        );
+        if (
+          readinessSteps.length !== 1 ||
+          !referencesExactHttpUrl(readinessSteps[0], readinessUrl) ||
+          !readinessSteps[0].includes(
+            "jq -e '.ok == true and .rateLimiter == \"shared_redis\"'",
+          )
+        ) {
+          fail(
+            `${app.readinessMonitor} must verify storage-proxy shared Redis readiness`,
+          );
+        }
+        if (
+          !readinessSteps[0].includes("if: github.event_name != 'pull_request'")
+        ) {
+          fail(
+            `${app.readinessMonitor} must defer storage-proxy readiness until post-deploy monitoring`,
+          );
+        }
       }
     }
   }
@@ -5335,7 +5567,7 @@ function normalizedMachineService(service) {
   return result;
 }
 
-function expectedMachineService(httpService, httpCheck) {
+function expectedMachineService(httpService, httpChecks) {
   if (Object.keys(httpService).length === 0) return [];
   const service = {
     protocol: "tcp",
@@ -5351,22 +5583,19 @@ function expectedMachineService(httpService, httpCheck) {
       },
       { port: 443, handlers: ["http", "tls"] },
     ],
-    checks:
-      Object.keys(httpCheck).length === 0
-        ? []
-        : [
-            normalizedMachineServiceCheck({
-              type: "http",
-              interval: httpCheck.interval,
-              timeout: httpCheck.timeout,
-              grace_period: httpCheck.grace_period,
-              method: httpCheck.method,
-              path: httpCheck.path,
-              protocol: httpCheck.protocol,
-              tls_server_name: httpCheck.tls_server_name,
-              tls_skip_verify: httpCheck.tls_skip_verify,
-            }),
-          ],
+    checks: httpChecks.map((httpCheck) =>
+      normalizedMachineServiceCheck({
+        type: "http",
+        interval: httpCheck.interval,
+        timeout: httpCheck.timeout,
+        grace_period: httpCheck.grace_period,
+        method: httpCheck.method,
+        path: httpCheck.path,
+        protocol: httpCheck.protocol,
+        tls_server_name: httpCheck.tls_server_name,
+        tls_skip_verify: httpCheck.tls_skip_verify,
+      }),
+    ),
   };
   service.ports.sort((left, right) => Number(left.port) - Number(right.port));
   service.checks.sort((left, right) =>
@@ -5523,7 +5752,7 @@ function readMachineConfigProfile(rootDir, selectedConfigPath, app) {
     env: tableAssignments(tables, "env"),
     processes: tableAssignments(tables, "processes"),
     httpService,
-    httpCheck: tableAssignments(tables, "http_service.checks"),
+    httpChecks: tableAssignmentGroups(configText, "http_service.checks"),
     mount: tableAssignments(tables, "mounts"),
     serviceGroups: [
       ...(configuredServiceGroups.length > 0
@@ -5841,6 +6070,8 @@ export function checkLiveFlyDrift(target, options = {}) {
   const allowScaleCountDrift = options.allowScaleCountDrift === true;
   const allowInterruptedScaleCountDrift =
     options.allowInterruptedScaleCountDrift === true;
+  const allowFirstTrustedBootstrapDrift =
+    options.allowFirstTrustedBootstrapDrift === true;
   const capturedPriorImage = options.capturedPriorImage;
   if (
     allowInterruptedScaleCountDrift &&
@@ -5918,7 +6149,7 @@ export function checkLiveFlyDrift(target, options = {}) {
     env: expectedEnv,
     processes: expectedProcesses,
     httpService: expectedHttpService,
-    httpCheck: expectedHttpCheck,
+    httpChecks: expectedHttpChecks,
     mount: configuredMount,
   } = selectedProfile;
   const expectedMounts = Object.keys(configuredMount).length
@@ -5948,6 +6179,28 @@ export function checkLiveFlyDrift(target, options = {}) {
   ) {
     fail("expected deployment identity is invalid");
   }
+  if (allowFirstTrustedBootstrapDrift) {
+    const transition = app.databaseSchemaTransition;
+    const reviewedRollbackConfig = getReviewedRollbackConfig(
+      target,
+      options.expectedImage,
+      rootDir,
+    );
+    if (
+      target !== "image-gen" ||
+      expectedDeploymentIdentity !== "none" ||
+      transition?.state !== "bridge_reviewed" ||
+      options.expectedImage !== transition.legacyBaseImage ||
+      !allowsFirstTrustedBootstrap(target, app, options.expectedImage) ||
+      path.resolve(rootDir, selectedConfigPath) !==
+        path.resolve(rootDir, reviewedRollbackConfig)
+    ) {
+      fail(
+        "first trusted bootstrap drift requires the exact reviewed image-gen legacy predecessor",
+      );
+    }
+  }
+  const acceptedBootstrapDrift = [];
   const liveEnv = { ...(live.env ?? {}) };
   const actualDeploymentIdentity =
     liveEnv.LEADERBOT_DEPLOYMENT_IDENTITY ?? "none";
@@ -6030,9 +6283,14 @@ export function checkLiveFlyDrift(target, options = {}) {
     "auto_start_machines",
     "min_machines_running",
   ]) {
+    const normalizedAutoStopMatch =
+      key === "auto_stop_machines" &&
+      new Set([false, "off"]).has(live.http_service?.[key]) &&
+      new Set([false, "off"]).has(expectedHttpService[key]);
     if (
       key in expectedHttpService &&
-      live.http_service?.[key] !== expectedHttpService[key]
+      live.http_service?.[key] !== expectedHttpService[key] &&
+      !normalizedAutoStopMatch
     ) {
       const drift = `http_service.${key}: expected ${JSON.stringify(expectedHttpService[key])}, got ${JSON.stringify(live.http_service?.[key])}`;
       (["internal_port", "force_https"].includes(key)
@@ -6045,19 +6303,27 @@ export function checkLiveFlyDrift(target, options = {}) {
     .map((check) => check.path)
     .filter(Boolean)
     .sort();
-  if (Object.keys(expectedHttpCheck).length > 0) {
-    const liveChecks = live.http_service?.checks ?? [];
-    if (liveChecks.length !== 1) {
+  if (expectedHttpChecks.length > 0) {
+    const liveChecks = [...(live.http_service?.checks ?? [])].sort(
+      (left, right) =>
+        String(left.path ?? "").localeCompare(String(right.path ?? "")),
+    );
+    const canonicalChecks = [...expectedHttpChecks].sort((left, right) =>
+      String(left.path ?? "").localeCompare(String(right.path ?? "")),
+    );
+    if (liveChecks.length !== canonicalChecks.length) {
       reconcilableDrift.push(
-        `live HTTP service must have exactly one canonical check; found ${liveChecks.length}`,
+        `live HTTP service must have exactly ${canonicalChecks.length} canonical checks; found ${liveChecks.length}`,
       );
     } else {
-      compareObject(
-        liveChecks[0],
-        expectedHttpCheck,
-        "http_service.checks[0]",
-        reconcilableDrift,
-      );
+      canonicalChecks.forEach((expectedCheck, index) => {
+        compareObject(
+          liveChecks[index],
+          expectedCheck,
+          `http_service.checks[${index}]`,
+          reconcilableDrift,
+        );
+      });
     }
   }
   if (options.configPath) {
@@ -6118,9 +6384,21 @@ export function checkLiveFlyDrift(target, options = {}) {
         );
       }
     }
-    if (machine.region !== machineProfile.root.primary_region) {
+    const bootstrapRegionDrift =
+      allowFirstTrustedBootstrapDrift &&
+      metadata.fly_process_group === "app" &&
+      machineProfile.root.primary_region === "ams" &&
+      machine.region === "fra";
+    if (
+      machine.region !== machineProfile.root.primary_region &&
+      !bootstrapRegionDrift
+    ) {
       blockingErrors.push(
         `Machine ${machine.id} region differs from its exact reviewed release config`,
+      );
+    } else if (bootstrapRegionDrift) {
+      acceptedBootstrapDrift.push(
+        `Machine ${machine.id} legacy app region will be reconciled`,
       );
     }
     const allowedMachineConfigKeys = new Set([
@@ -6138,7 +6416,11 @@ export function checkLiveFlyDrift(target, options = {}) {
     ]);
     const unexpectedMachineConfigKeys = Object.keys(
       machine.config ?? {},
-    ).filter((key) => !allowedMachineConfigKeys.has(key));
+    ).filter(
+      (key) =>
+        !allowedMachineConfigKeys.has(key) &&
+        !(allowFirstTrustedBootstrapDrift && key === "standbys"),
+    );
     if (unexpectedMachineConfigKeys.length > 0) {
       blockingErrors.push(
         `Machine ${machine.id} has unreviewed MachineConfig fields: ${unexpectedMachineConfigKeys.sort().join(", ")}`,
@@ -6199,8 +6481,21 @@ export function checkLiveFlyDrift(target, options = {}) {
       "fly_previous_alloc",
       "fly_bluegreen_deployment_tag",
     ]);
-    if (Object.keys(metadata).some((key) => !allowedMetadataKeys.has(key))) {
+    const unexpectedMetadataKeys = Object.keys(metadata).filter(
+      (key) =>
+        !allowedMetadataKeys.has(key) &&
+        !(
+          allowFirstTrustedBootstrapDrift &&
+          key === "fly_builder_id" &&
+          /^[a-f0-9]{14}$/.test(String(metadata[key] ?? ""))
+        ),
+    );
+    if (unexpectedMetadataKeys.length > 0) {
       blockingErrors.push(`Machine ${machine.id} has unreviewed metadata`);
+    } else if (metadata.fly_builder_id != null) {
+      acceptedBootstrapDrift.push(
+        `Machine ${machine.id} legacy builder metadata will be replaced`,
+      );
     }
     if (
       metadata.fly_release_version != null &&
@@ -6278,12 +6573,35 @@ export function checkLiveFlyDrift(target, options = {}) {
           machineProfile.root.primary_region,
         );
       }
-      if (
-        JSON.stringify(sortedStringRecord(actualMachineEnv)) !==
-        JSON.stringify(sortedStringRecord(expectedMachineEnv))
-      ) {
+      const differingEnvironmentKeys = [
+        ...new Set([
+          ...Object.keys(actualMachineEnv),
+          ...Object.keys(expectedMachineEnv),
+        ]),
+      ]
+        .filter(
+          (key) =>
+            String(actualMachineEnv[key]) !== String(expectedMachineEnv[key]),
+        )
+        .sort();
+      const exactLegacyCostDrift =
+        allowFirstTrustedBootstrapDrift &&
+        JSON.stringify(differingEnvironmentKeys) ===
+          JSON.stringify([
+            "MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD",
+            "OPENAI_IMAGE_ESTIMATED_COST_USD",
+          ]) &&
+        actualMachineEnv.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD === "50.00" &&
+        actualMachineEnv.OPENAI_IMAGE_ESTIMATED_COST_USD === "0.30" &&
+        expectedMachineEnv.MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD === "25.00" &&
+        expectedMachineEnv.OPENAI_IMAGE_ESTIMATED_COST_USD === "1.00";
+      if (differingEnvironmentKeys.length > 0 && !exactLegacyCostDrift) {
         blockingErrors.push(
           `Machine ${machine.id} environment differs from the exact reviewed process environment`,
+        );
+      } else if (exactLegacyCostDrift) {
+        acceptedBootstrapDrift.push(
+          `Machine ${machine.id} legacy cost limits will be tightened`,
         );
       }
 
@@ -6314,7 +6632,7 @@ export function checkLiveFlyDrift(target, options = {}) {
       )
         ? expectedMachineService(
             machineProfile.httpService,
-            machineProfile.httpCheck,
+            machineProfile.httpChecks,
           )
         : [];
       const actualServices = (machine.config?.services ?? []).map(
@@ -6331,10 +6649,42 @@ export function checkLiveFlyDrift(target, options = {}) {
         );
       }
     }
+    const standbyTargets = machine.config?.standbys;
+    const validBootstrapStandby =
+      allowFirstTrustedBootstrapDrift &&
+      machine.state === "stopped" &&
+      metadata.fly_process_group === "worker" &&
+      Array.isArray(standbyTargets) &&
+      standbyTargets.length === 1 &&
+      machines.some(
+        (candidate) =>
+          candidate.id === standbyTargets[0] &&
+          candidate.state === "started" &&
+          candidate.config?.metadata?.fly_process_group === "worker" &&
+          immutableMachineImage(app, candidate, options.resolveMachineImage) ===
+            actualMachineImage,
+      );
+    if (
+      allowFirstTrustedBootstrapDrift &&
+      standbyTargets != null &&
+      !validBootstrapStandby
+    ) {
+      blockingErrors.push(
+        `Machine ${machine.id} has an invalid legacy standby binding`,
+      );
+    } else if (validBootstrapStandby) {
+      acceptedBootstrapDrift.push(
+        `Machine ${machine.id} legacy worker standby will be reconciled`,
+      );
+    }
     if (
       metadata.fly_process_group &&
       machine.state !== "started" &&
-      !(allowInterruptedScaleCountDrift || allowScaleCountDrift)
+      !(
+        allowInterruptedScaleCountDrift ||
+        allowScaleCountDrift ||
+        validBootstrapStandby
+      )
     ) {
       blockingErrors.push(
         `Machine ${machine.id} in ${metadata.fly_process_group} is not started`,
@@ -6412,10 +6762,14 @@ export function checkLiveFlyDrift(target, options = {}) {
     ).length;
     if (startedMachineCount !== desired.count) {
       const drift = `started Machines for ${process}: expected ${desired.count}, got ${startedMachineCount}`;
-      (allowScaleCountDrift || allowInterruptedScaleCountDrift
-        ? reconcilableDrift
-        : blockingErrors
-      ).push(drift);
+      if (allowFirstTrustedBootstrapDrift) {
+        acceptedBootstrapDrift.push(drift);
+      } else {
+        (allowScaleCountDrift || allowInterruptedScaleCountDrift
+          ? reconcilableDrift
+          : blockingErrors
+        ).push(drift);
+      }
     }
     const actual = scaleByProcess[process];
     if (!actual) {
@@ -6438,6 +6792,13 @@ export function checkLiveFlyDrift(target, options = {}) {
       memoryMb: actual.Memory,
     };
     if (
+      allowFirstTrustedBootstrapDrift &&
+      actualScale.count !== desired.count
+    ) {
+      acceptedBootstrapDrift.push(
+        `scale.${process}.count: expected ${JSON.stringify(desired.count)}, got ${JSON.stringify(actualScale.count)}`,
+      );
+    } else if (
       (allowScaleCountDrift || allowInterruptedScaleCountDrift) &&
       actualScale.count !== desired.count
     ) {
@@ -6495,7 +6856,13 @@ export function checkLiveFlyDrift(target, options = {}) {
     );
   }
 
-  return { target, app: app.app, reconcilableDrift, blockingErrors };
+  return {
+    target,
+    app: app.app,
+    reconcilableDrift,
+    blockingErrors,
+    acceptedBootstrapDrift,
+  };
 }
 
 export async function checkSettledLiveFlyDrift(target, options = {}) {
@@ -6641,6 +7008,12 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
       fail(`Unexpected uncached Fly read: ${args.join(" ")}`);
     return cachedOutputs.get(key);
   };
+  const reviewedLegacyConfig =
+    target === "image-gen" &&
+    identity === "none" &&
+    allowsFirstTrustedBootstrap(target, app, expectedImage)
+      ? getReviewedRollbackConfig(target, expectedImage, rootDir)
+      : null;
   const results = uniqueConfigPaths.map((configPath) =>
     checkLiveFlyDrift(target, {
       rootDir,
@@ -6648,6 +7021,10 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
       expectedImage,
       configPath,
       expectedDeploymentIdentity: identity,
+      allowFirstTrustedBootstrapDrift:
+        reviewedLegacyConfig != null &&
+        path.resolve(rootDir, configPath) ===
+          path.resolve(rootDir, reviewedLegacyConfig),
       resolveMachineImage: (image) => resolvedImages.get(image) ?? image,
     }),
   );
@@ -6723,6 +7100,9 @@ if (isMain) {
   const allowInterruptedScaleCountDrift = process.argv.includes(
     "--allow-interrupted-scale-count-drift",
   );
+  const allowFirstTrustedBootstrapDrift = process.argv.includes(
+    "--allow-first-trusted-bootstrap-drift",
+  );
   const capturedPriorIdentityIndex = process.argv.indexOf(
     "--captured-prior-identity",
   );
@@ -6752,6 +7132,11 @@ if (isMain) {
   if (allowScaleCountDrift && restoreIndex < 0) {
     fail(
       "--allow-scale-count-drift is available only for restored-release verification",
+    );
+  }
+  if (allowFirstTrustedBootstrapDrift && restoreIndex < 0) {
+    fail(
+      "--allow-first-trusted-bootstrap-drift is available only for restored-release verification",
     );
   }
   if (
@@ -6965,6 +7350,7 @@ if (isMain) {
       expectedDeploymentIdentity,
       allowReviewedMachineImages,
       allowScaleCountDrift,
+      allowFirstTrustedBootstrapDrift,
       capturedPriorIdentity,
       interruptedDeploymentIdentity,
       capturedPriorImage,

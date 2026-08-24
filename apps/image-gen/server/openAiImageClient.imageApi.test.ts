@@ -352,6 +352,55 @@ describe("OpenAI image provider errors", () => {
     expect(getGenerationMetrics(error)?.openAiMs).toBe(50);
   });
 
+  it("records provider success before parsing a malformed 2xx body", async () => {
+    const request = createRequest();
+    process.env.OPENAI_IMAGE_MAX_RETRIES = "1";
+    const onProviderSuccess = vi.fn(async () => undefined);
+    const fetchMock = vi.fn(
+      async () => new Response("not-json", { status: 200 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchOpenAiImageResponse(request, {
+        reqId: "request-malformed-success",
+        startedAt: Date.now(),
+        partialMetrics: {},
+        onProviderSuccess,
+      })
+    ).rejects.toBeInstanceOf(SyntaxError);
+
+    expect(onProviderSuccess).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("never retries after provider 2xx when success persistence fails", async () => {
+    const request = createRequest();
+    process.env.OPENAI_IMAGE_MAX_RETRIES = "1";
+    const persistenceError = new TypeError("durable success unavailable");
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ data: [{ b64_json: GENERATED_IMAGE_BASE64 }] }),
+          { status: 200 }
+        )
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchOpenAiImageResponse(request, {
+        reqId: "request-success-persistence-failure",
+        startedAt: Date.now(),
+        partialMetrics: {},
+        onProviderSuccess: async () => {
+          throw persistenceError;
+        },
+      })
+    ).rejects.toBe(persistenceError);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it.each([
     JSON.stringify({
       error: {
