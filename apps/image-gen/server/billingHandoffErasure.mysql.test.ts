@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -474,25 +474,35 @@ suite("billing handoff privacy erasure", () => {
     const database = await getDatabaseOrThrow();
     const intentId = randomUUID();
     const tokenHash = `sha256:${"8".repeat(64)}`;
-    await database.insert(billingIntents).values({
-      ...intentValues({
-        intentId,
-        workspaceId: targetWorkspaceId,
-        senderKey: targetSenderKey,
-        pageId: targetPageId,
-      }),
-      messengerChannelConnectionId: null,
-      messengerPrivacyEpoch: null,
-    });
-    await database.insert(portalHandoffTokens).values({
-      workspaceId: targetWorkspaceId,
-      tokenHash,
-      messengerSenderUserKey: targetSenderKey,
-      facebookPageId: targetPageId,
-      messengerChannelConnectionId: null,
-      messengerPrivacyEpoch: null,
-      purpose: "workspace_onboarding",
-      expiresAt: new Date("2026-08-24T00:00:00.000Z"),
+    await database.transaction(async tx => {
+      // The final schema correctly refuses new unscoped identities. Disable
+      // CHECK evaluation only on this transaction's connection to reproduce a
+      // row that existed before the 0017 contract was applied.
+      await tx.execute(sql`SET SESSION check_constraint_checks = OFF`);
+      try {
+        await tx.insert(billingIntents).values({
+          ...intentValues({
+            intentId,
+            workspaceId: targetWorkspaceId,
+            senderKey: targetSenderKey,
+            pageId: targetPageId,
+          }),
+          messengerChannelConnectionId: null,
+          messengerPrivacyEpoch: null,
+        });
+        await tx.insert(portalHandoffTokens).values({
+          workspaceId: targetWorkspaceId,
+          tokenHash,
+          messengerSenderUserKey: targetSenderKey,
+          facebookPageId: targetPageId,
+          messengerChannelConnectionId: null,
+          messengerPrivacyEpoch: null,
+          purpose: "workspace_onboarding",
+          expiresAt: new Date("2026-08-24T00:00:00.000Z"),
+        });
+      } finally {
+        await tx.execute(sql`SET SESSION check_constraint_checks = ON`);
+      }
     });
 
     await eraseBillingHandoffIdentity(
