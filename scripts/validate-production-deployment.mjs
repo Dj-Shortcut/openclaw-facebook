@@ -1428,7 +1428,14 @@ export function getReviewedRollbackConfig(
   return relativePath;
 }
 
-function assertReviewedRollbackConfigCopy(target, image, configPath, rootDir) {
+function assertReviewedRollbackConfigCopy(
+  target,
+  image,
+  configPath,
+  rootDir,
+  failureMessage =
+    "scale count drift allowance requires the reviewed rollback config",
+) {
   const reviewedRelativePath = getReviewedRollbackConfig(
     target,
     image,
@@ -1442,10 +1449,10 @@ function assertReviewedRollbackConfigCopy(target, image, configPath, rootDir) {
   try {
     candidateStats = fs.lstatSync(candidatePath);
   } catch {
-    fail("scale count drift allowance requires the reviewed rollback config");
+    fail(failureMessage);
   }
   if (!candidateStats.isFile() || candidateStats.isSymbolicLink()) {
-    fail("scale count drift allowance requires the reviewed rollback config");
+    fail(failureMessage);
   }
   const reviewedSha256 = createHash("sha256")
     .update(fs.readFileSync(reviewedPath))
@@ -1454,7 +1461,7 @@ function assertReviewedRollbackConfigCopy(target, image, configPath, rootDir) {
     .update(fs.readFileSync(candidatePath))
     .digest("hex");
   if (candidateSha256 !== reviewedSha256) {
-    fail("scale count drift allowance requires the reviewed rollback config");
+    fail(failureMessage);
   }
 }
 
@@ -6189,24 +6196,24 @@ export function checkLiveFlyDrift(target, options = {}) {
   }
   if (allowFirstTrustedBootstrapDrift) {
     const transition = app.databaseSchemaTransition;
-    const reviewedRollbackConfig = getReviewedRollbackConfig(
-      target,
-      options.expectedImage,
-      rootDir,
-    );
     if (
       target !== "image-gen" ||
       expectedDeploymentIdentity !== "none" ||
       transition?.state !== "bridge_reviewed" ||
       options.expectedImage !== transition.legacyBaseImage ||
-      !allowsFirstTrustedBootstrap(target, app, options.expectedImage) ||
-      path.resolve(rootDir, selectedConfigPath) !==
-        path.resolve(rootDir, reviewedRollbackConfig)
+      !allowsFirstTrustedBootstrap(target, app, options.expectedImage)
     ) {
       fail(
         "first trusted bootstrap drift requires the exact reviewed image-gen legacy predecessor",
       );
     }
+    assertReviewedRollbackConfigCopy(
+      target,
+      options.expectedImage,
+      selectedConfigPath,
+      rootDir,
+      "first trusted bootstrap drift requires the exact reviewed image-gen legacy predecessor",
+    );
   }
   const acceptedBootstrapDrift = [];
   const liveEnv = { ...(live.env ?? {}) };

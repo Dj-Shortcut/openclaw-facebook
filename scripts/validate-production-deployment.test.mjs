@@ -6273,6 +6273,61 @@ describe("settled production identity", () => {
     });
   });
 
+  it("accepts a byte-exact copied rollback config during the first trusted bootstrap", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const { legacyImage } = stageImageGenBridge(manifest);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const reviewedConfig = getReviewedRollbackConfig(
+      "image-gen",
+      legacyImage,
+      root,
+    );
+    const copiedConfig = path.join(root, "before.fly.toml");
+    fs.copyFileSync(path.join(root, reviewedConfig), copiedConfig);
+
+    const result = checkLiveFlyDrift("image-gen", {
+      rootDir: root,
+      runFly: imageGenLegacyBootstrapFlyState(legacyImage),
+      expectedImage: legacyImage,
+      configPath: copiedConfig,
+      expectedDeploymentIdentity: "none",
+      allowFirstTrustedBootstrapDrift: true,
+    });
+
+    expect(result.blockingErrors).toEqual([]);
+  });
+
+  it("rejects a modified copied rollback config during the first trusted bootstrap", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const { legacyImage } = stageImageGenBridge(manifest);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const reviewedConfig = getReviewedRollbackConfig(
+      "image-gen",
+      legacyImage,
+      root,
+    );
+    const copiedConfig = path.join(root, "before.fly.toml");
+    fs.copyFileSync(path.join(root, reviewedConfig), copiedConfig);
+    fs.appendFileSync(copiedConfig, "\n");
+
+    expect(() =>
+      checkLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly: imageGenLegacyBootstrapFlyState(legacyImage),
+        expectedImage: legacyImage,
+        configPath: copiedConfig,
+        expectedDeploymentIdentity: "none",
+        allowFirstTrustedBootstrapDrift: true,
+      }),
+    ).toThrow(
+      "first trusted bootstrap drift requires the exact reviewed image-gen legacy predecessor",
+    );
+  });
+
   it.each([
     [
       "an extra environment change",
