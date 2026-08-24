@@ -186,6 +186,7 @@ jobs:
             --source-ref refs/heads/main \
             --predicate-type "$BRIDGE_PREDICATE_TYPE" \
             --deny-self-hosted-runners \
+            --format json \
             --jq '.[0].verificationResult.statement.predicate.baseImage')"
           test "$attested_base" = "$BRIDGE_BASE"
           docker pull "$BRIDGE_IMAGE"
