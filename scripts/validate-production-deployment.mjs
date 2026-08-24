@@ -2902,7 +2902,10 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "timeout --signal=TERM 8m flyctl ssh console",
       "must bound the remote restore verification and propagate its exit status",
     ],
-    ["mysqlcheck", "must verify the restored MySQL data files"],
+    [
+      "mysql-restore-check.sql",
+      "must verify the restored MySQL data files with the client included in the pinned image",
+    ],
     [
       "Remove isolated restore Machine and volume",
       "must always remove the isolated Machine before its volume",
@@ -3070,6 +3073,10 @@ function validateSchemaTransitionWorkflow(rootDir) {
     [
       "chown mysql:root /var/lib/mysql",
       "must restore only the disposable mount-root ownership expected by the pinned MySQL image",
+    ],
+    [
+      'test "$invalid" = 0',
+      "must fail unless every restored base-table check reports status OK",
     ],
   ]) {
     if (!restoreProbeStep?.includes(required)) {
