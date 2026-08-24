@@ -3059,6 +3059,14 @@ function validateSchemaTransitionWorkflow(rootDir) {
       '--command "$probe_command"',
       "must pass only the explicit shell command to flyctl SSH",
     ],
+    [
+      'printf "%s\\n" mysql_restore_probe_failed',
+      "must emit a metadata-only failure marker for a failed restore probe",
+    ],
+    [
+      "tail -n 120 /tmp/mysql-restore-probe.log",
+      "must emit a bounded MySQL startup diagnostic before failing closed",
+    ],
   ]) {
     if (!restoreProbeStep?.includes(required)) {
       fail(`${SCHEMA_TRANSITION_WORKFLOW_PATH} ${message}`);

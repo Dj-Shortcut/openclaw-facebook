@@ -1933,6 +1933,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires bounded restore-probe startup diagnostics", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      "tail -n 120 /tmp/mysql-restore-probe.log",
+      "true",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must emit a bounded MySQL startup diagnostic before failing closed",
+    );
+  });
+
   it("keeps the restore-probe outer timeout above all bounded subphases", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
