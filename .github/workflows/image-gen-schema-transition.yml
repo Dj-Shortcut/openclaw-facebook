@@ -503,11 +503,16 @@ jobs:
           # This script is intentionally expanded only inside the isolated Machine.
           # shellcheck disable=SC2016
           probe='set -eu; mkdir -p /var/run/mysqld; chown mysql:mysql /var/run/mysqld; mysqld --user=mysql --skip-networking --skip-grant-tables --socket=/var/run/mysqld/mysqld.sock --pid-file=/var/run/mysqld/mysqld.pid --log-error=/tmp/mysql-restore-probe.log & pid=$!; cleanup(){ kill -TERM "$pid" >/dev/null 2>&1 || true; wait "$pid" >/dev/null 2>&1 || true; }; trap cleanup EXIT; ready=0; for i in $(seq 1 60); do if mysqladmin --protocol=socket --socket=/var/run/mysqld/mysqld.sock -uroot ping --silent >/dev/null 2>&1; then ready=1; break; fi; sleep 2; done; test "$ready" = 1; mysqlcheck --protocol=socket --socket=/var/run/mysqld/mysqld.sock -uroot --all-databases --check --silent >/dev/null; mysql --protocol=socket --socket=/var/run/mysqld/mysqld.sock -uroot -Nse "SELECT COUNT(*)>=1 FROM leaderbot.__drizzle_migrations" | grep -Fx 1 >/dev/null'
+          probe_b64="$(printf '%s' "$probe" | base64 --wrap=0)"
+          [[ "$probe_b64" =~ ^[A-Za-z0-9+/]+={0,2}$ ]]
+          # flyctl executes --command directly, so invoke an explicit shell.
+          # Decode first and fail before running when transport is malformed.
+          probe_command="/bin/sh -lc 'decoded=\$(printf %s $probe_b64 | base64 -d) || exit 70; exec /bin/sh -c \"\$decoded\"'"
           timeout --signal=TERM 8m flyctl ssh console \
             --app "$db_app" \
             --machine "$probe_machine_id" \
             --quiet \
-            --command "$probe"
+            --command "$probe_command"
 
       - name: Remove isolated restore Machine and volume
         if: always()

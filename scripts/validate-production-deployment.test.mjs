@@ -1892,6 +1892,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("runs the fixed restore probe through an explicit remote shell", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      '--command "$probe_command"',
+      '--command "$probe"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must pass only the explicit shell command to flyctl SSH",
+    );
+  });
+
   it("keeps the restore-probe outer timeout above all bounded subphases", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
