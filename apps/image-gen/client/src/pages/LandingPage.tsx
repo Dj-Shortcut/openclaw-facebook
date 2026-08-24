@@ -97,9 +97,9 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     title: "Maak van je Facebookpagina een slimme klantenassistent.",
     body: "Leaderbot helpt je antwoorden, kennis en AI-beelden vanuit één afgeschermde werkruimte beheren. Je klant praat gewoon verder in Messenger.",
     primaryCta: "Bekijk hoe het werkt",
-    secondaryCta: "Interesse doorgeven",
+    secondaryCta: "Vraag informatie",
     noPayment:
-      "Gratis verkennen. De Startpilot is nog niet publiek te koop en via deze pagina wordt niets aangerekend.",
+      "Gratis verkennen of veilig inloggen om de Startpilot te kopen. Je betaalt één keer €19, zonder abonnement of automatische verlenging.",
     previewLabel: "Voorbeeldweergave",
     previewPrompt: "Maak een helder campagnebeeld voor onze zomeractie.",
     previewReply:
@@ -159,7 +159,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     pricingEyebrow: "Eenmalige Startpilot",
     pricingTitle: "Test de kwaliteitsstap zonder abonnement.",
     pricingBody:
-      "De geplande pilot geeft je 30 dagen afgebakend gebruik voor één vaste prijs. De publieke website verzamelt voorlopig alleen interesse.",
+      "De Startpilot geeft je 30 dagen afgebakend gebruik voor één vaste prijs. De aankoop start altijd in het beveiligde klantenportaal.",
     free: {
       name: "Gratis toegang",
       price: "€0",
@@ -173,7 +173,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       cta: "Open het klantenportaal",
     },
     premium: {
-      label: "Gepland — nog niet te koop",
+      label: "Beschikbaar via het portaal",
       name: "Leaderbot Startpilot",
       price: "€19",
       suffix: "eenmalig in EUR",
@@ -184,17 +184,17 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
         "20 Images 2.0-beelden · maximaal 5 per dag",
         "Geen abonnement, verlenging of kosten buiten het pakket",
       ],
-      cta: "Laat weten dat je interesse hebt",
+      cta: "Inloggen en Startpilot kopen",
     },
     pricingDisclosure:
-      "€19 is de geplande eenmalige prijs voor de Leaderbot Startpilot. Deze publieke pagina maakt nog geen aankoop aan. Checkout wordt pas in het ingelogde portaal zichtbaar nadat betaling, klantrechten en gebruikslimieten veilig zijn vrijgegeven.",
+      "€19 is de eenmalige prijs voor de Leaderbot Startpilot. Een aankoop start alleen na Facebook-login in je eigen werkruimte; je controleert daar het bedrag en gaat daarna veilig verder naar Mollie.",
     faqEyebrow: "Veelgestelde vragen",
     faqTitle: "Duidelijk vóór je begint.",
     questions: [
       {
         question: "Kan ik de Startpilot nu al kopen?",
         answer:
-          "Nog niet via deze publieke pagina. Je kunt interesse doorgeven zonder betaling. Na een gecontroleerde vrijgave kan een ingelogde klant de eenmalige checkout in het portaal zien.",
+          "Ja. Log in met Facebook, open de betaalkaart van je werkruimte en kies ‘Startpilot kopen via Mollie’. Je betaalt één keer €19; er is geen automatische verlenging.",
       },
       {
         question: "Wat gebeurt er na 30 dagen of wanneer een limiet op is?",
@@ -214,14 +214,14 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       {
         question: "Voor wie wordt de Startpilot beschikbaar?",
         answer:
-          "De eerste gecontroleerde lancering is gericht op België. Verkoop start pas wanneer betaling, facturatie, gebruiksrechten en voorwaarden aantoonbaar klaar zijn.",
+          "De Startpilot is gericht op Belgische consumenten. Zakelijke B2B-checkout en Peppol-facturatie zijn niet inbegrepen.",
       },
     ],
-    contactEyebrow: "Interesse valideren",
-    contactTitle: "Wil je Leaderbot voor €19 eenmalig testen?",
+    contactEyebrow: "Vragen vóór aankoop",
+    contactTitle: "Eerst iets vragen over de Startpilot?",
     contactBody:
-      "Vertel kort waarvoor je de assistent wilt gebruiken. Je reactie helpt de gecontroleerde Startpilot plannen en maakt geen aankoop of abonnement aan.",
-    contactCta: "Stuur je use-case",
+      "Stuur ons je vraag of use-case. Een bericht aan ons maakt nooit automatisch een aankoop of abonnement aan.",
+    contactCta: "Stuur je vraag",
     companyTitle: "Bedrijfsgegevens",
     enterpriseLabel: "Ondernemingsnummer",
     vatLabel: "Btw-nummer",
@@ -244,9 +244,9 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     title: "Transformez votre Page Facebook en assistant client intelligent.",
     body: "Leaderbot centralise les réponses, les connaissances et les images IA dans un espace de travail isolé. Vos clients continuent simplement dans Messenger.",
     primaryCta: "Voir le fonctionnement",
-    secondaryCta: "Signaler mon intérêt",
+    secondaryCta: "Demander des informations",
     noPayment:
-      "À découvrir gratuitement. Le pilote n'est pas encore en vente publique et cette page ne facture rien.",
+      "Découvrez gratuitement ou connectez-vous en toute sécurité pour acheter le pilote. Paiement unique de 19 €, sans abonnement ni renouvellement automatique.",
     previewLabel: "Aperçu illustratif",
     previewPrompt: "Crée une image claire pour notre campagne d'été.",
     previewReply:
@@ -306,7 +306,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     pricingEyebrow: "Pilote ponctuel",
     pricingTitle: "Testez la qualité sans abonnement.",
     pricingBody:
-      "Le pilote prévu offre 30 jours d'usage délimité pour un prix fixe. Le site public recueille uniquement les marques d'intérêt pour l'instant.",
+      "Le pilote offre 30 jours d'usage délimité pour un prix fixe. L'achat commence toujours dans le portail client sécurisé.",
     free: {
       name: "Accès gratuit",
       price: "€0",
@@ -320,7 +320,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       cta: "Ouvrir le portail client",
     },
     premium: {
-      label: "Prévu — pas encore en vente",
+      label: "Disponible via le portail",
       name: "Leaderbot Startpilot",
       price: "€19",
       suffix: "paiement unique en EUR",
@@ -331,17 +331,17 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
         "20 images Images 2.0 · maximum 5 par jour",
         "Sans abonnement, renouvellement ni dépassement facturé",
       ],
-      cta: "Signaler mon intérêt",
+      cta: "Se connecter et acheter",
     },
     pricingDisclosure:
-      "19 € est le prix unique prévu pour le pilote Leaderbot. Cette page publique ne crée aucun achat. Le checkout n'apparaîtra dans le portail connecté qu'après validation des paiements, droits et limites d'usage.",
+      "19 € est le prix unique du pilote Leaderbot. L'achat commence uniquement après connexion Facebook dans votre espace; vous vérifiez le montant avant de continuer vers Mollie.",
     faqEyebrow: "Questions fréquentes",
     faqTitle: "Tout savoir avant de commencer.",
     questions: [
       {
         question: "Puis-je déjà acheter le pilote ?",
         answer:
-          "Pas encore depuis cette page publique. Vous pouvez signaler votre intérêt sans paiement. Après une mise en service contrôlée, le checkout unique pourra apparaître dans le portail connecté.",
+          "Oui. Connectez-vous avec Facebook, ouvrez la section paiement de votre espace et choisissez l'achat via Mollie. Il s'agit d'un paiement unique de 19 €, sans renouvellement automatique.",
       },
       {
         question:
@@ -362,14 +362,14 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       {
         question: "Où le pilote sera-t-il lancé ?",
         answer:
-          "La première disponibilité contrôlée vise la Belgique, après validation complète des paiements, droits d'usage et conditions.",
+          "Le pilote vise les consommateurs belges. Le checkout B2B et la facturation Peppol ne sont pas inclus.",
       },
     ],
-    contactEyebrow: "Valider l'intérêt",
-    contactTitle: "Souhaitez-vous tester Leaderbot pour 19 € une seule fois ?",
+    contactEyebrow: "Questions avant l'achat",
+    contactTitle: "Une question sur le pilote ?",
     contactBody:
-      "Expliquez brièvement votre usage. Votre réponse aide à organiser le pilote contrôlé et ne crée aucun achat ni abonnement.",
-    contactCta: "Envoyer mon cas d'usage",
+      "Envoyez-nous votre question ou cas d'usage. Un message ne crée jamais automatiquement un achat ou un abonnement.",
+    contactCta: "Envoyer ma question",
     companyTitle: "Informations d'entreprise",
     enterpriseLabel: "Numéro d'entreprise",
     vatLabel: "Numéro de TVA",
@@ -393,9 +393,9 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     title: "Turn your Facebook Page into a focused customer assistant.",
     body: "Leaderbot keeps replies, knowledge and AI images in one isolated workspace while your customers continue the conversation in Messenger.",
     primaryCta: "See how it works",
-    secondaryCta: "Share your interest",
+    secondaryCta: "Ask a question",
     noPayment:
-      "Explore for free. The Startpilot is not on public sale yet and this page does not charge you.",
+      "Explore for free or sign in securely to buy the Startpilot. It is one €19 payment with no subscription or automatic renewal.",
     previewLabel: "Illustrative preview",
     previewPrompt: "Create a clear campaign image for our summer promotion.",
     previewReply:
@@ -455,7 +455,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
     pricingEyebrow: "One-time Startpilot",
     pricingTitle: "Test the quality step without a subscription.",
     pricingBody:
-      "The planned pilot provides 30 days of bounded usage for one fixed price. The public website only collects interest for now.",
+      "The Startpilot provides 30 days of bounded usage for one fixed price. Purchase always starts inside the secure customer portal.",
     free: {
       name: "Free access",
       price: "€0",
@@ -469,7 +469,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       cta: "Open the customer portal",
     },
     premium: {
-      label: "Planned — not for sale yet",
+      label: "Available in the portal",
       name: "Leaderbot Startpilot",
       price: "€19",
       suffix: "one-time in EUR",
@@ -480,17 +480,17 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
         "20 Images 2.0 images · maximum 5 per day",
         "No subscription, renewal or overage charges",
       ],
-      cta: "Tell us you are interested",
+      cta: "Sign in and buy Startpilot",
     },
     pricingDisclosure:
-      "€19 is the planned one-time price for the Leaderbot Startpilot. This public page does not create a purchase. Checkout will appear in the signed-in portal only after payments, entitlements and usage limits are safely released.",
+      "€19 is the one-time price for the Leaderbot Startpilot. A purchase starts only after Facebook sign-in inside your own workspace; you review the amount there before continuing securely to Mollie.",
     faqEyebrow: "Frequently asked questions",
     faqTitle: "Clear before you begin.",
     questions: [
       {
         question: "Can I buy the Startpilot now?",
         answer:
-          "Not through this public page yet. You can share interest without payment. After a controlled release, signed-in customers may see the one-time checkout in the portal.",
+          "Yes. Sign in with Facebook, open your workspace billing card and choose the Mollie purchase. It is one €19 payment with no automatic renewal.",
       },
       {
         question: "What happens after 30 days or when a limit is used?",
@@ -510,14 +510,14 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       {
         question: "Where will the Startpilot launch first?",
         answer:
-          "The first controlled release is aimed at Belgium, after payments, invoicing, entitlements and terms are validated.",
+          "Startpilot is for Belgian consumers. Business checkout and Peppol invoicing are not included.",
       },
     ],
-    contactEyebrow: "Validate demand",
-    contactTitle: "Would you test Leaderbot for a one-time €19?",
+    contactEyebrow: "Questions before purchase",
+    contactTitle: "Have a question about Startpilot?",
     contactBody:
-      "Tell us briefly how you would use it. Your response helps plan the controlled Startpilot and does not create a purchase or subscription.",
-    contactCta: "Send your use case",
+      "Send us your question or use case. A message never creates a purchase or subscription automatically.",
+    contactCta: "Send your question",
     companyTitle: "Business information",
     enterpriseLabel: "Enterprise number",
     vatLabel: "VAT number",
@@ -573,10 +573,12 @@ function LanguagePicker({
 
 function PortalButton({
   copy,
+  label,
   loginConfigured,
   variant = "light",
 }: {
   copy: LandingCopy;
+  label?: string;
   loginConfigured: boolean;
   variant?: "accent" | "light";
 }) {
@@ -596,7 +598,7 @@ function PortalButton({
       }}
     >
       <LogIn className="h-4 w-4" aria-hidden="true" />
-      {copy.nav.portal}
+      {label ?? copy.nav.portal}
     </button>
   );
 }
@@ -928,13 +930,14 @@ export default function LandingPage({
                   </li>
                 ))}
               </ul>
-              <a
-                className="mt-8 inline-flex min-h-11 items-center justify-center gap-2 rounded-full bg-lime-300 px-5 text-sm font-bold text-[#10211d] transition hover:bg-lime-200"
-                href={interestHref}
-              >
-                <Mail className="h-4 w-4" aria-hidden="true" />
-                {copy.premium.cta}
-              </a>
+              <div className="mt-8">
+                <PortalButton
+                  copy={copy}
+                  label={copy.premium.cta}
+                  loginConfigured={loginConfigured}
+                  variant="accent"
+                />
+              </div>
             </article>
           </div>
           <p className="mx-auto mt-6 max-w-4xl rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm leading-6 text-amber-950">

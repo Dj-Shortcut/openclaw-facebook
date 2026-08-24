@@ -79,7 +79,12 @@ describe("public runtime config", () => {
         VITE_APP_ID: "leaderbot-public-app",
       })
     ).toEqual({
-      oauth: { configured: false, portalUrl: null, appId: null, loginUrl: null },
+      oauth: {
+        configured: false,
+        portalUrl: null,
+        appId: null,
+        loginUrl: null,
+      },
     });
   });
 
@@ -110,7 +115,7 @@ describe("public runtime config", () => {
         configured: true,
         portalUrl: null,
         appId: null,
-        loginUrl: "/api/oauth/start",
+        loginUrl: "https://leaderbot.live/api/oauth/start",
       },
     });
   });

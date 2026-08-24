@@ -81,7 +81,7 @@ describe("legal routes", () => {
     expect(terms).toContain("/data-deletion");
   });
 
-  it("publishes the one-time Startpilot without implying a public checkout", () => {
+  it("publishes the one-time Startpilot with signed-in checkout boundaries", () => {
     const privacy = renderLegalRoute("/privacy").body;
     const terms = renderLegalRoute("/terms").body;
     const billingPolicy = renderLegalRoute("/billing-policy").body;
@@ -93,11 +93,11 @@ describe("legal routes", () => {
       ""
     )}`;
 
-    expect(privacy).toContain(`one ${displayedPrice} Startpilot payment`);
+    expect(privacy).toContain(`Mollie processes one ${displayedPrice} payment`);
     expect(terms).toContain(
-      `proposed at ${displayedPrice} as a single payment for 30 days`
+      `costs ${displayedPrice} as a single payment for 30 days`
     );
-    expect(terms).toContain("interest-only");
+    expect(terms).toContain("Purchase starts only in the signed-in portal");
     expect(terms).toContain("300 AI answers");
     expect(terms).toContain("20 Images 2.0");
     expect(terms).toContain("maximum of five");
@@ -105,7 +105,9 @@ describe("legal routes", () => {
     expect(billingPolicy).toContain(
       `${displayedPrice} once in ${plan.currency} for 30 days`
     );
-    expect(billingPolicy).toContain("does not create a purchase");
+    expect(billingPolicy).toContain(
+      "requires an explicit checkout confirmation"
+    );
     expect(billingPolicy).toContain("No renewal, top-up or overage");
     expect(billingPolicy).toContain("one workspace, one Facebook Page");
     expect(billingPolicy).toContain(

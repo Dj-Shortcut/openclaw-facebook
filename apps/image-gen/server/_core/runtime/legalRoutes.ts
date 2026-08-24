@@ -71,7 +71,7 @@ export function registerLegalRoutes(app: express.Express) {
           },
           {
             heading: "Payments",
-            html: `<p>The public website currently collects interest only. If the signed-in pilot checkout is enabled after the launch gates pass, Mollie will process one ${startpilotPrice} Startpilot payment. The proposed pilot does not create a subscription, automatic renewal, direct-debit mandate, top-up or overage charge.</p>`,
+            html: `<p>A Startpilot purchase starts only inside the signed-in customer portal. Mollie processes one ${startpilotPrice} payment after the customer reviews and confirms checkout. The pilot does not create a subscription, automatic renewal, direct-debit mandate, top-up or overage charge.</p>`,
           },
         ],
       })
@@ -87,8 +87,8 @@ export function registerLegalRoutes(app: express.Express) {
           "These pilot terms apply to the Leaderbot customer portal and connected Messenger assistant. Leaderbot provides AI-generated text and images together with workspace, usage and privacy controls.",
         sections: [
           {
-            heading: "Draft Startpilot offer",
-            html: `<p>Leaderbot Startpilot is proposed at ${startpilotPrice} as a single payment for 30 days. It includes one workspace, one connected Facebook Page, 300 AI answers and 20 Images 2.0 image generations, with a maximum of five image generations per day. An image generation counts once when its first AI-provider attempt starts; retries within that same request do not consume extra pilot generations. The public website is interest-only while paid launch remains disabled.</p>`,
+            heading: "Startpilot offer",
+            html: `<p>Leaderbot Startpilot costs ${startpilotPrice} as a single payment for 30 days. It includes one workspace, one connected Facebook Page, 300 AI answers and 20 Images 2.0 image generations, with a maximum of five image generations per day. An image generation counts once when its first AI-provider attempt starts; retries within that same request do not consume extra pilot generations. Purchase starts only in the signed-in portal.</p>`,
           },
           {
             heading: "No subscription or overage",
@@ -120,13 +120,13 @@ export function registerLegalRoutes(app: express.Express) {
       getStartpilotPricingDisplay();
     res.type("html").send(
       renderLegalPage({
-        title: "Startpilot Pre-launch Pricing and Billing Information",
+        title: "Startpilot Pricing and Billing Information",
         intro:
-          "Leaderbot is validating a bounded one-time pilot before opening payments. The public website currently collects interest only and does not create a purchase.",
+          "Leaderbot offers a bounded one-time Startpilot. A purchase starts only in the signed-in customer portal and requires an explicit checkout confirmation.",
         sections: [
           {
-            heading: "Proposed one-time price",
-            html: `<p>The current proposal is Leaderbot Startpilot at ${startpilotPrice} once in ${startpilotCurrency} for 30 days. This is pre-launch information, not a present charge. Checkout may appear only inside the signed-in portal after the technical, entitlement, legal and accounting launch gates pass.</p>`,
+            heading: "One-time price",
+            html: `<p>Leaderbot Startpilot costs ${startpilotPrice} once in ${startpilotCurrency} for 30 days. Checkout is available only inside the signed-in customer portal, where the customer reviews the exact amount before continuing to Mollie.</p>`,
           },
           {
             heading: "Included pilot usage",
@@ -141,12 +141,12 @@ export function registerLegalRoutes(app: express.Express) {
             html: "<p>Sending an email or early-access request does not authorize a payment or create a contract. A payment can start only from an explicitly enabled checkout shown to an authenticated workspace owner or administrator.</p>",
           },
           {
-            heading: "Before paid launch",
-            html: "<p>Before any payment, Leaderbot will show the total price, 30-day access period, included usage, payment method, absence of renewal and overage, and applicable cancellation, refund, consumer or business terms. Payment and invoicing flows must first pass technical, legal and accounting review.</p>",
+            heading: "Before payment",
+            html: "<p>Before any payment, Leaderbot shows the total price, 30-day access period, included usage, payment method, absence of renewal and overage, and applicable cancellation and refund terms.</p>",
           },
           {
             heading: "Questions",
-            html: '<p>For pre-launch pricing, privacy or support questions, contact <a href="mailto:privacy@leaderbot.live">privacy@leaderbot.live</a>. Do not send payment credentials or API keys by email.</p>',
+            html: '<p>For pricing, privacy or support questions, contact <a href="mailto:privacy@leaderbot.live">privacy@leaderbot.live</a>. Do not send payment credentials or API keys by email.</p>',
           },
         ],
       })
