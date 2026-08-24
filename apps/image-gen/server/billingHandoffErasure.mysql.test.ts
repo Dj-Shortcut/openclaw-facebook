@@ -488,7 +488,7 @@ suite("billing handoff privacy erasure", () => {
       intentCheckRelaxed = true;
       await database.execute(
         sql.raw(
-          "ALTER TABLE `portal_handoff_tokens` ALTER CHECK `portal_handoff_tokens_messenger_identity_scope` NOT ENFORCED"
+          "ALTER TABLE `portalHandoffTokens` ALTER CHECK `portal_handoff_tokens_messenger_identity_scope` NOT ENFORCED"
         )
       );
       tokenCheckRelaxed = true;
@@ -548,7 +548,7 @@ suite("billing handoff privacy erasure", () => {
           .where(eq(portalHandoffTokens.tokenHash, tokenHash));
         await database.execute(
           sql.raw(
-            "ALTER TABLE `portal_handoff_tokens` ALTER CHECK `portal_handoff_tokens_messenger_identity_scope` ENFORCED"
+            "ALTER TABLE `portalHandoffTokens` ALTER CHECK `portal_handoff_tokens_messenger_identity_scope` ENFORCED"
           )
         );
       }
