@@ -116,6 +116,31 @@ export function referencesForbiddenFlyApiUrl(source) {
   return false;
 }
 
+function referencesExactHttpUrl(source, expected) {
+  const expectedUrl = new URL(expected);
+  for (const match of source.matchAll(/https?:\/\/[^\s"'`<>()[\]{}]+/giu)) {
+    let parsed;
+    try {
+      parsed = new URL(match[0]);
+    } catch {
+      continue;
+    }
+    if (
+      parsed.protocol === expectedUrl.protocol &&
+      parsed.username === expectedUrl.username &&
+      parsed.password === expectedUrl.password &&
+      parsed.hostname === expectedUrl.hostname &&
+      parsed.port === expectedUrl.port &&
+      parsed.pathname === expectedUrl.pathname &&
+      parsed.search === expectedUrl.search &&
+      parsed.hash === expectedUrl.hash
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
@@ -1772,8 +1797,14 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     const steps = namedWorkflowStepBodies(workflow, stepName);
     if (
       steps.length !== 1 ||
-      !steps[0].includes("https://leaderbot-storage-proxy.fly.dev/healthz") ||
-      !steps[0].includes("https://leaderbot-storage-proxy.fly.dev/readyz") ||
+      !referencesExactHttpUrl(
+        steps[0],
+        "https://leaderbot-storage-proxy.fly.dev/healthz",
+      ) ||
+      !referencesExactHttpUrl(
+        steps[0],
+        "https://leaderbot-storage-proxy.fly.dev/readyz",
+      ) ||
       !steps[0].includes(
         "jq -e '.ok == true and .rateLimiter == \"shared_redis\"'",
       )
@@ -3843,8 +3874,14 @@ function validateProductionReconciliationWorkflow(rootDir) {
     }
     if (
       target === "storage-proxy" &&
-      (!step.includes("https://leaderbot-storage-proxy.fly.dev/healthz") ||
-        !step.includes("https://leaderbot-storage-proxy.fly.dev/readyz") ||
+      (!referencesExactHttpUrl(
+        step,
+        "https://leaderbot-storage-proxy.fly.dev/healthz",
+      ) ||
+        !referencesExactHttpUrl(
+          step,
+          "https://leaderbot-storage-proxy.fly.dev/readyz",
+        ) ||
         !step.includes(
           "jq -e '.ok == true and .rateLimiter == \"shared_redis\"'",
         ))
@@ -5163,6 +5200,13 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         ) {
           fail(
             `${app.readinessMonitor} must verify storage-proxy shared Redis readiness`,
+          );
+        }
+        if (
+          !readinessSteps[0].includes("if: github.event_name != 'pull_request'")
+        ) {
+          fail(
+            `${app.readinessMonitor} must defer storage-proxy readiness until post-deploy monitoring`,
           );
         }
       }

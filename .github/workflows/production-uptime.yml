@@ -83,6 +83,7 @@ jobs:
           jq -e '.ok == true' "$body"
 
       - name: Check storage proxy readiness
+        if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
           body="$(mktemp)"

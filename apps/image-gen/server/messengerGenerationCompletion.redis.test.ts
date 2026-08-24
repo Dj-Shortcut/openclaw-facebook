@@ -689,7 +689,9 @@ describe.skipIf(!enabled)("messenger completion Redis CAS", () => {
   it("scrubs current and legacy WhatsApp epoch indexes without touching another scope", async () => {
     const currentFence: MessengerGenerationCompletionFence = {
       ...fence("a"),
-      userKey: `redis-completion-whatsapp-bridge-${run}`,
+      userKey: createHash("sha256")
+        .update(`redis-completion-whatsapp-bridge-${run}`)
+        .digest("hex"),
       channel: "whatsapp",
     };
     const legacyFence: MessengerGenerationCompletionFence = {

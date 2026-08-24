@@ -1124,6 +1124,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("does not require an undeployed storage-proxy readiness route on pull requests", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/production-uptime.yml",
+      "        if: github.event_name != 'pull_request'\n",
+      "",
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must defer storage-proxy readiness until post-deploy monitoring",
+    );
+  });
+
   it("requires deploy and rollback to prove storage-proxy readiness", () => {
     const root = createRepositoryFixture();
     const workflowPath = path.join(
@@ -1162,6 +1176,28 @@ describe("production deployment contract", () => {
     expect(() => validateProductionRepository(root)).toThrow(
       "must prove restored storage-proxy liveness and shared-limiter readiness",
     );
+  });
+
+  it("rejects deceptive storage-proxy readiness URL substrings", () => {
+    for (const workflowFile of [
+      ".github/workflows/deploy-production.yml",
+      ".github/workflows/reconcile-production-deployment.yml",
+    ]) {
+      const root = createRepositoryFixture();
+      const workflowPath = path.join(root, workflowFile);
+      const workflow = fs.readFileSync(workflowPath, "utf8");
+      fs.writeFileSync(
+        workflowPath,
+        workflow.replaceAll(
+          "https://leaderbot-storage-proxy.fly.dev/readyz",
+          "https://attacker.invalid/https://leaderbot-storage-proxy.fly.dev/readyz",
+        ),
+      );
+
+      expect(() => validateProductionRepository(root)).toThrow(
+        /must prove .*storage-proxy .*readiness/u,
+      );
+    }
   });
 
   it("rejects the retired global image-forward cap in gateway production", () => {
