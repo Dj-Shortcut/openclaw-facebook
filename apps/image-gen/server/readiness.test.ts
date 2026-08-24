@@ -7,7 +7,9 @@ import {
   createReadinessHandler,
   type ReadinessCheck,
 } from "./_core/readiness";
+import * as billingReadiness from "./_core/billing/billingReadiness";
 import { resetConversationIdentityConfigForTests } from "./_core/conversationIdentityConfig";
+import { registerHealthRoutes } from "./_core/runtime/healthRoutes";
 import { bindTestHttpServer } from "./testHttpServer";
 
 const READINESS_ENV_KEYS = [
@@ -58,6 +60,7 @@ async function startServer(checks: ReadinessCheck[]) {
 
 describe("readiness", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
     restoreReadinessEnv();
     resetConversationIdentityConfigForTests();
@@ -170,6 +173,43 @@ describe("readiness", () => {
     );
   });
 
+  it("runs offline Mollie preflight without runtime-heartbeat workers", async () => {
+    for (const [name, value] of Object.entries({
+      MOLLIE_BILLING_ENABLED: "false",
+      MOLLIE_BILLING_PREFLIGHT_ENABLED: "true",
+      MOLLIE_LIVE_BILLING_ENABLED: "false",
+      MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED: "false",
+      AI_ANSWER_FINALIZATION_DRAIN_ENABLED: "false",
+      AI_ANSWER_QUOTA_PREFLIGHT_ENABLED: "false",
+      BILLING_NOTIFICATION_PLANE_ENABLED: "false",
+      MOLLIE_ACCOUNTING_IMPORT_ENABLED: "false",
+      MOLLIE_MODE: "test",
+      MOLLIE_BILLING_SCHEDULER_MODE: "pilot_pin",
+      MOLLIE_BILLING_WORKER_WORKSPACE_ID: "1",
+      DATABASE_URL: "mysql://test:test@database.test/leaderbot",
+      REDIS_URL: "redis://cache.test:6379",
+      PORTAL_HANDOFF_TOKEN_SECRET: "h".repeat(32),
+      BILLING_PROFILE_EVIDENCE_HMAC_SECRET: "e".repeat(32),
+      MOLLIE_CREDENTIAL_GENERATION_ID: "test-generation-1",
+      MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD: "10",
+      MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD: "100",
+      MESSENGER_USER_DAILY_SPEND_CAP_USD: "2",
+    })) {
+      vi.stubEnv(name, value);
+    }
+    const databaseCheck = vi
+      .spyOn(billingReadiness, "assertBillingDatabaseReadiness")
+      .mockResolvedValue();
+    const check = buildRuntimeReadinessChecks().find(
+      item => item.name === "mollie_launch_nonsecret_preflight"
+    );
+
+    await expect(check?.check()).resolves.toBeUndefined();
+    expect(databaseCheck).toHaveBeenCalledWith("test", {
+      requireRuntimeHeartbeat: false,
+    });
+  });
+
   it("returns ok when all dependency checks pass", async () => {
     const server = await startServer([
       { name: "redis", check: vi.fn() },
@@ -190,6 +230,54 @@ describe("readiness", () => {
       });
     } finally {
       await server.close();
+    }
+  });
+
+  it("labels a successful exposure-off check as offline readiness", async () => {
+    const app = express();
+    app.get(
+      "/readyz",
+      createReadinessHandler([{ name: "schema", check: vi.fn() }], {
+        getPhase: () => "offline",
+      })
+    );
+    const server = http.createServer(app);
+    const boundServer = await bindTestHttpServer(server);
+
+    try {
+      const response = await fetch(`${boundServer.baseUrl}/readyz`);
+      const payload = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(payload).toEqual({
+        ok: true,
+        phase: "offline",
+        checks: [{ name: "schema", ok: true }],
+      });
+    } finally {
+      await boundServer.close();
+    }
+  });
+
+  it("wires the offline phase through the production health routes", async () => {
+    vi.stubEnv("MOLLIE_BILLING_ENABLED", "false");
+    vi.stubEnv("MOLLIE_BILLING_PREFLIGHT_ENABLED", "true");
+    const app = express();
+    registerHealthRoutes(app, {
+      readinessChecks: [{ name: "schema", check: vi.fn() }],
+    });
+    const server = http.createServer(app);
+    const boundServer = await bindTestHttpServer(server);
+
+    try {
+      const response = await fetch(`${boundServer.baseUrl}/readyz`);
+
+      await expect(response.json()).resolves.toMatchObject({
+        ok: true,
+        phase: "offline",
+      });
+    } finally {
+      await boundServer.close();
     }
   });
 

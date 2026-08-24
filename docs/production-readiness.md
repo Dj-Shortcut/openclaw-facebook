@@ -1,8 +1,8 @@
 # Production Readiness
 
-Status: Not ready for broad customer launch; live Messenger smoke and delete-data flow are operator-verified, while live Mollie billing is NO-GO.
+Status: Not ready for broad customer launch; the repository contains the public Messenger isolation controls, but no compatible rollout/rollback artifact or production rehearsal is approved. WhatsApp and live Mollie billing remain NO-GO.
 
-Last updated: 2026-06-30
+Last updated: 2026-08-24
 
 Canonical release strategy and open work are tracked in
 [`docs/operations/todo.md`](operations/todo.md).
@@ -24,16 +24,20 @@ This document is the deploy/smoke checklist for the current gateway surface.
 
 ## Blocking Issues Fixed
 
-- Fixed Fly gateway workspace persistence: OpenClaw now uses `/data/workspace` through `OPENCLAW_WORKSPACE_DIR`.
-- Added startup migration for missing legacy markdown files from `/home/node/.openclaw/workspace` to `/data/workspace`.
-- Kept existing persistent workspace files safe: migration only copies missing files.
+- Fixed Fly gateway workspace persistence: OpenClaw now uses `/data/workspace` through `OPENCLAW_WORKSPACE_DIR` for static instruction files only.
+- Added startup migration for missing static instruction files from `/home/node/.openclaw/workspace` to `/data/workspace`.
+- Disabled shared public memory plugins, hooks, compaction flushes, search, and tools. Existing `USER.md`, `MEMORY.md`, and `memory/` content is moved to the recoverable `/data/private-memory-quarantine-v1` before startup; a collision fails closed.
+- Forced public Messenger direct messages to `per-account-channel-peer`, rejected secondary-agent Facebook bindings, and repeated both route checks before transcript dispatch.
+- Added immediate cleanup for downloaded Messenger media after successful and failed turns, with a maximum 24-hour persisted attachment TTL as crash recovery.
 - Repaired persisted config when it contains the known legacy default workspace path.
 - Kept OpenClaw built-in `image_generate` denied on the public gateway; Messenger image generation stays routed through Leaderbot image-gen.
-- Added a public-open Facebook DM tool denylist for high-cost/risky OpenClaw tools (`image_generate`, browser/canvas/web fetch/firecrawl, exec, and filesystem mutation tools).
+- Replaced the public-open Facebook DM tool surface with a positive minimal allowlist (`session_status` only); persisted profiles, provider overrides, additive allowlists, and code mode cannot widen an untrusted public turn.
 - Added the Fly public route guard: webhook and health routes stay public, customer portal/legal routes can be proxied to Leaderbot, and the broader OpenClaw gateway UI/API is not reachable from the internet.
 
 ## Remaining Blockers
 
+- The current route-guard hotfix image does not contain this startup script or plugin build. The standard gateway target remains manifest-blocked pending a mounted-state rehearsal plus reviewed rollout and rollback artifacts that both retain these isolation controls.
+- WhatsApp is operationally wired in the image-gen runtime: its credentials are mandatory at startup, `/webhook/whatsapp` is registered, and the production manifest names the callback canonical. Keep its release NO-GO until inbound WABA/phone identity resolves one exact workspace/connection/binding/privacy epoch, production sends use only that row's encrypted token, and text/image/audio attempts fail before any provider call on tenant, rebind, disconnect, or privacy mismatch.
 - Live image generation requires the separate `leaderbot-fb-image-gen` service key and OpenAI billing/key state to be healthy.
 - `npm audit --omit=dev --audit-level=high` could not complete from this Windows environment because the registry audit endpoint request failed with `EACCES`; rerun from CI or another network before broad launch.
 - Broad customer launch still requires the remaining portal, billing, usage-control, monitoring, and tenant-isolation work tracked in the canonical backlog.
@@ -84,9 +88,12 @@ service.
 
 ## Deploy Command
 
-```bash
-fly deploy -a leaderbot-openclaw-gateway
-```
+There is no approved gateway deploy command while
+`deploy/production/apps.json` keeps the target disabled. After the volume
+rehearsal, compatible rollback artifact, reviewed immutable rollout image, and
+manifest rebaseline are approved, use the protected `Deploy production`
+workflow with target `gateway`. Do not source-deploy this change or use the
+route-guard hotfix as isolation evidence.
 
 ## Smoke-Test Commands
 
@@ -122,7 +129,8 @@ fly logs -a leaderbot-openclaw-gateway
 
 Before deploy:
 
-- Confirm rollback target with `fly releases -a leaderbot-openclaw-gateway`.
+- Confirm both the rollout and rollback images contain the same session, memory, tool, quarantine, and attachment-cleanup controls; an older memory-creating startup image is not rollback-safe.
+- Rehearse startup on a snapshot/clone of the mounted volume. Treat quarantine collisions as stop conditions and do not inspect, overwrite, or delete customer content without an approved audited access flow.
 - Confirm the gateway `/healthz` route is reachable and no additional gateway UI/API routes are publicly exposed.
 - Confirm image-gen `/healthz`, `/readyz`, and `/metrics` are reachable.
 - Confirm image-gen queue metrics show bounded `messenger_generation_queue_jobs{state="queued"}`, `messenger_generation_queue_jobs{state="processing"}`, and `messenger_generation_global_slots{state="active"}`.
@@ -157,14 +165,15 @@ Manual Messenger smoke:
 
 ## Rollback Notes
 
-Use Fly deployment history to identify the previous stable deployment, then roll back:
+Use only the protected production workflow and a reviewed immutable rollback
+image recorded in the production manifest. A previous image that creates
+`MEMORY.md`, restores memory search, or lacks per-turn session/tool enforcement
+is not an acceptable rollback target.
 
-```bash
-fly releases -a leaderbot-openclaw-gateway
-fly deploy -a leaderbot-openclaw-gateway --image <previous-image>
-```
-
-The workspace migration is non-destructive: it only copies missing files into `/data/workspace` and does not remove legacy files.
+Startup moves legacy shared `USER.md`, `MEMORY.md`, and `memory/` entries into a
+recoverable quarantine. It never overwrites an existing quarantine. Rollback
+must preserve that boundary; restoring quarantined content into the public
+workspace would reintroduce the incident this control is designed to contain.
 
 ## Known Risks
 

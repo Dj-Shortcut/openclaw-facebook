@@ -2,6 +2,7 @@ import { storageDelete, storageKeyFromPublicUrl } from "../storage";
 import {
   eraseBillingHandoffIdentity,
   getConnectedFacebookPageConnection,
+  getConnectedMetaChannelConnection,
 } from "../db";
 import {
   deleteCostLedgerEntriesForUser,
@@ -27,8 +28,10 @@ import {
 } from "./messengerStatePersistence";
 import {
   getMessengerRequestErasurePrivacySubject,
+  getMessengerRequestChannel,
   getMessengerRequestOwnership,
   getMessengerRequestPageId,
+  setMessengerRequestErasurePrivacySubject,
 } from "./messengerRequestContext";
 import {
   beginMessengerPrivacyErasure,
@@ -98,10 +101,25 @@ type LockedPrivacyErasure = MessengerErasingPrivacySubject & {
   userKey: string;
 };
 
+function getConnectedDeletionChannelConnection(
+  channel: "facebook_messenger" | "whatsapp",
+  externalId: string,
+  expected?: {
+    workspaceId?: number | null;
+    channelConnectionId?: number | null;
+    bindingEpoch?: number | null;
+  }
+) {
+  return channel === "whatsapp"
+    ? getConnectedMetaChannelConnection(channel, externalId, expected)
+    : getConnectedFacebookPageConnection(externalId, expected);
+}
+
 async function deleteUserDataInternal(
   psid: string,
   lockedPrivacyErasure?: LockedPrivacyErasure
 ): Promise<UserDataDeletionOutcome> {
+  const requestChannel = getMessengerRequestChannel() ?? "facebook_messenger";
   const erasureRetry = getMessengerRequestErasurePrivacySubject();
   if (erasureRetry) {
     const ownership = getMessengerRequestOwnership();
@@ -220,11 +238,15 @@ async function deleteUserDataInternal(
     state.bindingEpoch &&
     state.privacyEpoch
   ) {
-    const connection = await getConnectedFacebookPageConnection(state.pageId, {
-      workspaceId: state.workspaceId,
-      channelConnectionId: state.channelConnectionId,
-      bindingEpoch: state.bindingEpoch,
-    });
+    const connection = await getConnectedDeletionChannelConnection(
+      requestChannel,
+      state.pageId,
+      {
+        workspaceId: state.workspaceId,
+        channelConnectionId: state.channelConnectionId,
+        bindingEpoch: state.bindingEpoch,
+      }
+    );
     if (!connection) return { status: "failed" };
     if (
       erasureRetry &&
@@ -262,6 +284,11 @@ async function deleteUserDataInternal(
       state?.privacyEpoch ?? erasureRetry?.dataPrivacyEpoch;
     if (!dataPrivacyEpoch) return { status: "failed" };
     const erasure = { ...privacyErasure, dataPrivacyEpoch };
+    setMessengerRequestErasurePrivacySubject({
+      userKey: erasure.userKey,
+      privacyEpoch: erasure.privacyEpoch,
+      dataPrivacyEpoch: erasure.dataPrivacyEpoch,
+    });
     return await runWithLockedMessengerPrivacyErasure(erasure, async () => {
       const value = await deleteUserDataInternal(psid, erasure);
       return { value, complete: value.status === "completed" };
@@ -370,18 +397,48 @@ async function deleteUserDataInternal(
         }
         return;
       }
-      const connection = await getConnectedFacebookPageConnection(
-        pageId,
+      const ownership = getMessengerRequestOwnership();
+      const expectedConnection =
         state?.workspaceId && state.channelConnectionId && state.bindingEpoch
           ? {
               workspaceId: state.workspaceId,
               channelConnectionId: state.channelConnectionId,
               bindingEpoch: state.bindingEpoch,
             }
-          : undefined
+          : ownership;
+      if (requestChannel === "whatsapp" && !expectedConnection) {
+        throw new Error("Exact WhatsApp ownership is required for erasure");
+      }
+      const connection = await getConnectedDeletionChannelConnection(
+        requestChannel,
+        pageId,
+        expectedConnection
       );
       if (!connection)
-        throw new Error("Verified Page ownership is unavailable");
+        throw new Error("Verified channel ownership is unavailable");
+      const maxPrivacyEpoch =
+        lockedPrivacyErasure?.dataPrivacyEpoch ??
+        erasureRetry?.dataPrivacyEpoch ??
+        state?.privacyEpoch;
+      if (
+        (requestChannel === "whatsapp" ||
+          process.env.NODE_ENV === "production") &&
+        (!Number.isSafeInteger(maxPrivacyEpoch) || Number(maxPrivacyEpoch) <= 0)
+      ) {
+        throw new Error("Exact billing privacy scope is required for erasure");
+      }
+      if (maxPrivacyEpoch) {
+        await eraseBillingHandoffIdentity(
+          connection.workspaceId,
+          userKey,
+          pageId,
+          {
+            channelConnectionId: connection.id,
+            maxPrivacyEpoch,
+          }
+        );
+        return;
+      }
       await eraseBillingHandoffIdentity(
         connection.workspaceId,
         userKey,
@@ -453,6 +510,9 @@ async function deleteUserDataInternal(
               privacyEpoch: deletionState.privacyEpoch,
               userKey: deletionState.userKey,
               pageId: deletionState.pageId!,
+              ...(requestChannel === "whatsapp"
+                ? { channel: "whatsapp" as const }
+                : {}),
             }
           : undefined
       )

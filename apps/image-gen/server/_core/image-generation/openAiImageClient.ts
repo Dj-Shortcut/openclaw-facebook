@@ -51,6 +51,7 @@ type OpenAiResponseContext = {
   startedAt: number;
   partialMetrics: Omit<GenerationMetrics, "totalMs">;
   onProviderAttempt?: () => Promise<void>;
+  onProviderSuccess?: () => Promise<void>;
 };
 
 const OPENAI_RETRY_LIMIT_DEFAULT = 0;
@@ -563,7 +564,8 @@ function isRetryableNetworkError(error: unknown): boolean {
 async function fetchAndReadWithDeadline(
   input: URL,
   init: RequestInit | undefined,
-  timeoutMs: number
+  timeoutMs: number,
+  onProviderSuccess?: () => Promise<void>
 ): Promise<{ response: Response; budgetExceeded: boolean }> {
   const controller = new AbortController();
   const deadlineAt = Date.now() + timeoutMs;
@@ -583,6 +585,10 @@ async function fetchAndReadWithDeadline(
     assertBeforeDeadline(controller.signal, deadlineAt);
 
     if (response.ok) {
+      // A 2xx is the provider's billable completion boundary. Persist that
+      // durable outcome before reading or parsing the response body so a
+      // malformed/slow body cannot downgrade known spend to failed.
+      await onProviderSuccess?.();
       const parsedBody = await readSuccessResponseJson({
         response,
         signal: controller.signal,
@@ -861,6 +867,7 @@ export async function fetchOpenAiImageResponse(
     await context.onProviderAttempt?.();
     const openAiStartedAt = Date.now();
     let attemptDurationRecorded = false;
+    let providerResponseAccepted = false;
     const recordAttemptDuration = () => {
       if (attemptDurationRecorded) return;
       context.partialMetrics.openAiMs =
@@ -872,7 +879,11 @@ export async function fetchOpenAiImageResponse(
       const { response, budgetExceeded } = await fetchAndReadWithDeadline(
         requestContext.endpoint,
         requestContext.createRequestInit?.() ?? requestContext.requestInit,
-        openAiTimeoutMs
+        openAiTimeoutMs,
+        async () => {
+          providerResponseAccepted = true;
+          await context.onProviderSuccess?.();
+        }
       );
 
       recordAttemptDuration();
@@ -934,6 +945,13 @@ export async function fetchOpenAiImageResponse(
       );
     } catch (error) {
       recordAttemptDuration();
+
+      // A provider 2xx can be followed by a durable-effect or response-body
+      // failure. It is never safe to turn that known accepted operation into
+      // another paid request.
+      if (providerResponseAccepted) {
+        throw error;
+      }
 
       if (
         canRetryAttempt({

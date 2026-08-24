@@ -1,4 +1,8 @@
-import { createImageGenerator, type ImageProvider } from "./imageService";
+import {
+  createImageGenerator,
+  type ImageProvider,
+  type ProviderAttemptAdmission,
+} from "./imageService";
 import {
   GenerationTimeoutError,
   MissingAppBaseUrlError,
@@ -82,7 +86,8 @@ type ExecuteGenerationFlowInput = {
   sourceImageUrls?: string[];
   lastPhotoUrl?: string | null;
   lastPhotoSource?: SourceImageOrigin | null;
-  onProviderAttempt?: () => Promise<void>;
+  onProviderAttempt?: () => Promise<ProviderAttemptAdmission | void>;
+  onProviderSuccess?: () => Promise<void>;
   bypassBudgetLimits?: boolean;
   costLedgerChannel?: string;
   costLedgerScope?: CostLedgerTenantScope;
@@ -352,6 +357,7 @@ export async function executeGenerationFlow(
       sourceImageProvenance: trustedSourceImageUrl ? "storeInbound" : undefined,
       promptHint: input.promptHint,
       onProviderAttempt: input.onProviderAttempt,
+      onProviderSuccess: input.onProviderSuccess,
       bypassBudgetLimits: input.bypassBudgetLimits,
       costLedgerChannel: input.costLedgerChannel,
       costLedgerScope: input.costLedgerScope,

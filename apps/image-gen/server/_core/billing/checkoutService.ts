@@ -503,9 +503,14 @@ export async function getMollieLaunchCheck(
     : { bancontact: false, providerChecked: false };
   let credentialFreeGatesReady = false;
   try {
-    assertMollieNonSecretLaunchConfig();
-    assertBillingNotificationConfig();
-    await assertBillingDatabaseReadiness(mode);
+    const requireOperationalFlags = phase === "provider";
+    assertMollieNonSecretLaunchConfig({ requireOperationalFlags });
+    if (requireOperationalFlags) {
+      assertBillingNotificationConfig();
+    }
+    await assertBillingDatabaseReadiness(mode, {
+      requireRuntimeHeartbeat: requireOperationalFlags,
+    });
     credentialFreeGatesReady = true;
   } catch {
     credentialFreeGatesReady = false;

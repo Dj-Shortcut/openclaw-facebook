@@ -19,9 +19,17 @@ import {
   MessengerQuotaReservationCommitError,
 } from "../messengerQuota";
 import {
+  assertAudioProviderFence,
+  type AudioProviderJob,
   prepareAudioForTranscriptionFromBuffer,
   transcribePreparedAudioMessage,
 } from "../webhookAudioMessageRouter";
+import {
+  finalizeMessengerProviderAttemptFence,
+  markMessengerProviderAttemptStarted,
+  reserveMessengerProviderAttemptFence,
+  type MessengerProviderAttemptFence,
+} from "../messengerProviderAttemptFence";
 import { downloadWhatsAppMedia } from "../whatsappApi";
 import { sendWhatsAppTextReply } from "../whatsappResponseService";
 import { handleWhatsAppTextEvent } from "./textHandler";
@@ -74,11 +82,55 @@ export async function handleWhatsAppAudioEvent(
       return;
     }
 
+    const providerJob: AudioProviderJob = {
+      psid: event.senderId,
+      userId: event.userId,
+      reqId: context.reqId,
+      lang: context.lang,
+      pageId: event.endpoint.phoneNumberId,
+      workspaceId: context.costLedgerScope.workspaceId,
+      channelConnectionId: context.costLedgerScope.channelConnectionId,
+      bindingEpoch: context.costLedgerScope.bindingEpoch,
+      privacyEpoch: context.costLedgerScope.privacyEpoch,
+      providerChannel: "whatsapp",
+    };
+
+    let downloadFence: MessengerProviderAttemptFence | null = null;
+    let downloadStarted = false;
     try {
+      await assertAudioProviderFence(providerJob);
+      downloadFence = await reserveMessengerProviderAttemptFence(
+        providerJob,
+        "meta-audio-download",
+        1,
+        new Date(),
+        "whatsapp"
+      );
+      await markMessengerProviderAttemptStarted(downloadFence);
+      downloadStarted = true;
       const downloaded = await downloadWhatsAppMedia(event.audioId);
       sourceAudioBuffer = downloaded.buffer;
       sourceAudioContentType = downloaded.contentType;
+      await finalizeMessengerProviderAttemptFence(downloadFence, "succeeded");
+      downloadFence = null;
+      // Deletion/rebind may win during the download. Never disclose the bytes
+      // to OpenAI after that immutable privacy scope changes.
+      await assertAudioProviderFence(providerJob);
     } catch (error) {
+      if (downloadFence) {
+        try {
+          await finalizeMessengerProviderAttemptFence(
+            downloadFence,
+            downloadStarted ? "ambiguous" : "known_failed"
+          );
+        } catch (fenceError) {
+          throw new AggregateError(
+            [error, fenceError],
+            "WhatsApp audio download fence finalization failed",
+            { cause: error }
+          );
+        }
+      }
       safeLog("whatsapp_audio_media_download_failed", {
         user: toLogUser(event.userId),
         reqId: context.reqId,
@@ -141,7 +193,8 @@ export async function handleWhatsAppAudioEvent(
       event.audioId,
       preparedAudio,
       commitProviderAttemptQuota,
-      "whatsapp"
+      "whatsapp",
+      providerJob
     );
     if (!transcript) {
       await sendWhatsAppTextReply(

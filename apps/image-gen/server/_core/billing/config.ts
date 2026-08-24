@@ -4,6 +4,8 @@ const MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED_VALUE = "true";
 
 export type MollieMode = "test" | "live";
 
+export type MollieReadinessPhase = "core" | "offline" | "operational";
+
 export type MollieConfig = Readonly<{
   apiKey: string;
   mode: MollieMode;
@@ -239,13 +241,56 @@ export function isMollieBillingPreflightEnabled(): boolean {
   );
 }
 
-export function assertMollieNonSecretLaunchConfig(): void {
+export function getMollieReadinessPhase(): MollieReadinessPhase {
+  if (isMollieBillingEnabled()) {
+    return "operational";
+  }
+  if (process.env.MOLLIE_BILLING_PREFLIGHT_ENABLED === "true") {
+    return "offline";
+  }
+  return "core";
+}
+
+export function assertMollieNonSecretLaunchConfig(
+  options: { requireOperationalFlags?: boolean } = {}
+): void {
+  const requireOperationalFlags = options.requireOperationalFlags !== false;
+  if (!requireOperationalFlags) {
+    if (process.env.MOLLIE_BILLING_PREFLIGHT_ENABLED !== "true") {
+      throw new Error(
+        "MOLLIE_BILLING_PREFLIGHT_ENABLED must be true during offline preflight"
+      );
+    }
+    if (isMollieBillingEnabled()) {
+      throw new Error(
+        "MOLLIE_BILLING_ENABLED must be false during offline preflight"
+      );
+    }
+    if (getConfiguredBillingMode() !== "test") {
+      throw new Error("MOLLIE_MODE must be test during offline preflight");
+    }
+    for (const name of [
+      "MOLLIE_LIVE_BILLING_ENABLED",
+      "MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED",
+      "AI_ANSWER_FINALIZATION_DRAIN_ENABLED",
+      "AI_ANSWER_QUOTA_PREFLIGHT_ENABLED",
+      "BILLING_NOTIFICATION_PLANE_ENABLED",
+      "MOLLIE_ACCOUNTING_IMPORT_ENABLED",
+    ] as const) {
+      if (process.env[name] === "true") {
+        throw new Error(`${name} must be false during offline preflight`);
+      }
+    }
+  }
   required("DATABASE_URL");
   required("REDIS_URL");
-  if (process.env.BILLING_NOTIFICATION_PLANE_ENABLED !== "true") {
+  if (
+    requireOperationalFlags &&
+    process.env.BILLING_NOTIFICATION_PLANE_ENABLED !== "true"
+  ) {
     throw new Error("BILLING_NOTIFICATION_PLANE_ENABLED must be true");
   }
-  if (!isMollieEntitlementEnforcementEnabled()) {
+  if (requireOperationalFlags && !isMollieEntitlementEnforcementEnabled()) {
     throw new Error("MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED must be true");
   }
   if ((process.env.PORTAL_HANDOFF_TOKEN_SECRET?.trim().length ?? 0) < 32) {

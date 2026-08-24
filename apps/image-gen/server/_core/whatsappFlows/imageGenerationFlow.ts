@@ -19,12 +19,38 @@ import {
   setLastGenerationContext,
 } from "../messengerState";
 import {
-  sendWhatsAppImageReply,
+  sendWhatsAppImageReplyWithReceipt,
   sendWhatsAppTextReply,
 } from "../whatsappResponseService";
 import { summarizeSensitiveUrl } from "../utils/urlSummarizer";
 import { safeLog } from "../logger";
 import { toLogUser } from "../privacy";
+import {
+  assertCostLedgerTenantScope,
+  type CostLedgerTenantScope,
+} from "../costLedger";
+import {
+  finalizeWhatsAppProviderAttemptFence,
+  markWhatsAppProviderAttemptStarted,
+  reserveWhatsAppProviderAttemptFence,
+  type WhatsAppProviderAttemptFence,
+} from "../whatsappProviderAttemptFence";
+import {
+  markMessengerGenerationCompleted,
+  markMessengerGenerationDelivered,
+  type MessengerGenerationCompletionFence,
+} from "../messengerGenerationCompletion";
+import {
+  getMessengerRequestOwnership,
+  getMessengerRequestPageId,
+  getMessengerRequestPrivacySubject,
+  getMessengerRequestChannel,
+} from "../messengerRequestContext";
+import type { WhatsAppEndpoint } from "../conversationEndpoint";
+import {
+  assertWhatsAppGenerationScopeActive,
+  WhatsAppGenerationScopeError,
+} from "../whatsappGenerationScope";
 
 type ImageGenerationInput = {
   senderId: string;
@@ -34,6 +60,8 @@ type ImageGenerationInput = {
   sourceImageUrl?: string;
   promptHint?: string;
   generationKind?: GenerationKind;
+  endpoint: WhatsAppEndpoint;
+  costLedgerScope: CostLedgerTenantScope;
 };
 
 type GenerationResult = Awaited<ReturnType<typeof executeGenerationFlow>>;
@@ -115,8 +143,31 @@ async function handleGenerationSuccess(input: {
   promptHint?: string;
   imageUrl: string;
   reqId: string;
+  userKey: string;
+  completionFence?: MessengerGenerationCompletionFence;
 }): Promise<void> {
-  await sendWhatsAppImageReply(input.senderId, input.imageUrl);
+  // Inventory the exact tenant/privacy-owned object before Graph can accept
+  // its URL. A crash after delivery can then never make GDPR erasure depend
+  // on the fallible conversation-state writes below.
+  await markMessengerGenerationCompleted(
+    input.reqId,
+    input.imageUrl,
+    input.userKey,
+    Date.now(),
+    input.completionFence
+  );
+  await sendWhatsAppImageReplyWithReceipt(
+    input.senderId,
+    input.imageUrl,
+    input.reqId
+  );
+  await markMessengerGenerationDelivered(
+    input.reqId,
+    input.imageUrl,
+    input.userKey,
+    Date.now(),
+    input.completionFence
+  );
   await setLastGenerated(input.senderId, input.imageUrl);
   await setLastGenerationContext(input.senderId, {
     prompt: input.promptHint,
@@ -126,6 +177,42 @@ async function handleGenerationSuccess(input: {
     input.senderId,
     `${t(input.lang, "success")}\n${t(input.lang, "whatsappGenerationFollowup")}`
   );
+}
+
+function resolveWhatsAppCompletionFence(
+  scope: CostLedgerTenantScope,
+  userKey: string
+): MessengerGenerationCompletionFence | undefined {
+  const pageId = getMessengerRequestPageId();
+  const requestChannel = getMessengerRequestChannel();
+  const ownership = getMessengerRequestOwnership();
+  const privacy = getMessengerRequestPrivacySubject();
+  if (!pageId || !ownership || !privacy) {
+    if (process.env.NODE_ENV === "production") {
+      throw new WhatsAppGenerationScopeError();
+    }
+    return undefined;
+  }
+  if (
+    requestChannel !== "whatsapp" ||
+    privacy.userKey !== userKey ||
+    scope.userKey !== userKey ||
+    ownership.workspaceId !== scope.workspaceId ||
+    ownership.channelConnectionId !== scope.channelConnectionId ||
+    ownership.bindingEpoch !== scope.bindingEpoch ||
+    privacy.privacyEpoch !== scope.privacyEpoch
+  ) {
+    throw new WhatsAppGenerationScopeError();
+  }
+  return Object.freeze({
+    pageId,
+    userKey,
+    workspaceId: ownership.workspaceId,
+    channelConnectionId: ownership.channelConnectionId,
+    bindingEpoch: ownership.bindingEpoch,
+    privacyEpoch: privacy.privacyEpoch,
+    channel: "whatsapp" as const,
+  });
 }
 
 function logGenerationFailure(input: {
@@ -140,8 +227,9 @@ function logGenerationFailure(input: {
     totalMs: metrics?.totalMs,
     error:
       input.result.error instanceof Error
-        ? input.result.error.message
-        : String(input.result.error),
+        ? input.result.error.name
+        : "unknown_error",
+    errorKind: input.result.errorKind,
   });
 }
 
@@ -229,8 +317,15 @@ async function handleGenerationFailure(input: {
 export async function runWhatsAppImageGeneration(
   input: ImageGenerationInput
 ): Promise<void> {
+  const scopedInput = {
+    ...input,
+    costLedgerScope: requireWhatsAppCostLedgerTenantScope(
+      input.costLedgerScope,
+      input.userId
+    ),
+  };
   const didRun = await runGuardedGeneration(input.senderId, () =>
-    runWhatsAppImageGenerationOnce(input)
+    runWhatsAppImageGenerationOnce(scopedInput)
   );
   if (didRun === null) {
     await sendWhatsAppTextReply(
@@ -239,6 +334,22 @@ export async function runWhatsAppImageGeneration(
         ? "Hang tight, I am still working on your image."
         : "Even geduld, ik ben nog bezig met je beeld."
     );
+  }
+}
+
+function requireWhatsAppCostLedgerTenantScope(
+  scope: CostLedgerTenantScope | undefined,
+  expectedUserKey: string
+): CostLedgerTenantScope {
+  try {
+    if (!scope || scope.userKey !== expectedUserKey) {
+      throw new WhatsAppGenerationScopeError();
+    }
+    assertCostLedgerTenantScope(scope);
+    return Object.freeze({ ...scope });
+  } catch (error) {
+    if (error instanceof WhatsAppGenerationScopeError) throw error;
+    throw new WhatsAppGenerationScopeError();
   }
 }
 
@@ -269,6 +380,15 @@ async function runWhatsAppImageGenerationOnce(
   let pendingQuotaReservation: typeof quotaReservation | null =
     quotaReservation;
   let providerAttemptsCommitted = 0;
+  const providerFences: WhatsAppProviderAttemptFence[] = [];
+  const finalizeKnownProviderSuccess = async (): Promise<void> => {
+    const fences = providerFences.splice(0, providerFences.length);
+    await Promise.all(
+      fences.map(fence =>
+        finalizeWhatsAppProviderAttemptFence(fence, "succeeded")
+      )
+    );
+  };
   const commitProviderAttemptQuota = async () => {
     const reservationForAttempt =
       pendingQuotaReservation ??
@@ -276,29 +396,59 @@ async function runWhatsAppImageGenerationOnce(
     if (!reservationForAttempt) {
       throw new MessengerQuotaReservationCommitError();
     }
-
-    const committed = await commitImageGenerationUsage({
-      ...quotaInput,
-      reservation: reservationForAttempt,
+    const providerFence = await reserveWhatsAppProviderAttemptFence({
+      reqId,
+      userKey: userId,
+      providerOperation: "whatsapp_openai_image",
+      expectedScope: input.costLedgerScope,
     });
-    if (!committed) {
-      throw new MessengerQuotaReservationCommitError();
-    }
+    let terminal = false;
+    return {
+      markTransportStarted: async () => {
+        if (terminal) {
+          throw new Error("WhatsApp provider attempt admission is terminal");
+        }
+        // The durable tenant/privacy fence is the last reversible local gate.
+        // Only consume customer quota after that exact pre-transport CAS wins.
+        await markWhatsAppProviderAttemptStarted(providerFence);
+        const committed = await commitImageGenerationUsage({
+          ...quotaInput,
+          reservation: reservationForAttempt,
+        });
+        if (!committed) {
+          throw new MessengerQuotaReservationCommitError();
+        }
 
-    providerAttemptsCommitted += 1;
-    if (pendingQuotaReservation?.token === reservationForAttempt.token) {
-      pendingQuotaReservation = null;
-    }
-    safeLog("whatsapp_quota_decision", {
-      action: "commit_provider_attempt",
-      user: userId,
-      generationKind: generationKind ?? null,
-      allowed: true,
-    });
+        providerAttemptsCommitted += 1;
+        if (pendingQuotaReservation?.token === reservationForAttempt.token) {
+          pendingQuotaReservation = null;
+        }
+        providerFences.push(providerFence);
+        terminal = true;
+        safeLog("whatsapp_quota_decision", {
+          action: "commit_provider_attempt",
+          user: toLogUser(userId),
+          generationKind: generationKind ?? null,
+          allowed: true,
+        });
+      },
+      abortBeforeTransport: async () => {
+        if (terminal) return;
+        await finalizeWhatsAppProviderAttemptFence(
+          providerFence,
+          "known_failed"
+        );
+        terminal = true;
+      },
+    };
   };
 
   try {
     const generationContext = await prepareGeneration(input);
+    const completionFence = resolveWhatsAppCompletionFence(
+      input.costLedgerScope,
+      userId
+    );
 
     const result = await executeGenerationFlow({
       userId,
@@ -309,13 +459,26 @@ async function runWhatsAppImageGenerationOnce(
       lastPhotoUrl: generationContext.lastPhotoUrl,
       lastPhotoSource: generationContext.lastPhotoSource,
       onProviderAttempt: commitProviderAttemptQuota,
+      onProviderSuccess: finalizeKnownProviderSuccess,
       costLedgerChannel: "whatsapp",
+      costLedgerScope: input.costLedgerScope,
     });
 
     if (result.kind === "success") {
       if (providerAttemptsCommitted === 0) {
-        await commitProviderAttemptQuota();
+        const admission = await commitProviderAttemptQuota();
+        await admission.markTransportStarted();
       }
+      // The billable image provider operation has a known successful outcome
+      // before channel delivery begins. Persist it now so a later Graph or
+      // state failure cannot misclassify provider spend as ambiguous.
+      // Kept as an idempotent fallback for injected test generators; the real
+      // image service closes this immediately on provider 2xx.
+      await finalizeKnownProviderSuccess();
+      await assertWhatsAppGenerationScopeActive({
+        endpoint: input.endpoint,
+        scope: input.costLedgerScope,
+      });
       await handleGenerationSuccess({
         senderId,
         lang,
@@ -323,9 +486,18 @@ async function runWhatsAppImageGenerationOnce(
         promptHint,
         imageUrl: result.imageUrl,
         reqId,
+        userKey: userId,
+        completionFence,
       });
       return;
     }
+
+    await Promise.all(
+      providerFences.map(fence =>
+        finalizeWhatsAppProviderAttemptFence(fence, "ambiguous")
+      )
+    );
+    providerFences.length = 0;
 
     await handleGenerationFailure({
       senderId,
@@ -336,6 +508,11 @@ async function runWhatsAppImageGenerationOnce(
       result,
     });
   } finally {
+    await Promise.all(
+      providerFences.map(fence =>
+        finalizeWhatsAppProviderAttemptFence(fence, "ambiguous")
+      )
+    );
     if (pendingQuotaReservation) {
       await releaseImageGenerationUsage({
         ...quotaInput,

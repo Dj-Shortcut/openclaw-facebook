@@ -413,7 +413,19 @@ describe("data deletion service", () => {
       async () => {
         await Promise.resolve(getOrCreateState(psid));
         beginStatePrivacyErasureMock.mockImplementationOnce(async () => {
-          await setPendingStoredImage(psid, lateSourceUrl);
+          // The racing ingress owns its original E5 request context; deletion
+          // has already advanced its own context to the E6 erasure epoch.
+          await runWithMessengerRequestContext(
+            pageId,
+            () => setPendingStoredImage(psid, lateSourceUrl),
+            {
+              workspaceId: 42,
+              channelConnectionId: 7,
+              bindingEpoch: 3,
+              userKey,
+              privacyEpoch: 5,
+            }
+          );
         });
 
         await expect(deleteUserData(psid)).resolves.toEqual({

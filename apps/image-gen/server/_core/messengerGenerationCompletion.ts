@@ -56,6 +56,7 @@ export type MessengerGenerationCompletion = {
   bindingEpoch?: number;
   privacyEpoch?: number;
   pageId?: string;
+  channel?: "facebook_messenger" | "whatsapp";
   expiresAt?: number;
 };
 
@@ -66,6 +67,7 @@ export type MessengerGenerationCompletionFence = Readonly<{
   privacyEpoch: number;
   userKey: string;
   pageId: string;
+  channel?: "facebook_messenger" | "whatsapp";
 }>;
 
 export type MessengerGenerationDeliveryStart =
@@ -367,9 +369,11 @@ function subjectTag(fence: MessengerGenerationCompletionFence): string {
     .update("\0")
     .update(String(fence.channelConnectionId))
     .update("\0")
-    .update(fence.userKey)
-    .digest("hex");
-  return `{mgc:${subjectDigest}}`;
+    .update(fence.userKey);
+  if (fence.channel === "whatsapp") {
+    subjectDigest.update("\0whatsapp");
+  }
+  return `{mgc:${subjectDigest.digest("hex")}}`;
 }
 
 function completionStorageId(
@@ -387,9 +391,11 @@ function completionStorageId(
     .update("\0")
     .update(fence.userKey)
     .update("\0")
-    .update(reqId)
-    .digest("hex");
-  return `${subjectTag(fence)}:${identity}`;
+    .update(reqId);
+  if (fence.channel === "whatsapp") {
+    identity.update("\0whatsapp");
+  }
+  return `${subjectTag(fence)}:${identity.digest("hex")}`;
 }
 
 function rootIndexStorageId(fence: MessengerGenerationCompletionFence): string {
@@ -1286,6 +1292,9 @@ function completionMatchesCleanupContext(
   scope: MessengerStorageScope,
   context: CompletionObjectCleanupContext
 ): boolean {
+  if (!completionChannelMatchesFence(completion, context.fence)) {
+    return false;
+  }
   if (context.mode === "exact") {
     return matchesFence(completion, context.fence);
   }
@@ -1396,11 +1405,22 @@ function matchesFence(
   fence: MessengerGenerationCompletionFence
 ): boolean {
   return (
+    completionChannelMatchesFence(completion, fence) &&
     completion.userKey === fence.userKey &&
     completion.workspaceId === fence.workspaceId &&
     completion.channelConnectionId === fence.channelConnectionId &&
     completion.bindingEpoch === fence.bindingEpoch &&
     completion.privacyEpoch === fence.privacyEpoch &&
     completion.pageId === fence.pageId
+  );
+}
+
+function completionChannelMatchesFence(
+  completion: Pick<MessengerGenerationCompletion, "channel">,
+  fence: Pick<MessengerGenerationCompletionFence, "channel">
+): boolean {
+  return (
+    (completion.channel ?? "facebook_messenger") ===
+    (fence.channel ?? "facebook_messenger")
   );
 }

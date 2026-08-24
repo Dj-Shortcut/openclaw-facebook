@@ -29,13 +29,14 @@ export async function admitMessengerPrivacySubjectFromMetaEvent(
   input: SubjectScope & {
     eventOccurredAt: Date;
     allowReactivation: boolean;
+    allowCreation?: boolean;
   }
 ): Promise<number> {
   validateScope(input);
   validateEventOccurredAt(input.eventOccurredAt);
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
-    if (input.allowReactivation) {
+    if (input.allowCreation ?? input.allowReactivation) {
       await tx
         .insert(messengerPrivacySubjects)
         .values({
@@ -76,8 +77,9 @@ export async function admitMessengerPrivacySubjectFromMetaEvent(
     if (subject.status === "active") {
       return subject.privacyEpoch;
     }
+    // Erasure is an exclusive state. Even a fresh inbound user event must not
+    // reopen the subject while deletion is still scrubbing tenant data.
     if (subject.status === "erasing") {
-      if (input.allowReactivation) return subject.privacyEpoch;
       throw new MessengerPrivacyFenceError();
     }
     if (subject.status !== "erased" || !input.allowReactivation) {

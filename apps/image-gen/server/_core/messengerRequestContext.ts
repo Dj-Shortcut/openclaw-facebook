@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 type MessengerRequestContext = {
+  channel?: "facebook_messenger" | "whatsapp";
   pageId?: string;
   workspaceId?: number;
   channelConnectionId?: number;
@@ -28,6 +29,7 @@ export async function runWithMessengerRequestContext<T>(
   pageId: string | undefined,
   task: () => Promise<T>,
   ownership?: {
+    channel?: "facebook_messenger" | "whatsapp";
     workspaceId: number;
     channelConnectionId: number;
     bindingEpoch: number;
@@ -149,6 +151,11 @@ export function getMessengerRequestErasurePrivacySubject():
 
 export function getMessengerRequestPageId(): string | undefined {
   return messengerRequestContext.getStore()?.pageId;
+}
+
+export function getMessengerRequestChannel():
+  "facebook_messenger" | "whatsapp" | undefined {
+  return messengerRequestContext.getStore()?.channel;
 }
 
 export function getMessengerRequestOwnership():

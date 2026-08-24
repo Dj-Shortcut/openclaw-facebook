@@ -4,9 +4,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   assertMollieBillingEnabled,
+  assertMollieNonSecretLaunchConfig,
   assertTenantBillingWorkerConfigured,
   assertTenantBillingWorkerWorkspace,
   getMollieConfig,
+  getMollieReadinessPhase,
   getTenantBillingWorkerWorkspaceId,
   isMollieBillingEnabled,
 } from "./config";
@@ -30,7 +32,30 @@ function useValidTestConfig(): void {
   delete process.env.PORTAL_BASE_URL;
   delete process.env.MOLLIE_LIVE_BILLING_ENABLED;
   delete process.env.MOLLIE_BILLING_ENABLED;
+  delete process.env.MOLLIE_BILLING_PREFLIGHT_ENABLED;
   delete process.env.MOLLIE_BILLING_WORKER_WORKSPACE_ID;
+}
+
+function useValidOfflinePreflightConfig(): void {
+  useValidTestConfig();
+  delete process.env.MOLLIE_API_KEY;
+  Object.assign(process.env, {
+    MOLLIE_BILLING_ENABLED: "false",
+    MOLLIE_BILLING_PREFLIGHT_ENABLED: "true",
+    MOLLIE_LIVE_BILLING_ENABLED: "false",
+    MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED: "false",
+    AI_ANSWER_FINALIZATION_DRAIN_ENABLED: "false",
+    AI_ANSWER_QUOTA_PREFLIGHT_ENABLED: "false",
+    BILLING_NOTIFICATION_PLANE_ENABLED: "false",
+    MOLLIE_ACCOUNTING_IMPORT_ENABLED: "false",
+    DATABASE_URL: "mysql://test:test@database.test/leaderbot",
+    REDIS_URL: "redis://cache.test:6379",
+    BILLING_PROFILE_EVIDENCE_HMAC_SECRET: "e".repeat(32),
+    MOLLIE_CREDENTIAL_GENERATION_ID: "test-generation-1",
+    MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD: "10",
+    MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD: "100",
+    MESSENGER_USER_DAILY_SPEND_CAP_USD: "2",
+  });
 }
 
 describe("Mollie configuration", () => {
@@ -82,6 +107,62 @@ describe("Mollie configuration", () => {
     process.env.MOLLIE_BILLING_ENABLED = "true";
     expect(isMollieBillingEnabled()).toBe(true);
     expect(() => assertMollieBillingEnabled()).not.toThrow();
+  });
+
+  it("separates core, offline preflight, and operational readiness", () => {
+    expect(getMollieReadinessPhase()).toBe("core");
+
+    process.env.MOLLIE_BILLING_PREFLIGHT_ENABLED = "true";
+    expect(getMollieReadinessPhase()).toBe("offline");
+
+    process.env.MOLLIE_BILLING_ENABLED = "true";
+    expect(getMollieReadinessPhase()).toBe("operational");
+  });
+
+  it("allows provider-silent offline preflight with operational workers off", () => {
+    useValidOfflinePreflightConfig();
+
+    expect(() =>
+      assertMollieNonSecretLaunchConfig({ requireOperationalFlags: false })
+    ).not.toThrow();
+    expect(() => assertMollieNonSecretLaunchConfig()).toThrow(
+      "BILLING_NOTIFICATION_PLANE_ENABLED must be true"
+    );
+  });
+
+  it("keeps cost caps fail-closed during offline preflight", () => {
+    useValidOfflinePreflightConfig();
+    delete process.env.MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD;
+
+    expect(() =>
+      assertMollieNonSecretLaunchConfig({ requireOperationalFlags: false })
+    ).toThrow("MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD is missing");
+  });
+
+  it("rejects live mode before an offline preflight can run", () => {
+    useValidOfflinePreflightConfig();
+    process.env.MOLLIE_MODE = "live";
+
+    expect(() =>
+      assertMollieNonSecretLaunchConfig({ requireOperationalFlags: false })
+    ).toThrow("MOLLIE_MODE must be test during offline preflight");
+  });
+
+  it.each([
+    "MOLLIE_BILLING_ENABLED",
+    "MOLLIE_LIVE_BILLING_ENABLED",
+    "MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED",
+    "AI_ANSWER_FINALIZATION_DRAIN_ENABLED",
+    "AI_ANSWER_QUOTA_PREFLIGHT_ENABLED",
+    "BILLING_NOTIFICATION_PLANE_ENABLED",
+    "MOLLIE_ACCOUNTING_IMPORT_ENABLED",
+  ])("rejects operational flag %s during offline preflight", name => {
+    useValidOfflinePreflightConfig();
+    process.env[name] = "true";
+
+    expect(() =>
+      assertMollieNonSecretLaunchConfig({ requireOperationalFlags: false })
+    ).toThrow(`${name} must be false during offline preflight`);
   });
 
   it("rejects checkout until paid entitlements are independently enforced", () => {

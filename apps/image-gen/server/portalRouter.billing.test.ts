@@ -73,10 +73,11 @@ const user: NonNullable<TrpcContext["user"]> = {
 function createCaller(
   headers: Record<string, string | string[] | undefined> = {
     origin: "https://leaderbot.test",
-  }
+  },
+  callerUser: NonNullable<TrpcContext["user"]> = user
 ) {
   return portalRouter.createCaller({
-    user,
+    user: callerUser,
     req: { protocol: "https", headers } as TrpcContext["req"],
     res: {} as TrpcContext["res"],
   });
@@ -99,6 +100,38 @@ describe("portal router billing", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("keeps the admin launch check provider-silent while billing is off", async () => {
+    const adminUser = { ...user, role: "admin" as const };
+    mocks.isMollieBillingEnabled.mockReturnValue(false);
+    mocks.getMollieLaunchCheck.mockResolvedValue({
+      ok: true,
+      phase: "offline",
+    });
+
+    await expect(
+      createCaller(undefined, adminUser).billing.launchCheck()
+    ).resolves.toMatchObject({ ok: true, phase: "offline" });
+    expect(mocks.getMollieLaunchCheck).toHaveBeenCalledWith(undefined, {
+      phase: "offline",
+    });
+  });
+
+  it("uses the provider launch phase only after billing is enabled", async () => {
+    const adminUser = { ...user, role: "admin" as const };
+    mocks.isMollieBillingEnabled.mockReturnValue(true);
+    mocks.getMollieLaunchCheck.mockResolvedValue({
+      ok: false,
+      phase: "provider",
+    });
+
+    await expect(
+      createCaller(undefined, adminUser).billing.launchCheck()
+    ).resolves.toMatchObject({ phase: "provider" });
+    expect(mocks.getMollieLaunchCheck).toHaveBeenCalledWith(undefined, {
+      phase: "provider",
+    });
   });
 
   it("uses the shared minor-amount formatter in billing summaries", async () => {

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 
 const { dbMock, drizzleMock } = vi.hoisted(() => {
   const db = {
@@ -326,6 +327,61 @@ describe("portal handoff database helpers", () => {
       messengerPrivacyEpoch: null,
     });
     expect(deleteWhere).toHaveBeenCalledTimes(1);
+  });
+
+  it("binds billing erasure to the exact channel connection and privacy epoch", async () => {
+    const intents = orderedSelectRows([{ intentId: "whatsapp-intent" }]);
+    const outbox = orderedSelectRows([]);
+    dbMock.select
+      .mockReturnValueOnce({ from: intents.from })
+      .mockReturnValueOnce({ from: outbox.from });
+
+    const updateWhere = vi.fn(async () => [{ affectedRows: 1 }, []]);
+    const updateSet = vi.fn(() => ({ where: updateWhere }));
+    dbMock.update.mockReturnValue({ set: updateSet });
+    const deleteWhere = vi.fn(async () => [{ affectedRows: 1 }, []]);
+    dbMock.delete.mockReturnValue({ where: deleteWhere });
+
+    await expect(
+      eraseBillingHandoffIdentity(
+        42,
+        "whatsapp-user-key",
+        "whatsapp-phone-42",
+        { channelConnectionId: 12, maxPrivacyEpoch: 5 }
+      )
+    ).resolves.toBe(0);
+
+    const dialect = new MySqlDialect();
+    for (const expression of [
+      intents.where.mock.calls[0]?.[0],
+      updateWhere.mock.calls[0]?.[0],
+      deleteWhere.mock.calls[0]?.[0],
+    ]) {
+      const query = dialect.sqlToQuery(expression);
+      expect(query.sql).toContain("messenger_channel_connection_id");
+      expect(query.sql).toContain("messenger_privacy_epoch");
+      expect(query.params).toEqual(
+        expect.arrayContaining([
+          42,
+          "whatsapp-user-key",
+          "whatsapp-phone-42",
+          12,
+          5,
+        ])
+      );
+    }
+  });
+
+  it("rejects an incomplete exact billing erasure scope before DB writes", async () => {
+    await expect(
+      eraseBillingHandoffIdentity(
+        42,
+        "whatsapp-user-key",
+        "whatsapp-phone-42",
+        { channelConnectionId: 0, maxPrivacyEpoch: 5 }
+      )
+    ).rejects.toThrow("Exact billing handoff erasure scope is required");
+    expect(dbMock.transaction).not.toHaveBeenCalled();
   });
 
   it("loads a workspace by id for claimed handoff sessions", async () => {

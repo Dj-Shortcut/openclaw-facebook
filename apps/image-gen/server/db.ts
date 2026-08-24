@@ -644,6 +644,53 @@ export async function getConnectedFacebookPageConnection(
   return matches[0];
 }
 
+export async function getConnectedMetaChannelConnection(
+  channel: "facebook_messenger" | "whatsapp",
+  externalId: string,
+  expected?: {
+    workspaceId?: number | null;
+    channelConnectionId?: number | null;
+    bindingEpoch?: number | null;
+  }
+) {
+  const normalizedExternalId = externalId.trim();
+  if (!normalizedExternalId) {
+    throw new Error("Meta channel external ID is required");
+  }
+  const db = await getDb();
+  if (!db) {
+    logDatabaseUnavailable("get_connected_meta_channel_connection");
+    throw new Error(
+      "Database unavailable: Meta channel binding was not loaded"
+    );
+  }
+
+  const matches = await db
+    .select()
+    .from(channelConnections)
+    .where(
+      and(
+        eq(channelConnections.channel, channel),
+        eq(channelConnections.status, "connected"),
+        eq(channelConnections.externalId, normalizedExternalId),
+        ...(expected?.workspaceId != null
+          ? [eq(channelConnections.workspaceId, expected.workspaceId)]
+          : []),
+        ...(expected?.channelConnectionId != null
+          ? [eq(channelConnections.id, expected.channelConnectionId)]
+          : []),
+        ...(expected?.bindingEpoch != null
+          ? [eq(channelConnections.bindingEpoch, expected.bindingEpoch)]
+          : [])
+      )
+    )
+    .limit(2);
+  if (matches.length !== 1) {
+    return null;
+  }
+  return matches[0];
+}
+
 type WorkspacePrivacySettingsRecord = {
   allowKnowledgeIndexing: number;
   allowUsageAnalytics: number;
@@ -1741,7 +1788,11 @@ export async function deletePortalHandoffTokensForMessengerUserKey(
 export async function eraseBillingHandoffIdentity(
   workspaceId: number,
   messengerSenderUserKey: string,
-  facebookPageId: string
+  facebookPageId: string,
+  exactScope?: Readonly<{
+    channelConnectionId: number;
+    maxPrivacyEpoch: number;
+  }>
 ) {
   const db = await getDb();
   if (!db) {
@@ -1756,7 +1807,12 @@ export async function eraseBillingHandoffIdentity(
     !Number.isSafeInteger(workspaceId) ||
     workspaceId <= 0 ||
     !pageId ||
-    !messengerSenderUserKey
+    !messengerSenderUserKey ||
+    (exactScope !== undefined &&
+      (!Number.isSafeInteger(exactScope.channelConnectionId) ||
+        exactScope.channelConnectionId <= 0 ||
+        !Number.isSafeInteger(exactScope.maxPrivacyEpoch) ||
+        exactScope.maxPrivacyEpoch <= 0))
   ) {
     throw new Error("Exact billing handoff erasure scope is required");
   }
@@ -1771,7 +1827,19 @@ export async function eraseBillingHandoffIdentity(
         and(
           eq(billingIntents.workspaceId, workspaceId),
           eq(billingIntents.messengerSenderUserKey, messengerSenderUserKey),
-          eq(billingIntents.messengerPageId, pageId)
+          eq(billingIntents.messengerPageId, pageId),
+          ...(exactScope
+            ? [
+                eq(
+                  billingIntents.messengerChannelConnectionId,
+                  exactScope.channelConnectionId
+                ),
+                lte(
+                  billingIntents.messengerPrivacyEpoch,
+                  exactScope.maxPrivacyEpoch
+                ),
+              ]
+            : [])
         )
       )
       .orderBy(billingIntents.intentId)
@@ -1780,7 +1848,13 @@ export async function eraseBillingHandoffIdentity(
     const payloadIntentId = sql<string>`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.intentId'))`;
     const payloadIdentityScope = and(
       sql`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerSenderUserKey')) = ${messengerSenderUserKey}`,
-      sql`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerPageId')) = ${pageId}`
+      sql`JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerPageId')) = ${pageId}`,
+      ...(exactScope
+        ? [
+            sql`CAST(JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerChannelConnectionId')) AS UNSIGNED) = ${exactScope.channelConnectionId}`,
+            sql`CAST(JSON_UNQUOTE(JSON_EXTRACT(${billingOutbox.payload}, '$.messengerPrivacyEpoch')) AS UNSIGNED) <= ${exactScope.maxPrivacyEpoch}`,
+          ]
+        : [])
     );
     const outboxRows = await tx
       .select({
@@ -1845,7 +1919,19 @@ export async function eraseBillingHandoffIdentity(
             eq(billingIntents.workspaceId, workspaceId),
             inArray(billingIntents.intentId, intentIds),
             eq(billingIntents.messengerSenderUserKey, messengerSenderUserKey),
-            eq(billingIntents.messengerPageId, pageId)
+            eq(billingIntents.messengerPageId, pageId),
+            ...(exactScope
+              ? [
+                  eq(
+                    billingIntents.messengerChannelConnectionId,
+                    exactScope.channelConnectionId
+                  ),
+                  lte(
+                    billingIntents.messengerPrivacyEpoch,
+                    exactScope.maxPrivacyEpoch
+                  ),
+                ]
+              : [])
           )
         );
     }
@@ -1858,7 +1944,19 @@ export async function eraseBillingHandoffIdentity(
             portalHandoffTokens.messengerSenderUserKey,
             messengerSenderUserKey
           ),
-          eq(portalHandoffTokens.facebookPageId, pageId)
+          eq(portalHandoffTokens.facebookPageId, pageId),
+          ...(exactScope
+            ? [
+                eq(
+                  portalHandoffTokens.messengerChannelConnectionId,
+                  exactScope.channelConnectionId
+                ),
+                lte(
+                  portalHandoffTokens.messengerPrivacyEpoch,
+                  exactScope.maxPrivacyEpoch
+                ),
+              ]
+            : [])
         )
       );
     return outboxRows.length;
@@ -2341,21 +2439,89 @@ export async function disconnectChannelConnection(
     );
   }
 
-  await db
-    .insert(channelConnections)
-    .values({
-      workspaceId,
-      channel,
-      status: "disconnected",
-      externalId: null,
-      providerAccountExternalId: null,
-      displayName: null,
-      encryptedAccessToken: null,
-      grantedScopes: null,
-      lastCheckedAt: new Date(),
-    })
-    .onDuplicateKeyUpdate({
-      set: {
+  await db.transaction(async tx => {
+    const existing = await tx
+      .select({ id: channelConnections.id })
+      .from(channelConnections)
+      .where(
+        and(
+          eq(channelConnections.workspaceId, workspaceId),
+          eq(channelConnections.channel, channel)
+        )
+      )
+      .limit(1)
+      .for("update");
+
+    const lastCheckedAt = new Date();
+    if (!existing[0]) {
+      await tx.insert(channelConnections).values({
+        workspaceId,
+        channel,
+        status: "disconnected",
+        externalId: null,
+        providerAccountExternalId: null,
+        displayName: null,
+        encryptedAccessToken: null,
+        grantedScopes: null,
+        lastCheckedAt,
+      });
+      return;
+    }
+
+    const providerFenceNow = new Date();
+    await tx
+      .update(messengerProviderAttemptFences)
+      .set({
+        status: "contained",
+        completedAt: providerFenceNow,
+        leaseUntil: providerFenceNow,
+      })
+      .where(
+        and(
+          eq(
+            messengerProviderAttemptFences.channelConnectionId,
+            existing[0].id
+          ),
+          inArray(messengerProviderAttemptFences.status, [
+            "reserved",
+            "started",
+            "ambiguous",
+          ]),
+          lte(messengerProviderAttemptFences.leaseUntil, providerFenceNow)
+        )
+      );
+    const activeAttempts = await tx
+      .select({ id: messengerProviderAttemptFences.id })
+      .from(messengerProviderAttemptFences)
+      .where(
+        and(
+          eq(
+            messengerProviderAttemptFences.channelConnectionId,
+            existing[0].id
+          ),
+          or(
+            inArray(messengerProviderAttemptFences.status, [
+              "started",
+              "ambiguous",
+            ]),
+            and(
+              eq(messengerProviderAttemptFences.status, "reserved"),
+              gt(messengerProviderAttemptFences.leaseUntil, providerFenceNow)
+            )
+          )
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (activeAttempts[0]) {
+      throw new Error(
+        "Channel connection has an active provider attempt; retry later"
+      );
+    }
+
+    await tx
+      .update(channelConnections)
+      .set({
         status: "disconnected",
         externalId: null,
         providerAccountExternalId: null,
@@ -2363,9 +2529,16 @@ export async function disconnectChannelConnection(
         encryptedAccessToken: null,
         bindingEpoch: sql`${channelConnections.bindingEpoch} + 1`,
         grantedScopes: null,
-        lastCheckedAt: new Date(),
-      },
-    });
+        lastCheckedAt,
+      })
+      .where(
+        and(
+          eq(channelConnections.id, existing[0].id),
+          eq(channelConnections.workspaceId, workspaceId),
+          eq(channelConnections.channel, channel)
+        )
+      );
+  });
 
   return listChannelConnections(workspaceId);
 }

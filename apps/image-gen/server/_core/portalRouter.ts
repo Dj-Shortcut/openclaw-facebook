@@ -5,7 +5,6 @@ import {
   consumeFacebookPage,
   exchangeFacebookCodeForPages,
   getFacebookOAuthUrl,
-  getStoredFacebookState,
   REQUIRED_FACEBOOK_SCOPES,
   startFacebookConnect,
   storeFacebookPages,
@@ -492,7 +491,9 @@ export const portalRouter = router({
       if (ctx.user.role !== "admin") {
         throw new TRPCError({ code: "FORBIDDEN", message: "admin required" });
       }
-      return getMollieLaunchCheck();
+      return getMollieLaunchCheck(undefined, {
+        phase: isMollieBillingEnabled() ? "provider" : "offline",
+      });
     }),
   }),
 
@@ -644,8 +645,9 @@ export const portalRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         await requireWorkspace(ctx, input.workspaceId);
+        let stored;
         try {
-          await validateStoredFacebookState({
+          stored = await validateStoredFacebookState({
             state: input.state,
             workspaceId: input.workspaceId,
             userId: ctx.user.id,
@@ -654,7 +656,6 @@ export const portalRouter = router({
           throw badRequest(error, "invalid facebook connect state");
         }
 
-        const stored = await getStoredFacebookState(input.state);
         if (stored?.pages) {
           return {
             pages: stored.pages.map(redactFacebookPageToken),

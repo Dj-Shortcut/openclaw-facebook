@@ -19,6 +19,7 @@ import {
   isOutsidePaymentMethodChangeCollectionWindow,
   startMollieCheckout,
 } from "./checkoutService";
+import * as billingReadiness from "./billingReadiness";
 import type { MollieClient } from "./mollieClient";
 
 const originalEnv = { ...process.env };
@@ -35,6 +36,7 @@ describe("Mollie checkout launch gate", () => {
     profileEligibilityMock.mockResolvedValue({ eligibilityVersion: 1 });
   });
   afterEach(() => {
+    vi.restoreAllMocks();
     process.env = { ...originalEnv };
   });
 
@@ -206,9 +208,11 @@ describe("Mollie checkout launch gate", () => {
   });
 
   it("runs the offline phase without a Mollie credential or provider call", async () => {
-    process.env = billingTestEnv();
-    delete process.env.MOLLIE_API_KEY;
+    process.env = offlineBillingTestEnv();
     const listMethods = vi.fn();
+    const databaseCheck = vi
+      .spyOn(billingReadiness, "assertBillingDatabaseReadiness")
+      .mockResolvedValue();
 
     await expect(
       getMollieLaunchCheck({ listMethods } as unknown as MollieClient, {
@@ -218,10 +222,15 @@ describe("Mollie checkout launch gate", () => {
       phase: "offline",
       mode: "test",
       providerChecked: false,
+      ok: true,
+      credentialFreeGatesReady: true,
       sandboxReady: false,
       liveReady: false,
     });
     expect(listMethods).not.toHaveBeenCalled();
+    expect(databaseCheck).toHaveBeenCalledWith("test", {
+      requireRuntimeHeartbeat: false,
+    });
   });
 
   it("fails closed when a checkout kind does not match its product", () => {
@@ -252,6 +261,29 @@ function billingTestEnv(): NodeJS.ProcessEnv {
     PORTAL_HANDOFF_TOKEN_SECRET: "test-portal-handoff-secret-at-least-32",
     MOLLIE_BILLING_WORKER_WORKSPACE_ID: "1",
     MOLLIE_BILLING_SCHEDULER_MODE: "pilot_pin",
+  };
+}
+
+function offlineBillingTestEnv(): NodeJS.ProcessEnv {
+  const env = billingTestEnv();
+  delete env.MOLLIE_API_KEY;
+  return {
+    ...env,
+    MOLLIE_BILLING_ENABLED: "false",
+    MOLLIE_BILLING_PREFLIGHT_ENABLED: "true",
+    MOLLIE_LIVE_BILLING_ENABLED: "false",
+    MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED: "false",
+    AI_ANSWER_FINALIZATION_DRAIN_ENABLED: "false",
+    AI_ANSWER_QUOTA_PREFLIGHT_ENABLED: "false",
+    BILLING_NOTIFICATION_PLANE_ENABLED: "false",
+    MOLLIE_ACCOUNTING_IMPORT_ENABLED: "false",
+    DATABASE_URL: "mysql://test:test@database.test/leaderbot",
+    REDIS_URL: "redis://cache.test:6379",
+    BILLING_PROFILE_EVIDENCE_HMAC_SECRET: "e".repeat(32),
+    MOLLIE_CREDENTIAL_GENERATION_ID: "test-generation-1",
+    MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD: "10",
+    MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD: "100",
+    MESSENGER_USER_DAILY_SPEND_CAP_USD: "2",
   };
 }
 

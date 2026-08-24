@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, eq, lte, or } from "drizzle-orm";
+import { and, eq, inArray, lte, or } from "drizzle-orm";
 
 import {
   channelConnections,
@@ -10,16 +10,23 @@ import { getDatabaseOrThrow } from "../db";
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
 
 const PROVIDER_FENCE_LEASE_MS = 15 * 60_000;
+export const WHATSAPP_ERASURE_CONTROL_PROVIDER_OPERATION =
+  "whatsapp_graph_erasure_control_text";
+
+type MessengerProviderAttemptPrivacyMode = "active" | "erasure_control";
 
 export type MessengerProviderAttemptFence = Readonly<{
   leaseToken: string | null;
   attemptKeyHash: string | null;
+  channel?: "facebook_messenger" | "whatsapp";
   workspaceId?: number;
   channelConnectionId?: number;
   bindingEpoch?: number;
   pageId?: string;
   userKey?: string;
   privacyEpoch?: number;
+  providerOperation?: string;
+  privacyMode?: MessengerProviderAttemptPrivacyMode;
 }>;
 
 export type MessengerProviderAttemptOutcome =
@@ -40,6 +47,7 @@ export type MessengerProviderAttemptClaim =
   | {
       kind: "unsafe_or_done";
       status: "started" | "ambiguous" | "succeeded";
+      attemptKeyHash?: string;
     }
   | { kind: "blocked"; status: "contained" | "abandoned" };
 
@@ -104,12 +112,19 @@ const LOCAL_FENCE: MessengerProviderAttemptFence = {
   attemptKeyHash: null,
 };
 
-export async function claimMessengerProviderAttemptFence(
+type MessengerProviderAttemptClaimOptions = Readonly<{
+  takeOverReserved?: boolean;
+  expectedChannel?: "facebook_messenger" | "whatsapp";
+}>;
+
+async function claimMessengerProviderAttemptFenceInternal(
   job: MessengerGenerationJob,
   providerOperation: string,
   providerAttemptSequence: number,
   now = new Date(),
-  options: { takeOverReserved?: boolean } = {}
+  options: MessengerProviderAttemptClaimOptions & {
+    privacyMode: MessengerProviderAttemptPrivacyMode;
+  }
 ): Promise<MessengerProviderAttemptClaim> {
   if (
     process.env.NODE_ENV !== "production" &&
@@ -137,6 +152,17 @@ export async function claimMessengerProviderAttemptFence(
   const userKey = job.userId;
   const privacyEpoch = job.privacyEpoch;
   const operation = providerOperation.trim();
+  const expectedChannel = options.expectedChannel ?? "facebook_messenger";
+  const privacyMode = options.privacyMode;
+  if (
+    (privacyMode === "erasure_control" &&
+      (expectedChannel !== "whatsapp" ||
+        operation !== WHATSAPP_ERASURE_CONTROL_PROVIDER_OPERATION)) ||
+    (privacyMode === "active" &&
+      operation === WHATSAPP_ERASURE_CONTROL_PROVIDER_OPERATION)
+  ) {
+    throw new Error("Messenger provider privacy mode is invalid");
+  }
   const attemptKeyHash = createHash("sha256")
     .update(String(workspaceId))
     .update("\0")
@@ -164,6 +190,7 @@ export async function claimMessengerProviderAttemptFence(
         and(
           eq(channelConnections.id, channelConnectionId),
           eq(channelConnections.workspaceId, workspaceId),
+          eq(channelConnections.channel, expectedChannel),
           eq(channelConnections.externalId, pageId),
           eq(channelConnections.status, "connected"),
           eq(channelConnections.bindingEpoch, bindingEpoch)
@@ -172,21 +199,89 @@ export async function claimMessengerProviderAttemptFence(
       .limit(1)
       .for("update");
     if (!owners[0]) throw new Error("Messenger provider ownership changed");
+    const readExistingFence = async () => {
+      const rows = await tx
+        .select({
+          status: messengerProviderAttemptFences.status,
+          leaseToken: messengerProviderAttemptFences.leaseToken,
+          leaseUntil: messengerProviderAttemptFences.leaseUntil,
+          attemptNumber: messengerProviderAttemptFences.attemptNumber,
+        })
+        .from(messengerProviderAttemptFences)
+        .where(
+          and(
+            eq(messengerProviderAttemptFences.workspaceId, workspaceId),
+            eq(
+              messengerProviderAttemptFences.channelConnectionId,
+              channelConnectionId
+            ),
+            eq(messengerProviderAttemptFences.bindingEpoch, bindingEpoch),
+            eq(messengerProviderAttemptFences.userKey, userKey),
+            eq(messengerProviderAttemptFences.privacyEpoch, privacyEpoch),
+            eq(messengerProviderAttemptFences.providerOperation, operation),
+            eq(messengerProviderAttemptFences.attemptKeyHash, attemptKeyHash)
+          )
+        )
+        .limit(1)
+        .for("update");
+      return rows[0];
+    };
+
+    // Read the exact historical attempt before current privacy admission. A
+    // later reactivation advances the subject epoch, but may only recognize a
+    // terminal old attempt; it can never authorize another provider call.
+    const existingBeforePrivacyAdmission =
+      privacyMode === "erasure_control" ? await readExistingFence() : undefined;
     const subjects = await tx
-      .select({ id: messengerPrivacySubjects.id })
+      .select({
+        id: messengerPrivacySubjects.id,
+        status: messengerPrivacySubjects.status,
+        privacyEpoch: messengerPrivacySubjects.privacyEpoch,
+      })
       .from(messengerPrivacySubjects)
       .where(
         and(
           eq(messengerPrivacySubjects.workspaceId, workspaceId),
           eq(messengerPrivacySubjects.channelConnectionId, channelConnectionId),
           eq(messengerPrivacySubjects.userKey, userKey),
-          eq(messengerPrivacySubjects.privacyEpoch, privacyEpoch),
-          eq(messengerPrivacySubjects.status, "active")
+          ...(privacyMode === "active"
+            ? [
+                eq(messengerPrivacySubjects.privacyEpoch, privacyEpoch),
+                eq(messengerPrivacySubjects.status, "active"),
+              ]
+            : [])
         )
       )
       .limit(1)
       .for("update");
-    if (!subjects[0]) throw new Error("Messenger provider privacy changed");
+    const subject = subjects[0];
+    if (!subject) throw new Error("Messenger provider privacy changed");
+
+    // Reactivation is never authority to send a new deletion outcome. The
+    // active state is admitted only to recognize a matching attempt that
+    // already crossed the provider boundary, which keeps replays fail-closed.
+    if (privacyMode === "erasure_control" && subject.status === "active") {
+      const existing = existingBeforePrivacyAdmission;
+      if (
+        existing?.status === "started" ||
+        existing?.status === "ambiguous" ||
+        existing?.status === "succeeded"
+      ) {
+        return {
+          kind: "unsafe_or_done",
+          status: existing.status,
+          attemptKeyHash,
+        };
+      }
+      throw new Error("Messenger provider privacy changed");
+    }
+    if (
+      privacyMode === "erasure_control" &&
+      (subject.privacyEpoch !== privacyEpoch ||
+        (subject.status !== "erasing" && subject.status !== "erased"))
+    ) {
+      throw new Error("Messenger provider privacy changed");
+    }
 
     await tx
       .insert(messengerProviderAttemptFences)
@@ -204,42 +299,22 @@ export async function claimMessengerProviderAttemptFence(
         leaseUntil: new Date(now.getTime() + PROVIDER_FENCE_LEASE_MS),
       })
       .onDuplicateKeyUpdate({ set: { attemptKeyHash } });
-    const existing = await tx
-      .select({
-        status: messengerProviderAttemptFences.status,
-        leaseToken: messengerProviderAttemptFences.leaseToken,
-        leaseUntil: messengerProviderAttemptFences.leaseUntil,
-        attemptNumber: messengerProviderAttemptFences.attemptNumber,
-      })
-      .from(messengerProviderAttemptFences)
-      .where(
-        and(
-          eq(messengerProviderAttemptFences.workspaceId, workspaceId),
-          eq(
-            messengerProviderAttemptFences.channelConnectionId,
-            channelConnectionId
-          ),
-          eq(messengerProviderAttemptFences.bindingEpoch, bindingEpoch),
-          eq(messengerProviderAttemptFences.userKey, userKey),
-          eq(messengerProviderAttemptFences.privacyEpoch, privacyEpoch),
-          eq(messengerProviderAttemptFences.attemptKeyHash, attemptKeyHash)
-        )
-      )
-      .limit(1)
-      .for("update");
-    const fence = existing[0];
+    const fence = await readExistingFence();
     if (fence?.leaseToken === leaseToken) {
       return {
         kind: "owned",
         fence: {
           leaseToken,
           attemptKeyHash,
+          channel: expectedChannel,
           workspaceId,
           channelConnectionId,
           bindingEpoch,
           pageId,
           userKey,
           privacyEpoch,
+          providerOperation: operation,
+          privacyMode,
         },
       };
     }
@@ -281,12 +356,15 @@ export async function claimMessengerProviderAttemptFence(
         fence: {
           leaseToken,
           attemptKeyHash,
+          channel: expectedChannel,
           workspaceId,
           channelConnectionId,
           bindingEpoch,
           pageId,
           userKey,
           privacyEpoch,
+          providerOperation: operation,
+          privacyMode,
         },
       };
     }
@@ -327,12 +405,15 @@ export async function claimMessengerProviderAttemptFence(
         fence: {
           leaseToken,
           attemptKeyHash,
+          channel: expectedChannel,
           workspaceId,
           channelConnectionId,
           bindingEpoch,
           pageId,
           userKey,
           privacyEpoch,
+          providerOperation: operation,
+          privacyMode,
         },
       };
     }
@@ -344,7 +425,11 @@ export async function claimMessengerProviderAttemptFence(
       fence?.status === "ambiguous" ||
       fence?.status === "succeeded"
     ) {
-      return { kind: "unsafe_or_done", status: fence.status };
+      return {
+        kind: "unsafe_or_done",
+        status: fence.status,
+        ...(privacyMode === "erasure_control" ? { attemptKeyHash } : {}),
+      };
     }
     if (fence?.status === "contained" || fence?.status === "abandoned") {
       return { kind: "blocked", status: fence.status };
@@ -353,17 +438,35 @@ export async function claimMessengerProviderAttemptFence(
   });
 }
 
+export async function claimMessengerProviderAttemptFence(
+  job: MessengerGenerationJob,
+  providerOperation: string,
+  providerAttemptSequence: number,
+  now = new Date(),
+  options: MessengerProviderAttemptClaimOptions = {}
+): Promise<MessengerProviderAttemptClaim> {
+  return claimMessengerProviderAttemptFenceInternal(
+    job,
+    providerOperation,
+    providerAttemptSequence,
+    now,
+    { ...options, privacyMode: "active" }
+  );
+}
+
 export async function reserveMessengerProviderAttemptFence(
   job: MessengerGenerationJob,
   providerOperation: string,
   providerAttemptSequence: number,
-  now = new Date()
+  now = new Date(),
+  expectedChannel: "facebook_messenger" | "whatsapp" = "facebook_messenger"
 ): Promise<MessengerProviderAttemptFence> {
   const claim = await claimMessengerProviderAttemptFence(
     job,
     providerOperation,
     providerAttemptSequence,
-    now
+    now,
+    { expectedChannel }
   );
   if (claim.kind === "owned") return claim.fence;
   throw new Error(
@@ -373,11 +476,32 @@ export async function reserveMessengerProviderAttemptFence(
   );
 }
 
+export async function claimWhatsAppErasureControlProviderAttemptFence(
+  job: MessengerGenerationJob,
+  now = new Date()
+): Promise<MessengerProviderAttemptClaim> {
+  return claimMessengerProviderAttemptFenceInternal(
+    job,
+    WHATSAPP_ERASURE_CONTROL_PROVIDER_OPERATION,
+    1,
+    now,
+    { expectedChannel: "whatsapp", privacyMode: "erasure_control" }
+  );
+}
+
 export async function markMessengerProviderAttemptStarted(
   fence: MessengerProviderAttemptFence,
   now = new Date()
 ): Promise<void> {
   if (!fence.leaseToken) return;
+  const privacyMode = fence.privacyMode ?? "active";
+  if (
+    privacyMode === "erasure_control" &&
+    (fence.channel !== "whatsapp" ||
+      fence.providerOperation !== WHATSAPP_ERASURE_CONTROL_PROVIDER_OPERATION)
+  ) {
+    throw new Error("Messenger provider privacy mode is invalid");
+  }
   const database = await getDatabaseOrThrow();
   await database.transaction(async tx => {
     const owners = await tx
@@ -387,6 +511,7 @@ export async function markMessengerProviderAttemptStarted(
         and(
           eq(channelConnections.id, fence.channelConnectionId!),
           eq(channelConnections.workspaceId, fence.workspaceId!),
+          eq(channelConnections.channel, fence.channel ?? "facebook_messenger"),
           eq(channelConnections.externalId, fence.pageId!),
           eq(channelConnections.status, "connected"),
           eq(channelConnections.bindingEpoch, fence.bindingEpoch!)
@@ -407,7 +532,9 @@ export async function markMessengerProviderAttemptStarted(
           ),
           eq(messengerPrivacySubjects.userKey, fence.userKey!),
           eq(messengerPrivacySubjects.privacyEpoch, fence.privacyEpoch!),
-          eq(messengerPrivacySubjects.status, "active")
+          privacyMode === "erasure_control"
+            ? inArray(messengerPrivacySubjects.status, ["erasing", "erased"])
+            : eq(messengerPrivacySubjects.status, "active")
         )
       )
       .limit(1)
@@ -434,6 +561,14 @@ export async function markMessengerProviderAttemptStarted(
             messengerProviderAttemptFences.attemptKeyHash,
             fence.attemptKeyHash!
           ),
+          ...(fence.providerOperation
+            ? [
+                eq(
+                  messengerProviderAttemptFences.providerOperation,
+                  fence.providerOperation
+                ),
+              ]
+            : []),
           eq(messengerProviderAttemptFences.leaseToken, fence.leaseToken!),
           eq(messengerProviderAttemptFences.status, "reserved")
         )
@@ -481,6 +616,14 @@ export async function finalizeMessengerProviderAttemptFence(
           messengerProviderAttemptFences.attemptKeyHash,
           fence.attemptKeyHash!
         ),
+        ...(fence.providerOperation
+          ? [
+              eq(
+                messengerProviderAttemptFences.providerOperation,
+                fence.providerOperation
+              ),
+            ]
+          : []),
         eq(messengerProviderAttemptFences.leaseToken, fence.leaseToken),
         or(
           eq(messengerProviderAttemptFences.status, "reserved"),

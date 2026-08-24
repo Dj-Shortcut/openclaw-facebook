@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   reserveImageGenerationUsage: vi.fn(),
   runGuardedGeneration: vi.fn(),
   safeLog: vi.fn(),
-  sendWhatsAppImageReply: vi.fn(),
+  sendWhatsAppImageReplyWithReceipt: vi.fn(),
   sendWhatsAppTextReply: vi.fn(),
   setFlowState: vi.fn(),
   setLastGenerated: vi.fn(),
@@ -46,7 +46,7 @@ vi.mock("./_core/messengerState", () => ({
 }));
 
 vi.mock("./_core/whatsappResponseService", () => ({
-  sendWhatsAppImageReply: mocks.sendWhatsAppImageReply,
+  sendWhatsAppImageReplyWithReceipt: mocks.sendWhatsAppImageReplyWithReceipt,
   sendWhatsAppTextReply: mocks.sendWhatsAppTextReply,
 }));
 
@@ -88,6 +88,18 @@ describe("WhatsApp image generation customer errors", () => {
       reqId: "request-id",
       lang: "nl",
       promptHint: "maak een kat",
+      endpoint: {
+        channel: "whatsapp",
+        wabaId: "303030303030303" as never,
+        phoneNumberId: "404040404040404" as never,
+      },
+      costLedgerScope: {
+        workspaceId: 42,
+        channelConnectionId: 8,
+        bindingEpoch: 3,
+        privacyEpoch: 2,
+        userKey: "opaque-user",
+      },
     });
 
     expect(mocks.sendWhatsAppTextReply).toHaveBeenNthCalledWith(

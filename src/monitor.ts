@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import {
@@ -158,6 +158,7 @@ const recentMessengerAssistantReplies = new Map<
   string,
   { text: string; expiresAt: number }
 >();
+const FACEBOOK_UNTRUSTED_TOOL_ALLOW = ["session_status"] as const;
 const FACEBOOK_UNTRUSTED_TOOL_DENY = [
   "image_generate",
   "video_generate",
@@ -169,8 +170,34 @@ const FACEBOOK_UNTRUSTED_TOOL_DENY = [
   "write",
   "edit",
   "apply_patch",
+  "memory_search",
+  "memory_get",
+  "memory_recall",
+  "group:memory",
   "group:runtime",
   "group:fs",
+  "group:web",
+  "group:ui",
+  "group:automation",
+  "group:messaging",
+  "group:nodes",
+  "group:agents",
+  "group:media",
+  "group:plugins",
+  "bundle-mcp",
+  "sessions",
+  "sessions_list",
+  "sessions_history",
+  "sessions_search",
+  "conversations_list",
+  "conversations_send",
+  "conversations_turn",
+  "sessions_send",
+  "sessions_spawn",
+  "sessions_yield",
+  "subagents",
+  "spawn_task",
+  "dismiss_task",
 ] as const;
 const messengerEventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
 let activeMessengerEventJobs = 0;
@@ -207,6 +234,7 @@ function finishMessengerTypingTurn(scopeKey: string): boolean {
 export type FacebookInboundToolPolicy = {
   source: "facebook_untrusted_default";
   tools: {
+    allow: string[];
     deny: string[];
   };
 };
@@ -680,6 +708,14 @@ async function resolveMessengerMedia(params: {
   return resolved;
 }
 
+async function cleanupMessengerMedia(
+  media: ChannelInboundMediaInput[],
+): Promise<void> {
+  await Promise.allSettled(
+    media.map((entry) => (entry.path ? unlink(entry.path) : Promise.resolve())),
+  );
+}
+
 function describeMessengerAttachments(
   attachments: MessengerAttachmentUrl[],
   lang: MessengerLanguage,
@@ -1128,7 +1164,10 @@ export function resolveFacebookInboundToolPolicy(params: {
   }
   return {
     source: "facebook_untrusted_default",
-    tools: { deny: [...FACEBOOK_UNTRUSTED_TOOL_DENY] },
+    tools: {
+      allow: [...FACEBOOK_UNTRUSTED_TOOL_ALLOW],
+      deny: [...FACEBOOK_UNTRUSTED_TOOL_DENY],
+    },
   };
 }
 
@@ -1140,18 +1179,16 @@ export function applyFacebookInboundToolPolicyToConfig(
     return cfg;
   }
 
-  const currentTools = (cfg as { tools?: Record<string, unknown> }).tools ?? {};
-  const currentDeny = Array.isArray(currentTools.deny)
-    ? currentTools.deny.filter(
-        (tool): tool is string => typeof tool === "string",
-      )
-    : [];
-
   return {
     ...cfg,
     tools: {
-      ...currentTools,
-      deny: [...new Set([...currentDeny, ...policy.tools.deny])],
+      // An untrusted public turn gets one closed tool surface. Persisted
+      // profiles, provider overrides, code mode, and additive allowlists must
+      // not widen it after this channel boundary has classified the turn.
+      profile: "minimal",
+      allow: [...policy.tools.allow],
+      deny: [...policy.tools.deny],
+      codeMode: false,
     },
   } as OpenClawConfig;
 }
@@ -1362,7 +1399,10 @@ async function sendMessengerPairingReply(params: {
   });
 }
 
-type MessengerIngressDecision = "process" | "leaderbot_free_tier" | "stop";
+type MessengerIngressDecision =
+  | { action: "process"; commandAuthorized: boolean }
+  | { action: "leaderbot_free_tier"; commandAuthorized: false }
+  | { action: "stop"; commandAuthorized: false };
 
 function isLeaderbotBridgeEnabled(account: ResolvedMessengerAccount): boolean {
   return account.config.leaderbotBridgeEnabled === true;
@@ -1414,6 +1454,7 @@ async function shouldProcessMessengerEvent(params: {
   const senderId = params.event.sender?.id ?? "";
   const rawText = params.event.message?.text ?? "";
   const dmPolicy = params.account.config.dmPolicy ?? "pairing";
+  const commandRequested = shouldComputeCommandAuthorized(rawText, params.cfg);
   const access = await resolveStableChannelMessageIngress({
     channelId: FACEBOOK_CHANNEL_ID,
     accountId: params.account.accountId,
@@ -1448,7 +1489,7 @@ async function shouldProcessMessengerEvent(params: {
     ),
     groupAllowFrom: [],
     command: {
-      hasControlCommand: shouldComputeCommandAuthorized(rawText, params.cfg),
+      hasControlCommand: commandRequested,
       groupOwnerAllowFrom: "none",
     },
   });
@@ -1463,7 +1504,11 @@ async function shouldProcessMessengerEvent(params: {
         params.account.accountId
       }`,
     );
-    return "process";
+    return {
+      action: "process",
+      commandAuthorized:
+        commandRequested && access.commandAccess.authorized === true,
+    };
   }
   if (access.senderAccess.decision === "pairing") {
     if (
@@ -1484,7 +1529,7 @@ async function shouldProcessMessengerEvent(params: {
           senderId,
         )} to Leaderbot free tier account=${params.account.accountId}`,
       );
-      return "leaderbot_free_tier";
+      return { action: "leaderbot_free_tier", commandAuthorized: false };
     }
     if (
       dmPolicy === "pairing" &&
@@ -1501,7 +1546,7 @@ async function shouldProcessMessengerEvent(params: {
           senderId,
         )} to OpenClaw turn account=${params.account.accountId}`,
       );
-      return "process";
+      return { action: "process", commandAuthorized: false };
     }
     params.trace &&
       logMessengerStage(params.trace, "intent_classified", {
@@ -1514,7 +1559,7 @@ async function shouldProcessMessengerEvent(params: {
         cfg: params.cfg,
       });
     }
-    return "stop";
+    return { action: "stop", commandAuthorized: false };
   }
   params.trace &&
     logMessengerStage(params.trace, "intent_classified", {
@@ -1525,7 +1570,7 @@ async function shouldProcessMessengerEvent(params: {
       dmPolicy
     })`,
   );
-  return "stop";
+  return { action: "stop", commandAuthorized: false };
 }
 
 export async function processMessengerEvent(params: {
@@ -1537,9 +1582,10 @@ export async function processMessengerEvent(params: {
   stateStore?: MessengerEphemeralStateStore;
 }) {
   activeMessengerEventJobs += 1;
+  let transientMedia: ChannelInboundMediaInput[] = [];
   try {
     const ingressDecision = await shouldProcessMessengerEvent(params);
-    if (ingressDecision === "stop") {
+    if (ingressDecision.action === "stop") {
       return;
     }
     const senderId = params.event.sender?.id ?? "";
@@ -1635,7 +1681,7 @@ export async function processMessengerEvent(params: {
       );
       return;
     }
-    if (ingressDecision === "leaderbot_free_tier") {
+    if (ingressDecision.action === "leaderbot_free_tier") {
       logMessengerStage(params.trace, "messenger_event_forward_started", {
         reason: "unknown_sender_leaderbot_free_tier",
       });
@@ -1937,6 +1983,7 @@ export async function processMessengerEvent(params: {
       attachments,
       trace: params.trace,
     });
+    transientMedia = media;
     const audioTranscripts = await resolveMessengerAudioTranscripts({
       media,
       cfg: params.cfg,
@@ -2032,7 +2079,13 @@ export async function processMessengerEvent(params: {
       });
       return;
     }
-    const commandAuthorized = shouldComputeCommandAuthorized(text, params.cfg);
+    // Command-shaped text is never authorization on the public gateway. The
+    // ingress resolver owns sender authorization, and the public boundary keeps
+    // even allowed senders on the same closed tool surface.
+    const commandAuthorized =
+      process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD === "1"
+        ? false
+        : ingressDecision.commandAuthorized;
     const facebookToolPolicy = resolveFacebookInboundToolPolicy({
       commandAuthorized,
     });
@@ -2046,6 +2099,19 @@ export async function processMessengerEvent(params: {
       accountId: params.account.accountId,
       peer: { kind: "direct", id: senderId },
     });
+    if (
+      process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD === "1" &&
+      route.dmScope !== "per-account-channel-peer"
+    ) {
+      throw new Error("Public Messenger session isolation is unavailable");
+    }
+    if (
+      process.env.OPENCLAW_PUBLIC_GATEWAY_GUARD === "1" &&
+      route.agentId !== "main"
+    ) {
+      throw new Error("Public Messenger agent isolation is unavailable");
+    }
+    const redactedSessionKey = redactMessengerIdentifier(route.sessionKey);
     const { storePath, envelopeOptions, previousTimestamp } =
       resolveInboundSessionEnvelopeContext({
         cfg: inboundCfg,
@@ -2153,10 +2219,10 @@ export async function processMessengerEvent(params: {
       );
     }
     logMessengerStage(params.trace, "openclaw_call_started", {
-      openclawSessionId: route.sessionKey,
+      openclawSessionId: redactedSessionKey,
     });
     logVerbose(
-      `messenger: dispatching inbound turn session=${route.sessionKey} account=${route.accountId}`,
+      `messenger: dispatching inbound turn session=${redactedSessionKey} account=${route.accountId}`,
     );
     let visibleFinalAiReplySent = false;
     let turnResult:
@@ -2209,7 +2275,7 @@ export async function processMessengerEvent(params: {
                   return { visibleReplySent: false };
                 }
                 logMessengerStage(params.trace, "first_response_ready", {
-                  openclawSessionId: route.sessionKey,
+                  openclawSessionId: redactedSessionKey,
                 });
                 const result = await sendMessengerText(
                   senderId,
@@ -2305,7 +2371,7 @@ export async function processMessengerEvent(params: {
       );
     } else {
       logMessengerStage(params.trace, "openclaw_call_completed", {
-        openclawSessionId: route.sessionKey,
+        openclawSessionId: redactedSessionKey,
       });
       logVerbose(
         `messenger: completed inbound turn sender=${redactMessengerIdentifier(
@@ -2314,6 +2380,7 @@ export async function processMessengerEvent(params: {
       );
     }
   } finally {
+    await cleanupMessengerMedia(transientMedia);
     logMessengerStage(params.trace, "request_completed", {
       activeMessengerEventJobs,
     });

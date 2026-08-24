@@ -3,8 +3,11 @@ import type { BotResponse, ConversationAction } from "./botResponse";
 import type { ConversationState } from "./messengerState";
 import {
   sendWhatsAppButtons,
+  sendWhatsAppErasureControlText,
   sendWhatsAppImage,
+  sendWhatsAppImageWithReceipt,
   sendWhatsAppText,
+  type WhatsAppDeliveryReceipt,
 } from "./whatsappApi";
 import { setPendingConversationActions } from "./messengerState";
 
@@ -15,11 +18,27 @@ export async function sendWhatsAppTextReply(
   await sendWhatsAppText(senderId, text);
 }
 
+export async function sendWhatsAppErasureControlTextReply(
+  senderId: string,
+  text: string,
+  reqId: string
+): Promise<void> {
+  await sendWhatsAppErasureControlText(senderId, text, reqId);
+}
+
 export async function sendWhatsAppImageReply(
   senderId: string,
   imageUrl: string
 ): Promise<void> {
   await sendWhatsAppImage(senderId, imageUrl);
+}
+
+export async function sendWhatsAppImageReplyWithReceipt(
+  senderId: string,
+  imageUrl: string,
+  reqId: string
+): Promise<WhatsAppDeliveryReceipt> {
+  return sendWhatsAppImageWithReceipt(senderId, imageUrl, reqId);
 }
 
 export async function sendWhatsAppButtonsReply(
@@ -62,7 +81,10 @@ export async function sendWhatsAppBotStateResponse(
     sendText: text => sendWhatsAppText(senderId, text),
     sendActionPrompt: async (text, actions) => {
       await Promise.resolve(setPendingConversationActions(senderId, actions));
-      await sendWhatsAppText(senderId, buildWhatsAppActionListText(text, actions));
+      await sendWhatsAppText(
+        senderId,
+        buildWhatsAppActionListText(text, actions)
+      );
     },
     replyState: replyState ?? undefined,
     sendStateText: (stateName, text) =>
@@ -76,7 +98,10 @@ export function createWhatsAppResponseSender(senderId: string) {
     sendImage: (imageUrl: string) => sendWhatsAppImage(senderId, imageUrl),
     sendActions: async (text: string, actions: ConversationAction[]) => {
       await Promise.resolve(setPendingConversationActions(senderId, actions));
-      await sendWhatsAppText(senderId, buildWhatsAppActionListText(text, actions));
+      await sendWhatsAppText(
+        senderId,
+        buildWhatsAppActionListText(text, actions)
+      );
     },
   };
 }

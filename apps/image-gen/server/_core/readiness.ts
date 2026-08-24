@@ -17,6 +17,7 @@ import {
   assertMollieNonSecretLaunchConfig,
   assertTenantBillingWorkerConfigured,
   getConfiguredBillingMode,
+  getMollieReadinessPhase,
   isMollieBillingPreflightEnabled,
   isMollieBillingEnabled,
   isMollieEntitlementEnforcementEnabled,
@@ -39,6 +40,8 @@ export type ReadinessCheck = {
   name: string;
   check: () => Promise<void> | void;
 };
+
+export type ReadinessPhase = "core" | "offline" | "operational";
 
 type ReadinessCheckResult = {
   name: string;
@@ -79,7 +82,8 @@ async function runReadinessChecks(
 }
 
 export function createReadinessHandler(
-  checks: readonly ReadinessCheck[]
+  checks: readonly ReadinessCheck[],
+  options: { getPhase?: () => ReadinessPhase } = {}
 ): express.RequestHandler {
   return (_req, res, next) => {
     void runReadinessChecks(checks)
@@ -87,6 +91,7 @@ export function createReadinessHandler(
         const ok = checkResults.every(result => result.ok);
         res.status(ok ? 200 : 503).json({
           ok,
+          ...(options.getPhase ? { phase: options.getPhase() } : {}),
           checks: checkResults,
         });
       })
@@ -95,6 +100,7 @@ export function createReadinessHandler(
 }
 
 export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
+  const mollieReadinessPhase = getMollieReadinessPhase();
   const aiFinalizationDrainEnabled =
     process.env.AI_ANSWER_FINALIZATION_DRAIN_ENABLED === "true";
   const aiAnswerQuotaPreflightEnabled =
@@ -149,8 +155,12 @@ export function buildRuntimeReadinessChecks(): ReadinessCheck[] {
       name: "mollie_launch_nonsecret_preflight",
       check: async () => {
         if (isMollieBillingPreflightEnabled()) {
-          assertMollieNonSecretLaunchConfig();
-          await assertBillingDatabaseReadiness(getConfiguredBillingMode());
+          const requireOperationalFlags =
+            mollieReadinessPhase === "operational";
+          assertMollieNonSecretLaunchConfig({ requireOperationalFlags });
+          await assertBillingDatabaseReadiness(getConfiguredBillingMode(), {
+            requireRuntimeHeartbeat: requireOperationalFlags,
+          });
         }
       },
     },

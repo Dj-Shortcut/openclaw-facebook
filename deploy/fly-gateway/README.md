@@ -56,9 +56,23 @@ public route guard:
 fly deploy --config fly.toml
 ```
 
-This hotfix does not upgrade the bundled Facebook plugin or OpenClaw runtime.
-Verify `/healthz`, `/facebook/webhook`, `/messenger/webhook`, all portal/legal
-routes, and protected route near-misses after every deployment.
+This hotfix does not upgrade the bundled Facebook plugin, OpenClaw runtime, or
+`start-gateway.mjs`. It therefore does **not** contain the tenant-isolation
+controls described below. Do not use the hotfix command to claim or test this
+isolation port.
+
+The isolation port requires a reviewed immutable image built from the standard
+`deploy/fly-gateway/Dockerfile`. The production manifest currently blocks that
+deployment. Keep it blocked until the mounted-state migration has been rehearsed
+on a volume copy and both the rollout image and a rollback image contain the
+same isolation controls. Rolling back to an older startup script would recreate
+shared `MEMORY.md` and re-enable shared memory, so such an image is not an
+acceptable rollback target.
+
+Verify `/healthz`, `/facebook/webhook`, all intended portal/legal routes, and
+protected route near-misses after every deployment. Verify the legacy
+`/messenger/webhook` route remains blocked unless an explicitly reviewed
+persisted channel configuration still requires the matching route override.
 
 ## Safety Defaults
 
@@ -84,18 +98,64 @@ The checked-in values and the non-deploying update boundary are enforced by:
 npm run gateway:deployment-safety
 ```
 
-- `OPENCLAW_WORKSPACE_DIR` defaults to `/data/workspace`, keeping `AGENTS.md`, `USER.md`, `MEMORY.md`, and daily memory on the mounted Fly volume.
-- On startup, missing workspace bootstrap files are copied once from the legacy `/home/node/.openclaw/workspace` fallback into `/data/workspace`.
+- `OPENCLAW_WORKSPACE_DIR` defaults to `/data/workspace` for static instruction files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, and `IDENTITY.md`). Public Messenger memory plugins, session-memory hooks, compaction memory flushes, memory search, and memory tools are disabled because this gateway serves multiple tenant Pages.
+- Startup moves any legacy shared `USER.md`, `MEMORY.md`, or `memory/` content to the recoverable, operator-only `/data/private-memory-quarantine-v1` directory before accepting traffic. If shared memory reappears after a prior quarantine, startup fails closed instead of overwriting either copy.
+- `session.dmScope` is forced to `per-account-channel-peer`, keeping direct-message history isolated by Page account, channel, and sender. A Facebook binding to a secondary shared agent fails startup, and the public plugin path repeats both checks before transcript dispatch.
+- `attachments.ttlHours` is capped at 24 hours as crash-recovery cleanup; normal Messenger turns delete their downloaded temporary media immediately after completion or failure.
+- On startup, missing static workspace instruction files are copied once from the legacy `/home/node/.openclaw/workspace` fallback into `/data/workspace`; legacy user or memory content is never copied into the public workspace.
 - `plugins.load.paths` includes `/app/node_modules/@dj-shortcut/facebook`.
-- `plugins.load.paths` includes `/app/node_modules/@openclaw/codex`.
+- The optional Codex plugin path/allow entry is removed and its plugin entry is disabled.
 - `plugins.entries.facebook.enabled` defaults to `true`.
 - `channels.facebook.dmPolicy` defaults to `pairing`.
 - `channels.facebook.unknownSenderMode` is seeded from `OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE` when missing. The public Leaderbot gateway sets this to `leaderbot_free_tier` so new Page senders enter the free-tier image flow while private installs can keep or set `pairing`.
 - `channels.facebook.leaderbotBridgeEnabled` is seeded from `OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED` when missing. Keep it unset/false for ClawHub and private installs; set it only for the intentional public Leaderbot gateway where Messenger content and identifiers are disclosed as being processed by the separate image-generation service.
 - `agents.defaults.model.primary` defaults to `OPENCLAW_AGENT_MODEL` when set.
 - `agents.defaults.thinkingDefault` defaults to `OPENCLAW_AGENT_THINKING_DEFAULT` when set.
-- `tools.deny` includes `image_generate` so this public Messenger gateway cannot invoke OpenClaw's built-in image-generation tool; Messenger image generation is routed through the separate Leaderbot image-gen service.
+- Every untrusted public Messenger turn replaces persisted tool profiles and provider overrides with a positive minimal allowlist containing only `session_status`; code mode is disabled and memory, cross-session, messaging, automation, plugin, node, web/UI, runtime, filesystem, and billable generation tools remain explicitly denied. Messenger image generation is routed through the separate Leaderbot image-gen service.
 - `OPENCLAW_PUBLIC_GATEWAY_GUARD=1` puts OpenClaw behind a small public route guard. Fly exposes `/facebook/webhook` and `/healthz` publicly by default, and can proxy customer portal/legal routes to `LEADERBOT_PORTAL_ORIGIN`. A deployment whose persisted channel config still uses the legacy `/messenger/webhook` path must opt in with `OPENCLAW_PUBLIC_GATEWAY_PATHS`; do not expose an unregistered webhook path because OpenClaw may otherwise serve its UI fallback there. Dashboard/UI/API access requires `OPENCLAW_ADMIN_TOKEN` and a request host listed in `OPENCLAW_ADMIN_HOSTS`; after that, OpenClaw's own device pairing/auth still applies.
 
 The container changes `channels.facebook.dmPolicy: "open"` back to `"pairing"` unless `OPENCLAW_FACEBOOK_ALLOW_OPEN=1` is intentionally set.
 Secrets must remain in Fly secrets or the mounted state, never in this repo.
+
+### Tenant-isolation rollout gate
+
+Before enabling the standard gateway deployment:
+
+1. Snapshot or clone the mounted volume and rehearse startup on the copy. Do not
+   inspect quarantined customer content without an approved, auditable support
+   or break-glass flow.
+2. Prove the generated non-secret config has
+   `session.dmScope=per-account-channel-peer`, memory slot `none`, disabled
+   `memory-core` and `session-memory`, disabled compaction memory flush, and an
+   attachment TTL no greater than 24 hours.
+3. Prove `/data/workspace` has no `USER.md`, `MEMORY.md`, or `memory/` entry and
+   that any prior content is present only in the protected quarantine. A
+   quarantine collision is a stop condition, not permission to delete or
+   overwrite either copy.
+4. Build and review matching rollout and rollback artifacts containing these
+   controls. Then use the protected production workflow; do not source-deploy or
+   use the route-guard hotfix as evidence.
+5. Smoke two senders on one Page and one sender identity across two test Page
+   accounts; their resolved session keys must all differ. Verify successful and
+   failed attachment turns leave no downloaded media behind, and verify logs
+   contain no raw session key, PSID, message text, or attachment URL.
+
+### WhatsApp requires a separate active-channel proof
+
+This port covers the root Facebook/Messenger gateway only. The image-gen runtime
+currently treats WhatsApp as operational: startup unconditionally requires
+`WHATSAPP_ACCESS_TOKEN` and `WHATSAPP_PHONE_NUMBER_ID`, registers
+`/webhook/whatsapp`, and the production manifest records that callback as
+canonical. Secret presence is therefore not evidence that the channel is safely
+isolated.
+
+Do not deploy or advertise WhatsApp under this Messenger proof. Because the live
+channel is intentionally active, its fail-closed release requirement is an exact
+inbound WABA plus phone-number binding to workspace, channel connection, binding
+epoch, and privacy epoch. Every production Graph send must use only the encrypted
+token on that exact connected database row; global `WHATSAPP_*` transport
+fallbacks are development/test-only and a contextless production send must fail
+before transport. Text, image, and audio provider attempts must be fenced and
+rechecked so wrong-tenant, rebind, disconnect, or privacy denial makes zero
+provider calls. Keep the image-gen deployment blocked until those boundaries and
+their production-equivalent tests are green.

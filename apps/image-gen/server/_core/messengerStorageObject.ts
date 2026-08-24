@@ -4,6 +4,7 @@ import {
   getMessengerRequestOwnership,
   getMessengerRequestPageId,
   getMessengerRequestPrivacySubject,
+  getMessengerRequestChannel,
 } from "./messengerRequestContext";
 
 export const MESSENGER_STORAGE_PREFIXES = [
@@ -25,7 +26,10 @@ export type MessengerStorageScope = Readonly<{
 }>;
 
 export type MessengerStorageRequestScope = MessengerStorageScope &
-  Readonly<{ pageId: string }>;
+  Readonly<{
+    pageId: string;
+    channel?: "facebook_messenger" | "whatsapp";
+  }>;
 
 const USER_KEY_PATTERN = /^[a-f0-9]{64}$/u;
 const LEGACY_OBJECT_KEY_PATTERN =
@@ -186,10 +190,11 @@ export function getMessengerStorageRequestScope(): MessengerStorageRequestScope 
   const ownership = getMessengerRequestOwnership();
   const privacy = getMessengerRequestPrivacySubject();
   const pageId = getMessengerRequestPageId()?.trim();
+  const channel = getMessengerRequestChannel();
   if (!ownership || !privacy || !pageId) return null;
   const scope = { ...ownership, ...privacy };
   assertMessengerStorageScope(scope);
-  return { ...scope, pageId };
+  return { ...scope, pageId, ...(channel ? { channel } : {}) };
 }
 
 export function hashStorageObjectKeyForLog(objectKey: string): string {

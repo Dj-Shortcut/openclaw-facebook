@@ -225,8 +225,9 @@ async function startServer() {
   }
   if (mollieBillingPreflightEnabled && !generationWorkerOnly) {
     assertTenantBillingWorkerConfigured();
-    assertMollieNonSecretLaunchConfig();
-    assertBillingNotificationConfig();
+    assertMollieNonSecretLaunchConfig({
+      requireOperationalFlags: mollieBillingEnabled,
+    });
     await assertBillingDatabaseReadiness(getConfiguredBillingMode(), {
       requireRuntimeHeartbeat: false,
     });

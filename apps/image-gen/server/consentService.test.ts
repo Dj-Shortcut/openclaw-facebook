@@ -52,6 +52,7 @@ vi.mock(
 import {
   handleMessengerConsentGate,
   handleWhatsAppConsentGate,
+  isWhatsAppPrivacyOrConsentControl,
 } from "./_core/consentService";
 import {
   anonymizePsid,
@@ -942,6 +943,46 @@ describe("Messenger consent deletion flow", () => {
     ).toBe(true);
   });
 
+  it("classifies WhatsApp privacy controls before subject reactivation", () => {
+    const event = {
+      channel: "whatsapp" as const,
+      messageType: "text" as const,
+      senderId: "whatsapp-control-user",
+      userId: "hashed-user",
+      rawEventMeta: { interactiveReplyId: "GDPR_DELETE_CONFIRM" },
+    };
+
+    expect(isWhatsAppPrivacyOrConsentControl(event)).toBe(true);
+    expect(
+      isWhatsAppPrivacyOrConsentControl({
+        ...event,
+        rawEventMeta: undefined,
+        textBody: "verwijder mijn data",
+      })
+    ).toBe(true);
+    expect(
+      isWhatsAppPrivacyOrConsentControl({
+        ...event,
+        rawEventMeta: undefined,
+        textBody: "I agree",
+      })
+    ).toBe(true);
+    expect(
+      isWhatsAppPrivacyOrConsentControl({
+        ...event,
+        rawEventMeta: undefined,
+        textBody: "yes",
+      })
+    ).toBe(true);
+    expect(
+      isWhatsAppPrivacyOrConsentControl({
+        ...event,
+        rawEventMeta: undefined,
+        textBody: "maak een afbeelding van Brussel",
+      })
+    ).toBe(false);
+  });
+
   it("does not persist unrelated WhatsApp contrast text as a consent decline", async () => {
     const senderId = "whatsapp-unrelated-consent-contrast-user";
     const sendText = vi.fn(async () => undefined);
@@ -1019,6 +1060,7 @@ describe("Messenger consent deletion flow", () => {
   it("does not claim WhatsApp deletion succeeded when a required step is pending", async () => {
     const senderId = "whatsapp-delete-required-step-pending-user";
     const sendText = vi.fn(async () => undefined);
+    const sendDeletionOutcome = vi.fn(async () => undefined);
     const sendButtons = vi.fn(async () => undefined);
     const initialState = await Promise.resolve(getOrCreateState(senderId));
 
@@ -1049,6 +1091,7 @@ describe("Messenger consent deletion flow", () => {
         lang: "nl",
         state: state!,
         sendText,
+        sendDeletionOutcome,
         sendButtons,
       })
     ).resolves.toBe(true);
@@ -1057,11 +1100,12 @@ describe("Messenger consent deletion flow", () => {
     expect(
       (await Promise.resolve(getState(senderId)))?.pendingDeleteConfirm
     ).toBe(false);
-    expect(sendText).toHaveBeenCalledWith(
+    expect(sendDeletionOutcome).toHaveBeenCalledWith(
       expect.stringContaining("nog niet al je data verwijderen")
     );
-    expect(sendText).not.toHaveBeenCalledWith(
+    expect(sendDeletionOutcome).not.toHaveBeenCalledWith(
       expect.stringContaining("Je data is verwijderd")
     );
+    expect(sendText).not.toHaveBeenCalled();
   });
 });
