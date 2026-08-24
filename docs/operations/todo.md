@@ -15,9 +15,12 @@
   and the Fly model/memory plus managed-redeploy invariants are now CI-checked.
   This is repository evidence only, not production rollout proof.
 - Last reviewed against code: **2026-08-24**, PR #400 commit
-  **`276bab2ac4f1d8396dedb055fa3f26c3c2e7360a`**. All GitHub checks on
-  that commit are green; review, protected rollout and provider evidence remain
-  separate gates.
+  **`ee59b09cbbaec76ebacf6eb8faa36ca3a94122bb`**. All GitHub checks on
+  that credential-free code commit are green, including Image Gen CI
+  [run 32740281414](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32740281414)
+  and canonical migration smoke
+  [run 32740281430](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32740281430).
+  Review, protected rollout and provider evidence remain separate gates.
 - Reviewed `main` baseline: **`29666ab9a9fc3830a464577a599c5b26de6162c5`**.
 - Latest operator production verification: **2026-08-24** public
   `/healthz` and core `/readyz` returned HTTP 200. This is not billing

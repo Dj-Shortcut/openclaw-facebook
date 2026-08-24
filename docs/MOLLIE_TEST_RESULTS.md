@@ -9,19 +9,19 @@ customer content or personal identifier.
 
 ## Credential-free automated evidence (2026-08-24)
 
-Evidence is for PR #400 commit
-`276bab2ac4f1d8396dedb055fa3f26c3c2e7360a`:
+Evidence is for PR #400 credential-free code commit
+`ee59b09cbbaec76ebacf6eb8faa36ca3a94122bb`:
 
-- Image Gen CI [run 32716890384](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32716890384):
-  TypeScript, lint, production build and tests passed; 178 test files and 1,902
-  tests passed, with 15 files/83 tests intentionally skipped in the ordinary
-  unit pass.
+- Image Gen CI [run 32740281414](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32740281414):
+  TypeScript, release lint/format, production build and tests passed; 184 test
+  files and 1,993 tests passed, with 17 files/98 tests intentionally skipped in
+  the ordinary pass.
 - The same CI run executed the real Redis privacy/queue suites and a separate
-  MySQL 8.4.11 billing/privacy integration lane: 25/25 targeted MySQL tests
+  MySQL 8.4.11 billing/privacy integration lane: 31/31 targeted MySQL tests
   passed after the exact test bootstrap verified `0017_contract`. This test
   schema is not the authorized production phase.
 - Image-gen migration smoke
-  [run 32716890277](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32716890277)
+  [run 32740281430](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32740281430)
   passed the canonical migration/rehearsal contract on MySQL 8.4.11.
 - CodeQL, Gitleaks, package validation, Fallow and production dependency/uptime
   checks passed on the same commit.

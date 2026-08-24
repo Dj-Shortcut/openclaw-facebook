@@ -49,10 +49,18 @@ deploying outside the protected workflows.
   Production intentionally remains on `0015_base`; only the protected
   `0015_base` to `0016_expand` workflow is authorized. Migration 0017 is blocked
   for a later reviewed rollout.
-- PR #400 CI at commit `276bab2ac4f1d8396dedb055fa3f26c3c2e7360a`
-  passed TypeScript, lint, build, CodeQL, Gitleaks, Fallow, the migration smoke,
-  1,902 image-gen tests, real Redis tests and targeted real-MySQL tests. This is
-  code evidence, not production migration or Mollie provider evidence.
+- PR #400 credential-free code evidence is frozen at commit
+  `ee59b09cbbaec76ebacf6eb8faa36ca3a94122bb`. Image Gen CI
+  [run 32740281414](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32740281414)
+  passed TypeScript, release lint/format, production build, 184 test files and
+  1,993 tests; 17 files and 98 tests were intentionally skipped in the ordinary
+  pass. Its real Redis suites and 31/31 targeted MySQL 8.4.11 tests also passed
+  after the disposable test database verified `0017_contract`. The canonical
+  migration smoke
+  [run 32740281430](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32740281430)
+  passed as well. CodeQL, Gitleaks, Fallow, package validation, artifact dry-run
+  and uptime/dependency checks were green. This is code evidence, not a
+  production migration or Mollie provider result.
 
 ## Remaining credential-free gates
 
@@ -64,8 +72,10 @@ deploying outside the protected workflows.
       designate Accountable as the intended external bookkeeping workflow for
       the pilot. This code decision does not mark the external reconciliation
       or accounting approval complete.
-- [ ] Keep `docs/operations/todo.md`, this checklist, the billing runbook and
-      the test-result matrix aligned with the exact reviewed release.
+- [x] Keep `docs/operations/todo.md`, this checklist, the billing runbook and
+      the test-result matrix aligned with the exact reviewed release. They now
+      share the credential-free `ee59b09` evidence boundary, while every
+      production/provider/human gate remains explicitly open.
 
 ## Protected production rollout gates
 
