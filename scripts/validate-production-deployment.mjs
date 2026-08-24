@@ -2840,6 +2840,14 @@ function validateSchemaTransitionWorkflow(rootDir) {
     ],
     ["--snapshot-id", "must restore from the exact fresh snapshot"],
     [
+      '\n          name="lbr_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"',
+      "must create a Fly-compatible exact run-and-attempt restore volume",
+    ],
+    [
+      'test "${#name}" -le 30',
+      "must refuse an overlong Fly restore-volume name before creation",
+    ],
+    [
       "restore-volume-name.txt",
       "must preserve the isolated restore name for failure cleanup",
     ],
@@ -2875,8 +2883,12 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "must reserve an exact run-and-attempt Machine name for restore probes",
     ],
     [
-      'expected_volume_name="leaderbot_restore_probe_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"',
+      'expected_volume_name="lbr_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"',
       "must bind always-cleanup to the exact run-and-attempt restore volume",
+    ],
+    [
+      'test "${#expected_volume_name}" -le 30',
+      "must keep the exact restore-volume name within Fly's length limit",
     ],
     [
       'test "$volume_name" = "$expected_volume_name"',
@@ -3211,8 +3223,16 @@ function validateSchemaProbeCleanupWorkflow(rootDir) {
       "must validate each exact Machine id before deletion",
     ],
     [
-      'test("^leaderbot_restore_probe_[0-9]+_[0-9]+$")',
+      'test("^lbr_[0-9]+_[0-9]+$")',
       "must identify restore volumes only by the exact protected-run name",
+    ],
+    [
+      'volume_name="lbr_${probe_run}_${probe_attempt}"',
+      "must derive the bounded restore-volume name from exact probe metadata",
+    ],
+    [
+      'test "${#volume_name}" -le 30',
+      "must refuse an overlong derived restore-volume name",
     ],
     [
       '(.attached_machine_id // "")==""',

@@ -1934,6 +1934,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires a Fly-compatible bounded restore-volume name before creation", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/image-gen-schema-transition.yml",
+      'name="lbr_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"',
+      'name="leaderbot_restore_probe_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must create a Fly-compatible exact run-and-attempt restore volume",
+    );
+  });
+
   it("passes workflow input through env instead of a run expression", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
