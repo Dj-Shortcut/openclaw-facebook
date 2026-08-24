@@ -103,6 +103,17 @@ function replaceFixtureText(root, relativePath, before, after) {
   fs.writeFileSync(filePath, source.replace(before, after));
 }
 
+function replaceLastFixtureText(root, relativePath, before, after) {
+  const filePath = path.join(root, relativePath);
+  const source = fs.readFileSync(filePath, "utf8");
+  const index = source.lastIndexOf(before);
+  expect(index).toBeGreaterThanOrEqual(0);
+  fs.writeFileSync(
+    filePath,
+    `${source.slice(0, index)}${after}${source.slice(index + before.length)}`,
+  );
+}
+
 function stageImageGenBridge(manifest, sourceCommit = "a".repeat(40)) {
   const app = manifest.apps["image-gen"];
   const legacyImage = app.databaseSchemaTransition.legacyBaseImage;
@@ -1255,6 +1266,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("gates rollback readiness on the reviewed storage-proxy image contract", () => {
+    const root = createRepositoryFixture();
+    replaceLastFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      'if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then',
+      'if [[ "$rollback_kind" != "unreviewed-legacy" ]]; then',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prove storage-proxy liveness and shared-limiter readiness after deploy and rollback",
+    );
+  });
+
   it("requires successor and restore recovery to prove storage-proxy readiness", () => {
     const root = createRepositoryFixture();
     const workflowPath = path.join(
@@ -1268,6 +1293,20 @@ describe("production deployment contract", () => {
         "https://leaderbot-storage-proxy.fly.dev/readyz",
         "https://leaderbot-storage-proxy.fly.dev/healthz",
       ),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must prove restored storage-proxy liveness and shared-limiter readiness",
+    );
+  });
+
+  it("gates recovered readiness on the reviewed storage-proxy image contract", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/reconcile-production-deployment.yml",
+      'if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then',
+      'if [[ "$rollback_kind" != "unreviewed-legacy" ]]; then',
     );
 
     expect(() => validateProductionRepository(root)).toThrow(

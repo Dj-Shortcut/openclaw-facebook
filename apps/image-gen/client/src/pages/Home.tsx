@@ -463,9 +463,7 @@ function Home() {
     { workspaceId: workspaceId ?? 0 },
     { enabled: Boolean(workspaceId) }
   );
-  const billingPlansQuery = trpc.portal.billing.plans.useQuery(undefined, {
-    enabled: auth.isAuthenticated,
-  });
+  const billingPlansQuery = trpc.portal.billing.plans.useQuery();
   const billingSummaryQuery = trpc.portal.billing.summary.useQuery(
     { workspaceId: workspaceId ?? 0 },
     { enabled: Boolean(workspaceId) }
@@ -974,6 +972,7 @@ function Home() {
       <LandingPage
         locale={locale}
         loginConfigured={loginConfigured}
+        commercialBillingAvailable={(billingPlansQuery.data?.length ?? 0) > 0}
         onLocaleChange={changeLocale}
       />
     );

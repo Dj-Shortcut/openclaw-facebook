@@ -916,6 +916,8 @@ jobs:
           rollback_image="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-image.txt")"
           rollback_config="$RUNNER_TEMP/leaderbot-release/before.fly.toml"
           prior_identity="$(cat "$RUNNER_TEMP/leaderbot-release/rollback-identity.txt")"
+          rollback_kind="$(node scripts/validate-production-deployment.mjs \
+            --reviewed-artifact-kind storage-proxy "$rollback_image")"
           node scripts/validate-production-deployment.mjs \
             --verify-restored-release storage-proxy "$rollback_image" "$rollback_config" \
             --expected-deployment-identity "$prior_identity"
@@ -923,10 +925,12 @@ jobs:
           status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/healthz)"
           test "$status" = "200"
           grep -Fx "ok" "$body"
-          ready_body="$(mktemp)"
-          ready_status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$ready_body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/readyz)"
-          test "$ready_status" = "200"
-          jq -e '.ok == true and .rateLimiter == "shared_redis"' "$ready_body"
+          if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then
+            ready_body="$(mktemp)"
+            ready_status="$(curl --ipv4 --silent --show-error --location --max-time 20 --retry 2 --retry-delay 5 --retry-all-errors --output "$ready_body" --write-out '%{http_code}' https://leaderbot-storage-proxy.fly.dev/readyz)"
+            test "$ready_status" = "200"
+            jq -e '.ok == true and .rateLimiter == "shared_redis"' "$ready_body"
+          fi
 
       - name: Record deployed release
         if: always() && steps.deploy.outcome != 'skipped'

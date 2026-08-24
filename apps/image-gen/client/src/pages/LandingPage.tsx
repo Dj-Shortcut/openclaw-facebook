@@ -528,6 +528,46 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
   },
 };
 
+const commercialUnavailableCopies: Record<
+  AppLocale,
+  Pick<LandingCopy, "noPayment" | "pricingDisclosure"> & {
+    premiumLabel: string;
+    premiumCta: string;
+    firstFaqAnswer: string;
+  }
+> = {
+  "nl-BE": {
+    noPayment:
+      "Je kunt Leaderbot gratis verkennen. De aankoopknop verschijnt pas wanneer de gecontroleerde Mollie-testfase beschikbaar is.",
+    premiumLabel: "Nog niet beschikbaar",
+    premiumCta: "Inloggen en Startpilot bekijken",
+    pricingDisclosure:
+      "€19 is de geplande eenmalige prijs voor de Leaderbot Startpilot. Er verschijnt pas een aankoopknop wanneer de beveiligde betaalroute beschikbaar is.",
+    firstFaqAnswer:
+      "Nog niet. Je kunt al veilig inloggen en Leaderbot gratis verkennen. De aankoopknop verschijnt zodra de gecontroleerde Mollie-testfase beschikbaar is.",
+  },
+  "fr-BE": {
+    noPayment:
+      "Vous pouvez découvrir Leaderbot gratuitement. Le bouton d’achat apparaîtra uniquement lorsque la phase de test Mollie contrôlée sera disponible.",
+    premiumLabel: "Pas encore disponible",
+    premiumCta: "Se connecter et voir le pilote",
+    pricingDisclosure:
+      "19 € est le prix unique prévu pour le pilote Leaderbot. Le bouton d’achat apparaîtra uniquement lorsque le parcours de paiement sécurisé sera disponible.",
+    firstFaqAnswer:
+      "Pas encore. Vous pouvez déjà vous connecter en toute sécurité et découvrir Leaderbot gratuitement. Le bouton d’achat apparaîtra dès que la phase de test Mollie contrôlée sera disponible.",
+  },
+  en: {
+    noPayment:
+      "You can explore Leaderbot for free. The purchase button appears only when the controlled Mollie test phase is available.",
+    premiumLabel: "Not available yet",
+    premiumCta: "Sign in and view Startpilot",
+    pricingDisclosure:
+      "€19 is the planned one-time price for the Leaderbot Startpilot. A purchase button appears only when the secured payment route is available.",
+    firstFaqAnswer:
+      "Not yet. You can already sign in safely and explore Leaderbot for free. The purchase button appears when the controlled Mollie test phase is available.",
+  },
+};
+
 const featureIcons = [
   Bot,
   Database,
@@ -606,13 +646,33 @@ function PortalButton({
 export default function LandingPage({
   locale,
   loginConfigured,
+  commercialBillingAvailable,
   onLocaleChange,
 }: {
   locale: AppLocale;
   loginConfigured: boolean;
+  commercialBillingAvailable: boolean;
   onLocaleChange: (locale: AppLocale) => void;
 }) {
-  const copy = landingCopies[locale];
+  const baseCopy = landingCopies[locale];
+  const unavailable = commercialUnavailableCopies[locale];
+  const copy = commercialBillingAvailable
+    ? baseCopy
+    : {
+        ...baseCopy,
+        noPayment: unavailable.noPayment,
+        premium: {
+          ...baseCopy.premium,
+          label: unavailable.premiumLabel,
+          cta: unavailable.premiumCta,
+        },
+        pricingDisclosure: unavailable.pricingDisclosure,
+        questions: baseCopy.questions.map((question, index) =>
+          index === 0
+            ? { ...question, answer: unavailable.firstFaqAnswer }
+            : question
+        ),
+      };
   const interestHref = `mailto:${PUBLIC_BUSINESS_DETAILS.email}?subject=${encodeURIComponent(
     copy.interestSubject
   )}`;

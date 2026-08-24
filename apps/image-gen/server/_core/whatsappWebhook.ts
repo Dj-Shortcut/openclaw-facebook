@@ -123,7 +123,8 @@ async function createWhatsAppEventContext(
   event: NormalizedWhatsAppEvent,
   privacyOrConsentControl: boolean,
   deletionRetryControl: boolean,
-  expectedScope?: CostLedgerTenantScope
+  expectedScope?: CostLedgerTenantScope,
+  expectedErasure?: MessengerErasingPrivacySubject
 ): Promise<WhatsAppEventContext | null> {
   const ownership = await resolveWhatsAppGenerationOwnership({
     endpoint: event.endpoint,
@@ -140,7 +141,19 @@ async function createWhatsAppEventContext(
     throw new WhatsAppGenerationScopeError();
   }
   if (deletionRetryControl) {
-    const erasure = await getErasingMessengerPrivacySubject(ownership);
+    const activeErasure = await getErasingMessengerPrivacySubject(ownership);
+    if (
+      activeErasure &&
+      expectedErasure &&
+      (activeErasure.privacyEpoch !== expectedErasure.privacyEpoch ||
+        activeErasure.dataPrivacyEpoch !== expectedErasure.dataPrivacyEpoch)
+    ) {
+      throw new WhatsAppGenerationScopeError();
+    }
+    // A durable erasure-control delivery keeps its immutable erasure epoch
+    // after deletion has committed and the subject has become `erased`. That
+    // stored scope is the only retry authority for the outcome reply.
+    const erasure = activeErasure ?? expectedErasure;
     if (erasure) {
       if (
         expectedScope &&
@@ -254,7 +267,8 @@ async function dispatchWhatsAppEvent(
 
 async function processSingleWhatsAppEvent(
   event: NormalizedWhatsAppEvent,
-  expectedScope?: CostLedgerTenantScope
+  expectedScope?: CostLedgerTenantScope,
+  expectedErasure?: MessengerErasingPrivacySubject
 ): Promise<void> {
   const privacyOrConsentControl = isWhatsAppPrivacyOrConsentControl(event);
   const interactiveReplyId =
@@ -269,7 +283,8 @@ async function processSingleWhatsAppEvent(
     event,
     privacyOrConsentControl,
     deletionRetryControl,
-    expectedScope
+    expectedScope,
+    expectedErasure
   );
   if (!context) {
     return;
@@ -515,10 +530,11 @@ async function claimWhatsAppEventReplayOrLog(
 
 async function safelyProcessSingleWhatsAppEvent(
   event: NormalizedWhatsAppEvent,
-  expectedScope?: CostLedgerTenantScope
+  expectedScope?: CostLedgerTenantScope,
+  expectedErasure?: MessengerErasingPrivacySubject
 ): Promise<void> {
   try {
-    await processSingleWhatsAppEvent(event, expectedScope);
+    await processSingleWhatsAppEvent(event, expectedScope, expectedErasure);
   } catch (error) {
     safeLog("whatsapp_reply_failed", {
       level: "error",
@@ -539,7 +555,10 @@ async function safelyProcessSingleWhatsAppEvent(
 
 export async function processWhatsAppWebhookPayload(
   payload: unknown,
-  options: { expectedScope?: CostLedgerTenantScope } = {}
+  options: {
+    expectedScope?: CostLedgerTenantScope;
+    expectedErasure?: MessengerErasingPrivacySubject;
+  } = {}
 ): Promise<void> {
   logWhatsAppWebhookPayload(payload);
 
@@ -550,6 +569,10 @@ export async function processWhatsAppWebhookPayload(
   }
 
   for (const event of events) {
-    await safelyProcessSingleWhatsAppEvent(event, options.expectedScope);
+    await safelyProcessSingleWhatsAppEvent(
+      event,
+      options.expectedScope,
+      options.expectedErasure
+    );
   }
 }

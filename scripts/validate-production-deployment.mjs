@@ -1818,8 +1818,17 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     "Verify restored storage-proxy release",
   ]) {
     const steps = namedWorkflowStepBodies(workflow, stepName);
+    const rollbackReadinessIsContractGated =
+      stepName !== "Verify restored storage-proxy release" ||
+      (steps[0]?.includes(
+        '--reviewed-artifact-kind storage-proxy "$rollback_image"',
+      ) === true &&
+        steps[0]?.includes(
+          'if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then',
+        ) === true);
     if (
       steps.length !== 1 ||
+      !rollbackReadinessIsContractGated ||
       !referencesExactHttpUrl(
         steps[0],
         "https://leaderbot-storage-proxy.fly.dev/healthz",
@@ -3901,6 +3910,12 @@ function validateProductionReconciliationWorkflow(rootDir) {
         step,
         "https://leaderbot-storage-proxy.fly.dev/healthz",
       ) ||
+        !step.includes(
+          '--reviewed-artifact-kind storage-proxy "$rollback_image"',
+        ) ||
+        !step.includes(
+          'if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then',
+        ) ||
         !referencesExactHttpUrl(
           step,
           "https://leaderbot-storage-proxy.fly.dev/readyz",
@@ -4204,8 +4219,8 @@ function validateProductionReconciliationWorkflow(rootDir) {
     occurrenceCount(workflow, "--require-current-reviewed-image") !== 4 ||
     occurrenceCount(workflow, "--verify-settled-baseline") !== 0 ||
     occurrenceCount(workflow, "--settled-live") !== 4 ||
-    occurrenceCount(workflow, 'node "$RECOVERY_CONTROLLER"') !== 41 ||
-    occurrenceCount(workflow, '--root-dir "$GITHUB_WORKSPACE"') !== 37 ||
+    occurrenceCount(workflow, 'node "$RECOVERY_CONTROLLER"') !== 42 ||
+    occurrenceCount(workflow, '--root-dir "$GITHUB_WORKSPACE"') !== 38 ||
     occurrenceCount(workflow, "--validate-recovery-protocol") !== 3 ||
     occurrenceCount(workflow, "--reviewed-scale-plan") !== 3 ||
     occurrenceCount(workflow, 'flyctl scale count "$count"') !== 3 ||

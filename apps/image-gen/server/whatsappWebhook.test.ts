@@ -652,6 +652,62 @@ describe("whatsappWebhook", () => {
     );
   });
 
+  it("retries a deletion outcome from its durable scope after erasure completed", async () => {
+    isWhatsAppPrivacyOrConsentControlMock.mockReturnValue(true);
+    isDeleteCommandMock.mockReturnValue(true);
+    getErasingMessengerPrivacySubjectMock.mockResolvedValue(null);
+    extractWhatsAppEventsMock.mockReturnValue([
+      {
+        channel: "whatsapp",
+        endpoint: {
+          channel: "whatsapp",
+          wabaId: "303030303030303",
+          phoneNumberId: "404040404040404",
+        },
+        senderId: "32999999",
+        userId: "u2",
+        messageType: "text",
+        rawMessageType: "text",
+        textBody: "delete my data",
+      },
+    ]);
+    claimWhatsAppWebhookReplayLeaseMock.mockResolvedValue(
+      ACQUIRED_REPLAY_CLAIM
+    );
+    deleteUserDataAndSendResultMock.mockImplementation(
+      async (_senderId, _lang, sendDeletionOutcome) => {
+        await sendDeletionOutcome("deletion outcome");
+      }
+    );
+
+    const { processWhatsAppWebhookPayload } =
+      await import("./_core/whatsappWebhook");
+    await processWhatsAppWebhookPayload(
+      { object: "whatsapp_business_account" },
+      {
+        expectedScope: {
+          workspaceId: 42,
+          channelConnectionId: 8,
+          bindingEpoch: 3,
+          privacyEpoch: 6,
+          userKey: "u2",
+        },
+        expectedErasure: {
+          privacyEpoch: 6,
+          dataPrivacyEpoch: 5,
+        },
+      }
+    );
+
+    expect(assertWhatsAppGenerationScopeActiveMock).not.toHaveBeenCalled();
+    expect(deleteUserDataAndSendResultMock).toHaveBeenCalledOnce();
+    expect(sendWhatsAppErasureControlTextReplyMock).toHaveBeenCalledWith(
+      "32999999",
+      "deletion outcome",
+      expect.stringMatching(/^[a-f0-9]{64}$/)
+    );
+  });
+
   it("rejects an ingress erasure epoch mismatch before claiming replay", async () => {
     isWhatsAppPrivacyOrConsentControlMock.mockReturnValue(true);
     isDeleteCommandMock.mockReturnValue(true);

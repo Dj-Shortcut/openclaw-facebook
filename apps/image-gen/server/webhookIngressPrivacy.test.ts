@@ -471,6 +471,49 @@ describe("WhatsApp webhook ingress privacy admission", () => {
     expect(mocks.processWhatsApp).toHaveBeenCalledOnce();
   });
 
+  it("forwards the durable erasure scope when retrying a WhatsApp deletion", async () => {
+    mocks.getErasingSubject.mockResolvedValueOnce({
+      privacyEpoch: 6,
+      dataPrivacyEpoch: 5,
+    });
+    const [unit] =
+      await webhookIngressQueueTestHooks.createWhatsAppIngressDeliveries(
+        whatsAppPayload([
+          whatsAppMessage(
+            "32470000009",
+            "wamid.delete-retry",
+            "delete my data"
+          ),
+        ])
+      );
+    if (!unit) throw new Error("expected WhatsApp erasure ingress unit");
+
+    await webhookIngressQueueTestHooks.processQueuedWebhookDelivery({
+      deliveryId: "55555555-5555-4555-8555-555555555555",
+      channel: "whatsapp",
+      payload: unit.payload,
+      receivedAt: "2026-08-24T12:00:00.000Z",
+      expiresAt: Date.now() + 60_000,
+      privacyControl: unit.privacyControl,
+      erasureControl: unit.erasureControl,
+      subjects: unit.subjects,
+    });
+
+    expect(mocks.processWhatsApp).toHaveBeenCalledWith(unit.payload, {
+      expectedScope: {
+        workspaceId: 42,
+        channelConnectionId: 8,
+        bindingEpoch: 3,
+        privacyEpoch: 6,
+        userKey: unit.subjects[0]?.userKey,
+      },
+      expectedErasure: {
+        privacyEpoch: 6,
+        dataPrivacyEpoch: 5,
+      },
+    });
+  });
+
   it("rejects an unscoped WhatsApp unit before invoking its handler", async () => {
     await expect(
       webhookIngressQueueTestHooks.processQueuedWebhookDelivery({

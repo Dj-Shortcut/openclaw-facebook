@@ -618,10 +618,14 @@ function parseMetaEventOccurredAt(value: unknown): Date {
 
 async function processWhatsAppWebhookPayloadSafely(
   payload: unknown,
-  expectedScope: Omit<WebhookIngressSubject, "pageId">
+  expectedScope: Omit<WebhookIngressSubject, "pageId">,
+  expectedErasure?: MessengerErasingPrivacySubject
 ): Promise<void> {
   const module = await import("../whatsappWebhook");
-  await module.processWhatsAppWebhookPayload(payload, { expectedScope });
+  await module.processWhatsAppWebhookPayload(payload, {
+    expectedScope,
+    expectedErasure,
+  });
 }
 
 async function processFacebookWebhookPayloadSafely(
@@ -665,13 +669,17 @@ async function processQueuedWebhookDelivery(
     await runWithMessengerRequestContext(
       subject.pageId,
       () =>
-        processWhatsAppWebhookPayloadSafely(delivery.payload, {
-          workspaceId: subject.workspaceId,
-          channelConnectionId: subject.channelConnectionId,
-          bindingEpoch: subject.bindingEpoch,
-          privacyEpoch: subject.privacyEpoch,
-          userKey: subject.userKey,
-        }),
+        processWhatsAppWebhookPayloadSafely(
+          delivery.payload,
+          {
+            workspaceId: subject.workspaceId,
+            channelConnectionId: subject.channelConnectionId,
+            bindingEpoch: subject.bindingEpoch,
+            privacyEpoch: subject.privacyEpoch,
+            userKey: subject.userKey,
+          },
+          delivery.erasureControl
+        ),
       {
         channel: "whatsapp",
         workspaceId: subject.workspaceId,
