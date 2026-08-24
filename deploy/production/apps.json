@@ -29,7 +29,7 @@
       "workingDirectory": "apps/image-gen",
       "deployScript": "deploy:image-gen",
       "deploymentEnabled": false,
-      "deploymentBlockReason": "Application deploys are frozen while the protected 0015-to-0016 expand runs; the attested bridge is the only recovery image.",
+      "deploymentBlockReason": "Application deploys remain frozen while the exact 0016 runtime artifact is built and reviewed; the attested bridge is the only recovery image.",
       "sourceDeployEnabled": false,
       "sourceDeployBlockReason": "Production deploys require an immutable image built from reviewed source and recorded in this manifest before rollout.",
       "trustedBuilderWorkflow": ".github/workflows/build-production-artifacts.yml",
@@ -51,11 +51,11 @@
       "reviewedRollbackSourceCommits": {
         "registry.fly.io/leaderbot-fb-image-gen@sha256:92647ef8bcc7aa79326630a051b486ea9c8c9d14399658118657515dc5242149": "a9f5cdf3ffa347ffa77fc0410e8780fe5c417191"
       },
-      "databaseSchemaPhase": "0015_base",
+      "databaseSchemaPhase": "0016_expand",
       "databaseSchemaTransition": {
         "from": "0015_base",
         "to": "0016_expand",
-        "state": "expand_pending",
+        "state": "runtime_build_pending",
         "legacyBaseImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:28d862568aa3cb049ac4aba164bb1e01792691feec646ff87c657f72bd306804",
         "bridgeImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:92647ef8bcc7aa79326630a051b486ea9c8c9d14399658118657515dc5242149",
         "bridgeSourceCommit": "a9f5cdf3ffa347ffa77fc0410e8780fe5c417191",
