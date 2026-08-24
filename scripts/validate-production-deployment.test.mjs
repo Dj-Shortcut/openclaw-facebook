@@ -119,6 +119,7 @@ function stageImageGenBridge(manifest, sourceCommit = "a".repeat(40)) {
   const app = manifest.apps["image-gen"];
   const legacyImage = app.databaseSchemaTransition.legacyBaseImage;
   const bridgeImage = `registry.fly.io/${app.app}@sha256:${"b".repeat(64)}`;
+  app.databaseSchemaPhase = "0015_base";
   app.deploymentEnabled = true;
   app.reviewedImage = bridgeImage;
   app.reviewedArtifactKind = "migration-bridge";
@@ -3061,7 +3062,10 @@ describe("production deployment contract", () => {
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    manifest.apps["image-gen"].reviewedImageSchemaPhases = ["0016_expand"];
+    const imageGen = manifest.apps["image-gen"];
+    imageGen.databaseSchemaPhase = "0015_base";
+    imageGen.databaseSchemaTransition.state = "expand_pending";
+    imageGen.reviewedImageSchemaPhases = ["0016_expand"];
     fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
     expect(() => validateProductionRepository(root)).toThrow(
