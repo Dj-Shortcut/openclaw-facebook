@@ -28,14 +28,14 @@
       "config": "apps/image-gen/fly.toml",
       "workingDirectory": "apps/image-gen",
       "deployScript": "deploy:image-gen",
-      "deploymentEnabled": false,
+      "deploymentEnabled": true,
       "deploymentBlockReason": "The reviewed 0015-to-0016 transition is waiting for a trusted, attested compatibility-bridge artifact.",
       "sourceDeployEnabled": false,
       "sourceDeployBlockReason": "Production deploys require an immutable image built from reviewed source and recorded in this manifest before rollout.",
       "trustedBuilderWorkflow": ".github/workflows/build-production-artifacts.yml",
-      "reviewedImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:28d862568aa3cb049ac4aba164bb1e01792691feec646ff87c657f72bd306804",
-      "reviewedArtifactKind": "legacy-bootstrap",
-      "reviewedSourceCommit": null,
+      "reviewedImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:92647ef8bcc7aa79326630a051b486ea9c8c9d14399658118657515dc5242149",
+      "reviewedArtifactKind": "migration-bridge",
+      "reviewedSourceCommit": "a9f5cdf3ffa347ffa77fc0410e8780fe5c417191",
       "reviewedRollbackImages": [
         "registry.fly.io/leaderbot-fb-image-gen@sha256:28d862568aa3cb049ac4aba164bb1e01792691feec646ff87c657f72bd306804"
       ],
@@ -53,10 +53,10 @@
       "databaseSchemaTransition": {
         "from": "0015_base",
         "to": "0016_expand",
-        "state": "awaiting_attested_bridge",
+        "state": "bridge_reviewed",
         "legacyBaseImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:28d862568aa3cb049ac4aba164bb1e01792691feec646ff87c657f72bd306804",
-        "bridgeImage": null,
-        "bridgeSourceCommit": null,
+        "bridgeImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:92647ef8bcc7aa79326630a051b486ea9c8c9d14399658118657515dc5242149",
+        "bridgeSourceCommit": "a9f5cdf3ffa347ffa77fc0410e8780fe5c417191",
         "bridgePredicateType": "https://leaderbot.live/attestations/migration-bridge/v1"
       },
       "databaseRecovery": {
@@ -68,7 +68,7 @@
         "probeVmMemoryMb": 2048,
         "mysqlImage": "docker-hub-mirror.fly.io/library/mysql:8.4.11@sha256:1d6b6a8fcee8ff758ff151d017f5203cd06792a0e698f0a593c9dfcb14609cf0"
       },
-      "reviewedImageSchemaPhases": ["0015_base"],
+      "reviewedImageSchemaPhases": ["0015_base", "0016_expand"],
       "reviewedRollbackImageSchemaPhases": {
         "registry.fly.io/leaderbot-fb-image-gen@sha256:28d862568aa3cb049ac4aba164bb1e01792691feec646ff87c657f72bd306804": [
           "0015_base"
