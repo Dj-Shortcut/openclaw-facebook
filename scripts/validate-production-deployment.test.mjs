@@ -1906,6 +1906,33 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("rejects restore-probe shell decoys outside the exact probe step", () => {
+    const root = createRepositoryFixture();
+    const relativePath = ".github/workflows/image-gen-schema-transition.yml";
+    replaceFixtureText(
+      root,
+      relativePath,
+      'probe_b64="$(printf \'%s\' "$probe" | base64 --wrap=0)"',
+      'probe_b64="unsafe"',
+    );
+    fs.appendFileSync(
+      path.join(root, relativePath),
+      [
+        "",
+        "# Decoys outside the named restore-probe step must not satisfy it:",
+        '# probe_b64="$(printf \'%s\' "$probe" | base64 --wrap=0)"',
+        '# probe_command="/bin/sh -lc',
+        "# decoded=\\$(printf %s $probe_b64 | base64 -d) || exit 70; exec /bin/sh -c",
+        '# --command "$probe_command"',
+        "",
+      ].join("\n"),
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must encode the fixed restore probe without shell-quoting ambiguity",
+    );
+  });
+
   it("keeps the restore-probe outer timeout above all bounded subphases", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(

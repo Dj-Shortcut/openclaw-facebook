@@ -2902,22 +2902,6 @@ function validateSchemaTransitionWorkflow(rootDir) {
       "timeout --signal=TERM 8m flyctl ssh console",
       "must bound the remote restore verification and propagate its exit status",
     ],
-    [
-      'probe_b64="$(printf \'%s\' "$probe" | base64 --wrap=0)"',
-      "must encode the fixed restore probe without shell-quoting ambiguity",
-    ],
-    [
-      'probe_command="/bin/sh -lc',
-      "must execute the restore probe through an explicit remote shell",
-    ],
-    [
-      'decoded=\\$(printf %s $probe_b64 | base64 -d) || exit 70; exec /bin/sh -c',
-      "must fail closed on decode errors and propagate the probe exit status",
-    ],
-    [
-      '--command "$probe_command"',
-      "must pass only the explicit shell command to flyctl SSH",
-    ],
     ["mysqlcheck", "must verify the restored MySQL data files"],
     [
       "Remove isolated restore Machine and volume",
@@ -3058,6 +3042,22 @@ function validateSchemaTransitionWorkflow(rootDir) {
     [
       "timeout --signal=TERM 8m flyctl ssh console",
       "must bound the remote restore verification and propagate its exit status",
+    ],
+    [
+      'probe_b64="$(printf \'%s\' "$probe" | base64 --wrap=0)"',
+      "must encode the fixed restore probe without shell-quoting ambiguity",
+    ],
+    [
+      'probe_command="/bin/sh -lc',
+      "must execute the restore probe through an explicit remote shell",
+    ],
+    [
+      'decoded=\\$(printf %s $probe_b64 | base64 -d) || exit 70; exec /bin/sh -c',
+      "must fail closed on decode errors and propagate the probe exit status",
+    ],
+    [
+      '--command "$probe_command"',
+      "must pass only the explicit shell command to flyctl SSH",
     ],
   ]) {
     if (!restoreProbeStep?.includes(required)) {
