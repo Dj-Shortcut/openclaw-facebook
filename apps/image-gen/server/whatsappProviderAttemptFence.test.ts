@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./_core/messengerProviderAttemptFence", () => ({
   WHATSAPP_ERASURE_CONTROL_PROVIDER_OPERATION:
     "whatsapp_graph_erasure_control_text",
-  reserveMessengerProviderAttemptFence: mocks.reserve,
+  claimMessengerProviderAttemptFence: mocks.reserve,
   claimWhatsAppErasureControlProviderAttemptFence: mocks.claimErasure,
   markMessengerProviderAttemptStarted: mocks.mark,
   finalizeMessengerProviderAttemptFence: mocks.finalize,
@@ -23,6 +23,7 @@ import {
   setMessengerRequestPrivacySubject,
 } from "./_core/messengerRequestContext";
 import {
+  claimWhatsAppDeliveryProviderAttemptFence,
   claimWhatsAppErasureControlProviderAttempt,
   reserveWhatsAppProviderAttemptFence,
   WhatsAppProviderAttemptFenceError,
@@ -40,8 +41,11 @@ const SCOPE = Object.freeze({
 describe("WhatsApp provider attempt fence", () => {
   beforeEach(() => {
     mocks.reserve.mockResolvedValue({
-      leaseToken: "lease",
-      attemptKeyHash: "a".repeat(64),
+      kind: "owned",
+      fence: {
+        leaseToken: "lease",
+        attemptKeyHash: "a".repeat(64),
+      },
     });
     mocks.claimErasure.mockResolvedValue({
       kind: "owned",
@@ -90,9 +94,48 @@ describe("WhatsApp provider attempt fence", () => {
       "whatsapp_graph_text",
       1,
       expect.any(Date),
-      "whatsapp"
+      { expectedChannel: "whatsapp" }
     );
   });
+
+  it.each([
+    ["succeeded", "succeeded"],
+    ["started", "ambiguous"],
+    ["ambiguous", "ambiguous"],
+  ] as const)(
+    "maps a stored %s Graph attempt to %s without taking ownership",
+    async (storedStatus, expectedKind) => {
+      mocks.reserve.mockResolvedValueOnce({
+        kind: "unsafe_or_done",
+        status: storedStatus,
+      });
+
+      const claim = await runWithMessengerRequestContext(
+        "404040404040404",
+        async () => {
+          setMessengerRequestPrivacySubject({
+            userKey: SCOPE.userKey,
+            privacyEpoch: SCOPE.privacyEpoch,
+          });
+          return await claimWhatsAppDeliveryProviderAttemptFence({
+            reqId: "stable-graph-attempt",
+            userKey: SCOPE.userKey,
+            providerOperation: "whatsapp_graph_text",
+          });
+        },
+        { ...SCOPE, channel: "whatsapp" }
+      );
+
+      expect(claim).toEqual({ kind: expectedKind, attemptKeyHash: null });
+      expect(mocks.reserve).toHaveBeenCalledWith(
+        expect.objectContaining({ reqId: "stable-graph-attempt" }),
+        "whatsapp_graph_text",
+        1,
+        expect.any(Date),
+        { expectedChannel: "whatsapp", takeOverReserved: true }
+      );
+    }
+  );
 
   it("uses a dedicated durable fence mode only for deletion outcomes", async () => {
     await runWithMessengerRequestContext(

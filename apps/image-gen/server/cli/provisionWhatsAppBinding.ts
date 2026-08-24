@@ -3,18 +3,23 @@ import {
   provisionWhatsAppTenantBinding,
   readWhatsAppProvisioningEnv,
 } from "../_core/whatsappProvisioning";
+import { closeDatabasePool } from "../db";
 
 export async function runWhatsAppProvisioningCli(): Promise<void> {
-  const result = await provisionWhatsAppTenantBinding(
-    readWhatsAppProvisioningEnv()
-  );
-  process.stdout.write(
-    `${JSON.stringify({
-      event: "whatsapp_binding_provisioned",
-      workspaceId: result.workspaceId,
-      status: result.status,
-    })}\n`
-  );
+  try {
+    const result = await provisionWhatsAppTenantBinding(
+      readWhatsAppProvisioningEnv()
+    );
+    process.stdout.write(
+      `${JSON.stringify({
+        event: "whatsapp_binding_provisioned",
+        workspaceId: result.workspaceId,
+        status: result.status,
+      })}\n`
+    );
+  } finally {
+    await closeDatabasePool();
+  }
 }
 
 const scriptUrl = process.argv[1]

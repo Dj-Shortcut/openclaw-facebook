@@ -117,7 +117,9 @@ export async function handleWhatsAppImageEvent(
     await setFlowState(event.senderId, "AWAITING_PHOTO");
     await sendWhatsAppTextReply(
       event.senderId,
-      t(context.lang, "missingInputImage")
+      t(context.lang, "missingInputImage"),
+      context.reqId,
+      "image-download-failed"
     );
     return;
   }
@@ -131,7 +133,9 @@ export async function handleWhatsAppImageEvent(
 
   await sendWhatsAppTextReply(
     event.senderId,
-    t(context.lang, "photoEditPrompt")
+    t(context.lang, "photoEditPrompt"),
+    context.reqId,
+    "photo-edit-prompt"
   );
 }
 

@@ -1,5 +1,5 @@
 import * as db from "../db";
-import { sendText } from "./messengerApi";
+import { sendMessengerPortalHandoffText } from "../messengerPortalHandoffTransport";
 import {
   findStateByUserKey,
   hasOpenPaidHandoffWindow,
@@ -265,20 +265,18 @@ export async function sendPortalHandoffLink(
       await revokeCreatedTokenSafely(tokenResult, input.workspaceId, logUser);
       return { ok: false, reason: "privacy_erased" };
     }
-    const outcome = await sendText(
-      state.psid,
-      buildPortalHandoffMessage(handoffUrl, state, input.messageVariant),
-      {
-        pageId,
-        workspaceId: input.workspaceId,
-        channelConnectionId: facebookConnection.id,
-        bindingEpoch: facebookConnection.bindingEpoch,
-        userKey: input.messengerSenderUserKey,
-        privacyEpoch,
-        operationId:
-          input.deliveryIdempotencyKey ?? `portal-handoff:${input.workspaceId}`,
-      }
-    );
+    const outcome = await sendMessengerPortalHandoffText({
+      psid: state.psid,
+      text: buildPortalHandoffMessage(handoffUrl, state, input.messageVariant),
+      pageId,
+      workspaceId: input.workspaceId,
+      channelConnectionId: facebookConnection.id,
+      bindingEpoch: facebookConnection.bindingEpoch,
+      userKey: input.messengerSenderUserKey,
+      privacyEpoch,
+      operationId:
+        input.deliveryIdempotencyKey ?? `portal-handoff:${input.workspaceId}`,
+    });
 
     if (!outcome.sent) {
       await revokeCreatedTokenSafely(tokenResult, input.workspaceId, logUser);

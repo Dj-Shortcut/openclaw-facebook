@@ -291,7 +291,7 @@ describe("WhatsApp deletion outcome transport boundary", () => {
         withErasureScope(userKey, async () => {
           await sendWhatsAppErasureControlText(
             SENDER_ID,
-            "deletion outcome",
+            "localized deletion outcome",
             `stable-${privacyStatus}-event`
           );
           await sendWhatsAppErasureControlText(
@@ -373,7 +373,11 @@ describe("WhatsApp deletion outcome transport boundary", () => {
             userKey,
             privacyEpoch: PRIVACY_EPOCH,
           });
-          await sendWhatsAppText(SENDER_ID, "ordinary stale reply");
+          await sendWhatsAppText(
+            SENDER_ID,
+            "ordinary stale reply",
+            "ordinary-stale-reply"
+          );
         },
         {
           channel: "whatsapp",
@@ -385,7 +389,6 @@ describe("WhatsApp deletion outcome transport boundary", () => {
     ).rejects.toMatchObject({
       name: WhatsAppDeliveryError.name,
       outcome: "pre_transport",
-      cause: { name: "WhatsAppTransportBindingError" },
     });
 
     expect(fetchMock).not.toHaveBeenCalled();
@@ -410,7 +413,11 @@ describe("WhatsApp deletion outcome transport boundary", () => {
             userKey,
             privacyEpoch: PRIVACY_EPOCH,
           });
-          await sendWhatsAppText(SENDER_ID, "must not leave");
+          await sendWhatsAppText(
+            SENDER_ID,
+            "must not leave",
+            "erasure-privacy-race"
+          );
         },
         {
           channel: "whatsapp",
@@ -422,7 +429,7 @@ describe("WhatsApp deletion outcome transport boundary", () => {
     ).rejects.toBeInstanceOf(WhatsAppDeliveryError);
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(flow.insertedOperations).toEqual([]);
+    expect(flow.insertedOperations).toEqual(["whatsapp_graph_text"]);
   });
 
   it("stops an erasure-control send when disconnect wins after credential resolution", async () => {
@@ -476,7 +483,11 @@ describe("WhatsApp deletion outcome transport boundary", () => {
               userKey,
               privacyEpoch: PRIVACY_EPOCH,
             });
-            await sendWhatsAppText(SENDER_ID, "normal outcome");
+            await sendWhatsAppText(
+              SENDER_ID,
+              "normal outcome",
+              "normal-outcome"
+            );
           },
           {
             channel: "whatsapp",

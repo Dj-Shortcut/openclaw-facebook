@@ -218,6 +218,26 @@ describe("WhatsApp transport credential boundary", () => {
     expect(mocks.unsealFacebookPageToken).not.toHaveBeenCalled();
   });
 
+  it("preserves an unexpected binding failure as the redacted error cause", async () => {
+    const databaseError = new TypeError("database temporarily unavailable");
+    mocks.getDatabaseOrThrow.mockRejectedValue(databaseError);
+
+    const error = await withScope(
+      {
+        phoneNumberId: "404040404040404",
+        workspaceId: 42,
+        channelConnectionId: 8,
+        bindingEpoch: 3,
+        userKey: "user-key-a",
+        privacyEpoch: 2,
+      },
+      resolveWhatsAppTransportCredential
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(WhatsAppTransportBindingError);
+    expect((error as WhatsAppTransportBindingError).cause).toBe(databaseError);
+  });
+
   it("rejects duplicate matching rows before unsealing a credential", async () => {
     const row = {
       encryptedAccessToken: "sealed-tenant-a",

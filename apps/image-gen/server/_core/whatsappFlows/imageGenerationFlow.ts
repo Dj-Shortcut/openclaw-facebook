@@ -95,13 +95,16 @@ function logGenerationRequested(input: {
 
 async function sendQuotaExceededReply(
   senderId: string,
-  lang: Lang
+  lang: Lang,
+  operationId: string
 ): Promise<void> {
   await sendWhatsAppTextReply(
     senderId,
     lang === "en"
       ? "You used your free credits for today. Come back tomorrow."
-      : "Je hebt je gratis credits voor vandaag opgebruikt. Kom morgen terug."
+      : "Je hebt je gratis credits voor vandaag opgebruikt. Kom morgen terug.",
+    operationId,
+    "image-quota-exceeded"
   );
   await setFlowState(senderId, "AWAITING_EDIT_PROMPT");
 }
@@ -127,7 +130,9 @@ async function prepareGeneration(input: ImageGenerationInput): Promise<{
   await setFlowState(input.senderId, "PROCESSING");
   await sendWhatsAppTextReply(
     input.senderId,
-    t(input.lang, "generatingImagePrompt")
+    t(input.lang, "generatingImagePrompt"),
+    input.reqId,
+    "image-generating"
   );
 
   return {
@@ -175,7 +180,9 @@ async function handleGenerationSuccess(input: {
   await setFlowState(input.senderId, "RESULT_READY");
   await sendWhatsAppTextReply(
     input.senderId,
-    `${t(input.lang, "success")}\n${t(input.lang, "whatsappGenerationFollowup")}`
+    `${t(input.lang, "success")}\n${t(input.lang, "whatsappGenerationFollowup")}`,
+    input.reqId,
+    "image-success-followup"
   );
 }
 
@@ -260,6 +267,7 @@ async function resolveGenerationFailure(input: {
   senderId: string;
   userId: string;
   lang: Lang;
+  reqId: string;
   sourceImageUrl?: string;
   lastPhotoUrl?: string | null;
   result: GenerationFailure;
@@ -308,13 +316,19 @@ async function handleGenerationFailure(input: {
   senderId: string;
   userId: string;
   lang: Lang;
+  reqId: string;
   sourceImageUrl?: string;
   lastPhotoUrl?: string | null;
   result: GenerationFailure;
 }): Promise<void> {
   logGenerationFailure(input);
   const failureText = await resolveGenerationFailure(input);
-  await sendWhatsAppTextReply(input.senderId, failureText);
+  await sendWhatsAppTextReply(
+    input.senderId,
+    failureText,
+    input.reqId,
+    `image-generation-failure:${input.result.errorKind}`
+  );
 }
 
 export async function runWhatsAppImageGeneration(
@@ -335,7 +349,9 @@ export async function runWhatsAppImageGeneration(
       input.senderId,
       input.lang === "en"
         ? "Hang tight, I am still working on your image."
-        : "Even geduld, ik ben nog bezig met je beeld."
+        : "Even geduld, ik ben nog bezig met je beeld.",
+      input.reqId,
+      "image-generation-busy"
     );
   }
 }
@@ -370,13 +386,13 @@ async function runWhatsAppImageGenerationOnce(
   } = input;
   const quotaInput = { channel: "whatsapp" as const, senderId };
   if (!(await canUseImageGeneration(quotaInput))) {
-    await sendQuotaExceededReply(senderId, lang);
+    await sendQuotaExceededReply(senderId, lang, reqId);
     return;
   }
 
   const quotaReservation = await reserveImageGenerationUsage(quotaInput);
   if (!quotaReservation) {
-    await sendQuotaExceededReply(senderId, lang);
+    await sendQuotaExceededReply(senderId, lang, reqId);
     return;
   }
 
@@ -514,6 +530,7 @@ async function runWhatsAppImageGenerationOnce(
       senderId,
       userId,
       lang,
+      reqId,
       sourceImageUrl,
       lastPhotoUrl: generationContext.lastPhotoUrl,
       result,

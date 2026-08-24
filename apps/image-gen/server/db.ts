@@ -41,6 +41,7 @@ import {
   workspacePrivacyRequests,
   workspaceUpgradeRequests,
   workspaceKnowledgeSources,
+  workspaceEntitlementUsageReservations,
   workspaces,
   workspaceUsageDaily,
   type PortalHandoffToken,
@@ -101,6 +102,17 @@ export async function getDatabaseOrThrow() {
     throw new Error("Database unavailable for billing operation");
   }
   return db;
+}
+
+/**
+ * Closes the lazily-created mysql2 pool used by bounded one-off processes.
+ * Long-running servers keep the pool for their full process lifetime.
+ */
+export async function closeDatabasePool(): Promise<void> {
+  const db = _db;
+  _db = null;
+  if (!db) return;
+  await db.$client.promise().end();
 }
 
 type ImageGenDatabase = NonNullable<Awaited<ReturnType<typeof getDb>>>;
@@ -2187,6 +2199,13 @@ export class ChannelConnectionAuthorizationError extends Error {
   }
 }
 
+export class WhatsAppChannelConnectionMigrationRequiredError extends Error {
+  constructor() {
+    super("WhatsApp binding change requires an explicit migration");
+    this.name = "WhatsAppChannelConnectionMigrationRequiredError";
+  }
+}
+
 function normalizeChannelConnectionEndpoint(
   values: InsertChannelConnection
 ): Readonly<{
@@ -2279,10 +2298,25 @@ export async function upsertChannelConnection(
       actorUserId: number;
       allowedRoles: readonly WorkspaceMember["role"][];
     }>;
+    updatePolicy?: "preserve_exact_whatsapp_binding";
   }> = {}
 ) {
   const { externalId, providerAccountExternalId } =
     normalizeChannelConnectionEndpoint(values);
+  const preservesExactWhatsAppBinding =
+    options.updatePolicy === "preserve_exact_whatsapp_binding";
+  const exactWhatsAppEndpoint =
+    preservesExactWhatsAppBinding && externalId && providerAccountExternalId
+      ? Object.freeze({ externalId, providerAccountExternalId })
+      : null;
+  if (
+    preservesExactWhatsAppBinding &&
+    (values.channel !== "whatsapp" ||
+      values.status !== "connected" ||
+      !exactWhatsAppEndpoint)
+  ) {
+    throw new WhatsAppChannelConnectionMigrationRequiredError();
+  }
   if (options.auditLog && options.auditLog.workspaceId !== values.workspaceId) {
     throw new Error("Channel connection audit workspace does not match");
   }
@@ -2382,7 +2416,13 @@ export async function upsertChannelConnection(
       }
 
       const existing = await tx
-        .select({ id: channelConnections.id })
+        .select({
+          id: channelConnections.id,
+          status: channelConnections.status,
+          externalId: channelConnections.externalId,
+          providerAccountExternalId:
+            channelConnections.providerAccountExternalId,
+        })
         .from(channelConnections)
         .where(
           and(
@@ -2394,71 +2434,143 @@ export async function upsertChannelConnection(
         .for("update");
 
       if (existing[0]) {
-        const providerFenceNow = new Date();
-        // Every external provider call is hard-bounded below the 15-minute
-        // fence lease. Reconcile expired reservations/attempts while the
-        // connection row is locked so a transient ambiguous upload cannot
-        // block this Page binding forever, and no new attempt can race the
-        // binding-epoch bump.
-        await tx
-          .update(messengerProviderAttemptFences)
-          .set({
-            status: "contained",
-            completedAt: providerFenceNow,
-            leaseUntil: providerFenceNow,
-          })
-          .where(
-            and(
-              eq(
-                messengerProviderAttemptFences.channelConnectionId,
-                existing[0].id
-              ),
-              inArray(messengerProviderAttemptFences.status, [
-                "reserved",
-                "started",
-                "ambiguous",
-              ]),
-              lte(messengerProviderAttemptFences.leaseUntil, providerFenceNow)
-            )
-          );
-        const activeAttempts = await tx
-          .select({ id: messengerProviderAttemptFences.id })
-          .from(messengerProviderAttemptFences)
-          .where(
-            and(
-              eq(
-                messengerProviderAttemptFences.channelConnectionId,
-                existing[0].id
-              ),
-              or(
+        if (preservesExactWhatsAppBinding) {
+          if (!exactWhatsAppEndpoint) {
+            throw new WhatsAppChannelConnectionMigrationRequiredError();
+          }
+          if (
+            existing[0].status !== "connected" ||
+            existing[0].externalId !== exactWhatsAppEndpoint.externalId ||
+            existing[0].providerAccountExternalId !==
+              exactWhatsAppEndpoint.providerAccountExternalId
+          ) {
+            throw new WhatsAppChannelConnectionMigrationRequiredError();
+          }
+          await tx
+            .update(channelConnections)
+            .set({
+              encryptedAccessToken: values.encryptedAccessToken ?? null,
+              grantedScopes: values.grantedScopes ?? null,
+              lastCheckedAt,
+            })
+            .where(
+              and(
+                eq(channelConnections.id, existing[0].id),
+                eq(channelConnections.workspaceId, values.workspaceId),
+                eq(channelConnections.channel, "whatsapp"),
+                eq(channelConnections.status, "connected"),
+                eq(
+                  channelConnections.externalId,
+                  exactWhatsAppEndpoint.externalId
+                ),
+                eq(
+                  channelConnections.providerAccountExternalId,
+                  exactWhatsAppEndpoint.providerAccountExternalId
+                )
+              )
+            );
+        } else {
+          const providerFenceNow = new Date();
+          // Every external provider call is hard-bounded below the 15-minute
+          // fence lease. Reconcile expired reservations/attempts while the
+          // connection row is locked so a transient ambiguous upload cannot
+          // block this Page binding forever, and no new attempt can race the
+          // binding-epoch bump.
+          await tx
+            .update(messengerProviderAttemptFences)
+            .set({
+              status: "contained",
+              completedAt: providerFenceNow,
+              leaseUntil: providerFenceNow,
+            })
+            .where(
+              and(
+                eq(
+                  messengerProviderAttemptFences.channelConnectionId,
+                  existing[0].id
+                ),
                 inArray(messengerProviderAttemptFences.status, [
+                  "reserved",
                   "started",
                   "ambiguous",
                 ]),
-                and(
-                  eq(messengerProviderAttemptFences.status, "reserved"),
-                  gt(messengerProviderAttemptFences.leaseUntil, new Date())
+                lte(messengerProviderAttemptFences.leaseUntil, providerFenceNow)
+              )
+            );
+          const activeAttempts = await tx
+            .select({ id: messengerProviderAttemptFences.id })
+            .from(messengerProviderAttemptFences)
+            .where(
+              and(
+                eq(
+                  messengerProviderAttemptFences.channelConnectionId,
+                  existing[0].id
+                ),
+                or(
+                  inArray(messengerProviderAttemptFences.status, [
+                    "started",
+                    "ambiguous",
+                  ]),
+                  and(
+                    eq(messengerProviderAttemptFences.status, "reserved"),
+                    gt(messengerProviderAttemptFences.leaseUntil, new Date())
+                  )
                 )
               )
             )
-          )
-          .limit(1)
-          .for("update");
-        if (activeAttempts[0]) {
-          throw new Error(
-            "Channel connection has an active provider attempt; retry later"
-          );
+            .limit(1)
+            .for("update");
+          if (activeAttempts[0]) {
+            throw new Error(
+              "Channel connection has an active provider attempt; retry later"
+            );
+          }
+          if (values.channel === "facebook_messenger") {
+            const activeAiDeliveries = await tx
+              .select({
+                reservationId:
+                  workspaceEntitlementUsageReservations.reservationId,
+              })
+              .from(workspaceEntitlementUsageReservations)
+              .where(
+                and(
+                  eq(
+                    workspaceEntitlementUsageReservations.channelConnectionId,
+                    existing[0].id
+                  ),
+                  eq(
+                    workspaceEntitlementUsageReservations.workspaceId,
+                    values.workspaceId
+                  ),
+                  eq(workspaceEntitlementUsageReservations.kind, "ai_answer"),
+                  eq(workspaceEntitlementUsageReservations.status, "reserved"),
+                  isNotNull(
+                    workspaceEntitlementUsageReservations.deliveryStartedAt
+                  ),
+                  isNull(
+                    workspaceEntitlementUsageReservations.deliveryKnownRejectedAt
+                  )
+                )
+              )
+              .limit(1)
+              .for("update");
+            if (activeAiDeliveries[0]) {
+              throw new Error(
+                "Channel connection has an active AI delivery; retry later"
+              );
+            }
+          }
+          await tx
+            .update(channelConnections)
+            .set(updateSet)
+            .where(
+              and(
+                eq(channelConnections.id, existing[0].id),
+                eq(channelConnections.workspaceId, values.workspaceId),
+                eq(channelConnections.channel, values.channel)
+              )
+            );
         }
-        await tx
-          .update(channelConnections)
-          .set(updateSet)
-          .where(
-            and(
-              eq(channelConnections.id, existing[0].id),
-              eq(channelConnections.workspaceId, values.workspaceId),
-              eq(channelConnections.channel, values.channel)
-            )
-          );
       } else {
         await tx.insert(channelConnections).values({
           ...values,
@@ -2480,7 +2592,12 @@ export async function upsertChannelConnection(
       await writeConnection();
       break;
     } catch (error) {
-      if (error instanceof ChannelConnectionClaimConflictError) throw error;
+      if (
+        error instanceof ChannelConnectionClaimConflictError ||
+        error instanceof WhatsAppChannelConnectionMigrationRequiredError
+      ) {
+        throw error;
+      }
       const canRetry = attempt < maxWriteAttempts;
       if (
         canRetry &&
@@ -2592,6 +2709,35 @@ export async function disconnectChannelConnection(
       throw new Error(
         "Channel connection has an active provider attempt; retry later"
       );
+    }
+    if (channel === "facebook_messenger") {
+      const activeAiDeliveries = await tx
+        .select({
+          reservationId: workspaceEntitlementUsageReservations.reservationId,
+        })
+        .from(workspaceEntitlementUsageReservations)
+        .where(
+          and(
+            eq(
+              workspaceEntitlementUsageReservations.channelConnectionId,
+              existing[0].id
+            ),
+            eq(workspaceEntitlementUsageReservations.workspaceId, workspaceId),
+            eq(workspaceEntitlementUsageReservations.kind, "ai_answer"),
+            eq(workspaceEntitlementUsageReservations.status, "reserved"),
+            isNotNull(workspaceEntitlementUsageReservations.deliveryStartedAt),
+            isNull(
+              workspaceEntitlementUsageReservations.deliveryKnownRejectedAt
+            )
+          )
+        )
+        .limit(1)
+        .for("update");
+      if (activeAiDeliveries[0]) {
+        throw new Error(
+          "Channel connection has an active AI delivery; retry later"
+        );
+      }
     }
 
     await tx

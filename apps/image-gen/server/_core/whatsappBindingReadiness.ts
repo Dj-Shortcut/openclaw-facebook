@@ -6,10 +6,23 @@ import { resolveWhatsAppEndpoint } from "./conversationEndpoint";
 import { getEnv } from "./env";
 import { unsealFacebookPageToken } from "./facebookConnectStore";
 
+export type WhatsAppBindingReadinessReason =
+  | "configuration_invalid"
+  | "database_unavailable"
+  | "binding_invalid"
+  | "credential_unseal_failed"
+  | "credential_mismatch";
+
 export class WhatsAppBindingReadinessError extends Error {
-  constructor() {
-    super("WhatsApp tenant binding is not ready");
+  readonly reason: WhatsAppBindingReadinessReason;
+
+  constructor(reason: WhatsAppBindingReadinessReason, cause?: unknown) {
+    super(
+      "WhatsApp tenant binding is not ready",
+      cause === undefined ? undefined : { cause }
+    );
     this.name = "WhatsAppBindingReadinessError";
+    this.reason = reason;
   }
 }
 
@@ -26,12 +39,29 @@ export async function assertWhatsAppTenantBindingReadiness(): Promise<void> {
     return;
   }
 
+  let phoneNumberId: string;
+  let expectedAccessToken: string;
+  let expectedEndpoint: ReturnType<typeof resolveWhatsAppEndpoint>;
   try {
-    const phoneNumberId = getEnv("WHATSAPP_PHONE_NUMBER_ID");
+    phoneNumberId = getEnv("WHATSAPP_PHONE_NUMBER_ID");
     const expectedWabaId = getEnv("WHATSAPP_BUSINESS_ACCOUNT_ID");
-    const expectedAccessToken = getEnv("WHATSAPP_ACCESS_TOKEN");
+    expectedAccessToken = getEnv("WHATSAPP_ACCESS_TOKEN");
+    expectedEndpoint = resolveWhatsAppEndpoint({
+      wabaId: expectedWabaId,
+      phoneNumberId,
+    });
+  } catch (error) {
+    throw new WhatsAppBindingReadinessError("configuration_invalid", error);
+  }
+
+  let rows: Array<{
+    encryptedAccessToken: string | null;
+    phoneNumberId: string | null;
+    wabaId: string | null;
+  }>;
+  try {
     const database = await getDatabaseOrThrow();
-    const rows = await database
+    rows = await database
       .select({
         encryptedAccessToken: channelConnections.encryptedAccessToken,
         phoneNumberId: channelConnections.externalId,
@@ -46,38 +76,45 @@ export async function assertWhatsAppTenantBindingReadiness(): Promise<void> {
         )
       )
       .limit(2);
+  } catch (error) {
+    throw new WhatsAppBindingReadinessError("database_unavailable", error);
+  }
 
-    const row = rows[0];
-    if (
-      rows.length !== 1 ||
-      !row?.encryptedAccessToken ||
-      !row.phoneNumberId ||
-      !row.wabaId ||
-      row.wabaId !== expectedWabaId
-    ) {
-      throw new WhatsAppBindingReadinessError();
-    }
+  const row = rows[0];
+  if (
+    rows.length !== 1 ||
+    !row?.encryptedAccessToken ||
+    !row.phoneNumberId ||
+    !row.wabaId ||
+    row.wabaId !== expectedEndpoint.wabaId
+  ) {
+    throw new WhatsAppBindingReadinessError("binding_invalid");
+  }
 
+  try {
     resolveWhatsAppEndpoint({
       wabaId: row.wabaId,
       phoneNumberId: row.phoneNumberId,
     });
-    const storedAccessToken = unsealFacebookPageToken(
+  } catch (error) {
+    throw new WhatsAppBindingReadinessError("binding_invalid", error);
+  }
+
+  let storedAccessToken: string;
+  try {
+    storedAccessToken = unsealFacebookPageToken(
       row.encryptedAccessToken
     ).trim();
-    if (
-      !storedAccessToken ||
-      !timingSafeEqual(
-        credentialDigest(storedAccessToken),
-        credentialDigest(expectedAccessToken)
-      )
-    ) {
-      throw new WhatsAppBindingReadinessError();
-    }
   } catch (error) {
-    if (error instanceof WhatsAppBindingReadinessError) {
-      throw error;
-    }
-    throw new WhatsAppBindingReadinessError();
+    throw new WhatsAppBindingReadinessError("credential_unseal_failed", error);
+  }
+  if (
+    !storedAccessToken ||
+    !timingSafeEqual(
+      credentialDigest(storedAccessToken),
+      credentialDigest(expectedAccessToken)
+    )
+  ) {
+    throw new WhatsAppBindingReadinessError("credential_mismatch");
   }
 }

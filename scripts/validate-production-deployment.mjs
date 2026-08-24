@@ -4020,11 +4020,13 @@ function validateProductionReconciliationWorkflow(rootDir) {
       !step.includes('--root-dir "$successor_root"') ||
       !step.includes('--expected-source-sha "$successor_sha"') ||
       !step.includes("--require-current-reviewed-image") ||
-      !step.includes(
+      !referencesExactHttpUrl(
+        step,
         `https://${CANONICAL_TARGETS[target].app}.fly.dev/healthz`,
       ) ||
       (ready &&
-        !step.includes(
+        !referencesExactHttpUrl(
+          step,
           `https://${CANONICAL_TARGETS[target].app}.fly.dev/readyz`,
         )) ||
       (target === "storage-proxy" &&
@@ -5233,7 +5235,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       const monitorPath = path.join(rootDir, app.readinessMonitor);
       const monitor = fs.readFileSync(monitorPath, "utf8");
       const readinessUrl = `https://${app.app}.fly.dev${app.readinessCheckPath}`;
-      if (!monitor.includes(readinessUrl)) {
+      if (!referencesExactHttpUrl(monitor, readinessUrl)) {
         fail(`${app.readinessMonitor} must monitor ${app.readinessCheckPath}`);
       }
       if (target === "storage-proxy") {
@@ -5243,7 +5245,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         );
         if (
           readinessSteps.length !== 1 ||
-          !readinessSteps[0].includes(readinessUrl) ||
+          !referencesExactHttpUrl(readinessSteps[0], readinessUrl) ||
           !readinessSteps[0].includes(
             "jq -e '.ok == true and .rateLimiter == \"shared_redis\"'",
           )

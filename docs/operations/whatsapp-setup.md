@@ -117,6 +117,14 @@ contains only the event name, workspace id, and connection status. Never pass
 the access token as a command-line argument and never paste it into chat or
 logs.
 
+Before a rolling upgrade from a runtime that still uses the legacy 300-second
+WhatsApp replay marker, first set `WEBHOOK_REPLAY_TTL_SECONDS=86400` on that old
+runtime and drain or pause active WhatsApp ingress for at least the former
+300-second window. Then verify no old delivery remains in flight before starting
+the rolling replacement. This preserves the one-key old/new exclusion contract;
+an already expired legacy marker cannot be reconstructed after deployment. This
+step is unnecessary when no legacy WhatsApp runtime has processed traffic.
+
 After provisioning, `GET /readyz` must report
 `whatsapp_tenant_binding: ok`. In production, env-only credentials with no
 unique connected and decryptable tenant binding deliberately keep readiness
@@ -124,9 +132,15 @@ red. Readiness also requires the stored provider-account id to match
 `WHATSAPP_BUSINESS_ACCOUNT_ID` and the sealed credential to match the current
 `WHATSAPP_ACCESS_TOKEN` exactly. A token rotation therefore remains fail closed
 until the same protected provisioning action has atomically sealed and audited
-the new credential. The boot preflight runs this check before webhook drains or
-generation workers start; `/healthz` remains a liveness endpoint after a
-successful boot and is not a substitute for this rollout gate.
+the new credential. Re-running provisioning for the exact same workspace, WABA
+and phone-number tuple preserves the existing binding epoch and updates only
+the sealed credential, granted scopes and check timestamp. Changing either
+provider identifier or reprovisioning a disconnected binding is refused: that
+requires a separately reviewed data-migration/erasure plan so state from the
+old privacy epoch cannot become unreachable. The boot preflight runs this check
+before webhook drains or generation workers start; `/healthz` remains a
+liveness endpoint after a successful boot and is not a substitute for this
+rollout gate.
 
 ## Inbound Flow
 

@@ -17,8 +17,11 @@ import {
 } from "./messengerPrivacySubject";
 
 export class WhatsAppTransportBindingError extends Error {
-  constructor() {
-    super("WhatsApp transport binding is unavailable");
+  constructor(cause?: unknown) {
+    super(
+      "WhatsApp transport binding is unavailable",
+      cause === undefined ? undefined : { cause }
+    );
     this.name = "WhatsAppTransportBindingError";
   }
 }
@@ -42,7 +45,7 @@ export async function resolveWhatsAppTransportCredential(): Promise<WhatsAppTran
     if (error instanceof WhatsAppTransportBindingError) {
       throw error;
     }
-    throw new WhatsAppTransportBindingError();
+    throw new WhatsAppTransportBindingError(error);
   }
 }
 

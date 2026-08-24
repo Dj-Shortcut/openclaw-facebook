@@ -98,6 +98,7 @@ jobs:
           pnpm exec vitest run server/messengerGenerationCompletion.redis.test.ts
           pnpm exec vitest run server/messengerGenerationQueue.redis.test.ts
           pnpm exec vitest run server/webhookIngressPrivacy.redis.test.ts
+          pnpm exec vitest run server/webhookReplayProtection.redis.test.ts
         env:
           RUN_REDIS_INTEGRATION: "1"
           REDIS_URL: redis://127.0.0.1:6379/14
@@ -105,9 +106,10 @@ jobs:
       - name: Test billing privacy serialization with MySQL
         run: |
           pnpm run db:migrate:test-bootstrap
-          pnpm exec vitest run \
+          pnpm exec vitest run --no-file-parallelism \
             server/billingHandoffErasure.mysql.test.ts \
             server/billingPrivacySerialization.mysql.test.ts \
+            server/internalAiAnswerQuota.mysql.test.ts \
             server/messengerErasureRetry.mysql.test.ts \
             server/messengerProviderAttemptFence.mysql.test.ts \
             server/portalHandoff.mysql.test.ts \

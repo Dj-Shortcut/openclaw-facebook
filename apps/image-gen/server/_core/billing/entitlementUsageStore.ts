@@ -168,6 +168,29 @@ export async function reserveStartpilotAiAnswerUsage(input: {
   return database.transaction(async tx => {
     const { usage, quota } = await lockStartpilotUsage(tx, input, now);
     const nextResolutionDue = new Date(now.getTime() + AI_RESERVATION_TTL_MS);
+    // Page delivery start and disconnect/rebind take this same Page lock before
+    // the scheduler and reservation rows. Keep this order global so a quota
+    // reserve cannot hold the scheduler while waiting for a Page lock owned by
+    // a delivery-start transaction.
+    if (channelConnectionId !== null && bindingEpoch !== null) {
+      const bindings = await tx
+        .select({ id: channelConnections.id })
+        .from(channelConnections)
+        .where(
+          and(
+            eq(channelConnections.id, channelConnectionId),
+            eq(channelConnections.workspaceId, input.workspaceId),
+            eq(channelConnections.bindingEpoch, bindingEpoch),
+            eq(channelConnections.channel, "facebook_messenger"),
+            eq(channelConnections.status, "connected")
+          )
+        )
+        .limit(1)
+        .for("update");
+      if (!bindings[0]) {
+        throw new Error("AI answer reservation binding changed");
+      }
+    }
     const scheduler = await tx
       .select({ enabled: billingSchedulerTenants.enabled })
       .from(billingSchedulerTenants)
@@ -227,23 +250,6 @@ export async function reserveStartpilotAiAnswerUsage(input: {
         (existing[0].bindingEpoch ?? null) !== (input.bindingEpoch ?? null))
     ) {
       return { allowed: false as const, reason: "idempotency_reused" as const };
-    }
-    if (channelConnectionId !== null && bindingEpoch !== null) {
-      const bindings = await tx
-        .select({ id: channelConnections.id })
-        .from(channelConnections)
-        .where(
-          and(
-            eq(channelConnections.id, channelConnectionId),
-            eq(channelConnections.workspaceId, input.workspaceId),
-            eq(channelConnections.bindingEpoch, bindingEpoch)
-          )
-        )
-        .limit(1)
-        .for("update");
-      if (!bindings[0]) {
-        throw new Error("AI answer reservation binding changed");
-      }
     }
     if (existing[0]?.status === "reserved") {
       if (

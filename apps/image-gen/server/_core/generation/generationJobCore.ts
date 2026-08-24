@@ -13,7 +13,7 @@ import {
   type MessengerImageQuotaReservationDecision,
 } from "../messengerImageQuotaStore";
 import { anonymizePsid } from "../messengerState";
-import { safeLog } from "../messengerApi";
+import { safeLog } from "../logger";
 import type { MessengerGenerationJob } from "../messengerGenerationJob";
 import type { GenerationKind } from "../image-generation/generationTypes";
 

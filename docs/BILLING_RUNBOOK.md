@@ -209,12 +209,14 @@ the net Mollie payout as revenue and do not deduct input VAT under the stated
 small-enterprise exemption without accounting advice.
 
 The GET-only account-level importer is provider-account/mode scoped, bounded,
-crash-resumable and quarantines unknown or ambiguous events. It uses a dedicated
-read-only accounting credential, never the payment API key. The portal CSV still
-does not provide an authoritative operator report for imported fees,
-settlements and quarantine resolution. Keep those fields out of live books
-until an authenticated operator report or an approved external bookkeeping
-workflow is designated and reconciled.
+crash-resumable and quarantines unknown or ambiguous events, but its durable
+cursor is not yet bound to one exact Mollie Balance. Keep
+`MOLLIE_ACCOUNTING_IMPORT_ENABLED=false` for the pilot. Accountable is the
+intended external bookkeeping workflow; reconcile gross revenue, Mollie fees,
+refunds, chargebacks, Balances and Settlements there and obtain human sign-off
+before live. If the built-in importer is selected later, first add durable
+Balance-ID scope to runs, cursors, events and readiness, then use a dedicated
+read-only accounting credential rather than the payment API key.
 
 B2B checkout remains disabled until a real Peppol invoicing provider and
 approved invoice flow exist. A Mollie payment proof is not a Peppol invoice.

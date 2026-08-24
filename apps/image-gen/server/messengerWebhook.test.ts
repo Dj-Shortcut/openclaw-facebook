@@ -35,6 +35,11 @@ vi.mock("./_core/messengerApi", () => ({
   safeLog: safeLogMock,
 }));
 
+vi.mock("./_core/logger", async importOriginal => {
+  const actual = await importOriginal<typeof import("./_core/logger")>();
+  return { ...actual, safeLog: safeLogMock };
+});
+
 vi.mock("./_core/redis", () => ({
   getRedisClient: getRedisClientMock,
   isRedisEnabled: isRedisEnabledMock,

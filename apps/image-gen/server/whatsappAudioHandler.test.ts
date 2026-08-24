@@ -160,7 +160,9 @@ describe("WhatsApp audio handler", () => {
 
     expect(sendWhatsAppTextReplyMock).toHaveBeenCalledWith(
       "whatsapp-sender",
-      t("en", "outOfFreeCredits")
+      t("en", "outOfFreeCredits"),
+      "req-wa-audio-over-cap",
+      "audio-daily-budget-exhausted"
     );
     expect(releaseAudioBudgetReservationMock).not.toHaveBeenCalled();
     expect(reserveTranscriptionForAttemptMock).not.toHaveBeenCalled();
@@ -312,7 +314,9 @@ describe("WhatsApp audio handler", () => {
     expect(transcribePreparedAudioMessageMock).not.toHaveBeenCalled();
     expect(sendWhatsAppTextReplyMock).toHaveBeenCalledWith(
       "32470000001",
-      t("en", "unsupportedAudio")
+      t("en", "unsupportedAudio"),
+      "req-wa-audio-delete-race",
+      "audio-download-failed"
     );
   });
 });

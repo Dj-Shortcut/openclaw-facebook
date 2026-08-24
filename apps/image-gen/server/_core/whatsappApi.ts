@@ -1,4 +1,4 @@
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { createLogger } from "./logger";
 import { toUserKey } from "./privacy";
 import {
@@ -8,9 +8,9 @@ import {
 } from "./whatsappTransportCredential";
 import {
   claimWhatsAppErasureControlProviderAttempt,
+  claimWhatsAppDeliveryProviderAttemptFence,
   finalizeWhatsAppProviderAttemptFence,
   markWhatsAppProviderAttemptStarted,
-  reserveWhatsAppProviderAttemptFence,
   type WhatsAppProviderAttemptFence,
 } from "./whatsappProviderAttemptFence";
 
@@ -70,6 +70,22 @@ export function hasAmbiguousWhatsAppDeliveryOutcome(error: unknown): boolean {
   );
 }
 
+export function hasPreTransportWhatsAppDeliveryOutcome(
+  error: unknown
+): boolean {
+  if (error instanceof WhatsAppDeliveryError) {
+    return error.outcome === "pre_transport";
+  }
+  if (error instanceof AggregateError) {
+    return error.errors.some(hasPreTransportWhatsAppDeliveryOutcome);
+  }
+  return (
+    error instanceof Error &&
+    error.cause !== undefined &&
+    hasPreTransportWhatsAppDeliveryOutcome(error.cause)
+  );
+}
+
 function getWhatsAppSendUrl(phoneNumberId: string): string {
   return `https://graph.facebook.com/${GRAPH_API_VERSION}/${encodeURIComponent(phoneNumberId)}/messages`;
 }
@@ -126,34 +142,65 @@ async function throwWithFenceFailure(
   throw deliveryError;
 }
 
-async function sendWhatsAppGraph(input: {
+type WhatsAppGraphDeliveryOperation =
+  "whatsapp_graph_text" | "whatsapp_graph_image" | "whatsapp_graph_buttons";
+
+async function claimWhatsAppGraphDelivery(input: {
   recipient: string;
-  credential: WhatsAppTransportCredential & { phoneNumberId: string };
-  reqId?: string;
-  operation:
-    "whatsapp_graph_text" | "whatsapp_graph_image" | "whatsapp_graph_buttons";
-  init: RequestInit;
-  fence?: WhatsAppProviderAttemptFence;
-}): Promise<{
-  response: Response;
-  attemptKeyHash: string | null;
-  failureOutcome: Exclude<
-    WhatsAppDeliveryFailureOutcome,
-    "pre_transport"
-  > | null;
-}> {
-  let fence: WhatsAppProviderAttemptFence;
+  reqId: string;
+  operation: WhatsAppGraphDeliveryOperation;
+}): Promise<
+  | Readonly<{
+      kind: "already_succeeded";
+      attemptKeyHash: string | null;
+    }>
+  | Readonly<{
+      kind: "owned";
+      fence: WhatsAppProviderAttemptFence;
+    }>
+> {
+  const reqId = input.reqId.trim();
+  if (!reqId) {
+    throw new WhatsAppDeliveryError("pre_transport", null);
+  }
   try {
-    fence =
-      input.fence ??
-      (await reserveWhatsAppProviderAttemptFence({
-        reqId: input.reqId ?? randomUUID(),
-        userKey: input.credential.userKey ?? toUserKey(input.recipient),
-        providerOperation: input.operation,
-      }));
+    const claim = await claimWhatsAppDeliveryProviderAttemptFence({
+      reqId,
+      userKey: toUserKey(input.recipient),
+      providerOperation: input.operation,
+    });
+    if (claim.kind === "succeeded") {
+      return {
+        kind: "already_succeeded",
+        attemptKeyHash: claim.attemptKeyHash,
+      };
+    }
+    if (claim.kind === "ambiguous") {
+      throw new WhatsAppDeliveryError("ambiguous", claim.attemptKeyHash);
+    }
+    return { kind: "owned", fence: claim.fence };
   } catch (error) {
+    if (error instanceof WhatsAppDeliveryError) throw error;
     throw new WhatsAppDeliveryError("pre_transport", null, error);
   }
+}
+
+async function sendWhatsAppGraph(input: {
+  credential: WhatsAppTransportCredential & { phoneNumberId: string };
+  init: RequestInit;
+  fence: WhatsAppProviderAttemptFence;
+}): Promise<
+  Readonly<{
+    kind: "response";
+    response: Response;
+    attemptKeyHash: string | null;
+    failureOutcome: Exclude<
+      WhatsAppDeliveryFailureOutcome,
+      "pre_transport"
+    > | null;
+  }>
+> {
+  const fence = input.fence;
   try {
     await markWhatsAppProviderAttemptStarted(fence);
   } catch (error) {
@@ -200,10 +247,28 @@ async function sendWhatsAppGraph(input: {
     );
   }
   return {
+    kind: "response",
     response,
     attemptKeyHash: fence.attemptKeyHash,
     failureOutcome,
   };
+}
+
+function createWhatsAppGraphAttemptId(input: {
+  operationId: string;
+  operation: "whatsapp_graph_text" | "whatsapp_graph_buttons";
+}): string {
+  const operationId = input.operationId.trim();
+  if (!operationId) {
+    throw new WhatsAppDeliveryError("pre_transport", null);
+  }
+  return createHash("sha256")
+    .update("whatsapp:graph-delivery:v1", "utf8")
+    .update("\0")
+    .update(operationId)
+    .update("\0")
+    .update(input.operation)
+    .digest("hex");
 }
 
 function validateWhatsAppMediaUrl(rawUrl: string): string {
@@ -341,13 +406,11 @@ async function resolveWhatsAppSendCredential(
   return { ...credential, phoneNumberId: credential.phoneNumberId };
 }
 
-function createErasureOutcomeAttemptId(reqId: string, message: string): string {
+function createErasureOutcomeAttemptId(reqId: string): string {
   return createHash("sha256")
     .update("whatsapp:erasure-outcome:v1", "utf8")
     .update("\0")
     .update(reqId)
-    .update("\0")
-    .update(message)
     .digest("hex");
 }
 
@@ -364,7 +427,7 @@ export async function sendWhatsAppErasureControlText(
   let claim;
   try {
     claim = await claimWhatsAppErasureControlProviderAttempt({
-      reqId: createErasureOutcomeAttemptId(normalizedReqId, message),
+      reqId: createErasureOutcomeAttemptId(normalizedReqId),
       userKey: toUserKey(to),
     });
   } catch (error) {
@@ -383,9 +446,7 @@ export async function sendWhatsAppErasureControlText(
     return throwWithFenceFailure(error, fence, "known_failed", "pre_transport");
   }
   const result = await sendWhatsAppGraph({
-    recipient: to,
     credential,
-    operation: "whatsapp_graph_text",
     fence,
     init: {
       method: "POST",
@@ -398,7 +459,7 @@ export async function sendWhatsAppErasureControlText(
       }),
     },
   });
-  if (!result.response.ok) {
+  if (result.kind === "response" && !result.response.ok) {
     logger.error({
       event: "whatsapp_send_failed",
       status: result.response.status,
@@ -412,32 +473,43 @@ export async function sendWhatsAppErasureControlText(
 
 export async function sendWhatsAppText(
   to: string,
-  message: string
+  message: string,
+  operationId: string
 ): Promise<void> {
+  const claim = await claimWhatsAppGraphDelivery({
+    recipient: to,
+    reqId: createWhatsAppGraphAttemptId({
+      operationId,
+      operation: "whatsapp_graph_text",
+    }),
+    operation: "whatsapp_graph_text",
+  });
+  if (claim.kind === "already_succeeded") return;
+  const fence = claim.fence;
   let credential: WhatsAppTransportCredential & { phoneNumberId: string };
   try {
     credential = await resolveWhatsAppSendCredential(to);
   } catch (error) {
-    throw new WhatsAppDeliveryError("pre_transport", null, error);
+    return throwWithFenceFailure(error, fence, "known_failed", "pre_transport");
   }
+  const body = JSON.stringify({
+    messaging_product: "whatsapp",
+    to,
+    type: "text",
+    text: { body: message },
+  });
   const result = await sendWhatsAppGraph({
-    recipient: to,
     credential,
-    operation: "whatsapp_graph_text",
+    fence,
     init: {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        to,
-        type: "text",
-        text: { body: message },
-      }),
+      body,
     },
   });
-  if (!result.response.ok) {
+  if (result.kind === "response" && !result.response.ok) {
     logger.error({
       event: "whatsapp_send_failed",
       status: result.response.status,
@@ -454,17 +526,27 @@ export async function sendWhatsAppImageWithReceipt(
   imageUrl: string,
   reqId: string
 ): Promise<WhatsAppDeliveryReceipt> {
+  const claim = await claimWhatsAppGraphDelivery({
+    recipient: to,
+    reqId,
+    operation: "whatsapp_graph_image",
+  });
+  if (claim.kind === "already_succeeded") {
+    return Object.freeze({
+      outcome: "accepted" as const,
+      attemptKeyHash: claim.attemptKeyHash,
+    });
+  }
+  const fence = claim.fence;
   let credential: WhatsAppTransportCredential & { phoneNumberId: string };
   try {
     credential = await resolveWhatsAppSendCredential(to);
   } catch (error) {
-    throw new WhatsAppDeliveryError("pre_transport", null, error);
+    return throwWithFenceFailure(error, fence, "known_failed", "pre_transport");
   }
   const result = await sendWhatsAppGraph({
-    recipient: to,
     credential,
-    reqId,
-    operation: "whatsapp_graph_image",
+    fence,
     init: {
       method: "POST",
       headers: {
@@ -478,7 +560,7 @@ export async function sendWhatsAppImageWithReceipt(
       }),
     },
   });
-  if (!result.response.ok) {
+  if (result.kind === "response" && !result.response.ok) {
     throw new WhatsAppDeliveryError(
       result.failureOutcome ?? "ambiguous",
       result.attemptKeyHash
@@ -501,44 +583,55 @@ export async function sendWhatsAppImage(
 export async function sendWhatsAppButtons(
   to: string,
   bodyText: string,
-  buttons: WhatsAppReplyButton[]
+  buttons: WhatsAppReplyButton[],
+  operationId: string
 ): Promise<void> {
+  const claim = await claimWhatsAppGraphDelivery({
+    recipient: to,
+    reqId: createWhatsAppGraphAttemptId({
+      operationId,
+      operation: "whatsapp_graph_buttons",
+    }),
+    operation: "whatsapp_graph_buttons",
+  });
+  if (claim.kind === "already_succeeded") return;
+  const fence = claim.fence;
   let credential: WhatsAppTransportCredential & { phoneNumberId: string };
   try {
     credential = await resolveWhatsAppSendCredential(to);
   } catch (error) {
-    throw new WhatsAppDeliveryError("pre_transport", null, error);
+    return throwWithFenceFailure(error, fence, "known_failed", "pre_transport");
   }
+  const body = JSON.stringify({
+    messaging_product: "whatsapp",
+    to,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: bodyText },
+      action: {
+        buttons: buttons.slice(0, 3).map(button => ({
+          type: "reply",
+          reply: {
+            id: button.id,
+            title: button.title.slice(0, 20),
+          },
+        })),
+      },
+    },
+  });
   const result = await sendWhatsAppGraph({
-    recipient: to,
     credential,
-    operation: "whatsapp_graph_buttons",
+    fence,
     init: {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        to,
-        type: "interactive",
-        interactive: {
-          type: "button",
-          body: { text: bodyText },
-          action: {
-            buttons: buttons.slice(0, 3).map(button => ({
-              type: "reply",
-              reply: {
-                id: button.id,
-                title: button.title.slice(0, 20),
-              },
-            })),
-          },
-        },
-      }),
+      body,
     },
   });
-  if (!result.response.ok) {
+  if (result.kind === "response" && !result.response.ok) {
     logger.error({
       event: "whatsapp_buttons_send_failed",
       status: result.response.status,

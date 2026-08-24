@@ -23,6 +23,7 @@ vi.mock("drizzle-orm/mysql2", () => ({
 import {
   ChannelConnectionAuthorizationError,
   ChannelConnectionClaimConflictError,
+  WhatsAppChannelConnectionMigrationRequiredError,
   disconnectChannelConnection,
   getConnectedMetaChannelConnection,
   upsertChannelConnection,
@@ -205,12 +206,14 @@ describe("channel connection database claims", () => {
     const pageClaim = lockedSelect([{ id: 7, workspaceId: 42 }]);
     const workspaceConnection = lockedSelect([{ id: 7 }]);
     const activeAttempts = lockedSelect([]);
+    const activeAiDeliveries = lockedSelect([]);
     const listed = [{ id: 7, ...connection }];
     const list = listSelect(listed);
     dbMock.select
       .mockReturnValueOnce({ from: pageClaim.from })
       .mockReturnValueOnce({ from: workspaceConnection.from })
       .mockReturnValueOnce({ from: activeAttempts.from })
+      .mockReturnValueOnce({ from: activeAiDeliveries.from })
       .mockReturnValueOnce({ from: list.from });
     const updateWhere = vi.fn(async () => undefined);
     const set = vi.fn(() => ({ where: updateWhere }));
@@ -239,12 +242,14 @@ describe("channel connection database claims", () => {
     const pageClaim = lockedSelect([{ id: 7, workspaceId: 42 }]);
     const workspaceConnection = lockedSelect([{ id: 7 }]);
     const activeAttempts = lockedSelect([]);
+    const activeAiDeliveries = lockedSelect([]);
     const listed = [{ id: 7, ...connection }];
     const list = listSelect(listed);
     dbMock.select
       .mockReturnValueOnce({ from: pageClaim.from })
       .mockReturnValueOnce({ from: workspaceConnection.from })
       .mockReturnValueOnce({ from: activeAttempts.from })
+      .mockReturnValueOnce({ from: activeAiDeliveries.from })
       .mockReturnValueOnce({ from: list.from });
     const updateWhere = vi.fn(async () => undefined);
     const set = vi.fn(() => ({ where: updateWhere }));
@@ -287,6 +292,51 @@ describe("channel connection database claims", () => {
       expect.objectContaining({ status: "contained" })
     );
     expect(dbMock.insert).not.toHaveBeenCalled();
+  });
+
+  it("blocks a Page rebind while an AI answer delivery is in flight", async () => {
+    const pageClaim = lockedSelect([{ id: 7, workspaceId: 42 }]);
+    const workspaceConnection = lockedSelect([{ id: 7 }]);
+    const activeAttempts = lockedSelect([]);
+    const activeAiDeliveries = lockedSelect([{ reservationId: "ai-live" }]);
+    dbMock.select
+      .mockReturnValueOnce({ from: pageClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from })
+      .mockReturnValueOnce({ from: activeAttempts.from })
+      .mockReturnValueOnce({ from: activeAiDeliveries.from });
+    const updateWhere = vi.fn(async () => undefined);
+    const set = vi.fn(() => ({ where: updateWhere }));
+    dbMock.update.mockReturnValue({ set });
+
+    await expect(upsertChannelConnection(connection)).rejects.toThrow(
+      "Channel connection has an active AI delivery; retry later"
+    );
+
+    expect(workspaceConnection.lock).toHaveBeenCalledWith("update");
+    expect(activeAiDeliveries.lock).toHaveBeenCalledWith("update");
+    expect(dbMock.insert).not.toHaveBeenCalled();
+  });
+
+  it("blocks Page disconnect while an AI answer delivery is in flight", async () => {
+    const workspaceConnection = lockedSelect([{ id: 7 }]);
+    const activeAttempts = lockedSelect([]);
+    const activeAiDeliveries = lockedSelect([{ reservationId: "ai-live" }]);
+    dbMock.select
+      .mockReturnValueOnce({ from: workspaceConnection.from })
+      .mockReturnValueOnce({ from: activeAttempts.from })
+      .mockReturnValueOnce({ from: activeAiDeliveries.from });
+    const updateWhere = vi.fn(async () => undefined);
+    const set = vi.fn(() => ({ where: updateWhere }));
+    dbMock.update.mockReturnValue({ set });
+
+    await expect(
+      disconnectChannelConnection(42, "facebook_messenger")
+    ).rejects.toThrow(
+      "Channel connection has an active AI delivery; retry later"
+    );
+
+    expect(workspaceConnection.lock).toHaveBeenCalledWith("update");
+    expect(activeAiDeliveries.lock).toHaveBeenCalledWith("update");
   });
 
   it.each(["whatsapp_openai_image", "whatsapp_graph_erasure_control_text"])(
@@ -489,6 +539,137 @@ describe("channel connection database claims", () => {
     expect(providerAccountClaim.lock).toHaveBeenCalledWith("update");
   });
 
+  it("rotates an exact WhatsApp credential without advancing its binding epoch", async () => {
+    const membership = lockedSelect([{ role: "owner" }]);
+    const providerAccountClaim = lockedSelect([{ id: 8, workspaceId: 42 }]);
+    const endpointClaim = lockedSelect([{ id: 8, workspaceId: 42 }]);
+    const workspaceConnection = lockedSelect([
+      {
+        id: 8,
+        status: "connected",
+        externalId: whatsAppConnection.externalId,
+        providerAccountExternalId: whatsAppConnection.providerAccountExternalId,
+      },
+    ]);
+    const rotatedConnection = {
+      ...whatsAppConnection,
+      encryptedAccessToken: "sealed-rotated-whatsapp-token",
+    };
+    const listed = [{ id: 8, bindingEpoch: 7, ...rotatedConnection }];
+    const list = listSelect(listed);
+    dbMock.select
+      .mockReturnValueOnce({ from: membership.from })
+      .mockReturnValueOnce({ from: providerAccountClaim.from })
+      .mockReturnValueOnce({ from: endpointClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from })
+      .mockReturnValueOnce({ from: list.from });
+    const updateWhere = vi.fn(async () => [{ affectedRows: 1 }, []]);
+    const set = vi.fn(() => ({ where: updateWhere }));
+    dbMock.update.mockReturnValue({ set });
+    const values = vi.fn(async () => undefined);
+    dbMock.insert.mockReturnValue({ values });
+    const audit = {
+      workspaceId: 42,
+      userId: 7,
+      event: "whatsapp_binding.provisioned",
+      metadata: { source: "operator_cli" },
+    };
+
+    await expect(
+      upsertChannelConnection(rotatedConnection, {
+        authorization: {
+          actorUserId: 7,
+          allowedRoles: ["owner", "admin"],
+        },
+        updatePolicy: "preserve_exact_whatsapp_binding",
+        auditLog: audit,
+      })
+    ).resolves.toEqual(listed);
+
+    expect(set).toHaveBeenCalledOnce();
+    const credentialUpdate = set.mock.calls[0]?.[0];
+    expect(credentialUpdate).toEqual(
+      expect.objectContaining({
+        encryptedAccessToken: "sealed-rotated-whatsapp-token",
+        grantedScopes: ["whatsapp_business_messaging"],
+        lastCheckedAt: expect.any(Date),
+      })
+    );
+    expect(credentialUpdate).not.toHaveProperty("bindingEpoch");
+    expect(credentialUpdate).not.toHaveProperty("externalId");
+    expect(credentialUpdate).not.toHaveProperty("providerAccountExternalId");
+    expect(credentialUpdate).not.toHaveProperty("status");
+    const updateQuery = new MySqlDialect().sqlToQuery(
+      updateWhere.mock.calls[0]?.[0]
+    );
+    expect(updateQuery.params).toEqual(
+      expect.arrayContaining([
+        8,
+        42,
+        "whatsapp",
+        "connected",
+        whatsAppConnection.externalId,
+        whatsAppConnection.providerAccountExternalId,
+      ])
+    );
+    expect(values).toHaveBeenCalledOnce();
+    expect(values).toHaveBeenCalledWith(audit);
+  });
+
+  it("refuses a WhatsApp endpoint change before credential or audit mutation", async () => {
+    const membership = lockedSelect([{ role: "owner" }]);
+    const providerAccountClaim = lockedSelect([{ id: 8, workspaceId: 42 }]);
+    const endpointClaim = lockedSelect([]);
+    const workspaceConnection = lockedSelect([
+      {
+        id: 8,
+        status: "connected",
+        externalId: whatsAppConnection.externalId,
+        providerAccountExternalId: whatsAppConnection.providerAccountExternalId,
+      },
+    ]);
+    dbMock.select
+      .mockReturnValueOnce({ from: membership.from })
+      .mockReturnValueOnce({ from: providerAccountClaim.from })
+      .mockReturnValueOnce({ from: endpointClaim.from })
+      .mockReturnValueOnce({ from: workspaceConnection.from });
+
+    await expect(
+      upsertChannelConnection(
+        { ...whatsAppConnection, externalId: "423456789012345" },
+        {
+          authorization: {
+            actorUserId: 7,
+            allowedRoles: ["owner", "admin"],
+          },
+          updatePolicy: "preserve_exact_whatsapp_binding",
+          auditLog: {
+            workspaceId: 42,
+            userId: 7,
+            event: "whatsapp_binding.provisioned",
+            metadata: { source: "operator_cli" },
+          },
+        }
+      )
+    ).rejects.toBeInstanceOf(WhatsAppChannelConnectionMigrationRequiredError);
+
+    expect(dbMock.update).not.toHaveBeenCalled();
+    expect(dbMock.insert).not.toHaveBeenCalled();
+  });
+
+  it("refuses a WhatsApp status change before starting a transaction", async () => {
+    await expect(
+      upsertChannelConnection(
+        { ...whatsAppConnection, status: "disconnected" },
+        { updatePolicy: "preserve_exact_whatsapp_binding" }
+      )
+    ).rejects.toBeInstanceOf(WhatsAppChannelConnectionMigrationRequiredError);
+
+    expect(dbMock.transaction).not.toHaveBeenCalled();
+    expect(dbMock.update).not.toHaveBeenCalled();
+    expect(dbMock.insert).not.toHaveBeenCalled();
+  });
+
   it("preserves the WhatsApp provider account when inserting a connection", async () => {
     const providerAccountClaim = lockedSelect([]);
     const endpointClaim = lockedSelect([]);
@@ -542,6 +723,7 @@ describe("channel connection database claims", () => {
       const retriedPageClaim = lockedSelect([{ id: 7, workspaceId: 42 }]);
       const retriedWorkspaceConnection = lockedSelect([{ id: 7 }]);
       const activeAttempts = lockedSelect([]);
+      const activeAiDeliveries = lockedSelect([]);
       const listed = [{ id: 7, ...connection }];
       const list = listSelect(listed);
       dbMock.select
@@ -550,6 +732,7 @@ describe("channel connection database claims", () => {
         .mockReturnValueOnce({ from: retriedPageClaim.from })
         .mockReturnValueOnce({ from: retriedWorkspaceConnection.from })
         .mockReturnValueOnce({ from: activeAttempts.from })
+        .mockReturnValueOnce({ from: activeAiDeliveries.from })
         .mockReturnValueOnce({ from: list.from });
       const values = vi.fn().mockRejectedValueOnce(
         Object.assign(new Error(`Duplicate entry for ${constraint}`), {

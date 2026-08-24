@@ -261,7 +261,7 @@ function loadConfig(): ProxyEnv {
     allowLegacyObjectKeys: readBooleanEnv("STORAGE_ALLOW_LEGACY_KEYS"),
     rateLimitRedisUrl: getEnv("STORAGE_RATE_LIMIT_REDIS_URL"),
     rateLimitKeySecret: readRateLimitKeySecret(),
-    trustFlyClientIp: process.env.NODE_ENV === "production",
+    trustFlyClientIp: readBooleanEnv("STORAGE_TRUST_FLY_CLIENT_IP"),
   };
 }
 
@@ -1136,7 +1136,7 @@ export function createStorageProxyApp(
     ) => {
       void next;
       logJson("error", {
-        msg: "storage_proxy_rate_limiter_unavailable",
+        msg: "storage_proxy_request_failed_closed",
         method: req.method,
         path: req.path,
         errorName: error instanceof Error ? error.name : typeof error,

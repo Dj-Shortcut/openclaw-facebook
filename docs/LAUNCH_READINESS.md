@@ -40,9 +40,11 @@ deploying outside the protected workflows.
   key. Platform admins now have a tenant-scoped, metadata-only incident inbox
   with monotone acknowledgement; receiver dead letters remain a red readiness
   signal until the on-call drill resolves them.
-- The accounting importer is GET-only, provider-account/mode scoped, bounded,
-  crash-resumable and quarantines ambiguous events. The portal CSV is bounded,
-  but it is not the authoritative live fees/settlements report.
+- The built-in accounting importer is GET-only, provider-account/mode scoped,
+  bounded, crash-resumable and quarantines ambiguous events. It is intentionally
+  disabled for the pilot because its durable cursor is not yet bound to one
+  exact Mollie Balance. Accountable is the intended external bookkeeping
+  workflow; its live reconciliation and human approval remain external gates.
 - The canonical migration chain and schema contract are tested on MySQL 8.4.11.
   Production intentionally remains on `0015_base`; only the protected
   `0015_base` to `0016_expand` workflow is authorized. Migration 0017 is blocked
@@ -58,9 +60,10 @@ deploying outside the protected workflows.
       tenant-scoped human surface. The portal shows metadata-only event/reason
       timestamps, ACK is exact workspace/audience bound, and receiver dead
       letters keep `/readyz` red rather than disappearing silently.
-- [ ] Complete an operator-facing accounting quarantine/settlement review flow,
-      or designate an approved external bookkeeping workflow as the
-      authoritative live source for fees, settlements and quarantined events.
+- [x] Keep the non-balance-scoped built-in accounting importer disabled and
+      designate Accountable as the intended external bookkeeping workflow for
+      the pilot. This code decision does not mark the external reconciliation
+      or accounting approval complete.
 - [ ] Keep `docs/operations/todo.md`, this checklist, the billing runbook and
       the test-result matrix aligned with the exact reviewed release.
 
@@ -93,8 +96,11 @@ deploying outside the protected workflows.
       financial retention with qualified legal/accounting review.
 - [ ] Name the billing/on-call operators and complete the notification,
       cancellation, duplicate-charge and incident drills.
-- [ ] For live only, configure the dedicated GET-only accounting credential and
-      prove Balance/Settlement reconciliation. Test Mode cannot prove this.
+- [ ] Before live, reconcile Mollie fees, Balances and Settlements in the
+      approved Accountable workflow and record human sign-off. If the built-in
+      importer is chosen instead, first bind its runs/cursors/events/readiness
+      to the exact Balance ID and then use a dedicated GET-only credential.
+      Test Mode cannot prove live settlement reconciliation.
 
 ## Required flag sequence
 

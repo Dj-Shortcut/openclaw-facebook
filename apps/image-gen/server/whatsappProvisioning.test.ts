@@ -4,17 +4,23 @@ import {
   readWhatsAppProvisioningEnv,
   WhatsAppProvisioningAuthorizationError,
   WhatsAppProvisioningConfigurationError,
+  WhatsAppProvisioningMigrationRequiredError,
 } from "./_core/whatsappProvisioning";
 import { unsealFacebookPageToken } from "./_core/facebookConnectStore";
 import { runWhatsAppProvisioningCli } from "./cli/provisionWhatsAppBinding";
-import { ChannelConnectionAuthorizationError } from "./db";
+import {
+  ChannelConnectionAuthorizationError,
+  WhatsAppChannelConnectionMigrationRequiredError,
+} from "./db";
 
 const mocks = vi.hoisted(() => ({
+  closeDatabasePool: vi.fn(),
   upsertChannelConnection: vi.fn(),
 }));
 
 vi.mock("./db", async importOriginal => ({
   ...(await importOriginal<typeof import("./db")>()),
+  closeDatabasePool: mocks.closeDatabasePool,
   upsertChannelConnection: mocks.upsertChannelConnection,
 }));
 
@@ -36,6 +42,7 @@ describe("WhatsApp tenant binding provisioning", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
 
   it("stores an authorized exact workspace binding and only a sealed credential", async () => {
@@ -83,6 +90,9 @@ describe("WhatsApp tenant binding provisioning", () => {
       actorUserId: 7,
       allowedRoles: ["owner", "admin"],
     });
+    expect(mocks.upsertChannelConnection.mock.calls[0]?.[1]?.updatePolicy).toBe(
+      "preserve_exact_whatsapp_binding"
+    );
   });
 
   it("rejects a workspace member before storing a credential or audit", async () => {
@@ -94,6 +104,23 @@ describe("WhatsApp tenant binding provisioning", () => {
       WhatsAppProvisioningAuthorizationError
     );
     expect(mocks.upsertChannelConnection).toHaveBeenCalledOnce();
+  });
+
+  it("returns only a metadata-only migration error for an endpoint change", async () => {
+    mocks.upsertChannelConnection.mockRejectedValueOnce(
+      new WhatsAppChannelConnectionMigrationRequiredError()
+    );
+
+    const error = await provisionWhatsAppTenantBinding(INPUT).catch(
+      (caught: unknown) => caught
+    );
+
+    expect(error).toBeInstanceOf(WhatsAppProvisioningMigrationRequiredError);
+    const serialized = JSON.stringify(error, Object.getOwnPropertyNames(error));
+    expect(serialized).not.toContain(INPUT.wabaId);
+    expect(serialized).not.toContain(INPUT.phoneNumberId);
+    expect(serialized).not.toContain(INPUT.accessToken);
+    expect(serialized).not.toContain(INPUT.approvalReference);
   });
 
   it("rejects invalid provider identifiers before any connection write", async () => {
@@ -152,6 +179,8 @@ describe("WhatsApp tenant binding provisioning", () => {
 
     await runWhatsAppProvisioningCli();
 
+    expect(mocks.closeDatabasePool).toHaveBeenCalledOnce();
+
     const serialized = output.join("");
     expect(serialized).toContain('"event":"whatsapp_binding_provisioned"');
     expect(serialized).toContain('"workspaceId":42');
@@ -159,5 +188,15 @@ describe("WhatsApp tenant binding provisioning", () => {
     expect(serialized).not.toContain(INPUT.approvalReference);
     expect(serialized).not.toContain(INPUT.wabaId);
     expect(serialized).not.toContain(INPUT.phoneNumberId);
+  });
+
+  it("closes the database pool when the operator command fails", async () => {
+    vi.stubEnv("WHATSAPP_PROVISION_CONFIRM", "");
+
+    await expect(runWhatsAppProvisioningCli()).rejects.toBeInstanceOf(
+      WhatsAppProvisioningConfigurationError
+    );
+
+    expect(mocks.closeDatabasePool).toHaveBeenCalledOnce();
   });
 });

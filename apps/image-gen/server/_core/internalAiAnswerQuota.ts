@@ -177,7 +177,79 @@ export async function markInternalAiAnswerDeliveryStarted(input: {
     .update(input.deliveryAttemptToken)
     .digest("hex");
   const resolutionDueAt = new Date(now.getTime() + 30_000);
+  const scopeRows = await database
+    .select({
+      workspaceId: workspaceEntitlementUsageReservations.workspaceId,
+      mode: workspaceEntitlementUsageReservations.mode,
+      channelConnectionId:
+        workspaceEntitlementUsageReservations.channelConnectionId,
+      bindingEpoch: workspaceEntitlementUsageReservations.bindingEpoch,
+    })
+    .from(workspaceEntitlementUsageReservations)
+    .where(
+      and(
+        eq(
+          workspaceEntitlementUsageReservations.reservationId,
+          input.reservationId
+        ),
+        eq(workspaceEntitlementUsageReservations.kind, "ai_answer"),
+        eq(workspaceEntitlementUsageReservations.status, "reserved"),
+        eq(
+          workspaceEntitlementUsageReservations.ownerTokenHash,
+          ownerTokenHash
+        ),
+        gt(workspaceEntitlementUsageReservations.ownerLeaseUntil, now)
+      )
+    )
+    .limit(1);
+  const immutableScope = scopeRows[0];
+  if (
+    !immutableScope ||
+    immutableScope.channelConnectionId == null ||
+    immutableScope.bindingEpoch == null
+  ) {
+    throw new InternalAiAnswerQuotaError("reservation_scope_unavailable");
+  }
+  const immutableChannelConnectionId = immutableScope.channelConnectionId;
+  const immutableBindingEpoch = immutableScope.bindingEpoch;
   return database.transaction(async tx => {
+    // Lock the Page binding before the reservation. Disconnect/rebind uses the
+    // same order, so either the delivery-start commit wins and blocks the
+    // binding change, or the binding change wins and this transport is denied.
+    const bindings = await tx
+      .select({ id: channelConnections.id })
+      .from(channelConnections)
+      .where(
+        and(
+          eq(channelConnections.id, immutableChannelConnectionId),
+          eq(channelConnections.workspaceId, immutableScope.workspaceId),
+          eq(channelConnections.bindingEpoch, immutableBindingEpoch),
+          eq(channelConnections.externalId, input.pageId),
+          eq(channelConnections.channel, "facebook_messenger"),
+          eq(channelConnections.status, "connected")
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (!bindings[0]) {
+      throw new InternalAiAnswerQuotaError("reservation_scope_unavailable");
+    }
+    assertTenantBillingWorkerWorkspace(immutableScope.workspaceId);
+    const scheduler = await tx
+      .select({ enabled: billingSchedulerTenants.enabled })
+      .from(billingSchedulerTenants)
+      .where(
+        and(
+          eq(billingSchedulerTenants.workspaceId, immutableScope.workspaceId),
+          eq(billingSchedulerTenants.mode, immutableScope.mode),
+          eq(billingSchedulerTenants.kind, "ai_finalization")
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (!scheduler[0]?.enabled) {
+      throw new InternalAiAnswerQuotaError("reservation_scope_unavailable");
+    }
     const rows = await tx
       .select()
       .from(workspaceEntitlementUsageReservations)
@@ -197,51 +269,12 @@ export async function markInternalAiAnswerDeliveryStarted(input: {
     if (
       !reservation ||
       reservation.ownerTokenHash !== ownerTokenHash ||
-      reservation.ownerLeaseUntil <= now
+      reservation.ownerLeaseUntil <= now ||
+      reservation.workspaceId !== immutableScope.workspaceId ||
+      reservation.mode !== immutableScope.mode ||
+      reservation.channelConnectionId !== immutableChannelConnectionId ||
+      reservation.bindingEpoch !== immutableBindingEpoch
     ) {
-      throw new InternalAiAnswerQuotaError("reservation_scope_unavailable");
-    }
-    if (
-      reservation.channelConnectionId == null ||
-      reservation.bindingEpoch == null
-    ) {
-      if (process.env.NODE_ENV === "production") {
-        throw new InternalAiAnswerQuotaError("reservation_scope_unavailable");
-      }
-    } else {
-      const bindings = await tx
-        .select({ id: channelConnections.id })
-        .from(channelConnections)
-        .where(
-          and(
-            eq(channelConnections.id, reservation.channelConnectionId),
-            eq(channelConnections.workspaceId, reservation.workspaceId),
-            eq(channelConnections.bindingEpoch, reservation.bindingEpoch),
-            eq(channelConnections.externalId, input.pageId),
-            eq(channelConnections.channel, "facebook_messenger"),
-            eq(channelConnections.status, "connected")
-          )
-        )
-        .limit(1)
-        .for("update");
-      if (!bindings[0]) {
-        throw new InternalAiAnswerQuotaError("reservation_scope_unavailable");
-      }
-    }
-    assertTenantBillingWorkerWorkspace(reservation.workspaceId);
-    const scheduler = await tx
-      .select({ enabled: billingSchedulerTenants.enabled })
-      .from(billingSchedulerTenants)
-      .where(
-        and(
-          eq(billingSchedulerTenants.workspaceId, reservation.workspaceId),
-          eq(billingSchedulerTenants.mode, reservation.mode),
-          eq(billingSchedulerTenants.kind, "ai_finalization")
-        )
-      )
-      .limit(1)
-      .for("update");
-    if (!scheduler[0]?.enabled) {
       throw new InternalAiAnswerQuotaError("reservation_scope_unavailable");
     }
     if (reservation.deliveryStartedAt) {

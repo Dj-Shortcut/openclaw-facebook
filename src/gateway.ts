@@ -11,7 +11,9 @@ import {
 import { readFacebookEnv, resolveFacebookConfig } from "./naming.js";
 import { getMessengerRuntime } from "./runtime.js";
 
-const loadMessengerMonitorRuntime = createLazyRuntimeModule(() => import("./monitor.js"));
+const loadMessengerMonitorRuntime = createLazyRuntimeModule(
+  () => import("./monitor.js"),
+);
 
 export const messengerGatewayAdapter: NonNullable<
   ChannelPlugin<ResolvedMessengerAccount>["gateway"]
@@ -30,10 +32,14 @@ export const messengerGatewayAdapter: NonNullable<
         );
       }
     }
-    ctx.log?.info(`[${account.accountId}] starting Messenger provider (${account.pageId})`);
+    const monitorRuntime = await loadMessengerMonitorRuntime();
+    await monitorRuntime.assertMessengerPaidAnswerQuotaReadiness();
+    ctx.log?.info(
+      `[${account.accountId}] starting Messenger provider (${account.pageId})`,
+    );
     const monitorMessengerProvider =
       getMessengerRuntime().channel.facebook?.monitorMessengerProvider ??
-      (await loadMessengerMonitorRuntime()).monitorMessengerProvider;
+      monitorRuntime.monitorMessengerProvider;
     return await monitorMessengerProvider({
       account,
       config: ctx.cfg,
@@ -45,7 +51,8 @@ export const messengerGatewayAdapter: NonNullable<
   logoutAccount: async ({ accountId, cfg }) => {
     const envToken = readFacebookEnv("pageAccessToken");
     const nextCfg = { ...cfg } as OpenClawConfig;
-    const { config: messengerConfig = {}, key: channelConfigKey } = resolveFacebookConfig(cfg);
+    const { config: messengerConfig = {}, key: channelConfigKey } =
+      resolveFacebookConfig(cfg);
     const nextMessenger = { ...messengerConfig };
     let cleared = false;
     let changed = false;
@@ -83,13 +90,23 @@ export const messengerGatewayAdapter: NonNullable<
       }
     }
     if (changed) {
-      nextCfg.channels = { ...nextCfg.channels, [channelConfigKey]: nextMessenger };
+      nextCfg.channels = {
+        ...nextCfg.channels,
+        [channelConfigKey]: nextMessenger,
+      };
       await getMessengerRuntime().config.replaceConfigFile({
         nextConfig: nextCfg,
         afterWrite: { mode: "auto" },
       });
     }
-    const resolved = resolveMessengerAccount({ cfg: changed ? nextCfg : cfg, accountId });
-    return { cleared, envToken: Boolean(envToken), loggedOut: resolved.tokenSource === "none" };
+    const resolved = resolveMessengerAccount({
+      cfg: changed ? nextCfg : cfg,
+      accountId,
+    });
+    return {
+      cleared,
+      envToken: Boolean(envToken),
+      loggedOut: resolved.tokenSource === "none",
+    };
   },
 };

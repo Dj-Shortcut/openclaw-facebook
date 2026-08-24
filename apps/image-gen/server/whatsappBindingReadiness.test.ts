@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
 
 const mocks = vi.hoisted(() => ({
   getDatabaseOrThrow: vi.fn(),
@@ -31,6 +32,8 @@ function databaseReturning(rows: unknown[]) {
   const from = vi.fn(() => ({ where }));
   return {
     select: vi.fn(() => ({ from })),
+    where,
+    limit,
   };
 }
 
@@ -49,7 +52,8 @@ describe("WhatsApp tenant binding readiness", () => {
   });
 
   it("is wired into runtime readiness and accepts one exact sealed binding", async () => {
-    mocks.getDatabaseOrThrow.mockResolvedValue(databaseReturning([BINDING]));
+    const database = databaseReturning([BINDING]);
+    mocks.getDatabaseOrThrow.mockResolvedValue(database);
     const check = buildRuntimeReadinessChecks().find(
       item => item.name === "whatsapp_tenant_binding"
     );
@@ -57,6 +61,16 @@ describe("WhatsApp tenant binding readiness", () => {
     expect(check).toBeDefined();
     await expect(check?.check()).resolves.toBeUndefined();
     expect(mocks.unsealFacebookPageToken).toHaveBeenCalledWith("sealed-token");
+    expect(database.limit).toHaveBeenCalledWith(2);
+    const query = new MySqlDialect().sqlToQuery(
+      database.where.mock.calls[0]?.[0]
+    );
+    expect(query.sql).toContain("`channelConnections`.`channel`");
+    expect(query.sql).toContain("`channelConnections`.`status`");
+    expect(query.sql).toContain("`channelConnections`.`externalId`");
+    expect(query.params).toEqual(
+      expect.arrayContaining(["whatsapp", "connected", BINDING.phoneNumberId])
+    );
   });
 
   it("fails closed when production has only env credentials and no binding", async () => {
@@ -72,10 +86,27 @@ describe("WhatsApp tenant binding readiness", () => {
     vi.stubEnv("WHATSAPP_BUSINESS_ACCOUNT_ID", "");
     mocks.getDatabaseOrThrow.mockResolvedValue(databaseReturning([BINDING]));
 
-    await expect(assertWhatsAppTenantBindingReadiness()).rejects.toBeInstanceOf(
-      WhatsAppBindingReadinessError
+    const error = await assertWhatsAppTenantBindingReadiness().catch(
+      caught => caught
     );
+    expect(error).toBeInstanceOf(WhatsAppBindingReadinessError);
+    expect(error).toMatchObject({ reason: "configuration_invalid" });
     expect(mocks.getDatabaseOrThrow).not.toHaveBeenCalled();
+  });
+
+  it("preserves a redacted database failure category and cause", async () => {
+    const cause = new Error("database offline");
+    mocks.getDatabaseOrThrow.mockRejectedValue(cause);
+
+    const error = await assertWhatsAppTenantBindingReadiness().catch(
+      caught => caught
+    );
+
+    expect(error).toBeInstanceOf(WhatsAppBindingReadinessError);
+    expect(error).toMatchObject({
+      reason: "database_unavailable",
+      cause,
+    });
   });
 
   it("rejects duplicate or mismatched bindings", async () => {
@@ -96,13 +127,19 @@ describe("WhatsApp tenant binding readiness", () => {
 
   it("rejects a credential envelope that cannot be unsealed", async () => {
     mocks.getDatabaseOrThrow.mockResolvedValue(databaseReturning([BINDING]));
+    const cause = new Error("invalid envelope");
     mocks.unsealFacebookPageToken.mockImplementation(() => {
-      throw new Error("invalid envelope");
+      throw cause;
     });
 
-    await expect(assertWhatsAppTenantBindingReadiness()).rejects.toBeInstanceOf(
-      WhatsAppBindingReadinessError
+    const error = await assertWhatsAppTenantBindingReadiness().catch(
+      caught => caught
     );
+    expect(error).toBeInstanceOf(WhatsAppBindingReadinessError);
+    expect(error).toMatchObject({
+      reason: "credential_unseal_failed",
+      cause,
+    });
   });
 
   it("fails closed when the sealed credential is stale after secret rotation", async () => {

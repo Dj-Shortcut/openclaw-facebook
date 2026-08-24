@@ -12,6 +12,7 @@ import {
   ChannelConnectionAuthorizationError,
   getDatabaseOrThrow,
   upsertChannelConnection,
+  WhatsAppChannelConnectionMigrationRequiredError,
 } from "./db";
 
 const suite = describe.runIf(process.env.RUN_MYSQL_INTEGRATION === "1");
@@ -24,6 +25,7 @@ suite("WhatsApp provisioning MySQL transaction", () => {
   const failedWabaId = `30${suffix}`;
   const connectedPhoneNumberId = `41${suffix}`;
   const connectedWabaId = `31${suffix}`;
+  const mismatchedPhoneNumberId = `42${suffix}`;
   let workspaceId = 0;
   let userId = 0;
 
@@ -162,7 +164,7 @@ suite("WhatsApp provisioning MySQL transaction", () => {
     expect(connections).toEqual([]);
   });
 
-  it("commits the exact binding and metadata-only audit together", async () => {
+  it("keeps exact reprovisioning on one binding epoch and refuses endpoint drift", async () => {
     const database = await getDatabaseOrThrow();
     await upsertChannelConnection(
       {
@@ -178,6 +180,7 @@ suite("WhatsApp provisioning MySQL transaction", () => {
           actorUserId: userId,
           allowedRoles: ["owner", "admin"],
         },
+        updatePolicy: "preserve_exact_whatsapp_binding",
         auditLog: {
           workspaceId,
           userId,
@@ -191,6 +194,8 @@ suite("WhatsApp provisioning MySQL transaction", () => {
       .select({
         externalId: channelConnections.externalId,
         providerAccountExternalId: channelConnections.providerAccountExternalId,
+        encryptedAccessToken: channelConnections.encryptedAccessToken,
+        bindingEpoch: channelConnections.bindingEpoch,
       })
       .from(channelConnections)
       .where(eq(channelConnections.workspaceId, workspaceId));
@@ -203,8 +208,134 @@ suite("WhatsApp provisioning MySQL transaction", () => {
       {
         externalId: connectedPhoneNumberId,
         providerAccountExternalId: connectedWabaId,
+        encryptedAccessToken: "sealed-test-token",
+        bindingEpoch: 1,
       },
     ]);
     expect(audits).toEqual([{ event: "whatsapp_binding.provisioned" }]);
+
+    await upsertChannelConnection(
+      {
+        workspaceId,
+        channel: "whatsapp",
+        status: "connected",
+        externalId: connectedPhoneNumberId,
+        providerAccountExternalId: connectedWabaId,
+        encryptedAccessToken: "sealed-test-token",
+      },
+      {
+        authorization: {
+          actorUserId: userId,
+          allowedRoles: ["owner", "admin"],
+        },
+        updatePolicy: "preserve_exact_whatsapp_binding",
+        auditLog: {
+          workspaceId,
+          userId,
+          event: "whatsapp_binding.provisioned",
+          metadata: { source: "mysql_idempotent_reprovision_test" },
+        },
+      }
+    );
+
+    const afterExactRerun = await database
+      .select({
+        externalId: channelConnections.externalId,
+        providerAccountExternalId: channelConnections.providerAccountExternalId,
+        encryptedAccessToken: channelConnections.encryptedAccessToken,
+        bindingEpoch: channelConnections.bindingEpoch,
+      })
+      .from(channelConnections)
+      .where(eq(channelConnections.workspaceId, workspaceId));
+    expect(afterExactRerun).toEqual(connections);
+
+    await upsertChannelConnection(
+      {
+        workspaceId,
+        channel: "whatsapp",
+        status: "connected",
+        externalId: connectedPhoneNumberId,
+        providerAccountExternalId: connectedWabaId,
+        encryptedAccessToken: "sealed-rotated-test-token",
+      },
+      {
+        authorization: {
+          actorUserId: userId,
+          allowedRoles: ["owner", "admin"],
+        },
+        updatePolicy: "preserve_exact_whatsapp_binding",
+        auditLog: {
+          workspaceId,
+          userId,
+          event: "whatsapp_binding.provisioned",
+          metadata: { source: "mysql_rotation_test" },
+        },
+      }
+    );
+
+    const afterRotation = await database
+      .select({
+        externalId: channelConnections.externalId,
+        providerAccountExternalId: channelConnections.providerAccountExternalId,
+        encryptedAccessToken: channelConnections.encryptedAccessToken,
+        bindingEpoch: channelConnections.bindingEpoch,
+      })
+      .from(channelConnections)
+      .where(eq(channelConnections.workspaceId, workspaceId));
+    const auditsAfterRotation = await database
+      .select({ event: auditLog.event })
+      .from(auditLog)
+      .where(eq(auditLog.workspaceId, workspaceId));
+    expect(afterRotation).toEqual([
+      {
+        externalId: connectedPhoneNumberId,
+        providerAccountExternalId: connectedWabaId,
+        encryptedAccessToken: "sealed-rotated-test-token",
+        bindingEpoch: 1,
+      },
+    ]);
+    expect(auditsAfterRotation).toHaveLength(3);
+
+    await expect(
+      upsertChannelConnection(
+        {
+          workspaceId,
+          channel: "whatsapp",
+          status: "connected",
+          externalId: mismatchedPhoneNumberId,
+          providerAccountExternalId: connectedWabaId,
+          encryptedAccessToken: "sealed-token-must-not-be-stored",
+        },
+        {
+          authorization: {
+            actorUserId: userId,
+            allowedRoles: ["owner", "admin"],
+          },
+          updatePolicy: "preserve_exact_whatsapp_binding",
+          auditLog: {
+            workspaceId,
+            userId,
+            event: "whatsapp_binding.provisioned",
+            metadata: { source: "mysql_mismatch_test" },
+          },
+        }
+      )
+    ).rejects.toBeInstanceOf(WhatsAppChannelConnectionMigrationRequiredError);
+
+    const afterMismatch = await database
+      .select({
+        externalId: channelConnections.externalId,
+        providerAccountExternalId: channelConnections.providerAccountExternalId,
+        encryptedAccessToken: channelConnections.encryptedAccessToken,
+        bindingEpoch: channelConnections.bindingEpoch,
+      })
+      .from(channelConnections)
+      .where(eq(channelConnections.workspaceId, workspaceId));
+    const auditsAfterMismatch = await database
+      .select({ event: auditLog.event })
+      .from(auditLog)
+      .where(eq(auditLog.workspaceId, workspaceId));
+    expect(afterMismatch).toEqual(afterRotation);
+    expect(auditsAfterMismatch).toEqual(auditsAfterRotation);
   });
 });

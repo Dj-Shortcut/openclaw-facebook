@@ -58,6 +58,9 @@ jobs:
       - name: Validate package-manager boundaries
         run: node scripts/check-package-manager-contract.mjs
 
+      - name: Validate product boundaries
+        run: npm run check:product-boundaries
+
       - name: Validate gateway deployment safety
         run: npm run gateway:deployment-safety
 

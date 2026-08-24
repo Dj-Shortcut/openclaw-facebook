@@ -19,6 +19,13 @@ export class WhatsAppProvisioningConfigurationError extends Error {
   }
 }
 
+export class WhatsAppProvisioningMigrationRequiredError extends Error {
+  constructor() {
+    super("WhatsApp binding migration is required");
+    this.name = "WhatsAppProvisioningMigrationRequiredError";
+  }
+}
+
 export type WhatsAppProvisioningInput = Readonly<{
   workspaceId: number;
   actorUserId: number;
@@ -111,6 +118,7 @@ export async function provisionWhatsAppTenantBinding(
           actorUserId: input.actorUserId,
           allowedRoles: ["owner", "admin"],
         },
+        updatePolicy: "preserve_exact_whatsapp_binding",
         auditLog: {
           workspaceId: input.workspaceId,
           userId: input.actorUserId,
@@ -129,6 +137,9 @@ export async function provisionWhatsAppTenantBinding(
   } catch (error) {
     if (error instanceof db.ChannelConnectionAuthorizationError) {
       throw new WhatsAppProvisioningAuthorizationError();
+    }
+    if (error instanceof db.WhatsAppChannelConnectionMigrationRequiredError) {
+      throw new WhatsAppProvisioningMigrationRequiredError();
     }
     throw error;
   }

@@ -13,11 +13,35 @@ import {
 } from "./whatsappApi";
 import { setPendingConversationActions } from "./messengerState";
 
+function createWhatsAppResponseOperationId(
+  reqId: string,
+  responseSlot: string
+): string {
+  const normalizedReqId = reqId.trim();
+  const normalizedSlot = responseSlot.trim();
+  if (!normalizedReqId || !normalizedSlot) {
+    throw new Error("WhatsApp response operation identity is required");
+  }
+  return createHash("sha256")
+    .update("whatsapp:response-slot:v1", "utf8")
+    .update("\0")
+    .update(normalizedReqId)
+    .update("\0")
+    .update(normalizedSlot)
+    .digest("hex");
+}
+
 export async function sendWhatsAppTextReply(
   senderId: string,
-  text: string
+  text: string,
+  reqId: string,
+  responseSlot: string
 ): Promise<void> {
-  await sendWhatsAppText(senderId, text);
+  await sendWhatsAppText(
+    senderId,
+    text,
+    createWhatsAppResponseOperationId(reqId, responseSlot)
+  );
 }
 
 export async function sendWhatsAppErasureControlTextReply(
@@ -47,9 +71,16 @@ export async function sendWhatsAppImageReplyWithReceipt(
 export async function sendWhatsAppButtonsReply(
   senderId: string,
   text: string,
-  options: Array<{ id: string; title: string }>
+  options: Array<{ id: string; title: string }>,
+  reqId: string,
+  responseSlot: string
 ): Promise<void> {
-  await sendWhatsAppButtons(senderId, text, options);
+  await sendWhatsAppButtons(
+    senderId,
+    text,
+    options,
+    createWhatsAppResponseOperationId(reqId, responseSlot)
+  );
 }
 
 function buildWhatsAppActionListText(
@@ -70,9 +101,10 @@ function buildWhatsAppActionListText(
 async function sendWhatsAppStateText(
   senderId: string,
   _state: ConversationState,
-  text: string
+  text: string,
+  operationId: string
 ): Promise<void> {
-  await sendWhatsAppText(senderId, text);
+  await sendWhatsAppText(senderId, text, operationId);
 }
 
 export async function sendWhatsAppBotStateResponse(
@@ -89,19 +121,33 @@ export async function sendWhatsAppBotStateResponse(
       .update(imageUrl)
       .digest("hex");
   await sendWhatsAppBotResponse(response, {
-    sendText: text => sendWhatsAppText(senderId, text),
+    sendText: text =>
+      sendWhatsAppText(
+        senderId,
+        text,
+        createWhatsAppResponseOperationId(reqId, "bot-text")
+      ),
     sendActionPrompt: async (text, actions) => {
       await Promise.resolve(setPendingConversationActions(senderId, actions));
       await sendWhatsAppText(
         senderId,
-        buildWhatsAppActionListText(text, actions)
+        buildWhatsAppActionListText(text, actions),
+        createWhatsAppResponseOperationId(reqId, "bot-action-prompt")
       );
     },
     replyState: replyState ?? undefined,
     sendImage: imageUrl =>
       sendWhatsAppImage(senderId, imageUrl, imageOperationId(imageUrl)),
     sendStateText: (stateName, text) =>
-      sendWhatsAppStateText(senderId, stateName, text),
+      sendWhatsAppStateText(
+        senderId,
+        stateName,
+        text,
+        createWhatsAppResponseOperationId(
+          reqId,
+          `bot-state:${String(stateName)}`
+        )
+      ),
   });
 }
 
@@ -114,14 +160,20 @@ export function createWhatsAppResponseSender(senderId: string, reqId: string) {
       .update(imageUrl)
       .digest("hex");
   return {
-    sendText: (text: string) => sendWhatsAppText(senderId, text),
+    sendText: (text: string) =>
+      sendWhatsAppText(
+        senderId,
+        text,
+        createWhatsAppResponseOperationId(reqId, "feature-text")
+      ),
     sendImage: (imageUrl: string) =>
       sendWhatsAppImage(senderId, imageUrl, imageOperationId(imageUrl)),
     sendActions: async (text: string, actions: ConversationAction[]) => {
       await Promise.resolve(setPendingConversationActions(senderId, actions));
       await sendWhatsAppText(
         senderId,
-        buildWhatsAppActionListText(text, actions)
+        buildWhatsAppActionListText(text, actions),
+        createWhatsAppResponseOperationId(reqId, "feature-actions")
       );
     },
   };

@@ -703,9 +703,12 @@ Historical branch review note:
       required on-call drill rather than being acknowledged away in the portal.
 - [x] Make accounting exports bounded and stream-safe with an explicit date
       range, high-water mark and canonical money validation.
-- [ ] Add an authenticated operator quarantine/fees/settlements report or
-      designate an approved external bookkeeping workflow as authoritative.
-- [ ] Reconcile Mollie Balances/Settlements in an approved live read-only accounting workflow.
+- [x] Keep the built-in accounting importer disabled for the pilot because its
+      durable cursor is not Balance-ID scoped; designate Accountable as the
+      intended external bookkeeping workflow instead.
+- [ ] Reconcile Mollie fees, Balances and Settlements in Accountable and record
+      human accounting approval before live. If the built-in importer is later
+      enabled, first add exact durable Balance-ID scope and migration coverage.
 - [ ] Close every blocker in `docs/LAUNCH_READINESS.md` before enabling a `live_` key.
 
 ### Testing & docs

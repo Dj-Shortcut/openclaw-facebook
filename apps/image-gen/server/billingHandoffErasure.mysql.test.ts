@@ -470,6 +470,55 @@ suite("billing handoff privacy erasure", () => {
     ).toHaveLength(0);
   });
 
+  it("erases legacy handoff rows whose expanded privacy scope is still null", async () => {
+    const database = await getDatabaseOrThrow();
+    const intentId = randomUUID();
+    const tokenHash = `sha256:${"8".repeat(64)}`;
+    await database.insert(billingIntents).values({
+      ...intentValues({
+        intentId,
+        workspaceId: targetWorkspaceId,
+        senderKey: targetSenderKey,
+        pageId: targetPageId,
+      }),
+      messengerChannelConnectionId: null,
+      messengerPrivacyEpoch: null,
+    });
+    await database.insert(portalHandoffTokens).values({
+      workspaceId: targetWorkspaceId,
+      tokenHash,
+      messengerSenderUserKey: targetSenderKey,
+      facebookPageId: targetPageId,
+      messengerChannelConnectionId: null,
+      messengerPrivacyEpoch: null,
+      purpose: "workspace_onboarding",
+      expiresAt: new Date("2026-08-24T00:00:00.000Z"),
+    });
+
+    await eraseBillingHandoffIdentity(
+      targetWorkspaceId,
+      targetSenderKey,
+      targetPageId,
+      {
+        channelConnectionId: targetChannelConnectionId,
+        maxPrivacyEpoch: 1,
+      }
+    );
+
+    expect(
+      await database
+        .select({ intentId: billingIntents.intentId })
+        .from(billingIntents)
+        .where(eq(billingIntents.intentId, intentId))
+    ).toHaveLength(0);
+    expect(
+      await database
+        .select({ id: portalHandoffTokens.id })
+        .from(portalHandoffTokens)
+        .where(eq(portalHandoffTokens.tokenHash, tokenHash))
+    ).toHaveLength(0);
+  });
+
   it("fails atomically while Messenger transport is already in flight", async () => {
     const database = await getDatabaseOrThrow();
     const intentId = randomUUID();

@@ -2,12 +2,13 @@ import type { CostLedgerTenantScope } from "./costLedger";
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
 import {
   claimWhatsAppErasureControlProviderAttemptFence as claimSharedWhatsAppErasureControlProviderAttemptFence,
+  claimMessengerProviderAttemptFence,
   finalizeMessengerProviderAttemptFence,
   markMessengerProviderAttemptStarted,
-  reserveMessengerProviderAttemptFence,
   WHATSAPP_ERASURE_CONTROL_PROVIDER_OPERATION,
   type MessengerProviderAttemptFence,
   type MessengerProviderAttemptOutcome,
+  type MessengerProviderAttemptClaim,
 } from "./messengerProviderAttemptFence";
 import {
   getMessengerRequestErasurePrivacySubject,
@@ -35,18 +36,18 @@ export type WhatsAppErasureControlProviderAttemptClaim =
   | Readonly<{ kind: "succeeded"; attemptKeyHash: string }>
   | Readonly<{ kind: "ambiguous"; attemptKeyHash: string }>;
 
-/**
- * Pins an outbound WhatsApp disclosure to the immutable inbound tenant,
- * connection, binding and privacy epoch. The underlying durable fence is
- * shared with Messenger so disconnect and privacy erasure have one linear
- * transport barrier for every Meta channel.
- */
-export async function reserveWhatsAppProviderAttemptFence(input: {
+export type WhatsAppDeliveryProviderAttemptClaim =
+  | Readonly<{ kind: "owned"; fence: MessengerProviderAttemptFence }>
+  | Readonly<{ kind: "succeeded"; attemptKeyHash: string | null }>
+  | Readonly<{ kind: "ambiguous"; attemptKeyHash: string | null }>;
+
+async function claimWhatsAppProviderAttemptFenceInternal(input: {
   reqId: string;
   userKey: string;
   providerOperation: string;
   expectedScope?: CostLedgerTenantScope;
-}): Promise<MessengerProviderAttemptFence> {
+  takeOverReserved?: boolean;
+}): Promise<MessengerProviderAttemptClaim> {
   const pageId = getMessengerRequestPageId();
   const requestChannel = getMessengerRequestChannel();
   const ownership = getMessengerRequestOwnership();
@@ -58,7 +59,7 @@ export async function reserveWhatsAppProviderAttemptFence(input: {
     if (process.env.NODE_ENV === "production" || hasAnyRequestScope) {
       throw new WhatsAppProviderAttemptFenceError();
     }
-    return LOCAL_FENCE;
+    return { kind: "owned", fence: LOCAL_FENCE };
   }
   if (
     !input.reqId.trim() ||
@@ -74,7 +75,6 @@ export async function reserveWhatsAppProviderAttemptFence(input: {
   ) {
     throw new WhatsAppProviderAttemptFenceError();
   }
-
   if (
     isMessengerErasureControlDelivery() ||
     input.providerOperation === WHATSAPP_ERASURE_CONTROL_PROVIDER_OPERATION
@@ -93,13 +93,65 @@ export async function reserveWhatsAppProviderAttemptFence(input: {
     reqId: input.reqId,
     lang: "nl",
   };
-  return reserveMessengerProviderAttemptFence(
+  return claimMessengerProviderAttemptFence(
     job,
     input.providerOperation,
     1,
     new Date(),
-    "whatsapp"
+    {
+      expectedChannel: "whatsapp",
+      ...(input.takeOverReserved ? { takeOverReserved: true } : {}),
+    }
   );
+}
+
+/**
+ * Pins an outbound WhatsApp disclosure to the immutable inbound tenant,
+ * connection, binding and privacy epoch. The underlying durable fence is
+ * shared with Messenger so disconnect and privacy erasure have one linear
+ * transport barrier for every Meta channel.
+ */
+export async function reserveWhatsAppProviderAttemptFence(input: {
+  reqId: string;
+  userKey: string;
+  providerOperation: string;
+  expectedScope?: CostLedgerTenantScope;
+}): Promise<MessengerProviderAttemptFence> {
+  const claim = await claimWhatsAppProviderAttemptFenceInternal(input);
+  if (claim.kind === "owned") return claim.fence;
+  throw new WhatsAppProviderAttemptFenceError();
+}
+
+export async function claimWhatsAppDeliveryProviderAttemptFence(input: {
+  reqId: string;
+  userKey: string;
+  providerOperation:
+    "whatsapp_graph_text" | "whatsapp_graph_image" | "whatsapp_graph_buttons";
+}): Promise<WhatsAppDeliveryProviderAttemptClaim> {
+  // A reserved fence proves Graph transport has not started. Reclaim it
+  // immediately so an ingress retry cannot dead-letter behind a crashed owner;
+  // the previous lease token is fenced from marking provider start.
+  const claim = await claimWhatsAppProviderAttemptFenceInternal({
+    ...input,
+    takeOverReserved: true,
+  });
+  if (claim.kind === "owned") return claim;
+  if (claim.kind === "unsafe_or_done" && claim.status === "succeeded") {
+    return {
+      kind: "succeeded",
+      attemptKeyHash: claim.attemptKeyHash ?? null,
+    };
+  }
+  if (
+    claim.kind === "unsafe_or_done" &&
+    (claim.status === "started" || claim.status === "ambiguous")
+  ) {
+    return {
+      kind: "ambiguous",
+      attemptKeyHash: claim.attemptKeyHash ?? null,
+    };
+  }
+  throw new WhatsAppProviderAttemptFenceError();
 }
 
 export async function claimWhatsAppErasureControlProviderAttempt(input: {

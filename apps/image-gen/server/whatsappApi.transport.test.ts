@@ -4,6 +4,7 @@ import { inspect } from "node:util";
 const mocks = vi.hoisted(() => ({
   resolveCredential: vi.fn(),
   claimErasure: vi.fn(),
+  claimDelivery: vi.fn(),
   reserveFence: vi.fn(),
   markFence: vi.fn(),
   finalizeFence: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock("./_core/whatsappTransportCredential", () => {
 
 vi.mock("./_core/whatsappProviderAttemptFence", () => ({
   claimWhatsAppErasureControlProviderAttempt: mocks.claimErasure,
+  claimWhatsAppDeliveryProviderAttemptFence: mocks.claimDelivery,
   reserveWhatsAppProviderAttemptFence: mocks.reserveFence,
   markWhatsAppProviderAttemptStarted: mocks.markFence,
   finalizeWhatsAppProviderAttemptFence: mocks.finalizeFence,
@@ -44,6 +46,7 @@ import { toUserKey } from "./_core/privacy";
 import {
   downloadWhatsAppMedia,
   sendWhatsAppErasureControlText,
+  sendWhatsAppButtons,
   sendWhatsAppImageWithReceipt,
   sendWhatsAppText,
   WhatsAppDeliveryError,
@@ -142,6 +145,13 @@ describe("WhatsApp Graph tenant transport boundary", () => {
         attemptKeyHash: "e".repeat(64),
       },
     });
+    mocks.claimDelivery.mockResolvedValue({
+      kind: "owned",
+      fence: {
+        leaseToken: "transport-lease",
+        attemptKeyHash: "a".repeat(64),
+      },
+    });
     mocks.markFence.mockResolvedValue(undefined);
     mocks.finalizeFence.mockResolvedValue(undefined);
     installExactCredentialResolver();
@@ -166,8 +176,12 @@ describe("WhatsApp Graph tenant transport boundary", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await Promise.all([
-      withScope(TENANT_A, () => sendWhatsAppText(TENANT_A.senderId, "reply A")),
-      withScope(TENANT_B, () => sendWhatsAppText(TENANT_B.senderId, "reply B")),
+      withScope(TENANT_A, () =>
+        sendWhatsAppText(TENANT_A.senderId, "reply A", "parallel-reply")
+      ),
+      withScope(TENANT_B, () =>
+        sendWhatsAppText(TENANT_B.senderId, "reply B", "parallel-reply")
+      ),
     ]);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -190,7 +204,9 @@ describe("WhatsApp Graph tenant transport boundary", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      withScope(TENANT_A, () => sendWhatsAppText(TENANT_B.senderId, "wrong"))
+      withScope(TENANT_A, () =>
+        sendWhatsAppText(TENANT_B.senderId, "wrong", "wrong-recipient")
+      )
     ).rejects.toMatchObject({
       name: "WhatsAppDeliveryError",
       outcome: "pre_transport",
@@ -208,7 +224,7 @@ describe("WhatsApp Graph tenant transport boundary", () => {
 
     await expect(
       withScope(TENANT_A, () =>
-        sendWhatsAppText(TENANT_A.senderId, "must not leave")
+        sendWhatsAppText(TENANT_A.senderId, "must not leave", "privacy-race")
       )
     ).rejects.toMatchObject({
       name: "WhatsAppDeliveryError",
@@ -216,13 +232,79 @@ describe("WhatsApp Graph tenant transport boundary", () => {
       attemptKeyHash: "a".repeat(64),
     });
 
-    expect(mocks.reserveFence).toHaveBeenCalledOnce();
+    expect(mocks.claimDelivery).toHaveBeenCalledOnce();
     expect(mocks.markFence).toHaveBeenCalledOnce();
     expect(mocks.finalizeFence).toHaveBeenCalledWith(
       expect.any(Object),
       "known_failed"
     );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("lets a recovered reservation fence the crashed owner before one Graph POST", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify({ messages: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+    const staleFence = {
+      leaseToken: "stale-reservation-owner",
+      attemptKeyHash: "7".repeat(64),
+    };
+    const recoveryFence = {
+      leaseToken: "recovered-reservation-owner",
+      attemptKeyHash: "7".repeat(64),
+    };
+    mocks.claimDelivery
+      .mockResolvedValueOnce({ kind: "owned", fence: staleFence })
+      .mockResolvedValueOnce({ kind: "owned", fence: recoveryFence });
+
+    let rejectStaleStart: ((error: unknown) => void) | undefined;
+    mocks.markFence
+      .mockImplementationOnce(
+        async () =>
+          await new Promise<void>((_resolve, reject) => {
+            rejectStaleStart = reject;
+          })
+      )
+      .mockResolvedValueOnce(undefined);
+
+    const staleDelivery = withScope(TENANT_A, () =>
+      sendWhatsAppText(
+        TENANT_A.senderId,
+        "stale owner reply",
+        "reserved-recovery-operation"
+      )
+    );
+    const staleOutcome = expect(staleDelivery).rejects.toMatchObject({
+      outcome: "pre_transport",
+      attemptKeyHash: "7".repeat(64),
+    });
+    await vi.waitFor(() => expect(rejectStaleStart).toBeTypeOf("function"));
+
+    await expect(
+      withScope(TENANT_A, () =>
+        sendWhatsAppText(
+          TENANT_A.senderId,
+          "recovered owner reply",
+          "reserved-recovery-operation"
+        )
+      )
+    ).resolves.toBeUndefined();
+    rejectStaleStart?.(new Error("provider attempt ownership was lost"));
+    await staleOutcome;
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(String(fetchMock.mock.calls[0]?.[1]?.body)).toContain(
+      "recovered owner reply"
+    );
+    expect(String(fetchMock.mock.calls[0]?.[1]?.body)).not.toContain(
+      "stale owner reply"
+    );
+    const requestIds = mocks.claimDelivery.mock.calls.map(
+      call => (call[0] as { reqId: string }).reqId
+    );
+    expect(requestIds).toHaveLength(2);
+    expect(requestIds[0]).toBe(requestIds[1]);
   });
 
   it("returns a stable accepted image receipt for the supplied operation id", async () => {
@@ -243,9 +325,89 @@ describe("WhatsApp Graph tenant transport boundary", () => {
       outcome: "accepted",
       attemptKeyHash: "a".repeat(64),
     });
-    expect(mocks.reserveFence).toHaveBeenCalledWith(
-      expect.objectContaining({ reqId: "generation-operation-1" })
+    expect(mocks.claimDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reqId: "generation-operation-1",
+        providerOperation: "whatsapp_graph_image",
+      })
     );
+  });
+
+  it("replays a succeeded image operation as accepted without a second POST", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify({ messages: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+    mocks.claimDelivery
+      .mockResolvedValueOnce({
+        kind: "owned",
+        fence: {
+          leaseToken: "image-success-lease",
+          attemptKeyHash: "b".repeat(64),
+        },
+      })
+      .mockResolvedValueOnce({
+        kind: "succeeded",
+        attemptKeyHash: "b".repeat(64),
+      });
+
+    const send = (imageUrl: string) =>
+      withScope(TENANT_A, () =>
+        sendWhatsAppImageWithReceipt(
+          TENANT_A.senderId,
+          imageUrl,
+          "generation-operation-replay"
+        )
+      );
+    await expect(send("https://assets.example/first.png")).resolves.toEqual({
+      outcome: "accepted",
+      attemptKeyHash: "b".repeat(64),
+    });
+    await expect(send("https://assets.example/changed.png")).resolves.toEqual({
+      outcome: "accepted",
+      attemptKeyHash: "b".repeat(64),
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an accepted image ambiguous after finalize loss without a second POST", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify({ messages: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+    mocks.finalizeFence.mockRejectedValueOnce(
+      new Error("provider outcome persistence failed")
+    );
+    mocks.claimDelivery
+      .mockResolvedValueOnce({
+        kind: "owned",
+        fence: {
+          leaseToken: "image-ambiguous-lease",
+          attemptKeyHash: "c".repeat(64),
+        },
+      })
+      .mockResolvedValueOnce({
+        kind: "ambiguous",
+        attemptKeyHash: "c".repeat(64),
+      });
+
+    const send = () =>
+      withScope(TENANT_A, () =>
+        sendWhatsAppImageWithReceipt(
+          TENANT_A.senderId,
+          "https://assets.example/ambiguous.png",
+          "generation-operation-ambiguous"
+        )
+      );
+    await expect(send()).rejects.toMatchObject({
+      outcome: "ambiguous",
+      attemptKeyHash: "c".repeat(64),
+    });
+    await expect(send()).rejects.toMatchObject({
+      outcome: "ambiguous",
+      attemptKeyHash: "c".repeat(64),
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it("classifies image credential rejection as pre-transport", async () => {
@@ -266,11 +428,95 @@ describe("WhatsApp Graph tenant transport boundary", () => {
     ).rejects.toMatchObject({
       name: "WhatsAppDeliveryError",
       outcome: "pre_transport",
-      attemptKeyHash: null,
+      attemptKeyHash: "a".repeat(64),
     });
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(mocks.reserveFence).not.toHaveBeenCalled();
+    expect(mocks.claimDelivery).toHaveBeenCalledOnce();
+    expect(mocks.markFence).not.toHaveBeenCalled();
+    expect(mocks.finalizeFence).toHaveBeenCalledWith(
+      expect.any(Object),
+      "known_failed"
+    );
   });
+
+  it.each(["text", "image"] as const)(
+    "recognizes an already-succeeded %s operation before credential lookup",
+    async kind => {
+      const fetchMock = vi.fn<typeof fetch>();
+      vi.stubGlobal("fetch", fetchMock);
+      mocks.claimDelivery.mockResolvedValueOnce({
+        kind: "succeeded",
+        attemptKeyHash: "d".repeat(64),
+      });
+      mocks.resolveCredential.mockRejectedValue(
+        new Error("credential store unavailable")
+      );
+
+      const delivery = withScope(TENANT_A, async () => {
+        if (kind === "text") {
+          return await sendWhatsAppText(
+            TENANT_A.senderId,
+            "already delivered",
+            "credential-independent-replay"
+          );
+        }
+        return await sendWhatsAppImageWithReceipt(
+          TENANT_A.senderId,
+          "https://assets.example/already-delivered.png",
+          "credential-independent-replay"
+        );
+      });
+
+      if (kind === "text") {
+        await expect(delivery).resolves.toBeUndefined();
+      } else {
+        await expect(delivery).resolves.toEqual({
+          outcome: "accepted",
+          attemptKeyHash: "d".repeat(64),
+        });
+      }
+      expect(mocks.resolveCredential).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["text", "image"] as const)(
+    "recognizes an ambiguous %s operation before credential lookup",
+    async kind => {
+      const fetchMock = vi.fn<typeof fetch>();
+      vi.stubGlobal("fetch", fetchMock);
+      mocks.claimDelivery.mockResolvedValueOnce({
+        kind: "ambiguous",
+        attemptKeyHash: "f".repeat(64),
+      });
+      mocks.resolveCredential.mockRejectedValue(
+        new Error("credential store unavailable")
+      );
+
+      const delivery = withScope(TENANT_A, async () => {
+        if (kind === "text") {
+          return await sendWhatsAppText(
+            TENANT_A.senderId,
+            "outcome unknown",
+            "credential-independent-ambiguous"
+          );
+        }
+        return await sendWhatsAppImageWithReceipt(
+          TENANT_A.senderId,
+          "https://assets.example/outcome-unknown.png",
+          "credential-independent-ambiguous"
+        );
+      });
+
+      await expect(delivery).rejects.toMatchObject({
+        name: "WhatsAppDeliveryError",
+        outcome: "ambiguous",
+        attemptKeyHash: "f".repeat(64),
+      });
+      expect(mocks.resolveCredential).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  );
 
   it.each([
     [400, "known_rejected"],
@@ -311,7 +557,9 @@ describe("WhatsApp Graph tenant transport boundary", () => {
     );
 
     await expect(
-      withScope(TENANT_A, () => sendWhatsAppText(TENANT_A.senderId, "reply"))
+      withScope(TENANT_A, () =>
+        sendWhatsAppText(TENANT_A.senderId, "reply", "ambiguous-text")
+      )
     ).rejects.toMatchObject({
       name: "WhatsAppDeliveryError",
       outcome: "ambiguous",
@@ -321,6 +569,128 @@ describe("WhatsApp Graph tenant transport boundary", () => {
       expect.any(Object),
       "ambiguous"
     );
+  });
+
+  it.each(["text", "buttons"] as const)(
+    "reuses a succeeded %s operation without a second Graph POST",
+    async kind => {
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response(JSON.stringify({ messages: [] })));
+      vi.stubGlobal("fetch", fetchMock);
+      mocks.claimDelivery
+        .mockResolvedValueOnce({
+          kind: "owned",
+          fence: {
+            leaseToken: "stable-transport-lease",
+            attemptKeyHash: "b".repeat(64),
+          },
+        })
+        .mockResolvedValueOnce({
+          kind: "succeeded",
+          attemptKeyHash: "b".repeat(64),
+        });
+      const send = (changed: boolean) =>
+        withScope(TENANT_A, () =>
+          kind === "text"
+            ? sendWhatsAppText(
+                TENANT_A.senderId,
+                changed ? "changed localized response" : "stable response",
+                "stable-response-slot"
+              )
+            : sendWhatsAppButtons(
+                TENANT_A.senderId,
+                changed ? "changed localized response" : "stable response",
+                [
+                  changed
+                    ? { id: "retry", title: "Retry" }
+                    : { id: "continue", title: "Continue" },
+                ],
+                "stable-response-slot"
+              )
+        );
+
+      await expect(send(false)).resolves.toBeUndefined();
+      await expect(send(true)).resolves.toBeUndefined();
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const requestIds = mocks.claimDelivery.mock.calls.map(
+        call => (call[0] as { reqId: string }).reqId
+      );
+      expect(requestIds).toHaveLength(2);
+      expect(requestIds[0]).toBe(requestIds[1]);
+    }
+  );
+
+  it.each(["text", "buttons"] as const)(
+    "keeps an ambiguous %s operation ambiguous without a second Graph POST",
+    async kind => {
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(new Response("sensitive", { status: 503 }));
+      vi.stubGlobal("fetch", fetchMock);
+      mocks.claimDelivery
+        .mockResolvedValueOnce({
+          kind: "owned",
+          fence: {
+            leaseToken: "ambiguous-transport-lease",
+            attemptKeyHash: "c".repeat(64),
+          },
+        })
+        .mockResolvedValueOnce({
+          kind: "ambiguous",
+          attemptKeyHash: "c".repeat(64),
+        });
+      const send = (changed: boolean) =>
+        withScope(TENANT_A, () =>
+          kind === "text"
+            ? sendWhatsAppText(
+                TENANT_A.senderId,
+                changed ? "changed after ambiguity" : "ambiguous response",
+                "ambiguous-response-slot"
+              )
+            : sendWhatsAppButtons(
+                TENANT_A.senderId,
+                changed ? "changed after ambiguity" : "ambiguous response",
+                [
+                  changed
+                    ? { id: "cancel", title: "Cancel" }
+                    : { id: "continue", title: "Continue" },
+                ],
+                "ambiguous-response-slot"
+              )
+        );
+
+      await expect(send(false)).rejects.toMatchObject({ outcome: "ambiguous" });
+      await expect(send(true)).rejects.toMatchObject({ outcome: "ambiguous" });
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const requestIds = mocks.claimDelivery.mock.calls.map(
+        call => (call[0] as { reqId: string }).reqId
+      );
+      expect(requestIds[0]).toBe(requestIds[1]);
+    }
+  );
+
+  it("keeps identical text in distinct logical response slots separate", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response(JSON.stringify({ messages: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await withScope(TENANT_A, () =>
+      sendWhatsAppText(TENANT_A.senderId, "same text", "response-slot-a")
+    );
+    await withScope(TENANT_A, () =>
+      sendWhatsAppText(TENANT_A.senderId, "same text", "response-slot-b")
+    );
+
+    const requestIds = mocks.claimDelivery.mock.calls.map(
+      call => (call[0] as { reqId: string }).reqId
+    );
+    expect(requestIds).toHaveLength(2);
+    expect(requestIds[0]).not.toBe(requestIds[1]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("preserves a rejected erasure delivery outcome and attempt hash", async () => {
@@ -472,7 +842,7 @@ describe("WhatsApp Graph tenant transport boundary", () => {
     );
 
     const error = await withScope(TENANT_A, () =>
-      sendWhatsAppText(TENANT_A.senderId, "reply")
+      sendWhatsAppText(TENANT_A.senderId, "reply", "redaction")
     ).catch((thrown: unknown) => thrown);
     expect(error).toBeInstanceOf(Error);
     const serializedError = inspect(error, { depth: 8 });

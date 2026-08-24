@@ -65,6 +65,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   if (originalOpenClawStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -2437,7 +2438,7 @@ describe("processMessengerEvent plan AI-answer quota", () => {
     expect(body.message.text).toContain("cannot safely check your credit");
   });
 
-  it("commits once only after a visible final reply", async () => {
+  it("fences and commits the first visible block reply before Graph transport", async () => {
     const inboundRun = vi.fn(
       async (input: {
         adapter: { resolveTurn: () => { delivery: { deliver: Function } } };
@@ -2445,31 +2446,65 @@ describe("processMessengerEvent plan AI-answer quota", () => {
         const turn = input.adapter.resolveTurn();
         await turn.delivery.deliver(
           { text: "Zichtbaar AI-antwoord" },
-          { kind: "final" },
+          { kind: "block" },
         );
         return {
           dispatched: true,
-          dispatchResult: { counts: { tool: 0, block: 0, final: 1 } },
+          dispatchResult: { counts: { tool: 0, block: 1, final: 0 } },
         };
       },
     );
     setGatewayRuntime(inboundRun);
-    const finalizeBodies: Array<Record<string, unknown>> = [];
+    const protocolCalls: Array<{
+      operation: string;
+      body: Record<string, unknown>;
+    }> = [];
     const fetchMock = vi.fn(
       async (url: URL | RequestInfo | string, init?: RequestInit) => {
         const requestUrl = String(url);
         if (requestUrl.includes("/ai-answer-quota/reserve")) {
+          protocolCalls.push({
+            operation: "reserve",
+            body: JSON.parse(String(init?.body)),
+          });
           return new Response(
             JSON.stringify({ status: "reserved", reservationId }),
             { status: 200 },
           );
         }
+        if (requestUrl.includes("/ai-answer-quota/heartbeat")) {
+          protocolCalls.push({
+            operation: "heartbeat",
+            body: JSON.parse(String(init?.body)),
+          });
+          return new Response(JSON.stringify({ status: "lease_renewed" }), {
+            status: 200,
+          });
+        }
+        if (requestUrl.includes("/ai-answer-quota/delivery-started")) {
+          protocolCalls.push({
+            operation: "delivery-started",
+            body: JSON.parse(String(init?.body)),
+          });
+          return new Response(
+            JSON.stringify({ status: "delivery_started" }),
+            { status: 200 },
+          );
+        }
         if (requestUrl.includes("/ai-answer-quota/finalize")) {
-          finalizeBodies.push(JSON.parse(String(init?.body)));
+          protocolCalls.push({
+            operation: "finalize",
+            body: JSON.parse(String(init?.body)),
+          });
           return new Response(JSON.stringify({ status: "finalized" }), {
             status: 200,
           });
         }
+        const graphBody = JSON.parse(String(init?.body));
+        protocolCalls.push({
+          operation: graphBody.message ? "graph-message" : "graph-action",
+          body: graphBody,
+        });
         return new Response(
           JSON.stringify({
             message_id: "visible-final",
@@ -2490,26 +2525,58 @@ describe("processMessengerEvent plan AI-answer quota", () => {
       ),
     );
 
-    expect(finalizeBodies).toEqual([
-      { pageId: "page-1", reservationId, outcome: "committed" },
+    expect(protocolCalls.map(({ operation }) => operation)).toEqual([
+      "reserve",
+      "graph-action",
+      "heartbeat",
+      "delivery-started",
+      "graph-message",
+      "graph-action",
+      "finalize",
     ]);
+    const reserveBody = protocolCalls[0]?.body;
+    const heartbeatBody = protocolCalls[2]?.body;
+    const deliveryBody = protocolCalls[3]?.body;
+    const finalizeBody = protocolCalls[6]?.body;
+    expect(reserveBody?.ownerToken).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f-]{27}$/,
+    );
+    expect(heartbeatBody).toEqual({
+      reservationId,
+      ownerToken: reserveBody?.ownerToken,
+    });
+    expect(deliveryBody).toEqual({
+      reservationId,
+      ownerToken: reserveBody?.ownerToken,
+      pageId: "page-1",
+      deliveryAttemptToken: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f-]{27}$/,
+      ),
+    });
+    expect(finalizeBody).toEqual({
+      pageId: "page-1",
+      reservationId,
+      ownerToken: reserveBody?.ownerToken,
+      outcome: "committed",
+    });
   });
 
   it("releases when OpenClaw produces no visible final reply", async () => {
     setGatewayRuntime(vi.fn(async () => ({ dispatched: false })));
-    const finalizeBodies: Array<Record<string, unknown>> = [];
+    const quotaBodies: Array<Record<string, unknown>> = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: URL | RequestInfo | string, init?: RequestInit) => {
         const requestUrl = String(url);
         if (requestUrl.includes("/ai-answer-quota/reserve")) {
+          quotaBodies.push(JSON.parse(String(init?.body)));
           return new Response(
             JSON.stringify({ status: "reserved", reservationId }),
             { status: 200 },
           );
         }
         if (requestUrl.includes("/ai-answer-quota/finalize")) {
-          finalizeBodies.push(JSON.parse(String(init?.body)));
+          quotaBodies.push(JSON.parse(String(init?.body)));
           return new Response(JSON.stringify({ status: "finalized" }), {
             status: 200,
           });
@@ -2525,9 +2592,13 @@ describe("processMessengerEvent plan AI-answer quota", () => {
       ),
     );
 
-    expect(finalizeBodies).toEqual([
-      { pageId: "page-1", reservationId, outcome: "released" },
-    ]);
+    expect(quotaBodies).toHaveLength(2);
+    expect(quotaBodies[1]).toEqual({
+      pageId: "page-1",
+      reservationId,
+      ownerToken: quotaBodies[0]?.ownerToken,
+      outcome: "released",
+    });
   });
 
   it("releases when OpenClaw fails before a final reply", async () => {
@@ -2536,22 +2607,21 @@ describe("processMessengerEvent plan AI-answer quota", () => {
         throw new Error("model unavailable");
       }),
     );
-    const finalizeBodies: Array<Record<string, unknown>> = [];
+    const quotaBodies: Array<Record<string, unknown>> = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: URL | RequestInfo | string, init?: RequestInit) => {
         const requestUrl = String(url);
         if (requestUrl.includes("/ai-answer-quota/reserve")) {
+          quotaBodies.push(JSON.parse(String(init?.body)));
           return new Response(
             JSON.stringify({ status: "reserved", reservationId }),
             { status: 200 },
           );
         }
         if (requestUrl.includes("/ai-answer-quota/finalize")) {
-          finalizeBodies.push(JSON.parse(String(init?.body)));
-          return new Response(JSON.stringify({ status: "finalized" }), {
-            status: 200,
-          });
+          quotaBodies.push(JSON.parse(String(init?.body)));
+          throw new Error("quota finalization offline");
         }
         return new Response(JSON.stringify({}), { status: 200 });
       }),
@@ -2565,9 +2635,314 @@ describe("processMessengerEvent plan AI-answer quota", () => {
         ),
       ),
     ).rejects.toThrow("model unavailable");
-    expect(finalizeBodies).toEqual([
-      { pageId: "page-1", reservationId, outcome: "released" },
+    expect(quotaBodies).toHaveLength(2);
+    expect(quotaBodies[1]).toEqual({
+      pageId: "page-1",
+      reservationId,
+      ownerToken: quotaBodies[0]?.ownerToken,
+      outcome: "released",
+    });
+  });
+
+  it("records a definitive Graph rejection before releasing the reservation", async () => {
+    const inboundRun = vi.fn(
+      async (input: {
+        adapter: { resolveTurn: () => { delivery: { deliver: Function } } };
+      }) => {
+        const turn = input.adapter.resolveTurn();
+        await turn.delivery.deliver(
+          { text: "Rejected AI answer" },
+          { kind: "final" },
+        );
+        return { dispatched: false };
+      },
+    );
+    setGatewayRuntime(inboundRun);
+    const operations: string[] = [];
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL | RequestInfo | string, init?: RequestInit) => {
+        const requestUrl = String(url);
+        const body = JSON.parse(String(init?.body));
+        if (requestUrl.includes("/ai-answer-quota/")) {
+          const operation = requestUrl.split("/").at(-1) ?? "";
+          operations.push(operation);
+          bodies.push(body);
+          const status = {
+            reserve: "reserved",
+            heartbeat: "lease_renewed",
+            "delivery-started": "delivery_started",
+            "delivery-known-rejected": "delivery_known_rejected",
+            finalize: "finalized",
+          }[operation];
+          return new Response(
+            JSON.stringify({ status, ...(operation === "reserve" ? { reservationId } : {}) }),
+            { status: 200 },
+          );
+        }
+        if (body.message) {
+          operations.push("graph-message");
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 10,
+                error_subcode: 2534022,
+                message: "outside allowed window",
+              },
+            }),
+            { status: 400 },
+          );
+        }
+        operations.push("graph-action");
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
+
+    await expect(
+      processGatewayTestEvent(
+        messengerTextEvent(
+          "mid-ai-quota-known-reject",
+          "Schrijf een planning voor morgen",
+        ),
+      ),
+    ).rejects.toThrow("24-hour response window");
+
+    expect(operations).toEqual([
+      "reserve",
+      "graph-action",
+      "heartbeat",
+      "delivery-started",
+      "graph-message",
+      "delivery-known-rejected",
+      "graph-action",
+      "finalize",
     ]);
+    const reserveBody = bodies[0];
+    const deliveryBody = bodies[2];
+    expect(bodies[3]).toEqual(deliveryBody);
+    expect(bodies.at(-1)).toEqual({
+      pageId: "page-1",
+      reservationId,
+      ownerToken: reserveBody?.ownerToken,
+      outcome: "released",
+    });
+  });
+
+  it("commits an ambiguous Graph attempt and never retries it", async () => {
+    const inboundRun = vi.fn(
+      async (input: {
+        adapter: { resolveTurn: () => { delivery: { deliver: Function } } };
+      }) => {
+        const turn = input.adapter.resolveTurn();
+        await turn.delivery
+          .deliver(
+            { text: "Ambiguous AI answer" },
+            { kind: "block" },
+          )
+          .catch(() => undefined);
+        await turn.delivery.deliver(
+          { text: "Must not retry" },
+          { kind: "final" },
+        );
+        return { dispatched: false };
+      },
+    );
+    setGatewayRuntime(inboundRun);
+    const operations: string[] = [];
+    const quotaBodies: Array<Record<string, unknown>> = [];
+    let graphMessageCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL | RequestInfo | string, init?: RequestInit) => {
+        const requestUrl = String(url);
+        const body = JSON.parse(String(init?.body));
+        if (requestUrl.includes("/ai-answer-quota/")) {
+          const operation = requestUrl.split("/").at(-1) ?? "";
+          operations.push(operation);
+          quotaBodies.push(body);
+          const status = {
+            reserve: "reserved",
+            heartbeat: "lease_renewed",
+            "delivery-started": "delivery_started",
+            finalize: "finalized",
+          }[operation];
+          return new Response(
+            JSON.stringify({ status, ...(operation === "reserve" ? { reservationId } : {}) }),
+            { status: 200 },
+          );
+        }
+        if (body.message) {
+          graphMessageCalls += 1;
+          throw new Error("socket reset after POST");
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
+
+    await expect(
+      processGatewayTestEvent(
+        messengerTextEvent(
+          "mid-ai-quota-ambiguous",
+          "Schrijf een planning voor morgen",
+        ),
+      ),
+    ).rejects.toThrow("cannot be retried safely");
+
+    expect(graphMessageCalls).toBe(1);
+    expect(operations).not.toContain("delivery-known-rejected");
+    expect(quotaBodies.at(-1)).toEqual({
+      pageId: "page-1",
+      reservationId,
+      ownerToken: quotaBodies[0]?.ownerToken,
+      outcome: "committed",
+    });
+  });
+
+  it("heartbeats a long-running reservation periodically before transport", async () => {
+    vi.useFakeTimers();
+    let releaseGeneration!: () => void;
+    const generationStarted = new Promise<void>((resolve) => {
+      setGatewayRuntime(
+        vi.fn(
+          async (input: {
+            adapter: {
+              resolveTurn: () => { delivery: { deliver: Function } };
+            };
+          }) => {
+            resolve();
+            await new Promise<void>((release) => {
+              releaseGeneration = release;
+            });
+            const turn = input.adapter.resolveTurn();
+            await turn.delivery.deliver(
+              { text: "Delayed AI answer" },
+              { kind: "final" },
+            );
+            return {
+              dispatched: true,
+              dispatchResult: { counts: { tool: 0, block: 0, final: 1 } },
+            };
+          },
+        ),
+      );
+    });
+    let heartbeatCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL | RequestInfo | string, init?: RequestInit) => {
+        const requestUrl = String(url);
+        if (requestUrl.includes("/ai-answer-quota/reserve")) {
+          return new Response(
+            JSON.stringify({ status: "reserved", reservationId }),
+            { status: 200 },
+          );
+        }
+        if (requestUrl.includes("/ai-answer-quota/heartbeat")) {
+          heartbeatCalls += 1;
+          return new Response(JSON.stringify({ status: "lease_renewed" }), {
+            status: 200,
+          });
+        }
+        if (requestUrl.includes("/ai-answer-quota/delivery-started")) {
+          return new Response(
+            JSON.stringify({ status: "delivery_started" }),
+            { status: 200 },
+          );
+        }
+        if (requestUrl.includes("/ai-answer-quota/finalize")) {
+          return new Response(JSON.stringify({ status: "finalized" }), {
+            status: 200,
+          });
+        }
+        const body = JSON.parse(String(init?.body));
+        return new Response(
+          JSON.stringify(
+            body.message
+              ? { message_id: "delayed-answer", recipient_id: "sender" }
+              : {},
+          ),
+          { status: 200 },
+        );
+      }),
+    );
+
+    const processing = processGatewayTestEvent(
+      messengerTextEvent(
+        "mid-ai-quota-heartbeat",
+        "Schrijf een planning voor morgen",
+      ),
+    );
+    await generationStarted;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(heartbeatCalls).toBe(1);
+    releaseGeneration();
+    await processing;
+    expect(heartbeatCalls).toBe(2);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(heartbeatCalls).toBe(2);
+  });
+
+  it("blocks Graph transport when the final lease heartbeat fails", async () => {
+    const inboundRun = vi.fn(
+      async (input: {
+        adapter: { resolveTurn: () => { delivery: { deliver: Function } } };
+      }) => {
+        const turn = input.adapter.resolveTurn();
+        await turn.delivery.deliver(
+          { text: "Must not be sent" },
+          { kind: "final" },
+        );
+        return { dispatched: false };
+      },
+    );
+    setGatewayRuntime(inboundRun);
+    let graphMessageCalls = 0;
+    const quotaBodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL | RequestInfo | string, init?: RequestInit) => {
+        const requestUrl = String(url);
+        const body = JSON.parse(String(init?.body));
+        if (requestUrl.includes("/ai-answer-quota/reserve")) {
+          quotaBodies.push(body);
+          return new Response(
+            JSON.stringify({ status: "reserved", reservationId }),
+            { status: 200 },
+          );
+        }
+        if (requestUrl.includes("/ai-answer-quota/heartbeat")) {
+          return new Response(JSON.stringify({ error: "lease lost" }), {
+            status: 503,
+          });
+        }
+        if (requestUrl.includes("/ai-answer-quota/finalize")) {
+          quotaBodies.push(body);
+          return new Response(JSON.stringify({ status: "finalized" }), {
+            status: 200,
+          });
+        }
+        if (body.message) graphMessageCalls += 1;
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
+
+    await expect(
+      processGatewayTestEvent(
+        messengerTextEvent(
+          "mid-ai-quota-heartbeat-failed",
+          "Schrijf een planning voor morgen",
+        ),
+      ),
+    ).rejects.toThrow("quota lease is unavailable");
+
+    expect(graphMessageCalls).toBe(0);
+    expect(quotaBodies.at(-1)).toEqual({
+      pageId: "page-1",
+      reservationId,
+      ownerToken: quotaBodies[0]?.ownerToken,
+      outcome: "released",
+    });
   });
 });
 

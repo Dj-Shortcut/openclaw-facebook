@@ -498,6 +498,7 @@ function storageProxyMachineConfig(image) {
       STORAGE_OPERATION_TIMEOUT_MS: "60000",
       STORAGE_ALLOW_LEGACY_BEARER_AUTH: "true",
       STORAGE_ALLOW_LEGACY_KEYS: "true",
+      STORAGE_TRUST_FLY_CLIENT_IP: "true",
       FLY_PROCESS_GROUP: "app",
       PRIMARY_REGION: "ams",
     },
@@ -647,6 +648,7 @@ function storageProxyFlyState(image) {
           STORAGE_OPERATION_TIMEOUT_MS: "60000",
           STORAGE_ALLOW_LEGACY_BEARER_AUTH: "true",
           STORAGE_ALLOW_LEGACY_KEYS: "true",
+          STORAGE_TRUST_FLY_CLIENT_IP: "true",
         },
         processes: { app: "node dist/index.cjs" },
         http_service: {
@@ -5161,7 +5163,9 @@ describe("production deployment contract", () => {
             app: "leaderbot-storage-proxy",
             primary_region: "ams",
             deploy: { strategy: "rolling" },
-            env: { LEADERBOT_DEPLOYMENT_IDENTITY: "deploy-123-2" },
+            env: {
+              LEADERBOT_DEPLOYMENT_IDENTITY: "deploy-123-2",
+            },
             processes: {},
             http_service: {
               internal_port: 8787,

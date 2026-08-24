@@ -5,7 +5,7 @@ import {
   isDeleteCommand,
 } from "./consentService";
 import { GDPR_DELETE_CONFIRM } from "./consentActionIds";
-import { safeLog } from "./messengerApi";
+import { safeLog } from "./logger";
 import { setPreferredLang } from "./messengerState";
 import { normalizeLang } from "./i18n";
 import { toLogUser, toUserKey } from "./privacy";

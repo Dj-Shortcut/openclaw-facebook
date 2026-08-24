@@ -14,10 +14,10 @@ import {
 } from "../generationGuard";
 import {
   commitTranscriptionSuccess,
+  MessengerQuotaReservationCommitError,
   releaseTranscriptionReservation,
   reserveTranscriptionForAttempt,
-  MessengerQuotaReservationCommitError,
-} from "../messengerQuota";
+} from "../transcriptionQuota";
 import {
   assertAudioProviderFence,
   type AudioProviderJob,
@@ -30,8 +30,8 @@ import {
   reserveMessengerProviderAttemptFence,
   type MessengerProviderAttemptFence,
 } from "../messengerProviderAttemptFence";
-import { downloadWhatsAppMedia } from "../whatsappApi";
 import { sendWhatsAppTextReply } from "../whatsappResponseService";
+import { downloadWhatsAppInboundMedia } from "../../whatsappTransportBoundary";
 import { handleWhatsAppTextEvent } from "./textHandler";
 
 export async function handleWhatsAppAudioEvent(
@@ -45,7 +45,9 @@ export async function handleWhatsAppAudioEvent(
     });
     await sendWhatsAppTextReply(
       event.senderId,
-      t(context.lang, "unsupportedAudio")
+      t(context.lang, "unsupportedAudio"),
+      context.reqId,
+      "audio-missing"
     );
     return;
   }
@@ -68,7 +70,9 @@ export async function handleWhatsAppAudioEvent(
     if (!process.env.OPENAI_API_KEY?.trim()) {
       await sendWhatsAppTextReply(
         event.senderId,
-        t(context.lang, "unsupportedAudio")
+        t(context.lang, "unsupportedAudio"),
+        context.reqId,
+        "audio-provider-unavailable"
       );
       return;
     }
@@ -77,7 +81,9 @@ export async function handleWhatsAppAudioEvent(
     if (!reservation) {
       await sendWhatsAppTextReply(
         event.senderId,
-        t(context.lang, "outOfFreeCredits")
+        t(context.lang, "outOfFreeCredits"),
+        context.reqId,
+        "audio-quota-exhausted"
       );
       return;
     }
@@ -108,7 +114,7 @@ export async function handleWhatsAppAudioEvent(
       );
       await markMessengerProviderAttemptStarted(downloadFence);
       downloadStarted = true;
-      const downloaded = await downloadWhatsAppMedia(event.audioId);
+      const downloaded = await downloadWhatsAppInboundMedia(event.audioId);
       sourceAudioBuffer = downloaded.buffer;
       sourceAudioContentType = downloaded.contentType;
       await finalizeMessengerProviderAttemptFence(downloadFence, "succeeded");
@@ -142,7 +148,9 @@ export async function handleWhatsAppAudioEvent(
       });
       await sendWhatsAppTextReply(
         event.senderId,
-        t(context.lang, "unsupportedAudio")
+        t(context.lang, "unsupportedAudio"),
+        context.reqId,
+        "audio-download-failed"
       );
       return;
     }
@@ -157,7 +165,9 @@ export async function handleWhatsAppAudioEvent(
     if (!preparedAudio) {
       await sendWhatsAppTextReply(
         event.senderId,
-        t(context.lang, "unsupportedAudio")
+        t(context.lang, "unsupportedAudio"),
+        context.reqId,
+        "audio-unsupported-format"
       );
       return;
     }
@@ -199,7 +209,9 @@ export async function handleWhatsAppAudioEvent(
     if (!transcript) {
       await sendWhatsAppTextReply(
         event.senderId,
-        t(context.lang, "unsupportedAudio")
+        t(context.lang, "unsupportedAudio"),
+        context.reqId,
+        "audio-empty-transcript"
       );
       return;
     }
@@ -216,7 +228,9 @@ export async function handleWhatsAppAudioEvent(
     if (error instanceof MessengerDailyAudioTranscriptionBudgetExceededError) {
       await sendWhatsAppTextReply(
         event.senderId,
-        t(context.lang, "outOfFreeCredits")
+        t(context.lang, "outOfFreeCredits"),
+        context.reqId,
+        "audio-daily-budget-exhausted"
       );
       return;
     }
@@ -226,7 +240,9 @@ export async function handleWhatsAppAudioEvent(
     ) {
       await sendWhatsAppTextReply(
         event.senderId,
-        t(context.lang, "outOfFreeCredits")
+        t(context.lang, "outOfFreeCredits"),
+        context.reqId,
+        "audio-quota-commit-failed"
       );
       return;
     }

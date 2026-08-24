@@ -105,7 +105,9 @@ describe("WhatsApp image generation customer errors", () => {
     expect(mocks.sendWhatsAppTextReply).toHaveBeenNthCalledWith(
       2,
       "whatsapp-sender",
-      "Ik kan nu even geen afbeelding maken. Probeer later opnieuw."
+      "Ik kan nu even geen afbeelding maken. Probeer later opnieuw.",
+      "request-id",
+      "image-generation-failure:generation_budget_reached"
     );
     const customerMessages = mocks.sendWhatsAppTextReply.mock.calls
       .map(([, message]) => message)

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { safeLog } from "./messengerApi";
+import { safeLog } from "./logger";
 import { toLogUser } from "./privacy";
 import {
   deleteScopedState,
