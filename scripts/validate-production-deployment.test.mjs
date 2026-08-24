@@ -2947,8 +2947,8 @@ describe("production deployment contract", () => {
       getReviewedArtifactSchemaSupport("image-gen", image, repoRoot),
     ).toEqual({
       minimum: "0015_base",
-      maximum: "0015_base",
-      phases: ["0015_base"],
+      maximum: "0016_expand",
+      phases: ["0015_base", "0016_expand"],
     });
   });
 
@@ -3005,7 +3005,7 @@ describe("production deployment contract", () => {
     fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "0017 contract is production-blocked",
+      "image-gen image does not support database phase 0017_contract",
     );
   });
 
@@ -3255,14 +3255,14 @@ describe("production deployment contract", () => {
       ),
     );
 
-    expect(() =>
+    expect(
       validateReviewedRollbackImage(
         "image-gen",
-        manifest.apps["image-gen"].reviewedImage,
+        manifest.apps["image-gen"].reviewedRollbackImages[0],
         repoRoot,
       ),
-    ).toThrow(
-      "legacy image is allowed only as the exact first trusted-rollout rollback",
+    ).toBe(
+      manifest.apps["image-gen"].reviewedRollbackImages[0],
     );
 
     const root = createRepositoryFixture();
@@ -3551,13 +3551,15 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("blocks every production target until its trusted rollout is reviewed", () => {
+  it("blocks unreviewed targets while enabling the reviewed image-gen bridge", () => {
     expect(() => validateDeploymentEnabled("gateway", repoRoot)).toThrow(
       "gateway production deployment is blocked",
     );
-    expect(() => validateDeploymentEnabled("image-gen", repoRoot)).toThrow(
-      "image-gen production deployment is blocked",
-    );
+    expect(validateDeploymentEnabled("image-gen", repoRoot)).toMatchObject({
+      deploymentEnabled: true,
+      reviewedArtifactKind: "migration-bridge",
+      databaseSchemaTransition: { state: "bridge_reviewed" },
+    });
     expect(() => validateDeploymentEnabled("storage-proxy", repoRoot)).toThrow(
       "storage-proxy production deployment is blocked",
     );
