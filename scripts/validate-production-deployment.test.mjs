@@ -4595,6 +4595,47 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("accepts only canonical Fly-managed builder metadata", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "deploy/production/apps.json"),
+        "utf8",
+      ),
+    );
+    const reviewedImage = manifest.apps["image-gen"].reviewedImage;
+    const canonical = imageGenFlyState(reviewedImage);
+    const inspect = (builderId) =>
+      checkLiveFlyDrift("image-gen", {
+        rootDir: repoRoot,
+        runFly(args) {
+          if (args.slice(0, 2).join(" ") !== "machine list") {
+            return canonical(args);
+          }
+          const machines = JSON.parse(canonical(args));
+          for (const machine of machines) {
+            machine.config.metadata.fly_builder_id = builderId;
+          }
+          return JSON.stringify(machines);
+        },
+      });
+
+    expect(inspect("683e341b47e018").blockingErrors).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("builder metadata")]),
+    );
+    for (const invalid of [
+      "not-a-builder",
+      null,
+      12345678901234,
+      ["683e341b47e018"],
+    ]) {
+      expect(inspect(invalid).blockingErrors).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("invalid builder metadata"),
+        ]),
+      );
+    }
+  });
+
   it("allows only an approved previous image during predeploy drift", () => {
     const root = createRepositoryFixture();
     const previousImage =

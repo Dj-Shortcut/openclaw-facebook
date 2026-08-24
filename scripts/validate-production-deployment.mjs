@@ -6493,21 +6493,24 @@ export function checkLiveFlyDrift(target, options = {}) {
       "fly_release_id",
       "fly_release_version",
       "fly_flyctl_version",
+      "fly_builder_id",
       "fly_previous_alloc",
       "fly_bluegreen_deployment_tag",
     ]);
     const unexpectedMetadataKeys = Object.keys(metadata).filter(
-      (key) =>
-        !allowedMetadataKeys.has(key) &&
-        !(
-          allowFirstTrustedBootstrapDrift &&
-          key === "fly_builder_id" &&
-          /^[a-f0-9]{14}$/.test(String(metadata[key] ?? ""))
-        ),
+      (key) => !allowedMetadataKeys.has(key),
     );
     if (unexpectedMetadataKeys.length > 0) {
       blockingErrors.push(`Machine ${machine.id} has unreviewed metadata`);
-    } else if (metadata.fly_builder_id != null) {
+    }
+    const hasBuilderId = Object.hasOwn(metadata, "fly_builder_id");
+    const builderId = metadata.fly_builder_id;
+    if (
+      hasBuilderId &&
+      (typeof builderId !== "string" || !/^[a-f0-9]{14}$/.test(builderId))
+    ) {
+      blockingErrors.push(`Machine ${machine.id} has invalid builder metadata`);
+    } else if (allowFirstTrustedBootstrapDrift && hasBuilderId) {
       acceptedBootstrapDrift.push(
         `Machine ${machine.id} legacy builder metadata will be replaced`,
       );
