@@ -295,53 +295,18 @@ for (const route of [
   { method: "DELETE", path: "/v1/storage/object" },
 ] as const) {
   test(`${route.method} ${route.path} is rate-limited before storage access`, async () => {
-    const apiKey = "test-storage-secret";
     const app = (await import("./index.ts")).createStorageProxyApp(
-      {
-        forgeApiKey: apiKey,
-        publicBaseUrl: "https://assets.example",
-        r2Bucket: "test-bucket",
-        r2Endpoint: "https://127.0.0.1.invalid",
-        r2AccessKeyId: "access",
-        r2SecretAccessKey: "secret",
-        port: 0,
-        maxUploadBytes: 1024,
-        storageOperationTimeoutMs: 20,
-        allowLegacyBearerAuth: false,
-        allowLegacyObjectKeys: false,
-        rateLimitRedisUrl: "redis://127.0.0.1:6379/13",
-        rateLimitKeySecret: "test-rate-limit-secret-at-least-32-bytes",
-        trustFlyClientIp: false,
-      },
+      buildTestConfig(),
       {
         windowMs: 60_000,
         authMaxRequests: 10,
         operationMaxRequests: 2,
       }
     );
-    const server = await new Promise<import("node:http").Server>(resolve => {
-      const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
-    });
+    const { baseUrl, server } = await listenOnLoopback(app);
     try {
-      const address = server.address();
-      assert.ok(address && typeof address !== "string");
-      const baseUrl = `http://127.0.0.1:${address.port}`;
       const requestUrl = `${baseUrl}${route.path}?path=${encodeURIComponent(scopedObjectKey)}`;
-      const parsedKey = parseStorageObjectKey(scopedObjectKey);
-      assert.ok(parsedKey);
-      const expiresAt = Math.floor(Date.now() / 1_000) + 60;
-      const headers = {
-        Authorization: `Bearer ${apiKey}`,
-        "X-Leaderbot-Storage-Scope": parsedKey.authorizationScope,
-        "X-Leaderbot-Storage-Expires": String(expiresAt),
-        "X-Leaderbot-Storage-Signature": `v1=${buildStorageRequestSignature({
-          apiKey,
-          method: route.method,
-          objectKey: scopedObjectKey,
-          scope: parsedKey.authorizationScope,
-          expiresAt,
-        })}`,
-      };
+      const headers = buildSignedStorageHeaders(route.method);
 
       const first = await fetch(requestUrl, { method: route.method, headers });
       const second = await fetch(requestUrl, { method: route.method, headers });
@@ -361,9 +326,7 @@ for (const route of [
       const health = await fetch(`${baseUrl}/healthz`);
       assert.equal(health.status, 200);
     } finally {
-      await new Promise<void>((resolve, reject) =>
-        server.close(error => (error ? reject(error) : resolve()))
-      );
+      await closeServer(server);
     }
   });
 }
@@ -386,6 +349,8 @@ test("the edge limiter ignores spoofed forwarding headers and keeps health live"
 
     const health = await fetch(`${baseUrl}/healthz`);
     assert.equal(health.status, 200);
+    assert.equal(health.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(health.headers.get("x-powered-by"), null);
   } finally {
     await closeServer(server);
   }

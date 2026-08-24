@@ -1,4 +1,5 @@
 import express from "express";
+import helmet from "helmet";
 import rateLimit, { ipKeyGenerator, type Store } from "express-rate-limit";
 import { Redis } from "ioredis";
 import { RedisStore, type RedisReply } from "rate-limit-redis";
@@ -906,6 +907,7 @@ export function createStorageProxyApp(
   }> = {}
 ): express.Express {
   const app = express();
+  app.use(helmet());
   const s3 = createS3Client(config);
   const windowMs = rateLimitOverrides.windowMs ?? STORAGE_RATE_LIMIT_WINDOW_MS;
   const backend = rateLimitOverrides.backend;
