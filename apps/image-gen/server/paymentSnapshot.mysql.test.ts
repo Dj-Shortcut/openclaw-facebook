@@ -94,7 +94,7 @@ suite("payment snapshot MySQL concurrency", () => {
       countryCode: "BE",
       customerType: "consumer",
       verificationStatus: "verified",
-      verificationMethod: "mysql_test",
+      verificationMethod: "manual_legal_review",
       evidenceReferenceHash: "e".repeat(64),
       verifiedAt: new Date("2026-01-01T00:00:00.000Z"),
       verificationExpiresAt: new Date("2030-01-01T00:00:00.000Z"),
