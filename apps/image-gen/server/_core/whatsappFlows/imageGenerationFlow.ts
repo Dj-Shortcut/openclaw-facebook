@@ -400,6 +400,25 @@ async function runWhatsAppImageGenerationOnce(
     quotaReservation;
   let providerAttemptsCommitted = 0;
   const providerFences: WhatsAppProviderAttemptFence[] = [];
+  const finalizeAmbiguousProviderFences = async (): Promise<number> => {
+    const fences = [...providerFences];
+    const outcomes = await Promise.allSettled(
+      fences.map(fence =>
+        finalizeWhatsAppProviderAttemptFence(fence, "ambiguous")
+      )
+    );
+    let failed = 0;
+    outcomes.forEach((outcome, index) => {
+      if (outcome.status === "rejected") {
+        failed += 1;
+        return;
+      }
+      const fence = fences[index];
+      const position = fence ? providerFences.indexOf(fence) : -1;
+      if (position >= 0) providerFences.splice(position, 1);
+    });
+    return failed;
+  };
   const finalizeKnownProviderSuccess = async (): Promise<void> => {
     const fences = [...providerFences];
     const outcomes = await Promise.allSettled(
@@ -423,6 +442,7 @@ async function runWhatsAppImageGenerationOnce(
     if (!reservationForAttempt) {
       throw new MessengerQuotaReservationCommitError();
     }
+    pendingQuotaReservation = reservationForAttempt;
     const providerFence = await reserveWhatsAppProviderAttemptFence({
       reqId,
       userKey: userId,
@@ -470,6 +490,7 @@ async function runWhatsAppImageGenerationOnce(
     };
   };
 
+  let operationFailed = false;
   try {
     const generationContext = await prepareGeneration(input);
     const completionFence = resolveWhatsAppCompletionFence(
@@ -519,12 +540,14 @@ async function runWhatsAppImageGenerationOnce(
       return;
     }
 
-    await Promise.all(
-      providerFences.map(fence =>
-        finalizeWhatsAppProviderAttemptFence(fence, "ambiguous")
-      )
-    );
-    providerFences.length = 0;
+    const failedFenceFinalizations = await finalizeAmbiguousProviderFences();
+    if (failedFenceFinalizations > 0) {
+      safeLog("whatsapp_provider_fence_cleanup_failed", {
+        level: "error",
+        user: toLogUser(userId),
+        failed: failedFenceFinalizations,
+      });
+    }
 
     await handleGenerationFailure({
       senderId,
@@ -535,17 +558,32 @@ async function runWhatsAppImageGenerationOnce(
       lastPhotoUrl: generationContext.lastPhotoUrl,
       result,
     });
+  } catch (error) {
+    operationFailed = true;
+    throw error;
   } finally {
-    await Promise.all(
-      providerFences.map(fence =>
-        finalizeWhatsAppProviderAttemptFence(fence, "ambiguous")
-      )
-    );
-    if (pendingQuotaReservation) {
-      await releaseImageGenerationUsage({
-        ...quotaInput,
-        reservation: pendingQuotaReservation,
+    const failedFenceFinalizations = await finalizeAmbiguousProviderFences();
+    if (failedFenceFinalizations > 0) {
+      safeLog("whatsapp_provider_fence_cleanup_failed", {
+        level: "error",
+        user: toLogUser(userId),
+        failed: failedFenceFinalizations,
       });
+    }
+    if (pendingQuotaReservation) {
+      try {
+        await releaseImageGenerationUsage({
+          ...quotaInput,
+          reservation: pendingQuotaReservation,
+        });
+      } catch (error) {
+        safeLog("whatsapp_quota_release_failed", {
+          level: "error",
+          user: toLogUser(userId),
+          error: error instanceof Error ? error.name : "unknown_error",
+        });
+        if (!operationFailed) throw error;
+      }
     }
   }
 }

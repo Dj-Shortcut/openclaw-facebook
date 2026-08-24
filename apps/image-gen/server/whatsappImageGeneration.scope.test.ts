@@ -372,6 +372,72 @@ describe("WhatsApp image generation tenant scope", () => {
     expect(mocks.sendWhatsAppImageReplyWithReceipt).not.toHaveBeenCalled();
   });
 
+  it("releases a retry reservation when ambiguous fence cleanup fails", async () => {
+    const firstFence = {
+      leaseToken: "provider-lease-first",
+      attemptKeyHash: "a".repeat(64),
+    };
+    const retryFence = {
+      leaseToken: "provider-lease-retry",
+      attemptKeyHash: "b".repeat(64),
+    };
+    const initialReservation = { token: "initial-reservation" };
+    const retryReservation = { token: "retry-reservation" };
+    mocks.reserveImageGenerationUsage
+      .mockResolvedValueOnce(initialReservation)
+      .mockResolvedValueOnce(retryReservation);
+    mocks.reserveProviderFence
+      .mockResolvedValueOnce(firstFence)
+      .mockResolvedValueOnce(retryFence);
+    mocks.finalizeProviderFence.mockImplementation(
+      async (_fence: unknown, outcome: string) => {
+        if (outcome === "ambiguous") {
+          throw new Error("provider fence cleanup failed");
+        }
+      }
+    );
+    mocks.executeGenerationFlow.mockImplementation(async input => {
+      const firstAdmission = await input.onProviderAttempt();
+      await firstAdmission.markTransportStarted();
+      const retryAdmission = await input.onProviderAttempt();
+      await retryAdmission.abortBeforeTransport();
+      throw new Error("generation failed before retry transport");
+    });
+
+    await expect(
+      runWhatsAppImageGeneration(generationInput("wa-cleanup-release"))
+    ).rejects.toThrow("generation failed before retry transport");
+
+    expect(mocks.finalizeProviderFence).toHaveBeenCalledWith(
+      firstFence,
+      "ambiguous"
+    );
+    expect(mocks.finalizeProviderFence).toHaveBeenCalledWith(
+      retryFence,
+      "known_failed"
+    );
+    expect(mocks.releaseImageGenerationUsage).toHaveBeenCalledWith({
+      channel: "whatsapp",
+      senderId: SENDER_ID,
+      reservation: retryReservation,
+    });
+  });
+
+  it("preserves the operation failure when reservation release also fails", async () => {
+    mocks.executeGenerationFlow.mockRejectedValueOnce(
+      new Error("generation operation failed")
+    );
+    mocks.releaseImageGenerationUsage.mockRejectedValueOnce(
+      new Error("quota release failed")
+    );
+
+    await expect(
+      runWhatsAppImageGeneration(generationInput("wa-release-failure"))
+    ).rejects.toThrow("generation operation failed");
+
+    expect(mocks.releaseImageGenerationUsage).toHaveBeenCalledOnce();
+  });
+
   it("marks an outstanding fence ambiguous exactly once on generation failure", async () => {
     mocks.executeGenerationFlow.mockImplementation(async input => {
       const admission = await input.onProviderAttempt();
