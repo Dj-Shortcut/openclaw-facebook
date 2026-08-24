@@ -3052,9 +3052,9 @@ describe("production deployment contract", () => {
     expect(
       getReviewedArtifactSchemaSupport("image-gen", image, repoRoot),
     ).toEqual({
-      minimum: "0015_base",
+      minimum: "0016_expand",
       maximum: "0016_expand",
-      phases: ["0015_base", "0016_expand"],
+      phases: ["0016_expand"],
     });
   });
 
@@ -3111,6 +3111,13 @@ describe("production deployment contract", () => {
       "0016_expand",
       "0017_contract",
     ];
+    for (const image of imageGen.reviewedRollbackImages) {
+      imageGen.reviewedRollbackImageSchemaPhases[image] = [
+        "0015_base",
+        "0016_expand",
+        "0017_contract",
+      ];
+    }
     fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
     expect(() => validateProductionRepository(root)).toThrow(
@@ -3660,13 +3667,13 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("blocks unreviewed targets and freezes image-gen during expand", () => {
+  it("blocks unreviewed targets and enables only the reviewed image-gen runtime", () => {
     expect(() => validateDeploymentEnabled("gateway", repoRoot)).toThrow(
       "gateway production deployment is blocked",
     );
-    expect(() => validateDeploymentEnabled("image-gen", repoRoot)).toThrow(
-      "image-gen production deployment is blocked",
-    );
+    expect(
+      validateDeploymentEnabled("image-gen", repoRoot).reviewedArtifactKind,
+    ).toBe("runtime");
     expect(() => validateDeploymentEnabled("storage-proxy", repoRoot)).toThrow(
       "storage-proxy production deployment is blocked",
     );
