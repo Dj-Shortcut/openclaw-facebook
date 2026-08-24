@@ -4622,11 +4622,18 @@ describe("production deployment contract", () => {
     expect(inspect("683e341b47e018").blockingErrors).not.toEqual(
       expect.arrayContaining([expect.stringContaining("builder metadata")]),
     );
-    expect(inspect("not-a-builder").blockingErrors).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("invalid builder metadata"),
-      ]),
-    );
+    for (const invalid of [
+      "not-a-builder",
+      null,
+      12345678901234,
+      ["683e341b47e018"],
+    ]) {
+      expect(inspect(invalid).blockingErrors).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("invalid builder metadata"),
+        ]),
+      );
+    }
   });
 
   it("allows only an approved previous image during predeploy drift", () => {

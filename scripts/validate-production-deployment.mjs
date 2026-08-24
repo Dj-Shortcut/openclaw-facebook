@@ -6503,15 +6503,14 @@ export function checkLiveFlyDrift(target, options = {}) {
     if (unexpectedMetadataKeys.length > 0) {
       blockingErrors.push(`Machine ${machine.id} has unreviewed metadata`);
     }
+    const hasBuilderId = Object.hasOwn(metadata, "fly_builder_id");
+    const builderId = metadata.fly_builder_id;
     if (
-      metadata.fly_builder_id != null &&
-      !/^[a-f0-9]{14}$/.test(String(metadata.fly_builder_id))
+      hasBuilderId &&
+      (typeof builderId !== "string" || !/^[a-f0-9]{14}$/.test(builderId))
     ) {
       blockingErrors.push(`Machine ${machine.id} has invalid builder metadata`);
-    } else if (
-      allowFirstTrustedBootstrapDrift &&
-      metadata.fly_builder_id != null
-    ) {
+    } else if (allowFirstTrustedBootstrapDrift && hasBuilderId) {
       acceptedBootstrapDrift.push(
         `Machine ${machine.id} legacy builder metadata will be replaced`,
       );
