@@ -28,8 +28,8 @@
       "config": "apps/image-gen/fly.toml",
       "workingDirectory": "apps/image-gen",
       "deployScript": "deploy:image-gen",
-      "deploymentEnabled": true,
-      "deploymentBlockReason": "The reviewed 0015-to-0016 transition is waiting for a trusted, attested compatibility-bridge artifact.",
+      "deploymentEnabled": false,
+      "deploymentBlockReason": "Application deploys are frozen while the protected 0015-to-0016 expand runs; the attested bridge is the only recovery image.",
       "sourceDeployEnabled": false,
       "sourceDeployBlockReason": "Production deploys require an immutable image built from reviewed source and recorded in this manifest before rollout.",
       "trustedBuilderWorkflow": ".github/workflows/build-production-artifacts.yml",
@@ -37,23 +37,25 @@
       "reviewedArtifactKind": "migration-bridge",
       "reviewedSourceCommit": "a9f5cdf3ffa347ffa77fc0410e8780fe5c417191",
       "reviewedRollbackImages": [
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:28d862568aa3cb049ac4aba164bb1e01792691feec646ff87c657f72bd306804"
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:92647ef8bcc7aa79326630a051b486ea9c8c9d14399658118657515dc5242149"
       ],
       "reviewedRollbackConfigs": {
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:28d862568aa3cb049ac4aba164bb1e01792691feec646ff87c657f72bd306804": {
-          "path": "deploy/production/rollback-configs/image-gen-28d862568aa3.toml",
-          "sha256": "c449016cd8a66ec563c71e8fbb7e6fc0a1953f5ad0a7d6c1313936aaff911b64"
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:92647ef8bcc7aa79326630a051b486ea9c8c9d14399658118657515dc5242149": {
+          "path": "deploy/production/rollback-configs/image-gen-92647ef8bcc7.toml",
+          "sha256": "6c9c18ff14ff62b713a2eb75f5e08d6dc3781350333a1fef59691ff6803660c8"
         }
       },
       "reviewedRollbackArtifactKinds": {
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:28d862568aa3cb049ac4aba164bb1e01792691feec646ff87c657f72bd306804": "legacy-bootstrap"
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:92647ef8bcc7aa79326630a051b486ea9c8c9d14399658118657515dc5242149": "migration-bridge"
       },
-      "reviewedRollbackSourceCommits": {},
+      "reviewedRollbackSourceCommits": {
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:92647ef8bcc7aa79326630a051b486ea9c8c9d14399658118657515dc5242149": "a9f5cdf3ffa347ffa77fc0410e8780fe5c417191"
+      },
       "databaseSchemaPhase": "0015_base",
       "databaseSchemaTransition": {
         "from": "0015_base",
         "to": "0016_expand",
-        "state": "bridge_reviewed",
+        "state": "expand_pending",
         "legacyBaseImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:28d862568aa3cb049ac4aba164bb1e01792691feec646ff87c657f72bd306804",
         "bridgeImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:92647ef8bcc7aa79326630a051b486ea9c8c9d14399658118657515dc5242149",
         "bridgeSourceCommit": "a9f5cdf3ffa347ffa77fc0410e8780fe5c417191",
@@ -70,8 +72,9 @@
       },
       "reviewedImageSchemaPhases": ["0015_base", "0016_expand"],
       "reviewedRollbackImageSchemaPhases": {
-        "registry.fly.io/leaderbot-fb-image-gen@sha256:28d862568aa3cb049ac4aba164bb1e01792691feec646ff87c657f72bd306804": [
-          "0015_base"
+        "registry.fly.io/leaderbot-fb-image-gen@sha256:92647ef8bcc7aa79326630a051b486ea9c8c9d14399658118657515dc5242149": [
+          "0015_base",
+          "0016_expand"
         ]
       },
       "generationQueueWriteVersion": "v1",

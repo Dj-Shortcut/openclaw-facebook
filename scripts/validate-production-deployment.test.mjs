@@ -49,6 +49,7 @@ function createRepositoryFixture() {
   fs.mkdirSync(path.join(root, ".github/workflows"), { recursive: true });
   for (const relativePath of [
     "deploy/production/apps.json",
+    "deploy/production/rollback-configs/image-gen-28d862568aa3.toml",
     "docs/operations/production-deployments.md",
     "deploy/fly-gateway/Dockerfile",
     "deploy/fly-gateway/Dockerfile.route-guard-hotfix",
@@ -123,6 +124,13 @@ function stageImageGenBridge(manifest, sourceCommit = "a".repeat(40)) {
   app.reviewedArtifactKind = "migration-bridge";
   app.reviewedSourceCommit = sourceCommit;
   app.reviewedRollbackImages = [legacyImage];
+  app.reviewedRollbackConfigs = {
+    [legacyImage]: {
+      path: "deploy/production/rollback-configs/image-gen-28d862568aa3.toml",
+      sha256:
+        "c449016cd8a66ec563c71e8fbb7e6fc0a1953f5ad0a7d6c1313936aaff911b64",
+    },
+  };
   app.reviewedRollbackArtifactKinds = {
     [legacyImage]: "legacy-bootstrap",
   };
@@ -3005,7 +3013,7 @@ describe("production deployment contract", () => {
     fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
     expect(() => validateProductionRepository(root)).toThrow(
-      "image-gen image does not support database phase 0017_contract",
+      "image-gen 0017 contract is production-blocked",
     );
   });
 
@@ -3551,15 +3559,13 @@ describe("production deployment contract", () => {
     );
   });
 
-  it("blocks unreviewed targets while enabling the reviewed image-gen bridge", () => {
+  it("blocks unreviewed targets and freezes image-gen during expand", () => {
     expect(() => validateDeploymentEnabled("gateway", repoRoot)).toThrow(
       "gateway production deployment is blocked",
     );
-    expect(validateDeploymentEnabled("image-gen", repoRoot)).toMatchObject({
-      deploymentEnabled: true,
-      reviewedArtifactKind: "migration-bridge",
-      databaseSchemaTransition: { state: "bridge_reviewed" },
-    });
+    expect(() => validateDeploymentEnabled("image-gen", repoRoot)).toThrow(
+      "image-gen production deployment is blocked",
+    );
     expect(() => validateDeploymentEnabled("storage-proxy", repoRoot)).toThrow(
       "storage-proxy production deployment is blocked",
     );
