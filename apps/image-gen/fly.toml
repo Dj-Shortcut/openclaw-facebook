@@ -13,7 +13,10 @@ kill_timeout = 300
   release_command_timeout = "10m"
 
 [env]
-  AI_ANSWER_FINALIZATION_DRAIN_ENABLED = "true"
+  # The disabled pilot control keeps only the safety outbox lane enabled.
+  # Enable finalization only after the audited scheduler-enable transition has
+  # activated the exact pilot lane while commercial exposure remains off.
+  AI_ANSWER_FINALIZATION_DRAIN_ENABLED = "false"
   AI_ANSWER_QUOTA_PREFLIGHT_ENABLED = "false"
   APP_BASE_URL = "https://app.leaderbot.live"
   # Must match the storage-proxy's public R2 asset base, not its Fly API host.
@@ -53,7 +56,9 @@ kill_timeout = 300
   MOLLIE_BILLING_SCHEDULER_MODE = "pilot_pin"
   MOLLIE_BILLING_WORKER_WORKSPACE_ID = "1"
   MOLLIE_CREDENTIAL_GENERATION_ID = "test-fly-v1"
-  MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED = "true"
+  # Entitlement admission is activated only after the finalization lane is
+  # enabled and its worker heartbeat has passed operational readiness.
+  MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED = "false"
   MOLLIE_LIVE_BILLING_ENABLED = "false"
   MOLLIE_MODE = "test"
   MOLLIE_PAYMENT_WEBHOOK_URL = "https://app.leaderbot.live/api/webhooks/mollie/payments"

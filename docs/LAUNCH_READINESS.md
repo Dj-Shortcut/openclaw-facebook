@@ -139,21 +139,31 @@ deploying outside the protected workflows.
    MOLLIE_ACCOUNTING_IMPORT_ENABLED=false
    ```
 
-2. After a green `phase: "offline"` and operator-notification gate, configure an
-   isolated Test Mode pilot outside chat. With
-   `MOLLIE_BILLING_ENABLED=false`, apply one reviewed operational transition
-   that sets `AI_ANSWER_FINALIZATION_DRAIN_ENABLED=true`,
-   `MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED=true`,
-   `BILLING_NOTIFICATION_PLANE_ENABLED=true`, the exact pilot scheduler and
-   `MOLLIE_BILLING_DRAIN_ENABLED=true`. Do not restart between partial values.
-   Wait for operational `/readyz` and every required worker heartbeat before
-   setting `MOLLIE_BILLING_ENABLED=true`. Keep
+2. After a green `phase: "offline"` and operator-notification gate, deploy the
+   provider-safe first operational phase with
+   `MOLLIE_BILLING_DRAIN_ENABLED=true` and
+   `BILLING_NOTIFICATION_PLANE_ENABLED=true`. Keep
+   `MOLLIE_BILLING_ENABLED=false`,
+   `AI_ANSWER_FINALIZATION_DRAIN_ENABLED=false` and
+   `MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED=false`. A commercially disabled
+   tenant intentionally has only its safety outbox lane enabled, so requiring
+   the finalization lane before the audited scheduler transition makes startup
+   fail closed.
+3. With that safety phase green, configure the exact isolated Test Mode pilot
+   outside chat and perform the audited scheduler-enable transition. Keep
+   `MOLLIE_BILLING_ENABLED=false`, so the database transition cannot expose a
+   checkout URL or create a provider resource.
+4. In a separate reviewed config deployment, set
+   `AI_ANSWER_FINALIZATION_DRAIN_ENABLED=true` and
+   `MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED=true`. Wait for operational
+   `/readyz` and every required worker heartbeat before setting
+   `MOLLIE_BILLING_ENABLED=true`. Keep
    `AI_ANSWER_QUOTA_PREFLIGHT_ENABLED=false` and
    `LEADERBOT_AI_ANSWER_ENFORCEMENT_ENABLED=false` for the image-only pilot.
    The drain flag stays true after the first exposure even
    when commercial billing is later disabled. Keep `MOLLIE_MODE=test` and
    `MOLLIE_LIVE_BILLING_ENABLED=false` throughout the sandbox matrix.
-3. Do not install or enable a `live_` credential until every sandbox,
+5. Do not install or enable a `live_` credential until every sandbox,
    production, legal, accounting and incident gate is signed off. Live
    activation is a separate explicit human change with rollback evidence.
 
