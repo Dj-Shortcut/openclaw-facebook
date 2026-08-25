@@ -687,6 +687,22 @@ export function getReviewedArtifactSchemaSupport(
   return support;
 }
 
+export function validateReviewedArtifactSchemaPhase(
+  target,
+  image,
+  phase,
+  rootDir = process.cwd(),
+) {
+  const support = getReviewedArtifactSchemaSupport(target, image, rootDir);
+  if (
+    !PRODUCTION_SCHEMA_PHASES.includes(phase) ||
+    !support.phases.includes(phase)
+  ) {
+    fail(`${target} image does not support database phase ${phase}`);
+  }
+  return phase;
+}
+
 function assertReviewedArtifactProvenance(target, app, image) {
   if (target === "gateway") return null;
   const kind = reviewedArtifactKindForImage(app, image);
@@ -1580,17 +1596,45 @@ export function getReviewedSettledPredecessorConfig(
   return relativePath;
 }
 
-function assertReviewedRollbackConfigCopy(
+export function getReviewedRestoreConfig(
   target,
   image,
+  identity,
+  rootDir = process.cwd(),
+) {
+  if (!/^(?:none|deploy-[0-9]+-[0-9]+)$/.test(identity ?? "")) {
+    fail(`${target} restore config requires an exact deployment identity`);
+  }
+  const predecessorConfig = getReviewedSettledPredecessorConfig(
+    target,
+    identity,
+    image,
+    rootDir,
+  );
+  if (predecessorConfig != null) {
+    validateReviewedRollbackImage(target, image, rootDir);
+    return predecessorConfig;
+  }
+  const app = loadProductionManifest(rootDir).apps[target];
+  if (app?.reviewedSettledPredecessor?.image === image) {
+    fail(`${target} current image lacks an exact identity-bound restore config`);
+  }
+  return getReviewedRollbackConfig(target, image, rootDir);
+}
+
+function assertReviewedRestoreConfigCopy(
+  target,
+  image,
+  identity,
   configPath,
   rootDir,
   failureMessage =
-    "scale count drift allowance requires the reviewed rollback config",
+    "scale count drift allowance requires the reviewed restore config",
 ) {
-  const reviewedRelativePath = getReviewedRollbackConfig(
+  const reviewedRelativePath = getReviewedRestoreConfig(
     target,
     image,
+    identity,
     rootDir,
   );
   const reviewedPath = path.resolve(rootDir, reviewedRelativePath);
@@ -1802,7 +1846,7 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       "must capture image-gen schema compatibility from the exact reviewed deployment manifest",
     ],
     [
-      ".reviewedRollbackImageSchemaPhases[$image] | index($phase) != null",
+      '--validate-reviewed-schema-phase image-gen "$rollback_image"',
       "must prove the captured image-gen rollback supports the manifest-bound schema phase",
     ],
     [
@@ -1918,8 +1962,8 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       "must verify the restored storage-proxy image and configuration",
     ],
     [
-      '--reviewed-rollback-config image-gen "$rollback_image"',
-      "must resolve the exact hash-reviewed image-gen rollback config",
+      '--reviewed-restore-config image-gen "$rollback_image" \\\n            "$rollback_identity")',
+      "must resolve the exact identity-bound image-gen restore config",
     ],
     [
       '--reviewed-rollback-config storage-proxy "$rollback_image"',
@@ -2166,11 +2210,19 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     ) ?? -1;
   const supportedPhaseIndex =
     imageRollbackCaptureStep?.indexOf(
-      ".reviewedRollbackImageSchemaPhases[$image] | index($phase) != null",
+      '--validate-reviewed-schema-phase image-gen "$rollback_image"',
     ) ?? -1;
   const phaseArtifactIndex =
     imageRollbackCaptureStep?.indexOf(
       'printf \'%s\\n\' "$rollback_schema_phase" > "$RUNNER_TEMP/leaderbot-release/rollback-schema-phase.txt"',
+    ) ?? -1;
+  const capturedIdentityIndex =
+    imageRollbackCaptureStep?.indexOf(
+      'rollback_identity="$(jq -er \'.env.LEADERBOT_DEPLOYMENT_IDENTITY // "none"\' <<<"$live_config")"',
+    ) ?? -1;
+  const restoreConfigIndex =
+    imageRollbackCaptureStep?.indexOf(
+      '--reviewed-restore-config image-gen "$rollback_image" \\\n            "$rollback_identity")',
     ) ?? -1;
   const restoredReleaseIndex =
     imageRollbackCaptureStep?.indexOf("--verify-restored-release image-gen") ??
@@ -2187,15 +2239,21 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     capturedPhaseIndex < 0 ||
     supportedPhaseIndex <= capturedPhaseIndex ||
     phaseArtifactIndex <= supportedPhaseIndex ||
-    restoredReleaseIndex <= phaseArtifactIndex
+    capturedIdentityIndex <= phaseArtifactIndex ||
+    restoreConfigIndex <= capturedIdentityIndex ||
+    restoredReleaseIndex <= restoreConfigIndex
   ) {
     fail(
       `${PRODUCTION_WORKFLOW_PATH} must bind the durable image-gen rollback schema evidence to the reviewed manifest and rollback image before strict capture succeeds`,
     );
   }
   for (const target of ["gateway", "image-gen", "storage-proxy"]) {
+    const configCommand =
+      target === "image-gen"
+        ? `--reviewed-restore-config ${target} "$rollback_image"`
+        : `--reviewed-rollback-config ${target} "$rollback_image"`;
     const configIndex = workflow.indexOf(
-      `--reviewed-rollback-config ${target} "$rollback_image"`,
+      configCommand,
     );
     const verifyIndex = workflow.indexOf(
       `--verify-restored-release ${target} "$rollback_image"`,
@@ -3799,8 +3857,8 @@ function validateProductionReconciliationWorkflow(rootDir) {
       "must resolve the exact hash-reviewed gateway rollback config only after its manifest gate",
     ],
     [
-      "--reviewed-rollback-config image-gen",
-      "must compare the image-gen artifact config to the reviewed repository file",
+      '--reviewed-restore-config image-gen "$rollback_image" "$prior_identity"',
+      "must compare the image-gen artifact config to its exact identity-bound reviewed repository file",
     ],
     [
       "--reviewed-rollback-config storage-proxy",
@@ -3908,7 +3966,7 @@ function validateProductionReconciliationWorkflow(rootDir) {
       "must bind rollback schema evidence to the interrupted deployment manifest",
     ],
     [
-      ".reviewedRollbackImageSchemaPhases[$image] | index($phase) != null",
+      "--validate-reviewed-schema-phase image-gen",
       "must prove the rollback image supports the exact captured manifest phase",
     ],
     [
@@ -4081,7 +4139,11 @@ function validateProductionReconciliationWorkflow(rootDir) {
     const targetEnabledIndex = step.indexOf(
       `--validate-target-enabled ${target}`,
     );
-    const configIndex = step.indexOf(`--reviewed-rollback-config ${target}`);
+    const configIndex = step.indexOf(
+      target === "image-gen"
+        ? `--reviewed-restore-config ${target} "$rollback_image" "$prior_identity"`
+        : `--reviewed-rollback-config ${target}`,
+    );
     const configCompareIndex = step.indexOf(
       'cmp --silent "$expected_config" "$rollback_config"',
     );
@@ -4179,6 +4241,16 @@ function validateProductionReconciliationWorkflow(rootDir) {
       );
     }
   }
+  if (
+    occurrenceCount(
+      workflow,
+      '--reviewed-restore-config image-gen "$rollback_image" "$prior_identity"',
+    ) !== 2
+  ) {
+    fail(
+      `${PRODUCTION_RECONCILIATION_WORKFLOW_PATH} must bind both image-gen recovery mutations to the exact captured predecessor identity`,
+    );
+  }
   const [schemaEvidenceStep] = namedWorkflowStepBodies(
     workflow,
     "Prove captured rollback schema compatibility evidence",
@@ -4202,7 +4274,7 @@ function validateProductionReconciliationWorkflow(rootDir) {
       'test "$phase" = "$(jq -er \'.apps["image-gen"].databaseSchemaPhase\' deploy/production/apps.json)"',
     ) ||
     !schemaEvidenceStep.includes(
-      ".reviewedRollbackImageSchemaPhases[$image] | index($phase) != null",
+      '--validate-reviewed-schema-phase image-gen "$rollback_image"',
     ) ||
     schemaEvidenceStep.includes("env:") ||
     /\$\{\{\s*secrets\./.test(schemaEvidenceStep) ||
@@ -4446,8 +4518,8 @@ function validateProductionReconciliationWorkflow(rootDir) {
     occurrenceCount(workflow, "--require-current-reviewed-image") !== 4 ||
     occurrenceCount(workflow, "--verify-settled-baseline") !== 0 ||
     occurrenceCount(workflow, "--settled-live") !== 4 ||
-    occurrenceCount(workflow, 'node "$RECOVERY_CONTROLLER"') !== 42 ||
-    occurrenceCount(workflow, '--root-dir "$GITHUB_WORKSPACE"') !== 38 ||
+    occurrenceCount(workflow, 'node "$RECOVERY_CONTROLLER"') !== 43 ||
+    occurrenceCount(workflow, '--root-dir "$GITHUB_WORKSPACE"') !== 39 ||
     occurrenceCount(workflow, "--validate-recovery-protocol") !== 3 ||
     occurrenceCount(workflow, "--reviewed-scale-plan") !== 3 ||
     occurrenceCount(workflow, 'flyctl scale count "$count"') !== 3 ||
@@ -6100,9 +6172,10 @@ export function classifyRecoveryReleaseCommandMachines(
     );
   }
   validateReviewedRollbackImage(target, capturedPriorImage, rootDir);
-  const capturedConfig = getReviewedRollbackConfig(
+  const capturedConfig = getReviewedRestoreConfig(
     target,
     capturedPriorImage,
+    capturedPriorIdentity,
     rootDir,
   );
   const tuples = [
@@ -6317,7 +6390,6 @@ export function checkLiveFlyDrift(target, options = {}) {
     (options.allowReviewedRollbackImage !== true ||
       options.expectedImage !== undefined ||
       options.configPath !== undefined ||
-      !app.reviewedRollbackImages?.includes(capturedPriorImage) ||
       !/^deploy-[0-9]+-[0-9]+$/.test(
         options.expectedDeploymentIdentity ?? "",
       ) ||
@@ -6332,6 +6404,12 @@ export function checkLiveFlyDrift(target, options = {}) {
   }
   if (allowInterruptedScaleCountDrift) {
     validateReviewedRollbackImage(target, capturedPriorImage, rootDir);
+    getReviewedRestoreConfig(
+      target,
+      capturedPriorImage,
+      options.capturedPriorIdentity,
+      rootDir,
+    );
   }
   if (allowScaleCountDrift) {
     if (
@@ -6361,9 +6439,10 @@ export function checkLiveFlyDrift(target, options = {}) {
       );
     }
     validateReviewedRollbackImage(target, options.expectedImage, rootDir);
-    assertReviewedRollbackConfigCopy(
+    assertReviewedRestoreConfigCopy(
       target,
       options.expectedImage,
+      options.capturedPriorIdentity,
       options.configPath,
       rootDir,
     );
@@ -6402,7 +6481,12 @@ export function checkLiveFlyDrift(target, options = {}) {
     allowScaleCountDrift || allowInterruptedScaleCountDrift
       ? readMachineConfigProfile(
           rootDir,
-          getReviewedRollbackConfig(target, capturedPriorImage, rootDir),
+          getReviewedRestoreConfig(
+            target,
+            capturedPriorImage,
+            options.capturedPriorIdentity,
+            rootDir,
+          ),
           app,
         )
       : null;
@@ -6431,9 +6515,10 @@ export function checkLiveFlyDrift(target, options = {}) {
         "first trusted bootstrap drift requires the exact reviewed image-gen legacy predecessor",
       );
     }
-    assertReviewedRollbackConfigCopy(
+    assertReviewedRestoreConfigCopy(
       target,
       options.expectedImage,
+      expectedDeploymentIdentity,
       selectedConfigPath,
       rootDir,
       "first trusted bootstrap drift requires the exact reviewed image-gen legacy predecessor",
@@ -7306,6 +7391,9 @@ if (isMain) {
   const artifactKindIndex = process.argv.indexOf("--reviewed-artifact-kind");
   const schemaMinimumIndex = process.argv.indexOf("--reviewed-schema-minimum");
   const schemaMaximumIndex = process.argv.indexOf("--reviewed-schema-maximum");
+  const schemaPhaseIndex = process.argv.indexOf(
+    "--validate-reviewed-schema-phase",
+  );
   const reviewedCiIndex = process.argv.indexOf("--verify-reviewed-ci");
   const sourceCiIndex = process.argv.indexOf("--verify-source-ci");
   const resolveIndex = process.argv.indexOf("--resolve-release-image");
@@ -7313,6 +7401,7 @@ if (isMain) {
   const rollbackConfigIndex = process.argv.indexOf(
     "--reviewed-rollback-config",
   );
+  const restoreConfigIndex = process.argv.indexOf("--reviewed-restore-config");
   const legacyRollbackIndex = process.argv.indexOf(
     "--validate-legacy-transition-rollback",
   );
@@ -7474,6 +7563,12 @@ if (isMain) {
     process.stdout.write(
       `${getReviewedArtifactSchemaSupport(target, image, cliRootDir).maximum}\n`,
     );
+  } else if (schemaPhaseIndex >= 0) {
+    const target = process.argv[schemaPhaseIndex + 1];
+    const image = process.argv[schemaPhaseIndex + 2];
+    const phase = process.argv[schemaPhaseIndex + 3];
+    validateReviewedArtifactSchemaPhase(target, image, phase, cliRootDir);
+    process.stdout.write(`${target} image supports database phase ${phase}.\n`);
   } else if (reviewedCiIndex >= 0) {
     const target = process.argv[reviewedCiIndex + 1];
     const image = process.argv[reviewedCiIndex + 2];
@@ -7574,6 +7669,13 @@ if (isMain) {
     const image = process.argv[rollbackConfigIndex + 2];
     process.stdout.write(
       `${getReviewedRollbackConfig(target, image, cliRootDir)}\n`,
+    );
+  } else if (restoreConfigIndex >= 0) {
+    const target = process.argv[restoreConfigIndex + 1];
+    const image = process.argv[restoreConfigIndex + 2];
+    const identity = process.argv[restoreConfigIndex + 3];
+    process.stdout.write(
+      `${getReviewedRestoreConfig(target, image, identity, cliRootDir)}\n`,
     );
   } else if (rollbackIndex >= 0) {
     const target = process.argv[rollbackIndex + 1];
