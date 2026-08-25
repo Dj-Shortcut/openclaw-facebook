@@ -11,7 +11,10 @@ import { assertMessengerPrivacySubject } from "./messengerPrivacySubject";
 import type { MessengerChannel } from "./messengerRequestContext";
 import { getRedisClient, isRedisEnabled } from "./redis";
 import { assertMessengerGenerationOwnership } from "./workspaceEntitlementRuntime";
-import type { MessengerImageQuotaStatus } from "./messengerImageQuotaStore";
+import type {
+  MessengerImageQuotaIdentity,
+  MessengerImageQuotaStatus,
+} from "./messengerImageQuotaStore";
 import {
   assertMessengerStorageScope,
   isLegacyMessengerStorageObjectKey,
@@ -52,6 +55,11 @@ export type MessengerGenerationCompletion = {
    * value is only for explicitly identified pre-migration completions.
    */
   quotaAccountingMode?: MessengerGenerationQuotaAccountingMode;
+  /**
+   * The exact originating free-quota scope, or null when the originating
+   * policy deliberately bypassed free quota. Older completions omit it.
+   */
+  quotaIdentity?: MessengerImageQuotaIdentity | null;
   quotaStatus?: MessengerImageQuotaStatus;
   quotaCommittedAt?: number;
   successNoticeStatus?: "pending" | "sent";
@@ -484,7 +492,8 @@ export async function markMessengerGenerationCompleted(
   userKey?: string,
   now = Date.now(),
   fence?: MessengerGenerationCompletionFence,
-  quotaAccountingMode: MessengerGenerationQuotaAccountingMode = "success_only_v1"
+  quotaAccountingMode: MessengerGenerationQuotaAccountingMode = "success_only_v1",
+  quotaIdentity?: MessengerImageQuotaIdentity | null
 ): Promise<void> {
   await writeMessengerGenerationCompletion(
     {
@@ -494,6 +503,7 @@ export async function markMessengerGenerationCompleted(
       deliveryStatus: "pending",
       successNoticeStatus: "pending",
       quotaAccountingMode,
+      ...(quotaIdentity !== undefined ? { quotaIdentity } : {}),
       userKey,
       ...fence,
       expiresAt: now + GENERATION_COMPLETION_TTL_SECONDS * 1_000,

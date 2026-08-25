@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { MessengerSendOutcome } from "./messengerApi";
 import { safeLog } from "./messengerApi";
 import { getGenerationMetrics } from "./image-generation/openAiImageClient";
@@ -379,7 +380,8 @@ export function createMessengerGenerationJobRunner(
                             channelConnectionId: job.channelConnectionId,
                             bindingEpoch: job.bindingEpoch,
                             mode: workspacePolicy.mode,
-                            idempotencyKey: `startpilot-image:${reqId}`,
+                            idempotencyKey:
+                              startpilotImageUsageIdempotencyKey(reqId),
                           }
                         ).catch(error => {
                           throw new StartpilotProviderAdmissionRetryError(
@@ -1018,11 +1020,10 @@ async function finishDuplicateGenerationIfCompleted(input: {
   let quotaStatus = completedGeneration.quotaStatus;
   let successNoticeStatus = completedGeneration.successNoticeStatus;
   const deliveryStatus = completedGeneration.deliveryStatus ?? "delivered";
-  const recoveryQuotaIdentity =
-    completedGeneration.quotaAccountingMode ===
-    "startpilot_attempt_committed_v1"
-      ? undefined
-      : input.successQuotaIdentity;
+  const recoveryQuotaIdentity = quotaIdentityForCompletionRecovery(
+    completedGeneration,
+    input.successQuotaIdentity
+  );
   if (recoveryQuotaIdentity && !quotaStatus) {
     const decision = await reserveMessengerGenerationQuota({
       psid: input.psid,
@@ -1305,7 +1306,8 @@ async function handleGenerationSuccess(input: {
       input.userId,
       Date.now(),
       input.completionFence,
-      input.quotaAccountingMode
+      input.quotaAccountingMode,
+      input.successQuotaIdentity ?? null
     )
   );
   let quotaStatus: MessengerImageQuotaStatus | undefined;
@@ -1639,6 +1641,49 @@ function imageQuotaIdentityForJob(
     privacyEpoch: 1,
     userKey: getUserKey(job.userId),
   };
+}
+
+function quotaIdentityForCompletionRecovery(
+  completion: MessengerGenerationCompletion,
+  currentFreeIdentity: MessengerImageQuotaIdentity | undefined
+): MessengerImageQuotaIdentity | undefined {
+  if (completion.quotaAccountingMode === "startpilot_attempt_committed_v1") {
+    return undefined;
+  }
+  if (!Object.hasOwn(completion, "quotaIdentity")) {
+    return currentFreeIdentity;
+  }
+  const identity = completion.quotaIdentity;
+  if (identity === null) return undefined;
+  if (
+    !identity ||
+    !Number.isSafeInteger(identity.workspaceId) ||
+    identity.workspaceId <= 0 ||
+    !Number.isSafeInteger(identity.channelConnectionId) ||
+    identity.channelConnectionId <= 0 ||
+    !Number.isSafeInteger(identity.bindingEpoch) ||
+    identity.bindingEpoch <= 0 ||
+    !Number.isSafeInteger(identity.privacyEpoch) ||
+    identity.privacyEpoch <= 0 ||
+    !/^[a-f0-9]{64}$/i.test(identity.userKey) ||
+    (completion.workspaceId !== undefined &&
+      completion.workspaceId !== identity.workspaceId) ||
+    (completion.channelConnectionId !== undefined &&
+      completion.channelConnectionId !== identity.channelConnectionId) ||
+    (completion.bindingEpoch !== undefined &&
+      completion.bindingEpoch !== identity.bindingEpoch) ||
+    (completion.privacyEpoch !== undefined &&
+      completion.privacyEpoch !== identity.privacyEpoch) ||
+    (completion.userKey !== undefined &&
+      getUserKey(completion.userKey) !== identity.userKey)
+  ) {
+    throw new MessengerImageQuotaRecoveryError();
+  }
+  return identity;
+}
+
+function startpilotImageUsageIdempotencyKey(reqId: string): string {
+  return `startpilot-image:${createHash("sha256").update(reqId).digest("hex")}`;
 }
 
 async function sendGenerationSuccessActions(input: {
