@@ -863,6 +863,74 @@ describe("production deployment contract", () => {
     });
   });
 
+  it("requires the exact settled runtime predecessor during image-gen rotation", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const app = manifest.apps["image-gen"];
+    const predecessorImage = app.reviewedSettledPredecessor.image;
+
+    app.reviewedRollbackImages = app.reviewedRollbackImages.filter(
+      (image) => image !== predecessorImage,
+    );
+    delete app.reviewedRollbackConfigs[predecessorImage];
+    delete app.reviewedRollbackArtifactKinds[predecessorImage];
+    delete app.reviewedRollbackSourceCommits[predecessorImage];
+    delete app.reviewedRollbackImageSchemaPhases[predecessorImage];
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "retain only the bridge plus exact settled runtime predecessor",
+    );
+  });
+
+  it("rejects an additional runtime rollback beyond the settled predecessor", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const app = manifest.apps["image-gen"];
+    const predecessor = app.reviewedSettledPredecessor;
+    const extraImage =
+      `registry.fly.io/${app.app}@sha256:${"c".repeat(64)}`;
+
+    app.reviewedRollbackImages.push(extraImage);
+    app.reviewedRollbackConfigs[extraImage] = {
+      path: predecessor.path,
+      sha256: predecessor.sha256,
+    };
+    app.reviewedRollbackArtifactKinds[extraImage] = "runtime";
+    app.reviewedRollbackSourceCommits[extraImage] = "d".repeat(40);
+    app.reviewedRollbackImageSchemaPhases[extraImage] = ["0016_expand"];
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "retain only the bridge plus exact settled runtime predecessor",
+    );
+  });
+
+  it.each([
+    ["artifact kind", (app, image) => {
+      app.reviewedRollbackArtifactKinds[image] = "migration-bridge";
+    }],
+    ["schema range", (app, image) => {
+      app.reviewedRollbackImageSchemaPhases[image] = [
+        "0015_base",
+        "0016_expand",
+      ];
+    }],
+  ])("rejects settled predecessor %s drift", (_label, mutate) => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const app = manifest.apps["image-gen"];
+    mutate(app, app.reviewedSettledPredecessor.image);
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "retain only the bridge plus exact settled runtime predecessor",
+    );
+  });
+
   it("rejects the remote setup-flyctl action in every production path", () => {
     const root = createRepositoryFixture();
     replaceFixtureText(
@@ -3523,7 +3591,7 @@ describe("production deployment contract", () => {
       ),
     );
     const app = manifest.apps["image-gen"];
-    const image = app.reviewedRollbackImages[0];
+    const image = app.databaseSchemaTransition.bridgeImage;
 
     expect(getReviewedRollbackConfig("image-gen", image, repoRoot)).toBe(
       app.reviewedRollbackConfigs[image].path,
@@ -3578,7 +3646,7 @@ describe("production deployment contract", () => {
       ),
     );
     const app = manifest.apps["image-gen"];
-    const image = app.reviewedRollbackImages[0];
+    const image = app.databaseSchemaTransition.bridgeImage;
 
     expect(
       getReviewedRestoreConfig(
@@ -5489,8 +5557,8 @@ describe("production deployment contract", () => {
             id: `${processGroup}-current`,
             state: "started",
             region: "ams",
-            image_ref: immutableImageRef(predecessor.image),
-            config: imageGenMachineConfig(predecessor.image, processGroup, {
+            image_ref: immutableImageRef(app.reviewedImage),
+            config: imageGenMachineConfig(app.reviewedImage, processGroup, {
               root,
               identity: currentIdentity,
             }),
@@ -6252,7 +6320,7 @@ describe("settled production identity", () => {
     sleepImpl: async () => {},
   };
 
-  it("accepts the exact reviewed predecessor for a config-only transition", async () => {
+  it("accepts the exact reviewed predecessor for a runtime rotation", async () => {
     const root = createRepositoryFixture();
     const manifest = JSON.parse(
       fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
@@ -6272,7 +6340,7 @@ describe("settled production identity", () => {
         ...verificationOptions,
         fetchImpl: async () =>
           jsonResponse(
-            canonicalDeploymentRun("image-gen", "32813414227", "1"),
+            canonicalDeploymentRun("image-gen", "32820475232", "1"),
           ),
       }),
     ).resolves.toMatchObject({
@@ -6283,7 +6351,7 @@ describe("settled production identity", () => {
     });
   });
 
-  it("does not reuse a reviewed predecessor for another deployment identity", async () => {
+  it("accepts the predecessor image under another separately verified deployment identity", async () => {
     const root = createRepositoryFixture();
     const manifest = JSON.parse(
       fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
@@ -6298,16 +6366,17 @@ describe("settled production identity", () => {
         root,
         predecessor.path,
       ),
-      fetchImpl: async () => {
-        throw new Error("drift must block before identity trust is consulted");
-      },
+      ...verificationOptions,
+      fetchImpl: async () =>
+        jsonResponse(canonicalDeploymentRun("image-gen", "999", "1")),
     });
 
-    expect(result.blockingErrors).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("MOLLIE_BILLING_PREFLIGHT_ENABLED"),
-      ]),
-    );
+    expect(result).toMatchObject({
+      identity: "deploy-999-1",
+      expectedImage: predecessor.image,
+      blockingErrors: [],
+      reconcilableDrift: [],
+    });
   });
 
   it("rejects a changed reviewed predecessor before checking live drift", async () => {
