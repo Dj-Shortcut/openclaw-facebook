@@ -10,6 +10,13 @@ content or personal identifier.
 
 ## Production offline preflight evidence (2026-08-25)
 
+The focused image-only paid-quota runtime was subsequently deployed by
+[run 32860967800](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32860967800)
+as exact identity `deploy-32860967800-1` and immutable digest
+`sha256:01ccf154e0ac4c314f68775a0fd00fe925aaba92fee997a32f932c8d4c36d806`.
+The protected rollout, drift check, `/healthz` and `/readyz` all passed while
+readiness remained `phase: "offline"`; no Mollie API or checkout call was made.
+
 Evidence is for reviewed main commit
 `0b4a9c66b57a9d6fdbd9dde49b778cba36fca17d` and protected production deploy
 [run 32820475232](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32820475232):

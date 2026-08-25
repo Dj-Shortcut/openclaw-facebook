@@ -13,7 +13,7 @@ kill_timeout = 300
   release_command_timeout = "10m"
 
 [env]
-  AI_ANSWER_FINALIZATION_DRAIN_ENABLED = "false"
+  AI_ANSWER_FINALIZATION_DRAIN_ENABLED = "true"
   AI_ANSWER_QUOTA_PREFLIGHT_ENABLED = "false"
   APP_BASE_URL = "https://app.leaderbot.live"
   # Must match the storage-proxy's public R2 asset base, not its Fly API host.
@@ -21,7 +21,7 @@ kill_timeout = 300
   BILLING_CUSTOMER_NOTIFICATION_KEY_ID = "test-customer-v1"
   BILLING_CUSTOMER_NOTIFICATION_WEBHOOK_URL = "https://app.leaderbot.live/api/internal/billing/notifications/customer"
   BILLING_NOTIFICATION_ORIGIN_ALLOWLIST = "https://app.leaderbot.live"
-  BILLING_NOTIFICATION_PLANE_ENABLED = "false"
+  BILLING_NOTIFICATION_PLANE_ENABLED = "true"
   BILLING_NOTIFICATION_RECEIVER_CUSTOMER_KEY_ID = "test-customer-v1"
   BILLING_NOTIFICATION_RECEIVER_OPERATOR_KEY_ID = "test-operator-v1"
   BILLING_NOTIFICATION_RECEIVER_PREFLIGHT_ACK = "true"
@@ -48,12 +48,12 @@ kill_timeout = 300
   MESSENGER_USER_DAILY_SPEND_CAP_USD = "2.00"
   MOLLIE_ACCOUNTING_IMPORT_ENABLED = "false"
   MOLLIE_BILLING_ENABLED = "false"
-  MOLLIE_BILLING_DRAIN_ENABLED = "false"
-  MOLLIE_BILLING_PREFLIGHT_ENABLED = "true"
+  MOLLIE_BILLING_DRAIN_ENABLED = "true"
+  MOLLIE_BILLING_PREFLIGHT_ENABLED = "false"
   MOLLIE_BILLING_SCHEDULER_MODE = "pilot_pin"
   MOLLIE_BILLING_WORKER_WORKSPACE_ID = "1"
   MOLLIE_CREDENTIAL_GENERATION_ID = "test-fly-v1"
-  MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED = "false"
+  MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED = "true"
   MOLLIE_LIVE_BILLING_ENABLED = "false"
   MOLLIE_MODE = "test"
   MOLLIE_PAYMENT_WEBHOOK_URL = "https://app.leaderbot.live/api/webhooks/mollie/payments"
