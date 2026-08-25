@@ -32,9 +32,9 @@
       "sourceDeployEnabled": false,
       "sourceDeployBlockReason": "Production deploys require an immutable image built from reviewed source and recorded in this manifest before rollout.",
       "trustedBuilderWorkflow": ".github/workflows/build-production-artifacts.yml",
-      "reviewedImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:afe82e1a59c2c228d122723b0d75daa93325faef254da03260d5ebf02c32472d",
+      "reviewedImage": "registry.fly.io/leaderbot-fb-image-gen@sha256:cb401e60109d33b12d56b6dba1da35b61cc4facf24961920b98174cc534b43e1",
       "reviewedArtifactKind": "runtime",
-      "reviewedSourceCommit": "54f40335cd4ab5be518655a56baa48f747f94862",
+      "reviewedSourceCommit": "1c834fda92b070d5cb6fb0422d1eda92d19ab532",
       "reviewedSettledPredecessor": {
         "identity": "deploy-32860967800-1",
         "image": "registry.fly.io/leaderbot-fb-image-gen@sha256:01ccf154e0ac4c314f68775a0fd00fe925aaba92fee997a32f932c8d4c36d806",
