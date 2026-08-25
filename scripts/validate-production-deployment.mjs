@@ -1622,17 +1622,19 @@ export function getReviewedRestoreConfig(
   return getReviewedRollbackConfig(target, image, rootDir);
 }
 
-function assertReviewedRollbackConfigCopy(
+function assertReviewedRestoreConfigCopy(
   target,
   image,
+  identity,
   configPath,
   rootDir,
   failureMessage =
-    "scale count drift allowance requires the reviewed rollback config",
+    "scale count drift allowance requires the reviewed restore config",
 ) {
-  const reviewedRelativePath = getReviewedRollbackConfig(
+  const reviewedRelativePath = getReviewedRestoreConfig(
     target,
     image,
+    identity,
     rootDir,
   );
   const reviewedPath = path.resolve(rootDir, reviewedRelativePath);
@@ -6387,7 +6389,6 @@ export function checkLiveFlyDrift(target, options = {}) {
     (options.allowReviewedRollbackImage !== true ||
       options.expectedImage !== undefined ||
       options.configPath !== undefined ||
-      !app.reviewedRollbackImages?.includes(capturedPriorImage) ||
       !/^deploy-[0-9]+-[0-9]+$/.test(
         options.expectedDeploymentIdentity ?? "",
       ) ||
@@ -6402,6 +6403,12 @@ export function checkLiveFlyDrift(target, options = {}) {
   }
   if (allowInterruptedScaleCountDrift) {
     validateReviewedRollbackImage(target, capturedPriorImage, rootDir);
+    getReviewedRestoreConfig(
+      target,
+      capturedPriorImage,
+      options.capturedPriorIdentity,
+      rootDir,
+    );
   }
   if (allowScaleCountDrift) {
     if (
@@ -6431,9 +6438,10 @@ export function checkLiveFlyDrift(target, options = {}) {
       );
     }
     validateReviewedRollbackImage(target, options.expectedImage, rootDir);
-    assertReviewedRollbackConfigCopy(
+    assertReviewedRestoreConfigCopy(
       target,
       options.expectedImage,
+      options.capturedPriorIdentity,
       options.configPath,
       rootDir,
     );
@@ -6472,7 +6480,12 @@ export function checkLiveFlyDrift(target, options = {}) {
     allowScaleCountDrift || allowInterruptedScaleCountDrift
       ? readMachineConfigProfile(
           rootDir,
-          getReviewedRollbackConfig(target, capturedPriorImage, rootDir),
+          getReviewedRestoreConfig(
+            target,
+            capturedPriorImage,
+            options.capturedPriorIdentity,
+            rootDir,
+          ),
           app,
         )
       : null;
@@ -6501,9 +6514,10 @@ export function checkLiveFlyDrift(target, options = {}) {
         "first trusted bootstrap drift requires the exact reviewed image-gen legacy predecessor",
       );
     }
-    assertReviewedRollbackConfigCopy(
+    assertReviewedRestoreConfigCopy(
       target,
       options.expectedImage,
+      expectedDeploymentIdentity,
       selectedConfigPath,
       rootDir,
       "first trusted bootstrap drift requires the exact reviewed image-gen legacy predecessor",

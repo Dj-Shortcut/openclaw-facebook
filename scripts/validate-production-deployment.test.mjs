@@ -5210,7 +5210,7 @@ describe("production deployment contract", () => {
         allowScaleCountDrift: true,
       }),
     ).toThrow(
-      "scale count drift allowance requires the reviewed rollback config",
+      "scale count drift allowance requires the reviewed restore config",
     );
   });
 
@@ -5465,6 +5465,111 @@ describe("production deployment contract", () => {
         expect.stringContaining("deployment identity is outside"),
         expect.stringContaining("is not started"),
         expect.stringContaining("image differs"),
+      ]),
+    );
+  });
+
+  it("accepts an exact config-only predecessor during interrupted scale drift", () => {
+    const root = createRepositoryFixture();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const app = manifest.apps["image-gen"];
+    const predecessor = app.reviewedSettledPredecessor;
+    const currentIdentity = "deploy-32815574535-1";
+    const runFly = (args) => {
+      const command = args.slice(0, 2).join(" ");
+      if (command === "config show") {
+        return JSON.stringify(imageGenLiveConfig(currentIdentity, { root }));
+      }
+      if (command === "machine list") {
+        const machines = [];
+        for (const processGroup of ["app", "worker"]) {
+          machines.push({
+            id: `${processGroup}-current`,
+            state: "started",
+            region: "ams",
+            image_ref: immutableImageRef(predecessor.image),
+            config: imageGenMachineConfig(predecessor.image, processGroup, {
+              root,
+              identity: currentIdentity,
+            }),
+          });
+          machines.push({
+            id: `${processGroup}-prior`,
+            state: "started",
+            region: "ams",
+            image_ref: immutableImageRef(predecessor.image),
+            config: imageGenMachineConfig(predecessor.image, processGroup, {
+              root,
+              configPath: predecessor.path,
+              identity: predecessor.identity,
+            }),
+          });
+        }
+        return JSON.stringify(machines);
+      }
+      if (command === "scale show") {
+        return JSON.stringify([
+          { Process: "app", Count: 3, CPUKind: "shared", CPUs: 1, Memory: 256 },
+          {
+            Process: "worker",
+            Count: 3,
+            CPUKind: "shared",
+            CPUs: 1,
+            Memory: 256,
+          },
+        ]);
+      }
+      throw new Error(`Unexpected fly command: ${args.join(" ")}`);
+    };
+
+    const result = checkLiveFlyDrift("image-gen", {
+      rootDir: root,
+      runFly,
+      expectedDeploymentIdentity: currentIdentity,
+      capturedPriorIdentity: predecessor.identity,
+      capturedPriorImage: predecessor.image,
+      allowReviewedRollbackImage: true,
+      allowInterruptedScaleCountDrift: true,
+    });
+
+    expect(result.blockingErrors).toEqual([]);
+    expect(result.reconcilableDrift).toEqual(
+      expect.arrayContaining([
+        "scale.app.count: expected 2, got 3",
+        "scale.worker.count: expected 2, got 3",
+      ]),
+    );
+
+    const restored = checkLiveFlyDrift("image-gen", {
+      rootDir: root,
+      runFly(args) {
+        if (args.slice(0, 2).join(" ") === "config show") {
+          return JSON.stringify(
+            imageGenLiveConfig(predecessor.identity, {
+              root,
+              configPath: predecessor.path,
+            }),
+          );
+        }
+        return runFly(args);
+      },
+      expectedImage: predecessor.image,
+      configPath: predecessor.path,
+      expectedDeploymentIdentity: predecessor.identity,
+      capturedPriorIdentity: predecessor.identity,
+      capturedPriorImage: predecessor.image,
+      interruptedDeploymentIdentity: currentIdentity,
+      allowReviewedMachineImages: true,
+      allowScaleCountDrift: true,
+    });
+
+    expect(restored.blockingErrors).toEqual([]);
+    expect(restored.reconcilableDrift).toEqual(
+      expect.arrayContaining([
+        "scale.app.count: expected 2, got 3",
+        "scale.worker.count: expected 2, got 3",
       ]),
     );
   });
