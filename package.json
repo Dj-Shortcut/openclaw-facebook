@@ -93,7 +93,7 @@
     "@types/node": "^26.2.0",
     "openclaw": "2026.7.2-beta.7",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "overrides": {
     "hono": "4.12.34",
