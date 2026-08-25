@@ -318,7 +318,11 @@ export function assertMollieNonSecretLaunchConfig(
   ) {
     throw new Error("BILLING_NOTIFICATION_PLANE_ENABLED must be true");
   }
-  if (requireOperationalFlags && !isMollieEntitlementEnforcementEnabled()) {
+  if (
+    requireOperationalFlags &&
+    isMollieBillingEnabled() &&
+    !isMollieEntitlementEnforcementEnabled()
+  ) {
     throw new Error("MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED must be true");
   }
   if ((process.env.PORTAL_HANDOFF_TOKEN_SECRET?.trim().length ?? 0) < 32) {

@@ -655,6 +655,11 @@ Historical branch review note:
 - [x] After the canonical production migration and protected rollout, capture a
       redacted green `phase: "offline"` `/readyz` response before enabling any
       operational paid lane or starting a Mollie sandbox checkout.
+- [ ] Deploy the first operational safety phase with only the retained billing
+      drain and key-free notification plane enabled. Keep commercial checkout,
+      entitlement admission and AI finalization off until the exact pilot
+      scheduler is enabled through its audited epoch transition; a disabled
+      tenant intentionally has only its safety outbox lane enabled.
 - [x] Validate the effective portal handoff origin (`PORTAL_BASE_URL`, falling back to `APP_BASE_URL`) before billing readiness/checkout; production/live requires HTTPS and an origin-only URL.
 - [x] Select the bounded launch offer: `€19` once, 30 days, one workspace/Page, guided Messenger image controls, 20 Images 2.0 generations, and at most five images per day, without renewal, top-ups, or overage. OpenClaw answers remain dormant and are not advertised or required for the Mollie pilot.
 - [x] Enforce an audited, expiring Belgian-consumer billing profile before

@@ -60,6 +60,15 @@ function useValidOfflinePreflightConfig(): void {
   });
 }
 
+function useValidSafetyDrainConfig(): void {
+  useValidOfflinePreflightConfig();
+  Object.assign(process.env, {
+    MOLLIE_BILLING_PREFLIGHT_ENABLED: "false",
+    MOLLIE_BILLING_DRAIN_ENABLED: "true",
+    BILLING_NOTIFICATION_PLANE_ENABLED: "true",
+  });
+}
+
 describe("Mollie configuration", () => {
   beforeEach(() => {
     useValidTestConfig();
@@ -137,6 +146,21 @@ describe("Mollie configuration", () => {
     ).not.toThrow();
     expect(() => assertMollieNonSecretLaunchConfig()).toThrow(
       "MOLLIE_BILLING_DRAIN_ENABLED must be true"
+    );
+  });
+
+  it("allows the safety drain before entitlement enforcement is enabled", () => {
+    useValidSafetyDrainConfig();
+
+    expect(() => assertMollieNonSecretLaunchConfig()).not.toThrow();
+  });
+
+  it("still rejects commercial checkout without entitlement enforcement", () => {
+    useValidSafetyDrainConfig();
+    process.env.MOLLIE_BILLING_ENABLED = "true";
+
+    expect(() => assertMollieNonSecretLaunchConfig()).toThrow(
+      "MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED must be true"
     );
   });
 

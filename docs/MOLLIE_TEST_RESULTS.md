@@ -10,6 +10,18 @@ content or personal identifier.
 
 ## Production offline preflight evidence (2026-08-25)
 
+Protected operational rollout
+[run 32871148100](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32871148100)
+was rejected before any Mollie provider call. The commercially disabled pilot
+correctly kept its AI-finalization scheduler lane disabled, while the attempted
+config required that lane during application startup. The protected workflow
+restored the prior digest and configuration; the one restored web Machine left
+stopped by Fly's timed-out health wait was restarted only after its exact prior
+image and deployment identity were verified. All four prior Machines and both
+web health checks were then green, and public `/readyz` again returned HTTP 200
+with `phase: "offline"`. No sandbox scenario below is credited by this failed
+rollout.
+
 The focused image-only paid-quota runtime was subsequently deployed by
 [run 32860967800](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32860967800)
 as exact identity `deploy-32860967800-1` and immutable digest
