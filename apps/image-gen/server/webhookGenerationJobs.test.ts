@@ -1744,9 +1744,14 @@ describe("messenger generation job safety", () => {
       imageModel: "gpt-image-2",
       imageQuality: "high",
     });
-    admitStartpilotImageProviderAttemptMock.mockRejectedValueOnce(
-      new Error("provider fence start unavailable")
-    );
+    admitStartpilotImageProviderAttemptMock
+      .mockRejectedValueOnce(new Error("provider fence start unavailable"))
+      .mockResolvedValueOnce({
+        allowed: true,
+        imagesUsed: 1,
+        imagesUsedToday: 1,
+        alreadyReserved: true,
+      });
     executeGenerationFlowMock
       .mockImplementationOnce(async input => {
         const admission = await input.onProviderAttempt();

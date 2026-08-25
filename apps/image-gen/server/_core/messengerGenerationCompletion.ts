@@ -51,8 +51,10 @@ export type MessengerGenerationCompletion = {
   deliveryStartedAt?: number;
   deliveredAt?: number;
   /**
-   * New completions must commit success-only quota before delivery. The legacy
-   * value is only for explicitly identified pre-migration completions.
+   * `success_only_v1` commits free quota after durable provider success.
+   * `startpilot_attempt_committed_v1` commits paid usage atomically with the
+   * provider-attempt transition. `legacy_pre_success_v1` is reserved for
+   * explicitly identified pre-migration completions.
    */
   quotaAccountingMode?: MessengerGenerationQuotaAccountingMode;
   /**

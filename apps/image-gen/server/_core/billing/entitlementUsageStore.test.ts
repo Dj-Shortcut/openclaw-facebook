@@ -40,6 +40,7 @@ describe("Startpilot finite entitlement usage", () => {
     expect(
       parseStartpilotQuota({ ...quota, imageQuality: "legacy" })
     ).toBeNull();
+    expect(parseStartpilotQuota({ ...quota, unexpected: true })).toBeNull();
   });
 
   it("reserves an image atomically and resets only the UTC daily counter", async () => {
@@ -134,6 +135,31 @@ describe("Startpilot finite entitlement usage", () => {
     });
     expect(flow.updateSet).not.toHaveBeenCalled();
     expect(flow.insertValues).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["entitlement", { entitlementId: 8 }],
+    ["channel connection", { channelConnectionId: 6 }],
+    ["binding epoch", { bindingEpoch: 4 }],
+    ["usage kind", { kind: "ai_answer" as const }],
+    ["receipt status", { status: "released" as const }],
+  ])("refuses an image replay with a mismatched %s", async (_label, change) => {
+    const existing = imageReservation(change);
+    const flow = usageFlow({}, { reservations: [existing] });
+    databaseMock.mockResolvedValue(flow.database);
+
+    await expect(
+      reserveStartpilotImageUsage({
+        workspaceId: 1,
+        entitlementId: 9,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        mode: "test",
+        idempotencyKey: existing.idempotencyKey,
+      })
+    ).rejects.toThrow("Startpilot image usage idempotency scope mismatch");
+    expect(flow.insertValues).not.toHaveBeenCalled();
+    expect(flow.updateSet).not.toHaveBeenCalled();
   });
 
   it("fails closed when the Page binding changed", async () => {
@@ -537,7 +563,21 @@ function usageFlow(
   };
 }
 
-function imageReservation() {
+type ImageReservation = {
+  reservationId: string;
+  workspaceId: number;
+  mode: "test";
+  entitlementId: number;
+  channelConnectionId: number;
+  bindingEpoch: number;
+  kind: "image" | "ai_answer";
+  status: "reserved" | "committed" | "released" | "expired";
+  idempotencyKey: string;
+};
+
+function imageReservation(
+  overrides: Partial<ImageReservation> = {}
+): ImageReservation {
   return {
     reservationId: "20000000-0000-4000-8000-000000000001",
     workspaceId: 1,
@@ -548,6 +588,7 @@ function imageReservation() {
     kind: "image" as const,
     status: "committed" as const,
     idempotencyKey: "image-request-key-00000001",
+    ...overrides,
   };
 }
 

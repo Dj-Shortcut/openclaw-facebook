@@ -63,6 +63,7 @@ import {
   getImageGenerationDailyLimit,
 } from "./_core/quotaPolicy";
 import { getBillingPlan, STARTPILOT_PLAN_CODE } from "./_core/billing/catalog";
+import { parseStartpilotQuota } from "./_core/billing/startpilotQuota";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -2954,19 +2955,15 @@ function exactStartpilotUsageQuota(
   value: unknown,
   plan: ReturnType<typeof getBillingPlan>
 ): { imagesTotal: number; imagesPerDay: number } | null {
-  if (!plan || !value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const quota = value as Record<string, unknown>;
+  const quota = parseStartpilotQuota(value);
+  if (!plan || !quota) return null;
   const expected = plan.entitlements;
   const expectedKeys = Object.keys(expected).sort();
   const actualKeys = Object.keys(quota).sort();
   if (
     expectedKeys.length !== actualKeys.length ||
     expectedKeys.some((key, index) => key !== actualKeys[index]) ||
-    expectedKeys.some(key => quota[key] !== expected[key]) ||
-    !Number.isSafeInteger(quota.imagesTotal) ||
-    !Number.isSafeInteger(quota.imagesPerDay)
+    expectedKeys.some(key => quota[key as keyof typeof quota] !== expected[key])
   ) {
     return null;
   }

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { safeLen, sha256 } from "./imageProof";
 import {
   attachGenerationMetrics,
@@ -256,6 +257,9 @@ export class OpenAiImageGenerator implements ImageGenerator {
       });
 
       let providerAttemptCount = 0;
+      const providerAttemptRunId = input.onProviderAttempt
+        ? randomUUID()
+        : null;
       let legacyProviderAttemptReported = false;
       let providerAttemptUsesAdmission = false;
       const recordProviderSuccess = async (): Promise<void> => {
@@ -281,7 +285,9 @@ export class OpenAiImageGenerator implements ImageGenerator {
         onProviderAttempt: async () => {
           const attemptedAt = new Date();
           providerAttemptCount += 1;
-          const costLedgerEntryId = `${input.reqId}:openai-image:${providerAttemptCount}`;
+          const costLedgerEntryId = providerAttemptRunId
+            ? `${input.reqId}:openai-image:${providerAttemptRunId}:${providerAttemptCount}`
+            : `${input.reqId}:openai-image:${providerAttemptCount}`;
           let admission: ProviderAttemptAdmission | void = undefined;
           let ledgerEntryRecorded = false;
           try {

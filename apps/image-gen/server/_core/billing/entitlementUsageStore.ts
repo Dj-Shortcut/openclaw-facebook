@@ -11,6 +11,9 @@ import {
 import { getDatabaseOrThrow } from "../../db";
 import { STARTPILOT_PLAN_CODE } from "./catalog";
 import { assertTenantBillingWorkerWorkspace, type MollieMode } from "./config";
+import { parseStartpilotQuota, type StartpilotQuota } from "./startpilotQuota";
+
+export { parseStartpilotQuota, type StartpilotQuota } from "./startpilotQuota";
 
 const AI_RESERVATION_TTL_MS = 5 * 60 * 1_000;
 const AI_RESERVATION_OWNER_LEASE_MS = AI_RESERVATION_TTL_MS - 30_000;
@@ -34,15 +37,6 @@ export type ActiveWorkspaceEntitlement = {
   status: "active" | "grace";
   quota: unknown;
   validUntil: Date | null;
-};
-
-export type StartpilotQuota = {
-  aiAnswersTotal: 300;
-  imagesTotal: 20;
-  imagesPerDay: 5;
-  workspaces: 1;
-  facebookPages: 1;
-  imageQuality: "images_2";
 };
 
 export type StartpilotImageUsageInput = {
@@ -878,19 +872,6 @@ function requireReservedCapacity(current: number, decrement: number): number {
     throw new Error("AI answer reserved counter invariant violated");
   }
   return current - decrement;
-}
-
-export function parseStartpilotQuota(value: unknown): StartpilotQuota | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const quota = value as Record<string, unknown>;
-  return quota.aiAnswersTotal === 300 &&
-    quota.imagesTotal === 20 &&
-    quota.imagesPerDay === 5 &&
-    quota.workspaces === 1 &&
-    quota.facebookPages === 1 &&
-    quota.imageQuality === "images_2"
-    ? (quota as StartpilotQuota)
-    : null;
 }
 
 export function utcDateKey(value: Date): string {
