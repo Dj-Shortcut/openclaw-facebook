@@ -11,7 +11,7 @@ import {
 import { getDatabaseOrThrow } from "../../db";
 import { STARTPILOT_PLAN_CODE } from "./catalog";
 import { assertTenantBillingWorkerWorkspace, type MollieMode } from "./config";
-import { parseStartpilotQuota, type StartpilotQuota } from "./startpilotQuota";
+import { parseStartpilotQuota } from "./startpilotQuota";
 
 export { parseStartpilotQuota, type StartpilotQuota } from "./startpilotQuota";
 
