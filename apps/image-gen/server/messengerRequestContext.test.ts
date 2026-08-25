@@ -63,7 +63,7 @@ describe("Messenger Page request context", () => {
       mode: "test",
       providerOperation: "text_to_image",
       attemptKeyHash: "a".repeat(64),
-      leaseToken: "123e4567-e89b-42d3-a456-426614174000",
+      leaseToken: "00000000-0000-4000-8000-000000000000",
       privacyEpoch: 3,
       idempotencyKey: "startpilot-image:request-recovery",
     };
