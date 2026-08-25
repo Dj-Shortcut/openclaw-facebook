@@ -1521,6 +1521,65 @@ export function getReviewedRollbackConfig(
   return relativePath;
 }
 
+export function getReviewedSettledPredecessorConfig(
+  target,
+  identity,
+  image,
+  rootDir = process.cwd(),
+) {
+  const app = loadProductionManifest(rootDir).apps[target];
+  if (!app) fail(`Unknown production target: ${target}`);
+  const predecessor = app.reviewedSettledPredecessor;
+  if (predecessor == null) return null;
+  const relativePath = predecessor.path;
+  const expectedSha256 = predecessor.sha256;
+  if (
+    typeof predecessor !== "object" ||
+    Array.isArray(predecessor) ||
+    !/^(?:deploy-[0-9]+-[0-9]+)$/.test(predecessor.identity ?? "") ||
+    !isImmutableAppImage(app, predecessor.image) ||
+    typeof relativePath !== "string" ||
+    relativePath.length === 0 ||
+    path.isAbsolute(relativePath) ||
+    relativePath.includes("\\") ||
+    path.posix.normalize(relativePath) !== relativePath ||
+    relativePath.startsWith("../") ||
+    !relativePath.startsWith("deploy/production/rollback-configs/") ||
+    !/^[a-f0-9]{64}$/.test(expectedSha256 ?? "")
+  ) {
+    fail(`${target} has an unsafe reviewed settled predecessor`);
+  }
+  const absoluteRoot = path.resolve(rootDir);
+  const absolutePath = path.resolve(absoluteRoot, relativePath);
+  if (!absolutePath.startsWith(`${absoluteRoot}${path.sep}`)) {
+    fail(`${target} reviewed settled predecessor escapes the repository`);
+  }
+  let fileStats;
+  try {
+    fileStats = fs.lstatSync(absolutePath);
+  } catch {
+    fail(`${target} reviewed settled predecessor config is missing`);
+  }
+  if (!fileStats.isFile() || fileStats.isSymbolicLink()) {
+    fail(`${target} reviewed settled predecessor must be a regular file`);
+  }
+  const realRoot = fs.realpathSync(absoluteRoot);
+  const realConfigPath = fs.realpathSync(absolutePath);
+  if (!realConfigPath.startsWith(`${realRoot}${path.sep}`)) {
+    fail(`${target} reviewed settled predecessor escapes the repository`);
+  }
+  const actualSha256 = createHash("sha256")
+    .update(fs.readFileSync(absolutePath))
+    .digest("hex");
+  if (actualSha256 !== expectedSha256) {
+    fail(`${target} reviewed settled predecessor hash does not match`);
+  }
+  if (predecessor.identity !== identity || predecessor.image !== image) {
+    return null;
+  }
+  return relativePath;
+}
+
 function assertReviewedRollbackConfigCopy(
   target,
   image,
@@ -5010,6 +5069,14 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       for (const image of app.reviewedRollbackImages) {
         getReviewedRollbackConfig(target, image, rootDir);
       }
+      if (app.reviewedSettledPredecessor != null) {
+        getReviewedSettledPredecessorConfig(
+          target,
+          app.reviewedSettledPredecessor.identity,
+          app.reviewedSettledPredecessor.image,
+          rootDir,
+        );
+      }
       if (
         app.reviewedSourceCommit !== null &&
         !isReviewedSourceCommit(app.reviewedSourceCommit)
@@ -7167,6 +7234,15 @@ export async function checkSettledLiveFlyDrift(target, options = {}) {
   }
   const configPaths = [];
   if (expectedImage === app.reviewedImage) configPaths.push(app.config);
+  if (options.requireCurrentReviewedImage !== true) {
+    const settledPredecessorConfig = getReviewedSettledPredecessorConfig(
+      target,
+      identity,
+      expectedImage,
+      rootDir,
+    );
+    if (settledPredecessorConfig) configPaths.push(settledPredecessorConfig);
+  }
   if (
     options.requireCurrentReviewedImage !== true &&
     app.reviewedRollbackImages?.includes(expectedImage)

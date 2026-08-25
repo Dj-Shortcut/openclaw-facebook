@@ -93,6 +93,12 @@ function createRepositoryFixture() {
       fs.mkdirSync(path.dirname(destination), { recursive: true });
       fs.copyFileSync(path.join(repoRoot, config.path), destination);
     }
+    const settledPredecessor = app.reviewedSettledPredecessor;
+    if (settledPredecessor?.path) {
+      const destination = path.join(root, settledPredecessor.path);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.copyFileSync(path.join(repoRoot, settledPredecessor.path), destination);
+    }
   }
   return root;
 }
@@ -449,7 +455,15 @@ function httpMachineService({
   };
 }
 
-function imageGenMachineConfig(image, processGroup) {
+function imageGenMachineConfig(
+  image,
+  processGroup,
+  {
+    root = repoRoot,
+    configPath = "apps/image-gen/fly.toml",
+    identity = "none",
+  } = {},
+) {
   const command =
     processGroup === "app"
       ? [
@@ -470,7 +484,10 @@ function imageGenMachineConfig(image, processGroup) {
     image,
     init: { cmd: command },
     env: {
-      ...checkedInTomlEnv("apps/image-gen/fly.toml"),
+      ...checkedInTomlEnv(configPath, root),
+      ...(identity === "none"
+        ? {}
+        : { LEADERBOT_DEPLOYMENT_IDENTITY: identity }),
       FLY_PROCESS_GROUP: processGroup,
       PRIMARY_REGION: "ams",
     },
@@ -598,6 +615,43 @@ function imageGenFlyState(image) {
   };
 }
 
+function imageGenSettledFlyState(image, identity, root, configPath) {
+  const live = imageGenLiveConfig(identity, { root, configPath });
+  const machines = [
+    ["image-gen-app-1", "app"],
+    ["image-gen-app-2", "app"],
+    ["image-gen-worker-1", "worker"],
+    ["image-gen-worker-2", "worker"],
+  ].map(([id, processGroup]) => ({
+    id,
+    state: "started",
+    region: "ams",
+    image_ref: immutableImageRef(image),
+    config: imageGenMachineConfig(image, processGroup, {
+      root,
+      configPath,
+      identity,
+    }),
+  }));
+  const scale = [
+    { Process: "app", Count: 2, CPUKind: "shared", CPUs: 1, Memory: 256 },
+    {
+      Process: "worker",
+      Count: 2,
+      CPUKind: "shared",
+      CPUs: 1,
+      Memory: 256,
+    },
+  ];
+  return (args) => {
+    const command = args.slice(0, 2).join(" ");
+    if (command === "config show") return JSON.stringify(live);
+    if (command === "machine list") return JSON.stringify(machines);
+    if (command === "scale show") return JSON.stringify(scale);
+    throw new Error(`Unexpected fly command: ${args.join(" ")}`);
+  };
+}
+
 function imageGenLegacyBootstrapFlyState(image, mutate = () => {}) {
   const live = imageGenLiveConfig("none", { rollback: true });
   live.http_service.auto_stop_machines = false;
@@ -659,11 +713,16 @@ function imageGenLegacyBootstrapFlyState(image, mutate = () => {}) {
   };
 }
 
-function imageGenLiveConfig(identity, { rollback = false } = {}) {
-  const configPath = rollback
-    ? "deploy/production/rollback-configs/image-gen-28d862568aa3.toml"
-    : "apps/image-gen/fly.toml";
-  const env = checkedInTomlEnv(configPath);
+function imageGenLiveConfig(
+  identity,
+  { rollback = false, root = repoRoot, configPath: requestedConfigPath } = {},
+) {
+  const configPath =
+    requestedConfigPath ??
+    (rollback
+      ? "deploy/production/rollback-configs/image-gen-28d862568aa3.toml"
+      : "apps/image-gen/fly.toml");
+  const env = checkedInTomlEnv(configPath, root);
   if (identity !== "none") env.LEADERBOT_DEPLOYMENT_IDENTITY = identity;
   return {
     app: "leaderbot-fb-image-gen",
@@ -5919,6 +5978,86 @@ describe("settled production identity", () => {
     token: "test-token",
     sleepImpl: async () => {},
   };
+
+  it("accepts the exact reviewed predecessor for a config-only transition", async () => {
+    const root = createRepositoryFixture();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const app = manifest.apps["image-gen"];
+    const predecessor = app.reviewedSettledPredecessor;
+
+    await expect(
+      checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly: imageGenSettledFlyState(
+          predecessor.image,
+          predecessor.identity,
+          root,
+          predecessor.path,
+        ),
+        ...verificationOptions,
+        fetchImpl: async () =>
+          jsonResponse(
+            canonicalDeploymentRun("image-gen", "32813414227", "1"),
+          ),
+      }),
+    ).resolves.toMatchObject({
+      identity: predecessor.identity,
+      expectedImage: predecessor.image,
+      blockingErrors: [],
+      reconcilableDrift: [],
+    });
+  });
+
+  it("does not reuse a reviewed predecessor for another deployment identity", async () => {
+    const root = createRepositoryFixture();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const app = manifest.apps["image-gen"];
+    const predecessor = app.reviewedSettledPredecessor;
+    const result = await checkSettledLiveFlyDrift("image-gen", {
+      rootDir: root,
+      runFly: imageGenSettledFlyState(
+        predecessor.image,
+        "deploy-999-1",
+        root,
+        predecessor.path,
+      ),
+      fetchImpl: async () => {
+        throw new Error("drift must block before identity trust is consulted");
+      },
+    });
+
+    expect(result.blockingErrors).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("MOLLIE_BILLING_PREFLIGHT_ENABLED"),
+      ]),
+    );
+  });
+
+  it("rejects a changed reviewed predecessor before checking live drift", async () => {
+    const root = createRepositoryFixture();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const predecessor =
+      manifest.apps["image-gen"].reviewedSettledPredecessor;
+    fs.appendFileSync(path.join(root, predecessor.path), "\n");
+
+    await expect(
+      checkSettledLiveFlyDrift("image-gen", {
+        rootDir: root,
+        runFly: imageGenSettledFlyState(
+          predecessor.image,
+          predecessor.identity,
+          root,
+          predecessor.path,
+        ),
+      }),
+    ).rejects.toThrow("reviewed settled predecessor hash does not match");
+  });
 
   it("accepts only the exact completed successful same-target deploy attempt", async () => {
     const calls = [];
