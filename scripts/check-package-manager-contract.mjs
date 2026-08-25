@@ -222,6 +222,23 @@ export function validatePackageManagerContract(repoRoot = process.cwd()) {
     }
   }
 
+  const clawhubWorkflowPath = ".github/workflows/clawhub-plugin-publish.yml";
+  const clawhubWorkflow = path.join(repoRoot, clawhubWorkflowPath);
+  if (!fs.existsSync(clawhubWorkflow)) {
+    failures.push(`${clawhubWorkflowPath}: required file is missing`);
+  } else {
+    const source = fs.readFileSync(clawhubWorkflow, "utf8");
+    if (
+      !source.includes(
+        "source: ${{ github.event_name == 'pull_request' && format('{0}@{1}', github.event.pull_request.head.repo.full_name, github.event.pull_request.head.sha) || format('{0}@{1}', github.repository, github.sha) }}",
+      )
+    ) {
+      failures.push(
+        `${clawhubWorkflowPath}: dry-run source must bind the exact pull-request head commit`,
+      );
+    }
+  }
+
   const tauriConfigPath = "apps/customer-app/src-tauri/tauri.conf.json";
   const tauriConfig = readJson(repoRoot, tauriConfigPath, failures);
   if (

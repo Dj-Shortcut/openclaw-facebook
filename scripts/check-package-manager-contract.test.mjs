@@ -21,6 +21,7 @@ const requiredFiles = [
   ".github/workflows/customer-app-ci.yml",
   ".github/workflows/image-gen-ci.yml",
   ".github/workflows/image-gen-fallow.yml",
+  ".github/workflows/clawhub-plugin-publish.yml",
   ".github/workflows/main.yml",
   ".github/workflows/update-openclaw.yml",
   "README.md",
@@ -147,6 +148,22 @@ describe("package-manager contract", () => {
 
     expect(validatePackageManagerContract(fixture)).toContain(
       ".github/workflows/main.yml: paths must include pnpm-lock.yaml",
+    );
+  });
+
+  it("requires ClawHub dry-runs to use the exact pull-request head", () => {
+    const fixture = makeFixture();
+    const workflowPath = path.join(
+      fixture,
+      ".github/workflows/clawhub-plugin-publish.yml",
+    );
+    const workflow = fs
+      .readFileSync(workflowPath, "utf8")
+      .replace(/^\s+source:.*\n/m, "");
+    fs.writeFileSync(workflowPath, workflow);
+
+    expect(validatePackageManagerContract(fixture)).toContain(
+      ".github/workflows/clawhub-plugin-publish.yml: dry-run source must bind the exact pull-request head commit",
     );
   });
 });
