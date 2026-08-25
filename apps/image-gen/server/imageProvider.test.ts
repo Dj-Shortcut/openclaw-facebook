@@ -5,6 +5,7 @@ import {
   getGeneratorStartupConfig,
   OpenAiImageGenerator,
 } from "./_core/imageService";
+import * as costLedger from "./_core/costLedger";
 import { readCostLedgerPeriod } from "./_core/costLedger";
 import { clearStateStore } from "./_core/stateStore";
 
@@ -399,6 +400,91 @@ describe("image provider boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("aborts admission without provider transport when the ledger write fails", async () => {
+    configureOpenAiImagesEnv();
+    const ledgerFailure = new Error("cost ledger unavailable");
+    vi.spyOn(costLedger, "appendCostLedgerEntry").mockRejectedValueOnce(
+      ledgerFailure
+    );
+    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const markTransportStarted = vi.fn(async () => undefined);
+    const abortBeforeTransport = vi.fn(async () => undefined);
+    const generator = new OpenAiImageGenerator();
+
+    await expect(
+      generator.generate({
+        userKey: "user-ledger-failure",
+        reqId: "req-ledger-failure",
+        onProviderAttempt: async () => ({
+          markTransportStarted,
+          abortBeforeTransport,
+        }),
+      })
+    ).rejects.toBe(ledgerFailure);
+
+    expect(abortBeforeTransport).toHaveBeenCalledOnce();
+    expect(markTransportStarted).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("uses a fresh ledger entry when paid admission retries a request", async () => {
+    configureOpenAiImagesEnv();
+    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const admissionFailure = new Error("paid admission unavailable");
+    const abortBeforeTransport = vi.fn(async () => undefined);
+    const generator = new OpenAiImageGenerator();
+
+    await expect(
+      generator.generate({
+        userKey: "paid-admission-retry-user",
+        reqId: "req-paid-admission-retry",
+        onProviderAttempt: async () => ({
+          markTransportStarted: async () => {
+            throw admissionFailure;
+          },
+          abortBeforeTransport,
+        }),
+      })
+    ).rejects.toBe(admissionFailure);
+
+    await expect(
+      generator.generate({
+        userKey: "paid-admission-retry-user",
+        reqId: "req-paid-admission-retry",
+        onProviderAttempt: async () => ({
+          markTransportStarted: async () => undefined,
+          abortBeforeTransport: async () => undefined,
+        }),
+      })
+    ).resolves.toEqual(
+      expect.objectContaining({
+        imageUrl: expect.stringContaining("/generated/"),
+      })
+    );
+
+    const ledgerEntries = await readCostLedgerPeriod(
+      new Date().toISOString().slice(0, 10)
+    );
+    expect(ledgerEntries).toHaveLength(2);
+    expect(ledgerEntries[0]).toMatchObject({
+      id: expect.stringMatching(
+        /^req-paid-admission-retry:openai-image:[0-9a-f-]{36}:1$/i
+      ),
+      status: "provider_attempt_failed",
+    });
+    expect(ledgerEntries[1]).toMatchObject({
+      id: expect.stringMatching(
+        /^req-paid-admission-retry:openai-image:[0-9a-f-]{36}:1$/i
+      ),
+      status: "provider_attempt_succeeded",
+    });
+    expect(ledgerEntries[0]?.id).not.toBe(ledgerEntries[1]?.id);
+    expect(abortBeforeTransport).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("uses prompt-first source-image edits when stale style jobs have no director mode", async () => {
     configureOpenAiImagesEnv();
 
@@ -725,7 +811,9 @@ describe("image provider boundary", () => {
       await readCostLedgerPeriod(new Date().toISOString().slice(0, 10))
     ).toEqual([
       expect.objectContaining({
-        id: "req-no-internal-price-gate:openai-image:1",
+        id: expect.stringMatching(
+          /^req-no-internal-price-gate:openai-image:[0-9a-f-]{36}:1$/i
+        ),
         status: "provider_attempt_succeeded",
         estimatedCostUsd: null,
         finalCostUsd: null,

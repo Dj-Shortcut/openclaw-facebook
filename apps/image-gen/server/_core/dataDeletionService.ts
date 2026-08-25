@@ -41,7 +41,10 @@ import {
 } from "./messengerPrivacySubject";
 import { containMessengerProviderAttemptsForPrivacy } from "./messengerProviderAttemptFence";
 import { eraseWebhookIngressDeliveriesForSubject } from "./meta/webhookIngressQueue";
-import { eraseMessengerGenerationJobsForSubject } from "./messengerGenerationQueue";
+import {
+  eraseMessengerGenerationJobsForSubject,
+  recoverMessengerGenerationAdmissionsForSubject,
+} from "./messengerGenerationQueue";
 import { eraseMessengerImageQuotaForUser } from "./messengerImageQuotaStore";
 import { hashStorageObjectKeyForLog } from "./messengerStorageObject";
 import { isLocalGeneratedImageUrl } from "./generatedImageStore";
@@ -341,6 +344,12 @@ async function deleteUserDataInternal(
   ) {
     deleteStepsSucceeded =
       (await runStep("messenger_provider_attempts", async () => {
+        await recoverMessengerGenerationAdmissionsForSubject({
+          ...privacyErasure,
+          bindingEpoch: generationState.bindingEpoch!,
+          pageId: generationState.pageId!,
+          privacyEpoch: generationState.privacyEpoch!,
+        });
         const drained =
           await containMessengerProviderAttemptsForPrivacy(privacyErasure);
         if (!drained) {

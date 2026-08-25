@@ -11,11 +11,14 @@ import {
 import { getDatabaseOrThrow } from "../../db";
 import { STARTPILOT_PLAN_CODE } from "./catalog";
 import { assertTenantBillingWorkerWorkspace, type MollieMode } from "./config";
+import { parseStartpilotQuota } from "./startpilotQuota";
+
+export { parseStartpilotQuota, type StartpilotQuota } from "./startpilotQuota";
 
 const AI_RESERVATION_TTL_MS = 5 * 60 * 1_000;
 const AI_RESERVATION_OWNER_LEASE_MS = AI_RESERVATION_TTL_MS - 30_000;
 
-type BillingTransaction = Parameters<
+export type BillingTransaction = Parameters<
   Parameters<Awaited<ReturnType<typeof getDatabaseOrThrow>>["transaction"]>[0]
 >[0];
 
@@ -36,14 +39,24 @@ export type ActiveWorkspaceEntitlement = {
   validUntil: Date | null;
 };
 
-export type StartpilotQuota = {
-  aiAnswersTotal: 300;
-  imagesTotal: 20;
-  imagesPerDay: 5;
-  workspaces: 1;
-  facebookPages: 1;
-  imageQuality: "images_2";
+export type StartpilotImageUsageInput = {
+  workspaceId: number;
+  entitlementId: number;
+  channelConnectionId: number;
+  bindingEpoch: number;
+  mode: MollieMode;
+  idempotencyKey: string;
+  now?: Date;
 };
+
+export type StartpilotImageUsageDecision =
+  | {
+      allowed: true;
+      imagesUsed: number;
+      imagesUsedToday: number;
+      alreadyReserved: boolean;
+    }
+  | { allowed: false; reason: "total_exhausted" | "daily_exhausted" };
 
 export async function resolveActiveWorkspaceEntitlement(
   workspaceId: number,
@@ -82,53 +95,181 @@ export async function resolveActiveWorkspaceEntitlement(
   };
 }
 
-export async function reserveStartpilotImageUsage(input: {
-  workspaceId: number;
-  entitlementId: number;
-  mode: MollieMode;
-  now?: Date;
-}): Promise<
-  | { allowed: true; imagesUsed: number; imagesUsedToday: number }
-  | { allowed: false; reason: "total_exhausted" | "daily_exhausted" }
-> {
-  assertPositiveId(input.workspaceId, "workspace");
-  assertPositiveId(input.entitlementId, "entitlement");
+export async function reserveStartpilotImageUsage(
+  input: StartpilotImageUsageInput
+): Promise<StartpilotImageUsageDecision> {
+  assertStartpilotImageUsageInput(input);
   const now = input.now ?? new Date();
-  const usageDate = utcDateKey(now);
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
-    const { usage, quota } = await lockStartpilotUsage(tx, input, now);
-    const imagesUsedToday =
-      usage.imageUsageDate === usageDate ? usage.imagesUsedToday : 0;
-    if (usage.imagesUsed >= quota.imagesTotal) {
-      return { allowed: false as const, reason: "total_exhausted" as const };
+    await lockStartpilotImageBinding(tx, input);
+    return reserveStartpilotImageUsageWithinTransaction(tx, input, now);
+  });
+}
+
+/**
+ * Transaction-scoped primitive used by the paid provider admission boundary.
+ * The caller must lock and validate the Page/privacy owner before calling it.
+ */
+export async function reserveStartpilotImageUsageWithinTransaction(
+  tx: BillingTransaction,
+  input: StartpilotImageUsageInput,
+  now = input.now ?? new Date()
+): Promise<StartpilotImageUsageDecision> {
+  assertStartpilotImageUsageInput(input);
+  const usageDate = utcDateKey(now);
+  const ownerTokenHash = createHash("sha256")
+    .update(`leaderbot-image-usage-v1\n${input.idempotencyKey}`)
+    .digest("hex");
+  const { usage, quota } = await lockStartpilotUsage(tx, input, now);
+  const imagesUsedToday =
+    usage.imageUsageDate === usageDate ? usage.imagesUsedToday : 0;
+  const existing = await tx
+    .select()
+    .from(workspaceEntitlementUsageReservations)
+    .where(
+      and(
+        eq(
+          workspaceEntitlementUsageReservations.workspaceId,
+          input.workspaceId
+        ),
+        eq(workspaceEntitlementUsageReservations.mode, input.mode),
+        eq(
+          workspaceEntitlementUsageReservations.idempotencyKey,
+          input.idempotencyKey
+        )
+      )
+    )
+    .limit(1)
+    .for("update");
+  let releasedReservationId: string | null = null;
+  if (existing[0]) {
+    if (
+      existing[0].entitlementId !== input.entitlementId ||
+      existing[0].channelConnectionId !== input.channelConnectionId ||
+      existing[0].bindingEpoch !== input.bindingEpoch ||
+      existing[0].kind !== "image"
+    ) {
+      throw new Error("Startpilot image usage idempotency scope mismatch");
     }
-    if (imagesUsedToday >= quota.imagesPerDay) {
-      return { allowed: false as const, reason: "daily_exhausted" as const };
+    if (existing[0].status === "committed") {
+      return {
+        allowed: true,
+        imagesUsed: usage.imagesUsed,
+        imagesUsedToday,
+        alreadyReserved: true,
+      };
     }
-    const nextImagesUsed = usage.imagesUsed + 1;
-    const nextImagesUsedToday = imagesUsedToday + 1;
-    await tx
-      .update(workspaceEntitlementUsage)
+    if (existing[0].status !== "released") {
+      throw new Error("Startpilot image usage idempotency scope mismatch");
+    }
+    releasedReservationId = existing[0].reservationId;
+  }
+  if (usage.imagesUsed >= quota.imagesTotal) {
+    return { allowed: false, reason: "total_exhausted" };
+  }
+  if (imagesUsedToday >= quota.imagesPerDay) {
+    return { allowed: false, reason: "daily_exhausted" };
+  }
+  const nextImagesUsed = usage.imagesUsed + 1;
+  const nextImagesUsedToday = imagesUsedToday + 1;
+  if (releasedReservationId) {
+    const recommitted = await tx
+      .update(workspaceEntitlementUsageReservations)
       .set({
-        imagesUsed: nextImagesUsed,
-        imageUsageDate: usageDate,
-        imagesUsedToday: nextImagesUsedToday,
+        status: "committed",
+        ownerTokenHash,
+        ownerLeaseUntil: now,
+        expiresAt: now,
+        resolutionDueAt: now,
+        committedAt: now,
+        releasedAt: null,
       })
       .where(
         and(
-          eq(workspaceEntitlementUsage.id, usage.id),
-          eq(workspaceEntitlementUsage.workspaceId, input.workspaceId),
-          eq(workspaceEntitlementUsage.mode, input.mode),
-          eq(workspaceEntitlementUsage.entitlementId, input.entitlementId)
+          eq(
+            workspaceEntitlementUsageReservations.reservationId,
+            releasedReservationId
+          ),
+          eq(workspaceEntitlementUsageReservations.status, "released")
         )
       );
-    return {
-      allowed: true as const,
+    if (extractAffectedRows(recommitted) !== 1) {
+      throw new Error("Startpilot image usage recommit was lost");
+    }
+  } else {
+    await tx.insert(workspaceEntitlementUsageReservations).values({
+      reservationId: randomUUID(),
+      workspaceId: input.workspaceId,
+      mode: input.mode,
+      entitlementId: input.entitlementId,
+      channelConnectionId: input.channelConnectionId,
+      bindingEpoch: input.bindingEpoch,
+      kind: "image",
+      status: "committed",
+      idempotencyKey: input.idempotencyKey,
+      ownerTokenHash,
+      ownerLeaseUntil: now,
+      expiresAt: now,
+      resolutionDueAt: now,
+      committedAt: now,
+    });
+  }
+  const updated = await tx
+    .update(workspaceEntitlementUsage)
+    .set({
       imagesUsed: nextImagesUsed,
+      imageUsageDate: usageDate,
       imagesUsedToday: nextImagesUsedToday,
-    };
-  });
+    })
+    .where(
+      and(
+        eq(workspaceEntitlementUsage.id, usage.id),
+        eq(workspaceEntitlementUsage.workspaceId, input.workspaceId),
+        eq(workspaceEntitlementUsage.mode, input.mode),
+        eq(workspaceEntitlementUsage.entitlementId, input.entitlementId)
+      )
+    );
+  if (extractAffectedRows(updated) !== 1) {
+    throw new Error("Startpilot image usage update was lost");
+  }
+  return {
+    allowed: true,
+    imagesUsed: nextImagesUsed,
+    imagesUsedToday: nextImagesUsedToday,
+    alreadyReserved: false,
+  };
+}
+
+function assertStartpilotImageUsageInput(input: StartpilotImageUsageInput) {
+  assertPositiveId(input.workspaceId, "workspace");
+  assertPositiveId(input.entitlementId, "entitlement");
+  assertPositiveId(input.channelConnectionId, "channel connection");
+  assertPositiveId(input.bindingEpoch, "binding epoch");
+  assertOpaqueIdempotencyKey(input.idempotencyKey);
+}
+
+async function lockStartpilotImageBinding(
+  tx: BillingTransaction,
+  input: StartpilotImageUsageInput
+) {
+  const bindings = await tx
+    .select({ id: channelConnections.id })
+    .from(channelConnections)
+    .where(
+      and(
+        eq(channelConnections.id, input.channelConnectionId),
+        eq(channelConnections.workspaceId, input.workspaceId),
+        eq(channelConnections.bindingEpoch, input.bindingEpoch),
+        eq(channelConnections.channel, "facebook_messenger"),
+        eq(channelConnections.status, "connected")
+      )
+    )
+    .limit(1)
+    .for("update");
+  if (!bindings[0]) {
+    throw new Error("Startpilot image usage binding changed");
+  }
 }
 
 export async function reserveStartpilotAiAnswerUsage(input: {
@@ -763,19 +904,6 @@ function requireReservedCapacity(current: number, decrement: number): number {
     throw new Error("AI answer reserved counter invariant violated");
   }
   return current - decrement;
-}
-
-export function parseStartpilotQuota(value: unknown): StartpilotQuota | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const quota = value as Record<string, unknown>;
-  return quota.aiAnswersTotal === 300 &&
-    quota.imagesTotal === 20 &&
-    quota.imagesPerDay === 5 &&
-    quota.workspaces === 1 &&
-    quota.facebookPages === 1 &&
-    quota.imageQuality === "images_2"
-    ? (quota as StartpilotQuota)
-    : null;
 }
 
 export function utcDateKey(value: Date): string {

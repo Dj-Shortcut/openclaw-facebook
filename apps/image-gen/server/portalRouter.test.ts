@@ -761,23 +761,26 @@ describe("portal router audit logging", () => {
       workspaceId,
       period: "today",
       plan: {
-        name: "Free",
-        billingStatus: "free",
+        name: "Leaderbot Startpilot",
+        billingStatus: "active",
       },
       messageCount: 18,
-      imageCount: 20,
+      imageCount: 3,
+      imageCountInPeriod: 12,
       blockedCount: 1,
       limits: {
-        imagesPerDay: 20,
+        imagesPerDay: 5,
+        imagesPerPeriod: 20,
         messagesPerWindow: 30,
         messageWindowSeconds: 60,
       },
       remaining: {
-        imagesToday: 0,
+        imagesToday: 2,
+        imagesInPeriod: 8,
       },
       upgrade: {
-        recommended: true,
-        reason: "image_limit_reached",
+        recommended: false,
+        reason: null,
       },
     };
     mocks.getWorkspaceUsageSummary.mockResolvedValue(usageSummary);

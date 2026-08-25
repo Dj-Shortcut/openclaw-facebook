@@ -215,6 +215,40 @@ describe("Mollie checkout launch gate", () => {
     expect(listMethods).toHaveBeenCalledWith("oneoff");
   });
 
+  it("reports sandbox ready only after provider and operational gates pass", async () => {
+    process.env = operationalBillingTestEnv();
+    const listMethods = vi
+      .fn()
+      .mockResolvedValue([
+        { resource: "method", id: "bancontact", status: "active" },
+      ]);
+    const databaseCheck = vi
+      .spyOn(billingReadiness, "assertBillingDatabaseReadiness")
+      .mockResolvedValue();
+
+    await expect(
+      getMollieLaunchCheck({ listMethods } as unknown as MollieClient)
+    ).resolves.toMatchObject({
+      phase: "provider",
+      mode: "test",
+      providerChecked: true,
+      ok: false,
+      credentialFreeGatesReady: true,
+      sandboxReady: true,
+      liveReady: false,
+      bancontact: true,
+      offerType: "one_time",
+      paymentSequenceType: "oneoff",
+      salesCountry: "BE",
+      currency: "EUR",
+      b2bCheckoutEnabled: false,
+    });
+    expect(listMethods).toHaveBeenCalledWith("oneoff");
+    expect(databaseCheck).toHaveBeenCalledWith("test", {
+      requireRuntimeHeartbeat: true,
+    });
+  });
+
   it("runs the offline phase without a Mollie credential or provider call", async () => {
     process.env = offlineBillingTestEnv();
     const listMethods = vi.fn();
@@ -294,6 +328,36 @@ function offlineBillingTestEnv(): NodeJS.ProcessEnv {
     MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD: "10",
     MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD: "100",
     MESSENGER_USER_DAILY_SPEND_CAP_USD: "2",
+  };
+}
+
+function operationalBillingTestEnv(): NodeJS.ProcessEnv {
+  return {
+    ...billingTestEnv(),
+    DATABASE_URL: "mysql://test:test@database.test/leaderbot",
+    REDIS_URL: "redis://cache.test:6379",
+    BILLING_PROFILE_EVIDENCE_HMAC_SECRET: "e".repeat(32),
+    MOLLIE_CREDENTIAL_GENERATION_ID: "test-generation-1",
+    MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD: "10",
+    MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD: "100",
+    MESSENGER_USER_DAILY_SPEND_CAP_USD: "2",
+    BILLING_NOTIFICATION_PLANE_ENABLED: "true",
+    BILLING_NOTIFICATION_SOURCE_ID: "leaderbot-test",
+    BILLING_NOTIFICATION_RECEIVER_PUBLIC_ORIGIN: "http://receiver.test",
+    BILLING_CUSTOMER_NOTIFICATION_WEBHOOK_URL:
+      "http://receiver.test/api/internal/billing/notifications/customer",
+    BILLING_OPERATOR_NOTIFICATION_WEBHOOK_URL:
+      "http://receiver.test/api/internal/billing/notifications/operator",
+    BILLING_CUSTOMER_NOTIFICATION_SIGNING_SECRET: "c".repeat(32),
+    BILLING_OPERATOR_NOTIFICATION_SIGNING_SECRET: "o".repeat(32),
+    BILLING_CUSTOMER_NOTIFICATION_KEY_ID: "customer-k1",
+    BILLING_OPERATOR_NOTIFICATION_KEY_ID: "operator-k1",
+    BILLING_NOTIFICATION_RECEIVER_CUSTOMER_SIGNING_SECRET: "c".repeat(32),
+    BILLING_NOTIFICATION_RECEIVER_OPERATOR_SIGNING_SECRET: "o".repeat(32),
+    BILLING_NOTIFICATION_RECEIVER_CUSTOMER_KEY_ID: "customer-k1",
+    BILLING_NOTIFICATION_RECEIVER_OPERATOR_KEY_ID: "operator-k1",
+    BILLING_NOTIFICATION_RECEIVER_SOURCE_ID: "leaderbot-test",
+    BILLING_NOTIFICATION_RECEIVER_PREFLIGHT_ACK: "true",
   };
 }
 

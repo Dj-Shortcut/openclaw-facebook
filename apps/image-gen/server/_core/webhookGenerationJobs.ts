@@ -1,13 +1,20 @@
+import { createHash } from "node:crypto";
 import type { MessengerSendOutcome } from "./messengerApi";
 import { safeLog } from "./messengerApi";
 import { getGenerationMetrics } from "./image-generation/openAiImageClient";
 import { executeGenerationFlow } from "./generationFlow";
+import type { ProviderAttemptAdmission } from "./imageService";
 import {
   buildFreeQuotaReachedResponse,
   buildGenerationFailureResponse,
   buildGenerationSuccessResponse,
   buildImageQuotaBalanceResponse,
+  buildStartpilotQuotaReachedResponse,
 } from "./conversationActions";
+import {
+  admitStartpilotImageProviderAttempt,
+  recoverStartpilotImageProviderAdmission,
+} from "./startpilotImageProviderAdmission";
 import {
   anonymizePsid,
   getOrCreateState,
@@ -65,6 +72,7 @@ import {
   markMessengerGenerationSuccessNoticeSent,
   type MessengerGenerationCompletion,
   type MessengerGenerationCompletionFence,
+  type MessengerGenerationQuotaAccountingMode,
 } from "./messengerGenerationCompletion";
 import {
   MESSENGER_ASYNC_RESPONSE_QUEUED,
@@ -142,6 +150,55 @@ class MessengerImageQuotaBusyError extends Error {
   }
 }
 
+class StartpilotImageQuotaExhaustedError extends Error {
+  constructor(readonly reason: "total_exhausted" | "daily_exhausted") {
+    super("Startpilot image quota is exhausted");
+    this.name = "StartpilotImageQuotaExhaustedError";
+  }
+}
+
+class StartpilotProviderAdmissionRetryError extends Error {
+  constructor(cause: unknown) {
+    super("Startpilot provider admission must be retried", { cause });
+    this.name = "StartpilotProviderAdmissionRetryError";
+  }
+}
+
+function asStartpilotProviderAdmissionRetryError(
+  error: unknown
+): StartpilotProviderAdmissionRetryError | null {
+  const seen = new Set<unknown>();
+  const findRetryError = (
+    candidate: unknown
+  ): StartpilotProviderAdmissionRetryError | null => {
+    if (candidate instanceof StartpilotProviderAdmissionRetryError) {
+      return candidate;
+    }
+    if (
+      (typeof candidate !== "object" && typeof candidate !== "function") ||
+      candidate === null ||
+      seen.has(candidate)
+    ) {
+      return null;
+    }
+    seen.add(candidate);
+    if (candidate instanceof AggregateError) {
+      for (const nested of candidate.errors) {
+        const retryError = findRetryError(nested);
+        if (retryError) return retryError;
+      }
+    }
+    if (candidate instanceof Error && candidate.cause !== undefined) {
+      return findRetryError(candidate.cause);
+    }
+    return null;
+  };
+
+  const retryError = findRetryError(error);
+  if (!retryError || retryError === error) return retryError;
+  return new StartpilotProviderAdmissionRetryError(error);
+}
+
 class MessengerImageQuotaRecoveryError extends Error {
   constructor() {
     super(
@@ -180,8 +237,6 @@ export function createMessengerGenerationJobRunner(
   async function executeImageGenerationJobInPageContext(
     job: MessengerGenerationJob
   ): Promise<MessengerSendOutcome> {
-    await assertMessengerGenerationOwnership(job);
-    await assertGenerationJobPrivacy(job);
     const {
       psid,
       userId,
@@ -197,6 +252,54 @@ export function createMessengerGenerationJobRunner(
       generationKind,
       sourceImageUrl,
     });
+    const pendingRecovery = job.startpilotAdmissionRecovery;
+    if (pendingRecovery) {
+      if (
+        !job.workspaceId ||
+        !job.channelConnectionId ||
+        !job.bindingEpoch ||
+        (pendingRecovery.resumeGeneration && !job.pageId) ||
+        (job.privacyEpoch !== undefined &&
+          job.privacyEpoch !== pendingRecovery.privacyEpoch) ||
+        pendingRecovery.providerOperation !== resolvedGenerationKind
+      ) {
+        throw new Error("Startpilot provider recovery job scope mismatch");
+      }
+      await recoverStartpilotImageProviderAdmission({
+        fence: {
+          leaseToken: pendingRecovery.leaseToken,
+          attemptKeyHash: pendingRecovery.attemptKeyHash,
+          channel: "facebook_messenger",
+          workspaceId: job.workspaceId,
+          channelConnectionId: job.channelConnectionId,
+          bindingEpoch: job.bindingEpoch,
+          pageId: job.pageId,
+          userKey: job.userId,
+          privacyEpoch: pendingRecovery.privacyEpoch,
+          providerOperation: pendingRecovery.providerOperation,
+          privacyMode: "active",
+        },
+        providerOperation: pendingRecovery.providerOperation,
+        workspaceId: job.workspaceId,
+        entitlementId: pendingRecovery.entitlementId,
+        channelConnectionId: job.channelConnectionId,
+        bindingEpoch: job.bindingEpoch,
+        mode: pendingRecovery.mode,
+        idempotencyKey: pendingRecovery.idempotencyKey,
+        pageIdHash: pendingRecovery.pageIdHash,
+      }).catch(error => {
+        throw new StartpilotProviderAdmissionRetryError(error);
+      });
+      delete job.startpilotAdmissionRecovery;
+      if (!pendingRecovery.resumeGeneration) {
+        return MESSENGER_SEND_SKIPPED;
+      }
+    }
+    // Current ownership/privacy gates decide whether generation may resume.
+    // Compensation above cannot call a provider and independently proves the
+    // immutable historical Page, receipt, and attempt-fence binding in SQL.
+    await assertMessengerGenerationOwnership(job);
+    await assertGenerationJobPrivacy(job);
     let sendOutcome: MessengerSendOutcome = MESSENGER_SEND_SKIPPED;
     const rememberSendOutcome = (outcome: MessengerSendOutcome) => {
       sendOutcome = combineMessengerSendOutcomes(sendOutcome, outcome);
@@ -211,9 +314,10 @@ export function createMessengerGenerationJobRunner(
         const ownerQuotaBypass = isMessengerAdmin(psid, userId);
         const quotaBypassApplied =
           ownerQuotaBypass || hasQuotaBypass(psid, userId);
-        const successQuotaIdentity = !quotaBypassApplied
-          ? imageQuotaIdentityForJob(job)
-          : undefined;
+        const successQuotaIdentity =
+          workspacePolicy.kind === "free" && !quotaBypassApplied
+            ? imageQuotaIdentityForJob(job)
+            : undefined;
         if (
           await finishDuplicateGenerationIfCompleted({
             deps,
@@ -282,19 +386,136 @@ export function createMessengerGenerationJobRunner(
             (sourceImageUrl === state.lastGeneratedUrl ||
               sourceImageUrl === state.lastImageUrl)
           );
-          const beginProviderAttempt = async () => {
-            await assertMessengerGenerationOwnership(job);
-            await assertGenerationJobPrivacy(job);
-            providerFenceSequence += 1;
-            const providerFence = await reserveMessengerProviderAttemptFence(
-              job,
-              resolvedGenerationKind,
-              providerFenceSequence
-            );
-            await markMessengerProviderAttemptStarted(providerFence);
-            providerFences.push(providerFence);
-            providerAttemptsStarted += 1;
-          };
+          const beginProviderAttempt =
+            async (): Promise<ProviderAttemptAdmission> => {
+              await assertMessengerGenerationOwnership(job);
+              await assertGenerationJobPrivacy(job);
+              providerFenceSequence += 1;
+              const providerFence = await reserveMessengerProviderAttemptFence(
+                job,
+                resolvedGenerationKind,
+                providerFenceSequence
+              );
+              let state: "reserved" | "started" | "terminal" = "reserved";
+              let startPromise: Promise<void> | null = null;
+              let paidAdmissionRecovery:
+                | NonNullable<
+                    MessengerGenerationJob["startpilotAdmissionRecovery"]
+                  >
+                | undefined;
+
+              return Object.freeze({
+                markTransportStarted: async () => {
+                  if (state === "started") return;
+                  if (state === "terminal") {
+                    throw new Error("Provider attempt is already terminal");
+                  }
+                  if (!startPromise) {
+                    startPromise = (async () => {
+                      if (
+                        workspacePolicy.kind === "startpilot" &&
+                        providerAttemptsStarted === 0
+                      ) {
+                        if (
+                          job.workspaceId !== workspacePolicy.workspaceId ||
+                          !job.channelConnectionId ||
+                          !job.bindingEpoch
+                        ) {
+                          throw new Error(
+                            "Startpilot generation scope mismatch"
+                          );
+                        }
+                        const usage = await admitStartpilotImageProviderAttempt(
+                          {
+                            fence: providerFence,
+                            providerOperation: resolvedGenerationKind,
+                            workspaceId: workspacePolicy.workspaceId,
+                            entitlementId: workspacePolicy.entitlementId,
+                            channelConnectionId: job.channelConnectionId,
+                            bindingEpoch: job.bindingEpoch,
+                            mode: workspacePolicy.mode,
+                            idempotencyKey:
+                              startpilotImageUsageIdempotencyKey(job),
+                          }
+                        ).catch(error => {
+                          if (
+                            providerFence.leaseToken &&
+                            providerFence.attemptKeyHash &&
+                            providerFence.privacyEpoch &&
+                            job.pageId
+                          ) {
+                            paidAdmissionRecovery = {
+                              version: "startpilot_admission_recovery_v1",
+                              resumeGeneration: true,
+                              recoveryDeadlineAt:
+                                Date.now() + 30 * 24 * 60 * 60_000,
+                              pageIdHash: createHash("sha256")
+                                .update(job.pageId)
+                                .digest("hex"),
+                              entitlementId: workspacePolicy.entitlementId,
+                              mode: workspacePolicy.mode,
+                              providerOperation: resolvedGenerationKind,
+                              attemptKeyHash: providerFence.attemptKeyHash,
+                              leaseToken: providerFence.leaseToken,
+                              privacyEpoch: providerFence.privacyEpoch,
+                              idempotencyKey:
+                                startpilotImageUsageIdempotencyKey(job),
+                            };
+                          }
+                          throw new StartpilotProviderAdmissionRetryError(
+                            error
+                          );
+                        });
+                        if (!usage.allowed) {
+                          state = "terminal";
+                          throw new StartpilotImageQuotaExhaustedError(
+                            usage.reason
+                          );
+                        }
+                      } else {
+                        await markMessengerProviderAttemptStarted(
+                          providerFence
+                        );
+                      }
+                      state = "started";
+                      providerFences.push(providerFence);
+                      providerAttemptsStarted += 1;
+                    })();
+                  }
+                  await startPromise;
+                },
+                abortBeforeTransport: async () => {
+                  if (state !== "reserved") return;
+                  if (paidAdmissionRecovery) {
+                    job.startpilotAdmissionRecovery = paidAdmissionRecovery;
+                    try {
+                      await recoverStartpilotImageProviderAdmission({
+                        fence: providerFence,
+                        providerOperation:
+                          paidAdmissionRecovery.providerOperation,
+                        workspaceId: job.workspaceId!,
+                        entitlementId: paidAdmissionRecovery.entitlementId,
+                        channelConnectionId: job.channelConnectionId!,
+                        bindingEpoch: job.bindingEpoch!,
+                        mode: paidAdmissionRecovery.mode,
+                        idempotencyKey: paidAdmissionRecovery.idempotencyKey,
+                        pageIdHash: paidAdmissionRecovery.pageIdHash,
+                      });
+                      delete job.startpilotAdmissionRecovery;
+                      state = "terminal";
+                      return;
+                    } catch (error) {
+                      throw new StartpilotProviderAdmissionRetryError(error);
+                    }
+                  }
+                  await finalizeMessengerProviderAttemptFence(
+                    providerFence,
+                    "known_failed"
+                  );
+                  state = "terminal";
+                },
+              });
+            };
 
           const generationResult = await executeGenerationFlow({
             generationKind: resolvedGenerationKind,
@@ -344,7 +565,8 @@ export function createMessengerGenerationJobRunner(
           if (generationResult.kind === "success") {
             try {
               if (providerAttemptsStarted === 0) {
-                await beginProviderAttempt();
+                const admission = await beginProviderAttempt();
+                await admission.markTransportStarted();
               }
               await assertMessengerGenerationOwnership(job);
               await assertGenerationJobPrivacy(job);
@@ -360,6 +582,10 @@ export function createMessengerGenerationJobRunner(
                 rememberSendOutcome,
                 completionFence: completionFenceForJob(job),
                 successQuotaIdentity,
+                quotaAccountingMode:
+                  workspacePolicy.kind === "startpilot"
+                    ? "startpilot_attempt_committed_v1"
+                    : "success_only_v1",
                 quotaReservation: pendingQuotaReservation,
                 quotaLeaseHeartbeat,
                 assertCurrentBinding: () =>
@@ -395,6 +621,24 @@ export function createMessengerGenerationJobRunner(
             )
           );
           providerFences.length = 0;
+
+          if (
+            generationResult.error instanceof StartpilotImageQuotaExhaustedError
+          ) {
+            await sendStartpilotQuotaReachedNotice({
+              deps,
+              psid,
+              reqId,
+              lang,
+              reason: generationResult.error.reason,
+              rememberSendOutcome,
+            });
+            return;
+          }
+
+          const providerAdmissionRetry =
+            asStartpilotProviderAdmissionRetryError(generationResult.error);
+          if (providerAdmissionRetry) throw providerAdmissionRetry;
 
           await handleGenerationFailure({
             deps,
@@ -434,6 +678,17 @@ export function createMessengerGenerationJobRunner(
     } catch (error) {
       if (error instanceof MessengerPrivacyFenceError) {
         return MESSENGER_SEND_SKIPPED;
+      }
+      const providerAdmissionRetry =
+        asStartpilotProviderAdmissionRetryError(error);
+      if (providerAdmissionRetry) {
+        safeLog("startpilot_provider_admission_requeued", {
+          level: "error",
+          reqId,
+          user: toLogUser(userId),
+          generationKind: resolvedGenerationKind,
+        });
+        throw providerAdmissionRetry;
       }
       if (error instanceof MessengerGenerationDeliveryError) {
         recordMessengerDeliveryFailure();
@@ -603,6 +858,14 @@ export function createMessengerGenerationJobRunner(
   async function processMessengerGenerationJobDeadLetter(
     input: MessengerGenerationJob
   ): Promise<MessengerSendOutcome> {
+    if (input.startpilotAdmissionRecovery) {
+      safeLog("messenger_generation_recovery_dead_lettered", {
+        reqId: input.reqId,
+        generationKind: input.generationKind ?? null,
+        attempts: input.attempts ?? null,
+      });
+      return MESSENGER_SEND_SKIPPED;
+    }
     return await runWithMessengerRequestContext(
       input.pageId,
       async () => {
@@ -640,6 +903,52 @@ export function createMessengerGenerationJobRunner(
     processMessengerGenerationJob: executeImageGenerationJob,
     processMessengerGenerationJobDeadLetter,
   };
+}
+
+async function sendStartpilotQuotaReachedNotice(input: {
+  deps: GenerationJobRunnerDeps;
+  psid: string;
+  reqId: string;
+  lang: MessengerGenerationJob["lang"];
+  reason: "total_exhausted" | "daily_exhausted";
+  rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
+}): Promise<void> {
+  const response = buildStartpilotQuotaReachedResponse(
+    input.lang,
+    input.reason
+  );
+  let outcome: MessengerSendOutcome;
+  try {
+    outcome = await input.deps.sendLoggedActions(
+      input.psid,
+      response.text ??
+        t(
+          input.lang,
+          input.reason === "daily_exhausted"
+            ? "startpilotDailyQuotaReached"
+            : "startpilotQuotaReached"
+        ),
+      response.actions ?? [],
+      input.reqId,
+      { providerAttemptKey: "startpilot-quota-notice-v1" }
+    );
+  } catch (error) {
+    // Meta has no idempotency key. Once delivery may have started, the exact
+    // provider fence prevents a second call; settle the local conversation so
+    // generic recovery cannot send contradictory failure actions.
+    if (isMessengerDeliveryAmbiguous(error)) {
+      await setFlowState(input.psid, "AWAITING_EDIT_PROMPT");
+      return;
+    }
+    throw new MessengerGenerationNoticeDeliveryError(error);
+  }
+  input.rememberSendOutcome(outcome);
+  if (!outcome.sent) {
+    throw new MessengerGenerationNoticeDeliveryError(
+      new Error(`Startpilot quota notice send skipped: ${outcome.reason}`)
+    );
+  }
+  await setFlowState(input.psid, "AWAITING_EDIT_PROMPT");
 }
 
 function shouldPropagateInlineGenerationFailure(): boolean {
@@ -819,10 +1128,14 @@ async function finishDuplicateGenerationIfCompleted(input: {
   let quotaStatus = completedGeneration.quotaStatus;
   let successNoticeStatus = completedGeneration.successNoticeStatus;
   const deliveryStatus = completedGeneration.deliveryStatus ?? "delivered";
-  if (input.successQuotaIdentity && !quotaStatus) {
+  const recoveryQuotaIdentity = quotaIdentityForCompletionRecovery(
+    completedGeneration,
+    input.successQuotaIdentity
+  );
+  if (recoveryQuotaIdentity && !quotaStatus) {
     const decision = await reserveMessengerGenerationQuota({
       psid: input.psid,
-      identity: input.successQuotaIdentity,
+      identity: recoveryQuotaIdentity,
       requestId: input.reqId,
     });
     if (decision.status === "busy") throw new MessengerImageQuotaBusyError();
@@ -832,7 +1145,7 @@ async function finishDuplicateGenerationIfCompleted(input: {
     ) {
       const committed = await commitMessengerGenerationQuota({
         psid: input.psid,
-        identity: input.successQuotaIdentity,
+        identity: recoveryQuotaIdentity,
         reservation: decision.reservation,
         generationKind: input.resolvedGenerationKind,
         assertCurrentBinding: input.assertCurrentBinding,
@@ -932,7 +1245,7 @@ async function finishDuplicateGenerationIfCompleted(input: {
         imageUrl: completedGeneration.imageUrl,
         lang: input.lang,
         rememberSendOutcome: input.rememberSendOutcome,
-        quotaIdentity: input.successQuotaIdentity,
+        quotaIdentity: recoveryQuotaIdentity,
         completionFence: input.completionFence,
       });
     }
@@ -943,11 +1256,11 @@ async function finishDuplicateGenerationIfCompleted(input: {
     successNoticeStatus === "pending" ||
     (deliveryStatus === "pending" && successNoticeStatus !== "sent");
   if (shouldSendSuccessNotice) {
-    if (input.successQuotaIdentity) {
+    if (recoveryQuotaIdentity) {
       // A retry can happen after another successful photo or after the local
       // day rolled over. Never send the stale balance captured at commit time.
       quotaStatus = await refreshGenerationQuotaSnapshot({
-        identity: input.successQuotaIdentity,
+        identity: recoveryQuotaIdentity,
         reqId: input.reqId,
         imageUrl: completedGeneration.imageUrl,
         userId: input.userId,
@@ -1046,6 +1359,7 @@ async function handleGenerationSuccess(input: {
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
   completionFence?: MessengerGenerationCompletionFence;
   successQuotaIdentity?: MessengerImageQuotaIdentity;
+  quotaAccountingMode: MessengerGenerationQuotaAccountingMode;
   quotaReservation: MessengerImageQuotaReservation | null;
   quotaLeaseHeartbeat: MessengerGenerationQuotaLeaseHeartbeat | null;
   assertCurrentBinding: () => Promise<void>;
@@ -1099,7 +1413,9 @@ async function handleGenerationSuccess(input: {
       imageUrl,
       input.userId,
       Date.now(),
-      input.completionFence
+      input.completionFence,
+      input.quotaAccountingMode,
+      input.successQuotaIdentity ?? null
     )
   );
   let quotaStatus: MessengerImageQuotaStatus | undefined;
@@ -1433,6 +1749,58 @@ function imageQuotaIdentityForJob(
     privacyEpoch: 1,
     userKey: getUserKey(job.userId),
   };
+}
+
+function quotaIdentityForCompletionRecovery(
+  completion: MessengerGenerationCompletion,
+  currentFreeIdentity: MessengerImageQuotaIdentity | undefined
+): MessengerImageQuotaIdentity | undefined {
+  if (completion.quotaAccountingMode === "startpilot_attempt_committed_v1") {
+    return undefined;
+  }
+  if (!Object.hasOwn(completion, "quotaIdentity")) {
+    return currentFreeIdentity;
+  }
+  const identity = completion.quotaIdentity;
+  if (identity === null) return undefined;
+  if (
+    !identity ||
+    !Number.isSafeInteger(identity.workspaceId) ||
+    identity.workspaceId <= 0 ||
+    !Number.isSafeInteger(identity.channelConnectionId) ||
+    identity.channelConnectionId <= 0 ||
+    !Number.isSafeInteger(identity.bindingEpoch) ||
+    identity.bindingEpoch <= 0 ||
+    !Number.isSafeInteger(identity.privacyEpoch) ||
+    identity.privacyEpoch <= 0 ||
+    !/^[a-f0-9]{64}$/i.test(identity.userKey) ||
+    (completion.workspaceId !== undefined &&
+      completion.workspaceId !== identity.workspaceId) ||
+    (completion.channelConnectionId !== undefined &&
+      completion.channelConnectionId !== identity.channelConnectionId) ||
+    (completion.bindingEpoch !== undefined &&
+      completion.bindingEpoch !== identity.bindingEpoch) ||
+    (completion.privacyEpoch !== undefined &&
+      completion.privacyEpoch !== identity.privacyEpoch) ||
+    (completion.userKey !== undefined &&
+      getUserKey(completion.userKey) !== identity.userKey)
+  ) {
+    throw new MessengerImageQuotaRecoveryError();
+  }
+  return identity;
+}
+
+function startpilotImageUsageIdempotencyKey(
+  job: Pick<MessengerGenerationJob, "reqId" | "userId" | "privacyEpoch">
+): string {
+  return `startpilot-image:${createHash("sha256")
+    .update("leaderbot-startpilot-image-v2\n")
+    .update(job.userId)
+    .update("\0")
+    .update(String(job.privacyEpoch ?? 0))
+    .update("\0")
+    .update(job.reqId)
+    .digest("hex")}`;
 }
 
 async function sendGenerationSuccessActions(input: {

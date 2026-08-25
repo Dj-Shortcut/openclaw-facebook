@@ -40,6 +40,7 @@ describe("Startpilot finite entitlement usage", () => {
     expect(
       parseStartpilotQuota({ ...quota, imageQuality: "legacy" })
     ).toBeNull();
+    expect(parseStartpilotQuota({ ...quota, unexpected: true })).toBeNull();
   });
 
   it("reserves an image atomically and resets only the UTC daily counter", async () => {
@@ -54,10 +55,18 @@ describe("Startpilot finite entitlement usage", () => {
       reserveStartpilotImageUsage({
         workspaceId: 1,
         entitlementId: 9,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
         mode: "test",
+        idempotencyKey: "image-request-key-00000001",
         now: new Date("2026-08-01T00:00:00.000Z"),
       })
-    ).resolves.toEqual({ allowed: true, imagesUsed: 8, imagesUsedToday: 1 });
+    ).resolves.toEqual({
+      allowed: true,
+      imagesUsed: 8,
+      imagesUsedToday: 1,
+      alreadyReserved: false,
+    });
     expect(flow.updateSet).toHaveBeenCalledWith({
       imagesUsed: 8,
       imageUsageDate: "2026-08-01",
@@ -72,7 +81,10 @@ describe("Startpilot finite entitlement usage", () => {
       reserveStartpilotImageUsage({
         workspaceId: 1,
         entitlementId: 9,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
         mode: "test",
+        idempotencyKey: "image-request-key-total-limit",
       })
     ).resolves.toEqual({ allowed: false, reason: "total_exhausted" });
     expect(total.updateSet).not.toHaveBeenCalled();
@@ -87,11 +99,126 @@ describe("Startpilot finite entitlement usage", () => {
       reserveStartpilotImageUsage({
         workspaceId: 1,
         entitlementId: 9,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
         mode: "test",
+        idempotencyKey: "image-request-key-daily-limit",
         now,
       })
     ).resolves.toEqual({ allowed: false, reason: "daily_exhausted" });
     expect(daily.updateSet).not.toHaveBeenCalled();
+  });
+
+  it("reuses the exact committed image receipt without counting twice", async () => {
+    const existing = imageReservation();
+    const flow = usageFlow(
+      { imagesUsed: 8, imageUsageDate: "2026-08-01", imagesUsedToday: 2 },
+      { reservations: [existing] }
+    );
+    databaseMock.mockResolvedValue(flow.database);
+
+    await expect(
+      reserveStartpilotImageUsage({
+        workspaceId: 1,
+        entitlementId: 9,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        mode: "test",
+        idempotencyKey: existing.idempotencyKey,
+        now: new Date("2026-08-01T12:00:00.000Z"),
+      })
+    ).resolves.toEqual({
+      allowed: true,
+      imagesUsed: 8,
+      imagesUsedToday: 2,
+      alreadyReserved: true,
+    });
+    expect(flow.updateSet).not.toHaveBeenCalled();
+    expect(flow.insertValues).not.toHaveBeenCalled();
+  });
+
+  it("recommits an exact released image receipt and counts it once", async () => {
+    const existing = imageReservation({ status: "released" });
+    const now = new Date("2026-08-01T12:00:00.000Z");
+    const flow = usageFlow(
+      { imagesUsed: 0, imageUsageDate: "2026-08-01", imagesUsedToday: 0 },
+      { reservations: [existing] }
+    );
+    databaseMock.mockResolvedValue(flow.database);
+
+    await expect(
+      reserveStartpilotImageUsage({
+        workspaceId: 1,
+        entitlementId: 9,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        mode: "test",
+        idempotencyKey: existing.idempotencyKey,
+        now,
+      })
+    ).resolves.toEqual({
+      allowed: true,
+      imagesUsed: 1,
+      imagesUsedToday: 1,
+      alreadyReserved: false,
+    });
+    expect(flow.insertValues).not.toHaveBeenCalled();
+    expect(flow.updateSet).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        status: "committed",
+        committedAt: now,
+        releasedAt: null,
+      })
+    );
+    expect(flow.updateSet).toHaveBeenNthCalledWith(2, {
+      imagesUsed: 1,
+      imageUsageDate: "2026-08-01",
+      imagesUsedToday: 1,
+    });
+  });
+
+  it.each([
+    ["entitlement", { entitlementId: 8 }],
+    ["channel connection", { channelConnectionId: 6 }],
+    ["binding epoch", { bindingEpoch: 4 }],
+    ["usage kind", { kind: "ai_answer" as const }],
+    ["receipt status", { status: "expired" as const }],
+  ])("refuses an image replay with a mismatched %s", async (_label, change) => {
+    const existing = imageReservation(change);
+    const flow = usageFlow({}, { reservations: [existing] });
+    databaseMock.mockResolvedValue(flow.database);
+
+    await expect(
+      reserveStartpilotImageUsage({
+        workspaceId: 1,
+        entitlementId: 9,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        mode: "test",
+        idempotencyKey: existing.idempotencyKey,
+      })
+    ).rejects.toThrow("Startpilot image usage idempotency scope mismatch");
+    expect(flow.insertValues).not.toHaveBeenCalled();
+    expect(flow.updateSet).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the Page binding changed", async () => {
+    const flow = usageFlow({}, { bindingMatches: false });
+    databaseMock.mockResolvedValue(flow.database);
+
+    await expect(
+      reserveStartpilotImageUsage({
+        workspaceId: 1,
+        entitlementId: 9,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        mode: "test",
+        idempotencyKey: "image-request-key-stale-binding",
+      })
+    ).rejects.toThrow("Startpilot image usage binding changed");
+    expect(flow.updateSet).not.toHaveBeenCalled();
+    expect(flow.insertValues).not.toHaveBeenCalled();
   });
 
   it("reserves the first AI answer and increments the reserved counter", async () => {
@@ -406,7 +533,11 @@ function usageFlow(
     imagesUsed: number;
     imageUsageDate: string | null;
     imagesUsedToday: number;
-  }>
+  }>,
+  options: {
+    reservations?: ReturnType<typeof imageReservation>[];
+    bindingMatches?: boolean;
+  } = {}
 ) {
   const validUntil = new Date("2026-09-01T00:00:00.000Z");
   const usage = {
@@ -423,8 +554,9 @@ function usageFlow(
     imagesUsedToday: 0,
     ...overrides,
   };
-  const updateWhere = vi.fn().mockResolvedValue(undefined);
+  const updateWhere = vi.fn().mockResolvedValue({ affectedRows: 1 });
   const updateSet = vi.fn(() => ({ where: updateWhere }));
+  const insertValues = vi.fn(async () => undefined);
   const tx = {
     select: vi.fn(() => ({
       from: vi.fn((table: unknown) => ({
@@ -443,14 +575,21 @@ function usageFlow(
                       validUntil,
                     },
                   ]
-                : table === workspaceEntitlementUsage
-                  ? [usage]
-                  : []
+                : table === channelConnections
+                  ? options.bindingMatches === false
+                    ? []
+                    : [{ id: 7 }]
+                  : table === workspaceEntitlementUsage
+                    ? [usage]
+                    : table === workspaceEntitlementUsageReservations
+                      ? (options.reservations ?? [])
+                      : []
             ),
           })),
         })),
       })),
     })),
+    insert: vi.fn(() => ({ values: insertValues })),
     update: vi.fn(() => ({ set: updateSet })),
   };
   return {
@@ -460,7 +599,37 @@ function usageFlow(
           callback(tx)
       ),
     },
+    insertValues,
     updateSet,
+  };
+}
+
+type ImageReservation = {
+  reservationId: string;
+  workspaceId: number;
+  mode: "test";
+  entitlementId: number;
+  channelConnectionId: number;
+  bindingEpoch: number;
+  kind: "image" | "ai_answer";
+  status: "reserved" | "committed" | "released" | "expired";
+  idempotencyKey: string;
+};
+
+function imageReservation(
+  overrides: Partial<ImageReservation> = {}
+): ImageReservation {
+  return {
+    reservationId: "20000000-0000-4000-8000-000000000001",
+    workspaceId: 1,
+    mode: "test" as const,
+    entitlementId: 9,
+    channelConnectionId: 7,
+    bindingEpoch: 3,
+    kind: "image" as const,
+    status: "committed" as const,
+    idempotencyKey: "image-request-key-00000001",
+    ...overrides,
   };
 }
 

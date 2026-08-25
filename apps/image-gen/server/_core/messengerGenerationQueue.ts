@@ -6,6 +6,7 @@ import { recordMessengerDuplicateSkip } from "./botRuntimeStats";
 import {
   createMessengerGenerationTenantPartition,
   createMessengerGenerationOwnershipPartition,
+  createStartpilotAdmissionRecoveryScopeProof,
   isMessengerGenerationTenantPartition,
   type MessengerGenerationJob,
 } from "./messengerGenerationJob";
@@ -13,6 +14,7 @@ import {
   parseReservedGenerationJob,
   type ReservedGenerationJob,
 } from "./messengerGenerationJobPayload";
+import { recoverStartpilotImageProviderAdmission } from "./startpilotImageProviderAdmission";
 
 const LEGACY_MESSENGER_GENERATION_QUEUE_KEY = "messenger-generation-jobs";
 const LEGACY_MESSENGER_GENERATION_PROCESSING_KEY =
@@ -1464,29 +1466,6 @@ export async function eraseMessengerGenerationJobsForSubject(input: {
     channelConnectionId: input.channelConnectionId,
     userKey: input.userKey,
   };
-  const erasedKey = getGenerationSubjectErasedKey(subjectScope);
-  const storedErasedEpoch = Number(
-    await redis.eval(
-      `
-        local current = tonumber(redis.call("GET", KEYS[1]) or "0")
-        local requested = tonumber(ARGV[1])
-        if current < requested then
-          redis.call("SET", KEYS[1], ARGV[1])
-          return requested
-        end
-        return current
-      `,
-      1,
-      erasedKey,
-      input.privacyEpoch
-    )
-  );
-  if (
-    !Number.isSafeInteger(storedErasedEpoch) ||
-    storedErasedEpoch < input.privacyEpoch
-  ) {
-    throw new Error("Messenger generation erasure epoch update failed");
-  }
   const indexedPartitions = await redis.smembers(
     getGenerationSubjectPartitionsKey(subjectScope)
   );
@@ -1513,6 +1492,34 @@ export async function eraseMessengerGenerationJobsForSubject(input: {
       getPartitionedGenerationQueueScope(tenantPartition, queueVersion)
     )
   );
+  // A pre-transport paid receipt is not customer content. Finish its exact,
+  // idempotent rollback before privacy scrubbing removes the queue proof.
+  // Failure keeps deletion pending instead of silently retaining a charge.
+  await recoverPendingStartpilotAdmissionsForSubject(redis, scopes, input);
+
+  const erasedKey = getGenerationSubjectErasedKey(subjectScope);
+  const storedErasedEpoch = Number(
+    await redis.eval(
+      `
+        local current = tonumber(redis.call("GET", KEYS[1]) or "0")
+        local requested = tonumber(ARGV[1])
+        if current < requested then
+          redis.call("SET", KEYS[1], ARGV[1])
+          return requested
+        end
+        return current
+      `,
+      1,
+      erasedKey,
+      input.privacyEpoch
+    )
+  );
+  if (
+    !Number.isSafeInteger(storedErasedEpoch) ||
+    storedErasedEpoch < input.privacyEpoch
+  ) {
+    throw new Error("Messenger generation erasure epoch update failed");
+  }
   // Fence every historical partition and both queue versions before scrubbing
   // any one of them. A
   // claimed job may still run local validation, but cannot cross its provider
@@ -1528,6 +1535,115 @@ export async function eraseMessengerGenerationJobsForSubject(input: {
     total += await scrubGenerationPartitionSubject(redis, scope, input.userKey);
   }
   return total;
+}
+
+export async function recoverMessengerGenerationAdmissionsForSubject(input: {
+  workspaceId: number;
+  channelConnectionId: number;
+  bindingEpoch: number;
+  privacyEpoch: number;
+  pageId: string;
+  userKey: string;
+}): Promise<void> {
+  if (!isMessengerGenerationQueueEnabled()) {
+    throw new Error(
+      "Messenger generation queue must be available for paid admission recovery"
+    );
+  }
+  const redis = await getRedisClient();
+  const indexedPartitions = await redis.smembers(
+    getGenerationSubjectPartitionsKey(input)
+  );
+  const partitionSecret = getMessengerGenerationPartitionSecret();
+  if (!partitionSecret) {
+    throw new Error("Messenger generation partition secret is required");
+  }
+  const partitions = new Set<string>([
+    createMessengerGenerationOwnershipPartition(input, partitionSecret),
+  ]);
+  for (const indexed of indexedPartitions) {
+    const separator = indexed.indexOf(":");
+    const epoch = Number(indexed.slice(0, separator));
+    const partition = indexed.slice(separator + 1);
+    if (
+      separator > 0 &&
+      Number.isSafeInteger(epoch) &&
+      epoch <= input.privacyEpoch &&
+      isMessengerGenerationTenantPartition(partition)
+    ) {
+      partitions.add(partition);
+    }
+  }
+  const scopes = [...partitions].flatMap(tenantPartition =>
+    MESSENGER_GENERATION_QUEUE_VERSIONS.map(queueVersion =>
+      getPartitionedGenerationQueueScope(tenantPartition, queueVersion)
+    )
+  );
+  await recoverPendingStartpilotAdmissionsForSubject(redis, scopes, input);
+}
+
+async function recoverPendingStartpilotAdmissionsForSubject(
+  redis: RedisLike,
+  scopes: PartitionedGenerationQueueScope[],
+  input: {
+    workspaceId: number;
+    channelConnectionId: number;
+    bindingEpoch: number;
+    privacyEpoch: number;
+    pageId: string;
+    userKey: string;
+  }
+): Promise<void> {
+  for (const scope of scopes) {
+    const references = await redis.smembers(
+      getGenerationSubjectIndexKey(scope, input.userKey)
+    );
+    for (const reference of references) {
+      if (!/^job-[a-f0-9]{64}$/.test(reference)) {
+        throw new Error("Messenger generation recovery index is invalid");
+      }
+      const serialized = await redis.get(
+        `${getGenerationQueueKeyPrefix(scope)}:content:${reference.slice(4)}`
+      );
+      if (!serialized) continue;
+      const reserved = parseReservedGenerationJobForScope(serialized, scope);
+      const job = reserved?.job;
+      const recovery = job?.startpilotAdmissionRecovery;
+      if (!job || !recovery) continue;
+      if (
+        job.workspaceId !== input.workspaceId ||
+        job.channelConnectionId !== input.channelConnectionId ||
+        job.bindingEpoch !== input.bindingEpoch ||
+        job.privacyEpoch !== input.privacyEpoch ||
+        job.userId !== input.userKey
+      ) {
+        throw new Error("Messenger generation recovery subject scope mismatch");
+      }
+      await recoverStartpilotImageProviderAdmission({
+        fence: {
+          leaseToken: recovery.leaseToken,
+          attemptKeyHash: recovery.attemptKeyHash,
+          channel: "facebook_messenger",
+          workspaceId: input.workspaceId,
+          channelConnectionId: input.channelConnectionId,
+          bindingEpoch: input.bindingEpoch,
+          pageId: job.pageId,
+          userKey: input.userKey,
+          privacyEpoch: input.privacyEpoch,
+          providerOperation: recovery.providerOperation,
+          privacyMode: "active",
+        },
+        providerOperation: recovery.providerOperation,
+        workspaceId: input.workspaceId,
+        entitlementId: recovery.entitlementId,
+        channelConnectionId: input.channelConnectionId,
+        bindingEpoch: input.bindingEpoch,
+        mode: recovery.mode,
+        idempotencyKey: recovery.idempotencyKey,
+        pageIdHash: recovery.pageIdHash,
+      });
+    }
+  }
 }
 
 async function scrubGenerationPartitionSubject(
@@ -1784,7 +1900,7 @@ function parseReservedGenerationJobForScope(
 
   const pageId = reserved.job.pageId?.trim();
   const partitionSecret = getMessengerGenerationPartitionSecret();
-  if (!pageId || !partitionSecret) {
+  if (!partitionSecret) {
     return null;
   }
   const hasOwnership =
@@ -1797,6 +1913,45 @@ function parseReservedGenerationJobForScope(
     Number.isSafeInteger(reserved.job.privacyEpoch) &&
     (reserved.job.privacyEpoch ?? 0) > 0;
   if (!hasOwnership && process.env.NODE_ENV === "production") return null;
+  const recovery = reserved.job.startpilotAdmissionRecovery;
+  const isMetadataOnlyRecovery = recovery?.resumeGeneration === false;
+  if (isMetadataOnlyRecovery) {
+    if (
+      !hasOwnership ||
+      pageId ||
+      reserved.job.psid !== "" ||
+      reserved.job.sourceImageUrl !== undefined ||
+      reserved.job.sourceImageUrls !== undefined ||
+      reserved.job.promptHint !== undefined ||
+      !reserved.job.tenantPartition ||
+      reserved.job.tenantPartition !== scope.tenantPartition ||
+      recovery.recoveryScopeProof !==
+        createStartpilotAdmissionRecoveryScopeProof(
+          {
+            tenantPartition: reserved.job.tenantPartition,
+            workspaceId: reserved.job.workspaceId!,
+            channelConnectionId: reserved.job.channelConnectionId!,
+            bindingEpoch: reserved.job.bindingEpoch!,
+            privacyEpoch: reserved.job.privacyEpoch!,
+            userId: reserved.job.userId,
+            reqId: reserved.job.reqId,
+            attemptKeyHash: recovery.attemptKeyHash,
+            pageIdHash: recovery.pageIdHash,
+            entitlementId: recovery.entitlementId,
+            mode: recovery.mode,
+            providerOperation: recovery.providerOperation,
+            leaseToken: recovery.leaseToken,
+            idempotencyKey: recovery.idempotencyKey,
+            recoveryDeadlineAt: recovery.recoveryDeadlineAt,
+          },
+          partitionSecret
+        )
+    ) {
+      return null;
+    }
+    return reserved;
+  }
+  if (!pageId) return null;
   const expectedPartition = hasOwnership
     ? createMessengerGenerationOwnershipPartition(
         {
@@ -1855,6 +2010,121 @@ async function completeMessengerGenerationJob(
   throw new Error("Messenger generation completion returned an invalid result");
 }
 
+async function ensureStartpilotAdmissionRecoveryShadow(
+  redis: RedisLike,
+  scope: PartitionedGenerationQueueScope,
+  sourceJob: MessengerGenerationJob
+): Promise<void> {
+  const recovery = sourceJob.startpilotAdmissionRecovery;
+  if (!recovery?.resumeGeneration) return;
+  const tenantPartition = sourceJob.tenantPartition;
+  const partitionSecret = getMessengerGenerationPartitionSecret();
+  if (
+    !tenantPartition ||
+    !partitionSecret ||
+    !sourceJob.workspaceId ||
+    !sourceJob.channelConnectionId ||
+    !sourceJob.bindingEpoch ||
+    !sourceJob.privacyEpoch
+  ) {
+    throw new Error("Paid admission recovery shadow scope is incomplete");
+  }
+  const createdAt = Date.now();
+  if (recovery.recoveryDeadlineAt <= createdAt) return;
+  const recoveryReqId = `recovery-${createHash("sha256")
+    .update(sourceJob.reqId)
+    .update("\0")
+    .update(recovery.attemptKeyHash)
+    .digest("hex")}`;
+  const recoveryJob: MessengerGenerationJob = {
+    operation: sourceJob.operation,
+    psid: "",
+    userId: sourceJob.userId,
+    workspaceId: sourceJob.workspaceId,
+    channelConnectionId: sourceJob.channelConnectionId,
+    bindingEpoch: sourceJob.bindingEpoch,
+    privacyEpoch: sourceJob.privacyEpoch,
+    createdAt,
+    expiresAt: recovery.recoveryDeadlineAt,
+    tenantPartition,
+    generationKind: sourceJob.generationKind,
+    reqId: recoveryReqId,
+    lang: "en",
+    attempts: 0,
+    startpilotAdmissionRecovery: {
+      ...recovery,
+      resumeGeneration: false,
+      recoveryScopeProof: createStartpilotAdmissionRecoveryScopeProof(
+        {
+          tenantPartition,
+          workspaceId: sourceJob.workspaceId,
+          channelConnectionId: sourceJob.channelConnectionId,
+          bindingEpoch: sourceJob.bindingEpoch,
+          privacyEpoch: sourceJob.privacyEpoch,
+          userId: sourceJob.userId,
+          reqId: recoveryReqId,
+          attemptKeyHash: recovery.attemptKeyHash,
+          pageIdHash: recovery.pageIdHash,
+          entitlementId: recovery.entitlementId,
+          mode: recovery.mode,
+          providerOperation: recovery.providerOperation,
+          leaseToken: recovery.leaseToken,
+          idempotencyKey: recovery.idempotencyKey,
+          recoveryDeadlineAt: recovery.recoveryDeadlineAt,
+        },
+        partitionSecret
+      ),
+    },
+  };
+  const acceptedKey = getGenerationJobAcceptedKey(scope, recoveryJob);
+  const enqueueAttemptToken = randomUUID();
+  await redis.sadd(
+    getGenerationPartitionIndexKey(scope.queueVersion),
+    scope.tenantPartition
+  );
+  let accepted: number;
+  try {
+    accepted = await evalPartitionScriptWithRetry(
+      redis,
+      ATOMIC_PARTITION_ENQUEUE_SCRIPT,
+      [
+        acceptedKey,
+        scope.queuedKey,
+        getGenerationJobContentKey(scope, recoveryJob),
+        getGenerationSubjectIndexKey(scope, recoveryJob.userId),
+        getGenerationSubjectTombstoneKey(scope, recoveryJob.userId),
+        scope.processingKey,
+        getAlternateGenerationJobAcceptedKey(scope, recoveryJob),
+      ],
+      [
+        getGenerationJobAcceptedSeconds(),
+        getGenerationJobReference(recoveryJob),
+        enqueueAttemptToken,
+        JSON.stringify(recoveryJob),
+        Math.max(1, getGenerationJobRemainingContentSeconds(recoveryJob)),
+        recoveryJob.expiresAt!,
+      ]
+    );
+  } catch (error) {
+    let storedAttemptToken: string | null;
+    try {
+      storedAttemptToken = await redis.get(acceptedKey);
+    } catch {
+      throw error;
+    }
+    if (storedAttemptToken !== enqueueAttemptToken) throw error;
+    accepted = 1;
+  }
+  if (accepted === 0 || accepted === 1 || accepted === -6) return;
+  if (accepted === -4) {
+    throw new Error("Messenger generation subject epoch is erased");
+  }
+  if (accepted === -5) {
+    throw new Error("Paid admission recovery shadow is inconsistent");
+  }
+  throw new Error("Paid admission recovery shadow enqueue failed");
+}
+
 async function releaseMessengerGenerationJob(
   redis: RedisLike,
   scope: GenerationQueueScope,
@@ -1863,16 +2133,100 @@ async function releaseMessengerGenerationJob(
   ownership: "owned" | "expired" = "owned"
 ): Promise<"requeued" | "dead_lettered" | "active" | "lost_ownership"> {
   const nextAttempt = (reserved.job.attempts ?? 0) + 1;
-  const retryJob: MessengerGenerationJob = {
+  let retryJob: MessengerGenerationJob = {
     ...reserved.job,
     attempts: nextAttempt,
   };
 
-  const remainingContentSeconds =
+  let remainingContentSeconds =
     getGenerationJobRemainingContentSeconds(retryJob);
-  const isDeadLetter =
-    nextAttempt >= getGenerationJobMaxAttempts() ||
-    remainingContentSeconds === 0;
+  // A paid admission rollback is compensation for a database acknowledgement
+  // lost before provider transport. Keep that exact recovery out of the
+  // ordinary three-attempt budget. At the 24h private-content boundary, keep
+  // only an HMAC-bound recovery receipt for the separately approved maximum
+  // of 30 days. It cannot resume generation or retain a recipient/prompt.
+  const hasPendingPaidAdmissionRecovery = Boolean(
+    retryJob.startpilotAdmissionRecovery
+  );
+  const recoveryDeadlineSeconds = hasPendingPaidAdmissionRecovery
+    ? Math.max(
+        0,
+        Math.ceil(
+          (retryJob.startpilotAdmissionRecovery!.recoveryDeadlineAt -
+            Date.now()) /
+            1000
+        )
+      )
+    : 0;
+  if (
+    hasPendingPaidAdmissionRecovery &&
+    remainingContentSeconds === 0 &&
+    recoveryDeadlineSeconds > 0
+  ) {
+    const tenantPartition = retryJob.tenantPartition;
+    const partitionSecret = getMessengerGenerationPartitionSecret();
+    if (
+      !tenantPartition ||
+      !partitionSecret ||
+      !retryJob.workspaceId ||
+      !retryJob.channelConnectionId ||
+      !retryJob.bindingEpoch ||
+      !retryJob.privacyEpoch
+    ) {
+      throw new Error("Paid admission recovery scope is incomplete");
+    }
+    const createdAt = Date.now();
+    const retainedSeconds = Math.min(
+      getGenerationJobContentSeconds(),
+      recoveryDeadlineSeconds
+    );
+    const recovery = retryJob.startpilotAdmissionRecovery!;
+    retryJob = {
+      operation: retryJob.operation,
+      psid: "",
+      userId: retryJob.userId,
+      workspaceId: retryJob.workspaceId,
+      channelConnectionId: retryJob.channelConnectionId,
+      bindingEpoch: retryJob.bindingEpoch,
+      privacyEpoch: retryJob.privacyEpoch,
+      createdAt,
+      expiresAt: createdAt + retainedSeconds * 1000,
+      tenantPartition,
+      generationKind: retryJob.generationKind,
+      reqId: retryJob.reqId,
+      lang: "en",
+      attempts: nextAttempt,
+      startpilotAdmissionRecovery: {
+        ...recovery,
+        resumeGeneration: false,
+        recoveryScopeProof: createStartpilotAdmissionRecoveryScopeProof(
+          {
+            tenantPartition,
+            workspaceId: retryJob.workspaceId,
+            channelConnectionId: retryJob.channelConnectionId,
+            bindingEpoch: retryJob.bindingEpoch,
+            privacyEpoch: retryJob.privacyEpoch,
+            userId: retryJob.userId,
+            reqId: retryJob.reqId,
+            attemptKeyHash: recovery.attemptKeyHash,
+            pageIdHash: recovery.pageIdHash,
+            entitlementId: recovery.entitlementId,
+            mode: recovery.mode,
+            providerOperation: recovery.providerOperation,
+            leaseToken: recovery.leaseToken,
+            idempotencyKey: recovery.idempotencyKey,
+            recoveryDeadlineAt: recovery.recoveryDeadlineAt,
+          },
+          partitionSecret
+        ),
+      },
+    };
+    remainingContentSeconds = retainedSeconds;
+  }
+  const isDeadLetter = hasPendingPaidAdmissionRecovery
+    ? recoveryDeadlineSeconds === 0
+    : remainingContentSeconds === 0 ||
+      nextAttempt >= getGenerationJobMaxAttempts();
   if (scope.kind === "legacy") {
     if (ownership === "expired") {
       const lease = await redis.get(
@@ -1900,6 +2254,7 @@ async function releaseMessengerGenerationJob(
       await scrubGenerationPartitionSubject(redis, scope, reserved.job.userId);
       return "lost_ownership";
     }
+    await ensureStartpilotAdmissionRecoveryShadow(redis, scope, retryJob);
     const transitionName = isDeadLetter ? "dead_lettered" : "requeued";
     const nextReference =
       reserved.raw.startsWith("{") && process.env.NODE_ENV === "test"

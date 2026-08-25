@@ -41,6 +41,8 @@ import {
   workspacePrivacyRequests,
   workspaceUpgradeRequests,
   workspaceKnowledgeSources,
+  workspaceEntitlements,
+  workspaceEntitlementUsage,
   workspaceEntitlementUsageReservations,
   workspaces,
   workspaceUsageDaily,
@@ -60,6 +62,12 @@ import {
   getBotTextRateLimitWindowSeconds,
   getImageGenerationDailyLimit,
 } from "./_core/quotaPolicy";
+import {
+  getBillingPlan,
+  PREMIUM_MONTHLY_PLAN_CODE,
+  STARTPILOT_PLAN_CODE,
+} from "./_core/billing/catalog";
+import { parseStartpilotQuota } from "./_core/billing/startpilotQuota";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -2765,39 +2773,60 @@ export async function disconnectChannelConnection(
 }
 
 export async function getWorkspaceUsageSummary(workspaceId: number) {
-  const imageDailyLimit = getImageGenerationDailyLimit();
   const messageRateLimit = getBotTextRateLimitMax();
   const messageRateLimitWindowSeconds = getBotTextRateLimitWindowSeconds();
 
-  const buildSummary = (usage?: {
-    messageCount?: number | null;
-    imageCount?: number | null;
-    blockedCount?: number | null;
-  }) => {
+  const buildSummary = (
+    usage?: {
+      messageCount?: number | null;
+      imageCount?: number | null;
+      blockedCount?: number | null;
+    },
+    paidUsage?: {
+      status: "active" | "grace";
+      planName: string;
+      imagesUsedToday: number;
+      imagesUsedInPeriod: number | null;
+      imagesPerDay: number;
+      imagesPerPeriod: number | null;
+    }
+  ) => {
     const messageCount = usage?.messageCount ?? 0;
-    const imageCount = usage?.imageCount ?? 0;
+    const imageCount = paidUsage?.imagesUsedToday ?? usage?.imageCount ?? 0;
+    const imageCountInPeriod = paidUsage?.imagesUsedInPeriod ?? null;
     const blockedCount = usage?.blockedCount ?? 0;
+    const imageDailyLimit =
+      paidUsage?.imagesPerDay ?? getImageGenerationDailyLimit();
+    const imagePeriodLimit = paidUsage?.imagesPerPeriod ?? null;
     const imagesRemainingToday = Math.max(0, imageDailyLimit - imageCount);
+    const imagesRemainingInPeriod =
+      imagePeriodLimit === null || imageCountInPeriod === null
+        ? null
+        : Math.max(0, imagePeriodLimit - imageCountInPeriod);
     const isImageLimitReached =
-      imageDailyLimit > 0 && imagesRemainingToday === 0;
+      (imageDailyLimit > 0 && imagesRemainingToday === 0) ||
+      (imagePeriodLimit !== null && imagesRemainingInPeriod === 0);
 
     return {
       workspaceId,
       period: "today" as const,
       plan: {
-        name: "Free",
-        billingStatus: "free" as const,
+        name: paidUsage?.planName ?? "Free",
+        billingStatus: paidUsage?.status ?? ("free" as const),
       },
       messageCount,
       imageCount,
+      imageCountInPeriod,
       blockedCount,
       limits: {
         imagesPerDay: imageDailyLimit,
+        imagesPerPeriod: imagePeriodLimit,
         messagesPerWindow: messageRateLimit,
         messageWindowSeconds: messageRateLimitWindowSeconds,
       },
       remaining: {
         imagesToday: imagesRemainingToday,
+        imagesInPeriod: imagesRemainingInPeriod,
       },
       upgrade: {
         recommended: isImageLimitReached || blockedCount > 0,
@@ -2817,7 +2846,7 @@ export async function getWorkspaceUsageSummary(workspaceId: number) {
   }
 
   const today = getTodayUTC();
-  const result = await db
+  const dailyUsage = await db
     .select()
     .from(workspaceUsageDaily)
     .where(
@@ -2827,9 +2856,175 @@ export async function getWorkspaceUsageSummary(workspaceId: number) {
       )
     )
     .limit(1);
+  const mode = getUsageSummaryMollieMode();
+  if (!mode) return buildSummary(dailyUsage[0]);
 
-  const usage = result[0];
-  return buildSummary(usage);
+  const now = new Date();
+  const entitlementRows = await db
+    .select({
+      id: workspaceEntitlements.id,
+      status: workspaceEntitlements.status,
+      planCode: workspaceEntitlements.planCode,
+      quota: workspaceEntitlements.quota,
+      sourceIntentId: workspaceEntitlements.sourceIntentId,
+      validUntil: workspaceEntitlements.validUntil,
+      usageId: workspaceEntitlementUsage.id,
+      usageSourceIntentId: workspaceEntitlementUsage.sourceIntentId,
+      usagePlanCode: workspaceEntitlementUsage.planCode,
+      usagePeriodStartedAt: workspaceEntitlementUsage.periodStartedAt,
+      usagePeriodEndsAt: workspaceEntitlementUsage.periodEndsAt,
+      usageImagesUsed: workspaceEntitlementUsage.imagesUsed,
+      usageImageDate: workspaceEntitlementUsage.imageUsageDate,
+      usageImagesUsedToday: workspaceEntitlementUsage.imagesUsedToday,
+    })
+    .from(workspaceEntitlements)
+    .leftJoin(
+      workspaceEntitlementUsage,
+      and(
+        eq(workspaceEntitlementUsage.workspaceId, workspaceId),
+        eq(workspaceEntitlementUsage.mode, mode),
+        eq(workspaceEntitlementUsage.entitlementId, workspaceEntitlements.id)
+      )
+    )
+    .where(
+      and(
+        eq(workspaceEntitlements.workspaceId, workspaceId),
+        eq(workspaceEntitlements.mode, mode),
+        or(
+          eq(workspaceEntitlements.status, "active"),
+          eq(workspaceEntitlements.status, "grace")
+        ),
+        or(
+          isNull(workspaceEntitlements.validUntil),
+          gt(workspaceEntitlements.validUntil, now)
+        )
+      )
+    )
+    .limit(2);
+  if (entitlementRows.length === 0) return buildSummary(dailyUsage[0]);
+  const entitlement = entitlementRows[0];
+  if (
+    entitlementRows.length !== 1 ||
+    !entitlement ||
+    (entitlement.status !== "active" && entitlement.status !== "grace")
+  ) {
+    throw new Error("Workspace paid usage summary is inconsistent");
+  }
+  if (entitlement.planCode === PREMIUM_MONTHLY_PLAN_CODE) {
+    const premium = getBillingPlan(PREMIUM_MONTHLY_PLAN_CODE);
+    const imagesPerDay = paidDailyImageLimit(entitlement.quota);
+    if (
+      !premium ||
+      imagesPerDay === null ||
+      !entitlement.usageId ||
+      entitlement.usagePlanCode !== PREMIUM_MONTHLY_PLAN_CODE ||
+      !isBoundedUsageCounter(
+        entitlement.usageImagesUsedToday ?? -1,
+        imagesPerDay
+      )
+    ) {
+      throw new Error("Workspace paid usage summary is inconsistent");
+    }
+    return buildSummary(dailyUsage[0], {
+      status: entitlement.status,
+      planName: premium.publicName,
+      imagesUsedToday:
+        entitlement.usageImageDate === today
+          ? entitlement.usageImagesUsedToday!
+          : 0,
+      imagesUsedInPeriod: null,
+      imagesPerDay,
+      imagesPerPeriod: null,
+    });
+  }
+  if (
+    entitlement.planCode !== STARTPILOT_PLAN_CODE ||
+    !entitlement.sourceIntentId ||
+    !entitlement.validUntil
+  ) {
+    throw new Error("Workspace paid usage summary is inconsistent");
+  }
+  const plan = getBillingPlan(STARTPILOT_PLAN_CODE);
+  const quota = exactStartpilotUsageQuota(entitlement.quota, plan);
+  if (!plan || !quota) {
+    throw new Error("Workspace paid usage summary is inconsistent");
+  }
+  if (
+    !entitlement.usageId ||
+    entitlement.usageSourceIntentId !== entitlement.sourceIntentId ||
+    entitlement.usagePlanCode !== STARTPILOT_PLAN_CODE ||
+    !entitlement.usagePeriodStartedAt ||
+    entitlement.usagePeriodStartedAt.getTime() > now.getTime() ||
+    !entitlement.usagePeriodEndsAt ||
+    entitlement.usagePeriodEndsAt.getTime() !==
+      entitlement.validUntil.getTime() ||
+    entitlement.usagePeriodEndsAt.getTime() <= now.getTime() ||
+    !isBoundedUsageCounter(
+      entitlement.usageImagesUsed ?? -1,
+      quota.imagesTotal
+    ) ||
+    !isBoundedUsageCounter(
+      entitlement.usageImagesUsedToday ?? -1,
+      quota.imagesPerDay
+    )
+  ) {
+    throw new Error("Workspace paid usage summary is inconsistent");
+  }
+
+  return buildSummary(dailyUsage[0], {
+    status: entitlement.status,
+    planName: plan.publicName,
+    imagesUsedToday:
+      entitlement.usageImageDate === today
+        ? entitlement.usageImagesUsedToday!
+        : 0,
+    imagesUsedInPeriod: entitlement.usageImagesUsed!,
+    imagesPerDay: quota.imagesPerDay,
+    imagesPerPeriod: quota.imagesTotal,
+  });
+}
+
+function paidDailyImageLimit(value: unknown): number | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const imagesPerDay = (value as Record<string, unknown>).imagesPerDay;
+  return typeof imagesPerDay === "number" &&
+    Number.isSafeInteger(imagesPerDay) &&
+    imagesPerDay > 0
+    ? imagesPerDay
+    : null;
+}
+
+function getUsageSummaryMollieMode(): "test" | "live" | null {
+  const mode = process.env.MOLLIE_MODE?.trim();
+  if (!mode) return null;
+  if (mode === "test" || mode === "live") return mode;
+  throw new Error("MOLLIE_MODE must be test or live for paid usage summary");
+}
+
+function exactStartpilotUsageQuota(
+  value: unknown,
+  plan: ReturnType<typeof getBillingPlan>
+): { imagesTotal: number; imagesPerDay: number } | null {
+  const quota = parseStartpilotQuota(value);
+  if (!plan || !quota) return null;
+  const expected = plan.entitlements;
+  const expectedKeys = Object.keys(expected).sort();
+  const actualKeys = Object.keys(quota).sort();
+  if (
+    expectedKeys.length !== actualKeys.length ||
+    expectedKeys.some((key, index) => key !== actualKeys[index]) ||
+    expectedKeys.some(key => quota[key as keyof typeof quota] !== expected[key])
+  ) {
+    return null;
+  }
+  return {
+    imagesTotal: Number(quota.imagesTotal),
+    imagesPerDay: Number(quota.imagesPerDay),
+  };
+}
+
+function isBoundedUsageCounter(value: number, limit: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0 && value <= limit;
 }
 
 export async function insertAuditLog(values: InsertAuditLog) {

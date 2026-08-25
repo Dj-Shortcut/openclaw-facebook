@@ -84,11 +84,11 @@ export function registerLegalRoutes(app: express.Express) {
       renderLegalPage({
         title: "Terms of Service",
         intro:
-          "These pilot terms apply to the Leaderbot customer portal and connected Messenger assistant. Leaderbot provides AI-generated text and images together with workspace, usage and privacy controls.",
+          "These pilot terms apply to the Leaderbot customer portal and connected Messenger image experience. Leaderbot provides AI-generated images and guided Messenger controls together with workspace, usage and privacy controls.",
         sections: [
           {
             heading: "Startpilot offer",
-            html: `<p>Leaderbot Startpilot costs ${startpilotPrice} as a single payment for 30 days. It includes one workspace, one connected Facebook Page, 300 AI answers and 20 Images 2.0 image generations, with a maximum of five image generations per day. An image generation counts once when its first AI-provider attempt starts; retries within that same request do not consume extra pilot generations. Purchase starts only in the signed-in portal.</p>`,
+            html: `<p>Leaderbot Startpilot costs ${startpilotPrice} as a single payment for 30 days. It includes one workspace, one connected Facebook Page, guided Messenger image controls and 20 Images 2.0 image generations, with a maximum of five image generations per day. An image generation counts once when its first AI-provider attempt starts; retries within that same request do not consume extra pilot generations. Purchase starts only in the signed-in portal.</p>`,
           },
           {
             heading: "No subscription or overage",
@@ -96,7 +96,7 @@ export function registerLegalRoutes(app: express.Express) {
           },
           {
             heading: "AI-generated content",
-            html: "<p>AI output can be inaccurate, incomplete or unexpected. Review text and images before relying on, publishing or sharing them. Do not use Leaderbot for unlawful, harmful, deceptive or infringing content.</p>",
+            html: "<p>AI-generated images can be inaccurate, incomplete or unexpected. Review images before relying on, publishing or sharing them. Do not use Leaderbot for unlawful, harmful, deceptive or infringing content.</p>",
           },
           {
             heading: "Messenger connection and limits",
@@ -130,7 +130,7 @@ export function registerLegalRoutes(app: express.Express) {
           },
           {
             heading: "Included pilot usage",
-            html: "<p>The proposed package covers one workspace, one Facebook Page, 300 AI answers and 20 Images 2.0 image generations. Image generation is additionally limited to five per day during the 30-day access period. A generation counts once when its first AI-provider attempt starts; retries within the same request do not consume another pilot generation.</p>",
+            html: "<p>The proposed package covers one workspace, one Facebook Page, guided Messenger image controls and 20 Images 2.0 image generations. Image generation is additionally limited to five per day during the 30-day access period. A generation counts once when its first AI-provider attempt starts; retries within the same request do not consume another pilot generation.</p>",
           },
           {
             heading: "No renewal, top-up or overage",

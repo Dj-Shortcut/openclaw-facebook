@@ -11,6 +11,7 @@ const {
   beginStatePrivacyErasureMock,
   eraseWebhookIngressMock,
   containProviderAttemptsMock,
+  recoverGenerationAdmissionsMock,
   eraseGenerationJobsMock,
   eraseImageQuotaMock,
 } = vi.hoisted(() => ({
@@ -27,6 +28,7 @@ const {
   beginStatePrivacyErasureMock: vi.fn(async () => undefined),
   eraseWebhookIngressMock: vi.fn(async () => 0),
   containProviderAttemptsMock: vi.fn(async () => true),
+  recoverGenerationAdmissionsMock: vi.fn(async () => undefined),
   eraseGenerationJobsMock: vi.fn(async () => 0),
   eraseImageQuotaMock: vi.fn(async () => undefined),
 }));
@@ -100,6 +102,8 @@ vi.mock("./_core/messengerGenerationQueue", async importOriginal => {
     await importOriginal<typeof import("./_core/messengerGenerationQueue")>();
   return {
     ...actual,
+    recoverMessengerGenerationAdmissionsForSubject:
+      recoverGenerationAdmissionsMock,
     eraseMessengerGenerationJobsForSubject: eraseGenerationJobsMock,
   };
 });
@@ -179,6 +183,7 @@ describe("data deletion service", () => {
     beginStatePrivacyErasureMock.mockClear();
     eraseWebhookIngressMock.mockClear();
     containProviderAttemptsMock.mockClear();
+    recoverGenerationAdmissionsMock.mockClear();
     eraseGenerationJobsMock.mockClear();
     eraseImageQuotaMock.mockClear();
   });
@@ -327,6 +332,13 @@ describe("data deletion service", () => {
     );
 
     expect(beginPrivacyErasureMock).toHaveBeenCalledTimes(1);
+    expect(recoverGenerationAdmissionsMock).toHaveBeenCalledTimes(2);
+    expect(
+      recoverGenerationAdmissionsMock.mock.invocationCallOrder[0]
+    ).toBeLessThan(containProviderAttemptsMock.mock.invocationCallOrder[0]!);
+    expect(
+      recoverGenerationAdmissionsMock.mock.invocationCallOrder[1]
+    ).toBeLessThan(containProviderAttemptsMock.mock.invocationCallOrder[1]!);
     expect(runPrivacyErasureMock).toHaveBeenLastCalledWith(
       {
         workspaceId: 42,
@@ -358,6 +370,40 @@ describe("data deletion service", () => {
         privacyEpoch: 5,
       }
     );
+  });
+
+  it("does not contain a paid fence when exact admission recovery is unavailable", async () => {
+    const psid = "delete-paid-recovery-unavailable";
+    const pageId = "page-delete-paid-recovery-unavailable";
+    const userKey = anonymizePsid(psid);
+    recoverGenerationAdmissionsMock.mockRejectedValueOnce(
+      new Error("paid recovery unavailable")
+    );
+    eraseGenerationJobsMock.mockRejectedValueOnce(
+      new Error("paid recovery unavailable")
+    );
+
+    await runWithMessengerRequestContext(
+      pageId,
+      async () => {
+        await Promise.resolve(getOrCreateState(psid));
+        await expect(deleteUserData(psid)).resolves.toEqual({
+          status: "pending",
+        });
+      },
+      {
+        channel: "facebook_messenger",
+        workspaceId: 42,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        userKey,
+        privacyEpoch: 5,
+      }
+    );
+
+    expect(recoverGenerationAdmissionsMock).toHaveBeenCalledOnce();
+    expect(containProviderAttemptsMock).not.toHaveBeenCalled();
+    expect(eraseGenerationJobsMock).toHaveBeenCalledOnce();
   });
 
   it("completes an E6 retry after a crash deleted the E5 state first", async () => {

@@ -98,7 +98,8 @@ describe("legal routes", () => {
       `costs ${displayedPrice} as a single payment for 30 days`
     );
     expect(terms).toContain("Purchase starts only in the signed-in portal");
-    expect(terms).toContain("300 AI answers");
+    expect(terms).toContain("guided Messenger image controls");
+    expect(terms).not.toContain("AI answers");
     expect(terms).toContain("20 Images 2.0");
     expect(terms).toContain("maximum of five");
     expect(terms).toContain("first AI-provider attempt starts");
@@ -108,6 +109,8 @@ describe("legal routes", () => {
     expect(billingPolicy).toContain(
       "requires an explicit checkout confirmation"
     );
+    expect(billingPolicy).toContain("guided Messenger image controls");
+    expect(billingPolicy).not.toContain("300 AI answers");
     expect(billingPolicy).toContain("No renewal, top-up or overage");
     expect(billingPolicy).toContain("one workspace, one Facebook Page");
     expect(billingPolicy).toContain(

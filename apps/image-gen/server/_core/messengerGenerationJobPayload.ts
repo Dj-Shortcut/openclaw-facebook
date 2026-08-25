@@ -25,7 +25,9 @@ function isOptionalString(value: unknown): value is string | undefined {
   return value === undefined || typeof value === "string";
 }
 
-function isOptionalSourceImageUrls(value: unknown): value is string[] | undefined {
+function isOptionalSourceImageUrls(
+  value: unknown
+): value is string[] | undefined {
   return (
     value === undefined ||
     (Array.isArray(value) &&
@@ -74,6 +76,65 @@ function isOptionalOperation(
   );
 }
 
+function isOptionalStartpilotAdmissionRecovery(
+  value: unknown
+): value is MessengerGenerationJob["startpilotAdmissionRecovery"] {
+  if (value === undefined) return true;
+  if (!isObjectRecord(value)) return false;
+  const keys = Object.keys(value).sort();
+  const requiredKeys = [
+    "attemptKeyHash",
+    "entitlementId",
+    "idempotencyKey",
+    "leaseToken",
+    "mode",
+    "pageIdHash",
+    "privacyEpoch",
+    "providerOperation",
+    "recoveryDeadlineAt",
+    "resumeGeneration",
+    "version",
+  ];
+  const expectedKeys = [...requiredKeys];
+  if (value.recoveryScopeProof !== undefined) {
+    expectedKeys.push("recoveryScopeProof");
+    expectedKeys.sort();
+  }
+  return (
+    keys.length === expectedKeys.length &&
+    keys.every((key, index) => key === expectedKeys[index]) &&
+    value.version === "startpilot_admission_recovery_v1" &&
+    typeof value.resumeGeneration === "boolean" &&
+    typeof value.recoveryDeadlineAt === "number" &&
+    Number.isSafeInteger(value.recoveryDeadlineAt) &&
+    value.recoveryDeadlineAt > 0 &&
+    typeof value.pageIdHash === "string" &&
+    /^[a-f0-9]{64}$/.test(value.pageIdHash) &&
+    (value.resumeGeneration
+      ? value.recoveryScopeProof === undefined
+      : typeof value.recoveryScopeProof === "string" &&
+        /^[a-f0-9]{64}$/.test(value.recoveryScopeProof)) &&
+    typeof value.entitlementId === "number" &&
+    Number.isSafeInteger(value.entitlementId) &&
+    value.entitlementId > 0 &&
+    (value.mode === "test" || value.mode === "live") &&
+    typeof value.providerOperation === "string" &&
+    value.providerOperation.trim().length > 0 &&
+    typeof value.privacyEpoch === "number" &&
+    Number.isSafeInteger(value.privacyEpoch) &&
+    value.privacyEpoch > 0 &&
+    typeof value.attemptKeyHash === "string" &&
+    /^[a-f0-9]{64}$/.test(value.attemptKeyHash) &&
+    typeof value.leaseToken === "string" &&
+    /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(
+      value.leaseToken
+    ) &&
+    typeof value.idempotencyKey === "string" &&
+    value.idempotencyKey.length > 0 &&
+    value.idempotencyKey.length <= 160
+  );
+}
+
 function parseMessengerGenerationJob(
   value: unknown
 ): MessengerGenerationJob | null {
@@ -104,7 +165,15 @@ function parseMessengerGenerationJob(
       value.expiresAt <= value.createdAt) ||
     (value.createdAt !== undefined &&
       value.expiresAt !== undefined &&
-      value.expiresAt > value.createdAt + 24 * 60 * 60_000) ||
+      value.expiresAt >
+        value.createdAt +
+          (isObjectRecord(value.startpilotAdmissionRecovery) &&
+          value.startpilotAdmissionRecovery.resumeGeneration === false
+            ? 30
+            : 1) *
+            24 *
+            60 *
+            60_000) ||
     (process.env.NODE_ENV === "production" &&
       (value.createdAt === undefined || value.expiresAt === undefined)) ||
     (value.workspaceId === undefined) !==
@@ -113,7 +182,16 @@ function parseMessengerGenerationJob(
     (value.workspaceId === undefined) !== (value.privacyEpoch === undefined) ||
     (value.tenantPartition !== undefined &&
       !isMessengerGenerationTenantPartition(value.tenantPartition)) ||
-    !isOptionalAttempts(value.attempts)
+    !isOptionalAttempts(value.attempts) ||
+    !isOptionalStartpilotAdmissionRecovery(value.startpilotAdmissionRecovery)
+  ) {
+    return null;
+  }
+
+  if (
+    value.startpilotAdmissionRecovery?.resumeGeneration === false &&
+    value.expiresAt !== undefined &&
+    value.expiresAt > value.startpilotAdmissionRecovery.recoveryDeadlineAt
   ) {
     return null;
   }
@@ -145,6 +223,7 @@ function parseMessengerGenerationJob(
     sourceImageUrls: value.sourceImageUrls,
     promptHint: value.promptHint,
     attempts: value.attempts,
+    startpilotAdmissionRecovery: value.startpilotAdmissionRecovery,
     operation: value.operation,
     generationKind:
       value.generationKind === "style_restyle"

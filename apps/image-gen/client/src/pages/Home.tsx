@@ -785,6 +785,8 @@ function Home() {
   const latestPrivacyRequest = privacyRequests[0];
   const imageLimit = usage?.limits.imagesPerDay ?? 0;
   const imagesRemaining = usage?.remaining.imagesToday ?? 0;
+  const imagePeriodLimit = usage?.limits.imagesPerPeriod ?? null;
+  const imagesRemainingInPeriod = usage?.remaining.imagesInPeriod ?? null;
   const imageProgress =
     imageLimit > 0
       ? Math.min(100, Math.round(((usage?.imageCount ?? 0) / imageLimit) * 100))
@@ -1609,7 +1611,7 @@ function Home() {
                   </Button>
                 ) : null}
               </div>
-              <div className="mt-5 grid gap-4 sm:grid-cols-3">
+              <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                 <MetricTile
                   label={copy.usage.imagesRemaining}
                   value={imagesRemaining}
@@ -1618,6 +1620,17 @@ function Home() {
                     String(imageLimit)
                   )}`}
                 />
+                {imagePeriodLimit !== null &&
+                imagesRemainingInPeriod !== null ? (
+                  <MetricTile
+                    label={copy.usage.imagesRemainingInPeriod}
+                    value={imagesRemainingInPeriod}
+                    detail={`${usage?.imageCountInPeriod ?? 0} ${copy.usage.imagesUsedInPeriodDetail.replace(
+                      "{limit}",
+                      String(imagePeriodLimit)
+                    )}`}
+                  />
+                ) : null}
                 <MetricTile
                   label={copy.usage.messagesToday}
                   value={usage?.messageCount ?? 0}
@@ -1863,7 +1876,7 @@ function Home() {
                                   </p>
                                   {[
                                     copy.billing.pilotWorkspacePage,
-                                    copy.billing.pilotAnswers,
+                                    copy.billing.pilotImageControls,
                                     copy.billing.pilotImages,
                                   ].map(item => (
                                     <div

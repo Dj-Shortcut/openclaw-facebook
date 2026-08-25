@@ -11,6 +11,7 @@ const {
   beginStatePrivacyErasureMock,
   eraseWebhookIngressMock,
   containProviderAttemptsMock,
+  recoverGenerationAdmissionsMock,
   eraseGenerationJobsMock,
   eraseImageQuotaMock,
   deleteCostLedgerEntriesMock,
@@ -42,6 +43,7 @@ const {
   beginStatePrivacyErasureMock: vi.fn(async () => undefined),
   eraseWebhookIngressMock: vi.fn(async () => 0),
   containProviderAttemptsMock: vi.fn(async () => true),
+  recoverGenerationAdmissionsMock: vi.fn(async () => undefined),
   eraseGenerationJobsMock: vi.fn(async () => 0),
   eraseImageQuotaMock: vi.fn(async () => undefined),
   deleteCostLedgerEntriesMock: vi.fn(async () => undefined),
@@ -119,6 +121,8 @@ vi.mock("./_core/messengerGenerationQueue", async importOriginal => {
     await importOriginal<typeof import("./_core/messengerGenerationQueue")>();
   return {
     ...actual,
+    recoverMessengerGenerationAdmissionsForSubject:
+      recoverGenerationAdmissionsMock,
     eraseMessengerGenerationJobsForSubject: eraseGenerationJobsMock,
   };
 });
@@ -218,6 +222,7 @@ describe("WhatsApp data deletion tenant boundary", () => {
     beginStatePrivacyErasureMock.mockClear();
     eraseWebhookIngressMock.mockClear();
     containProviderAttemptsMock.mockClear();
+    recoverGenerationAdmissionsMock.mockClear();
     eraseGenerationJobsMock.mockClear();
     eraseImageQuotaMock.mockClear();
     deleteCostLedgerEntriesMock.mockClear();

@@ -128,6 +128,8 @@ const enCopy = {
     requesting: "Requesting",
     imagesRemaining: "Images remaining",
     imagesUsedDetail: "of {limit} used today",
+    imagesRemainingInPeriod: "Startpilot images remaining",
+    imagesUsedInPeriodDetail: "of {limit} used in this Startpilot period",
     messagesToday: "Messages today",
     messagesWindowDetail: "per {seconds} seconds",
     blockedToday: "Blocked today",
@@ -152,7 +154,7 @@ const enCopy = {
     for30Days: "for 30 days",
     pilotIncludes: "The Startpilot includes",
     pilotWorkspacePage: "1 workspace and 1 Facebook Page",
-    pilotAnswers: "300 AI answers",
+    pilotImageControls: "Guided Messenger image controls and follow-up buttons",
     pilotImages:
       "20 Images 2.0 generations, with a maximum of 5 generations per day",
     noAutomaticRenewal: "No automatic renewal",
@@ -427,6 +429,8 @@ const nlBeCopy: PortalCopy = {
     requesting: "Aanvragen",
     imagesRemaining: "Beelden over",
     imagesUsedDetail: "van {limit} vandaag gebruikt",
+    imagesRemainingInPeriod: "Startpilot-beelden over",
+    imagesUsedInPeriodDetail: "van {limit} gebruikt in deze Startpilot-periode",
     messagesToday: "Berichten vandaag",
     messagesWindowDetail: "per {seconds} seconden",
     blockedToday: "Geblokkeerd vandaag",
@@ -452,7 +456,8 @@ const nlBeCopy: PortalCopy = {
     for30Days: "voor 30 dagen",
     pilotIncludes: "De Startpilot bevat",
     pilotWorkspacePage: "1 werkruimte en 1 Facebookpagina",
-    pilotAnswers: "300 AI-antwoorden",
+    pilotImageControls:
+      "Begeleide Messenger-beeldfuncties met handige vervolgknoppen",
     pilotImages: "20 Images 2.0-generaties, met maximaal 5 generaties per dag",
     noAutomaticRenewal: "Geen automatische verlenging",
     noAutomaticRenewalBody:
@@ -727,6 +732,8 @@ const frBeCopy: PortalCopy = {
     requesting: "Demande",
     imagesRemaining: "Images restantes",
     imagesUsedDetail: "sur {limit} utilisees aujourd'hui",
+    imagesRemainingInPeriod: "Images Startpilot restantes",
+    imagesUsedInPeriodDetail: "sur {limit} utilisees pendant cette periode",
     messagesToday: "Messages aujourd'hui",
     messagesWindowDetail: "par {seconds} secondes",
     blockedToday: "Bloques aujourd'hui",
@@ -752,7 +759,8 @@ const frBeCopy: PortalCopy = {
     for30Days: "pour 30 jours",
     pilotIncludes: "Le pilote comprend",
     pilotWorkspacePage: "1 espace de travail et 1 Page Facebook",
-    pilotAnswers: "300 réponses IA",
+    pilotImageControls:
+      "Commandes d'image Messenger guidées et boutons de suivi",
     pilotImages:
       "20 générations Images 2.0, avec un maximum de 5 générations par jour",
     noAutomaticRenewal: "Aucun renouvellement automatique",

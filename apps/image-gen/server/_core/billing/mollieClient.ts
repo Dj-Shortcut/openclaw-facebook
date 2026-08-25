@@ -416,7 +416,7 @@ export async function checkMollieOneTimePaymentMethod(client: MollieClient) {
   const bancontact = methods.some(
     method => method.id === "bancontact" && isEnabledMollieMethod(method)
   );
-  return { bancontact };
+  return { bancontact, providerChecked: true as const };
 }
 
 export function assertMollieId(

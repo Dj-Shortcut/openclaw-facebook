@@ -114,6 +114,7 @@ jobs:
             server/messengerProviderAttemptFence.mysql.test.ts \
             server/portalHandoff.mysql.test.ts \
             server/paymentSnapshot.mysql.test.ts \
+            server/startpilotImageUsage.mysql.test.ts \
             server/whatsappProvisioning.mysql.test.ts
         env:
           DATABASE_URL: mysql://root:root@127.0.0.1:3306/test_image_gen_ci
