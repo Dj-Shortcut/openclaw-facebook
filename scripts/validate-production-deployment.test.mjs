@@ -3180,6 +3180,20 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("requires the trusted image storage public origin", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      "apps/image-gen/fly.toml",
+      '  PUBLIC_BASE_URL = "https://pub-7e5beae089c4457a89cb65cf300daf75.r2.dev"\n',
+      '  PUBLIC_BASE_URL = "https://leaderbot-storage-proxy.fly.dev"\n',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "apps/image-gen/fly.toml must set PUBLIC_BASE_URL=https://pub-7e5beae089c4457a89cb65cf300daf75.r2.dev",
+    );
+  });
+
   it("requires a bounded graceful image-worker shutdown window", () => {
     const root = createRepositoryFixture();
     const configPath = path.join(root, "apps/image-gen/fly.toml");
