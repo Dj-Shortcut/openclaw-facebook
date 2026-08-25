@@ -3,9 +3,27 @@
 Environment: Mollie Test Mode only. Live credentials and real payments are
 prohibited until `LAUNCH_READINESS.md` records a live GO.
 
-No Mollie provider scenario below has been run for this release. Never mark a
-row passed without dated, metadata-only evidence that contains no secret,
-customer content or personal identifier.
+No Mollie provider scenario that calls Mollie has been run for this release.
+The provider-silent offline preflight has passed. Never mark any other row
+passed without dated, metadata-only evidence that contains no secret, customer
+content or personal identifier.
+
+## Production offline preflight evidence (2026-08-25)
+
+Evidence is for reviewed main commit
+`0b4a9c66b57a9d6fdbd9dde49b778cba36fca17d` and protected production deploy
+[run 32820475232](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32820475232):
+
+- the protected inspection and deployment completed successfully for exact
+  identity `deploy-32820475232-1`;
+- production kept immutable image digest
+  `sha256:33390bc580305a8549667633a9a2f9eac30dcd34262d11f75270a40aaf5bfd1e`;
+- `/healthz` returned `ok` and `/readyz` returned HTTP 200 with
+  `phase: "offline"` and every reported check green;
+- `MOLLIE_MODE=test` and only the provider-silent preflight were enabled; all
+  commercial, live, drain, entitlement, notification, quota/finalization and
+  accounting execution flags remained disabled;
+- no Mollie API, checkout or payment call was made.
 
 ## Credential-free automated evidence (2026-08-24)
 
@@ -25,12 +43,6 @@ Evidence is for PR #400 credential-free code commit
   passed the canonical migration/rehearsal contract on MySQL 8.4.11.
 - CodeQL, Gitleaks, package validation, Fallow and production dependency/uptime
   checks passed on the same commit.
-- Production MySQL is recorded as 8.4.11 and recent snapshots exist, but the
-  protected restore rehearsal and production `0015_base` to `0016_expand`
-  transition are **NOT RUN**.
-- Production currently returns HTTP 200 for `/healthz` and core `/readyz`.
-  Because `MOLLIE_BILLING_PREFLIGHT_ENABLED=false`, this is **not** billing
-  schema/readiness evidence and does not report `phase: "offline"`.
 - No Mollie Methods, Payment, Customer, webhook, refund, chargeback, Balance or
   Settlement API call was made by this evidence pass.
 
@@ -39,32 +51,32 @@ scenario below from **NOT RUN** to **PASS**.
 
 ## Startpilot sandbox scenarios
 
-| Scenario                            | Status  | Required evidence                                                                                                   |
-| ----------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------- |
-| Provider-silent offline preflight   | NOT RUN | Production `/readyz` is green with `phase: "offline"`, schema `0016_expand`, and every commercial/provider flag off |
-| Bancontact launch check             | NOT RUN | Test profile exposes Bancontact for Belgium/EUR without enabling a live flag                                        |
-| Belgian consumer profile            | NOT RUN | Audited, unexpired BE-consumer profile is eligible; business/Peppol buyer profiles remain blocked                   |
-| One-time payment succeeds           | NOT RUN | Test Payment, authenticated webhook fetch, one 30-day Startpilot entitlement and no Subscription                    |
-| First payment fails                 | NOT RUN | Failed state; no entitlement                                                                                        |
-| First payment canceled              | NOT RUN | Canceled state; no entitlement                                                                                      |
-| First payment expires               | NOT RUN | Expired state; no entitlement                                                                                       |
-| Webhook before redirect             | NOT RUN | Paid state independent of redirect                                                                                  |
-| Redirect before webhook             | NOT RUN | Return remains non-authoritative/open                                                                               |
-| Duplicate webhook                   | NOT RUN | One snapshot side effect                                                                                            |
-| Unknown Payment ID                  | NOT RUN | Generic 200 and no disclosure; transient failures return redacted 503                                               |
-| Amount mismatch                     | NOT RUN | Manual review; no activation                                                                                        |
-| Currency mismatch                   | NOT RUN | Manual review; no activation                                                                                        |
-| Duplicate Startpilot purchase       | NOT RUN | At most one paid pilot entitlement for the workspace; no automatic top-up                                           |
-| Startpilot limits                   | NOT RUN | 300 AI answers, 20 image generations, max five images/day and one workspace/Page are enforced before provider calls |
-| 30-day expiry                       | NOT RUN | Entitlement expires without renewal, collection, Subscription or mandate                                            |
-| Full refund                         | NOT RUN | Entitlement withdrawn per approved policy; no future collection exists                                              |
-| Partial refund                      | NOT RUN | Human-visible manual review                                                                                         |
-| Chargeback                          | NOT RUN | Access blocked and a human-visible operator incident is created                                                     |
-| Missed webhook recovery             | NOT RUN | Reconciliation applies the exact snapshot once                                                                      |
-| Billing disabled after URL exposure | NOT RUN | New checkout is blocked while webhook, reconciliation and exact safety drain still process the exposed Payment      |
-| No secrets/customer data in logs    | NOT RUN | Captured logs and serialized error/redaction assertions                                                             |
-| B2B buyer request                   | NOT RUN | Business/Peppol buyer profile is rejected; seller Peppol identity does not change buyer eligibility                 |
-| Paid image quota                    | NOT RUN | Provider smoke respects 5/day and 20/period customer counters plus separately verified provider-account hard limit  |
+| Scenario                            | Status  | Required evidence                                                                                                                                       |
+| ----------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Provider-silent offline preflight   | PASS    | 2026-08-25 protected deploy run 32820475232: production `/readyz` green with `phase: "offline"` and every commercial/provider flag off                  |
+| Bancontact launch check             | NOT RUN | Test profile exposes Bancontact for Belgium/EUR without enabling a live flag                                                                            |
+| Belgian consumer profile            | NOT RUN | Audited, unexpired BE-consumer profile is eligible; business/Peppol buyer profiles remain blocked                                                       |
+| One-time payment succeeds           | NOT RUN | Test Payment, authenticated webhook fetch, one 30-day Startpilot entitlement and no Subscription                                                        |
+| First payment fails                 | NOT RUN | Failed state; no entitlement                                                                                                                            |
+| First payment canceled              | NOT RUN | Canceled state; no entitlement                                                                                                                          |
+| First payment expires               | NOT RUN | Expired state; no entitlement                                                                                                                           |
+| Webhook before redirect             | NOT RUN | Paid state independent of redirect                                                                                                                      |
+| Redirect before webhook             | NOT RUN | Return remains non-authoritative/open                                                                                                                   |
+| Duplicate webhook                   | NOT RUN | One snapshot side effect                                                                                                                                |
+| Unknown Payment ID                  | NOT RUN | Generic 200 and no disclosure; transient failures return redacted 503                                                                                   |
+| Amount mismatch                     | NOT RUN | Manual review; no activation                                                                                                                            |
+| Currency mismatch                   | NOT RUN | Manual review; no activation                                                                                                                            |
+| Duplicate Startpilot purchase       | NOT RUN | At most one paid pilot entitlement for the workspace; no automatic top-up                                                                               |
+| Startpilot limits                   | NOT RUN | Guided image controls, 20 workspace-wide image attempts, max five/day and one workspace/Page are enforced before provider transport; replays count once |
+| 30-day expiry                       | NOT RUN | Entitlement expires without renewal, collection, Subscription or mandate                                                                                |
+| Full refund                         | NOT RUN | Entitlement withdrawn per approved policy; no future collection exists                                                                                  |
+| Partial refund                      | NOT RUN | Human-visible manual review                                                                                                                             |
+| Chargeback                          | NOT RUN | Access blocked and a human-visible operator incident is created                                                                                         |
+| Missed webhook recovery             | NOT RUN | Reconciliation applies the exact snapshot once                                                                                                          |
+| Billing disabled after URL exposure | NOT RUN | New checkout is blocked while webhook, reconciliation and exact safety drain still process the exposed Payment                                          |
+| No secrets/customer data in logs    | NOT RUN | Captured logs and serialized error/redaction assertions                                                                                                 |
+| B2B buyer request                   | NOT RUN | Business/Peppol buyer profile is rejected; seller Peppol identity does not change buyer eligibility                                                     |
+| Paid image quota                    | NOT RUN | Provider smoke respects 5/day and 20/period customer counters plus separately verified provider-account hard limit                                      |
 
 ## Dormant subscription regression scenarios
 

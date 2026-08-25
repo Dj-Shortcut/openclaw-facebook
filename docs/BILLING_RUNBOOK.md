@@ -63,8 +63,9 @@ never delete financial records.
 
 ## Protected schema and runtime rollout
 
-Production currently moves only from `0015_base` to the backwards-compatible
-`0016_expand` phase. Migration 0017 is blocked for a later reviewed rollout.
+Production completed the protected move from `0015_base` to the
+backwards-compatible `0016_expand` phase. Migration 0017 is blocked for a later
+reviewed rollout.
 Use the exact protected sequence in
 `docs/operations/production-deployments.md`: attested bridge, reviewed digest,
 bridge deploy, encrypted snapshot and isolated restore proof, protected 0016
@@ -78,9 +79,16 @@ in its offline phase. In the explicitly approved provider phase, the one-time
 Startpilot launch requires:
 
 - `bancontact: true`
+- `providerChecked: true`
+- `phase: provider`
+- `mode: test`
+- `sandboxReady: true`
 - `salesCountry: BE`
 - `currency: EUR`
 - `b2bCheckoutEnabled: false`
+
+In Mollie Test Mode, `ok` remains `false` because that field means live-ready;
+use `sandboxReady: true` as the explicit Test Mode GO signal.
 
 SEPA Direct Debit and mandates belong only to the unpublished subscription
 foundation and are not a requirement for the one-time Startpilot offer.
@@ -93,7 +101,7 @@ foundation and are not a requirement for the one-time Startpilot offer.
    eligibility; business/Peppol buyer profiles remain blocked.
 2. Confirm the requested plan code is active in the server catalog.
 3. Confirm a local intent and idempotency key exist before any Payment call.
-4. Confirm the first Payment has `sequenceType=first`, `method=bancontact`, the
+4. Confirm the one-time Payment has `sequenceType=oneoff`, `method=bancontact`, the
    full first-period EUR amount, customer ID, exact webhook URL, redirect URL,
    and only the opaque billing intent in metadata.
 5. Send the browser to `_links.checkout.href` with GET. A redirect is never

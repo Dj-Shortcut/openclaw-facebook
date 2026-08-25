@@ -5,36 +5,20 @@
 
 ## Verified snapshot
 
-- 2026-08-21 issue #393 deep-audit remediation is complete in the local
-  `codex/issue-393-deep-audit-roadmap` branch, pending CI/review/deployment:
-  root `npm audit` moved from 11 advisories to zero and image-gen `pnpm audit`
-  from five to zero through scoped transitive overrides; bridge transport and
-  Messenger intent classification gained focused tests while the existing
-  89-test monitor suite was retained; source-image config, retry policy, and
-  generation-input preparation were extracted behind typed/tested boundaries;
-  and the Fly model/memory plus managed-redeploy invariants are now CI-checked.
-  This is repository evidence only, not production rollout proof.
-- Last reviewed against code: **2026-08-24**, PR #400 commit
-  **`ee59b09cbbaec76ebacf6eb8faa36ca3a94122bb`**. All GitHub checks on
-  that credential-free code commit are green, including Image Gen CI
-  [run 32740281414](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32740281414)
-  and canonical migration smoke
-  [run 32740281430](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32740281430).
-  Review, protected rollout and provider evidence remain separate gates.
-- Reviewed `main` baseline: **`29666ab9a9fc3830a464577a599c5b26de6162c5`**.
-- Latest operator production verification: **2026-08-24** public
-  `/healthz` and core `/readyz` returned HTTP 200. This is not billing
-  readiness because `MOLLIE_BILLING_PREFLIGHT_ENABLED=false`; the latest
-  recorded Messenger/delete-my-data smoke remains 2026-06-30.
+- Last reviewed `main` baseline: **2026-08-25** commit
+  **`0b4a9c66b57a9d6fdbd9dde49b778cba36fca17d`**. Protected production
+  [run 32820475232](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32820475232)
+  deployed immutable image digest
+  `sha256:33390bc580305a8549667633a9a2f9eac30dcd34262d11f75270a40aaf5bfd1e`.
+  Public `/healthz` and `/readyz` returned HTTP 200; billing readiness reported
+  `phase: "offline"` with no Mollie API or payment call.
 - Current direction: generic prompt-first image generation; legacy style-picker UI, quick-reply flows, and director-mode preset plumbing are removed. Internal style-preset compatibility may remain only as backend fallback.
 - Product direction: `leaderbot.live` becomes a tenant/customer portal for managing each customer's own AI. The OpenClaw/Messenger gateway remains shielded and is not the customer-facing app.
-- 2026-08-24 production update: image-gen remains on reviewed legacy image
-  `sha256:28d862...` and schema phase `0015_base`, with every Mollie
-  commercial, entitlement, live, notification and accounting flag off. The
-  manifest intentionally blocks deployment until an attested compatibility
-  bridge is reviewed. The protected sequence is bridge deployment, encrypted
-  snapshot plus isolated restore proof, `0016_expand`, then an attested
-  runtime. Migration 0017 remains blocked.
+- 2026-08-25 production update: the protected bridge, encrypted snapshot,
+  isolated restore proof, `0016_expand` transition and attested runtime deploy
+  completed. Every Mollie commercial, live, drain, entitlement, notification,
+  finalization and accounting execution flag remains off. Migration 0017
+  remains blocked.
 - Historical audit and inventory files are not active plans. Keep valid open work here instead of reviving stale audit snapshots.
 
 ## Architecture boundary notes
@@ -668,11 +652,11 @@ Historical branch review note:
       entitlement, finalization, notification and accounting execution flag to
       remain off, skips runtime-heartbeat gates and labels `/readyz` as
       `phase: "offline"`.
-- [ ] After the canonical production migration and protected rollout, capture a
+- [x] After the canonical production migration and protected rollout, capture a
       redacted green `phase: "offline"` `/readyz` response before enabling any
       operational paid lane or starting a Mollie sandbox checkout.
 - [x] Validate the effective portal handoff origin (`PORTAL_BASE_URL`, falling back to `APP_BASE_URL`) before billing readiness/checkout; production/live requires HTTPS and an origin-only URL.
-- [x] Select the bounded product offer: `€19` once, 30 days, one workspace/Page, 300 AI answers, 20 Images 2.0 generations, and at most five images per day, without renewal, top-ups, or overage.
+- [x] Select the bounded launch offer: `€19` once, 30 days, one workspace/Page, guided Messenger image controls, 20 Images 2.0 generations, and at most five images per day, without renewal, top-ups, or overage. OpenClaw answers remain dormant and are not advertised or required for the Mollie pilot.
 - [x] Enforce an audited, expiring Belgian-consumer billing profile before
       checkout. Seller Peppol registration is separate; business/Peppol buyer
       profiles remain ineligible.
@@ -692,7 +676,9 @@ Historical branch review note:
 - [ ] Define a separate immutable subscription-history/event model if historical rows become a product or accounting requirement; `billing_subscriptions` currently stores one mutable current-state row per workspace and Mollie mode.
 - [x] Map inbound channel/Page identity uniquely to a workspace and enforce `workspace_entitlements` before the actual image-provider attempt; the database claim now fails closed instead of overwriting another workspace's Page credentials.
 - [x] Count one Startpilot image unit when the first provider attempt for a Messenger generation job starts; provider retries remain individually audited but do not consume extra customer pilot generations.
+- [ ] Land the idempotent workspace-wide image receipt and its real MySQL last-slot/same-request race proof; deploy it before any Mollie Test Mode checkout is exposed.
 - [ ] Prove the Page-to-workspace mapping and both paid quota gates in a production-like end-to-end test after the duplicate-Page preflight and migration, without any free-tier fallback.
+- [ ] After the sandbox matrix and the first strictly limited live payment are complete, return to the separately reviewed OpenClaw gateway state/rollback work. Keep it out of the critical Mollie payment path, but preserve it as the intended later optional conversation route.
 - [x] Replace the isolated worker with a durable tenant-partitioned scheduler
       and explicit `pilot_pin`/`multi_tenant` rollout, per-lane epochs,
       heartbeats, safety drain, backlog and dead-letter readiness.

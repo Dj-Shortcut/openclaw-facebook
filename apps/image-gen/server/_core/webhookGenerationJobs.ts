@@ -7,7 +7,9 @@ import {
   buildGenerationFailureResponse,
   buildGenerationSuccessResponse,
   buildImageQuotaBalanceResponse,
+  buildStartpilotQuotaReachedResponse,
 } from "./conversationActions";
+import { reserveStartpilotImageUsage } from "./billing/entitlementUsageStore";
 import {
   anonymizePsid,
   getOrCreateState,
@@ -142,6 +144,13 @@ class MessengerImageQuotaBusyError extends Error {
   }
 }
 
+class StartpilotImageQuotaExhaustedError extends Error {
+  constructor(readonly reason: "total_exhausted" | "daily_exhausted") {
+    super("Startpilot image quota is exhausted");
+    this.name = "StartpilotImageQuotaExhaustedError";
+  }
+}
+
 class MessengerImageQuotaRecoveryError extends Error {
   constructor() {
     super(
@@ -211,9 +220,10 @@ export function createMessengerGenerationJobRunner(
         const ownerQuotaBypass = isMessengerAdmin(psid, userId);
         const quotaBypassApplied =
           ownerQuotaBypass || hasQuotaBypass(psid, userId);
-        const successQuotaIdentity = !quotaBypassApplied
-          ? imageQuotaIdentityForJob(job)
-          : undefined;
+        const successQuotaIdentity =
+          workspacePolicy.kind === "free" && !quotaBypassApplied
+            ? imageQuotaIdentityForJob(job)
+            : undefined;
         if (
           await finishDuplicateGenerationIfCompleted({
             deps,
@@ -291,6 +301,43 @@ export function createMessengerGenerationJobRunner(
               resolvedGenerationKind,
               providerFenceSequence
             );
+            try {
+              if (
+                workspacePolicy.kind === "startpilot" &&
+                providerAttemptsStarted === 0
+              ) {
+                if (
+                  job.workspaceId !== workspacePolicy.workspaceId ||
+                  !job.channelConnectionId ||
+                  !job.bindingEpoch
+                ) {
+                  throw new Error("Startpilot generation scope mismatch");
+                }
+                const usage = await reserveStartpilotImageUsage({
+                  workspaceId: workspacePolicy.workspaceId,
+                  entitlementId: workspacePolicy.entitlementId,
+                  channelConnectionId: job.channelConnectionId,
+                  bindingEpoch: job.bindingEpoch,
+                  mode: workspacePolicy.mode,
+                  idempotencyKey: `startpilot-image:${reqId}`,
+                });
+                if (!usage.allowed) {
+                  throw new StartpilotImageQuotaExhaustedError(usage.reason);
+                }
+              }
+            } catch (error) {
+              // The provider callback is awaited before HTTP transport. Mark
+              // this fence as a known non-effect so a quota/DB refusal cannot
+              // become a permanently ambiguous provider attempt.
+              await finalizeMessengerProviderAttemptFence(
+                providerFence,
+                "known_failed"
+              );
+              throw error;
+            }
+            // Keep the fence reserved until every local, durable admission
+            // check has succeeded. A crash before provider transport can then
+            // safely reclaim the request without treating it as ambiguous.
             await markMessengerProviderAttemptStarted(providerFence);
             providerFences.push(providerFence);
             providerAttemptsStarted += 1;
@@ -395,6 +442,19 @@ export function createMessengerGenerationJobRunner(
             )
           );
           providerFences.length = 0;
+
+          if (
+            generationResult.error instanceof StartpilotImageQuotaExhaustedError
+          ) {
+            await sendStartpilotQuotaReachedNotice({
+              deps,
+              psid,
+              reqId,
+              lang,
+              rememberSendOutcome,
+            });
+            return;
+          }
 
           await handleGenerationFailure({
             deps,
@@ -640,6 +700,29 @@ export function createMessengerGenerationJobRunner(
     processMessengerGenerationJob: executeImageGenerationJob,
     processMessengerGenerationJobDeadLetter,
   };
+}
+
+async function sendStartpilotQuotaReachedNotice(input: {
+  deps: GenerationJobRunnerDeps;
+  psid: string;
+  reqId: string;
+  lang: MessengerGenerationJob["lang"];
+  rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
+}): Promise<void> {
+  const response = buildStartpilotQuotaReachedResponse(input.lang);
+  const outcome = await input.deps.sendLoggedActions(
+    input.psid,
+    response.text ?? t(input.lang, "startpilotQuotaReached"),
+    response.actions ?? [],
+    input.reqId
+  );
+  input.rememberSendOutcome(outcome);
+  if (!outcome.sent) {
+    throw new MessengerGenerationNoticeDeliveryError(
+      new Error(`Startpilot quota notice send skipped: ${outcome.reason}`)
+    );
+  }
+  await setFlowState(input.psid, "AWAITING_EDIT_PROMPT");
 }
 
 function shouldPropagateInlineGenerationFailure(): boolean {

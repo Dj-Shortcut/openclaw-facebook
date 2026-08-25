@@ -44,7 +44,6 @@ describe("billing catalog", () => {
         accessDurationDays: 30,
         active: true,
         entitlements: {
-          aiAnswersTotal: 300,
           imagesTotal: 20,
           imagesPerDay: 5,
           workspaces: 1,

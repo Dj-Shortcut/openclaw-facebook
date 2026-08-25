@@ -166,7 +166,7 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     outOfMonthlyImageCredits:
       "Je foto's voor deze maand zijn op. Volgende maand kun je opnieuw beginnen.",
     startpilotQuotaReached:
-      "Je Startpilot-tegoed is opgebruikt. Open Leaderbot om je gebruik te bekijken of een nieuw pakket te kiezen.",
+      "Je Startpilot-tegoed is opgebruikt. Open Leaderbot om je gebruik te bekijken. Er start nooit automatisch een nieuwe betaling.",
     openLeaderbot: "Open Leaderbot",
     openPortal: "Open klantenportaal",
     portalAction: "Klantenportaal",
@@ -302,7 +302,7 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
     outOfMonthlyImageCredits:
       "Your photos for this month are used up. You can start again next month.",
     startpilotQuotaReached:
-      "Your Startpilot credit is used up. Open Leaderbot to review usage or choose a new package.",
+      "Your Startpilot credit is used up. Open Leaderbot to review usage. A new payment never starts automatically.",
     openLeaderbot: "Open Leaderbot",
     openPortal: "Open customer portal",
     portalAction: "Customer portal",

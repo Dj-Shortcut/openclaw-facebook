@@ -1863,7 +1863,7 @@ function Home() {
                                   </p>
                                   {[
                                     copy.billing.pilotWorkspacePage,
-                                    copy.billing.pilotAnswers,
+                                    copy.billing.pilotImageControls,
                                     copy.billing.pilotImages,
                                   ].map(item => (
                                     <div

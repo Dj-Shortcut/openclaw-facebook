@@ -2,6 +2,10 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   executeGenerationFlowMock,
+  finalizeMessengerProviderAttemptFenceMock,
+  markMessengerProviderAttemptStartedMock,
+  reserveMessengerProviderAttemptFenceMock,
+  reserveStartpilotImageUsageMock,
   assertMessengerGenerationOwnershipMock,
   resolveWorkspaceRuntimePolicyMock,
   safeLogMock,
@@ -12,6 +16,10 @@ const {
   faultInjection,
 } = vi.hoisted(() => ({
   executeGenerationFlowMock: vi.fn(),
+  finalizeMessengerProviderAttemptFenceMock: vi.fn(),
+  markMessengerProviderAttemptStartedMock: vi.fn(),
+  reserveMessengerProviderAttemptFenceMock: vi.fn(),
+  reserveStartpilotImageUsageMock: vi.fn(),
   assertMessengerGenerationOwnershipMock: vi.fn(),
   resolveWorkspaceRuntimePolicyMock: vi.fn(),
   safeLogMock: vi.fn(),
@@ -27,6 +35,18 @@ const {
 
 vi.mock("./_core/generationFlow", () => ({
   executeGenerationFlow: executeGenerationFlowMock,
+}));
+
+vi.mock("./_core/billing/entitlementUsageStore", () => ({
+  reserveStartpilotImageUsage: reserveStartpilotImageUsageMock,
+}));
+
+vi.mock("./_core/messengerProviderAttemptFence", () => ({
+  finalizeMessengerProviderAttemptFence:
+    finalizeMessengerProviderAttemptFenceMock,
+  markMessengerProviderAttemptStarted: markMessengerProviderAttemptStartedMock,
+  reserveMessengerProviderAttemptFence:
+    reserveMessengerProviderAttemptFenceMock,
 }));
 
 vi.mock("./_core/messengerGenerationCompletion", async importOriginal => {
@@ -162,6 +182,22 @@ afterAll(() => {
 beforeEach(() => {
   process.env.PRIVACY_PEPPER = "webhook-generation-jobs-test-pepper";
   executeGenerationFlowMock.mockReset();
+  finalizeMessengerProviderAttemptFenceMock.mockReset();
+  finalizeMessengerProviderAttemptFenceMock.mockResolvedValue(undefined);
+  markMessengerProviderAttemptStartedMock.mockReset();
+  markMessengerProviderAttemptStartedMock.mockResolvedValue(undefined);
+  reserveMessengerProviderAttemptFenceMock.mockReset();
+  reserveMessengerProviderAttemptFenceMock.mockResolvedValue({
+    leaseToken: "provider-fence-lease",
+    attemptKeyHash: "provider-fence-attempt",
+  });
+  reserveStartpilotImageUsageMock.mockReset();
+  reserveStartpilotImageUsageMock.mockResolvedValue({
+    allowed: true,
+    imagesUsed: 1,
+    imagesUsedToday: 1,
+    alreadyReserved: false,
+  });
   assertMessengerGenerationOwnershipMock.mockReset();
   assertMessengerGenerationOwnershipMock.mockResolvedValue(undefined);
   resolveWorkspaceRuntimePolicyMock.mockReset();
@@ -1429,7 +1465,105 @@ describe("messenger generation job safety", () => {
     expect(executeGenerationFlowMock).toHaveBeenCalledTimes(1);
   });
 
-  it("counts only a durable Startpilot success in the shared 5/20 quota", async () => {
+  it("reserves paid quota before marking the provider fence started", async () => {
+    const order: string[] = [];
+    resolveWorkspaceRuntimePolicyMock.mockResolvedValueOnce({
+      kind: "startpilot",
+      workspaceId: 42,
+      entitlementId: 9,
+      mode: "test",
+      imageTotalLimit: 20,
+      imageDailyLimit: 5,
+      imageModel: "gpt-image-2",
+      imageQuality: "high",
+    });
+    reserveMessengerProviderAttemptFenceMock.mockImplementationOnce(
+      async () => {
+        order.push("fence_reserved");
+        return {
+          leaseToken: "provider-fence-lease",
+          attemptKeyHash: "provider-fence-attempt",
+        };
+      }
+    );
+    reserveStartpilotImageUsageMock.mockImplementationOnce(async () => {
+      order.push("quota_reserved");
+      return {
+        allowed: true,
+        imagesUsed: 1,
+        imagesUsedToday: 1,
+        alreadyReserved: false,
+      };
+    });
+    markMessengerProviderAttemptStartedMock.mockImplementationOnce(async () => {
+      order.push("fence_started");
+    });
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      await input.onProviderAttempt();
+      return failureGenerationResult();
+    });
+    const runner = createTestRunner();
+
+    await runner.processMessengerGenerationJob({
+      psid: "startpilot-admission-order-user",
+      userId: "startpilot-admission-order-user-key",
+      pageId: "startpilot-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      reqId: "req-startpilot-admission-order",
+      lang: "nl",
+    });
+
+    expect(order).toEqual([
+      "fence_reserved",
+      "quota_reserved",
+      "fence_started",
+    ]);
+  });
+
+  it("keeps a paid provider fence safely reserved when start marking fails", async () => {
+    resolveWorkspaceRuntimePolicyMock.mockResolvedValueOnce({
+      kind: "startpilot",
+      workspaceId: 42,
+      entitlementId: 9,
+      mode: "test",
+      imageTotalLimit: 20,
+      imageDailyLimit: 5,
+      imageModel: "gpt-image-2",
+      imageQuality: "high",
+    });
+    markMessengerProviderAttemptStartedMock.mockRejectedValueOnce(
+      new Error("provider fence start unavailable")
+    );
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      try {
+        await input.onProviderAttempt();
+        return successGenerationResult();
+      } catch (error) {
+        return failureGenerationResult(error);
+      }
+    });
+    const runner = createTestRunner();
+
+    await runner.processMessengerGenerationJob({
+      psid: "startpilot-fence-start-failure-user",
+      userId: "startpilot-fence-start-failure-user-key",
+      pageId: "startpilot-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      reqId: "req-startpilot-fence-start-failure",
+      lang: "nl",
+    });
+
+    expect(reserveStartpilotImageUsageMock).toHaveBeenCalledOnce();
+    expect(markMessengerProviderAttemptStartedMock).toHaveBeenCalledOnce();
+    expect(finalizeMessengerProviderAttemptFenceMock).not.toHaveBeenCalled();
+    expect(sendImageMock).not.toHaveBeenCalled();
+  });
+
+  it("records one paid Startpilot usage receipt per generation request", async () => {
     resolveWorkspaceRuntimePolicyMock.mockResolvedValue({
       kind: "startpilot",
       workspaceId: 42,
@@ -1456,6 +1590,9 @@ describe("messenger generation job safety", () => {
       psid: "startpilot-provider-retry-user",
       userId,
       pageId: "startpilot-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
       reqId: "req-startpilot-provider-failure",
       lang: "nl",
     });
@@ -1474,6 +1611,9 @@ describe("messenger generation job safety", () => {
       psid: "startpilot-provider-retry-user",
       userId,
       pageId: "startpilot-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
       reqId: "req-startpilot-provider-success",
       lang: "nl",
     });
@@ -1481,22 +1621,88 @@ describe("messenger generation job safety", () => {
     await expect(
       getMessengerImageQuotaStatus(quotaIdentityForUser(userId))
     ).resolves.toMatchObject({
-      daily: { used: 1, remaining: 4 },
-      monthly: { used: 1, remaining: 19 },
+      daily: { used: 0, remaining: 5 },
+      monthly: { used: 0, remaining: 20 },
     });
     await expect(
       getMessengerGenerationCompletion("req-startpilot-provider-success")
     ).resolves.toMatchObject({
-      quotaAccountingMode: "success_only_v1",
-      quotaStatus: {
-        daily: { used: 1, remaining: 4 },
-        monthly: { used: 1, remaining: 19 },
-      },
+      imageUrl: "https://img.example/startpilot-success.png",
+    });
+    expect(reserveStartpilotImageUsageMock).toHaveBeenCalledTimes(2);
+    expect(reserveStartpilotImageUsageMock).toHaveBeenNthCalledWith(1, {
+      workspaceId: 42,
+      entitlementId: 9,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      mode: "test",
+      idempotencyKey: "startpilot-image:req-startpilot-provider-failure",
+    });
+    expect(reserveStartpilotImageUsageMock).toHaveBeenNthCalledWith(2, {
+      workspaceId: 42,
+      entitlementId: 9,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      mode: "test",
+      idempotencyKey: "startpilot-image:req-startpilot-provider-success",
     });
     expect(sendImageMock).toHaveBeenCalledOnce();
   });
 
-  it("does not apply the shared customer limit to an explicit owner", async () => {
+  it("stops before provider transport when the paid image quota is exhausted", async () => {
+    resolveWorkspaceRuntimePolicyMock.mockResolvedValueOnce({
+      kind: "startpilot",
+      workspaceId: 42,
+      entitlementId: 9,
+      mode: "test",
+      imageTotalLimit: 20,
+      imageDailyLimit: 5,
+      imageModel: "gpt-image-2",
+      imageQuality: "high",
+    });
+    reserveStartpilotImageUsageMock.mockResolvedValueOnce({
+      allowed: false,
+      reason: "daily_exhausted",
+    });
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      try {
+        await input.onProviderAttempt();
+        return successGenerationResult();
+      } catch (error) {
+        return failureGenerationResult(error);
+      }
+    });
+    const runner = createTestRunner();
+
+    await runner.processMessengerGenerationJob({
+      psid: "startpilot-exhausted-user",
+      userId: "startpilot-exhausted-user-key",
+      pageId: "startpilot-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      reqId: "req-startpilot-daily-exhausted",
+      lang: "nl",
+    });
+
+    expect(reserveStartpilotImageUsageMock).toHaveBeenCalledOnce();
+    expect(markMessengerProviderAttemptStartedMock).not.toHaveBeenCalled();
+    expect(finalizeMessengerProviderAttemptFenceMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attemptKeyHash: "provider-fence-attempt",
+      }),
+      "known_failed"
+    );
+    expect(sendImageMock).not.toHaveBeenCalled();
+    expect(sendQuickRepliesMock).toHaveBeenCalledOnce();
+    expect(
+      await runWithMessengerRequestContext("startpilot-page", async () =>
+        getState("startpilot-exhausted-user")
+      )
+    ).toMatchObject({ stage: "AWAITING_EDIT_PROMPT" });
+  });
+
+  it("keeps the paid workspace quota even for an explicit owner", async () => {
     process.env.MESSENGER_ADMIN_IDS = "owner-psid";
     resolveWorkspaceRuntimePolicyMock.mockResolvedValueOnce({
       kind: "startpilot",
@@ -1519,6 +1725,9 @@ describe("messenger generation job safety", () => {
       psid: "owner-psid",
       userId: "owner-user-key",
       pageId: "owner-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
       reqId: "req-owner-unlimited",
       lang: "nl",
     });
@@ -1535,6 +1744,14 @@ describe("messenger generation job safety", () => {
         async () => getState("owner-psid")?.quota.count
       )
     ).toBe(0);
+    expect(reserveStartpilotImageUsageMock).toHaveBeenCalledWith({
+      workspaceId: 42,
+      entitlementId: 9,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      mode: "live",
+      idempotencyKey: "startpilot-image:req-owner-unlimited",
+    });
   });
 
   it("does not count provider retries when generation ultimately fails", async () => {
@@ -1867,11 +2084,13 @@ function successGenerationResult(
   };
 }
 
-function failureGenerationResult() {
+function failureGenerationResult(
+  error: unknown = new Error("provider failed")
+) {
   return {
     kind: "error",
     errorKind: "generation_failed",
-    error: new Error("provider failed"),
+    error,
     metrics: { totalMs: 10 },
     trustedSourceImageUrl: false,
   };

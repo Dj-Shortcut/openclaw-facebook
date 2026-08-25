@@ -180,7 +180,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       body: "Een afgebakende pilot om Leaderbot met je eigen Facebookpagina en de voelbare Images 2.0-kwaliteit te testen.",
       features: [
         "30 dagen · 1 werkruimte · 1 Facebookpagina",
-        "300 AI-antwoorden",
+        "Begeleide beeldfuncties en handige vervolgknoppen in Messenger",
         "20 Images 2.0-beelden · maximaal 5 per dag",
         "Geen abonnement, verlenging of kosten buiten het pakket",
       ],
@@ -327,7 +327,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       body: "Un pilote délimité pour tester Leaderbot avec votre Page Facebook et la qualité Images 2.0.",
       features: [
         "30 jours · 1 espace · 1 Page Facebook",
-        "300 réponses IA",
+        "Création d'images guidée et boutons de suivi dans Messenger",
         "20 images Images 2.0 · maximum 5 par jour",
         "Sans abonnement, renouvellement ni dépassement facturé",
       ],
@@ -476,7 +476,7 @@ const landingCopies: Record<AppLocale, LandingCopy> = {
       body: "A bounded pilot to test Leaderbot with your own Facebook Page and the visible Images 2.0 quality step.",
       features: [
         "30 days · 1 workspace · 1 Facebook Page",
-        "300 AI answers",
+        "Guided image creation and follow-up buttons in Messenger",
         "20 Images 2.0 images · maximum 5 per day",
         "No subscription, renewal or overage charges",
       ],

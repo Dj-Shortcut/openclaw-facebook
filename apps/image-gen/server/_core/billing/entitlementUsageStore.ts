@@ -85,21 +85,87 @@ export async function resolveActiveWorkspaceEntitlement(
 export async function reserveStartpilotImageUsage(input: {
   workspaceId: number;
   entitlementId: number;
+  channelConnectionId: number;
+  bindingEpoch: number;
   mode: MollieMode;
+  idempotencyKey: string;
   now?: Date;
 }): Promise<
-  | { allowed: true; imagesUsed: number; imagesUsedToday: number }
+  | {
+      allowed: true;
+      imagesUsed: number;
+      imagesUsedToday: number;
+      alreadyReserved: boolean;
+    }
   | { allowed: false; reason: "total_exhausted" | "daily_exhausted" }
 > {
   assertPositiveId(input.workspaceId, "workspace");
   assertPositiveId(input.entitlementId, "entitlement");
+  assertPositiveId(input.channelConnectionId, "channel connection");
+  assertPositiveId(input.bindingEpoch, "binding epoch");
+  assertOpaqueIdempotencyKey(input.idempotencyKey);
   const now = input.now ?? new Date();
   const usageDate = utcDateKey(now);
+  const ownerTokenHash = createHash("sha256")
+    .update(`leaderbot-image-usage-v1\n${input.idempotencyKey}`)
+    .digest("hex");
   const database = await getDatabaseOrThrow();
   return database.transaction(async tx => {
+    const bindings = await tx
+      .select({ id: channelConnections.id })
+      .from(channelConnections)
+      .where(
+        and(
+          eq(channelConnections.id, input.channelConnectionId),
+          eq(channelConnections.workspaceId, input.workspaceId),
+          eq(channelConnections.bindingEpoch, input.bindingEpoch),
+          eq(channelConnections.channel, "facebook_messenger"),
+          eq(channelConnections.status, "connected")
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (!bindings[0]) {
+      throw new Error("Startpilot image usage binding changed");
+    }
     const { usage, quota } = await lockStartpilotUsage(tx, input, now);
     const imagesUsedToday =
       usage.imageUsageDate === usageDate ? usage.imagesUsedToday : 0;
+    const existing = await tx
+      .select()
+      .from(workspaceEntitlementUsageReservations)
+      .where(
+        and(
+          eq(
+            workspaceEntitlementUsageReservations.workspaceId,
+            input.workspaceId
+          ),
+          eq(workspaceEntitlementUsageReservations.mode, input.mode),
+          eq(
+            workspaceEntitlementUsageReservations.idempotencyKey,
+            input.idempotencyKey
+          )
+        )
+      )
+      .limit(1)
+      .for("update");
+    if (existing[0]) {
+      if (
+        existing[0].entitlementId !== input.entitlementId ||
+        existing[0].channelConnectionId !== input.channelConnectionId ||
+        existing[0].bindingEpoch !== input.bindingEpoch ||
+        existing[0].kind !== "image" ||
+        existing[0].status !== "committed"
+      ) {
+        throw new Error("Startpilot image usage idempotency scope mismatch");
+      }
+      return {
+        allowed: true as const,
+        imagesUsed: usage.imagesUsed,
+        imagesUsedToday,
+        alreadyReserved: true,
+      };
+    }
     if (usage.imagesUsed >= quota.imagesTotal) {
       return { allowed: false as const, reason: "total_exhausted" as const };
     }
@@ -108,6 +174,22 @@ export async function reserveStartpilotImageUsage(input: {
     }
     const nextImagesUsed = usage.imagesUsed + 1;
     const nextImagesUsedToday = imagesUsedToday + 1;
+    await tx.insert(workspaceEntitlementUsageReservations).values({
+      reservationId: randomUUID(),
+      workspaceId: input.workspaceId,
+      mode: input.mode,
+      entitlementId: input.entitlementId,
+      channelConnectionId: input.channelConnectionId,
+      bindingEpoch: input.bindingEpoch,
+      kind: "image",
+      status: "committed",
+      idempotencyKey: input.idempotencyKey,
+      ownerTokenHash,
+      ownerLeaseUntil: now,
+      expiresAt: now,
+      resolutionDueAt: now,
+      committedAt: now,
+    });
     await tx
       .update(workspaceEntitlementUsage)
       .set({
@@ -127,6 +209,7 @@ export async function reserveStartpilotImageUsage(input: {
       allowed: true as const,
       imagesUsed: nextImagesUsed,
       imagesUsedToday: nextImagesUsedToday,
+      alreadyReserved: false,
     };
   });
 }

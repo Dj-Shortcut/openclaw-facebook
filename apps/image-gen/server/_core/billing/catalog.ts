@@ -94,7 +94,20 @@ export function listPublicBillingPlans() {
       offerType: plan.offerType,
       interval: plan.interval,
       accessDurationDays: plan.accessDurationDays,
-      entitlements: plan.entitlements,
+      // The root OpenClaw gateway is a separate, optional product surface.
+      // Keep its dormant AI-answer allowance out of the public launch offer
+      // until that gateway has its own reviewed rollout. The first paid
+      // product is the independently enforced Messenger image experience.
+      entitlements:
+        plan.code === STARTPILOT_PLAN_CODE
+          ? Object.freeze({
+              imagesTotal: plan.entitlements.imagesTotal,
+              imagesPerDay: plan.entitlements.imagesPerDay,
+              workspaces: plan.entitlements.workspaces,
+              facebookPages: plan.entitlements.facebookPages,
+              imageQuality: plan.entitlements.imageQuality,
+            })
+          : plan.entitlements,
       active: plan.active,
       disclosure: {
         paymentAmount: formatAmountMinor(plan.amountMinor),
