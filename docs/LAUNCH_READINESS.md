@@ -2,13 +2,13 @@
 
 Status on 2026-08-25: **NO-GO for a Mollie payment or live billing**.
 
-The protected schema transition, reviewed image-gen runtime deployment and
-provider-silent offline preflight are complete. Production `/readyz` is green
-with `phase: "offline"`. The current focused release must still land and deploy
-the idempotent workspace-wide paid image counter, prove the operational worker
-state for one exact pilot workspace, and then run the provider sandbox matrix.
-OpenClaw remains a planned later product step, but is not a dependency of the
-image-generation offer or the first Mollie sandbox payment.
+The protected schema transition, reviewed image-gen runtime deployment,
+provider-silent offline preflight and idempotent workspace-wide paid image
+counter are complete. Production `/readyz` is green with `phase: "offline"`.
+The remaining rollout must prove the operational worker state for one exact
+pilot workspace and then run the provider sandbox matrix. OpenClaw remains a
+planned later product step, but is not a dependency of the image-generation
+offer or the first Mollie sandbox payment.
 
 No step in this document authorizes printing a secret, making an unreviewed
 provider call, running a payment, applying SQL from a shell, merging a PR, or
