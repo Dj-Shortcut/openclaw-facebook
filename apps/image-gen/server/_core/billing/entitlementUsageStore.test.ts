@@ -487,7 +487,7 @@ function usageFlow(
     imagesUsedToday: 0,
     ...overrides,
   };
-  const updateWhere = vi.fn().mockResolvedValue(undefined);
+  const updateWhere = vi.fn().mockResolvedValue({ affectedRows: 1 });
   const updateSet = vi.fn(() => ({ where: updateWhere }));
   const insertValues = vi.fn(async () => undefined);
   const tx = {

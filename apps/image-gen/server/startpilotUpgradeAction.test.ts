@@ -43,6 +43,19 @@ describe("Startpilot upgrade action", () => {
     expect(JSON.stringify(response)).not.toMatch(/psid|sender/i);
   });
 
+  it("distinguishes today's Startpilot limit from the total credit", () => {
+    process.env.NODE_ENV = "production";
+    process.env.PORTAL_BASE_URL = "https://leaderbot.live";
+
+    const daily = buildStartpilotQuotaReachedResponse("nl", "daily_exhausted");
+    const total = buildStartpilotQuotaReachedResponse("nl", "total_exhausted");
+
+    expect(daily.text).toContain("Morgen kun je weer afbeeldingen maken");
+    expect(daily.text).not.toContain("tegoed is opgebruikt");
+    expect(total.text).toContain("tegoed is opgebruikt");
+    expect(daily.actions).toEqual(total.actions);
+  });
+
   it("renders allowlisted HTTPS URLs as Messenger web buttons, not quick replies", () => {
     process.env.NODE_ENV = "production";
     process.env.PORTAL_BASE_URL = "https://leaderbot.live";

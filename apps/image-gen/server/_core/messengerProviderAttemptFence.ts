@@ -9,7 +9,7 @@ import {
 import { getDatabaseOrThrow } from "../db";
 import type { MessengerGenerationJob } from "./messengerGenerationJob";
 
-const PROVIDER_FENCE_LEASE_MS = 15 * 60_000;
+export const MESSENGER_PROVIDER_FENCE_LEASE_MS = 15 * 60_000;
 export const WHATSAPP_ERASURE_CONTROL_PROVIDER_OPERATION =
   "whatsapp_graph_erasure_control_text";
 
@@ -296,7 +296,7 @@ async function claimMessengerProviderAttemptFenceInternal(
         attemptNumber: 1,
         status: "reserved",
         leaseToken,
-        leaseUntil: new Date(now.getTime() + PROVIDER_FENCE_LEASE_MS),
+        leaseUntil: new Date(now.getTime() + MESSENGER_PROVIDER_FENCE_LEASE_MS),
       })
       .onDuplicateKeyUpdate({ set: { attemptKeyHash } });
     const fence = await readExistingFence();
@@ -328,7 +328,9 @@ async function claimMessengerProviderAttemptFenceInternal(
         .update(messengerProviderAttemptFences)
         .set({
           leaseToken,
-          leaseUntil: new Date(now.getTime() + PROVIDER_FENCE_LEASE_MS),
+          leaseUntil: new Date(
+            now.getTime() + MESSENGER_PROVIDER_FENCE_LEASE_MS
+          ),
           attemptNumber: fence.attemptNumber + 1,
           startedAt: null,
           completedAt: null,
@@ -374,7 +376,9 @@ async function claimMessengerProviderAttemptFenceInternal(
         .set({
           status: "reserved",
           leaseToken,
-          leaseUntil: new Date(now.getTime() + PROVIDER_FENCE_LEASE_MS),
+          leaseUntil: new Date(
+            now.getTime() + MESSENGER_PROVIDER_FENCE_LEASE_MS
+          ),
           attemptNumber: fence.attemptNumber + 1,
           startedAt: null,
           completedAt: null,
@@ -545,7 +549,7 @@ export async function markMessengerProviderAttemptStarted(
       .set({
         status: "started",
         startedAt: now,
-        leaseUntil: new Date(now.getTime() + PROVIDER_FENCE_LEASE_MS),
+        leaseUntil: new Date(now.getTime() + MESSENGER_PROVIDER_FENCE_LEASE_MS),
       })
       .where(
         and(

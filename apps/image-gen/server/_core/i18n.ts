@@ -71,6 +71,7 @@ type TranslationKey =
   | "outOfFreeCredits"
   | "outOfDailyImageCredits"
   | "outOfMonthlyImageCredits"
+  | "startpilotDailyQuotaReached"
   | "startpilotQuotaReached"
   | "openLeaderbot"
   | "openPortal"
@@ -165,6 +166,8 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Je foto's voor vandaag zijn op. Morgen kun je opnieuw beginnen.",
     outOfMonthlyImageCredits:
       "Je foto's voor deze maand zijn op. Volgende maand kun je opnieuw beginnen.",
+    startpilotDailyQuotaReached:
+      "Je Startpilot-limiet voor vandaag is bereikt. Morgen kun je weer afbeeldingen maken. Open Leaderbot om je gebruik te bekijken.",
     startpilotQuotaReached:
       "Je Startpilot-tegoed is opgebruikt. Open Leaderbot om je gebruik te bekijken. Er start nooit automatisch een nieuwe betaling.",
     openLeaderbot: "Open Leaderbot",
@@ -301,6 +304,8 @@ const translations: Record<Lang, Record<TranslationKey, TranslationValue>> = {
       "Your photos for today are used up. You can start again tomorrow.",
     outOfMonthlyImageCredits:
       "Your photos for this month are used up. You can start again next month.",
+    startpilotDailyQuotaReached:
+      "You reached today's Startpilot limit. You can create images again tomorrow. Open Leaderbot to review usage.",
     startpilotQuotaReached:
       "Your Startpilot credit is used up. Open Leaderbot to review usage. A new payment never starts automatically.",
     openLeaderbot: "Open Leaderbot",

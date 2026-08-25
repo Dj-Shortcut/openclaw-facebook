@@ -9,7 +9,7 @@ import {
   buildImageQuotaBalanceResponse,
   buildStartpilotQuotaReachedResponse,
 } from "./conversationActions";
-import { reserveStartpilotImageUsage } from "./billing/entitlementUsageStore";
+import { admitStartpilotImageProviderAttempt } from "./startpilotImageProviderAdmission";
 import {
   anonymizePsid,
   getOrCreateState,
@@ -67,6 +67,7 @@ import {
   markMessengerGenerationSuccessNoticeSent,
   type MessengerGenerationCompletion,
   type MessengerGenerationCompletionFence,
+  type MessengerGenerationQuotaAccountingMode,
 } from "./messengerGenerationCompletion";
 import {
   MESSENGER_ASYNC_RESPONSE_QUEUED,
@@ -148,6 +149,13 @@ class StartpilotImageQuotaExhaustedError extends Error {
   constructor(readonly reason: "total_exhausted" | "daily_exhausted") {
     super("Startpilot image quota is exhausted");
     this.name = "StartpilotImageQuotaExhaustedError";
+  }
+}
+
+class StartpilotProviderAdmissionRetryError extends Error {
+  constructor(cause: unknown) {
+    super("Startpilot provider admission must be retried", { cause });
+    this.name = "StartpilotProviderAdmissionRetryError";
   }
 }
 
@@ -301,6 +309,7 @@ export function createMessengerGenerationJobRunner(
               resolvedGenerationKind,
               providerFenceSequence
             );
+            let providerFenceResolved = false;
             try {
               if (
                 workspacePolicy.kind === "startpilot" &&
@@ -313,32 +322,38 @@ export function createMessengerGenerationJobRunner(
                 ) {
                   throw new Error("Startpilot generation scope mismatch");
                 }
-                const usage = await reserveStartpilotImageUsage({
+                const usage = await admitStartpilotImageProviderAttempt({
+                  fence: providerFence,
+                  providerOperation: resolvedGenerationKind,
                   workspaceId: workspacePolicy.workspaceId,
                   entitlementId: workspacePolicy.entitlementId,
                   channelConnectionId: job.channelConnectionId,
                   bindingEpoch: job.bindingEpoch,
                   mode: workspacePolicy.mode,
                   idempotencyKey: `startpilot-image:${reqId}`,
+                }).catch(error => {
+                  throw new StartpilotProviderAdmissionRetryError(error);
                 });
+                providerFenceResolved = true;
                 if (!usage.allowed) {
                   throw new StartpilotImageQuotaExhaustedError(usage.reason);
                 }
+              } else {
+                await markMessengerProviderAttemptStarted(providerFence);
+                providerFenceResolved = true;
               }
             } catch (error) {
               // The provider callback is awaited before HTTP transport. Mark
               // this fence as a known non-effect so a quota/DB refusal cannot
               // become a permanently ambiguous provider attempt.
-              await finalizeMessengerProviderAttemptFence(
-                providerFence,
-                "known_failed"
-              );
+              if (!providerFenceResolved) {
+                await finalizeMessengerProviderAttemptFence(
+                  providerFence,
+                  "known_failed"
+                );
+              }
               throw error;
             }
-            // Keep the fence reserved until every local, durable admission
-            // check has succeeded. A crash before provider transport can then
-            // safely reclaim the request without treating it as ambiguous.
-            await markMessengerProviderAttemptStarted(providerFence);
             providerFences.push(providerFence);
             providerAttemptsStarted += 1;
           };
@@ -407,6 +422,10 @@ export function createMessengerGenerationJobRunner(
                 rememberSendOutcome,
                 completionFence: completionFenceForJob(job),
                 successQuotaIdentity,
+                quotaAccountingMode:
+                  workspacePolicy.kind === "startpilot"
+                    ? "startpilot_attempt_committed_v1"
+                    : "success_only_v1",
                 quotaReservation: pendingQuotaReservation,
                 quotaLeaseHeartbeat,
                 assertCurrentBinding: () =>
@@ -451,9 +470,17 @@ export function createMessengerGenerationJobRunner(
               psid,
               reqId,
               lang,
+              reason: generationResult.error.reason,
               rememberSendOutcome,
             });
             return;
+          }
+
+          if (
+            generationResult.error instanceof
+            StartpilotProviderAdmissionRetryError
+          ) {
+            throw generationResult.error;
           }
 
           await handleGenerationFailure({
@@ -494,6 +521,15 @@ export function createMessengerGenerationJobRunner(
     } catch (error) {
       if (error instanceof MessengerPrivacyFenceError) {
         return MESSENGER_SEND_SKIPPED;
+      }
+      if (error instanceof StartpilotProviderAdmissionRetryError) {
+        safeLog("startpilot_provider_admission_requeued", {
+          level: "error",
+          reqId,
+          user: toLogUser(userId),
+          generationKind: resolvedGenerationKind,
+        });
+        throw error;
       }
       if (error instanceof MessengerGenerationDeliveryError) {
         recordMessengerDeliveryFailure();
@@ -707,15 +743,38 @@ async function sendStartpilotQuotaReachedNotice(input: {
   psid: string;
   reqId: string;
   lang: MessengerGenerationJob["lang"];
+  reason: "total_exhausted" | "daily_exhausted";
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
 }): Promise<void> {
-  const response = buildStartpilotQuotaReachedResponse(input.lang);
-  const outcome = await input.deps.sendLoggedActions(
-    input.psid,
-    response.text ?? t(input.lang, "startpilotQuotaReached"),
-    response.actions ?? [],
-    input.reqId
+  const response = buildStartpilotQuotaReachedResponse(
+    input.lang,
+    input.reason
   );
+  let outcome: MessengerSendOutcome;
+  try {
+    outcome = await input.deps.sendLoggedActions(
+      input.psid,
+      response.text ??
+        t(
+          input.lang,
+          input.reason === "daily_exhausted"
+            ? "startpilotDailyQuotaReached"
+            : "startpilotQuotaReached"
+        ),
+      response.actions ?? [],
+      input.reqId,
+      { providerAttemptKey: "startpilot-quota-notice-v1" }
+    );
+  } catch (error) {
+    // Meta has no idempotency key. Once delivery may have started, the exact
+    // provider fence prevents a second call; settle the local conversation so
+    // generic recovery cannot send contradictory failure actions.
+    if (isMessengerDeliveryAmbiguous(error)) {
+      await setFlowState(input.psid, "AWAITING_EDIT_PROMPT");
+      return;
+    }
+    throw new MessengerGenerationNoticeDeliveryError(error);
+  }
   input.rememberSendOutcome(outcome);
   if (!outcome.sent) {
     throw new MessengerGenerationNoticeDeliveryError(
@@ -902,10 +961,15 @@ async function finishDuplicateGenerationIfCompleted(input: {
   let quotaStatus = completedGeneration.quotaStatus;
   let successNoticeStatus = completedGeneration.successNoticeStatus;
   const deliveryStatus = completedGeneration.deliveryStatus ?? "delivered";
-  if (input.successQuotaIdentity && !quotaStatus) {
+  const recoveryQuotaIdentity =
+    completedGeneration.quotaAccountingMode ===
+    "startpilot_attempt_committed_v1"
+      ? undefined
+      : input.successQuotaIdentity;
+  if (recoveryQuotaIdentity && !quotaStatus) {
     const decision = await reserveMessengerGenerationQuota({
       psid: input.psid,
-      identity: input.successQuotaIdentity,
+      identity: recoveryQuotaIdentity,
       requestId: input.reqId,
     });
     if (decision.status === "busy") throw new MessengerImageQuotaBusyError();
@@ -915,7 +979,7 @@ async function finishDuplicateGenerationIfCompleted(input: {
     ) {
       const committed = await commitMessengerGenerationQuota({
         psid: input.psid,
-        identity: input.successQuotaIdentity,
+        identity: recoveryQuotaIdentity,
         reservation: decision.reservation,
         generationKind: input.resolvedGenerationKind,
         assertCurrentBinding: input.assertCurrentBinding,
@@ -1015,7 +1079,7 @@ async function finishDuplicateGenerationIfCompleted(input: {
         imageUrl: completedGeneration.imageUrl,
         lang: input.lang,
         rememberSendOutcome: input.rememberSendOutcome,
-        quotaIdentity: input.successQuotaIdentity,
+        quotaIdentity: recoveryQuotaIdentity,
         completionFence: input.completionFence,
       });
     }
@@ -1026,11 +1090,11 @@ async function finishDuplicateGenerationIfCompleted(input: {
     successNoticeStatus === "pending" ||
     (deliveryStatus === "pending" && successNoticeStatus !== "sent");
   if (shouldSendSuccessNotice) {
-    if (input.successQuotaIdentity) {
+    if (recoveryQuotaIdentity) {
       // A retry can happen after another successful photo or after the local
       // day rolled over. Never send the stale balance captured at commit time.
       quotaStatus = await refreshGenerationQuotaSnapshot({
-        identity: input.successQuotaIdentity,
+        identity: recoveryQuotaIdentity,
         reqId: input.reqId,
         imageUrl: completedGeneration.imageUrl,
         userId: input.userId,
@@ -1129,6 +1193,7 @@ async function handleGenerationSuccess(input: {
   rememberSendOutcome: (outcome: MessengerSendOutcome) => MessengerSendOutcome;
   completionFence?: MessengerGenerationCompletionFence;
   successQuotaIdentity?: MessengerImageQuotaIdentity;
+  quotaAccountingMode: MessengerGenerationQuotaAccountingMode;
   quotaReservation: MessengerImageQuotaReservation | null;
   quotaLeaseHeartbeat: MessengerGenerationQuotaLeaseHeartbeat | null;
   assertCurrentBinding: () => Promise<void>;
@@ -1182,7 +1247,8 @@ async function handleGenerationSuccess(input: {
       imageUrl,
       input.userId,
       Date.now(),
-      input.completionFence
+      input.completionFence,
+      input.quotaAccountingMode
     )
   );
   let quotaStatus: MessengerImageQuotaStatus | undefined;

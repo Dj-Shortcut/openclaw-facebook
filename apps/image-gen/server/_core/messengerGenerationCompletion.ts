@@ -30,6 +30,11 @@ const GENERATION_OBJECT_INVENTORY_TTL_SECONDS = 31 * 24 * 60 * 60;
 const USER_INDEX_LOCK_TTL_SECONDS = 5;
 const USER_INDEX_LOCK_MAX_ATTEMPTS = 20;
 
+export type MessengerGenerationQuotaAccountingMode =
+  | "success_only_v1"
+  | "legacy_pre_success_v1"
+  | "startpilot_attempt_committed_v1";
+
 export type MessengerGenerationCompletion = {
   reqId: string;
   imageUrl: string;
@@ -46,7 +51,7 @@ export type MessengerGenerationCompletion = {
    * New completions must commit success-only quota before delivery. The legacy
    * value is only for explicitly identified pre-migration completions.
    */
-  quotaAccountingMode?: "success_only_v1" | "legacy_pre_success_v1";
+  quotaAccountingMode?: MessengerGenerationQuotaAccountingMode;
   quotaStatus?: MessengerImageQuotaStatus;
   quotaCommittedAt?: number;
   successNoticeStatus?: "pending" | "sent";
@@ -478,7 +483,8 @@ export async function markMessengerGenerationCompleted(
   imageUrl: string,
   userKey?: string,
   now = Date.now(),
-  fence?: MessengerGenerationCompletionFence
+  fence?: MessengerGenerationCompletionFence,
+  quotaAccountingMode: MessengerGenerationQuotaAccountingMode = "success_only_v1"
 ): Promise<void> {
   await writeMessengerGenerationCompletion(
     {
@@ -487,7 +493,7 @@ export async function markMessengerGenerationCompleted(
       completedAt: now,
       deliveryStatus: "pending",
       successNoticeStatus: "pending",
-      quotaAccountingMode: "success_only_v1",
+      quotaAccountingMode,
       userKey,
       ...fence,
       expiresAt: now + GENERATION_COMPLETION_TTL_SECONDS * 1_000,

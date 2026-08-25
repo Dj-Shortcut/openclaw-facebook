@@ -6,17 +6,19 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   billingIntents,
   channelConnections,
+  messengerPrivacySubjects,
+  messengerProviderAttemptFences,
   workspaceEntitlements,
   workspaceEntitlementUsage,
   workspaceEntitlementUsageReservations,
   workspaces,
 } from "../drizzle/schema";
 import { getDatabaseOrThrow } from "./db";
-import {
-  reserveStartpilotImageUsage,
-  utcDateKey,
-} from "./_core/billing/entitlementUsageStore";
+import { utcDateKey } from "./_core/billing/entitlementUsageStore";
 import { getBillingPlan, STARTPILOT_PLAN_CODE } from "./_core/billing/catalog";
+import { reserveMessengerProviderAttemptFence } from "./_core/messengerProviderAttemptFence";
+import { admitStartpilotImageProviderAttempt } from "./_core/startpilotImageProviderAdmission";
+import type { MessengerGenerationJob } from "./_core/messengerGenerationJob";
 
 const suite = describe.runIf(process.env.RUN_MYSQL_INTEGRATION === "1");
 
@@ -25,6 +27,7 @@ suite("Startpilot image usage MySQL races", () => {
   let connectionId = 0;
   let entitlementId = 0;
   let intentId = "";
+  let pageId = "";
 
   beforeEach(async () => {
     process.env.MOLLIE_MODE = "test";
@@ -47,11 +50,12 @@ suite("Startpilot image usage MySQL races", () => {
         .limit(1)
     )[0]!.id;
 
+    pageId = `startpilot-image-page-${suffix}`;
     await database.insert(channelConnections).values({
       workspaceId,
       channel: "facebook_messenger",
       status: "connected",
-      externalId: `startpilot-image-page-${suffix}`,
+      externalId: pageId,
       bindingEpoch: 1,
     });
     connectionId = (
@@ -111,6 +115,12 @@ suite("Startpilot image usage MySQL races", () => {
     if (!workspaceId) return;
     const database = await getDatabaseOrThrow();
     await database
+      .delete(messengerProviderAttemptFences)
+      .where(eq(messengerProviderAttemptFences.workspaceId, workspaceId));
+    await database
+      .delete(messengerPrivacySubjects)
+      .where(eq(messengerPrivacySubjects.workspaceId, workspaceId));
+    await database
       .delete(workspaceEntitlementUsageReservations)
       .where(
         eq(workspaceEntitlementUsageReservations.workspaceId, workspaceId)
@@ -129,6 +139,7 @@ suite("Startpilot image usage MySQL races", () => {
       .where(eq(channelConnections.workspaceId, workspaceId));
     await database.delete(workspaces).where(eq(workspaces.id, workspaceId));
     workspaceId = 0;
+    pageId = "";
   });
 
   it("allows exactly one request to take the last workspace slot", async () => {
@@ -143,9 +154,11 @@ suite("Startpilot image usage MySQL races", () => {
       })
       .where(eq(workspaceEntitlementUsage.workspaceId, workspaceId));
 
+    const first = await prepareFence("mysql-last-slot-a", now);
+    const second = await prepareFence("mysql-last-slot-b", now);
     const results = await Promise.all([
-      reserve("startpilot-image:mysql-last-slot-a", now),
-      reserve("startpilot-image:mysql-last-slot-b", now),
+      admit(first, "startpilot-image:mysql-last-slot-a", now),
+      admit(second, "startpilot-image:mysql-last-slot-b", now),
     ]);
 
     expect(results.filter(result => result.allowed)).toHaveLength(1);
@@ -160,19 +173,31 @@ suite("Startpilot image usage MySQL races", () => {
         .limit(1)
     )[0]!;
     expect(usage).toMatchObject({ imagesUsed: 20, imagesUsedToday: 5 });
+    const fences = await database
+      .select({ status: messengerProviderAttemptFences.status })
+      .from(messengerProviderAttemptFences)
+      .where(eq(messengerProviderAttemptFences.workspaceId, workspaceId));
+    expect(fences.map(row => row.status).sort()).toEqual([
+      "known_failed",
+      "started",
+    ]);
   });
 
-  it("counts concurrent retries with the same request id exactly once", async () => {
+  it("counts a concurrently repeated request exactly once", async () => {
     const now = new Date(Math.floor(Date.now() / 1_000) * 1_000);
     const key = "startpilot-image:mysql-same-request";
+    const fence = await prepareFence("mysql-same-request", now);
 
-    const results = await Promise.all([reserve(key, now), reserve(key, now)]);
+    const results = await Promise.allSettled([
+      admit(fence, key, now),
+      admit(fence, key, now),
+    ]);
 
-    expect(results).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ allowed: true, alreadyReserved: false }),
-        expect.objectContaining({ allowed: true, alreadyReserved: true }),
-      ])
+    expect(
+      results.filter(result => result.status === "fulfilled")
+    ).toHaveLength(1);
+    expect(results.filter(result => result.status === "rejected")).toHaveLength(
+      1
     );
     const database = await getDatabaseOrThrow();
     const usage = (
@@ -193,10 +218,156 @@ suite("Startpilot image usage MySQL races", () => {
       );
     expect(usage).toMatchObject({ imagesUsed: 1, imagesUsedToday: 1 });
     expect(receipts).toHaveLength(1);
+    await expect(fenceStatus(fence.attemptKeyHash!)).resolves.toBe("started");
   });
 
-  function reserve(idempotencyKey: string, now: Date) {
-    return reserveStartpilotImageUsage({
+  it("rolls back the paid receipt when provider-fence ownership is lost", async () => {
+    const now = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+    const database = await getDatabaseOrThrow();
+    const fence = await prepareFence("mysql-fence-lost", now);
+    await database
+      .update(messengerProviderAttemptFences)
+      .set({ status: "known_failed", completedAt: now, leaseUntil: now })
+      .where(
+        eq(messengerProviderAttemptFences.attemptKeyHash, fence.attemptKeyHash!)
+      );
+
+    await expect(
+      admit(fence, "startpilot-image:mysql-fence-lost", now)
+    ).rejects.toThrow("Startpilot provider admission ownership was lost");
+
+    const usage = (
+      await database
+        .select()
+        .from(workspaceEntitlementUsage)
+        .where(eq(workspaceEntitlementUsage.workspaceId, workspaceId))
+        .limit(1)
+    )[0]!;
+    const receipts = await database
+      .select()
+      .from(workspaceEntitlementUsageReservations)
+      .where(
+        eq(workspaceEntitlementUsageReservations.workspaceId, workspaceId)
+      );
+    expect(usage).toMatchObject({ imagesUsed: 0, imagesUsedToday: 0 });
+    expect(receipts).toHaveLength(0);
+    await expect(fenceStatus(fence.attemptKeyHash!)).resolves.toBe(
+      "known_failed"
+    );
+  });
+
+  it("marks an exhausted paid attempt known-failed without consuming usage", async () => {
+    const now = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+    const database = await getDatabaseOrThrow();
+    await database
+      .update(workspaceEntitlementUsage)
+      .set({
+        imagesUsed: 20,
+        imageUsageDate: utcDateKey(now),
+        imagesUsedToday: 4,
+      })
+      .where(eq(workspaceEntitlementUsage.workspaceId, workspaceId));
+    const fence = await prepareFence("mysql-exhausted", now);
+
+    await expect(
+      admit(fence, "startpilot-image:mysql-exhausted", now)
+    ).resolves.toEqual({ allowed: false, reason: "total_exhausted" });
+
+    const receipts = await database
+      .select()
+      .from(workspaceEntitlementUsageReservations)
+      .where(
+        eq(workspaceEntitlementUsageReservations.workspaceId, workspaceId)
+      );
+    expect(receipts).toHaveLength(0);
+    await expect(fenceStatus(fence.attemptKeyHash!)).resolves.toBe(
+      "known_failed"
+    );
+  });
+
+  it.each([
+    ["binding", "Startpilot provider ownership changed"],
+    ["privacy", "Startpilot provider privacy changed"],
+  ] as const)(
+    "refuses a changed %s scope before consuming paid usage",
+    async (scope, expectedError) => {
+      const now = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+      const database = await getDatabaseOrThrow();
+      const fence = await prepareFence(`mysql-${scope}-changed`, now);
+      if (scope === "binding") {
+        await database
+          .update(channelConnections)
+          .set({ status: "disconnected" })
+          .where(eq(channelConnections.id, connectionId));
+      } else {
+        await database
+          .update(messengerPrivacySubjects)
+          .set({ status: "erasing" })
+          .where(
+            and(
+              eq(messengerPrivacySubjects.workspaceId, workspaceId),
+              eq(messengerPrivacySubjects.userKey, fence.userKey!)
+            )
+          );
+      }
+
+      await expect(
+        admit(fence, `startpilot-image:mysql-${scope}-changed`, now)
+      ).rejects.toThrow(expectedError);
+
+      const usage = (
+        await database
+          .select()
+          .from(workspaceEntitlementUsage)
+          .where(eq(workspaceEntitlementUsage.workspaceId, workspaceId))
+          .limit(1)
+      )[0]!;
+      const receipts = await database
+        .select()
+        .from(workspaceEntitlementUsageReservations)
+        .where(
+          eq(workspaceEntitlementUsageReservations.workspaceId, workspaceId)
+        );
+      expect(usage).toMatchObject({ imagesUsed: 0, imagesUsedToday: 0 });
+      expect(receipts).toHaveLength(0);
+      await expect(fenceStatus(fence.attemptKeyHash!)).resolves.toBe(
+        "reserved"
+      );
+    }
+  );
+
+  async function prepareFence(reqId: string, now: Date) {
+    const database = await getDatabaseOrThrow();
+    const userKey = `user:${reqId}`;
+    await database.insert(messengerPrivacySubjects).values({
+      workspaceId,
+      channelConnectionId: connectionId,
+      userKey,
+      privacyEpoch: 1,
+      status: "active",
+    });
+    const job: MessengerGenerationJob = {
+      psid: `psid:${reqId}`,
+      userId: userKey,
+      pageId,
+      workspaceId,
+      channelConnectionId: connectionId,
+      bindingEpoch: 1,
+      privacyEpoch: 1,
+      reqId,
+      lang: "nl",
+    };
+    return reserveMessengerProviderAttemptFence(job, "image_from_text", 1, now);
+  }
+
+  function admit(
+    fence: Awaited<ReturnType<typeof prepareFence>>,
+    idempotencyKey: string,
+    now: Date
+  ) {
+    return admitStartpilotImageProviderAttempt({
+      fence,
+      providerOperation: "image_from_text",
       workspaceId,
       entitlementId,
       channelConnectionId: connectionId,
@@ -205,5 +376,18 @@ suite("Startpilot image usage MySQL races", () => {
       idempotencyKey,
       now,
     });
+  }
+
+  async function fenceStatus(attemptKeyHash: string) {
+    const database = await getDatabaseOrThrow();
+    return (
+      await database
+        .select({ status: messengerProviderAttemptFences.status })
+        .from(messengerProviderAttemptFences)
+        .where(
+          eq(messengerProviderAttemptFences.attemptKeyHash, attemptKeyHash)
+        )
+        .limit(1)
+    )[0]?.status;
   }
 });

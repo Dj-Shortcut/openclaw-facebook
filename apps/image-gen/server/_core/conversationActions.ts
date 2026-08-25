@@ -157,9 +157,18 @@ export function buildPortalEnrollmentResponse(
 
 /** Channel-neutral upgrade response; channels decide how to render its URL. */
 export function buildStartpilotQuotaReachedResponse(
-  lang: Lang
+  lang: Lang,
+  reason: "total_exhausted" | "daily_exhausted" = "total_exhausted"
 ): ConversationResponse {
-  return buildStartpilotPortalResponse(lang, t(lang, "startpilotQuotaReached"));
+  return buildStartpilotPortalResponse(
+    lang,
+    t(
+      lang,
+      reason === "daily_exhausted"
+        ? "startpilotDailyQuotaReached"
+        : "startpilotQuotaReached"
+    )
+  );
 }
 
 /** Free users get the same safe portal handoff when today's allowance ends. */

@@ -57,9 +57,9 @@ scenario below from **NOT RUN** to **PASS**.
 | Bancontact launch check             | NOT RUN | Test profile exposes Bancontact for Belgium/EUR without enabling a live flag                                                                            |
 | Belgian consumer profile            | NOT RUN | Audited, unexpired BE-consumer profile is eligible; business/Peppol buyer profiles remain blocked                                                       |
 | One-time payment succeeds           | NOT RUN | Test Payment, authenticated webhook fetch, one 30-day Startpilot entitlement and no Subscription                                                        |
-| First payment fails                 | NOT RUN | Failed state; no entitlement                                                                                                                            |
-| First payment canceled              | NOT RUN | Canceled state; no entitlement                                                                                                                          |
-| First payment expires               | NOT RUN | Expired state; no entitlement                                                                                                                           |
+| One-time payment fails              | NOT RUN | Failed state; no entitlement                                                                                                                            |
+| One-time payment canceled           | NOT RUN | Canceled state; no entitlement                                                                                                                          |
+| One-time payment expires            | NOT RUN | Expired state; no entitlement                                                                                                                           |
 | Webhook before redirect             | NOT RUN | Paid state independent of redirect                                                                                                                      |
 | Redirect before webhook             | NOT RUN | Return remains non-authoritative/open                                                                                                                   |
 | Duplicate webhook                   | NOT RUN | One snapshot side effect                                                                                                                                |
@@ -76,7 +76,7 @@ scenario below from **NOT RUN** to **PASS**.
 | Billing disabled after URL exposure | NOT RUN | New checkout is blocked while webhook, reconciliation and exact safety drain still process the exposed Payment                                          |
 | No secrets/customer data in logs    | NOT RUN | Captured logs and serialized error/redaction assertions                                                                                                 |
 | B2B buyer request                   | NOT RUN | Business/Peppol buyer profile is rejected; seller Peppol identity does not change buyer eligibility                                                     |
-| Paid image quota                    | NOT RUN | Provider smoke respects 5/day and 20/period customer counters plus separately verified provider-account hard limit                                      |
+| Paid image quota                    | NOT RUN | Provider smoke proves workspace-scoped limits of 5/day and 20/period, idempotent replay, and the separately verified provider-account hard limit        |
 
 ## Dormant subscription regression scenarios
 
