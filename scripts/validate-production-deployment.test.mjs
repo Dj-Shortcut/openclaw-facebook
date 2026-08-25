@@ -6362,7 +6362,7 @@ describe("settled production identity", () => {
         ...verificationOptions,
         fetchImpl: async () =>
           jsonResponse(
-            canonicalDeploymentRun("image-gen", "32820475232", "1"),
+            canonicalDeploymentRun("image-gen", "32860967800", "1"),
           ),
       }),
     ).resolves.toMatchObject({
