@@ -713,6 +713,7 @@ suite("Startpilot image usage MySQL races", () => {
       bindingEpoch: 1,
       mode: "test",
       idempotencyKey,
+      pageIdHash: createHash("sha256").update(pageId).digest("hex"),
       now,
     });
   }
