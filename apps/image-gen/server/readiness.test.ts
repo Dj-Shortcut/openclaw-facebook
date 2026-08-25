@@ -16,6 +16,7 @@ const READINESS_ENV_KEYS = [
   "NODE_ENV",
   "MOLLIE_BILLING_ENABLED",
   "MOLLIE_BILLING_DRAIN_ENABLED",
+  "MOLLIE_BILLING_PREFLIGHT_ENABLED",
   "MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED",
   "AI_ANSWER_FINALIZATION_DRAIN_ENABLED",
   "AI_ANSWER_QUOTA_PREFLIGHT_ENABLED",
@@ -24,6 +25,12 @@ const READINESS_ENV_KEYS = [
   "MOLLIE_PAYMENT_WEBHOOK_URL",
   "APP_BASE_URL",
   "BILLING_SUPPORT_EMAIL",
+  "BILLING_NOTIFICATION_PLANE_ENABLED",
+  "BILLING_PROFILE_EVIDENCE_HMAC_SECRET",
+  "MOLLIE_CREDENTIAL_GENERATION_ID",
+  "MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD",
+  "MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD",
+  "MESSENGER_USER_DAILY_SPEND_CAP_USD",
   "MOLLIE_BILLING_WORKER_WORKSPACE_ID",
   "MOLLIE_BILLING_SCHEDULER_MODE",
   "PORTAL_HANDOFF_TOKEN_SECRET",
@@ -212,6 +219,41 @@ describe("readiness", () => {
     await expect(check?.check()).resolves.toBeUndefined();
     expect(databaseCheck).toHaveBeenCalledWith("test", {
       requireRuntimeHeartbeat: false,
+    });
+  });
+
+  it("runs drain-only readiness without requiring entitlement enforcement", async () => {
+    for (const [name, value] of Object.entries({
+      MOLLIE_BILLING_ENABLED: "false",
+      MOLLIE_BILLING_DRAIN_ENABLED: "true",
+      MOLLIE_BILLING_PREFLIGHT_ENABLED: "false",
+      MOLLIE_ENTITLEMENT_ENFORCEMENT_ENABLED: "false",
+      AI_ANSWER_FINALIZATION_DRAIN_ENABLED: "false",
+      BILLING_NOTIFICATION_PLANE_ENABLED: "true",
+      MOLLIE_MODE: "test",
+      MOLLIE_BILLING_SCHEDULER_MODE: "pilot_pin",
+      MOLLIE_BILLING_WORKER_WORKSPACE_ID: "1",
+      DATABASE_URL: "mysql://test:test@database.test/leaderbot",
+      REDIS_URL: "redis://cache.test:6379",
+      PORTAL_HANDOFF_TOKEN_SECRET: "h".repeat(32),
+      BILLING_PROFILE_EVIDENCE_HMAC_SECRET: "e".repeat(32),
+      MOLLIE_CREDENTIAL_GENERATION_ID: "test-generation-1",
+      MESSENGER_GLOBAL_DAILY_SPEND_CAP_USD: "10",
+      MESSENGER_GLOBAL_MONTHLY_SPEND_CAP_USD: "100",
+      MESSENGER_USER_DAILY_SPEND_CAP_USD: "2",
+    })) {
+      vi.stubEnv(name, value);
+    }
+    const databaseCheck = vi
+      .spyOn(billingReadiness, "assertBillingDatabaseReadiness")
+      .mockResolvedValue();
+    const check = buildRuntimeReadinessChecks().find(
+      item => item.name === "mollie_launch_nonsecret_preflight"
+    );
+
+    await expect(check?.check()).resolves.toBeUndefined();
+    expect(databaseCheck).toHaveBeenCalledWith("test", {
+      requireRuntimeHeartbeat: true,
     });
   });
 
