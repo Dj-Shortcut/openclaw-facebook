@@ -15,9 +15,16 @@ import {
 } from "../drizzle/schema";
 import { getDatabaseOrThrow, getWorkspaceUsageSummary } from "./db";
 import { utcDateKey } from "./_core/billing/entitlementUsageStore";
-import { getBillingPlan, STARTPILOT_PLAN_CODE } from "./_core/billing/catalog";
+import {
+  getBillingPlan,
+  PREMIUM_MONTHLY_PLAN_CODE,
+  STARTPILOT_PLAN_CODE,
+} from "./_core/billing/catalog";
 import { reserveMessengerProviderAttemptFence } from "./_core/messengerProviderAttemptFence";
-import { admitStartpilotImageProviderAttempt } from "./_core/startpilotImageProviderAdmission";
+import {
+  admitStartpilotImageProviderAttempt,
+  recoverStartpilotImageProviderAdmission,
+} from "./_core/startpilotImageProviderAdmission";
 import type { MessengerGenerationJob } from "./_core/messengerGenerationJob";
 
 const suite = describe.runIf(process.env.RUN_MYSQL_INTEGRATION === "1");
@@ -272,6 +279,27 @@ suite("Startpilot image usage MySQL races", () => {
     );
   });
 
+  it("keeps a retained Premium entitlement visible without Startpilot usage", async () => {
+    const database = await getDatabaseOrThrow();
+    const premium = getBillingPlan(PREMIUM_MONTHLY_PLAN_CODE);
+    if (!premium) throw new Error("Premium fixture is unavailable");
+    await database
+      .update(workspaceEntitlements)
+      .set({
+        planCode: PREMIUM_MONTHLY_PLAN_CODE,
+        quota: premium.entitlements,
+        validUntil: null,
+      })
+      .where(eq(workspaceEntitlements.id, entitlementId));
+
+    await expect(getWorkspaceUsageSummary(workspaceId)).resolves.toMatchObject({
+      plan: { name: "Leaderbot Premium", billingStatus: "active" },
+      imageCountInPeriod: null,
+      limits: { imagesPerDay: 100, imagesPerPeriod: null },
+      remaining: { imagesInPeriod: null },
+    });
+  });
+
   it("rolls back the paid receipt when provider-fence ownership is lost", async () => {
     const now = new Date(Math.floor(Date.now() / 1_000) * 1_000);
     const database = await getDatabaseOrThrow();
@@ -302,6 +330,49 @@ suite("Startpilot image usage MySQL races", () => {
       );
     expect(usage).toMatchObject({ imagesUsed: 0, imagesUsedToday: 0 });
     expect(receipts).toHaveLength(0);
+    await expect(fenceStatus(fence.attemptKeyHash!)).resolves.toBe(
+      "known_failed"
+    );
+  });
+
+  it("atomically recovers a committed paid admission before provider transport", async () => {
+    const now = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+    const database = await getDatabaseOrThrow();
+    const fence = await prepareFence("mysql-admission-ack-lost", now);
+    const idempotencyKey = "startpilot-image:mysql-admission-ack-lost";
+
+    await expect(admit(fence, idempotencyKey, now)).resolves.toMatchObject({
+      allowed: true,
+      alreadyReserved: false,
+    });
+    await expect(
+      recover(fence, idempotencyKey, new Date(now.getTime() + 1_000))
+    ).resolves.toBeUndefined();
+    await expect(
+      recover(fence, idempotencyKey, new Date(now.getTime() + 2_000))
+    ).resolves.toBeUndefined();
+
+    const usage = (
+      await database
+        .select()
+        .from(workspaceEntitlementUsage)
+        .where(eq(workspaceEntitlementUsage.workspaceId, workspaceId))
+        .limit(1)
+    )[0]!;
+    const receipt = (
+      await database
+        .select()
+        .from(workspaceEntitlementUsageReservations)
+        .where(
+          eq(
+            workspaceEntitlementUsageReservations.idempotencyKey,
+            idempotencyKey
+          )
+        )
+        .limit(1)
+    )[0]!;
+    expect(usage).toMatchObject({ imagesUsed: 0, imagesUsedToday: 0 });
+    expect(receipt.status).toBe("released");
     await expect(fenceStatus(fence.attemptKeyHash!)).resolves.toBe(
       "known_failed"
     );
@@ -417,6 +488,24 @@ suite("Startpilot image usage MySQL races", () => {
     now: Date
   ) {
     return admitStartpilotImageProviderAttempt({
+      fence,
+      providerOperation: "image_from_text",
+      workspaceId,
+      entitlementId,
+      channelConnectionId: connectionId,
+      bindingEpoch: 1,
+      mode: "test",
+      idempotencyKey,
+      now,
+    });
+  }
+
+  function recover(
+    fence: Awaited<ReturnType<typeof prepareFence>>,
+    idempotencyKey: string,
+    now: Date
+  ) {
+    return recoverStartpilotImageProviderAdmission({
       fence,
       providerOperation: "image_from_text",
       workspaceId,

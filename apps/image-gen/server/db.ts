@@ -62,7 +62,11 @@ import {
   getBotTextRateLimitWindowSeconds,
   getImageGenerationDailyLimit,
 } from "./_core/quotaPolicy";
-import { getBillingPlan, STARTPILOT_PLAN_CODE } from "./_core/billing/catalog";
+import {
+  getBillingPlan,
+  PREMIUM_MONTHLY_PLAN_CODE,
+  STARTPILOT_PLAN_CODE,
+} from "./_core/billing/catalog";
 import { parseStartpilotQuota } from "./_core/billing/startpilotQuota";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -2782,9 +2786,9 @@ export async function getWorkspaceUsageSummary(workspaceId: number) {
       status: "active" | "grace";
       planName: string;
       imagesUsedToday: number;
-      imagesUsedInPeriod: number;
+      imagesUsedInPeriod: number | null;
       imagesPerDay: number;
-      imagesPerPeriod: number;
+      imagesPerPeriod: number | null;
     }
   ) => {
     const messageCount = usage?.messageCount ?? 0;
@@ -2864,8 +2868,27 @@ export async function getWorkspaceUsageSummary(workspaceId: number) {
       quota: workspaceEntitlements.quota,
       sourceIntentId: workspaceEntitlements.sourceIntentId,
       validUntil: workspaceEntitlements.validUntil,
+      usageId: workspaceEntitlementUsage.id,
+      usageSourceIntentId: workspaceEntitlementUsage.sourceIntentId,
+      usagePlanCode: workspaceEntitlementUsage.planCode,
+      usagePeriodStartedAt: workspaceEntitlementUsage.periodStartedAt,
+      usagePeriodEndsAt: workspaceEntitlementUsage.periodEndsAt,
+      usageImagesUsed: workspaceEntitlementUsage.imagesUsed,
+      usageImageDate: workspaceEntitlementUsage.imageUsageDate,
+      usageImagesUsedToday: workspaceEntitlementUsage.imagesUsedToday,
     })
     .from(workspaceEntitlements)
+    .leftJoin(
+      workspaceEntitlementUsage,
+      and(
+        eq(workspaceEntitlementUsage.workspaceId, workspaceId),
+        eq(workspaceEntitlementUsage.mode, mode),
+        eq(
+          workspaceEntitlementUsage.entitlementId,
+          workspaceEntitlements.id
+        )
+      )
+    )
     .where(
       and(
         eq(workspaceEntitlements.workspaceId, workspaceId),
@@ -2886,7 +2909,26 @@ export async function getWorkspaceUsageSummary(workspaceId: number) {
   if (
     entitlementRows.length !== 1 ||
     !entitlement ||
-    (entitlement.status !== "active" && entitlement.status !== "grace") ||
+    (entitlement.status !== "active" && entitlement.status !== "grace")
+  ) {
+    throw new Error("Workspace paid usage summary is inconsistent");
+  }
+  if (entitlement.planCode === PREMIUM_MONTHLY_PLAN_CODE) {
+    const premium = getBillingPlan(PREMIUM_MONTHLY_PLAN_CODE);
+    const imagesPerDay = Number(premium?.entitlements.imagesPerDay);
+    if (!premium || !Number.isSafeInteger(imagesPerDay) || imagesPerDay <= 0) {
+      throw new Error("Workspace paid usage summary is inconsistent");
+    }
+    return buildSummary(dailyUsage[0], {
+      status: entitlement.status,
+      planName: premium.publicName,
+      imagesUsedToday: dailyUsage[0]?.imageCount ?? 0,
+      imagesUsedInPeriod: null,
+      imagesPerDay,
+      imagesPerPeriod: null,
+    });
+  }
+  if (
     entitlement.planCode !== STARTPILOT_PLAN_CODE ||
     !entitlement.sourceIntentId ||
     !entitlement.validUntil
@@ -2898,37 +2940,24 @@ export async function getWorkspaceUsageSummary(workspaceId: number) {
   if (!plan || !quota) {
     throw new Error("Workspace paid usage summary is inconsistent");
   }
-  const usageRows = await db
-    .select({
-      sourceIntentId: workspaceEntitlementUsage.sourceIntentId,
-      planCode: workspaceEntitlementUsage.planCode,
-      periodStartedAt: workspaceEntitlementUsage.periodStartedAt,
-      periodEndsAt: workspaceEntitlementUsage.periodEndsAt,
-      imagesUsed: workspaceEntitlementUsage.imagesUsed,
-      imageUsageDate: workspaceEntitlementUsage.imageUsageDate,
-      imagesUsedToday: workspaceEntitlementUsage.imagesUsedToday,
-    })
-    .from(workspaceEntitlementUsage)
-    .where(
-      and(
-        eq(workspaceEntitlementUsage.workspaceId, workspaceId),
-        eq(workspaceEntitlementUsage.mode, mode),
-        eq(workspaceEntitlementUsage.entitlementId, entitlement.id),
-        eq(workspaceEntitlementUsage.planCode, STARTPILOT_PLAN_CODE)
-      )
-    )
-    .limit(2);
-  const paidUsage = usageRows[0];
   if (
-    usageRows.length !== 1 ||
-    !paidUsage ||
-    paidUsage.sourceIntentId !== entitlement.sourceIntentId ||
-    paidUsage.planCode !== STARTPILOT_PLAN_CODE ||
-    paidUsage.periodStartedAt.getTime() > now.getTime() ||
-    paidUsage.periodEndsAt.getTime() !== entitlement.validUntil.getTime() ||
-    paidUsage.periodEndsAt.getTime() <= now.getTime() ||
-    !isBoundedUsageCounter(paidUsage.imagesUsed, quota.imagesTotal) ||
-    !isBoundedUsageCounter(paidUsage.imagesUsedToday, quota.imagesPerDay)
+    !entitlement.usageId ||
+    entitlement.usageSourceIntentId !== entitlement.sourceIntentId ||
+    entitlement.usagePlanCode !== STARTPILOT_PLAN_CODE ||
+    !entitlement.usagePeriodStartedAt ||
+    entitlement.usagePeriodStartedAt.getTime() > now.getTime() ||
+    !entitlement.usagePeriodEndsAt ||
+    entitlement.usagePeriodEndsAt.getTime() !==
+      entitlement.validUntil.getTime() ||
+    entitlement.usagePeriodEndsAt.getTime() <= now.getTime() ||
+    !isBoundedUsageCounter(
+      entitlement.usageImagesUsed ?? -1,
+      quota.imagesTotal
+    ) ||
+    !isBoundedUsageCounter(
+      entitlement.usageImagesUsedToday ?? -1,
+      quota.imagesPerDay
+    )
   ) {
     throw new Error("Workspace paid usage summary is inconsistent");
   }
@@ -2937,8 +2966,10 @@ export async function getWorkspaceUsageSummary(workspaceId: number) {
     status: entitlement.status,
     planName: plan.publicName,
     imagesUsedToday:
-      paidUsage.imageUsageDate === today ? paidUsage.imagesUsedToday : 0,
-    imagesUsedInPeriod: paidUsage.imagesUsed,
+      entitlement.usageImageDate === today
+        ? entitlement.usageImagesUsedToday!
+        : 0,
+    imagesUsedInPeriod: entitlement.usageImagesUsed!,
     imagesPerDay: quota.imagesPerDay,
     imagesPerPeriod: quota.imagesTotal,
   });

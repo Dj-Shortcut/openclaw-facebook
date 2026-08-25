@@ -78,4 +78,19 @@ export type MessengerGenerationJob = {
   sourceImageUrls?: string[];
   promptHint?: string;
   attempts?: number;
+  /**
+   * Durable metadata-only proof that a paid Startpilot admission failed before
+   * provider transport. A retry must finish this exact rollback before it may
+   * reserve another provider fence.
+   */
+  startpilotAdmissionRecovery?: {
+    version: "startpilot_admission_recovery_v1";
+    entitlementId: number;
+    mode: "test" | "live";
+    providerOperation: string;
+    attemptKeyHash: string;
+    leaseToken: string;
+    privacyEpoch: number;
+    idempotencyKey: string;
+  };
 };

@@ -7,6 +7,7 @@ const {
   markMessengerProviderAttemptStartedMock,
   reserveMessengerProviderAttemptFenceMock,
   admitStartpilotImageProviderAttemptMock,
+  recoverStartpilotImageProviderAdmissionMock,
   assertMessengerGenerationOwnershipMock,
   resolveWorkspaceRuntimePolicyMock,
   safeLogMock,
@@ -21,6 +22,7 @@ const {
   markMessengerProviderAttemptStartedMock: vi.fn(),
   reserveMessengerProviderAttemptFenceMock: vi.fn(),
   admitStartpilotImageProviderAttemptMock: vi.fn(),
+  recoverStartpilotImageProviderAdmissionMock: vi.fn(),
   assertMessengerGenerationOwnershipMock: vi.fn(),
   resolveWorkspaceRuntimePolicyMock: vi.fn(),
   safeLogMock: vi.fn(),
@@ -40,6 +42,8 @@ vi.mock("./_core/generationFlow", () => ({
 
 vi.mock("./_core/startpilotImageProviderAdmission", () => ({
   admitStartpilotImageProviderAttempt: admitStartpilotImageProviderAttemptMock,
+  recoverStartpilotImageProviderAdmission:
+    recoverStartpilotImageProviderAdmissionMock,
 }));
 
 vi.mock("./_core/messengerProviderAttemptFence", () => ({
@@ -193,6 +197,7 @@ beforeEach(() => {
   reserveMessengerProviderAttemptFenceMock.mockResolvedValue({
     leaseToken: "provider-fence-lease",
     attemptKeyHash: "provider-fence-attempt",
+    privacyEpoch: 1,
   });
   admitStartpilotImageProviderAttemptMock.mockReset();
   admitStartpilotImageProviderAttemptMock.mockResolvedValue({
@@ -201,6 +206,8 @@ beforeEach(() => {
     imagesUsedToday: 1,
     alreadyReserved: false,
   });
+  recoverStartpilotImageProviderAdmissionMock.mockReset();
+  recoverStartpilotImageProviderAdmissionMock.mockResolvedValue(undefined);
   assertMessengerGenerationOwnershipMock.mockReset();
   assertMessengerGenerationOwnershipMock.mockResolvedValue(undefined);
   resolveWorkspaceRuntimePolicyMock.mockReset();
@@ -1808,11 +1815,15 @@ describe("messenger generation job safety", () => {
       })
     );
     expect(markMessengerProviderAttemptStartedMock).not.toHaveBeenCalled();
-    expect(finalizeMessengerProviderAttemptFenceMock).toHaveBeenCalledWith(
+    expect(recoverStartpilotImageProviderAdmissionMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        attemptKeyHash: "provider-fence-attempt",
-      }),
-      "known_failed"
+        fence: expect.objectContaining({
+          attemptKeyHash: "provider-fence-attempt",
+        }),
+        idempotencyKey: paidImageIdempotencyKey(
+          "req-startpilot-fence-start-failure"
+        ),
+      })
     );
     expect(finalizeMessengerProviderAttemptFenceMock).not.toHaveBeenCalledWith(
       expect.anything(),
@@ -1827,8 +1838,8 @@ describe("messenger generation job safety", () => {
     });
   });
 
-  it("keeps paid admission retryable when fence cleanup also fails", async () => {
-    resolveWorkspaceRuntimePolicyMock.mockResolvedValueOnce({
+  it("durably resumes paid admission rollback after its first cleanup fails", async () => {
+    resolveWorkspaceRuntimePolicyMock.mockResolvedValue({
       kind: "startpilot",
       workspaceId: 42,
       entitlementId: 9,
@@ -1840,32 +1851,44 @@ describe("messenger generation job safety", () => {
     });
     const admissionFailure = new Error("paid admission unavailable");
     const cleanupFailure = new Error("provider fence cleanup unavailable");
-    admitStartpilotImageProviderAttemptMock.mockRejectedValueOnce(
-      admissionFailure
-    );
-    finalizeMessengerProviderAttemptFenceMock.mockRejectedValueOnce(
-      cleanupFailure
-    );
-    executeGenerationFlowMock.mockImplementationOnce(async input => {
-      const admission = await input.onProviderAttempt();
-      try {
-        await admission?.markTransportStarted();
-        return successGenerationResult();
-      } catch (error) {
+    admitStartpilotImageProviderAttemptMock
+      .mockRejectedValueOnce(admissionFailure)
+      .mockResolvedValueOnce({
+        allowed: true,
+        imagesUsed: 1,
+        imagesUsedToday: 1,
+        alreadyReserved: false,
+      });
+    recoverStartpilotImageProviderAdmissionMock
+      .mockRejectedValueOnce(cleanupFailure)
+      .mockResolvedValueOnce(undefined);
+    executeGenerationFlowMock
+      .mockImplementationOnce(async input => {
+        const admission = await input.onProviderAttempt();
         try {
-          await admission?.abortBeforeTransport();
-          return failureGenerationResult(error);
-        } catch (cleanupError) {
-          return failureGenerationResult(
-            new AggregateError(
-              [error, cleanupError],
-              "Provider admission cleanup failed",
-              { cause: error }
-            )
-          );
+          await admission?.markTransportStarted();
+          return successGenerationResult();
+        } catch (error) {
+          try {
+            await admission?.abortBeforeTransport();
+            return failureGenerationResult(error);
+          } catch (cleanupError) {
+            return failureGenerationResult(
+              new AggregateError(
+                [error, cleanupError],
+                "Provider admission cleanup failed",
+                { cause: error }
+              )
+            );
+          }
         }
-      }
-    });
+      })
+      .mockImplementationOnce(async input => {
+        await (await input.onProviderAttempt())?.markTransportStarted();
+        return successGenerationResult(
+          "https://img.example/startpilot-recovered-admission.png"
+        );
+      });
     const runner = createTestRunner();
     const job = {
       psid: "startpilot-admission-cleanup-user",
@@ -1891,18 +1914,35 @@ describe("messenger generation job safety", () => {
         expect.objectContaining({
           name: "StartpilotProviderAdmissionRetryError",
         }),
-        cleanupFailure,
+        expect.objectContaining({
+          name: "StartpilotProviderAdmissionRetryError",
+          cause: cleanupFailure,
+        }),
       ])
     );
-    expect(finalizeMessengerProviderAttemptFenceMock).toHaveBeenCalledWith(
-      expect.anything(),
-      "known_failed"
-    );
+    expect(job.startpilotAdmissionRecovery).toMatchObject({
+      version: "startpilot_admission_recovery_v1",
+      attemptKeyHash: "provider-fence-attempt",
+      idempotencyKey: paidImageIdempotencyKey(
+        "req-startpilot-admission-cleanup"
+      ),
+    });
     expect(sendImageMock).not.toHaveBeenCalled();
     expect(sendQuickRepliesMock).not.toHaveBeenCalled();
     await expect(
       getMessengerGenerationCompletion(job.reqId)
     ).resolves.toBeNull();
+
+    await expect(
+      runner.processMessengerGenerationJob(job)
+    ).resolves.toBeDefined();
+    expect(executeGenerationFlowMock).toHaveBeenCalledTimes(2);
+    expect(recoverStartpilotImageProviderAdmissionMock).toHaveBeenCalledTimes(
+      2
+    );
+    expect(admitStartpilotImageProviderAttemptMock).toHaveBeenCalledTimes(2);
+    expect(job.startpilotAdmissionRecovery).toBeUndefined();
+    expect(sendImageMock).toHaveBeenCalledOnce();
   });
 
   it("records one paid Startpilot usage receipt per generation request", async () => {

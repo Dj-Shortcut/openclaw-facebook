@@ -4,12 +4,15 @@ import {
   channelConnections,
   messengerPrivacySubjects,
   messengerProviderAttemptFences,
+  workspaceEntitlementUsage,
+  workspaceEntitlementUsageReservations,
 } from "../../drizzle/schema";
 import { getDatabaseOrThrow } from "../db";
 import {
   reserveStartpilotImageUsageWithinTransaction,
   type StartpilotImageUsageDecision,
   type StartpilotImageUsageInput,
+  utcDateKey,
 } from "./billing/entitlementUsageStore";
 import {
   MESSENGER_PROVIDER_FENCE_LEASE_MS,
@@ -20,6 +23,9 @@ type StartpilotImageProviderAdmissionInput = StartpilotImageUsageInput & {
   fence: MessengerProviderAttemptFence;
   providerOperation: string;
 };
+
+export type StartpilotImageProviderAdmissionRecoveryInput =
+  StartpilotImageProviderAdmissionInput;
 
 type ExactStartpilotFence = {
   leaseToken: string;
@@ -129,6 +135,200 @@ export async function admitStartpilotImageProviderAttempt(
       throw new Error("Startpilot provider admission ownership was lost");
     }
     return decision;
+  });
+}
+
+/**
+ * Completes an exact pre-transport rollback after paid admission returned an
+ * error. It handles both possible database outcomes: the admission transaction
+ * rolled back and left a reservation fence, or it committed the paid receipt
+ * and started fence before its acknowledgement was lost.
+ */
+export async function recoverStartpilotImageProviderAdmission(
+  input: StartpilotImageProviderAdmissionRecoveryInput
+): Promise<void> {
+  const now = input.now ?? new Date();
+  const fence = assertExactStartpilotFence(input);
+  const database = await getDatabaseOrThrow();
+  await database.transaction(async tx => {
+    const usageRows = await tx
+      .select()
+      .from(workspaceEntitlementUsage)
+      .where(
+        and(
+          eq(workspaceEntitlementUsage.workspaceId, input.workspaceId),
+          eq(workspaceEntitlementUsage.mode, input.mode),
+          eq(workspaceEntitlementUsage.entitlementId, input.entitlementId)
+        )
+      )
+      .limit(1)
+      .for("update");
+    const usage = usageRows[0];
+    if (!usage) {
+      throw new Error("Startpilot provider recovery usage is unavailable");
+    }
+
+    const receiptRows = await tx
+      .select()
+      .from(workspaceEntitlementUsageReservations)
+      .where(
+        and(
+          eq(
+            workspaceEntitlementUsageReservations.workspaceId,
+            input.workspaceId
+          ),
+          eq(workspaceEntitlementUsageReservations.mode, input.mode),
+          eq(
+            workspaceEntitlementUsageReservations.idempotencyKey,
+            input.idempotencyKey
+          )
+        )
+      )
+      .limit(1)
+      .for("update");
+    const receipt = receiptRows[0];
+    if (
+      receipt &&
+      (receipt.entitlementId !== input.entitlementId ||
+        receipt.channelConnectionId !== input.channelConnectionId ||
+        receipt.bindingEpoch !== input.bindingEpoch ||
+        receipt.kind !== "image")
+    ) {
+      throw new Error("Startpilot provider recovery receipt scope mismatch");
+    }
+
+    const fenceRows = await tx
+      .select({
+        status: messengerProviderAttemptFences.status,
+        leaseToken: messengerProviderAttemptFences.leaseToken,
+      })
+      .from(messengerProviderAttemptFences)
+      .where(
+        and(
+          eq(messengerProviderAttemptFences.workspaceId, input.workspaceId),
+          eq(
+            messengerProviderAttemptFences.channelConnectionId,
+            input.channelConnectionId
+          ),
+          eq(messengerProviderAttemptFences.bindingEpoch, input.bindingEpoch),
+          eq(messengerProviderAttemptFences.userKey, fence.userKey),
+          eq(messengerProviderAttemptFences.privacyEpoch, fence.privacyEpoch),
+          eq(
+            messengerProviderAttemptFences.providerOperation,
+            input.providerOperation
+          ),
+          eq(
+            messengerProviderAttemptFences.attemptKeyHash,
+            fence.attemptKeyHash
+          )
+        )
+      )
+      .limit(1)
+      .for("update");
+    const storedFence = fenceRows[0];
+    if (!storedFence || storedFence.leaseToken !== fence.leaseToken) {
+      throw new Error("Startpilot provider recovery fence scope mismatch");
+    }
+
+    if (
+      storedFence.status === "known_failed" &&
+      (!receipt || receipt.status === "released")
+    ) {
+      return;
+    }
+
+    if (storedFence.status === "reserved" && !receipt) {
+      const finalized = await tx
+        .update(messengerProviderAttemptFences)
+        .set({ status: "known_failed", completedAt: now, leaseUntil: now })
+        .where(
+          and(
+            eq(
+              messengerProviderAttemptFences.attemptKeyHash,
+              fence.attemptKeyHash
+            ),
+            eq(
+              messengerProviderAttemptFences.leaseToken,
+              fence.leaseToken
+            ),
+            eq(messengerProviderAttemptFences.status, "reserved")
+          )
+        );
+      if (affectedRows(finalized) !== 1) {
+        throw new Error("Startpilot provider recovery finalization was lost");
+      }
+      return;
+    }
+
+    if (storedFence.status !== "started" || receipt?.status !== "committed") {
+      throw new Error("Startpilot provider recovery state is unsafe");
+    }
+    if (
+      !Number.isSafeInteger(usage.imagesUsed) ||
+      usage.imagesUsed <= 0 ||
+      !Number.isSafeInteger(usage.imagesUsedToday) ||
+      usage.imagesUsedToday < 0 ||
+      !receipt.committedAt
+    ) {
+      throw new Error("Startpilot provider recovery counter is inconsistent");
+    }
+    const committedToday =
+      usage.imageUsageDate === utcDateKey(receipt.committedAt);
+    if (committedToday && usage.imagesUsedToday <= 0) {
+      throw new Error("Startpilot provider recovery daily counter is empty");
+    }
+    const usageUpdate = await tx
+      .update(workspaceEntitlementUsage)
+      .set({
+        imagesUsed: usage.imagesUsed - 1,
+        imagesUsedToday: committedToday
+          ? usage.imagesUsedToday - 1
+          : usage.imagesUsedToday,
+      })
+      .where(
+        and(
+          eq(workspaceEntitlementUsage.id, usage.id),
+          eq(workspaceEntitlementUsage.workspaceId, input.workspaceId),
+          eq(workspaceEntitlementUsage.mode, input.mode),
+          eq(workspaceEntitlementUsage.entitlementId, input.entitlementId),
+          eq(workspaceEntitlementUsage.imagesUsed, usage.imagesUsed),
+          eq(
+            workspaceEntitlementUsage.imagesUsedToday,
+            usage.imagesUsedToday
+          )
+        )
+      );
+    if (affectedRows(usageUpdate) !== 1) {
+      throw new Error("Startpilot provider recovery usage update was lost");
+    }
+    const receiptUpdate = await tx
+      .update(workspaceEntitlementUsageReservations)
+      .set({ status: "released", releasedAt: now })
+      .where(
+        and(
+          eq(
+            workspaceEntitlementUsageReservations.reservationId,
+            receipt.reservationId
+          ),
+          eq(workspaceEntitlementUsageReservations.status, "committed")
+        )
+      );
+    const fenceUpdate = await tx
+      .update(messengerProviderAttemptFences)
+      .set({ status: "known_failed", completedAt: now, leaseUntil: now })
+      .where(
+        and(
+          eq(
+            messengerProviderAttemptFences.attemptKeyHash,
+            fence.attemptKeyHash
+          ),
+          eq(messengerProviderAttemptFences.leaseToken, fence.leaseToken),
+          eq(messengerProviderAttemptFences.status, "started")
+        )
+      );
+    if (affectedRows(receiptUpdate) !== 1 || affectedRows(fenceUpdate) !== 1) {
+      throw new Error("Startpilot provider recovery completion was lost");
+    }
   });
 }
 

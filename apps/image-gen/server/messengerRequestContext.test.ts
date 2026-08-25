@@ -48,6 +48,52 @@ describe("Messenger Page request context", () => {
     expect(parsed?.job.pageId).toBe("page-one");
   });
 
+  it("retains only an exact paid-admission recovery proof", () => {
+    const base = {
+      psid: "raw-only-inside-queue",
+      userId: "hashed-user",
+      pageId: "page-one",
+      reqId: "request-recovery",
+      lang: "nl",
+      generationKind: "text_to_image",
+    };
+    const recovery = {
+      version: "startpilot_admission_recovery_v1",
+      entitlementId: 9,
+      mode: "test",
+      providerOperation: "text_to_image",
+      attemptKeyHash: "a".repeat(64),
+      leaseToken: "123e4567-e89b-42d3-a456-426614174000",
+      privacyEpoch: 3,
+      idempotencyKey: "startpilot-image:request-recovery",
+    };
+
+    expect(
+      parseReservedGenerationJob(
+        JSON.stringify({ ...base, startpilotAdmissionRecovery: recovery })
+      )?.job.startpilotAdmissionRecovery
+    ).toEqual(recovery);
+    expect(
+      parseReservedGenerationJob(
+        JSON.stringify({
+          ...base,
+          startpilotAdmissionRecovery: { ...recovery, unexpected: true },
+        })
+      )
+    ).toBeNull();
+    expect(
+      parseReservedGenerationJob(
+        JSON.stringify({
+          ...base,
+          startpilotAdmissionRecovery: {
+            ...recovery,
+            attemptKeyHash: "not-a-hash",
+          },
+        })
+      )
+    ).toBeNull();
+  });
+
   it("finds Page-scoped state outside request context without using its storage key", async () => {
     const psid = "raw-page-scoped-psid";
     const now = 1_700_000_000_000;

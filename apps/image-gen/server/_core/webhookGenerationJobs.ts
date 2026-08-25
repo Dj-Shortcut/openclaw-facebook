@@ -11,7 +11,10 @@ import {
   buildImageQuotaBalanceResponse,
   buildStartpilotQuotaReachedResponse,
 } from "./conversationActions";
-import { admitStartpilotImageProviderAttempt } from "./startpilotImageProviderAdmission";
+import {
+  admitStartpilotImageProviderAttempt,
+  recoverStartpilotImageProviderAdmission,
+} from "./startpilotImageProviderAdmission";
 import {
   anonymizePsid,
   getOrCreateState,
@@ -251,6 +254,45 @@ export function createMessengerGenerationJobRunner(
       generationKind,
       sourceImageUrl,
     });
+    const pendingRecovery = job.startpilotAdmissionRecovery;
+    if (pendingRecovery) {
+      if (
+        !job.workspaceId ||
+        !job.channelConnectionId ||
+        !job.bindingEpoch ||
+        !job.pageId ||
+        (job.privacyEpoch !== undefined &&
+          job.privacyEpoch !== pendingRecovery.privacyEpoch) ||
+        pendingRecovery.providerOperation !== resolvedGenerationKind
+      ) {
+        throw new Error("Startpilot provider recovery job scope mismatch");
+      }
+      await recoverStartpilotImageProviderAdmission({
+        fence: {
+          leaseToken: pendingRecovery.leaseToken,
+          attemptKeyHash: pendingRecovery.attemptKeyHash,
+          channel: "facebook_messenger",
+          workspaceId: job.workspaceId,
+          channelConnectionId: job.channelConnectionId,
+          bindingEpoch: job.bindingEpoch,
+          pageId: job.pageId,
+          userKey: job.userId,
+          privacyEpoch: pendingRecovery.privacyEpoch,
+          providerOperation: pendingRecovery.providerOperation,
+          privacyMode: "active",
+        },
+        providerOperation: pendingRecovery.providerOperation,
+        workspaceId: job.workspaceId,
+        entitlementId: pendingRecovery.entitlementId,
+        channelConnectionId: job.channelConnectionId,
+        bindingEpoch: job.bindingEpoch,
+        mode: pendingRecovery.mode,
+        idempotencyKey: pendingRecovery.idempotencyKey,
+      }).catch(error => {
+        throw new StartpilotProviderAdmissionRetryError(error);
+      });
+      delete job.startpilotAdmissionRecovery;
+    }
     let sendOutcome: MessengerSendOutcome = MESSENGER_SEND_SKIPPED;
     const rememberSendOutcome = (outcome: MessengerSendOutcome) => {
       sendOutcome = combineMessengerSendOutcomes(sendOutcome, outcome);
@@ -349,6 +391,11 @@ export function createMessengerGenerationJobRunner(
               );
               let state: "reserved" | "started" | "terminal" = "reserved";
               let startPromise: Promise<void> | null = null;
+              let paidAdmissionRecovery:
+                | NonNullable<
+                    MessengerGenerationJob["startpilotAdmissionRecovery"]
+                  >
+                | undefined;
 
               return Object.freeze({
                 markTransportStarted: async () => {
@@ -384,6 +431,23 @@ export function createMessengerGenerationJobRunner(
                               startpilotImageUsageIdempotencyKey(reqId),
                           }
                         ).catch(error => {
+                          if (
+                            providerFence.leaseToken &&
+                            providerFence.attemptKeyHash &&
+                            providerFence.privacyEpoch
+                          ) {
+                            paidAdmissionRecovery = {
+                              version: "startpilot_admission_recovery_v1",
+                              entitlementId: workspacePolicy.entitlementId,
+                              mode: workspacePolicy.mode,
+                              providerOperation: resolvedGenerationKind,
+                              attemptKeyHash: providerFence.attemptKeyHash,
+                              leaseToken: providerFence.leaseToken,
+                              privacyEpoch: providerFence.privacyEpoch,
+                              idempotencyKey:
+                                startpilotImageUsageIdempotencyKey(reqId),
+                            };
+                          }
                           throw new StartpilotProviderAdmissionRetryError(
                             error
                           );
@@ -408,6 +472,27 @@ export function createMessengerGenerationJobRunner(
                 },
                 abortBeforeTransport: async () => {
                   if (state !== "reserved") return;
+                  if (paidAdmissionRecovery) {
+                    job.startpilotAdmissionRecovery = paidAdmissionRecovery;
+                    try {
+                      await recoverStartpilotImageProviderAdmission({
+                        fence: providerFence,
+                        providerOperation:
+                          paidAdmissionRecovery.providerOperation,
+                        workspaceId: job.workspaceId!,
+                        entitlementId: paidAdmissionRecovery.entitlementId,
+                        channelConnectionId: job.channelConnectionId!,
+                        bindingEpoch: job.bindingEpoch!,
+                        mode: paidAdmissionRecovery.mode,
+                        idempotencyKey: paidAdmissionRecovery.idempotencyKey,
+                      });
+                      delete job.startpilotAdmissionRecovery;
+                      state = "terminal";
+                      return;
+                    } catch (error) {
+                      throw new StartpilotProviderAdmissionRetryError(error);
+                    }
+                  }
                   await finalizeMessengerProviderAttemptFence(
                     providerFence,
                     "known_failed"

@@ -74,6 +74,47 @@ function isOptionalOperation(
   );
 }
 
+function isOptionalStartpilotAdmissionRecovery(
+  value: unknown
+): value is MessengerGenerationJob["startpilotAdmissionRecovery"] {
+  if (value === undefined) return true;
+  if (!isObjectRecord(value)) return false;
+  const keys = Object.keys(value).sort();
+  const expectedKeys = [
+    "attemptKeyHash",
+    "entitlementId",
+    "idempotencyKey",
+    "leaseToken",
+    "mode",
+    "privacyEpoch",
+    "providerOperation",
+    "version",
+  ];
+  return (
+    keys.length === expectedKeys.length &&
+    keys.every((key, index) => key === expectedKeys[index]) &&
+    value.version === "startpilot_admission_recovery_v1" &&
+    typeof value.entitlementId === "number" &&
+    Number.isSafeInteger(value.entitlementId) &&
+    value.entitlementId > 0 &&
+    (value.mode === "test" || value.mode === "live") &&
+    typeof value.providerOperation === "string" &&
+    value.providerOperation.trim().length > 0 &&
+    typeof value.privacyEpoch === "number" &&
+    Number.isSafeInteger(value.privacyEpoch) &&
+    value.privacyEpoch > 0 &&
+    typeof value.attemptKeyHash === "string" &&
+    /^[a-f0-9]{64}$/.test(value.attemptKeyHash) &&
+    typeof value.leaseToken === "string" &&
+    /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(
+      value.leaseToken
+    ) &&
+    typeof value.idempotencyKey === "string" &&
+    value.idempotencyKey.length > 0 &&
+    value.idempotencyKey.length <= 160
+  );
+}
+
 function parseMessengerGenerationJob(
   value: unknown
 ): MessengerGenerationJob | null {
@@ -113,7 +154,8 @@ function parseMessengerGenerationJob(
     (value.workspaceId === undefined) !== (value.privacyEpoch === undefined) ||
     (value.tenantPartition !== undefined &&
       !isMessengerGenerationTenantPartition(value.tenantPartition)) ||
-    !isOptionalAttempts(value.attempts)
+    !isOptionalAttempts(value.attempts) ||
+    !isOptionalStartpilotAdmissionRecovery(value.startpilotAdmissionRecovery)
   ) {
     return null;
   }
@@ -145,6 +187,7 @@ function parseMessengerGenerationJob(
     sourceImageUrls: value.sourceImageUrls,
     promptHint: value.promptHint,
     attempts: value.attempts,
+    startpilotAdmissionRecovery: value.startpilotAdmissionRecovery,
     operation: value.operation,
     generationKind:
       value.generationKind === "style_restyle"
