@@ -512,7 +512,9 @@ jobs:
             --reviewed-schema-maximum image-gen "$rollback_image")"
           rollback_schema_phase="$(jq -er '.apps["image-gen"].databaseSchemaPhase' deploy/production/apps.json)"
           [[ "$rollback_schema_phase" =~ ^(0015_base|0016_expand)$ ]]
-          jq -e --arg image "$rollback_image" --arg phase "$rollback_schema_phase" '.apps["image-gen"].reviewedRollbackImageSchemaPhases[$image] | index($phase) != null' deploy/production/apps.json > /dev/null
+          node scripts/validate-production-deployment.mjs \
+            --validate-reviewed-schema-phase image-gen "$rollback_image" \
+            "$rollback_schema_phase"
           docker pull "$rollback_image"
           if [[ "$rollback_kind" != "legacy-bootstrap" ]]; then
             signer="$GITHUB_REPOSITORY/.github/workflows/build-production-artifacts.yml"
@@ -554,13 +556,14 @@ jobs:
           fi
           printf '%s\n' "$rollback_image" > "$RUNNER_TEMP/leaderbot-release/rollback-image.txt"
           printf '%s\n' "$rollback_schema_phase" > "$RUNNER_TEMP/leaderbot-release/rollback-schema-phase.txt"
-          rollback_config_path="$(node scripts/validate-production-deployment.mjs \
-            --reviewed-rollback-config image-gen "$rollback_image")"
-          cp "$rollback_config_path" "$RUNNER_TEMP/leaderbot-release/before.fly.toml"
           live_config="$(fly config show --app leaderbot-fb-image-gen)"
           rollback_identity="$(jq -er '.env.LEADERBOT_DEPLOYMENT_IDENTITY // "none"' <<<"$live_config")"
           [[ "$rollback_identity" =~ ^(none|deploy-[0-9]+-[0-9]+)$ ]]
           printf '%s\n' "$rollback_identity" > "$RUNNER_TEMP/leaderbot-release/rollback-identity.txt"
+          rollback_config_path="$(node scripts/validate-production-deployment.mjs \
+            --reviewed-restore-config image-gen "$rollback_image" \
+            "$rollback_identity")"
+          cp "$rollback_config_path" "$RUNNER_TEMP/leaderbot-release/before.fly.toml"
           fly config validate --strict \
             --config "$RUNNER_TEMP/leaderbot-release/before.fly.toml"
           bootstrap_drift_args=()

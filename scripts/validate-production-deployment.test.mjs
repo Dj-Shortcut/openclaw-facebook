@@ -15,6 +15,7 @@ import {
   getReviewedArtifactSchemaSupport,
   getReviewedArtifactSourceCommit,
   getReviewedRollbackConfig,
+  getReviewedRestoreConfig,
   getReviewedScalePlan,
   materializeSuccessorSourceRoot,
   referencesForbiddenFlyApiUrl,
@@ -23,6 +24,7 @@ import {
   validateProductionRepository,
   validateRecoveryProtocol,
   validateReviewedImage,
+  validateReviewedArtifactSchemaPhase,
   validateReviewedRollbackImage,
   verifyReviewedArtifactCi,
   verifyDeploymentCandidate,
@@ -2750,7 +2752,7 @@ describe("production deployment contract", () => {
     replaceFixtureText(
       root,
       ".github/workflows/reconcile-production-deployment.yml",
-      ".reviewedRollbackImageSchemaPhases[$image] | index($phase) != null",
+      '--validate-reviewed-schema-phase image-gen "$rollback_image"',
       "true",
     );
 
@@ -3115,6 +3117,41 @@ describe("production deployment contract", () => {
       maximum: "0016_expand",
       phases: ["0016_expand"],
     });
+  });
+
+  it("validates schema compatibility for current and rollback images", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "deploy/production/apps.json"),
+        "utf8",
+      ),
+    );
+    const app = manifest.apps["image-gen"];
+
+    expect(
+      validateReviewedArtifactSchemaPhase(
+        "image-gen",
+        app.reviewedImage,
+        app.databaseSchemaPhase,
+        repoRoot,
+      ),
+    ).toBe(app.databaseSchemaPhase);
+    expect(
+      validateReviewedArtifactSchemaPhase(
+        "image-gen",
+        app.reviewedRollbackImages[0],
+        app.databaseSchemaPhase,
+        repoRoot,
+      ),
+    ).toBe(app.databaseSchemaPhase);
+    expect(() =>
+      validateReviewedArtifactSchemaPhase(
+        "image-gen",
+        app.reviewedImage,
+        "0015_base",
+        repoRoot,
+      ),
+    ).toThrow("does not support database phase 0015_base");
   });
 
   it("rejects an image-gen artifact that cannot run on the declared database phase", () => {
@@ -3491,6 +3528,66 @@ describe("production deployment contract", () => {
     expect(getReviewedRollbackConfig("image-gen", image, repoRoot)).toBe(
       app.reviewedRollbackConfigs[image].path,
     );
+  });
+
+  it("resolves the identity-bound predecessor config for a config-only transition", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "deploy/production/apps.json"),
+        "utf8",
+      ),
+    );
+    const app = manifest.apps["image-gen"];
+    const predecessor = app.reviewedSettledPredecessor;
+
+    expect(
+      getReviewedRestoreConfig(
+        "image-gen",
+        predecessor.image,
+        predecessor.identity,
+        repoRoot,
+      ),
+    ).toBe(predecessor.path);
+  });
+
+  it("does not reuse a predecessor config for another identity", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "deploy/production/apps.json"),
+        "utf8",
+      ),
+    );
+    const predecessor =
+      manifest.apps["image-gen"].reviewedSettledPredecessor;
+
+    expect(() =>
+      getReviewedRestoreConfig(
+        "image-gen",
+        predecessor.image,
+        "deploy-999-1",
+        repoRoot,
+      ),
+    ).toThrow("current image lacks an exact identity-bound restore config");
+  });
+
+  it("keeps the reviewed rollback config path for an older image", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(repoRoot, "deploy/production/apps.json"),
+        "utf8",
+      ),
+    );
+    const app = manifest.apps["image-gen"];
+    const image = app.reviewedRollbackImages[0];
+
+    expect(
+      getReviewedRestoreConfig(
+        "image-gen",
+        image,
+        "deploy-999-1",
+        repoRoot,
+      ),
+    ).toBe(app.reviewedRollbackConfigs[image].path);
   });
 
   it("rejects a rollback config whose bytes no longer match review", () => {
@@ -4084,6 +4181,34 @@ describe("production deployment contract", () => {
 
     expect(() => validateProductionRepository(root)).toThrow(
       "must never trust a live Fly config as rollback input",
+    );
+  });
+
+  it("binds the config-only rollback plan to the captured live identity", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/deploy-production.yml",
+      '--reviewed-restore-config image-gen "$rollback_image" \\\n            "$rollback_identity")',
+      '--reviewed-restore-config image-gen "$rollback_image" \\\n            "deploy-999-1")',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must resolve the exact identity-bound image-gen restore config",
+    );
+  });
+
+  it("binds both image-gen recovery mutations to the captured identity", () => {
+    const root = createRepositoryFixture();
+    replaceFixtureText(
+      root,
+      ".github/workflows/reconcile-production-deployment.yml",
+      '--reviewed-restore-config image-gen "$rollback_image" "$prior_identity"',
+      '--reviewed-restore-config image-gen "$rollback_image" "deploy-999-1"',
+    );
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "must bind both image-gen recovery mutations to the exact captured predecessor identity",
     );
   });
 
