@@ -2288,7 +2288,7 @@ describe("messengerGenerationQueue", () => {
         mode: "test",
         providerOperation: "text_to_image",
         attemptKeyHash: "a".repeat(64),
-        leaseToken: "1e7d6b7e-cf89-4ed7-81df-32401a81f001",
+        leaseToken: "00000000-0000-4000-8000-000000000000",
         privacyEpoch: 5,
         idempotencyKey: `startpilot-image:${"b".repeat(64)}`,
       },
