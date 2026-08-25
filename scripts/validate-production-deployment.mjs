@@ -4696,17 +4696,38 @@ function validateImageGenSchemaTransition(app) {
     return;
   }
 
+  const settledPredecessorImage = app.reviewedSettledPredecessor?.image;
+  const hasDistinctRuntimePredecessor =
+    settledPredecessorImage != null &&
+    settledPredecessorImage !== app.reviewedImage &&
+    settledPredecessorImage !== transition.bridgeImage;
+  const expectedRuntimeRollbacks = [
+    ...(hasDistinctRuntimePredecessor
+      ? [transition.bridgeImage, settledPredecessorImage]
+      : []),
+  ];
+  const hasExactRuntimePredecessor =
+    hasDistinctRuntimePredecessor &&
+    app.reviewedRollbackArtifactKinds[settledPredecessorImage] === "runtime" &&
+      isReviewedSourceCommit(
+        app.reviewedRollbackSourceCommits[settledPredecessorImage],
+      ) &&
+      JSON.stringify(
+        app.reviewedRollbackImageSchemaPhases[settledPredecessorImage],
+      ) === JSON.stringify(["0016_expand"]);
+
   if (
     app.databaseSchemaPhase !== "0016_expand" ||
     app.deploymentEnabled !== true ||
     app.reviewedArtifactKind !== "runtime" ||
     !isReviewedSourceCommit(app.reviewedSourceCommit) ||
-    !sameStringSet(app.reviewedRollbackImages, [transition.bridgeImage]) ||
+    !sameStringSet(app.reviewedRollbackImages, expectedRuntimeRollbacks) ||
     app.reviewedRollbackArtifactKinds[transition.bridgeImage] !==
-      "migration-bridge"
+      "migration-bridge" ||
+    !hasExactRuntimePredecessor
   ) {
     fail(
-      "image-gen reviewed runtime must support expand and retain only the bridge rollback",
+      "image-gen reviewed runtime must support expand and retain only the bridge plus exact settled runtime predecessor",
     );
   }
 }
