@@ -6008,6 +6008,49 @@ describe("release-command recovery selector", () => {
     ).toEqual([]);
   });
 
+  it("accepts an empty release-command inventory for a config-only predecessor", () => {
+    const root = createRepositoryFixture();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
+
+    expect(
+      classifyRecoveryReleaseCommandMachines("image-gen", [], {
+        rootDir: root,
+        interruptedDeploymentIdentity: "deploy-32815574535-1",
+        capturedPriorIdentity: predecessor.identity,
+        capturedPriorImage: predecessor.image,
+      }),
+    ).toEqual([]);
+  });
+
+  it("selects an exact release-command Machine for a config-only predecessor", () => {
+    const root = createRepositoryFixture();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(root, "deploy/production/apps.json"), "utf8"),
+    );
+    const predecessor = manifest.apps["image-gen"].reviewedSettledPredecessor;
+    const prior = imageGenReleaseCommandMachine(
+      predecessor.image,
+      predecessor.identity,
+      {
+        root,
+        configPath: predecessor.path,
+        id: "b1b2c3d4e5f607",
+      },
+    );
+
+    expect(
+      classifyRecoveryReleaseCommandMachines("image-gen", [prior], {
+        rootDir: root,
+        interruptedDeploymentIdentity: "deploy-32815574535-1",
+        capturedPriorIdentity: predecessor.identity,
+        capturedPriorImage: predecessor.image,
+      }),
+    ).toEqual([{ id: prior.id, needsDestroy: true }]);
+  });
+
   it("rejects duplicate release Machines for the same exact tuple", () => {
     const { root, bridgeImage, options } = stagedReleaseRecovery();
     const first = imageGenReleaseCommandMachine(bridgeImage, "deploy-124-1", {

@@ -6172,9 +6172,10 @@ export function classifyRecoveryReleaseCommandMachines(
     );
   }
   validateReviewedRollbackImage(target, capturedPriorImage, rootDir);
-  const capturedConfig = getReviewedRollbackConfig(
+  const capturedConfig = getReviewedRestoreConfig(
     target,
     capturedPriorImage,
+    capturedPriorIdentity,
     rootDir,
   );
   const tuples = [
