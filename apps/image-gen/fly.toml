@@ -16,6 +16,7 @@ kill_timeout = 300
   AI_ANSWER_FINALIZATION_DRAIN_ENABLED = "false"
   AI_ANSWER_QUOTA_PREFLIGHT_ENABLED = "false"
   APP_BASE_URL = "https://app.leaderbot.live"
+  PUBLIC_BASE_URL = "https://leaderbot-storage-proxy.fly.dev"
   BILLING_CUSTOMER_NOTIFICATION_KEY_ID = "test-customer-v1"
   BILLING_CUSTOMER_NOTIFICATION_WEBHOOK_URL = "https://app.leaderbot.live/api/internal/billing/notifications/customer"
   BILLING_NOTIFICATION_ORIGIN_ALLOWLIST = "https://app.leaderbot.live"
