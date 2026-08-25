@@ -1800,7 +1800,8 @@ describe("messenger generation job safety", () => {
       1,
       expect.objectContaining({
         idempotencyKey: paidImageIdempotencyKey(
-          "req-startpilot-fence-start-failure"
+          "req-startpilot-fence-start-failure",
+          "startpilot-fence-start-failure-user-key"
         ),
         providerOperation: "text_to_image",
       })
@@ -1809,7 +1810,8 @@ describe("messenger generation job safety", () => {
       2,
       expect.objectContaining({
         idempotencyKey: paidImageIdempotencyKey(
-          "req-startpilot-fence-start-failure"
+          "req-startpilot-fence-start-failure",
+          "startpilot-fence-start-failure-user-key"
         ),
         providerOperation: "text_to_image",
       })
@@ -1821,7 +1823,8 @@ describe("messenger generation job safety", () => {
           attemptKeyHash: "provider-fence-attempt",
         }),
         idempotencyKey: paidImageIdempotencyKey(
-          "req-startpilot-fence-start-failure"
+          "req-startpilot-fence-start-failure",
+          "startpilot-fence-start-failure-user-key"
         ),
       })
     );
@@ -1924,7 +1927,8 @@ describe("messenger generation job safety", () => {
       version: "startpilot_admission_recovery_v1",
       attemptKeyHash: "provider-fence-attempt",
       idempotencyKey: paidImageIdempotencyKey(
-        "req-startpilot-admission-cleanup"
+        "req-startpilot-admission-cleanup",
+        "startpilot-admission-cleanup-user-key"
       ),
     });
     expect(sendImageMock).not.toHaveBeenCalled();
@@ -2021,7 +2025,8 @@ describe("messenger generation job safety", () => {
         bindingEpoch: 3,
         mode: "test",
         idempotencyKey: paidImageIdempotencyKey(
-          "req-startpilot-provider-failure"
+          "req-startpilot-provider-failure",
+          userId
         ),
       })
     );
@@ -2034,7 +2039,8 @@ describe("messenger generation job safety", () => {
         bindingEpoch: 3,
         mode: "test",
         idempotencyKey: paidImageIdempotencyKey(
-          "req-startpilot-provider-success"
+          "req-startpilot-provider-success",
+          userId
         ),
       })
     );
@@ -2073,13 +2079,57 @@ describe("messenger generation job safety", () => {
       lang: "nl",
     });
 
-    const expectedKey = paidImageIdempotencyKey(reqId);
+    const expectedKey = paidImageIdempotencyKey(
+      reqId,
+      "normalized-request-id-user-key"
+    );
     expect(expectedKey).toMatch(/^startpilot-image:[a-f0-9]{64}$/);
     expect(expectedKey).not.toContain(reqId);
     expect(admitStartpilotImageProviderAttemptMock).toHaveBeenCalledWith(
       expect.objectContaining({ idempotencyKey: expectedKey })
     );
     expect(sendImageMock).toHaveBeenCalledOnce();
+  });
+
+  it("scopes paid image idempotency to the Messenger subject", async () => {
+    const reqId = "shared-upstream-request-id";
+    resolveWorkspaceRuntimePolicyMock.mockResolvedValue({
+      kind: "startpilot",
+      workspaceId: 42,
+      entitlementId: 9,
+      mode: "test",
+      imageTotalLimit: 20,
+      imageDailyLimit: 5,
+      imageModel: "gpt-image-2",
+      imageQuality: "high",
+    });
+    executeGenerationFlowMock.mockImplementation(async input => {
+      await (await input.onProviderAttempt())?.markTransportStarted();
+      return successGenerationResult(`https://img.example/${input.userId}.png`);
+    });
+    const runner = createTestRunner();
+
+    for (const userId of ["paid-subject-user-a", "paid-subject-user-b"]) {
+      await runner.processMessengerGenerationJob({
+        psid: userId,
+        userId,
+        pageId: "startpilot-page",
+        workspaceId: 42,
+        channelConnectionId: 8,
+        bindingEpoch: 3,
+        reqId,
+        lang: "nl",
+      });
+    }
+
+    const keys = admitStartpilotImageProviderAttemptMock.mock.calls.map(
+      ([input]) => input.idempotencyKey
+    );
+    expect(keys).toEqual([
+      paidImageIdempotencyKey(reqId, "paid-subject-user-a"),
+      paidImageIdempotencyKey(reqId, "paid-subject-user-b"),
+    ]);
+    expect(new Set(keys).size).toBe(2);
   });
 
   it("stops before provider transport when the paid image quota is exhausted", async () => {
@@ -2243,7 +2293,10 @@ describe("messenger generation job safety", () => {
         channelConnectionId: 8,
         bindingEpoch: 3,
         mode: "live",
-        idempotencyKey: paidImageIdempotencyKey("req-owner-unlimited"),
+        idempotencyKey: paidImageIdempotencyKey(
+          "req-owner-unlimited",
+          "owner-user-key"
+        ),
       })
     );
   });
@@ -2600,6 +2653,17 @@ function quotaIdentityForUser(userId: string): MessengerImageQuotaIdentity {
   };
 }
 
-function paidImageIdempotencyKey(reqId: string): string {
-  return `startpilot-image:${createHash("sha256").update(reqId).digest("hex")}`;
+function paidImageIdempotencyKey(
+  reqId: string,
+  userId: string,
+  privacyEpoch = 0
+): string {
+  return `startpilot-image:${createHash("sha256")
+    .update("leaderbot-startpilot-image-v2\n")
+    .update(userId)
+    .update("\0")
+    .update(String(privacyEpoch))
+    .update("\0")
+    .update(reqId)
+    .digest("hex")}`;
 }

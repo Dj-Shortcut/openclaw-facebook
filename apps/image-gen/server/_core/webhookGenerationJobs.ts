@@ -428,7 +428,7 @@ export function createMessengerGenerationJobRunner(
                             bindingEpoch: job.bindingEpoch,
                             mode: workspacePolicy.mode,
                             idempotencyKey:
-                              startpilotImageUsageIdempotencyKey(reqId),
+                              startpilotImageUsageIdempotencyKey(job),
                           }
                         ).catch(error => {
                           if (
@@ -445,7 +445,7 @@ export function createMessengerGenerationJobRunner(
                               leaseToken: providerFence.leaseToken,
                               privacyEpoch: providerFence.privacyEpoch,
                               idempotencyKey:
-                                startpilotImageUsageIdempotencyKey(reqId),
+                                startpilotImageUsageIdempotencyKey(job),
                             };
                           }
                           throw new StartpilotProviderAdmissionRetryError(
@@ -1767,8 +1767,17 @@ function quotaIdentityForCompletionRecovery(
   return identity;
 }
 
-function startpilotImageUsageIdempotencyKey(reqId: string): string {
-  return `startpilot-image:${createHash("sha256").update(reqId).digest("hex")}`;
+function startpilotImageUsageIdempotencyKey(
+  job: Pick<MessengerGenerationJob, "reqId" | "userId" | "privacyEpoch">
+): string {
+  return `startpilot-image:${createHash("sha256")
+    .update("leaderbot-startpilot-image-v2\n")
+    .update(job.userId)
+    .update("\0")
+    .update(String(job.privacyEpoch ?? 0))
+    .update("\0")
+    .update(job.reqId)
+    .digest("hex")}`;
 }
 
 async function sendGenerationSuccessActions(input: {

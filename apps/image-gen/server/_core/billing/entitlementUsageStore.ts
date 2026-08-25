@@ -142,22 +142,28 @@ export async function reserveStartpilotImageUsageWithinTransaction(
     )
     .limit(1)
     .for("update");
+  let releasedReservationId: string | null = null;
   if (existing[0]) {
     if (
       existing[0].entitlementId !== input.entitlementId ||
       existing[0].channelConnectionId !== input.channelConnectionId ||
       existing[0].bindingEpoch !== input.bindingEpoch ||
-      existing[0].kind !== "image" ||
-      existing[0].status !== "committed"
+      existing[0].kind !== "image"
     ) {
       throw new Error("Startpilot image usage idempotency scope mismatch");
     }
-    return {
-      allowed: true,
-      imagesUsed: usage.imagesUsed,
-      imagesUsedToday,
-      alreadyReserved: true,
-    };
+    if (existing[0].status === "committed") {
+      return {
+        allowed: true,
+        imagesUsed: usage.imagesUsed,
+        imagesUsedToday,
+        alreadyReserved: true,
+      };
+    }
+    if (existing[0].status !== "released") {
+      throw new Error("Startpilot image usage idempotency scope mismatch");
+    }
+    releasedReservationId = existing[0].reservationId;
   }
   if (usage.imagesUsed >= quota.imagesTotal) {
     return { allowed: false, reason: "total_exhausted" };
@@ -167,22 +173,48 @@ export async function reserveStartpilotImageUsageWithinTransaction(
   }
   const nextImagesUsed = usage.imagesUsed + 1;
   const nextImagesUsedToday = imagesUsedToday + 1;
-  await tx.insert(workspaceEntitlementUsageReservations).values({
-    reservationId: randomUUID(),
-    workspaceId: input.workspaceId,
-    mode: input.mode,
-    entitlementId: input.entitlementId,
-    channelConnectionId: input.channelConnectionId,
-    bindingEpoch: input.bindingEpoch,
-    kind: "image",
-    status: "committed",
-    idempotencyKey: input.idempotencyKey,
-    ownerTokenHash,
-    ownerLeaseUntil: now,
-    expiresAt: now,
-    resolutionDueAt: now,
-    committedAt: now,
-  });
+  if (releasedReservationId) {
+    const recommitted = await tx
+      .update(workspaceEntitlementUsageReservations)
+      .set({
+        status: "committed",
+        ownerTokenHash,
+        ownerLeaseUntil: now,
+        expiresAt: now,
+        resolutionDueAt: now,
+        committedAt: now,
+        releasedAt: null,
+      })
+      .where(
+        and(
+          eq(
+            workspaceEntitlementUsageReservations.reservationId,
+            releasedReservationId
+          ),
+          eq(workspaceEntitlementUsageReservations.status, "released")
+        )
+      );
+    if (extractAffectedRows(recommitted) !== 1) {
+      throw new Error("Startpilot image usage recommit was lost");
+    }
+  } else {
+    await tx.insert(workspaceEntitlementUsageReservations).values({
+      reservationId: randomUUID(),
+      workspaceId: input.workspaceId,
+      mode: input.mode,
+      entitlementId: input.entitlementId,
+      channelConnectionId: input.channelConnectionId,
+      bindingEpoch: input.bindingEpoch,
+      kind: "image",
+      status: "committed",
+      idempotencyKey: input.idempotencyKey,
+      ownerTokenHash,
+      ownerLeaseUntil: now,
+      expiresAt: now,
+      resolutionDueAt: now,
+      committedAt: now,
+    });
+  }
   const updated = await tx
     .update(workspaceEntitlementUsage)
     .set({

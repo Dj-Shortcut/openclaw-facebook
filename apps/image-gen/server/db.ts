@@ -2883,10 +2883,7 @@ export async function getWorkspaceUsageSummary(workspaceId: number) {
       and(
         eq(workspaceEntitlementUsage.workspaceId, workspaceId),
         eq(workspaceEntitlementUsage.mode, mode),
-        eq(
-          workspaceEntitlementUsage.entitlementId,
-          workspaceEntitlements.id
-        )
+        eq(workspaceEntitlementUsage.entitlementId, workspaceEntitlements.id)
       )
     )
     .where(
@@ -2915,14 +2912,26 @@ export async function getWorkspaceUsageSummary(workspaceId: number) {
   }
   if (entitlement.planCode === PREMIUM_MONTHLY_PLAN_CODE) {
     const premium = getBillingPlan(PREMIUM_MONTHLY_PLAN_CODE);
-    const imagesPerDay = Number(premium?.entitlements.imagesPerDay);
-    if (!premium || !Number.isSafeInteger(imagesPerDay) || imagesPerDay <= 0) {
+    const imagesPerDay = paidDailyImageLimit(entitlement.quota);
+    if (
+      !premium ||
+      imagesPerDay === null ||
+      !entitlement.usageId ||
+      entitlement.usagePlanCode !== PREMIUM_MONTHLY_PLAN_CODE ||
+      !isBoundedUsageCounter(
+        entitlement.usageImagesUsedToday ?? -1,
+        imagesPerDay
+      )
+    ) {
       throw new Error("Workspace paid usage summary is inconsistent");
     }
     return buildSummary(dailyUsage[0], {
       status: entitlement.status,
       planName: premium.publicName,
-      imagesUsedToday: dailyUsage[0]?.imageCount ?? 0,
+      imagesUsedToday:
+        entitlement.usageImageDate === today
+          ? entitlement.usageImagesUsedToday!
+          : 0,
       imagesUsedInPeriod: null,
       imagesPerDay,
       imagesPerPeriod: null,
@@ -2973,6 +2982,16 @@ export async function getWorkspaceUsageSummary(workspaceId: number) {
     imagesPerDay: quota.imagesPerDay,
     imagesPerPeriod: quota.imagesTotal,
   });
+}
+
+function paidDailyImageLimit(value: unknown): number | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const imagesPerDay = (value as Record<string, unknown>).imagesPerDay;
+  return typeof imagesPerDay === "number" &&
+    Number.isSafeInteger(imagesPerDay) &&
+    imagesPerDay > 0
+    ? imagesPerDay
+    : null;
 }
 
 function getUsageSummaryMollieMode(): "test" | "live" | null {

@@ -279,24 +279,34 @@ suite("Startpilot image usage MySQL races", () => {
     );
   });
 
-  it("keeps a retained Premium entitlement visible without Startpilot usage", async () => {
+  it("reads a retained Premium limit and usage from its paid snapshots", async () => {
     const database = await getDatabaseOrThrow();
     const premium = getBillingPlan(PREMIUM_MONTHLY_PLAN_CODE);
     if (!premium) throw new Error("Premium fixture is unavailable");
+    const retainedQuota = { ...premium.entitlements, imagesPerDay: 73 };
     await database
       .update(workspaceEntitlements)
       .set({
         planCode: PREMIUM_MONTHLY_PLAN_CODE,
-        quota: premium.entitlements,
+        quota: retainedQuota,
         validUntil: null,
       })
       .where(eq(workspaceEntitlements.id, entitlementId));
+    await database
+      .update(workspaceEntitlementUsage)
+      .set({
+        planCode: PREMIUM_MONTHLY_PLAN_CODE,
+        imageUsageDate: utcDateKey(new Date()),
+        imagesUsedToday: 7,
+      })
+      .where(eq(workspaceEntitlementUsage.entitlementId, entitlementId));
 
     await expect(getWorkspaceUsageSummary(workspaceId)).resolves.toMatchObject({
       plan: { name: "Leaderbot Premium", billingStatus: "active" },
+      imageCount: 7,
       imageCountInPeriod: null,
-      limits: { imagesPerDay: 100, imagesPerPeriod: null },
-      remaining: { imagesInPeriod: null },
+      limits: { imagesPerDay: 73, imagesPerPeriod: null },
+      remaining: { imagesToday: 66, imagesInPeriod: null },
     });
   });
 
@@ -359,7 +369,7 @@ suite("Startpilot image usage MySQL races", () => {
         .where(eq(workspaceEntitlementUsage.workspaceId, workspaceId))
         .limit(1)
     )[0]!;
-    const receipt = (
+    let receipt = (
       await database
         .select()
         .from(workspaceEntitlementUsageReservations)
@@ -375,6 +385,46 @@ suite("Startpilot image usage MySQL races", () => {
     expect(receipt.status).toBe("released");
     await expect(fenceStatus(fence.attemptKeyHash!)).resolves.toBe(
       "known_failed"
+    );
+
+    const retryFence = await reserveFence(
+      "mysql-admission-ack-lost",
+      new Date(now.getTime() + 3_000)
+    );
+    await expect(
+      admit(retryFence, idempotencyKey, new Date(now.getTime() + 3_000))
+    ).resolves.toMatchObject({
+      allowed: true,
+      alreadyReserved: false,
+      imagesUsed: 1,
+      imagesUsedToday: 1,
+    });
+    const recoveredUsage = (
+      await database
+        .select()
+        .from(workspaceEntitlementUsage)
+        .where(eq(workspaceEntitlementUsage.workspaceId, workspaceId))
+        .limit(1)
+    )[0]!;
+    receipt = (
+      await database
+        .select()
+        .from(workspaceEntitlementUsageReservations)
+        .where(
+          eq(
+            workspaceEntitlementUsageReservations.idempotencyKey,
+            idempotencyKey
+          )
+        )
+        .limit(1)
+    )[0]!;
+    expect(recoveredUsage).toMatchObject({
+      imagesUsed: 1,
+      imagesUsedToday: 1,
+    });
+    expect(receipt.status).toBe("committed");
+    await expect(fenceStatus(retryFence.attemptKeyHash!)).resolves.toBe(
+      "started"
     );
   });
 
@@ -468,6 +518,11 @@ suite("Startpilot image usage MySQL races", () => {
       privacyEpoch: 1,
       status: "active",
     });
+    return reserveFence(reqId, now);
+  }
+
+  function reserveFence(reqId: string, now: Date) {
+    const userKey = `user:${reqId}`;
     const job: MessengerGenerationJob = {
       psid: `psid:${reqId}`,
       userId: userKey,

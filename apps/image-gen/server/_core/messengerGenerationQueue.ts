@@ -1870,9 +1870,17 @@ async function releaseMessengerGenerationJob(
 
   const remainingContentSeconds =
     getGenerationJobRemainingContentSeconds(retryJob);
+  // A paid admission rollback is compensation for a database acknowledgement
+  // lost before provider transport. Keep that exact recovery out of the
+  // ordinary three-attempt budget, but never extend the queue's existing 24h
+  // privacy/content deadline.
+  const hasPendingPaidAdmissionRecovery = Boolean(
+    retryJob.startpilotAdmissionRecovery
+  );
   const isDeadLetter =
-    nextAttempt >= getGenerationJobMaxAttempts() ||
-    remainingContentSeconds === 0;
+    remainingContentSeconds === 0 ||
+    (!hasPendingPaidAdmissionRecovery &&
+      nextAttempt >= getGenerationJobMaxAttempts());
   if (scope.kind === "legacy") {
     if (ownership === "expired") {
       const lease = await redis.get(

@@ -2271,6 +2271,48 @@ describe("messengerGenerationQueue", () => {
     expect(onDeadLetter).toHaveBeenCalledWith(job, expect.any(Error));
   });
 
+  it("keeps an exact paid-admission recovery out of ordinary dead-lettering", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    process.env.MESSENGER_GENERATION_MAX_ATTEMPTS = "1";
+    isRedisEnabledMock.mockReturnValue(true);
+    const job = createJob({
+      reqId: "req-paid-recovery",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      startpilotAdmissionRecovery: {
+        version: "startpilot_admission_recovery_v1",
+        entitlementId: 9,
+        mode: "test",
+        providerOperation: "text_to_image",
+        attemptKeyHash: "a".repeat(64),
+        leaseToken: "1e7d6b7e-cf89-4ed7-81df-32401a81f001",
+        privacyEpoch: 5,
+        idempotencyKey: `startpilot-image:${"b".repeat(64)}`,
+      },
+    });
+    const queue: string[] = [JSON.stringify(job)];
+    const { dead, processing, redis } = createDrainRedis(queue);
+    getRedisClientMock.mockResolvedValue(redis);
+    const onDeadLetter = vi.fn(async () => undefined);
+
+    await drainMessengerGenerationQueue(
+      vi.fn(async () => {
+        throw new Error("recovery database unavailable");
+      }),
+      { onDeadLetter }
+    );
+
+    expect(processing).toEqual([]);
+    expect(dead).toEqual([]);
+    expect(queue.map(value => JSON.parse(value))).toEqual([
+      { ...job, attempts: 1 },
+    ]);
+    expect(onDeadLetter).not.toHaveBeenCalled();
+  });
+
   it("dead-letters invalid pending job payloads without running the processor", async () => {
     process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
     process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";

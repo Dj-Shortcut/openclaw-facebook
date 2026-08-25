@@ -137,12 +137,53 @@ describe("Startpilot finite entitlement usage", () => {
     expect(flow.insertValues).not.toHaveBeenCalled();
   });
 
+  it("recommits an exact released image receipt and counts it once", async () => {
+    const existing = imageReservation({ status: "released" });
+    const now = new Date("2026-08-01T12:00:00.000Z");
+    const flow = usageFlow(
+      { imagesUsed: 0, imageUsageDate: "2026-08-01", imagesUsedToday: 0 },
+      { reservations: [existing] }
+    );
+    databaseMock.mockResolvedValue(flow.database);
+
+    await expect(
+      reserveStartpilotImageUsage({
+        workspaceId: 1,
+        entitlementId: 9,
+        channelConnectionId: 7,
+        bindingEpoch: 3,
+        mode: "test",
+        idempotencyKey: existing.idempotencyKey,
+        now,
+      })
+    ).resolves.toEqual({
+      allowed: true,
+      imagesUsed: 1,
+      imagesUsedToday: 1,
+      alreadyReserved: false,
+    });
+    expect(flow.insertValues).not.toHaveBeenCalled();
+    expect(flow.updateSet).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        status: "committed",
+        committedAt: now,
+        releasedAt: null,
+      })
+    );
+    expect(flow.updateSet).toHaveBeenNthCalledWith(2, {
+      imagesUsed: 1,
+      imageUsageDate: "2026-08-01",
+      imagesUsedToday: 1,
+    });
+  });
+
   it.each([
     ["entitlement", { entitlementId: 8 }],
     ["channel connection", { channelConnectionId: 6 }],
     ["binding epoch", { bindingEpoch: 4 }],
     ["usage kind", { kind: "ai_answer" as const }],
-    ["receipt status", { status: "released" as const }],
+    ["receipt status", { status: "expired" as const }],
   ])("refuses an image replay with a mismatched %s", async (_label, change) => {
     const existing = imageReservation(change);
     const flow = usageFlow({}, { reservations: [existing] });
