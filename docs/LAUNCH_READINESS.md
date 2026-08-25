@@ -96,9 +96,12 @@ deploying outside the protected workflows.
       `/readyz` response with `phase: "offline"`. Protected deploy
       [run 32820475232](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32820475232)
       recorded that evidence without a Mollie API call.
-- [ ] Review, merge and deploy the focused image-only offer and paid
-      workspace-quota batch. Its real MySQL race must prove exactly one winner
-      for the last slot and exactly one receipt for a replayed request.
+- [x] Review, merge and deploy the focused image-only offer and paid
+      workspace-quota batch. PR #417 and protected deploy
+      [run 32860967800](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32860967800)
+      shipped exact runtime digest `sha256:01ccf154e0ac4c314f68775a0fd00fe925aaba92fee997a32f932c8d4c36d806`;
+      its real MySQL race proves exactly one winner for the last slot and one
+      receipt for a replayed request.
 
 ## External provider and human gates
 

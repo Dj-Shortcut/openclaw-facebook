@@ -676,7 +676,9 @@ Historical branch review note:
 - [ ] Define a separate immutable subscription-history/event model if historical rows become a product or accounting requirement; `billing_subscriptions` currently stores one mutable current-state row per workspace and Mollie mode.
 - [x] Map inbound channel/Page identity uniquely to a workspace and enforce `workspace_entitlements` before the actual image-provider attempt; the database claim now fails closed instead of overwriting another workspace's Page credentials.
 - [x] Count one Startpilot image unit when the first provider attempt for a Messenger generation job starts; provider retries remain individually audited but do not consume extra customer pilot generations.
-- [ ] Land the idempotent workspace-wide image receipt and its real MySQL last-slot/same-request race proof; deploy it before any Mollie Test Mode checkout is exposed.
+- [x] Land the idempotent workspace-wide image receipt and its real MySQL
+      last-slot/same-request race proof. PR #417 and protected deploy run
+      32860967800 shipped it before any Mollie Test Mode checkout exposure.
 - [ ] Prove the Page-to-workspace mapping and both paid quota gates in a production-like end-to-end test after the duplicate-Page preflight and migration, without any free-tier fallback.
 - [ ] After the sandbox matrix and the first strictly limited live payment are complete, return to the separately reviewed OpenClaw gateway state/rollback work. Keep it out of the critical Mollie payment path, but preserve and complete it as the planned final conversation-route step.
 - [x] Replace the isolated worker with a durable tenant-partitioned scheduler
