@@ -25,7 +25,9 @@ function isOptionalString(value: unknown): value is string | undefined {
   return value === undefined || typeof value === "string";
 }
 
-function isOptionalSourceImageUrls(value: unknown): value is string[] | undefined {
+function isOptionalSourceImageUrls(
+  value: unknown
+): value is string[] | undefined {
   return (
     value === undefined ||
     (Array.isArray(value) &&
@@ -80,20 +82,38 @@ function isOptionalStartpilotAdmissionRecovery(
   if (value === undefined) return true;
   if (!isObjectRecord(value)) return false;
   const keys = Object.keys(value).sort();
-  const expectedKeys = [
+  const requiredKeys = [
     "attemptKeyHash",
     "entitlementId",
     "idempotencyKey",
     "leaseToken",
     "mode",
+    "pageIdHash",
     "privacyEpoch",
     "providerOperation",
+    "recoveryDeadlineAt",
+    "resumeGeneration",
     "version",
   ];
+  const expectedKeys = [...requiredKeys];
+  if (value.recoveryScopeProof !== undefined) {
+    expectedKeys.push("recoveryScopeProof");
+    expectedKeys.sort();
+  }
   return (
     keys.length === expectedKeys.length &&
     keys.every((key, index) => key === expectedKeys[index]) &&
     value.version === "startpilot_admission_recovery_v1" &&
+    typeof value.resumeGeneration === "boolean" &&
+    typeof value.recoveryDeadlineAt === "number" &&
+    Number.isSafeInteger(value.recoveryDeadlineAt) &&
+    value.recoveryDeadlineAt > 0 &&
+    typeof value.pageIdHash === "string" &&
+    /^[a-f0-9]{64}$/.test(value.pageIdHash) &&
+    (value.resumeGeneration
+      ? value.recoveryScopeProof === undefined
+      : typeof value.recoveryScopeProof === "string" &&
+        /^[a-f0-9]{64}$/.test(value.recoveryScopeProof)) &&
     typeof value.entitlementId === "number" &&
     Number.isSafeInteger(value.entitlementId) &&
     value.entitlementId > 0 &&
@@ -145,7 +165,15 @@ function parseMessengerGenerationJob(
       value.expiresAt <= value.createdAt) ||
     (value.createdAt !== undefined &&
       value.expiresAt !== undefined &&
-      value.expiresAt > value.createdAt + 24 * 60 * 60_000) ||
+      value.expiresAt >
+        value.createdAt +
+          (isObjectRecord(value.startpilotAdmissionRecovery) &&
+          value.startpilotAdmissionRecovery.resumeGeneration === false
+            ? 30
+            : 1) *
+            24 *
+            60 *
+            60_000) ||
     (process.env.NODE_ENV === "production" &&
       (value.createdAt === undefined || value.expiresAt === undefined)) ||
     (value.workspaceId === undefined) !==
@@ -156,6 +184,14 @@ function parseMessengerGenerationJob(
       !isMessengerGenerationTenantPartition(value.tenantPartition)) ||
     !isOptionalAttempts(value.attempts) ||
     !isOptionalStartpilotAdmissionRecovery(value.startpilotAdmissionRecovery)
+  ) {
+    return null;
+  }
+
+  if (
+    value.startpilotAdmissionRecovery?.resumeGeneration === false &&
+    value.expiresAt !== undefined &&
+    value.expiresAt > value.startpilotAdmissionRecovery.recoveryDeadlineAt
   ) {
     return null;
   }

@@ -2,14 +2,24 @@ import { createHash } from "node:crypto";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getRedisClientMock, isRedisEnabledMock } = vi.hoisted(() => ({
+const {
+  getRedisClientMock,
+  isRedisEnabledMock,
+  recoverStartpilotImageProviderAdmissionMock,
+} = vi.hoisted(() => ({
   getRedisClientMock: vi.fn(),
   isRedisEnabledMock: vi.fn(() => false),
+  recoverStartpilotImageProviderAdmissionMock: vi.fn(),
 }));
 
 vi.mock("./_core/redis", () => ({
   getRedisClient: getRedisClientMock,
   isRedisEnabled: isRedisEnabledMock,
+}));
+
+vi.mock("./_core/startpilotImageProviderAdmission", () => ({
+  recoverStartpilotImageProviderAdmission:
+    recoverStartpilotImageProviderAdmissionMock,
 }));
 
 import {
@@ -20,6 +30,7 @@ import {
   eraseMessengerGenerationJobsForSubject,
   getMessengerGenerationQueueStats,
   isMessengerGenerationQueueEnabled,
+  recoverMessengerGenerationAdmissionsForSubject,
   assertMessengerGenerationQueueWriteVersionConfig,
   reclaimReservedMessengerGenerationJobs,
   resetMessengerGenerationQueueForTests,
@@ -92,6 +103,22 @@ function createJob(
     reqId: "req-1",
     lang: "nl",
     ...overrides,
+  };
+}
+
+function createPaidAdmissionRecovery(pageId: string, privacyEpoch = 5) {
+  return {
+    version: "startpilot_admission_recovery_v1" as const,
+    resumeGeneration: true,
+    recoveryDeadlineAt: Date.now() + 30 * 24 * 60 * 60_000,
+    pageIdHash: createHash("sha256").update(pageId).digest("hex"),
+    entitlementId: 9,
+    mode: "test" as const,
+    providerOperation: "text_to_image",
+    attemptKeyHash: "a".repeat(64),
+    leaseToken: "00000000-0000-4000-8000-000000000000",
+    privacyEpoch,
+    idempotencyKey: `startpilot-image:${"b".repeat(64)}`,
   };
 }
 
@@ -578,6 +605,8 @@ describe("messengerGenerationQueue", () => {
 
   beforeEach(() => {
     process.env.MESSENGER_GENERATION_PARTITION_SECRET = TEST_PARTITION_SECRET;
+    recoverStartpilotImageProviderAdmissionMock.mockReset();
+    recoverStartpilotImageProviderAdmissionMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -714,6 +743,16 @@ describe("messengerGenerationQueue", () => {
         userKey: "user-erasure-unavailable",
       })
     ).rejects.toThrow("must be available for privacy erasure");
+    await expect(
+      recoverMessengerGenerationAdmissionsForSubject({
+        workspaceId: 1,
+        channelConnectionId: 2,
+        bindingEpoch: 3,
+        privacyEpoch: 4,
+        pageId: "page-erasure-unavailable",
+        userKey: "user-erasure-unavailable",
+      })
+    ).rejects.toThrow("must be available for paid admission recovery");
   });
 
   it("tombstones an erased epoch while allowing a later explicit privacy epoch", async () => {
@@ -756,6 +795,116 @@ describe("messengerGenerationQueue", () => {
         reqId: "new-consented-epoch",
       })
     ).resolves.toBe(true);
+  });
+
+  it("finishes exact paid compensation before privacy erasure scrubs its proof", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const keyed = createKeyedRedis();
+    getRedisClientMock.mockResolvedValue(keyed.redis);
+    const scope = {
+      workspaceId: 51,
+      channelConnectionId: 52,
+      bindingEpoch: 7,
+      privacyEpoch: 9,
+      pageId: "page-paid-erasure",
+      userId: "subject-paid-erasure",
+    };
+    await enqueueMessengerGenerationJob(
+      createJob({
+        ...scope,
+        reqId: "paid-erasure-recovery",
+        generationKind: "text_to_image",
+        startpilotAdmissionRecovery: createPaidAdmissionRecovery(
+          scope.pageId,
+          scope.privacyEpoch
+        ),
+      })
+    );
+    recoverStartpilotImageProviderAdmissionMock.mockRejectedValueOnce(
+      new Error("recovery database unavailable")
+    );
+
+    const erase = () =>
+      eraseMessengerGenerationJobsForSubject({
+        workspaceId: scope.workspaceId,
+        channelConnectionId: scope.channelConnectionId,
+        bindingEpoch: scope.bindingEpoch,
+        privacyEpoch: scope.privacyEpoch,
+        pageId: scope.pageId,
+        userKey: scope.userId,
+      });
+    await expect(erase()).rejects.toThrow("recovery database unavailable");
+    expect(
+      [...keyed.strings.keys()].some(key => key.includes(":content:"))
+    ).toBe(true);
+
+    await expect(erase()).resolves.toBe(1);
+    expect(recoverStartpilotImageProviderAdmissionMock).toHaveBeenCalledTimes(
+      2
+    );
+    expect(
+      recoverStartpilotImageProviderAdmissionMock
+    ).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        workspaceId: scope.workspaceId,
+        channelConnectionId: scope.channelConnectionId,
+        bindingEpoch: scope.bindingEpoch,
+        pageIdHash: createHash("sha256").update(scope.pageId).digest("hex"),
+      })
+    );
+    expect(
+      [...keyed.strings.keys()].some(key => key.includes(":content:"))
+    ).toBe(false);
+  });
+
+  it("discovers an exact indexed paid recovery before provider containment", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const keyed = createKeyedRedis();
+    getRedisClientMock.mockResolvedValue(keyed.redis);
+    const scope = {
+      workspaceId: 61,
+      channelConnectionId: 62,
+      bindingEpoch: 4,
+      privacyEpoch: 7,
+      pageId: "page-paid-pre-containment",
+      userId: "subject-paid-pre-containment",
+    };
+    await enqueueMessengerGenerationJob(
+      createJob({
+        ...scope,
+        reqId: "paid-pre-containment-recovery",
+        generationKind: "text_to_image",
+        startpilotAdmissionRecovery: createPaidAdmissionRecovery(
+          scope.pageId,
+          scope.privacyEpoch
+        ),
+      })
+    );
+
+    await expect(
+      recoverMessengerGenerationAdmissionsForSubject({
+        workspaceId: scope.workspaceId,
+        channelConnectionId: scope.channelConnectionId,
+        bindingEpoch: scope.bindingEpoch,
+        privacyEpoch: scope.privacyEpoch,
+        pageId: scope.pageId,
+        userKey: scope.userId,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(recoverStartpilotImageProviderAdmissionMock).toHaveBeenCalledOnce();
+    expect(recoverStartpilotImageProviderAdmissionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: scope.workspaceId,
+        channelConnectionId: scope.channelConnectionId,
+        bindingEpoch: scope.bindingEpoch,
+        pageIdHash: createHash("sha256").update(scope.pageId).digest("hex"),
+      })
+    );
   });
 
   it("scrubs more than one batch and follows an empty nonzero SSCAN cursor", async () => {
@@ -2282,16 +2431,7 @@ describe("messengerGenerationQueue", () => {
       channelConnectionId: 8,
       bindingEpoch: 3,
       privacyEpoch: 5,
-      startpilotAdmissionRecovery: {
-        version: "startpilot_admission_recovery_v1",
-        entitlementId: 9,
-        mode: "test",
-        providerOperation: "text_to_image",
-        attemptKeyHash: "a".repeat(64),
-        leaseToken: "00000000-0000-4000-8000-000000000000",
-        privacyEpoch: 5,
-        idempotencyKey: `startpilot-image:${"b".repeat(64)}`,
-      },
+      startpilotAdmissionRecovery: createPaidAdmissionRecovery("page-1"),
     });
     const queue: string[] = [JSON.stringify(job)];
     const { dead, processing, redis } = createDrainRedis(queue);
@@ -2311,6 +2451,169 @@ describe("messengerGenerationQueue", () => {
       { ...job, attempts: 1 },
     ]);
     expect(onDeadLetter).not.toHaveBeenCalled();
+  });
+
+  it("creates one stable content-free recovery shadow before requeueing private work", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    isRedisEnabledMock.mockReturnValue(true);
+    const initialNow = new Date("2026-08-25T10:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(initialNow);
+    try {
+      const pageId = "page-paid-recovery-shadow";
+      const recovery = createPaidAdmissionRecovery(pageId);
+      const job = createJob({
+        reqId: "req-paid-recovery-shadow",
+        pageId,
+        workspaceId: 42,
+        channelConnectionId: 8,
+        bindingEpoch: 3,
+        privacyEpoch: 5,
+        generationKind: "text_to_image",
+        psid: "private-shadow-recipient",
+        promptHint: "private shadow prompt",
+        sourceImageUrl: "https://private.example/shadow.png",
+        sourceImageUrls: ["https://private.example/shadow.png"],
+        startpilotAdmissionRecovery: recovery,
+      });
+      const keyed = createKeyedRedis();
+      getRedisClientMock.mockResolvedValue(keyed.redis);
+      await expect(enqueueMessengerGenerationJob(job)).resolves.toBe(true);
+
+      await drainMessengerGenerationQueue(
+        vi.fn(async () => {
+          throw new Error("recovery database unavailable");
+        })
+      );
+
+      const storedJobs = [...keyed.strings.entries()]
+        .filter(([key]) => key.includes(":content:"))
+        .map(([, value]) => JSON.parse(value) as MessengerGenerationJob);
+      expect(storedJobs).toHaveLength(2);
+      const shadow = storedJobs.find(
+        stored => stored.startpilotAdmissionRecovery?.resumeGeneration === false
+      );
+      expect(shadow).toMatchObject({
+        psid: "",
+        userId: job.userId,
+        workspaceId: 42,
+        channelConnectionId: 8,
+        bindingEpoch: 3,
+        privacyEpoch: 5,
+        reqId: expect.stringMatching(/^recovery-[a-f0-9]{64}$/),
+        expiresAt: recovery.recoveryDeadlineAt,
+        startpilotAdmissionRecovery: {
+          resumeGeneration: false,
+          recoveryScopeProof: expect.stringMatching(/^[a-f0-9]{64}$/),
+        },
+      });
+      expect(shadow?.pageId).toBeUndefined();
+      expect(shadow?.promptHint).toBeUndefined();
+      expect(shadow?.sourceImageUrl).toBeUndefined();
+      expect(shadow?.sourceImageUrls).toBeUndefined();
+
+      const processed: MessengerGenerationJob[] = [];
+      await drainMessengerGenerationQueue(
+        vi.fn(async stored => {
+          processed.push(stored);
+        })
+      );
+      expect(processed).toHaveLength(2);
+      expect(new Set(processed.map(stored => stored.reqId)).size).toBe(2);
+      expect(
+        [...keyed.strings.keys()].filter(key => key.includes(":content:"))
+      ).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("removes private content at 24h while retaining only signed recovery metadata", async () => {
+    process.env.MESSENGER_GENERATION_QUEUE_ENABLED = "1";
+    process.env.MESSENGER_GENERATION_INLINE_FALLBACK = "0";
+    process.env.MESSENGER_GENERATION_MAX_ATTEMPTS = "1";
+    isRedisEnabledMock.mockReturnValue(true);
+    const initialNow = new Date("2026-08-25T10:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(initialNow);
+    try {
+      const pageId = "page-paid-metadata-recovery";
+      const job = createJob({
+        reqId: "req-paid-metadata-recovery",
+        pageId,
+        workspaceId: 42,
+        channelConnectionId: 8,
+        bindingEpoch: 3,
+        privacyEpoch: 5,
+        generationKind: "text_to_image",
+        psid: "private-recipient",
+        promptHint: "private prompt",
+        sourceImageUrl: "https://private.example/source.png",
+        sourceImageUrls: ["https://private.example/source.png"],
+        startpilotAdmissionRecovery: createPaidAdmissionRecovery(pageId),
+      });
+      const keyed = createKeyedRedis();
+      getRedisClientMock.mockResolvedValue(keyed.redis);
+      await expect(enqueueMessengerGenerationJob(job)).resolves.toBe(true);
+      const contentEntry = [...keyed.strings.entries()].find(([key]) =>
+        key.includes(":content:")
+      );
+      expect(contentEntry).toBeDefined();
+      const expiringJob = JSON.parse(
+        contentEntry![1]
+      ) as MessengerGenerationJob;
+      keyed.strings.set(
+        contentEntry![0],
+        JSON.stringify({ ...expiringJob, expiresAt: initialNow.getTime() + 1 })
+      );
+
+      await drainMessengerGenerationQueue(
+        vi.fn(async () => {
+          vi.setSystemTime(new Date(initialNow.getTime() + 2));
+          throw new Error("recovery database unavailable");
+        })
+      );
+
+      const serializedRecovery = [...keyed.strings.entries()].find(([key]) =>
+        key.includes(":content:")
+      )?.[1];
+      expect(serializedRecovery).toBeDefined();
+      const recovered = JSON.parse(
+        serializedRecovery!
+      ) as MessengerGenerationJob;
+      expect(recovered).toMatchObject({
+        psid: "",
+        userId: job.userId,
+        workspaceId: 42,
+        channelConnectionId: 8,
+        bindingEpoch: 3,
+        privacyEpoch: 5,
+        reqId: job.reqId,
+        generationKind: "text_to_image",
+        startpilotAdmissionRecovery: {
+          resumeGeneration: false,
+          recoveryScopeProof: expect.stringMatching(/^[a-f0-9]{64}$/),
+        },
+      });
+      expect(recovered.pageId).toBeUndefined();
+      expect(recovered.promptHint).toBeUndefined();
+      expect(recovered.sourceImageUrl).toBeUndefined();
+      expect(recovered.sourceImageUrls).toBeUndefined();
+      const recoveryProcessor = vi.fn(async () => undefined);
+      await drainMessengerGenerationQueue(recoveryProcessor);
+      expect(recoveryProcessor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          psid: "",
+          pageId: undefined,
+          startpilotAdmissionRecovery: expect.objectContaining({
+            resumeGeneration: false,
+          }),
+        })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("dead-letters invalid pending job payloads without running the processor", async () => {

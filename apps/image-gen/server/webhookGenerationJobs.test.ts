@@ -1949,6 +1949,103 @@ describe("messenger generation job safety", () => {
     expect(sendImageMock).toHaveBeenCalledOnce();
   });
 
+  it("restores an exact paid admission before rejecting stale current ownership", async () => {
+    const runner = createTestRunner();
+    const job = {
+      psid: "stale-paid-recovery-user",
+      userId: "stale-paid-recovery-user-key",
+      pageId: "historical-startpilot-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      reqId: "req-stale-paid-recovery",
+      lang: "nl" as const,
+      generationKind: "text_to_image" as const,
+      startpilotAdmissionRecovery: {
+        version: "startpilot_admission_recovery_v1" as const,
+        resumeGeneration: true,
+        recoveryDeadlineAt: Date.now() + 30 * 24 * 60 * 60_000,
+        pageIdHash: createHash("sha256")
+          .update("historical-startpilot-page")
+          .digest("hex"),
+        entitlementId: 9,
+        mode: "test" as const,
+        providerOperation: "text_to_image",
+        attemptKeyHash: "a".repeat(64),
+        leaseToken: "00000000-0000-4000-8000-000000000000",
+        privacyEpoch: 5,
+        idempotencyKey: `startpilot-image:${"b".repeat(64)}`,
+      },
+    };
+    assertMessengerGenerationOwnershipMock.mockRejectedValueOnce(
+      new Error("current Page binding is stale")
+    );
+
+    await expect(runner.processMessengerGenerationJob(job)).rejects.toThrow(
+      "current Page binding is stale"
+    );
+
+    expect(recoverStartpilotImageProviderAdmissionMock).toHaveBeenCalledOnce();
+    expect(
+      recoverStartpilotImageProviderAdmissionMock.mock.invocationCallOrder[0]
+    ).toBeLessThan(
+      assertMessengerGenerationOwnershipMock.mock.invocationCallOrder[0]!
+    );
+    expect(job.startpilotAdmissionRecovery).toBeUndefined();
+    expect(executeGenerationFlowMock).not.toHaveBeenCalled();
+  });
+
+  it("runs a signed metadata-only compensation without generation or user delivery", async () => {
+    const runner = createTestRunner();
+    const recovery = {
+      version: "startpilot_admission_recovery_v1" as const,
+      resumeGeneration: false,
+      recoveryDeadlineAt: Date.now() + 30 * 24 * 60 * 60_000,
+      recoveryScopeProof: "c".repeat(64),
+      pageIdHash: "d".repeat(64),
+      entitlementId: 9,
+      mode: "test" as const,
+      providerOperation: "text_to_image",
+      attemptKeyHash: "a".repeat(64),
+      leaseToken: "00000000-0000-4000-8000-000000000000",
+      privacyEpoch: 5,
+      idempotencyKey: `startpilot-image:${"b".repeat(64)}`,
+    };
+    const job = {
+      psid: "",
+      userId: "hashed-recovery-subject",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      privacyEpoch: 5,
+      reqId: "req-metadata-only-recovery",
+      lang: "en" as const,
+      generationKind: "text_to_image" as const,
+      startpilotAdmissionRecovery: recovery,
+    };
+
+    await expect(runner.processMessengerGenerationJob(job)).resolves.toEqual({
+      sent: false,
+      reason: "response_window_closed",
+    });
+    await expect(
+      runner.processMessengerGenerationJobDeadLetter({
+        ...job,
+        startpilotAdmissionRecovery: recovery,
+      })
+    ).resolves.toEqual({
+      sent: false,
+      reason: "response_window_closed",
+    });
+
+    expect(recoverStartpilotImageProviderAdmissionMock).toHaveBeenCalledOnce();
+    expect(assertMessengerGenerationOwnershipMock).not.toHaveBeenCalled();
+    expect(executeGenerationFlowMock).not.toHaveBeenCalled();
+    expect(sendTextMock).not.toHaveBeenCalled();
+    expect(sendImageMock).not.toHaveBeenCalled();
+  });
+
   it("records one paid Startpilot usage receipt per generation request", async () => {
     resolveWorkspaceRuntimePolicyMock.mockResolvedValue({
       kind: "startpilot",

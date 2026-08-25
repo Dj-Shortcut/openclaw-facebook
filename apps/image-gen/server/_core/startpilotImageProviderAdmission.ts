@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { and, eq } from "drizzle-orm";
 
 import {
@@ -25,7 +27,7 @@ type StartpilotImageProviderAdmissionInput = StartpilotImageUsageInput & {
 };
 
 export type StartpilotImageProviderAdmissionRecoveryInput =
-  StartpilotImageProviderAdmissionInput;
+  StartpilotImageProviderAdmissionInput & { pageIdHash: string };
 
 type ExactStartpilotFence = {
   leaseToken: string;
@@ -148,9 +150,40 @@ export async function recoverStartpilotImageProviderAdmission(
   input: StartpilotImageProviderAdmissionRecoveryInput
 ): Promise<void> {
   const now = input.now ?? new Date();
-  const fence = assertExactStartpilotFence(input);
+  const fence = assertExactStartpilotRecoveryFence(input);
   const database = await getDatabaseOrThrow();
   await database.transaction(async tx => {
+    // Recovery is allowed after disconnect, rebind, or privacy erasure because
+    // it only reverses a pre-transport charge. Prove the immutable historical
+    // Page ownership here instead of relying on mutable current-state gates.
+    const historicalOwners = await tx
+      .select({
+        id: channelConnections.id,
+        externalId: channelConnections.externalId,
+      })
+      .from(channelConnections)
+      .where(
+        and(
+          eq(channelConnections.id, input.channelConnectionId),
+          eq(channelConnections.workspaceId, input.workspaceId),
+          eq(channelConnections.channel, "facebook_messenger")
+        )
+      )
+      .limit(1)
+      .for("update");
+    const historicalOwner = historicalOwners[0];
+    if (
+      !historicalOwner ||
+      !historicalOwner.externalId ||
+      createHash("sha256").update(historicalOwner.externalId).digest("hex") !==
+        input.pageIdHash ||
+      (input.fence.pageId !== undefined &&
+        createHash("sha256").update(input.fence.pageId.trim()).digest("hex") !==
+          input.pageIdHash)
+    ) {
+      throw new Error("Startpilot provider recovery owner scope mismatch");
+    }
+
     const usageRows = await tx
       .select()
       .from(workspaceEntitlementUsage)
@@ -231,7 +264,8 @@ export async function recoverStartpilotImageProviderAdmission(
     }
 
     if (
-      storedFence.status === "known_failed" &&
+      (storedFence.status === "known_failed" ||
+        storedFence.status === "contained") &&
       (!receipt || receipt.status === "released")
     ) {
       return;
@@ -247,10 +281,7 @@ export async function recoverStartpilotImageProviderAdmission(
               messengerProviderAttemptFences.attemptKeyHash,
               fence.attemptKeyHash
             ),
-            eq(
-              messengerProviderAttemptFences.leaseToken,
-              fence.leaseToken
-            ),
+            eq(messengerProviderAttemptFences.leaseToken, fence.leaseToken),
             eq(messengerProviderAttemptFences.status, "reserved")
           )
         );
@@ -292,10 +323,7 @@ export async function recoverStartpilotImageProviderAdmission(
           eq(workspaceEntitlementUsage.mode, input.mode),
           eq(workspaceEntitlementUsage.entitlementId, input.entitlementId),
           eq(workspaceEntitlementUsage.imagesUsed, usage.imagesUsed),
-          eq(
-            workspaceEntitlementUsage.imagesUsedToday,
-            usage.imagesUsedToday
-          )
+          eq(workspaceEntitlementUsage.imagesUsedToday, usage.imagesUsedToday)
         )
       );
     if (affectedRows(usageUpdate) !== 1) {
@@ -357,6 +385,35 @@ function assertExactStartpilotFence(
     leaseToken: fence.leaseToken,
     attemptKeyHash: fence.attemptKeyHash,
     pageId: fence.pageId,
+    userKey: fence.userKey,
+    privacyEpoch: fence.privacyEpoch!,
+  };
+}
+
+function assertExactStartpilotRecoveryFence(
+  input: StartpilotImageProviderAdmissionRecoveryInput
+): Omit<ExactStartpilotFence, "pageId"> {
+  const fence = input.fence;
+  const providerOperation = input.providerOperation.trim();
+  if (
+    !fence.leaseToken ||
+    !fence.attemptKeyHash ||
+    fence.channel !== "facebook_messenger" ||
+    fence.workspaceId !== input.workspaceId ||
+    fence.channelConnectionId !== input.channelConnectionId ||
+    fence.bindingEpoch !== input.bindingEpoch ||
+    !fence.userKey?.trim() ||
+    !Number.isSafeInteger(fence.privacyEpoch) ||
+    fence.privacyEpoch! <= 0 ||
+    fence.providerOperation !== providerOperation ||
+    !/^[a-f0-9]{64}$/.test(input.pageIdHash) ||
+    (fence.privacyMode !== undefined && fence.privacyMode !== "active")
+  ) {
+    throw new Error("Startpilot provider recovery scope is incomplete");
+  }
+  return {
+    leaseToken: fence.leaseToken,
+    attemptKeyHash: fence.attemptKeyHash,
     userKey: fence.userKey,
     privacyEpoch: fence.privacyEpoch!,
   };

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { and, eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -20,7 +20,10 @@ import {
   PREMIUM_MONTHLY_PLAN_CODE,
   STARTPILOT_PLAN_CODE,
 } from "./_core/billing/catalog";
-import { reserveMessengerProviderAttemptFence } from "./_core/messengerProviderAttemptFence";
+import {
+  containMessengerProviderAttemptsForPrivacy,
+  reserveMessengerProviderAttemptFence,
+} from "./_core/messengerProviderAttemptFence";
 import {
   admitStartpilotImageProviderAttempt,
   recoverStartpilotImageProviderAdmission,
@@ -428,6 +431,146 @@ suite("Startpilot image usage MySQL races", () => {
     );
   });
 
+  it("releases one paid credit when original and shadow recovery race", async () => {
+    const now = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+    const database = await getDatabaseOrThrow();
+    const fence = await prepareFence("mysql-recovery-shadow-race", now);
+    const idempotencyKey = "startpilot-image:mysql-recovery-shadow-race";
+
+    await expect(admit(fence, idempotencyKey, now)).resolves.toMatchObject({
+      allowed: true,
+    });
+    await expect(
+      Promise.all([
+        recover(fence, idempotencyKey, new Date(now.getTime() + 1_000)),
+        recover(fence, idempotencyKey, new Date(now.getTime() + 1_001)),
+      ])
+    ).resolves.toEqual([undefined, undefined]);
+
+    const usage = (
+      await database
+        .select()
+        .from(workspaceEntitlementUsage)
+        .where(eq(workspaceEntitlementUsage.workspaceId, workspaceId))
+        .limit(1)
+    )[0]!;
+    const receipt = (
+      await database
+        .select()
+        .from(workspaceEntitlementUsageReservations)
+        .where(
+          eq(
+            workspaceEntitlementUsageReservations.idempotencyKey,
+            idempotencyKey
+          )
+        )
+        .limit(1)
+    )[0]!;
+    expect(usage).toMatchObject({ imagesUsed: 0, imagesUsedToday: 0 });
+    expect(receipt.status).toBe("released");
+    await expect(fenceStatus(fence.attemptKeyHash!)).resolves.toBe(
+      "known_failed"
+    );
+  });
+
+  it("refuses recovery for a different historical Page binding", async () => {
+    const now = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+    const database = await getDatabaseOrThrow();
+    const fence = await prepareFence("mysql-recovery-wrong-page", now);
+    const idempotencyKey = "startpilot-image:mysql-recovery-wrong-page";
+
+    await expect(admit(fence, idempotencyKey, now)).resolves.toMatchObject({
+      allowed: true,
+    });
+    await expect(
+      recoverStartpilotImageProviderAdmission({
+        fence: { ...fence, pageId: "another-page" },
+        providerOperation: "image_from_text",
+        workspaceId,
+        entitlementId,
+        channelConnectionId: connectionId,
+        bindingEpoch: 1,
+        mode: "test",
+        idempotencyKey,
+        pageIdHash: createHash("sha256").update(pageId).digest("hex"),
+        now: new Date(now.getTime() + 1_000),
+      })
+    ).rejects.toThrow("Startpilot provider recovery owner scope mismatch");
+
+    const usage = (
+      await database
+        .select()
+        .from(workspaceEntitlementUsage)
+        .where(eq(workspaceEntitlementUsage.workspaceId, workspaceId))
+        .limit(1)
+    )[0]!;
+    const receipt = (
+      await database
+        .select()
+        .from(workspaceEntitlementUsageReservations)
+        .where(
+          eq(
+            workspaceEntitlementUsageReservations.idempotencyKey,
+            idempotencyKey
+          )
+        )
+        .limit(1)
+    )[0]!;
+    expect(usage).toMatchObject({ imagesUsed: 1, imagesUsedToday: 1 });
+    expect(receipt.status).toBe("committed");
+    await expect(fenceStatus(fence.attemptKeyHash!)).resolves.toBe("started");
+  });
+
+  it("keeps paid compensation idempotent across privacy containment", async () => {
+    const now = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+    const database = await getDatabaseOrThrow();
+    const fence = await prepareFence("mysql-recovery-privacy", now);
+    const idempotencyKey = "startpilot-image:mysql-recovery-privacy";
+
+    await expect(admit(fence, idempotencyKey, now)).resolves.toMatchObject({
+      allowed: true,
+    });
+    await expect(
+      recover(fence, idempotencyKey, new Date(now.getTime() + 1_000))
+    ).resolves.toBeUndefined();
+    await expect(
+      containMessengerProviderAttemptsForPrivacy(
+        {
+          workspaceId,
+          channelConnectionId: connectionId,
+          userKey: fence.userKey!,
+        },
+        new Date(now.getTime() + 2_000)
+      )
+    ).resolves.toBe(true);
+    await expect(
+      recover(fence, idempotencyKey, new Date(now.getTime() + 3_000))
+    ).resolves.toBeUndefined();
+
+    const usage = (
+      await database
+        .select()
+        .from(workspaceEntitlementUsage)
+        .where(eq(workspaceEntitlementUsage.workspaceId, workspaceId))
+        .limit(1)
+    )[0]!;
+    const receipt = (
+      await database
+        .select()
+        .from(workspaceEntitlementUsageReservations)
+        .where(
+          eq(
+            workspaceEntitlementUsageReservations.idempotencyKey,
+            idempotencyKey
+          )
+        )
+        .limit(1)
+    )[0]!;
+    expect(usage).toMatchObject({ imagesUsed: 0, imagesUsedToday: 0 });
+    expect(receipt.status).toBe("released");
+    await expect(fenceStatus(fence.attemptKeyHash!)).resolves.toBe("contained");
+  });
+
   it("marks an exhausted paid attempt known-failed without consuming usage", async () => {
     const now = new Date(Math.floor(Date.now() / 1_000) * 1_000);
     const database = await getDatabaseOrThrow();
@@ -551,6 +694,7 @@ suite("Startpilot image usage MySQL races", () => {
       bindingEpoch: 1,
       mode: "test",
       idempotencyKey,
+      pageIdHash: createHash("sha256").update(pageId).digest("hex"),
       now,
     });
   }

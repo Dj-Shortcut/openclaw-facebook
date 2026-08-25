@@ -237,8 +237,6 @@ export function createMessengerGenerationJobRunner(
   async function executeImageGenerationJobInPageContext(
     job: MessengerGenerationJob
   ): Promise<MessengerSendOutcome> {
-    await assertMessengerGenerationOwnership(job);
-    await assertGenerationJobPrivacy(job);
     const {
       psid,
       userId,
@@ -260,7 +258,7 @@ export function createMessengerGenerationJobRunner(
         !job.workspaceId ||
         !job.channelConnectionId ||
         !job.bindingEpoch ||
-        !job.pageId ||
+        (pendingRecovery.resumeGeneration && !job.pageId) ||
         (job.privacyEpoch !== undefined &&
           job.privacyEpoch !== pendingRecovery.privacyEpoch) ||
         pendingRecovery.providerOperation !== resolvedGenerationKind
@@ -288,11 +286,20 @@ export function createMessengerGenerationJobRunner(
         bindingEpoch: job.bindingEpoch,
         mode: pendingRecovery.mode,
         idempotencyKey: pendingRecovery.idempotencyKey,
+        pageIdHash: pendingRecovery.pageIdHash,
       }).catch(error => {
         throw new StartpilotProviderAdmissionRetryError(error);
       });
       delete job.startpilotAdmissionRecovery;
+      if (!pendingRecovery.resumeGeneration) {
+        return MESSENGER_SEND_SKIPPED;
+      }
     }
+    // Current ownership/privacy gates decide whether generation may resume.
+    // Compensation above cannot call a provider and independently proves the
+    // immutable historical Page, receipt, and attempt-fence binding in SQL.
+    await assertMessengerGenerationOwnership(job);
+    await assertGenerationJobPrivacy(job);
     let sendOutcome: MessengerSendOutcome = MESSENGER_SEND_SKIPPED;
     const rememberSendOutcome = (outcome: MessengerSendOutcome) => {
       sendOutcome = combineMessengerSendOutcomes(sendOutcome, outcome);
@@ -434,10 +441,17 @@ export function createMessengerGenerationJobRunner(
                           if (
                             providerFence.leaseToken &&
                             providerFence.attemptKeyHash &&
-                            providerFence.privacyEpoch
+                            providerFence.privacyEpoch &&
+                            job.pageId
                           ) {
                             paidAdmissionRecovery = {
                               version: "startpilot_admission_recovery_v1",
+                              resumeGeneration: true,
+                              recoveryDeadlineAt:
+                                Date.now() + 30 * 24 * 60 * 60_000,
+                              pageIdHash: createHash("sha256")
+                                .update(job.pageId)
+                                .digest("hex"),
                               entitlementId: workspacePolicy.entitlementId,
                               mode: workspacePolicy.mode,
                               providerOperation: resolvedGenerationKind,
@@ -485,6 +499,7 @@ export function createMessengerGenerationJobRunner(
                         bindingEpoch: job.bindingEpoch!,
                         mode: paidAdmissionRecovery.mode,
                         idempotencyKey: paidAdmissionRecovery.idempotencyKey,
+                        pageIdHash: paidAdmissionRecovery.pageIdHash,
                       });
                       delete job.startpilotAdmissionRecovery;
                       state = "terminal";
@@ -843,6 +858,14 @@ export function createMessengerGenerationJobRunner(
   async function processMessengerGenerationJobDeadLetter(
     input: MessengerGenerationJob
   ): Promise<MessengerSendOutcome> {
+    if (input.startpilotAdmissionRecovery) {
+      safeLog("messenger_generation_recovery_dead_lettered", {
+        reqId: input.reqId,
+        generationKind: input.generationKind ?? null,
+        attempts: input.attempts ?? null,
+      });
+      return MESSENGER_SEND_SKIPPED;
+    }
     return await runWithMessengerRequestContext(
       input.pageId,
       async () => {

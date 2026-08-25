@@ -59,6 +59,9 @@ describe("Messenger Page request context", () => {
     };
     const recovery = {
       version: "startpilot_admission_recovery_v1",
+      resumeGeneration: true,
+      recoveryDeadlineAt: 1_900_000_000_000,
+      pageIdHash: "c".repeat(64),
       entitlementId: 9,
       mode: "test",
       providerOperation: "text_to_image",
@@ -88,6 +91,42 @@ describe("Messenger Page request context", () => {
           startpilotAdmissionRecovery: {
             ...recovery,
             attemptKeyHash: "not-a-hash",
+          },
+        })
+      )
+    ).toBeNull();
+
+    const createdAt = 1_800_000_000_000;
+    const recoveryDeadlineAt = createdAt + 30 * 24 * 60 * 60_000;
+    const metadataRecovery = {
+      ...recovery,
+      resumeGeneration: false,
+      recoveryDeadlineAt,
+      recoveryScopeProof: "d".repeat(64),
+    };
+    const metadataBase = {
+      ...base,
+      psid: "",
+      pageId: undefined,
+      createdAt,
+      expiresAt: recoveryDeadlineAt,
+    };
+    expect(
+      parseReservedGenerationJob(
+        JSON.stringify({
+          ...metadataBase,
+          startpilotAdmissionRecovery: metadataRecovery,
+        })
+      )
+    ).not.toBeNull();
+    expect(
+      parseReservedGenerationJob(
+        JSON.stringify({
+          ...metadataBase,
+          expiresAt: recoveryDeadlineAt + 1,
+          startpilotAdmissionRecovery: {
+            ...metadataRecovery,
+            recoveryDeadlineAt: recoveryDeadlineAt + 1,
           },
         })
       )

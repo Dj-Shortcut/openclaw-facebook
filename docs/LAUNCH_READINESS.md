@@ -7,7 +7,7 @@ provider-silent offline preflight are complete. Production `/readyz` is green
 with `phase: "offline"`. The current focused release must still land and deploy
 the idempotent workspace-wide paid image counter, prove the operational worker
 state for one exact pilot workspace, and then run the provider sandbox matrix.
-OpenClaw remains a later optional product route, but is not a dependency of the
+OpenClaw remains a planned later product step, but is not a dependency of the
 image-generation offer or the first Mollie sandbox payment.
 
 No step in this document authorizes printing a secret, making an unreviewed
@@ -168,5 +168,5 @@ Current decision: **NO-GO**.
 
 After the sandbox matrix, legal/accounting approvals and one limited live
 payment, resume the separate OpenClaw gateway state/rollback rollout. It remains
-part of the intended end product, not a prerequisite for selling image
-generation safely.
+an explicit final step of the intended end product, not a prerequisite for
+selling image generation safely.

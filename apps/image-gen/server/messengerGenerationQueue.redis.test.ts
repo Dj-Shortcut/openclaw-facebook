@@ -132,6 +132,68 @@ suite("Redis Messenger generation privacy fences", () => {
     }
   });
 
+  it("atomically preserves a metadata-only paid recovery beside private work", async () => {
+    const pageId = "redis-paid-recovery-page";
+    const recoveryDeadlineAt = Date.now() + 30 * 24 * 60 * 60_000;
+    const job = {
+      psid: "redis-paid-private-psid",
+      userId: "redis-paid-private-user",
+      pageId,
+      reqId: "redis-paid-recovery",
+      lang: "nl" as const,
+      workspaceId: 571,
+      channelConnectionId: 572,
+      bindingEpoch: 1,
+      privacyEpoch: 2,
+      generationKind: "text_to_image" as const,
+      promptHint: "redis-paid-private-prompt",
+      startpilotAdmissionRecovery: {
+        version: "startpilot_admission_recovery_v1" as const,
+        resumeGeneration: true,
+        recoveryDeadlineAt,
+        pageIdHash: createHash("sha256").update(pageId).digest("hex"),
+        entitlementId: 9,
+        mode: "test" as const,
+        providerOperation: "text_to_image",
+        attemptKeyHash: "a".repeat(64),
+        leaseToken: "00000000-0000-4000-8000-000000000000",
+        privacyEpoch: 2,
+        idempotencyKey: `startpilot-image:${"b".repeat(64)}`,
+      },
+    };
+    await enqueueMessengerGenerationJob(job);
+
+    await drainMessengerGenerationQueue(async () => {
+      throw new Error("recovery database unavailable");
+    });
+
+    const redis = await getRedisClient();
+    const contentKeys = await scanAll("messenger-generation-jobs:*:content:*");
+    expect(contentKeys).toHaveLength(2);
+    const stored = await Promise.all(contentKeys.map(key => redis.get(key)));
+    const shadow = stored
+      .filter((value): value is string => typeof value === "string")
+      .map(value => JSON.parse(value) as typeof job)
+      .find(
+        value => value.startpilotAdmissionRecovery?.resumeGeneration === false
+      );
+    expect(shadow).toMatchObject({
+      psid: "",
+      userId: job.userId,
+      workspaceId: job.workspaceId,
+      channelConnectionId: job.channelConnectionId,
+      bindingEpoch: job.bindingEpoch,
+      privacyEpoch: job.privacyEpoch,
+      expiresAt: recoveryDeadlineAt,
+      startpilotAdmissionRecovery: {
+        recoveryScopeProof: expect.stringMatching(/^[a-f0-9]{64}$/),
+      },
+    });
+    expect(JSON.stringify(shadow)).not.toContain(job.psid);
+    expect(JSON.stringify(shadow)).not.toContain(job.promptHint);
+    expect(shadow?.pageId).toBeUndefined();
+  });
+
   it("blocks legacy and partitioned raw payloads at readiness", async () => {
     const redis = await getRedisClient();
     await redis.lpush("messenger-generation-jobs", '{"psid":"legacy"}');

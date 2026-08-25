@@ -85,6 +85,14 @@ export type MessengerGenerationJob = {
    */
   startpilotAdmissionRecovery?: {
     version: "startpilot_admission_recovery_v1";
+    /** False after private generation content expires: compensate only. */
+    resumeGeneration: boolean;
+    /** Fixed upper bound for automatic metadata-only compensation retries. */
+    recoveryDeadlineAt: number;
+    /** HMAC proving a content-free recovery job stayed in its tenant partition. */
+    recoveryScopeProof?: string;
+    /** SHA-256 of the exact historical Facebook Page binding. */
+    pageIdHash: string;
     entitlementId: number;
     mode: "test" | "live";
     providerOperation: string;
@@ -94,3 +102,57 @@ export type MessengerGenerationJob = {
     idempotencyKey: string;
   };
 };
+
+export function createStartpilotAdmissionRecoveryScopeProof(
+  input: {
+    tenantPartition: string;
+    workspaceId: number;
+    channelConnectionId: number;
+    bindingEpoch: number;
+    privacyEpoch: number;
+    userId: string;
+    reqId: string;
+    attemptKeyHash: string;
+    pageIdHash: string;
+    entitlementId: number;
+    mode: "test" | "live";
+    providerOperation: string;
+    leaseToken: string;
+    idempotencyKey: string;
+    recoveryDeadlineAt: number;
+  },
+  secret: string
+): string {
+  return createHmac("sha256", secret)
+    .update("leaderbot-startpilot-admission-recovery-v1\n")
+    .update(input.tenantPartition)
+    .update("\0")
+    .update(String(input.workspaceId))
+    .update("\0")
+    .update(String(input.channelConnectionId))
+    .update("\0")
+    .update(String(input.bindingEpoch))
+    .update("\0")
+    .update(String(input.privacyEpoch))
+    .update("\0")
+    .update(input.userId)
+    .update("\0")
+    .update(input.reqId)
+    .update("\0")
+    .update(input.attemptKeyHash)
+    .update("\0")
+    .update(input.pageIdHash)
+    .update("\0")
+    .update(String(input.entitlementId))
+    .update("\0")
+    .update(input.mode)
+    .update("\0")
+    .update(input.providerOperation)
+    .update("\0")
+    .update(input.leaseToken)
+    .update("\0")
+    .update(input.idempotencyKey)
+    .update("\0")
+    .update(String(input.recoveryDeadlineAt))
+    .digest("hex");
+}

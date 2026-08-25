@@ -678,7 +678,7 @@ Historical branch review note:
 - [x] Count one Startpilot image unit when the first provider attempt for a Messenger generation job starts; provider retries remain individually audited but do not consume extra customer pilot generations.
 - [ ] Land the idempotent workspace-wide image receipt and its real MySQL last-slot/same-request race proof; deploy it before any Mollie Test Mode checkout is exposed.
 - [ ] Prove the Page-to-workspace mapping and both paid quota gates in a production-like end-to-end test after the duplicate-Page preflight and migration, without any free-tier fallback.
-- [ ] After the sandbox matrix and the first strictly limited live payment are complete, return to the separately reviewed OpenClaw gateway state/rollback work. Keep it out of the critical Mollie payment path, but preserve it as the intended later optional conversation route.
+- [ ] After the sandbox matrix and the first strictly limited live payment are complete, return to the separately reviewed OpenClaw gateway state/rollback work. Keep it out of the critical Mollie payment path, but preserve and complete it as the planned final conversation-route step.
 - [x] Replace the isolated worker with a durable tenant-partitioned scheduler
       and explicit `pilot_pin`/`multi_tenant` rollout, per-lane epochs,
       heartbeats, safety drain, backlog and dead-letter readiness.
