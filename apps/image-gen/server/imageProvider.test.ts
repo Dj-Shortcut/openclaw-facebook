@@ -5,6 +5,7 @@ import {
   getGeneratorStartupConfig,
   OpenAiImageGenerator,
 } from "./_core/imageService";
+import * as costLedger from "./_core/costLedger";
 import { readCostLedgerPeriod } from "./_core/costLedger";
 import { clearStateStore } from "./_core/stateStore";
 
@@ -397,6 +398,34 @@ describe("image provider boundary", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts admission without provider transport when the ledger write fails", async () => {
+    configureOpenAiImagesEnv();
+    const ledgerFailure = new Error("cost ledger unavailable");
+    vi.spyOn(costLedger, "appendCostLedgerEntry").mockRejectedValueOnce(
+      ledgerFailure
+    );
+    const fetchMock = vi.fn(async () => createGeneratedImageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const markTransportStarted = vi.fn(async () => undefined);
+    const abortBeforeTransport = vi.fn(async () => undefined);
+    const generator = new OpenAiImageGenerator();
+
+    await expect(
+      generator.generate({
+        userKey: "user-ledger-failure",
+        reqId: "req-ledger-failure",
+        onProviderAttempt: async () => ({
+          markTransportStarted,
+          abortBeforeTransport,
+        }),
+      })
+    ).rejects.toBe(ledgerFailure);
+
+    expect(abortBeforeTransport).toHaveBeenCalledOnce();
+    expect(markTransportStarted).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("uses prompt-first source-image edits when stale style jobs have no director mode", async () => {

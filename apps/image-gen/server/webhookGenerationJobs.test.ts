@@ -231,7 +231,7 @@ describe("messenger generation job safety", () => {
       .mockRejectedValueOnce(new Error("ownership changed"));
     const providerTransport = vi.fn();
     executeGenerationFlowMock.mockImplementationOnce(async input => {
-      await input.onProviderAttempt();
+      await (await input.onProviderAttempt())?.markTransportStarted();
       providerTransport();
       return successGenerationResult();
     });
@@ -262,7 +262,7 @@ describe("messenger generation job safety", () => {
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error("binding changed before quota commit"));
     executeGenerationFlowMock.mockImplementationOnce(async input => {
-      await input.onProviderAttempt();
+      await (await input.onProviderAttempt())?.markTransportStarted();
       return successGenerationResult();
     });
     const runner = createTestRunner();
@@ -1447,7 +1447,7 @@ describe("messenger generation job safety", () => {
       enteredGeneration = resolve;
     });
     executeGenerationFlowMock.mockImplementationOnce(async input => {
-      await input.onProviderAttempt();
+      await (await input.onProviderAttempt())?.markTransportStarted();
       enteredGeneration();
       await new Promise<void>(resolve => {
         releaseGeneration = resolve;
@@ -1532,7 +1532,7 @@ describe("messenger generation job safety", () => {
   it("does not count a provider failure, even after the attempt started", async () => {
     const runner = createTestRunner();
     executeGenerationFlowMock.mockImplementationOnce(async input => {
-      await input.onProviderAttempt();
+      await (await input.onProviderAttempt())?.markTransportStarted();
       return failureGenerationResult();
     });
 
@@ -1591,7 +1591,10 @@ describe("messenger generation job safety", () => {
       };
     });
     executeGenerationFlowMock.mockImplementationOnce(async input => {
-      await input.onProviderAttempt();
+      const admission = await input.onProviderAttempt();
+      order.push("ledger_recorded");
+      expect(admitStartpilotImageProviderAttemptMock).not.toHaveBeenCalled();
+      await admission?.markTransportStarted();
       return failureGenerationResult();
     });
     const runner = createTestRunner();
@@ -1607,8 +1610,55 @@ describe("messenger generation job safety", () => {
       lang: "nl",
     });
 
-    expect(order).toEqual(["fence_reserved", "paid_admission_committed"]);
+    expect(order).toEqual([
+      "fence_reserved",
+      "ledger_recorded",
+      "paid_admission_committed",
+    ]);
     expect(markMessengerProviderAttemptStartedMock).not.toHaveBeenCalled();
+  });
+
+  it("does not consume paid quota when the ledger fails before transport", async () => {
+    resolveWorkspaceRuntimePolicyMock.mockResolvedValueOnce({
+      kind: "startpilot",
+      workspaceId: 42,
+      entitlementId: 9,
+      mode: "test",
+      imageTotalLimit: 20,
+      imageDailyLimit: 5,
+      imageModel: "gpt-image-2",
+      imageQuality: "high",
+    });
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      const admission = await input.onProviderAttempt();
+      await admission?.abortBeforeTransport();
+      return failureGenerationResult(new Error("cost ledger unavailable"));
+    });
+    const runner = createTestRunner();
+
+    await runner.processMessengerGenerationJob({
+      psid: "startpilot-ledger-failure-user",
+      userId: "startpilot-ledger-failure-user-key",
+      pageId: "startpilot-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      reqId: "req-startpilot-ledger-failure",
+      lang: "nl",
+    });
+
+    expect(admitStartpilotImageProviderAttemptMock).not.toHaveBeenCalled();
+    expect(markMessengerProviderAttemptStartedMock).not.toHaveBeenCalled();
+    expect(finalizeMessengerProviderAttemptFenceMock).toHaveBeenCalledOnce();
+    expect(finalizeMessengerProviderAttemptFenceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ attemptKeyHash: "provider-fence-attempt" }),
+      "known_failed"
+    );
+    expect(finalizeMessengerProviderAttemptFenceMock).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "ambiguous"
+    );
+    expect(sendImageMock).not.toHaveBeenCalled();
   });
 
   it("retries safely when atomic paid admission is unavailable", async () => {
@@ -1627,15 +1677,17 @@ describe("messenger generation job safety", () => {
     );
     executeGenerationFlowMock
       .mockImplementationOnce(async input => {
+        const admission = await input.onProviderAttempt();
         try {
-          await input.onProviderAttempt();
+          await admission?.markTransportStarted();
           return successGenerationResult();
         } catch (error) {
+          await admission?.abortBeforeTransport();
           return failureGenerationResult(error);
         }
       })
       .mockImplementationOnce(async input => {
-        await input.onProviderAttempt();
+        await (await input.onProviderAttempt())?.markTransportStarted();
         return successGenerationResult(
           "https://img.example/startpilot-admission-retry.png"
         );
@@ -1694,6 +1746,84 @@ describe("messenger generation job safety", () => {
     });
   });
 
+  it("keeps paid admission retryable when fence cleanup also fails", async () => {
+    resolveWorkspaceRuntimePolicyMock.mockResolvedValueOnce({
+      kind: "startpilot",
+      workspaceId: 42,
+      entitlementId: 9,
+      mode: "test",
+      imageTotalLimit: 20,
+      imageDailyLimit: 5,
+      imageModel: "gpt-image-2",
+      imageQuality: "high",
+    });
+    const admissionFailure = new Error("paid admission unavailable");
+    const cleanupFailure = new Error("provider fence cleanup unavailable");
+    admitStartpilotImageProviderAttemptMock.mockRejectedValueOnce(
+      admissionFailure
+    );
+    finalizeMessengerProviderAttemptFenceMock.mockRejectedValueOnce(
+      cleanupFailure
+    );
+    executeGenerationFlowMock.mockImplementationOnce(async input => {
+      const admission = await input.onProviderAttempt();
+      try {
+        await admission?.markTransportStarted();
+        return successGenerationResult();
+      } catch (error) {
+        try {
+          await admission?.abortBeforeTransport();
+          return failureGenerationResult(error);
+        } catch (cleanupError) {
+          return failureGenerationResult(
+            new AggregateError(
+              [error, cleanupError],
+              "Provider admission cleanup failed",
+              { cause: error }
+            )
+          );
+        }
+      }
+    });
+    const runner = createTestRunner();
+    const job = {
+      psid: "startpilot-admission-cleanup-user",
+      userId: "startpilot-admission-cleanup-user-key",
+      pageId: "startpilot-page",
+      workspaceId: 42,
+      channelConnectionId: 8,
+      bindingEpoch: 3,
+      reqId: "req-startpilot-admission-cleanup",
+      lang: "nl" as const,
+    };
+
+    const thrown = await runner
+      .processMessengerGenerationJob(job)
+      .catch((error: unknown) => error);
+
+    expect(thrown).toMatchObject({
+      name: "StartpilotProviderAdmissionRetryError",
+      cause: expect.any(AggregateError),
+    });
+    expect((thrown as Error & { cause: AggregateError }).cause.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "StartpilotProviderAdmissionRetryError",
+        }),
+        cleanupFailure,
+      ])
+    );
+    expect(finalizeMessengerProviderAttemptFenceMock).toHaveBeenCalledWith(
+      expect.anything(),
+      "known_failed"
+    );
+    expect(sendImageMock).not.toHaveBeenCalled();
+    expect(sendQuickRepliesMock).not.toHaveBeenCalled();
+    await expect(
+      getMessengerGenerationCompletion(job.reqId)
+    ).resolves.toBeNull();
+  });
+
   it("records one paid Startpilot usage receipt per generation request", async () => {
     resolveWorkspaceRuntimePolicyMock.mockResolvedValue({
       kind: "startpilot",
@@ -1707,8 +1837,8 @@ describe("messenger generation job safety", () => {
     });
     executeGenerationFlowMock
       .mockImplementationOnce(async input => {
-        await input.onProviderAttempt();
-        await input.onProviderAttempt();
+        await (await input.onProviderAttempt())?.markTransportStarted();
+        await (await input.onProviderAttempt())?.markTransportStarted();
         return failureGenerationResult();
       })
       .mockResolvedValueOnce(
@@ -1804,7 +1934,7 @@ describe("messenger generation job safety", () => {
     });
     executeGenerationFlowMock.mockImplementationOnce(async input => {
       try {
-        await input.onProviderAttempt();
+        await (await input.onProviderAttempt())?.markTransportStarted();
         return successGenerationResult();
       } catch (error) {
         return failureGenerationResult(error);
@@ -1860,7 +1990,7 @@ describe("messenger generation job safety", () => {
     });
     executeGenerationFlowMock.mockImplementationOnce(async input => {
       try {
-        await input.onProviderAttempt();
+        await (await input.onProviderAttempt())?.markTransportStarted();
         return successGenerationResult();
       } catch (error) {
         return failureGenerationResult(error);
@@ -1913,7 +2043,7 @@ describe("messenger generation job safety", () => {
     });
     executeGenerationFlowMock.mockImplementationOnce(async input => {
       expect(input.bypassBudgetLimits).toBe(true);
-      await input.onProviderAttempt();
+      await (await input.onProviderAttempt())?.markTransportStarted();
       return successGenerationResult();
     });
     const runner = createTestRunner();
@@ -1956,8 +2086,8 @@ describe("messenger generation job safety", () => {
   it("does not count provider retries when generation ultimately fails", async () => {
     const runner = createTestRunner();
     executeGenerationFlowMock.mockImplementationOnce(async input => {
-      await input.onProviderAttempt();
-      await input.onProviderAttempt();
+      await (await input.onProviderAttempt())?.markTransportStarted();
+      await (await input.onProviderAttempt())?.markTransportStarted();
       return failureGenerationResult();
     });
 

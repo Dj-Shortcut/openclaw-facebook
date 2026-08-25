@@ -41,6 +41,8 @@ import {
   workspacePrivacyRequests,
   workspaceUpgradeRequests,
   workspaceKnowledgeSources,
+  workspaceEntitlements,
+  workspaceEntitlementUsage,
   workspaceEntitlementUsageReservations,
   workspaces,
   workspaceUsageDaily,
@@ -60,6 +62,7 @@ import {
   getBotTextRateLimitWindowSeconds,
   getImageGenerationDailyLimit,
 } from "./_core/quotaPolicy";
+import { getBillingPlan, STARTPILOT_PLAN_CODE } from "./_core/billing/catalog";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -2765,39 +2768,60 @@ export async function disconnectChannelConnection(
 }
 
 export async function getWorkspaceUsageSummary(workspaceId: number) {
-  const imageDailyLimit = getImageGenerationDailyLimit();
   const messageRateLimit = getBotTextRateLimitMax();
   const messageRateLimitWindowSeconds = getBotTextRateLimitWindowSeconds();
 
-  const buildSummary = (usage?: {
-    messageCount?: number | null;
-    imageCount?: number | null;
-    blockedCount?: number | null;
-  }) => {
+  const buildSummary = (
+    usage?: {
+      messageCount?: number | null;
+      imageCount?: number | null;
+      blockedCount?: number | null;
+    },
+    paidUsage?: {
+      status: "active" | "grace";
+      planName: string;
+      imagesUsedToday: number;
+      imagesUsedInPeriod: number;
+      imagesPerDay: number;
+      imagesPerPeriod: number;
+    }
+  ) => {
     const messageCount = usage?.messageCount ?? 0;
-    const imageCount = usage?.imageCount ?? 0;
+    const imageCount = paidUsage?.imagesUsedToday ?? usage?.imageCount ?? 0;
+    const imageCountInPeriod = paidUsage?.imagesUsedInPeriod ?? null;
     const blockedCount = usage?.blockedCount ?? 0;
+    const imageDailyLimit =
+      paidUsage?.imagesPerDay ?? getImageGenerationDailyLimit();
+    const imagePeriodLimit = paidUsage?.imagesPerPeriod ?? null;
     const imagesRemainingToday = Math.max(0, imageDailyLimit - imageCount);
+    const imagesRemainingInPeriod =
+      imagePeriodLimit === null || imageCountInPeriod === null
+        ? null
+        : Math.max(0, imagePeriodLimit - imageCountInPeriod);
     const isImageLimitReached =
-      imageDailyLimit > 0 && imagesRemainingToday === 0;
+      (imageDailyLimit > 0 && imagesRemainingToday === 0) ||
+      (imagePeriodLimit !== null && imagesRemainingInPeriod === 0);
 
     return {
       workspaceId,
       period: "today" as const,
       plan: {
-        name: "Free",
-        billingStatus: "free" as const,
+        name: paidUsage?.planName ?? "Free",
+        billingStatus: paidUsage?.status ?? ("free" as const),
       },
       messageCount,
       imageCount,
+      imageCountInPeriod,
       blockedCount,
       limits: {
         imagesPerDay: imageDailyLimit,
+        imagesPerPeriod: imagePeriodLimit,
         messagesPerWindow: messageRateLimit,
         messageWindowSeconds: messageRateLimitWindowSeconds,
       },
       remaining: {
         imagesToday: imagesRemainingToday,
+        imagesInPeriod: imagesRemainingInPeriod,
       },
       upgrade: {
         recommended: isImageLimitReached || blockedCount > 0,
@@ -2817,7 +2841,7 @@ export async function getWorkspaceUsageSummary(workspaceId: number) {
   }
 
   const today = getTodayUTC();
-  const result = await db
+  const dailyUsage = await db
     .select()
     .from(workspaceUsageDaily)
     .where(
@@ -2827,9 +2851,133 @@ export async function getWorkspaceUsageSummary(workspaceId: number) {
       )
     )
     .limit(1);
+  const mode = getUsageSummaryMollieMode();
+  if (!mode) return buildSummary(dailyUsage[0]);
 
-  const usage = result[0];
-  return buildSummary(usage);
+  const now = new Date();
+  const entitlementRows = await db
+    .select({
+      id: workspaceEntitlements.id,
+      status: workspaceEntitlements.status,
+      planCode: workspaceEntitlements.planCode,
+      quota: workspaceEntitlements.quota,
+      sourceIntentId: workspaceEntitlements.sourceIntentId,
+      validUntil: workspaceEntitlements.validUntil,
+    })
+    .from(workspaceEntitlements)
+    .where(
+      and(
+        eq(workspaceEntitlements.workspaceId, workspaceId),
+        eq(workspaceEntitlements.mode, mode),
+        or(
+          eq(workspaceEntitlements.status, "active"),
+          eq(workspaceEntitlements.status, "grace")
+        ),
+        or(
+          isNull(workspaceEntitlements.validUntil),
+          gt(workspaceEntitlements.validUntil, now)
+        )
+      )
+    )
+    .limit(2);
+  if (entitlementRows.length === 0) return buildSummary(dailyUsage[0]);
+  const entitlement = entitlementRows[0];
+  if (
+    entitlementRows.length !== 1 ||
+    !entitlement ||
+    (entitlement.status !== "active" && entitlement.status !== "grace") ||
+    entitlement.planCode !== STARTPILOT_PLAN_CODE ||
+    !entitlement.sourceIntentId ||
+    !entitlement.validUntil
+  ) {
+    throw new Error("Workspace paid usage summary is inconsistent");
+  }
+  const plan = getBillingPlan(STARTPILOT_PLAN_CODE);
+  const quota = exactStartpilotUsageQuota(entitlement.quota, plan);
+  if (!plan || !quota) {
+    throw new Error("Workspace paid usage summary is inconsistent");
+  }
+  const usageRows = await db
+    .select({
+      sourceIntentId: workspaceEntitlementUsage.sourceIntentId,
+      planCode: workspaceEntitlementUsage.planCode,
+      periodStartedAt: workspaceEntitlementUsage.periodStartedAt,
+      periodEndsAt: workspaceEntitlementUsage.periodEndsAt,
+      imagesUsed: workspaceEntitlementUsage.imagesUsed,
+      imageUsageDate: workspaceEntitlementUsage.imageUsageDate,
+      imagesUsedToday: workspaceEntitlementUsage.imagesUsedToday,
+    })
+    .from(workspaceEntitlementUsage)
+    .where(
+      and(
+        eq(workspaceEntitlementUsage.workspaceId, workspaceId),
+        eq(workspaceEntitlementUsage.mode, mode),
+        eq(workspaceEntitlementUsage.entitlementId, entitlement.id),
+        eq(workspaceEntitlementUsage.planCode, STARTPILOT_PLAN_CODE)
+      )
+    )
+    .limit(2);
+  const paidUsage = usageRows[0];
+  if (
+    usageRows.length !== 1 ||
+    !paidUsage ||
+    paidUsage.sourceIntentId !== entitlement.sourceIntentId ||
+    paidUsage.planCode !== STARTPILOT_PLAN_CODE ||
+    paidUsage.periodStartedAt.getTime() > now.getTime() ||
+    paidUsage.periodEndsAt.getTime() !== entitlement.validUntil.getTime() ||
+    paidUsage.periodEndsAt.getTime() <= now.getTime() ||
+    !isBoundedUsageCounter(paidUsage.imagesUsed, quota.imagesTotal) ||
+    !isBoundedUsageCounter(paidUsage.imagesUsedToday, quota.imagesPerDay)
+  ) {
+    throw new Error("Workspace paid usage summary is inconsistent");
+  }
+
+  return buildSummary(dailyUsage[0], {
+    status: entitlement.status,
+    planName: plan.publicName,
+    imagesUsedToday:
+      paidUsage.imageUsageDate === today ? paidUsage.imagesUsedToday : 0,
+    imagesUsedInPeriod: paidUsage.imagesUsed,
+    imagesPerDay: quota.imagesPerDay,
+    imagesPerPeriod: quota.imagesTotal,
+  });
+}
+
+function getUsageSummaryMollieMode(): "test" | "live" | null {
+  const mode = process.env.MOLLIE_MODE?.trim();
+  if (!mode) return null;
+  if (mode === "test" || mode === "live") return mode;
+  throw new Error("MOLLIE_MODE must be test or live for paid usage summary");
+}
+
+function exactStartpilotUsageQuota(
+  value: unknown,
+  plan: ReturnType<typeof getBillingPlan>
+): { imagesTotal: number; imagesPerDay: number } | null {
+  if (!plan || !value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const quota = value as Record<string, unknown>;
+  const expected = plan.entitlements;
+  const expectedKeys = Object.keys(expected).sort();
+  const actualKeys = Object.keys(quota).sort();
+  if (
+    expectedKeys.length !== actualKeys.length ||
+    expectedKeys.some((key, index) => key !== actualKeys[index]) ||
+    expectedKeys.some(key => quota[key] !== expected[key]) ||
+    !Number.isSafeInteger(quota.imagesTotal) ||
+    !Number.isSafeInteger(quota.imagesPerDay)
+  ) {
+    return null;
+  }
+  return {
+    imagesTotal: Number(quota.imagesTotal),
+    imagesPerDay: Number(quota.imagesPerDay),
+  };
+}
+
+function isBoundedUsageCounter(value: number, limit: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0 && value <= limit;
 }
 
 export async function insertAuditLog(values: InsertAuditLog) {

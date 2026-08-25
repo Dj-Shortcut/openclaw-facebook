@@ -13,7 +13,7 @@ import {
   workspaceEntitlementUsageReservations,
   workspaces,
 } from "../drizzle/schema";
-import { getDatabaseOrThrow } from "./db";
+import { getDatabaseOrThrow, getWorkspaceUsageSummary } from "./db";
 import { utcDateKey } from "./_core/billing/entitlementUsageStore";
 import { getBillingPlan, STARTPILOT_PLAN_CODE } from "./_core/billing/catalog";
 import { reserveMessengerProviderAttemptFence } from "./_core/messengerProviderAttemptFence";
@@ -219,6 +219,57 @@ suite("Startpilot image usage MySQL races", () => {
     expect(usage).toMatchObject({ imagesUsed: 1, imagesUsedToday: 1 });
     expect(receipts).toHaveLength(1);
     await expect(fenceStatus(fence.attemptKeyHash!)).resolves.toBe("started");
+  });
+
+  it("reports the exact paid daily and period image balances", async () => {
+    const now = new Date(Math.floor(Date.now() / 1_000) * 1_000);
+    const database = await getDatabaseOrThrow();
+    await database
+      .update(workspaceEntitlementUsage)
+      .set({
+        imagesUsed: 12,
+        imageUsageDate: utcDateKey(now),
+        imagesUsedToday: 3,
+      })
+      .where(eq(workspaceEntitlementUsage.workspaceId, workspaceId));
+
+    await expect(getWorkspaceUsageSummary(workspaceId)).resolves.toMatchObject({
+      workspaceId,
+      plan: { name: "Leaderbot Startpilot", billingStatus: "active" },
+      imageCount: 3,
+      imageCountInPeriod: 12,
+      limits: { imagesPerDay: 5, imagesPerPeriod: 20 },
+      remaining: { imagesToday: 2, imagesInPeriod: 8 },
+    });
+    await expect(
+      getWorkspaceUsageSummary(workspaceId + 1_000_000)
+    ).resolves.toMatchObject({
+      plan: { name: "Free", billingStatus: "free" },
+      imageCount: 0,
+      imageCountInPeriod: null,
+      remaining: { imagesInPeriod: null },
+    });
+
+    await database
+      .update(workspaceEntitlementUsage)
+      .set({ imageUsageDate: "2000-01-01", imagesUsedToday: 3 })
+      .where(eq(workspaceEntitlementUsage.workspaceId, workspaceId));
+    await expect(getWorkspaceUsageSummary(workspaceId)).resolves.toMatchObject({
+      imageCount: 0,
+      imageCountInPeriod: 12,
+      remaining: { imagesToday: 5, imagesInPeriod: 8 },
+    });
+  });
+
+  it("fails closed when an active paid entitlement has no usage row", async () => {
+    const database = await getDatabaseOrThrow();
+    await database
+      .delete(workspaceEntitlementUsage)
+      .where(eq(workspaceEntitlementUsage.workspaceId, workspaceId));
+
+    await expect(getWorkspaceUsageSummary(workspaceId)).rejects.toThrow(
+      "Workspace paid usage summary is inconsistent"
+    );
   });
 
   it("rolls back the paid receipt when provider-fence ownership is lost", async () => {

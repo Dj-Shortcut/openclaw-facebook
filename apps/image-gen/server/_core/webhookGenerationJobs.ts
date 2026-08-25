@@ -2,6 +2,7 @@ import type { MessengerSendOutcome } from "./messengerApi";
 import { safeLog } from "./messengerApi";
 import { getGenerationMetrics } from "./image-generation/openAiImageClient";
 import { executeGenerationFlow } from "./generationFlow";
+import type { ProviderAttemptAdmission } from "./imageService";
 import {
   buildFreeQuotaReachedResponse,
   buildGenerationFailureResponse,
@@ -159,6 +160,41 @@ class StartpilotProviderAdmissionRetryError extends Error {
   }
 }
 
+function asStartpilotProviderAdmissionRetryError(
+  error: unknown
+): StartpilotProviderAdmissionRetryError | null {
+  const seen = new Set<unknown>();
+  const findRetryError = (
+    candidate: unknown
+  ): StartpilotProviderAdmissionRetryError | null => {
+    if (candidate instanceof StartpilotProviderAdmissionRetryError) {
+      return candidate;
+    }
+    if (
+      (typeof candidate !== "object" && typeof candidate !== "function") ||
+      candidate === null ||
+      seen.has(candidate)
+    ) {
+      return null;
+    }
+    seen.add(candidate);
+    if (candidate instanceof AggregateError) {
+      for (const nested of candidate.errors) {
+        const retryError = findRetryError(nested);
+        if (retryError) return retryError;
+      }
+    }
+    if (candidate instanceof Error && candidate.cause !== undefined) {
+      return findRetryError(candidate.cause);
+    }
+    return null;
+  };
+
+  const retryError = findRetryError(error);
+  if (!retryError || retryError === error) return retryError;
+  return new StartpilotProviderAdmissionRetryError(error);
+}
+
 class MessengerImageQuotaRecoveryError extends Error {
   constructor() {
     super(
@@ -300,63 +336,84 @@ export function createMessengerGenerationJobRunner(
             (sourceImageUrl === state.lastGeneratedUrl ||
               sourceImageUrl === state.lastImageUrl)
           );
-          const beginProviderAttempt = async () => {
-            await assertMessengerGenerationOwnership(job);
-            await assertGenerationJobPrivacy(job);
-            providerFenceSequence += 1;
-            const providerFence = await reserveMessengerProviderAttemptFence(
-              job,
-              resolvedGenerationKind,
-              providerFenceSequence
-            );
-            let providerFenceResolved = false;
-            try {
-              if (
-                workspacePolicy.kind === "startpilot" &&
-                providerAttemptsStarted === 0
-              ) {
-                if (
-                  job.workspaceId !== workspacePolicy.workspaceId ||
-                  !job.channelConnectionId ||
-                  !job.bindingEpoch
-                ) {
-                  throw new Error("Startpilot generation scope mismatch");
-                }
-                const usage = await admitStartpilotImageProviderAttempt({
-                  fence: providerFence,
-                  providerOperation: resolvedGenerationKind,
-                  workspaceId: workspacePolicy.workspaceId,
-                  entitlementId: workspacePolicy.entitlementId,
-                  channelConnectionId: job.channelConnectionId,
-                  bindingEpoch: job.bindingEpoch,
-                  mode: workspacePolicy.mode,
-                  idempotencyKey: `startpilot-image:${reqId}`,
-                }).catch(error => {
-                  throw new StartpilotProviderAdmissionRetryError(error);
-                });
-                providerFenceResolved = true;
-                if (!usage.allowed) {
-                  throw new StartpilotImageQuotaExhaustedError(usage.reason);
-                }
-              } else {
-                await markMessengerProviderAttemptStarted(providerFence);
-                providerFenceResolved = true;
-              }
-            } catch (error) {
-              // The provider callback is awaited before HTTP transport. Mark
-              // this fence as a known non-effect so a quota/DB refusal cannot
-              // become a permanently ambiguous provider attempt.
-              if (!providerFenceResolved) {
-                await finalizeMessengerProviderAttemptFence(
-                  providerFence,
-                  "known_failed"
-                );
-              }
-              throw error;
-            }
-            providerFences.push(providerFence);
-            providerAttemptsStarted += 1;
-          };
+          const beginProviderAttempt =
+            async (): Promise<ProviderAttemptAdmission> => {
+              await assertMessengerGenerationOwnership(job);
+              await assertGenerationJobPrivacy(job);
+              providerFenceSequence += 1;
+              const providerFence = await reserveMessengerProviderAttemptFence(
+                job,
+                resolvedGenerationKind,
+                providerFenceSequence
+              );
+              let state: "reserved" | "started" | "terminal" = "reserved";
+              let startPromise: Promise<void> | null = null;
+
+              return Object.freeze({
+                markTransportStarted: async () => {
+                  if (state === "started") return;
+                  if (state === "terminal") {
+                    throw new Error("Provider attempt is already terminal");
+                  }
+                  if (!startPromise) {
+                    startPromise = (async () => {
+                      if (
+                        workspacePolicy.kind === "startpilot" &&
+                        providerAttemptsStarted === 0
+                      ) {
+                        if (
+                          job.workspaceId !== workspacePolicy.workspaceId ||
+                          !job.channelConnectionId ||
+                          !job.bindingEpoch
+                        ) {
+                          throw new Error(
+                            "Startpilot generation scope mismatch"
+                          );
+                        }
+                        const usage = await admitStartpilotImageProviderAttempt(
+                          {
+                            fence: providerFence,
+                            providerOperation: resolvedGenerationKind,
+                            workspaceId: workspacePolicy.workspaceId,
+                            entitlementId: workspacePolicy.entitlementId,
+                            channelConnectionId: job.channelConnectionId,
+                            bindingEpoch: job.bindingEpoch,
+                            mode: workspacePolicy.mode,
+                            idempotencyKey: `startpilot-image:${reqId}`,
+                          }
+                        ).catch(error => {
+                          throw new StartpilotProviderAdmissionRetryError(
+                            error
+                          );
+                        });
+                        if (!usage.allowed) {
+                          state = "terminal";
+                          throw new StartpilotImageQuotaExhaustedError(
+                            usage.reason
+                          );
+                        }
+                      } else {
+                        await markMessengerProviderAttemptStarted(
+                          providerFence
+                        );
+                      }
+                      state = "started";
+                      providerFences.push(providerFence);
+                      providerAttemptsStarted += 1;
+                    })();
+                  }
+                  await startPromise;
+                },
+                abortBeforeTransport: async () => {
+                  if (state !== "reserved") return;
+                  await finalizeMessengerProviderAttemptFence(
+                    providerFence,
+                    "known_failed"
+                  );
+                  state = "terminal";
+                },
+              });
+            };
 
           const generationResult = await executeGenerationFlow({
             generationKind: resolvedGenerationKind,
@@ -406,7 +463,8 @@ export function createMessengerGenerationJobRunner(
           if (generationResult.kind === "success") {
             try {
               if (providerAttemptsStarted === 0) {
-                await beginProviderAttempt();
+                const admission = await beginProviderAttempt();
+                await admission.markTransportStarted();
               }
               await assertMessengerGenerationOwnership(job);
               await assertGenerationJobPrivacy(job);
@@ -476,12 +534,9 @@ export function createMessengerGenerationJobRunner(
             return;
           }
 
-          if (
-            generationResult.error instanceof
-            StartpilotProviderAdmissionRetryError
-          ) {
-            throw generationResult.error;
-          }
+          const providerAdmissionRetry =
+            asStartpilotProviderAdmissionRetryError(generationResult.error);
+          if (providerAdmissionRetry) throw providerAdmissionRetry;
 
           await handleGenerationFailure({
             deps,
@@ -522,14 +577,16 @@ export function createMessengerGenerationJobRunner(
       if (error instanceof MessengerPrivacyFenceError) {
         return MESSENGER_SEND_SKIPPED;
       }
-      if (error instanceof StartpilotProviderAdmissionRetryError) {
+      const providerAdmissionRetry =
+        asStartpilotProviderAdmissionRetryError(error);
+      if (providerAdmissionRetry) {
         safeLog("startpilot_provider_admission_requeued", {
           level: "error",
           reqId,
           user: toLogUser(userId),
           generationKind: resolvedGenerationKind,
         });
-        throw error;
+        throw providerAdmissionRetry;
       }
       if (error instanceof MessengerGenerationDeliveryError) {
         recordMessengerDeliveryFailure();
