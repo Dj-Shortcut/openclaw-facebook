@@ -1178,6 +1178,197 @@ async function fetchGithubRawFile(relativePath, sourceSha, options) {
   return text;
 }
 
+function assertSuccessorSourceAccess({ repository, token, fetchImpl }) {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository ?? "")) {
+    fail("GITHUB_REPOSITORY must identify the exact source repository");
+  }
+  if (typeof token !== "string" || token.length < 1) {
+    fail("GITHUB_TOKEN with Actions and contents read permission is required");
+  }
+  if (typeof fetchImpl !== "function") {
+    fail("A fetch implementation is required for successor source validation");
+  }
+}
+
+function resolveSuccessorSourceDestination(destination) {
+  const absoluteDestination = path.resolve(destination ?? "");
+  if (
+    !destination ||
+    absoluteDestination === path.parse(absoluteDestination).root ||
+    fs.existsSync(absoluteDestination)
+  ) {
+    fail("Successor source destination must be a new bounded directory");
+  }
+  return absoluteDestination;
+}
+
+function parseSuccessorProductionManifest(manifestText) {
+  try {
+    return JSON.parse(manifestText);
+  } catch {
+    fail("Successor production manifest is not valid JSON");
+  }
+}
+
+function getSuccessorManifestApp(target, manifest) {
+  const app = manifest?.schemaVersion === 1 ? manifest.apps?.[target] : null;
+  const canonical = CANONICAL_TARGETS[target];
+  if (
+    !app ||
+    !canonical ||
+    app.app !== canonical.app ||
+    app.config !== canonical.config ||
+    !isImmutableAppImage(app, app.reviewedImage) ||
+    !safeSuccessorSourcePath(app.config)
+  ) {
+    fail("Successor manifest does not bind the canonical target and source");
+  }
+  return app;
+}
+
+function getSuccessorRollbackRecords(app) {
+  const rollbackRecords = Object.values(app.reviewedRollbackConfigs ?? {});
+  const hasUnsafeRecord = rollbackRecords.some(
+    (record) =>
+      !safeSuccessorSourcePath(
+        record?.path,
+        "deploy/production/rollback-configs/",
+      ) || !/^[a-f0-9]{64}$/.test(record?.sha256 ?? ""),
+  );
+  if (
+    !Array.isArray(app.reviewedRollbackImages) ||
+    rollbackRecords.length !== app.reviewedRollbackImages.length ||
+    hasUnsafeRecord
+  ) {
+    fail("Successor manifest has unsafe rollback configuration records");
+  }
+  return rollbackRecords;
+}
+
+async function fetchSuccessorSourceFiles(
+  app,
+  rollbackRecords,
+  sourceSha,
+  manifestText,
+  fetchOptions,
+) {
+  const sourceFiles = new Map([[MANIFEST_PATH, manifestText]]);
+  const sourcePaths = new Set([
+    app.config,
+    ...rollbackRecords.map((record) => record.path),
+  ]);
+  for (const relativePath of sourcePaths) {
+    sourceFiles.set(
+      relativePath,
+      await fetchGithubRawFile(relativePath, sourceSha, fetchOptions),
+    );
+  }
+  return sourceFiles;
+}
+
+function writeSuccessorSourceFiles(absoluteDestination, sourceFiles) {
+  fs.mkdirSync(absoluteDestination);
+  for (const [relativePath, source] of sourceFiles) {
+    const absolutePath = path.resolve(absoluteDestination, relativePath);
+    if (!absolutePath.startsWith(`${absoluteDestination}${path.sep}`)) {
+      fail("Successor source path escapes its bounded directory");
+    }
+    fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+    fs.writeFileSync(absolutePath, source, { flag: "wx", mode: 0o600 });
+  }
+}
+
+function validateSuccessorDeploymentPolicy(target, app, rootDir) {
+  if (target === "gateway") {
+    fail(
+      "Gateway successor validation requires the separately reviewed stateful rebaseline transition",
+    );
+  }
+  if (
+    app.sourceDeployEnabled !== false ||
+    app.trustedBuilderWorkflow !== TRUSTED_ARTIFACT_WORKFLOW_PATH ||
+    app.strategy !== "rolling" ||
+    app.allowDetachedMachines !== false
+  ) {
+    fail("Successor manifest weakens the trusted immutable deployment policy");
+  }
+  validateDeploymentEnabled(target, rootDir);
+  validateReviewedImage(target, app.reviewedImage, rootDir);
+  getReviewedArtifactKind(target, app.reviewedImage, rootDir);
+  if (target === "image-gen") validateImageGenSchemaTransition(app);
+  if (target === "storage-proxy") validateStorageProxyArtifactTransition(app);
+}
+
+function validateSuccessorRollbackProvenance(target, app, rootDir) {
+  for (const image of app.reviewedRollbackImages) {
+    const kind = getReviewedArtifactKind(target, image, rootDir);
+    validateReviewedRollbackImage(target, image, rootDir);
+    const sourceCommit = app.reviewedRollbackSourceCommits?.[image];
+    const invalidLegacySource =
+      kind === "legacy-bootstrap" && sourceCommit !== undefined;
+    const invalidReviewedSource =
+      kind !== "legacy-bootstrap" && !isReviewedSourceCommit(sourceCommit);
+    if (invalidLegacySource || invalidReviewedSource) {
+      fail("Successor rollback provenance does not match its artifact kind");
+    }
+  }
+}
+
+async function verifySuccessorSource(
+  target,
+  identity,
+  supersedesIdentity,
+  options,
+) {
+  const successor = await verifySettledBaseline(target, identity, {
+    ...options,
+    supersedesIdentity,
+  });
+  if (!isReviewedSourceCommit(successor.sourceSha)) {
+    fail("Successor deployment lacks an exact source SHA");
+  }
+  return successor;
+}
+
+async function loadSuccessorSourceBundle(target, sourceSha, fetchOptions) {
+  const manifestText = await fetchGithubRawFile(
+    MANIFEST_PATH,
+    sourceSha,
+    fetchOptions,
+  );
+  const manifest = parseSuccessorProductionManifest(manifestText);
+  const app = getSuccessorManifestApp(target, manifest);
+  const rollbackRecords = getSuccessorRollbackRecords(app);
+  const sourceFiles = await fetchSuccessorSourceFiles(
+    app,
+    rollbackRecords,
+    sourceSha,
+    manifestText,
+    fetchOptions,
+  );
+  return { app, sourceFiles };
+}
+
+function validateSuccessorRollbackConfigs(target, app, rootDir) {
+  for (const image of app.reviewedRollbackImages) {
+    getReviewedRollbackConfig(target, image, rootDir);
+  }
+}
+
+async function verifySuccessorSourceCi(
+  target,
+  app,
+  sourceSha,
+  rootDir,
+  fetchOptions,
+) {
+  await verifyReviewedArtifactCi(target, app.reviewedImage, {
+    rootDir,
+    ...fetchOptions,
+  });
+  await verifySourceCi(sourceSha, fetchOptions);
+}
+
 export async function materializeSuccessorSourceRoot(
   target,
   identity,
@@ -1193,142 +1384,44 @@ export async function materializeSuccessorSourceRoot(
       new Promise((resolve) => setTimeout(resolve, milliseconds)),
   } = {},
 ) {
-  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository ?? "")) {
-    fail("GITHUB_REPOSITORY must identify the exact source repository");
-  }
-  if (typeof token !== "string" || token.length < 1) {
-    fail("GITHUB_TOKEN with Actions and contents read permission is required");
-  }
-  if (typeof fetchImpl !== "function") {
-    fail("A fetch implementation is required for successor source validation");
-  }
-  const successor = await verifySettledBaseline(target, identity, {
+  assertSuccessorSourceAccess({ repository, token, fetchImpl });
+  const verificationOptions = {
     fetchImpl,
     repository,
     token,
     apiUrl,
     retryDelayMs,
     sleepImpl,
+  };
+  const successor = await verifySuccessorSource(
+    target,
+    identity,
     supersedesIdentity,
-  });
-  if (!isReviewedSourceCommit(successor.sourceSha)) {
-    fail("Successor deployment lacks an exact source SHA");
-  }
-  const absoluteDestination = path.resolve(destination ?? "");
-  if (
-    !destination ||
-    absoluteDestination === path.parse(absoluteDestination).root ||
-    fs.existsSync(absoluteDestination)
-  ) {
-    fail("Successor source destination must be a new bounded directory");
-  }
+    verificationOptions,
+  );
+  const absoluteDestination = resolveSuccessorSourceDestination(destination);
   const fetchOptions = {
     fetchImpl,
     repository,
     token,
     apiUrl,
   };
-  const manifestText = await fetchGithubRawFile(
-    MANIFEST_PATH,
+  const { app, sourceFiles } = await loadSuccessorSourceBundle(
+    target,
     successor.sourceSha,
     fetchOptions,
   );
-  let manifest;
-  try {
-    manifest = JSON.parse(manifestText);
-  } catch {
-    fail("Successor production manifest is not valid JSON");
-  }
-  const app = manifest?.schemaVersion === 1 ? manifest.apps?.[target] : null;
-  const canonical = CANONICAL_TARGETS[target];
-  if (
-    !app ||
-    !canonical ||
-    app.app !== canonical.app ||
-    app.config !== canonical.config ||
-    !isImmutableAppImage(app, app.reviewedImage) ||
-    !safeSuccessorSourcePath(app.config)
-  ) {
-    fail("Successor manifest does not bind the canonical target and source");
-  }
-  const rollbackRecords = Object.values(app.reviewedRollbackConfigs ?? {});
-  if (
-    !Array.isArray(app.reviewedRollbackImages) ||
-    rollbackRecords.length !== app.reviewedRollbackImages.length ||
-    rollbackRecords.some(
-      (record) =>
-        !safeSuccessorSourcePath(
-          record?.path,
-          "deploy/production/rollback-configs/",
-        ) || !/^[a-f0-9]{64}$/.test(record?.sha256 ?? ""),
-    )
-  ) {
-    fail("Successor manifest has unsafe rollback configuration records");
-  }
-  const sourceFiles = new Map([[MANIFEST_PATH, manifestText]]);
-  for (const relativePath of new Set([
-    app.config,
-    ...rollbackRecords.map((record) => record.path),
-  ])) {
-    sourceFiles.set(
-      relativePath,
-      await fetchGithubRawFile(relativePath, successor.sourceSha, fetchOptions),
-    );
-  }
-  fs.mkdirSync(absoluteDestination);
-  for (const [relativePath, source] of sourceFiles) {
-    const absolutePath = path.resolve(absoluteDestination, relativePath);
-    if (!absolutePath.startsWith(`${absoluteDestination}${path.sep}`)) {
-      fail("Successor source path escapes its bounded directory");
-    }
-    fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
-    fs.writeFileSync(absolutePath, source, { flag: "wx", mode: 0o600 });
-  }
-  for (const image of app.reviewedRollbackImages) {
-    getReviewedRollbackConfig(target, image, absoluteDestination);
-  }
-  if (target === "gateway") {
-    fail(
-      "Gateway successor validation requires the separately reviewed stateful rebaseline transition",
-    );
-  }
-  if (
-    app.sourceDeployEnabled !== false ||
-    app.trustedBuilderWorkflow !== TRUSTED_ARTIFACT_WORKFLOW_PATH ||
-    app.strategy !== "rolling" ||
-    app.allowDetachedMachines !== false
-  ) {
-    fail("Successor manifest weakens the trusted immutable deployment policy");
-  }
-  validateDeploymentEnabled(target, absoluteDestination);
-  validateReviewedImage(target, app.reviewedImage, absoluteDestination);
-  getReviewedArtifactKind(target, app.reviewedImage, absoluteDestination);
-  if (target === "image-gen") validateImageGenSchemaTransition(app);
-  if (target === "storage-proxy") validateStorageProxyArtifactTransition(app);
-  for (const image of app.reviewedRollbackImages) {
-    const kind = getReviewedArtifactKind(target, image, absoluteDestination);
-    validateReviewedRollbackImage(target, image, absoluteDestination);
-    const sourceCommit = app.reviewedRollbackSourceCommits?.[image];
-    if (
-      (kind === "legacy-bootstrap" && sourceCommit !== undefined) ||
-      (kind !== "legacy-bootstrap" && !isReviewedSourceCommit(sourceCommit))
-    ) {
-      fail("Successor rollback provenance does not match its artifact kind");
-    }
-  }
-  await verifyReviewedArtifactCi(target, app.reviewedImage, {
-    rootDir: absoluteDestination,
-    fetchImpl,
-    repository,
-    token,
-    apiUrl,
-  });
-  await verifySourceCi(successor.sourceSha, {
-    fetchImpl,
-    repository,
-    token,
-    apiUrl,
-  });
+  writeSuccessorSourceFiles(absoluteDestination, sourceFiles);
+  validateSuccessorRollbackConfigs(target, app, absoluteDestination);
+  validateSuccessorDeploymentPolicy(target, app, absoluteDestination);
+  validateSuccessorRollbackProvenance(target, app, absoluteDestination);
+  await verifySuccessorSourceCi(
+    target,
+    app,
+    successor.sourceSha,
+    absoluteDestination,
+    fetchOptions,
+  );
   return {
     target,
     identity,
