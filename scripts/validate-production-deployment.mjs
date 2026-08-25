@@ -4702,18 +4702,19 @@ function validateImageGenSchemaTransition(app) {
     settledPredecessorImage !== app.reviewedImage &&
     settledPredecessorImage !== transition.bridgeImage;
   const expectedRuntimeRollbacks = [
-    transition.bridgeImage,
-    ...(hasDistinctRuntimePredecessor ? [settledPredecessorImage] : []),
+    ...(hasDistinctRuntimePredecessor
+      ? [transition.bridgeImage, settledPredecessorImage]
+      : []),
   ];
   const hasExactRuntimePredecessor =
-    !hasDistinctRuntimePredecessor ||
-    (app.reviewedRollbackArtifactKinds[settledPredecessorImage] === "runtime" &&
+    hasDistinctRuntimePredecessor &&
+    app.reviewedRollbackArtifactKinds[settledPredecessorImage] === "runtime" &&
       isReviewedSourceCommit(
         app.reviewedRollbackSourceCommits[settledPredecessorImage],
       ) &&
       JSON.stringify(
         app.reviewedRollbackImageSchemaPhases[settledPredecessorImage],
-      ) === JSON.stringify(["0016_expand"]));
+      ) === JSON.stringify(["0016_expand"]);
 
   if (
     app.databaseSchemaPhase !== "0016_expand" ||

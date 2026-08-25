@@ -884,6 +884,28 @@ describe("production deployment contract", () => {
     );
   });
 
+  it("rejects removal of the settled predecessor and its rollback entries", () => {
+    const root = createRepositoryFixture();
+    const manifestPath = path.join(root, "deploy/production/apps.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const app = manifest.apps["image-gen"];
+    const predecessorImage = app.reviewedSettledPredecessor.image;
+
+    delete app.reviewedSettledPredecessor;
+    app.reviewedRollbackImages = app.reviewedRollbackImages.filter(
+      (image) => image !== predecessorImage,
+    );
+    delete app.reviewedRollbackConfigs[predecessorImage];
+    delete app.reviewedRollbackArtifactKinds[predecessorImage];
+    delete app.reviewedRollbackSourceCommits[predecessorImage];
+    delete app.reviewedRollbackImageSchemaPhases[predecessorImage];
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    expect(() => validateProductionRepository(root)).toThrow(
+      "retain only the bridge plus exact settled runtime predecessor",
+    );
+  });
+
   it("rejects an additional runtime rollback beyond the settled predecessor", () => {
     const root = createRepositoryFixture();
     const manifestPath = path.join(root, "deploy/production/apps.json");
