@@ -5150,7 +5150,10 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         );
       }
       for (const [name, expected] of [
-        ["PUBLIC_BASE_URL", "https://leaderbot-storage-proxy.fly.dev"],
+        [
+          "PUBLIC_BASE_URL",
+          "https://pub-7e5beae089c4457a89cb65cf300daf75.r2.dev",
+        ],
         ["MESSENGER_FREE_DAILY_LIMIT", "5"],
         ["MESSENGER_FREE_MONTHLY_LIMIT", "20"],
         ["MESSENGER_IMAGE_QUOTA_TIME_ZONE", "Europe/Brussels"],
