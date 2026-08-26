@@ -248,6 +248,25 @@ describe("gateway deployment safety validation", () => {
     ).toThrow("direct Fly deploy or rollback commands");
     expect(() =>
       validateManagedRedeployHandoff(
+        `${validManagedRedeployHandoff}\nfly -a leaderbot-openclaw-gateway deploy`,
+      ),
+    ).toThrow("direct Fly deploy or rollback commands");
+    expect(() =>
+      validateManagedRedeployHandoff(
+        `${validManagedRedeployHandoff}\nfly -a leaderbot-openclaw-gateway releases rollback`,
+      ),
+    ).toThrow("direct Fly deploy or rollback commands");
+    expect(() =>
+      validateManagedRedeployHandoff(
+        [
+          validManagedRedeployHandoff,
+          "fly --app=leaderbot-openclaw-gateway \\",
+          "deploy",
+        ].join("\n"),
+      ),
+    ).toThrow("direct Fly deploy or rollback commands");
+    expect(() =>
+      validateManagedRedeployHandoff(
         `${validManagedRedeployHandoff}\nfly releases --image -a leaderbot-openclaw-gateway`,
       ),
     ).not.toThrow();

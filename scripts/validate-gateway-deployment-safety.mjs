@@ -242,8 +242,18 @@ export function validatePluginWorkflow(text) {
   );
 }
 
+function hasDirectFlyDeployOrRollback(text) {
+  const logicalLines = text.replace(/\\\r?\n/g, " ");
+  return [...logicalLines.matchAll(/\bfly\b[^\r\n;|&]*/g)].some((match) => {
+    const command = match[0];
+    return (
+      /\bdeploy\b/.test(command) || /\breleases\b.*\brollback\b/.test(command)
+    );
+  });
+}
+
 export function validateManagedRedeployHandoff(text) {
-  if (/\bfly\s+(?:deploy\b|releases\s+rollback\b)/.test(text)) {
+  if (hasDirectFlyDeployOrRollback(text)) {
     throw new Error(
       "The managed gateway handoff must not contain direct Fly deploy or rollback commands",
     );
