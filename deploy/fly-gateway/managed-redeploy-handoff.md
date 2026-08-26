@@ -106,11 +106,22 @@ comments, or dashboard-visible status details.
 6. Operator approves the request. Approval must be explicit and time-limited.
 7. The deploy runner verifies the approved `repo_ref`, target app, target
    version, and expiry before using the scoped deploy credential.
-8. The deploy runner performs a normal image deploy:
+8. After the approved commit is merged to `main`, the production manifest has
+   been separately reviewed to enable the gateway, and the exact rollout image
+   is allowlisted, the deploy runner dispatches the protected production
+   workflow:
 
    ```bash
-   fly deploy -a leaderbot-openclaw-gateway
+   gh workflow run deploy-production.yml --ref main \
+     -f target=gateway \
+     -f rollback_image="$APPROVED_REVIEWED_IMAGE"
    ```
+
+   The input name is retained for workflow compatibility; for this dispatch it
+   is the exact reviewed rollout image. The workflow must pass its manifest,
+   callback, source-CI, predecessor, artifact, and rollback checks before the
+   production-environment approval can release the deploy. Do not replace this
+   dispatch with a direct Fly command.
 
 9. The deploy runner records metadata-only audit events for deploy start,
    release id/image, health check outcome, and operator-visible completion
@@ -171,23 +182,19 @@ Then verify:
 
 ## Rollback
 
-Capture the previous good image before deployment:
+The protected production workflow captures and validates the previous good
+image, config, volume identity, and deployment identity before it mutates Fly.
+If the new release fails verification, its bounded restore and
+`recover-gateway` path must restore that captured release and verify the result.
+Do not run a direct Fly rollback command. If automatic recovery cannot finish,
+continue only through the recovery procedure and artifacts emitted by the same
+protected workflow run.
 
-```bash
-fly releases --image -a leaderbot-openclaw-gateway
-```
-
-If the new release fails verification, redeploy the previous image recorded in
-the approved request:
-
-```bash
-fly deploy --image <previous-good-image> -a leaderbot-openclaw-gateway
-```
-
-Rollback should use the same approval and audit path unless production is
-already degraded and the operator invokes an incident rollback. Incident
-rollback still needs metadata-only audit events with the incident id, approving
-operator, previous image, restored image, and verification outcome.
+Rollback uses the same protected recovery and audit path. If production is
+already degraded, an operator may authorize incident-priority recovery, but it
+still may not bypass that protected path. Record metadata-only audit events with
+the incident id, approving operator, previous image, restored image, and
+verification outcome.
 
 Do not roll back by shelling into a machine and editing `/app/node_modules`,
 `/app/package.json`, or `/app/package-lock.json`. If state migration is ever
