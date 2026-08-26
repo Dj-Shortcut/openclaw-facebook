@@ -148,18 +148,83 @@ inspection environment contains only its read-only Fly token. Verify that
 timer, no administrator bypass, and only its narrowly scoped database migration
 token. Treat any drift as a release blocker.
 
-Use two exact MySQL principals for the production schema, with no global or
+Use three exact MySQL principals for the production schema, with no global or
 grant-option privileges:
 
 - runtime: exactly `SELECT, INSERT, UPDATE, DELETE`;
 - expand migration: exactly `CREATE TEMPORARY TABLES, ALTER, INDEX, REFERENCES,
-SELECT, INSERT, UPDATE`.
+SELECT, INSERT, UPDATE`;
+- persistent trigger definer: table-level `SELECT, TRIGGER` on
+  `billing_outbox` and table-level `SELECT, UPDATE, TRIGGER` on
+  `billing_scheduler_tenants`, with no rights on any other table.
 
-After creating or rotating them, run the matching protected inspection mode;
-the migrator rejects missing and excessive grants. Bootstrap/contract DDL
+After creating or rotating the runtime or expand principal, run its matching
+protected inspection mode; the migrator rejects missing and excessive grants.
+Inspect the trigger-definer grants privately with the database administrator,
+then require the automatic runtime trigger probe below. Bootstrap/contract DDL
 credentials are not application or 0016-expand credentials and stay outside
 these workflows. No MySQL principal is provisioned to automatic no-review
 application recovery.
+
+The trigger definer is a non-runtime executor for the three contract-pinned
+billing triggers. Its complete privilege set is table-level `SELECT, TRIGGER`
+on `billing_outbox` plus table-level `SELECT, UPDATE, TRIGGER` on
+`billing_scheduler_tenants`. It has no rights on any other table and does not
+have `INSERT`, `DELETE`, DDL, a schema/global privilege or grant option. Never
+add `TRIGGER` to the application runtime principal. Keep the expand principal
+separate so its temporary migration rights can be removed without disabling an
+already installed trigger.
+
+Before an image-gen rollout, the protected deployment extracts the reviewed
+probe from the candidate image, uploads it to one exact started app Machine,
+and runs it with that Machine's DML-only runtime identity. The probe locks one
+test-mode outbox scheduler row, performs a no-change scheduler update, inserts
+and updates one synthetic outbox row with explicit ID `0` under the
+connection-local `NO_AUTO_VALUE_ON_ZERO` SQL mode, then rolls the transaction
+back and proves the synthetic row is absent. This defined MySQL mode stores
+zero instead of allocating a sequence value. The disposable-MySQL regression
+also proves the persistent InnoDB auto-increment counter is identical before
+and after. This activates all three billing triggers without a Mollie call,
+durable row or sequence mutation. The uploaded probe is removed before the
+rollout. Any trigger-definer privilege failure therefore blocks before a
+Machine is replaced.
+
+If this probe reports `scheduler_update_trigger`, `outbox_insert_trigger` or
+`outbox_update_trigger`, stop the release. Never repair it by adding `TRIGGER`
+to the runtime account. Before changing a definer, a reviewer-approved database
+administrator must privately confirm a recoverable encrypted database snapshot
+has status `created`, commercial billing remains disabled, the schema contains
+exactly the three contract trigger names, and their metadata plus bodies match
+`0015_production_readiness_registry.sql`.
+
+When those triggers currently name the runtime account as their definer, the
+administrator must create one separate non-runtime account, lock it against
+login, and grant it only table-level `SELECT, TRIGGER` on `billing_outbox` and
+table-level `SELECT, UPDATE, TRIGGER` on `billing_scheduler_tenants`, without
+rights on any other table, schema/global privileges or grant option. Using a
+separately authenticated administrator with the required definer authority,
+recreate all three exact checked-in triggers with that account as their
+explicit definer in one reviewed maintenance transition. Keep the runtime
+account at exactly `SELECT, INSERT, UPDATE, DELETE`; do not reuse the expand
+principal as the persistent definer. MySQL account locking blocks login but
+does not disable execution of stored objects that name the locked account as
+definer.
+
+After the transition, privately prove that all three triggers name exactly that
+one locked account and that its only effective object grants are the two exact
+table-level sets above. Do not print the account name, grant output or
+connection URL. Run the normal runtime/expand schema inspection and the runtime
+trigger probe before another deploy, and retain the evidence as metadata only.
+That schema inspection deliberately omits privileged trigger metadata, while
+bootstrap inspection requires each trigger definer to equal the connected
+bootstrap principal. It therefore cannot certify this locked, separate
+definer. For this transition, the required replacement gate is the private
+three-trigger metadata/body tuple plus exact two-table grant check above,
+followed by the DML runtime probe. Do not claim that a bootstrap inspection
+under the administrator or expand account verified this boundary. Any body,
+SQL-mode, definer, grant or probe mismatch is a failed transition and must be
+restored from the reviewed trigger definitions or the pre-change snapshot
+before billing is enabled.
 
 The gateway currently has `deploymentEnabled: false`. This is an explicit
 bootstrap gate, not an operator override: both the workflow and the canonical

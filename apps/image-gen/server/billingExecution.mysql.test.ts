@@ -42,6 +42,7 @@ import {
   resolveDuePaymentProviderOperations,
 } from "./_core/billing/checkoutStore";
 import { runDailyBillingReconciliation } from "./_core/billing/reconciliation";
+import { assertBillingTriggerRuntimePreflight } from "../scripts/billing-trigger-runtime-preflight.mjs";
 
 const suite = describe.runIf(process.env.RUN_MYSQL_INTEGRATION === "1");
 
@@ -209,6 +210,76 @@ suite("billing execution MySQL safety boundary", () => {
         )
       );
     expect(safety[0]?.status).toBe("completed");
+  });
+
+  it("executes every billing trigger in a transaction and leaves no probe data", async () => {
+    const database = await getDatabaseOrThrow();
+    await registerBillingSchedulerTenant(
+      workspaceId,
+      "test",
+      new Date("2030-01-01T00:00:00.000Z")
+    );
+    const beforeLanes = await database
+      .select({
+        id: billingSchedulerTenants.id,
+        workspaceId: billingSchedulerTenants.workspaceId,
+        kind: billingSchedulerTenants.kind,
+        pendingWorkCount: billingSchedulerTenants.pendingWorkCount,
+        deadLetterCount: billingSchedulerTenants.deadLetterCount,
+        nextDueAt: billingSchedulerTenants.nextDueAt,
+      })
+      .from(billingSchedulerTenants)
+      .where(eq(billingSchedulerTenants.mode, "test"))
+      .orderBy(billingSchedulerTenants.id);
+    const beforeOutbox = await database
+      .select({ id: billingOutbox.id })
+      .from(billingOutbox)
+      .where(eq(billingOutbox.mode, "test"))
+      .orderBy(billingOutbox.id);
+    const url = process.env.DATABASE_URL;
+    if (!url) throw new Error("DATABASE_URL is required");
+    const connection = await mysql.createConnection(url);
+    let autoIncrementBefore: unknown;
+    let autoIncrementAfter: unknown;
+    try {
+      const [beforeCounterRows] = await connection.query(
+        "SELECT `AUTO_INCREMENT` AS autoIncrement FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='billing_outbox'"
+      );
+      autoIncrementBefore = (
+        beforeCounterRows as Array<{ autoIncrement: unknown }>
+      )[0]?.autoIncrement;
+      await assertBillingTriggerRuntimePreflight(connection, "test");
+      const [afterCounterRows] = await connection.query(
+        "SELECT `AUTO_INCREMENT` AS autoIncrement FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='billing_outbox'"
+      );
+      autoIncrementAfter = (
+        afterCounterRows as Array<{ autoIncrement: unknown }>
+      )[0]?.autoIncrement;
+    } finally {
+      await connection.end();
+    }
+    const afterLanes = await database
+      .select({
+        id: billingSchedulerTenants.id,
+        workspaceId: billingSchedulerTenants.workspaceId,
+        kind: billingSchedulerTenants.kind,
+        pendingWorkCount: billingSchedulerTenants.pendingWorkCount,
+        deadLetterCount: billingSchedulerTenants.deadLetterCount,
+        nextDueAt: billingSchedulerTenants.nextDueAt,
+      })
+      .from(billingSchedulerTenants)
+      .where(eq(billingSchedulerTenants.mode, "test"))
+      .orderBy(billingSchedulerTenants.id);
+    const afterOutbox = await database
+      .select({ id: billingOutbox.id })
+      .from(billingOutbox)
+      .where(eq(billingOutbox.mode, "test"))
+      .orderBy(billingOutbox.id);
+
+    expect(afterLanes).toEqual(beforeLanes);
+    expect(afterOutbox).toEqual(beforeOutbox);
+    expect(String(autoIncrementBefore)).toMatch(/^[1-9][0-9]*$/);
+    expect(String(autoIncrementAfter)).toBe(String(autoIncrementBefore));
   });
 
   it("contains provider results that crash before domain attachment", async () => {
