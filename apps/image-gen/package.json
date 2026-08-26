@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/index.js",
-    "build:docker": "vite build && esbuild server/_core/index.ts --platform=node --bundle --format=cjs --external:vite --outfile=dist/index.cjs && esbuild scripts/run-production-migrations.mjs --platform=node --bundle --format=cjs '--define:import.meta.url=\"file:///app/scripts/migrate-production.mjs\"' --outfile=dist/migrate-production.cjs && esbuild server/cli/provisionWhatsAppBinding.ts --platform=node --bundle --format=cjs '--define:import.meta.url=\"file:///app/dist/provision-whatsapp-binding.cjs\"' --outfile=dist/provision-whatsapp-binding.cjs",
+    "build:docker": "vite build && esbuild server/_core/index.ts --platform=node --bundle --format=cjs --external:vite --outfile=dist/index.cjs && esbuild scripts/run-production-migrations.mjs --platform=node --bundle --format=cjs '--define:import.meta.url=\"file:///app/scripts/migrate-production.mjs\"' --outfile=dist/migrate-production.cjs && esbuild scripts/run-billing-trigger-runtime-preflight.mjs --platform=node --bundle --format=cjs --outfile=dist/billing-trigger-runtime-preflight.cjs && esbuild server/cli/provisionWhatsAppBinding.ts --platform=node --bundle --format=cjs '--define:import.meta.url=\"file:///app/dist/provision-whatsapp-binding.cjs\"' --outfile=dist/provision-whatsapp-binding.cjs",
     "check": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:generate-production-contract": "node scripts/generate-production-schema-contract.mjs",
@@ -77,7 +77,7 @@
   "devDependencies": {
     "@builder.io/vite-plugin-jsx-loc": "^0.1.1",
     "@eslint/js": "^10.0.1",
-    "@tailwindcss/vite": "^4.2.1",
+    "@tailwindcss/vite": "^4.3.3",
     "@typescript/native": "npm:typescript@7.0.2",
     "@types/express": "5.0.6",
     "@types/google.maps": "^3.65.5",

@@ -10,6 +10,18 @@ content or personal identifier.
 
 ## Production offline preflight evidence (2026-08-25)
 
+Protected operational rollout
+[run 32871148100](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32871148100)
+was rejected before any Mollie provider call. The commercially disabled pilot
+correctly kept its AI-finalization scheduler lane disabled, while the attempted
+config required that lane during application startup. The protected workflow
+restored the prior digest and configuration; the one restored web Machine left
+stopped by Fly's timed-out health wait was restarted only after its exact prior
+image and deployment identity were verified. All four prior Machines and both
+web health checks were then green, and public `/readyz` again returned HTTP 200
+with `phase: "offline"`. No sandbox scenario below is credited by this failed
+rollout.
+
 The focused image-only paid-quota runtime was subsequently deployed by
 [run 32860967800](https://github.com/Dj-Shortcut/openclaw-facebook/actions/runs/32860967800)
 as exact identity `deploy-32860967800-1` and immutable digest
@@ -55,6 +67,14 @@ Evidence is for PR #400 credential-free code commit
 
 These results validate code contracts only. They do not convert a provider
 scenario below from **NOT RUN** to **PASS**.
+
+## Release-boundary evidence
+
+| Scenario                              | Status   | Required evidence                                                                                                                 |
+| ------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Direct multi-tenant image-gen route   | NOT RUN  | Production Meta callback and customer image traffic terminate in image-gen without creating an OpenClaw host session transcript   |
+| Image-gen deletion during provider IO | NOT RUN  | Tenant tombstone prevents late queue, asset, completion or send resurrection during a controlled slow provider/transport scenario |
+| OpenClaw non-archiving erasure        | DEFERRED | Required before any OpenClaw transcript/customer feature; non-blocking for image-gen only after the direct-route row passes       |
 
 ## Startpilot sandbox scenarios
 
@@ -104,4 +124,7 @@ collecting a Subscription.
 Use only Mollie's documented Test Mode controls when these cases are eventually
 approved. Recurring test Payments do not have a checkout link.
 
-Overall result: **NO-GO**.
+Overall result: **NO-GO**. The direct image-gen route, image-gen deletion race,
+provider sandbox and human approval evidence remain open. OpenClaw
+non-archiving erasure is not an image-gen blocker only after the direct-route
+row passes.

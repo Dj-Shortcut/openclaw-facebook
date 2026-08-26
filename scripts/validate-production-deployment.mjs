@@ -1994,8 +1994,8 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       "must verify the captured storage-proxy predecessor before mutation",
     ],
     [
-      "uses: ./.github/workflows/reconcile-production-deployment.yml",
-      "must invoke the protected recovery workflow after a failed deploy job",
+      "/actions/workflows/reconcile-production-deployment.yml/dispatches",
+      "must dispatch the protected recovery workflow after a failed deploy job",
     ],
     [
       '--config "$rollback_config"',
@@ -2009,6 +2009,10 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
     [
       "META_GRAPH_VERSION: v21.0",
       "must pin the reviewed Meta Graph API version",
+    ],
+    [
+      "Probe production billing triggers before rollout",
+      "must exercise the DML runtime against every billing trigger before rollout",
     ],
   ];
   for (const [needle, message] of requirements) {
@@ -2199,6 +2203,110 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       );
     }
   }
+  const [billingTriggerProbeStep] = namedWorkflowStepBodies(
+    workflow,
+    "Probe production billing triggers before rollout",
+  );
+  const billingTriggerProbeIndex = workflow.indexOf(
+    "      - name: Probe production billing triggers before rollout",
+  );
+  const imageGenDeployIndex = workflow.indexOf(
+    "      - name: Deploy reviewed image-gen config",
+  );
+  const remoteCleanupArmIndex = billingTriggerProbeStep?.indexOf(
+    "remote_uploaded=true",
+  );
+  const remoteUploadIndex = billingTriggerProbeStep?.indexOf(
+    "timeout --signal=TERM 30s flyctl ssh sftp put",
+  );
+  if (
+    !billingTriggerProbeStep ||
+    billingTriggerProbeIndex < 0 ||
+    imageGenDeployIndex <= billingTriggerProbeIndex ||
+    namedWorkflowStepTimeout(
+      workflow,
+      "Probe production billing triggers before rollout",
+    ) !== 5 ||
+    !billingTriggerProbeStep.includes(
+      "FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}",
+    ) ||
+    !billingTriggerProbeStep.includes(
+      'select(.state=="started" and .config.metadata.fly_process_group=="app")',
+    ) ||
+    !billingTriggerProbeStep.includes(
+      'docker cp "$probe_container:/app/dist/billing-trigger-runtime-preflight.cjs"',
+    ) ||
+    !billingTriggerProbeStep.includes(
+      "timeout --signal=TERM 30s flyctl ssh sftp put",
+    ) ||
+    remoteCleanupArmIndex === undefined ||
+    remoteUploadIndex === undefined ||
+    remoteCleanupArmIndex < 0 ||
+    remoteUploadIndex < 0 ||
+    remoteCleanupArmIndex >= remoteUploadIndex ||
+    !billingTriggerProbeStep.includes(
+      "timeout --signal=TERM 45s flyctl ssh console",
+    ) ||
+    !billingTriggerProbeStep.includes(
+      "Billing trigger runtime preflight passed.",
+    ) ||
+    !billingTriggerProbeStep.includes(
+      'test "$probe_output" = "Billing trigger runtime preflight passed."',
+    ) ||
+    !billingTriggerProbeStep.includes(
+      'remote_probe="/tmp/leaderbot-billing-trigger-preflight-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.cjs"',
+    ) ||
+    !billingTriggerProbeStep.includes('docker rm -f "$probe_container"') ||
+    !billingTriggerProbeStep.includes("trap cleanup_probe EXIT") ||
+    !billingTriggerProbeStep.includes('--command "test ! -e $remote_probe"')
+  ) {
+    fail(
+      `${PRODUCTION_WORKFLOW_PATH} must run the exact bounded, reversible billing-trigger probe before image-gen rollout`,
+    );
+  }
+  const [imageGenStartupDiagnosticStep] = namedWorkflowStepBodies(
+    workflow,
+    "Capture bounded image-gen startup diagnostics",
+  );
+  const imageGenStartupDiagnosticIndex = workflow.indexOf(
+    "      - name: Capture bounded image-gen startup diagnostics",
+  );
+  const imageGenRestoreIndex = workflow.indexOf(
+    "      - name: Restore captured image-gen release",
+  );
+  if (
+    !imageGenStartupDiagnosticStep ||
+    imageGenStartupDiagnosticIndex < 0 ||
+    imageGenRestoreIndex <= imageGenStartupDiagnosticIndex ||
+    namedWorkflowStepTimeout(
+      workflow,
+      "Capture bounded image-gen startup diagnostics",
+    ) !== 2 ||
+    !imageGenStartupDiagnosticStep.includes(
+      "if: failure() && steps.deploy.outcome != 'skipped'",
+    ) ||
+    !imageGenStartupDiagnosticStep.includes(
+      "FLY_API_TOKEN: ${{ secrets.FLY_IMAGE_GEN_DEPLOY_TOKEN }}",
+    ) ||
+    !imageGenStartupDiagnosticStep.includes(
+      "timeout --signal=TERM 30s",
+    ) ||
+    !imageGenStartupDiagnosticStep.includes(
+      "flyctl logs --app leaderbot-fb-image-gen --no-tail --json",
+    ) ||
+    !imageGenStartupDiagnosticStep.includes(
+      'event: "machine_memory_failure"',
+    ) ||
+    !imageGenStartupDiagnosticStep.includes(
+      'else "unclassified_start_failure"',
+    ) ||
+    !imageGenStartupDiagnosticStep.includes("tail -n 120") ||
+    imageGenStartupDiagnosticStep.includes("message: $raw")
+  ) {
+    fail(
+      `${PRODUCTION_WORKFLOW_PATH} must capture only bounded, classified image-gen startup metadata before rollback`,
+    );
+  }
   const rollbackCaptureSteps = namedWorkflowStepBodies(
     workflow,
     "Record rollback release",
@@ -2307,30 +2415,54 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
   }
   if (workflow.includes("secrets: inherit")) {
     fail(
-      `${PRODUCTION_WORKFLOW_PATH} production reusable recovery callers must never inherit caller secrets`,
+      `${PRODUCTION_WORKFLOW_PATH} production recovery dispatchers must never inherit caller secrets`,
     );
   }
   for (const target of ["gateway", "image-gen", "storage-proxy"]) {
     const deployJob = `deploy-${target}`;
-    const recoveryJob = namedWorkflowJobBody(workflow, `recover-${target}`);
+    const recoveryJob = namedWorkflowJobBody(
+      workflow,
+      `queue-recovery-${target}`,
+    );
     const expectedCondition = `if: \${{ always() && (failure() || cancelled()) && inputs.target == '${target}' && needs.validate.result == 'success' && (needs.${deployJob}.result == 'failure' || needs.${deployJob}.result == 'cancelled') }}`;
     if (
       !recoveryJob ||
       !recoveryJob.includes("needs:\n      - validate\n      - " + deployJob) ||
       !recoveryJob.includes(expectedCondition) ||
+      !recoveryJob.includes("runs-on: ubuntu-latest") ||
+      !recoveryJob.includes("timeout-minutes: 5") ||
+      !recoveryJob.includes("actions: write") ||
+      !recoveryJob.includes("contents: read") ||
+      !recoveryJob.includes("GH_TOKEN: ${{ github.token }}") ||
+      !recoveryJob.includes("RECOVERY_RUN_ID: ${{ github.run_id }}") ||
       !recoveryJob.includes(
+        "RECOVERY_RUN_ATTEMPT: ${{ github.run_attempt }}",
+      ) ||
+      !recoveryJob.includes("RECOVERY_SOURCE_SHA: ${{ github.sha }}") ||
+      !recoveryJob.includes(`RECOVERY_TARGET: ${target}`) ||
+      !recoveryJob.includes('test "$GITHUB_REF" = "refs/heads/main"') ||
+      !recoveryJob.includes(
+        '.id==$runId and .run_attempt==$runAttempt and .status=="in_progress" and .head_branch=="main" and .head_sha==$sourceSha and .event=="workflow_dispatch" and .path==".github/workflows/deploy-production.yml"',
+      ) ||
+      !recoveryJob.includes(
+        "[.artifacts[] | select(.expired==false and .name==$name)] | length==1",
+      ) ||
+      !recoveryJob.includes(
+        '{ref:"main",inputs:{recovery_run_id:$runId,recovery_run_attempt:$runAttempt,target:$target}}',
+      ) ||
+      occurrenceCount(
+        recoveryJob,
+        "/actions/workflows/reconcile-production-deployment.yml/dispatches",
+      ) !== 1 ||
+      recoveryJob.includes("environment: production-recovery") ||
+      recoveryJob.includes("secrets:") ||
+      recoveryJob.includes("secrets.") ||
+      recoveryJob.includes(
         "uses: ./.github/workflows/reconcile-production-deployment.yml",
-      ) ||
-      !recoveryJob.includes("invocation_mode: inline") ||
-      !recoveryJob.includes("recovery_run_id: ${{ github.run_id }}") ||
-      !recoveryJob.includes(
-        "recovery_run_attempt: ${{ github.run_attempt }}",
-      ) ||
-      !recoveryJob.includes(`target: ${target}`) ||
-      recoveryJob.includes("secrets:")
+      )
     ) {
       fail(
-        `${PRODUCTION_WORKFLOW_PATH} must invoke exact-attempt ${target} recovery only when its validated deploy job fails`,
+        `${PRODUCTION_WORKFLOW_PATH} must make one secretless exact-attempt ${target} recovery dispatch only when its validated deploy job fails`,
       );
     }
   }
@@ -2365,11 +2497,15 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       16,
       "must bound setup and rollback-plan uploads",
     ],
-    [/^\s*timeout-minutes: 2\s*$/gm, 5, "must bound config and Meta checks"],
+    [
+      /^\s*timeout-minutes: 2\s*$/gm,
+      6,
+      "must bound config, Meta, and startup diagnostic checks",
+    ],
     [
       /^\s*timeout-minutes: 5\s*$/gm,
-      8,
-      "must bound drift, rollback capture, and restore verification",
+      12,
+      "must bound drift, trigger probing, rollback capture, restore verification, and recovery dispatch",
     ],
     [
       /^\s*timeout-minutes: 6\s*$/gm,
@@ -2484,14 +2620,9 @@ export function validateProductionWorkflow(rootDir = process.cwd()) {
       "must validate and restore every captured configuration",
     ],
     [
-      "uses: ./.github/workflows/reconcile-production-deployment.yml",
+      "/actions/workflows/reconcile-production-deployment.yml/dispatches",
       3,
-      "must define exactly one recovery caller per production target",
-    ],
-    [
-      "invocation_mode: inline",
-      3,
-      "must identify every automatic recovery as an inline child",
+      "must define exactly one secretless recovery dispatch per production target",
     ],
     [
       'cp "$rollback_config_path" "$RUNNER_TEMP/leaderbot-release/before.fly.toml"',
@@ -3589,7 +3720,7 @@ function validateProductionCompletionRecoveryWorkflow(rootDir) {
   const workflow = fs.readFileSync(workflowPath, "utf8");
   if (workflow.includes("secrets: inherit")) {
     fail(
-      `${PRODUCTION_COMPLETION_RECOVERY_WORKFLOW_PATH} production reusable recovery callers must never inherit caller secrets`,
+      `${PRODUCTION_COMPLETION_RECOVERY_WORKFLOW_PATH} production recovery dispatchers must never inherit caller secrets`,
     );
   }
   assertNoDirectGithubExpressionsInRunBlocks(
@@ -3656,44 +3787,80 @@ function validateProductionCompletionRecoveryWorkflow(rootDir) {
       "must reject every non-canonical recovered target",
     ],
     [
-      "uses: ./.github/workflows/reconcile-production-deployment.yml",
-      "must delegate mutations to the protected reusable recovery workflow",
+      'gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/attempts/$SOURCE_RUN_ATTEMPT/jobs?per_page=100"',
+      "must inspect the exact attempt jobs before fallback dispatch",
     ],
     [
-      "invocation_mode: post_completion",
-      "must identify runner-loss recovery as post-completion",
+      'queue_name="Queue exact ${target} recovery after failed deploy"',
+      "must bind deduplication to the exact target recovery dispatcher",
     ],
     [
-      "recovery_run_id: ${{ needs.inspect.outputs.run_id }}",
-      "must forward only the inspected run id",
+      'if length==0 then "missing" elif length==1 then (.[0].conclusion // "missing") else error("duplicate recovery queue jobs") end',
+      "must fail closed on duplicate target dispatch jobs",
     ],
     [
-      "recovery_run_attempt: ${{ needs.inspect.outputs.run_attempt }}",
-      "must forward only the inspected run attempt",
+      'if test "$queue_result" = "success"; then',
+      "must not dispatch a second recovery after the parent already queued one",
     ],
     [
-      "target: ${{ needs.inspect.outputs.target }}",
-      "must forward only the inspected target",
+      "actions: write",
+      "must grant only the dispatch job permission to queue protected recovery",
+    ],
+    [
+      "RECOVERY_RUN_ID: ${{ needs.inspect.outputs.run_id }}",
+      "must forward only the inspected run id through step environment",
+    ],
+    [
+      "RECOVERY_RUN_ATTEMPT: ${{ needs.inspect.outputs.run_attempt }}",
+      "must forward only the inspected run attempt through step environment",
+    ],
+    [
+      "RECOVERY_TARGET: ${{ needs.inspect.outputs.target }}",
+      "must forward only the inspected target through step environment",
+    ],
+    [
+      '.id==$runId and .run_attempt==$runAttempt and .status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required","stale","startup_failure")) and .head_branch=="main" and .event=="workflow_dispatch" and .path==".github/workflows/deploy-production.yml" and (.head_sha|test("^[a-f0-9]{40}$"))',
+      "must revalidate exact trusted source metadata immediately before dispatch",
+    ],
+    [
+      "[.artifacts[] | select(.expired==false and .name==$name)] | length==1",
+      "must revalidate exactly one target-bound rollback plan before dispatch",
+    ],
+    [
+      '{ref:"main",inputs:{recovery_run_id:$runId,recovery_run_attempt:$runAttempt,target:$target}}',
+      "must dispatch only exact validated metadata to protected main",
+    ],
+    [
+      "/actions/workflows/reconcile-production-deployment.yml/dispatches",
+      "must dispatch the protected recovery authority",
     ],
   ]) {
     if (!workflow.includes(needle)) {
       fail(`${PRODUCTION_COMPLETION_RECOVERY_WORKFLOW_PATH} ${message}`);
     }
   }
+  const completedSourceLifecycle =
+    '.status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required","stale","startup_failure")) and .head_branch=="main" and .event=="workflow_dispatch" and .path==".github/workflows/deploy-production.yml"';
   if (
+    occurrenceCount(workflow, completedSourceLifecycle) !== 2 ||
+    occurrenceCount(workflow, 'and (.head_sha|test("^[a-f0-9]{40}$"))') !== 1 ||
+    occurrenceCount(workflow, "workflow_run:") !== 1 ||
     workflow.includes("workflow_dispatch:") ||
     workflow.includes("workflow_call:") ||
+    workflow.includes("repository_dispatch:") ||
+    workflow.includes("pull_request:") ||
+    workflow.includes("push:") ||
     workflow.includes("schedule:") ||
     workflow.includes("environment: production-recovery") ||
     workflow.includes("secrets:") ||
     /FLY_(?:API|GATEWAY|IMAGE_GEN|STORAGE_PROXY|DATABASE)_/.test(workflow) ||
     occurrenceCount(
       workflow,
-      "uses: ./.github/workflows/reconcile-production-deployment.yml",
+      "/actions/workflows/reconcile-production-deployment.yml/dispatches",
     ) !== 1
   ) {
     fail(
-      `${PRODUCTION_COMPLETION_RECOVERY_WORKFLOW_PATH} must remain a read-only exact-attempt selector with one protected recovery call`,
+      `${PRODUCTION_COMPLETION_RECOVERY_WORKFLOW_PATH} must remain a secretless exact-attempt selector with one protected recovery dispatch`,
     );
   }
 }
@@ -3717,20 +3884,12 @@ function validateProductionReconciliationWorkflow(rootDir) {
       "must reject recovery workflow code from every non-main ref before selecting artifacts or exposing secrets",
     ],
     [
-      "workflow_call:",
-      "must support an inline recovery call from the failed deploy job",
-    ],
-    [
       "workflow_dispatch:",
-      "must support protected manual recovery when the parent runner is lost",
+      "must accept only an exact protected metadata dispatch",
     ],
     [
-      "invocation_mode:",
-      "must distinguish inline recovery from protected manual recovery",
-    ],
-    [
-      "group: ${{ inputs.invocation_mode == 'inline' && format('recovery-child-{0}', github.run_id) || format('production-deploy-{0}', inputs.target) }}",
-      "must avoid a child deadlock while giving manual recovery the exact target lock",
+      "group: production-deploy-${{ inputs.target }}",
+      "must queue every recovery behind the exact target deployment lock",
     ],
     [
       "cancel-in-progress: false",
@@ -3738,31 +3897,15 @@ function validateProductionReconciliationWorkflow(rootDir) {
     ],
     [
       "queue: max",
-      "must retain every manual or post-completion recovery in the target lock queue",
-    ],
-    [
-      "RECOVERY_MODE: ${{ inputs.invocation_mode || 'manual' }}",
-      "must default only a protected manual dispatch to manual mode",
-    ],
-    [
-      '[[ "$RECOVERY_MODE" =~ ^(inline|post_completion|manual)$ ]]',
-      "must reject every unreviewed recovery invocation mode",
-    ],
-    [
-      'test "$RUN_ID" = "$GITHUB_RUN_ID"',
-      "must bind inline recovery to its parent workflow run",
-    ],
-    [
-      'test "$RUN_ATTEMPT" = "$GITHUB_RUN_ATTEMPT"',
-      "must bind inline recovery to its parent workflow attempt",
+      "must retain every protected recovery in the target lock queue",
     ],
     [
       'gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT"',
       "must inspect the exact source workflow attempt",
     ],
     [
-      '.id==$runId and .run_attempt==$runAttempt and .head_branch=="main" and .event=="workflow_dispatch" and .path==".github/workflows/deploy-production.yml" and (.head_sha|test("^[a-f0-9]{40}$")) and (($mode=="inline" and .status=="in_progress") or ($mode!="inline" and .status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required","stale","startup_failure"))))',
-      "must bind recovery to the exact canonical deploy attempt and its allowed lifecycle state",
+      '.id==$runId and .run_attempt==$runAttempt and .head_branch=="main" and .event=="workflow_dispatch" and .path==".github/workflows/deploy-production.yml" and (.head_sha|test("^[a-f0-9]{40}$")) and .status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required","stale","startup_failure"))',
+      "must bind recovery to one exact completed failed canonical deploy attempt",
     ],
     [
       'artifact_name="${REQUESTED_TARGET}-rollback-${RUN_ID}-${RUN_ATTEMPT}"',
@@ -4020,15 +4163,6 @@ function validateProductionReconciliationWorkflow(rootDir) {
     "FLY_RECOVERY_READONLY_TOKEN",
     "FLY_STORAGE_PROXY_RECOVERY_TOKEN",
   ];
-  const workflowCallSection = workflow.slice(
-    workflow.indexOf("  workflow_call:"),
-    workflow.indexOf("  workflow_dispatch:"),
-  );
-  const declaredRecoverySecrets = [
-    ...workflowCallSection.matchAll(/^      ([A-Z][A-Z0-9_]+):\s*$/gm),
-  ]
-    .map((match) => match[1])
-    .sort();
   const recoverySecretExpressions =
     workflow.match(/\$\{\{[^}\n]*\bsecrets\b[^}\n]*\}\}/g) ?? [];
   const parsedRecoverySecretExpressions = recoverySecretExpressions.map(
@@ -4042,12 +4176,13 @@ function validateProductionReconciliationWorkflow(rootDir) {
   ].sort();
   if (
     parsedRecoverySecretExpressions.some((match) => match === null) ||
-    declaredRecoverySecrets.length !== 0 ||
+    workflow.includes("workflow_call:") ||
+    workflow.includes("secrets: inherit") ||
     JSON.stringify(referencedRecoverySecrets) !==
       JSON.stringify(allowedRecoverySecrets)
   ) {
     fail(
-      `${PRODUCTION_RECONCILIATION_WORKFLOW_PATH} must accept no caller secrets and may reference only the four exact environment-scoped app-mutation and metadata-only recovery secrets`,
+      `${PRODUCTION_RECONCILIATION_WORKFLOW_PATH} must expose no reusable caller-secret boundary and may reference only the four exact environment-scoped app-mutation and metadata-only recovery secrets`,
     );
   }
   const controllerCheckoutSteps = namedWorkflowStepBodies(
@@ -4545,7 +4680,12 @@ function validateProductionReconciliationWorkflow(rootDir) {
     workflow.includes("RUN_COMPLETED_AT") ||
     workflow.includes("run_completed_at") ||
     workflow.includes("Date.parse") ||
+    occurrenceCount(workflow, "workflow_dispatch:") !== 1 ||
+    workflow.includes("workflow_call:") ||
     workflow.includes("workflow_run:") ||
+    workflow.includes("repository_dispatch:") ||
+    workflow.includes("pull_request:") ||
+    workflow.includes("push:") ||
     workflow.includes("schedule:") ||
     workflow.includes("fly config save") ||
     workflow.includes("node scripts/migrate-production.mjs") ||
@@ -4862,6 +5002,22 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       "must keep automatic recovery outside the database privilege boundary",
     ],
     [
+      "persistent trigger definer: table-level `SELECT, TRIGGER` on",
+      "must document the exact persistent trigger-definer privilege boundary",
+    ],
+    [
+      "`billing_scheduler_tenants`, with no rights on any other table",
+      "must restrict the persistent trigger definer to the two subject tables",
+    ],
+    [
+      "Never repair it by adding `TRIGGER`",
+      "must keep trigger remediation least-privileged and outside the app runtime",
+    ],
+    [
+      "three-trigger metadata/body tuple plus exact two-table grant check",
+      "must use an executable dedicated-definer verification gate",
+    ],
+    [
       "contains only these three app rollback tokens and this one",
       "must keep production-recovery free of database-provider write authority",
     ],
@@ -4936,31 +5092,36 @@ export function validateProductionRepository(rootDir = process.cwd()) {
   const workflowFiles = fs
     .readdirSync(workflowDir)
     .filter((file) => file.endsWith(".yml") || file.endsWith(".yaml"));
-  const reconciliationCallers = workflowFiles
+  const reconciliationDispatchers = workflowFiles
     .filter((file) =>
       fs
         .readFileSync(path.join(workflowDir, file), "utf8")
         .includes(
-          "uses: ./.github/workflows/reconcile-production-deployment.yml",
+          "/actions/workflows/reconcile-production-deployment.yml/dispatches",
         ),
     )
     .sort();
   if (
-    JSON.stringify(reconciliationCallers) !==
+    JSON.stringify(reconciliationDispatchers) !==
     JSON.stringify([
       "deploy-production.yml",
       "recover-completed-production-deployment.yml",
     ])
   ) {
     fail(
-      "Production reconciliation may be called only by its two exact reviewed local workflows",
+      "Production reconciliation may be dispatched only by its two exact reviewed local workflows",
     );
   }
-  for (const caller of reconciliationCallers) {
-    const source = fs.readFileSync(path.join(workflowDir, caller), "utf8");
-    if (source.includes("secrets: inherit")) {
+  for (const dispatcher of reconciliationDispatchers) {
+    const source = fs.readFileSync(path.join(workflowDir, dispatcher), "utf8");
+    if (
+      source.includes("secrets: inherit") ||
+      source.includes(
+        "uses: ./.github/workflows/reconcile-production-deployment.yml",
+      )
+    ) {
       fail(
-        `${caller} production reusable recovery callers must never inherit caller secrets`,
+        `${dispatcher} production recovery dispatchers must never expose a reusable caller-secret boundary`,
       );
     }
   }
@@ -5444,6 +5605,16 @@ export function validateProductionRepository(rootDir = process.cwd()) {
           );
         }
       }
+      for (const requiredTriggerProbeFragment of [
+        "scripts/run-billing-trigger-runtime-preflight.mjs",
+        "--outfile=dist/billing-trigger-runtime-preflight.cjs",
+      ]) {
+        if (!dockerBuild.includes(requiredTriggerProbeFragment)) {
+          fail(
+            "image-gen build:docker must bundle the reversible billing-trigger runtime probe",
+          );
+        }
+      }
       const dockerfile = fs.readFileSync(
         path.join(rootDir, "apps/image-gen/Dockerfile"),
         "utf8",
@@ -5477,6 +5648,7 @@ export function validateProductionRepository(rootDir = process.cwd()) {
         "'migration-bridge' > /app/.leaderbot-artifact-kind",
         "'runtime' > /app/.leaderbot-artifact-kind",
         "RUN test -s /app/dist/provision-whatsapp-binding.cjs",
+        "RUN test -s /app/dist/billing-trigger-runtime-preflight.cjs",
       ]) {
         if (!dockerfile.includes(requiredDockerFragment)) {
           fail(
@@ -5505,6 +5677,20 @@ export function validateProductionRepository(rootDir = process.cwd()) {
       ) {
         fail(
           "image-gen CI must inspect the bundled WhatsApp provisioning command",
+        );
+      }
+      if (
+        !imageGenCi.includes(
+          'docker run --rm "$image" test -s /app/dist/billing-trigger-runtime-preflight.cjs',
+        )
+      ) {
+        fail(
+          "image-gen CI must inspect the bundled billing-trigger runtime probe",
+        );
+      }
+      if (!imageGenCi.includes("server/billingExecution.mysql.test.ts")) {
+        fail(
+          "image-gen CI must run the billing trigger probe against disposable MySQL",
         );
       }
       const migrationRunner = fs.readFileSync(

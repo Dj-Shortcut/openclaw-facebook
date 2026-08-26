@@ -26,7 +26,11 @@ import type { MollieMode } from "./config";
 import {
   getBillingSchedulerRollout,
   getTenantBillingWorkerWorkspaceId,
+  isMollieBillingDrainEnabled,
+  isMollieEntitlementEnforcementEnabled,
 } from "./config";
+import { getMollieRuntimePolicy } from "./billingRuntimePolicy";
+import type { BillingProcessKind } from "./billingSchedulerStore";
 import {
   getBillingProfileEligibilityFailure,
   type BillingProfileEligibilitySnapshot,
@@ -51,6 +55,51 @@ type SchedulerLaneReadinessRow = Readonly<{
 
 type PinnedBillingProfileReadinessRow = BillingProfileEligibilitySnapshot &
   Readonly<{ workspaceId: number }>;
+
+type BillingRuntimeHeartbeatPolicyInput = Readonly<{
+  providerDrainEnabled: boolean;
+  notificationPlaneEnabled: boolean;
+  entitlementEnforcementEnabled: boolean;
+  aiFinalizationDrainEnabled: boolean;
+  aiAnswerQuotaPreflightEnabled: boolean;
+  reconciliationEnabled: boolean;
+}>;
+
+/** Mirrors the exact worker-start conditions in `_core/index.ts`. */
+export function getRequiredBillingRuntimeHeartbeatKinds(
+  input: BillingRuntimeHeartbeatPolicyInput = {
+    providerDrainEnabled: isMollieBillingDrainEnabled(),
+    notificationPlaneEnabled:
+      process.env.BILLING_NOTIFICATION_PLANE_ENABLED === "true",
+    entitlementEnforcementEnabled: isMollieEntitlementEnforcementEnabled(),
+    aiFinalizationDrainEnabled:
+      process.env.AI_ANSWER_FINALIZATION_DRAIN_ENABLED === "true",
+    aiAnswerQuotaPreflightEnabled:
+      process.env.AI_ANSWER_QUOTA_PREFLIGHT_ENABLED === "true",
+    reconciliationEnabled:
+      process.env.MOLLIE_RECONCILIATION_ENABLED !== "false",
+  }
+): readonly BillingProcessKind[] {
+  const mollieRuntimePolicy = getMollieRuntimePolicy({
+    providerDrainEnabled: input.providerDrainEnabled,
+    notificationPlaneEnabled: input.notificationPlaneEnabled,
+  });
+  const kinds: BillingProcessKind[] = [];
+  if (mollieRuntimePolicy.startSafetyOutbox) kinds.push("outbox");
+  if (mollieRuntimePolicy.startReconciliation && input.reconciliationEnabled) {
+    kinds.push("reconciliation");
+  }
+  if (input.entitlementEnforcementEnabled) kinds.push("profile_expiry");
+  if (
+    input.entitlementEnforcementEnabled ||
+    input.aiFinalizationDrainEnabled ||
+    input.aiAnswerQuotaPreflightEnabled
+  ) {
+    kinds.push("ai_finalization");
+  }
+  if (input.notificationPlaneEnabled) kinds.push("notification_receiver");
+  return Object.freeze(kinds);
+}
 
 export function assertPinnedBillingProfileReadiness(
   profiles: readonly PinnedBillingProfileReadinessRow[],
@@ -362,43 +411,37 @@ export async function assertBillingDatabaseReadiness(
     );
   assertBillingSchedulerRegistryCoherence(controls, lanes);
   if (options.requireRuntimeHeartbeat !== false) {
-    const requiredHeartbeatKinds = [
-      "outbox",
-      "reconciliation",
-      "profile_expiry",
-      "ai_finalization",
-      ...(process.env.BILLING_NOTIFICATION_PLANE_ENABLED === "true"
-        ? (["notification_receiver"] as const)
-        : []),
-    ] as const;
-    const processId =
-      process.env.FLY_MACHINE_ID?.trim() ||
-      process.env.BILLING_SCHEDULER_PROCESS_ID?.trim() ||
-      "";
-    if (!/^[A-Za-z0-9._:-]{3,96}$/.test(processId)) {
-      throw new Error("Billing scheduler process identity is missing");
-    }
-    const heartbeat = await database
-      .select({
-        laneCount: sql<number>`COUNT(DISTINCT ${billingSchedulerProcessHeartbeats.kind})`,
-      })
-      .from(billingSchedulerProcessHeartbeats)
-      .where(
-        and(
-          eq(billingSchedulerProcessHeartbeats.processId, processId),
-          eq(billingSchedulerProcessHeartbeats.mode, mode),
-          inArray(
-            billingSchedulerProcessHeartbeats.kind,
-            requiredHeartbeatKinds
-          ),
-          eq(billingSchedulerProcessHeartbeats.status, "polling"),
-          sql`${billingSchedulerProcessHeartbeats.lastPollAt} > ${new Date(Date.now() - 20 * 60_000)}`
-        )
-      );
-    if (
-      Number(heartbeat[0]?.laneCount ?? 0) !== requiredHeartbeatKinds.length
-    ) {
-      throw new Error("Billing scheduler process heartbeat is incomplete");
+    const requiredHeartbeatKinds = getRequiredBillingRuntimeHeartbeatKinds();
+    if (requiredHeartbeatKinds.length > 0) {
+      const processId =
+        process.env.FLY_MACHINE_ID?.trim() ||
+        process.env.BILLING_SCHEDULER_PROCESS_ID?.trim() ||
+        "";
+      if (!/^[A-Za-z0-9._:-]{3,96}$/.test(processId)) {
+        throw new Error("Billing scheduler process identity is missing");
+      }
+      const heartbeat = await database
+        .select({
+          laneCount: sql<number>`COUNT(DISTINCT ${billingSchedulerProcessHeartbeats.kind})`,
+        })
+        .from(billingSchedulerProcessHeartbeats)
+        .where(
+          and(
+            eq(billingSchedulerProcessHeartbeats.processId, processId),
+            eq(billingSchedulerProcessHeartbeats.mode, mode),
+            inArray(
+              billingSchedulerProcessHeartbeats.kind,
+              requiredHeartbeatKinds
+            ),
+            eq(billingSchedulerProcessHeartbeats.status, "polling"),
+            sql`${billingSchedulerProcessHeartbeats.lastPollAt} > ${new Date(Date.now() - 20 * 60_000)}`
+          )
+        );
+      if (
+        Number(heartbeat[0]?.laneCount ?? 0) !== requiredHeartbeatKinds.length
+      ) {
+        throw new Error("Billing scheduler process heartbeat is incomplete");
+      }
     }
   }
   if (rollout.mode === "pilot_pin" && pinnedWorkspaceId) {

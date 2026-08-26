@@ -1,14 +1,24 @@
 # Production Readiness
 
-Status: Not ready for broad customer launch; the repository contains the public Messenger isolation controls, but no compatible rollout/rollback artifact or production rehearsal is approved. WhatsApp and live Mollie billing remain NO-GO.
+Status: The personal-only OpenClaw gateway is not ready for a transcript/customer
+feature rollout. The direct multi-tenant image-gen route, WhatsApp and live
+Mollie billing remain NO-GO until their separate gates pass.
 
-Last updated: 2026-08-24
+Last updated: 2026-08-26
 
 Canonical release strategy and open work are tracked in
 [`docs/operations/todo.md`](operations/todo.md).
 This document is the deploy/smoke checklist for the current gateway surface.
 
-## Production Flow
+OpenClaw is personal-only. The multi-tenant customer image-generation path must
+terminate directly in image-gen and must not create an OpenClaw host session.
+The flow below describes the transitional gateway path, not the approved target
+customer architecture. Exact non-archiving host transcript erasure blocks every
+OpenClaw transcript/customer feature. It becomes non-blocking for image-gen only
+after protected production evidence proves the direct callback/routing cutover;
+until then it remains a conservative live blocker.
+
+## Transitional Gateway Flow
 
 1. Meta calls `GET /facebook/webhook` for webhook verification.
 2. Meta sends Messenger `POST /facebook/webhook` events with `X-Hub-Signature-256`.
@@ -30,13 +40,22 @@ This document is the deploy/smoke checklist for the current gateway surface.
 - Forced public Messenger direct messages to `per-account-channel-peer`. Startup rejects explicit non-`main` Facebook `agentId` values; the runtime route check rejects an inherited secondary default agent before transcript dispatch when the binding omits `agentId`.
 - Added immediate cleanup for downloaded Messenger media after successful and failed turns, with a maximum 24-hour persisted attachment TTL as crash recovery.
 - Repaired persisted config when it contains the known legacy default workspace path.
-- Kept OpenClaw built-in `image_generate` denied on the public gateway; Messenger image generation stays routed through Leaderbot image-gen.
+- Kept OpenClaw built-in `image_generate` denied on the personal gateway; the multi-tenant Messenger image-generation path terminates directly in image-gen.
 - Replaced the public-open Facebook DM tool surface with a positive minimal allowlist (`session_status` only); persisted profiles, provider overrides, additive allowlists, and code mode cannot widen an untrusted public turn.
-- Added the Fly public route guard: webhook and health routes stay public, customer portal/legal routes can be proxied to Leaderbot, and the broader OpenClaw gateway UI/API is not reachable from the internet.
+- Added the mandatory Fly public route guard: only gateway health stays public;
+  customer portal, legal, Mollie and both Facebook webhook paths are blocked on
+  the personal gateway regardless of stale route/proxy environment values. The
+  broader OpenClaw gateway UI/API remains admin-gated.
 
 ## Remaining Blockers
 
 - The current route-guard hotfix image does not contain this startup script or plugin build. The standard gateway target remains manifest-blocked pending a mounted-state rehearsal plus reviewed rollout and rollback artifacts that both retain these isolation controls.
+- OpenClaw does not yet have verified exact non-archiving host transcript
+  erasure. Keep every OpenClaw transcript/customer feature disabled until that
+  personal-product privacy gate passes.
+- Image-gen may treat the OpenClaw erasure gap as non-blocking only after the
+  protected production callback/routing evidence proves that no customer
+  image-generation turn creates an OpenClaw session.
 - WhatsApp is operationally wired in the image-gen runtime: its credentials are mandatory at startup, `/webhook/whatsapp` is registered, and the production manifest names the callback canonical. Keep its release NO-GO until inbound WABA/phone identity resolves one exact workspace/connection/binding/privacy epoch, production sends use only that row's encrypted token, and text/image/audio attempts fail before any provider call on tenant, rebind, disconnect, or privacy mismatch.
 - Live image generation requires the separate `leaderbot-fb-image-gen` service key and OpenAI billing/key state to be healthy.
 - `npm audit --omit=dev --audit-level=high` could not complete from this Windows environment because the registry audit endpoint request failed with `EACCES`; rerun from CI or another network before broad launch.
@@ -53,14 +72,9 @@ This document is the deploy/smoke checklist for the current gateway surface.
 
 Gateway app: `leaderbot-openclaw-gateway`
 
-- `FACEBOOK_APP_SECRET` or `MESSENGER_APP_SECRET`
-- `MESSENGER_PAGE_ACCESS_TOKEN`
-- `MESSENGER_PAGE_ID`
-- `MESSENGER_VERIFY_TOKEN`
 - `OPENAI_API_KEY`
 - `GATEWAY_AUTH_TOKEN`
 - `OPENCLAW_GATEWAY_TOKEN`
-- `LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN`
 
 Important env:
 
@@ -68,12 +82,13 @@ Important env:
 - `OPENCLAW_CONFIG_PATH=/data/openclaw.json`
 - `OPENCLAW_WORKSPACE_DIR=/data/workspace`
 - `OPENCLAW_PUBLIC_GATEWAY_GUARD=1`
-- `OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED=1` only for the intentional public Leaderbot gateway
-- `LEADERBOT_IMAGE_GEN_URL=https://leaderbot-fb-image-gen.fly.dev`
+- `OPENCLAW_PUBLIC_GATEWAY_PATHS=/healthz`
+- `OPENCLAW_FACEBOOK_UNKNOWN_SENDER_MODE=pairing`
+- `OPENCLAW_FACEBOOK_LEADERBOT_BRIDGE_ENABLED=0`
 
-Image-gen app must have matching internal token:
-
-- `INTERNAL_IMAGE_REQUEST_TOKEN` must match `LEADERBOT_IMAGE_GEN_INTERNAL_TOKEN`.
+Do not configure `LEADERBOT_IMAGE_GEN_URL` or a Leaderbot bridge token on this
+personal-only gateway. Image-gen owns its own exact Meta credentials and
+workspace/Page bindings; those secrets remain outside this gateway checklist.
 
 Mollie billing variables are documented in `apps/image-gen/.env.example`. Keep
 `MOLLIE_BILLING_ENABLED=false`, `MOLLIE_MODE=test`, and
@@ -81,10 +96,10 @@ Mollie billing variables are documented in `apps/image-gen/.env.example`. Keep
 early-access interest. Enable the master switch only in an approved test
 environment or after the billing launch decision is GO.
 
-The token alone must not enable forwarding. The Facebook channel config also
-needs `leaderbotBridgeEnabled: true` for any Messenger event, Page-scoped sender
-ID, prompt, or media URL to be sent to the separate Leaderbot image-generation
-service.
+Startup makes the reviewed `pairing` and bridge-disabled settings authoritative
+over stale top-level or account-level public values on the mounted volume. A
+persisted `dmPolicy: open`, `leaderbot_free_tier` or
+`leaderbotBridgeEnabled: true` value must not restore customer forwarding.
 
 ## Deploy Command
 
@@ -136,31 +151,39 @@ Before deploy:
 - Confirm image-gen queue metrics show bounded `messenger_generation_queue_jobs{state="queued"}`, `messenger_generation_queue_jobs{state="processing"}`, and `messenger_generation_global_slots{state="active"}`.
 - Confirm failed/dead-lettered generation jobs are zero or have an owner-reviewed incident note.
 - Confirm recent logs contain no raw PSIDs, access tokens, customer messages, uploaded knowledge, generated prompts, or generated outputs.
-- Confirm no public route exposure drift from the intended webhook/health/legal/customer-app surfaces.
-- Confirm Messenger prompt routing follows the operator-facing routing guide:
-  ordinary conversation stays on OpenClaw, prompt-first image generation and
-  source-photo edits are forwarded only through the explicit Leaderbot bridge,
-  and cap/failure fallbacks are visible through metadata-only trace stages. See
-  [`operator-prompt-routing.md`](operator-prompt-routing.md).
+- Confirm the personal gateway exposes only health publicly. Portal, legal,
+  Mollie and both Facebook webhook paths must return `404`; their canonical
+  customer endpoints are direct image-gen routes.
+- Confirm no `LEADERBOT_IMAGE_GEN_URL`, bridge token, public unknown-sender mode
+  or enabled Leaderbot bridge is present in the reviewed gateway configuration.
+- Before relying on the image-gen OpenClaw-erasure exemption, confirm the
+  production Meta callback and customer image path terminate directly in
+  image-gen and create no OpenClaw host session transcript.
 - Create a metadata-only smoke evidence file with `npm run messenger:smoke-template > smoke-evidence.json`.
 
 After deploy:
 
 - Re-run gateway `/healthz` and image-gen `/healthz`, `/readyz`, and `/metrics`.
+- Confirm gateway `/facebook/webhook` and `/messenger/webhook` return `404`.
 - Confirm `webhook_ack_sent` latency stays within the current production target and event-loop p95/p99 remains below the documented rollout threshold.
 - Confirm queue depth drains normally, failed/dead-lettered job counts do not increase, and worker lease/reclaim logs are healthy after a worker restart or deploy event.
 - Run the manual Messenger smoke below with the real Page.
 - Record metadata-only release notes: commit, image/release id, smoke result, rollback target, and any cost/quota anomalies.
 - Validate the smoke evidence before sharing or archiving it with `npm run messenger:smoke-validate -- smoke-evidence.json`.
 
-Manual Messenger smoke:
+Controlled direct image-gen Messenger smoke, only after the separate Meta gate
+authorizes it:
 
-- Send `ben je online`; expect a status reply.
-- Send a normal text question; expect an assistant reply.
+- Confirm the registered Meta Page callback is the canonical image-gen
+  `/facebook/webhook`, never the OpenClaw gateway.
+- Send `ben je online`; expect an image-gen status reply without any OpenClaw
+  session creation.
+- Send a normal text question; expect the image-gen conversation response.
 - Send a photo without edit text; expect the photo-received prompt asking what to change, not an automatic generated replacement image.
 - Send `maak een afbeelding van ...`; expect the image-gen service path.
 - Send `maak een futuristische stad bij zonsondergang`; expect text-to-image, not a style-picker default.
-- Send `maak een prompt voor een afbeelding`; expect the normal assistant path, not image generation.
+- Send `maak een prompt voor een afbeelding`; expect the image-gen conversation
+  layer response, not an OpenClaw turn.
 - Send a source photo plus explicit edit text such as `maak me cyberpunk`; expect the source-image edit path.
 
 ## Rollback Notes
@@ -177,11 +200,10 @@ workspace would reintroduce the incident this control is designed to contain.
 
 ## Known Risks
 
-- Public `dmPolicy: "open"` should not be enabled until paywall, consent, deletion, quota, and abuse controls are product-ready.
-- Public Pages need clear privacy/data-retention terms before open mode or
-  Leaderbot free-tier image generation is enabled.
-- Keep `leaderbotBridgeEnabled` false unless external Leaderbot processing is
-  intended and disclosed.
+- Keep the personal OpenClaw gateway in pairing mode with
+  `leaderbotBridgeEnabled=false`; it is not a customer ingress surface.
+- Public image-gen Pages need approved paywall, consent, deletion, quota, abuse,
+  privacy and retention controls before commercial exposure.
 - Messenger `RESPONSE` messages are constrained by Meta's response window.
 - Provider/API billing failures surface as assistant/image-generation failures; smoke tests must include the live keys.
 - The current local validation does not replace Meta App Review, Page permission, and webhook subscription checks.

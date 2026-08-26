@@ -1,20 +1,6 @@
 name: Reconcile interrupted production deployment
 
 on:
-  workflow_call:
-    inputs:
-      invocation_mode:
-        required: true
-        type: string
-      recovery_run_id:
-        required: true
-        type: string
-      recovery_run_attempt:
-        required: true
-        type: string
-      target:
-        required: true
-        type: string
   workflow_dispatch:
     inputs:
       recovery_run_id:
@@ -43,7 +29,7 @@ env:
   FLYCTL_VERSION: 0.4.85
 
 concurrency:
-  group: ${{ inputs.invocation_mode == 'inline' && format('recovery-child-{0}', github.run_id) || format('production-deploy-{0}', inputs.target) }}
+  group: production-deploy-${{ inputs.target }}
   cancel-in-progress: false
   queue: max
 
@@ -66,19 +52,13 @@ jobs:
           RUN_ID: ${{ inputs.recovery_run_id }}
           RUN_ATTEMPT: ${{ inputs.recovery_run_attempt }}
           REQUESTED_TARGET: ${{ inputs.target }}
-          RECOVERY_MODE: ${{ inputs.invocation_mode || 'manual' }}
         run: |
           test "$GITHUB_REF" = "refs/heads/main"
           [[ "$RUN_ID" =~ ^[0-9]+$ ]]
           [[ "$RUN_ATTEMPT" =~ ^[0-9]+$ ]]
           [[ "$REQUESTED_TARGET" =~ ^(gateway|image-gen|storage-proxy)$ ]]
-          [[ "$RECOVERY_MODE" =~ ^(inline|post_completion|manual)$ ]]
-          if test "$RECOVERY_MODE" = "inline"; then
-            test "$RUN_ID" = "$GITHUB_RUN_ID"
-            test "$RUN_ATTEMPT" = "$GITHUB_RUN_ATTEMPT"
-          fi
           run="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT")"
-          jq -e --argjson runId "$RUN_ID" --argjson runAttempt "$RUN_ATTEMPT" --arg mode "$RECOVERY_MODE" '.id==$runId and .run_attempt==$runAttempt and .head_branch=="main" and .event=="workflow_dispatch" and .path==".github/workflows/deploy-production.yml" and (.head_sha|test("^[a-f0-9]{40}$")) and (($mode=="inline" and .status=="in_progress") or ($mode!="inline" and .status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required","stale","startup_failure"))))' <<<"$run" > /dev/null
+          jq -e --argjson runId "$RUN_ID" --argjson runAttempt "$RUN_ATTEMPT" '.id==$runId and .run_attempt==$runAttempt and .head_branch=="main" and .event=="workflow_dispatch" and .path==".github/workflows/deploy-production.yml" and (.head_sha|test("^[a-f0-9]{40}$")) and .status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required","stale","startup_failure"))' <<<"$run" > /dev/null
           source_sha="$(jq -er '.head_sha' <<<"$run")"
           artifacts="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts?per_page=100")"
           artifact_name="${REQUESTED_TARGET}-rollback-${RUN_ID}-${RUN_ATTEMPT}"
